@@ -1,0 +1,411 @@
+syntax = "proto3";
+
+package lingxi.ai;
+
+option java_package = "com.lingxi.ai.proto";
+option java_outer_classname = "LingXiAiProto";
+option python_package = "lingxi.ai.proto";
+
+// 全链路安全管控体系
+service SecurityService {
+  // 身份校验接口
+  rpc AuthCheck(AuthCheckRequest) returns (AuthCheckResponse);
+  // 敏感操作校验接口
+  rpc SensitiveCheck(SensitiveCheckRequest) returns (SensitiveCheckResponse);
+  // 加解密接口
+  rpc Crypto(CryptoRequest) returns (CryptoResponse);
+}
+
+message AuthCheckRequest {
+  string user_id = 1;
+  string token = 2;
+  string service_name = 3;
+  string api_name = 4;
+}
+
+message AuthCheckResponse {
+  bool pass = 1;
+  string error_msg = 2;
+  string user_permission = 3;
+}
+
+message SensitiveCheckRequest {
+  string user_id = 1;
+  string operation_type = 2;
+  map<string, string> operation_params = 3;
+}
+
+message SensitiveCheckResponse {
+  bool need_confirm = 1;
+  bool pass = 2;
+  string error_msg = 3;
+}
+
+message CryptoRequest {
+  oneof data {
+    string plaintext = 1;
+    string ciphertext = 2;
+  }
+  string crypto_type = 3;
+}
+
+message CryptoResponse {
+  string result = 1;
+  bool success = 2;
+  string error_msg = 3;
+}
+
+// 统一可观测&配置中心
+service ConfigService {
+  // 配置中心接口
+  rpc ConfigGet(ConfigGetRequest) returns (ConfigGetResponse);
+}
+
+message ConfigGetRequest {
+  string key = 1;
+  string env = 2;
+  string service_name = 3;
+}
+
+message ConfigGetResponse {
+  string value = 1;
+  bool success = 2;
+  string error_msg = 3;
+}
+
+// 接入层 - Java REST API网关
+service GatewayService {
+  // 聊天接口
+  rpc Chat(ChatRequest) returns (ChatResponse);
+  // 工具调用接口
+  rpc ToolCall(ToolCallRequest) returns (ToolCallResponse);
+  // 用户认证接口
+  rpc UserAuth(UserAuthRequest) returns (UserAuthResponse);
+}
+
+message ChatRequest {
+  string user_id = 1;
+  string conversation_id = 2;
+  string user_input = 3;
+  bool stream = 4;
+}
+
+message ChatResponse {
+  string conversation_id = 1;
+  string content = 2;
+  bool is_finish = 3;
+}
+
+message ToolCallRequest {
+  string user_id = 1;
+  string tool_name = 2;
+  map<string, string> arguments = 3;
+}
+
+message ToolCallResponse {
+  bool success = 1;
+  string result = 2;
+  string error_msg = 3;
+  int64 latency_ms = 4;
+}
+
+message UserAuthRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message UserAuthResponse {
+  string user_id = 1;
+  string token = 2;
+  string permission = 3;
+}
+
+// Agent智能层 - LLM交互服务
+service LLMService {
+  // 聊天完成接口
+  rpc ChatCompletion(ChatCompletionRequest) returns (stream ChatCompletionResponse);
+  // 嵌入接口
+  rpc Embedding(EmbeddingRequest) returns (EmbeddingResponse);
+}
+
+message ChatCompletionRequest {
+  string model = 1;
+  repeated Message messages = 2;
+  float temperature = 3;
+  bool stream = 4;
+  repeated Function functions = 5;
+}
+
+message Message {
+  string role = 1;
+  string content = 2;
+}
+
+message Function {
+  string name = 1;
+  string description = 2;
+  map<string, string> parameters = 3;
+}
+
+message ChatCompletionResponse {
+  string content = 1;
+  ToolCall tool_call = 2;
+  Usage usage = 3;
+  string finish_reason = 4;
+}
+
+message ToolCall {
+  string name = 1;
+  map<string, string> arguments = 2;
+}
+
+message Usage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message EmbeddingRequest {
+  repeated string text_list = 1;
+  string model = 2;
+}
+
+message EmbeddingResponse {
+  repeated EmbeddingVector embeddings = 1;
+  Usage usage = 2;
+}
+
+message EmbeddingVector {
+  repeated float values = 1;
+}
+
+// Agent智能层 - 任务规划与编排服务
+service TaskPlanningService {
+  // 任务规划与执行接口
+  rpc PlanAndExecuteTask(TaskPlanRequest) returns (TaskPlanResponse);
+  // 获取任务状态接口
+  rpc GetTaskStatus(TaskStatusRequest) returns (TaskStatusResponse);
+}
+
+message TaskPlanRequest {
+  string user_id = 1;
+  string conversation_id = 2;
+  string user_input = 3;
+  int32 max_step = 4;
+}
+
+message TaskPlanResponse {
+  string task_id = 1;
+  string status = 2;
+  string final_result = 3;
+  string error_msg = 4;
+}
+
+message TaskStatusRequest {
+  string task_id = 1;
+}
+
+message TaskStatusResponse {
+  string task_id = 1;
+  int32 current_step = 2;
+  float progress = 3;
+  string status = 4;
+}
+
+// Agent智能层 - 工具调度与参数校验服务
+service ToolService {
+  // 调用工具接口
+  rpc CallTool(ToolCallRequest) returns (ToolCallResponse);
+  // 列出工具接口
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+}
+
+message ListToolsRequest {
+  string platform = 1;
+  string keyword = 2;
+}
+
+message ListToolsResponse {
+  repeated ToolDefinition tools = 1;
+}
+
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  map<string, string> parameters = 3;
+  string platform = 4;
+}
+
+// Agent智能层 - 对话上下文管理服务
+service ConversationService {
+  // 获取对话历史接口
+  rpc GetConversationHistory(ConversationRequest) returns (ConversationResponse);
+  // 追加对话消息接口
+  rpc AppendConversationMessage(AppendMessageRequest) returns (AppendMessageResponse);
+  // 获取用户偏好接口
+  rpc GetUserPreference(UserPreferenceRequest) returns (UserPreferenceResponse);
+}
+
+message ConversationRequest {
+  string user_id = 1;
+  string conversation_id = 2;
+  int32 max_round = 3;
+}
+
+message ConversationResponse {
+  repeated Message messages = 1;
+}
+
+message AppendMessageRequest {
+  string user_id = 1;
+  string conversation_id = 2;
+  string role = 3;
+  string content = 4;
+}
+
+message AppendMessageResponse {
+  bool success = 1;
+  string error_msg = 2;
+}
+
+message UserPreferenceRequest {
+  string user_id = 1;
+}
+
+message UserPreferenceResponse {
+  map<string, string> preference = 1;
+}
+
+// 业务服务层 - 用户中心与权限服务
+service UserService {
+  // 获取用户信息接口
+  rpc GetUserInfo(UserRequest) returns (UserResponse);
+  // 获取用户凭证接口
+  rpc GetUserCredential(CredentialRequest) returns (CredentialResponse);
+  // 保存用户凭证接口
+  rpc SaveUserCredential(SaveCredentialRequest) returns (SaveCredentialResponse);
+}
+
+message UserRequest {
+  string user_id = 1;
+}
+
+message UserResponse {
+  string user_id = 1;
+  string username = 2;
+  string permission = 3;
+  string status = 4;
+}
+
+message CredentialRequest {
+  string user_id = 1;
+  string platform = 2;
+}
+
+message CredentialResponse {
+  string encrypted_credential = 1;
+  int64 expire_time = 2;
+}
+
+message SaveCredentialRequest {
+  string user_id = 1;
+  string platform = 2;
+  string credential = 3;
+}
+
+message SaveCredentialResponse {
+  bool success = 1;
+  string error_msg = 2;
+}
+
+// 业务服务层 - 第三方平台对接服务
+service PlatformService {
+  // 调用平台工具接口
+  rpc CallTool(PlatformToolCallRequest) returns (ToolCallResponse);
+  // 获取工具定义接口
+  rpc GetToolDefinitions(ToolDefinitionRequest) returns (ToolDefinitionResponse);
+}
+
+message PlatformToolCallRequest {
+  string user_id = 1;
+  string tool_name = 2;
+  map<string, string> arguments = 3;
+}
+
+message ToolDefinitionRequest {
+  string platform = 1;
+}
+
+message ToolDefinitionResponse {
+  repeated ToolDefinition tools = 1;
+}
+
+// 业务服务层 - 审计日志与合规服务
+service AuditService {
+  // 审计日志查询接口
+  rpc QueryAuditLog(AuditLogQueryRequest) returns (AuditLogQueryResponse);
+}
+
+message AuditLogQueryRequest {
+  string user_id = 1;
+  string operation_type = 2;
+  int64 start_time = 3;
+  int64 end_time = 4;
+}
+
+message AuditLogQueryResponse {
+  repeated AuditLog logs = 1;
+}
+
+message AuditLog {
+  string log_id = 1;
+  string user_id = 2;
+  string operation_type = 3;
+  map<string, string> operation_params = 4;
+  int64 operation_time = 5;
+  bool success = 6;
+  string error_msg = 7;
+}
+
+// 基础设施服务层 - 向量检索引擎服务
+service VectorService {
+  // 搜索向量接口
+  rpc SearchVector(VectorSearchRequest) returns (VectorSearchResponse);
+  // 插入向量接口
+  rpc InsertVector(VectorInsertRequest) returns (VectorInsertResponse);
+}
+
+message VectorSearchRequest {
+  string collection_name = 1;
+  EmbeddingVector vector = 2;
+  int32 top_k = 3;
+  map<string, string> filter = 4;
+}
+
+message VectorSearchResponse {
+  repeated VectorResult results = 1;
+}
+
+message VectorResult {
+  string id = 1;
+  EmbeddingVector vector = 2;
+  float score = 3;
+  map<string, string> metadata = 4;
+}
+
+message VectorInsertRequest {
+  string collection_name = 1;
+  repeated VectorData vectors = 2;
+}
+
+message VectorData {
+  string id = 1;
+  EmbeddingVector vector = 2;
+  map<string, string> metadata = 3;
+}
+
+message VectorInsertResponse {
+  bool success = 1;
+  int32 count = 2;
+  string error_msg = 3;
+}
