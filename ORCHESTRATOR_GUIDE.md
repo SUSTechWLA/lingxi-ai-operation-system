@@ -76,8 +76,8 @@ graph TB
     WorkerService -->|发布结果| Topic_Result
     
     subgraph "状态存储 (Redis)"
-        RedisTaskRepository -->|读写| TaskKeys[task:{taskId}]
-        RedisTaskRepository -->|读写| NodeKeys[node:{taskId}:{nodeId}]
+        RedisTaskRepository -->|读写| TaskKeys["task:taskId"]
+        RedisTaskRepository -->|读写| NodeKeys["node:taskId:nodeId"]
     end
 ```
 
@@ -124,37 +124,31 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "开发者机器"
+    subgraph 开发者机器
         Client[客户端<br/>curl/浏览器]
         Maven[Maven<br/>构建工具]
     end
-    
-    subgraph "Docker 容器"
-        subgraph "Orchestrator 应用"
-            App[Spring Boot 应用<br/>端口 8080]
-        end
+
+    subgraph Docker容器
+        App[Spring Boot应用<br/>端口8080]
+        RP[Redpanda<br/>端口9092]
+        Redis[(Redis<br/>端口6379)]
         
-        subgraph "Redpanda 容器"
-            RP[Redpanda<br/>端口 9092]
-            Topic1[ai.task.created]
-            Topic2[ai.node.ready]
-            Topic3[ai.node.result]
-            Topic4[ai.task.completed]
-            Topic5[ai.task.failed]
-        end
+        Topic1[ai.task.created]
+        Topic2[ai.node.ready]
+        Topic3[ai.node.result]
+        Topic4[ai.task.completed]
+        Topic5[ai.task.failed]
         
-        subgraph "Redis 容器"
-            Redis[(Redis<br/>端口 6379)]
-            Key1[task:{taskId}]
-            Key2[node:{taskId}:1]
-            Key3[node:{taskId}:2]
-        end
+        Key1[task:taskId]
+        Key2[node:taskId:1]
+        Key3[node:taskId:2]
     end
-    
-    Client -->|HTTP :8080| App
+
+    Client -->|HTTP 8080| App
     Maven -->|启动| App
-    App -->|Kafka :9092| RP
-    App -->|Redis :6379| Redis
+    App -->|Kafka 9092| RP
+    App -->|Redis 6379| Redis
     
     RP -->|存储| Topic1
     RP -->|存储| Topic2
