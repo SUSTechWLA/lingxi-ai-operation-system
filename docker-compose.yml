@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lingxi-postgres
+    environment:
+      POSTGRES_USER: wanglian
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: lingxi_db
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: lingxi-redis
+    ports:
+      - "6379:6379"
+
+  # ✅ Kafka 替代（更轻量 & Mac友好）
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: lingxi-redpanda
+    command:
+      - redpanda start
+      - --overprovisioned
+      - --smp 1
+      - --memory 512M
+      - --reserve-memory 0M
+    ports:
+      - "9092:9092"
+
+  minio:
+    image: minio/minio:latest
+    container_name: lingxi-minio
+    environment:
+      MINIO_ROOT_USER: wanglian
+      MINIO_ROOT_PASSWORD: 12345678
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  # ⭐ 向量数据库（替代 Milvus）
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: lingxi-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage   # 👈 加这个
