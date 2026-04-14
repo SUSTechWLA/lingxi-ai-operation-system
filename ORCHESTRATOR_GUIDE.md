@@ -14,6 +14,16 @@
 6. [工作流程](#工作流程)
 7. [快速开始](#快速开始)
 
+## 架构图索引
+
+本文档包含以下 mermaid 架构图：
+
+- 📊 [整体架构图](#整体架构图) - 展示 Orchestrator 各组件的交互关系
+- 🏗️ [分层架构图](#分层架构图) - 展示代码的层次结构
+- 🔄 [DAG 流程图](#示例-dag-结构) - 展示任务节点的依赖关系
+- ⏱️ [执行时序图](#执行时序图) - 展示完整的执行时序
+- 🖥️ [系统部署图](#系统部署图) - 展示系统的部署结构
+
 ---
 
 ## 什么是 Orchestrator？
@@ -27,6 +37,49 @@
 - 通过事件驱动的方式与其他模块通信
 
 简单来说，Orchestrator 就是一个"任务大管家"，帮你把复杂的AI任务有条不紊地执行完成。
+
+### 整体架构图
+
+```mermaid
+graph TB
+    User[用户] -->|POST /api/task| TaskController
+    
+    subgraph "Orchestrator 模块"
+        TaskController -->|创建任务| OrchestratorService
+        OrchestratorService -->|生成DAG| PlannerService
+        OrchestratorService -->|保存/查询| RedisTaskRepository
+        OrchestratorService -->|发送事件| EventProducer
+        StateMachineService -->|更新状态| RedisTaskRepository
+        StateMachineService -->|发送事件| EventProducer
+    end
+    
+    subgraph "事件总线 (Redpanda)"
+        Topic_Created[ai.task.created]
+        Topic_Ready[ai.node.ready]
+        Topic_Result[ai.node.result]
+        Topic_Completed[ai.task.completed]
+        Topic_Failed[ai.task.failed]
+    end
+    
+    subgraph "事件处理"
+        EventConsumer -->|监听| Topic_Ready
+        EventConsumer -->|监听| Topic_Result
+        EventConsumer -->|调用| WorkerService
+        EventConsumer -->|调用| StateMachineService
+    end
+    
+    EventProducer -->|发布| Topic_Created
+    EventProducer -->|发布| Topic_Ready
+    EventProducer -->|发布| Topic_Completed
+    EventProducer -->|发布| Topic_Failed
+    
+    WorkerService -->|发布结果| Topic_Result
+    
+    subgraph "状态存储 (Redis)"
+        RedisTaskRepository -->|读写| TaskKeys[task:{taskId}]
+        RedisTaskRepository -->|读写| NodeKeys[node:{taskId}:{nodeId}]
+    end
+```
 
 ---
 
@@ -67,6 +120,53 @@
 | Lombok | 1.18.32 | 简化代码 |
 | Jackson | 最新 | JSON 序列化 |
 
+### 系统部署图
+
+```mermaid
+graph TB
+    subgraph "开发者机器"
+        Client[客户端<br/>curl/浏览器]
+        Maven[Maven<br/>构建工具]
+    end
+    
+    subgraph "Docker 容器"
+        subgraph "Orchestrator 应用"
+            App[Spring Boot 应用<br/>端口 8080]
+        end
+        
+        subgraph "Redpanda 容器"
+            RP[Redpanda<br/>端口 9092]
+            Topic1[ai.task.created]
+            Topic2[ai.node.ready]
+            Topic3[ai.node.result]
+            Topic4[ai.task.completed]
+            Topic5[ai.task.failed]
+        end
+        
+        subgraph "Redis 容器"
+            Redis[(Redis<br/>端口 6379)]
+            Key1[task:{taskId}]
+            Key2[node:{taskId}:1]
+            Key3[node:{taskId}:2]
+        end
+    end
+    
+    Client -->|HTTP :8080| App
+    Maven -->|启动| App
+    App -->|Kafka :9092| RP
+    App -->|Redis :6379| Redis
+    
+    RP -->|存储| Topic1
+    RP -->|存储| Topic2
+    RP -->|存储| Topic3
+    RP -->|存储| Topic4
+    RP -->|存储| Topic5
+    
+    Redis -->|存储| Key1
+    Redis -->|存储| Key2
+    Redis -->|存储| Key3
+```
+
 ---
 
 ## 项目结构
@@ -102,6 +202,88 @@ ai-orchestrator/
 │       └── RedisConfig.java                   # Redis 配置
 └── src/main/resources/
     └── application.yml                        # 应用配置文件
+```
+
+### 分层架构图
+
+```mermaid
+graph LR
+    subgraph "外部"
+        Client[客户端]
+        Docker[Docker 服务]
+    end
+    
+    subgraph "Controller 层"
+        TaskController
+    end
+    
+    subgraph "Service 层"
+        OrchestratorService
+        PlannerService
+        StateMachineService
+    end
+    
+    subgraph "Event 层"
+        EventProducer
+        EventConsumer
+        WorkerService
+    end
+    
+    subgraph "Repository 层"
+        RedisTaskRepository
+    end
+    
+    subgraph "Config 层"
+        KafkaConfig
+        RedisConfig
+    end
+    
+    subgraph "Model 层"
+        Task
+        Node
+        DAG
+        TaskStatus
+        NodeStatus
+        NodeTaskEvent
+        NodeResultEvent
+    end
+    
+    subgraph "基础设施"
+        Redis[(Redis)]
+        Redpanda[(Redpanda)]
+    end
+    
+    Client -->|HTTP请求| TaskController
+    
+    TaskController -->|调用| OrchestratorService
+    
+    OrchestratorService -->|调用| PlannerService
+    OrchestratorService -->|调用| EventProducer
+    OrchestratorService -->|调用| RedisTaskRepository
+    
+    StateMachineService -->|调用| EventProducer
+    StateMachineService -->|调用| RedisTaskRepository
+    
+    EventProducer -->|发送事件| Redpanda
+    EventConsumer -->|消费事件| Redpanda
+    
+    EventConsumer -->|调用| WorkerService
+    EventConsumer -->|调用| StateMachineService
+    
+    WorkerService -->|发送事件| Redpanda
+    
+    RedisTaskRepository -->|读写| Redis
+    
+    KafkaConfig -.->|配置| Redpanda
+    RedisConfig -.->|配置| Redis
+    
+    OrchestratorService -.->|使用| Model
+    PlannerService -.->|使用| Model
+    StateMachineService -.->|使用| Model
+    EventProducer -.->|使用| Model
+    EventConsumer -.->|使用| Model
+    WorkerService -.->|使用| Model
+    RedisTaskRepository -.->|使用| Model
 ```
 
 ---
@@ -187,9 +369,27 @@ public enum NodeStatus {
 | `isFailed()` | 检查 DAG 是否有节点失败 |
 
 **示例 DAG 结构**：
+
+```mermaid
+graph LR
+    Node1[节点1<br/>write_article<br/>status: SUCCESS] -->|依赖完成| Node2[节点2<br/>summarize<br/>status: SUCCESS]
+    
+    style Node1 fill:#90EE90
+    style Node2 fill:#90EE90
 ```
-节点1 (write_article) → 节点2 (summarize)
+
+```mermaid
+graph LR
+    Node1[节点1<br/>write_article<br/>status: RUNNING] -.->|等待执行| Node2[节点2<br/>summarize<br/>status: PENDING]
+    
+    style Node1 fill:#FFD700
+    style Node2 fill:#D3D3D3
 ```
+
+DAG 执行状态流转：
+- 初始状态：节点1 `PENDING` → 节点2 `PENDING`
+- 执行中：节点1 `RUNNING` → 节点2 `PENDING`
+- 完成后：节点1 `SUCCESS` → 节点2 `SUCCESS`
 
 #### NodeTaskEvent（节点任务事件）
 **文件位置**: `model/NodeTaskEvent.java`
@@ -358,6 +558,62 @@ Spring Boot 应用主类：
 ---
 
 ## 工作流程
+
+### 执行时序图
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant TC as TaskController
+    participant OS as OrchestratorService
+    participant PS as PlannerService
+    participant RTR as RedisTaskRepository
+    participant EP as EventProducer
+    participant RP as Redpanda
+    participant EC as EventConsumer
+    participant WS as WorkerService
+    participant SMS as StateMachineService
+
+    User->>TC: POST /api/task
+    TC->>OS: createTask(prompt)
+    OS->>PS: plan(prompt)
+    PS-->>OS: 返回 DAG
+    OS->>RTR: saveTask(task)
+    OS->>EP: sendTaskCreatedEvent(task)
+    EP->>RP: 发送 ai.task.created
+    OS->>OS: startTask(task)
+    OS->>RTR: 更新状态为 RUNNING
+    OS->>OS: scheduleReadyNodes(task)
+    OS->>RTR: 更新节点1为 RUNNING
+    OS->>EP: sendNodeReadyEvent(event)
+    EP->>RP: 发送 ai.node.ready
+    
+    RP->>EC: 接收 ai.node.ready
+    EC->>WS: executeTask(event)
+    Note over WS: 模拟1秒延迟
+    WS->>RP: 发送 ai.node.result (SUCCESS)
+    
+    RP->>EC: 接收 ai.node.result
+    EC->>SMS: handleNodeResult(event)
+    SMS->>RTR: 更新节点1为 SUCCESS
+    SMS->>SMS: 检查 DAG
+    SMS->>RTR: 更新节点2为 RUNNING
+    SMS->>EP: sendNodeReadyEvent(event)
+    EP->>RP: 发送 ai.node.ready
+    
+    RP->>EC: 接收 ai.node.ready
+    EC->>WS: executeTask(event)
+    Note over WS: 模拟1秒延迟
+    WS->>RP: 发送 ai.node.result (SUCCESS)
+    
+    RP->>EC: 接收 ai.node.result
+    EC->>SMS: handleNodeResult(event)
+    SMS->>RTR: 更新节点2为 SUCCESS
+    SMS->>SMS: 检查 DAG 完成
+    SMS->>RTR: 更新任务为 SUCCESS
+    SMS->>EP: sendTaskCompletedEvent(task)
+    EP->>RP: 发送 ai.task.completed
+```
 
 ### 完整执行链路
 
