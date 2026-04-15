@@ -27,12 +27,17 @@ public class WorkerService {
             result.setStatus(NodeStatus.SUCCESS);
             result.setTraceId(event.getTraceId());
 
+            // 从 payload 中获取 task 信息
+            String task = "unknown";
+            if (event.getPayload() != null && event.getPayload().get("task") != null) {
+                task = event.getPayload().get("task").toString();
+            }
+
             // Mock输出
             Map<String, Object> output = new HashMap<>();
-            String task = getTask(event);
-            if (task.equals("write_article")) {
+            if ("write_article".equals(task)) {
                 output.put("content", "这是一篇AI生成的文章...");
-            } else if (task.equals("summarize")) {
+            } else if ("summarize".equals(task)) {
                 output.put("summary", "这是文章的摘要...");
             }
             result.setOutput(output);
@@ -50,17 +55,5 @@ public class WorkerService {
             result.setErrorMessage("执行中断");
             kafkaTemplate.send("ai.node.result", event.getTaskId() + "-" + event.getNodeId(), result);
         }
-    }
-
-    // 获取任务类型
-    private String getTask(NodeTaskEvent event) {
-        // 这里简化处理，直接返回nodeId对应的任务类型
-        // 实际场景中应该从event.payload中获取
-        if (event.getNodeId().equals("1")) {
-            return "write_article";
-        } else if (event.getNodeId().equals("2")) {
-            return "summarize";
-        }
-        return "unknown";
     }
 }

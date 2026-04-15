@@ -30,23 +30,22 @@
 
 **Orchestrator（编排器）** 是灵犀AI OS的核心调度模块，就像操作系统的内核一样，负责：
 
-- 接收用户的任务请求
-- 将任务拆解成多个步骤（DAG有向无环图）
-- 按顺序调度执行这些步骤
+- 接收结构化的 Node/DAG 任务请求
+- 按顺序调度执行这些节点
 - 监控任务执行状态
 - 通过事件驱动的方式与其他模块通信
 
-简单来说，Orchestrator 就是一个"任务大管家"，帮你把复杂的AI任务有条不紊地执行完成。
+注意：自然语言到 DAG 的转换由 **NL Translator** 模块处理，Orchestrator 专注于任务编排。
 
 ### 整体架构图
 
 ```mermaid
 graph TB
-    User[用户] -->|POST /api/task| TaskController
+    User[用户] -->|POST /api/node (DAG)| TaskController
+    NLTranslator[NL Translator] -->|POST /api/node (DAG)| TaskController
     
     subgraph "Orchestrator 模块"
         TaskController -->|创建任务| OrchestratorService
-        OrchestratorService -->|生成DAG| PlannerService
         OrchestratorService -->|保存/查询| RedisTaskRepository
         OrchestratorService -->|发送事件| EventProducer
         StateMachineService -->|更新状态| RedisTaskRepository
@@ -696,12 +695,29 @@ mvn spring-boot:run
 
 ### 步骤 4：测试 API
 
-**创建任务**：
+**创建任务（发送 DAG）**：
 
 ```bash
-curl -s -X POST http://localhost:8080/api/task \
+curl -s -X POST http://localhost:8080/api/node \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"写文章并生成摘要"}'
+  -d '{
+    "nodes": [
+      {
+        "nodeId": "1",
+        "type": "LLM",
+        "task": "write_article",
+        "deps": [],
+        "status": "PENDING"
+      },
+      {
+        "nodeId": "2",
+        "type": "LLM",
+        "task": "summarize",
+        "deps": ["1"],
+        "status": "PENDING"
+      }
+    ]
+  }'
 ```
 
 你会得到类似这样的响应：
@@ -709,7 +725,7 @@ curl -s -X POST http://localhost:8080/api/task \
 ```json
 {
   "taskId": "afbbc0d1-ed57-46b2-a760-9672e14d3008",
-  "prompt": "写文章并生成摘要",
+  "prompt": "",
   "status": "RUNNING",
   "dag": {
     "nodes": [
@@ -764,6 +780,11 @@ curl -s http://localhost:8080/api/task/afbbc0d1-ed57-46b2-a760-9672e14d3008
   }
 }
 ```
+
+### 提示
+
+- 使用自然语言创建任务请参考 **[NL Translator 模块指南](./NL_TRANSLATOR_GUIDE.md)**
+- Orchestrator 现在专注于任务编排，不处理自然语言
 
 ### 步骤 5：停止服务
 

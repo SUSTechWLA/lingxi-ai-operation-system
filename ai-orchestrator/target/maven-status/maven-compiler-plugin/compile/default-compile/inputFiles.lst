@@ -4,7 +4,6 @@
 /Users/wanglian/Projects/lingxi-ai-operation-system/ai-orchestrator/src/main/java/com/lingxi/ai/orchestrator/model/NodeStatus.java
 /Users/wanglian/Projects/lingxi-ai-operation-system/ai-orchestrator/src/main/java/com/lingxi/ai/orchestrator/service/StateMachineService.java
 /Users/wanglian/Projects/lingxi-ai-operation-system/ai-orchestrator/src/main/java/com/lingxi/ai/orchestrator/controller/TaskController.java
-/Users/wanglian/Projects/lingxi-ai-operation-system/ai-orchestrator/src/main/java/com/lingxi/ai/orchestrator/service/PlannerService.java
 /Users/wanglian/Projects/lingxi-ai-operation-system/ai-orchestrator/src/main/java/com/lingxi/ai/orchestrator/service/OrchestratorService.java
 /Users/wanglian/Projects/lingxi-ai-operation-system/ai-orchestrator/src/main/java/com/lingxi/ai/orchestrator/event/EventProducer.java
 /Users/wanglian/Projects/lingxi-ai-operation-system/ai-orchestrator/src/main/java/com/lingxi/ai/orchestrator/config/RedisConfig.java

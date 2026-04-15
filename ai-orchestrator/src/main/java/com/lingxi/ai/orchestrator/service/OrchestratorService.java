@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.lingxi.ai.orchestrator.model.Task;
 import com.lingxi.ai.orchestrator.model.Node;
+import com.lingxi.ai.orchestrator.model.DAG;
 import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
 import com.lingxi.ai.orchestrator.model.TaskStatus;
 import com.lingxi.ai.orchestrator.event.EventProducer;
@@ -16,27 +17,29 @@ import com.lingxi.ai.orchestrator.repository.RedisTaskRepository;
 @Service
 public class OrchestratorService {
     private static final Logger logger = LoggerFactory.getLogger(OrchestratorService.class);
-    
-    @Autowired
-    private PlannerService plannerService;
+
     @Autowired
     private EventProducer eventProducer;
     @Autowired
     private RedisTaskRepository taskRepository;
 
-    // 创建任务
-    public Task createTask(String prompt) {
+    // 创建任务（直接接收 DAG）
+    public Task createTask(DAG dag) {
         // 1. 生成唯一ID
         String taskId = UUID.randomUUID().toString();
         String traceId = UUID.randomUUID().toString();
 
-        // 2. 生成DAG
-        com.lingxi.ai.orchestrator.model.DAG dag = plannerService.plan(prompt);
+        // 2. 初始化所有节点状态为 PENDING
+        for (Node node : dag.getNodes()) {
+            if (node.getStatus() == null) {
+                node.setStatus(com.lingxi.ai.orchestrator.model.NodeStatus.PENDING);
+            }
+        }
 
         // 3. 创建任务
         Task task = new Task();
         task.setTaskId(taskId);
-        task.setPrompt(prompt);
+        task.setPrompt("");  // prompt 由 nl-translator 处理，这里留空
         task.setStatus(TaskStatus.CREATED);
         task.setDag(dag);
         task.setTraceId(traceId);
@@ -73,12 +76,19 @@ public class OrchestratorService {
             node.setStatus(com.lingxi.ai.orchestrator.model.NodeStatus.RUNNING);
             taskRepository.saveNode(task.getTaskId(), node);
 
+            // 构建 payload（包含 task 信息）
+            java.util.Map<String, Object> payload = new java.util.HashMap<>();
+            if (node.getInput() != null) {
+                payload.putAll(node.getInput());
+            }
+            payload.put("task", node.getTask());
+
             // 发布节点就绪事件
             NodeTaskEvent event = new NodeTaskEvent(
                     task.getTaskId(),
                     node.getNodeId(),
                     node.getType(),
-                    node.getInput(),
+                    payload,
                     task.getTraceId()
             );
             eventProducer.sendNodeReadyEvent(event);

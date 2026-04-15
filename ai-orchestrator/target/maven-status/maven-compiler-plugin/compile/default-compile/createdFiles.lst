@@ -15,5 +15,4 @@ com/lingxi/ai/orchestrator/service/StateMachineService.class
 com/lingxi/ai/orchestrator/model/DAG.class
 com/lingxi/ai/orchestrator/config/KafkaConfig.class
 com/lingxi/ai/orchestrator/model/Task.class
-com/lingxi/ai/orchestrator/service/PlannerService.class
 com/lingxi/ai/orchestrator/OrchestratorApplication.class

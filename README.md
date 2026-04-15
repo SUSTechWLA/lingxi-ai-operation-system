@@ -138,6 +138,17 @@ flowchart TB
 - 🌐 **多语言支持**: Java/Python/C++ 各有所长
 - ⚡ **内核级调度**: 多级反馈队列调度算法
 
+### 模块架构
+
+```
+lingxi-ai-operation-system/
+├── ai-orchestrator/          # 任务编排层（核心调度）
+│   └── 职责：接收 Node/DAG，执行编排调度
+├── nl-translator/             # 自然语言翻译层
+│   └── 职责：通过 LLM API 将自然语言转换为 Node/DAG
+└── docs/                      # 文档
+```
+
 ## 快速开始
 
 ### 前置要求
@@ -145,6 +156,7 @@ flowchart TB
 - Java 17+
 - Maven 3.9+
 - Docker 和 Docker Compose
+- OpenAI API Key（用于 nl-translator）
 
 ### 启动 Orchestrator 模块
 
@@ -164,18 +176,72 @@ mvn clean compile
 mvn spring-boot:run
 ```
 
-### 测试 API
+### 启动 NL Translator 模块
+
+NL Translator 模块负责将自然语言转换为 Node/DAG。
 
 ```bash
-# 1. 创建任务
-TASK_ID=$(curl -s -X POST http://localhost:8080/api/task \
+# 在新的终端中，进入 nl-translator 目录
+cd nl-translator
+
+# 设置 OpenAI API Key
+export OPENAI_API_KEY=your-api-key-here
+
+# 编译项目
+mvn clean compile
+
+# 启动应用（端口 8081）
+mvn spring-boot:run
+```
+
+### 测试 API
+
+#### 方式一：直接使用 Orchestrator（发送 DAG）
+
+```bash
+# 1. 创建任务（直接发送 DAG）
+TASK_ID=$(curl -s -X POST http://localhost:8080/api/node \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"写文章并生成摘要"}' | python3 -c "import sys, json; print(json.load(sys.stdin)['taskId'])")
+  -d '{
+    "nodes": [
+      {
+        "nodeId": "1",
+        "type": "LLM",
+        "task": "write_article",
+        "deps": [],
+        "status": "PENDING"
+      },
+      {
+        "nodeId": "2",
+        "type": "LLM",
+        "task": "summarize",
+        "deps": ["1"],
+        "status": "PENDING"
+      }
+    ]
+  }' | python3 -c "import sys, json; print(json.load(sys.stdin)['taskId'])")
 
 echo "创建任务成功，Task ID: $TASK_ID"
 
-# 2. 等待 8 秒让任务执行
-sleep 8
+# 2. 等待 5 秒让任务执行
+sleep 5
+
+# 3. 查询任务状态
+curl -s http://localhost:8080/api/task/$TASK_ID
+```
+
+#### 方式二：使用 NL Translator（自然语言）
+
+```bash
+# 1. 翻译并提交任务
+TASK_ID=$(curl -s -X POST http://localhost:8081/api/translate-and-submit \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"写一篇关于AI的文章并生成摘要"}' | python3 -c "import sys, json; print(json.load(sys.stdin)['taskId'])")
+
+echo "创建任务成功，Task ID: $TASK_ID"
+
+# 2. 等待执行完成
+sleep 5
 
 # 3. 查询任务状态
 curl -s http://localhost:8080/api/task/$TASK_ID
@@ -200,9 +266,10 @@ curl -s http://localhost:8080/api/task/$TASK_ID
 lingxi-ai-operation-system/
 ├── README.md                           # 本文档
 ├── ORCHESTRATOR_GUIDE.md              # Orchestrator 模块完整指南
+├── NL_TRANSLATOR_GUIDE.md            # NL Translator 模块指南
 ├── create_orchestrator.md             # Orchestrator SDD 设计文档
 ├── docker-compose.yml                  # 根目录 Docker 配置
-├── ai-orchestrator/                    # Orchestrator 模块 ✨
+├── ai-orchestrator/                    # 任务编排层 ✨
 │   ├── pom.xml                         # Maven 配置
 │   ├── docker-compose.yml              # Orchestrator 依赖配置
 │   └── src/main/java/com/lingxi/ai/orchestrator/
@@ -212,6 +279,14 @@ lingxi-ai-operation-system/
 │       ├── model/                      # 数据模型
 │       ├── event/                      # 事件处理
 │       ├── repository/                 # 数据访问
+│       └── config/                     # 配置类
+├── nl-translator/                       # 自然语言翻译层 ✨
+│   ├── pom.xml                         # Maven 配置
+│   └── src/main/java/com/lingxi/ai/translator/
+│       ├── NlTranslatorApplication.java
+│       ├── controller/                 # API 控制器
+│       ├── service/                    # 业务服务
+│       ├── model/                      # 数据模型
 │       └── config/                     # 配置类
 └── ...
 ```
