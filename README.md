@@ -6,7 +6,56 @@
 
 灵犀AI原生OS是一个多语言、模块化的AI操作系统，基于深度架构设计文档实现。
 
-### 完整系统架构图
+### 当前实现模块架构图
+```mermaid
+graph TB
+    User[用户] -->|自然语言| NLTranslator
+
+    subgraph "NL Translator 模块"
+        NLTranslator[TranslateController<br>POST /api/translate]
+        NlToDagService[NlToDagService<br>自然语言转 DAG]
+        OpenAiClientService[OpenAiClientService<br>OpenAI API 调用]
+    end
+
+    subgraph "AI Orchestrator 模块"
+        TaskController[TaskController<br>POST /api/node<br>GET /api/task/{id}]
+        OrchestratorService[OrchestratorService<br>任务编排调度]
+        StateMachineService[StateMachineService<br>状态机管理]
+        EventProducer[EventProducer<br>事件发送]
+        EventConsumer[EventConsumer<br>事件消费]
+        WorkerService[WorkerService<br>Mock 执行]
+        RedisTaskRepository[RedisTaskRepository<br>状态存储]
+    end
+
+    subgraph "基础设施"
+        Redis[(Redis 7.x)]
+        Redpanda[(Redpanda / Kafka)]
+    end
+
+    User -->|DAG| TaskController
+
+    NLTranslator -->|调用| NlToDagService
+    NlToDagService -->|调用| OpenAiClientService
+    NlToDagService -->|POST /api/node| TaskController
+
+    TaskController -->|调用| OrchestratorService
+    OrchestratorService -->|保存/查询| RedisTaskRepository
+    OrchestratorService -->|发送事件| EventProducer
+    OrchestratorService -->|调度| StateMachineService
+
+    EventProducer -->|发送| Redpanda
+    EventConsumer -->|消费| Redpanda
+    EventConsumer -->|调用| WorkerService
+    EventConsumer -->|调用| StateMachineService
+
+    WorkerService -->|发送结果| Redpanda
+    StateMachineService -->|更新状态| RedisTaskRepository
+    StateMachineService -->|发送事件| EventProducer
+
+    RedisTaskRepository -->|读写| Redis
+```
+
+### 完整系统架构图（远景规划）
 ```mermaid
 flowchart TB
     %% ================= 横切能力（全链路覆盖）=================
@@ -29,6 +78,7 @@ flowchart TB
     %% ================= 编排与控制层（全请求唯一入口）=================
     subgraph O1 ["编排与控制层（总控中枢）"]
         O["Orchestrator<br>请求分发 / 服务调度 / 流程编排"]
+        NL["NL Translator<br>自然语言转 DAG<br>【当前已实现】"]
         WF["Workflow Engine<br>状态机 / 重试 / 回滚 / Saga事务<br>【编排层内置核心组件】"]
     end
 
@@ -74,6 +124,7 @@ flowchart TB
     G --> O
 
     %% 编排层 → 核心能力调度
+    O --> NL
     O --> B
     O --> C1
     O --> C2
@@ -249,7 +300,7 @@ curl -s http://localhost:8080/api/task/$TASK_ID
 
 ### 详细文档
 
-想了解更多？请查看完整的 Orchestrator 模块指南：
+想了解更多？请查看完整的模块指南：
 
 📖 **[Orchestrator 模块完整指南](./ORCHESTRATOR_GUIDE.md)**
 
@@ -258,6 +309,15 @@ curl -s http://localhost:8080/api/task/$TASK_ID
 - 核心功能详解
 - 所有类的定义和说明
 - 完整的工作流程
+- 快速上手教程
+
+📖 **[NL Translator 模块完整指南](./NL_TRANSLATOR_GUIDE.md)**
+
+这份指南包含：
+- 什么是 NL Translator？
+- 如何配置 OpenAI API
+- 自然语言到 DAG 的转换原理
+- API 接口使用说明
 - 快速上手教程
 
 ## 项目结构
