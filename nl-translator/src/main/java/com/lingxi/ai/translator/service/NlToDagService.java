@@ -7,12 +7,12 @@ import com.lingxi.ai.translator.model.NodeStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
 import java.util.Map;
 
 @Service
@@ -27,6 +27,9 @@ public class NlToDagService {
 
     @Autowired
     private WebClient.Builder webClientBuilder;
+
+    @Value("${orchestrator.url}")
+    private String orchestratorUrl;
 
     private WebClient webClient;
 
@@ -51,7 +54,7 @@ public class NlToDagService {
         }
     }
 
-    public Map<String, Object> translateAndSubmit(String prompt, String orchestratorUrl) {
+    public Map<String, Object> translateAndSubmit(String prompt) {
         // 1. 翻译为 DAG
         DAG dag = translateToDag(prompt);
 
@@ -79,6 +82,34 @@ public class NlToDagService {
         } catch (Exception e) {
             logger.error("Failed to submit task to orchestrator", e);
             throw new RuntimeException("Failed to submit to orchestrator: " + e.getMessage(), e);
+        }
+    }
+
+    public Map<String, Object> getTaskStatus(String taskId) {
+        logger.info("Fetching task status for taskId: {}", taskId);
+
+        if (webClient == null) {
+            webClient = webClientBuilder.baseUrl(orchestratorUrl).build();
+        }
+
+        try {
+            Map<String, Object> result = webClient.get()
+                    .uri("/api/task/{taskId}", taskId)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, clientResponse ->
+                            clientResponse.bodyToMono(String.class)
+                                    .flatMap(errorBody -> Mono.error(
+                                            new RuntimeException("Orchestrator error: " + errorBody)
+                                    ))
+                    )
+                    .bodyToMono(Map.class)
+                    .block();
+
+            logger.info("Successfully fetched task status: {}", result);
+            return result;
+        } catch (Exception e) {
+            logger.error("Failed to fetch task status", e);
+            throw new RuntimeException("Failed to fetch task status: " + e.getMessage(), e);
         }
     }
 }

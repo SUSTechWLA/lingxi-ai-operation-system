@@ -7,52 +7,56 @@
 灵犀AI原生OS是一个多语言、模块化的AI操作系统，基于深度架构设计文档实现。
 
 ### 当前实现模块架构图
-```mermaid
-graph TB
-    User[用户] -->|自然语言| NLTranslator
 
-    subgraph "NL Translator 模块"
-        NLTranslator[TranslateController<br>POST /api/translate]
-        NlToDagService[NlToDagService<br>自然语言转 DAG]
-        OpenAiClientService[OpenAiClientService<br>OpenAI API 调用]
-    end
-
-    subgraph "AI Orchestrator 模块"
-        TaskController[TaskController<br>POST /api/node<br>GET /api/task/{id}]
-        OrchestratorService[OrchestratorService<br>任务编排调度]
-        StateMachineService[StateMachineService<br>状态机管理]
-        EventProducer[EventProducer<br>事件发送]
-        EventConsumer[EventConsumer<br>事件消费]
-        WorkerService[WorkerService<br>Mock 执行]
-        RedisTaskRepository[RedisTaskRepository<br>状态存储]
-    end
-
-    subgraph "基础设施"
-        Redis[(Redis 7.x)]
-        Redpanda[(Redpanda / Kafka)]
-    end
-
-    User -->|DAG| TaskController
-
-    NLTranslator -->|调用| NlToDagService
-    NlToDagService -->|调用| OpenAiClientService
-    NlToDagService -->|POST /api/node| TaskController
-
-    TaskController -->|调用| OrchestratorService
-    OrchestratorService -->|保存/查询| RedisTaskRepository
-    OrchestratorService -->|发送事件| EventProducer
-    OrchestratorService -->|调度| StateMachineService
-
-    EventProducer -->|发送| Redpanda
-    EventConsumer -->|消费| Redpanda
-    EventConsumer -->|调用| WorkerService
-    EventConsumer -->|调用| StateMachineService
-
-    WorkerService -->|发送结果| Redpanda
-    StateMachineService -->|更新状态| RedisTaskRepository
-    StateMachineService -->|发送事件| EventProducer
-
-    RedisTaskRepository -->|读写| Redis
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              用户                                         │
+└────────────────────────────────────┬────────────────────────────────────┘
+                                     │ 自然语言
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    NL Translator 模块（用户访问入口）                     │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │ TranslateController                                               │  │
+│  │   - POST /api/translate           (仅翻译，返回DAG)               │  │
+│  │   - POST /api/translate-and-submit (翻译并提交)                   │  │
+│  │   - GET /api/task/{taskId}       (查询任务状态)                   │  │
+│  └──────────────┬────────────────────────────────────────────────────┘  │
+│                 │                                                         │
+│  ┌──────────────▼───────────────────┐  ┌───────────────────────────┐  │
+│  │ NlToDagService                   │  │ OpenAiClientService       │  │
+│  │   - 自然语言转 DAG               │  │   - OpenAI API 调用        │  │
+│  └──────────────┬───────────────────┘  └───────────────────────────┘  │
+└─────────────────┼─────────────────────────────────────────────────────────┘
+                  │ 内部调用
+                  ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│              AI Orchestrator 模块（内部服务）                            │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │ TaskController                                                   │  │
+│  │   - POST /api/node  (接收DAG创建任务)                             │  │
+│  │   - GET /api/task/{id} (查询任务状态)                              │  │
+│  └──────────────┬────────────────────────────────────────────────────┘  │
+│                 │                                                         │
+│  ┌──────────────▼───────────────────┐  ┌───────────────────────────┐  │
+│  │ OrchestratorService              │  │ StateMachineService       │  │
+│  │   - 任务编排调度                  │  │   - 状态机管理              │  │
+│  └──────────────┬───────────────────┘  └───────────────┬───────────┘  │
+│                 │                                         │               │
+│  ┌──────────────▼───────────────────┐  ┌───────────────▼───────────┐  │
+│  │ EventProducer                    │  │ EventConsumer              │  │
+│  │   - 事件发送                      │  │   - 事件消费                │  │
+│  └──────────────┬───────────────────┘  └───────────────┬───────────┘  │
+└─────────────────┼────────────────────────────────────────┼───────────────┘
+                  │                                │
+                  ▼                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              基础设施                                    │
+│  ┌───────────────────────┐  ┌───────────────────────────┐             │
+│  │ Redis 7.x             │  │ Redpanda / Kafka          │             │
+│  │   - 状态存储           │  │   - 事件总线               │             │
+│  └───────────────────────┘  └───────────────────────────┘             │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 完整系统架构图（远景规划）
@@ -247,44 +251,10 @@ mvn spring-boot:run
 
 ### 测试 API
 
-#### 方式一：直接使用 Orchestrator（发送 DAG）
+用户只能通过 NL Translator 模块访问系统：
 
 ```bash
-# 1. 创建任务（直接发送 DAG）
-TASK_ID=$(curl -s -X POST http://localhost:8080/api/node \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nodes": [
-      {
-        "nodeId": "1",
-        "type": "LLM",
-        "task": "write_article",
-        "deps": [],
-        "status": "PENDING"
-      },
-      {
-        "nodeId": "2",
-        "type": "LLM",
-        "task": "summarize",
-        "deps": ["1"],
-        "status": "PENDING"
-      }
-    ]
-  }' | python3 -c "import sys, json; print(json.load(sys.stdin)['taskId'])")
-
-echo "创建任务成功，Task ID: $TASK_ID"
-
-# 2. 等待 5 秒让任务执行
-sleep 5
-
-# 3. 查询任务状态
-curl -s http://localhost:8080/api/task/$TASK_ID
-```
-
-#### 方式二：使用 NL Translator（自然语言）
-
-```bash
-# 1. 翻译并提交任务
+# 1. 翻译并提交任务（自然语言 → DAG → 执行）
 TASK_ID=$(curl -s -X POST http://localhost:8081/api/translate-and-submit \
   -H "Content-Type: application/json" \
   -d '{"prompt":"写一篇关于AI的文章并生成摘要"}' | python3 -c "import sys, json; print(json.load(sys.stdin)['taskId'])")
@@ -294,9 +264,25 @@ echo "创建任务成功，Task ID: $TASK_ID"
 # 2. 等待执行完成
 sleep 5
 
-# 3. 查询任务状态
-curl -s http://localhost:8080/api/task/$TASK_ID
+# 3. 通过 nl-translator 查询任务状态
+curl -s http://localhost:8081/api/task/$TASK_ID
 ```
+
+#### 仅翻译不提交（可选）
+
+如果只需要获取 DAG 而不立即执行：
+
+```bash
+# 仅翻译，返回 DAG 结构
+curl -s -X POST http://localhost:8081/api/translate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"写一篇关于AI的文章并生成摘要"}'
+```
+
+> **重要说明**：
+> - 用户不直接访问 Orchestrator 模块
+> - Orchestrator 仅作为内部服务被 NL Translator 调用
+> - 所有用户请求都通过 NL Translator 模块统一处理
 
 ### 详细文档
 
