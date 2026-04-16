@@ -1,28 +1,40 @@
 package com.lingxi.ai.orchestrator.event;
 
+import com.lingxi.ai.orchestrator.model.NodeResultEvent;
+import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
+import com.lingxi.ai.orchestrator.model.NodeStatus;
+import com.lingxi.ai.orchestrator.service.StateMachine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
-import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
-import com.lingxi.ai.orchestrator.model.NodeResultEvent;
-import com.lingxi.ai.orchestrator.service.StateMachineService;
 
 @Service
 public class EventConsumer {
-    @Autowired
-    private StateMachineService stateMachineService;
-    @Autowired
-    private WorkerService workerService; // 内置Mock Worker
 
-    // 消费节点就绪事件（内置Worker执行）
+    private static final Logger logger = LoggerFactory.getLogger(EventConsumer.class);
+
+    @Autowired
+    private StateMachine stateMachine;
+
+    @Autowired
+    private WorkerService workerService;
+
     @KafkaListener(topics = "ai.node.ready", groupId = "worker-group")
     public void handleNodeReady(NodeTaskEvent event) {
+        logger.info("Received node ready event: {}", event.getNodeId());
         workerService.executeTask(event);
     }
 
-    // 消费节点结果事件
     @KafkaListener(topics = "ai.node.result", groupId = "orchestrator-group")
     public void handleNodeResult(NodeResultEvent event) {
-        stateMachineService.handleNodeResult(event);
+        logger.info("Received node result event: {} - {}", event.getNodeId(), event.getStatus());
+
+        if (event.getStatus() == NodeStatus.SUCCESS) {
+            stateMachine.onSuccess(event.getNodeId(), event.getOutput());
+        } else if (event.getStatus() == NodeStatus.FAILED) {
+            stateMachine.onFailure(event.getNodeId(), event.getErrorMessage());
+        }
     }
 }

@@ -1,15 +1,28 @@
 package com.lingxi.ai.orchestrator.event;
 
+import com.lingxi.ai.orchestrator.entity.Node;
+import com.lingxi.ai.orchestrator.model.Task;
+import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
-import com.lingxi.ai.orchestrator.model.Task;
-import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
 
 @Service
 public class EventProducer {
+
     @Autowired
     private KafkaTemplate<String, Object> kafkaTemplate;
+
+    public void publishNodeReady(Node node) {
+        NodeTaskEvent event = new NodeTaskEvent(
+                node.getTaskId(),
+                node.getId(),
+                node.getType().name(),
+                node.getInput(),
+                node.getTaskId() + "-" + node.getId()
+        );
+        kafkaTemplate.send("ai.node.ready", node.getTaskId() + "-" + node.getId(), event);
+    }
 
     public void sendTaskCreatedEvent(Task task) {
         kafkaTemplate.send("ai.task.created", task.getTaskId(), task);

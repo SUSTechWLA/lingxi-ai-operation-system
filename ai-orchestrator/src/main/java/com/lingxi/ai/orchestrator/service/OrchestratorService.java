@@ -1,102 +1,133 @@
 package com.lingxi.ai.orchestrator.service;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import java.util.List;
-import java.util.UUID;
+import com.lingxi.ai.orchestrator.context.ContextService;
+import com.lingxi.ai.orchestrator.entity.Node;
+import com.lingxi.ai.orchestrator.entity.NodeDependency;
+import com.lingxi.ai.orchestrator.entity.NodeStatus;
+import com.lingxi.ai.orchestrator.entity.NodeType;
+import com.lingxi.ai.orchestrator.entity.Task;
+import com.lingxi.ai.orchestrator.entity.TaskStatus;
+import com.lingxi.ai.orchestrator.model.DAGRequest;
+import com.lingxi.ai.orchestrator.repository.NodeDependencyRepository;
+import com.lingxi.ai.orchestrator.repository.NodeRepository;
+import com.lingxi.ai.orchestrator.repository.TaskRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.lingxi.ai.orchestrator.model.Task;
-import com.lingxi.ai.orchestrator.model.Node;
-import com.lingxi.ai.orchestrator.model.DAG;
-import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
-import com.lingxi.ai.orchestrator.model.TaskStatus;
-import com.lingxi.ai.orchestrator.event.EventProducer;
-import com.lingxi.ai.orchestrator.repository.RedisTaskRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class OrchestratorService {
+
     private static final Logger logger = LoggerFactory.getLogger(OrchestratorService.class);
 
     @Autowired
-    private EventProducer eventProducer;
+    private TaskRepository taskRepository;
+
     @Autowired
-    private RedisTaskRepository taskRepository;
+    private NodeRepository nodeRepository;
 
-    // 创建任务（直接接收 DAG）
-    public Task createTask(DAG dag) {
-        // 1. 生成唯一ID
+    @Autowired
+    private NodeDependencyRepository nodeDependencyRepository;
+
+    @Autowired
+    private DAGValidator dagValidator;
+
+    @Autowired
+    private ContextService contextService;
+
+    @Transactional
+    public Task createTask(Map<String, Object> input) {
         String taskId = UUID.randomUUID().toString();
-        String traceId = UUID.randomUUID().toString();
 
-        // 2. 初始化所有节点状态为 PENDING
-        for (Node node : dag.getNodes()) {
-            if (node.getStatus() == null) {
-                node.setStatus(com.lingxi.ai.orchestrator.model.NodeStatus.PENDING);
-            }
-        }
-
-        // 3. 创建任务
         Task task = new Task();
-        task.setTaskId(taskId);
-        task.setPrompt("");  // prompt 由 nl-translator 处理，这里留空
+        task.setId(taskId);
+        task.setInput(input);
         task.setStatus(TaskStatus.CREATED);
-        task.setDag(dag);
-        task.setTraceId(traceId);
-        task.setCreateTime(System.currentTimeMillis());
+        task = taskRepository.save(task);
 
-        // 4. 保存到Redis
-        taskRepository.saveTask(task);
-
-        // 5. 发布任务创建事件
-        eventProducer.sendTaskCreatedEvent(task);
-
-        // 6. 启动任务执行
-        startTask(task);
+        contextService.recordTaskCreated(task);
+        logger.info("Created task: {}", taskId);
 
         return task;
     }
 
-    // 启动任务
-    public void startTask(Task task) {
-        // 更新任务状态为RUNNING
-        task.setStatus(TaskStatus.RUNNING);
-        task.setStartTime(System.currentTimeMillis());
-        taskRepository.saveTask(task);
+    @Transactional
+    public void submitDAG(String taskId, DAGRequest dagRequest) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found: " + taskId));
 
-        // 调度所有就绪节点
-        scheduleReadyNodes(task);
-    }
+        logger.info("Submitting DAG for task: {}", taskId);
 
-    // 调度就绪节点
-    public void scheduleReadyNodes(Task task) {
-        List<Node> readyNodes = task.getDag().getReadyNodes();
-        for (Node node : readyNodes) {
-            // 更新节点状态为RUNNING
-            node.setStatus(com.lingxi.ai.orchestrator.model.NodeStatus.RUNNING);
-            taskRepository.saveNode(task.getTaskId(), node);
+        dagValidator.validate(dagRequest);
+        contextService.recordDagValidated(taskId);
 
-            // 构建 payload（包含 task 信息）
-            java.util.Map<String, Object> payload = new java.util.HashMap<>();
-            if (node.getInput() != null) {
-                payload.putAll(node.getInput());
+        for (DAGRequest.NodeRequest nodeReq : dagRequest.getNodes()) {
+            Node node = new Node();
+            node.setId(nodeReq.getId());
+            node.setTaskId(taskId);
+            node.setType(NodeType.valueOf(nodeReq.getType()));
+            node.setName(nodeReq.getName());
+            node.setStatus(NodeStatus.CREATED);
+            node.setInput(nodeReq.getInput());
+            if (nodeReq.getMaxRetry() != null) {
+                node.setMaxRetry(nodeReq.getMaxRetry());
             }
-            payload.put("task", node.getTask());
-
-            // 发布节点就绪事件
-            NodeTaskEvent event = new NodeTaskEvent(
-                    task.getTaskId(),
-                    node.getNodeId(),
-                    node.getType(),
-                    payload,
-                    task.getTraceId()
-            );
-            eventProducer.sendNodeReadyEvent(event);
+            if (nodeReq.getPriority() != null) {
+                node.setPriority(nodeReq.getPriority());
+            }
+            if (nodeReq.getWorkerGroup() != null) {
+                node.setWorkerGroup(nodeReq.getWorkerGroup());
+            }
+            nodeRepository.save(node);
         }
+
+        if (dagRequest.getEdges() != null) {
+            for (DAGRequest.Edge edge : dagRequest.getEdges()) {
+                NodeDependency dep = new NodeDependency();
+                dep.setParentNodeId(edge.getFrom());
+                dep.setChildNodeId(edge.getTo());
+                nodeDependencyRepository.save(dep);
+            }
+        }
+
+        task.setStatus(TaskStatus.RUNNING);
+        taskRepository.save(task);
+
+        contextService.recordDagSubmitted(taskId);
+        logger.info("DAG submitted for task: {}", taskId);
     }
 
-    // 查询任务
     public Task getTask(String taskId) {
-        return taskRepository.getTask(taskId);
+        return taskRepository.findById(taskId).orElse(null);
+    }
+
+    public List<Node> getNodesForTask(String taskId) {
+        return nodeRepository.findByTaskId(taskId);
+    }
+
+    public Map<String, Object> getTaskWithDetails(String taskId) {
+        Task task = getTask(taskId);
+        if (task == null) {
+            return null;
+        }
+
+        List<Node> nodes = getNodesForTask(taskId);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("taskId", task.getId());
+        result.put("status", task.getStatus());
+        result.put("input", task.getInput());
+        result.put("output", task.getOutput());
+        result.put("createdAt", task.getCreatedAt());
+        result.put("nodes", nodes);
+
+        return result;
     }
 }

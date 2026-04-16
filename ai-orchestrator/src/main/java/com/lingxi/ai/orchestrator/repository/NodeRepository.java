@@ -1,0 +1,56 @@
+package com.lingxi.ai.orchestrator.repository;
+
+import com.lingxi.ai.orchestrator.entity.Node;
+import com.lingxi.ai.orchestrator.entity.NodeStatus;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface NodeRepository extends JpaRepository<Node, String> {
+
+    List<Node> findByTaskId(String taskId);
+
+    List<Node> findByStatus(NodeStatus status);
+
+    /**
+     * 查找可执行的节点：状态为 CREATED，且所有父节点都 SUCCESS
+     */
+    @Query(value = """
+        SELECT n.*
+        FROM ai_node n
+        WHERE n.status = 'CREATED'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM ai_node_dependency d
+            JOIN ai_node p ON d.parent_node_id = p.id
+            WHERE d.child_node_id = n.id
+            AND p.status != 'SUCCESS'
+        )
+        """, nativeQuery = true)
+    List<Node> findReadyNodes();
+
+    /**
+     * 查找某个节点的子节点
+     */
+    @Query("SELECT n FROM Node n WHERE n.id IN (" +
+            "SELECT d.childNodeId FROM NodeDependency d WHERE d.parentNodeId = :parentNodeId)")
+    List<Node> findChildNodes(@Param("parentNodeId") String parentNodeId);
+
+    @Query("SELECT d FROM NodeDependency d WHERE d.childNodeId = :childNodeId")
+    List<com.lingxi.ai.orchestrator.entity.NodeDependency> findByChildNodeId(@Param("childNodeId") String childNodeId);
+
+    /**
+     * 乐观锁更新状态
+     */
+    @Modifying
+    @Query("UPDATE Node n SET n.status = :newStatus, n.version = n.version + 1 " +
+            "WHERE n.id = :nodeId AND n.version = :version")
+    int updateStatusWithLock(@Param("nodeId") String nodeId,
+                              @Param("newStatus") NodeStatus newStatus,
+                              @Param("version") Integer version);
+}
