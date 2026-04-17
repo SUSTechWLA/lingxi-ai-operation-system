@@ -50,7 +50,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              用户入口层                                       │
+│                              用户入口层                                     | │
 │  ┌─────────────────────────────────────────────────────────────────────┐  │
 │  │                    🌐 Web/CLI/SDK                                    │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
@@ -395,9 +395,9 @@ lingxi-ai-operation-system/
 3. 观察任务执行过程
 
 ### 第二阶段：理解原理
-1. 阅读 [ORCHESTRATOR_GUIDE.md](docs/ORCHESTRATOR_GUIDE.md) - 理解任务编排
-2. 阅读 [NL_TRANSLATOR_GUIDE.md](docs/NL_TRANSLATOR_GUIDE.md) - 理解自然语言处理
-3. 阅读 [AI-CONTEXT_GUIDE.md](docs/AI-CONTEXT_GUIDE.md) - 理解上下文管理
+1. 阅读 [ORCHESTRATOR_GUIDE.md](docs/guides/ORCHESTRATOR_GUIDE.md) - 理解任务编排
+2. 阅读 [NL_TRANSLATOR_GUIDE.md](docs/guides/NL_TRANSLATOR_GUIDE.md) - 理解自然语言处理
+3. 阅读 [AI-CONTEXT_GUIDE.md](docs/guides/AI-CONTEXT_GUIDE.md) - 理解上下文管理
 
 ### 第三阶段：二次开发
 1. 添加新的节点类型
@@ -410,10 +410,10 @@ lingxi-ai-operation-system/
 
 | 文档 | 内容 | 难度 |
 |------|------|------|
-| [ORCHESTRATOR_GUIDE.md](docs/ORCHESTRATOR_GUIDE.md) | 任务编排详解 | ⭐⭐ |
-| [NL_TRANSLATOR_GUIDE.md](docs/NL_TRANSLATOR_GUIDE.md) | 自然语言翻译详解 | ⭐⭐ |
-| [AI-CONTEXT_GUIDE.md](docs/AI-CONTEXT_GUIDE.md) | 上下文管理详解 | ⭐ |
-| [WORKER_GUIDE.md](docs/WORKER_GUIDE.md) | 工具执行层详解 | ⭐⭐⭐ |
+| [ORCHESTRATOR_GUIDE.md](docs/guides/ORCHESTRATOR_GUIDE.md) | 任务编排详解 | ⭐⭐ |
+| [NL_TRANSLATOR_GUIDE.md](docs/guides/NL_TRANSLATOR_GUIDE.md) | 自然语言翻译详解 | ⭐⭐ |
+| [AI-CONTEXT_GUIDE.md](docs/guides/AI-CONTEXT_GUIDE.md) | 上下文管理详解 | ⭐ |
+| [WORKER_GUIDE.md](docs/guides/WORKER_GUIDE.md) | 工具执行层详解 | ⭐⭐⭐ |
 
 ---
 
