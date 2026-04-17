@@ -5,6 +5,10 @@ import com.lingxi.ai.translator.config.OpenAiConfig;
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.service.OpenAiService;
+import okhttp3.OkHttpClient;
+import retrofit2.Retrofit;
+import retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
+import retrofit2.converter.jackson.JacksonConverterFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,10 +66,28 @@ public class OpenAiClientService {
     public String callOpenAi(String userPrompt) {
         logger.info("Calling OpenAI with prompt: {}", userPrompt);
 
-        OpenAiService service = new OpenAiService(
-                openAiConfig.getApiKey(),
-                Duration.ofMillis(openAiConfig.getTimeout())
-        );
+        String apiKey = openAiConfig.getApiKey();
+        if (apiKey == null || apiKey.isBlank() || apiKey.equals("your-api-key-here")) {
+            throw new RuntimeException("OpenAI API key is not configured. Please set the OPENAI_API_KEY environment variable or update the openai.api-key in application.yml");
+        }
+
+        String baseUrl = openAiConfig.getBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            baseUrl = "https://api.openai.com/v1";
+        }
+        if (!baseUrl.endsWith("/")) {
+            baseUrl = baseUrl + "/";
+        }
+
+        OkHttpClient client = OpenAiService.defaultClient(apiKey, Duration.ofMillis(openAiConfig.getTimeout()));
+        Retrofit retrofit = new Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .client(client)
+                .addConverterFactory(JacksonConverterFactory.create(objectMapper))
+                .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
+                .build();
+        com.theokanning.openai.client.OpenAiApi api = retrofit.create(com.theokanning.openai.client.OpenAiApi.class);
+        OpenAiService service = new OpenAiService(api);
 
         ChatMessage systemMessage = new ChatMessage("system", SYSTEM_PROMPT);
         ChatMessage userMessage = new ChatMessage("user", userPrompt);

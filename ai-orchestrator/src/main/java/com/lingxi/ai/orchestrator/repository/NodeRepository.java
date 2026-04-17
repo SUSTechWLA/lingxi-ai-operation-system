@@ -17,6 +17,10 @@ public interface NodeRepository extends JpaRepository<Node, String> {
 
     List<Node> findByStatus(NodeStatus status);
 
+    List<Node> findByTaskIdAndStatus(String taskId, NodeStatus status);
+
+    List<Node> findByTaskIdAndStatusIn(String taskId, List<NodeStatus> statuses);
+
     /**
      * 查找可执行的节点：状态为 CREATED，且所有父节点都 SUCCESS
      */

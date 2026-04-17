@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 public class StateMachine {
@@ -30,6 +31,9 @@ public class StateMachine {
     @Autowired
     private ContextService contextService;
 
+    @Autowired
+    private TaskExecutionControl taskExecutionControl;
+
     @Transactional
     public void onSuccess(String nodeId, Map<String, Object> output) {
         Node node = nodeRepository.findById(nodeId)
@@ -42,6 +46,16 @@ public class StateMachine {
         nodeRepository.save(node);
 
         contextService.recordNodeSuccess(node);
+
+        Optional<Task> taskOpt = taskRepository.findById(node.getTaskId());
+        if (taskOpt.isPresent() && taskOpt.get().getStatus() == TaskStatus.PAUSED) {
+            logger.info("Task {} was PAUSED, checking if can resume now", node.getTaskId());
+            List<Node> failedNodes = nodeRepository.findByTaskIdAndStatus(
+                    node.getTaskId(), NodeStatus.FAILED);
+            if (failedNodes.isEmpty()) {
+                taskExecutionControl.resumeTask(node.getTaskId());
+            }
+        }
 
         triggerChildNodes(node);
         checkTaskCompletion(node.getTaskId());
@@ -72,6 +86,11 @@ public class StateMachine {
         nodeRepository.save(node);
 
         contextService.recordNodeRetry(node);
+
+        Optional<Task> taskOpt = taskRepository.findById(node.getTaskId());
+        if (taskOpt.isPresent() && taskOpt.get().getStatus() == TaskStatus.PAUSED) {
+            taskExecutionControl.resumeTask(node.getTaskId());
+        }
     }
 
     private void failNode(Node node) {
@@ -81,10 +100,30 @@ public class StateMachine {
         nodeRepository.save(node);
 
         contextService.recordNodeFailed(node);
-        failTask(node.getTaskId());
+
+        taskExecutionControl.pauseTask(
+                node.getTaskId(),
+                "Node " + node.getId() + " failed after max retries");
+
+        if (!hasRetryableNodes(node.getTaskId())) {
+            failTask(node.getTaskId());
+        }
+    }
+
+    private boolean hasRetryableNodes(String taskId) {
+        List<Node> nodes = nodeRepository.findByTaskId(taskId);
+        return nodes.stream()
+                .anyMatch(n -> n.getStatus() == NodeStatus.FAILED
+                        && n.getRetryCount() < n.getMaxRetry());
     }
 
     private void triggerChildNodes(Node parentNode) {
+        if (!taskExecutionControl.canScheduleNodes(parentNode.getTaskId())) {
+            logger.debug("Task {} cannot schedule child nodes now, skipping trigger",
+                    parentNode.getTaskId());
+            return;
+        }
+
         List<Node> childNodes = nodeRepository.findChildNodes(parentNode.getId());
         logger.info("Triggering {} child nodes for parent {}", childNodes.size(), parentNode.getId());
 

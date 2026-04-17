@@ -16,7 +16,18 @@ public class TranslateController {
     @Autowired
     private NlToDagService nlToDagService;
 
-    // 仅翻译，返回 DAG
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<Map<String, Object>> handleRuntimeException(RuntimeException e) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("error", e.getMessage());
+        error.put("type", "ConfigurationError");
+        if (e.getMessage().contains("API key")) {
+            error.put("hint", "Please set OPENAI_API_KEY environment variable or update openai.api-key in application.yml");
+            return ResponseEntity.status(503).body(error);
+        }
+        return ResponseEntity.status(500).body(error);
+    }
+
     @PostMapping("/translate")
     public ResponseEntity<Map<String, Object>> translate(@RequestBody Map<String, String> request) {
         String prompt = request.get("prompt");
@@ -28,7 +39,6 @@ public class TranslateController {
         return ResponseEntity.ok(result);
     }
 
-    // 翻译并提交给 orchestrator
     @PostMapping("/translate-and-submit")
     public ResponseEntity<Map<String, Object>> translateAndSubmit(@RequestBody Map<String, String> request) {
         String prompt = request.get("prompt");
@@ -36,7 +46,6 @@ public class TranslateController {
         return ResponseEntity.ok(result);
     }
 
-    // 查询任务状态（用户唯一查询入口）
     @GetMapping("/task/{taskId}")
     public ResponseEntity<Map<String, Object>> getTaskStatus(@PathVariable String taskId) {
         Map<String, Object> result = nlToDagService.getTaskStatus(taskId);

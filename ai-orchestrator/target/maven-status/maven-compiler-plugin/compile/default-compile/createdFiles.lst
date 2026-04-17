@@ -9,6 +9,7 @@ com/lingxi/ai/orchestrator/repository/NodeDependencyRepository.class
 com/lingxi/ai/orchestrator/context/Context.class
 com/lingxi/ai/orchestrator/service/DAGValidator.class
 com/lingxi/ai/orchestrator/service/StateMachine.class
+com/lingxi/ai/orchestrator/service/TaskExecutionControl.class
 com/lingxi/ai/orchestrator/model/DAG.class
 com/lingxi/ai/orchestrator/config/KafkaConfig.class
 com/lingxi/ai/orchestrator/context/ContextRepository.class

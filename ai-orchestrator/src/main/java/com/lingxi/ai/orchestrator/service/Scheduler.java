@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class Scheduler {
@@ -28,6 +30,9 @@ public class Scheduler {
     @Autowired
     private ContextService contextService;
 
+    @Autowired
+    private TaskExecutionControl taskExecutionControl;
+
     @Scheduled(fixedRate = 1000)
     @Transactional
     public void schedule() {
@@ -36,16 +41,32 @@ public class Scheduler {
             return;
         }
 
-        logger.info("Found {} ready nodes to schedule", readyNodes.size());
+        Map<String, List<Node>> nodesByTask = readyNodes.stream()
+                .collect(Collectors.groupingBy(Node::getTaskId));
 
-        for (Node node : readyNodes) {
-            if (tryLockAndRun(node)) {
-                logger.info("Scheduled node: {}", node.getId());
-                // 保存执行前快照
-                contextService.recordNodeSnapshot(node, "Before execution snapshot");
-                contextService.recordNodeScheduled(node);
-                eventProducer.publishNodeReady(node);
+        int scheduledCount = 0;
+        for (Map.Entry<String, List<Node>> entry : nodesByTask.entrySet()) {
+            String taskId = entry.getKey();
+            List<Node> taskNodes = entry.getValue();
+
+            if (!taskExecutionControl.canScheduleNodes(taskId)) {
+                logger.debug("Skipping scheduling for task {}: cannot schedule now", taskId);
+                continue;
             }
+
+            for (Node node : taskNodes) {
+                if (tryLockAndRun(node)) {
+                    logger.info("Scheduled node: {} for task: {}", node.getId(), taskId);
+                    contextService.recordNodeSnapshot(node, "Before execution snapshot");
+                    contextService.recordNodeScheduled(node);
+                    eventProducer.publishNodeReady(node);
+                    scheduledCount++;
+                }
+            }
+        }
+
+        if (scheduledCount > 0) {
+            logger.info("Scheduled {} nodes across {} tasks", scheduledCount, nodesByTask.size());
         }
     }
 

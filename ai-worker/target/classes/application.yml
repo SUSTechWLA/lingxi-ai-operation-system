@@ -1,0 +1,81 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: ai-worker
+
+  # Kafka/Redpanda配置
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: ai-worker-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+  # DataSource配置
+  datasource:
+    url: jdbc:postgresql://localhost:5432/lingxi_ai_os
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+  # JPA配置
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  # Redis配置
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+
+# OpenAI配置
+openai:
+  api-key: ${OPENAI_API_KEY:d5c51fd9-4a2e-455e-af6f-47de85eadf95}
+  base-url: ${OPENAI_BASE_URL:https://ark.cn-beijing.volces.com/api/coding/v3}
+  model: doubao-seed-2.0-pro
+  max-tokens: 2000
+  temperature: 0.7
+  timeout-seconds: 60
+
+# AI-Context服务配置
+context:
+  service:
+    url: http://localhost:8082
+
+# Worker线程池配置
+worker:
+  thread-pool:
+    core-size: 10
+    max-size: 50
+    queue-capacity: 100
+  tool:
+    timeout-seconds: 120
+
+# 文件工具配置
+file:
+  tool:
+    base-path: /tmp/ai-worker-files
+    allowed-paths:
+      - /tmp
+      - /var/tmp
+
+# 日志配置
+logging:
+  level:
+    com.lingxi.ai.worker: DEBUG
+    org.springframework.kafka: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%X{traceId:-}] [%thread] %-5level %logger{36} - %msg%n"

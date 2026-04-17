@@ -26,6 +26,9 @@ public class TaskController {
     @Autowired
     private ContextService contextService;
 
+    @Autowired
+    private com.lingxi.ai.orchestrator.service.TaskExecutionControl taskExecutionControl;
+
     @PostMapping("/task/create")
     public ResponseEntity<Map<String, Object>> createTask(@RequestBody Map<String, Object> request) {
         Task task = orchestratorService.createTask(request);
@@ -103,5 +106,52 @@ public class TaskController {
                         "snapshot", result
                 )))
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping("/task/{taskId}/pause")
+    public ResponseEntity<Map<String, String>> pauseTask(
+            @PathVariable String taskId,
+            @RequestBody(required = false) Map<String, String> request) {
+        String reason = request != null ? request.getOrDefault("reason", "Manual pause") : "Manual pause";
+        taskExecutionControl.pauseTask(taskId, reason);
+        return ResponseEntity.ok(Map.of(
+                "taskId", taskId,
+                "message", "Task paused successfully"
+        ));
+    }
+
+    @PostMapping("/task/{taskId}/resume")
+    public ResponseEntity<Map<String, String>> resumeTask(@PathVariable String taskId) {
+        taskExecutionControl.resumeTask(taskId);
+        return ResponseEntity.ok(Map.of(
+                "taskId", taskId,
+                "message", "Task resumed successfully"
+        ));
+    }
+
+    @PostMapping("/node/{nodeId}/retry")
+    public ResponseEntity<Map<String, String>> retryNode(@PathVariable String nodeId) {
+        taskExecutionControl.retryNode(nodeId);
+        return ResponseEntity.ok(Map.of(
+                "nodeId", nodeId,
+                "message", "Node retry initiated"
+        ));
+    }
+
+    @GetMapping("/task/{taskId}/pause-reason")
+    public ResponseEntity<Map<String, String>> getPauseReason(@PathVariable String taskId) {
+        String reason = taskExecutionControl.getTaskPauseReason(taskId);
+        return ResponseEntity.ok(Map.of(
+                "taskId", taskId,
+                "reason", reason
+        ));
+    }
+
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, String>> health() {
+        return ResponseEntity.ok(Map.of(
+                "status", "UP",
+                "service", "ai-orchestrator"
+        ));
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "openai")
 public class OpenAiConfig {
     private String apiKey;
+    private String baseUrl;
     private String model;
     private Double temperature;
     private Integer maxTokens;
