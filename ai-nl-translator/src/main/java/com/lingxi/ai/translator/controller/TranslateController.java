@@ -51,4 +51,12 @@ public class TranslateController {
         Map<String, Object> result = nlToDagService.getTaskStatus(taskId);
         return ResponseEntity.ok(result);
     }
+
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, String>> health() {
+        return ResponseEntity.ok(Map.of(
+                "status", "UP",
+                "service", "nl-translator"
+        ));
+    }
 }
