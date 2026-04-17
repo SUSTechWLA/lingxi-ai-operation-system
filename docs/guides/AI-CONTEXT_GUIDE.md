@@ -427,9 +427,9 @@ server:
 
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/lingxi_db
-    username: wanglian
-    password: "123"
+    url: jdbc:postgresql://localhost:{port}/lingxi_db
+    username: {username}
+    password: {password}
 
 context:
   service:
