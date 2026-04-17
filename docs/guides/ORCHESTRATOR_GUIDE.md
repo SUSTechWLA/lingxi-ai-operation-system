@@ -41,8 +41,8 @@
 
 ```mermaid
 graph TB
-    User[用户] -->|POST /api/node (DAG)| TaskController
-    NLTranslator[NL Translator] -->|POST /api/node (DAG)| TaskController
+    User[用户] -->|"POST /api/node (DAG)"| TaskController
+    NLTranslator[NL Translator] -->|"POST /api/node (DAG)"| TaskController
     
     subgraph "Orchestrator 模块"
         TaskController -->|创建任务| OrchestratorService
