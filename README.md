@@ -48,8 +48,6 @@
 
 ### 自然语言操作全景图
 
-### 自然语言操作全景图
-
 ```mermaid
 graph TD
     subgraph "用户入口层 (Entry Layer)"
