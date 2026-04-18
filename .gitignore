@@ -8,8 +8,8 @@
 ai-orchestrator/*.log
 
 # Build output
-# target/
-# */target/
+target/
+*/target/
 
 # Environment files with secrets - NEVER commit these!
 .env
