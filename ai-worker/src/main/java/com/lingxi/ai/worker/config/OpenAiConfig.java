@@ -21,22 +21,56 @@ public class OpenAiConfig {
     @Value("${openai.base-url:https://api.openai.com/v1}")
     private String baseUrl;
 
+    @Value("${openai.model:gpt-4}")
+    private String model;
+
+    @Value("${openai.max-tokens:2000}")
+    private int maxTokens;
+
+    @Value("${openai.temperature:0.7}")
+    private double temperature;
+
     @Value("${openai.timeout-seconds:60}")
     private int timeoutSeconds;
 
     @Bean
     public OpenAiService openAiService() {
-        if (!baseUrl.endsWith("/")) {
-            baseUrl = baseUrl + "/";
+        String url = baseUrl;
+        if (!url.endsWith("/")) {
+            url = url + "/";
         }
         OkHttpClient client = OpenAiService.defaultClient(apiKey, Duration.ofSeconds(timeoutSeconds));
         Retrofit retrofit = new Retrofit.Builder()
-                .baseUrl(baseUrl)
+                .baseUrl(url)
                 .client(client)
                 .addConverterFactory(JacksonConverterFactory.create())
                 .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
                 .build();
         OpenAiApi api = retrofit.create(OpenAiApi.class);
         return new OpenAiService(api);
+    }
+
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public String getModel() {
+        return model;
+    }
+
+    public int getMaxTokens() {
+        return maxTokens;
+    }
+
+    public double getTemperature() {
+        return temperature;
+    }
+
+    public int getTimeoutSeconds() {
+        return timeoutSeconds;
     }
 }

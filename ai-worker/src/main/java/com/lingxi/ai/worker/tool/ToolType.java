@@ -23,5 +23,9 @@ public enum ToolType {
     /**
      * 自定义工具
      */
-    CUSTOM
+    CUSTOM,
+    /**
+     * 外部多语言工具
+     */
+    EXTERNAL
 }

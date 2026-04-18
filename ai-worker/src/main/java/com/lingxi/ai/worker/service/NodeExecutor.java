@@ -3,6 +3,7 @@ package com.lingxi.ai.worker.service;
 import com.lingxi.ai.worker.client.ContextClient;
 import com.lingxi.ai.worker.config.WorkerConfig;
 import com.lingxi.ai.worker.event.EventProducer;
+import com.lingxi.ai.worker.externaltool.service.ExternalToolExecutor;
 import com.lingxi.ai.worker.model.NodeResultEvent;
 import com.lingxi.ai.worker.model.NodeStatus;
 import com.lingxi.ai.worker.model.NodeTaskEvent;
@@ -15,6 +16,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Instant;
 import java.util.Map;
@@ -33,6 +36,7 @@ public class NodeExecutor {
     private final EventProducer eventProducer;
     private final ContextClient contextClient;
     private final WorkerConfig workerConfig;
+    private final ExternalToolExecutor externalToolExecutor;
 
     @Qualifier("toolExecutorService")
     private final ExecutorService toolExecutorService;
@@ -59,18 +63,7 @@ public class NodeExecutor {
             }
 
             String toolName = determineToolName(nodeType, payload);
-            Optional<Tool> toolOpt = toolRegistry.getTool(toolName);
-            if (toolOpt.isEmpty()) {
-                throw new IllegalArgumentException("Tool not found: " + toolName);
-            }
-
-            Tool tool = toolOpt.get();
             Map<String, Object> parameters = extractParameters(payload);
-
-            if (!tool.validateParameters(parameters)) {
-                throw new IllegalArgumentException("Invalid parameters for tool: " + toolName);
-            }
-
             ToolContext context = ToolContext.builder()
                     .taskId(taskId)
                     .nodeId(nodeId)
@@ -78,6 +71,101 @@ public class NodeExecutor {
                     .build();
 
             eventProducer.publishNodeRunning(taskId, nodeId, traceId);
+
+            // 检查是否为外部工具
+            if (externalToolExecutor.isExternalTool(toolName)) {
+                log.info("Executing as external tool: {}", toolName);
+                executeExternalToolAsync(toolName, parameters, context, traceId, nodeType, input);
+            } else {
+                // 执行本地工具
+                log.info("Executing as local tool: {}", toolName);
+                executeLocalTool(toolName, parameters, context, traceId, nodeType, input);
+            }
+
+        } catch (Exception e) {
+            log.error("Node execution failed: taskId={}, nodeId={}", taskId, nodeId, e);
+            savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, e.getMessage());
+            publishFailureResult(taskId, nodeId, traceId, e.getMessage());
+            recordNodeFailed(taskId, nodeId, e.getMessage());
+            TraceContext.clear();
+        }
+    }
+
+    /**
+     * 执行外部工具（异步非阻塞）
+     */
+    private void executeExternalToolAsync(
+            String toolName,
+            Map<String, Object> parameters,
+            ToolContext context,
+            String traceId,
+            String nodeType,
+            Map<String, Object> input) {
+
+        String taskId = context.getTaskId();
+        String nodeId = context.getNodeId();
+
+        externalToolExecutor.executeTool(toolName, parameters, context)
+                .subscribeOn(Schedulers.boundedElastic())
+                .subscribe(
+                        result -> {
+                            try {
+                                TraceContext.setContext(traceId, taskId, nodeId);
+                                if (result.isSuccess()) {
+                                    log.info("External tool execution succeeded: {}", toolName);
+                                    savePostExecutionSnapshot(taskId, nodeId, nodeType, input, result.getData(), null);
+                                    publishSuccessResult(taskId, nodeId, traceId, result.getData());
+                                    recordNodeSuccess(taskId, nodeId);
+                                } else {
+                                    log.warn("External tool execution failed: {}", toolName);
+                                    savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, result.getErrorMessage());
+                                    publishFailureResult(taskId, nodeId, traceId, result.getErrorMessage());
+                                    recordNodeFailed(taskId, nodeId, result.getErrorMessage());
+                                }
+                            } finally {
+                                TraceContext.clear();
+                            }
+                        },
+                        error -> {
+                            try {
+                                TraceContext.setContext(traceId, taskId, nodeId);
+                                log.error("External tool execution error: {}", toolName, error);
+                                String errorMessage = error.getMessage() != null ? error.getMessage() : "Unknown error";
+                                savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, errorMessage);
+                                publishFailureResult(taskId, nodeId, traceId, errorMessage);
+                                recordNodeFailed(taskId, nodeId, errorMessage);
+                            } finally {
+                                TraceContext.clear();
+                            }
+                        }
+                );
+    }
+
+    /**
+     * 执行本地工具（同步阻塞）
+     */
+    private void executeLocalTool(
+            String toolName,
+            Map<String, Object> parameters,
+            ToolContext context,
+            String traceId,
+            String nodeType,
+            Map<String, Object> input) {
+
+        String taskId = context.getTaskId();
+        String nodeId = context.getNodeId();
+
+        try {
+            Optional<Tool> toolOpt = toolRegistry.getTool(toolName);
+            if (toolOpt.isEmpty()) {
+                throw new IllegalArgumentException("Tool not found: " + toolName);
+            }
+
+            Tool tool = toolOpt.get();
+
+            if (!tool.validateParameters(parameters)) {
+                throw new IllegalArgumentException("Invalid parameters for tool: " + toolName);
+            }
 
             ToolResult result = executeWithTimeout(tool, parameters, context, traceId);
 
@@ -90,9 +178,8 @@ public class NodeExecutor {
                 publishFailureResult(taskId, nodeId, traceId, result.getErrorMessage());
                 recordNodeFailed(taskId, nodeId, result.getErrorMessage());
             }
-
         } catch (Exception e) {
-            log.error("Node execution failed: taskId={}, nodeId={}", taskId, nodeId, e);
+            log.error("Local tool execution failed: taskId={}, nodeId={}", taskId, nodeId, e);
             savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, e.getMessage());
             publishFailureResult(taskId, nodeId, traceId, e.getMessage());
             recordNodeFailed(taskId, nodeId, e.getMessage());
@@ -190,6 +277,10 @@ public class NodeExecutor {
         if (payload.containsKey("tool")) {
             return payload.get("tool").toString();
         }
+        // 如果是TOOL类型节点，name字段就是工具名
+        if ("TOOL".equals(nodeType) && payload.containsKey("name")) {
+            return payload.get("name").toString();
+        }
         return "llm";
     }
 
@@ -199,6 +290,13 @@ public class NodeExecutor {
             Object params = payload.get("parameters");
             if (params instanceof Map) {
                 return (Map<String, Object>) params;
+            }
+        }
+        // 如果是TOOL类型节点，input字段就是参数
+        if (payload.containsKey("input")) {
+            Object input = payload.get("input");
+            if (input instanceof Map) {
+                return (Map<String, Object>) input;
             }
         }
         return payload;
