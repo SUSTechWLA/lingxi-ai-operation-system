@@ -362,7 +362,7 @@ graph TB
 ### 第二阶段：理解原理
 1. 阅读 [ORCHESTRATOR_GUIDE.md](docs/guides/ORCHESTRATOR_GUIDE.md) - 理解任务编排
 2. 阅读 [NL_TRANSLATOR_GUIDE.md](docs/guides/NL_TRANSLATOR_GUIDE.md) - 理解自然语言处理
-3. 阅读 [AI-CONTEXT_GUIDE.md](docs/guides/AI-CONTEXT_GUIDE.md) - 理解上下文管理
+3. 阅读 [AI_CONTEXT_GUIDE.md](docs/guides/AI_CONTEXT_GUIDE.md) - 理解上下文管理
 3. 阅读 [WORKER_GUIDE.md](docs/guides/WORKER_GUIDE.md) - 理解上下文管理
 
 ### 第三阶段：二次开发
