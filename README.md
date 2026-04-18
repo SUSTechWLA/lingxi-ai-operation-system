@@ -378,7 +378,7 @@ graph TB
 |------|------|------|
 | [ORCHESTRATOR_GUIDE.md](docs/guides/ORCHESTRATOR_GUIDE.md) | 任务编排详解 | ⭐⭐ |
 | [NL_TRANSLATOR_GUIDE.md](docs/guides/NL_TRANSLATOR_GUIDE.md) | 自然语言翻译详解 | ⭐⭐ |
-| [AI-CONTEXT_GUIDE.md](docs/guides/AI-CONTEXT_GUIDE.md) | 上下文管理详解 | ⭐ |
+| [AI-CONTEXT_GUIDE.md](docs/guides/AI_CONTEXT_GUIDE.md) | 上下文管理详解 | ⭐ |
 | [WORKER_GUIDE.md](docs/guides/WORKER_GUIDE.md) | 工具执行层详解 | ⭐⭐⭐ |
 
 ---
