@@ -76,7 +76,7 @@ python test_tool_final.py
 
 ```bash
 cd examples
-./final_test.sh
+../scripts/final_test.sh
 ```
 
 或者手动注册：

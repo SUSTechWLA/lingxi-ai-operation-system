@@ -8,8 +8,9 @@
 |------|------|
 | `weather_tool.py` | 完整的天气查询工具示例（生产级） |
 | `test_tool_final.py` | 简化的测试工具（用于验证注册流程） |
-| `final_test.sh` | 自动化测试脚本 |
 | `requirements.txt` | Python依赖 |
+
+**注意**: 自动化测试脚本已移动到 `../scripts/final_test.sh`
 
 ## 快速开始
 
@@ -35,7 +36,7 @@ mvn spring-boot:run
 
 ### 4. 运行测试脚本
 ```bash
-./final_test.sh
+../scripts/final_test.sh
 ```
 
 ## 工具接口规范
