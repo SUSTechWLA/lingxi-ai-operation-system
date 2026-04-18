@@ -14,6 +14,11 @@ section() { echo -e "\n${BLUE}========================================${NC}"; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+if [ -f "$PROJECT_DIR/.env" ]; then
+    export $(cat "$PROJECT_DIR/.env" | grep -v '^#' | xargs)
+fi
+
 CONTEXT_PID=""
 ORCH_PID=""
 TRANSLATOR_PID=""
