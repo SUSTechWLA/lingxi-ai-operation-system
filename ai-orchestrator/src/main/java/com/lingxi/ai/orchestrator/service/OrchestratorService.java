@@ -101,6 +101,10 @@ public class OrchestratorService {
         taskRepository.save(task);
 
         contextService.recordDagSubmitted(taskId);
+
+        // 将没有依赖的节点设置为READY状态
+        initializeReadyNodes(taskId, dagRequest);
+
         logger.info("DAG submitted for task: {}", taskId);
     }
 
@@ -129,5 +133,35 @@ public class OrchestratorService {
         result.put("nodes", nodes);
 
         return result;
+    }
+
+    /**
+     * 初始化就绪节点：将没有依赖的节点设置为READY状态
+     */
+    private void initializeReadyNodes(String taskId, DAGRequest dagRequest) {
+        List<String> allNodeIds = dagRequest.getNodes().stream()
+                .map(DAGRequest.NodeRequest::getId)
+                .toList();
+
+        // 找出所有有依赖的节点
+        java.util.Set<String> nodesWithDependencies = new java.util.HashSet<>();
+        if (dagRequest.getEdges() != null) {
+            for (DAGRequest.Edge edge : dagRequest.getEdges()) {
+                nodesWithDependencies.add(edge.getTo());
+            }
+        }
+
+        // 将没有依赖的节点设置为READY
+        for (String nodeId : allNodeIds) {
+            if (!nodesWithDependencies.contains(nodeId)) {
+                Node node = nodeRepository.findById(nodeId).orElse(null);
+                if (node != null && node.getStatus() == NodeStatus.CREATED) {
+                    node.setStatus(NodeStatus.READY);
+                    nodeRepository.save(node);
+                    contextService.recordNodeReady(node);
+                    logger.info("Node {} is READY (no dependencies)", nodeId);
+                }
+            }
+        }
     }
 }

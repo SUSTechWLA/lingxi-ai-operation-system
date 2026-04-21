@@ -1,28 +1,28 @@
 package com.lingxi.ai.orchestrator.event;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lingxi.ai.orchestrator.model.NodeResultEvent;
 import com.lingxi.ai.orchestrator.model.NodeStatus;
 import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.Map;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class WorkerService {
 
-    private static final Logger logger = LoggerFactory.getLogger(WorkerService.class);
-
-    @Autowired
-    private KafkaTemplate<String, Object> kafkaTemplate;
+    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final ObjectMapper objectMapper;
 
     public void executeTask(NodeTaskEvent event) {
         try {
-            logger.info("Worker executing task for node: {}", event.getNodeId());
+            log.info("Worker executing task for node: {}", event.getNodeId());
 
             Thread.sleep(1000);
 
@@ -47,19 +47,26 @@ public class WorkerService {
             }
             result.setOutput(output);
 
-            logger.info("Worker completed task for node: {}", event.getNodeId());
-            kafkaTemplate.send("ai.node.result", event.getTaskId() + "-" + event.getNodeId(), result);
+            log.info("Worker completed task for node: {}", event.getNodeId());
+            String message = objectMapper.writeValueAsString(result);
+            kafkaTemplate.send("ai.node.result", event.getTaskId() + "-" + event.getNodeId(), message);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            try {
+                NodeResultEvent result = new NodeResultEvent();
+                result.setTaskId(event.getTaskId());
+                result.setNodeId(event.getNodeId());
+                result.setStatus(NodeStatus.FAILED);
+                result.setTraceId(event.getTraceId());
+                result.setErrorMessage("执行中断");
 
-            NodeResultEvent result = new NodeResultEvent();
-            result.setTaskId(event.getTaskId());
-            result.setNodeId(event.getNodeId());
-            result.setStatus(NodeStatus.FAILED);
-            result.setTraceId(event.getTraceId());
-            result.setErrorMessage("执行中断");
-
-            kafkaTemplate.send("ai.node.result", event.getTaskId() + "-" + event.getNodeId(), result);
+                String message = objectMapper.writeValueAsString(result);
+                kafkaTemplate.send("ai.node.result", event.getTaskId() + "-" + event.getNodeId(), message);
+            } catch (Exception ex) {
+                log.error("Failed to send failure message", ex);
+            }
+        } catch (Exception e) {
+            log.error("Error in executeTask", e);
         }
     }
 }
