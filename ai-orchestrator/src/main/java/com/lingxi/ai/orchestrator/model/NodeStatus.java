@@ -1,5 +1,9 @@
 package com.lingxi.ai.orchestrator.model;
 
 public enum NodeStatus {
-    PENDING, RUNNING, SUCCESS, FAILED
+    CREATED,
+    READY,
+    RUNNING,
+    SUCCESS,
+    FAILED
 }

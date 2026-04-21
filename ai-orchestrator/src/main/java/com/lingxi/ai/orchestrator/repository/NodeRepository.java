@@ -22,20 +22,9 @@ public interface NodeRepository extends JpaRepository<Node, String> {
     List<Node> findByTaskIdAndStatusIn(String taskId, List<NodeStatus> statuses);
 
     /**
-     * 查找可执行的节点：状态为 CREATED，且所有父节点都 SUCCESS
+     * 查找可执行的节点：状态为 READY
      */
-    @Query(value = """
-        SELECT n.*
-        FROM ai_node n
-        WHERE n.status = 'CREATED'
-        AND NOT EXISTS (
-            SELECT 1
-            FROM ai_node_dependency d
-            JOIN ai_node p ON d.parent_node_id = p.id
-            WHERE d.child_node_id = n.id
-            AND p.status != 'SUCCESS'
-        )
-        """, nativeQuery = true)
+    @Query("SELECT n FROM Node n WHERE n.status = 'READY'")
     List<Node> findReadyNodes();
 
     /**

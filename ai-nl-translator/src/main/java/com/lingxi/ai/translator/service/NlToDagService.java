@@ -42,9 +42,9 @@ public class NlToDagService {
         // 解析 JSON 为 DAG 对象
         try {
             DAG dag = objectMapper.readValue(openAiResponse, DAG.class);
-            // 初始化所有节点状态为 PENDING
+            // 初始化所有节点状态为 CREATED
             for (Node node : dag.getNodes()) {
-                node.setStatus(NodeStatus.PENDING);
+                node.setStatus(NodeStatus.CREATED);
             }
             logger.info("Successfully translated to DAG with {} nodes", dag.getNodes().size());
             return dag;

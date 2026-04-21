@@ -1,72 +1,18 @@
 package com.lingxi.ai.orchestrator.model;
 
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import java.util.Map;
 
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 public class NodeResultEvent {
     private String taskId;
     private String nodeId;
     private NodeStatus status;
     private Map<String, Object> output;
     private String traceId;
-    private String errorMessage; // 失败时填充
-
-    public NodeResultEvent() {
-    }
-
-    public NodeResultEvent(String taskId, String nodeId, NodeStatus status, Map<String, Object> output, String traceId, String errorMessage) {
-        this.taskId = taskId;
-        this.nodeId = nodeId;
-        this.status = status;
-        this.output = output;
-        this.traceId = traceId;
-        this.errorMessage = errorMessage;
-    }
-
-    public String getTaskId() {
-        return taskId;
-    }
-
-    public void setTaskId(String taskId) {
-        this.taskId = taskId;
-    }
-
-    public String getNodeId() {
-        return nodeId;
-    }
-
-    public void setNodeId(String nodeId) {
-        this.nodeId = nodeId;
-    }
-
-    public NodeStatus getStatus() {
-        return status;
-    }
-
-    public void setStatus(NodeStatus status) {
-        this.status = status;
-    }
-
-    public Map<String, Object> getOutput() {
-        return output;
-    }
-
-    public void setOutput(Map<String, Object> output) {
-        this.output = output;
-    }
-
-    public String getTraceId() {
-        return traceId;
-    }
-
-    public void setTraceId(String traceId) {
-        this.traceId = traceId;
-    }
-
-    public String getErrorMessage() {
-        return errorMessage;
-    }
-
-    public void setErrorMessage(String errorMessage) {
-        this.errorMessage = errorMessage;
-    }
+    private String errorMessage;
 }
