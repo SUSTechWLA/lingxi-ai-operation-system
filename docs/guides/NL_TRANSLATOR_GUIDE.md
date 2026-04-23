@@ -131,20 +131,20 @@ ai-nl-translator/
 ```bash
 curl -X POST http://localhost:8081/api/translate \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "写一篇关于AI的文章并生成摘要"}'
+  -d '{"prompt": "查询北京天气并生成总结报告"}'
 ```
 
 响应：
 ```json
 {
-  "prompt": "写一篇关于AI的文章并生成摘要",
+  "prompt": "查询北京天气并生成总结报告",
   "dag": {
     "nodes": [
       {
         "id": "node-1",
-        "type": "LLM",
-        "name": "write_article",
-        "input": {"topic": "AI"},
+        "type": "TOOL",
+        "name": "weather_query",
+        "input": {"city": "北京", "type": "realtime"},
         "status": "CREATED"
       },
       {
@@ -170,14 +170,14 @@ curl -X POST http://localhost:8081/api/translate \
 ```bash
 curl -X POST http://localhost:8081/api/translate-and-submit \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "写一篇关于AI的文章"}'
+  -d '{"prompt": "查询北京的天气"}'
 ```
 
 响应：
 ```json
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "prompt": "写一篇关于AI的文章",
+  "prompt": "查询北京的天气",
   "dag": {
     "nodes": [...]
   },
@@ -323,7 +323,7 @@ sequenceDiagram
 ### DAG 生成流程
 
 ```
-用户输入: "写一篇关于AI的文章并生成摘要"
+用户输入: "查询北京天气并生成总结报告"
                         │
                         ▼
             ┌─────────────────────────┐
@@ -381,12 +381,12 @@ mvn spring-boot:run
 # 仅翻译
 curl -X POST http://localhost:8081/api/translate \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "写一篇关于AI的文章并生成摘要"}'
+  -d '{"prompt": "查询北京天气并生成总结报告"}'
 
 # 翻译并提交
 curl -X POST http://localhost:8081/api/translate-and-submit \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "写一篇关于AI的文章"}'
+  -d '{"prompt": "查询北京的天气"}'
 ```
 
 ### 配置说明

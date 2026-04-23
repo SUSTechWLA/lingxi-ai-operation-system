@@ -120,14 +120,13 @@ curl -X POST http://localhost:8080/api/task/{taskId}/dag \
   -d '{
     "nodes": [
       {
-        "id": "node-llm-001",
-        "type": "LLM",
-        "name": "write_article",
+        "id": "node-tool-001",
+        "type": "TOOL",
+        "name": "weather_query",
         "input": {
-          "tool": "llm",
+          "tool": "weather",
           "parameters": {
-            "prompt": "写一篇关于人工智能未来发展的文章，300字以内",
-            "system_prompt": "你是一个专业的科技文章作者"
+            "city": "北京"
           }
         },
         "maxRetry": 3
@@ -271,13 +270,13 @@ curl -X POST http://localhost:8080/api/task/{taskId}/dag \
     "nodes": [
       {
         "id": "write-ai-article",
-        "type": "LLM",
-        "name": "write_ai_article",
+        "type": "TOOL",
+        "name": "weather_query",
         "input": {
-          "tool": "llm",
+          "tool": "weather_query",
           "parameters": {
-            "prompt": "写一篇关于AI的短文，200字以内",
-            "system_prompt": "你是一个科普作家"
+            "city": "北京",
+            "type": "realtime"
           }
         },
         "maxRetry": 2

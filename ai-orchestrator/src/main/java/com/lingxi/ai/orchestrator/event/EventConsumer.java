@@ -1,15 +1,14 @@
 package com.lingxi.ai.orchestrator.event;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lingxi.ai.orchestrator.model.NodeResultEvent;
-import com.lingxi.ai.orchestrator.model.NodeTaskEvent;
-import com.lingxi.ai.orchestrator.model.NodeStatus;
+import com.lingxi.ai.orchestrator.service.DependencyChecker;
 import com.lingxi.ai.orchestrator.service.StateMachine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
+
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -17,35 +16,46 @@ import org.springframework.stereotype.Service;
 public class EventConsumer {
 
     private final StateMachine stateMachine;
-    private final WorkerService workerService;
+    private final DependencyChecker dependencyChecker;
     private final ObjectMapper objectMapper;
-
-    @KafkaListener(topics = "ai.node.ready", groupId = "worker-group")
-    public void handleNodeReady(String message) {
-        log.info("Received node ready message: {}", message);
-        try {
-            NodeTaskEvent event = objectMapper.readValue(message, NodeTaskEvent.class);
-            log.info("Parsed node ready event: {}", event.getNodeId());
-            workerService.executeTask(event);
-        } catch (Exception e) {
-            log.error("Error processing node ready message: {}", message, e);
-        }
-    }
 
     @KafkaListener(topics = "ai.node.result", groupId = "orchestrator-group")
     public void handleNodeResult(String message) {
         log.info("Received node result message: {}", message);
         try {
-            NodeResultEvent event = objectMapper.readValue(message, NodeResultEvent.class);
-            log.info("Parsed node result event: {} - {}", event.getNodeId(), event.getStatus());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> event = objectMapper.readValue(message, Map.class);
+            String nodeId = (String) event.get("nodeId");
+            String taskId = (String) event.get("taskId");
+            String status = (String) event.get("status");
 
-            if (event.getStatus() == NodeStatus.SUCCESS) {
-                stateMachine.onSuccess(event.getNodeId(), event.getOutput());
-            } else if (event.getStatus() == NodeStatus.FAILED) {
-                stateMachine.onFailure(event.getNodeId(), event.getErrorMessage());
+            log.info("Parsed node result event: nodeId={}, status={}", nodeId, status);
+
+            if ("SUCCESS".equals(status)) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> output = (Map<String, Object>) event.get("output");
+                stateMachine.onSuccess(nodeId, output);
+            } else if ("FAILED".equals(status)) {
+                String errorMessage = (String) event.get("errorMessage");
+                stateMachine.onFailure(nodeId, errorMessage);
             }
         } catch (Exception e) {
             log.error("Error processing node result message: {}", message, e);
+        }
+    }
+
+    @KafkaListener(topics = "ai.node.executed", groupId = "orchestrator-group")
+    public void handleNodeExecuted(String message) {
+        log.info("Received node executed message: {}", message);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> event = objectMapper.readValue(message, Map.class);
+            String nodeId = (String) event.get("nodeId");
+            String taskId = (String) event.get("taskId");
+
+            dependencyChecker.onNodeExecuted(nodeId, taskId);
+        } catch (Exception e) {
+            log.error("Error processing node executed message: {}", message, e);
         }
     }
 }

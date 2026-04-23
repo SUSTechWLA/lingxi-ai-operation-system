@@ -1,64 +1,50 @@
 package com.lingxi.ai.orchestrator.service;
 
-import com.lingxi.ai.orchestrator.context.ContextService;
 import com.lingxi.ai.orchestrator.entity.Node;
 import com.lingxi.ai.orchestrator.entity.NodeStatus;
 import com.lingxi.ai.orchestrator.entity.Task;
 import com.lingxi.ai.orchestrator.entity.TaskStatus;
+import com.lingxi.ai.orchestrator.event.EventProducer;
 import com.lingxi.ai.orchestrator.repository.NodeRepository;
 import com.lingxi.ai.orchestrator.repository.TaskRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class StateMachine {
 
-    private static final Logger logger = LoggerFactory.getLogger(StateMachine.class);
-
-    @Autowired
-    private NodeRepository nodeRepository;
-
-    @Autowired
-    private TaskRepository taskRepository;
-
-    @Autowired
-    private ContextService contextService;
-
-    @Autowired
-    private TaskExecutionControl taskExecutionControl;
+    private final StateService stateService;
+    private final NodeRepository nodeRepository;
+    private final TaskRepository taskRepository;
+    private final EventProducer eventProducer;
+    private final RetryPolicy retryPolicy;
 
     @Transactional
     public void onSuccess(String nodeId, Map<String, Object> output) {
-        Node node = nodeRepository.findById(nodeId)
-                .orElseThrow(() -> new IllegalArgumentException("Node not found: " + nodeId));
+        Node node = stateService.transitionNode(nodeId, NodeStatus.SUCCESS, output, null);
+        log.info("Node {} succeeded", nodeId);
 
-        logger.info("Node {} succeeded", nodeId);
+        // Publish NodeExecuted event for dependency-driven scheduling
+        eventProducer.publishNodeExecuted(node);
 
-        node.setStatus(NodeStatus.SUCCESS);
-        node.setOutput(output);
-        nodeRepository.save(node);
-
-        contextService.recordNodeSuccess(node);
-
-        Optional<Task> taskOpt = taskRepository.findById(node.getTaskId());
-        if (taskOpt.isPresent() && taskOpt.get().getStatus() == TaskStatus.PAUSED) {
-            logger.info("Task {} was PAUSED, checking if can resume now", node.getTaskId());
-            List<Node> failedNodes = nodeRepository.findByTaskIdAndStatus(
-                    node.getTaskId(), NodeStatus.FAILED);
-            if (failedNodes.isEmpty()) {
-                taskExecutionControl.resumeTask(node.getTaskId());
+        // Check if task was paused and can resume
+        Task task = taskRepository.findById(node.getTaskId()).orElse(null);
+        if (task != null && task.getStatus() == TaskStatus.PAUSED) {
+            if (!stateService.hasRetryableNodes(node.getTaskId())) {
+                stateService.transitionTask(node.getTaskId(), TaskStatus.RUNNING);
             }
         }
 
-        triggerChildNodes(node);
-        checkTaskCompletion(node.getTaskId());
+        // Check task completion
+        if (stateService.checkTaskCompleted(node.getTaskId())) {
+            stateService.transitionTask(node.getTaskId(), TaskStatus.SUCCESS);
+        }
     }
 
     @Transactional
@@ -66,115 +52,39 @@ public class StateMachine {
         Node node = nodeRepository.findById(nodeId)
                 .orElseThrow(() -> new IllegalArgumentException("Node not found: " + nodeId));
 
-        logger.info("Node {} failed: {}", nodeId, errorMessage);
+        log.info("Node {} failed: {}", nodeId, errorMessage);
 
-        node.setErrorMessage(errorMessage);
-
-        if (node.getRetryCount() < node.getMaxRetry()) {
-            retryNode(node);
+        if (retryPolicy.shouldRetry(node.getRetryCount(), node.getMaxRetry())) {
+            retryNode(node, errorMessage);
         } else {
-            failNode(node);
+            failNode(node, errorMessage);
         }
     }
 
-    private void retryNode(Node node) {
-        logger.info("Retrying node {} (attempt {}/{})",
+    private void retryNode(Node node, String errorMessage) {
+        log.info("Retrying node {} (attempt {}/{})",
                 node.getId(), node.getRetryCount() + 1, node.getMaxRetry());
 
-        node.setStatus(NodeStatus.CREATED);
+        node.setErrorMessage(errorMessage);
+        node.setStatus(NodeStatus.RETRYING);
         node.setRetryCount(node.getRetryCount() + 1);
         nodeRepository.save(node);
 
-        contextService.recordNodeRetry(node);
-
-        Optional<Task> taskOpt = taskRepository.findById(node.getTaskId());
-        if (taskOpt.isPresent() && taskOpt.get().getStatus() == TaskStatus.PAUSED) {
-            taskExecutionControl.resumeTask(node.getTaskId());
-        }
+        stateService.transitionNode(node.getId(), NodeStatus.CREATED, null, null);
     }
 
-    private void failNode(Node node) {
-        logger.info("Node {} failed after {} retries", node.getId(), node.getMaxRetry());
+    private void failNode(Node node, String errorMessage) {
+        log.info("Node {} failed after {} retries", node.getId(), node.getMaxRetry());
 
-        node.setStatus(NodeStatus.FAILED);
-        nodeRepository.save(node);
+        stateService.transitionNode(node.getId(), NodeStatus.FAILED, null, errorMessage);
 
-        contextService.recordNodeFailed(node);
+        // Publish NodeFailed event
+        eventProducer.publishNodeFailed(node);
 
-        taskExecutionControl.pauseTask(
-                node.getTaskId(),
-                "Node " + node.getId() + " failed after max retries");
+        stateService.transitionTask(node.getTaskId(), TaskStatus.PAUSED);
 
-        if (!hasRetryableNodes(node.getTaskId())) {
-            failTask(node.getTaskId());
-        }
-    }
-
-    private boolean hasRetryableNodes(String taskId) {
-        List<Node> nodes = nodeRepository.findByTaskId(taskId);
-        return nodes.stream()
-                .anyMatch(n -> n.getStatus() == NodeStatus.FAILED
-                        && n.getRetryCount() < n.getMaxRetry());
-    }
-
-    private void triggerChildNodes(Node parentNode) {
-        if (!taskExecutionControl.canScheduleNodes(parentNode.getTaskId())) {
-            logger.debug("Task {} cannot schedule child nodes now, skipping trigger",
-                    parentNode.getTaskId());
-            return;
-        }
-
-        List<Node> childNodes = nodeRepository.findChildNodes(parentNode.getId());
-        logger.info("Triggering {} child nodes for parent {}", childNodes.size(), parentNode.getId());
-
-        for (Node child : childNodes) {
-            if (child.getStatus() == NodeStatus.CREATED) {
-                boolean allParentsSuccess = areAllParentsSuccessful(child);
-                if (allParentsSuccess) {
-                    child.setStatus(NodeStatus.READY);
-                    nodeRepository.save(child);
-                    logger.info("Child node {} is now READY", child.getId());
-                    contextService.recordNodeReady(child);
-                }
-            }
-        }
-    }
-
-    private boolean areAllParentsSuccessful(Node node) {
-        List<com.lingxi.ai.orchestrator.entity.NodeDependency> dependencies =
-                nodeRepository.findByChildNodeId(node.getId());
-
-        for (com.lingxi.ai.orchestrator.entity.NodeDependency dep : dependencies) {
-            Node parent = nodeRepository.findById(dep.getParentNodeId()).orElse(null);
-            if (parent == null || parent.getStatus() != NodeStatus.SUCCESS) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private void checkTaskCompletion(String taskId) {
-        List<Node> nodes = nodeRepository.findByTaskId(taskId);
-
-        boolean allSuccess = nodes.stream().allMatch(n -> n.getStatus() == NodeStatus.SUCCESS);
-        if (allSuccess) {
-            Task task = taskRepository.findById(taskId).orElse(null);
-            if (task != null) {
-                task.setStatus(TaskStatus.SUCCESS);
-                taskRepository.save(task);
-                logger.info("Task {} completed successfully", taskId);
-                contextService.recordTaskSuccess(task);
-            }
-        }
-    }
-
-    private void failTask(String taskId) {
-        Task task = taskRepository.findById(taskId).orElse(null);
-        if (task != null) {
-            task.setStatus(TaskStatus.FAILED);
-            taskRepository.save(task);
-            logger.info("Task {} failed", taskId);
-            contextService.recordTaskFailed(task);
+        if (!stateService.hasRetryableNodes(node.getTaskId())) {
+            stateService.transitionTask(node.getTaskId(), TaskStatus.FAILED);
         }
     }
 }

@@ -1,7 +1,7 @@
 # 灵犀AI OS AI-Context 模块完整指南
 
 > **状态**: ✅ 已实现 - 本文档描述当前已实现的模块
-> **最后更新**: 2026-04-18
+> **最后更新**: 2026-04-22
 
 ---
 
@@ -67,6 +67,11 @@
 - 按节点ID查询快照
 - 支持时间范围查询
 
+### 5. 事件自动记录
+- 监听 Kafka 事件总线，自动记录关键事件
+- 支持多种事件类型（任务/节点生命周期、节点执行完成等）
+- 新增 `ai.node.executed` 事件监听，记录节点执行完成事件
+
 ---
 
 ## 技术栈
@@ -97,6 +102,8 @@ ai-context/
     │   └── ContextService.java         # 业务服务
     ├── controller/
     │   └── ContextController.java      # REST API
+    ├── event/
+    │   └── ContextEventConsumer.java   # Kafka 事件消费（自动记录上下文）
     └── config/
         └── DatabaseInitializer.java     # 数据库初始化
 ```
@@ -190,9 +197,9 @@ curl -X POST http://localhost:8082/api/context/node-snapshot \
     "taskId": "task-001",
     "nodeId": "node-001",
     "type": "LLM",
-    "name": "write_article",
+    "name": "weather_query",
     "status": "RUNNING",
-    "input": {"topic": "AI"},
+    "input": {"city": "北京", "type": "realtime"},
     "output": {},
     "retryCount": 0,
     "maxRetry": 3,
@@ -217,9 +224,9 @@ curl http://localhost:8082/api/node/node-001/snapshot/latest
     "nodeId": "node-001",
     "taskId": "task-001",
     "type": "LLM",
-    "name": "write_article",
+    "name": "weather_query",
     "status": "RUNNING",
-    "input": {"topic": "AI"},
+    "input": {"city": "北京", "type": "realtime"},
     "output": {},
     "retryCount": 0,
     "maxRetry": 3,
@@ -405,6 +412,52 @@ curl -X POST http://localhost:8082/api/context/task-created \
 # 查询上下文
 curl http://localhost:8082/api/task/test-001/context
 ```
+
+---
+
+## 事件自动记录
+
+AI-Context 通过 `ContextEventConsumer` 监听 Kafka 事件总线，自动将关键事件持久化为上下文记录。
+
+### 监听的 Kafka Topics
+
+| Topic | 触发时机 | 记录的上下文类型 |
+|-------|---------|-----------------|
+| `ai.task.created` | 任务创建 | TASK_CREATED |
+| `ai.task.validated` | 任务验证通过 | — |
+| `ai.task.running` | 任务开始执行 | — |
+| `ai.task.success` | 任务成功完成 | TASK_SUCCESS |
+| `ai.task.failed` | 任务失败 | TASK_FAILED |
+| `ai.node.created` | 节点创建 | — |
+| `ai.node.scheduled` | 节点调度 | NODE_SCHEDULED |
+| `ai.node.running` | 节点开始执行 | — |
+| `ai.node.success` | 节点执行成功 | NODE_SUCCESS |
+| `ai.node.executed` | 节点执行完成（事件驱动调度） | NODE_SUCCESS |
+| `ai.node.failed` | 节点执行失败 | NODE_FAILED |
+| `ai.context.events` | 通用上下文事件 | 按事件类型 |
+
+### 事件处理逻辑
+
+```
+1. 从 Kafka 消费事件（Map<String, Object> 格式）
+   │
+   ├─► 优先使用 event_type 字段判断事件类型
+   │
+   └─► 若无 event_type，从 status 字段推断
+       │
+       ├─► SUCCESS → ai.node.success
+       ├─► FAILED  → ai.node.failed
+       └─► RUNNING → ai.node.running
+   ▼
+2. 根据 taskId + nodeId 调用 ContextService 记录上下文
+   │
+   ▼
+3. 持久化到 PostgreSQL (ai_context 表)
+```
+
+### ai.node.executed 事件
+
+这是去中心化架构升级后新增的事件，由 Orchestrator 的 StateMachine 在节点执行成功后发布。DependencyChecker 消费此事件进行依赖检查和下游调度。AI-Context 同时消费此事件，将其记录为 NODE_SUCCESS 上下文，确保完整的执行历史追溯。
 
 ---
 

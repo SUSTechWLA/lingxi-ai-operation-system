@@ -14,4 +14,5 @@ public class NodeTaskEvent {
     private String type;
     private Map<String, Object> payload;
     private String traceId;
+    private String idempotencyKey;
 }

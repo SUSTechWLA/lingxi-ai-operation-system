@@ -26,6 +26,7 @@ public class ContextEventConsumer {
             "ai.node.running",
             "ai.node.success",
             "ai.node.failed",
+            "ai.node.executed",
             "ai.context.events"
     }, groupId = "ai-context-group")
     public void consumeContextEvent(Map<String, Object> event) {
@@ -78,6 +79,11 @@ public class ContextEventConsumer {
             case "ai.task.success" -> contextService.recordTaskSuccess(taskId);
             case "ai.task.failed" -> contextService.recordTaskFailed(taskId);
             case "ai.node.success" -> {
+                if (nodeId != null) {
+                    contextService.recordNodeSuccess(taskId, nodeId);
+                }
+            }
+            case "ai.node.executed" -> {
                 if (nodeId != null) {
                     contextService.recordNodeSuccess(taskId, nodeId);
                 }

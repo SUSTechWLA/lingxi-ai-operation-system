@@ -15,4 +15,5 @@ public class NodeResultEvent {
     private Map<String, Object> output;
     private String traceId;
     private String errorMessage;
+    private String idempotencyKey;
 }

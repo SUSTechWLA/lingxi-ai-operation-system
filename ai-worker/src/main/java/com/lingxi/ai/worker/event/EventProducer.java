@@ -19,11 +19,13 @@ public class EventProducer {
     }
 
     public void publishNodeResult(NodeResultEvent event) {
-        String key = event.getTaskId() + "-" + event.getNodeId();
+        String key = event.getIdempotencyKey() != null
+                ? event.getIdempotencyKey()
+                : event.getTaskId() + "-" + event.getNodeId();
         try {
             String message = objectMapper.writeValueAsString(event);
-            log.info("Publishing node result event: taskId={}, nodeId={}, status={}",
-                    event.getTaskId(), event.getNodeId(), event.getStatus());
+            log.info("Publishing node result event: taskId={}, nodeId={}, status={}, idempotencyKey={}",
+                    event.getTaskId(), event.getNodeId(), event.getStatus(), key);
             kafkaTemplate.send("ai.node.result", key, message);
         } catch (Exception e) {
             log.error("Failed to publish node result event", e);

@@ -1,7 +1,7 @@
 # 灵犀AIOS 完整API参考文档
 
-> **版本**: 1.0.0
-> **最后更新**: 2026-04-21
+> **版本**: 2.1.0
+> **最后更新**: 2026-04-23
 
 ## 目录
 
@@ -73,31 +73,45 @@ POST /api/translate
 Content-Type: application/json
 
 {
-  "prompt": "写一篇关于AI的文章"
+  "prompt": "查询北京天气并生成总结报告"
 }
 ```
 
 **响应示例**:
 ```json
 {
-  "prompt": "写一篇关于AI的文章",
+  "prompt": "查询北京天气并生成总结报告",
   "dag": {
     "nodes": [
       {
+        "id": "node-tool-001",
+        "type": "TOOL",
+        "name": "weather_query",
+        "input": {
+          "tool": "weather_query",
+          "parameters": {
+            "city": "北京",
+            "type": "realtime"
+          }
+        },
+        "maxRetry": 3
+      },
+      {
         "id": "node-llm-001",
         "type": "LLM",
-        "name": "write_article",
+        "name": "summarize",
         "input": {
           "tool": "llm",
           "parameters": {
-            "prompt": "写一篇关于AI的文章",
-            "system_prompt": "你是一个专业的文章作者"
+            "prompt": "根据以下天气数据生成简要总结报告: {{parent.node-tool-001.output}}"
           }
         },
         "maxRetry": 3
       }
     ],
-    "edges": []
+    "edges": [
+      {"from": "node-tool-001", "to": "node-llm-001"}
+    ]
   }
 }
 ```
@@ -110,7 +124,7 @@ POST /api/translate-and-submit
 Content-Type: application/json
 
 {
-  "prompt": "写一篇关于AI的文章并生成摘要"
+  "prompt": "查询北京天气并生成总结报告"
 }
 ```
 
@@ -137,9 +151,14 @@ GET /api/task/{taskId}
   "status": "SUCCESS",
   "nodes": [
     {
-      "id": "node-1",
+      "id": "node-tool-001",
       "status": "SUCCESS",
-      "output": {"text": "文章内容..."}
+      "output": {"city": "北京", "temperature": 25, "weather": "晴", "humidity": 60}
+    },
+    {
+      "id": "node-llm-001",
+      "status": "SUCCESS",
+      "output": {"text": "北京今日天气晴朗，气温25°C，湿度60%..."}
     }
   ]
 }
@@ -203,33 +222,34 @@ Content-Type: application/json
 {
   "nodes": [
     {
-      "id": "node-1",
-      "type": "LLM",
-      "name": "write_article",
+      "id": "query-weather",
+      "type": "TOOL",
+      "name": "weather_query",
       "input": {
-        "tool": "llm",
+        "tool": "weather_query",
         "parameters": {
-          "prompt": "写一篇关于AI的文章"
+          "city": "北京",
+          "type": "realtime"
         }
       },
       "priority": 5,
       "maxRetry": 3
     },
     {
-      "id": "node-2",
+      "id": "summarize",
       "type": "LLM",
       "name": "summarize",
       "input": {
         "tool": "llm",
         "parameters": {
-          "prompt": "总结以下文章: {{parent.node-1.text}}"
+          "prompt": "根据以下天气数据生成简要总结报告: {{parent.query-weather.output}}"
         }
       },
       "maxRetry": 3
     }
   ],
   "edges": [
-    {"from": "node-1", "to": "node-2"}
+    {"from": "query-weather", "to": "summarize"}
   ]
 }
 ```
@@ -269,28 +289,28 @@ GET /api/task/{taskId}
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
   "userId": "user-001",
   "status": "RUNNING",
-  "input": {"prompt": "测试任务"},
+  "input": {"prompt": "查询北京天气并生成总结报告"},
   "output": null,
-  "createdAt": "2026-04-21T10:30:00",
+  "createdAt": "2026-04-23T10:30:00",
   "nodes": [
     {
-      "id": "node-1",
+      "id": "query-weather",
       "taskId": "550e8400-e29b-41d4-a716-446655440000",
-      "type": "LLM",
-      "name": "write_article",
+      "type": "TOOL",
+      "name": "weather_query",
       "status": "SUCCESS",
-      "input": {"tool": "llm", "parameters": {...}},
-      "output": {"text": "文章内容..."},
+      "input": {"tool": "weather_query", "parameters": {"city": "北京", "type": "realtime"}},
+      "output": {"city": "北京", "temperature": 25, "humidity": 60, "windSpeed": 12, "weather": "晴"},
       "errorMessage": null,
       "retryCount": 0,
       "maxRetry": 3,
       "priority": 5,
       "workerGroup": "default",
       "version": 2,
-      "createdAt": "2026-04-21T10:30:01"
+      "createdAt": "2026-04-23T10:30:01"
     },
     {
-      "id": "node-2",
+      "id": "summarize",
       "type": "LLM",
       "name": "summarize",
       "status": "RUNNING",
@@ -314,6 +334,7 @@ GET /api/task/{taskId}
 - `CREATED`: 已创建
 - `READY`: 就绪(依赖满足)
 - `RUNNING`: 运行中
+- `RETRYING`: 重试中（指数退避等待）
 - `SUCCESS`: 成功
 - `FAILED`: 失败
 
@@ -492,6 +513,43 @@ POST /api/node/{nodeId}/restore
 
 ---
 
+#### 14. 一步创建任务并提交DAG
+```http
+POST /api/node
+Content-Type: application/json
+
+{
+  "nodes": [
+    {
+      "nodeId": "query-weather",
+      "type": "TOOL",
+      "name": "weather_query",
+      "input": {
+        "tool": "weather_query",
+        "parameters": {
+          "city": "上海",
+          "type": "realtime"
+        }
+      }
+    }
+  ],
+  "edges": []
+}
+```
+
+**响应**:
+```json
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "CREATED",
+  "message": "DAG submitted successfully"
+}
+```
+
+**说明**: 此端点专为 NL-Translator 设计，将创建任务和提交 DAG 合并为一步操作。支持 `nodeId` 或 `id` 字段作为节点标识。
+
+---
+
 ## AI-Worker API (端口: 8083)
 
 工具执行模块，负责执行具体的工具调用。
@@ -559,7 +617,7 @@ POST /worker/register
 Content-Type: application/json
 
 {
-  "endpoint": "http://localhost:8092",
+  "endpoint": "http://localhost:8090",
   "workerGroup": "default"
 }
 ```
@@ -577,35 +635,53 @@ Content-Type: application/json
 }
 ```
 
-**外部工具必须实现的接口**:
+**外部工具必须实现的接口**（以 `weather_tool.py` 为例）:
 
-1. **GET /info** - 获取工具元数据
+1. **GET /tool/info** - 获取工具元数据
 ```json
 {
   "toolName": "weather_query",
   "toolVersion": "1.0.0",
-  "description": "查询天气信息",
-  "parameters": {
+  "description": "查询指定城市的实时天气信息，支持温度、湿度、风力等数据。",
+  "inputSchema": {
     "type": "object",
     "properties": {
       "city": {
         "type": "string",
-        "description": "城市名称"
+        "description": "要查询的城市名称，如'北京'、'上海'、'广州'、'深圳'"
+      },
+      "type": {
+        "type": "string",
+        "description": "查询类型，可选值：realtime(实时天气)/forecast(天气预报)",
+        "default": "realtime"
       }
     },
     "required": ["city"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "city": {"type": "string", "description": "城市名称"},
+      "temperature": {"type": "number", "description": "实时温度，单位摄氏度"},
+      "humidity": {"type": "number", "description": "相对湿度，百分比"},
+      "windSpeed": {"type": "number", "description": "风速，单位公里/小时"},
+      "weather": {"type": "string", "description": "天气状况描述"},
+      "queryTime": {"type": "string", "description": "查询时间"}
+    }
   }
 }
 ```
 
-2. **POST /run** - 执行工具
+2. **POST /tool/execute** - 执行工具
 ```json
 // 请求
 {
   "taskId": "task-001",
   "nodeId": "node-001",
+  "traceId": "trace-001",
   "input": {
-    "city": "北京"
+    "city": "北京",
+    "type": "realtime"
   }
 }
 
@@ -616,16 +692,24 @@ Content-Type: application/json
   "data": {
     "city": "北京",
     "temperature": 25,
+    "humidity": 60,
+    "windSpeed": 12,
     "weather": "晴",
-    "humidity": 60
+    "queryTime": "2026-04-23 14:30:00",
+    "type": "realtime"
   }
 }
 ```
 
-3. **GET /health** - 健康检查
+3. **GET /tool/health** - 健康检查
 ```json
 {
-  "status": "UP"
+  "code": 200,
+  "message": "success",
+  "data": {
+    "status": "UP",
+    "version": "1.0.0"
+  }
 }
 ```
 
@@ -637,7 +721,7 @@ POST /worker/unregister
 Content-Type: application/json
 
 {
-  "endpoint": "http://localhost:8092"
+  "endpoint": "http://localhost:8090"
 }
 ```
 
@@ -667,10 +751,10 @@ GET /worker/tools
       {
         "toolName": "weather_query",
         "toolVersion": "1.0.0",
-        "description": "查询天气信息",
-        "endpoint": "http://localhost:8092",
+        "description": "查询指定城市的实时天气信息",
+        "endpoint": "http://localhost:8090",
         "status": "HEALTHY",
-        "registeredAt": "2026-04-21T10:30:00"
+        "registeredAt": "2026-04-23T10:30:00"
       }
     ]
   }
@@ -692,12 +776,12 @@ GET /worker/tools/{toolName}
   "data": {
     "toolName": "weather_query",
     "toolVersion": "1.0.0",
-    "description": "查询天气信息",
-    "endpoint": "http://localhost:8092",
+    "description": "查询指定城市的实时天气信息",
+    "endpoint": "http://localhost:8090",
     "status": "HEALTHY",
     "toolInfo": {...},
-    "registeredAt": "2026-04-21T10:30:00",
-    "lastHealthCheckAt": "2026-04-21T10:35:00"
+    "registeredAt": "2026-04-23T10:30:00",
+    "lastHealthCheckAt": "2026-04-23T10:35:00"
   }
 }
 ```
@@ -723,8 +807,8 @@ GET /worker/tools/{toolName}
 {
   "tool": "llm",
   "parameters": {
-    "prompt": "写一篇关于AI的文章",
-    "system_prompt": "你是一个专业的科技作者",
+    "prompt": "根据以下天气数据生成简要总结报告: 北京25°C晴天，上海28°C多云",
+    "system_prompt": "你是一个气象分析师",
     "model": "gpt-4",
     "temperature": 0.7
   }
@@ -903,14 +987,14 @@ GET /api/node/{nodeId}/snapshot/latest
 **响应**:
 ```json
 {
-  "nodeId": "node-1",
+  "nodeId": "query-weather",
   "snapshot": {
-    "id": "node-1",
-    "type": "LLM",
-    "name": "write_article",
+    "id": "query-weather",
+    "type": "TOOL",
+    "name": "weather_query",
     "status": "SUCCESS",
     "input": {...},
-    "output": {...},
+    "output": {"city": "北京", "temperature": 25, "weather": "晴"},
     "retryCount": 0,
     "maxRetry": 3,
     "priority": 5,
@@ -954,9 +1038,9 @@ Content-Type: application/json
 
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "nodeId": "node-1",
-  "type": "LLM",
-  "name": "write_article"
+  "nodeId": "query-weather",
+  "type": "TOOL",
+  "name": "weather_query"
 }
 ```
 
@@ -969,7 +1053,7 @@ Content-Type: application/json
 
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "nodeId": "node-1"
+  "nodeId": "query-weather"
 }
 ```
 
@@ -982,8 +1066,8 @@ Content-Type: application/json
 
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "nodeId": "node-1",
-  "errorMessage": "执行失败原因"
+  "nodeId": "query-weather",
+  "errorMessage": "城市不存在"
 }
 ```
 
@@ -996,12 +1080,12 @@ Content-Type: application/json
 
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "nodeId": "node-1",
-  "type": "LLM",
-  "name": "write_article",
+  "nodeId": "query-weather",
+  "type": "TOOL",
+  "name": "weather_query",
   "status": "SUCCESS",
   "input": {...},
-  "output": {...},
+  "output": {"city": "北京", "temperature": 25, "weather": "晴"},
   "retryCount": 0,
   "maxRetry": 3,
   "priority": 5,
@@ -1022,8 +1106,12 @@ Content-Type: application/json
 | Topic | 生产者 | 消费者 | 说明 |
 |-------|--------|--------|------|
 | `ai.task.created` | Orchestrator | Context | 任务创建事件 |
-| `ai.node.ready` | Orchestrator | Worker | 节点就绪事件 |
-| `ai.node.result` | Worker | Orchestrator | 节点结果事件 |
+| `ai.task.success` | Orchestrator | Context | 任务成功事件 |
+| `ai.task.failed` | Orchestrator | Context | 任务失败事件 |
+| `ai.node.ready` | Orchestrator (DependencyChecker) | Worker | 节点就绪事件（含 idempotencyKey） |
+| `ai.node.result` | Worker | Orchestrator | 节点结果事件（含 idempotencyKey） |
+| `ai.node.executed` | Orchestrator (StateMachine) | Context, DependencyChecker | 节点执行完成事件（事件驱动调度） |
+| `ai.node.failed` | Orchestrator (StateMachine) | Context | 节点永久失败事件 |
 | `ai.context.events` | All | Context | 上下文事件 |
 
 ---
@@ -1034,17 +1122,19 @@ Content-Type: application/json
 ```json
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "nodeId": "node-1",
-  "type": "LLM",
-  "name": "write_article",
+  "nodeId": "query-weather",
+  "type": "TOOL",
+  "name": "weather_query",
   "payload": {
-    "tool": "llm",
+    "tool": "weather_query",
     "parameters": {
-      "prompt": "写一篇关于AI的文章"
+      "city": "北京",
+      "type": "realtime"
     }
   },
   "traceId": "trace-001",
-  "timestamp": "2026-04-21T10:30:00"
+  "idempotencyKey": "550e8400-e29b-41d4-a716-446655440000-query-weather",
+  "timestamp": "2026-04-23T10:30:00"
 }
 ```
 
@@ -1052,29 +1142,49 @@ Content-Type: application/json
 
 #### 2. ai.node.result (节点结果事件)
 ```json
-// 成功
+// 成功（天气查询节点）
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "nodeId": "node-1",
+  "nodeId": "query-weather",
   "status": "SUCCESS",
   "output": {
-    "text": "文章内容..."
+    "city": "北京",
+    "temperature": 25,
+    "humidity": 60,
+    "windSpeed": 12,
+    "weather": "晴",
+    "queryTime": "2026-04-23 14:30:00"
   },
   "traceId": "trace-001",
-  "timestamp": "2026-04-21T10:30:05"
+  "errorMessage": null,
+  "idempotencyKey": "550e8400-e29b-41d4-a716-446655440000-query-weather"
 }
 
 // 失败
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
-  "nodeId": "node-1",
+  "nodeId": "query-weather",
   "status": "FAILED",
   "output": null,
-  "errorMessage": "网络超时",
+  "errorMessage": "城市不存在",
   "traceId": "trace-001",
-  "timestamp": "2026-04-21T10:30:05"
+  "idempotencyKey": "550e8400-e29b-41d4-a716-446655440000-query-weather"
 }
 ```
+
+---
+
+#### 3. ai.node.executed (节点执行完成事件)
+```json
+{
+  "event_type": "ai.node.executed",
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "nodeId": "node-1",
+  "status": "SUCCESS"
+}
+```
+
+**说明**: 由 StateMachine 在节点成功后发布，DependencyChecker 消费此事件检查下游依赖并触发新的 `ai.node.ready` 事件。
 
 ---
 
@@ -1095,8 +1205,9 @@ public enum TaskStatus {
 ```java
 public enum NodeStatus {
     CREATED,   // 已创建
-    READY,     // 就绪
+    READY,     // 就绪（依赖满足）
     RUNNING,   // 运行中
+    RETRYING,  // 重试中（指数退避等待）
     SUCCESS,   // 成功
     FAILED     // 失败
 }
@@ -1118,13 +1229,29 @@ public enum ToolType {
 }
 ```
 
+### Node 实体新增字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `idempotencyKey` | String(128, unique) | 幂等键，格式为 `taskId + "-" + nodeId`，由 Orchestrator 在 DAG 提交时自动生成。用于 Kafka 消息去重和节点执行幂等保证 |
+
 ---
 
 ## 完整使用示例
 
-### 示例1: 单节点LLM任务
+### 示例1: 查询单城市天气（单节点 TOOL 任务）
 
 ```bash
+# 0. 先注册外部天气工具
+cd examples
+pip install fastapi uvicorn
+python weather_tool.py &
+sleep 2
+
+curl -X POST http://localhost:8083/worker/register \
+  -H "Content-Type: application/json" \
+  -d '{"endpoint": "http://localhost:8090"}'
+
 # 1. 创建任务
 TASK_ID=$(curl -s -X POST http://localhost:8080/api/task/create \
   -H "Content-Type: application/json" \
@@ -1132,19 +1259,20 @@ TASK_ID=$(curl -s -X POST http://localhost:8080/api/task/create \
 
 echo "Task ID: $TASK_ID"
 
-# 2. 提交DAG
+# 2. 提交DAG（查询北京天气）
 curl -X POST "http://localhost:8080/api/task/${TASK_ID}/dag" \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
       {
-        "id": "write-article",
-        "type": "LLM",
-        "name": "write_article",
+        "id": "query-beijing",
+        "type": "TOOL",
+        "name": "weather_query",
         "input": {
-          "tool": "llm",
+          "tool": "weather_query",
           "parameters": {
-            "prompt": "写一篇关于人工智能未来发展的短文，300字以内"
+            "city": "北京",
+            "type": "realtime"
           }
         },
         "maxRetry": 3
@@ -1163,7 +1291,7 @@ curl "http://localhost:8080/api/task/${TASK_ID}/context"
 
 ---
 
-### 示例2: 两节点串行任务
+### 示例2: 查询天气并生成总结报告（TOOL + LLM 串行任务）
 
 ```bash
 # 1. 创建任务
@@ -1171,19 +1299,20 @@ TASK_ID=$(curl -s -X POST http://localhost:8080/api/task/create \
   -H "Content-Type: application/json" \
   -d '{"userId": "demo-user"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['taskId'])")
 
-# 2. 提交包含两个节点的DAG
+# 2. 提交包含两个节点的DAG：先查天气，再用LLM总结
 curl -X POST "http://localhost:8080/api/task/${TASK_ID}/dag" \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
       {
-        "id": "write-article",
-        "type": "LLM",
-        "name": "write_article",
+        "id": "query-weather",
+        "type": "TOOL",
+        "name": "weather_query",
         "input": {
-          "tool": "llm",
+          "tool": "weather_query",
           "parameters": {
-            "prompt": "写一篇关于人工智能的文章，500字左右"
+            "city": "北京",
+            "type": "realtime"
           }
         },
         "maxRetry": 3
@@ -1195,14 +1324,14 @@ curl -X POST "http://localhost:8080/api/task/${TASK_ID}/dag" \
         "input": {
           "tool": "llm",
           "parameters": {
-            "prompt": "请为以下文章生成摘要: {{parent.write-article.text}}"
+            "prompt": "根据以下天气数据生成简要总结报告: {{parent.query-weather.output}}"
           }
         },
         "maxRetry": 3
       }
     ],
     "edges": [
-      {"from": "write-article", "to": "summarize"}
+      {"from": "query-weather", "to": "summarize"}
     ]
   }'
 
@@ -1219,7 +1348,7 @@ curl "http://localhost:8080/api/task/${TASK_ID}"
 # 直接通过自然语言提交任务
 RESPONSE=$(curl -s -X POST http://localhost:8081/api/translate-and-submit \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "写一篇关于AI的文章并生成摘要"}')
+  -d '{"prompt": "查询北京天气并生成总结报告"}')
 
 TASK_ID=$(echo $RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin)['taskId'])")
 
@@ -1232,7 +1361,7 @@ curl "http://localhost:8081/api/task/${TASK_ID}"
 
 ---
 
-### 示例4: 并行节点任务
+### 示例4: 并行查询多个城市天气
 
 ```bash
 # 1. 创建任务
@@ -1240,31 +1369,33 @@ TASK_ID=$(curl -s -X POST http://localhost:8080/api/task/create \
   -H "Content-Type: application/json" \
   -d '{"userId": "demo-user"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['taskId'])")
 
-# 2. 提交两个并行节点(没有edges即为并行)
+# 2. 提交两个并行节点（无 edges 即为并行）
 curl -X POST "http://localhost:8080/api/task/${TASK_ID}/dag" \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
       {
-        "id": "write-ai",
-        "type": "LLM",
-        "name": "write_ai",
+        "id": "query-beijing",
+        "type": "TOOL",
+        "name": "weather_query",
         "input": {
-          "tool": "llm",
+          "tool": "weather_query",
           "parameters": {
-            "prompt": "写一篇关于AI的短文，200字以内"
+            "city": "北京",
+            "type": "realtime"
           }
         },
         "maxRetry": 2
       },
       {
-        "id": "write-space",
-        "type": "LLM",
-        "name": "write_space",
+        "id": "query-shanghai",
+        "type": "TOOL",
+        "name": "weather_query",
         "input": {
-          "tool": "llm",
+          "tool": "weather_query",
           "parameters": {
-            "prompt": "写一篇关于太空探索的短文，200字以内"
+            "city": "上海",
+            "type": "realtime"
           }
         },
         "maxRetry": 2

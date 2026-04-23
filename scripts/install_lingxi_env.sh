@@ -1,4 +1,7 @@
 #!/bin/bash
+# 灵犀AI OS - 一键安装脚本 (Mac/Linux)
+# 检查并安装必要的依赖，配置环境变量，构建项目
+
 set -e
 
 RED='\033[0;31m'
@@ -15,231 +18,225 @@ section() { echo -e "\n${BLUE}========================================${NC}"; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-if [ -f "$PROJECT_DIR/.env" ]; then
-    export $(cat "$PROJECT_DIR/.env" | grep -v '^#' | xargs)
-fi
-
-CONTEXT_PID=""
-ORCH_PID=""
-TRANSLATOR_PID=""
-WORKER_PID=""
-
-cleanup() {
-    section "清理进程"
-    info "停止所有模块进程..."
-    [ -n "$CONTEXT_PID" ] && kill $CONTEXT_PID 2>/dev/null && info "已停止 ai-context"
-    [ -n "$ORCH_PID" ] && kill $ORCH_PID 2>/dev/null && info "已停止 ai-orchestrator"
-    [ -n "$TRANSLATOR_PID" ] && kill $TRANSLATOR_PID 2>/dev/null && info "已停止 nl-translator"
-    [ -n "$WORKER_PID" ] && kill $WORKER_PID 2>/dev/null && info "已停止 ai-worker"
-    info "清理完成"
-}
-
-trap cleanup EXIT
-
-wait_for_url() {
-    local url=$1
-    local name=$2
-    local max_attempts=30
-    local attempt=1
-    echo -n "等待 $name..."
-    while [ $attempt -le $max_attempts ]; do
-        if curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null | grep -qE "^[24]"; then
-            echo -e " ${GREEN}✓${NC}"
-            return 0
-        fi
-        echo -n "."
-        sleep 2
-        attempt=$((attempt + 1))
-    done
-    echo -e " ${RED}✗ 超时${NC}"
-    return 1
-}
-
-wait_for_docker() {
-    local max_attempts=30
-    local attempt=1
-    echo -n "等待 Docker 启动..."
-    while [ $attempt -le $max_attempts ]; do
-        if docker info &> /dev/null; then
-            echo -e " ${GREEN}✓${NC}"
-            return 0
-        fi
-        echo -n "."
-        sleep 2
-        attempt=$((attempt + 1))
-    done
-    echo -e " ${RED}✗ 超时${NC}"
-    return 1
-}
-
 cd "$PROJECT_DIR"
 
-section "步骤 1: Docker 基础设施"
+section "灵犀AI OS - 一键安装"
 
-if ! command -v docker &> /dev/null; then
-    error "Docker 未安装"
+# ============ 步骤 1: 检查 Java ============
+section "步骤 1: 检查 Java 17+"
+
+if command -v java &> /dev/null; then
+    JAVA_VERSION=$(java -version 2>&1 | head -1 | cut -d'"' -f2 | cut -d'.' -f1)
+    if [ "$JAVA_VERSION" -ge 17 ]; then
+        info "Java 版本满足要求: $(java -version 2>&1 | head -1)"
+    else
+        error "Java 版本过低 (当前: $JAVA_VERSION)，需要 Java 17+"
+        echo "安装方式:"
+        echo "  macOS:   brew install openjdk@17"
+        echo "  Linux:   sudo apt install openjdk-17-jdk"
+        echo "  手动:    https://adoptium.net/"
+        exit 1
+    fi
+else
+    error "Java 未安装，需要 Java 17+"
+    echo "安装方式:"
+    echo "  macOS:   brew install openjdk@17"
+    echo "  Linux:   sudo apt install openjdk-17-jdk"
+    echo "  手动:    https://adoptium.net/"
     exit 1
 fi
 
-if ! docker info &> /dev/null; then
-    info "启动 Docker Desktop..."
-    open -a Docker 2>/dev/null || true
-    wait_for_docker || { error "Docker 启动失败"; exit 1; }
+# ============ 步骤 2: 检查 Maven ============
+section "步骤 2: 检查 Maven"
+
+if command -v mvn &> /dev/null; then
+    MVN_VERSION=$(mvn -version 2>&1 | head -1 | cut -d' ' -f3)
+    info "Maven 已安装: $MVN_VERSION"
+else
+    error "Maven 未安装"
+    echo "安装方式:"
+    echo "  macOS:   brew install maven"
+    echo "  Linux:   sudo apt install maven"
+    echo "  手动:    https://maven.apache.org/download.cgi"
+    exit 1
 fi
 
-info "清理旧容器..."
-docker ps -a --format "{{.Names}}" | grep -E "^lingxi-" | xargs -r docker stop 2>/dev/null || true
-docker ps -a --format "{{.Names}}" | grep -E "^lingxi-" | xargs -r docker rm 2>/dev/null || true
+# ============ 步骤 3: 检查 Docker ============
+section "步骤 3: 检查 Docker"
 
-info "启动 Docker 服务..."
+if command -v docker &> /dev/null; then
+    if docker info &> /dev/null; then
+        DOCKER_VERSION=$(docker --version | cut -d' ' -f3 | tr -d ',')
+        info "Docker 已安装并运行: $DOCKER_VERSION"
+    else
+        warn "Docker 已安装但未运行，请先启动 Docker Desktop"
+    fi
+else
+    error "Docker 未安装"
+    echo "安装方式:"
+    echo "  macOS:   brew install --cask docker"
+    echo "  Linux:   https://docs.docker.com/engine/install/"
+    exit 1
+fi
+
+# ============ 步骤 4: 检查 Docker Compose ============
+section "步骤 4: 检查 Docker Compose"
+
+if docker compose version &> /dev/null; then
+    COMPOSE_VERSION=$(docker compose version 2>&1 | cut -d' ' -f4 | tr -d 'v')
+    info "Docker Compose 已安装: $COMPOSE_VERSION"
+elif command -v docker-compose &> /dev/null; then
+    warn "检测到旧版 docker-compose，建议升级到 Docker Compose V2"
+else
+    error "Docker Compose 未安装"
+    echo "安装方式: Docker Compose V2 已包含在 Docker Desktop 中"
+    exit 1
+fi
+
+# ============ 步骤 5: 检查 curl ============
+section "步骤 5: 检查 curl"
+
+if command -v curl &> /dev/null; then
+    info "curl 已安装"
+else
+    error "curl 未安装"
+    echo "安装方式:"
+    echo "  macOS:   xcode-select --install"
+    echo "  Linux:   sudo apt install curl"
+    exit 1
+fi
+
+# ============ 步骤 6: 配置环境变量 ============
+section "步骤 6: 配置环境变量"
+
+if [ -f "$PROJECT_DIR/.env" ]; then
+    info ".env 文件已存在"
+else
+    if [ -f "$PROJECT_DIR/.env.example" ]; then
+        cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
+        info "已从 .env.example 复制创建 .env 文件"
+    else
+        warn ".env.example 不存在，创建默认 .env 文件"
+        cat > "$PROJECT_DIR/.env" << 'ENVEOF'
+# 灵犀AI OS 环境变量配置
+OPENAI_API_KEY=your-api-key-here
+OPENAI_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3
+OPENAI_MODEL=doubao-seed-2.0-pro
+OPENAI_TEMPERATURE=0.7
+OPENAI_MAX_TOKENS=2000
+OPENAI_TIMEOUT=30000
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+POSTGRES_HOST=localhost
+POSTGRES_DB=lingxi_db
+POSTGRES_USER=wanglian
+POSTGRES_PASSWORD=123
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+ORCHESTRATOR_URL=http://localhost:8080
+CONTEXT_SERVICE_URL=http://localhost:8082
+ENVEOF
+    fi
+    warn "请编辑 .env 文件，配置 OPENAI_API_KEY 等必要参数"
+    echo "  编辑命令: vim $PROJECT_DIR/.env"
+fi
+
+# ============ 步骤 7: 启动 Docker 基础设施 ============
+section "步骤 7: 启动 Docker 基础设施"
+
+if ! docker info &> /dev/null; then
+    warn "Docker 未运行，尝试启动..."
+    open -a Docker 2>/dev/null || true
+    echo -n "等待 Docker 启动"
+    for i in {1..30}; do
+        if docker info &> /dev/null; then
+            echo -e " ${GREEN}✓${NC}"
+            break
+        fi
+        echo -n "."
+        sleep 2
+    done
+    if ! docker info &> /dev/null; then
+        error "Docker 启动失败，请手动启动 Docker Desktop 后重试"
+        exit 1
+    fi
+fi
+
+info "启动基础设施容器..."
 docker compose up -d
-sleep 5
 
-info "等待数据库服务就绪..."
+echo -n "等待 PostgreSQL 就绪"
 for i in {1..30}; do
-    if docker inspect lingxi-postgres --format='{{.State.Health.Status}}' 2>/dev/null | grep -q "healthy"; then
+    if docker exec lingxi-postgres pg_isready -U wanglian &> /dev/null; then
+        echo -e " ${GREEN}✓${NC}"
         break
     fi
     if docker ps --format '{{.Names}}' | grep -q "^lingxi-postgres$"; then
+        echo -e " ${GREEN}✓${NC}"
         break
     fi
     echo -n "."
     sleep 2
 done
-echo -e " ${GREEN}✓${NC}"
-info "PostgreSQL 就绪 (localhost:5432)"
 
-info "Redis 就绪 (localhost:6379)"
-
-section "步骤 2: 启动 AI-Context 模块 (8082)"
-cd "$PROJECT_DIR/ai-context"
-nohup mvn spring-boot:run > /tmp/ai-context.log 2>&1 &
-CONTEXT_PID=$!
-info "ai-context 启动中 (PID: $CONTEXT_PID)..."
-
-section "步骤 3: 启动 AI-Orchestrator 模块 (8080)"
-cd "$PROJECT_DIR/ai-orchestrator"
-nohup mvn spring-boot:run > /tmp/ai-orchestrator.log 2>&1 &
-ORCH_PID=$!
-info "ai-orchestrator 启动中 (PID: $ORCH_PID)..."
-
-section "步骤 4: 启动 NL-Translator 模块 (8081)"
-cd "$PROJECT_DIR/ai-nl-translator"
-nohup mvn spring-boot:run > /tmp/nl-translator.log 2>&1 &
-TRANSLATOR_PID=$!
-info "nl-translator 启动中 (PID: $TRANSLATOR_PID)..."
-
-section "步骤 5: 启动 AI-Worker 模块 (8083)"
-cd "$PROJECT_DIR/ai-worker"
-nohup mvn spring-boot:run > /tmp/ai-worker.log 2>&1 &
-WORKER_PID=$!
-info "ai-worker 启动中 (PID: $WORKER_PID)..."
-
-section "步骤 6: 等待所有模块就绪"
-wait_for_url "http://localhost:8082/api/health" "AI-Context" || warn "AI-Context 启动失败"
-wait_for_url "http://localhost:8080/api/health" "AI-Orchestrator" || warn "AI-Orchestrator 启动失败"
-wait_for_url "http://localhost:8081/api/health" "NL-Translator" || warn "NL-Translator 启动失败"
-wait_for_url "http://localhost:8083/api/health" "AI-Worker" || warn "AI-Worker 启动失败"
-
-section "步骤 7: 运行 API 测试"
-
-passed=0
-failed=0
-
-test_api() {
-    local name=$1
-    local expected_code=$2
-    shift 2
-    local response
-    response=$(curl -s -o /dev/null -w "%{http_code}" "$@")
-    if echo "$response" | grep -q "$expected_code"; then
-        echo -e "  ${GREEN}✓${NC} $name (HTTP $response)"
-        passed=$((passed + 1))
+echo ""
+echo "基础设施状态:"
+for container in lingxi-postgres lingxi-redis lingxi-redpanda lingxi-minio lingxi-qdrant; do
+    if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+        echo -e "  ${GREEN}✓${NC} ${container}"
     else
-        echo -e "  ${RED}✗${NC} $name (期望: $expected_code, 实际: $response)"
-        failed=$((failed + 1))
+        echo -e "  ${YELLOW}⚠${NC}  ${container} (未运行)"
+    fi
+done
+
+# ============ 步骤 8: 构建所有模块 ============
+section "步骤 8: 构建所有模块"
+
+build_module() {
+    local module=$1
+    info "构建 $module..."
+    cd "$PROJECT_DIR/$module"
+    if mvn clean install -DskipTests -q 2>&1; then
+        echo -e "  ${GREEN}✓${NC} $module 构建成功"
+    else
+        echo -e "  ${RED}✗${NC} $module 构建失败，请检查日志"
+        return 1
     fi
 }
 
-info "7.1 AI-Context 模块测试"
-test_api "Health" "200" -X GET http://localhost:8082/api/health
-test_api "记录TaskCreated" "200" -X POST http://localhost:8082/api/context/task-created -H "Content-Type: application/json" -d '{"taskId":"test-001"}'
+BUILD_FAILED=0
+build_module "ai-context" || BUILD_FAILED=1
+build_module "ai-orchestrator" || BUILD_FAILED=1
+build_module "ai-nl-translator" || BUILD_FAILED=1
+build_module "ai-worker" || BUILD_FAILED=1
 
-info "7.2 AI-Orchestrator 模块测试"
-ORCH_TASK_RESP=$(curl -s -X POST http://localhost:8080/api/task/create -H "Content-Type: application/json" -d '{"input":"测试任务"}')
-TEST_TASK_ID=$(echo "$ORCH_TASK_RESP" | python3 -c "import sys, json; print(json.load(sys.stdin).get('taskId', ''))" 2>/dev/null || echo "")
-if [ -n "$TEST_TASK_ID" ]; then
-    echo -e "  ${GREEN}✓${NC} 创建任务成功: $TEST_TASK_ID"
-    passed=$((passed + 1))
-    test_api "提交DAG" "200" -X POST "http://localhost:8080/api/task/${TEST_TASK_ID}/dag" -H "Content-Type: application/json" -d '{"nodes":[{"id":"n1","type":"LLM","name":"test"}],"edges":[]}'
-    sleep 2
-    test_api "查询任务" "200" -X GET "http://localhost:8080/api/task/${TEST_TASK_ID}"
-    test_api "查询上下文" "200" -X GET "http://localhost:8082/api/task/${TEST_TASK_ID}/context"
-else
-    echo -e "  ${RED}✗${NC} 创建任务失败"
-    failed=$((failed + 1))
-fi
+cd "$PROJECT_DIR"
 
-info "7.3 NL-Translator 模块测试"
-TRANSLATE_RESP=$(curl -s -X POST http://localhost:8081/api/translate -H "Content-Type: application/json" -d '{"prompt":"test"}')
-TRANSLATE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8081/api/translate -H "Content-Type: application/json" -d '{"prompt":"test"}')
-if [ "$TRANSLATE_CODE" = "503" ]; then
-    echo -e "  ${YELLOW}⚠${NC} NL-Translator 需要配置 OpenAI API Key (HTTP 503)"
-    echo -e "     设置环境变量: export OPENAI_API_KEY=your-key"
-    echo -e "     或修改配置文件: ai-nl-translator/src/main/resources/application.yml"
-    passed=$((passed + 1))
-elif [ "$TRANSLATE_CODE" = "200" ]; then
-    echo -e "  ${GREEN}✓${NC} NL-Translator 正常工作 (HTTP 200)"
-    passed=$((passed + 1))
-else
-    echo -e "  ${RED}✗${NC} NL-Translator 异常 (HTTP $TRANSLATE_CODE)"
-    failed=$((failed + 1))
-fi
-
-if [ -n "$TEST_TASK_ID" ]; then
-    test_api "任务查询代理" "200" -X GET "http://localhost:8081/api/task/${TEST_TASK_ID}"
-fi
-
-info "7.4 AI-Worker 模块测试"
-test_api "Health" "200" -X GET http://localhost:8083/api/health
-test_api "工具列表" "200" -X GET http://localhost:8083/api/tools
-
-info "7.5 模块间通信测试"
-if [ -n "$TEST_TASK_ID" ]; then
-    CTX_COUNT=$(curl -s "http://localhost:8082/api/task/${TEST_TASK_ID}/context" | python3 -c "import sys, json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
-    if [ "$CTX_COUNT" -gt 0 ] || [ "$CTX_COUNT" = "0" ]; then
-        echo -e "  ${GREEN}✓${NC} Orchestrator -> AI-Context 通信正常 (上下文记录数: $CTX_COUNT)"
-        passed=$((passed + 1))
-    else
-        echo -e "  ${RED}✗${NC} Orchestrator -> AI-Context 通信异常"
-        failed=$((failed + 1))
-    fi
-fi
-
-section "测试总结"
-echo -e "通过: ${GREEN}$passed${NC}"
-echo -e "失败: ${RED}$failed${NC}"
-
-if [ $failed -eq 0 ]; then
-    echo -e "\n${GREEN}✅ 所有测试通过！${NC}"
-    echo ""
-    echo "服务端口:"
-    echo "  - AI-Context:      http://localhost:8082"
-    echo "  - AI-Orchestrator: http://localhost:8080"
-    echo "  - NL-Translator:   http://localhost:8081"
-    echo "  - AI-Worker:       http://localhost:8083"
-    echo ""
-    echo "配置文件位置:"
-    echo "  - NL-Translator: ai-nl-translator/src/main/resources/application.yml"
-    echo "  - AI-Worker:     ai-worker/src/main/resources/application.yml"
-    exit 0
-else
-    echo -e "\n${RED}❌ 部分测试失败${NC}"
-    echo ""
-    echo "日志文件:"
-    echo "  - /tmp/ai-context.log"
-    echo "  - /tmp/ai-orchestrator.log"
-    echo "  - /tmp/nl-translator.log"
-    echo "  - /tmp/ai-worker.log"
+if [ $BUILD_FAILED -ne 0 ]; then
+    error "部分模块构建失败，请检查错误信息"
+    echo "可以单独构建失败的模块:"
+    echo "  cd <module-dir> && mvn clean install -DskipTests"
     exit 1
 fi
+
+# ============ 安装完成 ============
+section "安装完成！"
+
+echo ""
+echo -e "${GREEN}✅ 环境安装和项目构建完成！${NC}"
+echo ""
+echo "后续步骤:"
+echo "  1. 编辑 .env 文件，配置 OPENAI_API_KEY"
+echo "     vim $PROJECT_DIR/.env"
+echo ""
+echo "  2. 启动所有服务"
+echo "     ./scripts/startup.sh"
+echo ""
+echo "  3. 或手动启动各模块"
+echo "     cd ai-context && mvn spring-boot:run"
+echo "     cd ai-orchestrator && mvn spring-boot:run"
+echo "     cd ai-nl-translator && mvn spring-boot:run"
+echo "     cd ai-worker && mvn spring-boot:run"
+echo ""
+echo "  4. 测试 API"
+echo "     ./scripts/test-all-apis.sh"

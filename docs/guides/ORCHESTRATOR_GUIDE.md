@@ -1,7 +1,7 @@
 # 灵犀AI OS Orchestrator 模块完整指南
 
-> **状态**: ✅ 已实现 - 本文档描述当前已实现的模块
-> **最后更新**: 2026-04-18
+> **状态**: ✅ 已实现 - 去中心化事件驱动架构
+> **最后更新**: 2026-04-22
 
 ---
 
@@ -25,8 +25,23 @@
 - 接收 NL-Translator 转换的 DAG 任务请求
 - 按依赖关系调度执行节点
 - 管理任务和节点的生命周期状态
-- 通过事件驱动与 Worker 通信
+- 通过事件驱动与 Worker 通信（去中心化调度）
+- 通过 StateService 统一收敛状态写入
+- 通过 DependencyChecker 实现依赖驱动调度
 - 通过 Context 记录操作历史
+
+### 架构演进
+
+系统已从「中心化调度」升级为「去中心化事件驱动」架构：
+
+| 维度 | 旧架构 | 新架构 |
+|------|--------|--------|
+| 调度方式 | StateMachine 直接触发子节点 | DependencyChecker 通过事件驱动 |
+| 状态写入 | 分散在4个服务中 | 统一收敛到 StateService |
+| 事件流 | ai.node.ready + ai.node.result | 新增 ai.node.executed / ai.node.failed |
+| 重试策略 | 立即重试 | 指数退避重试（RetryPolicy） |
+| 幂等性 | 无 | taskId+nodeId 作为幂等键 |
+| 恢复能力 | 无 | Scheduler 自动恢复 CREATED 节点 |
 
 ### 整体架构图
 
@@ -37,31 +52,31 @@ graph TB
     subgraph "Orchestrator 模块"
         TaskController -->|创建任务| OrchestratorService
         OrchestratorService -->|校验DAG| DAGValidator
-        OrchestratorService -->|保存| TaskRepository
-        OrchestratorService -->|发送事件| EventProducer
+        OrchestratorService -->|状态变更| StateService
         Scheduler -->|查询就绪节点| NodeRepository
+        Scheduler -->|恢复节点| StateService
         Scheduler -->|发布事件| EventProducer
-        StateMachine -->|更新状态| NodeRepository
+        StateMachine -->|状态变更| StateService
+        StateMachine -->|发布执行事件| EventProducer
+        DependencyChecker -->|依赖检查| StateService
+        DependencyChecker -->|触发子节点| EventProducer
+        StateService -->|统一状态写入| NodeRepository
+        StateService -->|记录上下文| ContextService
     end
 
     subgraph "事件总线 (Redpanda)"
         Topic_NodeReady["ai.node.ready"]
         Topic_NodeResult["ai.node.result"]
-    end
-
-    subgraph "数据存储"
-        TaskRepository[(Task)]
-        NodeRepository[(Node)]
-        NodeDependencyRepository[(NodeDependency)]
+        Topic_NodeExecuted["ai.node.executed"]
+        Topic_NodeFailed["ai.node.failed"]
     end
 
     EventProducer -->|"ai.node.ready"| Topic_NodeReady
+    EventProducer -->|"ai.node.executed"| Topic_NodeExecuted
     Topic_NodeResult -->|消费| EventConsumer
-    EventConsumer -->|更新状态| StateMachine
-
-    TaskRepository -.->|"CRUD"| PostgreSQL
-    NodeRepository -.->|"CRUD"| PostgreSQL
-    NodeDependencyRepository -.->|"CRUD"| PostgreSQL
+    Topic_NodeExecuted -->|消费| EventConsumer
+    EventConsumer -->|成功/失败| StateMachine
+    EventConsumer -->|依赖检查| DependencyChecker
 ```
 
 ---
@@ -73,21 +88,36 @@ graph TB
 - 节点支持多种类型：LLM、TOOL 等
 - 支持节点优先级和重试配置
 - 边定义节点间的依赖关系
+- 自动为节点生成幂等键（taskId + nodeId）
 
-### 2. 节点调度
+### 2. 依赖驱动调度（去中心化）
 - 定时扫描就绪节点（每秒一次）
+- **恢复机制**：自动检查 CREATED 节点依赖是否满足
 - 乐观锁防止重复调度
 - 支持任务暂停/恢复
-- 支持节点重试
+- 节点成功后发布 `ai.node.executed` 事件
+- DependencyChecker 消费事件，检查子节点依赖
+- 依赖满足后自动触发子节点
 
-### 3. 状态管理
-- 使用 PostgreSQL 持久化存储
-- 任务状态：CREATED → RUNNING → SUCCESS/FAILED
-- 节点状态：CREATED → READY → RUNNING → SUCCESS/FAILED
+### 3. 状态收敛（StateService）
+- **统一状态写入入口**：所有节点/任务状态变更必须通过 StateService
+- 自动发布对应事件（ai.task.completed, ai.task.failed 等）
+- 自动记录上下文（Context）
+- 依赖检查：`checkDependenciesMet(nodeId)`
+- 完成检查：`checkTaskCompleted(taskId)`
+- 失败检查：`checkTaskFailed(taskId)`
 
-### 4. 事件驱动
+### 4. 生产级能力
+- **幂等机制**：taskId + nodeId 作为幂等键，Kafka 消息使用此 key
+- **指数退避重试**：1s → 2s → 4s → 8s → ... → max 60s
+- **节点状态 RETRYING**：区分首次执行和重试
+- **失败终止策略**：无可重试节点时自动标记任务 FAILED
+- **系统恢复**：Scheduler 自动恢复系统重启前的 CREATED 节点
+
+### 5. 事件驱动
 - 通过 Redpanda 发布节点就绪事件
 - 监听节点结果事件更新状态
+- 发布节点执行成功/失败事件
 - Worker 消费事件执行具体任务
 
 ---
@@ -118,9 +148,11 @@ ai-orchestrator/
     │   └── TaskController.java               # 任务API
     ├── service/
     │   ├── OrchestratorService.java          # 核心编排
-    │   ├── Scheduler.java                    # 节点调度器
+    │   ├── Scheduler.java                    # 节点调度器（含恢复）
     │   ├── StateMachine.java                 # 状态机
-    │   ├── StateMachineService.java           # 状态机服务
+    │   ├── StateService.java                 # 状态收敛层（新增）
+    │   ├── DependencyChecker.java            # 依赖驱动调度（新增）
+    │   ├── RetryPolicy.java                  # 指数退避重试（新增）
     │   ├── DAGValidator.java                 # DAG校验
     │   └── TaskExecutionControl.java         # 任务执行控制
     ├── event/
@@ -132,15 +164,13 @@ ai-orchestrator/
     │   └── NodeDependencyRepository.java     # 依赖仓储
     ├── entity/
     │   ├── Task.java                        # 任务实体
-    │   ├── Node.java                        # 节点实体
+    │   ├── Node.java                        # 节点实体（含 idempotencyKey）
     │   ├── NodeDependency.java               # 依赖实体
     │   ├── TaskStatus.java                   # 任务状态枚举
-    │   ├── NodeStatus.java                   # 节点状态枚举
+    │   ├── NodeStatus.java                   # 节点状态枚举（含 RETRYING）
     │   └── NodeType.java                     # 节点类型枚举
     ├── model/
-    │   ├── DAGRequest.java                  # DAG请求模型
-    │   ├── NodeTaskEvent.java                # 节点任务事件
-    │   └── NodeResultEvent.java              # 节点结果事件
+    │   └── DAGRequest.java                  # DAG请求模型
     ├── context/
     │   └── ContextService.java              # 上下文服务代理
     └── config/
@@ -164,6 +194,7 @@ ai-orchestrator/
 |------|------|------|
 | POST | `/api/task/create` | 创建新任务 |
 | POST | `/api/task/{taskId}/dag` | 提交 DAG |
+| POST | `/api/node` | 一键提交DAG（创建任务+提交DAG，兼容NL-Translator） |
 | GET | `/api/task/{taskId}` | 查询任务详情 |
 | POST | `/api/task/{taskId}/pause` | 暂停任务 |
 | POST | `/api/task/{taskId}/resume` | 恢复任务 |
@@ -193,7 +224,7 @@ ai-orchestrator/
 ```bash
 curl -X POST http://localhost:8080/api/task/create \
   -H "Content-Type: application/json" \
-  -d '{"input": {"prompt": "写一篇关于AI的文章"}}'
+  -d '{"input": {"prompt": "查询北京的天气"}}'
 ```
 
 响应：
@@ -213,18 +244,17 @@ curl -X POST http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000
     "nodes": [
       {
         "id": "node-1",
-        "type": "LLM",
-        "name": "write_article",
-        "input": {"topic": "AI"},
-        "priority": 5,
+        "type": "TOOL",
+        "name": "weather_query",
+        "input": {"tool": "weather_query", "parameters": {"city": "北京", "type": "realtime"}},
         "maxRetry": 3
       },
       {
         "id": "node-2",
         "type": "LLM",
         "name": "summarize",
-        "input": {},
-        "priority": 5
+        "input": {"tool": "llm", "parameters": {"prompt": "总结以下文章"}},
+        "maxRetry": 3
       }
     ],
     "edges": [
@@ -241,7 +271,27 @@ curl -X POST http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000
 }
 ```
 
-#### 3. 查询任务
+#### 3. 一键提交DAG（兼容NL-Translator）
+
+```bash
+curl -X POST http://localhost:8080/api/node \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nodes": [{"nodeId": "node-1", "type": "LLM", "name": "test"}],
+    "edges": []
+  }'
+```
+
+响应：
+```json
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "CREATED",
+  "message": "DAG submitted successfully"
+}
+```
+
+#### 4. 查询任务
 
 ```bash
 curl http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000
@@ -252,47 +302,29 @@ curl http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
   "status": "RUNNING",
-  "input": {"prompt": "写一篇关于AI的文章"},
-  "output": null,
-  "createdAt": "2024-01-15T10:30:00",
   "nodes": [
     {
       "id": "node-1",
-      "taskId": "550e8400-e29b-41d4-a716-446655440000",
-      "type": "LLM",
-      "name": "write_article",
       "status": "SUCCESS",
-      "input": {"topic": "AI"},
-      "output": {"content": "这是一篇关于AI的文章..."},
-      "errorMessage": null,
+      "idempotencyKey": "550e8400-...-node-1",
+      "output": {"content": "文章内容..."},
       "retryCount": 0,
       "maxRetry": 3,
-      "priority": 5,
-      "workerGroup": "default",
-      "version": 2,
-      "createdAt": "2024-01-15T10:30:01"
+      "version": 2
     },
     {
       "id": "node-2",
-      "taskId": "550e8400-e29b-41d4-a716-446655440000",
-      "type": "LLM",
-      "name": "summarize",
-      "status": "RUNNING",
-      "input": {},
-      "output": null,
-      "errorMessage": null,
+      "status": "READY",
+      "idempotencyKey": "550e8400-...-node-2",
       "retryCount": 0,
       "maxRetry": 3,
-      "priority": 5,
-      "workerGroup": "default",
-      "version": 1,
-      "createdAt": "2024-01-15T10:30:01"
+      "version": 1
     }
   ]
 }
 ```
 
-#### 4. 暂停/恢复任务
+#### 5. 暂停/恢复任务
 
 ```bash
 # 暂停任务
@@ -304,19 +336,11 @@ curl -X POST http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000
 curl -X POST http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000/resume
 ```
 
-#### 5. 重试节点
+#### 6. 重试节点
 
 ```bash
 curl -X POST http://localhost:8080/api/node/node-1/retry
 ```
-
-#### 6. 查询任务上下文
-
-```bash
-curl http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000/context
-```
-
-响应：返回 AI-Context 模块记录的操作历史
 
 #### 7. 健康检查
 
@@ -324,14 +348,37 @@ curl http://localhost:8080/api/task/550e8400-e29b-41d4-a716-446655440000/context
 curl http://localhost:8080/api/health
 ```
 
-响应：
-```json
-{"status": "UP", "service": "ai-orchestrator"}
-```
-
 ---
 
 ## 类定义详解
+
+### 核心服务类
+
+#### StateService（状态收敛层）
+所有节点/任务状态变更的唯一入口。
+
+| 方法 | 说明 |
+|------|------|
+| `transitionNode(nodeId, newStatus, output, errorMessage)` | 统一节点状态变更 + 事件发布 + 上下文记录 |
+| `transitionTask(taskId, newStatus)` | 统一任务状态变更 + 事件发布 + 上下文记录 |
+| `checkDependenciesMet(nodeId)` | 检查节点依赖是否全部 SUCCESS |
+| `checkTaskCompleted(taskId)` | 检查任务是否所有节点 SUCCESS |
+| `checkTaskFailed(taskId)` | 检查任务是否有不可重试的失败节点 |
+| `initializeNodeReady(node)` | 初始化节点为 READY（含幂等键生成） |
+
+#### DependencyChecker（依赖驱动调度）
+消费 `ai.node.executed` 事件，检查子节点依赖是否满足。
+
+| 方法 | 说明 |
+|------|------|
+| `onNodeExecuted(nodeId, taskId)` | 处理节点执行完成事件，触发依赖检查 |
+
+#### RetryPolicy（指数退避重试策略）
+
+| 方法 | 说明 |
+|------|------|
+| `getRetryDelay(retryCount)` | 获取重试延迟（1s, 2s, 4s...max 60s） |
+| `shouldRetry(retryCount, maxRetry)` | 判断是否应该重试 |
 
 ### 实体类
 
@@ -362,6 +409,7 @@ curl http://localhost:8080/api/health
 | maxRetry | int | 最大重试次数 |
 | priority | int | 优先级（1-10） |
 | workerGroup | String | Worker分组 |
+| idempotencyKey | String | 幂等键（taskId+nodeId） |
 | version | int | 乐观锁版本号 |
 | createdAt | LocalDateTime | 创建时间 |
 
@@ -372,6 +420,7 @@ curl http://localhost:8080/api/health
 public enum TaskStatus {
     CREATED,   // 已创建
     RUNNING,   // 运行中
+    PAUSED,    // 已暂停
     SUCCESS,   // 成功
     FAILED     // 失败
 }
@@ -380,11 +429,12 @@ public enum TaskStatus {
 #### NodeStatus
 ```java
 public enum NodeStatus {
-    CREATED,   // 已创建
-    READY,     // 就绪（依赖满足）
-    RUNNING,   // 运行中
-    SUCCESS,   // 成功
-    FAILED     // 失败
+    CREATED,    // 已创建
+    READY,      // 就绪（依赖满足）
+    RUNNING,    // 运行中
+    RETRYING,   // 重试中（指数退避等待）
+    SUCCESS,    // 成功
+    FAILED      // 失败
 }
 ```
 
@@ -396,78 +446,40 @@ public enum NodeType {
 }
 ```
 
-### 事件模型
-
-#### NodeTaskEvent
-```java
-@Data
-public class NodeTaskEvent {
-    private String taskId;
-    private String nodeId;
-    private String type;         // 节点类型
-    private Map<String, Object> payload;  // 执行负载
-    private String traceId;
-}
-```
-
-#### NodeResultEvent
-```java
-@Data
-public class NodeResultEvent {
-    private String taskId;
-    private String nodeId;
-    private NodeStatus status;
-    private Map<String, Object> output;
-    private String traceId;
-    private String errorMessage;
-}
-```
-
 ---
 
 ## 工作流程
 
-### 完整执行时序图
+### 去中心化事件驱动时序图
 
 ```mermaid
 sequenceDiagram
     participant NL as NL-Translator
     participant TC as TaskController
     participant OS as OrchestratorService
-    participant DV as DAGValidator
-    participant TR as TaskRepository
-    participant NR as NodeRepository
-    participant DR as NodeDependencyRepository
+    participant SS as StateService
+    participant Sch as Scheduler
     participant EP as EventProducer
     participant RP as Redpanda
-    participant Sch as Scheduler
     participant SM as StateMachine
+    participant DC as DependencyChecker
     participant Worker as Worker
 
     NL->>TC: POST /api/task/create
     TC->>OS: createTask(input)
-    OS->>TR: save(task)
-    OS->>TR: update status=RUNNING
+    OS->>SS: transitionTask(CREATED)
     OS-->>TC: taskId
 
     NL->>TC: POST /api/task/{taskId}/dag
     TC->>OS: submitDAG(taskId, dagRequest)
-    OS->>DV: validate(dagRequest)
-    DV-->>OS: valid
-    loop 创建节点
-        OS->>NR: save(node)
-    end
-    loop 创建依赖边
-        OS->>DR: save(dependency)
-    end
-    OS->>TR: update status=RUNNING
+    OS->>SS: transitionTask(RUNNING)
+    OS->>SS: initializeNodeReady(node) [无依赖节点]
+    SS->>EP: 记录上下文 + 幂等键
     OS-->>TC: DAG submitted
 
-    Note over Sch: 每秒轮询
-    Sch->>NR: findReadyNodes()
-    NR-->>Sch: [node-1]
-    Sch->>NR: updateStatusWithLock(node-1)
-    Sch->>EP: publishNodeReady(node-1)
+    Sch->>Sch: recoverCreatedNodes() [恢复重启节点]
+    Sch->>SS: initializeNodeReady() [依赖满足的CREATED节点]
+    Sch->>EP: publishNodeReady(node)
     EP->>RP: 发送 ai.node.ready
 
     RP->>Worker: 消费事件
@@ -475,17 +487,19 @@ sequenceDiagram
     Worker->>RP: 发送 ai.node.result
 
     RP->>SM: handleNodeResult(event)
-    alt node success
-        SM->>NR: update node SUCCESS
-        SM->>NR: findReadyNodes() 再次检查
-        Note over SM: 如果node-2依赖满足，更新为READY
-    else node failure
-        SM->>NR: update node FAILED
-        SM->>TR: update task FAILED
-    end
+    SM->>SS: transitionNode(SUCCESS)
+    SM->>EP: publishNodeExecuted(node)
+    EP->>RP: 发送 ai.node.executed
+
+    RP->>DC: handleNodeExecuted(event)
+    DC->>SS: checkDependenciesMet(childNode)
+    SS-->>DC: true
+    DC->>SS: initializeNodeReady(childNode)
+    DC->>EP: publishNodeReady(childNode)
+    EP->>RP: 发送 ai.node.ready
 ```
 
-### 节点调度流程
+### 节点调度流程（含恢复）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -493,45 +507,43 @@ sequenceDiagram
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
-                    ┌─────────────────┐
-                    │ 查询就绪节点     │
-                    │ findReadyNodes() │
-                    └────────┬────────┘
+                    ┌─────────────────────┐
+                    │ 恢复 CREATED 节点    │  ← 新增：系统重启恢复
+                    │ recoverCreatedNodes  │
+                    └────────┬────────────┘
                              │
-                             ▼
-                    ┌─────────────────┐
-                    │ 检查任务是否暂停 │
-                    │ canScheduleNodes│
-                    └────────┬────────┘
+                    ┌────────▼────────────┐
+                    │ 检查依赖是否满足     │
+                    │ checkDependenciesMet │
+                    └────────┬────────────┘
                              │
-              ┌───────────────┼───────────────┐
-              │               │               │
-              ▼               ▼               ▼
-         [暂停]           [可调度]         [其他]
-         跳过             继续             跳过
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ 尝试获取锁       │
-                    │ updateWithLock  │
-                    └────────┬────────┘
-                             │
-              ┌───────────────┴───────────────┐
-              │               │               │
-              ▼               ▼               ▼
-           [成功]          [失败]          [其他]
-         更新为RUNNING     跳过             跳过
+              ┌──────────────┼──────────────┐
+              ▼                                 ▼
+         [满足]                              [不满足]
+    initializeNodeReady                    跳过
               │
               ▼
     ┌─────────────────┐
-    │ 发布NodeReady事件│
-    │ publishNodeReady│
+    │ 查询就绪节点     │
+    │ findReadyNodes() │
     └────────┬────────┘
              │
              ▼
     ┌─────────────────┐
-    │ 记录节点快照     │
-    │ recordNodeSnapshot│
+    │ 检查任务是否暂停 │
+    │ canScheduleNodes│
+    └────────┬────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ 尝试获取锁       │
+    │ updateWithLock  │
+    └────────┬────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ 发布NodeReady事件│
+    │ publishNodeReady│
     └─────────────────┘
 ```
 
@@ -541,6 +553,10 @@ sequenceDiagram
 |-------|------|--------|--------|
 | `ai.node.ready` | 节点就绪，Worker可以执行 | Orchestrator | Worker |
 | `ai.node.result` | 节点执行结果 | Worker | Orchestrator |
+| `ai.node.executed` | 节点执行成功事件 | Orchestrator | Orchestrator (DependencyChecker) |
+| `ai.node.failed` | 节点执行失败事件 | Orchestrator | Context |
+| `ai.task.completed` | 任务完成事件 | Orchestrator (StateService) | Context |
+| `ai.task.failed` | 任务失败事件 | Orchestrator (StateService) | Context |
 
 ---
 
@@ -575,7 +591,7 @@ curl -X POST "http://localhost:8080/api/task/${TASK_ID}/dag" \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
-      {"id": "n1", "type": "LLM", "name": "test_node", "input": {}}
+      {"id": "n1", "type": "LLM", "name": "test_node", "input": {"tool": "llm", "parameters": {"prompt": "hello"}}}
     ],
     "edges": []
   }'

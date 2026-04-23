@@ -1,286 +1,133 @@
-# 生产级重构总结
+# 灵犀AIOS 重构总结
 
-## 已完成的工作
+## 重构历程
 
-### ✅ 1. 数据层重构
-- **新增实体类**：
-  - `Task` - ai_task 表实体
-  - `Node` - ai_node 表实体（包含乐观锁 version）
-  - `NodeDependency` - ai_node_dependency 表实体
-  - `TaskStatus`、`NodeStatus`、`NodeType` 枚举
+### 阶段1：生产级重构 — "Everything is Node"
+- JPA 实体类（Task、Node、NodeDependency）替代 Redis 内存模型
+- PostgreSQL 持久化替代 Redis 存储
+- DAGValidator 环检测和孤立节点检测
+- Scheduler 定时调度 + 乐观锁抢占
+- StateMachine 状态流转 + 子节点触发
+- ContextService 操作历史记录
 
-- **新增 Repository 层**：
-  - `TaskRepository` - Task 数据访问
-  - `NodeRepository` - Node 数据访问（包含 findReadyNodes、乐观锁更新等）
-  - `NodeDependencyRepository` - 依赖关系数据访问
-
-### ✅ 2. 核心服务层
-- **DAGValidator** - DAG 校验器
-  - 环检测
-  - 起点检测（孤立节点检测）
-
-- **Scheduler** - 调度器
-  - 定时扫描（每秒）CREATED 状态的 Node
-  - 判断父节点是否全部 SUCCESS
-  - 使用乐观锁抢占
-  - 状态变为 RUNNING
-
-- **StateMachine** - 状态机
-  - SUCCESS：触发子节点 READY
-  - FAILED：retry < max → 重试；否则 → FAILED
-  - 自动检查 Task 完成状态
-
-- **OrchestratorService** - 核心编排服务（重构）
-  - `createTask(input)` - 创建 Task
-  - `submitDAG(taskId, dag)` - 提交 DAG（校验后入库）
-  - `getTask(taskId)` - 查询 Task
-  - `getTaskWithDetails(taskId)` - 查询 Task 详情（包含 Nodes）
-
-### ✅ 3. 上下文管理模块（新增）
-- **ContextType** - 上下文类型枚举
-  - TASK_CREATED、TASK_SUCCESS、TASK_FAILED
-  - NODE_SCHEDULED、NODE_READY、NODE_SUCCESS、NODE_FAILED、NODE_RETRY
-  - DAG_SUBMITTED、DAG_VALIDATED
-
-- **Context** - 上下文实体（ai_context 表）
-  - 记录系统运行的所有关键事件
-
-- **ContextService** - 上下文服务
-  - 记录 Task 生命周期事件
-  - 记录 Node 生命周期事件
-  - 记录 DAG 提交/校验事件
-  - 查询 Task 的上下文历史
-
-### ✅ 4. API 层（重构）
-- **TaskController** - 新的 API 接口
-  - `POST /api/task/create` - 创建 Task
-  - `POST /api/task/{taskId}/dag` - 提交 DAG
-  - `GET /api/task/{taskId}` - 查询 Task 状态
-  - `GET /api/task/{taskId}/context` - 查询 Task 上下文
-  - `POST /api/node/{nodeId}/success` - 标记 Node 成功
-  - `POST /api/node/{nodeId}/failure` - 标记 Node 失败
-
-### ✅ 5. 数据库设计
-- **schema.sql** - 数据库初始化脚本
-  - ai_task 表
-  - ai_node 表（包含索引、乐观锁）
-  - ai_node_dependency 表
-  - ai_context 表
-
-### ✅ 6. 配置更新
-- **pom.xml** - 添加 MySQL + Spring Data JPA 依赖
-- **OrchestratorApplication** - 启用 @EnableScheduling
+### 阶段2：去中心化架构升级 — 事件驱动调度
+- 消除中心调度瓶颈，改为事件驱动依赖检查
+- 统一状态收敛层，解决状态写入分散问题
+- 清理遗留 Redis 模型，消除双重消费者冲突
+- 添加幂等机制和指数退避重试
+- 实现系统中断恢复能力
 
 ---
 
-## 数据库设计（三张表）
+## 阶段2 改动详情
 
-### ai_task 表
-```sql
-CREATE TABLE ai_task (
-    id VARCHAR(64) PRIMARY KEY,
-    user_id VARCHAR(64),
-    status VARCHAR(20),
-    input JSON,
-    output JSON,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+### 新增类
+
+| 类 | 职责 |
+|---|---|
+| `StateService` | 统一状态收敛层，所有节点/任务状态变更入口 |
+| `DependencyChecker` | 依赖驱动调度，消费 ai.node.executed 事件检查下游依赖 |
+| `RetryPolicy` | 指数退避重试策略（1s, 2s, 4s, ... 60s max） |
+
+### 删除类（11个）
+
+| 类 | 原因 |
+|---|---|
+| `WorkerService` (orchestrator内) | 假执行器，与 ai-worker 在同一 topic 竞争消费 |
+| `StateMachineService` | 遗留 Redis 状态机实现 |
+| `RedisTaskRepository` | 遗留 Redis 仓储实现 |
+| `model/Task` | 遗留 Redis 模型，与 entity/Task 冲突 |
+| `model/Node` | 遗留 Redis 模型 |
+| `model/DAG` | 遗留 Redis 模型 |
+| `model/NodeStatus` | 与 entity/NodeStatus 重复 |
+| `model/NodeType` | 与 entity/NodeType 重复 |
+| `model/TaskStatus` | 与 entity/TaskStatus 重复 |
+| `model/NodeTaskEvent` | 被 worker 包取代 |
+| `model/NodeResultEvent` | 被 worker 包取代 |
+
+### 重构类
+
+| 类 | 改动 |
+|---|---|
+| `StateMachine` | 移除 triggerChildNodes，状态写入委托 StateService，发布 NodeExecuted 事件 |
+| `OrchestratorService` | 状态变更委托 StateService，submitDAG 设置 idempotencyKey |
+| `Scheduler` | 新增 recoverCreatedNodes() 恢复 CREATED 节点，状态更新委托 StateService |
+| `TaskExecutionControl` | 使用 StateService + RetryPolicy，retryNode 先设 RETRYING 再转 CREATED |
+| `EventProducer` | 使用 Map 替代已删除 model 类，新增 publishNodeExecuted/publishNodeReady(含幂等键) |
+| `EventConsumer` | 移除 handleNodeReady/WorkerService 依赖，新增 onNodeExecuted 消费 |
+| `Node` entity | 新增 idempotencyKey 字段 |
+| `NodeStatus` entity | 新增 RETRYING 状态 |
+| `NodeRepository` | 新增 findCreatedNodes() 查询 |
+| `TaskController` | 新增 POST /api/node 端点（一步创建+提交） |
+
+### Worker 侧改动
+
+| 文件 | 改动 |
+|---|---|
+| `NodeTaskEvent` | 新增 idempotencyKey 字段 |
+| `NodeResultEvent` | 新增 idempotencyKey 字段 |
+| `NodeExecutor` | 提取并传递 idempotencyKey，更新所有方法签名 |
+| `EventProducer` | publishNodeResult 使用 idempotencyKey 作为 Kafka 消息 key |
+
+### Context 侧改动
+
+| 文件 | 改动 |
+|---|---|
+| `ContextEventConsumer` | 新增 ai.node.executed topic 监听 |
+
+---
+
+## 架构变更对比
+
+### Before（中心化调度）
+```
+Worker → ai.node.result → StateMachine → 直接触发子节点(CREATED→READY)
+                                         → Scheduler 轮询 READY 节点
 ```
 
-### ai_node 表
-```sql
-CREATE TABLE ai_node (
-    id VARCHAR(64) PRIMARY KEY,
-    task_id VARCHAR(64),
-    type VARCHAR(20),
-    name VARCHAR(100),
-    status VARCHAR(20),
-    input JSON,
-    output JSON,
-    retry_count INT DEFAULT 0,
-    max_retry INT DEFAULT 3,
-    priority INT DEFAULT 5,
-    worker_group VARCHAR(50) DEFAULT 'default',
-    version INT DEFAULT 0,  -- 乐观锁
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_task (task_id),
-    INDEX idx_status (status)
-);
+### After（事件驱动调度）
 ```
-
-### ai_node_dependency 表
-```sql
-CREATE TABLE ai_node_dependency (
-    parent_node_id VARCHAR(64),
-    child_node_id VARCHAR(64),
-    PRIMARY KEY (parent_node_id, child_node_id)
-);
-```
-
-### ai_context 表
-```sql
-CREATE TABLE ai_context (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    context_type VARCHAR(50),
-    task_id VARCHAR(64),
-    node_id VARCHAR(64),
-    metadata JSON,
-    message VARCHAR(1000),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_task (task_id)
-);
+Worker → ai.node.result → StateMachine → StateService(状态收敛)
+                                        → publish(ai.node.executed)
+         → DependencyChecker 消费 → StateService.checkDependenciesMet
+                                  → publish(ai.node.ready)
+         → Scheduler 恢复 CREATED 节点（系统中断恢复）
 ```
 
 ---
 
-## 新 API 设计
+## 新增 Kafka Topic
 
-### POST /api/task/create
-**请求**：
-```json
-{
-  "input": "写一篇AI文章并总结"
-}
-```
-
-**响应**：
-```json
-{
-  "taskId": "t1",
-  "status": "CREATED"
-}
-```
+| Topic | 生产者 | 消费者 | 说明 |
+|-------|--------|--------|------|
+| `ai.node.executed` | StateMachine | DependencyChecker, Context | 节点执行完成事件 |
+| `ai.node.failed` | StateMachine | Context | 节点永久失败事件 |
+| `ai.task.success` | StateService | Context | 任务成功事件 |
+| `ai.task.failed` | StateService | Context | 任务失败事件 |
 
 ---
 
-### POST /api/task/{taskId}/dag
-**请求**：
-```json
-{
-  "nodes": [
-    {"id": "n1", "type": "LLM", "name": "write"},
-    {"id": "n2", "type": "TOOL", "name": "summary"}
-  ],
-  "edges": [
-    {"from": "n1", "to": "n2"}
-  ]
-}
-```
+## 数据结构变更
 
----
+### Node Entity 新增字段
+- `idempotencyKey` (VARCHAR(128), UNIQUE) — 幂等键，格式 `taskId + "-" + nodeId`
 
-### GET /api/task/{taskId}
-**响应**：
-```json
-{
-  "taskId": "t1",
-  "status": "SUCCESS",
-  "input": {...},
-  "output": {...},
-  "nodes": [...]
-}
-```
-
----
-
-### GET /api/task/{taskId}/context
-**响应**：
-```json
-[
-  {
-    "id": 1,
-    "contextType": "TASK_CREATED",
-    "taskId": "t1",
-    "message": "Task created",
-    "createdAt": "..."
-  },
-  {
-    "id": 2,
-    "contextType": "DAG_SUBMITTED",
-    "taskId": "t1",
-    "message": "DAG submitted",
-    "createdAt": "..."
-  }
-]
-```
+### NodeStatus 新增状态
+- `RETRYING` — 重试中，区分首次 CREATED 和重试等待
 
 ---
 
 ## 核心设计理念
 
-```text
-1️⃣ 一切皆 Node（Tool / LLM / Log / Control）
-2️⃣ DAG = Node表 + Dependency表（禁止JSON DAG）
-3️⃣ Orchestrator 必须纯确定性（不调用LLM）
-4️⃣ Node 是最小执行单元
-5️⃣ 状态必须可持久化（支持恢复/重试）
-6️⃣ Worker 与 Orchestrator 解耦（事件驱动）
-7️⃣ 所有交互统一JSON协议
 ```
-
----
-
-## 待完成的工作
-
-### ⏳ 1. 配置文件更新
-- 更新 `application.yml` - 添加 MySQL、JPA 配置
-- 更新 `docker-compose.yml` - 添加 MySQL 服务
-
-### ⏳ 2. EventConsumer 和 WorkerService 适配
-- 更新 EventConsumer 以适配新的 StateMachine
-- 更新 WorkerService 以适配新的 Node 实体
-- 或通过新的 API 端点 `/api/node/{nodeId}/success` 和 `/api/node/{nodeId}/failure` 来回调
-
-### ⏳ 3. nl-translator 模块适配
-- 更新 nl-translator 以调用新的 Orchestrator API
-- `POST /api/task/create` → `POST /api/task/{taskId}/dag`
-
-### ⏳ 4. 测试脚本
-- 创建端到端测试脚本
-- 验证完整流程：创建 Task → 提交 DAG → 自动执行 → 查询状态为 SUCCESS
-
-### ⏳ 5. 文档更新
-- 更新 `README.md`
-- 更新 `ORCHESTRATOR_GUIDE.md`
-- 创建新的生产级使用文档
-
----
-
-## 快速启动（待配置后）
-
-```bash
-# 1. 启动 MySQL + Redpanda
-cd ai-orchestrator
-docker-compose up -d mysql redpanda
-
-# 2. 启动应用
-mvn spring-boot:run
-
-# 3. 测试
-# 创建 Task
-TASK_ID=$(curl -s -X POST http://localhost:8080/api/task/create \
-  -H "Content-Type: application/json" \
-  -d '{"input":"写文章并总结"}' | jq -r '.taskId')
-
-# 提交 DAG
-curl -X POST http://localhost:8080/api/task/$TASK_ID/dag \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nodes": [
-      {"id": "n1", "type": "LLM", "name": "write_article"},
-      {"id": "n2", "type": "LLM", "name": "summarize"}
-    ],
-    "edges": [
-      {"from": "n1", "to": "n2"}
-    ]
-  }'
-
-# 等待执行
-sleep 5
-
-# 查询状态
-curl http://localhost:8080/api/task/$TASK_ID
-
-# 查询上下文
-curl http://localhost:8080/api/task/$TASK_ID/context
+1. 一切皆 Node（Tool / LLM / Log / Control）
+2. DAG = Node表 + Dependency表（禁止JSON DAG）
+3. Orchestrator 必须纯确定性（不调用LLM）
+4. Node 是最小执行单元
+5. 状态必须可持久化（支持恢复/重试）
+6. Worker 与 Orchestrator 解耦（事件驱动）
+7. 所有交互统一JSON协议
+8. 状态变更统一收敛（StateService）
+9. 调度依赖驱动（DependencyChecker，非代码直接调用）
+10. 幂等执行保障（idempotencyKey）
 ```

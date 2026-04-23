@@ -56,6 +56,9 @@ public class Node {
     @Version
     private Integer version;
 
+    @Column(name = "idempotency_key", length = 128, unique = true)
+    private String idempotencyKey;
+
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 

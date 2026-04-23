@@ -16,7 +16,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Instant;
@@ -46,11 +45,12 @@ public class NodeExecutor {
         String nodeId = event.getNodeId();
         String traceId = event.getTraceId() != null ? event.getTraceId() : TraceContext.generateTraceId();
         String nodeType = event.getType();
+        String idempotencyKey = event.getIdempotencyKey() != null ? event.getIdempotencyKey() : taskId + "-" + nodeId;
 
         TraceContext.setContext(traceId, taskId, nodeId);
 
-        log.info("Starting node execution: taskId={}, nodeId={}, type={}, traceId={}",
-                taskId, nodeId, nodeType, traceId);
+        log.info("Starting node execution: taskId={}, nodeId={}, type={}, traceId={}, idempotencyKey={}",
+                taskId, nodeId, nodeType, traceId, idempotencyKey);
 
         Map<String, Object> payload = event.getPayload();
         Map<String, Object> input = payload != null ? payload : Map.of();
@@ -72,35 +72,31 @@ public class NodeExecutor {
 
             eventProducer.publishNodeRunning(taskId, nodeId, traceId);
 
-            // 检查是否为外部工具
             if (externalToolExecutor.isExternalTool(toolName)) {
                 log.info("Executing as external tool: {}", toolName);
-                executeExternalToolAsync(toolName, parameters, context, traceId, nodeType, input);
+                executeExternalToolAsync(toolName, parameters, context, traceId, nodeType, input, idempotencyKey);
             } else {
-                // 执行本地工具
                 log.info("Executing as local tool: {}", toolName);
-                executeLocalTool(toolName, parameters, context, traceId, nodeType, input);
+                executeLocalTool(toolName, parameters, context, traceId, nodeType, input, idempotencyKey);
             }
 
         } catch (Exception e) {
             log.error("Node execution failed: taskId={}, nodeId={}", taskId, nodeId, e);
             savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, e.getMessage());
-            publishFailureResult(taskId, nodeId, traceId, e.getMessage());
+            publishFailureResult(taskId, nodeId, traceId, e.getMessage(), idempotencyKey);
             recordNodeFailed(taskId, nodeId, e.getMessage());
             TraceContext.clear();
         }
     }
 
-    /**
-     * 执行外部工具（异步非阻塞）
-     */
     private void executeExternalToolAsync(
             String toolName,
             Map<String, Object> parameters,
             ToolContext context,
             String traceId,
             String nodeType,
-            Map<String, Object> input) {
+            Map<String, Object> input,
+            String idempotencyKey) {
 
         String taskId = context.getTaskId();
         String nodeId = context.getNodeId();
@@ -114,12 +110,12 @@ public class NodeExecutor {
                                 if (result.isSuccess()) {
                                     log.info("External tool execution succeeded: {}", toolName);
                                     savePostExecutionSnapshot(taskId, nodeId, nodeType, input, result.getData(), null);
-                                    publishSuccessResult(taskId, nodeId, traceId, result.getData());
+                                    publishSuccessResult(taskId, nodeId, traceId, result.getData(), idempotencyKey);
                                     recordNodeSuccess(taskId, nodeId);
                                 } else {
                                     log.warn("External tool execution failed: {}", toolName);
                                     savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, result.getErrorMessage());
-                                    publishFailureResult(taskId, nodeId, traceId, result.getErrorMessage());
+                                    publishFailureResult(taskId, nodeId, traceId, result.getErrorMessage(), idempotencyKey);
                                     recordNodeFailed(taskId, nodeId, result.getErrorMessage());
                                 }
                             } finally {
@@ -132,7 +128,7 @@ public class NodeExecutor {
                                 log.error("External tool execution error: {}", toolName, error);
                                 String errorMessage = error.getMessage() != null ? error.getMessage() : "Unknown error";
                                 savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, errorMessage);
-                                publishFailureResult(taskId, nodeId, traceId, errorMessage);
+                                publishFailureResult(taskId, nodeId, traceId, errorMessage, idempotencyKey);
                                 recordNodeFailed(taskId, nodeId, errorMessage);
                             } finally {
                                 TraceContext.clear();
@@ -141,16 +137,14 @@ public class NodeExecutor {
                 );
     }
 
-    /**
-     * 执行本地工具（同步阻塞）
-     */
     private void executeLocalTool(
             String toolName,
             Map<String, Object> parameters,
             ToolContext context,
             String traceId,
             String nodeType,
-            Map<String, Object> input) {
+            Map<String, Object> input,
+            String idempotencyKey) {
 
         String taskId = context.getTaskId();
         String nodeId = context.getNodeId();
@@ -171,17 +165,17 @@ public class NodeExecutor {
 
             if (result.isSuccess()) {
                 savePostExecutionSnapshot(taskId, nodeId, nodeType, input, result.getData(), null);
-                publishSuccessResult(taskId, nodeId, traceId, result.getData());
+                publishSuccessResult(taskId, nodeId, traceId, result.getData(), idempotencyKey);
                 recordNodeSuccess(taskId, nodeId);
             } else {
                 savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, result.getErrorMessage());
-                publishFailureResult(taskId, nodeId, traceId, result.getErrorMessage());
+                publishFailureResult(taskId, nodeId, traceId, result.getErrorMessage(), idempotencyKey);
                 recordNodeFailed(taskId, nodeId, result.getErrorMessage());
             }
         } catch (Exception e) {
             log.error("Local tool execution failed: taskId={}, nodeId={}", taskId, nodeId, e);
             savePostExecutionSnapshot(taskId, nodeId, nodeType, input, null, e.getMessage());
-            publishFailureResult(taskId, nodeId, traceId, e.getMessage());
+            publishFailureResult(taskId, nodeId, traceId, e.getMessage(), idempotencyKey);
             recordNodeFailed(taskId, nodeId, e.getMessage());
         } finally {
             TraceContext.clear();
@@ -277,7 +271,6 @@ public class NodeExecutor {
         if (payload.containsKey("tool")) {
             return payload.get("tool").toString();
         }
-        // 如果是TOOL类型节点，name字段就是工具名
         if ("TOOL".equals(nodeType) && payload.containsKey("name")) {
             return payload.get("name").toString();
         }
@@ -292,7 +285,6 @@ public class NodeExecutor {
                 return (Map<String, Object>) params;
             }
         }
-        // 如果是TOOL类型节点，input字段就是参数
         if (payload.containsKey("input")) {
             Object input = payload.get("input");
             if (input instanceof Map) {
@@ -302,26 +294,28 @@ public class NodeExecutor {
         return payload;
     }
 
-    private void publishSuccessResult(String taskId, String nodeId, String traceId, Map<String, Object> data) {
+    private void publishSuccessResult(String taskId, String nodeId, String traceId, Map<String, Object> data, String idempotencyKey) {
         NodeResultEvent resultEvent = new NodeResultEvent(
                 taskId,
                 nodeId,
                 NodeStatus.SUCCESS,
                 data,
                 traceId,
-                null
+                null,
+                idempotencyKey
         );
         eventProducer.publishNodeResult(resultEvent);
     }
 
-    private void publishFailureResult(String taskId, String nodeId, String traceId, String errorMessage) {
+    private void publishFailureResult(String taskId, String nodeId, String traceId, String errorMessage, String idempotencyKey) {
         NodeResultEvent resultEvent = new NodeResultEvent(
                 taskId,
                 nodeId,
                 NodeStatus.FAILED,
                 null,
                 traceId,
-                errorMessage
+                errorMessage,
+                idempotencyKey
         );
         eventProducer.publishNodeResult(resultEvent);
     }

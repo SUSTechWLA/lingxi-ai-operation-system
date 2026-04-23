@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -153,5 +154,61 @@ public class TaskController {
                 "status", "UP",
                 "service", "ai-orchestrator"
         ));
+    }
+
+    @PostMapping("/node")
+    public ResponseEntity<Map<String, Object>> submitDAGFromNL(@RequestBody Map<String, Object> dagPayload) {
+        try {
+            Map<String, Object> input = new HashMap<>();
+            input.put("source", "nl-translator");
+            Task task = orchestratorService.createTask(input);
+
+            DAGRequest dagRequest = convertToDAGRequest(dagPayload);
+            orchestratorService.submitDAG(task.getId(), dagRequest);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("taskId", task.getId());
+            result.put("status", task.getStatus());
+            result.put("message", "DAG submitted successfully");
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private DAGRequest convertToDAGRequest(Map<String, Object> dagPayload) {
+        DAGRequest dagRequest = new DAGRequest();
+
+        List<Map<String, Object>> nodesData = (List<Map<String, Object>>) dagPayload.get("nodes");
+        if (nodesData != null) {
+            List<DAGRequest.NodeRequest> nodes = nodesData.stream().map(n -> {
+                DAGRequest.NodeRequest nodeReq = new DAGRequest.NodeRequest();
+                nodeReq.setId((String) n.get("nodeId"));
+                if (nodeReq.getId() == null) {
+                    nodeReq.setId((String) n.get("id"));
+                }
+                nodeReq.setType((String) n.get("type"));
+                nodeReq.setName((String) n.get("name"));
+                nodeReq.setInput((Map<String, Object>) n.get("input"));
+                return nodeReq;
+            }).toList();
+            dagRequest.setNodes(nodes);
+        }
+
+        List<Map<String, String>> edgesData = (List<Map<String, String>>) dagPayload.get("edges");
+        if (edgesData != null) {
+            List<DAGRequest.Edge> edges = edgesData.stream().map(e -> {
+                DAGRequest.Edge edge = new DAGRequest.Edge();
+                edge.setFrom(e.get("from"));
+                edge.setTo(e.get("to"));
+                return edge;
+            }).toList();
+            dagRequest.setEdges(edges);
+        }
+
+        return dagRequest;
     }
 }

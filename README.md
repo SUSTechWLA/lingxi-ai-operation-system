@@ -56,13 +56,15 @@ graph TD
 
     subgraph "自然语言翻译层 (NL-Translator)"
         B["NL-Translator (Port: 8081)"]
-        B1["意图解析: '写文章并生成摘要'"] --> B2["生成任务图 (DAG)"]
+        B1["意图解析: '查询北京天气并生成总结'"] --> B2["生成任务图 (DAG)"]
     end
 
     subgraph "任务编排层 (AI-Orchestrator)"
         C["Orchestrator (Port: 8080)"]
-        C1["Scheduler (调度)"]
-        C2["StateMachine (状态机)"]
+        C1["Scheduler (调度+恢复)"]
+        C2["StateService (状态收敛)"]
+        C3["DependencyChecker (依赖驱动)"]
+        C4["RetryPolicy (指数退避)"]
     end
 
     subgraph "上下文管理层 (AI-Context)"
@@ -73,9 +75,9 @@ graph TD
 
     subgraph "工具执行层 (AI-Worker)"
         E["AI-Worker (Port: 8083)"]
-        E1["数据库工具"]
-        E2["邮件工具"]
-        E3["文件工具"]
+        E1["天气查询工具"]
+        E2["数据库工具"]
+        E3["文件/Bash工具"]
         E4["LLM工具"]
     end
 
@@ -92,7 +94,7 @@ graph TD
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              用户层                                          │
 │  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │  用户: "查询数据库中最近一周的用户注册数据，生成报告并发送给张三"         │  │
+│  │  用户: "查询北京的天气并生成总结报告"                                     │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────┬────────────────────────────────────────┘
                                      │ 自然语言 (一句话)
@@ -102,10 +104,10 @@ graph TD
 │  ┌─────────────────────────────────────────────────────────────────────┐  │
 │  │  解析意图 → 生成任务图 (DAG)                                          │  │
 │  │                                                                      │  │
-│  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    │  │
-│  │  │ 查询数据库 │ ──▶│ 生成报告  │ ──▶│ 发送邮件  │            │    │  │
-│  │  │ (TOOL)   │    │ (LLM)    │    │ (TOOL)   │            │    │  │
-│  │  └──────────┘    └──────────┘    └──────────┘            │    │  │
+│  │  ┌──────────┐    ┌──────────┐                                       │  │
+│  │  │ 查询天气  │ ──▶│ 生成总结  │                                       │  │
+│  │  │ (TOOL)   │    │ (LLM)    │                                       │  │
+│  │  └──────────┘    └──────────┘                                       │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 │                              端口: 8081                                     │
 └────────────────────────────────────┬────────────────────────────────────────┘
@@ -114,7 +116,7 @@ graph TD
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                       任务编排层 (AI-Orchestrator)                            │
 │  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │  调度执行 → 状态管理 → 错误处理 → 重试机制                              │  │
+│  │  事件驱动调度 → 状态收敛(StateService) → 依赖检查 → 指数退避重试         │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 │                              端口: 8080                                     │
 └────────────────────────────────────┬────────────────────────────────────────┘
@@ -124,8 +126,8 @@ graph TD
 │                       工具执行层 (AI-Worker)                                  │
 │  ┌─────────────────────────────────────────────────────────────────────┐  │
 │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐ │  │
-│  │  │  数据库  │  │  邮件   │  │  文件   │  │  HTTP   │  │  LLM   │ │  │
-│  │  │  工具   │  │  工具   │  │  系统   │  │  请求   │  │  工具   │ │  │
+│  │  │  天气   │  │  数据库  │  │  文件   │  │  Bash   │  │  LLM   │ │  │
+│  │  │  查询   │  │  查询   │  │  系统   │  │  命令   │  │  工具   │ │  │
 │  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘ │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 │                              端口: 8083                                     │
@@ -149,9 +151,8 @@ graph TD
 
 | 用户说 | 系统执行 | 操作目标 |
 |--------|---------|---------|
-| "重启测试环境的 Web 服务器" | SSH → 执行重启命令 | 硬件/服务器 |
-| "查询 Redis 中用户 Session 信息" | 连接 Redis → 执行查询 | 中间件/缓存 |
-| "把销售报表发送给销售团队" | 查询数据库 → 生成报表 → 发送邮件 | 应用/办公系统 |
+| "查询北京天气并生成总结" | 天气工具查询 → LLM总结 | 外部工具 + LLM |
+| "查询用户注册数据并生成报告" | 数据库查询 → LLM生成报告 | 中间件/数据库 |
 | "分析最近一周的异常日志" | 收集日志 → LLM分析 → 生成报告 | 中间件/日志系统 |
 
 ### 🔗 模块间通信详解
@@ -168,18 +169,24 @@ sequenceDiagram
 
     User->>NL: POST /api/translate (自然语言)
     NL->>NL: 调用 LLM 生成 DAG 结构
-    NL->>Orch: POST /api/task/create (发送DAG)
+    NL->>Orch: POST /api/node (发送DAG，一步创建+提交)
     Orch->>Context: 记录 TaskCreated 初始上下文
     Orch->>Red: 发布 ai.task.created 事件
-    
-    Note over Orch, Red: Scheduler 开始调度
-    Orch->>Red: 发布 ai.node.ready (Node 1)
+
+    Note over Orch: DependencyChecker 检查依赖
+    Orch->>Red: 发布 ai.node.ready (Node 1, 含 idempotencyKey)
     Red-->>Worker: 消费 Ready 事件
-    Worker->>Worker: 执行任务 (LLM/Tool)
+    Worker->>Worker: 执行任务 (LLM/Tool, 含超时控制)
+    Worker->>Red: 发布 ai.node.result (含 idempotencyKey)
+    Red-->>Orch: StateMachine 处理结果
+    Orch->>Red: 发布 ai.node.executed (事件驱动调度)
+    Red-->>Orch: DependencyChecker 消费，检查下游依赖
+    Orch->>Red: 发布 ai.node.ready (Node 2, 依赖满足)
+    Red-->>Worker: 消费 Ready 事件
     Worker->>Red: 发布 ai.node.result
-    Red-->>Orch: 监听结果
+    Red-->>Orch: StateMachine 处理结果
     Orch->>Context: 更新节点快照
-    Orch->>Orch: 检查 DAG 是否完成
+    Orch->>Orch: StateService 检查任务完成
     Orch-->>User: 返回任务最终状态
 ```
 
@@ -210,24 +217,25 @@ graph LR
 **做什么**：自然语言理解层，把用户意图转换为可执行的任务图
 
 ```
-用户说: "查询数据库中最近一周的用户注册数据，生成报告并发送给张三"
+用户说: "查询北京天气并生成总结报告"
                                     ↓
 NL-Translator 解析意图，生成 DAG:
                                     ↓
-┌──────────┐    ┌──────────┐    ┌──────────┐
-│ 查询数据库 │ ──▶│ 生成报告  │ ──▶│ 发送邮件  │
-│ (TOOL)   │    │ (LLM)    │    │ (TOOL)   │
-└──────────┘    └──────────┘    └──────────┘
+┌──────────┐    ┌──────────┐
+│ 查询天气  │ ──▶│ 生成总结  │
+│ (TOOL)   │    │ (LLM)    │
+└──────────┘    └──────────┘
 ```
 
 ### AI-Orchestrator (端口 8080)
 **做什么**：任务调度内核，协调各模块完成复杂任务
 
 - 接收 DAG 任务图
-- 按依赖关系调度执行顺序
-- 管理任务状态（创建→运行→成功/失败）
-- 处理错误和重试
-- 调用 AI-Worker 执行具体操作
+- 按依赖关系调度执行顺序（事件驱动，DependencyChecker 检查依赖后触发）
+- 统一状态管理（StateService 收敛所有状态变更）
+- 指数退避重试（RetryPolicy: 1s → 2s → 4s → ... → 60s）
+- 幂等执行保障（idempotencyKey 去重）
+- 系统中断恢复（Scheduler 自动恢复 CREATED 节点）
 
 ### AI-Context (端口 8082)
 **做什么**：操作审计层，记录一切操作历史
@@ -237,13 +245,15 @@ NL-Translator 解析意图，生成 DAG:
 - 提供操作追溯和审计能力
 - 支持从任意点恢复执行
 
-### AI-Worker (端口 8083, 规划中)
+### AI-Worker (端口 8083)
 **做什么**：工具执行层，真正操作硬件、中间件、应用
 
 - 连接数据库、缓存、消息队列等中间件
 - 操作服务器、存储、网络等硬件资源
 - 调用邮件系统、办公软件等应用
 - 对接 OpenAI、搜索引擎等外部服务
+- 支持内置工具（Bash/LLM）和外部工具注册
+- 幂等结果发布（idempotencyKey 作为 Kafka 消息 key）
 
 ---
 
@@ -275,10 +285,18 @@ cd ai-nl-translator && mvn spring-boot:run &
 ### 测试你的第一个任务
 
 ```bash
+# 启动外部天气工具
+cd examples && pip install fastapi uvicorn && python weather_tool.py &
+
+# 注册外部工具到 Worker
+curl -X POST http://localhost:8083/worker/register \
+  -H "Content-Type: application/json" \
+  -d '{"endpoint": "http://localhost:8090"}'
+
 # 通过 NL-Translator 创建任务
 curl -X POST http://localhost:8081/api/translate \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "写一篇关于AI的文章"}'
+  -d '{"prompt": "查询北京的天气"}'
 
 # 查询任务状态
 curl http://localhost:8080/api/task/{返回的taskId}
@@ -300,15 +318,15 @@ lingxi-ai-operation-system/
 │
 ├── ⚙️ 核心编排层
 ├── ai-orchestrator/                 # 任务编排引擎
-│   └── 职责：调度任务、管理状态、事件驱动
+│   └── 职责：事件驱动调度、状态收敛、依赖检查、指数退避重试、幂等执行
 │
 ├── 📝 上下文层
 ├── ai-context/                     # 上下文管理
-│   └── 职责：记录历史、支持回溯、快照恢复
+│   └── 职责：记录历史、支持回溯、快照恢复、事件自动记录
 │
-├── 🔧 工具执行层 (规划中)
+├── 🔧 工具执行层
 ├── ai-worker/                      # 工具网关
-│   └── 职责：执行具体工具、连接外部API
+│   └── 职责：执行具体工具、连接外部API、幂等结果发布
 │
 └── 🗄️ 基础设施
     ├── PostgreSQL 16                # 持久化存储
@@ -363,7 +381,7 @@ graph TB
 1. 阅读 [ORCHESTRATOR_GUIDE.md](docs/guides/ORCHESTRATOR_GUIDE.md) - 理解任务编排
 2. 阅读 [NL_TRANSLATOR_GUIDE.md](docs/guides/NL_TRANSLATOR_GUIDE.md) - 理解自然语言处理
 3. 阅读 [AI_CONTEXT_GUIDE.md](docs/guides/AI_CONTEXT_GUIDE.md) - 理解上下文管理
-3. 阅读 [WORKER_GUIDE.md](docs/guides/WORKER_GUIDE.md) - 理解上下文管理
+4. 阅读 [WORKER_GUIDE.md](docs/guides/WORKER_GUIDE.md) - 理解工具执行
 
 ### 第三阶段：二次开发
 1. 添加新的节点类型

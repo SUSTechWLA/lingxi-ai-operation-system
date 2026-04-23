@@ -21,15 +21,12 @@ public interface NodeRepository extends JpaRepository<Node, String> {
 
     List<Node> findByTaskIdAndStatusIn(String taskId, List<NodeStatus> statuses);
 
-    /**
-     * 查找可执行的节点：状态为 READY
-     */
     @Query("SELECT n FROM Node n WHERE n.status = 'READY'")
     List<Node> findReadyNodes();
 
-    /**
-     * 查找某个节点的子节点
-     */
+    @Query("SELECT n FROM Node n WHERE n.status = 'CREATED'")
+    List<Node> findCreatedNodes();
+
     @Query("SELECT n FROM Node n WHERE n.id IN (" +
             "SELECT d.childNodeId FROM NodeDependency d WHERE d.parentNodeId = :parentNodeId)")
     List<Node> findChildNodes(@Param("parentNodeId") String parentNodeId);
@@ -37,9 +34,6 @@ public interface NodeRepository extends JpaRepository<Node, String> {
     @Query("SELECT d FROM NodeDependency d WHERE d.childNodeId = :childNodeId")
     List<com.lingxi.ai.orchestrator.entity.NodeDependency> findByChildNodeId(@Param("childNodeId") String childNodeId);
 
-    /**
-     * 乐观锁更新状态
-     */
     @Modifying
     @Query("UPDATE Node n SET n.status = :newStatus, n.version = n.version + 1 " +
             "WHERE n.id = :nodeId AND n.version = :version")

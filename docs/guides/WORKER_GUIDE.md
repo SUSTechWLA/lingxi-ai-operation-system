@@ -1,7 +1,7 @@
 # 灵犀AI OS Worker 模块完整指南
 
 > **状态**: ✅ 已实现 - 本文档描述当前已实现的模块
-> **最后更新**: 2026-04-18
+> **最后更新**: 2026-04-22
 
 ---
 
@@ -14,7 +14,8 @@
 5. [完整 API 接口](#完整-api-接口)
 6. [工具系统](#工具系统)
 7. [工作流程](#工作流程)
-8. [快速开始](#快速开始)
+8. [事件模型](#事件模型)
+9. [快速开始](#快速开始)
 
 ---
 
@@ -25,7 +26,7 @@
 - 监听 Orchestrator 发布的任务事件
 - 执行具体的节点任务（LLM 调用或工具调用）
 - 支持内置工具和外部工具
-- 向 Orchestrator 报告执行结果
+- 向 Orchestrator 报告执行结果（含幂等键，防止重复处理）
 
 简单来说，Worker 就是"干活的人"，负责实际执行用户请求的操作。
 
@@ -70,6 +71,15 @@
 - 执行后更新节点状态
 - 记录成功/失败上下文
 
+### 5. 幂等执行
+- 每个 NodeTaskEvent 携带 `idempotencyKey`
+- 执行结果使用幂等键作为 Kafka 消息 key，确保同一节点不会重复处理
+- 幂等键默认为 `taskId + "-" + nodeId`，由 Orchestrator 在 DAG 提交时生成
+
+### 6. 超时控制
+- 工具执行设有超时机制（通过 `WorkerConfig.toolTimeoutSeconds` 配置）
+- 超时后自动标记为 FAILED 并发布失败结果
+
 ---
 
 ## 技术栈
@@ -95,10 +105,14 @@ ai-worker/
     │   ├── WorkerController.java                # 基础API (/api)
     │   └── ExternalToolController.java         # 外部工具API (/worker)
     ├── service/
-    │   └── NodeExecutor.java                   # 节点执行器
+    │   └── NodeExecutor.java                   # 节点执行器（含幂等键、超时控制）
     ├── event/
-    │   ├── EventConsumer.java                  # 事件消费
-    │   └── EventProducer.java                  # 事件生产
+    │   ├── EventConsumer.java                  # 事件消费（ai.node.ready）
+    │   └── EventProducer.java                  # 事件生产（ai.node.result，含幂等键）
+    ├── model/
+    │   ├── NodeTaskEvent.java                  # 节点任务事件（含 idempotencyKey）
+    │   ├── NodeResultEvent.java                # 节点结果事件（含 idempotencyKey）
+    │   └── NodeStatus.java                     # 节点状态枚举
     ├── tool/
     │   ├── Tool.java                          # 工具接口
     │   ├── ToolType.java                      # 工具类型枚举
@@ -130,6 +144,8 @@ ai-worker/
     │       └── RegisteredTool.java
     ├── client/
     │   └── ContextClient.java                  # 上下文服务客户端
+    ├── util/
+    │   └── TraceContext.java                   # 链路追踪上下文
     └── config/
         ├── KafkaConfig.java
         ├── OpenAiConfig.java
@@ -395,7 +411,7 @@ sequenceDiagram
     participant EP as EventProducer
     participant CC as ContextClient
 
-    RP->>EC: ai.node.ready 事件
+    RP->>EC: ai.node.ready 事件（含 idempotencyKey）
     EC->>NE: executeNode(event)
 
     NE->>CC: saveNodeSnapshot (执行前)
@@ -404,7 +420,7 @@ sequenceDiagram
     alt 本地工具
         NE->>TR: getTool(toolName)
         TR-->>NE: Tool
-        NE->>NE: tool.execute()
+        NE->>NE: tool.execute()（含超时控制）
     else 外部工具
         NE->>ETE: isExternalTool(toolName)
         ETE-->>NE: true
@@ -415,13 +431,13 @@ sequenceDiagram
 
     alt 执行成功
         NE->>CC: recordNodeSuccess
-        NE->>EP: publishNodeResult (SUCCESS)
+        NE->>EP: publishNodeResult (SUCCESS, idempotencyKey)
     else 执行失败
         NE->>CC: recordNodeFailed
-        NE->>EP: publishNodeResult (FAILED)
+        NE->>EP: publishNodeResult (FAILED, idempotencyKey)
     end
 
-    EP->>RP: ai.node.result 事件
+    EP->>RP: ai.node.result 事件（Kafka key = idempotencyKey）
     RP->>Orch: 消费结果事件
 ```
 
@@ -434,6 +450,7 @@ sequenceDiagram
    │    "taskId": "task-001",
    │    "nodeId": "node-001",
    │    "type": "LLM",
+   │    "idempotencyKey": "task-001-node-001",
    │    "payload": {
    │      "tool": "llm",
    │      "parameters": {
@@ -442,17 +459,18 @@ sequenceDiagram
    │    }
    │  }
    ▼
-2. Worker 消费事件
+2. Worker 消费事件（EventConsumer）
    │
    ▼
 3. NodeExecutor 决定执行方式
    │
    ├─► 本地工具: ToolRegistry.getTool("llm")
+   │   └─► 含超时控制（WorkerConfig.toolTimeoutSeconds）
    │
    └─► 外部工具: ExternalToolRegistry.getTool("weather")
               │
               ▼
-         HTTP POST /run
+         HTTP POST /run（异步，响应式）
               │
               ▼
 4. 执行结果发布 ai.node.result 事件
@@ -461,11 +479,58 @@ sequenceDiagram
    │    "taskId": "task-001",
    │    "nodeId": "node-001",
    │    "status": "SUCCESS",
-   │    "output": {"result": "文章内容..."}
+   │    "output": {"result": "文章内容..."},
+   │    "idempotencyKey": "task-001-node-001"
    │  }
+   │
+   │  Kafka 消息 key = "task-001-node-001"（确保幂等）
    ▼
-5. Orchestrator 消费结果，更新状态
+5. Orchestrator 消费结果，调用 StateMachine 处理状态流转
+   │
+   ▼
+6. StateMachine 发布 ai.node.executed 事件
+   │
+   ▼
+7. DependencyChecker 检查下游节点依赖，触发新的 ai.node.ready
 ```
+
+---
+
+## 事件模型
+
+### NodeTaskEvent（ai.node.ready 消费）
+
+Worker 从 `ai.node.ready` Topic 消费的事件模型：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| taskId | String | 任务ID |
+| nodeId | String | 节点ID |
+| type | String | 节点类型（LLM/TOOL） |
+| payload | Map\<String, Object\> | 执行参数 |
+| traceId | String | 链路追踪ID |
+| idempotencyKey | String | 幂等键（taskId + "-" + nodeId） |
+
+### NodeResultEvent（ai.node.result 生产）
+
+Worker 执行完成后向 `ai.node.result` Topic 发布的事件模型：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| taskId | String | 任务ID |
+| nodeId | String | 节点ID |
+| status | NodeStatus | 执行状态（SUCCESS/FAILED） |
+| output | Map\<String, Object\> | 执行输出（成功时） |
+| traceId | String | 链路追踪ID |
+| errorMessage | String | 错误信息（失败时） |
+| idempotencyKey | String | 幂等键，同时作为 Kafka 消息 key |
+
+### Kafka Topic 映射
+
+| Topic | 角色 | 消费/生产 | 说明 |
+|-------|------|-----------|------|
+| `ai.node.ready` | 消费者 | 消费 | 接收待执行节点任务 |
+| `ai.node.result` | 生产者 | 生产 | 发布节点执行结果 |
 
 ---
 
