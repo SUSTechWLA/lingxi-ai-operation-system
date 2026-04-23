@@ -4,9 +4,7 @@
 
 ---
 
-## 📚 阅读指南
-
-本文档面向**零基础读者**，帮助你快速理解整个系统。
+## 阅读指南
 
 ### 什么是 AIOS？
 
@@ -37,198 +35,92 @@
 
 ### 核心价值
 
-- 🎯 **降低使用门槛**: 不需要学习复杂的 GUI 操作，会说话就会用
-- ⚡ **提升效率**: 一句话完成原本需要多步操作的任务
-- 🔧 **统一交互**: 硬件、中间件、应用都用同一种方式操作
-- 🚀 **面向未来**: 为下一代自然语言操作系统奠定基础
+- 降低使用门槛: 不需要学习复杂的 GUI 操作，会说话就会用
+- 提升效率: 一句话完成原本需要多步操作的任务
+- 统一交互: 硬件、中间件、应用都用同一种方式操作
+- 面向未来: 为下一代自然语言操作系统奠定基础
 
 ---
 
-## 🏗️ 系统架构图
+## 系统架构图
 
 ### 自然语言操作全景图
 
 ```mermaid
 graph TD
     subgraph "用户入口层 (Entry Layer)"
-        A[🌐 Web / CLI / SDK]
+        A[Web / CLI / SDK]
     end
 
-    subgraph "自然语言翻译层 (NL-Translator)"
-        B["NL-Translator (Port: 8081)"]
-        B1["意图解析: '查询北京天气并生成总结'"] --> B2["生成任务图 (DAG)"]
+    subgraph "Go 单体服务 (Port: 8080)"
+        B["NL-Translator"]
+        C["Orchestrator"]
+        D["Context"]
+        E["Worker"]
     end
 
-    subgraph "任务编排层 (AI-Orchestrator)"
-        C["Orchestrator (Port: 8080)"]
-        C1["Scheduler (调度+恢复)"]
-        C2["StateService (状态收敛)"]
-        C3["DependencyChecker (依赖驱动)"]
-        C4["RetryPolicy (指数退避)"]
-    end
-
-    subgraph "上下文管理层 (AI-Context)"
-        D["AI-Context (Port: 8082)"]
-        D1["操作历史回溯"]
-        D2["节点快照恢复"]
-    end
-
-    subgraph "工具执行层 (AI-Worker)"
-        E["AI-Worker (Port: 8083)"]
-        E1["天气查询工具"]
-        E2["数据库工具"]
-        E3["文件/Bash工具"]
-        E4["LLM工具"]
+    subgraph "基础设施"
+        F["PostgreSQL 16"]
+        G["Redis 7"]
+        H["Redpanda (Kafka)"]
+        I["MinIO / Qdrant"]
     end
 
     A -->|"自然语言请求"| B
-    B -->|"REST API (JSON DAG)"| C
+    B -->|"DAG"| C
     C <-->|"状态同步 & 记录"| D
     C -->|"发布任务事件"| E
     E -->|"执行结果"| C
+    C --- F
+    C --- G
+    C --- H
 ```
 
 ### 用户请求处理流程
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              用户层                                          │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │  用户: "查询北京的天气并生成总结报告"                                     │  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │ 自然语言 (一句话)
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       自然语言翻译层 (NL-Translator)                         │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │  解析意图 → 生成任务图 (DAG)                                          │  │
-│  │                                                                      │  │
-│  │  ┌──────────┐    ┌──────────┐                                       │  │
-│  │  │ 查询天气  │ ──▶│ 生成总结  │                                       │  │
-│  │  │ (TOOL)   │    │ (LLM)    │                                       │  │
-│  │  └──────────┘    └──────────┘                                       │  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-│                              端口: 8081                                     │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │ REST API
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       任务编排层 (AI-Orchestrator)                            │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │  事件驱动调度 → 状态收敛(StateService) → 依赖检查 → 指数退避重试         │  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-│                              端口: 8080                                     │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │ REST API / 事件
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       工具执行层 (AI-Worker)                                  │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐ │  │
-│  │  │  天气   │  │  数据库  │  │  文件   │  │  Bash   │  │  LLM   │ │  │
-│  │  │  查询   │  │  查询   │  │  系统   │  │  命令   │  │  工具   │ │  │
-│  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘ │  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-│                              端口: 8083                                     │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │
-                    ┌────────────────┼────────────────┐
-                    │                │                │
-                    ▼                ▼                ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           被操作的目标                                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
-│  │   硬件       │  │  中间件      │  │   应用       │  │  外部服务    │      │
-│  │  • 服务器    │  │  • 数据库    │  │  • 邮件系统  │  │  • OpenAI   │      │
-│  │  • 存储      │  │  • 缓存      │  │  • 办公软件  │  │  • 搜索引擎  │      │
-│  │  • 网络      │  │  • 消息队列  │  │  • 业务系统  │  │  • 云服务    │      │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘      │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 典型使用场景
-
-| 用户说 | 系统执行 | 操作目标 |
-|--------|---------|---------|
-| "查询北京天气并生成总结" | 天气工具查询 → LLM总结 | 外部工具 + LLM |
-| "查询用户注册数据并生成报告" | 数据库查询 → LLM生成报告 | 中间件/数据库 |
-| "分析最近一周的异常日志" | 收集日志 → LLM分析 → 生成报告 | 中间件/日志系统 |
-
-### 🔗 模块间通信详解
-
-``` mermaid
-sequenceDiagram
-    autonumber
-    actor User as 用户
-    participant NL as NL-Translator (8081)
-    participant Orch as Orchestrator (8080)
-    participant Red as Redpanda (Event Bus)
-    participant Worker as Worker Service
-    participant Context as AI-Context (8082)
-
-    User->>NL: POST /api/translate (自然语言)
-    NL->>NL: 调用 LLM 生成 DAG 结构
-    NL->>Orch: POST /api/node (发送DAG，一步创建+提交)
-    Orch->>Context: 记录 TaskCreated 初始上下文
-    Orch->>Red: 发布 ai.task.created 事件
-
-    Note over Orch: DependencyChecker 检查依赖
-    Orch->>Red: 发布 ai.node.ready (Node 1, 含 idempotencyKey)
-    Red-->>Worker: 消费 Ready 事件
-    Worker->>Worker: 执行任务 (LLM/Tool, 含超时控制)
-    Worker->>Red: 发布 ai.node.result (含 idempotencyKey)
-    Red-->>Orch: StateMachine 处理结果
-    Orch->>Red: 发布 ai.node.executed (事件驱动调度)
-    Red-->>Orch: DependencyChecker 消费，检查下游依赖
-    Orch->>Red: 发布 ai.node.ready (Node 2, 依赖满足)
-    Red-->>Worker: 消费 Ready 事件
-    Worker->>Red: 发布 ai.node.result
-    Red-->>Orch: StateMachine 处理结果
-    Orch->>Context: 更新节点快照
-    Orch->>Orch: StateService 检查任务完成
-    Orch-->>User: 返回任务最终状态
-```
-
-### 📊 数据流向图
-
-``` mermaid
-graph LR
-    Input[用户输入] --> NL[NL-Translator]
-    NL --> GPT[(GPT-4)]
-    GPT --> DAG[DAG 结构]
-    
-    subgraph "核心数据处理"
-        DAG --> Orch[Orchestrator]
-        Orch <--> DB[(PostgreSQL<br/>持久化存储)]
-        Orch <--> Bus{Redpanda<br/>事件总线}
-        Orch <--> Context[AI-Context<br/>历史快照]
-    end
-    
-    Bus -->|"ai.node.*"| Worker[Worker 执行器]
-    Worker --> Bus
+用户: "查询北京的天气并生成总结报告"
+                │ 自然语言
+                ▼
+┌─────────────────────────────────────────────┐
+│  NL-Translator                               │
+│  解析意图 → 调用 LLM → 生成任务图 (DAG)        │
+│                                              │
+│  ┌──────────┐    ┌──────────┐               │
+│  │ 查询天气  │ ──▶│ 生成总结  │               │
+│  │ (TOOL)   │    │ (LLM)    │               │
+│  └──────────┘    └──────────┘               │
+└─────────────────────────────────────────────┘
+                │ REST API
+                ▼
+┌─────────────────────────────────────────────┐
+│  Orchestrator                                │
+│  事件驱动调度 → 状态收敛 → 依赖检查 → 重试     │
+└─────────────────────────────────────────────┘
+                │ Kafka 事件
+                ▼
+┌─────────────────────────────────────────────┐
+│  Worker                                      │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
+│  │  Bash   │  │  LLM    │  │  自定义  │     │
+│  │  命令   │  │  工具   │  │  工具   │     │
+│  └─────────┘  └─────────┘  └─────────┘     │
+└─────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🎯 模块职责
+## 模块职责
 
-### NL-Translator (端口 8081)
-**做什么**：自然语言理解层，把用户意图转换为可执行的任务图
+### NL-Translator
+**做什么**: 自然语言理解层，把用户意图转换为可执行的任务图
 
-```
-用户说: "查询北京天气并生成总结报告"
-                                    ↓
-NL-Translator 解析意图，生成 DAG:
-                                    ↓
-┌──────────┐    ┌──────────┐
-│ 查询天气  │ ──▶│ 生成总结  │
-│ (TOOL)   │    │ (LLM)    │
-└──────────┘    └──────────┘
-```
+- 调用 OpenAI API 解析用户意图
+- 生成 DAG 任务图（节点 + 依赖边）
+- 支持一步翻译+提交
 
-### AI-Orchestrator (端口 8080)
-**做什么**：任务调度内核，协调各模块完成复杂任务
+### Orchestrator
+**做什么**: 任务调度内核，协调各模块完成复杂任务
 
 - 接收 DAG 任务图
 - 按依赖关系调度执行顺序（事件驱动，DependencyChecker 检查依赖后触发）
@@ -237,189 +129,174 @@ NL-Translator 解析意图，生成 DAG:
 - 幂等执行保障（idempotencyKey 去重）
 - 系统中断恢复（Scheduler 自动恢复 CREATED 节点）
 
-### AI-Context (端口 8082)
-**做什么**：操作审计层，记录一切操作历史
+### Context
+**做什么**: 操作审计层，记录一切操作历史
 
 - 记录每个操作的详细信息
 - 保存节点快照（用于故障恢复）
 - 提供操作追溯和审计能力
 - 支持从任意点恢复执行
 
-### AI-Worker (端口 8083)
-**做什么**：工具执行层，真正操作硬件、中间件、应用
+### Worker
+**做什么**: 工具执行层，真正操作硬件、中间件、应用
 
-- 连接数据库、缓存、消息队列等中间件
-- 操作服务器、存储、网络等硬件资源
-- 调用邮件系统、办公软件等应用
-- 对接 OpenAI、搜索引擎等外部服务
-- 支持内置工具（Bash/LLM）和外部工具注册
+- 插件式工具架构（Tool 接口 + ToolRegistry）
+- 内置 BashTool（Shell 命令执行）和 LlmApiTool（LLM 调用）
+- 支持自定义工具注册
 - 幂等结果发布（idempotencyKey 作为 Kafka 消息 key）
+- 超时控制
 
 ---
 
-## 🚀 快速开始
+## 技术栈
 
-### 一键启动所有服务
+| 组件 | 技术 | 说明 |
+|------|------|------|
+| 语言 | Go 1.23+ | 高性能、并发友好 |
+| HTTP 框架 | Gin | 轻量级 Web 框架 |
+| 数据库 | pgx (PostgreSQL 16) | 原生 PostgreSQL 驱动 |
+| 缓存 | go-redis (Redis 7) | Redis 客户端 |
+| 消息队列 | Sarama (Redpanda) | Kafka 兼容客户端 |
+| 配置 | Viper | 支持 .env + YAML |
+| 日志 | Zap | 高性能结构化日志 |
+| 定时任务 | robfig/cron | Scheduler 周期恢复 |
+
+---
+
+## 快速开始
+
+### 环境准备
 
 ```bash
-cd /Users/wanglian/Projects/lingxi-ai-operation-system
+# 安装 Go 1.23+
+brew install go          # macOS
+# 或访问 https://go.dev/dl/  # Linux
+
+# 确保 Docker 已安装并运行
+docker info
+```
+
+### 一键安装与启动
+
+```bash
+# 1. 安装环境和构建
+./scripts/install_lingxi_env.sh
+
+# 2. 编辑 .env 填写 OPENAI_API_KEY
+vim .env
+
+# 3. 启动服务
 ./scripts/startup.sh
 ```
 
-### 手动启动（分步骤）
+### 手动启动
 
 ```bash
-# 1. 启动基础设施
+# 启动基础设施
 docker compose up -d
 
-# 2. 启动上下文服务
-cd ai-context && mvn spring-boot:run &
-
-# 3. 启动编排服务
-cd ai-orchestrator && mvn spring-boot:run &
-
-# 4. 启动翻译服务
-cd ai-nl-translator && mvn spring-boot:run &
+# 构建并运行
+make run
 ```
 
-### 测试你的第一个任务
+### 测试
 
 ```bash
-# 启动外部天气工具
-cd examples && pip install fastapi uvicorn && python weather_tool.py &
+# 运行 API 测试
+./scripts/test-apis.sh
 
-# 注册外部工具到 Worker
-curl -X POST http://localhost:8083/worker/register \
-  -H "Content-Type: application/json" \
-  -d '{"endpoint": "http://localhost:8090"}'
+# 运行单元测试
+go test ./...
 
-# 通过 NL-Translator 创建任务
-curl -X POST http://localhost:8081/api/translate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "查询北京的天气"}'
-
-# 查询任务状态
-curl http://localhost:8080/api/task/{返回的taskId}
-
-# 查看执行上下文
-curl http://localhost:8080/api/task/{taskId}/context
+# 健康检查
+curl http://localhost:8080/api/health
 ```
 
 ---
 
-## 📂 项目结构
+## 项目结构
 
 ```
 lingxi-ai-operation-system/
-│
-├── 🌐 用户接口层
-├── nl-translator/                    # 自然语言 → DAG 翻译
-│   └── 职责：解析用户意图，生成可执行的任务图
-│
-├── ⚙️ 核心编排层
-├── ai-orchestrator/                 # 任务编排引擎
-│   └── 职责：事件驱动调度、状态收敛、依赖检查、指数退避重试、幂等执行
-│
-├── 📝 上下文层
-├── ai-context/                     # 上下文管理
-│   └── 职责：记录历史、支持回溯、快照恢复、事件自动记录
-│
-├── 🔧 工具执行层
-├── ai-worker/                      # 工具网关
-│   └── 职责：执行具体工具、连接外部API、幂等结果发布
-│
-└── 🗄️ 基础设施
-    ├── PostgreSQL 16                # 持久化存储
-    ├── Redis 7.x                    # 缓存
-    ├── Redpanda                     # 事件总线 (Kafka兼容)
-    └── MinIO/Qdrant                 # 对象存储/向量检索
+├── cmd/lingxi-ai-os/           # 入口: main.go (服务组装 + 优雅关闭)
+├── internal/
+│   ├── config/                 # Viper 配置 (.env 支持)
+│   ├── database/               # pgx 连接池 + Schema 迁移
+│   ├── eventbus/               # Kafka 生产者/消费者 (Sarama)
+│   ├── logger/                 # Zap 日志 (dev/prod)
+│   ├── model/                  # 数据模型 + 仓储层
+│   │   └── repository/         # pgx CRUD 操作
+│   ├── redis/                  # go-redis 客户端
+│   ├── orchestrator/
+│   │   ├── handler/            # Gin HTTP 处理器
+│   │   └── service/            # 状态机 + 调度器 + 依赖检查
+│   ├── translator/
+│   │   ├── handler/            # Gin HTTP 处理器
+│   │   └── service/            # NL → DAG 翻译
+│   ├── context/
+│   │   ├── handler/            # Gin HTTP 处理器
+│   │   └── service/            # 上下文/快照管理
+│   └── worker/
+│       ├── service/            # 节点执行引擎
+│       └── tool/
+│           ├── builtin/        # BashTool, LlmApiTool
+│           └── tool_test.go    # 工具测试
+├── scripts/
+│   ├── install_lingxi_env.sh   # 环境安装脚本
+│   ├── startup.sh              # 一键启动脚本
+│   └── test-apis.sh            # API 测试脚本
+├── docs/
+│   ├── ARCHITECTURE.md         # 架构设计文档
+│   ├── API_REFERENCE.md        # API 接口文档
+│   └── ONBOARDING.md           # Go 新手上路指南
+├── docker-compose.yml          # 基础设施容器
+├── Dockerfile                  # 多阶段构建
+├── Makefile                    # 常用命令
+├── go.mod / go.sum             # Go 依赖管理
+└── .env.example                # 环境变量模板
 ```
 
 ---
 
-## 🔮 未来架构展望
+## 环境配置
 
-``` mermaid
-graph TB
-    User((用户)) --> Gateway[API Gateway<br/>认证/限流/监控]
-    
-    subgraph "Service Mesh"
-        Gateway --> NL[NL-Translator]
-        Gateway --> Workflow[Workflow Engine]
-        Gateway --> Agent[Agent Service]
-    end
-    
-    NL & Workflow & Agent --> Core[Orchestrator 核心引擎]
-    
-    subgraph "Infrastructure"
-        Core --- Bus((Redpanda Event Bus))
-        Core --- DB[(PostgreSQL)]
-        Core --- Cache[(Redis)]
-    end
-    
-    Bus --- Worker1[Worker A]
-    Bus --- Worker2[Worker B]
-    Bus --- Worker3[Worker C]
-    
-    subgraph "External Resources"
-        Worker1 --- LLM[OpenAI/Claude]
-        Worker2 --- Web[Google Search]
-        Worker3 --- Data[(External DB/File)]
-    end
+```bash
+cp .env.example .env
 ```
 
----
-
-## 🎓 学习路径
-
-### 第一阶段：跑起来
-1. 运行 `./scripts/startup.sh`
-2. 调用 API 创建任务
-3. 观察任务执行过程
-
-### 第二阶段：理解原理
-1. 阅读 [ORCHESTRATOR_GUIDE.md](docs/guides/ORCHESTRATOR_GUIDE.md) - 理解任务编排
-2. 阅读 [NL_TRANSLATOR_GUIDE.md](docs/guides/NL_TRANSLATOR_GUIDE.md) - 理解自然语言处理
-3. 阅读 [AI_CONTEXT_GUIDE.md](docs/guides/AI_CONTEXT_GUIDE.md) - 理解上下文管理
-4. 阅读 [WORKER_GUIDE.md](docs/guides/WORKER_GUIDE.md) - 理解工具执行
-
-### 第三阶段：二次开发
-1. 添加新的节点类型
-2. 实现自定义 Worker
-3. 扩展 NL-Translator
+必要配置:
+- `OPENAI_API_KEY` - LLM 服务的 API Key
+- `OPENAI_BASE_URL` - LLM 服务的基础 URL
+- `POSTGRES_PASSWORD` - PostgreSQL 密码
 
 ---
 
-## 📖 文档索引
+## 文档索引
 
 | 文档 | 内容 | 难度 |
 |------|------|------|
-| [ORCHESTRATOR_GUIDE.md](docs/guides/ORCHESTRATOR_GUIDE.md) | 任务编排详解 | ⭐⭐ |
-| [NL_TRANSLATOR_GUIDE.md](docs/guides/NL_TRANSLATOR_GUIDE.md) | 自然语言翻译详解 | ⭐⭐ |
-| [AI_CONTEXT_GUIDE.md](docs/guides/AI_CONTEXT_GUIDE.md) | 上下文管理详解 | ⭐ |
-| [WORKER_GUIDE.md](docs/guides/WORKER_GUIDE.md) | 工具执行层详解 | ⭐⭐⭐ |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计详解 | ⭐⭐ |
+| [API_REFERENCE.md](docs/API_REFERENCE.md) | API 接口文档 | ⭐ |
+| [ONBOARDING.md](docs/ONBOARDING.md) | Go 新手上路指南 | ⭐ |
 
 ---
 
-## ❓ 常见问题
+## 常见问题
 
 **Q: AIOS 和传统操作系统有什么区别？**
 A: 传统操作系统需要用户通过 GUI 点击操作，AIOS 让用户用自然语言直接操作硬件、中间件和应用。
 
-**Q: 为什么需要 NL-Translator？**
-A: 将用户的自然语言意图转换为系统可执行的任务图（DAG），实现"说一句话，系统自动执行"。
+**Q: 为什么用 Go 重写？**
+A: Go 编译为单二进制、启动快、内存占用低、并发原生支持，适合部署为轻量级 AI 操作系统。
 
-**Q: 为什么需要 Orchestrator？**
-A: 复杂任务往往包含多个步骤，Orchestrator 负责协调这些步骤的执行顺序和状态管理。
+**Q: 需要多个服务端口吗？**
+A: 不需要。Go 版本采用模块化单体架构，所有模块运行在同一个进程的 8080 端口。
 
-**Q: 为什么需要 AI-Context？**
-A: 记录所有操作历史，支持审计追溯和故障恢复，确保操作可追溯、可恢复。
+**Q: NL-Translator 返回 503？**
+A: 检查 `.env` 中的 `OPENAI_API_KEY` 是否配置正确。
 
-**Q: AI-Worker 是什么？**
-A: 真正执行操作的模块，负责连接数据库、操作服务器、调用外部 API 等，是"干活"的模块。
-
-**Q: 这和 ChatGPT 有什么区别？**
-A: ChatGPT 只是对话，AIOS 是真正**执行操作**的系统。用户说"重启服务器"，AIOS 会真的去重启服务器。
+**Q: 如何添加自定义工具？**
+A: 实现 `Tool` 接口（Name, Description, Type, Execute, ValidateParameters），然后注册到 `ToolRegistry`。参见 [ONBOARDING.md](docs/ONBOARDING.md)。
 
 ---
 

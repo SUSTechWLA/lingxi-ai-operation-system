@@ -1,6 +1,0 @@
-# 灵犀AI OS - 多语言工具示例依赖
-# 天气查询工具（Python）依赖
-
-fastapi>=0.104.0
-uvicorn>=0.24.0
-pydantic>=2.0.0

@@ -5,23 +5,25 @@
 
 # Logs
 *.log
-ai-orchestrator/*.log
 
 # Build output
+build/
 target/
-*/target/
 
 # Environment files with secrets - NEVER commit these!
 .env
 .env.local
 .env.*.local
-.env.example
 
-# Local configurations
-application-local.yml
-application-local.yaml
-application-dev.yml
-application-dev.yaml
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
 
 # OS
 .DS_Store
