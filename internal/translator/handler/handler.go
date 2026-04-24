@@ -22,7 +22,6 @@ func (h *TranslatorHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/translate", h.Translate)
 		api.POST("/translate/submit", h.TranslateAndSubmit)
 		api.GET("/task/:taskId/status", h.GetTaskStatus)
-		api.GET("/health", h.Health)
 	}
 }
 

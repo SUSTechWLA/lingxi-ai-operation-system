@@ -70,10 +70,10 @@ func TestDetermineToolName(t *testing.T) {
 			expected: "custom_tool",
 		},
 		{
-			name:     "default to llm",
+			name:     "default to llm_api",
 			nodeType: string(model.NodeTypeLLM),
 			payload:  map[string]interface{}{"prompt": "hello"},
-			expected: "llm",
+			expected: "llm_api",
 		},
 	}
 

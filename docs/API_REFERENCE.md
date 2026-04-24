@@ -71,23 +71,44 @@ Submit a DAG (nodes + edges) to an existing task.
     {
       "id": "node-1",
       "type": "TOOL",
-      "name": "Query Weather",
+      "name": "weather",
       "input": {"city": "Beijing"}
     },
     {
       "id": "node-2",
       "type": "LLM",
       "name": "Summarize",
-      "input": {}
+      "input": {"prompt": "Generate travel advice based on weather"}
+    },
+    {
+      "id": "node-3",
+      "type": "TOOL",
+      "name": "error-handler",
+      "condition": "node-1.status == failed",
+      "input": {"message": "Weather query failed"}
     }
   ],
   "edges": [
-    {"from": "node-1", "to": "node-2"}
+    {"from": "node-1", "to": "node-2"},
+    {"from": "node-1", "to": "node-3"}
   ]
 }
 ```
 
-**Node Types**: `LLM`, `TOOL`
+**Node Fields**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | string | Yes | Unique node identifier within the task |
+| type | string | Yes | `LLM` or `TOOL` |
+| name | string | Yes | Node name (TOOL type: used as tool name for routing) |
+| input | object | No | Node input parameters |
+| condition | string | No | Conditional expression (e.g., `"nodeA.status == success"`) |
+| maxRetry | int | No | Maximum retry count (default: 3) |
+| priority | int | No | Node priority |
+| workerGroup | string | No | Worker group assignment |
+
+**Condition Format**: `"nodeId.status == success"` or `"nodeId.status == failed"`. When condition is not met, the node is automatically marked as SKIPPED.
 
 **Response** `200`
 ```json
@@ -104,8 +125,8 @@ curl -X POST http://localhost:8080/api/task/${TASK_ID}/dag \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "Query", "input": {}},
-      {"id": "n2", "type": "LLM", "name": "Summarize", "input": {}}
+      {"id": "n1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
+      {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
     ],
     "edges": [
       {"from": "n1", "to": "n2"}
@@ -128,18 +149,30 @@ Get task details including all nodes and their statuses.
   "task": {
     "id": "20260423150000-a1b2c3",
     "status": "RUNNING",
-    "userId": "test-user"
+    "userId": "test-user",
+    "pauseReason": ""
   },
   "nodes": [
     {
       "id": "n1",
       "type": "TOOL",
-      "name": "Query",
-      "status": "SUCCESS"
+      "name": "weather",
+      "status": "SUCCESS",
+      "condition": "",
+      "output": {"city": "Beijing", "temperature": "22°C", "condition": "Sunny"}
+    },
+    {
+      "id": "n2",
+      "type": "TOOL",
+      "name": "error-handler",
+      "status": "SKIPPED",
+      "condition": "n1.status == failed"
     }
   ]
 }
 ```
+
+**Node Statuses**: `CREATED`, `READY`, `RUNNING`, `SUCCESS`, `FAILED`, `RETRYING`, `SKIPPED`
 
 **Example**
 ```bash
@@ -162,8 +195,8 @@ Get all context records for a task.
     "id": "ctx-001",
     "taskId": "20260423150000-a1b2c3",
     "nodeId": "n1",
-    "type": "NODE_EXECUTED",
-    "message": "Node executed successfully",
+    "type": "NODE_SUCCESS",
+    "message": "Node succeeded",
     "createdAt": "2026-04-23T15:00:01Z"
   }
 ]
@@ -401,8 +434,8 @@ Translate a natural language prompt into a DAG structure.
 ```json
 {
   "nodes": [
-    {"id": "n1", "type": "TOOL", "name": "Query Weather", "input": {"city": "Beijing"}},
-    {"id": "n2", "type": "LLM", "name": "Summarize", "input": {}}
+    {"id": "n1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
+    {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
   ],
   "edges": [
     {"from": "n1", "to": "n2"}
@@ -514,7 +547,7 @@ Manually record a context entry.
 }
 ```
 
-**Context Types**: `TASK_CREATED`, `NODE_EXECUTED`, `NODE_FAILED`, `TASK_COMPLETED`, `TASK_FAILED`, `SNAPSHOT`, `CUSTOM`
+**Context Types**: `TASK_CREATED`, `DAG_VALIDATED`, `DAG_SUBMITTED`, `NODE_READY`, `NODE_SCHEDULED`, `NODE_SUCCESS`, `NODE_FAILED`, `NODE_RETRY`, `NODE_SKIPPED`, `TASK_SUCCESS`, `TASK_FAILED`, `SNAPSHOT`, `CUSTOM`
 
 **Response** `200`
 ```json
@@ -542,8 +575,8 @@ Submit a complete DAG in one step (used by NL-Translator). Creates a task and su
 ```json
 {
   "nodes": [
-    {"id": "n1", "type": "TOOL", "name": "Query", "input": {}},
-    {"id": "n2", "type": "LLM", "name": "Summarize", "input": {}}
+    {"id": "n1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
+    {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
   ],
   "edges": [
     {"from": "n1", "to": "n2"}
@@ -560,18 +593,32 @@ Submit a complete DAG in one step (used by NL-Translator). Creates a task and su
 }
 ```
 
-**Example**
+**Example: Conditional branching**
 ```bash
 curl -X POST http://localhost:8080/api/node \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "Query", "input": {}},
-      {"id": "n2", "type": "LLM", "name": "Summarize", "input": {}}
+      {"id": "weather-1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
+      {"id": "success-1", "type": "LLM", "name": "travel-advice", "condition": "weather-1.status == success", "input": {"prompt": "Generate travel advice"}},
+      {"id": "fail-1", "type": "TOOL", "name": "bash", "condition": "weather-1.status == failed", "input": {"command": "echo weather failed"}}
     ],
-    "edges": [{"from": "n1", "to": "n2"}]
+    "edges": [
+      {"from": "weather-1", "to": "success-1"},
+      {"from": "weather-1", "to": "fail-1"}
+    ]
   }'
 ```
+
+---
+
+## Built-in Tools
+
+| Tool Name | Type | Description | Input Parameters |
+|-----------|------|-------------|-----------------|
+| `bash` | CUSTOM | Sandboxed shell execution | `command` (string, required) |
+| `llm_api` | LLM | OpenAI-compatible chat API | `prompt` / `message` / `content` (string, required) |
+| `weather` | CUSTOM | Weather query (simulated) | `city` or `location` (string, required) |
 
 ---
 

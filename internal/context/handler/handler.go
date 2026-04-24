@@ -24,7 +24,6 @@ func (h *ContextHandler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/context/:taskId/node/:nodeId/snapshot/latest", h.GetLatestSnapshot)
 		api.POST("/context/:taskId/node/:nodeId/restore", h.RestoreFromSnapshot)
 		api.POST("/context/record", h.RecordContext)
-		api.GET("/health", h.Health)
 	}
 }
 

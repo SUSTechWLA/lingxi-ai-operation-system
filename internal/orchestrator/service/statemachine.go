@@ -6,9 +6,11 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/outbox"
 )
 
 type StateMachine struct {
@@ -16,6 +18,7 @@ type StateMachine struct {
 	nodeRepo     *repository.NodeRepository
 	taskRepo     *repository.TaskRepository
 	producer     *eventbus.Producer
+	pool         *pgxpool.Pool
 	retryPolicy  *RetryPolicy
 }
 
@@ -24,12 +27,14 @@ func NewStateMachine(
 	nodeRepo *repository.NodeRepository,
 	taskRepo *repository.TaskRepository,
 	producer *eventbus.Producer,
+	pool *pgxpool.Pool,
 ) *StateMachine {
 	return &StateMachine{
 		stateService: stateService,
 		nodeRepo:     nodeRepo,
 		taskRepo:     taskRepo,
 		producer:     producer,
+		pool:         pool,
 		retryPolicy:  NewRetryPolicy(),
 	}
 }
@@ -42,7 +47,7 @@ func (sm *StateMachine) OnSuccess(ctx context.Context, nodeID string, output map
 
 	zap.L().Info("Node succeeded", zap.String("nodeId", nodeID))
 
-	_ = sm.producer.Publish(eventbus.TopicNodeExecuted, node.TaskID+"-"+node.ID, eventbus.Event{
+	_ = outbox.SaveEvent(ctx, sm.pool, "node", node.ID, eventbus.TopicNodeExecuted, eventbus.Event{
 		TaskID: node.TaskID,
 		NodeID: node.ID,
 		Status: "SUCCESS",
@@ -115,7 +120,7 @@ func (sm *StateMachine) failNode(ctx context.Context, node *model.Node, errorMes
 		return err
 	}
 
-	_ = sm.producer.Publish(eventbus.TopicNodeFailed, node.TaskID+"-"+node.ID, eventbus.Event{
+	_ = outbox.SaveEvent(ctx, sm.pool, "node", node.ID, eventbus.TopicNodeFailed, eventbus.Event{
 		TaskID:       node.TaskID,
 		NodeID:       node.ID,
 		Status:       "FAILED",

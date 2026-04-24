@@ -40,6 +40,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	    status VARCHAR(20),
 	    input JSONB,
 	    output JSONB,
+	    pause_reason TEXT,
 	    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -52,12 +53,13 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	    input JSONB,
 	    output JSONB,
 	    error_message TEXT,
+	    condition TEXT,
 	    retry_count INT DEFAULT 0,
 	    max_retry INT DEFAULT 3,
 	    priority INT DEFAULT 5,
 	    worker_group VARCHAR(50) DEFAULT 'default',
 	    version INT DEFAULT 0,
-	    idempotency_key VARCHAR(128) UNIQUE,
+	    idempotency_key VARCHAR(128),
 	    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -83,6 +85,17 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 
 	CREATE INDEX IF NOT EXISTS idx_context_task ON ai_context(task_id);
 	CREATE INDEX IF NOT EXISTS idx_context_node ON ai_context(node_id);
+
+	CREATE TABLE IF NOT EXISTS outbox (
+	    id BIGSERIAL PRIMARY KEY,
+	    aggregate_type VARCHAR(50) NOT NULL,
+	    aggregate_id VARCHAR(100) NOT NULL,
+	    event_type VARCHAR(100) NOT NULL,
+	    payload JSONB NOT NULL,
+	    created_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_outbox_created ON outbox(created_at);
 	`
 
 	_, err := pool.Exec(ctx, schema)
@@ -90,11 +103,32 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		zap.L().Fatal("Failed to run migrations", zap.Error(err))
 	}
 
+	// Add columns that may be missing from older (Java) schema
+	alterStatements := []string{
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128)`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS retry_count INT DEFAULT 0`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS max_retry INT DEFAULT 3`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS priority INT DEFAULT 5`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS worker_group VARCHAR(50) DEFAULT 'default'`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS version INT DEFAULT 0`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS error_message TEXT`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS condition TEXT`,
+		`ALTER TABLE ai_task ADD COLUMN IF NOT EXISTS pause_reason TEXT`,
+		`ALTER TABLE ai_node DROP CONSTRAINT IF EXISTS ai_node_status_check`,
+		`ALTER TABLE ai_node ADD CONSTRAINT ai_node_status_check CHECK (status IN ('CREATED','READY','RUNNING','RETRYING','SUCCESS','FAILED','SKIPPED'))`,
+		`ALTER TABLE ai_task DROP CONSTRAINT IF EXISTS ai_task_status_check`,
+		`ALTER TABLE ai_task ADD CONSTRAINT ai_task_status_check CHECK (status IN ('CREATED','RUNNING','PAUSED','SUCCESS','FAILED'))`,
+	}
+	for _, stmt := range alterStatements {
+		_, _ = pool.Exec(ctx, stmt)
+	}
+
 	zap.L().Info("Database migrations completed")
 }
 
 func DropAll(ctx context.Context, pool *pgxpool.Pool) {
 	drop := fmt.Sprintln(`
+	DROP TABLE IF EXISTS outbox;
 	DROP TABLE IF EXISTS ai_context;
 	DROP TABLE IF EXISTS ai_node_dependency;
 	DROP TABLE IF EXISTS ai_node;

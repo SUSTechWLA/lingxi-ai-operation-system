@@ -19,8 +19,9 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/logger"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
-	orchestratorHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/handler"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/service"
+	orchestratorHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/handler"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/outbox"
 	redisClient "github.com/lingxi-ai/lingxi-ai-operation-system/internal/redis"
 	translatorHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/translator/handler"
 	translatorSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/translator/service"
@@ -61,18 +62,27 @@ func main() {
 	contextRepo := repository.NewContextRepository(pool)
 
 	// Services
-	stateService := service.NewStateService(nodeRepo, taskRepo, depRepo, contextRepo, producer)
+	stateService := service.NewStateService(nodeRepo, taskRepo, depRepo, contextRepo, producer, pool)
 	orchestratorService := service.NewOrchestratorService(taskRepo, nodeRepo, depRepo, contextRepo, stateService)
-	stateMachine := service.NewStateMachine(stateService, nodeRepo, taskRepo, producer)
-	dependencyChecker := service.NewDependencyChecker(nodeRepo, stateService, producer)
+	stateMachine := service.NewStateMachine(stateService, nodeRepo, taskRepo, producer, pool)
+	dependencyChecker := service.NewDependencyChecker(nodeRepo, stateService, producer, pool)
 	taskExecutionCtrl := service.NewTaskExecutionControl(taskRepo, nodeRepo, stateService)
 	scheduler := service.NewScheduler(nodeRepo, stateService, producer)
 	contextService := contextSvc.NewContextService(contextRepo, nodeRepo, taskRepo)
+
+	// Wire DependencyChecker into StateService for event-driven scheduling
+	stateService.SetDependencyChecker(dependencyChecker)
+
+	// Outbox relay
+	outboxRelay := outbox.NewRelay(pool, producer)
+	outboxRelay.Start(ctx)
+	defer outboxRelay.Stop()
 
 	// Worker
 	toolRegistry := tool.NewToolRegistry()
 	toolRegistry.Register(builtin.NewBashTool(cfg.BashTool))
 	toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewWeatherTool())
 
 	nodeExecutor := workerSvc.NewNodeExecutor(toolRegistry, producer, cfg.Worker)
 
@@ -80,7 +90,6 @@ func main() {
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL)
 
 	// Kafka consumers
-	// Worker consumer: listens for node ready events
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
 		[]string{eventbus.TopicNodeReady},
 		func(event eventbus.Event) error {
@@ -91,7 +100,6 @@ func main() {
 	workerConsumer.Start()
 	defer workerConsumer.Stop()
 
-	// Orchestrator consumer: listens for node result and node executed events
 	orchestratorConsumer := eventbus.NewConsumer(cfg.Kafka, "orchestrator-group",
 		[]string{eventbus.TopicNodeResult, eventbus.TopicNodeExecuted},
 		func(event eventbus.Event) error {
@@ -112,7 +120,6 @@ func main() {
 	orchestratorConsumer.Start()
 	defer orchestratorConsumer.Stop()
 
-	// Context consumer: records all events for audit
 	contextConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-context-group",
 		[]string{eventbus.TopicNodeResult, eventbus.TopicNodeExecuted, eventbus.TopicNodeFailed,
 			eventbus.TopicTaskCompleted, eventbus.TopicTaskFailed},
@@ -123,7 +130,7 @@ func main() {
 	contextConsumer.Start()
 	defer contextConsumer.Stop()
 
-	// Start scheduler
+	// Start scheduler (30s fallback)
 	scheduler.Start(ctx)
 	defer scheduler.Stop()
 

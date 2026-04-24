@@ -29,7 +29,17 @@ func NewTaskExecutionControl(
 }
 
 func (tc *TaskExecutionControl) PauseTask(ctx context.Context, taskID, reason string) error {
-	if err := tc.stateService.TransitionTask(ctx, taskID, model.TaskPaused); err != nil {
+	task, err := tc.taskRepo.FindByID(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to find task: %w", err)
+	}
+	if task == nil {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+
+	task.Status = model.TaskPaused
+	task.PauseReason = reason
+	if err := tc.taskRepo.Save(ctx, task); err != nil {
 		return fmt.Errorf("failed to pause task: %w", err)
 	}
 	zap.L().Info("Task paused", zap.String("taskId", taskID), zap.String("reason", reason))
@@ -37,7 +47,17 @@ func (tc *TaskExecutionControl) PauseTask(ctx context.Context, taskID, reason st
 }
 
 func (tc *TaskExecutionControl) ResumeTask(ctx context.Context, taskID string) error {
-	if err := tc.stateService.TransitionTask(ctx, taskID, model.TaskRunning); err != nil {
+	task, err := tc.taskRepo.FindByID(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to find task: %w", err)
+	}
+	if task == nil {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+
+	task.Status = model.TaskRunning
+	task.PauseReason = ""
+	if err := tc.taskRepo.Save(ctx, task); err != nil {
 		return fmt.Errorf("failed to resume task: %w", err)
 	}
 	zap.L().Info("Task resumed", zap.String("taskId", taskID))
@@ -74,6 +94,9 @@ func (tc *TaskExecutionControl) GetTaskPauseReason(ctx context.Context, taskID s
 		return "Task not found"
 	}
 	if task.Status == model.TaskPaused {
+		if task.PauseReason != "" {
+			return task.PauseReason
+		}
 		return "Task was paused"
 	}
 	return "Task is not paused"

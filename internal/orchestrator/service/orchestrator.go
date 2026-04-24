@@ -73,6 +73,7 @@ func (s *OrchestratorService) SubmitDAG(ctx context.Context, taskID string, dagR
 			Name:           nodeReq.Name,
 			Status:         model.NodeCreated,
 			Input:          nodeReq.Input,
+			Condition:      nodeReq.Condition,
 			IdempotencyKey: taskID + "-" + nodeReq.ID,
 			RetryCount:     0,
 			MaxRetry:       3,

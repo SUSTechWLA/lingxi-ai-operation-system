@@ -132,8 +132,8 @@ defer cancel()
 灵犀AI OS 是一个**自然语言驱动的任务操作系统**。用户输入自然语言（如"写一篇文章并总结"），系统会：
 
 1. **翻译**：将自然语言分解为可执行的任务图 (DAG)
-2. **调度**：按照依赖关系自动编排任务执行顺序
-3. **执行**：调用各种工具（LLM、Shell命令等）完成实际操作
+2. **调度**：按照依赖关系自动编排任务执行顺序（事件驱动 + Outbox 模式保证可靠）
+3. **执行**：调用各种工具（LLM、Shell命令、天气查询等）完成实际操作
 4. **记录**：全程审计，支持快照和恢复
 
 ### 2.2 架构图
@@ -142,11 +142,11 @@ defer cancel()
 用户自然语言输入
        │
        ▼
-┌──────────────┐    Kafka     ┌──────────────┐
-│  NL-Translator│─────────────│  Orchestrator │
-│  自然语言→DAG  │             │  任务调度引擎  │
+┌──────────────┐             ┌──────────────┐
+│  NL-Translator│             │  Orchestrator │
+│  自然语言→DAG  │────────────│  任务调度引擎  │
 └──────────────┘             └──────┬───────┘
-                                    │ ai.node.ready
+                                    │ outbox → Kafka
                               ┌─────▼───────┐
                               │    Worker     │
                               │  工具执行引擎  │
@@ -158,7 +158,7 @@ defer cancel()
                               └──────────────┘
 
 所有模块运行在同一个 Go 进程中 (端口 8080)
-通过 Kafka 事件总线异步通信
+事件通过 Outbox 模式写入 DB，再由 Relay 协程转发到 Kafka
 数据持久化到 PostgreSQL
 ```
 
@@ -169,7 +169,7 @@ defer cancel()
 | Web 框架 | [Gin](https://gin-gonic.com/) | 最流行的 Go HTTP 框架，类似 Spring MVC |
 | 数据库 | [pgx](https://github.com/jackc/pgx) | 原生 PostgreSQL 驱动，性能最好 |
 | 缓存 | [go-redis](https://github.com/redis/go-redis) | Redis 官方推荐 Go 客户端 |
-| 消息队列 | [Sarama](https://github.com/Shopify/sarama) | Kafka/Redpanda Go 客户端 |
+| 消息队列 | [IBM/sarama](https://github.com/IBM/sarama) | Kafka/Redpanda Go 客户端 |
 | 配置 | [Viper](https://github.com/spf13/viper) | 支持 .env、JSON、YAML 等 |
 | 日志 | [Zap](https://github.com/uber-go/zap) | Uber 开源的高性能日志库 |
 
@@ -200,6 +200,9 @@ lingxi-ai-operation-system/
 │   ├── eventbus/                 # Kafka 事件总线
 │   │   └── eventbus.go           # Producer(发送) + Consumer(消费)
 │   │
+│   ├── outbox/                   # Outbox 发件箱模式
+│   │   └── relay.go              # Relay 协程 + SaveEvent 写入
+│   │
 │   ├── model/                    # 数据模型（纯数据，无业务逻辑）
 │   │   ├── model.go              # Task, Node, DAGRequest 等结构体
 │   │   └── repository/
@@ -208,13 +211,13 @@ lingxi-ai-operation-system/
 │   ├── orchestrator/             # ★ 核心调度模块
 │   │   ├── service/
 │   │   │   ├── orchestrator.go   #   任务创建、DAG提交
-│   │   │   ├── state.go          #   状态转换服务
-│   │   │   ├── statemachine.go   #   节点成功/失败状态机
-│   │   │   ├── dependency_checker.go  # 依赖检查器
-│   │   │   ├── scheduler.go      #   定时恢复调度器
+│   │   │   ├── state.go          #   状态转换服务 (TryMakeReady 即时调度)
+│   │   │   ├── statemachine.go   #   节点成功/失败状态机 (outbox 发布)
+│   │   │   ├── dependency_checker.go  #   依赖检查器 + 条件分支评估
+│   │   │   ├── scheduler.go      #   兜底恢复调度器 (30s, >1min 停滞节点)
 │   │   │   ├── dag_validator.go  #   DAG 环检测+验证
 │   │   │   ├── retry_policy.go   #   指数退避重试策略
-│   │   │   └── task_execution_control.go  # 暂停/恢复/重试
+│   │   │   └── task_execution_control.go  #   暂停/恢复/重试
 │   │   └── handler/
 │   │       └── handler.go        #   Gin HTTP 路由处理
 │   │
@@ -222,9 +225,11 @@ lingxi-ai-operation-system/
 │   │   ├── service/
 │   │   │   └── executor.go       #   节点执行器（调度工具执行）
 │   │   └── tool/
-│   │       ├── tool.go           #   Tool 接口 + ToolRegistry
+│   │       ├── tool.go           #   Tool 接口 + ToolRegistry + DetermineToolName
 │   │       └── builtin/
-│   │           └── builtin.go    #   BashTool, LlmApiTool
+│   │           ├── builtin.go    #   LlmApiTool + 共享 execCommandContext
+│   │           ├── bash_tool.go  #   BashTool (沙箱隔离: 白名单+危险过滤+沙箱目录)
+│   │           └── weather_tool.go # WeatherTool (天气查询示例)
 │   │
 │   ├── translator/               # ★ 自然语言翻译模块
 │   │   ├── service/
@@ -241,6 +246,7 @@ lingxi-ai-operation-system/
 ├── docs/                         # 文档
 ├── scripts/                      # 构建/运行/测试脚本
 ├── docker-compose.yml            # Docker 基础设施
+├── Dockerfile                    # 多阶段构建
 ├── go.mod                        # ★ Go 依赖管理（类似 pom.xml）
 ├── Makefile                      # 常用命令快捷方式
 └── .env.example                  # 环境变量模板
@@ -271,6 +277,7 @@ lingxi-ai-operation-system/
 
 - **节点 (Node)**：一个执行单元，类型包括 LLM 调用、工具执行等
 - **边 (Edge)**：依赖关系，`from → to` 表示 `to` 依赖 `from` 先完成
+- **条件 (Condition)**：节点可设置条件分支，不满足条件时自动 SKIPPED
 
 ### 4.2 节点状态流转
 
@@ -280,7 +287,7 @@ CREATED ──→ READY ──→ RUNNING ──→ SUCCESS
   │           │           └──→ FAILED ──→ RETRYING ──→ CREATED (重试)
   │           │                         └──→ FAILED (永久失败)
   └───────────┘
-   (依赖满足时由 Scheduler 恢复到 READY)
+   (TryMakeReady 即时检查依赖并转 READY)
 ```
 
 | 状态 | 含义 |
@@ -291,34 +298,53 @@ CREATED ──→ READY ──→ RUNNING ──→ SUCCESS
 | SUCCESS | 执行成功 |
 | FAILED | 执行失败 |
 | RETRYING | 重试中（指数退避：1s → 2s → 4s → ... → 60s） |
+| SKIPPED | 条件不满足，跳过执行（对下游等同于 SUCCESS） |
 
 ### 4.3 事件驱动流程
 
 ```
 1. 用户提交 DAG
        │
-2. Orchestrator 保存节点，检测无依赖的节点 → 转为 READY
+2. Orchestrator 保存节点，TryMakeReady 检测无依赖的节点 → 立即转 READY
        │
-3. 发布 ai.node.ready 事件到 Kafka
+3. outbox 写入 ai.node.ready 事件 → Relay 转发到 Kafka
        │
 4. Worker 消费事件，执行对应工具
        │
-5. Worker 发布 ai.node.result 事件 (SUCCESS/FAILED)
+5. Worker 发布 ai.node.result 事件 (SUCCESS/FAILED) via outbox
        │
 6. Orchestrator 消费结果事件
-   ├── SUCCESS → DependencyChecker 检查下游节点是否可执行
-   │            → 如果全部节点完成 → 任务 SUCCESS
+   ├── SUCCESS → DependencyChecker 检查下游 → 评估 condition → 标记 READY/SKIPPED
+   │            → 如果全部节点完成或跳过 → 任务 SUCCESS
    └── FAILED  → StateMachine 判断是否重试
                 → 超过最大重试次数 → 任务 PAUSED/FAILED
        │
 7. Context 服务消费所有事件，记录审计日志
 ```
 
-### 4.4 幂等性保证
+### 4.4 Outbox 发件箱模式
+
+所有 Kafka 事件不直接发送，而是先写入数据库 `outbox` 表，再由 Relay 协程（100ms 间隔）异步转发到 Kafka。
+
+**好处**：
+- 事件不丢：outbox 写入与业务操作在同一 DB 事务中
+- Kafka 不可用时事件留在 outbox，等待恢复后转发
+- 转发成功后立即从 outbox 删除
+
+### 4.5 幂等性保证
 
 每个节点有 `idempotencyKey = taskId + "-" + nodeId`，作为 Kafka 消息的 key，确保同一节点不会被重复执行。
 
-### 4.5 工具系统
+### 4.6 条件分支
+
+DAG 节点支持 `condition` 字段实现条件分支：
+
+- 格式：`"nodeId.status == success"` 或 `"nodeId.status == failed"`
+- DependencyChecker 在下游节点依赖满足后评估 condition
+- 条件不满足 → 节点自动标记为 SKIPPED
+- SKIPPED 状态对下游依赖等同于 SUCCESS（不阻塞任务完成）
+
+### 4.7 工具系统
 
 Worker 的工具采用**插件式架构**：
 
@@ -335,20 +361,36 @@ type Tool interface {
 // 2. 实现具体工具
 type BashTool struct { timeoutSeconds int }
 func (t *BashTool) Name() string { return "bash" }
-func (t *BashTool) Execute(...) ToolResult { /* 执行 shell 命令 */ }
+func (t *BashTool) Execute(...) ToolResult { /* 沙箱执行 shell 命令 */ }
 
 // 3. 注册到 Registry
 toolRegistry.Register(builtin.NewBashTool(cfg.BashTool))
 toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
+toolRegistry.Register(builtin.NewWeatherTool())
 
-// 4. 按名称查找并执行
-tool, ok := toolRegistry.Get("bash")
+// 4. 按名称查找并执行 (TOOL 类型按 node name 路由)
+tool, ok := toolRegistry.Get("weather")
 result := tool.Execute(ctx, params, toolCtx)
 ```
 
 已实现的内置工具：
-- **bash** - 执行 Shell 命令
-- **llm_api** - 调用 OpenAI 兼容的 LLM API
+- **bash** - 沙箱执行 Shell 命令（白名单 + 危险模式过滤 + /tmp/ai-sandbox 目录）
+- **llm_api** - 调用 OpenAI 兼容的 LLM API（支持 prompt/message/content 字段）
+- **weather** - 天气查询示例工具（模拟数据，展示 TOOL 类型工具开发方式）
+
+### 4.8 BashTool 安全防护
+
+```
+命令白名单:
+  ls, cat, echo, curl, python, python3, node,
+  head, tail, wc, grep, find, which, whoami, date, pwd, uname, df, ps
+
+危险模式过滤 (拒绝包含以下模式的命令):
+  ;  |  &&  ||  `  $(  >  <  >>  <<  &
+
+沙箱目录:
+  /tmp/ai-sandbox (所有命令在此目录下执行)
+```
 
 ---
 
@@ -428,10 +470,12 @@ curl http://localhost:8080/api/health
 第 1 站：数据模型
   internal/model/model.go
   → 理解 Task, Node, DAGRequest 等核心数据结构
+  → 注意 condition 字段 (条件分支)、NodeSkipped 状态
 
 第 2 站：程序入口
   cmd/lingxi-ai-os/main.go
   → 看清所有组件如何组装在一起
+  → 注意 outbox Relay、stateService.SetDependencyChecker 连线
 
 第 3 站：配置系统
   internal/config/config.go
@@ -439,25 +483,30 @@ curl http://localhost:8080/api/health
 
 第 4 站：Orchestrator 服务（核心）
   internal/orchestrator/service/orchestrator.go    → 任务创建、DAG 提交
-  internal/orchestrator/service/state.go            → 状态转换
-  internal/orchestrator/service/statemachine.go     → 成功/失败处理
-  internal/orchestrator/service/dependency_checker.go → 依赖驱动调度
+  internal/orchestrator/service/state.go            → 状态转换 + TryMakeReady 即时调度
+  internal/orchestrator/service/statemachine.go     → 成功/失败处理 (outbox 发布)
+  internal/orchestrator/service/dependency_checker.go → 依赖驱动调度 + 条件评估
 
-第 5 站：Worker 工具执行
-  internal/worker/tool/tool.go                      → Tool 接口
-  internal/worker/tool/builtin/builtin.go           → 具体工具实现
+第 5 站：Outbox 发件箱
+  internal/outbox/relay.go                          → Relay 协程 + SaveEvent
+
+第 6 站：Worker 工具执行
+  internal/worker/tool/tool.go                      → Tool 接口 + DetermineToolName
+  internal/worker/tool/builtin/bash_tool.go         → 沙箱 BashTool
+  internal/worker/tool/builtin/builtin.go           → LlmApiTool
+  internal/worker/tool/builtin/weather_tool.go      → WeatherTool 示例
   internal/worker/service/executor.go               → 节点执行器
 
-第 6 站：事件总线
+第 7 站：事件总线
   internal/eventbus/eventbus.go                     → Kafka 生产者/消费者
 
-第 7 站：HTTP 接口
+第 8 站：HTTP 接口
   internal/orchestrator/handler/handler.go          → API 路由处理
 
-第 8 站：翻译器
+第 9 站：翻译器
   internal/translator/service/translator.go         → NL → DAG
 
-第 9 站：上下文审计
+第 10 站：上下文审计
   internal/context/service/context.go               → 事件记录
 ```
 
@@ -467,7 +516,7 @@ curl http://localhost:8080/api/health
 
 ### 7.1 添加新的内置工具
 
-**示例：添加一个 HTTP 请求工具**
+**示例：添加一个 HTTP 请求工具**（也可参考现有的 `weather_tool.go` 作为最简示例）
 
 第 1 步：创建工具实现文件 `internal/worker/tool/builtin/http_tool.go`
 
@@ -523,24 +572,24 @@ func (t *HttpTool) ValidateParameters(params map[string]interface{}) bool {
 toolRegistry := tool.NewToolRegistry()
 toolRegistry.Register(builtin.NewBashTool(cfg.BashTool))
 toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
+toolRegistry.Register(builtin.NewWeatherTool())
 toolRegistry.Register(builtin.NewHttpTool())  // ← 新增
 ```
 
-第 3 步：使用时在 DAG 的 input 中指定
+第 3 步：使用时在 DAG 中指定
 
 ```json
 {
   "id": "http-1",
   "type": "TOOL",
-  "name": "fetch_api",
+  "name": "http",
   "input": {
-    "tool": "http",
-    "parameters": {
-      "url": "https://api.example.com/data"
-    }
+    "url": "https://api.example.com/data"
   }
 }
 ```
+
+> 注意：TOOL 类型节点的 `name` 字段决定工具路由。`name: "http"` 会查找 ToolRegistry 中名为 "http" 的工具。
 
 ### 7.2 添加新的 API 端点
 
@@ -590,7 +639,7 @@ func (h *OrchestratorHandler) RegisterRoutes(r *gin.Engine) {
 ```go
 func (r *TaskRepository) FindByStatus(ctx context.Context, status model.TaskStatus) ([]*model.Task, error) {
     rows, err := r.pool.Query(ctx,
-        `SELECT id, user_id, status, input, output, created_at
+        `SELECT id, user_id, status, input, output, pause_reason, created_at
          FROM ai_task WHERE status=$1`, string(status),
     )
     if err != nil {
@@ -603,13 +652,17 @@ func (r *TaskRepository) FindByStatus(ctx context.Context, status model.TaskStat
         var task model.Task
         var input, output []byte
         var userID *string
+        var pauseReason *string
 
-        if err := rows.Scan(&task.ID, &userID, &task.Status, &input, &output, &task.CreatedAt); err != nil {
+        if err := rows.Scan(&task.ID, &userID, &task.Status, &input, &output, &pauseReason, &task.CreatedAt); err != nil {
             return nil, err
         }
 
         if userID != nil {
             task.UserID = *userID
+        }
+        if pauseReason != nil {
+            task.PauseReason = *pauseReason
         }
         if len(input) > 0 {
             _ = json.Unmarshal(input, &task.Input)
@@ -678,6 +731,15 @@ docker compose up -d    # 确保 Redpanda 已启动
 docker logs lingxi-redpanda  # 查看日志
 ```
 
+### Q: 从 Java 版本切换过来后 Kafka 消费者组冲突
+
+Java 版本的 Spring Kafka 消费者组协议与 Go Sarama 不兼容，需要删除旧消费者组：
+
+```bash
+rpk group list                           # 列出消费者组
+rpk group delete <group-name>            # 删除旧组
+```
+
 ### Q: 如何查看运行日志？
 
 服务启动后日志直接输出到终端。如需文件日志：
@@ -702,6 +764,10 @@ make run 2>&1 | tee /tmp/lingxi.log
 | 内存占用 | ~1.5GB (4个JVM) | ~50MB |
 | 部署 | 4 个 JAR | 1 个二进制 |
 | 通信 | HTTP + Kafka | 内部调用 + Kafka |
+| 事件可靠性 | 直接发 Kafka | Outbox 模式 (先写 DB 再转发) |
+| 调度方式 | 轮询 (1s) | 事件驱动 + 30s 兜底 |
+| Bash 安全 | 无限制 | 沙箱隔离 (白名单+过滤+沙箱目录) |
+| 条件分支 | 不支持 | condition 字段 + SKIPPED 状态 |
 
 ### Q: Go 项目的依赖管理是什么？
 
@@ -717,6 +783,15 @@ go mod tidy
 # 下载所有依赖到本地
 go mod download
 ```
+
+### Q: BashTool 为什么拒绝我的命令？
+
+BashTool 有安全防护：
+- 命令必须在白名单内（`ls`, `cat`, `curl`, `python` 等）
+- 不能包含危险模式（`;`, `|`, `&&`, `>`, `$()` 等）
+- 工作目录限制在 `/tmp/ai-sandbox`
+
+如需执行更复杂的命令，需要修改 `internal/worker/tool/builtin/bash_tool.go` 中的白名单。
 
 ---
 

@@ -2,29 +2,36 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/outbox"
 )
 
 type DependencyChecker struct {
 	nodeRepo     *repository.NodeRepository
 	stateService *StateService
 	producer     *eventbus.Producer
+	pool         *pgxpool.Pool
 }
 
 func NewDependencyChecker(
 	nodeRepo *repository.NodeRepository,
 	stateService *StateService,
 	producer *eventbus.Producer,
+	pool *pgxpool.Pool,
 ) *DependencyChecker {
 	return &DependencyChecker{
 		nodeRepo:     nodeRepo,
 		stateService: stateService,
 		producer:     producer,
+		pool:         pool,
 	}
 }
 
@@ -50,18 +57,33 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 				continue
 			}
 			if met {
+				// Evaluate condition if present
+				if child.Condition != "" {
+					if !evaluateCondition(child.Condition, child.TaskID, ctx, dc.nodeRepo) {
+						_, _ = dc.stateService.TransitionNode(ctx, child.ID, model.NodeSkipped, nil, "Condition not met")
+						zap.L().Info("Child node SKIPPED (condition not met)", zap.String("nodeId", child.ID))
+						continue
+					}
+				}
 				if err := dc.stateService.InitializeNodeReady(ctx, child); err != nil {
 					zap.L().Error("Failed to initialize node as ready", zap.Error(err))
 					continue
 				}
-				_ = dc.producer.Publish(eventbus.TopicNodeReady, child.IdempotencyKey, eventbus.Event{
-					TaskID:         child.TaskID,
-					NodeID:         child.ID,
-					Type:           string(child.Type),
-					Payload:        child.Input,
-					TraceID:        child.TaskID + "-" + child.ID,
-					IdempotencyKey: child.IdempotencyKey,
-				})
+					// Merge child name into payload so worker can determine the correct tool
+					childPayload := make(map[string]interface{})
+					for k, v := range child.Input {
+						childPayload[k] = v
+					}
+					childPayload["name"] = child.Name
+
+					_ = outbox.SaveEvent(ctx, dc.pool, "node", child.ID, eventbus.TopicNodeReady, eventbus.Event{
+						TaskID:         child.TaskID,
+						NodeID:         child.ID,
+						Type:           string(child.Type),
+						Payload:        childPayload,
+						TraceID:        child.TaskID + "-" + child.ID,
+						IdempotencyKey: child.IdempotencyKey,
+					})
 				zap.L().Info("Child node is now READY and published", zap.String("nodeId", child.ID))
 			}
 		}
@@ -72,4 +94,49 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 		_ = dc.stateService.TransitionTask(ctx, taskID, model.TaskSuccess)
 		zap.L().Info("Task completed successfully", zap.String("taskId", taskID))
 	}
+}
+
+// evaluateCondition checks a simple condition string against parent node outputs
+// Supported format: "NODE_ID.status == success" or "NODE_ID.status == failed"
+func evaluateCondition(condition, taskID string, ctx context.Context, nodeRepo *repository.NodeRepository) bool {
+	condition = strings.TrimSpace(condition)
+
+	// Simple equality check: "nodeId.status == success"
+	parts := strings.SplitN(condition, "==", 2)
+	if len(parts) != 2 {
+		zap.L().Warn("Invalid condition format, treating as true", zap.String("condition", condition))
+		return true
+	}
+
+	left := strings.TrimSpace(parts[0])
+	right := strings.TrimSpace(parts[1])
+
+	// Parse "nodeId.field"
+	fieldParts := strings.SplitN(left, ".", 2)
+	if len(fieldParts) != 2 {
+		return true
+	}
+
+	refNodeID := fieldParts[0]
+	field := fieldParts[1]
+
+	node, err := nodeRepo.FindByID(ctx, refNodeID)
+	if err != nil || node == nil {
+		zap.L().Warn("Condition references unknown node, treating as false", zap.String("nodeId", refNodeID))
+		return false
+	}
+
+	var actual string
+	switch field {
+	case "status":
+		actual = string(node.Status)
+	default:
+		if node.Output != nil {
+			if v, ok := node.Output[field]; ok {
+				actual = strings.ToLower(fmt.Sprintf("%v", v))
+			}
+		}
+	}
+
+	return strings.EqualFold(actual, right)
 }

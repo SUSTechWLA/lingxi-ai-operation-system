@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
@@ -16,58 +15,8 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
 
-// ==================== BashTool ====================
-
-type BashTool struct {
-	timeoutSeconds int
-}
-
-func NewBashTool(cfg config.BashToolConfig) *BashTool {
-	return &BashTool{timeoutSeconds: cfg.TimeoutSeconds}
-}
-
-func (t *BashTool) Name() string        { return "bash" }
-func (t *BashTool) Description() string  { return "Execute shell commands" }
-func (t *BashTool) Type() tool.ToolType  { return tool.ToolTypeCustom }
-
-func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
-	command, _ := params["command"].(string)
-	if command == "" {
-		return tool.FailureResult("Command is required")
-	}
-
-	zap.L().Info("Executing bash command", zap.String("taskId", toolCtx.TaskID), zap.String("command", command))
-
-	timeout := time.Duration(t.timeoutSeconds) * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "bash", "-c", command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n" + stderr.String()
-	}
-
-	if err != nil {
-		return tool.FailureResult(fmt.Sprintf("Command failed: %s, output: %s", err.Error(), output))
-	}
-
-	return tool.SuccessResult(map[string]interface{}{
-		"exitCode": 0,
-		"output":   output,
-		"command":  command,
-	})
-}
-
-func (t *BashTool) ValidateParameters(params map[string]interface{}) bool {
-	_, ok := params["command"].(string)
-	return ok
-}
+// execCommandContext is overridable for testing
+var execCommandContext = exec.CommandContext
 
 // ==================== LlmApiTool ====================
 
@@ -79,14 +28,20 @@ func NewLlmApiTool(cfg config.OpenAIConfig) *LlmApiTool {
 	return &LlmApiTool{cfg: cfg}
 }
 
-func (t *LlmApiTool) Name() string        { return "llm_api" }
-func (t *LlmApiTool) Description() string  { return "Call LLM API for chat completions" }
-func (t *LlmApiTool) Type() tool.ToolType  { return tool.ToolTypeLLM }
+func (t *LlmApiTool) Name() string       { return "llm_api" }
+func (t *LlmApiTool) Description() string { return "Call LLM API for chat completions" }
+func (t *LlmApiTool) Type() tool.ToolType { return tool.ToolTypeLLM }
 
 func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	prompt, _ := params["prompt"].(string)
 	if prompt == "" {
-		return tool.FailureResult("Prompt is required")
+		prompt, _ = params["message"].(string)
+	}
+	if prompt == "" {
+		prompt, _ = params["content"].(string)
+	}
+	if prompt == "" {
+		return tool.FailureResult("Prompt is required (provide 'prompt', 'message', or 'content' field)")
 	}
 
 	if t.cfg.APIKey == "" {
@@ -163,8 +118,16 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 }
 
 func (t *LlmApiTool) ValidateParameters(params map[string]interface{}) bool {
-	_, ok := params["prompt"].(string)
-	return ok
+	if _, ok := params["prompt"].(string); ok {
+		return true
+	}
+	if _, ok := params["message"].(string); ok {
+		return true
+	}
+	if _, ok := params["content"].(string); ok {
+		return true
+	}
+	return false
 }
 
 func extractContent(response map[string]interface{}) string {

@@ -25,24 +25,25 @@ func (r *TaskRepository) Save(ctx context.Context, task *model.Task) error {
 	output, _ := json.Marshal(task.Output)
 
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO ai_task (id, user_id, status, input, output, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 ON CONFLICT (id) DO UPDATE SET status=$3, output=$5`,
-		task.ID, task.UserID, string(task.Status), input, output, task.CreatedAt,
+		`INSERT INTO ai_task (id, user_id, status, input, output, pause_reason, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (id) DO UPDATE SET status=$3, output=$5, pause_reason=$6`,
+		task.ID, task.UserID, string(task.Status), input, output, task.PauseReason, task.CreatedAt,
 	)
 	return err
 }
 
 func (r *TaskRepository) FindByID(ctx context.Context, id string) (*model.Task, error) {
 	row := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, status, input, output, created_at FROM ai_task WHERE id=$1`, id,
+		`SELECT id, user_id, status, input, output, pause_reason, created_at FROM ai_task WHERE id=$1`, id,
 	)
 
 	var task model.Task
 	var input, output []byte
 	var userID *string
+	var pauseReason *string
 
-	if err := row.Scan(&task.ID, &userID, &task.Status, &input, &output, &task.CreatedAt); err != nil {
+	if err := row.Scan(&task.ID, &userID, &task.Status, &input, &output, &pauseReason, &task.CreatedAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
@@ -51,6 +52,9 @@ func (r *TaskRepository) FindByID(ctx context.Context, id string) (*model.Task, 
 
 	if userID != nil {
 		task.UserID = *userID
+	}
+	if pauseReason != nil {
+		task.PauseReason = *pauseReason
 	}
 
 	if len(input) > 0 {
@@ -81,15 +85,15 @@ func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 	output, _ := json.Marshal(node.Output)
 
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO ai_node (id, task_id, type, name, status, input, output, error_message,
+		`INSERT INTO ai_node (id, task_id, type, name, status, input, output, error_message, condition,
 		 retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		 ON CONFLICT (id) DO UPDATE SET
-		 	status=$5, output=$7, error_message=$8, retry_count=$9,
-		 	max_retry=$10, priority=$11, worker_group=$12, version=ai_node.version+1,
-		 	idempotency_key=$14`,
+		 	status=$5, output=$7, error_message=$8, condition=$9, retry_count=$10,
+		 	max_retry=$11, priority=$12, worker_group=$13, version=ai_node.version+1,
+		 	idempotency_key=$15`,
 		node.ID, node.TaskID, string(node.Type), node.Name, string(node.Status),
-		input, output, node.ErrorMessage,
+		input, output, node.ErrorMessage, node.Condition,
 		node.RetryCount, node.MaxRetry, node.Priority, node.WorkerGroup,
 		node.Version, node.IdempotencyKey, node.CreatedAt,
 	)
@@ -98,7 +102,7 @@ func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 
 func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, error) {
 	row := r.pool.QueryRow(ctx,
-		`SELECT id, task_id, type, name, status, input, output, error_message,
+		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
 		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at
 		 FROM ai_node WHERE id=$1`, id,
 	)
@@ -106,10 +110,11 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 	var node model.Node
 	var input, output []byte
 	var errorMsg *string
+	var condition *string
 
 	if err := row.Scan(
 		&node.ID, &node.TaskID, &node.Type, &node.Name, &node.Status,
-		&input, &output, &errorMsg,
+		&input, &output, &errorMsg, &condition,
 		&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 		&node.Version, &node.IdempotencyKey, &node.CreatedAt,
 	); err != nil {
@@ -121,6 +126,9 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 
 	if errorMsg != nil {
 		node.ErrorMessage = *errorMsg
+	}
+	if condition != nil {
+		node.Condition = *condition
 	}
 	if len(input) > 0 {
 		_ = json.Unmarshal(input, &node.Input)
@@ -134,7 +142,7 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 
 func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*model.Node, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, task_id, type, name, status, input, output, error_message,
+		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
 		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at
 		 FROM ai_node WHERE task_id=$1`, taskID,
 	)
@@ -148,10 +156,11 @@ func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*mo
 		var node model.Node
 		var input, output []byte
 		var errorMsg *string
+		var condition *string
 
 		if err := rows.Scan(
 			&node.ID, &node.TaskID, &node.Type, &node.Name, &node.Status,
-			&input, &output, &errorMsg,
+			&input, &output, &errorMsg, &condition,
 			&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 			&node.Version, &node.IdempotencyKey, &node.CreatedAt,
 		); err != nil {
@@ -160,6 +169,9 @@ func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*mo
 
 		if errorMsg != nil {
 			node.ErrorMessage = *errorMsg
+		}
+		if condition != nil {
+			node.Condition = *condition
 		}
 		if len(input) > 0 {
 			_ = json.Unmarshal(input, &node.Input)
@@ -176,7 +188,7 @@ func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*mo
 
 func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStatus) ([]*model.Node, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, task_id, type, name, status, input, output, error_message,
+		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
 		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at
 		 FROM ai_node WHERE status=$1`, string(status),
 	)
@@ -190,10 +202,11 @@ func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStat
 		var node model.Node
 		var input, output []byte
 		var errorMsg *string
+		var condition *string
 
 		if err := rows.Scan(
 			&node.ID, &node.TaskID, &node.Type, &node.Name, &node.Status,
-			&input, &output, &errorMsg,
+			&input, &output, &errorMsg, &condition,
 			&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 			&node.Version, &node.IdempotencyKey, &node.CreatedAt,
 		); err != nil {
@@ -202,6 +215,9 @@ func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStat
 
 		if errorMsg != nil {
 			node.ErrorMessage = *errorMsg
+		}
+		if condition != nil {
+			node.Condition = *condition
 		}
 		if len(input) > 0 {
 			_ = json.Unmarshal(input, &node.Input)
@@ -218,7 +234,7 @@ func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStat
 
 func (r *NodeRepository) FindChildNodes(ctx context.Context, parentID string) ([]*model.Node, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT n.id, n.task_id, n.type, n.name, n.status, n.input, n.output, n.error_message,
+		`SELECT n.id, n.task_id, n.type, n.name, n.status, n.input, n.output, n.error_message, n.condition,
 		        n.retry_count, n.max_retry, n.priority, n.worker_group, n.version, n.idempotency_key, n.created_at
 		 FROM ai_node n
 		 JOIN ai_node_dependency d ON n.id = d.child_node_id
@@ -234,10 +250,11 @@ func (r *NodeRepository) FindChildNodes(ctx context.Context, parentID string) ([
 		var node model.Node
 		var input, output []byte
 		var errorMsg *string
+		var condition *string
 
 		if err := rows.Scan(
 			&node.ID, &node.TaskID, &node.Type, &node.Name, &node.Status,
-			&input, &output, &errorMsg,
+			&input, &output, &errorMsg, &condition,
 			&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 			&node.Version, &node.IdempotencyKey, &node.CreatedAt,
 		); err != nil {
@@ -246,6 +263,9 @@ func (r *NodeRepository) FindChildNodes(ctx context.Context, parentID string) ([
 
 		if errorMsg != nil {
 			node.ErrorMessage = *errorMsg
+		}
+		if condition != nil {
+			node.Condition = *condition
 		}
 		if len(input) > 0 {
 			_ = json.Unmarshal(input, &node.Input)

@@ -69,7 +69,7 @@ graph TD
     A -->|"自然语言请求"| B
     B -->|"DAG"| C
     C <-->|"状态同步 & 记录"| D
-    C -->|"发布任务事件"| E
+    C -->|"Outbox → Kafka"| E
     E -->|"执行结果"| C
     C --- F
     C --- G
@@ -96,14 +96,15 @@ graph TD
 ┌─────────────────────────────────────────────┐
 │  Orchestrator                                │
 │  事件驱动调度 → 状态收敛 → 依赖检查 → 重试     │
+│  Outbox 保证事件不丢 → Kafka 分发             │
 └─────────────────────────────────────────────┘
                 │ Kafka 事件
                 ▼
 ┌─────────────────────────────────────────────┐
 │  Worker                                      │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-│  │  Bash   │  │  LLM    │  │  自定义  │     │
-│  │  命令   │  │  工具   │  │  工具   │     │
+│  │  Bash   │  │  LLM    │  │  天气   │     │
+│  │  (沙箱) │  │  工具   │  │  工具   │     │
 │  └─────────┘  └─────────┘  └─────────┘     │
 └─────────────────────────────────────────────┘
 ```
@@ -125,9 +126,11 @@ graph TD
 - 接收 DAG 任务图
 - 按依赖关系调度执行顺序（事件驱动，DependencyChecker 检查依赖后触发）
 - 统一状态管理（StateService 收敛所有状态变更）
+- 条件分支支持（condition 字段，不满足时节点自动 SKIPPED）
 - 指数退避重试（RetryPolicy: 1s → 2s → 4s → ... → 60s）
 - 幂等执行保障（idempotencyKey 去重）
-- 系统中断恢复（Scheduler 自动恢复 CREATED 节点）
+- Outbox 模式保证事件不丢（先写 DB 再异步转发 Kafka）
+- 系统中断恢复（Scheduler 30s 兜底扫描超过1分钟的停滞节点）
 
 ### Context
 **做什么**: 操作审计层，记录一切操作历史
@@ -141,7 +144,9 @@ graph TD
 **做什么**: 工具执行层，真正操作硬件、中间件、应用
 
 - 插件式工具架构（Tool 接口 + ToolRegistry）
-- 内置 BashTool（Shell 命令执行）和 LlmApiTool（LLM 调用）
+- 内置 BashTool（沙箱隔离：命令白名单 + 危险模式过滤 + /tmp/ai-sandbox 目录）
+- 内置 LlmApiTool（调用 OpenAI 兼容 API）
+- 内置 WeatherTool（天气查询示例工具）
 - 支持自定义工具注册
 - 幂等结果发布（idempotencyKey 作为 Kafka 消息 key）
 - 超时控制
@@ -156,10 +161,9 @@ graph TD
 | HTTP 框架 | Gin | 轻量级 Web 框架 |
 | 数据库 | pgx (PostgreSQL 16) | 原生 PostgreSQL 驱动 |
 | 缓存 | go-redis (Redis 7) | Redis 客户端 |
-| 消息队列 | Sarama (Redpanda) | Kafka 兼容客户端 |
+| 消息队列 | IBM/sarama (Redpanda) | Kafka 兼容客户端 |
 | 配置 | Viper | 支持 .env + YAML |
 | 日志 | Zap | 高性能结构化日志 |
-| 定时任务 | robfig/cron | Scheduler 周期恢复 |
 
 ---
 
@@ -226,10 +230,12 @@ lingxi-ai-operation-system/
 │   ├── logger/                 # Zap 日志 (dev/prod)
 │   ├── model/                  # 数据模型 + 仓储层
 │   │   └── repository/         # pgx CRUD 操作
+│   ├── outbox/                 # Outbox 模式 (事件先写 DB 再转发 Kafka)
+│   │   └── relay.go            # Relay 协程 + SaveEvent 写入
 │   ├── redis/                  # go-redis 客户端
 │   ├── orchestrator/
 │   │   ├── handler/            # Gin HTTP 处理器
-│   │   └── service/            # 状态机 + 调度器 + 依赖检查
+│   │   └── service/            # 状态机 + 调度器 + 依赖检查 + 条件分支
 │   ├── translator/
 │   │   ├── handler/            # Gin HTTP 处理器
 │   │   └── service/            # NL → DAG 翻译
@@ -239,7 +245,7 @@ lingxi-ai-operation-system/
 │   └── worker/
 │       ├── service/            # 节点执行引擎
 │       └── tool/
-│           ├── builtin/        # BashTool, LlmApiTool
+│           ├── builtin/        # BashTool(沙箱), LlmApiTool, WeatherTool
 │           └── tool_test.go    # 工具测试
 ├── scripts/
 │   ├── install_lingxi_env.sh   # 环境安装脚本
@@ -297,6 +303,15 @@ A: 检查 `.env` 中的 `OPENAI_API_KEY` 是否配置正确。
 
 **Q: 如何添加自定义工具？**
 A: 实现 `Tool` 接口（Name, Description, Type, Execute, ValidateParameters），然后注册到 `ToolRegistry`。参见 [ONBOARDING.md](docs/ONBOARDING.md)。
+
+**Q: Bash 工具安全吗？**
+A: BashTool 运行在沙箱环境中，只允许白名单命令，过滤危险模式（管道、重定向、命令链等），工作目录限制在 `/tmp/ai-sandbox`。
+
+**Q: 事件会丢失吗？**
+A: 不会。系统使用 Outbox 模式，事件先写入数据库 outbox 表，再由 Relay 协程异步转发到 Kafka，保证事件不丢。
+
+**Q: 如何实现条件分支？**
+A: 在 DAG 节点的 `condition` 字段中指定条件（如 `"nodeA.status == success"`），不满足条件的节点会自动标记为 SKIPPED，下游依赖仍可正常推进。
 
 ---
 

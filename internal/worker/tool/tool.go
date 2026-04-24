@@ -70,19 +70,25 @@ func (r *ToolRegistry) Has(name string) bool {
 }
 
 func DetermineToolName(nodeType string, payload map[string]interface{}) string {
+	// Explicit tool override in payload
 	if tool, ok := payload["tool"]; ok {
-		if s, ok := tool.(string); ok {
+		if s, ok := tool.(string); ok && s != "" {
 			return s
 		}
 	}
+	// TOOL type: use the node name as the tool name (e.g. "weather", "bash")
 	if nodeType == string(model.NodeTypeTool) {
 		if name, ok := payload["name"]; ok {
-			if s, ok := name.(string); ok {
+			if s, ok := name.(string); ok && s != "" {
 				return s
 			}
 		}
 	}
-	return "llm"
+	// LLM type: use llm_api tool
+	if nodeType == string(model.NodeTypeLLM) {
+		return "llm_api"
+	}
+	return "llm_api"
 }
 
 func ExtractParameters(payload map[string]interface{}) map[string]interface{} {

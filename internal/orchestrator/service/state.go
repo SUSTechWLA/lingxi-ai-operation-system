@@ -6,18 +6,22 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/outbox"
 )
 
 type StateService struct {
-	nodeRepo    *repository.NodeRepository
-	taskRepo    *repository.TaskRepository
-	depRepo     *repository.NodeDependencyRepository
-	contextRepo *repository.ContextRepository
-	producer    *eventbus.Producer
-	retryPolicy *RetryPolicy
+	nodeRepo          *repository.NodeRepository
+	taskRepo          *repository.TaskRepository
+	depRepo           *repository.NodeDependencyRepository
+	contextRepo       *repository.ContextRepository
+	producer          *eventbus.Producer
+	pool              *pgxpool.Pool
+	retryPolicy       *RetryPolicy
+	dependencyChecker *DependencyChecker
 }
 
 func NewStateService(
@@ -26,6 +30,7 @@ func NewStateService(
 	depRepo *repository.NodeDependencyRepository,
 	contextRepo *repository.ContextRepository,
 	producer *eventbus.Producer,
+	pool *pgxpool.Pool,
 ) *StateService {
 	return &StateService{
 		nodeRepo:    nodeRepo,
@@ -33,8 +38,13 @@ func NewStateService(
 		depRepo:     depRepo,
 		contextRepo: contextRepo,
 		producer:    producer,
+		pool:        pool,
 		retryPolicy: NewRetryPolicy(),
 	}
+}
+
+func (s *StateService) SetDependencyChecker(dc *DependencyChecker) {
+	s.dependencyChecker = dc
 }
 
 func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newStatus model.NodeStatus, output map[string]interface{}, errMsg string) (*model.Node, error) {
@@ -46,10 +56,9 @@ func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newSta
 		return nil, fmt.Errorf("node not found: %s", nodeID)
 	}
 
-	oldStatus := node.Status
 	zap.L().Info("Node transitioning",
 		zap.String("nodeId", nodeID),
-		zap.String("oldStatus", string(oldStatus)),
+		zap.String("oldStatus", string(node.Status)),
 		zap.String("newStatus", string(newStatus)),
 	)
 
@@ -67,7 +76,29 @@ func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newSta
 
 	s.recordContextForTransition(ctx, node, newStatus)
 
+	// Event-driven: immediately try to make CREATED nodes ready
+	if newStatus == model.NodeCreated {
+		s.TryMakeReady(ctx, node)
+	}
+
 	return node, nil
+}
+
+// TryMakeReady immediately checks dependencies and transitions to READY if met
+func (s *StateService) TryMakeReady(ctx context.Context, node *model.Node) {
+	if node.Status != model.NodeCreated {
+		return
+	}
+	met, err := s.CheckDependenciesMet(ctx, node.ID)
+	if err != nil {
+		zap.L().Error("TryMakeReady: failed to check dependencies", zap.Error(err))
+		return
+	}
+	if met {
+		if err := s.InitializeNodeReady(ctx, node); err != nil {
+			zap.L().Error("TryMakeReady: failed to initialize node as ready", zap.Error(err))
+		}
+	}
 }
 
 func (s *StateService) TransitionTask(ctx context.Context, taskID string, newStatus model.TaskStatus) error {
@@ -94,12 +125,12 @@ func (s *StateService) TransitionTask(ctx context.Context, taskID string, newSta
 	switch newStatus {
 	case model.TaskSuccess:
 		s.recordContext(ctx, taskID, "", model.ContextTaskSuccess, "Task completed successfully", nil)
-		_ = s.producer.Publish(eventbus.TopicTaskCompleted, taskID, eventbus.Event{
+		_ = outbox.SaveEvent(ctx, s.pool, "task", taskID, eventbus.TopicTaskCompleted, eventbus.Event{
 			TaskID: taskID, Status: "SUCCESS",
 		})
 	case model.TaskFailed:
 		s.recordContext(ctx, taskID, "", model.ContextTaskFailed, "Task failed", nil)
-		_ = s.producer.Publish(eventbus.TopicTaskFailed, taskID, eventbus.Event{
+		_ = outbox.SaveEvent(ctx, s.pool, "task", taskID, eventbus.TopicTaskFailed, eventbus.Event{
 			TaskID: taskID, Status: "FAILED",
 		})
 	case model.TaskPaused:
@@ -121,7 +152,11 @@ func (s *StateService) CheckDependenciesMet(ctx context.Context, nodeID string) 
 
 	for _, dep := range deps {
 		parent, err := s.nodeRepo.FindByID(ctx, dep.ParentNodeID)
-		if err != nil || parent == nil || parent.Status != model.NodeSuccess {
+		if err != nil || parent == nil {
+			return false, nil
+		}
+		// SUCCESS or SKIPPED satisfies dependency
+		if parent.Status != model.NodeSuccess && parent.Status != model.NodeSkipped {
 			return false, nil
 		}
 	}
@@ -136,7 +171,7 @@ func (s *StateService) CheckTaskCompleted(ctx context.Context, taskID string) (b
 	}
 
 	for _, n := range nodes {
-		if n.Status != model.NodeSuccess {
+		if n.Status != model.NodeSuccess && n.Status != model.NodeSkipped {
 			return false, nil
 		}
 	}
@@ -188,11 +223,18 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 
 			s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "Node is READY", nil)
 
-			_ = s.producer.Publish(eventbus.TopicNodeReady, node.IdempotencyKey, eventbus.Event{
+			// Merge node name into payload so worker can determine the correct tool
+			payload := make(map[string]interface{})
+			for k, v := range node.Input {
+				payload[k] = v
+			}
+			payload["name"] = node.Name
+
+			_ = outbox.SaveEvent(ctx, s.pool, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
 				TaskID:         node.TaskID,
 				NodeID:         node.ID,
 				Type:           string(node.Type),
-				Payload:        node.Input,
+				Payload:        payload,
 				TraceID:        node.TaskID + "-" + node.ID,
 				IdempotencyKey: node.IdempotencyKey,
 			})
@@ -223,6 +265,9 @@ func (s *StateService) recordContextForTransition(ctx context.Context, node *mod
 	case model.NodeRetrying:
 		ctxType = model.ContextNodeRetry
 		message = "Node retrying"
+	case model.NodeSkipped:
+		ctxType = model.ContextType("NODE_SKIPPED")
+		message = "Node skipped (condition not met)"
 	default:
 		return
 	}

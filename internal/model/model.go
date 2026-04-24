@@ -26,6 +26,7 @@ const (
 	NodeRetrying  NodeStatus = "RETRYING"
 	NodeSuccess   NodeStatus = "SUCCESS"
 	NodeFailed    NodeStatus = "FAILED"
+	NodeSkipped   NodeStatus = "SKIPPED"
 )
 
 // Node type
@@ -55,12 +56,13 @@ const (
 )
 
 type Task struct {
-	ID        string                 `json:"id"`
-	UserID    string                 `json:"userId,omitempty"`
-	Status    TaskStatus             `json:"status"`
-	Input     map[string]interface{} `json:"input,omitempty"`
-	Output    map[string]interface{} `json:"output,omitempty"`
-	CreatedAt time.Time              `json:"createdAt"`
+	ID          string                 `json:"id"`
+	UserID      string                 `json:"userId,omitempty"`
+	Status      TaskStatus             `json:"status"`
+	Input       map[string]interface{} `json:"input,omitempty"`
+	Output      map[string]interface{} `json:"output,omitempty"`
+	PauseReason string                 `json:"pauseReason,omitempty"`
+	CreatedAt   time.Time              `json:"createdAt"`
 }
 
 type Node struct {
@@ -72,6 +74,7 @@ type Node struct {
 	Input          map[string]interface{} `json:"input,omitempty"`
 	Output         map[string]interface{} `json:"output,omitempty"`
 	ErrorMessage   string                 `json:"errorMessage,omitempty"`
+	Condition      string                 `json:"condition,omitempty"`
 	RetryCount     int                    `json:"retryCount"`
 	MaxRetry       int                    `json:"maxRetry"`
 	Priority       int                    `json:"priority"`
@@ -108,6 +111,7 @@ type NodeRequest struct {
 	Type        string                 `json:"type"`
 	Name        string                 `json:"name"`
 	Input       map[string]interface{} `json:"input,omitempty"`
+	Condition   string                 `json:"condition,omitempty"`
 	MaxRetry    *int                   `json:"maxRetry,omitempty"`
 	Priority    *int                   `json:"priority,omitempty"`
 	WorkerGroup string                 `json:"workerGroup,omitempty"`
