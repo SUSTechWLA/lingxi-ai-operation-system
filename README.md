@@ -247,16 +247,27 @@ lingxi-ai-operation-system/
 │       └── tool/
 │           ├── builtin/        # BashTool(沙箱), LlmApiTool, WeatherTool
 │           └── tool_test.go    # 工具测试
+├── frontend/                   # 前端项目 (React/Vue 等)
+│   ├── src/
+│   │   ├── components/        # UI 组件
+│   │   ├── pages/              # 页面
+│   │   ├── hooks/              # 自定义 Hooks
+│   │   ├── utils/              # 工具函数
+│   │   ├── services/           # API 服务
+│   │   ├── stores/             # 状态管理
+│   │   ├── styles/             # 样式文件
+│   │   └── assets/             # 静态资源
+│   └── public/                 # 公共资源
 ├── scripts/
 │   ├── install_lingxi_env.sh   # 环境安装脚本
-│   ├── startup.sh              # 一键启动脚本
+│   ├── startup.sh              # 后端启动脚本
 │   └── test-apis.sh            # API 测试脚本
 ├── docs/
 │   ├── ARCHITECTURE.md         # 架构设计文档
 │   ├── API_REFERENCE.md        # API 接口文档
 │   └── ONBOARDING.md           # Go 新手上路指南
 ├── docker-compose.yml          # 基础设施容器
-├── Dockerfile                  # 多阶段构建
+├── Dockerfile                  # 多阶段构建 (后端)
 ├── Makefile                    # 常用命令
 ├── go.mod / go.sum             # Go 依赖管理
 └── .env.example                # 环境变量模板

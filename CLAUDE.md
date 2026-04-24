@@ -134,6 +134,17 @@ internal/
     service/                 # Node execution engine
     tool/                    # Tool interface + registry
       builtin/               # BashTool(sandboxed), LlmApiTool, WeatherTool
+frontend/                    # Frontend project (React/Vue, etc.)
+  src/
+    components/             # UI components
+    pages/                   # Pages
+    hooks/                   # Custom hooks
+    utils/                   # Utility functions
+    services/                # API services
+    stores/                  # State management
+    styles/                  # Styles
+    assets/                  # Static assets
+  public/                    # Public assets
 ```
 
 ## Infrastructure

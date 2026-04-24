@@ -1,4 +1,4 @@
-.PHONY: build run test clean tidy migrate docker-up docker-down
+.PHONY: build run test clean tidy migrate docker-up docker-down frontend-install frontend-dev frontend-build
 
 APP_NAME := lingxi-ai-os
 BUILD_DIR := build
@@ -39,3 +39,18 @@ lint:
 fmt:
 	gofmt -w .
 	goimports -w .
+
+frontend-install:
+	cd frontend && npm install
+
+frontend-dev:
+	cd frontend && npm run dev
+
+frontend-build:
+	cd frontend && npm run build
+
+frontend-lint:
+	cd frontend && npm run lint
+
+frontend-test:
+	cd frontend && npm run test
