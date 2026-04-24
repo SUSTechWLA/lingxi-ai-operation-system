@@ -11,14 +11,14 @@ import (
 )
 
 type TaskExecutionControl struct {
-	taskRepo     *repository.TaskRepository
-	nodeRepo     *repository.NodeRepository
+	taskRepo     repository.TaskRepo
+	nodeRepo     repository.NodeRepo
 	stateService *StateService
 }
 
 func NewTaskExecutionControl(
-	taskRepo *repository.TaskRepository,
-	nodeRepo *repository.NodeRepository,
+	taskRepo repository.TaskRepo,
+	nodeRepo repository.NodeRepo,
 	stateService *StateService,
 ) *TaskExecutionControl {
 	return &TaskExecutionControl{

@@ -13,6 +13,9 @@ func NewDAGValidator() *DAGValidator {
 }
 
 func (v *DAGValidator) Validate(dag *model.DAGRequest) error {
+	if dag == nil {
+		return fmt.Errorf("DAG request is nil")
+	}
 	if len(dag.Nodes) == 0 {
 		return fmt.Errorf("DAG must have at least one node")
 	}

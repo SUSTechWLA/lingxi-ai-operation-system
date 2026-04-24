@@ -12,17 +12,17 @@ import (
 )
 
 type Scheduler struct {
-	nodeRepo     *repository.NodeRepository
+	nodeRepo     repository.NodeRepo
 	stateService *StateService
-	producer     *eventbus.Producer
+	producer     eventbus.EventPublisher
 	interval     time.Duration
 	cancel       context.CancelFunc
 }
 
 func NewScheduler(
-	nodeRepo *repository.NodeRepository,
+	nodeRepo repository.NodeRepo,
 	stateService *StateService,
-	producer *eventbus.Producer,
+	producer eventbus.EventPublisher,
 ) *Scheduler {
 	return &Scheduler{
 		nodeRepo:     nodeRepo,

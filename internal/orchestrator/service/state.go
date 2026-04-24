@@ -6,7 +6,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
@@ -14,31 +13,28 @@ import (
 )
 
 type StateService struct {
-	nodeRepo          *repository.NodeRepository
-	taskRepo          *repository.TaskRepository
-	depRepo           *repository.NodeDependencyRepository
-	contextRepo       *repository.ContextRepository
-	producer          *eventbus.Producer
-	pool              *pgxpool.Pool
+	nodeRepo          repository.NodeRepo
+	taskRepo          repository.TaskRepo
+	depRepo           repository.DependencyRepo
+	contextRepo       repository.ContextRepo
+	eventSaver        outbox.EventSaver
 	retryPolicy       *RetryPolicy
 	dependencyChecker *DependencyChecker
 }
 
 func NewStateService(
-	nodeRepo *repository.NodeRepository,
-	taskRepo *repository.TaskRepository,
-	depRepo *repository.NodeDependencyRepository,
-	contextRepo *repository.ContextRepository,
-	producer *eventbus.Producer,
-	pool *pgxpool.Pool,
+	nodeRepo repository.NodeRepo,
+	taskRepo repository.TaskRepo,
+	depRepo repository.DependencyRepo,
+	contextRepo repository.ContextRepo,
+	eventSaver outbox.EventSaver,
 ) *StateService {
 	return &StateService{
 		nodeRepo:    nodeRepo,
 		taskRepo:    taskRepo,
 		depRepo:     depRepo,
 		contextRepo: contextRepo,
-		producer:    producer,
-		pool:        pool,
+		eventSaver:  eventSaver,
 		retryPolicy: NewRetryPolicy(),
 	}
 }
@@ -125,12 +121,12 @@ func (s *StateService) TransitionTask(ctx context.Context, taskID string, newSta
 	switch newStatus {
 	case model.TaskSuccess:
 		s.recordContext(ctx, taskID, "", model.ContextTaskSuccess, "Task completed successfully", nil)
-		_ = outbox.SaveEvent(ctx, s.pool, "task", taskID, eventbus.TopicTaskCompleted, eventbus.Event{
+		_ = s.eventSaver.SaveEvent(ctx, "task", taskID, eventbus.TopicTaskCompleted, eventbus.Event{
 			TaskID: taskID, Status: "SUCCESS",
 		})
 	case model.TaskFailed:
 		s.recordContext(ctx, taskID, "", model.ContextTaskFailed, "Task failed", nil)
-		_ = outbox.SaveEvent(ctx, s.pool, "task", taskID, eventbus.TopicTaskFailed, eventbus.Event{
+		_ = s.eventSaver.SaveEvent(ctx, "task", taskID, eventbus.TopicTaskFailed, eventbus.Event{
 			TaskID: taskID, Status: "FAILED",
 		})
 	case model.TaskPaused:
@@ -230,7 +226,7 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 			}
 			payload["name"] = node.Name
 
-			_ = outbox.SaveEvent(ctx, s.pool, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
+			_ = s.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
 				TaskID:         node.TaskID,
 				NodeID:         node.ID,
 				Type:           string(node.Type),

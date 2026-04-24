@@ -6,7 +6,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
@@ -15,26 +14,23 @@ import (
 
 type StateMachine struct {
 	stateService *StateService
-	nodeRepo     *repository.NodeRepository
-	taskRepo     *repository.TaskRepository
-	producer     *eventbus.Producer
-	pool         *pgxpool.Pool
+	nodeRepo     repository.NodeRepo
+	taskRepo     repository.TaskRepo
+	eventSaver   outbox.EventSaver
 	retryPolicy  *RetryPolicy
 }
 
 func NewStateMachine(
 	stateService *StateService,
-	nodeRepo *repository.NodeRepository,
-	taskRepo *repository.TaskRepository,
-	producer *eventbus.Producer,
-	pool *pgxpool.Pool,
+	nodeRepo repository.NodeRepo,
+	taskRepo repository.TaskRepo,
+	eventSaver outbox.EventSaver,
 ) *StateMachine {
 	return &StateMachine{
 		stateService: stateService,
 		nodeRepo:     nodeRepo,
 		taskRepo:     taskRepo,
-		producer:     producer,
-		pool:         pool,
+		eventSaver:   eventSaver,
 		retryPolicy:  NewRetryPolicy(),
 	}
 }
@@ -47,7 +43,7 @@ func (sm *StateMachine) OnSuccess(ctx context.Context, nodeID string, output map
 
 	zap.L().Info("Node succeeded", zap.String("nodeId", nodeID))
 
-	_ = outbox.SaveEvent(ctx, sm.pool, "node", node.ID, eventbus.TopicNodeExecuted, eventbus.Event{
+	_ = sm.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeExecuted, eventbus.Event{
 		TaskID: node.TaskID,
 		NodeID: node.ID,
 		Status: "SUCCESS",
@@ -120,7 +116,7 @@ func (sm *StateMachine) failNode(ctx context.Context, node *model.Node, errorMes
 		return err
 	}
 
-	_ = outbox.SaveEvent(ctx, sm.pool, "node", node.ID, eventbus.TopicNodeFailed, eventbus.Event{
+	_ = sm.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeFailed, eventbus.Event{
 		TaskID:       node.TaskID,
 		NodeID:       node.ID,
 		Status:       "FAILED",

@@ -1,0 +1,319 @@
+package builtin
+
+import (
+	"context"
+	"testing"
+
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+)
+
+// ===== validateBashCommand tests =====
+
+func TestValidateBashCommand_AllowedCommands(t *testing.T) {
+	allowed := []string{"ls", "cat", "echo", "curl", "python", "python3",
+		"node", "head", "tail", "wc", "grep", "find", "which", "whoami",
+		"date", "pwd", "uname", "df", "ps"}
+
+	for _, cmd := range allowed {
+		if err := validateBashCommand(cmd); err != nil {
+			t.Errorf("Expected '%s' to be allowed, got error: %v", cmd, err)
+		}
+	}
+}
+
+func TestValidateBashCommand_DisallowedCommand(t *testing.T) {
+	disallowed := []string{"rm", "chmod", "sudo", "dd", "mkfs", "shutdown"}
+
+	for _, cmd := range disallowed {
+		if err := validateBashCommand(cmd); err == nil {
+			t.Errorf("Expected '%s' to be rejected", cmd)
+		}
+	}
+}
+
+func TestValidateBashCommand_DangerousPatterns(t *testing.T) {
+	dangerous := []string{
+		"ls;rm -rf /",
+		"ls | grep foo",
+		"ls && rm file",
+		"ls || echo fail",
+		"echo `whoami`",
+		"echo $(whoami)",
+		"ls > file.txt",
+		"ls < input.txt",
+		"ls >> file.txt",
+		"ls &",
+	}
+
+	for _, cmd := range dangerous {
+		if err := validateBashCommand(cmd); err == nil {
+			t.Errorf("Expected dangerous pattern to be rejected: '%s'", cmd)
+		}
+	}
+}
+
+func TestValidateBashCommand_EmptyCommand(t *testing.T) {
+	if err := validateBashCommand(""); err == nil {
+		t.Error("Expected error for empty command")
+	}
+	if err := validateBashCommand("   "); err == nil {
+		t.Error("Expected error for whitespace-only command")
+	}
+}
+
+func TestValidateBashCommand_AllowedWithArgs(t *testing.T) {
+	if err := validateBashCommand("ls -la /tmp"); err != nil {
+		t.Errorf("Expected 'ls -la /tmp' to be allowed, got error: %v", err)
+	}
+	if err := validateBashCommand("grep -r pattern ."); err != nil {
+		t.Errorf("Expected 'grep -r pattern .' to be allowed, got error: %v", err)
+	}
+}
+
+// ===== BashTool tests =====
+
+func TestBashTool_Interface(t *testing.T) {
+	cfg := testBashConfig()
+	bt := NewBashTool(cfg)
+
+	if bt.Name() != "bash" {
+		t.Errorf("Expected name 'bash', got '%s'", bt.Name())
+	}
+	if bt.Type() != tool.ToolTypeCustom {
+		t.Errorf("Expected CUSTOM type, got %v", bt.Type())
+	}
+}
+
+func TestBashTool_ValidateParameters(t *testing.T) {
+	cfg := testBashConfig()
+	bt := NewBashTool(cfg)
+
+	if !bt.ValidateParameters(map[string]interface{}{"command": "ls"}) {
+		t.Error("Expected valid for string command")
+	}
+	if bt.ValidateParameters(map[string]interface{}{"command": 123}) {
+		t.Error("Expected invalid for non-string command")
+	}
+	if bt.ValidateParameters(map[string]interface{}{}) {
+		t.Error("Expected invalid for missing command")
+	}
+}
+
+func TestBashTool_Execute_EmptyCommand(t *testing.T) {
+	cfg := testBashConfig()
+	bt := NewBashTool(cfg)
+
+	result := bt.Execute(context.Background(), map[string]interface{}{"command": ""}, tool.ToolContext{})
+	if result.Success {
+		t.Error("Expected failure for empty command")
+	}
+}
+
+func TestBashTool_Execute_DangerousCommand(t *testing.T) {
+	cfg := testBashConfig()
+	bt := NewBashTool(cfg)
+
+	result := bt.Execute(context.Background(), map[string]interface{}{"command": "rm -rf /"}, tool.ToolContext{})
+	if result.Success {
+		t.Error("Expected failure for dangerous command")
+	}
+}
+
+func TestBashTool_Execute_SafeCommand(t *testing.T) {
+	cfg := testBashConfig()
+	bt := NewBashTool(cfg)
+
+	result := bt.Execute(context.Background(), map[string]interface{}{"command": "echo hello"}, tool.ToolContext{})
+	if !result.Success {
+		t.Errorf("Expected success for safe command, got error: %s", result.Error)
+	}
+}
+
+func TestBashTool_Execute_CommandNotAllowed(t *testing.T) {
+	cfg := testBashConfig()
+	bt := NewBashTool(cfg)
+
+	result := bt.Execute(context.Background(), map[string]interface{}{"command": "sudo ls"}, tool.ToolContext{})
+	if result.Success {
+		t.Error("Expected failure for non-allowed base command")
+	}
+}
+
+func testBashConfig() config.BashToolConfig {
+	return config.BashToolConfig{TimeoutSeconds: 10}
+}
+
+// ===== WeatherTool tests =====
+
+func TestWeatherTool_Interface(t *testing.T) {
+	wt := NewWeatherTool()
+
+	if wt.Name() != "weather" {
+		t.Errorf("Expected name 'weather', got '%s'", wt.Name())
+	}
+	if wt.Type() != tool.ToolTypeCustom {
+		t.Errorf("Expected CUSTOM type, got %v", wt.Type())
+	}
+}
+
+func TestWeatherTool_ValidateParameters(t *testing.T) {
+	wt := NewWeatherTool()
+
+	if !wt.ValidateParameters(map[string]interface{}{"city": "Beijing"}) {
+		t.Error("Expected valid with 'city' param")
+	}
+	if !wt.ValidateParameters(map[string]interface{}{"location": "Shanghai"}) {
+		t.Error("Expected valid with 'location' param")
+	}
+	if wt.ValidateParameters(map[string]interface{}{}) {
+		t.Error("Expected invalid with no city/location")
+	}
+}
+
+func TestWeatherTool_Execute_WithCity(t *testing.T) {
+	wt := NewWeatherTool()
+
+	result := wt.Execute(context.Background(), map[string]interface{}{"city": "Beijing"}, tool.ToolContext{})
+	if !result.Success {
+		t.Errorf("Expected success, got error: %s", result.Error)
+	}
+	if result.Data["city"] != "Beijing" {
+		t.Errorf("Expected city=Beijing in result, got %v", result.Data["city"])
+	}
+}
+
+func TestWeatherTool_Execute_WithLocation(t *testing.T) {
+	wt := NewWeatherTool()
+
+	result := wt.Execute(context.Background(), map[string]interface{}{"location": "Shanghai"}, tool.ToolContext{})
+	if !result.Success {
+		t.Errorf("Expected success, got error: %s", result.Error)
+	}
+	if result.Data["city"] != "Shanghai" {
+		t.Errorf("Expected city=Shanghai (from location), got %v", result.Data["city"])
+	}
+}
+
+func TestWeatherTool_Execute_NoCity(t *testing.T) {
+	wt := NewWeatherTool()
+
+	result := wt.Execute(context.Background(), map[string]interface{}{}, tool.ToolContext{})
+	if result.Success {
+		t.Error("Expected failure when no city provided")
+	}
+}
+
+// ===== LlmApiTool tests =====
+
+func TestLlmApiTool_Interface(t *testing.T) {
+	lt := NewLlmApiTool(config.OpenAIConfig{})
+
+	if lt.Name() != "llm_api" {
+		t.Errorf("Expected name 'llm_api', got '%s'", lt.Name())
+	}
+	if lt.Type() != tool.ToolTypeLLM {
+		t.Errorf("Expected LLM type, got %v", lt.Type())
+	}
+}
+
+func TestLlmApiTool_ValidateParameters(t *testing.T) {
+	lt := NewLlmApiTool(config.OpenAIConfig{})
+
+	if !lt.ValidateParameters(map[string]interface{}{"prompt": "hello"}) {
+		t.Error("Expected valid with 'prompt'")
+	}
+	if !lt.ValidateParameters(map[string]interface{}{"message": "hello"}) {
+		t.Error("Expected valid with 'message'")
+	}
+	if !lt.ValidateParameters(map[string]interface{}{"content": "hello"}) {
+		t.Error("Expected valid with 'content'")
+	}
+	if lt.ValidateParameters(map[string]interface{}{}) {
+		t.Error("Expected invalid with no prompt/message/content")
+	}
+	if lt.ValidateParameters(map[string]interface{}{"prompt": 123}) {
+		t.Error("Expected invalid with non-string prompt")
+	}
+}
+
+func TestLlmApiTool_Execute_NoAPIKey(t *testing.T) {
+	lt := NewLlmApiTool(config.OpenAIConfig{})
+
+	result := lt.Execute(context.Background(), map[string]interface{}{"prompt": "hello"}, tool.ToolContext{})
+	if result.Success {
+		t.Error("Expected failure when API key not configured")
+	}
+}
+
+func TestLlmApiTool_Execute_NoPrompt(t *testing.T) {
+	lt := NewLlmApiTool(config.OpenAIConfig{APIKey: "test-key"})
+
+	result := lt.Execute(context.Background(), map[string]interface{}{}, tool.ToolContext{})
+	if result.Success {
+		t.Error("Expected failure when no prompt provided")
+	}
+}
+
+// ===== extractContent tests =====
+
+func TestExtractContent_ValidResponse(t *testing.T) {
+	response := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"message": map[string]interface{}{
+					"content": "Hello, world!",
+				},
+			},
+		},
+	}
+
+	content := extractContent(response)
+	if content != "Hello, world!" {
+		t.Errorf("Expected 'Hello, world!', got '%s'", content)
+	}
+}
+
+func TestExtractContent_EmptyChoices(t *testing.T) {
+	response := map[string]interface{}{
+		"choices": []interface{}{},
+	}
+
+	content := extractContent(response)
+	if content != "" {
+		t.Errorf("Expected empty string, got '%s'", content)
+	}
+}
+
+func TestExtractContent_NoChoices(t *testing.T) {
+	response := map[string]interface{}{}
+
+	content := extractContent(response)
+	if content != "" {
+		t.Errorf("Expected empty string, got '%s'", content)
+	}
+}
+
+func TestExtractContent_InvalidChoiceFormat(t *testing.T) {
+	response := map[string]interface{}{
+		"choices": []interface{}{"invalid"},
+	}
+
+	content := extractContent(response)
+	if content != "" {
+		t.Errorf("Expected empty string for invalid format, got '%s'", content)
+	}
+}
+
+func TestExtractContent_MissingMessage(t *testing.T) {
+	response := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{},
+		},
+	}
+
+	content := extractContent(response)
+	if content != "" {
+		t.Errorf("Expected empty string, got '%s'", content)
+	}
+}

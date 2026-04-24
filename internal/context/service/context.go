@@ -12,15 +12,15 @@ import (
 )
 
 type ContextService struct {
-	contextRepo *repository.ContextRepository
-	nodeRepo    *repository.NodeRepository
-	taskRepo    *repository.TaskRepository
+	contextRepo repository.ContextRepo
+	nodeRepo    repository.NodeRepo
+	taskRepo    repository.TaskRepo
 }
 
 func NewContextService(
-	contextRepo *repository.ContextRepository,
-	nodeRepo *repository.NodeRepository,
-	taskRepo *repository.TaskRepository,
+	contextRepo repository.ContextRepo,
+	nodeRepo repository.NodeRepo,
+	taskRepo repository.TaskRepo,
 ) *ContextService {
 	return &ContextService{
 		contextRepo: contextRepo,

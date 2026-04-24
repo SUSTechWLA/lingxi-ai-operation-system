@@ -7,7 +7,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
@@ -15,23 +14,20 @@ import (
 )
 
 type DependencyChecker struct {
-	nodeRepo     *repository.NodeRepository
+	nodeRepo     repository.NodeRepo
 	stateService *StateService
-	producer     *eventbus.Producer
-	pool         *pgxpool.Pool
+	eventSaver   outbox.EventSaver
 }
 
 func NewDependencyChecker(
-	nodeRepo *repository.NodeRepository,
+	nodeRepo repository.NodeRepo,
 	stateService *StateService,
-	producer *eventbus.Producer,
-	pool *pgxpool.Pool,
+	eventSaver outbox.EventSaver,
 ) *DependencyChecker {
 	return &DependencyChecker{
 		nodeRepo:     nodeRepo,
 		stateService: stateService,
-		producer:     producer,
-		pool:         pool,
+		eventSaver:   eventSaver,
 	}
 }
 
@@ -76,7 +72,7 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 					}
 					childPayload["name"] = child.Name
 
-					_ = outbox.SaveEvent(ctx, dc.pool, "node", child.ID, eventbus.TopicNodeReady, eventbus.Event{
+					_ = dc.eventSaver.SaveEvent(ctx, "node", child.ID, eventbus.TopicNodeReady, eventbus.Event{
 						TaskID:         child.TaskID,
 						NodeID:         child.ID,
 						Type:           string(child.Type),
@@ -98,7 +94,7 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 
 // evaluateCondition checks a simple condition string against parent node outputs
 // Supported format: "NODE_ID.status == success" or "NODE_ID.status == failed"
-func evaluateCondition(condition, taskID string, ctx context.Context, nodeRepo *repository.NodeRepository) bool {
+func evaluateCondition(condition, taskID string, ctx context.Context, nodeRepo repository.NodeRepo) bool {
 	condition = strings.TrimSpace(condition)
 
 	// Simple equality check: "nodeId.status == success"

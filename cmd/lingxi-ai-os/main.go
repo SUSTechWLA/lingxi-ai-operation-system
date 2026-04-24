@@ -62,10 +62,11 @@ func main() {
 	contextRepo := repository.NewContextRepository(pool)
 
 	// Services
-	stateService := service.NewStateService(nodeRepo, taskRepo, depRepo, contextRepo, producer, pool)
+	eventSaver := outbox.NewOutboxSaver(pool)
+	stateService := service.NewStateService(nodeRepo, taskRepo, depRepo, contextRepo, eventSaver)
 	orchestratorService := service.NewOrchestratorService(taskRepo, nodeRepo, depRepo, contextRepo, stateService)
-	stateMachine := service.NewStateMachine(stateService, nodeRepo, taskRepo, producer, pool)
-	dependencyChecker := service.NewDependencyChecker(nodeRepo, stateService, producer, pool)
+	stateMachine := service.NewStateMachine(stateService, nodeRepo, taskRepo, eventSaver)
+	dependencyChecker := service.NewDependencyChecker(nodeRepo, stateService, eventSaver)
 	taskExecutionCtrl := service.NewTaskExecutionControl(taskRepo, nodeRepo, stateService)
 	scheduler := service.NewScheduler(nodeRepo, stateService, producer)
 	contextService := contextSvc.NewContextService(contextRepo, nodeRepo, taskRepo)

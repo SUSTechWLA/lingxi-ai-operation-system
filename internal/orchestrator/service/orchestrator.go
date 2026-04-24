@@ -11,19 +11,19 @@ import (
 )
 
 type OrchestratorService struct {
-	taskRepo *repository.TaskRepository
-	nodeRepo *repository.NodeRepository
-	depRepo  *repository.NodeDependencyRepository
-	dagValidator *DAGValidator
-	stateService *StateService
-	contextRepo *repository.ContextRepository
+	taskRepo      repository.TaskRepo
+	nodeRepo      repository.NodeRepo
+	depRepo       repository.DependencyRepo
+	dagValidator  *DAGValidator
+	stateService  *StateService
+	contextRepo   repository.ContextRepo
 }
 
 func NewOrchestratorService(
-	taskRepo *repository.TaskRepository,
-	nodeRepo *repository.NodeRepository,
-	depRepo *repository.NodeDependencyRepository,
-	contextRepo *repository.ContextRepository,
+	taskRepo repository.TaskRepo,
+	nodeRepo repository.NodeRepo,
+	depRepo repository.DependencyRepo,
+	contextRepo repository.ContextRepo,
 	stateService *StateService,
 ) *OrchestratorService {
 	return &OrchestratorService{
