@@ -1,0 +1,9 @@
+{
+  "name": "lingxi-ai-operation-system",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "electron:dev": "cd electron && NODE_ENV=development npm start",
+    "electron:build": "cd electron && npm run build"
+  }
+}

@@ -17,6 +17,7 @@ type Config struct {
 	Worker   WorkerConfig   `mapstructure:",squash"`
 	BashTool BashToolConfig `mapstructure:",squash"`
 	Services ServicesConfig `mapstructure:",squash"`
+	Sandbox  SandboxConfig  `mapstructure:",squash"`
 }
 
 type ServerConfig struct {
@@ -62,9 +63,10 @@ type OpenAIConfig struct {
 }
 
 type WorkerConfig struct {
-	ToolTimeoutSeconds int `mapstructure:"WORKER_TOOL_TIMEOUT"`
-	ThreadPoolCore     int `mapstructure:"WORKER_THREAD_POOL_CORE"`
-	ThreadPoolMax      int `mapstructure:"WORKER_THREAD_POOL_MAX"`
+	ToolTimeoutSeconds int           `mapstructure:"WORKER_TOOL_TIMEOUT"`
+	ThreadPoolCore     int           `mapstructure:"WORKER_THREAD_POOL_CORE"`
+	ThreadPoolMax      int           `mapstructure:"WORKER_THREAD_POOL_MAX"`
+	Sandbox            SandboxConfig `mapstructure:",squash"`
 }
 
 type BashToolConfig struct {
@@ -75,6 +77,12 @@ type BashToolConfig struct {
 type ServicesConfig struct {
 	OrchestratorURL  string `mapstructure:"ORCHESTRATOR_URL"`
 	ContextServiceURL string `mapstructure:"CONTEXT_SERVICE_URL"`
+}
+
+type SandboxConfig struct {
+	Enabled  bool   `mapstructure:"SANDBOX_ENABLED"`
+	Address  string `mapstructure:"SANDBOX_ADDRESS"`
+	Fallback bool   `mapstructure:"SANDBOX_FALLBACK"`
 }
 
 func Load() *Config {

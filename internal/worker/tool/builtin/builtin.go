@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os/exec"
 	"time"
 
 	"go.uber.org/zap"
@@ -14,11 +13,6 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
-
-// execCommandContext is overridable for testing
-var execCommandContext = exec.CommandContext
-
-// ==================== LlmApiTool ====================
 
 type LlmApiTool struct {
 	cfg config.OpenAIConfig
@@ -28,9 +22,9 @@ func NewLlmApiTool(cfg config.OpenAIConfig) *LlmApiTool {
 	return &LlmApiTool{cfg: cfg}
 }
 
-func (t *LlmApiTool) Name() string       { return "llm_api" }
-func (t *LlmApiTool) Description() string { return "Call LLM API for chat completions" }
-func (t *LlmApiTool) Type() tool.ToolType { return tool.ToolTypeLLM }
+func (t *LlmApiTool) Name() string                  { return "llm_api" }
+func (t *LlmApiTool) Description() string            { return "Call LLM API for chat completions" }
+func (t *LlmApiTool) Type() tool.ToolType            { return tool.ToolTypeLLM }
 
 func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	prompt, _ := params["prompt"].(string)

@@ -6,8 +6,10 @@ import KeywordInput from '../components/KeywordInput'
 import AIHelperPanel from '../components/AIHelperPanel'
 import PlatformSelector from '../components/PlatformSelector'
 import PublishButton from '../components/PublishButton'
+import DesktopToolbar from '../components/DesktopToolbar'
 import { useAppStore } from '../stores/appStore'
-import { publishContent } from '../services/api'
+import { publishContent, aiGenerateContent, aiPolishText } from '../services/api'
+import { isElectron } from '../utils/electron'
 
 const PublishPage: React.FC = () => {
   const {
@@ -18,27 +20,56 @@ const PublishPage: React.FC = () => {
     images,
     isPublishing,
     getSelectedPlatforms,
+    setTitle,
+    setDescription,
     setIsPublishing,
     clearAll,
   } = useAppStore()
 
   const [showToast, setShowToast] = useState(false)
   const [toastMessage, setToastMessage] = useState('')
+  const [toastType, setToastType] = useState<'success' | 'error'>('success')
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setToastMessage(message)
+    setToastType(type)
     setShowToast(true)
     setTimeout(() => setShowToast(false), 3000)
   }
 
   const handleAIGenerate = async () => {
-    console.log('AI生成中...')
-    showNotification('AI正在生成内容，请稍候...')
+    try {
+      showNotification('AI正在生成内容，请稍候...')
+      const prompt = title || description || '自媒体内容创作'
+      const result = await aiGenerateContent(prompt)
+      if (result.title) setTitle(result.title)
+      if (result.description) setDescription(result.description)
+      showNotification('AI内容生成成功！')
+    } catch (error) {
+      console.error('AI生成失败:', error)
+      showNotification('AI生成失败，请重试', 'error')
+    }
   }
 
-  const handleAIPolish = async () => {
-    console.log('AI润色中...')
-    showNotification('AI正在优化内容，请稍候...')
+  const handleAIPolish = async (type: 'title' | 'description') => {
+    try {
+      const text = type === 'title' ? title : description
+      if (!text.trim()) {
+        showNotification(`请先输入${type === 'title' ? '标题' : '简介'}内容`, 'error')
+        return
+      }
+      showNotification('AI正在优化内容，请稍候...')
+      const polished = await aiPolishText(text, type)
+      if (type === 'title') {
+        setTitle(polished)
+      } else {
+        setDescription(polished)
+      }
+      showNotification('AI润色完成！')
+    } catch (error) {
+      console.error('AI润色失败:', error)
+      showNotification('AI润色失败，请重试', 'error')
+    }
   }
 
   const handlePublish = async () => {
@@ -95,8 +126,12 @@ const PublishPage: React.FC = () => {
       {showToast && (
         <div className="fixed top-4 right-4 z-50 animate-slide-in">
           <div className="bg-white rounded-xl shadow-lg border border-gray-100 px-6 py-4 flex items-center gap-3">
-            <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            <svg className={`w-5 h-5 ${toastType === 'error' ? 'text-red-500' : 'text-green-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {toastType === 'error' ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              )}
             </svg>
             <span className="text-sm text-gray-700">{toastMessage}</span>
           </div>
@@ -169,6 +204,11 @@ const PublishPage: React.FC = () => {
 
         <aside className="w-80 bg-white border-l border-gray-100 p-6 overflow-y-auto">
           <div className="space-y-6">
+            {isElectron() && (
+              <div className="pb-6 border-b border-gray-100">
+                <DesktopToolbar />
+              </div>
+            )}
             <AIHelperPanel
               onGenerate={handleAIGenerate}
               onPolish={handleAIPolish}

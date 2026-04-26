@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { useAppStore } from '../stores/appStore'
 import { MediaFile } from '../utils/types'
+import { isElectron, getElectronAPI } from '../utils/electron'
 
 interface UploadCardProps {
   type: 'video' | 'image'
@@ -17,7 +18,7 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
   const isVideo = type === 'video'
   const files = isVideo ? videos : images
   const maxFiles = isVideo ? 5 : 9
-  const accept = isVideo
+  const accept: Record<string, readonly string[]> = isVideo
     ? { 'video/*': ['.mp4', '.mov', '.avi'] }
     : { 'image/*': ['.jpg', '.jpeg', '.png', '.webp'] }
 
@@ -50,6 +51,32 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
     disabled: files.length >= maxFiles,
   })
 
+  const handleElectronFilePick = async () => {
+    const api = getElectronAPI()
+    if (!api) return
+    try {
+      const extensions = isVideo ? ['mp4', 'mov', 'avi'] : ['jpg', 'jpeg', 'png', 'webp']
+      const paths = await api.openFileDialog({
+        properties: ['openFile', 'multiSelections'],
+        filters: [{ name: isVideo ? '视频文件' : '图片文件', extensions }],
+      })
+      if (!paths || paths.length === 0) return
+      const mediaFiles: MediaFile[] = paths.map((p) => {
+        const name = p.split('/').pop() || p
+        return { file: new File([], name), preview: isVideo ? undefined : `file://${p}`, name, size: 0 }
+      })
+      if (isVideo) {
+        addVideos(mediaFiles)
+      } else {
+        addImages(mediaFiles)
+      }
+    } catch {
+      // user cancelled or error
+    }
+  }
+
+  const showElectronPick = isElectron() && files.length < maxFiles
+
   return (
     <div
       {...getRootProps()}
@@ -66,6 +93,22 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
       <input {...getInputProps()} />
 
       <div className="flex flex-col items-center gap-4">
+        {showElectronPick && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleElectronFilePick()
+            }}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              isVideo
+                ? 'bg-primary/20 text-primary hover:bg-primary/30'
+                : 'bg-green-100 text-green-700 hover:bg-green-200'
+            }`}
+          >
+            从本地选择文件
+          </button>
+        )}
         <div
           className={`w-16 h-16 rounded-full flex items-center justify-center ${
             isVideo ? 'bg-primary/20' : 'bg-green-100'

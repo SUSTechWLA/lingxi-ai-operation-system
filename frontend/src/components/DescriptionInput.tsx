@@ -2,7 +2,7 @@ import React from 'react'
 import { useAppStore } from '../stores/appStore'
 
 interface DescriptionInputProps {
-  onPolish?: () => void
+  onPolish?: (type: 'title' | 'description') => void
 }
 
 const DescriptionInput: React.FC<DescriptionInputProps> = ({ onPolish }) => {
@@ -15,7 +15,7 @@ const DescriptionInput: React.FC<DescriptionInputProps> = ({ onPolish }) => {
       <div className="flex items-center justify-between mb-2">
         <label className="text-sm font-medium text-gray-700">简介</label>
         <button
-          onClick={onPolish}
+          onClick={() => onPolish?.('description')}
           className="flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-sm hover:bg-primary/20 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

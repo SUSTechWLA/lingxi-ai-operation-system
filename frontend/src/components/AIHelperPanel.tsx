@@ -2,7 +2,7 @@ import React from 'react'
 
 interface AIHelperPanelProps {
   onGenerate?: () => void
-  onPolish?: () => void
+  onPolish?: (type: 'title' | 'description') => void
 }
 
 const AIHelperPanel: React.FC<AIHelperPanelProps> = ({ onGenerate, onPolish }) => {
@@ -46,7 +46,7 @@ const AIHelperPanel: React.FC<AIHelperPanelProps> = ({ onGenerate, onPolish }) =
             </p>
             <div className="flex justify-end">
               <button
-                onClick={onPolish}
+                onClick={() => onPolish?.('description')}
                 className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 transition-colors"
               >
                 一键优化

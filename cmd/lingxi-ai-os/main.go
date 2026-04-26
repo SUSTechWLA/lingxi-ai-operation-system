@@ -22,12 +22,15 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/service"
 	orchestratorHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/handler"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/outbox"
+	publishHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/publish/handler"
+	publishSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/publish/service"
 	redisClient "github.com/lingxi-ai/lingxi-ai-operation-system/internal/redis"
 	translatorHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/translator/handler"
 	translatorSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/translator/service"
-	workerSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/service"
+	workerService "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/service"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool/builtin"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
 )
 
 func main() {
@@ -84,11 +87,25 @@ func main() {
 	toolRegistry.Register(builtin.NewBashTool(cfg.BashTool))
 	toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewWeatherTool())
+	toolRegistry.Register(builtin.NewPythonTool())
 
-	nodeExecutor := workerSvc.NewNodeExecutor(toolRegistry, producer, cfg.Worker)
+	directExec := executor.NewDirectExecutor()
+	var sandboxExec *executor.SandboxExecutor
+	if cfg.Sandbox.Enabled {
+		var err error
+		sandboxExec, err = executor.NewSandboxExecutor(cfg.Sandbox.Address)
+		if err != nil {
+			zap.L().Warn("sandbox client init failed, will fallback", zap.Error(err))
+		}
+	}
+
+	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec)
 
 	// Translator
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL)
+
+	// Publish
+	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -138,9 +155,22 @@ func main() {
 	// HTTP server
 	r := gin.Default()
 
+	// CORS middleware
+	r.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
+
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r)
 	translatorHandler.NewTranslatorHandler(nlService).RegisterRoutes(r)
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
+	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),

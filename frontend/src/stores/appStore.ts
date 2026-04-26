@@ -25,16 +25,16 @@ interface AppState {
 }
 
 const defaultPlatforms: Platform[] = [
-  { id: 'douyin', name: '抖音', icon: 'douyin', enabled: true },
-  { id: 'kuaishou', name: '快手', icon: 'kuaishou', enabled: true },
-  { id: 'shipinhao', name: '视频号', icon: 'shipinhao', enabled: true },
-  { id: 'xiaohongshu', name: '小红书', icon: 'xiaohongshu', enabled: true },
-  { id: 'bilibili', name: 'B站', icon: 'bilibili', enabled: false },
-  { id: 'weibo', name: '微博', icon: 'weibo', enabled: true },
-  { id: 'toutiao', name: '今日头条', icon: 'toutiao', enabled: true },
-  { id: 'baijiahao', name: '百家号', icon: 'baijiahao', enabled: true },
-  { id: 'zhihu', name: '知乎', icon: 'zhihu', enabled: false },
-  { id: 'gongzhonghao', name: '公众号', icon: 'gongzhonghao', enabled: true },
+  { id: 'douyin', name: '抖音', icon: 'douyin', enabled: true, status: 'available' },
+  { id: 'kuaishou', name: '快手', icon: 'kuaishou', enabled: false, status: 'developing' },
+  { id: 'shipinhao', name: '视频号', icon: 'shipinhao', enabled: false, status: 'developing' },
+  { id: 'xiaohongshu', name: '小红书', icon: 'xiaohongshu', enabled: true, status: 'available' },
+  { id: 'bilibili', name: 'B站', icon: 'bilibili', enabled: false, status: 'developing' },
+  { id: 'weibo', name: '微博', icon: 'weibo', enabled: false, status: 'developing' },
+  { id: 'toutiao', name: '今日头条', icon: 'toutiao', enabled: false, status: 'developing' },
+  { id: 'baijiahao', name: '百家号', icon: 'baijiahao', enabled: false, status: 'developing' },
+  { id: 'zhihu', name: '知乎', icon: 'zhihu', enabled: false, status: 'developing' },
+  { id: 'gongzhonghao', name: '公众号', icon: 'gongzhonghao', enabled: false, status: 'developing' },
 ]
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -77,7 +77,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   toggleAllPlatforms: (enabled) =>
     set((state) => ({
-      platforms: state.platforms.map((p) => ({ ...p, enabled })),
+      platforms: state.platforms.map((p) => ({
+        ...p,
+        enabled: p.status === 'available' ? enabled : false,
+      })),
     })),
 
   clearAll: () =>

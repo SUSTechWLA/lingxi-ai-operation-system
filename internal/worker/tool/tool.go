@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
 )
 
 type ToolType string
@@ -11,6 +12,7 @@ type ToolType string
 const (
 	ToolTypeLLM    ToolType = "LLM"
 	ToolTypeCustom ToolType = "CUSTOM"
+	ToolTypeCode   ToolType = "CODE"
 )
 
 type ToolResult struct {
@@ -43,6 +45,16 @@ type Tool interface {
 	ValidateParameters(params map[string]interface{}) bool
 }
 
+type BuildableTool interface {
+	Tool
+	BuildExecutionRequest(params map[string]interface{}) (*executor.ExecutionRequest, error)
+}
+
+type ExecutableTool interface {
+	Tool
+	Execute(ctx context.Context, params map[string]interface{}, toolCtx ToolContext) ToolResult
+}
+
 type ToolRegistry struct {
 	tools map[string]Tool
 }
@@ -70,13 +82,11 @@ func (r *ToolRegistry) Has(name string) bool {
 }
 
 func DetermineToolName(nodeType string, payload map[string]interface{}) string {
-	// Explicit tool override in payload
 	if tool, ok := payload["tool"]; ok {
 		if s, ok := tool.(string); ok && s != "" {
 			return s
 		}
 	}
-	// TOOL type: use the node name as the tool name (e.g. "weather", "bash")
 	if nodeType == string(model.NodeTypeTool) {
 		if name, ok := payload["name"]; ok {
 			if s, ok := name.(string); ok && s != "" {
@@ -84,7 +94,6 @@ func DetermineToolName(nodeType string, payload map[string]interface{}) string {
 			}
 		}
 	}
-	// LLM type: use llm_api tool
 	if nodeType == string(model.NodeTypeLLM) {
 		return "llm_api"
 	}

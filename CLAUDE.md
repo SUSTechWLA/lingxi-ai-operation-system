@@ -9,25 +9,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Commands
 
-#### Start all services
+#### Start all services (recommended)
 ```bash
-# Copy environment config
+# 1. Copy and configure environment
 cp .env.example .env
+# Edit .env — add your OPENAI_API_KEY
 
-# Edit .env and add your OPENAI_API_KEY
-
-# One-click startup (builds + starts infrastructure + runs)
+# 2. One-click startup (infra → build backend → run backend → start frontend)
 ./scripts/startup.sh
 ```
 
 #### Manual startup
 ```bash
-# Start infrastructure
+# Terminal 1: Infrastructure
 docker compose up -d
 
-# Build and run
+# Terminal 2: Backend (port 8080)
 go build -o build/lingxi-ai-os cmd/lingxi-ai-os/main.go
 ./build/lingxi-ai-os
+
+# Terminal 3: Frontend (port 3000, proxies /api to :8080)
+cd frontend
+npm install
+npm run dev
 ```
 
 #### Development
@@ -42,8 +46,6 @@ make fmt      # Format code
 #### Test APIs
 ```bash
 ./scripts/test-apis.sh
-
-# Health check
 curl http://localhost:8080/api/health
 ```
 
@@ -55,6 +57,7 @@ Go modular monolith — all modules run in a single process on port 8080:
 2. **Orchestrator** - Core task scheduler managing task lifecycle, dependencies, and event distribution
 3. **Context** - Persists task history and provides audit/snapshot capabilities
 4. **Worker** - Executes operations via plugin-based tool architecture
+5. **Publish** - Frontend-facing API for content creation, AI generation/polish, and multi-platform publishing
 
 ### Communication Flow
 - Modules communicate via internal Go function calls (same process)
@@ -92,15 +95,33 @@ Key components:
 - `HandleEvent` - Auto-record context from Kafka events (ai.node.executed, ai.node.failed, etc.)
 
 ### internal/worker
-Tool execution gateway.
+Tool execution gateway with sandbox support.
 
-Key components:
-- `Tool` interface - Name, Description, Type, Execute, ValidateParameters
-- `ToolRegistry` - Plugin registration and lookup
-- `BashTool` - Sandboxed shell execution: command whitelist + dangerous pattern filtering + /tmp/ai-sandbox working directory
-- `LlmApiTool` - Call OpenAI chat/completions API (accepts prompt/message/content fields)
-- `WeatherTool` - Example TOOL-type plugin for weather queries
-- `NodeExecutor` - Determine tool (TOOL type uses node name, LLM type uses llm_api), validate, execute with timeout, publish result events
+Architecture layers:
+- **Tool layer** (`internal/worker/tool/`) — Plugin interface + registry
+- **Executor layer** (`internal/worker/executor/`) — Execution backends (direct / sandbox)
+
+#### Tool Interface
+- `Tool` — Base interface: Name, Description, Type, Execute, ValidateParameters
+- `BuildableTool` — Tool that produces an `ExecutionRequest` (for executor routing to sandbox)
+- `ExecutableTool` — Tool that self-executes inline (for API-call-style tools)
+- `ToolRegistry` — Plugin registration and lookup by name
+
+#### Built-in Tools (`internal/worker/tool/builtin/`)
+- `BashTool` — Sandboxed shell: command whitelist + dangerous pattern filter + `/tmp/lingxi-sandbox` workdir. Implements `BuildableTool`.
+- `PythonTool` — python3 -c execution with resource limits. Implements `BuildableTool`.
+- `LlmApiTool` — OpenAI chat/completions API calls. Implements `ExecutableTool`.
+- `WeatherTool` — Demo/template tool.
+
+#### Executor Layer (`internal/worker/executor/`)
+- `Executor` interface — `Execute(ctx, ExecutionRequest) (ExecutionResult, error)`
+- `DirectExecutor` — Runs subprocess locally with temp workdir and env injection
+- `SandboxExecutor` — gRPC-based remote execution (stub, ready for Rust sandbox integration). When `SANDBOX_ENABLED=true`, `BuildableTool` requests route through this instead of `DirectExecutor`
+- `ExecutionRequest` — Unified request: Command, Args, Env, WorkDir, TimeoutSec, Limits (memory, CPU, disk, PID), InputFiles, Stdin
+- `ExecutionResult` — Unified result: ExitCode, Stdout, Stderr, TimedOut, ResourceUsage, OutputRef
+
+#### Node Execution (`internal/worker/service/`)
+- `NodeExecutor` — Routes to tool by name, selects executor (sandbox if enabled + BuildableTool, else direct), enforces timeout, publishes result/failure events to Kafka
 
 ### internal/outbox
 Event reliability layer.
@@ -108,6 +129,36 @@ Event reliability layer.
 Key components:
 - `Relay` - Background goroutine (100ms ticker) that reads pending outbox entries, publishes to Kafka, deletes on success
 - `SaveEvent` - Writes events to outbox table (called by StateService, StateMachine, DependencyChecker)
+
+### internal/publish
+Frontend-facing content publishing API.
+
+Key components:
+- `PublishHandler` - Gin HTTP handlers for `/api/publish`, `/api/ai/generate`, `/api/ai/polish`
+- `PublishService` - Orchestrates content publishing via DAG task creation, AI content generation and text polishing via OpenAI
+
+API contract (standard response format):
+```json
+{"code": 0, "message": "success", "data": {...}}
+```
+
+### Frontend (frontend/)
+React + TypeScript + TailwindCSS + Zustand.
+
+Key components:
+- `Sidebar.tsx` - Navigation sidebar
+- `UploadCard.tsx` - Drag-and-drop video/image upload
+- `TitleInput.tsx` - Title input with AI polish
+- `DescriptionInput.tsx` - Description textarea with AI polish
+- `KeywordInput.tsx` - Tag-based keyword input
+- `AIHelperPanel.tsx` - AI generate and polish controls
+- `PlatformSelector.tsx` - Multi-platform toggle selector
+- `PublishButton.tsx` - Publish action button
+- `PublishPage.tsx` - Main page composing all components
+- `appStore.ts` - Zustand store (title, description, keywords, media, platforms)
+- `api.ts` - Axios service calling `/api/publish`, `/api/ai/generate`, `/api/ai/polish`
+
+Frontend runs on port 3000 with Vite proxy forwarding `/api` to backend port 8080.
 
 ## Project Structure
 
@@ -130,21 +181,21 @@ internal/
   context/
     handler/                 # Gin HTTP handlers
     service/                 # Context/snapshot management
+  publish/
+    handler/                 # Publish/AI HTTP handlers
+    service/                 # Content publishing + AI generate/polish
   worker/
     service/                 # Node execution engine
     tool/                    # Tool interface + registry
-      builtin/               # BashTool(sandboxed), LlmApiTool, WeatherTool
-frontend/                    # Frontend project (React/Vue, etc.)
+      builtin/               # BashTool, PythonTool, LlmApiTool, WeatherTool
+    executor/                # DirectExecutor, SandboxExecutor (stub), types
+frontend/                    # React + TypeScript + TailwindCSS
   src/
-    components/             # UI components
-    pages/                   # Pages
-    hooks/                   # Custom hooks
-    utils/                   # Utility functions
-    services/                # API services
-    stores/                  # State management
-    styles/                  # Styles
-    assets/                  # Static assets
-  public/                    # Public assets
+    components/             # UI components (Sidebar, UploadCard, TitleInput, etc.)
+    pages/                   # Pages (PublishPage)
+    stores/                  # Zustand state management (appStore)
+    services/                # API services (api.ts)
+    utils/                   # Types and utilities
 ```
 
 ## Infrastructure
@@ -223,6 +274,26 @@ idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplicat
 3. Make changes following existing Go patterns
 4. Write tests for new functionality
 5. `./scripts/test-apis.sh` before submitting
+
+## API Endpoints
+
+### Publish Module (frontend-facing)
+- `POST /api/publish` - Submit content for publishing (title, description, keywords, platforms)
+- `POST /api/ai/generate` - AI-generate title and description from prompt
+- `POST /api/ai/polish` - AI-polish existing text (title or description)
+
+### Orchestrator
+- `POST /api/task/create` - Create a new task
+- `POST /api/task/:taskId/dag` - Submit DAG for a task
+- `GET /api/task/:taskId` - Get task details
+- `POST /api/node` - Submit DAG from NL translation (creates task + submits DAG)
+
+### Translator
+- `POST /api/translate` - Translate natural language to DAG
+- `POST /api/translate/submit` - Translate and submit in one step
+
+### Context
+- `GET /api/task/:taskId/context` - Get task context history
 
 ## Common Issues
 

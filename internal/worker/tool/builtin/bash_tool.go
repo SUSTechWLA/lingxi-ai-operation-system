@@ -1,16 +1,12 @@
 package builtin
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"strings"
-	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
 
@@ -28,62 +24,69 @@ var dangerousPatterns = []string{";", "|", "&&", "||", "`", "$(", ">", "<", ">>"
 
 type BashTool struct {
 	timeoutSeconds int
-	sandboxDir     string
 }
 
 func NewBashTool(cfg config.BashToolConfig) *BashTool {
-	sandboxDir := "/tmp/ai-sandbox"
-	os.MkdirAll(sandboxDir, 0755)
 	timeout := cfg.TimeoutSeconds
 	if timeout == 0 {
 		timeout = 30
 	}
 	return &BashTool{
 		timeoutSeconds: timeout,
-		sandboxDir:     sandboxDir,
 	}
 }
 
-func (t *BashTool) Name() string       { return "bash" }
-func (t *BashTool) Description() string { return "Execute shell commands (sandboxed)" }
-func (t *BashTool) Type() tool.ToolType { return tool.ToolTypeCustom }
+func (t *BashTool) Name() string                  { return "bash" }
+func (t *BashTool) Description() string            { return "Execute shell commands (sandboxed)" }
+func (t *BashTool) Type() tool.ToolType            { return tool.ToolTypeCustom }
 
-func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+func (t *BashTool) BuildExecutionRequest(params map[string]interface{}) (*executor.ExecutionRequest, error) {
 	command, _ := params["command"].(string)
 	if command == "" {
-		return tool.FailureResult("Command is required")
+		return nil, fmt.Errorf("command is required")
 	}
 
 	if err := validateBashCommand(command); err != nil {
-		return tool.FailureResult(fmt.Sprintf("Command rejected: %s", err.Error()))
+		return nil, fmt.Errorf("command rejected: %s", err.Error())
 	}
 
-	zap.L().Info("Executing bash command", zap.String("taskId", toolCtx.TaskID), zap.String("command", command))
-
-	timeout := time.Duration(t.timeoutSeconds) * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := execCommandContext(execCtx, "bash", "-c", command)
-	cmd.Dir = t.sandboxDir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n" + stderr.String()
+	timeout := uint32(t.timeoutSeconds)
+	if timeoutSec, ok := params["timeoutSec"].(float64); ok {
+		timeout = uint32(timeoutSec)
 	}
 
+	return &executor.ExecutionRequest{
+		Command:    "bash",
+		Args:       []string{"-c", command},
+		WorkDir:    "/tmp/lingxi-sandbox",
+		TimeoutSec: timeout,
+		Limits: executor.ResourceLimits{
+			MemoryBytes: 256 * 1024 * 1024,
+			CPUShares:   100,
+		},
+	}, nil
+}
+
+func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	execReq, err := t.BuildExecutionRequest(params)
 	if err != nil {
-		return tool.FailureResult(fmt.Sprintf("Command failed: %s, output: %s", err.Error(), output))
+		return tool.FailureResult(err.Error())
+	}
+
+	directExec := executor.NewDirectExecutor()
+	result, execErr := directExec.Execute(ctx, *execReq)
+	if execErr != nil {
+		return tool.FailureResult(execErr.Error())
+	}
+
+	if result.ExitCode != 0 {
+		return tool.FailureResult(fmt.Sprintf("command failed with exit code %d: %s", result.ExitCode, string(result.Stderr)))
 	}
 
 	return tool.SuccessResult(map[string]interface{}{
-		"exitCode": 0,
-		"output":   output,
-		"command":  command,
+		"exitCode": result.ExitCode,
+		"output":   string(result.Stdout),
+		"command":  execReq.Args[1],
 	})
 }
 

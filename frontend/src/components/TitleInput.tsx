@@ -2,7 +2,7 @@ import React from 'react'
 import { useAppStore } from '../stores/appStore'
 
 interface TitleInputProps {
-  onPolish?: () => void
+  onPolish?: (type: 'title' | 'description') => void
 }
 
 const TitleInput: React.FC<TitleInputProps> = ({ onPolish }) => {
@@ -15,7 +15,7 @@ const TitleInput: React.FC<TitleInputProps> = ({ onPolish }) => {
       <div className="flex items-center justify-between mb-2">
         <label className="text-sm font-medium text-gray-700">标题</label>
         <button
-          onClick={onPolish}
+          onClick={() => onPolish?.('title')}
           className="flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-sm hover:bg-primary/20 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

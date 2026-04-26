@@ -19,9 +19,25 @@ export interface Platform {
   name: string
   icon: string
   enabled: boolean
+  status: 'available' | 'developing'
+}
+
+export interface ApiResponse<T> {
+  code: number
+  message: string
+  data: T
 }
 
 export interface TaskResponse {
   taskId: string
   message: string
+}
+
+export interface AIGenerateData {
+  title: string
+  description: string
+}
+
+export interface AIPolishData {
+  content: string
 }

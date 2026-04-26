@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { TaskResponse } from '../utils/types'
+import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData } from '../utils/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -28,26 +28,26 @@ export const publishContent = async (
     formData.append('images', file)
   })
 
-  const response = await api.post<TaskResponse>('/publish', formData, {
+  const response = await api.post<ApiResponse<TaskResponse>>('/publish', formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
   })
 
-  return response.data
+  return response.data.data
 }
 
 export const aiGenerateContent = async (
   prompt: string
-): Promise<{ title: string; description: string }> => {
-  const response = await api.post('/ai/generate', { prompt })
-  return response.data
+): Promise<AIGenerateData> => {
+  const response = await api.post<ApiResponse<AIGenerateData>>('/ai/generate', { prompt })
+  return response.data.data
 }
 
 export const aiPolishText = async (
   text: string,
   type: 'title' | 'description'
 ): Promise<string> => {
-  const response = await api.post('/ai/polish', { text, type })
-  return response.data.content
+  const response = await api.post<ApiResponse<AIPolishData>>('/ai/polish', { text, type })
+  return response.data.data.content
 }
