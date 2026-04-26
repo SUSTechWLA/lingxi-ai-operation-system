@@ -29,13 +29,14 @@ func NewContextService(
 	}
 }
 
-func (s *ContextService) RecordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, message string, metadata map[string]interface{}) error {
+func (s *ContextService) RecordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, sourceModule, message string, metadata map[string]interface{}) error {
 	c := &model.Context{
-		ContextType: ctxType,
-		TaskID:      taskID,
-		NodeID:      nodeID,
-		Message:     message,
-		Metadata:    metadata,
+		ContextType:  ctxType,
+		TaskID:       taskID,
+		NodeID:       nodeID,
+		SourceModule: sourceModule,
+		Message:      message,
+		Metadata:     metadata,
 	}
 	return s.contextRepo.Save(ctx, c)
 }
@@ -61,6 +62,7 @@ func (s *ContextService) RestoreNodeFromSnapshot(ctx context.Context, nodeID str
 
 func (s *ContextService) HandleEvent(ctx context.Context, event eventbus.Event) error {
 	zap.L().Info("ContextService handling event",
+		zap.String("topic", event.Topic),
 		zap.String("taskId", event.TaskID),
 		zap.String("nodeId", event.NodeID),
 		zap.String("status", event.Status),
@@ -72,16 +74,42 @@ func (s *ContextService) HandleEvent(ctx context.Context, event eventbus.Event) 
 	switch event.Status {
 	case "SUCCESS":
 		ctxType = model.ContextNodeSuccess
-		message = "Node succeeded"
+		message = "Kafka 事件记录：节点执行成功"
 	case "FAILED":
 		ctxType = model.ContextNodeFailed
-		message = fmt.Sprintf("Node failed: %s", event.ErrorMessage)
+		message = fmt.Sprintf("Kafka 事件记录：节点执行失败: %s", event.ErrorMessage)
 	case "RUNNING":
 		ctxType = model.ContextNodeScheduled
-		message = "Node running"
+		message = "Kafka 事件记录：节点进入运行状态"
 	default:
 		return nil
 	}
 
-	return s.RecordContext(ctx, event.TaskID, event.NodeID, ctxType, message, nil)
+	metadata := buildExecutionMetadata(event.Output)
+	c := &model.Context{
+		ContextType:  ctxType,
+		TaskID:       event.TaskID,
+		NodeID:       event.NodeID,
+		SourceModule: "ContextService",
+		SourceTopic:  event.Topic,
+		Message:      message,
+		Metadata:     metadata,
+	}
+	return s.contextRepo.Save(ctx, c)
+}
+
+func buildExecutionMetadata(output map[string]interface{}) map[string]interface{} {
+	if len(output) == 0 {
+		return nil
+	}
+	meta := make(map[string]interface{})
+	for _, key := range []string{"startedAt", "durationMs", "exitCode", "error", "resourceUsage"} {
+		if v, ok := output[key]; ok {
+			meta[key] = v
+		}
+	}
+	if len(meta) > 0 {
+		return meta
+	}
+	return nil
 }

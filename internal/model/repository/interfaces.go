@@ -20,6 +20,7 @@ type NodeRepo interface {
 type TaskRepo interface {
 	Save(ctx context.Context, task *model.Task) error
 	FindByID(ctx context.Context, id string) (*model.Task, error)
+	FindRecent(ctx context.Context) (*model.Task, error)
 	UpdateStatus(ctx context.Context, id string, status model.TaskStatus) error
 }
 

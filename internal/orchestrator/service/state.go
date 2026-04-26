@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -50,6 +51,15 @@ func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newSta
 	}
 	if node == nil {
 		return nil, fmt.Errorf("node not found: %s", nodeID)
+	}
+
+	// Skip if already in target status (idempotency)
+	if node.Status == newStatus {
+		zap.L().Debug("Node already in target status, skipping transition",
+			zap.String("nodeId", nodeID),
+			zap.String("status", string(newStatus)),
+		)
+		return node, nil
 	}
 
 	zap.L().Info("Node transitioning",
@@ -106,6 +116,14 @@ func (s *StateService) TransitionTask(ctx context.Context, taskID string, newSta
 		return fmt.Errorf("task not found: %s", taskID)
 	}
 
+	if task.Status == newStatus {
+		zap.L().Debug("Task already in target status, skipping transition",
+			zap.String("taskId", taskID),
+			zap.String("status", string(newStatus)),
+		)
+		return nil
+	}
+
 	oldStatus := task.Status
 	zap.L().Info("Task transitioning",
 		zap.String("taskId", taskID),
@@ -120,12 +138,12 @@ func (s *StateService) TransitionTask(ctx context.Context, taskID string, newSta
 
 	switch newStatus {
 	case model.TaskSuccess:
-		s.recordContext(ctx, taskID, "", model.ContextTaskSuccess, "Task completed successfully", nil)
+		s.recordContext(ctx, taskID, "", model.ContextTaskSuccess, "StateMachine", "任务全部节点执行完毕，任务完成", nil)
 		_ = s.eventSaver.SaveEvent(ctx, "task", taskID, eventbus.TopicTaskCompleted, eventbus.Event{
 			TaskID: taskID, Status: "SUCCESS",
 		})
 	case model.TaskFailed:
-		s.recordContext(ctx, taskID, "", model.ContextTaskFailed, "Task failed", nil)
+		s.recordContext(ctx, taskID, "", model.ContextTaskFailed, "StateMachine", "任务执行失败", nil)
 		_ = s.eventSaver.SaveEvent(ctx, "task", taskID, eventbus.TopicTaskFailed, eventbus.Event{
 			TaskID: taskID, Status: "FAILED",
 		})
@@ -217,7 +235,7 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 				return err
 			}
 
-			s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "Node is READY", nil)
+			s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "StateMachine", "初始节点就绪（无依赖），进入 READY 状态", buildNodeMetadata(node, model.NodeReady))
 
 			// Merge node name into payload so worker can determine the correct tool
 			payload := make(map[string]interface{})
@@ -248,36 +266,65 @@ func (s *StateService) recordContextForTransition(ctx context.Context, node *mod
 	switch newStatus {
 	case model.NodeReady:
 		ctxType = model.ContextNodeReady
-		message = "Node ready"
+		message = "节点状态就绪（CREATED → READY），等待 Worker 调度"
 	case model.NodeRunning:
 		ctxType = model.ContextNodeScheduled
-		message = "Node scheduled"
+		message = "节点开始调度（READY → RUNNING），Worker 已收到事件"
 	case model.NodeSuccess:
 		ctxType = model.ContextNodeSuccess
-		message = "Node succeeded"
+		message = "节点执行成功（RUNNING → SUCCESS）"
 	case model.NodeFailed:
 		ctxType = model.ContextNodeFailed
-		message = "Node failed"
+		message = "节点执行失败（RUNNING → FAILED）"
 	case model.NodeRetrying:
 		ctxType = model.ContextNodeRetry
-		message = "Node retrying"
+		message = "节点即将重试"
 	case model.NodeSkipped:
 		ctxType = model.ContextType("NODE_SKIPPED")
-		message = "Node skipped (condition not met)"
+		message = "节点已跳过（条件未满足）"
 	default:
 		return
 	}
 
-	s.recordContext(ctx, node.TaskID, node.ID, ctxType, message, nil)
+	s.recordContext(ctx, node.TaskID, node.ID, ctxType, "StateMachine", message, buildNodeMetadata(node, newStatus))
 }
 
-func (s *StateService) recordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, message string, metadata map[string]interface{}) {
+func buildNodeMetadata(node *model.Node, status model.NodeStatus) map[string]interface{} {
+	meta := make(map[string]interface{})
+	if node.Input != nil {
+		if text, ok := node.Input["text"].(string); ok {
+			preview := text
+			if len([]rune(preview)) > 80 {
+				preview = string([]rune(preview)[:80]) + "..."
+			}
+			meta["inputPreview"] = preview
+		}
+	}
+	if node.Output != nil && (status == model.NodeSuccess || status == model.NodeFailed) {
+		if stdout, ok := node.Output["stdout"].(string); ok {
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(stdout), &parsed); err == nil {
+				if content, ok := parsed["content"].(string); ok {
+					preview := content
+					if len([]rune(preview)) > 80 {
+						preview = string([]rune(preview)[:80]) + "..."
+					}
+					meta["outputPreview"] = preview
+				}
+			}
+		}
+	}
+	return meta
+}
+
+func (s *StateService) recordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, sourceModule, message string, metadata map[string]interface{}) {
 	c := &model.Context{
-		ContextType: ctxType,
-		TaskID:      taskID,
-		NodeID:      nodeID,
-		Message:     message,
-		Metadata:    metadata,
+		ContextType:  ctxType,
+		TaskID:       taskID,
+		NodeID:       nodeID,
+		SourceModule: sourceModule,
+		Message:      message,
+		Metadata:     metadata,
 	}
 	if err := s.contextRepo.Save(ctx, c); err != nil {
 		zap.L().Warn("Failed to record context", zap.Error(err))

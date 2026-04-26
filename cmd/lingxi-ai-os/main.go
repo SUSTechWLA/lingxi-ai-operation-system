@@ -86,8 +86,8 @@ func main() {
 	toolRegistry := tool.NewToolRegistry()
 	toolRegistry.Register(builtin.NewBashTool(cfg.BashTool))
 	toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
-	toolRegistry.Register(builtin.NewWeatherTool())
 	toolRegistry.Register(builtin.NewPythonTool())
+	toolRegistry.Register(builtin.NewPolisherTool(cfg.OpenAI))
 
 	directExec := executor.NewDirectExecutor()
 	var sandboxExec *executor.SandboxExecutor
@@ -119,7 +119,7 @@ func main() {
 	defer workerConsumer.Stop()
 
 	orchestratorConsumer := eventbus.NewConsumer(cfg.Kafka, "orchestrator-group",
-		[]string{eventbus.TopicNodeResult, eventbus.TopicNodeExecuted},
+		[]string{eventbus.TopicNodeResult},
 		func(event eventbus.Event) error {
 			switch event.Status {
 			case "SUCCESS":
@@ -139,8 +139,7 @@ func main() {
 	defer orchestratorConsumer.Stop()
 
 	contextConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-context-group",
-		[]string{eventbus.TopicNodeResult, eventbus.TopicNodeExecuted, eventbus.TopicNodeFailed,
-			eventbus.TopicTaskCompleted, eventbus.TopicTaskFailed},
+			[]string{eventbus.TopicNodeResult, eventbus.TopicNodeFailed},
 		func(event eventbus.Event) error {
 			return contextService.HandleEvent(ctx, event)
 		},
@@ -171,6 +170,7 @@ func main() {
 	translatorHandler.NewTranslatorHandler(nlService).RegisterRoutes(r)
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
+	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),

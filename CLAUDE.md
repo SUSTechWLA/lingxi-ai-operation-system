@@ -134,8 +134,10 @@ Key components:
 Frontend-facing content publishing API.
 
 Key components:
-- `PublishHandler` - Gin HTTP handlers for `/api/publish`, `/api/ai/generate`, `/api/ai/polish`
+- `PublishHandler` - Gin HTTP handlers for `/api/publish`, `/api/ai/generate`, `/api/ai/generate-from-media`, `/api/ai/polish`
 - `PublishService` - Orchestrates content publishing via DAG task creation, AI content generation and text polishing via OpenAI
+- `WeatherHandler` - Gin HTTP handler for `/api/weather/query`
+- `WeatherService` - City weather query using WeatherTool (simulated data)
 
 API contract (standard response format):
 ```json
@@ -148,17 +150,24 @@ React + TypeScript + TailwindCSS + Zustand.
 Key components:
 - `Sidebar.tsx` - Navigation sidebar
 - `UploadCard.tsx` - Drag-and-drop video/image upload
-- `TitleInput.tsx` - Title input with AI polish
-- `DescriptionInput.tsx` - Description textarea with AI polish
+- `TitleInput.tsx` - Title input with AI polish button
+- `DescriptionInput.tsx` - Description textarea with AI polish button
 - `KeywordInput.tsx` - Tag-based keyword input
+- `WeatherCard.tsx` - City weather query + generate weather content
 - `AIHelperPanel.tsx` - AI generate and polish controls
 - `PlatformSelector.tsx` - Multi-platform toggle selector
-- `PublishButton.tsx` - Publish action button
+- `PublishButton.tsx` - Publish action button (calls `/api/publish`)
+- `DesktopToolbar.tsx` - Electron desktop app toolbar
+- `CommandPanel.tsx` - Command panel
 - `PublishPage.tsx` - Main page composing all components
 - `appStore.ts` - Zustand store (title, description, keywords, media, platforms)
-- `api.ts` - Axios service calling `/api/publish`, `/api/ai/generate`, `/api/ai/polish`
+- `api.ts` - Axios service calling all `/api/publish`, `/api/ai/*`, `/api/weather/*`
 
 Frontend runs on port 3000 with Vite proxy forwarding `/api` to backend port 8080.
+
+Key UI features:
+- **Media-based AI generation**: When images/videos are uploaded, AI generate uses `/api/ai/generate-from-media` (multipart) instead of text-only `/api/ai/generate`
+- **Weather publishing flow**: WeatherCard queries `/api/weather/query?city=xxx`, then auto-fills title+description for AI polish and publishing
 
 ## Project Structure
 
@@ -182,8 +191,13 @@ internal/
     handler/                 # Gin HTTP handlers
     service/                 # Context/snapshot management
   publish/
-    handler/                 # Publish/AI HTTP handlers
-    service/                 # Content publishing + AI generate/polish
+    handler/                 # Publish/AI/Weather HTTP handlers
+      handler.go             # Publish, AI generate, AI polish, AI generate-from-media
+      weather_handler.go     # Weather query
+      handler_test.go
+    service/                 # Content publishing + AI generate/polish + weather
+      service.go             # PublishContent, AIGenerateContent, AIGenerateFromMedia, AIPolishText
+      weather_service.go     # QueryWeather
   worker/
     service/                 # Node execution engine
     tool/                    # Tool interface + registry
@@ -191,7 +205,7 @@ internal/
     executor/                # DirectExecutor, SandboxExecutor (stub), types
 frontend/                    # React + TypeScript + TailwindCSS
   src/
-    components/             # UI components (Sidebar, UploadCard, TitleInput, etc.)
+    components/             # UI components (Sidebar, UploadCard, TitleInput, WeatherCard, etc.)
     pages/                   # Pages (PublishPage)
     stores/                  # Zustand state management (appStore)
     services/                # API services (api.ts)
@@ -278,9 +292,11 @@ idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplicat
 ## API Endpoints
 
 ### Publish Module (frontend-facing)
-- `POST /api/publish` - Submit content for publishing (title, description, keywords, platforms)
-- `POST /api/ai/generate` - AI-generate title and description from prompt
+- `POST /api/publish` - Submit content for publishing (multipart: title, description, keywords, platforms, images, videos)
+- `POST /api/ai/generate` - AI-generate title and description from text prompt
+- `POST /api/ai/generate-from-media` - AI-generate from images/videos + prompt (multipart)
 - `POST /api/ai/polish` - AI-polish existing text (title or description)
+- `GET /api/weather/query?city=xxx` - Query weather info for a city
 
 ### Orchestrator
 - `POST /api/task/create` - Create a new task

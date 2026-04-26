@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData } from '../utils/types'
+import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData, TraceData } from '../utils/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -44,10 +44,36 @@ export const aiGenerateContent = async (
   return response.data.data
 }
 
+export const aiGenerateFromMedia = async (
+  prompt: string,
+  images: File[],
+  videos: File[]
+): Promise<AIGenerateData> => {
+  const formData = new FormData()
+  formData.append('prompt', prompt)
+  images.forEach((file) => formData.append('images', file))
+  videos.forEach((file) => formData.append('videos', file))
+
+  const response = await api.post<ApiResponse<AIGenerateData>>('/ai/generate-from-media', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data.data
+}
+
 export const aiPolishText = async (
   text: string,
   type: 'title' | 'description'
-): Promise<string> => {
+): Promise<AIPolishData> => {
   const response = await api.post<ApiResponse<AIPolishData>>('/ai/polish', { text, type })
-  return response.data.data.content
+  return response.data.data
+}
+
+export const fetchTrace = async (taskId: string): Promise<TraceData> => {
+  const response = await api.get<ApiResponse<TraceData>>(`/trace/${taskId}`)
+  return response.data.data
+}
+
+export const fetchRecentTrace = async (): Promise<TraceData> => {
+  const response = await api.get<ApiResponse<TraceData>>('/trace/recent')
+  return response.data.data
 }

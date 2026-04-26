@@ -22,6 +22,7 @@ const (
 )
 
 type Event struct {
+	Topic          string                 `json:"-"` // populated by consumer from msg.Topic
 	TaskID         string                 `json:"taskId"`
 	NodeID         string                 `json:"nodeId,omitempty"`
 	Type           string                 `json:"type,omitempty"`
@@ -153,6 +154,8 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 			session.MarkMessage(msg, "")
 			continue
 		}
+		event.Topic = msg.Topic
+
 
 		if err := h.handlerFn(event); err != nil {
 			zap.L().Error("Failed to handle event",

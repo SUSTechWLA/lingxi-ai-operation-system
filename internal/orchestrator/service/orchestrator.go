@@ -42,7 +42,7 @@ func (s *OrchestratorService) CreateTask(ctx context.Context, input map[string]i
 		return nil, fmt.Errorf("failed to save task: %w", err)
 	}
 
-	s.recordContext(ctx, task.ID, "", model.ContextTaskCreated, "Task created", nil)
+	s.recordContext(ctx, task.ID, "", model.ContextTaskCreated, "Orchestrator", "任务创建成功，等待 DAG 提交", nil)
 	zap.L().Info("Created task", zap.String("taskId", task.ID))
 
 	return task, nil
@@ -63,7 +63,7 @@ func (s *OrchestratorService) SubmitDAG(ctx context.Context, taskID string, dagR
 		return fmt.Errorf("DAG validation failed: %w", err)
 	}
 
-	s.recordContext(ctx, taskID, "", model.ContextDagValidated, "DAG validated", nil)
+	s.recordContext(ctx, taskID, "", model.ContextDagValidated, "Orchestrator", "DAG 结构校验通过（无环、无重复节点）", nil)
 
 	for _, nodeReq := range dagReq.Nodes {
 		node := &model.Node{
@@ -110,7 +110,7 @@ func (s *OrchestratorService) SubmitDAG(ctx context.Context, taskID string, dagR
 		return fmt.Errorf("failed to transition task to RUNNING: %w", err)
 	}
 
-	s.recordContext(ctx, taskID, "", model.ContextDagSubmitted, "DAG submitted", nil)
+	s.recordContext(ctx, taskID, "", model.ContextDagSubmitted, "Orchestrator", "DAG 已提交，节点写入数据库", nil)
 
 	s.initializeReadyNodes(ctx, dagReq)
 
@@ -144,6 +144,10 @@ func (s *OrchestratorService) GetTaskWithDetails(ctx context.Context, taskID str
 	return result, nil
 }
 
+func (s *OrchestratorService) GetRecentTask(ctx context.Context) (*model.Task, error) {
+	return s.taskRepo.FindRecent(ctx)
+}
+
 func (s *OrchestratorService) initializeReadyNodes(ctx context.Context, dagReq *model.DAGRequest) {
 	nodesWithDeps := make(map[string]bool)
 	for _, edge := range dagReq.Edges {
@@ -163,11 +167,12 @@ func (s *OrchestratorService) initializeReadyNodes(ctx context.Context, dagReq *
 	}
 }
 
-func (s *OrchestratorService) recordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, message string, metadata map[string]interface{}) {
+func (s *OrchestratorService) recordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, sourceModule, message string, metadata map[string]interface{}) {
 	c := &model.Context{
 		ContextType: ctxType,
 		TaskID:      taskID,
 		NodeID:      nodeID,
+		SourceModule: sourceModule,
 		Message:     message,
 		Metadata:    metadata,
 	}

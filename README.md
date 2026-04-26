@@ -1,331 +1,322 @@
-# 灵犀AI原生操作系统 (AIOS)
+# 灵犀AI自媒体运营助手 (Lingxi AI OS)
 
-> **核心理念**: 用户通过**自然语言**直接操作硬件、中间件和应用，**绕过复杂的 GUI 前端交互**，为下一代操作系统做准备。
-
----
-
-## 阅读指南
-
-### 什么是 AIOS？
-
-**AIOS 是新一代自然语言驱动的操作系统**。
-
-#### 传统操作系统的交互方式
-
-```
-用户 ──▶ 点击图标 ──▶ 打开应用 ──▶ 点击菜单 ──▶ 选择功能 ──▶ 填写表单 ──▶ 执行操作
-         (复杂的 GUI 交互链路)
-```
-
-#### AIOS 的交互方式
-
-```
-用户 ──▶ 说一句话 ──▶ 系统自动执行
-         (自然语言直达目标)
-```
-
-#### 对比示例
-
-| 场景 | 传统 GUI 操作 | AIOS 自然语言操作 |
-|------|--------------|------------------|
-| 查询数据库 | 打开工具 → 连接服务器 → 选数据库 → 写SQL → 执行 → 查看结果 | "查询用户表中最近一周的注册数据" |
-| 部署应用 | 打开终端 → SSH登录 → 拉取代码 → 编译 → 配置 → 启动 | "把最新版本部署到测试环境" |
-| 分析日志 | 打开日志平台 → 选时间范围 → 输入过滤条件 → 导出 → 分析 | "分析过去一小时的所有错误日志" |
-| 发送邮件 | 打开邮箱 → 新建 → 填写收件人 → 写主题 → 写正文 → 添加附件 → 发送 | "给张三发一封项目进度报告邮件" |
-
-### 核心价值
-
-- 降低使用门槛: 不需要学习复杂的 GUI 操作，会说话就会用
-- 提升效率: 一句话完成原本需要多步操作的任务
-- 统一交互: 硬件、中间件、应用都用同一种方式操作
-- 面向未来: 为下一代自然语言操作系统奠定基础
+> **一句话介绍**：一个帮你管理自媒体内容创作和发布的智能助手。输入简单想法 → AI 帮你生成/润色内容 → 一键发布到多平台。
 
 ---
 
-## 系统架构图
+## 👋 这是什么？
 
-### 自然语言操作全景图
+**灵犀AI自媒体运营助手** 是一个面向自媒体创作者的一站式内容管理平台。它帮你解决这些痛点：
 
-```mermaid
-graph TD
-    subgraph "用户入口层 (Entry Layer)"
-        A[Web / CLI / SDK]
-    end
-
-    subgraph "Go 单体服务 (Port: 8080)"
-        B["NL-Translator"]
-        C["Orchestrator"]
-        D["Context"]
-        E["Worker"]
-    end
-
-    subgraph "基础设施"
-        F["PostgreSQL 16"]
-        G["Redis 7"]
-        H["Redpanda (Kafka)"]
-        I["MinIO / Qdrant"]
-    end
-
-    A -->|"自然语言请求"| B
-    B -->|"DAG"| C
-    C <-->|"状态同步 & 记录"| D
-    C -->|"Outbox → Kafka"| E
-    E -->|"执行结果"| C
-    C --- F
-    C --- G
-    C --- H
-```
-
-### 用户请求处理流程
-
-```
-用户: "查询北京的天气并生成总结报告"
-                │ 自然语言
-                ▼
-┌─────────────────────────────────────────────┐
-│  NL-Translator                               │
-│  解析意图 → 调用 LLM → 生成任务图 (DAG)        │
-│                                              │
-│  ┌──────────┐    ┌──────────┐               │
-│  │ 查询天气  │ ──▶│ 生成总结  │               │
-│  │ (TOOL)   │    │ (LLM)    │               │
-│  └──────────┘    └──────────┘               │
-└─────────────────────────────────────────────┘
-                │ REST API
-                ▼
-┌─────────────────────────────────────────────┐
-│  Orchestrator                                │
-│  事件驱动调度 → 状态收敛 → 依赖检查 → 重试     │
-│  Outbox 保证事件不丢 → Kafka 分发             │
-└─────────────────────────────────────────────┘
-                │ Kafka 事件
-                ▼
-┌─────────────────────────────────────────────┐
-│  Worker                                      │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-│  │  Bash   │  │  LLM    │  │  天气   │     │
-│  │  (沙箱) │  │  工具   │  │  工具   │     │
-│  └─────────┘  └─────────┘  └─────────┘     │
-└─────────────────────────────────────────────┘
-```
-
----
-
-## 模块职责
-
-### NL-Translator
-**做什么**: 自然语言理解层，把用户意图转换为可执行的任务图
-
-- 调用 OpenAI API 解析用户意图
-- 生成 DAG 任务图（节点 + 依赖边）
-- 支持一步翻译+提交
-
-### Orchestrator
-**做什么**: 任务调度内核，协调各模块完成复杂任务
-
-- 接收 DAG 任务图
-- 按依赖关系调度执行顺序（事件驱动，DependencyChecker 检查依赖后触发）
-- 统一状态管理（StateService 收敛所有状态变更）
-- 条件分支支持（condition 字段，不满足时节点自动 SKIPPED）
-- 指数退避重试（RetryPolicy: 1s → 2s → 4s → ... → 60s）
-- 幂等执行保障（idempotencyKey 去重）
-- Outbox 模式保证事件不丢（先写 DB 再异步转发 Kafka）
-- 系统中断恢复（Scheduler 30s 兜底扫描超过1分钟的停滞节点）
-
-### Context
-**做什么**: 操作审计层，记录一切操作历史
-
-- 记录每个操作的详细信息
-- 保存节点快照（用于故障恢复）
-- 提供操作追溯和审计能力
-- 支持从任意点恢复执行
-
-### Worker
-**做什么**: 工具执行层，真正操作硬件、中间件、应用
-
-- 插件式工具架构（Tool 接口 + ToolRegistry）
-- 内置 BashTool（沙箱隔离：命令白名单 + 危险模式过滤 + /tmp/ai-sandbox 目录）
-- 内置 LlmApiTool（调用 OpenAI 兼容 API）
-- 内置 WeatherTool（天气查询示例工具）
-- 支持自定义工具注册
-- 幂等结果发布（idempotencyKey 作为 Kafka 消息 key）
-- 超时控制
-
----
-
-## 技术栈
-
-| 组件 | 技术 | 说明 |
+| 场景 | 以前 | 现在 |
 |------|------|------|
-| 语言 | Go 1.23+ | 高性能、并发友好 |
-| HTTP 框架 | Gin | 轻量级 Web 框架 |
-| 数据库 | pgx (PostgreSQL 16) | 原生 PostgreSQL 驱动 |
-| 缓存 | go-redis (Redis 7) | Redis 客户端 |
-| 消息队列 | IBM/sarama (Redpanda) | Kafka 兼容客户端 |
-| 配置 | Viper | 支持 .env + YAML |
-| 日志 | Zap | 高性能结构化日志 |
+| **写标题** | 绞尽脑汁想标题 | 告诉 AI 你的想法，自动生成吸引人的标题 |
+| **写简介** | 憋半天写不好 | AI 帮你润色，让文字更生动 |
+| **配图视频** | 上传后要自己想文案 | 根据你上传的图片/视频，AI 分析后生成匹配的内容 |
+| **多平台发布** | 每个平台手动复制粘贴 | 选好平台，一键发布到抖音、小红书等 |
+| **天气内容** | 查天气 → 自己编内容 | 输入城市名，自动生成天气相关的自媒体内容 |
 
 ---
 
-## 快速开始
+## 🚀 不需要懂技术也能使用
 
-### 环境准备
+### 第一步：启动项目
+
+如果你是**技术小白**，找技术人员帮你执行以下命令即可：
 
 ```bash
-# 安装 Go 1.23+
-brew install go          # macOS
-# 或访问 https://go.dev/dl/  # Linux
-
-# 确保 Docker 已安装并运行
-docker info
+# 在终端执行（打开"终端"应用）
+cd 项目目录
+bash ./scripts/startup.sh
 ```
 
-### 一键安装与启动
-
-```bash
-# 1. 安装环境和构建
-./scripts/install_lingxi_env.sh
-
-# 2. 编辑 .env 填写 OPENAI_API_KEY
-vim .env
-
-# 3. 启动服务
-./scripts/startup.sh
+看到以下输出就说明启动成功了：
+```
+Backend:  http://localhost:8080
+Frontend: http://localhost:3000
 ```
 
-### 手动启动
+### 第二步：打开界面
 
-```bash
-# 启动基础设施
-docker compose up -d
+1. 打开 Chrome 浏览器
+2. 在地址栏输入：`http://localhost:3000`
+3. 按回车键，即可看到主界面
 
-# 构建并运行
-make run
+### 第三步：开始使用
+
+#### 功能 1：上传素材
+- 点击"上传视频"或"上传图片"区域
+- 选择你的视频或图片文件
+- 支持 MP4、MOV、JPG、PNG 等常见格式
+
+#### 功能 2：AI 生成内容
+- 点击右侧"AI创作助手"区域中的**一键生成**按钮
+- AI 会根据你的素材自动生成标题和简介
+- 你也可以手动输入想法，再点击顶部的**AI 生成标题和简介**
+
+#### 功能 3：AI 润色文字
+- 在标题或简介输入框旁，点击 ✨**AI润色** 按钮
+- AI 会让文字更生动、更吸引人
+
+#### 功能 4：查询天气
+- 在右侧找到"天气查询"卡片
+- 输入城市名（如"北京"），点击查询
+- 点击"生成天气内容"，自动填入标题和简介
+
+#### 功能 5：选择发布平台
+- 在右侧选择要发布的平台（抖音、小红书等）
+- 已标注"开发中"的平台暂不可用
+
+#### 功能 6：发布内容
+- 确认标题和简介无误
+- 点击**下一步：选择发布平台**或侧边栏的**一键发布**
+- 任务创建成功后，内容即进入处理流程
+
+---
+
+## ✨ 功能介绍（配图说明）
+
+### 主界面布局
+
 ```
-
-### 测试
-
-```bash
-# 运行 API 测试
-./scripts/test-apis.sh
-
-# 运行单元测试
-go test ./...
-
-# 健康检查
-curl http://localhost:8080/api/health
+┌─────────────┬──────────────────────────────┬────────────────┐
+│             │                              │                │
+│  侧边导航   │     内容编辑区               │  AI助手面板    │
+│             │   ┌──────────────────────┐   │  ┌──────────┐  │
+│   · 创作发布│   │ 上传素材区域          │   │  │ 天气查询  │  │
+│   · 任务中心│   │ (图片/视频拖拽上传)    │   │  └──────────┘  │
+│   · 设置    │   └──────────────────────┘   │  ┌──────────┐  │
+│             │   ┌──────────────────────┐   │  │ AI创作    │  │
+│             │   │ 标题 (可AI润色)       │   │  │ 助手      │  │
+│             │   ├──────────────────────┤   │  │ · 一键生成 │  │
+│             │   │ 简介 (可AI润色)       │   │  │ · 一键优化 │  │
+│             │   ├──────────────────────┤   │  └──────────┘  │
+│             │   │ 关键词输入            │   │  ┌──────────┐  │
+│             │   └──────────────────────┘   │  │ 平台选择  │  │
+│             │   ┌──────────────────────┐   │  │ 器        │  │
+│             │   │ 操作按钮区            │   │  └──────────┘  │
+│             │   └──────────────────────┘   │  ┌──────────┐  │
+│             │                              │  │ 发布按钮  │  │
+│             │                              │  └──────────┘  │
+└─────────────┴──────────────────────────────┴────────────────┘
 ```
 
 ---
 
-## 项目结构
+## 🎯 核心功能清单
+
+### 已实现功能
+- ✅ **素材上传**：拖拽或点击上传图片/视频
+- ✅ **AI 内容生成**：根据文字想法或上传的素材，自动生成标题和简介
+- ✅ **AI 润色**：优化标题和简介的文字表达
+- ✅ **天气内容**：查询城市天气，一键生成天气相关的自媒体内容
+- ✅ **多平台发布**：选择平台，提交发布任务
+- ✅ **关键词管理**：标签式关键词输入
+- ✅ **内容清空**：一键清空所有输入内容
+
+### 开发中功能
+- 🔄 **电子桌面应用**：支持本地文件选择和系统托盘
+- 🔄 **平台实际发布**：对接各平台 API 实现自动发布
+- 🔄 **任务中心**：查看发布历史和状态
+- 🔄 **更多工具**：图片编辑、视频剪辑辅助等
+
+---
+
+## 💻 技术架构（给开发者看）
+
+### 系统结构
+
+```
+                   浏览器 (http://localhost:3000)
+                           │
+                    Vite 开发服务器 (代理 /api)
+                           │
+              ┌────────────▼───────────┐
+              │    Go 后端 (端口 8080)   │
+              │                         │
+              │  ┌───────────────────┐  │
+              │  │  Publish 发布模块   │  │ ← 用户直接使用的功能
+              │  │  · 内容发布         │  │
+              │  │  · AI 生成/润色     │  │
+              │  │  · 天气查询         │  │
+              │  └───────────────────┘  │
+              │  ┌───────────────────┐  │
+              │  │  Orchestrator 调度  │  │ ← 任务调度引擎
+              │  │  Worker 工具执行    │  │ ← 调用 AI、执行命令
+              │  │  Context 审计记录   │  │ ← 记录操作历史
+              │  └───────────────────┘  │
+              │                         │
+              └────────────┬────────────┘
+                           │
+        ┌──────────────────┼──────────────────┐
+        │                  │                  │
+   PostgreSQL          Redis              Redpanda
+   (数据存储)          (缓存)             (事件消息)
+```
+
+### 技术栈
+
+| 组件 | 技术 | 做什么 |
+|------|------|--------|
+| 前端 | React + TypeScript + TailwindCSS | 用户操作界面 |
+| 后端 | Go + Gin 框架 | 处理所有业务逻辑 |
+| 数据库 | PostgreSQL 16 | 存储用户数据和任务 |
+| 缓存 | Redis 7 | 临时数据加速 |
+| 消息队列 | Redpanda (Kafka 兼容) | 模块间通信 |
+| AI 能力 | OpenAI 兼容 API | 内容生成和润色 |
+
+### 目录结构
 
 ```
 lingxi-ai-operation-system/
-├── cmd/lingxi-ai-os/           # 入口: main.go (服务组装 + 优雅关闭)
-├── internal/
-│   ├── config/                 # Viper 配置 (.env 支持)
-│   ├── database/               # pgx 连接池 + Schema 迁移
-│   ├── eventbus/               # Kafka 生产者/消费者 (Sarama)
-│   ├── logger/                 # Zap 日志 (dev/prod)
-│   ├── model/                  # 数据模型 + 仓储层
-│   │   └── repository/         # pgx CRUD 操作
-│   ├── outbox/                 # Outbox 模式 (事件先写 DB 再转发 Kafka)
-│   │   └── relay.go            # Relay 协程 + SaveEvent 写入
-│   ├── redis/                  # go-redis 客户端
-│   ├── orchestrator/
-│   │   ├── handler/            # Gin HTTP 处理器
-│   │   └── service/            # 状态机 + 调度器 + 依赖检查 + 条件分支
-│   ├── translator/
-│   │   ├── handler/            # Gin HTTP 处理器
-│   │   └── service/            # NL → DAG 翻译
-│   ├── context/
-│   │   ├── handler/            # Gin HTTP 处理器
-│   │   └── service/            # 上下文/快照管理
-│   └── worker/
-│       ├── service/            # 节点执行引擎
-│       └── tool/
-│           ├── builtin/        # BashTool(沙箱), LlmApiTool, WeatherTool
-│           └── tool_test.go    # 工具测试
-├── frontend/                   # 前端项目 (React/Vue 等)
-│   ├── src/
-│   │   ├── components/        # UI 组件
-│   │   ├── pages/              # 页面
-│   │   ├── hooks/              # 自定义 Hooks
-│   │   ├── utils/              # 工具函数
-│   │   ├── services/           # API 服务
-│   │   ├── stores/             # 状态管理
-│   │   ├── styles/             # 样式文件
-│   │   └── assets/             # 静态资源
-│   └── public/                 # 公共资源
-├── scripts/
-│   ├── install_lingxi_env.sh   # 环境安装脚本
-│   ├── startup.sh              # 后端启动脚本
-│   └── test-apis.sh            # API 测试脚本
-├── docs/
-│   ├── ARCHITECTURE.md         # 架构设计文档
-│   ├── API_REFERENCE.md        # API 接口文档
-│   └── ONBOARDING.md           # Go 新手上路指南
-├── docker-compose.yml          # 基础设施容器
-├── Dockerfile                  # 多阶段构建 (后端)
-├── Makefile                    # 常用命令
-├── go.mod / go.sum             # Go 依赖管理
-└── .env.example                # 环境变量模板
+├── cmd/lingxi-ai-os/main.go      # ★ 后端启动入口
+├── internal/                      # 后端代码
+│   ├── publish/                   # ★ 发布模块（核心业务）
+│   │   ├── handler/               #   HTTP 接口
+│   │   └── service/               #   业务逻辑
+│   ├── orchestrator/              #   任务调度引擎
+│   ├── worker/                    #   工具执行引擎
+│   ├── translator/                #   自然语言翻译
+│   ├── context/                   #   上下文审计
+│   ├── config/                    #   配置管理
+│   ├── database/                  #   数据库连接
+│   ├── eventbus/                  #   消息队列
+│   └── outbox/                    #   事件可靠性保障
+├── frontend/                      # ★ 前端代码
+│   └── src/
+│       ├── components/            #   界面组件
+│       │   ├── UploadCard.tsx     #     上传素材卡片
+│       │   ├── TitleInput.tsx     #     标题输入
+│       │   ├── DescriptionInput.tsx#    简介输入
+│       │   ├── WeatherCard.tsx    #     天气查询卡片
+│       │   ├── AIHelperPanel.tsx  #     AI 助手面板
+│       │   ├── PlatformSelector.tsx#   平台选择器
+│       │   ├── PublishButton.tsx  #     发布按钮
+│       │   └── Sidebar.tsx        #     侧边导航
+│       ├── pages/
+│       │   └── PublishPage.tsx    #   主页面
+│       ├── services/api.ts        #   API 调用
+│       ├── stores/appStore.ts     #   状态管理
+│       └── utils/types.ts         #   类型定义
+├── docs/                          # 文档
+├── scripts/                       # 启动脚本
+└── docker-compose.yml             # 基础设施容器
 ```
 
 ---
 
-## 环境配置
+## 🛠️ 快速开发指南
+
+### 环境要求
+
+| 工具 | 版本要求 | 安装方法 |
+|------|---------|---------|
+| Go | 1.23+ | `brew install go`（Mac）或访问 [go.dev](https://go.dev/dl/) |
+| Node.js | 18+ | `brew install node` 或访问 [nodejs.org](https://nodejs.org/) |
+| Docker | 20+ | `brew install --cask docker` 或访问 [docker.com](https://www.docker.com/) |
+
+### 一键启动
 
 ```bash
+# 1. 进入项目目录
+cd lingxi-ai-operation-system
+
+# 2. 配置环境变量
 cp .env.example .env
+# 编辑 .env 文件，填入你的 OPENAI_API_KEY
+
+# 3. 一键启动（会启动所有服务）
+bash ./scripts/startup.sh
 ```
 
-必要配置:
-- `OPENAI_API_KEY` - LLM 服务的 API Key
-- `OPENAI_BASE_URL` - LLM 服务的基础 URL
-- `POSTGRES_PASSWORD` - PostgreSQL 密码
+### 分步启动
+
+```bash
+# 终端 1：启动基础设施（PostgreSQL、Redis、消息队列等）
+docker compose up -d
+
+# 终端 2：构建并启动后端（端口 8080）
+make run
+
+# 终端 3：启动前端开发服务器（端口 3000）
+cd frontend && npm install && npm run dev
+```
+
+### 常用命令
+
+```bash
+make build    # 构建后端
+make run      # 构建并运行
+make test     # 运行测试
+make tidy     # 整理依赖
+make fmt      # 格式化代码
+```
+
+### API 测试
+
+```bash
+# 一键测试所有 API
+bash ./scripts/test-apis.sh
+
+# 或逐个测试
+curl http://localhost:8080/api/health                    # 健康检查
+curl -X POST http://localhost:8080/api/ai/generate \      # AI 生成
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"周末去哪儿玩"}'
+curl "http://localhost:8080/api/weather/query?city=北京"   # 天气查询
+```
 
 ---
 
-## 文档索引
+## 📚 文档索引
 
-| 文档 | 内容 | 难度 |
+| 文档 | 适合谁 | 内容 |
+|------|--------|------|
+| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 开发者 | 系统架构、模块设计、数据流 |
+| **[API_REFERENCE.md](docs/API_REFERENCE.md)** | 开发者/测试 | 所有 API 接口详细说明 |
+| **[ONBOARDING.md](docs/ONBOARDING.md)** | 新开发者 | 从零上手项目开发 |
+
+### 其他文档
+- `docs/prompts/` - 开发过程中的设计方案和讨论记录
+
+---
+
+## ❓ 常见问题
+
+### 我不会技术，能用这个项目吗？
+项目的界面在浏览器中运行，操作方式类似普通网站。但**需要技术人员先帮你完成一次启动**。启动后你只需打开浏览器使用即可。
+
+### AI 功能需要付费吗？
+AI 功能依赖 OpenAI 兼容的 API 服务，你需要自行获取 API Key 并配置在 `.env` 文件中。API 服务通常需要付费，但很多平台提供免费额度。
+
+### 支持哪些自媒体平台？
+目前支持：**抖音**、**小红书**。（其他如快手、B站、微信视频号等正在开发中）
+
+### 上传的文件会保存到哪里？
+文件会上传到后端服务器，存储在临时目录中。正式使用时建议配置对象存储（如 MinIO 或云存储）。
+
+### 数据存储在哪里？
+所有数据存储在本地 PostgreSQL 数据库中（Docker 容器内）。数据库文件在 Docker 数据卷中。
+
+### 如何关闭服务？
+按 `Ctrl+C` 可以停止所有服务。要完全清理，执行 `docker compose down`。
+
+---
+
+## 📝 环境变量说明
+
+配置文件 `.env` 中的关键设置：
+
+| 变量 | 必填 | 说明 |
 |------|------|------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计详解 | ⭐⭐ |
-| [API_REFERENCE.md](docs/API_REFERENCE.md) | API 接口文档 | ⭐ |
-| [ONBOARDING.md](docs/ONBOARDING.md) | Go 新手上路指南 | ⭐ |
+| `OPENAI_API_KEY` | **是** | AI 服务的 API 密钥 |
+| `OPENAI_BASE_URL` | 否 | AI 服务地址（默认 OpenAI） |
+| `OPENAI_MODEL` | 否 | 使用的 AI 模型 |
+| `SERVER_PORT` | 否 | 后端端口（默认 8080） |
+| `POSTGRES_PASSWORD` | 否 | 数据库密码 |
 
 ---
 
-## 常见问题
-
-**Q: AIOS 和传统操作系统有什么区别？**
-A: 传统操作系统需要用户通过 GUI 点击操作，AIOS 让用户用自然语言直接操作硬件、中间件和应用。
-
-**Q: 为什么用 Go 重写？**
-A: Go 编译为单二进制、启动快、内存占用低、并发原生支持，适合部署为轻量级 AI 操作系统。
-
-**Q: 需要多个服务端口吗？**
-A: 不需要。Go 版本采用模块化单体架构，所有模块运行在同一个进程的 8080 端口。
-
-**Q: NL-Translator 返回 503？**
-A: 检查 `.env` 中的 `OPENAI_API_KEY` 是否配置正确。
-
-**Q: 如何添加自定义工具？**
-A: 实现 `Tool` 接口（Name, Description, Type, Execute, ValidateParameters），然后注册到 `ToolRegistry`。参见 [ONBOARDING.md](docs/ONBOARDING.md)。
-
-**Q: Bash 工具安全吗？**
-A: BashTool 运行在沙箱环境中，只允许白名单命令，过滤危险模式（管道、重定向、命令链等），工作目录限制在 `/tmp/ai-sandbox`。
-
-**Q: 事件会丢失吗？**
-A: 不会。系统使用 Outbox 模式，事件先写入数据库 outbox 表，再由 Relay 协程异步转发到 Kafka，保证事件不丢。
-
-**Q: 如何实现条件分支？**
-A: 在 DAG 节点的 `condition` 字段中指定条件（如 `"nodeA.status == success"`），不满足条件的节点会自动标记为 SKIPPED，下游依赖仍可正常推进。
-
----
-
-## License
+## 📄 License
 
 MIT License

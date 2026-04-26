@@ -84,7 +84,7 @@ func (h *ContextHandler) RecordContext(c *gin.Context) {
 	}
 
 	err := h.contextService.RecordContext(c.Request.Context(), request.TaskID, request.NodeID,
-		model.ContextType(request.Type), request.Message, nil)
+		model.ContextType(request.Type), "", request.Message, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

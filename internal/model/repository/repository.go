@@ -72,6 +72,40 @@ func (r *TaskRepository) UpdateStatus(ctx context.Context, id string, status mod
 	return err
 }
 
+func (r *TaskRepository) FindRecent(ctx context.Context) (*model.Task, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT id, user_id, status, input, output, pause_reason, created_at FROM ai_task ORDER BY created_at DESC LIMIT 1`,
+	)
+
+	var task model.Task
+	var input, output []byte
+	var userID *string
+	var pauseReason *string
+
+	if err := row.Scan(&task.ID, &userID, &task.Status, &input, &output, &pauseReason, &task.CreatedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if userID != nil {
+		task.UserID = *userID
+	}
+	if pauseReason != nil {
+		task.PauseReason = *pauseReason
+	}
+
+	if len(input) > 0 {
+		_ = json.Unmarshal(input, &task.Input)
+	}
+	if len(output) > 0 {
+		_ = json.Unmarshal(output, &task.Output)
+	}
+
+	return &task, nil
+}
+
 type NodeRepository struct {
 	pool *pgxpool.Pool
 }
@@ -341,9 +375,9 @@ func (r *ContextRepository) Save(ctx context.Context, c *model.Context) error {
 
 	var id int64
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO ai_context (context_type, task_id, node_id, metadata, message, snapshot_data, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-		string(c.ContextType), c.TaskID, c.NodeID, metadata, c.Message, snapshot, c.CreatedAt,
+		`INSERT INTO ai_context (context_type, task_id, node_id, metadata, message, snapshot_data, source_module, source_topic, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		string(c.ContextType), c.TaskID, c.NodeID, metadata, c.Message, snapshot, c.SourceModule, c.SourceTopic, c.CreatedAt,
 	).Scan(&id)
 
 	c.ID = id
@@ -352,7 +386,7 @@ func (r *ContextRepository) Save(ctx context.Context, c *model.Context) error {
 
 func (r *ContextRepository) FindByTaskID(ctx context.Context, taskID string) ([]*model.Context, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, context_type, task_id, node_id, metadata, message, snapshot_data, created_at
+		`SELECT id, context_type, task_id, node_id, metadata, message, snapshot_data, source_module, source_topic, created_at
 		 FROM ai_context WHERE task_id=$1 ORDER BY created_at`, taskID,
 	)
 	if err != nil {
@@ -366,7 +400,7 @@ func (r *ContextRepository) FindByTaskID(ctx context.Context, taskID string) ([]
 		var metadata, snapshot []byte
 		var nodeID *string
 
-		if err := rows.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeID, &metadata, &c.Message, &snapshot, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeID, &metadata, &c.Message, &snapshot, &c.SourceModule, &c.SourceTopic, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 
@@ -388,7 +422,7 @@ func (r *ContextRepository) FindByTaskID(ctx context.Context, taskID string) ([]
 
 func (r *ContextRepository) FindLatestSnapshotByNodeID(ctx context.Context, nodeID string) (*model.Context, error) {
 	row := r.pool.QueryRow(ctx,
-		`SELECT id, context_type, task_id, node_id, metadata, message, snapshot_data, created_at
+		`SELECT id, context_type, task_id, node_id, metadata, message, snapshot_data, source_module, source_topic, created_at
 		 FROM ai_context WHERE node_id=$1 AND snapshot_data IS NOT NULL
 		 ORDER BY created_at DESC LIMIT 1`, nodeID,
 	)
@@ -397,7 +431,7 @@ func (r *ContextRepository) FindLatestSnapshotByNodeID(ctx context.Context, node
 	var metadata, snapshot []byte
 	var nodeIDVal *string
 
-	if err := row.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeIDVal, &metadata, &c.Message, &snapshot, &c.CreatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeIDVal, &metadata, &c.Message, &snapshot, &c.SourceModule, &c.SourceTopic, &c.CreatedAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}

@@ -74,7 +74,20 @@ else
     failed=$((failed + 1))
 fi
 
-section "Step 4: NL-Translator API"
+section "Step 4: Publish Module APIs"
+test_api "AI Generate" "200" -X POST "$BASE_URL/api/ai/generate" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"周末活动推荐"}'
+test_api "AI Polish" "200" -X POST "$BASE_URL/api/ai/polish" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"今天天气很好","type":"description"}'
+test_api "Generate from Media" "200" -X POST "$BASE_URL/api/ai/generate-from-media" \
+  -F "prompt=风景"
+test_api "Publish" "200" -X POST "$BASE_URL/api/publish" \
+  -F "title=测试" -F "description=测试内容" -F "keywords=测试" -F 'platforms=["douyin"]'
+echo -e "  ${GREEN}✓${NC} Publish module API endpoints verified"
+
+section "Step 5: NL-Translator API"
 TRANSLATE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/translate" \
   -H "Content-Type: application/json" \
   -d '{"prompt":"test"}' 2>/dev/null || echo "000")

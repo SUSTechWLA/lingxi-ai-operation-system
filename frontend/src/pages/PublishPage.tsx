@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import UploadCard from '../components/UploadCard'
 import TitleInput from '../components/TitleInput'
 import DescriptionInput from '../components/DescriptionInput'
@@ -8,8 +8,9 @@ import PlatformSelector from '../components/PlatformSelector'
 import PublishButton from '../components/PublishButton'
 import DesktopToolbar from '../components/DesktopToolbar'
 import { useAppStore } from '../stores/appStore'
-import { publishContent, aiGenerateContent, aiPolishText } from '../services/api'
+import { publishContent, aiGenerateContent, aiGenerateFromMedia, aiPolishText, fetchRecentTrace } from '../services/api'
 import { isElectron } from '../utils/electron'
+import type { AIPolishData, TraceData } from '../utils/types'
 
 const PublishPage: React.FC = () => {
   const {
@@ -26,28 +27,87 @@ const PublishPage: React.FC = () => {
     clearAll,
   } = useAppStore()
 
-  const [showToast, setShowToast] = useState(false)
-  const [toastMessage, setToastMessage] = useState('')
-  const [toastType, setToastType] = useState<'success' | 'error'>('success')
+  const [showResult, setShowResult] = useState(false)
+  const [resultMessage, setResultMessage] = useState('')
+  const [resultType, setResultType] = useState<'success' | 'error'>('success')
+  const [isAILoading, setIsAILoading] = useState(false)
+  const [aiLoadingMessage, setAILoadingMessage] = useState('')
+  const [aiProgressText, setAIProgressText] = useState('')
+  const [showDebugTrace, setShowDebugTrace] = useState(false)
+  const [debugTraceData, setDebugTraceData] = useState<TraceData | null>(null)
+  const [debugLoading, setDebugLoading] = useState(false)
 
-  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
-    setToastMessage(message)
-    setToastType(type)
-    setShowToast(true)
-    setTimeout(() => setShowToast(false), 3000)
+  const handleDebugTrace = async () => {
+    setDebugLoading(true)
+    try {
+      const data = await fetchRecentTrace()
+      setDebugTraceData(data)
+      setShowDebugTrace(true)
+    } catch (e) {
+      console.error('Failed to fetch recent trace', e)
+    } finally {
+      setDebugLoading(false)
+    }
   }
+
+  const showResultPopup = (message: string, type: 'success' | 'error' = 'success') => {
+    setResultMessage(message)
+    setResultType(type)
+    setShowResult(true)
+    setTimeout(() => setShowResult(false), 2500)
+  }
+
+  const startAILoading = (message: string) => {
+    setIsAILoading(true)
+    setAILoadingMessage(message)
+    setAIProgressText('准备中...')
+  }
+
+  const stopAILoading = () => {
+    setIsAILoading(false)
+    setAILoadingMessage('')
+    setAIProgressText('')
+  }
+
+  // Animated progress dots during AI loading
+  const [progressDots, setProgressDots] = useState('')
+  useEffect(() => {
+    if (!isAILoading) {
+      setProgressDots('')
+      return
+    }
+    const interval = setInterval(() => {
+      setProgressDots(prev => prev.length >= 3 ? '' : prev + '.')
+    }, 500)
+    return () => clearInterval(interval)
+  }, [isAILoading])
 
   const handleAIGenerate = async () => {
     try {
-      showNotification('AI正在生成内容，请稍候...')
       const prompt = title || description || '自媒体内容创作'
-      const result = await aiGenerateContent(prompt)
-      if (result.title) setTitle(result.title)
-      if (result.description) setDescription(result.description)
-      showNotification('AI内容生成成功！')
+      const hasMedia = images.length > 0 || videos.length > 0
+      startAILoading(hasMedia ? 'AI 正在分析媒体素材并生成内容' : 'AI 正在生成内容')
+
+      // Use media-based generation if images or videos are uploaded
+      if (images.length > 0 || videos.length > 0) {
+        setAIProgressText('正在分析上传的图片和视频...')
+        const imageFiles = images.map((i) => i.file)
+        const videoFiles = videos.map((v) => v.file)
+        const result = await aiGenerateFromMedia(prompt, imageFiles, videoFiles)
+        if (result.title) setTitle(result.title)
+        if (result.description) setDescription(result.description)
+      } else {
+        setAIProgressText('AI 正在思考创作内容...')
+        const result = await aiGenerateContent(prompt)
+        if (result.title) setTitle(result.title)
+        if (result.description) setDescription(result.description)
+      }
+      stopAILoading()
+      showResultPopup('AI 内容生成成功！')
     } catch (error) {
       console.error('AI生成失败:', error)
-      showNotification('AI生成失败，请重试', 'error')
+      stopAILoading()
+      showResultPopup('AI 生成失败，请重试', 'error')
     }
   }
 
@@ -55,20 +115,23 @@ const PublishPage: React.FC = () => {
     try {
       const text = type === 'title' ? title : description
       if (!text.trim()) {
-        showNotification(`请先输入${type === 'title' ? '标题' : '简介'}内容`, 'error')
+        showResultPopup(`请先输入${type === 'title' ? '标题' : '简介'}内容`, 'error')
         return
       }
-      showNotification('AI正在优化内容，请稍候...')
-      const polished = await aiPolishText(text, type)
+      startAILoading(`AI 正在润色${type === 'title' ? '标题' : '简介'}`)
+      setAIProgressText('AI 正在优化文字表达...')
+      const result: AIPolishData = await aiPolishText(text, type)
       if (type === 'title') {
-        setTitle(polished)
+        setTitle(result.content)
       } else {
-        setDescription(polished)
+        setDescription(result.content)
       }
-      showNotification('AI润色完成！')
+      stopAILoading()
+      showResultPopup('AI 润色完成！')
     } catch (error) {
       console.error('AI润色失败:', error)
-      showNotification('AI润色失败，请重试', 'error')
+      stopAILoading()
+      showResultPopup('AI 润色失败，请重试', 'error')
     }
   }
 
@@ -76,17 +139,17 @@ const PublishPage: React.FC = () => {
     const selectedPlatforms = getSelectedPlatforms()
 
     if (selectedPlatforms.length === 0) {
-      showNotification('请至少选择一个发布平台', 'error')
+      showResultPopup('请至少选择一个发布平台', 'error')
       return
     }
 
     if (!title.trim()) {
-      showNotification('请输入标题', 'error')
+      showResultPopup('请输入标题', 'error')
       return
     }
 
     if (!description.trim()) {
-      showNotification('请输入简介', 'error')
+      showResultPopup('请输入简介', 'error')
       return
     }
 
@@ -105,10 +168,10 @@ const PublishPage: React.FC = () => {
         imageFiles
       )
 
-      showNotification(`发布任务已创建！任务ID: ${result.taskId}`)
+      showResultPopup(`发布任务已创建！任务ID: ${result.taskId}`)
     } catch (error) {
       console.error('发布失败:', error)
-      showNotification('发布失败，请重试', 'error')
+      showResultPopup('发布失败，请重试', 'error')
     } finally {
       setIsPublishing(false)
     }
@@ -116,24 +179,66 @@ const PublishPage: React.FC = () => {
 
   const handleClear = () => {
     clearAll()
-    showNotification('内容已清空')
+    showResultPopup('内容已清空')
   }
 
   const selectedCount = getSelectedPlatforms().length
 
   return (
     <div className="flex min-h-screen bg-background">
-      {showToast && (
-        <div className="fixed top-4 right-4 z-50 animate-slide-in">
-          <div className="bg-white rounded-xl shadow-lg border border-gray-100 px-6 py-4 flex items-center gap-3">
-            <svg className={`w-5 h-5 ${toastType === 'error' ? 'text-red-500' : 'text-green-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              {toastType === 'error' ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      {/* AI loading overlay */}
+      {isAILoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-96 p-8 flex flex-col items-center gap-6 animate-in">
+            {/* Animated spinner */}
+            <div className="relative w-16 h-16">
+              <div className="absolute inset-0 rounded-full border-4 border-gray-100"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-primary animate-spin"></div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <svg className="w-7 h-7 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+            </div>
+
+            {/* Message */}
+            <div className="text-center">
+              <p className="text-base font-semibold text-gray-800">{aiLoadingMessage}</p>
+              <p className="text-sm text-gray-500 mt-1">
+                {aiProgressText}{progressDots}
+              </p>
+            </div>
+
+            {/* Animated progress bar */}
+            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-primary via-purple-500 to-primary rounded-full animate-progress"></div>
+            </div>
+
+            <p className="text-xs text-gray-400">请耐心等待，不要关闭页面</p>
+          </div>
+        </div>
+      )}
+
+      {/* Result popup overlay */}
+      {showResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setShowResult(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 min-w-[300px] animate-in" onClick={(e) => e.stopPropagation()}>
+            <div className={`w-16 h-16 rounded-full flex items-center justify-center ${
+              resultType === 'error' ? 'bg-red-100' : 'bg-green-100'
+            }`}>
+              {resultType === 'error' ? (
+                <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
               ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
               )}
-            </svg>
-            <span className="text-sm text-gray-700">{toastMessage}</span>
+            </div>
+            <p className={`text-lg font-semibold ${
+              resultType === 'error' ? 'text-red-700' : 'text-green-700'
+            }`}>{resultMessage}</p>
           </div>
         </div>
       )}
@@ -231,6 +336,44 @@ const PublishPage: React.FC = () => {
           </div>
         </aside>
       </div>
+
+      {/* Debug: float button for recent trace */}
+      <button
+        onClick={handleDebugTrace}
+        disabled={debugLoading}
+        className="fixed bottom-6 right-6 z-40 w-10 h-10 bg-gray-800 text-white rounded-full shadow-lg hover:bg-gray-700 flex items-center justify-center text-xs opacity-50 hover:opacity-100 transition-opacity"
+        title="查看最近任务追踪"
+      >
+        {debugLoading ? '…' : '🔍'}
+      </button>
+
+      {/* Debug trace modal */}
+      {showDebugTrace && debugTraceData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowDebugTrace(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-y-auto m-4" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-gray-800">任务追踪</span>
+                <span className="text-xs text-gray-400 font-mono">{debugTraceData.task.taskId}</span>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                  debugTraceData.task.status === 'SUCCESS' ? 'bg-green-100 text-green-700' :
+                  debugTraceData.task.status === 'FAILED' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                }`}>{debugTraceData.task.status}</span>
+              </div>
+              <button onClick={() => setShowDebugTrace(false)} className="p-1.5 hover:bg-gray-100 rounded-lg">
+                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6">
+              <pre className="text-xs text-gray-700 bg-gray-50 rounded-xl p-4 overflow-x-auto max-h-[60vh] font-mono whitespace-pre-wrap break-all">
+                {JSON.stringify(debugTraceData, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

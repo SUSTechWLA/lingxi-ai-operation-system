@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -85,22 +86,26 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		RetryCount: 0,
 	}
 
+	startTime := time.Now()
 	_ = ne.producer.Publish(eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
 		Status: "RUNNING",
+		Output: map[string]interface{}{
+			"startedAt": startTime.Format(time.RFC3339Nano),
+		},
 	})
 
 	t, found := ne.toolRegistry.Get(toolName)
 	if !found {
 		errMsg := fmt.Sprintf("Tool not found: %s", toolName)
-		ne.publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey)
+		ne.publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey, nil)
 		return
 	}
 
 	if !t.ValidateParameters(parameters) {
 		errMsg := fmt.Sprintf("Invalid parameters for tool: %s", toolName)
-		ne.publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey)
+		ne.publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey, nil)
 		return
 	}
 
@@ -134,10 +139,10 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		select {
 		case toolResult := <-resultCh:
 			if toolResult.Success {
-				output := fmt.Sprintf("%v", toolResult.Data)
+				output, _ := json.Marshal(toolResult.Data)
 				result = executor.ExecutionResult{
 					ExitCode: 0,
-					Stdout:   []byte(output),
+					Stdout:   output,
 				}
 			} else {
 				result = executor.ExecutionResult{
@@ -155,27 +160,38 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		result.Error = "tool does not implement any executable interface"
 	}
 
+	durationMs := time.Since(startTime).Milliseconds()
+
 	if result.Error != "" || execErr != nil {
 		if result.Error == "" {
 			result.Error = execErr.Error()
 		}
-		ne.publishFailure(taskID, nodeID, traceID, result.Error, idempotencyKey)
+		failureData := map[string]interface{}{
+			"exitCode":   result.ExitCode,
+			"durationMs": durationMs,
+			"error":      result.Error,
+		}
+		if result.ResourceUsage != nil {
+			failureData["resourceUsage"] = result.ResourceUsage
+		}
+		ne.publishFailure(taskID, nodeID, traceID, result.Error, idempotencyKey, failureData)
 		return
 	}
 
-	outputData := map[string]interface{}{
-		"exitCode": result.ExitCode,
-		"stdout":   string(result.Stdout),
-		"stderr":   string(result.Stderr),
+	data := map[string]interface{}{
+		"exitCode":   result.ExitCode,
+		"stdout":     string(result.Stdout),
+		"stderr":     string(result.Stderr),
+		"durationMs": durationMs,
 	}
 	if result.ResourceUsage != nil {
-		outputData["resourceUsage"] = result.ResourceUsage
+		data["resourceUsage"] = result.ResourceUsage
 	}
 	if result.OutputRef != "" {
-		outputData["outputRef"] = result.OutputRef
+		data["outputRef"] = result.OutputRef
 	}
 
-	ne.publishSuccess(taskID, nodeID, traceID, outputData, idempotencyKey)
+	ne.publishSuccess(taskID, nodeID, traceID, data, idempotencyKey)
 }
 
 func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[string]interface{}, idempotencyKey string) {
@@ -201,7 +217,7 @@ func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[
 	zap.L().Info("Node execution succeeded", zap.String("nodeId", nodeID))
 }
 
-func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey string) {
+func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey string, data map[string]interface{}) {
 	result := model.NodeResultEvent{
 		TaskID:         taskID,
 		NodeID:         nodeID,
@@ -215,11 +231,15 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 		TaskID:         result.TaskID,
 		NodeID:         result.NodeID,
 		Status:         string(result.Status),
+		Output:         data,
 		TraceID:        result.TraceID,
 		ErrorMessage:   result.ErrorMessage,
 		IdempotencyKey: result.IdempotencyKey,
 	}
 
 	_ = ne.producer.Publish(eventbus.TopicNodeResult, idempotencyKey, event)
-	zap.L().Info("Node execution failed", zap.String("nodeId", nodeID), zap.String("error", errMsg))
+	zap.L().Info("Node execution failed",
+		zap.String("nodeId", nodeID),
+		zap.String("error", errMsg),
+	)
 }

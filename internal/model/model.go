@@ -94,6 +94,8 @@ type Context struct {
 	ContextType  ContextType            `json:"contextType"`
 	TaskID       string                 `json:"taskId,omitempty"`
 	NodeID       string                 `json:"nodeId,omitempty"`
+	SourceModule string                 `json:"sourceModule,omitempty"`
+	SourceTopic  string                 `json:"sourceTopic,omitempty"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 	Message      string                 `json:"message,omitempty"`
 	SnapshotData map[string]interface{} `json:"snapshotData,omitempty"`
