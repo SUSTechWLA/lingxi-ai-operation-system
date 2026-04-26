@@ -57,10 +57,10 @@
 │  │  (用户交互层)  │  │  调度引擎         │  │  工具执行     │             │
 │  │               │  │                   │  │               │             │
 │  │  PublishSvc   │  │  StateService     │  │  NodeExecutor  │             │
-│  │  WeatherSvc   │  │  StateMachine     │  │  ToolRegistry  │             │
+│  │  TraceHandler │  │  StateMachine     │  │  ToolRegistry  │             │
 │  │  AI Generate  │  │  DependencyChecker│  │  BashTool      │             │
 │  │  AI Polish    │  │  Scheduler        │  │  LlmApiTool    │             │
-│  │               │  │  RetryPolicy      │  │  WeatherTool   │             │
+│  │               │  │  RetryPolicy      │  │  PolisherTool  │             │
 │  └──────┬────────┘  └──────┬────────────┘  └──────┬─────────┘             │
 │         │                 │                       │                       │
 │  ┌──────▼─────────────────▼───────────────────────▼──────────┐           │
@@ -122,7 +122,9 @@ PublishHandler (HTTP 路由)
 ├── POST /api/ai/generate           → AI 生成标题+简介
 ├── POST /api/ai/generate-from-media → 基于图片/视频的 AI 生成
 ├── POST /api/ai/polish             → AI 润色文字
-└── GET  /api/weather/query         → 天气查询
+├── GET  /api/weather/query         → 天气查询
+├── GET  /api/trace/recent          → 查询最近一次任务追踪
+└── GET  /api/trace/:taskId         → 查询指定任务追踪
 
 PublishService (业务逻辑)
 ├── PublishContent()    → 创建 DAG 任务，使用 LLM 润色后发布
@@ -131,9 +133,9 @@ PublishService (业务逻辑)
 ├── AIPolishText()      → 调用 LLM 润色指定文本
 └── callOpenAI()        → 通用 OpenAI API 调用封装
 
-WeatherService (天气服务)
-├── QueryWeather() → 调用 WeatherTool 查询城市天气（模拟数据）
-└── WeatherQueryResult → 天气查询返回结构
+TraceHandler (追踪查询)
+├── GET /api/trace/recent    → 查询最近一次任务的完整链路数据（任务详情 + 上下文列表）
+└── GET /api/trace/:taskId   → 查询指定任务的完整链路数据
 
 PublishRequest → PublishResponse 流程：
   1. 用户提交表单（标题 + 简介 + 关键词 + 平台 + 媒体文件）
@@ -248,9 +250,21 @@ type Tool interface {
 |--------|------|------|------|
 | `llm_api` | LLM | AI 调用 | 调用 OpenAI 兼容 API 进行文本生成和润色 |
 | `bash` | CUSTOM | Shell 执行 | 沙箱执行 Shell 命令（白名单+危险过滤） |
-| `weather` | CUSTOM | 天气查询 | 模拟天气数据查询（示例工具） |
+| `polisher` | CUSTOM | 文本润色 | 调用 LLM 对标题或简介进行润色优化 |
 
 **BashTool 安全**：命令白名单 + 危险模式过滤 + `/tmp/ai-sandbox` 沙箱目录。
+
+**执行监控**：Worker 在每个节点执行时自动记录以下指标到事件输出中：
+
+| 字段 | 说明 | 示例 |
+|------|------|------|
+| `startedAt` | 节点开始执行的时间戳 | `"2026-04-26T23:13:21.048766+08:00"` |
+| `durationMs` | 执行耗时（毫秒） | `12543` |
+| `exitCode` | 进程退出码 | `0` |
+| `error` | 错误信息（失败时） | `"command not found"` |
+| `resourceUsage` | 资源使用统计（占位，待沙箱集成后扩展） | `{"memory": ..., "cpu": ...}` |
+
+这些指标通过 Kafka 事件传递到 Context 服务，存入 `ai_context.metadata` 字段，供审计和调试使用。
 
 ### 2.4 NL-Translator — 自然语言翻译器
 
@@ -262,7 +276,34 @@ type Tool interface {
 
 **职责**：记录所有状态变更事件，提供快照恢复能力。
 
-记录的事件类型：`TASK_CREATED`, `NODE_SUCCESS`, `NODE_FAILED`, `NODE_RETRY`, `TASK_COMPLETED` 等。
+**上下文记录结构**：
+
+```go
+type Context struct {
+    ID           int64                  // 自增主键
+    ContextType  ContextType            // 事件类型
+    TaskID       string                 // 关联任务 ID
+    NodeID       string                 // 关联节点 ID（可选）
+    SourceModule string                 // 来源模块（Orchestrator / StateMachine / ContextService）
+    SourceTopic  string                 // 来源 Kafka Topic（仅 ContextService 消费的事件有值）
+    Metadata     map[string]interface{} // 元数据（含 inputPreview/outputPreview/执行指标等）
+    Message      string                 // 可读描述（纯文本，不含模块前缀）
+    SnapshotData map[string]interface{} // 快照数据
+    CreatedAt    time.Time              // 记录时间
+}
+```
+
+**上下文生产来源**：
+
+| 来源模块 | 写入方式 | 记录的上下文类型 |
+|---------|---------|----------------|
+| OrchestratorService | 直接 DB 写入 | TASK_CREATED, DAG_VALIDATED, DAG_SUBMITTED |
+| StateMachine | 直接 DB 写入 | NODE_READY, NODE_SUCCESS, NODE_FAILED, NODE_SKIPPED, TASK_SUCCESS, TASK_FAILED |
+| ContextService | 从 Kafka 事件消费 | NODE_SCHEDULED, NODE_SUCCESS, NODE_FAILED（从 ai.node.result 和 ai.node.failed 主题） |
+
+**执行监控数据提取**：ContextService 在消费 Kafka 事件时，从事件 Output 中提取执行指标（`startedAt`, `durationMs`, `exitCode`, `error`, `resourceUsage`）写入上下文记录的 Metadata 字段，实现审计链路中的执行性能可见性。
+
+记录的事件类型：`TASK_CREATED`, `DAG_VALIDATED`, `DAG_SUBMITTED`, `NODE_READY`, `NODE_SCHEDULED`, `NODE_SUCCESS`, `NODE_FAILED`, `NODE_SKIPPED`, `TASK_SUCCESS`, `TASK_FAILED`, `SNAPSHOT`, `CUSTOM`。
 
 ---
 
@@ -294,11 +335,13 @@ App.tsx (主入口)
     │   ├── 清空内容
     │   ├── AI 生成
     │   └── 下一步/发布
-    └── 右侧面板
-        ├── WeatherCard.tsx        天气查询组件
-        ├── AIHelperPanel.tsx      AI 助手面板
-        ├── PlatformSelector.tsx   发布平台选择器
-        └── PublishButton.tsx      一键发布按钮
+    ├── 右侧面板
+    │   ├── AIHelperPanel.tsx      AI 助手面板
+    │   ├── PlatformSelector.tsx   发布平台选择器
+    │   └── PublishButton.tsx      一键发布按钮
+    ├── AI 加载遮罩                  AI 操作时的全屏加载动画（进度条+spinner）
+    ├── 结果弹窗                      操作成功/失败的居中弹窗（2.5s 自动消失）
+    └── 调试追踪按钮（右下角浮动）        点击查询最近一次任务链路追踪
 ```
 
 ### 3.3 数据流
@@ -386,22 +429,22 @@ interface AppState {
                                 │
                ┌────────────────┤
                │                │
-┌──────────────▼────┐  ┌───────▼──────────────┐
-│ ai_node_dependency│  │     ai_context        │
-├───────────────────┤  ├──────────────────────┤
-│ parent_node_id(PK)│  │ id (BIGSERIAL, PK)   │
-│ child_node_id(PK) │  │ context_type         │
-└───────────────────┘  │ task_id              │
-                       │ node_id              │
-┌───────────────────┐  │ metadata (JSONB)     │
-│     outbox        │  │ message              │
-├───────────────────┤  │ snapshot_data (JSONB)│
-│ id (BIGSERIAL,PK) │  │ created_at           │
-│ aggregate_type    │  └──────────────────────┘
-│ aggregate_id      │
-│ event_type        │
-│ payload (JSONB)   │
-│ created_at        │
+┌──────────────▼────┐  ┌──────────────────────────┐
+│ ai_node_dependency│  │     ai_context            │
+├───────────────────┤  ├──────────────────────────┤
+│ parent_node_id(PK)│  │ id (BIGSERIAL, PK)       │
+│ child_node_id(PK) │  │ context_type             │
+└───────────────────┘  │ task_id                  │
+                       │ node_id                  │
+┌───────────────────┐  │ source_module            │ ← 来源模块
+│     outbox        │  │ source_topic             │ ← 来源 Kafka Topic
+├───────────────────┤  │ metadata (JSONB)         │ ← inputPreview/执行指标等
+│ id (BIGSERIAL,PK) │  │ message                  │
+│ aggregate_type    │  │ snapshot_data (JSONB)    │
+│ aggregate_id      │  │ resource_limits          │
+│ event_type        │  │ resource_usage (JSONB)   │
+│ payload (JSONB)   │  │ created_at               │
+│ created_at        │  └──────────────────────────┘
 └───────────────────┘
 ```
 
@@ -430,14 +473,16 @@ interface AppState {
 
 ### 5.2 事件主题
 
-| Topic | 发布者 | 消费者 |
-|-------|--------|--------|
-| `ai.node.ready` | Orchestrator | Worker |
-| `ai.node.result` | Worker | Orchestrator, Context |
-| `ai.node.executed` | StateMachine | Orchestrator, Context |
-| `ai.node.failed` | StateMachine | Context |
-| `ai.task.completed` | StateMachine | Context |
-| `ai.task.failed` | StateMachine | Context |
+| Topic | 发布者 | 消费者 | 说明 |
+|-------|--------|--------|------|
+| `ai.node.ready` | Orchestrator (StateService) | Worker | 节点就绪，Worker 消费后执行 |
+| `ai.node.result` | Worker (NodeExecutor) | Orchestrator, Context | **唯一的结果事件源**：Worker 执行完节点后发布，Orchestrator 消费处理状态流转，Context 消费记录执行监控数据 |
+| `ai.node.failed` | StateMachine | Context | 节点永久失败事件，Context 记录归档 |
+| `ai.node.executed` | StateMachine | DependencyChecker | 节点成功后的内部反馈事件，DependencyChecker 消费后检查下游依赖 |
+| `ai.task.completed` | StateMachine | — | **已取消订阅**（任务完成通过 DependencyChecker 直接触发 TransitionTask） |
+| `ai.task.failed` | StateMachine | — | **已取消订阅**（同任务完成逻辑） |
+
+> **消费优化说明**：ContextService 当前仅订阅 `ai.node.result` 和 `ai.node.failed` 两个主题，避免因多主题重复消费导致上下文记录重复。`ai.node.result` 同时携带 NODE_SCHEDULED（RUNNING 状态）和 NODE_SUCCESS（SUCCESS 状态）两种事件，由 Worker 的 NodeExecutor 一次性发布。
 
 ### 5.3 幂等性
 
@@ -468,7 +513,7 @@ Scheduler 30 秒扫描一次，仅处理停滞超过 1 分钟的节点。正常�
 
 ### 6.5 数据库迁移
 
-启动时自动执行建表语句（`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS`），无额外迁移工具依赖。
+启动时自动执行建表语句（`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS`），无额外迁移工具依赖。关键历史迁移：`ai_context` 表增加了 `source_module`（VARCHAR(50)）和 `source_topic`（VARCHAR(100)）字段，以及 `resource_limits` 和 `resource_usage`（JSONB）字段。
 
 ---
 

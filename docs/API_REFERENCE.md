@@ -40,7 +40,10 @@ Common HTTP status codes:
    - [POST /api/ai/generate-from-media — AI generate from media](#post-apiaigenerate-from-media)
    - [POST /api/ai/polish — AI polish text](#post-apiaipolish)
    - [GET /api/weather/query — Query weather](#get-apiweatherquery)
-3. [Orchestrator Module](#orchestrator-module)
+2. [Trace — Task trace query](#2-trace-task-trace-query)
+   - [GET /api/trace/recent — Get recent trace](#get-apitracerecent)
+   - [GET /api/trace/:taskId — Get task trace](#get-apitracetaskid)
+3. [Orchestrator Module](#3-orchestrator-module)
    - [POST /api/task/create — Create task](#post-apitaskcreate)
    - [POST /api/task/:taskId/dag — Submit DAG](#post-apitasktaskiddag)
    - [GET /api/task/:taskId — Get task](#get-apitasktaskid)
@@ -48,24 +51,24 @@ Common HTTP status codes:
    - [POST /api/task/:taskId/pause — Pause task](#post-apitasktaskidpause)
    - [POST /api/task/:taskId/resume — Resume task](#post-apitasktaskidresume)
    - [GET /api/task/:taskId/pause-reason — Get pause reason](#get-apitasktaskidpause-reason)
-4. [Node Operations](#node-operations)
+4. [Node Operations](#4-node-operations)
    - [POST /api/node/:nodeId/success — Report success](#post-apinodenodeidsuccess)
    - [POST /api/node/:nodeId/failure — Report failure](#post-apinodenodeidfailure)
    - [POST /api/node/:nodeId/retry — Retry node](#post-apinodenodeidretry)
    - [GET /api/node/:nodeId/snapshot/latest — Get snapshot](#get-apinodenodeidsnapshotlatest)
    - [POST /api/node/:nodeId/restore — Restore from snapshot](#post-apinodenodeidrestore)
-5. [NL-Translator](#nl-translator)
+5. [NL-Translator](#5-nl-translator)
    - [POST /api/translate — Translate NL to DAG](#post-apitranslate)
    - [POST /api/translate/submit — Translate and submit](#post-apitranslatesubmit)
-6. [NL-Driven DAG Submission](#nl-driven-dag-submission)
+6. [NL-Driven DAG Submission](#6-nl-driven-dag-submission)
    - [POST /api/node — Submit DAG directly](#post-apinode)
-7. [Context](#context)
+7. [Context](#7-context)
    - [GET /api/context/:taskId — Get task context](#get-apicontexttaskid)
    - [GET /api/context/:taskId/node/:nodeId/snapshot/latest — Get node snapshot](#get-apicontexttaskidnodenodeidsnapshotlatest)
    - [POST /api/context/:taskId/node/:nodeId/restore — Restore node](#post-apicontexttaskidnodenodeidrestore)
    - [POST /api/context/record — Record context manually](#post-apicontextrecord)
-8. [Built-in Tools](#built-in-tools)
-9. [Error Responses](#error-responses)
+8. [Built-in Tools](#8-built-in-tools)
+9. [Error Responses](#9-error-responses)
 
 ---
 
@@ -236,7 +239,9 @@ curl -X POST http://localhost:8080/api/ai/polish \
   "code": 0,
   "message": "success",
   "data": {
-    "content": "这周末就别宅家啦，我们一起去爬山..."
+    "content": "这周末就别宅家啦，我们一起去爬山...",
+    "taskId": "20260426232624-b0989898",
+    "traceUrl": "/api/trace/20260426232624-b0989898"
   }
 }
 ```
@@ -282,6 +287,169 @@ curl "http://localhost:8080/api/weather/query?city=北京"
   "data": null
 }
 ```
+
+---
+
+## 2. Trace — Task Trace Query
+
+Trace endpoints provide complete task lifecycle data (task details + all context entries) for debugging and auditing.
+
+### GET /api/trace/recent
+
+Query the most recently executed task's full trace.
+
+**Example:**
+```bash
+curl http://localhost:8080/api/trace/recent
+```
+
+**Response** `200`:
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task": {
+      "taskId": "20260426231320-68686850",
+      "status": "SUCCESS",
+      "input": {"source": "nl-translator"},
+      "output": null,
+      "createdAt": "2026-04-26T23:13:20.960495Z",
+      "nodes": [...]
+    },
+    "contexts": [
+      {
+        "id": 9185846,
+        "contextType": "TASK_CREATED",
+        "taskId": "20260426231320-68686850",
+        "sourceModule": "Orchestrator",
+        "message": "任务创建成功，等待 DAG 提交",
+        "createdAt": "0001-01-01T00:00:00Z"
+      },
+      {
+        "id": 9185850,
+        "contextType": "NODE_SCHEDULED",
+        "taskId": "20260426231320-68686850",
+        "nodeId": "polish-xxx",
+        "sourceModule": "ContextService",
+        "sourceTopic": "ai.node.result",
+        "metadata": {"startedAt": "2026-04-26T23:13:21.048766+08:00"},
+        "message": "Kafka 事件记录：节点进入运行状态"
+      },
+      {
+        "id": 9185851,
+        "contextType": "NODE_SUCCESS",
+        "taskId": "20260426231320-68686850",
+        "nodeId": "polish-xxx",
+        "sourceModule": "ContextService",
+        "sourceTopic": "ai.node.result",
+        "metadata": {"durationMs": 12543, "exitCode": 0},
+        "message": "Kafka 事件记录：节点执行成功"
+      }
+    ]
+  }
+}
+```
+
+**Response** `404` (no tasks found):
+```json
+{
+  "code": 404,
+  "message": "no tasks found",
+  "data": null
+}
+```
+
+---
+
+### GET /api/trace/:taskId
+
+Query a specific task's full trace by task ID.
+
+**Example:**
+```bash
+curl http://localhost:8080/api/trace/20260426231320-68686850
+```
+
+**Response** `200` (same format as /api/trace/recent):
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "task": {...},
+    "contexts": [...]
+  }
+}
+```
+
+**Response** `404`:
+```json
+{
+  "code": 404,
+  "message": "task not found",
+  "data": null
+}
+```
+
+---
+
+### Trace Data Schema
+
+Each trace response contains two sections: `task` (the full task with nodes) and `contexts` (ordered lifecycle events).
+
+**Task Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `taskId` | string | Task unique identifier |
+| `status` | string | One of: `CREATED`, `RUNNING`, `SUCCESS`, `FAILED`, `PAUSED` |
+| `input` | object | Task input parameters |
+| `output` | object | Task output / result (null if not completed) |
+| `createdAt` | string | ISO 8601 timestamp |
+| `nodes` | Node[] | All nodes belonging to this task |
+
+**Node Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Node ID |
+| `type` | string | `TOOL` or `LLM` |
+| `name` | string | Tool name (e.g. `polisher`, `llm_api`) |
+| `status` | string | One of: `CREATED`, `READY`, `RUNNING`, `SUCCESS`, `FAILED`, `RETRYING`, `SKIPPED` |
+| `input` | object | Node input parameters |
+| `output` | object | Node output — includes execution metrics (`startedAt`, `durationMs`, `exitCode`, `error`, `resourceUsage`) |
+| `condition` | string | Conditional expression (if any) |
+| `retryCount` | int | Number of retries attempted |
+| `maxRetry` | int | Maximum allowed retries |
+| `idempotencyKey` | string | Kafka idempotency key (`taskId + "-" + nodeId`) |
+
+**Context Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | int | Auto-increment ID |
+| `contextType` | string | Event type (see below) |
+| `taskId` | string | Associated task ID |
+| `nodeId` | string | Associated node ID (empty for task-level events) |
+| `sourceModule` | string | Originating module: `Orchestrator`, `StateMachine`, or `ContextService` |
+| `sourceTopic` | string | Kafka topic this event was consumed from (only for `ContextService` entries) |
+| `metadata` | object | Additional data (inputPreview, outputPreview, execution metrics) |
+| `message` | string | Human-readable description |
+| `createdAt` | string | Timestamp |
+
+**Context Types (ordered lifecycle):**
+
+| # | Type | Source | Description |
+|---|------|--------|-------------|
+| 1 | `TASK_CREATED` | Orchestrator | Task created, awaiting DAG submission |
+| 2 | `DAG_VALIDATED` | Orchestrator | DAG structure validated (no cycles, no duplicates) |
+| 3 | `DAG_SUBMITTED` | Orchestrator | DAG submitted, nodes written to DB |
+| 4 | `NODE_READY` | StateMachine | Node dependencies met, transitioned to READY |
+| 5 | `NODE_SCHEDULED` | ContextService | Worker picked up the node, execution started |
+| 6 | `NODE_SUCCESS` | StateMachine | Node execution succeeded (RUNNING → SUCCESS) |
+| 6 | `NODE_SUCCESS` | ContextService | Kafka event: node execution result (with durationMs, exitCode) |
+| 7 | `TASK_SUCCESS` | StateMachine | All nodes completed, task finished |
 
 ---
 
@@ -450,16 +618,32 @@ curl http://localhost:8080/api/task/20260423150000-a1b2c3/context
 
 **Response** `200`:
 ```json
-[
-  {
-    "id": "ctx-001",
-    "taskId": "20260423150000-a1b2c3",
-    "nodeId": "n1",
-    "type": "NODE_SUCCESS",
-    "message": "Node succeeded",
-    "createdAt": "2026-04-23T15:00:01Z"
-  }
-]
+{
+  "code": 0,
+  "message": "success",
+  "data": [
+    {
+      "id": 9185846,
+      "contextType": "TASK_CREATED",
+      "taskId": "20260423150000-a1b2c3",
+      "sourceModule": "Orchestrator",
+      "message": "任务创建成功，等待 DAG 提交",
+      "createdAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": 9185850,
+      "contextType": "NODE_SCHEDULED",
+      "taskId": "20260423150000-a1b2c3",
+      "nodeId": "n1",
+      "sourceModule": "ContextService",
+      "sourceTopic": "ai.node.result",
+      "metadata": {
+        "startedAt": "2026-04-23T15:00:01.123456+08:00"
+      },
+      "message": "Kafka 事件记录：节点进入运行状态"
+    }
+  ]
+}
 ```
 
 ---
@@ -801,7 +985,7 @@ curl -X POST http://localhost:8080/api/context/record \
 |-----------|------|-------------|-----------------|
 | `llm_api` | LLM | OpenAI-compatible chat API | `prompt` / `message` / `content` (string, required) |
 | `bash` | CUSTOM | Sandboxed shell execution | `command` (string, required) |
-| `weather` | CUSTOM | Weather query (simulated) | `city` or `location` (string, required) |
+| `polisher` | CUSTOM | Text polish via LLM | `text` (string, required), `polishType` (`"title"` or `"description"`) |
 
 ---
 

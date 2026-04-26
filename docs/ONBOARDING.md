@@ -253,10 +253,9 @@ lingxi-ai-operation-system/
 │   ├── publish/                   # ★ 用户发布模块（主要开发模块）
 │   │   ├── handler/
 │   │   │   ├── handler.go         #   发布/AI生成/AI润色接口
-│   │   │   └── weather_handler.go #   天气查询接口
+│   │   │   └── trace_handler.go   #   任务追踪查询接口
 │   │   ├── service/
-│   │   │   ├── service.go         #   发布/AI生成/AI润色业务逻辑
-│   │   │   └── weather_service.go #   天气查询业务逻辑
+│   │   │   └── service.go         #   发布/AI生成/AI润色业务逻辑
 │   │   └── handler_test.go        #   单元测试
 │   │
 │   ├── orchestrator/              # 任务调度引擎
@@ -276,7 +275,7 @@ lingxi-ai-operation-system/
 │   │       ├── tool.go            #   Tool 接口 + 注册表
 │   │       └── builtin/
 │   │           ├── bash_tool.go   #   Bash 沙箱工具
-│   │           ├── weather_tool.go #   天气查询工具
+│   │           ├── polisher_tool.go #   文本润色工具
 │   │           └── builtin.go     #   LLM API 工具
 │   │
 │   ├── translator/                # 自然语言翻译
@@ -290,13 +289,16 @@ lingxi-ai-operation-system/
 │   │   │   ├── TitleInput.tsx     #     标题输入 + AI 润色
 │   │   │   ├── DescriptionInput.tsx #   简介输入 + AI 润色
 │   │   │   ├── KeywordInput.tsx   #     关键词标签输入
-│   │   │   ├── WeatherCard.tsx    #     天气查询
 │   │   │   ├── AIHelperPanel.tsx  #     AI 助手面板
 │   │   │   ├── PlatformSelector.tsx #  平台选择
 │   │   │   ├── PublishButton.tsx  #     发布按钮
 │   │   │   ├── Sidebar.tsx        #     侧边导航
 │   │   │   ├── DesktopToolbar.tsx #     Electron 桌面工具栏
 │   │   │   └── CommandPanel.tsx   #     命令面板
+│   │   │   # （PublishPage.tsx 内嵌UI）
+│   │   │   # - AI 加载遮罩：全屏进度条+spinner动画
+│   │   │   # - 结果弹窗：成功/失败居中弹窗，2.5s自动消失
+│   │   │   # - 调试追踪按钮：右下角浮动，点击查询最近任务链路
 │   │   ├── pages/
 │   │   │   └── PublishPage.tsx    #   创作发布主页面
 │   │   ├── services/api.ts        #   Axios API 调用封装
@@ -468,7 +470,7 @@ cd frontend && npm install && npm run dev
 
 第 5 站：Worker 工具执行
   internal/worker/tool/tool.go
-  internal/worker/tool/builtin/weather_tool.go
+  internal/worker/tool/builtin/polisher_tool.go
 
 第 6 站：HTTP 路由注册
   internal/orchestrator/handler/handler.go
@@ -548,7 +550,7 @@ func (h *PublishHandler) RegisterRoutes(r *gin.Engine) {
 
 ### 8.2 添加新的内置工具
 
-**示例**：添加一个 HTTP 请求工具（参考 `weather_tool.go` 作为最简模板）。
+**示例**：添加一个 HTTP 请求工具（参考 `bash_tool.go` 作为最简模板）。
 
 ```go
 // internal/worker/tool/builtin/http_tool.go
@@ -591,7 +593,7 @@ toolRegistry.Register(builtin.NewHttpTool())  // ← 新增
 
 ### 8.3 添加新的前端组件
 
-参考已有的 `WeatherCard.tsx` 模式。详见下面的第 9 节。
+参考已有的 `AIHelperPanel.tsx` 模式。详见下面的第 9 节。
 
 ### 8.4 运行测试
 
@@ -635,7 +637,6 @@ frontend/src/
 │   ├── TitleInput.tsx       #   标题输入框
 │   ├── DescriptionInput.tsx #   简介文本域
 │   ├── KeywordInput.tsx     #   关键词标签输入
-│   ├── WeatherCard.tsx      #   天气查询
 │   ├── AIHelperPanel.tsx    #   AI 助手面板
 │   ├── PlatformSelector.tsx #   平台选择器
 │   ├── PublishButton.tsx    #   发布按钮

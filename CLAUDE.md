@@ -111,7 +111,7 @@ Architecture layers:
 - `BashTool` — Sandboxed shell: command whitelist + dangerous pattern filter + `/tmp/lingxi-sandbox` workdir. Implements `BuildableTool`.
 - `PythonTool` — python3 -c execution with resource limits. Implements `BuildableTool`.
 - `LlmApiTool` — OpenAI chat/completions API calls. Implements `ExecutableTool`.
-- `WeatherTool` — Demo/template tool.
+- `PolisherTool` — Text polish for social media titles/descriptions via LLM. Implements `ExecutableTool`.
 
 #### Executor Layer (`internal/worker/executor/`)
 - `Executor` interface — `Execute(ctx, ExecutionRequest) (ExecutionResult, error)`
@@ -136,8 +136,7 @@ Frontend-facing content publishing API.
 Key components:
 - `PublishHandler` - Gin HTTP handlers for `/api/publish`, `/api/ai/generate`, `/api/ai/generate-from-media`, `/api/ai/polish`
 - `PublishService` - Orchestrates content publishing via DAG task creation, AI content generation and text polishing via OpenAI
-- `WeatherHandler` - Gin HTTP handler for `/api/weather/query`
-- `WeatherService` - City weather query using WeatherTool (simulated data)
+- `TraceHandler` - Gin HTTP handlers for `/api/trace/recent`, `/api/trace/:taskId` (task lifecycle audit)
 
 API contract (standard response format):
 ```json
@@ -153,7 +152,6 @@ Key components:
 - `TitleInput.tsx` - Title input with AI polish button
 - `DescriptionInput.tsx` - Description textarea with AI polish button
 - `KeywordInput.tsx` - Tag-based keyword input
-- `WeatherCard.tsx` - City weather query + generate weather content
 - `AIHelperPanel.tsx` - AI generate and polish controls
 - `PlatformSelector.tsx` - Multi-platform toggle selector
 - `PublishButton.tsx` - Publish action button (calls `/api/publish`)
@@ -161,13 +159,16 @@ Key components:
 - `CommandPanel.tsx` - Command panel
 - `PublishPage.tsx` - Main page composing all components
 - `appStore.ts` - Zustand store (title, description, keywords, media, platforms)
-- `api.ts` - Axios service calling all `/api/publish`, `/api/ai/*`, `/api/weather/*`
+- `api.ts` - Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`
 
 Frontend runs on port 3000 with Vite proxy forwarding `/api` to backend port 8080.
 
 Key UI features:
 - **Media-based AI generation**: When images/videos are uploaded, AI generate uses `/api/ai/generate-from-media` (multipart) instead of text-only `/api/ai/generate`
-- **Weather publishing flow**: WeatherCard queries `/api/weather/query?city=xxx`, then auto-fills title+description for AI polish and publishing
+- **AI loading overlay**: Full-screen loading animation with progress bar+spinner during AI operations
+- **Result popup**: Centered modal with success/error icon and auto-dismiss
+- **Debug trace button**: Floating button (bottom-right) to query recent task lifecycle
+- **Trace endpoints**: `/api/trace/recent` and `/api/trace/:taskId` for full task+context audit data
 
 ## Project Structure
 
@@ -193,19 +194,18 @@ internal/
   publish/
     handler/                 # Publish/AI/Weather HTTP handlers
       handler.go             # Publish, AI generate, AI polish, AI generate-from-media
-      weather_handler.go     # Weather query
+      trace_handler.go       # Task trace query (/api/trace/recent, /api/trace/:taskId)
       handler_test.go
-    service/                 # Content publishing + AI generate/polish + weather
+    service/                 # Content publishing + AI generate/polish
       service.go             # PublishContent, AIGenerateContent, AIGenerateFromMedia, AIPolishText
-      weather_service.go     # QueryWeather
   worker/
     service/                 # Node execution engine
     tool/                    # Tool interface + registry
-      builtin/               # BashTool, PythonTool, LlmApiTool, WeatherTool
+      builtin/               # BashTool, PythonTool, LlmApiTool, PolisherTool
     executor/                # DirectExecutor, SandboxExecutor (stub), types
 frontend/                    # React + TypeScript + TailwindCSS
   src/
-    components/             # UI components (Sidebar, UploadCard, TitleInput, WeatherCard, etc.)
+    components/             # UI components (Sidebar, UploadCard, TitleInput, AIHelperPanel, etc.)
     pages/                   # Pages (PublishPage)
     stores/                  # Zustand state management (appStore)
     services/                # API services (api.ts)
@@ -296,7 +296,8 @@ idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplicat
 - `POST /api/ai/generate` - AI-generate title and description from text prompt
 - `POST /api/ai/generate-from-media` - AI-generate from images/videos + prompt (multipart)
 - `POST /api/ai/polish` - AI-polish existing text (title or description)
-- `GET /api/weather/query?city=xxx` - Query weather info for a city
+- `GET /api/trace/recent` - Get most recent task trace (full task + context audit data)
+- `GET /api/trace/:taskId` - Get specific task trace
 
 ### Orchestrator
 - `POST /api/task/create` - Create a new task
