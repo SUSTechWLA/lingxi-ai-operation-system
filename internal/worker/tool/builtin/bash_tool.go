@@ -36,9 +36,9 @@ func NewBashTool(cfg config.BashToolConfig) *BashTool {
 	}
 }
 
-func (t *BashTool) Name() string                  { return "bash" }
-func (t *BashTool) Description() string            { return "Execute shell commands (sandboxed)" }
-func (t *BashTool) Type() tool.ToolType            { return tool.ToolTypeCustom }
+func (t *BashTool) Name() string        { return "bash" }
+func (t *BashTool) Description() string { return "Execute shell commands (sandboxed)" }
+func (t *BashTool) Type() tool.ToolType { return tool.ToolTypeCustom }
 
 func (t *BashTool) BuildExecutionRequest(params map[string]interface{}) (*executor.ExecutionRequest, error) {
 	command, _ := params["command"].(string)

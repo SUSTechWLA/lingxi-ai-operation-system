@@ -113,6 +113,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS version INT DEFAULT 0`,
 		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS error_message TEXT`,
 		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS condition TEXT`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`,
 		`ALTER TABLE ai_task ADD COLUMN IF NOT EXISTS pause_reason TEXT`,
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_module VARCHAR(50)`,
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_topic VARCHAR(100)`,

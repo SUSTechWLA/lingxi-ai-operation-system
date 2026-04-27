@@ -14,7 +14,7 @@ function createWindow() {
     height: 960,
     minWidth: 1024,
     minHeight: 700,
-    title: '灵犀 AI 操作系统',
+    title: '灵犀AI自媒体运营助手',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -89,7 +89,14 @@ ipcMain.handle('check-service-health', async () => {
     const req = http.get('http://localhost:8080/api/health', (res) => {
       let data = ''
       res.on('data', (chunk) => { data += chunk })
-      res.on('end', () => resolve(data))
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data)
+          resolve(parsed.status === 'UP' ? 'ok' : 'unhealthy')
+        } catch {
+          resolve(data)
+        }
+      })
     })
     req.on('error', () => resolve('unreachable'))
     req.setTimeout(3000, () => { req.destroy(); resolve('timeout') })

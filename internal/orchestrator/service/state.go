@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -74,6 +75,16 @@ func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newSta
 	}
 	if errMsg != "" {
 		node.ErrorMessage = errMsg
+	}
+
+	// Record execution timestamps
+	now := time.Now()
+	if newStatus == model.NodeRunning {
+		node.StartedAt = &now
+	}
+	if newStatus == model.NodeSuccess || newStatus == model.NodeFailed {
+		now := time.Now()
+		node.CompletedAt = &now
 	}
 
 	if err := s.nodeRepo.Save(ctx, node); err != nil {

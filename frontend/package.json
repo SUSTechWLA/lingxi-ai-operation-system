@@ -35,7 +35,7 @@
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.9",
     "globals": "^15.9.0",
-    "postcss": "^10.4.20",
+    "postcss": "^8.4.20",
     "tailwindcss": "^3.4.10",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.0",
@@ -44,7 +44,7 @@
   },
   "build": {
     "appId": "com.lingxi.ai-os",
-    "productName": "灵犀AI操作系统",
+    "productName": "灵犀AI自媒体运营助手",
     "directories": {
       "output": "release"
     },
@@ -55,13 +55,16 @@
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "icon": "../resources/灵犀ai自媒体运营助手.png"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "../resources/灵犀ai自媒体运营助手.png"
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "icon": "../resources/灵犀ai自媒体运营助手.png"
     }
   }
 }

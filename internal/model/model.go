@@ -82,6 +82,8 @@ type Node struct {
 	Version        int                    `json:"version"`
 	IdempotencyKey string                 `json:"idempotencyKey,omitempty"`
 	CreatedAt      time.Time              `json:"createdAt"`
+	StartedAt     *time.Time             `json:"startedAt,omitempty"`
+	CompletedAt   *time.Time             `json:"completedAt,omitempty"`
 }
 
 type NodeDependency struct {

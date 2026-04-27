@@ -84,7 +84,7 @@ func (h *PublishHandler) PublishContent(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": result})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": result})
 }
 
 
@@ -109,7 +109,7 @@ func (h *PublishHandler) AIGenerateContent(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": result})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": result})
 }
 
 func (h *PublishHandler) AIGenerateFromMedia(c *gin.Context) {
@@ -147,7 +147,7 @@ func (h *PublishHandler) AIGenerateFromMedia(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": result})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": result})
 }
 
 func (h *PublishHandler) AIPolishText(c *gin.Context) {
@@ -212,7 +212,7 @@ func (h *PublishHandler) AIPolishSubmit(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": result})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": result})
 }
 
 func (h *PublishHandler) AIPolishQuery(c *gin.Context) {
@@ -235,5 +235,5 @@ func (h *PublishHandler) AIPolishQuery(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": result})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": result})
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import UploadCard from '../components/UploadCard'
 import TitleInput from '../components/TitleInput'
 import DescriptionInput from '../components/DescriptionInput'
@@ -36,6 +36,7 @@ const PublishPage: React.FC = () => {
   const [showDebugTrace, setShowDebugTrace] = useState(false)
   const [debugTraceData, setDebugTraceData] = useState<TraceData | null>(null)
   const [debugLoading, setDebugLoading] = useState(false)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   const handleDebugTrace = async () => {
     setDebugLoading(true)
@@ -83,44 +84,67 @@ const PublishPage: React.FC = () => {
   }, [isAILoading])
 
   const handleAIGenerate = async () => {
-    try {
-      const prompt = title || description || '自媒体内容创作'
-      const hasMedia = images.length > 0 || videos.length > 0
-      startAILoading(hasMedia ? 'AI 正在分析媒体素材并生成内容' : 'AI 正在生成内容')
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
+    const prompt = title || description || '自媒体内容创作'
+    const hasMedia = images.length > 0 || videos.length > 0
+    startAILoading(hasMedia ? 'AI 正在分析媒体素材并生成内容' : 'AI 正在生成内容')
+    try {
       // Use media-based generation if images or videos are uploaded
       if (images.length > 0 || videos.length > 0) {
         setAIProgressText('正在分析上传的图片和视频...')
         const imageFiles = images.map((i) => i.file)
         const videoFiles = videos.map((v) => v.file)
-        const result = await aiGenerateFromMedia(prompt, imageFiles, videoFiles)
+        const result = await aiGenerateFromMedia(prompt, imageFiles, videoFiles, controller.signal)
+        if (controller.signal.aborted) return
         if (result.title) setTitle(result.title)
         if (result.description) setDescription(result.description)
       } else {
         setAIProgressText('AI 正在思考创作内容...')
-        const result = await aiGenerateContent(prompt)
+        const result = await aiGenerateContent(prompt, controller.signal)
+        if (controller.signal.aborted) return
         if (result.title) setTitle(result.title)
         if (result.description) setDescription(result.description)
       }
       stopAILoading()
       showResultPopup('AI 内容生成成功！')
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
       console.error('AI生成失败:', error)
       stopAILoading()
       showResultPopup('AI 生成失败，请重试', 'error')
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+      }
     }
   }
 
+  const cancelAILoading = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
+    stopAILoading()
+    showResultPopup('已取消 AI 操作', 'error')
+  }
+
   const handleAIPolish = async (type: 'title' | 'description') => {
+    const text = type === 'title' ? title : description
+    if (!text.trim()) {
+      showResultPopup(`请先输入${type === 'title' ? '标题' : '简介'}内容`, 'error')
+      return
+    }
+    // Create new AbortController and store in ref
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    startAILoading(`AI 正在润色${type === 'title' ? '标题' : '简介'}`)
+    setAIProgressText('AI 正在优化文字表达...')
     try {
-      const text = type === 'title' ? title : description
-      if (!text.trim()) {
-        showResultPopup(`请先输入${type === 'title' ? '标题' : '简介'}内容`, 'error')
-        return
-      }
-      startAILoading(`AI 正在润色${type === 'title' ? '标题' : '简介'}`)
-      setAIProgressText('AI 正在优化文字表达...')
-      const result: AIPolishData = await aiPolishText(text, type)
+      const result: AIPolishData = await aiPolishText(text, type, controller.signal)
+      if (controller.signal.aborted) return
       if (type === 'title') {
         setTitle(result.content)
       } else {
@@ -128,10 +152,15 @@ const PublishPage: React.FC = () => {
       }
       stopAILoading()
       showResultPopup('AI 润色完成！')
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
       console.error('AI润色失败:', error)
       stopAILoading()
       showResultPopup('AI 润色失败，请重试', 'error')
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+      }
     }
   }
 
@@ -214,7 +243,12 @@ const PublishPage: React.FC = () => {
               <div className="h-full bg-gradient-to-r from-primary via-purple-500 to-primary rounded-full animate-progress"></div>
             </div>
 
-            <p className="text-xs text-gray-400">请耐心等待，不要关闭页面</p>
+            <button
+              onClick={cancelAILoading}
+              className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-sm transition-colors"
+            >
+              取消
+            </button>
           </div>
         </div>
       )}

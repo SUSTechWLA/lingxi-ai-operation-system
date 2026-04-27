@@ -59,7 +59,7 @@ func (h *TraceHandler) buildAndReturnTrace(c *gin.Context, taskID string) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
+		"code":    200,
 		"message": "success",
 		"data": gin.H{
 			"task":     taskDetails,

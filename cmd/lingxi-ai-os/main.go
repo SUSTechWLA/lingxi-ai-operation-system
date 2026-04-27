@@ -18,6 +18,7 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/database"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/logger"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/service"
 	orchestratorHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/handler"
@@ -122,6 +123,10 @@ func main() {
 		[]string{eventbus.TopicNodeResult},
 		func(event eventbus.Event) error {
 			switch event.Status {
+			case "RUNNING":
+				if _, err := stateService.TransitionNode(ctx, event.NodeID, model.NodeRunning, nil, ""); err != nil {
+					zap.L().Error("Failed to set node RUNNING", zap.Error(err))
+				}
 			case "SUCCESS":
 				if err := stateMachine.OnSuccess(ctx, event.NodeID, event.Output); err != nil {
 					zap.L().Error("Failed to handle node success", zap.Error(err))

@@ -120,16 +120,19 @@ func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO ai_node (id, task_id, type, name, status, input, output, error_message, condition,
-		 retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		 retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
+		 started_at, completed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		 ON CONFLICT (id) DO UPDATE SET
 		 	status=$5, output=$7, error_message=$8, condition=$9, retry_count=$10,
 		 	max_retry=$11, priority=$12, worker_group=$13, version=ai_node.version+1,
-		 	idempotency_key=$15`,
+		 	idempotency_key=$15, started_at=COALESCE($17, ai_node.started_at),
+		 	completed_at=COALESCE($18, ai_node.completed_at)`,
 		node.ID, node.TaskID, string(node.Type), node.Name, string(node.Status),
 		input, output, node.ErrorMessage, node.Condition,
 		node.RetryCount, node.MaxRetry, node.Priority, node.WorkerGroup,
 		node.Version, node.IdempotencyKey, node.CreatedAt,
+		node.StartedAt, node.CompletedAt,
 	)
 	return err
 }
@@ -137,7 +140,8 @@ func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, error) {
 	row := r.pool.QueryRow(ctx,
 		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
-		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at
+		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
+		        started_at, completed_at
 		 FROM ai_node WHERE id=$1`, id,
 	)
 
@@ -151,6 +155,7 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 		&input, &output, &errorMsg, &condition,
 		&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 		&node.Version, &node.IdempotencyKey, &node.CreatedAt,
+		&node.StartedAt, &node.CompletedAt,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -177,8 +182,10 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*model.Node, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
-		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at
-		 FROM ai_node WHERE task_id=$1`, taskID,
+		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
+		        started_at, completed_at
+		 FROM ai_node WHERE task_id=$1
+		 ORDER BY started_at NULLS LAST, created_at`, taskID,
 	)
 	if err != nil {
 		return nil, err
@@ -197,6 +204,7 @@ func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*mo
 			&input, &output, &errorMsg, &condition,
 			&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 			&node.Version, &node.IdempotencyKey, &node.CreatedAt,
+			&node.StartedAt, &node.CompletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -223,7 +231,8 @@ func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*mo
 func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStatus) ([]*model.Node, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
-		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at
+		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
+		        started_at, completed_at
 		 FROM ai_node WHERE status=$1`, string(status),
 	)
 	if err != nil {
@@ -243,6 +252,7 @@ func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStat
 			&input, &output, &errorMsg, &condition,
 			&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 			&node.Version, &node.IdempotencyKey, &node.CreatedAt,
+			&node.StartedAt, &node.CompletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -269,7 +279,8 @@ func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStat
 func (r *NodeRepository) FindChildNodes(ctx context.Context, parentID string) ([]*model.Node, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT n.id, n.task_id, n.type, n.name, n.status, n.input, n.output, n.error_message, n.condition,
-		        n.retry_count, n.max_retry, n.priority, n.worker_group, n.version, n.idempotency_key, n.created_at
+		        n.retry_count, n.max_retry, n.priority, n.worker_group, n.version, n.idempotency_key, n.created_at,
+		        n.started_at, n.completed_at
 		 FROM ai_node n
 		 JOIN ai_node_dependency d ON n.id = d.child_node_id
 		 WHERE d.parent_node_id=$1`, parentID,
@@ -291,6 +302,7 @@ func (r *NodeRepository) FindChildNodes(ctx context.Context, parentID string) ([
 			&input, &output, &errorMsg, &condition,
 			&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 			&node.Version, &node.IdempotencyKey, &node.CreatedAt,
+			&node.StartedAt, &node.CompletedAt,
 		); err != nil {
 			return nil, err
 		}
