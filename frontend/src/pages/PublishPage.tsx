@@ -6,10 +6,8 @@ import KeywordInput from '../components/KeywordInput'
 import AIHelperPanel from '../components/AIHelperPanel'
 import PlatformSelector from '../components/PlatformSelector'
 import PublishButton from '../components/PublishButton'
-import DesktopToolbar from '../components/DesktopToolbar'
 import { useAppStore } from '../stores/appStore'
 import { publishContent, aiGenerateContent, aiGenerateFromMedia, aiPolishText, fetchRecentTrace } from '../services/api'
-import { isElectron } from '../utils/electron'
 import type { AIPolishData, TraceData } from '../utils/types'
 
 const PublishPage: React.FC = () => {
@@ -343,11 +341,6 @@ const PublishPage: React.FC = () => {
 
         <aside className="w-80 bg-white border-l border-gray-100 p-6 overflow-y-auto">
           <div className="space-y-6">
-            {isElectron() && (
-              <div className="pb-6 border-b border-gray-100">
-                <DesktopToolbar />
-              </div>
-            )}
             <AIHelperPanel
               onGenerate={handleAIGenerate}
               onPolish={handleAIPolish}

@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import Sidebar from './components/Sidebar'
 import PublishPage from './pages/PublishPage'
+import DesktopPage from './pages/DesktopPage'
 import { isElectron, getElectronAPI } from './utils/electron'
 
 function App() {
+  const [activeNav, setActiveNav] = useState('publish')
   const [serviceStatus, setServiceStatus] = useState<'unknown' | 'ok' | 'unhealthy'>('unknown')
 
   useEffect(() => {
@@ -27,7 +29,7 @@ function App() {
 
   return (
     <div className="flex h-screen">
-      <Sidebar />
+      <Sidebar activeNav={activeNav} onNavChange={setActiveNav} />
       <div className="flex-1 flex flex-col">
         {isElectron() && serviceStatus === 'unhealthy' && (
           <div className="bg-red-50 border-b border-red-200 px-6 py-3 flex items-center gap-2">
@@ -37,7 +39,7 @@ function App() {
             <span className="text-sm text-red-700">后端服务未连接，部分功能不可用，请检查后端服务是否启动</span>
           </div>
         )}
-        <PublishPage />
+        {activeNav === 'publish' ? <PublishPage /> : <DesktopPage />}
       </div>
     </div>
   )

@@ -1,10 +1,12 @@
-import React, { useState } from 'react'
-import { isElectron } from '../utils/electron'
+import React from 'react'
 import appIcon from '../assets/灵犀ai自媒体运营助手.png'
 
-const Sidebar: React.FC = () => {
-  const [activeNav, setActiveNav] = useState('publish')
-  const showDesktopNav = isElectron()
+interface SidebarProps {
+  activeNav: string
+  onNavChange: (nav: string) => void
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange }) => {
   return (
     <aside className="w-64 bg-white border-r border-gray-100 flex flex-col h-screen">
       <div className="p-6">
@@ -22,7 +24,7 @@ const Sidebar: React.FC = () => {
       <nav className="flex-1 px-4 py-2">
         <div className="space-y-1">
           <button
-            onClick={() => setActiveNav('publish')}
+            onClick={() => onNavChange('publish')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition-colors ${
               activeNav === 'publish'
                 ? 'bg-primary/10 text-primary'
@@ -34,21 +36,19 @@ const Sidebar: React.FC = () => {
             </svg>
             创作发布
           </button>
-          {showDesktopNav && (
-            <button
-              onClick={() => setActiveNav('desktop')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition-colors ${
-                activeNav === 'desktop'
-                  ? 'bg-purple-50 text-purple-600'
-                  : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              桌面工具
-            </button>
-          )}
+          <button
+            onClick={() => onNavChange('desktop')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition-colors ${
+              activeNav === 'desktop'
+                ? 'bg-purple-50 text-purple-600'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            桌面工具
+          </button>
         </div>
       </nav>
 

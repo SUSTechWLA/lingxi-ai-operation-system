@@ -9,17 +9,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Commands
 
-#### Start all services (recommended)
+#### Start backend + infrastructure
 ```bash
 # 1. Copy and configure environment
 cp .env.example .env
 # Edit .env — add your OPENAI_API_KEY
 
-# 2. One-click startup (infra → build backend → run backend → start frontend)
-./scripts/startup.sh
+# 2. Start Docker infrastructure + backend
+./scripts/startup.sh    # One-click (infra → build backend → run backend)
 ```
 
-#### Manual startup
+#### Manual backend startup
 ```bash
 # Terminal 1: Infrastructure
 docker compose up -d
@@ -27,11 +27,19 @@ docker compose up -d
 # Terminal 2: Backend (port 8080)
 go build -o build/lingxi-ai-os cmd/lingxi-ai-os/main.go
 ./build/lingxi-ai-os
+```
 
-# Terminal 3: Frontend (port 3000, proxies /api to :8080)
+#### Frontend (development or Electron build)
+```bash
 cd frontend
 npm install
-npm run dev
+
+# Dev server (hot reload, proxies /api to :8080)
+npm run dev            # http://localhost:3000
+
+# Electron production build (uses dist/ directly, APIs call localhost:8080)
+npm run build          # Build Vite
+npm run electron:build # Build .dmg/.exe via electron-builder
 ```
 
 #### Development
@@ -144,24 +152,30 @@ API contract (standard response format):
 ```
 
 ### Frontend (frontend/)
-React + TypeScript + TailwindCSS + Zustand.
+React + TypeScript + TailwindCSS + Zustand (no router — simple state-driven page switching).
 
-Key components:
-- `Sidebar.tsx` - Navigation sidebar
-- `UploadCard.tsx` - Drag-and-drop video/image upload
-- `TitleInput.tsx` - Title input with AI polish button
-- `DescriptionInput.tsx` - Description textarea with AI polish button
-- `KeywordInput.tsx` - Tag-based keyword input
-- `AIHelperPanel.tsx` - AI generate and polish controls
-- `PlatformSelector.tsx` - Multi-platform toggle selector
-- `PublishButton.tsx` - Publish action button (calls `/api/publish`)
-- `DesktopToolbar.tsx` - Electron desktop app toolbar
-- `CommandPanel.tsx` - Command panel
-- `PublishPage.tsx` - Main page composing all components
-- `appStore.ts` - Zustand store (title, description, keywords, media, platforms)
-- `api.ts` - Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`
+#### Pages (in `pages/`)
+- `PublishPage.tsx` — 创作发布: upload media, write/edit title/description/keywords, AI generate/polish, select platforms, publish
+- `DesktopPage.tsx` — 桌面工具 (Electron only): system status monitoring, backend health check, command execution panel
 
-Frontend runs on port 3000 with Vite proxy forwarding `/api` to backend port 8080.
+#### Key components (in `components/`)
+- `Sidebar.tsx` — Navigation sidebar with 创作发布 / 桌面工具 tabs
+- `UploadCard.tsx` — Drag-and-drop video/image upload
+- `TitleInput.tsx` — Title input with AI polish button
+- `DescriptionInput.tsx` — Description textarea with AI polish button
+- `KeywordInput.tsx` — Tag-based keyword input
+- `AIHelperPanel.tsx` — AI generate and polish controls
+- `PlatformSelector.tsx` — Multi-platform toggle selector
+- `PublishButton.tsx` — Publish action button (calls `/api/publish`)
+- `CommandPanel.tsx` — Command execution panel (Electron IPC, in DesktopPage)
+- `appStore.ts` — Zustand store (title, description, keywords, media, platforms)
+- `api.ts` — Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`
+
+#### Electron vs Web
+- Production: Packaged as Electron .dmg/.exe via `electron-builder`
+- Development: `npm run dev` serves at port 3000 with Vite proxy forwarding `/api` to `:8080`
+- The desktop tools tab is always visible (designed for Electron usage)
+- API base URL: auto-detects Electron → `http://localhost:8080/api`, otherwise `/api` (Vite proxy)
 
 Key UI features:
 - **Media-based AI generation**: When images/videos are uploaded, AI generate uses `/api/ai/generate-from-media` (multipart) instead of text-only `/api/ai/generate`
