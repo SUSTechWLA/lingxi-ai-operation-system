@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -66,6 +67,7 @@ func (s *OrchestratorService) SubmitDAG(ctx context.Context, taskID string, dagR
 	s.recordContext(ctx, taskID, "", model.ContextDagValidated, "Orchestrator", "DAG 结构校验通过（无环、无重复节点）", nil)
 
 	for _, nodeReq := range dagReq.Nodes {
+		now := time.Now()
 		node := &model.Node{
 			ID:             nodeReq.ID,
 			TaskID:         taskID,
@@ -80,6 +82,7 @@ func (s *OrchestratorService) SubmitDAG(ctx context.Context, taskID string, dagR
 			Priority:       5,
 			WorkerGroup:    "default",
 			Version:        0,
+			CreatedAt:      now,
 		}
 		if nodeReq.MaxRetry != nil {
 			node.MaxRetry = *nodeReq.MaxRetry

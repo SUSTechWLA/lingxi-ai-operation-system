@@ -385,14 +385,16 @@ func (r *ContextRepository) Save(ctx context.Context, c *model.Context) error {
 	metadata, _ := json.Marshal(c.Metadata)
 	snapshot, _ := json.Marshal(c.SnapshotData)
 
-	var id int64
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now()
+	}
+
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO ai_context (context_type, task_id, node_id, metadata, message, snapshot_data, source_module, source_topic, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
 		string(c.ContextType), c.TaskID, c.NodeID, metadata, c.Message, snapshot, c.SourceModule, c.SourceTopic, c.CreatedAt,
-	).Scan(&id)
+	).Scan(&c.ID)
 
-	c.ID = id
 	return err
 }
 
@@ -411,9 +413,14 @@ func (r *ContextRepository) FindByTaskID(ctx context.Context, taskID string) ([]
 		var c model.Context
 		var metadata, snapshot []byte
 		var nodeID *string
+		var createdAt *time.Time
 
-		if err := rows.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeID, &metadata, &c.Message, &snapshot, &c.SourceModule, &c.SourceTopic, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeID, &metadata, &c.Message, &snapshot, &c.SourceModule, &c.SourceTopic, &createdAt); err != nil {
 			return nil, err
+		}
+
+		if createdAt != nil {
+			c.CreatedAt = *createdAt
 		}
 
 		if nodeID != nil {
@@ -442,14 +449,18 @@ func (r *ContextRepository) FindLatestSnapshotByNodeID(ctx context.Context, node
 	var c model.Context
 	var metadata, snapshot []byte
 	var nodeIDVal *string
+	var createdAt *time.Time
 
-	if err := row.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeIDVal, &metadata, &c.Message, &snapshot, &c.SourceModule, &c.SourceTopic, &c.CreatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.ContextType, &c.TaskID, &nodeIDVal, &metadata, &c.Message, &snapshot, &c.SourceModule, &c.SourceTopic, &createdAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
 
+	if createdAt != nil {
+		c.CreatedAt = *createdAt
+	}
 	if nodeIDVal != nil {
 		c.NodeID = *nodeIDVal
 	}
