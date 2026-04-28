@@ -49,6 +49,18 @@ frontend-dev:
 frontend-build:
 	cd frontend && npm run build
 
+sandbox-build:
+	@echo "Building Rust sandbox..."
+	. $$HOME/.cargo/env && cd sandbox && cargo build --release
+	cp sandbox/target/release/lingxi-sandbox build/
+	@echo "Sandbox build complete: build/lingxi-sandbox"
+
+sandbox-run:
+	. $$HOME/.cargo/env && cd sandbox && cargo run
+
+sandbox-clean:
+	cd sandbox && cargo clean
+
 frontend-lint:
 	cd frontend && npm run lint
 

@@ -100,6 +100,13 @@ func (m *mockTaskRepo) FindByID(ctx context.Context, id string) (*model.Task, er
 	return t, nil
 }
 
+func (m *mockTaskRepo) FindRecent(ctx context.Context) (*model.Task, error) {
+	for _, t := range m.tasks {
+		return t, nil // return first found (most recent in mock)
+	}
+	return nil, nil
+}
+
 func (m *mockTaskRepo) UpdateStatus(ctx context.Context, id string, status model.TaskStatus) error {
 	t, ok := m.tasks[id]
 	if !ok {

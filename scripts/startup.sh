@@ -75,9 +75,32 @@ go build -o build/lingxi-ai-os cmd/lingxi-ai-os/main.go
 info "Backend build complete"
 
 # ============================================
-# Step 3: Start backend
+# Step 3: Build sandbox (if Rust toolchain available)
 # ============================================
-section "Step 3: Start Backend (port 8080)"
+section "Step 3: Build Sandbox Service"
+
+if command -v cargo &> /dev/null || [ -f "$HOME/.cargo/env" ]; then
+    [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+    if command -v cargo &> /dev/null; then
+        info "Building Rust sandbox service..."
+        cd sandbox
+        cargo build --release --quiet 2>&1 || warn "Sandbox build failed (non-fatal)"
+        cd "$PROJECT_DIR"
+        if [ -f sandbox/target/release/lingxi-sandbox ]; then
+            cp sandbox/target/release/lingxi-sandbox build/
+            info "Sandbox build complete"
+        fi
+    else
+        warn "Rust toolchain not found, skipping sandbox build (set SANDBOX_ENABLED=false)"
+    fi
+else
+    warn "Rust toolchain not found, skipping sandbox build (set SANDBOX_ENABLED=false)"
+fi
+
+# ============================================
+# Step 4: Start backend
+# ============================================
+section "Step 4: Start Backend (port 8080)"
 
 ./build/lingxi-ai-os &
 BACKEND_PID=$!
@@ -93,9 +116,9 @@ for i in $(seq 1 30); do
 done
 
 # ============================================
-# Step 4: Start frontend
+# Step 5: Start frontend
 # ============================================
-section "Step 4: Start Frontend (port 3000)"
+section "Step 5: Start Frontend (port 3000)"
 
 cd frontend
 
@@ -126,20 +149,26 @@ section "Worker Module Overview"
 
 echo -e ""
 echo -e "  ${CYAN}Execution Modes:${NC}"
-echo -e "   ${GREEN}1${NC} DirectExecutor — Local subprocess with sandbox dir"
-echo -e "   ${GREEN}2${NC} SandboxExecutor — gRPC sandbox (stub, ready for Rust integration)"
+echo -e "   ${GREEN}1${NC} DirectExecutor — Local subprocess execution (default)"
+echo -e "   ${GREEN}2${NC} SandboxExecutor — Rust gRPC sandbox with resource isolation"
 echo -e ""
 echo -e "  ${CYAN}Built-in Tools:${NC}"
-echo -e "   • Bash     — Command whitelist + dangerous pattern filter + /tmp/lingxi-sandbox"
+echo -e "   • Bash     — Command whitelist + dangerous pattern filter"
 echo -e "   • Python   — python3 -c execution via DirectExecutor"
 echo -e "   • LLM API  — OpenAI chat/completions calls"
-echo -e "   • Weather  — demo/template tool"
+echo -e "   • Polisher — Text polish for social media titles/descriptions"
 echo -e ""
 echo -e "  ${CYAN}Sandbox enables:${NC}"
-echo -e "   • Resource isolation (memory, CPU, disk limits)"
-echo -e "   • Remote gRPC execution endpoint (config: SANDBOX_ADDRESS)"
+echo -e "   • Resource isolation (memory, CPU, disk, PID limits via setrlimit)"
+echo -e "   • gRPC-based remote execution (config: SANDBOX_ADDRESS)"
+echo -e "   • Temp directory isolation with automatic cleanup"
+echo -e "   • Timeout enforcement at sandbox level"
 echo -e "   • Fallback to DirectExecutor when sandbox unavailable (SANDBOX_FALLBACK=true)"
 echo -e ""
+echo -e "  ${CYAN}To enable sandbox:${NC}"
+echo -e "   1. Set SANDBOX_ENABLED=true in .env"
+echo -e "   2. Start the sandbox service: ./build/lingxi-sandbox &"
+echo -e "   3. Restart the backend"
 
 # ============================================
 # Running

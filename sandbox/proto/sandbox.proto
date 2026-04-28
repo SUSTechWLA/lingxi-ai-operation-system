@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package sandbox;
+
+option go_package = "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor/sandboxpb";
+
+service SandboxService {
+  rpc Execute(ExecuteRequest) returns (ExecuteResult);
+}
+
+message ExecuteRequest {
+  string task_id = 1;
+  string node_id = 2;
+  string command = 3;
+  repeated string args = 4;
+  map<string, string> env = 5;
+  string work_dir = 6;
+  uint32 timeout_sec = 7;
+  ResourceLimits limits = 8;
+  map<string, bytes> input_files = 9;
+  bytes stdin = 10;
+}
+
+message ResourceLimits {
+  uint64 memory_bytes = 1;
+  uint64 cpu_shares = 2;
+  uint64 disk_bytes = 3;
+  uint32 max_pids = 4;
+}
+
+message ExecuteResult {
+  int32 exit_code = 1;
+  bytes stdout = 2;
+  bytes stderr = 3;
+  bool timed_out = 4;
+  ResourceUsage resource_usage = 5;
+  string error = 6;
+}
+
+message ResourceUsage {
+  uint64 memory_peak_bytes = 1;
+  uint64 cpu_time_usec = 2;
+  uint64 user_time_usec = 3;
+  uint64 system_time_usec = 4;
+}

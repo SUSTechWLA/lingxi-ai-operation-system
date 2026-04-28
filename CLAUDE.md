@@ -19,6 +19,17 @@ cp .env.example .env
 ./scripts/startup.sh    # One-click (infra → build backend → run backend)
 ```
 
+#### Build sandbox (Rust)
+```bash
+# Prerequisites: Rust toolchain (install via: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh)
+
+make sandbox-build       # Build Rust sandbox service
+./build/lingxi-sandbox & # Start sandbox gRPC server on :50051
+
+# To enable sandbox for tool execution:
+# Set SANDBOX_ENABLED=true in .env, restart backend
+```
+
 #### Manual backend startup
 ```bash
 # Terminal 1: Infrastructure
@@ -124,7 +135,8 @@ Architecture layers:
 #### Executor Layer (`internal/worker/executor/`)
 - `Executor` interface — `Execute(ctx, ExecutionRequest) (ExecutionResult, error)`
 - `DirectExecutor` — Runs subprocess locally with temp workdir and env injection
-- `SandboxExecutor` — gRPC-based remote execution (stub, ready for Rust sandbox integration). When `SANDBOX_ENABLED=true`, `BuildableTool` requests route through this instead of `DirectExecutor`
+- `SandboxExecutor` — gRPC client to Rust sandbox service (`sandbox/`). Implements resource isolation (memory, CPU, disk, PID limits via setrlimit), timeout enforcement, and temp directory cleanup. When `SANDBOX_ENABLED=true`, `BuildableTool` requests route through this instead of `DirectExecutor`
+- `sandboxpb/` — Generated Go protobuf/gRPC code from `sandbox/proto/sandbox.proto`
 - `ExecutionRequest` — Unified request: Command, Args, Env, WorkDir, TimeoutSec, Limits (memory, CPU, disk, PID), InputFiles, Stdin
 - `ExecutionResult` — Unified result: ExitCode, Stdout, Stderr, TimedOut, ResourceUsage, OutputRef
 
@@ -217,6 +229,14 @@ internal/
     tool/                    # Tool interface + registry
       builtin/               # BashTool, PythonTool, LlmApiTool, PolisherTool
     executor/                # DirectExecutor, SandboxExecutor (stub), types
+sandbox/                     # Rust sandbox service (gRPC server for isolated execution)
+  src/
+    main.rs                  # gRPC server entry point (tonic + tokio)
+    sandbox.rs               # Sandbox execution with setrlimit resource isolation
+  proto/
+    sandbox.proto            # Protobuf/gRPC service definition
+  Cargo.toml                 # Rust dependencies (tonic, prost, tokio, libc)
+  build.rs                   # Proto compilation via tonic-build
 frontend/                    # React + TypeScript + TailwindCSS
   src/
     components/             # UI components (Sidebar, UploadCard, TitleInput, AIHelperPanel, etc.)
