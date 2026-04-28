@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData, TraceData, MediaListResponse, MediaAsset, ChatGenerateResponse, ChatReviseResponse } from '../utils/types'
+import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData, PolishSubmitData, PolishQueryData, TraceData, MediaListResponse, MediaAsset, ChatGenerateResponse, ChatReviseResponse } from '../utils/types'
 import { isElectron } from '../utils/electron'
 
 const API_BASE = isElectron() ? 'http://localhost:8080/api' : '/api'
@@ -17,7 +17,8 @@ export const publishContent = async (
   videoFiles: File[],
   imageFiles: File[],
   contentType?: string,
-  coverFile?: File | null
+  coverFile?: File | null,
+  signal?: AbortSignal
 ): Promise<TaskResponse> => {
   const formData = new FormData()
   formData.append('title', title)
@@ -42,6 +43,7 @@ export const publishContent = async (
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    signal,
   })
 
   return response.data.data
@@ -160,4 +162,49 @@ export const batchProcessMedia = async (
     action,
   })
   return response.data.data
+}
+
+export const aiPolishSubmit = async (
+  text: string,
+  type: 'title' | 'description',
+  signal?: AbortSignal
+): Promise<PolishSubmitData> => {
+  const response = await api.post<ApiResponse<PolishSubmitData>>('/ai/polish/submit', { text, type }, { signal })
+  return response.data.data
+}
+
+export const queryPolishResult = async (
+  taskId: string,
+  nodeId: string,
+  signal?: AbortSignal
+): Promise<PolishQueryData> => {
+  const response = await api.get<ApiResponse<PolishQueryData>>('/ai/polish/result', {
+    params: { taskId, nodeId },
+    signal,
+  })
+  return response.data.data
+}
+
+export const failNode = async (
+  nodeId: string,
+  errorMessage: string,
+  signal?: AbortSignal
+): Promise<void> => {
+  await api.post(`/node/${nodeId}/failure`, { errorMessage }, { signal })
+}
+
+export const failTask = async (
+  taskId: string,
+  signal?: AbortSignal
+): Promise<void> => {
+  await api.post(`/task/${taskId}/fail`, {}, { signal })
+}
+
+export const recordContextEvent = async (
+  taskId: string,
+  type: string,
+  message: string,
+  nodeId?: string
+): Promise<void> => {
+  await api.post('/context/record', { taskId, nodeId, type, message })
 }

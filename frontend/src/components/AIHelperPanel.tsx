@@ -1,12 +1,18 @@
-import React, { useState } from 'react'
-import { aiPolishText, aiGenerateFromMedia } from '../services/api'
+import React, { useState, useRef } from 'react'
+import { aiPolishSubmit, queryPolishResult, aiGenerateFromMedia, failNode, failTask, recordContextEvent } from '../services/api'
 import { useAppStore } from '../stores/appStore'
+import { setAIAbort } from '../utils/ai-loading'
+
+const MAX_POLL_ATTEMPTS = 75
+const POLL_INTERVAL_MS = 800
 
 const AIHelperPanel: React.FC = () => {
-  const { title, description, images, videos, setTitle, setDescription, contentType } = useAppStore()
+  const { title, description, images, videos, setTitle, setDescription, contentType, setAILoadingMessage } = useAppStore()
 
-  const [generating, setGenerating] = useState(false)
-  const [polishing, setPolishing] = useState(false)
+  const generateAbortRef = useRef<AbortController | null>(null)
+  const polishAbortRef = useRef<AbortController | null>(null)
+  const polishTaskIdRef = useRef<string | null>(null)
+  const polishNodeIdRef = useRef<string | null>(null)
   const [msg, setMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
   const showMsg = (text: string, type: 'success' | 'error' = 'success') => {
@@ -19,43 +25,145 @@ const AIHelperPanel: React.FC = () => {
       showMsg('请先上传素材', 'error')
       return
     }
-    setGenerating(true)
+    setAILoadingMessage('AI正在生成标题和简介...')
+    const controller = new AbortController()
+    generateAbortRef.current = controller
+    setAIAbort(() => {
+      controller.abort()
+      setAILoadingMessage(null)
+      generateAbortRef.current = null
+      recordContextEvent('', 'AI_CANCELLED', '用户取消了AI生成操作')
+    })
     try {
       const imageFiles = images.map(i => i.file)
       const videoFiles = videos.map(v => v.file)
-      const result = await aiGenerateFromMedia('根据素材自动生成标题和简介', imageFiles, videoFiles)
+      const result = await aiGenerateFromMedia('根据素材自动生成标题和简介', imageFiles, videoFiles, controller.signal)
+      if (controller.signal.aborted) return
       if (result.title) setTitle(result.title)
       if (result.description) setDescription(result.description)
       showMsg('内容已生成')
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return
       console.error('AI生成失败:', e)
       showMsg('生成失败，请重试', 'error')
     } finally {
-      setGenerating(false)
+      setAILoadingMessage(null)
+      setAIAbort(null)
+      if (generateAbortRef.current === controller) {
+        generateAbortRef.current = null
+      }
     }
   }
 
   const handlePolish = async () => {
-    const text = title || description
-    if (!text.trim()) {
+    const hasTitle = title.trim().length > 0
+    const hasDesc = description.trim().length > 0
+
+    if (!hasTitle && !hasDesc) {
       showMsg('请先输入标题或简介内容', 'error')
       return
     }
-    setPolishing(true)
-    try {
-      const target = title ? 'title' : 'description'
-      const result = await aiPolishText(text, target)
-      if (target === 'title') {
-        setTitle(result.content)
+
+    const tasks: { text: string; type: 'title' | 'description' }[] = []
+    if (hasTitle) tasks.push({ text: title, type: 'title' })
+    if (hasDesc) tasks.push({ text: description, type: 'description' })
+
+    const controller = new AbortController()
+    polishAbortRef.current = controller
+
+    let cancelled = false
+    let successCount = 0
+    polishTaskIdRef.current = null
+    polishNodeIdRef.current = null
+
+    setAIAbort(() => {
+      cancelled = true
+      controller.abort()
+
+      const nodeId = polishNodeIdRef.current
+      const taskId = polishTaskIdRef.current
+      if (nodeId) {
+        // Mark the node as FAILED + task as FAILED so the backend stops processing
+        failNode(nodeId, '用户主动取消').catch(() => {})
+        if (taskId) {
+          failTask(taskId).catch(() => {})
+        }
+        // Record cancellation in context log
+        recordContextEvent(taskId || '', 'AI_CANCELLED', '用户主动取消了AI润色操作', nodeId)
       } else {
-        setDescription(result.content)
+        recordContextEvent('', 'AI_CANCELLED', '用户主动取消了AI润色操作')
       }
-      showMsg('润色完成')
-    } catch (e) {
+
+      setAILoadingMessage(null)
+      polishAbortRef.current = null
+    })
+
+    try {
+      for (const task of tasks) {
+        if (cancelled) return
+        setAILoadingMessage(`AI正在润色${task.type === 'title' ? '标题' : '简介'}...`)
+
+        // Step 1: submit the polish DAG
+        const submitResp = await aiPolishSubmit(task.text, task.type, controller.signal)
+        if (cancelled) return
+
+        polishTaskIdRef.current = submitResp.taskId
+        polishNodeIdRef.current = submitResp.nodeId
+
+        // Step 2: poll for result
+        let polled = false
+        for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
+          if (cancelled) return
+          await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+          if (cancelled) return
+
+          const queryResp = await queryPolishResult(submitResp.taskId, submitResp.nodeId, controller.signal)
+          if (cancelled) return
+
+          if (queryResp.status === 'SUCCESS') {
+            if (task.type === 'title') {
+              setTitle(queryResp.content || '')
+            } else {
+              setDescription(queryResp.content || '')
+            }
+            successCount++
+            polled = true
+            break
+          }
+
+          if (queryResp.status === 'FAILED' || queryResp.status === 'ERROR') {
+            console.error('AI润色节点失败:', queryResp.error)
+            break
+          }
+
+          // RUNNING / READY / CREATED — keep polling
+        }
+
+        if (!polled) {
+          console.error('AI润色超时或失败:', task.type)
+        }
+      }
+
+      if (successCount > 0) {
+        const label = tasks.length > 1 ? '标题和简介' : (tasks[0].type === 'title' ? '标题' : '简介')
+        showMsg(`已润色${label}`)
+      } else {
+        showMsg('润色失败，请重试', 'error')
+      }
+    } catch (e: any) {
+      if (e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return
       console.error('AI润色失败:', e)
-      showMsg('润色失败，请重试', 'error')
+      if (successCount > 0) {
+        showMsg('部分润色完成，请检查结果', 'error')
+      } else {
+        showMsg('润色失败，请重试', 'error')
+      }
     } finally {
-      setPolishing(false)
+      setAILoadingMessage(null)
+      setAIAbort(null)
+      if (polishAbortRef.current === controller) {
+        polishAbortRef.current = null
+      }
     }
   }
 
@@ -76,10 +184,8 @@ const AIHelperPanel: React.FC = () => {
             </p>
             <button
               onClick={handleGenerate}
-              disabled={generating}
-              className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs hover:bg-primary-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs hover:bg-primary-dark transition-colors flex items-center gap-1.5"
             >
-              {generating && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               {contentType === 'image' ? '生成图文内容' : '生成短视频文案'}
             </button>
           </div>
@@ -101,10 +207,8 @@ const AIHelperPanel: React.FC = () => {
             </p>
             <button
               onClick={handlePolish}
-              disabled={polishing}
-              className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs hover:bg-amber-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs hover:bg-amber-600 transition-colors flex items-center gap-1.5"
             >
-              {polishing && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               一键优化
             </button>
           </div>

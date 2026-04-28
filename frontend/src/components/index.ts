@@ -12,3 +12,4 @@ export { default as MediaLibraryPanel } from './MediaLibraryPanel'
 
 export { default as GenerateModal } from './GenerateModal'
 export { default as AIAssistantTab } from './AIAssistantTab'
+export { default as BlockingOverlay } from './BlockingOverlay'

@@ -157,6 +157,8 @@ type PublishRequest struct {
     Keywords    string                // 关键词（逗号分隔）
     Platforms   []string              // 目标平台（["douyin", "xiaohongshu"]）
     VideoFiles  []*multipart.FileHeader  // 视频文件
+t    ContentType string                     // 内容类型（"image" / "video"）
+t    CoverFile   *multipart.FileHeader      // 封面图片文件
     ImageFiles  []*multipart.FileHeader  // 图片文件
 }
 ```
@@ -165,7 +167,7 @@ type PublishRequest struct {
 
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": { ... }
 }
@@ -347,8 +349,10 @@ App.tsx (主入口)
     ├── 右侧面板
     │   ├── AIHelperPanel.tsx      AI 助手面板
     │   ├── ContentWorkbench.tsx   内容生成工作台
+    │   ├── AIAssistantTab.tsx     AI 对话式创作面板
     │   ├── PlatformSelector.tsx   发布平台选择器
     │   └── PublishButton.tsx      一键发布按钮
+    ├── BlockingOverlay            AI 操作全屏遮罩（含取消按钮，模块级 abort 管理）
     ├── AI 加载遮罩                  AI 操作时的全屏加载动画（进度条+spinner）
     ├── 结果弹窗                      操作成功/失败的居中弹窗（2.5s 自动消失）
     └── 调试追踪按钮（右下角浮动）        点击查询最近一次任务链路追踪
@@ -392,11 +396,16 @@ server: {
 interface AppState {
   title: string          // 标题
   description: string    // 简介  
+	  body: string             // 正文
   keywords: string       // 关键词
   videos: MediaFile[]    // 已上传的视频
   images: MediaFile[]    // 已上传的图片
+	  cover: MediaFile | null  // 封面图片
   platforms: Platform[]  // 可用发布平台
   isPublishing: boolean  // 发布中状态
+	  chatSessionId: string | null  // AI 对话会话 ID
+	  contentType: ContentType       // 内容类型（"image" / "video" / null）
+	  aiLoadingMessage: string | null // AI 操作加载提示文本
   // ... 操作方法
 }
 ```

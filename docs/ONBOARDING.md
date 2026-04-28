@@ -295,6 +295,9 @@ lingxi-ai-operation-system/
 │   │   │   ├── DescriptionInput.tsx #   简介输入 + AI 润色
 │   │   │   ├── KeywordInput.tsx   #     关键词标签输入
 │   │   │   ├── AIHelperPanel.tsx  #     AI 助手面板
+│   │   │   ├── BlockingOverlay.tsx #     AI 操作全屏遮罩（含取消按钮）
+│   │   │   ├── AIAssistantTab.tsx  #     AI 对话式创作面板
+│   │   │   ├── ContentTypeSelector.tsx # 内容类型选择
 │   │   │   ├── ContentWorkbench.tsx #  内容生成工作台
 │   │   │   ├── MediaLibraryPanel.tsx # 素材库浏览面板
 │   │   │   ├── PlatformSelector.tsx #  平台选择
@@ -541,7 +544,7 @@ func (h *PublishHandler) CategorizeContent(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
         return
     }
-    c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"category": category}})
+    c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{"category": category}})
 }
 ```
 

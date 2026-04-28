@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import UploadCard from '../components/UploadCard'
 import TitleInput from '../components/TitleInput'
 import DescriptionInput from '../components/DescriptionInput'
@@ -10,9 +10,11 @@ import PlatformSelector from '../components/PlatformSelector'
 import PublishButton from '../components/PublishButton'
 import MediaLibraryPanel from '../components/MediaLibraryPanel'
 import AIAssistantTab from '../components/AIAssistantTab'
+import BlockingOverlay from '../components/BlockingOverlay'
 import { useAppStore } from '../stores/appStore'
-import { publishContent, fetchRecentTrace } from '../services/api'
+import { publishContent, fetchRecentTrace, recordContextEvent } from '../services/api'
 import type { TraceData, ContentType } from '../utils/types'
+import { setAIAbort } from '../utils/ai-loading'
 
 const PublishPage: React.FC = () => {
   const {
@@ -24,13 +26,17 @@ const PublishPage: React.FC = () => {
     cover,
     isPublishing,
     contentType,
+    aiLoadingMessage,
     getSelectedPlatforms,
     setIsPublishing,
     clearAll,
     setContentType,
     clearMedia,
     setCover,
+    setAILoadingMessage,
   } = useAppStore()
+
+  const publishAbortRef = useRef<AbortController | null>(null)
 
   const [showResult, setShowResult] = useState(false)
   const [resultMessage, setResultMessage] = useState('')
@@ -115,6 +121,17 @@ const PublishPage: React.FC = () => {
     }
 
     setIsPublishing(true)
+    setAILoadingMessage('正在提交发布任务...')
+
+    const controller = new AbortController()
+    publishAbortRef.current = controller
+    setAIAbort(() => {
+      controller.abort()
+      setIsPublishing(false)
+      setAILoadingMessage(null)
+      publishAbortRef.current = null
+      recordContextEvent('', 'AI_CANCELLED', '用户取消了发布操作')
+    })
 
     try {
       // Only send files matching the selected content type
@@ -129,15 +146,24 @@ const PublishPage: React.FC = () => {
         videoFiles,
         imageFiles,
         contentType || undefined,
-        cover?.file
+        cover?.file,
+        controller.signal
       )
 
+      if (controller.signal.aborted) return
+
       showResultPopup(`发布任务已创建！任务ID: ${result.taskId}`)
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
       console.error('发布失败:', error)
       showResultPopup('发布失败，请重试', 'error')
     } finally {
       setIsPublishing(false)
+      setAILoadingMessage(null)
+      setAIAbort(null)
+      if (publishAbortRef.current === controller) {
+        publishAbortRef.current = null
+      }
     }
   }
 
@@ -411,6 +437,9 @@ const PublishPage: React.FC = () => {
           </div>
         </aside>
       </div>
+
+      {/* Blocking overlay for LLM operations */}
+      {aiLoadingMessage && <BlockingOverlay message={aiLoadingMessage} />}
 
       {/* Media Library Panel */}
       <MediaLibraryPanel

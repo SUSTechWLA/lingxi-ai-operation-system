@@ -39,6 +39,7 @@ func (h *OrchestratorHandler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/task/:taskId", h.GetTask)
 		api.GET("/task/:taskId/context", h.GetTaskContext)
 		api.POST("/task/:taskId/pause", h.PauseTask)
+api.POST("/task/:taskId/fail", h.FailTask)
 		api.POST("/task/:taskId/resume", h.ResumeTask)
 		api.GET("/task/:taskId/pause-reason", h.GetPauseReason)
 		api.POST("/node/:nodeId/success", h.OnNodeSuccess)
@@ -215,6 +216,20 @@ func (h *OrchestratorHandler) PauseTask(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"taskId":  taskID,
 		"message": "Task paused successfully",
+	})
+}
+
+func (h *OrchestratorHandler) FailTask(c *gin.Context) {
+	taskID := c.Param("taskId")
+
+	if err := h.taskExecutionCtrl.FailTask(c.Request.Context(), taskID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"taskId":  taskID,
+		"message": "Task failed successfully",
 	})
 }
 

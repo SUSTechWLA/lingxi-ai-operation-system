@@ -9,7 +9,7 @@ All endpoints return JSON with the following standard format:
 **Success:**
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": { ... }
 }
@@ -49,6 +49,7 @@ Common HTTP status codes:
    - [GET /api/task/:taskId — Get task](#get-apitasktaskid)
    - [GET /api/task/:taskId/context — Get context](#get-apitasktaskidcontext)
    - [POST /api/task/:taskId/pause — Pause task](#post-apitasktaskidpause)
+   - [POST /api/task/:taskId/fail — Fail task](#post-apitasktaskidfail)
    - [POST /api/task/:taskId/resume — Resume task](#post-apitasktaskidresume)
    - [GET /api/task/:taskId/pause-reason — Get pause reason](#get-apitasktaskidpause-reason)
 5. [Node Operations](#5-node-operations)
@@ -113,9 +114,11 @@ Submit content for multi-platform publishing. Creates an AI task that polishes t
 | `title` | string | **Yes** | Content title |
 | `description` | string | **Yes** | Content description |
 | `keywords` | string | No | Comma-separated keywords |
+| `content_type` | string | No | `"image"` or `"video"` |
 | `platforms` | string | No | JSON array of platform IDs, e.g. `["douyin","xiaohongshu"]` |
 | `images` | File[] | No | Image files (jpg, png, webp, gif) |
 | `videos` | File[] | No | Video files (mp4, mov, avi, mkv) |
+| `cover` | File | No | Cover image file |
 
 **Example:**
 ```bash
@@ -130,7 +133,7 @@ curl -X POST http://localhost:8080/api/publish \
 **Response** `200`:
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": {
     "taskId": "20260426091349-a8a8a8a8",
@@ -172,7 +175,7 @@ curl -X POST http://localhost:8080/api/ai/generate \
 **Response** `200`:
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": {
     "title": "周末别宅家！8个低门槛户外活动直接抄作业",
@@ -207,7 +210,7 @@ curl -X POST http://localhost:8080/api/ai/generate-from-media \
 **Response** `200`:
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": {
     "title": "这组神仙风景也太治愈了！",
@@ -220,7 +223,7 @@ curl -X POST http://localhost:8080/api/ai/generate-from-media \
 
 ### POST /api/ai/polish
 
-Polish existing text (title or description) using AI.
+Polish existing text (title or description) using AI (synchronous — waits for completion).
 
 **Content-Type:** `application/json`
 
@@ -241,7 +244,7 @@ curl -X POST http://localhost:8080/api/ai/polish \
 **Response** `200`:
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": {
     "content": "这周末就别宅家啦，我们一起去爬山...",
@@ -250,6 +253,91 @@ curl -X POST http://localhost:8080/api/ai/polish \
   }
 }
 ```
+
+---
+
+### POST /api/ai/polish/submit
+
+Submit a polish task and return immediately with taskId + nodeId (asynchronous). Used by the frontend to support cancel during long-running polish operations.
+
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `text` | string | **Yes** | Text to polish |
+| `type` | string | No | `"title"` or `"description"` (default: `"description"`) |
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/ai/polish/submit \
+  -H "Content-Type: application/json" \
+  -d '{"text":"这个周末我们去爬山","type":"description"}'
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "taskId": "20260426232624-b0989898",
+    "nodeId": "polish-xxxxx",
+    "message": "Polish task submitted",
+    "traceUrl": "/api/trace/20260426232624-b0989898"
+  }
+}
+```
+
+---
+
+### GET /api/ai/polish/result
+
+Query the result of an async polish task. Used together with `POST /api/ai/polish/submit`.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | string | **Yes** | Task ID from submit response |
+| `nodeId` | string | No | Node ID (optional, queries latest if omitted) |
+
+**Example:**
+```bash
+curl "http://localhost:8080/api/ai/polish/result?taskId=20260426232624-b0989898&nodeId=polish-xxxxx"
+```
+
+**Response** `200` (still running):
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "taskId": "20260426232624-b0989898",
+    "nodeId": "polish-xxxxx",
+    "status": "RUNNING",
+    "traceUrl": "/api/trace/20260426232624-b0989898"
+  }
+}
+```
+
+**Response** `200` (completed):
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "taskId": "20260426232624-b0989898",
+    "nodeId": "polish-xxxxx",
+    "status": "SUCCESS",
+    "content": "这周末就别宅家啦，我们一起去爬山...",
+    "traceUrl": "/api/trace/20260426232624-b0989898"
+  }
+}
+```
+
+**Node Status Values:** `CREATED`, `READY`, `RUNNING`, `SUCCESS`, `FAILED`
 
 ---
 
@@ -271,7 +359,7 @@ curl "http://localhost:8080/api/weather/query?city=北京"
 **Response** `200`:
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": {
     "city": "北京",
@@ -311,7 +399,7 @@ curl http://localhost:8080/api/trace/recent
 **Response** `200`:
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": {
     "task": {
@@ -379,7 +467,7 @@ curl http://localhost:8080/api/trace/20260426231320-68686850
 **Response** `200` (same format as /api/trace/recent):
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": {
     "task": {...},
@@ -454,7 +542,10 @@ Each trace response contains two sections: `task` (the full task with nodes) and
 | 5 | `NODE_SCHEDULED` | ContextService | Worker picked up the node, execution started |
 | 6 | `NODE_SUCCESS` | StateMachine | Node execution succeeded (RUNNING → SUCCESS) |
 | 6 | `NODE_SUCCESS` | ContextService | Kafka event: node execution result (with durationMs, exitCode) |
-| 7 | `TASK_SUCCESS` | StateMachine | All nodes completed, task finished |
+| 7 | `NODE_FAILED` | StateMachine | Node execution permanently failed (RUNNING → FAILED) |
+| 7 | `AI_CANCELLED` | Frontend / Handler | User cancelled AI operation via frontend |
+| 8 | `TASK_SUCCESS` | StateMachine | All nodes completed, task finished |
+| 8 | `TASK_FAILED` | StateMachine | Task marked as failed |
 
 ---
 
@@ -624,7 +715,7 @@ curl http://localhost:8080/api/task/20260423150000-a1b2c3/context
 **Response** `200`:
 ```json
 {
-  "code": 0,
+  "code": 200,
   "message": "success",
   "data": [
     {
@@ -669,6 +760,25 @@ curl -X POST http://localhost:8080/api/task/20260423150000-a1b2c3/pause \
 {
   "taskId": "20260423150000-a1b2c3",
   "message": "Task paused successfully"
+}
+```
+
+---
+
+### POST /api/task/:taskId/fail
+
+Immediately mark a task as FAILED. Used by the frontend cancel mechanism to ensure the backend task stops processing when the user cancels an AI operation.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/task/20260423150000-a1b2c3/fail
+```
+
+**Response** `200`:
+```json
+{
+  "taskId": "20260423150000-a1b2c3",
+  "message": "Task failed successfully"
 }
 ```
 
@@ -973,7 +1083,7 @@ curl -X POST http://localhost:8080/api/context/record \
   -d '{"taskId": "20260423150000-a1b2c3", "nodeId": "n1", "type": "CUSTOM", "message": "test"}'
 ```
 
-**Context Types:** `TASK_CREATED`, `DAG_VALIDATED`, `DAG_SUBMITTED`, `NODE_READY`, `NODE_SCHEDULED`, `NODE_SUCCESS`, `NODE_FAILED`, `NODE_RETRY`, `NODE_SKIPPED`, `TASK_SUCCESS`, `TASK_FAILED`, `SNAPSHOT`, `CUSTOM`
+**Context Types:** `TASK_CREATED`, `DAG_VALIDATED`, `DAG_SUBMITTED`, `NODE_READY`, `NODE_SCHEDULED`, `NODE_SUCCESS`, `NODE_FAILED`, `NODE_RETRY`, `NODE_SKIPPED`, `TASK_SUCCESS`, `TASK_FAILED`, `AI_CANCELLED`, `SNAPSHOT`, `CUSTOM`
 
 **Response** `200`:
 ```json

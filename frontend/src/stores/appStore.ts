@@ -13,6 +13,7 @@ interface AppState {
   isPublishing: boolean
   chatSessionId: string | null
   contentType: ContentType
+  aiLoadingMessage: string | null
 
   setTitle: (title: string) => void
   setDescription: (description: string) => void
@@ -30,6 +31,7 @@ interface AppState {
   setChatSessionId: (id: string | null) => void
   setContentType: (type: ContentType) => void
   clearMedia: () => void
+  setAILoadingMessage: (msg: string | null) => void
   applyFields: (fields: Partial<Pick<AppState, 'title' | 'description' | 'keywords' | 'body'>>) => void
   getSelectedPlatforms: () => string[]
 }
@@ -59,6 +61,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isPublishing: false,
   chatSessionId: null,
   contentType: null,
+  aiLoadingMessage: null,
 
   setTitle: (title) => set({ title }),
   setDescription: (description) => set({ description }),
@@ -114,6 +117,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setChatSessionId: (chatSessionId) => set({ chatSessionId }),
   setContentType: (contentType) => set({ contentType }),
   clearMedia: () => set({ videos: [], images: [], cover: null }),
+  setAILoadingMessage: (aiLoadingMessage) => set({ aiLoadingMessage }),
 
   applyFields: (fields) => set((state) => ({
     title: fields.title ?? state.title,

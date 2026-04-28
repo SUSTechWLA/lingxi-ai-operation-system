@@ -1,26 +1,32 @@
 import React, { useState, useRef } from 'react'
-import { chatRevise } from '../services/api'
+import { chatRevise, recordContextEvent } from '../services/api'
 import { useAppStore } from '../stores/appStore'
+import { setAIAbort } from '../utils/ai-loading'
 
 const AIAssistantTab: React.FC = () => {
-  const { title, description, keywords, setTitle, setDescription, setKeywords } = useAppStore()
+  const { title, description, keywords, setTitle, setDescription, setKeywords, setAILoadingMessage } = useAppStore()
 
   const [inputValue, setInputValue] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
   const [revisionHistory, setRevisionHistory] = useState<string[]>([])
   const abortRef = useRef<AbortController | null>(null)
 
   const handleRevise = async () => {
     const text = inputValue.trim()
-    if (!text || isLoading) return
-
-    setIsLoading(true)
+    if (!text) return
 
     if (abortRef.current) {
       abortRef.current.abort()
     }
     const controller = new AbortController()
     abortRef.current = controller
+
+    setAILoadingMessage('AI正在处理修改请求...')
+    setAIAbort(() => {
+      controller.abort()
+      setAILoadingMessage(null)
+      abortRef.current = null
+      recordContextEvent('', 'AI_CANCELLED', '用户取消了AI修改操作')
+    })
 
     try {
       const result = await chatRevise(
@@ -57,7 +63,8 @@ const AIAssistantTab: React.FC = () => {
       console.error('AI revise failed:', error)
       setRevisionHistory(prev => [`修改失败，请重试`, ...prev].slice(0, 10))
     } finally {
-      setIsLoading(false)
+      setAILoadingMessage(null)
+      setAIAbort(null)
       if (abortRef.current === controller) {
         abortRef.current = null
       }
@@ -106,22 +113,17 @@ const AIAssistantTab: React.FC = () => {
             onKeyDown={handleKeyDown}
             placeholder="例：把标题改得更吸引人..."
             rows={2}
-            disabled={isLoading}
-            className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none placeholder:text-gray-400 disabled:opacity-50"
+            className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none placeholder:text-gray-400"
           />
         </div>
         <button
           onClick={handleRevise}
-          disabled={isLoading || !inputValue.trim()}
+          disabled={!inputValue.trim()}
           className="px-3 py-2 bg-primary text-white rounded-xl hover:bg-primary-dark transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 flex-shrink-0"
         >
-          {isLoading ? (
-            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          ) : (
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
-          )}
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+          </svg>
         </button>
       </div>
 

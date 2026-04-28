@@ -46,6 +46,22 @@ export interface AIPolishData {
   traceUrl: string
 }
 
+export interface PolishSubmitData {
+  taskId: string
+  nodeId: string
+  message: string
+  traceUrl: string
+}
+
+export interface PolishQueryData {
+  taskId: string
+  nodeId: string
+  status: string
+  content?: string
+  error?: string
+  traceUrl: string
+}
+
 export interface MediaAsset {
   id: string
   userId: string

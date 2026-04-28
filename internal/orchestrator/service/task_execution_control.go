@@ -64,6 +64,18 @@ func (tc *TaskExecutionControl) ResumeTask(ctx context.Context, taskID string) e
 	return nil
 }
 
+func (tc *TaskExecutionControl) FailTask(ctx context.Context, taskID string) error {
+	task, err := tc.taskRepo.FindByID(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to find task: %w", err)
+	}
+	if task == nil {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+
+	return tc.stateService.TransitionTask(ctx, taskID, model.TaskFailed)
+}
+
 func (tc *TaskExecutionControl) RetryNode(ctx context.Context, nodeID string) error {
 	node, err := tc.nodeRepo.FindByID(ctx, nodeID)
 	if err != nil {

@@ -118,8 +118,10 @@ Frontend: http://localhost:3000
 
 ### 已实现功能
 - ✅ **素材上传与库管理**：拖拽上传图片/视频到素材库，支持标签筛选和快速引用
+- ✅ **封面图上传**：支持上传内容封面图
 - ✅ **AI 内容生成**：根据文字想法或上传的素材，自动生成标题和简介
-- ✅ **AI 润色**：优化标题和简介的文字表达
+- ✅ **AI 润色**：优化标题和简介的文字表达，支持标题和简介同时润色
+- ✅ **AI 操作取消**：AI 调用时全屏遮罩+取消按钮，取消时自动终止后端任务并记录上下文
 - ✅ **内容生成工作台**：选择目标平台和风格，AI 智能生成适配内容
 - ✅ **AI 合规检查**：自动检测极限词、敏感词和平台违规风险
 - ✅ **跨平台适配**：一键适配抖音、小红书、微博、B站等平台风格
@@ -219,16 +221,25 @@ lingxi-ai-operation-system/
 │       │   ├── UploadCard.tsx     #     上传素材卡片
 │       │   ├── TitleInput.tsx     #     标题输入
 │       │   ├── DescriptionInput.tsx#    简介输入
-│       │   ├── WeatherCard.tsx    #     天气查询卡片
-│       │   ├── AIHelperPanel.tsx  #     AI 助手面板
-│       │   ├── PlatformSelector.tsx#   平台选择器
-│       │   ├── PublishButton.tsx  #     发布按钮
-│       │   └── Sidebar.tsx        #     侧边导航
+│       │   ├── WeatherCard.tsx       #     天气查询卡片
+│       │   ├── BlockingOverlay.tsx   #     AI 操作全屏遮罩
+│       │   ├── AIHelperPanel.tsx     #     AI 助手面板
+│       │   ├── AIAssistantTab.tsx    #     AI 对话式创作面板
+│       │   ├── ContentTypeSelector.tsx #   内容类型选择
+│       │   ├── MediaLibraryPanel.tsx #     素材库浏览面板
+│       │   ├── PlatformSelector.tsx  #   平台选择器
+│       │   ├── PublishButton.tsx     #     发布按钮
+│       │   ├── Sidebar.tsx           #     侧边导航
+│       │   ├── DesktopToolbar.tsx    #     Electron 桌面工具栏
+│       │   ├── CommandPanel.tsx      #     命令面板
+│       │   └── index.ts              #     组件统一导出
 │       ├── pages/
 │       │   └── PublishPage.tsx    #   主页面
 │       ├── services/api.ts        #   API 调用
-│       ├── stores/appStore.ts     #   状态管理
-│       └── utils/types.ts         #   类型定义
+│       ├── stores/appStore.ts     #   状态管理（含 cover、aiLoadingMessage、chatSessionId）
+│       └── utils/
+│           ├── types.ts           #   类型定义（含 PolishSubmitData、PolishQueryData、Chat 类型）
+│           └── electron.ts        #   Electron 工具函数
 ├── docs/                          # 文档
 ├── scripts/                       # 启动脚本
 └── docker-compose.yml             # 基础设施容器
