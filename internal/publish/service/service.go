@@ -34,8 +34,10 @@ type PublishRequest struct {
 	Description string                `json:"description"`
 	Keywords    string                `json:"keywords"`
 	Platforms   []string              `json:"platforms"`
+	ContentType string                `json:"contentType"`
 	VideoFiles  []*multipart.FileHeader
 	ImageFiles  []*multipart.FileHeader
+	CoverFile   *multipart.FileHeader
 }
 
 type PublishResponse struct {
@@ -62,6 +64,9 @@ func (s *PublishService) PublishContent(ctx context.Context, req *PublishRequest
 			names = append(names, f.Filename)
 		}
 		mediaInfo += fmt.Sprintf("图片文件：%v\n", names)
+	}
+	if req.CoverFile != nil {
+		mediaInfo += fmt.Sprintf("封面图片：%s\n", req.CoverFile.Filename)
 	}
 	if mediaInfo != "" {
 		contentSummary += "\n" + mediaInfo
@@ -142,8 +147,10 @@ Content to polish:
 }
 
 type AIGenerateResponse struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Body        string   `json:"body,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
 }
 
 func (s *PublishService) AIGenerateContent(ctx context.Context, prompt string) (*AIGenerateResponse, error) {

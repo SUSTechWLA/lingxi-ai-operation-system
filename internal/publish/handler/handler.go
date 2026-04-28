@@ -30,6 +30,7 @@ func (h *PublishHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/ai/polish", h.AIPolishText)
 		api.POST("/ai/polish/submit", h.AIPolishSubmit)
 		api.GET("/ai/polish/result", h.AIPolishQuery)
+
 	}
 }
 
@@ -58,6 +59,11 @@ func (h *PublishHandler) PublishContent(c *gin.Context) {
 		}
 	}
 
+	contentTypeStr := c.Request.FormValue("content_type")
+	if contentTypeStr != "" {
+		req.ContentType = contentTypeStr
+	}
+
 	if req.Title == "" || req.Description == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "title and description are required", "data": nil})
 		return
@@ -66,8 +72,12 @@ func (h *PublishHandler) PublishContent(c *gin.Context) {
 	// Handle file uploads
 	form := c.Request.MultipartForm
 	if form != nil {
-		for _, fileHeaders := range form.File {
+		for field, fileHeaders := range form.File {
 			for _, fh := range fileHeaders {
+				if field == "cover" {
+					req.CoverFile = fh
+					continue
+				}
 				ext := strings.ToLower(filepath.Ext(fh.Filename))
 				if ext == ".mp4" || ext == ".mov" || ext == ".avi" || ext == ".mkv" {
 					req.VideoFiles = append(req.VideoFiles, fh)
@@ -237,3 +247,4 @@ func (h *PublishHandler) AIPolishQuery(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": result})
 }
+

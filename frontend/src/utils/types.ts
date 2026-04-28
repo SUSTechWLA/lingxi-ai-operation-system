@@ -36,6 +36,8 @@ export interface TaskResponse {
 export interface AIGenerateData {
   title: string
   description: string
+  body?: string
+  keywords?: string[]
 }
 
 export interface AIPolishData {
@@ -129,4 +131,6 @@ export interface ChatMessageItem {
   suggestions?: Suggestion[]
   fields?: ChatGeneratedFields
 }
+
+export type ContentType = 'image' | 'video' | null
 

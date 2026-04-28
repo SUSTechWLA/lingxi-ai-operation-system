@@ -24,7 +24,7 @@ const KeywordInput: React.FC<KeywordInputProps> = ({
 
   return (
     <div>
-      <label className="text-sm font-medium text-gray-700 mb-2 block">
+      <label className="text-xs font-medium text-gray-500 mb-1.5 block">
         关键词（选填）
       </label>
       <div className="relative">
@@ -32,15 +32,15 @@ const KeywordInput: React.FC<KeywordInputProps> = ({
           type="text"
           value={keywords}
           onChange={(e) => setKeywords(e.target.value)}
-          placeholder="请输入关键词，用于提高内容曝光和精准推荐，多个关键词请用逗号分隔"
+          placeholder="关键词，用逗号分隔"
           maxLength={maxLength}
-          className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm"
+          className="w-full px-3.5 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm"
         />
-        <span className="absolute right-3 bottom-3 text-xs text-gray-400">
+        <span className="absolute right-3 bottom-2 text-xs text-gray-400">
           {keywords.length}/{maxLength}
         </span>
       </div>
-      <p className="mt-2 text-xs text-gray-400">
+      <p className="mt-1.5 text-[11px] text-gray-400">
         例如：
         {examples.map((ex, i) => (
           <span key={i}>

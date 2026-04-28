@@ -15,13 +15,16 @@ export const publishContent = async (
   keywords: string,
   platforms: string[],
   videoFiles: File[],
-  imageFiles: File[]
+  imageFiles: File[],
+  contentType?: string,
+  coverFile?: File | null
 ): Promise<TaskResponse> => {
   const formData = new FormData()
   formData.append('title', title)
   formData.append('description', description)
   formData.append('keywords', keywords)
   formData.append('platforms', JSON.stringify(platforms))
+  if (contentType) formData.append('content_type', contentType)
 
   videoFiles.forEach((file) => {
     formData.append('videos', file)
@@ -30,6 +33,10 @@ export const publishContent = async (
   imageFiles.forEach((file) => {
     formData.append('images', file)
   })
+
+  if (coverFile) {
+    formData.append('cover', coverFile)
+  }
 
   const response = await api.post<ApiResponse<TaskResponse>>('/publish', formData, {
     headers: {

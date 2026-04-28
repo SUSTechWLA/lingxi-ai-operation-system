@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { MediaFile, Platform } from '../utils/types'
+import { MediaFile, Platform, ContentType } from '../utils/types'
 
 interface AppState {
   title: string
@@ -8,9 +8,11 @@ interface AppState {
   body: string
   videos: MediaFile[]
   images: MediaFile[]
+  cover: MediaFile | null
   platforms: Platform[]
   isPublishing: boolean
   chatSessionId: string | null
+  contentType: ContentType
 
   setTitle: (title: string) => void
   setDescription: (description: string) => void
@@ -20,11 +22,14 @@ interface AppState {
   removeVideo: (index: number) => void
   addImages: (files: MediaFile[]) => void
   removeImage: (index: number) => void
+  setCover: (file: MediaFile | null) => void
   togglePlatform: (id: string) => void
   toggleAllPlatforms: (enabled: boolean) => void
   clearAll: () => void
   setIsPublishing: (isPublishing: boolean) => void
   setChatSessionId: (id: string | null) => void
+  setContentType: (type: ContentType) => void
+  clearMedia: () => void
   applyFields: (fields: Partial<Pick<AppState, 'title' | 'description' | 'keywords' | 'body'>>) => void
   getSelectedPlatforms: () => string[]
 }
@@ -49,9 +54,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   body: '',
   videos: [],
   images: [],
+  cover: null,
   platforms: defaultPlatforms,
   isPublishing: false,
   chatSessionId: null,
+  contentType: null,
 
   setTitle: (title) => set({ title }),
   setDescription: (description) => set({ description }),
@@ -75,6 +82,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       images: state.images.filter((_, i) => i !== index),
     })),
+  setCover: (cover) => set({ cover }),
 
   togglePlatform: (id) =>
     set((state) => ({
@@ -99,10 +107,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       body: '',
       videos: [],
       images: [],
+      cover: null,
     }),
 
   setIsPublishing: (isPublishing) => set({ isPublishing }),
   setChatSessionId: (chatSessionId) => set({ chatSessionId }),
+  setContentType: (contentType) => set({ contentType }),
+  clearMedia: () => set({ videos: [], images: [], cover: null }),
 
   applyFields: (fields) => set((state) => ({
     title: fields.title ?? state.title,
