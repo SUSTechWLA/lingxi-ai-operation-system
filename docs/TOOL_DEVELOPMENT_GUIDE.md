@@ -41,7 +41,12 @@
 |--------|------|------|
 | `llm_api` | Go | 调用 OpenAI 兼容 API 进行文本生成 |
 | `bash` | Go | 执行 Shell 命令（沙箱保护） |
+| `python` | Go | Python3 -c 执行，资源限制 |
 | `polisher` | Go | 文本润色（调用 LLM 优化标题/简介） |
+| `media_analyzer` | Go | 分析图片/视频，输出标签、建议和摘要 |
+| `content_generator` | Go | 基于素材分析和平台风格生成完整内容包 |
+| `content_checker` | Go | 检测敏感词、极限词、平台规范违规 |
+| `platform_adapter` | Go | 适配内容到抖音、小红书、B站等平台风格 |
 
 你可以在**任何语言**中编写工具并接入系统。
 

@@ -276,7 +276,12 @@ lingxi-ai-operation-system/
 │   │       └── builtin/
 │   │           ├── bash_tool.go   #   Bash 沙箱工具
 │   │           ├── polisher_tool.go #   文本润色工具
-│   │           └── builtin.go     #   LLM API 工具
+│   │           ├── llm_api_tool.go #   LLM API 工具
+│   │           ├── python_tool.go #   Python 执行工具
+│   │           ├── media_analyzer.go # 素材分析工具
+│   │           ├── content_generator.go # 内容生成工具
+│   │           ├── content_checker.go #  合规检查工具
+│   │           └── platform_adapter.go # 平台适配工具
 │   │
 │   ├── translator/                # 自然语言翻译
 │   └── context/                   # 上下文审计
@@ -290,11 +295,13 @@ lingxi-ai-operation-system/
 │   │   │   ├── DescriptionInput.tsx #   简介输入 + AI 润色
 │   │   │   ├── KeywordInput.tsx   #     关键词标签输入
 │   │   │   ├── AIHelperPanel.tsx  #     AI 助手面板
+│   │   │   ├── ContentWorkbench.tsx #  内容生成工作台
+│   │   │   ├── MediaLibraryPanel.tsx # 素材库浏览面板
 │   │   │   ├── PlatformSelector.tsx #  平台选择
 │   │   │   ├── PublishButton.tsx  #     发布按钮
 │   │   │   ├── Sidebar.tsx        #     侧边导航
 │   │   │   ├── DesktopToolbar.tsx #     Electron 桌面工具栏
-│   │   │   └── CommandPanel.tsx   #     命令面板
+│   │   │   ├── CommandPanel.tsx   #     命令面板
 │   │   │   # （PublishPage.tsx 内嵌UI）
 │   │   │   # - AI 加载遮罩：全屏进度条+spinner动画
 │   │   │   # - 结果弹窗：成功/失败居中弹窗，2.5s自动消失
@@ -346,13 +353,13 @@ lingxi-ai-operation-system/
 3. 润色内容 ──→ 点击标题或简介旁的"AI润色"按钮
       │         调用 /api/ai/polish
       │
-4. 查天气 ────→ 在右侧天气面板输入城市名
-      │         调用 /api/weather/query
-      │         点击"生成天气内容"自动填充
+4. 素材库 ────→ 点击素材区"素材库"按钮，浏览已上传素材
       │
-5. 选平台 ────→ 勾选要发布的平台
+5. 内容工作台 ──→ 在右侧工作台选择平台和风格，AI智能生成
       │
-6. 发布 ──────→ 点击"一键发布"
+6. 选平台 ────→ 勾选要发布的平台
+      │
+7. 发布 ──────→ 点击"一键发布"
                  调用 /api/publish
                  后端创建 DAG 任务并执行
 ```
@@ -442,6 +449,9 @@ cd frontend && npm install && npm run dev
 | `OPENAI_MODEL` | 否 | 使用的模型（默认 doubao） |
 | `SERVER_PORT` | 否 | 后端端口（默认 8080） |
 | `POSTGRES_PASSWORD` | 否 | 数据库密码 |
+| `MINIO_ENDPOINT` | 否 | MinIO 对象存储地址（默认 localhost:9000） |
+| `MINIO_ACCESS_KEY` | 否 | MinIO 访问密钥 |
+| `MINIO_SECRET_KEY` | 否 | MinIO 密钥 |
 
 ---
 

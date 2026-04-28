@@ -33,17 +33,17 @@ Common HTTP status codes:
 
 ## Table of Contents
 
-1. [Health](#health)
-2. [Publish Module (Frontend-facing)](#publish-module-frontend-facing)
+1. [Health](#1-health)
+2. [Publish Module (Frontend-facing)](#2-publish-module-frontend-facing)
    - [POST /api/publish — Submit publish task](#post-apipublish)
    - [POST /api/ai/generate — AI generate content](#post-apiaigenerate)
    - [POST /api/ai/generate-from-media — AI generate from media](#post-apiaigenerate-from-media)
    - [POST /api/ai/polish — AI polish text](#post-apiaipolish)
    - [GET /api/weather/query — Query weather](#get-apiweatherquery)
-2. [Trace — Task trace query](#2-trace-task-trace-query)
+3. [Trace — Task Trace Query](#3-trace--task-trace-query)
    - [GET /api/trace/recent — Get recent trace](#get-apitracerecent)
    - [GET /api/trace/:taskId — Get task trace](#get-apitracetaskid)
-3. [Orchestrator Module](#3-orchestrator-module)
+4. [Orchestrator Module](#4-orchestrator-module)
    - [POST /api/task/create — Create task](#post-apitaskcreate)
    - [POST /api/task/:taskId/dag — Submit DAG](#post-apitasktaskiddag)
    - [GET /api/task/:taskId — Get task](#get-apitasktaskid)
@@ -51,24 +51,29 @@ Common HTTP status codes:
    - [POST /api/task/:taskId/pause — Pause task](#post-apitasktaskidpause)
    - [POST /api/task/:taskId/resume — Resume task](#post-apitasktaskidresume)
    - [GET /api/task/:taskId/pause-reason — Get pause reason](#get-apitasktaskidpause-reason)
-4. [Node Operations](#4-node-operations)
+5. [Node Operations](#5-node-operations)
    - [POST /api/node/:nodeId/success — Report success](#post-apinodenodeidsuccess)
    - [POST /api/node/:nodeId/failure — Report failure](#post-apinodenodeidfailure)
    - [POST /api/node/:nodeId/retry — Retry node](#post-apinodenodeidretry)
    - [GET /api/node/:nodeId/snapshot/latest — Get snapshot](#get-apinodenodeidsnapshotlatest)
    - [POST /api/node/:nodeId/restore — Restore from snapshot](#post-apinodenodeidrestore)
-5. [NL-Translator](#5-nl-translator)
+6. [NL-Translator](#6-nl-translator)
    - [POST /api/translate — Translate NL to DAG](#post-apitranslate)
    - [POST /api/translate/submit — Translate and submit](#post-apitranslatesubmit)
-6. [NL-Driven DAG Submission](#6-nl-driven-dag-submission)
+7. [NL-Driven DAG Submission](#7-nl-driven-dag-submission)
    - [POST /api/node — Submit DAG directly](#post-apinode)
-7. [Context](#7-context)
+8. [Context](#8-context)
    - [GET /api/context/:taskId — Get task context](#get-apicontexttaskid)
    - [GET /api/context/:taskId/node/:nodeId/snapshot/latest — Get node snapshot](#get-apicontexttaskidnodenodeidsnapshotlatest)
    - [POST /api/context/:taskId/node/:nodeId/restore — Restore node](#post-apicontexttaskidnodenodeidrestore)
    - [POST /api/context/record — Record context manually](#post-apicontextrecord)
-8. [Built-in Tools](#8-built-in-tools)
-9. [Error Responses](#9-error-responses)
+9. [Media Management API](#9-media-management-api)
+   - [POST /api/media/upload — Upload media files](#post-apimediaupload)
+   - [GET /api/media/list — List media assets](#get-apimedialist)
+   - [GET /api/media/:id — Get media by ID](#get-apimediaid)
+   - [PUT /api/media/:id/tags — Update media tags](#put-apimediaidtags)
+10. [Built-in Tools](#10-built-in-tools)
+11. [Error Responses](#11-error-responses)
 
 ---
 
@@ -290,7 +295,7 @@ curl "http://localhost:8080/api/weather/query?city=北京"
 
 ---
 
-## 2. Trace — Task Trace Query
+## 3. Trace — Task Trace Query
 
 Trace endpoints provide complete task lifecycle data (task details + all context entries) for debugging and auditing.
 
@@ -453,7 +458,7 @@ Each trace response contains two sections: `task` (the full task with nodes) and
 
 ---
 
-## 3. Orchestrator Module
+## 4. Orchestrator Module
 
 ### POST /api/task/create
 
@@ -707,7 +712,7 @@ curl http://localhost:8080/api/task/20260423150000-a1b2c3/pause-reason
 
 ---
 
-## 4. Node Operations
+## 5. Node Operations
 
 ### POST /api/node/:nodeId/success
 
@@ -823,7 +828,7 @@ curl -X POST http://localhost:8080/api/node/n1/restore
 
 ---
 
-## 5. NL-Translator
+## 6. NL-Translator
 
 ### POST /api/translate
 
@@ -873,7 +878,7 @@ curl -X POST http://localhost:8080/api/translate/submit \
 
 ---
 
-## 6. NL-Driven DAG Submission
+## 7. NL-Driven DAG Submission
 
 ### POST /api/node
 
@@ -922,7 +927,7 @@ curl -X POST http://localhost:8080/api/node \
 
 ---
 
-## 7. Context
+## 8. Context
 
 ### GET /api/context/:taskId
 
@@ -979,17 +984,167 @@ curl -X POST http://localhost:8080/api/context/record \
 
 ---
 
-## 8. Built-in Tools
+## 9. Media Management API
+
+### POST /api/media/upload
+
+Upload media files (images/videos). Files are stored in MinIO and metadata is saved to the database.
+
+**Content-Type:** `multipart/form-data`
+
+**Form Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `userId` | string | No | User identifier (default: "default") |
+| `files` | File[] | **Yes** | One or more image/video files |
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/media/upload \
+  -F "userId=test-user" \
+  -F "files=@photo.jpg"
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": [
+    {
+      "id": "media-1714294410000-photo",
+      "userId": "test-user",
+      "originalName": "photo.jpg",
+      "mimeType": "image/jpeg",
+      "size": 1024000,
+      "minioPath": "test-user/2026/04/28/media-1714294410000-photo.jpg",
+      "tags": [],
+      "createdAt": "2026-04-28T12:00:00Z",
+      "updatedAt": "2026-04-28T12:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/media/list
+
+List uploaded media assets with pagination and optional tag filtering.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `userId` | string | No | User identifier (default: "default") |
+| `offset` | int | No | Pagination offset (default: 0) |
+| `limit` | int | No | Page size (default: 20) |
+| `tag` | string | No | Filter by tag name |
+
+**Example:**
+```bash
+curl "http://localhost:8080/api/media/list?userId=test-user&offset=0&limit=10&tag=风景"
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "items": [...],
+    "total": 1
+  }
+}
+```
+
+---
+
+### GET /api/media/:id
+
+Get a single media asset by ID.
+
+**Example:**
+```bash
+curl http://localhost:8080/api/media/media-1714294410000-photo
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "id": "media-1714294410000-photo",
+    "userId": "test-user",
+    "originalName": "photo.jpg",
+    "mimeType": "image/jpeg",
+    "size": 1024000,
+    "minioPath": "test-user/2026/04/28/media-1714294410000-photo.jpg",
+    "tags": [],
+    "createdAt": "2026-04-28T12:00:00Z",
+    "updatedAt": "2026-04-28T12:00:00Z"
+  }
+}
+```
+
+**Response** `404`:
+```json
+{
+  "code": 404,
+  "message": "media asset not found: ...",
+  "data": null
+}
+```
+
+---
+
+### PUT /api/media/:id/tags
+
+Update tags for a media asset.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tags` | string[] | **Yes** | New tag array |
+
+**Example:**
+```bash
+curl -X PUT http://localhost:8080/api/media/media-1714294410000-photo/tags \
+  -H "Content-Type: application/json" \
+  -d '{"tags": ["风景", "旅行", "故宫"]}'
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": null
+}
+```
+
+---
+
+
+## 10. Built-in Tools
 
 | Tool Name | Type | Description | Input Parameters |
 |-----------|------|-------------|-----------------|
 | `llm_api` | LLM | OpenAI-compatible chat API | `prompt` / `message` / `content` (string, required) |
 | `bash` | CUSTOM | Sandboxed shell execution | `command` (string, required) |
 | `polisher` | CUSTOM | Text polish via LLM | `text` (string, required), `polishType` (`"title"` or `"description"`) |
+| `python` | CUSTOM | Python3 -c execution with resource limits | `code` (string, required) |
+| `media_analyzer` | CUSTOM | Analyze uploaded media for tags, suggestions, summary | `media_ids` (string array) |
+| `content_generator` | CUSTOM | Generate full content package (title, description, script, tags) from media analysis | `media_ids`, `platform`, `style` |
+| `content_checker` | CUSTOM | Check content for compliance and quality issues | `content` (string), `title` (string), `platform` (string) |
+| `platform_adapter` | CUSTOM | Adapt content for specific social media platform requirements | `source_content` (string, required), `target_platform` (string, required), `title` (string) |
 
 ---
 
-## 9. Error Responses
+## 11. Error Responses
 
 **400 Bad Request:**
 ```json

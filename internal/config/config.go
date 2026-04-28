@@ -15,6 +15,7 @@ type Config struct {
 	Kafka    KafkaConfig    `mapstructure:",squash"`
 	OpenAI   OpenAIConfig   `mapstructure:",squash"`
 	Worker   WorkerConfig   `mapstructure:",squash"`
+	MinIO    MinIOConfig    `mapstructure:",squash"`
 	BashTool BashToolConfig `mapstructure:",squash"`
 	Services ServicesConfig `mapstructure:",squash"`
 	Sandbox  SandboxConfig  `mapstructure:",squash"`
@@ -67,6 +68,14 @@ type WorkerConfig struct {
 	ThreadPoolCore     int           `mapstructure:"WORKER_THREAD_POOL_CORE"`
 	ThreadPoolMax      int           `mapstructure:"WORKER_THREAD_POOL_MAX"`
 	Sandbox            SandboxConfig `mapstructure:",squash"`
+}
+
+type MinIOConfig struct {
+	Endpoint  string `mapstructure:"MINIO_ENDPOINT"`
+	AccessKey string `mapstructure:"MINIO_ACCESS_KEY"`
+	SecretKey string `mapstructure:"MINIO_SECRET_KEY"`
+	Bucket    string `mapstructure:"MINIO_BUCKET"`
+	UseSSL    bool   `mapstructure:"MINIO_USE_SSL"`
 }
 
 type BashToolConfig struct {
@@ -125,6 +134,11 @@ func setDefaults() {
 	viper.SetDefault("BASH_TOOL_TIMEOUT", 60)
 	viper.SetDefault("ORCHESTRATOR_URL", "http://localhost:8080")
 	viper.SetDefault("CONTEXT_SERVICE_URL", "http://localhost:8082")
+	viper.SetDefault("MINIO_ENDPOINT", "localhost:9000")
+	viper.SetDefault("MINIO_ACCESS_KEY", "minioadmin")
+	viper.SetDefault("MINIO_SECRET_KEY", "changeme")
+	viper.SetDefault("MINIO_BUCKET", "media-assets")
+	viper.SetDefault("MINIO_USE_SSL", false)
 
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		viper.SetDefault("OPENAI_API_KEY", apiKey)

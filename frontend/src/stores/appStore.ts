@@ -5,14 +5,17 @@ interface AppState {
   title: string
   description: string
   keywords: string
+  body: string
   videos: MediaFile[]
   images: MediaFile[]
   platforms: Platform[]
   isPublishing: boolean
+  chatSessionId: string | null
 
   setTitle: (title: string) => void
   setDescription: (description: string) => void
   setKeywords: (keywords: string) => void
+  setBody: (body: string) => void
   addVideos: (files: MediaFile[]) => void
   removeVideo: (index: number) => void
   addImages: (files: MediaFile[]) => void
@@ -21,6 +24,8 @@ interface AppState {
   toggleAllPlatforms: (enabled: boolean) => void
   clearAll: () => void
   setIsPublishing: (isPublishing: boolean) => void
+  setChatSessionId: (id: string | null) => void
+  applyFields: (fields: Partial<Pick<AppState, 'title' | 'description' | 'keywords' | 'body'>>) => void
   getSelectedPlatforms: () => string[]
 }
 
@@ -41,14 +46,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   title: '',
   description: '',
   keywords: '',
+  body: '',
   videos: [],
   images: [],
   platforms: defaultPlatforms,
   isPublishing: false,
+  chatSessionId: null,
 
   setTitle: (title) => set({ title }),
   setDescription: (description) => set({ description }),
   setKeywords: (keywords) => set({ keywords }),
+  setBody: (body) => set({ body }),
 
   addVideos: (files) =>
     set((state) => ({
@@ -88,11 +96,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       title: '',
       description: '',
       keywords: '',
+      body: '',
       videos: [],
       images: [],
     }),
 
   setIsPublishing: (isPublishing) => set({ isPublishing }),
+  setChatSessionId: (chatSessionId) => set({ chatSessionId }),
+
+  applyFields: (fields) => set((state) => ({
+    title: fields.title ?? state.title,
+    description: fields.description ?? state.description,
+    keywords: fields.keywords ?? state.keywords,
+    body: fields.body ?? state.body,
+  })),
 
   getSelectedPlatforms: () => {
     const { platforms } = get()

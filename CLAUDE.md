@@ -131,6 +131,10 @@ Architecture layers:
 - `PythonTool` — python3 -c execution with resource limits. Implements `BuildableTool`.
 - `LlmApiTool` — OpenAI chat/completions API calls. Implements `ExecutableTool`.
 - `PolisherTool` — Text polish for social media titles/descriptions via LLM. Implements `ExecutableTool`.
+- `MediaAnalyzerTool` — Media analysis: extracts tags, suggestions, and summaries from uploaded images/videos via LLM. Implements `ExecutableTool`.
+- `ContentGeneratorTool` — Full content package generation based on media analysis, platform, and style keywords. Implements `ExecutableTool`.
+- `ContentCheckerTool` — Content compliance check: sensitive words, advertising law violations, platform-specific rules. Implements `ExecutableTool`.
+- `PlatformAdapterTool` — Cross-platform content adaptation: adjusts tone, format, and length for 7 social media platforms. Implements `ExecutableTool`.
 
 #### Executor Layer (`internal/worker/executor/`)
 - `Executor` interface — `Execute(ctx, ExecutionRequest) (ExecutionResult, error)`

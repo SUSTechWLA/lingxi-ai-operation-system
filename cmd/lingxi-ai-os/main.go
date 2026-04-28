@@ -32,6 +32,7 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool/builtin"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/media"
 )
 
 func main() {
@@ -89,6 +90,10 @@ func main() {
 	toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewPythonTool())
 	toolRegistry.Register(builtin.NewPolisherTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewMediaAnalyzerTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewContentGeneratorTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewContentCheckerTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewPlatformAdapterTool(cfg.OpenAI))
 
 	directExec := executor.NewDirectExecutor()
 	var sandboxExec *executor.SandboxExecutor
@@ -107,6 +112,9 @@ func main() {
 
 	// Publish
 	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
+
+	// Chat (conversational AI generation)
+	chatService := publishSvc.NewChatService(cfg.OpenAI, rdb)
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -176,6 +184,16 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
+	publishHandler.NewChatHandler(chatService).RegisterRoutes(r)
+
+	// Media management
+	if storageSvc, err := media.NewStorageService(cfg.MinIO); err == nil {
+		mediaSvc := media.NewMediaService(pool, storageSvc)
+		media.NewMediaHandler(mediaSvc).RegisterRoutes(r)
+		zap.L().Info("Media service initialized with MinIO storage")
+	} else {
+		zap.L().Warn("MinIO storage not available, media uploads disabled", zap.Error(err))
+	}
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),

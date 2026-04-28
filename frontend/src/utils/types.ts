@@ -44,6 +44,27 @@ export interface AIPolishData {
   traceUrl: string
 }
 
+export interface MediaAsset {
+  id: string
+  userId: string
+  originalName: string
+  mimeType: string
+  size: number
+  minioPath: string
+  tags: string[]
+  embeddingId?: string
+  createdAt: string
+  updatedAt: string
+  url?: string
+}
+
+export interface MediaListResponse {
+  items: MediaAsset[]
+  total: number
+  offset: number
+  limit: number
+}
+
 export interface TraceNode {
   id: string
   taskId: string
@@ -75,5 +96,37 @@ export interface TraceData {
     metadata?: Record<string, unknown>
     createdAt: string
   }>
+}
+
+// Chat types for conversational AI generation
+export interface Suggestion {
+  text: string
+  type: string
+}
+
+export interface ChatGeneratedFields {
+  title?: string
+  description?: string
+  body?: string
+  keywords?: string[]
+}
+
+export interface ChatGenerateResponse {
+  session_id: string
+  reply: string
+  suggestions?: Suggestion[]
+  fields?: ChatGeneratedFields
+}
+
+export interface ChatReviseResponse {
+  reply: string
+  fields: ChatGeneratedFields
+}
+
+export interface ChatMessageItem {
+  role: 'user' | 'assistant'
+  content: string
+  suggestions?: Suggestion[]
+  fields?: ChatGeneratedFields
 }
 

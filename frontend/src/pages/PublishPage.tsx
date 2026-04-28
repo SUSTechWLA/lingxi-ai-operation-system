@@ -4,11 +4,15 @@ import TitleInput from '../components/TitleInput'
 import DescriptionInput from '../components/DescriptionInput'
 import KeywordInput from '../components/KeywordInput'
 import AIHelperPanel from '../components/AIHelperPanel'
+import ContentWorkbench from '../components/ContentWorkbench'
 import PlatformSelector from '../components/PlatformSelector'
 import PublishButton from '../components/PublishButton'
+import MediaLibraryPanel from '../components/MediaLibraryPanel'
+import GenerateModal from '../components/GenerateModal'
+import AIAssistantTab from '../components/AIAssistantTab'
 import { useAppStore } from '../stores/appStore'
-import { publishContent, aiGenerateContent, aiGenerateFromMedia, aiPolishText, fetchRecentTrace } from '../services/api'
-import type { AIPolishData, TraceData } from '../utils/types'
+import { publishContent, aiPolishText, fetchRecentTrace } from '../services/api'
+import type { AIPolishData, TraceData, MediaAsset } from '../utils/types'
 
 const PublishPage: React.FC = () => {
   const {
@@ -23,6 +27,8 @@ const PublishPage: React.FC = () => {
     setDescription,
     setIsPublishing,
     clearAll,
+    addImages,
+    addVideos,
   } = useAppStore()
 
   const [showResult, setShowResult] = useState(false)
@@ -35,6 +41,21 @@ const PublishPage: React.FC = () => {
   const [debugTraceData, setDebugTraceData] = useState<TraceData | null>(null)
   const [debugLoading, setDebugLoading] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
+
+  const [showMediaLibrary, setShowMediaLibrary] = useState(false)
+  const [showChatModal, setShowChatModal] = useState(false)
+  const [rightPanelTab, setRightPanelTab] = useState<'platform' | 'ai-assistant'>('platform')
+
+  const handleSelectMedia = (asset: MediaAsset) => {
+    if (asset.mimeType?.startsWith('image/')) {
+      const fakeFile = new File([], asset.originalName)
+      addImages([{ file: fakeFile, name: asset.originalName, size: asset.size }])
+    } else if (asset.mimeType?.startsWith('video/')) {
+      const fakeFile = new File([], asset.originalName)
+      addVideos([{ file: fakeFile, name: asset.originalName, size: asset.size }])
+    }
+    setShowMediaLibrary(false)
+  }
 
   const handleDebugTrace = async () => {
     setDebugLoading(true)
@@ -80,44 +101,6 @@ const PublishPage: React.FC = () => {
     }, 500)
     return () => clearInterval(interval)
   }, [isAILoading])
-
-  const handleAIGenerate = async () => {
-    const controller = new AbortController()
-    abortControllerRef.current = controller
-
-    const prompt = title || description || '自媒体内容创作'
-    const hasMedia = images.length > 0 || videos.length > 0
-    startAILoading(hasMedia ? 'AI 正在分析媒体素材并生成内容' : 'AI 正在生成内容')
-    try {
-      // Use media-based generation if images or videos are uploaded
-      if (images.length > 0 || videos.length > 0) {
-        setAIProgressText('正在分析上传的图片和视频...')
-        const imageFiles = images.map((i) => i.file)
-        const videoFiles = videos.map((v) => v.file)
-        const result = await aiGenerateFromMedia(prompt, imageFiles, videoFiles, controller.signal)
-        if (controller.signal.aborted) return
-        if (result.title) setTitle(result.title)
-        if (result.description) setDescription(result.description)
-      } else {
-        setAIProgressText('AI 正在思考创作内容...')
-        const result = await aiGenerateContent(prompt, controller.signal)
-        if (controller.signal.aborted) return
-        if (result.title) setTitle(result.title)
-        if (result.description) setDescription(result.description)
-      }
-      stopAILoading()
-      showResultPopup('AI 内容生成成功！')
-    } catch (error: any) {
-      if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
-      console.error('AI生成失败:', error)
-      stopAILoading()
-      showResultPopup('AI 生成失败，请重试', 'error')
-    } finally {
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null
-      }
-    }
-  }
 
   const cancelAILoading = () => {
     if (abortControllerRef.current) {
@@ -277,7 +260,7 @@ const PublishPage: React.FC = () => {
 
       <div className="flex-1 flex">
         <main className="flex-1 p-8 overflow-y-auto">
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-3xl mx-auto">
             <div className="mb-8">
               <div className="flex items-center gap-3 mb-2">
                 <h2 className="text-2xl font-bold text-gray-800">创作发布</h2>
@@ -289,7 +272,18 @@ const PublishPage: React.FC = () => {
 
             <div className="space-y-6">
               <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-4">上传素材</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-medium text-gray-700">上传素材</h3>
+                  <button
+                    onClick={() => setShowMediaLibrary(true)}
+                    className="text-xs text-primary hover:text-primary-dark flex items-center gap-1 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                    </svg>
+                    素材库
+                  </button>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <UploadCard type="video" />
                   <UploadCard type="image" />
@@ -316,13 +310,13 @@ const PublishPage: React.FC = () => {
                 <div className="flex-1" />
 
                 <button
-                  onClick={handleAIGenerate}
+                  onClick={() => setShowChatModal(true)}
                   className="px-6 py-2.5 bg-primary/10 text-primary rounded-xl hover:bg-primary/20 transition-colors flex items-center gap-2"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                   </svg>
-                  AI 生成标题和简介
+                  AI 生成全部内容
                 </button>
 
                 <button
@@ -339,30 +333,84 @@ const PublishPage: React.FC = () => {
           </div>
         </main>
 
-        <aside className="w-80 bg-white border-l border-gray-100 p-6 overflow-y-auto">
-          <div className="space-y-6">
-            <AIHelperPanel
-              onGenerate={handleAIGenerate}
-              onPolish={handleAIPolish}
-            />
+        <aside className="w-96 bg-white border-l border-gray-100 flex flex-col">
+          {/* Right panel tab bar */}
+          <div className="flex border-b border-gray-100">
+            <button
+              onClick={() => setRightPanelTab('platform')}
+              className={`flex-1 px-5 py-3.5 text-sm font-medium transition-colors relative ${
+                rightPanelTab === 'platform'
+                  ? 'text-primary'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              发布平台
+              {rightPanelTab === 'platform' && (
+                <div className="absolute bottom-0 left-5 right-5 h-0.5 bg-primary rounded-full" />
+              )}
+            </button>
+            <button
+              onClick={() => setRightPanelTab('ai-assistant')}
+              className={`flex-1 px-5 py-3.5 text-sm font-medium transition-colors relative ${
+                rightPanelTab === 'ai-assistant'
+                  ? 'text-primary'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              AI 助手
+              {rightPanelTab === 'ai-assistant' && (
+                <div className="absolute bottom-0 left-5 right-5 h-0.5 bg-primary rounded-full" />
+              )}
+            </button>
+          </div>
 
-            <div className="pt-6 border-t border-gray-100">
-              <PlatformSelector />
-            </div>
+          {/* Tab content */}
+          <div className="flex-1 p-6 overflow-y-auto">
+            {rightPanelTab === 'platform' ? (
+              <div className="space-y-6">
+                <AIHelperPanel
+                  onGenerate={() => setShowChatModal(true)}
+                  onPolish={handleAIPolish}
+                />
 
-            <div className="pt-4">
-              <PublishButton
-                onClick={handlePublish}
-                disabled={selectedCount === 0}
-                loading={isPublishing}
-              />
-              <p className="text-xs text-gray-400 mt-3 text-center">
-                发布前请确保内容遵守各平台规范
-              </p>
-            </div>
+                <div className="pt-2">
+                  <ContentWorkbench />
+                </div>
+
+                <div className="pt-6 border-t border-gray-100">
+                  <PlatformSelector />
+                </div>
+
+                <div className="pt-4">
+                  <PublishButton
+                    onClick={handlePublish}
+                    disabled={selectedCount === 0}
+                    loading={isPublishing}
+                  />
+                  <p className="text-xs text-gray-400 mt-3 text-center">
+                    发布前请确保内容遵守各平台规范
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <AIAssistantTab />
+            )}
           </div>
         </aside>
       </div>
+
+      {/* AI Chat Generation Modal */}
+      <GenerateModal
+        isOpen={showChatModal}
+        onClose={() => setShowChatModal(false)}
+      />
+
+      {/* Media Library Panel */}
+      <MediaLibraryPanel
+        isOpen={showMediaLibrary}
+        onClose={() => setShowMediaLibrary(false)}
+        onSelectMedia={handleSelectMedia}
+      />
 
       {/* Debug: float button for recent trace */}
       <button

@@ -96,6 +96,20 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_outbox_created ON outbox(created_at);
+
+	CREATE TABLE IF NOT EXISTS media_assets (
+	    id VARCHAR(64) PRIMARY KEY,
+	    user_id VARCHAR(64) NOT NULL DEFAULT 'default',
+	    original_name TEXT NOT NULL,
+	    mime_type VARCHAR(50),
+	    size BIGINT,
+	    minio_path TEXT,
+	    tags JSONB DEFAULT '[]',
+	    embedding_id VARCHAR(64),
+	    created_at TIMESTAMPTZ DEFAULT NOW(),
+	    updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_media_assets_user ON media_assets(user_id);
 	`
 
 	_, err := pool.Exec(ctx, schema)
