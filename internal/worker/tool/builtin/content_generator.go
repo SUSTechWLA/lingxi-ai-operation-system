@@ -22,6 +22,61 @@ func (t *ContentGeneratorTool) Name() string       { return "content_generator" 
 func (t *ContentGeneratorTool) Description() string { return "Generate full content package (title, description, script, tags) from media analysis" }
 func (t *ContentGeneratorTool) Type() tool.ToolType { return tool.ToolTypeCustom }
 
+func (t *ContentGeneratorTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     false,
+		Parameters: map[string]tool.ParamDef{
+			"prompt": {
+				Type:        "string",
+				Description: "User content creation request (default: 创作一篇自媒体内容)",
+				Required:    false,
+			},
+			"platform": {
+				Type:        "string",
+				Description: "Target platform name (default: 通用自媒体)",
+				Required:    false,
+			},
+			"style": {
+				Type:        "string",
+				Description: "Writing style (default: 轻松自然)",
+				Required:    false,
+			},
+			"keywords": {
+				Type:        "string",
+				Description: "Additional keywords as plain text",
+				Required:    false,
+			},
+			"analysis": {
+				Type:        "string",
+				Description: "JSON string of media analysis result (includes tags and summary)",
+				Required:    false,
+			},
+			"media_ids": {
+				Type:        "array",
+				Description: "Array of media ID strings from uploaded files",
+				Required:    false,
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"content":     {Type: "string", Description: "Raw LLM response text"},
+			"package":     {Type: "object", Description: "Parsed content package with title, description, script, tags"},
+			"title":       {Type: "string", Description: "Generated title"},
+			"description": {Type: "string", Description: "Generated description"},
+			"script":      {Type: "string", Description: "Generated content script"},
+			"tags":        {Type: "array", Description: "Generated tags"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"prompt": "创作一篇关于咖啡的自媒体内容", "platform": "小红书", "style": "轻松自然"},
+				Output: map[string]interface{}{"title": "手冲咖啡入门指南", "description": "今天和大家分享手冲咖啡的基本步骤...", "tags": []interface{}{"咖啡", "手冲", "生活方式"}},
+			},
+		},
+	}
+}
+
 func (t *ContentGeneratorTool) ValidateParameters(params map[string]interface{}) bool {
 	_, hasPrompt := params["prompt"]
 	_, hasMedia := params["media_ids"]

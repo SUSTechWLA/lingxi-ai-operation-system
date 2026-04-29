@@ -20,6 +20,45 @@ func NewMediaAnalyzerTool(cfg config.OpenAIConfig) *MediaAnalyzerTool {
 func (t *MediaAnalyzerTool) Name() string        { return "media_analyzer" }
 func (t *MediaAnalyzerTool) Description() string  { return "Analyze media files (images/videos) and generate tags, descriptions, and content suggestions" }
 func (t *MediaAnalyzerTool) Type() tool.ToolType  { return tool.ToolTypeCustom }
+func (t *MediaAnalyzerTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     false,
+		Parameters: map[string]tool.ParamDef{
+			"media_ids": {
+				Type:        "array",
+				Description: "Array of media ID strings from uploaded files",
+				Required:    false,
+			},
+			"file_names": {
+				Type:        "array",
+				Description: "Array of filename strings (paired by index with media_ids)",
+				Required:    false,
+			},
+			"prompt": {
+				Type:        "string",
+				Description: "Custom analysis instructions (default: 分析这批自媒体素材，生成相关标签和内容创作建议)",
+				Required:    false,
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"content":     {Type: "string", Description: "Raw LLM response text"},
+			"analysis":    {Type: "object", Description: "Parsed analysis with tags, suggestions, summary"},
+			"tags":        {Type: "array", Description: "Generated tags (3-5 Chinese tags)"},
+			"suggestions": {Type: "array", Description: "Content creation suggestions"},
+			"summary":     {Type: "string", Description: "One-sentence summary of media features"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"media_ids": []interface{}{"media_001", "media_002"}, "file_names": []interface{}{"photo1.jpg", "photo2.jpg"}},
+				Output: map[string]interface{}{"tags": []interface{}{"美食", "烘焙", "甜品"}, "suggestions": []interface{}{"制作烘焙教程", "分享甜点故事"}},
+			},
+		},
+	}
+}
+
 func (t *MediaAnalyzerTool) ValidateParameters(params map[string]interface{}) bool {
 	_, hasMediaIDs := params["media_ids"]
 	_, hasNames := params["file_names"]

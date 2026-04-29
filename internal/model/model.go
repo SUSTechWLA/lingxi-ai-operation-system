@@ -53,6 +53,8 @@ const (
 	ContextNodeRetry      ContextType = "NODE_RETRY"
 	ContextTaskSuccess    ContextType = "TASK_SUCCESS"
 	ContextTaskFailed     ContextType = "TASK_FAILED"
+	ContextAIRevise       ContextType = "AI_REVISE"
+	ContextAICancelled    ContextType = "AI_CANCELLED"
 )
 
 type Task struct {

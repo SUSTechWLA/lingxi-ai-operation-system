@@ -103,6 +103,7 @@ export const chatGenerate = async (
     body?: string
     keywords?: string[]
     media_count?: number
+    media_names?: string[]
   },
   sessionId?: string,
   signal?: AbortSignal
@@ -122,11 +123,17 @@ export const chatRevise = async (
     description: string
     keywords: string[]
   },
+  mediaCount?: number,
+  mediaNames?: string[],
   signal?: AbortSignal
 ): Promise<ChatReviseResponse> => {
   const response = await api.post<ApiResponse<ChatReviseResponse>>('/chat/revise', {
     message,
-    current_fields: currentFields,
+    title: currentFields.title,
+    description: currentFields.description,
+    keywords: currentFields.keywords,
+    media_count: mediaCount || 0,
+    media_names: mediaNames || [],
   }, { signal })
   return response.data.data
 }

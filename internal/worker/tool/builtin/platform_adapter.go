@@ -22,6 +22,48 @@ func (t *PlatformAdapterTool) Name() string       { return "platform_adapter" }
 func (t *PlatformAdapterTool) Description() string { return "Adapt content for specific social media platform requirements" }
 func (t *PlatformAdapterTool) Type() tool.ToolType { return tool.ToolTypeCustom }
 
+func (t *PlatformAdapterTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     false,
+		Parameters: map[string]tool.ParamDef{
+			"target_platform": {
+				Type:        "string",
+				Description: "Target platform name (抖音/小红书/微博/B站/公众号/快手/知乎)",
+				Required:    true,
+				Enum:        []string{"抖音", "小红书", "微博", "B站", "公众号", "快手", "知乎"},
+			},
+			"source_content": {
+				Type:        "string",
+				Description: "The content text to adapt",
+				Required:    true,
+			},
+			"title": {
+				Type:        "string",
+				Description: "Current title (included in prompt context)",
+				Required:    false,
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"content":            {Type: "string", Description: "Raw LLM response text"},
+			"adapted":            {Type: "object", Description: "Parsed adapted content object"},
+			"adapted_title":      {Type: "string", Description: "Platform-adapted title"},
+			"adapted_description": {Type: "string", Description: "Platform-adapted description"},
+			"adapted_tags":       {Type: "array", Description: "Platform-adapted tags"},
+			"platform_notes":     {Type: "string", Description: "Adaptation notes"},
+			"target_platform":    {Type: "string", Description: "Echoed target platform name"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"target_platform": "小红书", "source_content": "这个产品非常好用", "title": "好物推荐"},
+				Output: map[string]interface{}{"adapted_title": "好物推荐｜亲测好用！✨", "adapted_description": "今天给大家分享一款真的超好用的产品...", "adapted_tags": []interface{}{"好物分享", "真实体验"}},
+			},
+		},
+	}
+}
+
 func (t *PlatformAdapterTool) ValidateParameters(params map[string]interface{}) bool {
 	target, _ := params["target_platform"].(string)
 	_, hasContent := params["source_content"]

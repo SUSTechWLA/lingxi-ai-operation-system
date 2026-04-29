@@ -64,6 +64,38 @@ func (t *PythonTool) Execute(ctx context.Context, params map[string]interface{},
 	})
 }
 
+func (t *PythonTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     true,
+		Parameters: map[string]tool.ParamDef{
+			"source": {
+				Type:        "string",
+				Description: "Python3 source code to execute (passed as python3 -c '...')",
+				Required:    true,
+			},
+			"timeoutSec": {
+				Type:        "number",
+				Description: "Execution timeout in seconds (default: 30)",
+				Required:    false,
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"exitCode": {Type: "integer", Description: "Process exit code (0 for success)"},
+			"output":   {Type: "string", Description: "Captured stdout text"},
+			"stderr":   {Type: "string", Description: "Captured stderr text"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"source": "print('hello world')"},
+				Output: map[string]interface{}{"exitCode": 0, "output": "hello world\n", "stderr": ""},
+			},
+		},
+	}
+}
+
 func (t *PythonTool) ValidateParameters(params map[string]interface{}) bool {
 	_, ok := params["source"].(string)
 	return ok

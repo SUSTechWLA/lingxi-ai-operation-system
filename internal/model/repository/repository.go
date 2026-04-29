@@ -352,6 +352,31 @@ func (r *NodeDependencyRepository) Save(ctx context.Context, dep *model.NodeDepe
 	return err
 }
 
+func (r *NodeDependencyRepository) FindByTaskID(ctx context.Context, taskID string) ([]*model.NodeDependency, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT DISTINCT nd.parent_node_id, nd.child_node_id
+		 FROM ai_node_dependency nd
+		 JOIN ai_node n ON n.id = nd.parent_node_id
+		 WHERE n.task_id = $1`,
+		taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var deps []*model.NodeDependency
+	for rows.Next() {
+		var dep model.NodeDependency
+		if err := rows.Scan(&dep.ParentNodeID, &dep.ChildNodeID); err != nil {
+			return nil, err
+		}
+		deps = append(deps, &dep)
+	}
+
+	return deps, nil
+}
+
 func (r *NodeDependencyRepository) FindByChildID(ctx context.Context, childID string) ([]*model.NodeDependency, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT parent_node_id, child_node_id FROM ai_node_dependency WHERE child_node_id=$1`, childID,

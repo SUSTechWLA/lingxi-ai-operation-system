@@ -94,6 +94,9 @@ func main() {
 	toolRegistry.Register(builtin.NewContentGeneratorTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewContentCheckerTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewPlatformAdapterTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewChatReviseTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewChatGenerateTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewExternalTool(toolRegistry))
 
 	directExec := executor.NewDirectExecutor()
 	var sandboxExec *executor.SandboxExecutor
@@ -113,8 +116,8 @@ func main() {
 	// Publish
 	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
 
-	// Chat (conversational AI generation)
-	chatService := publishSvc.NewChatService(cfg.OpenAI, rdb)
+	// Chat (conversational AI generation with tool-calling support)
+	chatService := publishSvc.NewChatService(cfg.OpenAI, rdb, cfg.Services.OrchestratorURL, toolRegistry)
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -184,7 +187,8 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
-	publishHandler.NewChatHandler(chatService).RegisterRoutes(r)
+	publishHandler.NewChatHandler(chatService, orchestratorService, contextService).RegisterRoutes(r)
+	publishHandler.NewToolHandler(toolRegistry).RegisterRoutes(r)
 
 	// Media management
 	if storageSvc, err := media.NewStorageService(cfg.MinIO); err == nil {

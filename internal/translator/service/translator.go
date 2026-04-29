@@ -54,9 +54,9 @@ const systemPrompt = `你是一个任务分解专家。请将用户的自然语�
 }`
 
 type NlToDagService struct {
-	cfg            config.OpenAIConfig
+	cfg             config.OpenAIConfig
 	orchestratorURL string
-	httpClient     *http.Client
+	httpClient      *http.Client
 }
 
 func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string) *NlToDagService {
@@ -67,23 +67,160 @@ func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string) *NlToDag
 	}
 }
 
+// TranslateToDag translates natural language to a DAG.
+// Routes through the DAG pipeline (Orchestrator -> Worker -> llm_api) for full traceability.
 func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*model.DAGRequest, error) {
-	zap.L().Info("Translating natural language to DAG", zap.String("prompt", prompt))
+	zap.L().Info("Translating natural language to DAG via pipeline", zap.String("prompt", prompt))
 
-	response, err := s.callOpenAI(ctx, prompt)
+	// Step 1: Submit DAG with llm_api node (combined system prompt + user prompt)
+	nodeID := fmt.Sprintf("nl-translate-%d", time.Now().UnixMilli())
+
+	fullPrompt := fmt.Sprintf(`%s
+
+用户需求：%s`, systemPrompt, prompt)
+
+	dagPayload := map[string]interface{}{
+		"nodes": []map[string]interface{}{
+			{
+				"id":   nodeID,
+				"type": "TOOL",
+				"name": "llm_api",
+				"input": map[string]interface{}{
+					"prompt": fullPrompt,
+				},
+			},
+		},
+		"edges": []map[string]interface{}{},
+	}
+
+	dagBody, _ := json.Marshal(dagPayload)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", s.orchestratorURL+"/api/node", bytes.NewReader(dagBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to call OpenAI: %w", err)
+		return nil, fmt.Errorf("failed to create DAG submit request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to submit translation DAG: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var submitResult map[string]interface{}
+	if err := json.Unmarshal(respBody, &submitResult); err != nil {
+		return nil, fmt.Errorf("failed to parse DAG submit response: %w", err)
 	}
 
-	var dag model.DAGRequest
-	if err := json.Unmarshal([]byte(response), &dag); err != nil {
-		return nil, fmt.Errorf("failed to parse DAG: %w", err)
+	taskID, _ := submitResult["taskId"].(string)
+	if taskID == "" {
+		return nil, fmt.Errorf("orchestrator did not return taskId: %s", string(respBody))
 	}
 
-	zap.L().Info("Successfully translated to DAG", zap.Int("nodeCount", len(dag.Nodes)))
-	return &dag, nil
+	zap.L().Info("NL translation DAG submitted",
+		zap.String("taskId", taskID),
+		zap.String("nodeId", nodeID))
+
+	// Step 2: Poll for result (max 60s, every 800ms)
+	maxAttempts := 75
+	pollInterval := 800 * time.Millisecond
+
+	for i := 0; i < maxAttempts; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("context cancelled while polling translation result: %w", ctx.Err())
+		default:
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, "GET", s.orchestratorURL+"/api/task/"+taskID, nil)
+		if err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		httpResp, err := s.httpClient.Do(httpReq)
+		if err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		body, _ := io.ReadAll(httpResp.Body)
+		httpResp.Body.Close()
+
+		var taskResult map[string]interface{}
+		if err := json.Unmarshal(body, &taskResult); err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// Find target node
+		var nodeStatus string
+		var nodeOutput map[string]interface{}
+
+		if nodes, ok := taskResult["nodes"].([]interface{}); ok {
+			for _, n := range nodes {
+				node, ok := n.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				nid, _ := node["id"].(string)
+				if nid != nodeID {
+					continue
+				}
+				nodeStatus, _ = node["status"].(string)
+				if output, ok := node["output"].(map[string]interface{}); ok {
+					nodeOutput = output
+				}
+				break
+			}
+		}
+
+		switch nodeStatus {
+		case "SUCCESS":
+			if nodeOutput == nil {
+				return nil, fmt.Errorf("node %s has no output", nodeID)
+			}
+			stdout, _ := nodeOutput["stdout"].(string)
+			if stdout == "" {
+				return nil, fmt.Errorf("node %s stdout is empty", nodeID)
+			}
+
+			var toolOutput map[string]interface{}
+			if err := json.Unmarshal([]byte(stdout), &toolOutput); err != nil {
+				return nil, fmt.Errorf("failed to parse tool stdout: %w", err)
+			}
+
+			contentStr, _ := toolOutput["content"].(string)
+			if contentStr == "" {
+				return nil, fmt.Errorf("tool output content is empty")
+			}
+
+			var dag model.DAGRequest
+			if err := json.Unmarshal([]byte(contentStr), &dag); err != nil {
+				return nil, fmt.Errorf("failed to parse LLM response as DAG: %w", err)
+			}
+
+			zap.L().Info("Successfully translated to DAG via pipeline",
+				zap.String("taskId", taskID),
+				zap.Int("nodeCount", len(dag.Nodes)))
+
+			return &dag, nil
+
+		case "FAILED":
+			return nil, fmt.Errorf("translation node %s failed", nodeID)
+
+		default:
+			time.Sleep(pollInterval)
+		}
+	}
+
+	return nil, fmt.Errorf("polling timed out for translation task %s", taskID)
 }
 
+// TranslateAndSubmit translates natural language to DAG and submits the resulting DAG to the orchestrator.
+// The translation itself goes through the DAG pipeline, and the result is submitted as a new task.
 func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) (map[string]interface{}, error) {
 	dag, err := s.TranslateToDag(ctx, prompt)
 	if err != nil {
@@ -110,71 +247,8 @@ func (s *NlToDagService) TranslateAndSubmit(ctx context.Context, prompt string) 
 		return nil, fmt.Errorf("failed to parse orchestrator response: %w", err)
 	}
 
-	zap.L().Info("Successfully submitted task to orchestrator")
+	zap.L().Info("Successfully submitted translated task to orchestrator")
 	return result, nil
-}
-
-func (s *NlToDagService) callOpenAI(ctx context.Context, userPrompt string) (string, error) {
-	if s.cfg.APIKey == "" {
-		return "", fmt.Errorf("API key is not configured")
-	}
-
-	requestBody := map[string]interface{}{
-		"model":       s.cfg.Model,
-		"temperature": s.cfg.Temperature,
-		"max_tokens":  s.cfg.MaxTokens,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
-	}
-
-	body, _ := json.Marshal(requestBody)
-
-	baseURL := s.cfg.BaseURL
-	if len(baseURL) > 0 && baseURL[len(baseURL)-1] != '/' {
-		baseURL += "/"
-	}
-	endpoint := baseURL + "chat/completions"
-
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("LLM API call failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	var responseMap map[string]interface{}
-	if err := json.Unmarshal(respBody, &responseMap); err != nil {
-		return "", fmt.Errorf("failed to parse LLM response: %w", err)
-	}
-
-	choices, ok := responseMap["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return "", fmt.Errorf("no choices in LLM response")
-	}
-
-	choice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid choice format")
-	}
-
-	message, ok := choice["message"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid message format")
-	}
-
-	content, _ := message["content"].(string)
-	return content, nil
 }
 
 func (s *NlToDagService) GetTaskStatus(ctx context.Context, taskID string) (map[string]interface{}, error) {

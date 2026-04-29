@@ -16,9 +16,9 @@ import (
 )
 
 type PublishService struct {
-	cfg              config.OpenAIConfig
-	orchestratorURL  string
-	httpClient       *http.Client
+	cfg             config.OpenAIConfig
+	orchestratorURL string
+	httpClient      *http.Client
 }
 
 func NewPublishService(cfg config.OpenAIConfig, orchestratorURL string) *PublishService {
@@ -151,29 +151,224 @@ type AIGenerateResponse struct {
 	Description string   `json:"description"`
 	Body        string   `json:"body,omitempty"`
 	Keywords    []string `json:"keywords,omitempty"`
+	TaskID      string   `json:"taskId,omitempty"`
 }
 
-func (s *PublishService) AIGenerateContent(ctx context.Context, prompt string) (*AIGenerateResponse, error) {
-	systemPrompt := `你是一个自媒体内容创作助手。请根据用户的提示，生成适合自媒体发布的标题和简介。
+type PolishSubmitResponse struct {
+	TaskID   string `json:"taskId"`
+	NodeID   string `json:"nodeId"`
+	Message  string `json:"message"`
+	TraceURL string `json:"traceUrl"`
+}
+
+type PolishQueryResponse struct {
+	TaskID   string      `json:"taskId"`
+	NodeID   string      `json:"nodeId"`
+	Status   string      `json:"status"`
+	Content  string      `json:"content,omitempty"`
+	Error    string      `json:"error,omitempty"`
+	TraceURL string      `json:"traceUrl"`
+}
+
+// AIGenerateSubmit submits a content generation task through the Orchestrator -> Worker -> llm_api pipeline.
+func (s *PublishService) AIGenerateSubmit(ctx context.Context, prompt string) (*PolishSubmitResponse, error) {
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
+
+	nodeID := fmt.Sprintf("ai-generate-%d", time.Now().UnixMilli())
+
+	fullPrompt := fmt.Sprintf(`你是一个自媒体内容创作助手。请根据用户的提示，生成适合自媒体发布的标题和简介。
 要求：
 1. 标题吸引眼球，不超过30字
 2. 简介详细介绍内容亮点，200字以内
-3. 返回纯JSON格式：{"title": "标题", "description": "简介"}`
+3. 返回纯JSON格式：{"title": "标题", "description": "简介", "keywords": ["关键词1"]}
 
-	content, err := s.callOpenAI(ctx, systemPrompt, prompt)
+用户需求：%s`, prompt)
+
+	dagPayload := map[string]interface{}{
+		"nodes": []map[string]interface{}{
+			{
+				"id":   nodeID,
+				"type": "TOOL",
+				"name": "llm_api",
+				"input": map[string]interface{}{
+					"prompt": fullPrompt,
+				},
+			},
+		},
+		"edges": []map[string]interface{}{},
+	}
+
+	dagBody, _ := json.Marshal(dagPayload)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", s.orchestratorURL+"/api/node", bytes.NewReader(dagBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to submit to orchestrator: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse orchestrator response: %w", err)
+	}
+
+	taskID, _ := result["taskId"].(string)
+	if taskID == "" {
+		return nil, fmt.Errorf("orchestrator did not return taskId: %s", string(respBody))
+	}
+
+	zap.L().Info("AI generate task submitted",
+		zap.String("taskId", taskID),
+		zap.String("nodeId", nodeID))
+
+	traceURL := fmt.Sprintf("/api/trace/%s", taskID)
+
+	return &PolishSubmitResponse{
+		TaskID:   taskID,
+		NodeID:   nodeID,
+		Message:  "内容生成任务已提交",
+		TraceURL: traceURL,
+	}, nil
+}
+
+// AIGenerateQueryResult queries the result of an AI generate task and returns the parsed response.
+func (s *PublishService) AIGenerateQueryResult(ctx context.Context, taskID, nodeID string) (*AIGenerateResponse, error) {
+	result := &AIGenerateResponse{}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", s.orchestratorURL+"/api/task/"+taskID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpResp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	body, _ := io.ReadAll(httpResp.Body)
+
+	var taskResult map[string]interface{}
+	if err := json.Unmarshal(body, &taskResult); err != nil {
+		return nil, fmt.Errorf("failed to parse task response: %w", err)
+	}
+
+	// Find the target node
+	var nodeStatus string
+	var nodeOutput map[string]interface{}
+
+	if nodes, ok := taskResult["nodes"].([]interface{}); ok {
+		for _, n := range nodes {
+			node, ok := n.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			nid, _ := node["id"].(string)
+			if nid != nodeID {
+				continue
+			}
+
+			nodeStatus, _ = node["status"].(string)
+			if output, ok := node["output"].(map[string]interface{}); ok {
+				nodeOutput = output
+			}
+			break
+		}
+	}
+
+	if nodeStatus == "" {
+		return nil, fmt.Errorf("node %s not found in task %s", nodeID, taskID)
+	}
+
+	switch nodeStatus {
+	case "SUCCESS":
+		// Parse output
+	case "FAILED":
+		return nil, fmt.Errorf("generate task failed for node %s", nodeID)
+	default:
+		// Still pending/running
+		return nil, nil
+	}
+
+	if nodeOutput == nil {
+		return nil, fmt.Errorf("node %s has no output", nodeID)
+	}
+
+	// Extract content from llm_api tool output
+	// LlmApiTool returns: {"content": "LLM response string", "model": "...", "rawResponse": {...}}
+	// The LLM response is a JSON string like: {"title": "...", "description": "...", "keywords": [...]}
+	stdout, _ := nodeOutput["stdout"].(string)
+	if stdout == "" {
+		return nil, fmt.Errorf("node %s stdout is empty", nodeID)
+	}
+
+	var toolOutput map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &toolOutput); err != nil {
+		return nil, fmt.Errorf("failed to parse tool stdout: %w", err)
+	}
+
+	contentStr, _ := toolOutput["content"].(string)
+	if contentStr == "" {
+		return nil, fmt.Errorf("tool output content is empty")
+	}
+
+	if err := json.Unmarshal([]byte(contentStr), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse LLM response as JSON: %w", err)
+	}
+
+	result.TaskID = taskID
+	return result, nil
+}
+
+// AIGenerateContent generates content via the Orchestrator -> Worker -> llm_api pipeline.
+func (s *PublishService) AIGenerateContent(ctx context.Context, prompt string) (*AIGenerateResponse, error) {
+	submitResp, err := s.AIGenerateSubmit(ctx, prompt)
 	if err != nil {
 		return nil, err
 	}
 
-	var result AIGenerateResponse
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse AI response: %w", err)
+	taskID := submitResp.TaskID
+	nodeID := submitResp.NodeID
+
+	// Poll for result (max 60s, every 800ms)
+	maxAttempts := 75
+	pollInterval := 800 * time.Millisecond
+
+	for i := 0; i < maxAttempts; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("context cancelled while polling generate result: %w", ctx.Err())
+		default:
+		}
+
+		result, err := s.AIGenerateQueryResult(ctx, taskID, nodeID)
+		if err != nil {
+			return nil, fmt.Errorf("generate query failed: %w", err)
+		}
+		if result != nil {
+			zap.L().Info("AI generate task completed",
+				zap.String("taskId", taskID),
+				zap.String("nodeId", nodeID))
+			return result, nil
+		}
+
+		time.Sleep(pollInterval)
 	}
 
-	return &result, nil
+	return nil, fmt.Errorf("polling timed out for generate task %s", taskID)
 }
 
-func (s *PublishService) AIGenerateFromMedia(ctx context.Context, prompt string, images []*multipart.FileHeader, videos []*multipart.FileHeader) (*AIGenerateResponse, error) {
+// AIGenerateFromMediaDAG submits a content generation task with media descriptions through the DAG pipeline.
+func (s *PublishService) AIGenerateFromMediaSubmit(ctx context.Context, prompt string, images []*multipart.FileHeader, videos []*multipart.FileHeader) (*PolishSubmitResponse, error) {
 	mediaDesc := ""
 	if len(images) > 0 {
 		names := make([]string, 0, len(images))
@@ -200,42 +395,48 @@ func (s *PublishService) AIGenerateFromMedia(ctx context.Context, prompt string,
 请根据以上素材和说明，生成适合自媒体发布的标题和简介。`, mediaDesc, prompt)
 	}
 
-	systemPrompt := `你是一个自媒体内容创作助手。请根据用户上传的素材和说明，生成适合自媒体发布的标题和简介。
-要求：
-1. 标题吸引眼球，不超过30字
-2. 简介详细介绍内容亮点，200字以内
-3. 返回纯JSON格式：{"title": "标题", "description": "简介"}`
+	return s.AIGenerateSubmit(ctx, fullPrompt)
+}
 
-	content, err := s.callOpenAI(ctx, systemPrompt, fullPrompt)
+// AIGenerateFromMedia generates content from media via the DAG pipeline.
+func (s *PublishService) AIGenerateFromMedia(ctx context.Context, prompt string, images []*multipart.FileHeader, videos []*multipart.FileHeader) (*AIGenerateResponse, error) {
+	submitResp, err := s.AIGenerateFromMediaSubmit(ctx, prompt, images, videos)
 	if err != nil {
 		return nil, err
 	}
 
-	var result AIGenerateResponse
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse AI response: %w", err)
+	taskID := submitResp.TaskID
+	nodeID := submitResp.NodeID
+
+	// Poll for result (max 60s, every 800ms)
+	maxAttempts := 75
+	pollInterval := 800 * time.Millisecond
+
+	for i := 0; i < maxAttempts; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("context cancelled while polling generate-from-media result: %w", ctx.Err())
+		default:
+		}
+
+		result, err := s.AIGenerateQueryResult(ctx, taskID, nodeID)
+		if err != nil {
+			return nil, fmt.Errorf("generate query failed: %w", err)
+		}
+		if result != nil {
+			zap.L().Info("AI generate-from-media task completed",
+				zap.String("taskId", taskID),
+				zap.String("nodeId", nodeID))
+			return result, nil
+		}
+
+		time.Sleep(pollInterval)
 	}
 
-	return &result, nil
+	return nil, fmt.Errorf("polling timed out for generate-from-media task %s", taskID)
 }
 
-type PolishSubmitResponse struct {
-	TaskID      string `json:"taskId"`
-	NodeID      string `json:"nodeId"`
-	Message     string `json:"message"`
-	TraceURL    string `json:"traceUrl"`
-}
-
-type PolishQueryResponse struct {
-	TaskID   string      `json:"taskId"`
-	NodeID   string      `json:"nodeId"`
-	Status   string      `json:"status"`
-	Content  string      `json:"content,omitempty"`
-	Error    string      `json:"error,omitempty"`
-	TraceURL string      `json:"traceUrl"`
-}
-
-// AIPolishSubmit submits a polish task through the Orchestrator → Worker pipeline.
+// AIPolishSubmit submits a polish task through the Orchestrator -> Worker pipeline.
 // Creates a DAG with a single polisher node and submits it to the orchestrator.
 func (s *PublishService) AIPolishSubmit(ctx context.Context, text string, polishType string) (*PolishSubmitResponse, error) {
 	if text == "" {
@@ -448,68 +649,4 @@ func (s *PublishService) AIPolishText(ctx context.Context, text string, polishTy
 	}
 
 	return "", taskID, fmt.Errorf("polling timed out for polish task %s", taskID)
-}
-
-// callOpenAI is kept for the generate endpoints that don't need the full pipeline.
-func (s *PublishService) callOpenAI(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	if s.cfg.APIKey == "" {
-		return "", fmt.Errorf("API key is not configured")
-	}
-
-	requestBody := map[string]interface{}{
-		"model":       s.cfg.Model,
-		"temperature": s.cfg.Temperature,
-		"max_tokens":  s.cfg.MaxTokens,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
-	}
-
-	body, _ := json.Marshal(requestBody)
-
-	baseURL := s.cfg.BaseURL
-	if len(baseURL) > 0 && baseURL[len(baseURL)-1] != '/' {
-		baseURL += "/"
-	}
-	endpoint := baseURL + "chat/completions"
-
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("LLM API call failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	var responseMap map[string]interface{}
-	if err := json.Unmarshal(respBody, &responseMap); err != nil {
-		return "", fmt.Errorf("failed to parse LLM response: %w", err)
-	}
-
-	choices, ok := responseMap["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
-		return "", fmt.Errorf("no choices in LLM response")
-	}
-
-	choice, ok := choices[0].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid choice format")
-	}
-
-	message, ok := choice["message"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid message format")
-	}
-
-	content, _ := message["content"].(string)
-	return content, nil
 }

@@ -111,6 +111,58 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 	})
 }
 
+func (t *LlmApiTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     false,
+		Parameters: map[string]tool.ParamDef{
+			"prompt": {
+				Type:        "string",
+				Description: "Primary prompt text (one of prompt/message/content is required)",
+				Required:    false,
+			},
+			"message": {
+				Type:        "string",
+				Description: "Alternate prompt text (used if prompt is empty)",
+				Required:    false,
+			},
+			"content": {
+				Type:        "string",
+				Description: "Alternate prompt text (used if prompt and message are empty)",
+				Required:    false,
+			},
+			"model": {
+				Type:        "string",
+				Description: "Model override (default: configured model)",
+				Required:    false,
+			},
+			"max_tokens": {
+				Type:        "number",
+				Description: "Maximum tokens in response (default: configured value)",
+				Required:    false,
+			},
+			"temperature": {
+				Type:        "number",
+				Description: "Temperature for generation (default: configured value)",
+				Required:    false,
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"content":     {Type: "string", Description: "Generated text response from the LLM"},
+			"model":       {Type: "string", Description: "Model name used for generation"},
+			"rawResponse": {Type: "object", Description: "Full API response object"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"prompt": "写一首关于春天的诗"},
+				Output: map[string]interface{}{"content": "春风拂面来，花开满园香……", "model": "gpt-4"},
+			},
+		},
+	}
+}
+
 func (t *LlmApiTool) ValidateParameters(params map[string]interface{}) bool {
 	if _, ok := params["prompt"].(string); ok {
 		return true

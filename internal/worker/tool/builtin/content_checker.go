@@ -22,6 +22,45 @@ func (t *ContentCheckerTool) Name() string       { return "content_checker" }
 func (t *ContentCheckerTool) Description() string { return "Check content for compliance, sensitive content, and quality issues" }
 func (t *ContentCheckerTool) Type() tool.ToolType { return tool.ToolTypeCustom }
 
+func (t *ContentCheckerTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     false,
+		Parameters: map[string]tool.ParamDef{
+			"content": {
+				Type:        "string",
+				Description: "The body content text to check",
+				Required:    false,
+			},
+			"title": {
+				Type:        "string",
+				Description: "The title text to check",
+				Required:    false,
+			},
+			"platform": {
+				Type:        "string",
+				Description: "Target platform name (default: 通用自媒体)",
+				Required:    false,
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"is_compliant":  {Type: "boolean", Description: "Whether the content passes compliance checks"},
+			"quality_score": {Type: "number", Description: "Content quality score (0-100)"},
+			"violations":    {Type: "array", Description: "List of violation objects with type, detail, and severity"},
+			"suggestions":   {Type: "array", Description: "List of improvement suggestions"},
+			"raw_result":    {Type: "string", Description: "Raw LLM response text"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"content": "这是最好的产品", "title": "最佳选择", "platform": "抖音"},
+				Output: map[string]interface{}{"is_compliant": false, "quality_score": 75, "violations": []interface{}{map[string]interface{}{"type": "极限词", "detail": "使用'最'字极限词", "severity": "medium"}}},
+			},
+		},
+	}
+}
+
 func (t *ContentCheckerTool) ValidateParameters(params map[string]interface{}) bool {
 	_, hasContent := params["content"]
 	_, hasTitle := params["title"]

@@ -128,6 +128,40 @@ func (t *PolisherTool) callOpenAI(ctx context.Context, systemPrompt, userPrompt,
 	})
 }
 
+func (t *PolisherTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     false,
+		Parameters: map[string]tool.ParamDef{
+			"text": {
+				Type:        "string",
+				Description: "The text content to polish",
+				Required:    true,
+			},
+			"polishType": {
+				Type:        "string",
+				Description: "Type of content being polished",
+				Required:    false,
+				Default:     "description",
+				Enum:        []string{"title", "description"},
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"content":    {Type: "string", Description: "The polished text"},
+			"polishType": {Type: "string", Description: "Echoed polish type"},
+			"model":      {Type: "string", Description: "Model name used"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"text": "今天天气很好", "polishType": "title"},
+				Output: map[string]interface{}{"content": "今日阳光正好，一起来感受春日暖阳！", "polishType": "title", "model": "gpt-4"},
+			},
+		},
+	}
+}
+
 func (t *PolisherTool) ValidateParameters(params map[string]interface{}) bool {
 	_, ok := params["text"].(string)
 	return ok

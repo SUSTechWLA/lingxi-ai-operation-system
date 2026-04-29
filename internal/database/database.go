@@ -136,6 +136,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		`ALTER TABLE ai_node ADD CONSTRAINT ai_node_status_check CHECK (status IN ('CREATED','READY','RUNNING','RETRYING','SUCCESS','FAILED','SKIPPED'))`,
 		`ALTER TABLE ai_task DROP CONSTRAINT IF EXISTS ai_task_status_check`,
 		`ALTER TABLE ai_task ADD CONSTRAINT ai_task_status_check CHECK (status IN ('CREATED','RUNNING','PAUSED','SUCCESS','FAILED'))`,
+	`ALTER TABLE ai_context DROP CONSTRAINT IF EXISTS ai_context_context_type_check`,
+	`ALTER TABLE ai_context ADD CONSTRAINT ai_context_context_type_check CHECK (context_type IN ('TASK_CREATED','TASK_SUCCESS','TASK_FAILED','NODE_SCHEDULED','NODE_READY','NODE_SUCCESS','NODE_FAILED','NODE_RETRY','NODE_SNAPSHOT','DAG_SUBMITTED','DAG_VALIDATED','AI_REVISE','AI_CANCELLED'))`,
 		`UPDATE ai_context SET created_at = NOW() WHERE created_at IS NULL`,
 	}
 	for _, stmt := range alterStatements {

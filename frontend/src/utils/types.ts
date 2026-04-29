@@ -139,6 +139,7 @@ export interface ChatGenerateResponse {
 export interface ChatReviseResponse {
   reply: string
   fields: ChatGeneratedFields
+  task_id: string
 }
 
 export interface ChatMessageItem {

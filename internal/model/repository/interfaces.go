@@ -28,6 +28,7 @@ type TaskRepo interface {
 type DependencyRepo interface {
 	Save(ctx context.Context, dep *model.NodeDependency) error
 	FindByChildID(ctx context.Context, childID string) ([]*model.NodeDependency, error)
+	FindByTaskID(ctx context.Context, taskID string) ([]*model.NodeDependency, error)
 }
 
 // ContextRepo defines the interface for context data access.

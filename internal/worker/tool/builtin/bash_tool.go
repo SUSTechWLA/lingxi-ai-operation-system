@@ -90,6 +90,38 @@ func (t *BashTool) Execute(ctx context.Context, params map[string]interface{}, t
 	})
 }
 
+func (t *BashTool) Manifest() tool.ToolManifest {
+	return tool.ToolManifest{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Type:        "builtin",
+		Sandbox:     true,
+		Parameters: map[string]tool.ParamDef{
+			"command": {
+				Type:        "string",
+				Description: "Shell command to execute. Allowed commands: ls, cat, echo, curl, python, python3, node, head, tail, wc, grep, find, which, whoami, date, pwd, uname, df, ps",
+				Required:    true,
+			},
+			"timeoutSec": {
+				Type:        "number",
+				Description: "Execution timeout in seconds (default: 30)",
+				Required:    false,
+			},
+		},
+		Output: map[string]tool.ParamDef{
+			"exitCode": {Type: "integer", Description: "Process exit code"},
+			"output":   {Type: "string", Description: "Captured stdout text"},
+			"command":  {Type: "string", Description: "The command string that was executed"},
+		},
+		Examples: []tool.ToolExample{
+			{
+				Input:  map[string]interface{}{"command": "ls -la /tmp"},
+				Output: map[string]interface{}{"exitCode": 0, "output": "total 0\ndrwxr-xr-x  2 user  wheel  64 Apr 30 00:00 .", "command": "ls -la /tmp"},
+			},
+		},
+	}
+}
+
 func (t *BashTool) ValidateParameters(params map[string]interface{}) bool {
 	_, ok := params["command"].(string)
 	return ok

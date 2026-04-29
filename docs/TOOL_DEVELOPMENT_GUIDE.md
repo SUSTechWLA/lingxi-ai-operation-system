@@ -1,203 +1,613 @@
 # 工具开发对接指南
 
-> 本文档适用于希望通过**非 Go 语言**（Python、Node.js、Shell 等）编写工具并接入灵犀 AI OS 系统的开发者。
-> 如果你只想了解如何使用系统内置的 AI 润色、发布等功能，请阅读 [ONBOARDING.md](./ONBOARDING.md)。
+> 本文档面向外部开发者，说明如何实现、注册、使用工具类，以及 AI 助手如何通过知识库发现和调用工具。
 
 ---
 
 ## 目录
 
-1. [什么是工具](#1-什么是工具)
-2. [工具的两种形态](#2-工具的两种形态)
-3. [工具执行流程](#3-工具执行流程)
-4. [对接方式一：独立脚本（推荐）](#4-对接方式一独立脚本推荐)
-5. [对接方式二：Go 内置插件](#5-对接方式二go-内置插件)
-6. [JSON 输出契约](#6-json-输出契约)
-7. [输入参数传递](#7-输入参数传递)
-8. [执行指标和元数据](#8-执行指标和元数据)
-9. [错误处理](#9-错误处理)
-10. [Python 工具示例](#10-python-工具示例)
-11. [Node.js 工具示例](#11-nodejs-工具示例)
-12. [Shell 脚本工具示例](#12-shell-脚本工具示例)
-13. [注册工具到系统](#13-注册工具到系统)
-14. [测试工具](#14-测试工具)
-15. [在 DAG 中使用工具](#15-在-dag-中使用工具)
-16. [常见问题](#16-常见问题)
-17. [附录：完整输出示例](#17-附录完整输出示例)
+1. [工具系统概述](#1-工具系统概述)
+2. [工具知识库 API](#2-工具知识库-api)
+3. [内置工具一览](#3-内置工具一览)
+4. [外部工具开发](#4-外部工具开发)
+5. [工具 Manifest 格式](#5-工具-manifest-格式)
+6. [注册外部工具](#6-注册外部工具)
+7. [执行契约](#7-执行契约)
+8. [沙箱规则](#8-沙箱规则)
+9. [AI 自创工具](#9-ai-自创工具)
+10. [完整示例](#10-完整示例)
+11. [安全注意事项](#11-安全注意事项)
+12. [故障排查](#12-故障排查)
 
 ---
 
-## 1. 什么是工具
+## 1. 工具系统概述
 
-**工具（Tool）** 是灵犀 AI OS 中可以独立执行的**功能单元**。系统通过 DAG（有向无环图）编排工具的调用顺序，实现复杂的自动化流程。
-
-简单理解：
-- 工具 = 一个"函数"或"命令"，接收输入 → 执行操作 → 返回结果
-- DAG = 把这些工具串起来，前一个的输出传给后一个
-
-已实现的内置工具：
-
-| 工具名 | 语言 | 用途 |
-|--------|------|------|
-| `llm_api` | Go | 调用 OpenAI 兼容 API 进行文本生成 |
-| `bash` | Go | 执行 Shell 命令（沙箱保护） |
-| `python` | Go | Python3 -c 执行，资源限制 |
-| `polisher` | Go | 文本润色（调用 LLM 优化标题/简介） |
-| `media_analyzer` | Go | 分析图片/视频，输出标签、建议和摘要 |
-| `content_generator` | Go | 基于素材分析和平台风格生成完整内容包 |
-| `content_checker` | Go | 检测敏感词、极限词、平台规范违规 |
-| `platform_adapter` | Go | 适配内容到抖音、小红书、B站等平台风格 |
-
-你可以在**任何语言**中编写工具并接入系统。
-
----
-
-## 2. 工具的两种形态
-
-### 形态 A：独立脚本（Subprocess 模式）
-
-你的工具是一个独立的脚本/程序（Python、Node.js、Shell、Ruby 等），系统通过子进程方式调用它。
+### 1.1 架构
 
 ```
-系统 → 运行子进程 → 你的脚本（Python/Node/Shell）
-                     ↓
-                  stdout 输出 JSON 结果
-                     ↓
-系统捕获输出 → 记录到节点结果
+┌─────────────────────────────────────────────────────────────┐
+│                     AI 助手 / NL-Translator                    │
+│  (通过知识库 API 发现工具 → 决策调用 → 输出 tool_call 格式)     │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│                      DAG 调度引擎 (Orchestrator)              │
+│  解析 tool_call → 创建 Task + DAG → Worker 执行               │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│                    工具执行引擎 (Worker)                        │
+│                                                              │
+│  ┌────────────┐  ┌────────────┐  ┌──────────────────────┐   │
+│  │ 内置工具    │  │ 外部工具    │  │ bash/python 自创工具  │   │
+│  │ (Go实现)    │  │ (HTTP调用)  │  │ (沙箱中执行)          │   │
+│  └────────────┘  └────────────┘  └──────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**优点**：无需 Go 知识，任何语言都可以写，独立部署，不重启系统即可更新脚本。
+### 1.2 三种工具类型
 
-### 形态 B：Go 内置插件（Plugin 模式）
+| 类型 | 说明 | 适用场景 |
+|------|------|---------|
+| **内置工具** | Go 语言实现，编译进主程序 | 高频使用的标准操作（媒体分析、内容生成、合规检查等） |
+| **外部工具** | 任意语言实现，通过 HTTP 注册和执行 | 专用业务逻辑、第三方 API 封装、遗留系统对接 |
+| **自创工具** | AI 通过 bash/python 动态创建的临时脚本 | 没有现有工具覆盖的临时性任务 |
 
-你的工具作为 Go 代码编译到系统二进制文件中。
-
-```
-系统 → 直接函数调用 → 你的 Go 工具
-                       ↓
-                    返回 ToolResult 结构
-```
-
-**优点**：性能最好，无进程开销，可访问系统内部 API。
-**缺点**：需要 Go 开发环境，修改后需要重新编译。
-
----
-
-## 3. 工具执行流程
-
-无论是哪种形态，系统都会按以下流程执行工具：
+### 1.3 数据流
 
 ```
-1. Orchestrator 调度器发现节点就绪
-   ↓
-2. Worker 收到 ai.node.ready 事件
-   ↓
-3. Worker 记录 NODE_SCHEDULED（含 startedAt 时间戳）
-   ↓
-4. Worker 调用对应工具的 Execute 方法
-   ↓
-    ┌─ 形态 A（独立脚本）: 创建子进程 → 执行脚本 → 捕获 stdout
-    └─ 形态 B（Go 插件）:  直接调用 Execute() 函数
-   ↓
-5. Worker 计算执行耗时（durationMs）
-   ↓
-6. Worker 记录 NODE_SUCCESS / NODE_FAILED（含 durationMs、exitCode）
-   ↓
-7. Worker 发布 ai.node.result 事件到 Kafka
-   ↓
-8. Context 服务消费事件，将执行指标写入审计记录
+1. 用户请求 → AI 助手接收
+2. AI 通过知识库 API 了解可用工具（名称、参数、用法）
+3. AI 决定使用某个工具 → 输出 tool_call JSON
+4. 系统解析 tool_call → 创建 DAG 任务 → Worker 执行
+5. 工具执行结果返回给 AI
+6. AI 合成最终回复给用户
 ```
 
 ---
 
-## 4. 对接方式一：独立脚本（推荐）
+## 2. 工具知识库 API
 
-### 4.1 前置要求
+AI 助手和外部系统通过知识库 API 发现和了解可用工具。
 
-无需 Go 开发环境，只需：
-- 你的脚本语言运行环境（Python 3、Node.js 18+、Bash 等）
-- 脚本文件放置在系统可以访问的路径
+### GET /api/tools — 列出所有工具
 
-### 4.2 核心原则
+列出所有已注册工具（内置 + 外部）的完整 Manifest。
 
-你的脚本只需要遵守 **三个规则**：
+**请求：**
+```bash
+curl http://localhost:8080/api/tools
+```
 
-| # | 规则 | 说明 |
-|---|------|------|
-| 1 | **输出 JSON 到 stdout** | 执行结果必须是 JSON 格式，写入标准输出 |
-| 2 | **退出码 0 表示成功** | 非 0 退出码会被系统判定为失败 |
-| 3 | **错误信息写 stderr** | 错误详情写入标准错误输出 |
+**响应：**
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": [
+    {
+      "name": "media_analyzer",
+      "description": "Analyze media files (images/videos) and generate tags, descriptions, and content suggestions",
+      "type": "builtin",
+      "parameters": {
+        "prompt": { "type": "string", "description": "分析要求", "required": false },
+        "file_names": { "type": "array", "description": "文件名列表", "required": false }
+      },
+      "sandbox": false
+    },
+    {
+      "name": "my_custom_tool",
+      "description": "自定义工具示例",
+      "type": "http",
+      "endpoint": "http://localhost:9001/execute",
+      "timeout": 30,
+      "parameters": { ... },
+      "output": { ... },
+      "examples": [ ... ],
+      "sandbox": false
+    }
+  ]
+}
+```
 
-### 4.3 系统调用方式
+### GET /api/tools/:name — 获取单个工具详情
 
-系统通过 BashTool 的 `BuildExecutionRequest` 构建执行命令。默认情况下，系统会在 DAG 节点的 `input.command` 字段中指定要执行的命令。
+**请求：**
+```bash
+curl http://localhost:8080/api/tools/media_analyzer
+```
 
-例如，在 DAG 中定义一个工具节点：
+### POST /api/tools/register — 注册外部工具
+
+向系统注册一个外部 HTTP 工具。参见 [第 6 节](#6-注册外部工具)。
+
+### DELETE /api/tools/:name — 注销外部工具
+
+---
+
+## 3. 内置工具一览
+
+系统预置了以下内置工具，可直接在 DAG 中使用：
+
+| 工具名 | 用途 | 关键参数 | 沙箱 |
+|--------|------|---------|------|
+| `llm_api` | 调用 LLM API 进行文本生成 | `prompt` / `message` / `content` | 否 |
+| `bash` | 沙箱执行 shell 命令 | `command` (shell 命令字符串) | **是** |
+| `python` | python3 -c 执行 | `code` (Python 代码) | **是** |
+| `polisher` | LLM 润色标题/简介 | `text`, `polishType` (`title` / `description`) | 否 |
+| `media_analyzer` | 分析图片/视频素材 | `prompt`, `media_ids`, `file_names` | 否 |
+| `content_generator` | 生成完整内容包 | `prompt`, `platform`, `style`, `analysis` | 否 |
+| `content_checker` | 合规检查 | `content`, `title`, `platform` | 否 |
+| `platform_adapter` | 平台适配 | `source_content`, `target_platform`, `title` | 否 |
+| `chat_revise` | 修改现有内容字段 | `message`, `title`, `description`, `keywords` | 否 |
+| `chat_generate` | 对话式内容生成 | `messages` (完整消息数组) | 否 |
+| `external` | 执行外部注册工具 | `tool` (外部工具名), 其他参数 | 取决于外部工具 |
+
+### 3.1 何时使用 bash/python（沙箱工具）
+
+以下情况应使用 bash/python 工具来创建临时脚本：
+
+- **数据处理**：CSV/JSON 解析、格式转换、批量重命名
+- **网络请求**：通过 curl 调用第三方 API、下载文件
+- **文本处理**：复杂的正则匹配、模板渲染
+- **自定义分析**：没有现成工具且需要特定计算的场景
+
+### 3.2 bash 沙箱限制
+
+bash 工具在沙箱中执行，有以下限制：
+
+| 限制 | 说明 |
+|------|------|
+| 命令白名单 | `ls`, `cat`, `echo`, `curl`, `python3`, `node`, `grep`, `find`, `wc`, `head`, `tail` 等 |
+| 危险模式 | `;`, `\|`, `&&`, `\`\``, `$()`, `>`, `<` 等被禁止 |
+| 工作目录 | `/tmp/lingxi-sandbox` |
+| 内存限制 | 256MB |
+| 超时 | 默认 30s |
+
+> **重要**：如果 bash 的白名单限制太严格，考虑使用 python 工具进行更灵活的操作。python 执行 `python3 -c` 代码，不受命令白名单限制。
+
+---
+
+## 4. 外部工具开发
+
+你可以用**任意编程语言**（Python、Node.js、Go、Rust、Java 等）实现工具，通过 HTTP 注册到系统。
+
+### 4.1 工具生命周期
+
+```
+1. 开发: 在你选择的语言中实现工具逻辑
+2. 暴露: 提供 HTTP 端点 (POST /execute)
+3. 注册: 通过 POST /api/tools/register 提交 Manifest
+4. 发现: AI 助手通过知识库 API 自动发现你的工具
+5. 执行: 用户触发 → AI 决策 → DAG → Worker → 你的 HTTP 端点
+6. 更新: 重新注册覆盖 Manifest
+7. 注销: DELETE /api/tools/:name
+```
+
+### 4.2 开发要求
+
+外部工具只需满足以下 3 个要求：
+
+1. **HTTP 端点**：暴露一个 `POST` 端点，接收 JSON 请求，返回 JSON 响应
+2. **标准请求格式**：接收以下结构的 JSON body
+3. **标准响应格式**：返回结构化的 JSON 响应
+
+---
+
+## 5. 工具 Manifest 格式
+
+Manifest 是工具的"身份证"，定义了工具的元数据、参数、输出和示例。
 
 ```json
 {
-  "id": "my-tool-node",
-  "type": "TOOL",
-  "name": "bash",
-  "input": {
-    "command": "python3 /path/to/your_script.py --param1 value1 --param2 value2"
-  }
+  "name": "my_tool",
+  "description": "工具的一句话描述，AI 据此判断何时使用",
+  "version": "1.0.0",
+  "author": "开发者姓名或组织",
+
+  "type": "http",
+  "endpoint": "http://localhost:9001/execute",
+
+  "timeout": 30,
+
+  "parameters": {
+    "url": {
+      "type": "string",
+      "description": "要请求的 URL",
+      "required": true
+    },
+    "method": {
+      "type": "string",
+      "description": "HTTP 方法 (GET/POST)",
+      "required": false,
+      "default": "GET",
+      "enum": ["GET", "POST"]
+    },
+    "headers": {
+      "type": "object",
+      "description": "自定义请求头",
+      "required": false
+    }
+  },
+
+  "output": {
+    "statusCode": {
+      "type": "integer",
+      "description": "HTTP 状态码"
+    },
+    "body": {
+      "type": "string",
+      "description": "响应体内容"
+    }
+  },
+
+  "sandbox": false,
+
+  "examples": [
+    {
+      "input": { "url": "https://api.example.com/data" },
+      "output": { "statusCode": 200, "body": "..." }
+    }
+  ]
 }
 ```
 
-系统会执行这个命令并捕获输出。
+### 字段说明
 
-### 4.4 更规范的方式：包装为 BuildableTool
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | **是** | 工具全局唯一名，字母数字下划线，AI 通过此名调用 |
+| `description` | **是** | 一句话描述工具功能，**AI 据此判断何时使用**，务必清晰 |
+| `version` | 否 | 版本号 |
+| `author` | 否 | 开发者信息 |
+| `type` | **是** | 工具类型：`http`（推荐）、`grpc`、`executable` |
+| `endpoint` | **是** | 工具 HTTP 端点完整 URL。系统收到请求后 POST JSON 到此地址 |
+| `timeout` | 否 | 超时秒数（默认 30） |
+| `parameters` | **是** | 参数定义，键为参数名，值为参数定义对象 |
+| `output` | **是** | 输出字段定义，键为字段名，值为字段定义对象 |
+| `sandbox` | 否 | 是否需要沙箱隔离（默认 false） |
+| `examples` | 否 | 输入输出示例，**帮助 AI 理解如何调用**，建议至少 1 个 |
 
-如果希望系统原生识别你的工具（像 `bash`、`polisher` 一样按名称调用），需要创建一个 Go 的 BuildableTool 包装器。参见 [第 13 节](#13-注册工具到系统)。
+### 参数/输出字段定义
+
+| 子字段 | 必填 | 说明 |
+|--------|------|------|
+| `type` | **是** | 数据类型：`string`, `integer`, `number`, `boolean`, `array`, `object` |
+| `description` | **是** | 字段描述，AI 据此填写参数值 |
+| `required` | 否 | 是否必填（默认 false） |
+| `default` | 否 | 默认值 |
+| `enum` | 否 | 可选值列表 |
 
 ---
 
-## 5. 对接方式二：Go 内置插件
+## 6. 注册外部工具
 
-如果你有 Go 开发环境，可以将工具直接编译到系统中。
+### 6.1 注册
 
-### 5.1 实现 Tool 接口
+```bash
+curl -X POST http://localhost:8080/api/tools/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "weather_forecast",
+    "description": "根据城市名称查询天气预报，返回温度和天气状况",
+    "version": "1.0.0",
+    "type": "http",
+    "endpoint": "http://localhost:9001/weather",
+    "timeout": 10,
+    "parameters": {
+      "city": {
+        "type": "string",
+        "description": "城市名称，如 北京、上海、广州",
+        "required": true
+      }
+    },
+    "output": {
+      "temperature": { "type": "string", "description": "当前温度，如 22°C" },
+      "condition": { "type": "string", "description": "天气状况，如 晴、多云、小雨" },
+      "humidity": { "type": "string", "description": "湿度" }
+    },
+    "examples": [
+      {
+        "input": { "city": "北京" },
+        "output": { "temperature": "22°C", "condition": "晴", "humidity": "45%" }
+      }
+    ]
+  }'
+```
 
-```go
-type Tool interface {
-    Name() string                                                    // 工具唯一名称
-    Description() string                                             // 工具描述
-    Type() ToolType                                                  // LLM / CUSTOM
-    Execute(ctx, params, toolCtx) ToolResult                          // 执行逻辑
-    ValidateParameters(params map[string]interface{}) bool            // 参数校验
+**成功响应：**
+```json
+{
+  "code": 200,
+  "message": "tool registered successfully",
+  "data": { "name": "weather_forecast", "type": "http" }
 }
 ```
 
-### 5.2 ToolResult 结构
+### 6.2 查看已注册的工具
 
-```go
-type ToolResult struct {
-    Success   bool                   `json:"success"`              // 是否成功
-    Data      map[string]interface{} `json:"data,omitempty"`       // 成功时的返回数据
-    Error     string                 `json:"error,omitempty"`      // 失败时错误信息
+```bash
+# 列出所有工具
+curl http://localhost:8080/api/tools
+
+# 查看具体工具详情
+curl http://localhost:8080/api/tools/weather_forecast
+```
+
+### 6.3 注销
+
+```bash
+curl -X DELETE http://localhost:8080/api/tools/weather_forecast
+```
+
+---
+
+## 7. 执行契约
+
+当系统调用外部工具时，会 POST JSON 到注册的 `endpoint`，并期待返回 JSON。
+
+### 7.1 请求格式
+
+系统发送的请求体：
+
+```json
+{
+  "tool": "weather_forecast",
+  "params": {
+    "city": "北京"
+  },
+  "task_id": "20260430120000-abc123",
+  "node_id": "tool-weather-forecast-1714411200000-0"
 }
 ```
 
-### 5.3 辅助函数
+| 字段 | 说明 |
+|------|------|
+| `tool` | 工具名称，用于你的服务识别调用来源 |
+| `params` | Manifest 中 parameters 定义的参数，具体值由 AI 根据用户请求填充 |
+| `task_id` | 当前 DAG 任务 ID，可用于日志追踪 |
+| `node_id` | 当前执行节点 ID |
 
-```go
-// 返回成功结果
-return tool.SuccessResult(map[string]interface{}{
-    "result": "success data",
-})
+### 7.2 响应格式
 
-// 返回失败结果
-return tool.FailureResult("error description")
+成功的响应（HTTP 200）：
+
+```json
+{
+  "temperature": "22°C",
+  "condition": "晴",
+  "humidity": "45%",
+  "wind": "3级"
+}
 ```
 
-### 5.4 完整示例
+响应字段应与 Manifest 中 `output` 定义一致。额外字段会被保留但不会被 AI 优先关注。
+
+**错误响应**（HTTP 4xx/5xx）：
+
+```json
+{
+  "error": "city not found: 未知城市",
+  "code": 404
+}
+```
+
+### 7.3 关键规则
+
+| 规则 | 说明 |
+|------|------|
+| **同步** | 外部工具必须同步返回结果。如果工具需要长时间处理，建议实现异步模式（先返回 task_id，再轮询） |
+| **超时** | 超时会返回错误，超时值由 Manifest 的 `timeout` 字段控制 |
+| **重试** | 工具执行失败后，由 Orchestrator 按重试策略重试（默认最多 3 次，指数退避） |
+| **幂等** | 工具应尽可能幂等，因为重试可能导致多次执行 |
+
+---
+
+## 8. 沙箱规则
+
+### 8.1 需要沙箱的场景
+
+以下情况需要启用沙箱（在 Manifest 中设置 `"sandbox": true`）：
+
+- **执行用户提供的代码或命令** — 防止恶意代码影响主机
+- **访问不可信的外部资源** — 隔离网络请求的文件系统影响
+- **处理敏感数据** — 确保临时文件不会泄漏
+- **高权限操作** — 防止权限滥用
+
+### 8.2 不需要沙箱的场景
+
+- **纯 LLM 调用** — 数据在内存中处理，无副作用
+- **只读 API 调用** — 调用外部 API 获取数据
+- **已沙箱的工具组合** — 内部调用已在沙箱中
+
+### 8.3 内置沙箱工具
+
+`bash` 和 `python` 工具自动在沙箱中执行：
+
+| 特性 | 说明 |
+|------|------|
+| 文件系统隔离 | 仅在 `/tmp/lingxi-sandbox/` 下操作 |
+| 资源限制 | 256MB 内存，30s 超时 |
+| 命令白名单 | bash 仅允许白名单内的命令 |
+| 环境隔离 | 独立环境变量 |
+| 自动清理 | 执行完成后自动清理临时文件 |
+
+---
+
+## 9. AI 自创工具
+
+AI 可以动态创建临时工具来完成任务。当没有现成的内置或外部工具时，AI 会自动使用 `bash` 或 `python` 工具作为"自创工具"。
+
+### 9.1 自创工具的典型场景
+
+```python
+# 场景 1：数据处理 — AI 用 Python 处理 JSON/CSV 数据
+{
+  "type": "tool_call",
+  "reasoning": "用户想分析这篇文本的关键词，没有现成的工具，我用 Python 实现",
+  "reply": "我正在分析文本关键词...",
+  "tools": [
+    {
+      "name": "python",
+      "params": {
+        "code": "import re, collections; text = \"用户提供的文本\"; words = re.findall(r'\\w+', text); print(collections.Counter(words).most_common(10))"
+      }
+    }
+  ]
+}
+```
+
+```bash
+# 场景 2：调用第三方 API — AI 用 curl + bash
+{
+  "type": "tool_call",
+  "tools": [
+    {
+      "name": "bash",
+      "params": {
+        "command": "curl -s https://api.example.com/data | python3 -c \"import sys,json; data=json.load(sys.stdin); print(json.dumps(data, indent=2, ensure_ascii=False))\""
+      }
+    }
+  ]
+}
+```
+
+### 9.2 自创工具的限制
+
+- 是**临时**的，不会持久化到知识库
+- 适用于一次性任务
+- 如果某个自创工具被频繁使用，应考虑开发为外部工具
+
+---
+
+## 10. 完整示例
+
+### 10.1 Python 外部工具
+
+**工具代码** (`weather_service.py`)：
+
+```python
+#!/usr/bin/env python3
+"""天气预报外部工具示例"""
+import json
+import http.server
+import random
+
+class WeatherHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        content_length = int(self.headers['Content-Length'])
+        body = self.rfile.read(content_length)
+        request = json.loads(body)
+
+        tool = request.get('tool', '')
+        params = request.get('params', {})
+        task_id = request.get('task_id', '')
+        city = params.get('city', '')
+
+        print(f"[WeatherTool] city={city}, task={task_id}")
+
+        # 模拟天气查询
+        weathers = {
+            "北京": {"temperature": "22°C", "condition": "晴", "humidity": "45%"},
+            "上海": {"temperature": "25°C", "condition": "多云", "humidity": "65%"},
+            "广州": {"temperature": "28°C", "condition": "小雨", "humidity": "80%"},
+        }
+
+        result = weathers.get(city, {"error": f"未知城市: {city}"})
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(result).encode())
+
+if __name__ == '__main__':
+    server = http.server.HTTPServer(('localhost', 9001), WeatherHandler)
+    print("Weather tool running on http://localhost:9001")
+    server.serve_forever()
+```
+
+**注册命令：**
+
+```bash
+curl -X POST http://localhost:8080/api/tools/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "weather_forecast",
+    "description": "根据城市名称查询天气预报，返回温度和天气状况",
+    "type": "http",
+    "endpoint": "http://localhost:9001/",
+    "timeout": 10,
+    "parameters": {
+      "city": {
+        "type": "string",
+        "description": "城市名称，如 北京、上海、广州",
+        "required": true
+      }
+    },
+    "output": {
+      "temperature": { "type": "string", "description": "温度" },
+      "condition": { "type": "string", "description": "天气状况" },
+      "humidity": { "type": "string", "description": "湿度" }
+    },
+    "examples": [
+      {
+        "input": { "city": "北京" },
+        "output": { "temperature": "22°C", "condition": "晴", "humidity": "45%" }
+      }
+    ]
+  }'
+```
+
+### 10.2 Node.js 外部工具
+
+**工具代码** (`translate_service.js`)：
+
+```javascript
+#!/usr/bin/env node
+const http = require('http');
+
+const server = http.createServer((req, res) => {
+  if (req.method !== 'POST') {
+    res.writeHead(405);
+    return res.end();
+  }
+
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    const request = JSON.parse(body);
+    const { text, targetLang } = request.params || {};
+    const taskId = request.task_id;
+
+    console.log(`[Translate] text=${text}, target=${targetLang}, task=${taskId}`);
+
+    // 模拟翻译
+    const result = {
+      translatedText: `[${targetLang}] ${text}`,
+      sourceLang: 'auto',
+      targetLang: targetLang
+    };
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(result));
+  });
+});
+
+server.listen(9002, () => console.log('Translate tool on :9002'));
+```
+
+### 10.3 Go 内置工具（高级）
+
+如果你希望将工具编译进主程序而不是通过 HTTP，可以实现 Go 的 `Tool` 接口：
 
 ```go
 package builtin
 
 import (
     "context"
+    "fmt"
+
     "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
 
@@ -205,910 +615,126 @@ type MyTool struct{}
 
 func NewMyTool() *MyTool { return &MyTool{} }
 
-func (t *MyTool) Name() string                       { return "my_tool" }
-func (t *MyTool) Description() string                 { return "Does something useful" }
-func (t *MyTool) Type() tool.ToolType                 { return tool.ToolTypeCustom }
+func (t *MyTool) Name() string        { return "my_tool" }
+func (t *MyTool) Description() string  { return "工具功能描述，会出现在 AI 的知识库中" }
+func (t *MyTool) Type() tool.ToolType { return tool.ToolTypeCustom }
+
+func (t *MyTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+    // 1. 解析参数
+    input, _ := params["input"].(string)
+    if input == "" {
+        return tool.FailureResult("input is required")
+    }
+
+    // 2. 执行业务逻辑
+    result := fmt.Sprintf("processed: %s", input)
+
+    // 3. 返回结果（JSON 兼容的 map）
+    return tool.SuccessResult(map[string]interface{}{
+        "output": result,
+    })
+}
+
 func (t *MyTool) ValidateParameters(params map[string]interface{}) bool {
     _, ok := params["input"].(string)
     return ok
 }
-func (t *MyTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
-    input, _ := params["input"].(string)
-    // ... 执行逻辑 ...
-    return tool.SuccessResult(map[string]interface{}{
-        "output": "processed: " + input,
-    })
-}
 ```
 
----
-
-## 6. JSON 输出契约
-
-这是**最重要**的部分。无论你用什么语言写工具，你的脚本必须输出 JSON 到 stdout。
-
-### 6.1 成功时的输出格式
-
-脚本成功执行时：
-
-```json
-{
-  "success": true,
-  "data": {
-    "key1": "value1",
-    "key2": 123,
-    "key3": {"nested": "object"},
-    "key4": ["list", "of", "items"]
-  }
-}
-```
-
-**或简写**（success: true 可以省略，系统默认退出码为 0 即为成功）：
-
-```json
-{
-  "result": "操作成功",
-  "count": 42,
-  "items": ["a", "b", "c"]
-}
-```
-
-### 6.2 失败时的输出格式
-
-脚本执行失败时：
-
-```json
-{
-  "success": false,
-  "error": "描述错误原因",
-  "errorCode": "ERROR_001"
-}
-```
-
-同时脚本的**退出码必须是 1**（或任何非 0 值）。
-
-### 6.3 系统如何处理你的输出
-
-系统会捕获脚本的 stdout 和 stderr，并包装成以下结构写入节点 output：
-
-```json
-{
-  "exitCode": 0,
-  "stdout": "{\"success\": true, \"data\": {...}}",
-  "stderr": "",
-  "durationMs": 1254
-}
-```
-
-### 6.4 关键数据字段说明
-
-| 字段 | 类型 | 说明 | 由谁填写 |
-|------|------|------|---------|
-| `exitCode` | int | 进程退出码（0=成功，非0=失败） | 系统自动 |
-| `stdout` | string | 你的脚本输出的 stdout 内容 | 系统自动捕获 |
-| `stderr` | string | 你的脚本输出的 stderr 内容 | 系统自动捕获 |
-| `durationMs` | int | 执行耗时（毫秒） | 系统自动计算 |
-| `startedAt` | string | 执行开始时间（ISO 8601） | 系统自动记录 |
-| `startTime` | string | 与 startedAt 含义相同 | 系统自动 |
-| `endTime` | string | 执行结束时间 | 系统自动 |
-| `error` | string | 错误描述（失败时） | 系统或脚本 |
-| `resourceUsage` | object | 资源使用统计（预留，待沙箱集成后可用） | 系统自动 |
-| `outputRef` | string | 大文件输出引用路径 | 系统（对于大文件场景） |
-
----
-
-## 7. 输入参数传递
-
-你的脚本可以通过以下方式接收输入参数：
-
-### 7.1 命令行参数
-
-在 DAG 节点的 `input` 中指定完整命令：
-
-```json
-{
-  "input": {
-    "command": "python3 /opt/tools/weather.py --city 北京 --date 2026-04-26"
-  }
-}
-```
-
-你的脚本侧（Python）：
-
-```python
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument('--city')
-parser.add_argument('--date')
-args = parser.parse_args()
-city = args.city
-```
-
-### 7.2 环境变量
-
-系统在执行工具时注入环境变量。目前注入的环境变量：
-
-| 环境变量 | 说明 | 示例 |
-|---------|------|------|
-| `TASK_ID` | 当前任务 ID | `20260426231320-68686850` |
-| `NODE_ID` | 当前节点 ID | `polish-1777216400959` |
-| `TRACE_ID` | 追踪 ID | `20260426231320-68686850-polish-1777216400959` |
-
-你的脚本可以读取：
-
-```python
-import os
-task_id = os.environ.get('TASK_ID', '')
-node_id = os.environ.get('NODE_ID', '')
-```
-
-### 7.3 标准输入（stdin）
-
-系统可以给子进程提供 stdin 数据（需 BuildableTool 支持）。未来版本会支持通过 stdin 传递 JSON 格式的完整参数包。
-
----
-
-## 8. 执行指标和元数据
-
-系统会自动为每次工具执行记录以下指标，无需你的脚本做任何额外工作：
-
-| 指标 | 记录位置 | 说明 |
-|------|---------|------|
-| `startedAt` | node.output 和 context.metadata | Worker 开始执行工具的时刻 |
-| `durationMs` | node.output 和 context.metadata | 从开始到结束的毫秒数 |
-| `exitCode` | node.output 和 context.metadata | 进程退出码 |
-| `error` | node.output 和 context.metadata | 错误信息（仅失败时） |
-
-这些指标会自动进入 Context 审计服务，你可以在 `/api/trace/recent` 或 `/api/trace/:taskId` 中查看。
-
----
-
-## 9. 错误处理
-
-### 9.1 脚本级别的错误
-
-场景：输入参数不合法、配置缺失、外部服务不可用。
-
-```python
-import sys, json
-
-def validate_input(params):
-    if 'city' not in params:
-        print(json.dumps({"success": False, "error": "缺少城市参数"}))
-        sys.exit(1)
-
-validate_input(params)
-```
-
-### 9.2 系统级别的错误
-
-| 场景 | 系统行为 |
-|------|---------|
-| 脚本不存在或路径错误 | 系统捕获错误，节点标记为 FAILED |
-| 脚本执行超时（默认 120 秒） | 系统终止进程，节点标记为 FAILED |
-| 脚本输出不是有效 JSON | 系统仍记录 stdout 字符串，依赖下游解析 |
-| 退出码非 0 但 stdout 中有 JSON | 系统优先判断退出码，节点标记为 FAILED |
-
-### 9.3 重试策略
-
-系统支持自动重试失败的节点：
-
-```
-指数退避：1s → 2s → 4s → 8s → 16s → 32s → 60s（最大）
-默认重试次数：3 次（可在 DAG 节点配置中修改 maxRetry）
-```
-
-你的脚本应该是**幂等的**：重复执行同一个输入应该得到同样的结果，不会产生副作用。
-
----
-
-## 10. Python 工具示例
-
-### 示例：城市天气查询工具
-
-**Step 1** 创建脚本 `/opt/tools/weather_tool.py`：
-
-```python
-#!/usr/bin/env python3
-"""
-天气查询工具
-输入：--city 城市名（必需）
-输出：JSON 到 stdout
-"""
-
-import argparse
-import json
-import sys
-import random
-
-def validate(city):
-    if not city or not city.strip():
-        return False, "城市名不能为空"
-    return True, ""
-
-def query_weather(city):
-    """模拟天气查询"""
-    conditions = ["晴天", "多云", "小雨", "阴天", "大风"]
-    # 在这里替换为你自己的天气 API 调用
-    return {
-        "city": city,
-        "temperature": f"{random.randint(15, 35)}°C",
-        "condition": random.choice(conditions),
-        "humidity": f"{random.randint(30, 80)}%",
-        "wind": f"{random.randint(5, 30)} km/h"
-    }
-
-def main():
-    parser = argparse.ArgumentParser(description='天气查询工具')
-    parser.add_argument('--city', required=True, help='城市名称')
-    args = parser.parse_args()
-
-    # 验证输入
-    valid, error_msg = validate(args.city)
-    if not valid:
-        print(json.dumps({"success": False, "error": error_msg}))
-        sys.exit(1)
-
-    try:
-        # 执行查询
-        data = query_weather(args.city)
-
-        # 输出成功结果
-        print(json.dumps({
-            "success": True,
-            "data": data
-        }))
-        sys.exit(0)
-    except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
-        sys.exit(1)
-
-if __name__ == '__main__':
-    main()
-```
-
-**Step 2** 使脚本可执行：
-
-```bash
-chmod +x /opt/tools/weather_tool.py
-```
-
-**Step 3** 测试运行：
-
-```bash
-python3 /opt/tools/weather_tool.py --city 北京
-# 预期输出：
-# {"success": true, "data": {"city": "北京", "temperature": "25°C", ...}}
-```
-
-### 示例：内容摘要生成工具
-
-```python
-#!/usr/bin/env python3
-"""
-内容摘要生成工具
-输入：
-  --text    要摘要的文本（必需）
-  --max-length 摘要最大长度（可选，默认 200）
-输出：JSON
-"""
-
-import argparse
-import json
-import sys
-import os
-
-def summarize(text, max_length):
-    """调用 LLM API 生成摘要"""
-    # 这里可以整合 openai SDK 或其他 API
-    api_key = os.environ.get('OPENAI_API_KEY')
-    if not api_key:
-        return {"success": False, "error": "OPENAI_API_KEY 环境变量未设置"}
-
-    # ... 实际的 LLM 调用逻辑 ...
-    summary = text[:max_length] + "..."
-
-    return {
-        "success": True,
-        "data": {
-            "summary": summary,
-            "original_length": len(text),
-            "summary_length": len(summary)
-        }
-    }
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--text', required=True)
-    parser.add_argument('--max-length', type=int, default=200)
-    args = parser.parse_args()
-
-    result = summarize(args.text, args.max_length)
-    print(json.dumps(result, ensure_ascii=False))
-    sys.exit(0 if result.get("success") else 1)
-
-if __name__ == '__main__':
-    main()
-```
-
----
-
-## 11. Node.js 工具示例
-
-### 示例：网页抓取工具
-
-**Step 1** 创建脚本 `/opt/tools/fetch_page.mjs`：
-
-```javascript
-#!/usr/bin/env node
-/**
- * 网页抓取工具
- * 输入：--url 目标网址（必需）
- * 输出：JSON 到 stdout
- */
-
-import { argv } from 'process';
-
-function parseArgs() {
-  const args = {};
-  for (let i = 2; i < argv.length; i += 2) {
-    const key = argv[i].replace('--', '');
-    args[key] = argv[i + 1];
-  }
-  return args;
-}
-
-async function main() {
-  const params = parseArgs();
-  const url = params.url;
-
-  // 验证输入
-  if (!url) {
-    console.log(JSON.stringify({ success: false, error: '缺少 --url 参数' }));
-    process.exit(1);
-  }
-
-  try {
-    // 执行 HTTP 请求
-    const response = await fetch(url);
-    const text = await response.text();
-
-    // 输出成功结果
-    console.log(JSON.stringify({
-      success: true,
-      data: {
-        url: url,
-        statusCode: response.status,
-        contentLength: text.length,
-        contentType: response.headers.get('content-type'),
-        snippet: text.substring(0, 500)  // 只保存前 500 字符
-      }
-    }));
-    process.exit(0);
-  } catch (error) {
-    console.log(JSON.stringify({
-      success: false,
-      error: `请求失败: ${error.message}`
-    }));
-    process.exit(1);
-  }
-}
-
-main();
-```
-
-**Step 2** 使脚本可执行：
-
-```bash
-chmod +x /opt/tools/fetch_page.mjs
-```
-
-**Step 3** 测试运行：
-
-```bash
-node /opt/tools/fetch_page.mjs --url https://example.com
-# 预期输出：
-# {"success": true, "data": {"url": "https://example.com", "statusCode": 200, ...}}
-```
-
----
-
-## 12. Shell 脚本工具示例
-
-### 示例：文件统计工具
-
-```bash
-#!/bin/bash
-# 文件统计工具
-# 输入：--dir 目录路径（必需）
-# 输出：JSON 到 stdout
-
-# 解析参数
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dir) DIR="$2"; shift 2 ;;
-    *) echo "{\"success\": false, \"error\": \"未知参数: $1\"}"; exit 1 ;;
-  esac
-done
-
-# 验证输入
-if [ -z "$DIR" ]; then
-  echo '{"success": false, "error": "--dir 参数不能为空"}'
-  exit 1
-fi
-
-if [ ! -d "$DIR" ]; then
-  echo "{\"success\": false, \"error\": \"目录不存在: $DIR\"}"
-  exit 1
-fi
-
-# 执行统计
-FILE_COUNT=$(find "$DIR" -type f | wc -l | tr -d ' ')
-DIR_COUNT=$(find "$DIR" -type d | wc -l | tr -d ' ')
-TOTAL_SIZE=$(du -sh "$DIR" 2>/dev/null | cut -f1)
-
-# 输出成功结果
-echo "{\"success\": true, \"data\": {\"fileCount\": $FILE_COUNT, \"dirCount\": $DIR_COUNT, \"totalSize\": \"$TOTAL_SIZE\"}}"
-exit 0
-```
-
----
-
-## 13. 注册工具到系统
-
-### 13.1 方式一：通过 DAG 直接调用（无需 Go 开发）
-
-这是**最简单的方式**，不需要修改 Go 代码。
-
-在 DAG 节点中，将工具类型设为 `TOOL`，名称设为 `bash`，并把你的脚本执行命令放在 `input.command` 中：
-
-```json
-{
-  "nodes": [
-    {
-      "id": "weather-query",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {
-        "command": "python3 /opt/tools/weather_tool.py --city 北京"
-      }
-    }
-  ]
-}
-```
-
-系统通过 BashTool 直接调用你的脚本，无需任何代码修改。
-
-### 13.2 方式二：注册为系统原生工具（需 Go 开发）
-
-如果你希望工具像 `bash`、`polisher` 一样按**名称**被调用（例如 `name: "my_tool"`），需要：
-
-**Step 1** 创建 Go 包装器，将你的脚本包装为 `BuildableTool`：
+然后在 `cmd/lingxi-ai-os/main.go` 注册：
 
 ```go
-// internal/worker/tool/builtin/my_script_tool.go
-package builtin
-
-import (
-    "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
-    "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
-)
-
-type MyScriptTool struct{}
-
-func NewMyScriptTool() *MyScriptTool { return &MyScriptTool{} }
-
-func (t *MyScriptTool) Name() string        { return "my_tool" }
-func (t *MyScriptTool) Description() string  { return "我的自定义工具" }
-func (t *MyScriptTool) Type() tool.ToolType  { return tool.ToolTypeCustom }
-func (t *MyScriptTool) ValidateParameters(params map[string]interface{}) bool {
-    _, ok := params["city"].(string)
-    return ok
-}
-
-// 将参数转为 shell 命令发送给脚本
-func (t *MyScriptTool) BuildExecutionRequest(params map[string]interface{}) (*executor.ExecutionRequest, error) {
-    city, _ := params["city"].(string)
-    return &executor.ExecutionRequest{
-        Command:    "python3",
-        Args:       []string{"/opt/tools/weather_tool.py", "--city", city},
-        TimeoutSec: 30,
-    }, nil
-}
-```
-
-**Step 2** 在 `cmd/lingxi-ai-os/main.go` 中注册：
-
-```go
-toolRegistry.Register(builtin.NewMyScriptTool())
-```
-
-**Step 3** 重新编译并启动：
-
-```bash
-make build && make run
-```
-
-之后就可以在 DAG 中按名称调用：
-
-```json
-{
-  "id": "weather-query",
-  "type": "TOOL",
-  "name": "my_tool",
-  "input": {"city": "北京"}
-}
+toolRegistry.Register(builtin.NewMyTool())
 ```
 
 ---
 
-## 14. 测试工具
+## 11. 安全注意事项
 
-### 14.1 本地直接测试
+### 11.1 工具开发安全
 
-在终端直接运行你的脚本，验证输出格式：
+| 注意事项 | 说明 |
+|---------|------|
+| **输入验证** | 外部工具始终验证 AI 传入的参数，不要信任任何输入 |
+| **最小权限** | 你的工具进程应以最低必要权限运行 |
+| **超时保护** | 在工具代码中实现请求级超时，防止慢请求阻塞 |
+| **错误处理** | 返回有意义的错误信息，帮助 AI 判断是否重试 |
+| **幂等设计** | 相同的输入应产生相同的输出（或至少无副作用） |
+| **日志脱敏** | 不要在日志中记录敏感数据（API Key、用户隐私等） |
 
-```bash
-# Python
-python3 /opt/tools/weather_tool.py --city 北京 | python3 -m json.tool
+### 11.2 HTTP 端点保护
 
-# Node.js
-node /opt/tools/fetch_page.mjs --url https://example.com | python3 -m json.tool
+推荐在外部工具的 HTTP 端点上实施以下保护：
+
+```python
+# 可选：验证来源 IP
+ALLOWED_IPS = ['127.0.0.1', '::1', '10.0.0.0/8']
+
+# 可选：共享密钥验证
+EXPECTED_TOKEN = os.environ.get('TOOL_SECRET', '')
 ```
 
-检查：
-- [ ] 输出是否是有效的 JSON（使用 `python3 -m json.tool` 验证）
-- [ ] 成功时 `success` 为 `true`，`data` 中包含你需要的数据
-- [ ] 失败时 `success` 为 `false`，`error` 中有错误描述
-- [ ] 缺少必要参数时返回错误（非 0 退出码）
-- [ ] 异常参数时返回错误
+### 11.3 沙箱安全
 
-### 14.2 通过系统 API 测试
+参见 [SANDBOX_INTEGRATION_GUIDE.md](./SANDBOX_INTEGRATION_GUIDE.md) 了解沙箱的安全边界。
 
-创建一个 DAG 并提交，观察工具执行情况：
+---
 
-**Step 1** 通过 `/api/node` 创建并提交 DAG：
+## 12. 故障排查
 
+### 12.1 工具未注册
+
+```
+AI 输出：我找不到合适的工具来完成这个任务
+```
+
+**排查：**
 ```bash
-curl -X POST http://localhost:8080/api/node \
+# 检查工具是否已注册
+curl http://localhost:8080/api/tools
+```
+
+### 12.2 工具执行超时
+
+```
+Worker 日志：external tool HTTP call failed: context deadline exceeded
+```
+
+**排查：**
+- 检查 Manifest 的 timeout 是否足够
+- 检查外部工具的服务是否正常运行
+- 检查网络连通性
+
+### 12.3 参数错误
+
+```
+AI 生成了错误的参数值
+```
+
+**排查：**
+- Manifest 中的 `parameters` 定义是否清晰？`description` 是否准确描述了参数含义？
+- `examples` 是否足够？AI 通过示例学习正确的参数格式
+- 检查 `required` 字段是否正确标记了必填参数
+
+### 12.4 外部工具返回错误
+
+```
+Worker 日志：external tool returned HTTP 500
+```
+
+**排查：**
+```bash
+# 直接测试外部工具的端点
+curl -X POST http://localhost:9001/execute \
   -H "Content-Type: application/json" \
-  -d '{
-    "nodes": [
-      {
-        "id": "test-1",
-        "type": "TOOL",
-        "name": "bash",
-        "input": {
-          "command": "python3 /opt/tools/weather_tool.py --city 北京"
-        }
-      }
-    ],
-    "edges": []
-  }'
-```
-
-**Step 2** 保存返回的 `taskId`，查询执行结果：
-
-```bash
-# 查看节点详情（包含 stdout、exitCode、durationMs）
-curl http://localhost:8080/api/task/<taskId>
-```
-
-**Step 3** 查看完整的链路追踪：
-
-```bash
-# 查看任务链路（含执行指标、上下文记录）
-curl http://localhost:8080/api/trace/<taskId>
-```
-
-### 14.3 前端调试按钮
-
-系统前端页面右下角有一个 **🔍 调试按钮**，点击即可查看最近一次任务的完整链路数据，包括你的工具执行耗时、stdout 输出等。
-
----
-
-## 15. 在 DAG 中使用工具
-
-### 15.1 最简单的场景：单个工具
-
-```json
-{
-  "nodes": [
-    {
-      "id": "my-tool",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {
-        "command": "python3 /opt/tools/my_tool.py --input 数据A"
-      }
-    }
-  ],
-  "edges": []
-}
-```
-
-### 15.2 串联场景：A → B → C
-
-```json
-{
-  "nodes": [
-    {
-      "id": "step-1",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {
-        "command": "python3 /opt/tools/fetch_data.py"
-      }
-    },
-    {
-      "id": "step-2",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {
-        "command": "python3 /opt/tools/process_data.py"
-      }
-    },
-    {
-      "id": "step-3",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {
-        "command": "python3 /opt/tools/save_result.py"
-      }
-    }
-  ],
-  "edges": [
-    {"from": "step-1", "to": "step-2"},
-    {"from": "step-2", "to": "step-3"}
-  ]
-}
-```
-
-### 15.3 条件分支场景
-
-```json
-{
-  "nodes": [
-    {
-      "id": "check",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {
-        "command": "python3 /opt/tools/check_status.py"
-      }
-    },
-    {
-      "id": "success-handler",
-      "type": "TOOL",
-      "name": "bash",
-      "condition": "check.status == success",
-      "input": {
-        "command": "python3 /opt/tools/on_success.py"
-      }
-    },
-    {
-      "id": "fail-handler",
-      "type": "TOOL",
-      "name": "bash",
-      "condition": "check.status == failed",
-      "input": {
-        "command": "python3 /opt/tools/on_fail.py"
-      }
-    }
-  ],
-  "edges": [
-    {"from": "check", "to": "success-handler"},
-    {"from": "check", "to": "fail-handler"}
-  ]
-}
-```
-
-### 15.4 混合使用内置工具和自定义脚本
-
-```json
-{
-  "nodes": [
-    {
-      "id": "generate-content",
-      "type": "LLM",
-      "name": "llm_api",
-      "input": {
-        "prompt": "写一段关于北京春天的短文"
-      }
-    },
-    {
-      "id": "save-to-file",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {
-        "command": "python3 /opt/tools/save_content.py"
-      }
-    }
-  ],
-  "edges": [
-    {"from": "generate-content", "to": "save-to-file"}
-  ]
-}
+  -d '{"tool": "my_tool", "params": {"key": "value"}, "task_id": "test", "node_id": "test"}'
 ```
 
 ---
 
-## 16. 常见问题
-
-### Q: 脚本的 stdout 只能输出 JSON 吗？能不能输出日志？
-
-日志写到 **stderr**。系统会捕获 stderr 但不会将它视为执行结果。
-
-```python
-import sys
-# 日志输出到 stderr（不会影响执行结果）
-print("正在查询天气...", file=sys.stderr)
-# 结果输出到 stdout（系统解析）
-print(json.dumps({"success": true, "data": result}))
-```
-
-### Q: 脚本执行超时怎么办？
-
-系统默认超时是 120 秒。如果脚本需要更长时间，需要在 DAG 节点配置中设置（未来支持通过节点参数调整超时时间）。
-
-```python
-# 脚本侧也可以自行控制超时
-import signal
-
-def handler(signum, frame):
-    print(json.dumps({"success": false, "error": "执行超时"}))
-    exit(1)
-
-signal.alarm(60)  # 60 秒后触发超时
-```
-
-### Q: 我的脚本需要安装第三方依赖怎么办？
-
-两种方案：
-
-1. **虚拟环境方案**：在脚本中使用完整路径指定 Python 虚拟环境：
-   ```json
-   {"command": "/opt/venv/bin/python3 /opt/tools/my_tool.py --input xxx"}
-   ```
-
-2. **容器方案**（推荐）：将你的脚本和依赖打包成 Docker 镜像，通过 shell 命令调用：
-   ```json
-   {"command": "docker run --rm my-tool-image --input xxx"}
-   ```
-
-### Q: 我的工具需要访问数据库怎么办？
-
-系统连接的数据库信息会通过环境变量注入：
-- `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`
-
-你的脚本可以通过 `os.environ` 读取这些环境变量。
-
-### Q: 脚本输出太大怎么办？
-
-目前 stdout 直接存储在节点数据库中。如果输出非常大（例如超过 1MB），建议将数据写入文件，然后在 stdout 中只输出文件路径：
-
-```python
-result = {"outputRef": "/data/outputs/result_20260426.json"}
-print(json.dumps({"success": true, "data": result}))
-```
-
-### Q: 脚本更新后需要重启系统吗？
-
-如果你使用**方式一（独立脚本）**，不需要重启系统。直接更新脚本文件，下一次 DAG 调用就会使用新版本。
-
-如果你使用**方式二（Go 内置插件）**，需要重新编译并重启系统。
-
-### Q: 如何调试脚本执行问题？
-
-1. 先在终端直接运行脚本，验证输出
-2. 查看系统日志：`docker compose logs -f lingxi-ai-os`
-3. 查看任务追踪：`curl http://localhost:8080/api/trace/<taskId>`
-4. 前端点击右下角 🔍 按钮查看最近任务链路
-
----
-
-## 17. 附录：完整输出示例
-
-### 17.1 成功执行
-
-节点 output 的完整结构（通过 `/api/trace/:taskId` 查看）：
-
-```json
-{
-  "task": {
-    "taskId": "20260426231320-68686850",
-    "status": "SUCCESS",
-    "nodes": [
-      {
-        "id": "weather-query",
-        "taskId": "20260426231320-68686850",
-        "type": "TOOL",
-        "name": "bash",
-        "status": "SUCCESS",
-        "input": {
-          "command": "python3 /opt/tools/weather_tool.py --city 北京"
-        },
-        "output": {
-          "exitCode": 0,
-          "stdout": "{\"success\": true, \"data\": {\"city\": \"北京\", \"temperature\": \"25°C\", \"condition\": \"晴天\"}}",
-          "stderr": "",
-          "durationMs": 1254
-        },
-        "retryCount": 0,
-        "maxRetry": 3
-      }
-    ]
-  },
-  "contexts": [
-    {
-      "contextType": "NODE_READY",
-      "sourceModule": "StateMachine",
-      "message": "初始节点就绪（无依赖），进入 READY 状态"
-    },
-    {
-      "contextType": "NODE_SCHEDULED",
-      "nodeId": "weather-query",
-      "sourceModule": "ContextService",
-      "metadata": {
-        "startedAt": "2026-04-26T23:13:21.048766+08:00"
-      },
-      "message": "Kafka 事件记录：节点进入运行状态"
-    },
-    {
-      "contextType": "NODE_SUCCESS",
-      "nodeId": "weather-query",
-      "sourceModule": "ContextService",
-      "metadata": {
-        "durationMs": 1254,
-        "exitCode": 0
-      },
-      "message": "Kafka 事件记录：节点执行成功"
-    }
-  ]
-}
-```
-
-### 17.2 失败执行
-
-```json
-{
-  "id": "weather-query-fail",
-  "type": "TOOL",
-  "name": "bash",
-  "status": "FAILED",
-  "input": {
-    "command": "python3 /opt/tools/weather_tool.py"
-  },
-  "output": {
-    "exitCode": 1,
-    "stdout": "{\"success\": false, \"error\": \"缺少 --city 参数\"}",
-    "stderr": "",
-    "durationMs": 32,
-    "error": "Tool execution failed with exit code 1"
-  },
-  "errorMessage": "Tool execution failed with exit code 1",
-  "retryCount": 0,
-  "maxRetry": 3
-}
-```
-
-### 17.3 完整上下文链路（正常流程）
-
-一个典型任务的上下文链路（8 条记录，无重复）：
-
-| # | 类型 | 来源模块 | 说明 |
-|---|------|---------|------|
-| 1 | TASK_CREATED | Orchestrator | 任务创建成功 |
-| 2 | DAG_VALIDATED | Orchestrator | DAG 校验通过 |
-| 3 | DAG_SUBMITTED | Orchestrator | DAG 已提交 |
-| 4 | NODE_READY | StateMachine | 节点就绪 |
-| 5 | NODE_SCHEDULED | ContextService | 节点开始执行（含 startedAt） |
-| 6 | NODE_SUCCESS | ContextService | 节点执行成功（含 durationMs、exitCode） |
-| 7 | NODE_SUCCESS | StateMachine | 节点状态流转完成 |
-| 8 | TASK_SUCCESS | StateMachine | 全部节点执行完毕 |
-
----
-
-> **结语**：灵犀 AI OS 的工具系统设计为语言无关。无论你使用 Python、Node.js、Shell 还是其他语言，只要遵守 JSON stdout 契约，你的工具就能无缝接入系统。
->
-> 遇到问题请先查看 [常见问题](#16-常见问题) 章节，或通过前端右下角 🔍 调试按钮查看任务链路排查问题。
+> **相关文档：**
+> - [API_REFERENCE.md](./API_REFERENCE.md) — 完整 API 参考
+> - [ARCHITECTURE.md](./ARCHITECTURE.md) — 系统架构设计
+> - [SANDBOX_INTEGRATION_GUIDE.md](./SANDBOX_INTEGRATION_GUIDE.md) — 沙箱集成指南
+> - `internal/worker/tool/tool.go` — Tool 接口和注册表源码
+> - `internal/worker/tool/builtin/external_tool.go` — 外部工具执行器源码

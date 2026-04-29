@@ -103,6 +103,7 @@ const GenerateModal: React.FC<GenerateModalProps> = ({ isOpen, onClose }) => {
         body,
         keywords: keywords ? keywords.split(/[,，、\s]+/).filter(Boolean) : [],
         media_count: images.length + videos.length,
+        media_names: [...images.map(i => i.name), ...videos.map(v => v.name)],
       }
 
       const result = await chatGenerate(

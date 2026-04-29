@@ -1,18 +1,68 @@
-import React, { useState, useRef } from 'react'
-import { chatRevise, recordContextEvent } from '../services/api'
+import React, { useState, useRef, useEffect } from 'react'
+import { chatGenerate, recordContextEvent } from '../services/api'
 import { useAppStore } from '../stores/appStore'
 import { setAIAbort } from '../utils/ai-loading'
+import type { ChatMessageItem } from '../utils/types'
 
 const AIAssistantTab: React.FC = () => {
-  const { title, description, keywords, setTitle, setDescription, setKeywords, setAILoadingMessage } = useAppStore()
+  const {
+    title,
+    description,
+    keywords,
+    body,
+    images,
+    videos,
+    chatSessionId,
+    setChatSessionId,
+    setTitle,
+    setDescription,
+    setKeywords,
+    applyFields,
+    setAILoadingMessage,
+  } = useAppStore()
 
+  const [messages, setMessages] = useState<ChatMessageItem[]>([])
   const [inputValue, setInputValue] = useState('')
-  const [revisionHistory, setRevisionHistory] = useState<string[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(chatSessionId)
+  const [error, setError] = useState('')
+  const [showResult, setShowResult] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const [hasInitialized, setHasInitialized] = useState(false)
 
-  const handleRevise = async () => {
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  // Focus input on mount
+  useEffect(() => {
+    setTimeout(() => inputRef.current?.focus(), 200)
+  }, [])
+
+  // Show welcome message on mount
+  useEffect(() => {
+    if (!hasInitialized) {
+      setHasInitialized(true)
+      setMessages([{
+        role: 'assistant',
+        content: '你好！我是 AI 创作助手，可以帮你：\n\n• 根据素材生成标题和简介\n• 优化和完善现有内容\n• 创作灵感和建议\n• 回答自媒体相关问题\n\n有什么我可以帮你的吗？',
+      }])
+    }
+  }, [])
+
+  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+    setShowResult({ text, type })
+    setTimeout(() => setShowResult(null), 2000)
+  }
+
+  const handleSendMessage = async () => {
     const text = inputValue.trim()
-    if (!text) return
+    if (!text || isLoading) return
+
+    setIsLoading(true)
+    setError('')
 
     if (abortRef.current) {
       abortRef.current.abort()
@@ -20,51 +70,77 @@ const AIAssistantTab: React.FC = () => {
     const controller = new AbortController()
     abortRef.current = controller
 
-    setAILoadingMessage('AI正在处理修改请求...')
     setAIAbort(() => {
       controller.abort()
       setAILoadingMessage(null)
       abortRef.current = null
-      recordContextEvent('', 'AI_CANCELLED', '用户取消了AI修改操作')
     })
 
+    // Add user message to UI
+    setMessages(prev => [...prev, { role: 'user', content: text }])
+    setInputValue('')
+
     try {
-      const result = await chatRevise(
+      const currentContext = {
+        title,
+        description,
+        body,
+        keywords: keywords ? keywords.split(/[,，、\s]+/).filter(Boolean) : [],
+        media_count: images.length + videos.length,
+        media_names: [...images.map(i => i.name), ...videos.map(v => v.name)],
+      }
+
+      const result = await chatGenerate(
         text,
-        { title, description, keywords: keywords ? keywords.split(/[,，、\s]+/).filter(Boolean) : [] },
+        currentContext,
+        sessionId || undefined,
         controller.signal
       )
 
       if (controller.signal.aborted) return
 
-      // Update store with returned fields
-      let updatedFields: string[] = []
-      if (result.fields.title) {
-        setTitle(result.fields.title)
-        updatedFields.push('标题')
-      }
-      if (result.fields.description) {
-        setDescription(result.fields.description)
-        updatedFields.push('简介')
-      }
-      if (result.fields.keywords && result.fields.keywords.length > 0) {
-        setKeywords(result.fields.keywords.join(', '))
-        updatedFields.push('关键词')
+      // Save session ID for conversation continuity
+      if (result.session_id) {
+        setSessionId(result.session_id)
+        setChatSessionId(result.session_id)
       }
 
-      const historyEntry = updatedFields.length > 0
-        ? `已更新${updatedFields.join('、')}：${result.reply}`
-        : result.reply
+      // Check if we got complete fields (generation result)
+      if (result.fields) {
+        const fieldsToApply: Record<string, string> = {}
+        if (result.fields.title) fieldsToApply.title = result.fields.title
+        if (result.fields.description) fieldsToApply.description = result.fields.description
+        if (result.fields.body) fieldsToApply.body = result.fields.body
+        if (result.fields.keywords && result.fields.keywords.length > 0) {
+          fieldsToApply.keywords = result.fields.keywords.join(', ')
+        }
 
-      setRevisionHistory(prev => [historyEntry, ...prev].slice(0, 10))
-      setInputValue('')
+        if (Object.keys(fieldsToApply).length > 0) {
+          applyFields(fieldsToApply as any)
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: result.reply || '内容已生成！',
+            fields: result.fields,
+          }])
+          showToast('内容已更新')
+        } else {
+          setMessages(prev => [...prev, { role: 'assistant', content: result.reply }])
+        }
+      } else {
+        // Conversational response
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: result.reply,
+          suggestions: result.suggestions,
+        }])
+      }
     } catch (error: any) {
       if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
-      console.error('AI revise failed:', error)
-      setRevisionHistory(prev => [`修改失败，请重试`, ...prev].slice(0, 10))
+      console.error('AI assistant failed:', error)
+      setError('请求失败，请重试')
     } finally {
+      setIsLoading(false)
       setAILoadingMessage(null)
-      setAIAbort(null)
       if (abortRef.current === controller) {
         abortRef.current = null
       }
@@ -74,29 +150,64 @@ const AIAssistantTab: React.FC = () => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleRevise()
+      handleSendMessage()
     }
+  }
+
+  const handleSuggestionClick = (suggestionText: string) => {
+    setInputValue(suggestionText)
+    // Auto-send after a short delay to let input update
+    setTimeout(() => {
+      handleSendMessage()
+    }, 50)
+  }
+
+  const handleQuickAction = (action: string) => {
+    setInputValue(action)
+    setTimeout(() => handleSendMessage(), 50)
+  }
+
+  const clearChat = () => {
+    setMessages([{
+      role: 'assistant',
+      content: '你好！我是 AI 创作助手，有什么我可以帮你的吗？',
+    }])
+    setSessionId(null)
+    setChatSessionId(null)
+    setError('')
   }
 
   return (
     <div className="flex flex-col h-full">
-      {/* Welcome message */}
+      {/* Header */}
       <div className="mb-4">
-        <h3 className="text-base font-semibold text-gray-800">AI 助手</h3>
-        <p className="text-xs text-gray-500 mt-1">输入修改指令，AI 帮你完善内容</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-gray-800">AI 助手</h3>
+            <p className="text-xs text-gray-500 mt-1">智能对话，帮你完成内容创作</p>
+          </div>
+          {messages.length > 1 && (
+            <button
+              onClick={clearChat}
+              className="text-xs text-gray-400 hover:text-gray-600 transition-colors px-2 py-1"
+            >
+              清空对话
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Quick actions */}
       <div className="flex flex-wrap gap-2 mb-4">
         {[
-          { label: '标题更吸引人', action: '把标题改得更吸引人，加入一些悬念' },
-          { label: '简介缩短', action: '把简介缩短到50字以内' },
-          { label: '加关键词', action: '添加5个相关关键词' },
-          { label: '优化语气', action: '让语气更正式专业一些' },
+          { label: '生成标题和简介', action: images.length > 0 ? '请根据我上传的图片生成标题和简介' : '帮我生成一个吸引人的标题和简介' },
+          { label: '标题更吸引人', action: title ? `把标题"${title}"改得更吸引人` : '帮我想一个吸引人的标题' },
+          { label: '优化语气', action: description ? `优化这段简介的语气：${description}` : '让语气更正式专业一些' },
+          { label: '创作建议', action: '给我一些自媒体内容创作的技巧和建议' },
         ].map((item) => (
           <button
             key={item.label}
-            onClick={() => setInputValue(item.action)}
+            onClick={() => handleQuickAction(item.action)}
             className="px-2.5 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-lg text-gray-600 hover:border-primary/30 hover:text-primary hover:bg-primary/5 transition-colors"
           >
             {item.label}
@@ -104,61 +215,97 @@ const AIAssistantTab: React.FC = () => {
         ))}
       </div>
 
-      {/* Input area */}
-      <div className="flex items-end gap-2 mb-4">
-        <div className="flex-1 relative">
-          <textarea
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="例：把标题改得更吸引人..."
-            rows={2}
-            className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none placeholder:text-gray-400"
-          />
-        </div>
-        <button
-          onClick={handleRevise}
-          disabled={!inputValue.trim()}
-          className="px-3 py-2 bg-primary text-white rounded-xl hover:bg-primary-dark transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 flex-shrink-0"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-          </svg>
-        </button>
+      {/* Messages area */}
+      <div className="flex-1 overflow-y-auto space-y-4 mb-4 min-h-[200px]">
+        {messages.map((msg, index) => (
+          <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] ${
+              msg.role === 'user'
+                ? 'bg-primary text-white rounded-2xl rounded-tr-md px-4 py-2.5'
+                : 'bg-gray-50 text-gray-700 rounded-2xl rounded-tl-md px-4 py-2.5'
+            }`}>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+
+              {/* Suggestions rendered as clickable buttons */}
+              {msg.suggestions && msg.suggestions.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {msg.suggestions.map((s, si) => (
+                    <button
+                      key={si}
+                      onClick={() => handleSuggestionClick(s.text)}
+                      disabled={isLoading}
+                      className="px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-full text-gray-600 hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-colors disabled:opacity-50"
+                    >
+                      {s.text}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {/* Loading indicator */}
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="bg-gray-50 text-gray-500 rounded-2xl rounded-tl-md px-4 py-3">
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Error message */}
+        {error && (
+          <div className="flex justify-center">
+            <div className="bg-red-50 text-red-600 rounded-xl px-4 py-2 text-sm">{error}</div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Revision history */}
-      {revisionHistory.length > 0 && (
-        <div className="flex-1 overflow-y-auto">
-          <h4 className="text-xs font-medium text-gray-400 mb-2">修改记录</h4>
-          <div className="space-y-2">
-            {revisionHistory.map((entry, i) => (
-              <div
-                key={i}
-                className={`text-xs px-3 py-2 rounded-xl ${
-                  entry.startsWith('已更新')
-                    ? 'bg-green-50 text-green-700'
-                    : entry.startsWith('修改失败')
-                    ? 'bg-red-50 text-red-600'
-                    : 'bg-gray-50 text-gray-600'
-                }`}
-              >
-                {entry}
-              </div>
-            ))}
+      {/* Input area */}
+      <div>
+        <div className="flex items-end gap-2">
+          <div className="flex-1 relative">
+            <textarea
+              ref={inputRef}
+              value={inputValue}
+              onChange={(e) => {
+                setInputValue(e.target.value)
+                e.target.style.height = 'auto'
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 80)}px`
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="输入你的想法，按 Enter 发送..."
+              rows={1}
+              disabled={isLoading}
+              className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none placeholder:text-gray-400 disabled:opacity-50"
+            />
           </div>
-        </div>
-      )}
-
-      {/* Empty state */}
-      {revisionHistory.length === 0 && (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <svg className="w-10 h-10 mx-auto mb-2 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          <button
+            onClick={handleSendMessage}
+            disabled={isLoading || !inputValue.trim()}
+            className="px-3 py-2 bg-primary text-white rounded-xl hover:bg-primary-dark transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 flex-shrink-0"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
             </svg>
-            <p className="text-xs text-gray-400">输入修改指令开始优化内容</p>
-          </div>
+          </button>
+        </div>
+        <p className="text-[10px] text-gray-400 mt-1.5">Shift + Enter 换行 | 支持自然语言对话</p>
+      </div>
+
+      {/* Toast notification */}
+      {showResult && (
+        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 text-sm px-4 py-2 rounded-xl shadow-lg ${
+          showResult.type === 'error' ? 'bg-red-500 text-white' : 'bg-green-500 text-white'
+        }`}>
+          {showResult.text}
         </div>
       )}
     </div>

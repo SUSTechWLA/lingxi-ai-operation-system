@@ -64,7 +64,25 @@ func (s *OrchestratorService) SubmitDAG(ctx context.Context, taskID string, dagR
 		return fmt.Errorf("DAG validation failed: %w", err)
 	}
 
-	s.recordContext(ctx, taskID, "", model.ContextDagValidated, "Orchestrator", "DAG 结构校验通过（无环、无重复节点）", nil)
+	// Print DAG structure: all nodes and their dependency edges
+	nodeInfos := make([]string, 0, len(dagReq.Nodes))
+	for _, n := range dagReq.Nodes {
+		nodeInfos = append(nodeInfos, fmt.Sprintf("%s(%s:%s)", n.ID, n.Type, n.Name))
+	}
+	edges := make([]string, 0, len(dagReq.Edges))
+	for _, e := range dagReq.Edges {
+		edges = append(edges, fmt.Sprintf("%s → %s", e.From, e.To))
+	}
+	zap.L().Info("DAG structure",
+		zap.String("taskId", taskID),
+		zap.Strings("nodes", nodeInfos),
+		zap.Strings("edges", edges),
+	)
+
+	s.recordContext(ctx, taskID, "", model.ContextDagValidated, "Orchestrator", "DAG 结构校验通过（无环、无重复节点）", map[string]interface{}{
+		"nodes": nodeInfos,
+		"edges": edges,
+	})
 
 	for _, nodeReq := range dagReq.Nodes {
 		now := time.Now()
@@ -113,7 +131,10 @@ func (s *OrchestratorService) SubmitDAG(ctx context.Context, taskID string, dagR
 		return fmt.Errorf("failed to transition task to RUNNING: %w", err)
 	}
 
-	s.recordContext(ctx, taskID, "", model.ContextDagSubmitted, "Orchestrator", "DAG 已提交，节点写入数据库", nil)
+	s.recordContext(ctx, taskID, "", model.ContextDagSubmitted, "Orchestrator", "DAG 已提交，节点写入数据库", map[string]interface{}{
+		"nodes": nodeInfos,
+		"edges": edges,
+	})
 
 	s.initializeReadyNodes(ctx, dagReq)
 
@@ -135,6 +156,16 @@ func (s *OrchestratorService) GetTaskWithDetails(ctx context.Context, taskID str
 		return nil, err
 	}
 
+	edges, err := s.depRepo.FindByTaskID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	edgeStrs := make([]string, 0, len(edges))
+	for _, e := range edges {
+		edgeStrs = append(edgeStrs, fmt.Sprintf("%s → %s", e.ParentNodeID, e.ChildNodeID))
+	}
+
 	result := map[string]interface{}{
 		"taskId":   task.ID,
 		"status":   task.Status,
@@ -142,6 +173,7 @@ func (s *OrchestratorService) GetTaskWithDetails(ctx context.Context, taskID str
 		"output":   task.Output,
 		"createdAt": task.CreatedAt,
 		"nodes":    nodes,
+		"edges":    edgeStrs,
 	}
 
 	return result, nil
