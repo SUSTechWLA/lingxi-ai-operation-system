@@ -30,7 +30,7 @@ const PlatformSelector: React.FC = () => {
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
-            checked={selectedCount === platforms.length}
+            checked={selectedCount === availablePlatforms.length}
             onChange={(e) => toggleAllPlatforms(e.target.checked)}
             className="w-4 h-4 text-primary border-gray-300 rounded focus:ring-primary"
           />
