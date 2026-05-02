@@ -110,6 +110,21 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	    updated_at TIMESTAMPTZ DEFAULT NOW()
 	);
 	CREATE INDEX IF NOT EXISTS idx_media_assets_user ON media_assets(user_id);
+
+		CREATE TABLE IF NOT EXISTS tool_manifests (
+		    name VARCHAR(255) PRIMARY KEY,
+		    description TEXT NOT NULL,
+		    type VARCHAR(50) NOT NULL DEFAULT 'builtin',
+		    version VARCHAR(50) DEFAULT '1.0',
+		    endpoint TEXT,
+		    timeout_ms INT DEFAULT 30000,
+		    parameters JSONB DEFAULT '{}',
+		    output JSONB DEFAULT '{}',
+		    examples JSONB DEFAULT '[]',
+		    sandbox BOOLEAN DEFAULT false,
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ DEFAULT NOW()
+		);
 	`
 
 	_, err := pool.Exec(ctx, schema)

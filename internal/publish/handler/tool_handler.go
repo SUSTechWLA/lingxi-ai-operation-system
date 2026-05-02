@@ -5,15 +5,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	skillSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/service"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
 
 type ToolHandler struct {
-	registry *tool.ToolRegistry
+	registry     *tool.ToolRegistry
+	manifestSvc  *skillSvc.ToolManifestService
 }
 
-func NewToolHandler(registry *tool.ToolRegistry) *ToolHandler {
-	return &ToolHandler{registry: registry}
+func NewToolHandler(registry *tool.ToolRegistry, manifestSvc *skillSvc.ToolManifestService) *ToolHandler {
+	return &ToolHandler{registry: registry, manifestSvc: manifestSvc}
 }
 
 func (h *ToolHandler) RegisterRoutes(r *gin.Engine) {
@@ -27,8 +29,6 @@ func (h *ToolHandler) RegisterRoutes(r *gin.Engine) {
 }
 
 // ListTools returns all registered tools (built-in + external) with their full manifests.
-// This is the knowledge base that AI assistants and developers query to understand
-// available tools and their capabilities.
 func (h *ToolHandler) ListTools(c *gin.Context) {
 	manifests := h.registry.ListManifests()
 	c.JSON(http.StatusOK, gin.H{
@@ -57,8 +57,7 @@ func (h *ToolHandler) GetTool(c *gin.Context) {
 	})
 }
 
-// RegisterTool registers an external tool manifest.
-// External tools must provide endpoint, type, parameter definitions, and output definitions.
+// RegisterTool registers an external tool manifest and persists it to the database.
 func (h *ToolHandler) RegisterTool(c *gin.Context) {
 	var manifest tool.ToolManifest
 	if err := c.ShouldBindJSON(&manifest); err != nil {
@@ -88,7 +87,15 @@ func (h *ToolHandler) RegisterTool(c *gin.Context) {
 		return
 	}
 
-	h.registry.RegisterExternal(&manifest)
+	// Persist to DB + in-memory registry + invalidate cache
+	if err := h.manifestSvc.RegisterExternal(c.Request.Context(), &manifest); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "failed to register tool: " + err.Error(),
+			"data":    nil,
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -100,10 +107,10 @@ func (h *ToolHandler) RegisterTool(c *gin.Context) {
 	})
 }
 
-// DeregisterTool removes an external tool registration.
+// DeregisterTool removes an external tool registration from DB and registry.
 func (h *ToolHandler) DeregisterTool(c *gin.Context) {
 	name := c.Param("name")
-	if !h.registry.DeregisterExternal(name) {
+	if err := h.manifestSvc.DeregisterExternal(c.Request.Context(), name); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "external tool not found: " + name,

@@ -73,8 +73,10 @@ Common HTTP status codes:
    - [GET /api/media/list — List media assets](#get-apimedialist)
    - [GET /api/media/:id — Get media by ID](#get-apimediaid)
    - [PUT /api/media/:id/tags — Update media tags](#put-apimediaidtags)
-10. [Built-in Tools](#10-built-in-tools)
-11. [Error Responses](#11-error-responses)
+10. [Skill / AI Assistant Dialog API](#10-skill--ai-assistant-dialog-api)
+11. [Tool Registry API](#11-tool-registry-api)
+12. [Built-in Tools](#12-built-in-tools)
+13. [Error Responses](#13-error-responses)
 
 ---
 
@@ -1239,22 +1241,280 @@ curl -X PUT http://localhost:8080/api/media/media-1714294410000-photo/tags \
 ---
 
 
-## 10. Built-in Tools
+## 10. Skill / AI Assistant Dialog API
 
-| Tool Name | Type | Description | Input Parameters |
-|-----------|------|-------------|-----------------|
-| `llm_api` | LLM | OpenAI-compatible chat API | `prompt` / `message` / `content` (string, required) |
-| `bash` | CUSTOM | Sandboxed shell execution | `command` (string, required) |
-| `polisher` | CUSTOM | Text polish via LLM | `text` (string, required), `polishType` (`"title"` or `"description"`) |
-| `python` | CUSTOM | Python3 -c execution with resource limits | `code` (string, required) |
-| `media_analyzer` | CUSTOM | Analyze uploaded media for tags, suggestions, summary | `media_ids` (string array) |
-| `content_generator` | CUSTOM | Generate full content package (title, description, script, tags) from media analysis | `media_ids`, `platform`, `style` |
-| `content_checker` | CUSTOM | Check content for compliance and quality issues | `content` (string), `title` (string), `platform` (string) |
-| `platform_adapter` | CUSTOM | Adapt content for specific social media platform requirements | `source_content` (string, required), `target_platform` (string, required), `title` (string) |
+AI 对话助手 API，每次对话 = 一个 Task，经 Orchestrator → Worker 执行，Context 全程追踪。
+
+### POST /api/skill/dialog/session/create
+
+创建新的对话会话。可传入当前页面上下文（标题、简介、关键词、已上传素材）辅助 AI 理解。
+
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `user_id` | string | No | 用户标识 |
+| `title` | string | No | 当前页面标题 |
+| `description` | string | No | 当前页面简介 |
+| `body` | string | No | 当前页面正文 |
+| `keywords` | string[] | No | 当前页面关键词 |
+| `media_count` | int | No | 已上传素材数量 |
+| `media_names` | string[] | No | 素材文件名列表 |
+| `media_ids` | string[] | No | 素材 ID 列表 |
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/skill/dialog/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user001",
+    "title": "我的创作页面",
+    "description": "一个关于美食的创作",
+    "keywords": ["美食", "探店"],
+    "media_count": 1,
+    "media_names": ["photo.jpg"],
+    "media_ids": ["media-xxx"]
+  }'
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": { "session_id": "uuid-string" }
+}
+```
 
 ---
 
-## 11. Error Responses
+### GET /api/skill/dialog/session/:session_id
+
+获取会话完整状态（消息历史、媒体上下文、任务列表），用于恢复对话。
+
+**Example:**
+```bash
+curl http://localhost:8080/api/skill/dialog/session/uuid-string
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "session_id": "uuid-string",
+    "messages": [...],
+    "media_context": {...},
+    "task_ids": ["20260502131237-b8b8b8b8"],
+    "terminated": false,
+    "created_at": "2026-05-02T13:12:37Z"
+  }
+}
+```
+
+---
+
+### POST /api/skill/dialog/session/:session_id/chat
+
+发送对话消息。系统会结合会话历史 + 媒体上下文 + 工具清单生成 DAG，通过 Orchestrator 执行后返回结果。
+
+**Content-Type:** `application/json`
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `message` | string | **Yes** | 用户消息 |
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/skill/dialog/session/uuid-string/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "根据上传的图片生成标题和简介"}'
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "reply": "内容已生成！",
+    "fields": {
+      "title": "生成的标题",
+      "description": "生成的简介",
+      "keywords": ["关键词1", "关键词2"],
+      "task_id": "20260502131237-b8b8b8b8"
+    }
+  }
+}
+```
+
+---
+
+### GET /api/skill/dialog/session/:session_id/progress
+
+查询会话当前执行进度。
+
+**Example:**
+```bash
+curl http://localhost:8080/api/skill/dialog/session/uuid-string/progress
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "status": "EXECUTING",
+    "task_id": "20260502131237-b8b8b8b8"
+  }
+}
+```
+
+**Status Values:** `IDLE`, `EXECUTING`, `TERMINATED`
+
+---
+
+### POST /api/skill/dialog/session/:session_id/terminate
+
+终止会话。
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/skill/dialog/session/uuid-string/terminate
+```
+
+---
+
+## 11. Tool Registry API
+
+工具注册表 API，用于查询、注册、注销工具。工具清单存储在 DB（`tool_manifests` 表）中，Redis 缓存加速查询（TTL 5分钟），启动时自动同步 builtin 工具。AI 助手通过此 API 获取系统可用工具完整信息。
+
+### GET /api/tools — 列出所有工具
+
+返回所有已注册工具（builtin + external）的完整 Manifest。
+
+**Example:**
+```bash
+curl http://localhost:8080/api/tools
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": [
+    {
+      "name": "chat_generate",
+      "description": "Conversational content generation with full message history support",
+      "type": "builtin",
+      "parameters": { "messages": { "type": "array", "description": "...", "required": true } },
+      "output": { "content": { "type": "string", "description": "..." } },
+      "sandbox": false
+    }
+  ]
+}
+```
+
+---
+
+### GET /api/tools/:name — 获取单个工具详情
+
+**Example:**
+```bash
+curl http://localhost:8080/api/tools/chat_generate
+```
+
+---
+
+### POST /api/tools/register — 注册外部工具
+
+向系统注册一个外部工具。工具信息持久化到 DB、加入内存注册表，并立即使 Redis 缓存失效。
+
+**Content-Type:** `application/json`
+
+**Request Body (ToolManifest):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **Yes** | 工具全局唯一名 |
+| `description` | string | **Yes** | 工具功能描述（AI 据此判断何时使用） |
+| `type` | string | **Yes** | `external`（外部 HTTP 工具） |
+| `endpoint` | string | **Yes** | HTTP 端点完整 URL |
+| `version` | string | No | 版本号 |
+| `timeout` | int | No | 超时毫秒数（默认 30000） |
+| `parameters` | object | **Yes** | 参数定义（ParamDef map） |
+| `output` | object | **Yes** | 输出字段定义（ParamDef map） |
+| `sandbox` | bool | No | 是否需要沙箱隔离 |
+| `examples` | array | No | 输入输出示例 |
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/tools/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "weather_forecast",
+    "description": "根据城市名称查询天气预报",
+    "type": "external",
+    "endpoint": "http://localhost:9001/weather",
+    "timeout": 10000,
+    "parameters": {
+      "city": { "type": "string", "description": "城市名称", "required": true }
+    },
+    "output": {
+      "temperature": { "type": "string", "description": "温度" },
+      "condition": { "type": "string", "description": "天气状况" }
+    }
+  }'
+```
+
+**Response** `200`:
+```json
+{
+  "code": 200,
+  "message": "tool registered successfully",
+  "data": { "name": "weather_forecast", "type": "external" }
+}
+```
+
+---
+
+### DELETE /api/tools/:name — 注销外部工具
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:8080/api/tools/weather_forecast
+```
+
+---
+
+## 12. Built-in Tools
+
+当前系统内置 11 个工具，启动时自动同步到 `tool_manifests` 表：
+
+| Tool Name | Type | Description | Key Parameters |
+|-----------|------|-------------|----------------|
+| `llm_api` | builtin | Call LLM API for chat completions | `prompt` / `message` / `content` |
+| `bash` | builtin | Sandboxed shell execution | `command` (string, required) |
+| `python` | builtin | Python3 code execution | `source` (string, required) |
+| `polisher` | builtin | Polish text via LLM | `text` (string, required), `polishType` (`title`/`description`) |
+| `media_analyzer` | builtin | Analyze images/videos → tags + suggestions | `media_ids`, `file_names`, `prompt` |
+| `content_generator` | builtin | Generate full content package from media | `prompt`, `platform`, `style`, `media_ids` |
+| `content_checker` | builtin | Compliance check (sensitive words, ad law) | `content`, `title`, `platform` |
+| `platform_adapter` | builtin | Adapt content for 7 social platforms | `source_content`, `target_platform`, `title` |
+| `chat_generate` | builtin | Multi-turn conversational content generation | `messages` (array, required) |
+| `chat_revise` | builtin | Revise title/desc/keywords via NL instruction | `message` (string, required) |
+| `external` | builtin | Proxy to registered external tools | `tool` (external tool name) |
+
+---
+
+## 13. Error Responses
 
 **400 Bad Request:**
 ```json

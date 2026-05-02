@@ -50,8 +50,8 @@
 
 | 类型 | 说明 | 适用场景 |
 |------|------|---------|
-| **内置工具** | Go 语言实现，编译进主程序 | 高频使用的标准操作（媒体分析、内容生成、合规检查等） |
-| **外部工具** | 任意语言实现，通过 HTTP 注册和执行 | 专用业务逻辑、第三方 API 封装、遗留系统对接 |
+| **内置工具 (builtin)** | Go 语言实现，编译进主程序 | 高频使用的标准操作（媒体分析、内容生成、合规检查等） |
+| **外部工具 (external)** | 任意语言实现，通过 HTTP 注册和执行 | 专用业务逻辑、第三方 API 封装、遗留系统对接 |
 | **自创工具** | AI 通过 bash/python 动态创建的临时脚本 | 没有现有工具覆盖的临时性任务 |
 
 ### 1.3 数据流
@@ -99,7 +99,7 @@ curl http://localhost:8080/api/tools
     {
       "name": "my_custom_tool",
       "description": "自定义工具示例",
-      "type": "http",
+      "type": "external",
       "endpoint": "http://localhost:9001/execute",
       "timeout": 30,
       "parameters": { ... },
@@ -134,7 +134,7 @@ curl http://localhost:8080/api/tools/media_analyzer
 |--------|------|---------|------|
 | `llm_api` | 调用 LLM API 进行文本生成 | `prompt` / `message` / `content` | 否 |
 | `bash` | 沙箱执行 shell 命令 | `command` (shell 命令字符串) | **是** |
-| `python` | python3 -c 执行 | `code` (Python 代码) | **是** |
+| `python` | python3 -c 执行 | `source` (Python 代码) | **是** |
 | `polisher` | LLM 润色标题/简介 | `text`, `polishType` (`title` / `description`) | 否 |
 | `media_analyzer` | 分析图片/视频素材 | `prompt`, `media_ids`, `file_names` | 否 |
 | `content_generator` | 生成完整内容包 | `prompt`, `platform`, `style`, `analysis` | 否 |
@@ -206,7 +206,7 @@ Manifest 是工具的"身份证"，定义了工具的元数据、参数、输出
   "version": "1.0.0",
   "author": "开发者姓名或组织",
 
-  "type": "http",
+  "type": "external",
   "endpoint": "http://localhost:9001/execute",
 
   "timeout": 30,
@@ -261,7 +261,7 @@ Manifest 是工具的"身份证"，定义了工具的元数据、参数、输出
 | `description` | **是** | 一句话描述工具功能，**AI 据此判断何时使用**，务必清晰 |
 | `version` | 否 | 版本号 |
 | `author` | 否 | 开发者信息 |
-| `type` | **是** | 工具类型：`http`（推荐）、`grpc`、`executable` |
+| `type` | **是** | 工具类型：`external`（外部 HTTP 工具）、`builtin`（内置 Go 工具） |
 | `endpoint` | **是** | 工具 HTTP 端点完整 URL。系统收到请求后 POST JSON 到此地址 |
 | `timeout` | 否 | 超时秒数（默认 30） |
 | `parameters` | **是** | 参数定义，键为参数名，值为参数定义对象 |
@@ -292,7 +292,7 @@ curl -X POST http://localhost:8080/api/tools/register \
     "name": "weather_forecast",
     "description": "根据城市名称查询天气预报，返回温度和天气状况",
     "version": "1.0.0",
-    "type": "http",
+    "type": "external",
     "endpoint": "http://localhost:9001/weather",
     "timeout": 10,
     "parameters": {
@@ -321,7 +321,7 @@ curl -X POST http://localhost:8080/api/tools/register \
 {
   "code": 200,
   "message": "tool registered successfully",
-  "data": { "name": "weather_forecast", "type": "http" }
+  "data": { "name": "weather_forecast", "type": "external" }
 }
 ```
 
@@ -535,7 +535,7 @@ curl -X POST http://localhost:8080/api/tools/register \
   -d '{
     "name": "weather_forecast",
     "description": "根据城市名称查询天气预报，返回温度和天气状况",
-    "type": "http",
+    "type": "external",
     "endpoint": "http://localhost:9001/",
     "timeout": 10,
     "parameters": {

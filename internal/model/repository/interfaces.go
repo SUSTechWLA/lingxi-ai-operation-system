@@ -38,8 +38,17 @@ type ContextRepo interface {
 	FindLatestSnapshotByNodeID(ctx context.Context, nodeID string) (*model.Context, error)
 }
 
+// ToolManifestRepo defines the interface for tool manifest persistence.
+type ToolManifestRepo interface {
+	Upsert(ctx context.Context, m *model.ToolManifestRecord) error
+	FindByName(ctx context.Context, name string) (*model.ToolManifestRecord, error)
+	FindAll(ctx context.Context) ([]*model.ToolManifestRecord, error)
+	Delete(ctx context.Context, name string) error
+}
+
 // Compile-time checks that concrete types satisfy interfaces.
 var _ NodeRepo = (*NodeRepository)(nil)
 var _ TaskRepo = (*TaskRepository)(nil)
 var _ DependencyRepo = (*NodeDependencyRepository)(nil)
 var _ ContextRepo = (*ContextRepository)(nil)
+var _ ToolManifestRepo = (*ToolManifestRepository)(nil)

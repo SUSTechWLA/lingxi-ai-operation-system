@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData, PolishSubmitData, PolishQueryData, TraceData, MediaListResponse, MediaAsset, ChatGenerateResponse, ChatReviseResponse } from '../utils/types'
+import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData, PolishSubmitData, PolishQueryData, TraceData, MediaListResponse, MediaAsset, CreateSessionResponse, SkillChatResponse, SkillSessionResponse, ProgressResponse } from '../utils/types'
 import { isElectron } from '../utils/electron'
 
 const API_BASE = isElectron() ? 'http://localhost:8080/api' : '/api'
@@ -94,48 +94,60 @@ export const fetchRecentTrace = async (): Promise<TraceData> => {
   return response.data.data
 }
 
-// Chat API - Conversational AI generation
-export const chatGenerate = async (
-  message: string,
-  currentContext?: {
+// Skill Dialog API - Conversational AI generation
+// Uses a longer timeout (120s) because the chat flow may involve:
+// intent → clarify → plan → execute → assemble
+
+export const createSkillSession = async (
+  context?: {
     title?: string
     description?: string
     body?: string
     keywords?: string[]
     media_count?: number
     media_names?: string[]
-  },
-  sessionId?: string,
-  signal?: AbortSignal
-): Promise<ChatGenerateResponse> => {
-  const response = await api.post<ApiResponse<ChatGenerateResponse>>('/chat/generate', {
-    session_id: sessionId,
-    message,
-    current_context: currentContext || {},
-  }, { signal })
+    media_ids?: string[]
+  }
+): Promise<CreateSessionResponse> => {
+  const response = await api.post<ApiResponse<CreateSessionResponse>>('/skill/dialog/session/create', context || {})
   return response.data.data
 }
 
-export const chatRevise = async (
+export const chatSkillSession = async (
+  sessionId: string,
   message: string,
-  currentFields: {
-    title: string
-    description: string
-    keywords: string[]
-  },
-  mediaCount?: number,
-  mediaNames?: string[],
   signal?: AbortSignal
-): Promise<ChatReviseResponse> => {
-  const response = await api.post<ApiResponse<ChatReviseResponse>>('/chat/revise', {
-    message,
-    title: currentFields.title,
-    description: currentFields.description,
-    keywords: currentFields.keywords,
-    media_count: mediaCount || 0,
-    media_names: mediaNames || [],
-  }, { signal })
+): Promise<SkillChatResponse> => {
+  const response = await api.post<ApiResponse<SkillChatResponse>>(
+    `/skill/dialog/session/${sessionId}/chat`,
+    { message },
+    { signal, timeout: 120000 }
+  )
   return response.data.data
+}
+
+export const getSkillSessionProgress = async (
+  sessionId: string
+): Promise<ProgressResponse> => {
+  const response = await api.get<ApiResponse<ProgressResponse>>(
+    `/skill/dialog/session/${sessionId}/progress`
+  )
+  return response.data.data
+}
+
+export const getSkillSession = async (
+  sessionId: string
+): Promise<SkillSessionResponse> => {
+  const response = await api.get<ApiResponse<SkillSessionResponse>>(
+    `/skill/dialog/session/${sessionId}`
+  )
+  return response.data.data
+}
+
+export const terminateSkillSession = async (
+  sessionId: string
+): Promise<void> => {
+  await api.post(`/skill/dialog/session/${sessionId}/terminate`, {})
 }
 
 // Media management API
@@ -158,6 +170,24 @@ export const fetchMediaDetail = async (id: string): Promise<MediaAsset> => {
 export const updateMediaTags = async (id: string, tags: string[]): Promise<MediaAsset> => {
   const response = await api.put<ApiResponse<MediaAsset>>(`/media/${id}/tags`, { tags })
   return response.data.data
+}
+
+export const uploadMedia = async (
+  file: File,
+  signal?: AbortSignal
+): Promise<MediaAsset> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await api.post<ApiResponse<MediaAsset[]>>('/media/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    signal,
+  })
+  // Backend returns array of assets; we upload one file at a time
+  const data = response.data.data
+  if (Array.isArray(data) && data.length > 0) {
+    return data[0]
+  }
+  return data as unknown as MediaAsset
 }
 
 export const batchProcessMedia = async (

@@ -26,6 +26,8 @@ import (
 	publishHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/publish/handler"
 	publishSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/publish/service"
 	redisClient "github.com/lingxi-ai/lingxi-ai-operation-system/internal/redis"
+	skillHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/handler"
+	skillSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/service"
 	translatorHandler "github.com/lingxi-ai/lingxi-ai-operation-system/internal/translator/handler"
 	translatorSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/translator/service"
 	workerService "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/service"
@@ -65,6 +67,7 @@ func main() {
 	nodeRepo := repository.NewNodeRepository(pool)
 	depRepo := repository.NewNodeDependencyRepository(pool)
 	contextRepo := repository.NewContextRepository(pool)
+	toolManifestRepo := repository.NewToolManifestRepository(pool)
 
 	// Services
 	eventSaver := outbox.NewOutboxSaver(pool)
@@ -116,8 +119,17 @@ func main() {
 	// Publish
 	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
 
-	// Chat (conversational AI generation with tool-calling support)
-	chatService := publishSvc.NewChatService(cfg.OpenAI, rdb, cfg.Services.OrchestratorURL, toolRegistry)
+	// Tool manifest service (DB-persisted + Redis-cached tool knowledge base)
+	toolManifestSvc := skillSvc.NewToolManifestService(toolManifestRepo, rdb, toolRegistry)
+	if err := toolManifestSvc.SyncBuiltinTools(ctx); err != nil {
+		zap.L().Warn("Failed to sync builtin tools to DB", zap.Error(err))
+	}
+
+	// Skill (AI assistant dialog system — each chat turn = one Task via orchestrator)
+	skillLlmClient := skillSvc.NewLLMClient(cfg.OpenAI)
+	skillSessionManager := skillSvc.NewSessionManager(rdb)
+	skillPlanService := skillSvc.NewPlanService(skillLlmClient, toolManifestSvc)
+	skillResultAssembler := skillSvc.NewResultAssembler(orchestratorService, contextService)
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -187,8 +199,10 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
-	publishHandler.NewChatHandler(chatService, orchestratorService, contextService).RegisterRoutes(r)
-	publishHandler.NewToolHandler(toolRegistry).RegisterRoutes(r)
+	skillHandler.NewSessionHandler(
+		skillSessionManager, skillPlanService, skillResultAssembler,
+	).RegisterRoutes(r)
+	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
 
 	// Media management
 	if storageSvc, err := media.NewStorageService(cfg.MinIO); err == nil {

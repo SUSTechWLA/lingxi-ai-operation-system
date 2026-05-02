@@ -129,17 +129,44 @@ export interface ChatGeneratedFields {
   keywords?: string[]
 }
 
-export interface ChatGenerateResponse {
+// Skill dialog session types
+export interface CreateSessionResponse {
   session_id: string
+}
+
+export interface SkillChatResponse {
   reply: string
   suggestions?: Suggestion[]
   fields?: ChatGeneratedFields
+  progress?: SkillProgress
 }
 
-export interface ChatReviseResponse {
-  reply: string
-  fields: ChatGeneratedFields
-  task_id: string
+export interface SkillProgress {
+  status: string
+  phase: string
+  task_id?: string
+}
+
+export interface ProgressResponse {
+  status: string
+  current_phase: string
+  task_id?: string
+}
+
+export interface SkillSessionResponse {
+  session_id: string
+  messages: ChatMessageItem[]
+  media_context: {
+    media_count: number
+    media_names: string[]
+    media_ids?: string[]
+    title?: string
+    description?: string
+    keywords?: string[]
+  }
+  task_ids: string[]
+  terminated: boolean
+  created_at: string
 }
 
 export interface ChatMessageItem {

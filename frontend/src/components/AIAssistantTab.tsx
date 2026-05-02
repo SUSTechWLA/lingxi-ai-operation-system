@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { chatGenerate, recordContextEvent } from '../services/api'
+import { createSkillSession, chatSkillSession, getSkillSession, terminateSkillSession, uploadMedia } from '../services/api'
 import { useAppStore } from '../stores/appStore'
 import { setAIAbort } from '../utils/ai-loading'
 import type { ChatMessageItem } from '../utils/types'
@@ -12,11 +12,9 @@ const AIAssistantTab: React.FC = () => {
     body,
     images,
     videos,
+    cover,
     chatSessionId,
     setChatSessionId,
-    setTitle,
-    setDescription,
-    setKeywords,
     applyFields,
     setAILoadingMessage,
   } = useAppStore()
@@ -26,11 +24,23 @@ const AIAssistantTab: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(chatSessionId)
   const [error, setError] = useState('')
+  const [loadingText, setLoadingText] = useState('')
   const [showResult, setShowResult] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const [hasInitialized, setHasInitialized] = useState(false)
+  const [messageHistory, setMessageHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const savedInputRef = useRef('')
+
+  // Auto-resize textarea when inputValue changes
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 80)}px`
+    }
+  }, [inputValue])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -41,16 +51,54 @@ const AIAssistantTab: React.FC = () => {
     setTimeout(() => inputRef.current?.focus(), 200)
   }, [])
 
-  // Show welcome message on mount
+  // Progress text that updates while loading
   useEffect(() => {
-    if (!hasInitialized) {
-      setHasInitialized(true)
-      setMessages([{
-        role: 'assistant',
-        content: '你好！我是 AI 创作助手，可以帮你：\n\n• 根据素材生成标题和简介\n• 优化和完善现有内容\n• 创作灵感和建议\n• 回答自媒体相关问题\n\n有什么我可以帮你的吗？',
-      }])
+    if (!isLoading) {
+      setLoadingText('')
+      return
+    }
+    setLoadingText('正在理解需求...')
+    const t1 = setTimeout(() => setLoadingText('正在分析需求...'), 2000)
+    const t2 = setTimeout(() => setLoadingText('正在生成内容...'), 5000)
+    const t3 = setTimeout(() => setLoadingText('内容生成中，请耐心等待...'), 15000)
+    const t4 = setTimeout(() => setLoadingText('正在优化结果...'), 30000)
+    return () => {
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4)
+    }
+  }, [isLoading])
+
+  // On mount: restore existing session history or show welcome message
+  useEffect(() => {
+    if (hasInitialized) return
+    setHasInitialized(true)
+
+    if (chatSessionId) {
+      // Resume existing conversation
+      getSkillSession(chatSessionId)
+        .then((session) => {
+          if (session.messages && session.messages.length > 0) {
+            setMessages(session.messages)
+            setSessionId(session.session_id)
+          } else {
+            showWelcome()
+          }
+        })
+        .catch((err) => {
+          console.warn('Failed to load session history, starting fresh:', err)
+          setChatSessionId(null)
+          showWelcome()
+        })
+    } else {
+      showWelcome()
     }
   }, [])
+
+  const showWelcome = () => {
+    setMessages([{
+      role: 'assistant',
+      content: '你好！我是 AI 创作助手，可以帮你：\n\n• 根据素材生成标题和简介\n• 优化和完善现有内容\n• 创作灵感和建议\n• 回答自媒体相关问题\n\n有什么我可以帮你的吗？',
+    }])
+  }
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setShowResult({ text, type })
@@ -62,6 +110,7 @@ const AIAssistantTab: React.FC = () => {
     if (!text || isLoading) return
 
     setIsLoading(true)
+    setLoadingText('正在理解需求...')
     setError('')
 
     if (abortRef.current) {
@@ -76,34 +125,79 @@ const AIAssistantTab: React.FC = () => {
       abortRef.current = null
     })
 
+    // Add to history for arrow-key navigation
+    setMessageHistory(prev => [...prev, text])
+    setHistoryIndex(-1)
+    savedInputRef.current = ''
+
     // Add user message to UI
     setMessages(prev => [...prev, { role: 'user', content: text }])
     setInputValue('')
 
-    try {
-      const currentContext = {
-        title,
-        description,
-        body,
-        keywords: keywords ? keywords.split(/[,，、\s]+/).filter(Boolean) : [],
-        media_count: images.length + videos.length,
-        media_names: [...images.map(i => i.name), ...videos.map(v => v.name)],
+    // Upload media files and return their server-side IDs.
+    // Only called on the first attempt (not on retry), since retries re-use
+    // media that was already uploaded.
+    const uploadMediaFiles = async (): Promise<{ mediaIds: string[]; mediaNames: string[] }> => {
+      const mediaIds: string[] = []
+      const mediaNames: string[] = []
+      const allMedia = [...images, ...videos]
+      if (cover) allMedia.push(cover)
+      if (allMedia.length === 0) return { mediaIds, mediaNames }
+
+      setLoadingText('正在上传素材...')
+      for (const media of allMedia) {
+        try {
+          const asset = await uploadMedia(media.file, controller.signal)
+          if (asset?.id) {
+            mediaIds.push(asset.id)
+            mediaNames.push(media.name)
+          }
+        } catch (uploadErr: any) {
+          if (uploadErr?.name === 'CanceledError') throw uploadErr
+          console.warn('Media upload failed, continuing without ID:', media.name, uploadErr)
+        }
+      }
+      return { mediaIds, mediaNames }
+    }
+
+    // Core send logic extracted so we can retry on stale-session errors.
+    // - isRetry=false: normal flow — upload media, create session if needed, then chat.
+    // - isRetry=true : stale session cleared — always create a fresh session, skip re-upload.
+    const sendWithSession = async (isRetry: boolean): Promise<void> => {
+      let currentSessionId = sessionId
+
+      if (!currentSessionId || isRetry) {
+        const uploadResult = isRetry ? { mediaIds: [] as string[], mediaNames: [] as string[] } : await uploadMediaFiles()
+        if (controller.signal.aborted) return
+
+        const allMediaNames = [
+          ...images.map(i => i.name),
+          ...videos.map(v => v.name),
+          ...(cover ? [cover.name] : []),
+        ]
+
+        const currentContext = {
+          title,
+          description,
+          body,
+          keywords: keywords ? keywords.split(/[,，、\s]+/).filter(Boolean) : [],
+          media_count: images.length + videos.length + (cover ? 1 : 0),
+          media_names: allMediaNames,
+          media_ids: uploadResult.mediaIds,
+        }
+        const session = await createSkillSession(currentContext)
+        currentSessionId = session.session_id
+        setSessionId(currentSessionId)
+        setChatSessionId(currentSessionId)
       }
 
-      const result = await chatGenerate(
+      const result = await chatSkillSession(
+        currentSessionId,
         text,
-        currentContext,
-        sessionId || undefined,
         controller.signal
       )
 
       if (controller.signal.aborted) return
-
-      // Save session ID for conversation continuity
-      if (result.session_id) {
-        setSessionId(result.session_id)
-        setChatSessionId(result.session_id)
-      }
 
       // Check if we got complete fields (generation result)
       if (result.fields) {
@@ -127,17 +221,46 @@ const AIAssistantTab: React.FC = () => {
           setMessages(prev => [...prev, { role: 'assistant', content: result.reply }])
         }
       } else {
-        // Conversational response
+        // Conversational response (may include suggestions and/or progress)
         setMessages(prev => [...prev, {
           role: 'assistant',
           content: result.reply,
           suggestions: result.suggestions,
         }])
       }
+    }
+
+    try {
+      await sendWithSession(false)
     } catch (error: any) {
       if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
+
+      const backendMsg = error?.response?.data?.message
+
+      // If the session was not found (expired in Redis), clear and retry once
+      if (error?.response?.status === 404 && backendMsg === 'session not found') {
+        setSessionId(null)
+        setChatSessionId(null)
+        try {
+          await sendWithSession(true)
+          return
+        } catch (retryErr: any) {
+          if (retryErr?.name === 'CanceledError' || retryErr?.code === 'ERR_CANCELED') return
+          console.error('AI assistant retry failed:', retryErr)
+          const retryMsg = retryErr?.response?.data?.message
+          setError(retryMsg || '请求失败，请重试')
+          return
+        }
+      }
+
       console.error('AI assistant failed:', error)
-      setError('请求失败，请重试')
+      if (error?.code === 'ECONNABORTED') {
+        setError('请求超时，请重试')
+      } else if (backendMsg) {
+        setError(backendMsg)
+      } else {
+        setError('请求失败，请重试')
+      }
     } finally {
       setIsLoading(false)
       setAILoadingMessage(null)
@@ -151,6 +274,36 @@ const AIAssistantTab: React.FC = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
+      return
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (messageHistory.length === 0) return
+
+      if (historyIndex === -1) {
+        savedInputRef.current = inputValue
+      }
+
+      const newIndex = historyIndex === -1 ? messageHistory.length - 1 : Math.max(0, historyIndex - 1)
+      setHistoryIndex(newIndex)
+      setInputValue(messageHistory[newIndex])
+      return
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (historyIndex === -1) return
+
+      if (historyIndex >= messageHistory.length - 1) {
+        setHistoryIndex(-1)
+        setInputValue(savedInputRef.current)
+      } else {
+        const newIndex = historyIndex + 1
+        setHistoryIndex(newIndex)
+        setInputValue(messageHistory[newIndex])
+      }
+      return
     }
   }
 
@@ -172,6 +325,9 @@ const AIAssistantTab: React.FC = () => {
       role: 'assistant',
       content: '你好！我是 AI 创作助手，有什么我可以帮你的吗？',
     }])
+    if (sessionId) {
+      terminateSkillSession(sessionId).catch(() => {})
+    }
     setSessionId(null)
     setChatSessionId(null)
     setError('')
@@ -245,15 +401,18 @@ const AIAssistantTab: React.FC = () => {
           </div>
         ))}
 
-        {/* Loading indicator */}
+        {/* Loading indicator with progress text */}
         {isLoading && (
           <div className="flex justify-start">
             <div className="bg-gray-50 text-gray-500 rounded-2xl rounded-tl-md px-4 py-3">
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2 mb-1">
                 <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                 <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                 <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
               </div>
+              {loadingText && (
+                <p className="text-xs text-gray-400">{loadingText}</p>
+              )}
             </div>
           </div>
         )}

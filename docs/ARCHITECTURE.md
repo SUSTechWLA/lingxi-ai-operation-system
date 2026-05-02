@@ -58,10 +58,15 @@
 │  │              │  │     · 素材 CRUD      │  │                   │  │               │  │
 │  │  PublishSvc  │  │                    │  │   StateService    │  │ NodeExecutor  │  │
 │  │ TraceHandler │  │                    │  │   StateMachine    │  │ ToolRegistry  │  │
-│  │ AI Generate  │  │                    │  │ DependencyChecker │  │   BashTool    │  │
-│  │  AI Polish   │  │                    │  │     Scheduler     │  │  LlmApiTool   │  │
-│  │              │  │                    │  │    RetryPolicy    │  │ PolisherTool  │  │
+│  │ AI Generate  │  │                    │  │ DependencyChecker │  │ 11 个内置工具   │  │
+│  │  AI Polish   │  │                    │  │     Scheduler     │  │ + 外部工具代理  │  │
 │  └──────┬───────┘  └─────────┬──────────┘  └──────┬────────────┘  └──────┬────────┘  │
+│         │                     │                    │                      │          │
+│  ┌──────▼─────────────────────┴────────────────────┴──────────────────────┴────────┐ │
+│  │                           Skill — AI 对话助手模块                                 │  │
+│  │  PlanService (LLM → DAG) · SessionManager (Redis) · ResultAssembler (轮询)     │  │
+│  │  ToolManifestService (DB+Redis缓存工具知识库)                                      │  │
+│  └────────────────────────────────────────┬────────────────────────────────────────┘ │
 │         │                     │                    │                      │          │
 │  ┌──────▼─────────────────────▼────────────────────▼──────────────────────▼────────┐ │
 │  │                                  Context 审计服务                                  │  │
@@ -254,7 +259,7 @@ type Tool interface {
 
 | 工具名 | 类型 | 用途 | 说明 |
 |--------|------|------|------|
-| `llm_api` | LLM | AI 调用 | 调用 OpenAI 兼容 API 进行文本生成和润色 |
+| `llm_api` | CUSTOM | AI 调用 | 调用 OpenAI 兼容 API 进行文本生成 |
 | `bash` | CUSTOM | Shell 执行 | 沙箱执行 Shell 命令（白名单+危险过滤） |
 | `python` | CUSTOM | Python 执行 | python3 -c 执行，资源限制 |
 | `polisher` | CUSTOM | 文本润色 | 调用 LLM 对标题或简介进行润色优化 |
@@ -262,6 +267,9 @@ type Tool interface {
 | `content_generator` | CUSTOM | 内容生成 | 基于素材分析生成完整内容包（标题、简介、脚本、标签） |
 | `content_checker` | CUSTOM | 合规检查 | 检测敏感词、极限词、平台规范违规 |
 | `platform_adapter` | CUSTOM | 平台适配 | 将内容适配到抖音、小红书、B站等平台的风格 |
+| `chat_generate` | CUSTOM | 对话生成 | 多轮对话式内容生成，支持完整消息历史 |
+| `chat_revise` | CUSTOM | 内容修改 | 根据自然语言指令修改标题/简介/关键词 |
+| `external` | CUSTOM | 外部工具代理 | 代理执行通过 `/api/tools/register` 注册的外部 HTTP 工具 |
 
 **BashTool 安全**：命令白名单 + 危险模式过滤 + `/tmp/ai-sandbox` 沙箱目录。
 
@@ -315,6 +323,60 @@ type Context struct {
 **执行监控数据提取**：ContextService 在消费 Kafka 事件时，从事件 Output 中提取执行指标（`startedAt`, `durationMs`, `exitCode`, `error`, `resourceUsage`）写入上下文记录的 Metadata 字段，实现审计链路中的执行性能可见性。
 
 记录的事件类型：`TASK_CREATED`, `DAG_VALIDATED`, `DAG_SUBMITTED`, `NODE_READY`, `NODE_SCHEDULED`, `NODE_SUCCESS`, `NODE_FAILED`, `NODE_SKIPPED`, `TASK_SUCCESS`, `TASK_FAILED`, `SNAPSHOT`, `CUSTOM`。
+
+### 2.6 Skill — AI 对话助手模块
+
+**职责**：提供多轮对话式 AI 内容创作能力。每次对话 = 一个 Task + DAG，经 Orchestrator → Worker 执行，Context 全程追踪。
+
+**核心组件**：
+
+```
+SessionHandler (HTTP 路由 /api/skill/dialog)
+├── POST /session/create      → 创建对话会话（含页面上下文）
+├── GET  /session/:id          → 获取会话状态（消息历史 + 媒体上下文）
+├── POST /session/:id/chat     → 发送消息 → 生成内容
+├── GET  /session/:id/progress → 查询执行进度
+└── POST /session/:id/terminate → 终止会话
+
+SessionManager (Redis 会话管理)
+├── CreateSession()   → 创建会话 + 欢迎消息
+├── GetSession()      → 读取会话（含完整消息历史）
+├── SaveSession()     → 持久化会话到 Redis (TTL 30min)
+└── AppendMessage()   → 追加消息（超过 50 条自动裁剪）
+
+PlanService (DAG 生成)
+├── GeneratePlan()    → 构建 prompt（历史 + 媒体上下文 + 工具清单）→ LLM → DAG
+└── 依赖 ToolManifestService 获取全量工具描述
+
+ResultAssembler (结果轮询与提取)
+├── CreateTask()      → 通过 Orchestrator 创建任务
+├── SubmitDAG()       → 提交 DAG（节点 ID scope 防冲突）
+├── PollAndExtract()  → 轮询任务结果 → 提取 title/description/keywords
+└── extractFieldsFromOutputs() → 解析 node output JSON
+
+ToolManifestService (工具知识库)
+├── SyncBuiltinTools()   → 启动时同步 builtin 工具到 DB
+├── ListAll()            → Redis 缓存查询（TTL 5min，DB fallback）
+├── FormatForPrompt()    → 格式化为 LLM DAG prompt 中的工具描述
+├── RegisterExternal()   → 注册外部工具（DB + Registry + 缓存失效）
+└── DeregisterExternal() → 注销外部工具
+```
+
+**数据流**：
+```
+用户消息 → SessionHandler.Chat
+  → PlanService.GeneratePlan (历史 + 媒体 + 工具清单 → LLM → DAG)
+  → ResultAssembler.CreateTask → Orchestrator.CreateTask
+  → ResultAssembler.SubmitDAG → Orchestrator.SubmitDAG (节点 ID scope)
+  → Worker 执行 → Context 记录
+  → ResultAssembler.PollAndExtract → 提取结果
+  → 保存 assistant 回复到会话历史 → 返回前端
+```
+
+**关键设计决策**：
+- 每次对话 = 1 个 Task，不把多轮对话合并到一个 task
+- Node ID 在 SubmitDAG 时 scope 为 `{taskId}-{原始ID}`，防止跨 task 冲突
+- LLM DAG 生成时的工具清单来自 DB（`tool_manifests` 表），不做硬编码过滤
 
 ---
 
@@ -480,6 +542,22 @@ interface AppState {
 	│ created_at           │
 	│ updated_at           │
 	└──────────────────────┘
+┌──────────────────────┐
+│   tool_manifests     │
+├──────────────────────┤
+│ name (PK)            │
+│ description          │
+│ type                 │
+│ version              │
+│ endpoint             │
+│ timeout_ms           │
+│ parameters (JSONB)   │
+│ output (JSONB)       │
+│ examples (JSONB)     │
+│ sandbox              │
+│ created_at           │
+│ updated_at           │
+└──────────────────────┘
 ```
 
 ### 4.2 表说明
@@ -492,6 +570,7 @@ interface AppState {
 | `ai_context` | 上下文审计表 | `task_id`, `node_id` |
 | `outbox` | 发件箱事件表 | `id` (PK, ASC) |
 | `media_assets` | 素材文件元数据表 | `user_id`, `tags` |
+| `tool_manifests` | 工具注册清单表 | `name` (PK) |
 
 ---
 

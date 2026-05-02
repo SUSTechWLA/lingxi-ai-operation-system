@@ -83,6 +83,12 @@ Frontend: http://localhost:3000
 - 点击**下一步：选择发布平台**或侧边栏的**一键发布**
 - 任务创建成功后，内容即进入处理流程
 
+#### 功能 9：AI 对话助手
+- 在右侧面板切换到 **AI 对话助手** 标签
+- 通过自然语言描述需求，AI 自动生成/修改内容
+- 支持上传素材后直接对话：\"根据图片生成标题和简介\"
+- 多轮对话自动记忆上下文，可持续优化内容
+
 ---
 
 ## ✨ 功能介绍（配图说明）
@@ -94,7 +100,7 @@ Frontend: http://localhost:3000
 │             │                              │                │
 │  侧边导航   │     内容编辑区               │  AI助手面板    │
 │             │   ┌──────────────────────┐   │  ┌──────────┐  │
-│   · 创作发布│   │ 上传素材区域          │   │  │ 天气查询  │  │
+│   · 创作发布│   │ 上传素材区域          │   │  │ AI对话    │  │
 │   · 任务中心│   │ (图片/视频拖拽上传)    │   │  └──────────┘  │
 │   · 设置    │   └──────────────────────┘   │  ┌──────────┐  │
 │             │   ┌──────────────────────┐   │  │ AI创作    │  │
@@ -127,14 +133,15 @@ Frontend: http://localhost:3000
 - ✅ **跨平台适配**：一键适配抖音、小红书、微博、B站等平台风格
 - ✅ **多平台发布**：选择平台，提交发布任务
 - ✅ **关键词管理**：标签式关键词输入
+- ✅ **AI 对话助手**：多轮对话式内容创作，支持上传素材 → 自然语言描述 → AI 自动生成/修改标题、简介、关键词
 - ✅ **内容清空**：一键清空所有输入内容
+- ✅ **工具注册体系**：支持外部开发者通过 HTTP 注册自定义工具，AI 自动发现和调用
 
 ### 开发中功能
 - 🔄 **电子桌面应用**：支持本地文件选择和系统托盘
 - 🔄 **平台实际发布**：对接各平台 API 实现自动发布
 - 🔄 **任务中心**：查看发布历史和状态
 - 🔄 **素材批量处理**：批量上传和 AI 解析
-- 🔄 **对话式创作**：通过自然语言对话逐步完善内容
 
 ---
 
@@ -159,10 +166,15 @@ Frontend: http://localhost:3000
               │  │  Media 素材管理模块 │  │ ← 图片/视频管理
               │  │  · MinIO 对象存储  │  │
               │  │  · 素材库浏览筛选  │  │
+              │  ├───────────────────┤  │
+              │  │  Skill 对话助手模块 │  │ ← 多轮对话AI创作
+              │  │  · 会话管理(Redis) │  │
+              │  │  · 工具知识库      │  │
+              │  │  · DAG 生成与执行  │  │
               │  └───────────────────┘  │
               │  ┌───────────────────┐  │
               │  │  Orchestrator 调度  │  │ ← 任务调度引擎
-              │  │  Worker 工具执行    │  │ ← 调用 AI、执行命令
+              │  │  Worker 工具执行    │  │ ← 11个内置工具+外部工具
               │  │  Context 审计记录   │  │ ← 记录操作历史
               │  └───────────────────┘  │
               │                         │
@@ -198,17 +210,24 @@ lingxi-ai-operation-system/
 │   │   ├── handler.go             #   素材 CRUD 接口
 │   │   ├── service.go             #   业务逻辑
 │   │   └── storage.go             #   MinIO 对象存储
+│   ├── skill/                      #   AI 对话助手模块
+│   │   ├── handler/                 #     HTTP 接口（会话/对话/进度）
+│   │   ├── service/                 #     业务逻辑（Plan/Result/Session）
+│   │   └── prompts/                 #     LLM 系统提示词
 │   ├── orchestrator/              #   任务调度引擎
 │   ├── worker/                    #   工具执行引擎
-│   │   └── tool/builtin/          #   内置工具
+│   │   └── tool/builtin/          #   内置工具（11个）
 │   │       ├── bash_tool.go       #     Shell 命令执行
-│   │       ├── llm_api_tool.go    #     AI 调用
-│   │       ├── polisher_tool.go   #     文本润色
 │   │       ├── python_tool.go     #     Python 执行
+│   │       ├── llm_api_tool.go    #     LLM API 调用
+│   │       ├── polisher_tool.go   #     文本润色
 │   │       ├── media_analyzer.go  #     素材分析
 │   │       ├── content_generator.go #   内容生成
 │   │       ├── content_checker.go #     合规检查
-│   │       └── platform_adapter.go #   平台适配
+│   │       ├── platform_adapter.go #   平台适配
+│   │       ├── chat_generate.go   #     对话式内容生成
+│   │       ├── chat_revise.go     #     对话式内容修改
+│   │       └── external_tool.go   #     外部工具代理
 │   ├── translator/                #   自然语言翻译
 │   ├── context/                   #   上下文审计
 │   ├── config/                    #   配置管理
@@ -221,7 +240,7 @@ lingxi-ai-operation-system/
 │       │   ├── UploadCard.tsx     #     上传素材卡片
 │       │   ├── TitleInput.tsx     #     标题输入
 │       │   ├── DescriptionInput.tsx#    简介输入
-│       │   ├── WeatherCard.tsx       #     天气查询卡片
+│       │   ├── KeywordInput.tsx   #     关键词标签输入
 │       │   ├── BlockingOverlay.tsx   #     AI 操作全屏遮罩
 │       │   ├── AIHelperPanel.tsx     #     AI 助手面板
 │       │   ├── AIAssistantTab.tsx    #     AI 对话式创作面板
@@ -305,7 +324,7 @@ curl http://localhost:8080/api/health                    # 健康检查
 curl -X POST http://localhost:8080/api/ai/generate \      # AI 生成
   -H "Content-Type: application/json" \
   -d '{"prompt":"周末去哪儿玩"}'
-curl "http://localhost:8080/api/weather/query?city=北京"   # 天气查询
+curl http://localhost:8080/api/tools                     # 查看所有工具
 ```
 
 ---
@@ -316,10 +335,12 @@ curl "http://localhost:8080/api/weather/query?city=北京"   # 天气查询
 |------|--------|------|
 | **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 开发者 | 系统架构、模块设计、数据流 |
 | **[API_REFERENCE.md](docs/API_REFERENCE.md)** | 开发者/测试 | 所有 API 接口详细说明 |
+| **[TOOL_DEVELOPMENT_GUIDE.md](docs/TOOL_DEVELOPMENT_GUIDE.md)** | 外部工具开发者 | 工具开发对接指南（注册、Manifest、执行契约） |
 | **[ONBOARDING.md](docs/ONBOARDING.md)** | 新开发者 | 从零上手项目开发 |
 
 ### 其他文档
-- `docs/prompts/` - 开发过程中的设计方案和讨论记录
+- `docs/AI_ASSISTANT_DESIGN.md` - AI 对话助手设计文档
+- `docs/SANDBOX_INTEGRATION_GUIDE.md` - 沙箱集成指南
 
 ---
 
@@ -332,10 +353,10 @@ curl "http://localhost:8080/api/weather/query?city=北京"   # 天气查询
 AI 功能依赖 OpenAI 兼容的 API 服务，你需要自行获取 API Key 并配置在 `.env` 文件中。API 服务通常需要付费，但很多平台提供免费额度。
 
 ### 支持哪些自媒体平台？
-目前支持：**抖音**、**小红书**。（其他如快手、B站、微信视频号等正在开发中）
+目前支持：**抖音**、**小红书**、**B站**、**微博**、**快手**、**微信视频号**、**YouTube**（通过 AI 平台适配功能）。实际自动发布 API 对接正在开发中。
 
 ### 上传的文件会保存到哪里？
-文件会上传到后端服务器，存储在临时目录中。正式使用时建议配置对象存储（如 MinIO 或云存储）。
+文件上传到 MinIO 对象存储服务（Docker 容器内），元数据存储在 PostgreSQL 中。MinIO 提供可靠的持久化存储。
 
 ### 数据存储在哪里？
 所有数据存储在本地 PostgreSQL 数据库中（Docker 容器内）。数据库文件在 Docker 数据卷中。

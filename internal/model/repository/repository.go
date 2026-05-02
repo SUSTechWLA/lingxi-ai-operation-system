@@ -124,7 +124,7 @@ func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 		 started_at, completed_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		 ON CONFLICT (id) DO UPDATE SET
-		 	status=$5, output=$7, error_message=$8, condition=$9, retry_count=$10,
+		 	task_id=$2, status=$5, output=$7, error_message=$8, condition=$9, retry_count=$10,
 		 	max_retry=$11, priority=$12, worker_group=$13, version=ai_node.version+1,
 		 	idempotency_key=$15, started_at=COALESCE($17, ai_node.started_at),
 		 	completed_at=COALESCE($18, ai_node.completed_at)`,

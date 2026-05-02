@@ -10,6 +10,5 @@ export { default as CommandPanel } from './CommandPanel'
 export { default as DesktopToolbar } from './DesktopToolbar'
 export { default as MediaLibraryPanel } from './MediaLibraryPanel'
 
-export { default as GenerateModal } from './GenerateModal'
 export { default as AIAssistantTab } from './AIAssistantTab'
 export { default as BlockingOverlay } from './BlockingOverlay'

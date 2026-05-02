@@ -77,6 +77,8 @@ Go modular monolith — all modules run in a single process on port 8080:
 3. **Context** - Persists task history and provides audit/snapshot capabilities
 4. **Worker** - Executes operations via plugin-based tool architecture
 5. **Publish** - Frontend-facing API for content creation, AI generation/polish, and multi-platform publishing
+6. **Media** - MinIO-backed media asset management with upload, tag filtering, and presigned URL retrieval
+7. **Chat** - Conversational AI with multi-turn history, tool-calling support, and Redis-backed session state
 
 ### Communication Flow
 - Modules communicate via internal Go function calls (same process)
@@ -124,7 +126,10 @@ Architecture layers:
 - `Tool` — Base interface: Name, Description, Type, Execute, ValidateParameters
 - `BuildableTool` — Tool that produces an `ExecutionRequest` (for executor routing to sandbox)
 - `ExecutableTool` — Tool that self-executes inline (for API-call-style tools)
-- `ToolRegistry` — Plugin registration and lookup by name
+- `ManifestProvider` — Optional interface: `Manifest() ToolManifest` exposes full parameter/ output schema, sandbox requirements, and examples for AI tool discovery
+- `ExternalToolProvider` — Interface for tools that can execute registered external tools by name
+- `ToolRegistry` — Plugin registration and lookup by name; also manages external tool manifests (RegisterExternal, DeregisterExternal, ListManifests)
+- `ToolManifest` (`manifest.go`) — Full tool specification: Name, Description, Type, Endpoint, Timeout, Parameters (map of ParamDef), Output (map of ParamDef), Sandbox flag, Examples
 
 #### Built-in Tools (`internal/worker/tool/builtin/`)
 - `BashTool` — Sandboxed shell: command whitelist + dangerous pattern filter + `/tmp/lingxi-sandbox` workdir. Implements `BuildableTool`.
@@ -135,6 +140,9 @@ Architecture layers:
 - `ContentGeneratorTool` — Full content package generation based on media analysis, platform, and style keywords. Implements `ExecutableTool`.
 - `ContentCheckerTool` — Content compliance check: sensitive words, advertising law violations, platform-specific rules. Implements `ExecutableTool`.
 - `PlatformAdapterTool` — Cross-platform content adaptation: adjusts tone, format, and length for 7 social media platforms. Implements `ExecutableTool`.
+- `ChatGenerateTool` — Conversational content generation with full multi-turn message history via OpenAI. Implements `ExecutableTool`.
+- `ChatReviseTool` — Revise or generate content fields (title, description, keywords) from natural language instructions. Implements `ExecutableTool`.
+- `ExternalTool` — Bridge to registered external tool services via HTTP. Routes DAG pipeline calls to external endpoints registered through `/api/tools/register`. Implements `ExecutableTool` + `ExternalToolProvider`.
 
 #### Executor Layer (`internal/worker/executor/`)
 - `Executor` interface — `Execute(ctx, ExecutionRequest) (ExecutionResult, error)`
@@ -167,6 +175,23 @@ API contract (standard response format):
 {"code": 0, "message": "success", "data": {...}}
 ```
 
+### internal/media
+Media asset management backed by MinIO object storage.
+
+Key components:
+- `MediaHandler` - Gin HTTP handlers for `/api/media/upload`, `/api/media/list`, `/api/media/:id`, `/api/media/:id/tags`
+- `MediaService` - CRUD operations on `media_assets` table, tag-based filtering with PostgreSQL JSONB `@>` queries
+- `StorageService` - Wraps `minio-go` client: auto-creates bucket on init, upload with content-type detection, presigned GET URLs (24h TTL), delete
+
+Media asset model: ID, UserID, OriginalName, MimeType, Size, MinioPath, Tags (JSONB array), EmbeddingID, timestamps.
+
+### internal/publish (Chat + Tools)
+In addition to the core PublishHandler, this module now includes:
+
+- `ChatHandler` - `/api/chat/generate` and `/api/chat/revise` endpoints for conversational AI with tool-calling
+- `ChatService` - Multi-turn chat using Redis for session state, calls OpenAI with tool manifests from the registry for function calling
+- `ToolHandler` - `/api/tools` endpoints for listing/querying/registering/deregistering tool manifests (builtin + external)
+
 ### Frontend (frontend/)
 React + TypeScript + TailwindCSS + Zustand (no router — simple state-driven page switching).
 
@@ -181,22 +206,33 @@ React + TypeScript + TailwindCSS + Zustand (no router — simple state-driven pa
 - `DescriptionInput.tsx` — Description textarea with AI polish button
 - `KeywordInput.tsx` — Tag-based keyword input
 - `AIHelperPanel.tsx` — AI generate and polish controls
+- `AIAssistantTab.tsx` — Conversational AI chat panel with multi-turn history
+- `BlockingOverlay.tsx` — Full-screen loading overlay during AI operations with cancel button
+- `ContentTypeSelector.tsx` — Content type selection (video/article/image)
+- `MediaLibraryPanel.tsx` — Side panel for browsing and filtering uploaded media assets
+- `GenerateModal.tsx` — Content generation result modal/popup
 - `PlatformSelector.tsx` — Multi-platform toggle selector
 - `PublishButton.tsx` — Publish action button (calls `/api/publish`)
+- `DesktopToolbar.tsx` — Electron desktop toolbar
 - `CommandPanel.tsx` — Command execution panel (Electron IPC, in DesktopPage)
-- `appStore.ts` — Zustand store (title, description, keywords, media, platforms)
-- `api.ts` — Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`
+- `appStore.ts` — Zustand store (title, description, keywords, media, platforms, cover, aiLoadingMessage, chatSessionId)
+- `api.ts` — Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`, `/api/chat/*`, `/api/media/*`, `/api/tools`
 
 #### Electron vs Web
-- Production: Packaged as Electron .dmg/.exe via `electron-builder`
+- Production: Packaged as Electron .dmg/.exe via `electron-builder` (config in `electron/package.json`); bundles `frontend/dist/` as static assets
+- `electron/main.js` — Main process: creates BrowserWindow, loads frontend dist or dev server
+- `electron/preload.js` — Preload script for secure IPC between renderer and main process
 - Development: `npm run dev` serves at port 3000 with Vite proxy forwarding `/api` to `:8080`
-- The desktop tools tab is always visible (designed for Electron usage)
+- The desktop tools tab (`DesktopPage`, `DesktopToolbar`, `CommandPanel`) is always visible
 - API base URL: auto-detects Electron → `http://localhost:8080/api`, otherwise `/api` (Vite proxy)
 
 Key UI features:
 - **Media-based AI generation**: When images/videos are uploaded, AI generate uses `/api/ai/generate-from-media` (multipart) instead of text-only `/api/ai/generate`
-- **AI loading overlay**: Full-screen loading animation with progress bar+spinner during AI operations
-- **Result popup**: Centered modal with success/error icon and auto-dismiss
+- **Conversational AI assistant**: `AIAssistantTab` provides multi-turn chat for content generation and revision, with tool-calling support
+- **Media library panel**: Browse, filter by tag, and reuse previously uploaded media assets
+- **Content type selector**: Choose between video, article, image content types before generation
+- **AI loading overlay**: Full-screen `BlockingOverlay` with progress bar+spinner and cancel button during AI operations; cancel terminates the backend task and records context
+- **Result popup**: `GenerateModal` centered modal with success/error icon and auto-dismiss
 - **Debug trace button**: Floating button (bottom-right) to query recent task lifecycle
 - **Trace endpoints**: `/api/trace/recent` and `/api/trace/:taskId` for full task+context audit data
 
@@ -221,18 +257,27 @@ internal/
   context/
     handler/                 # Gin HTTP handlers
     service/                 # Context/snapshot management
+  media/
+    handler.go               # Media upload/list/get/update-tags HTTP handlers
+    service.go               # Media CRUD + MinIO storage
+    storage.go               # MinIO client wrapper (bucket auto-create, presigned URLs)
   publish/
-    handler/                 # Publish/AI/Weather HTTP handlers
+    handler/                 # Publish/AI/Chat/Tool HTTP handlers
       handler.go             # Publish, AI generate, AI polish, AI generate-from-media
       trace_handler.go       # Task trace query (/api/trace/recent, /api/trace/:taskId)
+      chat_handler.go        # Chat generate/revise with tool-calling
+      tool_handler.go        # Tool registry query/register/deregister
       handler_test.go
-    service/                 # Content publishing + AI generate/polish
+    service/                 # Content publishing + AI generate/polish + Chat
       service.go             # PublishContent, AIGenerateContent, AIGenerateFromMedia, AIPolishText
+      chat_service.go        # Multi-turn chat with OpenAI function calling + Redis session state
   worker/
     service/                 # Node execution engine
-    tool/                    # Tool interface + registry
-      builtin/               # BashTool, PythonTool, LlmApiTool, PolisherTool
-    executor/                # DirectExecutor, SandboxExecutor (stub), types
+    tool/                    # Tool interface + registry + manifest
+      tool.go                # Tool, BuildableTool, ExecutableTool, ManifestProvider, ExternalToolProvider
+      manifest.go            # ToolManifest spec (parameters, output, examples)
+      builtin/               # BashTool, PythonTool, LlmApiTool, PolisherTool, MediaAnalyzer, ContentGenerator, ContentChecker, PlatformAdapter, ChatGenerateTool, ChatReviseTool, ExternalTool
+    executor/                # DirectExecutor, SandboxExecutor, types
 sandbox/                     # Rust sandbox service (gRPC server for isolated execution)
   src/
     main.rs                  # gRPC server entry point (tonic + tokio)
@@ -243,11 +288,15 @@ sandbox/                     # Rust sandbox service (gRPC server for isolated ex
   build.rs                   # Proto compilation via tonic-build
 frontend/                    # React + TypeScript + TailwindCSS
   src/
-    components/             # UI components (Sidebar, UploadCard, TitleInput, AIHelperPanel, etc.)
-    pages/                   # Pages (PublishPage)
+    components/             # UI components (Sidebar, UploadCard, TitleInput, AIHelperPanel, AIAssistantTab, BlockingOverlay, ContentTypeSelector, MediaLibraryPanel, GenerateModal, etc.)
+    pages/                   # Pages (PublishPage, DesktopPage)
     stores/                  # Zustand state management (appStore)
     services/                # API services (api.ts)
-    utils/                   # Types and utilities
+    utils/                   # Types (types.ts) and Electron utilities (electron.ts)
+electron/                    # Electron desktop wrapper
+  main.js                    # Electron main process
+  preload.js                 # Preload script for IPC
+  package.json               # electron-builder config (outputs .dmg/.exe)
 ```
 
 ## Infrastructure
@@ -315,7 +364,7 @@ Events are first written to the `outbox` DB table via `SaveEvent()`. A backgroun
 idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplication.
 
 ### Tool Name Routing
-- TOOL type: `payload["name"]` (the node's name) determines the tool (e.g., "weather", "bash")
+- TOOL type: `payload["name"]` (the node's name) determines the tool (e.g., "bash", "python")
 - LLM type: always routes to "llm_api"
 - Explicit override: `payload["tool"]` takes highest priority
 
@@ -349,6 +398,22 @@ idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplicat
 
 ### Context
 - `GET /api/task/:taskId/context` - Get task context history
+
+### Media
+- `POST /api/media/upload` - Upload images/videos (multipart, stored in MinIO)
+- `GET /api/media/list?userId=&offset=&limit=&tag=` - List assets with tag filtering
+- `GET /api/media/:id` - Get single media asset
+- `PUT /api/media/:id/tags` - Update asset tags
+
+### Chat
+- `POST /api/chat/generate` - Multi-turn conversational content generation with tool-calling
+- `POST /api/chat/revise` - Revise content fields from natural language instructions
+
+### Tool Registry
+- `GET /api/tools` - List all tool manifests (builtin + external) with full parameter/output schemas
+- `GET /api/tools/:name` - Get specific tool manifest
+- `POST /api/tools/register` - Register an external tool (HTTP endpoint + manifest)
+- `DELETE /api/tools/:name` - Deregister an external tool
 
 ## Common Issues
 
