@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { createSkillSession, chatSkillSession, getSkillSession, terminateSkillSession, uploadMedia } from '../services/api'
 import { useAppStore } from '../stores/appStore'
-import { setAIAbort } from '../utils/ai-loading'
+import { setAIAbort, cancelAI } from '../utils/ai-loading'
 import type { ChatMessageItem } from '../utils/types'
 
 const AIAssistantTab: React.FC = () => {
@@ -112,6 +112,7 @@ const AIAssistantTab: React.FC = () => {
     setIsLoading(true)
     setLoadingText('正在理解需求...')
     setError('')
+    setAILoadingMessage('AI 助手正在处理任务...')
 
     if (abortRef.current) {
       abortRef.current.abort()
@@ -401,18 +402,27 @@ const AIAssistantTab: React.FC = () => {
           </div>
         ))}
 
-        {/* Loading indicator with progress text */}
+        {/* Loading indicator with progress text and stop button */}
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-gray-50 text-gray-500 rounded-2xl rounded-tl-md px-4 py-3">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            <div className="bg-gray-50 rounded-2xl rounded-tl-md px-4 py-3">
+              <div className="flex items-center gap-3">
+                <div className="relative w-5 h-5 flex-shrink-0">
+                  <div className="absolute inset-0 rounded-full border-2 border-gray-200" />
+                  <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  {loadingText && (
+                    <p className="text-sm text-gray-500">{loadingText}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => cancelAI()}
+                  className="flex-shrink-0 px-3 py-1 text-xs font-medium text-red-500 border border-red-200 rounded-lg hover:bg-red-50 hover:border-red-300 transition-colors"
+                >
+                  停止
+                </button>
               </div>
-              {loadingText && (
-                <p className="text-xs text-gray-400">{loadingText}</p>
-              )}
             </div>
           </div>
         )}
