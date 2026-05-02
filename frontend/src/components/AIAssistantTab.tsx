@@ -51,17 +51,30 @@ const AIAssistantTab: React.FC = () => {
     setTimeout(() => inputRef.current?.focus(), 200)
   }, [])
 
-  // Progress text that updates while loading
+  // Progress text that updates while loading — both inline and overlay
   useEffect(() => {
     if (!isLoading) {
       setLoadingText('')
       return
     }
     setLoadingText('正在理解需求...')
-    const t1 = setTimeout(() => setLoadingText('正在分析需求...'), 2000)
-    const t2 = setTimeout(() => setLoadingText('正在生成内容...'), 5000)
-    const t3 = setTimeout(() => setLoadingText('内容生成中，请耐心等待...'), 15000)
-    const t4 = setTimeout(() => setLoadingText('正在优化结果...'), 30000)
+    setAILoadingMessage('正在理解你的需求...')
+    const t1 = setTimeout(() => {
+      setLoadingText('正在分析需求...')
+      setAILoadingMessage('正在分析内容方向，马上就好...')
+    }, 2000)
+    const t2 = setTimeout(() => {
+      setLoadingText('正在生成内容...')
+      setAILoadingMessage('AI 正在为你创作内容...')
+    }, 5000)
+    const t3 = setTimeout(() => {
+      setLoadingText('内容生成中，请耐心等待...')
+      setAILoadingMessage('内容生成中，请耐心等待...')
+    }, 15000)
+    const t4 = setTimeout(() => {
+      setLoadingText('正在优化结果...')
+      setAILoadingMessage('正在做最后的润色优化...')
+    }, 30000)
     return () => {
       clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4)
     }
