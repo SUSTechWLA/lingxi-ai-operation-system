@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 )
 
@@ -198,7 +199,7 @@ func (a *ResultAssembler) extractFieldsFromOutputs(outputs map[string]interface{
 		if content, ok := outMap["content"].(string); ok && content != "" {
 			// Try to parse as JSON first (structured output)
 			var parsed map[string]interface{}
-			if err := json.Unmarshal([]byte(content), &parsed); err == nil {
+			if err := jsonx.ExtractJSON(content, &parsed); err == nil {
 				if title, ok := parsed["title"].(string); ok && title != "" {
 					fields.Title = title
 				}
@@ -219,8 +220,21 @@ func (a *ResultAssembler) extractFieldsFromOutputs(outputs map[string]interface{
 					replyParts = append(replyParts, reply)
 				}
 			} else {
-				// Not JSON, use content as plain reply
-				replyParts = append(replyParts, content)
+				// Not a JSON object — try array of strings (bare keywords list)
+				var arr []interface{}
+				if err2 := jsonx.ExtractJSON(content, &arr); err2 == nil && len(arr) > 0 {
+					for _, item := range arr {
+						if s, ok := item.(string); ok {
+							fields.Keywords = append(fields.Keywords, s)
+						}
+					}
+					if len(fields.Keywords) > 0 {
+						replyParts = append(replyParts, fmt.Sprintf("已生成 %d 个关键词", len(fields.Keywords)))
+					}
+				} else {
+					// Not JSON at all, use content as plain reply
+					replyParts = append(replyParts, content)
+				}
 			}
 		}
 
@@ -233,6 +247,18 @@ func (a *ResultAssembler) extractFieldsFromOutputs(outputs map[string]interface{
 		}
 		if body, ok := outMap["body"].(string); ok && body != "" && fields.Body == "" {
 			fields.Body = body
+		}
+		// Check top-level keywords (from chat_revise tool)
+		if kw, ok := outMap["keywords"].([]interface{}); ok && len(fields.Keywords) == 0 {
+			for _, k := range kw {
+				if s, ok := k.(string); ok {
+					fields.Keywords = append(fields.Keywords, s)
+				}
+			}
+		}
+		// Check top-level reply (from chat_revise tool)
+		if r, ok := outMap["reply"].(string); ok && r != "" {
+			replyParts = append(replyParts, r)
 		}
 
 		// Check stdout for parsed JSON

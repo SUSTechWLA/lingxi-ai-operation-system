@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 )
@@ -198,7 +199,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*mo
 			}
 
 			var dag model.DAGRequest
-			if err := json.Unmarshal([]byte(contentStr), &dag); err != nil {
+			if err := jsonx.ExtractJSON(contentStr, &dag); err != nil {
 				return nil, fmt.Errorf("failed to parse LLM response as DAG: %w", err)
 			}
 

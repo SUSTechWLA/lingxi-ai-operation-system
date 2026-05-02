@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 )
 
@@ -96,8 +97,8 @@ func (c *LLMClient) ChatWithJSON(ctx context.Context, messages []map[string]stri
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal([]byte(content), result); err != nil {
-		return fmt.Errorf("failed to parse LLM JSON response: %w (raw: %.200s)", err, content)
+	if err := jsonx.ExtractJSON(content, result); err != nil {
+		return err
 	}
 	return nil
 }

@@ -34,7 +34,7 @@
 │  │  │  ┌──────────┐ ┌───────────┐ ┌─────────┐ ┌──────────────┐ │  │                  │
 │  │  │  │上传素材   │ │标题/简介  │ │AI助手    │ │平台选择/发布 │ │  │                                │
 │  │  │  │UploadCard│ │TitleInput │ │AIHelper  │ │PlatformSelect│ │  │                 │
-│  │  │  │          │ │DescInput  │ │Weather   │ │PublishButton │ │  │                 │
+│  │  │  │          │ │DescInput  │ │ContentType│ │PublishButton │ │  │                 │
 │  │  │  └──────────┘ └───────────┘ └─────────┘ └──────────────┘ │  │                  │
 │  │  └─────────────────────────────────────────────────────────────┘  │               │
 │  │  Zustand Store (状态管理)                                          │                  │
@@ -48,7 +48,7 @@
 │                                                                                      │
 │  ┌───────────────────────────────────────────────────────────────────────────────┐   │
 │  │                                 Gin HTTP 路由层                                  │   │
-│  │    /api/health | /api/publish | /api/media/* | /api/ai/* | /api/weather/*     │   │
+│  │    /api/health | /api/publish | /api/media/* | /api/ai/*                       │   │
 │  │         /api/task/* | /api/translate/* | /api/node/* | /api/context/*         │   │
 │  └────────────────────────────────────────────────────┬──────────────────────────┘   │
 │                                                       │                              │
@@ -127,7 +127,6 @@ PublishHandler (HTTP 路由)
 ├── POST /api/ai/generate           → AI 生成标题+简介
 ├── POST /api/ai/generate-from-media → 基于图片/视频的 AI 生成
 ├── POST /api/ai/polish             → AI 润色文字
-├── GET  /api/weather/query         → 天气查询
 ├── GET  /api/trace/recent          → 查询最近一次任务追踪
 ├── GET  /api/trace/:taskId         → 查询指定任务追踪
 ├── POST /api/media/upload          → 上传素材
@@ -289,7 +288,7 @@ type Tool interface {
 
 **职责**：将自然语言转为 DAG 任务图。
 
-通过 System Prompt 引导 LLM 将用户输入（如"查询北京天气并生成总结"）转为结构化的节点和边。
+通过 System Prompt 引导 LLM 将用户输入（如"执行命令并生成总结"）转为结构化的节点和边。
 
 ### 2.5 Context — 上下文审计
 

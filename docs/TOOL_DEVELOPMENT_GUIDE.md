@@ -289,28 +289,28 @@ Manifest 是工具的"身份证"，定义了工具的元数据、参数、输出
 curl -X POST http://localhost:8080/api/tools/register \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "weather_forecast",
-    "description": "根据城市名称查询天气预报，返回温度和天气状况",
+    "name": "image_processor",
+    "description": "处理图片文件，返回宽度、高度和格式信息",
     "version": "1.0.0",
     "type": "external",
-    "endpoint": "http://localhost:9001/weather",
+    "endpoint": "http://localhost:9001/image",
     "timeout": 10,
     "parameters": {
-      "city": {
+      "image_url": {
         "type": "string",
-        "description": "城市名称，如 北京、上海、广州",
+        "description": "图片URL地址",
         "required": true
       }
     },
     "output": {
-      "temperature": { "type": "string", "description": "当前温度，如 22°C" },
-      "condition": { "type": "string", "description": "天气状况，如 晴、多云、小雨" },
-      "humidity": { "type": "string", "description": "湿度" }
+      "width": { "type": "string", "description": "图片宽度" },
+      "height": { "type": "string", "description": "图片高度" },
+      "format": { "type": "string", "description": "图片格式" }
     },
     "examples": [
       {
-        "input": { "city": "北京" },
-        "output": { "temperature": "22°C", "condition": "晴", "humidity": "45%" }
+        "input": { "image_url": "https://example.com/photo.jpg" },
+        "output": { "width": "1920", "height": "1080", "format": "jpeg" }
       }
     ]
   }'
@@ -321,7 +321,7 @@ curl -X POST http://localhost:8080/api/tools/register \
 {
   "code": 200,
   "message": "tool registered successfully",
-  "data": { "name": "weather_forecast", "type": "external" }
+  "data": { "name": "image_processor", "type": "external" }
 }
 ```
 
@@ -332,13 +332,13 @@ curl -X POST http://localhost:8080/api/tools/register \
 curl http://localhost:8080/api/tools
 
 # 查看具体工具详情
-curl http://localhost:8080/api/tools/weather_forecast
+curl http://localhost:8080/api/tools/image_processor
 ```
 
 ### 6.3 注销
 
 ```bash
-curl -X DELETE http://localhost:8080/api/tools/weather_forecast
+curl -X DELETE http://localhost:8080/api/tools/image_processor
 ```
 
 ---
@@ -353,12 +353,12 @@ curl -X DELETE http://localhost:8080/api/tools/weather_forecast
 
 ```json
 {
-  "tool": "weather_forecast",
+  "tool": "image_processor",
   "params": {
     "city": "北京"
   },
   "task_id": "20260430120000-abc123",
-  "node_id": "tool-weather-forecast-1714411200000-0"
+  "node_id": "tool-image-processor-1714411200000-0"
 }
 ```
 
@@ -485,16 +485,15 @@ AI 可以动态创建临时工具来完成任务。当没有现成的内置或�
 
 ### 10.1 Python 外部工具
 
-**工具代码** (`weather_service.py`)：
+**工具代码** (`image_service.py`)：
 
 ```python
 #!/usr/bin/env python3
-"""天气预报外部工具示例"""
+"""图片处理外部工具示例"""
 import json
 import http.server
-import random
 
-class WeatherHandler(http.server.BaseHTTPRequestHandler):
+class ImageHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers['Content-Length'])
         body = self.rfile.read(content_length)
@@ -503,18 +502,12 @@ class WeatherHandler(http.server.BaseHTTPRequestHandler):
         tool = request.get('tool', '')
         params = request.get('params', {})
         task_id = request.get('task_id', '')
-        city = params.get('city', '')
+        image_url = params.get('image_url', '')
 
-        print(f"[WeatherTool] city={city}, task={task_id}")
+        print(f"[ImageTool] url={image_url}, task={task_id}")
 
-        # 模拟天气查询
-        weathers = {
-            "北京": {"temperature": "22°C", "condition": "晴", "humidity": "45%"},
-            "上海": {"temperature": "25°C", "condition": "多云", "humidity": "65%"},
-            "广州": {"temperature": "28°C", "condition": "小雨", "humidity": "80%"},
-        }
-
-        result = weathers.get(city, {"error": f"未知城市: {city}"})
+        # 模拟图片处理
+        result = {"width": "1920", "height": "1080", "format": "jpeg"}
 
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -522,8 +515,8 @@ class WeatherHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(result).encode())
 
 if __name__ == '__main__':
-    server = http.server.HTTPServer(('localhost', 9001), WeatherHandler)
-    print("Weather tool running on http://localhost:9001")
+    server = http.server.HTTPServer(('localhost', 9001), ImageHandler)
+    print("Image tool running on http://localhost:9001")
     server.serve_forever()
 ```
 
@@ -533,21 +526,21 @@ if __name__ == '__main__':
 curl -X POST http://localhost:8080/api/tools/register \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "weather_forecast",
-    "description": "根据城市名称查询天气预报，返回温度和天气状况",
+    "name": "image_processor",
+    "description": "处理图片文件，返回宽度、高度和格式信息",
     "type": "external",
     "endpoint": "http://localhost:9001/",
     "timeout": 10,
     "parameters": {
-      "city": {
+      "image_url": {
         "type": "string",
-        "description": "城市名称，如 北京、上海、广州",
+        "description": "图片URL地址",
         "required": true
       }
     },
     "output": {
       "temperature": { "type": "string", "description": "温度" },
-      "condition": { "type": "string", "description": "天气状况" },
+      "condition": { "type": "string", "description": "图片格式" },
       "humidity": { "type": "string", "description": "湿度" }
     },
     "examples": [

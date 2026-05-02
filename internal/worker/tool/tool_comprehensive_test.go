@@ -31,7 +31,7 @@ func TestToolRegistry_NewRegistryIsEmpty(t *testing.T) {
 func TestToolRegistry_RegisterMultiple(t *testing.T) {
 	registry := NewToolRegistry()
 	registry.Register(&mockTool{name: "bash"})
-	registry.Register(&mockTool{name: "weather"})
+	registry.Register(&mockTool{name: "test_tool"})
 	registry.Register(&mockTool{name: "llm_api"})
 
 	if len(registry.tools) != 3 {
@@ -52,7 +52,7 @@ func TestToolRegistry_RegisterOverwrite(t *testing.T) {
 func TestToolRegistry_All(t *testing.T) {
 	registry := NewToolRegistry()
 	registry.Register(&mockTool{name: "bash"})
-	registry.Register(&mockTool{name: "weather"})
+	registry.Register(&mockTool{name: "test_tool"})
 
 	all := registry.All()
 	if len(all) != 2 {
@@ -70,9 +70,9 @@ func TestDetermineToolName_ToolOverride(t *testing.T) {
 }
 
 func TestDetermineToolName_ToolTypeUsesName(t *testing.T) {
-	result := DetermineToolName(string(model.NodeTypeTool), map[string]interface{}{"name": "weather"})
-	if result != "weather" {
-		t.Errorf("Expected 'weather', got '%s'", result)
+	result := DetermineToolName(string(model.NodeTypeTool), map[string]interface{}{"name": "test_tool"})
+	if result != "test_tool" {
+		t.Errorf("Expected 'test_tool', got '%s'", result)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestDetermineToolName_ToolOverridePriority(t *testing.T) {
 	// Even for TOOL type, explicit "tool" field takes priority over "name"
 	result := DetermineToolName(string(model.NodeTypeTool), map[string]interface{}{
 		"tool": "override",
-		"name": "weather",
+		"name": "test_tool",
 	})
 	if result != "override" {
 		t.Errorf("Expected 'override' (tool field priority), got '%s'", result)

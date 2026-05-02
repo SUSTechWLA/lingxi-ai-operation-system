@@ -39,7 +39,6 @@ Common HTTP status codes:
    - [POST /api/ai/generate — AI generate content](#post-apiaigenerate)
    - [POST /api/ai/generate-from-media — AI generate from media](#post-apiaigenerate-from-media)
    - [POST /api/ai/polish — AI polish text](#post-apiaipolish)
-   - [GET /api/weather/query — Query weather](#get-apiweatherquery)
 3. [Trace — Task Trace Query](#3-trace--task-trace-query)
    - [GET /api/trace/recent — Get recent trace](#get-apitracerecent)
    - [GET /api/trace/:taskId — Get task trace](#get-apitracetaskid)
@@ -343,48 +342,6 @@ curl "http://localhost:8080/api/ai/polish/result?taskId=20260426232624-b0989898&
 
 ---
 
-### GET /api/weather/query
-
-Query weather information for a city. Currently returns simulated data.
-
-**Query Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `city` | string | **Yes** | City name (e.g. "北京", "上海") |
-
-**Example:**
-```bash
-curl "http://localhost:8080/api/weather/query?city=北京"
-```
-
-**Response** `200`:
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "city": "北京",
-    "temperature": "22°C",
-    "condition": "Sunny",
-    "humidity": "45%",
-    "wind": "Light breeze, 8 km/h",
-    "forecast": "Clear skies expected throughout the day"
-  }
-}
-```
-
-**Response** `400` (missing city):
-```json
-{
-  "code": 400,
-  "message": "city parameter is required",
-  "data": null
-}
-```
-
----
-
 ## 3. Trace — Task Trace Query
 
 Trace endpoints provide complete task lifecycle data (task details + all context entries) for debugging and auditing.
@@ -598,21 +555,21 @@ Submit a DAG (nodes + edges) to an existing task.
     {
       "id": "node-1",
       "type": "TOOL",
-      "name": "weather",
-      "input": {"city": "Beijing"}
+      "name": "bash",
+      "input": {"command": "echo 'Hello World'"}
     },
     {
       "id": "node-2",
       "type": "LLM",
       "name": "Summarize",
-      "input": {"prompt": "Generate travel advice based on weather"}
+      "input": {"prompt": "Generate a summary of the task output"}
     },
     {
       "id": "node-3",
       "type": "TOOL",
-      "name": "error-handler",
+      "name": "bash",
       "condition": "node-1.status == failed",
-      "input": {"message": "Weather query failed"}
+      "input": {"command": "echo 'Task failed'"}
     }
   ],
   "edges": [
@@ -644,7 +601,7 @@ curl -X POST http://localhost:8080/api/task/${TASK_ID}/dag \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
+      {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
       {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
     ],
     "edges": [
@@ -685,7 +642,7 @@ curl http://localhost:8080/api/task/20260423150000-a1b2c3
     {
       "id": "n1",
       "type": "TOOL",
-      "name": "weather",
+      "name": "bash",
       "status": "SUCCESS",
       "condition": "",
       "output": {"city": "Beijing", "temperature": "22°C", "condition": "Sunny"}
@@ -950,14 +907,14 @@ Translate a natural language prompt into a DAG structure.
 ```bash
 curl -X POST http://localhost:8080/api/translate \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Query Beijing weather and generate a summary"}'
+  -d '{"prompt": "Run a hello world command and generate a summary"}'
 ```
 
 **Response** `200`:
 ```json
 {
   "nodes": [
-    {"id": "n1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
+    {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
     {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
   ],
   "edges": [
@@ -976,7 +933,7 @@ Translate a natural language prompt and immediately submit the DAG to the orches
 ```bash
 curl -X POST http://localhost:8080/api/translate/submit \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Query Beijing weather and generate a summary"}'
+  -d '{"prompt": "Run a hello world command and generate a summary"}'
 ```
 
 **Response** `200`:
@@ -1002,7 +959,7 @@ curl -X POST http://localhost:8080/api/node \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
+      {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
       {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
     ],
     "edges": [
@@ -1017,13 +974,13 @@ curl -X POST http://localhost:8080/api/node \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
-      {"id": "weather-1", "type": "TOOL", "name": "weather", "input": {"city": "Beijing"}},
-      {"id": "success-1", "type": "LLM", "name": "travel-advice", "condition": "weather-1.status == success", "input": {"prompt": "Generate travel advice"}},
-      {"id": "fail-1", "type": "TOOL", "name": "bash", "condition": "weather-1.status == failed", "input": {"command": "echo weather failed"}}
+      {"id": "bash-1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
+      {"id": "success-1", "type": "LLM", "name": "summary", "condition": "bash-1.status == success", "input": {"prompt": "Generate a summary"}},
+      {"id": "fail-1", "type": "TOOL", "name": "bash", "condition": "bash-1.status == failed", "input": {"command": "echo 'Task failed'"}}
     ],
     "edges": [
-      {"from": "weather-1", "to": "success-1"},
-      {"from": "weather-1", "to": "fail-1"}
+      {"from": "bash-1", "to": "success-1"},
+      {"from": "bash-1", "to": "fail-1"}
     ]
   }'
 ```
@@ -1459,17 +1416,17 @@ curl http://localhost:8080/api/tools/chat_generate
 curl -X POST http://localhost:8080/api/tools/register \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "weather_forecast",
-    "description": "根据城市名称查询天气预报",
+    "name": "image_processor",
+    "description": "处理图片文件，返回图片信息",
     "type": "external",
-    "endpoint": "http://localhost:9001/weather",
+    "endpoint": "http://localhost:9001/image",
     "timeout": 10000,
     "parameters": {
-      "city": { "type": "string", "description": "城市名称", "required": true }
+      "image_url": { "type": "string", "description": "图片URL", "required": true }
     },
     "output": {
-      "temperature": { "type": "string", "description": "温度" },
-      "condition": { "type": "string", "description": "天气状况" }
+      "width": { "type": "string", "description": "宽度" },
+      "height": { "type": "string", "description": "高度" }
     }
   }'
 ```
@@ -1479,7 +1436,7 @@ curl -X POST http://localhost:8080/api/tools/register \
 {
   "code": 200,
   "message": "tool registered successfully",
-  "data": { "name": "weather_forecast", "type": "external" }
+  "data": { "name": "image_processor", "type": "external" }
 }
 ```
 
@@ -1489,7 +1446,7 @@ curl -X POST http://localhost:8080/api/tools/register \
 
 **Example:**
 ```bash
-curl -X DELETE http://localhost:8080/api/tools/weather_forecast
+curl -X DELETE http://localhost:8080/api/tools/image_processor
 ```
 
 ---

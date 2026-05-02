@@ -144,8 +144,8 @@ func (t *ExternalTool) Manifest() tool.ToolManifest {
 		},
 		Examples: []tool.ToolExample{
 			{
-				Input:  map[string]interface{}{"tool": "weather_forecast", "city": "北京"},
-				Output: map[string]interface{}{"temperature": "22°C", "condition": "晴", "tool": "weather_forecast"},
+				Input:  map[string]interface{}{"tool": "image_processor", "image_url": "https://example.com/photo.jpg"},
+				Output: map[string]interface{}{"width": "1920", "height": "1080", "format": "jpeg", "tool": "image_processor"},
 			},
 		},
 	}

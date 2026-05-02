@@ -2,9 +2,9 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -105,7 +105,7 @@ func (t *ContentCheckerTool) Execute(ctx context.Context, params map[string]inte
 	responseContent, _ := result.Data["content"].(string)
 
 	var checkResult map[string]interface{}
-	if err := json.Unmarshal([]byte(responseContent), &checkResult); err != nil {
+	if err := jsonx.ExtractJSON(responseContent, &checkResult); err != nil {
 		checkResult = map[string]interface{}{
 			"is_compliant":  true,
 			"violations":    []interface{}{},

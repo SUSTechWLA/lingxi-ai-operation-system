@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 )
 
@@ -321,7 +322,7 @@ func (s *PublishService) AIGenerateQueryResult(ctx context.Context, taskID, node
 		return nil, fmt.Errorf("tool output content is empty")
 	}
 
-	if err := json.Unmarshal([]byte(contentStr), &result); err != nil {
+	if err := jsonx.ExtractJSON(contentStr, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse LLM response as JSON: %w", err)
 	}
 

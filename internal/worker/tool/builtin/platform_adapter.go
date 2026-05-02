@@ -2,9 +2,9 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -129,7 +129,7 @@ func (t *PlatformAdapterTool) Execute(ctx context.Context, params map[string]int
 	content, _ := result.Data["content"].(string)
 
 	var adapted map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &adapted); err != nil {
+	if err := jsonx.ExtractJSON(content, &adapted); err != nil {
 		adapted = map[string]interface{}{
 			"adapted_title":       title,
 			"adapted_description": sourceContent,

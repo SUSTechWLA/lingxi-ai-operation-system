@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -145,7 +146,7 @@ func (t *ContentGeneratorTool) Execute(ctx context.Context, params map[string]in
 	content, _ := result.Data["content"].(string)
 
 	var contentPkg map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &contentPkg); err != nil {
+	if err := jsonx.ExtractJSON(content, &contentPkg); err != nil {
 		contentPkg = map[string]interface{}{
 			"title":       "AI 生成内容",
 			"description": content,

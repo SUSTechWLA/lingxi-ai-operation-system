@@ -2,8 +2,8 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -110,7 +110,7 @@ func (t *MediaAnalyzerTool) Execute(ctx context.Context, params map[string]inter
 	content, _ := result.Data["content"].(string)
 
 	var analysis map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &analysis); err != nil {
+	if err := jsonx.ExtractJSON(content, &analysis); err != nil {
 		analysis = map[string]interface{}{
 			"tags":        []string{"素材"},
 			"suggestions": []string{"基于素材创作相关内容"},

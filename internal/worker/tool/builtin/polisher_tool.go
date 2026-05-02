@@ -155,7 +155,7 @@ func (t *PolisherTool) Manifest() tool.ToolManifest {
 		},
 		Examples: []tool.ToolExample{
 			{
-				Input:  map[string]interface{}{"text": "今天天气很好", "polishType": "title"},
+				Input:  map[string]interface{}{"text": "今天是个好日子", "polishType": "title"},
 				Output: map[string]interface{}{"content": "今日阳光正好，一起来感受春日暖阳！", "polishType": "title", "model": "gpt-4"},
 			},
 		},

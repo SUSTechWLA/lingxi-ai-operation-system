@@ -806,10 +806,7 @@ curl -X POST http://localhost:8080/api/ai/generate \
 # AI 润色
 curl -X POST http://localhost:8080/api/ai/polish \
   -H "Content-Type: application/json" \
-  -d '{"text":"今天天气很好","type":"description"}'
-
-# 天气查询
-curl "http://localhost:8080/api/weather/query?city=北京"
+  -d '{"text":"今天是个好日子","type":"description"}'
 
 # 从媒体文件生成
 curl -X POST http://localhost:8080/api/ai/generate-from-media \
@@ -837,8 +834,8 @@ curl -X POST "http://localhost:8080/api/task/${TASK_ID}/dag" \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "weather", "input": {"city": "北京"}},
-      {"id": "n2", "type": "LLM", "name": "summary", "input": {"prompt": "根据天气生成出行建议"}}
+      {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
+      {"id": "n2", "type": "LLM", "name": "summary", "input": {"prompt": "根据执行结果生成总结"}}
     ],
     "edges": [
       {"from": "n1", "to": "n2"}

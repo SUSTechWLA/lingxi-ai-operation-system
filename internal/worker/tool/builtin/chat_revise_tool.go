@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -133,7 +134,7 @@ func (t *ChatReviseTool) Execute(ctx context.Context, params map[string]interfac
 		"keywords":    []string{},
 	}
 
-	if err := json.Unmarshal([]byte(reply), &parsed); err == nil && parsed.Type == "revise" {
+	if err := jsonx.ExtractJSON(reply, &parsed); err == nil && parsed.Type == "revise" {
 		result["reply"] = parsed.Reply
 		result["title"] = parsed.Fields.Title
 		result["description"] = parsed.Fields.Description

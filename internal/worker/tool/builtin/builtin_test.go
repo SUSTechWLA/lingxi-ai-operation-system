@@ -144,66 +144,6 @@ func testBashConfig() config.BashToolConfig {
 	return config.BashToolConfig{TimeoutSeconds: 10}
 }
 
-// ===== WeatherTool tests =====
-
-func TestWeatherTool_Interface(t *testing.T) {
-	wt := NewWeatherTool()
-
-	if wt.Name() != "weather" {
-		t.Errorf("Expected name 'weather', got '%s'", wt.Name())
-	}
-	if wt.Type() != tool.ToolTypeCustom {
-		t.Errorf("Expected CUSTOM type, got %v", wt.Type())
-	}
-}
-
-func TestWeatherTool_ValidateParameters(t *testing.T) {
-	wt := NewWeatherTool()
-
-	if !wt.ValidateParameters(map[string]interface{}{"city": "Beijing"}) {
-		t.Error("Expected valid with 'city' param")
-	}
-	if !wt.ValidateParameters(map[string]interface{}{"location": "Shanghai"}) {
-		t.Error("Expected valid with 'location' param")
-	}
-	if wt.ValidateParameters(map[string]interface{}{}) {
-		t.Error("Expected invalid with no city/location")
-	}
-}
-
-func TestWeatherTool_Execute_WithCity(t *testing.T) {
-	wt := NewWeatherTool()
-
-	result := wt.Execute(context.Background(), map[string]interface{}{"city": "Beijing"}, tool.ToolContext{})
-	if !result.Success {
-		t.Errorf("Expected success, got error: %s", result.Error)
-	}
-	if result.Data["city"] != "Beijing" {
-		t.Errorf("Expected city=Beijing in result, got %v", result.Data["city"])
-	}
-}
-
-func TestWeatherTool_Execute_WithLocation(t *testing.T) {
-	wt := NewWeatherTool()
-
-	result := wt.Execute(context.Background(), map[string]interface{}{"location": "Shanghai"}, tool.ToolContext{})
-	if !result.Success {
-		t.Errorf("Expected success, got error: %s", result.Error)
-	}
-	if result.Data["city"] != "Shanghai" {
-		t.Errorf("Expected city=Shanghai (from location), got %v", result.Data["city"])
-	}
-}
-
-func TestWeatherTool_Execute_NoCity(t *testing.T) {
-	wt := NewWeatherTool()
-
-	result := wt.Execute(context.Background(), map[string]interface{}{}, tool.ToolContext{})
-	if result.Success {
-		t.Error("Expected failure when no city provided")
-	}
-}
-
 // ===== LlmApiTool tests =====
 
 func TestLlmApiTool_Interface(t *testing.T) {
