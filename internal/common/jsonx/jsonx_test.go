@@ -2,6 +2,7 @@ package jsonx
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -192,6 +193,64 @@ func TestExtractJSON_RealWorldKeywordsArray(t *testing.T) {
 	}
 	if keywords[0] != "灵犀AI" {
 		t.Errorf("expected first keyword='灵犀AI', got %q", keywords[0])
+	}
+}
+
+func TestExtractJSON_UnescapedNewlinesInStrings(t *testing.T) {
+	// Simulates the exact ChatReviseTool scenario: LLM returns JSON with
+	// literal newlines inside the description string value.
+	raw := `{
+  "type": "revise",
+  "reply": "已将原有营销感较强的简介修改",
+  "fields": {
+    "title": "",
+    "description": "之前为了提高工作效率少加班、规划转AI赛道我找了好多相关课程。
+从零基础的AI认知、大模型底层原理讲起，内容覆盖提示词工程。
+我自己学了半个多月，现在日常处理报表、写方案起码省了一半时间。",
+    "keywords": []
+  }
+}`
+
+	type reviseOutput struct {
+		Type   string `json:"type"`
+		Reply  string `json:"reply"`
+		Fields struct {
+			Title       string   `json:"title"`
+			Description string   `json:"description"`
+			Keywords    []string `json:"keywords"`
+		} `json:"fields"`
+	}
+
+	var parsed reviseOutput
+	if err := ExtractJSON(raw, &parsed); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parsed.Type != "revise" {
+		t.Errorf("expected type='revise', got %q", parsed.Type)
+	}
+	if parsed.Fields.Title != "" {
+		t.Errorf("expected empty title, got %q", parsed.Fields.Title)
+	}
+	if parsed.Fields.Description == "" {
+		t.Fatal("expected non-empty description, got empty")
+	}
+	if !strings.Contains(parsed.Fields.Description, "少加班") {
+		t.Errorf("description missing expected content, got: %s", parsed.Fields.Description)
+	}
+	// Verify newlines became literal \n in the Go string value
+	if !strings.Contains(parsed.Fields.Description, "\n") {
+		t.Error("expected newlines preserved in description")
+	}
+}
+
+func TestExtractJSON_UnescapedTabs(t *testing.T) {
+	raw := "{\"text\": \"hello\tworld\"}"
+	var result map[string]interface{}
+	if err := ExtractJSON(raw, &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result["text"] != "hello\tworld" {
+		t.Errorf("expected tab preserved, got %q", result["text"])
 	}
 }
 

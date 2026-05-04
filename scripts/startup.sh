@@ -102,6 +102,14 @@ fi
 # ============================================
 section "Step 4: Start Backend (port 8080)"
 
+# Kill any process occupying port 8080
+if lsof -ti :8080 &>/dev/null; then
+    info "Port 8080 is in use, killing existing process..."
+    lsof -ti :8080 | xargs kill -9 2>/dev/null
+    sleep 1
+    info "Port 8080 freed"
+fi
+
 ./build/lingxi-ai-os &
 BACKEND_PID=$!
 

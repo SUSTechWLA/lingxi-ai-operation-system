@@ -24,6 +24,7 @@ var (
 //   - Markdown code fences (```json ... ``` or ``` ... ```)
 //   - Text before or after the JSON block
 //   - Trailing commas in objects and arrays
+//   - Unescaped control characters (newlines, tabs) inside JSON strings
 func ExtractJSON(raw string, v interface{}) error {
 	cleaned := extractJSONBlock(raw)
 	if cleaned == "" {
@@ -37,7 +38,14 @@ func ExtractJSON(raw string, v interface{}) error {
 
 	// Try fixing trailing commas
 	fixed := trailingCommaRe.ReplaceAllString(cleaned, "$1")
-	if err := json.Unmarshal([]byte(fixed), v); err != nil {
+	if err := json.Unmarshal([]byte(fixed), v); err == nil {
+		return nil
+	}
+
+	// Try normalizing unescaped control characters within strings (LLMs often
+	// output literal newlines inside JSON string values)
+	normalized := normalizeStringChars(fixed)
+	if err := json.Unmarshal([]byte(normalized), v); err != nil {
 		return fmt.Errorf("failed to parse LLM JSON: %w (cleaned: %.200s)", err, cleaned)
 	}
 	return nil
@@ -81,6 +89,50 @@ func extractJSONBlock(raw string) string {
 
 	// Fallback: return original trimmed string
 	return s
+}
+
+// normalizeStringChars escapes unescaped control characters (\n, \r, \t) that
+// appear inside JSON string values. LLMs often output literal newlines within
+// string content, which violates the JSON spec (RFC 7159 requires control
+// characters U+0000–U+001F to be escaped).
+func normalizeStringChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString := false
+	escaped := false
+
+	for _, ch := range s {
+		if escaped {
+			escaped = false
+			b.WriteRune(ch)
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			b.WriteRune(ch)
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			b.WriteRune(ch)
+			continue
+		}
+		if inString {
+			switch ch {
+			case '\n':
+				b.WriteString("\\n")
+			case '\r':
+				b.WriteString("\\r")
+			case '\t':
+				b.WriteString("\\t")
+			default:
+				b.WriteRune(ch)
+			}
+			continue
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
 }
 
 // extractBalanced extracts a balanced bracket/brace block from the start of s,
