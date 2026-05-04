@@ -121,7 +121,7 @@ export const chatSkillSession = async (
   const response = await api.post<ApiResponse<SkillChatResponse>>(
     `/skill/dialog/session/${sessionId}/chat`,
     { message },
-    { signal, timeout: 120000 }
+    { signal, timeout: 180000 }
   )
   return response.data.data
 }

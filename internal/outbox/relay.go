@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,9 +22,9 @@ type OutboxEntry struct {
 }
 
 type Relay struct {
-	pool    *pgxpool.Pool
+	pool     *pgxpool.Pool
 	producer *eventbus.Producer
-	cancel  context.CancelFunc
+	cancel   context.CancelFunc
 }
 
 func NewRelay(pool *pgxpool.Pool, producer *eventbus.Producer) *Relay {
@@ -93,6 +94,16 @@ func (r *Relay) processPending(ctx context.Context) {
 
 		if err := r.producer.Publish(entry.EventType, key, event); err != nil {
 			zap.L().Error("Outbox: failed to publish event", zap.Error(err))
+			// If message is too large for Kafka, delete it to unblock the queue
+			if strings.Contains(err.Error(), "Message larger than configured") ||
+				strings.Contains(err.Error(), "MaxMessageBytes") {
+				zap.L().Warn("Outbox: deleting oversized event",
+					zap.Int64("id", entry.ID),
+					zap.String("eventType", entry.EventType),
+					zap.Int("payloadSize", len(payload)))
+				_, _ = r.pool.Exec(ctx, `DELETE FROM outbox WHERE id=$1`, entry.ID)
+				continue
+			}
 			return // Stop processing, will retry next tick
 		}
 

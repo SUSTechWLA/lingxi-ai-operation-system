@@ -91,12 +91,19 @@ func (a *ResultAssembler) PollAndExtract(
 
 // pollTaskResults polls the orchestrator for all node results.
 func (a *ResultAssembler) pollTaskResults(
-	ctx context.Context,
+	_ context.Context,
 	taskID string,
 	nodes []model.NodeRequest,
 ) (map[string]interface{}, map[string]interface{}, error) {
-	maxAttempts := 120 // 120 * 500ms = 60s
+	maxAttempts := 240 // 240 * 500ms = 120s
 	pollInterval := 500 * time.Millisecond
+
+	// Use a background-derived context so polling continues even if the
+	// HTTP request context is cancelled (e.g. client timeout). This prevents
+	// losing results from tasks that complete near the timeout boundary.
+	pollCtx, cancel := context.WithTimeout(context.Background(),
+		time.Duration(maxAttempts)*pollInterval+30*time.Second)
+	defer cancel()
 
 	nodeIDSet := make(map[string]bool, len(nodes))
 	for _, n := range nodes {
@@ -105,12 +112,12 @@ func (a *ResultAssembler) pollTaskResults(
 
 	for i := 0; i < maxAttempts; i++ {
 		select {
-		case <-ctx.Done():
-			return nil, nil, fmt.Errorf("context cancelled: %w", ctx.Err())
+		case <-pollCtx.Done():
+			return nil, nil, fmt.Errorf("task %s polling deadline exceeded", taskID)
 		default:
 		}
 
-		details, err := a.orchestrator.GetTaskWithDetails(ctx, taskID)
+		details, err := a.orchestrator.GetTaskWithDetails(pollCtx, taskID)
 		if err != nil {
 			time.Sleep(pollInterval)
 			continue
@@ -181,7 +188,7 @@ func (a *ResultAssembler) pollTaskResults(
 		time.Sleep(pollInterval)
 	}
 
-	return nil, nil, fmt.Errorf("task %s timed out after 60s", taskID)
+	return nil, nil, fmt.Errorf("task %s timed out after 120s", taskID)
 }
 
 // extractFieldsFromOutputs extracts ChatFields from node outputs.

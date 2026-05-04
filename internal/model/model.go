@@ -194,6 +194,7 @@ type MediaContext struct {
 	MediaCount  int      `json:"media_count"`
 	MediaNames  []string `json:"media_names"`
 	MediaIDs    []string `json:"media_ids,omitempty"`
+	MediaURLs   []string `json:"media_urls,omitempty"`
 	Title       string   `json:"title,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Keywords    []string `json:"keywords,omitempty"`

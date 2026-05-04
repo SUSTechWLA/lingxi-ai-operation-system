@@ -248,12 +248,8 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 
 			s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "StateMachine", "初始节点就绪（无依赖），进入 READY 状态", buildNodeMetadata(node, model.NodeReady))
 
-			// Merge node name into payload so worker can determine the correct tool
-			payload := make(map[string]interface{})
-			for k, v := range node.Input {
-				payload[k] = v
-			}
-			payload["name"] = node.Name
+			// Merge node name into payload, but skip image_urls (too large for Kafka)
+			payload := buildEventPayload(node.Input, node.Name)
 
 			_ = s.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
 				TaskID:         node.TaskID,
@@ -326,6 +322,20 @@ func buildNodeMetadata(node *model.Node, status model.NodeStatus) map[string]int
 		}
 	}
 	return meta
+}
+
+// buildEventPayload copies node input into an event payload, skipping image_urls
+// since base64-encoded images are too large for Kafka messages.
+func buildEventPayload(input map[string]interface{}, name string) map[string]interface{} {
+	payload := make(map[string]interface{}, len(input)+1)
+	for k, v := range input {
+		if k == "image_urls" {
+			continue
+		}
+		payload[k] = v
+	}
+	payload["name"] = name
+	return payload
 }
 
 func (s *StateService) recordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, sourceModule, message string, metadata map[string]interface{}) {

@@ -133,6 +133,14 @@ func (m *mockDepRepo) FindByChildID(ctx context.Context, childID string) ([]*mod
 	return m.deps[childID], nil
 }
 
+func (m *mockDepRepo) FindByTaskID(ctx context.Context, taskID string) ([]*model.NodeDependency, error) {
+	var all []*model.NodeDependency
+	for _, deps := range m.deps {
+		all = append(all, deps...)
+	}
+	return all, nil
+}
+
 type mockContextRepo struct {
 	saved []*model.Context
 }

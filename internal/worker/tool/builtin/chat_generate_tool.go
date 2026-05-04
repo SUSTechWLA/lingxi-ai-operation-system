@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -27,28 +28,63 @@ func (t *ChatGenerateTool) Description() string  { return "Conversational conten
 func (t *ChatGenerateTool) Type() tool.ToolType  { return tool.ToolTypeCustom }
 
 func (t *ChatGenerateTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
-	var messages []map[string]string
-
 	messagesRaw, ok := params["messages"].([]interface{})
 	if !ok || len(messagesRaw) == 0 {
 		return tool.FailureResult("messages array is required")
 	}
 
+	messages := make([]map[string]interface{}, 0, len(messagesRaw))
 	for _, m := range messagesRaw {
 		msg, ok := m.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		role, _ := msg["role"].(string)
-		content, _ := msg["content"].(string)
 		if role == "" {
 			continue
 		}
-		messages = append(messages, map[string]string{"role": role, "content": content})
+		entry := map[string]interface{}{"role": role}
+		// Preserve content as-is: string for text, array for multimodal
+		if content, exists := msg["content"]; exists {
+			entry["content"] = content
+		}
+		messages = append(messages, entry)
 	}
 
 	if len(messages) == 0 {
 		return tool.FailureResult("no valid messages found in messages array")
+	}
+
+	// Inject image_urls into the last user message if provided
+	if imageURLs, ok := params["image_urls"].([]interface{}); ok && len(imageURLs) > 0 {
+		var urls []string
+		for _, u := range imageURLs {
+			if s, ok := u.(string); ok && s != "" {
+				urls = append(urls, s)
+			}
+		}
+		if len(urls) > 0 {
+			// Find last user message and rebuild it as multimodal
+			for i := len(messages) - 1; i >= 0; i-- {
+				if role, _ := messages[i]["role"].(string); role == "user" {
+					text := ""
+					switch c := messages[i]["content"].(type) {
+					case string:
+						text = c
+					case []interface{}:
+						for _, part := range c {
+							if p, ok := part.(map[string]interface{}); ok {
+								if t, ok := p["text"].(string); ok {
+									text += t
+								}
+							}
+						}
+					}
+					messages[i] = llmutil.BuildUserMessage(text, urls)
+					break
+				}
+			}
+		}
 	}
 
 	if t.cfg.APIKey == "" {
@@ -139,6 +175,11 @@ func (t *ChatGenerateTool) Manifest() tool.ToolManifest {
 			"model": {
 				Type:        "string",
 				Description: "Model override (default: configured model)",
+				Required:    false,
+			},
+			"image_urls": {
+				Type:        "array",
+				Description: "Image URLs or base64 data URLs for multimodal vision requests",
 				Required:    false,
 			},
 			"max_tokens": {

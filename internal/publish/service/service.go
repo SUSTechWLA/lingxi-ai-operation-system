@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 )
 
@@ -369,15 +370,39 @@ func (s *PublishService) AIGenerateContent(ctx context.Context, prompt string) (
 }
 
 // AIGenerateFromMediaDAG submits a content generation task with media descriptions through the DAG pipeline.
+// Images are read, base64-encoded, and passed as image_urls for multimodal vision models.
 func (s *PublishService) AIGenerateFromMediaSubmit(ctx context.Context, prompt string, images []*multipart.FileHeader, videos []*multipart.FileHeader) (*PolishSubmitResponse, error) {
+	// Build media description and collect base64-encoded image URLs
 	mediaDesc := ""
-	if len(images) > 0 {
-		names := make([]string, 0, len(images))
-		for _, f := range images {
-			names = append(names, f.Filename)
+	var imageURLs []string
+
+	for _, f := range images {
+		mediaDesc += fmt.Sprintf("上传的图片：%s\n", f.Filename)
+
+		// Only encode images (not videos) for multimodal vision
+		mimeType := f.Header.Get("Content-Type")
+		if !llmutil.IsImageMimeType(mimeType) {
+			continue
 		}
-		mediaDesc += fmt.Sprintf("上传的图片：%v\n", names)
+
+		file, err := f.Open()
+		if err != nil {
+			zap.L().Warn("failed to open image for encoding", zap.String("name", f.Filename), zap.Error(err))
+			continue
+		}
+		data, err := io.ReadAll(file)
+		file.Close()
+		if err != nil {
+			zap.L().Warn("failed to read image data", zap.String("name", f.Filename), zap.Error(err))
+			continue
+		}
+
+		// Compress image to reduce token usage and improve response time
+		compressedData, compressedMime := llmutil.CompressImageBytes(data)
+		dataURL := llmutil.Base64DataURL(compressedMime, compressedData)
+		imageURLs = append(imageURLs, dataURL)
 	}
+
 	if len(videos) > 0 {
 		names := make([]string, 0, len(videos))
 		for _, f := range videos {
@@ -386,17 +411,77 @@ func (s *PublishService) AIGenerateFromMediaSubmit(ctx context.Context, prompt s
 		mediaDesc += fmt.Sprintf("上传的视频：%v\n", names)
 	}
 
-	fullPrompt := prompt
-	if mediaDesc != "" {
-		fullPrompt = fmt.Sprintf(`用户上传了以下素材：
+	fullPrompt := fmt.Sprintf(`你是一个自媒体内容创作助手。请根据用户上传的素材图片和说明，生成适合自媒体发布的标题和简介。
+要求：
+1. 标题吸引眼球，不超过30字
+2. 简介详细介绍内容亮点，200字以内
+3. 必须严格返回纯JSON格式，不要markdown、不要额外文字：{"title": "标题", "description": "简介", "keywords": ["关键词1", "关键词2"]}
+
+用户上传了以下素材：
 %s
 
-用户补充说明：%s
+用户补充说明：%s`, mediaDesc, prompt)
 
-请根据以上素材和说明，生成适合自媒体发布的标题和简介。`, mediaDesc, prompt)
+	nodeID := fmt.Sprintf("ai-generate-%d", time.Now().UnixMilli())
+
+	nodeInput := map[string]interface{}{
+		"prompt": fullPrompt,
+	}
+	if len(imageURLs) > 0 {
+		nodeInput["image_urls"] = imageURLs
 	}
 
-	return s.AIGenerateSubmit(ctx, fullPrompt)
+	dagPayload := map[string]interface{}{
+		"nodes": []map[string]interface{}{
+			{
+				"id":    nodeID,
+				"type":  "TOOL",
+				"name":  "llm_api",
+				"input": nodeInput,
+			},
+		},
+		"edges": []map[string]interface{}{},
+	}
+
+	dagBody, _ := json.Marshal(dagPayload)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", s.orchestratorURL+"/api/node", bytes.NewReader(dagBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to submit to orchestrator: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse orchestrator response: %w", err)
+	}
+
+	taskID, _ := result["taskId"].(string)
+	if taskID == "" {
+		return nil, fmt.Errorf("orchestrator did not return taskId: %s", string(respBody))
+	}
+
+	zap.L().Info("AI generate-from-media task submitted",
+		zap.String("taskId", taskID),
+		zap.String("nodeId", nodeID),
+		zap.Int("imageCount", len(imageURLs)))
+
+	traceURL := fmt.Sprintf("/api/trace/%s", taskID)
+
+	return &PolishSubmitResponse{
+		TaskID:   taskID,
+		NodeID:   nodeID,
+		Message:  "内容生成任务已提交",
+		TraceURL: traceURL,
+	}, nil
 }
 
 // AIGenerateFromMedia generates content from media via the DAG pipeline.

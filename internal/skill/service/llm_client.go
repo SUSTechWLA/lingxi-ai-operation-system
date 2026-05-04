@@ -28,7 +28,8 @@ func NewLLMClient(cfg config.OpenAIConfig) *LLMClient {
 }
 
 // Chat sends messages to the LLM and returns the raw content string.
-func (c *LLMClient) Chat(ctx context.Context, messages []map[string]string) (string, error) {
+// Messages can be simple {role, content: string} or multimodal {role, content: [...]}.
+func (c *LLMClient) Chat(ctx context.Context, messages []map[string]interface{}) (string, error) {
 	if c.cfg.APIKey == "" {
 		return "", fmt.Errorf("API key is not configured")
 	}
@@ -92,7 +93,7 @@ func (c *LLMClient) Chat(ctx context.Context, messages []map[string]string) (str
 }
 
 // ChatWithJSON calls Chat and unmarshals the response into the target struct.
-func (c *LLMClient) ChatWithJSON(ctx context.Context, messages []map[string]string, result interface{}) error {
+func (c *LLMClient) ChatWithJSON(ctx context.Context, messages []map[string]interface{}, result interface{}) error {
 	content, err := c.Chat(ctx, messages)
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -67,6 +68,16 @@ func (t *ChatReviseTool) Execute(ctx context.Context, params map[string]interfac
 		}
 	}
 
+	// Extract image URLs for multimodal requests
+	var imageURLs []string
+	if urls, ok := params["image_urls"].([]interface{}); ok {
+		for _, u := range urls {
+			if s, ok := u.(string); ok && s != "" {
+				imageURLs = append(imageURLs, s)
+			}
+		}
+	}
+
 	zap.L().Info("ChatReviseTool executing",
 		zap.String("taskId", toolCtx.TaskID),
 		zap.String("nodeId", toolCtx.NodeID),
@@ -112,7 +123,7 @@ func (t *ChatReviseTool) Execute(ctx context.Context, params map[string]interfac
 
 	userMessage := fmt.Sprintf("用户要求：%s", message)
 
-	reply, err := t.callOpenAI(ctx, systemPrompt, userMessage)
+	reply, err := t.callOpenAI(ctx, systemPrompt, userMessage, imageURLs)
 	if err != nil {
 		return tool.FailureResult("OpenAI call failed: " + err.Error())
 	}
@@ -171,6 +182,11 @@ func (t *ChatReviseTool) Manifest() tool.ToolManifest {
 				Description: "Current keywords list (passed as context for revision)",
 				Required:    false,
 			},
+			"image_urls": {
+				Type:        "array",
+				Description: "Image URLs or base64 data URLs for multimodal vision requests",
+				Required:    false,
+			},
 			"media_count": {
 				Type:        "number",
 				Description: "Number of uploaded media files",
@@ -202,18 +218,19 @@ func (t *ChatReviseTool) ValidateParameters(params map[string]interface{}) bool 
 	return ok
 }
 
-func (t *ChatReviseTool) callOpenAI(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+func (t *ChatReviseTool) callOpenAI(ctx context.Context, systemPrompt, userPrompt string, imageURLs []string) (string, error) {
 	if t.cfg.APIKey == "" {
 		return "", fmt.Errorf("API key is not configured")
 	}
 
+	userMsg := llmutil.BuildUserMessage(userPrompt, imageURLs)
 	requestBody := map[string]interface{}{
 		"model":       t.cfg.Model,
 		"temperature": t.cfg.Temperature,
 		"max_tokens":  t.cfg.MaxTokens,
-		"messages": []map[string]string{
+		"messages": []map[string]interface{}{
 			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
+			userMsg,
 		},
 	}
 

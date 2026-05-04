@@ -43,6 +43,8 @@ func NewProducer(cfg config.KafkaConfig) *Producer {
 	saramaCfg.Producer.RequiredAcks = sarama.WaitForAll
 	saramaCfg.Producer.Retry.Max = 5
 	saramaCfg.Producer.Return.Successes = true
+	// Allow messages up to 5MB (default 1MB is too small for occasional large payloads)
+	saramaCfg.Producer.MaxMessageBytes = 5 * 1024 * 1024
 
 	producer, err := sarama.NewSyncProducer([]string{cfg.BootstrapServers}, saramaCfg)
 	if err != nil {

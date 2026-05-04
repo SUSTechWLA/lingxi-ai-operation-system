@@ -188,6 +188,20 @@ func (s *MediaService) GetURL(ctx context.Context, id string) (string, error) {
 	return s.storage.GetURL(ctx, asset.MinioPath)
 }
 
+// GetURLs resolves multiple media IDs to presigned URLs in a single batch.
+func (s *MediaService) GetURLs(ctx context.Context, ids []string) ([]string, error) {
+	urls := make([]string, 0, len(ids))
+	for _, id := range ids {
+		url, err := s.GetURL(ctx, id)
+		if err != nil {
+			zap.L().Warn("failed to get URL for media", zap.String("id", id), zap.Error(err))
+			continue
+		}
+		urls = append(urls, url)
+	}
+	return urls, nil
+}
+
 func detectMimeType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {

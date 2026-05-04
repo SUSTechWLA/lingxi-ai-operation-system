@@ -11,6 +11,7 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -21,6 +22,7 @@ type NodeExecutor struct {
 	cfg             config.WorkerConfig
 	directExecutor  *executor.DirectExecutor
 	sandboxExecutor *executor.SandboxExecutor
+	nodeRepo        repository.NodeRepo
 }
 
 type executorInterface interface {
@@ -33,6 +35,7 @@ func NewNodeExecutor(
 	cfg config.WorkerConfig,
 	directExec *executor.DirectExecutor,
 	sandboxExec *executor.SandboxExecutor,
+	nodeRepo repository.NodeRepo,
 ) *NodeExecutor {
 	return &NodeExecutor{
 		toolRegistry:    toolRegistry,
@@ -40,6 +43,7 @@ func NewNodeExecutor(
 		cfg:             cfg,
 		directExecutor:  directExec,
 		sandboxExecutor: sandboxExec,
+		nodeRepo:        nodeRepo,
 	}
 }
 
@@ -76,6 +80,15 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	payload := event.Payload
 	if payload == nil {
 		payload = make(map[string]interface{})
+	}
+
+	// image_urls are stripped from Kafka events (too large) — read them from DB
+	if _, hasImageURLs := payload["image_urls"]; !hasImageURLs && ne.nodeRepo != nil {
+		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
+			if urls, ok := node.Input["image_urls"]; ok {
+				payload["image_urls"] = urls
+			}
+		}
 	}
 
 	toolName := tool.DetermineToolName(event.Type, payload)

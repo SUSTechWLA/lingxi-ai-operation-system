@@ -3,9 +3,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/prompts"
 )
@@ -42,7 +47,7 @@ func (s *PlanService) GeneratePlan(
 
 	prompt := fmt.Sprintf(prompts.SystemPromptSkillDAG, history, mediaInfo, toolsDesc, userMessage)
 
-	llmMessages := []map[string]string{
+	llmMessages := []map[string]interface{}{
 		{"role": "system", "content": prompt},
 	}
 
@@ -53,6 +58,11 @@ func (s *PlanService) GeneratePlan(
 
 	if len(dag.Nodes) == 0 {
 		return nil, fmt.Errorf("LLM generated empty DAG")
+	}
+
+	// Inject image URLs into LLM-calling nodes so multimodal models can see the actual images
+	if len(mediaCtx.MediaURLs) > 0 {
+		injectImageURLs(dag.Nodes, mediaCtx.MediaURLs)
 	}
 
 	zap.L().Info("Plan generated via LLM",
@@ -126,4 +136,76 @@ func joinLines(parts []string) string {
 		result += "\n" + parts[i]
 	}
 	return result
+}
+
+// llmTools is the set of tool names that accept image_urls for multimodal vision.
+var llmTools = map[string]bool{
+	"chat_generate":    true,
+	"chat_revise":      true,
+	"llm_api":          true,
+	"content_generator": true,
+	"polisher":         true,
+}
+
+// injectImageURLs converts presigned HTTP URLs to base64 data URLs and adds them
+// to every LLM-calling node's input. External LLM APIs cannot reach internal
+// MinIO presigned URLs (e.g. localhost:9000), so we download and inline the images.
+func injectImageURLs(nodes []model.NodeRequest, urls []string) {
+	dataURLs := resolveToDataURLs(urls)
+	if len(dataURLs) == 0 {
+		return
+	}
+
+	urlsInterface := make([]interface{}, len(dataURLs))
+	for i, u := range dataURLs {
+		urlsInterface[i] = u
+	}
+	for i := range nodes {
+		if llmTools[nodes[i].Name] {
+			if nodes[i].Input == nil {
+				nodes[i].Input = map[string]interface{}{}
+			}
+			nodes[i].Input["image_urls"] = urlsInterface
+		}
+	}
+}
+
+// resolveToDataURLs converts HTTP presigned URLs to base64 data URLs.
+// External LLM services cannot reach internal MinIO endpoints, so we
+// fetch the images from the backend (which can reach MinIO) and inline them.
+func resolveToDataURLs(urls []string) []string {
+	dataURLs := make([]string, 0, len(urls))
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	for _, u := range urls {
+		if strings.HasPrefix(u, "data:") {
+			dataURLs = append(dataURLs, u)
+			continue
+		}
+
+		resp, err := client.Get(u)
+		if err != nil {
+			zap.L().Warn("failed to fetch image from presigned URL, skipping",
+				zap.String("url", u[:min(50, len(u))]), zap.Error(err))
+			continue
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			zap.L().Warn("failed to read image data, skipping", zap.Error(err))
+			continue
+		}
+
+		mimeType := resp.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = "image/jpeg"
+		}
+
+		// Compress to reduce token usage
+		compressed, compressedMime := llmutil.CompressImageBytes(data)
+		dataURL := llmutil.Base64DataURL(compressedMime, compressed)
+		dataURLs = append(dataURLs, dataURL)
+	}
+
+	return dataURLs
 }

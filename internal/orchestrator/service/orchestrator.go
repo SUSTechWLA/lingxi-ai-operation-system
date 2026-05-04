@@ -166,14 +166,51 @@ func (s *OrchestratorService) GetTaskWithDetails(ctx context.Context, taskID str
 		edgeStrs = append(edgeStrs, fmt.Sprintf("%s → %s", e.ParentNodeID, e.ChildNodeID))
 	}
 
+	// Strip large binary fields (e.g. image_urls) from node input for display
+	sanitizedNodes := make([]map[string]interface{}, 0, len(nodes))
+	for _, n := range nodes {
+		sanitized := map[string]interface{}{
+			"id":         n.ID,
+			"taskId":     n.TaskID,
+			"type":       string(n.Type),
+			"name":       n.Name,
+			"status":     string(n.Status),
+			"output":     n.Output,
+			"errorMessage": n.ErrorMessage,
+			"condition":    n.Condition,
+			"retryCount":   n.RetryCount,
+			"maxRetry":     n.MaxRetry,
+			"priority":     n.Priority,
+			"createdAt":    n.CreatedAt,
+			"startedAt":    n.StartedAt,
+			"completedAt":  n.CompletedAt,
+		}
+		if n.Input != nil {
+			cleanInput := make(map[string]interface{}, len(n.Input))
+			for k, v := range n.Input {
+				if k == "image_urls" {
+					urls, ok := v.([]interface{})
+					if !ok {
+						continue
+					}
+					cleanInput["image_count"] = len(urls)
+					continue
+				}
+				cleanInput[k] = v
+			}
+			sanitized["input"] = cleanInput
+		}
+		sanitizedNodes = append(sanitizedNodes, sanitized)
+	}
+
 	result := map[string]interface{}{
-		"taskId":   task.ID,
-		"status":   task.Status,
-		"input":    task.Input,
-		"output":   task.Output,
+		"taskId":    task.ID,
+		"status":    string(task.Status),
+		"input":     task.Input,
+		"output":    task.Output,
 		"createdAt": task.CreatedAt,
-		"nodes":    nodes,
-		"edges":    edgeStrs,
+		"nodes":     sanitizedNodes,
+		"edges":     edgeStrs,
 	}
 
 	return result, nil

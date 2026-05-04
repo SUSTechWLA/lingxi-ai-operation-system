@@ -34,9 +34,10 @@ const SystemPromptSkillDAG = `你是一个内容创作任务分解专家，为"�
 ## 工具选择指南
 
 ### chat_generate — 万能工具（首选）
-参数: messages (必填, array of {role, content})
+参数: messages (必填, array of {role, content}), image_urls (可选, 图片URL数组，系统会自动注入)
 **适用所有场景**：生成内容、分析素材、修改润色、询问澄清、友好拒绝。
 在 messages 的 system prompt 中描述完整任务，在 user content 中放入所有上下文信息（页面当前状态、素材文件列表、用户需求）。
+当用户上传了图片时，系统会自动将图片URL注入为 image_urls 参数，无需手动设置。
 
 示例 — 用户上传了图片要求生成标题和简介：
 {
@@ -95,7 +96,7 @@ const SystemPromptSkillDAG = `你是一个内容创作任务分解专家，为"�
 可独立使用。但通常直接用 chat_generate 把素材信息嵌入 prompt 更简单。
 
 ## 规则（必须严格遵守）
-1. **单节点优先**：99% 的场景只需一个节点，把所有上下文嵌入该节点的参数中。永远不要使用 {{node.output}} 引用其他节点。
+1. **单节点优先**：99%% 的场景只需一个节点，把所有上下文嵌入该节点的参数中。永远不要使用 {{node.output}} 引用其他节点。
 2. **生成完整内容包（标题+简介+脚本+标签） → chat_generate 或 content_generator**：在 messages[0].content（system）中写清楚输出格式要求，在 messages[1].content（user）中包含：页面当前状态 + 素材文件列表 + 用户需求。
 3. **生成或修改单个/部分字段（标题/简介/关键词） → chat_revise**：将页面现有的 title/description/keywords 和素材信息作为参数传入（即使当前值为空也传入），让 LLM 看到完整上下文，精准生成所需字段。
 4. **信息不足 → chat_generate**：友好询问。

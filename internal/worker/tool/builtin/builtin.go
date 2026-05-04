@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
@@ -63,13 +64,22 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 
 	zap.L().Info("Calling LLM API", zap.String("taskId", toolCtx.TaskID), zap.String("model", model))
 
+	// Collect image URLs for multimodal requests
+	var imageURLs []string
+	if urls, ok := params["image_urls"].([]interface{}); ok {
+		for _, u := range urls {
+			if s, ok := u.(string); ok && s != "" {
+				imageURLs = append(imageURLs, s)
+			}
+		}
+	}
+
+	msg := llmutil.BuildUserMessage(prompt, imageURLs)
 	requestBody := map[string]interface{}{
 		"model":       model,
 		"max_tokens":  maxTokens,
 		"temperature": temperature,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
+		"messages":    []interface{}{msg},
 	}
 
 	body, _ := json.Marshal(requestBody)

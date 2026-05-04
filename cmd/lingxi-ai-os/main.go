@@ -111,7 +111,7 @@ func main() {
 		}
 	}
 
-	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec)
+	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo)
 
 	// Translator
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL)
@@ -199,19 +199,21 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
-	skillHandler.NewSessionHandler(
-		skillSessionManager, skillPlanService, skillResultAssembler,
-	).RegisterRoutes(r)
-	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
 
-	// Media management
+	// Media management — initialize before skill handler so we can resolve media URLs
+	var mediaSvc *media.MediaService
 	if storageSvc, err := media.NewStorageService(cfg.MinIO); err == nil {
-		mediaSvc := media.NewMediaService(pool, storageSvc)
+		mediaSvc = media.NewMediaService(pool, storageSvc)
 		media.NewMediaHandler(mediaSvc).RegisterRoutes(r)
 		zap.L().Info("Media service initialized with MinIO storage")
 	} else {
 		zap.L().Warn("MinIO storage not available, media uploads disabled", zap.Error(err))
 	}
+
+	skillHandler.NewSessionHandler(
+		skillSessionManager, skillPlanService, skillResultAssembler, mediaSvc,
+	).RegisterRoutes(r)
+	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),

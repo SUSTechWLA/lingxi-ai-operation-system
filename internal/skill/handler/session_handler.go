@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/media"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/service"
 )
@@ -17,17 +18,20 @@ type SessionHandler struct {
 	sessionManager  *service.SessionManager
 	planService     *service.PlanService
 	resultAssembler *service.ResultAssembler
+	mediaService    *media.MediaService
 }
 
 func NewSessionHandler(
 	sessionManager *service.SessionManager,
 	planService *service.PlanService,
 	resultAssembler *service.ResultAssembler,
+	mediaService *media.MediaService,
 ) *SessionHandler {
 	return &SessionHandler{
 		sessionManager:  sessionManager,
 		planService:     planService,
 		resultAssembler: resultAssembler,
+		mediaService:    mediaService,
 	}
 }
 
@@ -57,6 +61,16 @@ func (h *SessionHandler) CreateSession(c *gin.Context) {
 		MediaCount:  req.MediaCount,
 		MediaNames:  req.MediaNames,
 		MediaIDs:    req.MediaIDs,
+	}
+
+	// Resolve media IDs to presigned URLs for multimodal vision
+	if h.mediaService != nil && len(req.MediaIDs) > 0 {
+		urls, err := h.mediaService.GetURLs(c.Request.Context(), req.MediaIDs)
+		if err != nil {
+			zap.L().Warn("Failed to resolve media URLs", zap.Error(err))
+		} else {
+			mediaCtx.MediaURLs = urls
+		}
 	}
 
 	session, err := h.sessionManager.CreateSession(c.Request.Context(), req.UserID, mediaCtx)

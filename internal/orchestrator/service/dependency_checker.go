@@ -65,12 +65,8 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 					zap.L().Error("Failed to initialize node as ready", zap.Error(err))
 					continue
 				}
-					// Merge child name into payload so worker can determine the correct tool
-					childPayload := make(map[string]interface{})
-					for k, v := range child.Input {
-						childPayload[k] = v
-					}
-					childPayload["name"] = child.Name
+					// Merge child name into payload, but skip image_urls (too large for Kafka)
+					childPayload := buildEventPayload(child.Input, child.Name)
 
 					_ = dc.eventSaver.SaveEvent(ctx, "node", child.ID, eventbus.TopicNodeReady, eventbus.Event{
 						TaskID:         child.TaskID,
