@@ -15,12 +15,14 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/media"
 )
 
 type PublishService struct {
 	cfg             config.OpenAIConfig
 	orchestratorURL string
 	httpClient      *http.Client
+	mediaSvc        *media.MediaService
 }
 
 func NewPublishService(cfg config.OpenAIConfig, orchestratorURL string) *PublishService {
@@ -29,6 +31,11 @@ func NewPublishService(cfg config.OpenAIConfig, orchestratorURL string) *Publish
 		orchestratorURL: orchestratorURL,
 		httpClient:      &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
 	}
+}
+
+// SetMediaService sets the media service for video upload support.
+func (s *PublishService) SetMediaService(svc *media.MediaService) {
+	s.mediaSvc = svc
 }
 
 type PublishRequest struct {
@@ -372,43 +379,106 @@ func (s *PublishService) AIGenerateContent(ctx context.Context, prompt string) (
 // AIGenerateFromMediaDAG submits a content generation task with media descriptions through the DAG pipeline.
 // Images are read, base64-encoded, and passed as image_urls for multimodal vision models.
 func (s *PublishService) AIGenerateFromMediaSubmit(ctx context.Context, prompt string, images []*multipart.FileHeader, videos []*multipart.FileHeader) (*PolishSubmitResponse, error) {
-	// Build media description and collect base64-encoded image URLs
-	mediaDesc := ""
-	var imageURLs []string
+	ts := time.Now().UnixMilli()
 
+	// If videos are present and media service is available, use the video pipeline
+	if len(videos) > 0 && s.mediaSvc != nil {
+		return s.submitVideoPipeline(ctx, prompt, images, videos, ts)
+	}
+
+	// Image-only path: base64 encode and send to multimodal LLM directly
+	return s.submitImageOnlyDAG(ctx, prompt, images, ts)
+}
+
+// submitVideoPipeline uploads the video to MinIO and creates a 3-node video pipeline DAG.
+func (s *PublishService) submitVideoPipeline(ctx context.Context, prompt string, images []*multipart.FileHeader, videos []*multipart.FileHeader, ts int64) (*PolishSubmitResponse, error) {
+	// Upload the first video to MinIO to get a media_id
+	assets, err := s.mediaSvc.Upload(ctx, "default", videos)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload video for analysis: %w", err)
+	}
+	if len(assets) == 0 {
+		return nil, fmt.Errorf("video upload returned no assets")
+	}
+	mediaID := assets[0].ID
+
+	// Encode supplementary images as base64
+	var imageURLs []interface{}
 	for _, f := range images {
-		mediaDesc += fmt.Sprintf("上传的图片：%s\n", f.Filename)
-
-		// Only encode images (not videos) for multimodal vision
 		mimeType := f.Header.Get("Content-Type")
 		if !llmutil.IsImageMimeType(mimeType) {
 			continue
 		}
-
 		file, err := f.Open()
 		if err != nil {
-			zap.L().Warn("failed to open image for encoding", zap.String("name", f.Filename), zap.Error(err))
 			continue
 		}
 		data, err := io.ReadAll(file)
 		file.Close()
 		if err != nil {
-			zap.L().Warn("failed to read image data", zap.String("name", f.Filename), zap.Error(err))
 			continue
 		}
+		compressedData, compressedMime := llmutil.CompressImageBytes(data)
+		imageURLs = append(imageURLs, llmutil.Base64DataURL(compressedMime, compressedData))
+	}
 
-		// Compress image to reduce token usage and improve response time
+	vmID := fmt.Sprintf("vm-%d", ts)
+	vaID := fmt.Sprintf("va-%d", ts)
+	vcgID := fmt.Sprintf("vcg-%d", ts)
+
+	vmInput := map[string]interface{}{"media_id": mediaID}
+	vaInput := map[string]interface{}{
+		"cached_video_path": fmt.Sprintf("{{%s.output.cached_video_path}}", vmID),
+		"strategy":          "balanced",
+	}
+	vcgInput := map[string]interface{}{
+		"platform":            "douyin",
+		"metadata":            fmt.Sprintf("{{%s.output.metadata}}", vmID),
+		"keyframes_data_urls": fmt.Sprintf("{{%s.output.keyframes_data_urls}}", vaID),
+		"transcription":       fmt.Sprintf("{{%s.output.transcription}}", vaID),
+	}
+	if len(imageURLs) > 0 {
+		vcgInput["image_urls"] = imageURLs
+	}
+
+	dagPayload := map[string]interface{}{
+		"nodes": []map[string]interface{}{
+			{"id": vmID, "type": "TOOL", "name": "video_metadata", "input": vmInput},
+			{"id": vaID, "type": "TOOL", "name": "video_analyzer", "input": vaInput},
+			{"id": vcgID, "type": "TOOL", "name": "video_copy_generator", "input": vcgInput},
+		},
+		"edges": []map[string]interface{}{
+			{"from": vmID, "to": vaID},
+			{"from": vaID, "to": vcgID},
+		},
+	}
+
+	return s.submitDAG(ctx, dagPayload, vcgID)
+}
+
+// submitImageOnlyDAG creates a single-node DAG with base64-encoded images for multimodal LLM.
+func (s *PublishService) submitImageOnlyDAG(ctx context.Context, prompt string, images []*multipart.FileHeader, ts int64) (*PolishSubmitResponse, error) {
+	mediaDesc := ""
+	var imageURLs []string
+
+	for _, f := range images {
+		mediaDesc += fmt.Sprintf("上传的图片：%s\n", f.Filename)
+		mimeType := f.Header.Get("Content-Type")
+		if !llmutil.IsImageMimeType(mimeType) {
+			continue
+		}
+		file, err := f.Open()
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(file)
+		file.Close()
+		if err != nil {
+			continue
+		}
 		compressedData, compressedMime := llmutil.CompressImageBytes(data)
 		dataURL := llmutil.Base64DataURL(compressedMime, compressedData)
 		imageURLs = append(imageURLs, dataURL)
-	}
-
-	if len(videos) > 0 {
-		names := make([]string, 0, len(videos))
-		for _, f := range videos {
-			names = append(names, f.Filename)
-		}
-		mediaDesc += fmt.Sprintf("上传的视频：%v\n", names)
 	}
 
 	fullPrompt := fmt.Sprintf(`你是一个自媒体内容创作助手。请根据用户上传的素材图片和说明，生成适合自媒体发布的标题和简介。
@@ -422,27 +492,27 @@ func (s *PublishService) AIGenerateFromMediaSubmit(ctx context.Context, prompt s
 
 用户补充说明：%s`, mediaDesc, prompt)
 
-	nodeID := fmt.Sprintf("ai-generate-%d", time.Now().UnixMilli())
-
-	nodeInput := map[string]interface{}{
-		"prompt": fullPrompt,
-	}
+	nodeID := fmt.Sprintf("ai-generate-%d", ts)
+	nodeInput := map[string]interface{}{"prompt": fullPrompt}
 	if len(imageURLs) > 0 {
-		nodeInput["image_urls"] = imageURLs
+		urls := make([]interface{}, len(imageURLs))
+		for i, u := range imageURLs {
+			urls[i] = u
+		}
+		nodeInput["image_urls"] = urls
 	}
 
 	dagPayload := map[string]interface{}{
 		"nodes": []map[string]interface{}{
-			{
-				"id":    nodeID,
-				"type":  "TOOL",
-				"name":  "llm_api",
-				"input": nodeInput,
-			},
+			{"id": nodeID, "type": "TOOL", "name": "llm_api", "input": nodeInput},
 		},
 		"edges": []map[string]interface{}{},
 	}
 
+	return s.submitDAG(ctx, dagPayload, nodeID)
+}
+
+func (s *PublishService) submitDAG(ctx context.Context, dagPayload map[string]interface{}, primaryNodeID string) (*PolishSubmitResponse, error) {
 	dagBody, _ := json.Marshal(dagPayload)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", s.orchestratorURL+"/api/node", bytes.NewReader(dagBody))
@@ -469,18 +539,15 @@ func (s *PublishService) AIGenerateFromMediaSubmit(ctx context.Context, prompt s
 		return nil, fmt.Errorf("orchestrator did not return taskId: %s", string(respBody))
 	}
 
-	zap.L().Info("AI generate-from-media task submitted",
+	zap.L().Info("DAG submitted via nl-translator endpoint",
 		zap.String("taskId", taskID),
-		zap.String("nodeId", nodeID),
-		zap.Int("imageCount", len(imageURLs)))
-
-	traceURL := fmt.Sprintf("/api/trace/%s", taskID)
+		zap.String("primaryNode", primaryNodeID))
 
 	return &PolishSubmitResponse{
 		TaskID:   taskID,
-		NodeID:   nodeID,
+		NodeID:   primaryNodeID,
 		Message:  "内容生成任务已提交",
-		TraceURL: traceURL,
+		TraceURL: fmt.Sprintf("/api/trace/%s", taskID),
 	}, nil
 }
 

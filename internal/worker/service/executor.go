@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -15,6 +17,9 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
 )
+
+// nodeRefPattern matches {{node_id.output.field}} references in node inputs.
+var nodeRefPattern = regexp.MustCompile(`\{\{([^.]+)\.output\.([^}]+)\}\}`)
 
 type NodeExecutor struct {
 	toolRegistry    *tool.ToolRegistry
@@ -93,6 +98,17 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 
 	toolName := tool.DetermineToolName(event.Type, payload)
 	parameters := tool.ExtractParameters(payload)
+
+	// Resolve {{node_id.output.field}} references using completed parent node outputs
+	if ne.nodeRepo != nil {
+		resolved, err := ne.resolveNodeReferences(ctx, taskID, parameters)
+		if err != nil {
+			zap.L().Warn("Failed to resolve node references, using original parameters", zap.Error(err))
+		} else {
+			parameters = resolved
+		}
+	}
+
 	toolCtx := tool.ToolContext{
 		TaskID:     taskID,
 		NodeID:     nodeID,
@@ -255,4 +271,164 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 		zap.String("nodeId", nodeID),
 		zap.String("error", errMsg),
 	)
+}
+
+// resolveNodeReferences scans parameters for {{node_id.output.field}} references,
+// looks up the completed parent nodes, and replaces references with actual values.
+func (ne *NodeExecutor) resolveNodeReferences(ctx context.Context, taskID string, params map[string]interface{}) (map[string]interface{}, error) {
+	result := make(map[string]interface{}, len(params))
+	for k, v := range params {
+		resolved, err := resolveValue(ctx, ne.nodeRepo, taskID, v)
+		if err != nil {
+			return nil, err
+		}
+		result[k] = resolved
+	}
+	return result, nil
+}
+
+func resolveValue(ctx context.Context, nodeRepo repository.NodeRepo, taskID string, v interface{}) (interface{}, error) {
+	switch val := v.(type) {
+	case string:
+		// If the entire string is a single {{ref}}, resolve to the typed value
+		if nodeRefPattern.MatchString(val) && strings.TrimSpace(val) == val &&
+			strings.HasPrefix(val, "{{") && strings.HasSuffix(val, "}}") &&
+			strings.Count(val, "{{") == 1 {
+			typed, isRef := resolveSingleRef(ctx, nodeRepo, taskID, val)
+			if isRef {
+				return typed, nil
+			}
+		}
+		return resolveString(ctx, nodeRepo, taskID, val), nil
+	case map[string]interface{}:
+		resolved := make(map[string]interface{}, len(val))
+		for mk, mv := range val {
+			rv, err := resolveValue(ctx, nodeRepo, taskID, mv)
+			if err != nil {
+				return nil, err
+			}
+			resolved[mk] = rv
+		}
+		return resolved, nil
+	case []interface{}:
+		resolved := make([]interface{}, len(val))
+		for i, item := range val {
+			rv, err := resolveValue(ctx, nodeRepo, taskID, item)
+			if err != nil {
+				return nil, err
+			}
+			resolved[i] = rv
+		}
+		return resolved, nil
+	default:
+		return v, nil
+	}
+}
+
+// resolveSingleRef resolves an entire string that is one {{node.output.field}} reference.
+// Returns the typed value directly (not JSON-stringified) for non-string types like arrays.
+func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID string, ref string) (interface{}, bool) {
+	matches := nodeRefPattern.FindStringSubmatch(ref)
+	if len(matches) != 3 {
+		return ref, false
+	}
+
+	refNodeID := strings.TrimSpace(matches[1])
+	field := strings.TrimSpace(matches[2])
+
+	node, output := findNodeOutput(ctx, nodeRepo, taskID, refNodeID)
+	if output == nil {
+		return ref, false
+	}
+
+	val, ok := output[field]
+	if !ok {
+		// Try parsing stdout
+		if stdout, sOk := output["stdout"].(string); sOk && stdout != "" {
+			var parsed map[string]interface{}
+			if json.Unmarshal([]byte(stdout), &parsed) == nil {
+				val, ok = parsed[field]
+			}
+		}
+	}
+	if !ok {
+		return ref, false
+	}
+
+	_ = node
+	return val, true
+}
+
+// findNodeOutput looks up a node and returns its output map, trying both the raw reference ID
+// and the taskID-scoped version (taskID-refNodeID) for compatibility with both code paths.
+func findNodeOutput(ctx context.Context, nodeRepo repository.NodeRepo, taskID, refNodeID string) (*model.Node, map[string]interface{}) {
+	// Try raw ID first (used by /api/node direct submission path)
+	for _, candidate := range []string{
+		refNodeID,
+		taskID + "-" + refNodeID,
+	} {
+		node, err := nodeRepo.FindByID(ctx, candidate)
+		if err != nil || node == nil || node.Output == nil {
+			continue
+		}
+		return node, node.Output
+	}
+	return nil, nil
+}
+
+func resolveString(ctx context.Context, nodeRepo repository.NodeRepo, taskID string, s string) string {
+	matches := nodeRefPattern.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return s
+	}
+
+	result := s
+	for _, m := range matches {
+		refNodeID := strings.TrimSpace(m[1])
+		field := strings.TrimSpace(m[2])
+
+		_, output := findNodeOutput(ctx, nodeRepo, taskID, refNodeID)
+		if output == nil {
+			zap.L().Warn("Cannot resolve node reference: node not found",
+				zap.String("refNodeId", refNodeID),
+				zap.String("field", field),
+			)
+			continue
+		}
+
+		val, ok := output[field]
+		if !ok {
+			// Field not at top level — try parsing stdout (tool output is JSON-marshaled there)
+			if stdout, sOk := output["stdout"].(string); sOk && stdout != "" {
+				var parsed map[string]interface{}
+				if json.Unmarshal([]byte(stdout), &parsed) == nil {
+					val, ok = parsed[field]
+				}
+			}
+		}
+		if !ok {
+			zap.L().Warn("Cannot resolve node reference: field not found in output",
+				zap.String("refNodeId", refNodeID),
+				zap.String("field", field),
+			)
+			continue
+		}
+
+		var replacement string
+		switch v := val.(type) {
+		case string:
+			replacement = v
+		default:
+			b, err := json.Marshal(v)
+			if err != nil {
+				replacement = fmt.Sprintf("%v", v)
+			} else {
+				replacement = string(b)
+			}
+		}
+
+		result = strings.Replace(result, m[0], replacement, 1)
+	}
+
+	return result
 }

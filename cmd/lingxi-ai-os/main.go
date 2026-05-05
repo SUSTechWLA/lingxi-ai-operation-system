@@ -210,6 +210,18 @@ func main() {
 		zap.L().Warn("MinIO storage not available, media uploads disabled", zap.Error(err))
 	}
 
+	// Wire media service into publish service for video pipeline support
+	if mediaSvc != nil {
+		publishService.SetMediaService(mediaSvc)
+	}
+
+	// Register video pipeline tools — requires mediaSvc for MinIO download
+	if mediaSvc != nil {
+		toolRegistry.Register(builtin.NewVideoMetadataTool(cfg.OpenAI, mediaSvc))
+		toolRegistry.Register(builtin.NewVideoAnalyzerTool(cfg.OpenAI, mediaSvc))
+	}
+	toolRegistry.Register(builtin.NewVideoCopyGeneratorTool(cfg.OpenAI))
+
 	skillHandler.NewSessionHandler(
 		skillSessionManager, skillPlanService, skillResultAssembler, mediaSvc,
 	).RegisterRoutes(r)
