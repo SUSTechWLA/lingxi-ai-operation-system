@@ -115,7 +115,7 @@ func (s *MediaService) List(ctx context.Context, userID string, offset, limit in
 		return nil, 0, fmt.Errorf("failed to count media assets: %w", err)
 	}
 
-	query := `SELECT id, user_id, original_name, mime_type, size, minio_path, tags, embedding_id, created_at, updated_at
+	query := `SELECT id, user_id, original_name, mime_type, size, minio_path, tags, COALESCE(embedding_id, ''), created_at, updated_at
 	           FROM media_assets WHERE user_id = $1`
 	queryArgs := []interface{}{userID}
 	paramIdx := 2
@@ -160,7 +160,7 @@ func (s *MediaService) Get(ctx context.Context, id string) (*MediaAsset, error) 
 	var createdAt, updatedAt time.Time
 
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, user_id, original_name, mime_type, size, minio_path, tags, embedding_id, created_at, updated_at
+		`SELECT id, user_id, original_name, mime_type, size, minio_path, tags, COALESCE(embedding_id, ''), created_at, updated_at
 		 FROM media_assets WHERE id = $1`, id).
 		Scan(&a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.Size,
 			&a.MinioPath, &tagsJSON, &a.EmbeddingID, &createdAt, &updatedAt)
