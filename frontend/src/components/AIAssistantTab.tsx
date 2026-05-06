@@ -29,6 +29,7 @@ const AIAssistantTab: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const prevChatSessionIdRef = useRef<string | null>(chatSessionId)
   const [hasInitialized, setHasInitialized] = useState(false)
   const [messageHistory, setMessageHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -50,6 +51,20 @@ const AIAssistantTab: React.FC = () => {
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 200)
   }, [])
+
+  // When chatSessionId is cleared externally (e.g. content type switch),
+  // reset the AI assistant conversation state
+  useEffect(() => {
+    if (prevChatSessionIdRef.current && !chatSessionId) {
+      if (sessionId) {
+        terminateSkillSession(sessionId).catch(() => {})
+      }
+      setSessionId(null)
+      setMessages([])
+      showWelcome()
+    }
+    prevChatSessionIdRef.current = chatSessionId
+  }, [chatSessionId])
 
   // Progress text that updates while loading — both inline and overlay
   useEffect(() => {
