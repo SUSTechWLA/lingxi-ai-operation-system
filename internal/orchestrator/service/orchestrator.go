@@ -272,10 +272,6 @@ func summarizeStdout(stdout string) string {
 	if base64Count > 0 {
 		return fmt.Sprintf("[%d keyframe images (base64 data URLs omitted for readability)]", base64Count)
 	}
-	// Truncate very long stdout that doesn't contain base64 images
-	if len(stdout) > 4096 {
-		return stdout[:4096] + fmt.Sprintf("\n... [truncated at 4KB, total %d bytes]", len(stdout))
-	}
 	return stdout
 }
 

@@ -125,10 +125,14 @@
 PublishHandler (HTTP 路由)
 ├── POST /api/publish              → 提交发布任务
 ├── POST /api/ai/generate           → AI 生成标题+简介
-├── POST /api/ai/generate-from-media → 基于图片/视频的 AI 生成
-├── POST /api/ai/polish             → AI 润色文字
+├── POST /api/ai/generate-from-media → 基于图片/视频的 AI 生成（含视频 pipeline）
+├── POST /api/ai/polish             → AI 润色文字（同步）
+├── POST /api/ai/polish/submit      → 提交异步润色任务
+├── GET  /api/ai/polish/result      → 查询异步润色结果
 ├── GET  /api/trace/recent          → 查询最近一次任务追踪
 ├── GET  /api/trace/:taskId         → 查询指定任务追踪
+
+MediaHandler (HTTP 路由)
 ├── POST /api/media/upload          → 上传素材
 ├── GET  /api/media/list            → 素材列表（分页+标签筛选）
 ├── GET  /api/media/:id             → 素材详情
@@ -137,8 +141,10 @@ PublishHandler (HTTP 路由)
 PublishService (业务逻辑)
 ├── PublishContent()    → 创建 DAG 任务，使用 LLM 润色后发布
 ├── AIGenerateContent() → 调用 LLM 从文字想法生成标题/简介
-├── AIGenerateFromMedia() → 根据上传的图片/视频文件名+描述生成内容
-├── AIPolishText()      → 调用 LLM 润色指定文本
+├── AIGenerateFromMedia() → 根据上传的图片/视频+描述生成内容（含视频 pipeline）
+├── AIPolishText()      → 调用 LLM 润色指定文本（同步）
+├── AIPolishSubmit()    → 提交异步润色任务（返回 taskId+nodeId）
+├── AIPolishQuery()     → 查询异步润色结果
 └── callOpenAI()        → 通用 OpenAI API 调用封装
 
 TraceHandler (追踪查询)
@@ -156,13 +162,14 @@ PublishRequest → PublishResponse 流程：
 
 ```go
 type PublishRequest struct {
-    Title       string                // 标题
-    Description string                // 简介
-    Keywords    string                // 关键词（逗号分隔）
-    Platforms   []string              // 目标平台（["douyin", "xiaohongshu"]）
+    Title       string                   // 标题
+    Description string                   // 简介
+    Body        string                   // 正文
+    Keywords    string                   // 关键词（逗号分隔）
+    Platforms   []string                 // 目标平台（["douyin", "xiaohongshu"]）
+    ContentType string                   // 内容类型（"image" / "video"）
+    CoverFile   *multipart.FileHeader    // 封面图片文件
     VideoFiles  []*multipart.FileHeader  // 视频文件
-t    ContentType string                     // 内容类型（"image" / "video"）
-t    CoverFile   *multipart.FileHeader      // 封面图片文件
     ImageFiles  []*multipart.FileHeader  // 图片文件
 }
 ```
@@ -269,6 +276,9 @@ type Tool interface {
 | `chat_generate` | CUSTOM | 对话生成 | 多轮对话式内容生成，支持完整消息历史 |
 | `chat_revise` | CUSTOM | 内容修改 | 根据自然语言指令修改标题/简介/关键词 |
 | `external` | CUSTOM | 外部工具代理 | 代理执行通过 `/api/tools/register` 注册的外部 HTTP 工具 |
+| `video_metadata` | CUSTOM | 视频元数据 | 从 MinIO 下载视频，提取时长/分辨率/帧率/编码/音频信息，缓存到本地 |
+| `video_analyzer` | CUSTOM | 视频分析 | ffmpeg 场景检测提取关键帧（base64）+ Whisper 音频转录 |
+| `video_copy_generator` | CUSTOM | 短视频文案 | 基于元数据+关键帧+转录，调用多模态 LLM 生成平台适配的标题/文案/关键词 |
 
 **BashTool 安全**：命令白名单 + 危险模式过滤 + `/tmp/ai-sandbox` 沙箱目录。
 
@@ -327,55 +337,67 @@ type Context struct {
 
 **职责**：提供多轮对话式 AI 内容创作能力。每次对话 = 一个 Task + DAG，经 Orchestrator → Worker 执行，Context 全程追踪。
 
+**实现状态**：已完整实现，代码位于 `internal/skill/`。
+
 **核心组件**：
 
 ```
 SessionHandler (HTTP 路由 /api/skill/dialog)
-├── POST /session/create      → 创建对话会话（含页面上下文）
-├── GET  /session/:id          → 获取会话状态（消息历史 + 媒体上下文）
-├── POST /session/:id/chat     → 发送消息 → 生成内容
-├── GET  /session/:id/progress → 查询执行进度
+├── POST /session/create      → 创建对话会话（含页面上下文 + 媒体 presigned URL）
+├── GET  /session/:id          → 获取会话状态（消息历史 + 媒体上下文 + task 列表）
+├── POST /session/:id/chat     → 发送消息 → LLM 规划 DAG → 执行 → 提取字段 → 返回
+├── GET  /session/:id/progress → 查询执行进度（IDLE/EXECUTING/TERMINATED）
 └── POST /session/:id/terminate → 终止会话
 
 SessionManager (Redis 会话管理)
-├── CreateSession()   → 创建会话 + 欢迎消息
+├── CreateSession()   → 创建会话 + 欢迎消息 + 媒体上下文（含 presigned URLs）
 ├── GetSession()      → 读取会话（含完整消息历史）
 ├── SaveSession()     → 持久化会话到 Redis (TTL 30min)
-└── AppendMessage()   → 追加消息（超过 50 条自动裁剪）
+├── AppendMessage()   → 追加消息（超过 50 条自动裁剪）
+└── TerminateSession() → 标记会话终止
 
 PlanService (DAG 生成)
 ├── GeneratePlan()    → 构建 prompt（历史 + 媒体上下文 + 工具清单）→ LLM → DAG
+├── 使用 LLMClient（typed JSON schema mode）调用 OpenAI
 └── 依赖 ToolManifestService 获取全量工具描述
 
 ResultAssembler (结果轮询与提取)
-├── CreateTask()      → 通过 Orchestrator 创建任务
-├── SubmitDAG()       → 提交 DAG（节点 ID scope 防冲突）
-├── PollAndExtract()  → 轮询任务结果 → 提取 title/description/keywords
-└── extractFieldsFromOutputs() → 解析 node output JSON
+├── CreateTask()      → 通过 Orchestrator 创建任务（source: "skill_assistant"）
+├── SubmitDAG()       → 提交 DAG（节点 ID scope 为 {taskId}-{原始ID} 防冲突）
+├── PollAndExtract()  → 轮询任务结果（2s 间隔，5min 超时）→ 提取 title/description/keywords/body
+└── extractFieldsFromOutputs() → 解析 LLM tool node output JSON
+
+LLMClient (typed OpenAI client)
+├── ChatCompletion()  → 发送消息到 OpenAI，要求 JSON 响应格式
+└── JSON schema 约束确保返回结构化的 DAG 定义
 
 ToolManifestService (工具知识库)
-├── SyncBuiltinTools()   → 启动时同步 builtin 工具到 DB
+├── SyncBuiltinTools()   → 启动时同步 builtin 工具到 DB（tool_manifests 表）
 ├── ListAll()            → Redis 缓存查询（TTL 5min，DB fallback）
 ├── FormatForPrompt()    → 格式化为 LLM DAG prompt 中的工具描述
-├── RegisterExternal()   → 注册外部工具（DB + Registry + 缓存失效）
+├── RegisterExternal()   → 注册外部工具（DB + in-memory Registry + 缓存失效）
 └── DeregisterExternal() → 注销外部工具
 ```
 
 **数据流**：
 ```
 用户消息 → SessionHandler.Chat
-  → PlanService.GeneratePlan (历史 + 媒体 + 工具清单 → LLM → DAG)
+  → 加载会话历史 + 媒体上下文（presigned URLs）
+  → PlanService.GeneratePlan (历史 + 媒体 + 工具清单 → LLM → DAG JSON)
   → ResultAssembler.CreateTask → Orchestrator.CreateTask
   → ResultAssembler.SubmitDAG → Orchestrator.SubmitDAG (节点 ID scope)
-  → Worker 执行 → Context 记录
-  → ResultAssembler.PollAndExtract → 提取结果
-  → 保存 assistant 回复到会话历史 → 返回前端
+  → Worker 消费 ai.node.ready → 执行工具节点
+  → Context 记录审计事件
+  → ResultAssembler.PollAndExtract (轮询 task 状态) → 提取字段
+  → 保存 assistant 回复到会话历史 → 返回 ChatResponse{reply, fields} 给前端
 ```
 
 **关键设计决策**：
 - 每次对话 = 1 个 Task，不把多轮对话合并到一个 task
 - Node ID 在 SubmitDAG 时 scope 为 `{taskId}-{原始ID}`，防止跨 task 冲突
 - LLM DAG 生成时的工具清单来自 DB（`tool_manifests` 表），不做硬编码过滤
+- 媒体上下文包含 presigned URLs（24h TTL），使 LLM 可以进行多模态视觉分析
+- Session TTL 30min，消息上限 50 条，超限自动裁剪早期消息
 
 ---
 
@@ -397,27 +419,21 @@ ToolManifestService (工具知识库)
 
 ```
 App.tsx (主入口)
-├── Sidebar.tsx                    侧边导航栏
+├── Sidebar.tsx                    侧边导航栏（创作发布 / 桌面工具）
 └── PublishPage.tsx                创作发布主页面
-    ├── UploadCard.tsx (×2)        上传素材卡（视频/图片）
-    ├── TitleInput.tsx             标题输入 + AI 润色按钮
+    ├── UploadCard.tsx (×2)        上传素材卡（视频/图片）+ 内容类型选择
+    ├── TitleInput.tsx             标题输入 + AI 润色按钮（异步 submit/poll）
     ├── DescriptionInput.tsx       简介输入 + AI 润色按钮
     ├── KeywordInput.tsx           关键词标签输入
-    ├── 操作按钮区
-    │   ├── 清空内容
-    │   ├── AI 生成
-    │   └── 下一步/发布
+    ├── ContentTypeSelector.tsx    内容类型选择器（视频/图文/文章）
     ├── 右侧面板
-    │   ├── AIHelperPanel.tsx      AI 助手面板
-    │   ├── ContentWorkbench.tsx   内容生成工作台
-    │   ├── AIAssistantTab.tsx     AI 对话式创作面板
-    │   ├── PlatformSelector.tsx   发布平台选择器
+    │   ├── AIHelperPanel.tsx      AI 生成/润色控制面板
+    │   ├── AIAssistantTab.tsx     AI 对话式创作面板（Skill 会话集成）
+    │   ├── PlatformSelector.tsx   发布平台选择器（10 个平台）
     │   └── PublishButton.tsx      一键发布按钮
-    ├── BlockingOverlay            AI 操作全屏遮罩（含取消按钮，模块级 abort 管理）
-    ├── AI 加载遮罩                  AI 操作时的全屏加载动画（进度条+spinner）
-    ├── 结果弹窗                      操作成功/失败的居中弹窗（2.5s 自动消失）
+    ├── BlockingOverlay.tsx        AI 操作全屏遮罩（进度条+spinner + 取消按钮）
+    ├── MediaLibraryPanel.tsx      素材库浏览侧边面板（弹出式，支持标签筛选）
     └── 调试追踪按钮（右下角浮动）        点击查询最近一次任务链路追踪
-    ├── MediaLibraryPanel          素材库浏览侧边面板（弹出式）
 ```
 
 ### 3.3 数据流
@@ -456,7 +472,7 @@ server: {
 ```typescript
 interface AppState {
   title: string          // 标题
-  description: string    // 简介  
+  description: string    // 简介
 	  body: string             // 正文
   keywords: string       // 关键词
   videos: MediaFile[]    // 已上传的视频
@@ -696,7 +712,7 @@ Scheduler 30 秒扫描一次，仅处理停滞超过 1 分钟的节点。正常�
 | 服务 | 版本 | 用途 | 必须启动 |
 |------|------|------|---------|
 | PostgreSQL | 16 | 持久化 + Outbox 表 | **是** |
-| Redis | 7 | 缓存 | 否 |
+| Redis | 7 | 缓存 + Skill 会话状态 | 是（Skill 对话功能需要） |
 | Redpanda | latest | 事件总线 (Kafka) | **是** |
 | MinIO | latest | 对象存储（素材管理功能需要） | 是（素材管理） |
 | Qdrant | latest | 向量数据库 | 否（预留） |

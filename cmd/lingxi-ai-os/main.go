@@ -113,9 +113,6 @@ func main() {
 
 	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo)
 
-	// Translator
-	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL)
-
 	// Publish
 	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
 
@@ -124,6 +121,9 @@ func main() {
 	if err := toolManifestSvc.SyncBuiltinTools(ctx); err != nil {
 		zap.L().Warn("Failed to sync builtin tools to DB", zap.Error(err))
 	}
+
+	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
+	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL, toolManifestSvc)
 
 	// Skill (AI assistant dialog system — each chat turn = one Task via orchestrator)
 	skillLlmClient := skillSvc.NewLLMClient(cfg.OpenAI)

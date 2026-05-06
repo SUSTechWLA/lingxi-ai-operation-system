@@ -281,7 +281,22 @@ lingxi-ai-operation-system/
 │   │           ├── media_analyzer.go # 素材分析工具
 │   │           ├── content_generator.go # 内容生成工具
 │   │           ├── content_checker.go #  合规检查工具
-│   │           └── platform_adapter.go # 平台适配工具
+│   │           ├── platform_adapter.go # 平台适配工具
+│   │           ├── video_metadata.go #  视频元数据提取工具
+│   │           ├── video_analyzer.go #  视频关键帧+音频分析工具
+│   │           └── video_copy_generator.go # 短视频文案生成工具
+│   │
+│   ├── skill/                      # AI 对话助手（会话管理+DAG规划）
+│   │   ├── handler/
+│   │   │   └── session_handler.go #   会话 CRUD + 对话接口
+│   │   ├── service/
+│   │   │   ├── session_manager.go #   Redis 会话状态管理
+│   │   │   ├── plan_service.go    #   LLM DAG 规划
+│   │   │   ├── result_assembler.go #   任务提交 + 结果轮询
+│   │   │   ├── llm_client.go      #   OpenAI 客户端封装
+│   │   │   └── tool_manifest_service.go # 工具知识库管理
+│   │   └── prompts/
+│   │       └── prompts.go         #   System prompt 模板
 │   │
 │   ├── translator/                # 自然语言翻译
 │   └── context/                   # 上下文审计
@@ -298,16 +313,15 @@ lingxi-ai-operation-system/
 │   │   │   ├── BlockingOverlay.tsx #     AI 操作全屏遮罩（含取消按钮）
 │   │   │   ├── AIAssistantTab.tsx  #     AI 对话式创作面板
 │   │   │   ├── ContentTypeSelector.tsx # 内容类型选择
-│   │   │   ├── ContentWorkbench.tsx #  内容生成工作台
+│   │   │   ├── ContentTypeSelector.tsx # 内容类型选择
 │   │   │   ├── MediaLibraryPanel.tsx # 素材库浏览面板
-│   │   │   ├── PlatformSelector.tsx #  平台选择
+│   │   │   ├── PlatformSelector.tsx #  平台选择（10个平台）
 │   │   │   ├── PublishButton.tsx  #     发布按钮
 │   │   │   ├── Sidebar.tsx        #     侧边导航
 │   │   │   ├── DesktopToolbar.tsx #     Electron 桌面工具栏
 │   │   │   ├── CommandPanel.tsx   #     命令面板
-│   │   │   # （PublishPage.tsx 内嵌UI）
-│   │   │   # - AI 加载遮罩：全屏进度条+spinner动画
-│   │   │   # - 结果弹窗：成功/失败居中弹窗，2.5s自动消失
+│   │   │   # （PublishPage.tsx 内嵌）
+│   │   │   # - AI 加载遮罩（BlockingOverlay）：全屏进度条+spinner+取消按钮
 │   │   │   # - 调试追踪按钮：右下角浮动，点击查询最近任务链路
 │   │   ├── pages/
 │   │   │   └── PublishPage.tsx    #   创作发布主页面
@@ -485,8 +499,13 @@ cd frontend && npm install && npm run dev
   internal/worker/tool/tool.go
   internal/worker/tool/builtin/polisher_tool.go
 
-第 6 站：HTTP 路由注册
-  internal/orchestrator/handler/handler.go
+第 6 站：Skill 对话助手
+  internal/skill/handler/session_handler.go
+  internal/skill/service/plan_service.go
+  internal/skill/service/session_manager.go
+
+第 7 站：HTTP 路由注册
+  cmd/lingxi-ai-os/main.go
 ```
 
 ### 前端阅读顺序

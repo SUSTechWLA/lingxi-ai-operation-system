@@ -71,21 +71,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   addVideos: (files) =>
     set((state) => ({
       videos: [...state.videos, ...files].slice(0, 5),
+      chatSessionId: null,
     })),
   removeVideo: (index) =>
     set((state) => ({
       videos: state.videos.filter((_, i) => i !== index),
+      chatSessionId: null,
     })),
 
   addImages: (files) =>
     set((state) => ({
       images: [...state.images, ...files].slice(0, 9),
+      chatSessionId: null,
     })),
   removeImage: (index) =>
     set((state) => ({
       images: state.images.filter((_, i) => i !== index),
+      chatSessionId: null,
     })),
-  setCover: (cover) => set({ cover }),
+  setCover: (cover) => set({ cover, chatSessionId: null }),
 
   togglePlatform: (id) =>
     set((state) => ({
@@ -116,7 +120,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setIsPublishing: (isPublishing) => set({ isPublishing }),
   setChatSessionId: (chatSessionId) => set({ chatSessionId }),
   setContentType: (contentType) => set({ contentType }),
-  clearMedia: () => set({ videos: [], images: [], cover: null }),
+  clearMedia: () => set({ videos: [], images: [], cover: null, chatSessionId: null }),
   setAILoadingMessage: (aiLoadingMessage) => set({ aiLoadingMessage }),
 
   applyFields: (fields) => set((state) => ({

@@ -1,5 +1,18 @@
 # Skill：核心对话 Skill 模块集成（Translator 增强 + 会话编排）
 
+> **状态：已实现** (2026-05)
+>
+> 此设计文档描述的功能已在 `internal/skill/` 中完整实现。实现与设计的主要差异：
+> - 未使用预设 DAG 模板（全部由 LLM 动态规划）
+> - 未实现意图识别/需求澄清的多轮反问流程（直接一次 LLM 调用生成 DAG）
+> - 会话管理使用 Redis（TTL 30min，消息上限 50 条）
+> - 媒体上下文包含 presigned URLs（24h TTL），支持多模态视觉分析
+> - 实现了 ToolManifestService（DB + Redis 缓存工具知识库）
+> - 实现了 LLMClient（typed JSON schema mode）
+> - 实际路由前缀为 `/api/skill/dialog/session/*`
+>
+> 详见：[ARCHITECTURE.md](./ARCHITECTURE.md) 第 2.6 节、`internal/skill/` 源码。
+
 ## 一、目标与定位
 
 本 Skill 用于在现有架构中新增 `internal/skill` 模块，向上提供多轮对话接口，向下复用现有 **Translator（NL→DAG）**、**Orchestrator（任务调度）**、**Worker（工具执行）**、**Context（审计）** 等能力，实现：

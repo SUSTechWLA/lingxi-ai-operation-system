@@ -78,7 +78,7 @@ Go modular monolith — all modules run in a single process on port 8080:
 4. **Worker** - Executes operations via plugin-based tool architecture
 5. **Publish** - Frontend-facing API for content creation, AI generation/polish, and multi-platform publishing
 6. **Media** - MinIO-backed media asset management with upload, tag filtering, and presigned URL retrieval
-7. **Chat** - Conversational AI with multi-turn history, tool-calling support, and Redis-backed session state
+7. **Skill** - AI conversational assistant with multi-turn dialog, LLM-driven DAG planning, Redis-backed session state, and tool manifest knowledge base
 
 ### Communication Flow
 - Modules communicate via internal Go function calls (same process)
@@ -143,6 +143,9 @@ Architecture layers:
 - `ChatGenerateTool` — Conversational content generation with full multi-turn message history via OpenAI. Implements `ExecutableTool`.
 - `ChatReviseTool` — Revise or generate content fields (title, description, keywords) from natural language instructions. Implements `ExecutableTool`.
 - `ExternalTool` — Bridge to registered external tool services via HTTP. Routes DAG pipeline calls to external endpoints registered through `/api/tools/register`. Implements `ExecutableTool` + `ExternalToolProvider`.
+- `VideoMetadataTool` — Downloads video from MinIO (via presigned URL) and extracts metadata: duration, resolution, frame rate, codec, audio track info. Caches video locally for downstream tools (`/tmp/lingxi-video-cache`). Implements `ExecutableTool`.
+- `VideoAnalyzerTool` — Extracts keyframes via ffmpeg scene detection and transcribes audio via Whisper. Outputs base64 data URLs for keyframes and dialogue transcript text. Implements `ExecutableTool`.
+- `VideoCopyGeneratorTool` — Generates platform-adapted short-video titles, copy, and keywords from video metadata, keyframe analysis, and audio transcripts. Uses multimodal LLM. Supports douyin/xiaohongshu/bilibili/kuaishou platforms. Implements `ExecutableTool`.
 
 #### Executor Layer (`internal/worker/executor/`)
 - `Executor` interface — `Execute(ctx, ExecutionRequest) (ExecutionResult, error)`
@@ -185,11 +188,19 @@ Key components:
 
 Media asset model: ID, UserID, OriginalName, MimeType, Size, MinioPath, Tags (JSONB array), EmbeddingID, timestamps.
 
-### internal/publish (Chat + Tools)
-In addition to the core PublishHandler, this module now includes:
+### internal/skill (AI Assistant Dialog)
+Conversational AI assistant with multi-turn dialog, LLM-driven DAG planning, and tool manifest knowledge base.
 
-- `ChatHandler` - `/api/chat/generate` and `/api/chat/revise` endpoints for conversational AI with tool-calling
-- `ChatService` - Multi-turn chat using Redis for session state, calls OpenAI with tool manifests from the registry for function calling
+Key components:
+- `SessionHandler` - `/api/skill/dialog/session/*` endpoints for creating sessions, sending messages, querying progress, and terminating
+- `SessionManager` - Redis-backed session state with message history (50-message cap, 30min TTL), media context (presigned URLs), and task tracking
+- `PlanService` - Builds LLM prompt from conversation history + media context + tool manifests → generates DAG (JSON mode)
+- `ResultAssembler` - Creates orchestrator tasks, submits DAGs (with node ID scoping), polls for completion, extracts title/description/keywords from node outputs
+- `LLMClient` - Typed OpenAI chat completion client with JSON schema response format
+- `ToolManifestService` - DB-persisted + Redis-cached tool knowledge base; syncs builtin tools on startup, formats manifests for LLM DAG prompts
+- `prompts/` - System prompt templates for DAG generation and content planning
+
+### internal/publish (Tools)
 - `ToolHandler` - `/api/tools` endpoints for listing/querying/registering/deregistering tool manifests (builtin + external)
 
 ### Frontend (frontend/)
@@ -201,22 +212,21 @@ React + TypeScript + TailwindCSS + Zustand (no router — simple state-driven pa
 
 #### Key components (in `components/`)
 - `Sidebar.tsx` — Navigation sidebar with 创作发布 / 桌面工具 tabs
-- `UploadCard.tsx` — Drag-and-drop video/image upload
+- `UploadCard.tsx` — Drag-and-drop video/image upload with content type selection
 - `TitleInput.tsx` — Title input with AI polish button
 - `DescriptionInput.tsx` — Description textarea with AI polish button
 - `KeywordInput.tsx` — Tag-based keyword input
 - `AIHelperPanel.tsx` — AI generate and polish controls
-- `AIAssistantTab.tsx` — Conversational AI chat panel with multi-turn history
+- `AIAssistantTab.tsx` — Conversational AI chat panel with multi-turn history, media context, and skill dialog integration
 - `BlockingOverlay.tsx` — Full-screen loading overlay during AI operations with cancel button
 - `ContentTypeSelector.tsx` — Content type selection (video/article/image)
 - `MediaLibraryPanel.tsx` — Side panel for browsing and filtering uploaded media assets
-- `GenerateModal.tsx` — Content generation result modal/popup
-- `PlatformSelector.tsx` — Multi-platform toggle selector
+- `PlatformSelector.tsx` — Multi-platform toggle selector (10 platforms)
 - `PublishButton.tsx` — Publish action button (calls `/api/publish`)
 - `DesktopToolbar.tsx` — Electron desktop toolbar
 - `CommandPanel.tsx` — Command execution panel (Electron IPC, in DesktopPage)
-- `appStore.ts` — Zustand store (title, description, keywords, media, platforms, cover, aiLoadingMessage, chatSessionId)
-- `api.ts` — Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`, `/api/chat/*`, `/api/media/*`, `/api/tools`
+- `appStore.ts` — Zustand store (title, description, keywords, body, media, platforms, cover, aiLoadingMessage, chatSessionId, contentType)
+- `api.ts` — Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`, `/api/skill/dialog/*`, `/api/media/*`, `/api/tools`
 
 #### Electron vs Web
 - Production: Packaged as Electron .dmg/.exe via `electron-builder` (config in `electron/package.json`); bundles `frontend/dist/` as static assets
@@ -227,14 +237,14 @@ React + TypeScript + TailwindCSS + Zustand (no router — simple state-driven pa
 - API base URL: auto-detects Electron → `http://localhost:8080/api`, otherwise `/api` (Vite proxy)
 
 Key UI features:
-- **Media-based AI generation**: When images/videos are uploaded, AI generate uses `/api/ai/generate-from-media` (multipart) instead of text-only `/api/ai/generate`
-- **Conversational AI assistant**: `AIAssistantTab` provides multi-turn chat for content generation and revision, with tool-calling support
+- **Media-based AI generation**: When images/videos are uploaded, AI generate uses `/api/ai/generate-from-media` (multipart) instead of text-only `/api/ai/generate`; video pipeline involves metadata extraction → frame analysis → audio transcription → copy generation
+- **Conversational AI assistant**: `AIAssistantTab` provides multi-turn chat via `/api/skill/dialog/session/*` endpoints, with media context (presigned URLs for multimodal vision) and LLM-driven DAG planning
 - **Media library panel**: Browse, filter by tag, and reuse previously uploaded media assets
 - **Content type selector**: Choose between video, article, image content types before generation
-- **AI loading overlay**: Full-screen `BlockingOverlay` with progress bar+spinner and cancel button during AI operations; cancel terminates the backend task and records context
-- **Result popup**: `GenerateModal` centered modal with success/error icon and auto-dismiss
+- **AI loading overlay**: Full-screen `BlockingOverlay` with progress bar+spinner and cancel button during AI operations; cancel terminates the backend task (via `/api/task/:taskId/fail`) and records context
 - **Debug trace button**: Floating button (bottom-right) to query recent task lifecycle
 - **Trace endpoints**: `/api/trace/recent` and `/api/trace/:taskId` for full task+context audit data
+- **Async polish**: Title/description polish uses submit/poll pattern (`/api/ai/polish/submit` + `/api/ai/polish/result`) for cancel support
 
 ## Project Structure
 
@@ -262,22 +272,35 @@ internal/
     service.go               # Media CRUD + MinIO storage
     storage.go               # MinIO client wrapper (bucket auto-create, presigned URLs)
   publish/
-    handler/                 # Publish/AI/Chat/Tool HTTP handlers
-      handler.go             # Publish, AI generate, AI polish, AI generate-from-media
+    handler/                 # Publish/AI/Tool HTTP handlers
+      handler.go             # Publish, AI generate, AI polish (sync+async), AI generate-from-media
       trace_handler.go       # Task trace query (/api/trace/recent, /api/trace/:taskId)
-      chat_handler.go        # Chat generate/revise with tool-calling
       tool_handler.go        # Tool registry query/register/deregister
       handler_test.go
-    service/                 # Content publishing + AI generate/polish + Chat
+    service/                 # Content publishing + AI generate/polish
       service.go             # PublishContent, AIGenerateContent, AIGenerateFromMedia, AIPolishText
-      chat_service.go        # Multi-turn chat with OpenAI function calling + Redis session state
   worker/
     service/                 # Node execution engine
     tool/                    # Tool interface + registry + manifest
       tool.go                # Tool, BuildableTool, ExecutableTool, ManifestProvider, ExternalToolProvider
       manifest.go            # ToolManifest spec (parameters, output, examples)
-      builtin/               # BashTool, PythonTool, LlmApiTool, PolisherTool, MediaAnalyzer, ContentGenerator, ContentChecker, PlatformAdapter, ChatGenerateTool, ChatReviseTool, ExternalTool
+      builtin/               # BashTool, PythonTool, LlmApiTool, PolisherTool, MediaAnalyzer, ContentGenerator, ContentChecker, PlatformAdapter, ChatGenerateTool, ChatReviseTool, ExternalTool, VideoMetadataTool, VideoAnalyzerTool, VideoCopyGeneratorTool
     executor/                # DirectExecutor, SandboxExecutor, types
+  skill/                     # AI conversational assistant (dialog + DAG planning)
+    handler/
+      session_handler.go     # Session create/get/chat/progress/terminate HTTP handlers
+    service/
+      session_manager.go     # Redis-backed session state (30min TTL, 50-msg cap)
+      plan_service.go        # LLM DAG generation from conversation context + tool manifests
+      result_assembler.go    # Task creation, DAG submission, polling, field extraction
+      llm_client.go          # Typed OpenAI chat completion client (JSON schema mode)
+      tool_manifest_service.go # DB+Redis tool knowledge base (sync, cache, format for LLM)
+    prompts/
+      prompts.go             # System prompt templates for DAG generation
+  common/                    # Shared utility packages
+    llmutil/                 # OpenAI client helpers
+    jsonx/                   # JSON parsing/schema utilities
+    metadata/                # Metadata extraction utilities
 sandbox/                     # Rust sandbox service (gRPC server for isolated execution)
   src/
     main.rs                  # gRPC server entry point (tonic + tokio)
@@ -288,7 +311,7 @@ sandbox/                     # Rust sandbox service (gRPC server for isolated ex
   build.rs                   # Proto compilation via tonic-build
 frontend/                    # React + TypeScript + TailwindCSS
   src/
-    components/             # UI components (Sidebar, UploadCard, TitleInput, AIHelperPanel, AIAssistantTab, BlockingOverlay, ContentTypeSelector, MediaLibraryPanel, GenerateModal, etc.)
+    components/             # UI components (Sidebar, UploadCard, TitleInput, DescriptionInput, KeywordInput, AIHelperPanel, AIAssistantTab, BlockingOverlay, ContentTypeSelector, MediaLibraryPanel, PlatformSelector, PublishButton, DesktopToolbar, CommandPanel)
     pages/                   # Pages (PublishPage, DesktopPage)
     stores/                  # Zustand state management (appStore)
     services/                # API services (api.ts)
@@ -383,6 +406,8 @@ idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplicat
 - `POST /api/ai/generate` - AI-generate title and description from text prompt
 - `POST /api/ai/generate-from-media` - AI-generate from images/videos + prompt (multipart)
 - `POST /api/ai/polish` - AI-polish existing text (title or description)
+- `POST /api/ai/polish/submit` - Submit async polish task (returns taskId+nodeId immediately for cancel support)
+- `GET /api/ai/polish/result` - Query async polish result by taskId+nodeId
 - `GET /api/trace/recent` - Get most recent task trace (full task + context audit data)
 - `GET /api/trace/:taskId` - Get specific task trace
 
@@ -405,9 +430,12 @@ idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplicat
 - `GET /api/media/:id` - Get single media asset
 - `PUT /api/media/:id/tags` - Update asset tags
 
-### Chat
-- `POST /api/chat/generate` - Multi-turn conversational content generation with tool-calling
-- `POST /api/chat/revise` - Revise content fields from natural language instructions
+### Skill / AI Assistant Dialog
+- `POST /api/skill/dialog/session/create` - Create a new conversation session (with optional page context: title, description, keywords, media IDs)
+- `GET /api/skill/dialog/session/:id` - Get session state (message history + media context + task IDs)
+- `POST /api/skill/dialog/session/:id/chat` - Send a message → LLM plans DAG → orchestrator executes → returns generated fields
+- `GET /api/skill/dialog/session/:id/progress` - Query current execution progress (IDLE/EXECUTING/TERMINATED)
+- `POST /api/skill/dialog/session/:id/terminate` - Terminate a session
 
 ### Tool Registry
 - `GET /api/tools` - List all tool manifests (builtin + external) with full parameter/output schemas

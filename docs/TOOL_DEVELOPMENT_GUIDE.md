@@ -128,7 +128,7 @@ curl http://localhost:8080/api/tools/media_analyzer
 
 ## 3. 内置工具一览
 
-系统预置了以下内置工具，可直接在 DAG 中使用：
+系统预置了以下 14 个内置工具，可直接在 DAG 中使用：
 
 | 工具名 | 用途 | 关键参数 | 沙箱 |
 |--------|------|---------|------|
@@ -142,6 +142,9 @@ curl http://localhost:8080/api/tools/media_analyzer
 | `platform_adapter` | 平台适配 | `source_content`, `target_platform`, `title` | 否 |
 | `chat_revise` | 修改现有内容字段 | `message`, `title`, `description`, `keywords` | 否 |
 | `chat_generate` | 对话式内容生成 | `messages` (完整消息数组) | 否 |
+| `video_metadata` | 下载视频并提取元数据 | `media_id` (MinIO 素材 ID) | 否 |
+| `video_analyzer` | ffmpeg 关键帧提取 + Whisper 音频转录 | `cached_video_path` 或 `media_id` | 否 |
+| `video_copy_generator` | 基于视频分析生成平台适配文案 | `platform` (douyin/xiaohongshu/bilibili/kuaishou) | 否 |
 | `external` | 执行外部注册工具 | `tool` (外部工具名), 其他参数 | 取决于外部工具 |
 
 ### 3.1 何时使用 bash/python（沙箱工具）

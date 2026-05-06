@@ -258,6 +258,10 @@ func (t *ChatReviseTool) callOpenAI(ctx context.Context, systemPrompt, userPromp
 
 	respBody, _ := io.ReadAll(resp.Body)
 
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("LLM API returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
 	var responseMap map[string]interface{}
 	if err := json.Unmarshal(respBody, &responseMap); err != nil {
 		return "", fmt.Errorf("failed to parse LLM response: %w", err)

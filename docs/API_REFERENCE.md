@@ -1453,7 +1453,7 @@ curl -X DELETE http://localhost:8080/api/tools/image_processor
 
 ## 12. Built-in Tools
 
-当前系统内置 11 个工具，启动时自动同步到 `tool_manifests` 表：
+当前系统内置 14 个工具，启动时自动同步到 `tool_manifests` 表：
 
 | Tool Name | Type | Description | Key Parameters |
 |-----------|------|-------------|----------------|
@@ -1467,6 +1467,9 @@ curl -X DELETE http://localhost:8080/api/tools/image_processor
 | `platform_adapter` | builtin | Adapt content for 7 social platforms | `source_content`, `target_platform`, `title` |
 | `chat_generate` | builtin | Multi-turn conversational content generation | `messages` (array, required) |
 | `chat_revise` | builtin | Revise title/desc/keywords via NL instruction | `message` (string, required) |
+| `video_metadata` | builtin | Download video + extract metadata (duration, resolution, frame rate, codec, audio) | `media_id` (string, required) |
+| `video_analyzer` | builtin | Extract keyframes (ffmpeg scene detection) + transcribe audio (Whisper) | `cached_video_path` or `media_id` |
+| `video_copy_generator` | builtin | Generate platform-adapted short-video titles, copy, and keywords via multimodal LLM | `platform` (douyin/xiaohongshu/bilibili/kuaishou) |
 | `external` | builtin | Proxy to registered external tools | `tool` (external tool name) |
 
 ---

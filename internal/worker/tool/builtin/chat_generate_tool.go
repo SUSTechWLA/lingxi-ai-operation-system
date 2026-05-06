@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -146,6 +147,10 @@ func (t *ChatGenerateTool) Execute(ctx context.Context, params map[string]interf
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return tool.FailureResult(fmt.Sprintf("LLM API returned status %d: %s", resp.StatusCode, string(respBody)))
+	}
 
 	var responseMap map[string]interface{}
 	if err := json.Unmarshal(respBody, &responseMap); err != nil {

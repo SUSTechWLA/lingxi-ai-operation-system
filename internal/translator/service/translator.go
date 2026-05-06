@@ -14,15 +14,16 @@ import (
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	skillSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/service"
 )
 
-const systemPrompt = `你是一个任务分解专家。请将用户的自然语言任务分解为多个执行节点（Node），并构建一个有向无环图（DAG）。
+const systemPromptTmpl = `你是一个任务分解专家。请将用户的自然语言任务分解为多个执行节点（Node），并构建一个有向无环图（DAG）。
 
 每个 Node 的格式：
 - id: 节点唯一标识（字符串）
-- type: 节点类型（LLM 或 TOOL）
-- name: 节点名称（如 write_article, summarize 等）
-- input: 输入数据（Map格式，可为空）
+- type: 节点类型（固定为 TOOL）
+- name: 工具名称（必须从下方可用工具列表中选择，不得编造）
+- input: 输入数据（Map格式，根据工具的 input_schema 填写参数）
 - deps: 依赖的节点ID列表（空列表表示无依赖）
 
 要求：
@@ -36,15 +37,15 @@ const systemPrompt = `你是一个任务分解专家。请将用户的自然语�
   "nodes": [
     {
       "id": "1",
-      "type": "LLM",
-      "name": "write_article",
+      "type": "TOOL",
+      "name": "llm_api",
       "input": {},
       "deps": []
     },
     {
       "id": "2",
-      "type": "LLM",
-      "name": "summarize",
+      "type": "TOOL",
+      "name": "llm_api",
       "input": {},
       "deps": ["1"]
     }
@@ -52,19 +53,24 @@ const systemPrompt = `你是一个任务分解专家。请将用户的自然语�
   "edges": [
     {"from": "1", "to": "2"}
   ]
-}`
+}
+
+## 可用工具列表（只能使用以下工具，不得编造工具名）
+%s`
 
 type NlToDagService struct {
 	cfg             config.OpenAIConfig
 	orchestratorURL string
 	httpClient      *http.Client
+	toolManifestSvc *skillSvc.ToolManifestService
 }
 
-func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string) *NlToDagService {
+func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string, toolManifestSvc *skillSvc.ToolManifestService) *NlToDagService {
 	return &NlToDagService{
 		cfg:             cfg,
 		orchestratorURL: orchestratorURL,
 		httpClient:      &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second},
+		toolManifestSvc: toolManifestSvc,
 	}
 }
 
@@ -73,8 +79,22 @@ func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string) *NlToDag
 func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*model.DAGRequest, error) {
 	zap.L().Info("Translating natural language to DAG via pipeline", zap.String("prompt", prompt))
 
-	// Step 1: Submit DAG with llm_api node (combined system prompt + user prompt)
+	// Query available tools for the LLM prompt
+	var toolsDesc string
+	if s.toolManifestSvc != nil {
+		var err error
+		toolsDesc, err = s.toolManifestSvc.FormatForPrompt(ctx)
+		if err != nil {
+			zap.L().Warn("Failed to query tool manifests for translator, using fallback", zap.Error(err))
+		}
+	}
+	if toolsDesc == "" {
+		toolsDesc = "llm_api: 通用大模型调用，可执行任意文本生成任务\nchat_generate: 通用内容生成\nchat_revise: 修改已有内容"
+	}
+
 	nodeID := fmt.Sprintf("nl-translate-%d", time.Now().UnixMilli())
+
+	systemPrompt := fmt.Sprintf(systemPromptTmpl, toolsDesc)
 
 	fullPrompt := fmt.Sprintf(`%s
 

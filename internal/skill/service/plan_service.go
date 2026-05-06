@@ -197,6 +197,15 @@ func resolveToDataURLs(urls []string) []string {
 		}
 
 		mimeType := resp.Header.Get("Content-Type")
+
+		// Skip non-image media (e.g., videos). Multimodal vision APIs only
+		// accept image formats; sending video bytes wrapped as image_url
+		// causes the API to return an error or empty choices.
+		if mimeType != "" && !llmutil.IsImageMimeType(mimeType) {
+			zap.L().Warn("skipping non-image media for multimodal request",
+				zap.String("mimeType", mimeType))
+			continue
+		}
 		if mimeType == "" {
 			mimeType = "image/jpeg"
 		}
