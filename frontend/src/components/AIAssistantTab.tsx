@@ -371,14 +371,16 @@ const AIAssistantTab: React.FC = () => {
             <h3 className="text-base font-semibold text-gray-800">AI 助手</h3>
             <p className="text-xs text-gray-500 mt-1">智能对话，帮你完成内容创作</p>
           </div>
-          {messages.length > 1 && (
-            <button
-              onClick={clearChat}
-              className="text-xs text-gray-400 hover:text-gray-600 transition-colors px-2 py-1"
-            >
-              清空对话
-            </button>
-          )}
+          <button
+            onClick={clearChat}
+            className="text-xs text-gray-400 hover:text-red-500 transition-colors px-2 py-1 flex items-center gap-1"
+            title="清空对话上下文"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            清空上下文
+          </button>
         </div>
       </div>
 
@@ -484,6 +486,16 @@ const AIAssistantTab: React.FC = () => {
               className="w-full px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none placeholder:text-gray-400 disabled:opacity-50"
             />
           </div>
+          <button
+            onClick={clearChat}
+            disabled={isLoading}
+            className="px-2.5 py-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors disabled:opacity-40 flex-shrink-0"
+            title="清空对话上下文"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
           <button
             onClick={handleSendMessage}
             disabled={isLoading || !inputValue.trim()}
