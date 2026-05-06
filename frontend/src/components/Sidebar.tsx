@@ -1,5 +1,5 @@
 import React from 'react'
-import appIcon from '../assets/灵犀ai自媒体运营助手.png'
+import appIcon from '../assets/躺营ai自媒体运营助手.png'
 
 interface SidebarProps {
   activeNav: string
@@ -12,10 +12,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange }) => {
       <div className="p-6">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden">
-            <img src={appIcon} alt="灵犀AI" className="w-full h-full object-cover" />
+            <img src={appIcon} alt="躺营AI" className="w-full h-full object-cover" />
           </div>
           <div>
-            <h1 className="text-base font-semibold text-gray-800">灵犀AI自媒体运营助手</h1>
+            <h1 className="text-base font-semibold text-gray-800">躺营AI自媒体运营助手</h1>
             <p className="text-xs text-gray-500">让创作更简单，让传播更高效</p>
           </div>
         </div>

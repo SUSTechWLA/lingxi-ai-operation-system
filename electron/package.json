@@ -12,7 +12,7 @@
   },
   "build": {
     "appId": "com.lingxi.aios.desktop",
-    "productName": "灵犀AI自媒体运营助手",
+    "productName": "躺营AI自媒体运营助手",
     "directories": {
       "output": "dist-electron"
     },

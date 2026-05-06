@@ -1,4 +1,4 @@
-# 灵犀AI自媒体运营助手 (Lingxi AI OS)
+# 躺营AI自媒体运营助手 (Lingxi AI OS)
 
 > **一句话介绍**：一个帮你管理自媒体内容创作和发布的智能助手。输入简单想法 → AI 帮你生成/润色内容 → 一键发布到多平台。
 
@@ -6,7 +6,7 @@
 
 ## 👋 这是什么？
 
-**灵犀AI自媒体运营助手** 是一个面向自媒体创作者的一站式内容管理平台。它帮你解决这些痛点：
+**躺营AI自媒体运营助手** 是一个面向自媒体创作者的一站式内容管理平台。它帮你解决这些痛点：
 
 | 场景 | 以前 | 现在 |
 |------|------|------|
@@ -136,12 +136,13 @@ Frontend: http://localhost:3000
 - ✅ **AI 对话助手**：多轮对话式内容创作，支持上传素材 → 自然语言描述 → AI 自动生成/修改标题、简介、关键词
 - ✅ **内容清空**：一键清空所有输入内容
 - ✅ **工具注册体系**：支持外部开发者通过 HTTP 注册自定义工具，AI 自动发现和调用
+- ✅ **短视频智能创作**：视频上传 → 元数据提取 → 关键帧分析 → 音频转录 → 多模态大模型生成平台适配文案
+- ✅ **沙箱隔离执行**：Bash/Python 工具通过 Rust gRPC 沙箱服务执行，资源隔离（内存/CPU/磁盘/PID 限制）
 
 ### 开发中功能
 - 🔄 **电子桌面应用**：支持本地文件选择和系统托盘
 - 🔄 **平台实际发布**：对接各平台 API 实现自动发布
 - 🔄 **任务中心**：查看发布历史和状态
-- 🔄 **素材批量处理**：批量上传和 AI 解析
 
 ---
 
@@ -174,16 +175,20 @@ Frontend: http://localhost:3000
               │  └───────────────────┘  │
               │  ┌───────────────────┐  │
               │  │  Orchestrator 调度  │  │ ← 任务调度引擎
-              │  │  Worker 工具执行    │  │ ← 11个内置工具+外部工具
+              │  │  Worker 工具执行    │  │ ← 14个内置工具+外部工具
               │  │  Context 审计记录   │  │ ← 记录操作历史
               │  └───────────────────┘  │
-              │                         │
+              │            │            │
+              │     ┌──────▼──────┐     │
+              │     │ Rust 沙箱   │     │ ← gRPC 隔离执行
+              │     │ (端口 50051) │     │
+              │     └─────────────┘     │
               └────────────┬────────────┘
                            │
         ┌──────────────────┼──────────────────┐
         │                  │                  │
-   PostgreSQL          Redis              Redpanda
-   (数据存储)          (缓存)             (事件消息)
+   PostgreSQL      Redis       Redpanda      MinIO       Qdrant
+   (数据存储)      (缓存)     (事件消息)   (对象存储)   (向量数据库)
 ```
 
 ### 技术栈
@@ -192,9 +197,12 @@ Frontend: http://localhost:3000
 |------|------|--------|
 | 前端 | React + TypeScript + TailwindCSS | 用户操作界面 |
 | 后端 | Go + Gin 框架 | 处理所有业务逻辑 |
+| 沙箱 | Rust + gRPC (tonic) | 隔离执行 Bash/Python 工具 |
 | 数据库 | PostgreSQL 16 | 存储用户数据和任务 |
-| 缓存 | Redis 7 | 临时数据加速 |
-| 消息队列 | Redpanda (Kafka 兼容) | 模块间通信 |
+| 缓存 | Redis 7 | 会话缓存 + 工具知识库 |
+| 消息队列 | Redpanda (Kafka 兼容) | 模块间事件通信 |
+| 对象存储 | MinIO | 素材文件存储 |
+| 向量数据库 | Qdrant | 向量检索（预留） |
 | AI 能力 | OpenAI 兼容 API | 内容生成和润色 |
 
 ### 目录结构
@@ -216,24 +224,30 @@ lingxi-ai-operation-system/
 │   │   └── prompts/                 #     LLM 系统提示词
 │   ├── orchestrator/              #   任务调度引擎
 │   ├── worker/                    #   工具执行引擎
-│   │   └── tool/builtin/          #   内置工具（11个）
-│   │       ├── bash_tool.go       #     Shell 命令执行
-│   │       ├── python_tool.go     #     Python 执行
-│   │       ├── llm_api_tool.go    #     LLM API 调用
-│   │       ├── polisher_tool.go   #     文本润色
-│   │       ├── media_analyzer.go  #     素材分析
-│   │       ├── content_generator.go #   内容生成
-│   │       ├── content_checker.go #     合规检查
-│   │       ├── platform_adapter.go #   平台适配
-│   │       ├── chat_generate.go   #     对话式内容生成
-│   │       ├── chat_revise.go     #     对话式内容修改
-│   │       └── external_tool.go   #     外部工具代理
+│   │   └── tool/builtin/          #   内置工具（14个）
+│   │       ├── builtin.go          #     LLM API 调用
+│   │       ├── bash_tool.go        #     Shell 命令执行（沙箱）
+│   │       ├── python_tool.go      #     Python 执行（沙箱）
+│   │       ├── polisher_tool.go    #     文本润色
+│   │       ├── media_analyzer.go   #     素材分析
+│   │       ├── content_generator.go #    内容生成
+│   │       ├── content_checker.go  #     合规检查
+│   │       ├── platform_adapter.go #    平台适配
+│   │       ├── chat_generate_tool.go #  对话式内容生成
+│   │       ├── chat_revise_tool.go #    对话式内容修改
+│   │       ├── external_tool.go    #     外部工具代理
+│   │       ├── video_metadata.go   #     视频元数据提取
+│   │       ├── video_analyzer.go   #     视频关键帧+音频转录
+│   │       └── video_copy_generator.go # 视频文案生成
 │   ├── translator/                #   自然语言翻译
 │   ├── context/                   #   上下文审计
 │   ├── config/                    #   配置管理
 │   ├── database/                  #   数据库连接
 │   ├── eventbus/                  #   消息队列
 │   └── outbox/                    #   事件可靠性保障
+├── sandbox/                       #   Rust 沙箱服务（gRPC 隔离执行）
+│   ├── src/                       #     沙箱主逻辑
+│   └── proto/                     #     Protobuf 定义
 ├── frontend/                      # ★ 前端代码
 │   └── src/
 │       ├── components/            #   界面组件

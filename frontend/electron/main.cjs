@@ -14,7 +14,7 @@ function createWindow() {
     height: 960,
     minWidth: 1024,
     minHeight: 700,
-    title: '灵犀AI自媒体运营助手',
+    title: '躺营AI自媒体运营助手',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
