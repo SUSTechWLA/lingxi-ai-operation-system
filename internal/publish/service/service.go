@@ -490,23 +490,36 @@ func (s *PublishService) submitImageOnlyDAG(ctx context.Context, prompt string, 
 	var imageURLs []string
 
 	for _, f := range images {
-		mediaDesc += fmt.Sprintf("上传的图片：%s\n", f.Filename)
 		mimeType := f.Header.Get("Content-Type")
 		if !llmutil.IsImageMimeType(mimeType) {
+			zap.L().Warn("skipping file with unrecognized image MIME type",
+				zap.String("filename", f.Filename),
+				zap.String("mimeType", mimeType))
 			continue
 		}
 		file, err := f.Open()
 		if err != nil {
+			zap.L().Warn("failed to open uploaded image file",
+				zap.String("filename", f.Filename),
+				zap.Error(err))
 			continue
 		}
 		data, err := io.ReadAll(file)
 		file.Close()
 		if err != nil {
+			zap.L().Warn("failed to read uploaded image data",
+				zap.String("filename", f.Filename),
+				zap.Error(err))
 			continue
 		}
 		compressedData, compressedMime := llmutil.CompressImageBytes(data)
 		dataURL := llmutil.Base64DataURL(compressedMime, compressedData)
 		imageURLs = append(imageURLs, dataURL)
+		mediaDesc += fmt.Sprintf("上传的图片：%s\n", f.Filename)
+	}
+
+	if len(imageURLs) == 0 {
+		return nil, fmt.Errorf("failed to process any images: all %d files could not be read or encoded", len(images))
 	}
 
 	fullPrompt := fmt.Sprintf(`你是一个自媒体内容创作助手。请根据用户上传的素材图片和说明，生成适合自媒体发布的标题和简介。

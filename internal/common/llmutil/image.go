@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	maxImageDim  = 1024
+	maxImageDim  = 720
 	jpegQuality  = 75
 	maxImageBytes = 512 * 1024 // 512KB target max after compression
 )

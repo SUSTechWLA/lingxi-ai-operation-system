@@ -163,6 +163,11 @@ func (t *LlmApiTool) Manifest() tool.ToolManifest {
 				Description: "Temperature for generation (default: configured value)",
 				Required:    false,
 			},
+			"image_urls": {
+				Type:        "array",
+				Description: "Base64 data URLs or HTTP URLs of images for multimodal vision (optional)",
+				Required:    false,
+			},
 		},
 		Output: map[string]tool.ParamDef{
 			"content":     {Type: "string", Description: "Generated text response from the LLM"},

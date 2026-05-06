@@ -223,6 +223,25 @@ func (a *ResultAssembler) extractFieldsFromOutputs(outputs map[string]interface{
 						}
 					}
 				}
+				// Check nested "fields" object (e.g. {"type": "generate", "fields": {"title": "...", ...}})
+				if nestedFields, ok := parsed["fields"].(map[string]interface{}); ok {
+					if title, ok := nestedFields["title"].(string); ok && title != "" && fields.Title == "" {
+						fields.Title = title
+					}
+					if desc, ok := nestedFields["description"].(string); ok && desc != "" && fields.Description == "" {
+						fields.Description = desc
+					}
+					if body, ok := nestedFields["body"].(string); ok && body != "" && fields.Body == "" {
+						fields.Body = body
+					}
+					if kw, ok := nestedFields["keywords"].([]interface{}); ok && len(fields.Keywords) == 0 {
+						for _, k := range kw {
+							if s, ok := k.(string); ok {
+								fields.Keywords = append(fields.Keywords, s)
+							}
+						}
+					}
+				}
 				if reply, ok := parsed["reply"].(string); ok && reply != "" {
 					replyParts = append(replyParts, reply)
 				}

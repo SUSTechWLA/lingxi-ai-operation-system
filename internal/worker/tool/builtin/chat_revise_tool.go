@@ -145,7 +145,7 @@ func (t *ChatReviseTool) Execute(ctx context.Context, params map[string]interfac
 		"keywords":    []string{},
 	}
 
-	if err := jsonx.ExtractJSON(reply, &parsed); err == nil && parsed.Type == "revise" {
+	if err := jsonx.ExtractJSON(reply, &parsed); err == nil && (parsed.Type == "revise" || parsed.Type == "generate") {
 		result["reply"] = parsed.Reply
 		result["title"] = parsed.Fields.Title
 		result["description"] = parsed.Fields.Description

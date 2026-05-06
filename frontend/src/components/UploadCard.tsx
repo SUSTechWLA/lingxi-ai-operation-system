@@ -63,10 +63,29 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
         filters: [{ name: isVideo ? '视频文件' : '图片文件', extensions }],
       })
       if (!paths || paths.length === 0) return
-      const mediaFiles: MediaFile[] = paths.map((p) => {
-        const name = p.split('/').pop() || p
-        return { file: new File([], name), preview: isVideo ? undefined : `file://${p}`, name, size: 0 }
-      })
+      const mediaFiles: MediaFile[] = await Promise.all(paths.map(async (p) => {
+        try {
+          const info = await api.readFile(p)
+          // Convert base64 to a Blob, then to a File with proper MIME type
+          const byteChars = atob(info.data)
+          const byteNums = new Uint8Array(byteChars.length)
+          for (let i = 0; i < byteChars.length; i++) {
+            byteNums[i] = byteChars.charCodeAt(i)
+          }
+          const blob = new Blob([byteNums], { type: info.mimeType })
+          const file = new File([blob], info.name, { type: info.mimeType })
+          return {
+            file,
+            preview: isVideo ? undefined : URL.createObjectURL(blob),
+            name: info.name,
+            size: info.size,
+          }
+        } catch {
+          // Fallback: use empty file if read fails (unlikely)
+          const name = p.split('/').pop() || p
+          return { file: new File([], name), preview: undefined, name, size: 0 }
+        }
+      }))
       if (isVideo) {
         addVideos(mediaFiles)
       } else {

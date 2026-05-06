@@ -57,6 +57,29 @@ ipcMain.handle('execute-command', async (_, command, args = [], workDir = '/tmp'
   })
 })
 
+// Read file from disk and return base64-encoded data with metadata.
+// Used by the renderer to create proper File objects for upload.
+ipcMain.handle('read-file', async (_, filePath) => {
+  const data = fs.readFileSync(filePath)
+  const ext = path.extname(filePath).toLowerCase()
+  const mimeTypes = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.mp4': 'video/mp4',
+    '.mov': 'video/quicktime',
+    '.avi': 'video/x-msvideo',
+  }
+  return {
+    data: data.toString('base64'),
+    mimeType: mimeTypes[ext] || 'application/octet-stream',
+    name: path.basename(filePath),
+    size: data.length,
+  }
+})
+
 // Open file dialog
 ipcMain.handle('open-file-dialog', async (_, options = {}) => {
   const result = await dialog.showOpenDialog(mainWindow, {

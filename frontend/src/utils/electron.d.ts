@@ -11,9 +11,17 @@ export interface PublishResult {
   error?: string
 }
 
+export interface FileReadResult {
+  data: string      // base64-encoded file content
+  mimeType: string
+  name: string
+  size: number
+}
+
 export interface ElectronAPI {
   executeCommand: (command: string, args?: string[], workDir?: string) => Promise<CommandResult>
   openFileDialog: (options?: Record<string, unknown>) => Promise<string[]>
+  readFile: (filePath: string) => Promise<FileReadResult>
   openDirectoryDialog: (options?: Record<string, unknown>) => Promise<string[]>
   saveFileDialog: (options?: Record<string, unknown>) => Promise<string | undefined>
   checkServiceHealth: () => Promise<string>
