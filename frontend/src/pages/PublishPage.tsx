@@ -267,6 +267,15 @@ const PublishPage: React.FC = () => {
                         <span className="text-xs text-gray-400">
                           {contentType === 'image' ? `${images.length}张图片` : `${videos.length}个视频`}
                         </span>
+                        {(videos.length > 0 || images.length > 0) && (
+                          <button
+                            onClick={clearMedia}
+                            className="text-xs text-gray-400 hover:text-red-500 transition-colors ml-1"
+                            title="清空全部素材"
+                          >
+                            · 清空
+                          </button>
+                        )}
                       </div>
                       {showMediaLibrary === false && (
                         <button

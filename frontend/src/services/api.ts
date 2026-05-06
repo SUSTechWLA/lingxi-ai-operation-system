@@ -71,6 +71,7 @@ export const aiGenerateFromMedia = async (
   const response = await api.post<ApiResponse<AIGenerateData>>('/ai/generate-from-media', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     signal,
+    timeout: 180000, // 180s — video pipeline involves 2 LLM calls (visual analysis + copy generation)
   })
   return response.data.data
 }

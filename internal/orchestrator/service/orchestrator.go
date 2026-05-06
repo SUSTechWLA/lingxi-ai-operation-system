@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -175,7 +176,7 @@ func (s *OrchestratorService) GetTaskWithDetails(ctx context.Context, taskID str
 			"type":       string(n.Type),
 			"name":       n.Name,
 			"status":     string(n.Status),
-			"output":     n.Output,
+			"output":     sanitizeNodeOutput(n.Output),
 			"errorMessage": n.ErrorMessage,
 			"condition":    n.Condition,
 			"retryCount":   n.RetryCount,
@@ -237,6 +238,45 @@ func (s *OrchestratorService) initializeReadyNodes(ctx context.Context, dagReq *
 			}
 		}
 	}
+}
+
+// sanitizeNodeOutput replaces large base64 data in node output with readable summaries.
+func sanitizeNodeOutput(output map[string]interface{}) map[string]interface{} {
+	if output == nil {
+		return nil
+	}
+	cleaned := make(map[string]interface{}, len(output))
+	for k, v := range output {
+		if k == "stdout" {
+			if s, ok := v.(string); ok {
+				cleaned[k] = summarizeStdout(s)
+				continue
+			}
+		}
+		cleaned[k] = v
+	}
+	return cleaned
+}
+
+func summarizeStdout(stdout string) string {
+	// Count base64 data URLs (typical pattern: "data:image/jpeg;base64,...")
+	base64Count := 0
+	for {
+		idx := strings.Index(stdout, `"data:image/`)
+		if idx < 0 {
+			break
+		}
+		base64Count++
+		stdout = stdout[:idx] + stdout[idx+1:] // remove opening quote so we find the next
+	}
+	if base64Count > 0 {
+		return fmt.Sprintf("[%d keyframe images (base64 data URLs omitted for readability)]", base64Count)
+	}
+	// Truncate very long stdout that doesn't contain base64 images
+	if len(stdout) > 4096 {
+		return stdout[:4096] + fmt.Sprintf("\n... [truncated at 4KB, total %d bytes]", len(stdout))
+	}
+	return stdout
 }
 
 func (s *OrchestratorService) recordContext(ctx context.Context, taskID, nodeID string, ctxType model.ContextType, sourceModule, message string, metadata map[string]interface{}) {

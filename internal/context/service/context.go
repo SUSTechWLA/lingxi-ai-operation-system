@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/metadata"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
@@ -108,6 +109,14 @@ func buildExecutionMetadata(output map[string]interface{}) map[string]interface{
 			meta[key] = v
 		}
 	}
+
+	// Extract human-readable output summary from tool stdout
+	if stdout, ok := output["stdout"].(string); ok && stdout != "" {
+		if outputSummary := metadata.BuildOutputSummary(stdout); len(outputSummary) > 0 {
+			meta["output"] = outputSummary
+		}
+	}
+
 	if len(meta) > 0 {
 		return meta
 	}

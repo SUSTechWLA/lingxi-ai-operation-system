@@ -274,6 +274,7 @@ func (s *PublishService) AIGenerateQueryResult(ctx context.Context, taskID, node
 	// Find the target node
 	var nodeStatus string
 	var nodeOutput map[string]interface{}
+	var nodeErrorMessage string
 
 	if nodes, ok := taskResult["nodes"].([]interface{}); ok {
 		for _, n := range nodes {
@@ -287,6 +288,7 @@ func (s *PublishService) AIGenerateQueryResult(ctx context.Context, taskID, node
 			}
 
 			nodeStatus, _ = node["status"].(string)
+			nodeErrorMessage, _ = node["errorMessage"].(string)
 			if output, ok := node["output"].(map[string]interface{}); ok {
 				nodeOutput = output
 			}
@@ -302,6 +304,9 @@ func (s *PublishService) AIGenerateQueryResult(ctx context.Context, taskID, node
 	case "SUCCESS":
 		// Parse output
 	case "FAILED":
+		if nodeErrorMessage != "" {
+			return nil, fmt.Errorf("%s", nodeErrorMessage)
+		}
 		return nil, fmt.Errorf("generate task failed for node %s", nodeID)
 	default:
 		// Still pending/running
@@ -312,9 +317,10 @@ func (s *PublishService) AIGenerateQueryResult(ctx context.Context, taskID, node
 		return nil, fmt.Errorf("node %s has no output", nodeID)
 	}
 
-	// Extract content from llm_api tool output
-	// LlmApiTool returns: {"content": "LLM response string", "model": "...", "rawResponse": {...}}
-	// The LLM response is a JSON string like: {"title": "...", "description": "...", "keywords": [...]}
+	// Extract content from tool output. Two formats are supported:
+	// 1. llm_api tool: {"content": "LLM response JSON string", "model": "...", ...}
+	//    where the LLM response is JSON like {"title": "...", "description": "...", "keywords": [...]}
+	// 2. video_copy_generator / direct tools: {"title": "...", "description": "...", "keywords": [...]}
 	stdout, _ := nodeOutput["stdout"].(string)
 	if stdout == "" {
 		return nil, fmt.Errorf("node %s stdout is empty", nodeID)
@@ -326,12 +332,34 @@ func (s *PublishService) AIGenerateQueryResult(ctx context.Context, taskID, node
 	}
 
 	contentStr, _ := toolOutput["content"].(string)
-	if contentStr == "" {
-		return nil, fmt.Errorf("tool output content is empty")
-	}
-
-	if err := jsonx.ExtractJSON(contentStr, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse LLM response as JSON: %w", err)
+	if contentStr != "" {
+		// Format 1: llm_api — content is a JSON string with title/description/keywords
+		if err := jsonx.ExtractJSON(contentStr, &result); err != nil {
+			return nil, fmt.Errorf("failed to parse LLM response as JSON: %w", err)
+		}
+	} else {
+		// Format 2: tools that return title/description/keywords directly (e.g. video_copy_generator)
+		if title, ok := toolOutput["title"].(string); ok {
+			result.Title = title
+		}
+		if desc, ok := toolOutput["description"].(string); ok {
+			result.Description = desc
+		}
+		if body, ok := toolOutput["body"].(string); ok {
+			result.Body = body
+		}
+		if kw, ok := toolOutput["keywords"].([]interface{}); ok {
+			keywords := make([]string, 0, len(kw))
+			for _, k := range kw {
+				if s, ok := k.(string); ok {
+					keywords = append(keywords, s)
+				}
+			}
+			result.Keywords = keywords
+		}
+		if result.Title == "" && result.Description == "" {
+			return nil, fmt.Errorf("tool output has no title or description")
+		}
 	}
 
 	result.TaskID = taskID
@@ -348,8 +376,8 @@ func (s *PublishService) AIGenerateContent(ctx context.Context, prompt string) (
 	taskID := submitResp.TaskID
 	nodeID := submitResp.NodeID
 
-	// Poll for result (max 60s, every 800ms)
-	maxAttempts := 75
+	// Poll for result (max 180s, every 800ms)
+	maxAttempts := 225
 	pollInterval := 800 * time.Millisecond
 
 	for i := 0; i < maxAttempts; i++ {
@@ -561,8 +589,8 @@ func (s *PublishService) AIGenerateFromMedia(ctx context.Context, prompt string,
 	taskID := submitResp.TaskID
 	nodeID := submitResp.NodeID
 
-	// Poll for result (max 60s, every 800ms)
-	maxAttempts := 75
+	// Poll for result (max 180s, every 800ms)
+	maxAttempts := 225
 	pollInterval := 800 * time.Millisecond
 
 	for i := 0; i < maxAttempts; i++ {

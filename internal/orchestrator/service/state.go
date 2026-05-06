@@ -2,12 +2,12 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/metadata"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
 	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
@@ -298,28 +298,32 @@ func (s *StateService) recordContextForTransition(ctx context.Context, node *mod
 
 func buildNodeMetadata(node *model.Node, status model.NodeStatus) map[string]interface{} {
 	meta := make(map[string]interface{})
-	if node.Input != nil {
-		if text, ok := node.Input["text"].(string); ok {
-			preview := text
-			if len([]rune(preview)) > 80 {
-				preview = string([]rune(preview)[:80]) + "..."
-			}
-			meta["inputPreview"] = preview
-		}
+
+	// Tool name for context
+	if node.Name != "" {
+		meta["tool"] = node.Name
 	}
+
+	// Summarize input parameters
+	if inputSummary := metadata.BuildInputSummary(node.Input); len(inputSummary) > 0 {
+		meta["input"] = inputSummary
+	}
+
+	// Summarize output for terminal states
 	if node.Output != nil && (status == model.NodeSuccess || status == model.NodeFailed) {
 		if stdout, ok := node.Output["stdout"].(string); ok {
-			var parsed map[string]interface{}
-			if err := json.Unmarshal([]byte(stdout), &parsed); err == nil {
-				if content, ok := parsed["content"].(string); ok {
-					preview := content
-					if len([]rune(preview)) > 80 {
-						preview = string([]rune(preview)[:80]) + "..."
-					}
-					meta["outputPreview"] = preview
-				}
+			if outputSummary := metadata.BuildOutputSummary(stdout); len(outputSummary) > 0 {
+				meta["output"] = outputSummary
 			}
 		}
+		// Include error from output if present
+		if errStr, ok := node.Output["error"].(string); ok && errStr != "" {
+			meta["error"] = errStr
+		}
+	}
+
+	if len(meta) == 0 {
+		return nil
 	}
 	return meta
 }

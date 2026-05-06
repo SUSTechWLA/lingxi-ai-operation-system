@@ -116,7 +116,15 @@ func (t *VideoCopyGeneratorTool) Execute(ctx context.Context, params map[string]
 	}
 
 	// Stage 2: Combined summary → platform-optimized copy
-	reply, title, desc, keywords := t.generateCopy(ctx, meta, transcription, visualAnalysis, platform)
+	reply, title, desc, keywords, err := t.generateCopy(ctx, meta, transcription, visualAnalysis, platform)
+	if err != nil {
+		zap.L().Error("VideoCopyGeneratorTool copy generation failed",
+			zap.String("taskId", toolCtx.TaskID),
+			zap.String("nodeId", toolCtx.NodeID),
+			zap.Error(err),
+		)
+		return tool.FailureResult("大模型服务调用失败，请检查网络连接: " + err.Error())
+	}
 
 	zap.L().Info("VideoCopyGeneratorTool completed",
 		zap.String("taskId", toolCtx.TaskID),
@@ -227,7 +235,7 @@ func (t *VideoCopyGeneratorTool) callVisualAnalysis(ctx context.Context, imageDa
 
 // --- Copy generation ---
 
-func (t *VideoCopyGeneratorTool) generateCopy(ctx context.Context, meta videoMeta, transcription, visualAnalysis, platform string) (reply, title, desc string, keywords []string) {
+func (t *VideoCopyGeneratorTool) generateCopy(ctx context.Context, meta videoMeta, transcription, visualAnalysis, platform string) (reply, title, desc string, keywords []string, err error) {
 	rules, ok := platformRulesMap[platform]
 	if !ok {
 		rules = platformRulesMap["douyin"]
@@ -299,8 +307,7 @@ func (t *VideoCopyGeneratorTool) generateCopy(ctx context.Context, meta videoMet
 	content, err := callLLMAPI(ctx, t.cfg, reqBody)
 	if err != nil {
 		zap.L().Warn("Copy generation LLM call failed", zap.Error(err))
-		reply = buildFallbackCopy(meta, transcription, visualAnalysis)
-		return reply, "", reply, nil
+		return "", "", "", nil, fmt.Errorf("大模型服务调用失败，请检查网络连接: %w", err)
 	}
 
 	var parsed struct {
@@ -313,10 +320,10 @@ func (t *VideoCopyGeneratorTool) generateCopy(ctx context.Context, meta videoMet
 	if err := jsonx.ExtractJSON(content, &parsed); err != nil {
 		zap.L().Warn("Failed to parse copy generation JSON", zap.Error(err))
 		reply = buildFallbackCopy(meta, transcription, visualAnalysis)
-		return reply, "", reply, nil
+		return reply, "", reply, nil, nil
 	}
 
-	return parsed.Reply, parsed.Title, parsed.Description, parsed.Keywords
+	return parsed.Reply, parsed.Title, parsed.Description, parsed.Keywords, nil
 }
 
 func buildFallbackCopy(meta videoMeta, transcription, visualAnalysis string) string {

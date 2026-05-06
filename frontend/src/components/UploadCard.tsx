@@ -12,6 +12,8 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
   const [isDragOver, setIsDragOver] = useState(false)
   const addVideos = useAppStore((state) => state.addVideos)
   const addImages = useAppStore((state) => state.addImages)
+  const removeVideo = useAppStore((state) => state.removeVideo)
+  const removeImage = useAppStore((state) => state.removeImage)
   const videos = useAppStore((state) => state.videos)
   const images = useAppStore((state) => state.images)
 
@@ -144,7 +146,7 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
             </p>
             <div className="space-y-2">
               {files.map((file, index) => (
-                <div key={index} className="flex items-center gap-2 bg-white/80 rounded-lg px-3 py-2">
+                <div key={index} className="flex items-center gap-2 bg-white/80 rounded-lg px-3 py-2 group">
                   {isVideo ? (
                     <svg className="w-4 h-4 text-primary flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                       <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
@@ -156,6 +158,20 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
                   <span className="text-xs text-gray-400 flex-shrink-0">
                     {(file.size / 1024 / 1024).toFixed(1)}MB
                   </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (isVideo) removeVideo(index)
+                      else removeImage(index)
+                    }}
+                    className="flex-shrink-0 w-5 h-5 rounded-full bg-gray-200 hover:bg-red-400 text-gray-400 hover:text-white flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    title={`删除${isVideo ? '视频' : '图片'}`}
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
               ))}
             </div>
