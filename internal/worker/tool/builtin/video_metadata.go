@@ -106,15 +106,17 @@ func (t *VideoMetadataTool) Execute(ctx context.Context, params map[string]inter
 
 	metaJSON, _ := json.Marshal(meta)
 	return tool.SuccessResult(map[string]interface{}{
-		"metadata":          string(metaJSON),
-		"cached_video_path": cachedPath,
-		"duration_sec":      meta.DurationSec,
-		"width":             meta.Width,
-		"height":            meta.Height,
-		"fps":               meta.FPS,
-		"has_audio":         meta.HasAudio,
+		"metadata":           string(metaJSON),
+		"cached_video_path":  cachedPath,
+		"duration_sec":       meta.DurationSec,
+		"width":              meta.Width,
+		"height":             meta.Height,
+		"fps":                meta.FPS,
+		"video_codec":        meta.VideoCodec,
+		"has_audio":          meta.HasAudio,
+		"audio_codec":        meta.AudioCodec,
 		"audio_duration_sec": meta.AudioDur,
-		"file_size_mb":      meta.FileSizeMB,
+		"file_size_mb":       meta.FileSizeMB,
 	})
 }
 
@@ -132,15 +134,17 @@ func (t *VideoMetadataTool) Manifest() tool.ToolManifest {
 			},
 		},
 		Output: map[string]tool.ParamDef{
-			"metadata":          {Type: "string", Description: "视频元数据JSON（时长、分辨率、帧率、编码、音频信息）"},
-			"cached_video_path": {Type: "string", Description: "缓存的本地视频文件路径，供下游工具使用"},
-			"duration_sec":      {Type: "number", Description: "视频时长（秒）"},
-			"width":             {Type: "number", Description: "视频宽度（像素）"},
-			"height":            {Type: "number", Description: "视频高度（像素）"},
-			"fps":               {Type: "number", Description: "视频帧率"},
-			"has_audio":         {Type: "boolean", Description: "是否有音频轨道"},
+			"metadata":           {Type: "string", Description: "视频元数据JSON（时长、分辨率、帧率、编码、音频信息）"},
+			"cached_video_path":  {Type: "string", Description: "缓存的本地视频文件路径，供下游工具使用"},
+			"duration_sec":       {Type: "number", Description: "视频时长（秒）"},
+			"width":              {Type: "number", Description: "视频宽度（像素）"},
+			"height":             {Type: "number", Description: "视频高度（像素）"},
+			"fps":                {Type: "number", Description: "视频帧率"},
+			"video_codec":        {Type: "string", Description: "视频编码格式（如 h264, hevc）"},
+			"has_audio":          {Type: "boolean", Description: "是否有音频轨道"},
+			"audio_codec":        {Type: "string", Description: "音频编码格式（如 aac, mp3）"},
 			"audio_duration_sec": {Type: "number", Description: "音频时长（秒）"},
-			"file_size_mb":      {Type: "number", Description: "文件大小（MB）"},
+			"file_size_mb":       {Type: "number", Description: "文件大小（MB）"},
 		},
 		Examples: []tool.ToolExample{
 			{

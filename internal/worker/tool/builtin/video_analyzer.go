@@ -111,7 +111,7 @@ func (t *VideoAnalyzerTool) Execute(ctx context.Context, params map[string]inter
 	if err := os.MkdirAll(framesDir, 0700); err != nil {
 		return tool.FailureResult("failed to create frames dir: " + err.Error())
 	}
-	frameCount, err := extractKeyFrames(ctx, videoPath, framesDir, maxKeyframes, meta)
+	frameCount, extractionMethod, err := extractKeyFrames(ctx, videoPath, framesDir, maxKeyframes, meta)
 	if err != nil {
 		return tool.FailureResult("frame extraction failed: " + err.Error())
 	}
@@ -150,17 +150,24 @@ func (t *VideoAnalyzerTool) Execute(ctx context.Context, params map[string]inter
 	)
 
 	urlsInterface := make([]interface{}, len(imageDataURLs))
+	var totalFramesSize int64
 	for i, u := range imageDataURLs {
 		urlsInterface[i] = u
+		// Estimate base64 data URL size (before encoding, this is the actual data)
+		totalFramesSize += int64(len(u))
 	}
 
 	return tool.SuccessResult(map[string]interface{}{
-		"keyframes_data_urls": urlsInterface,
-		"transcription":       transcription,
-		"frame_count":         frameCount,
-		"strategy_used":       strategy,
-		"duration_sec":        meta.DurationSec,
-		"has_audio":           meta.HasAudio,
+		"keyframes_data_urls":  urlsInterface,
+		"transcription":        transcription,
+		"frame_count":          frameCount,
+		"strategy_used":        strategy,
+		"extraction_method":    extractionMethod,
+		"frame_resolution":     "720p",
+		"total_frames_size_mb": float64(totalFramesSize) / (1024 * 1024),
+		"transcription_length": len([]rune(transcription)),
+		"duration_sec":         meta.DurationSec,
+		"has_audio":            meta.HasAudio,
 	})
 }
 
@@ -196,12 +203,16 @@ func (t *VideoAnalyzerTool) Manifest() tool.ToolManifest {
 			},
 		},
 		Output: map[string]tool.ParamDef{
-			"keyframes_data_urls": {Type: "array", Description: "关键帧base64数据URL数组（JPEG压缩，720p缩放）"},
-			"transcription":       {Type: "string", Description: "Whisper音频转录文本（人物对话，已过滤背景音乐）"},
-			"frame_count":         {Type: "number", Description: "实际提取的关键帧数量"},
-			"strategy_used":       {Type: "string", Description: "实际使用的处理策略"},
-			"duration_sec":        {Type: "number", Description: "视频时长（秒）"},
-			"has_audio":           {Type: "boolean", Description: "是否有音频轨道"},
+			"keyframes_data_urls":  {Type: "array", Description: "关键帧base64数据URL数组（JPEG压缩，720p缩放）"},
+			"transcription":        {Type: "string", Description: "Whisper音频转录文本（人物对话，已过滤背景音乐）"},
+			"frame_count":          {Type: "number", Description: "实际提取的关键帧数量"},
+			"strategy_used":        {Type: "string", Description: "实际使用的处理策略"},
+			"extraction_method":    {Type: "string", Description: "关键帧提取方法（scene_detect 或 uniform_sampling）"},
+			"frame_resolution":     {Type: "string", Description: "关键帧缩放分辨率（如 720p）"},
+			"total_frames_size_mb": {Type: "number", Description: "所有关键帧base64 data URL总大小（MB）"},
+			"transcription_length": {Type: "number", Description: "转录文本字符数"},
+			"duration_sec":         {Type: "number", Description: "视频时长（秒）"},
+			"has_audio":            {Type: "boolean", Description: "是否有音频轨道"},
 		},
 		Examples: []tool.ToolExample{
 			{
@@ -236,7 +247,7 @@ func (t *VideoAnalyzerTool) downloadToCache(ctx context.Context, mediaID string)
 
 // --- Key frame extraction ---
 
-func extractKeyFrames(ctx context.Context, videoPath, framesDir string, maxCount int, meta *videoMeta) (int, error) {
+func extractKeyFrames(ctx context.Context, videoPath, framesDir string, maxCount int, meta *videoMeta) (int, string, error) {
 	scaleFilter := "'min(720,iw):min(720,ih):force_original_aspect_ratio=decrease'"
 
 	// Approach 1: scene detection
@@ -258,7 +269,7 @@ func extractKeyFrames(ctx context.Context, videoPath, framesDir string, maxCount
 
 	frames, _ := filepath.Glob(filepath.Join(framesDir, "frame_*.jpg"))
 	if len(frames) >= 3 {
-		return len(frames), nil
+		return len(frames), "scene_detect", nil
 	}
 
 	// Approach 2: uniform sampling fallback
@@ -298,7 +309,7 @@ func extractKeyFrames(ctx context.Context, videoPath, framesDir string, maxCount
 	}
 
 	frames, _ = filepath.Glob(filepath.Join(framesDir, "frame_*.jpg"))
-	return len(frames), nil
+	return len(frames), "uniform_sampling", nil
 }
 
 // --- Audio extraction ---

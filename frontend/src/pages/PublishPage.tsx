@@ -138,10 +138,14 @@ const PublishPage: React.FC = () => {
       const videoFiles = contentType === 'video' ? videos.map((v) => v.file) : []
       const imageFiles = contentType === 'image' ? images.map((i) => i.file) : []
 
+      const keywordList = keywords
+        ? keywords.split(/[,，；;、\s]+/).filter(Boolean)
+        : []
+
       const result = await publishContent(
         title,
         description,
-        keywords,
+        keywordList,
         selectedPlatforms,
         videoFiles,
         imageFiles,

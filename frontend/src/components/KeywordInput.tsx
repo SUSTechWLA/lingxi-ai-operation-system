@@ -5,6 +5,23 @@ interface KeywordInputProps {
   examples?: string[]
 }
 
+// normalizeKeywords splits on common delimiters, trims, deduplicates, and rejoins.
+const normalizeKeywords = (raw: string): string => {
+  const parts = raw
+    .split(/[,，；;、\s]+/)
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0)
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const p of parts) {
+    if (!seen.has(p)) {
+      seen.add(p)
+      unique.push(p)
+    }
+  }
+  return unique.join(', ')
+}
+
 const KeywordInput: React.FC<KeywordInputProps> = ({
   examples = ['旅行', '风景', '治愈', 'vlog'],
 }) => {
@@ -12,10 +29,15 @@ const KeywordInput: React.FC<KeywordInputProps> = ({
   const setKeywords = useAppStore((state) => state.setKeywords)
   const maxLength = 200
 
+  const handleBlur = () => {
+    if (keywords.trim()) {
+      setKeywords(normalizeKeywords(keywords))
+    }
+  }
+
   const handleExampleClick = (example: string) => {
-    const currentKeywords = keywords
-      .split(/[,，]/)
-      .map((k) => k.trim())
+    const currentKeywords = normalizeKeywords(keywords)
+      .split(/,\s*/)
       .filter((k) => k)
     if (!currentKeywords.includes(example)) {
       setKeywords([...currentKeywords, example].join(', '))
@@ -32,7 +54,8 @@ const KeywordInput: React.FC<KeywordInputProps> = ({
           type="text"
           value={keywords}
           onChange={(e) => setKeywords(e.target.value)}
-          placeholder="关键词，用逗号分隔"
+          onBlur={handleBlur}
+          placeholder="关键词，支持逗号、分号、顿号等分隔"
           maxLength={maxLength}
           className="w-full px-3.5 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm"
         />

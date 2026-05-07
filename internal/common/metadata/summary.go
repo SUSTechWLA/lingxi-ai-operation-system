@@ -3,10 +3,16 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 )
+
+// nodeRefPattern matches {{node_id.output.field}} references in DAG node inputs.
+var nodeRefPattern = regexp.MustCompile(`\{\{([^.]+)\.output\.([^}]+)\}\}`)
 
 // BuildInputSummary creates a human-readable summary of tool input parameters.
 // Large values are truncated; binary/large fields are summarized with counts.
+// Template references like {{node.output.field}} are formatted as readable cross-references.
 func BuildInputSummary(input map[string]interface{}) map[string]interface{} {
 	if len(input) == 0 {
 		return nil
@@ -15,11 +21,15 @@ func BuildInputSummary(input map[string]interface{}) map[string]interface{} {
 	for k, v := range input {
 		switch val := v.(type) {
 		case string:
-			runes := []rune(val)
-			if len(runes) > 200 {
-				summary[k] = string(runes[:200]) + "..."
+			if ref := formatNodeRef(val); ref != "" {
+				summary[k] = ref
 			} else {
-				summary[k] = val
+				runes := []rune(val)
+				if len(runes) > 200 {
+					summary[k] = string(runes[:200]) + "..."
+				} else {
+					summary[k] = val
+				}
 			}
 		case []interface{}:
 			summary[k] = fmt.Sprintf("[%d items]", len(val))
@@ -32,6 +42,29 @@ func BuildInputSummary(input map[string]interface{}) map[string]interface{} {
 		}
 	}
 	return summary
+}
+
+// formatNodeRef detects {{node_id.output.field}} references and returns a
+// human-readable cross-reference like "[→ tool_abbrev.field_name]".
+// Returns empty string if the value is not a node reference.
+func formatNodeRef(s string) string {
+	matches := nodeRefPattern.FindStringSubmatch(s)
+	if len(matches) != 3 {
+		return ""
+	}
+	nodeID := strings.TrimSpace(matches[1])
+	field := strings.TrimSpace(matches[2])
+	abbrev := extractNodeAbbrev(nodeID)
+	return fmt.Sprintf("[→ %s.%s]", abbrev, field)
+}
+
+// extractNodeAbbrev extracts the tool abbreviation prefix from a node ID.
+// e.g. "vm-1778156898450" → "vm", "va-1778156898450" → "va"
+func extractNodeAbbrev(nodeID string) string {
+	if idx := strings.LastIndex(nodeID, "-"); idx >= 0 {
+		return nodeID[:idx]
+	}
+	return nodeID
 }
 
 // BuildOutputSummary parses tool stdout JSON and extracts human-readable fields.
@@ -57,6 +90,13 @@ func BuildOutputSummary(stdout string) map[string]interface{} {
 		"title", "description", "reply", "keywords", "tags", "platform",
 		"duration_sec", "width", "height", "fps", "file_size_mb", "has_audio",
 		"audio_duration_sec", "content", "summary", "visual_analysis", "body",
+		// Video tool debug fields
+		"video_codec", "audio_codec",
+		"frame_count", "strategy_used", "extraction_method",
+		"frame_resolution", "total_frames_size_mb",
+		"transcription_length", "transcription_chars",
+		"keyframes_count", "visual_analysis_chars",
+		"cached_video_path",
 	}
 
 	for _, key := range meaningfulKeys {

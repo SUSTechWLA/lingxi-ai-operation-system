@@ -319,6 +319,13 @@ func buildNodeMetadata(node *model.Node, status model.NodeStatus) map[string]int
 				meta["output"] = outputSummary
 			}
 		}
+		// Always include execution metrics for observability
+		if v, ok := node.Output["durationMs"]; ok {
+			meta["durationMs"] = v
+		}
+		if v, ok := node.Output["exitCode"]; ok {
+			meta["exitCode"] = v
+		}
 		// Include error from output if present
 		if errStr, ok := node.Output["error"].(string); ok && errStr != "" {
 			meta["error"] = errStr

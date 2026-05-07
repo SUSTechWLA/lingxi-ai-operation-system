@@ -49,7 +49,7 @@ func (h *PublishHandler) PublishContent(c *gin.Context) {
 	req := service.PublishRequest{
 		Title:       c.Request.FormValue("title"),
 		Description: c.Request.FormValue("description"),
-		Keywords:    c.Request.FormValue("keywords"),
+		Keywords:    parseKeywords(c.Request.FormValue("keywords")),
 	}
 
 	platformsStr := c.Request.FormValue("platforms")
@@ -223,6 +223,34 @@ func (h *PublishHandler) AIPolishSubmit(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": result})
+}
+
+// parseKeywords parses a keywords value from form data. Accepts:
+// - JSON array: ["k1", "k2"]
+// - Comma/semicolon/Chinese-comma separated string: "k1,k2,k3"
+func parseKeywords(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	// Try JSON array first
+	if strings.HasPrefix(raw, "[") {
+		var arr []string
+		if json.Unmarshal([]byte(raw), &arr) == nil {
+			return arr
+		}
+	}
+	// Split by common delimiters
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '，' || r == '；' || r == ';' || r == '、'
+	})
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func (h *PublishHandler) AIPolishQuery(c *gin.Context) {

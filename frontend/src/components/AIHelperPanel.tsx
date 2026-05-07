@@ -7,7 +7,7 @@ const MAX_POLL_ATTEMPTS = 75
 const POLL_INTERVAL_MS = 800
 
 const AIHelperPanel: React.FC = () => {
-  const { title, description, images, videos, setTitle, setDescription, contentType, setAILoadingMessage } = useAppStore()
+  const { title, description, images, videos, setTitle, setDescription, setKeywords, contentType, setAILoadingMessage } = useAppStore()
 
   const generateAbortRef = useRef<AbortController | null>(null)
   const polishAbortRef = useRef<AbortController | null>(null)
@@ -41,6 +41,9 @@ const AIHelperPanel: React.FC = () => {
       if (controller.signal.aborted) return
       if (result.title) setTitle(result.title)
       if (result.description) setDescription(result.description)
+      if (result.keywords && result.keywords.length > 0) {
+        setKeywords(result.keywords.join(', '))
+      }
       showMsg('内容已生成')
     } catch (e: any) {
       if (e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return

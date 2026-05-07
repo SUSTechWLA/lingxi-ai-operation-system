@@ -133,12 +133,15 @@ func (t *VideoCopyGeneratorTool) Execute(ctx context.Context, params map[string]
 	)
 
 	return tool.SuccessResult(map[string]interface{}{
-		"reply":           reply,
-		"title":           title,
-		"description":     desc,
-		"keywords":        keywords,
-		"visual_analysis": visualAnalysis,
-		"platform":        platform,
+		"reply":                reply,
+		"title":                title,
+		"description":          desc,
+		"keywords":             keywords,
+		"visual_analysis":      visualAnalysis,
+		"platform":             platform,
+		"keyframes_count":      len(imageURLs),
+		"visual_analysis_chars": len([]rune(visualAnalysis)),
+		"transcription_chars":  len([]rune(transcription)),
 	})
 }
 
@@ -178,12 +181,15 @@ func (t *VideoCopyGeneratorTool) Manifest() tool.ToolManifest {
 			},
 		},
 		Output: map[string]tool.ParamDef{
-			"reply":           {Type: "string", Description: "完整的发布文案（含标题+正文+话题标签，可直接复制发布）"},
-			"title":           {Type: "string", Description: "平台优化的标题"},
-			"description":     {Type: "string", Description: "视频简介（纯文案，不含话题标签）"},
-			"keywords":        {Type: "array", Description: "5-8个与视频内容强相关的标签"},
-			"visual_analysis": {Type: "string", Description: "基于关键帧的多模态视觉分析结果"},
-			"platform":        {Type: "string", Description: "实际使用的目标平台"},
+			"reply":                {Type: "string", Description: "完整的发布文案（含标题+正文+话题标签，可直接复制发布）"},
+			"title":                {Type: "string", Description: "平台优化的标题"},
+			"description":          {Type: "string", Description: "视频简介（纯文案，不含话题标签）"},
+			"keywords":             {Type: "array", Description: "5-8个与视频内容强相关的标签"},
+			"visual_analysis":      {Type: "string", Description: "基于关键帧的多模态视觉分析结果"},
+			"platform":             {Type: "string", Description: "实际使用的目标平台"},
+			"keyframes_count":      {Type: "number", Description: "输入的关键帧数量"},
+			"visual_analysis_chars": {Type: "number", Description: "视觉分析结果字符数"},
+			"transcription_chars":  {Type: "number", Description: "转录文本字符数"},
 		},
 		Examples: []tool.ToolExample{
 			{

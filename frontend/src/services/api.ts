@@ -12,7 +12,7 @@ const api = axios.create({
 export const publishContent = async (
   title: string,
   description: string,
-  keywords: string,
+  keywords: string[],
   platforms: string[],
   videoFiles: File[],
   imageFiles: File[],
@@ -23,7 +23,7 @@ export const publishContent = async (
   const formData = new FormData()
   formData.append('title', title)
   formData.append('description', description)
-  formData.append('keywords', keywords)
+  formData.append('keywords', JSON.stringify(keywords))
   formData.append('platforms', JSON.stringify(platforms))
   if (contentType) formData.append('content_type', contentType)
 

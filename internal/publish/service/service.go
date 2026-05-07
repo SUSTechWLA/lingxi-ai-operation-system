@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -41,7 +42,7 @@ func (s *PublishService) SetMediaService(svc *media.MediaService) {
 type PublishRequest struct {
 	Title       string                `json:"title"`
 	Description string                `json:"description"`
-	Keywords    string                `json:"keywords"`
+	Keywords    []string              `json:"keywords"`
 	Platforms   []string              `json:"platforms"`
 	ContentType string                `json:"contentType"`
 	VideoFiles  []*multipart.FileHeader
@@ -56,7 +57,7 @@ type PublishResponse struct {
 
 func (s *PublishService) PublishContent(ctx context.Context, req *PublishRequest) (*PublishResponse, error) {
 	contentSummary := fmt.Sprintf("标题：%s\n简介：%s\n关键词：%s",
-		req.Title, req.Description, req.Keywords)
+		req.Title, req.Description, strings.Join(req.Keywords, "、"))
 
 	// Describe uploaded media for the AI prompt
 	mediaInfo := ""
