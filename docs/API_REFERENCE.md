@@ -1220,6 +1220,7 @@ AI 对话助手 API，每次对话 = 一个 Task，经 Orchestrator → Worker �
 | `media_count` | int | No | 已上传素材数量 |
 | `media_names` | string[] | No | 素材文件名列表 |
 | `media_ids` | string[] | No | 素材 ID 列表 |
+| `platforms` | string[] | No | 当前页面已选平台 |
 
 **Example:**
 ```bash
@@ -1303,6 +1304,7 @@ curl -X POST http://localhost:8080/api/skill/dialog/session/uuid-string/chat \
     "fields": {
       "title": "生成的标题",
       "description": "生成的简介",
+      "body": "生成的正文",
       "keywords": ["关键词1", "关键词2"],
       "task_id": "20260502131237-b8b8b8b8"
     }

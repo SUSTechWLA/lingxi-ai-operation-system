@@ -58,7 +58,7 @@
 │  │              │  │     · 素材 CRUD      │  │                   │  │               │  │
 │  │  PublishSvc  │  │                    │  │   StateService    │  │ NodeExecutor  │  │
 │  │ TraceHandler │  │                    │  │   StateMachine    │  │ ToolRegistry  │  │
-│  │ AI Generate  │  │                    │  │ DependencyChecker │  │ 11 个内置工具   │  │
+│  │ AI Generate  │  │                    │  │ DependencyChecker │  │ 14 个内置工具   │  │
 │  │  AI Polish   │  │                    │  │     Scheduler     │  │ + 外部工具代理  │  │
 │  └──────┬───────┘  └─────────┬──────────┘  └──────┬────────────┘  └──────┬────────┘  │
 │         │                     │                    │                      │          │
@@ -280,7 +280,7 @@ type Tool interface {
 | `video_analyzer` | CUSTOM | 视频分析 | ffmpeg 场景检测提取关键帧（base64）+ Whisper 音频转录 |
 | `video_copy_generator` | CUSTOM | 短视频文案 | 基于元数据+关键帧+转录，调用多模态 LLM 生成平台适配的标题/文案/关键词 |
 
-**BashTool 安全**：命令白名单 + 危险模式过滤 + `/tmp/ai-sandbox` 沙箱目录。
+**BashTool 安全**：命令白名单 + 危险模式过滤 + `/tmp/tangying-sandbox` 沙箱目录。
 
 **执行监控**：Worker 在每个节点执行时自动记录以下指标到事件输出中：
 

@@ -138,9 +138,9 @@ Frontend: http://localhost:3000
 - ✅ **工具注册体系**：支持外部开发者通过 HTTP 注册自定义工具，AI 自动发现和调用
 - ✅ **短视频智能创作**：视频上传 → 元数据提取 → 关键帧分析 → 音频转录 → 多模态大模型生成平台适配文案
 - ✅ **沙箱隔离执行**：Bash/Python 工具通过 Rust gRPC 沙箱服务执行，资源隔离（内存/CPU/磁盘/PID 限制）
+- ✅ **Electron 桌面应用**：支持 .dmg/.exe 打包，本地文件选择和系统托盘，后端健康检查
 
 ### 开发中功能
-- 🔄 **电子桌面应用**：支持本地文件选择和系统托盘
 - 🔄 **平台实际发布**：对接各平台 API 实现自动发布
 - 🔄 **任务中心**：查看发布历史和状态
 
@@ -248,6 +248,10 @@ tangying-ai-operation-system/
 ├── sandbox/                       #   Rust 沙箱服务（gRPC 隔离执行）
 │   ├── src/                       #     沙箱主逻辑
 │   └── proto/                     #     Protobuf 定义
+├── electron/                       # Electron 桌面应用
+│   ├── main.js                     #   Electron 主进程
+│   ├── preload.js                  #   Preload 脚本
+│   └── package.json                #   electron-builder 配置
 ├── frontend/                      # ★ 前端代码
 │   └── src/
 │       ├── components/            #   界面组件
@@ -267,7 +271,8 @@ tangying-ai-operation-system/
 │       │   ├── CommandPanel.tsx      #     命令面板
 │       │   └── index.ts              #     组件统一导出
 │       ├── pages/
-│       │   └── PublishPage.tsx    #   主页面
+│       │   ├── PublishPage.tsx    #   主页面（创作发布）
+│       │   └── DesktopPage.tsx    #   桌面工具页（Electron）
 │       ├── services/api.ts        #   API 调用
 │       ├── stores/appStore.ts     #   状态管理（含 cover、aiLoadingMessage、chatSessionId）
 │       └── utils/
@@ -289,6 +294,7 @@ tangying-ai-operation-system/
 | Go | 1.23+ | `brew install go`（Mac）或访问 [go.dev](https://go.dev/dl/) |
 | Node.js | 18+ | `brew install node` 或访问 [nodejs.org](https://nodejs.org/) |
 | Docker | 20+ | `brew install --cask docker` 或访问 [docker.com](https://www.docker.com/) |
+| Rust（可选） | latest | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`（仅沙箱编译需要） |
 
 ### 一键启动
 
@@ -320,11 +326,12 @@ cd frontend && npm install && npm run dev
 ### 常用命令
 
 ```bash
-make build    # 构建后端
-make run      # 构建并运行
-make test     # 运行测试
-make tidy     # 整理依赖
-make fmt      # 格式化代码
+make build         # 构建后端
+make run           # 构建并运行
+make test          # 运行测试
+make tidy          # 整理依赖
+make fmt           # 格式化代码
+make sandbox-build # 构建 Rust 沙箱（需 Rust 环境）
 ```
 
 ### API 测试

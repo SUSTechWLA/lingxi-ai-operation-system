@@ -276,12 +276,15 @@ tangying-ai-operation-system/
 │   │       └── builtin/
 │   │           ├── bash_tool.go   #   Bash 沙箱工具
 │   │           ├── polisher_tool.go #   文本润色工具
-│   │           ├── llm_api_tool.go #   LLM API 工具
+│   │           ├── builtin.go      #   LLM API 工具 (LlmApiTool)
 │   │           ├── python_tool.go #   Python 执行工具
 │   │           ├── media_analyzer.go # 素材分析工具
 │   │           ├── content_generator.go # 内容生成工具
 │   │           ├── content_checker.go #  合规检查工具
 │   │           ├── platform_adapter.go # 平台适配工具
+│   │           ├── chat_generate_tool.go # 对话式内容生成工具
+│   │           ├── chat_revise_tool.go # 对话式内容修改工具
+│   │           ├── external_tool.go  #   外部工具代理
 │   │           ├── video_metadata.go #  视频元数据提取工具
 │   │           ├── video_analyzer.go #  视频关键帧+音频分析工具
 │   │           └── video_copy_generator.go # 短视频文案生成工具
@@ -312,7 +315,6 @@ tangying-ai-operation-system/
 │   │   │   ├── AIHelperPanel.tsx  #     AI 助手面板
 │   │   │   ├── BlockingOverlay.tsx #     AI 操作全屏遮罩（含取消按钮）
 │   │   │   ├── AIAssistantTab.tsx  #     AI 对话式创作面板
-│   │   │   ├── ContentTypeSelector.tsx # 内容类型选择
 │   │   │   ├── ContentTypeSelector.tsx # 内容类型选择
 │   │   │   ├── MediaLibraryPanel.tsx # 素材库浏览面板
 │   │   │   ├── PlatformSelector.tsx #  平台选择（10个平台）

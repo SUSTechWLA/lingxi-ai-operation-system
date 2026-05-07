@@ -1,8 +1,8 @@
 # 沙箱执行环境对接指南
 
-> 本文档面向**沙箱运行时开发人员**，说明如何将 Linux Namespace 沙箱（或其他隔离执行环境）对接至躺营 AI OS 的 Worker 模块。
+> 本文档面向**沙箱运行时开发人员**，说明沙箱隔离执行环境如何与躺营 AI OS 的 Worker 模块集成。
 >
-> 目标：在保证通用性和可扩展性的前提下，无缝替换当前 DirectExecutor 的实现。
+> **当前状态**：Rust gRPC 沙箱服务已完整实现（`sandbox/` 目录），支持 Bash/Python 工具隔离执行。通过 `SANDBOX_ENABLED=true` 启用。
 
 ---
 
@@ -98,27 +98,35 @@ SandboxExecutor 初始化成功
 |------|------|------|------|
 | `SandboxConfig` | `internal/config/config.go:82` | **已完成** | 配置结构体，支持 Enable/Address/Fallback |
 | `.env` 配置项 | `.env.example:62` | **已完成** | `SANDBOX_ENABLED`、`SANDBOX_ADDRESS`、`SANDBOX_FALLBACK` |
-| `SandboxExecutor` 存根 | `internal/worker/executor/sandbox.go` | **存根** | 实现了 Executor 接口，返回 `"not yet implemented"` 错误 |
-| `main.go` 初始化 | `cmd/tangying-ai-os/main.go:93` | **已完成** | 按配置初始化 SandboxExecutor，失败时 warn 但不阻塞启动 |
-| `NodeExecutor.selectExecutor` | `internal/worker/service/executor.go:46` | **已完成** | 自动路由 BuildableTool 到沙箱（如果启用） |
-| `ResourceLimits` | `internal/worker/executor/types.go:4` | **已完成** | 资源约束结构体 |
-| `ResourceUsage` | `internal/worker/executor/types.go:12` | **已完成** | 资源使用统计结构体 |
-| `ExecutionRequest` | `internal/worker/executor/types.go:20` | **已完成** | 统一的执行请求结构体 |
-| `ExecutionResult` | `internal/worker/executor/types.go:34` | **已完成** | 统一的执行结果结构体 |
+| `SandboxExecutor` | `internal/worker/executor/sandbox.go` | **已实现** | gRPC 客户端，连接 Rust 沙箱服务 (`sandbox/`)，通过 `sandbox.proto` 协议通信 |
+| `main.go` 初始化 | `cmd/tangying-ai-os/main.go` | **已完成** | 按配置初始化 SandboxExecutor，失败时 warn 但不阻塞启动 |
+| `NodeExecutor.selectExecutor` | `internal/worker/service/executor.go` | **已完成** | 自动路由 BuildableTool 到沙箱（如果启用） |
+| `ResourceLimits` | `internal/worker/executor/types.go` | **已完成** | 资源约束结构体 |
+| `ResourceUsage` | `internal/worker/executor/types.go` | **已完成** | 资源使用统计结构体 |
+| `ExecutionRequest` | `internal/worker/executor/types.go` | **已完成** | 统一的执行请求结构体 |
+| `ExecutionResult` | `internal/worker/executor/types.go` | **已完成** | 统一的执行结果结构体 |
+| **Rust 沙箱服务** | `sandbox/src/main.rs`, `sandbox/src/sandbox.rs` | **已实现** | tonic gRPC 服务，支持进程隔离执行 |
+| **Proto 协议定义** | `sandbox/proto/sandbox.proto` | **已实现** | gRPC 服务 + 消息定义 |
+| **沙箱构建** | `make sandbox-build` | **已实现** | `cargo build --release` → `build/tangying-sandbox` |
 
-### 2.2 你需要实现的
+### 2.2 沙箱服务实现总览
 
-你需要在**沙箱服务端**实现：
-1. **gRPC 服务**，接收 `ExecutionRequest`，返回 `ExecutionResult`
-2. **进程隔离**，使用 Linux Namespace / cgroup / seccomp 等技术
-3. **文件系统**，支持 `InputFiles` 写入和 `OutputRef` 读取
-4. **资源限制**，限制内存、CPU、磁盘、进程数
-5. **健康检查**，供主程序检测沙箱可用性
+Rust 沙箱服务（`sandbox/`）已完整实现以下能力：
+1. **gRPC 服务** — 基于 tonic，接收 `ExecutionRequest`，返回 `ExecutionResult`
+2. **进程隔离** — 通过 `setrlimit` 实现资源限制（内存、CPU、磁盘、PID 数量）
+3. **文件系统** — 支持 `InputFiles` 写入和 `OutputRef` 读取
+4. **超时控制** — 双层超时机制（Worker context + 沙箱内 timeout）
 
-并在**主程序侧**（如果需要）：
-1. 实现 `SandboxExecutor` 中的 gRPC 客户端调用
+Go 侧 `SandboxExecutor` (`internal/worker/executor/sandbox.go`) 实现了完整的 gRPC 客户端，通过 `sandbox.proto` 协议与 Rust 服务通信。
 
-> 注意：`SandboxExecutor` 当前为 Go 存根。如果你用非 Go 语言编写沙箱服务，建议在 Go 侧仅保留 gRPC 客户端调用，沙箱服务本身可独立部署。
+构建和启动：
+```bash
+make sandbox-build                    # 编译 Rust 沙箱 → build/tangying-sandbox
+./build/tangying-sandbox &            # 启动沙箱 gRPC 服务 (端口 50051)
+SANDBOX_ENABLED=true make run         # 启动主程序（启用沙箱模式）
+```
+
+> **注意**：沙箱服务需要 macOS/Linux 环境。未启用沙箱时 (`SANDBOX_ENABLED=false`)，`BuildableTool`（Bash/Python）通过 `DirectExecutor` 本地执行。
 
 ---
 
@@ -197,8 +205,8 @@ type ExecutionResult struct {
 ┌─────────────────────┐       gRPC        ┌──────────────────────┐
 │  Go 主进程           │ ◄──────────────►  │  沙箱服务（独立进程）   │
 │                     │   Execute()       │                      │
-│  SandboxExecutor    │                   │  - Linux Namespaces  │
-│  (gRPC Client 存根)  │                   │  - cgroup v2         │
+│  SandboxExecutor    │                   │  - setrlimit 资源控制 │
+│  (gRPC Client)       │                   │  - 超时/清理        │
 │                     │   HealthCheck()   │  - Seccomp BPF       │
 │                     │ ◄──────────────►  │  - 网络隔离           │
 │                     │                   │                      │
@@ -596,13 +604,15 @@ SANDBOX_READONLY_PATHS=/usr/bin:/usr/lib:/lib:/lib64  # 只读挂载路径列表
 
 ---
 
-## 12. 实现步骤
+## 12. 实现步骤（参考）
+
+> **注意**：以下步骤已完成。此章节保留作为二次开发或定制沙箱服务的参考。
 
 ### Step 1：定义 proto 文件
 
-参考 [第 5 节](#5-proto-协议定义) 的 proto 定义，在沙箱项目根目录创建 `proto/sandbox.proto`。
+Proto 文件位于 `sandbox/proto/sandbox.proto`，定义参见 [第 5 节](#5-proto-协议定义)。
 
-生成对应语言的 gRPC 代码：
+Rust 侧通过 `build.rs`（tonic-build）自动生成，Go 侧通过 `protoc` 生成到 `internal/worker/executor/sandboxpb/`。
 
 ```bash
 # Go
@@ -617,7 +627,7 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/sandbox
 
 ### Step 2：实现沙箱服务端
 
-核心逻辑（伪代码）：
+当前 Rust 实现位于 `sandbox/src/sandbox.rs`（~210 行），核心逻辑：
 
 ```go
 func (s *SandboxServer) Execute(ctx context.Context, req *pb.ExecuteRequest) (*pb.ExecuteResponse, error) {
@@ -673,7 +683,7 @@ func (s *SandboxServer) Execute(ctx context.Context, req *pb.ExecuteRequest) (*p
 }
 ```
 
-### Step 3：更新 Go 侧的 SandboxExecutor
+### Step 3：Go 侧 SandboxExecutor（已实现）
 
 ```go
 // internal/worker/executor/sandbox.go
@@ -756,7 +766,7 @@ func (s *SandboxExecutor) Execute(ctx context.Context, req ExecutionRequest) (Ex
 }
 ```
 
-### Step 4：构建和部署
+### Step 4：构建和部署（已实现）
 
 ```bash
 # 主程序侧（Go）—— 重新编译以包含 gRPC 客户端
@@ -777,7 +787,7 @@ cd tangying-ai-operation-system
 SANDBOX_ENABLED=true SANDBOX_ADDRESS=localhost:50051 ./build/tangying-ai-os
 ```
 
-### Step 5：验证集成
+### Step 5：验证集成（可直接使用）
 
 ```bash
 # 验证沙箱服务健康

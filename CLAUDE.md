@@ -134,7 +134,7 @@ Architecture layers:
 #### Built-in Tools (`internal/worker/tool/builtin/`)
 - `BashTool` — Sandboxed shell: command whitelist + dangerous pattern filter + `/tmp/tangying-sandbox` workdir. Implements `BuildableTool`.
 - `PythonTool` — python3 -c execution with resource limits. Implements `BuildableTool`.
-- `LlmApiTool` — OpenAI chat/completions API calls. Implements `ExecutableTool`.
+- `LlmApiTool` — OpenAI chat/completions API calls. Implements `ExecutableTool`. Defined in `builtin.go`.
 - `PolisherTool` — Text polish for social media titles/descriptions via LLM. Implements `ExecutableTool`.
 - `MediaAnalyzerTool` — Media analysis: extracts tags, suggestions, and summaries from uploaded images/videos via LLM. Implements `ExecutableTool`.
 - `ContentGeneratorTool` — Full content package generation based on media analysis, platform, and style keywords. Implements `ExecutableTool`.
@@ -175,7 +175,7 @@ Key components:
 
 API contract (standard response format):
 ```json
-{"code": 0, "message": "success", "data": {...}}
+{"code": 200, "message": "success", "data": {...}}
 ```
 
 ### internal/media
