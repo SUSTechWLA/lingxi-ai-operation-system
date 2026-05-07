@@ -30,3 +30,4 @@ vendor/
 Thumbs.db
 trace.json
 lingxi-ai-os
+frontend/node_modules
