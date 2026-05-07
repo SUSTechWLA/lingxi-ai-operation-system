@@ -48,7 +48,7 @@ pub struct SandboxServiceImpl;
 impl SandboxServiceImpl {
     fn sandbox_dir(task_id: &str, node_id: &str) -> std::io::Result<PathBuf> {
         let dir = std::env::temp_dir()
-            .join("lingxi-sandbox")
+            .join("tangying-sandbox")
             .join(format!("{}-{}", task_id, node_id));
         std::fs::create_dir_all(&dir)?;
         Ok(dir)

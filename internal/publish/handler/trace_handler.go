@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	contextSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/context/service"
-	orchSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/orchestrator/service"
+	contextSvc "github.com/tangying-ai/tangying-ai-operation-system/internal/context/service"
+	orchSvc "github.com/tangying-ai/tangying-ai-operation-system/internal/orchestrator/service"
 )
 
 type TraceHandler struct {

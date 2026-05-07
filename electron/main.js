@@ -5,7 +5,7 @@ const http = require('http')
 
 let mainWindow
 
-const BACKEND_URL = process.env.LINGXI_BACKEND_URL || 'http://localhost:8080'
+const BACKEND_URL = process.env.TANGYING_BACKEND_URL || 'http://localhost:8080'
 const FRONTEND_DEV_URL = 'http://localhost:3000'
 
 function createWindow() {
@@ -57,7 +57,7 @@ ipcMain.handle('dialog:confirm', async (_event, { message }) => {
 
 // Command execution: whitelist dirs + dangerous pattern filtering + execFile
 ipcMain.handle('system:execute-command', async (_event, { command, args, workDir }) => {
-  const allowedDirs = [app.getPath('userData'), '/tmp/lingxi-sandbox', '/tmp/ai-sandbox']
+  const allowedDirs = [app.getPath('userData'), '/tmp/tangying-sandbox', '/tmp/ai-sandbox']
   const resolved = path.resolve(workDir || process.cwd())
   if (!allowedDirs.some((d) => resolved.startsWith(d))) {
     throw new Error('工作目录不在白名单内')

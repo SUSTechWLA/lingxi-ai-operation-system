@@ -8,7 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor/sandboxpb"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor/sandboxpb"
 )
 
 // SandboxExecutor executes commands via the Rust sandbox gRPC service.

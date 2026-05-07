@@ -3,7 +3,7 @@ import { getElectronAPI } from '../utils/electron'
 
 const CommandPanel: React.FC = () => {
   const [command, setCommand] = useState('')
-  const [workDir, setWorkDir] = useState('/tmp/lingxi-sandbox')
+  const [workDir, setWorkDir] = useState('/tmp/tangying-sandbox')
   const [output, setOutput] = useState('')
   const [loading, setLoading] = useState(false)
 

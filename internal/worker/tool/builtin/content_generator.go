@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/jsonx"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 // ContentGeneratorTool generates full content packages from media analysis results.

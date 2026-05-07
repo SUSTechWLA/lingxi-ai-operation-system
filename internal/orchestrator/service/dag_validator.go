@@ -3,7 +3,7 @@ package service
 import (
 	"fmt"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
 )
 
 type DAGValidator struct{}

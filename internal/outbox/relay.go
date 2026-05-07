@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/eventbus"
 )
 
 type OutboxEntry struct {

@@ -99,7 +99,7 @@ SandboxExecutor 初始化成功
 | `SandboxConfig` | `internal/config/config.go:82` | **已完成** | 配置结构体，支持 Enable/Address/Fallback |
 | `.env` 配置项 | `.env.example:62` | **已完成** | `SANDBOX_ENABLED`、`SANDBOX_ADDRESS`、`SANDBOX_FALLBACK` |
 | `SandboxExecutor` 存根 | `internal/worker/executor/sandbox.go` | **存根** | 实现了 Executor 接口，返回 `"not yet implemented"` 错误 |
-| `main.go` 初始化 | `cmd/lingxi-ai-os/main.go:93` | **已完成** | 按配置初始化 SandboxExecutor，失败时 warn 但不阻塞启动 |
+| `main.go` 初始化 | `cmd/tangying-ai-os/main.go:93` | **已完成** | 按配置初始化 SandboxExecutor，失败时 warn 但不阻塞启动 |
 | `NodeExecutor.selectExecutor` | `internal/worker/service/executor.go:46` | **已完成** | 自动路由 BuildableTool 到沙箱（如果启用） |
 | `ResourceLimits` | `internal/worker/executor/types.go:4` | **已完成** | 资源约束结构体 |
 | `ResourceUsage` | `internal/worker/executor/types.go:12` | **已完成** | 资源使用统计结构体 |
@@ -229,7 +229,7 @@ syntax = "proto3";
 
 package sandbox;
 
-option go_package = "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor/sandboxpb";
+option go_package = "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor/sandboxpb";
 
 // =================== 服务定义 ===================
 
@@ -433,7 +433,7 @@ Worker 侧（Go）：context.WithTimeout → gRPC 调用超时
 
 ```
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-HOME=/tmp/lingxi-sandbox
+HOME=/tmp/tangying-sandbox
 ```
 
 ### 8.2 工具级环境变量
@@ -515,7 +515,7 @@ grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
 |------|------|
 | **用户** | 沙箱内进程以非 root 用户运行（如 nobody） |
 | **网络** | 默认禁止网络访问（白名单模式，需要时由 Worker 通过参数开启） |
-| **文件系统** | 仅可访问沙箱工作目录，`/tmp/lingxi-sandbox/xxx` |
+| **文件系统** | 仅可访问沙箱工作目录，`/tmp/tangying-sandbox/xxx` |
 | **挂载** | 使用 `mount --bind` 仅挂载必要目录（`/usr/bin`、`/lib` 只读） |
 | **系统调用** | 使用 seccomp BPF 过滤危险 syscall（`clone`、`mount`、`reboot` 等） |
 
@@ -545,7 +545,7 @@ BLOCKED_SYSCALLS = [
 ```
 沙箱内路径                 宿主机路径
 ──────────────────────────────────────────────────
-/tmp/lingxi-sandbox/<id>/   → 临时目录（读写，用完即删）
+/tmp/tangying-sandbox/<id>/   → 临时目录（读写，用完即删）
 /usr/bin/                   → /usr/bin（只读）
 /usr/lib/                   → /usr/lib（只读）
 /lib/                       → /lib（只读）
@@ -685,7 +685,7 @@ import (
 
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
-    pb "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor/sandboxpb"
+    pb "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor/sandboxpb"
 )
 
 type SandboxExecutor struct {
@@ -760,7 +760,7 @@ func (s *SandboxExecutor) Execute(ctx context.Context, req ExecutionRequest) (Ex
 
 ```bash
 # 主程序侧（Go）—— 重新编译以包含 gRPC 客户端
-cd lingxi-ai-operation-system
+cd tangying-ai-operation-system
 go mod tidy
 make build
 
@@ -773,8 +773,8 @@ cargo build --release  # 或 go build / docker build
 ./sandbox-service --addr 0.0.0.0:50051
 
 # 再启动主程序
-cd lingxi-ai-operation-system
-SANDBOX_ENABLED=true SANDBOX_ADDRESS=localhost:50051 ./build/lingxi-ai-os
+cd tangying-ai-operation-system
+SANDBOX_ENABLED=true SANDBOX_ADDRESS=localhost:50051 ./build/tangying-ai-os
 ```
 
 ### Step 5：验证集成

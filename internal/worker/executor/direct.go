@@ -16,7 +16,7 @@ func NewDirectExecutor() *DirectExecutor {
 }
 
 func (d *DirectExecutor) Execute(ctx context.Context, req ExecutionRequest) (ExecutionResult, error) {
-	workDir, err := os.MkdirTemp("", "lingxi-worker-"+req.NodeID)
+	workDir, err := os.MkdirTemp("", "tangying-worker-"+req.NodeID)
 	if err != nil {
 		return ExecutionResult{Error: "failed to create temp dir"}, err
 	}

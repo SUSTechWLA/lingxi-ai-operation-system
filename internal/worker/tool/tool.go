@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor"
 )
 
 type ToolType string

@@ -10,12 +10,12 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/eventbus"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model/repository"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 // nodeRefPattern matches {{node_id.output.field}} references in node inputs.

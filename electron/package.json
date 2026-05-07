@@ -1,5 +1,5 @@
 {
-  "name": "lingxi-aios-desktop",
+  "name": "tangying-aios-desktop",
   "version": "0.1.0",
   "main": "main.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "electron-builder": "^24.0.0"
   },
   "build": {
-    "appId": "com.lingxi.aios.desktop",
+    "appId": "com.tangying.aios.desktop",
     "productName": "躺营AI自媒体运营助手",
     "directories": {
       "output": "dist-electron"

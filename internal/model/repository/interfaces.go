@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
 )
 
 // NodeRepo defines the interface for node data access.

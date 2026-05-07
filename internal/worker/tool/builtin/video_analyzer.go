@@ -16,10 +16,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/media"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/llmutil"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/media"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 type VideoAnalyzerTool struct {
@@ -216,7 +216,7 @@ func (t *VideoAnalyzerTool) Manifest() tool.ToolManifest {
 		},
 		Examples: []tool.ToolExample{
 			{
-				Input:  map[string]interface{}{"cached_video_path": "/tmp/lingxi-video-cache/media-xxx", "strategy": "balanced"},
+				Input:  map[string]interface{}{"cached_video_path": "/tmp/tangying-video-cache/media-xxx", "strategy": "balanced"},
 				Output: map[string]interface{}{"frame_count": 12, "transcription": "今天给大家分享一个实用技巧...", "has_audio": true},
 			},
 		},

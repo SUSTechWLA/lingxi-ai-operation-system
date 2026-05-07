@@ -34,7 +34,7 @@ electron/
 ### 1.2 编写 `electron/package.json`
 ```json
 {
-  "name": "lingxi-aios-desktop",
+  "name": "tangying-aios-desktop",
   "version": "0.1.0",
   "main": "main.js",
   "scripts": {
@@ -102,7 +102,7 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 // 命令执行：白名单 + 路径限制
 ipcMain.handle('system:execute-command', async (event, { command, args, workDir }) => {
   // 0. 权限检查：仅允许在预定义的工作目录内执行
-  const allowedDirs = [app.getPath('userData'), '/tmp/lingxi-sandbox'];
+  const allowedDirs = [app.getPath('userData'), '/tmp/tangying-sandbox'];
   const resolved = path.resolve(workDir || process.cwd());
   if (!allowedDirs.some(allowed => resolved.startsWith(allowed))) {
     throw new Error('工作目录不在白名单内');

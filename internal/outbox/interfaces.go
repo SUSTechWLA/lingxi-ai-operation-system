@@ -5,7 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/eventbus"
 )
 
 // EventSaver defines the interface for saving events to the outbox.

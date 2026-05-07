@@ -1,8 +1,8 @@
 .PHONY: build run test clean tidy migrate docker-up docker-down frontend-install frontend-dev frontend-build
 
-APP_NAME := lingxi-ai-os
+APP_NAME := tangying-ai-os
 BUILD_DIR := build
-MAIN := cmd/lingxi-ai-os/main.go
+MAIN := cmd/tangying-ai-os/main.go
 
 build:
 	@echo "Building $(APP_NAME)..."
@@ -52,8 +52,8 @@ frontend-build:
 sandbox-build:
 	@echo "Building Rust sandbox..."
 	. $$HOME/.cargo/env && cd sandbox && cargo build --release
-	cp sandbox/target/release/lingxi-sandbox build/
-	@echo "Sandbox build complete: build/lingxi-sandbox"
+	cp sandbox/target/release/tangying-sandbox build/
+	@echo "Sandbox build complete: build/tangying-sandbox"
 
 sandbox-run:
 	. $$HOME/.cargo/env && cd sandbox && cargo run

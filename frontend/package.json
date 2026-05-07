@@ -1,5 +1,5 @@
 {
-  "name": "lingxi-frontend",
+  "name": "tangying-frontend",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -43,7 +43,7 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.lingxi.ai-os",
+    "appId": "com.tangying.ai-os",
     "productName": "躺营AI自媒体运营助手",
     "directories": {
       "output": "release"

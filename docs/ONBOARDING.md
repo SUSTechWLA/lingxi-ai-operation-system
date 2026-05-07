@@ -234,9 +234,9 @@ interface ApiResponse<T> {
 ## 4. 项目结构详解
 
 ```
-lingxi-ai-operation-system/
+tangying-ai-operation-system/
 │
-├── cmd/lingxi-ai-os/
+├── cmd/tangying-ai-os/
 │   └── main.go                    # ★ 启动入口，所有组件在此组装
 │
 ├── internal/                      # 后端代码
@@ -336,7 +336,7 @@ lingxi-ai-operation-system/
 ├── scripts/
 │   ├── startup.sh                 # 一键启动脚本
 │   ├── test-apis.sh               # API 测试脚本
-│   └── install_lingxi_env.sh      # 环境安装脚本
+│   └── install_tangying_env.sh      # 环境安装脚本
 ├── docker-compose.yml             # 基础设施容器
 ├── Makefile                       # 常用命令
 ├── go.mod / go.sum                # Go 依赖
@@ -434,7 +434,7 @@ const result = await aiGenerateContent("周末去哪儿玩")
 ```bash
 # 克隆项目
 git clone <repo-url>
-cd lingxi-ai-operation-system
+cd tangying-ai-operation-system
 
 # 配置 API Key（必须）
 cp .env.example .env
@@ -483,7 +483,7 @@ cd frontend && npm install && npm run dev
   → 理解 AI 生成、润色、发布的业务流程
 
 第 2 站：程序入口
-  cmd/lingxi-ai-os/main.go
+  cmd/tangying-ai-os/main.go
   → 看清所有组件如何组装
 
 第 3 站：数据模型
@@ -505,7 +505,7 @@ cd frontend && npm install && npm run dev
   internal/skill/service/session_manager.go
 
 第 7 站：HTTP 路由注册
-  cmd/lingxi-ai-os/main.go
+  cmd/tangying-ai-os/main.go
 ```
 
 ### 前端阅读顺序
@@ -590,7 +590,7 @@ package builtin
 
 import (
     "context"
-    "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+    "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 type HttpTool struct{}
@@ -617,7 +617,7 @@ func (t *HttpTool) ValidateParameters(params map[string]interface{}) bool {
 }
 ```
 
-然后在 `cmd/lingxi-ai-os/main.go` 注册：
+然后在 `cmd/tangying-ai-os/main.go` 注册：
 
 ```go
 toolRegistry.Register(builtin.NewHttpTool())  // ← 新增

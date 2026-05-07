@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
 )
 
 type mockTool struct {

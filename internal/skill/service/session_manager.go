@@ -10,7 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
 )
 
 const (

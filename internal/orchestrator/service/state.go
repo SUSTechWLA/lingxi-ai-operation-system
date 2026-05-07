@@ -7,11 +7,11 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/metadata"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model/repository"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/outbox"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/metadata"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/eventbus"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model/repository"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/outbox"
 )
 
 type StateService struct {

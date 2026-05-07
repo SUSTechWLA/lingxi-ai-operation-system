@@ -11,10 +11,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
-	skillSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/service"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/jsonx"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
+	skillSvc "github.com/tangying-ai/tangying-ai-operation-system/internal/skill/service"
 )
 
 const systemPromptTmpl = `你是一个任务分解专家。请将用户的自然语言任务分解为多个执行节点（Node），并构建一个有向无环图（DAG）。

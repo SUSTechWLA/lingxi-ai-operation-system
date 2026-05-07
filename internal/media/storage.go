@@ -9,7 +9,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
 )
 
 type StorageService struct {

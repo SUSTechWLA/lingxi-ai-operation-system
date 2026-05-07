@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/jsonx"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
 )
 
 // LLMClient provides direct HTTP access to the OpenAI-compatible API.

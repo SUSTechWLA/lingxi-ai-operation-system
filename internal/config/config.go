@@ -116,7 +116,7 @@ func setDefaults() {
 	viper.SetDefault("POSTGRES_PORT", 5432)
 	viper.SetDefault("POSTGRES_USER", "postgres")
 	viper.SetDefault("POSTGRES_PASSWORD", "changeme")
-	viper.SetDefault("POSTGRES_DB", "lingxi_db")
+	viper.SetDefault("POSTGRES_DB", "tangying_db")
 	viper.SetDefault("POSTGRES_SSLMODE", "disable")
 	viper.SetDefault("REDIS_HOST", "localhost")
 	viper.SetDefault("REDIS_PORT", 6379)

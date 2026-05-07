@@ -10,9 +10,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/prompts"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/llmutil"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/skill/prompts"
 )
 
 // PlanService generates execution plans (DAGs) from conversation context via direct LLM call.

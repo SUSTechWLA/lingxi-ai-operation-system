@@ -11,7 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 // ExternalTool executes registered external tools via their registered HTTP endpoints.
@@ -89,7 +89,7 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 		return tool.FailureResult(fmt.Sprintf("failed to create HTTP request: %s", err.Error()))
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "lingxi-ai-os/1.0")
+	req.Header.Set("User-Agent", "tangying-ai-os/1.0")
 
 	resp, err := t.client.Do(req)
 	if err != nil {

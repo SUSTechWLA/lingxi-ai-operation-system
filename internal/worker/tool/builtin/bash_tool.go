@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 // ==================== BashTool (Sandboxed) ====================
@@ -58,7 +58,7 @@ func (t *BashTool) BuildExecutionRequest(params map[string]interface{}) (*execut
 	return &executor.ExecutionRequest{
 		Command:    "bash",
 		Args:       []string{"-c", command},
-		WorkDir:    "/tmp/lingxi-sandbox",
+		WorkDir:    "/tmp/tangying-sandbox",
 		TimeoutSec: timeout,
 		Limits: executor.ResourceLimits{
 			MemoryBytes: 256 * 1024 * 1024,

@@ -117,8 +117,8 @@ func NewDirectExecutor() *DirectExecutor {
 }
 
 func (d *DirectExecutor) Execute(ctx context.Context, req ExecutionRequest) (ExecutionResult, error) {
-    // 1. 创建临时工作目录（例如 /tmp/lingxi-worker-{nodeID}）
-    workDir, err := os.MkdirTemp("", "lingxi-worker-"+req.NodeID)
+    // 1. 创建临时工作目录（例如 /tmp/tangying-worker-{nodeID}）
+    workDir, err := os.MkdirTemp("", "tangying-worker-"+req.NodeID)
     if err != nil {
         return ExecutionResult{Error: "failed to create temp dir"}, err
     }

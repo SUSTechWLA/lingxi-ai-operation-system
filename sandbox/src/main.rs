@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
 
     let sandbox_svc = sandbox::SandboxServiceImpl::default();
 
-    tracing::info!("Lingxi Sandbox starting on {}", addr);
+    tracing::info!("Tangying Sandbox starting on {}", addr);
 
     Server::builder()
         .add_service(sandbox::SandboxServiceServer::new(sandbox_svc))

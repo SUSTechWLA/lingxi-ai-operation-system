@@ -8,9 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/media"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/service"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/media"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/skill/service"
 )
 
 // SessionHandler handles HTTP requests for the skill dialog system.

@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-section "Lingxi AI OS - Environment Setup"
+section "Tangying AI OS - Environment Setup"
 
 # Step 1: Check Go
 section "Step 1: Check Go 1.23+"
@@ -63,7 +63,7 @@ docker compose up -d
 
 echo "Waiting for PostgreSQL..."
 for i in $(seq 1 30); do
-    if docker exec lingxi-postgres pg_isready &> /dev/null 2>&1; then
+    if docker exec tangying-postgres pg_isready &> /dev/null 2>&1; then
         echo -e " ${GREEN}ready${NC}"
         break
     fi
@@ -73,7 +73,7 @@ done
 
 echo ""
 echo "Infrastructure status:"
-for container in lingxi-postgres lingxi-redis lingxi-redpanda lingxi-minio lingxi-qdrant; do
+for container in tangying-postgres tangying-redis tangying-redpanda tangying-minio tangying-qdrant; do
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
         echo -e "  ${GREEN}✓${NC} ${container}"
     else
@@ -91,8 +91,8 @@ info "Go dependencies installed"
 section "Step 6: Build"
 
 mkdir -p build
-go build -o build/lingxi-ai-os cmd/lingxi-ai-os/main.go
-info "Build complete: build/lingxi-ai-os"
+go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+info "Build complete: build/tangying-ai-os"
 
 section "Setup Complete!"
 echo ""

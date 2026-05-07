@@ -13,10 +13,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/llmutil"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/media"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/jsonx"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/llmutil"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/media"
 )
 
 type PublishService struct {
@@ -102,7 +102,7 @@ Content to polish:
 			"name": "bash",
 			"input": map[string]interface{}{
 				"parameters": map[string]interface{}{
-					"command": fmt.Sprintf(`echo "[PUBLISH] Task completed: %s" >> /tmp/lingxi-publish.log`, req.Title),
+					"command": fmt.Sprintf(`echo "[PUBLISH] Task completed: %s" >> /tmp/tangying-publish.log`, req.Title),
 				},
 			},
 		},

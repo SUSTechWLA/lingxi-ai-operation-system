@@ -685,7 +685,7 @@ Scheduler 30 秒扫描一次，仅处理停滞超过 1 分钟的节点。正常�
 ### 9.1 添加新工具
 1. 创建工具文件 `internal/worker/tool/builtin/my_tool.go`
 2. 实现 `Tool` 接口（Name, Description, Type, Execute, ValidateParameters）
-3. 在 `cmd/lingxi-ai-os/main.go` 中注册
+3. 在 `cmd/tangying-ai-os/main.go` 中注册
 
 ### 9.2 添加新前端组件
 1. 在 `frontend/src/components/` 创建组件文件

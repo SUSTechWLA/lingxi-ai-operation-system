@@ -115,7 +115,7 @@ const DesktopPage: React.FC = () => {
                 </div>
                 <div className="flex justify-between">
                   <span>数据目录</span>
-                  <span className="font-mono text-gray-400 truncate w-32 text-right">/tmp/lingxi-sandbox</span>
+                  <span className="font-mono text-gray-400 truncate w-32 text-right">/tmp/tangying-sandbox</span>
                 </div>
               </div>
             </div>

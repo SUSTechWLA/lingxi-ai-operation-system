@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	skillSvc "github.com/lingxi-ai/lingxi-ai-operation-system/internal/skill/service"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	skillSvc "github.com/tangying-ai/tangying-ai-operation-system/internal/skill/service"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 type ToolHandler struct {

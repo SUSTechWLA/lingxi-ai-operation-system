@@ -31,7 +31,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-section "🐝 Lingxi AI OS — One-Click Start"
+section "🐝 Tangying AI OS — One-Click Start"
 
 # ============================================
 # Step 1: Docker infrastructure
@@ -43,7 +43,7 @@ if ! docker info &> /dev/null; then
     open -a Docker 2>/dev/null || true
 fi
 
-if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^lingxi-postgres$"; then
+if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^tangying-postgres$"; then
     info "Starting infrastructure containers..."
     docker compose up -d
     sleep 5
@@ -51,7 +51,7 @@ fi
 
 # Check all 5 containers
 all_ok=true
-for container in lingxi-postgres lingxi-redis lingxi-redpanda lingxi-minio lingxi-qdrant; do
+for container in tangying-postgres tangying-redis tangying-redpanda tangying-minio tangying-qdrant; do
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
         echo -e "  ${GREEN}✓${NC} ${container}"
     else
@@ -71,7 +71,7 @@ section "Step 2: Build Backend"
 
 mkdir -p build
 info "Building Go binary..."
-go build -o build/lingxi-ai-os cmd/lingxi-ai-os/main.go
+go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
 info "Backend build complete"
 
 # ============================================
@@ -86,8 +86,8 @@ if command -v cargo &> /dev/null || [ -f "$HOME/.cargo/env" ]; then
         cd sandbox
         cargo build --release --quiet 2>&1 || warn "Sandbox build failed (non-fatal)"
         cd "$PROJECT_DIR"
-        if [ -f sandbox/target/release/lingxi-sandbox ]; then
-            cp sandbox/target/release/lingxi-sandbox build/
+        if [ -f sandbox/target/release/tangying-sandbox ]; then
+            cp sandbox/target/release/tangying-sandbox build/
             info "Sandbox build complete"
         fi
     else
@@ -110,7 +110,7 @@ if lsof -ti :8080 &>/dev/null; then
     info "Port 8080 freed"
 fi
 
-./build/lingxi-ai-os &
+./build/tangying-ai-os &
 BACKEND_PID=$!
 
 echo -n "Waiting for backend..."
@@ -179,7 +179,7 @@ echo -e "   • Fallback to DirectExecutor when sandbox unavailable (SANDBOX_FAL
 echo -e ""
 echo -e "  ${CYAN}To enable sandbox:${NC}"
 echo -e "   1. Set SANDBOX_ENABLED=true in .env"
-echo -e "   2. Start the sandbox service: ./build/lingxi-sandbox &"
+echo -e "   2. Start the sandbox service: ./build/tangying-sandbox &"
 echo -e "   3. Restart the backend"
 
 # ============================================

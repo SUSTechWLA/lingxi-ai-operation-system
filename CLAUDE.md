@@ -24,7 +24,7 @@ cp .env.example .env
 # Prerequisites: Rust toolchain (install via: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh)
 
 make sandbox-build       # Build Rust sandbox service
-./build/lingxi-sandbox & # Start sandbox gRPC server on :50051
+./build/tangying-sandbox & # Start sandbox gRPC server on :50051
 
 # To enable sandbox for tool execution:
 # Set SANDBOX_ENABLED=true in .env, restart backend
@@ -36,8 +36,8 @@ make sandbox-build       # Build Rust sandbox service
 docker compose up -d
 
 # Terminal 2: Backend (port 8080)
-go build -o build/lingxi-ai-os cmd/lingxi-ai-os/main.go
-./build/lingxi-ai-os
+go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+./build/tangying-ai-os
 ```
 
 #### Frontend (development or Electron build)
@@ -132,7 +132,7 @@ Architecture layers:
 - `ToolManifest` (`manifest.go`) — Full tool specification: Name, Description, Type, Endpoint, Timeout, Parameters (map of ParamDef), Output (map of ParamDef), Sandbox flag, Examples
 
 #### Built-in Tools (`internal/worker/tool/builtin/`)
-- `BashTool` — Sandboxed shell: command whitelist + dangerous pattern filter + `/tmp/lingxi-sandbox` workdir. Implements `BuildableTool`.
+- `BashTool` — Sandboxed shell: command whitelist + dangerous pattern filter + `/tmp/tangying-sandbox` workdir. Implements `BuildableTool`.
 - `PythonTool` — python3 -c execution with resource limits. Implements `BuildableTool`.
 - `LlmApiTool` — OpenAI chat/completions API calls. Implements `ExecutableTool`.
 - `PolisherTool` — Text polish for social media titles/descriptions via LLM. Implements `ExecutableTool`.
@@ -143,7 +143,7 @@ Architecture layers:
 - `ChatGenerateTool` — Conversational content generation with full multi-turn message history via OpenAI. Implements `ExecutableTool`.
 - `ChatReviseTool` — Revise or generate content fields (title, description, keywords) from natural language instructions. Implements `ExecutableTool`.
 - `ExternalTool` — Bridge to registered external tool services via HTTP. Routes DAG pipeline calls to external endpoints registered through `/api/tools/register`. Implements `ExecutableTool` + `ExternalToolProvider`.
-- `VideoMetadataTool` — Downloads video from MinIO (via presigned URL) and extracts metadata: duration, resolution, frame rate, codec, audio track info. Caches video locally for downstream tools (`/tmp/lingxi-video-cache`). Implements `ExecutableTool`.
+- `VideoMetadataTool` — Downloads video from MinIO (via presigned URL) and extracts metadata: duration, resolution, frame rate, codec, audio track info. Caches video locally for downstream tools (`/tmp/tangying-video-cache`). Implements `ExecutableTool`.
 - `VideoAnalyzerTool` — Extracts keyframes via ffmpeg scene detection and transcribes audio via Whisper. Outputs base64 data URLs for keyframes and dialogue transcript text. Implements `ExecutableTool`.
 - `VideoCopyGeneratorTool` — Generates platform-adapted short-video titles, copy, and keywords from video metadata, keyframe analysis, and audio transcripts. Uses multimodal LLM. Supports douyin/xiaohongshu/bilibili/kuaishou platforms. Implements `ExecutableTool`.
 
@@ -249,7 +249,7 @@ Key UI features:
 ## Project Structure
 
 ```
-cmd/lingxi-ai-os/main.go    # Entry point, wiring, graceful shutdown
+cmd/tangying-ai-os/main.go    # Entry point, wiring, graceful shutdown
 internal/
   config/                    # Viper-based config with .env support
   database/                  # pgx pool + schema migrations

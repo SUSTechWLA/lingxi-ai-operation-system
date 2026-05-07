@@ -170,7 +170,7 @@ completed_integration:
   backend:
     - internal/publish/handler/handler.go - 3个API端点
     - internal/publish/service/service.go - 业务逻辑（OpenAI调用 + DAG提交）
-    - cmd/lingxi-ai-os/main.go - 路由注册 + CORS中间件
+    - cmd/tangying-ai-os/main.go - 路由注册 + CORS中间件
   frontend:
     - src/services/api.ts - 统一API调用层（解析response.data.data）
     - src/utils/types.ts - 标准响应类型（ApiResponse<T>）

@@ -9,8 +9,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/common/jsonx"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/common/jsonx"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
 )
 
 // OrchestratorInterface defines the methods we need from the orchestrator.

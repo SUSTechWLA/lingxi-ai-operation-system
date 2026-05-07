@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/eventbus"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/outbox"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/eventbus"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/outbox"
 )
 
 // ==================== Mock Implementations ====================

@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
 )
 
 func TestDAGValidator_SingleNodeNoEdges(t *testing.T) {

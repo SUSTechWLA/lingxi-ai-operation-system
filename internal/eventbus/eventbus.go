@@ -7,7 +7,7 @@ import (
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
 )
 
 const (

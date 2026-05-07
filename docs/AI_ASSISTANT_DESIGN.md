@@ -121,7 +121,7 @@ type StructuredDemand struct {
        r.POST("/session/:session_id/terminate", h.Terminate)
    }
    ```
-3. 在 `cmd/lingxi-ai-os/main.go` 中注入所有依赖并注册路由：
+3. 在 `cmd/tangying-ai-os/main.go` 中注入所有依赖并注册路由：
    ```go
    skillSvc := skill.NewService(
        orchestratorService,

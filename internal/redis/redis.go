@@ -6,7 +6,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
 )
 
 func NewClient(cfg config.RedisConfig) *redis.Client {

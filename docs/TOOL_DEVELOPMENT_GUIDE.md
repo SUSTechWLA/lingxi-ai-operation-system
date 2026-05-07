@@ -164,7 +164,7 @@ bash 工具在沙箱中执行，有以下限制：
 |------|------|
 | 命令白名单 | `ls`, `cat`, `echo`, `curl`, `python3`, `node`, `grep`, `find`, `wc`, `head`, `tail` 等 |
 | 危险模式 | `;`, `\|`, `&&`, `\`\``, `$()`, `>`, `<` 等被禁止 |
-| 工作目录 | `/tmp/lingxi-sandbox` |
+| 工作目录 | `/tmp/tangying-sandbox` |
 | 内存限制 | 256MB |
 | 超时 | 默认 30s |
 
@@ -430,7 +430,7 @@ curl -X DELETE http://localhost:8080/api/tools/image_processor
 
 | 特性 | 说明 |
 |------|------|
-| 文件系统隔离 | 仅在 `/tmp/lingxi-sandbox/` 下操作 |
+| 文件系统隔离 | 仅在 `/tmp/tangying-sandbox/` 下操作 |
 | 资源限制 | 256MB 内存，30s 超时 |
 | 命令白名单 | bash 仅允许白名单内的命令 |
 | 环境隔离 | 独立环境变量 |
@@ -604,7 +604,7 @@ import (
     "context"
     "fmt"
 
-    "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+    "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 type MyTool struct{}
@@ -637,7 +637,7 @@ func (t *MyTool) ValidateParameters(params map[string]interface{}) bool {
 }
 ```
 
-然后在 `cmd/lingxi-ai-os/main.go` 注册：
+然后在 `cmd/tangying-ai-os/main.go` 注册：
 
 ```go
 toolRegistry.Register(builtin.NewMyTool())

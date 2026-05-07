@@ -16,13 +16,13 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/config"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/media"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/config"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/media"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 // shared video cache to avoid re-downloading across tools
-const videoCacheDir = "/tmp/lingxi-video-cache"
+const videoCacheDir = "/tmp/tangying-video-cache"
 
 type VideoMetadataTool struct {
 	cfg      config.OpenAIConfig

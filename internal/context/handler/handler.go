@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/context/service"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/model"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/context/service"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/model"
 )
 
 type ContextHandler struct {

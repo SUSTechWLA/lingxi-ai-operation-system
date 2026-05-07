@@ -38,10 +38,10 @@ test_api() {
     fi
 }
 
-section "Lingxi AI OS - API Tests"
+section "Tangying AI OS - API Tests"
 
 section "Step 1: Infrastructure Check"
-for container in lingxi-postgres lingxi-redis lingxi-redpanda; do
+for container in tangying-postgres tangying-redis tangying-redpanda; do
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
         echo -e "  ${GREEN}✓${NC} ${container}"
     else

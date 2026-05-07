@@ -1,4 +1,4 @@
-# 躺营AI自媒体运营助手 (Lingxi AI OS)
+# 躺营AI自媒体运营助手 (Tangying AI OS)
 
 > **一句话介绍**：一个帮你管理自媒体内容创作和发布的智能助手。输入简单想法 → AI 帮你生成/润色内容 → 一键发布到多平台。
 
@@ -208,8 +208,8 @@ Frontend: http://localhost:3000
 ### 目录结构
 
 ```
-lingxi-ai-operation-system/
-├── cmd/lingxi-ai-os/main.go      # ★ 后端启动入口
+tangying-ai-operation-system/
+├── cmd/tangying-ai-os/main.go      # ★ 后端启动入口
 ├── internal/                      # 后端代码
 │   ├── publish/                   # ★ 发布模块（核心业务）
 │   │   ├── handler/               #   HTTP 接口
@@ -294,7 +294,7 @@ lingxi-ai-operation-system/
 
 ```bash
 # 1. 进入项目目录
-cd lingxi-ai-operation-system
+cd tangying-ai-operation-system
 
 # 2. 配置环境变量
 cp .env.example .env

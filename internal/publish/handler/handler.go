@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/publish/service"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/publish/service"
 )
 
 type PublishHandler struct {

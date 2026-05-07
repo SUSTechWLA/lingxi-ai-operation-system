@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package sandbox;
 
-option go_package = "github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor/sandboxpb";
+option go_package = "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor/sandboxpb";
 
 service SandboxService {
   rpc Execute(ExecuteRequest) returns (ExecuteResult);

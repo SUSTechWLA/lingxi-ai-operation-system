@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/translator/service"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/translator/service"
 )
 
 type TranslatorHandler struct {

@@ -402,7 +402,7 @@ const file_sandbox_proto_rawDesc = "" +
 	"\x0euser_time_usec\x18\x03 \x01(\x04R\fuserTimeUsec\x12(\n" +
 	"\x10system_time_usec\x18\x04 \x01(\x04R\x0esystemTimeUsec2L\n" +
 	"\x0eSandboxService\x12:\n" +
-	"\aExecute\x12\x17.sandbox.ExecuteRequest\x1a\x16.sandbox.ExecuteResultBTZRgithub.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor/sandboxpbb\x06proto3"
+	"\aExecute\x12\x17.sandbox.ExecuteRequest\x1a\x16.sandbox.ExecuteResultBXZVgithub.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor/sandboxpbb\x06proto3"
 
 var (
 	file_sandbox_proto_rawDescOnce sync.Once

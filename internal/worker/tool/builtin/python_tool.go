@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/executor"
-	"github.com/lingxi-ai/lingxi-ai-operation-system/internal/worker/tool"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor"
+	"github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
 )
 
 type PythonTool struct{}
@@ -32,7 +32,7 @@ func (t *PythonTool) BuildExecutionRequest(params map[string]interface{}) (*exec
 	return &executor.ExecutionRequest{
 		Command: "python3",
 		Args:    []string{"-c", source},
-		WorkDir: "/tmp/lingxi-sandbox",
+		WorkDir: "/tmp/tangying-sandbox",
 		TimeoutSec: timeout,
 		Limits: executor.ResourceLimits{
 			MemoryBytes: 128 * 1024 * 1024,
