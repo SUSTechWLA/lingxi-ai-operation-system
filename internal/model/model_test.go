@@ -5,58 +5,6 @@ import (
 	"testing"
 )
 
-func TestToJSONB(t *testing.T) {
-	data := map[string]interface{}{"key": "value", "num": 42}
-
-	result, err := ToJSONB(data)
-	if err != nil {
-		t.Fatalf("ToJSONB returned error: %v", err)
-	}
-
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(result, &parsed); err != nil {
-		t.Fatalf("Failed to unmarshal result: %v", err)
-	}
-
-	if parsed["key"] != "value" {
-		t.Errorf("Expected key=value, got %v", parsed["key"])
-	}
-}
-
-func TestToJSONB_NilValue(t *testing.T) {
-	result, err := ToJSONB(nil)
-	if err != nil {
-		t.Fatalf("ToJSONB(nil) returned error: %v", err)
-	}
-
-	if string(result) != "null" {
-		t.Errorf("Expected 'null' for nil, got %s", string(result))
-	}
-}
-
-func TestFromJSONB(t *testing.T) {
-	input := `{"key":"value","num":42}`
-	var parsed map[string]interface{}
-
-	err := FromJSONB(json.RawMessage(input), &parsed)
-	if err != nil {
-		t.Fatalf("FromJSONB returned error: %v", err)
-	}
-
-	if parsed["key"] != "value" {
-		t.Errorf("Expected key=value, got %v", parsed["key"])
-	}
-}
-
-func TestFromJSONB_InvalidJSON(t *testing.T) {
-	var parsed map[string]interface{}
-
-	err := FromJSONB(json.RawMessage("invalid"), &parsed)
-	if err == nil {
-		t.Error("Expected error for invalid JSON")
-	}
-}
-
 func TestTaskStatus_Constants(t *testing.T) {
 	statuses := map[TaskStatus]string{
 		TaskCreated: "CREATED",

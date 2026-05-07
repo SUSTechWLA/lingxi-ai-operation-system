@@ -148,15 +148,6 @@ type NodeTaskEvent struct {
 	IdempotencyKey string                 `json:"idempotencyKey,omitempty"`
 }
 
-// Helper for JSONB
-func ToJSONB(v interface{}) (json.RawMessage, error) {
-	return json.Marshal(v)
-}
-
-func FromJSONB(data json.RawMessage, v interface{}) error {
-	return json.Unmarshal(data, v)
-}
-
 // ── Skill / Conversational AI types ──
 
 // ConversationContext stores a skill session's state in Redis.

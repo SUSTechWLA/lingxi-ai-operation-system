@@ -232,37 +232,40 @@ func (s *StateService) HasRetryableNodes(ctx context.Context, taskID string) (bo
 }
 
 func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node) error {
-	if node.Status == model.NodeCreated {
-		met, err := s.CheckDependenciesMet(ctx, node.ID)
-		if err != nil {
-			return err
-		}
-		if met {
-			node.Status = model.NodeReady
-			if node.IdempotencyKey == "" {
-				node.IdempotencyKey = node.TaskID + "-" + node.ID
-			}
-			if err := s.nodeRepo.Save(ctx, node); err != nil {
-				return err
-			}
-
-			s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "StateMachine", "初始节点就绪（无依赖），进入 READY 状态", buildNodeMetadata(node, model.NodeReady))
-
-			// Merge node name into payload, but skip image_urls (too large for Kafka)
-			payload := buildEventPayload(node.Input, node.Name)
-
-			_ = s.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
-				TaskID:         node.TaskID,
-				NodeID:         node.ID,
-				Type:           string(node.Type),
-				Payload:        payload,
-				TraceID:        node.TaskID + "-" + node.ID,
-				IdempotencyKey: node.IdempotencyKey,
-			})
-
-			zap.L().Info("Node is READY (dependencies met)", zap.String("nodeId", node.ID))
-		}
+	if node.Status != model.NodeCreated {
+		return nil
 	}
+
+	met, err := s.CheckDependenciesMet(ctx, node.ID)
+	if err != nil {
+		return err
+	}
+	if !met {
+		return nil
+	}
+
+	node.Status = model.NodeReady
+	if node.IdempotencyKey == "" {
+		node.IdempotencyKey = node.TaskID + "-" + node.ID
+	}
+	if err := s.nodeRepo.Save(ctx, node); err != nil {
+		return err
+	}
+
+	s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "StateMachine", "初始节点就绪（无依赖），进入 READY 状态", buildNodeMetadata(node, model.NodeReady))
+
+	payload := buildEventPayload(node.Input, node.Name)
+
+	_ = s.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
+		TaskID:         node.TaskID,
+		NodeID:         node.ID,
+		Type:           string(node.Type),
+		Payload:        payload,
+		TraceID:        node.TaskID + "-" + node.ID,
+		IdempotencyKey: node.IdempotencyKey,
+	})
+
+	zap.L().Info("Node is READY (dependencies met)", zap.String("nodeId", node.ID))
 	return nil
 }
 

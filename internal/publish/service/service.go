@@ -137,13 +137,7 @@ Content to polish:
 
 	taskID, _ := result["taskId"].(string)
 	if taskID == "" {
-		// The /api/node response uses "taskId"
-		if id, ok := result["taskId"]; ok {
-			taskID, _ = id.(string)
-		}
-		if taskID == "" {
-			return nil, fmt.Errorf("orchestrator did not return taskId: %s", string(respBody))
-		}
+		return nil, fmt.Errorf("orchestrator did not return taskId: %s", string(respBody))
 	}
 
 	zap.L().Info("Content published as task",

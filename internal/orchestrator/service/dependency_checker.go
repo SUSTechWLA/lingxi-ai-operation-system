@@ -46,39 +46,41 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 	zap.L().Info("Found child nodes", zap.Int("count", len(childNodes)), zap.String("parent", nodeID))
 
 	for _, child := range childNodes {
-		if child.Status == model.NodeCreated || child.Status == model.NodeRetrying {
-			met, err := dc.stateService.CheckDependenciesMet(ctx, child.ID)
-			if err != nil {
-				zap.L().Error("Failed to check dependencies", zap.Error(err))
-				continue
-			}
-			if met {
-				// Evaluate condition if present
-				if child.Condition != "" {
-					if !evaluateCondition(child.Condition, child.TaskID, ctx, dc.nodeRepo) {
-						_, _ = dc.stateService.TransitionNode(ctx, child.ID, model.NodeSkipped, nil, "Condition not met")
-						zap.L().Info("Child node SKIPPED (condition not met)", zap.String("nodeId", child.ID))
-						continue
-					}
-				}
-				if err := dc.stateService.InitializeNodeReady(ctx, child); err != nil {
-					zap.L().Error("Failed to initialize node as ready", zap.Error(err))
-					continue
-				}
-					// Merge child name into payload, but skip image_urls (too large for Kafka)
-					childPayload := buildEventPayload(child.Input, child.Name)
-
-					_ = dc.eventSaver.SaveEvent(ctx, "node", child.ID, eventbus.TopicNodeReady, eventbus.Event{
-						TaskID:         child.TaskID,
-						NodeID:         child.ID,
-						Type:           string(child.Type),
-						Payload:        childPayload,
-						TraceID:        child.TaskID + "-" + child.ID,
-						IdempotencyKey: child.IdempotencyKey,
-					})
-				zap.L().Info("Child node is now READY and published", zap.String("nodeId", child.ID))
-			}
+		if child.Status != model.NodeCreated && child.Status != model.NodeRetrying {
+			continue
 		}
+
+		met, err := dc.stateService.CheckDependenciesMet(ctx, child.ID)
+		if err != nil {
+			zap.L().Error("Failed to check dependencies", zap.Error(err))
+			continue
+		}
+		if !met {
+			continue
+		}
+
+		if child.Condition != "" && !evaluateCondition(child.Condition, child.TaskID, ctx, dc.nodeRepo) {
+			_, _ = dc.stateService.TransitionNode(ctx, child.ID, model.NodeSkipped, nil, "Condition not met")
+			zap.L().Info("Child node SKIPPED (condition not met)", zap.String("nodeId", child.ID))
+			continue
+		}
+
+		if err := dc.stateService.InitializeNodeReady(ctx, child); err != nil {
+			zap.L().Error("Failed to initialize node as ready", zap.Error(err))
+			continue
+		}
+
+		childPayload := buildEventPayload(child.Input, child.Name)
+
+		_ = dc.eventSaver.SaveEvent(ctx, "node", child.ID, eventbus.TopicNodeReady, eventbus.Event{
+			TaskID:         child.TaskID,
+			NodeID:         child.ID,
+			Type:           string(child.Type),
+			Payload:        childPayload,
+			TraceID:        child.TaskID + "-" + child.ID,
+			IdempotencyKey: child.IdempotencyKey,
+		})
+		zap.L().Info("Child node is now READY and published", zap.String("nodeId", child.ID))
 	}
 
 	completed, _ := dc.stateService.CheckTaskCompleted(ctx, taskID)

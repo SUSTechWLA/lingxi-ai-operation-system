@@ -72,7 +72,7 @@ func (a *ResultAssembler) PollAndExtract(
 	taskID string,
 	nodes []model.NodeRequest,
 ) (string, *model.ChatFields, error) {
-	results, nodeOutputs, err := a.pollTaskResults(ctx, taskID, nodes)
+	_, nodeOutputs, err := a.pollTaskResults(ctx, taskID, nodes)
 	if err != nil {
 		return "", nil, fmt.Errorf("task execution failed: %w", err)
 	}
@@ -84,7 +84,7 @@ func (a *ResultAssembler) PollAndExtract(
 		a.recordContext(ctx, taskID, fields)
 	}
 
-	_ = results // results includes _task_id if needed
+
 
 	return reply, fields, nil
 }

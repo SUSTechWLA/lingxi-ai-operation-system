@@ -336,14 +336,13 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 	refNodeID := strings.TrimSpace(matches[1])
 	field := strings.TrimSpace(matches[2])
 
-	node, output := findNodeOutput(ctx, nodeRepo, taskID, refNodeID)
+	_, output := findNodeOutput(ctx, nodeRepo, taskID, refNodeID)
 	if output == nil {
 		return ref, false
 	}
 
 	val, ok := output[field]
 	if !ok {
-		// Try parsing stdout
 		if stdout, sOk := output["stdout"].(string); sOk && stdout != "" {
 			var parsed map[string]interface{}
 			if json.Unmarshal([]byte(stdout), &parsed) == nil {
@@ -355,7 +354,6 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 		return ref, false
 	}
 
-	_ = node
 	return val, true
 }
 

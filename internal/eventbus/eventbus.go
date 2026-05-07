@@ -3,7 +3,6 @@ package eventbus
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
@@ -171,6 +170,3 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 	return nil
 }
 
-func TopicName(topic string) string {
-	return fmt.Sprintf("ai.%s", topic)
-}

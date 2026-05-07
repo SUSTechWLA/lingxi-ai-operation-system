@@ -5,15 +5,6 @@ export interface MediaFile {
   size: number
 }
 
-export interface PublishData {
-  title: string
-  description: string
-  keywords: string
-  videos: MediaFile[]
-  images: MediaFile[]
-  platforms: string[]
-}
-
 export interface Platform {
   id: string
   name: string
