@@ -1,0 +1,25 @@
+[Unit]
+Description=Tangying AI OS Backend
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__PROJECT_DIR__/.env
+ExecStart=__PROJECT_DIR__/build/tangying-ai-os
+Restart=always
+RestartSec=5
+
+# 日志输出到 journald
+StandardOutput=journal
+StandardError=journal
+
+# 资源限制
+LimitNOFILE=65536
+MemoryHigh=2G
+MemoryMax=4G
+
+[Install]
+WantedBy=multi-user.target

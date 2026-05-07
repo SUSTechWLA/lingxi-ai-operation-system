@@ -285,6 +285,54 @@ tangying-ai-operation-system/
 
 ---
 
+## 🚀 服务器部署（一键脚本）
+
+在裸 Linux 服务器上从零部署整个项目，使团队成员通过浏览器直接访问。
+
+### 推荐系统
+
+**Ubuntu Server 24.04 LTS**（也支持 22.04、Debian 12）
+
+### 部署步骤
+
+```bash
+# 1. 将项目上传到服务器
+git clone <repo-url> /opt/tangying
+cd /opt/tangying
+
+# 2. 运行一键部署脚本（需要 sudo）
+sudo bash scripts/deploy.sh
+
+# 3. 脚本会提示你输入 OPENAI_API_KEY 等配置
+#    部署完成后访问: http://<服务器IP>/
+```
+
+部署脚本自动完成以下工作：
+- 安装 Docker、Go、Node.js、Nginx 等所有依赖
+- 启动 PostgreSQL、Redis、Redpanda、MinIO、Qdrant 容器
+- 编译 Go 后端并注册为 systemd 服务（开机自启、崩溃自动重启）
+- 构建前端生产版本，配置 Nginx 反向代理
+- 配置防火墙（ufw），开放 80 端口
+
+### 更新部署
+
+```bash
+cd /opt/tangying
+git pull
+sudo bash scripts/deploy.sh --update   # 仅构建+重启，跳过系统安装
+```
+
+### 常用管理命令
+
+```bash
+systemctl status tangying-backend   # 查看后端状态
+systemctl restart tangying-backend  # 重启后端
+journalctl -u tangying-backend -f   # 查看后端日志
+docker compose ps                   # 查看基础设施容器
+```
+
+---
+
 ## 🛠️ 快速开发指南
 
 ### 环境要求
