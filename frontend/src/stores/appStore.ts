@@ -115,6 +115,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       videos: [],
       images: [],
       cover: null,
+      chatSessionId: null,
     }),
 
   setIsPublishing: (isPublishing) => set({ isPublishing }),

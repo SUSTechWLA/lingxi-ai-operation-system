@@ -121,6 +121,10 @@ func buildMediaContextInfo(mediaCtx model.MediaContext) string {
 		parts = append(parts, "- 用户当前未上传任何素材文件")
 	}
 
+	if len(mediaCtx.Platforms) > 0 {
+		parts = append(parts, fmt.Sprintf("- 用户选择的目标发布平台：%s", strings.Join(mediaCtx.Platforms, "、")))
+	}
+
 	if len(parts) == 0 {
 		return "无页面上下文信息。"
 	}

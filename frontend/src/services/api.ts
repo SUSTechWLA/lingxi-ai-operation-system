@@ -108,6 +108,7 @@ export const createSkillSession = async (
     media_count?: number
     media_names?: string[]
     media_ids?: string[]
+    platforms?: string[]
   }
 ): Promise<CreateSessionResponse> => {
   const response = await api.post<ApiResponse<CreateSessionResponse>>('/skill/dialog/session/create', context || {})

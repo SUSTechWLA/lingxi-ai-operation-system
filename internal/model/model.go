@@ -189,6 +189,7 @@ type MediaContext struct {
 	Title       string   `json:"title,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Keywords    []string `json:"keywords,omitempty"`
+	Platforms   []string `json:"platforms,omitempty"`
 }
 
 // ── Skill API contracts ──
@@ -203,6 +204,7 @@ type CreateSessionRequest struct {
 	MediaCount  int      `json:"media_count,omitempty"`
 	MediaNames  []string `json:"media_names,omitempty"`
 	MediaIDs    []string `json:"media_ids,omitempty"`
+	Platforms   []string `json:"platforms,omitempty"`
 }
 
 // CreateSessionResponse is the response for a created skill session.

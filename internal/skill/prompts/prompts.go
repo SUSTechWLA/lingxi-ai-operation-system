@@ -116,7 +116,7 @@ const SystemPromptSkillDAG = `你是一个内容创作任务分解专家，为"�
 参数引用示例：cached_video_path: {{vm-1.output.cached_video_path}}
 
 #### 第3步：video_copy_generator — 多模态大模型生成文案
-参数: platform (必填), metadata (推荐引用第1步), keyframes_data_urls (推荐引用第2步), transcription (推荐引用第2步)
+参数: platform (必填，从页面上下文的"用户选择的目标发布平台"中获取), metadata (推荐引用第1步), keyframes_data_urls (推荐引用第2步), transcription (推荐引用第2步)
 功能：多模态LLM视觉分析关键帧画面 → 综合对话+画面 → 生成平台适配的标题/文案/标签
 输出字段：reply, title, description, keywords, visual_analysis
 
@@ -124,8 +124,9 @@ const SystemPromptSkillDAG = `你是一个内容创作任务分解专家，为"�
 - metadata: {{vm-1.output.metadata}}
 - keyframes_data_urls: {{va-1.output.keyframes_data_urls}}
 - transcription: {{va-1.output.transcription}}
+- platform: 使用页面上下文中标注的"用户选择的目标发布平台"值，支持多平台同义词（如douyin=抖音）
 
-#### 完整DAG示例 — 用户要求为视频生成抖音文案：
+#### 完整DAG示例 — 用户要求为视频生成抖音文案，已选择douyin平台：
 {
   "nodes": [
     {
@@ -163,7 +164,7 @@ const SystemPromptSkillDAG = `你是一个内容创作任务分解专家，为"�
 
 ## 规则（必须严格遵守）
 1. **单节点优先**：除了短视频文案生成外，99%% 的场景只需一个节点。不要为简单任务创建多节点流水线。
-2. **📹 短视频 → 3节点流水线（最高优先级）**：只要用户上传了视频文件（.mp4/.mov/.avi等），无论用户要求生成标题、简介、关键词还是完整文案，都必须使用 video_metadata → video_analyzer → video_copy_generator 流水线。节点间通过 {{node_id.output.field}} 传递数据，edges 定义执行顺序。此规则覆盖规则4。
+2. **📹 短视频 → 3节点流水线（最高优先级）**：只要用户上传了视频文件（.mp4/.mov/.avi等），无论用户要求生成标题、简介、关键词还是完整文案，都必须使用 video_metadata → video_analyzer → video_copy_generator 流水线。节点间通过 {{node_id.output.field}} 传递数据，edges 定义执行顺序。video_copy_generator 的 platform 参数必须使用页面上下文中"用户选择的目标发布平台"列出的平台（取第一个），不要自行编造。此规则覆盖规则4。
 3. **生成完整内容包（标题+简介+脚本+标签） → chat_generate 或 content_generator**：在 messages[0].content（system）中写清楚输出格式要求，在 messages[1].content（user）中包含：页面当前状态 + 素材文件列表 + 用户需求。
 4. **生成或修改单个/部分字段（标题/简介/关键词） → chat_revise**：将页面现有的 title/description/keywords 和素材信息作为参数传入（即使当前值为空也传入），让 LLM 看到完整上下文，精准生成所需字段。**注意：此规则仅适用于用户上传图片或无素材的情况，如果用户上传了视频则必须使用规则2的3节点流水线。**
 5. **信息不足 → chat_generate**：友好询问。

@@ -17,6 +17,7 @@ const AIAssistantTab: React.FC = () => {
     setChatSessionId,
     applyFields,
     setAILoadingMessage,
+    getSelectedPlatforms,
   } = useAppStore()
 
   const [messages, setMessages] = useState<ChatMessageItem[]>([])
@@ -205,6 +206,8 @@ const AIAssistantTab: React.FC = () => {
           ...(cover ? [cover.name] : []),
         ]
 
+        const selectedPlatforms = getSelectedPlatforms()
+
         const currentContext = {
           title,
           description,
@@ -213,6 +216,7 @@ const AIAssistantTab: React.FC = () => {
           media_count: images.length + videos.length + (cover ? 1 : 0),
           media_names: allMediaNames,
           media_ids: uploadResult.mediaIds,
+          platforms: selectedPlatforms,
         }
         const session = await createSkillSession(currentContext)
         currentSessionId = session.session_id

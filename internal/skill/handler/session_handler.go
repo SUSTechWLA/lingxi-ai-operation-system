@@ -61,6 +61,7 @@ func (h *SessionHandler) CreateSession(c *gin.Context) {
 		MediaCount:  req.MediaCount,
 		MediaNames:  req.MediaNames,
 		MediaIDs:    req.MediaIDs,
+		Platforms:   req.Platforms,
 	}
 
 	// Resolve media IDs to presigned URLs for multimodal vision

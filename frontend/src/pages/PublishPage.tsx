@@ -58,12 +58,13 @@ const PublishPage: React.FC = () => {
       setPendingTypeChange(newType)
       setShowConfirmSwitch(true)
     } else {
+      clearAll()
       setContentType(newType)
     }
   }
 
   const confirmTypeSwitch = () => {
-    clearMedia()
+    clearAll()
     setContentType(pendingTypeChange)
     setShowConfirmSwitch(false)
     setPendingTypeChange(null)
@@ -215,7 +216,7 @@ const PublishPage: React.FC = () => {
             </div>
             <h3 className="text-lg font-semibold text-gray-800 text-center mb-2">切换发布类型</h3>
             <p className="text-sm text-gray-600 text-center mb-6">
-              切换类型将清空已上传的素材，但已填写的标题、简介等文字内容会保留。是否继续？
+              切换类型将清空全部内容（素材、标题、简介、关键词等）。是否继续？
             </p>
             <div className="flex gap-3">
               <button
