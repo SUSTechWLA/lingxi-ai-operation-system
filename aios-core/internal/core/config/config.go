@@ -64,10 +64,12 @@ type OpenAIConfig struct {
 }
 
 type WorkerConfig struct {
-	ToolTimeoutSeconds int           `mapstructure:"WORKER_TOOL_TIMEOUT"`
-	ThreadPoolCore     int           `mapstructure:"WORKER_THREAD_POOL_CORE"`
-	ThreadPoolMax      int           `mapstructure:"WORKER_THREAD_POOL_MAX"`
-	Sandbox            SandboxConfig `mapstructure:",squash"`
+	ToolTimeoutSeconds   int           `mapstructure:"WORKER_TOOL_TIMEOUT"`
+	ThreadPoolCore       int           `mapstructure:"WORKER_THREAD_POOL_CORE"`
+	ThreadPoolMax        int           `mapstructure:"WORKER_THREAD_POOL_MAX"`
+	HeartbeatIntervalSec int           `mapstructure:"WORKER_HEARTBEAT_INTERVAL"`
+	HeartbeatTimeoutSec  int           `mapstructure:"WORKER_HEARTBEAT_TIMEOUT"`
+	Sandbox              SandboxConfig `mapstructure:",squash"`
 }
 
 type MinIOConfig struct {
@@ -84,7 +86,7 @@ type BashToolConfig struct {
 }
 
 type ServicesConfig struct {
-	OrchestratorURL  string `mapstructure:"ORCHESTRATOR_URL"`
+	OrchestratorURL   string `mapstructure:"ORCHESTRATOR_URL"`
 	ContextServiceURL string `mapstructure:"CONTEXT_SERVICE_URL"`
 }
 
@@ -130,6 +132,8 @@ func setDefaults() {
 	viper.SetDefault("WORKER_TOOL_TIMEOUT", 120)
 	viper.SetDefault("WORKER_THREAD_POOL_CORE", 10)
 	viper.SetDefault("WORKER_THREAD_POOL_MAX", 50)
+	viper.SetDefault("WORKER_HEARTBEAT_INTERVAL", 30)
+	viper.SetDefault("WORKER_HEARTBEAT_TIMEOUT", 300)
 	viper.SetDefault("BASH_TOOL_ALLOWED_COMMANDS", "*")
 	viper.SetDefault("BASH_TOOL_TIMEOUT", 60)
 	viper.SetDefault("ORCHESTRATOR_URL", "http://localhost:8080")

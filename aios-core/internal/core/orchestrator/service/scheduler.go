@@ -14,6 +14,7 @@ import (
 type Scheduler struct {
 	nodeRepo     repository.NodeRepo
 	stateService *StateService
+	stateMachine *StateMachine
 	producer     eventbus.EventPublisher
 	interval     time.Duration
 	cancel       context.CancelFunc
@@ -32,6 +33,11 @@ func NewScheduler(
 	}
 }
 
+// SetStateMachine wires the state machine for heartbeat timeout handling.
+func (s *Scheduler) SetStateMachine(sm *StateMachine) {
+	s.stateMachine = sm
+}
+
 func (s *Scheduler) Start(ctx context.Context) {
 	schedCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
@@ -46,11 +52,40 @@ func (s *Scheduler) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.recoverStaleCreatedNodes(schedCtx)
+				s.detectHeartbeatTimeout(schedCtx)
 			}
 		}
 	}()
 
 	zap.L().Info("Scheduler started (30s fallback scan)")
+}
+
+// detectHeartbeatTimeout scans for long-running nodes whose heartbeat has timed out.
+func (s *Scheduler) detectHeartbeatTimeout(ctx context.Context) {
+	if s.stateMachine == nil {
+		return
+	}
+
+	// Default timeout: 5 minutes (300 seconds)
+	nodes, err := s.nodeRepo.FindStaleRunningNodes(ctx, 300)
+	if err != nil {
+		zap.L().Error("Scheduler: failed to find stale running nodes", zap.Error(err))
+		return
+	}
+
+	for _, node := range nodes {
+		zap.L().Warn("Scheduler: heartbeat timeout detected",
+			zap.String("nodeId", node.ID),
+			zap.String("taskId", node.TaskID),
+		)
+
+		if err := s.stateMachine.OnHeartbeatTimeout(ctx, node.ID); err != nil {
+			zap.L().Error("Scheduler: failed to handle heartbeat timeout",
+				zap.String("nodeId", node.ID),
+				zap.Error(err),
+			)
+		}
+	}
 }
 
 func (s *Scheduler) Stop() {

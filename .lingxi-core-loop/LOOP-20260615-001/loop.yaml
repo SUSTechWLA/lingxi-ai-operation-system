@@ -1,10 +1,36 @@
 loop_id: LOOP-20260615-001
-mode: solution-design
-created: 2026-06-15T20:30:00+08:00
-status: CREATED
-core_write_enabled: false
-risk_level: medium
-target: develop_go
-repository: /Users/wanglian/Projects/tangying-ai-operation-system
-core_path: aios-core/
-frontend_path: frontend/
+created_at: "2026-06-15"
+mode: core-update
+title: "AIOS Core 长任务支持"
+status: COMPLETED
+core_write_enabled: true
+
+phases_completed:
+  - Phase-0-intake
+  - Phase-1-discovery
+  - Phase-2-requirements
+  - Phase-3-core-gap-decision
+  - Phase-4-impact-analysis
+  - Phase-5-architecture-design
+  - Phase-6-execution-planning
+  - Phase-8-implementation
+  - Phase-9-verification
+
+evidence:
+  build: passed
+  gofmt: passed
+  go_vet: passed
+  unit_tests: passed
+  critical_regressions: 0
+
+artifacts:
+  - 00-intake.md
+  - 01-core-discovery.md
+  - 02-requirement-spec.md
+  - 03-acceptance-and-nfr.md
+  - 04-core-gap-decision.md
+  - 05-core-impact-analysis.md
+  - 06-core-architecture-design.md
+  - 07-core-execution-plan.md
+  - 12-delivery-report.md
+  - adr/ADR-001-long-task-support.md

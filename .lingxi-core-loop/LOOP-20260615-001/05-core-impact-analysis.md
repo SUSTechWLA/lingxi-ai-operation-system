@@ -1,157 +1,66 @@
-# 05-Core-Impact-Analysis: Core 影响分析
+# 05-Core-Impact-Analysis: 变更影响分析
 
-## CORE-001: CONTROL 节点自动暂停
+## 受影响文件
 
-### 受影响文件
+### 数据模型层 (`internal/core/model/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `model.go` | Node 增加字段，新增 NodeStatus 常量 | 扩展 |
 
-| 文件 | 影响 | 改动量 |
-|------|------|--------|
-| `internal/orchestrator/service/statemachine.go` | 新增 `handleControlNode()` 方法 | ~30 行 |
-| `internal/orchestrator/service/state.go` | `TransitionNode` 到 READY 后检查 NodeType | ~10 行 |
-| `internal/orchestrator/service/state.go` | CONTROL 节点 SKIPPED 也算依赖满足 | 已有逻辑，验证即可 |
+### 仓库层 (`internal/core/model/repository/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `interfaces.go` | NodeRepo 增加方法 | 扩展 |
+| `repository.go` | 实现新方法，SQL 更新 | 扩展 |
 
-### 不改动
+### 编排层 (`internal/core/orchestrator/service/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `statemachine.go` | 处理 HEARTBEAT_TIMEOUT 和 checkpoint 恢复 | 扩展 |
+| `state.go` | TransitionNode 处理新状态的时间戳 | 扩展 |
+| `scheduler.go` | 增加心跳超时检测扫描 | 扩展 |
+| `orchestrator.go` | SubmitDAG 支持 long_running 参数 | 扩展 |
 
-- `internal/model/model.go` — NodeType CONTROL 已定义
-- `internal/orchestrator/service/orchestrator.go` — DAG 提交不变
-- `internal/orchestrator/service/dependency_checker.go` — 依赖检查不变
-- `internal/worker/` — Worker 不处理 CONTROL 节点
+### 编排层 Handler (`internal/core/orchestrator/handler/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `handler.go` | 新进度查询端点 | 扩展 |
 
-### 状态转换
+### Worker 层 (`internal/core/worker/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `tool/tool.go` | 增加 ProgressReporter 接口 | 扩展 |
+| `service/executor.go` | 支持长任务心跳上报 | 扩展 |
 
-```
-CONTROL node CREATED
-  → READY (dependencies met, 同其他节点)
-    → Task 自动暂停 (新增行为)
-      → 等待外部 API 调用
-        → POST /api/node/:nodeId/success → SUCCESS → Task 恢复
-        → POST /api/node/:nodeId/failure → FAILED → 触发重试逻辑
-```
+### 数据库 (`internal/core/database/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `database.go` | Schema 迁移增加新列 | 扩展 |
 
-### 并发与事务
+### 事件总线 (`internal/core/eventbus/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `eventbus.go` | Progress 事件消费者（main.go 中注册） | 扩展 |
 
-- `TransitionNode` 和 `TransitionTask` 已使用 pgx 事务，CONTROL 暂停逻辑复用同一事务
-- 竞态条件: 用户快速连续调用 approve+reject，由 Version 乐观锁防护
-- 幂等: TransitionNode 对相同状态幂等
+### 入口 (`cmd/tangying-ai-os/`)
+| 文件 | 变更 | 类型 |
+|------|------|------|
+| `main.go` | 注册新 Consumer，注册新路由 | 扩展 |
 
-### API 变化
+## 向后兼容性
 
-- 无新 API 端点。复用现有:
-  - `POST /api/node/:nodeId/success` — 审核通过
-  - `POST /api/node/:nodeId/failure` — 审核驳回（附带 errorMessage）
-  - `POST /api/node/:nodeId/retry` — 驳回后重试
+| 方面 | 兼容策略 |
+|------|---------|
+| Node 新字段 | 全部使用零值默认（long_running=false, progress=0） |
+| 新状态 | 仅长任务节点可达新状态 |
+| API | 只在 node 对象内增加字段，不删除/修改已有字段 |
+| 数据库 | ADD COLUMN IF NOT EXISTS，默认值兼容 |
+| 现有测试 | 不修改任何现有测试断言 |
 
-### 向后兼容
+## 风险
 
-- 不影响 TOOL/LLM/LOG 节点
-- 不影响已有 DAG 行为
-- CONTROL 节点不存在于任何现有 DAG 中，零风险
-
-## CORE-002: 进度事件
-
-### 受影响文件
-
-| 文件 | 影响 | 改动量 |
-|------|------|--------|
-| `internal/eventbus/eventbus.go` | 新增 `TopicProgress` 常量 | ~2 行 |
-| `internal/model/model.go` | 新增 `ProgressEvent` 结构体 | ~10 行 |
-
-### 不改动
-
-- `internal/outbox/` — 复用现有 SaveEvent → Relay → Kafka 通路
-- `internal/orchestrator/` — 进度事件由业务模块发布，非编排层
-
-### 事件结构
-
-```go
-type ProgressEvent struct {
-    ProjectID   string  `json:"project_id"`
-    Stage       string  `json:"stage"`
-    Progress    float64 `json:"progress"`
-    CurrentStep string  `json:"current_step"`
-    TotalSteps  int     `json:"total_steps"`
-    Timestamp   string  `json:"timestamp"`
-}
-```
-
-Topic: `ai.node.progress` (通用，不仅限于 bid)
-
-### 向后兼容
-
-- 新增 topic，无消费者时不产生副作用
-- 不影响已有 event 结构
-
----
-
-## 新增 `internal/bid/` 模块
-
-### 遵循现有模式
-
-参考 `internal/publish/` 和 `internal/skill/` 的模块结构:
-
-```
-internal/bid/
-  handler/
-    handler.go       # Gin HTTP handler (17 个端点)
-  service/
-    service.go       # 业务逻辑
-    workflow.go      # DAG 构建和提交
-  repository/
-    repository.go    # bid_projects, bid_chapters 数据访问
-```
-
-### 依赖关系
-
-```
-bid/handler → bid/service → model/repository (新增接口)
-                          → orchestrator/service (Task 创建、DAG 提交)
-                          → outbox (进度事件发布)
-                          → worker/tool (外部工具调用)
-```
-
-### 数据库影响
-
-- 3 张新表 (`bid_projects`, `bid_chapters`, `bid_templates`)
-- 在 `database.RunMigrations()` 追加
-- 不影响现有表
-
-### 注册到 main.go
-
-```go
-bidRepo := repository.NewBidRepository(dbPool)
-bidSvc := bidService.NewBidService(bidRepo, orchestratorService, eventSaver, toolRegistry)
-bidHandler := bidHandler.NewBidHandler(bidSvc)
-bidHandler.RegisterRoutes(r)
-```
-
-### 与现有模块的交互
-
-| 交互 | 方式 |
+| 风险 | 缓解 |
 |------|------|
-| 创建 Task | `orchestratorService.CreateTask()` |
-| 提交 DAG | `orchestratorService.SubmitDAG()` |
-| 查询状态 | `GET /api/task/:taskId` (通过 orchestrator handler) |
-| 工具调用 | 通过 DAG 节点，Worker 自动路由 |
-| 暂停/恢复 | `taskExecutionControl.PauseTask()` / `ResumeTask()` |
-| 发布进度 | `eventSaver.SaveEvent()` → outbox → Kafka |
-| 文件上传 | `media.StorageService` (MinIO) |
-
-## 风险矩阵
-
-| 风险 | 概率 | 影响 | 缓解 |
-|------|------|------|------|
-| CONTROL 节点与现有依赖检查冲突 | 低 | 中 | SKIPPED 状态已处理，CONTROL 同理 |
-| 并发 APPROVE/REJECT 导致状态不一致 | 低 | 中 | Version 乐观锁 + 状态幂等 |
-| 进度事件消费端不存在导致 Kafka 堆积 | 低 | 低 | 独立 topic，不影响核心事件流 |
-| bid 模块引入循环依赖 | 低 | 高 | 单向依赖: bid → orchestrator，不存在反向 |
-
-## 总改动量估算
-
-| 类别 | 文件数 | 预计行数 |
-|------|--------|----------|
-| Core 修改 (CONTROL) | 1-2 | ~40 |
-| Core 修改 (Progress) | 2 | ~15 |
-| bid 模块新增 | 3-5 | ~600 |
-| 数据库迁移 | 1 (追加) | ~40 |
-| main.go 注册 | 1 | ~15 |
-| **总计** | **8-10** | **~710** |
+| 心跳扫描增加 DB 负载 | 使用索引 `idx_node_status_heartbeat`，间隔 30s |
+| Kafka 事件量增加 | Progress 事件限流（每个节点每秒最多 1 个） |
+| Redis 缓存不一致 | 使用短 TTL（30s），以 DB 为真相源 |

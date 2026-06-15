@@ -37,9 +37,10 @@ func (h *OrchestratorHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/task/create", h.CreateTask)
 		api.POST("/task/:taskId/dag", h.SubmitDAG)
 		api.GET("/task/:taskId", h.GetTask)
+		api.GET("/task/:taskId/progress", h.GetTaskProgress)
 		api.GET("/task/:taskId/context", h.GetTaskContext)
 		api.POST("/task/:taskId/pause", h.PauseTask)
-api.POST("/task/:taskId/fail", h.FailTask)
+		api.POST("/task/:taskId/fail", h.FailTask)
 		api.POST("/task/:taskId/resume", h.ResumeTask)
 		api.GET("/task/:taskId/pause-reason", h.GetPauseReason)
 		api.POST("/node/:nodeId/success", h.OnNodeSuccess)
@@ -105,6 +106,26 @@ func (h *OrchestratorHandler) GetTask(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+func (h *OrchestratorHandler) GetTaskProgress(c *gin.Context) {
+	taskID := c.Param("taskId")
+
+	result, err := h.orchestratorService.GetTaskProgress(c.Request.Context(), taskID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	if result == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Task not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "success",
+		"data":    result,
+	})
 }
 
 func (h *OrchestratorHandler) GetTaskContext(c *gin.Context) {

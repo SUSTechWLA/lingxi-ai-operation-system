@@ -12,29 +12,29 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	skillHandler "github.com/tangying-ai/aios-core/internal/agents/chat/handler"
+	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
+	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
+	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/context/handler"
 	contextSvc "github.com/tangying-ai/aios-core/internal/core/context/service"
 	"github.com/tangying-ai/aios-core/internal/core/database"
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/logger"
+	"github.com/tangying-ai/aios-core/internal/core/media"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
-	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	orchestratorHandler "github.com/tangying-ai/aios-core/internal/core/orchestrator/handler"
+	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
-	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
-	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
 	redisClient "github.com/tangying-ai/aios-core/internal/core/redis"
-	skillHandler "github.com/tangying-ai/aios-core/internal/agents/chat/handler"
-	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 	translatorHandler "github.com/tangying-ai/aios-core/internal/core/translator/handler"
 	translatorSvc "github.com/tangying-ai/aios-core/internal/core/translator/service"
+	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	workerService "github.com/tangying-ai/aios-core/internal/core/worker/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
-	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
-	"github.com/tangying-ai/aios-core/internal/core/media"
 
 	bidHandler "github.com/tangying-ai/aios-core/internal/agents/bid/handler"
 	bidRepo "github.com/tangying-ai/aios-core/internal/agents/bid/repository"
@@ -86,6 +86,9 @@ func main() {
 
 	// Wire DependencyChecker into StateService for event-driven scheduling
 	stateService.SetDependencyChecker(dependencyChecker)
+
+	// Wire StateMachine into Scheduler for heartbeat timeout handling
+	scheduler.SetStateMachine(stateMachine)
 
 	// Outbox relay
 	outboxRelay := outbox.NewRelay(pool, producer)
@@ -171,8 +174,85 @@ func main() {
 	orchestratorConsumer.Start()
 	defer orchestratorConsumer.Stop()
 
+	// Progress consumer — handles heartbeat and progress events from long-running nodes
+	progressConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-progress-group",
+		[]string{eventbus.TopicProgress},
+		func(event eventbus.Event) error {
+			switch event.Status {
+			case "HEARTBEAT":
+				// Update heartbeat timestamp in DB
+				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, -1, ""); err != nil {
+					zap.L().Error("Failed to update heartbeat", zap.Error(err))
+				}
+			case "PROGRESS":
+				// Update progress and step in DB
+				var progress float64
+				var step string
+				if event.Output != nil {
+					if p, ok := event.Output["progress"].(float64); ok {
+						progress = p
+					}
+					if s, ok := event.Output["step"].(string); ok {
+						step = s
+					}
+				}
+				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, progress, step); err != nil {
+					zap.L().Error("Failed to update progress", zap.Error(err))
+				}
+				// Also record context for auditing
+				if progress > 0 {
+					c := &model.Context{
+						ContextType:  model.ContextNodeProgress,
+						TaskID:       event.TaskID,
+						NodeID:       event.NodeID,
+						SourceModule: "ProgressConsumer",
+						Message:      fmt.Sprintf("Progress: %.0f%% — %s", progress*100, step),
+						Metadata:     map[string]interface{}{"progress": progress, "step": step},
+					}
+					_ = contextRepo.Save(ctx, c)
+				}
+			case "CHECKPOINT":
+				// Persist checkpoint data
+				var progress float64
+				var step string
+				var checkpointData map[string]interface{}
+				if event.Output != nil {
+					if p, ok := event.Output["progress"].(float64); ok {
+						progress = p
+					}
+					if s, ok := event.Output["step"].(string); ok {
+						step = s
+					}
+					if cp, ok := event.Output["checkpoint"].(map[string]interface{}); ok {
+						checkpointData = cp
+					}
+				}
+				if err := nodeRepo.UpdateHeartbeat(ctx, event.NodeID, progress, step); err != nil {
+					zap.L().Error("Failed to update checkpoint heartbeat", zap.Error(err))
+				}
+				c := &model.Context{
+					ContextType:  model.ContextNodeCheckpoint,
+					TaskID:       event.TaskID,
+					NodeID:       event.NodeID,
+					SourceModule: "ProgressConsumer",
+					Message:      fmt.Sprintf("Checkpoint at %.0f%% — %s", progress*100, step),
+					SnapshotData: checkpointData,
+					Metadata:     map[string]interface{}{"progress": progress, "step": step},
+				}
+				_ = contextRepo.Save(ctx, c)
+				zap.L().Info("Checkpoint persisted",
+					zap.String("nodeId", event.NodeID),
+					zap.Float64("progress", progress),
+				)
+			}
+			return nil
+		},
+	)
+	progressConsumer.Start()
+	defer progressConsumer.Stop()
+
 	contextConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-context-group",
-			[]string{eventbus.TopicNodeResult, eventbus.TopicNodeFailed},
+		[]string{eventbus.TopicNodeResult, eventbus.TopicNodeFailed},
 		func(event eventbus.Event) error {
 			return contextService.HandleEvent(ctx, event)
 		},

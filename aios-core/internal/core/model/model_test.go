@@ -91,11 +91,11 @@ func TestDAGRequest_JSONRoundTrip(t *testing.T) {
 
 func TestNodeResultEvent_JSONRoundTrip(t *testing.T) {
 	event := NodeResultEvent{
-		TaskID:       "task-1",
-		NodeID:       "node-1",
-		Status:       NodeSuccess,
-		Data:         map[string]interface{}{"result": "ok"},
-		TraceID:      "trace-1",
+		TaskID:         "task-1",
+		NodeID:         "node-1",
+		Status:         NodeSuccess,
+		Data:           map[string]interface{}{"result": "ok"},
+		TraceID:        "trace-1",
 		IdempotencyKey: "task-1-node-1",
 	}
 
@@ -139,11 +139,11 @@ func TestNodeRequest_MaxRetryPointer(t *testing.T) {
 
 func TestNodeTaskEvent_JSONRoundTrip(t *testing.T) {
 	event := NodeTaskEvent{
-		TaskID:   "task-1",
-		NodeID:   "node-1",
-		Type:     "LLM",
-		Payload:  map[string]interface{}{"prompt": "analyze"},
-		TraceID:  "trace-1",
+		TaskID:         "task-1",
+		NodeID:         "node-1",
+		Type:           "LLM",
+		Payload:        map[string]interface{}{"prompt": "analyze"},
+		TraceID:        "trace-1",
 		IdempotencyKey: "task-1-node-1",
 	}
 

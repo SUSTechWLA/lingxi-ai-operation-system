@@ -14,8 +14,8 @@ import (
 // ==================== Mock Implementations ====================
 
 type mockNodeRepo struct {
-	nodes      map[string]*model.Node
-	findByID   func(ctx context.Context, id string) (*model.Node, error)
+	nodes    map[string]*model.Node
+	findByID func(ctx context.Context, id string) (*model.Node, error)
 }
 
 func newMockNodeRepo() *mockNodeRepo {
@@ -75,6 +75,35 @@ func (m *mockNodeRepo) UpdateStatus(ctx context.Context, id string, status model
 	}
 	if errMsg != "" {
 		n.ErrorMessage = errMsg
+	}
+	return nil
+}
+
+func (m *mockNodeRepo) FindStaleRunningNodes(ctx context.Context, timeoutSec int) ([]*model.Node, error) {
+	var result []*model.Node
+	now := time.Now()
+	for _, n := range m.nodes {
+		if n.LongRunning && n.Status == model.NodeRunning {
+			if n.HeartbeatAt == nil || now.Sub(*n.HeartbeatAt) > time.Duration(timeoutSec)*time.Second {
+				result = append(result, n)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (m *mockNodeRepo) UpdateHeartbeat(ctx context.Context, id string, progress float64, currentStep string) error {
+	n, ok := m.nodes[id]
+	if !ok {
+		return fmt.Errorf("not found")
+	}
+	now := time.Now()
+	n.HeartbeatAt = &now
+	if progress >= 0 {
+		n.Progress = progress
+	}
+	if currentStep != "" {
+		n.CurrentStep = currentStep
 	}
 	return nil
 }

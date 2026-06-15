@@ -33,10 +33,27 @@ func FailureResult(err string) ToolResult {
 	return ToolResult{Success: false, Error: err}
 }
 
+// ProgressUpdate carries a progress report from a long-running tool.
+type ProgressUpdate struct {
+	Progress   float64                `json:"progress"`             // 0.0 ~ 1.0
+	Step       string                 `json:"step"`                 // 当前步骤描述
+	Checkpoint map[string]interface{} `json:"checkpoint,omitempty"` // 断点数据
+}
+
+// ProgressCallback is the function signature tools call to report progress.
+type ProgressCallback func(ctx context.Context, update ProgressUpdate)
+
+// ProgressReporter is an optional interface that long-running tools can implement
+// to receive a callback for reporting execution progress to the orchestrator.
+type ProgressReporter interface {
+	SetProgressCallback(cb ProgressCallback)
+}
+
 type ToolContext struct {
-	TaskID     string `json:"taskId"`
-	NodeID     string `json:"nodeId"`
-	RetryCount int    `json:"retryCount"`
+	TaskID     string                 `json:"taskId"`
+	NodeID     string                 `json:"nodeId"`
+	RetryCount int                    `json:"retryCount"`
+	Checkpoint map[string]interface{} `json:"checkpoint,omitempty"` // 上次执行的断点
 }
 
 type Tool interface {

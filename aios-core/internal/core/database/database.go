@@ -181,7 +181,6 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		zap.L().Error("Failed to run bid migrations (non-fatal)", zap.Error(err))
 	}
 
-
 	// Add columns that may be missing from older (Java) schema
 	alterStatements := []string{
 		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128)`,
@@ -194,16 +193,22 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS condition TEXT`,
 		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ`,
 		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS long_running BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS progress DOUBLE PRECISION DEFAULT 0.0`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS current_step VARCHAR(500) DEFAULT ''`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS heartbeat_timeout_sec INT DEFAULT 300`,
+		`ALTER TABLE ai_node ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ`,
 		`ALTER TABLE ai_task ADD COLUMN IF NOT EXISTS pause_reason TEXT`,
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_module VARCHAR(50)`,
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_topic VARCHAR(100)`,
 		`ALTER TABLE ai_node DROP CONSTRAINT IF EXISTS ai_node_status_check`,
-		`ALTER TABLE ai_node ADD CONSTRAINT ai_node_status_check CHECK (status IN ('CREATED','READY','RUNNING','RETRYING','SUCCESS','FAILED','SKIPPED'))`,
+		`ALTER TABLE ai_node ADD CONSTRAINT ai_node_status_check CHECK (status IN ('CREATED','READY','RUNNING','RETRYING','HEARTBEAT_TIMEOUT','SUCCESS','FAILED','SKIPPED'))`,
 		`ALTER TABLE ai_task DROP CONSTRAINT IF EXISTS ai_task_status_check`,
 		`ALTER TABLE ai_task ADD CONSTRAINT ai_task_status_check CHECK (status IN ('CREATED','RUNNING','PAUSED','SUCCESS','FAILED'))`,
-	`ALTER TABLE ai_context DROP CONSTRAINT IF EXISTS ai_context_context_type_check`,
-	`ALTER TABLE ai_context ADD CONSTRAINT ai_context_context_type_check CHECK (context_type IN ('TASK_CREATED','TASK_SUCCESS','TASK_FAILED','NODE_SCHEDULED','NODE_READY','NODE_SUCCESS','NODE_FAILED','NODE_RETRY','NODE_SNAPSHOT','DAG_SUBMITTED','DAG_VALIDATED','AI_REVISE','AI_CANCELLED'))`,
+		`ALTER TABLE ai_context DROP CONSTRAINT IF EXISTS ai_context_context_type_check`,
+		`ALTER TABLE ai_context ADD CONSTRAINT ai_context_context_type_check CHECK (context_type IN ('TASK_CREATED','TASK_SUCCESS','TASK_FAILED','NODE_SCHEDULED','NODE_READY','NODE_SUCCESS','NODE_FAILED','NODE_RETRY','NODE_SNAPSHOT','NODE_PROGRESS','NODE_CHECKPOINT','NODE_HEARTBEAT_TIMEOUT','DAG_SUBMITTED','DAG_VALIDATED','AI_REVISE','AI_CANCELLED'))`,
 		`UPDATE ai_context SET created_at = NOW() WHERE created_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_node_heartbeat ON ai_node(heartbeat_at) WHERE long_running = TRUE`,
 	}
 	for _, stmt := range alterStatements {
 		_, _ = pool.Exec(ctx, stmt)

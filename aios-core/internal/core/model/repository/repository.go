@@ -121,18 +121,21 @@ func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO ai_node (id, task_id, type, name, status, input, output, error_message, condition,
 		 retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
-		 started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		 started_at, completed_at, long_running, progress, current_step, heartbeat_timeout_sec, heartbeat_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		 ON CONFLICT (id) DO UPDATE SET
 		 	task_id=$2, status=$5, output=$7, error_message=$8, condition=$9, retry_count=$10,
 		 	max_retry=$11, priority=$12, worker_group=$13, version=ai_node.version+1,
 		 	idempotency_key=$15, started_at=COALESCE($17, ai_node.started_at),
-		 	completed_at=COALESCE($18, ai_node.completed_at)`,
+		 	completed_at=COALESCE($18, ai_node.completed_at),
+		 	progress=$20, current_step=$21, heartbeat_at=COALESCE($23, ai_node.heartbeat_at)`,
 		node.ID, node.TaskID, string(node.Type), node.Name, string(node.Status),
 		input, output, node.ErrorMessage, node.Condition,
 		node.RetryCount, node.MaxRetry, node.Priority, node.WorkerGroup,
 		node.Version, node.IdempotencyKey, node.CreatedAt,
 		node.StartedAt, node.CompletedAt,
+		node.LongRunning, node.Progress, node.CurrentStep,
+		node.HeartbeatTimeoutSec, node.HeartbeatAt,
 	)
 	return err
 }
@@ -141,7 +144,8 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 	row := r.pool.QueryRow(ctx,
 		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
 		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
-		        started_at, completed_at
+		        started_at, completed_at,
+		        long_running, progress, current_step, heartbeat_timeout_sec, heartbeat_at
 		 FROM ai_node WHERE id=$1`, id,
 	)
 
@@ -149,6 +153,8 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 	var input, output []byte
 	var errorMsg *string
 	var condition *string
+	var currentStep *string
+	var heartbeatAt *time.Time
 
 	if err := row.Scan(
 		&node.ID, &node.TaskID, &node.Type, &node.Name, &node.Status,
@@ -156,6 +162,7 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 		&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
 		&node.Version, &node.IdempotencyKey, &node.CreatedAt,
 		&node.StartedAt, &node.CompletedAt,
+		&node.LongRunning, &node.Progress, &currentStep, &node.HeartbeatTimeoutSec, &heartbeatAt,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -168,6 +175,12 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 	}
 	if condition != nil {
 		node.Condition = *condition
+	}
+	if currentStep != nil {
+		node.CurrentStep = *currentStep
+	}
+	if heartbeatAt != nil {
+		node.HeartbeatAt = heartbeatAt
 	}
 	if len(input) > 0 {
 		_ = json.Unmarshal(input, &node.Input)
@@ -233,7 +246,8 @@ func (r *NodeRepository) FindByStatus(ctx context.Context, status model.NodeStat
 		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
 		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
 		        started_at, completed_at
-		 FROM ai_node WHERE status=$1`, string(status),
+		 long_running, progress, current_step, heartbeat_timeout_sec, heartbeat_at
+			 FROM ai_node WHERE status=$1`, string(status),
 	)
 	if err != nil {
 		return nil, err
@@ -331,6 +345,79 @@ func (r *NodeRepository) UpdateStatus(ctx context.Context, id string, status mod
 	_, err := r.pool.Exec(ctx,
 		`UPDATE ai_node SET status=$1, output=COALESCE($2::jsonb, output), error_message=$3 WHERE id=$4`,
 		string(status), string(outputJSON), errMsg, id,
+	)
+	return err
+}
+
+// FindStaleRunningNodes returns long-running nodes in RUNNING status
+// whose heartbeat_at is NULL or older than now - timeoutSec seconds.
+func (r *NodeRepository) FindStaleRunningNodes(ctx context.Context, timeoutSec int) ([]*model.Node, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, task_id, type, name, status, input, output, error_message, condition,
+		        retry_count, max_retry, priority, worker_group, version, idempotency_key, created_at,
+		        started_at, completed_at,
+		        long_running, progress, current_step, heartbeat_timeout_sec, heartbeat_at
+		 FROM ai_node
+		 WHERE long_running = TRUE AND status = 'RUNNING'
+		   AND (heartbeat_at IS NULL OR heartbeat_at < NOW() - ($1 || ' seconds')::INTERVAL)`,
+		fmt.Sprintf("%d", timeoutSec),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []*model.Node
+	for rows.Next() {
+		var node model.Node
+		var input, output []byte
+		var errorMsg *string
+		var condition *string
+		var currentStep *string
+		var heartbeatAt *time.Time
+
+		if err := rows.Scan(
+			&node.ID, &node.TaskID, &node.Type, &node.Name, &node.Status,
+			&input, &output, &errorMsg, &condition,
+			&node.RetryCount, &node.MaxRetry, &node.Priority, &node.WorkerGroup,
+			&node.Version, &node.IdempotencyKey, &node.CreatedAt,
+			&node.StartedAt, &node.CompletedAt,
+			&node.LongRunning, &node.Progress, &currentStep, &node.HeartbeatTimeoutSec, &heartbeatAt,
+		); err != nil {
+			return nil, err
+		}
+
+		if errorMsg != nil {
+			node.ErrorMessage = *errorMsg
+		}
+		if condition != nil {
+			node.Condition = *condition
+		}
+		if currentStep != nil {
+			node.CurrentStep = *currentStep
+		}
+		if heartbeatAt != nil {
+			node.HeartbeatAt = heartbeatAt
+		}
+		if len(input) > 0 {
+			_ = json.Unmarshal(input, &node.Input)
+		}
+		if len(output) > 0 {
+			_ = json.Unmarshal(output, &node.Output)
+		}
+
+		nodes = append(nodes, &node)
+	}
+
+	return nodes, nil
+}
+
+// UpdateHeartbeat refreshes the heartbeat_at timestamp and optionally updates progress/step.
+func (r *NodeRepository) UpdateHeartbeat(ctx context.Context, id string, progress float64, currentStep string) error {
+	now := time.Now()
+	_, err := r.pool.Exec(ctx,
+		`UPDATE ai_node SET heartbeat_at=$1, progress=$2, current_step=$3 WHERE id=$4`,
+		now, progress, currentStep, id,
 	)
 	return err
 }

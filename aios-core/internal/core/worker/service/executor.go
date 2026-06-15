@@ -88,12 +88,23 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	}
 
 	// image_urls are stripped from Kafka events (too large) — read them from DB
-	if _, hasImageURLs := payload["image_urls"]; !hasImageURLs && ne.nodeRepo != nil {
+	// Also read long-running metadata for the node
+	var isLongRunning bool
+	var heartbeatTimeoutSec int
+	if ne.nodeRepo != nil {
 		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
 			if urls, ok := node.Input["image_urls"]; ok {
 				payload["image_urls"] = urls
 			}
+			isLongRunning = node.LongRunning
+			if node.HeartbeatTimeoutSec > 0 {
+				heartbeatTimeoutSec = node.HeartbeatTimeoutSec
+			}
 		}
+	}
+	// Also check payload-level override
+	if lr, ok := payload["long_running"].(bool); ok && lr {
+		isLongRunning = true
 	}
 
 	toolName := tool.DetermineToolName(event.Type, payload)
@@ -109,19 +120,82 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		}
 	}
 
+	// Build tool context with checkpoint data for retries
 	toolCtx := tool.ToolContext{
 		TaskID:     taskID,
 		NodeID:     nodeID,
 		RetryCount: 0,
 	}
+	if isLongRunning && ne.nodeRepo != nil {
+		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
+			toolCtx.RetryCount = node.RetryCount
+		}
+	}
 
 	startTime := time.Now()
+
+	// --- Long-running task: heartbeat + progress support ---
+	hbInterval := ne.cfg.HeartbeatIntervalSec
+	if hbInterval <= 0 {
+		hbInterval = 30
+	}
+	hbTimeout := heartbeatTimeoutSec
+	if hbTimeout <= 0 {
+		hbTimeout = ne.cfg.HeartbeatTimeoutSec
+	}
+	if hbTimeout <= 0 {
+		hbTimeout = 300 // default 5 minutes
+	}
+
+	var progressCb tool.ProgressCallback
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+
+	if isLongRunning {
+		zap.L().Info("Starting long-running node execution",
+			zap.String("nodeId", nodeID),
+			zap.Int("heartbeatInterval", hbInterval),
+			zap.Int("heartbeatTimeout", hbTimeout),
+		)
+
+		// First heartbeat immediately
+		ne.publishProgress(taskID, nodeID, 0, "started")
+		ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+
+		// Progress callback for the tool
+		progressCb = func(cbCtx context.Context, update tool.ProgressUpdate) {
+			if update.Progress > 0 {
+				ne.publishProgress(taskID, nodeID, update.Progress, update.Step)
+			}
+			// If checkpoint data provided, persist it via progress event
+			if update.Checkpoint != nil {
+				ne.publishCheckpoint(taskID, nodeID, update.Progress, update.Step, update.Checkpoint)
+			}
+		}
+
+		// Periodic heartbeat goroutine
+		go func() {
+			ticker := time.NewTicker(time.Duration(hbInterval) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-hbCtx.Done():
+					return
+				case <-ticker.C:
+					ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+				}
+			}
+		}()
+	}
+
 	_ = ne.producer.Publish(eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
 		Status: "RUNNING",
 		Output: map[string]interface{}{
-			"startedAt": startTime.Format(time.RFC3339Nano),
+			"startedAt":           startTime.Format(time.RFC3339Nano),
+			"longRunning":         isLongRunning,
+			"heartbeatTimeoutSec": hbTimeout,
 		},
 	})
 
@@ -136,6 +210,17 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		errMsg := fmt.Sprintf("Invalid parameters for tool: %s", toolName)
 		ne.publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey, nil)
 		return
+	}
+
+	// Wire progress reporter for long-running tasks
+	if isLongRunning && progressCb != nil {
+		if pr, ok := t.(tool.ProgressReporter); ok {
+			pr.SetProgressCallback(progressCb)
+			zap.L().Info("ProgressReporter wired for tool", zap.String("tool", toolName), zap.String("nodeId", nodeID))
+		} else {
+			zap.L().Debug("Tool does not implement ProgressReporter, only heartbeat will be sent",
+				zap.String("tool", toolName), zap.String("nodeId", nodeID))
+		}
 	}
 
 	execImpl := ne.selectExecutor(t)
@@ -270,6 +355,53 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 	zap.L().Info("Node execution failed",
 		zap.String("nodeId", nodeID),
 		zap.String("error", errMsg),
+	)
+}
+
+// ── Long-running task helpers ──
+
+// publishHeartbeat sends a heartbeat event for a long-running node.
+func (ne *NodeExecutor) publishHeartbeat(taskID, nodeID, idempotencyKey string) {
+	hbKey := idempotencyKey + "-hb"
+	event := eventbus.Event{
+		TaskID:         taskID,
+		NodeID:         nodeID,
+		Status:         "HEARTBEAT",
+		IdempotencyKey: hbKey,
+	}
+	_ = ne.producer.Publish(eventbus.TopicProgress, hbKey, event)
+}
+
+// publishProgress sends a progress update event for a long-running node.
+func (ne *NodeExecutor) publishProgress(taskID, nodeID string, progress float64, step string) {
+	event := eventbus.Event{
+		TaskID: taskID,
+		NodeID: nodeID,
+		Status: "PROGRESS",
+		Output: map[string]interface{}{
+			"progress": progress,
+			"step":     step,
+		},
+	}
+	_ = ne.producer.Publish(eventbus.TopicProgress, taskID+"-"+nodeID+"-progress", event)
+}
+
+// publishCheckpoint sends a checkpoint event for a long-running node.
+func (ne *NodeExecutor) publishCheckpoint(taskID, nodeID string, progress float64, step string, checkpoint map[string]interface{}) {
+	event := eventbus.Event{
+		TaskID: taskID,
+		NodeID: nodeID,
+		Status: "CHECKPOINT",
+		Output: map[string]interface{}{
+			"progress":   progress,
+			"step":       step,
+			"checkpoint": checkpoint,
+		},
+	}
+	_ = ne.producer.Publish(eventbus.TopicProgress, taskID+"-"+nodeID+"-checkpoint", event)
+	zap.L().Info("Checkpoint saved",
+		zap.String("nodeId", nodeID),
+		zap.Float64("progress", progress),
 	)
 }
 

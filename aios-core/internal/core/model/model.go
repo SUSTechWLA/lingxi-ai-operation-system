@@ -20,13 +20,14 @@ const (
 type NodeStatus string
 
 const (
-	NodeCreated   NodeStatus = "CREATED"
-	NodeReady     NodeStatus = "READY"
-	NodeRunning   NodeStatus = "RUNNING"
-	NodeRetrying  NodeStatus = "RETRYING"
-	NodeSuccess   NodeStatus = "SUCCESS"
-	NodeFailed    NodeStatus = "FAILED"
-	NodeSkipped   NodeStatus = "SKIPPED"
+	NodeCreated          NodeStatus = "CREATED"
+	NodeReady            NodeStatus = "READY"
+	NodeRunning          NodeStatus = "RUNNING"
+	NodeRetrying         NodeStatus = "RETRYING"
+	NodeHeartbeatTimeout NodeStatus = "HEARTBEAT_TIMEOUT"
+	NodeSuccess          NodeStatus = "SUCCESS"
+	NodeFailed           NodeStatus = "FAILED"
+	NodeSkipped          NodeStatus = "SKIPPED"
 )
 
 // Node type
@@ -43,18 +44,21 @@ const (
 type ContextType string
 
 const (
-	ContextTaskCreated    ContextType = "TASK_CREATED"
-	ContextDagValidated   ContextType = "DAG_VALIDATED"
-	ContextDagSubmitted   ContextType = "DAG_SUBMITTED"
-	ContextNodeReady      ContextType = "NODE_READY"
-	ContextNodeScheduled  ContextType = "NODE_SCHEDULED"
-	ContextNodeSuccess    ContextType = "NODE_SUCCESS"
-	ContextNodeFailed     ContextType = "NODE_FAILED"
-	ContextNodeRetry      ContextType = "NODE_RETRY"
-	ContextTaskSuccess    ContextType = "TASK_SUCCESS"
-	ContextTaskFailed     ContextType = "TASK_FAILED"
-	ContextAIRevise       ContextType = "AI_REVISE"
-	ContextAICancelled    ContextType = "AI_CANCELLED"
+	ContextTaskCreated          ContextType = "TASK_CREATED"
+	ContextDagValidated         ContextType = "DAG_VALIDATED"
+	ContextDagSubmitted         ContextType = "DAG_SUBMITTED"
+	ContextNodeReady            ContextType = "NODE_READY"
+	ContextNodeScheduled        ContextType = "NODE_SCHEDULED"
+	ContextNodeSuccess          ContextType = "NODE_SUCCESS"
+	ContextNodeFailed           ContextType = "NODE_FAILED"
+	ContextNodeRetry            ContextType = "NODE_RETRY"
+	ContextTaskSuccess          ContextType = "TASK_SUCCESS"
+	ContextTaskFailed           ContextType = "TASK_FAILED"
+	ContextAIRevise             ContextType = "AI_REVISE"
+	ContextAICancelled          ContextType = "AI_CANCELLED"
+	ContextNodeProgress         ContextType = "NODE_PROGRESS"          // 长任务进度更新
+	ContextNodeCheckpoint       ContextType = "NODE_CHECKPOINT"        // 长任务断点
+	ContextNodeHeartbeatTimeout ContextType = "NODE_HEARTBEAT_TIMEOUT" // 心跳超时
 )
 
 type Task struct {
@@ -84,8 +88,14 @@ type Node struct {
 	Version        int                    `json:"version"`
 	IdempotencyKey string                 `json:"idempotencyKey,omitempty"`
 	CreatedAt      time.Time              `json:"createdAt"`
-	StartedAt     *time.Time             `json:"startedAt,omitempty"`
-	CompletedAt   *time.Time             `json:"completedAt,omitempty"`
+	StartedAt      *time.Time             `json:"startedAt,omitempty"`
+	CompletedAt    *time.Time             `json:"completedAt,omitempty"`
+	// Long-running task support
+	LongRunning         bool       `json:"longRunning"`                   // 是否为长任务节点
+	Progress            float64    `json:"progress"`                      // 执行进度 0.0 ~ 1.0
+	CurrentStep         string     `json:"currentStep,omitempty"`         // 当前步骤描述
+	HeartbeatTimeoutSec int        `json:"heartbeatTimeoutSec,omitempty"` // 自定义心跳超时秒数
+	HeartbeatAt         *time.Time `json:"heartbeatAt,omitempty"`         // 最后心跳时间
 }
 
 type NodeDependency struct {
@@ -113,14 +123,16 @@ type DAGRequest struct {
 }
 
 type NodeRequest struct {
-	ID          string                 `json:"id"`
-	Type        string                 `json:"type"`
-	Name        string                 `json:"name"`
-	Input       map[string]interface{} `json:"input,omitempty"`
-	Condition   string                 `json:"condition,omitempty"`
-	MaxRetry    *int                   `json:"maxRetry,omitempty"`
-	Priority    *int                   `json:"priority,omitempty"`
-	WorkerGroup string                 `json:"workerGroup,omitempty"`
+	ID                  string                 `json:"id"`
+	Type                string                 `json:"type"`
+	Name                string                 `json:"name"`
+	Input               map[string]interface{} `json:"input,omitempty"`
+	Condition           string                 `json:"condition,omitempty"`
+	MaxRetry            *int                   `json:"maxRetry,omitempty"`
+	Priority            *int                   `json:"priority,omitempty"`
+	WorkerGroup         string                 `json:"workerGroup,omitempty"`
+	LongRunning         bool                   `json:"longRunning,omitempty"`         // 是否长任务节点
+	HeartbeatTimeoutSec *int                   `json:"heartbeatTimeoutSec,omitempty"` // 自定义心跳超时
 }
 
 type Edge struct {
@@ -265,19 +277,42 @@ type ProgressEvent struct {
 	Timestamp   string  `json:"timestamp"`
 }
 
+// TaskProgressResponse is the response for the task-level progress query.
+type TaskProgressResponse struct {
+	TaskID         string             `json:"taskId"`
+	Status         string             `json:"status"`
+	Progress       float64            `json:"progress"` // 0.0 ~ 1.0
+	TotalNodes     int                `json:"totalNodes"`
+	CompletedNodes int                `json:"completedNodes"`
+	Nodes          []NodeProgressInfo `json:"nodes"`
+}
+
+// NodeProgressInfo describes a single node's execution progress.
+type NodeProgressInfo struct {
+	NodeID      string     `json:"nodeId"`
+	Name        string     `json:"name"`
+	Type        string     `json:"type"`
+	Status      string     `json:"status"`
+	Progress    float64    `json:"progress"`
+	CurrentStep string     `json:"currentStep,omitempty"`
+	HeartbeatAt *time.Time `json:"heartbeatAt,omitempty"`
+	StartedAt   *time.Time `json:"startedAt,omitempty"`
+	Error       string     `json:"error,omitempty"`
+}
+
 // ToolManifestRecord is the database-persisted tool manifest row.
 // It mirrors tool.ToolManifest for JSONB storage in PostgreSQL.
 type ToolManifestRecord struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Type        string           `json:"type"`
-	Version     string           `json:"version,omitempty"`
-	Endpoint    string           `json:"endpoint,omitempty"`
-	TimeoutMs   int              `json:"timeout_ms,omitempty"`
-	Parameters  json.RawMessage  `json:"parameters"`
-	Output      json.RawMessage  `json:"output"`
-	Examples    json.RawMessage  `json:"examples"`
-	Sandbox     bool             `json:"sandbox"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Type        string          `json:"type"`
+	Version     string          `json:"version,omitempty"`
+	Endpoint    string          `json:"endpoint,omitempty"`
+	TimeoutMs   int             `json:"timeout_ms,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
+	Output      json.RawMessage `json:"output"`
+	Examples    json.RawMessage `json:"examples"`
+	Sandbox     bool            `json:"sandbox"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }

@@ -14,6 +14,11 @@ type NodeRepo interface {
 	FindChildNodes(ctx context.Context, parentID string) ([]*model.Node, error)
 	Save(ctx context.Context, node *model.Node) error
 	UpdateStatus(ctx context.Context, id string, status model.NodeStatus, output map[string]interface{}, errMsg string) error
+	// FindStaleRunningNodes returns long-running nodes in RUNNING status
+	// whose heartbeat_at is older than timeout (duration since last heartbeat).
+	FindStaleRunningNodes(ctx context.Context, timeoutSec int) ([]*model.Node, error)
+	// UpdateHeartbeat refreshes the heartbeat_at and progress for a node.
+	UpdateHeartbeat(ctx context.Context, id string, progress float64, currentStep string) error
 }
 
 // TaskRepo defines the interface for task data access.

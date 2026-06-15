@@ -105,6 +105,45 @@ func (sm *StateMachine) retryNode(ctx context.Context, node *model.Node, errorMe
 	return err
 }
 
+// OnHeartbeatTimeout handles a long-running node whose heartbeat has timed out.
+// It transitions the node to HEARTBEAT_TIMEOUT, then either retries or permanently fails.
+func (sm *StateMachine) OnHeartbeatTimeout(ctx context.Context, nodeID string) error {
+	node, err := sm.nodeRepo.FindByID(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to find node: %w", err)
+	}
+	if node == nil {
+		return fmt.Errorf("node not found: %s", nodeID)
+	}
+
+	zap.L().Warn("Heartbeat timeout detected for node",
+		zap.String("nodeId", nodeID),
+		zap.String("taskId", node.TaskID),
+	)
+
+	errMsg := "heartbeat timeout: no heartbeat received within timeout period"
+	node.Status = model.NodeHeartbeatTimeout
+	node.ErrorMessage = errMsg
+	if err := sm.nodeRepo.Save(ctx, node); err != nil {
+		return err
+	}
+
+	_ = sm.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeFailed, eventbus.Event{
+		TaskID:       node.TaskID,
+		NodeID:       node.ID,
+		Status:       "HEARTBEAT_TIMEOUT",
+		ErrorMessage: errMsg,
+	})
+
+	// If retries remain, retry from checkpoint
+	if sm.retryPolicy.ShouldRetry(node.RetryCount, node.MaxRetry) {
+		return sm.retryNode(ctx, node, errMsg)
+	}
+
+	// No retries left — permanent failure
+	return sm.failNode(ctx, node, errMsg)
+}
+
 func (sm *StateMachine) failNode(ctx context.Context, node *model.Node, errorMessage string) error {
 	zap.L().Info("Node failed after max retries",
 		zap.String("nodeId", node.ID),
