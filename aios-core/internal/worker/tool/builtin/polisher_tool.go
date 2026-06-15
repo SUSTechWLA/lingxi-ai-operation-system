@@ -47,7 +47,7 @@ func (t *PolisherTool) Execute(ctx context.Context, params map[string]interface{
 		zap.Int("textLength", len(text)),
 	)
 
-	systemPrompt := fmt.Sprintf(`你是一个自媒体内容润色专家。请润色以下%s，使其更加吸引人、专业。
+	systemPrompt := fmt.Sprintf(`你是一个智能内容润色专家。请润色以下%s，使其更加吸引人、专业。
 要求：
 1. 保持原意不变
 2. 使表达更加流畅、吸引人

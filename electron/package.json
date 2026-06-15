@@ -12,7 +12,7 @@
   },
   "build": {
     "appId": "com.tangying.aios.desktop",
-    "productName": "躺营AI自媒体运营助手",
+    "productName": "AIOS 通用智能体平台",
     "directories": {
       "output": "dist-electron"
     },

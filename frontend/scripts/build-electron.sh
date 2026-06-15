@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")/../frontend"
 
 echo "================================================"
-echo "  躺营AI自媒体运营助手 - Electron 打包脚本"
+echo "  AIOS 通用智能体平台 - Electron 打包脚本"
 echo "================================================"
 echo ""
 
@@ -27,5 +27,5 @@ node node_modules/.bin/electron-builder --mac
 echo ""
 echo "================================================"
 echo "  ✅ 打包完成！"
-echo "  输出: release/躺营AI自媒体运营助手-0.0.1-arm64.dmg"
+echo "  输出: release/AIOS 通用智能体平台-0.0.1-arm64.dmg"
 echo "================================================"

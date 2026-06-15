@@ -131,6 +131,56 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	if err != nil {
 		zap.L().Fatal("Failed to run migrations", zap.Error(err))
 	}
+	// Bid (tender) generation tables
+	bidSchema := `
+	CREATE TABLE IF NOT EXISTS bid_projects (
+	    id VARCHAR(64) PRIMARY KEY,
+	    user_id VARCHAR(64) DEFAULT 'default',
+	    name VARCHAR(255) NOT NULL,
+	    status VARCHAR(32) DEFAULT 'DRAFT',
+	    task_id VARCHAR(64),
+	    template_id VARCHAR(64),
+	    industry VARCHAR(128),
+	    tender_file_path VARCHAR(512),
+	    tender_file_name VARCHAR(255),
+	    tender_analysis JSONB,
+	    structure JSONB,
+	    config JSONB,
+	    progress REAL DEFAULT 0,
+	    created_at TIMESTAMPTZ DEFAULT NOW(),
+	    updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_bid_project_task ON bid_projects(task_id);
+	CREATE INDEX IF NOT EXISTS idx_bid_project_status ON bid_projects(status);
+
+	CREATE TABLE IF NOT EXISTS bid_chapters (
+	    id VARCHAR(64) PRIMARY KEY,
+	    project_id VARCHAR(64) NOT NULL,
+	    node_id VARCHAR(64),
+	    title VARCHAR(255) NOT NULL,
+	    content TEXT,
+	    status VARCHAR(32) DEFAULT 'PENDING',
+	    review_comment TEXT,
+	    score_items JSONB,
+	    sort_order INT DEFAULT 0,
+	    created_at TIMESTAMPTZ DEFAULT NOW(),
+	    updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_bid_chapter_project ON bid_chapters(project_id);
+
+	CREATE TABLE IF NOT EXISTS bid_templates (
+	    id VARCHAR(64) PRIMARY KEY,
+	    name VARCHAR(255) NOT NULL,
+	    category VARCHAR(128),
+	    industry VARCHAR(128),
+	    structure JSONB NOT NULL,
+	    workflow_dag JSONB,
+	    created_at TIMESTAMPTZ DEFAULT NOW()
+	);`
+	if _, err := pool.Exec(ctx, bidSchema); err != nil {
+		zap.L().Error("Failed to run bid migrations (non-fatal)", zap.Error(err))
+	}
+
 
 	// Add columns that may be missing from older (Java) schema
 	alterStatements := []string{

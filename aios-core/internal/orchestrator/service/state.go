@@ -93,6 +93,11 @@ func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newSta
 
 	s.recordContextForTransition(ctx, node, newStatus)
 
+	// CONTROL node: auto-pause task when node becomes READY (human review required)
+	if node.Type == model.NodeTypeControl && newStatus == model.NodeReady {
+		s.handleControlNodeReady(ctx, node)
+	}
+
 	// Event-driven: immediately try to make CREATED nodes ready
 	if newStatus == model.NodeCreated {
 		s.TryMakeReady(ctx, node)
@@ -167,6 +172,45 @@ func (s *StateService) TransitionTask(ctx context.Context, taskID string, newSta
 	}
 
 	return nil
+}
+
+// handleControlNodeReady pauses the task when a CONTROL node becomes READY,
+// signaling that human review is required before the workflow proceeds.
+func (s *StateService) handleControlNodeReady(ctx context.Context, node *model.Node) {
+	task, err := s.taskRepo.FindByID(ctx, node.TaskID)
+	if err != nil || task == nil {
+		zap.L().Error("Failed to find task for CONTROL node pause", zap.Error(err))
+		return
+	}
+
+	// Only pause if task is currently RUNNING
+	if task.Status != model.TaskRunning {
+		zap.L().Debug("Task not in RUNNING state, skipping CONTROL node pause",
+			zap.String("taskId", node.TaskID),
+			zap.String("taskStatus", string(task.Status)),
+		)
+		return
+	}
+
+	task.Status = model.TaskPaused
+	task.PauseReason = fmt.Sprintf("Control node '%s' (%s) requires review", node.Name, node.ID)
+	if err := s.taskRepo.Save(ctx, task); err != nil {
+		zap.L().Error("Failed to pause task for CONTROL node", zap.Error(err))
+		return
+	}
+
+	s.recordContext(ctx, node.TaskID, node.ID,
+		model.ContextType("NODE_REVIEW_REQUIRED"),
+		"StateMachine",
+		fmt.Sprintf("Control node '%s' ready for review — task paused", node.Name),
+		nil,
+	)
+
+	zap.L().Info("Task paused for CONTROL node review",
+		zap.String("taskId", node.TaskID),
+		zap.String("nodeId", node.ID),
+		zap.String("nodeName", node.Name),
+	)
 }
 
 func (s *StateService) CheckDependenciesMet(ctx context.Context, nodeID string) (bool, error) {

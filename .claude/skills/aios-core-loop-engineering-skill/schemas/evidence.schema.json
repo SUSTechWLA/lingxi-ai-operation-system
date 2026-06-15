@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "loopId",
+    "runId",
+    "commitSha",
+    "commands",
+    "tests",
+    "checks"
+  ],
+  "properties": {
+    "loopId": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "commitSha": {
+      "type": "string"
+    },
+    "commands": {
+      "type": "array"
+    },
+    "tests": {
+      "type": "object"
+    },
+    "checks": {
+      "type": "object"
+    },
+    "artifacts": {
+      "type": "array"
+    },
+    "knownRisks": {
+      "type": "array"
+    }
+  }
+}

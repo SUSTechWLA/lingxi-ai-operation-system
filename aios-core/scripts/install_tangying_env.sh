@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-section "Tangying AI OS - Environment Setup"
+section "AIOS - Environment Setup"
 
 # Step 1: Check Go
 section "Step 1: Check Go 1.23+"

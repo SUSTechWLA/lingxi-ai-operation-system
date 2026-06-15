@@ -1,0 +1,19 @@
+schema_version: "1.0"
+loop_id: LOOP-YYYYMMDD-001
+title: ""
+mode: solution-design
+status: CREATED
+risk_level: MEDIUM
+repository: ""
+core_write_enabled: false
+review_mode: EXTERNAL_MANUAL
+solution_outputs:
+  solution_blueprint: false
+  frontend_requirements: false
+  workflow_spec: false
+  api_and_event_contracts: false
+  external_capability_requirements: false
+loop_policy:
+  max_fix_iterations: 5
+  max_same_failure: 2
+  require_evidence: true

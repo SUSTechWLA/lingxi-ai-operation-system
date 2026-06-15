@@ -44,7 +44,7 @@
   },
   "build": {
     "appId": "com.tangying.ai-os",
-    "productName": "躺营AI自媒体运营助手",
+    "productName": "AIOS 通用智能体平台",
     "directories": {
       "output": "release"
     },
@@ -56,15 +56,15 @@
     "mac": {
       "target": "dmg",
       "category": "public.app-category.productivity",
-      "icon": "../resources/躺营ai自媒体运营助手.png"
+      "icon": "../resources/AIOSai自媒体运营助手.png"
     },
     "win": {
       "target": "nsis",
-      "icon": "../resources/躺营ai自媒体运营助手.png"
+      "icon": "../resources/AIOSai自媒体运营助手.png"
     },
     "linux": {
       "target": "AppImage",
-      "icon": "../resources/躺营ai自媒体运营助手.png"
+      "icon": "../resources/AIOSai自媒体运营助手.png"
     }
   }
 }

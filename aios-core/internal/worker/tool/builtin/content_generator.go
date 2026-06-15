@@ -32,12 +32,12 @@ func (t *ContentGeneratorTool) Manifest() tool.ToolManifest {
 		Parameters: map[string]tool.ParamDef{
 			"prompt": {
 				Type:        "string",
-				Description: "User content creation request (default: 创作一篇自媒体内容)",
+				Description: "User content creation request (default: 创作一篇内容)",
 				Required:    false,
 			},
 			"platform": {
 				Type:        "string",
-				Description: "Target platform name (default: 通用自媒体)",
+				Description: "Target platform name (default: 通用平台)",
 				Required:    false,
 			},
 			"style": {
@@ -91,13 +91,13 @@ func (t *ContentGeneratorTool) Execute(ctx context.Context, params map[string]in
 	keywords, _ := params["keywords"].(string)
 
 	if platform == "" {
-		platform = "通用自媒体"
+		platform = "通用平台"
 	}
 	if style == "" {
 		style = "轻松自然"
 	}
 	if prompt == "" {
-		prompt = "创作一篇自媒体内容"
+		prompt = "创作一篇内容"
 	}
 
 	analysis, _ := params["analysis"].(string)
@@ -114,7 +114,7 @@ func (t *ContentGeneratorTool) Execute(ctx context.Context, params map[string]in
 		}
 	}
 
-	systemPrompt := fmt.Sprintf(`你是一个专业的自媒体内容创作助手。目标平台：%s。
+	systemPrompt := fmt.Sprintf(`你是一个专业的智能内容创作助手。目标平台：%s。
 创作风格：%s。
 
 根据素材分析结果和用户需求，输出完整的内容包（纯JSON格式）：

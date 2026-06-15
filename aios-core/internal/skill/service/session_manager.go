@@ -35,7 +35,7 @@ func (m *SessionManager) CreateSession(ctx context.Context, userID string, media
 
 	welcomeMsg := model.ChatMessage{
 		Role:      "assistant",
-		Content:   "你好！我是 AI 创作助手，可以帮你：\n\n• 根据素材生成标题和简介\n• 优化和完善现有内容\n• 创作灵感和建议\n• 回答自媒体相关问题\n\n有什么我可以帮你的吗？",
+		Content:   "你好！我是 AIOS 通用智能助手，可以帮你：\n\n• 编排和执行复杂任务工作流\n• 调用各类工具完成自动化操作\n• 生成和优化内容\n• 管理和分析数据\n\n有什么我可以帮你的吗？",
 		Timestamp: time.Now(),
 	}
 

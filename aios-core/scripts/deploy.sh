@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-#  躺营 AI OS — 一键部署脚本
+#  AIOS AI OS — 一键部署脚本
 #  适用系统: Ubuntu 22.04/24.04, Debian 12
 #
 #  用法:
@@ -24,7 +24,7 @@ NC='\033[0m'
 # ── 全局变量 ──────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-INSTALL_DIR="/opt/tangying"
+INSTALL_DIR="/opt/aios"
 LOG_FILE="/tmp/tangying-deploy-$(date +%Y%m%d-%H%M%S).log"
 START_TIME=$(date +%s)
 
@@ -43,7 +43,7 @@ bare()    { echo -e "  $1" | tee -a "$LOG_FILE"; }
 
 usage() {
     cat <<'EOF'
-躺营 AI OS — 一键部署脚本
+AIOS AI OS — 一键部署脚本
 
 用法:
   sudo bash scripts/deploy.sh             一键安装部署（裸服务器从零开始）
@@ -403,7 +403,7 @@ build_backend() {
 
     cd "$PROJECT_DIR"
 
-    # 如果部署到了 /opt/tangying 但项目目录不在那里，创建软链接
+    # 如果部署到了 /opt/aios 但项目目录不在那里，创建软链接
     if [ "$PROJECT_DIR" != "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR" ]; then
         mkdir -p "$(dirname "$INSTALL_DIR")"
         ln -sf "$PROJECT_DIR" "$INSTALL_DIR"
@@ -458,9 +458,9 @@ build_sandbox() {
     if [ -f sandbox/Cargo.toml ]; then
         step "编译 Rust 沙箱..."
         (cd sandbox && cargo build --release 2>&1 | tail -5)
-        if [ -f sandbox/target/release/tangying-sandbox ]; then
-            cp sandbox/target/release/tangying-sandbox build/
-            info "沙箱构建完成: build/tangying-sandbox"
+        if [ -f sandbox/target/release/aios-core-sandbox ]; then
+            cp sandbox/target/release/aios-core-sandbox build/
+            info "沙箱构建完成: build/aios-core-sandbox"
         fi
     fi
     cd "$PROJECT_DIR"
@@ -470,7 +470,7 @@ build_sandbox() {
 configure_nginx() {
     section "Step 12: 配置 Nginx"
 
-    local NGINX_CONF="/etc/nginx/sites-available/tangying"
+    local NGINX_CONF="/etc/nginx/sites-available/aios-core"
     local FRONTEND_DIST="$PROJECT_DIR/../frontend/dist"
 
     if [ ! -d "$FRONTEND_DIST" ]; then
@@ -478,8 +478,8 @@ configure_nginx() {
     fi
 
     # 生成 Nginx 配置
-    if [ -f "$SCRIPT_DIR/nginx-tangying.conf" ]; then
-        cp "$SCRIPT_DIR/nginx-tangying.conf" "$NGINX_CONF"
+    if [ -f "$SCRIPT_DIR/nginx-aios-core.conf" ]; then
+        cp "$SCRIPT_DIR/nginx-aios-core.conf" "$NGINX_CONF"
         sed -i "s|__FRONTEND_DIST__|$FRONTEND_DIST|g" "$NGINX_CONF"
     else
         # Inline fallback
@@ -517,7 +517,7 @@ NGINX_EOF
 
     # 启用站点
     rm -f /etc/nginx/sites-enabled/default
-    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/tangying
+    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/aios-core
 
     # 验证配置
     if nginx -t 2>/dev/null; then
@@ -533,15 +533,15 @@ install_services() {
     section "Step 13: 安装 systemd 服务"
 
     # ── 后端服务 ──
-    local back_src="$SCRIPT_DIR/tangying-backend.service"
-    local back_dst="/etc/systemd/system/tangying-backend.service"
+    local back_src="$SCRIPT_DIR/aios-core-backend.service"
+    local back_dst="/etc/systemd/system/aios-core-backend.service"
 
     if [ -f "$back_src" ]; then
         cp "$back_src" "$back_dst"
     else
         cat > "$back_dst" << SYSTEMD_EOF
 [Unit]
-Description=Tangying AI OS Backend
+Description=AIOS Backend
 After=network.target docker.service
 Requires=docker.service
 
@@ -565,29 +565,29 @@ SYSTEMD_EOF
     sed -i "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$back_dst"
 
     systemctl daemon-reload
-    systemctl enable tangying-backend
-    systemctl restart tangying-backend
+    systemctl enable aios-core-backend
+    systemctl restart aios-core-backend
 
-    info "后端服务已安装: systemctl status tangying-backend"
+    info "后端服务已安装: systemctl status aios-core-backend"
 
     # ── 沙箱服务 (可选) ──
-    if [ "${SANDBOX_ENABLED:-false}" = "true" ] && [ -f "$PROJECT_DIR/build/tangying-sandbox" ]; then
-        local sand_src="$SCRIPT_DIR/tangying-sandbox.service"
-        local sand_dst="/etc/systemd/system/tangying-sandbox.service"
+    if [ "${SANDBOX_ENABLED:-false}" = "true" ] && [ -f "$PROJECT_DIR/build/aios-core-sandbox" ]; then
+        local sand_src="$SCRIPT_DIR/aios-core-sandbox.service"
+        local sand_dst="/etc/systemd/system/aios-core-sandbox.service"
 
         if [ -f "$sand_src" ]; then
             cp "$sand_src" "$sand_dst"
         else
             cat > "$sand_dst" << SYSTEMD_EOF
 [Unit]
-Description=Tangying AI OS Sandbox (Rust gRPC)
-After=network.target tangying-backend.service
+Description=AIOS Sandbox (Rust gRPC)
+After=network.target aios-core-backend.service
 
 [Service]
 Type=simple
 User=$DEPLOY_USER
 WorkingDirectory=$PROJECT_DIR
-ExecStart=$PROJECT_DIR/build/tangying-sandbox
+ExecStart=$PROJECT_DIR/build/aios-core-sandbox
 Restart=always
 RestartSec=3
 StandardOutput=journal
@@ -601,12 +601,12 @@ SYSTEMD_EOF
         sed -i "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$sand_dst"
 
         systemctl daemon-reload
-        systemctl enable tangying-sandbox
-        systemctl restart tangying-sandbox
-        info "沙箱服务已安装: systemctl status tangying-sandbox"
+        systemctl enable aios-core-sandbox
+        systemctl restart aios-core-sandbox
+        info "沙箱服务已安装: systemctl status aios-core-sandbox"
     else
-        systemctl stop tangying-sandbox 2>/dev/null || true
-        systemctl disable tangying-sandbox 2>/dev/null || true
+        systemctl stop aios-core-sandbox 2>/dev/null || true
+        systemctl disable aios-core-sandbox 2>/dev/null || true
     fi
 }
 
@@ -654,7 +654,7 @@ verify_deployment() {
             break
         fi
         if [ $i -eq $max_wait ]; then
-            warn "后端未响应 (可稍后检查: journalctl -u tangying-backend -f)"
+            warn "后端未响应 (可稍后检查: journalctl -u aios-core-backend -f)"
             failed=1
         fi
         sleep 1
@@ -700,7 +700,7 @@ print_summary() {
 
     section "部署完成!"
     echo ""
-    echo -e "  ${GREEN}${BOLD}躺营 AI OS 已成功部署${NC}"
+    echo -e "  ${GREEN}${BOLD}AIOS AI OS 已成功部署${NC}"
     echo ""
     echo -e "  ${BOLD}访问地址:${NC}  ${CYAN}http://${SERVER_IP}/${NC}"
     echo -e "  ${BOLD}部署耗时:${NC}  ${minutes}分${seconds}秒"
@@ -709,9 +709,9 @@ print_summary() {
     echo -e "  ${BOLD}━━━ 常用管理命令 ━━━${NC}"
     echo ""
     echo -e "  ${CYAN}后端服务:${NC}"
-    echo -e "    systemctl status tangying-backend  # 查看状态"
-    echo -e "    systemctl restart tangying-backend # 重启"
-    echo -e "    journalctl -u tangying-backend -f  # 查看日志"
+    echo -e "    systemctl status aios-core-backend  # 查看状态"
+    echo -e "    systemctl restart aios-core-backend # 重启"
+    echo -e "    journalctl -u aios-core-backend -f  # 查看日志"
     echo ""
     echo -e "  ${CYAN}Docker 基础设施:${NC}"
     echo -e "    cd $INSTALL_DIR && docker compose ps     # 查看容器"
@@ -729,7 +729,7 @@ print_summary() {
 main() {
     echo -e "${BLUE}${BOLD}"
     echo "  ╔══════════════════════════════════════╗"
-    echo "  ║   躺营 AI OS — 一键部署脚本         ║"
+    echo "  ║   AIOS AI OS — 一键部署脚本         ║"
     echo "  ║   Ubuntu 22.04/24.04 · Debian 12   ║"
     echo "  ╚══════════════════════════════════════╝"
     echo -e "${NC}"

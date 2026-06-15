@@ -39,7 +39,7 @@ func (t *MediaAnalyzerTool) Manifest() tool.ToolManifest {
 			},
 			"prompt": {
 				Type:        "string",
-				Description: "Custom analysis instructions (default: 分析这批自媒体素材，生成相关标签和内容创作建议)",
+				Description: "Custom analysis instructions (default: 分析这批多媒体素材，生成相关标签和内容创作建议)",
 				Required:    false,
 			},
 		},
@@ -68,7 +68,7 @@ func (t *MediaAnalyzerTool) ValidateParameters(params map[string]interface{}) bo
 func (t *MediaAnalyzerTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	mediaIDs, _ := params["media_ids"].([]interface{})
 	fileNames, _ := params["file_names"].([]interface{})
-	prompt := "分析这批自媒体素材，生成相关标签（3-5个中文标签）和内容创作建议"
+	prompt := "分析这批多媒体素材，生成相关标签（3-5个中文标签）和内容创作建议"
 
 	if p, ok := params["prompt"].(string); ok && p != "" {
 		prompt = p
@@ -83,7 +83,7 @@ func (t *MediaAnalyzerTool) Execute(ctx context.Context, params map[string]inter
 		mediaDesc += "- " + name + " (ID: " + id.(string) + ")\n"
 	}
 
-	systemPrompt := `你是一个专业的自媒体素材分析助手。分析用户提供的素材，输出JSON格式的分析结果。
+	systemPrompt := `你是一个专业的多媒体素材分析助手。分析用户提供的素材，输出JSON格式的分析结果。
 字段说明：
 - tags: 3-5个中文标签，概括素材主题
 - suggestions: 2-3个内容创作方向建议

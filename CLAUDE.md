@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Quick Reference
 
 ### Service
-- Single Go binary on port 8080 (all modules combined in a modular monolith)
+- AIOS — 通用智能体编排平台。Go 单体应用，端口 8080，模块化架构支持 DAG 工作流编排、多工具协作、人工审核节点和外部工具注册
 
 ### Core Commands
 
@@ -71,15 +71,17 @@ curl http://localhost:8080/api/health
 
 ## Architecture Overview
 
-Go modular monolith — all modules run in a single process on port 8080:
+Go 通用智能体编排平台 — 所有模块运行在同一进程（端口 8080）：
 
-1. **NL-Translator** - Converts natural language prompts into executable DAG task graphs using LLMs
-2. **Orchestrator** - Core task scheduler managing task lifecycle, dependencies, and event distribution
-3. **Context** - Persists task history and provides audit/snapshot capabilities
-4. **Worker** - Executes operations via plugin-based tool architecture
-5. **Publish** - Frontend-facing API for content creation, AI generation/polish, and multi-platform publishing
-6. **Media** - MinIO-backed media asset management with upload, tag filtering, and presigned URL retrieval
-7. **Skill** - AI conversational assistant with multi-turn dialog, LLM-driven DAG planning, Redis-backed session state, and tool manifest knowledge base
+1. **NL-Translator** - LLM 驱动的自然语言到 DAG 任务图转换
+2. **Orchestrator** - 核心任务调度：DAG 生命周期管理、状态机、依赖解析、重试策略
+3. **Context** - 任务历史持久化、审计追踪、快照/恢复
+4. **Worker** - 插件化工具执行引擎（内置 + 外部工具注册）
+5. **Publish** - 内容生成与多平台发布 API
+6. **Media** - MinIO 对象存储，媒体资产管理
+7. **Skill** - 多轮对话 AI 助手，LLM DAG 规划，Redis 会话状态
+8. **Bid** - 自动化标书生成（招标解析 → 章节生成 → 审核 → 导出）
+9. **Workflow** - 硬编排工作流模板系统（保存/复用/实例化 DAG）
 
 ### Communication Flow
 - Modules communicate via internal Go function calls (same process)

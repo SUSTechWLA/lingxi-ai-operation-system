@@ -35,6 +35,11 @@ import (
 	"github.com/tangying-ai/aios-core/internal/worker/tool/builtin"
 	"github.com/tangying-ai/aios-core/internal/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/media"
+
+	bidHandler "github.com/tangying-ai/aios-core/internal/bid/handler"
+	bidRepo "github.com/tangying-ai/aios-core/internal/bid/repository"
+	bidsvc "github.com/tangying-ai/aios-core/internal/bid/service"
+	"github.com/tangying-ai/aios-core/internal/workflow"
 )
 
 func main() {
@@ -226,6 +231,20 @@ func main() {
 		skillSessionManager, skillPlanService, skillResultAssembler, mediaSvc,
 	).RegisterRoutes(r)
 	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
+
+	// Bid (tender) generation module
+	bidRepository := bidRepo.NewBidRepository(pool)
+	bidService := bidsvc.NewBidService(bidRepository, orchestratorService, taskExecutionCtrl, stateService, taskRepo, nodeRepo)
+	bidHandler.NewBidHandler(bidService).RegisterRoutes(r)
+	zap.L().Info("Bid service registered")
+
+	// Workflow templates — reusable DAG blueprints
+	workflowRepo := workflow.NewRepository(pool)
+	workflowService := workflow.NewService(workflowRepo, orchestratorService)
+	workflow.NewHandler(workflowService).RegisterRoutes(r)
+	// Ensure schema and seed built-in templates
+	workflow.EnsureSchema(ctx, pool)
+	zap.L().Info("Workflow service registered")
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),

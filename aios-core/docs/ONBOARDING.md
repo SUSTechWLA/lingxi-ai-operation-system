@@ -1,4 +1,4 @@
-# 躺营AI OS - 新开发者上手指南
+# AIOS - 新开发者上手指南
 
 > 本文档面向**新加入的开发者**，帮助你从零理解项目并快速上手开发。
 
@@ -175,9 +175,9 @@ interface ApiResponse<T> {
 
 ## 3. 项目总览
 
-### 3.1 躺营 AI OS 是什么
+### 3.1 AIOS AI OS 是什么
 
-躺营 AI 自媒体运营助手是一个**一站式自媒体内容管理平台**：
+AIOS 是一个**通用智能体编排平台**：
 
 ```
 用户使用场景：
@@ -234,7 +234,7 @@ interface ApiResponse<T> {
 ## 4. 项目结构详解
 
 ```
-tangying-ai-operation-system/
+aios-core/
 │
 ├── cmd/tangying-ai-os/
 │   └── main.go                    # ★ 启动入口，所有组件在此组装
@@ -436,7 +436,7 @@ const result = await aiGenerateContent("周末去哪儿玩")
 ```bash
 # 克隆项目
 git clone <repo-url>
-cd tangying-ai-operation-system
+cd aios-core
 
 # 配置 API Key（必须）
 cp .env.example .env
@@ -592,7 +592,7 @@ package builtin
 
 import (
     "context"
-    "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
+    "github.com/tangying-ai/aios-core/internal/worker/tool"
 )
 
 type HttpTool struct{}

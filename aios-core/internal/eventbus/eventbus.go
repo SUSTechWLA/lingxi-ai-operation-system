@@ -18,6 +18,7 @@ const (
 	TopicTaskCreated  = "ai.task.created"
 	TopicTaskCompleted = "ai.task.completed"
 	TopicTaskFailed   = "ai.task.failed"
+	TopicProgress     = "ai.node.progress"
 )
 
 type Event struct {

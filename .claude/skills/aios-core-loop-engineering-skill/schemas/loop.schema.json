@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "loop_id",
+    "mode",
+    "status",
+    "core_write_enabled"
+  ],
+  "properties": {
+    "loop_id": {
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "core-update",
+        "bugfix",
+        "refactor",
+        "performance",
+        "reliability",
+        "observability",
+        "solution-design",
+        "solution-assessment",
+        "release-review",
+        "operations-review"
+      ]
+    },
+    "status": {
+      "type": "string"
+    },
+    "core_write_enabled": {
+      "type": "boolean"
+    },
+    "review_mode": {
+      "enum": [
+        "EXTERNAL_MANUAL",
+        "INTERNAL_APPROVAL"
+      ]
+    },
+    "solution_outputs": {
+      "type": "object",
+      "properties": {
+        "solution_blueprint": {
+          "type": "boolean"
+        },
+        "frontend_requirements": {
+          "type": "boolean"
+        },
+        "workflow_spec": {
+          "type": "boolean"
+        },
+        "api_and_event_contracts": {
+          "type": "boolean"
+        },
+        "external_capability_requirements": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

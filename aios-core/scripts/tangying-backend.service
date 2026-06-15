@@ -1,5 +1,5 @@
 [Unit]
-Description=Tangying AI OS Backend
+Description=AIOS Backend
 After=network.target docker.service
 Requires=docker.service
 

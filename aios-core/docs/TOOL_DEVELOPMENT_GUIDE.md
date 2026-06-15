@@ -604,7 +604,7 @@ import (
     "context"
     "fmt"
 
-    "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/tool"
+    "github.com/tangying-ai/aios-core/internal/worker/tool"
 )
 
 type MyTool struct{}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "decision",
+    "evidence",
+    "next_action"
+  ],
+  "properties": {
+    "decision": {
+      "enum": [
+        "NO_CORE_CHANGE",
+        "CORE_CHANGE_CANDIDATE",
+        "CORE_CHANGE_REJECTED",
+        "NEED_MORE_EVIDENCE"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_action": {
+      "type": "string"
+    }
+  }
+}

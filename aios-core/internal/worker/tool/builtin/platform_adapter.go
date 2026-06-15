@@ -91,7 +91,7 @@ func (t *PlatformAdapterTool) Execute(ctx context.Context, params map[string]int
 
 	rules, ok := platformRules[targetPlatform]
 	if !ok {
-		rules = "通用自媒体平台，保持内容自然流畅"
+		rules = "通用平台平台，保持内容自然流畅"
 	}
 
 	callTool := &LlmApiTool{cfg: t.cfg}

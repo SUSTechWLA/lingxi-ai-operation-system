@@ -254,6 +254,17 @@ type ProgressResponse struct {
 	TaskID       string `json:"task_id,omitempty"`
 }
 
+// ProgressEvent reports stage progress for long-running tasks.
+type ProgressEvent struct {
+	ProjectID   string  `json:"project_id"`
+	Stage       string  `json:"stage"`
+	Progress    float64 `json:"progress"`
+	CurrentStep string  `json:"current_step"`
+	TotalSteps  int     `json:"total_steps"`
+	NodeID      string  `json:"node_id,omitempty"`
+	Timestamp   string  `json:"timestamp"`
+}
+
 // ToolManifestRecord is the database-persisted tool manifest row.
 // It mirrors tool.ToolManifest for JSONB storage in PostgreSQL.
 type ToolManifestRecord struct {

@@ -182,7 +182,7 @@ func (s *PublishService) AIGenerateSubmit(ctx context.Context, prompt string) (*
 
 	nodeID := fmt.Sprintf("ai-generate-%d", time.Now().UnixMilli())
 
-	fullPrompt := fmt.Sprintf(`你是一个自媒体内容创作助手。请根据用户的提示，生成适合自媒体发布的标题和简介。
+	fullPrompt := fmt.Sprintf(`你是一个智能内容创作助手。请根据用户的提示，生成适合各平台发布的标题和简介。
 要求：
 1. 标题吸引眼球，不超过30字
 2. 简介详细介绍内容亮点，200字以内
@@ -517,7 +517,7 @@ func (s *PublishService) submitImageOnlyDAG(ctx context.Context, prompt string, 
 		return nil, fmt.Errorf("failed to process any images: all %d files could not be read or encoded", len(images))
 	}
 
-	fullPrompt := fmt.Sprintf(`你是一个自媒体内容创作助手。请根据用户上传的素材图片和说明，生成适合自媒体发布的标题和简介。
+	fullPrompt := fmt.Sprintf(`你是一个智能内容创作助手。请根据用户上传的素材图片和说明，生成适合各平台发布的标题和简介。
 要求：
 1. 标题吸引眼球，不超过30字
 2. 简介详细介绍内容亮点，200字以内

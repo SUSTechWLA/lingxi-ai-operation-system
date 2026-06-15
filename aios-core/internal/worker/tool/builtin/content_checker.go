@@ -41,7 +41,7 @@ func (t *ContentCheckerTool) Manifest() tool.ToolManifest {
 			},
 			"platform": {
 				Type:        "string",
-				Description: "Target platform name (default: 通用自媒体)",
+				Description: "Target platform name (default: 通用平台)",
 				Required:    false,
 			},
 		},
@@ -73,7 +73,7 @@ func (t *ContentCheckerTool) Execute(ctx context.Context, params map[string]inte
 	platform, _ := params["platform"].(string)
 
 	if platform == "" {
-		platform = "通用自媒体"
+		platform = "通用平台"
 	}
 
 

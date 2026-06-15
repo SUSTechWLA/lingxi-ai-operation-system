@@ -49,7 +49,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-section "🐝 Tangying AI OS — One-Click Start"
+section "🐝 AIOS — One-Click Start"
 
 # ============================================
 # Step 1: Docker infrastructure

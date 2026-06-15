@@ -38,7 +38,7 @@ test_api() {
     fi
 }
 
-section "Tangying AI OS - API Tests"
+section "AIOS - API Tests"
 
 section "Step 1: Infrastructure Check"
 for container in tangying-postgres tangying-redis tangying-redpanda; do

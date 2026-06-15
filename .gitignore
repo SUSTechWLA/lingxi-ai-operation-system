@@ -1,7 +1,7 @@
 # IDE
-.claude
 .vscode
 .idea
+.lingxi-core-loop
 
 # Logs
 *.log
@@ -29,5 +29,4 @@ vendor/
 .DS_Store
 Thumbs.db
 trace.json
-/tangying-ai-os
 frontend/node_modules

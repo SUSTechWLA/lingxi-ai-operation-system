@@ -1,6 +1,6 @@
 # 沙箱执行环境对接指南
 
-> 本文档面向**沙箱运行时开发人员**，说明沙箱隔离执行环境如何与躺营 AI OS 的 Worker 模块集成。
+> 本文档面向**沙箱运行时开发人员**，说明沙箱隔离执行环境如何与AIOS AI OS 的 Worker 模块集成。
 >
 > **当前状态**：Rust gRPC 沙箱服务已完整实现（`sandbox/` 目录），支持 Bash/Python 工具隔离执行。通过 `SANDBOX_ENABLED=true` 启用。
 
@@ -237,7 +237,7 @@ syntax = "proto3";
 
 package sandbox;
 
-option go_package = "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor/sandboxpb";
+option go_package = "github.com/tangying-ai/aios-core/internal/worker/executor/sandboxpb";
 
 // =================== 服务定义 ===================
 
@@ -695,7 +695,7 @@ import (
 
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
-    pb "github.com/tangying-ai/tangying-ai-operation-system/internal/worker/executor/sandboxpb"
+    pb "github.com/tangying-ai/aios-core/internal/worker/executor/sandboxpb"
 )
 
 type SandboxExecutor struct {
@@ -770,7 +770,7 @@ func (s *SandboxExecutor) Execute(ctx context.Context, req ExecutionRequest) (Ex
 
 ```bash
 # 主程序侧（Go）—— 重新编译以包含 gRPC 客户端
-cd tangying-ai-operation-system
+cd aios-core
 go mod tidy
 make build
 
@@ -783,7 +783,7 @@ cargo build --release  # 或 go build / docker build
 ./sandbox-service --addr 0.0.0.0:50051
 
 # 再启动主程序
-cd tangying-ai-operation-system
+cd aios-core
 SANDBOX_ENABLED=true SANDBOX_ADDRESS=localhost:50051 ./build/tangying-ai-os
 ```
 
