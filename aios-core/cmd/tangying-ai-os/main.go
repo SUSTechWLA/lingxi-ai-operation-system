@@ -26,8 +26,8 @@ import (
 	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
 	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
 	redisClient "github.com/tangying-ai/aios-core/internal/core/redis"
-	skillHandler "github.com/tangying-ai/aios-core/internal/agents/skill/handler"
-	skillSvc "github.com/tangying-ai/aios-core/internal/agents/skill/service"
+	skillHandler "github.com/tangying-ai/aios-core/internal/agents/chat/handler"
+	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 	translatorHandler "github.com/tangying-ai/aios-core/internal/core/translator/handler"
 	translatorSvc "github.com/tangying-ai/aios-core/internal/core/translator/service"
 	workerService "github.com/tangying-ai/aios-core/internal/core/worker/service"
@@ -130,7 +130,7 @@ func main() {
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL, toolManifestSvc)
 
-	// Skill (AI assistant dialog system — each chat turn = one Task via orchestrator)
+	// Chat (AI assistant dialog system — each chat turn = one Task via orchestrator)
 	skillLlmClient := skillSvc.NewLLMClient(cfg.OpenAI)
 	skillSessionManager := skillSvc.NewSessionManager(rdb)
 	skillPlanService := skillSvc.NewPlanService(skillLlmClient, toolManifestSvc)

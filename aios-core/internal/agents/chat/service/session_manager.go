@@ -15,7 +15,7 @@ import (
 
 const (
 	sessionTTL     = 30 * time.Minute
-	sessionPrefix  = "skill:session:"
+	sessionPrefix  = "chat:session:"
 	maxMessages    = 50
 	terminatedTTL  = 5 * time.Minute
 )
@@ -53,7 +53,7 @@ func (m *SessionManager) CreateSession(ctx context.Context, userID string, media
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
-	zap.L().Info("Skill session created", zap.String("session_id", sessionID))
+	zap.L().Info("Chat session created", zap.String("session_id", sessionID))
 	return session, nil
 }
 

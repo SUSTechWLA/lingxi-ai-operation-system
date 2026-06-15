@@ -10,10 +10,10 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/media"
 	"github.com/tangying-ai/aios-core/internal/core/model"
-	"github.com/tangying-ai/aios-core/internal/agents/skill/service"
+	"github.com/tangying-ai/aios-core/internal/agents/chat/service"
 )
 
-// SessionHandler handles HTTP requests for the skill dialog system.
+// SessionHandler handles HTTP requests for the chat dialog system.
 type SessionHandler struct {
 	sessionManager  *service.SessionManager
 	planService     *service.PlanService
@@ -35,15 +35,15 @@ func NewSessionHandler(
 	}
 }
 
-// RegisterRoutes registers all skill dialog routes.
+// RegisterRoutes registers all chat session routes.
 func (h *SessionHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/skill/dialog")
+	api := r.Group("/api/chat/sessions")
 	{
-		api.POST("/session/create", h.CreateSession)
-		api.GET("/session/:session_id", h.GetSession)
-		api.POST("/session/:session_id/chat", h.Chat)
-		api.GET("/session/:session_id/progress", h.GetProgress)
-		api.POST("/session/:session_id/terminate", h.TerminateSession)
+		api.POST("/create", h.CreateSession)
+		api.GET("/:session_id", h.GetSession)
+		api.POST("/:session_id/chat", h.Chat)
+		api.GET("/:session_id/progress", h.GetProgress)
+		api.POST("/:session_id/terminate", h.TerminateSession)
 	}
 }
 
@@ -184,7 +184,7 @@ func (h *SessionHandler) Chat(c *gin.Context) {
 	// Step 2: Create task and submit DAG to orchestrator
 	// Each chat turn = one Task, fully tracked by context module
 	task, err := h.resultAssembler.CreateTask(ctx, map[string]interface{}{
-		"source":    "skill_assistant",
+		"source":    "chat_assistant",
 		"message":   req.Message,
 		"user_id":   session.UserID,
 		"session_id": sessionID,
@@ -205,7 +205,7 @@ func (h *SessionHandler) Chat(c *gin.Context) {
 	session.TaskIDs = append(session.TaskIDs, task.ID)
 	h.sessionManager.SaveSession(ctx, session)
 
-	zap.L().Info("Skill task submitted to orchestrator",
+	zap.L().Info("Chat task submitted to orchestrator",
 		zap.String("taskId", task.ID),
 		zap.String("sessionId", sessionID),
 		zap.Int("nodeCount", len(dag.Nodes)))

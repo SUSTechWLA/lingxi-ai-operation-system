@@ -148,7 +148,7 @@ type NodeTaskEvent struct {
 	IdempotencyKey string                 `json:"idempotencyKey,omitempty"`
 }
 
-// ── Skill / Conversational AI types ──
+// ── Chat / Conversational AI types ──
 
 // ConversationContext stores a skill session's state in Redis.
 // Each chat turn creates a Task tracked via TaskIDs; the full conversation
@@ -192,7 +192,7 @@ type MediaContext struct {
 	Platforms   []string `json:"platforms,omitempty"`
 }
 
-// ── Skill API contracts ──
+// ── Chat API contracts ──
 
 // CreateSessionRequest is the request body for creating a skill session.
 type CreateSessionRequest struct {

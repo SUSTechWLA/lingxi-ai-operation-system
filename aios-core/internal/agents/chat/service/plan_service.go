@@ -12,7 +12,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/common/llmutil"
 	"github.com/tangying-ai/aios-core/internal/core/model"
-	"github.com/tangying-ai/aios-core/internal/agents/skill/prompts"
+	"github.com/tangying-ai/aios-core/internal/agents/chat/prompts"
 )
 
 // PlanService generates execution plans (DAGs) from conversation context via direct LLM call.
@@ -45,7 +45,7 @@ func (s *PlanService) GeneratePlan(
 		toolsDesc = "chat_generate: 通用内容生成\nchat_revise: 修改已有内容"
 	}
 
-	prompt := fmt.Sprintf(prompts.SystemPromptSkillDAG, history, mediaInfo, toolsDesc, userMessage)
+	prompt := fmt.Sprintf(prompts.SystemPromptChatDAG, history, mediaInfo, toolsDesc, userMessage)
 
 	llmMessages := []map[string]interface{}{
 		{"role": "system", "content": prompt},

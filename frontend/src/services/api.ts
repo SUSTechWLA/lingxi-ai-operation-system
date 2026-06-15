@@ -111,7 +111,7 @@ export const createSkillSession = async (
     platforms?: string[]
   }
 ): Promise<CreateSessionResponse> => {
-  const response = await api.post<ApiResponse<CreateSessionResponse>>('/skill/dialog/session/create', context || {})
+  const response = await api.post<ApiResponse<CreateSessionResponse>>('/chat/sessions/create', context || {})
   return response.data.data
 }
 
@@ -121,7 +121,7 @@ export const chatSkillSession = async (
   signal?: AbortSignal
 ): Promise<SkillChatResponse> => {
   const response = await api.post<ApiResponse<SkillChatResponse>>(
-    `/skill/dialog/session/${sessionId}/chat`,
+    `/chat/sessions/${sessionId}/chat`,
     { message },
     { signal, timeout: 180000 }
   )
@@ -132,7 +132,7 @@ export const getSkillSessionProgress = async (
   sessionId: string
 ): Promise<ProgressResponse> => {
   const response = await api.get<ApiResponse<ProgressResponse>>(
-    `/skill/dialog/session/${sessionId}/progress`
+    `/chat/sessions/${sessionId}/progress`
   )
   return response.data.data
 }
@@ -141,7 +141,7 @@ export const getSkillSession = async (
   sessionId: string
 ): Promise<SkillSessionResponse> => {
   const response = await api.get<ApiResponse<SkillSessionResponse>>(
-    `/skill/dialog/session/${sessionId}`
+    `/chat/sessions/${sessionId}`
   )
   return response.data.data
 }
@@ -149,7 +149,7 @@ export const getSkillSession = async (
 export const terminateSkillSession = async (
   sessionId: string
 ): Promise<void> => {
-  await api.post(`/skill/dialog/session/${sessionId}/terminate`, {})
+  await api.post(`/chat/sessions/${sessionId}/terminate`, {})
 }
 
 // Media management API

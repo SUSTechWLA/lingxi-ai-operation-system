@@ -14,7 +14,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/common/jsonx"
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/model"
-	skillSvc "github.com/tangying-ai/aios-core/internal/agents/skill/service"
+	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 )
 
 const systemPromptTmpl = `你是一个任务分解专家。请将用户的自然语言任务分解为多个执行节点（Node），并构建一个有向无环图（DAG）。

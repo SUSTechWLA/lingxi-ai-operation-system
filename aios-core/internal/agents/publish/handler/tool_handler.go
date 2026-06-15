@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	skillSvc "github.com/tangying-ai/aios-core/internal/agents/skill/service"
+	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 

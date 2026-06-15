@@ -333,7 +333,7 @@ func (a *ResultAssembler) recordContext(ctx context.Context, taskID string, fiel
 
 	message := fmt.Sprintf("AI助手生成了内容: %s", strings.Join(changed, "; "))
 
-	if err := a.contextSvc.RecordContext(ctx, taskID, "", model.ContextType("AI_GENERATE"), "SkillAssistant", message, nil); err != nil {
+	if err := a.contextSvc.RecordContext(ctx, taskID, "", model.ContextType("AI_GENERATE"), "ChatAssistant", message, nil); err != nil {
 		zap.L().Warn("Failed to record skill context", zap.Error(err))
 	}
 }

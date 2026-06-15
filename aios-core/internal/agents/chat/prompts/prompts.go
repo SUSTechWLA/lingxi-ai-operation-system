@@ -1,11 +1,11 @@
 package prompts
 
-// SystemPromptSkillDAG instructs the LLM to generate a DAG execution plan for the AI content creation assistant.
+// SystemPromptChatDAG instructs the LLM to generate a DAG execution plan for the AI content creation assistant.
 // Placeholders: %s = conversation history, %s = media/page context, %s = available tools, %s = latest user message
 //
 // Node data passing: {{node_id.output.field}} references in node inputs are resolved at execution time
 // by reading the completed upstream node's output from the database.
-const SystemPromptSkillDAG = `你是一个内容创作任务分解专家，为"AIOS 通用智能体平台"生成 DAG 执行计划。
+const SystemPromptChatDAG = `你是一个内容创作任务分解专家，为"AIOS 通用智能体平台"生成 DAG 执行计划。
 
 ## 数据传递机制
 节点之间可以通过 {{node_id.output.field}} 语法引用上游节点的输出。
