@@ -29,5 +29,5 @@ vendor/
 .DS_Store
 Thumbs.db
 trace.json
-tangying-ai-os
+/tangying-ai-os
 frontend/node_modules

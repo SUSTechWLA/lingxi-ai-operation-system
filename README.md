@@ -1,4 +1,10 @@
-# 躺营AI自媒体运营助手 (Tangying AI OS)
+# Tangying AI OS
+
+> 当前仓库以 Go 后端作为 **AIOS Core**，前端和 Electron 作为可替换 client。后端可以独立构建、测试和启动；客户专属前端与外部工具实现不进入 Core。
+
+后端边界说明见 [docs/AIOS_CORE_BACKEND_BOUNDARY.md](docs/AIOS_CORE_BACKEND_BOUNDARY.md)。
+
+# 躺营AI自媒体运营助手 (Current Client)
 
 > **一句话介绍**：一个帮你管理自媒体内容创作和发布的智能助手。输入简单想法 → AI 帮你生成/润色内容 → 一键发布到多平台。
 
@@ -20,7 +26,7 @@
 
 ---
 
-## 🚀 不需要懂技术也能使用
+## 🚀 不需要懂技术也能使用当前自媒体 client
 
 ### 第一步：启动项目
 
@@ -29,13 +35,19 @@
 ```bash
 # 在终端执行（打开"终端"应用）
 cd 项目目录
-bash ./scripts/startup.sh
+bash ./aios-core/scripts/startup.sh
 ```
 
 看到以下输出就说明启动成功了：
 ```
 Backend:  http://localhost:8080
 Frontend: http://localhost:3000
+```
+
+只启动 AIOS Core 后端：
+
+```bash
+bash ./aios-core/scripts/startup.sh --backend-only
 ```
 
 ### 第二步：打开界面
@@ -209,7 +221,7 @@ Frontend: http://localhost:3000
 
 ```
 tangying-ai-operation-system/
-├── cmd/tangying-ai-os/main.go      # ★ 后端启动入口
+├── aios-core/cmd/tangying-ai-os/main.go      # ★ 后端启动入口
 ├── internal/                      # 后端代码
 │   ├── publish/                   # ★ 发布模块（核心业务）
 │   │   ├── handler/               #   HTTP 接口
@@ -248,11 +260,11 @@ tangying-ai-operation-system/
 ├── sandbox/                       #   Rust 沙箱服务（gRPC 隔离执行）
 │   ├── src/                       #     沙箱主逻辑
 │   └── proto/                     #     Protobuf 定义
-├── electron/                       # Electron 桌面应用
+├── electron/                       # Electron 桌面 client
 │   ├── main.js                     #   Electron 主进程
 │   ├── preload.js                  #   Preload 脚本
 │   └── package.json                #   electron-builder 配置
-├── frontend/                      # ★ 前端代码
+├── frontend/                      # ★ React 前端 client
 │   └── src/
 │       ├── components/            #   界面组件
 │       │   ├── UploadCard.tsx     #     上传素材卡片
@@ -351,18 +363,18 @@ docker compose ps                   # 查看基础设施容器
 cd tangying-ai-operation-system
 
 # 2. 配置环境变量
-cp .env.example .env
+cd aios-core && cp .env.example .env
 # 编辑 .env 文件，填入你的 OPENAI_API_KEY
 
 # 3. 一键启动（会启动所有服务）
-bash ./scripts/startup.sh
+bash ./aios-core/scripts/startup.sh
 ```
 
 ### 分步启动
 
 ```bash
 # 终端 1：启动基础设施（PostgreSQL、Redis、消息队列等）
-docker compose up -d
+cd aios-core && docker compose up -d
 
 # 终端 2：构建并启动后端（端口 8080）
 make run
@@ -386,7 +398,7 @@ make sandbox-build # 构建 Rust 沙箱（需 Rust 环境）
 
 ```bash
 # 一键测试所有 API
-bash ./scripts/test-apis.sh
+bash ./aios-core/scripts/test-apis.sh
 
 # 或逐个测试
 curl http://localhost:8080/api/health                    # 健康检查

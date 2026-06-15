@@ -12,11 +12,11 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 #### Start backend + infrastructure
 ```bash
 # 1. Copy and configure environment
-cp .env.example .env
+cd aios-core && cp .env.example .env
 # Edit .env — add your OPENAI_API_KEY
 
 # 2. Start Docker infrastructure + backend
-./scripts/startup.sh    # One-click (infra → build backend → run backend)
+./aios-core/scripts/startup.sh    # One-click (infra → build backend → run backend)
 ```
 
 #### Build sandbox (Rust)
@@ -33,11 +33,11 @@ make sandbox-build       # Build Rust sandbox service
 #### Manual backend startup
 ```bash
 # Terminal 1: Infrastructure
-docker compose up -d
+cd aios-core && docker compose up -d
 
 # Terminal 2: Backend (port 8080)
-go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
-./build/tangying-ai-os
+cd aios-core && go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+./aios-core/build/tangying-ai-os
 ```
 
 #### Frontend (development or Electron build)
@@ -64,7 +64,7 @@ make fmt      # Format code
 
 #### Test APIs
 ```bash
-./scripts/test-apis.sh
+./aios-core/scripts/test-apis.sh
 curl http://localhost:8080/api/health
 ```
 
@@ -249,7 +249,7 @@ Key UI features:
 ## Project Structure
 
 ```
-cmd/tangying-ai-os/main.go    # Entry point, wiring, graceful shutdown
+aios-core/cmd/tangying-ai-os/main.go    # Entry point, wiring, graceful shutdown
 internal/
   config/                    # Viper-based config with .env support
   database/                  # pgx pool + schema migrations
@@ -332,7 +332,7 @@ Docker-based local development:
 - Qdrant - Vector database
 
 ```bash
-docker compose up -d    # Start
+cd aios-core && docker compose up -d    # Start
 docker compose down     # Stop
 docker compose logs -f  # View logs
 ```
@@ -342,13 +342,13 @@ docker compose logs -f  # View logs
 ```bash
 go test ./...                    # All tests
 go test ./internal/orchestrator/ # Orchestrator only
-./scripts/test-apis.sh           # API integration tests
+./aios-core/scripts/test-apis.sh           # API integration tests
 ```
 
 ## Environment Configuration
 
 ```bash
-cp .env.example .env
+cd aios-core && cp .env.example .env
 ```
 
 Required:
@@ -397,7 +397,7 @@ idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplicat
 2. `make run` to build and start
 3. Make changes following existing Go patterns
 4. Write tests for new functionality
-5. `./scripts/test-apis.sh` before submitting
+5. `./aios-core/scripts/test-apis.sh` before submitting
 
 ## API Endpoints
 
