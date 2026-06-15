@@ -1,7 +1,6 @@
 # IDE
 .vscode
 .idea
-.lingxi-core-loop
 
 # Logs
 *.log

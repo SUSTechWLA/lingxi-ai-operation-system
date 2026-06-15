@@ -1,0 +1,10 @@
+loop_id: LOOP-20260615-001
+mode: solution-design
+created: 2026-06-15T20:30:00+08:00
+status: CREATED
+core_write_enabled: false
+risk_level: medium
+target: develop_go
+repository: /Users/wanglian/Projects/tangying-ai-operation-system
+core_path: aios-core/
+frontend_path: frontend/
