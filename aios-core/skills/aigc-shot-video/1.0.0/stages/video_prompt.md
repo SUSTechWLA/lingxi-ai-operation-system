@@ -1,0 +1,1 @@
+# Video Prompt Stage - Generate video generation prompts

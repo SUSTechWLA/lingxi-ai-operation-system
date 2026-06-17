@@ -19,6 +19,15 @@ type Config struct {
 	BashTool BashToolConfig `mapstructure:",squash"`
 	Services ServicesConfig `mapstructure:",squash"`
 	Sandbox  SandboxConfig  `mapstructure:",squash"`
+	Video    VideoConfig    `mapstructure:",squash"`
+}
+
+// VideoConfig controls the video creation feature flags.
+type VideoConfig struct {
+	VideoCreationEnabled bool   `mapstructure:"VIDEO_CREATION_ENABLED"`
+	LocalRunnerEnabled   bool   `mapstructure:"LOCAL_RUNNER_ENABLED"`
+	ModelProviderMode    string `mapstructure:"MODEL_PROVIDER_MODE"` // "fake" | "real"
+	SkillRoot            string `mapstructure:"SKILL_ROOT"`          // path to skills/ directory
 }
 
 type ServerConfig struct {
@@ -143,6 +152,12 @@ func setDefaults() {
 	viper.SetDefault("MINIO_SECRET_KEY", "changeme")
 	viper.SetDefault("MINIO_BUCKET", "media-assets")
 	viper.SetDefault("MINIO_USE_SSL", false)
+
+	// Video creation feature flags (all off by default — must opt-in)
+	viper.SetDefault("VIDEO_CREATION_ENABLED", false)
+	viper.SetDefault("LOCAL_RUNNER_ENABLED", false)
+	viper.SetDefault("MODEL_PROVIDER_MODE", "fake")
+	viper.SetDefault("SKILL_ROOT", "skills")
 
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		viper.SetDefault("OPENAI_API_KEY", apiKey)

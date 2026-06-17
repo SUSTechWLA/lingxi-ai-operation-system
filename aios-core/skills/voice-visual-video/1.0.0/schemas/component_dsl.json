@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["type", "props"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["TITLE", "BULLET_LIST", "IMAGE_SPLIT", "KPI_CARD", "QUOTE", "COMPARISON", "CALLOUT", "TIMELINE", "TEXT_OVERLAY", "BACKGROUND"]
+    },
+    "props": {"type": "object"},
+    "animation": {"type": "string", "enum": ["fade_in", "slide_up", "slide_left", "scale_in", "typewriter", "none"]},
+    "position": {
+      "type": "object",
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number"},
+        "height": {"type": "number"}
+      }
+    }
+  }
+}

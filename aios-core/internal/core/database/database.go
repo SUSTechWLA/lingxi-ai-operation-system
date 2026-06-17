@@ -131,6 +131,149 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	if err != nil {
 		zap.L().Fatal("Failed to run migrations", zap.Error(err))
 	}
+	// Artifact and Video Project tables (video creation upgrade)
+	artifactSchema := `
+		CREATE TABLE IF NOT EXISTS artifacts (
+		    id VARCHAR(64) PRIMARY KEY,
+		    project_id VARCHAR(64) NOT NULL,
+		    workflow_run_id VARCHAR(64),
+		    stage_name VARCHAR(128) NOT NULL,
+		    unit_id VARCHAR(64) DEFAULT '',
+		    kind VARCHAR(32) NOT NULL DEFAULT 'JSON',
+		    name VARCHAR(255) NOT NULL,
+		    version INT NOT NULL DEFAULT 1,
+		    parent_id VARCHAR(64),
+		    storage_type VARCHAR(16) NOT NULL DEFAULT 'inline',
+		    storage_ref TEXT,
+		    inline_json TEXT,
+		    mime_type VARCHAR(128),
+		    size_bytes BIGINT DEFAULT 0,
+		    content_hash VARCHAR(128),
+		    prompt_hash VARCHAR(128),
+		    provider VARCHAR(128),
+		    model VARCHAR(128),
+		    is_current BOOLEAN NOT NULL DEFAULT true,
+		    metadata JSONB DEFAULT '{}',
+		    created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_artifacts_project_stage ON artifacts(project_id, stage_name, unit_id);
+		CREATE INDEX IF NOT EXISTS idx_artifacts_current ON artifacts(project_id, stage_name, unit_id) WHERE is_current = true;
+
+		CREATE TABLE IF NOT EXISTS video_projects (
+		    id VARCHAR(64) PRIMARY KEY,
+		    user_id VARCHAR(64) DEFAULT 'default',
+		    name VARCHAR(255) NOT NULL,
+		    description TEXT,
+		    mode VARCHAR(32) NOT NULL,
+		    status VARCHAR(32) DEFAULT 'DRAFT',
+		    skill_name VARCHAR(128) NOT NULL,
+		    skill_version VARCHAR(32) NOT NULL,
+		    workflow_name VARCHAR(128) NOT NULL,
+		    workflow_version VARCHAR(32) NOT NULL,
+		    generation_mode VARCHAR(32) DEFAULT 'provider_api',
+		    aspect_ratio VARCHAR(16),
+		    target_duration_sec INT,
+		    language VARCHAR(16) DEFAULT 'zh-CN',
+		    config JSONB DEFAULT '{}',
+		    current_run_id VARCHAR(64),
+		    local_path_hint TEXT,
+		    deleted_at TIMESTAMPTZ,
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_video_project_status ON video_projects(status) WHERE deleted_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_video_project_updated ON video_projects(user_id, updated_at DESC) WHERE deleted_at IS NULL;
+	`
+	if _, err := pool.Exec(ctx, artifactSchema); err != nil {
+		zap.L().Warn("Failed to run video creation migrations (non-fatal)", zap.Error(err))
+	}
+
+	// Workflow Run tables (video creation upgrade P3)
+	workflowRunSchema := `
+		ALTER TABLE workflow_templates ADD COLUMN IF NOT EXISTS version VARCHAR(32) DEFAULT '1.0.0';
+
+		CREATE TABLE IF NOT EXISTS workflow_runs (
+		    id VARCHAR(64) PRIMARY KEY,
+		    project_id VARCHAR(64) NOT NULL,
+		    template_id VARCHAR(64) NOT NULL,
+		    template_version VARCHAR(32) NOT NULL,
+		    task_id VARCHAR(64),
+		    status VARCHAR(20) DEFAULT 'PENDING',
+		    attempt INT DEFAULT 1,
+		    input JSONB DEFAULT '{}',
+		    output JSONB DEFAULT '{}',
+		    stage_statuses JSONB DEFAULT '{}',
+		    trace_id VARCHAR(128),
+		    started_at TIMESTAMPTZ,
+		    finished_at TIMESTAMPTZ,
+		    created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_workflow_runs_project ON workflow_runs(project_id);
+
+		CREATE TABLE IF NOT EXISTS workflow_attempts (
+		    id VARCHAR(64) PRIMARY KEY,
+		    stage_run_id VARCHAR(64) NOT NULL,
+		    number INT NOT NULL,
+		    trigger_type VARCHAR(20) DEFAULT 'INITIAL',
+		    node_ids JSONB DEFAULT '[]',
+		    status VARCHAR(20) DEFAULT 'RUNNING',
+		    error_message TEXT,
+		    created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS model_calls (
+		    id VARCHAR(64) PRIMARY KEY,
+		    project_id VARCHAR(64),
+		    provider VARCHAR(64) NOT NULL,
+		    model VARCHAR(64) NOT NULL,
+		    capability VARCHAR(32) NOT NULL,
+		    fingerprint VARCHAR(128),
+		    prompt_tokens INT DEFAULT 0,
+		    output_tokens INT DEFAULT 0,
+		    cost_usd NUMERIC(10,6) DEFAULT 0,
+		    duration_ms INT DEFAULT 0,
+		    status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
+		    error_message TEXT,
+		    created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_model_calls_project ON model_calls(project_id);
+		CREATE INDEX IF NOT EXISTS idx_model_calls_fingerprint ON model_calls(fingerprint);
+	`
+	if _, err := pool.Exec(ctx, workflowRunSchema); err != nil {
+		zap.L().Warn("Failed to run workflow run migrations (non-fatal)", zap.Error(err))
+	}
+
+	// Local Runner tables (video creation upgrade P7)
+	localRunnerSchema := `
+		CREATE TABLE IF NOT EXISTS local_runners (
+		    id VARCHAR(64) PRIMARY KEY,
+		    name VARCHAR(128) NOT NULL,
+		    status VARCHAR(20) DEFAULT 'ONLINE',
+		    last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
+		    created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS local_jobs (
+		    id VARCHAR(64) PRIMARY KEY,
+		    runner_id VARCHAR(64),
+		    project_id VARCHAR(64) NOT NULL,
+		    command VARCHAR(64) NOT NULL,
+		    payload TEXT,
+		    status VARCHAR(20) DEFAULT 'PENDING',
+		    progress REAL DEFAULT 0,
+		    current_step VARCHAR(256) DEFAULT '',
+		    output TEXT,
+		    error_message TEXT,
+		    lease_expires_at TIMESTAMPTZ,
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_local_jobs_status ON local_jobs(status);
+	`
+	if _, err := pool.Exec(ctx, localRunnerSchema); err != nil {
+		zap.L().Warn("Failed to run local runner migrations (non-fatal)", zap.Error(err))
+	}
+
 	// Bid (tender) generation tables
 	bidSchema := `
 	CREATE TABLE IF NOT EXISTS bid_projects (

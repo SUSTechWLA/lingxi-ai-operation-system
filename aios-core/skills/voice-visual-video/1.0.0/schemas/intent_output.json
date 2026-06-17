@@ -1,0 +1,1 @@
+{"type": "object", "required": ["core_opinion", "intent"], "properties": {"core_opinion": {"type": "string"}, "intent": {"type": "string"}, "target_audience": {"type": "string"}}}

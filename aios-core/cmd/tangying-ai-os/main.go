@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -39,6 +40,10 @@ import (
 	bidHandler "github.com/tangying-ai/aios-core/internal/agents/bid/handler"
 	bidRepo "github.com/tangying-ai/aios-core/internal/agents/bid/repository"
 	bidsvc "github.com/tangying-ai/aios-core/internal/agents/bid/service"
+	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
+	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
+	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
+	"github.com/tangying-ai/aios-core/internal/core/skillruntime"
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
 )
 
@@ -325,6 +330,59 @@ func main() {
 	// Ensure schema and seed built-in templates
 	workflow.EnsureSchema(ctx, pool)
 	zap.L().Info("Workflow service registered")
+
+	// ── Video Creation Upgrade (feature-gated) ──
+	if cfg.Video.VideoCreationEnabled {
+		zap.L().Info("Video creation enabled — registering video modules",
+			zap.String("model_provider_mode", cfg.Video.ModelProviderMode),
+		)
+
+		// Skill Runtime
+		skillReg, skillErrs := skillruntime.LoadSkills(cfg.Video.SkillRoot)
+		for _, err := range skillErrs {
+			zap.L().Warn("Skill load error", zap.Error(err))
+		}
+		skillHandler := skillruntime.NewHandler(skillReg)
+		skillHandler.SetCompiler(func(s *skillruntime.SkillManifest) (json.RawMessage, error) {
+			return workflow.CompileSkillToDAG(s)
+		})
+		skillHandler.RegisterRoutes(r)
+		zap.L().Info("Skill runtime registered", zap.Int("skills_loaded", len(skillReg.List())))
+
+		// Auto-register each loaded skill as a workflow template
+		for _, skill := range skillReg.List() {
+			if skill.Health != skillruntime.HealthHealthy {
+				continue
+			}
+			dag, err := workflow.CompileSkillToDAG(skill)
+			if err != nil {
+				zap.L().Warn("Skill compile failed", zap.String("skill", skill.Name), zap.Error(err))
+				continue
+			}
+			tmpl, err := workflowService.Create(ctx, &workflow.CreateTemplateRequest{
+				Name:        skill.Name + "-workflow",
+				Description: skill.Description,
+				Category:    skill.Category,
+				DAG:         dag,
+			})
+			if err != nil {
+				zap.L().Warn("Auto-register workflow failed", zap.String("skill", skill.Name), zap.Error(err))
+			} else {
+				zap.L().Info("Auto-registered workflow", zap.String("id", tmpl.ID), zap.String("skill", skill.Name+"@"+skill.Version))
+			}
+		}
+
+		// Video Projects
+		videoProjectRepo := videoRepo.NewProjectRepository(pool)
+		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
+		videoHandler.NewProjectHandler(videoProjectSvc).RegisterRoutes(r)
+
+		// Workflow Runs
+		workflowRunRepo := workflow.NewRunRepository(pool)
+		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService)
+		videoHandler.NewWorkflowHandler(workflowRunSvc).RegisterRoutes(r)
+		zap.L().Info("Video project and workflow run services registered")
+	}
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),

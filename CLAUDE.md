@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Service
 - AIOS — 通用智能体编排平台。Go 单体应用，端口 8080，模块化架构支持 DAG 工作流编排、多工具协作、人工审核节点和外部工具注册
+- 🆕 **Video Creation** — 视频创作子系统 (feature-flagged, 默认关闭)。支持 AIGC 镜头式视频和文字口播可视化视频两条生产线。
 
 ### Core Commands
 
@@ -90,6 +91,69 @@ Go 通用智能体编排平台 — 所有模块运行在同一进程（端口 80
 - Persistence with PostgreSQL (pgx), caching with Redis (go-redis)
 
 ## Module Details
+
+### internal/core/artifact (🆕 Video Creation)
+Versioned output artifact management. Key components:
+
+- `Artifact` model — Versioned intermediate/final outputs with current pointer, content hash, parent tracking
+- `Service` — Version auto-increment, idempotent creation (same hash = same artifact), MinIO/inline storage
+- `Repository` — Transactional save (unset old current → insert new current)
+
+### internal/core/skillruntime (🆕 Video Creation)
+Skill Package loading and version management. Key components:
+
+- `Registry` — Thread-safe skill registry keyed by name@version
+- `LoadSkills(root)` — Scans directories, parses skill.yaml, validates stage files and schemas
+- `Handler` — `GET /api/skills`, `GET /api/skills/:name/:version`
+- Skills directory: `skills/{name}/{version}/` with `skill.yaml`, `stages/*.md`, `schemas/*.json`
+
+### internal/core/modelgateway (🆕 Video Creation)
+Unified external model API gateway. Key components:
+
+- `Provider` interface — `Name()`, `Supports(Capability)`, `Execute(ctx, req)`, `Health(ctx)`
+- `Gateway` — Routes by Capability, fingerprint-based idempotency cache, exponential retry
+- `Capability` types — `text_to_text`, `image_to_text`, `text_to_image`, `text_to_video`, `image_to_video`
+- `providers/fake/` — Fixture-driven fake provider for testing with fault injection
+- `providers/openai_compatible/` — OpenAI-compatible API adapter
+
+### internal/core/localrunner (🆕 Video Creation)
+Electron local runner task protocol. Key components:
+
+- `LocalRunner` / `LocalJob` models — Runner registration, heartbeat, job claim/poll
+- `Service` — RegisterRunner, Heartbeat, CreateJob, ClaimJob, ReportProgress, CompleteJob, FailJob
+- Command whitelist: `HYPERGEN_RENDER`, `FFMPEG_PROBE`, `FFMPEG_ASSEMBLE`, `BUNDLE_EXTRACT`
+- `ValidCommands` map — prevents arbitrary shell execution
+
+### internal/core/workflow (Extended 🆕)
+- `RunService` — WorkflowRun lifecycle: CreateRun compiles stage→DAG, submits to orchestrator, tracks stages
+- `RunRepository` — WorkflowRun CRUD, stage status updates
+- `RunModel` — RunStatus (PENDING/RUNNING/PAUSED/COMPLETED/FAILED/CANCELLED), StageStatus, Attempt
+- `Template.Version` — Version field added (default "1.0.0"), backward compatible with legacy templates
+
+### internal/agents/video (🆕 Video Creation)
+Video production domain. Key components:
+
+- `model/` — VideoProject, Script, Character, SceneDef, ShotDefinition, ShotPackage, NarrationBeat, VisualBeat, ComponentDSL
+- `service/` — ProjectService (CRUD, mode/version lock, soft delete), ComponentDSL validator
+- `handler/` — ProjectHandler (`/api/video-projects`), WorkflowHandler (`/api/video-projects/:pid/workflow-runs`)
+- `workflows/` — AIGC Shot Video v1 and Voice Visual Video v1 workflow registration
+
+### Two Video Skill Packages
+- `skills/aigc-shot-video/1.0.0/` — 10 stages: brief→script→visual_design→shot_plan→storyboard→keyframe→video_prompt→generate→review
+- `skills/voice-visual-video/1.0.0/` — 8 stages: intent_analysis→narration→visual_design→beat_planning→component_dsl→image_generation→bundle_assemble→render_review
+
+### Feature Flags
+```env
+VIDEO_CREATION_ENABLED=false   # 控制所有视频创作功能 (路由注册 + API)
+LOCAL_RUNNER_ENABLED=false     # Electron 本地 Runner
+MODEL_PROVIDER_MODE=fake       # fake | real (测试用 fake，生产用 real)
+SKILL_ROOT=skills              # Skill Package 根目录
+```
+
+### Docker Cloud Deployment
+- `deploy/docker-compose.cloud.yml` — 生产部署: nginx + backend + postgres + redis + redpanda + minio
+- `deploy/nginx.conf` — SSE 流代理 (关闭缓冲)、视频上传支持 (500M)、SPA fallback
+- `deploy/.env.cloud.example` — 云部署环境变量模板
 
 ### internal/orchestrator
 Core task scheduling engine.

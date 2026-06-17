@@ -1,0 +1,1 @@
+# Beat Planning Stage - Map narration beats to visual beats

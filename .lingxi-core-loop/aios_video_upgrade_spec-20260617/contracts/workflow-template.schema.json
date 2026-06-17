@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aios.local/schemas/workflow-template.schema.json",
+  "title": "AIOS Workflow Template",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "name",
+    "stages"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "inputSchemaRef": {
+      "type": "string"
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "AGENT",
+              "TOOL",
+              "APPROVAL",
+              "PARALLEL",
+              "FOREACH",
+              "LOCAL_TOOL",
+              "CONDITION"
+            ]
+          },
+          "skillStage": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "foreach": {
+            "type": "string"
+          },
+          "approvalRequired": {
+            "type": "boolean"
+          },
+          "rerunScope": {
+            "enum": [
+              "SELF",
+              "UNIT_DOWNSTREAM",
+              "STAGE_DOWNSTREAM"
+            ]
+          },
+          "input": {
+            "type": "object"
+          },
+          "outputSchemaRef": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}
