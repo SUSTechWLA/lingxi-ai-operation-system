@@ -273,4 +273,4 @@ curl -X POST http://localhost:8080/api/skills/my-skill/1.0.0/compile
 
 ## 📄 License
 
-MIT License
+Apache License 2.0
