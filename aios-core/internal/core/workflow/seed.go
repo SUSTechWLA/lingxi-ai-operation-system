@@ -12,6 +12,7 @@ import (
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) {
 	_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS workflow_templates (
 	    id VARCHAR(64) PRIMARY KEY,
+	    version VARCHAR(32) DEFAULT '1.0.0',
 	    name VARCHAR(255) NOT NULL,
 	    description TEXT,
 	    category VARCHAR(128),
@@ -23,6 +24,7 @@ func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) {
 		zap.L().Error("Failed to create workflow_templates table (non-fatal)", zap.Error(err))
 		return
 	}
+	_, _ = pool.Exec(ctx, `ALTER TABLE workflow_templates ADD COLUMN IF NOT EXISTS version VARCHAR(32) DEFAULT '1.0.0'`)
 	SeedBuiltinTemplates(ctx, pool)
 }
 

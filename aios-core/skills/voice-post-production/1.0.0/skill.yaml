@@ -1,0 +1,20 @@
+name: voice-post-production
+version: "1.0.0"
+description: 人声后期流水线：统一多段现场录音的人声格式、响度、EQ、压缩、空间感并合并为最终旁白音轨。
+category: audio
+stages:
+  - name: audio_intake
+    instruction: stages/audio_intake.md
+  - name: voice_process
+    kind: TOOL
+    tool: voice_post_process
+    instruction: stages/voice_process.md
+    long_running: true
+    heartbeat_timeout_sec: 1200
+  - name: quality_review
+    instruction: stages/quality_review.md
+    approval_required: true
+  - name: export_package
+    kind: TOOL
+    tool: audio_artifact_packager
+    instruction: stages/export_package.md

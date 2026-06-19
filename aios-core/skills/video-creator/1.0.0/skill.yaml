@@ -1,0 +1,59 @@
+name: video-creator
+version: "1.0.0"
+description: Markdown-first AIGC 视频创作流水线：IP、剧本、参考资产、SHOT、关键帧、故事板、视频生成、导演剪辑和成片装配。
+category: video
+stages:
+  - name: ip_and_story_seed
+    instruction: stages/ip_and_story_seed.md
+    approval_required: true
+  - name: script_and_profiles
+    instruction: stages/script_and_profiles.md
+    approval_required: true
+  - name: material_library_match
+    kind: TOOL
+    tool: material_library_matcher
+    instruction: stages/material_library_match.md
+    optional: true
+  - name: reference_asset_plan
+    instruction: stages/reference_asset_plan.md
+    approval_required: true
+  - name: reference_asset_generation
+    kind: TOOL
+    tool: image_asset_generator
+    instruction: stages/reference_asset_generation.md
+    approval_required: true
+    long_running: true
+    heartbeat_timeout_sec: 2400
+  - name: shot_design
+    instruction: stages/shot_design.md
+    approval_required: true
+  - name: keyframes_and_prompts
+    kind: TOOL
+    tool: video_keyframe_prompt_builder
+    instruction: stages/keyframes_and_prompts.md
+    approval_required: true
+    long_running: true
+    heartbeat_timeout_sec: 1800
+  - name: storyboard
+    kind: TOOL
+    tool: storyboard_assembler
+    instruction: stages/storyboard.md
+    approval_required: true
+  - name: video_generation
+    kind: TOOL
+    tool: text_image_to_video_generator
+    instruction: stages/video_generation.md
+    long_running: true
+    heartbeat_timeout_sec: 3600
+  - name: director_cut
+    instruction: stages/director_cut.md
+    approval_required: true
+  - name: final_assembly
+    kind: TOOL
+    tool: video_final_assembler
+    instruction: stages/final_assembly.md
+    long_running: true
+    heartbeat_timeout_sec: 1800
+  - name: final_review
+    instruction: stages/final_review.md
+    approval_required: true

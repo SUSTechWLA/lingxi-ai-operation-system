@@ -59,6 +59,8 @@ const (
 	ContextNodeProgress         ContextType = "NODE_PROGRESS"          // 长任务进度更新
 	ContextNodeCheckpoint       ContextType = "NODE_CHECKPOINT"        // 长任务断点
 	ContextNodeHeartbeatTimeout ContextType = "NODE_HEARTBEAT_TIMEOUT" // 心跳超时
+	ContextNodeReviewRequired   ContextType = "NODE_REVIEW_REQUIRED"   // 人工审核节点等待确认
+	ContextNodeSkipped          ContextType = "NODE_SKIPPED"           // 条件未满足跳过
 )
 
 type Task struct {
