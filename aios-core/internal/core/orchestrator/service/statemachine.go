@@ -62,6 +62,10 @@ func (sm *StateMachine) OnSuccess(ctx context.Context, nodeID string, output map
 		}
 	}
 
+	if sm.stateService.dependencyChecker != nil {
+		sm.stateService.dependencyChecker.OnNodeExecuted(ctx, node.ID, node.TaskID)
+	}
+
 	completed, _ := sm.stateService.CheckTaskCompleted(ctx, node.TaskID)
 	if completed {
 		_ = sm.stateService.TransitionTask(ctx, node.TaskID, model.TaskSuccess)

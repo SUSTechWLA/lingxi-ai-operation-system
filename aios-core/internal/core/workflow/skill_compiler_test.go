@@ -51,6 +51,83 @@ func TestCompileSkillToDAG_SimpleLinear(t *testing.T) {
 	}
 }
 
+func TestCompileSkillToDAG_DefaultAgentStageUsesExternalSkillAgent(t *testing.T) {
+	skill := &skillruntime.SkillManifest{
+		Name:    "create-opinion-videos",
+		Version: "1.0.0",
+		Stages: []skillruntime.StageDefinition{
+			{Name: "recording_script", Instruction: "stages/recording_script.md"},
+		},
+	}
+
+	dag, err := CompileSkillToDAG(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed dagRequest
+	if err := json.Unmarshal(dag, &parsed); err != nil {
+		t.Fatal(err)
+	}
+
+	node := parsed.Nodes[0]
+	if node.Type != "TOOL" || node.Name != "external" {
+		t.Fatalf("expected stage to route through external tool bridge, got %s/%s", node.Type, node.Name)
+	}
+	params, ok := node.Input["parameters"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected parameters map in node input: %+v", node.Input)
+	}
+	if params["tool"] != "skill_stage_agent" {
+		t.Errorf("expected default external tool skill_stage_agent, got %v", params["tool"])
+	}
+	if params["skill_name"] != "create-opinion-videos" || params["skill_version"] != "1.0.0" {
+		t.Errorf("expected skill identity in parameters, got %+v", params)
+	}
+}
+
+func TestCompileSkillToDAG_ToolStageRoutesToDeclaredExternalTool(t *testing.T) {
+	skill := &skillruntime.SkillManifest{
+		Name:    "voice-post-production",
+		Version: "1.0.0",
+		Stages: []skillruntime.StageDefinition{
+			{
+				Name:                "voice_process",
+				Kind:                "TOOL",
+				Tool:                "voice_post_process",
+				Instruction:         "stages/voice_process.md",
+				LongRunning:         true,
+				HeartbeatTimeoutSec: 900,
+			},
+		},
+	}
+
+	dag, err := CompileSkillToDAG(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed dagRequest
+	if err := json.Unmarshal(dag, &parsed); err != nil {
+		t.Fatal(err)
+	}
+
+	node := parsed.Nodes[0]
+	if node.Name != "external" {
+		t.Fatalf("expected external bridge node, got %s", node.Name)
+	}
+	params := node.Input["parameters"].(map[string]interface{})
+	if params["tool"] != "voice_post_process" {
+		t.Errorf("expected voice_post_process tool, got %v", params["tool"])
+	}
+	if !node.LongRunning {
+		t.Error("expected long-running metadata on tool stage")
+	}
+	if node.HeartbeatTimeoutSec == nil || *node.HeartbeatTimeoutSec != 900 {
+		t.Errorf("expected heartbeat timeout 900, got %v", node.HeartbeatTimeoutSec)
+	}
+}
+
 func TestCompileSkillToDAG_WithApproval(t *testing.T) {
 	skill := &skillruntime.SkillManifest{
 		Name:    "test-approval",
@@ -159,6 +236,45 @@ func TestCompileSkillToDAG_OptionalStage(t *testing.T) {
 	}
 }
 
+func TestCompileSkillToDAG_OptionalStageExecDependsOnPreviousOutput(t *testing.T) {
+	skill := &skillruntime.SkillManifest{
+		Name:    "test-optional-dependencies",
+		Version: "1.0.0",
+		Stages: []skillruntime.StageDefinition{
+			{Name: "brief", Instruction: "stages/brief.md"},
+			{Name: "image_assets", Instruction: "stages/assets.md", Optional: true, ApprovalReq: true},
+			{Name: "render", Instruction: "stages/render.md"},
+		},
+	}
+
+	dag, err := CompileSkillToDAG(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed dagRequest
+	if err := json.Unmarshal(dag, &parsed); err != nil {
+		t.Fatal(err)
+	}
+
+	hasBriefToExec := false
+	hasBriefToApproval := false
+	for _, edge := range parsed.Edges {
+		if edge.From == "brief" && edge.To == "image_assets_exec" {
+			hasBriefToExec = true
+		}
+		if edge.From == "brief" && edge.To == "image_assets" {
+			hasBriefToApproval = true
+		}
+	}
+	if !hasBriefToExec {
+		t.Error("expected previous output to gate optional exec branch")
+	}
+	if hasBriefToApproval {
+		t.Error("previous output should not bypass optional exec by connecting directly to approval")
+	}
+}
+
 func TestCompileSkillToDAG_NilSkill(t *testing.T) {
 	_, err := CompileSkillToDAG(nil)
 	if err == nil {
@@ -236,4 +352,15 @@ func TestCompileSkillToDAG_RealSkillAIGC(t *testing.T) {
 	}
 
 	t.Logf("Generated DAG: %d nodes, %d edges", len(parsed.Nodes), len(parsed.Edges))
+}
+
+func TestTemplateIDForSkill_IsStableAndVersioned(t *testing.T) {
+	id := TemplateIDForSkill("create-opinion-videos", "1.0.0")
+	if id != "wf-create-opinion-videos-1-0-0" {
+		t.Fatalf("unexpected template id: %s", id)
+	}
+
+	if again := TemplateIDForSkill("create-opinion-videos", "1.0.0"); again != id {
+		t.Fatalf("expected stable id %s, got %s", id, again)
+	}
 }

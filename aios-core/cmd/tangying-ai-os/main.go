@@ -359,7 +359,10 @@ func main() {
 				zap.L().Warn("Skill compile failed", zap.String("skill", skill.Name), zap.Error(err))
 				continue
 			}
-			tmpl, err := workflowService.Create(ctx, &workflow.CreateTemplateRequest{
+			templateID := workflow.TemplateIDForSkill(skill.Name, skill.Version)
+			tmpl, err := workflowService.Upsert(ctx, &workflow.CreateTemplateRequest{
+				ID:          templateID,
+				Version:     skill.Version,
 				Name:        skill.Name + "-workflow",
 				Description: skill.Description,
 				Category:    skill.Category,

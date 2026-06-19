@@ -15,8 +15,8 @@ import (
 
 // Service manages workflow templates and instantiation.
 type Service struct {
-	repo         *Repository
-	orchService  *service.OrchestratorService
+	repo        *Repository
+	orchService *service.OrchestratorService
 }
 
 func NewService(repo *Repository, orchService *service.OrchestratorService) *Service {
@@ -36,8 +36,17 @@ func (s *Service) Get(ctx context.Context, id string) (*Template, error) {
 // Create saves a new workflow template.
 func (s *Service) Create(ctx context.Context, req *CreateTemplateRequest) (*Template, error) {
 	now := time.Now()
+	id := req.ID
+	if id == "" {
+		id = "wf-" + uuid.NewString()[:8]
+	}
+	version := req.Version
+	if version == "" {
+		version = "1.0.0"
+	}
 	t := &Template{
-		ID:          "wf-" + uuid.NewString()[:8],
+		ID:          id,
+		Version:     version,
 		Name:        req.Name,
 		Description: req.Description,
 		Category:    req.Category,
@@ -52,6 +61,35 @@ func (s *Service) Create(ctx context.Context, req *CreateTemplateRequest) (*Temp
 	return t, nil
 }
 
+// Upsert saves a workflow template with a stable ID, replacing the mutable fields
+// when the same template ID already exists.
+func (s *Service) Upsert(ctx context.Context, req *CreateTemplateRequest) (*Template, error) {
+	now := time.Now()
+	id := req.ID
+	if id == "" {
+		return nil, fmt.Errorf("template id is required for upsert")
+	}
+	version := req.Version
+	if version == "" {
+		version = "1.0.0"
+	}
+	t := &Template{
+		ID:          id,
+		Version:     version,
+		Name:        req.Name,
+		Description: req.Description,
+		Category:    req.Category,
+		DAG:         req.DAG,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.repo.Upsert(ctx, t); err != nil {
+		return nil, fmt.Errorf("failed to upsert template: %w", err)
+	}
+	zap.L().Info("Workflow template upserted", zap.String("id", t.ID), zap.String("version", t.Version), zap.String("name", t.Name))
+	return t, nil
+}
+
 // Update modifies an existing template.
 func (s *Service) Update(ctx context.Context, id string, req *UpdateTemplateRequest) (*Template, error) {
 	t, err := s.repo.FindByID(ctx, id)
@@ -60,6 +98,9 @@ func (s *Service) Update(ctx context.Context, id string, req *UpdateTemplateRequ
 	}
 	if req.Name != "" {
 		t.Name = req.Name
+	}
+	if req.Version != "" {
+		t.Version = req.Version
 	}
 	if req.Description != "" {
 		t.Description = req.Description
@@ -110,8 +151,8 @@ func (s *Service) Instantiate(ctx context.Context, templateID string, overrides 
 
 	// Create task
 	task, err := s.orchService.CreateTask(ctx, map[string]interface{}{
-		"source":       "workflow-template",
-		"template_id":  templateID,
+		"source":        "workflow-template",
+		"template_id":   templateID,
 		"template_name": t.Name,
 	})
 	if err != nil {

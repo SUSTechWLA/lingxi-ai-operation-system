@@ -599,6 +599,43 @@ func TestStateService_InitializeNodeReady(t *testing.T) {
 	}
 }
 
+func TestStateService_InitializeControlNodeReady_PausesWithoutDispatch(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	depRepo := newMockDepRepo()
+	ctxRepo := newMockContextRepo()
+	eventSaver := newMockEventSaver()
+
+	taskRepo.tasks["t1"] = &model.Task{ID: "t1", Status: model.TaskRunning}
+	node := &model.Node{
+		ID: "review", TaskID: "t1", Status: model.NodeCreated,
+		Type: model.NodeTypeControl, Name: "审核-脚本",
+	}
+	nodeRepo.nodes["review"] = node
+
+	ss := NewStateService(nodeRepo, taskRepo, depRepo, ctxRepo, eventSaver)
+
+	err := ss.InitializeNodeReady(context.Background(), node)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if nodeRepo.nodes["review"].Status != model.NodeReady {
+		t.Errorf("Expected control node READY, got %s", nodeRepo.nodes["review"].Status)
+	}
+	if taskRepo.tasks["t1"].Status != model.TaskPaused {
+		t.Errorf("Expected task PAUSED for review, got %s", taskRepo.tasks["t1"].Status)
+	}
+	if taskRepo.tasks["t1"].PauseReason == "" {
+		t.Error("Expected pause reason for review")
+	}
+	for _, e := range eventSaver.events {
+		if e.eventType == eventbus.TopicNodeReady {
+			t.Fatalf("CONTROL node should not be dispatched to worker, got event: %+v", e.event)
+		}
+	}
+}
+
 // ==================== StateMachine Tests ====================
 
 func TestStateMachine_OnSuccess(t *testing.T) {
@@ -621,6 +658,46 @@ func TestStateMachine_OnSuccess(t *testing.T) {
 
 	if nodeRepo.nodes["n1"].Status != model.NodeSuccess {
 		t.Errorf("Expected SUCCESS, got %s", nodeRepo.nodes["n1"].Status)
+	}
+}
+
+func TestStateMachine_OnSuccess_WakesDownstreamAfterManualControlApproval(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	depRepo := newMockDepRepo()
+	ctxRepo := newMockContextRepo()
+	eventSaver := newMockEventSaver()
+
+	review := &model.Node{ID: "review", TaskID: "t1", Status: model.NodeReady, Type: model.NodeTypeControl, Name: "审核"}
+	next := &model.Node{ID: "next", TaskID: "t1", Status: model.NodeCreated, Type: model.NodeTypeLLM, Name: "generate"}
+	nodeRepo.nodes["review"] = review
+	nodeRepo.nodes["next"] = next
+	taskRepo.tasks["t1"] = &model.Task{ID: "t1", Status: model.TaskPaused, PauseReason: "waiting review"}
+	depRepo.deps["next"] = []*model.NodeDependency{
+		{ParentNodeID: "review", ChildNodeID: "next"},
+	}
+	nodeRepoWithChildren := &mockNodeRepoWithChildren{
+		mockNodeRepo: nodeRepo,
+		children: map[string][]*model.Node{
+			"review": {next},
+		},
+	}
+
+	ss := NewStateService(nodeRepoWithChildren, taskRepo, depRepo, ctxRepo, eventSaver)
+	dc := NewDependencyChecker(nodeRepoWithChildren, ss, eventSaver)
+	ss.SetDependencyChecker(dc)
+	sm := NewStateMachine(ss, nodeRepoWithChildren, taskRepo, eventSaver)
+
+	err := sm.OnSuccess(context.Background(), "review", map[string]interface{}{"approved": true})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if nodeRepoWithChildren.nodes["next"].Status != model.NodeReady {
+		t.Errorf("Expected downstream node READY after approval, got %s", nodeRepoWithChildren.nodes["next"].Status)
+	}
+	if taskRepo.tasks["t1"].Status != model.TaskRunning {
+		t.Errorf("Expected task RUNNING after approval resumes workflow, got %s", taskRepo.tasks["t1"].Status)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 // Template is a reusable DAG workflow blueprint.
 type Template struct {
 	ID          string          `json:"id"`
+	Version     string          `json:"version"`
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Category    string          `json:"category,omitempty"`
@@ -19,6 +20,8 @@ type Template struct {
 // ── API types ──
 
 type CreateTemplateRequest struct {
+	ID          string          `json:"id,omitempty"`
+	Version     string          `json:"version,omitempty"`
 	Name        string          `json:"name" binding:"required"`
 	Description string          `json:"description,omitempty"`
 	Category    string          `json:"category,omitempty"`
@@ -26,6 +29,7 @@ type CreateTemplateRequest struct {
 }
 
 type UpdateTemplateRequest struct {
+	Version     string          `json:"version,omitempty"`
 	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Category    string          `json:"category,omitempty"`

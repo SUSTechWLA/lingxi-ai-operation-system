@@ -200,7 +200,7 @@ func (s *StateService) handleControlNodeReady(ctx context.Context, node *model.N
 	}
 
 	s.recordContext(ctx, node.TaskID, node.ID,
-		model.ContextType("NODE_REVIEW_REQUIRED"),
+		model.ContextNodeReviewRequired,
 		"StateMachine",
 		fmt.Sprintf("Control node '%s' ready for review — task paused", node.Name),
 		nil,
@@ -298,6 +298,11 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 
 	s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "StateMachine", "初始节点就绪（无依赖），进入 READY 状态", buildNodeMetadata(node, model.NodeReady))
 
+	if node.Type == model.NodeTypeControl {
+		s.handleControlNodeReady(ctx, node)
+		return nil
+	}
+
 	payload := buildEventPayload(node.Input, node.Name)
 
 	_ = s.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
@@ -334,7 +339,7 @@ func (s *StateService) recordContextForTransition(ctx context.Context, node *mod
 		ctxType = model.ContextNodeRetry
 		message = "节点即将重试"
 	case model.NodeSkipped:
-		ctxType = model.ContextType("NODE_SKIPPED")
+		ctxType = model.ContextNodeSkipped
 		message = "节点已跳过（条件未满足）"
 	default:
 		return

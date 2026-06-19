@@ -108,12 +108,17 @@ func loadSkillYAML(dir, name, version string) (*skillruntime.SkillManifest, erro
 		Description string `yaml:"description"`
 		Category    string `yaml:"category"`
 		Stages      []struct {
-			Name         string `yaml:"name"`
-			Instruction  string `yaml:"instruction"`
-			InputSchema  string `yaml:"input_schema"`
-			OutputSchema string `yaml:"output_schema"`
-			Optional     bool   `yaml:"optional"`
-			ApprovalReq  bool   `yaml:"approval_required"`
+			Name                string                 `yaml:"name"`
+			Kind                string                 `yaml:"kind"`
+			Tool                string                 `yaml:"tool"`
+			Instruction         string                 `yaml:"instruction"`
+			InputSchema         string                 `yaml:"input_schema"`
+			OutputSchema        string                 `yaml:"output_schema"`
+			Input               map[string]interface{} `yaml:"input"`
+			Optional            bool                   `yaml:"optional"`
+			ApprovalReq         bool                   `yaml:"approval_required"`
+			LongRunning         bool                   `yaml:"long_running"`
+			HeartbeatTimeoutSec int                    `yaml:"heartbeat_timeout_sec"`
 		} `yaml:"stages"`
 	}
 
@@ -132,12 +137,17 @@ func loadSkillYAML(dir, name, version string) (*skillruntime.SkillManifest, erro
 
 	for _, s := range raw.Stages {
 		skill.Stages = append(skill.Stages, skillruntime.StageDefinition{
-			Name:         s.Name,
-			Instruction:  s.Instruction,
-			InputSchema:  s.InputSchema,
-			OutputSchema: s.OutputSchema,
-			Optional:     s.Optional,
-			ApprovalReq:  s.ApprovalReq,
+			Name:                s.Name,
+			Kind:                s.Kind,
+			Tool:                s.Tool,
+			Instruction:         s.Instruction,
+			InputSchema:         s.InputSchema,
+			OutputSchema:        s.OutputSchema,
+			Input:               s.Input,
+			Optional:            s.Optional,
+			ApprovalReq:         s.ApprovalReq,
+			LongRunning:         s.LongRunning,
+			HeartbeatTimeoutSec: s.HeartbeatTimeoutSec,
 		})
 	}
 

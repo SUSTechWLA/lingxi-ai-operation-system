@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/tangying-ai/aios-core/internal/core/skillruntime"
 )
@@ -21,9 +22,8 @@ func CompileSkillToDAG(skill *skillruntime.SkillManifest) (json.RawMessage, erro
 	var edges []dagEdge
 	var prevOutputIDs []string // IDs that the next stage depends on
 
-	for i, stage := range skill.Stages {
-		isLast := i == len(skill.Stages)-1
-
+	for _, stage := range skill.Stages {
+		var currentEntryIDs []string
 		var currentOutputIDs []string
 
 		if stage.Optional {
@@ -37,16 +37,12 @@ func CompileSkillToDAG(skill *skillruntime.SkillManifest) (json.RawMessage, erro
 				Type: "CONTROL",
 				Name: fmt.Sprintf("跳过-%s", stage.Name),
 			})
+			currentEntryIDs = append(currentEntryIDs, skipID)
 			currentOutputIDs = append(currentOutputIDs, skipID)
 
 			// Exec node
-			execNode := dagNode{
-				ID:   execID,
-				Type: "TOOL",
-				Name: "skill_stage",
-				Input: buildStageInput(stage),
-			}
-			nodes = append(nodes, execNode)
+			nodes = append(nodes, buildExecutionNode(execID, skill, stage))
+			currentEntryIDs = append(currentEntryIDs, execID)
 
 			if stage.ApprovalReq {
 				// Exec → Approval → next
@@ -67,12 +63,8 @@ func CompileSkillToDAG(skill *skillruntime.SkillManifest) (json.RawMessage, erro
 			execID := stage.Name + "_exec"
 			approvalID := stage.Name
 
-			nodes = append(nodes, dagNode{
-				ID:   execID,
-				Type: "TOOL",
-				Name: "skill_stage",
-				Input: buildStageInput(stage),
-			})
+			nodes = append(nodes, buildExecutionNode(execID, skill, stage))
+			currentEntryIDs = append(currentEntryIDs, execID)
 			nodes = append(nodes, dagNode{
 				ID:   approvalID,
 				Type: "CONTROL",
@@ -83,28 +75,16 @@ func CompileSkillToDAG(skill *skillruntime.SkillManifest) (json.RawMessage, erro
 		} else {
 			// Simple stage: single TOOL node
 			nodeID := stage.Name
-			nodes = append(nodes, dagNode{
-				ID:   nodeID,
-				Type: "TOOL",
-				Name: "skill_stage",
-				Input: buildStageInput(stage),
-			})
+			nodes = append(nodes, buildStageNode(nodeID, skill, stage))
+			currentEntryIDs = append(currentEntryIDs, nodeID)
 			currentOutputIDs = append(currentOutputIDs, nodeID)
 		}
 
 		// Connect previous outputs to current inputs
 		for _, prevID := range prevOutputIDs {
-			for _, curID := range currentOutputIDs {
-				// Don't connect skip nodes to the exec branch (they're parallel alternatives)
-				if !isSkipToExec(prevID, curID) {
-					edges = append(edges, dagEdge{From: prevID, To: curID})
-				}
+			for _, curID := range currentEntryIDs {
+				edges = append(edges, dagEdge{From: prevID, To: curID})
 			}
-		}
-
-		// Last stage: no downstream connections needed
-		if isLast {
-			_ = len(currentOutputIDs) // final stage
 		}
 
 		prevOutputIDs = currentOutputIDs
@@ -120,10 +100,12 @@ func CompileSkillToDAG(skill *skillruntime.SkillManifest) (json.RawMessage, erro
 
 // dagNode is the internal DAG node representation used by the compiler.
 type dagNode struct {
-	ID    string                 `json:"id"`
-	Type  string                 `json:"type"`
-	Name  string                 `json:"name"`
-	Input map[string]interface{} `json:"input,omitempty"`
+	ID                  string                 `json:"id"`
+	Type                string                 `json:"type"`
+	Name                string                 `json:"name"`
+	Input               map[string]interface{} `json:"input,omitempty"`
+	LongRunning         bool                   `json:"longRunning,omitempty"`
+	HeartbeatTimeoutSec *int                   `json:"heartbeatTimeoutSec,omitempty"`
 }
 
 type dagEdge struct {
@@ -136,17 +118,63 @@ type dagRequest struct {
 	Edges []dagEdge `json:"edges"`
 }
 
+func buildStageNode(nodeID string, skill *skillruntime.SkillManifest, stage skillruntime.StageDefinition) dagNode {
+	kind := strings.ToUpper(stage.Kind)
+	if kind == "CONTROL" || kind == "APPROVAL" {
+		return dagNode{
+			ID:   nodeID,
+			Type: "CONTROL",
+			Name: fmt.Sprintf("审核-%s", stage.Name),
+		}
+	}
+	return buildExecutionNode(nodeID, skill, stage)
+}
+
+func buildExecutionNode(nodeID string, skill *skillruntime.SkillManifest, stage skillruntime.StageDefinition) dagNode {
+	node := dagNode{
+		ID:    nodeID,
+		Type:  "TOOL",
+		Name:  "external",
+		Input: buildStageInput(skill, stage),
+	}
+	if stage.LongRunning {
+		node.LongRunning = true
+	}
+	if stage.HeartbeatTimeoutSec > 0 {
+		timeout := stage.HeartbeatTimeoutSec
+		node.HeartbeatTimeoutSec = &timeout
+	}
+	return node
+}
+
 // buildStageInput creates the input map for a skill stage node.
-func buildStageInput(stage skillruntime.StageDefinition) map[string]interface{} {
-	input := map[string]interface{}{
+func buildStageInput(skill *skillruntime.SkillManifest, stage skillruntime.StageDefinition) map[string]interface{} {
+	toolName := stage.Tool
+	if toolName == "" {
+		toolName = "skill_stage_agent"
+	}
+
+	parameters := map[string]interface{}{
+		"tool":            toolName,
+		"skill_name":      skill.Name,
+		"skill_version":   skill.Version,
 		"stage":           stage.Name,
+		"stage_kind":      stage.Kind,
 		"instruction_ref": stage.Instruction,
 	}
 	if stage.InputSchema != "" {
-		input["input_schema"] = stage.InputSchema
+		parameters["input_schema"] = stage.InputSchema
 	}
 	if stage.OutputSchema != "" {
-		input["output_schema"] = stage.OutputSchema
+		parameters["output_schema"] = stage.OutputSchema
+	}
+	for k, v := range stage.Input {
+		parameters[k] = v
+	}
+
+	input := map[string]interface{}{
+		"stage":      stage.Name,
+		"parameters": parameters,
 	}
 	return input
 }
@@ -156,4 +184,28 @@ func isSkipToExec(from, to string) bool {
 	// e.g., "visual_design_skip" → "visual_design_exec" should NOT be connected
 	return len(from) > 5 && len(to) > 5 &&
 		from[len(from)-5:] == "_skip" && to[len(to)-5:] == "_exec"
+}
+
+// TemplateIDForSkill returns the stable workflow template ID for a skill version.
+func TemplateIDForSkill(name, version string) string {
+	return "wf-" + sanitizeTemplateIDPart(name) + "-" + sanitizeTemplateIDPart(version)
+}
+
+func sanitizeTemplateIDPart(value string) string {
+	value = strings.ToLower(value)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		isAlphaNum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlphaNum {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }

@@ -1,0 +1,21 @@
+schema_version: "1.0"
+loop_id: LOOP-20260619-001
+mode: solution-design
+status: VERIFIED
+core_write_enabled: true
+review_mode: SELF_REVIEW
+request: "将 .codex/skills 中的 4 个业务 skill 转成 AIOS Core 可加载、可编译、可审核、可追踪的稳定 workflow runtime package"
+core_gap_decision: CORE_CHANGE_CANDIDATE
+solution_outputs:
+  solution_blueprint: true
+  frontend_requirements: true
+  workflow_spec: true
+  api_and_event_contracts: true
+  external_capability_requirements: true
+implementation:
+  scope:
+    - skillruntime manifest stage extensions
+    - skill-to-workflow compiler external tool routing
+    - CONTROL review node orchestration behavior
+    - deterministic workflow template ID and startup upsert
+    - runtime packages for create-opinion-videos, film-shot-reconstruction, video-creator, voice-post-production
