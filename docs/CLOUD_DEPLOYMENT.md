@@ -45,6 +45,8 @@ go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
 bash scripts/start-cloud-backend.sh
 ```
 
+根目录脚本会默认导出 `SKILL_ROOT=<repo>/cloud-backend/skills`。如果手动启动，`SKILL_ROOT=skills` 会优先按当前工作目录解析；当从仓库根目录启动时，后端会自动兜底到 `cloud-backend/skills`。
+
 ## 云端 Docker Compose
 
 ```bash

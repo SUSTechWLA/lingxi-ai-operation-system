@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -117,6 +118,9 @@ func Load() *Config {
 	if err := viper.Unmarshal(cfg); err != nil {
 		zap.L().Fatal("Failed to unmarshal config", zap.Error(err))
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		cfg.Video.SkillRoot = resolveSkillRoot(cfg.Video.SkillRoot, cwd)
+	}
 
 	return cfg
 }
@@ -162,4 +166,36 @@ func setDefaults() {
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		viper.SetDefault("OPENAI_API_KEY", apiKey)
 	}
+}
+
+func resolveSkillRoot(root, cwd string) string {
+	if root == "" {
+		return root
+	}
+	if filepath.IsAbs(root) {
+		return filepath.Clean(root)
+	}
+
+	candidates := []string{
+		filepath.Join(cwd, root),
+		filepath.Join(cwd, "cloud-backend", root),
+		filepath.Join(cwd, "..", root),
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Join(exeDir, root),
+			filepath.Join(exeDir, "..", root),
+			filepath.Join(exeDir, "..", "cloud-backend", root),
+			filepath.Join(exeDir, "..", "..", "cloud-backend", root),
+		)
+	}
+
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return root
 }

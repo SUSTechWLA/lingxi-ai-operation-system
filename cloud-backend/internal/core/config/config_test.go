@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -51,5 +53,37 @@ func TestConfigZeroValueBehavior(t *testing.T) {
 	}
 	if cfg.Video.LocalRunnerEnabled {
 		t.Error("Zero-value Config should have LocalRunnerEnabled=false")
+	}
+}
+
+func TestResolveSkillRootFindsMigratedCloudBackendSkillsFromRepoRoot(t *testing.T) {
+	repoRoot := t.TempDir()
+	cloudSkills := filepath.Join(repoRoot, "cloud-backend", "skills")
+	if err := os.MkdirAll(cloudSkills, 0o755); err != nil {
+		t.Fatalf("create cloud skills dir: %v", err)
+	}
+
+	resolved := resolveSkillRoot("skills", repoRoot)
+	if resolved != cloudSkills {
+		t.Fatalf("resolved skill root = %q, want %q", resolved, cloudSkills)
+	}
+}
+
+func TestResolveSkillRootKeepsExistingRelativePath(t *testing.T) {
+	cloudRoot := t.TempDir()
+	skills := filepath.Join(cloudRoot, "skills")
+	if err := os.MkdirAll(skills, 0o755); err != nil {
+		t.Fatalf("create skills dir: %v", err)
+	}
+
+	resolved := resolveSkillRoot("skills", cloudRoot)
+	if resolved != skills {
+		t.Fatalf("resolved skill root = %q, want %q", resolved, skills)
+	}
+}
+
+func TestResolveSkillRootKeepsEmptyValue(t *testing.T) {
+	if resolved := resolveSkillRoot("", t.TempDir()); resolved != "" {
+		t.Fatalf("resolved empty skill root = %q, want empty", resolved)
 	}
 }
