@@ -3,6 +3,9 @@ package artifact
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -20,7 +23,6 @@ func NewService(repo *Repository) *Service {
 // content hash already exists for the same scope, it returns the existing one
 // (idempotent). Otherwise, it auto-increments the version number and saves.
 func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest) (*Artifact, error) {
-	// Compute content hash if not provided
 	if req.ContentHash == "" && len(req.Data) > 0 {
 		req.ContentHash = HashContent(req.Data)
 	}
@@ -43,45 +45,7 @@ func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest
 		parentID = current.ID
 	}
 
-	// Handle inline vs MinIO storage
-	storageType := req.StorageType
-	if storageType == "" {
-		storageType = "inline"
-	}
-
-	var inlineJSON string
-	var storageRef string
-	var sizeBytes int64
-
-	if storageType == "inline" && len(req.Data) > 0 {
-		inlineJSON = string(req.Data)
-		sizeBytes = int64(len(req.Data))
-	} else if storageType == "minio" {
-		storageRef = req.StorageRef
-		sizeBytes = int64(len(req.Data))
-	}
-
-	artifact := &Artifact{
-		ProjectID:     req.ProjectID,
-		WorkflowRunID: req.WorkflowRunID,
-		StageName:     req.StageName,
-		UnitID:        req.UnitID,
-		Kind:          req.Kind,
-		Name:          req.Name,
-		Version:       nextVersion,
-		ParentID:      parentID,
-		StorageType:   storageType,
-		StorageRef:    storageRef,
-		InlineJSON:    inlineJSON,
-		MimeType:      req.MimeType,
-		SizeBytes:     sizeBytes,
-		ContentHash:   req.ContentHash,
-		PromptHash:    req.PromptHash,
-		Provider:      req.Provider,
-		Model:         req.Model,
-		IsCurrent:     true,
-		Metadata:      req.Metadata,
-	}
+	artifact := buildArtifactRecord(req, nextVersion, parentID)
 
 	if err := s.repo.Save(ctx, artifact); err != nil {
 		return nil, fmt.Errorf("failed to create artifact: %w", err)
@@ -113,4 +77,87 @@ func (s *Service) GetHistory(ctx context.Context, projectID, stageName, unitID s
 // ListByProject returns all current artifacts for a project.
 func (s *Service) ListByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
 	return s.repo.ListByProject(ctx, projectID)
+}
+
+func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID string) *Artifact {
+	if req.ContentHash == "" && len(req.Data) > 0 {
+		req.ContentHash = HashContent(req.Data)
+	}
+
+	metadata := cloneMetadata(req.Metadata)
+	metadata["cloudPayloadStored"] = false
+	metadata["localOnly"] = true
+	if _, exists := metadata["requestedStorageType"]; !exists && req.StorageType != "" && req.StorageType != StorageLocal {
+		metadata["requestedStorageType"] = req.StorageType
+	}
+
+	storageRef := req.StorageRef
+	if strings.TrimSpace(storageRef) == "" {
+		storageRef = LocalArtifactRef(req.ProjectID, req.StageName, req.UnitID, req.ContentHash, req.Name)
+	}
+
+	sizeBytes := req.SizeBytes
+	if sizeBytes == 0 && len(req.Data) > 0 {
+		sizeBytes = int64(len(req.Data))
+	}
+
+	return &Artifact{
+		ProjectID:     req.ProjectID,
+		WorkflowRunID: req.WorkflowRunID,
+		StageName:     req.StageName,
+		UnitID:        req.UnitID,
+		Kind:          req.Kind,
+		Name:          req.Name,
+		Version:       nextVersion,
+		ParentID:      parentID,
+		StorageType:   StorageLocal,
+		StorageRef:    storageRef,
+		InlineJSON:    "",
+		MimeType:      req.MimeType,
+		SizeBytes:     sizeBytes,
+		ContentHash:   req.ContentHash,
+		PromptHash:    req.PromptHash,
+		Provider:      req.Provider,
+		Model:         req.Model,
+		IsCurrent:     true,
+		Metadata:      metadata,
+	}
+}
+
+func LocalArtifactRef(projectID, stageName, unitID, contentHash, name string) string {
+	hash := safeStorageSegment(contentHash)
+	if hash == "" {
+		hash = "pending"
+	}
+	fileName := safeStorageSegment(name)
+	if fileName == "" {
+		fileName = "artifact"
+	}
+	return "local://projects/" + path.Join(
+		safeStorageSegment(projectID),
+		"artifacts",
+		safeStorageSegment(stageName),
+		safeStorageSegment(unitID),
+		hash,
+		fileName,
+	)
+}
+
+func cloneMetadata(metadata map[string]interface{}) map[string]interface{} {
+	cloned := map[string]interface{}{}
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+var unsafeStorageSegmentPattern = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func safeStorageSegment(value string) string {
+	cleaned := unsafeStorageSegmentPattern.ReplaceAllString(strings.TrimSpace(value), "-")
+	cleaned = strings.Trim(cleaned, ".-_")
+	if cleaned == "" {
+		return ""
+	}
+	return cleaned
 }

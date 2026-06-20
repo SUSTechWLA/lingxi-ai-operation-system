@@ -10,7 +10,7 @@ cloud-backend/
   -> cloud logs, trace, diagnostics analysis
 ```
 
-云端负责配置、账号、LLM/API 对接、远程编排、云端日志和诊断分析。本地用户不需要安装数据库或 Docker。
+云端负责配置、账号、LLM/API 对接、远程编排、云端日志和诊断分析。本地用户不需要安装数据库或 Docker。桌面用户生成的脚本、JSON、图片、音频、视频等个人资产默认保存在本地，云端只保存本地引用、hash、size、版本、服务日志和必要的诊断索引。
 
 ## 目录
 
@@ -63,7 +63,7 @@ docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
 - postgres: 业务数据库。
 - redis: 会话/缓存。
 - redpanda: Kafka-compatible event bus。
-- minio: 云端对象存储。
+- minio: 云端对象存储，用于云端服务资产和 legacy 媒体兼容；不作为桌面用户生成资产的默认存储。
 
 ## 前端云端 API 配置
 
@@ -84,6 +84,16 @@ Web 部署在 nginx 下时，也可以使用同域 `/api`。
 - task / node trace。
 - model call and external tool errors。
 - uploaded local diagnostic packages。
+- artifact metadata: `storage_type=local`、`storage_ref=local://...`、hash、size、版本和 provider/model。
+- sanitized node/task output: 只保留本地 manifest、hash、size、trace、状态和脱敏摘要。
+
+云端默认不保留：
+
+- 用户生成脚本、Prompt、分镜正文。
+- 用户生成图片、配音音频、最终视频。
+- 本地项目文件和缓存文件。
+
+桌面端调用基础模型服务商的长期形态应由本地 agent 直连 Provider；云端只下发远程配置和策略，不代理用户大正文或二进制资产。
 
 推荐诊断流程：
 

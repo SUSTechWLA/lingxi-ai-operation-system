@@ -2,518 +2,191 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Quick Reference
+> **权威架构文档：** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 完整的模块说明、数据模型、API 清单、前端架构、基础设施。
+> 本文档为快速上手指南，详细内容请查阅架构文档。
 
-### Service
-- AIOS — 通用智能体编排平台。Go 单体应用，端口 8080，模块化架构支持 DAG 工作流编排、多工具协作、人工审核节点和外部工具注册
-- 🆕 **Video Creation** — 视频创作子系统 (feature-flagged, 默认关闭)。支持 AIGC 镜头式视频和文字口播可视化视频两条生产线。
+## 系统概览
 
-### Core Commands
+**躺营 AIOS** — 「本地执行面 + 云端控制面」的自媒体内容运营系统。
 
-#### Start backend + infrastructure
-```bash
-# 1. Copy and configure environment
-cd aios-core && cp .env.example .env
-# Edit .env — add your OPENAI_API_KEY
-
-# 2. Start Docker infrastructure + backend
-./aios-core/scripts/startup.sh    # One-click (infra → build backend → run backend)
+```text
+frontend/       # React + Electron UI（桌面端 & Web）
+local-backend/  # 本地轻量 agent（:18080），无数据库、无 Docker，管理用户本地文件/缓存/日志/产物
+cloud-backend/  # 云端 AIOS Core（:8080），Go 单体，PostgreSQL/Redis/Redpanda/MinIO
 ```
 
-#### Build sandbox (Rust)
+### 核心边界
+
+| 层 | 职责 | 不负责 |
+|----|------|--------|
+| **local-backend** | 本地文件读写、缓存、项目文件、产物文件、执行日志、诊断包生成 | 数据库、LLM API Key、云端业务数据 |
+| **cloud-backend** | DAG 编排、LLM/API 对接、配置、工作流模板、远程编排、云端日志分析 | 保存用户生成的脚本/图片/音频/视频正文 |
+
+### 产物存储边界（v3.0 关键变更）
+
+- **用户生成内容**（脚本、JSON、图片、音频、视频）→ 保存在用户本机 `local-backend` 的 `artifacts/` 目录
+- **云端 artifact 表** → 仅保存 `storage_type=local`、`storage_ref=local://...`、hash、size、version、provider/model 等索引元数据
+- **云端不保存**用户产物正文（`inline_json` 为空），不把用户图片/音频/视频默认上传 MinIO
+
+## 快速启动
+
+### 本地桌面开发（无需 Docker）
+
 ```bash
-# Prerequisites: Rust toolchain (install via: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh)
+# 终端 1：本地 agent
+bash scripts/start-local-backend.sh     # 监听 127.0.0.1:18080
 
-cd aios-core && make sandbox-build  # Build Rust sandbox service
-./aios-core/build/tangying-sandbox & # Start sandbox gRPC server on :50051
-
-# To enable sandbox for tool execution:
-# Set SANDBOX_ENABLED=true in .env, restart backend
+# 终端 2：前端 dev server
+bash scripts/start-frontend.sh          # http://localhost:3000
 ```
 
-#### Manual backend startup
-```bash
-# Terminal 1: Infrastructure
-cd aios-core && docker compose up -d
+本地启动不依赖 PostgreSQL、Redis、Kafka、MinIO 或 Docker。需要云端能力时通过 `VITE_CLOUD_API_BASE` 指向云端 API。
 
-# Terminal 2: Backend (port 8080)
-cd aios-core && go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
-./aios-core/build/tangying-ai-os
+### 云端后端开发（需要 Docker）
+
+```bash
+cd cloud-backend
+cp .env.example .env                    # 填 OPENAI_API_KEY
+docker compose up -d                    # 启动 PG/Redis/Redpanda/MinIO
+go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+./build/tangying-ai-os                  # 监听 :8080
 ```
 
-#### Frontend (development or Electron build)
-```bash
-cd frontend
-npm install
+### 启用视频创作
 
-# Dev server (hot reload, proxies /api to :8080)
-npm run dev            # http://localhost:3000
-
-# Electron production build (uses dist/ directly, APIs call localhost:8080)
-npm run build          # Build Vite
-npm run electron:build # Build .dmg/.exe via electron-builder
-```
-
-#### Development
-```bash
-cd aios-core
-make build    # Build binary
-make run      # Build + run
-make test     # Run tests
-make tidy     # Tidy dependencies
-make fmt      # Format code
-```
-
-#### Test APIs
-```bash
-./aios-core/scripts/test-apis.sh
-curl http://localhost:8080/api/health
-```
-
-## Architecture Overview
-
-Go 通用智能体编排平台 — 所有模块运行在同一进程（端口 8080）：
-
-1. **NL-Translator** - LLM 驱动的自然语言到 DAG 任务图转换
-2. **Orchestrator** - 核心任务调度：DAG 生命周期管理、状态机、依赖解析、重试策略
-3. **Context** - 任务历史持久化、审计追踪、快照/恢复
-4. **Worker** - 插件化工具执行引擎（内置 + 外部工具注册）
-5. **Publish** - 内容生成与多平台发布 API
-6. **Media** - MinIO 对象存储，媒体资产管理
-7. **Skill** - 多轮对话 AI 助手，LLM DAG 规划，Redis 会话状态
-8. **Bid** - 自动化标书生成（招标解析 → 章节生成 → 审核 → 导出）
-9. **Workflow** - 硬编排工作流模板系统（保存/复用/实例化 DAG）
-
-### Communication Flow
-- Modules communicate via internal Go function calls (same process)
-- Event-driven architecture using Redpanda (Kafka-compatible) for async coordination
-- Outbox pattern: events written to DB first, relayed to Kafka by background goroutine (no event loss)
-- Persistence with PostgreSQL (pgx), caching with Redis (go-redis)
-
-## Module Details
-
-### internal/core/artifact (🆕 Video Creation)
-Versioned output artifact management. Key components:
-
-- `Artifact` model — Versioned intermediate/final outputs with current pointer, content hash, parent tracking
-- `Service` — Version auto-increment, idempotent creation (same hash = same artifact), MinIO/inline storage
-- `Repository` — Transactional save (unset old current → insert new current)
-
-### internal/core/skillruntime (🆕 Video Creation)
-Skill Package loading and version management. Key components:
-
-- `Registry` — Thread-safe skill registry keyed by name@version
-- `LoadSkills(root)` — Scans directories, parses skill.yaml, validates stage files and schemas
-- `Handler` — `GET /api/skills`, `GET /api/skills/:name/:version`
-- Skills directory: `skills/{name}/{version}/` with `skill.yaml`, `stages/*.md`, `schemas/*.json`
-
-### internal/core/modelgateway (🆕 Video Creation)
-Unified external model API gateway. Key components:
-
-- `Provider` interface — `Name()`, `Supports(Capability)`, `Execute(ctx, req)`, `Health(ctx)`
-- `Gateway` — Routes by Capability, fingerprint-based idempotency cache, exponential retry
-- `Capability` types — `text_to_text`, `image_to_text`, `text_to_image`, `text_to_video`, `image_to_video`
-- `providers/fake/` — Fixture-driven fake provider for testing with fault injection
-- `providers/openai_compatible/` — OpenAI-compatible API adapter
-
-### internal/core/localrunner (🆕 Video Creation)
-Electron local runner task protocol. Key components:
-
-- `LocalRunner` / `LocalJob` models — Runner registration, heartbeat, job claim/poll
-- `Service` — RegisterRunner, Heartbeat, CreateJob, ClaimJob, ReportProgress, CompleteJob, FailJob
-- Command whitelist: `HYPERGEN_RENDER`, `FFMPEG_PROBE`, `FFMPEG_ASSEMBLE`, `BUNDLE_EXTRACT`
-- `ValidCommands` map — prevents arbitrary shell execution
-
-### internal/core/workflow (Extended 🆕)
-- `RunService` — WorkflowRun lifecycle: CreateRun compiles stage→DAG, submits to orchestrator, tracks stages
-- `RunRepository` — WorkflowRun CRUD, stage status updates
-- `RunModel` — RunStatus (PENDING/RUNNING/PAUSED/COMPLETED/FAILED/CANCELLED), StageStatus, Attempt
-- `Template.Version` — Version field added (default "1.0.0"), backward compatible with legacy templates
-
-### internal/agents/video (🆕 Video Creation)
-Video production domain. Key components:
-
-- `model/` — VideoProject, Script, Character, SceneDef, ShotDefinition, ShotPackage, NarrationBeat, VisualBeat, ComponentDSL
-- `service/` — ProjectService (CRUD, mode/version lock, soft delete), ComponentDSL validator
-- `handler/` — ProjectHandler (`/api/video-projects`), WorkflowHandler (`/api/video-projects/:pid/workflow-runs`)
-- `workflows/` — AIGC Shot Video v1 and Voice Visual Video v1 workflow registration
-
-### Two Video Skill Packages
-- `skills/aigc-shot-video/1.0.0/` — 10 stages: brief→script→visual_design→shot_plan→storyboard→keyframe→video_prompt→generate→review
-- `skills/voice-visual-video/1.0.0/` — 8 stages: intent_analysis→narration→visual_design→beat_planning→component_dsl→image_generation→bundle_assemble→render_review
-
-### Feature Flags
 ```env
-VIDEO_CREATION_ENABLED=false   # 控制所有视频创作功能 (路由注册 + API)
+# cloud-backend/.env
+VIDEO_CREATION_ENABLED=true
+MODEL_PROVIDER_MODE=fake               # 测试用 fake，生产用 real
+SKILL_ROOT=skills
+```
+
+## 目录结构
+
+```text
+cloud-backend/
+  cmd/tangying-ai-os/main.go           # 入口，路由注册，优雅关闭
+  internal/
+    core/                               # 通用引擎层（不绑定业务）
+      orchestrator/                     # DAG 调度引擎
+      workflow/                         # 工作流模板 + Run + Skill→DAG 编译器
+      worker/                           # 工具执行引擎（14+ 内置工具 + 沙箱）
+      skillruntime/                     # Skill 包加载 + LLM Router
+      modelgateway/                     # 统一模型网关（指纹缓存 + 重试 + Provider 路由）
+      artifact/                         # 版本化产物管理（v3.0: metadata-only，内容在本地）
+      localrunner/                      # Electron 本地任务协议
+      translator/                       # NL→DAG 翻译
+      context/                          # 审计追踪
+      media/                            # MinIO 媒体管理（云端服务资产/legacy 兼容）
+      outbox/ eventbus/ config/ database/ logger/ model/
+    agents/                             # 业务 Agent 层
+      video/                            # 视频创作（Project/Run/审核/产物）
+      bid/                              # 标书生成
+      chat/                             # AI 对话助手
+      publish/                          # 内容发布 + AI 生成
+  skills/                               # 6 个 Skill Package（create-opinion-videos 等）
+  deploy/                               # 云端 Docker Compose + nginx 配置
+  scripts/                              # 启动/测试脚本
+
+local-backend/
+  cmd/local-agent/                      # 本地 agent 入口
+  internal/localagent/                  # HTTP server（:18080），本地文件管理 + 产物存储 API
+
+frontend/
+  src/
+    components/                         # Sidebar, CreatorWorkbenchPage 内联组件 等
+    pages/                              # CreatorWorkbenchPage（创作台）, DesktopPage
+    services/api.ts                     # axios，云端 API 调用
+    stores/                             # Zustand（appStore，发布相关；创作台自管理 state）
+  electron/                             # Electron 壳（main.cjs, preload.cjs）
+```
+
+## 常用命令
+
+```bash
+# 云端后端
+cd cloud-backend
+make build                    # 编译
+make run                      # 编译 + 运行
+make test                     # 跑测试
+go test -race ./...           # 全量 + 竞态检测
+./scripts/test-apis.sh        # API 集成测试
+
+# 本地后端
+cd local-backend
+go test ./...                 # 跑测试
+go build -o build/tangying-local-agent cmd/local-agent/main.go
+
+# 前端
+cd frontend
+npm run dev                   # Dev server（:3000，proxy /api → :8080）
+npm run build                 # 生产构建
+npm run electron:build        # Electron .dmg/.exe 打包
+
+# 桌面完整构建
+VITE_CLOUD_API_BASE=https://your-cloud.example.com/api \
+TANGYING_CLOUD_API_BASE=https://your-cloud.example.com/api \
+bash scripts/build-local-desktop.sh
+
+# 沙箱（可选，Rust）
+cd cloud-backend && make sandbox-build
+```
+
+## 本地 Agent API
+
+```text
+GET  /api/local/health                          # 健康检查
+GET  /api/local/paths                           # 数据目录路径
+POST /api/local/artifacts                       # 保存本地产物（content 或 contentBase64）
+GET  /api/local/artifacts/:id?projectId=<pid>   # 读取本地产物
+POST /api/local/logs                            # 写本地日志
+POST /api/local/diagnostics                     # 生成诊断包
+```
+
+产物存储结构：`<DataDir>/artifacts/<projectId>/<artifactId>/content` + `metadata.json`
+
+## 关键架构概念
+
+- **DAG 工作流引擎** — 任务有向无环图，节点=操作（LLM/工具/审核），边=依赖，支持条件分支、重试、暂停/恢复
+- **Skill Package** — 业务流程写成 `skill.yaml` + stages Markdown，启动时自动编译为 DAG → Workflow 模板
+- **LLM Skill Router** — 用户一句话自动选择最合适的 Skill + 推断画幅/时长/交付目标
+- **Outbox 可靠投递** — 事件先写 DB 再异步 relay 到 Kafka，基础设施抖动时不丢事件
+- **事件驱动** — Kafka topics: `ai.node.ready` → `ai.node.result`（含 executed/failed）→ 状态机驱动
+- **版本化产物** — 每个 stage 产物有 version/contentHash/promptHash，支持返工闭环
+- **沙箱隔离** — Rust gRPC 沙箱执行不受信任代码（setrlimit 资源限制）
+
+## Feature Flags
+
+```env
+VIDEO_CREATION_ENABLED=false   # 视频创作功能（路由 + API）
 LOCAL_RUNNER_ENABLED=false     # Electron 本地 Runner
-MODEL_PROVIDER_MODE=fake       # fake | real (测试用 fake，生产用 real)
+MODEL_PROVIDER_MODE=fake       # fake | real
 SKILL_ROOT=skills              # Skill Package 根目录
 ```
 
-### Docker Cloud Deployment
-- `deploy/docker-compose.cloud.yml` — 生产部署: nginx + backend + postgres + redis + redpanda + minio
-- `deploy/nginx.conf` — SSE 流代理 (关闭缓冲)、视频上传支持 (500M)、SPA fallback
-- `deploy/.env.cloud.example` — 云部署环境变量模板
-
-### internal/orchestrator
-Core task scheduling engine.
-
-Key components:
-- `OrchestratorService` - Task creation, DAG submission, validation
-- `StateService` - Unified state convergence for tasks and nodes; includes `TryMakeReady` for immediate dependency check
-- `StateMachine` - Handles node success/failure, retry logic; publishes events via outbox
-- `DependencyChecker` - Event-driven: checks downstream dependencies after node execution; evaluates conditions before making child nodes ready
-- `RetryPolicy` - Exponential backoff (1s -> 2s -> 4s -> ... -> 60s max)
-- `Scheduler` - Fallback recovery: 30s ticker, only processes CREATED nodes stuck for >1 minute
-- `TaskExecutionControl` - Pause/resume/retry operations; persists pause reason
-- `DAGValidator` - Cycle detection, duplicate node checks
-
-### internal/translator
-Natural language to DAG translation via LLM.
-
-Key components:
-- `NlToDagService` - Calls OpenAI API with system prompt to generate DAG from natural language
-- `TranslateAndSubmit` - Translates then submits DAG to orchestrator in one step
-
-### internal/context
-Audit and context management.
-
-Key components:
-- `ContextService` - Record context, get task history, snapshot/restore nodes
-- `HandleEvent` - Auto-record context from Kafka events (ai.node.executed, ai.node.failed, etc.)
-
-### internal/worker
-Tool execution gateway with sandbox support.
-
-Architecture layers:
-- **Tool layer** (`internal/worker/tool/`) — Plugin interface + registry
-- **Executor layer** (`internal/worker/executor/`) — Execution backends (direct / sandbox)
-
-#### Tool Interface
-- `Tool` — Base interface: Name, Description, Type, Execute, ValidateParameters
-- `BuildableTool` — Tool that produces an `ExecutionRequest` (for executor routing to sandbox)
-- `ExecutableTool` — Tool that self-executes inline (for API-call-style tools)
-- `ManifestProvider` — Optional interface: `Manifest() ToolManifest` exposes full parameter/ output schema, sandbox requirements, and examples for AI tool discovery
-- `ExternalToolProvider` — Interface for tools that can execute registered external tools by name
-- `ToolRegistry` — Plugin registration and lookup by name; also manages external tool manifests (RegisterExternal, DeregisterExternal, ListManifests)
-- `ToolManifest` (`manifest.go`) — Full tool specification: Name, Description, Type, Endpoint, Timeout, Parameters (map of ParamDef), Output (map of ParamDef), Sandbox flag, Examples
-
-#### Built-in Tools (`internal/worker/tool/builtin/`)
-- `BashTool` — Sandboxed shell: command whitelist + dangerous pattern filter + `/tmp/tangying-sandbox` workdir. Implements `BuildableTool`.
-- `PythonTool` — python3 -c execution with resource limits. Implements `BuildableTool`.
-- `LlmApiTool` — OpenAI chat/completions API calls. Implements `ExecutableTool`. Defined in `builtin.go`.
-- `PolisherTool` — Text polish for social media titles/descriptions via LLM. Implements `ExecutableTool`.
-- `MediaAnalyzerTool` — Media analysis: extracts tags, suggestions, and summaries from uploaded images/videos via LLM. Implements `ExecutableTool`.
-- `ContentGeneratorTool` — Full content package generation based on media analysis, platform, and style keywords. Implements `ExecutableTool`.
-- `ContentCheckerTool` — Content compliance check: sensitive words, advertising law violations, platform-specific rules. Implements `ExecutableTool`.
-- `PlatformAdapterTool` — Cross-platform content adaptation: adjusts tone, format, and length for 7 social media platforms. Implements `ExecutableTool`.
-- `ChatGenerateTool` — Conversational content generation with full multi-turn message history via OpenAI. Implements `ExecutableTool`.
-- `ChatReviseTool` — Revise or generate content fields (title, description, keywords) from natural language instructions. Implements `ExecutableTool`.
-- `ExternalTool` — Bridge to registered external tool services via HTTP. Routes DAG pipeline calls to external endpoints registered through `/api/tools/register`. Implements `ExecutableTool` + `ExternalToolProvider`.
-- `VideoMetadataTool` — Downloads video from MinIO (via presigned URL) and extracts metadata: duration, resolution, frame rate, codec, audio track info. Caches video locally for downstream tools (`/tmp/tangying-video-cache`). Implements `ExecutableTool`.
-- `VideoAnalyzerTool` — Extracts keyframes via ffmpeg scene detection and transcribes audio via Whisper. Outputs base64 data URLs for keyframes and dialogue transcript text. Implements `ExecutableTool`.
-- `VideoCopyGeneratorTool` — Generates platform-adapted short-video titles, copy, and keywords from video metadata, keyframe analysis, and audio transcripts. Uses multimodal LLM. Supports douyin/xiaohongshu/bilibili/kuaishou platforms. Implements `ExecutableTool`.
-
-#### Executor Layer (`internal/worker/executor/`)
-- `Executor` interface — `Execute(ctx, ExecutionRequest) (ExecutionResult, error)`
-- `DirectExecutor` — Runs subprocess locally with temp workdir and env injection
-- `SandboxExecutor` — gRPC client to Rust sandbox service (`sandbox/`). Implements resource isolation (memory, CPU, disk, PID limits via setrlimit), timeout enforcement, and temp directory cleanup. When `SANDBOX_ENABLED=true`, `BuildableTool` requests route through this instead of `DirectExecutor`
-- `sandboxpb/` — Generated Go protobuf/gRPC code from `sandbox/proto/sandbox.proto`
-- `ExecutionRequest` — Unified request: Command, Args, Env, WorkDir, TimeoutSec, Limits (memory, CPU, disk, PID), InputFiles, Stdin
-- `ExecutionResult` — Unified result: ExitCode, Stdout, Stderr, TimedOut, ResourceUsage, OutputRef
-
-#### Node Execution (`internal/worker/service/`)
-- `NodeExecutor` — Routes to tool by name, selects executor (sandbox if enabled + BuildableTool, else direct), enforces timeout, publishes result/failure events to Kafka
-
-### internal/outbox
-Event reliability layer.
-
-Key components:
-- `Relay` - Background goroutine (100ms ticker) that reads pending outbox entries, publishes to Kafka, deletes on success
-- `SaveEvent` - Writes events to outbox table (called by StateService, StateMachine, DependencyChecker)
-
-### internal/publish
-Frontend-facing content publishing API.
-
-Key components:
-- `PublishHandler` - Gin HTTP handlers for `/api/publish`, `/api/ai/generate`, `/api/ai/generate-from-media`, `/api/ai/polish`
-- `PublishService` - Orchestrates content publishing via DAG task creation, AI content generation and text polishing via OpenAI
-- `TraceHandler` - Gin HTTP handlers for `/api/trace/recent`, `/api/trace/:taskId` (task lifecycle audit)
-
-API contract (standard response format):
-```json
-{"code": 200, "message": "success", "data": {...}}
-```
-
-### internal/media
-Media asset management backed by MinIO object storage.
-
-Key components:
-- `MediaHandler` - Gin HTTP handlers for `/api/media/upload`, `/api/media/list`, `/api/media/:id`, `/api/media/:id/tags`
-- `MediaService` - CRUD operations on `media_assets` table, tag-based filtering with PostgreSQL JSONB `@>` queries
-- `StorageService` - Wraps `minio-go` client: auto-creates bucket on init, upload with content-type detection, presigned GET URLs (24h TTL), delete
-
-Media asset model: ID, UserID, OriginalName, MimeType, Size, MinioPath, Tags (JSONB array), EmbeddingID, timestamps.
-
-### internal/skill (AI Assistant Dialog)
-Conversational AI assistant with multi-turn dialog, LLM-driven DAG planning, and tool manifest knowledge base.
-
-Key components:
-- `SessionHandler` - `/api/skill/dialog/session/*` endpoints for creating sessions, sending messages, querying progress, and terminating
-- `SessionManager` - Redis-backed session state with message history (50-message cap, 30min TTL), media context (presigned URLs), and task tracking
-- `PlanService` - Builds LLM prompt from conversation history + media context + tool manifests → generates DAG (JSON mode)
-- `ResultAssembler` - Creates orchestrator tasks, submits DAGs (with node ID scoping), polls for completion, extracts title/description/keywords from node outputs
-- `LLMClient` - Typed OpenAI chat completion client with JSON schema response format
-- `ToolManifestService` - DB-persisted + Redis-cached tool knowledge base; syncs builtin tools on startup, formats manifests for LLM DAG prompts
-- `prompts/` - System prompt templates for DAG generation and content planning
-
-### internal/publish (Tools)
-- `ToolHandler` - `/api/tools` endpoints for listing/querying/registering/deregistering tool manifests (builtin + external)
-
-### Frontend (frontend/)
-React + TypeScript + TailwindCSS + Zustand (no router — simple state-driven page switching).
-
-#### Pages (in `pages/`)
-- `PublishPage.tsx` — 创作发布: upload media, write/edit title/description/keywords, AI generate/polish, select platforms, publish
-- `DesktopPage.tsx` — 桌面工具 (Electron only): system status monitoring, backend health check, command execution panel
-
-#### Key components (in `components/`)
-- `Sidebar.tsx` — Navigation sidebar with 创作发布 / 桌面工具 tabs
-- `UploadCard.tsx` — Drag-and-drop video/image upload with content type selection
-- `TitleInput.tsx` — Title input with AI polish button
-- `DescriptionInput.tsx` — Description textarea with AI polish button
-- `KeywordInput.tsx` — Tag-based keyword input
-- `AIHelperPanel.tsx` — AI generate and polish controls
-- `AIAssistantTab.tsx` — Conversational AI chat panel with multi-turn history, media context, and skill dialog integration
-- `BlockingOverlay.tsx` — Full-screen loading overlay during AI operations with cancel button
-- `ContentTypeSelector.tsx` — Content type selection (video/article/image)
-- `MediaLibraryPanel.tsx` — Side panel for browsing and filtering uploaded media assets
-- `PlatformSelector.tsx` — Multi-platform toggle selector (10 platforms)
-- `PublishButton.tsx` — Publish action button (calls `/api/publish`)
-- `DesktopToolbar.tsx` — Electron desktop toolbar
-- `CommandPanel.tsx` — Command execution panel (Electron IPC, in DesktopPage)
-- `appStore.ts` — Zustand store (title, description, keywords, body, media, platforms, cover, aiLoadingMessage, chatSessionId, contentType)
-- `api.ts` — Axios service calling all `/api/publish`, `/api/ai/*`, `/api/trace/*`, `/api/skill/dialog/*`, `/api/media/*`, `/api/tools`
-
-#### Electron vs Web
-- Production: Packaged as Electron .dmg/.exe via `electron-builder` (config in `electron/package.json`); bundles `frontend/dist/` as static assets
-- `electron/main.js` — Main process: creates BrowserWindow, loads frontend dist or dev server
-- `electron/preload.js` — Preload script for secure IPC between renderer and main process
-- Development: `npm run dev` serves at port 3000 with Vite proxy forwarding `/api` to `:8080`
-- The desktop tools tab (`DesktopPage`, `DesktopToolbar`, `CommandPanel`) is always visible
-- API base URL: auto-detects Electron → `http://localhost:8080/api`, otherwise `/api` (Vite proxy)
-
-Key UI features:
-- **Media-based AI generation**: When images/videos are uploaded, AI generate uses `/api/ai/generate-from-media` (multipart) instead of text-only `/api/ai/generate`; video pipeline involves metadata extraction → frame analysis → audio transcription → copy generation
-- **Conversational AI assistant**: `AIAssistantTab` provides multi-turn chat via `/api/skill/dialog/session/*` endpoints, with media context (presigned URLs for multimodal vision) and LLM-driven DAG planning
-- **Media library panel**: Browse, filter by tag, and reuse previously uploaded media assets
-- **Content type selector**: Choose between video, article, image content types before generation
-- **AI loading overlay**: Full-screen `BlockingOverlay` with progress bar+spinner and cancel button during AI operations; cancel terminates the backend task (via `/api/task/:taskId/fail`) and records context
-- **Debug trace button**: Floating button (bottom-right) to query recent task lifecycle
-- **Trace endpoints**: `/api/trace/recent` and `/api/trace/:taskId` for full task+context audit data
-- **Async polish**: Title/description polish uses submit/poll pattern (`/api/ai/polish/submit` + `/api/ai/polish/result`) for cancel support
-
-## Project Structure
-
-```
-aios-core/cmd/tangying-ai-os/main.go    # Entry point, wiring, graceful shutdown
-internal/
-  config/                    # Viper-based config with .env support
-  database/                  # pgx pool + schema migrations
-  eventbus/                  # IBM/sarama Kafka producer/consumer
-  logger/                    # Zap logger (dev/prod modes)
-  model/                     # Data models + repositories
-  outbox/                    # Outbox pattern (relay.go + SaveEvent)
-  redis/                     # go-redis client
-  orchestrator/
-    handler/                 # Gin HTTP handlers
-    service/                 # Business logic + state machine + condition evaluation
-  translator/
-    handler/                 # Gin HTTP handlers
-    service/                 # NL-to-DAG translation
-  context/
-    handler/                 # Gin HTTP handlers
-    service/                 # Context/snapshot management
-  media/
-    handler.go               # Media upload/list/get/update-tags HTTP handlers
-    service.go               # Media CRUD + MinIO storage
-    storage.go               # MinIO client wrapper (bucket auto-create, presigned URLs)
-  publish/
-    handler/                 # Publish/AI/Tool HTTP handlers
-      handler.go             # Publish, AI generate, AI polish (sync+async), AI generate-from-media
-      trace_handler.go       # Task trace query (/api/trace/recent, /api/trace/:taskId)
-      tool_handler.go        # Tool registry query/register/deregister
-      handler_test.go
-    service/                 # Content publishing + AI generate/polish
-      service.go             # PublishContent, AIGenerateContent, AIGenerateFromMedia, AIPolishText
-  worker/
-    service/                 # Node execution engine
-    tool/                    # Tool interface + registry + manifest
-      tool.go                # Tool, BuildableTool, ExecutableTool, ManifestProvider, ExternalToolProvider
-      manifest.go            # ToolManifest spec (parameters, output, examples)
-      builtin/               # BashTool, PythonTool, LlmApiTool, PolisherTool, MediaAnalyzer, ContentGenerator, ContentChecker, PlatformAdapter, ChatGenerateTool, ChatReviseTool, ExternalTool, VideoMetadataTool, VideoAnalyzerTool, VideoCopyGeneratorTool
-    executor/                # DirectExecutor, SandboxExecutor, types
-  skill/                     # AI conversational assistant (dialog + DAG planning)
-    handler/
-      session_handler.go     # Session create/get/chat/progress/terminate HTTP handlers
-    service/
-      session_manager.go     # Redis-backed session state (30min TTL, 50-msg cap)
-      plan_service.go        # LLM DAG generation from conversation context + tool manifests
-      result_assembler.go    # Task creation, DAG submission, polling, field extraction
-      llm_client.go          # Typed OpenAI chat completion client (JSON schema mode)
-      tool_manifest_service.go # DB+Redis tool knowledge base (sync, cache, format for LLM)
-    prompts/
-      prompts.go             # System prompt templates for DAG generation
-  common/                    # Shared utility packages
-    llmutil/                 # OpenAI client helpers
-    jsonx/                   # JSON parsing/schema utilities
-    metadata/                # Metadata extraction utilities
-sandbox/                     # Rust sandbox service (gRPC server for isolated execution)
-  src/
-    main.rs                  # gRPC server entry point (tonic + tokio)
-    sandbox.rs               # Sandbox execution with setrlimit resource isolation
-  proto/
-    sandbox.proto            # Protobuf/gRPC service definition
-  Cargo.toml                 # Rust dependencies (tonic, prost, tokio, libc)
-  build.rs                   # Proto compilation via tonic-build
-frontend/                    # React + TypeScript + TailwindCSS
-  src/
-    components/             # UI components (Sidebar, UploadCard, TitleInput, DescriptionInput, KeywordInput, AIHelperPanel, AIAssistantTab, BlockingOverlay, ContentTypeSelector, MediaLibraryPanel, PlatformSelector, PublishButton, DesktopToolbar, CommandPanel)
-    pages/                   # Pages (PublishPage, DesktopPage)
-    stores/                  # Zustand state management (appStore)
-    services/                # API services (api.ts)
-    utils/                   # Types (types.ts) and Electron utilities (electron.ts)
-electron/                    # Electron desktop wrapper
-  main.js                    # Electron main process
-  preload.js                 # Preload script for IPC
-  package.json               # electron-builder config (outputs .dmg/.exe)
-```
-
-## Infrastructure
-
-Docker-based local development:
-- PostgreSQL 16 - Primary database
-- Redis 7 - Caching
-- Redpanda - Event streaming (Kafka compatible)
-- MinIO - Object storage
-- Qdrant - Vector database
+## 测试
 
 ```bash
-cd aios-core && docker compose up -d    # Start
-docker compose down     # Stop
-docker compose logs -f  # View logs
+# 云端
+cd cloud-backend && go test ./...
+
+# 本地
+cd local-backend && go test ./...
+
+# 前端
+cd frontend && npm run build
 ```
 
-## Testing
+## 新增业务线步骤
 
-```bash
-go test ./...                    # All tests
-go test ./internal/orchestrator/ # Orchestrator only
-./aios-core/scripts/test-apis.sh           # API integration tests
-```
+1. 在 `skills/{name}/1.0.0/` 写 `skill.yaml` + `stages/*.md`
+2. （可选）在 `internal/agents/{name}/` 写领域 Agent，复用 orchestrator/workflow
+3. 在 `main.go` 注册 handler（feature-gated）
+4. 启动时自动加载 Skill → 编译 → 注册为 Workflow 模板
 
-## Environment Configuration
+## 常见问题
 
-```bash
-cd aios-core && cp .env.example .env
-```
-
-Required:
-- `OPENAI_API_KEY` - API key for LLM operations
-- `OPENAI_BASE_URL` - Base URL for LLM service
-
-## Key Concepts
-
-### DAG Task Graph
-Tasks are directed acyclic graphs:
-- Nodes = individual operations (LLM calls, tool executions)
-- Edges = dependencies between nodes
-- Nodes can have `condition` field for conditional branching (e.g., `"nodeA.status == success"`)
-- Orchestrator handles execution order and state management
-
-### Event Topics
-- `ai.node.ready` - DependencyChecker publishes when node is ready (contains idempotencyKey)
-- `ai.node.result` - Worker publishes on node completion (contains idempotencyKey)
-- `ai.node.executed` - StateMachine publishes on success, DependencyChecker consumes
-- `ai.node.failed` - StateMachine publishes on permanent failure
-- `ai.task.completed` - Published on task completion
-- `ai.task.failed` - Published on task failure
-
-All events go through the outbox table first, then relayed to Kafka.
-
-### Node Status Flow
-- `CREATED` -> `READY` (dependencies met, via TryMakeReady or DependencyChecker) -> `RUNNING` -> `SUCCESS` or `FAILED`
-- `SKIPPED` - Condition not met (counts as satisfied for downstream dependencies and task completion)
-- `RETRYING` - Intermediate during exponential backoff retry
-- Failed with retries: `FAILED` -> `RETRYING` -> `CREATED` (Scheduler 30s fallback recovers to `READY`)
-
-### Outbox Pattern
-Events are first written to the `outbox` DB table via `SaveEvent()`. A background Relay goroutine (100ms ticker) reads pending entries, publishes to Kafka, and deletes on success. This guarantees no event loss even if Kafka is temporarily unavailable.
-
-### Idempotency
-idempotencyKey = taskId + "-" + nodeId, used as Kafka message key for deduplication.
-
-### Tool Name Routing
-- TOOL type: `payload["name"]` (the node's name) determines the tool (e.g., "bash", "python")
-- LLM type: always routes to "llm_api"
-- Explicit override: `payload["tool"]` takes highest priority
-
-## Development Workflow
-
-1. Ensure Docker is running and infrastructure is up
-2. `make run` to build and start
-3. Make changes following existing Go patterns
-4. Write tests for new functionality
-5. `./aios-core/scripts/test-apis.sh` before submitting
-
-## API Endpoints
-
-### Publish Module (frontend-facing)
-- `POST /api/publish` - Submit content for publishing (multipart: title, description, keywords, platforms, images, videos)
-- `POST /api/ai/generate` - AI-generate title and description from text prompt
-- `POST /api/ai/generate-from-media` - AI-generate from images/videos + prompt (multipart)
-- `POST /api/ai/polish` - AI-polish existing text (title or description)
-- `POST /api/ai/polish/submit` - Submit async polish task (returns taskId+nodeId immediately for cancel support)
-- `GET /api/ai/polish/result` - Query async polish result by taskId+nodeId
-- `GET /api/trace/recent` - Get most recent task trace (full task + context audit data)
-- `GET /api/trace/:taskId` - Get specific task trace
-
-### Orchestrator
-- `POST /api/task/create` - Create a new task
-- `POST /api/task/:taskId/dag` - Submit DAG for a task
-- `GET /api/task/:taskId` - Get task details
-- `POST /api/node` - Submit DAG from NL translation (creates task + submits DAG)
-
-### Translator
-- `POST /api/translate` - Translate natural language to DAG
-- `POST /api/translate/submit` - Translate and submit in one step
-
-### Context
-- `GET /api/task/:taskId/context` - Get task context history
-
-### Media
-- `POST /api/media/upload` - Upload images/videos (multipart, stored in MinIO)
-- `GET /api/media/list?userId=&offset=&limit=&tag=` - List assets with tag filtering
-- `GET /api/media/:id` - Get single media asset
-- `PUT /api/media/:id/tags` - Update asset tags
-
-### Skill / AI Assistant Dialog
-- `POST /api/skill/dialog/session/create` - Create a new conversation session (with optional page context: title, description, keywords, media IDs)
-- `GET /api/skill/dialog/session/:id` - Get session state (message history + media context + task IDs)
-- `POST /api/skill/dialog/session/:id/chat` - Send a message → LLM plans DAG → orchestrator executes → returns generated fields
-- `GET /api/skill/dialog/session/:id/progress` - Query current execution progress (IDLE/EXECUTING/TERMINATED)
-- `POST /api/skill/dialog/session/:id/terminate` - Terminate a session
-
-### Tool Registry
-- `GET /api/tools` - List all tool manifests (builtin + external) with full parameter/output schemas
-- `GET /api/tools/:name` - Get specific tool manifest
-- `POST /api/tools/register` - Register an external tool (HTTP endpoint + manifest)
-- `DELETE /api/tools/:name` - Deregister an external tool
-
-## Common Issues
-
-- **NL-Translator 503**: Missing or invalid OPENAI_API_KEY
-- **Port conflict**: Ensure port 8080 is not in use
-- **Docker not running**: Start Docker Desktop first
-- **Go not installed**: Need Go 1.23+, install via `brew install go`
-- **Old consumer group incompatibility**: If switching from Java version, delete old Kafka consumer groups via `rpk group delete <group-name>`
+- **NL-Translator 503**：OPENAI_API_KEY 缺失或无效
+- **端口冲突**：确保 8080（云端）、18080（本地）、3000（前端）未被占用
+- **Docker 未运行**：仅云端开发需要，本地开发不需要
+- **Go 版本**：cloud-backend 需要 Go 1.25+，local-backend 需要 Go 1.23+

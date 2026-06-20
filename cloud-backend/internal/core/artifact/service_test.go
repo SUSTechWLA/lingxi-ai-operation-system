@@ -84,3 +84,37 @@ func TestCreateArtifactRequest(t *testing.T) {
 		t.Log("contentHash auto-computed by service layer")
 	}
 }
+
+func TestBuildArtifactRecordStoresOnlyLocalMetadata(t *testing.T) {
+	req := &CreateArtifactRequest{
+		ProjectID:   "proj-1",
+		StageName:   "script",
+		UnitID:      "content",
+		Kind:        KindMarkdown,
+		Name:        "script.md",
+		StorageType: "inline",
+		Data:        []byte("## 用户脚本\n不能进入云端数据库。"),
+		MimeType:    "text/markdown; charset=utf-8",
+	}
+
+	record := buildArtifactRecord(req, 2, "art-1")
+
+	if record.StorageType != StorageLocal {
+		t.Fatalf("storage type = %q, want %q", record.StorageType, StorageLocal)
+	}
+	if record.InlineJSON != "" {
+		t.Fatalf("inline json should stay empty for local artifacts, got %q", record.InlineJSON)
+	}
+	if record.StorageRef == "" {
+		t.Fatalf("storage ref should point to the local artifact location")
+	}
+	if record.SizeBytes != int64(len(req.Data)) {
+		t.Fatalf("size bytes = %d, want %d", record.SizeBytes, len(req.Data))
+	}
+	if record.ContentHash == "" {
+		t.Fatalf("content hash should be computed for local idempotency")
+	}
+	if stored, ok := record.Metadata["cloudPayloadStored"].(bool); !ok || stored {
+		t.Fatalf("metadata should mark cloud payload as not stored: %+v", record.Metadata)
+	}
+}

@@ -3,6 +3,7 @@ package localagent
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,57 @@ func TestHealthAndPathsUseLocalDataDir(t *testing.T) {
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			t.Fatalf("expected directory %q to exist, stat=%v err=%v", dir, info, err)
 		}
+	}
+}
+
+func TestLocalArtifactStoreSupportsBinaryPayloads(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	payload := []byte{0x00, 0x01, 0x02, 0xff}
+	body := bytes.NewBufferString(`{
+		"id":"img-1",
+		"projectId":"vp-1",
+		"storageRef":"local://projects/vp-1/artifacts/keyframe/image/hash/keyframe.png",
+		"mimeType":"image/png",
+		"contentBase64":"` + base64.StdEncoding.EncodeToString(payload) + `",
+		"metadata":{"kind":"IMAGE","cloudPayloadStored":false}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("store status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var stored LocalArtifactResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("invalid store response: %v", err)
+	}
+	content, err := os.ReadFile(stored.Path)
+	if err != nil {
+		t.Fatalf("expected local binary artifact: %v", err)
+	}
+	if !bytes.Equal(content, payload) {
+		t.Fatalf("binary payload mismatch: %#v", content)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/artifacts/img-1?projectId=vp-1", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var loaded LocalArtifactResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &loaded); err != nil {
+		t.Fatalf("invalid read response: %v", err)
+	}
+	if loaded.Content != "" {
+		t.Fatalf("binary response should not use text content: %q", loaded.Content)
+	}
+	if loaded.ContentBase64 != base64.StdEncoding.EncodeToString(payload) {
+		t.Fatalf("binary response base64 mismatch: %q", loaded.ContentBase64)
 	}
 }
 
@@ -124,5 +176,129 @@ func TestHandlerAllowsLocalFrontendCORS(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
 		t.Fatalf("allow-methods header missing")
+	}
+}
+
+func TestLocalArtifactStoreWritesAndReadsUserPayload(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{
+		"id":"art-1",
+		"projectId":"vp-1",
+		"storageRef":"local://projects/vp-1/artifacts/script/content/hash/script.md",
+		"mimeType":"text/markdown; charset=utf-8",
+		"content":"## 本地脚本\n用户资产只保存在本地。",
+		"metadata":{"stageName":"script","cloudPayloadStored":false}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("store status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var stored LocalArtifactResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("invalid store response: %v", err)
+	}
+	if stored.Path == "" || stored.MetadataPath == "" {
+		t.Fatalf("expected local paths in response: %+v", stored)
+	}
+	content, err := os.ReadFile(stored.Path)
+	if err != nil {
+		t.Fatalf("expected local artifact payload: %v", err)
+	}
+	if !bytes.Contains(content, []byte("用户资产只保存在本地")) {
+		t.Fatalf("artifact payload mismatch: %s", string(content))
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/artifacts/art-1?projectId=vp-1", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var loaded LocalArtifactResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &loaded); err != nil {
+		t.Fatalf("invalid read response: %v", err)
+	}
+	if loaded.Content != "## 本地脚本\n用户资产只保存在本地。" {
+		t.Fatalf("loaded content mismatch: %q", loaded.Content)
+	}
+	if loaded.Metadata["cloudPayloadStored"] != false {
+		t.Fatalf("metadata should preserve cloudPayloadStored=false: %+v", loaded.Metadata)
+	}
+}
+
+func TestLocalArtifactDeleteRemovesPayloadAndMetadata(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{
+		"id":"art-delete",
+		"projectId":"vp-1",
+		"storageRef":"local://projects/vp-1/artifacts/script/content/hash/script.md",
+		"mimeType":"text/markdown",
+		"content":"delete me"
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("store status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/local/artifacts/art-delete?projectId=vp-1", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "artifacts", "vp-1", "art-delete")); !os.IsNotExist(err) {
+		t.Fatalf("artifact directory should be deleted, err=%v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/artifacts/art-delete?projectId=vp-1", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("deleted artifact should return 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLocalProjectDeleteRemovesProjectArtifactsAndCache(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	for _, dir := range []string{
+		filepath.Join(root, "projects", "vp-1"),
+		filepath.Join(root, "artifacts", "vp-1", "art-1"),
+		filepath.Join(root, "cache", "vp-1"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "data"), []byte("payload"), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/local/projects/vp-1", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("project delete status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	for _, dir := range []string{
+		filepath.Join(root, "projects", "vp-1"),
+		filepath.Join(root, "artifacts", "vp-1"),
+		filepath.Join(root, "cache", "vp-1"),
+	} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("project delete should remove %s, err=%v", dir, err)
+		}
 	}
 }

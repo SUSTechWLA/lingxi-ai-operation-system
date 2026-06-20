@@ -2,6 +2,7 @@ package localagent
 
 import (
 	"archive/zip"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +40,18 @@ type DiagnosticResponse struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+type LocalArtifactResponse struct {
+	ID            string                 `json:"id"`
+	ProjectID     string                 `json:"projectId"`
+	StorageRef    string                 `json:"storageRef,omitempty"`
+	MimeType      string                 `json:"mimeType,omitempty"`
+	Path          string                 `json:"path"`
+	MetadataPath  string                 `json:"metadataPath"`
+	Content       string                 `json:"content,omitempty"`
+	ContentBase64 string                 `json:"contentBase64,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata"`
+}
+
 type logRequest struct {
 	Source  string                 `json:"source"`
 	Level   string                 `json:"level"`
@@ -48,6 +61,16 @@ type logRequest struct {
 
 type diagnosticRequest struct {
 	Reason string `json:"reason"`
+}
+
+type localArtifactRequest struct {
+	ID            string                 `json:"id"`
+	ProjectID     string                 `json:"projectId"`
+	StorageRef    string                 `json:"storageRef"`
+	MimeType      string                 `json:"mimeType"`
+	Content       string                 `json:"content"`
+	ContentBase64 string                 `json:"contentBase64"`
+	Metadata      map[string]interface{} `json:"metadata"`
 }
 
 func NewServer(cfg Config) *Server {
@@ -85,6 +108,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/health", s.handleHealth)
 	s.mux.HandleFunc("/api/local/paths", s.handlePaths)
 	s.mux.HandleFunc("/api/local/logs", s.handleLogs)
+	s.mux.HandleFunc("/api/local/artifacts", s.handleArtifacts)
+	s.mux.HandleFunc("/api/local/artifacts/", s.handleArtifactByID)
+	s.mux.HandleFunc("/api/local/projects/", s.handleProjectByID)
 	s.mux.HandleFunc("/api/local/diagnostics", s.handleDiagnostics)
 }
 
@@ -155,6 +181,168 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req localArtifactRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid artifact payload")
+		return
+	}
+	if err := validateLocalArtifactScope(req.ProjectID, req.ID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.EnsureDirs(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	contentPath, metadataPath := s.localArtifactPaths(req.ProjectID, req.ID)
+	if err := os.MkdirAll(filepath.Dir(contentPath), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	payload, err := localArtifactPayload(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := os.WriteFile(contentPath, payload, 0o644); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	metadata := req.Metadata
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	metadata["id"] = req.ID
+	metadata["projectId"] = req.ProjectID
+	metadata["storageRef"] = req.StorageRef
+	metadata["mimeType"] = req.MimeType
+	metadata["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := writeIndentedJSON(metadataPath, metadata); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, LocalArtifactResponse{
+		ID:           req.ID,
+		ProjectID:    req.ProjectID,
+		StorageRef:   req.StorageRef,
+		MimeType:     req.MimeType,
+		Path:         contentPath,
+		MetadataPath: metadataPath,
+		Metadata:     metadata,
+	})
+}
+
+func (s *Server) handleArtifactByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/local/artifacts/")
+	projectID := r.URL.Query().Get("projectId")
+	if err := validateLocalArtifactScope(projectID, id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if r.Method == http.MethodDelete {
+		s.deleteLocalArtifact(w, projectID, id)
+		return
+	}
+	contentPath, metadataPath := s.localArtifactPaths(projectID, id)
+	content, err := os.ReadFile(contentPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusNotFound, "artifact not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	metadata := map[string]interface{}{}
+	if data, err := os.ReadFile(metadataPath); err == nil {
+		_ = json.Unmarshal(data, &metadata)
+	}
+	resp := LocalArtifactResponse{
+		ID:           id,
+		ProjectID:    projectID,
+		Path:         contentPath,
+		MetadataPath: metadataPath,
+		Metadata:     metadata,
+	}
+	if isTextMime(resp.MimeType) {
+		resp.Content = string(content)
+	} else {
+		resp.ContentBase64 = base64.StdEncoding.EncodeToString(content)
+	}
+	if value, ok := metadata["storageRef"].(string); ok {
+		resp.StorageRef = value
+	}
+	if value, ok := metadata["mimeType"].(string); ok {
+		resp.MimeType = value
+		if isTextMime(resp.MimeType) {
+			resp.Content = string(content)
+			resp.ContentBase64 = ""
+		} else {
+			resp.Content = ""
+			resp.ContentBase64 = base64.StdEncoding.EncodeToString(content)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) deleteLocalArtifact(w http.ResponseWriter, projectID, artifactID string) {
+	dir := filepath.Join(s.paths.ArtifactDir, projectID, artifactID)
+	if err := removeLocalDir(dir); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "deleted",
+		"projectId": projectID,
+		"id":        artifactID,
+		"path":      dir,
+	})
+}
+
+func (s *Server) localArtifactPaths(projectID, artifactID string) (string, string) {
+	dir := filepath.Join(s.paths.ArtifactDir, projectID, artifactID)
+	return filepath.Join(dir, "content"), filepath.Join(dir, "metadata.json")
+}
+
+func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimPrefix(r.URL.Path, "/api/local/projects/")
+	if !isSafePathSegment(projectID) {
+		writeError(w, http.StatusBadRequest, "projectId is required and must be a safe path segment")
+		return
+	}
+	paths := []string{
+		filepath.Join(s.paths.ProjectDir, projectID),
+		filepath.Join(s.paths.ArtifactDir, projectID),
+		filepath.Join(s.paths.CacheDir, projectID),
+	}
+	deleted := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if err := removeLocalDir(path); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		deleted = append(deleted, path)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":       "deleted",
+		"projectId":    projectID,
+		"deletedPaths": deleted,
+	})
 }
 
 func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +418,37 @@ func appendJSONLine(path string, value interface{}) error {
 	return nil
 }
 
+func writeIndentedJSON(path string, value interface{}) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", "  ")
+	return enc.Encode(value)
+}
+
+func localArtifactPayload(req localArtifactRequest) ([]byte, error) {
+	if strings.TrimSpace(req.ContentBase64) != "" {
+		payload, err := base64.StdEncoding.DecodeString(req.ContentBase64)
+		if err != nil {
+			return nil, errors.New("contentBase64 is not valid base64")
+		}
+		return payload, nil
+	}
+	return []byte(req.Content), nil
+}
+
+func isTextMime(mimeType string) bool {
+	lower := strings.ToLower(strings.TrimSpace(mimeType))
+	return lower == "" ||
+		strings.HasPrefix(lower, "text/") ||
+		strings.Contains(lower, "json") ||
+		strings.Contains(lower, "xml") ||
+		strings.Contains(lower, "markdown")
+}
+
 func addJSONToZip(zw *zip.Writer, name string, value interface{}) error {
 	writer, err := zw.Create(name)
 	if err != nil {
@@ -273,6 +492,37 @@ func redactFields(fields map[string]interface{}) map[string]interface{} {
 	return redacted
 }
 
+func validateLocalArtifactScope(projectID, artifactID string) error {
+	if !isSafePathSegment(projectID) {
+		return errors.New("projectId is required and must be a safe path segment")
+	}
+	if !isSafePathSegment(artifactID) {
+		return errors.New("id is required and must be a safe path segment")
+	}
+	return nil
+}
+
+func isSafePathSegment(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || trimmed == "." || trimmed == ".." {
+		return false
+	}
+	if strings.Contains(trimmed, "/") || strings.Contains(trimmed, "\\") {
+		return false
+	}
+	return true
+}
+
+func removeLocalDir(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return os.RemoveAll(path)
+}
+
 func writeJSON(w http.ResponseWriter, status int, value interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -286,7 +536,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

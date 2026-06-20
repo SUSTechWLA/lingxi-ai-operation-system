@@ -22,7 +22,7 @@ func NewTaskRepository(pool *pgxpool.Pool) *TaskRepository {
 
 func (r *TaskRepository) Save(ctx context.Context, task *model.Task) error {
 	input, _ := json.Marshal(task.Input)
-	output, _ := json.Marshal(task.Output)
+	output, _ := json.Marshal(SanitizeOutputForPersistence(task.Output))
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO ai_task (id, user_id, status, input, output, pause_reason, created_at)
@@ -116,7 +116,7 @@ func NewNodeRepository(pool *pgxpool.Pool) *NodeRepository {
 
 func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 	input, _ := json.Marshal(node.Input)
-	output, _ := json.Marshal(node.Output)
+	output, _ := json.Marshal(SanitizeOutputForPersistence(node.Output))
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO ai_node (id, task_id, type, name, status, input, output, error_message, condition,
@@ -350,7 +350,7 @@ func (r *NodeRepository) FindChildNodes(ctx context.Context, parentID string) ([
 }
 
 func (r *NodeRepository) UpdateStatus(ctx context.Context, id string, status model.NodeStatus, output map[string]interface{}, errMsg string) error {
-	outputJSON, _ := json.Marshal(output)
+	outputJSON, _ := json.Marshal(SanitizeOutputForPersistence(output))
 	_, err := r.pool.Exec(ctx,
 		`UPDATE ai_node SET status=$1, output=COALESCE($2::jsonb, output), error_message=$3 WHERE id=$4`,
 		string(status), string(outputJSON), errMsg, id,

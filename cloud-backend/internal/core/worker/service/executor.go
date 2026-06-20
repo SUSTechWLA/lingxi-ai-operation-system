@@ -309,11 +309,12 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 }
 
 func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[string]interface{}, idempotencyKey string) {
+	sanitizedData := repository.SanitizeOutputForPersistence(data)
 	result := model.NodeResultEvent{
 		TaskID:         taskID,
 		NodeID:         nodeID,
 		Status:         model.NodeSuccess,
-		Data:           data,
+		Data:           sanitizedData,
 		TraceID:        traceID,
 		IdempotencyKey: idempotencyKey,
 	}
@@ -332,6 +333,7 @@ func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[
 }
 
 func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey string, data map[string]interface{}) {
+	sanitizedData := repository.SanitizeOutputForPersistence(data)
 	result := model.NodeResultEvent{
 		TaskID:         taskID,
 		NodeID:         nodeID,
@@ -345,7 +347,7 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 		TaskID:         result.TaskID,
 		NodeID:         result.NodeID,
 		Status:         string(result.Status),
-		Output:         data,
+		Output:         sanitizedData,
 		TraceID:        result.TraceID,
 		ErrorMessage:   result.ErrorMessage,
 		IdempotencyKey: result.IdempotencyKey,

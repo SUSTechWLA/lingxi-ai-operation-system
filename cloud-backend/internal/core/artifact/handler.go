@@ -105,8 +105,7 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 		return
 	}
 
-	data := buildLocalRevisionData(base, req.Message)
-	revision, err := h.service.CreateArtifact(c.Request.Context(), BuildRevisionRequest(base, req.Message, data))
+	revision, err := h.service.CreateArtifact(c.Request.Context(), BuildRevisionRequest(base, req.Message, nil))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
@@ -146,7 +145,15 @@ func (h *Handler) materializeProject(ctx context.Context, projectID string) erro
 }
 
 func artifactContent(artifact *Artifact) (interface{}, string, []string) {
-	if artifact.StorageType == "minio" || artifact.StorageType == "url" {
+	if artifact.StorageType == StorageLocal {
+		return map[string]interface{}{
+			"storageRef":          artifact.StorageRef,
+			"localOnly":           true,
+			"cloudPayloadStored":  false,
+			"contentAvailability": "local-agent",
+		}, "", []string{}
+	}
+	if artifact.StorageType == StorageMinIO || artifact.StorageType == "url" {
 		return nil, artifact.StorageRef, mediaURLsFromString(artifact.StorageRef)
 	}
 	raw := artifact.InlineJSON

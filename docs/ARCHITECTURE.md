@@ -153,7 +153,7 @@ PostgreSQL  Redis   Redpanda     MinIO    (Qdrant)
 | 数据库 | PostgreSQL 16 + pgx/v5 | 连接池（2~10 连接） |
 | 缓存/会话 | Redis 7 + go-redis | 对话会话（30min TTL, 50 条上限）+ 工具清单缓存 |
 | 消息队列 | Redpanda（Kafka 兼容）+ sarama | 事件驱动 |
-| 对象存储 | MinIO + minio-go | 媒体资产 + presigned URL（24h） |
+| 对象存储 | MinIO + minio-go | 云端服务资产 / legacy 媒体兼容；桌面用户生成资产默认留在本地 |
 | 配置 | Viper + .env | 环境变量优先 |
 | 日志 | Zap | dev/prod 双模式 |
 | LLM | OpenAI 兼容 API | `OPENAI_BASE_URL` 可指向任意兼容服务 |
@@ -334,10 +334,39 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `model.go` | `Artifact`（projectID/stage/unit/kind/version/parentID/storageType/contentHash/promptHash/provider/model/isCurrent）。Kind: JSON/MARKDOWN/IMAGE/AUDIO/VIDEO/BUNDLE/LOG |
 | `repository.go` | 带版本化的写入（同 project+stage+unit 自增 version，旧版 isCurrent=false） |
 | `service.go` | CreateArtifact / GetByID / ListByProject / GetHistory |
-| `materializer.go` | **`BuildArtifactRequestsFromNode`**：从成功的 node output 提取产物并落库（前端拉 artifacts 时触发 materialize） |
-| `handler.go` | HTTP 路由：列表/详情/内容/历史/返工。返工 `ReviseArtifact` 当前生成「返工指令 + 旧内容」的新版本 |
+| `materializer.go` | **`BuildArtifactRequestsFromNode`**：只从成功 node output 的 `artifacts` 本地 manifest 提取产物索引并落库 |
+| `handler.go` | HTTP 路由：列表/详情/内容/历史/返工。返工 `ReviseArtifact` 生成新版本元数据，本体由本地 agent 保存 |
 
-**产物存储：** `storageType` 支持 `inline`（内容进 DB）和 `minio`/`url`（存引用）。
+**产物存储边界：**
+
+| 内容类型 | 保存位置 | 云端保存什么 |
+|----------|----------|--------------|
+| 用户生成文本、脚本、JSON、分镜、Prompt、图片、音频、视频 | 用户本机 `local-backend` 数据目录 `artifacts/` | `storage_type=local`、`storage_ref=local://...`、hash、size、版本、provider/model、必要 metadata |
+| 云端服务日志、任务状态、模型调用审计、外部服务错误 | 云端 PostgreSQL / structured logs | 服务运行所需的日志和索引 |
+| 历史 legacy 产物 | 旧库中可能仍有 `inline`/`minio` | 仅保留兼容读取，新产物不再默认写入 |
+
+云端 artifact 层不得把用户产物正文写入 `artifacts.inline_json`，也不得把用户图片、音频、视频作为默认流程上传 MinIO。MinIO 只作为云端服务资产或历史兼容能力存在，不是本地用户生成资产的默认存储。
+
+**本地 artifact manifest 协议：** 本地执行器保存正文/图片/音频/视频后，只向云端回传索引数组：
+
+```json
+{
+  "artifacts": [
+    {
+      "unitId": "content",
+      "kind": "MARKDOWN",
+      "name": "script.md",
+      "mimeType": "text/markdown; charset=utf-8",
+      "storageRef": "local://projects/vp-1/artifacts/script/content/hash/script.md",
+      "contentHash": "hash",
+      "sizeBytes": 128,
+      "metadata": {"displayable": true}
+    }
+  ]
+}
+```
+
+`content`、`imageRequests`、`videoImportPackage`、`audioPackage` 等 legacy 正文字段不再被 materializer 转成云端产物；`ai_node.output` / `ai_task.output` 和 node result event 写入前会对正文、Prompt、data URL、媒体 URL 做脱敏，只保留本地引用、hash、size、状态和 trace 信息。
 
 ### 4.7 localrunner — Electron 本地任务协议
 
@@ -349,7 +378,7 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 |----|---------|
 | `translator` | NL→DAG：`NlToDagService` 调 OpenAI 生成 DAG JSON，注入工具清单。路由 `/api/translate*` |
 | `context` | 审计：`ContextService.HandleEvent` 从 Kafka 事件自动记录任务/节点生命周期；路由 `/api/task/:id/context`、`/api/context/record` |
-| `media` | MinIO 媒体管理：`MediaHandler`（upload/list/get/tags）、`StorageService`（自动建桶、presigned URL）、路由 `/api/media/*` |
+| `media` | MinIO 媒体管理：`MediaHandler`（upload/list/get/tags）、`StorageService`（自动建桶、presigned URL）、路由 `/api/media/*`。默认不用于保存桌面用户生成资产 |
 | `model` + `model/repository` | 数据模型（Task/Node/Context/MediaAsset/ToolManifest）+ pgx 仓储 |
 | `outbox` | `Relay`（100ms ticker）读 outbox 表发 Kafka 成功后删除；`SaveEvent` 写 outbox |
 | `eventbus` | sarama Producer/Consumer；Topic 常量 |
@@ -498,7 +527,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | `ai_node_dependency` | 依赖边 | parent_node_id, child_node_id |
 | `ai_context` | 审计日志 | context_type(17 种枚举), task_id, node_id, metadata, snapshot_data, source_module |
 | `outbox` | 事件暂存 | aggregate_type, aggregate_id, event_type, payload |
-| `media_assets` | 媒体资产 | user_id, original_name, mime_type, size, minio_path, tags JSONB, embedding_id |
+| `media_assets` | 云端媒体资产 / legacy 媒体索引 | user_id, original_name, mime_type, size, minio_path, tags JSONB, embedding_id |
 | `tool_manifests` | 工具清单持久化 | name, type, endpoint, parameters/output JSONB, sandbox |
 | `workflow_templates` | 工作流模板 | id, version, name, category, dag JSONB |
 | `workflow_runs` | 工作流执行 | project_id, template_id, task_id, status, stage_statuses JSONB |
@@ -512,7 +541,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | 表 | 用途 |
 |----|------|
 | `video_projects` | 视频项目（mode/skill/workflow/generation_mode/aspect_ratio/target_duration，软删除 deleted_at） |
-| `artifacts` | 版本化产物（project/stage/unit/kind/version/parent_id/storage_type/content_hash/is_current） |
+| `artifacts` | 版本化产物索引（project/stage/unit/kind/version/parent_id/storage_type/storage_ref/content_hash/is_current；新产物正文在本地） |
 | `bid_projects` | 标书项目（task_id/template_id/industry/tender_file/structure/config） |
 | `bid_chapters` | 标书章节（node_id 关联 CONTROL，status, review_comment, score_items） |
 | `bid_templates` | 标书模板（structure JSONB, workflow_dag） |
@@ -544,7 +573,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | POST | `/api/video-projects/:id/stages/:stage/approve` | 视频域阶段审核封装（body: runId/output/comment；内部映射 CONTROL 节点） |
 | GET | `/api/video-projects/:id/artifacts` | 项目产物列表（触发 materialize） |
 | GET | `/api/artifacts/:id` | 产物详情 |
-| GET | `/api/artifacts/:id/content` | 产物内容（含提取的 mediaUrl/mediaUrls） |
+| GET | `/api/artifacts/:id/content` | 产物内容。legacy inline/minio 可返回内容或 URL；新 local 产物返回 local storageRef，由桌面端向本地 agent 读取正文 |
 | GET | `/api/artifacts/:id/history` | 产物版本历史 |
 | POST | `/api/artifacts/:id/revise` | 返工（body: message → 新版本） |
 
@@ -847,40 +876,43 @@ make sandbox-build    # 构建 Rust 沙箱
 6. **localrunner 完成 HTTP 接线**
    - `local_runners` / `local_jobs` 表和 Service 都在，但没注册路由，Electron Runner 协议悬空。要么接线，要么从主二进制拆出。
 
+7. **完成本地直连模型 Provider 的执行链路**
+   - 当前云端 artifact/materializer、node result event、`ai_node.output` / `ai_task.output` 已只保留本地 manifest、hash、size、trace 和脱敏摘要；下一阶段应把桌面端的 LLM/图片/视频 Provider 调用完全下沉到本地 agent，由本地端直连基础模型服务商，云端仅提供远程配置、额度/策略、日志索引和错误诊断，不经手原始用户正文或二进制数据。
+
 ### 🟡 P2 — 可靠性与可观测
 
-7. **引入正式 DB 迁移工具**
+8. **引入正式 DB 迁移工具**
    - 现在用 `CREATE TABLE IF NOT EXISTS` + `ALTER ADD COLUMN IF NOT EXISTS` 全堆在 `RunMigrations` 里（已 360 行）。建议上 `golang-migrate` 或 `goose`，支持版本回退、CI 校验、生产灰度。
 
-8. **SSE 实时进度推送**
+9. **SSE 实时进度推送**
    - nginx 已为 `/api/progress/stream` 关闭缓冲，但后端该端点未实现，前端只能 3s 轮询 artifacts。实现 SSE 后体验和负载都更好（KNOWN_LIMITATIONS 也提到）。
 
-9. **Outbox Relay 单点 + 可观测**
+10. **Outbox Relay 单点 + 可观测**
    - Relay 是单 goroutine，挂了事件就停。建议加 metrics（积压数、延迟）+ 多实例时用 `SELECT FOR UPDATE SKIP LOCKED` 分片。
 
-10. **长任务心跳超时的恢复路径**
+11. **长任务心跳超时的恢复路径**
     - Scheduler 能检测 `HEARTBEAT_TIMEOUT`，但「超时后如何续跑 / 断点恢复」尚不完整（artifact materialize 只是读，不重跑）。结合 `checkpoint` 做真正的断点续传。
 
 ### 🟢 P3 — 前端与工程化
 
-11. **清理发布相关遗留代码**
+12. **清理发布相关遗留代码**
     - `PublishPage.tsx` 已不被引用，`appStore.ts` 的发布状态创作台也不用。要么恢复发布入口，要么删除降低维护噪音。
 
-12. **补全占位页 + 引入路由**
+13. **补全占位页 + 引入路由**
     - `projects` / `skills` 两个 nav 是占位。随着功能增长，建议引入 React Router（现在用 state 切换，刷新即丢），并把创作台的状态拆到 store。
 
-13. **前端测试体系**
+14. **前端测试体系**
     - 当前 0 前端测试。优先给 `CreatorWorkbenchPage` 的路由/启动/审核三个核心流程加 Vitest + RTL；产物渲染逻辑（mediaUrl 提取）是纯函数，单测性价比高。
 
-14. **产物 materialize 时机**
+15. **产物 materialize 时机**
     - 现在「每次 GET artifacts 都遍历所有 run 的所有成功 node 尝试落库」，规模上去会放大。建议改成节点成功事件触发增量 materialize（worker 发事件 → consumer 写 artifact）。
 
 ### 🔵 P4 — 长期演进
 
-15. **多租户与权限**：当前单用户模式（user_id 默认 `default`），上 SaaS 需补租户隔离 + RBAC。
-16. **Qdrant 向量库启用**：基础设施已起但未用，可用于媒体语义检索 / Skill 推荐。
-17. **视频 API Provider 适配**：Seedance / GPT-Image 等外部视频/图片 API 适配器待补（Gateway 的 Capability 已预留 `text_to_video` / `image_to_video`），补齐后可从 `manual_import` 切到 `provider_api` 全自动。
-18. **沙箱能力增强**：当前 Rust 沙箱用 setrlimit（同机隔离弱），生产可演进到 Firecracker microVM 或容器化执行器。
+16. **多租户与权限**：当前单用户模式（user_id 默认 `default`），上 SaaS 需补租户隔离 + RBAC。
+17. **Qdrant 向量库启用**：基础设施已起但未用，可用于媒体语义检索 / Skill 推荐。
+18. **视频 API Provider 适配**：Seedance / GPT-Image 等外部视频/图片 API 适配器待补（Gateway 的 Capability 已预留 `text_to_video` / `image_to_video`），补齐后可从 `manual_import` 切到 `provider_api` 全自动。
+19. **沙箱能力增强**：当前 Rust 沙箱用 setrlimit（同机隔离弱），生产可演进到 Firecracker microVM 或容器化执行器。
 
 ---
 

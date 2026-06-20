@@ -17,6 +17,15 @@ const (
 	KindLog      ArtifactKind = "LOG"
 )
 
+const (
+	// StorageLocal means the user payload is stored by the local desktop agent.
+	StorageLocal = "local"
+	// StorageInline is retained for reading legacy rows created before local-only storage.
+	StorageInline = "inline"
+	// StorageMinIO is retained for reading legacy rows created before local-only storage.
+	StorageMinIO = "minio"
+)
+
 // Artifact represents a versioned intermediate or final output of a workflow stage.
 type Artifact struct {
 	ID            string                 `json:"id"`
@@ -28,7 +37,7 @@ type Artifact struct {
 	Name          string                 `json:"name"`
 	Version       int                    `json:"version"`
 	ParentID      string                 `json:"parentId,omitempty"`
-	StorageType   string                 `json:"storageType"` // "minio" | "inline"
+	StorageType   string                 `json:"storageType"` // "local"; legacy reads may be "minio" | "inline"
 	StorageRef    string                 `json:"storageRef,omitempty"`
 	InlineJSON    string                 `json:"inlineJson,omitempty"`
 	MimeType      string                 `json:"mimeType,omitempty"`
@@ -50,10 +59,11 @@ type CreateArtifactRequest struct {
 	UnitID        string
 	Kind          ArtifactKind
 	Name          string
-	StorageType   string // "minio" | "inline"
+	StorageType   string // new artifacts are normalized to "local"
 	StorageRef    string
 	Data          []byte
 	MimeType      string
+	SizeBytes     int64
 	ContentHash   string
 	PromptHash    string
 	Provider      string

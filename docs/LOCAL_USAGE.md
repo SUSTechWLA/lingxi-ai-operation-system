@@ -37,6 +37,9 @@ TangyingAIOS/
 ├── cache/
 ├── projects/
 ├── artifacts/
+│   └── <projectId>/<artifactId>/
+│       ├── content
+│       └── metadata.json
 ├── logs/
 │   └── local-agent.jsonl
 └── diagnostics/
@@ -72,6 +75,10 @@ bash scripts/start-frontend.sh
 ```text
 GET  /api/local/health
 GET  /api/local/paths
+POST /api/local/artifacts
+GET  /api/local/artifacts/:id?projectId=<projectId>
+DELETE /api/local/artifacts/:id?projectId=<projectId>
+DELETE /api/local/projects/:id
 POST /api/local/logs
 POST /api/local/diagnostics
 ```
@@ -81,6 +88,43 @@ POST /api/local/diagnostics
 ```bash
 curl http://127.0.0.1:18080/api/local/health
 ```
+
+保存本地产物：
+
+```bash
+curl -X POST http://127.0.0.1:18080/api/local/artifacts \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id":"art-1",
+    "projectId":"vp-1",
+    "storageRef":"local://projects/vp-1/artifacts/script/content/hash/script.md",
+    "mimeType":"text/markdown; charset=utf-8",
+    "content":"## 用户脚本",
+    "metadata":{"cloudPayloadStored":false}
+  }'
+```
+
+文本类产物使用 `content`；图片、音频、视频等二进制产物使用 `contentBase64`，读取时也会以 `contentBase64` 返回。
+
+读取本地产物：
+
+```bash
+curl 'http://127.0.0.1:18080/api/local/artifacts/art-1?projectId=vp-1'
+```
+
+删除单个本地产物：
+
+```bash
+curl -X DELETE 'http://127.0.0.1:18080/api/local/artifacts/art-1?projectId=vp-1'
+```
+
+删除一个本地项目的项目文件、产物和缓存：
+
+```bash
+curl -X DELETE http://127.0.0.1:18080/api/local/projects/vp-1
+```
+
+云端只保存 `storageRef`、hash、size、版本和服务 metadata。用户生成的脚本、JSON、图片、音频、视频正文应保存在本地 `artifacts/` 目录。
 
 生成诊断包：
 
