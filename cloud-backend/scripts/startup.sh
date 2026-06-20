@@ -133,7 +133,7 @@ BACKEND_PID=$!
 
 echo -n "Waiting for backend..."
 for i in $(seq 1 30); do
-    if curl -s http://localhost:8080/api/health >/dev/null 2>&1; then
+    if curl -s http://localhost:8080/api/health/ready >/dev/null 2>&1; then
         echo -e " ${GREEN}ready${NC}"
         break
     fi
@@ -218,7 +218,8 @@ else
 fi
 echo -e ""
 echo -e "  ${CYAN}API Endpoints:${NC}"
-echo -e "   /api/health                 — Health check"
+echo -e "   /api/health                 — Liveness check"
+echo -e "   /api/health/ready           — Readiness check (DB/Redis/Kafka)"
 echo -e "   /api/publish                — Content publishing with media upload"
 echo -e "   /api/ai/generate            — AI content generation from text"
 echo -e "   /api/ai/generate-from-media — AI content generation from images/videos"

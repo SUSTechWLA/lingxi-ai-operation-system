@@ -23,6 +23,7 @@ import (
 	contextSvc "github.com/tangying-ai/aios-core/internal/core/context/service"
 	"github.com/tangying-ai/aios-core/internal/core/database"
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
+	"github.com/tangying-ai/aios-core/internal/core/health"
 	"github.com/tangying-ai/aios-core/internal/core/logger"
 	"github.com/tangying-ai/aios-core/internal/core/media"
 	"github.com/tangying-ai/aios-core/internal/core/model"
@@ -286,6 +287,13 @@ func main() {
 	})
 
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r)
+	health.NewHandler([]health.DependencyCheck{
+		{Name: "postgres", Check: pool.Ping},
+		{Name: "redis", Check: func(ctx context.Context) error {
+			return rdb.Ping(ctx).Err()
+		}},
+		{Name: "kafka", Check: health.KafkaCheck(cfg.Kafka.BootstrapServers)},
+	}).RegisterRoutes(r)
 	translatorHandler.NewTranslatorHandler(nlService).RegisterRoutes(r)
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)

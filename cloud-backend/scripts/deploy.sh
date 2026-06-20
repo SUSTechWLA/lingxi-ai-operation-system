@@ -649,7 +649,7 @@ verify_deployment() {
     # 2. 后端健康检查
     step "等待后端服务启动..."
     for i in $(seq 1 $max_wait); do
-        if curl -sf http://localhost:8080/api/health >/dev/null 2>&1; then
+        if curl -sf http://localhost:8080/api/health/ready >/dev/null 2>&1; then
             info "后端健康检查通过"
             break
         fi
@@ -662,7 +662,7 @@ verify_deployment() {
 
     # 3. Nginx 代理
     step "检查 Nginx 代理..."
-    if curl -sf http://localhost/api/health >/dev/null 2>&1; then
+    if curl -sf http://localhost/api/health/ready >/dev/null 2>&1; then
         info "Nginx 代理 /api/* → 后端: 正常"
     else
         warn "Nginx 代理未生效 (检查: nginx -t)"

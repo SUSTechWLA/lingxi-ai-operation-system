@@ -76,6 +76,11 @@ TANGYING_CLOUD_API_BASE=https://your-cloud.example.com/api
 
 Web 部署在 nginx 下时，也可以使用同域 `/api`。
 
+## 健康检查
+
+- `/api/health`: liveness，只表示进程和 HTTP 路由仍在响应。
+- `/api/health/ready`: readiness，会检查 PostgreSQL、Redis、Kafka 依赖；Docker Compose 和部署脚本应使用这个端点判断 backend 是否可接流量。
+
 ## 云端日志和诊断
 
 云端保留：

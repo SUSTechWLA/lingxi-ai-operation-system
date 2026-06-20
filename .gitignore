@@ -11,8 +11,11 @@ target/
 
 # Environment files with secrets - NEVER commit these!
 .env
+.env.*
 .env.local
 .env.*.local
+!.env.example
+!.env.*.example
 
 # Go
 *.exe

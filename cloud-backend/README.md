@@ -52,6 +52,7 @@ docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
 ```bash
 go test ./...
 curl http://localhost:8080/api/health
+curl http://localhost:8080/api/health/ready
 ./scripts/test-apis.sh
 ```
 

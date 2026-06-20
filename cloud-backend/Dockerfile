@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /tangying-ai-os cmd/tangying-ai-os/main
 
 FROM alpine:3.19
 
-RUN apk --no-cache add ca-certificates bash
+RUN apk --no-cache add ca-certificates bash curl
 WORKDIR /app
 
 COPY --from=builder /tangying-ai-os .
