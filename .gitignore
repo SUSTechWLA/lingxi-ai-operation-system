@@ -29,3 +29,12 @@ vendor/
 Thumbs.db
 trace.json
 frontend/node_modules
+electron/node_modules
+node_modules/
+.codex/
+cloud-backend/build/
+cloud-backend/sandbox/target/
+local-backend/build/
+local-backend/dist/
+frontend/resources/bin/
+*.tsbuildinfo

@@ -4,7 +4,8 @@ import { getElectronAPI } from '../utils/electron'
 
 const DesktopPage: React.FC = () => {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
-  const [serviceInfo, setServiceInfo] = useState({ host: 'localhost:8080', pid: '' })
+  const [serviceInfo, setServiceInfo] = useState({ host: '127.0.0.1:18080', pid: '' })
+  const [localDirectory, setLocalDirectory] = useState('未选择')
   const api = getElectronAPI()
 
   useEffect(() => {
@@ -14,6 +15,9 @@ const DesktopPage: React.FC = () => {
         return
       }
       try {
+        if (api.runtimeConfig?.localAgentUrl) {
+          setServiceInfo(prev => ({ ...prev, host: api.runtimeConfig.localAgentUrl }))
+        }
         const status = await api.checkServiceHealth()
         setBackendStatus(status === 'ok' ? 'connected' : 'disconnected')
       } catch {
@@ -30,7 +34,7 @@ const DesktopPage: React.FC = () => {
     if (!api) return
     try {
       const paths = await api.openDirectoryDialog()
-      if (paths?.length) setServiceInfo(prev => ({ ...prev, host: paths[0] }))
+      if (paths?.length) setLocalDirectory(paths[0])
     } catch { /* cancelled */ }
   }
 
@@ -61,7 +65,7 @@ const DesktopPage: React.FC = () => {
                 <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                 </svg>
-                后端服务
+                本地服务
               </h3>
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -90,7 +94,7 @@ const DesktopPage: React.FC = () => {
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
                     </svg>
-                    选择输出目录
+                    选择本地目录
                   </button>
                 </div>
               </div>
@@ -114,8 +118,8 @@ const DesktopPage: React.FC = () => {
                   <span className="font-mono">Electron</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>数据目录</span>
-                  <span className="font-mono text-gray-400 truncate w-32 text-right">/tmp/tangying-sandbox</span>
+                  <span>本地目录</span>
+                  <span className="font-mono text-gray-400 truncate w-32 text-right">{localDirectory}</span>
                 </div>
               </div>
             </div>

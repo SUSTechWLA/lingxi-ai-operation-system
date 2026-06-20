@@ -5,8 +5,51 @@ const fs = require('fs')
 const http = require('http')
 
 const isDev = !app.isPackaged
+const LOCAL_AGENT_URL = process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080'
+const CLOUD_API_BASE = process.env.TANGYING_CLOUD_API_BASE || process.env.VITE_CLOUD_API_BASE || ''
 
 let mainWindow = null
+let localAgentProcess = null
+
+function localAgentBinaryPath() {
+  const binaryName = process.platform === 'win32' ? 'tangying-local-agent.exe' : 'tangying-local-agent'
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'bin', binaryName)
+  }
+  return path.join(__dirname, '..', 'resources', 'bin', binaryName)
+}
+
+function startLocalAgent() {
+  if (process.env.TANGYING_SKIP_LOCAL_AGENT === 'true') return
+  const binary = localAgentBinaryPath()
+  if (!fs.existsSync(binary)) {
+    console.warn(`Local agent binary not found: ${binary}`)
+    return
+  }
+  const url = new URL(LOCAL_AGENT_URL)
+  const addr = `${url.hostname}:${url.port || '18080'}`
+  localAgentProcess = spawn(binary, ['-addr', addr, '-cloud-api-base', CLOUD_API_BASE], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: {
+      ...process.env,
+      TANGYING_LOCAL_DATA_DIR: path.join(app.getPath('userData'), 'local-agent'),
+    },
+  })
+  localAgentProcess.stderr.on('data', (data) => {
+    console.warn(`[local-agent] ${data.toString().trim()}`)
+  })
+  localAgentProcess.on('exit', (code) => {
+    console.warn(`Local agent exited with code ${code}`)
+    localAgentProcess = null
+  })
+}
+
+function stopLocalAgent() {
+  if (localAgentProcess) {
+    localAgentProcess.kill()
+    localAgentProcess = null
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -109,13 +152,13 @@ ipcMain.handle('save-file-dialog', async (_, options = {}) => {
 // Check if backend is healthy
 ipcMain.handle('check-service-health', async () => {
   return new Promise((resolve) => {
-    const req = http.get('http://localhost:8080/api/health', (res) => {
+    const req = http.get(`${LOCAL_AGENT_URL}/api/local/health`, (res) => {
       let data = ''
       res.on('data', (chunk) => { data += chunk })
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data)
-          resolve(parsed.status === 'UP' ? 'ok' : 'unhealthy')
+          resolve(parsed.status === 'ok' ? 'ok' : 'unhealthy')
         } catch {
           resolve(data)
         }
@@ -125,6 +168,11 @@ ipcMain.handle('check-service-health', async () => {
     req.setTimeout(3000, () => { req.destroy(); resolve('timeout') })
   })
 })
+
+ipcMain.handle('get-runtime-config', async () => ({
+  localAgentUrl: LOCAL_AGENT_URL,
+  cloudApiBase: CLOUD_API_BASE,
+}))
 
 // Open external URL in system browser
 ipcMain.handle('open-external', async (_, url) => {
@@ -173,7 +221,10 @@ async function publishToPlatform(platform, content) {
 
 // ── App lifecycle ─────────────────────────────────────────
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  startLocalAgent()
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
@@ -182,3 +233,5 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })
+
+app.on('before-quit', stopLocalAgent)

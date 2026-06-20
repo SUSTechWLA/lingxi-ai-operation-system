@@ -169,3 +169,225 @@ export interface ChatMessageItem {
 
 export type ContentType = 'image' | 'video' | null
 
+export interface SkillStage {
+  name: string
+  kind?: string
+  tool?: string
+  instruction: string
+  inputSchema?: string
+  outputSchema?: string
+  input?: Record<string, unknown>
+  optional: boolean
+  approvalRequired: boolean
+  longRunning?: boolean
+  heartbeatTimeoutSec?: number
+}
+
+export interface SkillRuntimeItem {
+  name: string
+  version: string
+  displayName?: string
+  description: string
+  category: string
+  visibility?: string
+  canonicalSkill?: string
+  stages: SkillStage[]
+  health: 'HEALTHY' | 'UNHEALTHY' | 'DISABLED'
+  loadedAt?: string
+  loadError?: string
+}
+
+export interface SkillCatalogItem {
+  name: string
+  version: string
+  displayName?: string
+  description: string
+  category: string
+  visibility: string
+  canonicalSkill?: string
+  health: 'HEALTHY' | 'UNHEALTHY' | 'DISABLED'
+  stageCount: number
+  requiresApproval: boolean
+  hasLongRunningStages: boolean
+  loadError?: string
+}
+
+export interface SkillsResponse {
+  skills: SkillRuntimeItem[]
+  health: Record<string, string>
+}
+
+export interface SkillCatalogResponse {
+  skills: SkillCatalogItem[]
+  health: Record<string, string>
+}
+
+export interface SkillDetailResponse {
+  skill: SkillRuntimeItem
+}
+
+export interface SkillRouteResponse {
+  skill: SkillCatalogItem
+  route: string
+  deliverable: string
+  aspectRatio: string
+  targetDurationSec: number
+  reasoning: string
+  confidence: number
+  source: string
+}
+
+export interface WorkflowNode {
+  id: string
+  name: string
+  type: string
+  input?: Record<string, unknown>
+  longRunning?: boolean
+  heartbeatTimeoutSec?: number
+}
+
+export interface WorkflowEdge {
+  from: string
+  to: string
+}
+
+export interface WorkflowDAG {
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+}
+
+export interface WorkflowTemplate {
+  id: string
+  version: string
+  name: string
+  description?: string
+  category?: string
+  dag: WorkflowDAG
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WorkflowListResponse {
+  templates: WorkflowTemplate[]
+}
+
+export type VideoProjectMode = 'aigc_shot' | 'voice_visual'
+export type VideoGenerationMode = 'provider_api' | 'manual_import'
+
+export interface VideoProject {
+  id: string
+  userId: string
+  name: string
+  description?: string
+  mode: VideoProjectMode
+  status: 'DRAFT' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED'
+  skillName: string
+  skillVersion: string
+  workflowName: string
+  workflowVersion: string
+  generationMode: VideoGenerationMode
+  aspectRatio?: string
+  targetDurationSec?: number
+  language?: string
+  config?: Record<string, unknown>
+  currentRunId?: string
+  localPathHint?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface VideoProjectListResponse {
+  projects: VideoProject[]
+  total: number
+}
+
+export interface CreateVideoProjectPayload {
+  name: string
+  description?: string
+  mode: VideoProjectMode
+  skillName: string
+  skillVersion: string
+  workflowName: string
+  workflowVersion: string
+  generationMode: VideoGenerationMode
+  aspectRatio?: string
+  targetDurationSec?: number
+  language?: string
+  config?: Record<string, unknown>
+}
+
+export interface WorkflowRun {
+  id: string
+  projectId: string
+  templateId: string
+  templateVersion: string
+  taskId: string
+  status: string
+  attempt: number
+  input?: Record<string, unknown>
+  output?: Record<string, unknown>
+  stageStatuses?: Record<string, string>
+  traceId?: string
+  startedAt?: string
+  finishedAt?: string
+  createdAt: string
+}
+
+export interface CreateWorkflowRunPayload {
+  templateId: string
+  templateVersion: string
+  input: Record<string, unknown>
+}
+
+export interface ApproveVideoStagePayload {
+  runId?: string
+  output?: Record<string, unknown>
+  comment?: string
+}
+
+export interface ApproveVideoStageResponse {
+  nodeId: string
+  stage: string
+  message: string
+}
+
+export type ArtifactKind = 'JSON' | 'MARKDOWN' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'BUNDLE' | 'LOG'
+
+export interface Artifact {
+  id: string
+  projectId: string
+  workflowRunId?: string
+  stageName: string
+  unitId?: string
+  kind: ArtifactKind
+  name: string
+  version: number
+  parentId?: string
+  storageType: string
+  storageRef?: string
+  inlineJson?: string
+  mimeType?: string
+  sizeBytes: number
+  contentHash: string
+  promptHash?: string
+  provider?: string
+  model?: string
+  isCurrent: boolean
+  metadata?: Record<string, unknown>
+  createdAt: string
+}
+
+export interface ArtifactListResponse {
+  artifacts: Artifact[]
+}
+
+export interface ArtifactContentResponse {
+  artifact: Artifact
+  content: unknown
+  mediaUrl?: string
+  mediaUrls?: string[]
+}
+
+export interface ArtifactHistoryResponse {
+  history: Artifact[]
+}

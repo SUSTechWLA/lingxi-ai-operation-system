@@ -1,8 +1,38 @@
 import axios from 'axios'
-import { ApiResponse, TaskResponse, AIGenerateData, AIPolishData, PolishSubmitData, PolishQueryData, TraceData, MediaListResponse, MediaAsset, CreateSessionResponse, SkillChatResponse, SkillSessionResponse, ProgressResponse } from '../utils/types'
-import { isElectron } from '../utils/electron'
+import {
+  ApiResponse,
+  TaskResponse,
+  AIGenerateData,
+  AIPolishData,
+  PolishSubmitData,
+  PolishQueryData,
+  TraceData,
+  MediaListResponse,
+  MediaAsset,
+  CreateSessionResponse,
+  SkillChatResponse,
+  SkillSessionResponse,
+  ProgressResponse,
+  SkillCatalogResponse,
+  SkillDetailResponse,
+  SkillRouteResponse,
+  SkillsResponse,
+  WorkflowListResponse,
+  VideoProjectListResponse,
+  CreateVideoProjectPayload,
+  VideoProject,
+  CreateWorkflowRunPayload,
+  WorkflowRun,
+  ApproveVideoStagePayload,
+  ApproveVideoStageResponse,
+  ArtifactListResponse,
+  ArtifactContentResponse,
+  ArtifactHistoryResponse,
+} from '../utils/types'
 
-const API_BASE = isElectron() ? 'http://localhost:8080/api' : '/api'
+const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
+const electronCloudBase = typeof window !== 'undefined' ? window.electronAPI?.runtimeConfig?.cloudApiBase : ''
+const API_BASE = configuredCloudBase || electronCloudBase || '/api'
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -232,6 +262,14 @@ export const failNode = async (
   await api.post(`/node/${nodeId}/failure`, { errorMessage }, { signal })
 }
 
+export const succeedNode = async (
+  nodeId: string,
+  output: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<void> => {
+  await api.post(`/node/${nodeId}/success`, output, { signal })
+}
+
 export const failTask = async (
   taskId: string,
   signal?: AbortSignal
@@ -246,4 +284,97 @@ export const recordContextEvent = async (
   nodeId?: string
 ): Promise<void> => {
   await api.post('/context/record', { taskId, nodeId, type, message })
+}
+
+// Video creator workbench compatibility API
+export const fetchSkills = async (): Promise<SkillsResponse> => {
+  const response = await api.get<ApiResponse<SkillsResponse>>('/skills')
+  return response.data.data
+}
+
+export const fetchSkillCatalog = async (): Promise<SkillCatalogResponse> => {
+  const response = await api.get<ApiResponse<SkillCatalogResponse>>('/skills/catalog')
+  return response.data.data
+}
+
+export const fetchSkillDetail = async (
+  name: string,
+  version: string
+): Promise<SkillDetailResponse> => {
+  const response = await api.get<ApiResponse<SkillDetailResponse>>(`/skills/${name}/${version}`)
+  return response.data.data
+}
+
+export const routeSkill = async (brief: string): Promise<SkillRouteResponse> => {
+  const response = await api.post<ApiResponse<SkillRouteResponse>>('/skills/route', { brief })
+  return response.data.data
+}
+
+export const fetchWorkflows = async (): Promise<WorkflowListResponse> => {
+  const response = await api.get<ApiResponse<WorkflowListResponse>>('/workflows')
+  return response.data.data
+}
+
+export const fetchVideoProjects = async (): Promise<VideoProjectListResponse> => {
+  const response = await api.get<ApiResponse<VideoProjectListResponse>>('/video-projects')
+  return response.data.data
+}
+
+export const createVideoProject = async (
+  payload: CreateVideoProjectPayload
+): Promise<VideoProject> => {
+  const response = await api.post<ApiResponse<{ project: VideoProject }>>('/video-projects', payload)
+  return response.data.data.project
+}
+
+export const createWorkflowRun = async (
+  projectId: string,
+  payload: CreateWorkflowRunPayload
+): Promise<WorkflowRun> => {
+  const response = await api.post<ApiResponse<{ run: WorkflowRun }>>(
+    `/video-projects/${projectId}/workflow-runs`,
+    payload
+  )
+  return response.data.data.run
+}
+
+export const approveVideoStage = async (
+  projectId: string,
+  stageName: string,
+  payload: ApproveVideoStagePayload
+): Promise<ApproveVideoStageResponse> => {
+  const response = await api.post<ApiResponse<ApproveVideoStageResponse>>(
+    `/video-projects/${projectId}/stages/${stageName}/approve`,
+    payload
+  )
+  return response.data.data
+}
+
+export const fetchProjectArtifacts = async (
+  projectId: string
+): Promise<ArtifactListResponse> => {
+  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`)
+  return response.data.data
+}
+
+export const fetchArtifactContent = async (
+  artifactId: string
+): Promise<ArtifactContentResponse> => {
+  const response = await api.get<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/content`)
+  return response.data.data
+}
+
+export const fetchArtifactHistory = async (
+  artifactId: string
+): Promise<ArtifactHistoryResponse> => {
+  const response = await api.get<ApiResponse<ArtifactHistoryResponse>>(`/artifacts/${artifactId}/history`)
+  return response.data.data
+}
+
+export const reviseArtifact = async (
+  artifactId: string,
+  message: string
+): Promise<ArtifactContentResponse> => {
+  const response = await api.post<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/revise`, { message })
+  return response.data.data
 }

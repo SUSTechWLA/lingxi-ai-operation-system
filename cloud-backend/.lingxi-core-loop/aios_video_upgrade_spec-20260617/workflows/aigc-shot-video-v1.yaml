@@ -1,0 +1,130 @@
+id: aigc-shot-video
+version: 1.0.0
+name: AIGC 镜头式视频
+category: video
+inputSchemaRef: skills/aigc-shot-video/1.0.0/schemas/project-input.schema.json
+
+stages:
+  - id: brief
+    name: 项目需求结构化
+    kind: AGENT
+    skillStage: brief
+    outputSchemaRef: schemas/brief.schema.json
+    rerunScope: STAGE_DOWNSTREAM
+
+  - id: script_generate
+    name: 剧本生成
+    kind: AGENT
+    skillStage: script
+    dependsOn: [brief]
+    outputSchemaRef: schemas/script.schema.json
+    rerunScope: STAGE_DOWNSTREAM
+
+  - id: script_approval
+    name: 剧本审核
+    kind: APPROVAL
+    dependsOn: [script_generate]
+    approvalRequired: true
+    rerunScope: STAGE_DOWNSTREAM
+
+  - id: visual_rules
+    name: 全局视觉规则
+    kind: AGENT
+    skillStage: visual_design
+    dependsOn: [script_approval]
+
+  - id: asset_plan
+    name: 资产规划
+    kind: AGENT
+    skillStage: asset_plan
+    dependsOn: [visual_rules]
+
+  - id: asset_generate
+    name: 人物场景道具并行生成
+    kind: PARALLEL
+    dependsOn: [asset_plan]
+    input:
+      branches: [characters, scenes, props]
+
+  - id: assets_approval
+    name: 视觉资产审核
+    kind: APPROVAL
+    dependsOn: [asset_generate]
+    approvalRequired: true
+
+  - id: shot_plan
+    name: SHOT 拆分
+    kind: AGENT
+    skillStage: shot_plan
+    dependsOn: [assets_approval]
+    outputSchemaRef: schemas/shots.schema.json
+
+  - id: continuity_plan
+    name: 连续性规划
+    kind: AGENT
+    skillStage: continuity
+    dependsOn: [shot_plan]
+
+  - id: shot_storyboard
+    name: 分镜生成
+    kind: FOREACH
+    foreach: $.project.shots
+    skillStage: storyboard
+    dependsOn: [continuity_plan]
+    rerunScope: UNIT_DOWNSTREAM
+
+  - id: shot_keyframes
+    name: 关键帧生成
+    kind: FOREACH
+    foreach: $.project.shots
+    skillStage: keyframe
+    dependsOn: [shot_storyboard]
+    rerunScope: UNIT_DOWNSTREAM
+
+  - id: shot_video_prompt
+    name: 视频 Prompt
+    kind: FOREACH
+    foreach: $.project.shots
+    skillStage: video_prompt
+    dependsOn: [shot_keyframes]
+    rerunScope: UNIT_DOWNSTREAM
+
+  - id: shot_package_approval
+    name: SHOT 生产包审核
+    kind: FOREACH
+    foreach: $.project.shots
+    approvalRequired: true
+    dependsOn: [shot_video_prompt]
+
+  - id: shot_video
+    name: 视频生成或导入
+    kind: FOREACH
+    foreach: $.project.shots
+    tool: video_generate_or_import
+    dependsOn: [shot_package_approval]
+    rerunScope: UNIT_DOWNSTREAM
+
+  - id: shot_review
+    name: 视频抽帧审核
+    kind: FOREACH
+    foreach: $.project.shots
+    skillStage: video_review
+    dependsOn: [shot_video]
+
+  - id: timeline_manifest
+    name: 成片时间线清单
+    kind: TOOL
+    tool: timeline_manifest_builder
+    dependsOn: [shot_review]
+
+  - id: final_approval
+    name: 成片审核
+    kind: APPROVAL
+    dependsOn: [timeline_manifest]
+    approvalRequired: true
+
+  - id: publication_package
+    name: 发布资料
+    kind: AGENT
+    skillStage: publication
+    dependsOn: [final_approval]

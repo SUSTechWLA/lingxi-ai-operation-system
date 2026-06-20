@@ -51,7 +51,14 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "scripts/**/*"
+      "scripts/**/*",
+      "resources/bin/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin"
+      }
     ],
     "mac": {
       "target": "dmg",

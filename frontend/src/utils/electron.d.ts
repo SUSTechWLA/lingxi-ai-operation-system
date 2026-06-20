@@ -19,12 +19,20 @@ export interface FileReadResult {
 }
 
 export interface ElectronAPI {
+  runtimeConfig: {
+    localAgentUrl: string
+    cloudApiBase: string
+  }
   executeCommand: (command: string, args?: string[], workDir?: string) => Promise<CommandResult>
   openFileDialog: (options?: Record<string, unknown>) => Promise<string[]>
   readFile: (filePath: string) => Promise<FileReadResult>
   openDirectoryDialog: (options?: Record<string, unknown>) => Promise<string[]>
   saveFileDialog: (options?: Record<string, unknown>) => Promise<string | undefined>
   checkServiceHealth: () => Promise<string>
+  getRuntimeConfig: () => Promise<{
+    localAgentUrl: string
+    cloudApiBase: string
+  }>
   publishToPlatforms: (payload: {
     title: string
     description: string

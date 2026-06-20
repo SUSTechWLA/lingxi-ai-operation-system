@@ -1,6 +1,6 @@
 # 躺营 AIOS 产品架构设计说明文档
 
-> 版本：v2.0（视频创作子系统）
+> 版本：v3.0（本地执行面 + 云端控制面）
 > 最后更新：2026-06-20
 > 适用对象：新加入的后端 / 前端 / 部署工程师
 > 配套文档：[README.md](../README.md)、[AGENTS.md](../AGENTS.md)、[docs/upgrade/video-creation-v1/](upgrade/video-creation-v1/)
@@ -29,7 +29,15 @@
 
 ### 1.1 一句话定位
 
-**躺营 AIOS（AI Operation System）** 是一套面向自媒体内容运营的「通用智能体编排平台」：用一个 Go 单体服务把「自然语言 → DAG 工作流 → 多工具执行 → 人工审核 → 产物归档」全链路打通，支撑视频创作、内容发布、标书生成等多条业务线。
+**躺营 AIOS（AI Operation System）** 是一套面向自媒体内容运营的「本地执行面 + 云端控制面」系统：本地桌面端负责用户电脑上的文件、缓存、日志和诊断包；云端负责配置、LLM/API、远程编排、外部对接和云端日志分析。
+
+当前代码仓按运行边界拆为：
+
+```text
+frontend/       # React + Electron UI
+local-backend/  # 本地轻量执行器，无数据库、无 Docker
+cloud-backend/  # 云端 AIOS Core，包含原 Go 编排平台和云端部署
+```
 
 ### 1.2 它解决什么问题
 
@@ -71,13 +79,15 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Electron 桌面端 / Web 浏览器（React + TS + Tailwind）   │
-│   ├─ 创作台 CreatorWorkbenchPage（自然语言入口）          │
-│   └─ 系统 DesktopPage（健康检查、命令执行）               │
-└──────────────────────────┬──────────────────────────────┘
-                           │ HTTP /api（Nginx 反代 + SSE）
-┌──────────────────────────▼──────────────────────────────┐
-│  Go AIOS Core 单体（:8080，Gin）                          │
+│  frontend/ Electron 桌面端 / Web 浏览器                   │
+│   ├─ 本地文件、缓存、日志、诊断 → local-backend            │
+│   └─ LLM/API、云端配置、远程编排 → cloud-backend           │
+└──────────────┬──────────────────────────┬───────────────┘
+               │ 127.0.0.1:18080           │ HTTPS /api
+┌──────────────▼───────────────┐ ┌────────▼────────────────┐
+│ local-backend local-agent     │ │ cloud-backend AIOS Core │
+│ 无 DB / Redis / Kafka / MinIO │ │ Go 单体（:8080，Gin）   │
+└───────────────────────────────┘ │                        │
 │                                                          │
 │  ┌──────────── 业务 Agent 层（internal/agents）────────┐ │
 │  │  video   │  bid   │  chat   │  publish              │ │
@@ -134,7 +144,7 @@ PostgreSQL  Redis   Redpanda     MinIO    (Qdrant)
 
 ## 3. 技术栈与依赖
 
-### 3.1 后端（`aios-core/`）
+### 3.1 云端后端（`cloud-backend/`）
 
 | 类别 | 选型 | 说明 |
 |------|------|------|
@@ -150,7 +160,16 @@ PostgreSQL  Redis   Redpanda     MinIO    (Qdrant)
 | 沙箱 | Rust + tonic + tokio | gRPC :50051，setrlimit 隔离 |
 | 序列化 | encoding/json + yaml.v3 + protoc | |
 
-### 3.2 前端（`frontend/`）
+### 3.2 本地后端（`local-backend/`）
+
+| 类别 | 选型 | 说明 |
+|------|------|------|
+| 语言 | Go 1.23+ | 轻量 HTTP agent |
+| 监听 | `127.0.0.1:18080` | 只服务本机桌面端 |
+| 持久化 | 本地文件 | cache/projects/artifacts/logs/diagnostics |
+| 依赖 | 标准库 | 不引入 DB、Docker、Redis、Kafka、MinIO |
+
+### 3.3 前端（`frontend/`）
 
 | 类别 | 选型 |
 |------|------|
@@ -165,7 +184,7 @@ PostgreSQL  Redis   Redpanda     MinIO    (Qdrant)
 
 ### 3.3 模块路径约定
 
-Go module：`github.com/tangying-ai/aios-core`。所有内部包挂在 `internal/core`（引擎）和 `internal/agents`（业务）下。
+云端 Go module 仍为 `github.com/tangying-ai/aios-core`，位于 `cloud-backend/`。本地 Go module 为 `github.com/tangying-ai/tangying-ai-operation-system/local-backend`，位于 `local-backend/`。
 
 ---
 
@@ -406,7 +425,7 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 ### 6.1 目录结构
 
 ```
-aios-core/skills/{name}/{version}/
+cloud-backend/skills/{name}/{version}/
 ├── skill.yaml          # 清单：stages + 元信息
 ├── stages/*.md         # 每个 stage 的指令（Prompt）
 └── schemas/*.json      # 输入/输出 JSON Schema（可选）
@@ -459,7 +478,7 @@ go run cmd/skill2workflow/main.go --skill skills/aigc-shot-video/1.0.0
 go run cmd/skill2workflow/main.go --skill-root skills/ --output out/
 
 # 2) API
-curl -X POST localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
+curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
 # 3) 启动自动注册（VIDEO_CREATION_ENABLED=true 时，每个 healthy skill 自动 Upsert 为模板）
 ```
@@ -648,7 +667,7 @@ curl -X POST localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
 ### 9.4 API 服务（`services/api.ts`）
 
-axios 实例，`API_BASE` 自动判断：Electron → `http://localhost:8080/api`，Web → `/api`（Vite proxy）。按模块分组：
+axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CLOUD_API_BASE` / `TANGYING_CLOUD_API_BASE` 指向云端 `/api`，Web 开发默认走 `/api`（Vite proxy）。本机能力不走这个 axios 实例，而是通过 Electron IPC / `127.0.0.1:18080` 调用 `local-backend`。按模块分组：
 
 - **发布/AI**：publishContent / aiGenerateContent / aiGenerateFromMedia / aiPolishText / aiPolishSubmit / queryPolishResult
 - **对话**：createSkillSession / chatSkillSession / getSkillSession(Progress) / terminateSkillSession（调 `/api/chat/sessions/*`）
@@ -656,15 +675,15 @@ axios 实例，`API_BASE` 自动判断：Electron → `http://localhost:8080/api
 - **Skill/视频**：fetchSkills / fetchSkillCatalog / fetchSkillDetail / routeSkill / fetchWorkflows / fetchVideoProjects / createVideoProject / createWorkflowRun / fetchProjectArtifacts / fetchArtifact(Content/History) / reviseArtifact
 - **节点/任务**：succeedNode / failNode / failTask / recordContextEvent / fetchTrace / fetchRecentTrace
 
-### 9.5 Electron（`electron/`）
+### 9.5 Electron（`frontend/electron/`）
 
 | 文件 | 职责 |
 |------|------|
-| `main.js` | 主进程：建 1400×900 窗口；dev 加载 `:3000`，prod 加载 `frontend/dist/index.html`；contextIsolation + sandbox |
-| `preload.js` | contextBridge 暴露 `window.electronAPI`：executeCommand（带确认弹窗）/ openFileDialog/Directory / saveFileDialog / checkServiceHealth / isElectron |
-| `package.json` | electron-builder 配置：appId `com.tangying.ai-os`，输出 `release/`，mac=dmg/win=nsis/linux=AppImage |
+| `main.cjs` | 主进程：建 1400×960 窗口；dev 加载 `:3000`，prod 加载 `frontend/dist/index.html`；打包后自动启动 `resources/bin/tangying-local-agent` |
+| `preload.cjs` | contextBridge 暴露 `window.electronAPI`：本地命令/文件对话框/本地 agent 健康检查/运行时配置 |
+| `frontend/package.json` | electron-builder 配置：appId `com.tangying.aios.desktop`，输出 `release/`，额外打包本地 agent 二进制到 `resources/bin` |
 
-**命令执行安全：** `execute-command` IPC 限白名单目录（userData / `/tmp/tangying-sandbox` / `/tmp/ai-sandbox`）+ 危险模式拦截（rm -rf/mkfs/dd/chmod 777 等）+ execFile（非 shell）+ 30s 超时。
+**边界：** Electron 只负责桌面壳层和用户授权的本地交互；数据库、LLM Key、外部平台凭证不进入本地包。本地 agent 负责本机缓存、日志、文件处理和诊断包生成，云端 API 负责模型、配置、外部集成和云端日志。
 
 ---
 
@@ -710,47 +729,39 @@ axios 实例，`API_BASE` 自动判断：Electron → `http://localhost:8080/api
 | Rust（可选，沙箱） | stable | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | protoc（可选） | 3.x | `brew install protobuf` |
 
-### 11.2 本地一键启动
+### 11.2 本地桌面开发启动
 
 ```bash
-cd aios-core && cp .env.example .env
-# 编辑 .env：填 OPENAI_API_KEY
-./aios-core/scripts/startup.sh   # infra → build → run
+bash scripts/start-local-backend.sh
+bash scripts/start-frontend.sh
 ```
 
-启动后访问 `http://localhost:3000`（前端 dev）或直接调 `:8080` API。
+本地启动不需要 PostgreSQL、Redis、Kafka、MinIO 或 Docker。需要云端能力时，通过 `VITE_CLOUD_API_BASE` / `TANGYING_CLOUD_API_BASE` 指向云端 API。
 
-### 11.3 启用视频创作
+### 11.3 启用云端视频创作
 
-`.env` 里：
+`cloud-backend/.env` 里：
 ```bash
 VIDEO_CREATION_ENABLED=true
 MODEL_PROVIDER_MODE=fake     # 测试用 fake（无需视频 API）；生产用 real
-SKILL_ROOT=skills            # 默认即 aios-core/skills
-LOCAL_RUNNER_ENABLED=true    # 可选：Electron 本地 Runner
+SKILL_ROOT=skills            # 默认即 cloud-backend/skills
+LOCAL_RUNNER_ENABLED=false   # 云端不启动桌面本地 Runner
 ```
 
-### 11.4 手动启动（分进程）
+### 11.4 云端后端启动（开发）
 
 ```bash
-# 终端 1：基础设施
-cd aios-core && docker compose up -d
-
-# 终端 2：后端
-cd aios-core && go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
-./aios-core/build/tangying-ai-os
-
-# 终端 3：前端
-cd frontend && npm install && npm run dev
-
-# 可选：沙箱（SANDBOX_ENABLED=true 时）
-make sandbox-build && ./build/tangying-sandbox &
+cd cloud-backend
+cp .env.example .env
+docker compose up -d
+go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+./build/tangying-ai-os
 ```
 
 ### 11.5 云端部署（`deploy/`）
 
 ```bash
-cd aios-core/deploy
+cd cloud-backend/deploy
 cp .env.cloud.example .env.cloud   # 填 OPENAI_API_KEY / 密码
 docker compose -f docker-compose.cloud.yml up -d
 ```
@@ -768,16 +779,14 @@ docker compose -f docker-compose.cloud.yml up -d
 
 `nginx.conf` 要点：`/api/` 反代到 backend（500M body / 300s 超时，视频上传友好）；`/api/progress/stream` 关闭缓冲支持 SSE（86400s）；`/` SPA fallback。
 
-> 云端默认开 `VIDEO_CREATION_ENABLED=true` / `MODEL_PROVIDER_MODE=real` / `LOCAL_RUNNER_ENABLED=true`。
+> 云端默认开 `VIDEO_CREATION_ENABLED=true` / `MODEL_PROVIDER_MODE=real`，并保持 `LOCAL_RUNNER_ENABLED=false`。本地执行能力由 `local-backend` 提供。
 
 ### 11.6 前端 / 桌面构建
 
 ```bash
-cd frontend
-npm run dev            # dev :3000
-npm run build          # tsc -b && vite build → dist/
-npm run electron:dev   # vite + electron
-npm run electron:build # vite build + electron-builder → release/（dmg/nsis/AppImage）
+VITE_CLOUD_API_BASE=https://your-cloud.example.com/api \
+TANGYING_CLOUD_API_BASE=https://your-cloud.example.com/api \
+bash scripts/build-local-desktop.sh
 ```
 
 ---
@@ -792,7 +801,7 @@ make run       # 编译 + 运行
 make test      # 跑测试
 go test -race ./...   # 全量 + 竞态
 make sandbox-build    # 构建 Rust 沙箱
-./aios-core/scripts/test-apis.sh   # API 集成测试
+./scripts/test-apis.sh   # API 集成测试（在 cloud-backend/ 下执行）
 ```
 
 ### 12.2 测试覆盖现状
