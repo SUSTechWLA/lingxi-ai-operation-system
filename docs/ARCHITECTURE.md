@@ -29,7 +29,7 @@
 
 ### 1.1 一句话定位
 
-**躺营 AIOS（AI Operation System）** 是一套面向自媒体内容运营的「本地执行面 + 云端控制面」系统：本地桌面端负责用户电脑上的文件、缓存、日志和诊断包；云端负责配置、LLM/API、远程编排、外部对接和云端日志分析。
+**躺营 AIOS（AI Operation System）** 是一套面向自媒体内容运营的「本地执行面 + 云端控制面」系统：本地桌面端负责用户电脑上的文件、缓存、日志、诊断包和用户自配的基础模型 Provider；云端负责远程配置、编排、外部服务元数据、账号体系和云端日志分析。
 
 当前代码仓按运行边界拆为：
 
@@ -80,8 +80,8 @@ cloud-backend/  # 云端 AIOS Core，包含原 Go 编排平台和云端部署
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  frontend/ Electron 桌面端 / Web 浏览器                   │
-│   ├─ 本地文件、缓存、日志、诊断 → local-backend            │
-│   └─ LLM/API、云端配置、远程编排 → cloud-backend           │
+│   ├─ 本地文件、缓存、日志、诊断、基础模型直连 → local-backend │
+│   └─ 云端配置、账号、远程编排、日志分析 → cloud-backend       │
 └──────────────┬──────────────────────────┬───────────────┘
                │ 127.0.0.1:18080           │ HTTPS /api
 ┌──────────────▼───────────────┐ ┌────────▼────────────────┐
@@ -166,7 +166,8 @@ PostgreSQL  Redis   Redpanda     MinIO    (Qdrant)
 |------|------|------|
 | 语言 | Go 1.23+ | 轻量 HTTP agent |
 | 监听 | `127.0.0.1:18080` | 只服务本机桌面端 |
-| 持久化 | 本地文件 | cache/projects/artifacts/logs/diagnostics |
+| 持久化 | 本地文件 | cache/config/projects/artifacts/logs/diagnostics |
+| Provider 配置 | OpenAI-compatible | 用户本机保存 text_to_text/text_to_image/text_to_video 的 baseUrl/apiKey/model |
 | 依赖 | 标准库 | 不引入 DB、Docker、Redis、Kafka、MinIO |
 
 ### 3.3 前端（`frontend/`）
@@ -696,7 +697,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
 ### 9.4 API 服务（`services/api.ts`）
 
-axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CLOUD_API_BASE` / `TANGYING_CLOUD_API_BASE` 指向云端 `/api`，Web 开发默认走 `/api`（Vite proxy）。本机能力不走这个 axios 实例，而是通过 Electron IPC / `127.0.0.1:18080` 调用 `local-backend`。按模块分组：
+axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CLOUD_API_BASE` / `TANGYING_CLOUD_API_BASE` 指向云端 `/api`，Web 开发默认走 `/api`（Vite proxy）。本机能力不走这个 axios 实例，而是通过 Electron IPC / `127.0.0.1:18080` 调用 `local-backend`。基础模型 API 设置也走本地 agent，保存用户自配的 OpenAI-compatible `baseUrl/apiKey/model`，不进入云端数据库。按模块分组：
 
 - **发布/AI**：publishContent / aiGenerateContent / aiGenerateFromMedia / aiPolishText / aiPolishSubmit / queryPolishResult
 - **对话**：createSkillSession / chatSkillSession / getSkillSession(Progress) / terminateSkillSession（调 `/api/chat/sessions/*`）
@@ -712,7 +713,7 @@ axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CL
 | `preload.cjs` | contextBridge 暴露 `window.electronAPI`：本地命令/文件对话框/本地 agent 健康检查/运行时配置 |
 | `frontend/package.json` | electron-builder 配置：appId `com.tangying.aios.desktop`，输出 `release/`，额外打包本地 agent 二进制到 `resources/bin` |
 
-**边界：** Electron 只负责桌面壳层和用户授权的本地交互；数据库、LLM Key、外部平台凭证不进入本地包。本地 agent 负责本机缓存、日志、文件处理和诊断包生成，云端 API 负责模型、配置、外部集成和云端日志。
+**边界：** Electron 只负责桌面壳层和用户授权的本地交互；数据库和云端服务凭证不进入本地包。用户自配的模型 Provider token 只保存在本机 `config/model-providers.json`，本地 agent 负责本机缓存、日志、文件处理、诊断包生成和桌面端基础模型直连；云端 API 负责远程配置、账号、外部服务元数据和云端日志。
 
 ---
 
@@ -877,7 +878,7 @@ make sandbox-build    # 构建 Rust 沙箱
    - `local_runners` / `local_jobs` 表和 Service 都在，但没注册路由，Electron Runner 协议悬空。要么接线，要么从主二进制拆出。
 
 7. **完成本地直连模型 Provider 的执行链路**
-   - 当前云端 artifact/materializer、node result event、`ai_node.output` / `ai_task.output` 已只保留本地 manifest、hash、size、trace 和脱敏摘要；下一阶段应把桌面端的 LLM/图片/视频 Provider 调用完全下沉到本地 agent，由本地端直连基础模型服务商，云端仅提供远程配置、额度/策略、日志索引和错误诊断，不经手原始用户正文或二进制数据。
+   - 当前云端 artifact/materializer、node result event、`ai_node.output` / `ai_task.output` 已只保留本地 manifest、hash、size、trace 和脱敏摘要；桌面端 text_to_text/text_to_image/text_to_video 的 Provider 配置已下沉到本地 agent，下一阶段应把实际 LLM/图片/视频执行器也完全切到本地直连基础模型服务商，云端仅提供远程配置、额度/策略、日志索引和错误诊断，不经手原始用户正文或二进制数据。
 
 ### 🟡 P2 — 可靠性与可观测
 

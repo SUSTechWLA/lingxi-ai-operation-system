@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,6 +106,93 @@ func TestLocalArtifactStoreSupportsBinaryPayloads(t *testing.T) {
 	}
 }
 
+func TestModelProviderSettingsSaveListAndPreserveSecrets(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{
+		"providers":{
+			"text_to_text":{"baseUrl":"https://api.openai.com/v1","model":"gpt-4.1","apiKey":"sk-text-secret"},
+			"text_to_image":{"baseUrl":"https://api.example.com/v1","model":"gpt-image-1","apiKey":"sk-image-secret"},
+			"text_to_video":{"baseUrl":"https://video.example.com/v1","model":"seedance-v1","apiKey":"sk-video-secret"}
+		}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/local/model-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	configFile := filepath.Join(root, "config", "model-providers.json")
+	raw, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatalf("expected provider config file: %v", err)
+	}
+	if !bytes.Contains(raw, []byte("sk-text-secret")) {
+		t.Fatalf("local config should store the full local token")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/model-providers", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("sk-text-secret")) || bytes.Contains(rec.Body.Bytes(), []byte("sk-image-secret")) {
+		t.Fatalf("provider settings GET should not expose full api keys: %s", rec.Body.String())
+	}
+	var listed ModelProviderSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("invalid provider response: %v", err)
+	}
+	if !listed.Providers[CapabilityTextToText].HasAPIKey {
+		t.Fatalf("text provider should report existing api key: %+v", listed.Providers[CapabilityTextToText])
+	}
+	if listed.Providers[CapabilityTextToText].APIKeyPreview == "" {
+		t.Fatalf("text provider should include masked key preview")
+	}
+
+	body = bytes.NewBufferString(`{
+		"providers":{
+			"text_to_text":{"baseUrl":"https://proxy.example.com/v1","model":"gpt-4.1-mini","apiKey":""}
+		}
+	}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/local/model-providers", body)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	raw, err = os.ReadFile(configFile)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	if !bytes.Contains(raw, []byte("sk-text-secret")) {
+		t.Fatalf("blank apiKey should preserve existing local token: %s", string(raw))
+	}
+	if !bytes.Contains(raw, []byte("https://proxy.example.com/v1")) {
+		t.Fatalf("baseUrl should be updated: %s", string(raw))
+	}
+}
+
+func TestModelProviderSettingsRejectUnsupportedCapability(t *testing.T) {
+	server := NewServer(Config{DataDir: t.TempDir()})
+	body := bytes.NewBufferString(`{
+		"providers":{
+			"image_to_video":{"baseUrl":"https://example.com/v1","model":"bad","apiKey":"sk"}
+		}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/local/model-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported capability should return 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})
@@ -164,7 +252,7 @@ func TestHandlerAllowsLocalFrontendCORS(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/local/diagnostics", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
-	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Method", http.MethodPut)
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 
@@ -174,8 +262,8 @@ func TestHandlerAllowsLocalFrontendCORS(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
 		t.Fatalf("allow-origin = %q, want *", got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
-		t.Fatalf("allow-methods header missing")
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPut) {
+		t.Fatalf("allow-methods = %q, want PUT", got)
 	}
 }
 

@@ -29,6 +29,7 @@ type Server struct {
 type Paths struct {
 	DataDir        string `json:"dataDir"`
 	CacheDir       string `json:"cacheDir"`
+	ConfigDir      string `json:"configDir"`
 	ProjectDir     string `json:"projectDir"`
 	ArtifactDir    string `json:"artifactDir"`
 	LogDir         string `json:"logDir"`
@@ -50,6 +51,26 @@ type LocalArtifactResponse struct {
 	Content       string                 `json:"content,omitempty"`
 	ContentBase64 string                 `json:"contentBase64,omitempty"`
 	Metadata      map[string]interface{} `json:"metadata"`
+}
+
+type ModelCapability string
+
+const (
+	CapabilityTextToText  ModelCapability = "text_to_text"
+	CapabilityTextToImage ModelCapability = "text_to_image"
+	CapabilityTextToVideo ModelCapability = "text_to_video"
+)
+
+type ModelProviderSettingsResponse struct {
+	Providers map[ModelCapability]ModelProviderConfig `json:"providers"`
+}
+
+type ModelProviderConfig struct {
+	BaseURL       string `json:"baseUrl"`
+	Model         string `json:"model"`
+	APIKey        string `json:"apiKey,omitempty"`
+	HasAPIKey     bool   `json:"hasApiKey,omitempty"`
+	APIKeyPreview string `json:"apiKeyPreview,omitempty"`
 }
 
 type logRequest struct {
@@ -81,6 +102,7 @@ func NewServer(cfg Config) *Server {
 	s.paths = Paths{
 		DataDir:        cfg.DataDir,
 		CacheDir:       filepath.Join(cfg.DataDir, "cache"),
+		ConfigDir:      filepath.Join(cfg.DataDir, "config"),
 		ProjectDir:     filepath.Join(cfg.DataDir, "projects"),
 		ArtifactDir:    filepath.Join(cfg.DataDir, "artifacts"),
 		LogDir:         filepath.Join(cfg.DataDir, "logs"),
@@ -96,7 +118,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) EnsureDirs() error {
-	for _, dir := range []string{s.paths.DataDir, s.paths.CacheDir, s.paths.ProjectDir, s.paths.ArtifactDir, s.paths.LogDir, s.paths.DiagnosticsDir} {
+	for _, dir := range []string{s.paths.DataDir, s.paths.CacheDir, s.paths.ConfigDir, s.paths.ProjectDir, s.paths.ArtifactDir, s.paths.LogDir, s.paths.DiagnosticsDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -108,6 +130,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/health", s.handleHealth)
 	s.mux.HandleFunc("/api/local/paths", s.handlePaths)
 	s.mux.HandleFunc("/api/local/logs", s.handleLogs)
+	s.mux.HandleFunc("/api/local/model-providers", s.handleModelProviders)
 	s.mux.HandleFunc("/api/local/artifacts", s.handleArtifacts)
 	s.mux.HandleFunc("/api/local/artifacts/", s.handleArtifactByID)
 	s.mux.HandleFunc("/api/local/projects/", s.handleProjectByID)
@@ -181,6 +204,41 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		settings, err := s.readModelProviderSettings()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, maskModelProviderSettings(settings))
+	case http.MethodPut:
+		var req ModelProviderSettingsResponse
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid model provider payload")
+			return
+		}
+		if err := validateProviderCapabilities(req.Providers); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		current, err := s.readModelProviderSettings()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		merged := mergeModelProviderSettings(current, req.Providers)
+		if err := s.writeModelProviderSettings(merged); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, maskModelProviderSettings(merged))
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +507,85 @@ func isTextMime(mimeType string) bool {
 		strings.Contains(lower, "markdown")
 }
 
+func defaultModelProviderSettings() map[ModelCapability]ModelProviderConfig {
+	return map[ModelCapability]ModelProviderConfig{
+		CapabilityTextToText: {
+			BaseURL: "https://api.openai.com/v1",
+			Model:   "gpt-4.1",
+		},
+		CapabilityTextToImage: {
+			BaseURL: "https://api.openai.com/v1",
+			Model:   "gpt-image-1",
+		},
+		CapabilityTextToVideo: {
+			BaseURL: "https://api.openai.com/v1",
+			Model:   "sora",
+		},
+	}
+}
+
+func validateProviderCapabilities(providers map[ModelCapability]ModelProviderConfig) error {
+	for capability := range providers {
+		if !isSupportedModelCapability(capability) {
+			return fmt.Errorf("unsupported model capability: %s", capability)
+		}
+	}
+	return nil
+}
+
+func isSupportedModelCapability(capability ModelCapability) bool {
+	switch capability {
+	case CapabilityTextToText, CapabilityTextToImage, CapabilityTextToVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeModelProviderSettings(current, updates map[ModelCapability]ModelProviderConfig) map[ModelCapability]ModelProviderConfig {
+	merged := map[ModelCapability]ModelProviderConfig{}
+	for capability, cfg := range current {
+		merged[capability] = cfg
+	}
+	for capability, update := range updates {
+		cfg := merged[capability]
+		if strings.TrimSpace(update.BaseURL) != "" {
+			cfg.BaseURL = strings.TrimSpace(update.BaseURL)
+		}
+		if strings.TrimSpace(update.Model) != "" {
+			cfg.Model = strings.TrimSpace(update.Model)
+		}
+		if update.APIKey != "" {
+			cfg.APIKey = update.APIKey
+		}
+		cfg.HasAPIKey = false
+		cfg.APIKeyPreview = ""
+		merged[capability] = cfg
+	}
+	return merged
+}
+
+func maskModelProviderSettings(settings map[ModelCapability]ModelProviderConfig) ModelProviderSettingsResponse {
+	masked := make(map[ModelCapability]ModelProviderConfig, len(settings))
+	for capability, cfg := range settings {
+		cfg.HasAPIKey = cfg.APIKey != ""
+		cfg.APIKeyPreview = previewAPIKey(cfg.APIKey)
+		cfg.APIKey = ""
+		masked[capability] = cfg
+	}
+	return ModelProviderSettingsResponse{Providers: masked}
+}
+
+func previewAPIKey(apiKey string) string {
+	if apiKey == "" {
+		return ""
+	}
+	if len(apiKey) <= 8 {
+		return "••••"
+	}
+	return apiKey[:4] + "••••" + apiKey[len(apiKey)-4:]
+}
+
 func addJSONToZip(zw *zip.Writer, name string, value interface{}) error {
 	writer, err := zw.Create(name)
 	if err != nil {
@@ -536,7 +673,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -565,4 +702,41 @@ func defaultDataDir() string {
 	default:
 		return filepath.Join(home, ".tangying-aios")
 	}
+}
+
+func (s *Server) modelProviderConfigPath() string {
+	return filepath.Join(s.paths.ConfigDir, "model-providers.json")
+}
+
+func (s *Server) readModelProviderSettings() (map[ModelCapability]ModelProviderConfig, error) {
+	settings := defaultModelProviderSettings()
+	if err := s.EnsureDirs(); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(s.modelProviderConfigPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return settings, nil
+		}
+		return nil, err
+	}
+	var stored ModelProviderSettingsResponse
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return nil, err
+	}
+	if err := validateProviderCapabilities(stored.Providers); err != nil {
+		return nil, err
+	}
+	return mergeModelProviderSettings(settings, stored.Providers), nil
+}
+
+func (s *Server) writeModelProviderSettings(settings map[ModelCapability]ModelProviderConfig) error {
+	if err := s.EnsureDirs(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(ModelProviderSettingsResponse{Providers: settings}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.modelProviderConfigPath(), append(data, '\n'), 0o600)
 }

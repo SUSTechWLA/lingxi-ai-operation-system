@@ -18,7 +18,7 @@ frontend/Electron UI
 - 写本地执行日志。
 - 生成诊断包，由用户授权后上传云端分析。
 
-本地端不保存 LLM API Key，不直接调用外部模型服务，不维护云端业务数据。
+本地端不内置平台 LLM API Key，不维护云端业务数据。用户可以在「系统 → 基础模型 API」里为文生文、文生图片、文生视频分别配置 OpenAI-compatible Provider；这些 token 只保存在用户本机，不上传云端。
 
 ## 本地数据目录
 
@@ -35,6 +35,8 @@ Linux:   ~/.tangying-aios/
 ```text
 TangyingAIOS/
 ├── cache/
+├── config/
+│   └── model-providers.json
 ├── projects/
 ├── artifacts/
 │   └── <projectId>/<artifactId>/
@@ -51,6 +53,7 @@ TangyingAIOS/
 ```bash
 TANGYING_LOCAL_DATA_DIR=/path/to/data
 TANGYING_LOCAL_AGENT_ADDR=127.0.0.1:18080
+VITE_LOCAL_AGENT_URL=http://127.0.0.1:18080
 TANGYING_CLOUD_API_BASE=https://your-cloud.example.com/api
 ```
 
@@ -75,6 +78,8 @@ bash scripts/start-frontend.sh
 ```text
 GET  /api/local/health
 GET  /api/local/paths
+GET  /api/local/model-providers
+PUT  /api/local/model-providers
 POST /api/local/artifacts
 GET  /api/local/artifacts/:id?projectId=<projectId>
 DELETE /api/local/artifacts/:id?projectId=<projectId>
@@ -88,6 +93,40 @@ POST /api/local/diagnostics
 ```bash
 curl http://127.0.0.1:18080/api/local/health
 ```
+
+读取基础模型 API 设置：
+
+```bash
+curl http://127.0.0.1:18080/api/local/model-providers
+```
+
+保存基础模型 API 设置：
+
+```bash
+curl -X PUT http://127.0.0.1:18080/api/local/model-providers \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "providers": {
+      "text_to_text": {
+        "baseUrl": "https://api.openai.com/v1",
+        "model": "gpt-4.1",
+        "apiKey": "sk-..."
+      },
+      "text_to_image": {
+        "baseUrl": "https://api.openai.com/v1",
+        "model": "gpt-image-1",
+        "apiKey": "sk-..."
+      },
+      "text_to_video": {
+        "baseUrl": "https://api.openai.com/v1",
+        "model": "sora",
+        "apiKey": "sk-..."
+      }
+    }
+  }'
+```
+
+字段遵循 OpenAI-compatible 习惯：`baseUrl`、`apiKey`、`model`。`GET` 返回时不会回显完整 token，只返回 `hasApiKey` 和 `apiKeyPreview`；`PUT` 中某个能力的 `apiKey` 为空时会保留本机已有 token。
 
 保存本地产物：
 
