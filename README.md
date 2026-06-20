@@ -75,9 +75,13 @@ Go AIOS Core (:8080)
 │   ├── bid/                       #   标书生成（招标解析→章节生成→审核→导出）
 │   ├── chat/                      #   AI 对话助手
 │   └── publish/                   #   内容发布
-├── skills/                        # 🆕 Skill Package 目录
-│   ├── aigc-shot-video/1.0.0/     #   10 个 stage
-│   └── voice-visual-video/1.0.0/  #   8 个 stage
+├── skills/                        # 🆕 Skill Package 目录（6 个）
+│   ├── create-opinion-videos/1.0.0/   # 口播/知识视频（8 stage，默认路由）
+│   ├── aigc-shot-video/1.0.0/         # 镜头式 AIGC 短片（9 stage）
+│   ├── video-creator/1.0.0/           # 导演级视频流水线（12 stage）
+│   ├── film-shot-reconstruction/1.0.0/# 经典镜头拉片学习（10 stage）
+│   ├── voice-post-production/1.0.0/   # 音频后期（4 stage）
+│   └── voice-visual-video/1.0.0/      # 旧版口播可视化（8 stage，hidden）
 ├── cmd/tangying-ai-os/            # 主入口
 ├── cmd/skill2workflow/            # 🆕 CLI 转换工具
 ├── deploy/                        # 🆕 Docker 云端部署
@@ -132,8 +136,8 @@ docker compose -f deploy/docker-compose.cloud.yml up -d
 | POST | `/api/ai/polish` | AI 润色 |
 | POST | `/api/media/upload` | 上传素材 |
 | GET  | `/api/media/list` | 素材列表 |
-| POST | `/api/skill/dialog/session/create` | 创建对话 |
-| POST | `/api/skill/dialog/session/:id/chat` | 发送消息 |
+| POST | `/api/chat/sessions/create` | 创建对话 |
+| POST | `/api/chat/sessions/:id/chat` | 发送消息 |
 
 ### 任务调度
 | 方法 | 路径 | 说明 |
@@ -263,8 +267,8 @@ curl -X POST http://localhost:8080/api/skills/my-skill/1.0.0/compile
 
 | 文档 | 说明 |
 |------|------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | ★ **完整产品架构设计说明**（新成员必读，含全部模块/接口/部署/优化建议） |
 | [CLAUDE.md](CLAUDE.md) | 项目开发指南（Coding Agent 用） |
-| [docs/AIOS_CORE_BACKEND_BOUNDARY.md](docs/AIOS_CORE_BACKEND_BOUNDARY.md) | 后端边界说明 |
 | [docs/upgrade/video-creation-v1/BASELINE_TEST_REPORT.md](docs/upgrade/video-creation-v1/BASELINE_TEST_REPORT.md) | 🆕 升级基线报告 |
 | [docs/upgrade/video-creation-v1/TASK_STATUS.md](docs/upgrade/video-creation-v1/TASK_STATUS.md) | 🆕 任务完成状态 |
 | [docs/upgrade/video-creation-v1/KNOWN_LIMITATIONS.md](docs/upgrade/video-creation-v1/KNOWN_LIMITATIONS.md) | 🆕 已知限制 |
