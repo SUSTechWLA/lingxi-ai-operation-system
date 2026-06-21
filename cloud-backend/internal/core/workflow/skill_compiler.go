@@ -173,6 +173,7 @@ func buildStageInput(skill *skillruntime.SkillManifest, stage skillruntime.Stage
 	}
 
 	input := map[string]interface{}{
+		"tool":       toolName,
 		"stage":      stage.Name,
 		"parameters": parameters,
 	}
