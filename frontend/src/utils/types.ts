@@ -1,3 +1,15 @@
+// ── Note ────────────────────────────────────────────────────────────────
+// api-types.generated.ts is regenerated from the OpenAPI spec via
+//   cd ../cloud-backend && make gen-docs
+//
+// The hand-crafted types below MAY be more precise (enum unions, UI types).
+// When the generated file drifts, the CI `make api-docs-check` fails and both
+// should be reconciled.
+//
+// UI-only types: MediaFile, Platform, Suggestion, etc. (no spec equivalent).
+// Data types: Artifact, VideoProject, etc. — keep these aligned manually.
+// ─────────────────────────────────────────────────────────────────────────
+
 export interface MediaFile {
   file: File
   preview?: string

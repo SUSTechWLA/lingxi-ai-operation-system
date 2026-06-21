@@ -135,6 +135,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/artifacts/", s.handleArtifactByID)
 	s.mux.HandleFunc("/api/local/projects/", s.handleProjectByID)
 	s.mux.HandleFunc("/api/local/diagnostics", s.handleDiagnostics)
+	s.mux.HandleFunc("/api/local/openapi.json", handleOpenAPI)
+	s.mux.HandleFunc("/api/local/docs", handleDocs)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

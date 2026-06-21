@@ -1,1497 +1,1634 @@
-# API Reference
+<!-- GENERATED — do not edit.
+     Regenerate: cd cloud-backend && make gen-docs
+     Source of truth: internal/core/apispec/cloud_spec.go
+-->
 
-Base URL: `http://localhost:8080`
+# Tangying AIOS Cloud API
 
-## Response Format
+Version: 0.1.0
 
-All endpoints return JSON with the following standard format:
+## Base URLs
 
-**Success:**
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": { ... }
-}
-```
-
-**Error:**
-```json
-{
-  "code": 400,
-  "message": "error description",
-  "data": null
-}
-```
-
-Common HTTP status codes:
-- `200` — Success
-- `400` — Bad Request (missing or invalid parameters)
-- `500` — Internal Server Error
-
----
+- `http://localhost:8080` — Local development server
 
 ## Table of Contents
 
-1. [Health](#1-health)
-2. [Publish Module (Frontend-facing)](#2-publish-module-frontend-facing)
-   - [POST /api/publish — Submit publish task](#post-apipublish)
-   - [POST /api/ai/generate — AI generate content](#post-apiaigenerate)
-   - [POST /api/ai/generate-from-media — AI generate from media](#post-apiaigenerate-from-media)
-   - [POST /api/ai/polish — AI polish text](#post-apiaipolish)
-3. [Trace — Task Trace Query](#3-trace--task-trace-query)
-   - [GET /api/trace/recent — Get recent trace](#get-apitracerecent)
-   - [GET /api/trace/:taskId — Get task trace](#get-apitracetaskid)
-4. [Orchestrator Module](#4-orchestrator-module)
-   - [POST /api/task/create — Create task](#post-apitaskcreate)
-   - [POST /api/task/:taskId/dag — Submit DAG](#post-apitasktaskiddag)
-   - [GET /api/task/:taskId — Get task](#get-apitasktaskid)
-   - [GET /api/task/:taskId/context — Get context](#get-apitasktaskidcontext)
-   - [POST /api/task/:taskId/pause — Pause task](#post-apitasktaskidpause)
-   - [POST /api/task/:taskId/fail — Fail task](#post-apitasktaskidfail)
-   - [POST /api/task/:taskId/resume — Resume task](#post-apitasktaskidresume)
-   - [GET /api/task/:taskId/pause-reason — Get pause reason](#get-apitasktaskidpause-reason)
-5. [Node Operations](#5-node-operations)
-   - [POST /api/node/:nodeId/success — Report success](#post-apinodenodeidsuccess)
-   - [POST /api/node/:nodeId/failure — Report failure](#post-apinodenodeidfailure)
-   - [POST /api/node/:nodeId/retry — Retry node](#post-apinodenodeidretry)
-   - [GET /api/node/:nodeId/snapshot/latest — Get snapshot](#get-apinodenodeidsnapshotlatest)
-   - [POST /api/node/:nodeId/restore — Restore from snapshot](#post-apinodenodeidrestore)
-6. [NL-Translator](#6-nl-translator)
-   - [POST /api/translate — Translate NL to DAG](#post-apitranslate)
-   - [POST /api/translate/submit — Translate and submit](#post-apitranslatesubmit)
-7. [NL-Driven DAG Submission](#7-nl-driven-dag-submission)
-   - [POST /api/node — Submit DAG directly](#post-apinode)
-8. [Context](#8-context)
-   - [GET /api/context/:taskId — Get task context](#get-apicontexttaskid)
-   - [GET /api/context/:taskId/node/:nodeId/snapshot/latest — Get node snapshot](#get-apicontexttaskidnodenodeidsnapshotlatest)
-   - [POST /api/context/:taskId/node/:nodeId/restore — Restore node](#post-apicontexttaskidnodenodeidrestore)
-   - [POST /api/context/record — Record context manually](#post-apicontextrecord)
-9. [Media Management API](#9-media-management-api)
-   - [POST /api/media/upload — Upload media files](#post-apimediaupload)
-   - [GET /api/media/list — List media assets](#get-apimedialist)
-   - [GET /api/media/:id — Get media by ID](#get-apimediaid)
-   - [PUT /api/media/:id/tags — Update media tags](#put-apimediaidtags)
-10. [Skill / AI Assistant Dialog API](#10-skill--ai-assistant-dialog-api)
-11. [Tool Registry API](#11-tool-registry-api)
-12. [Built-in Tools](#12-built-in-tools)
-13. [Error Responses](#13-error-responses)
+1. [AI](#1-ai)
+2. [Artifacts](#2-artifacts)
+3. [Bid](#3-bid)
+4. [Chat](#4-chat)
+5. [Context](#5-context)
+6. [Health](#6-health)
+7. [Media](#7-media)
+8. [Node](#8-node)
+9. [Orchestrator](#9-orchestrator)
+10. [Publish](#10-publish)
+11. [Skills](#11-skills)
+12. [Stages](#12-stages)
+13. [Tools](#13-tools)
+14. [Trace](#14-trace)
+15. [Translate](#15-translate)
+16. [Video Projects](#16-video-projects)
+17. [Workflow Runs](#17-workflow-runs)
+18. [Workflows](#18-workflows)
 
 ---
 
-## 1. Health
+## 1. AI
 
-### GET /api/health
+### GET /api/ai/polish/result
 
-Check if the service is running.
+Query async polish result
 
-**Example:**
-```bash
-curl http://localhost:8080/api/health
-```
+**Parameters:**
 
-**Response** `200`:
-```json
-{
-  "service": "ai-orchestrator",
-  "status": "UP"
-}
-```
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | query | `string` | **Yes** | Task ID from submit response |
+| `nodeId` | query | `string` | No | Node ID (optional) |
 
----
+**Responses:**
 
-## 2. Publish Module (Frontend-facing)
-
-### POST /api/publish
-
-Submit content for multi-platform publishing. Creates an AI task that polishes the content before publishing.
-
-**Content-Type:** `multipart/form-data`
-
-**Form Fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `title` | string | **Yes** | Content title |
-| `description` | string | **Yes** | Content description |
-| `keywords` | string | No | Comma-separated keywords |
-| `content_type` | string | No | `"image"` or `"video"` |
-| `platforms` | string | No | JSON array of platform IDs, e.g. `["douyin","xiaohongshu"]` |
-| `images` | File[] | No | Image files (jpg, png, webp, gif) |
-| `videos` | File[] | No | Video files (mp4, mov, avi, mkv) |
-| `cover` | File | No | Cover image file |
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/publish \
-  -F "title=今日美食推荐" \
-  -F "description=推荐几家好吃的餐厅" \
-  -F "keywords=美食,餐厅,推荐" \
-  -F 'platforms=["douyin","xiaohongshu"]' \
-  -F "images=@photo.jpg"
-```
-
-**Response** `200`:
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "taskId": "20260426091349-a8a8a8a8",
-    "message": "内容已提交发布任务"
-  }
-}
-```
-
-**Response** `400` (missing required fields):
-```json
-{
-  "code": 400,
-  "message": "title and description are required",
-  "data": null
-}
-```
-
----
-
-### POST /api/ai/generate
-
-Generate title and description from a text prompt using AI.
-
-**Content-Type:** `application/json`
-
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `prompt` | string | **Yes** | Text prompt describing the content idea |
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/ai/generate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"周末户外活动推荐"}'
-```
-
-**Response** `200`:
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "title": "周末别宅家！8个低门槛户外活动直接抄作业",
-    "description": "整理了适配不同人数、预算的周末户外玩法..."
-  }
-}
-```
+- **200** — Polish result or status (JSON)
 
 ---
 
 ### POST /api/ai/generate-from-media
 
-Generate title and description from uploaded media files (images/videos) plus a text prompt.
+Generate content from media files + prompt
 
-**Content-Type:** `multipart/form-data`
+**Request body:** Optional (Content-Type: `multipart/form-data`)
 
-**Form Fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `prompt` | string | No | Additional text description |
-| `images` | File[] | No | Image files for context |
-| `videos` | File[] | No | Video files for context |
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/ai/generate-from-media \
-  -F "prompt=风景照片" \
-  -F "images=@scenery.jpg"
-```
-
-**Response** `200`:
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "title": "这组神仙风景也太治愈了！",
-    "description": "收录了不同时节不同地点的宝藏自然风景..."
-  }
+  "prompt": "string",
 }
 ```
 
----
+**Responses:**
 
-### POST /api/ai/polish
-
-Polish existing text (title or description) using AI (synchronous — waits for completion).
-
-**Content-Type:** `application/json`
-
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `text` | string | **Yes** | Text to polish |
-| `type` | string | No | `"title"` or `"description"` (default: `"description"`) |
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/ai/polish \
-  -H "Content-Type: application/json" \
-  -d '{"text":"这个周末我们去爬山","type":"description"}'
-```
-
-**Response** `200`:
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "content": "这周末就别宅家啦，我们一起去爬山...",
-    "taskId": "20260426232624-b0989898",
-    "traceUrl": "/api/trace/20260426232624-b0989898"
-  }
-}
-```
+- **200** — Generated content (JSON)
 
 ---
 
 ### POST /api/ai/polish/submit
 
-Submit a polish task and return immediately with taskId + nodeId (asynchronous). Used by the frontend to support cancel during long-running polish operations.
+Submit async polish task
 
-**Content-Type:** `application/json`
+**Request body:** **Required** (Content-Type: `application/json`)
 
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `text` | string | **Yes** | Text to polish |
-| `type` | string | No | `"title"` or `"description"` (default: `"description"`) |
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/ai/polish/submit \
-  -H "Content-Type: application/json" \
-  -d '{"text":"这个周末我们去爬山","type":"description"}'
-```
-
-**Response** `200`:
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "taskId": "20260426232624-b0989898",
-    "nodeId": "polish-xxxxx",
-    "message": "Polish task submitted",
-    "traceUrl": "/api/trace/20260426232624-b0989898"
-  }
+  "text": "string",
+  "type": "string",
 }
 ```
+
+**Responses:**
+
+- **200** — Task submitted (JSON)
 
 ---
 
-### GET /api/ai/polish/result
+### POST /api/ai/polish
 
-Query the result of an async polish task. Used together with `POST /api/ai/polish/submit`.
+Polish text via AI (synchronous)
 
-**Query Parameters:**
+**Request body:** **Required** (Content-Type: `application/json`)
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `taskId` | string | **Yes** | Task ID from submit response |
-| `nodeId` | string | No | Node ID (optional, queries latest if omitted) |
-
-**Example:**
-```bash
-curl "http://localhost:8080/api/ai/polish/result?taskId=20260426232624-b0989898&nodeId=polish-xxxxx"
-```
-
-**Response** `200` (still running):
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "taskId": "20260426232624-b0989898",
-    "nodeId": "polish-xxxxx",
-    "status": "RUNNING",
-    "traceUrl": "/api/trace/20260426232624-b0989898"
-  }
+  "text": "string",
+  "type": "string",
 }
 ```
 
-**Response** `200` (completed):
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "taskId": "20260426232624-b0989898",
-    "nodeId": "polish-xxxxx",
-    "status": "SUCCESS",
-    "content": "这周末就别宅家啦，我们一起去爬山...",
-    "traceUrl": "/api/trace/20260426232624-b0989898"
-  }
-}
-```
+**Responses:**
 
-**Node Status Values:** `CREATED`, `READY`, `RUNNING`, `SUCCESS`, `FAILED`
+- **200** — Polished result (JSON)
 
 ---
 
-## 3. Trace — Task Trace Query
+### POST /api/ai/generate
 
-Trace endpoints provide complete task lifecycle data (task details + all context entries) for debugging and auditing.
+Generate content from text prompt
 
-### GET /api/trace/recent
+**Request body:** **Required** (Content-Type: `application/json`)
 
-Query the most recently executed task's full trace.
-
-**Example:**
-```bash
-curl http://localhost:8080/api/trace/recent
-```
-
-**Response** `200`:
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "task": {
-      "taskId": "20260426231320-68686850",
-      "status": "SUCCESS",
-      "input": {"source": "nl-translator"},
-      "output": null,
-      "createdAt": "2026-04-26T23:13:20.960495Z",
-      "nodes": [...]
-    },
-    "contexts": [
-      {
-        "id": 9185846,
-        "contextType": "TASK_CREATED",
-        "taskId": "20260426231320-68686850",
-        "sourceModule": "Orchestrator",
-        "message": "任务创建成功，等待 DAG 提交",
-        "createdAt": "0001-01-01T00:00:00Z"
-      },
-      {
-        "id": 9185850,
-        "contextType": "NODE_SCHEDULED",
-        "taskId": "20260426231320-68686850",
-        "nodeId": "polish-xxx",
-        "sourceModule": "ContextService",
-        "sourceTopic": "ai.node.result",
-        "metadata": {"startedAt": "2026-04-26T23:13:21.048766+08:00"},
-        "message": "Kafka 事件记录：节点进入运行状态"
-      },
-      {
-        "id": 9185851,
-        "contextType": "NODE_SUCCESS",
-        "taskId": "20260426231320-68686850",
-        "nodeId": "polish-xxx",
-        "sourceModule": "ContextService",
-        "sourceTopic": "ai.node.result",
-        "metadata": {"durationMs": 12543, "exitCode": 0},
-        "message": "Kafka 事件记录：节点执行成功"
-      }
-    ]
-  }
+  "prompt": "string",
 }
 ```
 
-**Response** `404` (no tasks found):
-```json
-{
-  "code": 404,
-  "message": "no tasks found",
-  "data": null
-}
-```
+**Responses:**
+
+- **200** — Generated content (JSON)
 
 ---
 
-### GET /api/trace/:taskId
+## 2. Artifacts
 
-Query a specific task's full trace by task ID.
+### POST /api/artifacts/:id/revise
 
-**Example:**
-```bash
-curl http://localhost:8080/api/trace/20260426231320-68686850
-```
+Create an artifact revision
 
-**Response** `200` (same format as /api/trace/recent):
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Artifact identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "task": {...},
-    "contexts": [...]
-  }
+  "message": "string",
 }
 ```
 
-**Response** `404`:
-```json
-{
-  "code": 404,
-  "message": "task not found",
-  "data": null
-}
-```
+**Responses:**
+
+- **200** — Revised (JSON)
 
 ---
 
-### Trace Data Schema
+### GET /api/artifacts/:id/history
 
-Each trace response contains two sections: `task` (the full task with nodes) and `contexts` (ordered lifecycle events).
+Get artifact revision history
 
-**Task Fields:**
+**Parameters:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `taskId` | string | Task unique identifier |
-| `status` | string | One of: `CREATED`, `RUNNING`, `SUCCESS`, `FAILED`, `PAUSED` |
-| `input` | object | Task input parameters |
-| `output` | object | Task output / result (null if not completed) |
-| `createdAt` | string | ISO 8601 timestamp |
-| `nodes` | Node[] | All nodes belonging to this task |
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Artifact identifier |
 
-**Node Fields:**
+**Responses:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Node ID |
-| `type` | string | `TOOL` or `LLM` |
-| `name` | string | Tool name (e.g. `polisher`, `llm_api`) |
-| `status` | string | One of: `CREATED`, `READY`, `RUNNING`, `SUCCESS`, `FAILED`, `RETRYING`, `SKIPPED` |
-| `input` | object | Node input parameters |
-| `output` | object | Node output — includes execution metrics (`startedAt`, `durationMs`, `exitCode`, `error`, `resourceUsage`) |
-| `condition` | string | Conditional expression (if any) |
-| `retryCount` | int | Number of retries attempted |
-| `maxRetry` | int | Maximum allowed retries |
-| `idempotencyKey` | string | Kafka idempotency key (`taskId + "-" + nodeId`) |
-
-**Context Fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | int | Auto-increment ID |
-| `contextType` | string | Event type (see below) |
-| `taskId` | string | Associated task ID |
-| `nodeId` | string | Associated node ID (empty for task-level events) |
-| `sourceModule` | string | Originating module: `Orchestrator`, `StateMachine`, or `ContextService` |
-| `sourceTopic` | string | Kafka topic this event was consumed from (only for `ContextService` entries) |
-| `metadata` | object | Additional data (inputPreview, outputPreview, execution metrics) |
-| `message` | string | Human-readable description |
-| `createdAt` | string | Timestamp |
-
-**Context Types (ordered lifecycle):**
-
-| # | Type | Source | Description |
-|---|------|--------|-------------|
-| 1 | `TASK_CREATED` | Orchestrator | Task created, awaiting DAG submission |
-| 2 | `DAG_VALIDATED` | Orchestrator | DAG structure validated (no cycles, no duplicates) |
-| 3 | `DAG_SUBMITTED` | Orchestrator | DAG submitted, nodes written to DB |
-| 4 | `NODE_READY` | StateMachine | Node dependencies met, transitioned to READY |
-| 5 | `NODE_SCHEDULED` | ContextService | Worker picked up the node, execution started |
-| 6 | `NODE_SUCCESS` | StateMachine | Node execution succeeded (RUNNING → SUCCESS) |
-| 6 | `NODE_SUCCESS` | ContextService | Kafka event: node execution result (with durationMs, exitCode) |
-| 7 | `NODE_FAILED` | StateMachine | Node execution permanently failed (RUNNING → FAILED) |
-| 7 | `AI_CANCELLED` | Frontend / Handler | User cancelled AI operation via frontend |
-| 8 | `TASK_SUCCESS` | StateMachine | All nodes completed, task finished |
-| 8 | `TASK_FAILED` | StateMachine | Task marked as failed |
+- **200** — Version history (JSON)
 
 ---
 
-## 4. Orchestrator Module
+### GET /api/artifacts/:id
 
-### POST /api/task/create
+Get artifact by ID
 
-Create a new empty task.
+**Parameters:**
 
-**Request Body:**
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Artifact identifier |
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `userId` | string | No | User identifier |
+**Responses:**
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/task/create \
-  -H "Content-Type: application/json" \
-  -d '{"userId": "test-user"}'
-```
-
-**Response** `200`:
-```json
-{
-  "taskId": "20260423150000-a1b2c3",
-  "status": "CREATED"
-}
-```
+- **200** — Artifact (JSON)
+- **404** — Not found (JSON)
 
 ---
 
-### POST /api/task/:taskId/dag
+### GET /api/artifacts/:id/content
 
-Submit a DAG (nodes + edges) to an existing task.
+Get artifact content
 
-**Path Parameters:**
+**Parameters:**
 
-| Name | Description |
-|------|-------------|
-| `taskId` | Task ID returned from create |
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Artifact identifier |
 
-**Request Body:**
+**Responses:**
 
-```json
-{
-  "nodes": [
-    {
-      "id": "node-1",
-      "type": "TOOL",
-      "name": "bash",
-      "input": {"command": "echo 'Hello World'"}
-    },
-    {
-      "id": "node-2",
-      "type": "LLM",
-      "name": "Summarize",
-      "input": {"prompt": "Generate a summary of the task output"}
-    },
-    {
-      "id": "node-3",
-      "type": "TOOL",
-      "name": "bash",
-      "condition": "node-1.status == failed",
-      "input": {"command": "echo 'Task failed'"}
-    }
-  ],
-  "edges": [
-    {"from": "node-1", "to": "node-2"},
-    {"from": "node-1", "to": "node-3"}
-  ]
-}
-```
-
-**Node Fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | **Yes** | Unique node identifier within the task |
-| `type` | string | **Yes** | `"LLM"` or `"TOOL"` |
-| `name` | string | **Yes** | Node name; for TOOL type, used for tool routing |
-| `input` | object | No | Node input parameters |
-| `condition` | string | No | Conditional expression (e.g. `"nodeA.status == success"`) |
-| `maxRetry` | int | No | Maximum retry count (default: 3) |
-| `priority` | int | No | Node priority |
-| `workerGroup` | string | No | Worker group assignment |
-
-**Condition Format:** `"nodeId.status == success"` or `"nodeId.status == failed"`. When condition is not met, the node is automatically marked as SKIPPED.
-
-**Example:**
-```bash
-TASK_ID="20260423150000-a1b2c3"
-curl -X POST http://localhost:8080/api/task/${TASK_ID}/dag \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
-      {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
-    ],
-    "edges": [
-      {"from": "n1", "to": "n2"}
-    ]
-  }'
-```
-
-**Response** `200`:
-```json
-{
-  "taskId": "20260423150000-a1b2c3",
-  "message": "DAG submitted successfully"
-}
-```
+- **404** — Not found (JSON)
+- **200** — Content + metadata (JSON)
 
 ---
 
-### GET /api/task/:taskId
+### GET /api/video-projects/:id/artifacts
 
-Get task details including all nodes and their statuses.
+List project artifacts
 
-**Example:**
-```bash
-curl http://localhost:8080/api/task/20260423150000-a1b2c3
-```
+**Parameters:**
 
-**Response** `200`:
-```json
-{
-  "task": {
-    "id": "20260423150000-a1b2c3",
-    "status": "RUNNING",
-    "userId": "test-user",
-    "pauseReason": ""
-  },
-  "nodes": [
-    {
-      "id": "n1",
-      "type": "TOOL",
-      "name": "bash",
-      "status": "SUCCESS",
-      "condition": "",
-      "output": {"city": "Beijing", "temperature": "22°C", "condition": "Sunny"}
-    },
-    {
-      "id": "n2",
-      "type": "TOOL",
-      "name": "error-handler",
-      "status": "SKIPPED",
-      "condition": "n1.status == failed"
-    }
-  ]
-}
-```
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
 
-**Node Statuses:** `CREATED`, `READY`, `RUNNING`, `SUCCESS`, `FAILED`, `RETRYING`, `SKIPPED`
+**Responses:**
+
+- **200** — Artifacts list (JSON)
 
 ---
 
-### GET /api/task/:taskId/context
+## 3. Bid
 
-Get all context records for a task.
+### POST /api/bid/projects/:id/chapters/:chId/regenerate
 
-**Example:**
-```bash
-curl http://localhost:8080/api/task/20260423150000-a1b2c3/context
-```
+Trigger chapter regeneration
 
-**Response** `200`:
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": 9185846,
-      "contextType": "TASK_CREATED",
-      "taskId": "20260423150000-a1b2c3",
-      "sourceModule": "Orchestrator",
-      "message": "任务创建成功，等待 DAG 提交",
-      "createdAt": "0001-01-01T00:00:00Z"
-    },
-    {
-      "id": 9185850,
-      "contextType": "NODE_SCHEDULED",
-      "taskId": "20260423150000-a1b2c3",
-      "nodeId": "n1",
-      "sourceModule": "ContextService",
-      "sourceTopic": "ai.node.result",
-      "metadata": {
-        "startedAt": "2026-04-23T15:00:01.123456+08:00"
-      },
-      "message": "Kafka 事件记录：节点进入运行状态"
-    }
-  ]
-}
-```
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `chId` | path | `string` | **Yes** | Chapter identifier |
+
+**Responses:**
+
+- **200** — Regeneration triggered (JSON)
 
 ---
 
-### POST /api/task/:taskId/pause
+### POST /api/bid/projects/:id/start
 
-Pause a running task.
+Start bid generation
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/task/20260423150000-a1b2c3/pause \
-  -H "Content-Type: application/json" \
-  -d '{"reason": "debugging"}'
-```
+**Parameters:**
 
-**Response** `200`:
-```json
-{
-  "taskId": "20260423150000-a1b2c3",
-  "message": "Task paused successfully"
-}
-```
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Started (JSON)
 
 ---
 
-### POST /api/task/:taskId/fail
+### GET /api/bid/projects/:id/export/status
 
-Immediately mark a task as FAILED. Used by the frontend cancel mechanism to ensure the backend task stops processing when the user cancels an AI operation.
+Get export status
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/task/20260423150000-a1b2c3/fail
-```
+**Parameters:**
 
-**Response** `200`:
-```json
-{
-  "taskId": "20260423150000-a1b2c3",
-  "message": "Task failed successfully"
-}
-```
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Export status (JSON)
 
 ---
 
-### POST /api/task/:taskId/resume
+### POST /api/bid/projects/:id/export
 
-Resume a paused task.
+Export project to document
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/task/20260423150000-a1b2c3/resume
-```
+**Parameters:**
 
-**Response** `200`:
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
 ```json
 {
-  "taskId": "20260423150000-a1b2c3",
-  "message": "Task resumed successfully"
+  "format": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Export started (JSON)
+
 ---
 
-### GET /api/task/:taskId/pause-reason
+### GET /api/bid/projects/:id
 
-Get the reason a task was paused.
+Get project detail
 
-**Example:**
-```bash
-curl http://localhost:8080/api/task/20260423150000-a1b2c3/pause-reason
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Project + chapters (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### PUT /api/bid/projects/:id
+
+Update a project
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
 ```
 
-**Response** `200`:
+**Responses:**
+
+- **200** — Updated (JSON)
+
+---
+
+### DELETE /api/bid/projects/:id
+
+Delete a project
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Deleted (JSON)
+
+---
+
+### GET /api/bid/projects
+
+List bid projects
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `status` | query | `string` | No | Filter by status |
+| `userId` | query | `string` | No | Filter by user |
+| `offset` | query | `integer` | No | Pagination offset |
+| `limit` | query | `integer` | No | Page size |
+
+**Responses:**
+
+- **200** — Projects list (JSON)
+
+---
+
+### POST /api/bid/projects
+
+Create a bid project
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Created (JSON)
+
+---
+
+### GET /api/bid/templates
+
+List bid templates
+
+**Responses:**
+
+- **200** — Templates list (JSON)
+
+---
+
+### POST /api/bid/projects/:id/resume
+
+Resume generation
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Resumed (JSON)
+
+---
+
+### GET /api/bid/projects/:id/trace
+
+Get project trace redirect
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Trace URL (JSON)
+
+---
+
+### POST /api/bid/projects/:id/upload-tender
+
+Upload tender document
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `multipart/form-data`)
+
 ```json
 {
-  "taskId": "20260423150000-a1b2c3",
-  "reason": "Manual pause for debugging"
+  "file": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Uploaded (JSON)
+
 ---
 
-## 5. Node Operations
+### POST /api/bid/projects/:id/chapters/:chId/reject
 
-### POST /api/node/:nodeId/success
+Reject a chapter
 
-Report a node execution as successful.
+**Parameters:**
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/node/n1/success \
-  -H "Content-Type: application/json" \
-  -d '{"result": "success", "data": {}}'
-```
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `chId` | path | `string` | **Yes** | Chapter identifier |
 
-**Response** `200`:
+**Request body:** **Required** (Content-Type: `application/json`)
+
 ```json
 {
-  "message": "Node success recorded"
+  "comment": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Rejected (JSON)
+
 ---
 
-### POST /api/node/:nodeId/failure
+### GET /api/bid/projects/:id/progress
 
-Report a node execution as failed.
+Get generation progress
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/node/n1/failure \
-  -H "Content-Type: application/json" \
-  -d '{"errorMessage": "timeout"}'
-```
+**Parameters:**
 
-**Response** `200`:
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Progress data (JSON)
+
+---
+
+### POST /api/bid/projects/:id/chapters/:chId/approve
+
+Approve a chapter
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `chId` | path | `string` | **Yes** | Chapter identifier |
+
+**Responses:**
+
+- **200** — Approved (JSON)
+
+---
+
+### POST /api/bid/projects/:id/pause
+
+Pause generation
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
 ```json
 {
-  "message": "Node failure recorded"
+  "reason": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Paused (JSON)
+
 ---
 
-### POST /api/node/:nodeId/retry
+## 4. Chat
 
-Retry a failed node. Resets node status to CREATED and re-initializes it.
+### POST /api/chat/sessions/:session_id/chat
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/node/n1/retry
-```
+Send a chat message
 
-**Response** `200`:
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `session_id` | path | `string` | **Yes** | Session identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
 ```json
 {
-  "nodeId": "n1",
-  "message": "Node retry initiated"
+  "message": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Assistant reply (JSON)
+- **410** — Session terminated (JSON)
+
 ---
 
-### GET /api/node/:nodeId/snapshot/latest
+### GET /api/chat/sessions/:session_id
 
-Get the latest snapshot for a node.
+Get session state
 
-**Example:**
-```bash
-curl http://localhost:8080/api/node/n1/snapshot/latest
-```
+**Parameters:**
 
-**Response** `200`:
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `session_id` | path | `string` | **Yes** | Session identifier |
+
+**Responses:**
+
+- **200** — Session state (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### GET /api/chat/sessions/:session_id/progress
+
+Get session progress
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `session_id` | path | `string` | **Yes** | Session identifier |
+
+**Responses:**
+
+- **200** — Progress state (JSON)
+
+---
+
+### POST /api/chat/sessions/:session_id/terminate
+
+Terminate session
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `session_id` | path | `string` | **Yes** | Session identifier |
+
+**Responses:**
+
+- **200** — Terminated (JSON)
+
+---
+
+### POST /api/chat/sessions/create
+
+Create a new chat session
+
+**Request body:** Optional (Content-Type: `application/json`)
+
 ```json
 {
-  "nodeId": "n1",
-  "snapshot": {
-    "id": "ctx-001",
-    "type": "SNAPSHOT",
-    "message": "Node state snapshot",
-    "data": {}
-  }
+  "user_id": "string",
+  "title": "string",
+  "description": "string",
+  "keywords": ["string"],
+  "media_count": 0,
+  "media_ids": ["string"],
+  ...
 }
 ```
 
-**Response** `404`:
-```json
-{
-  "error": "No snapshot found"
-}
-```
+**Responses:**
+
+- **200** — Session created (JSON)
 
 ---
 
-### POST /api/node/:nodeId/restore
-
-Restore a node from its latest snapshot.
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/node/n1/restore
-```
-
-**Response** `200`:
-```json
-{
-  "nodeId": "n1",
-  "message": "Node snapshot retrieved",
-  "snapshot": {
-    "id": "ctx-001",
-    "type": "SNAPSHOT",
-    "data": {}
-  }
-}
-```
-
----
-
-## 6. NL-Translator
-
-### POST /api/translate
-
-Translate a natural language prompt into a DAG structure.
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/translate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Run a hello world command and generate a summary"}'
-```
-
-**Response** `200`:
-```json
-{
-  "nodes": [
-    {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
-    {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
-  ],
-  "edges": [
-    {"from": "n1", "to": "n2"}
-  ]
-}
-```
-
----
-
-### POST /api/translate/submit
-
-Translate a natural language prompt and immediately submit the DAG to the orchestrator.
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/translate/submit \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Run a hello world command and generate a summary"}'
-```
-
-**Response** `200`:
-```json
-{
-  "taskId": "20260423150000-a1b2c3",
-  "status": "CREATED",
-  "message": "DAG submitted successfully"
-}
-```
-
----
-
-## 7. NL-Driven DAG Submission
-
-### POST /api/node
-
-Submit a complete DAG in one step. Creates a task and submits the DAG in a single request.
-
-**Example — basic:**
-```bash
-curl -X POST http://localhost:8080/api/node \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
-      {"id": "n2", "type": "LLM", "name": "Summarize", "input": {"prompt": "Generate travel advice"}}
-    ],
-    "edges": [
-      {"from": "n1", "to": "n2"}
-    ]
-  }'
-```
-
-**Example — conditional branching:**
-```bash
-curl -X POST http://localhost:8080/api/node \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nodes": [
-      {"id": "bash-1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
-      {"id": "success-1", "type": "LLM", "name": "summary", "condition": "bash-1.status == success", "input": {"prompt": "Generate a summary"}},
-      {"id": "fail-1", "type": "TOOL", "name": "bash", "condition": "bash-1.status == failed", "input": {"command": "echo 'Task failed'"}}
-    ],
-    "edges": [
-      {"from": "bash-1", "to": "success-1"},
-      {"from": "bash-1", "to": "fail-1"}
-    ]
-  }'
-```
-
-**Response** `200`:
-```json
-{
-  "taskId": "20260423150000-a1b2c3",
-  "status": "CREATED",
-  "message": "DAG submitted successfully"
-}
-```
-
----
-
-## 8. Context
-
-### GET /api/context/:taskId
-
-Get all context records for a task (same as GET /api/task/:taskId/context).
-
-**Example:**
-```bash
-curl http://localhost:8080/api/context/20260423150000-a1b2c3
-```
-
----
+## 5. Context
 
 ### GET /api/context/:taskId/node/:nodeId/snapshot/latest
 
-Get the latest snapshot for a specific node.
+Get node snapshot
 
-**Example:**
-```bash
-curl http://localhost:8080/api/context/20260423150000-a1b2c3/node/n1/snapshot/latest
-```
+**Parameters:**
 
----
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+| `nodeId` | path | `string` | **Yes** | Node identifier |
 
-### POST /api/context/:taskId/node/:nodeId/restore
+**Responses:**
 
-Restore a node from its latest snapshot.
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/context/20260423150000-a1b2c3/node/n1/restore
-```
+- **200** — Snapshot found (JSON)
 
 ---
 
 ### POST /api/context/record
 
-Manually record a context entry.
+Record a context event manually
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/context/record \
-  -H "Content-Type: application/json" \
-  -d '{"taskId": "20260423150000-a1b2c3", "nodeId": "n1", "type": "CUSTOM", "message": "test"}'
-```
+**Request body:** **Required** (Content-Type: `application/json`)
 
-**Context Types:** `TASK_CREATED`, `DAG_VALIDATED`, `DAG_SUBMITTED`, `NODE_READY`, `NODE_SCHEDULED`, `NODE_SUCCESS`, `NODE_FAILED`, `NODE_RETRY`, `NODE_SKIPPED`, `TASK_SUCCESS`, `TASK_FAILED`, `AI_CANCELLED`, `SNAPSHOT`, `CUSTOM`
-
-**Response** `200`:
 ```json
 {
-  "message": "Context recorded"
+  "taskId": "string",
+  "nodeId": "string",
+  "type": "string",
+  "message": "string",
 }
 ```
 
----
+**Responses:**
 
-## 9. Media Management API
-
-### POST /api/media/upload
-
-Upload media files (images/videos). Files are stored in MinIO and metadata is saved to the database.
-
-**Content-Type:** `multipart/form-data`
-
-**Form Fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `userId` | string | No | User identifier (default: "default") |
-| `files` | File[] | **Yes** | One or more image/video files |
-
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/media/upload \
-  -F "userId=test-user" \
-  -F "files=@photo.jpg"
-```
-
-**Response** `200`:
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "id": "media-1714294410000-photo",
-      "userId": "test-user",
-      "originalName": "photo.jpg",
-      "mimeType": "image/jpeg",
-      "size": 1024000,
-      "minioPath": "test-user/2026/04/28/media-1714294410000-photo.jpg",
-      "tags": [],
-      "createdAt": "2026-04-28T12:00:00Z",
-      "updatedAt": "2026-04-28T12:00:00Z"
-    }
-  ]
-}
-```
+- **200** — Recorded (JSON)
 
 ---
+
+### GET /api/context/:taskId
+
+Get context records for task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Context records (JSON)
+
+---
+
+### POST /api/context/:taskId/node/:nodeId/restore
+
+Restore node
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Responses:**
+
+- **200** — Restored (JSON)
+
+---
+
+## 6. Health
+
+### GET /api/health
+
+Liveness check
+
+**Responses:**
+
+- **200** — Service is up (JSON)
+
+---
+
+### GET /api/health/ready
+
+Readiness check with dependencies
+
+**Responses:**
+
+- **200** — All dependencies healthy (JSON)
+- **503** — One or more dependency down (JSON)
+
+---
+
+## 7. Media
 
 ### GET /api/media/list
 
-List uploaded media assets with pagination and optional tag filtering.
+List media assets
 
-**Query Parameters:**
+**Parameters:**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `userId` | string | No | User identifier (default: "default") |
-| `offset` | int | No | Pagination offset (default: 0) |
-| `limit` | int | No | Page size (default: 20) |
-| `tag` | string | No | Filter by tag name |
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `userId` | query | `string` | No | User identifier |
+| `offset` | query | `integer` | No | Pagination offset |
+| `limit` | query | `integer` | No | Page size |
+| `tag` | query | `string` | No | Filter by tag |
 
-**Example:**
-```bash
-curl "http://localhost:8080/api/media/list?userId=test-user&offset=0&limit=10&tag=风景"
-```
+**Responses:**
 
-**Response** `200`:
+- **200** — Media list (JSON)
+
+---
+
+### POST /api/media/upload
+
+Upload media files
+
+**Request body:** Optional (Content-Type: `multipart/form-data`)
+
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "items": [...],
-    "total": 1
-  }
+  "userId": "string",
 }
 ```
+
+**Responses:**
+
+- **200** — Uploaded (JSON)
+- **400** — No files (JSON)
 
 ---
 
 ### GET /api/media/:id
 
-Get a single media asset by ID.
+Get media asset by ID
 
-**Example:**
-```bash
-curl http://localhost:8080/api/media/media-1714294410000-photo
-```
+**Parameters:**
 
-**Response** `200`:
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {
-    "id": "media-1714294410000-photo",
-    "userId": "test-user",
-    "originalName": "photo.jpg",
-    "mimeType": "image/jpeg",
-    "size": 1024000,
-    "minioPath": "test-user/2026/04/28/media-1714294410000-photo.jpg",
-    "tags": [],
-    "createdAt": "2026-04-28T12:00:00Z",
-    "updatedAt": "2026-04-28T12:00:00Z"
-  }
-}
-```
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Media identifier |
 
-**Response** `404`:
-```json
-{
-  "code": 404,
-  "message": "media asset not found: ...",
-  "data": null
-}
-```
+**Responses:**
+
+- **200** — Media asset (JSON)
+- **404** — Not found (JSON)
 
 ---
 
 ### PUT /api/media/:id/tags
 
-Update tags for a media asset.
+Update media tags
 
-**Request Body:**
+**Parameters:**
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `tags` | string[] | **Yes** | New tag array |
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Media identifier |
 
-**Example:**
-```bash
-curl -X PUT http://localhost:8080/api/media/media-1714294410000-photo/tags \
-  -H "Content-Type: application/json" \
-  -d '{"tags": ["风景", "旅行", "故宫"]}'
-```
+**Request body:** **Required** (Content-Type: `application/json`)
 
-**Response** `200`:
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": null
+  "tags": ["string"],
 }
 ```
 
+**Responses:**
+
+- **200** — Tags updated (JSON)
+
 ---
 
+## 8. Node
 
-## 10. Skill / AI Assistant Dialog API
+### POST /api/node/:nodeId/restore
 
-AI 对话助手 API，每次对话 = 一个 Task，经 Orchestrator → Worker 执行，Context 全程追踪。
+Restore node from snapshot
 
-### POST /api/skill/dialog/session/create
+**Parameters:**
 
-创建新的对话会话。可传入当前页面上下文（标题、简介、关键词、已上传素材）辅助 AI 理解。
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `nodeId` | path | `string` | **Yes** | Node identifier |
 
-**Content-Type:** `application/json`
+**Responses:**
 
-**Request Body:**
+- **200** — Restored (JSON)
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `user_id` | string | No | 用户标识 |
-| `title` | string | No | 当前页面标题 |
-| `description` | string | No | 当前页面简介 |
-| `body` | string | No | 当前页面正文 |
-| `keywords` | string[] | No | 当前页面关键词 |
-| `media_count` | int | No | 已上传素材数量 |
-| `media_names` | string[] | No | 素材文件名列表 |
-| `media_ids` | string[] | No | 素材 ID 列表 |
-| `platforms` | string[] | No | 当前页面已选平台 |
+---
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/skill/dialog/session/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user001",
-    "title": "我的创作页面",
-    "description": "一个关于美食的创作",
-    "keywords": ["美食", "探店"],
-    "media_count": 1,
-    "media_names": ["photo.jpg"],
-    "media_ids": ["media-xxx"]
-  }'
+### POST /api/node/:nodeId/success
+
+Report node execution success
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{}
 ```
 
-**Response** `200`:
+**Responses:**
+
+- **200** — Recorded (JSON)
+
+---
+
+### POST /api/node
+
+Submit DAG in one step (create + submit)
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/DAGRequest" }
+```
+
+**Responses:**
+
+- **200** — DAG submitted (JSON)
+
+---
+
+### GET /api/node/:nodeId/snapshot/latest
+
+Get latest node snapshot
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Responses:**
+
+- **200** — Snapshot found (JSON)
+- **404** — No snapshot (JSON)
+
+---
+
+### POST /api/node/:nodeId/failure
+
+Report node execution failure
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": { "session_id": "uuid-string" }
+  "errorMessage": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Recorded (JSON)
+
 ---
 
-### GET /api/skill/dialog/session/:session_id
+### POST /api/node/:nodeId/retry
 
-获取会话完整状态（消息历史、媒体上下文、任务列表），用于恢复对话。
+Retry a failed node
 
-**Example:**
-```bash
-curl http://localhost:8080/api/skill/dialog/session/uuid-string
-```
+**Parameters:**
 
-**Response** `200`:
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Responses:**
+
+- **200** — Retry initiated (JSON)
+
+---
+
+## 9. Orchestrator
+
+### GET /api/task/:taskId/progress
+
+Get task execution progress
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Task progress (JSON)
+
+---
+
+### GET /api/task/:taskId
+
+Get task with node details
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Task + nodes (JSON)
+
+---
+
+### POST /api/task/:taskId/pause
+
+Pause a running task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "session_id": "uuid-string",
-    "messages": [...],
-    "media_context": {...},
-    "task_ids": ["20260502131237-b8b8b8b8"],
-    "terminated": false,
-    "created_at": "2026-05-02T13:12:37Z"
-  }
+  "reason": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Paused (JSON)
+
 ---
 
-### POST /api/skill/dialog/session/:session_id/chat
+### POST /api/task/:taskId/resume
 
-发送对话消息。系统会结合会话历史 + 媒体上下文 + 工具清单生成 DAG，通过 Orchestrator 执行后返回结果。
+Resume a paused task
 
-**Content-Type:** `application/json`
+**Parameters:**
 
-**Request Body:**
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `message` | string | **Yes** | 用户消息 |
+**Responses:**
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/skill/dialog/session/uuid-string/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "根据上传的图片生成标题和简介"}'
+- **200** — Resumed (JSON)
+
+---
+
+### GET /api/task/:taskId/context
+
+Get context records for task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Context records (JSON)
+
+---
+
+### GET /api/task/:taskId/pause-reason
+
+Get task pause reason
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Pause reason (JSON)
+
+---
+
+### POST /api/task/:taskId/fail
+
+Immediately fail a task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Failed (JSON)
+
+---
+
+### POST /api/task/:taskId/dag
+
+Submit a DAG to a task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/DAGRequest" }
 ```
 
-**Response** `200`:
+**Responses:**
+
+- **200** — DAG submitted (JSON)
+
+---
+
+### POST /api/task/create
+
+Create a new empty task
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Task created (JSON)
+
+---
+
+## 10. Publish
+
+### POST /api/publish
+
+Submit content for multi-platform publishing
+
+**Request body:** Optional (Content-Type: `multipart/form-data`)
+
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "reply": "内容已生成！",
-    "fields": {
-      "title": "生成的标题",
-      "description": "生成的简介",
-      "body": "生成的正文",
-      "keywords": ["关键词1", "关键词2"],
-      "task_id": "20260502131237-b8b8b8b8"
-    }
-  }
+  "content_type": "string",
+  "platforms": "string",
+  "title": "string",
+  "description": "string",
+  "keywords": "string",
 }
 ```
 
+**Responses:**
+
+- **200** — Task created (JSON)
+- **400** — Missing required fields (JSON)
+
 ---
 
-### GET /api/skill/dialog/session/:session_id/progress
+## 11. Skills
 
-查询会话当前执行进度。
+### GET /api/skills/catalog
 
-**Example:**
-```bash
-curl http://localhost:8080/api/skill/dialog/session/uuid-string/progress
-```
+Get skill catalog
 
-**Response** `200`:
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `includeHidden` | query | `boolean` | No | Include hidden skills |
+
+**Responses:**
+
+- **200** — Catalog (JSON)
+
+---
+
+### POST /api/skills/:name/:version/compile
+
+Compile skill to DAG
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `name` | path | `string` | **Yes** | Skill name |
+| `version` | path | `string` | **Yes** | Skill version |
+
+**Responses:**
+
+- **200** — Compiled DAG (JSON)
+
+---
+
+### GET /api/skills
+
+List all loaded skills
+
+**Responses:**
+
+- **200** — Skills list (JSON)
+
+---
+
+### POST /api/skills/route
+
+Route a brief to a skill
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "status": "EXECUTING",
-    "task_id": "20260502131237-b8b8b8b8"
-  }
+  "brief": "string",
 }
 ```
 
-**Status Values:** `IDLE`, `EXECUTING`, `TERMINATED`
+**Responses:**
+
+- **200** — Route result (JSON)
 
 ---
 
-### POST /api/skill/dialog/session/:session_id/terminate
+### GET /api/skills/:name/:version
 
-终止会话。
+Get skill detail
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/skill/dialog/session/uuid-string/terminate
-```
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `name` | path | `string` | **Yes** | Skill name |
+| `version` | path | `string` | **Yes** | Skill version |
+
+**Responses:**
+
+- **200** — Skill detail (JSON)
+- **404** — Not found (JSON)
 
 ---
 
-## 11. Tool Registry API
+## 12. Stages
 
-工具注册表 API，用于查询、注册、注销工具。工具清单存储在 DB（`tool_manifests` 表）中，Redis 缓存加速查询（TTL 5分钟），启动时自动同步 builtin 工具。AI 助手通过此 API 获取系统可用工具完整信息。
+### POST /api/video-projects/:id/stages/:stage/approve
 
-### GET /api/tools — 列出所有工具
+Approve a stage
 
-返回所有已注册工具（builtin + external）的完整 Manifest。
+**Parameters:**
 
-**Example:**
-```bash
-curl http://localhost:8080/api/tools
-```
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `stage` | path | `string` | **Yes** | Stage name |
 
-**Response** `200`:
+**Request body:** Optional (Content-Type: `application/json`)
+
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": [
-    {
-      "name": "chat_generate",
-      "description": "Conversational content generation with full message history support",
-      "type": "builtin",
-      "parameters": { "messages": { "type": "array", "description": "...", "required": true } },
-      "output": { "content": { "type": "string", "description": "..." } },
-      "sandbox": false
-    }
-  ]
+  "runId": "string",
+  "output": {},
+  "comment": "string",
 }
 ```
 
----
+**Responses:**
 
-### GET /api/tools/:name — 获取单个工具详情
-
-**Example:**
-```bash
-curl http://localhost:8080/api/tools/chat_generate
-```
+- **200** — Approved (JSON)
+- **409** — Stage not ready (JSON)
 
 ---
 
-### POST /api/tools/register — 注册外部工具
+## 13. Tools
 
-向系统注册一个外部工具。工具信息持久化到 DB、加入内存注册表，并立即使 Redis 缓存失效。
+### GET /api/tools
 
-**Content-Type:** `application/json`
+List all registered tools
 
-**Request Body (ToolManifest):**
+**Responses:**
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | **Yes** | 工具全局唯一名 |
-| `description` | string | **Yes** | 工具功能描述（AI 据此判断何时使用） |
-| `type` | string | **Yes** | `external`（外部 HTTP 工具） |
-| `endpoint` | string | **Yes** | HTTP 端点完整 URL |
-| `version` | string | No | 版本号 |
-| `timeout` | int | No | 超时毫秒数（默认 30000） |
-| `parameters` | object | **Yes** | 参数定义（ParamDef map） |
-| `output` | object | **Yes** | 输出字段定义（ParamDef map） |
-| `sandbox` | bool | No | 是否需要沙箱隔离 |
-| `examples` | array | No | 输入输出示例 |
+- **200** — Tool manifests (JSON)
 
-**Example:**
-```bash
-curl -X POST http://localhost:8080/api/tools/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "image_processor",
-    "description": "处理图片文件，返回图片信息",
-    "type": "external",
-    "endpoint": "http://localhost:9001/image",
-    "timeout": 10000,
-    "parameters": {
-      "image_url": { "type": "string", "description": "图片URL", "required": true }
-    },
-    "output": {
-      "width": { "type": "string", "description": "宽度" },
-      "height": { "type": "string", "description": "高度" }
-    }
-  }'
+---
+
+### GET /api/tools/:name
+
+Get tool details
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `name` | path | `string` | **Yes** | Tool name |
+
+**Responses:**
+
+- **200** — Tool manifest (JSON)
+- **404** — Tool not found (JSON)
+
+---
+
+### DELETE /api/tools/:name
+
+Deregister an external tool
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `name` | path | `string` | **Yes** | Tool name |
+
+**Responses:**
+
+- **200** — Deregistered (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### POST /api/tools/register
+
+Register an external tool
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
 ```
 
-**Response** `200`:
+**Responses:**
+
+- **200** — Registered (JSON)
+
+---
+
+## 14. Trace
+
+### GET /api/trace/:taskId
+
+Get task trace by ID
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **404** — Task not found (JSON)
+- **200** — Trace data (JSON)
+
+---
+
+### GET /api/trace/recent
+
+Get most recent task trace
+
+**Responses:**
+
+- **200** — Trace data (JSON)
+- **404** — No tasks found (JSON)
+
+---
+
+## 15. Translate
+
+### GET /api/task/:taskId/status
+
+Query translate task status
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Task status (JSON)
+
+---
+
+### POST /api/translate
+
+Translate NL prompt to DAG
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
 ```json
 {
-  "code": 200,
-  "message": "tool registered successfully",
-  "data": { "name": "image_processor", "type": "external" }
+  "prompt": "string",
 }
 ```
 
----
+**Responses:**
 
-### DELETE /api/tools/:name — 注销外部工具
-
-**Example:**
-```bash
-curl -X DELETE http://localhost:8080/api/tools/image_processor
-```
+- **200** — DAG structure (JSON)
 
 ---
 
-## 12. Built-in Tools
+### POST /api/translate/submit
 
-当前系统内置 14 个工具，启动时自动同步到 `tool_manifests` 表：
+Translate NL prompt and submit DAG
 
-| Tool Name | Type | Description | Key Parameters |
-|-----------|------|-------------|----------------|
-| `llm_api` | builtin | Call LLM API for chat completions | `prompt` / `message` / `content` |
-| `bash` | builtin | Sandboxed shell execution | `command` (string, required) |
-| `python` | builtin | Python3 code execution | `source` (string, required) |
-| `polisher` | builtin | Polish text via LLM | `text` (string, required), `polishType` (`title`/`description`) |
-| `media_analyzer` | builtin | Analyze images/videos → tags + suggestions | `media_ids`, `file_names`, `prompt` |
-| `content_generator` | builtin | Generate full content package from media | `prompt`, `platform`, `style`, `media_ids` |
-| `content_checker` | builtin | Compliance check (sensitive words, ad law) | `content`, `title`, `platform` |
-| `platform_adapter` | builtin | Adapt content for 7 social platforms | `source_content`, `target_platform`, `title` |
-| `chat_generate` | builtin | Multi-turn conversational content generation | `messages` (array, required) |
-| `chat_revise` | builtin | Revise title/desc/keywords via NL instruction | `message` (string, required) |
-| `video_metadata` | builtin | Download video + extract metadata (duration, resolution, frame rate, codec, audio) | `media_id` (string, required) |
-| `video_analyzer` | builtin | Extract keyframes (ffmpeg scene detection) + transcribe audio (Whisper) | `cached_video_path` or `media_id` |
-| `video_copy_generator` | builtin | Generate platform-adapted short-video titles, copy, and keywords via multimodal LLM | `platform` (douyin/xiaohongshu/bilibili/kuaishou) |
-| `external` | builtin | Proxy to registered external tools | `tool` (external tool name) |
+**Request body:** **Required** (Content-Type: `application/json`)
 
----
-
-## 13. Error Responses
-
-**400 Bad Request:**
 ```json
 {
-  "code": 400,
-  "message": "invalid request body",
-  "data": null
+  "prompt": "string",
 }
 ```
 
-**500 Internal Server Error:**
+**Responses:**
+
+- **200** — Result (JSON)
+
+---
+
+## 16. Video Projects
+
+### GET /api/video-projects/:id
+
+Get project detail
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Project (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### DELETE /api/video-projects/:id
+
+Archive a project (soft delete)
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Archived (JSON)
+
+---
+
+### PATCH /api/video-projects/:id
+
+Update a project
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Updated (JSON)
+
+---
+
+### GET /api/video-projects
+
+List video projects
+
+**Responses:**
+
+- **200** — Projects list (JSON)
+
+---
+
+### POST /api/video-projects
+
+Create a video project
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Created (JSON)
+
+---
+
+## 17. Workflow Runs
+
+### POST /api/video-projects/:id/workflow-runs
+
+Create a workflow run
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
 ```json
 {
-  "code": 500,
-  "message": "database connection failed",
-  "data": null
+  "templateId": "string",
+  "templateVersion": "string",
+  "input": {},
 }
 ```
+
+**Responses:**
+
+- **200** — Run created (JSON)
+
+---
+
+### GET /api/video-projects/:id/workflow-runs/:rid
+
+Get run detail
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `rid` | path | `string` | **Yes** | Run identifier |
+
+**Responses:**
+
+- **200** — Run detail (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### POST /api/video-projects/:id/workflow-runs/:rid/cancel
+
+Cancel a run
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `rid` | path | `string` | **Yes** | Run identifier |
+
+**Responses:**
+
+- **200** — Cancelled (JSON)
+
+---
+
+### POST /api/video-projects/:id/workflow-runs/:rid/pause
+
+Pause a run
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `rid` | path | `string` | **Yes** | Run identifier |
+
+**Responses:**
+
+- **200** — Paused (JSON)
+
+---
+
+## 18. Workflows
+
+### DELETE /api/workflows/:id
+
+Delete a template
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Template identifier |
+
+**Responses:**
+
+- **200** — Deleted (JSON)
+
+---
+
+### GET /api/workflows/:id
+
+Get template detail
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Template identifier |
+
+**Responses:**
+
+- **200** — Template (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### PUT /api/workflows/:id
+
+Update a template
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Template identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Updated (JSON)
+
+---
+
+### POST /api/workflows/:id/instantiate
+
+Instantiate template → task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Template identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Task created (JSON)
+
+---
+
+### GET /api/workflows
+
+List workflow templates
+
+**Responses:**
+
+- **200** — Templates (JSON)
+
+---
+
+### POST /api/workflows
+
+Create a workflow template
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Created (JSON)
+
+---
+

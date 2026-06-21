@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 	"github.com/tangying-ai/aios-core/internal/core/translator/service"
 )
 
@@ -30,17 +31,17 @@ func (h *TranslatorHandler) Translate(c *gin.Context) {
 		Prompt string `json:"prompt" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	dag, err := h.nlService.TranslateToDag(c.Request.Context(), request.Prompt)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, dag)
+	httpx.OK(c, dag)
 }
 
 func (h *TranslatorHandler) TranslateAndSubmit(c *gin.Context) {
@@ -48,17 +49,17 @@ func (h *TranslatorHandler) TranslateAndSubmit(c *gin.Context) {
 		Prompt string `json:"prompt" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	result, err := h.nlService.TranslateAndSubmit(c.Request.Context(), request.Prompt)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, result)
+	httpx.OK(c, result)
 }
 
 func (h *TranslatorHandler) GetTaskStatus(c *gin.Context) {
@@ -66,15 +67,15 @@ func (h *TranslatorHandler) GetTaskStatus(c *gin.Context) {
 
 	result, err := h.nlService.GetTaskStatus(c.Request.Context(), taskID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, result)
+	httpx.OK(c, result)
 }
 
 func (h *TranslatorHandler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"status":  "UP",
 		"service": "nl-translator",
 	})

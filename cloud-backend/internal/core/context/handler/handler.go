@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 	"github.com/tangying-ai/aios-core/internal/core/context/service"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
@@ -32,11 +33,11 @@ func (h *ContextHandler) GetContextForTask(c *gin.Context) {
 
 	contexts, err := h.contextService.GetContextForTask(c.Request.Context(), taskID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, contexts)
+	httpx.OK(c, contexts)
 }
 
 func (h *ContextHandler) GetLatestSnapshot(c *gin.Context) {
@@ -44,15 +45,15 @@ func (h *ContextHandler) GetLatestSnapshot(c *gin.Context) {
 
 	snapshot, err := h.contextService.GetLatestSnapshotForNode(c.Request.Context(), nodeID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if snapshot == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No snapshot found"})
+		httpx.Fail(c, http.StatusNotFound, "No snapshot found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"snapshot": snapshot})
+	httpx.OK(c, gin.H{"snapshot": snapshot})
 }
 
 func (h *ContextHandler) RestoreFromSnapshot(c *gin.Context) {
@@ -60,15 +61,15 @@ func (h *ContextHandler) RestoreFromSnapshot(c *gin.Context) {
 
 	result, err := h.contextService.RestoreNodeFromSnapshot(c.Request.Context(), nodeID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if result == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No snapshot found"})
+		httpx.Fail(c, http.StatusNotFound, "No snapshot found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"snapshot": result})
+	httpx.OK(c, gin.H{"snapshot": result})
 }
 
 func (h *ContextHandler) RecordContext(c *gin.Context) {
@@ -79,22 +80,22 @@ func (h *ContextHandler) RecordContext(c *gin.Context) {
 		Message string `json:"message"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	err := h.contextService.RecordContext(c.Request.Context(), request.TaskID, request.NodeID,
 		model.ContextType(request.Type), "", request.Message, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Context recorded"})
+	httpx.OKWith(c, "success", gin.H{"message": "Context recorded"})
 }
 
 func (h *ContextHandler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"status":  "UP",
 		"service": "ai-context",
 	})

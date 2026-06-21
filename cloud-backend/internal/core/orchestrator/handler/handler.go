@@ -8,6 +8,7 @@ import (
 	contextSvc "github.com/tangying-ai/aios-core/internal/core/context/service"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
+	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 )
 
 type OrchestratorHandler struct {
@@ -56,17 +57,17 @@ func (h *OrchestratorHandler) RegisterRoutes(r *gin.Engine) {
 func (h *OrchestratorHandler) CreateTask(c *gin.Context) {
 	var request map[string]interface{}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	task, err := h.orchestratorService.CreateTask(c.Request.Context(), request)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"taskId": task.ID,
 		"status": task.Status,
 	})
@@ -77,16 +78,16 @@ func (h *OrchestratorHandler) SubmitDAG(c *gin.Context) {
 
 	var dagReq model.DAGRequest
 	if err := c.ShouldBindJSON(&dagReq); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.orchestratorService.SubmitDAG(c.Request.Context(), taskID, &dagReq); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"taskId":  taskID,
 		"message": "DAG submitted successfully",
 	})
@@ -97,15 +98,15 @@ func (h *OrchestratorHandler) GetTask(c *gin.Context) {
 
 	result, err := h.orchestratorService.GetTaskWithDetails(c.Request.Context(), taskID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if result == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		httpx.Fail(c, http.StatusNotFound, "Task not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, result)
+	httpx.OK(c, result)
 }
 
 func (h *OrchestratorHandler) GetTaskProgress(c *gin.Context) {
@@ -113,19 +114,15 @@ func (h *OrchestratorHandler) GetTaskProgress(c *gin.Context) {
 
 	result, err := h.orchestratorService.GetTaskProgress(c.Request.Context(), taskID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if result == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Task not found"})
+		httpx.Fail(c, http.StatusNotFound, "Task not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "success",
-		"data":    result,
-	})
+	httpx.OK(c, result)
 }
 
 func (h *OrchestratorHandler) GetTaskContext(c *gin.Context) {
@@ -133,11 +130,11 @@ func (h *OrchestratorHandler) GetTaskContext(c *gin.Context) {
 
 	contexts, err := h.contextService.GetContextForTask(c.Request.Context(), taskID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, contexts)
+	httpx.OK(c, contexts)
 }
 
 func (h *OrchestratorHandler) OnNodeSuccess(c *gin.Context) {
@@ -145,16 +142,16 @@ func (h *OrchestratorHandler) OnNodeSuccess(c *gin.Context) {
 
 	var output map[string]interface{}
 	if err := c.ShouldBindJSON(&output); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.stateMachine.OnSuccess(c.Request.Context(), nodeID, output); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Node success recorded"})
+	httpx.OKWith(c, "success", gin.H{"message": "Node success recorded"})
 }
 
 func (h *OrchestratorHandler) OnNodeFailure(c *gin.Context) {
@@ -162,7 +159,7 @@ func (h *OrchestratorHandler) OnNodeFailure(c *gin.Context) {
 
 	var request map[string]string
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -172,11 +169,11 @@ func (h *OrchestratorHandler) OnNodeFailure(c *gin.Context) {
 	}
 
 	if err := h.stateMachine.OnFailure(c.Request.Context(), nodeID, errorMessage); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Node failure recorded"})
+	httpx.OKWith(c, "success", gin.H{"message": "Node failure recorded"})
 }
 
 func (h *OrchestratorHandler) GetLatestSnapshot(c *gin.Context) {
@@ -184,15 +181,15 @@ func (h *OrchestratorHandler) GetLatestSnapshot(c *gin.Context) {
 
 	snapshot, err := h.contextService.GetLatestSnapshotForNode(c.Request.Context(), nodeID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if snapshot == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No snapshot found"})
+		httpx.Fail(c, http.StatusNotFound, "No snapshot found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"nodeId":   nodeID,
 		"snapshot": snapshot,
 	})
@@ -203,15 +200,15 @@ func (h *OrchestratorHandler) RestoreFromSnapshot(c *gin.Context) {
 
 	result, err := h.contextService.RestoreNodeFromSnapshot(c.Request.Context(), nodeID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if result == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No snapshot found"})
+		httpx.Fail(c, http.StatusNotFound, "No snapshot found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"nodeId":   nodeID,
 		"message":  "Node snapshot retrieved",
 		"snapshot": result,
@@ -230,11 +227,11 @@ func (h *OrchestratorHandler) PauseTask(c *gin.Context) {
 	}
 
 	if err := h.taskExecutionCtrl.PauseTask(c.Request.Context(), taskID, reason); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"taskId":  taskID,
 		"message": "Task paused successfully",
 	})
@@ -244,11 +241,11 @@ func (h *OrchestratorHandler) FailTask(c *gin.Context) {
 	taskID := c.Param("taskId")
 
 	if err := h.taskExecutionCtrl.FailTask(c.Request.Context(), taskID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"taskId":  taskID,
 		"message": "Task failed successfully",
 	})
@@ -258,11 +255,11 @@ func (h *OrchestratorHandler) ResumeTask(c *gin.Context) {
 	taskID := c.Param("taskId")
 
 	if err := h.taskExecutionCtrl.ResumeTask(c.Request.Context(), taskID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"taskId":  taskID,
 		"message": "Task resumed successfully",
 	})
@@ -272,11 +269,11 @@ func (h *OrchestratorHandler) RetryNode(c *gin.Context) {
 	nodeID := c.Param("nodeId")
 
 	if err := h.taskExecutionCtrl.RetryNode(c.Request.Context(), nodeID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"nodeId":  nodeID,
 		"message": "Node retry initiated",
 	})
@@ -286,7 +283,7 @@ func (h *OrchestratorHandler) GetPauseReason(c *gin.Context) {
 	taskID := c.Param("taskId")
 
 	reason := h.taskExecutionCtrl.GetTaskPauseReason(c.Request.Context(), taskID)
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"taskId": taskID,
 		"reason": reason,
 	})
@@ -295,24 +292,24 @@ func (h *OrchestratorHandler) GetPauseReason(c *gin.Context) {
 func (h *OrchestratorHandler) SubmitDAGFromNL(c *gin.Context) {
 	var dagPayload map[string]interface{}
 	if err := c.ShouldBindJSON(&dagPayload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	input := map[string]interface{}{"source": "nl-translator"}
 	task, err := h.orchestratorService.CreateTask(c.Request.Context(), input)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	dagReq := convertToDAGRequest(dagPayload)
 	if err := h.orchestratorService.SubmitDAG(c.Request.Context(), task.ID, dagReq); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"taskId":  task.ID,
 		"status":  task.Status,
 		"message": "DAG submitted successfully",
@@ -320,7 +317,7 @@ func (h *OrchestratorHandler) SubmitDAGFromNL(c *gin.Context) {
 }
 
 func (h *OrchestratorHandler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
+	httpx.OK(c, gin.H{
 		"status":  "UP",
 		"service": "ai-orchestrator",
 	})

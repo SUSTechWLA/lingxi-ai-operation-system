@@ -1,9 +1,9 @@
 package workflow
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
+
+	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 )
 
 // Handler serves HTTP endpoints for workflow templates.
@@ -28,11 +28,11 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 }
 
 func ok(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": data})
+	httpx.OK(c, data)
 }
 
 func fail(c *gin.Context, status int, msg string) {
-	c.JSON(status, gin.H{"code": status, "message": msg, "data": nil})
+	httpx.Fail(c, status, msg)
 }
 
 // GET /api/workflows

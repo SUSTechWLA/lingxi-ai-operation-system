@@ -1,15 +1,14 @@
 package handler
 
 import (
-	"encoding/json"
 	"io"
-	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
-	bidmodel "github.com/tangying-ai/aios-core/internal/agents/bid/model"
+	"github.com/tangying-ai/aios-core/internal/agents/bid/model"
 	bidsvc "github.com/tangying-ai/aios-core/internal/agents/bid/service"
+	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 )
 
 // BidHandler handles HTTP requests for bid/tender generation.
@@ -47,17 +46,17 @@ func (h *BidHandler) RegisterRoutes(r *gin.Engine) {
 }
 
 func ok(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "success", "data": data})
+	httpx.OK(c, data)
 }
 
 func fail(c *gin.Context, status int, msg string) {
-	c.JSON(status, gin.H{"code": status, "message": msg, "data": nil})
+	httpx.Fail(c, status, msg)
 }
 
 // ── Projects ──
 
 func (h *BidHandler) CreateProject(c *gin.Context) {
-	var req bidmodel.CreateProjectRequest
+	var req model.CreateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, 400, "invalid request: "+err.Error())
 		return
@@ -96,7 +95,7 @@ func (h *BidHandler) ListProjects(c *gin.Context) {
 
 func (h *BidHandler) UpdateProject(c *gin.Context) {
 	id := c.Param("id")
-	var req bidmodel.UpdateProjectRequest
+	var req model.UpdateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, 400, "invalid request: "+err.Error())
 		return
@@ -206,7 +205,7 @@ func (h *BidHandler) RejectChapter(c *gin.Context) {
 	projectID := c.Param("id")
 	chID := c.Param("chId")
 
-	var req bidmodel.RejectChapterRequest
+	var req model.RejectChapterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, 400, "comment is required")
 		return
@@ -236,7 +235,7 @@ func (h *BidHandler) RegenerateChapter(c *gin.Context) {
 
 func (h *BidHandler) ExportDocument(c *gin.Context) {
 	_ = c.Param("id") // project ID for export
-	var req bidmodel.ExportRequest
+	var req model.ExportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		req.Format = "docx"
 	}
@@ -291,6 +290,3 @@ func (h *BidHandler) ListTemplates(c *gin.Context) {
 	}
 	ok(c, gin.H{"templates": templates})
 }
-
-// ensure json import is used
-var _ = json.Marshal

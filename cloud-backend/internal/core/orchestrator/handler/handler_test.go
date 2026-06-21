@@ -27,14 +27,21 @@ func TestOrchestratorHandler_Health(t *testing.T) {
 		t.Errorf("Expected 200, got %d", w.Code)
 	}
 
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-
-	if response["status"] != "UP" {
-		t.Errorf("Expected status UP, got %v", response["status"])
+	var envelope struct {
+		Code    int                    `json:"code"`
+		Message string                 `json:"message"`
+		Data    map[string]interface{} `json:"data"`
 	}
-	if response["service"] != "ai-orchestrator" {
-		t.Errorf("Expected service ai-orchestrator, got %v", response["service"])
+	json.Unmarshal(w.Body.Bytes(), &envelope)
+
+	if envelope.Data == nil {
+		t.Fatalf("Expected envelope with data, got nil")
+	}
+	if envelope.Data["status"] != "UP" {
+		t.Errorf("Expected status UP, got %v", envelope.Data["status"])
+	}
+	if envelope.Data["service"] != "ai-orchestrator" {
+		t.Errorf("Expected service ai-orchestrator, got %v", envelope.Data["service"])
 	}
 }
 

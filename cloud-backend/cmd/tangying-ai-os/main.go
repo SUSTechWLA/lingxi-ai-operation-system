@@ -38,6 +38,7 @@ import (
 	workerService "github.com/tangying-ai/aios-core/internal/core/worker/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
+	"github.com/tangying-ai/aios-core/internal/core/apispec"
 
 	bidHandler "github.com/tangying-ai/aios-core/internal/agents/bid/handler"
 	bidRepo "github.com/tangying-ai/aios-core/internal/agents/bid/repository"
@@ -402,10 +403,14 @@ func main() {
 		zap.L().Info("Video project and workflow run services registered")
 	}
 
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler: r,
-	}
+		srv := &http.Server{
+			Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+			Handler: r,
+		}
+
+		// OpenAPI spec + Swagger UI (always up-to-date with registered routes)
+		apispec.Register(r, apispec.BuildCloudSpec())
+		zap.L().Info("OpenAPI docs and Swagger UI registered at /docs")
 
 	go func() {
 		zap.L().Info("Server starting", zap.Int("port", cfg.Server.Port))

@@ -67,6 +67,23 @@ sandbox-run:
 sandbox-clean:
 	cd sandbox && cargo clean
 
+gen-docs: backend-build
+	@echo "Generating API docs from OpenAPI spec..."
+	go run ./cmd/gen-apidocs
+	@echo "Done — docs/API_REFERENCE.md + frontend api-types.generated.ts"
+
+gen-ts: gen-docs
+	@echo "TypeScript types regenerated (via gen-docs)."
+
+api-docs-check:
+	@echo "Checking API docs are up-to-date..."
+	cp docs/API_REFERENCE.md /tmp/api-ref-current.md
+	cp ../frontend/src/utils/api-types.generated.ts /tmp/api-types-current.ts
+	go run ./cmd/gen-apidocs
+	diff docs/API_REFERENCE.md /tmp/api-ref-current.md || (echo "ERROR: API_REFERENCE.md is out of date. Run: make gen-docs" && exit 1)
+	diff ../frontend/src/utils/api-types.generated.ts /tmp/api-types-current.ts || (echo "ERROR: api-types.generated.ts is out of date. Run: make gen-docs" && exit 1)
+	@echo "All docs up-to-date."
+
 frontend-lint:
 	cd ../frontend && npm run lint
 

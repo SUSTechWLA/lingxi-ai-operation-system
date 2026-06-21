@@ -65,3 +65,42 @@ cd ../frontend && npm run build
 - Do not store LLM API keys in the local desktop package.
 - Local logs must be uploaded only after user action/authorization.
 - Keep cloud business orchestration in `cloud-backend`.
+
+## API Documentation (OpenAPI)
+
+API docs are generated from the authoritative OpenAPI spec — not hand-written.
+The spec lives alongside the routes in code and is the single source of truth.
+
+### Live Swagger UIs
+
+- **Cloud backend:** start the server and open `http://localhost:8080/docs`
+  - Raw spec: `http://localhost:8080/openapi.json`
+- **Local agent:** start the agent and open `http://localhost:9090/api/local/docs`
+  - Raw spec: `http://localhost:9090/api/local/openapi.json`
+
+### Regenerating docs
+
+```bash
+# Cloud backend (markdown + TypeScript types)
+cd cloud-backend && make gen-docs
+
+# Local agent (markdown only)
+cd local-backend && go run ./cmd/gen-local-apidocs
+```
+
+### Keeping docs in sync
+
+When you add/change/remove an API endpoint:
+
+1. Update the handler's `RegisterRoutes` (Gin) or `routes()` (net/http).
+2. Update `cloud-backend/internal/core/apispec/cloud_spec.go` (cloud) or
+   `local-backend/internal/localagent/openapi.go` (local) to match.
+3. Run `make gen-docs` to regenerate the markdown and TypeScript types.
+4. Run `make api-docs-check` to verify nothing drifted (add to pre-commit/CI).
+
+The generated markdown files (`cloud-backend/docs/API_REFERENCE.md`,
+`local-backend/docs/API_REFERENCE.md`) and the generated TypeScript file
+(`frontend/src/utils/api-types.generated.ts`) carry a `DO NOT EDIT` banner —
+they are always overwritten by the generator. The frontend's hand-crafted
+`frontend/src/utils/types.ts` remains the authoritative TS source and should
+be manually reconciled when the generated file changes.
