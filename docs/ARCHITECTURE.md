@@ -1,7 +1,7 @@
 # 躺营 AIOS 产品架构设计说明文档
 
-> 版本：v3.0（本地执行面 + 云端控制面）
-> 最后更新：2026-06-20
+> 版本：v3.1（本地执行面 + 云端控制面）
+> 最后更新：2026-06-21
 > 适用对象：新加入的后端 / 前端 / 部署工程师
 > 配套文档：[README.md](../README.md)、[AGENTS.md](../AGENTS.md)、[docs/upgrade/video-creation-v1/](upgrade/video-creation-v1/)
 
@@ -99,6 +99,7 @@ cloud-backend/  # 云端 AIOS Core，包含原 Go 编排平台和云端部署
 │  │  orchestrator │ workflow │ skillruntime │ artifact   │ │
 │  │  worker/tool  │ modelgateway │ translator │ context  │ │
 │  │  media │ localrunner │ outbox │ eventbus │ config    │ │
+│  │  apispec │ health │ redis │ database │ logger │ model │ │
 │  └───────────────────┬─────────────────────────────────┘ │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -373,7 +374,54 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 
 目录：`internal/core/localrunner/`。为 Electron 桌面端做本地渲染/命令执行的预留协议：`local_runners`（注册+心跳）和 `local_jobs`（PENDING→CLAIMED→RUNNING→COMPLETED/FAILED，带 5 分钟租约 + SKIP LOCKED 抢占）。**当前未接 HTTP 路由**，是 P7 预留层。
 
-### 4.8 其他核心包
+### 4.8 apispec — OpenAPI 规范自动生成
+
+目录：`internal/core/apispec/`。
+
+基于 Gin 路由树自动生成 OpenAPI 3.0 规范，并通过 Swagger UI 和 TypeScript 代码生成工具输出可消费的 API 文档和前端类型。
+
+| 文件 | 职责 |
+|------|------|
+| `cloud_spec.go` | `BuildCloudSpec()` — 遍历所有已注册路由，构建 OpenAPI 3.0 规范对象（含请求/响应 schema） |
+| `register.go` | `Register(r, spec)` — 在 Gin 路由上挂载 Swagger UI（`/docs`）和 `/api/openapi.json` 端点 |
+| `cloud_schemas.go` | 所有 API 的请求/响应 JSON Schema 定义（统一 `{code, message, data}` 信封） |
+| `builder.go` | OpenAPI spec 对象构建辅助函数 |
+| `swaggerui.go` | 内嵌 Swagger UI HTML（无需外部 CDN） |
+| `tscodegen.go` | 从 OpenAPI spec 生成前端 TypeScript 类型定义（`api-types.generated.ts`） |
+| `markdown.go` | 从 OpenAPI spec 生成 API 参考文档（`API_REFERENCE.md`） |
+| `schema.go` / `types.go` | 内部类型和 schema 工具 |
+
+**设计原则：** 规范完全由代码路由注册驱动，不手写 OpenAPI YAML/JSON，避免代码与文档不同步。CI 可通过 `make api-docs-check` 校验生成文件是否过期。
+
+### 4.9 health — 就绪健康检查
+
+目录：`internal/core/health/`。
+
+提供带依赖探测的就绪检查端点（readiness probe），供 Docker compose、Kubernetes、Electron 桌面端使用。
+
+| 文件 | 职责 |
+|------|------|
+| `handler.go` | `GET /api/health/ready` — 返回 `{"status":"UP/DOWN","service":"tangying-ai-os","dependencies":{...}}`；每个依赖并发探测，2s 超时 |
+| `handler_test.go` | 就绪检查单元测试 |
+
+**依赖探测项：**
+- `postgres` — pgx pool ping
+- `redis` — redis client ping
+- `kafka` — sarama client 连接 broker + 获取 controller
+
+任一依赖不健康时 HTTP 状态码为 503，`status` 字段为 `"DOWN"`，对应依赖的 `status` 也为 `"DOWN"` 并附带 `error` 信息。所有依赖健康时返回 200 + `"UP"`。
+
+### 4.10 redis — Redis 客户端
+
+目录：`internal/core/redis/`。
+
+| 文件 | 职责 |
+|------|------|
+| `redis.go` | `NewClient(cfg)` — 创建 go-redis 客户端，用于会话管理、工具清单缓存等 |
+
+封装了 go-redis 客户端初始化，统一连接配置（地址、密码、DB、超时），供 `chat.SessionManager` 和 `ToolManifestService` 使用。
+
+### 4.11 其他核心包
 
 | 包 | 职责要点 |
 |----|---------|
@@ -381,7 +429,7 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `context` | 审计：`ContextService.HandleEvent` 从 Kafka 事件自动记录任务/节点生命周期；路由 `/api/task/:id/context`、`/api/context/record` |
 | `media` | MinIO 媒体管理：`MediaHandler`（upload/list/get/tags）、`StorageService`（自动建桶、presigned URL）、路由 `/api/media/*`。默认不用于保存桌面用户生成资产 |
 | `model` + `model/repository` | 数据模型（Task/Node/Context/MediaAsset/ToolManifest）+ pgx 仓储 |
-| `outbox` | `Relay`（100ms ticker）读 outbox 表发 Kafka 成功后删除；`SaveEvent` 写 outbox |
+| `outbox` | `Relay`（100ms ticker）读 outbox 表发 Kafka 成功后删除；`SaveEvent` 写 outbox。v3.1 新增接口抽象层（`EventSaver`/`EventPublisher`/`OutboxStore`）支持内存 mock 测试；Relay 新增指数退避重试 + DLQ 死信队列 |
 | `eventbus` | sarama Producer/Consumer；Topic 常量 |
 | `config` | Viper 加载 .env，`VideoConfig` 控制视频 feature flags |
 | `database` | pgx 池 + `RunMigrations`（`CREATE TABLE IF NOT EXISTS` + `ALTER`） |
@@ -641,7 +689,21 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
 ### 8.7 健康检查
 
-`GET /api/health` — Docker compose / Electron 用其判活。
+`GET /api/health/ready` — 就绪检查（readiness probe），供 Docker compose / Kubernetes / Electron 判活。返回格式：
+
+```json
+{
+  "status": "UP",
+  "service": "tangying-ai-os",
+  "dependencies": {
+    "postgres": {"status": "UP"},
+    "redis":    {"status": "UP"},
+    "kafka":    {"status": "UP"}
+  }
+}
+```
+
+任一依赖不健康时 HTTP 状态码 503，`status` 为 `"DOWN"`，对应依赖项附带 `"error"` 字段说明原因。所有依赖探测并发执行，2 秒超时。
 
 ---
 
@@ -739,7 +801,14 @@ axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CL
 
 ### 10.3 Outbox 可靠投递
 
-`SaveEvent` 先写 `outbox` 表 → `Relay`（100ms ticker）读 pending 发 Kafka 成功后删除。保证 Kafka 抖动时不丢事件。
+`SaveEvent` 先写 `outbox` 表 → `Relay`（100ms ticker，`DefaultRelayConfig()`）读 pending 事件（`SELECT ... FOR UPDATE` 行锁，防并发重复投递）→ 发 Kafka → 成功后删除。投递失败按指数退避重试（`IncrementRetry`），超过最大重试次数的事件移入死信队列（`MoveToDLQ`）。
+
+**接口抽象（`interfaces.go`）：**
+- `EventSaver` — 事件写入接口
+- `EventPublisher` — Kafka 发布接口（`eventbus.Producer` 实现）
+- `OutboxStore` — DB 操作接口（`FetchPending` / `Delete` / `IncrementRetry` / `MoveToDLQ`），支持内存 mock 实现，便于单元测试
+
+**测试覆盖：** `relay_test.go`（~600 行），覆盖重试、DLQ、优雅关闭等场景。
 
 ### 10.4 幂等
 
@@ -801,7 +870,7 @@ docker compose -f docker-compose.cloud.yml up -d
 | 服务 | 镜像 | 端口 |
 |------|------|------|
 | nginx | nginx:alpine | 80/443（反代 + SPA fallback + SSE 长连） |
-| backend | 本地 Dockerfile | 8080（healthcheck: `/api/health`） |
+| backend | 本地 Dockerfile | 8080（healthcheck: `/api/health/ready`） |
 | postgres | postgres:16-alpine | 5432 |
 | redis | redis:7-alpine | 6379 |
 | redpanda | redpandadata/redpanda | 9092/19092 |
@@ -883,7 +952,7 @@ make sandbox-build    # 构建 Rust 沙箱
 ### 🟡 P2 — 可靠性与可观测
 
 8. **引入正式 DB 迁移工具**
-   - 现在用 `CREATE TABLE IF NOT EXISTS` + `ALTER ADD COLUMN IF NOT EXISTS` 全堆在 `RunMigrations` 里（已 360 行）。建议上 `golang-migrate` 或 `goose`，支持版本回退、CI 校验、生产灰度。
+   - 现在用 `CREATE TABLE IF NOT EXISTS` + `ALTER ADD COLUMN IF NOT EXISTS` 全堆在 `RunMigrations` 里（已 ~400 行）。建议上 `golang-migrate` 或 `goose`，支持版本回退、CI 校验、生产灰度。
 
 9. **SSE 实时进度推送**
    - nginx 已为 `/api/progress/stream` 关闭缓冲，但后端该端点未实现，前端只能 3s 轮询 artifacts。实现 SSE 后体验和负载都更好（KNOWN_LIMITATIONS 也提到）。
@@ -917,4 +986,4 @@ make sandbox-build    # 构建 Rust 沙箱
 
 ---
 
-> 本文档基于截至 2026-06-19 的代码现状（分支 `develop_go`）撰写，所有路径、接口、表结构均经源码核对。如代码与本文档冲突，**以代码为准**并及时回更本文档。
+> 本文档基于截至 2026-06-21 的代码现状（分支 `develop_go`）撰写，所有路径、接口、表结构均经源码核对。如代码与本文档冲突，**以代码为准**并及时回更本文档。

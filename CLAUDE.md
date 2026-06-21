@@ -78,6 +78,9 @@ cloud-backend/
       translator/                       # NL→DAG 翻译
       context/                          # 审计追踪
       media/                            # MinIO 媒体管理（云端服务资产/legacy 兼容）
+      apispec/                          # OpenAPI 3.0 自动生成 + Swagger UI + 前端类型代码生成
+      health/                           # 就绪健康检查（DB/Redis/Kafka 依赖探测）
+      redis/                            # Redis 客户端封装
       outbox/ eventbus/ config/ database/ logger/ model/
     agents/                             # 业务 Agent 层
       video/                            # 视频创作（Project/Run/审核/产物）
@@ -109,6 +112,11 @@ cd cloud-backend
 make build                    # 编译
 make run                      # 编译 + 运行
 make test                     # 跑测试
+make docker-up                # 启动 PG/Redis/Redpanda/MinIO
+make docker-down              # 停止基础设施
+make gen-docs                 # 生成 OpenAPI 文档 + 前端 TypeScript 类型
+make lint                     # golangci-lint 检查
+make fmt                      # gofmt + goimports 格式化
 go test -race ./...           # 全量 + 竞态检测
 ./scripts/test-apis.sh        # API 集成测试
 
@@ -154,6 +162,8 @@ POST /api/local/diagnostics                     # 生成诊断包
 - **事件驱动** — Kafka topics: `ai.node.ready` → `ai.node.result`（含 executed/failed）→ 状态机驱动
 - **版本化产物** — 每个 stage 产物有 version/contentHash/promptHash，支持返工闭环
 - **沙箱隔离** — Rust gRPC 沙箱执行不受信任代码（setrlimit 资源限制）
+- **就绪健康检查** — `GET /api/health/ready` 探测 PostgreSQL/Redis/Kafka 依赖状态
+- **OpenAPI 自动文档** — `/docs` Swagger UI + `/api/openapi.json`，由代码路由注册自动生成
 
 ## Feature Flags
 
