@@ -70,6 +70,13 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 			continue
 		}
 
+		// CONTROL nodes are handled by InitializeNodeReady (pauses task for review),
+		// they should NOT be published to the worker for execution.
+		if child.Type == model.NodeTypeControl {
+			zap.L().Info("Child CONTROL node is now READY (awaiting review)", zap.String("nodeId", child.ID))
+			continue
+		}
+
 		childPayload := buildEventPayload(child.Input, child.Name)
 
 		_ = dc.eventSaver.SaveEvent(ctx, "node", child.ID, eventbus.TopicNodeReady, eventbus.Event{
