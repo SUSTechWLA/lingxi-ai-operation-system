@@ -51,7 +51,7 @@ function App() {
   }, [])
 
   if (authChecking) {
-    return <div className="flex h-screen items-center justify-center bg-[#F8F7F2] text-sm text-[#60635F]">正在检查登录状态...</div>
+    return <div className="flex h-screen items-center justify-center bg-[#FFF8E8] text-sm text-[#735C3D]">正在检查登录状态...</div>
   }
 
   if (!authUser) {
@@ -93,11 +93,11 @@ function App() {
 }
 
 const PlaceholderPage: React.FC<{ title: string; description: string }> = ({ title, description }) => (
-  <div className="flex min-h-screen items-center justify-center bg-[#F8F7F2] p-8">
-    <div className="max-w-xl rounded-lg border border-[#DDDED8] bg-white p-8">
-      <p className="text-xs font-semibold uppercase text-[#00A6A6]">Coming next</p>
-      <h1 className="mt-2 text-2xl font-semibold text-[#17181A]">{title}</h1>
-      <p className="mt-3 text-sm leading-6 text-[#60635F]">{description}</p>
+  <div className="flex min-h-screen items-center justify-center bg-[#FFF8E8] p-8">
+    <div className="max-w-xl rounded-lg border border-[#EBD8A7] bg-white p-8">
+      <p className="text-xs font-semibold uppercase text-[#B76600]">Coming next</p>
+      <h1 className="mt-2 text-2xl font-semibold text-[#2B1708]">{title}</h1>
+      <p className="mt-3 text-sm leading-6 text-[#735C3D]">{description}</p>
     </div>
   </div>
 )

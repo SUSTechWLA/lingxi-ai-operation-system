@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { FiKey, FiLogIn, FiMail, FiRefreshCw, FiUser } from 'react-icons/fi'
 import { login, register, type AuthUser } from '../services/auth'
-import appIcon from '../assets/aios-icon.png'
+import { APP_ICON_PATH } from '../utils/brand'
 
 interface AuthScreenProps {
   onAuthenticated: (user: AuthUser) => void
@@ -32,20 +32,20 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
   }
 
   return (
-    <div className="min-h-screen bg-[#F8F7F2] px-6 py-8 text-[#17181A]">
+    <div className="min-h-screen bg-[#FFF8E8] px-6 py-8 text-[#2B1708]">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-5xl items-center justify-center">
-        <div className="grid w-full overflow-hidden rounded-lg border border-[#D8D9D2] bg-white shadow-sm md:grid-cols-[0.9fr_1.1fr]">
-          <div className="hidden bg-[#17181A] p-8 text-white md:flex md:flex-col md:justify-between">
+        <div className="grid w-full overflow-hidden rounded-lg border border-[#EBD8A7] bg-white shadow-sm md:grid-cols-[0.9fr_1.1fr]">
+          <div className="hidden bg-[#2B1708] p-8 text-white md:flex md:flex-col md:justify-between">
             <div>
               <div className="flex items-center gap-3">
-                <img src={appIcon} alt="AIOS" className="h-9 w-9 rounded-lg" />
+                <img src={APP_ICON_PATH} alt="躺营 AI" className="h-9 w-9 rounded-lg" />
                 <div>
                   <div className="text-base font-semibold">躺营 AI</div>
                   <div className="text-xs text-white/55">AI Operation System</div>
                 </div>
               </div>
-              <div className="mt-12 border-l border-[#D6FF4D] pl-5">
-                <p className="text-sm font-medium text-[#D6FF4D]">Cloud identity</p>
+              <div className="mt-12 border-l border-[#FFCF4A] pl-5">
+                <p className="text-sm font-medium text-[#FFCF4A]">Cloud identity</p>
                 <p className="mt-3 max-w-xs text-sm leading-6 text-white/72">
                   登录后项目、素材索引和运行记录按账号隔离；本机模型 API Key 仍只保存在桌面端。
                 </p>
@@ -56,32 +56,32 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
 
           <form onSubmit={submit} className="p-6 sm:p-8">
             <div className="md:hidden mb-8 flex items-center gap-3">
-              <img src={appIcon} alt="AIOS" className="h-9 w-9 rounded-lg" />
+              <img src={APP_ICON_PATH} alt="躺营 AI" className="h-9 w-9 rounded-lg" />
               <div>
                 <div className="text-base font-semibold">躺营 AI</div>
-                <div className="text-xs text-[#667085]">AI Operation System</div>
+                <div className="text-xs text-[#7A6142]">AI Operation System</div>
               </div>
             </div>
 
-            <div className="flex rounded-lg border border-[#E4E5DF] bg-[#F8F7F2] p-1">
+            <div className="flex rounded-lg border border-[#F0DCA6] bg-[#FFF8E8] p-1">
               <button
                 type="button"
                 onClick={() => setMode('login')}
-                className={`h-9 flex-1 rounded-md text-sm font-medium ${mode === 'login' ? 'bg-white text-[#17181A] shadow-sm' : 'text-[#667085]'}`}
+                className={`h-9 flex-1 rounded-md text-sm font-medium ${mode === 'login' ? 'bg-white text-[#2B1708] shadow-sm' : 'text-[#7A6142]'}`}
               >
                 登录
               </button>
               <button
                 type="button"
                 onClick={() => setMode('register')}
-                className={`h-9 flex-1 rounded-md text-sm font-medium ${mode === 'register' ? 'bg-white text-[#17181A] shadow-sm' : 'text-[#667085]'}`}
+                className={`h-9 flex-1 rounded-md text-sm font-medium ${mode === 'register' ? 'bg-white text-[#2B1708] shadow-sm' : 'text-[#7A6142]'}`}
               >
                 注册
               </button>
             </div>
 
             <h1 className="mt-8 text-2xl font-semibold">{mode === 'login' ? '登录账号' : '创建账号'}</h1>
-            <p className="mt-2 text-sm text-[#667085]">使用邮箱和密码进入创作台。</p>
+            <p className="mt-2 text-sm text-[#7A6142]">使用邮箱和密码进入创作台。</p>
 
             <div className="mt-8 space-y-4">
               {mode === 'register' && (
@@ -127,7 +127,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             <button
               type="submit"
               disabled={loading}
-              className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#17181A] text-sm font-semibold text-white hover:bg-black disabled:opacity-60"
+              className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#2B1708] text-sm font-semibold text-white hover:bg-black disabled:opacity-60"
             >
               {loading ? <FiRefreshCw className="h-4 w-4 animate-spin" /> : <FiLogIn className="h-4 w-4" />}
               {mode === 'login' ? '登录' : '注册并登录'}
@@ -141,9 +141,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
 
 const Field: React.FC<{ icon: React.ReactNode, label: string, children: React.ReactNode }> = ({ icon, label, children }) => (
   <label className="block">
-    <span className="text-xs font-medium text-[#667085]">{label}</span>
-    <span className="mt-1 flex items-center gap-3 rounded-lg border border-[#E1E3DD] bg-white px-3 focus-within:border-[#17181A]">
-      <span className="text-[#667085]">{icon}</span>
+    <span className="text-xs font-medium text-[#7A6142]">{label}</span>
+    <span className="mt-1 flex items-center gap-3 rounded-lg border border-[#F0DCA6] bg-white px-3 focus-within:border-[#2B1708]">
+      <span className="text-[#7A6142]">{icon}</span>
       {children}
     </span>
   </label>

@@ -9,6 +9,7 @@ import {
   type ModelCapability,
   type ModelProviderConfig,
 } from '../services/localAgent'
+import { clearModelProviderConfig, syncModelProviderConfig } from '../services/api'
 import { getElectronAPI } from '../utils/electron'
 
 const providerRows: Array<{
@@ -79,7 +80,19 @@ const DesktopPage: React.FC = () => {
     setProviderMessage(null)
     try {
       const response = await fetchModelProviderSettings()
-      setProviderSettings(mergeModelProviderSettings(response.providers))
+      const merged = mergeModelProviderSettings(response.providers)
+      setProviderSettings(merged)
+      // Sync text_to_text base URL + model to cloud (API key synced on save)
+      const t2t = merged.text_to_text
+      if (t2t?.baseUrl && t2t?.model) {
+        try {
+          await syncModelProviderConfig({
+            baseUrl: t2t.baseUrl,
+            apiKey: '',
+            model: t2t.model,
+          })
+        } catch { /* cloud sync is best-effort */ }
+      }
     } catch (error) {
       setProviderMessage({ type: 'error', text: error instanceof Error ? error.message : '读取模型设置失败' })
     } finally {
@@ -103,9 +116,44 @@ const DesktopPage: React.FC = () => {
     try {
       const response = await saveModelProviderSettings(providerSettings)
       setProviderSettings(mergeModelProviderSettings(response.providers))
-      setProviderMessage({ type: 'success', text: '模型 API 设置已保存到本地' })
+      // Sync text_to_text config to cloud backend so skill_stage_agent can call LLM.
+      const t2t = providerSettings.text_to_text
+      let cloudSynced = false
+      if (t2t?.baseUrl && t2t?.model) {
+        const payload: { baseUrl: string; apiKey?: string; model: string } = {
+          baseUrl: t2t.baseUrl,
+          model: t2t.model,
+        }
+        // Include apiKey only when explicitly typed (non-empty)
+        if (t2t.apiKey) payload.apiKey = t2t.apiKey
+        try {
+          await syncModelProviderConfig(payload as { baseUrl: string; apiKey: string; model: string })
+          cloudSynced = true
+        } catch (e) {
+          console.error('Cloud model config sync failed:', e)
+        }
+      }
+      setProviderMessage({
+        type: 'success',
+        text: cloudSynced
+          ? '模型 API 设置已保存并同步到服务端'
+          : '模型 API 设置已保存到本地（云端同步失败，请检查服务端连接）',
+      })
     } catch (error) {
       setProviderMessage({ type: 'error', text: error instanceof Error ? error.message : '保存模型设置失败' })
+    } finally {
+      setProviderSaving(false)
+    }
+  }
+
+  const handleClearProviders = async () => {
+    setProviderSaving(true)
+    setProviderMessage(null)
+    try {
+      await clearModelProviderConfig()
+      setProviderMessage({ type: 'success', text: '已恢复为服务端默认配置' })
+    } catch (error) {
+      setProviderMessage({ type: 'error', text: error instanceof Error ? error.message : '恢复默认配置失败' })
     } finally {
       setProviderSaving(false)
     }
@@ -235,6 +283,14 @@ const DesktopPage: React.FC = () => {
                   >
                     {providerSaving ? <FiRefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FiSave className="w-3.5 h-3.5" />}
                     保存
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearProviders}
+                    disabled={providerLoading || providerSaving}
+                    className="h-8 px-3 rounded-lg border border-red-200 bg-white text-red-600 text-xs font-medium hover:bg-red-50 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    恢复默认
                   </button>
                 </div>
               </div>

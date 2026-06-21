@@ -212,6 +212,13 @@ func extractContent(response map[string]interface{}) string {
 		return ""
 	}
 
-	content, _ := message["content"].(string)
-	return content
+	// Standard chat models return content. Reasoning models (e.g. deepseek-v4-pro)
+	// return reasoning_content and may leave content empty.
+	if content, _ := message["content"].(string); content != "" {
+		return content
+	}
+	if reasoning, _ := message["reasoning_content"].(string); reasoning != "" {
+		return reasoning
+	}
+	return ""
 }

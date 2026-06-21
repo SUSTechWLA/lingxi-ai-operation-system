@@ -1240,7 +1240,7 @@ const ArtifactRenderer: React.FC<{ content: ArtifactContentResponse }> = ({ cont
     ...extractMediaUrls(content.content),
   ])
   if (artifact.kind === 'MARKDOWN') {
-    return <MarkdownDocument text={String(content.content || '')} />
+    return <MarkdownDocument text={safeString(content.content)} />
   }
   if (artifact.kind === 'IMAGE') {
     return <ImageArtifact content={content.content} mediaUrls={mediaUrls} />
@@ -1426,11 +1426,11 @@ const PublishCopyView: React.FC<{ record: Record<string, unknown> }> = ({ record
     <div className="space-y-4 rounded-lg bg-white p-5 shadow-sm">
       <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
         <p className="text-xs font-semibold text-[#7A6142]">标题</p>
-        <p className="mt-2 text-xl font-semibold leading-8">{String(record.title || '待补充标题')}</p>
+        <p className="mt-2 text-xl font-semibold leading-8">{safeString(record.title, '待补充标题')}</p>
       </div>
       <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
         <p className="text-xs font-semibold text-[#7A6142]">简介</p>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-7">{String(record.description || '待补充简介')}</p>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-7">{safeString(record.description, '待补充简介')}</p>
       </div>
       <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
         <p className="text-xs font-semibold text-[#7A6142]">关键词</p>
@@ -1767,6 +1767,16 @@ const readField = (value: unknown, key: string) => {
     return (value as Record<string, unknown>)[key]
   }
   return undefined
+}
+
+const safeString = (value: unknown, fallback = ''): string => {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value && typeof value === 'object') {
+    try { return JSON.stringify(value, null, 2) }
+    catch { return fallback }
+  }
+  return fallback
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {

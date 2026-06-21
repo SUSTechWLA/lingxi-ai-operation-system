@@ -26,7 +26,11 @@ func TestExternalToolExecutesRegisteredLocalVideoCreationTool(t *testing.T) {
 	if result.Data["content"] == "" {
 		t.Fatalf("expected reviewable content in result: %+v", result.Data)
 	}
-	if result.Data["publishCopy"] == nil {
-		t.Fatalf("expected publish copy draft in result: %+v", result.Data)
+	if result.Data["artifacts"] == nil {
+		t.Fatalf("expected artifacts manifest in result: %+v", result.Data)
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) < 2 {
+		t.Fatalf("expected at least 2 artifact entries (markdown + publish-copy), got: %+v", result.Data["artifacts"])
 	}
 }

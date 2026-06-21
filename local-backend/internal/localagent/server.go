@@ -209,6 +209,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
+	includeKey := r.URL.Query().Get("include_key") == "true" && isLocalhost(r)
 	switch r.Method {
 	case http.MethodGet:
 		settings, err := s.readModelProviderSettings()
@@ -216,7 +217,7 @@ func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, maskModelProviderSettings(settings))
+		writeJSON(w, http.StatusOK, maskModelProviderSettings(settings, includeKey))
 	case http.MethodPut:
 		var req ModelProviderSettingsResponse
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -237,7 +238,7 @@ func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, maskModelProviderSettings(merged))
+		writeJSON(w, http.StatusOK, maskModelProviderSettings(merged, includeKey))
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -567,15 +568,28 @@ func mergeModelProviderSettings(current, updates map[ModelCapability]ModelProvid
 	return merged
 }
 
-func maskModelProviderSettings(settings map[ModelCapability]ModelProviderConfig) ModelProviderSettingsResponse {
+func maskModelProviderSettings(settings map[ModelCapability]ModelProviderConfig, includeKey bool) ModelProviderSettingsResponse {
 	masked := make(map[ModelCapability]ModelProviderConfig, len(settings))
 	for capability, cfg := range settings {
 		cfg.HasAPIKey = cfg.APIKey != ""
 		cfg.APIKeyPreview = previewAPIKey(cfg.APIKey)
-		cfg.APIKey = ""
+		if !includeKey {
+			cfg.APIKey = ""
+		}
 		masked[capability] = cfg
 	}
 	return ModelProviderSettingsResponse{Providers: masked}
+}
+
+func isLocalhost(r *http.Request) bool {
+	host := r.RemoteAddr
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	// Remove brackets from IPv6 addresses
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	return host == "127.0.0.1" || host == "::1" || host == "localhost"
 }
 
 func previewAPIKey(apiKey string) string {

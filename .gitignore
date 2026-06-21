@@ -42,3 +42,4 @@ local-backend/dist/
 frontend/resources/bin/
 *.tsbuildinfo
 cloud-backend/tangying-ai-os
+cloud-backend/runtime-model-provider.json

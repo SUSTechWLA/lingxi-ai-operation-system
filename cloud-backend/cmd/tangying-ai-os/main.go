@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -356,6 +358,68 @@ func main() {
 			zap.String("model_provider_mode", cfg.Video.ModelProviderMode),
 		)
 		builtin.RegisterVideoCreationExternalTools(toolRegistry)
+		builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
+		// Persist user model config alongside the skill root so it survives restarts.
+		// API key is encrypted at rest using AES-256-GCM with a key derived from the auth secret.
+		builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
+		builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
+		if cfg.Video.HyperFramesCLIPath != "" {
+			builtin.SetHyperFramesCLIPath(cfg.Video.HyperFramesCLIPath)
+			zap.L().Info("HyperFrames CLI path configured",
+				zap.String("path", cfg.Video.HyperFramesCLIPath))
+		}
+
+		// Runtime model-provider config — synced from frontend Desktop page, persisted to disk
+		modelProviderHandler := func(c *gin.Context) {
+			switch c.Request.Method {
+			case "GET":
+				effective := builtin.GetVideoCreationOpenAIConfig()
+				runtime := builtin.GetRuntimeModelProviderConfig()
+				c.JSON(200, gin.H{"code": 200, "message": "ok", "data": gin.H{
+					"baseUrl":    effective.BaseURL,
+					"model":      effective.Model,
+					"hasKey":     effective.APIKey != "",
+					"endpoint":   strings.TrimRight(effective.BaseURL, "/") + "/chat/completions",
+					"fromUser":   runtime.BaseURL != "",
+					"fromEnv":    builtin.GetEnvOpenAIConfig().APIKey != "" || runtime.APIKey == "",
+				}})
+			case "PUT":
+				var req struct {
+					BaseURL string `json:"baseUrl"`
+					APIKey  string `json:"apiKey"`
+					Model   string `json:"model"`
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(400, gin.H{"code": 400, "message": "invalid request", "data": nil})
+					return
+				}
+				// Merge with existing: keep old key when not provided
+				existing := builtin.GetRuntimeModelProviderConfig()
+				if req.APIKey == "" {
+					req.APIKey = existing.APIKey
+				}
+				builtin.SetRuntimeModelProviderConfig(builtin.RuntimeModelProviderConfig{
+					BaseURL: req.BaseURL,
+					APIKey:  req.APIKey,
+					Model:   req.Model,
+				})
+				zap.L().Info("Runtime model-provider config updated",
+					zap.String("baseUrl", req.BaseURL),
+					zap.String("model", req.Model),
+					zap.Bool("hasApiKey", req.APIKey != ""),
+				)
+				c.JSON(200, gin.H{"code": 200, "message": "ok", "data": nil})
+			case "DELETE":
+				builtin.ClearRuntimeModelProviderConfig()
+				zap.L().Info("Runtime model-provider config cleared — using env defaults")
+				c.JSON(200, gin.H{"code": 200, "message": "cleared, using env defaults", "data": nil})
+			default:
+				c.JSON(405, gin.H{"code": 405, "message": "method not allowed", "data": nil})
+			}
+		}
+		r.GET("/api/config/model-provider", modelProviderHandler)
+		r.PUT("/api/config/model-provider", modelProviderHandler)
+		r.DELETE("/api/config/model-provider", modelProviderHandler)
 
 		// Skill Runtime
 		skillReg, skillErrs := skillruntime.LoadSkills(cfg.Video.SkillRoot)

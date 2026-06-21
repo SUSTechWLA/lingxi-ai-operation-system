@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/tangying-ai/aios-core/internal/core/common/jsonx"
 	"github.com/tangying-ai/aios-core/internal/core/config"
@@ -154,12 +155,47 @@ func (t *ContentGeneratorTool) Execute(ctx context.Context, params map[string]in
 		}
 	}
 
+	// Build artifact manifest for on-read materialization.
+	// Always emit a markdown artifact with the best available readable content.
+	artifacts := []map[string]interface{}{}
+	scriptText := bestString(contentPkg, "script", "narration", "core_opinion", "logline", "description")
+	if scriptText == "" {
+		scriptText = content // fallback to raw LLM response
+	}
+	artifacts = append(artifacts, map[string]interface{}{
+		"unitId":   "script-content",
+		"kind":     "MARKDOWN",
+		"name":     "脚本内容.md",
+		"mimeType": "text/markdown",
+	})
+
+	// Always emit a publish-copy artifact so the user sees structured metadata.
+	artifacts = append(artifacts, map[string]interface{}{
+		"unitId":   "publish-copy",
+		"kind":     "JSON",
+		"name":     "发布文案",
+		"mimeType": "application/json",
+	})
+
 	return tool.SuccessResult(map[string]interface{}{
 		"content":     content,
 		"package":     contentPkg,
 		"title":       contentPkg["title"],
 		"description": contentPkg["description"],
-		"script":      contentPkg["script"],
+		"script":      scriptText,
 		"tags":        contentPkg["tags"],
+		"artifacts":   artifacts,
 	})
+}
+
+// bestString returns the first non-empty string value from the given keys in
+// the content package. Used to pick the most useful readable content when the
+// LLM response format varies (e.g. different fake fixtures or provider models).
+func bestString(pkg map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := pkg[k].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }

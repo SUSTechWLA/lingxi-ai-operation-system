@@ -94,6 +94,86 @@ func TestBuildArtifactsFromNodeOutputIgnoresLegacyPayloadFields(t *testing.T) {
 	}
 }
 
+func TestBuildArtifactsFromNodeOutputHandlesSingleMapManifest(t *testing.T) {
+	// Verify that the materializer handles a single-map (object) artifacts
+	// manifest (legacy format from older tool versions) by wrapping it.
+	node := &model.Node{
+		ID:     "opso_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "opso",
+		},
+		Output: map[string]interface{}{
+			"stdout": `{
+				"content": "## OPSO\n口播优化结果。",
+				"artifacts": {
+					"stage": "opso",
+					"skillName": "create-opinion-videos",
+					"requiresReview": true
+				}
+			}`,
+		},
+	}
+
+	requests := BuildArtifactRequestsFromNode("vp-1", "run-1", node)
+
+	// The single-map format should be accepted (wrapped into an array).
+	// Entries without unitId and kind are skipped, so we expect 0 valid requests
+	// but the function should NOT panic or return nil from the type assertion failure.
+	// The legacy map has no unitId/kind, so it's filtered out — that's expected.
+	// The key behavior is: no panic, and the function completes normally.
+	if requests == nil {
+		t.Fatal("expected non-nil result, legacy map should be handled gracefully")
+	}
+	// No valid artifact entries expected since legacy map lacks unitId/kind
+	if len(requests) != 0 {
+		t.Fatalf("expected 0 artifact requests from legacy map without unitId/kind, got %d", len(requests))
+	}
+}
+
+func TestBuildArtifactsFromNodeOutputHandlesMapManifestWithValidFields(t *testing.T) {
+	// Verify that a single-map artifacts manifest WITH valid unitId/kind
+	// is correctly materialized into an artifact request.
+	node := &model.Node{
+		ID:     "publish_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "publish",
+		},
+		Output: map[string]interface{}{
+			"stdout": `{
+				"artifacts": {
+					"unitId": "publish-copy",
+					"kind": "JSON",
+					"name": "发布文案",
+					"mimeType": "application/json",
+					"contentHash": "abc123",
+					"sizeBytes": 512
+				}
+			}`,
+		},
+	}
+
+	requests := BuildArtifactRequestsFromNode("vp-1", "run-1", node)
+
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 artifact request from single-map with valid fields, got %d", len(requests))
+	}
+	req := requests[0]
+	if req.UnitID != "publish-copy" {
+		t.Fatalf("expected unitId 'publish-copy', got %q", req.UnitID)
+	}
+	if req.Kind != KindJSON {
+		t.Fatalf("expected kind JSON, got %q", req.Kind)
+	}
+	if req.Name != "发布文案" {
+		t.Fatalf("expected name '发布文案', got %q", req.Name)
+	}
+	if req.StorageType != StorageLocal {
+		t.Fatalf("expected local storage, got %q", req.StorageType)
+	}
+}
+
 func TestReviseInlineArtifactCreatesNewVersionPayload(t *testing.T) {
 	base := &Artifact{
 		ID:          "art-1",

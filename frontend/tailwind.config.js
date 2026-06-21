@@ -8,12 +8,12 @@ export default {
     extend: {
       colors: {
         primary: {
-          DEFAULT: '#7C5CFF',
-          light: '#9B82FF',
-          dark: '#6645E0',
+          DEFAULT: '#D97706',
+          light: '#FBBF24',
+          dark: '#7C3E08',
         },
         background: {
-          DEFAULT: '#F7F8FC',
+          DEFAULT: '#FFF8E8',
         },
       },
       borderRadius: {

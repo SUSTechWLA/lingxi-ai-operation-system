@@ -101,6 +101,19 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		sizeBytes = int64(len(req.Data))
 	}
 
+	// For artifacts materialized from workflow nodes, store inline content so
+	// it can be displayed before the local backend syncs. The storage type is
+	// set to "inline" to bypass the StorageLocal placeholder in artifactContent.
+	storageType := StorageLocal
+	inlineJSON := ""
+	if len(req.Data) > 0 && req.Provider == "workflow-node" {
+		storageType = "inline"
+		inlineJSON = string(req.Data)
+		metadata["cloudPayloadStored"] = true
+		metadata["localOnly"] = false
+		metadata["contentAvailability"] = "cloud-inline"
+	}
+
 	return &Artifact{
 		ProjectID:     req.ProjectID,
 		WorkflowRunID: req.WorkflowRunID,
@@ -110,9 +123,9 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		Name:          req.Name,
 		Version:       nextVersion,
 		ParentID:      parentID,
-		StorageType:   StorageLocal,
+		StorageType:   storageType,
 		StorageRef:    storageRef,
-		InlineJSON:    "",
+		InlineJSON:    inlineJSON,
 		MimeType:      req.MimeType,
 		SizeBytes:     sizeBytes,
 		ContentHash:   req.ContentHash,

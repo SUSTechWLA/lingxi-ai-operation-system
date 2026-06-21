@@ -472,6 +472,10 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 
 	_, output := findNodeOutput(ctx, nodeRepo, taskID, refNodeID)
 	if output == nil {
+		zap.L().Warn("Cannot resolve node reference: referenced node output not found",
+			zap.String("taskId", taskID),
+			zap.String("refNodeID", refNodeID),
+			zap.String("ref", ref))
 		return ref, false
 	}
 
@@ -485,6 +489,11 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 		}
 	}
 	if !ok {
+		zap.L().Warn("Cannot resolve node reference: field not found in output",
+			zap.String("taskId", taskID),
+			zap.String("refNodeID", refNodeID),
+			zap.String("field", field),
+			zap.String("ref", ref))
 		return ref, false
 	}
 

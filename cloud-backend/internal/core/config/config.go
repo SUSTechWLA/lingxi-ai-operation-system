@@ -28,8 +28,9 @@ type Config struct {
 type VideoConfig struct {
 	VideoCreationEnabled bool   `mapstructure:"VIDEO_CREATION_ENABLED"`
 	LocalRunnerEnabled   bool   `mapstructure:"LOCAL_RUNNER_ENABLED"`
-	ModelProviderMode    string `mapstructure:"MODEL_PROVIDER_MODE"` // "fake" | "real"
-	SkillRoot            string `mapstructure:"SKILL_ROOT"`          // path to skills/ directory
+	ModelProviderMode    string `mapstructure:"MODEL_PROVIDER_MODE"`    // "fake" | "real"
+	SkillRoot            string `mapstructure:"SKILL_ROOT"`             // path to skills/ directory
+	HyperFramesCLIPath   string `mapstructure:"HYPERFRAMES_CLI_PATH"`   // path to hyperframes CLI binary (optional)
 }
 
 type ServerConfig struct {

@@ -146,6 +146,13 @@ func (h *Handler) materializeProject(ctx context.Context, projectID string) erro
 
 func artifactContent(artifact *Artifact) (interface{}, string, []string) {
 	if artifact.StorageType == StorageLocal {
+		// For markdown/text artifacts without inline content, return a
+		// readable placeholder instead of the metadata object.  The
+		// frontend's MarkdownDocument component would otherwise render
+		// String(metadataObject) → "[object Object]".
+		if artifact.Kind == KindMarkdown || strings.HasPrefix(artifact.MimeType, "text/") {
+			return "内容保存在本地系统中。请确保本地后台正在运行以查看完整内容。", "", []string{}
+		}
 		return map[string]interface{}{
 			"storageRef":          artifact.StorageRef,
 			"localOnly":           true,

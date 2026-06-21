@@ -422,3 +422,21 @@ export const reviseArtifact = async (
   const response = await api.post<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/revise`, { message })
   return response.data.data
 }
+
+// ── Model Provider Config Sync ──
+
+export interface ModelProviderSyncPayload {
+  baseUrl: string
+  apiKey?: string
+  model: string
+}
+
+export const syncModelProviderConfig = async (
+  payload: ModelProviderSyncPayload
+): Promise<void> => {
+  await api.put('/config/model-provider', payload)
+}
+
+export const clearModelProviderConfig = async (): Promise<void> => {
+  await api.delete('/config/model-provider')
+}
