@@ -212,6 +212,7 @@ const CreatorWorkbenchPage: React.FC = () => {
   const [currentRun, setCurrentRun] = useState<WorkflowRun | null>(null)
   const [currentProject, setCurrentProject] = useState<VideoProject | null>(null)
   const [runElapsed, setRunElapsed] = useState(0)
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null)
 
   // Poll workflow run status every 2s while a run is active
   useEffect(() => {
@@ -546,6 +547,15 @@ const CreatorWorkbenchPage: React.FC = () => {
     setCurrentProject(null)
   }
 
+  const handleReuseProject = (project: VideoProject) => {
+    const config = project.config as Record<string, unknown> | undefined
+    const brief = (config?.brief as string) || project.description || project.name
+    setBrief(brief)
+    setExpandedProjectId(null)
+    setCurrentRun(null)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   const handleReviseArtifact = async () => {
     if (!selectedArtifactId || !revisionMessage.trim()) return
     setRevisingArtifact(true)
@@ -787,18 +797,79 @@ const CreatorWorkbenchPage: React.FC = () => {
           </div>
 
           <div className="rounded-lg border border-[#EED79A] bg-white">
-            <PanelHeader icon={<FiDownload />} title="最近作品" desc={`${projects.length} 个项目`} />
-            <div className="space-y-2 p-4">
+            <PanelHeader icon={<FiDownload />} title="最近作品" desc={`${projects.length} 个项目 · 点击查看详情或复用提示词`} />
+            <div className="space-y-2 p-4 max-h-[480px] overflow-y-auto">
               {projects.length === 0 && <p className="text-sm text-[#7A6142]">还没有项目。</p>}
-              {projects.slice(0, 6).map((project) => (
-                <div key={project.id} className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="min-w-0 truncate text-sm font-semibold">{project.name}</p>
-                    <span className="shrink-0 rounded-full bg-[#FFF0C6] px-2 py-0.5 text-[10px] text-[#7A6142]">{project.status}</span>
+              {projects.slice(0, 20).map((project) => {
+                const isExpanded = expandedProjectId === project.id
+                const config = project.config as Record<string, unknown> | undefined
+                const brief = (config?.brief as string) || project.description || ''
+                const statusColor =
+                  project.status === 'COMPLETED' ? 'bg-green-100 text-green-700' :
+                  project.status === 'RUNNING' ? 'bg-blue-100 text-blue-700' :
+                  project.status === 'ARCHIVED' ? 'bg-red-100 text-red-700' :
+                  'bg-[#FFF0C6] text-[#7A6142]'
+
+                return (
+                  <div key={project.id}>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedProjectId(isExpanded ? null : project.id)}
+                      className={`w-full text-left rounded-lg border transition-colors p-3 ${
+                        isExpanded
+                          ? 'border-[#D6FF4D] bg-[#F8F9F0]'
+                          : 'border-[#EED79A] bg-[#FFFCF4] hover:border-[#D6FF4D] hover:bg-[#F8F9F0]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="min-w-0 truncate text-sm font-semibold text-gray-800">{project.name}</p>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColor}`}>{project.status}</span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-[#7A6142]">{formatSkillName(project.skillName)} · {project.generationMode}</p>
+                      {brief && <p className="mt-1.5 truncate text-[11px] text-gray-400 italic">"{brief.slice(0, 80)}{brief.length > 80 ? '…' : ''}"</p>}
+                    </button>
+
+                    {isExpanded && (
+                      <div className="mt-1 rounded-lg border border-[#D6FF4D]/60 bg-[#F8F9F0] p-4 space-y-3 text-xs animate-in slide-in-from-top-2">
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-gray-600">
+                          <div>
+                            <span className="text-[10px] text-gray-400">Skill</span>
+                            <p className="font-medium text-gray-800">{formatSkillName(project.skillName)}</p>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-gray-400">画幅</span>
+                            <p className="font-medium text-gray-800">{project.aspectRatio || '—'}</p>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-gray-400">时长</span>
+                            <p className="font-medium text-gray-800">{project.targetDurationSec ? `${project.targetDurationSec}s` : '—'}</p>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-gray-400">状态</span>
+                            <p className="font-medium text-gray-800">{project.status}</p>
+                          </div>
+                        </div>
+
+                        {brief && (
+                          <div>
+                            <span className="text-[10px] text-gray-400">原始提示词</span>
+                            <p className="mt-0.5 text-gray-700 leading-relaxed whitespace-pre-wrap">{brief}</p>
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleReuseProject(project) }}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[#D6FF4D] px-3 py-2 text-xs font-semibold text-[#17181A] hover:bg-[#C5ED3B] transition-colors"
+                        >
+                          <FiRefreshCw className="w-3.5 h-3.5" />
+                          复用此提示词
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="mt-1 truncate text-xs text-[#7A6142]">{formatSkillName(project.skillName)} · {project.generationMode}</p>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </aside>
