@@ -86,14 +86,35 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	CREATE INDEX IF NOT EXISTS idx_context_task ON ai_context(task_id);
 	CREATE INDEX IF NOT EXISTS idx_context_node ON ai_context(node_id);
 
-	CREATE TABLE IF NOT EXISTS outbox (
-	    id BIGSERIAL PRIMARY KEY,
-	    aggregate_type VARCHAR(50) NOT NULL,
-	    aggregate_id VARCHAR(100) NOT NULL,
-	    event_type VARCHAR(100) NOT NULL,
-	    payload JSONB NOT NULL,
-	    created_at TIMESTAMPTZ DEFAULT NOW()
-	);
+		CREATE TABLE IF NOT EXISTS outbox (
+		    id BIGSERIAL PRIMARY KEY,
+		    aggregate_type VARCHAR(50) NOT NULL,
+		    aggregate_id VARCHAR(100) NOT NULL,
+		    event_type VARCHAR(100) NOT NULL,
+		    payload JSONB NOT NULL,
+		    retry_count INTEGER NOT NULL DEFAULT 0,
+		    last_error TEXT,
+		    created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_outbox_created ON outbox(created_at);
+
+		-- Backward-compatible migration for existing outbox tables
+		ALTER TABLE outbox ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE outbox ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+		CREATE TABLE IF NOT EXISTS outbox_dlq (
+		    id BIGSERIAL PRIMARY KEY,
+		    aggregate_type VARCHAR(50) NOT NULL,
+		    aggregate_id VARCHAR(100) NOT NULL,
+		    event_type VARCHAR(100) NOT NULL,
+		    payload JSONB NOT NULL,
+		    retry_count INTEGER NOT NULL DEFAULT 0,
+		    last_error TEXT,
+		    original_id BIGINT,
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    dead_at TIMESTAMPTZ DEFAULT NOW()
+		);
 
 	CREATE INDEX IF NOT EXISTS idx_outbox_created ON outbox(created_at);
 
@@ -362,7 +383,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 
 func DropAll(ctx context.Context, pool *pgxpool.Pool) {
 	drop := fmt.Sprintln(`
-	DROP TABLE IF EXISTS outbox;
+	DROP TABLE IF EXISTS outbox_dlq;
+		DROP TABLE IF EXISTS outbox;
 	DROP TABLE IF EXISTS ai_context;
 	DROP TABLE IF EXISTS ai_node_dependency;
 	DROP TABLE IF EXISTS ai_node;

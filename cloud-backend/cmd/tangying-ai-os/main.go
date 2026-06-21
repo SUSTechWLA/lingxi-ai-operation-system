@@ -98,8 +98,8 @@ func main() {
 	// Wire StateMachine into Scheduler for heartbeat timeout handling
 	scheduler.SetStateMachine(stateMachine)
 
-	// Outbox relay
-	outboxRelay := outbox.NewRelay(pool, producer)
+		// Outbox relay with retry, DLQ, and exponential backoff
+		outboxRelay := outbox.NewRelay(pool, producer, outbox.DefaultRelayConfig())
 	outboxRelay.Start(ctx)
 	defer outboxRelay.Stop()
 
