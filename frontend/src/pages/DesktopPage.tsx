@@ -45,6 +45,7 @@ const DesktopPage: React.FC = () => {
   const [providerLoading, setProviderLoading] = useState(true)
   const [providerSaving, setProviderSaving] = useState(false)
   const [providerMessage, setProviderMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [activeTab, setActiveTab] = useState<ModelCapability>('text_to_text')
   const api = getElectronAPI()
 
   useEffect(() => {
@@ -205,7 +206,7 @@ const DesktopPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Right: Command Execution */}
+          {/* Right: Model Configuration & Command Execution */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white rounded-2xl border border-gray-100 p-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-5">
@@ -214,7 +215,7 @@ const DesktopPage: React.FC = () => {
                     <FiCpu className="w-4 h-4 text-gray-500" />
                     基础模型 API
                   </h3>
-                  <p className="mt-1 text-xs text-gray-500">OpenAI-compatible: baseUrl / apiKey / model</p>
+                  <p className="mt-1 text-xs text-gray-500">OpenAI-compatible 接口地址 / 模型名 / 密钥，按能力分别配置</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -238,66 +239,88 @@ const DesktopPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="space-y-4">
-                {providerRows.map((row) => {
-                  const provider = providerSettings[row.id]
-                  const Icon = row.icon
-                  const tokenPlaceholder = provider.hasApiKey
-                    ? `已保存 ${provider.apiKeyPreview || 'token'}，留空保留`
-                    : 'sk-...'
+              {/* Tab bar */}
+              <div className="flex rounded-lg border border-gray-200 bg-gray-100 p-1 mb-4">
+                {providerRows.map((row) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => setActiveTab(row.id)}
+                    className={`flex-1 h-9 rounded-md text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+                      activeTab === row.id
+                        ? 'bg-white text-gray-800 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <row.icon className="w-4 h-4" />
+                    {row.label}
+                  </button>
+                ))}
+              </div>
 
-                  return (
-                    <div key={row.id} className="rounded-lg border border-gray-100 bg-gray-50/70 p-4">
-                      <div className="flex flex-col gap-4">
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-white border border-gray-100 flex items-center justify-center text-gray-600">
-                            <Icon className="w-4 h-4" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-gray-800">{row.label}</div>
-                            <div className="text-xs text-gray-500 leading-5">{row.desc}</div>
-                          </div>
-                        </div>
+              {/* Active tab content */}
+              {(() => {
+                const row = providerRows.find((r) => r.id === activeTab)!
+                const provider = providerSettings[activeTab]
+                const tokenPlaceholder = provider.hasApiKey
+                  ? `已保存 ${provider.apiKeyPreview || 'token'}，留空保留原密钥`
+                  : 'sk-... 输入 API Key'
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <label className="block">
-                            <span className="text-[11px] font-medium text-gray-500">URL</span>
-                            <input
-                              value={provider.baseUrl}
-                              onChange={(event) => updateProvider(row.id, 'baseUrl', event.target.value)}
-                              className="mt-1 w-full h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs font-mono text-gray-700 outline-none focus:border-gray-400"
-                              placeholder="https://api.openai.com/v1"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="text-[11px] font-medium text-gray-500">Model</span>
-                            <input
-                              value={provider.model}
-                              onChange={(event) => updateProvider(row.id, 'model', event.target.value)}
-                              className="mt-1 w-full h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs font-mono text-gray-700 outline-none focus:border-gray-400"
-                              placeholder="model-name"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="text-[11px] font-medium text-gray-500 flex items-center gap-1">
-                              <FiKey className="w-3 h-3" />
-                              Token
-                            </span>
-                            <input
-                              value={provider.apiKey || ''}
-                              onChange={(event) => updateProvider(row.id, 'apiKey', event.target.value)}
-                              className="mt-1 w-full h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs font-mono text-gray-700 outline-none focus:border-gray-400"
-                              placeholder={tokenPlaceholder}
-                              type="password"
-                              autoComplete="off"
-                            />
-                          </label>
-                        </div>
+                return (
+                  <div className="rounded-lg border border-gray-100 bg-gray-50/70 p-5 space-y-4">
+                    <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
+                      <div className="w-9 h-9 rounded-xl bg-white border border-gray-100 flex items-center justify-center text-gray-600">
+                        <row.icon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-gray-800">{row.label} · API 配置</div>
+                        <div className="text-xs text-gray-500">{row.desc}</div>
                       </div>
                     </div>
-                  )
-                })}
-              </div>
+
+                    {/* API URL — full width */}
+                    <label className="block">
+                      <span className="text-xs font-semibold text-gray-600">接口地址 (Base URL)</span>
+                      <input
+                        value={provider.baseUrl}
+                        onChange={(event) => updateProvider(activeTab, 'baseUrl', event.target.value)}
+                        className="mt-1.5 w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono text-gray-700 outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                        placeholder="https://api.openai.com/v1"
+                      />
+                      <span className="mt-1 text-[11px] text-gray-400">OpenAI-compatible 端点，例如 https://ark.cn-beijing.volces.com/api/coding/v3</span>
+                    </label>
+
+                    {/* Model + Token side by side */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <label className="block">
+                        <span className="text-xs font-semibold text-gray-600">模型名称 (Model)</span>
+                        <input
+                          value={provider.model}
+                          onChange={(event) => updateProvider(activeTab, 'model', event.target.value)}
+                          className="mt-1.5 w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono text-gray-700 outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                          placeholder="model-name"
+                        />
+                        <span className="mt-1 text-[11px] text-gray-400">例如 gpt-4.1 / doubao-seed-2.0-pro</span>
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-gray-600 flex items-center gap-1">
+                          <FiKey className="w-3 h-3" />
+                          API 密钥 (Token)
+                        </span>
+                        <input
+                          value={provider.apiKey || ''}
+                          onChange={(event) => updateProvider(activeTab, 'apiKey', event.target.value)}
+                          className="mt-1.5 w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono text-gray-700 outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                          placeholder={tokenPlaceholder}
+                          type="password"
+                          autoComplete="off"
+                        />
+                        <span className="mt-1 text-[11px] text-gray-400">密钥仅保存在本机，不上传云端</span>
+                      </label>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {providerMessage && (
                 <div className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
