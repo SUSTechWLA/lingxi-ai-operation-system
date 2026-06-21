@@ -372,6 +372,16 @@ export const createWorkflowRun = async (
   return response.data.data.run
 }
 
+export const fetchWorkflowRun = async (
+  projectId: string,
+  runId: string
+): Promise<WorkflowRun> => {
+  const response = await api.get<ApiResponse<{ run: WorkflowRun }>>(
+    `/video-projects/${projectId}/workflow-runs/${runId}`
+  )
+  return response.data.data.run
+}
+
 export const approveVideoStage = async (
   projectId: string,
   stageName: string,

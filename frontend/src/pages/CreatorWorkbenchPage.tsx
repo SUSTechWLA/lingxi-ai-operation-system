@@ -32,6 +32,7 @@ import {
   fetchProjectArtifacts,
   fetchVideoProjects,
   fetchWorkflows,
+  fetchWorkflowRun,
   reviseArtifact,
   routeSkill,
 } from '../services/api'
@@ -210,6 +211,38 @@ const CreatorWorkbenchPage: React.FC = () => {
   const [error, setError] = useState('')
   const [currentRun, setCurrentRun] = useState<WorkflowRun | null>(null)
   const [currentProject, setCurrentProject] = useState<VideoProject | null>(null)
+  const [runElapsed, setRunElapsed] = useState(0)
+
+  // Poll workflow run status every 2s while a run is active
+  useEffect(() => {
+    if (!currentRun || !currentProject) return
+    const terminalStatuses = ['COMPLETED', 'FAILED', 'CANCELLED']
+    if (terminalStatuses.includes(currentRun.status)) return
+
+    const timer = setInterval(async () => {
+      try {
+        const updated = await fetchWorkflowRun(currentProject.id, currentRun.id)
+        setCurrentRun(updated)
+        if (updated.startedAt) {
+          setRunElapsed(Math.floor((Date.now() - new Date(updated.startedAt).getTime()) / 1000))
+        }
+        if (terminalStatuses.includes(updated.status)) {
+          loadArtifacts(currentProject.id)
+        }
+      } catch { /* keep last known state */ }
+    }, 2000)
+
+    return () => clearInterval(timer)
+  }, [currentRun?.id, currentRun?.status])
+
+  // Update elapsed time every second
+  useEffect(() => {
+    if (!currentRun?.startedAt || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(currentRun.status)) return
+    const timer = setInterval(() => {
+      setRunElapsed(Math.floor((Date.now() - new Date(currentRun.startedAt!).getTime()) / 1000))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [currentRun?.startedAt, currentRun?.status])
   const [approvingStage, setApprovingStage] = useState('')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [selectedArtifactId, setSelectedArtifactId] = useState('')
@@ -556,13 +589,13 @@ const CreatorWorkbenchPage: React.FC = () => {
   const canStart = Boolean(brief.trim() && !starting && !loading && !routing)
 
   return (
-    <div className="min-h-screen overflow-y-auto bg-[#F4F6F8] text-[#16181D]">
-      <header className="border-b border-[#D9DEE7] bg-white px-7 py-5">
+    <div className="min-h-screen overflow-y-auto bg-[#FFF8E8] text-[#2B1708]">
+      <header className="border-b border-[#EED79A] bg-white px-7 py-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase text-[#245BFF]">Creator Workbench</p>
+            <p className="text-xs font-semibold uppercase text-[#D97706]">Creator Workbench</p>
             <h1 className="mt-1 text-2xl font-semibold">自然语言自媒体创作台</h1>
-            <p className="mt-1 text-sm text-[#667085]">输入成片目标，系统自动理解、路由 Skill，并保留可追踪的中间态。</p>
+            <p className="mt-1 text-sm text-[#7A6142]">输入成片目标，系统自动理解、路由 Skill，并保留可追踪的中间态。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <StatusPill label={`${abilityCards.length} 条基础路径`} tone="dark" />
@@ -574,7 +607,7 @@ const CreatorWorkbenchPage: React.FC = () => {
 
       <main className="grid gap-5 p-6 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="space-y-5">
-          <div className="rounded-lg border border-[#D9DEE7] bg-white">
+          <div className="rounded-lg border border-[#EED79A] bg-white">
             <PanelHeader icon={<FiMessageSquare />} title="一句话创作入口" desc="用户只需要描述想要的成片" />
             <div className="space-y-4 p-5">
               {error && (
@@ -586,20 +619,20 @@ const CreatorWorkbenchPage: React.FC = () => {
               <textarea
                 value={brief}
                 onChange={(e) => setBrief(e.target.value)}
-                className="min-h-36 w-full resize-y rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] px-4 py-3 text-base leading-7 outline-none transition focus:border-[#245BFF] focus:ring-2 focus:ring-[#245BFF]/15"
+                className="min-h-36 w-full resize-y rounded-lg border border-[#EED79A] bg-[#FFFCF4] px-4 py-3 text-base leading-7 outline-none transition focus:border-[#D97706] focus:ring-2 focus:ring-[#D97706]/15"
               />
               <div className="flex flex-wrap gap-2">
                 {examplePrompts.map((prompt) => (
                   <button
                     key={prompt}
                     onClick={() => setBrief(prompt)}
-                    className="rounded-full border border-[#D9DEE7] bg-[#F7F9FC] px-3 py-1.5 text-xs text-[#475467] transition hover:border-[#245BFF] hover:text-[#245BFF]"
+                    className="rounded-full border border-[#EED79A] bg-[#FFF9ED] px-3 py-1.5 text-xs text-[#6B5236] transition hover:border-[#D97706] hover:text-[#D97706]"
                   >
                     {prompt}
                   </button>
                 ))}
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#D9DEE7] pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#EED79A] pt-4">
                 <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-4">
                   <Metric label="路由方式" value={routeResult ? (routeResult.source === 'llm' ? 'LLM' : '规则兜底') : routing ? '理解中' : '-'} />
                   <Metric label="交付目标" value={deliverableLabels[currentDeliverable] || currentDeliverable} />
@@ -609,7 +642,7 @@ const CreatorWorkbenchPage: React.FC = () => {
                 <button
                   onClick={handleStart}
                   disabled={!canStart}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#16181D] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#2B2F36] disabled:cursor-not-allowed disabled:bg-[#AAB2C0]"
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#2B1708] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#4A2A0B] disabled:cursor-not-allowed disabled:bg-[#CBB88A]"
                 >
                   {starting || routing ? <FiRefreshCw className="animate-spin" /> : <FiArrowRight />}
                   {routing ? '理解中' : '启动创作线'}
@@ -619,7 +652,7 @@ const CreatorWorkbenchPage: React.FC = () => {
           </div>
 
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.6fr)]">
-            <div className="rounded-lg border border-[#D9DEE7] bg-white">
+            <div className="rounded-lg border border-[#EED79A] bg-white">
               <PanelHeader icon={<FiTarget />} title="系统理解" desc="由入口 LLM 根据能力目录自动路由" />
               <div className="space-y-4 p-5">
                 {routeError && (
@@ -629,18 +662,18 @@ const CreatorWorkbenchPage: React.FC = () => {
                   </div>
                 )}
                 <RouteCard route={routeDisplay} routing={routing} />
-                <div className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
+                <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-[#667085]">命中能力</p>
+                      <p className="text-xs font-semibold text-[#7A6142]">命中能力</p>
                       <h2 className="mt-1 truncate text-lg font-semibold">{selectedSummary ? formatSkillName(selectedSummary) : '等待系统理解'}</h2>
-                      <p className="mt-1 text-xs text-[#667085]">
+                      <p className="mt-1 text-xs text-[#7A6142]">
                         {selectedSummary ? `${selectedSummary.name}@${selectedSummary.version}` : '输入变化后自动重新判断'}
                       </p>
                     </div>
                     <StatusPill label={selectedTemplate ? 'Workflow ready' : selectedSummary ? '缺 Workflow' : '待路由'} tone={selectedTemplate ? 'green' : 'amber'} />
                   </div>
-                  <p className="mt-3 text-sm leading-6 text-[#475467]">{routeResult?.reasoning || selectedSummary?.description || routeDisplay.reason}</p>
+                  <p className="mt-3 text-sm leading-6 text-[#6B5236]">{routeResult?.reasoning || selectedSummary?.description || routeDisplay.reason}</p>
                   <div className="mt-4 grid gap-2 sm:grid-cols-4">
                     <Metric label="阶段" value={String(selectedSummary?.stageCount || 0)} />
                     <Metric label="审核门" value={selectedSummary?.requiresApproval ? '有' : '无'} />
@@ -651,7 +684,7 @@ const CreatorWorkbenchPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="rounded-lg border border-[#D9DEE7] bg-white">
+            <div className="rounded-lg border border-[#EED79A] bg-white">
               <PanelHeader icon={<FiCpu />} title="能力管理" desc="点击路径后仍由自然语言路由确认" />
               <div className="space-y-3 p-4">
                 {loading && <Skeleton label="正在读取能力目录" />}
@@ -668,22 +701,22 @@ const CreatorWorkbenchPage: React.FC = () => {
                       disabled={!skill}
                       className={`w-full rounded-lg border p-3 text-left transition ${
                         selected
-                        ? 'border-[#245BFF] bg-[#EEF4FF]'
-                        : 'border-[#D9DEE7] bg-[#FBFCFE] hover:border-[#245BFF]'
+                        ? 'border-[#D97706] bg-[#FFF2C2]'
+                        : 'border-[#EED79A] bg-[#FFFCF4] hover:border-[#D97706]'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold">{route.title}</p>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#667085]">{route.subtitle}</p>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#7A6142]">{route.subtitle}</p>
                         </div>
-                        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] text-[#667085]">
+                        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] text-[#7A6142]">
                           {skill ? skill.stageCount : '缺失'}
                         </span>
                       </div>
                       <div className="mt-3 flex items-center justify-between gap-3">
-                        <span className="min-w-0 truncate text-[11px] text-[#667085]">{skill ? `${skill.name}@${skill.version}` : skillName}</span>
-                        <span className={`shrink-0 text-[11px] font-semibold ${selected ? 'text-[#245BFF]' : 'text-[#667085]'}`}>
+                        <span className="min-w-0 truncate text-[11px] text-[#7A6142]">{skill ? `${skill.name}@${skill.version}` : skillName}</span>
+                        <span className={`shrink-0 text-[11px] font-semibold ${selected ? 'text-[#D97706]' : 'text-[#7A6142]'}`}>
                           {selected ? '当前命中' : '测试'}
                         </span>
                       </div>
@@ -694,28 +727,28 @@ const CreatorWorkbenchPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="rounded-lg border border-[#D9DEE7] bg-white">
+          <div className="rounded-lg border border-[#EED79A] bg-white">
             <PanelHeader icon={<FiClock />} title="制作进度" desc="按系统判断的交付目标展示中间态" />
             <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
               {(visibleStages.length > 0 ? visibleStages : progressStages).map((stage, index) => (
-                <div key={`${stage.name}-${index}`} className="min-h-[132px] rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
+                <div key={`${stage.name}-${index}`} className="min-h-[132px] rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-xs text-[#667085]">{String(index + 1).padStart(2, '0')}</span>
+                    <span className="font-mono text-xs text-[#7A6142]">{String(index + 1).padStart(2, '0')}</span>
                     <div className="flex shrink-0 gap-1">
                       {stage.approvalRequired && <MiniBadge label="审核" />}
                       {stage.longRunning && <MiniBadge label="长任务" />}
                       {stage.optional && <MiniBadge label="可选" />}
                     </div>
                   </div>
-                  <h3 className="mt-3 min-h-[40px] break-words text-sm font-semibold leading-5 text-[#16181D]">{stageNameMap[stage.name] || stage.name}</h3>
-                  <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-[#667085]">{stage.tool ? `工具：${stage.tool}` : 'Markdown 中间态 / 可返修产物'}</p>
+                  <h3 className="mt-3 min-h-[40px] break-words text-sm font-semibold leading-5 text-[#2B1708]">{stageNameMap[stage.name] || stage.name}</h3>
+                  <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-[#7A6142]">{stage.tool ? `工具：${stage.tool}` : 'Markdown 中间态 / 可返修产物'}</p>
                 </div>
               ))}
               {!loading && progressStages.length === 0 && <Skeleton label={routeResult ? '命中能力后加载阶段详情' : '等待系统理解后加载阶段详情'} />}
             </div>
           </div>
 
-          <div className="rounded-lg border border-[#D9DEE7] bg-white">
+          <div className="rounded-lg border border-[#EED79A] bg-white">
             <PanelHeader icon={<FiPlayCircle />} title="产物审片台" desc="点击产物进入大窗口查看、播放和返工" />
             <div className="p-4">
               <ArtifactWorkbench
@@ -730,7 +763,7 @@ const CreatorWorkbenchPage: React.FC = () => {
         </section>
 
         <aside className="space-y-5">
-          <div className="rounded-lg border border-[#D9DEE7] bg-white">
+          <div className="rounded-lg border border-[#EED79A] bg-white">
             <PanelHeader icon={<FiZap />} title="最终交付" desc="围绕发布素材，而不是多平台同步" />
             <div className="space-y-3 p-5">
               <MaterialRow icon={<FiBookOpen />} title="脚本 / 结构" desc="观点、剧本、口播稿或导演设计。" />
@@ -739,42 +772,31 @@ const CreatorWorkbenchPage: React.FC = () => {
               <MaterialRow icon={<FiMessageSquare />} title="标题 / 简介 / 关键词" desc="面向发布页的最终文案。" />
 
               {currentRun ? (
-                <div className="rounded-lg border border-[#00A86B]/30 bg-[#ECFDF3] p-4 text-sm">
-                  <div className="flex items-center gap-2 font-semibold text-[#027A48]">
-                    <FiCheckCircle />
-                    创作线已启动
-                  </div>
-                  <dl className="mt-3 space-y-2 text-xs text-[#24564A]">
-                    <KeyValue label="Project" value={shortId(currentProject?.id)} title={currentProject?.id} />
-                    <KeyValue label="Run" value={shortId(currentRun.id)} title={currentRun.id} />
-                    <KeyValue label="Task" value={shortId(currentRun.taskId)} title={currentRun.taskId} />
-                  </dl>
-                  <button
-                    type="button"
-                    onClick={handleOpenTrace}
-                    className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#00A86B] px-3 py-2 text-xs font-semibold text-white"
-                  >
-                    查看制作记录
-                    <FiArrowRight />
-                  </button>
-                </div>
+                <RunProgressPanel
+                  run={currentRun}
+                  elapsed={runElapsed}
+                  project={currentProject}
+                  onViewTrace={handleOpenTrace}
+                  onApproveStage={handleApproveStage}
+                  approvingStage={approvingStage}
+                />
               ) : (
                 <EmptyState title="等待启动" desc="启动后出现 run、task、trace 和中间态入口。" />
               )}
             </div>
           </div>
 
-          <div className="rounded-lg border border-[#D9DEE7] bg-white">
+          <div className="rounded-lg border border-[#EED79A] bg-white">
             <PanelHeader icon={<FiDownload />} title="最近作品" desc={`${projects.length} 个项目`} />
             <div className="space-y-2 p-4">
-              {projects.length === 0 && <p className="text-sm text-[#667085]">还没有项目。</p>}
+              {projects.length === 0 && <p className="text-sm text-[#7A6142]">还没有项目。</p>}
               {projects.slice(0, 6).map((project) => (
-                <div key={project.id} className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-3">
+                <div key={project.id} className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-3">
                   <div className="flex items-center justify-between gap-3">
                     <p className="min-w-0 truncate text-sm font-semibold">{project.name}</p>
-                    <span className="shrink-0 rounded-full bg-[#EEF2F6] px-2 py-0.5 text-[10px] text-[#667085]">{project.status}</span>
+                    <span className="shrink-0 rounded-full bg-[#FFF0C6] px-2 py-0.5 text-[10px] text-[#7A6142]">{project.status}</span>
                   </div>
-                  <p className="mt-1 truncate text-xs text-[#667085]">{formatSkillName(project.skillName)} · {project.generationMode}</p>
+                  <p className="mt-1 truncate text-xs text-[#7A6142]">{formatSkillName(project.skillName)} · {project.generationMode}</p>
                 </div>
               ))}
             </div>
@@ -830,19 +852,149 @@ interface PanelHeaderProps {
   desc: string
 }
 
+const STAGE_LABELS: Record<string, string> = {
+  script: '观点档案',
+  opso: '口播 OPSO',
+  keyframe: '关键帧',
+  packaging: '素材打包',
+  publish: '发布文案',
+}
+
+const STAGE_ORDER = ['script', 'opso', 'keyframe', 'packaging', 'publish']
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return m > 0 ? `${m} 分 ${s} 秒` : `${s} 秒`
+}
+
+interface RunProgressPanelProps {
+  run: WorkflowRun
+  elapsed: number
+  project?: { id: string } | null
+  approvingStage: string
+  onViewTrace: () => void
+  onApproveStage: (stage: string) => void
+}
+
+const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, approvingStage, onViewTrace, onApproveStage }) => {
+  const statusConfig: Record<string, { bg: string; text: string; icon: React.ReactNode; label: string; animate?: boolean }> = {
+    PENDING:   { bg: 'bg-gray-100', text: 'text-gray-600', icon: <FiClock className="w-4 h-4" />, label: '等待中' },
+    RUNNING:   { bg: 'bg-blue-50', text: 'text-blue-700', icon: <FiCpu className="w-4 h-4 animate-pulse" />, label: '执行中', animate: true },
+    PAUSED:    { bg: 'bg-amber-50', text: 'text-amber-700', icon: <FiClock className="w-4 h-4" />, label: '已暂停' },
+    COMPLETED: { bg: 'bg-green-50', text: 'text-green-700', icon: <FiCheckCircle className="w-4 h-4" />, label: '已完成' },
+    FAILED:    { bg: 'bg-red-50', text: 'text-red-700', icon: <FiAlertCircle className="w-4 h-4" />, label: '失败' },
+    CANCELLED: { bg: 'bg-gray-100', text: 'text-gray-500', icon: <FiAlertCircle className="w-4 h-4" />, label: '已取消' },
+  }
+  const sc = statusConfig[run.status] || statusConfig.PENDING
+  const stages = run.stageStatuses || {}
+  const totalStages = STAGE_ORDER.length
+  const completedStages = STAGE_ORDER.filter((s) => {
+    const st = stages[s]
+    return st === 'SUCCEEDED' || st === 'WAITING_APPROVAL'
+  }).length
+  const progressPct = totalStages > 0 ? Math.round((completedStages / totalStages) * 100) : 0
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm space-y-4">
+      {/* Header: status badge + elapsed */}
+      <div className="flex items-center justify-between">
+        <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${sc.bg} ${sc.text}`}>
+          {sc.icon}
+          <span>{sc.label}</span>
+          {sc.animate && <span className="inline-block w-2 h-2 rounded-full bg-current animate-ping ml-0.5" />}
+        </div>
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <FiClock className="w-3.5 h-3.5" />
+          <span>{run.startedAt ? `已运行 ${formatElapsed(elapsed)}` : '准备中…'}</span>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div>
+        <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
+          <span>创作进度</span>
+          <span className="font-mono">{completedStages} / {totalStages} 阶段</span>
+        </div>
+        <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-700 ${run.status === 'FAILED' ? 'bg-red-400' : run.status === 'COMPLETED' ? 'bg-green-500' : 'bg-blue-500'}`}
+            style={{ width: `${Math.max(progressPct, 4)}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Stage timeline */}
+      <div className="space-y-1.5">
+        {STAGE_ORDER.map((stage) => {
+          const st = stages[stage]
+          const stageIcon =
+            st === 'SUCCEEDED' || st === 'WAITING_APPROVAL' ? <FiCheckCircle className="w-4 h-4 text-green-500" /> :
+            st === 'RUNNING' ? <FiCpu className="w-4 h-4 text-blue-500 animate-pulse" /> :
+            st === 'FAILED' ? <FiAlertCircle className="w-4 h-4 text-red-500" /> :
+            <FiClock className="w-4 h-4 text-gray-300" />
+
+          const stageBg =
+            st === 'SUCCEEDED' || st === 'WAITING_APPROVAL' ? 'bg-green-50 border-green-200' :
+            st === 'RUNNING' ? 'bg-blue-50 border-blue-200' :
+            st === 'FAILED' ? 'bg-red-50 border-red-200' :
+            'bg-gray-50 border-gray-100'
+
+          return (
+            <div key={stage} className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-xs ${stageBg}`}>
+              {stageIcon}
+              <span className="flex-1 font-medium text-gray-700">{STAGE_LABELS[stage] || stage}</span>
+              <span className="text-gray-400 font-mono text-[10px]">
+                {st === 'WAITING_APPROVAL' ? '待确认' :
+                 st === 'SUCCEEDED' ? '已就绪' :
+                 st === 'RUNNING' ? '进行中' :
+                 st === 'FAILED' ? '失败' :
+                 st === 'PENDING' ? '等待' : '—'}
+              </span>
+              {st === 'WAITING_APPROVAL' && (
+                <button
+                  type="button"
+                  onClick={() => onApproveStage(stage)}
+                  disabled={!!approvingStage}
+                  className="shrink-0 rounded-md bg-[#00A86B] px-2 py-1 text-[10px] font-semibold text-white hover:bg-[#019A5F] disabled:opacity-50"
+                >
+                  {approvingStage === stage ? '确认中…' : '确认'}
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Footer actions */}
+      <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+        <button
+          type="button"
+          onClick={onViewTrace}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800"
+        >
+          查看制作记录
+          <FiArrowRight className="w-3.5 h-3.5" />
+        </button>
+        <span className="text-[10px] text-gray-400 font-mono ml-auto">Run {run.id.slice(0, 8)}</span>
+      </div>
+    </div>
+  )
+}
+
 const PanelHeader: React.FC<PanelHeaderProps> = ({ icon, title, desc }) => (
-  <div className="flex items-center gap-3 border-b border-[#D9DEE7] px-5 py-4">
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#16181D] text-white">{icon}</div>
+  <div className="flex items-center gap-3 border-b border-[#EED79A] px-5 py-4">
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#2B1708] text-white">{icon}</div>
     <div className="min-w-0">
       <h2 className="truncate text-sm font-semibold">{title}</h2>
-      <p className="truncate text-xs text-[#667085]">{desc}</p>
+      <p className="truncate text-xs text-[#7A6142]">{desc}</p>
     </div>
   </div>
 )
 
 const RouteCard: React.FC<{ route: CreatorRoute; routing: boolean }> = ({ route, routing }) => {
   const toneClasses = {
-    blue: 'border-[#245BFF]/30 bg-[#EEF4FF] text-[#1A47C9]',
+    blue: 'border-[#D97706]/30 bg-[#FFF2C2] text-[#8A4A08]',
     green: 'border-[#00A86B]/30 bg-[#ECFDF3] text-[#027A48]',
     rose: 'border-[#E85D75]/30 bg-[#FFF1F3] text-[#B8324F]',
     amber: 'border-[#F5A524]/35 bg-[#FFF7E6] text-[#9A6700]',
@@ -861,8 +1013,8 @@ const RouteCard: React.FC<{ route: CreatorRoute; routing: boolean }> = ({ route,
 
 const StatusPill: React.FC<{ label: string; tone: 'dark' | 'blue' | 'green' | 'amber' }> = ({ label, tone }) => {
   const classes = {
-    dark: 'bg-[#16181D] text-white',
-    blue: 'bg-[#245BFF] text-white',
+    dark: 'bg-[#2B1708] text-white',
+    blue: 'bg-[#D97706] text-white',
     green: 'bg-[#00A86B] text-white',
     amber: 'bg-[#FFF7E6] text-[#9A6700]',
   }
@@ -870,24 +1022,24 @@ const StatusPill: React.FC<{ label: string; tone: 'dark' | 'blue' | 'green' | 'a
 }
 
 const MiniBadge: React.FC<{ label: string }> = ({ label }) => (
-  <span className="rounded-full bg-[#EEF2F6] px-2 py-0.5 text-[10px] text-[#667085]">{label}</span>
+  <span className="rounded-full bg-[#FFF0C6] px-2 py-0.5 text-[10px] text-[#7A6142]">{label}</span>
 )
 
 const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="rounded-lg border border-[#D9DEE7] bg-white px-3 py-2">
-    <p className="text-[10px] text-[#667085]">{label}</p>
+  <div className="rounded-lg border border-[#EED79A] bg-white px-3 py-2">
+    <p className="text-[10px] text-[#7A6142]">{label}</p>
     <p className="mt-0.5 break-words text-sm font-semibold">{value}</p>
   </div>
 )
 
 const Skeleton: React.FC<{ label: string }> = ({ label }) => (
-  <div className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4 text-sm text-[#667085]">{label}</div>
+  <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4 text-sm text-[#7A6142]">{label}</div>
 )
 
 const EmptyState: React.FC<{ title: string; desc: string }> = ({ title, desc }) => (
-  <div className="rounded-lg border border-dashed border-[#C8D0DC] bg-[#FBFCFE] p-4">
+  <div className="rounded-lg border border-dashed border-[#DDBF78] bg-[#FFFCF4] p-4">
     <p className="text-sm font-semibold">{title}</p>
-    <p className="mt-1 text-xs text-[#667085]">{desc}</p>
+    <p className="mt-1 text-xs text-[#7A6142]">{desc}</p>
   </div>
 )
 
@@ -898,11 +1050,11 @@ const ArtifactWorkbench: React.FC<{
   currentRun: WorkflowRun | null
   onOpen: (id: string) => void
 }> = ({ artifacts, selectedId, loading, currentRun, onOpen }) => (
-  <div className="min-h-[220px] rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
+  <div className="min-h-[220px] rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div>
         <p className="text-sm font-semibold">本次创作产物</p>
-        <p className="mt-1 text-xs text-[#667085]">只展示可读、可审、可返工的内容；技术细节已收起。</p>
+        <p className="mt-1 text-xs text-[#7A6142]">只展示可读、可审、可返工的内容；技术细节已收起。</p>
       </div>
       <MiniBadge label={`${artifacts.length} 个`} />
     </div>
@@ -922,19 +1074,19 @@ const ArtifactWorkbench: React.FC<{
             type="button"
             onClick={() => onOpen(artifact.id)}
             className={`group min-h-[142px] rounded-lg border p-4 text-left transition ${
-              selected ? 'border-[#245BFF] bg-white shadow-sm' : 'border-[#D9DEE7] bg-white hover:border-[#245BFF]'
+              selected ? 'border-[#D97706] bg-white shadow-sm' : 'border-[#EED79A] bg-white hover:border-[#D97706]'
             }`}
           >
             <div className="flex h-full flex-col justify-between gap-4">
               <div>
                 <div className="flex items-start justify-between gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#EEF4FF] text-[#245BFF]">{artifactKindIcon(artifact.kind)}</span>
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#FFF2C2] text-[#D97706]">{artifactKindIcon(artifact.kind)}</span>
                   <MiniBadge label={`v${artifact.version}`} />
                 </div>
                 <p className="mt-3 text-base font-semibold">{artifactDisplayName(artifact)}</p>
-                <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#667085]">{artifactDisplayDescription(artifact)}</p>
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#7A6142]">{artifactDisplayDescription(artifact)}</p>
               </div>
-              <div className="flex items-center justify-between gap-3 text-xs font-semibold text-[#245BFF]">
+              <div className="flex items-center justify-between gap-3 text-xs font-semibold text-[#D97706]">
                 <span>{artifactKindLabel(artifact)}</span>
                 <span className="inline-flex items-center gap-1 opacity-80 group-hover:opacity-100">
                   打开查看
@@ -965,24 +1117,24 @@ const ArtifactReviewModal: React.FC<{
 }> = ({ content, loading, history, reviewStages, revisionMessage, revising, approvingStage, currentRun, onRevisionChange, onRevise, onApprove, onClose }) => {
   const artifact = content?.artifact
   return (
-    <div className="fixed inset-0 z-50 bg-[#101318]/60 p-3 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 bg-[#2B1708]/60 p-3 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true">
       <div className="mx-auto flex h-full max-w-[1440px] flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-[#D9DEE7] px-5 py-4">
+        <div className="flex items-center justify-between gap-3 border-b border-[#EED79A] px-5 py-4">
           <div className="min-w-0">
             <p className="truncate text-base font-semibold">{artifact ? artifactDisplayName(artifact) : '产物查看'}</p>
-            <p className="mt-1 text-xs text-[#667085]">{artifact ? `${artifactKindLabel(artifact)} · ${stageNameMap[artifact.stageName] || artifact.stageName}` : '正在读取内容'}</p>
+            <p className="mt-1 text-xs text-[#7A6142]">{artifact ? `${artifactKindLabel(artifact)} · ${stageNameMap[artifact.stageName] || artifact.stageName}` : '正在读取内容'}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#D9DEE7] bg-white text-[#475467] hover:bg-[#F7F9FC]"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#EED79A] bg-white text-[#6B5236] hover:bg-[#FFF9ED]"
             aria-label="关闭"
           >
             <FiX />
           </button>
         </div>
         <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="min-h-0 overflow-y-auto bg-[#F7F9FC] p-4 sm:p-6">
+          <div className="min-h-0 overflow-y-auto bg-[#FFF9ED] p-4 sm:p-6">
             {loading && !content ? (
               <Skeleton label="正在装载产物内容" />
             ) : content ? (
@@ -1034,7 +1186,7 @@ const ArtifactRenderer: React.FC<{ content: ArtifactContentResponse }> = ({ cont
 const MarkdownDocument: React.FC<{ text: string }> = ({ text }) => {
   const lines = text.split('\n')
   return (
-    <article className="min-h-[520px] rounded-lg bg-white p-6 text-base leading-8 text-[#1D2939] shadow-sm">
+    <article className="min-h-[520px] rounded-lg bg-white p-6 text-base leading-8 text-[#3B210B] shadow-sm">
       {lines.map((line, index) => {
         if (line.startsWith('## ')) return <h2 key={index} className="mt-4 text-lg font-semibold first:mt-0">{line.slice(3)}</h2>
         if (line.startsWith('### ')) return <h3 key={index} className="mt-3 text-base font-semibold">{line.slice(4)}</h3>
@@ -1062,7 +1214,7 @@ const ImageArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
   return (
     <div className="space-y-4">
       {selectedUrl && (
-        <div className="overflow-hidden rounded-lg border border-[#D9DEE7] bg-[#0E1116]">
+        <div className="overflow-hidden rounded-lg border border-[#EED79A] bg-[#0E1116]">
           <img src={selectedUrl} className="max-h-[560px] w-full object-contain" />
         </div>
       )}
@@ -1072,18 +1224,18 @@ const ImageArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
             <button
               key={url}
               onClick={() => setSelectedUrl(url)}
-              className={`overflow-hidden rounded-lg border bg-[#0E1116] ${selectedUrl === url ? 'border-[#245BFF]' : 'border-[#D9DEE7]'}`}
+              className={`overflow-hidden rounded-lg border bg-[#0E1116] ${selectedUrl === url ? 'border-[#D97706]' : 'border-[#EED79A]'}`}
             >
               <img src={url} className="h-24 w-full object-cover" />
-              <span className="block truncate bg-white px-2 py-1 text-left text-[11px] text-[#667085]">图片 {index + 1}</span>
+              <span className="block truncate bg-white px-2 py-1 text-left text-[11px] text-[#7A6142]">图片 {index + 1}</span>
             </button>
           ))}
         </div>
       )}
       <div className="grid gap-3 md:grid-cols-2">
         {items.map((item, index) => (
-          <div key={index} className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
-            <p className="text-xs font-semibold text-[#667085]">参考帧 {index + 1}</p>
+          <div key={index} className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
+            <p className="text-xs font-semibold text-[#7A6142]">参考帧 {index + 1}</p>
             <p className="mt-2 text-sm leading-6">{String(readField(item, 'prompt') || readField(item, 'description') || '图片产物')}</p>
           </div>
         ))}
@@ -1106,7 +1258,7 @@ const VideoArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
 
   return (
     <div className="space-y-4">
-      <div className="overflow-hidden rounded-lg border border-[#D9DEE7] bg-[#0E1116]">
+      <div className="overflow-hidden rounded-lg border border-[#EED79A] bg-[#0E1116]">
         {selectedVideo ? (
           <video key={selectedVideo} controls preload="metadata" poster={poster || undefined} className="max-h-[560px] w-full bg-black" src={selectedVideo} />
         ) : (
@@ -1116,11 +1268,11 @@ const VideoArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
         )}
       </div>
       {videoUrls.length > 0 && (
-        <div className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-3">
+        <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-[#667085]">视频轨道</p>
+            <p className="text-xs font-semibold text-[#7A6142]">视频轨道</p>
             {selectedVideo && (
-              <a href={selectedVideo} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-[#245BFF]">
+              <a href={selectedVideo} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-[#D97706]">
                 <FiDownload />
                 打开素材
               </a>
@@ -1131,12 +1283,12 @@ const VideoArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
               <button
                 key={url}
                 onClick={() => setSelectedVideo(url)}
-                className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left ${selectedVideo === url ? 'border-[#245BFF] bg-white' : 'border-[#D9DEE7] bg-white/70'}`}
+                className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left ${selectedVideo === url ? 'border-[#D97706] bg-white' : 'border-[#EED79A] bg-white/70'}`}
               >
-                <FiPlayCircle className="shrink-0 text-[#245BFF]" />
+                <FiPlayCircle className="shrink-0 text-[#D97706]" />
                 <span className="min-w-0 flex-1">
                   <span className="block text-xs font-semibold">视频 {index + 1}</span>
-                  <span className="block truncate text-[11px] text-[#667085]">{url}</span>
+                  <span className="block truncate text-[11px] text-[#7A6142]">{url}</span>
                 </span>
               </button>
             ))}
@@ -1156,19 +1308,19 @@ const AudioArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
 
   return (
     <div className="space-y-4">
-      <div className="space-y-3 rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
+      <div className="space-y-3 rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
         {audioUrls.length > 0 ? (
           audioUrls.map((url, index) => (
-            <div key={url} className="rounded-lg border border-[#D9DEE7] bg-white p-3">
+            <div key={url} className="rounded-lg border border-[#EED79A] bg-white p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs font-semibold text-[#667085]">音频 {index + 1}</p>
-                <a href={url} target="_blank" rel="noreferrer" className="truncate text-[11px] font-semibold text-[#245BFF]">打开素材</a>
+                <p className="text-xs font-semibold text-[#7A6142]">音频 {index + 1}</p>
+                <a href={url} target="_blank" rel="noreferrer" className="truncate text-[11px] font-semibold text-[#D97706]">打开素材</a>
               </div>
               <audio controls preload="metadata" className="w-full" src={url} />
             </div>
           ))
         ) : (
-          <p className="text-sm text-[#667085]">当前音频产物没有可播放 URL。</p>
+          <p className="text-sm text-[#7A6142]">当前音频产物没有可播放 URL。</p>
         )}
       </div>
       <ReadableArtifact artifact={{ kind: 'AUDIO', unitId: 'audio-package', stageName: '', name: '', version: 1 } as Artifact} content={content} />
@@ -1190,7 +1342,7 @@ const ReadableArtifact: React.FC<{ artifact: Artifact; content: unknown }> = ({ 
     <div className="space-y-4 rounded-lg bg-white p-5 shadow-sm">
       <div>
         <p className="text-sm font-semibold">{artifact.kind === 'VIDEO' ? '视频素材包' : artifact.kind === 'AUDIO' ? '音频素材包' : '素材说明'}</p>
-        <p className="mt-1 text-xs text-[#667085]">这里展示可直接拿去制作或返工的信息，已隐藏技术字段。</p>
+        <p className="mt-1 text-xs text-[#7A6142]">这里展示可直接拿去制作或返工的信息，已隐藏技术字段。</p>
       </div>
       <ReadableValue value={record} />
     </div>
@@ -1201,20 +1353,20 @@ const PublishCopyView: React.FC<{ record: Record<string, unknown> }> = ({ record
   const keywords = toStringList(record.keywords)
   return (
     <div className="space-y-4 rounded-lg bg-white p-5 shadow-sm">
-      <div className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
-        <p className="text-xs font-semibold text-[#667085]">标题</p>
+      <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
+        <p className="text-xs font-semibold text-[#7A6142]">标题</p>
         <p className="mt-2 text-xl font-semibold leading-8">{String(record.title || '待补充标题')}</p>
       </div>
-      <div className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
-        <p className="text-xs font-semibold text-[#667085]">简介</p>
+      <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
+        <p className="text-xs font-semibold text-[#7A6142]">简介</p>
         <p className="mt-2 whitespace-pre-wrap text-sm leading-7">{String(record.description || '待补充简介')}</p>
       </div>
-      <div className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4">
-        <p className="text-xs font-semibold text-[#667085]">关键词</p>
+      <div className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
+        <p className="text-xs font-semibold text-[#7A6142]">关键词</p>
         <div className="mt-3 flex flex-wrap gap-2">
           {keywords.length > 0 ? keywords.map((keyword) => (
-            <span key={keyword} className="rounded-full bg-[#EEF4FF] px-3 py-1 text-xs font-semibold text-[#245BFF]">{keyword}</span>
-          )) : <span className="text-sm text-[#667085]">待补充关键词</span>}
+            <span key={keyword} className="rounded-full bg-[#FFF2C2] px-3 py-1 text-xs font-semibold text-[#D97706]">{keyword}</span>
+          )) : <span className="text-sm text-[#7A6142]">待补充关键词</span>}
         </div>
       </div>
     </div>
@@ -1224,14 +1376,14 @@ const PublishCopyView: React.FC<{ record: Record<string, unknown> }> = ({ record
 const ReadableValue: React.FC<{ value: unknown; level?: number }> = ({ value, level = 0 }) => {
   if (value == null || value === '') return null
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return <p className="whitespace-pre-wrap text-sm leading-7 text-[#1D2939]">{String(value)}</p>
+    return <p className="whitespace-pre-wrap text-sm leading-7 text-[#3B210B]">{String(value)}</p>
   }
   if (Array.isArray(value)) {
     return (
       <div className="space-y-3">
         {value.map((item, index) => (
-          <div key={index} className="rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-3">
-            <p className="mb-2 text-xs font-semibold text-[#667085]">素材 {index + 1}</p>
+          <div key={index} className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-3">
+            <p className="mb-2 text-xs font-semibold text-[#7A6142]">素材 {index + 1}</p>
             <ReadableValue value={item} level={level + 1} />
           </div>
         ))}
@@ -1241,12 +1393,12 @@ const ReadableValue: React.FC<{ value: unknown; level?: number }> = ({ value, le
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([key, item]) => shouldShowReadableField(key, item))
-    if (entries.length === 0) return <p className="text-sm text-[#667085]">暂无可展示内容。</p>
+    if (entries.length === 0) return <p className="text-sm text-[#7A6142]">暂无可展示内容。</p>
     return (
       <div className="space-y-3">
         {entries.map(([key, item]) => (
-          <div key={key} className={level > 0 ? '' : 'rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-4'}>
-            <p className="text-xs font-semibold text-[#667085]">{fieldLabel(key)}</p>
+          <div key={key} className={level > 0 ? '' : 'rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4'}>
+            <p className="text-xs font-semibold text-[#7A6142]">{fieldLabel(key)}</p>
             <div className="mt-2">
               <ReadableValue value={item} level={level + 1} />
             </div>
@@ -1273,24 +1425,24 @@ const ArtifactRevisionPanel: React.FC<{
   const stageName = content?.artifact.stageName
   const reviewStage = stageName ? reviewStages.find((stage) => stage.name === stageName) : undefined
   return (
-    <div className="min-h-0 overflow-y-auto border-t border-[#D9DEE7] bg-white p-4 lg:border-l lg:border-t-0">
+    <div className="min-h-0 overflow-y-auto border-t border-[#EED79A] bg-white p-4 lg:border-l lg:border-t-0">
       <div className="flex items-center gap-2 text-sm font-semibold">
         <FiMessageSquare />
         对这份产物说修改意见
       </div>
-      <p className="mt-2 text-xs leading-5 text-[#667085]">像给图片补充描述一样，直接说不满意哪里，系统会生成新版本并保留历史。</p>
+      <p className="mt-2 text-xs leading-5 text-[#7A6142]">像给图片补充描述一样，直接说不满意哪里，系统会生成新版本并保留历史。</p>
       <textarea
         value={revisionMessage}
         onChange={(event) => onRevisionChange(event.target.value)}
         disabled={!content || revising}
-        className="mt-3 min-h-32 w-full resize-y rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] px-3 py-2 text-sm leading-6 outline-none focus:border-[#245BFF] focus:ring-2 focus:ring-[#245BFF]/15 disabled:bg-[#EEF2F6]"
+        className="mt-3 min-h-32 w-full resize-y rounded-lg border border-[#EED79A] bg-[#FFFCF4] px-3 py-2 text-sm leading-6 outline-none focus:border-[#D97706] focus:ring-2 focus:ring-[#D97706]/15 disabled:bg-[#FFF0C6]"
         placeholder="例如：开头更有冲突感；把屈原和龙舟关系讲清楚；标题更像小红书知识号。"
       />
       <div className="mt-3 flex flex-wrap gap-2">
         <button
           onClick={onRevise}
           disabled={!content || !revisionMessage.trim() || revising}
-          className="inline-flex items-center gap-2 rounded-lg bg-[#16181D] px-3 py-2 text-xs font-semibold text-white disabled:bg-[#AAB2C0]"
+          className="inline-flex items-center gap-2 rounded-lg bg-[#2B1708] px-3 py-2 text-xs font-semibold text-white disabled:bg-[#CBB88A]"
         >
           {revising ? <FiRefreshCw className="animate-spin" /> : <FiRefreshCw />}
           生成返工版本
@@ -1298,23 +1450,23 @@ const ArtifactRevisionPanel: React.FC<{
         <button
           onClick={() => stageName && onApprove(stageName)}
           disabled={!currentRun || !reviewStage || approvingStage === stageName}
-          className="inline-flex items-center gap-2 rounded-lg border border-[#D9DEE7] bg-white px-3 py-2 text-xs font-semibold text-[#16181D] disabled:text-[#98A2B3]"
+          className="inline-flex items-center gap-2 rounded-lg border border-[#EED79A] bg-white px-3 py-2 text-xs font-semibold text-[#2B1708] disabled:text-[#A48B62]"
         >
           <FiCheckCircle />
           {approvingStage === stageName ? '确认中' : '确认通过'}
         </button>
       </div>
       <div className="mt-5">
-        <p className="text-xs font-semibold text-[#667085]">版本历史</p>
+        <p className="text-xs font-semibold text-[#7A6142]">版本历史</p>
         <div className="mt-2 space-y-2">
-          {history.length === 0 && <p className="text-xs text-[#667085]">暂无历史版本。</p>}
+          {history.length === 0 && <p className="text-xs text-[#7A6142]">暂无历史版本。</p>}
           {history.map((artifact) => (
-            <div key={artifact.id} className="rounded-lg border border-[#D9DEE7] bg-white px-3 py-2">
+            <div key={artifact.id} className="rounded-lg border border-[#EED79A] bg-white px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold">v{artifact.version}</span>
-                <span className="text-[10px] text-[#667085]">{artifact.isCurrent ? '当前' : '历史'}</span>
+                <span className="text-[10px] text-[#7A6142]">{artifact.isCurrent ? '当前' : '历史'}</span>
               </div>
-              <p className="mt-1 truncate text-[11px] text-[#667085]">{artifact.provider || artifact.model || artifact.createdAt}</p>
+              <p className="mt-1 truncate text-[11px] text-[#7A6142]">{artifact.provider || artifact.model || artifact.createdAt}</p>
             </div>
           ))}
         </div>
@@ -1332,23 +1484,23 @@ const TraceModal: React.FC<{
   const nodes = trace?.task.nodes || []
   const contexts = trace?.contexts || []
   return (
-    <div className="fixed inset-0 z-50 bg-[#101318]/60 p-3 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 bg-[#2B1708]/60 p-3 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true">
       <div className="mx-auto flex h-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-[#D9DEE7] px-5 py-4">
+        <div className="flex items-center justify-between gap-3 border-b border-[#EED79A] px-5 py-4">
           <div>
             <p className="text-base font-semibold">制作记录</p>
-            <p className="mt-1 text-xs text-[#667085]">{trace?.task.taskId ? `任务 ${shortId(trace.task.taskId)}` : '读取这条创作线的执行过程'}</p>
+            <p className="mt-1 text-xs text-[#7A6142]">{trace?.task.taskId ? `任务 ${shortId(trace.task.taskId)}` : '读取这条创作线的执行过程'}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#D9DEE7] bg-white text-[#475467] hover:bg-[#F7F9FC]"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#EED79A] bg-white text-[#6B5236] hover:bg-[#FFF9ED]"
             aria-label="关闭"
           >
             <FiX />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto bg-[#F7F9FC] p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-[#FFF9ED] p-5">
           {loading && <Skeleton label="正在读取制作记录" />}
           {error && (
             <div className="rounded-lg border border-[#E85D75]/30 bg-[#FFF1F3] p-4 text-sm text-[#9D2540]">{error}</div>
@@ -1356,17 +1508,17 @@ const TraceModal: React.FC<{
           {!loading && !error && trace && (
             <div className="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
               <div className="space-y-3">
-                <div className="rounded-lg border border-[#D9DEE7] bg-white p-4">
-                  <p className="text-xs font-semibold text-[#667085]">整体状态</p>
+                <div className="rounded-lg border border-[#EED79A] bg-white p-4">
+                  <p className="text-xs font-semibold text-[#7A6142]">整体状态</p>
                   <p className="mt-2 text-2xl font-semibold">{statusLabel(trace.task.status)}</p>
-                  <p className="mt-2 text-xs leading-5 text-[#667085]">{nodes.length} 个步骤，{contexts.length} 条过程记录。</p>
+                  <p className="mt-2 text-xs leading-5 text-[#7A6142]">{nodes.length} 个步骤，{contexts.length} 条过程记录。</p>
                 </div>
                 {nodes.map((node) => (
-                  <div key={node.id} className="rounded-lg border border-[#D9DEE7] bg-white p-3">
+                  <div key={node.id} className="rounded-lg border border-[#EED79A] bg-white p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold">{stageNameMap[node.id] || stageNameMap[node.name] || node.name || node.id}</p>
-                        <p className="mt-1 text-[11px] text-[#667085]">{node.type}</p>
+                        <p className="mt-1 text-[11px] text-[#7A6142]">{node.type}</p>
                       </div>
                       <MiniBadge label={statusLabel(node.status)} />
                     </div>
@@ -1374,23 +1526,23 @@ const TraceModal: React.FC<{
                   </div>
                 ))}
               </div>
-              <div className="rounded-lg border border-[#D9DEE7] bg-white p-4">
+              <div className="rounded-lg border border-[#EED79A] bg-white p-4">
                 <p className="text-sm font-semibold">过程时间线</p>
                 <div className="mt-4 space-y-4">
                   {contexts.map((item) => (
                     <div key={item.id} className="flex gap-3">
-                      <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-[#245BFF]" />
-                      <div className="min-w-0 flex-1 border-b border-[#EEF2F6] pb-4">
+                      <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-[#D97706]" />
+                      <div className="min-w-0 flex-1 border-b border-[#FFF0C6] pb-4">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-sm font-semibold">{contextLabel(item.contextType)}</p>
-                          {item.nodeId && <span className="rounded-full bg-[#EEF2F6] px-2 py-0.5 text-[10px] text-[#667085]">{stageNameMap[item.nodeId] || item.nodeId}</span>}
+                          {item.nodeId && <span className="rounded-full bg-[#FFF0C6] px-2 py-0.5 text-[10px] text-[#7A6142]">{stageNameMap[item.nodeId] || item.nodeId}</span>}
                         </div>
-                        <p className="mt-1 text-sm leading-6 text-[#475467]">{item.message}</p>
-                        <p className="mt-1 text-[11px] text-[#98A2B3]">{formatTime(item.createdAt)}</p>
+                        <p className="mt-1 text-sm leading-6 text-[#6B5236]">{item.message}</p>
+                        <p className="mt-1 text-[11px] text-[#A48B62]">{formatTime(item.createdAt)}</p>
                       </div>
                     </div>
                   ))}
-                  {contexts.length === 0 && <p className="text-sm text-[#667085]">暂无过程记录。</p>}
+                  {contexts.length === 0 && <p className="text-sm text-[#7A6142]">暂无过程记录。</p>}
                 </div>
               </div>
             </div>
@@ -1600,20 +1752,14 @@ const fieldLabel = (key: string) => {
 }
 
 const MaterialRow: React.FC<{ icon: React.ReactNode; title: string; desc: string }> = ({ icon, title, desc }) => (
-  <div className="flex gap-3 rounded-lg border border-[#D9DEE7] bg-[#FBFCFE] p-3">
-    <div className="mt-0.5 shrink-0 text-[#245BFF]">{icon}</div>
+  <div className="flex gap-3 rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-3">
+    <div className="mt-0.5 shrink-0 text-[#D97706]">{icon}</div>
     <div className="min-w-0">
       <p className="text-sm font-semibold">{title}</p>
-      <p className="mt-0.5 text-xs leading-5 text-[#667085]">{desc}</p>
+      <p className="mt-0.5 text-xs leading-5 text-[#7A6142]">{desc}</p>
     </div>
   </div>
 )
 
-const KeyValue: React.FC<{ label: string; value: string; title?: string }> = ({ label, value, title }) => (
-  <div className="flex justify-between gap-3">
-    <dt>{label}</dt>
-    <dd className="font-mono" title={title}>{value}</dd>
-  </div>
-)
 
 export default CreatorWorkbenchPage
