@@ -34,3 +34,55 @@
 .animate-in {
   animation: fade-in-scale 0.2s ease-out;
 }
+
+/* Markdown document rendering */
+.markdown-body {
+  @apply text-base leading-8 text-[#3B210B];
+  min-height: 520px;
+}
+.markdown-body h1 {
+  @apply mt-6 mb-4 text-2xl font-bold text-[#2B1708];
+}
+.markdown-body h2 {
+  @apply mt-5 mb-3 text-lg font-semibold text-[#2B1708];
+}
+.markdown-body h3 {
+  @apply mt-4 mb-2 text-base font-semibold text-[#3B210B];
+}
+.markdown-body p {
+  @apply my-2 leading-8;
+}
+.markdown-body ul,
+.markdown-body ol {
+  @apply my-2 pl-5;
+}
+.markdown-body li {
+  @apply my-1;
+}
+.markdown-body ul > li {
+  @apply list-disc;
+}
+.markdown-body ol > li {
+  @apply list-decimal;
+}
+.markdown-body strong {
+  @apply font-bold text-[#2B1708];
+}
+.markdown-body em {
+  @apply italic;
+}
+.markdown-body hr {
+  @apply my-5 border-0 border-t border-[#EED79A];
+}
+.markdown-body code {
+  @apply rounded bg-[#FFF0C6] px-1 py-0.5 text-sm text-[#7A4E1B];
+}
+.markdown-body pre {
+  @apply my-3 overflow-x-auto rounded-lg bg-[#FFF9ED] p-4;
+}
+.markdown-body pre code {
+  @apply bg-transparent p-0;
+}
+.markdown-body blockquote {
+  @apply my-3 border-l-4 border-[#D97706] bg-[#FFF9ED] py-2 pl-4 italic text-[#6B5236];
+}

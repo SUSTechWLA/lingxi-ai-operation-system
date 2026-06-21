@@ -142,9 +142,12 @@ func TestBuildArtifactsFromNodeOutputHandlesMapManifestWithValidFields(t *testin
 		},
 		Output: map[string]interface{}{
 			"stdout": `{
-				"artifacts": {
-					"unitId": "publish-copy",
-					"kind": "JSON",
+					"title": "端午节为什么吃粽子",
+					"description": "讲清楚端午节和粽子的来源",
+					"keywords": ["端午节", "粽子"],
+					"artifacts": {
+						"unitId": "publish-copy",
+						"kind": "JSON",
 					"name": "发布文案",
 					"mimeType": "application/json",
 					"contentHash": "abc123",
@@ -171,6 +174,88 @@ func TestBuildArtifactsFromNodeOutputHandlesMapManifestWithValidFields(t *testin
 	}
 	if req.StorageType != StorageLocal {
 		t.Fatalf("expected local storage, got %q", req.StorageType)
+	}
+}
+
+func TestBuildArtifactsFromNodeOutputSkipsEmptyPublishCopyArtifact(t *testing.T) {
+	node := &model.Node{
+		ID:     "viewpoint_dossier",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "viewpoint_dossier",
+		},
+		Output: map[string]interface{}{
+			"stdout": `{
+				"content": "{\"核心观点\":\"端午不只是吃粽子\"}",
+				"title": "",
+				"description": "",
+				"artifacts": [
+					{
+						"unitId": "viewpoint_dossier",
+						"kind": "MARKDOWN",
+						"name": "viewpoint_dossier.md",
+						"mimeType": "text/markdown"
+					},
+					{
+						"unitId": "publish-copy",
+						"kind": "JSON",
+						"name": "发布文案.json",
+						"mimeType": "application/json"
+					}
+				]
+			}`,
+		},
+	}
+
+	requests := BuildArtifactRequestsFromNode("vp-1", "run-1", node)
+
+	for _, req := range requests {
+		if req.UnitID == "publish-copy" {
+			t.Fatalf("empty publish-copy artifact should be skipped: %+v", req)
+		}
+	}
+}
+
+func TestContentFromMatchingNodeArtifactHydratesLocalMarkdown(t *testing.T) {
+	artifact := &Artifact{
+		ProjectID:     "vp-1",
+		WorkflowRunID: "run-1",
+		StageName:     "viewpoint_dossier",
+		UnitID:        "viewpoint_dossier",
+		Kind:          KindMarkdown,
+		Name:          "viewpoint_dossier.md",
+		StorageType:   StorageLocal,
+		MimeType:      "text/markdown",
+	}
+	node := &model.Node{
+		ID:     "viewpoint_dossier_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "viewpoint_dossier",
+		},
+		Output: map[string]interface{}{
+			"stdout": `{
+				"content": "# 观点档案\n端午节和粽子的来源。",
+				"artifacts": [
+					{
+						"unitId": "viewpoint_dossier",
+						"kind": "MARKDOWN",
+						"name": "viewpoint_dossier.md",
+						"mimeType": "text/markdown",
+						"storageRef": "local://projects/vp-1/artifacts/viewpoint_dossier/viewpoint_dossier/hash/viewpoint_dossier.md"
+					}
+				]
+			}`,
+		},
+	}
+
+	content, ok := contentFromMatchingNodeArtifact("vp-1", "run-1", artifact, node)
+
+	if !ok {
+		t.Fatal("expected local markdown artifact to hydrate from matching node output")
+	}
+	if string(content) != "# 观点档案\n端午节和粽子的来源。" {
+		t.Fatalf("unexpected hydrated content: %q", string(content))
 	}
 }
 

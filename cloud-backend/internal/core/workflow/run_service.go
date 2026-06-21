@@ -40,17 +40,7 @@ func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, versi
 		return nil, fmt.Errorf("invalid DAG in template: %w", err)
 	}
 
-	// Apply input overrides to nodes
-	if input != nil {
-		for i := range dag.Nodes {
-			for k, v := range input {
-				if dag.Nodes[i].Input == nil {
-					dag.Nodes[i].Input = make(map[string]interface{})
-				}
-				dag.Nodes[i].Input[k] = v
-			}
-		}
-	}
+	applyRunInputToDAG(&dag, input)
 
 	// Create orchestrator task
 	task, err := s.orchService.CreateTask(ctx, map[string]interface{}{
@@ -107,6 +97,28 @@ func workflowRunUserID(ctx context.Context) string {
 		return userID
 	}
 	return "default"
+}
+
+func applyRunInputToDAG(dag *model.DAGRequest, input map[string]interface{}) {
+	if dag == nil || len(input) == 0 {
+		return
+	}
+	for i := range dag.Nodes {
+		if dag.Nodes[i].Input == nil {
+			dag.Nodes[i].Input = make(map[string]interface{})
+		}
+		for k, v := range input {
+			dag.Nodes[i].Input[k] = v
+		}
+
+		parameters, ok := dag.Nodes[i].Input["parameters"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for k, v := range input {
+			parameters[k] = v
+		}
+	}
 }
 
 // GetRun returns a WorkflowRun by ID.

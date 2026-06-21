@@ -126,6 +126,9 @@ func main() {
 	toolRegistry.Register(builtin.NewChatReviseTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewChatGenerateTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewExternalTool(toolRegistry))
+	if cfg.Video.VideoCreationEnabled {
+		builtin.RegisterVideoCreationExternalTools(toolRegistry)
+	}
 
 	directExec := executor.NewDirectExecutor()
 	var sandboxExec *executor.SandboxExecutor
@@ -357,7 +360,6 @@ func main() {
 		zap.L().Info("Video creation enabled — registering video modules",
 			zap.String("model_provider_mode", cfg.Video.ModelProviderMode),
 		)
-		builtin.RegisterVideoCreationExternalTools(toolRegistry)
 		builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
 		// Persist user model config alongside the skill root so it survives restarts.
 		// API key is encrypted at rest using AES-256-GCM with a key derived from the auth secret.
@@ -376,12 +378,12 @@ func main() {
 				effective := builtin.GetVideoCreationOpenAIConfig()
 				runtime := builtin.GetRuntimeModelProviderConfig()
 				c.JSON(200, gin.H{"code": 200, "message": "ok", "data": gin.H{
-					"baseUrl":    effective.BaseURL,
-					"model":      effective.Model,
-					"hasKey":     effective.APIKey != "",
-					"endpoint":   strings.TrimRight(effective.BaseURL, "/") + "/chat/completions",
-					"fromUser":   runtime.BaseURL != "",
-					"fromEnv":    builtin.GetEnvOpenAIConfig().APIKey != "" || runtime.APIKey == "",
+					"baseUrl":  effective.BaseURL,
+					"model":    effective.Model,
+					"hasKey":   effective.APIKey != "",
+					"endpoint": strings.TrimRight(effective.BaseURL, "/") + "/chat/completions",
+					"fromUser": runtime.BaseURL != "",
+					"fromEnv":  builtin.GetEnvOpenAIConfig().APIKey != "" || runtime.APIKey == "",
 				}})
 			case "PUT":
 				var req struct {

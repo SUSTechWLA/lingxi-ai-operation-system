@@ -28,9 +28,9 @@ type Config struct {
 type VideoConfig struct {
 	VideoCreationEnabled bool   `mapstructure:"VIDEO_CREATION_ENABLED"`
 	LocalRunnerEnabled   bool   `mapstructure:"LOCAL_RUNNER_ENABLED"`
-	ModelProviderMode    string `mapstructure:"MODEL_PROVIDER_MODE"`    // "fake" | "real"
-	SkillRoot            string `mapstructure:"SKILL_ROOT"`             // path to skills/ directory
-	HyperFramesCLIPath   string `mapstructure:"HYPERFRAMES_CLI_PATH"`   // path to hyperframes CLI binary (optional)
+	ModelProviderMode    string `mapstructure:"MODEL_PROVIDER_MODE"`  // "fake" | "real"
+	SkillRoot            string `mapstructure:"SKILL_ROOT"`           // path to skills/ directory
+	HyperFramesCLIPath   string `mapstructure:"HYPERFRAMES_CLI_PATH"` // path to hyperframes CLI binary (optional)
 }
 
 type ServerConfig struct {
@@ -168,8 +168,9 @@ func setDefaults() {
 	viper.SetDefault("MINIO_BUCKET", "media-assets")
 	viper.SetDefault("MINIO_USE_SSL", false)
 
-	// Video creation feature flags (all off by default — must opt-in)
-	viper.SetDefault("VIDEO_CREATION_ENABLED", false)
+	// Video creation is part of the default cloud backend surface. Local desktop
+	// execution remains off unless explicitly enabled.
+	viper.SetDefault("VIDEO_CREATION_ENABLED", true)
 	viper.SetDefault("LOCAL_RUNNER_ENABLED", false)
 	viper.SetDefault("MODEL_PROVIDER_MODE", "fake")
 	viper.SetDefault("SKILL_ROOT", "skills")

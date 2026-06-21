@@ -120,6 +120,9 @@ func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, m
 		// before the local backend syncs it. This is a materialization-time
 		// convenience; the authoritative copy lives on the local agent.
 		data := extractArtifactContent(payload, unitID, kind)
+		if unitID == "publish-copy" && len(data) == 0 {
+			continue
+		}
 
 		// Generate a deterministic content hash when none is provided, so the
 		// idempotency check in CreateArtifact prevents duplicate versions on
@@ -201,7 +204,7 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 			pubData["keywords"] = tags
 		}
 		if len(pubData) > 0 {
-			return marshalValue(pubData)
+			return normalizePublishCopy(pubData)
 		}
 	default:
 		// Stage-named markdown artifacts: use parsed script or content field.
@@ -225,42 +228,111 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 // the frontend's ReadableArtifact fallback can still render useful content.
 func normalizePublishCopy(src map[string]interface{}) []byte {
 	out := map[string]interface{}{}
-	hasStandard := false
 	if t, ok := src["title"]; ok {
-		out["title"] = ensureString(t)
-		hasStandard = true
+		if text := ensureString(t); strings.TrimSpace(text) != "" {
+			out["title"] = text
+		}
 	}
 	if d, ok := src["description"]; ok {
-		out["description"] = ensureString(d)
-		hasStandard = true
+		if text := ensureString(d); strings.TrimSpace(text) != "" {
+			out["description"] = text
+		}
 	}
 	if kw, ok := src["keywords"]; ok {
-		out["keywords"] = kw
+		if normalized := normalizeKeywordValue(kw); len(normalized) > 0 {
+			out["keywords"] = normalized
+		}
 	} else if tags, ok := src["tags"]; ok {
-		out["keywords"] = tags
+		if normalized := normalizeKeywordValue(tags); len(normalized) > 0 {
+			out["keywords"] = normalized
+		}
 	}
 
-	// Copy additional readable fields for the frontend fallback renderer.
-	extraKeys := []string{"negativePrompt", "videoPrompt", "prompt", "referenceFrames",
-		"core_opinion", "narration_beats", "visual_beats", "scenes", "shots", "characters",
-		"script", "narration", "voiceover", "transcript", "scenes"}
+	if len(out) == 0 {
+		return nil
+	}
+
+	extraKeys := []string{
+		"negativePrompt", "videoPrompt", "prompt", "referenceFrames",
+		"script", "narration", "voiceover", "transcript",
+	}
 	for _, k := range extraKeys {
-		if v, ok := src[k]; ok && v != nil {
+		if v, ok := src[k]; ok && hasReadableValue(v) {
 			out[k] = v
 		}
 	}
 
-	// If no standard fields are present, pass through all remaining fields
-	// so the user can at least review whatever the LLM produced.
-	if !hasStandard {
-		for k, v := range src {
-			if _, already := out[k]; !already && v != nil {
-				out[k] = v
+	return marshalValue(out)
+}
+
+func normalizeKeywordValue(value interface{}) []string {
+	keywords := make([]string, 0)
+	switch typed := value.(type) {
+	case []string:
+		for _, item := range typed {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				keywords = append(keywords, trimmed)
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			switch v := item.(type) {
+			case string:
+				if trimmed := strings.TrimSpace(v); trimmed != "" {
+					keywords = append(keywords, trimmed)
+				}
+			case map[string]interface{}:
+				if text := firstStringField(v, "keyword", "tag", "label", "name", "text", "value"); text != "" {
+					keywords = append(keywords, text)
+				}
+			default:
+				if text := strings.TrimSpace(ensureString(v)); text != "" {
+					keywords = append(keywords, text)
+				}
+			}
+		}
+	case string:
+		for _, item := range strings.FieldsFunc(typed, func(r rune) bool {
+			return r == ',' || r == '，' || r == '、' || r == ';' || r == '；' || r == '\n' || r == '\t' || r == ' '
+		}) {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				keywords = append(keywords, trimmed)
+			}
+		}
+	case map[string]interface{}:
+		if text := firstStringField(typed, "keyword", "tag", "label", "name", "text", "value"); text != "" {
+			keywords = append(keywords, text)
+		}
+	}
+	return keywords
+}
+
+func firstStringField(record map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if text, ok := record[key].(string); ok {
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
+				return trimmed
 			}
 		}
 	}
+	return ""
+}
 
-	return marshalValue(out)
+func hasReadableValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []interface{}:
+		return len(typed) > 0
+	case []string:
+		return len(normalizeKeywordValue(typed)) > 0
+	case map[string]interface{}:
+		return len(typed) > 0
+	default:
+		return true
+	}
 }
 
 // ensureString converts any value to a string representation, preventing

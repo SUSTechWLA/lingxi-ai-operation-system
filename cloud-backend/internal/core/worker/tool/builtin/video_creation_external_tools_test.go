@@ -1,36 +1,46 @@
 package builtin
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
-func TestExternalToolExecutesRegisteredLocalVideoCreationTool(t *testing.T) {
+func TestRegisterVideoCreationExternalToolsInstallsOpinionVideoDependencies(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
 
-	ext := NewExternalTool(registry)
-	result := ext.Execute(context.Background(), map[string]interface{}{
-		"tool":            "skill_stage_agent",
-		"skill_name":      "create-opinion-videos",
-		"stage":           "viewpoint_dossier",
-		"brief":           "做一条 60 秒口播视频",
-		"instruction_ref": "skills/create-opinion-videos/1.0.0/stages/viewpoint_dossier.md",
-	}, tool.ToolContext{TaskID: "task-1", NodeID: "viewpoint_dossier"})
+	for _, name := range []string{
+		"skill_stage_agent",
+		"image_asset_generator",
+		"hyperframes_project_builder",
+		"hyperframes_renderer",
+		"hypergen_keyframes",
+	} {
+		if registry.GetExternalManifest(name) == nil {
+			t.Fatalf("expected default video tool %q to be registered", name)
+		}
+	}
+}
 
-	if !result.Success {
-		t.Fatalf("expected local external tool success, got %s", result.Error)
+func TestBuildSkillStageArtifactsDoesNotEmitPublishCopyForNonPublishStage(t *testing.T) {
+	artifacts := buildSkillStageArtifacts("viewpoint_dossier", "create-opinion-videos", false)
+	for _, artifact := range artifacts {
+		if artifact["unitId"] == "publish-copy" {
+			t.Fatalf("non-publish stages should not emit publish-copy artifacts: %+v", artifact)
+		}
 	}
-	if result.Data["content"] == "" {
-		t.Fatalf("expected reviewable content in result: %+v", result.Data)
+}
+
+func TestBuildSkillStageArtifactsEmitsPublishCopyForPublishPackageStage(t *testing.T) {
+	artifacts := buildSkillStageArtifacts("publish_package", "create-opinion-videos", true)
+	found := false
+	for _, artifact := range artifacts {
+		if artifact["unitId"] == "publish-copy" {
+			found = true
+		}
 	}
-	if result.Data["artifacts"] == nil {
-		t.Fatalf("expected artifacts manifest in result: %+v", result.Data)
-	}
-	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
-	if !ok || len(artifacts) < 2 {
-		t.Fatalf("expected at least 2 artifact entries (markdown + publish-copy), got: %+v", result.Data["artifacts"])
+	if !found {
+		t.Fatalf("publish_package stage should emit a publish-copy artifact: %+v", artifacts)
 	}
 }

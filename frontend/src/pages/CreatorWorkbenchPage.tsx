@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import {
   FiAlertCircle,
   FiArrowRight,
@@ -139,6 +140,7 @@ const stageNameMap: Record<string, string> = {
   hyperframes_build: '工程构建',
   hyperframes_render: '视频渲染',
   render_review: '成片审核',
+  publish_package: '发布素材包',
   intent_analysis: '意图分析',
   narration: '讲稿整理',
   visual_design: '视觉方向',
@@ -203,6 +205,8 @@ const CreatorWorkbenchPage: React.FC = () => {
   const [workflows, setWorkflows] = useState<WorkflowTemplate[]>([])
   const [projects, setProjects] = useState<VideoProject[]>([])
   const [brief, setBrief] = useState(examplePrompts[0])
+  const [aspectRatio, setAspectRatio] = useState('9:16')
+  const [targetDurationSec, setTargetDurationSec] = useState(60)
   const [routeResult, setRouteResult] = useState<SkillRouteResponse | null>(null)
   const [routing, setRouting] = useState(false)
   const [routeError, setRouteError] = useState('')
@@ -351,6 +355,14 @@ const CreatorWorkbenchPage: React.FC = () => {
     }
   }, [brief])
 
+  // Sync route-inferred aspect ratio and duration into user-editable controls.
+  // Only updates when the route result changes (user editing between routes is
+  // safe because routing resets on each keystroke with a debounce).
+  useEffect(() => {
+    if (routeResult?.aspectRatio) setAspectRatio(routeResult.aspectRatio)
+    if (routeResult?.targetDurationSec) setTargetDurationSec(routeResult.targetDurationSec)
+  }, [routeResult?.aspectRatio, routeResult?.targetDurationSec])
+
   useEffect(() => {
     if (!selectedSummary) return
     const key = skillKey(selectedSummary)
@@ -457,8 +469,6 @@ const CreatorWorkbenchPage: React.FC = () => {
       }
 
       const deliverable = route.deliverable || 'publish_pack'
-      const aspectRatio = route.aspectRatio || '9:16'
-      const targetDurationSec = route.targetDurationSec || 60
       const display = routeDisplayFor(route.route)
 
       const project = await createVideoProject({
@@ -646,8 +656,37 @@ const CreatorWorkbenchPage: React.FC = () => {
                 <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-4">
                   <Metric label="路由方式" value={routeResult ? (routeResult.source === 'llm' ? 'LLM' : '规则兜底') : routing ? '理解中' : '-'} />
                   <Metric label="交付目标" value={deliverableLabels[currentDeliverable] || currentDeliverable} />
-                  <Metric label="画幅" value={routeResult?.aspectRatio || '-'} />
-                  <Metric label="时长" value={routeResult?.targetDurationSec ? `${routeResult.targetDurationSec}秒` : '-'} />
+                  <div className="rounded-lg border border-[#EED79A] bg-white px-3 py-2">
+                    <label className="text-[10px] text-[#7A6142]" htmlFor="aspect-ratio-select">画幅</label>
+                    <select
+                      id="aspect-ratio-select"
+                      value={aspectRatio}
+                      onChange={(e) => setAspectRatio(e.target.value)}
+                      className="mt-0.5 w-full rounded border border-[#EED79A] bg-[#FFFCF4] py-1 pl-1.5 pr-5 text-sm font-semibold text-[#2B1708] outline-none focus:border-[#D97706] focus:ring-1 focus:ring-[#D97706]/20"
+                    >
+                      <option value="9:16">9:16 竖屏</option>
+                      <option value="16:9">16:9 横屏</option>
+                      <option value="1:1">1:1 方形</option>
+                      <option value="4:5">4:5 竖屏</option>
+                      <option value="3:4">3:4 竖屏</option>
+                    </select>
+                  </div>
+                  <div className="rounded-lg border border-[#EED79A] bg-white px-3 py-2">
+                    <label className="text-[10px] text-[#7A6142]" htmlFor="duration-input">时长</label>
+                    <div className="mt-0.5 flex items-center gap-1">
+                      <input
+                        id="duration-input"
+                        type="number"
+                        min={15}
+                        max={300}
+                        step={5}
+                        value={targetDurationSec}
+                        onChange={(e) => setTargetDurationSec(Number(e.target.value) || 60)}
+                        className="w-16 rounded border border-[#EED79A] bg-[#FFFCF4] px-1.5 py-1 text-sm font-semibold text-[#2B1708] outline-none focus:border-[#D97706] focus:ring-1 focus:ring-[#D97706]/20"
+                      />
+                      <span className="text-xs text-[#7A6142]">秒</span>
+                    </div>
+                  </div>
                 </div>
                 <button
                   onClick={handleStart}
@@ -786,6 +825,7 @@ const CreatorWorkbenchPage: React.FC = () => {
                   run={currentRun}
                   elapsed={runElapsed}
                   project={currentProject}
+                  stageDefinitions={progressStages}
                   onViewTrace={handleOpenTrace}
                   onApproveStage={handleApproveStage}
                   approvingStage={approvingStage}
@@ -923,16 +963,6 @@ interface PanelHeaderProps {
   desc: string
 }
 
-const STAGE_LABELS: Record<string, string> = {
-  script: '观点档案',
-  opso: '口播 OPSO',
-  keyframe: '关键帧',
-  packaging: '素材打包',
-  publish: '发布文案',
-}
-
-const STAGE_ORDER = ['script', 'opso', 'keyframe', 'packaging', 'publish']
-
 function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
@@ -943,12 +973,13 @@ interface RunProgressPanelProps {
   run: WorkflowRun
   elapsed: number
   project?: { id: string } | null
+  stageDefinitions: SkillStage[]
   approvingStage: string
   onViewTrace: () => void
   onApproveStage: (stage: string) => void
 }
 
-const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, approvingStage, onViewTrace, onApproveStage }) => {
+const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, stageDefinitions, approvingStage, onViewTrace, onApproveStage }) => {
   const statusConfig: Record<string, { bg: string; text: string; icon: React.ReactNode; label: string; animate?: boolean }> = {
     PENDING:   { bg: 'bg-gray-100', text: 'text-gray-600', icon: <FiClock className="w-4 h-4" />, label: '等待中' },
     RUNNING:   { bg: 'bg-blue-50', text: 'text-blue-700', icon: <FiCpu className="w-4 h-4 animate-pulse" />, label: '执行中', animate: true },
@@ -959,11 +990,9 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, appro
   }
   const sc = statusConfig[run.status] || statusConfig.PENDING
   const stages = run.stageStatuses || {}
-  const totalStages = STAGE_ORDER.length
-  const completedStages = STAGE_ORDER.filter((s) => {
-    const st = stages[s]
-    return st === 'SUCCEEDED' || st === 'WAITING_APPROVAL'
-  }).length
+  const displayStages = buildRunStageDisplays(stageDefinitions, stages)
+  const totalStages = displayStages.length
+  const completedStages = displayStages.filter((stage) => stage.status === 'SUCCEEDED' || stage.status === 'WAITING_APPROVAL').length
   const progressPct = totalStages > 0 ? Math.round((completedStages / totalStages) * 100) : 0
 
   return (
@@ -997,8 +1026,8 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, appro
 
       {/* Stage timeline */}
       <div className="space-y-1.5">
-        {STAGE_ORDER.map((stage) => {
-          const st = stages[stage]
+        {displayStages.map((stage) => {
+          const st = stage.status
           const stageIcon =
             st === 'SUCCEEDED' || st === 'WAITING_APPROVAL' ? <FiCheckCircle className="w-4 h-4 text-green-500" /> :
             st === 'RUNNING' ? <FiCpu className="w-4 h-4 text-blue-500 animate-pulse" /> :
@@ -1012,9 +1041,9 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, appro
             'bg-gray-50 border-gray-100'
 
           return (
-            <div key={stage} className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-xs ${stageBg}`}>
+            <div key={stage.key} className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-xs ${stageBg}`}>
               {stageIcon}
-              <span className="flex-1 font-medium text-gray-700">{STAGE_LABELS[stage] || stage}</span>
+              <span className="flex-1 font-medium text-gray-700">{stage.label}</span>
               <span className="text-gray-400 font-mono text-[10px]">
                 {st === 'WAITING_APPROVAL' ? '待确认' :
                  st === 'SUCCEEDED' ? '已就绪' :
@@ -1025,11 +1054,11 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, appro
               {st === 'WAITING_APPROVAL' && (
                 <button
                   type="button"
-                  onClick={() => onApproveStage(stage)}
+                  onClick={() => onApproveStage(stage.approvalStage || stage.key)}
                   disabled={!!approvingStage}
                   className="shrink-0 rounded-md bg-[#00A86B] px-2 py-1 text-[10px] font-semibold text-white hover:bg-[#019A5F] disabled:opacity-50"
                 >
-                  {approvingStage === stage ? '确认中…' : '确认'}
+                  {approvingStage === (stage.approvalStage || stage.key) ? '确认中…' : '确认'}
                 </button>
               )}
             </div>
@@ -1051,6 +1080,57 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, appro
       </div>
     </div>
   )
+}
+
+interface RunStageDisplay {
+  key: string
+  label: string
+  status?: string
+  approvalStage?: string
+}
+
+const buildRunStageDisplays = (
+  stageDefinitions: SkillStage[],
+  stageStatuses: Record<string, string>
+): RunStageDisplay[] => {
+  if (stageDefinitions.length === 0) {
+    return Object.keys(stageStatuses).map((key) => ({
+      key,
+      label: stageNameMap[key] || key,
+      status: stageStatuses[key],
+      approvalStage: key,
+    }))
+  }
+
+  return stageDefinitions.map((stage) => {
+    const nodeIds = stageNodeIds(stage)
+    const status = aggregateStageStatus(nodeIds.map((id) => stageStatuses[id]))
+    return {
+      key: stage.name,
+      label: stageNameMap[stage.name] || stage.name,
+      status,
+      approvalStage: stage.approvalRequired ? stage.name : undefined,
+    }
+  })
+}
+
+const stageNodeIds = (stage: SkillStage) => {
+  const ids: string[] = []
+  if (stage.optional) ids.push(`${stage.name}_skip`)
+  if (stage.approvalRequired || stage.optional) ids.push(`${stage.name}_exec`)
+  ids.push(stage.name)
+  return ids
+}
+
+const aggregateStageStatus = (statuses: Array<string | undefined>) => {
+  if (statuses.includes('WAITING_APPROVAL')) return 'WAITING_APPROVAL'
+  if (statuses.includes('RUNNING')) return 'RUNNING'
+  if (statuses.includes('FAILED')) return 'FAILED'
+  if (statuses.includes('SUCCEEDED')) return 'SUCCEEDED'
+  if (statuses.includes('CANCELLED')) return 'CANCELLED'
+  if (statuses.includes('INVALIDATED')) return 'INVALIDATED'
+  if (statuses.includes('PENDING')) return 'PENDING'
+  return undefined
 }
 
 const PanelHeader: React.FC<PanelHeaderProps> = ({ icon, title, desc }) => (
@@ -1254,20 +1334,11 @@ const ArtifactRenderer: React.FC<{ content: ArtifactContentResponse }> = ({ cont
   return <ReadableArtifact artifact={artifact} content={content.content} />
 }
 
-const MarkdownDocument: React.FC<{ text: string }> = ({ text }) => {
-  const lines = text.split('\n')
-  return (
-    <article className="min-h-[520px] rounded-lg bg-white p-6 text-base leading-8 text-[#3B210B] shadow-sm">
-      {lines.map((line, index) => {
-        if (line.startsWith('## ')) return <h2 key={index} className="mt-4 text-lg font-semibold first:mt-0">{line.slice(3)}</h2>
-        if (line.startsWith('### ')) return <h3 key={index} className="mt-3 text-base font-semibold">{line.slice(4)}</h3>
-        if (line.startsWith('- ')) return <p key={index} className="pl-3">· {line.slice(2)}</p>
-        if (line.trim() === '') return <div key={index} className="h-3" />
-        return <p key={index}>{line}</p>
-      })}
-    </article>
-  )
-}
+const MarkdownDocument: React.FC<{ text: string }> = ({ text }) => (
+  <article className="markdown-body rounded-lg bg-white p-6 shadow-sm">
+    <ReactMarkdown>{text}</ReactMarkdown>
+  </article>
+)
 
 const ImageArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ content, mediaUrls }) => {
   const items = Array.isArray(content) ? content : [content]
@@ -1307,7 +1378,7 @@ const ImageArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
         {items.map((item, index) => (
           <div key={index} className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
             <p className="text-xs font-semibold text-[#7A6142]">参考帧 {index + 1}</p>
-            <p className="mt-2 text-sm leading-6">{String(readField(item, 'prompt') || readField(item, 'description') || '图片产物')}</p>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{safeString(readField(item, 'prompt') || readField(item, 'description'), '图片产物')}</p>
           </div>
         ))}
       </div>
@@ -1402,7 +1473,7 @@ const AudioArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
 const ReadableArtifact: React.FC<{ artifact: Artifact; content: unknown }> = ({ artifact, content }) => {
   const record = asRecord(content)
   if (!record) {
-    return <MarkdownDocument text={String(content || '')} />
+    return <MarkdownDocument text={safeString(content)} />
   }
 
   if (artifact.unitId === 'publish-copy' || record.title || record.description || record.keywords) {
@@ -1787,9 +1858,26 @@ const asRecord = (value: unknown): Record<string, unknown> | null => {
 }
 
 const toStringList = (value: unknown): string[] => {
-  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean)
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') return String(item)
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>
+          return safeString(record.keyword || record.tag || record.label || record.name || record.text || record.value)
+        }
+        return ''
+      })
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
   if (typeof value === 'string') {
     return value.split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean)
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const item = safeString(record.keyword || record.tag || record.label || record.name || record.text || record.value)
+    return item ? [item] : []
   }
   return []
 }

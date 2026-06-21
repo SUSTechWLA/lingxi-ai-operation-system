@@ -68,6 +68,11 @@ func (h *Handler) GetArtifactContent(c *gin.Context) {
 		return
 	}
 	content, mediaURL, mediaURLs := artifactContent(artifact)
+	if hydrated, ok := h.hydrateLocalTextArtifactContent(c.Request.Context(), artifact); ok {
+		content = string(hydrated)
+		mediaURLs = mediaURLsFromString(string(hydrated))
+		mediaURL = firstMediaURL(mediaURLs)
+	}
 	mediaURLs = normalizeMediaURLs(mediaURLs)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{
 		"artifact":  artifact,
@@ -142,6 +147,81 @@ func (h *Handler) materializeProject(ctx context.Context, projectID string) erro
 		}
 	}
 	return nil
+}
+
+func (h *Handler) hydrateLocalTextArtifactContent(ctx context.Context, artifact *Artifact) ([]byte, bool) {
+	if !shouldHydrateLocalTextArtifact(artifact) || h.runRepo == nil || h.nodeRepo == nil {
+		return nil, false
+	}
+	run, err := h.runRepo.FindByID(ctx, artifact.WorkflowRunID)
+	if err != nil || run == nil || strings.TrimSpace(run.TaskID) == "" {
+		return nil, false
+	}
+	nodes, err := h.nodeRepo.FindByTaskID(ctx, run.TaskID)
+	if err != nil {
+		return nil, false
+	}
+	for _, node := range nodes {
+		if content, ok := contentFromMatchingNodeArtifact(artifact.ProjectID, artifact.WorkflowRunID, artifact, node); ok {
+			return content, true
+		}
+	}
+	return nil, false
+}
+
+func shouldHydrateLocalTextArtifact(artifact *Artifact) bool {
+	if artifact == nil || artifact.StorageType != StorageLocal || strings.TrimSpace(artifact.WorkflowRunID) == "" {
+		return false
+	}
+	if strings.TrimSpace(artifact.InlineJSON) != "" {
+		return false
+	}
+	return artifact.Kind == KindMarkdown || strings.HasPrefix(artifact.MimeType, "text/")
+}
+
+func contentFromMatchingNodeArtifact(projectID, workflowRunID string, artifact *Artifact, node *model.Node) ([]byte, bool) {
+	if artifact == nil || node == nil || node.Status != model.NodeSuccess {
+		return nil, false
+	}
+	requests := BuildArtifactRequestsFromNode(projectID, workflowRunID, node)
+	if len(requests) == 0 {
+		return nil, false
+	}
+	for _, req := range requests {
+		if exactArtifactRequestMatch(artifact, req) && len(req.Data) > 0 {
+			return req.Data, true
+		}
+	}
+
+	var fallback []byte
+	for _, req := range requests {
+		if req == nil || len(req.Data) == 0 {
+			continue
+		}
+		if req.StageName != artifact.StageName || req.Kind != artifact.Kind {
+			continue
+		}
+		if artifact.Name != "" && req.Name == artifact.Name {
+			return req.Data, true
+		}
+		if fallback != nil {
+			return nil, false
+		}
+		fallback = req.Data
+	}
+	if fallback != nil {
+		return fallback, true
+	}
+	return nil, false
+}
+
+func exactArtifactRequestMatch(artifact *Artifact, req *CreateArtifactRequest) bool {
+	if artifact == nil || req == nil {
+		return false
+	}
+	return req.StageName == artifact.StageName &&
+		req.UnitID == artifact.UnitID &&
+		req.Kind == artifact.Kind
 }
 
 func artifactContent(artifact *Artifact) (interface{}, string, []string) {

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestVideoConfigDefaults(t *testing.T) {
@@ -40,6 +42,20 @@ func TestVideoConfigStruct(t *testing.T) {
 	}
 	if cfg.Video.SkillRoot != "skills" {
 		t.Errorf("SKILL_ROOT should be 'skills', got %q", cfg.Video.SkillRoot)
+	}
+}
+
+func TestSetDefaultsEnablesCloudVideoCreation(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	setDefaults()
+
+	if !viper.GetBool("VIDEO_CREATION_ENABLED") {
+		t.Fatal("VIDEO_CREATION_ENABLED should default to true for the cloud backend")
+	}
+	if viper.GetBool("LOCAL_RUNNER_ENABLED") {
+		t.Fatal("LOCAL_RUNNER_ENABLED should remain false by default")
 	}
 }
 

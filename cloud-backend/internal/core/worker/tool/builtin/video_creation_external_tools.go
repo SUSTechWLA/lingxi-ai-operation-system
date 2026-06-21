@@ -24,6 +24,7 @@ var videoCreationExternalTools = []string{
 	"image_asset_generator",
 	"hyperframes_project_builder",
 	"hyperframes_renderer",
+	"hypergen_keyframes",
 	"material_library_matcher",
 	"video_keyframe_prompt_builder",
 	"storyboard_assembler",
@@ -414,27 +415,8 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 		content := fmt.Sprintf("# %s\n\n用户需求：%s\n\n阶段说明：\n%s\n\n> ⚠️ LLM API Key 未配置。请设置 OPENAI_API_KEY 环境变量以启用 AI 内容生成。",
 			stage, brief, instructionContent)
 		return tool.SuccessResult(map[string]interface{}{
-			"content": content,
-			"artifacts": []map[string]interface{}{
-				{
-					"unitId":   stage,
-					"kind":     "MARKDOWN",
-					"name":     fmt.Sprintf("%s.md", stage),
-					"mimeType": "text/markdown",
-					"metadata": map[string]interface{}{
-						"stage":          stage,
-						"skillName":      skillName,
-						"requiresReview": true,
-						"source":         "llm-placeholder",
-					},
-				},
-				{
-					"unitId":   "publish-copy",
-					"kind":     "JSON",
-					"name":     "发布文案",
-					"mimeType": "application/json",
-				},
-			},
+			"content":   content,
+			"artifacts": buildSkillStageArtifacts(stage, skillName, isPublishPackageStage(stage)),
 		})
 	}
 
@@ -464,7 +446,34 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 		}
 	}
 
-	// Build artifact manifest
+	includePublishCopy := isPublishPackageStage(stage) && hasPublishCopyFields(contentPkg)
+	artifacts := buildSkillStageArtifacts(stage, skillName, includePublishCopy)
+
+	data := map[string]interface{}{
+		"content":   rawContent,
+		"package":   contentPkg,
+		"script":    scriptText,
+		"artifacts": artifacts,
+	}
+	if title, ok := nonEmptyStringField(contentPkg, "title"); ok {
+		data["title"] = title
+	}
+	if desc, ok := contentPkg["description"]; ok {
+		if text := ensureStringValue(desc); strings.TrimSpace(text) != "" {
+			data["description"] = text
+		}
+	}
+	if keywords, ok := contentPkg["keywords"]; ok && hasPublishValue(keywords) {
+		data["keywords"] = keywords
+	} else if tags, ok := contentPkg["tags"]; ok && hasPublishValue(tags) {
+		data["keywords"] = tags
+		data["tags"] = tags
+	}
+
+	return tool.SuccessResult(data)
+}
+
+func buildSkillStageArtifacts(stage, skillName string, includePublishCopy bool) []map[string]interface{} {
 	artifacts := []map[string]interface{}{
 		{
 			"unitId":   stage,
@@ -476,32 +485,90 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 				"skillName":       skillName,
 				"requiresReview":  true,
 				"canReviseByChat": true,
-				"source":          "llm-api",
+				"source":          "skill-stage-agent",
 			},
 		},
-		{
+	}
+	if includePublishCopy {
+		artifacts = append(artifacts, map[string]interface{}{
 			"unitId":   "publish-copy",
 			"kind":     "JSON",
 			"name":     "发布文案.json",
 			"mimeType": "application/json",
-		},
+			"metadata": map[string]interface{}{
+				"stage":     stage,
+				"skillName": skillName,
+				"source":    "skill-stage-agent",
+			},
+		})
 	}
+	return artifacts
+}
 
-	data := map[string]interface{}{
-		"content":   rawContent,
-		"package":   contentPkg,
-		"title":     ensureStringValue(contentPkg["title"]),
-		"script":    scriptText,
-		"artifacts": artifacts,
-	}
-	if desc, ok := contentPkg["description"]; ok {
-		data["description"] = ensureStringValue(desc)
-	}
-	if tags, ok := contentPkg["tags"]; ok {
-		data["tags"] = tags
-	}
+func isPublishPackageStage(stage string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(stage))
+	return normalized == "publish" ||
+		normalized == "publish_copy" ||
+		normalized == "publish_package"
+}
 
-	return tool.SuccessResult(data)
+func hasPublishCopyFields(pkg map[string]interface{}) bool {
+	if len(pkg) == 0 {
+		return false
+	}
+	for _, key := range []string{"title", "description", "keywords", "tags"} {
+		if hasPublishValue(pkg[key]) {
+			return true
+		}
+	}
+	if nested, ok := pkg["publishCopy"].(map[string]interface{}); ok {
+		return hasPublishCopyFields(nested)
+	}
+	return false
+}
+
+func hasPublishValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []interface{}:
+		for _, item := range typed {
+			if hasPublishValue(item) {
+				return true
+			}
+		}
+		return false
+	case []string:
+		for _, item := range typed {
+			if strings.TrimSpace(item) != "" {
+				return true
+			}
+		}
+		return false
+	case map[string]interface{}:
+		for _, key := range []string{"keyword", "tag", "label", "name", "text", "value"} {
+			if hasPublishValue(typed[key]) {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+func nonEmptyStringField(pkg map[string]interface{}, key string) (string, bool) {
+	if len(pkg) == 0 {
+		return "", false
+	}
+	value, ok := pkg[key]
+	if !ok {
+		return "", false
+	}
+	text := strings.TrimSpace(ensureStringValue(value))
+	return text, text != ""
 }
 
 // ensureStringValue converts a value to its string representation,
@@ -579,10 +646,10 @@ func executeImageAssetGenerator(stage, skillName, brief, instructionRef string, 
 	}
 
 	summary := map[string]interface{}{
-		"total":       len(imageRequests),
-		"generated":   generatedCount,
-		"promptOnly":  len(imageRequests) - generatedCount,
-		"note":        "图片已生成完整提示词，可通过 imagegen 工具手动生成",
+		"total":      len(imageRequests),
+		"generated":  generatedCount,
+		"promptOnly": len(imageRequests) - generatedCount,
+		"note":       "图片已生成完整提示词，可通过 imagegen 工具手动生成",
 	}
 
 	if imageGenEndpoint == "" {
@@ -639,15 +706,15 @@ func executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef st
 	artifacts := buildProjectArtifacts(stage, skillName, status, projectRef, referenceRef)
 
 	return tool.SuccessResult(map[string]interface{}{
-		"content":     content,
-		"projectRef":  projectRef,
-		"previewUrl":  previewURL,
-		"lintOutput":  lintOutput,
-		"beatsBuilt":  beatsBuilt,
-		"status":      status,
+		"content":      content,
+		"projectRef":   projectRef,
+		"previewUrl":   previewURL,
+		"lintOutput":   lintOutput,
+		"beatsBuilt":   beatsBuilt,
+		"status":       status,
 		"cliAvailable": cliFound,
-		"guidance":    buildHyperFramesGuidance(cliCmd, referenceRef, assetsRef, toolCtx.TaskID),
-		"artifacts":   artifacts,
+		"guidance":     buildHyperFramesGuidance(cliCmd, referenceRef, assetsRef, toolCtx.TaskID),
+		"artifacts":    artifacts,
 	})
 }
 

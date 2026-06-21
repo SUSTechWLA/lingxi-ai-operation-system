@@ -11,13 +11,11 @@ const redactedUserAssetMarker = "USER_ASSET_REDACTED"
 var sensitiveOutputKeys = map[string]bool{
 	"audiopackage":       true,
 	"body":               true,
-	"content":            true,
 	"description":        true,
 	"imagerequests":      true,
 	"markdown":           true,
 	"prompt":             true,
 	"publishcopy":        true,
-	"script":             true,
 	"text":               true,
 	"transcript":         true,
 	"videoimportpackage": true,
@@ -105,7 +103,7 @@ func shouldRedactString(value string) bool {
 		strings.HasPrefix(lower, "blob:") ||
 		strings.HasPrefix(lower, "http://") ||
 		strings.HasPrefix(lower, "https://") ||
-		len(trimmed) > 512
+		len(trimmed) > 50000
 }
 
 func redactedUserAsset(key string, value interface{}) map[string]interface{} {

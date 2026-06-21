@@ -56,3 +56,11 @@ stages:
       script_ref: "{{recording_script_exec.output.content}}"
       reference_ref: "{{hyperframes_reference_exec.output.content}}"
       render_ref: "{{hyperframes_render.output.content}}"
+
+  - name: publish_package
+    instruction: stages/publish_package.md
+    input:
+      script_ref: "{{recording_script_exec.output.content}}"
+      reference_ref: "{{hyperframes_reference_exec.output.content}}"
+      render_ref: "{{hyperframes_render.output.content}}"
+      review_ref: "{{render_review_exec.output.content}}"

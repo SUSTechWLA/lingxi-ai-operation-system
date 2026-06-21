@@ -9,7 +9,8 @@ import (
 func TestSanitizeOutputForPersistenceRedactsUserPayloads(t *testing.T) {
 	output := map[string]interface{}{
 		"stdout": `{
-			"content":"## 用户脚本\n这段正文不能进入云端数据库。",
+			"content":"## 用户脚本\n这段正文保留——artifact materializer 需要从 stdout 提取。",
+			"script":"口播稿文本——可从 payload.script 提取并存入 artifact inline_json。",
 			"imageRequests":[{"url":"data:image/png;base64,AAAA","prompt":"封面图 prompt"}],
 			"videoImportPackage":{"videoUrl":"https://provider.example.com/final.mp4"},
 			"artifacts":[{
@@ -21,7 +22,6 @@ func TestSanitizeOutputForPersistenceRedactsUserPayloads(t *testing.T) {
 			}],
 			"exitCode":0
 		}`,
-		"content":     "短正文也不能直接进云端。",
 		"storageRef":  "local://projects/vp-1/artifacts/script/content/hash/script.md",
 		"contentHash": "hash",
 		"sizeBytes":   42,
@@ -34,26 +34,42 @@ func TestSanitizeOutputForPersistenceRedactsUserPayloads(t *testing.T) {
 	}
 	text := string(raw)
 
+	// Media payloads (data URIs, HTTP URLs) must still be redacted.
 	for _, forbidden := range []string{
-		"这段正文不能进入云端数据库",
-		"短正文也不能直接进云端",
 		"data:image/png;base64",
 		"https://provider.example.com/final.mp4",
 		"封面图 prompt",
 	} {
 		if strings.Contains(text, forbidden) {
-			t.Fatalf("sanitized output still contains user payload %q: %s", forbidden, text)
+			t.Fatalf("sanitized output still contains media/user payload %q: %s", forbidden, text)
 		}
 	}
+
+	// Content and script text are preserved so the artifact materializer can
+	// extract inline content for display.
+	for _, preserved := range []string{
+		"这段正文保留",
+		"口播稿文本",
+	} {
+		if !strings.Contains(text, preserved) {
+			t.Fatalf("sanitized output should preserve text content for artifact display, missing %q: %s", preserved, text)
+		}
+	}
+
+	// Artifact manifest references must be preserved.
 	for _, expected := range []string{
 		"local://projects/vp-1/artifacts/script/content/hash/script.md",
 		"contentHash",
 		"sizeBytes",
-		"USER_ASSET_REDACTED",
 	} {
 		if !strings.Contains(text, expected) {
-			t.Fatalf("sanitized output missing expected marker %q: %s", expected, text)
+			t.Fatalf("sanitized output missing expected artifact ref %q: %s", expected, text)
 		}
+	}
+
+	// Sensitive keys (imageRequests, videoImportPackage) must be redacted.
+	if !strings.Contains(text, "USER_ASSET_REDACTED") {
+		t.Fatalf("sanitized output missing USER_ASSET_REDACTED marker for media keys: %s", text)
 	}
 }
 

@@ -234,16 +234,37 @@ func DetermineToolName(nodeType string, payload map[string]interface{}) string {
 }
 
 func ExtractParameters(payload map[string]interface{}) map[string]interface{} {
+	var result map[string]interface{}
+
 	if params, ok := payload["parameters"]; ok {
 		if m, ok := params.(map[string]interface{}); ok {
-			return m
+			result = m
 		}
 	}
-	if input, ok := payload["input"]; ok {
-		if m, ok := input.(map[string]interface{}); ok {
-			return m
+	if result == nil {
+		if input, ok := payload["input"]; ok {
+			if m, ok := input.(map[string]interface{}); ok {
+				result = m
+			}
 		}
 	}
-	return payload
+	if result == nil {
+		result = payload
+	}
+
+	// Propagate common user-input fields from the top-level payload into the
+	// extracted parameters. applyRunInputToDAG adds these to node.Input but
+	// they don't always land inside the parameters sub-map after a database
+	// round-trip — so we merge them here to ensure tools see the user's brief,
+	// aspect ratio, and other settings.
+	for _, key := range []string{"brief", "deliverable", "target_duration_sec", "aspect_ratio", "expected_output", "generation_mode"} {
+		if _, exists := result[key]; !exists {
+			if v, ok := payload[key]; ok {
+				result[key] = v
+			}
+		}
+	}
+
+	return result
 }
 
