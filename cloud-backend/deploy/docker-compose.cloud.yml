@@ -59,6 +59,8 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    ports:
+      - "5432:5432"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
@@ -74,6 +76,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -85,6 +89,8 @@ services:
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
+    ports:
+      - "9092:9092"
     command:
       - redpanda start
       - --smp 1
