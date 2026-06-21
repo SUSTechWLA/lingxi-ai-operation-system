@@ -1,24 +1,35 @@
 package media
 
 import (
+	"context"
 	"mime/multipart"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 )
 
-type MediaHandler struct {
-	service *MediaService
+type serviceAPI interface {
+	Upload(ctx context.Context, userID string, files []*multipart.FileHeader) ([]*MediaAsset, error)
+	List(ctx context.Context, userID string, offset, limit int, tag string) ([]*MediaAsset, int, error)
+	GetForUser(ctx context.Context, userID string, id string) (*MediaAsset, error)
+	UpdateTagsForUser(ctx context.Context, userID string, id string, tags []string) error
 }
 
-func NewMediaHandler(service *MediaService) *MediaHandler {
-	return &MediaHandler{service: service}
+type MediaHandler struct {
+	service    serviceAPI
+	middleware []gin.HandlerFunc
+}
+
+func NewMediaHandler(service serviceAPI, middleware ...gin.HandlerFunc) *MediaHandler {
+	return &MediaHandler{service: service, middleware: middleware}
 }
 
 func (h *MediaHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/media")
+	api := r.Group("/api/media", h.middleware...)
 	{
 		api.POST("/upload", h.Upload)
 		api.GET("/list", h.List)
@@ -33,7 +44,10 @@ func (h *MediaHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	userID := c.DefaultPostForm("userId", "default")
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		return
+	}
 	var files []*multipart.FileHeader
 	form := c.Request.MultipartForm
 	if form != nil {
@@ -58,7 +72,10 @@ func (h *MediaHandler) Upload(c *gin.Context) {
 }
 
 func (h *MediaHandler) List(c *gin.Context) {
-	userID := c.DefaultQuery("userId", "default")
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		return
+	}
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	tag := c.Query("tag")
@@ -80,8 +97,12 @@ func (h *MediaHandler) List(c *gin.Context) {
 }
 
 func (h *MediaHandler) Get(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		return
+	}
 	id := c.Param("id")
-	asset, err := h.service.Get(c.Request.Context(), id)
+	asset, err := h.service.GetForUser(c.Request.Context(), userID, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": err.Error(), "data": nil})
 		return
@@ -90,6 +111,10 @@ func (h *MediaHandler) Get(c *gin.Context) {
 }
 
 func (h *MediaHandler) UpdateTags(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		return
+	}
 	id := c.Param("id")
 	var req struct {
 		Tags []string `json:"tags"`
@@ -99,10 +124,19 @@ func (h *MediaHandler) UpdateTags(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.UpdateTags(c.Request.Context(), id, req.Tags); err != nil {
+	if err := h.service.UpdateTagsForUser(c.Request.Context(), userID, id, req.Tags); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": nil})
+}
+
+func authenticatedUserID(c *gin.Context) (string, bool) {
+	userID, ok := auth.UserIDFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "unauthorized", "data": nil})
+		return "", false
+	}
+	return userID, true
 }

@@ -23,10 +23,10 @@ func (r *RunRepository) Create(ctx context.Context, run *WorkflowRun) error {
 		run.ID = "wfr-" + uuid.NewString()[:8]
 	}
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO workflow_runs (id, project_id, template_id, template_version,
+		`INSERT INTO workflow_runs (id, project_id, user_id, template_id, template_version,
 		 task_id, status, attempt, input, output, stage_statuses, trace_id, started_at, finished_at, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		run.ID, run.ProjectID, run.TemplateID, run.TemplateVersion,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		run.ID, run.ProjectID, run.UserID, run.TemplateID, run.TemplateVersion,
 		run.TaskID, string(run.Status), run.Attempt, run.Input, run.Output,
 		run.StageStatuses, run.TraceID, run.StartedAt, run.FinishedAt, run.CreatedAt,
 	)
@@ -37,12 +37,12 @@ func (r *RunRepository) Create(ctx context.Context, run *WorkflowRun) error {
 func (r *RunRepository) FindByID(ctx context.Context, id string) (*WorkflowRun, error) {
 	var run WorkflowRun
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, project_id, template_id, template_version,
+		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
 		        trace_id, started_at, finished_at, created_at
 		 FROM workflow_runs WHERE id=$1`, id,
 	).Scan(
-		&run.ID, &run.ProjectID, &run.TemplateID, &run.TemplateVersion,
+		&run.ID, &run.ProjectID, &run.UserID, &run.TemplateID, &run.TemplateVersion,
 		&run.TaskID, &run.Status, &run.Attempt, &run.Input, &run.Output,
 		&run.StageStatuses, &run.TraceID, &run.StartedAt, &run.FinishedAt, &run.CreatedAt,
 	)
@@ -55,7 +55,7 @@ func (r *RunRepository) FindByID(ctx context.Context, id string) (*WorkflowRun, 
 // FindByProject returns all runs for a project, newest first.
 func (r *RunRepository) FindByProject(ctx context.Context, projectID string) ([]*WorkflowRun, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, project_id, template_id, template_version,
+		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
 		        task_id, status, attempt, input, output, stage_statuses,
 		        trace_id, started_at, finished_at, created_at
 		 FROM workflow_runs WHERE project_id=$1 ORDER BY created_at DESC`, projectID,
@@ -69,7 +69,7 @@ func (r *RunRepository) FindByProject(ctx context.Context, projectID string) ([]
 	for rows.Next() {
 		var run WorkflowRun
 		if err := rows.Scan(
-			&run.ID, &run.ProjectID, &run.TemplateID, &run.TemplateVersion,
+			&run.ID, &run.ProjectID, &run.UserID, &run.TemplateID, &run.TemplateVersion,
 			&run.TaskID, &run.Status, &run.Attempt, &run.Input, &run.Output,
 			&run.StageStatuses, &run.TraceID, &run.StartedAt, &run.FinishedAt, &run.CreatedAt,
 		); err != nil {

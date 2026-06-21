@@ -1,13 +1,16 @@
 import React from 'react'
-import { FiArchive, FiCpu, FiMonitor, FiVideo } from 'react-icons/fi'
+import { FiArchive, FiCpu, FiLogOut, FiMonitor, FiVideo } from 'react-icons/fi'
 import appIcon from '../assets/aios-icon.png'
+import type { AuthUser } from '../services/auth'
 
 interface SidebarProps {
   activeNav: string
   onNavChange: (nav: string) => void
+  user?: AuthUser
+  onLogout?: () => void
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange, user, onLogout }) => {
   const navItems = [
     { id: 'creator', label: '创作台', icon: <FiVideo className="h-4 w-4" /> },
     { id: 'projects', label: '作品', icon: <FiArchive className="h-4 w-4" /> },
@@ -48,7 +51,26 @@ const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange }) => {
         </div>
       </nav>
 
-      <div className="p-4 border-t border-white/10">
+      <div className="space-y-3 p-4 border-t border-white/10">
+        {user && (
+          <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#D6FF4D] text-xs font-semibold text-[#17181A]">
+              {(user.nickname || user.email).slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white">{user.nickname || '已登录'}</p>
+              <p className="truncate text-xs text-white/45">{user.email}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-white/55 hover:bg-white/10 hover:text-white"
+              title="退出登录"
+            >
+              <FiLogOut className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         <div className="rounded-lg border border-white/10 bg-white/5 p-4">
           <p className="text-xs font-semibold uppercase text-[#D6FF4D]">Runtime</p>
           <p className="mt-2 text-sm text-white/80">Skill 驱动</p>

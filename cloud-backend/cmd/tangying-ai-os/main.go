@@ -17,7 +17,9 @@ import (
 	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
 	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
+	"github.com/tangying-ai/aios-core/internal/core/apispec"
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/context/handler"
 	contextSvc "github.com/tangying-ai/aios-core/internal/core/context/service"
@@ -38,7 +40,6 @@ import (
 	workerService "github.com/tangying-ai/aios-core/internal/core/worker/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
-	"github.com/tangying-ai/aios-core/internal/core/apispec"
 
 	bidHandler "github.com/tangying-ai/aios-core/internal/agents/bid/handler"
 	bidRepo "github.com/tangying-ai/aios-core/internal/agents/bid/repository"
@@ -76,6 +77,7 @@ func main() {
 	defer producer.Close()
 
 	// Repositories
+	authRepo := auth.NewRepository(pool)
 	taskRepo := repository.NewTaskRepository(pool)
 	nodeRepo := repository.NewNodeRepository(pool)
 	depRepo := repository.NewNodeDependencyRepository(pool)
@@ -83,6 +85,12 @@ func main() {
 	toolManifestRepo := repository.NewToolManifestRepository(pool)
 
 	// Services
+	authService := auth.NewService(authRepo, auth.NewTokenIssuer(auth.TokenConfig{
+		Secret:          cfg.Auth.TokenSecret,
+		AccessTokenTTL:  time.Duration(cfg.Auth.AccessTokenTTLSeconds) * time.Second,
+		RefreshTokenTTL: time.Duration(cfg.Auth.RefreshTokenTTLSeconds) * time.Second,
+	}))
+	authMiddleware := auth.NewMiddleware(authService)
 	eventSaver := outbox.NewOutboxSaver(pool)
 	stateService := service.NewStateService(nodeRepo, taskRepo, depRepo, contextRepo, eventSaver)
 	orchestratorService := service.NewOrchestratorService(taskRepo, nodeRepo, depRepo, contextRepo, stateService)
@@ -98,8 +106,8 @@ func main() {
 	// Wire StateMachine into Scheduler for heartbeat timeout handling
 	scheduler.SetStateMachine(stateMachine)
 
-		// Outbox relay with retry, DLQ, and exponential backoff
-		outboxRelay := outbox.NewRelay(pool, producer, outbox.DefaultRelayConfig())
+	// Outbox relay with retry, DLQ, and exponential backoff
+	outboxRelay := outbox.NewRelay(pool, producer, outbox.DefaultRelayConfig())
 	outboxRelay.Start(ctx)
 	defer outboxRelay.Stop()
 
@@ -279,7 +287,7 @@ func main() {
 	r.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, DeviceID")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
@@ -287,6 +295,7 @@ func main() {
 		c.Next()
 	})
 
+	auth.NewHandler(authService).RegisterRoutes(r)
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r)
 	health.NewHandler([]health.DependencyCheck{
 		{Name: "postgres", Check: pool.Ping},
@@ -304,7 +313,7 @@ func main() {
 	var mediaSvc *media.MediaService
 	if storageSvc, err := media.NewStorageService(cfg.MinIO); err == nil {
 		mediaSvc = media.NewMediaService(pool, storageSvc)
-		media.NewMediaHandler(mediaSvc).RegisterRoutes(r)
+		media.NewMediaHandler(mediaSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
 		zap.L().Info("Media service initialized with MinIO storage")
 	} else {
 		zap.L().Warn("MinIO storage not available, media uploads disabled", zap.Error(err))
@@ -330,7 +339,7 @@ func main() {
 	// Bid (tender) generation module
 	bidRepository := bidRepo.NewBidRepository(pool)
 	bidService := bidsvc.NewBidService(bidRepository, orchestratorService, taskExecutionCtrl, stateService, taskRepo, nodeRepo)
-	bidHandler.NewBidHandler(bidService).RegisterRoutes(r)
+	bidHandler.NewBidHandler(bidService, authMiddleware.RequireAuth()).RegisterRoutes(r)
 	zap.L().Info("Bid service registered")
 
 	// Workflow templates — reusable DAG blueprints
@@ -390,7 +399,7 @@ func main() {
 		// Video Projects
 		videoProjectRepo := videoRepo.NewProjectRepository(pool)
 		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
-		videoHandler.NewProjectHandler(videoProjectSvc).RegisterRoutes(r)
+		videoHandler.NewProjectHandler(videoProjectSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
 
 		// Workflow Runs
 		workflowRunRepo := workflow.NewRunRepository(pool)
@@ -403,14 +412,14 @@ func main() {
 		zap.L().Info("Video project and workflow run services registered")
 	}
 
-		srv := &http.Server{
-			Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
-			Handler: r,
-		}
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler: r,
+	}
 
-		// OpenAPI spec + Swagger UI (always up-to-date with registered routes)
-		apispec.Register(r, apispec.BuildCloudSpec())
-		zap.L().Info("OpenAPI docs and Swagger UI registered at /docs")
+	// OpenAPI spec + Swagger UI (always up-to-date with registered routes)
+	apispec.Register(r, apispec.BuildCloudSpec())
+	zap.L().Info("OpenAPI docs and Swagger UI registered at /docs")
 
 	go func() {
 		zap.L().Info("Server starting", zap.Int("port", cfg.Server.Port))

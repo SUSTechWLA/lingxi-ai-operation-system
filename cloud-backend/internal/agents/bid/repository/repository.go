@@ -63,6 +63,26 @@ func (r *BidRepository) FindProjectByID(ctx context.Context, id string) (*bidmod
 	return &p, nil
 }
 
+func (r *BidRepository) FindProjectByIDForUser(ctx context.Context, userID string, id string) (*bidmodel.BidProject, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT id, user_id, name, status, task_id, template_id, industry,
+		 tender_file_path, tender_file_name, tender_analysis, structure, config, progress, created_at, updated_at
+		 FROM bid_projects WHERE id=$1 AND user_id=$2`, id, userID)
+
+	var p bidmodel.BidProject
+	var tenderAnalysis, structure, cfg []byte
+	err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.Status, &p.TaskID, &p.TemplateID, &p.Industry,
+		&p.TenderFilePath, &p.TenderFileName, &tenderAnalysis, &structure, &cfg,
+		&p.Progress, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	p.TenderAnalysis = tenderAnalysis
+	p.Structure = structure
+	p.Config = cfg
+	return &p, nil
+}
+
 // FindProjects lists bid projects with optional status filter and pagination.
 func (r *BidRepository) FindProjects(ctx context.Context, status string, userID string, offset, limit int) ([]*bidmodel.BidProject, int, error) {
 	where := "WHERE 1=1"
@@ -123,6 +143,17 @@ func (r *BidRepository) FindProjects(ctx context.Context, status string, userID 
 func (r *BidRepository) DeleteProject(ctx context.Context, id string) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM bid_projects WHERE id=$1`, id)
 	return err
+}
+
+func (r *BidRepository) DeleteProjectForUser(ctx context.Context, userID string, id string) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM bid_projects WHERE id=$1 AND user_id=$2`, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("project not found")
+	}
+	return nil
 }
 
 // ── Chapter CRUD ──

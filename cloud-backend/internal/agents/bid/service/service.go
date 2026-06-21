@@ -18,12 +18,12 @@ import (
 
 // BidService orchestrates bid project lifecycle on top of AIOS Core.
 type BidService struct {
-	repo        *bidrepo.BidRepository
-	orchService *service.OrchestratorService
-	taskControl *service.TaskExecutionControl
+	repo         *bidrepo.BidRepository
+	orchService  *service.OrchestratorService
+	taskControl  *service.TaskExecutionControl
 	stateService *service.StateService
-	taskRepo    repository.TaskRepo
-	nodeRepo    repository.NodeRepo
+	taskRepo     repository.TaskRepo
+	nodeRepo     repository.NodeRepo
 }
 
 // NewBidService creates a new BidService.
@@ -48,11 +48,11 @@ func NewBidService(
 // ── Project CRUD ──
 
 // CreateProject creates a new bid project.
-func (s *BidService) CreateProject(ctx context.Context, req *bidmodel.CreateProjectRequest) (*bidmodel.BidProject, error) {
+func (s *BidService) CreateProject(ctx context.Context, userID string, req *bidmodel.CreateProjectRequest) (*bidmodel.BidProject, error) {
 	now := time.Now()
 	project := &bidmodel.BidProject{
 		ID:         "bid-" + uuid.NewString()[:8],
-		UserID:     req.UserID,
+		UserID:     userID,
 		Name:       req.Name,
 		Status:     bidmodel.BidDraft,
 		TemplateID: req.TemplateID,
@@ -72,8 +72,8 @@ func (s *BidService) CreateProject(ctx context.Context, req *bidmodel.CreateProj
 }
 
 // GetProject retrieves a bid project with its chapters.
-func (s *BidService) GetProject(ctx context.Context, projectID string) (*bidmodel.BidProject, []*bidmodel.BidChapter, error) {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) GetProject(ctx context.Context, userID string, projectID string) (*bidmodel.BidProject, []*bidmodel.BidChapter, error) {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project not found: %w", err)
 	}
@@ -93,8 +93,8 @@ func (s *BidService) ListProjects(ctx context.Context, status, userID string, of
 }
 
 // UpdateProject updates a bid project's structure or config.
-func (s *BidService) UpdateProject(ctx context.Context, projectID string, req *bidmodel.UpdateProjectRequest) (*bidmodel.BidProject, error) {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) UpdateProject(ctx context.Context, userID string, projectID string, req *bidmodel.UpdateProjectRequest) (*bidmodel.BidProject, error) {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("project not found: %w", err)
 	}
@@ -117,15 +117,15 @@ func (s *BidService) UpdateProject(ctx context.Context, projectID string, req *b
 }
 
 // DeleteProject removes a bid project.
-func (s *BidService) DeleteProject(ctx context.Context, projectID string) error {
-	return s.repo.DeleteProject(ctx, projectID)
+func (s *BidService) DeleteProject(ctx context.Context, userID string, projectID string) error {
+	return s.repo.DeleteProjectForUser(ctx, userID, projectID)
 }
 
 // ── Tender Upload ──
 
 // SetTenderFile records the uploaded tender file path on the project.
-func (s *BidService) SetTenderFile(ctx context.Context, projectID, filePath, fileName string) error {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) SetTenderFile(ctx context.Context, userID string, projectID, filePath, fileName string) error {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return fmt.Errorf("project not found: %w", err)
 	}
@@ -141,8 +141,8 @@ func (s *BidService) SetTenderFile(ctx context.Context, projectID, filePath, fil
 // ── Generation Lifecycle ──
 
 // StartGeneration creates an orchestrator task and submits the bid DAG.
-func (s *BidService) StartGeneration(ctx context.Context, projectID string) (string, error) {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) StartGeneration(ctx context.Context, userID string, projectID string) (string, error) {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return "", fmt.Errorf("project not found: %w", err)
 	}
@@ -151,6 +151,7 @@ func (s *BidService) StartGeneration(ctx context.Context, projectID string) (str
 	task, err := s.orchService.CreateTask(ctx, map[string]interface{}{
 		"projectId": projectID,
 		"source":    "bid-generator",
+		"user_id":   userID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to create task: %w", err)
@@ -187,8 +188,8 @@ func (s *BidService) StartGeneration(ctx context.Context, projectID string) (str
 }
 
 // PauseGeneration pauses the bid generation task.
-func (s *BidService) PauseGeneration(ctx context.Context, projectID string) error {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) PauseGeneration(ctx context.Context, userID string, projectID string) error {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return err
 	}
@@ -199,8 +200,8 @@ func (s *BidService) PauseGeneration(ctx context.Context, projectID string) erro
 }
 
 // ResumeGeneration resumes a paused bid generation task.
-func (s *BidService) ResumeGeneration(ctx context.Context, projectID string) error {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) ResumeGeneration(ctx context.Context, userID string, projectID string) error {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return err
 	}
@@ -213,7 +214,10 @@ func (s *BidService) ResumeGeneration(ctx context.Context, projectID string) err
 // ── Chapter Review ──
 
 // ApproveChapter approves a chapter and triggers the CONTROL node to succeed.
-func (s *BidService) ApproveChapter(ctx context.Context, projectID, chapterID string) (*bidmodel.BidChapter, error) {
+func (s *BidService) ApproveChapter(ctx context.Context, userID string, projectID, chapterID string) (*bidmodel.BidChapter, error) {
+	if _, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID); err != nil {
+		return nil, fmt.Errorf("project not found: %w", err)
+	}
 	chapter, err := s.repo.FindChapterByID(ctx, chapterID)
 	if err != nil {
 		return nil, fmt.Errorf("chapter not found: %w", err)
@@ -236,7 +240,10 @@ func (s *BidService) ApproveChapter(ctx context.Context, projectID, chapterID st
 }
 
 // RejectChapter rejects a chapter and triggers the CONTROL node to fail (retry).
-func (s *BidService) RejectChapter(ctx context.Context, projectID, chapterID, comment string) (*bidmodel.BidChapter, error) {
+func (s *BidService) RejectChapter(ctx context.Context, userID string, projectID, chapterID, comment string) (*bidmodel.BidChapter, error) {
+	if _, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID); err != nil {
+		return nil, fmt.Errorf("project not found: %w", err)
+	}
 	chapter, err := s.repo.FindChapterByID(ctx, chapterID)
 	if err != nil {
 		return nil, fmt.Errorf("chapter not found: %w", err)
@@ -262,8 +269,8 @@ func (s *BidService) RejectChapter(ctx context.Context, projectID, chapterID, co
 // ── Progress ──
 
 // GetProgress returns the current progress of a bid project.
-func (s *BidService) GetProgress(ctx context.Context, projectID string) (*bidmodel.ProgressResponse, error) {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) GetProgress(ctx context.Context, userID string, projectID string) (*bidmodel.ProgressResponse, error) {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -301,8 +308,8 @@ func (s *BidService) ListTemplates(ctx context.Context) ([]*bidmodel.BidTemplate
 // ── Export ──
 
 // GetExportStatus returns the export node status and download URL.
-func (s *BidService) GetExportStatus(ctx context.Context, projectID string) (*bidmodel.ExportStatusResponse, error) {
-	project, err := s.repo.FindProjectByID(ctx, projectID)
+func (s *BidService) GetExportStatus(ctx context.Context, userID string, projectID string) (*bidmodel.ExportStatusResponse, error) {
+	project, err := s.repo.FindProjectByIDForUser(ctx, userID, projectID)
 	if err != nil {
 		return nil, err
 	}

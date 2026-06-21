@@ -11,6 +11,7 @@ func BuildCloudSpec() *Spec {
 	b := New("Tangying AIOS Cloud API", "0.1.0").
 		Server("http://localhost:8080", "Local development server").
 		Tag("Health", "Service health and readiness").
+		Tag("Auth", "User registration, login, token refresh, and session identity").
 		Tag("Publish", "Multi-platform content publishing — frontend-facing").
 		Tag("AI", "AI-assisted content generation and polishing").
 		Tag("Trace", "Task lifecycle trace/debugging").
@@ -38,15 +39,42 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("200", "All dependencies healthy", "ReadinessResponse").
 		ResponseJSON("503", "One or more dependency down", "ReadinessResponse")
 
+	// ── Auth ──
+	b.Route("POST", "/api/auth/register", "Register a user with email and password").
+		Tags("Auth").
+		BodyJSON("AuthRegisterRequest", "Registration payload", true).
+		ResponseJSON("200", "Registered and authenticated", "AuthResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("409", "Email already registered", "ErrorResponse")
+	b.Route("POST", "/api/auth/login", "Log in with email and password").
+		Tags("Auth").
+		BodyJSON("AuthLoginRequest", "Login payload", true).
+		ResponseJSON("200", "Authenticated", "AuthResponse").
+		ResponseJSON("401", "Invalid credentials", "ErrorResponse")
+	b.Route("POST", "/api/auth/refresh", "Rotate refresh token and return new tokens").
+		Tags("Auth").
+		BodyJSON("AuthRefreshRequest", "Refresh token payload", true).
+		ResponseJSON("200", "Refreshed", "AuthResponse").
+		ResponseJSON("401", "Invalid refresh token", "ErrorResponse")
+	b.Route("POST", "/api/auth/logout", "Revoke the current refresh token").
+		Tags("Auth").
+		BodyJSON("AuthLogoutRequest", "Refresh token payload", true).
+		ResponseJSON("200", "Logged out", "GenericOKResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("GET", "/api/auth/me", "Get the current authenticated user").
+		Tags("Auth").
+		ResponseJSON("200", "Current user", "CurrentUserResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+
 	// ── Publish ──
 	b.Route("POST", "/api/publish", "Submit content for multi-platform publishing").
 		Tags("Publish").
 		BodyMultipart(map[string]*Schema{
-			"title":       StringSchema(),
-			"description": StringSchema(),
-			"keywords":    StringSchema(),
+			"title":        StringSchema(),
+			"description":  StringSchema(),
+			"keywords":     StringSchema(),
 			"content_type": StringSchema(),
-			"platforms":   StringSchema(),
+			"platforms":    StringSchema(),
 		}, false).
 		ResponseJSON("200", "Task created", "PublishResponse").
 		ResponseJSON("400", "Missing required fields", "ErrorResponse")
@@ -528,7 +556,7 @@ func BuildCloudSpec() *Spec {
 		Tags("Bid").
 		PathParam("id", "Project identifier", StringSchema()).
 		BodyInlineJSON(&Schema{
-			Type: "object",
+			Type:       "object",
 			Properties: map[string]*SchemaRef{"reason": {Schema: StringSchema()}},
 		}, "Pause reason", false).
 		ResponseJSON("200", "Paused", "GenericOKResponse")
@@ -553,9 +581,9 @@ func BuildCloudSpec() *Spec {
 		PathParam("id", "Project identifier", StringSchema()).
 		PathParam("chId", "Chapter identifier", StringSchema()).
 		BodyInlineJSON(&Schema{
-			Type: "object",
+			Type:       "object",
 			Properties: map[string]*SchemaRef{"comment": {Schema: StringSchema()}},
-			Required: []string{"comment"},
+			Required:   []string{"comment"},
 		}, "Rejection comment", true).
 		ResponseJSON("200", "Rejected", "BidChapterResponse")
 	b.Route("POST", "/api/bid/projects/:id/chapters/:chId/regenerate", "Trigger chapter regeneration").

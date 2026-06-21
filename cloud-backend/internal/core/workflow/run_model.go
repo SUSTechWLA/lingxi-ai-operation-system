@@ -31,6 +31,7 @@ const (
 type WorkflowRun struct {
 	ID              string                 `json:"id"`
 	ProjectID       string                 `json:"projectId"`
+	UserID          string                 `json:"userId"`
 	TemplateID      string                 `json:"templateId"`
 	TemplateVersion string                 `json:"templateVersion"`
 	TaskID          string                 `json:"taskId"`
@@ -47,20 +48,20 @@ type WorkflowRun struct {
 
 // StageRun tracks the execution of a single stage within a workflow run.
 type StageRun struct {
-	ID            string     `json:"id"`
-	WorkflowRunID string     `json:"workflowRunId"`
-	StageName     string     `json:"stageName"`
-	UnitID        string     `json:"unitId,omitempty"`
-	Status        StageStatus `json:"status"`
-	Attempt       int        `json:"attempt"`
-	NodeIDs       []string   `json:"nodeIds"`
+	ID            string                 `json:"id"`
+	WorkflowRunID string                 `json:"workflowRunId"`
+	StageName     string                 `json:"stageName"`
+	UnitID        string                 `json:"unitId,omitempty"`
+	Status        StageStatus            `json:"status"`
+	Attempt       int                    `json:"attempt"`
+	NodeIDs       []string               `json:"nodeIds"`
 	Input         map[string]interface{} `json:"input,omitempty"`
 	Output        map[string]interface{} `json:"output,omitempty"`
-	ErrorCode     string     `json:"errorCode,omitempty"`
-	ErrorMessage  string     `json:"errorMessage,omitempty"`
-	StartedAt     *time.Time `json:"startedAt,omitempty"`
-	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
+	ErrorCode     string                 `json:"errorCode,omitempty"`
+	ErrorMessage  string                 `json:"errorMessage,omitempty"`
+	StartedAt     *time.Time             `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time             `json:"finishedAt,omitempty"`
+	CreatedAt     time.Time              `json:"createdAt"`
 }
 
 // Attempt records a single execution attempt of a stage (for rerun tracking).

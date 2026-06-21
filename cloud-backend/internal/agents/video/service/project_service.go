@@ -12,17 +12,28 @@ import (
 
 // ProjectService provides business logic for video projects.
 type ProjectService struct {
-	repo *repository.ProjectRepository
+	repo ProjectStore
 }
 
-func NewProjectService(repo *repository.ProjectRepository) *ProjectService {
+type ProjectStore interface {
+	Create(ctx context.Context, p *model.VideoProject) error
+	FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error)
+	FindAllForUser(ctx context.Context, userID string, modeFilter string, statusFilter string, offset, limit int) ([]*model.VideoProject, int, error)
+	UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error
+	SoftDeleteForUser(ctx context.Context, userID string, id string) error
+}
+
+func NewProjectService(repo ProjectStore) *ProjectService {
 	return &ProjectService{repo: repo}
 }
 
 // CreateProject creates a new video project with validated mode and version locking.
-func (s *ProjectService) CreateProject(ctx context.Context, req *model.CreateProjectRequest) (*model.VideoProject, error) {
+func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *model.CreateProjectRequest) (*model.VideoProject, error) {
 	if !model.IsValidMode(req.Mode) {
 		return nil, fmt.Errorf("invalid mode: %s (must be aigc_shot or voice_visual)", req.Mode)
+	}
+	if userID == "" {
+		return nil, fmt.Errorf("user_id is required")
 	}
 	if req.GenerationMode != "" && !model.IsValidGenerationMode(req.GenerationMode) {
 		return nil, fmt.Errorf("invalid generation_mode: %s (must be provider_api or manual_import)", req.GenerationMode)
@@ -60,7 +71,7 @@ func (s *ProjectService) CreateProject(ctx context.Context, req *model.CreatePro
 	}
 
 	project := &model.VideoProject{
-		UserID:          "default",
+		UserID:          userID,
 		Name:            req.Name,
 		Description:     req.Description,
 		Mode:            req.Mode,
@@ -90,24 +101,24 @@ func (s *ProjectService) CreateProject(ctx context.Context, req *model.CreatePro
 }
 
 // GetProject returns a project by ID.
-func (s *ProjectService) GetProject(ctx context.Context, id string) (*model.VideoProject, error) {
-	return s.repo.FindByID(ctx, id)
+func (s *ProjectService) GetProject(ctx context.Context, userID string, id string) (*model.VideoProject, error) {
+	return s.repo.FindByIDForUser(ctx, userID, id)
 }
 
 // ListProjects returns projects with optional filters and pagination.
-func (s *ProjectService) ListProjects(ctx context.Context, modeFilter, statusFilter string, offset, limit int) ([]*model.VideoProject, int, error) {
+func (s *ProjectService) ListProjects(ctx context.Context, userID string, modeFilter, statusFilter string, offset, limit int) ([]*model.VideoProject, int, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	if limit > 100 {
 		limit = 100
 	}
-	return s.repo.FindAll(ctx, modeFilter, statusFilter, offset, limit)
+	return s.repo.FindAllForUser(ctx, userID, modeFilter, statusFilter, offset, limit)
 }
 
 // UpdateProject updates a project. Mode and version fields cannot be changed.
-func (s *ProjectService) UpdateProject(ctx context.Context, id string, req *model.UpdateProjectRequest) (*model.VideoProject, error) {
-	project, err := s.repo.FindByID(ctx, id)
+func (s *ProjectService) UpdateProject(ctx context.Context, userID string, id string, req *model.UpdateProjectRequest) (*model.VideoProject, error) {
+	project, err := s.repo.FindByIDForUser(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +154,7 @@ func (s *ProjectService) UpdateProject(ctx context.Context, id string, req *mode
 		project.LocalPathHint = req.LocalPathHint
 	}
 
-	if err := s.repo.Update(ctx, project); err != nil {
+	if err := s.repo.UpdateForUser(ctx, userID, project); err != nil {
 		return nil, err
 	}
 
@@ -152,6 +163,8 @@ func (s *ProjectService) UpdateProject(ctx context.Context, id string, req *mode
 }
 
 // ArchiveProject soft-deletes a project.
-func (s *ProjectService) ArchiveProject(ctx context.Context, id string) error {
-	return s.repo.SoftDelete(ctx, id)
+func (s *ProjectService) ArchiveProject(ctx context.Context, userID string, id string) error {
+	return s.repo.SoftDeleteForUser(ctx, userID, id)
 }
+
+var _ ProjectStore = (*repository.ProjectRepository)(nil)

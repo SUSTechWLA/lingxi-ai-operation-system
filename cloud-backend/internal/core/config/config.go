@@ -15,6 +15,7 @@ type Config struct {
 	Redis    RedisConfig    `mapstructure:",squash"`
 	Kafka    KafkaConfig    `mapstructure:",squash"`
 	OpenAI   OpenAIConfig   `mapstructure:",squash"`
+	Auth     AuthConfig     `mapstructure:",squash"`
 	Worker   WorkerConfig   `mapstructure:",squash"`
 	MinIO    MinIOConfig    `mapstructure:",squash"`
 	BashTool BashToolConfig `mapstructure:",squash"`
@@ -71,6 +72,12 @@ type OpenAIConfig struct {
 	MaxTokens   int     `mapstructure:"OPENAI_MAX_TOKENS"`
 	Temperature float64 `mapstructure:"OPENAI_TEMPERATURE"`
 	Timeout     int     `mapstructure:"OPENAI_TIMEOUT"`
+}
+
+type AuthConfig struct {
+	TokenSecret            string `mapstructure:"AUTH_TOKEN_SECRET"`
+	AccessTokenTTLSeconds  int    `mapstructure:"AUTH_ACCESS_TOKEN_TTL_SECONDS"`
+	RefreshTokenTTLSeconds int    `mapstructure:"AUTH_REFRESH_TOKEN_TTL_SECONDS"`
 }
 
 type WorkerConfig struct {
@@ -142,6 +149,9 @@ func setDefaults() {
 	viper.SetDefault("OPENAI_MAX_TOKENS", 2000)
 	viper.SetDefault("OPENAI_TEMPERATURE", 0.7)
 	viper.SetDefault("OPENAI_TIMEOUT", 60)
+	viper.SetDefault("AUTH_TOKEN_SECRET", "development-only-change-me")
+	viper.SetDefault("AUTH_ACCESS_TOKEN_TTL_SECONDS", 3600)
+	viper.SetDefault("AUTH_REFRESH_TOKEN_TTL_SECONDS", 2592000)
 	viper.SetDefault("WORKER_TOOL_TIMEOUT", 120)
 	viper.SetDefault("WORKER_THREAD_POOL_CORE", 10)
 	viper.SetDefault("WORKER_THREAD_POOL_MAX", 50)

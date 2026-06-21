@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 )
@@ -56,6 +57,7 @@ func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, versi
 		"source":      "video-workflow",
 		"template_id": templateID,
 		"project_id":  projectID,
+		"user_id":     workflowRunUserID(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create task: %w", err)
@@ -76,6 +78,7 @@ func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, versi
 	run := &WorkflowRun{
 		ID:              "wfr-" + uuid.NewString()[:8],
 		ProjectID:       projectID,
+		UserID:          workflowRunUserID(ctx),
 		TemplateID:      templateID,
 		TemplateVersion: version,
 		TaskID:          task.ID,
@@ -97,6 +100,13 @@ func (s *RunService) CreateRun(ctx context.Context, projectID, templateID, versi
 		zap.String("taskId", task.ID),
 	)
 	return run, nil
+}
+
+func workflowRunUserID(ctx context.Context) string {
+	if userID, ok := auth.UserIDFromContext(ctx); ok {
+		return userID
+	}
+	return "default"
 }
 
 // GetRun returns a WorkflowRun by ID.

@@ -81,6 +81,41 @@ export interface ArtifactListResponse {
 }
 
 /**  */
+// AuthLoginRequest
+export interface AuthLoginRequest {
+  email: string;
+  password: string;
+}
+
+/**  */
+// AuthLogoutRequest
+export interface AuthLogoutRequest {
+  refresh_token: string;
+}
+
+/**  */
+// AuthRefreshRequest
+export interface AuthRefreshRequest {
+  refresh_token: string;
+}
+
+/**  */
+// AuthRegisterRequest
+export interface AuthRegisterRequest {
+  email: string;
+  nickname?: string;
+  password: string;
+}
+
+/**  */
+// AuthResponse
+export interface AuthResponse {
+  code?: number;
+  data?: { access_token: string; expires_in: number; refresh_token: string; user: { avatarUrl?: string; createdAt: string; email: string; id: string; lastLoginAt?: string | null; nickname?: string; status: string; updatedAt: string } };
+  message?: string;
+}
+
+/**  */
 // BidChapter
 export interface BidChapter {
   content?: string;
@@ -233,6 +268,14 @@ export interface ContextListResponse {
 export interface CreateSessionResponse {
   code?: number;
   data?: { session_id?: string };
+  message?: string;
+}
+
+/**  */
+// CurrentUserResponse
+export interface CurrentUserResponse {
+  code?: number;
+  data?: { avatarUrl?: string; createdAt: string; email: string; id: string; lastLoginAt?: string | null; nickname?: string; status: string; updatedAt: string };
   message?: string;
 }
 

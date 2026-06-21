@@ -1,29 +1,48 @@
 package handler
 
 import (
+	"context"
 	"io"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/agents/bid/model"
-	bidsvc "github.com/tangying-ai/aios-core/internal/agents/bid/service"
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 )
 
+type bidService interface {
+	CreateProject(ctx context.Context, userID string, req *model.CreateProjectRequest) (*model.BidProject, error)
+	GetProject(ctx context.Context, userID string, projectID string) (*model.BidProject, []*model.BidChapter, error)
+	ListProjects(ctx context.Context, status string, userID string, offset, limit int) ([]*model.BidProject, int, error)
+	UpdateProject(ctx context.Context, userID string, projectID string, req *model.UpdateProjectRequest) (*model.BidProject, error)
+	DeleteProject(ctx context.Context, userID string, projectID string) error
+	SetTenderFile(ctx context.Context, userID string, projectID, filePath, fileName string) error
+	StartGeneration(ctx context.Context, userID string, projectID string) (string, error)
+	PauseGeneration(ctx context.Context, userID string, projectID string) error
+	ResumeGeneration(ctx context.Context, userID string, projectID string) error
+	ApproveChapter(ctx context.Context, userID string, projectID, chapterID string) (*model.BidChapter, error)
+	RejectChapter(ctx context.Context, userID string, projectID, chapterID, comment string) (*model.BidChapter, error)
+	GetProgress(ctx context.Context, userID string, projectID string) (*model.ProgressResponse, error)
+	ListTemplates(ctx context.Context) ([]*model.BidTemplate, error)
+	GetExportStatus(ctx context.Context, userID string, projectID string) (*model.ExportStatusResponse, error)
+}
+
 // BidHandler handles HTTP requests for bid/tender generation.
 type BidHandler struct {
-	svc *bidsvc.BidService
+	svc        bidService
+	middleware []gin.HandlerFunc
 }
 
 // NewBidHandler creates a new BidHandler.
-func NewBidHandler(svc *bidsvc.BidService) *BidHandler {
-	return &BidHandler{svc: svc}
+func NewBidHandler(svc bidService, middleware ...gin.HandlerFunc) *BidHandler {
+	return &BidHandler{svc: svc, middleware: middleware}
 }
 
 // RegisterRoutes registers all bid API routes.
 func (h *BidHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/bid")
+	api := r.Group("/api/bid", h.middleware...)
 	{
 		api.POST("/projects", h.CreateProject)
 		api.GET("/projects", h.ListProjects)
@@ -56,12 +75,16 @@ func fail(c *gin.Context, status int, msg string) {
 // ── Projects ──
 
 func (h *BidHandler) CreateProject(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	var req model.CreateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, 400, "invalid request: "+err.Error())
 		return
 	}
-	project, err := h.svc.CreateProject(c.Request.Context(), &req)
+	project, err := h.svc.CreateProject(c.Request.Context(), userID, &req)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return
@@ -70,8 +93,12 @@ func (h *BidHandler) CreateProject(c *gin.Context) {
 }
 
 func (h *BidHandler) GetProject(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
-	project, chapters, err := h.svc.GetProject(c.Request.Context(), id)
+	project, chapters, err := h.svc.GetProject(c.Request.Context(), userID, id)
 	if err != nil {
 		fail(c, 404, err.Error())
 		return
@@ -80,10 +107,13 @@ func (h *BidHandler) GetProject(c *gin.Context) {
 }
 
 func (h *BidHandler) ListProjects(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	status := c.Query("status")
-	userID := c.Query("userId")
 
 	projects, total, err := h.svc.ListProjects(c.Request.Context(), status, userID, offset, limit)
 	if err != nil {
@@ -94,13 +124,17 @@ func (h *BidHandler) ListProjects(c *gin.Context) {
 }
 
 func (h *BidHandler) UpdateProject(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
 	var req model.UpdateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, 400, "invalid request: "+err.Error())
 		return
 	}
-	project, err := h.svc.UpdateProject(c.Request.Context(), id, &req)
+	project, err := h.svc.UpdateProject(c.Request.Context(), userID, id, &req)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return
@@ -109,8 +143,12 @@ func (h *BidHandler) UpdateProject(c *gin.Context) {
 }
 
 func (h *BidHandler) DeleteProject(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
-	if err := h.svc.DeleteProject(c.Request.Context(), id); err != nil {
+	if err := h.svc.DeleteProject(c.Request.Context(), userID, id); err != nil {
 		fail(c, 500, err.Error())
 		return
 	}
@@ -120,6 +158,10 @@ func (h *BidHandler) DeleteProject(c *gin.Context) {
 // ── Upload ──
 
 func (h *BidHandler) UploadTender(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
 
 	file, header, err := c.Request.FormFile("file")
@@ -140,7 +182,7 @@ func (h *BidHandler) UploadTender(c *gin.Context) {
 	// Store file path metadata on the project
 	// In production this would upload to MinIO via media service
 	filePath := "tenders/" + id + "/" + header.Filename
-	if err := h.svc.SetTenderFile(c.Request.Context(), id, filePath, header.Filename); err != nil {
+	if err := h.svc.SetTenderFile(c.Request.Context(), userID, id, filePath, header.Filename); err != nil {
 		fail(c, 500, err.Error())
 		return
 	}
@@ -155,8 +197,12 @@ func (h *BidHandler) UploadTender(c *gin.Context) {
 // ── Generation Lifecycle ──
 
 func (h *BidHandler) StartGeneration(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
-	taskID, err := h.svc.StartGeneration(c.Request.Context(), id)
+	taskID, err := h.svc.StartGeneration(c.Request.Context(), userID, id)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return
@@ -165,13 +211,17 @@ func (h *BidHandler) StartGeneration(c *gin.Context) {
 }
 
 func (h *BidHandler) PauseGeneration(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
 	var body struct {
 		Reason string `json:"reason"`
 	}
 	_ = c.ShouldBindJSON(&body)
 
-	if err := h.svc.PauseGeneration(c.Request.Context(), id); err != nil {
+	if err := h.svc.PauseGeneration(c.Request.Context(), userID, id); err != nil {
 		fail(c, 500, err.Error())
 		return
 	}
@@ -179,8 +229,12 @@ func (h *BidHandler) PauseGeneration(c *gin.Context) {
 }
 
 func (h *BidHandler) ResumeGeneration(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
-	if err := h.svc.ResumeGeneration(c.Request.Context(), id); err != nil {
+	if err := h.svc.ResumeGeneration(c.Request.Context(), userID, id); err != nil {
 		fail(c, 500, err.Error())
 		return
 	}
@@ -190,10 +244,14 @@ func (h *BidHandler) ResumeGeneration(c *gin.Context) {
 // ── Chapter Review ──
 
 func (h *BidHandler) ApproveChapter(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	projectID := c.Param("id")
 	chID := c.Param("chId")
 
-	chapter, err := h.svc.ApproveChapter(c.Request.Context(), projectID, chID)
+	chapter, err := h.svc.ApproveChapter(c.Request.Context(), userID, projectID, chID)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return
@@ -202,6 +260,10 @@ func (h *BidHandler) ApproveChapter(c *gin.Context) {
 }
 
 func (h *BidHandler) RejectChapter(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	projectID := c.Param("id")
 	chID := c.Param("chId")
 
@@ -211,7 +273,7 @@ func (h *BidHandler) RejectChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.svc.RejectChapter(c.Request.Context(), projectID, chID, req.Comment)
+	chapter, err := h.svc.RejectChapter(c.Request.Context(), userID, projectID, chID, req.Comment)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return
@@ -226,8 +288,8 @@ func (h *BidHandler) RegenerateChapter(c *gin.Context) {
 	// Regenerate by rejecting (triggers retry) then immediately approving restart
 	// This re-triggers the chapter_generator node
 	ok(c, gin.H{
-		"chapter_id":   chID,
-		"message":      "regeneration triggered",
+		"chapter_id": chID,
+		"message":    "regeneration triggered",
 	})
 }
 
@@ -244,8 +306,12 @@ func (h *BidHandler) ExportDocument(c *gin.Context) {
 }
 
 func (h *BidHandler) GetExportStatus(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
-	status, err := h.svc.GetExportStatus(c.Request.Context(), id)
+	status, err := h.svc.GetExportStatus(c.Request.Context(), userID, id)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return
@@ -256,8 +322,12 @@ func (h *BidHandler) GetExportStatus(c *gin.Context) {
 // ── Progress & Trace ──
 
 func (h *BidHandler) GetProgress(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
-	progress, err := h.svc.GetProgress(c.Request.Context(), id)
+	progress, err := h.svc.GetProgress(c.Request.Context(), userID, id)
 	if err != nil {
 		fail(c, 500, err.Error())
 		return
@@ -266,8 +336,12 @@ func (h *BidHandler) GetProgress(c *gin.Context) {
 }
 
 func (h *BidHandler) GetTrace(c *gin.Context) {
+	userID, hasUser := authenticatedUserID(c)
+	if !hasUser {
+		return
+	}
 	id := c.Param("id")
-	project, _, err := h.svc.GetProject(c.Request.Context(), id)
+	project, _, err := h.svc.GetProject(c.Request.Context(), userID, id)
 	if err != nil {
 		fail(c, 404, err.Error())
 		return
@@ -278,6 +352,15 @@ func (h *BidHandler) GetTrace(c *gin.Context) {
 		"task_id":    project.TaskID,
 		"trace_url":  "/api/trace/" + project.TaskID,
 	})
+}
+
+func authenticatedUserID(c *gin.Context) (string, bool) {
+	userID, ok := auth.UserIDFromContext(c.Request.Context())
+	if !ok {
+		fail(c, 401, "unauthorized")
+		return "", false
+	}
+	return userID, true
 }
 
 // ── Templates ──

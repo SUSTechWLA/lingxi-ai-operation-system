@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getAuthAccessToken, refreshAuthSession, logout } from './auth'
 import {
   ApiResponse,
   TaskResponse,
@@ -38,6 +39,39 @@ const api = axios.create({
   baseURL: API_BASE,
   timeout: 30000,
 })
+
+api.interceptors.request.use((config) => {
+  const token = getAuthAccessToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+let refreshPromise: Promise<unknown> | null = null
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const original = error.config
+    if (error.response?.status === 401 && original && !original.__authRetry) {
+      original.__authRetry = true
+      try {
+        refreshPromise = refreshPromise || refreshAuthSession()
+        await refreshPromise
+        refreshPromise = null
+        const token = getAuthAccessToken()
+        if (token) original.headers.Authorization = `Bearer ${token}`
+        return api(original)
+      } catch (refreshError) {
+        refreshPromise = null
+        logout()
+        throw refreshError
+      }
+    }
+    throw error
+  }
+)
 
 export const publishContent = async (
   title: string,

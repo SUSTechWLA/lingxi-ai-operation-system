@@ -34,6 +34,49 @@ func NewPool(ctx context.Context, cfg config.PostgresConfig) *pgxpool.Pool {
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	schema := `
+	CREATE TABLE IF NOT EXISTS users (
+	    id VARCHAR(64) PRIMARY KEY,
+	    email VARCHAR(255) NOT NULL UNIQUE,
+	    password_hash TEXT NOT NULL,
+	    nickname VARCHAR(128),
+	    avatar_url TEXT,
+	    status VARCHAR(32) NOT NULL DEFAULT 'active',
+	    created_at TIMESTAMPTZ DEFAULT NOW(),
+	    updated_at TIMESTAMPTZ DEFAULT NOW(),
+	    last_login_at TIMESTAMPTZ
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+	CREATE TABLE IF NOT EXISTS refresh_tokens (
+	    id VARCHAR(64) PRIMARY KEY,
+	    user_id VARCHAR(64) NOT NULL REFERENCES users(id),
+	    token_hash TEXT NOT NULL UNIQUE,
+	    device_id VARCHAR(128),
+	    user_agent TEXT,
+	    ip_address VARCHAR(64),
+	    expires_at TIMESTAMPTZ NOT NULL,
+	    revoked_at TIMESTAMPTZ,
+	    replaced_by_token_id VARCHAR(64),
+	    created_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
+	CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+
+	CREATE TABLE IF NOT EXISTS devices (
+	    id VARCHAR(128) PRIMARY KEY,
+	    user_id VARCHAR(64) NOT NULL REFERENCES users(id),
+	    device_name VARCHAR(128),
+	    device_type VARCHAR(64),
+	    platform VARCHAR(64),
+	    last_seen_at TIMESTAMPTZ,
+	    created_at TIMESTAMPTZ DEFAULT NOW(),
+	    updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
+
 	CREATE TABLE IF NOT EXISTS ai_task (
 	    id VARCHAR(64) PRIMARY KEY,
 	    user_id VARCHAR(64),
@@ -216,6 +259,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		CREATE TABLE IF NOT EXISTS workflow_runs (
 		    id VARCHAR(64) PRIMARY KEY,
 		    project_id VARCHAR(64) NOT NULL,
+		    user_id VARCHAR(64) DEFAULT 'default',
 		    template_id VARCHAR(64) NOT NULL,
 		    template_version VARCHAR(32) NOT NULL,
 		    task_id VARCHAR(64),
@@ -245,6 +289,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		CREATE TABLE IF NOT EXISTS model_calls (
 		    id VARCHAR(64) PRIMARY KEY,
 		    project_id VARCHAR(64),
+		    user_id VARCHAR(64) DEFAULT 'default',
 		    provider VARCHAR(64) NOT NULL,
 		    model VARCHAR(64) NOT NULL,
 		    capability VARCHAR(32) NOT NULL,
@@ -259,6 +304,8 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_model_calls_project ON model_calls(project_id);
 		CREATE INDEX IF NOT EXISTS idx_model_calls_fingerprint ON model_calls(fingerprint);
+		ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS user_id VARCHAR(64) DEFAULT 'default';
+		ALTER TABLE model_calls ADD COLUMN IF NOT EXISTS user_id VARCHAR(64) DEFAULT 'default';
 	`
 	if _, err := pool.Exec(ctx, workflowRunSchema); err != nil {
 		zap.L().Warn("Failed to run workflow run migrations (non-fatal)", zap.Error(err))

@@ -15,41 +15,43 @@ Version: 0.1.0
 
 1. [AI](#1-ai)
 2. [Artifacts](#2-artifacts)
-3. [Bid](#3-bid)
-4. [Chat](#4-chat)
-5. [Context](#5-context)
-6. [Health](#6-health)
-7. [Media](#7-media)
-8. [Node](#8-node)
-9. [Orchestrator](#9-orchestrator)
-10. [Publish](#10-publish)
-11. [Skills](#11-skills)
-12. [Stages](#12-stages)
-13. [Tools](#13-tools)
-14. [Trace](#14-trace)
-15. [Translate](#15-translate)
-16. [Video Projects](#16-video-projects)
-17. [Workflow Runs](#17-workflow-runs)
-18. [Workflows](#18-workflows)
+3. [Auth](#3-auth)
+4. [Bid](#4-bid)
+5. [Chat](#5-chat)
+6. [Context](#6-context)
+7. [Health](#7-health)
+8. [Media](#8-media)
+9. [Node](#9-node)
+10. [Orchestrator](#10-orchestrator)
+11. [Publish](#11-publish)
+12. [Skills](#12-skills)
+13. [Stages](#13-stages)
+14. [Tools](#14-tools)
+15. [Trace](#15-trace)
+16. [Translate](#16-translate)
+17. [Video Projects](#17-video-projects)
+18. [Workflow Runs](#18-workflow-runs)
+19. [Workflows](#19-workflows)
 
 ---
 
 ## 1. AI
 
-### GET /api/ai/polish/result
+### POST /api/ai/generate
 
-Query async polish result
+Generate content from text prompt
 
-**Parameters:**
+**Request body:** **Required** (Content-Type: `application/json`)
 
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `taskId` | query | `string` | **Yes** | Task ID from submit response |
-| `nodeId` | query | `string` | No | Node ID (optional) |
+```json
+{
+  "prompt": "string",
+}
+```
 
 **Responses:**
 
-- **200** — Polish result or status (JSON)
+- **200** — Generated content (JSON)
 
 ---
 
@@ -68,25 +70,6 @@ Generate content from media files + prompt
 **Responses:**
 
 - **200** — Generated content (JSON)
-
----
-
-### POST /api/ai/polish/submit
-
-Submit async polish task
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{
-  "text": "string",
-  "type": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Task submitted (JSON)
 
 ---
 
@@ -109,65 +92,43 @@ Polish text via AI (synchronous)
 
 ---
 
-### POST /api/ai/generate
+### GET /api/ai/polish/result
 
-Generate content from text prompt
+Query async polish result
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | query | `string` | **Yes** | Task ID from submit response |
+| `nodeId` | query | `string` | No | Node ID (optional) |
+
+**Responses:**
+
+- **200** — Polish result or status (JSON)
+
+---
+
+### POST /api/ai/polish/submit
+
+Submit async polish task
 
 **Request body:** **Required** (Content-Type: `application/json`)
 
 ```json
 {
-  "prompt": "string",
+  "text": "string",
+  "type": "string",
 }
 ```
 
 **Responses:**
 
-- **200** — Generated content (JSON)
+- **200** — Task submitted (JSON)
 
 ---
 
 ## 2. Artifacts
-
-### POST /api/artifacts/:id/revise
-
-Create an artifact revision
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Artifact identifier |
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{
-  "message": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Revised (JSON)
-
----
-
-### GET /api/artifacts/:id/history
-
-Get artifact revision history
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Artifact identifier |
-
-**Responses:**
-
-- **200** — Version history (JSON)
-
----
 
 ### GET /api/artifacts/:id
 
@@ -198,8 +159,48 @@ Get artifact content
 
 **Responses:**
 
-- **404** — Not found (JSON)
 - **200** — Content + metadata (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### GET /api/artifacts/:id/history
+
+Get artifact revision history
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Artifact identifier |
+
+**Responses:**
+
+- **200** — Version history (JSON)
+
+---
+
+### POST /api/artifacts/:id/revise
+
+Create an artifact revision
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Artifact identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{
+  "message": "string",
+}
+```
+
+**Responses:**
+
+- **200** — Revised (JSON)
 
 ---
 
@@ -219,78 +220,122 @@ List project artifacts
 
 ---
 
-## 3. Bid
+## 3. Auth
 
-### POST /api/bid/projects/:id/chapters/:chId/regenerate
+### POST /api/auth/login
 
-Trigger chapter regeneration
+Log in with email and password
 
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-| `chId` | path | `string` | **Yes** | Chapter identifier |
-
-**Responses:**
-
-- **200** — Regeneration triggered (JSON)
-
----
-
-### POST /api/bid/projects/:id/start
-
-Start bid generation
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Started (JSON)
-
----
-
-### GET /api/bid/projects/:id/export/status
-
-Get export status
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Export status (JSON)
-
----
-
-### POST /api/bid/projects/:id/export
-
-Export project to document
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Request body:** Optional (Content-Type: `application/json`)
+**Request body:** **Required** (Content-Type: `application/json`)
 
 ```json
-{
-  "format": "string",
-}
+{ "$ref": "#/components/schemas/AuthLoginRequest" }
 ```
 
 **Responses:**
 
-- **200** — Export started (JSON)
+- **200** — Authenticated (JSON)
+- **401** — Invalid credentials (JSON)
+
+---
+
+### POST /api/auth/logout
+
+Revoke the current refresh token
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/AuthLogoutRequest" }
+```
+
+**Responses:**
+
+- **200** — Logged out (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+### GET /api/auth/me
+
+Get the current authenticated user
+
+**Responses:**
+
+- **200** — Current user (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+### POST /api/auth/refresh
+
+Rotate refresh token and return new tokens
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/AuthRefreshRequest" }
+```
+
+**Responses:**
+
+- **200** — Refreshed (JSON)
+- **401** — Invalid refresh token (JSON)
+
+---
+
+### POST /api/auth/register
+
+Register a user with email and password
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/AuthRegisterRequest" }
+```
+
+**Responses:**
+
+- **200** — Registered and authenticated (JSON)
+- **400** — Invalid request (JSON)
+- **409** — Email already registered (JSON)
+
+---
+
+## 4. Bid
+
+### GET /api/bid/projects
+
+List bid projects
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `status` | query | `string` | No | Filter by status |
+| `userId` | query | `string` | No | Filter by user |
+| `offset` | query | `integer` | No | Pagination offset |
+| `limit` | query | `integer` | No | Page size |
+
+**Responses:**
+
+- **200** — Projects list (JSON)
+
+---
+
+### POST /api/bid/projects
+
+Create a bid project
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Created (JSON)
 
 ---
 
@@ -349,48 +394,142 @@ Delete a project
 
 ---
 
-### GET /api/bid/projects
+### POST /api/bid/projects/:id/chapters/:chId/approve
 
-List bid projects
+Approve a chapter
 
 **Parameters:**
 
 | Name | In | Type | Required | Description |
 |------|----|------|----------|-------------|
-| `status` | query | `string` | No | Filter by status |
-| `userId` | query | `string` | No | Filter by user |
-| `offset` | query | `integer` | No | Pagination offset |
-| `limit` | query | `integer` | No | Page size |
+| `id` | path | `string` | **Yes** | Project identifier |
+| `chId` | path | `string` | **Yes** | Chapter identifier |
 
 **Responses:**
 
-- **200** — Projects list (JSON)
+- **200** — Approved (JSON)
 
 ---
 
-### POST /api/bid/projects
+### POST /api/bid/projects/:id/chapters/:chId/regenerate
 
-Create a bid project
+Trigger chapter regeneration
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `chId` | path | `string` | **Yes** | Chapter identifier |
+
+**Responses:**
+
+- **200** — Regeneration triggered (JSON)
+
+---
+
+### POST /api/bid/projects/:id/chapters/:chId/reject
+
+Reject a chapter
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `chId` | path | `string` | **Yes** | Chapter identifier |
 
 **Request body:** **Required** (Content-Type: `application/json`)
 
 ```json
-{}
+{
+  "comment": "string",
+}
 ```
 
 **Responses:**
 
-- **200** — Created (JSON)
+- **200** — Rejected (JSON)
 
 ---
 
-### GET /api/bid/templates
+### POST /api/bid/projects/:id/export
 
-List bid templates
+Export project to document
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{
+  "format": "string",
+}
+```
 
 **Responses:**
 
-- **200** — Templates list (JSON)
+- **200** — Export started (JSON)
+
+---
+
+### GET /api/bid/projects/:id/export/status
+
+Get export status
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Export status (JSON)
+
+---
+
+### POST /api/bid/projects/:id/pause
+
+Pause generation
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{
+  "reason": "string",
+}
+```
+
+**Responses:**
+
+- **200** — Paused (JSON)
+
+---
+
+### GET /api/bid/projects/:id/progress
+
+Get generation progress
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Progress data (JSON)
 
 ---
 
@@ -407,6 +546,22 @@ Resume generation
 **Responses:**
 
 - **200** — Resumed (JSON)
+
+---
+
+### POST /api/bid/projects/:id/start
+
+Start bid generation
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Started (JSON)
 
 ---
 
@@ -450,89 +605,34 @@ Upload tender document
 
 ---
 
-### POST /api/bid/projects/:id/chapters/:chId/reject
+### GET /api/bid/templates
 
-Reject a chapter
+List bid templates
+
+**Responses:**
+
+- **200** — Templates list (JSON)
+
+---
+
+## 5. Chat
+
+### GET /api/chat/sessions/:session_id
+
+Get session state
 
 **Parameters:**
 
 | Name | In | Type | Required | Description |
 |------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-| `chId` | path | `string` | **Yes** | Chapter identifier |
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{
-  "comment": "string",
-}
-```
+| `session_id` | path | `string` | **Yes** | Session identifier |
 
 **Responses:**
 
-- **200** — Rejected (JSON)
+- **200** — Session state (JSON)
+- **404** — Not found (JSON)
 
 ---
-
-### GET /api/bid/projects/:id/progress
-
-Get generation progress
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Progress data (JSON)
-
----
-
-### POST /api/bid/projects/:id/chapters/:chId/approve
-
-Approve a chapter
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-| `chId` | path | `string` | **Yes** | Chapter identifier |
-
-**Responses:**
-
-- **200** — Approved (JSON)
-
----
-
-### POST /api/bid/projects/:id/pause
-
-Pause generation
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Request body:** Optional (Content-Type: `application/json`)
-
-```json
-{
-  "reason": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Paused (JSON)
-
----
-
-## 4. Chat
 
 ### POST /api/chat/sessions/:session_id/chat
 
@@ -556,23 +656,6 @@ Send a chat message
 
 - **200** — Assistant reply (JSON)
 - **410** — Session terminated (JSON)
-
----
-
-### GET /api/chat/sessions/:session_id
-
-Get session state
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `session_id` | path | `string` | **Yes** | Session identifier |
-
-**Responses:**
-
-- **200** — Session state (JSON)
-- **404** — Not found (JSON)
 
 ---
 
@@ -616,12 +699,12 @@ Create a new chat session
 
 ```json
 {
-  "user_id": "string",
-  "title": "string",
   "description": "string",
   "keywords": ["string"],
   "media_count": 0,
   "media_ids": ["string"],
+  "platforms": ["string"],
+  "title": "string",
   ...
 }
 ```
@@ -632,45 +715,7 @@ Create a new chat session
 
 ---
 
-## 5. Context
-
-### GET /api/context/:taskId/node/:nodeId/snapshot/latest
-
-Get node snapshot
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `taskId` | path | `string` | **Yes** | Task identifier |
-| `nodeId` | path | `string` | **Yes** | Node identifier |
-
-**Responses:**
-
-- **200** — Snapshot found (JSON)
-
----
-
-### POST /api/context/record
-
-Record a context event manually
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{
-  "taskId": "string",
-  "nodeId": "string",
-  "type": "string",
-  "message": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Recorded (JSON)
-
----
+## 6. Context
 
 ### GET /api/context/:taskId
 
@@ -705,7 +750,45 @@ Restore node
 
 ---
 
-## 6. Health
+### GET /api/context/:taskId/node/:nodeId/snapshot/latest
+
+Get node snapshot
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Responses:**
+
+- **200** — Snapshot found (JSON)
+
+---
+
+### POST /api/context/record
+
+Record a context event manually
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{
+  "message": "string",
+  "nodeId": "string",
+  "taskId": "string",
+  "type": "string",
+}
+```
+
+**Responses:**
+
+- **200** — Recorded (JSON)
+
+---
+
+## 7. Health
 
 ### GET /api/health
 
@@ -728,45 +811,7 @@ Readiness check with dependencies
 
 ---
 
-## 7. Media
-
-### GET /api/media/list
-
-List media assets
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `userId` | query | `string` | No | User identifier |
-| `offset` | query | `integer` | No | Pagination offset |
-| `limit` | query | `integer` | No | Page size |
-| `tag` | query | `string` | No | Filter by tag |
-
-**Responses:**
-
-- **200** — Media list (JSON)
-
----
-
-### POST /api/media/upload
-
-Upload media files
-
-**Request body:** Optional (Content-Type: `multipart/form-data`)
-
-```json
-{
-  "userId": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Uploaded (JSON)
-- **400** — No files (JSON)
-
----
+## 8. Media
 
 ### GET /api/media/:id
 
@@ -809,45 +854,45 @@ Update media tags
 
 ---
 
-## 8. Node
+### GET /api/media/list
 
-### POST /api/node/:nodeId/restore
-
-Restore node from snapshot
+List media assets
 
 **Parameters:**
 
 | Name | In | Type | Required | Description |
 |------|----|------|----------|-------------|
-| `nodeId` | path | `string` | **Yes** | Node identifier |
+| `userId` | query | `string` | No | User identifier |
+| `offset` | query | `integer` | No | Pagination offset |
+| `limit` | query | `integer` | No | Page size |
+| `tag` | query | `string` | No | Filter by tag |
 
 **Responses:**
 
-- **200** — Restored (JSON)
+- **200** — Media list (JSON)
 
 ---
 
-### POST /api/node/:nodeId/success
+### POST /api/media/upload
 
-Report node execution success
+Upload media files
 
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `nodeId` | path | `string` | **Yes** | Node identifier |
-
-**Request body:** Optional (Content-Type: `application/json`)
+**Request body:** Optional (Content-Type: `multipart/form-data`)
 
 ```json
-{}
+{
+  "userId": "string",
+}
 ```
 
 **Responses:**
 
-- **200** — Recorded (JSON)
+- **200** — Uploaded (JSON)
+- **400** — No files (JSON)
 
 ---
+
+## 9. Node
 
 ### POST /api/node
 
@@ -862,23 +907,6 @@ Submit DAG in one step (create + submit)
 **Responses:**
 
 - **200** — DAG submitted (JSON)
-
----
-
-### GET /api/node/:nodeId/snapshot/latest
-
-Get latest node snapshot
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `nodeId` | path | `string` | **Yes** | Node identifier |
-
-**Responses:**
-
-- **200** — Snapshot found (JSON)
-- **404** — No snapshot (JSON)
 
 ---
 
@@ -906,6 +934,22 @@ Report node execution failure
 
 ---
 
+### POST /api/node/:nodeId/restore
+
+Restore node from snapshot
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Responses:**
+
+- **200** — Restored (JSON)
+
+---
+
 ### POST /api/node/:nodeId/retry
 
 Retry a failed node
@@ -922,23 +966,46 @@ Retry a failed node
 
 ---
 
-## 9. Orchestrator
+### GET /api/node/:nodeId/snapshot/latest
 
-### GET /api/task/:taskId/progress
-
-Get task execution progress
+Get latest node snapshot
 
 **Parameters:**
 
 | Name | In | Type | Required | Description |
 |------|----|------|----------|-------------|
-| `taskId` | path | `string` | **Yes** | Task identifier |
+| `nodeId` | path | `string` | **Yes** | Node identifier |
 
 **Responses:**
 
-- **200** — Task progress (JSON)
+- **200** — Snapshot found (JSON)
+- **404** — No snapshot (JSON)
 
 ---
+
+### POST /api/node/:nodeId/success
+
+Report node execution success
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `nodeId` | path | `string` | **Yes** | Node identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Recorded (JSON)
+
+---
+
+## 10. Orchestrator
 
 ### GET /api/task/:taskId
 
@@ -953,6 +1020,60 @@ Get task with node details
 **Responses:**
 
 - **200** — Task + nodes (JSON)
+
+---
+
+### GET /api/task/:taskId/context
+
+Get context records for task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Context records (JSON)
+
+---
+
+### POST /api/task/:taskId/dag
+
+Submit a DAG to a task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/DAGRequest" }
+```
+
+**Responses:**
+
+- **200** — DAG submitted (JSON)
+
+---
+
+### POST /api/task/:taskId/fail
+
+Immediately fail a task
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `taskId` | path | `string` | **Yes** | Task identifier |
+
+**Responses:**
+
+- **200** — Failed (JSON)
 
 ---
 
@@ -980,38 +1101,6 @@ Pause a running task
 
 ---
 
-### POST /api/task/:taskId/resume
-
-Resume a paused task
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `taskId` | path | `string` | **Yes** | Task identifier |
-
-**Responses:**
-
-- **200** — Resumed (JSON)
-
----
-
-### GET /api/task/:taskId/context
-
-Get context records for task
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `taskId` | path | `string` | **Yes** | Task identifier |
-
-**Responses:**
-
-- **200** — Context records (JSON)
-
----
-
 ### GET /api/task/:taskId/pause-reason
 
 Get task pause reason
@@ -1028,9 +1117,9 @@ Get task pause reason
 
 ---
 
-### POST /api/task/:taskId/fail
+### GET /api/task/:taskId/progress
 
-Immediately fail a task
+Get task execution progress
 
 **Parameters:**
 
@@ -1040,13 +1129,13 @@ Immediately fail a task
 
 **Responses:**
 
-- **200** — Failed (JSON)
+- **200** — Task progress (JSON)
 
 ---
 
-### POST /api/task/:taskId/dag
+### POST /api/task/:taskId/resume
 
-Submit a DAG to a task
+Resume a paused task
 
 **Parameters:**
 
@@ -1054,15 +1143,9 @@ Submit a DAG to a task
 |------|----|------|----------|-------------|
 | `taskId` | path | `string` | **Yes** | Task identifier |
 
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{ "$ref": "#/components/schemas/DAGRequest" }
-```
-
 **Responses:**
 
-- **200** — DAG submitted (JSON)
+- **200** — Resumed (JSON)
 
 ---
 
@@ -1082,7 +1165,7 @@ Create a new empty task
 
 ---
 
-## 10. Publish
+## 11. Publish
 
 ### POST /api/publish
 
@@ -1093,10 +1176,10 @@ Submit content for multi-platform publishing
 ```json
 {
   "content_type": "string",
-  "platforms": "string",
-  "title": "string",
   "description": "string",
   "keywords": "string",
+  "platforms": "string",
+  "title": "string",
 }
 ```
 
@@ -1107,40 +1190,7 @@ Submit content for multi-platform publishing
 
 ---
 
-## 11. Skills
-
-### GET /api/skills/catalog
-
-Get skill catalog
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `includeHidden` | query | `boolean` | No | Include hidden skills |
-
-**Responses:**
-
-- **200** — Catalog (JSON)
-
----
-
-### POST /api/skills/:name/:version/compile
-
-Compile skill to DAG
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `name` | path | `string` | **Yes** | Skill name |
-| `version` | path | `string` | **Yes** | Skill version |
-
-**Responses:**
-
-- **200** — Compiled DAG (JSON)
-
----
+## 12. Skills
 
 ### GET /api/skills
 
@@ -1149,24 +1199,6 @@ List all loaded skills
 **Responses:**
 
 - **200** — Skills list (JSON)
-
----
-
-### POST /api/skills/route
-
-Route a brief to a skill
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{
-  "brief": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Route result (JSON)
 
 ---
 
@@ -1188,7 +1220,58 @@ Get skill detail
 
 ---
 
-## 12. Stages
+### POST /api/skills/:name/:version/compile
+
+Compile skill to DAG
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `name` | path | `string` | **Yes** | Skill name |
+| `version` | path | `string` | **Yes** | Skill version |
+
+**Responses:**
+
+- **200** — Compiled DAG (JSON)
+
+---
+
+### GET /api/skills/catalog
+
+Get skill catalog
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `includeHidden` | query | `boolean` | No | Include hidden skills |
+
+**Responses:**
+
+- **200** — Catalog (JSON)
+
+---
+
+### POST /api/skills/route
+
+Route a brief to a skill
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{
+  "brief": "string",
+}
+```
+
+**Responses:**
+
+- **200** — Route result (JSON)
+
+---
+
+## 13. Stages
 
 ### POST /api/video-projects/:id/stages/:stage/approve
 
@@ -1205,9 +1288,9 @@ Approve a stage
 
 ```json
 {
-  "runId": "string",
-  "output": {},
   "comment": "string",
+  "output": {},
+  "runId": "string",
 }
 ```
 
@@ -1218,7 +1301,7 @@ Approve a stage
 
 ---
 
-## 13. Tools
+## 14. Tools
 
 ### GET /api/tools
 
@@ -1280,7 +1363,7 @@ Register an external tool
 
 ---
 
-## 14. Trace
+## 15. Trace
 
 ### GET /api/trace/:taskId
 
@@ -1294,8 +1377,8 @@ Get task trace by ID
 
 **Responses:**
 
-- **404** — Task not found (JSON)
 - **200** — Trace data (JSON)
+- **404** — Task not found (JSON)
 
 ---
 
@@ -1310,7 +1393,7 @@ Get most recent task trace
 
 ---
 
-## 15. Translate
+## 16. Translate
 
 ### GET /api/task/:taskId/status
 
@@ -1364,62 +1447,7 @@ Translate NL prompt and submit DAG
 
 ---
 
-## 16. Video Projects
-
-### GET /api/video-projects/:id
-
-Get project detail
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Project (JSON)
-- **404** — Not found (JSON)
-
----
-
-### DELETE /api/video-projects/:id
-
-Archive a project (soft delete)
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Archived (JSON)
-
----
-
-### PATCH /api/video-projects/:id
-
-Update a project
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{}
-```
-
-**Responses:**
-
-- **200** — Updated (JSON)
-
----
+## 17. Video Projects
 
 ### GET /api/video-projects
 
@@ -1447,7 +1475,62 @@ Create a video project
 
 ---
 
-## 17. Workflow Runs
+### GET /api/video-projects/:id
+
+Get project detail
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Project (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### PATCH /api/video-projects/:id
+
+Update a project
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Updated (JSON)
+
+---
+
+### DELETE /api/video-projects/:id
+
+Archive a project (soft delete)
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Archived (JSON)
+
+---
+
+## 18. Workflow Runs
 
 ### POST /api/video-projects/:id/workflow-runs
 
@@ -1463,9 +1546,9 @@ Create a workflow run
 
 ```json
 {
+  "input": {},
   "templateId": "string",
   "templateVersion": "string",
-  "input": {},
 }
 ```
 
@@ -1527,21 +1610,31 @@ Pause a run
 
 ---
 
-## 18. Workflows
+## 19. Workflows
 
-### DELETE /api/workflows/:id
+### GET /api/workflows
 
-Delete a template
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Template identifier |
+List workflow templates
 
 **Responses:**
 
-- **200** — Deleted (JSON)
+- **200** — Templates (JSON)
+
+---
+
+### POST /api/workflows
+
+Create a workflow template
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Created (JSON)
 
 ---
 
@@ -1584,6 +1677,22 @@ Update a template
 
 ---
 
+### DELETE /api/workflows/:id
+
+Delete a template
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Template identifier |
+
+**Responses:**
+
+- **200** — Deleted (JSON)
+
+---
+
 ### POST /api/workflows/:id/instantiate
 
 Instantiate template → task
@@ -1603,32 +1712,6 @@ Instantiate template → task
 **Responses:**
 
 - **200** — Task created (JSON)
-
----
-
-### GET /api/workflows
-
-List workflow templates
-
-**Responses:**
-
-- **200** — Templates (JSON)
-
----
-
-### POST /api/workflows
-
-Create a workflow template
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{}
-```
-
-**Responses:**
-
-- **200** — Created (JSON)
 
 ---
 

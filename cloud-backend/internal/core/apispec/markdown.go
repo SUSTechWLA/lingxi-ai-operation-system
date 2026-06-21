@@ -92,7 +92,13 @@ func RenderMarkdown(spec *Spec) []byte {
 			// Responses
 			if len(entry.Responses) > 0 {
 				b.WriteString("**Responses:**\n\n")
-				for status, resp := range entry.Responses {
+				statuses := make([]string, 0, len(entry.Responses))
+				for status := range entry.Responses {
+					statuses = append(statuses, status)
+				}
+				sort.Strings(statuses)
+				for _, status := range statuses {
+					resp := entry.Responses[status]
 					b.WriteString(fmt.Sprintf("- **%s** — %s", status, resp.Description))
 					if hasBody(resp) {
 						b.WriteString(" (JSON)")
@@ -122,11 +128,25 @@ type pathEntry struct {
 
 func groupPathsByTag(spec *Spec) map[string][]*pathEntry {
 	groups := map[string][]*pathEntry{}
-	for path, item := range spec.Paths {
-		for method, op := range map[string]*Operation{
-			"GET": item.Get, "POST": item.Post, "PUT": item.Put,
-			"DELETE": item.Delete, "PATCH": item.Patch,
-		} {
+	paths := make([]string, 0, len(spec.Paths))
+	for path := range spec.Paths {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	methods := []struct {
+		name string
+		get  func(*PathItem) *Operation
+	}{
+		{"GET", func(item *PathItem) *Operation { return item.Get }},
+		{"POST", func(item *PathItem) *Operation { return item.Post }},
+		{"PUT", func(item *PathItem) *Operation { return item.Put }},
+		{"PATCH", func(item *PathItem) *Operation { return item.Patch }},
+		{"DELETE", func(item *PathItem) *Operation { return item.Delete }},
+	}
+	for _, path := range paths {
+		item := spec.Paths[path]
+		for _, method := range methods {
+			op := method.get(item)
 			if op == nil {
 				continue
 			}
@@ -135,7 +155,7 @@ func groupPathsByTag(spec *Spec) map[string][]*pathEntry {
 				tag = op.Tags[0]
 			}
 			groups[tag] = append(groups[tag], &pathEntry{
-				Method:      method,
+				Method:      method.name,
 				Path:        path,
 				Summary:     op.Summary,
 				Params:      op.Parameters,
@@ -145,7 +165,34 @@ func groupPathsByTag(spec *Spec) map[string][]*pathEntry {
 			})
 		}
 	}
+	for tag := range groups {
+		sort.SliceStable(groups[tag], func(i, j int) bool {
+			left := groups[tag][i]
+			right := groups[tag][j]
+			if left.Path != right.Path {
+				return left.Path < right.Path
+			}
+			return methodRank(left.Method) < methodRank(right.Method)
+		})
+	}
 	return groups
+}
+
+func methodRank(method string) int {
+	switch method {
+	case "GET":
+		return 0
+	case "POST":
+		return 1
+	case "PUT":
+		return 2
+	case "PATCH":
+		return 3
+	case "DELETE":
+		return 4
+	default:
+		return 99
+	}
 }
 
 func sortedTags(groups map[string][]*pathEntry) []string {
@@ -196,8 +243,13 @@ func labelRequired(required bool) string {
 }
 
 func contentType(body *RequestBody) string {
+	contentTypes := make([]string, 0, len(body.Content))
 	for ct := range body.Content {
-		return ct
+		contentTypes = append(contentTypes, ct)
+	}
+	sort.Strings(contentTypes)
+	if len(contentTypes) > 0 {
+		return contentTypes[0]
 	}
 	return "application/json"
 }
@@ -207,7 +259,13 @@ func hasBody(resp *Response) bool {
 }
 
 func exampleJSON(body *RequestBody) string {
-	for _, mt := range body.Content {
+	contentTypes := make([]string, 0, len(body.Content))
+	for ct := range body.Content {
+		contentTypes = append(contentTypes, ct)
+	}
+	sort.Strings(contentTypes)
+	for _, ct := range contentTypes {
+		mt := body.Content[ct]
 		if mt.Schema != nil {
 			return schemaExample(mt.Schema)
 		}
@@ -255,8 +313,13 @@ func schemaToExample(s *Schema, depth int) string {
 		}
 		var b strings.Builder
 		b.WriteString("{\n")
-		count := 0
-		for name, prop := range s.Properties {
+		propNames := make([]string, 0, len(s.Properties))
+		for name := range s.Properties {
+			propNames = append(propNames, name)
+		}
+		sort.Strings(propNames)
+		for count, name := range propNames {
+			prop := s.Properties[name]
 			if count > 5 {
 				b.WriteString("  ...\n")
 				break

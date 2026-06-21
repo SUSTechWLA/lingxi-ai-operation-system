@@ -173,11 +173,43 @@ func (s *MediaService) Get(ctx context.Context, id string) (*MediaAsset, error) 
 	return a, nil
 }
 
+func (s *MediaService) GetForUser(ctx context.Context, userID string, id string) (*MediaAsset, error) {
+	a := &MediaAsset{}
+	var tagsJSON []byte
+	var createdAt, updatedAt time.Time
+
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, user_id, original_name, mime_type, size, minio_path, tags, COALESCE(embedding_id, ''), created_at, updated_at
+		 FROM media_assets WHERE id = $1 AND user_id = $2`, id, userID).
+		Scan(&a.ID, &a.UserID, &a.OriginalName, &a.MimeType, &a.Size,
+			&a.MinioPath, &tagsJSON, &a.EmbeddingID, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("media asset not found: %w", err)
+	}
+	a.Tags = fromJSONB(tagsJSON)
+	a.CreatedAt = createdAt.Format(time.RFC3339)
+	a.UpdatedAt = updatedAt.Format(time.RFC3339)
+	return a, nil
+}
+
 func (s *MediaService) UpdateTags(ctx context.Context, id string, tags []string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE media_assets SET tags = $1, updated_at = NOW() WHERE id = $2`,
 		toJSONB(tags), id)
 	return err
+}
+
+func (s *MediaService) UpdateTagsForUser(ctx context.Context, userID string, id string, tags []string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE media_assets SET tags = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3`,
+		toJSONB(tags), id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("media asset not found")
+	}
+	return nil
 }
 
 func (s *MediaService) GetURL(ctx context.Context, id string) (string, error) {

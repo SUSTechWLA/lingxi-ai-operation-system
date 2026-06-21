@@ -1,13 +1,35 @@
 import { useState, useEffect } from 'react'
 import type React from 'react'
+import AuthScreen from './components/AuthScreen'
 import Sidebar from './components/Sidebar'
 import DesktopPage from './pages/DesktopPage'
 import CreatorWorkbenchPage from './pages/CreatorWorkbenchPage'
+import { fetchCurrentUser, getStoredAuthSession, logout, type AuthUser } from './services/auth'
 import { isElectron, getElectronAPI } from './utils/electron'
 
 function App() {
   const [activeNav, setActiveNav] = useState('creator')
   const [serviceStatus, setServiceStatus] = useState<'unknown' | 'ok' | 'unhealthy'>('unknown')
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [authChecking, setAuthChecking] = useState(true)
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      if (!getStoredAuthSession()) {
+        setAuthChecking(false)
+        return
+      }
+      try {
+        const user = await fetchCurrentUser()
+        setAuthUser(user)
+      } catch {
+        logout()
+      } finally {
+        setAuthChecking(false)
+      }
+    }
+    restoreSession()
+  }, [])
 
   useEffect(() => {
     if (!isElectron()) return
@@ -28,9 +50,20 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
+  if (authChecking) {
+    return <div className="flex h-screen items-center justify-center bg-[#F8F7F2] text-sm text-[#60635F]">正在检查登录状态...</div>
+  }
+
+  if (!authUser) {
+    return <AuthScreen onAuthenticated={setAuthUser} />
+  }
+
   return (
     <div className="flex h-screen">
-      <Sidebar activeNav={activeNav} onNavChange={setActiveNav} />
+      <Sidebar activeNav={activeNav} onNavChange={setActiveNav} user={authUser} onLogout={() => {
+        logout()
+        setAuthUser(null)
+      }} />
       <div className="flex-1 flex flex-col">
         {isElectron() && serviceStatus === 'unhealthy' && (
           <div className="bg-red-50 border-b border-red-200 px-6 py-3 flex items-center gap-2">

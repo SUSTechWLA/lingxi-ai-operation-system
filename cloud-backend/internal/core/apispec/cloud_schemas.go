@@ -4,6 +4,7 @@ import (
 	bidmodel "github.com/tangying-ai/aios-core/internal/agents/bid/model"
 	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	artifacts "github.com/tangying-ai/aios-core/internal/core/artifact"
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	workflow "github.com/tangying-ai/aios-core/internal/core/workflow"
 )
@@ -42,6 +43,28 @@ func registerCloudSchemas(b *Builder) {
 			"status":       {Schema: StringSchema()},
 			"service":      {Schema: StringSchema()},
 			"dependencies": {Schema: ObjectSchema()},
+		},
+	})
+
+	// ── Auth ──
+	b.Schema("AuthRegisterRequest", Reflect(auth.RegisterRequest{}))
+	b.Schema("AuthLoginRequest", Reflect(auth.LoginRequest{}))
+	b.Schema("AuthRefreshRequest", Reflect(auth.RefreshRequest{}))
+	b.Schema("AuthLogoutRequest", Reflect(auth.LogoutRequest{}))
+	b.Schema("AuthResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data":    {Schema: Reflect(auth.AuthResponse{})},
+		},
+	})
+	b.Schema("CurrentUserResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data":    {Schema: Reflect(auth.UserResponse{})},
 		},
 	})
 
@@ -462,7 +485,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"skill": {Schema: ObjectSchema()}},
 			}},
 		},
@@ -488,7 +511,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"template": {Schema: ObjectSchema()}},
 			}},
 		},
@@ -530,7 +553,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"project": {Schema: Reflect(videomodel.VideoProject{})}},
 			}},
 		},
@@ -541,7 +564,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"project": {Schema: Reflect(videomodel.VideoProject{})}},
 			}},
 		},
@@ -554,7 +577,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"run": {Schema: ObjectSchema()}},
 			}},
 		},
@@ -565,7 +588,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"run": {Schema: ObjectSchema()}},
 			}},
 		},
@@ -595,7 +618,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"artifacts": {Schema: ArraySchema(Reflect(artifacts.Artifact{}))}},
 			}},
 		},
@@ -606,7 +629,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"artifact": {Schema: Reflect(artifacts.Artifact{})}},
 			}},
 		},
@@ -633,7 +656,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"history": {Schema: ArraySchema(Reflect(artifacts.Artifact{}))}},
 			}},
 		},
@@ -646,7 +669,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"templates": {Schema: ArraySchema(ObjectSchema())}},
 			}},
 		},
@@ -657,7 +680,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"project": {Schema: Reflect(bidmodel.BidProject{})}},
 			}},
 		},
@@ -725,7 +748,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"chapter": {Schema: Reflect(bidmodel.BidChapter{})}},
 			}},
 		},
@@ -764,7 +787,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"status": {Schema: ObjectSchema()}},
 			}},
 		},
@@ -775,7 +798,7 @@ func registerCloudSchemas(b *Builder) {
 			"code":    {Schema: IntegerSchema()},
 			"message": {Schema: StringSchema()},
 			"data": {Schema: &Schema{
-				Type: "object",
+				Type:       "object",
 				Properties: map[string]*SchemaRef{"progress": {Schema: ObjectSchema()}},
 			}},
 		},
