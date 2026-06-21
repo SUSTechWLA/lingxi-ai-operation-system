@@ -6,7 +6,7 @@
 *.log
 
 # Build output
-build/
+/build/
 target/
 
 # Environment files with secrets - NEVER commit these!

@@ -2,6 +2,8 @@
   "name": "tangying-frontend",
   "private": true,
   "version": "0.0.1",
+  "description": "躺营 AIOS — AI 自媒体内容运营系统桌面客户端",
+  "author": "躺营 AI Team",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -44,7 +46,8 @@
   },
   "build": {
     "appId": "com.tangying.ai-os",
-    "productName": "AIOS 通用智能体平台",
+    "productName": "躺营AI自媒体运营助手",
+    "icon": "build/icon.png",
     "directories": {
       "output": "release"
     },
@@ -62,16 +65,13 @@
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.productivity",
-      "icon": "../resources/AIOSai自媒体运营助手.png"
+      "category": "public.app-category.productivity"
     },
     "win": {
-      "target": "nsis",
-      "icon": "../resources/AIOSai自媒体运营助手.png"
+      "target": "nsis"
     },
     "linux": {
-      "target": "AppImage",
-      "icon": "../resources/AIOSai自媒体运营助手.png"
+      "target": "AppImage"
     }
   }
 }
