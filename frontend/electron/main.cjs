@@ -6,7 +6,8 @@ const http = require('http')
 
 const isDev = !app.isPackaged
 const LOCAL_AGENT_URL = process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080'
-const CLOUD_API_BASE = process.env.TANGYING_CLOUD_API_BASE || process.env.VITE_CLOUD_API_BASE || ''
+const CLOUD_API_BASE = process.env.TANGYING_CLOUD_API_BASE || process.env.VITE_CLOUD_API_BASE || 'http://localhost:8080/api'
+const APP_ICON_FILE = '躺营ai自媒体运营助手.png'
 
 let mainWindow = null
 let localAgentProcess = null
@@ -17,6 +18,13 @@ function localAgentBinaryPath() {
     return path.join(process.resourcesPath, 'bin', binaryName)
   }
   return path.join(__dirname, '..', 'resources', 'bin', binaryName)
+}
+
+function appIconPath() {
+  if (app.isPackaged) {
+    return path.join(__dirname, '..', 'dist', APP_ICON_FILE)
+  }
+  return path.join(__dirname, '..', 'public', APP_ICON_FILE)
 }
 
 function startLocalAgent() {
@@ -58,6 +66,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: '躺营AI自媒体运营助手',
+    icon: appIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
