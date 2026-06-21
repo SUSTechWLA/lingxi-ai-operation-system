@@ -253,9 +253,13 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	}
 
 	// Workflow Run tables (video creation upgrade P3)
-	workflowRunSchema := `
-		ALTER TABLE workflow_templates ADD COLUMN IF NOT EXISTS version VARCHAR(32) DEFAULT '1.0.0';
+	// Run ALTER TABLE separately — it fails if the table doesn't exist yet.
+	alterTemplates := `ALTER TABLE workflow_templates ADD COLUMN IF NOT EXISTS version VARCHAR(32) DEFAULT '1.0.0';`
+	if _, err := pool.Exec(ctx, alterTemplates); err != nil {
+		zap.L().Warn("Failed to alter workflow_templates (non-fatal)", zap.Error(err))
+	}
 
+	workflowRunSchema := `
 		CREATE TABLE IF NOT EXISTS workflow_runs (
 		    id VARCHAR(64) PRIMARY KEY,
 		    project_id VARCHAR(64) NOT NULL,
