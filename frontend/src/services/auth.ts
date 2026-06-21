@@ -16,10 +16,27 @@ export interface AuthSession {
   expiresIn: number
 }
 
+/** Raw backend auth response — uses snake_case keys. */
+interface RawAuthResponse {
+  user: AuthUser
+  access_token: string
+  refresh_token: string
+  expires_in: number
+}
+
 interface AuthEnvelope<T> {
   code: number
   message: string
   data: T
+}
+
+function mapAuthResponse(raw: RawAuthResponse): AuthSession {
+  return {
+    user: raw.user,
+    accessToken: raw.access_token,
+    refreshToken: raw.refresh_token,
+    expiresIn: raw.expires_in,
+  }
 }
 
 const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
@@ -44,17 +61,19 @@ export function getAuthRefreshToken(): string | null {
 }
 
 export async function register(email: string, password: string, nickname: string): Promise<AuthSession> {
-  const session = await authRequest<AuthSession>('/auth/register', {
+  const raw = await authRequest<RawAuthResponse>('/auth/register', {
     email,
     password,
     nickname: nickname.trim() || undefined,
   })
+  const session = mapAuthResponse(raw)
   storeSession(session)
   return session
 }
 
 export async function login(email: string, password: string): Promise<AuthSession> {
-  const session = await authRequest<AuthSession>('/auth/login', { email, password })
+  const raw = await authRequest<RawAuthResponse>('/auth/login', { email, password })
+  const session = mapAuthResponse(raw)
   storeSession(session)
   return session
 }
@@ -62,7 +81,8 @@ export async function login(email: string, password: string): Promise<AuthSessio
 export async function refreshAuthSession(): Promise<AuthSession> {
   const refreshToken = getAuthRefreshToken()
   if (!refreshToken) throw new Error('登录已过期')
-  const session = await authRequest<AuthSession>('/auth/refresh', { refresh_token: refreshToken })
+  const raw = await authRequest<RawAuthResponse>('/auth/refresh', { refresh_token: refreshToken })
+  const session = mapAuthResponse(raw)
   storeSession(session)
   return session
 }
