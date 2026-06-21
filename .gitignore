@@ -41,3 +41,4 @@ local-backend/build/
 local-backend/dist/
 frontend/resources/bin/
 *.tsbuildinfo
+cloud-backend/tangying-ai-os
