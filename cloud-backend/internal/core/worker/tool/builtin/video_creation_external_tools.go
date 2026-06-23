@@ -1569,7 +1569,8 @@ func isStructuredOutputTool(toolName string) bool {
 		"video_script_generator", "shot_splitter",
 		"keyframe_prompt_generator", "video_prompt_generator",
 		"script_quality_checker", "shot_quality_checker",
-		"video_prompt_quality_checker", "package_quality_checker":
+		"video_prompt_quality_checker", "package_quality_checker",
+		"video_package_exporter":
 		return true
 	default:
 		return false
@@ -1844,7 +1845,51 @@ modelHint=<modelHint>
 		return fmt.Sprintf("你是一个专业的短视频平台运营专家。根据视频内容生成发布文案。\n\n目标平台：%s\n\n生成：1.视频标题（吸引眼球，不超过30字）2.视频简介（100-200字）3.话题标签（5-8个）4.平台适配建议。输出Markdown。", platform)
 
 	case "video_package_exporter":
-		return "你是一个视频创作项目经理。将所有中间产物打包整理为完整的创作交付包。\n\n输出：1.创作包清单 2.各产物摘要 3.使用说明。输出Markdown，清晰易读。"
+		return `你是视频创作包交付经理。
+
+目标：
+将所有上游产物（知识研究、事实核查、口播稿、分镜、视频提示词、发布文案、质量报告）打包为完整视频创作包。
+
+硬性要求：
+1. 输出两部分：Markdown 总包 + package_manifest.json。
+2. Markdown 总包必须包含所有已存在的产物内容摘要。
+3. package_manifest.json 必须逐项检查：
+   - knowledge_research 是否存在
+   - fact_check 是否存在
+   - script（口播稿）是否存在且审批通过
+   - shot_list（分镜）是否存在且审批通过
+   - video_prompts（视频提示词）是否存在且审批通过
+   - publish_copy（发布文案）是否存在
+   - quality_report（质量报告）是否存在
+4. 所有核心产物（script/shot_list/video_prompts）均审批通过 → status = "READY_FOR_PRODUCTION"
+5. 缺少任一必须产物或未审批 → status = "INCOMPLETE"，并在 issues 中列出缺失项
+6. 输出严格 JSON，包含 Markdown 正文和 manifest。
+
+输出 JSON：
+{
+  "packageMarkdown": "# 视频创作包：...\n\n## 1. 项目概览\n...\n## 2. 知识资料整理\n...",
+  "packageManifest": {
+    "packageVersion": "1.0.0",
+    "topic": "...",
+    "platform": "...",
+    "aspectRatio": "16:9",
+    "targetDurationSec": 90,
+    "status": "READY_FOR_PRODUCTION",
+    "artifacts": [
+      {"kind": "KNOWLEDGE_RESEARCH", "name": "01_knowledge_research.md", "reviewStatus": "APPROVED"},
+      {"kind": "FACT_CHECK", "name": "02_fact_check.md", "reviewStatus": "APPROVED"},
+      {"kind": "SCRIPT", "name": "03_oral_script.md", "reviewStatus": "APPROVED"},
+      {"kind": "SHOT_LIST", "name": "04_shot_list.json", "reviewStatus": "APPROVED"},
+      {"kind": "VIDEO_PROMPTS", "name": "07_video_prompts.md", "reviewStatus": "APPROVED"},
+      {"kind": "PUBLISH_COPY", "name": "08_publish_copy.md", "reviewStatus": "NONE"},
+      {"kind": "QUALITY_REPORT", "name": "09_quality_report.md", "reviewStatus": "NONE"}
+    ],
+    "quality": {"passed": true, "score": 88},
+    "issues": [],
+    "missingArtifacts": [],
+    "unreviewedArtifacts": []
+  }
+}`
 
 	default:
 		return fmt.Sprintf("你是一个专业的自媒体内容创作助手。当前阶段：%s。根据用户需求生成高质量内容。", toolName)
@@ -1939,19 +1984,26 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 
 	case "video_package_exporter":
 		var parts []string
+		parts = append(parts, "请将以下所有产物打包为完整视频创作包。")
 		parts = append(parts, "主题："+topic)
 		if script != "" {
-			parts = append(parts, "口播稿：\n"+script)
+			parts = append(parts, "口播稿（已审核通过）：\n"+script)
 		}
 		if shotList != "" {
-			parts = append(parts, "分镜：\n"+shotList)
+			parts = append(parts, "分镜（已审核通过）：\n"+shotList)
 		}
 		if videoPrompts != "" {
-			parts = append(parts, "视频提示词：\n"+videoPrompts)
+			parts = append(parts, "视频提示词（已审核通过）：\n"+videoPrompts)
+		}
+		if facts != "" {
+			parts = append(parts, "知识研究资料：\n"+facts)
 		}
 		if publishCopy != "" {
 			parts = append(parts, "发布文案：\n"+publishCopy)
 		}
+		parts = append(parts, "请输出：1. Markdown 总包 2. package_manifest.json")
+		parts = append(parts, "注意：如果核心产物（script/shotList/videoPrompts）非空，则视为已审核通过，status 应为 READY_FOR_PRODUCTION。")
+		parts = append(parts, "如果有任何核心产物为空，status 应为 INCOMPLETE，并在 missingArtifacts 中列出。")
 		return strings.Join(parts, "\n\n---\n\n")
 
 	default:
