@@ -29,6 +29,11 @@ import {
   ArtifactListResponse,
   ArtifactContentResponse,
   ArtifactHistoryResponse,
+  AgentStartRunRequest,
+  AgentStartRunResponse,
+  AgentRun,
+  AgentReviewListResponse,
+  AgentReviewActionResponse,
 } from '../utils/types'
 
 const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
@@ -439,4 +444,58 @@ export const syncModelProviderConfig = async (
 
 export const clearModelProviderConfig = async (): Promise<void> => {
   await api.delete('/config/model-provider')
+}
+
+// ── Agent Run API (dynamic agent runtime) ──────────────────────────────
+
+export const startAgentRun = async (
+  payload: AgentStartRunRequest
+): Promise<AgentStartRunResponse> => {
+  const response = await api.post<ApiResponse<AgentStartRunResponse>>('/agent/runs', payload)
+  return response.data.data
+}
+
+export const getAgentRun = async (
+  runId: string
+): Promise<AgentRun> => {
+  const response = await api.get<ApiResponse<{ run: AgentRun; task: unknown }>>(`/agent/runs/${runId}`)
+  return response.data.data.run
+}
+
+export const getAgentRunTrace = async (
+  runId: string
+): Promise<unknown> => {
+  const response = await api.get<ApiResponse<unknown>>(`/agent/runs/${runId}/trace`)
+  return response.data.data
+}
+
+export const getAgentRunReviews = async (
+  runId: string
+): Promise<AgentReviewListResponse> => {
+  const response = await api.get<ApiResponse<AgentReviewListResponse>>(`/agent/runs/${runId}/reviews`)
+  return response.data.data
+}
+
+export const approveAgentReview = async (
+  runId: string,
+  reviewId: string,
+  comment?: string
+): Promise<AgentReviewActionResponse> => {
+  const response = await api.post<ApiResponse<AgentReviewActionResponse>>(
+    `/agent/runs/${runId}/reviews/${reviewId}/approve`,
+    { comment }
+  )
+  return response.data.data
+}
+
+export const rejectAgentReview = async (
+  runId: string,
+  reviewId: string,
+  comment?: string
+): Promise<AgentReviewActionResponse> => {
+  const response = await api.post<ApiResponse<AgentReviewActionResponse>>(
+    `/agent/runs/${runId}/reviews/${reviewId}/reject`,
+    { comment }
+  )
+  return response.data.data
 }

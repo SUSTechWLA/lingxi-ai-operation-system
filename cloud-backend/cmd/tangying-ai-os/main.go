@@ -364,7 +364,7 @@ func main() {
 	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r)
 
 	agentRunRepo := agentruntime.NewRepository(pool)
-	agentPlanner := buildAgentPlanner(cfg, toolRegistry)
+	agentPlanner := buildAgentPlanner(cfg, toolRegistry, nil)
 	agentRunner := agentruntime.NewRunner(
 		orchestratorService,
 		agentRunRepo,
@@ -404,21 +404,28 @@ func main() {
 				zap.String("path", cfg.Video.HyperFramesCLIPath))
 		}
 
-		// Initialize model gateway for image generation.
-		// Providers: openai (DALL-E), stability (Stable Diffusion), fake (dev/test).
+		// Initialize model gateway for image generation and text-to-text (LLMPlanner).
+		// Providers: openai (DALL-E + GPT), stability (Stable Diffusion), fake (dev/test).
 		gw := modelgateway.NewGateway(cfg.Video.ModelProviderMode)
 		if cfg.Video.ModelProviderMode == "real" {
+			openaiProvider := openai.NewProvider()
+			// Register image generation provider
 			switch cfg.Video.ImageProvider {
 			case "stability":
 				gw.RegisterProvider(stability.NewProvider(), modelgateway.CapTextToImage)
 				zap.L().Info("Image generation provider: stability (Stable Diffusion)")
 			default:
-				gw.RegisterProvider(openai.NewProvider(), modelgateway.CapTextToImage)
+				gw.RegisterProvider(openaiProvider, modelgateway.CapTextToImage)
 				zap.L().Info("Image generation provider: openai (DALL-E)")
 			}
+			// Register text-to-text provider for LLMPlanner
+			gw.RegisterProvider(openaiProvider, modelgateway.CapTextToText)
+			zap.L().Info("Text-to-text provider: openai (GPT)")
 		} else {
-			gw.RegisterProvider(fake.NewProvider(), modelgateway.CapTextToImage)
-			zap.L().Info("Image generation provider: fake (dev/test fixtures)")
+			fakeProvider := fake.NewProvider()
+			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToImage)
+			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
+			zap.L().Info("Model providers: fake (dev/test fixtures)")
 		}
 		builtin.SetModelGateway(gw)
 
@@ -606,15 +613,25 @@ func main() {
 	zap.L().Info("Server exited")
 }
 
-func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry) agentruntime.Planner {
+func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry, gw *modelgateway.Gateway) agentruntime.Planner {
 	maxTools := cfg.Agent.PlannerMaxTools
 	if maxTools <= 0 {
 		maxTools = 6
 	}
 	heuristic := agentruntime.NewHeuristicPlannerWithMaxTools(toolRegistry, maxTools)
+
+	// Prefer ModelGateway for LLMPlanner (caching + retry + provider routing),
+	// fall back to direct OpenAI HTTP client when gateway is unavailable.
+	var plannerClient agentruntime.PlannerLLMClient
+	if gw != nil {
+		plannerClient = agentruntime.NewGatewayPlannerClient(gw, cfg.OpenAI.Model)
+	} else {
+		plannerClient = agentruntime.NewOpenAIPlannerClient(cfg.OpenAI)
+	}
+
 	llm := agentruntime.NewLLMPlanner(
 		toolRegistry,
-		agentruntime.NewOpenAIPlannerClient(cfg.OpenAI),
+		plannerClient,
 		agentruntime.LLMPlannerOptions{MaxTools: maxTools},
 	)
 

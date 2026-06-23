@@ -38,6 +38,11 @@ var videoCreationExternalTools = []string{
 	"material_library_importer",
 	"voice_post_process",
 	"audio_artifact_packager",
+	// Dynamic agent prompt_tool entries — used by LLMPlanner for video creation workflows.
+	"knowledge_researcher",
+	"fact_checker",
+	"publish_copy_generator",
+	"video_package_exporter",
 }
 
 var (
@@ -297,6 +302,12 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 	// with a prompt built from the stage instruction and user's brief.
 	if toolName == "skill_stage_agent" {
 		return executeSkillStageAgent(stage, skillName, brief, instructionRef, toolCtx)
+	}
+
+	// Dynamic agent prompt_tool entries — use the LLM API to generate content
+	// from the tool parameters (topic, facts, style, script, etc.).
+	if isDynamicAgentPromptTool(toolName) {
+		return executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructionRef, params, toolCtx)
 	}
 
 	// Dispatch to tool-specific implementations.
@@ -1372,4 +1383,177 @@ func countByStatus(requests []map[string]interface{}, status string) int {
 		}
 	}
 	return count
+}
+
+// isDynamicAgentPromptTool reports whether toolName is a dynamic-agent prompt_tool
+// that should be executed via the LLM API (like skill_stage_agent).
+func isDynamicAgentPromptTool(toolName string) bool {
+	switch toolName {
+	case "knowledge_researcher", "fact_checker",
+		"publish_copy_generator", "video_package_exporter":
+		return true
+	default:
+		return false
+	}
+}
+
+// executeDynamicAgentPromptTool executes a dynamic-agent prompt_tool by building
+// an LLM prompt from the tool parameters and calling the LLM API.
+func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	topic := stringParam(params, "topic", brief)
+	facts := stringParam(params, "facts", "")
+	style := stringParam(params, "outputStyle", "")
+	platform := stringParam(params, "platform", "通用平台")
+	script := stringParam(params, "script", "")
+	shotList := stringParam(params, "shotList", "")
+	videoPrompts := stringParam(params, "videoPrompts", "")
+	publishCopy := stringParam(params, "publishCopy", "")
+
+	systemPrompt := buildDynamicAgentSystemPrompt(toolName, topic, style, platform)
+	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform)
+
+	effectiveCfg := GetVideoCreationOpenAIConfig()
+	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
+		if localCfg.BaseURL != "" {
+			effectiveCfg.BaseURL = localCfg.BaseURL
+		}
+		if localCfg.APIKey != "" {
+			effectiveCfg.APIKey = localCfg.APIKey
+		}
+		if localCfg.Model != "" {
+			effectiveCfg.Model = localCfg.Model
+		}
+	}
+
+	if effectiveCfg.APIKey == "" {
+		content := fmt.Sprintf("# %s\n\n主题：%s\n\n> ⚠️ LLM API Key 未配置。请设置 API Key 以启用 AI 内容生成。", toolName, topic)
+		return tool.SuccessResult(map[string]interface{}{
+			"content":   content,
+			"artifacts": buildSkillStageArtifacts(toolName, skillName, false, false),
+		})
+	}
+
+	callTool := &LlmApiTool{cfg: effectiveCfg}
+	result := callTool.Execute(context.Background(), map[string]interface{}{
+		"prompt":     systemPrompt + "\n\n---\n\n" + userPrompt,
+		"max_tokens": 8000,
+	}, toolCtx)
+
+	if !result.Success {
+		zap.L().Error("LLM API call failed for dynamic agent prompt tool",
+			zap.String("tool", toolName),
+			zap.Error(fmt.Errorf("%s", result.Error)))
+		return result
+	}
+
+	rawContent, _ := result.Data["content"].(string)
+	finishReason, _ := result.Data["finishReason"].(string)
+	rawContent = continueSkillStageIfNeeded(callTool, toolName, systemPrompt+"\n\n---\n\n"+userPrompt, rawContent, finishReason, toolCtx)
+
+	var contentPkg map[string]interface{}
+	isJSON := jsonx.ExtractJSON(rawContent, &contentPkg) == nil
+
+	artifacts := buildSkillStageArtifacts(toolName, skillName, toolName == "publish_copy_generator", isJSON)
+
+	data := map[string]interface{}{
+		"content":   rawContent,
+		"package":   contentPkg,
+		"artifacts": artifacts,
+	}
+
+	if title, ok := nonEmptyStringField(contentPkg, "title"); ok {
+		data["title"] = title
+	}
+	if desc, ok := contentPkg["description"]; ok {
+		if text := ensureStringValue(desc); strings.TrimSpace(text) != "" {
+			data["description"] = text
+		}
+	}
+	if keywords, ok := contentPkg["keywords"]; ok && hasPublishValue(keywords) {
+		data["keywords"] = keywords
+	}
+	if scriptText, ok := nonEmptyStringField(contentPkg, "script"); ok {
+		data["script"] = scriptText
+	}
+	if factsOut, ok := contentPkg["facts"]; ok {
+		data["facts"] = factsOut
+	}
+	if storyAngles, ok := contentPkg["storyAngles"]; ok {
+		data["storyAngles"] = storyAngles
+	}
+	if risks, ok := contentPkg["risks"]; ok {
+		data["risks"] = risks
+	}
+	if warnings, ok := contentPkg["warnings"]; ok {
+		data["warnings"] = warnings
+	}
+	if summary, ok := nonEmptyStringField(contentPkg, "summary"); ok {
+		data["summary"] = summary
+	}
+	if estimatedDurationSec, ok := contentPkg["estimatedDurationSec"]; ok {
+		data["estimatedDurationSec"] = estimatedDurationSec
+	}
+
+	return tool.SuccessResult(data)
+}
+
+func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) string {
+	switch toolName {
+	case "knowledge_researcher":
+		return fmt.Sprintf("你是一个专业的知识研究助手。根据用户指定的主题进行深度知识研究。\n\n主题：%s\n输出要求：%s\n\n按以下结构输出Markdown：1.主题概述与背景 2.关键事实与时间线 3.常见习俗/表现形式 4.文化内涵与演变 5.多个可选讲述角度 6.需要注意的事实风险点。要求内容准确、权威、适合大众理解。", topic, style)
+
+	case "fact_checker":
+		return fmt.Sprintf("你是一个严格的事实核查员。对已有知识内容进行事实核查。\n\n主题：%s\n\n检查：1.关键事实准确性 2.日期时间正确性 3.人物准确性 4.文化表述恰当性 5.潜在敏感性/争议性表述。输出Markdown，包含核查结果、修正建议和风险提示。", topic)
+
+	case "publish_copy_generator":
+		return fmt.Sprintf("你是一个专业的短视频平台运营专家。根据视频内容生成发布文案。\n\n目标平台：%s\n\n生成：1.视频标题（吸引眼球，不超过30字）2.视频简介（100-200字）3.话题标签（5-8个）4.平台适配建议。输出Markdown。", platform)
+
+	case "video_package_exporter":
+		return "你是一个视频创作项目经理。将所有中间产物打包整理为完整的创作交付包。\n\n输出：1.创作包清单 2.各产物摘要 3.使用说明。输出Markdown，清晰易读。"
+
+	default:
+		return fmt.Sprintf("你是一个专业的自媒体内容创作助手。当前阶段：%s。根据用户需求生成高质量内容。", toolName)
+	}
+}
+
+func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform string) string {
+	switch toolName {
+	case "knowledge_researcher":
+		return fmt.Sprintf("请围绕以下主题进行深度知识研究：%s\n\n输出风格：%s", topic, style)
+
+	case "fact_checker":
+		return fmt.Sprintf("请核查以下内容的准确性：\n\n%s\n\n原始主题：%s", facts, topic)
+
+	case "publish_copy_generator":
+		var parts []string
+		if script != "" {
+			parts = append(parts, "口播稿：\n"+script)
+		}
+		if shotList != "" {
+			parts = append(parts, "分镜：\n"+shotList)
+		}
+		parts = append(parts, "主题："+topic)
+		parts = append(parts, "目标平台："+platform)
+		return strings.Join(parts, "\n\n")
+
+	case "video_package_exporter":
+		var parts []string
+		parts = append(parts, "主题："+topic)
+		if script != "" {
+			parts = append(parts, "口播稿：\n"+script)
+		}
+		if shotList != "" {
+			parts = append(parts, "分镜：\n"+shotList)
+		}
+		if videoPrompts != "" {
+			parts = append(parts, "视频提示词：\n"+videoPrompts)
+		}
+		if publishCopy != "" {
+			parts = append(parts, "发布文案：\n"+publishCopy)
+		}
+		return strings.Join(parts, "\n\n---\n\n")
+
+	default:
+		return fmt.Sprintf("请围绕主题「%s」生成内容。", topic)
+	}
 }

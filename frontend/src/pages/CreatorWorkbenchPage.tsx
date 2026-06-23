@@ -21,6 +21,7 @@ import {
   FiX,
   FiZap,
 } from 'react-icons/fi'
+import AgentRunPanel from '../components/AgentRunPanel'
 import {
   approveVideoStage,
   createVideoProject,
@@ -801,6 +802,26 @@ const CreatorWorkbenchPage: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* Dynamic Agent (Beta) — LLMPlanner-driven pipeline, no fixed workflow */}
+          <details className="rounded-lg border border-[#EED79A] bg-[#FFFCF4] overflow-hidden">
+            <summary className="px-5 py-3 cursor-pointer hover:bg-amber-50 transition-colors select-none">
+              <span className="text-sm font-semibold text-[#7A6142]">🧪 Dynamic Agent (Beta) — LLM Planner 自主编排</span>
+              <span className="ml-2 text-xs text-gray-400">点击展开</span>
+            </summary>
+            <div className="px-5 pb-5">
+              <AgentRunPanel
+                brief={brief}
+                aspectRatio={aspectRatio}
+                targetDurationSec={targetDurationSec}
+                platform="通用平台"
+                onTrace={(data) => {
+                  if (data) setTraceData(data as TraceData)
+                  setTraceOpen(true)
+                }}
+              />
+            </div>
+          </details>
 
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.6fr)]">
             <div className="rounded-lg border border-[#EED79A] bg-white">

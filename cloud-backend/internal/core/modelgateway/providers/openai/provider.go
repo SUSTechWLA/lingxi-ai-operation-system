@@ -37,7 +37,7 @@ func NewProvider() *Provider {
 func (p *Provider) Name() string { return "openai" }
 
 func (p *Provider) Supports(cap modelgateway.Capability) bool {
-	return cap == modelgateway.CapTextToImage
+	return cap == modelgateway.CapTextToImage || cap == modelgateway.CapTextToText
 }
 
 func (p *Provider) Health(ctx context.Context) error {
@@ -86,6 +86,138 @@ func (p *Provider) Execute(ctx context.Context, req *modelgateway.ModelRequest) 
 		}
 	}
 
+	if req.Capability == modelgateway.CapTextToText {
+		return p.executeChatCompletion(ctx, req)
+	}
+
+	return p.executeImageGeneration(ctx, req)
+}
+
+func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.ModelRequest) (*modelgateway.ModelResult, error) {
+	model := stringParam(req.Parameters, "model", "gpt-4")
+	temperature := floatParam(req.Parameters, "temperature", 0.2)
+	maxTokens := intParam(req.Parameters, "max_tokens", 2000)
+
+	type chatMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	messages := make([]chatMessage, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		messages = append(messages, chatMessage{Role: m.Role, Content: m.Content})
+	}
+
+	body := map[string]interface{}{
+		"model":       model,
+		"messages":    messages,
+		"temperature": temperature,
+		"max_tokens":  maxTokens,
+	}
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrInvalidRequest,
+			Message: fmt.Sprintf("failed to marshal chat request: %v", err),
+			Retry:   false,
+		}
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrUnavailable,
+			Message: fmt.Sprintf("failed to create chat request: %v", err),
+			Retry:   true,
+		}
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	start := time.Now()
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrTimeout,
+			Message: fmt.Sprintf("chat request failed: %v", err),
+			Retry:   true,
+		}
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrAuthFailed,
+			Message: fmt.Sprintf("openai returned %d: %s", resp.StatusCode, string(respBody)),
+			Retry:   false,
+		}
+	}
+	if resp.StatusCode == 429 {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrRateLimited,
+			Message: "openai rate limited",
+			Retry:   true,
+		}
+	}
+	if resp.StatusCode >= 500 {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrUnavailable,
+			Message: fmt.Sprintf("openai server error %d", resp.StatusCode),
+			Retry:   true,
+		}
+	}
+	if resp.StatusCode != 200 {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrInvalidRequest,
+			Message: fmt.Sprintf("openai returned %d: %s", resp.StatusCode, string(respBody)),
+			Retry:   false,
+		}
+	}
+
+	var decoded struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(respBody, &decoded); err != nil {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrInvalidRequest,
+			Message: fmt.Sprintf("failed to decode chat response: %v", err),
+			Retry:   false,
+		}
+	}
+	if len(decoded.Choices) == 0 || decoded.Choices[0].Message.Content == "" {
+		return nil, &modelgateway.GatewayError{
+			Code:    modelgateway.ErrContentRejected,
+			Message: "openai returned empty content",
+			Retry:   false,
+		}
+	}
+
+	usage := modelgateway.Usage{
+		Model:     model,
+		DurationMs: time.Since(start).Milliseconds(),
+	}
+	if decoded.Usage != nil {
+		usage.PromptTokens = decoded.Usage.PromptTokens
+		usage.OutputTokens = decoded.Usage.CompletionTokens
+	}
+
+	return &modelgateway.ModelResult{
+		Content: decoded.Choices[0].Message.Content,
+		Usage:   usage,
+	}, nil
+}
+
+func (p *Provider) executeImageGeneration(ctx context.Context, req *modelgateway.ModelRequest) (*modelgateway.ModelResult, error) {
 	prompt, _ := req.Parameters["prompt"].(string)
 	if prompt == "" {
 		return nil, &modelgateway.GatewayError{
@@ -234,6 +366,16 @@ func intParam(params map[string]interface{}, key string, defaultVal int) int {
 		return int(v)
 	case string:
 		// ignore; use default
+	}
+	return defaultVal
+}
+
+func floatParam(params map[string]interface{}, key string, defaultVal float64) float64 {
+	switch v := params[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
 	}
 	return defaultVal
 }

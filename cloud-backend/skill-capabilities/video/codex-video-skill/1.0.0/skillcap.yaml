@@ -7,15 +7,24 @@ description: Codex 沉淀的视频创作能力，用于生成口播稿、分镜�
 activation:
   intents:
     - video_creation
+    - knowledge_research
+    - fact_checking
     - script_generation
     - storyboard_generation
     - video_prompt_generation
+    - publish_copy
+    - package_export
   keywords:
     - 视频
     - 口播
     - 分镜
     - shot
     - prompt
+    - 知识
+    - 事实
+    - 发布
+    - 导出
+    - 创作包
     - 小红书
     - 短视频
 
@@ -46,6 +55,10 @@ resources:
     priority: 90
 
 tools:
+  - id: knowledge_researcher
+    manifest: tools/knowledge_researcher.tool.yaml
+  - id: fact_checker
+    manifest: tools/fact_checker.tool.yaml
   - id: video_script_generator
     manifest: tools/video_script_generator.tool.yaml
     prompt: prompts/script_generator.prompt.md
@@ -55,6 +68,10 @@ tools:
   - id: video_prompt_generator
     manifest: tools/video_prompt_generator.tool.yaml
     prompt: prompts/video_prompt_generator.prompt.md
+  - id: publish_copy_generator
+    manifest: tools/publish_copy_generator.tool.yaml
+  - id: video_package_exporter
+    manifest: tools/video_package_exporter.tool.yaml
 
 recipe:
   path: recipe.yaml

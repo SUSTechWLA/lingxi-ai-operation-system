@@ -403,3 +403,83 @@ export interface ArtifactContentResponse {
 export interface ArtifactHistoryResponse {
   history: Artifact[]
 }
+
+// ── Agent Run Types ─────────────────────────────────────────────────────
+
+export interface AgentBudget {
+  maxLLMCalls?: number
+  maxToolCalls?: number
+  maxSteps?: number
+  maxReplans?: number
+  maxCostLevel?: string
+}
+
+export interface AgentStep {
+  id: string
+  intent?: string
+  tool: string
+  arguments: Record<string, unknown>
+  dependsOn?: string[]
+  expectedOutput?: string[]
+  produceArtifact?: boolean
+}
+
+export interface AgentPlan {
+  goal: string
+  domain: string
+  mode: string
+  steps: AgentStep[]
+  budget?: AgentBudget
+  stopPolicy?: { stopWhenEnough?: boolean }
+}
+
+export interface AgentRun {
+  id: string
+  taskId?: string
+  userId?: string
+  domain?: string
+  message: string
+  plan?: AgentPlan
+  status: 'CREATED' | 'RUNNING' | 'FAILED'
+  budget?: AgentBudget
+  createdAt: string
+  updatedAt: string
+  metadata?: Record<string, unknown>
+}
+
+export interface AgentStartRunRequest {
+  message: string
+  domain?: string
+  context?: Record<string, unknown>
+  mode?: string
+  userId?: string
+}
+
+export interface AgentStartRunResponse {
+  runId: string
+  taskId: string
+  status: string
+  plan?: AgentPlan
+}
+
+export interface AgentReviewItem {
+  id: string
+  nodeId: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  stepId?: string
+  tool?: string
+  reviewPhase?: string
+  reviewReason?: string
+  blocksDownstream?: boolean
+  reviewArtifactKinds?: string[]
+}
+
+export interface AgentReviewListResponse {
+  runId: string
+  reviews: AgentReviewItem[]
+}
+
+export interface AgentReviewActionResponse {
+  reviewId: string
+  status: 'APPROVED' | 'REJECTED'
+}

@@ -1,0 +1,60 @@
+name: fact_checker
+description: 对知识事实整理结果进行检查，识别潜在的事实错误、敏感表述和文化争议点。
+type: builtin_prompt_tool
+version: 1.0.0
+endpoint: builtin://video-creation/fact_checker
+timeout: 120
+
+capabilities:
+  - video_creation
+  - fact_checking
+  - content_review
+tags:
+  - video
+  - fact_check
+  - review
+  - safety
+
+parameters:
+  facts:
+    type: string
+    required: true
+    description: 待检查的事实内容（Markdown 或结构化事实列表）
+  topic:
+    type: string
+    required: true
+    description: 原始视频主题
+
+output:
+  content:
+    type: string
+    description: 事实检查报告（Markdown）
+  checkedFacts:
+    type: object
+    description: 经过核验的结构化事实
+  warnings:
+    type: array
+    description: 需要关注的风险提示
+
+costLevel: low
+latencyLevel: medium
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: false
+  mode: after_artifact
+  blocksDownstream: false
+  reason: 事实检查结果供用户参考，不强制阻断下游。
+  reviewArtifactKinds:
+    - MARKDOWN
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - MARKDOWN
+  defaultReviewRequired: false
+
+nextRecommendedTools:
+  - video_script_generator
