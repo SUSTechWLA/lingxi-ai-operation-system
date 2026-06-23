@@ -73,6 +73,51 @@ func NewHybridPlanner(primary Planner, fallback Planner) *HybridPlanner {
 	return &HybridPlanner{primary: primary, fallback: fallback}
 }
 
+// RepairPlan attempts to fix a Guard-rejected AgentPlan by sending the error
+// and the original plan back to the LLM for one repair attempt.
+// Returns the repaired plan or an error if repair fails.
+func (p *LLMPlanner) RepairPlan(ctx context.Context, originalPlan *AgentPlan, guardError string, manifests []*tool.ToolManifest) (*AgentPlan, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("llm client not configured")
+	}
+
+	planJSON, err := json.MarshalIndent(originalPlan, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal original plan for repair: %w", err)
+	}
+
+	userPayload := map[string]interface{}{
+		"guardError":  guardError,
+		"originalPlan": json.RawMessage(planJSON),
+		"candidateTools": compactToolManifests(manifests),
+	}
+
+	encoded, _ := json.MarshalIndent(userPayload, "", "  ")
+	userPrompt := "你生成的 AgentPlan 未通过系统校验。请只输出修复后的 AgentPlan JSON。不要解释，不要 Markdown。\n" + string(encoded)
+
+	systemPrompt := strings.TrimSpace(`
+你是 AIOS 的 LLM Planner 修复模式。
+你之前生成的 AgentPlan 未通过 Guard 校验。请根据错误信息修复 JSON。
+禁止输出 DAGRequest、节点类型或执行图。
+只输出修复后的 AgentPlan JSON。
+
+必须遵守以下 JSON Schema：
+` + AgentPlanJSONSchema + `
+`)
+
+	raw, err := p.client.Complete(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("repair plan llm call: %w", err)
+	}
+
+	var plan AgentPlan
+	if err := jsonx.ExtractJSON(raw, &plan); err != nil {
+		return nil, fmt.Errorf("parse repaired agent plan: %w", err)
+	}
+	normalizeLLMPlan(&plan, StartRunRequest{}, "", p.maxTools)
+	return &plan, nil
+}
+
 func (p *HybridPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*AgentPlan, error) {
 	if p == nil {
 		return nil, fmt.Errorf("hybrid planner is not configured")
@@ -170,12 +215,47 @@ func (c *OpenAIPlannerClient) Complete(ctx context.Context, systemPrompt, userPr
 	return decoded.Choices[0].Message.Content, nil
 }
 
+// AgentPlanJSONSchema is the JSON Schema for AgentPlan validation.
+// It is included in the LLMPlanner prompt to guide structured output.
+const AgentPlanJSONSchema = `{
+  "type": "object",
+  "required": ["goal", "mode", "steps"],
+  "properties": {
+    "goal": { "type": "string" },
+    "domain": { "type": "string" },
+    "mode": { "type": "string", "enum": ["dynamic_agent"] },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["id", "intent", "tool", "arguments"],
+        "properties": {
+          "id": { "type": "string" },
+          "intent": { "type": "string" },
+          "tool": { "type": "string" },
+          "arguments": { "type": "object" },
+          "dependsOn": { "type": "array", "items": { "type": "string" } },
+          "expectedOutput": { "type": "array", "items": { "type": "string" } },
+          "produceArtifact": { "type": "boolean" }
+        }
+      }
+    },
+    "budget": { "type": "object" },
+    "stopPolicy": { "type": "object" }
+  }
+}`
+
 func plannerSystemPrompt() string {
 	return strings.TrimSpace(`
 你是 AIOS 的 LLM Planner。你的职责是根据用户需求和候选工具生成一次性的 AgentPlan。
 只输出 JSON，不要输出 Markdown。
 禁止输出 DAGRequest、节点类型、ai_node、workflow_template 或执行图细节。
-系统会在你输出后通过 PlanGuard 校验工具、参数、成本和副作用，并由 PlanCompiler 根据 ToolManifest 自动插入审核节点。
+系统会在你输出后通过 PlanGuard 校验工具、参数、成本和副作用，并由 PlanCompiler 根据 ToolManifest 自动插入审核节点和质量门禁。
+
+必须遵守以下 JSON Schema：
+` + AgentPlanJSONSchema + `
 `)
 }
 

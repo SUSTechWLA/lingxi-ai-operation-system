@@ -116,6 +116,33 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 		}
 		out = append(out, checkerStep)
 		toolSet[checkerName] = true
+
+		// Auto-insert a quality gate step that blocks downstream when quality fails.
+		// Uses __quality_gate__ marker tool compiled as a CONTROL node below.
+		minScore := manifest.QualityPolicy.MinScore
+		if minScore <= 0 {
+			minScore = 85
+		}
+		gateID := step.ID + "_quality_gate"
+		gateStep := AgentStep{
+			ID:        gateID,
+			Intent:    fmt.Sprintf("质量门禁：%s 评分需 >=%d", checkerName, minScore),
+			Tool:      "__quality_gate__",
+			DependsOn: []string{checkerName},
+			Arguments: map[string]interface{}{
+				"checkerStep":           checkerName,
+				"productionStep":        step.ID,
+				"productionTool":        step.Tool,
+				"minScore":              minScore,
+				"autoApproveWhenPassed": true,
+				"autoRepair":            manifest.QualityPolicy.AutoRepair,
+				"maxRepairAttempts":     manifest.QualityPolicy.MaxRepairAttempts,
+			},
+			ExpectedOutput:  []string{"gateResult"},
+			ProduceArtifact: false,
+		}
+		out = append(out, gateStep)
+		toolSet[gateID] = true
 	}
 
 	return out
@@ -152,6 +179,12 @@ type compiledStep struct {
 }
 
 func compileStep(step AgentStep, manifest *tool.ToolManifest) (compiledStep, error) {
+	// Handle quality gate marker tool — compiled as a special CONTROL node
+	// that auto-approves when the quality checker passes, blocks when it fails.
+	if step.Tool == "__quality_gate__" {
+		return compileQualityGate(step), nil
+	}
+
 	policy := normalizedApprovalPolicy(manifest)
 	switch policy.Mode {
 	case tool.ApprovalBeforeExecute, tool.ApprovalBeforeSideEffect:
@@ -298,4 +331,56 @@ func copyMap(in map[string]interface{}) map[string]interface{} {
 		out[k] = v
 	}
 	return out
+}
+
+// compileQualityGate creates a CONTROL node for a quality gate step.
+// When autoApproveWhenPassed is true, the quality gate CONTROL node inspects
+// the quality checker's output: if passed=true and score >= minScore, the node
+// can be auto-approved; otherwise it blocks downstream and pauses for user review.
+func compileQualityGate(step AgentStep) compiledStep {
+	nodeID := step.ID
+	input := map[string]interface{}{
+		"stepId":                step.ID,
+		"tool":                  step.Tool,
+		"reviewPhase":           "quality_gate",
+		"reviewReason":          step.Intent,
+		"blocksDownstream":      true,
+		"requiresApprovedArtifacts": true,
+	}
+
+	// Copy quality gate metadata from step arguments.
+	if step.Arguments != nil {
+		if v, ok := step.Arguments["checkerStep"]; ok {
+			input["checkerStep"] = v
+		}
+		if v, ok := step.Arguments["productionStep"]; ok {
+			input["productionStep"] = v
+		}
+		if v, ok := step.Arguments["productionTool"]; ok {
+			input["productionTool"] = v
+		}
+		if v, ok := step.Arguments["minScore"]; ok {
+			input["minScore"] = v
+		}
+		if v, ok := step.Arguments["autoApproveWhenPassed"]; ok {
+			input["autoApproveWhenPassed"] = v
+		}
+		if v, ok := step.Arguments["autoRepair"]; ok {
+			input["autoRepair"] = v
+		}
+		if v, ok := step.Arguments["maxRepairAttempts"]; ok {
+			input["maxRepairAttempts"] = v
+		}
+	}
+
+	return compiledStep{
+		nodes: []model.NodeRequest{{
+			ID:    nodeID,
+			Type:  string(model.NodeTypeControl),
+			Name:  "质量门禁-" + step.ID,
+			Input: input,
+		}},
+		entryIDs:  []string{nodeID},
+		outputIDs: []string{nodeID},
+	}
 }

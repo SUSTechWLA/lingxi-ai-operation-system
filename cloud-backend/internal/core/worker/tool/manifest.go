@@ -71,13 +71,15 @@ type ArtifactPolicy struct {
 
 // QualityPolicy defines automated quality checking for a tool.
 // When Required is true, the PlanCompiler can auto-insert a quality checker
-// node after this tool's execution node.
+// node after this tool's execution node, followed by a quality gate CONTROL node
+// that auto-approves when the checker passes or blocks when it fails.
 type QualityPolicy struct {
 	Required          bool   `json:"required"`
 	CheckerTool       string `json:"checkerTool,omitempty"`
 	MinScore          int    `json:"minScore,omitempty"`
 	AutoRepair        bool   `json:"autoRepair,omitempty"`
 	MaxRepairAttempts int    `json:"maxRepairAttempts,omitempty"`
+	RepairTool        string `json:"repairTool,omitempty"`
 }
 
 type ParamDef struct {
