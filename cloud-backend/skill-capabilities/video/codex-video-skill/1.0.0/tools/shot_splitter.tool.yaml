@@ -15,12 +15,35 @@ tags:
   - storyboard
 
 parameters:
-  brief:
+  script:
     type: string
     required: true
+    description: 已确认的口播稿正文
+  brief:
+    type: string
+    required: false
     description: 用户的视频创作需求
+  shotDurationRule:
+    type: string
+    required: false
+    default: 3-15秒
+    description: 镜头时长规则
+  aspectRatio:
+    type: string
+    required: false
+    default: 16:9
+    description: 视频画幅
 
 output:
+  shotList:
+    type: array
+    description: 分镜列表
+  totalDurationSec:
+    type: number
+    description: 总时长（秒）
+  summary:
+    type: string
+    description: 分镜概览
   content:
     type: string
     description: 分镜清单
@@ -33,6 +56,12 @@ latencyLevel: medium
 riskLevel: low
 sideEffect: false
 idempotent: true
+
+promptRef: prompts/shot_splitter.prompt.md
+resourceRefs:
+  - rules/shot_rules.md
+  - references/camera_language_reference.md
+  - examples/example_shot_list.json
 
 approvalPolicy:
   required: true
@@ -50,4 +79,6 @@ artifactPolicy:
   defaultReviewRequired: true
 
 nextRecommendedTools:
+  - shot_quality_checker
+  - keyframe_prompt_generator
   - video_prompt_generator

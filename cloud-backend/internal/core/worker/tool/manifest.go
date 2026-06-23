@@ -25,6 +25,7 @@ type ToolManifest struct {
 	Idempotent           bool                `json:"idempotent,omitempty"`
 	ApprovalPolicy       ApprovalPolicy      `json:"approvalPolicy,omitempty"`
 	ArtifactPolicy       ArtifactPolicy      `json:"artifactPolicy,omitempty"`
+	QualityPolicy        QualityPolicy       `json:"qualityPolicy,omitempty"`
 	NextRecommendedTools []string            `json:"nextRecommendedTools,omitempty"`
 	FailureModes         []string            `json:"failureModes,omitempty"`
 	SkillPackageID       string              `json:"skillPackageId,omitempty"`
@@ -66,6 +67,17 @@ type ArtifactPolicy struct {
 	ProduceArtifact       bool     `json:"produceArtifact"`
 	ArtifactKinds         []string `json:"artifactKinds,omitempty"`
 	DefaultReviewRequired bool     `json:"defaultReviewRequired,omitempty"`
+}
+
+// QualityPolicy defines automated quality checking for a tool.
+// When Required is true, the PlanCompiler can auto-insert a quality checker
+// node after this tool's execution node.
+type QualityPolicy struct {
+	Required          bool   `json:"required"`
+	CheckerTool       string `json:"checkerTool,omitempty"`
+	MinScore          int    `json:"minScore,omitempty"`
+	AutoRepair        bool   `json:"autoRepair,omitempty"`
+	MaxRepairAttempts int    `json:"maxRepairAttempts,omitempty"`
 }
 
 type ParamDef struct {

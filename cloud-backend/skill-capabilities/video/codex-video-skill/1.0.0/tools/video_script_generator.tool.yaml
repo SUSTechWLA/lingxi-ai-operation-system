@@ -15,16 +15,47 @@ tags:
   - talking_head
 
 parameters:
-  brief:
+  topic:
     type: string
     required: true
+    description: 视频主题
+  brief:
+    type: string
+    required: false
     description: 用户的视频创作需求
+  facts:
+    type: array
+    required: false
+    description: 事实材料
+  style:
+    type: string
+    required: false
+    description: 口播风格（真诚、有知识感、幽默等）
+  targetDurationSec:
+    type: number
+    required: false
+    description: 目标时长（秒）
   platform:
     type: string
     required: false
     description: 发布平台
 
 output:
+  script:
+    type: string
+    description: 口播稿正文
+  summary:
+    type: string
+    description: 内容摘要
+  estimatedDurationSec:
+    type: number
+    description: 估算时长（秒）
+  sections:
+    type: array
+    description: 分段信息
+  qualityHints:
+    type: object
+    description: 质量提示（hasHook/hasStory/hasKnowledgeValue）
   content:
     type: string
     description: 口播稿正文
@@ -37,6 +68,13 @@ latencyLevel: medium
 riskLevel: low
 sideEffect: false
 idempotent: true
+
+promptRef: prompts/video_script_generator.prompt.md
+resourceRefs:
+  - rules/global.md
+  - rules/script_rules.md
+  - references/knowledge_video_style.md
+  - examples/example_script.md
 
 approvalPolicy:
   required: true
@@ -53,4 +91,5 @@ artifactPolicy:
   defaultReviewRequired: true
 
 nextRecommendedTools:
+  - script_quality_checker
   - shot_splitter

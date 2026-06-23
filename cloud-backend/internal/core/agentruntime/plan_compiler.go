@@ -28,11 +28,14 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 		return nil, fmt.Errorf("agent plan has no steps")
 	}
 
-	nodes := make([]model.NodeRequest, 0, len(plan.Steps)*2)
-	edges := make([]model.Edge, 0, len(plan.Steps)*2)
-	stepOutputs := make(map[string][]string, len(plan.Steps))
+	// Detect missing quality checkers and auto-insert them.
+	steps := c.injectQualityGates(plan.Steps)
 
-	for _, step := range plan.Steps {
+	nodes := make([]model.NodeRequest, 0, len(steps)*2)
+	edges := make([]model.Edge, 0, len(steps)*2)
+	stepOutputs := make(map[string][]string, len(steps))
+
+	for _, step := range steps {
 		if step.ID == "" {
 			return nil, fmt.Errorf("agent step id is required")
 		}
@@ -64,6 +67,74 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 	}
 
 	return &model.DAGRequest{Nodes: nodes, Edges: edges}, nil
+}
+
+// injectQualityGates scans the plan steps and auto-inserts quality checker steps
+// after production tools that don't already have an explicit quality check in the plan.
+func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
+	// Build tool presence set to avoid duplicates.
+	toolSet := make(map[string]bool, len(steps))
+	for _, s := range steps {
+		toolSet[s.Tool] = true
+	}
+
+	// Quality checker mapping for production tools.
+	qualityCheckers := map[string]string{
+		"video_script_generator": "script_quality_checker",
+		"shot_splitter":          "shot_quality_checker",
+		"video_prompt_generator": "video_prompt_quality_checker",
+		"video_package_exporter": "package_quality_checker",
+	}
+
+	var out []AgentStep
+	out = make([]AgentStep, 0, len(steps)+len(qualityCheckers))
+
+	for _, step := range steps {
+		checkerName, hasChecker := qualityCheckers[step.Tool]
+		out = append(out, step)
+
+		if !hasChecker || toolSet[checkerName] {
+			continue
+		}
+
+		// Check if the production tool's manifest has qualityPolicy.Required.
+		manifest := c.manifestFor(step.Tool)
+		if manifest == nil || !manifest.QualityPolicy.Required {
+			// Quality checker is recommended but not required by manifest; skip auto-insert.
+			continue
+		}
+
+		// Auto-insert a quality check step.
+		checkerStep := AgentStep{
+			ID:              checkerName,
+			Intent:          fmt.Sprintf("自动质量检查：%s 的输出", step.Tool),
+			Tool:            checkerName,
+			DependsOn:       []string{step.ID},
+			Arguments:       buildQualityCheckArgs(step),
+			ExpectedOutput:  []string{"passed", "score", "issues", "repairSuggestions"},
+			ProduceArtifact: true,
+		}
+		out = append(out, checkerStep)
+		toolSet[checkerName] = true
+	}
+
+	return out
+}
+
+// buildQualityCheckArgs constructs arguments for an auto-inserted quality checker step.
+func buildQualityCheckArgs(sourceStep AgentStep) map[string]interface{} {
+	args := map[string]interface{}{}
+	switch sourceStep.Tool {
+	case "video_script_generator":
+		args["script"] = fmt.Sprintf("{{%s.output.script}}", sourceStep.ID)
+	case "shot_splitter":
+		args["shotList"] = fmt.Sprintf("{{%s.output.shotList}}", sourceStep.ID)
+	case "video_prompt_generator":
+		args["videoPrompts"] = fmt.Sprintf("{{%s.output.videoPrompts}}", sourceStep.ID)
+	case "video_package_exporter":
+		args["script"] = fmt.Sprintf("{{%s.output.package}}", sourceStep.ID)
+	}
+	return args
 }
 
 func (c *PlanCompiler) manifestFor(name string) *tool.ToolManifest {
@@ -195,18 +266,29 @@ func requiresExternalBridge(manifest *tool.ToolManifest) bool {
 }
 
 func buildReviewNode(nodeID string, step AgentStep, policy tool.ApprovalPolicy, phase string) model.NodeRequest {
+	execID := step.ID + "_exec"
+	input := map[string]interface{}{
+		"stepId":              step.ID,
+		"tool":                step.Tool,
+		"reviewPhase":         phase,
+		"reviewReason":        policy.Reason,
+		"blocksDownstream":    policy.BlocksDownstream,
+		"reviewArtifactKinds": policy.ReviewArtifactKinds,
+	}
+	// Bind the source execution node so the handler knows which artifact to review.
+	if phase == "after_artifact" || phase == "before_downstream" {
+		input["sourceNode"] = execID
+	}
+	if len(policy.ReviewArtifactKinds) > 0 {
+		input["artifactKinds"] = policy.ReviewArtifactKinds
+	}
+	input["requiresApprovedArtifacts"] = policy.BlocksDownstream
+
 	return model.NodeRequest{
-		ID:   nodeID,
-		Type: string(model.NodeTypeControl),
-		Name: "审核-" + step.ID,
-		Input: map[string]interface{}{
-			"stepId":              step.ID,
-			"tool":                step.Tool,
-			"reviewPhase":         phase,
-			"reviewReason":        policy.Reason,
-			"blocksDownstream":    policy.BlocksDownstream,
-			"reviewArtifactKinds": policy.ReviewArtifactKinds,
-		},
+		ID:    nodeID,
+		Type:  string(model.NodeTypeControl),
+		Name:  "审核-" + step.ID,
+		Input: input,
 	}
 }
 

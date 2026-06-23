@@ -21,13 +21,21 @@ type ReviewStateMachine interface {
 }
 
 type Handler struct {
-	runner       *Runner
-	nodes        ReviewNodeStore
-	stateMachine ReviewStateMachine
+	runner         *Runner
+	nodes          ReviewNodeStore
+	stateMachine   ReviewStateMachine
+	artifactReview ArtifactReviewStore
 }
 
 func NewHandler(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *Handler {
 	return &Handler{runner: runner, nodes: nodes, stateMachine: stateMachine}
+}
+
+// WithArtifactReviewStore sets the artifact review store for persisting
+// PENDING/APPROVED/REJECTED artifact review records.
+func (h *Handler) WithArtifactReviewStore(store ArtifactReviewStore) *Handler {
+	h.artifactReview = store
+	return h
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
@@ -97,6 +105,14 @@ func (h *Handler) ListReviews(c *gin.Context) {
 		httpx.Fail(c, http.StatusNotFound, "agent run not found")
 		return
 	}
+
+	// Sync artifact_review records for any CONTROL nodes that don't have one yet.
+	if h.artifactReview != nil && run.TaskID != "" {
+		for _, r := range reviews {
+			h.ensureArtifactReview(c.Request.Context(), run.TaskID, r)
+		}
+	}
+
 	httpx.OK(c, gin.H{"runId": run.ID, "reviews": reviews})
 }
 
@@ -120,7 +136,8 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 	}
 
 	var req struct {
-		Comment string `json:"comment,omitempty"`
+		Comment    string `json:"comment,omitempty"`
+		ReviewerID string `json:"reviewerId,omitempty"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if err := h.stateMachine.OnSuccess(c.Request.Context(), node.ID, map[string]interface{}{
@@ -130,6 +147,10 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Sync artifact_review status to APPROVED.
+	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewApproved, req.ReviewerID, req.Comment)
+
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "APPROVED"})
 }
 
@@ -149,7 +170,8 @@ func (h *Handler) RejectReview(c *gin.Context) {
 	}
 
 	var req struct {
-		Comment string `json:"comment,omitempty"`
+		Comment    string `json:"comment,omitempty"`
+		ReviewerID string `json:"reviewerId,omitempty"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	reason := req.Comment
@@ -163,6 +185,10 @@ func (h *Handler) RejectReview(c *gin.Context) {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Sync artifact_review status to REJECTED.
+	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewRejected, req.ReviewerID, reason)
+
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "REJECTED"})
 }
 
@@ -259,4 +285,44 @@ func stringSlice(value interface{}) []string {
 	default:
 		return nil
 	}
+}
+
+// ensureArtifactReview creates a PENDING artifact_review record for a CONTROL node
+// if one does not already exist. This bridges the DAG CONTROL node with the
+// artifact_reviews persistence table.
+func (h *Handler) ensureArtifactReview(ctx context.Context, taskID string, r Review) {
+	if h.artifactReview == nil {
+		return
+	}
+
+	// Check if a record already exists for this node.
+	existing, err := h.artifactReview.FindByNodeID(ctx, r.NodeID)
+	if err == nil && existing != nil {
+		return
+	}
+
+	review := &ArtifactReview{
+		ID:           r.NodeID,
+		TaskID:       taskID,
+		NodeID:       r.NodeID,
+		Status:       ArtifactReviewPending,
+		ReviewReason: r.ReviewReason,
+	}
+	_ = h.artifactReview.Save(ctx, review)
+}
+
+// updateArtifactReviewStatus syncs the artifact_review table when a review
+// is approved or rejected.
+func (h *Handler) updateArtifactReviewStatus(ctx context.Context, nodeID string, status ArtifactReviewStatus, reviewerID, comment string) {
+	if h.artifactReview == nil {
+		return
+	}
+
+	// Try to find by node ID first.
+	review, err := h.artifactReview.FindByNodeID(ctx, nodeID)
+	if err != nil || review == nil {
+		return
+	}
+
+	_ = h.artifactReview.UpdateStatus(ctx, review.ID, status, reviewerID, comment)
 }

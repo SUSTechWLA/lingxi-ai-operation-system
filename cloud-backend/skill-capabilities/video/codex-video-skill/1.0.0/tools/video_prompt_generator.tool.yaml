@@ -15,16 +15,38 @@ tags:
   - generation
 
 parameters:
+  shotList:
+    type: array
+    required: true
+    description: 已确认的分镜列表
   brief:
     type: string
-    required: true
+    required: false
     description: 用户的视频创作需求
+  keyframePrompts:
+    type: array
+    required: false
+    description: 关键帧提示词（可选，增强视频 prompt 质量）
+  style:
+    type: string
+    required: false
+    description: 视觉风格描述
+  modelHint:
+    type: string
+    required: false
+    description: 目标视频生成模型提示
   aspectRatio:
     type: string
     required: false
     description: 视频画幅
 
 output:
+  videoPrompts:
+    type: array
+    description: 视频提示词列表
+  summary:
+    type: string
+    description: 提示词概览
   content:
     type: string
     description: 视频提示词包
@@ -38,6 +60,12 @@ riskLevel: medium
 sideEffect: false
 idempotent: true
 
+promptRef: prompts/video_prompt_generator.prompt.md
+resourceRefs:
+  - rules/video_prompt_rules.md
+  - references/video_model_prompt_reference.md
+  - examples/example_video_prompt.md
+
 approvalPolicy:
   required: true
   mode: after_artifact
@@ -45,9 +73,16 @@ approvalPolicy:
   reason: 视频提示词将驱动后续高成本生成动作，必须确认。
   reviewArtifactKinds:
     - MARKDOWN
+    - JSON
 
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
     - MARKDOWN
+    - JSON
   defaultReviewRequired: true
+
+nextRecommendedTools:
+  - video_prompt_quality_checker
+  - publish_copy_generator
+  - video_package_exporter
