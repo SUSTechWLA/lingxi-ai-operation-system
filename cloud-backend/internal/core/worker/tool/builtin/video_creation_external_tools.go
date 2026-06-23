@@ -41,8 +41,16 @@ var videoCreationExternalTools = []string{
 	// Dynamic agent prompt_tool entries — used by LLMPlanner for video creation workflows.
 	"knowledge_researcher",
 	"fact_checker",
+	"video_script_generator",
+	"shot_splitter",
+	"keyframe_prompt_generator",
+	"video_prompt_generator",
+	"script_quality_checker",
+	"shot_quality_checker",
+	"video_prompt_quality_checker",
 	"publish_copy_generator",
 	"video_package_exporter",
+	"package_quality_checker",
 }
 
 var (
@@ -1390,6 +1398,10 @@ func countByStatus(requests []map[string]interface{}, status string) int {
 func isDynamicAgentPromptTool(toolName string) bool {
 	switch toolName {
 	case "knowledge_researcher", "fact_checker",
+		"video_script_generator", "shot_splitter",
+		"keyframe_prompt_generator", "video_prompt_generator",
+		"script_quality_checker", "shot_quality_checker",
+		"video_prompt_quality_checker", "package_quality_checker",
 		"publish_copy_generator", "video_package_exporter":
 		return true
 	default:
@@ -1453,6 +1465,19 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	var contentPkg map[string]interface{}
 	isJSON := jsonx.ExtractJSON(rawContent, &contentPkg) == nil
 
+	// For tools that require structured JSON output, fail on parse error
+	// instead of silently accepting markdown.
+	if !isJSON && isStructuredOutputTool(toolName) {
+		preview := rawContent
+		if len(preview) > 500 {
+			preview = preview[:500]
+		}
+		zap.L().Error("dynamic agent prompt tool failed to produce structured JSON",
+			zap.String("tool", toolName),
+			zap.String("rawContent", preview))
+		return tool.FailureResult(fmt.Sprintf("%s: LLM 未返回结构化 JSON，请重试", toolName))
+	}
+
 	artifacts := buildSkillStageArtifacts(toolName, skillName, toolName == "publish_copy_generator", isJSON)
 
 	data := map[string]interface{}{
@@ -1493,8 +1518,61 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	if estimatedDurationSec, ok := contentPkg["estimatedDurationSec"]; ok {
 		data["estimatedDurationSec"] = estimatedDurationSec
 	}
+	// Structured fields for shot_splitter and video_prompt_generator
+	if shotList, ok := contentPkg["shotList"]; ok {
+		data["shotList"] = shotList
+	}
+	if videoPromptsOut, ok := contentPkg["videoPrompts"]; ok {
+		data["videoPrompts"] = videoPromptsOut
+	}
+	if totalDurationSec, ok := contentPkg["totalDurationSec"]; ok {
+		data["totalDurationSec"] = totalDurationSec
+	}
+	if sections, ok := contentPkg["sections"]; ok {
+		data["sections"] = sections
+	}
+	if qualityHints, ok := contentPkg["qualityHints"]; ok {
+		data["qualityHints"] = qualityHints
+	}
+	if keyframePromptsOut, ok := contentPkg["keyframePrompts"]; ok {
+		data["keyframePrompts"] = keyframePromptsOut
+	}
+	// Quality checker output fields
+	if passed, ok := contentPkg["passed"]; ok {
+		data["passed"] = passed
+	}
+	if score, ok := contentPkg["score"]; ok {
+		data["score"] = score
+	}
+	if issues, ok := contentPkg["issues"]; ok {
+		data["issues"] = issues
+	}
+	if repairSuggestions, ok := contentPkg["repairSuggestions"]; ok {
+		data["repairSuggestions"] = repairSuggestions
+	}
+	if missingArtifacts, ok := contentPkg["missingArtifacts"]; ok {
+		data["missingArtifacts"] = missingArtifacts
+	}
+	if unreviewedArtifacts, ok := contentPkg["unreviewedArtifacts"]; ok {
+		data["unreviewedArtifacts"] = unreviewedArtifacts
+	}
 
 	return tool.SuccessResult(data)
+}
+
+// isStructuredOutputTool reports whether toolName requires structured JSON output
+// (as opposed to free-form Markdown). Quality checkers and content production tools
+// must output valid JSON.
+func isStructuredOutputTool(toolName string) bool {
+	switch toolName {
+	case "video_script_generator", "shot_splitter",
+		"keyframe_prompt_generator", "video_prompt_generator",
+		"script_quality_checker", "shot_quality_checker",
+		"video_prompt_quality_checker", "package_quality_checker":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) string {
@@ -1504,6 +1582,237 @@ func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) stri
 
 	case "fact_checker":
 		return fmt.Sprintf("你是一个严格的事实核查员。对已有知识内容进行事实核查。\n\n主题：%s\n\n检查：1.关键事实准确性 2.日期时间正确性 3.人物准确性 4.文化表述恰当性 5.潜在敏感性/争议性表述。输出Markdown，包含核查结果、修正建议和风险提示。", topic)
+
+	case "video_script_generator":
+		return fmt.Sprintf(`你是短视频口播稿创作专家。
+
+目标：
+根据主题、事实材料和用户风格要求，生成适合中文短视频平台的口播知识分享视频脚本。
+
+硬性要求：
+1. 开头 5-8 秒必须有明确钩子。
+2. 内容必须基于 facts，不允许编造历史事实。
+3. 语言自然，适合真人或 AI 配音口播。
+4. 总时长接近 targetDurationSec。
+5. 分段清晰：开场、背景、核心讲述、总结。
+6. 不要写成论文，不要堆砌百科。
+7. 每句话尽量短，适合口播。
+8. 输出严格 JSON。
+
+输入：
+topic=%s
+style=%s
+
+输出 JSON：
+{
+  "script": "完整口播稿正文",
+  "summary": "内容摘要",
+  "estimatedDurationSec": 90,
+  "sections": [
+    {
+      "name": "开场",
+      "startSec": 0,
+      "endSec": 8,
+      "text": "..."
+    }
+  ],
+  "qualityHints": {
+    "hasHook": true,
+    "hasStory": true,
+    "hasKnowledgeValue": true
+  }
+}`, topic, style)
+
+	case "shot_splitter":
+		return `你是短视频分镜导演。
+
+目标：
+把已确认口播稿拆成适合 AI 视频生成的镜头列表。
+
+硬性要求：
+1. 每个 shot 时长 3-15 秒。
+2. 每个 shot 只表达一个主要画面变化。
+3. 每个 shot 必须包含：shotId、durationSec、scriptText、visual、camera、composition、lighting、transitionIn、transitionOut。
+4. 分镜必须覆盖完整口播稿，不要遗漏。
+5. 视觉风格默认 16:9，非写实动画，去 AI 感。
+6. 输出严格 JSON。
+
+输入：
+script=<script>
+shotDurationRule=<shotDurationRule>
+aspectRatio=<aspectRatio>
+
+输出 JSON：
+{
+  "shotList": [
+    {
+      "shotId": "SHOT_01",
+      "durationSec": 6,
+      "scriptText": "...",
+      "visual": "...",
+      "camera": "...",
+      "composition": "...",
+      "lighting": "...",
+      "transitionIn": "...",
+      "transitionOut": "...",
+      "notes": "..."
+    }
+  ],
+  "totalDurationSec": 90,
+  "summary": "..."
+}`
+
+	case "keyframe_prompt_generator":
+		return `你是AI图像关键帧提示词导演。
+
+目标：
+根据分镜列表中的关键画面，为每个镜头的代表性画面生成 AI 图像生成提示词。
+
+硬性要求：
+1. 每个 shot 生成一个关键帧图像提示词。
+2. 提示词必须描述：画面主体、场景、构图、光影、色彩、风格、景别。
+3. 视觉风格统一为非写实动画，去 AI 感。
+4. 关键帧画面应能代表该镜头的高潮或典型画面。
+5. 输出严格 JSON。
+
+输入：
+shotList=<shotList>
+style=<style>
+
+输出 JSON：
+{
+  "keyframePrompts": [
+    {
+      "shotId": "SHOT_01",
+      "prompt": "非写实动画风格，...",
+      "styleNotes": "..."
+    }
+  ],
+  "summary": "..."
+}`
+
+	case "video_prompt_generator":
+		return `你是 AI 视频生成提示词导演。
+
+目标：
+根据分镜生成每个镜头可直接用于视频生成模型的 Prompt。
+
+硬性要求：
+1. 每个 shot 输出一个 video prompt。
+2. prompt 必须包含：画面主体、场景、动作、镜头运动、光影、色彩、风格、持续时间、转场。
+3. 必须写清楚该镜头内部的时间线变化。
+4. 不依赖上下文记忆，因为视频模型每个 shot 独立生成。
+5. 禁止真人写实，默认非写实动画，去 AI 感。
+6. 输出严格 JSON。
+
+输入：
+shotList=<shotList>
+keyframePrompts=<keyframePrompts>
+style=<style>
+modelHint=<modelHint>
+
+输出 JSON：
+{
+  "videoPrompts": [
+    {
+      "shotId": "SHOT_01",
+      "durationSec": 6,
+      "prompt": "...",
+      "negativePrompt": "...",
+      "continuity": "...",
+      "modelTips": {
+        "cameraMotion": "...",
+        "subjectMotion": "..."
+      }
+    }
+  ],
+  "summary": "..."
+}`
+
+	case "script_quality_checker":
+		return `你是口播稿质量审核员。
+
+检查以下内容：
+1. 结构完整性：是否有钩子开头、核心内容、总结
+2. 节奏：每段时长是否合理
+3. 时长：总时长是否接近目标
+4. 知识准确性：是否基于事实
+5. 开头吸引力：前 5-8 秒是否有钩子
+6. 语言自然度：是否适合口播
+
+输出严格 JSON：
+{
+  "passed": true/false,
+  "score": 0-100,
+  "issues": [
+    {"level": "error|warning|info", "field": "...", "message": "..."}
+  ],
+  "repairSuggestions": ["..."]
+}`
+
+	case "shot_quality_checker":
+		return `你是分镜质量审核员。
+
+检查以下内容：
+1. shot 数量是否合理
+2. 每个镜头时长是否在 3-15 秒
+3. 画面连续性：前后镜头是否衔接
+4. 字段完整性：每个 shot 是否包含必要字段
+5. 视觉描述是否具体可执行
+6. 总时长是否匹配目标
+
+输出严格 JSON：
+{
+  "passed": true/false,
+  "score": 0-100,
+  "issues": [
+    {"level": "error|warning|info", "field": "...", "message": "..."}
+  ],
+  "repairSuggestions": ["..."]
+}`
+
+	case "video_prompt_quality_checker":
+		return `你是视频生成提示词质量审核员。
+
+检查以下内容：
+1. 每个镜头是否有对应 video prompt
+2. prompt 是否包含主体、场景、动作、镜头运动
+3. 是否包含时间线变化描述
+4. 风格是否统一（非写实动画，去 AI 感）
+5. negativePrompt 是否合理
+6. modelTips 是否完整
+
+输出严格 JSON：
+{
+  "passed": true/false,
+  "score": 0-100,
+  "issues": [
+    {"level": "error|warning|info", "field": "...", "message": "..."}
+  ],
+  "repairSuggestions": ["..."]
+}`
+
+	case "package_quality_checker":
+		return `你是视频创作包最终质检员。
+
+检查以下内容：
+1. 是否缺少必需文件（research、fact_check、script、shot_list、video_prompts、publish_copy）
+2. 各产物是否已审核通过
+3. 字段是否完整
+4. 格式是否正确
+5. 时长、风格是否一致
+
+输出严格 JSON：
+{
+  "passed": true/false,
+  "score": 0-100,
+  "issues": [
+    {"level": "error|warning|info", "field": "...", "message": "..."}
+  ],
+  "repairSuggestions": ["..."],
+  "missingArtifacts": ["..."],
+  "unreviewedArtifacts": ["..."]
+}`
 
 	case "publish_copy_generator":
 		return fmt.Sprintf("你是一个专业的短视频平台运营专家。根据视频内容生成发布文案。\n\n目标平台：%s\n\n生成：1.视频标题（吸引眼球，不超过30字）2.视频简介（100-200字）3.话题标签（5-8个）4.平台适配建议。输出Markdown。", platform)
@@ -1523,6 +1832,72 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 
 	case "fact_checker":
 		return fmt.Sprintf("请核查以下内容的准确性：\n\n%s\n\n原始主题：%s", facts, topic)
+
+	case "video_script_generator":
+		var parts []string
+		parts = append(parts, "主题："+topic)
+		if facts != "" {
+			parts = append(parts, "事实材料：\n"+facts)
+		}
+		if style != "" {
+			parts = append(parts, "风格要求："+style)
+		}
+		return strings.Join(parts, "\n\n")
+
+	case "shot_splitter":
+		var parts []string
+		if script != "" {
+			parts = append(parts, "口播稿：\n"+script)
+		}
+		parts = append(parts, "分镜时长规则：3-15秒")
+		parts = append(parts, "画幅：16:9")
+		return strings.Join(parts, "\n\n")
+
+	case "keyframe_prompt_generator":
+		var parts []string
+		if shotList != "" {
+			parts = append(parts, "分镜列表：\n"+shotList)
+		}
+		if style != "" {
+			parts = append(parts, "风格要求："+style)
+		}
+		return strings.Join(parts, "\n\n")
+
+	case "video_prompt_generator":
+		var parts []string
+		if shotList != "" {
+			parts = append(parts, "分镜列表：\n"+shotList)
+		}
+		if style != "" {
+			parts = append(parts, "风格要求："+style)
+		}
+		return strings.Join(parts, "\n\n")
+
+	case "script_quality_checker":
+		return fmt.Sprintf("请检查以下口播稿的质量：\n\n%s\n\n目标时长：90秒", script)
+
+	case "shot_quality_checker":
+		return fmt.Sprintf("请检查以下分镜的质量：\n\n%s", shotList)
+
+	case "video_prompt_quality_checker":
+		return fmt.Sprintf("请检查以下视频提示词的质量：\n\n%s", videoPrompts)
+
+	case "package_quality_checker":
+		var parts []string
+		parts = append(parts, "主题："+topic)
+		if script != "" {
+			parts = append(parts, "口播稿：\n"+script)
+		}
+		if shotList != "" {
+			parts = append(parts, "分镜：\n"+shotList)
+		}
+		if videoPrompts != "" {
+			parts = append(parts, "视频提示词：\n"+videoPrompts)
+		}
+		if publishCopy != "" {
+			parts = append(parts, "发布文案：\n"+publishCopy)
+		}
+		return "请对以下视频创作包进行最终质检：\n\n" + strings.Join(parts, "\n\n---\n\n")
 
 	case "publish_copy_generator":
 		var parts []string
