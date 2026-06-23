@@ -364,7 +364,37 @@ func main() {
 	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r)
 
 	agentRunRepo := agentruntime.NewRepository(pool)
-	agentPlanner := buildAgentPlanner(cfg, toolRegistry, nil)
+
+	// ── ModelGateway (initialized early so LLMPlanner and PromptTools can use it) ──
+	var gw *modelgateway.Gateway
+	if cfg.Video.VideoCreationEnabled {
+		gw = modelgateway.NewGateway(cfg.Video.ModelProviderMode)
+		if cfg.Video.ModelProviderMode == "real" {
+			openaiProvider := openai.NewProvider()
+			switch cfg.Video.ImageProvider {
+			case "stability":
+				gw.RegisterProvider(stability.NewProvider(), modelgateway.CapTextToImage)
+			default:
+				gw.RegisterProvider(openaiProvider, modelgateway.CapTextToImage)
+			}
+			gw.RegisterProvider(openaiProvider, modelgateway.CapTextToText)
+		} else {
+			fakeProvider := fake.NewProvider()
+			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToImage)
+			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
+		}
+		builtin.SetModelGateway(gw)
+		builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
+		builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
+		builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
+		if cfg.Video.HyperFramesCLIPath != "" {
+			builtin.SetHyperFramesCLIPath(cfg.Video.HyperFramesCLIPath)
+		}
+		zap.L().Info("ModelGateway initialized for agent planner and video tools",
+			zap.String("mode", cfg.Video.ModelProviderMode))
+	}
+
+	agentPlanner := buildAgentPlanner(cfg, toolRegistry, gw)
 	agentRunner := agentruntime.NewRunner(
 		orchestratorService,
 		agentRunRepo,
@@ -393,41 +423,8 @@ func main() {
 		zap.L().Info("Video creation enabled — registering video modules",
 			zap.String("model_provider_mode", cfg.Video.ModelProviderMode),
 		)
-		builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
-		// Persist user model config alongside the skill root so it survives restarts.
-		// API key is encrypted at rest using AES-256-GCM with a key derived from the auth secret.
-		builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
-		builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
-		if cfg.Video.HyperFramesCLIPath != "" {
-			builtin.SetHyperFramesCLIPath(cfg.Video.HyperFramesCLIPath)
-			zap.L().Info("HyperFrames CLI path configured",
-				zap.String("path", cfg.Video.HyperFramesCLIPath))
-		}
-
-		// Initialize model gateway for image generation and text-to-text (LLMPlanner).
-		// Providers: openai (DALL-E + GPT), stability (Stable Diffusion), fake (dev/test).
-		gw := modelgateway.NewGateway(cfg.Video.ModelProviderMode)
-		if cfg.Video.ModelProviderMode == "real" {
-			openaiProvider := openai.NewProvider()
-			// Register image generation provider
-			switch cfg.Video.ImageProvider {
-			case "stability":
-				gw.RegisterProvider(stability.NewProvider(), modelgateway.CapTextToImage)
-				zap.L().Info("Image generation provider: stability (Stable Diffusion)")
-			default:
-				gw.RegisterProvider(openaiProvider, modelgateway.CapTextToImage)
-				zap.L().Info("Image generation provider: openai (DALL-E)")
-			}
-			// Register text-to-text provider for LLMPlanner
-			gw.RegisterProvider(openaiProvider, modelgateway.CapTextToText)
-			zap.L().Info("Text-to-text provider: openai (GPT)")
-		} else {
-			fakeProvider := fake.NewProvider()
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToImage)
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
-			zap.L().Info("Model providers: fake (dev/test fixtures)")
-		}
-		builtin.SetModelGateway(gw)
+		// ModelGateway and builtin config are initialized earlier (before buildAgentPlanner).
+		// gw is already created and providers registered; we just reference it here.
 
 		// Runtime model-provider config — synced from frontend Desktop page, persisted to disk
 		modelProviderHandler := func(c *gin.Context) {

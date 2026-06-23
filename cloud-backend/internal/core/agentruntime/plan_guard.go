@@ -75,8 +75,8 @@ func (g *PlanGuard) Validate(plan *AgentPlan) error {
 				return fmt.Errorf("agent step %s depends on unknown or later step %s", step.ID, dep)
 			}
 		}
-		// Validate reference expressions in arguments.
-		if err := validateReferenceExpressions(step, stepMap); err != nil {
+		// Validate reference expressions in arguments (includes output field validation).
+		if err := validateReferenceExpressions(step, stepMap, stepManifests); err != nil {
 			return err
 		}
 	}
@@ -250,7 +250,15 @@ func matchesParamType(value interface{}, expectedType string) bool {
 
 // validateReferenceExpressions checks that {{step.output.field}} references
 // point to existing upstream steps with the declared output fields.
-func validateReferenceExpressions(step AgentStep, stepMap map[string]AgentStep) error {
+// It validates:
+//   1. The referenced step exists.
+//   2. The referenced step is declared as a dependency.
+//   3. The referenced field exists in the upstream tool's output schema.
+func validateReferenceExpressions(
+	step AgentStep,
+	stepMap map[string]AgentStep,
+	stepManifests map[string]*tool.ToolManifest,
+) error {
 	for _, value := range step.Arguments {
 		s, ok := value.(string)
 		if !ok {
@@ -261,10 +269,11 @@ func validateReferenceExpressions(step AgentStep, stepMap map[string]AgentStep) 
 			continue
 		}
 		refStepID := matches[1]
-		// refField := matches[2] // available for future output schema validation
+		refField := matches[2]
 
 		// Check the referenced step exists.
-		if _, exists := stepMap[refStepID]; !exists {
+		refStep, exists := stepMap[refStepID]
+		if !exists {
 			return fmt.Errorf("agent step %s references unknown step %s in argument expression %s", step.ID, refStepID, s)
 		}
 
@@ -278,6 +287,25 @@ func validateReferenceExpressions(step AgentStep, stepMap map[string]AgentStep) 
 		}
 		if !isUpstream && refStepID != step.ID {
 			return fmt.Errorf("agent step %s references step %s which is not declared as a dependency", step.ID, refStepID)
+		}
+
+		// Validate the referenced field exists in the upstream tool's output schema.
+		if stepManifests != nil {
+			refManifest := stepManifests[refStep.ID]
+			if refManifest == nil {
+				return fmt.Errorf(
+					"agent step %s references step %s without manifest, cannot validate output field %s",
+					step.ID, refStepID, refField,
+				)
+			}
+			if len(refManifest.Output) > 0 {
+				if _, ok := refManifest.Output[refField]; !ok {
+					return fmt.Errorf(
+						"agent step %s references output field %s of step %s, but tool %s does not declare this output field",
+						step.ID, refField, refStepID, refStep.Tool,
+					)
+				}
+			}
 		}
 	}
 	return nil

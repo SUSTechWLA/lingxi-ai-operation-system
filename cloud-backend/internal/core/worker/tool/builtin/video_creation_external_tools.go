@@ -1565,7 +1565,8 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 // must output valid JSON.
 func isStructuredOutputTool(toolName string) bool {
 	switch toolName {
-	case "video_script_generator", "shot_splitter",
+	case "knowledge_researcher", "fact_checker",
+		"video_script_generator", "shot_splitter",
 		"keyframe_prompt_generator", "video_prompt_generator",
 		"script_quality_checker", "shot_quality_checker",
 		"video_prompt_quality_checker", "package_quality_checker":
@@ -1578,10 +1579,35 @@ func isStructuredOutputTool(toolName string) bool {
 func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) string {
 	switch toolName {
 	case "knowledge_researcher":
-		return fmt.Sprintf("你是一个专业的知识研究助手。根据用户指定的主题进行深度知识研究。\n\n主题：%s\n输出要求：%s\n\n按以下结构输出Markdown：1.主题概述与背景 2.关键事实与时间线 3.常见习俗/表现形式 4.文化内涵与演变 5.多个可选讲述角度 6.需要注意的事实风险点。要求内容准确、权威、适合大众理解。", topic, style)
+		return fmt.Sprintf(`你是知识分享视频资料研究员。
+
+任务：
+根据 topic 整理适合短视频口播的事实材料、讲述角度、风险点。
+
+要求：
+1. 不要输出 Markdown。
+2. 只输出 JSON。
+3. 不要编造明确历史细节。
+4. 对不确定内容写入 risks。
+5. facts 应该短句化，适合后续口播稿生成。
+6. storyAngles 给出 3-5 个短视频讲述角度。
+
+输入：
+topic=%s
+style=%s
+
+输出 JSON：
+{
+  "facts": ["事实短句1", "事实短句2", ...],
+  "timeline": [{"date": "时间", "event": "事件"}, ...],
+  "storyAngles": ["讲述角度1", "讲述角度2", ...],
+  "risks": ["需要注意的事实风险点", ...],
+  "sourceNotes": ["来源说明", ...],
+  "summary": "资料整理摘要"
+}`, topic, style)
 
 	case "fact_checker":
-		return fmt.Sprintf("你是一个严格的事实核查员。对已有知识内容进行事实核查。\n\n主题：%s\n\n检查：1.关键事实准确性 2.日期时间正确性 3.人物准确性 4.文化表述恰当性 5.潜在敏感性/争议性表述。输出Markdown，包含核查结果、修正建议和风险提示。", topic)
+		return "你是知识类短视频事实核查员。\n\n任务：\n检查 facts 中是否存在不稳妥、过度简化、容易误导或需要谨慎表达的内容。\n\n要求：\n1. 不要输出 Markdown。\n2. 只输出 JSON。\n3. 保留稳妥事实到 checkedFacts。\n4. 把不确定或争议内容写入 warnings。\n5. 对需要改写的内容写入 corrections。\n\n输出 JSON：\n{\n  \"checkedFacts\": [\"已核查的事实短句\"],\n  \"warnings\": [\"需要谨慎表达的内容\"],\n  \"corrections\": [{\"original\": \"原文\", \"corrected\": \"修正后\", \"reason\": \"修正原因\"}],\n  \"passed\": true,\n  \"summary\": \"核查摘要\"\n}"
 
 	case "video_script_generator":
 		return fmt.Sprintf(`你是短视频口播稿创作专家。

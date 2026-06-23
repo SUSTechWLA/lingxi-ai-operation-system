@@ -26,15 +26,24 @@ parameters:
     description: 原始视频主题
 
 output:
-  content:
-    type: string
-    description: 事实检查报告（Markdown）
   checkedFacts:
-    type: object
-    description: 经过核验的结构化事实
+    type: array
+    description: 已核查的稳妥事实短句列表
   warnings:
     type: array
-    description: 需要关注的风险提示
+    description: 需要谨慎表达或存在争议的内容
+  corrections:
+    type: array
+    description: 需要修正的内容 [{"original": "...", "corrected": "...", "reason": "..."}]
+  passed:
+    type: boolean
+    description: 是否通过事实核查
+  summary:
+    type: string
+    description: 核查摘要
+  content:
+    type: string
+    description: 事实检查报告
 
 costLevel: low
 latencyLevel: medium
@@ -48,11 +57,13 @@ approvalPolicy:
   blocksDownstream: false
   reason: 事实检查结果供用户参考，不强制阻断下游。
   reviewArtifactKinds:
+    - JSON
     - MARKDOWN
 
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
+    - JSON
     - MARKDOWN
   defaultReviewRequired: false
 

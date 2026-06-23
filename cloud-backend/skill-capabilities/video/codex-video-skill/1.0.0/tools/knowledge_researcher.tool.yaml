@@ -26,18 +26,27 @@ parameters:
     description: 输出风格要求（例如"适合大众口播知识分享视频"）
 
 output:
-  content:
-    type: string
-    description: 知识事实整理内容（Markdown）
   facts:
     type: array
-    description: 结构化事实列表
+    description: 结构化事实短句列表，适合后续口播稿生成
+  timeline:
+    type: array
+    description: 关键事件时间线 [{"date": "...", "event": "..."}]
   storyAngles:
     type: array
-    description: 可选讲述角度
+    description: 3-5个短视频讲述角度
   risks:
     type: array
-    description: 需要注意的事实风险点
+    description: 需要注意的事实风险点和不确��内容
+  sourceNotes:
+    type: array
+    description: 资料来源说明
+  summary:
+    type: string
+    description: 资料整理摘要
+  content:
+    type: string
+    description: 知识事实整理内容
 
 costLevel: low
 latencyLevel: medium
@@ -51,11 +60,13 @@ approvalPolicy:
   blocksDownstream: true
   reason: 知识类视频的事实基础需要用户确认后再进入脚本生成。
   reviewArtifactKinds:
+    - JSON
     - MARKDOWN
 
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
+    - JSON
     - MARKDOWN
   defaultReviewRequired: true
 
