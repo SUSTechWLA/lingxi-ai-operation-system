@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 frontend/       # React + Electron UI（桌面端 & Web）
 local-backend/  # 本地轻量 agent（:18080），无数据库、无 Docker，管理用户本地文件/缓存/日志/产物
 cloud-backend/  # 云端 AIOS Core（:8080），Go 单体，PostgreSQL/Redis/Redpanda/MinIO
+hyperframes-render-service/  # HyperFrames 渲染服务（:8787），Node.js/TypeScript，无 CLI 依赖
 ```
 
 ### 核心边界
@@ -85,6 +86,7 @@ cloud-backend/
       health/                           # 就绪健康检查（DB/Redis/Kafka 依赖探测）
       redis/                            # Redis 客户端封装
       outbox/ eventbus/ config/ database/ logger/ model/
+      hyperframes/                       # HyperFrames Render Service HTTP 客户端（替代 CLI）
     agents/                             # 业务 Agent 层
       video/                            # 视频创作（Project/Run/审核/产物）
       bid/                              # 标书生成
@@ -175,6 +177,7 @@ POST /api/agent/runs/:runId/reviews/:reviewId/reject    # 🆕 审核驳回
 - **LLM Skill Router** — 用户一句话自动选择最合适的 Skill + 推断画幅/时长/交付目标
 - **质量门禁体系** — 关键工具自动插入 quality checker → quality gate CONTROL 节点：score≥85 自动通过，70-84 支持自动修复，<70 暂停人工确认
 - **HybridToolRetriever** — 多信号评分从工具库检索 TopK 候选工具供给 LLMPlanner，扣成本/风险惩罚
+- **HyperFrames Render Service** — 独立 Node.js 渲染服务（:8787），通过 `@hyperframes/producer` 程序化渲染 MP4，不再依赖 `npx hyperframes` CLI。Go 端通过 HTTP Client 调用
 - **Outbox 可靠投递** — 事件先写 DB 再异步 relay 到 Kafka，基础设施抖动时不丢事件
 - **事件驱动** — Kafka topics: `ai.node.ready` → `ai.node.result`（含 executed/failed）→ 状态机驱动
 - **版本化产物** — 每个 stage 产物有 version/contentHash/promptHash，支持返工闭环
@@ -189,6 +192,14 @@ VIDEO_CREATION_ENABLED=false   # 视频创作功能（路由 + API）
 LOCAL_RUNNER_ENABLED=false     # Electron 本地 Runner
 MODEL_PROVIDER_MODE=fake       # fake | real
 SKILL_ROOT=skills              # Skill Package 根目录
+
+# HyperFrames Render Service（替代 CLI）
+HYPERFRAMES_MODE=service            # disabled | service
+HYPERFRAMES_SERVICE_URL=http://127.0.0.1:8787
+HYPERFRAMES_TIMEOUT_SEC=1800
+HYPERFRAMES_DEFAULT_FPS=30
+HYPERFRAMES_DEFAULT_QUALITY=standard
+HYPERFRAMES_DEFAULT_FORMAT=mp4
 ```
 
 ## 测试

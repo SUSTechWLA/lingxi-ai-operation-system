@@ -17,6 +17,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/common/crypto"
 	"github.com/tangying-ai/aios-core/internal/core/common/jsonx"
 	"github.com/tangying-ai/aios-core/internal/core/config"
+	"github.com/tangying-ai/aios-core/internal/core/hyperframes"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
@@ -94,12 +95,12 @@ func GetVideoCreationOpenAIConfig() config.OpenAIConfig {
 	return cfg
 }
 
-// --- HyperFrames CLI support ---
+// --- HyperFrames CLI support (deprecated, use service mode below) ---
 
 var hyperFramesCLIPath string
 
 // SetHyperFramesCLIPath sets the path to the HyperFrames CLI binary.
-// If empty, the tools will use exec.LookPath to auto-detect.
+// Deprecated: use SetHyperFramesConfig for service mode instead.
 func SetHyperFramesCLIPath(path string) {
 	hyperFramesCLIPath = path
 }
@@ -134,6 +135,37 @@ func detectHyperFramesCLI() (command string, found bool) {
 func hyperFramesAvailable() bool {
 	_, found := detectHyperFramesCLI()
 	return found
+}
+
+// --- HyperFrames Render Service (replaces CLI) ---
+
+var (
+	hyperFramesConfig hyperframes.Config
+	hyperFramesClient *hyperframes.Client
+)
+
+// SetHyperFramesConfig stores the HyperFrames service configuration and
+// initializes the HTTP client. When Mode is "service", the renderer and
+// project builder tools will call the Render Service HTTP API instead of
+// shelling out to npx.
+func SetHyperFramesConfig(cfg hyperframes.Config) {
+	hyperFramesConfig = cfg
+	if cfg.IsEnabled() {
+		hyperFramesClient = hyperframes.NewClientFromConfig(cfg)
+		zap.L().Info("HyperFrames Render Service client initialized",
+			zap.String("serviceURL", cfg.ServiceURL),
+			zap.String("mode", string(cfg.Mode)),
+			zap.Int("timeoutSec", cfg.TimeoutSec))
+	} else {
+		hyperFramesClient = nil
+		zap.L().Info("HyperFrames Render Service is disabled",
+			zap.String("mode", string(cfg.Mode)))
+	}
+}
+
+// hyperFramesServiceAvailable reports whether the Render Service client is ready.
+func hyperFramesServiceAvailable() bool {
+	return hyperFramesClient != nil && hyperFramesConfig.IsEnabled()
 }
 
 // RuntimeModelProviderConfig holds model-provider settings synced from the
@@ -909,31 +941,78 @@ func executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef st
 }
 
 // executeHyperframesRenderer renders a HyperFrames project to MP4.
+//
+// When HyperFrames mode is "service", it calls the Render Service HTTP API.
+// Otherwise it falls back to the legacy CLI detection (deprecated).
 func executeHyperframesRenderer(stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	projectRef := stringParam(params, "project_ref", "")
+	projectDir := stringParam(params, "projectDir", projectRef)
 
-	cliCmd, cliFound := detectHyperFramesCLI()
 	status := "guidance_only"
-	var renderPath, duration, resolution, codec, fileSize string
+	var renderPath, duration, resolution, codec, fileSize, jobID string
+	serviceUsed := false
 
-	if cliFound && projectRef != "" {
-		zap.L().Info("Attempting HyperFrames render",
+	// Prefer service mode over CLI.
+	if hyperFramesServiceAvailable() {
+		zap.L().Info("HyperFrames render via Render Service",
 			zap.String("taskId", toolCtx.TaskID),
-			zap.String("projectRef", projectRef))
+			zap.String("projectDir", projectDir))
 
-		args := buildHyperFramesRenderArgs(cliCmd, projectRef, toolCtx.TaskID)
-		if output, err := runHyperFramesCommand(cliCmd, args, toolCtx.TaskID); err == nil {
-			renderPath = fmt.Sprintf("output/%s.mp4", toolCtx.TaskID)
-			duration = extractDurationFromOutput(output)
-			resolution = extractResolutionFromOutput(output)
-			codec = "h264"
-			fileSize = extractFileSizeFromOutput(output)
-			status = "rendered"
-			zap.L().Info("HyperFrames render completed",
-				zap.String("path", renderPath))
-		} else {
-			zap.L().Warn("HyperFrames render failed, falling back to guidance",
+		outputPath := fmt.Sprintf("%s/%s.mp4", hyperFramesConfig.OutputRoot, toolCtx.TaskID)
+		ctx, cancel := context.WithTimeout(context.Background(), hyperFramesConfig.Timeout())
+		defer cancel()
+
+		result, err := hyperFramesClient.Render(ctx, hyperframes.RenderRequest{
+			ProjectDir: projectDir,
+			Entry:      stringParam(params, "entry", "index.html"),
+			OutputPath: outputPath,
+			FPS:        hyperFramesConfig.DefaultFPS,
+			Quality:    hyperFramesConfig.DefaultQuality,
+			Format:     hyperFramesConfig.DefaultFormat,
+			Workers:    hyperFramesConfig.MaxWorkers,
+			UseGPU:     hyperFramesConfig.UseGPU,
+		})
+		if err != nil {
+			zap.L().Error("HyperFrames Render Service call failed",
+				zap.String("taskId", toolCtx.TaskID),
 				zap.Error(err))
+			return tool.FailureResult(
+				fmt.Sprintf("HyperFrames Render Service 渲染失败: %v。请检查本地渲染服务是否启动。", err),
+			)
+		}
+
+		renderPath = result.OutputPath
+		jobID = result.JobID
+		duration = fmt.Sprintf("%.1fs", float64(result.DurationMs)/1000.0)
+		status = "rendered"
+		serviceUsed = true
+		zap.L().Info("HyperFrames render completed via service",
+			zap.String("jobId", jobID),
+			zap.String("outputPath", renderPath),
+			zap.Int64("durationMs", result.DurationMs))
+	} else {
+		// Legacy CLI fallback (deprecated, kept for transition).
+		cliCmd, cliFound := detectHyperFramesCLI()
+
+		if cliFound && projectRef != "" {
+			zap.L().Info("Attempting HyperFrames render via CLI (deprecated)",
+				zap.String("taskId", toolCtx.TaskID),
+				zap.String("projectRef", projectRef))
+
+			args := buildHyperFramesRenderArgs(cliCmd, projectRef, toolCtx.TaskID)
+			if output, err := runHyperFramesCommand(cliCmd, args, toolCtx.TaskID); err == nil {
+				renderPath = fmt.Sprintf("output/%s.mp4", toolCtx.TaskID)
+				duration = extractDurationFromOutput(output)
+				resolution = extractResolutionFromOutput(output)
+				codec = "h264"
+				fileSize = extractFileSizeFromOutput(output)
+				status = "rendered"
+				zap.L().Info("HyperFrames render completed via CLI",
+					zap.String("path", renderPath))
+			} else {
+				zap.L().Warn("HyperFrames CLI render failed",
+					zap.Error(err))
+			}
 		}
 	}
 
@@ -945,23 +1024,37 @@ func executeHyperframesRenderer(stage, skillName, brief, instructionRef string, 
 			"codec":      codec,
 			"size":       fileSize,
 			"status":     status,
+			"jobId":      jobID,
 		},
 	}
 
-	content := buildRenderContent(stage, skillName, status, cliFound, renderPath, renderArtifacts)
+	content := buildRenderContent(stage, skillName, status, true, renderPath, renderArtifacts)
 	artifacts := buildRenderArtifacts(stage, skillName, status, renderPath)
 
-	return tool.SuccessResult(map[string]interface{}{
+	resultData := map[string]interface{}{
 		"content":         content,
 		"renderArtifacts": renderArtifacts,
-		"cliAvailable":    cliFound,
-		"renderLogs":      fmt.Sprintf("Status: %s, CLI: %v", status, cliFound),
+		"serviceUsed":     serviceUsed,
+		"renderLogs":      fmt.Sprintf("Status: %s, Service: %v", status, serviceUsed),
 		"diagnostics": map[string]interface{}{
 			"warnings": []string{},
 		},
-		"guidance":  buildRenderGuidance(cliCmd, projectRef, toolCtx.TaskID),
 		"artifacts": artifacts,
-	})
+	}
+
+	if renderPath != "" {
+		resultData["outputPath"] = renderPath
+		resultData["artifact"] = map[string]interface{}{
+			"kind":       "VIDEO",
+			"name":       "final.mp4",
+			"storageRef": fmt.Sprintf("local://%s", renderPath),
+		}
+	}
+	if jobID != "" {
+		resultData["jobId"] = jobID
+	}
+
+	return tool.SuccessResult(resultData)
 }
 
 // --- Helper functions for image asset generation ---

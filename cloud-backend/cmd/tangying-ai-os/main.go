@@ -29,6 +29,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/database"
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/health"
+	"github.com/tangying-ai/aios-core/internal/core/hyperframes"
 	"github.com/tangying-ai/aios-core/internal/core/logger"
 	"github.com/tangying-ai/aios-core/internal/core/media"
 	"github.com/tangying-ai/aios-core/internal/core/model"
@@ -387,9 +388,22 @@ func main() {
 		builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
 		builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
 		builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
+		// HyperFrames Render Service config (replaces CLI dependency).
 		if cfg.Video.HyperFramesCLIPath != "" {
 			builtin.SetHyperFramesCLIPath(cfg.Video.HyperFramesCLIPath)
 		}
+		builtin.SetHyperFramesConfig(hyperframes.Config{
+			Mode:           hyperframes.Mode(cfg.HyperFrames.Mode),
+			ServiceURL:     cfg.HyperFrames.ServiceURL,
+			TimeoutSec:     cfg.HyperFrames.TimeoutSec,
+			DefaultFPS:     cfg.HyperFrames.DefaultFPS,
+			DefaultQuality: cfg.HyperFrames.DefaultQuality,
+			DefaultFormat:  cfg.HyperFrames.DefaultFormat,
+			MaxWorkers:     cfg.HyperFrames.MaxWorkers,
+			UseGPU:         cfg.HyperFrames.UseGPU,
+			ProjectRoot:    cfg.HyperFrames.ProjectRoot,
+			OutputRoot:     cfg.HyperFrames.OutputRoot,
+		})
 		zap.L().Info("ModelGateway initialized for agent planner and video tools",
 			zap.String("mode", cfg.Video.ModelProviderMode))
 	}

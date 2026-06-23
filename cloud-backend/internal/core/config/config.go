@@ -10,19 +10,20 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `mapstructure:",squash"`
-	Postgres PostgresConfig `mapstructure:",squash"`
-	Redis    RedisConfig    `mapstructure:",squash"`
-	Kafka    KafkaConfig    `mapstructure:",squash"`
-	OpenAI   OpenAIConfig   `mapstructure:",squash"`
-	Auth     AuthConfig     `mapstructure:",squash"`
-	Worker   WorkerConfig   `mapstructure:",squash"`
-	MinIO    MinIOConfig    `mapstructure:",squash"`
-	BashTool BashToolConfig `mapstructure:",squash"`
-	Services ServicesConfig `mapstructure:",squash"`
-	Sandbox  SandboxConfig  `mapstructure:",squash"`
-	Video    VideoConfig    `mapstructure:",squash"`
-	Agent    AgentConfig    `mapstructure:",squash"`
+	Server      ServerConfig       `mapstructure:",squash"`
+	Postgres    PostgresConfig     `mapstructure:",squash"`
+	Redis       RedisConfig        `mapstructure:",squash"`
+	Kafka       KafkaConfig        `mapstructure:",squash"`
+	OpenAI      OpenAIConfig       `mapstructure:",squash"`
+	Auth        AuthConfig         `mapstructure:",squash"`
+	Worker      WorkerConfig       `mapstructure:",squash"`
+	MinIO       MinIOConfig        `mapstructure:",squash"`
+	BashTool    BashToolConfig     `mapstructure:",squash"`
+	Services    ServicesConfig     `mapstructure:",squash"`
+	Sandbox     SandboxConfig      `mapstructure:",squash"`
+	Video       VideoConfig        `mapstructure:",squash"`
+	Agent       AgentConfig        `mapstructure:",squash"`
+	HyperFrames HyperFramesConfig  `mapstructure:",squash"`
 }
 
 // AgentConfig controls the dynamic agent runtime.
@@ -40,7 +41,23 @@ type VideoConfig struct {
 	SkillRoot                       string `mapstructure:"SKILL_ROOT"`          // path to legacy skills/ directory
 	SkillCapabilityRoot             string `mapstructure:"SKILL_CAPABILITY_ROOT"`
 	LegacySkillWorkflowAutoRegister bool   `mapstructure:"LEGACY_SKILL_WORKFLOW_AUTOREGISTER"`
-	HyperFramesCLIPath              string `mapstructure:"HYPERFRAMES_CLI_PATH"` // path to hyperframes CLI binary (optional)
+	HyperFramesCLIPath              string `mapstructure:"HYPERFRAMES_CLI_PATH"` // [DEPRECATED] use HyperFramesConfig.Mode=service instead
+}
+
+// HyperFramesConfig controls the HyperFrames Render Service connection.
+// When Mode is "service", the system calls the Render Service HTTP API
+// instead of shelling out to the CLI.
+type HyperFramesConfig struct {
+	Mode           string `mapstructure:"HYPERFRAMES_MODE"`            // "disabled" | "service"
+	ServiceURL     string `mapstructure:"HYPERFRAMES_SERVICE_URL"`     // e.g. http://127.0.0.1:8787
+	TimeoutSec     int    `mapstructure:"HYPERFRAMES_TIMEOUT_SEC"`     // render timeout in seconds
+	DefaultFPS     int    `mapstructure:"HYPERFRAMES_DEFAULT_FPS"`     // default frames per second
+	DefaultQuality string `mapstructure:"HYPERFRAMES_DEFAULT_QUALITY"` // "draft" | "standard" | "high"
+	DefaultFormat  string `mapstructure:"HYPERFRAMES_DEFAULT_FORMAT"`  // "mp4" | "webm"
+	MaxWorkers     int    `mapstructure:"HYPERFRAMES_MAX_WORKERS"`     // max parallel render workers
+	UseGPU         bool   `mapstructure:"HYPERFRAMES_USE_GPU"`         // enable GPU acceleration
+	ProjectRoot    string `mapstructure:"HYPERFRAMES_PROJECT_ROOT"`    // allowed project dir root
+	OutputRoot     string `mapstructure:"HYPERFRAMES_OUTPUT_ROOT"`     // allowed output dir root
 }
 
 type ServerConfig struct {
@@ -190,6 +207,16 @@ func setDefaults() {
 	viper.SetDefault("LEGACY_SKILL_WORKFLOW_AUTOREGISTER", false)
 	viper.SetDefault("AGENT_PLANNER_MODE", "hybrid")
 	viper.SetDefault("AGENT_PLANNER_MAX_TOOLS", 6)
+	viper.SetDefault("HYPERFRAMES_MODE", "disabled")
+	viper.SetDefault("HYPERFRAMES_SERVICE_URL", "http://127.0.0.1:8787")
+	viper.SetDefault("HYPERFRAMES_TIMEOUT_SEC", 1800)
+	viper.SetDefault("HYPERFRAMES_DEFAULT_FPS", 30)
+	viper.SetDefault("HYPERFRAMES_DEFAULT_QUALITY", "standard")
+	viper.SetDefault("HYPERFRAMES_DEFAULT_FORMAT", "mp4")
+	viper.SetDefault("HYPERFRAMES_MAX_WORKERS", 4)
+	viper.SetDefault("HYPERFRAMES_USE_GPU", false)
+	viper.SetDefault("HYPERFRAMES_PROJECT_ROOT", "/data/aios/projects")
+	viper.SetDefault("HYPERFRAMES_OUTPUT_ROOT", "/data/aios/projects")
 
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		viper.SetDefault("OPENAI_API_KEY", apiKey)

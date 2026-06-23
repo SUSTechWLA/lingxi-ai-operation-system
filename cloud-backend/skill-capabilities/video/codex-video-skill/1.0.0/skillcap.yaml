@@ -68,6 +68,10 @@ tools:
   - id: video_prompt_generator
     manifest: tools/video_prompt_generator.tool.yaml
     prompt: prompts/video_prompt_generator.prompt.md
+  - id: hyperframes_project_generator
+    manifest: tools/hyperframes_project_generator.tool.yaml
+  - id: hyperframes_renderer
+    manifest: tools/hyperframes_renderer.tool.yaml
   - id: publish_copy_generator
     manifest: tools/publish_copy_generator.tool.yaml
   - id: video_package_exporter

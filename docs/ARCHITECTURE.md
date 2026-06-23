@@ -34,9 +34,10 @@
 当前代码仓按运行边界拆为：
 
 ```text
-frontend/       # React + Electron UI
-local-backend/  # 本地轻量执行器，无数据库、无 Docker
-cloud-backend/  # 云端 AIOS Core，包含原 Go 编排平台和云端部署
+frontend/                    # React + Electron UI
+local-backend/               # 本地轻量执行器，无数据库、无 Docker
+cloud-backend/               # 云端 AIOS Core，包含原 Go 编排平台和云端部署
+hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript），无 CLI 依赖
 ```
 
 ### 1.2 它解决什么问题
@@ -496,7 +497,8 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `model` + `model/repository` | 数据模型（Task/Node/Context/MediaAsset/ToolManifest）+ pgx 仓储 |
 | `outbox` | `Relay`（100ms ticker）读 outbox 表发 Kafka 成功后删除；`SaveEvent` 写 outbox。v3.1 新增接口抽象层（`EventSaver`/`EventPublisher`/`OutboxStore`）支持内存 mock 测试；Relay 新增指数退避重试 + DLQ 死信队列 |
 | `eventbus` | sarama Producer/Consumer；Topic 常量 |
-| `config` | Viper 加载 .env，`VideoConfig` 控制视频 feature flags |
+| `config` | Viper 加载 .env，`VideoConfig` 控制视频 feature flags；`HyperFramesConfig` 控制渲染服务连接 |
+| `hyperframes` | HyperFrames Render Service HTTP 客户端：`Client`（Health/Render/Lint）、`Config`（Mode/ServiceURL/Timeout/Quality 等）— 替代旧 CLI `exec.Command("npx", "hyperframes")` |
 | `database` | pgx 池 + `RunMigrations`（`CREATE TABLE IF NOT EXISTS` + `ALTER`） |
 | `logger` | Zap dev/prod |
 | `common/llmutil` `common/jsonx` `common/metadata` | OpenAI 客户端、JSON 提取、元数据摘要工具 |
@@ -878,6 +880,51 @@ axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CL
 ### 10.4 幂等
 
 `idempotencyKey = taskId + "-" + nodeId`，作为 Kafka message key 去重；状态转换前检查「已在目标状态则跳过」。
+
+### 10.5 HyperFrames Render Service（渲染服务）
+
+**独立的 Node.js/TypeScript 服务**，提供 HTTP API 来程序化调用 HyperFrames 渲染管线，**不再依赖 `npx hyperframes` CLI**。
+
+**目录：** `hyperframes-render-service/`
+
+**API：**
+
+| 端点 | 方法 | 作用 |
+|------|------|------|
+| `/health` | GET | 就绪检查（Node/FFmpeg/Chromium/Producer 状态） |
+| `/render` | POST | 同步渲染：接收 `projectDir`/`outputPath`/`fps`/`quality`/`format` → 调 `@hyperframes/producer` → 返回 MP4 |
+| `/lint` | POST | 项目检查：扫描 `index.html` 禁止非确定性模式（Date.now/Math.random/fetch） |
+| `/snapshot` | POST | 关键帧快照：在指定时间点截取 PNG（Phase 2） |
+| `/render/stream` | POST | SSE 流式进度推送（Phase 2） |
+| `/jobs/:jobId` | GET | 查询任务状态 |
+
+**安全：** `projectDir`/`outputPath` 白名单校验，只允许访问配置的 `HYPERFRAMES_PROJECT_ROOT` / `HYPERFRAMES_OUTPUT_ROOT`。
+
+**Go 客户端：** `cloud-backend/internal/core/hyperframes/` 封装 HTTP 调用，AIOS 工具通过 `Client.Render()` 触发渲染。
+
+**配置：** `cloud-backend/.env` 中设置：
+```env
+HYPERFRAMES_MODE=service            # disabled | service
+HYPERFRAMES_SERVICE_URL=http://127.0.0.1:8787
+HYPERFRAMES_TIMEOUT_SEC=1800
+HYPERFRAMES_DEFAULT_FPS=30
+HYPERFRAMES_DEFAULT_QUALITY=standard
+HYPERFRAMES_DEFAULT_FORMAT=mp4
+HYPERFRAMES_MAX_WORKERS=4
+HYPERFRAMES_USE_GPU=false
+HYPERFRAMES_PROJECT_ROOT=/data/aios/projects
+HYPERFRAMES_OUTPUT_ROOT=/data/aios/projects
+```
+
+**运行方式：**
+```bash
+# 开发模式
+cd hyperframes-render-service && npm install && npm run dev
+
+# Docker 模式
+docker build -t hyperframes-render-service .
+docker run -p 8787:8787 -v /data/aios/projects:/data/aios/projects hyperframes-render-service
+```
 
 ---
 

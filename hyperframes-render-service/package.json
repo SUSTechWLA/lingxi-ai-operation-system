@@ -1,0 +1,23 @@
+{
+  "name": "hyperframes-render-service",
+  "version": "1.0.0",
+  "description": "HyperFrames Render Service — programmatic video rendering without CLI dependency, called by AIOS Go backend via HTTP",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@hyperframes/core": "latest",
+    "@hyperframes/producer": "latest",
+    "fastify": "^5.0.0",
+    "zod": "^3.23.8",
+    "nanoid": "^5.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

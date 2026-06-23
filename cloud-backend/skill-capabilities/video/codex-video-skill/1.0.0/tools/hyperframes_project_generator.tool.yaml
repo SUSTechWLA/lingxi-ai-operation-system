@@ -1,0 +1,83 @@
+name: hyperframes_project_generator
+description: 根据口播稿、分镜和视频 Prompt 生成 HyperFrames HTML 视频项目目录，输出可直接渲染的 index.html、assets/data.json 和 manifest.json。
+type: builtin_prompt_tool
+version: 1.0.0
+endpoint: builtin://video-creation/hyperframes_project_generator
+timeout: 120
+
+capabilities:
+  - video_creation
+  - hyperframes_project
+  - html_video_composition
+tags:
+  - hyperframes
+  - html
+  - video
+  - project_generation
+
+parameters:
+  topic:
+    type: string
+    required: true
+    description: 视频主题，如"端午节的来历"
+  script:
+    type: string
+    required: true
+    description: 完整口播稿
+  shotList:
+    type: array
+    required: true
+    description: 分镜列表
+  videoPrompts:
+    type: array
+    required: false
+    description: 视频生成提示词
+  style:
+    type: string
+    required: false
+    description: 视频风格描述，如"16:9 非写实动画，中文知识分享"
+  publishCopy:
+    type: object
+    required: false
+    description: 发布文案
+
+output:
+  projectDir:
+    type: string
+    description: HyperFrames 项目目录路径
+  entry:
+    type: string
+    description: 入口 HTML 文件名
+  files:
+    type: array
+    description: 生成的文件列表
+  summary:
+    type: string
+    description: 生成摘要
+
+costLevel: low
+latencyLevel: medium
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: HyperFrames 项目会作为最终视频渲染输入，建议审核后再渲染。
+  reviewArtifactKinds:
+    - HTML
+    - JSON
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - HTML
+    - JSON
+  defaultReviewRequired: true
+
+nextRecommendedTools:
+  - hyperframes_linter
+  - hyperframes_snapshot
+  - hyperframes_renderer

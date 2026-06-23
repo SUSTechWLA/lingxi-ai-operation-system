@@ -84,5 +84,6 @@ artifactPolicy:
 
 nextRecommendedTools:
   - video_prompt_quality_checker
+  - hyperframes_project_generator
   - publish_copy_generator
   - video_package_exporter
