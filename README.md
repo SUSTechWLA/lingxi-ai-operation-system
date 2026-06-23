@@ -1,11 +1,14 @@
 # 躺营 AIOS
 
+> **版本：v3.2** — 动态 Agent Runtime：从自然语言一步生成可执行 DAG，含质量门禁 + 人工审核 + 完整包导出。
+
 AIOS 现在按运行边界拆分为三个主要部分：
 
 ```text
 frontend/       # React + Electron 桌面/Web 前端
 local-backend/  # 本地执行器，无数据库、无 Docker，只处理本地文件/缓存/日志/诊断
 cloud-backend/  # 云端 AIOS Core，负责 LLM/API、配置、编排、云端日志和外部集成
+                #   🆕 Dynamic Agent Runtime: Planner → Guard → Compiler → DAG
 ```
 
 ## 本地用户

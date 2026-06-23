@@ -1,11 +1,14 @@
 # 本地使用说明
 
+> **版本：v3.2** — 桌面端可通过 Dynamic Agent API 直接从自然语言生成视频创作包。
+
 本文面向桌面端用户和交付同学。新的本地形态是：
 
 ```text
 frontend/Electron UI
   -> local-backend local-agent, 127.0.0.1:18080
   -> cloud-backend API, configured by VITE_CLOUD_API_BASE or TANGYING_CLOUD_API_BASE
+     🆕 Dynamic Agent: POST /api/agent/runs（自然语言 → 自动规划 → 执行）
 ```
 
 本地端不启动 PostgreSQL、Redis、Kafka、MinIO，也不要求 Docker。它只负责和用户电脑强相关的事情。

@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **架构版本：v3.2** — Dynamic Agent Runtime (`LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`)，含质量门禁体系和 Artifact Review 闭环。
+
 This repository is split by runtime boundary:
 
 ```text
@@ -55,9 +57,31 @@ bash scripts/build-local-desktop.sh
 
 ```bash
 cd local-backend && go test ./...
-cd ../cloud-backend && go test ./...
+cd ../cloud-backend && go test ./...           # includes agentruntime unit tests
+cd ../cloud-backend && go test -race ./...     # race detector
 cd ../frontend && npm run build
 ```
+
+## Dynamic Agent Runtime (v3.2)
+
+The cloud backend now supports a dynamic agent path that does NOT require workflow_templates:
+
+```text
+POST /api/agent/runs  {"message": "请帮我根据端午节的来历创作一个口播知识分享视频"}
+    → LLMPlanner generates AgentPlan JSON (via ModelGateway)
+    → PlanGuard validates (tools, params, types, references, risk)
+    → PlanCompiler inserts quality gates + approval CONTROL nodes
+    → Transient DAG submitted to Orchestrator
+    → Executes with quality gates blocking on failure, reviews pausing for approval
+    → Artifact reviews synced to artifact_reviews table (PENDING/APPROVED/REJECTED)
+```
+
+Key agent API:
+- `POST /api/agent/runs` — start a dynamic agent run
+- `GET /api/agent/runs/:id` — query run status + plan
+- `GET /api/agent/runs/:id/trace` — DAG execution trace
+- `GET /api/agent/runs/:id/reviews` — list pending reviews
+- `POST /api/agent/runs/:id/reviews/:rid/approve|reject` — approve/reject
 
 ## Boundary Rules
 

@@ -1,7 +1,7 @@
 # 躺营 AIOS 产品架构设计说明文档
 
-> 版本：v3.1（本地执行面 + 云端控制面）
-> 最后更新：2026-06-21
+> 版本：v3.2（动态 Agent Runtime + 质量门禁体系）
+> 最后更新：2026-06-24
 > 适用对象：新加入的后端 / 前端 / 部署工程师
 > 配套文档：[README.md](../README.md)、[AGENTS.md](../AGENTS.md)、[docs/upgrade/video-creation-v1/](upgrade/video-creation-v1/)
 
@@ -53,14 +53,17 @@ cloud-backend/  # 云端 AIOS Core，包含原 Go 编排平台和云端部署
 | 优势 | 说明 |
 |------|------|
 | **DAG 工作流引擎** | 任务=有向无环图，节点=操作（LLM/工具/审核），边=依赖。支持条件分支、重试、暂停/恢复、阶段审核（CONTROL 节点）。 |
+| **动态 Agent Runtime** | `LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`：用户一句话，LLM 自动选择工具、规划步骤、Guard 校验（参数类型/引用合法性/风险等级）、Compiler 自动插入审核节点和质量门禁，生成一次性 DAG 提交执行。不依赖固定 workflow_template。 |
 | **Skill Package 热加载** | 业务流程写成 `skill.yaml` + stages Markdown，启动时自动加载、校验、编译为 DAG 并注册为 Workflow 模板。新增业务线不改引擎代码。 |
 | **Skill→Workflow 自动转换** | `approval_required` 自动生成「执行节点 + 审核节点」双链；`optional` 自动生成 skip 旁路。开发者只写业务语义。 |
 | **自然语言入口路由** | 用户一句话，LLM Router 在可见的 Skill 目录里选出最合适的一个，并推断画幅/时长/交付目标，无需手动选「视频类型」。 |
-| **统一 Model Gateway** | 所有模型调用走指纹缓存（幂等）+ 指数退避重试 + Provider 路由，Fake Provider 让无 API Key 也能跑通端到端测试。 |
-| **版本化产物管理** | 每个 stage 产物有 `version`、`contentHash`、`promptHash`，支持历史回看与「说修改意见 → 生成新版本」的返工闭环。 |
+| **统一 Model Gateway** | 所有模型调用走指纹缓存（幂等）+ 指数退避重试 + Provider 路由，Fake Provider 让无 API Key 也能跑通端到端测试。LLMPlanner、PromptTool、QualityChecker 统一走 ModelGateway。 |
+| **质量门禁体系** | 关键生产工具（口播稿/分镜/视频Prompt）自动插入质量检查器，输出 `passed/score/issues/repairSuggestions`。质量门 CONTROL 节点：score≥85 自动通过，70-84 支持自动修复，<70 暂停人工确认。 |
+| **版本化产物管理** | 每个 stage 产物有 `version`、`contentHash`、`promptHash`，支持历史回看与「说修改意见 → 生成新版本」的返工闭环。`artifact_reviews` 表记录审核状态（PENDING/APPROVED/REJECTED），未审核产物禁止进入下游。 |
 | **沙箱隔离执行** | Rust gRPC 沙箱（setrlimit 内存/CPU/磁盘/PID 限制）执行不受信任的 Bash/Python 代码，危险命令拦截。 |
 | **Electron 桌面 + Web 双形态** | 同一套 React 代码，既能打包成 .dmg/.exe 桌面应用（带本地命令执行能力），也能纯 Web 访问。 |
 | **事件驱动 + Outbox 可靠投递** | 事件先写 DB 再异步 relay 到 Kafka，保证基础设施抖动时不丢事件。 |
+| **HybridToolRetriever** | 多信号评分（能力0.3 + 关键词0.25 + 标签0.2 + 推荐链0.1 + 领域0.15）从工具库中检索 TopK 候选工具供给 LLMPlanner。预留向量检索接口。 |
 
 ### 1.4 当前业务线
 
@@ -96,9 +99,9 @@ cloud-backend/  # 云端 AIOS Core，包含原 Go 编排平台和云端部署
 │                      │ 复用                              │
 │  ┌───────────────────▼─────────────────────────────────┐ │
 │  │           通用引擎层（internal/core）                │ │
-│  │  orchestrator │ workflow │ skillruntime │ artifact   │ │
+│  │  agentruntime │ orchestrator │ workflow │ skillruntime│ │
 │  │  worker/tool  │ modelgateway │ translator │ context  │ │
-│  │  media │ localrunner │ outbox │ eventbus │ config    │ │
+│  │  artifact │ media │ localrunner │ outbox │ eventbus   │ │
 │  │  apispec │ health │ redis │ database │ logger │ model │ │
 │  └───────────────────┬─────────────────────────────────┘ │
 └──────────────────────┬──────────────────────────────────┘
@@ -120,6 +123,37 @@ PostgreSQL  Redis   Redpanda     MinIO    (Qdrant)
 > 这种分层让「加一条新业务线」≈「加一个 Agent 包 + 一个 Skill 包」，不动引擎。
 
 ### 2.3 一次「视频创作」的完整时序
+
+#### 路径 A：Dynamic Agent（推荐）
+
+```
+用户输入一句话
+  → POST /api/agent/runs
+        └─ Runner.Start
+             ├─ LLMPlanner.GeneratePlan（HybridToolRetriever 筛选候选工具）
+             │     └─ LLM 输出 AgentPlan JSON（steps 含 knowledge_researcher →
+             │        fact_checker → video_script_generator → script_quality_checker
+             │        → shot_splitter → video_prompt_generator → video_package_exporter）
+             ├─ PlanGuard.Validate（校验工具存在、参数类型、引用合法性、风险等级）
+             ├─ PlanGuard.ValidateWithWarnings（检测缺失的质量检查器）
+             ├─ PlanCompiler.Compile
+             │     ├─ injectQualityGates（自动插入 quality checker + quality gate CONTROL 节点）
+             │     ├─ compileStep（根据 ApprovalPolicy 插入审核 CONTROL 节点）
+             │     └─ 生成 Transient DAG（TOOL → QUALITY_CHECKER → QUALITY_GATE → CONTROL → 下游）
+             ├─ OrchestratorService.CreateTask + SubmitDAG
+             └─ 写 agent_runs 记录
+  → 事件循环（Kafka）：
+       ai.node.ready  → Worker 执行（调 PromptTool / LLM）
+       ai.node.result → StateMachine 更新状态 → DependencyChecker 放行下游
+       (CONTROL 节点变 READY 时自动 PAUSE，质量门 CONTROL 可 autoApprove)
+  → 用户审核：
+       GET  /api/agent/runs/:runId/reviews（查看审核列表）
+       POST /api/agent/runs/:runId/reviews/:id/approve（审核通过 → artifact_reviews=APPROVED）
+       POST /api/agent/runs/:runId/reviews/:id/reject（驳回）
+  → GET /api/agent/runs/:runId/trace（查看执行追踪）
+```
+
+#### 路径 B：Workflow Template（传统）
 
 ```
 用户输入一句话
@@ -220,9 +254,40 @@ SKIPPED（条件未满足，对下游等同满足）
 **节点类型（`model.NodeType`）：**
 - `TOOL` — 调用工具执行
 - `LLM` — 路由到内置 `llm_api` 工具
-- `CONTROL` — 人工审核节点，变 READY 时暂停任务
+- `CONTROL` — 人工审核节点 / 质量门禁节点，变 READY 时暂停任务
+- `SYSTEM_GATE` — 质量门禁（quality_gate CONTROL），根据 checker 输出 autoApprove 或阻塞
 
 **依赖满足规则：** 父节点为 `SUCCESS` **或** `SKIPPED` 即满足（见 `state.go:228`）。
+
+#### 4.1.5 agentruntime — 动态 Agent Runtime（v3.2 新增）
+
+目录：`internal/core/agentruntime/`。从自然语言到可执行 DAG 的「规划—校验—编译」全链路。
+
+**核心流程：** `Planner → PlanGuard → PlanCompiler → Transient DAG`
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `LLMPlanner` | `llm_planner.go` | LLM 驱动生成 AgentPlan JSON。走 ModelGateway。内置 `AgentPlanJSONSchema` 约束。 |
+| `HeuristicPlanner` | `planner.go` | 启发式选 TopK 工具线性编排，无需 LLM。 |
+| `HybridPlanner` | `llm_planner.go` | LLMPlanner 优先，失败回退 HeuristicPlanner。 |
+| `HybridToolRetriever` | `tool_retriever.go` | 多信号评分检索（能力+关键词+标签+推荐链+领域）扣成本/风险惩罚。 |
+| `PlanGuard` | `plan_guard.go` | 校验工具存在、参数类型、引用表达式含 output schema 字段存在性、风险等级、侧效应、maxToolCalls。 |
+| `PlanCompiler` | `plan_compiler.go` | 编译 AgentPlan→Transient DAG：自动插入审核 CONTROL 节点、quality checker + quality gate CONTROL 节点。 |
+| `Runner` | `runner.go` | 编排 Planner→Guard→Compiler→Orchestrator 全流程。 |
+| `Handler` | `handler.go` | HTTP：`POST/GET /api/agent/runs`，审核 approve/reject，集成 `artifact_reviews` 表。 |
+| `ArtifactReviewStore` | `artifact_review.go` | `artifact_reviews` 表持久化：PENDING→APPROVED/REJECTED。 |
+| `PlanRepairer` | `llm_planner.go` | Guard 失败后 LLM 修复一次，失败则 fallback。 |
+
+**核心 Agent API：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/agent/runs` | 启动 dynamic agent run（message → AgentPlan → DAG → 执行） |
+| GET | `/api/agent/runs/:id` | 查询 run 状态和 plan |
+| GET | `/api/agent/runs/:id/trace` | 获取 DAG 执行追踪 |
+| GET | `/api/agent/runs/:id/reviews` | 列出待审核节点 |
+| POST | `/api/agent/runs/:id/reviews/:reviewId/approve` | 审核通过 |
+| POST | `/api/agent/runs/:id/reviews/:reviewId/reject` | 审核驳回 |
 
 ### 4.2 worker — 工具执行引擎
 

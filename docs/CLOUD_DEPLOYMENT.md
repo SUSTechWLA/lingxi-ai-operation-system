@@ -81,12 +81,28 @@ Web 部署在 nginx 下时，也可以使用同域 `/api`。
 - `/api/health`: liveness，只表示进程和 HTTP 路由仍在响应。
 - `/api/health/ready`: readiness，会检查 PostgreSQL、Redis、Kafka 依赖；Docker Compose 和部署脚本应使用这个端点判断 backend 是否可接流量。
 
+## Dynamic Agent API（v3.2）
+
+不走 workflow_template 的动态 Agent 入口：
+
+```text
+POST /api/agent/runs                                    # 启动 dynamic agent run
+GET  /api/agent/runs/:runId                             # 查询 run 状态和 plan
+GET  /api/agent/runs/:runId/trace                       # 获取 DAG 执行追踪
+GET  /api/agent/runs/:runId/reviews                     # 列出待审核节点
+POST /api/agent/runs/:runId/reviews/:reviewId/approve   # 审核通过
+POST /api/agent/runs/:runId/reviews/:reviewId/reject    # 审核驳回
+```
+
+`POST /api/agent/runs` 接收 `{"message": "..."}` 即可启动完整流程：LLMPlanner → PlanGuard → PlanCompiler → Transient DAG → Orchestrator 执行。
+
 ## 云端日志和诊断
 
 云端保留：
 
 - backend structured logs。
-- task / node trace。
+- task / node trace（含 `agent_runs` 表的 AgentPlan 和执行记录）。
+- `artifact_reviews` 表：PENDING / APPROVED / REJECTED 状态流转，绑定 reviewer 和 timestamps。
 - model call and external tool errors。
 - uploaded local diagnostic packages。
 - artifact metadata: `storage_type=local`、`storage_ref=local://...`、hash、size、版本和 provider/model。
