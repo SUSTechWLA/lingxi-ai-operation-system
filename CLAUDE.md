@@ -2,8 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **权威架构文档：** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 完整的模块说明、数据模型、API 清单、前端架构、基础设施。
+> **权威架构文档：** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 完整的模块说明（含 v3.2 动态 Agent Runtime）、数据模型、API 清单、前端架构、基础设施。
 > 本文档为快速上手指南，详细内容请查阅架构文档。
+
+> **v3.2 核心新增：** Dynamic Agent Runtime — `LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`，从自然语言一步生成可执行 DAG，含质量门禁体系和 Artifact Review 闭环。
 
 ## 系统概览
 
@@ -68,6 +70,7 @@ cloud-backend/
   cmd/tangying-ai-os/main.go           # 入口，路由注册，优雅关闭
   internal/
     core/                               # 通用引擎层（不绑定业务）
+      agentruntime/                     # 🆕 动态 Agent Runtime（Planner→Guard→Compiler→DAG）
       orchestrator/                     # DAG 调度引擎
       workflow/                         # 工作流模板 + Run + Skill→DAG 编译器
       worker/                           # 工具执行引擎（14+ 内置工具 + 沙箱）
@@ -153,11 +156,25 @@ POST /api/local/diagnostics                     # 生成诊断包
 
 产物存储结构：`<DataDir>/artifacts/<projectId>/<artifactId>/content` + `metadata.json`
 
+## 动态 Agent API（v3.2 新增）
+
+```text
+POST /api/agent/runs                                    # 🆕 启动 dynamic agent run（消息 → AgentPlan → DAG → 执行）
+GET  /api/agent/runs/:runId                             # 🆕 查询 run 状态和 plan
+GET  /api/agent/runs/:runId/trace                       # 🆕 获取 DAG 执行追踪
+GET  /api/agent/runs/:runId/reviews                     # 🆕 列出待审核节点（CONTROL + quality_gate）
+POST /api/agent/runs/:runId/reviews/:reviewId/approve   # 🆕 审核通过
+POST /api/agent/runs/:runId/reviews/:reviewId/reject    # 🆕 审核驳回
+```
+
 ## 关键架构概念
 
-- **DAG 工作流引擎** — 任务有向无环图，节点=操作（LLM/工具/审核），边=依赖，支持条件分支、重试、暂停/恢复
+- **DAG 工作流引擎** — 任务有向无环图，节点=操作（LLM/工具/审核/质量门禁），边=依赖，支持条件分支、重试、暂停/恢复
+- **动态 Agent Runtime（v3.2）** — `LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`：用户一句话 → LLM 自动规划步骤 → Guard 校验（参数类型/引用合法性/output schema 字段）→ Compiler 自动插入审核节点和质量门禁 → 一次性 DAG 提交执行。不依赖固定 workflow_template。
 - **Skill Package** — 业务流程写成 `skill.yaml` + stages Markdown，启动时自动编译为 DAG → Workflow 模板
 - **LLM Skill Router** — 用户一句话自动选择最合适的 Skill + 推断画幅/时长/交付目标
+- **质量门禁体系** — 关键工具自动插入 quality checker → quality gate CONTROL 节点：score≥85 自动通过，70-84 支持自动修复，<70 暂停人工确认
+- **HybridToolRetriever** — 多信号评分从工具库检索 TopK 候选工具供给 LLMPlanner，扣成本/风险惩罚
 - **Outbox 可靠投递** — 事件先写 DB 再异步 relay 到 Kafka，基础设施抖动时不丢事件
 - **事件驱动** — Kafka topics: `ai.node.ready` → `ai.node.result`（含 executed/failed）→ 状态机驱动
 - **版本化产物** — 每个 stage 产物有 version/contentHash/promptHash，支持返工闭环
