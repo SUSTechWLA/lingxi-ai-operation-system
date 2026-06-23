@@ -305,16 +305,30 @@ type NodeProgressInfo struct {
 // ToolManifestRecord is the database-persisted tool manifest row.
 // It mirrors tool.ToolManifest for JSONB storage in PostgreSQL.
 type ToolManifestRecord struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Type        string          `json:"type"`
-	Version     string          `json:"version,omitempty"`
-	Endpoint    string          `json:"endpoint,omitempty"`
-	TimeoutMs   int             `json:"timeout_ms,omitempty"`
-	Parameters  json.RawMessage `json:"parameters"`
-	Output      json.RawMessage `json:"output"`
-	Examples    json.RawMessage `json:"examples"`
-	Sandbox     bool            `json:"sandbox"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	Name                 string          `json:"name"`
+	Description          string          `json:"description"`
+	Type                 string          `json:"type"`
+	Version              string          `json:"version,omitempty"`
+	Endpoint             string          `json:"endpoint,omitempty"`
+	TimeoutMs            int             `json:"timeout_ms,omitempty"`
+	Parameters           json.RawMessage `json:"parameters"`
+	Output               json.RawMessage `json:"output"`
+	Examples             json.RawMessage `json:"examples"`
+	Sandbox              bool            `json:"sandbox"`
+	Capabilities         json.RawMessage `json:"capabilities,omitempty"`
+	Tags                 json.RawMessage `json:"tags,omitempty"`
+	CostLevel            string          `json:"cost_level,omitempty"`
+	LatencyLevel         string          `json:"latency_level,omitempty"`
+	RiskLevel            string          `json:"risk_level,omitempty"`
+	SideEffect           bool            `json:"side_effect,omitempty"`
+	Idempotent           bool            `json:"idempotent,omitempty"`
+	ApprovalPolicy       json.RawMessage `json:"approval_policy,omitempty"`
+	ArtifactPolicy       json.RawMessage `json:"artifact_policy,omitempty"`
+	NextRecommendedTools json.RawMessage `json:"next_recommended_tools,omitempty"`
+	FailureModes         json.RawMessage `json:"failure_modes,omitempty"`
+	SkillPackageID       string          `json:"skill_package_id,omitempty"`
+	PromptRef            string          `json:"prompt_ref,omitempty"`
+	ResourceRefs         json.RawMessage `json:"resource_refs,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
 }

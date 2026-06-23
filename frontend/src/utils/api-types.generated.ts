@@ -23,6 +23,48 @@ export interface AIPolishResponse {
 }
 
 /**  */
+// AgentReviewDecisionResponse
+export interface AgentReviewDecisionResponse {
+  code?: number;
+  data?: { reviewId?: string; status?: string };
+  message?: string;
+}
+
+/**  */
+// AgentReviewListResponse
+export interface AgentReviewListResponse {
+  code?: number;
+  data?: { reviews?: { blocksDownstream?: boolean; id: string; nodeId: string; reviewArtifactKinds?: string[]; reviewPhase?: string; reviewReason?: string; status: string; stepId?: string; tool?: string }[]; runId?: string };
+  message?: string;
+}
+
+/**  */
+// AgentRunDetailResponse
+export interface AgentRunDetailResponse {
+  code?: number;
+  data?: { run?: { budget?: { maxCostLevel?: string; maxLLMCalls?: number; maxReplans?: number; maxSteps?: number; maxToolCalls?: number }; createdAt: string; domain?: string; id: string; message: string; metadata?: Record<string, Record<string, unknown>>; plan?: { budget?: { maxCostLevel?: string; maxLLMCalls?: number; maxReplans?: number; maxSteps?: number; maxToolCalls?: number }; domain?: string; goal?: string; mode?: string; steps?: { arguments: Record<string, Record<string, unknown>>; dependsOn?: string[]; expectedOutput?: string[]; id: string; intent?: string; produceArtifact?: boolean; tool: string }[]; stopPolicy?: { stopWhenEnough?: boolean } } | null; status: string; taskId?: string; updatedAt: string; userId?: string }; task?: Record<string, unknown> };
+  message?: string;
+}
+
+/**  */
+// AgentRunStartResponse
+export interface AgentRunStartResponse {
+  code?: number;
+  data?: { plan?: { budget: { maxCostLevel?: string; maxLLMCalls?: number; maxReplans?: number; maxSteps?: number; maxToolCalls?: number }; domain: string; goal: string; mode: string; steps: { arguments: Record<string, Record<string, unknown>>; dependsOn?: string[]; expectedOutput?: string[]; id: string; intent?: string; produceArtifact?: boolean; tool: string }[]; stopPolicy: { stopWhenEnough?: boolean } }; runId?: string; status?: string; taskId?: string };
+  message?: string;
+}
+
+/**  */
+// AgentStartRunRequest
+export interface AgentStartRunRequest {
+  context?: Record<string, Record<string, unknown>>;
+  domain?: string;
+  message: string;
+  mode?: string;
+  userId?: string;
+}
+
+/**  */
 // Artifact
 export interface Artifact {
   contentHash: string;
@@ -425,6 +467,22 @@ export interface ReadinessResponse {
 export interface SessionResponse {
   code?: number;
   data?: { created_at?: string; media_context?: Record<string, unknown>; messages?: Record<string, unknown>[]; session_id?: string; task_ids?: string[]; terminated?: boolean };
+  message?: string;
+}
+
+/**  */
+// SkillCapabilityDetailResponse
+export interface SkillCapabilityDetailResponse {
+  code?: number;
+  data?: { capability?: { activation: { intents?: string[]; keywords?: string[] }; description: string; domain: string; id: string; loadError?: string; name: string; recipe: { mode?: string; path?: string }; resources: { id: string; loadStrategy?: string; path: string; priority?: number; scope?: string; type: string }[]; rootPath?: string; status: string; tools: { id: string; manifest: string; prompt?: string }[]; version: string } };
+  message?: string;
+}
+
+/**  */
+// SkillCapabilityListResponse
+export interface SkillCapabilityListResponse {
+  code?: number;
+  data?: { capabilities?: { activation: { intents?: string[]; keywords?: string[] }; description: string; domain: string; id: string; loadError?: string; name: string; recipe: { mode?: string; path?: string }; resources: { id: string; loadStrategy?: string; path: string; priority?: number; scope?: string; type: string }[]; rootPath?: string; status: string; tools: { id: string; manifest: string; prompt?: string }[]; version: string }[] };
   message?: string;
 }
 

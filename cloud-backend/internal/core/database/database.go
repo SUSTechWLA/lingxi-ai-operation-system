@@ -189,6 +189,77 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    created_at TIMESTAMPTZ DEFAULT NOW(),
 		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS capabilities JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS cost_level VARCHAR(16) DEFAULT 'low';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS latency_level VARCHAR(16) DEFAULT 'medium';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS risk_level VARCHAR(16) DEFAULT 'low';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS side_effect BOOLEAN DEFAULT false;
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS idempotent BOOLEAN DEFAULT true;
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS approval_policy JSONB DEFAULT '{}';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS artifact_policy JSONB DEFAULT '{}';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS next_recommended_tools JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS failure_modes JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS skill_package_id VARCHAR(255);
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS prompt_ref TEXT;
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS resource_refs JSONB DEFAULT '[]';
+
+		CREATE TABLE IF NOT EXISTS agent_runs (
+		    id VARCHAR(64) PRIMARY KEY,
+		    task_id VARCHAR(64),
+		    user_id VARCHAR(64),
+		    domain VARCHAR(128),
+		    message TEXT,
+		    plan_json JSONB,
+		    status VARCHAR(32) NOT NULL,
+		    budget_json JSONB DEFAULT '{}',
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_domain ON agent_runs(domain);
+
+		CREATE TABLE IF NOT EXISTS agent_steps (
+		    id VARCHAR(64) PRIMARY KEY,
+		    run_id VARCHAR(64) NOT NULL,
+		    step_id VARCHAR(128) NOT NULL,
+		    tool_name VARCHAR(255),
+		    status VARCHAR(32) NOT NULL,
+		    input_json JSONB DEFAULT '{}',
+		    output_json JSONB DEFAULT '{}',
+		    artifact_ids JSONB DEFAULT '[]',
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id);
+
+		CREATE TABLE IF NOT EXISTS skill_capabilities (
+		    id VARCHAR(255) PRIMARY KEY,
+		    name VARCHAR(255) NOT NULL,
+		    version VARCHAR(64) NOT NULL,
+		    domain VARCHAR(128),
+		    root_path TEXT,
+		    manifest_json JSONB,
+		    status VARCHAR(32) NOT NULL,
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_skill_capabilities_domain ON skill_capabilities(domain);
+
+		CREATE TABLE IF NOT EXISTS artifact_reviews (
+		    id VARCHAR(64) PRIMARY KEY,
+		    task_id VARCHAR(64) NOT NULL,
+		    node_id VARCHAR(64) NOT NULL,
+		    artifact_id VARCHAR(64),
+		    storage_ref TEXT,
+		    status VARCHAR(32) NOT NULL,
+		    review_reason TEXT,
+		    reviewer_id VARCHAR(64),
+		    review_comment TEXT,
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    reviewed_at TIMESTAMPTZ
+		);
+		CREATE INDEX IF NOT EXISTS idx_artifact_reviews_task ON artifact_reviews(task_id);
 	`
 
 	_, err := pool.Exec(ctx, schema)

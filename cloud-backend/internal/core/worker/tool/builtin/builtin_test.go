@@ -234,6 +234,23 @@ func TestExtractContent_NoChoices(t *testing.T) {
 	}
 }
 
+func TestExtractFinishReason(t *testing.T) {
+	response := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"finish_reason": "length",
+				"message": map[string]interface{}{
+					"content": "partial",
+				},
+			},
+		},
+	}
+
+	if got := extractFinishReason(response); got != "length" {
+		t.Fatalf("expected finish reason length, got %q", got)
+	}
+}
+
 func TestExtractContent_InvalidChoiceFormat(t *testing.T) {
 	response := map[string]interface{}{
 		"choices": []interface{}{"invalid"},

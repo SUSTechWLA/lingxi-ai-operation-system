@@ -5,18 +5,67 @@ import "time"
 // ToolManifest represents the full specification of a tool, used as the knowledge base
 // for AI assistants and external developers to understand how to use or implement tools.
 type ToolManifest struct {
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	Version     string              `json:"version,omitempty"`
-	Author      string              `json:"author,omitempty"`
-	Type        string              `json:"type"`       // "builtin", "http", "grpc", "executable"
-	Endpoint    string              `json:"endpoint,omitempty"` // URL for external tools
-	Timeout     int                 `json:"timeout,omitempty"`
-	Parameters  map[string]ParamDef `json:"parameters"`
-	Output      map[string]ParamDef `json:"output"`
-	Sandbox     bool                `json:"sandbox"`
-	Examples    []ToolExample       `json:"examples,omitempty"`
-	RegisteredAt time.Time          `json:"registeredAt,omitempty"`
+	Name                 string              `json:"name"`
+	Description          string              `json:"description"`
+	Version              string              `json:"version,omitempty"`
+	Author               string              `json:"author,omitempty"`
+	Type                 string              `json:"type"`               // "builtin", "http", "grpc", "executable"
+	Endpoint             string              `json:"endpoint,omitempty"` // URL for external tools
+	Timeout              int                 `json:"timeout,omitempty"`
+	Parameters           map[string]ParamDef `json:"parameters"`
+	Output               map[string]ParamDef `json:"output"`
+	Sandbox              bool                `json:"sandbox"`
+	Examples             []ToolExample       `json:"examples,omitempty"`
+	Capabilities         []string            `json:"capabilities,omitempty"`
+	Tags                 []string            `json:"tags,omitempty"`
+	CostLevel            string              `json:"costLevel,omitempty"`
+	LatencyLevel         string              `json:"latencyLevel,omitempty"`
+	RiskLevel            string              `json:"riskLevel,omitempty"`
+	SideEffect           bool                `json:"sideEffect,omitempty"`
+	Idempotent           bool                `json:"idempotent,omitempty"`
+	ApprovalPolicy       ApprovalPolicy      `json:"approvalPolicy,omitempty"`
+	ArtifactPolicy       ArtifactPolicy      `json:"artifactPolicy,omitempty"`
+	NextRecommendedTools []string            `json:"nextRecommendedTools,omitempty"`
+	FailureModes         []string            `json:"failureModes,omitempty"`
+	SkillPackageID       string              `json:"skillPackageId,omitempty"`
+	PromptRef            string              `json:"promptRef,omitempty"`
+	ResourceRefs         []string            `json:"resourceRefs,omitempty"`
+	RegisteredAt         time.Time           `json:"registeredAt,omitempty"`
+}
+
+const (
+	CostLow    = "low"
+	CostMedium = "medium"
+	CostHigh   = "high"
+
+	LatencyLow    = "low"
+	LatencyMedium = "medium"
+	LatencyHigh   = "high"
+
+	RiskLow    = "low"
+	RiskMedium = "medium"
+	RiskHigh   = "high"
+
+	ApprovalNone             = "none"
+	ApprovalBeforeExecute    = "before_execute"
+	ApprovalAfterArtifact    = "after_artifact"
+	ApprovalBeforeDownstream = "before_downstream"
+	ApprovalBeforeSideEffect = "before_side_effect"
+	ApprovalAlways           = "always"
+)
+
+type ApprovalPolicy struct {
+	Required            bool     `json:"required"`
+	Mode                string   `json:"mode,omitempty"`
+	BlocksDownstream    bool     `json:"blocksDownstream,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	ReviewArtifactKinds []string `json:"reviewArtifactKinds,omitempty"`
+}
+
+type ArtifactPolicy struct {
+	ProduceArtifact       bool     `json:"produceArtifact"`
+	ArtifactKinds         []string `json:"artifactKinds,omitempty"`
+	DefaultReviewRequired bool     `json:"defaultReviewRequired,omitempty"`
 }
 
 type ParamDef struct {

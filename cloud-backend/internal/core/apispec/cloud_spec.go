@@ -23,6 +23,8 @@ func BuildCloudSpec() *Spec {
 		Tag("Chat", "AI assistant conversational dialog").
 		Tag("Tools", "Tool registry management").
 		Tag("Skills", "AI skill catalog and routing").
+		Tag("Skill Capabilities", "Agent capability package catalog").
+		Tag("Agent Runs", "Dynamic agent runtime runs and review gates").
 		Tag("Workflows", "Reusable workflow templates (blueprints)").
 		Tag("Video Projects", "Video creation project CRUD").
 		Tag("Workflow Runs", "Video workflow run lifecycle").
@@ -389,6 +391,50 @@ func BuildCloudSpec() *Spec {
 		PathParam("name", "Skill name", StringSchema()).
 		PathParam("version", "Skill version", StringSchema()).
 		ResponseJSON("200", "Compiled DAG", "DAGResponse")
+
+	// ── Skill Capabilities ──
+	b.Route("GET", "/api/skill-capabilities", "List agent capability packages").
+		Tags("Skill Capabilities").
+		ResponseJSON("200", "Capability packages", "SkillCapabilityListResponse")
+	b.Route("GET", "/api/skill-capabilities/:id", "Get capability package detail").
+		Tags("Skill Capabilities").
+		PathParam("id", "Capability package identifier", StringSchema()).
+		ResponseJSON("200", "Capability package", "SkillCapabilityDetailResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
+
+	// ── Dynamic Agent Runs ──
+	b.Route("POST", "/api/agent/runs", "Start a dynamic agent run from natural language").
+		Tags("Agent Runs").
+		BodyJSON("AgentStartRunRequest", "Agent run request", true).
+		ResponseJSON("200", "Agent run started", "AgentRunStartResponse").
+		ResponseJSON("400", "Invalid plan or request", "ErrorResponse")
+	b.Route("GET", "/api/agent/runs/:runId", "Get dynamic agent run state").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		ResponseJSON("200", "Agent run detail", "AgentRunDetailResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
+	b.Route("GET", "/api/agent/runs/:runId/trace", "Get dynamic agent task trace").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		ResponseJSON("200", "Agent task trace", "TaskDetailResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
+	b.Route("GET", "/api/agent/runs/:runId/reviews", "List review gates for a dynamic agent run").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		ResponseJSON("200", "Review gates", "AgentReviewListResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
+	b.Route("POST", "/api/agent/runs/:runId/reviews/:reviewId/approve", "Approve a dynamic agent review gate").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		PathParam("reviewId", "Review node identifier", StringSchema()).
+		BodyInlineJSON(ObjectSchema(), "Optional review comment", false).
+		ResponseJSON("200", "Approved", "AgentReviewDecisionResponse")
+	b.Route("POST", "/api/agent/runs/:runId/reviews/:reviewId/reject", "Reject a dynamic agent review gate").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		PathParam("reviewId", "Review node identifier", StringSchema()).
+		BodyInlineJSON(ObjectSchema(), "Optional rejection comment", false).
+		ResponseJSON("200", "Rejected", "AgentReviewDecisionResponse")
 
 	// ── Workflows ──
 	b.Route("GET", "/api/workflows", "List workflow templates").

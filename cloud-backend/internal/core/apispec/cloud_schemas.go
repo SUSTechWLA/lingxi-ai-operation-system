@@ -3,9 +3,11 @@ package apispec
 import (
 	bidmodel "github.com/tangying-ai/aios-core/internal/agents/bid/model"
 	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
+	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
 	artifacts "github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	workflow "github.com/tangying-ai/aios-core/internal/core/workflow"
 )
 
@@ -487,6 +489,95 @@ func registerCloudSchemas(b *Builder) {
 			"data": {Schema: &Schema{
 				Type:       "object",
 				Properties: map[string]*SchemaRef{"skill": {Schema: ObjectSchema()}},
+			}},
+		},
+	})
+
+	// ── Skill Capabilities ──
+	b.Schema("SkillCapabilityListResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"capabilities": {Schema: ArraySchema(Reflect(skillcapability.Manifest{}))},
+				},
+			}},
+		},
+	})
+	b.Schema("SkillCapabilityDetailResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"capability": {Schema: Reflect(skillcapability.Manifest{})},
+				},
+			}},
+		},
+	})
+
+	// ── Dynamic Agent Runs ──
+	b.Schema("AgentStartRunRequest", Reflect(agentruntime.StartRunRequest{}))
+	b.Schema("AgentRunStartResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"runId":  {Schema: StringSchema()},
+					"taskId": {Schema: StringSchema()},
+					"status": {Schema: StringSchema()},
+					"plan":   {Schema: Reflect(agentruntime.AgentPlan{})},
+				},
+			}},
+		},
+	})
+	b.Schema("AgentRunDetailResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"run":  {Schema: Reflect(agentruntime.Run{})},
+					"task": {Schema: ObjectSchema()},
+				},
+			}},
+		},
+	})
+	b.Schema("AgentReviewListResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"runId":   {Schema: StringSchema()},
+					"reviews": {Schema: ArraySchema(Reflect(agentruntime.Review{}))},
+				},
+			}},
+		},
+	})
+	b.Schema("AgentReviewDecisionResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"reviewId": {Schema: StringSchema()},
+					"status":   {Schema: StringSchema()},
+				},
 			}},
 		},
 	})

@@ -37,6 +37,15 @@ import {
   reviseArtifact,
   routeSkill,
 } from '../services/api'
+import {
+  buildRunStageDisplays,
+  isStageConfirmed,
+  mergeApprovedStageStatus,
+  mergeRunStageStatuses,
+  mergeTraceNodeStatuses,
+  reviewStatusForStage,
+  type ReviewStatus,
+} from './creatorWorkbenchLogic'
 import type {
   Artifact,
   ArtifactContentResponse,
@@ -227,7 +236,21 @@ const CreatorWorkbenchPage: React.FC = () => {
     const timer = setInterval(async () => {
       try {
         const updated = await fetchWorkflowRun(currentProject.id, currentRun.id)
-        setCurrentRun(updated)
+        let nextRun = updated
+        if (updated.taskId) {
+          try {
+            const trace = await fetchTrace(updated.taskId)
+            nextRun = {
+              ...updated,
+              status: normalizeRunStatusFromTask(updated.status, trace.task.status),
+              stageStatuses: mergeTraceNodeStatuses(updated.stageStatuses, trace.task.nodes),
+            }
+          } catch { /* trace is best-effort for progress freshness */ }
+        }
+        setCurrentRun((previous) => previous && previous.id === nextRun.id ? ({
+          ...nextRun,
+          stageStatuses: mergeRunStageStatuses(previous.stageStatuses, nextRun.stageStatuses),
+        }) : nextRun)
         if (updated.startedAt) {
           setRunElapsed(Math.floor((Date.now() - new Date(updated.startedAt).getTime()) / 1000))
         }
@@ -248,6 +271,10 @@ const CreatorWorkbenchPage: React.FC = () => {
     }, 1000)
     return () => clearInterval(timer)
   }, [currentRun?.startedAt, currentRun?.status])
+
+  useEffect(() => {
+    setConfirmedStages(new Set())
+  }, [currentRun?.id])
   const [approvingStage, setApprovingStage] = useState('')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [selectedArtifactId, setSelectedArtifactId] = useState('')
@@ -256,6 +283,7 @@ const CreatorWorkbenchPage: React.FC = () => {
   const [artifactsLoading, setArtifactsLoading] = useState(false)
   const [revisionMessage, setRevisionMessage] = useState('')
   const [revisingArtifact, setRevisingArtifact] = useState(false)
+  const [confirmedStages, setConfirmedStages] = useState<Set<string>>(() => new Set())
   const [artifactModalOpen, setArtifactModalOpen] = useState(false)
   const [traceOpen, setTraceOpen] = useState(false)
   const [traceLoading, setTraceLoading] = useState(false)
@@ -534,7 +562,19 @@ const CreatorWorkbenchPage: React.FC = () => {
     if (!currentRun || !currentProject) return
     setApprovingStage(stageName)
     setError('')
+    const markConfirmed = () => {
+      setConfirmedStages((previous) => new Set(previous).add(stageName))
+      setArtifactModalOpen(false)
+      setSelectedArtifactId('')
+      setArtifactContent(null)
+    }
+    const isWorkflowApprovalStage = reviewStages.some((stage) => stage.name === stageName)
     try {
+      if (!isWorkflowApprovalStage) {
+        markConfirmed()
+        return
+      }
+
       await approveVideoStage(currentProject.id, stageName, {
         runId: currentRun.id,
         output: {
@@ -542,6 +582,13 @@ const CreatorWorkbenchPage: React.FC = () => {
           source: 'creator-workbench',
         },
       })
+      setCurrentRun((previous) => previous ? ({
+        ...previous,
+        status: previous.status === 'PAUSED' ? 'RUNNING' : previous.status,
+        stageStatuses: mergeApprovedStageStatus(previous.stageStatuses, stageName),
+      }) : previous)
+      markConfirmed()
+      // Close the artifact modal so the user sees the progress panel update.
       window.setTimeout(() => loadArtifacts(currentProject.id), 800)
     } catch (err: any) {
       setError(err?.response?.data?.message || err?.response?.data?.error || err?.message || '确认中间态失败')
@@ -587,6 +634,7 @@ const CreatorWorkbenchPage: React.FC = () => {
 
   const handleOpenArtifact = (artifactId: string) => {
     setSelectedArtifactId(artifactId)
+    setRevisionMessage('')
     setArtifactModalOpen(true)
   }
 
@@ -598,6 +646,11 @@ const CreatorWorkbenchPage: React.FC = () => {
     try {
       const data = await fetchTrace(currentRun.taskId)
       setTraceData(data)
+      setCurrentRun((previous) => previous && previous.taskId === data.task.taskId ? ({
+        ...previous,
+        status: normalizeRunStatusFromTask(previous.status, data.task.status),
+        stageStatuses: mergeTraceNodeStatuses(previous.stageStatuses, data.task.nodes),
+      }) : previous)
     } catch (err: any) {
       setTraceError(err?.response?.data?.message || err?.message || '无法读取制作记录')
       setTraceData(null)
@@ -606,7 +659,8 @@ const CreatorWorkbenchPage: React.FC = () => {
     }
   }
 
-  const canStart = Boolean(brief.trim() && !starting && !loading && !routing)
+  const isRunning = Boolean(currentRun && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(currentRun.status))
+  const canStart = Boolean(brief.trim() && !starting && !loading && !routing && !isRunning)
 
   return (
     <div className="min-h-screen overflow-y-auto bg-[#FFF8E8] text-[#2B1708]">
@@ -625,6 +679,36 @@ const CreatorWorkbenchPage: React.FC = () => {
         </div>
       </header>
 
+      {isRunning && currentRun && (
+        <div className="border-b border-[#D97706]/30 bg-gradient-to-r from-[#FFF7ED] via-[#FFFCF4] to-[#FFF7ED] px-7 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="relative flex h-3 w-3">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#D97706] opacity-60" />
+                <span className="relative inline-flex h-3 w-3 rounded-full bg-[#D97706]" />
+              </span>
+              <span className="text-sm font-semibold text-[#2B1708]">创作线运行中</span>
+              <span className="hidden text-xs text-[#7A6142] sm:inline">
+                {runElapsed > 0 ? `已运行 ${formatElapsed(runElapsed)}` : '正在初始化…'}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="rounded-full bg-[#D97706]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#D97706]">
+                {currentRun.status === 'RUNNING' ? '执行中' : currentRun.status === 'PAUSED' ? '已暂停' : '排队中'}
+              </span>
+              <span className="text-[10px] text-[#7A6142] font-mono hidden sm:inline">Run {currentRun.id.slice(0, 8)}</span>
+              <button
+                type="button"
+                onClick={handleOpenTrace}
+                className="rounded-md border border-[#EED79A] bg-white px-2.5 py-1 text-[10px] font-semibold text-[#7A6142] hover:border-[#D97706] hover:text-[#D97706] transition-colors"
+              >
+                查看详情
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="grid gap-5 p-6 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="space-y-5">
           <div className="rounded-lg border border-[#EED79A] bg-white">
@@ -639,14 +723,17 @@ const CreatorWorkbenchPage: React.FC = () => {
               <textarea
                 value={brief}
                 onChange={(e) => setBrief(e.target.value)}
-                className="min-h-36 w-full resize-y rounded-lg border border-[#EED79A] bg-[#FFFCF4] px-4 py-3 text-base leading-7 outline-none transition focus:border-[#D97706] focus:ring-2 focus:ring-[#D97706]/15"
+                disabled={isRunning || starting}
+                placeholder={isRunning ? '创作线正在运行中…' : undefined}
+                className="min-h-36 w-full resize-y rounded-lg border border-[#EED79A] bg-[#FFFCF4] px-4 py-3 text-base leading-7 outline-none transition focus:border-[#D97706] focus:ring-2 focus:ring-[#D97706]/15 disabled:cursor-not-allowed disabled:bg-[#FFF9ED] disabled:text-[#7A6142]"
               />
               <div className="flex flex-wrap gap-2">
                 {examplePrompts.map((prompt) => (
                   <button
                     key={prompt}
                     onClick={() => setBrief(prompt)}
-                    className="rounded-full border border-[#EED79A] bg-[#FFF9ED] px-3 py-1.5 text-xs text-[#6B5236] transition hover:border-[#D97706] hover:text-[#D97706]"
+                    disabled={isRunning}
+                    className="rounded-full border border-[#EED79A] bg-[#FFF9ED] px-3 py-1.5 text-xs text-[#6B5236] transition hover:border-[#D97706] hover:text-[#D97706] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {prompt}
                   </button>
@@ -662,7 +749,8 @@ const CreatorWorkbenchPage: React.FC = () => {
                       id="aspect-ratio-select"
                       value={aspectRatio}
                       onChange={(e) => setAspectRatio(e.target.value)}
-                      className="mt-0.5 w-full rounded border border-[#EED79A] bg-[#FFFCF4] py-1 pl-1.5 pr-5 text-sm font-semibold text-[#2B1708] outline-none focus:border-[#D97706] focus:ring-1 focus:ring-[#D97706]/20"
+                      disabled={isRunning}
+                      className="mt-0.5 w-full rounded border border-[#EED79A] bg-[#FFFCF4] py-1 pl-1.5 pr-5 text-sm font-semibold text-[#2B1708] outline-none focus:border-[#D97706] focus:ring-1 focus:ring-[#D97706]/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <option value="9:16">9:16 竖屏</option>
                       <option value="16:9">16:9 横屏</option>
@@ -682,20 +770,34 @@ const CreatorWorkbenchPage: React.FC = () => {
                         step={5}
                         value={targetDurationSec}
                         onChange={(e) => setTargetDurationSec(Number(e.target.value) || 60)}
-                        className="w-16 rounded border border-[#EED79A] bg-[#FFFCF4] px-1.5 py-1 text-sm font-semibold text-[#2B1708] outline-none focus:border-[#D97706] focus:ring-1 focus:ring-[#D97706]/20"
+                        disabled={isRunning}
+                        className="w-16 rounded border border-[#EED79A] bg-[#FFFCF4] px-1.5 py-1 text-sm font-semibold text-[#2B1708] outline-none focus:border-[#D97706] focus:ring-1 focus:ring-[#D97706]/20 disabled:cursor-not-allowed disabled:opacity-60"
                       />
                       <span className="text-xs text-[#7A6142]">秒</span>
                     </div>
                   </div>
                 </div>
-                <button
-                  onClick={handleStart}
-                  disabled={!canStart}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#2B1708] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#4A2A0B] disabled:cursor-not-allowed disabled:bg-[#CBB88A]"
-                >
-                  {starting || routing ? <FiRefreshCw className="animate-spin" /> : <FiArrowRight />}
-                  {routing ? '理解中' : '启动创作线'}
-                </button>
+                {isRunning ? (
+                  <div className="inline-flex items-center gap-3 rounded-lg bg-[#FFF7ED] border-2 border-[#D97706] px-5 py-2.5">
+                    <span className="relative flex h-3 w-3">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#D97706] opacity-60" />
+                      <span className="relative inline-flex h-3 w-3 rounded-full bg-[#D97706]" />
+                    </span>
+                    <div className="text-left leading-tight">
+                      <span className="text-sm font-bold text-[#D97706]">创作线运行中</span>
+                      <span className="block text-[10px] text-[#A48B62]">{runElapsed > 0 ? `已运行 ${formatElapsed(runElapsed)}` : '正在初始化…'}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleStart}
+                    disabled={!canStart}
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#2B1708] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#4A2A0B] disabled:cursor-not-allowed disabled:bg-[#CBB88A]"
+                  >
+                    {starting || routing ? <FiRefreshCw className="animate-spin" /> : <FiArrowRight />}
+                    {routing ? '理解中' : starting ? '启动中…' : '启动创作线'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -805,6 +907,8 @@ const CreatorWorkbenchPage: React.FC = () => {
                 selectedId={selectedArtifactId}
                 loading={artifactsLoading}
                 currentRun={currentRun}
+                reviewStages={reviewStages}
+                confirmedStages={confirmedStages}
                 onOpen={handleOpenArtifact}
               />
             </div>
@@ -925,6 +1029,7 @@ const CreatorWorkbenchPage: React.FC = () => {
           revising={revisingArtifact}
           approvingStage={approvingStage}
           currentRun={currentRun}
+          confirmedStages={confirmedStages}
           onRevisionChange={setRevisionMessage}
           onRevise={handleReviseArtifact}
           onApprove={handleApproveStage}
@@ -969,6 +1074,15 @@ function formatElapsed(seconds: number): string {
   return m > 0 ? `${m} 分 ${s} 秒` : `${s} 秒`
 }
 
+const normalizeRunStatusFromTask = (currentStatus: string, taskStatus: string) => {
+  const normalized = taskStatus.toUpperCase()
+  if (normalized === 'SUCCESS') return 'COMPLETED'
+  if (normalized === 'FAILED') return 'FAILED'
+  if (normalized === 'PAUSED') return 'PAUSED'
+  if (normalized === 'RUNNING') return 'RUNNING'
+  return currentStatus
+}
+
 interface RunProgressPanelProps {
   run: WorkflowRun
   elapsed: number
@@ -990,7 +1104,7 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, stage
   }
   const sc = statusConfig[run.status] || statusConfig.PENDING
   const stages = run.stageStatuses || {}
-  const displayStages = buildRunStageDisplays(stageDefinitions, stages)
+  const displayStages = buildRunStageDisplays(stageDefinitions, stages, stageNameMap)
   const totalStages = displayStages.length
   const completedStages = displayStages.filter((stage) => stage.status === 'SUCCEEDED' || stage.status === 'WAITING_APPROVAL').length
   const progressPct = totalStages > 0 ? Math.round((completedStages / totalStages) * 100) : 0
@@ -1029,13 +1143,15 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, stage
         {displayStages.map((stage) => {
           const st = stage.status
           const stageIcon =
-            st === 'SUCCEEDED' || st === 'WAITING_APPROVAL' ? <FiCheckCircle className="w-4 h-4 text-green-500" /> :
+            st === 'SUCCEEDED' ? <FiCheckCircle className="w-4 h-4 text-green-500" /> :
+            st === 'WAITING_APPROVAL' ? <FiClock className="w-4 h-4 text-amber-500" /> :
             st === 'RUNNING' ? <FiCpu className="w-4 h-4 text-blue-500 animate-pulse" /> :
             st === 'FAILED' ? <FiAlertCircle className="w-4 h-4 text-red-500" /> :
             <FiClock className="w-4 h-4 text-gray-300" />
 
           const stageBg =
-            st === 'SUCCEEDED' || st === 'WAITING_APPROVAL' ? 'bg-green-50 border-green-200' :
+            st === 'SUCCEEDED' ? 'bg-green-50 border-green-200' :
+            st === 'WAITING_APPROVAL' ? 'bg-amber-50 border-amber-200' :
             st === 'RUNNING' ? 'bg-blue-50 border-blue-200' :
             st === 'FAILED' ? 'bg-red-50 border-red-200' :
             'bg-gray-50 border-gray-100'
@@ -1082,57 +1198,6 @@ const RunProgressPanel: React.FC<RunProgressPanelProps> = ({ run, elapsed, stage
   )
 }
 
-interface RunStageDisplay {
-  key: string
-  label: string
-  status?: string
-  approvalStage?: string
-}
-
-const buildRunStageDisplays = (
-  stageDefinitions: SkillStage[],
-  stageStatuses: Record<string, string>
-): RunStageDisplay[] => {
-  if (stageDefinitions.length === 0) {
-    return Object.keys(stageStatuses).map((key) => ({
-      key,
-      label: stageNameMap[key] || key,
-      status: stageStatuses[key],
-      approvalStage: key,
-    }))
-  }
-
-  return stageDefinitions.map((stage) => {
-    const nodeIds = stageNodeIds(stage)
-    const status = aggregateStageStatus(nodeIds.map((id) => stageStatuses[id]))
-    return {
-      key: stage.name,
-      label: stageNameMap[stage.name] || stage.name,
-      status,
-      approvalStage: stage.approvalRequired ? stage.name : undefined,
-    }
-  })
-}
-
-const stageNodeIds = (stage: SkillStage) => {
-  const ids: string[] = []
-  if (stage.optional) ids.push(`${stage.name}_skip`)
-  if (stage.approvalRequired || stage.optional) ids.push(`${stage.name}_exec`)
-  ids.push(stage.name)
-  return ids
-}
-
-const aggregateStageStatus = (statuses: Array<string | undefined>) => {
-  if (statuses.includes('WAITING_APPROVAL')) return 'WAITING_APPROVAL'
-  if (statuses.includes('RUNNING')) return 'RUNNING'
-  if (statuses.includes('FAILED')) return 'FAILED'
-  if (statuses.includes('SUCCEEDED')) return 'SUCCEEDED'
-  if (statuses.includes('CANCELLED')) return 'CANCELLED'
-  if (statuses.includes('INVALIDATED')) return 'INVALIDATED'
-  if (statuses.includes('PENDING')) return 'PENDING'
-  return undefined
-}
-
 const PanelHeader: React.FC<PanelHeaderProps> = ({ icon, title, desc }) => (
   <div className="flex items-center gap-3 border-b border-[#EED79A] px-5 py-4">
     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#2B1708] text-white">{icon}</div>
@@ -1176,6 +1241,26 @@ const MiniBadge: React.FC<{ label: string }> = ({ label }) => (
   <span className="rounded-full bg-[#FFF0C6] px-2 py-0.5 text-[10px] text-[#7A6142]">{label}</span>
 )
 
+const ReviewStatusBadge: React.FC<{ status: ReviewStatus }> = ({ status }) => {
+  if (!status) return null
+  const config: Record<Exclude<ReviewStatus, undefined>, { label: string; className: string }> = {
+    CONFIRMED: {
+      label: '已确认',
+      className: 'border-[#16A34A] bg-[#DCFCE7] text-[#047857]',
+    },
+    PENDING_CONFIRMATION: {
+      label: '待确认',
+      className: 'border-[#F59E0B] bg-[#FEF3C7] text-[#B45309]',
+    },
+    RUNNING: {
+      label: '制作中',
+      className: 'border-[#60A5FA] bg-[#DBEAFE] text-[#1D4ED8]',
+    },
+  }
+  const item = config[status]
+  return <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${item.className}`}>{item.label}</span>
+}
+
 const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="rounded-lg border border-[#EED79A] bg-white px-3 py-2">
     <p className="text-[10px] text-[#7A6142]">{label}</p>
@@ -1199,8 +1284,10 @@ const ArtifactWorkbench: React.FC<{
   selectedId: string
   loading: boolean
   currentRun: WorkflowRun | null
+  reviewStages: SkillStage[]
+  confirmedStages: Set<string>
   onOpen: (id: string) => void
-}> = ({ artifacts, selectedId, loading, currentRun, onOpen }) => (
+}> = ({ artifacts, selectedId, loading, currentRun, reviewStages, confirmedStages, onOpen }) => (
   <div className="min-h-[220px] rounded-lg border border-[#EED79A] bg-[#FFFCF4] p-4">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div>
@@ -1219,6 +1306,13 @@ const ArtifactWorkbench: React.FC<{
     <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
       {artifacts.map((artifact) => {
         const selected = artifact.id === selectedId
+        const hasReviewStage = reviewStages.some((stage) => stage.name === artifact.stageName)
+        const reviewStatus = reviewStatusForStage(
+          currentRun?.stageStatuses,
+          artifact.stageName,
+          hasReviewStage,
+          confirmedStages.has(artifact.stageName),
+        )
         return (
           <button
             key={artifact.id}
@@ -1232,7 +1326,10 @@ const ArtifactWorkbench: React.FC<{
               <div>
                 <div className="flex items-start justify-between gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#FFF2C2] text-[#D97706]">{artifactKindIcon(artifact.kind)}</span>
-                  <MiniBadge label={`v${artifact.version}`} />
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    <ReviewStatusBadge status={reviewStatus} />
+                    <MiniBadge label={`v${artifact.version}`} />
+                  </div>
                 </div>
                 <p className="mt-3 text-base font-semibold">{artifactDisplayName(artifact)}</p>
                 <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#7A6142]">{artifactDisplayDescription(artifact)}</p>
@@ -1261,11 +1358,12 @@ const ArtifactReviewModal: React.FC<{
   revising: boolean
   approvingStage: string
   currentRun: WorkflowRun | null
+  confirmedStages: Set<string>
   onRevisionChange: (value: string) => void
   onRevise: () => void
   onApprove: (stageName: string) => void
   onClose: () => void
-}> = ({ content, loading, history, reviewStages, revisionMessage, revising, approvingStage, currentRun, onRevisionChange, onRevise, onApprove, onClose }) => {
+}> = ({ content, loading, history, reviewStages, revisionMessage, revising, approvingStage, currentRun, confirmedStages, onRevisionChange, onRevise, onApprove, onClose }) => {
   const artifact = content?.artifact
   return (
     <div className="fixed inset-0 z-50 bg-[#2B1708]/60 p-3 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true">
@@ -1302,6 +1400,7 @@ const ArtifactReviewModal: React.FC<{
             revising={revising}
             approvingStage={approvingStage}
             currentRun={currentRun}
+            confirmedStages={confirmedStages}
             onRevisionChange={onRevisionChange}
             onRevise={onRevise}
             onApprove={onApprove}
@@ -1331,7 +1430,36 @@ const ArtifactRenderer: React.FC<{ content: ArtifactContentResponse }> = ({ cont
   if (artifact.kind === 'AUDIO') {
     return <AudioArtifact content={content.content} mediaUrls={mediaUrls} />
   }
+  if (artifact.kind === 'JSON') {
+    return <JsonArtifact content={content.content} />
+  }
   return <ReadableArtifact artifact={artifact} content={content.content} />
+}
+
+const JsonArtifact: React.FC<{ content: unknown }> = ({ content }) => {
+  const formatted = useMemo(() => {
+    if (typeof content === 'string') {
+      const formattedStr = formatJsonString(content)
+      if (formattedStr !== null) return formattedStr
+    }
+    if (content && typeof content === 'object') {
+      try { return JSON.stringify(content, null, 2) }
+      catch { /* fall through */ }
+    }
+    return String(content ?? '')
+  }, [content])
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-[#EED79A] bg-[#0E1116] shadow-sm">
+      <div className="flex items-center gap-2 border-b border-[#EED79A]/30 px-4 py-2">
+        <FiFileText className="text-[#D97706]" size={14} />
+        <span className="text-xs font-semibold text-[#EED79A]">JSON</span>
+      </div>
+      <pre className="max-h-[560px] overflow-auto p-4 text-sm leading-6 text-[#E6DBB5] font-mono whitespace-pre-wrap">
+        {formatted}
+      </pre>
+    </div>
+  )
 }
 
 const MarkdownDocument: React.FC<{ text: string }> = ({ text }) => (
@@ -1473,6 +1601,23 @@ const AudioArtifact: React.FC<{ content: unknown; mediaUrls: string[] }> = ({ co
 const ReadableArtifact: React.FC<{ artifact: Artifact; content: unknown }> = ({ artifact, content }) => {
   const record = asRecord(content)
   if (!record) {
+    if (Array.isArray(content) || (content && typeof content === 'object')) {
+      const formatted = (() => {
+        try { return JSON.stringify(content, null, 2) }
+        catch { return String(content ?? '') }
+      })()
+      return (
+        <div className="overflow-hidden rounded-lg border border-[#EED79A] bg-[#0E1116] shadow-sm">
+          <div className="flex items-center gap-2 border-b border-[#EED79A]/30 px-4 py-2">
+            <FiFileText className="text-[#D97706]" size={14} />
+            <span className="text-xs font-semibold text-[#EED79A]">JSON</span>
+          </div>
+          <pre className="max-h-[560px] overflow-auto p-4 text-sm leading-6 text-[#E6DBB5] font-mono whitespace-pre-wrap">
+            {formatted}
+          </pre>
+        </div>
+      )
+    }
     return <MarkdownDocument text={safeString(content)} />
   }
 
@@ -1517,8 +1662,19 @@ const PublishCopyView: React.FC<{ record: Record<string, unknown> }> = ({ record
 
 const ReadableValue: React.FC<{ value: unknown; level?: number }> = ({ value, level = 0 }) => {
   if (value == null || value === '') return null
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+  if (typeof value === 'number' || typeof value === 'boolean') {
     return <p className="whitespace-pre-wrap text-sm leading-7 text-[#3B210B]">{String(value)}</p>
+  }
+  if (typeof value === 'string') {
+    const formatted = formatJsonString(value)
+    if (formatted !== null) {
+      return (
+        <pre className="max-h-64 overflow-auto rounded border border-[#EED79A] bg-[#0E1116] p-3 text-xs leading-5 text-[#E6DBB5] font-mono whitespace-pre-wrap">
+          {formatted}
+        </pre>
+      )
+    }
+    return <p className="whitespace-pre-wrap text-sm leading-7 text-[#3B210B]">{value}</p>
   }
   if (Array.isArray(value)) {
     return (
@@ -1560,44 +1716,60 @@ const ArtifactRevisionPanel: React.FC<{
   revising: boolean
   approvingStage: string
   currentRun: WorkflowRun | null
+  confirmedStages: Set<string>
   onRevisionChange: (value: string) => void
   onRevise: () => void
   onApprove: (stageName: string) => void
-}> = ({ content, history, reviewStages, revisionMessage, revising, approvingStage, currentRun, onRevisionChange, onRevise, onApprove }) => {
+}> = ({ content, history, reviewStages, revisionMessage, revising, approvingStage, currentRun, confirmedStages, onRevisionChange, onRevise, onApprove }) => {
   const stageName = content?.artifact.stageName
   const reviewStage = stageName ? reviewStages.find((stage) => stage.name === stageName) : undefined
+  const stageApproved = isStageConfirmed(currentRun?.stageStatuses, stageName, Boolean(reviewStage), Boolean(stageName && confirmedStages.has(stageName)))
+
   return (
     <div className="min-h-0 overflow-y-auto border-t border-[#EED79A] bg-white p-4 lg:border-l lg:border-t-0">
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        <FiMessageSquare />
-        对这份产物说修改意见
-      </div>
-      <p className="mt-2 text-xs leading-5 text-[#7A6142]">像给图片补充描述一样，直接说不满意哪里，系统会生成新版本并保留历史。</p>
-      <textarea
-        value={revisionMessage}
-        onChange={(event) => onRevisionChange(event.target.value)}
-        disabled={!content || revising}
-        className="mt-3 min-h-32 w-full resize-y rounded-lg border border-[#EED79A] bg-[#FFFCF4] px-3 py-2 text-sm leading-6 outline-none focus:border-[#D97706] focus:ring-2 focus:ring-[#D97706]/15 disabled:bg-[#FFF0C6]"
-        placeholder="例如：开头更有冲突感；把屈原和龙舟关系讲清楚；标题更像小红书知识号。"
-      />
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          onClick={onRevise}
-          disabled={!content || !revisionMessage.trim() || revising}
-          className="inline-flex items-center gap-2 rounded-lg bg-[#2B1708] px-3 py-2 text-xs font-semibold text-white disabled:bg-[#CBB88A]"
-        >
-          {revising ? <FiRefreshCw className="animate-spin" /> : <FiRefreshCw />}
-          生成返工版本
-        </button>
-        <button
-          onClick={() => stageName && onApprove(stageName)}
-          disabled={!currentRun || !reviewStage || approvingStage === stageName}
-          className="inline-flex items-center gap-2 rounded-lg border border-[#EED79A] bg-white px-3 py-2 text-xs font-semibold text-[#2B1708] disabled:text-[#A48B62]"
-        >
-          <FiCheckCircle />
-          {approvingStage === stageName ? '确认中' : '确认通过'}
-        </button>
-      </div>
+      {stageApproved ? (
+        <div className="flex flex-col items-center justify-center py-8 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#ECFDF3]">
+            <FiCheckCircle className="text-[#00A86B] h-6 w-6" />
+          </div>
+          <p className="mt-3 text-sm font-semibold text-[#2B1708]">已确认</p>
+          <p className="mt-1 text-xs text-[#7A6142]">该阶段已确认，无法再次对话返工或修改。</p>
+          <p className="mt-1 text-[11px] text-[#A48B62]">如需修改，请等待流水线完成后再发起新创作线。</p>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <FiMessageSquare />
+            对这份产物说修改意见
+          </div>
+          <p className="mt-2 text-xs leading-5 text-[#7A6142]">确认通过前可以继续对话返工；确认后该阶段会锁定。</p>
+          <textarea
+            value={revisionMessage}
+            onChange={(event) => onRevisionChange(event.target.value)}
+            disabled={!content || revising}
+            className="mt-3 min-h-32 w-full resize-y rounded-lg border border-[#EED79A] bg-[#FFFCF4] px-3 py-2 text-sm leading-6 outline-none focus:border-[#D97706] focus:ring-2 focus:ring-[#D97706]/15 disabled:bg-[#FFF0C6]"
+            placeholder="例如：开头更有冲突感；把屈原和龙舟关系讲清楚；标题更像小红书知识号。"
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={onRevise}
+              disabled={!content || !revisionMessage.trim() || revising}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#2B1708] px-3 py-2 text-xs font-semibold text-white disabled:bg-[#CBB88A]"
+            >
+              {revising ? <FiRefreshCw className="animate-spin" /> : <FiRefreshCw />}
+              生成返工版本
+            </button>
+            <button
+              onClick={() => stageName && onApprove(stageName)}
+              disabled={!currentRun || !stageName || approvingStage === stageName}
+              className="inline-flex items-center gap-2 rounded-lg border border-[#16A34A] bg-[#DCFCE7] px-3 py-2 text-xs font-bold text-[#047857] hover:bg-[#BBF7D0] disabled:border-[#EED79A] disabled:bg-white disabled:text-[#A48B62]"
+            >
+              <FiCheckCircle />
+              {approvingStage === stageName ? '确认中' : '确认通过'}
+            </button>
+          </div>
+        </>
+      )}
       <div className="mt-5">
         <p className="text-xs font-semibold text-[#7A6142]">版本历史</p>
         <div className="mt-2 space-y-2">
@@ -1840,8 +2012,23 @@ const readField = (value: unknown, key: string) => {
   return undefined
 }
 
+const formatJsonString = (value: string): string | null => {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return null
+  }
+}
+
 const safeString = (value: unknown, fallback = ''): string => {
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') {
+    const formatted = formatJsonString(value)
+    if (formatted !== null) return formatted
+    return value
+  }
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (value && typeof value === 'object') {
     try { return JSON.stringify(value, null, 2) }

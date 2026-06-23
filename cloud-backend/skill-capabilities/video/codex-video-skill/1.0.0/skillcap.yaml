@@ -1,0 +1,61 @@
+id: codex-video-skill
+name: Codex 视频创作能力包
+version: 1.0.0
+domain: video_creation
+description: Codex 沉淀的视频创作能力，用于生成口播稿、分镜和视频提示词。
+
+activation:
+  intents:
+    - video_creation
+    - script_generation
+    - storyboard_generation
+    - video_prompt_generation
+  keywords:
+    - 视频
+    - 口播
+    - 分镜
+    - shot
+    - prompt
+    - 小红书
+    - 短视频
+
+resources:
+  - id: global_rules
+    type: rule
+    path: rules/global.md
+    scope: "*"
+    load_strategy: full
+    priority: 100
+  - id: script_rules
+    type: rule
+    path: rules/script_rules.md
+    scope: video_script_generator
+    load_strategy: full
+    priority: 90
+  - id: shot_rules
+    type: rule
+    path: rules/shot_rules.md
+    scope: shot_splitter
+    load_strategy: full
+    priority: 90
+  - id: video_prompt_rules
+    type: rule
+    path: rules/video_prompt_rules.md
+    scope: video_prompt_generator
+    load_strategy: full
+    priority: 90
+
+tools:
+  - id: video_script_generator
+    manifest: tools/video_script_generator.tool.yaml
+    prompt: prompts/script_generator.prompt.md
+  - id: shot_splitter
+    manifest: tools/shot_splitter.tool.yaml
+    prompt: prompts/shot_splitter.prompt.md
+  - id: video_prompt_generator
+    manifest: tools/video_prompt_generator.tool.yaml
+    prompt: prompts/video_prompt_generator.prompt.md
+
+recipe:
+  path: recipe.yaml
+  mode: advisory

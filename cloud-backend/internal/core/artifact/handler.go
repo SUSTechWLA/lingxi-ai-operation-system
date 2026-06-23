@@ -3,7 +3,10 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,14 +17,30 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
 )
 
+// ReviseLLMFunc is called to generate revised content via an LLM.
+// systemPrompt provides the stage instruction context; userPrompt contains
+// the original content and the user's revision instruction.
+type ReviseLLMFunc func(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+
 type Handler struct {
 	service  *Service
 	runRepo  *workflow.RunRepository
 	nodeRepo modelRepo.NodeRepo
+
+	// Revision support — set via SetRevisionConfig.
+	skillRoot string
+	reviseLLM ReviseLLMFunc
 }
 
 func NewHandler(service *Service, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
 	return &Handler{service: service, runRepo: runRepo, nodeRepo: nodeRepo}
+}
+
+// SetRevisionConfig wires the skill root path and LLM call function needed for
+// the /artifacts/:id/revise endpoint to actually process revisions.
+func (h *Handler) SetRevisionConfig(skillRoot string, llm ReviseLLMFunc) {
+	h.skillRoot = skillRoot
+	h.reviseLLM = llm
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
@@ -110,7 +129,36 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 		return
 	}
 
-	revision, err := h.service.CreateArtifact(c.Request.Context(), BuildRevisionRequest(base, req.Message, nil))
+	// 1. Resolve the original content.
+	originalContent := h.resolveOriginalContent(c.Request.Context(), base)
+	if originalContent == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无法读取原始产物内容，请确保产物已生成后再返工", "data": nil})
+		return
+	}
+
+	// 2. Build the stage instruction context.
+	stageInstruction := h.readStageInstruction(base)
+	systemPrompt := buildRevisionSystemPrompt(base.StageName, stageInstruction)
+	userPrompt := fmt.Sprintf("原始内容：\n\n%s\n\n---\n\n修改意见：\n%s\n\n请根据修改意见重新生成完整内容，保持原有的格式结构。", originalContent, req.Message)
+
+	// 3. Call the LLM to generate revised content.
+	var revisedData []byte
+	if h.reviseLLM != nil {
+		revisedText, err := h.reviseLLM(c.Request.Context(), systemPrompt, userPrompt)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "返工生成失败: " + err.Error(), "data": nil})
+			return
+		}
+		revisedData = []byte(revisedText)
+	} else {
+		// Fallback: embed the revision instruction in a local-only record.
+		revisedData = buildLocalRevisionData(base, req.Message)
+	}
+
+	// 4. Create the revision artifact with inline content.
+	revisionReq := BuildRevisionRequest(base, req.Message, revisedData)
+	revisionReq.StorageType = StorageInline // store the LLM response inline
+	revision, err := h.service.CreateArtifact(c.Request.Context(), revisionReq)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
@@ -123,6 +171,72 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 		"mediaUrl":  mediaURL,
 		"mediaUrls": mediaURLs,
 	}})
+}
+
+// resolveOriginalContent returns the full original artifact content as a string.
+func (h *Handler) resolveOriginalContent(ctx context.Context, a *Artifact) string {
+	// If inline content exists, use it.
+	if strings.TrimSpace(a.InlineJSON) != "" {
+		return a.InlineJSON
+	}
+	// Try hydrating from the workflow node output.
+	if hydrated, ok := h.hydrateLocalTextArtifactContent(ctx, a); ok {
+		return string(hydrated)
+	}
+	// Fallback: use the artifact content helper result.
+	content, _, _ := artifactContent(a)
+	return stringifyContent(content)
+}
+
+// readStageInstruction reads the stage instruction markdown file for the given artifact.
+func (h *Handler) readStageInstruction(a *Artifact) string {
+	if h.skillRoot == "" || a.StageName == "" {
+		return ""
+	}
+	// Look for <skillRoot>/<anything>/<version>/stages/<stageName>.md
+	// Walk the skill root to find the matching stage file.
+	entries, err := os.ReadDir(h.skillRoot)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Try version subdirectories
+		versions, err := os.ReadDir(filepath.Join(h.skillRoot, entry.Name()))
+		if err != nil {
+			continue
+		}
+		for _, ver := range versions {
+			if !ver.IsDir() {
+				continue
+			}
+			stagePath := filepath.Join(h.skillRoot, entry.Name(), ver.Name(), "stages", a.StageName+".md")
+			if data, err := os.ReadFile(stagePath); err == nil {
+				return string(data)
+			}
+		}
+	}
+	return ""
+}
+
+func buildRevisionSystemPrompt(stageName string, stageInstruction string) string {
+	prompt := fmt.Sprintf(`你是一个专业的内容返工助手，正在帮助用户修改「%s」阶段的产物。
+
+重要规则：
+- 严格根据用户的修改意见，在原始内容的基础上进行修改
+- 保持原始内容的整体结构和格式风格
+- 只修改用户明确要求修改的部分，不要擅自改动其他内容
+- 如果原始内容是 Markdown 格式，输出 Markdown
+- 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
+- 不要引入原始内容中没有的新字段、新章节或额外内容
+- 输出完整内容，不要省略或截断`, stageName)
+
+	if stageInstruction != "" {
+		prompt += "\n\n阶段说明（参考上下文）：\n" + stageInstruction
+	}
+	return prompt
 }
 
 func (h *Handler) materializeProject(ctx context.Context, projectID string) error {

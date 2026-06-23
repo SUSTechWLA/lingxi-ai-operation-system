@@ -19,6 +19,7 @@ import (
 	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
 	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
+	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
 	"github.com/tangying-ai/aios-core/internal/core/apispec"
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/auth"
@@ -32,10 +33,15 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/media"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/openai"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/stability"
 	orchestratorHandler "github.com/tangying-ai/aios-core/internal/core/orchestrator/handler"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
 	redisClient "github.com/tangying-ai/aios-core/internal/core/redis"
+	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	translatorHandler "github.com/tangying-ai/aios-core/internal/core/translator/handler"
 	translatorSvc "github.com/tangying-ai/aios-core/internal/core/translator/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
@@ -150,6 +156,21 @@ func main() {
 	if err := toolManifestSvc.SyncBuiltinTools(ctx); err != nil {
 		zap.L().Warn("Failed to sync builtin tools to DB", zap.Error(err))
 	}
+
+	skillCapabilityReg, capabilityToolManifests, skillCapErrs := skillcapability.LoadCapabilities(cfg.Video.SkillCapabilityRoot)
+	for _, err := range skillCapErrs {
+		zap.L().Warn("Skill capability load error", zap.Error(err))
+	}
+	for _, manifest := range capabilityToolManifests {
+		if err := toolManifestSvc.RegisterManifest(ctx, manifest); err != nil {
+			zap.L().Warn("Failed to register skill capability tool",
+				zap.String("name", manifest.Name),
+				zap.Error(err))
+		}
+	}
+	zap.L().Info("Skill capability registry initialized",
+		zap.Int("capabilities", len(skillCapabilityReg.List())),
+		zap.Int("tools", len(capabilityToolManifests)))
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL, toolManifestSvc)
@@ -340,6 +361,18 @@ func main() {
 		skillSessionManager, skillPlanService, skillResultAssembler, mediaSvc,
 	).RegisterRoutes(r)
 	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
+	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r)
+
+	agentRunRepo := agentruntime.NewRepository(pool)
+	agentPlanner := buildAgentPlanner(cfg, toolRegistry)
+	agentRunner := agentruntime.NewRunner(
+		orchestratorService,
+		agentRunRepo,
+		agentPlanner,
+		agentruntime.NewPlanGuard(toolRegistry),
+		agentruntime.NewPlanCompiler(toolRegistry),
+	)
+	agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).RegisterRoutes(r)
 
 	// Bid (tender) generation module
 	bidRepository := bidRepo.NewBidRepository(pool)
@@ -370,6 +403,24 @@ func main() {
 			zap.L().Info("HyperFrames CLI path configured",
 				zap.String("path", cfg.Video.HyperFramesCLIPath))
 		}
+
+		// Initialize model gateway for image generation.
+		// Providers: openai (DALL-E), stability (Stable Diffusion), fake (dev/test).
+		gw := modelgateway.NewGateway(cfg.Video.ModelProviderMode)
+		if cfg.Video.ModelProviderMode == "real" {
+			switch cfg.Video.ImageProvider {
+			case "stability":
+				gw.RegisterProvider(stability.NewProvider(), modelgateway.CapTextToImage)
+				zap.L().Info("Image generation provider: stability (Stable Diffusion)")
+			default:
+				gw.RegisterProvider(openai.NewProvider(), modelgateway.CapTextToImage)
+				zap.L().Info("Image generation provider: openai (DALL-E)")
+			}
+		} else {
+			gw.RegisterProvider(fake.NewProvider(), modelgateway.CapTextToImage)
+			zap.L().Info("Image generation provider: fake (dev/test fixtures)")
+		}
+		builtin.SetModelGateway(gw)
 
 		// Runtime model-provider config — synced from frontend Desktop page, persisted to disk
 		modelProviderHandler := func(c *gin.Context) {
@@ -436,30 +487,35 @@ func main() {
 		skillHandler.RegisterRoutes(r)
 		zap.L().Info("Skill runtime registered", zap.Int("skills_loaded", len(skillReg.List())))
 
-		// Auto-register each loaded skill as a workflow template
-		for _, skill := range skillReg.List() {
-			if skill.Health != skillruntime.HealthHealthy {
-				continue
+		if cfg.Video.LegacySkillWorkflowAutoRegister {
+			// Legacy compatibility only: dynamic agent runs are the primary path,
+			// so Skill packages are no longer forced into workflow_templates.
+			for _, skill := range skillReg.List() {
+				if skill.Health != skillruntime.HealthHealthy {
+					continue
+				}
+				dag, err := workflow.CompileSkillToDAG(skill)
+				if err != nil {
+					zap.L().Warn("Skill compile failed", zap.String("skill", skill.Name), zap.Error(err))
+					continue
+				}
+				templateID := workflow.TemplateIDForSkill(skill.Name, skill.Version)
+				tmpl, err := workflowService.Upsert(ctx, &workflow.CreateTemplateRequest{
+					ID:          templateID,
+					Version:     skill.Version,
+					Name:        skill.Name + "-workflow",
+					Description: skill.Description,
+					Category:    skill.Category,
+					DAG:         dag,
+				})
+				if err != nil {
+					zap.L().Warn("Auto-register workflow failed", zap.String("skill", skill.Name), zap.Error(err))
+				} else {
+					zap.L().Info("Auto-registered workflow", zap.String("id", tmpl.ID), zap.String("skill", skill.Name+"@"+skill.Version))
+				}
 			}
-			dag, err := workflow.CompileSkillToDAG(skill)
-			if err != nil {
-				zap.L().Warn("Skill compile failed", zap.String("skill", skill.Name), zap.Error(err))
-				continue
-			}
-			templateID := workflow.TemplateIDForSkill(skill.Name, skill.Version)
-			tmpl, err := workflowService.Upsert(ctx, &workflow.CreateTemplateRequest{
-				ID:          templateID,
-				Version:     skill.Version,
-				Name:        skill.Name + "-workflow",
-				Description: skill.Description,
-				Category:    skill.Category,
-				DAG:         dag,
-			})
-			if err != nil {
-				zap.L().Warn("Auto-register workflow failed", zap.String("skill", skill.Name), zap.Error(err))
-			} else {
-				zap.L().Info("Auto-registered workflow", zap.String("id", tmpl.ID), zap.String("skill", skill.Name+"@"+skill.Version))
-			}
+		} else {
+			zap.L().Info("Legacy skill-to-workflow auto-register disabled; dynamic agent runtime is primary")
 		}
 
 		// Video Projects
@@ -469,12 +525,51 @@ func main() {
 
 		// Workflow Runs
 		workflowRunRepo := workflow.NewRunRepository(pool)
+		// Wire the state machine to sync node statuses to the workflow run's
+		// stage_statuses JSONB so the frontend progress panel shows live status.
+		stateMachine.SetStageStatusSyncer(&runStatusSyncer{runRepo: workflowRunRepo})
 		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService)
 		stageApprovalSvc := workflow.NewStageApprovalService(workflowRunRepo, nodeRepo, stateMachine)
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).RegisterRoutes(r)
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
-		artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo).RegisterRoutes(r)
+		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo)
+		// Wire LLM-based revision support so the /artifacts/:id/revise endpoint
+		// can actually call the LLM with original content + revision instruction.
+		artifactHandler.SetRevisionConfig(cfg.Video.SkillRoot, func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+			effectiveCfg := builtin.GetVideoCreationOpenAIConfig()
+			// Also try to pull config from the local desktop agent, matching
+			// the behavior of executeSkillStageAgent (the workflow LLM call path).
+			if localCfg, ok := builtin.TryFetchLocalAgentConfig(); ok {
+				if localCfg.BaseURL != "" {
+					effectiveCfg.BaseURL = localCfg.BaseURL
+				}
+				if localCfg.APIKey != "" {
+					effectiveCfg.APIKey = localCfg.APIKey
+				}
+				if localCfg.Model != "" {
+					effectiveCfg.Model = localCfg.Model
+				}
+			}
+			if effectiveCfg.APIKey == "" {
+				return "", fmt.Errorf("LLM API key 未配置，无法执行返工。请在桌面端设置页面配置 API Key。")
+			}
+			llmTool := builtin.NewLlmApiTool(effectiveCfg)
+			var toolCtx tool.ToolContext
+			result := llmTool.Execute(ctx, map[string]interface{}{
+				"prompt":     systemPrompt + "\n\n---\n\n" + userPrompt,
+				"max_tokens": 8000,
+			}, toolCtx)
+			if !result.Success {
+				return "", fmt.Errorf("LLM 返工调用失败: %s", result.Error)
+			}
+			content, _ := result.Data["content"].(string)
+			if content == "" {
+				return "", fmt.Errorf("LLM 返回了空内容")
+			}
+			return content, nil
+		})
+		artifactHandler.RegisterRoutes(r)
 		zap.L().Info("Video project and workflow run services registered")
 	}
 
@@ -509,4 +604,41 @@ func main() {
 	}
 
 	zap.L().Info("Server exited")
+}
+
+func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry) agentruntime.Planner {
+	maxTools := cfg.Agent.PlannerMaxTools
+	if maxTools <= 0 {
+		maxTools = 6
+	}
+	heuristic := agentruntime.NewHeuristicPlannerWithMaxTools(toolRegistry, maxTools)
+	llm := agentruntime.NewLLMPlanner(
+		toolRegistry,
+		agentruntime.NewOpenAIPlannerClient(cfg.OpenAI),
+		agentruntime.LLMPlannerOptions{MaxTools: maxTools},
+	)
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Agent.PlannerMode)) {
+	case "llm":
+		return llm
+	case "heuristic":
+		return heuristic
+	default:
+		return agentruntime.NewHybridPlanner(llm, heuristic)
+	}
+}
+
+// runStatusSyncer adapts the workflow RunRepository to the orchestrator's
+// StageStatusSyncer interface, keeping the run's stage_statuses JSONB in
+// sync with the DAG node state machine.
+type runStatusSyncer struct {
+	runRepo *workflow.RunRepository
+}
+
+func (s *runStatusSyncer) UpdateStageStatus(ctx context.Context, runID, stageName string, status string) error {
+	return s.runRepo.UpdateStageStatus(ctx, runID, stageName, workflow.StageStatus(status))
+}
+
+func (s *runStatusSyncer) FindRunIDByTaskID(ctx context.Context, taskID string) (string, error) {
+	return s.runRepo.FindRunIDByTaskID(ctx, taskID)
 }

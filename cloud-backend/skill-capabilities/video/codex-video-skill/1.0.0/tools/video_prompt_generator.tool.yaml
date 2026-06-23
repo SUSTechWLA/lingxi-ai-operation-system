@@ -1,0 +1,53 @@
+name: video_prompt_generator
+description: 根据已确认的分镜生成视频生成模型提示词。
+type: builtin_prompt_tool
+version: 1.0.0
+endpoint: builtin://video-creation/video_prompt_generator
+timeout: 120
+
+capabilities:
+  - video_creation
+  - video_prompt_generation
+  - text_to_video
+tags:
+  - video
+  - prompt
+  - generation
+
+parameters:
+  brief:
+    type: string
+    required: true
+    description: 用户的视频创作需求
+  aspectRatio:
+    type: string
+    required: false
+    description: 视频画幅
+
+output:
+  content:
+    type: string
+    description: 视频提示词包
+  artifacts:
+    type: object
+    description: 可审核的视频提示词产物索引
+
+costLevel: medium
+latencyLevel: medium
+riskLevel: medium
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: 视频提示词将驱动后续高成本生成动作，必须确认。
+  reviewArtifactKinds:
+    - MARKDOWN
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - MARKDOWN
+  defaultReviewRequired: true

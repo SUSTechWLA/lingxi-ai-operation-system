@@ -57,6 +57,12 @@ func TestSetDefaultsEnablesCloudVideoCreation(t *testing.T) {
 	if viper.GetBool("LOCAL_RUNNER_ENABLED") {
 		t.Fatal("LOCAL_RUNNER_ENABLED should remain false by default")
 	}
+	if got := viper.GetString("AGENT_PLANNER_MODE"); got != "hybrid" {
+		t.Fatalf("AGENT_PLANNER_MODE default = %q, want hybrid", got)
+	}
+	if got := viper.GetInt("AGENT_PLANNER_MAX_TOOLS"); got != 6 {
+		t.Fatalf("AGENT_PLANNER_MAX_TOOLS default = %d, want 6", got)
+	}
 }
 
 func TestConfigZeroValueBehavior(t *testing.T) {

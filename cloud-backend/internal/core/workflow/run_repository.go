@@ -91,13 +91,27 @@ func (r *RunRepository) UpdateStatus(ctx context.Context, runID string, status R
 	return err
 }
 
+// FindRunIDByTaskID returns the run ID associated with a given task ID.
+func (r *RunRepository) FindRunIDByTaskID(ctx context.Context, taskID string) (string, error) {
+	var id string
+	err := r.pool.QueryRow(ctx, `SELECT id FROM workflow_runs WHERE task_id=$1`, taskID).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // UpdateStageStatus updates a single stage's status in the run's stage_statuses JSONB.
 func (r *RunRepository) UpdateStageStatus(ctx context.Context, runID, stageName string, status StageStatus) error {
 	_, err := r.pool.Exec(ctx,
-		`UPDATE workflow_runs SET stage_statuses = jsonb_set(stage_statuses, $3, $4)
-		 WHERE id=$1`, runID, stageName, `"`+string(status)+`"`,
+		`UPDATE workflow_runs SET stage_statuses = jsonb_set(stage_statuses, $2::text[], to_jsonb($3::text), true)
+		 WHERE id=$1`, runID, stageStatusJSONBPath(stageName), string(status),
 	)
 	return err
+}
+
+func stageStatusJSONBPath(stageName string) []string {
+	return []string{stageName}
 }
 
 // SaveAttempt records a new execution attempt for a stage.

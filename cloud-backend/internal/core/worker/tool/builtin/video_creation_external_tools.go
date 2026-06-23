@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -16,6 +17,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/common/crypto"
 	"github.com/tangying-ai/aios-core/internal/core/common/jsonx"
 	"github.com/tangying-ai/aios-core/internal/core/config"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -41,7 +43,13 @@ var videoCreationExternalTools = []string{
 var (
 	videoCreationOpenAICfg config.OpenAIConfig
 	videoCreationSkillRoot string
+	modelGateway           *modelgateway.Gateway
 )
+
+// SetModelGateway stores the model gateway for image generation tools.
+func SetModelGateway(gw *modelgateway.Gateway) {
+	modelGateway = gw
+}
 
 // SetVideoCreationConfig stores configuration needed by local video creation
 // tools so skill_stage_agent can call the LLM API.
@@ -124,6 +132,7 @@ type RuntimeModelProviderConfig struct {
 }
 
 var (
+	runtimeConfigMu            sync.RWMutex
 	runtimeModelProviderConfig RuntimeModelProviderConfig
 	runtimeConfigPersistPath   string
 	runtimeConfigLoaded        bool
@@ -139,8 +148,10 @@ type onDiskConfig struct {
 
 // SetRuntimeConfigPersistPath sets the file path for persisting runtime config.
 func SetRuntimeConfigPersistPath(path string) {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	runtimeConfigPersistPath = path
-	loadRuntimeConfig()
+	loadRuntimeConfigLocked()
 }
 
 // SetEncryptionSecret derives an AES-256 key from the given secret phrase
@@ -153,19 +164,25 @@ func SetEncryptionSecret(secret string) {
 		zap.L().Warn("AUTH_TOKEN_SECRET not set — using hostname-derived encryption key. Set AUTH_TOKEN_SECRET for production.",
 			zap.String("hostname", hostname))
 	}
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	encryptionKey = crypto.DeriveKey(secret)
 }
 
 // SetRuntimeModelProviderConfig updates the runtime model-provider config and persists it.
 func SetRuntimeModelProviderConfig(cfg RuntimeModelProviderConfig) {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	runtimeModelProviderConfig = cfg
-	persistRuntimeConfig()
+	persistRuntimeConfigLocked()
 }
 
 // GetRuntimeModelProviderConfig returns the current persisted runtime config.
 func GetRuntimeModelProviderConfig() RuntimeModelProviderConfig {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	if !runtimeConfigLoaded {
-		loadRuntimeConfig()
+		loadRuntimeConfigLocked()
 	}
 	return runtimeModelProviderConfig
 }
@@ -173,6 +190,8 @@ func GetRuntimeModelProviderConfig() RuntimeModelProviderConfig {
 // ClearRuntimeModelProviderConfig removes the persisted runtime config so the
 // backend falls back to env-based defaults.
 func ClearRuntimeModelProviderConfig() {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	runtimeModelProviderConfig = RuntimeModelProviderConfig{}
 	if runtimeConfigPersistPath != "" {
 		_ = os.Remove(runtimeConfigPersistPath)
@@ -180,6 +199,12 @@ func ClearRuntimeModelProviderConfig() {
 }
 
 func loadRuntimeConfig() {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
+	loadRuntimeConfigLocked()
+}
+
+func loadRuntimeConfigLocked() {
 	runtimeConfigLoaded = true
 	if runtimeConfigPersistPath == "" {
 		return
@@ -207,6 +232,12 @@ func loadRuntimeConfig() {
 }
 
 func persistRuntimeConfig() {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
+	persistRuntimeConfigLocked()
+}
+
+func persistRuntimeConfigLocked() {
 	if runtimeConfigPersistPath == "" {
 		return
 	}
@@ -309,7 +340,9 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 // from the local agent (127.0.0.1:18080). This covers the case where the
 // frontend Desktop page saved config to the local agent but the cloud sync
 // (PUT /api/config/model-provider) failed.
-func tryFetchLocalAgentConfig() (RuntimeModelProviderConfig, bool) {
+// TryFetchLocalAgentConfig fetches model-provider config from the local
+// desktop agent (127.0.0.1:18080). Returns the config and true when found.
+func TryFetchLocalAgentConfig() (RuntimeModelProviderConfig, bool) {
 	url := "http://127.0.0.1:18080/api/local/model-providers?include_key=true"
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(url)
@@ -397,7 +430,7 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 	// Also try to pull from local agent (127.0.0.1:18080) — this catches config set
 	// by the frontend Desktop page even when cloud sync is unavailable.
 	effectiveCfg := GetVideoCreationOpenAIConfig()
-	if localCfg, ok := tryFetchLocalAgentConfig(); ok {
+	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
 		if localCfg.BaseURL != "" {
 			effectiveCfg.BaseURL = localCfg.BaseURL
 		}
@@ -416,7 +449,7 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 			stage, brief, instructionContent)
 		return tool.SuccessResult(map[string]interface{}{
 			"content":   content,
-			"artifacts": buildSkillStageArtifacts(stage, skillName, isPublishPackageStage(stage)),
+			"artifacts": buildSkillStageArtifacts(stage, skillName, false, false),
 		})
 	}
 
@@ -435,6 +468,8 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 	}
 
 	rawContent, _ := result.Data["content"].(string)
+	finishReason, _ := result.Data["finishReason"].(string)
+	rawContent = continueSkillStageIfNeeded(callTool, stage, fullPrompt, rawContent, finishReason, toolCtx)
 
 	// Try to parse LLM output as JSON; use as-is if parsing fails
 	var contentPkg map[string]interface{}
@@ -446,8 +481,11 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 		}
 	}
 
+	// Detect JSON output so the frontend formats it as structured JSON instead
+	// of rendering it as unformatted markdown (e.g., viewpoint_dossier produces JSON).
+	isJSONOutput := jsonx.ExtractJSON(rawContent, &contentPkg) == nil
 	includePublishCopy := isPublishPackageStage(stage) && hasPublishCopyFields(contentPkg)
-	artifacts := buildSkillStageArtifacts(stage, skillName, includePublishCopy)
+	artifacts := buildSkillStageArtifacts(stage, skillName, includePublishCopy, isJSONOutput)
 
 	data := map[string]interface{}{
 		"content":   rawContent,
@@ -473,13 +511,134 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 	return tool.SuccessResult(data)
 }
 
-func buildSkillStageArtifacts(stage, skillName string, includePublishCopy bool) []map[string]interface{} {
+func continueSkillStageIfNeeded(callTool *LlmApiTool, stage, originalPrompt, content, finishReason string, toolCtx tool.ToolContext) string {
+	combined := content
+	reason := finishReason
+	for attempt := 0; attempt < 2 && needsSkillStageContinuation(stage, combined, reason); attempt++ {
+		prompt := buildSkillStageContinuationPrompt(originalPrompt, combined)
+		result := callTool.Execute(context.Background(), map[string]interface{}{
+			"prompt":     prompt,
+			"max_tokens": 8000,
+		}, toolCtx)
+		if !result.Success {
+			zap.L().Warn("LLM continuation failed for skill_stage_agent",
+				zap.String("stage", stage),
+				zap.String("error", result.Error))
+			return combined
+		}
+		next, _ := result.Data["content"].(string)
+		if strings.TrimSpace(next) == "" {
+			return combined
+		}
+		combined = appendContinuation(combined, next)
+		reason, _ = result.Data["finishReason"].(string)
+	}
+	return combined
+}
+
+func needsSkillStageContinuation(stage, content, finishReason string) bool {
+	if strings.EqualFold(strings.TrimSpace(finishReason), "length") {
+		return true
+	}
+	if stage != "hyperframes_reference" {
+		return false
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	required := []string{
+		"一、观点档案",
+		"二、视频总体设定",
+		"三、重要制作原则",
+		"四、逐段画面脚本",
+		"五、imagegen 图片清单",
+		"六、图片在视频中的处理方式",
+		"七、字幕和文字规则",
+		"八、整体节奏控制",
+		"九、推荐项目素材目录",
+	}
+	for _, marker := range required {
+		if !strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	last := []rune(trimmed)
+	if len(last) == 0 {
+		return false
+	}
+	switch last[len(last)-1] {
+	case '。', '！', '？', '.', '!', '?', '`', '）', ')':
+		return false
+	default:
+		return true
+	}
+}
+
+func buildSkillStageContinuationPrompt(originalPrompt, partialContent string) string {
+	return fmt.Sprintf(`%s
+
+---
+
+上一次输出被截断，下面是已经生成的内容。请从最后一个未完成的位置继续写，先补完当前句子，然后继续完成剩余章节。
+
+要求：
+- 只输出续写内容，不要重复已经完整出现的章节和段落
+- 保持原输出格式；如果原内容是 Markdown，保持 Markdown 层级；如果原内容是 JSON，继续补完整 JSON
+- 如果正在 HyperFrames 参考文档的某个 BEAT 中间，继续完成该 BEAT 的剩余小节，再继续后续 BEAT 和第五到第九章
+- 必须写到文档自然结束
+
+已生成内容：
+
+%s`, originalPrompt, partialContent)
+}
+
+func appendContinuation(content, continuation string) string {
+	base := strings.TrimRight(content, "\r\n")
+	next := strings.TrimLeft(continuation, "\r\n")
+	if base == "" {
+		return next
+	}
+	if shouldAppendContinuationInline(base, next) {
+		return base + next
+	}
+	return base + "\n" + next
+}
+
+func shouldAppendContinuationInline(base, next string) bool {
+	if base == "" || next == "" {
+		return false
+	}
+	if strings.HasPrefix(strings.TrimSpace(next), "#") || strings.HasPrefix(strings.TrimSpace(next), "-") {
+		return false
+	}
+	last := []rune(strings.TrimSpace(base))
+	if len(last) == 0 {
+		return false
+	}
+	switch last[len(last)-1] {
+	case '。', '！', '？', '.', '!', '?', ':', '：', ';', '；', '`':
+		return false
+	default:
+		return true
+	}
+}
+
+func buildSkillStageArtifacts(stage, skillName string, includePublishCopy, isJSON bool) []map[string]interface{} {
+	kind := "MARKDOWN"
+	name := fmt.Sprintf("%s.md", stage)
+	mime := "text/markdown"
+	if isJSON {
+		kind = "JSON"
+		name = fmt.Sprintf("%s.json", stage)
+		mime = "application/json"
+	}
 	artifacts := []map[string]interface{}{
 		{
 			"unitId":   stage,
-			"kind":     "MARKDOWN",
-			"name":     fmt.Sprintf("%s.md", stage),
-			"mimeType": "text/markdown",
+			"kind":     kind,
+			"name":     name,
+			"mimeType": mime,
 			"metadata": map[string]interface{}{
 				"stage":           stage,
 				"skillName":       skillName,
@@ -630,30 +789,42 @@ func executeImageAssetGenerator(stage, skillName, brief, instructionRef string, 
 		}
 	}
 
-	// Check if an external image generation endpoint is configured.
-	imageGenEndpoint := os.Getenv("IMAGE_GENERATION_ENDPOINT")
+	// Generate images via the model gateway (supports OpenAI DALL-E, Stability AI, etc.)
 	generatedCount := 0
-	if imageGenEndpoint != "" {
+	if modelGateway != nil {
 		for i, req := range imageRequests {
-			if prompt, ok := req["prompt"].(string); ok {
-				if ref, err := callImageGenerationAPI(imageGenEndpoint, prompt, toolCtx.TaskID); err == nil {
+			if prompt, ok := req["prompt"].(string); ok && prompt != "" {
+				result, err := modelGateway.Execute(context.Background(), &modelgateway.ModelRequest{
+					Capability: modelgateway.CapTextToImage,
+					Parameters: map[string]interface{}{
+						"prompt":       prompt,
+						"size":         "1792x1024",
+						"aspect_ratio": "16:9",
+					},
+				})
+				if err == nil && len(result.Images) > 0 {
 					imageRequests[i]["status"] = "generated"
-					imageRequests[i]["storageRef"] = ref
+					imageRequests[i]["storageRef"] = result.Images[0].URL
 					generatedCount++
+				} else if err != nil {
+					zap.L().Warn("Image generation via gateway failed, keeping as prompt-only",
+						zap.String("id", stringParam(req, "id", "unknown")),
+						zap.Error(err))
 				}
 			}
 		}
+	}
+
+	providerNote := "图片生成服务未配置，已输出完整提示词"
+	if modelGateway != nil {
+		providerNote = "已通过模型网关生成图片"
 	}
 
 	summary := map[string]interface{}{
 		"total":      len(imageRequests),
 		"generated":  generatedCount,
 		"promptOnly": len(imageRequests) - generatedCount,
-		"note":       "图片已生成完整提示词，可通过 imagegen 工具手动生成",
-	}
-
-	if imageGenEndpoint == "" {
-		summary["note"] = "图片生成服务未配置 (IMAGE_GENERATION_ENDPOINT)，已输出完整提示词"
+		"note":       providerNote,
 	}
 
 	content := buildImageAssetContent(stage, skillName, imageRequests, summary)
@@ -884,40 +1055,6 @@ Constraints: no watermark, no logo, no photorealism, no clutter, no distorted ha
 		}
 	}
 	return ""
-}
-
-// callImageGenerationAPI sends a prompt to an external image generation endpoint.
-func callImageGenerationAPI(endpoint, prompt, taskID string) (string, error) {
-	payload := map[string]interface{}{
-		"prompt":  prompt,
-		"task_id": taskID,
-		"width":   1920,
-		"height":  1080,
-	}
-	body, _ := json.Marshal(payload)
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Post(endpoint, "application/json", strings.NewReader(string(body)))
-	if err != nil {
-		return "", fmt.Errorf("image generation API call failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("image generation API returned %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result map[string]interface{}
-	if json.Unmarshal(respBody, &result) == nil {
-		if ref, ok := result["storageRef"].(string); ok {
-			return ref, nil
-		}
-		if url, ok := result["url"].(string); ok {
-			return url, nil
-		}
-	}
-	return string(respBody), nil
 }
 
 func buildImageAssetContent(stage, skillName string, requests []map[string]interface{}, summary map[string]interface{}) string {

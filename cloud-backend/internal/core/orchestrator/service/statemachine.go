@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -12,12 +13,19 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
 )
 
+// StageStatusSyncer syncs a single stage's status to the workflow run.
+type StageStatusSyncer interface {
+	UpdateStageStatus(ctx context.Context, runID, stageName string, status string) error
+	FindRunIDByTaskID(ctx context.Context, taskID string) (string, error)
+}
+
 type StateMachine struct {
-	stateService *StateService
-	nodeRepo     repository.NodeRepo
-	taskRepo     repository.TaskRepo
-	eventSaver   outbox.EventSaver
-	retryPolicy  *RetryPolicy
+	stateService      *StateService
+	nodeRepo          repository.NodeRepo
+	taskRepo          repository.TaskRepo
+	eventSaver        outbox.EventSaver
+	retryPolicy       *RetryPolicy
+	stageStatusSyncer StageStatusSyncer
 }
 
 func NewStateMachine(
@@ -35,11 +43,68 @@ func NewStateMachine(
 	}
 }
 
+// SetStageStatusSyncer injects a syncer to keep the workflow run's
+// stage_statuses JSONB in sync with the DAG node states.
+func (sm *StateMachine) SetStageStatusSyncer(syncer StageStatusSyncer) {
+	sm.stageStatusSyncer = syncer
+}
+
+func (sm *StateMachine) syncStageStatus(ctx context.Context, nodeID string, status string) {
+	if sm.stageStatusSyncer == nil {
+		return
+	}
+	node, err := sm.nodeRepo.FindByID(ctx, nodeID)
+	if err != nil || node == nil {
+		return
+	}
+	runID, err := sm.stageStatusSyncer.FindRunIDByTaskID(ctx, node.TaskID)
+	if err != nil || runID == "" {
+		return
+	}
+	stageName := stageStatusKey(node)
+	if err := sm.stageStatusSyncer.UpdateStageStatus(ctx, runID, stageName, status); err != nil {
+		zap.L().Warn("Failed to sync workflow stage status",
+			zap.String("runId", runID),
+			zap.String("nodeId", nodeID),
+			zap.String("stageName", stageName),
+			zap.String("status", status),
+			zap.Error(err))
+	}
+}
+
+func stageStatusKey(node *model.Node) string {
+	if node == nil {
+		return ""
+	}
+	if node.Input != nil {
+		if original, ok := node.Input["agentOriginalNodeId"].(string); ok && original != "" {
+			return original
+		}
+		if stage, ok := node.Input["stage"].(string); ok && stage != "" {
+			if strings.HasSuffix(node.ID, "_exec") {
+				return stage + "_exec"
+			}
+			if strings.HasSuffix(node.ID, "_skip") {
+				return stage + "_skip"
+			}
+			return stage
+		}
+	}
+	if strings.HasPrefix(node.ID, node.TaskID+"-") {
+		return strings.TrimPrefix(node.ID, node.TaskID+"-")
+	}
+	return node.ID
+}
+
 func (sm *StateMachine) OnSuccess(ctx context.Context, nodeID string, output map[string]interface{}) error {
 	node, err := sm.stateService.TransitionNode(ctx, nodeID, model.NodeSuccess, output, "")
 	if err != nil {
 		return fmt.Errorf("failed to transition node to SUCCESS: %w", err)
 	}
+
+	// Sync the node status to the workflow run's stage_statuses so the
+	// frontend progress panel shows the correct stage state.
+	sm.syncStageStatus(ctx, nodeID, "SUCCEEDED")
 
 	zap.L().Info("Node succeeded", zap.String("nodeId", nodeID))
 
@@ -158,6 +223,9 @@ func (sm *StateMachine) failNode(ctx context.Context, node *model.Node, errorMes
 	if err != nil {
 		return err
 	}
+
+	// Sync the failed status to the workflow run's stage_statuses.
+	sm.syncStageStatus(ctx, node.ID, "FAILED")
 
 	_ = sm.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeFailed, eventbus.Event{
 		TaskID:       node.TaskID,

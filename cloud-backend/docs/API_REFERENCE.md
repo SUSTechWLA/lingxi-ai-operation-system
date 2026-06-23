@@ -14,24 +14,26 @@ Version: 0.1.0
 ## Table of Contents
 
 1. [AI](#1-ai)
-2. [Artifacts](#2-artifacts)
-3. [Auth](#3-auth)
-4. [Bid](#4-bid)
-5. [Chat](#5-chat)
-6. [Context](#6-context)
-7. [Health](#7-health)
-8. [Media](#8-media)
-9. [Node](#9-node)
-10. [Orchestrator](#10-orchestrator)
-11. [Publish](#11-publish)
-12. [Skills](#12-skills)
-13. [Stages](#13-stages)
-14. [Tools](#14-tools)
-15. [Trace](#15-trace)
-16. [Translate](#16-translate)
-17. [Video Projects](#17-video-projects)
-18. [Workflow Runs](#18-workflow-runs)
-19. [Workflows](#19-workflows)
+2. [Agent Runs](#2-agent-runs)
+3. [Artifacts](#3-artifacts)
+4. [Auth](#4-auth)
+5. [Bid](#5-bid)
+6. [Chat](#6-chat)
+7. [Context](#7-context)
+8. [Health](#8-health)
+9. [Media](#9-media)
+10. [Node](#10-node)
+11. [Orchestrator](#11-orchestrator)
+12. [Publish](#12-publish)
+13. [Skill Capabilities](#13-skill-capabilities)
+14. [Skills](#14-skills)
+15. [Stages](#15-stages)
+16. [Tools](#16-tools)
+17. [Trace](#17-trace)
+18. [Translate](#18-translate)
+19. [Video Projects](#19-video-projects)
+20. [Workflow Runs](#20-workflow-runs)
+21. [Workflows](#21-workflows)
 
 ---
 
@@ -128,7 +130,123 @@ Submit async polish task
 
 ---
 
-## 2. Artifacts
+## 2. Agent Runs
+
+### POST /api/agent/runs
+
+Start a dynamic agent run from natural language
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/AgentStartRunRequest" }
+```
+
+**Responses:**
+
+- **200** — Agent run started (JSON)
+- **400** — Invalid plan or request (JSON)
+
+---
+
+### GET /api/agent/runs/:runId
+
+Get dynamic agent run state
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+
+**Responses:**
+
+- **200** — Agent run detail (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### GET /api/agent/runs/:runId/reviews
+
+List review gates for a dynamic agent run
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+
+**Responses:**
+
+- **200** — Review gates (JSON)
+- **404** — Not found (JSON)
+
+---
+
+### POST /api/agent/runs/:runId/reviews/:reviewId/approve
+
+Approve a dynamic agent review gate
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+| `reviewId` | path | `string` | **Yes** | Review node identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Approved (JSON)
+
+---
+
+### POST /api/agent/runs/:runId/reviews/:reviewId/reject
+
+Reject a dynamic agent review gate
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+| `reviewId` | path | `string` | **Yes** | Review node identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+**Responses:**
+
+- **200** — Rejected (JSON)
+
+---
+
+### GET /api/agent/runs/:runId/trace
+
+Get dynamic agent task trace
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+
+**Responses:**
+
+- **200** — Agent task trace (JSON)
+- **404** — Not found (JSON)
+
+---
+
+## 3. Artifacts
 
 ### GET /api/artifacts/:id
 
@@ -220,7 +338,7 @@ List project artifacts
 
 ---
 
-## 3. Auth
+## 4. Auth
 
 ### POST /api/auth/login
 
@@ -302,7 +420,7 @@ Register a user with email and password
 
 ---
 
-## 4. Bid
+## 5. Bid
 
 ### GET /api/bid/projects
 
@@ -615,7 +733,7 @@ List bid templates
 
 ---
 
-## 5. Chat
+## 6. Chat
 
 ### GET /api/chat/sessions/:session_id
 
@@ -715,7 +833,7 @@ Create a new chat session
 
 ---
 
-## 6. Context
+## 7. Context
 
 ### GET /api/context/:taskId
 
@@ -788,7 +906,7 @@ Record a context event manually
 
 ---
 
-## 7. Health
+## 8. Health
 
 ### GET /api/health
 
@@ -811,7 +929,7 @@ Readiness check with dependencies
 
 ---
 
-## 8. Media
+## 9. Media
 
 ### GET /api/media/:id
 
@@ -892,7 +1010,7 @@ Upload media files
 
 ---
 
-## 9. Node
+## 10. Node
 
 ### POST /api/node
 
@@ -1005,7 +1123,7 @@ Report node execution success
 
 ---
 
-## 10. Orchestrator
+## 11. Orchestrator
 
 ### GET /api/task/:taskId
 
@@ -1165,7 +1283,7 @@ Create a new empty task
 
 ---
 
-## 11. Publish
+## 12. Publish
 
 ### POST /api/publish
 
@@ -1190,7 +1308,36 @@ Submit content for multi-platform publishing
 
 ---
 
-## 12. Skills
+## 13. Skill Capabilities
+
+### GET /api/skill-capabilities
+
+List agent capability packages
+
+**Responses:**
+
+- **200** — Capability packages (JSON)
+
+---
+
+### GET /api/skill-capabilities/:id
+
+Get capability package detail
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Capability package identifier |
+
+**Responses:**
+
+- **200** — Capability package (JSON)
+- **404** — Not found (JSON)
+
+---
+
+## 14. Skills
 
 ### GET /api/skills
 
@@ -1271,7 +1418,7 @@ Route a brief to a skill
 
 ---
 
-## 13. Stages
+## 15. Stages
 
 ### POST /api/video-projects/:id/stages/:stage/approve
 
@@ -1301,7 +1448,7 @@ Approve a stage
 
 ---
 
-## 14. Tools
+## 16. Tools
 
 ### GET /api/tools
 
@@ -1363,7 +1510,7 @@ Register an external tool
 
 ---
 
-## 15. Trace
+## 17. Trace
 
 ### GET /api/trace/:taskId
 
@@ -1393,7 +1540,7 @@ Get most recent task trace
 
 ---
 
-## 16. Translate
+## 18. Translate
 
 ### GET /api/task/:taskId/status
 
@@ -1447,7 +1594,7 @@ Translate NL prompt and submit DAG
 
 ---
 
-## 17. Video Projects
+## 19. Video Projects
 
 ### GET /api/video-projects
 
@@ -1530,7 +1677,7 @@ Archive a project (soft delete)
 
 ---
 
-## 18. Workflow Runs
+## 20. Workflow Runs
 
 ### POST /api/video-projects/:id/workflow-runs
 
@@ -1610,7 +1757,7 @@ Pause a run
 
 ---
 
-## 19. Workflows
+## 21. Workflows
 
 ### GET /api/workflows
 

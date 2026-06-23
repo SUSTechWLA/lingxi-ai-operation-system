@@ -24,9 +24,9 @@ func NewLlmApiTool(cfg config.OpenAIConfig) *LlmApiTool {
 	return &LlmApiTool{cfg: cfg}
 }
 
-func (t *LlmApiTool) Name() string                  { return "llm_api" }
-func (t *LlmApiTool) Description() string            { return "Call LLM API for chat completions" }
-func (t *LlmApiTool) Type() tool.ToolType            { return tool.ToolTypeLLM }
+func (t *LlmApiTool) Name() string        { return "llm_api" }
+func (t *LlmApiTool) Description() string { return "Call LLM API for chat completions" }
+func (t *LlmApiTool) Type() tool.ToolType { return tool.ToolTypeLLM }
 
 func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	prompt, _ := params["prompt"].(string)
@@ -118,11 +118,13 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 	}
 
 	content := extractContent(responseMap)
+	finishReason := extractFinishReason(responseMap)
 
 	return tool.SuccessResult(map[string]interface{}{
-		"content":     content,
-		"model":       model,
-		"rawResponse": responseMap,
+		"content":      content,
+		"model":        model,
+		"finishReason": finishReason,
+		"rawResponse":  responseMap,
 	})
 }
 
@@ -221,4 +223,19 @@ func extractContent(response map[string]interface{}) string {
 		return reasoning
 	}
 	return ""
+}
+
+func extractFinishReason(response map[string]interface{}) string {
+	choices, ok := response["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return ""
+	}
+
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	reason, _ := choice["finish_reason"].(string)
+	return reason
 }

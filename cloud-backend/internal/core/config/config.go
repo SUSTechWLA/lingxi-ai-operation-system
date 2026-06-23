@@ -22,15 +22,25 @@ type Config struct {
 	Services ServicesConfig `mapstructure:",squash"`
 	Sandbox  SandboxConfig  `mapstructure:",squash"`
 	Video    VideoConfig    `mapstructure:",squash"`
+	Agent    AgentConfig    `mapstructure:",squash"`
+}
+
+// AgentConfig controls the dynamic agent runtime.
+type AgentConfig struct {
+	PlannerMode     string `mapstructure:"AGENT_PLANNER_MODE"` // "llm" | "hybrid" | "heuristic"
+	PlannerMaxTools int    `mapstructure:"AGENT_PLANNER_MAX_TOOLS"`
 }
 
 // VideoConfig controls the video creation feature flags.
 type VideoConfig struct {
-	VideoCreationEnabled bool   `mapstructure:"VIDEO_CREATION_ENABLED"`
-	LocalRunnerEnabled   bool   `mapstructure:"LOCAL_RUNNER_ENABLED"`
-	ModelProviderMode    string `mapstructure:"MODEL_PROVIDER_MODE"`  // "fake" | "real"
-	SkillRoot            string `mapstructure:"SKILL_ROOT"`           // path to skills/ directory
-	HyperFramesCLIPath   string `mapstructure:"HYPERFRAMES_CLI_PATH"` // path to hyperframes CLI binary (optional)
+	VideoCreationEnabled            bool   `mapstructure:"VIDEO_CREATION_ENABLED"`
+	LocalRunnerEnabled              bool   `mapstructure:"LOCAL_RUNNER_ENABLED"`
+	ModelProviderMode               string `mapstructure:"MODEL_PROVIDER_MODE"` // "fake" | "real"
+	ImageProvider                   string `mapstructure:"IMAGE_PROVIDER"`      // "openai" | "stability" (image generation)
+	SkillRoot                       string `mapstructure:"SKILL_ROOT"`          // path to legacy skills/ directory
+	SkillCapabilityRoot             string `mapstructure:"SKILL_CAPABILITY_ROOT"`
+	LegacySkillWorkflowAutoRegister bool   `mapstructure:"LEGACY_SKILL_WORKFLOW_AUTOREGISTER"`
+	HyperFramesCLIPath              string `mapstructure:"HYPERFRAMES_CLI_PATH"` // path to hyperframes CLI binary (optional)
 }
 
 type ServerConfig struct {
@@ -128,6 +138,7 @@ func Load() *Config {
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.Video.SkillRoot = resolveSkillRoot(cfg.Video.SkillRoot, cwd)
+		cfg.Video.SkillCapabilityRoot = resolveSkillRoot(cfg.Video.SkillCapabilityRoot, cwd)
 	}
 
 	return cfg
@@ -173,7 +184,12 @@ func setDefaults() {
 	viper.SetDefault("VIDEO_CREATION_ENABLED", true)
 	viper.SetDefault("LOCAL_RUNNER_ENABLED", false)
 	viper.SetDefault("MODEL_PROVIDER_MODE", "fake")
+	viper.SetDefault("IMAGE_PROVIDER", "openai")
 	viper.SetDefault("SKILL_ROOT", "skills")
+	viper.SetDefault("SKILL_CAPABILITY_ROOT", "skill-capabilities")
+	viper.SetDefault("LEGACY_SKILL_WORKFLOW_AUTOREGISTER", false)
+	viper.SetDefault("AGENT_PLANNER_MODE", "hybrid")
+	viper.SetDefault("AGENT_PLANNER_MAX_TOOLS", 6)
 
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		viper.SetDefault("OPENAI_API_KEY", apiKey)

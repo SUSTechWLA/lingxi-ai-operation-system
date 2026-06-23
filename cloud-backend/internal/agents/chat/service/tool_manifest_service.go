@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	toolCacheKey    = "tools:manifests:all"
-	toolCacheTTL    = 5 * time.Minute
+	toolCacheKey     = "tools:manifests:all"
+	toolCacheTTL     = 5 * time.Minute
 	toolCacheVersion = "tools:version" // version key for cache invalidation
 )
 
@@ -63,6 +63,20 @@ func (s *ToolManifestService) RegisterExternal(ctx context.Context, manifest *to
 	s.registry.RegisterExternal(manifest)
 
 	zap.L().Info("Registered external tool", zap.String("name", manifest.Name))
+	return s.invalidateCache(ctx)
+}
+
+// RegisterManifest persists a manifest and makes it discoverable through the
+// external bridge without rewriting its declared type. Skill capability prompt
+// tools use this path because their type is meaningful to the agent planner.
+func (s *ToolManifestService) RegisterManifest(ctx context.Context, manifest *tool.ToolManifest) error {
+	record := manifestToRecord(manifest)
+	if err := s.repo.Upsert(ctx, record); err != nil {
+		return fmt.Errorf("failed to persist tool manifest: %w", err)
+	}
+	s.registry.RegisterExternal(manifest)
+
+	zap.L().Info("Registered tool manifest", zap.String("name", manifest.Name), zap.String("type", manifest.Type))
 	return s.invalidateCache(ctx)
 }
 
@@ -162,17 +176,51 @@ func manifestToRecord(m *tool.ToolManifest) *model.ToolManifestRecord {
 	params, _ := json.Marshal(m.Parameters)
 	output, _ := json.Marshal(m.Output)
 	examples, _ := json.Marshal(m.Examples)
+	capabilities, _ := json.Marshal(m.Capabilities)
+	tags, _ := json.Marshal(m.Tags)
+	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
+	artifactPolicy, _ := json.Marshal(m.ArtifactPolicy)
+	nextRecommendedTools, _ := json.Marshal(m.NextRecommendedTools)
+	failureModes, _ := json.Marshal(m.FailureModes)
+	resourceRefs, _ := json.Marshal(m.ResourceRefs)
+
+	costLevel := m.CostLevel
+	if costLevel == "" {
+		costLevel = tool.CostLow
+	}
+	latencyLevel := m.LatencyLevel
+	if latencyLevel == "" {
+		latencyLevel = tool.LatencyMedium
+	}
+	riskLevel := m.RiskLevel
+	if riskLevel == "" {
+		riskLevel = tool.RiskLow
+	}
 
 	return &model.ToolManifestRecord{
-		Name:        m.Name,
-		Description: m.Description,
-		Type:        m.Type,
-		Version:     m.Version,
-		Endpoint:    m.Endpoint,
-		TimeoutMs:   m.Timeout,
-		Parameters:  params,
-		Output:      output,
-		Examples:    examples,
-		Sandbox:     m.Sandbox,
+		Name:                 m.Name,
+		Description:          m.Description,
+		Type:                 m.Type,
+		Version:              m.Version,
+		Endpoint:             m.Endpoint,
+		TimeoutMs:            m.Timeout,
+		Parameters:           params,
+		Output:               output,
+		Examples:             examples,
+		Sandbox:              m.Sandbox,
+		Capabilities:         capabilities,
+		Tags:                 tags,
+		CostLevel:            costLevel,
+		LatencyLevel:         latencyLevel,
+		RiskLevel:            riskLevel,
+		SideEffect:           m.SideEffect,
+		Idempotent:           m.Idempotent || !m.SideEffect,
+		ApprovalPolicy:       approvalPolicy,
+		ArtifactPolicy:       artifactPolicy,
+		NextRecommendedTools: nextRecommendedTools,
+		FailureModes:         failureModes,
+		SkillPackageID:       m.SkillPackageID,
+		PromptRef:            m.PromptRef,
+		ResourceRefs:         resourceRefs,
 	}
 }
