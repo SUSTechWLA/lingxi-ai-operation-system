@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 // ErrRunnerNotFound is returned when a runner does not exist.
@@ -455,4 +457,85 @@ func (s *Service) StartLeaseReaper(ctx context.Context, interval time.Duration) 
 			}
 		}
 	}()
+}
+
+// HasOnlineRunner checks whether the given user has at least one online
+// local runner that can accept jobs.
+func (s *Service) HasOnlineRunner(ctx context.Context, userID string) (bool, error) {
+	var count int
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM local_runners
+		 WHERE user_id=$1 AND status='ONLINE'
+		   AND last_heartbeat > NOW() - INTERVAL '90 seconds'`,
+		userID,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check online runner: %w", err)
+	}
+	return count > 0, nil
+}
+
+// SupportsCommand checks whether any online runner for the given user
+// has registered the specified local command as available.
+func (s *Service) SupportsCommand(ctx context.Context, userID string, command string) (bool, error) {
+	var count int
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM local_runners lr
+		 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lr.capabilities, '[]'::jsonb)) cap
+		 WHERE lr.user_id=$1
+		   AND lr.status='ONLINE'
+		   AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
+		   AND cap->>'command' = $2
+		   AND COALESCE((cap->>'available')::boolean, false) = true`,
+		userID, command,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check command support: %w", err)
+	}
+	return count > 0, nil
+}
+
+// SatisfiesRequirements checks whether the user's online runners satisfy
+// the given local requirements. Returns a list of human-readable descriptions
+// of unsatisfied requirements.
+func (s *Service) SatisfiesRequirements(ctx context.Context, userID string, req *tool.LocalRequirements) (bool, []string, error) {
+	if req == nil {
+		return true, nil, nil
+	}
+
+	var missing []string
+
+	// Check required commands
+	for _, cmd := range req.Commands {
+		supported, err := s.SupportsCommand(ctx, userID, cmd)
+		if err != nil {
+			return false, nil, fmt.Errorf("check requirement command %q: %w", cmd, err)
+		}
+		if !supported {
+			missing = append(missing, fmt.Sprintf("命令 %s 在本地环境中不可用", cmd))
+		}
+	}
+
+	// OS checks
+	if len(req.OS) > 0 {
+		var count int
+		err := s.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM local_runners
+			 WHERE user_id=$1 AND status='ONLINE'
+			   AND last_heartbeat > NOW() - INTERVAL '90 seconds'
+			   AND platform->>'os' = ANY($2)`,
+			userID, req.OS,
+		).Scan(&count)
+		if err != nil {
+			return false, nil, fmt.Errorf("check OS requirement: %w", err)
+		}
+		if count == 0 {
+			missing = append(missing, fmt.Sprintf("需要操作系统 %v，但未找到匹配的在线 runner", req.OS))
+		}
+	}
+
+	if len(missing) > 0 {
+		return false, missing, nil
+	}
+	return true, nil, nil
 }

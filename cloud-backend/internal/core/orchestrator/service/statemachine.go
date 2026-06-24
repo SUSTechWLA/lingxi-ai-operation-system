@@ -96,6 +96,21 @@ func stageStatusKey(node *model.Node) string {
 	return node.ID
 }
 
+// OnProgress updates the ai_node progress, current step, and heartbeat timestamp
+// so the frontend can display real-time local execution progress.
+func (sm *StateMachine) OnProgress(ctx context.Context, nodeID string, progress float64, step, message string) error {
+	if err := sm.nodeRepo.UpdateHeartbeat(ctx, nodeID, progress, step); err != nil {
+		return fmt.Errorf("update node heartbeat/progress: %w", err)
+	}
+	// Also update the stage status to reflect the current step.
+	if message != "" {
+		sm.syncStageStatus(ctx, nodeID, "RUNNING:"+message)
+	} else if step != "" {
+		sm.syncStageStatus(ctx, nodeID, "RUNNING:"+step)
+	}
+	return nil
+}
+
 func (sm *StateMachine) OnSuccess(ctx context.Context, nodeID string, output map[string]interface{}) error {
 	node, err := sm.stateService.TransitionNode(ctx, nodeID, model.NodeSuccess, output, "")
 	if err != nil {

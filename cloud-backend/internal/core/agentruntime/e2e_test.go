@@ -18,7 +18,7 @@ func TestE2E_DragonBoatFestival_FullPipeline(t *testing.T) {
 	plan := dragonBoatPlan()
 
 	// Stage 1: PlanGuard validation.
-	guard := NewPlanGuard(catalog)
+	guard := NewPlanGuard(catalog, nil)
 	if err := guard.Validate(plan); err != nil {
 		t.Fatalf("PlanGuard rejected the plan: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestE2E_PlanGuardOutputFieldValidation(t *testing.T) {
 	// script_generation (step[2]) depends on fact_check and references its checkedFacts.
 	plan.Steps[2].Arguments["facts"] = "{{fact_check.output.checkedFacts_broken}}"
 
-	guard := NewPlanGuard(catalog)
+	guard := NewPlanGuard(catalog, nil)
 	err := guard.Validate(plan)
 	if err == nil {
 		t.Fatal("❌ PlanGuard should have rejected invalid output field reference")
@@ -151,7 +151,7 @@ func TestE2E_PlanGuardUnknownTool(t *testing.T) {
 		Tool: "delete_all_files",
 	})
 
-	guard := NewPlanGuard(catalog)
+	guard := NewPlanGuard(catalog, nil)
 	err := guard.Validate(plan)
 	if err == nil {
 		t.Fatal("❌ PlanGuard should have rejected unknown tool")
@@ -179,7 +179,7 @@ func TestE2E_PlanCompilerQualityGateAutoInsert(t *testing.T) {
 		},
 	}
 
-	guard := NewPlanGuard(catalog)
+	guard := NewPlanGuard(catalog, nil)
 	if err := guard.Validate(plan); err != nil {
 		t.Fatalf("PlanGuard: %v", err)
 	}

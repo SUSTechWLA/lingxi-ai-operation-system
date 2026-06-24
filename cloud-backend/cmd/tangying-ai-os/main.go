@@ -417,7 +417,7 @@ func main() {
 		orchestratorService,
 		agentRunRepo,
 		agentPlanner,
-		agentruntime.NewPlanGuard(toolRegistry),
+		agentruntime.NewPlanGuard(toolRegistry, localRunnerService),
 		agentruntime.NewPlanCompiler(toolRegistry),
 	)
 	agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).RegisterRoutes(r)

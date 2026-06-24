@@ -27,7 +27,7 @@ func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 		},
 	}
 
-	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog), NewPlanCompiler(catalog))
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
 	run, err := runner.Start(context.Background(), StartRunRequest{
 		UserID:  "user-1",
 		Message: "make a video about AI workflows",

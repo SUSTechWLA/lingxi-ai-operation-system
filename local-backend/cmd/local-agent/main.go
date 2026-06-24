@@ -41,16 +41,14 @@ func main() {
 
 	if *cloudAPIBase != "" && *userToken != "" && *deviceID != "" {
 		registry := localtool.NewRegistry()
-		dataDir := server.Paths().DataDir
 
-		// Register local tool executors
-		registry.Register(localtool.NewHyperFramesProjectExecutor(dataDir), localtool.CommandHyperFramesProjectGenerate)
-		registry.Register(
-			localtool.NewHyperFramesRenderExecutor(dataDir, *hfServiceURL, time.Duration(*renderTimeoutSec)*time.Second),
-			localtool.CommandHyperFramesRender,
-		)
-		registry.Register(localtool.NewFFmpegProbeExecutor(dataDir), localtool.CommandFFmpegProbe)
-		registry.Register(localtool.NewArtifactPackageExecutor(dataDir), localtool.CommandArtifactPackage)
+		if err := localtool.RegisterDefaultExecutors(registry, localtool.ExecutorConfig{
+			DataDir:               server.Paths().DataDir,
+			HyperFramesServiceURL: *hfServiceURL,
+			RenderTimeoutSec:      *renderTimeoutSec,
+		}); err != nil {
+			log.Fatalf("register local tool executors: %v", err)
+		}
 		runnerClient := localrunner.NewClient(localrunner.Config{
 			CloudAPIBase: *cloudAPIBase,
 			UserToken:    *userToken,
@@ -60,7 +58,7 @@ func main() {
 			DeviceID:      *deviceID,
 			RunnerVersion: "1.0.0",
 			WorkspaceRoot: "local://aios/projects",
-			DataDir:       dataDir,
+			DataDir:       server.Paths().DataDir,
 		})
 		go func() {
 			if err := runnerLoop.Run(ctx); err != nil && err != context.Canceled {

@@ -94,7 +94,7 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	if plan.Mode == "" {
 		plan.Mode = "dynamic_agent"
 	}
-	if err := r.guard.Validate(plan); err != nil {
+	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
 

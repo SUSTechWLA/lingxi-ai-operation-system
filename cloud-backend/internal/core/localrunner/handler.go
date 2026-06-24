@@ -25,6 +25,7 @@ type RunnerService interface {
 type NodeResultSink interface {
 	OnSuccess(ctx context.Context, nodeID string, output map[string]interface{}) error
 	OnFailure(ctx context.Context, nodeID string, errorMessage string) error
+	OnProgress(ctx context.Context, nodeID string, progress float64, step, message string) error
 }
 
 type Handler struct {
@@ -114,6 +115,16 @@ func (h *Handler) reportProgress(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Sync progress to the ai_node so the frontend can display real-time
+	// local execution progress instead of just WAITING_LOCAL.
+	if h.results != nil {
+		job, err := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+		if err == nil && job != nil && job.NodeID != "" {
+			_ = h.results.OnProgress(c.Request.Context(), job.NodeID, req.Progress, req.Step, req.Message)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

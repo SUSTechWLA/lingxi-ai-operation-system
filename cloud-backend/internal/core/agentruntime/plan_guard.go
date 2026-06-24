@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -16,14 +17,22 @@ type PlanGuard struct {
 	localValidator *LocalCapabilityValidator
 }
 
-func NewPlanGuard(tools ToolCatalog) *PlanGuard {
+// NewPlanGuard creates a PlanGuard with the given tool catalog.
+// If localProvider is nil, local capability checks are skipped (graceful degradation).
+func NewPlanGuard(tools ToolCatalog, localProvider LocalCapabilityProvider) *PlanGuard {
 	return &PlanGuard{
 		tools:          tools,
-		localValidator: &LocalCapabilityValidator{},
+		localValidator: NewLocalCapabilityValidator(localProvider),
 	}
 }
 
 func (g *PlanGuard) Validate(plan *AgentPlan) error {
+	return g.ValidatePlan(context.Background(), "", plan)
+}
+
+// ValidatePlan performs full plan validation including local capability checks
+// when a user ID is provided.
+func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *AgentPlan) error {
 	if plan == nil {
 		return fmt.Errorf("agent plan is required")
 	}
@@ -59,6 +68,15 @@ func (g *PlanGuard) Validate(plan *AgentPlan) error {
 		if manifest == nil {
 			return fmt.Errorf("agent step %s references unknown tool %s", step.ID, step.Tool)
 		}
+
+		// Local capability check: if this tool requires local execution,
+		// verify the user's local runner is online and supports it.
+		if userID != "" && g.localValidator != nil {
+			if err := g.localValidator.ValidateForLocalExecution(ctx, userID, step, manifest); err != nil {
+				return err
+			}
+		}
+
 		if err := validateCost(step, manifest, plan.Budget.MaxCostLevel); err != nil {
 			return err
 		}

@@ -55,14 +55,12 @@ func (g *PathGuard) ResolveLocalURI(uri string) (string, error) {
 		trimmed := strings.TrimPrefix(uri, "local://")
 		trimmed = strings.TrimPrefix(trimmed, "/")
 
-		// Validate the segment doesn't contain traversal
-		if err := validateLocalSegment(trimmed); err != nil {
-			return "", fmt.Errorf("invalid local URI path: %w", err)
-		}
-
-		// Check for forbidden segments throughout the path
+		// Split into segments and validate each one.
 		parts := strings.Split(trimmed, "/")
 		for _, part := range parts {
+			if err := validateLocalSegment(part); err != nil {
+				return "", fmt.Errorf("invalid local URI path segment %q: %w", part, err)
+			}
 			for _, forbidden := range forbiddenSegments {
 				if part == forbidden {
 					return "", fmt.Errorf("path segment %q is forbidden", part)

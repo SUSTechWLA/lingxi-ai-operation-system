@@ -238,10 +238,14 @@ func (f *fakeRunnerService) ValidateJobAccess(_ context.Context, _, _, _ string)
 }
 
 type fakeNodeResultSink struct {
-	successNodeID string
-	successOutput map[string]interface{}
-	failureNodeID string
-	failureError  string
+	successNodeID  string
+	successOutput  map[string]interface{}
+	failureNodeID  string
+	failureError   string
+	progressNodeID string
+	progressValue  float64
+	progressStep   string
+	progressMsg    string
 }
 
 func (f *fakeNodeResultSink) OnSuccess(_ context.Context, nodeID string, output map[string]interface{}) error {
@@ -253,5 +257,13 @@ func (f *fakeNodeResultSink) OnSuccess(_ context.Context, nodeID string, output 
 func (f *fakeNodeResultSink) OnFailure(_ context.Context, nodeID string, errorMessage string) error {
 	f.failureNodeID = nodeID
 	f.failureError = errorMessage
+	return nil
+}
+
+func (f *fakeNodeResultSink) OnProgress(_ context.Context, nodeID string, progress float64, step, message string) error {
+	f.progressNodeID = nodeID
+	f.progressValue = progress
+	f.progressStep = step
+	f.progressMsg = message
 	return nil
 }
