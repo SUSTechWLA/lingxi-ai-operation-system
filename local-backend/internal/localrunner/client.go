@@ -16,6 +16,7 @@ type Config struct {
 	CloudAPIBase string
 	UserToken    string
 	DeviceID     string
+	RunnerID     string
 	SessionID    string
 	HTTPClient   *http.Client
 }
@@ -100,8 +101,14 @@ func (c *Client) Register(ctx context.Context, req RegisterRunnerRequest) (*Regi
 	if err := c.doJSON(ctx, http.MethodPost, "/api/local-runners/register", req, &resp); err != nil {
 		return nil, err
 	}
+	c.cfg.RunnerID = resp.RunnerID
 	c.cfg.SessionID = resp.SessionID
 	return &resp, nil
+}
+
+// RunnerID returns the registered runner ID (available after Register succeeds).
+func (c *Client) RunnerID() string {
+	return c.cfg.RunnerID
 }
 
 func (c *Client) Heartbeat(ctx context.Context, runnerID string, req HeartbeatRequest) error {
@@ -156,6 +163,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body interface
 	}
 	if c.cfg.DeviceID != "" {
 		req.Header.Set("X-Device-ID", c.cfg.DeviceID)
+	}
+	if c.cfg.RunnerID != "" {
+		req.Header.Set("X-Runner-ID", c.cfg.RunnerID)
 	}
 	if c.cfg.SessionID != "" {
 		req.Header.Set("X-Runner-Session-ID", c.cfg.SessionID)

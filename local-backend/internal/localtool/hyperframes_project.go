@@ -92,25 +92,6 @@ func validateLocalSegment(segment string) error {
 	return nil
 }
 
-func ensureInside(root, path string) error {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return err
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(absRoot, absPath)
-	if err != nil {
-		return err
-	}
-	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return fmt.Errorf("path escapes workspace: %s", path)
-	}
-	return nil
-}
-
 func buildHyperFramesIndex(topic, script string) string {
 	if topic == "" {
 		topic = "Tangying AIOS Video"

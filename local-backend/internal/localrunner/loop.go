@@ -21,22 +21,29 @@ type LoopOptions struct {
 	DeviceID      string
 	RunnerVersion string
 	WorkspaceRoot string
+	DataDir       string
 	PollInterval  time.Duration
 }
 
 type Loop struct {
-	client    CloudClient
-	registry  *localtool.Registry
-	options   LoopOptions
-	runnerID  string
-	sessionID string
+	client         CloudClient
+	registry       *localtool.Registry
+	options        LoopOptions
+	runnerID       string
+	sessionID      string
+	pendingReports *PendingReportStore
 }
 
 func NewLoop(client CloudClient, registry *localtool.Registry, options LoopOptions) *Loop {
 	if options.PollInterval <= 0 {
 		options.PollInterval = 3 * time.Second
 	}
-	return &Loop{client: client, registry: registry, options: options}
+	return &Loop{
+		client:         client,
+		registry:       registry,
+		options:        options,
+		pendingReports: NewPendingReportStore(options.DataDir),
+	}
 }
 
 func (l *Loop) Run(ctx context.Context) error {
@@ -60,6 +67,8 @@ func (l *Loop) RunOnce(ctx context.Context) error {
 		SessionID: l.sessionID,
 		Status:    "online",
 	})
+	// Flush any pending reports from previous failed deliveries
+	_ = l.flushPendingReports(ctx)
 	job, err := l.client.ClaimJob(ctx, l.runnerID)
 	if err != nil || job == nil {
 		return err
@@ -150,14 +159,21 @@ func toolNameForCommand(command string) string {
 
 func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 	if !l.registry.CanExecute(job.Command) {
-		return l.client.FailJob(ctx, job.ID, FailJobRequest{
+		failReq := FailJobRequest{
 			Success:   false,
 			Retryable: false,
 			Error: map[string]interface{}{
 				"code":    "LOCAL_COMMAND_NOT_ALLOWED",
 				"message": fmt.Sprintf("local command is not registered or allowed: %s", job.Command),
 			},
-		})
+		}
+		// Persist pending report before cloud delivery
+		_ = l.pendingReports.Save(PendingReport{JobID: job.ID, Type: "fail", Fail: &failReq})
+		err := l.client.FailJob(ctx, job.ID, failReq)
+		if err == nil {
+			_ = l.pendingReports.Remove(job.ID, "fail")
+		}
+		return err
 	}
 	_ = l.client.ReportProgress(ctx, job.ID, ProgressRequest{
 		Status:   "running",
@@ -167,18 +183,61 @@ func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 	})
 	result, err := l.registry.Execute(ctx, job)
 	if err != nil {
-		return l.client.FailJob(ctx, job.ID, FailJobRequest{
+		failReq := FailJobRequest{
 			Success:   false,
 			Retryable: true,
 			Error: map[string]interface{}{
 				"code":    "LOCAL_TOOL_EXEC_FAILED",
 				"message": err.Error(),
 			},
-		})
+		}
+		_ = l.pendingReports.Save(PendingReport{JobID: job.ID, Type: "fail", Fail: &failReq})
+		reportErr := l.client.FailJob(ctx, job.ID, failReq)
+		if reportErr == nil {
+			_ = l.pendingReports.Remove(job.ID, "fail")
+		}
+		return reportErr
 	}
 	output := map[string]interface{}{}
 	if result != nil && result.Output != nil {
 		output = result.Output
 	}
-	return l.client.CompleteJob(ctx, job.ID, CompleteJobRequest{Success: true, Output: output})
+	completeReq := CompleteJobRequest{Success: true, Output: output}
+	_ = l.pendingReports.Save(PendingReport{JobID: job.ID, Type: "complete", Complete: &completeReq})
+	reportErr := l.client.CompleteJob(ctx, job.ID, completeReq)
+	if reportErr == nil {
+		_ = l.pendingReports.Remove(job.ID, "complete")
+	}
+	return reportErr
+}
+
+// flushPendingReports retries delivering all persisted pending reports to the cloud.
+func (l *Loop) flushPendingReports(ctx context.Context) error {
+	reports, err := l.pendingReports.List()
+	if err != nil || len(reports) == 0 {
+		return err
+	}
+	for _, report := range reports {
+		switch report.Type {
+		case "complete":
+			if report.Complete == nil {
+				_ = l.pendingReports.Remove(report.JobID, "complete")
+				continue
+			}
+			if err := l.client.CompleteJob(ctx, report.JobID, *report.Complete); err == nil {
+				_ = l.pendingReports.Remove(report.JobID, "complete")
+			}
+		case "fail":
+			if report.Fail == nil {
+				_ = l.pendingReports.Remove(report.JobID, "fail")
+				continue
+			}
+			if err := l.client.FailJob(ctx, report.JobID, *report.Fail); err == nil {
+				_ = l.pendingReports.Remove(report.JobID, "fail")
+			}
+		default:
+			_ = l.pendingReports.Remove(report.JobID, report.Type)
+		}
+	}
+	return nil
 }

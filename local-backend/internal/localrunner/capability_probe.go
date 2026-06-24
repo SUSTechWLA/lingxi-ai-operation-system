@@ -29,10 +29,15 @@ func Probe(ctx context.Context, workspaceRoot string) ProbeResult {
 		Platform: PlatformInfo{OS: runtime.GOOS, Arch: runtime.GOARCH, Hostname: hostname},
 	}
 	result.Capabilities = append(result.Capabilities,
-		probeCommand("ffmpeg_probe", "FFMPEG_PROBE", "ffmpeg"),
+		probeCommand("ffmpeg_probe", "FFMPEG_PROBE", "ffprobe"),
 		probeCommand("ffmpeg_clip_extractor", "FFMPEG_CLIP_EXTRACT", "ffmpeg"),
+		probeCommand("ffmpeg_assembler", "FFMPEG_ASSEMBLE", "ffmpeg"),
 		probeCommand("audio_extractor", "AUDIO_EXTRACT", "ffmpeg"),
+		probeCommand("audio_normalizer", "AUDIO_NORMALIZE", "ffmpeg"),
 		probeCommand("hyperframes_project_generator", "HYPERFRAMES_PROJECT_GENERATE", "node"),
+		probeCommand("hyperframes_linter", "HYPERFRAMES_LINT", "node"),
+		probeCommand("artifact_packager", "ARTIFACT_PACKAGE", "node"),
+		probeCommand("local_file_importer", "LOCAL_FILE_IMPORT", "node"),
 	)
 	renderAvailable, renderVersion := probeHTTP(ctx, "http://127.0.0.1:8787/health")
 	result.Capabilities = append(result.Capabilities, Capability{

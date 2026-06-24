@@ -141,6 +141,7 @@ func TestHandlerCompleteJobAdvancesNodeResult(t *testing.T) {
 		"output": {"summary":"视频渲染完成","artifacts":[{"kind":"VIDEO","storageRef":"local://projects/project_001/renders/final.mp4"}]}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -173,6 +174,7 @@ func TestHandlerFailJobAdvancesNodeFailure(t *testing.T) {
 		"retryable": true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Runner-ID", "runner_001")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -221,6 +223,18 @@ func (f *fakeRunnerService) CompleteJob(_ context.Context, jobID string, _ Compl
 
 func (f *fakeRunnerService) FailJob(_ context.Context, _ string, _ FailJobRequest) (*LocalJob, error) {
 	return f.job, nil
+}
+
+func (f *fakeRunnerService) GetJob(_ context.Context, _ string) (*LocalJob, error) {
+	return f.job, nil
+}
+
+func (f *fakeRunnerService) ValidateRunnerAccess(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
+
+func (f *fakeRunnerService) ValidateJobAccess(_ context.Context, _, _, _ string) error {
+	return nil
 }
 
 type fakeNodeResultSink struct {

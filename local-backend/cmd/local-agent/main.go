@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localagent"
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localrunner"
@@ -21,6 +23,8 @@ func main() {
 	cloudAPIBase := flag.String("cloud-api-base", os.Getenv("TANGYING_CLOUD_API_BASE"), "cloud API base URL")
 	userToken := flag.String("user-token", os.Getenv("TANGYING_USER_TOKEN"), "cloud user access token for local runner")
 	deviceID := flag.String("device-id", os.Getenv("TANGYING_DEVICE_ID"), "stable local device identifier")
+	hfServiceURL := flag.String("hf-service-url", envOrDefault("TANGYING_HYPERFRAMES_SERVICE_URL", "http://127.0.0.1:8787"), "HyperFrames Render Service base URL")
+	renderTimeoutSec := flag.Int("render-timeout-sec", envOrDefaultInt("TANGYING_RENDER_TIMEOUT_SEC", 1800), "HyperFrames render timeout in seconds")
 	flag.Parse()
 
 	server := localagent.NewServer(localagent.Config{DataDir: *dataDir, CloudAPIBase: *cloudAPIBase})
@@ -37,7 +41,16 @@ func main() {
 
 	if *cloudAPIBase != "" && *userToken != "" && *deviceID != "" {
 		registry := localtool.NewRegistry()
-		registry.Register(localtool.NewHyperFramesProjectExecutor(server.Paths().DataDir), "HYPERFRAMES_PROJECT_GENERATE")
+		dataDir := server.Paths().DataDir
+
+		// Register local tool executors
+		registry.Register(localtool.NewHyperFramesProjectExecutor(dataDir), "HYPERFRAMES_PROJECT_GENERATE")
+		registry.Register(
+			localtool.NewHyperFramesRenderExecutor(dataDir, *hfServiceURL, time.Duration(*renderTimeoutSec)*time.Second),
+			"HYPERFRAMES_RENDER",
+		)
+		registry.Register(localtool.NewFFmpegProbeExecutor(dataDir), "FFMPEG_PROBE")
+		registry.Register(localtool.NewArtifactPackageExecutor(dataDir), "ARTIFACT_PACKAGE")
 		runnerClient := localrunner.NewClient(localrunner.Config{
 			CloudAPIBase: *cloudAPIBase,
 			UserToken:    *userToken,
@@ -47,6 +60,7 @@ func main() {
 			DeviceID:      *deviceID,
 			RunnerVersion: "1.0.0",
 			WorkspaceRoot: "local://aios/projects",
+			DataDir:       dataDir,
 		})
 		go func() {
 			if err := runnerLoop.Run(ctx); err != nil && ctx.Err() == nil {
@@ -67,6 +81,15 @@ func main() {
 func envOrDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return fallback
+}
+
+func envOrDefaultInt(key string, fallback int) int {
+	if value := os.Getenv(key); value != "" {
+		if n, err := strconv.Atoi(value); err == nil && n > 0 {
+			return n
+		}
 	}
 	return fallback
 }

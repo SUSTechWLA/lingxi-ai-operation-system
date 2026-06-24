@@ -12,6 +12,18 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrRunnerNotFound is returned when a runner does not exist.
+var ErrRunnerNotFound = fmt.Errorf("runner not found")
+
+// ErrRunnerAccessDenied is returned when runner ownership validation fails.
+var ErrRunnerAccessDenied = fmt.Errorf("runner access denied")
+
+// ErrJobAccessDenied is returned when job ownership validation fails.
+var ErrJobAccessDenied = fmt.Errorf("job access denied")
+
+// ErrJobAlreadyCompleted is returned when attempting to mutate a completed job.
+var ErrJobAlreadyCompleted = fmt.Errorf("job already completed")
+
 // Service manages local runner registration and job lifecycle.
 type Service struct {
 	pool *pgxpool.Pool
@@ -206,8 +218,15 @@ func (s *Service) ReportProgress(ctx context.Context, jobID string, req Progress
 	return nil
 }
 
-// CompleteJob marks a job as completed.
+// CompleteJob marks a job as completed. Idempotent: if the job is already
+// completed, it returns the existing job without modifying state.
 func (s *Service) CompleteJob(ctx context.Context, jobID string, req CompleteJobRequest) (*LocalJob, error) {
+	// Idempotency: if already completed, return existing job
+	existing, err := s.GetJob(ctx, jobID)
+	if err == nil && existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
+		return existing, nil
+	}
+
 	if req.Output == nil {
 		req.Output = map[string]interface{}{}
 	}
@@ -217,7 +236,7 @@ func (s *Service) CompleteJob(ctx context.Context, jobID string, req CompleteJob
 		 FROM (
 		  UPDATE local_jobs
 		  SET status='COMPLETED', progress=1.0, output=$2, completed_at=NOW(), updated_at=NOW()
-		  WHERE id=$1
+		  WHERE id=$1 AND status NOT IN ('COMPLETED', 'FAILED')
 		  RETURNING *
 		 ) AS local_jobs`,
 		jobID, string(outputJSON),
@@ -225,8 +244,15 @@ func (s *Service) CompleteJob(ctx context.Context, jobID string, req CompleteJob
 	return scanJob(row)
 }
 
-// FailJob marks a job as failed.
+// FailJob marks a job as failed. Idempotent: if the job is already
+// completed or failed, it returns the existing job without modifying state.
 func (s *Service) FailJob(ctx context.Context, jobID string, req FailJobRequest) (*LocalJob, error) {
+	// Idempotency: if already completed/failed, return existing job
+	existing, err := s.GetJob(ctx, jobID)
+	if err == nil && existing != nil && (existing.Status == JobCompleted || existing.Status == JobFailed) {
+		return existing, nil
+	}
+
 	errorMessage := errorMessageFromMap(req.Error)
 	errorJSON, _ := json.Marshal(req.Error)
 	diagnosticsJSON, _ := json.Marshal(req.Diagnostics)
@@ -236,12 +262,72 @@ func (s *Service) FailJob(ctx context.Context, jobID string, req FailJobRequest)
 		  UPDATE local_jobs
 		  SET status='FAILED', error_message=$2, error_json=$3::jsonb, diagnostics=$4::jsonb, retryable=$5,
 		      completed_at=NOW(), updated_at=NOW()
-		  WHERE id=$1
+		  WHERE id=$1 AND status NOT IN ('COMPLETED', 'FAILED')
 		  RETURNING *
 		 ) AS local_jobs`,
 		jobID, errorMessage, string(errorJSON), string(diagnosticsJSON), req.Retryable,
 	)
 	return scanJob(row)
+}
+
+// GetJob fetches a local job by ID.
+func (s *Service) GetJob(ctx context.Context, jobID string) (*LocalJob, error) {
+	row := s.pool.QueryRow(ctx,
+		localJobSelectPrefix()+" FROM local_jobs WHERE id=$1", jobID,
+	)
+	return scanJob(row)
+}
+
+// ValidateRunnerAccess verifies that a runner exists, belongs to the given user and device,
+// has a matching session ID, and is not revoked.
+func (s *Service) ValidateRunnerAccess(ctx context.Context, userID, deviceID, runnerID, sessionID string) error {
+	var dbUserID, dbDeviceID, dbSessionID, dbStatus string
+	err := s.pool.QueryRow(ctx,
+		`SELECT user_id, device_id, session_id, status FROM local_runners WHERE id=$1`, runnerID,
+	).Scan(&dbUserID, &dbDeviceID, &dbSessionID, &dbStatus)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return ErrRunnerNotFound
+		}
+		return fmt.Errorf("validate runner: %w", err)
+	}
+	if dbStatus == "REVOKED" {
+		return fmt.Errorf("%w: runner is revoked", ErrRunnerAccessDenied)
+	}
+	if dbUserID != "" && dbUserID != userID {
+		return fmt.Errorf("%w: runner belongs to user %s, not %s", ErrRunnerAccessDenied, dbUserID, userID)
+	}
+	if deviceID != "" && dbDeviceID != "" && dbDeviceID != deviceID {
+		return fmt.Errorf("%w: runner device mismatch", ErrRunnerAccessDenied)
+	}
+	if sessionID != "" && dbSessionID != "" && dbSessionID != sessionID {
+		return fmt.Errorf("%w: runner session mismatch", ErrRunnerAccessDenied)
+	}
+	return nil
+}
+
+// ValidateJobAccess verifies that a job exists, belongs to the given user,
+// and is claimed by the given runner (if already claimed).
+func (s *Service) ValidateJobAccess(ctx context.Context, userID, runnerID, jobID string) error {
+	var dbRunnerID, dbStatus string
+	err := s.pool.QueryRow(ctx,
+		`SELECT runner_id, status FROM local_jobs WHERE id=$1`, jobID,
+	).Scan(&dbRunnerID, &dbStatus)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("job not found: %s", jobID)
+		}
+		return fmt.Errorf("validate job: %w", err)
+	}
+	// Once a job is claimed, only the claiming runner can complete/fail it
+	if dbRunnerID != "" && dbRunnerID != runnerID {
+		return fmt.Errorf("%w: job %s claimed by runner %s, not %s", ErrJobAccessDenied, jobID, dbRunnerID, runnerID)
+	}
+	// Completed/failed jobs are immutable (idempotent check)
+	if dbStatus == string(JobCompleted) || dbStatus == string(JobFailed) {
+		return ErrJobAlreadyCompleted
+	}
+	return nil
 }
 
 func localJobSelectPrefix() string {
