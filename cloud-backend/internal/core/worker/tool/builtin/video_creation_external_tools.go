@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 var videoCreationExternalTools = []string{
 	"skill_stage_agent",
 	"image_asset_generator",
+	"hyperframes_project_generator",
 	"hyperframes_project_builder",
 	"hyperframes_renderer",
 	"hypergen_keyframes",
@@ -354,6 +356,8 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 	switch toolName {
 	case "image_asset_generator":
 		return executeImageAssetGenerator(stage, skillName, brief, instructionRef, params, toolCtx)
+	case "hyperframes_project_generator":
+		return executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef, params, toolCtx)
 	case "hyperframes_project_builder", "storyboard_assembler":
 		return executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef, params, toolCtx)
 	case "hyperframes_renderer", "text_image_to_video_generator", "video_final_assembler":
@@ -889,7 +893,493 @@ func executeImageAssetGenerator(stage, skillName, brief, instructionRef string, 
 	})
 }
 
+// executeHyperframesProjectGenerator generates a real HyperFrames HTML video project
+// directory from the upstream script, shot list, and video prompts. It writes
+// index.html, assets/data.json, assets/style.css, and manifest.json to disk.
+//
+// This is the service-mode replacement for the deprecated CLI-based
+// hyperframes_project_builder. It does NOT call npx or hyperframes CLI.
+func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	topic := stringParam(params, "topic", brief)
+	script := stringParam(params, "script", "")
+	style := stringParam(params, "style", "16:9 非写实动画，中文知识分享，低饱和知识分享")
+
+	// Serialize structured params for the LLM prompt.
+	shotListJSON := serializeParamJSON(params["shotList"])
+	videoPromptsJSON := serializeParamJSON(params["videoPrompts"])
+	publishCopyJSON := serializeParamJSON(params["publishCopy"])
+
+	// Determine project directory.
+	projectRoot := hyperFramesConfig.ProjectRoot
+	if projectRoot == "" {
+		projectRoot = "/data/aios/projects"
+	}
+	projectDir := filepath.Join(projectRoot, toolCtx.TaskID, "hyperframes")
+	assetsDir := filepath.Join(projectDir, "assets")
+
+	// Build data.json content.
+	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, style, publishCopyJSON)
+	manifestJSON := buildHyperFramesManifestJSON(topic, toolCtx.TaskID)
+	styleCSS := hyperFramesDefaultStyleCSS()
+
+	// Use LLM to generate the index.html.
+	indexHTML := generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style, toolCtx)
+
+	// Write files to disk.
+	files := []string{}
+	writeErr := os.MkdirAll(assetsDir, 0755)
+	if writeErr != nil {
+		zap.L().Warn("Cannot create HyperFrames project directory",
+			zap.String("projectDir", projectDir),
+			zap.Error(writeErr))
+	} else {
+		if err := os.WriteFile(filepath.Join(projectDir, "index.html"), []byte(indexHTML), 0644); err != nil {
+			zap.L().Warn("Cannot write index.html", zap.Error(err))
+		} else {
+			files = append(files, "index.html")
+		}
+		if err := os.WriteFile(filepath.Join(assetsDir, "data.json"), []byte(dataJSON), 0644); err != nil {
+			zap.L().Warn("Cannot write data.json", zap.Error(err))
+		} else {
+			files = append(files, "assets/data.json")
+		}
+		if err := os.WriteFile(filepath.Join(assetsDir, "style.css"), []byte(styleCSS), 0644); err != nil {
+			zap.L().Warn("Cannot write style.css", zap.Error(err))
+		} else {
+			files = append(files, "assets/style.css")
+		}
+		if err := os.WriteFile(filepath.Join(projectDir, "manifest.json"), []byte(manifestJSON), 0644); err != nil {
+			zap.L().Warn("Cannot write manifest.json", zap.Error(err))
+		} else {
+			files = append(files, "manifest.json")
+		}
+	}
+
+	summary := fmt.Sprintf("已生成 HyperFrames HTML 视频项目（主题：%s），包含 %d 个文件。", topic, len(files))
+	if writeErr != nil {
+		summary = fmt.Sprintf("HyperFrames 项目内容已通过 LLM 生成，但写入磁盘失败：%v。项目目录：%s", writeErr, projectDir)
+	}
+
+	zap.L().Info("HyperFrames project generated",
+		zap.String("taskId", toolCtx.TaskID),
+		zap.String("projectDir", projectDir),
+		zap.Int("fileCount", len(files)))
+
+	artifacts := []map[string]interface{}{
+		{
+			"unitId":   stage,
+			"kind":     "HTML",
+			"name":     "index.html",
+			"mimeType": "text/html",
+			"metadata": map[string]interface{}{
+				"stage":           stage,
+				"skillName":       skillName,
+				"requiresReview":  true,
+				"canReviseByChat": true,
+				"source":          "hyperframes-project-generator",
+			},
+		},
+		{
+			"unitId":   stage + "-data",
+			"kind":     "JSON",
+			"name":     "data.json",
+			"mimeType": "application/json",
+			"metadata": map[string]interface{}{
+				"stage":     stage,
+				"skillName": skillName,
+				"source":    "hyperframes-project-generator",
+			},
+		},
+	}
+
+	return tool.SuccessResult(map[string]interface{}{
+		"content":    fmt.Sprintf("# %s\n\n%s\n\n生成文件：\n%s", stage, summary, strings.Join(files, "\n")),
+		"projectDir": projectDir,
+		"entry":      "index.html",
+		"files":      files,
+		"summary":    summary,
+		"artifacts":  artifacts,
+	})
+}
+
+// serializeParamJSON converts a param value (which may be []interface{}, string, or
+// already-encoded JSON) to an indented JSON string suitable for embedding in prompts.
+func serializeParamJSON(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return s
+	}
+	b, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(b)
+}
+
+// buildHyperFramesDataJSON builds the data.json content for a HyperFrames project.
+func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, style, publishCopyJSON string) string {
+	// Always emit valid JSON even when upstream fields are empty.
+	safeShots := shotListJSON
+	if safeShots == "" {
+		safeShots = "[]"
+	}
+	safePrompts := videoPromptsJSON
+	if safePrompts == "" {
+		safePrompts = "[]"
+	}
+	safePublish := publishCopyJSON
+	if safePublish == "" {
+		safePublish = "{}"
+	}
+
+	return fmt.Sprintf(`{
+  "topic": %s,
+  "script": %s,
+  "shots": %s,
+  "videoPrompts": %s,
+  "style": {
+    "aspectRatio": "16:9",
+    "language": "zh-CN",
+    "visualStyle": %s
+  },
+  "publishCopy": %s
+}
+`, jsonString(topic), jsonString(script), safeShots, safePrompts, jsonString(style), safePublish)
+}
+
+// buildHyperFramesManifestJSON builds the manifest.json for a HyperFrames project.
+func buildHyperFramesManifestJSON(topic, taskID string) string {
+	return fmt.Sprintf(`{
+  "name": %s,
+  "version": "1.0.0",
+  "taskId": %s,
+  "createdAt": %s,
+  "entry": "index.html",
+  "format": "hyperframes-html5",
+  "aspectRatio": "16:9"
+}
+`, jsonString(topic), jsonString(taskID), jsonString(time.Now().UTC().Format(time.RFC3339)))
+}
+
+// hyperFramesDefaultStyleCSS returns a minimal CSS foundation for HyperFrames projects.
+func hyperFramesDefaultStyleCSS() string {
+	return `/* HyperFrames Project — base styles */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #0a0a0f;
+  color: #f0f0f0;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.scene {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.scene-title {
+  font-size: 3.5vw;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-align: center;
+  padding: 0 10%;
+  line-height: 1.3;
+}
+
+.scene-subtitle {
+  font-size: 1.8vw;
+  font-weight: 400;
+  opacity: 0.75;
+  margin-top: 2vh;
+  text-align: center;
+  padding: 0 15%;
+}
+
+.scene-body {
+  font-size: 2vw;
+  font-weight: 400;
+  line-height: 1.6;
+  text-align: center;
+  padding: 0 12%;
+  margin-top: 3vh;
+}
+
+.caption-bar {
+  position: absolute;
+  bottom: 8%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80%;
+  text-align: center;
+  font-size: 1.8vw;
+  font-weight: 500;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 1.5vh 3vw;
+  border-radius: 0.8vw;
+  letter-spacing: 0.03em;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+.anim-fade-in {
+  animation: fadeIn 0.8s ease-out both;
+}
+
+.anim-fade-out {
+  animation: fadeOut 0.6s ease-in both;
+}
+`
+}
+
+// generateHyperFramesIndexHTML uses the LLM to generate a complete HyperFrames HTML
+// video page from the topic, script, shot list, and style parameters.
+func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style string, toolCtx tool.ToolContext) string {
+	effectiveCfg := GetVideoCreationOpenAIConfig()
+	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
+		if localCfg.BaseURL != "" {
+			effectiveCfg.BaseURL = localCfg.BaseURL
+		}
+		if localCfg.APIKey != "" {
+			effectiveCfg.APIKey = localCfg.APIKey
+		}
+		if localCfg.Model != "" {
+			effectiveCfg.Model = localCfg.Model
+		}
+	}
+
+	// If no LLM is configured, generate a minimal static HTML from the data.
+	if effectiveCfg.APIKey == "" {
+		zap.L().Info("No LLM API key configured, generating minimal HyperFrames HTML")
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+	}
+
+	systemPrompt := `你是 HyperFrames HTML 视频页面开发专家。
+
+任务：
+根据提供的话题、口播稿、分镜列表和视频风格，生成一个完整的、可直接渲染的 HyperFrames HTML 视频页面。
+
+HyperFrames 是一个 HTML-to-Video 渲染框架。你生成的 HTML 页面将直接被渲染引擎逐帧截取并编码为 MP4 视频。
+
+硬性要求：
+1. 页面尺寸为 1920x1080（16:9 画幅），所有元素定位基于此分辨率。
+2. 每个镜头（shot）应生成对应的 <div class="scene"> 或 <section>，包含该镜头的视觉描述和口播文字。
+3. 使用 CSS @keyframes 动画实现镜头切换效果（淡入淡出、滑动、缩放等）。
+4. 文字以字幕/标题/要点形式呈现，适合视频观看，不要长段落。
+5. 基调为非写实动画风格，去 AI 感，配色低饱和知识分享风格。
+6. 背景色使用深色系（#0a0a0f 或类似），文字使用浅色系。
+7. 每个场景的字幕/口播文字放在底部 caption-bar 中。
+8. 不要使用任何外部依赖或 CDN 链接。
+9. 所有 CSS 内联或放在 <style> 标签中。
+10. 整个页面必须是一个独立的、可以直接在浏览器中打开的完整 HTML 文件。
+11. 不要包含任何 JavaScript 框架（React、Vue 等）。
+12. 不要输出 Markdown 代码块标记，只输出纯 HTML。
+
+视觉风格要求：
+- 低饱和配色：背景 #0a0a0f，主文字 #f0f0f0，强调色使用低饱和蓝/青/金色
+- 大量留白，简约设计
+- 文字层级清晰：标题 > 副标题 > 正文 > 字幕
+- 几何装饰元素（线条、圆点、半透明形状）
+- 每个场景之间有明确视觉过渡
+
+输出：
+只输出完整的 HTML 文件内容，从 <!DOCTYPE html> 开始。不要有任何解释文字。`
+
+	userPrompt := fmt.Sprintf(`话题：%s
+
+口播稿：
+%s
+
+分镜列表：
+%s
+
+视频提示词：
+%s
+
+风格要求：%s
+
+请生成完整的 HyperFrames HTML 视频页面。`, topic, script, shotListJSON, videoPromptsJSON, style)
+
+	callTool := &LlmApiTool{cfg: effectiveCfg}
+	result := callTool.Execute(context.Background(), map[string]interface{}{
+		"prompt":     systemPrompt + "\n\n---\n\n" + userPrompt,
+		"max_tokens": 16000,
+	}, toolCtx)
+
+	if !result.Success {
+		zap.L().Warn("LLM generation for HyperFrames HTML failed, falling back to minimal HTML",
+			zap.String("error", result.Error))
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+	}
+
+	rawHTML, _ := result.Data["content"].(string)
+	rawHTML = strings.TrimSpace(rawHTML)
+
+	// Strip markdown code fences if the LLM wrapped the output.
+	rawHTML = strings.TrimPrefix(rawHTML, "```html")
+	rawHTML = strings.TrimPrefix(rawHTML, "```HTML")
+	rawHTML = strings.TrimPrefix(rawHTML, "```")
+	rawHTML = strings.TrimSuffix(rawHTML, "```")
+	rawHTML = strings.TrimSpace(rawHTML)
+
+	// If the LLM didn't return valid HTML, fall back.
+	if !strings.HasPrefix(rawHTML, "<!DOCTYPE") && !strings.HasPrefix(rawHTML, "<html") {
+		zap.L().Warn("LLM did not return valid HTML, falling back to minimal HTML",
+			zap.String("prefix", safePrefix(rawHTML, 100)))
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+	}
+
+	return rawHTML
+}
+
+// buildMinimalHyperFramesHTML generates a basic HyperFrames HTML page from the given
+// data without calling the LLM. Used as fallback when no API key is configured.
+func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) string {
+	// Parse shot list to extract shot entries.
+	type shotEntry struct {
+		ShotID        string `json:"shotId"`
+		DurationSec   int    `json:"durationSec"`
+		ScriptText    string `json:"scriptText"`
+		Visual        string `json:"visual"`
+		Camera        string `json:"camera"`
+		TransitionIn  string `json:"transitionIn"`
+		TransitionOut string `json:"transitionOut"`
+	}
+	var shots []shotEntry
+	if err := json.Unmarshal([]byte(shotListJSON), &shots); err != nil {
+		// shotListJSON might be a wrapper object with a "shotList" field.
+		var wrapper struct {
+			ShotList []shotEntry `json:"shotList"`
+		}
+		if err2 := json.Unmarshal([]byte(shotListJSON), &wrapper); err2 == nil && len(wrapper.ShotList) > 0 {
+			shots = wrapper.ShotList
+		}
+	}
+
+	var scenesBuilder strings.Builder
+	if len(shots) == 0 {
+		// No structured shots — generate a single-scene page from the script.
+		escapedScript := strings.ReplaceAll(script, "`", "\\`")
+		escapedScript = strings.ReplaceAll(escapedScript, "${", "\\${")
+		scenesBuilder.WriteString(fmt.Sprintf(`  <div class="scene anim-fade-in">
+    <div class="scene-title">%s</div>
+    <div class="scene-body">%s</div>
+    <div class="caption-bar">%s</div>
+  </div>
+`, templateEscape(topic), templateEscape(truncateText(script, 200)), templateEscape(truncateText(script, 80))))
+	} else {
+		for i, shot := range shots {
+			animClass := "anim-fade-in"
+			if i > 0 {
+				animClass = "anim-fade-in"
+			}
+			title := shot.Visual
+			if title == "" {
+				title = shot.ShotID
+			}
+			body := shot.Camera
+			if body == "" {
+				body = shot.TransitionIn
+			}
+			scenesBuilder.WriteString(fmt.Sprintf(`  <div class="scene %s" style="animation-delay: %ds">
+    <div class="scene-title">%s</div>
+    <div class="scene-subtitle">%s</div>
+    <div class="caption-bar">%s</div>
+  </div>
+`, animClass, i*1, templateEscape(title), templateEscape(body), templateEscape(shot.ScriptText)))
+		}
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>%s</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0a0a0f; color: #f0f0f0; }
+#app { width: 100%%; height: 100%%; position: relative; }
+.scene { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.scene-title { font-size: 56px; font-weight: 700; letter-spacing: 0.05em; text-align: center; padding: 0 10%%; line-height: 1.3; color: #e8e8f0; }
+.scene-subtitle { font-size: 28px; font-weight: 400; opacity: 0.65; margin-top: 20px; text-align: center; padding: 0 15%%; color: #b0b0c0; }
+.scene-body { font-size: 32px; font-weight: 400; line-height: 1.6; text-align: center; padding: 0 12%%; margin-top: 30px; color: #c0c0d0; }
+.caption-bar { position: absolute; bottom: 8%%; left: 50%%; transform: translateX(-50%%); width: 80%%; text-align: center; font-size: 30px; font-weight: 500; background: rgba(0, 0, 0, 0.6); padding: 16px 40px; border-radius: 12px; letter-spacing: 0.03em; color: #ffffff; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+.anim-fade-in { animation: fadeIn 0.8s ease-out both; }
+.anim-fade-out { animation: fadeOut 0.6s ease-in both; }
+</style>
+</head>
+<body>
+<div id="app">
+%s
+</div>
+</body>
+</html>`, templateEscape(topic), scenesBuilder.String())
+}
+
+// templateEscape escapes text for safe embedding in HTML templates.
+func templateEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
+}
+
+// truncateText truncates text to maxLen characters, appending "..." if truncated.
+func truncateText(text string, maxLen int) string {
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+	return string(runes[:maxLen]) + "..."
+}
+
+// jsonString returns a JSON-encoded string (with quotes).
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// safePrefix returns the first n characters of s for logging purposes.
+func safePrefix(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
+}
+
 // executeHyperframesProjectBuilder builds or provides guidance for a HyperFrames project.
+// Deprecated: use executeHyperframesProjectGenerator for service mode instead.
 func executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	referenceRef := stringParam(params, "reference_ref", "")
 	assetsRef := stringParam(params, "assets_ref", "")
@@ -943,17 +1433,26 @@ func executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef st
 // executeHyperframesRenderer renders a HyperFrames project to MP4.
 //
 // When HyperFrames mode is "service", it calls the Render Service HTTP API.
-// Otherwise it falls back to the legacy CLI detection (deprecated).
+// CLI fallback is explicitly forbidden in service mode — if the service is
+// unavailable the tool returns a failure. When mode is "disabled" the tool
+// refuses to render.
 func executeHyperframesRenderer(stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	projectRef := stringParam(params, "project_ref", "")
 	projectDir := stringParam(params, "projectDir", projectRef)
+	entry := stringParam(params, "entry", "index.html")
 
 	status := "guidance_only"
 	var renderPath, duration, resolution, codec, fileSize, jobID string
 	serviceUsed := false
 
-	// Prefer service mode over CLI.
-	if hyperFramesServiceAvailable() {
+	switch hyperFramesConfig.Mode {
+	case hyperframes.ModeService:
+		if !hyperFramesServiceAvailable() {
+			return tool.FailureResult(
+				"HyperFrames Render Service 未启用或不可用，service 模式禁止回退 CLI。请检查 Render Service 是否已启动。",
+			)
+		}
+
 		zap.L().Info("HyperFrames render via Render Service",
 			zap.String("taskId", toolCtx.TaskID),
 			zap.String("projectDir", projectDir))
@@ -964,7 +1463,7 @@ func executeHyperframesRenderer(stage, skillName, brief, instructionRef string, 
 
 		result, err := hyperFramesClient.Render(ctx, hyperframes.RenderRequest{
 			ProjectDir: projectDir,
-			Entry:      stringParam(params, "entry", "index.html"),
+			Entry:      entry,
 			OutputPath: outputPath,
 			FPS:        hyperFramesConfig.DefaultFPS,
 			Quality:    hyperFramesConfig.DefaultQuality,
@@ -990,30 +1489,15 @@ func executeHyperframesRenderer(stage, skillName, brief, instructionRef string, 
 			zap.String("jobId", jobID),
 			zap.String("outputPath", renderPath),
 			zap.Int64("durationMs", result.DurationMs))
-	} else {
-		// Legacy CLI fallback (deprecated, kept for transition).
-		cliCmd, cliFound := detectHyperFramesCLI()
 
-		if cliFound && projectRef != "" {
-			zap.L().Info("Attempting HyperFrames render via CLI (deprecated)",
-				zap.String("taskId", toolCtx.TaskID),
-				zap.String("projectRef", projectRef))
+	case hyperframes.ModeDisabled:
+		return tool.FailureResult("HyperFrames 渲染已禁用（HYPERFRAMES_MODE=disabled）")
 
-			args := buildHyperFramesRenderArgs(cliCmd, projectRef, toolCtx.TaskID)
-			if output, err := runHyperFramesCommand(cliCmd, args, toolCtx.TaskID); err == nil {
-				renderPath = fmt.Sprintf("output/%s.mp4", toolCtx.TaskID)
-				duration = extractDurationFromOutput(output)
-				resolution = extractResolutionFromOutput(output)
-				codec = "h264"
-				fileSize = extractFileSizeFromOutput(output)
-				status = "rendered"
-				zap.L().Info("HyperFrames render completed via CLI",
-					zap.String("path", renderPath))
-			} else {
-				zap.L().Warn("HyperFrames CLI render failed",
-					zap.Error(err))
-			}
-		}
+	default:
+		// Unknown mode — refuse to render.
+		return tool.FailureResult(
+			fmt.Sprintf("HyperFrames 模式未识别（%s）。请设置 HYPERFRAMES_MODE=service 或 HYPERFRAMES_MODE=disabled。", string(hyperFramesConfig.Mode)),
+		)
 	}
 
 	renderArtifacts := []map[string]interface{}{
