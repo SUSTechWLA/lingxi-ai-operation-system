@@ -19,10 +19,17 @@ type StageApprover interface {
 type WorkflowHandler struct {
 	runSvc        *workflow.RunService
 	stageApprover StageApprover
+	checkpointSvc *workflow.CheckpointService
 }
 
 func NewWorkflowHandler(runSvc *workflow.RunService, stageApprover StageApprover) *WorkflowHandler {
 	return &WorkflowHandler{runSvc: runSvc, stageApprover: stageApprover}
+}
+
+// WithCheckpointService injects the checkpoint service for recovery endpoints.
+func (h *WorkflowHandler) WithCheckpointService(svc *workflow.CheckpointService) *WorkflowHandler {
+	h.checkpointSvc = svc
+	return h
 }
 
 func (h *WorkflowHandler) RegisterRoutes(r *gin.Engine) {
@@ -32,6 +39,8 @@ func (h *WorkflowHandler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/:rid", h.GetRun)
 		api.POST("/:rid/pause", h.PauseRun)
 		api.POST("/:rid/cancel", h.CancelRun)
+		api.GET("/:rid/checkpoints", h.ListCheckpoints)
+		api.POST("/:rid/recover", h.RecoverRun)
 	}
 
 	stages := r.Group("/api/video-projects/:id/stages")
@@ -123,6 +132,42 @@ func (h *WorkflowHandler) ApproveStage(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"nodeId": node.ID, "stage": c.Param("stage"), "message": "approved"})
+}
+
+// GET /api/video-projects/:id/workflow-runs/:rid/checkpoints
+func (h *WorkflowHandler) ListCheckpoints(c *gin.Context) {
+	if h.checkpointSvc == nil {
+		fail(c, 503, "checkpoint service is not configured")
+		return
+	}
+	runID := c.Param("rid")
+	cps, err := h.checkpointSvc.ListByRun(c.Request.Context(), runID)
+	if err != nil {
+		fail(c, 500, err.Error())
+		return
+	}
+	if cps == nil {
+		cps = []*workflow.Checkpoint{}
+	}
+	ok(c, gin.H{"checkpoints": cps})
+}
+
+// POST /api/video-projects/:id/workflow-runs/:rid/recover
+func (h *WorkflowHandler) RecoverRun(c *gin.Context) {
+	if h.checkpointSvc == nil {
+		fail(c, 503, "checkpoint service is not configured")
+		return
+	}
+	cp, err := h.checkpointSvc.RecoverToCheckpoint(c.Request.Context(), c.Param("rid"))
+	if err != nil {
+		fail(c, 500, err.Error())
+		return
+	}
+	if cp == nil {
+		fail(c, 404, "no awaiting checkpoint found for recovery")
+		return
+	}
+	ok(c, gin.H{"checkpoint": cp, "message": "recovered to stage " + cp.StageName})
 }
 
 func approvalErrorStatus(err error) int {

@@ -52,6 +52,25 @@ func (r *RunRepository) FindByID(ctx context.Context, id string) (*WorkflowRun, 
 	return &run, nil
 }
 
+// FindByTaskID returns the WorkflowRun associated with the given orchestrator task.
+func (r *RunRepository) FindByTaskID(ctx context.Context, taskID string) (*WorkflowRun, error) {
+	var run WorkflowRun
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, project_id, COALESCE(user_id, 'default'), template_id, template_version,
+		        task_id, status, attempt, input, output, stage_statuses,
+		        trace_id, started_at, finished_at, created_at
+		 FROM workflow_runs WHERE task_id=$1`, taskID,
+	).Scan(
+		&run.ID, &run.ProjectID, &run.UserID, &run.TemplateID, &run.TemplateVersion,
+		&run.TaskID, &run.Status, &run.Attempt, &run.Input, &run.Output,
+		&run.StageStatuses, &run.TraceID, &run.StartedAt, &run.FinishedAt, &run.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 // FindByProject returns all runs for a project, newest first.
 func (r *RunRepository) FindByProject(ctx context.Context, projectID string) ([]*WorkflowRun, error) {
 	rows, err := r.pool.Query(ctx,

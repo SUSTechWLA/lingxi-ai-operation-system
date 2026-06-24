@@ -12,12 +12,34 @@ type ToolCatalog interface {
 	GetManifest(name string) *tool.ToolManifest
 }
 
+// StageDirector provides stage-level tool constraints.
+type StageDirector interface {
+	Name() string
+	StageName() string
+	AllowedTools() []string
+	ForbiddenTools() []string
+	MaxToolCalls() int
+	RequiresApproval() bool
+}
+
+// DirectorRegistry maps stage names to their Directors.
+type DirectorRegistry interface {
+	Get(stageName string) StageDirector
+}
+
 type PlanCompiler struct {
-	tools ToolCatalog
+	tools     ToolCatalog
+	directors DirectorRegistry
 }
 
 func NewPlanCompiler(tools ToolCatalog) *PlanCompiler {
 	return &PlanCompiler{tools: tools}
+}
+
+// WithDirectors injects a DirectorRegistry for stage-level tool enforcement.
+func (c *PlanCompiler) WithDirectors(directors DirectorRegistry) *PlanCompiler {
+	c.directors = directors
+	return c
 }
 
 func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
@@ -30,6 +52,9 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 
 	// Detect missing quality checkers and auto-insert them.
 	steps := c.injectQualityGates(plan.Steps)
+
+	// Enforce stage-level tool restrictions via Directors.
+	steps = c.enforceDirectors(steps, plan.Domain)
 
 	nodes := make([]model.NodeRequest, 0, len(steps)*2)
 	edges := make([]model.Edge, 0, len(steps)*2)
@@ -162,6 +187,90 @@ func buildQualityCheckArgs(sourceStep AgentStep) map[string]interface{} {
 		args["script"] = fmt.Sprintf("{{%s.output.package}}", sourceStep.ID)
 	}
 	return args
+}
+
+// enforceDirectors checks each step's tool against the stage director's constraints.
+// Forbidden tools and tools exceeding the max call limit are removed from the plan.
+// This is a safety net that prevents the LLM from calling restricted tools regardless
+// of what the prompt says.
+func (c *PlanCompiler) enforceDirectors(steps []AgentStep, domain string) []AgentStep {
+	if c.directors == nil {
+		return steps
+	}
+	if domain != "video_creation" {
+		return steps
+	}
+
+	// Try to resolve a stage name from the first step's context.
+	stageName := ""
+	for _, s := range steps {
+		if s.Arguments != nil {
+			if sn, ok := s.Arguments["stage"].(string); ok && sn != "" {
+				stageName = sn
+				break
+			}
+		}
+	}
+	if stageName == "" {
+		return steps
+	}
+
+	d := c.directors.Get(stageName)
+	if d == nil {
+		return steps
+	}
+
+	// Build forbid-set and allow-set for fast lookup.
+	forbidden := stringSet(d.ForbiddenTools())
+	allowed := stringSet(d.AllowedTools())
+	maxCalls := d.MaxToolCalls()
+	if maxCalls <= 0 {
+		maxCalls = 10
+	}
+
+	callCount := 0
+	filtered := make([]AgentStep, 0, len(steps))
+	for _, s := range steps {
+		// Skip internal marker tools.
+		if s.Tool == "__quality_gate__" {
+			filtered = append(filtered, s)
+			continue
+		}
+		// Quality-checker tools are always allowed.
+		if isQualityCheckerTool(s.Tool) {
+			filtered = append(filtered, s)
+			continue
+		}
+
+		if forbidden[s.Tool] {
+			continue // silently drop forbidden tool
+		}
+		if len(allowed) > 0 && !allowed[s.Tool] {
+			continue // tool not in allow-list
+		}
+		if callCount >= maxCalls {
+			continue // exceeded stage tool limit
+		}
+		callCount++
+		filtered = append(filtered, s)
+	}
+	return filtered
+}
+
+func isQualityCheckerTool(toolName string) bool {
+	return strings.HasSuffix(toolName, "_quality_checker") ||
+		strings.Contains(toolName, "quality_check")
+}
+
+func stringSet(items []string) map[string]bool {
+	if len(items) == 0 {
+		return nil
+	}
+	s := make(map[string]bool, len(items))
+	for _, item := range items {
+		s[item] = true
+	}
+	return s
 }
 
 func (c *PlanCompiler) manifestFor(name string) *tool.ToolManifest {
@@ -319,7 +428,7 @@ func buildReviewNode(nodeID string, step AgentStep, policy tool.ApprovalPolicy, 
 
 	return model.NodeRequest{
 		ID:    nodeID,
-		Type:  string(model.NodeTypeControl),
+		Type:  string(model.NodeTypeReviewGate),
 		Name:  "审核-" + step.ID,
 		Input: input,
 	}
@@ -376,7 +485,7 @@ func compileQualityGate(step AgentStep) compiledStep {
 	return compiledStep{
 		nodes: []model.NodeRequest{{
 			ID:    nodeID,
-			Type:  string(model.NodeTypeControl),
+			Type:  string(model.NodeTypeReviewGate),
 			Name:  "质量门禁-" + step.ID,
 			Input: input,
 		}},

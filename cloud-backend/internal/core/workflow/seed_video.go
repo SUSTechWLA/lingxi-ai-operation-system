@@ -36,7 +36,7 @@ func GuidedImageTextVideoWorkflow() struct {
     },
     {
       "id": "proposal_review_gate",
-      "type": "CONTROL",
+      "type": "REVIEW_GATE",
       "name": "审核-创作方案",
       "input": {
         "phase": "after_artifact",
@@ -61,7 +61,7 @@ func GuidedImageTextVideoWorkflow() struct {
     },
     {
       "id": "script_review_gate",
-      "type": "CONTROL",
+      "type": "REVIEW_GATE",
       "name": "审核-口播脚本",
       "input": {
         "phase": "after_artifact",
@@ -86,7 +86,7 @@ func GuidedImageTextVideoWorkflow() struct {
     },
     {
       "id": "composition_review_gate",
-      "type": "CONTROL",
+      "type": "REVIEW_GATE",
       "name": "审核-视频结构",
       "input": {
         "phase": "after_artifact",
@@ -109,7 +109,7 @@ func GuidedImageTextVideoWorkflow() struct {
     },
     {
       "id": "preview_review_gate",
-      "type": "CONTROL",
+      "type": "REVIEW_GATE",
       "name": "审核-画面预览",
       "input": {
         "phase": "after_artifact",

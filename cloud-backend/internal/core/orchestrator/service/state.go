@@ -14,6 +14,10 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
 )
 
+// TransitionHook is an optional callback invoked after every node transition.
+// It receives the node (post-transition) and its new status.
+type TransitionHook func(ctx context.Context, node *model.Node, newStatus model.NodeStatus)
+
 type StateService struct {
 	nodeRepo          repository.NodeRepo
 	taskRepo          repository.TaskRepo
@@ -22,6 +26,7 @@ type StateService struct {
 	eventSaver        outbox.EventSaver
 	retryPolicy       *RetryPolicy
 	dependencyChecker *DependencyChecker
+	onTransition      TransitionHook
 }
 
 func NewStateService(
@@ -43,6 +48,13 @@ func NewStateService(
 
 func (s *StateService) SetDependencyChecker(dc *DependencyChecker) {
 	s.dependencyChecker = dc
+}
+
+// SetTransitionHook registers an optional callback that is invoked after every
+// successful node transition. This allows higher-level services (e.g. workflow
+// checkpointing) to observe state changes without coupling to the orchestrator.
+func (s *StateService) SetTransitionHook(hook TransitionHook) {
+	s.onTransition = hook
 }
 
 func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newStatus model.NodeStatus, output map[string]interface{}, errMsg string) (*model.Node, error) {
@@ -93,8 +105,13 @@ func (s *StateService) TransitionNode(ctx context.Context, nodeID string, newSta
 
 	s.recordContextForTransition(ctx, node, newStatus)
 
-	// CONTROL node: auto-pause task when node becomes READY (human review required)
-	if node.Type == model.NodeTypeControl && newStatus == model.NodeReady {
+	// Notify higher-level observers (e.g. workflow checkpoints).
+	if s.onTransition != nil {
+		s.onTransition(ctx, node, newStatus)
+	}
+
+	// CONTROL or REVIEW_GATE node: auto-pause task when node becomes READY (human review required)
+	if (node.Type == model.NodeTypeControl || node.Type == model.NodeTypeReviewGate) && newStatus == model.NodeReady {
 		s.handleControlNodeReady(ctx, node)
 	}
 
@@ -298,7 +315,7 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 
 	s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "StateMachine", "初始节点就绪（无依赖），进入 READY 状态", buildNodeMetadata(node, model.NodeReady))
 
-	if node.Type == model.NodeTypeControl {
+	if node.Type == model.NodeTypeControl || node.Type == model.NodeTypeReviewGate {
 		s.handleControlNodeReady(ctx, node)
 		return nil
 	}

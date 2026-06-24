@@ -74,7 +74,7 @@ func TestE2E_DragonBoatFestival_FullPipeline(t *testing.T) {
 	}
 	foundReviews := 0
 	for _, n := range dag.Nodes {
-		if n.Type == string(model.NodeTypeControl) {
+		if n.Type == string(model.NodeTypeControl) || n.Type == string(model.NodeTypeReviewGate) {
 			t.Logf("  ✓ CONTROL node: %s (phase: %v)", n.ID, n.Input["reviewPhase"])
 			if reviewSteps[n.ID] {
 				foundReviews++
@@ -88,7 +88,7 @@ func TestE2E_DragonBoatFestival_FullPipeline(t *testing.T) {
 	// 3c: Quality gates should be present for qualityPolicy.Required tools.
 	qualityGates := 0
 	for _, n := range dag.Nodes {
-		if n.Type == string(model.NodeTypeControl) && n.Input["reviewPhase"] == "quality_gate" {
+		if n.Type == string(model.NodeTypeControl) || n.Type == string(model.NodeTypeReviewGate) && n.Input["reviewPhase"] == "quality_gate" {
 			qualityGates++
 			t.Logf("  ✓ QUALITY_GATE: %s (autoApproveWhenPassed=%v, minScore=%v)",
 				n.ID, n.Input["autoApproveWhenPassed"], n.Input["minScore"])
@@ -198,7 +198,7 @@ func TestE2E_PlanCompilerQualityGateAutoInsert(t *testing.T) {
 		switch {
 		case n.ID == "script_quality_checker":
 			foundChecker = true
-		case n.ID == "script_gen_quality_gate" && n.Type == string(model.NodeTypeControl):
+		case n.ID == "script_gen_quality_gate" && (n.Type == string(model.NodeTypeControl) || n.Type == string(model.NodeTypeReviewGate)):
 			foundGate = true
 			if n.Input["reviewPhase"] != "quality_gate" {
 				t.Errorf("quality gate has wrong reviewPhase: %v", n.Input["reviewPhase"])
@@ -206,7 +206,7 @@ func TestE2E_PlanCompilerQualityGateAutoInsert(t *testing.T) {
 			if n.Input["autoApproveWhenPassed"] != true {
 				t.Errorf("quality gate should have autoApproveWhenPassed=true")
 			}
-		case n.ID == "script_gen_review" && n.Type == string(model.NodeTypeControl):
+		case n.ID == "script_gen_review" && (n.Type == string(model.NodeTypeControl) || n.Type == string(model.NodeTypeReviewGate)):
 			foundReview = true
 		}
 	}

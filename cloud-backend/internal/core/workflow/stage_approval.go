@@ -112,7 +112,7 @@ func findApprovalNode(nodes []*model.Node, stageName string) (*model.Node, error
 		if node == nil || node.ID != stageName {
 			continue
 		}
-		if node.Type != model.NodeTypeControl {
+		if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
 			return nil, fmt.Errorf("%w: %s", ErrStageNotControl, stageName)
 		}
 		return node, nil

@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -20,11 +21,37 @@ type ReviewStateMachine interface {
 	OnFailure(ctx context.Context, nodeID string, errorMessage string) error
 }
 
+// Decision type constants for audit-trail entries.
+const (
+	DecisionStageApproval     = "stage_approval"
+	DecisionStageRejection    = "stage_rejection"
+	DecisionStageEdit         = "stage_edited"
+	DecisionStageRegeneration = "stage_regenerated"
+)
+
+// DecisionLogWriter abstracts the storage needed to write audit-trail entries.
+type DecisionLogWriter interface {
+	Save(ctx context.Context, record *DecisionLogRecord) error
+}
+
+// DecisionLogRecord is a simplified decision-log entry used by the agent runtime handler.
+type DecisionLogRecord struct {
+	WorkflowRunID  string `json:"workflowRunId"`
+	TaskID         string `json:"taskId"`
+	StageName      string `json:"stageName"`
+	DecisionType   string `json:"decisionType"`
+	Selected       string `json:"selected"`
+	ApprovedByUser bool   `json:"approvedByUser"`
+	ReviewerID     string `json:"reviewerId,omitempty"`
+	Comment        string `json:"comment,omitempty"`
+}
+
 type Handler struct {
 	runner         *Runner
 	nodes          ReviewNodeStore
 	stateMachine   ReviewStateMachine
 	artifactReview ArtifactReviewStore
+	decisionLog    DecisionLogWriter
 }
 
 func NewHandler(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *Handler {
@@ -38,6 +65,12 @@ func (h *Handler) WithArtifactReviewStore(store ArtifactReviewStore) *Handler {
 	return h
 }
 
+// WithDecisionLogWriter sets the decision log writer for audit-trail persistence.
+func (h *Handler) WithDecisionLogWriter(w DecisionLogWriter) *Handler {
+	h.decisionLog = w
+	return h
+}
+
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api := r.Group("/api/agent/runs")
 	{
@@ -47,6 +80,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/:runId/reviews", h.ListReviews)
 		api.POST("/:runId/reviews/:reviewId/approve", h.ApproveReview)
 		api.POST("/:runId/reviews/:reviewId/reject", h.RejectReview)
+			api.POST("/:runId/reviews/:reviewId/submit-edited", h.SubmitEdited)
+			api.POST("/:runId/reviews/:reviewId/regenerate", h.RegenerateStage)
 	}
 }
 
@@ -151,11 +186,14 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 	// Sync artifact_review status to APPROVED.
 	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewApproved, req.ReviewerID, req.Comment)
 
+	// Write decision log entry for audit trail.
+	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageApproval, req.ReviewerID, req.Comment)
+
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "APPROVED"})
 }
 
 func (h *Handler) RejectReview(c *gin.Context) {
-	_, node, err := h.findReviewNode(c.Request.Context(), c.Param("runId"), c.Param("reviewId"))
+	run, node, err := h.findReviewNode(c.Request.Context(), c.Param("runId"), c.Param("reviewId"))
 	if err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -189,8 +227,34 @@ func (h *Handler) RejectReview(c *gin.Context) {
 	// Sync artifact_review status to REJECTED.
 	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewRejected, req.ReviewerID, reason)
 
+	// Write decision log entry for audit trail.
+	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageRejection, req.ReviewerID, reason)
+
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "REJECTED"})
 }
+
+func (h *Handler) writeDecisionLog(ctx context.Context, run *Run, node *model.Node, decisionType, reviewerID, comment string) {
+	if h.decisionLog == nil {
+		return
+	}
+	stageName := ""
+	if node.Input != nil {
+		if s, ok := node.Input["stage"].(string); ok {
+			stageName = s
+		} else if s, ok := node.Input["stepId"].(string); ok {
+			stageName = s
+		}
+	}
+	_ = h.decisionLog.Save(ctx, &DecisionLogRecord{
+		TaskID:         run.TaskID,
+		StageName:      stageName,
+		DecisionType:   decisionType,
+		Selected:       "approved",
+		ApprovedByUser: decisionType == DecisionStageApproval,
+		ReviewerID:     reviewerID,
+		Comment:        comment,
+	})
+	}
 
 func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Review, error) {
 	run, _, err := h.runner.Get(ctx, runID)
@@ -203,7 +267,7 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 	}
 	reviews := make([]Review, 0)
 	for _, node := range nodes {
-		if node.Type != model.NodeTypeControl {
+		if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
 			continue
 		}
 		reviews = append(reviews, reviewFromNode(node))
@@ -221,7 +285,7 @@ func (h *Handler) findReviewNode(ctx context.Context, runID, reviewID string) (*
 		return nil, nil, err
 	}
 	for _, node := range nodes {
-		if node.ID == reviewID && node.Type == model.NodeTypeControl {
+		if node.ID == reviewID && (node.Type == model.NodeTypeControl || node.Type == model.NodeTypeReviewGate) {
 			return run, node, nil
 		}
 	}
@@ -325,4 +389,105 @@ func (h *Handler) updateArtifactReviewStatus(ctx context.Context, nodeID string,
 	}
 
 	_ = h.artifactReview.UpdateStatus(ctx, review.ID, status, reviewerID, comment)
+}
+
+// SubmitEdited allows the user to submit an edited version of the artifact
+// that triggered the review. The review gate is approved with the edited content.
+func (h *Handler) SubmitEdited(c *gin.Context) {
+	run, node, err := h.findReviewNode(c.Request.Context(), c.Param("runId"), c.Param("reviewId"))
+	if err != nil {
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if node == nil {
+		httpx.Fail(c, http.StatusNotFound, "review not found")
+		return
+	}
+	if node.Status != model.NodeReady {
+		httpx.Fail(c, http.StatusConflict, "review is not pending")
+		return
+	}
+
+	var req struct {
+		Content    interface{} `json:"content"`
+		Comment    string      `json:"comment,omitempty"`
+		ReviewerID string      `json:"reviewerId,omitempty"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	output := map[string]interface{}{
+		"approved":    true,
+		"edited":      true,
+		"editContent": req.Content,
+		"comment":     req.Comment,
+	}
+	if err := h.stateMachine.OnSuccess(c.Request.Context(), node.ID, output); err != nil {
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewApproved, req.ReviewerID, req.Comment)
+	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageEdit, req.ReviewerID, req.Comment)
+	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "APPROVED_EDITED"})
+}
+
+// RegenerateStage resets the execution node and review gate for a stage,
+// allowing the LLM to re-run the stage with an optional regeneration hint.
+func (h *Handler) RegenerateStage(c *gin.Context) {
+	run, node, err := h.findReviewNode(c.Request.Context(), c.Param("runId"), c.Param("reviewId"))
+	if err != nil {
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if node == nil {
+		httpx.Fail(c, http.StatusNotFound, "review not found")
+		return
+	}
+	// REVIEW_GATE nodes must be READY (pending review), FAILED, or SUCCESS.
+	// SUCCESS means re-requested after approval.
+
+	var req struct {
+		Hint       string `json:"hint,omitempty"`
+		ReviewerID string `json:"reviewerId,omitempty"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	// Reset the exec node that feeds into this review gate.
+	if err := h.regenerateSourceNode(c.Request.Context(), node); err != nil {
+		httpx.Fail(c, http.StatusInternalServerError, "failed to regenerate source: "+err.Error())
+		return
+	}
+
+	// Reset the review gate itself to CREATED so it re-enters the ready cycle.
+	if err := h.nodes.UpdateStatus(c.Request.Context(), node.ID, model.NodeCreated, nil, ""); err != nil {
+		httpx.Fail(c, http.StatusInternalServerError, "failed to reset review gate: "+err.Error())
+		return
+	}
+
+	// Write audit trail.
+	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageRegeneration, req.ReviewerID, req.Hint)
+	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "REGENERATING"})
+}
+
+// regenerateSourceNode finds the upstream execution node that feeds into this
+// review gate and resets it to CREATED so it gets re-dispatched.
+func (h *Handler) regenerateSourceNode(ctx context.Context, gateNode *model.Node) error {
+	// The source exec node is typically named <step>_exec and connected to
+	// the review gate via an edge. We look for it in the gate node's input.
+	sourceID := ""
+	if gateNode.Input != nil {
+		if id, ok := gateNode.Input["sourceNode"].(string); ok && id != "" {
+			sourceID = id
+		}
+	}
+	if sourceID == "" {
+		// Fallback: try to derive from stepId.
+		if stepID, ok := gateNode.Input["stepId"].(string); ok && stepID != "" {
+			sourceID = stepID + "_exec"
+		}
+	}
+	if sourceID == "" {
+		return fmt.Errorf("source exec node not found for review gate %s", gateNode.ID)
+	}
+	return h.nodes.UpdateStatus(ctx, sourceID, model.NodeCreated, nil, "")
 }

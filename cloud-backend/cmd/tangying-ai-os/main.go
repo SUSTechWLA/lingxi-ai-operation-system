@@ -57,6 +57,7 @@ import (
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
 	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
 	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
+	videodirector "github.com/tangying-ai/aios-core/internal/core/video/director"
 	"github.com/tangying-ai/aios-core/internal/core/skillruntime"
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
 )
@@ -420,9 +421,14 @@ func main() {
 		agentRunRepo,
 		agentPlanner,
 		agentruntime.NewPlanGuard(toolRegistry, localRunnerService),
-		agentruntime.NewPlanCompiler(toolRegistry),
+		func() *agentruntime.PlanCompiler {
+		pc := agentruntime.NewPlanCompiler(toolRegistry)
+		pc.WithDirectors(&stageDirectorRegistry{videodirector.DefaultRegistry()})
+		return pc
+	}(),
 	)
-	agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).RegisterRoutes(r)
+	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine)
+	agentRuntimeHandler.RegisterRoutes(r)
 
 	// Bid (tender) generation module
 	bidRepository := bidRepo.NewBidRepository(pool)
@@ -554,7 +560,24 @@ func main() {
 		stateMachine.SetStageStatusSyncer(&runStatusSyncer{runRepo: workflowRunRepo})
 		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService)
 		stageApprovalSvc := workflow.NewStageApprovalService(workflowRunRepo, nodeRepo, stateMachine)
-		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).RegisterRoutes(r)
+
+		// Checkpoint store and service — persists stage boundaries for recovery.
+		checkpointStore := workflow.NewCheckpointStore(pool)
+		checkpointSvc := workflow.NewCheckpointService(checkpointStore, workflowRunRepo, nodeRepo)
+		stateService.SetTransitionHook(checkpointSvc.TransitionHook())
+		_ = workflow.EnsureCheckpointSchema(ctx, pool)
+
+		// Decision log store — audit trail for every approval, rejection, and pipeline decision.
+		decisionLogStore := workflow.NewDecisionLogStore(pool)
+		_ = workflow.EnsureDecisionLogSchema(ctx, pool)
+
+		// Wire decision log into the agent runtime handler so approve/reject
+		// writes audit-trail entries automatically.
+		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore})
+
+		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
+			WithCheckpointService(checkpointSvc).
+			RegisterRoutes(r)
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
 		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo)
@@ -675,4 +698,40 @@ func (s *runStatusSyncer) UpdateStageStatus(ctx context.Context, runID, stageNam
 
 func (s *runStatusSyncer) FindRunIDByTaskID(ctx context.Context, taskID string) (string, error) {
 	return s.runRepo.FindRunIDByTaskID(ctx, taskID)
+}
+
+// decisionLogAdapter bridges the workflow DecisionLogStore to the
+// agentruntime.DecisionLogWriter interface, allowing the agent runtime
+// handler to write audit-trail entries without importing the workflow package.
+type decisionLogAdapter struct {
+	store workflow.DecisionLogStore
+}
+
+// stageDirectorRegistry adapts videodirector.Registry to agentruntime.DirectorRegistry.
+// Go's structural typing allows director.Director to satisfy agentruntime.StageDirector.
+type stageDirectorRegistry struct {
+	inner *videodirector.Registry
+}
+
+func (r *stageDirectorRegistry) Get(stageName string) agentruntime.StageDirector {
+	d := r.inner.Get(stageName)
+	if d == nil {
+		return nil
+	}
+	// director.Director and agentruntime.StageDirector have the same method set;
+	// Go's structural typing handles the conversion.
+	return d
+}
+
+func (a *decisionLogAdapter) Save(ctx context.Context, r *agentruntime.DecisionLogRecord) error {
+	return a.store.Save(ctx, &workflow.DecisionLogRecord{
+		WorkflowRunID:  r.WorkflowRunID,
+		TaskID:         r.TaskID,
+		StageName:      r.StageName,
+		DecisionType:   r.DecisionType,
+		Selected:       r.Selected,
+		ApprovedByUser: r.ApprovedByUser,
+		ReviewerID:     r.ReviewerID,
+		Comment:        r.Comment,
+	})
 }

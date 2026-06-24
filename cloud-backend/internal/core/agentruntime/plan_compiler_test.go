@@ -42,7 +42,7 @@ func TestPlanCompiler_InsertsAfterArtifactReviewFromToolManifest(t *testing.T) {
 	}
 
 	requireNode(t, dag, "script_generation_exec", string(model.NodeTypeTool), "external")
-	review := requireNode(t, dag, "script_generation_review", string(model.NodeTypeControl), "审核-script_generation")
+	review := requireNode(t, dag, "script_generation_review", string(model.NodeTypeReviewGate), "审核-script_generation")
 	if reason, _ := review.Input["reviewReason"].(string); reason != "script requires review" {
 		t.Fatalf("review reason not copied from manifest: %#v", review.Input)
 	}
@@ -119,7 +119,7 @@ func TestPlanCompiler_InsertsQualityCheckerFromManifestPolicy(t *testing.T) {
 
 	requireNode(t, dag, "proposal", string(model.NodeTypeTool), "external")
 	requireNode(t, dag, "proposal_quality_checker", string(model.NodeTypeTool), "external")
-	gate := requireNode(t, dag, "proposal_quality_gate", string(model.NodeTypeControl), "质量门禁-proposal_quality_gate")
+	gate := requireNode(t, dag, "proposal_quality_gate", string(model.NodeTypeReviewGate), "质量门禁-proposal_quality_gate")
 	if got, _ := gate.Input["checkerStep"].(string); got != "proposal_quality_checker" {
 		t.Fatalf("quality gate should reference manifest checker tool: %#v", gate.Input)
 	}

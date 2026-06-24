@@ -518,3 +518,73 @@ export const rejectAgentReview = async (
   )
   return response.data.data
 }
+
+export const submitEditedArtifact = async (
+  runId: string,
+  reviewId: string,
+  content: unknown,
+  comment?: string
+): Promise<AgentReviewActionResponse> => {
+  const response = await api.post<ApiResponse<AgentReviewActionResponse>>(
+    `/agent/runs/${runId}/reviews/${reviewId}/submit-edited`,
+    { content, comment }
+  )
+  return response.data.data
+}
+
+export const regenerateAgentStage = async (
+  runId: string,
+  reviewId: string,
+  hint?: string
+): Promise<AgentReviewActionResponse> => {
+  const response = await api.post<ApiResponse<AgentReviewActionResponse>>(
+    `/agent/runs/${runId}/reviews/${reviewId}/regenerate`,
+    { hint }
+  )
+  return response.data.data
+}
+
+export interface CheckpointItem {
+  id: string
+  workflowRunId: string
+  taskId: string
+  stageName: string
+  stageIndex: number
+  nodeId: string
+  state: 'AWAITING_HUMAN' | 'IN_PROGRESS' | 'COMPLETED'
+  createdAt: string
+  recoveredAt?: string
+}
+
+export const fetchCheckpoints = async (runId: string): Promise<CheckpointItem[]> => {
+  // Uses the video workflow endpoint; project ID is resolved server-side via the run.
+  const response = await api.get<ApiResponse<{ checkpoints: CheckpointItem[] }>>(
+    `/video-projects/checkpoints`, { params: { runId } }
+  )
+  return response.data.data?.checkpoints ?? []
+}
+
+export const recoverRun = async (runId: string): Promise<{ checkpoint: CheckpointItem; message: string }> => {
+  const response = await api.post<ApiResponse<{ checkpoint: CheckpointItem; message: string }>>(
+    `/video-projects/checkpoints/recover`, { runId }
+  )
+  return response.data.data!
+}
+
+export interface PreflightResponse {
+  pipeline: string
+  status: 'passed' | 'blocked'
+  canStart: boolean
+  capabilityMenu: {
+    localRunner: { available: boolean }
+    compositionRuntime: { hyperframes: { available: boolean } }
+    localTools: { command: string; available: boolean }[]
+    warnings: string[]
+  }
+  blockers?: { code: string; message: string }[]
+}
+
+export const fetchVideoPreflight = async (pipeline: string = 'wf-guided-image-text-video'): Promise<PreflightResponse> => {
+  const response = await api.get<ApiResponse<PreflightResponse>>('/video/preflight', { params: { pipeline } })
+  return response.data.data!
+}

@@ -40,10 +40,11 @@ const (
 type NodeType string
 
 const (
-	NodeTypeTool    NodeType = "TOOL"
-	NodeTypeLLM     NodeType = "LLM"
-	NodeTypeLog     NodeType = "LOG"
-	NodeTypeControl NodeType = "CONTROL"
+	NodeTypeTool       NodeType = "TOOL"
+	NodeTypeLLM        NodeType = "LLM"
+	NodeTypeLog        NodeType = "LOG"
+	NodeTypeControl    NodeType = "CONTROL"
+	NodeTypeReviewGate NodeType = "REVIEW_GATE"
 )
 
 // Context type
