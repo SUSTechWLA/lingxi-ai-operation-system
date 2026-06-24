@@ -1,6 +1,9 @@
 name: visual_feasibility_analyzer
 description: 按镜头和画面元素判断 HyperFrames、Seedance、Hybrid 或素材路径的可行性。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/visual_feasibility_analyzer
 timeout: 60

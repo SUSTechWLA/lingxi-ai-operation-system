@@ -1,6 +1,9 @@
 name: knowledge_researcher
 description: 根据视频主题研究整理关键事实、背景知识、常见误区和讲述角度，为口播稿提供可靠的知识基础。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/knowledge_researcher
 timeout: 120

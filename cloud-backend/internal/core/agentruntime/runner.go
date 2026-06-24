@@ -22,11 +22,13 @@ const (
 )
 
 type StartRunRequest struct {
-	UserID  string                 `json:"userId,omitempty"`
-	Message string                 `json:"message"`
-	Domain  string                 `json:"domain,omitempty"`
-	Context map[string]interface{} `json:"context,omitempty"`
-	Mode    string                 `json:"mode,omitempty"`
+	UserID       string                 `json:"userId,omitempty"`
+	Message      string                 `json:"message"`
+	Domain       string                 `json:"domain,omitempty"`
+	Context      map[string]interface{} `json:"context,omitempty"`
+	Mode         string                 `json:"mode,omitempty"`
+	MaxCostLevel string                 `json:"maxCostLevel,omitempty"`
+	MaxRiskLevel string                 `json:"maxRiskLevel,omitempty"`
 }
 
 type Run struct {

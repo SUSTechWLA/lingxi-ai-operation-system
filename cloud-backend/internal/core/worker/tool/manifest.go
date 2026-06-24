@@ -24,7 +24,8 @@ type ToolManifest struct {
 	SideEffect           bool                   `json:"sideEffect,omitempty"`
 	Idempotent           bool                   `json:"idempotent,omitempty"`
 	ApprovalPolicy       ApprovalPolicy         `json:"approvalPolicy,omitempty"`
-	ArtifactPolicy       ArtifactPolicy         `json:"artifactPolicy,omitempty"`
+	HumanReview          *HumanReview            `json:"humanReview,omitempty"`
+	ArtifactPolicy       ArtifactPolicy          `json:"artifactPolicy,omitempty"`
 	QualityPolicy        QualityPolicy          `json:"qualityPolicy,omitempty"`
 	ExecutionPlane       string                 `json:"executionPlane,omitempty"`
 	RequiresUserDevice   bool                   `json:"requiresUserDevice,omitempty"`
@@ -96,6 +97,17 @@ type QualityPolicy struct {
 	AutoRepair        bool   `json:"autoRepair,omitempty"`
 	MaxRepairAttempts int    `json:"maxRepairAttempts,omitempty"`
 	RepairTool        string `json:"repairTool,omitempty"`
+}
+
+// HumanReview describes how human-in-the-loop review should be presented
+// to the user. It supplements ApprovalPolicy with UI-facing metadata:
+// title, review focus points, and available user actions.
+type HumanReview struct {
+	Required    bool     `json:"required"`
+	Gate        string   `json:"gate,omitempty"`
+	Title       string   `json:"title,omitempty"`
+	ReviewFocus []string `json:"reviewFocus,omitempty"`
+	UserActions []string `json:"userActions,omitempty"`
 }
 
 type LocalRequirements struct {

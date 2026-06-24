@@ -81,6 +81,19 @@ approvalPolicy:
   mode: before_execute
   blocksDownstream: true
   reason: 渲染视频耗时较长且会产生大文件，必须用户确认后执行。
+
+humanReview:
+  required: true
+  gate: before_execute
+  title: 确认最终渲染
+  reviewFocus:
+    - 预览画面是否已确认
+    - 视频结构是否正确
+    - 是否允许开始本地渲染
+  userActions:
+    - approve
+    - reject
+    - back_to_preview
   reviewArtifactKinds:
     - HTML
     - SNAPSHOT

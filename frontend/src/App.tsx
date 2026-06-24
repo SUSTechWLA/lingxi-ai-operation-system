@@ -3,12 +3,12 @@ import AuthScreen from './components/AuthScreen'
 import Sidebar from './components/Sidebar'
 import DesktopPage from './pages/DesktopPage'
 import CreatorWorkbenchPage from './pages/CreatorWorkbenchPage'
-import OneClickVideoPage from './pages/OneClickVideoPage'
+import GuidedVideoStudioPage from './pages/GuidedVideoStudioPage'
 import { fetchCurrentUser, getStoredAuthSession, logout, type AuthUser } from './services/auth'
 import { isElectron, getElectronAPI } from './utils/electron'
 
 function App() {
-  const [activeNav, setActiveNav] = useState('oneclick')
+  const [activeNav, setActiveNav] = useState('guidedVideo')
   const [serviceStatus, setServiceStatus] = useState<'unknown' | 'ok' | 'unhealthy'>('unknown')
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authChecking, setAuthChecking] = useState(true)
@@ -73,7 +73,7 @@ function App() {
             <span className="text-sm text-red-700">后端服务未连接，部分功能不可用，请检查后端服务是否启动</span>
           </div>
         )}
-        {activeNav === 'oneclick' && <OneClickVideoPage />}
+        {activeNav === 'guidedVideo' && <GuidedVideoStudioPage />}
         {activeNav === 'creator' && <CreatorWorkbenchPage />}
         {activeNav === 'system' && <DesktopPage />}
       </div>

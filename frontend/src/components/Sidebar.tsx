@@ -12,7 +12,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange, user, onLogout }) => {
   const navItems = [
-    { id: 'oneclick', label: '视频创作', icon: <FiZap className="h-4 w-4" /> },
+    { id: 'guidedVideo', label: '引导式创作', icon: <FiZap className="h-4 w-4" /> },
     { id: 'creator', label: '创作台', icon: <FiVideo className="h-4 w-4" /> },
     { id: 'system', label: '系统', icon: <FiMonitor className="h-4 w-4" /> },
   ]

@@ -1,6 +1,9 @@
 name: shot_splitter
 description: 将已确认的口播稿或视频创意拆成短视频分镜。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/shot_splitter
 timeout: 120

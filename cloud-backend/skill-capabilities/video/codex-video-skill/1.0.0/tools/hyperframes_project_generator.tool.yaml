@@ -80,6 +80,20 @@ approvalPolicy:
   mode: after_artifact
   blocksDownstream: true
   reason: HyperFrames 项目会作为最终视频渲染输入，建议审核后再渲染。
+
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核项目结构
+  reviewFocus:
+    - 项目目录是否完整
+    - index.html 是否正确
+    - assets 是否齐全
+  userActions:
+    - approve
+    - edit
+    - regenerate
+    - reject
   reviewArtifactKinds:
     - HTML
     - JSON

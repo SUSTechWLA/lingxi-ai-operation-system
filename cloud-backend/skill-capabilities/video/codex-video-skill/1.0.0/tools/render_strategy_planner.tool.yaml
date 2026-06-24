@@ -1,6 +1,9 @@
 name: render_strategy_planner
 description: 生成 render_strategy canonical artifact，按镜头选择 HyperFrames、Seedance、Hybrid 或已有素材，并记录 decision_log。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/render_strategy_planner
 timeout: 60

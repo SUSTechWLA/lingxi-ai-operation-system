@@ -1,6 +1,9 @@
 name: video_prompt_generator
 description: 根据已确认的分镜生成视频生成模型提示词。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/video_prompt_generator
 timeout: 120

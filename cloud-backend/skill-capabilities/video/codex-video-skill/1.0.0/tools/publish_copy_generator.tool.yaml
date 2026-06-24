@@ -1,6 +1,9 @@
 name: publish_copy_generator
 description: 根据视频口播稿和分镜生成发布标题、简介、话题标签和平台适配文案。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/publish_copy_generator
 timeout: 120

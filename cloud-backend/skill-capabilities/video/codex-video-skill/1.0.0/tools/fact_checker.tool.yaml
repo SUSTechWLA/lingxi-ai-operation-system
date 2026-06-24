@@ -1,6 +1,9 @@
 name: fact_checker
 description: 对知识事实整理结果进行检查，识别潜在的事实错误、敏感表述和文化争议点。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/fact_checker
 timeout: 120

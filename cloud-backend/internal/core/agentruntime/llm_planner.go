@@ -46,13 +46,41 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 		domain = inferDomain(req.Message)
 	}
 
-	retriever := &HeuristicPlanner{tools: p.tools, maxTools: p.maxTools}
-	selected := retriever.selectTools(domain, req.Message)
-	if len(selected) == 0 {
+	// Use HybridToolRetriever for multi-signal scoring instead of brute-force
+	// heuristic selection. This selects tools by capability, keyword, tag, cost,
+	// and risk relevance rather than a single-domain filter.
+	retriever := NewHybridToolRetriever(p.tools.ListManifests())
+	candidates, err := retriever.Retrieve(ctx, RetrieveRequest{
+		Query:       req.Message,
+		Domain:      domain,
+		MaxCostLevel: req.MaxCostLevel,
+		MaxRiskLevel: req.MaxRiskLevel,
+		CoarseTopK:  30,
+		PlannerTopK: p.maxTools,
+		IncludeCapabilities: []string{
+			"video_planning",
+			"script_generation",
+			"video_composition",
+			"hyperframes",
+			"video_render",
+			"artifact_package",
+			"quality_check",
+		},
+		ExcludeCapabilities: []string{
+			"seedance",
+			"tts",
+			"asr",
+			"platform_publish",
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tool retrieval failed: %w", err)
+	}
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no tools matched domain %q", domain)
 	}
 
-	raw, err := p.client.Complete(ctx, plannerSystemPrompt(), plannerUserPrompt(req, domain, selected))
+	raw, err := p.client.Complete(ctx, plannerSystemPrompt(), plannerUserPrompt(req, domain, candidates))
 	if err != nil {
 		return nil, err
 	}
@@ -249,10 +277,23 @@ const AgentPlanJSONSchema = `{
 
 func plannerSystemPrompt() string {
 	return strings.TrimSpace(`
-你是 AIOS 的 LLM Planner。你的职责是根据用户需求和候选工具生成一次性的 AgentPlan。
+你是 Dynamic Guided Video Planner。
+
+你的职责：
+1. 根据用户需求和候选工具生成 AgentPlan。
+2. 自主决定工具顺序、依赖关系和参数引用。
+3. 只使用候选工具，不得发明工具。
+4. 尊重每个工具的 approvalPolicy 和 humanReview。
+5. 尊重每个工具的 executionPlane：local 工具需要用户本地设备在线。
+6. 本地工具 requiresUserDevice=true 时，必须确保前置包含 capability_preflight。
+7. 你不需要手写审核节点，系统会根据 ToolManifest 自动插入。
+8. 你不得绕过需要人工审核的工具。
+9. 第一版只生成图文视频，不使用 Seedance、TTS、ASR、平台发布工具。
+10. hyperframes_renderer 只能在 preview 或 composition 已确认后执行。
+
 只输出 JSON，不要输出 Markdown。
 禁止输出 DAGRequest、节点类型、ai_node、workflow_template 或执行图细节。
-系统会在你输出后通过 PlanGuard 校验工具、参数、成本和副作用，并由 PlanCompiler 根据 ToolManifest 自动插入审核节点和质量门禁。
+系统会在你输出后通过 PlanGuard 校验并由 PlanCompiler 自动插入审核节点。
 
 必须遵守以下 JSON Schema：
 ` + AgentPlanJSONSchema + `
@@ -294,10 +335,13 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 		if manifest == nil {
 			continue
 		}
-		out = append(out, map[string]interface{}{
+		entry := map[string]interface{}{
 			"name":                 manifest.Name,
 			"description":          manifest.Description,
 			"type":                 manifest.Type,
+			"executionPlane":       manifest.ExecutionPlane,
+			"requiresUserDevice":   manifest.RequiresUserDevice,
+			"artifactLocation":     manifest.ArtifactLocation,
 			"parameters":           manifest.Parameters,
 			"output":               manifest.Output,
 			"capabilities":         manifest.Capabilities,
@@ -307,9 +351,20 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"sideEffect":           manifest.SideEffect,
 			"approvalPolicy":       manifest.ApprovalPolicy,
 			"artifactPolicy":       manifest.ArtifactPolicy,
+			"qualityPolicy":        manifest.QualityPolicy,
 			"nextRecommendedTools": manifest.NextRecommendedTools,
 			"skillPackageId":       manifest.SkillPackageID,
-		})
+		}
+		// Include local-tool fields when applicable.
+		if manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+			entry["localCommand"] = manifest.LocalCommand
+			entry["localRequirements"] = manifest.LocalRequirements
+		}
+		// Include human review UI metadata when present.
+		if manifest.HumanReview != nil {
+			entry["humanReview"] = manifest.HumanReview
+		}
+		out = append(out, entry)
 	}
 	return out
 }

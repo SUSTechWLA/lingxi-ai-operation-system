@@ -16,14 +16,16 @@ type ToolRetriever interface {
 
 // RetrieveRequest carries the parameters for tool retrieval.
 type RetrieveRequest struct {
-	Query         string   // Natural language user query.
-	Domain        string   // Target domain (e.g., "video_creation").
-	Stage         string   // Optional pipeline stage hint.
-	PreviousTools []string // Tools already in the plan (for next-tool boosting).
-	MaxCostLevel  string   // Maximum allowed cost level.
-	MaxRiskLevel  string   // Maximum allowed risk level.
-	CoarseTopK    int       // Number of candidates to retrieve before reranking.
-	PlannerTopK   int       // Number of tools to return to the LLM planner.
+	Query              string   // Natural language user query.
+	Domain             string   // Target domain (e.g., "video_creation").
+	Stage              string   // Optional pipeline stage hint.
+	PreviousTools      []string // Tools already in the plan (for next-tool boosting).
+	MaxCostLevel       string   // Maximum allowed cost level.
+	MaxRiskLevel       string   // Maximum allowed risk level.
+	CoarseTopK         int      // Number of candidates to retrieve before reranking.
+	PlannerTopK        int      // Number of tools to return to the LLM planner.
+	IncludeCapabilities []string // Only include tools with at least one of these capabilities.
+	ExcludeCapabilities []string // Exclude tools whose capabilities overlap with these.
 }
 
 // HybridToolRetriever implements ToolRetriever with multi-signal scoring:
@@ -124,6 +126,32 @@ func (r *HybridToolRetriever) hardFilter(req RetrieveRequest) []*tool.ToolManife
 		// Exclude quality gate marker.
 		if m.Name == "__quality_gate__" {
 			continue
+		}
+		// Include-only filter: skip tools that don't match any required capability.
+		if len(req.IncludeCapabilities) > 0 {
+			has := false
+			for _, ic := range req.IncludeCapabilities {
+				if hasCapability(m, ic) {
+					has = true
+					break
+				}
+			}
+			if !has {
+				continue
+			}
+		}
+		// Exclude filter: skip tools whose capabilities overlap with excluded set.
+		if len(req.ExcludeCapabilities) > 0 {
+			skip := false
+			for _, ec := range req.ExcludeCapabilities {
+				if hasCapability(m, ec) {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
 		}
 		filtered = append(filtered, m)
 	}

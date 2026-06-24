@@ -1,0 +1,61 @@
+name: final_review_generator
+version: "1.0"
+type: builtin_tool
+description: 视频最终质检：确认 final.mp4 存在、文件大小有效、时长合理、产物完整。
+
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+
+capabilities:
+  - final_review
+  - video_quality_check
+
+parameters:
+  videoPath:
+    type: string
+    required: true
+    description: final.mp4 的存储引用路径。
+  expectedDurationSec:
+    type: number
+    required: false
+    description: 预期时长（用于校验）。
+
+output:
+  artifactKind:
+    type: string
+  passed:
+    type: boolean
+  checks:
+    type: object
+  finalVideo:
+    type: object
+
+approvalPolicy:
+  required: false
+
+qualityPolicy:
+  required: true
+  checks:
+    - final_video_exists
+    - file_size_valid
+    - duration_valid
+    - artifact_complete
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - FINAL_REVIEW
+
+nextRecommendedTools:
+  - artifact_packager
+
+tags:
+  - video
+  - review
+  - quality
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

@@ -90,6 +90,26 @@ tools:
     manifest: tools/publish_copy_generator.tool.yaml
   - id: video_package_exporter
     manifest: tools/video_package_exporter.tool.yaml
+  - id: video_composition_builder
+    manifest: tools/video_composition_builder.tool.yaml
+  - id: hyperframes_snapshot
+    manifest: tools/hyperframes_snapshot.tool.yaml
+  - id: final_review_generator
+    manifest: tools/final_review_generator.tool.yaml
+  - id: ffmpeg_probe
+    manifest: tools/ffmpeg_probe.tool.yaml
+  - id: artifact_packager
+    manifest: tools/artifact_packager.tool.yaml
+  - id: script_quality_checker
+    manifest: tools/script_quality_checker.tool.yaml
+  - id: shot_quality_checker
+    manifest: tools/shot_quality_checker.tool.yaml
+  - id: video_prompt_quality_checker
+    manifest: tools/video_prompt_quality_checker.tool.yaml
+  - id: package_quality_checker
+    manifest: tools/package_quality_checker.tool.yaml
+  - id: keyframe_prompt_generator
+    manifest: tools/keyframe_prompt_generator.tool.yaml
 
 recipe:
   path: recipe.yaml

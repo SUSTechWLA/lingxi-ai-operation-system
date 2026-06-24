@@ -1,6 +1,9 @@
 name: video_script_generator
 description: 根据用户选题、平台和风格生成短视频口播稿。
 type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
 version: 1.0.0
 endpoint: builtin://video-creation/video_script_generator
 timeout: 120
@@ -81,6 +84,21 @@ approvalPolicy:
   mode: after_artifact
   blocksDownstream: true
   reason: 口播稿会影响后续分镜和视频提示词，必须确认后继续。
+
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核口播脚本
+  reviewFocus:
+    - 开头是否有吸引力
+    - 口播是否自然
+    - 内容是否准确
+    - 时长是否匹配
+  userActions:
+    - approve
+    - edit
+    - regenerate
+    - reject
   reviewArtifactKinds:
     - MARKDOWN
 
