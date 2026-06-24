@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react'
-import type React from 'react'
 import AuthScreen from './components/AuthScreen'
 import Sidebar from './components/Sidebar'
 import DesktopPage from './pages/DesktopPage'
 import CreatorWorkbenchPage from './pages/CreatorWorkbenchPage'
+import OneClickVideoPage from './pages/OneClickVideoPage'
 import { fetchCurrentUser, getStoredAuthSession, logout, type AuthUser } from './services/auth'
 import { isElectron, getElectronAPI } from './utils/electron'
 
 function App() {
-  const [activeNav, setActiveNav] = useState('creator')
+  const [activeNav, setActiveNav] = useState('oneclick')
   const [serviceStatus, setServiceStatus] = useState<'unknown' | 'ok' | 'unhealthy'>('unknown')
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authChecking, setAuthChecking] = useState(true)
@@ -73,33 +73,12 @@ function App() {
             <span className="text-sm text-red-700">后端服务未连接，部分功能不可用，请检查后端服务是否启动</span>
           </div>
         )}
+        {activeNav === 'oneclick' && <OneClickVideoPage />}
         {activeNav === 'creator' && <CreatorWorkbenchPage />}
-        {activeNav === 'projects' && (
-          <PlaceholderPage
-            title="作品"
-            description="这里会集中展示每条创作线的发布素材包、导入的视频和返修历史。当前 MVP 先在创作台右侧展示最近项目。"
-          />
-        )}
-        {activeNav === 'skills' && (
-          <PlaceholderPage
-            title="技能"
-            description="这里会展示 Skill 健康状态、输入 Schema、输出契约和依赖工具。当前 MVP 已在创作台左侧读取后端视频 Skill。"
-          />
-        )}
         {activeNav === 'system' && <DesktopPage />}
       </div>
     </div>
   )
 }
-
-const PlaceholderPage: React.FC<{ title: string; description: string }> = ({ title, description }) => (
-  <div className="flex min-h-screen items-center justify-center bg-[#FFF8E8] p-8">
-    <div className="max-w-xl rounded-lg border border-[#EBD8A7] bg-white p-8">
-      <p className="text-xs font-semibold uppercase text-[#B76600]">Coming next</p>
-      <h1 className="mt-2 text-2xl font-semibold text-[#2B1708]">{title}</h1>
-      <p className="mt-3 text-sm leading-6 text-[#735C3D]">{description}</p>
-    </div>
-  </div>
-)
 
 export default App

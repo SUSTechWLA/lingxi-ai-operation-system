@@ -61,6 +61,10 @@ var videoCreationExternalTools = []string{
 	"publish_copy_generator",
 	"video_package_exporter",
 	"package_quality_checker",
+	// OneClick Video v1 tools.
+	"video_composition_builder",
+	"artifact_packager",
+	"ffmpeg_probe",
 }
 
 var (
@@ -318,7 +322,7 @@ func persistRuntimeConfigLocked() {
 // through the same external-tool bridge used by real HTTP tools.
 func RegisterVideoCreationExternalTools(registry *tool.ToolRegistry) {
 	for _, name := range videoCreationExternalTools {
-		registry.RegisterExternal(&tool.ToolManifest{
+		manifest := &tool.ToolManifest{
 			Name:        name,
 			Description: "Local video creation tool for reviewable intermediate assets",
 			Version:     "local-1.0.0",
@@ -337,8 +341,63 @@ func RegisterVideoCreationExternalTools(registry *tool.ToolRegistry) {
 				"artifacts": {Type: "object", Description: "Structured intermediate assets"},
 			},
 			Sandbox: false,
-		})
+		}
+
+		// Configure local execution plane tools.
+		if localManifest, ok := localToolManifests[name]; ok {
+			manifest.ExecutionPlane = localManifest.ExecutionPlane
+			manifest.LocalCommand = localManifest.LocalCommand
+			manifest.RequiresUserDevice = localManifest.RequiresUserDevice
+			manifest.ArtifactLocation = localManifest.ArtifactLocation
+			manifest.Description = localManifest.Description
+			manifest.Timeout = localManifest.Timeout
+		}
+
+		registry.RegisterExternal(manifest)
 	}
+}
+
+// localToolManifests configures tools that execute on the user's local device.
+var localToolManifests = map[string]struct {
+	ExecutionPlane     string
+	LocalCommand       string
+	RequiresUserDevice bool
+	ArtifactLocation   string
+	Description        string
+	Timeout            int
+}{
+	"hyperframes_project_generator": {
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		LocalCommand:       "HYPERFRAMES_PROJECT_GENERATE",
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		Description:        "在本地生成 HyperFrames HTML 项目，包含卡片、字幕和样式",
+		Timeout:            120,
+	},
+	"hyperframes_renderer": {
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		LocalCommand:       "HYPERFRAMES_RENDER",
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		Description:        "调用本地 HyperFrames Render Service 渲染 MP4 视频",
+		Timeout:            1800,
+	},
+	"artifact_packager": {
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		LocalCommand:       "ARTIFACT_PACKAGE",
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		Description:        "将项目产物（视频、manifest、数据）打包为 ZIP 文件",
+		Timeout:            120,
+	},
+	"ffmpeg_probe": {
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		LocalCommand:       "FFMPEG_PROBE",
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		Description:        "使用 ffprobe 检查视频文件元数据（时长、分辨率、编码）",
+		Timeout:            60,
+	},
 }
 
 func executeLocalVideoCreationTool(toolName string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
@@ -2294,7 +2353,8 @@ func isDynamicAgentPromptTool(toolName string) bool {
 		"keyframe_prompt_generator", "video_prompt_generator",
 		"script_quality_checker", "shot_quality_checker",
 		"video_prompt_quality_checker", "package_quality_checker",
-		"publish_copy_generator", "video_package_exporter":
+		"publish_copy_generator", "video_package_exporter",
+		"video_composition_builder":
 		return true
 	default:
 		return false
@@ -2902,3 +2962,5 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 		return fmt.Sprintf("请围绕主题「%s」生成内容。", topic)
 	}
 }
+
+// Inserted by sed below

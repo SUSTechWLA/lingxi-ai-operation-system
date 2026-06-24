@@ -19,6 +19,7 @@ import {
   SkillRouteResponse,
   SkillsResponse,
   WorkflowListResponse,
+  WorkflowTemplate,
   VideoProjectListResponse,
   CreateVideoProjectPayload,
   VideoProject,
@@ -351,6 +352,24 @@ export const routeSkill = async (brief: string): Promise<SkillRouteResponse> => 
 
 export const fetchWorkflows = async (): Promise<WorkflowListResponse> => {
   const response = await api.get<ApiResponse<WorkflowListResponse>>('/workflows')
+  return response.data.data
+}
+
+// fetchWorkflowTemplates returns all workflow templates (GET /api/workflows).
+export const fetchWorkflowTemplates = async (): Promise<WorkflowTemplate[]> => {
+  const response = await api.get<ApiResponse<{ templates: WorkflowTemplate[] }>>('/workflows')
+  return response.data.data?.templates ?? []
+}
+
+// instantiateWorkflow creates a new workflow run from a template (POST /api/workflows/:id/instantiate).
+export const instantiateWorkflow = async (
+  templateId: string,
+  overrides?: Record<string, unknown>
+): Promise<{ taskId: string }> => {
+  const response = await api.post<ApiResponse<{ taskId: string }>>(
+    `/workflows/${templateId}/instantiate`,
+    { overrides }
+  )
   return response.data.data
 }
 

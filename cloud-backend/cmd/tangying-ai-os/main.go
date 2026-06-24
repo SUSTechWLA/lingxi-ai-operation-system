@@ -339,6 +339,8 @@ func main() {
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
 	localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth()).RegisterRoutes(r)
+		// Preflight: check local capabilities before starting a video pipeline.
+		r.GET("/api/video/preflight", authMiddleware.RequireAuth(), localrunner.HandleVideoPreflight(localRunnerService))
 
 	// Media management — initialize before skill handler so we can resolve media URLs
 	var mediaSvc *media.MediaService

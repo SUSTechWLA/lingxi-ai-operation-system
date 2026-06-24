@@ -1,5 +1,5 @@
 import React from 'react'
-import { FiArchive, FiCpu, FiLogOut, FiMonitor, FiVideo } from 'react-icons/fi'
+import { FiLogOut, FiMonitor, FiVideo, FiZap } from 'react-icons/fi'
 import type { AuthUser } from '../services/auth'
 import { APP_ICON_PATH } from '../utils/brand'
 
@@ -12,9 +12,8 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange, user, onLogout }) => {
   const navItems = [
+    { id: 'oneclick', label: '视频创作', icon: <FiZap className="h-4 w-4" /> },
     { id: 'creator', label: '创作台', icon: <FiVideo className="h-4 w-4" /> },
-    { id: 'projects', label: '作品', icon: <FiArchive className="h-4 w-4" /> },
-    { id: 'skills', label: '技能', icon: <FiCpu className="h-4 w-4" /> },
     { id: 'system', label: '系统', icon: <FiMonitor className="h-4 w-4" /> },
   ]
 
@@ -27,7 +26,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeNav, onNavChange, user, onLogou
           </div>
           <div>
             <h1 className="text-base font-semibold">躺营 AI</h1>
-            <p className="text-xs text-white/55">自媒体视频创作台</p>
+            <p className="text-xs text-white/55">Guided Video Studio</p>
           </div>
         </div>
       </div>
