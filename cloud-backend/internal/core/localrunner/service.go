@@ -291,7 +291,7 @@ func (s *Service) ValidateRunnerAccess(ctx context.Context, userID, deviceID, ru
 		}
 		return fmt.Errorf("validate runner: %w", err)
 	}
-	if dbStatus == "REVOKED" {
+	if dbStatus == string(RunnerRevoked) {
 		return fmt.Errorf("%w: runner is revoked", ErrRunnerAccessDenied)
 	}
 	if dbUserID != "" && dbUserID != userID {
@@ -411,4 +411,48 @@ func errorMessageFromMap(m map[string]interface{}) string {
 		return code
 	}
 	return "local job failed"
+}
+
+// ReapExpiredLeases finds jobs stuck in CLAIMED status with expired leases
+// and resets them to PENDING so they can be reclaimed. Increments the attempt
+// counter on each reaped job. Returns the number of jobs reaped.
+func (s *Service) ReapExpiredLeases(ctx context.Context) (int, error) {
+	result, err := s.pool.Exec(ctx,
+		`UPDATE local_jobs
+		 SET status='PENDING', runner_id=NULL, lease_expires_at=NULL,
+		     attempt=attempt+1, updated_at=NOW()
+		 WHERE status='CLAIMED'
+		   AND lease_expires_at IS NOT NULL
+		   AND lease_expires_at < NOW()`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reap expired leases: %w", err)
+	}
+	return int(result.RowsAffected()), nil
+}
+
+// StartLeaseReaper runs a periodic goroutine that reaps expired job leases.
+// It stops when the context is cancelled.
+func (s *Service) StartLeaseReaper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				n, err := s.ReapExpiredLeases(ctx)
+				if err != nil {
+					zap.L().Warn("lease reaper error", zap.Error(err))
+				} else if n > 0 {
+					zap.L().Info("lease reaper reset expired jobs",
+						zap.Int("count", n))
+				}
+			}
+		}
+	}()
 }

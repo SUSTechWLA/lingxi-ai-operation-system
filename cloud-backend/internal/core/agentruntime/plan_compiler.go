@@ -144,14 +144,8 @@ func qualityCheckerFor(toolName string, manifest *tool.ToolManifest) (string, bo
 	if manifest != nil && manifest.QualityPolicy.Required && manifest.QualityPolicy.CheckerTool != "" {
 		return manifest.QualityPolicy.CheckerTool, true
 	}
-	qualityCheckers := map[string]string{
-		"video_script_generator": "script_quality_checker",
-		"shot_splitter":          "shot_quality_checker",
-		"video_prompt_generator": "video_prompt_quality_checker",
-		"video_package_exporter": "package_quality_checker",
-	}
-	checkerName, ok := qualityCheckers[toolName]
-	return checkerName, ok
+	name := QualityCheckerFor(toolName)
+	return name, name != ""
 }
 
 // buildQualityCheckArgs constructs arguments for an auto-inserted quality checker step.

@@ -44,13 +44,13 @@ func main() {
 		dataDir := server.Paths().DataDir
 
 		// Register local tool executors
-		registry.Register(localtool.NewHyperFramesProjectExecutor(dataDir), "HYPERFRAMES_PROJECT_GENERATE")
+		registry.Register(localtool.NewHyperFramesProjectExecutor(dataDir), localtool.CommandHyperFramesProjectGenerate)
 		registry.Register(
 			localtool.NewHyperFramesRenderExecutor(dataDir, *hfServiceURL, time.Duration(*renderTimeoutSec)*time.Second),
-			"HYPERFRAMES_RENDER",
+			localtool.CommandHyperFramesRender,
 		)
-		registry.Register(localtool.NewFFmpegProbeExecutor(dataDir), "FFMPEG_PROBE")
-		registry.Register(localtool.NewArtifactPackageExecutor(dataDir), "ARTIFACT_PACKAGE")
+		registry.Register(localtool.NewFFmpegProbeExecutor(dataDir), localtool.CommandFFmpegProbe)
+		registry.Register(localtool.NewArtifactPackageExecutor(dataDir), localtool.CommandArtifactPackage)
 		runnerClient := localrunner.NewClient(localrunner.Config{
 			CloudAPIBase: *cloudAPIBase,
 			UserToken:    *userToken,
@@ -63,8 +63,14 @@ func main() {
 			DataDir:       dataDir,
 		})
 		go func() {
-			if err := runnerLoop.Run(ctx); err != nil && ctx.Err() == nil {
+			if err := runnerLoop.Run(ctx); err != nil && err != context.Canceled {
 				log.Printf("local runner loop stopped: %v", err)
+			}
+			// Flush pending reports on clean shutdown.
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := runnerLoop.Shutdown(shutdownCtx); err != nil {
+				log.Printf("runner shutdown flush failed: %v", err)
 			}
 		}()
 		log.Printf("Tangying local runner enabled for cloud %s", *cloudAPIBase)

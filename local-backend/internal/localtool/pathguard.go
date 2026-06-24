@@ -31,11 +31,15 @@ var allowedPrefixes = map[string]string{
 var forbiddenSegments = []string{"..", "~"}
 
 // forbiddenPrefixes lists absolute path prefixes that are always rejected.
+// These cover sensitive system directories on macOS and Linux.
 var forbiddenPrefixes = []string{
 	"/etc/",
 	"/System/",
 	"/private/etc/",
 	"/var/root/",
+	"/proc/",
+	"/sys/",
+	"/dev/",
 }
 
 // ResolveLocalURI converts a local:// URI to an absolute filesystem path
@@ -177,6 +181,15 @@ func ensureInside(root, path string) error {
 	}
 	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return fmt.Errorf("path escapes workspace: %s", path)
+	}
+	return nil
+}
+
+// validateLocalSegment checks that a path segment is safe for use in file operations.
+// It rejects empty, ".", segments containing path separators, or path traversal.
+func validateLocalSegment(segment string) error {
+	if segment == "" || segment == "." || strings.Contains(segment, "/") || strings.Contains(segment, "\\") || strings.Contains(segment, "..") {
+		return fmt.Errorf("unsafe path segment %q", segment)
 	}
 	return nil
 }

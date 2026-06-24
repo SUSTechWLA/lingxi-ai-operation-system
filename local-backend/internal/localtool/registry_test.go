@@ -5,6 +5,42 @@ import (
 	"testing"
 )
 
+func TestNormalizeCommand(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"HYPERFRAMES_RENDER", "HYPERFRAMES_RENDER"},
+		{"hyperframes_render", "HYPERFRAMES_RENDER"},
+		{"HyperFrames_Render", "HYPERFRAMES_RENDER"},
+		{"  FFMPEG_PROBE  ", "FFMPEG_PROBE"},
+		{"\tARTIFACT_PACKAGE\n", "ARTIFACT_PACKAGE"},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		result := NormalizeCommand(tt.input)
+		if result != tt.expected {
+			t.Errorf("NormalizeCommand(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestIsAllowedCommandWithNormalization(t *testing.T) {
+	if !IsAllowedCommand("hyperframes_render") {
+		t.Error("lowercase hyperframes_render should be allowed after normalization")
+	}
+	if !IsAllowedCommand("  ffmpeg_probe  ") {
+		t.Error("whitespace-padded ffmpeg_probe should be allowed after normalization")
+	}
+	if IsAllowedCommand("") {
+		t.Error("empty string should not be allowed")
+	}
+	if IsAllowedCommand("  bash  ") {
+		t.Error("whitespace-padded bash should not become allowed")
+	}
+}
+
 func TestRegistryRejectsArbitraryShellCommands(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(ExecutorFunc(func(context.Context, Job) (*Result, error) {

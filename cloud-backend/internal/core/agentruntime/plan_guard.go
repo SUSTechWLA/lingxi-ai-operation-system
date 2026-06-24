@@ -12,11 +12,15 @@ import (
 var referencePattern = regexp.MustCompile(`^\{\{([^.]+)\.output\.([^}]+)\}\}$`)
 
 type PlanGuard struct {
-	tools ToolCatalog
+	tools          ToolCatalog
+	localValidator *LocalCapabilityValidator
 }
 
 func NewPlanGuard(tools ToolCatalog) *PlanGuard {
-	return &PlanGuard{tools: tools}
+	return &PlanGuard{
+		tools:          tools,
+		localValidator: &LocalCapabilityValidator{},
+	}
 }
 
 func (g *PlanGuard) Validate(plan *AgentPlan) error {
@@ -101,14 +105,7 @@ func (g *PlanGuard) ValidateWithWarnings(plan *AgentPlan) ([]string, error) {
 
 	var warnings []string
 
-	// Quality gate insertion warnings.
-	qualityChecks := map[string]string{
-		"video_script_generator": "script_quality_checker",
-		"shot_splitter":          "shot_quality_checker",
-		"video_prompt_generator": "video_prompt_quality_checker",
-		"video_package_exporter": "package_quality_checker",
-	}
-
+	// Quality gate insertion warnings — use the canonical QualityCheckerFor.
 	// Build set of tool names present in the plan.
 	toolSet := make(map[string]bool, len(plan.Steps))
 	stepTools := make(map[string]string, len(plan.Steps))
@@ -117,10 +114,11 @@ func (g *PlanGuard) ValidateWithWarnings(plan *AgentPlan) ([]string, error) {
 		stepTools[step.ID] = step.Tool
 	}
 
-	for prodTool, checkerTool := range qualityChecks {
-		if toolSet[prodTool] && !toolSet[checkerTool] {
+	for _, step := range plan.Steps {
+		checkerTool := QualityCheckerFor(step.Tool)
+		if checkerTool != "" && !toolSet[checkerTool] {
 			warnings = append(warnings, fmt.Sprintf(
-				"建议在 %s 之后加入 %s 进行质量检查", prodTool, checkerTool))
+				"建议在 %s 之后加入 %s 进行质量检查", step.Tool, checkerTool))
 		}
 	}
 

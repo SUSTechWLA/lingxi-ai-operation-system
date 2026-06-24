@@ -85,13 +85,6 @@ func stringFromPayload(payload map[string]interface{}, key string) string {
 	return ""
 }
 
-func validateLocalSegment(segment string) error {
-	if segment == "" || segment == "." || strings.Contains(segment, "/") || strings.Contains(segment, "\\") || strings.Contains(segment, "..") {
-		return fmt.Errorf("unsafe path segment %q", segment)
-	}
-	return nil
-}
-
 func buildHyperFramesIndex(topic, script string) string {
 	if topic == "" {
 		topic = "Tangying AIOS Video"

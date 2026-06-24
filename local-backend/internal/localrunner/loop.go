@@ -3,6 +3,7 @@ package localrunner
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localtool"
@@ -47,10 +48,29 @@ func NewLoop(client CloudClient, registry *localtool.Registry, options LoopOptio
 }
 
 func (l *Loop) Run(ctx context.Context) error {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
 	for {
 		if err := l.RunOnce(ctx); err != nil {
-			return err
+			// If the context is done, exit cleanly.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Transient error — back off and retry instead of crashing.
+			log.Printf("local runner loop error (will retry in %v): %v", backoff, err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
 		}
+		// Reset backoff on a successful cycle.
+		backoff = time.Second
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -63,12 +83,17 @@ func (l *Loop) RunOnce(ctx context.Context) error {
 	if err := l.ensureRegistered(ctx); err != nil {
 		return err
 	}
-	_ = l.client.Heartbeat(ctx, l.runnerID, HeartbeatRequest{
+	if err := l.client.Heartbeat(ctx, l.runnerID, HeartbeatRequest{
 		SessionID: l.sessionID,
 		Status:    "online",
-	})
+	}); err != nil {
+		log.Printf("heartbeat error: %v", err)
+		// Heartbeat failures are non-fatal; don't break the loop.
+	}
 	// Flush any pending reports from previous failed deliveries
-	_ = l.flushPendingReports(ctx)
+	if err := l.flushPendingReports(ctx); err != nil {
+		log.Printf("flush pending reports error: %v", err)
+	}
 	job, err := l.client.ClaimJob(ctx, l.runnerID)
 	if err != nil || job == nil {
 		return err
@@ -126,32 +151,36 @@ func (l *Loop) executableCapabilities(probe ProbeResult) []Capability {
 
 func toolNameForCommand(command string) string {
 	switch command {
-	case "HYPERFRAMES_PROJECT_GENERATE":
+	case localtool.CommandHyperFramesProjectGenerate:
 		return "hyperframes_project_generator"
-	case "HYPERFRAMES_RENDER":
+	case localtool.CommandHyperFramesRender:
 		return "hyperframes_renderer"
-	case "HYPERFRAMES_LINT":
+	case localtool.CommandHyperFramesLint:
 		return "hyperframes_linter"
-	case "HYPERFRAMES_SNAPSHOT":
+	case localtool.CommandHyperFramesSnapshot:
 		return "hyperframes_snapshot"
-	case "FFMPEG_PROBE":
+	case localtool.CommandHyperGenRender:
+		return "hypergen_renderer"
+	case localtool.CommandFFmpegProbe:
 		return "ffmpeg_probe"
-	case "FFMPEG_CLIP_EXTRACT":
+	case localtool.CommandFFmpegClipExtract:
 		return "ffmpeg_clip_extractor"
-	case "FFMPEG_ASSEMBLE":
+	case localtool.CommandFFmpegAssemble:
 		return "ffmpeg_assembler"
-	case "AUDIO_EXTRACT":
+	case localtool.CommandAudioExtract:
 		return "audio_extractor"
-	case "AUDIO_NORMALIZE":
+	case localtool.CommandAudioNormalize:
 		return "audio_normalizer"
-	case "ASR_TRANSCRIBE":
+	case localtool.CommandASRTranscribe:
 		return "asr_transcriber_local"
-	case "ARTIFACT_PACKAGE":
+	case localtool.CommandArtifactPackage:
 		return "artifact_packager"
-	case "LOCAL_FILE_IMPORT":
+	case localtool.CommandLocalFileImport:
 		return "local_file_importer"
-	case "LOCAL_MEDIA_INDEX":
+	case localtool.CommandLocalMediaIndex:
 		return "local_media_indexer"
+	case localtool.CommandBundleExtract:
+		return "bundle_extractor"
 	default:
 		return command
 	}
@@ -181,6 +210,30 @@ func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 		Step:     "started",
 		Message:  "Local job started",
 	})
+
+	// Start a heartbeat goroutine so the runner stays "online" during
+	// long-running job execution (e.g. 10-minute video renders).
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hbCtx.Done():
+				return
+			case <-ticker.C:
+				if err := l.client.Heartbeat(hbCtx, l.runnerID, HeartbeatRequest{
+					SessionID:   l.sessionID,
+					Status:      "online",
+					RunningJobs: 1,
+				}); err != nil {
+					log.Printf("heartbeat during execution failed: %v", err)
+				}
+			}
+		}
+	}()
+
 	result, err := l.registry.Execute(ctx, job)
 	if err != nil {
 		failReq := FailJobRequest{
@@ -209,6 +262,12 @@ func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 		_ = l.pendingReports.Remove(job.ID, "complete")
 	}
 	return reportErr
+}
+
+// Shutdown flushes pending reports before the runner process exits.
+// Call this when the Run loop exits cleanly (context cancelled).
+func (l *Loop) Shutdown(ctx context.Context) error {
+	return l.flushPendingReports(ctx)
 }
 
 // flushPendingReports retries delivering all persisted pending reports to the cloud.

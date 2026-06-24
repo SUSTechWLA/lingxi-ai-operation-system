@@ -22,7 +22,7 @@ func NewArtifactPackageExecutor(dataDir string) *ArtifactPackageExecutor {
 }
 
 // Execute collects the listed files and writes them into a zip archive.
-func (e *ArtifactPackageExecutor) Execute(_ context.Context, job Job) (*Result, error) {
+func (e *ArtifactPackageExecutor) Execute(ctx context.Context, job Job) (*Result, error) {
 	projectID := strings.TrimSpace(job.ProjectID)
 	if projectID == "" {
 		projectID = stringFromPayload(job.Payload, "projectId")
@@ -69,6 +69,13 @@ func (e *ArtifactPackageExecutor) Execute(_ context.Context, job Job) (*Result, 
 
 	var packagedFiles []string
 	for _, uri := range includeURIs {
+		// Check context cancellation between entries
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		resolved, err := e.guard.ResolveLocalURI(uri)
 		if err != nil {
 			return nil, fmt.Errorf("invalid include path %s: %w", uri, err)

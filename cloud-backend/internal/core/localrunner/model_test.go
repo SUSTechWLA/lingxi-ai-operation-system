@@ -66,6 +66,43 @@ func TestLocalJobModel(t *testing.T) {
 	}
 }
 
+func TestNormalizeCommand(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"HYPERFRAMES_RENDER", "HYPERFRAMES_RENDER"},
+		{"hyperframes_render", "HYPERFRAMES_RENDER"},
+		{"HyperFrames_Render", "HYPERFRAMES_RENDER"},
+		{"  FFMPEG_PROBE  ", "FFMPEG_PROBE"},
+		{"\tARTIFACT_PACKAGE\n", "ARTIFACT_PACKAGE"},
+		{"", ""},
+		{"   ", ""},
+	}
+	for _, tt := range tests {
+		result := NormalizeCommand(tt.input)
+		if result != tt.expected {
+			t.Errorf("NormalizeCommand(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestIsValidCommandWithNormalization(t *testing.T) {
+	// Verify that IsValidCommand normalizes input before checking
+	if !IsValidCommand("hyperframes_render") {
+		t.Error("lowercase hyperframes_render should be valid after normalization")
+	}
+	if !IsValidCommand("  ffmpeg_probe  ") {
+		t.Error("whitespace-padded ffmpeg_probe should be valid after normalization")
+	}
+	if IsValidCommand("") {
+		t.Error("empty string should not be valid")
+	}
+	if IsValidCommand("  bash  ") {
+		t.Error("whitespace-padded bash should not become valid")
+	}
+}
+
 func TestLocalRunnerModel(t *testing.T) {
 	runner := &LocalRunner{
 		ID:            "runner-1",
@@ -88,5 +125,36 @@ func TestLocalRunnerModel(t *testing.T) {
 	}
 	if runner.DeviceID == "" || len(runner.Capabilities) != 1 {
 		t.Fatalf("runner should retain device identity and capability probe result: %#v", runner)
+	}
+}
+
+func TestJobStatusLifecycle(t *testing.T) {
+	// Verify all lifecycle states are defined and distinct.
+	states := []JobStatus{JobPending, JobClaimed, JobRunning, JobCompleted, JobFailed}
+	seen := make(map[JobStatus]bool)
+	for _, s := range states {
+		if seen[s] {
+			t.Errorf("duplicate JobStatus: %s", s)
+		}
+		seen[s] = true
+		if s == "" {
+			t.Error("empty JobStatus not allowed")
+		}
+	}
+}
+
+func TestRunnerStatusConstants(t *testing.T) {
+	if string(RunnerOnline) != "ONLINE" {
+		t.Error("RunnerOnline mismatch")
+	}
+	if string(RunnerOffline) != "OFFLINE" {
+		t.Error("RunnerOffline mismatch")
+	}
+	if string(RunnerRevoked) != "REVOKED" {
+		t.Error("RunnerRevoked mismatch")
+	}
+	// Verify all statuses are distinct.
+	if RunnerOnline == RunnerOffline || RunnerOnline == RunnerRevoked || RunnerOffline == RunnerRevoked {
+		t.Error("runner statuses must be distinct")
 	}
 }

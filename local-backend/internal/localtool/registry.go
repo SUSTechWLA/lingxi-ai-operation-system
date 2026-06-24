@@ -96,18 +96,39 @@ func IsAllowedCommand(command string) bool {
 	return allowedCommands[NormalizeCommand(command)]
 }
 
+// Local command constants — aligned with cloud-backend ValidCommands.
+const (
+	CommandHyperFramesProjectGenerate = "HYPERFRAMES_PROJECT_GENERATE"
+	CommandHyperFramesRender          = "HYPERFRAMES_RENDER"
+	CommandHyperFramesLint            = "HYPERFRAMES_LINT"
+	CommandHyperFramesSnapshot        = "HYPERFRAMES_SNAPSHOT"
+	CommandHyperGenRender             = "HYPERGEN_RENDER"
+	CommandFFmpegProbe                = "FFMPEG_PROBE"
+	CommandFFmpegClipExtract          = "FFMPEG_CLIP_EXTRACT"
+	CommandFFmpegAssemble             = "FFMPEG_ASSEMBLE"
+	CommandAudioExtract               = "AUDIO_EXTRACT"
+	CommandAudioNormalize             = "AUDIO_NORMALIZE"
+	CommandASRTranscribe              = "ASR_TRANSCRIBE"
+	CommandArtifactPackage            = "ARTIFACT_PACKAGE"
+	CommandLocalFileImport            = "LOCAL_FILE_IMPORT"
+	CommandLocalMediaIndex            = "LOCAL_MEDIA_INDEX"
+	CommandBundleExtract              = "BUNDLE_EXTRACT"
+)
+
 var allowedCommands = map[string]bool{
-	"HYPERFRAMES_PROJECT_GENERATE": true,
-	"HYPERFRAMES_RENDER":           true,
-	"HYPERFRAMES_LINT":             true,
-	"HYPERFRAMES_SNAPSHOT":         true,
-	"FFMPEG_PROBE":                 true,
-	"FFMPEG_CLIP_EXTRACT":          true,
-	"FFMPEG_ASSEMBLE":              true,
-	"AUDIO_EXTRACT":                true,
-	"AUDIO_NORMALIZE":              true,
-	"ASR_TRANSCRIBE":               true,
-	"ARTIFACT_PACKAGE":             true,
-	"LOCAL_FILE_IMPORT":            true,
-	"LOCAL_MEDIA_INDEX":            true,
+	CommandHyperFramesProjectGenerate: true,
+	CommandHyperFramesRender:          true,
+	CommandHyperFramesLint:            true,
+	CommandHyperFramesSnapshot:        true,
+	CommandHyperGenRender:             true,
+	CommandFFmpegProbe:                true,
+	CommandFFmpegClipExtract:          true,
+	CommandFFmpegAssemble:             true,
+	CommandAudioExtract:               true,
+	CommandAudioNormalize:             true,
+	CommandASRTranscribe:              true,
+	CommandArtifactPackage:            true,
+	CommandLocalFileImport:            true,
+	CommandLocalMediaIndex:            true,
+	CommandBundleExtract:              true,
 }

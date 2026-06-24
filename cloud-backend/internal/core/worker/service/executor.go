@@ -97,52 +97,21 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		payload = make(map[string]interface{})
 	}
 
-	// image_urls are stripped from Kafka events (too large) — read them from DB
-	// Also read long-running metadata for the node
-	var isLongRunning bool
-	var heartbeatTimeoutSec int
-	if ne.nodeRepo != nil {
-		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
-			if urls, ok := node.Input["image_urls"]; ok {
-				payload["image_urls"] = urls
-			}
-			isLongRunning = node.LongRunning
-			if node.HeartbeatTimeoutSec > 0 {
-				heartbeatTimeoutSec = node.HeartbeatTimeoutSec
-			}
-		}
-	}
-	// Also check payload-level override
-	if lr, ok := payload["long_running"].(bool); ok && lr {
-		isLongRunning = true
-	}
+	// Hydrate payload from DB (image URLs, long-running metadata).
+	payload, isLongRunning, heartbeatTimeoutSec := ne.hydratePayloadFromDB(ctx, nodeID, payload)
 
 	toolName := tool.DetermineToolName(event.Type, payload)
 	parameters := tool.ExtractParameters(payload)
+	manifest := ne.toolRegistry.GetManifest(toolName)
 
-	// Resolve {{node_id.output.field}} references using completed parent node outputs
-	if ne.nodeRepo != nil {
-		resolved, err := ne.resolveNodeReferences(ctx, taskID, parameters)
-		if err != nil {
-			zap.L().Warn("Failed to resolve node references, using original parameters", zap.Error(err))
-		} else {
-			parameters = resolved
-		}
-	}
+	// Resolve {{node_id.output.field}} references.
+	parameters = ne.resolveParameters(ctx, taskID, parameters)
 
-	// Build tool context with checkpoint data for retries
-	toolCtx := tool.ToolContext{
-		TaskID:     taskID,
-		NodeID:     nodeID,
-		RetryCount: 0,
-	}
-	if isLongRunning && ne.nodeRepo != nil {
-		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
-			toolCtx.RetryCount = node.RetryCount
-		}
-	}
+	// Build tool context with checkpoint data for retries.
+	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
 
-	if manifest := ne.toolRegistry.GetManifest(toolName); manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+	// Local execution plane: dispatch to local runner and return.
+	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
 		if err := ne.dispatchLocalNode(ctx, event, manifest, parameters, idempotencyKey); err != nil {
 			ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
 		}
@@ -151,59 +120,10 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 
 	startTime := time.Now()
 
-	// --- Long-running task: heartbeat + progress support ---
-	hbInterval := ne.cfg.HeartbeatIntervalSec
-	if hbInterval <= 0 {
-		hbInterval = 30
-	}
-	hbTimeout := heartbeatTimeoutSec
-	if hbTimeout <= 0 {
-		hbTimeout = ne.cfg.HeartbeatTimeoutSec
-	}
-	if hbTimeout <= 0 {
-		hbTimeout = 300 // default 5 minutes
-	}
-
-	var progressCb tool.ProgressCallback
-	hbCtx, hbCancel := context.WithCancel(ctx)
+	// Set up long-running heartbeat + progress support.
+	progressCb, hbCancel := ne.setupLongRunningHeartbeat(ctx, taskID, nodeID, idempotencyKey,
+		isLongRunning, heartbeatTimeoutSec)
 	defer hbCancel()
-
-	if isLongRunning {
-		zap.L().Info("Starting long-running node execution",
-			zap.String("nodeId", nodeID),
-			zap.Int("heartbeatInterval", hbInterval),
-			zap.Int("heartbeatTimeout", hbTimeout),
-		)
-
-		// First heartbeat immediately
-		ne.publishProgress(taskID, nodeID, 0, "started")
-		ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
-
-		// Progress callback for the tool
-		progressCb = func(cbCtx context.Context, update tool.ProgressUpdate) {
-			if update.Progress > 0 {
-				ne.publishProgress(taskID, nodeID, update.Progress, update.Step)
-			}
-			// If checkpoint data provided, persist it via progress event
-			if update.Checkpoint != nil {
-				ne.publishCheckpoint(taskID, nodeID, update.Progress, update.Step, update.Checkpoint)
-			}
-		}
-
-		// Periodic heartbeat goroutine
-		go func() {
-			ticker := time.NewTicker(time.Duration(hbInterval) * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-hbCtx.Done():
-					return
-				case <-ticker.C:
-					ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
-				}
-			}
-		}()
-	}
 
 	_ = ne.producer.Publish(eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
 		TaskID: taskID,
@@ -212,84 +132,12 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		Output: map[string]interface{}{
 			"startedAt":           startTime.Format(time.RFC3339Nano),
 			"longRunning":         isLongRunning,
-			"heartbeatTimeoutSec": hbTimeout,
+			"heartbeatTimeoutSec": heartbeatTimeoutSec,
 		},
 	})
 
-	t, found := ne.toolRegistry.Get(toolName)
-	if !found {
-		errMsg := fmt.Sprintf("Tool not found: %s", toolName)
-		ne.publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey, nil)
-		return
-	}
-
-	if !t.ValidateParameters(parameters) {
-		errMsg := fmt.Sprintf("Invalid parameters for tool: %s", toolName)
-		ne.publishFailure(taskID, nodeID, traceID, errMsg, idempotencyKey, nil)
-		return
-	}
-
-	// Wire progress reporter for long-running tasks
-	if isLongRunning && progressCb != nil {
-		if pr, ok := t.(tool.ProgressReporter); ok {
-			pr.SetProgressCallback(progressCb)
-			zap.L().Info("ProgressReporter wired for tool", zap.String("tool", toolName), zap.String("nodeId", nodeID))
-		} else {
-			zap.L().Debug("Tool does not implement ProgressReporter, only heartbeat will be sent",
-				zap.String("tool", toolName), zap.String("nodeId", nodeID))
-		}
-	}
-
-	execImpl := ne.selectExecutor(t)
-
-	var result executor.ExecutionResult
-	var execErr error
-
-	if bt, ok := t.(tool.BuildableTool); ok {
-		execReq, err := bt.BuildExecutionRequest(parameters)
-		if err != nil {
-			result.Error = err.Error()
-		} else {
-			execReq.TaskID = taskID
-			execReq.NodeID = nodeID
-			timeout := time.Duration(execReq.TimeoutSec) * time.Second
-			if timeout == 0 {
-				timeout = time.Duration(ne.cfg.ToolTimeoutSeconds) * time.Second
-			}
-			execCtx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-			result, execErr = execImpl.Execute(execCtx, *execReq)
-		}
-	} else if et, ok := t.(tool.ExecutableTool); ok {
-		resultCh := make(chan tool.ToolResult, 1)
-		go func() {
-			resultCh <- et.Execute(ctx, parameters, toolCtx)
-		}()
-
-		timeout := time.Duration(ne.cfg.ToolTimeoutSeconds) * time.Second
-		select {
-		case toolResult := <-resultCh:
-			if toolResult.Success {
-				output, _ := json.Marshal(toolResult.Data)
-				result = executor.ExecutionResult{
-					ExitCode: 0,
-					Stdout:   output,
-				}
-			} else {
-				result = executor.ExecutionResult{
-					ExitCode: 1,
-					Error:    toolResult.Error,
-				}
-			}
-		case <-time.After(timeout):
-			result = executor.ExecutionResult{
-				TimedOut: true,
-				Error:    fmt.Sprintf("Tool execution timed out after %d seconds", ne.cfg.ToolTimeoutSeconds),
-			}
-		}
-	} else {
-		result.Error = "tool does not implement any executable interface"
-	}
+	// Execute the tool on the cloud plane.
+	result, execErr := ne.executeTool(ctx, toolName, parameters, toolCtx, isLongRunning, progressCb)
 
 	durationMs := time.Since(startTime).Milliseconds()
 
@@ -325,6 +173,196 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	ne.publishSuccess(taskID, nodeID, traceID, data, idempotencyKey)
 }
 
+// hydratePayloadFromDB reads image_urls and long-running metadata from the node
+// record (these are stripped from Kafka events). Also checks for payload-level
+// long_running override.
+func (ne *NodeExecutor) hydratePayloadFromDB(ctx context.Context, nodeID string, payload map[string]interface{}) (map[string]interface{}, bool, int) {
+	var isLongRunning bool
+	var heartbeatTimeoutSec int
+	if ne.nodeRepo != nil {
+		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
+			if urls, ok := node.Input["image_urls"]; ok {
+				payload["image_urls"] = urls
+			}
+			isLongRunning = node.LongRunning
+			if node.HeartbeatTimeoutSec > 0 {
+				heartbeatTimeoutSec = node.HeartbeatTimeoutSec
+			}
+		}
+	}
+	// Payload-level override.
+	if lr, ok := payload["long_running"].(bool); ok && lr {
+		isLongRunning = true
+	}
+	return payload, isLongRunning, heartbeatTimeoutSec
+}
+
+// resolveParameters resolves {{node_id.output.field}} references using completed
+// parent node outputs. Returns the original parameters on resolution failure.
+func (ne *NodeExecutor) resolveParameters(ctx context.Context, taskID string, parameters map[string]interface{}) map[string]interface{} {
+	if ne.nodeRepo == nil {
+		return parameters
+	}
+	resolved, err := ne.resolveNodeReferences(ctx, taskID, parameters)
+	if err != nil {
+		zap.L().Warn("Failed to resolve node references, using original parameters", zap.Error(err))
+		return parameters
+	}
+	return resolved
+}
+
+// buildToolContext builds a ToolContext with retry count from the node record.
+func (ne *NodeExecutor) buildToolContext(ctx context.Context, nodeID, taskID string, isLongRunning bool) tool.ToolContext {
+	toolCtx := tool.ToolContext{
+		TaskID:     taskID,
+		NodeID:     nodeID,
+		RetryCount: 0,
+	}
+	if isLongRunning && ne.nodeRepo != nil {
+		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
+			toolCtx.RetryCount = node.RetryCount
+		}
+	}
+	return toolCtx
+}
+
+// setupLongRunningHeartbeat wires up progress callbacks and a periodic heartbeat
+// goroutine for long-running nodes. Returns a progress callback (nil for
+// non-long-running) and a cancel function to stop the heartbeat goroutine.
+func (ne *NodeExecutor) setupLongRunningHeartbeat(
+	ctx context.Context,
+	taskID, nodeID, idempotencyKey string,
+	isLongRunning bool,
+	heartbeatTimeoutSec int,
+) (tool.ProgressCallback, context.CancelFunc) {
+	hbInterval := ne.cfg.HeartbeatIntervalSec
+	if hbInterval <= 0 {
+		hbInterval = 30
+	}
+	hbTimeout := heartbeatTimeoutSec
+	if hbTimeout <= 0 {
+		hbTimeout = ne.cfg.HeartbeatTimeoutSec
+	}
+	if hbTimeout <= 0 {
+		hbTimeout = 300
+	}
+
+	hbCtx, hbCancel := context.WithCancel(ctx)
+
+	if !isLongRunning {
+		return nil, hbCancel
+	}
+
+	zap.L().Info("Starting long-running node execution",
+		zap.String("nodeId", nodeID),
+		zap.Int("heartbeatInterval", hbInterval),
+		zap.Int("heartbeatTimeout", hbTimeout),
+	)
+
+	// First heartbeat immediately.
+	ne.publishProgress(taskID, nodeID, 0, "started")
+	ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+
+	// Progress callback for the tool.
+	progressCb := func(_ context.Context, update tool.ProgressUpdate) {
+		if update.Progress > 0 {
+			ne.publishProgress(taskID, nodeID, update.Progress, update.Step)
+		}
+		if update.Checkpoint != nil {
+			ne.publishCheckpoint(taskID, nodeID, update.Progress, update.Step, update.Checkpoint)
+		}
+	}
+
+	// Periodic heartbeat goroutine.
+	go func() {
+		ticker := time.NewTicker(time.Duration(hbInterval) * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hbCtx.Done():
+				return
+			case <-ticker.C:
+				ne.publishHeartbeat(taskID, nodeID, idempotencyKey)
+			}
+		}
+	}()
+
+	return progressCb, hbCancel
+}
+
+// executeTool looks up the tool, validates parameters, wires up progress
+// reporting, selects the executor, and runs the tool.
+func (ne *NodeExecutor) executeTool(
+	ctx context.Context,
+	toolName string,
+	parameters map[string]interface{},
+	toolCtx tool.ToolContext,
+	isLongRunning bool,
+	progressCb tool.ProgressCallback,
+) (executor.ExecutionResult, error) {
+	t, found := ne.toolRegistry.Get(toolName)
+	if !found {
+		return executor.ExecutionResult{Error: fmt.Sprintf("Tool not found: %s", toolName)}, nil
+	}
+
+	if !t.ValidateParameters(parameters) {
+		return executor.ExecutionResult{Error: fmt.Sprintf("Invalid parameters for tool: %s", toolName)}, nil
+	}
+
+	// Wire progress reporter for long-running tasks.
+	if isLongRunning && progressCb != nil {
+		if pr, ok := t.(tool.ProgressReporter); ok {
+			pr.SetProgressCallback(progressCb)
+			zap.L().Info("ProgressReporter wired for tool", zap.String("tool", toolName))
+		}
+	}
+
+	execImpl := ne.selectExecutor(t)
+
+	var result executor.ExecutionResult
+	var execErr error
+
+	if bt, ok := t.(tool.BuildableTool); ok {
+		execReq, err := bt.BuildExecutionRequest(parameters)
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			timeout := time.Duration(execReq.TimeoutSec) * time.Second
+			if timeout == 0 {
+				timeout = time.Duration(ne.cfg.ToolTimeoutSeconds) * time.Second
+			}
+			execCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			result, execErr = execImpl.Execute(execCtx, *execReq)
+		}
+	} else if et, ok := t.(tool.ExecutableTool); ok {
+		resultCh := make(chan tool.ToolResult, 1)
+		go func() {
+			resultCh <- et.Execute(ctx, parameters, toolCtx)
+		}()
+
+		timeout := time.Duration(ne.cfg.ToolTimeoutSeconds) * time.Second
+		select {
+		case toolResult := <-resultCh:
+			if toolResult.Success {
+				output, _ := json.Marshal(toolResult.Data)
+				result = executor.ExecutionResult{ExitCode: 0, Stdout: output}
+			} else {
+				result = executor.ExecutionResult{ExitCode: 1, Error: toolResult.Error}
+			}
+		case <-time.After(timeout):
+			result = executor.ExecutionResult{
+				TimedOut: true,
+				Error:    fmt.Sprintf("Tool execution timed out after %d seconds", ne.cfg.ToolTimeoutSeconds),
+			}
+		}
+	} else {
+		result.Error = "tool does not implement any executable interface"
+	}
+
+	return result, execErr
+}
+
 func (ne *NodeExecutor) dispatchLocalNode(
 	ctx context.Context,
 	event eventbus.Event,
@@ -340,7 +378,10 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		return fmt.Errorf("local execution requested for %s but localCommand is empty", manifest.Name)
 	}
 	timeoutSec := manifest.Timeout
-	if timeoutSec > 1000 {
+	// Guard: if the manifest timeout is implausibly large (>24h in seconds),
+	// assume it was specified in milliseconds and convert to seconds.
+	const maxReasonableTimeoutSec = 86400 // 24 hours
+	if timeoutSec > maxReasonableTimeoutSec {
 		timeoutSec = timeoutSec / 1000
 	}
 	if timeoutSec <= 0 {

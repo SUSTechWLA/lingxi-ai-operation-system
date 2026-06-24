@@ -83,15 +83,17 @@ func (e *FFmpegProbeExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	// Parse duration from format
 	if probe.Format.Duration != "" {
 		var durationSec float64
-		fmt.Sscanf(probe.Format.Duration, "%f", &durationSec)
-		media["durationSec"] = durationSec
+		if n, _ := fmt.Sscanf(probe.Format.Duration, "%f", &durationSec); n == 1 {
+			media["durationSec"] = durationSec
+		}
 	}
 
 	// Parse bitrate
 	if probe.Format.BitRate != "" {
 		var bitrate int64
-		fmt.Sscanf(probe.Format.BitRate, "%d", &bitrate)
-		media["bitrate"] = bitrate
+		if n, _ := fmt.Sscanf(probe.Format.BitRate, "%d", &bitrate); n == 1 {
+			media["bitrate"] = bitrate
+		}
 	}
 
 	// Extract stream info
