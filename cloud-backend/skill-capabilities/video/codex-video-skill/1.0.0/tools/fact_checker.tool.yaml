@@ -34,7 +34,7 @@ output:
     description: 需要谨慎表达或存在争议的内容
   corrections:
     type: array
-    description: 需要修正的内容 [{"original": "...", "corrected": "...", "reason": "..."}]
+    description: '需要修正的内容 [{"original": "...", "corrected": "...", "reason": "..."}]'
   passed:
     type: boolean
     description: 是否通过事实核查

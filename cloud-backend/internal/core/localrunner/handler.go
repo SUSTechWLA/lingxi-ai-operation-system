@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 )
 
 type RunnerService interface {
@@ -22,21 +24,26 @@ type NodeResultSink interface {
 }
 
 type Handler struct {
-	service RunnerService
-	results NodeResultSink
+	service    RunnerService
+	results    NodeResultSink
+	middleware []gin.HandlerFunc
 }
 
-func NewHandler(service RunnerService, results NodeResultSink) *Handler {
-	return &Handler{service: service, results: results}
+func NewHandler(service RunnerService, results NodeResultSink, middleware ...gin.HandlerFunc) *Handler {
+	return &Handler{service: service, results: results, middleware: middleware}
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	r.POST("/api/local-runners/register", h.registerRunner)
-	r.POST("/api/local-runners/:runnerId/heartbeat", h.heartbeat)
-	r.GET("/api/local-runners/:runnerId/jobs/claim", h.claimJob)
-	r.POST("/api/local-jobs/:jobId/progress", h.reportProgress)
-	r.POST("/api/local-jobs/:jobId/complete", h.completeJob)
-	r.POST("/api/local-jobs/:jobId/fail", h.failJob)
+	group := r.Group("/")
+	if len(h.middleware) > 0 {
+		group.Use(h.middleware...)
+	}
+	group.POST("/api/local-runners/register", h.registerRunner)
+	group.POST("/api/local-runners/:runnerId/heartbeat", h.heartbeat)
+	group.GET("/api/local-runners/:runnerId/jobs/claim", h.claimJob)
+	group.POST("/api/local-jobs/:jobId/progress", h.reportProgress)
+	group.POST("/api/local-jobs/:jobId/complete", h.completeJob)
+	group.POST("/api/local-jobs/:jobId/fail", h.failJob)
 }
 
 func (h *Handler) registerRunner(c *gin.Context) {
@@ -44,6 +51,12 @@ func (h *Handler) registerRunner(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	if userID, ok := auth.UserIDFromContext(c.Request.Context()); ok {
+		req.UserID = userID
+	}
+	if deviceID, ok := auth.DeviceIDFromContext(c.Request.Context()); ok {
+		req.DeviceID = deviceID
 	}
 	resp, err := h.service.RegisterRunner(c.Request.Context(), req)
 	if err != nil {

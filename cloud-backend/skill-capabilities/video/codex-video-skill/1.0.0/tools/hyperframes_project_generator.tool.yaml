@@ -1,9 +1,23 @@
 name: hyperframes_project_generator
-description: 根据口播稿、分镜和视频 Prompt 生成 HyperFrames HTML 视频项目目录，输出可直接渲染的 index.html、assets/data.json 和 manifest.json。
-type: builtin_prompt_tool
+description: 根据口播稿、分镜和视频 Prompt 在本地工作区生成 HyperFrames HTML 视频项目目录，输出可直接渲染的 index.html、assets/data.json 和 manifest.json。
+type: local_tool
 version: 1.0.0
 endpoint: builtin://video-creation/hyperframes_project_generator
 timeout: 120
+executionPlane: local
+requiresUserDevice: true
+artifactLocation: local
+localCommand: HYPERFRAMES_PROJECT_GENERATE
+
+localRequirements:
+  os:
+    - darwin
+    - windows
+    - linux
+  commands:
+    - node
+  minDiskMb: 512
+  requiresNetwork: false
 
 capabilities:
   - video_creation

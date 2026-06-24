@@ -220,35 +220,41 @@ func BuildCloudSpec() *Spec {
 		Tags("Local Runners").
 		BodyJSON("RegisterRunnerRequest", "Local runner device and capability probe", true).
 		ResponseJSON("200", "Runner session", "RegisterRunnerResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse")
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 	b.Route("POST", "/api/local-runners/:runnerId/heartbeat", "Update local runner heartbeat and resource snapshot").
 		Tags("Local Runners").
 		PathParam("runnerId", "Runner identifier", StringSchema()).
 		BodyJSON("HeartbeatRequest", "Runner heartbeat", true).
 		ResponseJSON("200", "Heartbeat accepted", "LocalOKResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse")
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 	b.Route("GET", "/api/local-runners/:runnerId/jobs/claim", "Claim the next pending local job for a runner").
 		Tags("Local Runners").
 		PathParam("runnerId", "Runner identifier", StringSchema()).
-		ResponseJSON("200", "Claimed job or null", "ClaimJobResponse")
+		ResponseJSON("200", "Claimed job or null", "ClaimJobResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 	b.Route("POST", "/api/local-jobs/:jobId/progress", "Report local job progress and logs").
 		Tags("Local Runners").
 		PathParam("jobId", "Local job identifier", StringSchema()).
 		BodyJSON("ProgressRequest", "Progress update", true).
 		ResponseJSON("200", "Progress accepted", "LocalOKResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse")
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 	b.Route("POST", "/api/local-jobs/:jobId/complete", "Complete a local job and advance its DAG node").
 		Tags("Local Runners").
 		PathParam("jobId", "Local job identifier", StringSchema()).
 		BodyJSON("CompleteJobRequest", "Local job output", true).
 		ResponseJSON("200", "Completion accepted", "LocalOKResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse")
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 	b.Route("POST", "/api/local-jobs/:jobId/fail", "Fail a local job and advance its DAG node failure path").
 		Tags("Local Runners").
 		PathParam("jobId", "Local job identifier", StringSchema()).
 		BodyJSON("FailJobRequest", "Local job failure details", true).
 		ResponseJSON("200", "Failure accepted", "LocalOKResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse")
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 
 	// ── Translate ──
 	b.Route("POST", "/api/translate", "Translate NL prompt to DAG").

@@ -952,6 +952,7 @@ Complete a local job and advance its DAG node
 
 - **200** — Completion accepted (JSON)
 - **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
 
 ---
 
@@ -975,6 +976,7 @@ Fail a local job and advance its DAG node failure path
 
 - **200** — Failure accepted (JSON)
 - **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
 
 ---
 
@@ -998,6 +1000,7 @@ Report local job progress and logs
 
 - **200** — Progress accepted (JSON)
 - **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
 
 ---
 
@@ -1021,6 +1024,7 @@ Update local runner heartbeat and resource snapshot
 
 - **200** — Heartbeat accepted (JSON)
 - **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
 
 ---
 
@@ -1037,6 +1041,7 @@ Claim the next pending local job for a runner
 **Responses:**
 
 - **200** — Claimed job or null (JSON)
+- **401** — Missing or invalid access token (JSON)
 
 ---
 
@@ -1054,6 +1059,7 @@ Register a local execution runner and create a runner session
 
 - **200** — Runner session (JSON)
 - **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
 
 ---
 

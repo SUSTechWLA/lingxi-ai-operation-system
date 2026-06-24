@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 )
 
 func TestHandlerRegisterRunnerUsesEdgeRunProtocol(t *testing.T) {
@@ -43,6 +45,38 @@ func TestHandlerRegisterRunnerUsesEdgeRunProtocol(t *testing.T) {
 	}
 	if resp.RunnerID == "" || resp.SessionID == "" || resp.HeartbeatIntervalSec != 15 || resp.PollIntervalSec != 3 {
 		t.Fatalf("unexpected register response: %#v", resp)
+	}
+}
+
+func TestHandlerRegisterRunnerUsesAuthenticatedUserAndDevice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		ctx := auth.ContextWithUser(c.Request.Context(), "user_auth")
+		ctx = auth.ContextWithDevice(ctx, "device_auth")
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	NewHandler(service, nil).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-runners/register", bytes.NewBufferString(`{
+		"deviceId":"device_spoofed",
+		"userId":"user_spoofed",
+		"runnerVersion":"1.0.0",
+		"platform":{"os":"darwin","arch":"arm64","hostname":"Wang-MacBook"},
+		"workspaceRoot":"local://aios/projects",
+		"capabilities":[{"toolName":"artifact_packager","command":"ARTIFACT_PACKAGE","available":true}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.registerReq.UserID != "user_auth" || service.registerReq.DeviceID != "device_auth" {
+		t.Fatalf("register should use authenticated identity, got %#v", service.registerReq)
 	}
 }
 

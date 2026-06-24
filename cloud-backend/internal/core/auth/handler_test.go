@@ -119,6 +119,21 @@ func TestMiddlewareRequireAuthInjectsUserContext(t *testing.T) {
 	if body["deviceId"] != "device-1" {
 		t.Fatalf("deviceId = %q", body["deviceId"])
 	}
+
+	xDeviceReq := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	xDeviceReq.Header.Set("Authorization", "Bearer "+registered.AccessToken)
+	xDeviceReq.Header.Set("X-Device-ID", "device-2")
+	xDeviceRec := httptest.NewRecorder()
+	router.ServeHTTP(xDeviceRec, xDeviceReq)
+	if xDeviceRec.Code != http.StatusOK {
+		t.Fatalf("x-device token status = %d body=%s", xDeviceRec.Code, xDeviceRec.Body.String())
+	}
+	if err := json.Unmarshal(xDeviceRec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid x-device body: %v", err)
+	}
+	if body["deviceId"] != "device-2" {
+		t.Fatalf("x-device deviceId = %q", body["deviceId"])
+	}
 }
 
 func postJSON(router http.Handler, path string, body string, accessToken string) *httptest.ResponseRecorder {

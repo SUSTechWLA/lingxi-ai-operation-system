@@ -117,6 +117,10 @@ func (s *Server) Handler() http.Handler {
 	return withCORS(s.mux)
 }
 
+func (s *Server) Paths() Paths {
+	return s.paths
+}
+
 func (s *Server) EnsureDirs() error {
 	for _, dir := range []string{s.paths.DataDir, s.paths.CacheDir, s.paths.ConfigDir, s.paths.ProjectDir, s.paths.ArtifactDir, s.paths.LogDir, s.paths.DiagnosticsDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

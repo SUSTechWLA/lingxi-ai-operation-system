@@ -32,7 +32,11 @@ func (m *Middleware) RequireAuth() gin.HandlerFunc {
 			return
 		}
 		ctx := ContextWithUser(c.Request.Context(), user.ID)
-		if deviceID := strings.TrimSpace(c.GetHeader("DeviceID")); deviceID != "" {
+		deviceID := strings.TrimSpace(c.GetHeader("DeviceID"))
+		if deviceID == "" {
+			deviceID = strings.TrimSpace(c.GetHeader("X-Device-ID"))
+		}
+		if deviceID != "" {
 			ctx = ContextWithDevice(ctx, deviceID)
 		}
 		c.Request = c.Request.WithContext(ctx)

@@ -117,6 +117,27 @@ nextRecommendedTools:
 	}
 }
 
+func TestBundledVideoCapabilityMarksHyperFramesProjectGeneratorLocal(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "skill-capabilities")
+	_, manifests, errs := LoadCapabilities(root)
+	if len(errs) != 0 {
+		t.Fatalf("LoadCapabilities returned errors: %v", errs)
+	}
+	for _, manifest := range manifests {
+		if manifest.Name != "hyperframes_project_generator" {
+			continue
+		}
+		if manifest.ExecutionPlane != tool.ExecutionPlaneLocal || manifest.LocalCommand != "HYPERFRAMES_PROJECT_GENERATE" {
+			t.Fatalf("hyperframes_project_generator must run locally: %#v", manifest)
+		}
+		if !manifest.RequiresUserDevice || manifest.ArtifactLocation != tool.ArtifactLocationLocal {
+			t.Fatalf("hyperframes_project_generator local metadata incomplete: %#v", manifest)
+		}
+		return
+	}
+	t.Fatal("hyperframes_project_generator manifest not found")
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {

@@ -338,7 +338,7 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
-	localrunner.NewHandler(localRunnerService, stateMachine).RegisterRoutes(r)
+	localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth()).RegisterRoutes(r)
 
 	// Media management — initialize before skill handler so we can resolve media URLs
 	var mediaSvc *media.MediaService

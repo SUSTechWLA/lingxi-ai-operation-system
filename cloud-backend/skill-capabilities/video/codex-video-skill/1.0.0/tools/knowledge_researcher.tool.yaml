@@ -31,13 +31,13 @@ output:
     description: 结构化事实短句列表，适合后续口播稿生成
   timeline:
     type: array
-    description: 关键事件时间线 [{"date": "...", "event": "..."}]
+    description: '关键事件时间线 [{"date": "...", "event": "..."}]'
   storyAngles:
     type: array
     description: 3-5个短视频讲述角度
   risks:
     type: array
-    description: 需要注意的事实风险点和不确��内容
+    description: 需要注意的事实风险点和不确定内容
   sourceNotes:
     type: array
     description: 资料来源说明
