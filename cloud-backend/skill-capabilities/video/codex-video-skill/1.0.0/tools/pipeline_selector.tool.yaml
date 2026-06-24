@@ -1,0 +1,57 @@
+name: pipeline_selector
+description: 根据用户输入和可用素材选择 VideoForge Studio Pipeline，固定视频生产主骨架。
+type: builtin_prompt_tool
+version: 1.0.0
+endpoint: builtin://video-creation/pipeline_selector
+timeout: 30
+
+capabilities:
+  - video_creation
+  - pipeline_selection
+  - videoforge_studio
+tags:
+  - video
+  - pipeline
+  - videoforge
+  - studio
+
+parameters:
+  brief:
+    type: string
+    required: true
+    description: 用户的视频创作需求
+  inputKinds:
+    type: array
+    required: false
+    description: 输入类型，默认 brief
+  pipelineRoot:
+    type: string
+    required: false
+    description: Pipeline manifest 根目录，默认 cloud-backend/video-pipelines
+
+output:
+  pipelineSelection:
+    type: object
+    description: 选中的 pipeline、置信度、原因和首个审核阶段
+  content:
+    type: string
+    description: 人类可读的 pipeline 选择说明
+  artifacts:
+    type: object
+    description: pipeline_selection.json 产物索引
+
+costLevel: low
+latencyLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - JSON
+  defaultReviewRequired: false
+
+nextRecommendedTools:
+  - capability_preflight
+  - proposal_generator

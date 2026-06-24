@@ -89,6 +89,8 @@ DELETE /api/local/artifacts/:id?projectId=<projectId>
 DELETE /api/local/projects/:id
 POST /api/local/logs
 POST /api/local/diagnostics
+GET  /api/local/openapi.json
+GET  /api/local/docs
 ```
 
 健康检查：
@@ -96,6 +98,8 @@ POST /api/local/diagnostics
 ```bash
 curl http://127.0.0.1:18080/api/local/health
 ```
+
+API 文档（Swagger UI）：浏览器打开 `http://127.0.0.1:18080/api/local/docs`，或获取原始 OpenAPI 规范 `http://127.0.0.1:18080/api/local/openapi.json`。
 
 读取基础模型 API 设置：
 

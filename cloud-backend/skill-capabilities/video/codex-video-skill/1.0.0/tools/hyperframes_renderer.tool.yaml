@@ -4,6 +4,21 @@ type: builtin_prompt_tool
 version: 1.0.0
 endpoint: builtin://video-creation/hyperframes_renderer
 timeout: 1800
+executionPlane: local
+requiresUserDevice: true
+artifactLocation: local
+localCommand: HYPERFRAMES_RENDER
+
+localRequirements:
+  os:
+    - darwin
+    - windows
+    - linux
+  commands:
+    - node
+    - ffmpeg
+  minDiskMb: 2048
+  requiresNetwork: false
 
 capabilities:
   - video_creation

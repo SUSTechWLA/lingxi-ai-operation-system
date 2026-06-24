@@ -74,8 +74,9 @@ cloud-backend/
       agentruntime/                     # 🆕 动态 Agent Runtime（Planner→Guard→Compiler→DAG）
       orchestrator/                     # DAG 调度引擎
       workflow/                         # 工作流模板 + Run + Skill→DAG 编译器
-      worker/                           # 工具执行引擎（14+ 内置工具 + 沙箱）
+      worker/                           # 工具执行引擎（30+ 内置工具 + 沙箱）
       skillruntime/                     # Skill 包加载 + LLM Router
+      skillcapability/                  # 🆕 Skill Capability 加载（Dynamic Agent 工具注册表）
       modelgateway/                     # 统一模型网关（指纹缓存 + 重试 + Provider 路由）
       artifact/                         # 版本化产物管理（v3.0: metadata-only，内容在本地）
       localrunner/                      # Electron 本地任务协议
@@ -93,6 +94,7 @@ cloud-backend/
       chat/                             # AI 对话助手
       publish/                          # 内容发布 + AI 生成
   skills/                               # 6 个 Skill Package（create-opinion-videos 等）
+  skill-capabilities/                   # 🆕 Skill Capability（codex-video-skill 工具注册表）
   deploy/                               # 云端 Docker Compose + nginx 配置
   scripts/                              # 启动/测试脚本
 
@@ -150,10 +152,16 @@ cd cloud-backend && make sandbox-build
 ```text
 GET  /api/local/health                          # 健康检查
 GET  /api/local/paths                           # 数据目录路径
+GET  /api/local/model-providers                 # 读取基础模型 API 设置（不回显完整 token）
+PUT  /api/local/model-providers                 # 保存基础模型 API 设置
 POST /api/local/artifacts                       # 保存本地产物（content 或 contentBase64）
 GET  /api/local/artifacts/:id?projectId=<pid>   # 读取本地产物
+DELETE /api/local/artifacts/:id?projectId=<pid> # 删除本地产物
+DELETE /api/local/projects/:id                  # 删除项目文件、产物和缓存
 POST /api/local/logs                            # 写本地日志
 POST /api/local/diagnostics                     # 生成诊断包
+GET  /api/local/openapi.json                    # OpenAPI 3.0 规范
+GET  /api/local/docs                            # Swagger UI
 ```
 
 产物存储结构：`<DataDir>/artifacts/<projectId>/<artifactId>/content` + `metadata.json`
@@ -188,10 +196,12 @@ POST /api/agent/runs/:runId/reviews/:reviewId/reject    # 🆕 审核驳回
 ## Feature Flags
 
 ```env
-VIDEO_CREATION_ENABLED=false   # 视频创作功能（路由 + API）
-LOCAL_RUNNER_ENABLED=false     # Electron 本地 Runner
-MODEL_PROVIDER_MODE=fake       # fake | real
-SKILL_ROOT=skills              # Skill Package 根目录
+VIDEO_CREATION_ENABLED=false              # 视频创作功能（路由 + API）
+LOCAL_RUNNER_ENABLED=false                # Electron 本地 Runner
+MODEL_PROVIDER_MODE=fake                  # fake | real
+SKILL_ROOT=skills                         # Skill Package 根目录（legacy skills/）
+SKILL_CAPABILITY_ROOT=skill-capabilities  # 🆕 Skill Capability 根目录（Dynamic Agent 工具注册）
+LEGACY_SKILL_WORKFLOW_AUTOREGISTER=false  # 🆕 是否自动将 legacy Skill 注册为 Workflow 模板
 
 # HyperFrames Render Service（替代 CLI）
 HYPERFRAMES_MODE=service            # disabled | service
@@ -200,6 +210,10 @@ HYPERFRAMES_TIMEOUT_SEC=1800
 HYPERFRAMES_DEFAULT_FPS=30
 HYPERFRAMES_DEFAULT_QUALITY=standard
 HYPERFRAMES_DEFAULT_FORMAT=mp4
+HYPERFRAMES_MAX_WORKERS=4           # 最大并行渲染 worker
+HYPERFRAMES_USE_GPU=false           # 是否启用 GPU 加速
+HYPERFRAMES_PROJECT_ROOT=/data/aios/projects  # 允许的项目目录根
+HYPERFRAMES_OUTPUT_ROOT=/data/aios/projects   # 允许的输出目录根
 ```
 
 ## 测试

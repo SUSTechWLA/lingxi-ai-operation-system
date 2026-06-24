@@ -60,8 +60,8 @@ func TestSetDefaultsEnablesCloudVideoCreation(t *testing.T) {
 	if got := viper.GetString("AGENT_PLANNER_MODE"); got != "hybrid" {
 		t.Fatalf("AGENT_PLANNER_MODE default = %q, want hybrid", got)
 	}
-	if got := viper.GetInt("AGENT_PLANNER_MAX_TOOLS"); got != 6 {
-		t.Fatalf("AGENT_PLANNER_MAX_TOOLS default = %d, want 6", got)
+	if got := viper.GetInt("AGENT_PLANNER_MAX_TOOLS"); got != 8 {
+		t.Fatalf("AGENT_PLANNER_MAX_TOOLS default = %d, want 8", got)
 	}
 }
 

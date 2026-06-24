@@ -1,0 +1,84 @@
+id: knowledge-video
+name: 知识口播视频
+description: 适合从一句话生成知识分享类视频，包含方案、脚本、分镜、字幕、图文组件和最终 MP4。
+inputKinds:
+  - brief
+keywords:
+  - 知识
+  - 科普
+  - 口播
+  - 分享
+  - 小红书
+  - 抖音
+  - B站
+stages:
+  - id: brief
+    director: brief_director
+    produces: video_brief
+    reviewRequired: false
+  - id: preflight
+    director: capability_preflight_director
+    produces: capability_preflight
+    reviewRequired: false
+    dependsOn:
+      - brief
+  - id: proposal
+    director: proposal_director
+    produces: proposal_packet
+    reviewRequired: true
+    dependsOn:
+      - preflight
+  - id: script
+    director: script_director
+    produces: script
+    reviewRequired: true
+    dependsOn:
+      - proposal
+  - id: shot_list
+    director: shot_director
+    produces: shot_list
+    reviewRequired: true
+    dependsOn:
+      - script
+  - id: visual_plan
+    director: visual_plan_director
+    produces: visual_plan
+    reviewRequired: true
+    dependsOn:
+      - shot_list
+  - id: render_strategy
+    director: render_strategy_director
+    produces: render_strategy
+    reviewRequired: true
+    dependsOn:
+      - visual_plan
+  - id: assets
+    director: asset_director
+    produces: asset_manifest
+    reviewRequired: false
+    dependsOn:
+      - render_strategy
+  - id: edit
+    director: edit_director
+    produces: video_composition_spec
+    reviewRequired: true
+    dependsOn:
+      - assets
+  - id: compose
+    director: compose_director
+    produces: render_report
+    reviewRequired: false
+    dependsOn:
+      - edit
+  - id: final_review
+    director: final_review_director
+    produces: final_review
+    reviewRequired: false
+    dependsOn:
+      - compose
+  - id: publish
+    director: publish_director
+    produces: publish_package
+    reviewRequired: true
+    dependsOn:
+      - final_review

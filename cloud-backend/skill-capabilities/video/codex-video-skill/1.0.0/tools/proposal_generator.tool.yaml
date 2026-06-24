@@ -1,0 +1,73 @@
+name: proposal_generator
+description: 生成 VideoForge proposal_packet，提供 2-3 个成本和风险不同的视频生产方案，必须先审核再进入脚本和高成本生成。
+type: builtin_prompt_tool
+version: 1.0.0
+endpoint: builtin://video-creation/proposal_generator
+timeout: 60
+
+capabilities:
+  - video_creation
+  - proposal_generation
+  - videoforge_studio
+tags:
+  - video
+  - proposal
+  - approval
+  - cost
+
+parameters:
+  brief:
+    type: string
+    required: true
+    description: 用户的视频创作需求
+  pipelineId:
+    type: string
+    required: false
+    default: knowledge-video
+    description: 已选 pipeline ID
+  targetDurationSec:
+    type: number
+    required: false
+    default: 60
+    description: 目标时长
+  seedanceAvailable:
+    type: boolean
+    required: false
+    description: 是否可使用 Seedance
+
+output:
+  proposalPacket:
+    type: object
+    description: proposal_packet canonical artifact
+  decisionLog:
+    type: object
+    description: proposal_selection 决策日志
+  content:
+    type: string
+    description: 人类可读的方案摘要
+  artifacts:
+    type: object
+    description: proposal_packet.json 产物索引
+
+costLevel: low
+latencyLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: Proposal 会决定是否进入脚本、Seedance 和渲染成本，必须用户确认后继续。
+  reviewArtifactKinds:
+    - JSON
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - JSON
+  defaultReviewRequired: true
+
+nextRecommendedTools:
+  - video_script_generator

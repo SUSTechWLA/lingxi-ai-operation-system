@@ -33,6 +33,8 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 	tags, _ := json.Marshal(m.Tags)
 	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
 	artifactPolicy, _ := json.Marshal(m.ArtifactPolicy)
+	localRequirements, _ := json.Marshal(m.LocalRequirements)
+	providerCapabilities, _ := json.Marshal(m.ProviderCapabilities)
 	nextRecommendedTools, _ := json.Marshal(m.NextRecommendedTools)
 	failureModes, _ := json.Marshal(m.FailureModes)
 	resourceRefs, _ := json.Marshal(m.ResourceRefs)
@@ -41,23 +43,28 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 		`INSERT INTO tool_manifests (name, description, type, version, endpoint, timeout_ms,
 		 parameters, output, examples, sandbox, capabilities, tags, cost_level, latency_level,
 		 risk_level, side_effect, idempotent, approval_policy, artifact_policy,
-		 next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
+		 execution_plane, requires_user_device, artifact_location, local_command, local_requirements,
+		 provider, provider_capabilities, next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
 		 created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 		         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-		         $21, $22, $23, $24, $25, $26)
+		         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+		         $31, $32, $33)
 		 ON CONFLICT (name) DO UPDATE SET
 		   description=$2, type=$3, version=$4, endpoint=$5, timeout_ms=$6,
 		   parameters=$7, output=$8, examples=$9, sandbox=$10, capabilities=$11,
 		   tags=$12, cost_level=$13, latency_level=$14, risk_level=$15,
 		   side_effect=$16, idempotent=$17, approval_policy=$18, artifact_policy=$19,
-		   next_recommended_tools=$20, failure_modes=$21, skill_package_id=$22,
-		   prompt_ref=$23, resource_refs=$24, updated_at=$26`,
+		   execution_plane=$20, requires_user_device=$21, artifact_location=$22,
+		   local_command=$23, local_requirements=$24, provider=$25, provider_capabilities=$26,
+		   next_recommended_tools=$27, failure_modes=$28, skill_package_id=$29,
+		   prompt_ref=$30, resource_refs=$31, updated_at=$33`,
 		m.Name, m.Description, m.Type, m.Version, m.Endpoint, m.TimeoutMs,
 		params, output, examples, m.Sandbox,
 		capabilities, tags, m.CostLevel, m.LatencyLevel, m.RiskLevel,
 		m.SideEffect, m.Idempotent, approvalPolicy, artifactPolicy,
-		nextRecommendedTools, failureModes, m.SkillPackageID, m.PromptRef, resourceRefs,
+		m.ExecutionPlane, m.RequiresUserDevice, m.ArtifactLocation, m.LocalCommand, localRequirements,
+		m.Provider, providerCapabilities, nextRecommendedTools, failureModes, m.SkillPackageID, m.PromptRef, resourceRefs,
 		m.CreatedAt, m.UpdatedAt,
 	)
 	return err
@@ -68,8 +75,10 @@ func (r *ToolManifestRepository) FindByName(ctx context.Context, name string) (*
 		`SELECT name, description, type, version, endpoint, timeout_ms,
 		        parameters, output, examples, sandbox, capabilities, tags,
 		        cost_level, latency_level, risk_level, side_effect, idempotent,
-		        approval_policy, artifact_policy, next_recommended_tools, failure_modes,
-		        skill_package_id, prompt_ref, resource_refs, created_at, updated_at
+		        approval_policy, artifact_policy, execution_plane, requires_user_device,
+		        artifact_location, local_command, local_requirements, provider, provider_capabilities,
+		        next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
+		        created_at, updated_at
 		 FROM tool_manifests WHERE name=$1`, name,
 	)
 
@@ -81,8 +90,10 @@ func (r *ToolManifestRepository) FindAll(ctx context.Context) ([]*model.ToolMani
 		`SELECT name, description, type, version, endpoint, timeout_ms,
 		        parameters, output, examples, sandbox, capabilities, tags,
 		        cost_level, latency_level, risk_level, side_effect, idempotent,
-		        approval_policy, artifact_policy, next_recommended_tools, failure_modes,
-		        skill_package_id, prompt_ref, resource_refs, created_at, updated_at
+		        approval_policy, artifact_policy, execution_plane, requires_user_device,
+		        artifact_location, local_command, local_requirements, provider, provider_capabilities,
+		        next_recommended_tools, failure_modes, skill_package_id, prompt_ref, resource_refs,
+		        created_at, updated_at
 		 FROM tool_manifests ORDER BY name`,
 	)
 	if err != nil {
@@ -110,18 +121,22 @@ func (r *ToolManifestRepository) Delete(ctx context.Context, name string) error 
 func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	var m model.ToolManifestRecord
 	var params, output, examples []byte
-	var capabilities, tags, approvalPolicy, artifactPolicy, nextRecommendedTools, failureModes, resourceRefs []byte
+	var capabilities, tags, approvalPolicy, artifactPolicy, localRequirements, providerCapabilities []byte
+	var nextRecommendedTools, failureModes, resourceRefs []byte
 	var endpoint *string
 	var version *string
 	var costLevel, latencyLevel, riskLevel *string
+	var executionPlane, artifactLocation, localCommand, provider *string
 	var skillPackageID, promptRef *string
 
 	if err := row.Scan(
 		&m.Name, &m.Description, &m.Type, &version, &endpoint, &m.TimeoutMs,
 		&params, &output, &examples, &m.Sandbox, &capabilities, &tags,
 		&costLevel, &latencyLevel, &riskLevel, &m.SideEffect, &m.Idempotent,
-		&approvalPolicy, &artifactPolicy, &nextRecommendedTools, &failureModes,
-		&skillPackageID, &promptRef, &resourceRefs, &m.CreatedAt, &m.UpdatedAt,
+		&approvalPolicy, &artifactPolicy, &executionPlane, &m.RequiresUserDevice,
+		&artifactLocation, &localCommand, &localRequirements, &provider, &providerCapabilities,
+		&nextRecommendedTools, &failureModes, &skillPackageID, &promptRef, &resourceRefs,
+		&m.CreatedAt, &m.UpdatedAt,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -143,6 +158,18 @@ func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	}
 	if riskLevel != nil {
 		m.RiskLevel = *riskLevel
+	}
+	if executionPlane != nil {
+		m.ExecutionPlane = *executionPlane
+	}
+	if artifactLocation != nil {
+		m.ArtifactLocation = *artifactLocation
+	}
+	if localCommand != nil {
+		m.LocalCommand = *localCommand
+	}
+	if provider != nil {
+		m.Provider = *provider
 	}
 	if skillPackageID != nil {
 		m.SkillPackageID = *skillPackageID
@@ -170,6 +197,12 @@ func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	}
 	if len(artifactPolicy) > 0 {
 		m.ArtifactPolicy = artifactPolicy
+	}
+	if len(localRequirements) > 0 {
+		m.LocalRequirements = localRequirements
+	}
+	if len(providerCapabilities) > 0 {
+		m.ProviderCapabilities = providerCapabilities
 	}
 	if len(nextRecommendedTools) > 0 {
 		m.NextRecommendedTools = nextRecommendedTools

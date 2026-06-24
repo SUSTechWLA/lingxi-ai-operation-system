@@ -90,6 +90,13 @@ artifactPolicy:
     - MARKDOWN
   defaultReviewRequired: true
 
+qualityPolicy:
+  required: true
+  checkerTool: script_quality_checker
+  minScore: 85
+  autoRepair: true
+  maxRepairAttempts: 1
+
 nextRecommendedTools:
   - script_quality_checker
   - shot_splitter

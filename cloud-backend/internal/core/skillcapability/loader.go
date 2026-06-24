@@ -124,6 +124,14 @@ type toolManifestFile struct {
 	Idempotent           bool                     `yaml:"idempotent"`
 	ApprovalPolicy       approvalPolicyFile       `yaml:"approvalPolicy"`
 	ArtifactPolicy       artifactPolicyFile       `yaml:"artifactPolicy"`
+	QualityPolicy        qualityPolicyFile        `yaml:"qualityPolicy"`
+	ExecutionPlane       string                   `yaml:"executionPlane"`
+	RequiresUserDevice   bool                     `yaml:"requiresUserDevice"`
+	ArtifactLocation     string                   `yaml:"artifactLocation"`
+	LocalCommand         string                   `yaml:"localCommand"`
+	LocalRequirements    localRequirementsFile    `yaml:"localRequirements"`
+	Provider             string                   `yaml:"provider"`
+	ProviderCapabilities map[string]interface{}   `yaml:"providerCapabilities"`
 	NextRecommendedTools []string                 `yaml:"nextRecommendedTools"`
 	FailureModes         []string                 `yaml:"failureModes"`
 	SkillPackageID       string                   `yaml:"skillPackageId"`
@@ -157,6 +165,14 @@ func (f toolManifestFile) toManifest() *tool.ToolManifest {
 		Idempotent:           idempotent,
 		ApprovalPolicy:       f.ApprovalPolicy.toPolicy(),
 		ArtifactPolicy:       f.ArtifactPolicy.toPolicy(),
+		QualityPolicy:        f.QualityPolicy.toPolicy(),
+		ExecutionPlane:       f.ExecutionPlane,
+		RequiresUserDevice:   f.RequiresUserDevice,
+		ArtifactLocation:     f.ArtifactLocation,
+		LocalCommand:         f.LocalCommand,
+		LocalRequirements:    f.LocalRequirements.toRequirements(),
+		Provider:             f.Provider,
+		ProviderCapabilities: f.ProviderCapabilities,
 		NextRecommendedTools: f.NextRecommendedTools,
 		FailureModes:         f.FailureModes,
 		SkillPackageID:       f.SkillPackageID,
@@ -194,5 +210,41 @@ func (p artifactPolicyFile) toPolicy() tool.ArtifactPolicy {
 		ProduceArtifact:       p.ProduceArtifact,
 		ArtifactKinds:         p.ArtifactKinds,
 		DefaultReviewRequired: p.DefaultReviewRequired,
+	}
+}
+
+type qualityPolicyFile struct {
+	Required          bool   `yaml:"required"`
+	CheckerTool       string `yaml:"checkerTool"`
+	MinScore          int    `yaml:"minScore"`
+	AutoRepair        bool   `yaml:"autoRepair"`
+	MaxRepairAttempts int    `yaml:"maxRepairAttempts"`
+	RepairTool        string `yaml:"repairTool"`
+}
+
+func (p qualityPolicyFile) toPolicy() tool.QualityPolicy {
+	return tool.QualityPolicy{
+		Required:          p.Required,
+		CheckerTool:       p.CheckerTool,
+		MinScore:          p.MinScore,
+		AutoRepair:        p.AutoRepair,
+		MaxRepairAttempts: p.MaxRepairAttempts,
+		RepairTool:        p.RepairTool,
+	}
+}
+
+type localRequirementsFile struct {
+	OS              []string `yaml:"os"`
+	Commands        []string `yaml:"commands"`
+	MinDiskMb       int      `yaml:"minDiskMb"`
+	RequiresNetwork bool     `yaml:"requiresNetwork"`
+}
+
+func (r localRequirementsFile) toRequirements() tool.LocalRequirements {
+	return tool.LocalRequirements{
+		OS:              r.OS,
+		Commands:        r.Commands,
+		MinDiskMb:       r.MinDiskMb,
+		RequiresNetwork: r.RequiresNetwork,
 	}
 }

@@ -39,6 +39,19 @@ name: video_script_generator
 description: Generate a short video script.
 type: builtin_prompt_tool
 endpoint: builtin://video-creation/video_script_generator
+executionPlane: local
+requiresUserDevice: true
+artifactLocation: local
+localCommand: HYPERFRAMES_RENDER
+localRequirements:
+  os:
+    - darwin
+    - linux
+  commands:
+    - node
+    - ffmpeg
+  minDiskMb: 2048
+  requiresNetwork: false
 capabilities:
   - video_creation
   - script_generation
@@ -53,6 +66,12 @@ artifactPolicy:
   artifactKinds:
     - MARKDOWN
   defaultReviewRequired: true
+qualityPolicy:
+  required: true
+  checkerTool: script_quality_checker
+  minScore: 85
+  autoRepair: true
+  maxRepairAttempts: 2
 nextRecommendedTools:
   - shot_splitter
 `)
@@ -80,6 +99,21 @@ nextRecommendedTools:
 	}
 	if manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact || !manifest.ArtifactPolicy.DefaultReviewRequired {
 		t.Fatalf("review policy not loaded: %#v", manifest)
+	}
+	if !manifest.QualityPolicy.Required || manifest.QualityPolicy.CheckerTool != "script_quality_checker" || manifest.QualityPolicy.MinScore != 85 {
+		t.Fatalf("quality policy not loaded: %#v", manifest.QualityPolicy)
+	}
+	if !manifest.QualityPolicy.AutoRepair || manifest.QualityPolicy.MaxRepairAttempts != 2 {
+		t.Fatalf("quality repair policy not loaded: %#v", manifest.QualityPolicy)
+	}
+	if manifest.ExecutionPlane != tool.ExecutionPlaneLocal || !manifest.RequiresUserDevice || manifest.ArtifactLocation != tool.ArtifactLocationLocal {
+		t.Fatalf("execution plane policy not loaded: %#v", manifest)
+	}
+	if manifest.LocalCommand != "HYPERFRAMES_RENDER" || manifest.LocalRequirements.MinDiskMb != 2048 {
+		t.Fatalf("local execution requirements not loaded: %#v", manifest.LocalRequirements)
+	}
+	if len(manifest.LocalRequirements.Commands) != 2 || manifest.LocalRequirements.Commands[1] != "ffmpeg" {
+		t.Fatalf("local command requirements not loaded: %#v", manifest.LocalRequirements.Commands)
 	}
 }
 

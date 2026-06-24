@@ -6,6 +6,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
 	artifacts "github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/auth"
+	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	workflow "github.com/tangying-ai/aios-core/internal/core/workflow"
@@ -272,6 +273,21 @@ func registerCloudSchemas(b *Builder) {
 					"message": {Schema: StringSchema()},
 				},
 			}},
+		},
+	})
+
+	// ── Local Runners ──
+	b.Schema("RegisterRunnerRequest", Reflect(localrunner.RegisterRunnerRequest{}))
+	b.Schema("RegisterRunnerResponse", Reflect(localrunner.RegisterRunnerResponse{}))
+	b.Schema("HeartbeatRequest", Reflect(localrunner.HeartbeatRequest{}))
+	b.Schema("ClaimJobResponse", Reflect(localrunner.ClaimJobResponse{}))
+	b.Schema("ProgressRequest", Reflect(localrunner.ProgressRequest{}))
+	b.Schema("CompleteJobRequest", Reflect(localrunner.CompleteJobRequest{}))
+	b.Schema("FailJobRequest", Reflect(localrunner.FailJobRequest{}))
+	b.Schema("LocalOKResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"ok": {Schema: BoolSchema()},
 		},
 	})
 

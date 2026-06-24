@@ -298,6 +298,19 @@ export interface ChatResponse {
 }
 
 /**  */
+// ClaimJobResponse
+export interface ClaimJobResponse {
+  job?: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; command?: string; createdAt?: string; currentStep?: string; diagnostics?: Record<string, Record<string, unknown>>; error?: Record<string, Record<string, unknown>>; errorMessage?: string; idempotencyKey?: string; jobId?: string; leaseExpiresAt?: string | null; message?: string; nodeId?: string; output?: Record<string, Record<string, unknown>>; payload?: Record<string, Record<string, unknown>>; progress?: number; projectId?: string; retryable?: boolean; runnerId?: string; status?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string } | null;
+}
+
+/**  */
+// CompleteJobRequest
+export interface CompleteJobRequest {
+  output: Record<string, Record<string, unknown>>;
+  success: boolean;
+}
+
+/**  */
 // ContextListResponse
 export interface ContextListResponse {
   code?: number;
@@ -353,6 +366,15 @@ export interface ErrorResponse {
 }
 
 /**  */
+// FailJobRequest
+export interface FailJobRequest {
+  diagnostics?: Record<string, Record<string, unknown>>;
+  error: Record<string, Record<string, unknown>>;
+  retryable: boolean;
+  success: boolean;
+}
+
+/**  */
 // GenericOKResponse
 export interface GenericOKResponse {
   code?: number;
@@ -367,11 +389,29 @@ export interface HealthResponse {
 }
 
 /**  */
+// HeartbeatRequest
+export interface HeartbeatRequest {
+  cpuLoad: number;
+  diskFreeMb: number;
+  lastError?: string | null;
+  memoryUsageMb: number;
+  runningJobs: number;
+  sessionId: string;
+  status: string;
+}
+
+/**  */
 // InstantiateResponse
 export interface InstantiateResponse {
   code?: number;
   data?: { message?: string; task_id?: string; trace_url?: string };
   message?: string;
+}
+
+/**  */
+// LocalOKResponse
+export interface LocalOKResponse {
+  ok?: boolean;
 }
 
 /**  */
@@ -439,6 +479,16 @@ export interface PolishSubmitResponse {
 }
 
 /**  */
+// ProgressRequest
+export interface ProgressRequest {
+  logs?: string[];
+  message: string;
+  progress: number;
+  status: string;
+  step: string;
+}
+
+/**  */
 // ProgressResponse
 export interface ProgressResponse {
   code?: number;
@@ -460,6 +510,26 @@ export interface ReadinessResponse {
   dependencies?: Record<string, unknown>;
   service?: string;
   status?: string;
+}
+
+/**  */
+// RegisterRunnerRequest
+export interface RegisterRunnerRequest {
+  capabilities: { available: boolean; command: string; toolName: string; version?: string }[];
+  deviceId: string;
+  platform: { arch?: string; hostname?: string; os?: string };
+  runnerVersion: string;
+  userId: string;
+  workspaceRoot: string;
+}
+
+/**  */
+// RegisterRunnerResponse
+export interface RegisterRunnerResponse {
+  heartbeatIntervalSec: number;
+  pollIntervalSec: number;
+  runnerId: string;
+  sessionId: string;
 }
 
 /**  */

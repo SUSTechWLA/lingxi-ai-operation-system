@@ -25,6 +25,7 @@ func BuildCloudSpec() *Spec {
 		Tag("Skills", "AI skill catalog and routing").
 		Tag("Skill Capabilities", "Agent capability package catalog").
 		Tag("Agent Runs", "Dynamic agent runtime runs and review gates").
+		Tag("Local Runners", "Cloud control-plane protocol for local execution runners").
 		Tag("Workflows", "Reusable workflow templates (blueprints)").
 		Tag("Video Projects", "Video creation project CRUD").
 		Tag("Workflow Runs", "Video workflow run lifecycle").
@@ -213,6 +214,41 @@ func BuildCloudSpec() *Spec {
 		Tags("Node").
 		BodyJSON("DAGRequest", "DAG nodes + edges", true).
 		ResponseJSON("200", "DAG submitted", "DAGSubmitResponse")
+
+	// ── Local Runners ──
+	b.Route("POST", "/api/local-runners/register", "Register a local execution runner and create a runner session").
+		Tags("Local Runners").
+		BodyJSON("RegisterRunnerRequest", "Local runner device and capability probe", true).
+		ResponseJSON("200", "Runner session", "RegisterRunnerResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/local-runners/:runnerId/heartbeat", "Update local runner heartbeat and resource snapshot").
+		Tags("Local Runners").
+		PathParam("runnerId", "Runner identifier", StringSchema()).
+		BodyJSON("HeartbeatRequest", "Runner heartbeat", true).
+		ResponseJSON("200", "Heartbeat accepted", "LocalOKResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("GET", "/api/local-runners/:runnerId/jobs/claim", "Claim the next pending local job for a runner").
+		Tags("Local Runners").
+		PathParam("runnerId", "Runner identifier", StringSchema()).
+		ResponseJSON("200", "Claimed job or null", "ClaimJobResponse")
+	b.Route("POST", "/api/local-jobs/:jobId/progress", "Report local job progress and logs").
+		Tags("Local Runners").
+		PathParam("jobId", "Local job identifier", StringSchema()).
+		BodyJSON("ProgressRequest", "Progress update", true).
+		ResponseJSON("200", "Progress accepted", "LocalOKResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/local-jobs/:jobId/complete", "Complete a local job and advance its DAG node").
+		Tags("Local Runners").
+		PathParam("jobId", "Local job identifier", StringSchema()).
+		BodyJSON("CompleteJobRequest", "Local job output", true).
+		ResponseJSON("200", "Completion accepted", "LocalOKResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/local-jobs/:jobId/fail", "Fail a local job and advance its DAG node failure path").
+		Tags("Local Runners").
+		PathParam("jobId", "Local job identifier", StringSchema()).
+		BodyJSON("FailJobRequest", "Local job failure details", true).
+		ResponseJSON("200", "Failure accepted", "LocalOKResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
 
 	// ── Translate ──
 	b.Route("POST", "/api/translate", "Translate NL prompt to DAG").

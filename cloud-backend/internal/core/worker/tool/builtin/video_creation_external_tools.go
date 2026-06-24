@@ -20,6 +20,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/hyperframes"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
+	videopipeline "github.com/tangying-ai/aios-core/internal/core/video/pipeline"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -41,6 +42,12 @@ var videoCreationExternalTools = []string{
 	"material_library_importer",
 	"voice_post_process",
 	"audio_artifact_packager",
+	// VideoForge Studio P0 pipeline tools.
+	"pipeline_selector",
+	"capability_preflight",
+	"proposal_generator",
+	"visual_feasibility_analyzer",
+	"render_strategy_planner",
 	// Dynamic agent prompt_tool entries — used by LLMPlanner for video creation workflows.
 	"knowledge_researcher",
 	"fact_checker",
@@ -354,6 +361,16 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 
 	// Dispatch to tool-specific implementations.
 	switch toolName {
+	case "pipeline_selector":
+		return executePipelineSelector(stage, skillName, brief, params, toolCtx)
+	case "capability_preflight":
+		return executeCapabilityPreflight(stage, skillName, params)
+	case "proposal_generator":
+		return executeProposalGenerator(stage, skillName, brief, params)
+	case "visual_feasibility_analyzer":
+		return executeVisualFeasibilityAnalyzer(stage, skillName, params)
+	case "render_strategy_planner":
+		return executeRenderStrategyPlanner(stage, skillName, params)
 	case "image_asset_generator":
 		return executeImageAssetGenerator(stage, skillName, brief, instructionRef, params, toolCtx)
 	case "hyperframes_project_generator":
@@ -388,6 +405,304 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 			"content":   content,
 			"artifacts": artifacts,
 		})
+	}
+}
+
+func executePipelineSelector(stage, skillName, brief string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	root := pipelineRoot(params)
+	registry, err := videopipeline.LoadDirectory(root)
+	if err != nil {
+		return tool.FailureResult(fmt.Sprintf("load video pipelines: %s", err.Error()))
+	}
+	selection, err := registry.Select(videopipeline.SelectionRequest{
+		Message: brief,
+		Inputs:  inputKindsParam(params),
+	})
+	if err != nil {
+		return tool.FailureResult(fmt.Sprintf("select video pipeline: %s", err.Error()))
+	}
+	selectionMap := structToMap(selection)
+	content := fmt.Sprintf("# Pipeline Selection\n\n已选择 `%s`（%s）。\n\n原因：%s\n\n首个审核阶段：`%s`",
+		selection.PipelineID, selection.PipelineName, selection.Reason, selection.FirstApprovalStage)
+	return tool.SuccessResult(map[string]interface{}{
+		"content":           content,
+		"pipelineSelection": selectionMap,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "pipeline_selection.json", skillName, "videoforge-pipeline-selector", true),
+		},
+		"taskId": toolCtx.TaskID,
+	})
+}
+
+func executeCapabilityPreflight(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	caps := capabilitySnapshot(params)
+	result := map[string]interface{}{
+		"textModel": map[string]interface{}{
+			"available": caps.TextModelAvailable,
+			"provider":  "openai-compatible",
+		},
+		"hyperframes": map[string]interface{}{
+			"available":       caps.HyperFramesAvailable,
+			"contractVersion": "aios-hyperframes-render-v1",
+			"supports":        []string{"render", "lint", "captionOverlay", "videoClipComposition"},
+		},
+		"seedance": map[string]interface{}{
+			"available":              caps.SeedanceAvailable,
+			"maxDurationSec":         15,
+			"supportsImageReference": true,
+			"supportsVideoReference": true,
+		},
+		"tts": map[string]interface{}{
+			"available":     caps.TTSAvailable,
+			"setupRequired": !caps.TTSAvailable,
+		},
+		"asr":             map[string]interface{}{"available": caps.ASRAvailable},
+		"recommendations": capabilityRecommendations(caps),
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"content":      "# Capability Preflight\n\n" + strings.Join(capabilityRecommendations(caps), "\n"),
+		"capabilities": result,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "capability_preflight.json", skillName, "videoforge-capability-preflight", false),
+		},
+	})
+}
+
+func executeProposalGenerator(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
+	manifest := loadRequestedPipeline(params)
+	packet := videopipeline.BuildProposalPacket(videopipeline.ProposalRequest{
+		Pipeline:          manifest,
+		Message:           brief,
+		TargetDurationSec: intParam(params, "targetDurationSec", 60),
+		Capabilities:      capabilitySnapshot(params),
+	})
+	packetMap := structToMap(packet)
+	content := fmt.Sprintf("# Proposal Packet\n\n推荐方案：`%s`\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", packet.RecommendedOptionID)
+	return tool.SuccessResult(map[string]interface{}{
+		"content":        content,
+		"proposalPacket": packetMap,
+		"decisionLog":    structToMap(packet.DecisionLog),
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "proposal_packet.json", skillName, "videoforge-proposal-generator", true),
+		},
+	})
+}
+
+func executeVisualFeasibilityAnalyzer(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	strategy := videopipeline.BuildRenderStrategy(videopipeline.RenderStrategyRequest{
+		Shots:        shotPlansParam(params),
+		Capabilities: capabilitySnapshot(params),
+	})
+	feasibility := map[string]interface{}{
+		"artifactKind": "visual_feasibility",
+		"overallMode":  strategy.OverallMode,
+		"shots":        strategy.Shots,
+		"summary":      "已按精确文字、复杂动态和可用引擎评估每个镜头的视觉可行性。",
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"content":     "# Visual Feasibility\n\n" + feasibility["summary"].(string),
+		"feasibility": feasibility,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "visual_feasibility.json", skillName, "videoforge-visual-feasibility", false),
+		},
+	})
+}
+
+func executeRenderStrategyPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	strategy := videopipeline.BuildRenderStrategy(videopipeline.RenderStrategyRequest{
+		Shots:        shotPlansParam(params),
+		Capabilities: capabilitySnapshot(params),
+	})
+	strategyMap := structToMap(strategy)
+	content := fmt.Sprintf("# Render Strategy\n\n整体模式：`%s`\n\nSeedance clips：%d\nHyperFrames renders：%d",
+		strategy.OverallMode, strategy.EstimatedCost.SeedanceClips, strategy.EstimatedCost.HyperFramesRenders)
+	return tool.SuccessResult(map[string]interface{}{
+		"content":        content,
+		"renderStrategy": strategyMap,
+		"decisionLog":    structToMap(strategy.DecisionLog),
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "render_strategy.json", skillName, "videoforge-render-strategy", true),
+		},
+	})
+}
+
+func pipelineRoot(params map[string]interface{}) string {
+	if root := stringParam(params, "pipelineRoot", ""); root != "" {
+		return root
+	}
+	if root := os.Getenv("AIOS_VIDEO_PIPELINE_ROOT"); root != "" {
+		return root
+	}
+	return "video-pipelines"
+}
+
+func inputKindsParam(params map[string]interface{}) []videopipeline.InputKind {
+	raw, ok := params["inputKinds"]
+	if !ok {
+		return []videopipeline.InputKind{videopipeline.InputBrief}
+	}
+	var result []videopipeline.InputKind
+	switch typed := raw.(type) {
+	case []string:
+		for _, value := range typed {
+			result = append(result, videopipeline.InputKind(value))
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if value, ok := item.(string); ok && value != "" {
+				result = append(result, videopipeline.InputKind(value))
+			}
+		}
+	case string:
+		if typed != "" {
+			result = append(result, videopipeline.InputKind(typed))
+		}
+	}
+	if len(result) == 0 {
+		return []videopipeline.InputKind{videopipeline.InputBrief}
+	}
+	return result
+}
+
+func loadRequestedPipeline(params map[string]interface{}) *videopipeline.Manifest {
+	root := pipelineRoot(params)
+	registry, err := videopipeline.LoadDirectory(root)
+	if err == nil {
+		pipelineID := stringParam(params, "pipelineId", "knowledge-video")
+		if manifest, ok := registry.Get(pipelineID); ok {
+			return manifest
+		}
+	}
+	return &videopipeline.Manifest{ID: "knowledge-video", Name: "知识口播视频"}
+}
+
+func capabilitySnapshot(params map[string]interface{}) videopipeline.CapabilitySnapshot {
+	cfg := GetVideoCreationOpenAIConfig()
+	return videopipeline.CapabilitySnapshot{
+		TextModelAvailable:   boolParam(params, "textModelAvailable", cfg.APIKey != ""),
+		HyperFramesAvailable: boolParam(params, "hyperframesAvailable", hyperFramesServiceAvailable()),
+		SeedanceAvailable:    boolParam(params, "seedanceAvailable", false),
+		TTSAvailable:         boolParam(params, "ttsAvailable", false),
+		ASRAvailable:         boolParam(params, "asrAvailable", true),
+	}
+}
+
+func capabilityRecommendations(caps videopipeline.CapabilitySnapshot) []string {
+	recommendations := []string{}
+	if caps.HyperFramesAvailable {
+		recommendations = append(recommendations, "- 当前适合生成图文口播视频。")
+	} else {
+		recommendations = append(recommendations, "- HyperFrames 未启用，成片合成需要配置渲染服务或走人工导入。")
+	}
+	if caps.SeedanceAvailable {
+		recommendations = append(recommendations, "- 可使用 Seedance 生成短 B-roll。")
+	} else {
+		recommendations = append(recommendations, "- Seedance 未配置，高动态镜头将优先降级为 HyperFrames-only。")
+	}
+	if !caps.TTSAvailable {
+		recommendations = append(recommendations, "- TTS 未配置，无法自动生成口播音频。")
+	}
+	return recommendations
+}
+
+func shotPlansParam(params map[string]interface{}) []videopipeline.ShotPlan {
+	raw, ok := params["shots"]
+	if !ok {
+		raw = params["shotList"]
+	}
+	var shots []videopipeline.ShotPlan
+	data, err := json.Marshal(raw)
+	if err == nil && len(data) > 0 && string(data) != "null" {
+		_ = json.Unmarshal(data, &shots)
+	}
+	if len(shots) > 0 {
+		return shots
+	}
+	brief := stringParam(params, "brief", "知识分享视频")
+	return []videopipeline.ShotPlan{
+		{
+			ShotID:      "SHOT_01",
+			DurationSec: 5,
+			Elements: []videopipeline.VisualElement{
+				{ID: "title", Type: "text", RequiresExactText: true},
+			},
+		},
+		{
+			ShotID:      "SHOT_02",
+			DurationSec: 8,
+			Elements: []videopipeline.VisualElement{
+				{ID: "background", Type: "topic_motion", RequiresComplexMotion: strings.Contains(brief, "动态") || strings.Contains(brief, "龙舟")},
+				{ID: "caption", Type: "text", RequiresExactText: true},
+			},
+		},
+	}
+}
+
+func intParam(params map[string]interface{}, key string, fallback int) int {
+	value, ok := params[key]
+	if !ok {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		if n, err := typed.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		var parsed int
+		if _, err := fmt.Sscanf(typed, "%d", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func boolParam(params map[string]interface{}, key string, fallback bool) bool {
+	value, ok := params[key]
+	if !ok {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(typed, "true") || typed == "1" || strings.EqualFold(typed, "yes")
+	default:
+		return fallback
+	}
+}
+
+func structToMap(value interface{}) map[string]interface{} {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return map[string]interface{}{}
+	}
+	return out
+}
+
+func jsonArtifact(stage, name, skillName, source string, requiresReview bool) map[string]interface{} {
+	return map[string]interface{}{
+		"unitId":   stage,
+		"kind":     "JSON",
+		"name":     name,
+		"mimeType": "application/json",
+		"metadata": map[string]interface{}{
+			"stage":           stage,
+			"skillName":       skillName,
+			"source":          source,
+			"requiresReview":  requiresReview,
+			"canReviseByChat": requiresReview,
+		},
 	}
 }
 

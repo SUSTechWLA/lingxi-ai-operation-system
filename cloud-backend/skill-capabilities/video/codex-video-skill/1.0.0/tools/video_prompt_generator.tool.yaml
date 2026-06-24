@@ -82,6 +82,13 @@ artifactPolicy:
     - JSON
   defaultReviewRequired: true
 
+qualityPolicy:
+  required: true
+  checkerTool: video_prompt_quality_checker
+  minScore: 85
+  autoRepair: true
+  maxRepairAttempts: 1
+
 nextRecommendedTools:
   - video_prompt_quality_checker
   - hyperframes_project_generator

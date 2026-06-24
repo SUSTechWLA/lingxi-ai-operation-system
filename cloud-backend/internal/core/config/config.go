@@ -10,20 +10,20 @@ import (
 )
 
 type Config struct {
-	Server      ServerConfig       `mapstructure:",squash"`
-	Postgres    PostgresConfig     `mapstructure:",squash"`
-	Redis       RedisConfig        `mapstructure:",squash"`
-	Kafka       KafkaConfig        `mapstructure:",squash"`
-	OpenAI      OpenAIConfig       `mapstructure:",squash"`
-	Auth        AuthConfig         `mapstructure:",squash"`
-	Worker      WorkerConfig       `mapstructure:",squash"`
-	MinIO       MinIOConfig        `mapstructure:",squash"`
-	BashTool    BashToolConfig     `mapstructure:",squash"`
-	Services    ServicesConfig     `mapstructure:",squash"`
-	Sandbox     SandboxConfig      `mapstructure:",squash"`
-	Video       VideoConfig        `mapstructure:",squash"`
-	Agent       AgentConfig        `mapstructure:",squash"`
-	HyperFrames HyperFramesConfig  `mapstructure:",squash"`
+	Server      ServerConfig      `mapstructure:",squash"`
+	Postgres    PostgresConfig    `mapstructure:",squash"`
+	Redis       RedisConfig       `mapstructure:",squash"`
+	Kafka       KafkaConfig       `mapstructure:",squash"`
+	OpenAI      OpenAIConfig      `mapstructure:",squash"`
+	Auth        AuthConfig        `mapstructure:",squash"`
+	Worker      WorkerConfig      `mapstructure:",squash"`
+	MinIO       MinIOConfig       `mapstructure:",squash"`
+	BashTool    BashToolConfig    `mapstructure:",squash"`
+	Services    ServicesConfig    `mapstructure:",squash"`
+	Sandbox     SandboxConfig     `mapstructure:",squash"`
+	Video       VideoConfig       `mapstructure:",squash"`
+	Agent       AgentConfig       `mapstructure:",squash"`
+	HyperFrames HyperFramesConfig `mapstructure:",squash"`
 }
 
 // AgentConfig controls the dynamic agent runtime.
@@ -206,7 +206,7 @@ func setDefaults() {
 	viper.SetDefault("SKILL_CAPABILITY_ROOT", "skill-capabilities")
 	viper.SetDefault("LEGACY_SKILL_WORKFLOW_AUTOREGISTER", false)
 	viper.SetDefault("AGENT_PLANNER_MODE", "hybrid")
-	viper.SetDefault("AGENT_PLANNER_MAX_TOOLS", 6)
+	viper.SetDefault("AGENT_PLANNER_MAX_TOOLS", 8)
 	viper.SetDefault("HYPERFRAMES_MODE", "disabled")
 	viper.SetDefault("HYPERFRAMES_SERVICE_URL", "http://127.0.0.1:8787")
 	viper.SetDefault("HYPERFRAMES_TIMEOUT_SEC", 1800)

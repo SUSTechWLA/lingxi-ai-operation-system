@@ -21,19 +21,20 @@ Version: 0.1.0
 6. [Chat](#6-chat)
 7. [Context](#7-context)
 8. [Health](#8-health)
-9. [Media](#9-media)
-10. [Node](#10-node)
-11. [Orchestrator](#11-orchestrator)
-12. [Publish](#12-publish)
-13. [Skill Capabilities](#13-skill-capabilities)
-14. [Skills](#14-skills)
-15. [Stages](#15-stages)
-16. [Tools](#16-tools)
-17. [Trace](#17-trace)
-18. [Translate](#18-translate)
-19. [Video Projects](#19-video-projects)
-20. [Workflow Runs](#20-workflow-runs)
-21. [Workflows](#21-workflows)
+9. [Local Runners](#9-local-runners)
+10. [Media](#10-media)
+11. [Node](#11-node)
+12. [Orchestrator](#12-orchestrator)
+13. [Publish](#13-publish)
+14. [Skill Capabilities](#14-skill-capabilities)
+15. [Skills](#15-skills)
+16. [Stages](#16-stages)
+17. [Tools](#17-tools)
+18. [Trace](#18-trace)
+19. [Translate](#19-translate)
+20. [Video Projects](#20-video-projects)
+21. [Workflow Runs](#21-workflow-runs)
+22. [Workflows](#22-workflows)
 
 ---
 
@@ -929,7 +930,134 @@ Readiness check with dependencies
 
 ---
 
-## 9. Media
+## 9. Local Runners
+
+### POST /api/local-jobs/:jobId/complete
+
+Complete a local job and advance its DAG node
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `jobId` | path | `string` | **Yes** | Local job identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/CompleteJobRequest" }
+```
+
+**Responses:**
+
+- **200** — Completion accepted (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/local-jobs/:jobId/fail
+
+Fail a local job and advance its DAG node failure path
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `jobId` | path | `string` | **Yes** | Local job identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/FailJobRequest" }
+```
+
+**Responses:**
+
+- **200** — Failure accepted (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/local-jobs/:jobId/progress
+
+Report local job progress and logs
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `jobId` | path | `string` | **Yes** | Local job identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/ProgressRequest" }
+```
+
+**Responses:**
+
+- **200** — Progress accepted (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/local-runners/:runnerId/heartbeat
+
+Update local runner heartbeat and resource snapshot
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runnerId` | path | `string` | **Yes** | Runner identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/HeartbeatRequest" }
+```
+
+**Responses:**
+
+- **200** — Heartbeat accepted (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### GET /api/local-runners/:runnerId/jobs/claim
+
+Claim the next pending local job for a runner
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runnerId` | path | `string` | **Yes** | Runner identifier |
+
+**Responses:**
+
+- **200** — Claimed job or null (JSON)
+
+---
+
+### POST /api/local-runners/register
+
+Register a local execution runner and create a runner session
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/RegisterRunnerRequest" }
+```
+
+**Responses:**
+
+- **200** — Runner session (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+## 10. Media
 
 ### GET /api/media/:id
 
@@ -1010,7 +1138,7 @@ Upload media files
 
 ---
 
-## 10. Node
+## 11. Node
 
 ### POST /api/node
 
@@ -1123,7 +1251,7 @@ Report node execution success
 
 ---
 
-## 11. Orchestrator
+## 12. Orchestrator
 
 ### GET /api/task/:taskId
 
@@ -1283,7 +1411,7 @@ Create a new empty task
 
 ---
 
-## 12. Publish
+## 13. Publish
 
 ### POST /api/publish
 
@@ -1308,7 +1436,7 @@ Submit content for multi-platform publishing
 
 ---
 
-## 13. Skill Capabilities
+## 14. Skill Capabilities
 
 ### GET /api/skill-capabilities
 
@@ -1337,7 +1465,7 @@ Get capability package detail
 
 ---
 
-## 14. Skills
+## 15. Skills
 
 ### GET /api/skills
 
@@ -1418,7 +1546,7 @@ Route a brief to a skill
 
 ---
 
-## 15. Stages
+## 16. Stages
 
 ### POST /api/video-projects/:id/stages/:stage/approve
 
@@ -1448,7 +1576,7 @@ Approve a stage
 
 ---
 
-## 16. Tools
+## 17. Tools
 
 ### GET /api/tools
 
@@ -1510,7 +1638,7 @@ Register an external tool
 
 ---
 
-## 17. Trace
+## 18. Trace
 
 ### GET /api/trace/:taskId
 
@@ -1540,7 +1668,7 @@ Get most recent task trace
 
 ---
 
-## 18. Translate
+## 19. Translate
 
 ### GET /api/task/:taskId/status
 
@@ -1594,7 +1722,7 @@ Translate NL prompt and submit DAG
 
 ---
 
-## 19. Video Projects
+## 20. Video Projects
 
 ### GET /api/video-projects
 
@@ -1677,7 +1805,7 @@ Archive a project (soft delete)
 
 ---
 
-## 20. Workflow Runs
+## 21. Workflow Runs
 
 ### POST /api/video-projects/:id/workflow-runs
 
@@ -1757,7 +1885,7 @@ Pause a run
 
 ---
 
-## 21. Workflows
+## 22. Workflows
 
 ### GET /api/workflows
 

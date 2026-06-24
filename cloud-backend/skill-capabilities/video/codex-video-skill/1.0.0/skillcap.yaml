@@ -21,6 +21,10 @@ activation:
     - shot
     - prompt
     - 知识
+    - VideoForge
+    - pipeline
+    - proposal
+    - render strategy
     - 事实
     - 发布
     - 导出
@@ -55,6 +59,12 @@ resources:
     priority: 90
 
 tools:
+  - id: pipeline_selector
+    manifest: tools/pipeline_selector.tool.yaml
+  - id: capability_preflight
+    manifest: tools/capability_preflight.tool.yaml
+  - id: proposal_generator
+    manifest: tools/proposal_generator.tool.yaml
   - id: knowledge_researcher
     manifest: tools/knowledge_researcher.tool.yaml
   - id: fact_checker
@@ -65,6 +75,10 @@ tools:
   - id: shot_splitter
     manifest: tools/shot_splitter.tool.yaml
     prompt: prompts/shot_splitter.prompt.md
+  - id: visual_feasibility_analyzer
+    manifest: tools/visual_feasibility_analyzer.tool.yaml
+  - id: render_strategy_planner
+    manifest: tools/render_strategy_planner.tool.yaml
   - id: video_prompt_generator
     manifest: tools/video_prompt_generator.tool.yaml
     prompt: prompts/video_prompt_generator.prompt.md

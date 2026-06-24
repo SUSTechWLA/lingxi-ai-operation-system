@@ -180,6 +180,8 @@ func manifestToRecord(m *tool.ToolManifest) *model.ToolManifestRecord {
 	tags, _ := json.Marshal(m.Tags)
 	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
 	artifactPolicy, _ := json.Marshal(m.ArtifactPolicy)
+	localRequirements, _ := json.Marshal(m.LocalRequirements)
+	providerCapabilities, _ := json.Marshal(m.ProviderCapabilities)
 	nextRecommendedTools, _ := json.Marshal(m.NextRecommendedTools)
 	failureModes, _ := json.Marshal(m.FailureModes)
 	resourceRefs, _ := json.Marshal(m.ResourceRefs)
@@ -195,6 +197,14 @@ func manifestToRecord(m *tool.ToolManifest) *model.ToolManifestRecord {
 	riskLevel := m.RiskLevel
 	if riskLevel == "" {
 		riskLevel = tool.RiskLow
+	}
+	executionPlane := m.ExecutionPlane
+	if executionPlane == "" {
+		executionPlane = tool.ExecutionPlaneCloud
+	}
+	artifactLocation := m.ArtifactLocation
+	if artifactLocation == "" {
+		artifactLocation = tool.ArtifactLocationCloud
 	}
 
 	return &model.ToolManifestRecord{
@@ -217,6 +227,13 @@ func manifestToRecord(m *tool.ToolManifest) *model.ToolManifestRecord {
 		Idempotent:           m.Idempotent || !m.SideEffect,
 		ApprovalPolicy:       approvalPolicy,
 		ArtifactPolicy:       artifactPolicy,
+		ExecutionPlane:       executionPlane,
+		RequiresUserDevice:   m.RequiresUserDevice,
+		ArtifactLocation:     artifactLocation,
+		LocalCommand:         m.LocalCommand,
+		LocalRequirements:    localRequirements,
+		Provider:             m.Provider,
+		ProviderCapabilities: providerCapabilities,
 		NextRecommendedTools: nextRecommendedTools,
 		FailureModes:         failureModes,
 		SkillPackageID:       m.SkillPackageID,

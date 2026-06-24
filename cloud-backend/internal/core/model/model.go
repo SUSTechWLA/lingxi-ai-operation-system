@@ -23,11 +23,17 @@ const (
 	NodeCreated          NodeStatus = "CREATED"
 	NodeReady            NodeStatus = "READY"
 	NodeRunning          NodeStatus = "RUNNING"
+	NodeWaitingLocal     NodeStatus = "WAITING_LOCAL"
+	NodeLocalClaimed     NodeStatus = "LOCAL_CLAIMED"
+	NodeLocalRunning     NodeStatus = "LOCAL_RUNNING"
+	NodeLocalCompleted   NodeStatus = "LOCAL_COMPLETED"
+	NodeLocalFailed      NodeStatus = "LOCAL_FAILED"
 	NodeRetrying         NodeStatus = "RETRYING"
 	NodeHeartbeatTimeout NodeStatus = "HEARTBEAT_TIMEOUT"
 	NodeSuccess          NodeStatus = "SUCCESS"
 	NodeFailed           NodeStatus = "FAILED"
 	NodeSkipped          NodeStatus = "SKIPPED"
+	NodeCancelled        NodeStatus = "CANCELLED"
 )
 
 // Node type
@@ -324,6 +330,13 @@ type ToolManifestRecord struct {
 	Idempotent           bool            `json:"idempotent,omitempty"`
 	ApprovalPolicy       json.RawMessage `json:"approval_policy,omitempty"`
 	ArtifactPolicy       json.RawMessage `json:"artifact_policy,omitempty"`
+	ExecutionPlane       string          `json:"execution_plane,omitempty"`
+	RequiresUserDevice   bool            `json:"requires_user_device,omitempty"`
+	ArtifactLocation     string          `json:"artifact_location,omitempty"`
+	LocalCommand         string          `json:"local_command,omitempty"`
+	LocalRequirements    json.RawMessage `json:"local_requirements,omitempty"`
+	Provider             string          `json:"provider,omitempty"`
+	ProviderCapabilities json.RawMessage `json:"provider_capabilities,omitempty"`
 	NextRecommendedTools json.RawMessage `json:"next_recommended_tools,omitempty"`
 	FailureModes         json.RawMessage `json:"failure_modes,omitempty"`
 	SkillPackageID       string          `json:"skill_package_id,omitempty"`

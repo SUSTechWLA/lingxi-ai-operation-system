@@ -9,10 +9,20 @@ import (
 
 func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 	record := manifestToRecord(&tool.ToolManifest{
-		Name:           "video_script_generator",
-		Description:    "Generate a reviewable script",
-		Type:           "builtin_prompt_tool",
-		Version:        "1.0.0",
+		Name:               "video_script_generator",
+		Description:        "Generate a reviewable script",
+		Type:               "builtin_prompt_tool",
+		Version:            "1.0.0",
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		LocalCommand:       "HYPERFRAMES_RENDER",
+		LocalRequirements: tool.LocalRequirements{
+			OS:              []string{"darwin", "linux"},
+			Commands:        []string{"node", "ffmpeg"},
+			MinDiskMb:       2048,
+			RequiresNetwork: false,
+		},
 		Capabilities:   []string{"video_creation", "script_generation"},
 		Tags:           []string{"video", "script"},
 		CostLevel:      tool.CostLow,
@@ -58,6 +68,20 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 	}
 	if record.SkillPackageID != "codex-video-skill" || record.PromptRef == "" {
 		t.Fatalf("skill capability metadata not preserved: %#v", record)
+	}
+	if record.ExecutionPlane != tool.ExecutionPlaneLocal || !record.RequiresUserDevice || record.ArtifactLocation != tool.ArtifactLocationLocal {
+		t.Fatalf("edge execution metadata not preserved: %#v", record)
+	}
+	if record.LocalCommand != "HYPERFRAMES_RENDER" {
+		t.Fatalf("local command not preserved: %#v", record)
+	}
+
+	var localRequirements tool.LocalRequirements
+	if err := json.Unmarshal(record.LocalRequirements, &localRequirements); err != nil {
+		t.Fatalf("local requirements not valid JSON: %v", err)
+	}
+	if localRequirements.MinDiskMb != 2048 || len(localRequirements.Commands) != 2 || localRequirements.Commands[1] != "ffmpeg" {
+		t.Fatalf("local requirements not preserved: %#v", localRequirements)
 	}
 
 	var approval tool.ApprovalPolicy

@@ -46,7 +46,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 
 - **一句话描述成片目标**，系统自动理解需求、选择最合适的「技能（Skill）」、编排成可执行的工作流；
 - **全程可追踪、可审核、可返工**，每个中间产物都有版本，能回溯能改；
-- **工具可插拔**，内置 14+ 工具，外部工具通过 HTTP 注册即可接入；
+- **工具可插拔**，内置 30+ 工具（含 17 个通用内置工具 + 33 个视频创作工具 + Skill Capability 动态注册工具），外部工具通过 HTTP 注册即可接入；
 - **同一套引擎服务多条业务线**（视频、发布、标书、对话），不重复造轮子。
 
 ### 1.3 核心优势
@@ -60,6 +60,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 | **自然语言入口路由** | 用户一句话，LLM Router 在可见的 Skill 目录里选出最合适的一个，并推断画幅/时长/交付目标，无需手动选「视频类型」。 |
 | **统一 Model Gateway** | 所有模型调用走指纹缓存（幂等）+ 指数退避重试 + Provider 路由，Fake Provider 让无 API Key 也能跑通端到端测试。LLMPlanner、PromptTool、QualityChecker 统一走 ModelGateway。 |
 | **质量门禁体系** | 关键生产工具（口播稿/分镜/视频Prompt）自动插入质量检查器，输出 `passed/score/issues/repairSuggestions`。质量门 CONTROL 节点：score≥85 自动通过，70-84 支持自动修复，<70 暂停人工确认。 |
+| **VideoForge Studio Pipeline** | 视频创作可先走 Pipeline Manifest：`pipeline_selector → capability_preflight → proposal_generator → script → shot_list → visual_feasibility → render_strategy`，proposal 和 render strategy 通过 Artifact Review 阻塞下游，避免直接进入高成本生成。 |
 | **版本化产物管理** | 每个 stage 产物有 `version`、`contentHash`、`promptHash`，支持历史回看与「说修改意见 → 生成新版本」的返工闭环。`artifact_reviews` 表记录审核状态（PENDING/APPROVED/REJECTED），未审核产物禁止进入下游。 |
 | **沙箱隔离执行** | Rust gRPC 沙箱（setrlimit 内存/CPU/磁盘/PID 限制）执行不受信任的 Bash/Python 代码，危险命令拦截。 |
 | **Electron 桌面 + Web 双形态** | 同一套 React 代码，既能打包成 .dmg/.exe 桌面应用（带本地命令执行能力），也能纯 Web 访问。 |
@@ -71,6 +72,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 | 业务线 | 入口 Agent | 状态 |
 |--------|-----------|------|
 | 自媒体视频创作（口播/镜头式/导演级/拉片） | `internal/agents/video` | ✅ MVP 可用（feature-gated） |
+| VideoForge Studio P0（Pipeline/Proposal/Render Strategy） | `video-pipelines/` + `skill-capabilities/video/codex-video-skill` | ✅ 可用（Dynamic Agent 工具链） |
 | 内容发布 + AI 生成/润色 | `internal/agents/publish` | ✅ 可用 |
 | AI 对话助手（多轮对话 → DAG） | `internal/agents/chat` | ✅ 可用 |
 | 标书/投标文档生成 | `internal/agents/bid` | ✅ 可用 |
@@ -271,6 +273,7 @@ SKIPPED（条件未满足，对下游等同满足）
 | `LLMPlanner` | `llm_planner.go` | LLM 驱动生成 AgentPlan JSON。走 ModelGateway。内置 `AgentPlanJSONSchema` 约束。 |
 | `HeuristicPlanner` | `planner.go` | 启发式选 TopK 工具线性编排，无需 LLM。 |
 | `HybridPlanner` | `llm_planner.go` | LLMPlanner 优先，失败回退 HeuristicPlanner。 |
+| `GatewayPlannerClient` | `gateway_planner_client.go` | ModelGateway 适配器，将 Planner 的 LLM 调用走统一网关（指纹缓存+重试）。 |
 | `HybridToolRetriever` | `tool_retriever.go` | 多信号评分检索（能力+关键词+标签+推荐链+领域）扣成本/风险惩罚。 |
 | `PlanGuard` | `plan_guard.go` | 校验工具存在、参数类型、引用表达式含 output schema 字段存在性、风险等级、侧效应、maxToolCalls。 |
 | `PlanCompiler` | `plan_compiler.go` | 编译 AgentPlan→Transient DAG：自动插入审核 CONTROL 节点、quality checker + quality gate CONTROL 节点。 |
@@ -278,6 +281,8 @@ SKIPPED（条件未满足，对下游等同满足）
 | `Handler` | `handler.go` | HTTP：`POST/GET /api/agent/runs`，审核 approve/reject，集成 `artifact_reviews` 表。 |
 | `ArtifactReviewStore` | `artifact_review.go` | `artifact_reviews` 表持久化：PENDING→APPROVED/REJECTED。 |
 | `PlanRepairer` | `llm_planner.go` | Guard 失败后 LLM 修复一次，失败则 fallback。 |
+| `AgentRunRepository` | `repository.go` | `agent_runs` 表持久化（plan JSONB/stage/status）。 |
+| `E2E Smoke Tests` | `e2e_test.go` | 🆕 端到端冒烟测试（~740 行），覆盖 Planner→Guard→Compiler 全链路、质量门禁、Artifact Review。 |
 
 **核心 Agent API：**
 
@@ -328,6 +333,11 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `video_metadata` | video_metadata.go | Executable | 下载视频→提取时长/分辨率/帧率/编码 |
 | `video_analyzer` | video_analyzer.go | Executable | ffmpeg 关键帧 + Whisper 转录 |
 | `video_copy_generator` | video_copy_generator.go | Executable | 多模态生成短视频文案 |
+| `pipeline_selector` | video_creation_external_tools.go | builtin_prompt_tool | 读取 `video-pipelines/*.yaml`，选择 VideoForge pipeline |
+| `capability_preflight` | video_creation_external_tools.go | builtin_prompt_tool | 输出文本模型、HyperFrames、Seedance、TTS/ASR 能力状态 |
+| `proposal_generator` | video_creation_external_tools.go | builtin_prompt_tool | 生成 `proposal_packet`，需 Artifact Review 后继续 |
+| `visual_feasibility_analyzer` | video_creation_external_tools.go | builtin_prompt_tool | 按镜头和元素评估 HyperFrames/Seedance/Hybrid 可行性 |
+| `render_strategy_planner` | video_creation_external_tools.go | builtin_prompt_tool | 生成 `render_strategy` 和 decision log，需 Artifact Review 后继续 |
 | *(动态注册)* | video_creation_external_tools.go | — | 视频创作开启时注册的 seedance/imagegen 等外部工具 |
 
 #### 4.2.3 执行器与 NodeExecutor（`service/executor.go`）
@@ -438,7 +448,18 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 
 ### 4.7 localrunner — Electron 本地任务协议
 
-目录：`internal/core/localrunner/`。为 Electron 桌面端做本地渲染/命令执行的预留协议：`local_runners`（注册+心跳）和 `local_jobs`（PENDING→CLAIMED→RUNNING→COMPLETED/FAILED，带 5 分钟租约 + SKIP LOCKED 抢占）。**当前未接 HTTP 路由**，是 P7 预留层。
+目录：`internal/core/localrunner/`。EdgeRun 的云端控制面协议：`local_runners` 负责本地执行器注册、心跳和能力探测结果；`local_jobs` 负责云端编排到本地执行面的语义化任务队列（PENDING→CLAIMED→RUNNING→COMPLETED/FAILED，带租约 + SKIP LOCKED 抢占）；`local_job_logs` 保存本地任务日志。
+
+已接入 HTTP 路由：
+
+- `POST /api/local-runners/register`
+- `POST /api/local-runners/:runnerId/heartbeat`
+- `GET /api/local-runners/:runnerId/jobs/claim`
+- `POST /api/local-jobs/:jobId/progress`
+- `POST /api/local-jobs/:jobId/complete`
+- `POST /api/local-jobs/:jobId/fail`
+
+`NodeExecutor` 会读取 `ToolManifest.executionPlane`，当工具声明 `local` 时创建 `LocalJob` 并把节点置为 `WAITING_LOCAL`，由本地 runner 主动拉取执行；完成或失败回调会进入 StateMachine 推进 DAG。
 
 ### 4.8 apispec — OpenAPI 规范自动生成
 
@@ -499,6 +520,7 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `eventbus` | sarama Producer/Consumer；Topic 常量 |
 | `config` | Viper 加载 .env，`VideoConfig` 控制视频 feature flags；`HyperFramesConfig` 控制渲染服务连接 |
 | `hyperframes` | HyperFrames Render Service HTTP 客户端：`Client`（Health/Render/Lint）、`Config`（Mode/ServiceURL/Timeout/Quality 等）— 替代旧 CLI `exec.Command("npx", "hyperframes")` |
+| `skillcapability` | 🆕 Skill Capability 加载系统：`Loader` 扫描 `{root}/{domain}/{name}/{version}/skillcap.yaml` + `tools/*.tool.yaml`，构建 `CapabilityRegistry`；`Handler` 提供 `/api/skill-capabilities` 路由 |
 | `database` | pgx 池 + `RunMigrations`（`CREATE TABLE IF NOT EXISTS` + `ALTER`） |
 | `logger` | Zap dev/prod |
 | `common/llmutil` `common/jsonx` `common/metadata` | OpenAI 客户端、JSON 提取、元数据摘要工具 |
@@ -625,7 +647,8 @@ go run cmd/skill2workflow/main.go --skill-root skills/ --output out/
 # 2) API
 curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
-# 3) 启动自动注册（VIDEO_CREATION_ENABLED=true 时，每个 healthy skill 自动 Upsert 为模板）
+# 3) 启动自动注册（LEGACY_SKILL_WORKFLOW_AUTOREGISTER=true 时，每个 healthy skill 自动 Upsert 为模板）
+#    默认 false（v3.2+ 推荐走 Dynamic Agent Runtime，不再自动注册 legacy Skill 模板）
 ```
 
 ---
@@ -644,13 +667,14 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | `ai_context` | 审计日志 | context_type(17 种枚举), task_id, node_id, metadata, snapshot_data, source_module |
 | `outbox` | 事件暂存 | aggregate_type, aggregate_id, event_type, payload |
 | `media_assets` | 云端媒体资产 / legacy 媒体索引 | user_id, original_name, mime_type, size, minio_path, tags JSONB, embedding_id |
-| `tool_manifests` | 工具清单持久化 | name, type, endpoint, parameters/output JSONB, sandbox |
+| `tool_manifests` | 工具清单持久化 | name, type, endpoint, execution_plane, artifact_location, local_command, local_requirements, parameters/output JSONB |
 | `workflow_templates` | 工作流模板 | id, version, name, category, dag JSONB |
 | `workflow_runs` | 工作流执行 | project_id, template_id, task_id, status, stage_statuses JSONB |
 | `workflow_attempts` | 阶段重试记录 | stage_run_id, number, trigger_type(INITIAL/RERUN/RETRY), node_ids |
 | `model_calls` | 模型调用审计 | provider, model, capability, fingerprint, tokens, cost_usd |
-| `local_runners` | 本地 Runner 注册 | name, status, last_heartbeat |
-| `local_jobs` | 本地任务 | runner_id, project_id, command, payload, status, progress, lease_expires_at |
+| `local_runners` | 本地 Runner 注册 | device_id, user_id, runner_version, platform, workspace_root, capabilities, session_id, status, last_heartbeat |
+| `local_jobs` | 本地任务 | runner_id, project_id, task_id, node_id, tool_name, command, payload, status, progress, artifact_policy, lease_expires_at |
+| `local_job_logs` | 本地任务日志 | job_id, level, message, created_at |
 
 ### 7.2 业务表
 
@@ -756,7 +780,19 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
 ### 8.7 健康检查
 
-`GET /api/health/ready` — 就绪检查（readiness probe），供 Docker compose / Kubernetes / Electron 判活。返回格式：
+`GET /api/health/ready` — 就绪检查（readiness probe），供 Docker compose / Kubernetes / Electron 判活。
+
+### 8.8 配置与能力注册
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/config/model-provider` | 读取云端模型 Provider 配置（不回显完整 API Key） |
+| PUT | `/api/config/model-provider` | 更新云端模型 Provider 配置 |
+| DELETE | `/api/config/model-provider` | 删除云端模型 Provider 配置 |
+| GET | `/api/skill-capabilities` | 🆕 列出已加载的 Skill Capability 包 |
+| GET | `/api/skill-capabilities/:id` | 🆕 获取 Capability 包详情（含 tools） |
+
+### 8.9 健康检查响应格式
 
 ```json
 {
@@ -954,9 +990,11 @@ bash scripts/start-frontend.sh
 `cloud-backend/.env` 里：
 ```bash
 VIDEO_CREATION_ENABLED=true
-MODEL_PROVIDER_MODE=fake     # 测试用 fake（无需视频 API）；生产用 real
-SKILL_ROOT=skills            # 默认即 cloud-backend/skills
-LOCAL_RUNNER_ENABLED=false   # 云端不启动桌面本地 Runner
+MODEL_PROVIDER_MODE=fake          # 测试用 fake（无需视频 API）；生产用 real
+SKILL_ROOT=skills                 # 默认即 cloud-backend/skills（legacy Skills）
+SKILL_CAPABILITY_ROOT=skill-capabilities  # 🆕 Skill Capability 根目录（Dynamic Agent 工具注册表）
+LEGACY_SKILL_WORKFLOW_AUTOREGISTER=false  # 🆕 是否自动将 legacy Skill 注册为 Workflow 模板
+LOCAL_RUNNER_ENABLED=false        # 云端不启动桌面本地 Runner
 ```
 
 ### 11.4 云端后端启动（开发）
@@ -1055,8 +1093,8 @@ make sandbox-build    # 构建 Rust 沙箱
 5. **统一人工审核入口**
    - 视频域已提供 `/api/video-projects/:id/stages/:stage/approve` 领域封装，前端不再直接猜测或操控底层节点 ID；底层 `/api/node/:id/success` 仍保留为 Core 通用接口。后续可继续把标书、视频等领域审核响应体和错误语义收敛成统一规范。
 
-6. **localrunner 完成 HTTP 接线**
-   - `local_runners` / `local_jobs` 表和 Service 都在，但没注册路由，Electron Runner 协议悬空。要么接线，要么从主二进制拆出。
+6. **local-backend 完成本地执行器工具适配**
+   - 云端 EdgeRun 控制面已经接线：runner 注册/心跳/claim/progress/complete/fail、`executionPlane=local` 派发和 DAG 回调已可用。下一步应在 `local-backend` 补齐 FFmpeg、HyperFrames、Hypergen、ASR、文件导入等语义命令执行器，以及路径授权和本地 artifact 同步策略。
 
 7. **完成本地直连模型 Provider 的执行链路**
    - 当前云端 artifact/materializer、node result event、`ai_node.output` / `ai_task.output` 已只保留本地 manifest、hash、size、trace 和脱敏摘要；桌面端 text_to_text/text_to_image/text_to_video 的 Provider 配置已下沉到本地 agent，下一阶段应把实际 LLM/图片/视频执行器也完全切到本地直连基础模型服务商，云端仅提供远程配置、额度/策略、日志索引和错误诊断，不经手原始用户正文或二进制数据。

@@ -78,27 +78,19 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 		toolSet[s.Tool] = true
 	}
 
-	// Quality checker mapping for production tools.
-	qualityCheckers := map[string]string{
-		"video_script_generator": "script_quality_checker",
-		"shot_splitter":          "shot_quality_checker",
-		"video_prompt_generator": "video_prompt_quality_checker",
-		"video_package_exporter": "package_quality_checker",
-	}
-
 	var out []AgentStep
-	out = make([]AgentStep, 0, len(steps)+len(qualityCheckers))
+	out = make([]AgentStep, 0, len(steps)*3)
 
 	for _, step := range steps {
-		checkerName, hasChecker := qualityCheckers[step.Tool]
 		out = append(out, step)
 
+		manifest := c.manifestFor(step.Tool)
+		checkerName, hasChecker := qualityCheckerFor(step.Tool, manifest)
 		if !hasChecker || toolSet[checkerName] {
 			continue
 		}
 
 		// Check if the production tool's manifest has qualityPolicy.Required.
-		manifest := c.manifestFor(step.Tool)
 		if manifest == nil || !manifest.QualityPolicy.Required {
 			// Quality checker is recommended but not required by manifest; skip auto-insert.
 			continue
@@ -146,6 +138,20 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 	}
 
 	return out
+}
+
+func qualityCheckerFor(toolName string, manifest *tool.ToolManifest) (string, bool) {
+	if manifest != nil && manifest.QualityPolicy.Required && manifest.QualityPolicy.CheckerTool != "" {
+		return manifest.QualityPolicy.CheckerTool, true
+	}
+	qualityCheckers := map[string]string{
+		"video_script_generator": "script_quality_checker",
+		"shot_splitter":          "shot_quality_checker",
+		"video_prompt_generator": "video_prompt_quality_checker",
+		"video_package_exporter": "package_quality_checker",
+	}
+	checkerName, ok := qualityCheckers[toolName]
+	return checkerName, ok
 }
 
 // buildQualityCheckArgs constructs arguments for an auto-inserted quality checker step.
@@ -340,11 +346,11 @@ func copyMap(in map[string]interface{}) map[string]interface{} {
 func compileQualityGate(step AgentStep) compiledStep {
 	nodeID := step.ID
 	input := map[string]interface{}{
-		"stepId":                step.ID,
-		"tool":                  step.Tool,
-		"reviewPhase":           "quality_gate",
-		"reviewReason":          step.Intent,
-		"blocksDownstream":      true,
+		"stepId":                    step.ID,
+		"tool":                      step.Tool,
+		"reviewPhase":               "quality_gate",
+		"reviewReason":              step.Intent,
+		"blocksDownstream":          true,
 		"requiresApprovedArtifacts": true,
 	}
 

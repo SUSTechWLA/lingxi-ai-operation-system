@@ -78,6 +78,13 @@ artifactPolicy:
     - MARKDOWN
   defaultReviewRequired: true
 
+qualityPolicy:
+  required: true
+  checkerTool: shot_quality_checker
+  minScore: 85
+  autoRepair: true
+  maxRepairAttempts: 1
+
 nextRecommendedTools:
   - shot_quality_checker
   - keyframe_prompt_generator

@@ -150,10 +150,20 @@ func hasCapability(manifest *tool.ToolManifest, capability string) bool {
 func phaseRank(manifest *tool.ToolManifest) int {
 	joined := strings.Join(append([]string{manifest.Name}, manifest.Capabilities...), " ")
 	switch {
+	case strings.Contains(joined, "pipeline_selection"):
+		return 1
+	case strings.Contains(joined, "capability_preflight"):
+		return 2
+	case strings.Contains(joined, "proposal_generation"):
+		return 3
 	case strings.Contains(joined, "script_generation"):
 		return 10
 	case strings.Contains(joined, "storyboard_generation") || strings.Contains(joined, "shot_planning"):
 		return 20
+	case strings.Contains(joined, "visual_feasibility"):
+		return 25
+	case strings.Contains(joined, "render_strategy"):
+		return 26
 	case strings.Contains(joined, "video_prompt_generation"):
 		return 30
 	default:

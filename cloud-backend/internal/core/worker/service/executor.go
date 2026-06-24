@@ -12,6 +12,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
+	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
@@ -23,20 +24,25 @@ var nodeRefPattern = regexp.MustCompile(`\{\{([^.]+)\.output\.([^}]+)\}\}`)
 
 type NodeExecutor struct {
 	toolRegistry    *tool.ToolRegistry
-	producer        *eventbus.Producer
+	producer        eventbus.EventPublisher
 	cfg             config.WorkerConfig
 	directExecutor  *executor.DirectExecutor
 	sandboxExecutor *executor.SandboxExecutor
 	nodeRepo        repository.NodeRepo
+	localDispatcher localJobDispatcher
 }
 
 type executorInterface interface {
 	Execute(ctx context.Context, req executor.ExecutionRequest) (executor.ExecutionResult, error)
 }
 
+type localJobDispatcher interface {
+	DispatchLocalJob(ctx context.Context, req localrunner.DispatchLocalJobRequest) (*localrunner.LocalJob, error)
+}
+
 func NewNodeExecutor(
 	toolRegistry *tool.ToolRegistry,
-	producer *eventbus.Producer,
+	producer eventbus.EventPublisher,
 	cfg config.WorkerConfig,
 	directExec *executor.DirectExecutor,
 	sandboxExec *executor.SandboxExecutor,
@@ -50,6 +56,10 @@ func NewNodeExecutor(
 		sandboxExecutor: sandboxExec,
 		nodeRepo:        nodeRepo,
 	}
+}
+
+func (ne *NodeExecutor) SetLocalJobDispatcher(dispatcher localJobDispatcher) {
+	ne.localDispatcher = dispatcher
 }
 
 func (ne *NodeExecutor) selectExecutor(t tool.Tool) executorInterface {
@@ -130,6 +140,13 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		if node, err := ne.nodeRepo.FindByID(ctx, nodeID); err == nil && node != nil {
 			toolCtx.RetryCount = node.RetryCount
 		}
+	}
+
+	if manifest := ne.toolRegistry.GetManifest(toolName); manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+		if err := ne.dispatchLocalNode(ctx, event, manifest, parameters, idempotencyKey); err != nil {
+			ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
+		}
+		return
 	}
 
 	startTime := time.Now()
@@ -306,6 +323,92 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	}
 
 	ne.publishSuccess(taskID, nodeID, traceID, data, idempotencyKey)
+}
+
+func (ne *NodeExecutor) dispatchLocalNode(
+	ctx context.Context,
+	event eventbus.Event,
+	manifest *tool.ToolManifest,
+	parameters map[string]interface{},
+	idempotencyKey string,
+) error {
+	if ne.localDispatcher == nil {
+		return fmt.Errorf("local execution requested for %s but local job dispatcher is not configured", manifest.Name)
+	}
+	command := manifest.LocalCommand
+	if command == "" {
+		return fmt.Errorf("local execution requested for %s but localCommand is empty", manifest.Name)
+	}
+	timeoutSec := manifest.Timeout
+	if timeoutSec > 1000 {
+		timeoutSec = timeoutSec / 1000
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = ne.cfg.ToolTimeoutSeconds
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 1800
+	}
+
+	job, err := ne.localDispatcher.DispatchLocalJob(ctx, localrunner.DispatchLocalJobRequest{
+		ProjectID:      firstString(parameters, event.Payload, "projectId", "project_id", "videoProjectId"),
+		TaskID:         event.TaskID,
+		NodeID:         event.NodeID,
+		ToolName:       manifest.Name,
+		Command:        command,
+		Payload:        parameters,
+		TimeoutSec:     timeoutSec,
+		ArtifactPolicy: localArtifactPolicyForManifest(manifest),
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		return err
+	}
+	if ne.nodeRepo != nil && job != nil {
+		output := map[string]interface{}{
+			"executionPlane": tool.ExecutionPlaneLocal,
+			"localJobId":     job.ID,
+			"localCommand":   command,
+			"toolName":       manifest.Name,
+			"queuedAt":       time.Now().Format(time.RFC3339Nano),
+		}
+		if err := ne.nodeRepo.UpdateStatus(ctx, event.NodeID, model.NodeWaitingLocal, output, ""); err != nil {
+			return fmt.Errorf("mark node waiting local: %w", err)
+		}
+	}
+	zap.L().Info("Node dispatched to local runner",
+		zap.String("taskId", event.TaskID),
+		zap.String("nodeId", event.NodeID),
+		zap.String("tool", manifest.Name),
+		zap.String("command", command),
+	)
+	return nil
+}
+
+func localArtifactPolicyForManifest(manifest *tool.ToolManifest) localrunner.LocalArtifactPolicy {
+	location := manifest.ArtifactLocation
+	if location == "" {
+		location = tool.ArtifactLocationLocal
+	}
+	return localrunner.LocalArtifactPolicy{
+		Location:            location,
+		SyncMetadataToCloud: true,
+		SyncFileToCloud:     location == tool.ArtifactLocationCloud || location == tool.ArtifactLocationBoth,
+	}
+}
+
+func firstString(primary map[string]interface{}, secondary map[string]interface{}, keys ...string) string {
+	for _, source := range []map[string]interface{}{primary, secondary} {
+		for _, key := range keys {
+			if source == nil {
+				continue
+			}
+			if value, ok := source[key].(string); ok && value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[string]interface{}, idempotencyKey string) {

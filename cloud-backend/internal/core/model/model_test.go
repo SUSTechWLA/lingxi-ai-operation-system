@@ -23,13 +23,19 @@ func TestTaskStatus_Constants(t *testing.T) {
 
 func TestNodeStatus_Constants(t *testing.T) {
 	statuses := map[NodeStatus]string{
-		NodeCreated:  "CREATED",
-		NodeReady:    "READY",
-		NodeRunning:  "RUNNING",
-		NodeRetrying: "RETRYING",
-		NodeSuccess:  "SUCCESS",
-		NodeFailed:   "FAILED",
-		NodeSkipped:  "SKIPPED",
+		NodeCreated:        "CREATED",
+		NodeReady:          "READY",
+		NodeRunning:        "RUNNING",
+		NodeWaitingLocal:   "WAITING_LOCAL",
+		NodeLocalClaimed:   "LOCAL_CLAIMED",
+		NodeLocalRunning:   "LOCAL_RUNNING",
+		NodeLocalCompleted: "LOCAL_COMPLETED",
+		NodeLocalFailed:    "LOCAL_FAILED",
+		NodeRetrying:       "RETRYING",
+		NodeSuccess:        "SUCCESS",
+		NodeFailed:         "FAILED",
+		NodeSkipped:        "SKIPPED",
+		NodeCancelled:      "CANCELLED",
 	}
 
 	for status, expected := range statuses {

@@ -198,6 +198,13 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS idempotent BOOLEAN DEFAULT true;
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS approval_policy JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS artifact_policy JSONB DEFAULT '{}';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS execution_plane VARCHAR(32) DEFAULT 'cloud';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS requires_user_device BOOLEAN DEFAULT false;
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS artifact_location VARCHAR(32) DEFAULT 'cloud';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS local_command VARCHAR(64);
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS local_requirements JSONB DEFAULT '{}';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS provider VARCHAR(128);
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS provider_capabilities JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS next_recommended_tools JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS failure_modes JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS skill_package_id VARCHAR(255);
@@ -390,28 +397,91 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	localRunnerSchema := `
 		CREATE TABLE IF NOT EXISTS local_runners (
 		    id VARCHAR(64) PRIMARY KEY,
-		    name VARCHAR(128) NOT NULL,
+		    device_id VARCHAR(128),
+		    user_id VARCHAR(64),
+		    name VARCHAR(128) NOT NULL DEFAULT '',
+		    runner_version VARCHAR(64) DEFAULT '',
+		    platform JSONB DEFAULT '{}',
+		    workspace_root TEXT DEFAULT '',
+		    capabilities JSONB DEFAULT '[]',
+		    session_id VARCHAR(128),
 		    status VARCHAR(20) DEFAULT 'ONLINE',
 		    last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
+		    running_jobs INT DEFAULT 0,
+		    disk_free_mb BIGINT DEFAULT 0,
+		    cpu_load DOUBLE PRECISION DEFAULT 0,
+		    memory_usage_mb BIGINT DEFAULT 0,
+		    last_error TEXT,
+		    updated_at TIMESTAMPTZ DEFAULT NOW(),
 		    created_at TIMESTAMPTZ DEFAULT NOW()
 		);
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS device_id VARCHAR(128);
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS user_id VARCHAR(64);
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS runner_version VARCHAR(64) DEFAULT '';
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS platform JSONB DEFAULT '{}';
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS workspace_root TEXT DEFAULT '';
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS capabilities JSONB DEFAULT '[]';
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS session_id VARCHAR(128);
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS running_jobs INT DEFAULT 0;
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS disk_free_mb BIGINT DEFAULT 0;
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS cpu_load DOUBLE PRECISION DEFAULT 0;
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS memory_usage_mb BIGINT DEFAULT 0;
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS last_error TEXT;
+		ALTER TABLE local_runners ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 		CREATE TABLE IF NOT EXISTS local_jobs (
 		    id VARCHAR(64) PRIMARY KEY,
 		    runner_id VARCHAR(64),
 		    project_id VARCHAR(64) NOT NULL,
+		    task_id VARCHAR(64),
+		    node_id VARCHAR(64),
+		    tool_name VARCHAR(255),
 		    command VARCHAR(64) NOT NULL,
 		    payload TEXT,
 		    status VARCHAR(20) DEFAULT 'PENDING',
 		    progress REAL DEFAULT 0,
 		    current_step VARCHAR(256) DEFAULT '',
+		    message TEXT DEFAULT '',
 		    output TEXT,
 		    error_message TEXT,
+		    error_json JSONB DEFAULT '{}',
+		    diagnostics JSONB DEFAULT '{}',
+		    retryable BOOLEAN DEFAULT true,
+		    timeout_sec INT DEFAULT 1800,
+		    artifact_policy JSONB DEFAULT '{}',
+		    idempotency_key VARCHAR(128),
+		    attempt INT DEFAULT 1,
+		    claimed_at TIMESTAMPTZ,
 		    lease_expires_at TIMESTAMPTZ,
+		    completed_at TIMESTAMPTZ,
 		    created_at TIMESTAMPTZ DEFAULT NOW(),
 		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS task_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS node_id VARCHAR(64);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS tool_name VARCHAR(255);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS message TEXT DEFAULT '';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS error_json JSONB DEFAULT '{}';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS diagnostics JSONB DEFAULT '{}';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS retryable BOOLEAN DEFAULT true;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS timeout_sec INT DEFAULT 1800;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS artifact_policy JSONB DEFAULT '{}';
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS attempt INT DEFAULT 1;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+		ALTER TABLE local_jobs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 		CREATE INDEX IF NOT EXISTS idx_local_jobs_status ON local_jobs(status);
+		CREATE INDEX IF NOT EXISTS idx_local_jobs_node ON local_jobs(node_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_local_jobs_idempotency ON local_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> '';
+
+		CREATE TABLE IF NOT EXISTS local_job_logs (
+		    id BIGSERIAL PRIMARY KEY,
+		    job_id VARCHAR(64) NOT NULL,
+		    level VARCHAR(16) DEFAULT 'INFO',
+		    message TEXT NOT NULL,
+		    created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_local_job_logs_job ON local_job_logs(job_id, created_at);
 	`
 	if _, err := pool.Exec(ctx, localRunnerSchema); err != nil {
 		zap.L().Warn("Failed to run local runner migrations (non-fatal)", zap.Error(err))
@@ -488,7 +558,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_module VARCHAR(50)`,
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_topic VARCHAR(100)`,
 		`ALTER TABLE ai_node DROP CONSTRAINT IF EXISTS ai_node_status_check`,
-		`ALTER TABLE ai_node ADD CONSTRAINT ai_node_status_check CHECK (status IN ('CREATED','READY','RUNNING','RETRYING','HEARTBEAT_TIMEOUT','SUCCESS','FAILED','SKIPPED'))`,
+		`ALTER TABLE ai_node ADD CONSTRAINT ai_node_status_check CHECK (status IN ('CREATED','READY','RUNNING','WAITING_LOCAL','LOCAL_CLAIMED','LOCAL_RUNNING','LOCAL_COMPLETED','LOCAL_FAILED','RETRYING','HEARTBEAT_TIMEOUT','SUCCESS','FAILED','SKIPPED','CANCELLED'))`,
 		`ALTER TABLE ai_task DROP CONSTRAINT IF EXISTS ai_task_status_check`,
 		`ALTER TABLE ai_task ADD CONSTRAINT ai_task_status_check CHECK (status IN ('CREATED','RUNNING','PAUSED','SUCCESS','FAILED'))`,
 		`ALTER TABLE ai_context DROP CONSTRAINT IF EXISTS ai_context_context_type_check`,
@@ -505,8 +575,11 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 
 func DropAll(ctx context.Context, pool *pgxpool.Pool) {
 	drop := fmt.Sprintln(`
+	DROP TABLE IF EXISTS local_job_logs;
+	DROP TABLE IF EXISTS local_jobs;
+	DROP TABLE IF EXISTS local_runners;
 	DROP TABLE IF EXISTS outbox_dlq;
-		DROP TABLE IF EXISTS outbox;
+	DROP TABLE IF EXISTS outbox;
 	DROP TABLE IF EXISTS ai_context;
 	DROP TABLE IF EXISTS ai_node_dependency;
 	DROP TABLE IF EXISTS ai_node;

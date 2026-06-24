@@ -30,6 +30,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/health"
 	"github.com/tangying-ai/aios-core/internal/core/hyperframes"
+	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/logger"
 	"github.com/tangying-ai/aios-core/internal/core/media"
 	"github.com/tangying-ai/aios-core/internal/core/model"
@@ -108,6 +109,7 @@ func main() {
 	taskExecutionCtrl := service.NewTaskExecutionControl(taskRepo, nodeRepo, stateService)
 	scheduler := service.NewScheduler(nodeRepo, stateService, producer)
 	contextService := contextSvc.NewContextService(contextRepo, nodeRepo, taskRepo)
+	localRunnerService := localrunner.NewService(pool)
 
 	// Wire DependencyChecker into StateService for event-driven scheduling
 	stateService.SetDependencyChecker(dependencyChecker)
@@ -148,6 +150,7 @@ func main() {
 	}
 
 	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo)
+	nodeExecutor.SetLocalJobDispatcher(localRunnerService)
 
 	// Publish
 	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
@@ -335,6 +338,7 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
+	localrunner.NewHandler(localRunnerService, stateMachine).RegisterRoutes(r)
 
 	// Media management — initialize before skill handler so we can resolve media URLs
 	var mediaSvc *media.MediaService

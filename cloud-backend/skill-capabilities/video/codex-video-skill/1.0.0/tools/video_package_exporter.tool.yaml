@@ -63,4 +63,11 @@ artifactPolicy:
     - JSON
   defaultReviewRequired: true
 
+qualityPolicy:
+  required: true
+  checkerTool: package_quality_checker
+  minScore: 85
+  autoRepair: false
+  maxRepairAttempts: 0
+
 nextRecommendedTools: []

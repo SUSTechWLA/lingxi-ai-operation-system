@@ -55,6 +55,46 @@ func TestHeuristicPlanner_DomainFilterRecomputesLimit(t *testing.T) {
 	}
 }
 
+func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T) {
+	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
+		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},
+		{Name: "shot_splitter", Capabilities: []string{"video_creation", "storyboard_generation"}},
+		{Name: "pipeline_selector", Capabilities: []string{"video_creation", "pipeline_selection", "videoforge_studio"}},
+		{Name: "proposal_generator", Capabilities: []string{"video_creation", "proposal_generation", "videoforge_studio"}},
+		{Name: "capability_preflight", Capabilities: []string{"video_creation", "capability_preflight", "videoforge_studio"}},
+		{Name: "visual_feasibility_analyzer", Capabilities: []string{"video_creation", "visual_feasibility", "render_strategy"}},
+		{Name: "render_strategy_planner", Capabilities: []string{"video_creation", "render_strategy", "dual_engine"}},
+	}, 7)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我根据端午节的来历创作一个 60 秒知识分享视频",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	want := []string{
+		"pipeline_selector",
+		"capability_preflight",
+		"proposal_generator",
+		"video_script_generator",
+		"shot_splitter",
+		"visual_feasibility_analyzer",
+		"render_strategy_planner",
+	}
+	if len(plan.Steps) != len(want) {
+		t.Fatalf("expected %d steps, got %#v", len(want), plan.Steps)
+	}
+	for i, step := range plan.Steps {
+		if step.Tool != want[i] {
+			t.Fatalf("step %d should be %s, got %#v", i, want[i], plan.Steps)
+		}
+		if i > 0 && (len(step.DependsOn) != 1 || step.DependsOn[0] != plan.Steps[i-1].ID) {
+			t.Fatalf("VideoForge fallback plan should be linear through approval gates: %#v", plan.Steps)
+		}
+	}
+}
+
 type staticToolList []tool.ToolManifest
 
 func (l staticToolList) ListManifests() []*tool.ToolManifest {

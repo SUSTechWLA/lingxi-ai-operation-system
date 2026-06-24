@@ -99,8 +99,8 @@ The spec lives alongside the routes in code and is the single source of truth.
 
 - **Cloud backend:** start the server and open `http://localhost:8080/docs`
   - Raw spec: `http://localhost:8080/openapi.json`
-- **Local agent:** start the agent and open `http://localhost:9090/api/local/docs`
-  - Raw spec: `http://localhost:9090/api/local/openapi.json`
+- **Local agent:** start the agent and open `http://localhost:18080/api/local/docs`
+  - Raw spec: `http://localhost:18080/api/local/openapi.json`
 
 ### Regenerating docs
 

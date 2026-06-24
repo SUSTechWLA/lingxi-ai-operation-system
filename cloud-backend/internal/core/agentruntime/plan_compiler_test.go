@@ -86,6 +86,50 @@ func TestPlanCompiler_ExternalToolNodeRoutesThroughExternalBridge(t *testing.T) 
 	}
 }
 
+func TestPlanCompiler_InsertsQualityCheckerFromManifestPolicy(t *testing.T) {
+	compiler := NewPlanCompiler(staticToolCatalog{
+		"proposal_generator": &tool.ToolManifest{
+			Name:     "proposal_generator",
+			Type:     "builtin_prompt_tool",
+			Endpoint: "builtin://video-creation/proposal_generator",
+			QualityPolicy: tool.QualityPolicy{
+				Required:    true,
+				CheckerTool: "proposal_quality_checker",
+				MinScore:    90,
+			},
+		},
+		"proposal_quality_checker": &tool.ToolManifest{
+			Name:     "proposal_quality_checker",
+			Type:     "builtin_prompt_tool",
+			Endpoint: "builtin://video-creation/proposal_quality_checker",
+		},
+	})
+
+	dag, err := compiler.Compile(&AgentPlan{
+		Goal:   "make a proposal",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "proposal", Tool: "proposal_generator", Arguments: map[string]interface{}{"brief": "知识视频"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Compile returned error: %v", err)
+	}
+
+	requireNode(t, dag, "proposal", string(model.NodeTypeTool), "external")
+	requireNode(t, dag, "proposal_quality_checker", string(model.NodeTypeTool), "external")
+	gate := requireNode(t, dag, "proposal_quality_gate", string(model.NodeTypeControl), "质量门禁-proposal_quality_gate")
+	if got, _ := gate.Input["checkerStep"].(string); got != "proposal_quality_checker" {
+		t.Fatalf("quality gate should reference manifest checker tool: %#v", gate.Input)
+	}
+	if got, ok := gate.Input["minScore"].(int); !ok || got != 90 {
+		t.Fatalf("quality gate should copy minScore: %#v", gate.Input)
+	}
+	requireEdge(t, dag, "proposal", "proposal_quality_checker")
+	requireEdge(t, dag, "proposal_quality_checker", "proposal_quality_gate")
+}
+
 type staticToolCatalog map[string]*tool.ToolManifest
 
 func (c staticToolCatalog) GetManifest(name string) *tool.ToolManifest {

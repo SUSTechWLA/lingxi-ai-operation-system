@@ -65,6 +65,8 @@ docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
 - redpanda: Kafka-compatible event bus。
 - minio: 云端对象存储，用于云端服务资产和 legacy 媒体兼容；不作为桌面用户生成资产的默认存储。
 
+完整部署还需 `hyperframes-render-service/`（Node.js 渲染服务，端口 8787），详见 [ARCHITECTURE.md 第 10.5 节](ARCHITECTURE.md#105-hyperframes-render-service渲染服务)。
+
 ## 前端云端 API 配置
 
 桌面包和 Web 前端通过以下变量确定云端 API：
