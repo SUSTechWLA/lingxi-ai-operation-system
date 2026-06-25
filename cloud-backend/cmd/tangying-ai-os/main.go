@@ -559,7 +559,8 @@ func main() {
 		// Video Projects
 		videoProjectRepo := videoRepo.NewProjectRepository(pool)
 		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
-		videoHandler.NewProjectHandler(videoProjectSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
+		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, authMiddleware.RequireAuth())
+		projectHandler.RegisterRoutes(r)
 
 		// Workflow Runs
 		workflowRunRepo := workflow.NewRunRepository(pool)
@@ -589,6 +590,9 @@ func main() {
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
 		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo)
+
+		// Wire session dependencies into the project handler
+		projectHandler.WithSessionDependencies(artifactSvc, localRunnerService)
 		// Wire LLM-based revision support so the /artifacts/:id/revise endpoint
 		// can actually call the LLM with original content + revision instruction.
 		artifactHandler.SetRevisionConfig(cfg.Video.SkillRoot, func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
@@ -637,10 +641,10 @@ func main() {
 		nodeExecutor.SetRenderDependencyChecker(
 			workerService.NewRepositoryBackedRenderDependencyChecker(
 				&artifactStateAdapter{svc: artifactSvc},
-				nil, // review check: use payload-based fallback via DefaultRenderDependencyChecker
-				nil, // runner check: use existing heartbeat/capability mechanism
-			),
-		)
+				workerService.NewRepositoryReviewApprovalChecker(&artifactStateAdapter{svc: artifactSvc}),
+				workerService.NewRunnerCapabilityChecker(&runnerServiceAdapter{svc: localRunnerService}),
+				),
+			)
 
 		// Wire artifact sync callback so local job completions automatically
 		// write artifact metadata to the cloud ArtifactIndex.
@@ -760,12 +764,34 @@ func (a *artifactStateAdapter) FindCurrentByKind(ctx context.Context, projectID,
 		Kind:          string(art.Kind),
 		Status:        art.Status,
 		HumanApproved: art.HumanApproved,
+		Metadata:      art.Metadata,
 	}, nil
+}
+
+// runnerServiceAdapter adapts localrunner.Service to workerService.RunnerService
+// by delegating to SupportsCommandForAnyUser (no user context needed for guard checks).
+type runnerServiceAdapter struct {
+	svc *localrunner.Service
+}
+
+func (a *runnerServiceAdapter) SupportsCommand(ctx context.Context, command string) (bool, error) {
+	if a.svc == nil {
+		return false, nil
+	}
+	return a.svc.SupportsCommandForAnyUser(ctx, command)
 }
 
 // syncArtifactsFromLocalJob materializes artifact records from a local job's
 // output after it completes successfully. This ensures the cloud ArtifactIndex
 // is always in sync with local artifact production.
+//
+// It processes two sources of artifact data:
+//  1. Node output (via BuildArtifactRequestsFromNode) — LLM-generated artifacts
+//     that were stored in the node's stdout.
+//  2. Local job output.artifacts[] — artifacts produced by local executors
+//     (HYPERFRAMES_RENDER, FFMPEG_PROBE, FINAL_REVIEW, ARTIFACT_PACKAGE, etc.)
+//     that include stage_name-agnostic metadata like kind, dependsOn, producedByTool,
+//     producedByRole, status, and humanApproved.
 func syncArtifactsFromLocalJob(
 	ctx context.Context,
 	artifactSvc *artifact.Service,
@@ -781,15 +807,27 @@ func syncArtifactsFromLocalJob(
 		return err
 	}
 
-	// Use the existing BuildArtifactRequestsFromNode to create artifact records.
-	requests := artifact.BuildArtifactRequestsFromNode(projectID, taskID, node)
-	if len(requests) == 0 {
-		return nil // No artifacts to materialize
+	stage := stageNameFromNodeInput(node)
+
+	// 1. Process artifacts[] from local job output (standardized executor output).
+	if rawArtifacts, ok := output["artifacts"]; ok {
+		requests := buildArtifactRequestsFromOutputArtifacts(projectID, taskID, stage, node, toolName, rawArtifacts)
+		for _, req := range requests {
+			if _, err := artifactSvc.CreateArtifact(ctx, req); err != nil {
+				zap.L().Warn("artifact sync: failed to create artifact from local job output",
+					zap.String("projectId", projectID),
+					zap.String("kind", string(req.Kind)),
+					zap.Error(err),
+				)
+			}
+		}
 	}
 
+	// 2. Process artifacts from node output (LLM-generated content via BuildArtifactRequestsFromNode).
+	requests := artifact.BuildArtifactRequestsFromNode(projectID, taskID, node)
 	for _, req := range requests {
 		if _, err := artifactSvc.CreateArtifact(ctx, req); err != nil {
-			zap.L().Warn("artifact sync: failed to create artifact",
+			zap.L().Warn("artifact sync: failed to create artifact from node output",
 				zap.String("projectId", projectID),
 				zap.String("kind", string(req.Kind)),
 				zap.Error(err),
@@ -798,6 +836,154 @@ func syncArtifactsFromLocalJob(
 	}
 
 	return nil
+}
+
+// buildArtifactRequestsFromOutputArtifacts converts a local job's output.artifacts[]
+// into CreateArtifactRequest records. It uses the node's input metadata to fill in
+// stage_name, task_id, and role_agent_id context.
+func buildArtifactRequestsFromOutputArtifacts(
+	projectID, taskID, stage string,
+	node *model.Node,
+	toolName string,
+	rawArtifacts interface{},
+) []*artifact.CreateArtifactRequest {
+	items, ok := rawArtifacts.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	roleAgentID := ""
+	if node != nil && node.Input != nil {
+		if v, ok := node.Input["roleAgentId"].(string); ok {
+			roleAgentID = v
+		}
+	}
+
+	requests := make([]*artifact.CreateArtifactRequest, 0, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		kind := artifact.ArtifactKind(stringValueFromMap(entry, "kind"))
+		if kind == "" {
+			continue
+		}
+		name := stringValueFromMap(entry, "name")
+		if name == "" {
+			name = string(kind)
+		}
+		storageRef := stringValueFromMap(entry, "storageRef")
+		mimeType := stringValueFromMap(entry, "mimeType")
+		sizeBytes := int64ValueFromMap(entry, "sizeBytes")
+
+		// Collect metadata
+		meta := map[string]interface{}{
+			"status":        stringValueFromMap(entry, "status"),
+			"humanApproved": boolValueFromMap(entry, "humanApproved"),
+			"producedByTool": stringValueFromMap(entry, "producedByTool"),
+			"producedByRole": stringValueFromMap(entry, "producedByRole"),
+			"taskId":         taskID,
+			"roleAgentId":    roleAgentID,
+			"producedByNode": node.ID,
+		}
+		if meta["status"] == "" {
+			meta["status"] = "valid"
+		}
+
+		// Carry depends_on from the executor output.
+		if deps, ok := entry["dependsOn"]; ok {
+			switch v := deps.(type) {
+			case []interface{}:
+				depStrings := make([]string, 0, len(v))
+				for _, d := range v {
+					if s, ok := d.(string); ok {
+						depStrings = append(depStrings, s)
+					}
+				}
+				meta["dependsOn"] = depStrings
+			case []string:
+				meta["dependsOn"] = v
+			}
+		}
+
+		// Merge any additional metadata from the executor.
+		if execMeta, ok := entry["metadata"].(map[string]interface{}); ok {
+			for k, v := range execMeta {
+				if _, exists := meta[k]; !exists {
+					meta[k] = v
+				}
+			}
+		}
+
+		requests = append(requests, &artifact.CreateArtifactRequest{
+			ProjectID:     projectID,
+			WorkflowRunID: taskID,
+			TaskID:        taskID,
+			StageName:     stage,
+			RoleAgentID:   roleAgentID,
+			UnitID:        stage,
+			Kind:          kind,
+			Name:          name,
+			StorageType:   artifact.StorageLocal,
+			StorageRef:    storageRef,
+			MimeType:      mimeType,
+			SizeBytes:     sizeBytes,
+			Provider:      "local-job",
+			Model:         toolName,
+			Metadata:      meta,
+		})
+	}
+	return requests
+}
+
+func stageNameFromNodeInput(node *model.Node) string {
+	if node == nil || node.Input == nil {
+		return "artifact"
+	}
+	if stage, ok := node.Input["stage"].(string); ok && stage != "" {
+		return stage
+	}
+	if params, ok := node.Input["parameters"].(map[string]interface{}); ok {
+		if stage, ok := params["stage"].(string); ok && stage != "" {
+			return stage
+		}
+	}
+	stage := strings.TrimSuffix(node.ID, "_exec")
+	if stage == "" {
+		return "artifact"
+	}
+	return stage
+}
+
+func stringValueFromMap(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func boolValueFromMap(m map[string]interface{}, key string) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
+func int64ValueFromMap(m map[string]interface{}, key string) int64 {
+	switch v := m[key].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	}
+	return 0
 }
 
 // decisionLogAdapter bridges the workflow DecisionLogStore to the

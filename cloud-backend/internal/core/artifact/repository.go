@@ -202,8 +202,9 @@ func (r *Repository) ListByProject(ctx context.Context, projectID string) ([]*Ar
 	return scanArtifacts(rows)
 }
 
-// ListUsableByProject returns current artifacts that are valid (not stale/rejected/failed/deleted)
-// and, if the stage requires human approval, have human_approved=true.
+// ListUsableByProject returns current artifacts that are valid (not stale/rejected/failed/deleted).
+// Callers that need human-approval checks must inspect Artifact.HumanApproved themselves —
+// only stages that require human review (e.g. PREVIEW_SNAPSHOTS) need it.
 func (r *Repository) ListUsableByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT `+fullSelectColumns+`
@@ -273,10 +274,22 @@ func (r *Repository) MarkStaleByKind(ctx context.Context, projectID string, kind
 
 	// Mark artifacts stale and reset human_approved
 	rows, err := tx.Query(ctx,
-		`UPDATE artifacts SET status='stale', human_approved=false, updated_at=NOW()
-		 WHERE project_id=$1 AND is_current=true AND kind = ANY($2)
+		`UPDATE artifacts SET
+		 status = 'stale',
+		 human_approved = false,
+		 metadata = jsonb_set(
+		     COALESCE(metadata, '{}'::jsonb),
+		     '{staleReason}',
+		     to_jsonb($3::text),
+		     true
+		 ),
+		 updated_at = NOW()
+		 WHERE project_id = $1
+		   AND is_current = true
+		   AND stage_name = ANY($2)
+		   AND status <> 'stale'
 		 RETURNING id`,
-		projectID, kinds,
+		projectID, kinds, reason,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mark artifacts stale: %w", err)

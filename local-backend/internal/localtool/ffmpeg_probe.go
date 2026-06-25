@@ -46,6 +46,11 @@ func (e *FFmpegProbeExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		return nil, fmt.Errorf("input is required for ffprobe")
 	}
 
+	projectID := stringFromPayload(job.Payload, "projectId")
+	if projectID == "" {
+		projectID = stringFromPayload(job.Payload, "project_id")
+	}
+
 	inputPath, err := e.guard.ResolveLocalURI(inputURI)
 	if err != nil {
 		return nil, fmt.Errorf("invalid input path: %w", err)
@@ -137,6 +142,22 @@ func (e *FFmpegProbeExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	return &Result{Output: map[string]interface{}{
 		"success": true,
 		"media":   media,
+		"artifacts": []map[string]interface{}{
+			{
+				"kind":           "FFMPEG_PROBE_REPORT",
+				"name":           "ffprobe_report.json",
+				"storageType":    "local",
+				"storageRef":     "local://projects/" + projectID + "/reports/ffprobe.json",
+				"mimeType":       "application/json",
+				"sizeBytes":      0,
+				"status":         "valid",
+				"humanApproved":  false,
+				"dependsOn":      []string{"VIDEO"},
+				"producedByTool": "ffmpeg_probe",
+				"producedByRole": "质量审核",
+				"metadata":       media,
+			},
+		},
 	}}, nil
 }
 

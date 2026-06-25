@@ -181,12 +181,21 @@ func (e *HyperFramesSnapshotExecutor) Execute(ctx context.Context, job Job) (*Re
 		"previewsDir":  "local://projects/" + projectID + "/previews",
 		"artifacts": []map[string]interface{}{
 			{
-				"artifactId":  "artifact_preview_snapshots",
-				"kind":        artifactKind,
-				"name":        "preview_snapshots",
-				"storageRef":  "local://projects/" + projectID + "/previews",
-				"localOnly":   true,
-				"snapshotRefs": localSnapshots,
+				"kind":           "PREVIEW_SNAPSHOTS",
+				"name":           "preview_snapshots",
+				"storageType":    "local",
+				"storageRef":     "local://projects/" + projectID + "/previews",
+				"mimeType":       "image/png",
+				"sizeBytes":      0,
+				"status":         "pending",
+				"humanApproved":  false,
+				"dependsOn":      []string{"HYPERFRAMES_PROJECT"},
+				"producedByTool": "hyperframes_snapshot",
+				"producedByRole": "预览导演",
+				"metadata": map[string]interface{}{
+					"snapshotCount": len(localSnapshots),
+					"snapshotRefs":  localSnapshots,
+				},
 			},
 		},
 	}}, nil

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	modelRepo "github.com/tangying-ai/aios-core/internal/core/model/repository"
@@ -162,6 +163,15 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
+	}
+	// Mark downstream artifacts stale when an upstream artifact is revised.
+	if base.ProjectID != "" && base.StageName != "" {
+		if _, err := h.service.MarkDownstreamStale(c.Request.Context(), base.ProjectID, base.ID, "用户返工修改产物"); err != nil {
+			zap.L().Warn("revise artifact: failed to mark downstream stale",
+				zap.String("artifactId", base.ID),
+				zap.Error(err),
+			)
+		}
 	}
 	content, mediaURL, mediaURLs := artifactContent(revision)
 	mediaURLs = normalizeMediaURLs(mediaURLs)

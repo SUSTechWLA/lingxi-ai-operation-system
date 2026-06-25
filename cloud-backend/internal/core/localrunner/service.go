@@ -495,6 +495,26 @@ func (s *Service) SupportsCommand(ctx context.Context, userID string, command st
 	return count > 0, nil
 }
 
+	// SupportsCommandForAnyUser checks whether any online runner (regardless of user)
+	// has registered the specified local command as available. This is used by the
+	// render dependency guard to check infrastructure readiness without a user context.
+	func (s *Service) SupportsCommandForAnyUser(ctx context.Context, command string) (bool, error) {
+		var count int
+		err := s.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM local_runners lr
+			 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lr.capabilities, '[]'::jsonb)) cap
+			 WHERE lr.status='ONLINE'
+			   AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
+			   AND cap->>'command' = $1
+			   AND COALESCE((cap->>'available')::boolean, false) = true`,
+			command,
+		).Scan(&count)
+		if err != nil {
+			return false, fmt.Errorf("check command support for any user: %w", err)
+		}
+		return count > 0, nil
+	}
+
 // SatisfiesRequirements checks whether the user's online runners satisfy
 // the given local requirements. Returns a list of human-readable descriptions
 // of unsatisfied requirements.

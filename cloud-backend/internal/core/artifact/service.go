@@ -15,6 +15,7 @@ type ArtifactStatus string
 
 const (
 	ArtifactStatusValid    ArtifactStatus = "valid"
+	ArtifactStatusPending  ArtifactStatus = "pending"
 	ArtifactStatusStale    ArtifactStatus = "stale"
 	ArtifactStatusRejected ArtifactStatus = "rejected"
 	ArtifactStatusFailed   ArtifactStatus = "failed"
@@ -144,26 +145,26 @@ func (s *Service) MarkArtifactStale(ctx context.Context, artifactID string, reas
 }
 
 // MarkDownstreamStale marks all downstream artifacts as stale when an upstream
-// artifact changes. Returns the list of artifact kinds that were marked stale.
+// artifact changes. Returns the list of stage names that were marked stale.
 func (s *Service) MarkDownstreamStale(ctx context.Context, projectID string, changedArtifactID string, reason string) ([]string, error) {
-	// Find the changed artifact to determine its kind
+	// Find the changed artifact to determine its stage
 	changed, err := s.repo.FindByID(ctx, changedArtifactID)
 	if err != nil {
 		return nil, fmt.Errorf("mark downstream stale: %w", err)
 	}
 
-	// Get the downstream kinds to invalidate
-	downstreamKinds := DownstreamStaleArtifactKinds(string(changed.Kind))
-	if len(downstreamKinds) == 0 {
+	// Get the downstream stage names to invalidate (from the artifact's stage_name)
+	downstreamStages := DownstreamStageNamesForStage(changed.StageName)
+	if len(downstreamStages) == 0 {
 		zap.L().Debug("No downstream artifacts to stale",
 			zap.String("changedArtifactId", changedArtifactID),
-			zap.String("kind", string(changed.Kind)),
+			zap.String("stageName", changed.StageName),
 		)
 		return nil, nil
 	}
 
 	// Mark them stale in the database
-	affectedIDs, err := s.repo.MarkStaleByKind(ctx, projectID, downstreamKinds, reason)
+	affectedIDs, err := s.repo.MarkStaleByKind(ctx, projectID, downstreamStages, reason)
 	if err != nil {
 		return nil, fmt.Errorf("mark downstream stale: %w", err)
 	}
@@ -171,11 +172,33 @@ func (s *Service) MarkDownstreamStale(ctx context.Context, projectID string, cha
 	zap.L().Info("Downstream artifacts marked stale",
 		zap.String("projectId", projectID),
 		zap.String("changedArtifactId", changedArtifactID),
-		zap.String("changedKind", string(changed.Kind)),
-		zap.Strings("downstreamKinds", downstreamKinds),
+		zap.String("changedStage", changed.StageName),
+		zap.Strings("downstreamStages", downstreamStages),
 		zap.Int("affectedCount", len(affectedIDs)),
 	)
-	return downstreamKinds, nil
+	return downstreamStages, nil
+}
+
+// MarkDownstreamStaleByStageNames marks artifacts identified by stage_name values
+// as stale. This bypasses the FindByID lookup and is used when the caller already
+// knows which stage names to invalidate (e.g. from business kind identifiers).
+func (s *Service) MarkDownstreamStaleByStageNames(ctx context.Context, projectID string, stageNames []string, reason string) ([]string, error) {
+	if len(stageNames) == 0 {
+		return nil, nil
+	}
+
+	affectedIDs, err := s.repo.MarkStaleByKind(ctx, projectID, stageNames, reason)
+	if err != nil {
+		return nil, fmt.Errorf("mark downstream stale by stage names: %w", err)
+	}
+
+	zap.L().Info("Downstream artifacts marked stale by stage names",
+		zap.String("projectId", projectID),
+		zap.Strings("stageNames", stageNames),
+		zap.String("reason", reason),
+		zap.Int("affectedCount", len(affectedIDs)),
+	)
+	return stageNames, nil
 }
 
 // FindCurrentByKind finds the current artifact of a specific stage kind for a project.

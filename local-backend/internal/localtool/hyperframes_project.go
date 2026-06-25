@@ -103,6 +103,21 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		"entry":      "index.html",
 		"files":      files,
 		"summary":    "HyperFrames project generated locally",
+		"artifacts": []map[string]interface{}{
+			{
+				"kind":           "HYPERFRAMES_PROJECT",
+				"name":           "hyperframes_project",
+				"storageType":    "local",
+				"storageRef":     "local://projects/" + projectID + "/hyperframes",
+				"mimeType":       "text/html",
+				"sizeBytes":      0,
+				"status":         "valid",
+				"humanApproved":  false,
+				"dependsOn":      []string{"VIDEO_COMPOSITION_SPEC"},
+				"producedByTool": "hyperframes_project_generator",
+				"producedByRole": "渲染制片",
+			},
+		},
 	}}, nil
 }
 

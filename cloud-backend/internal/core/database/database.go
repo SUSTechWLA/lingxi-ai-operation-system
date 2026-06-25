@@ -312,6 +312,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		CREATE INDEX IF NOT EXISTS idx_artifacts_project_status ON artifacts(project_id, status);
 		CREATE INDEX IF NOT EXISTS idx_artifacts_project_kind_current ON artifacts(project_id, kind, is_current);
 		CREATE INDEX IF NOT EXISTS idx_artifacts_project_human_approved ON artifacts(project_id, human_approved);
+			CREATE INDEX IF NOT EXISTS idx_artifacts_depends_on_gin ON artifacts USING gin(depends_on);
 
 		CREATE TABLE IF NOT EXISTS video_projects (
 		    id VARCHAR(64) PRIMARY KEY,
@@ -590,6 +591,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_project_status ON artifacts(project_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_project_kind_current ON artifacts(project_id, kind, is_current)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_project_human_approved ON artifacts(project_id, human_approved)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_depends_on_gin ON artifacts USING gin(depends_on)`,
 	}
 	for _, stmt := range alterStatements {
 		_, _ = pool.Exec(ctx, stmt)

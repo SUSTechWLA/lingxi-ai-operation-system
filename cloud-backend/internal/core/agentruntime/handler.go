@@ -51,6 +51,7 @@ type DecisionLogRecord struct {
 // ArtifactService is the subset of artifact.Service needed by review handlers.
 type ArtifactService interface {
 	MarkDownstreamStale(ctx context.Context, projectID string, changedArtifactID string, reason string) ([]string, error)
+	MarkDownstreamStaleByStageNames(ctx context.Context, projectID string, stageNames []string, reason string) ([]string, error)
 	ApproveArtifact(ctx context.Context, artifactID string, reviewerID string) error
 }
 
@@ -600,29 +601,20 @@ func (h *Handler) triggerDownstreamStale(ctx context.Context, run *Run, node *mo
 		return
 	}
 
-	// Find the artifact for this review's stage to use as the changed artifact.
-	// We use the stage name to construct a lookup key.
-	_ = h.artifactService // artifactService is used via MarkDownstreamStale
-	// Note: MarkDownstreamStale requires a changed artifact ID. For now,
-	// we mark stale by artifact kinds derived from the node's required outputs.
-	stageName := nodeInputString(node, "stage")
-	if stageName == "" {
+	// Compute the downstream stage names that must be marked stale from the
+	// node's required outputs (business kind identifiers like "VIDEO_PROPOSAL").
+	staleStageNames := downstreamStaleArtifactsForReview(node)
+	if len(staleStageNames) == 0 {
 		return
 	}
 
-	// Compute the artifact kinds that go stale
-	staleKinds := downstreamStaleArtifactsForReview(node)
-	if len(staleKinds) == 0 {
-		return
-	}
-
-	// Mark downstream artifacts stale for this project.
-	// We create a synthetic artifact ID representing the changed stage.
-	changedArtifactID := fmt.Sprintf("stage:%s:%s", projectID, stageName)
-	if _, err := h.artifactService.MarkDownstreamStale(ctx, projectID, changedArtifactID, reason); err != nil {
+	// Mark downstream artifacts stale by their stage_name values.
+	// This bypasses the FindByID lookup since we already know which stages
+	// need invalidation from the dependency graph.
+	if _, err := h.artifactService.MarkDownstreamStaleByStageNames(ctx, projectID, staleStageNames, reason); err != nil {
 		zap.L().Warn("failed to mark downstream stale",
 			zap.String("projectId", projectID),
-			zap.String("stageName", stageName),
+			zap.Strings("stageNames", staleStageNames),
 			zap.Error(err),
 		)
 	}

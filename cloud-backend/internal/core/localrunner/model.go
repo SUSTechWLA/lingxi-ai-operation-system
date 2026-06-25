@@ -156,6 +156,7 @@ const (
 	CommandHyperFramesProjectGenerate = "HYPERFRAMES_PROJECT_GENERATE"
 	CommandHyperFramesRender          = "HYPERFRAMES_RENDER"
 	CommandHyperFramesLint            = "HYPERFRAMES_LINT"
+	CommandFinalReview                = "FINAL_REVIEW"
 	CommandHyperFramesSnapshot        = "HYPERFRAMES_SNAPSHOT"
 	CommandHyperGenRender             = "HYPERGEN_RENDER"
 	CommandFFmpegProbe                = "FFMPEG_PROBE"
@@ -187,6 +188,7 @@ var ValidCommands = map[string]bool{
 	CommandLocalFileImport:            true,
 	CommandLocalMediaIndex:            true,
 	CommandBundleExtract:              true,
+	CommandFinalReview:                true,
 }
 
 // IsValidCommand checks if a command is in the whitelist.

@@ -22,18 +22,65 @@ type ArtifactState struct {
 	Kind          string
 	Status        string
 	HumanApproved bool
+	Metadata      map[string]interface{}
 }
 
 // ReviewApprovalChecker checks whether a review gate has been approved.
 type ReviewApprovalChecker interface {
-	// IsReviewApproved returns true if the review for a given node has been approved.
-	IsReviewApproved(ctx context.Context, nodeID string) (bool, error)
+	// IsReviewApproved returns true if the review for a given project+stage has been approved.
+	// It checks that the stage's current artifact is valid and human-approved.
+	IsReviewApproved(ctx context.Context, projectID, stageName string) (bool, error)
 }
 
 // RunnerCapabilityChecker checks whether a local runner can execute a command.
 type RunnerCapabilityChecker interface {
 	// SupportsCommand returns true if any online runner supports the given command.
 	SupportsCommand(ctx context.Context, command string) (bool, error)
+}
+
+// RepositoryReviewApprovalChecker implements ReviewApprovalChecker by checking
+// whether the current artifact for a project+stage is valid and human-approved.
+type RepositoryReviewApprovalChecker struct {
+	artifactProvider ArtifactStateProvider
+}
+
+// NewRepositoryReviewApprovalChecker creates a review checker backed by artifact state.
+func NewRepositoryReviewApprovalChecker(artifactProvider ArtifactStateProvider) *RepositoryReviewApprovalChecker {
+	return &RepositoryReviewApprovalChecker{artifactProvider: artifactProvider}
+}
+
+// IsReviewApproved checks whether the current artifact for the given project+stage
+// has been reviewed and approved by a human.
+func (c *RepositoryReviewApprovalChecker) IsReviewApproved(ctx context.Context, projectID, stageName string) (bool, error) {
+	artifact, err := c.artifactProvider.FindCurrentByKind(ctx, projectID, stageName)
+	if err != nil || artifact == nil {
+		return false, err
+	}
+	return artifact.Status == "valid" && artifact.HumanApproved, nil
+}
+
+// RunnerCapabilityCheckerImpl implements RunnerCapabilityChecker by delegating
+// to the local runner service.
+type RunnerCapabilityCheckerImpl struct {
+	runnerSvc RunnerService
+}
+
+// RunnerService is the subset of localrunner.Service needed for capability checks.
+type RunnerService interface {
+	SupportsCommand(ctx context.Context, command string) (bool, error)
+}
+
+// NewRunnerCapabilityChecker creates a runner capability checker.
+func NewRunnerCapabilityChecker(runnerSvc RunnerService) *RunnerCapabilityCheckerImpl {
+	return &RunnerCapabilityCheckerImpl{runnerSvc: runnerSvc}
+}
+
+// SupportsCommand checks whether any online runner can execute the given command.
+func (c *RunnerCapabilityCheckerImpl) SupportsCommand(ctx context.Context, command string) (bool, error) {
+	if c.runnerSvc == nil {
+		return false, nil
+	}
+	return c.runnerSvc.SupportsCommand(ctx, command)
 }
 
 // RepositoryBackedRenderDependencyChecker validates render preconditions
@@ -77,6 +124,13 @@ func (c *RepositoryBackedRenderDependencyChecker) CheckRenderDependencies(
 }
 
 // checkRenderGuard validates HYPERFRAMES_RENDER preconditions against database facts.
+// Per spec section 6.4, all of the following must be satisfied before rendering:
+//
+//  1. VIDEO_COMPOSITION_SPEC must be valid and human-approved
+//  2. HYPERFRAMES_PROJECT must be valid
+//  3. PREVIEW_SNAPSHOTS must be valid and human-approved
+//  4. Preview review must be APPROVED
+//  5. Local runner must be online and support HYPERFRAMES_RENDER
 func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 	ctx context.Context,
 	req RenderDependencyCheckRequest,
@@ -95,7 +149,8 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 		missing = append(missing, "视频结构尚未确认")
 	}
 
-	// 2. HYPERFRAMES_PROJECT / PREVIEW_SNAPSHOTS must be valid (stage: preview)
+	// 2. HYPERFRAMES_PROJECT must be valid (stage: preview, same stage as snapshots)
+	//    We check the preview stage artifact which covers both.
 	preview, err := c.findArtifact(ctx, req.ProjectID, "preview")
 	if err != nil {
 		zap.L().Warn("render guard: cannot check preview artifact", zap.Error(err))
@@ -105,6 +160,28 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 	}
 	if preview != nil && !preview.HumanApproved {
 		missing = append(missing, "预览尚未确认")
+	}
+
+	// 3. Preview review must be APPROVED
+	if c.reviewChecker != nil {
+		approved, err := c.reviewChecker.IsReviewApproved(ctx, req.ProjectID, "preview")
+		if err != nil {
+			zap.L().Warn("render guard: cannot check preview review", zap.Error(err))
+		}
+		if !approved {
+			missing = append(missing, "预览审核未通过")
+		}
+	}
+
+	// 4. Local runner must be online and support HYPERFRAMES_RENDER
+	if c.runnerChecker != nil {
+		supported, err := c.runnerChecker.SupportsCommand(ctx, "HYPERFRAMES_RENDER")
+		if err != nil {
+			zap.L().Warn("render guard: cannot check runner capability", zap.Error(err))
+		}
+		if !supported {
+			missing = append(missing, "本地执行器未就绪或不支持渲染")
+		}
 	}
 
 	if len(missing) > 0 {
@@ -119,6 +196,11 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 }
 
 // checkPackageGuard validates ARTIFACT_PACKAGE preconditions against database facts.
+// Per spec section 7.3, all of the following must be satisfied before packaging:
+//
+//  1. VIDEO must exist and be valid
+//  2. FFMPEG_PROBE_REPORT must exist and be valid
+//  3. FINAL_REVIEW must exist, be valid, and have metadata.passed == true
 func (c *RepositoryBackedRenderDependencyChecker) checkPackageGuard(
 	ctx context.Context,
 	req RenderDependencyCheckRequest,
@@ -134,26 +216,25 @@ func (c *RepositoryBackedRenderDependencyChecker) checkPackageGuard(
 		missing = append(missing, "最终视频不存在或已过期")
 	}
 
-	// 2. FFMPEG_PROBE_REPORT must be valid (stage: quality)
-	probeReport, err := c.findArtifact(ctx, req.ProjectID, "quality")
+	// 2. FFMPEG_PROBE_REPORT and FINAL_REVIEW share the "quality" stage.
+	//    We check the quality stage artifact which covers both.
+	qualityArtifact, err := c.findArtifact(ctx, req.ProjectID, "quality")
 	if err != nil {
-		zap.L().Warn("package guard: cannot check ffmpeg probe artifact", zap.Error(err))
+		zap.L().Warn("package guard: cannot check quality artifacts", zap.Error(err))
 	}
-	if probeReport == nil || probeReport.Status != "valid" {
+	if qualityArtifact == nil || qualityArtifact.Status != "valid" {
 		missing = append(missing, "视频检测报告不存在或已过期")
-	}
-
-	// 3. FINAL_REVIEW must be valid and passed (stage: quality)
-	//    The FINAL_REVIEW artifact's metadata should contain "passed": true
-	finalReview, err := c.findArtifact(ctx, req.ProjectID, "quality")
-	if err != nil {
-		zap.L().Warn("package guard: cannot check final review artifact", zap.Error(err))
-	}
-	if finalReview == nil || finalReview.Status != "valid" {
 		missing = append(missing, "质量报告不存在或已过期")
+	} else {
+		// 3. FINAL_REVIEW must have metadata.passed == true
+		if qualityArtifact.Metadata != nil {
+			if passed, ok := qualityArtifact.Metadata["passed"].(bool); !ok || !passed {
+				missing = append(missing, "质量报告未通过")
+			}
+		} else {
+			missing = append(missing, "质量报告未通过")
+		}
 	}
-	// Note: We can't deeply check metadata "passed" field through ArtifactState.
-	// The tool should validate this at execution time.
 
 	if len(missing) > 0 {
 		return &RenderDependencyError{

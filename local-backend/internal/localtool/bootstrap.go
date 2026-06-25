@@ -49,6 +49,10 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 		NewArtifactPackageExecutor(cfg.DataDir),
 		CommandArtifactPackage,
 	)
+	reg.Register(
+		NewFinalReviewExecutor(guard, cfg.DataDir),
+		CommandFinalReview,
+	)
 
 	// Prevent unused variable warning — guard is passed to each New*Executor
 	// constructor above for executors that accept a *PathGuard directly.

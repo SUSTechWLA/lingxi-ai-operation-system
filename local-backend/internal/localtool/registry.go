@@ -113,6 +113,7 @@ const (
 	CommandLocalFileImport            = "LOCAL_FILE_IMPORT"
 	CommandLocalMediaIndex            = "LOCAL_MEDIA_INDEX"
 	CommandBundleExtract              = "BUNDLE_EXTRACT"
+	CommandFinalReview                = "FINAL_REVIEW"
 )
 
 var allowedCommands = map[string]bool{
@@ -131,4 +132,5 @@ var allowedCommands = map[string]bool{
 	CommandLocalFileImport:            true,
 	CommandLocalMediaIndex:            true,
 	CommandBundleExtract:              true,
+	CommandFinalReview:                true,
 }

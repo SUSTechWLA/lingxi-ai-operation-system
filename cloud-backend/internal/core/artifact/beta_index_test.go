@@ -80,8 +80,10 @@ func TestBuildArtifactRequestsFromNodeCarriesBetaIndexMetadata(t *testing.T) {
 }
 
 func TestDownstreamStaleArtifactKinds(t *testing.T) {
+	// DownstreamStaleArtifactKinds now returns stage_name values (matching the
+	// artifacts.stage_name column) for use with MarkStaleByKind's stage_name filter.
 	got := DownstreamStaleArtifactKinds("VIDEO_SCRIPT")
-	want := []string{"CARD_PLAN", "VIDEO_COMPOSITION_SPEC", "REFERENCE_ASSET_PLAN", "CONTINUITY_REPORT", "HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "VIDEO", "FINAL_REVIEW", "PROJECT_PACKAGE"}
+	want := []string{"storyboard", "composition", "reference", "continuity", "preview", "render", "quality", "package"}
 	if len(got) != len(want) {
 		t.Fatalf("downstream len = %d, want %d: %#v", len(got), len(want), got)
 	}
