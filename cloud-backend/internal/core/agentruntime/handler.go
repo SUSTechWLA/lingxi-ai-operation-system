@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
@@ -220,8 +221,13 @@ func (h *Handler) RejectReview(c *gin.Context) {
 		reason = "review rejected"
 	}
 	if err := h.nodes.UpdateStatus(c.Request.Context(), node.ID, model.NodeFailed, map[string]interface{}{
-		"approved": false,
-		"comment":  reason,
+		"approved":              false,
+		"comment":               reason,
+		"stage":                 nodeInputString(node, "stage"),
+		"roleAgentId":           nodeInputString(node, "roleAgentId"),
+		"staleTrackingRequired": true,
+		"staleTracker":          "stale_tracker",
+		"staleArtifacts":        downstreamStaleArtifactsForReview(node),
 	}, reason); err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -457,6 +463,7 @@ func (h *Handler) SubmitEdited(c *gin.Context) {
 		"roleAgentId":           nodeInputString(node, "roleAgentId"),
 		"staleTrackingRequired": true,
 		"staleTracker":          "stale_tracker",
+		"staleArtifacts":        downstreamStaleArtifactsForReview(node),
 	}
 	if err := h.stateMachine.OnSuccess(c.Request.Context(), node.ID, output); err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
@@ -503,7 +510,13 @@ func (h *Handler) RegenerateStage(c *gin.Context) {
 
 	// Write audit trail.
 	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageRegeneration, req.ReviewerID, req.Hint)
-	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "REGENERATING"})
+	httpx.OK(c, gin.H{
+		"reviewId":              node.ID,
+		"status":                "REGENERATING",
+		"staleTrackingRequired": true,
+		"staleTracker":          "stale_tracker",
+		"staleArtifacts":        downstreamStaleArtifactsForReview(node),
+	})
 }
 
 // regenerateSourceNode finds the upstream execution node that feeds into this
@@ -527,4 +540,22 @@ func (h *Handler) regenerateSourceNode(ctx context.Context, gateNode *model.Node
 		return fmt.Errorf("source exec node not found for review gate %s", gateNode.ID)
 	}
 	return h.nodes.UpdateStatus(ctx, sourceID, model.NodeCreated, nil, "")
+}
+
+func downstreamStaleArtifactsForReview(node *model.Node) []string {
+	if node == nil || node.Input == nil {
+		return nil
+	}
+	outputs := stringSlice(node.Input["requiredOutputs"])
+	seen := map[string]bool{}
+	result := make([]string, 0)
+	for _, output := range outputs {
+		for _, downstream := range artifact.DownstreamStaleArtifactKinds(output) {
+			if !seen[downstream] {
+				seen[downstream] = true
+				result = append(result, downstream)
+			}
+		}
+	}
+	return result
 }

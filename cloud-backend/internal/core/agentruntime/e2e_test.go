@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	videodirector "github.com/tangying-ai/aios-core/internal/core/video/director"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -67,10 +68,10 @@ func TestE2E_DragonBoatFestival_FullPipeline(t *testing.T) {
 
 	// 3b: Steps with ApprovalPolicy.Required=true should have CONTROL review nodes.
 	reviewSteps := map[string]bool{
-		"knowledge_research_review":       true,
-		"script_generation_review":        true,
-		"shot_split_review":               true,
-		"video_prompt_generation_review":  true,
+		"knowledge_research_review":      true,
+		"script_generation_review":       true,
+		"shot_split_review":              true,
+		"video_prompt_generation_review": true,
 	}
 	foundReviews := 0
 	for _, n := range dag.Nodes {
@@ -272,6 +273,419 @@ func TestE2E_PlanStructureValidation(t *testing.T) {
 	t.Logf("✅ Budget: maxSteps=%d, maxToolCalls=%d", plan.Budget.MaxSteps, plan.Budget.MaxToolCalls)
 }
 
+func TestE2E_TangyingDirector_FirstUserBeta(t *testing.T) {
+	catalog := tangyingDirectorBetaCatalog()
+	registry := videodirector.DefaultRegistry()
+	directors := videoDirectorAdapter{registry: registry}
+	plan := tangyingDirectorBetaPlan()
+
+	guard := NewPlanGuard(catalog, nil).WithDirectors(directors)
+	if err := guard.Validate(plan); err != nil {
+		t.Fatalf("PlanGuard rejected beta plan: %v", err)
+	}
+
+	compiler := NewPlanCompiler(catalog).WithDirectors(directors)
+	dag, err := compiler.Compile(plan)
+	if err != nil {
+		t.Fatalf("PlanCompiler rejected beta plan: %v", err)
+	}
+
+	requiredStages := []string{"proposal", "script", "storyboard", "composition", "reference", "continuity", "preview", "render", "quality", "package"}
+	requiredRoles := []string{"CreativeDirectorAgent", "ScriptWriterAgent", "StoryboardArtistAgent", "CompositionDirectorAgent", "ReferenceSelectorAgent", "ContinuityKeeperAgent", "PreviewDirectorAgent", "RenderProducerAgent", "QualityReviewerAgent", "PackageProducerAgent"}
+	requiredArtifacts := []string{"VIDEO_PROPOSAL", "VIDEO_SCRIPT", "CARD_PLAN", "VIDEO_COMPOSITION_SPEC", "REFERENCE_ASSET_PLAN", "STYLE_PROFILE", "CONTINUITY_REPORT", "HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "VIDEO", "FINAL_REVIEW", "PROJECT_PACKAGE"}
+
+	stepStages := map[string]bool{}
+	for _, step := range plan.Steps {
+		if stage, _ := step.Arguments["stage"].(string); stage != "" {
+			stepStages[stage] = true
+		}
+	}
+	for _, stage := range requiredStages {
+		if !stepStages[stage] {
+			t.Fatalf("beta plan missing stage %s", stage)
+		}
+	}
+
+	roles := map[string]bool{}
+	for _, role := range registry.List() {
+		roles[role.Name] = true
+	}
+	for _, role := range requiredRoles {
+		if !roles[role] {
+			t.Fatalf("beta registry missing role %s", role)
+		}
+	}
+
+	artifactKinds := map[string]bool{}
+	for _, manifest := range catalog {
+		for _, kind := range manifest.ArtifactPolicy.ArtifactKinds {
+			artifactKinds[kind] = true
+		}
+	}
+	for _, kind := range requiredArtifacts {
+		if !artifactKinds[kind] {
+			t.Fatalf("beta tool catalog missing artifact kind %s", kind)
+		}
+	}
+
+	nodeByID := make(map[string]model.NodeRequest, len(dag.Nodes))
+	for _, node := range dag.Nodes {
+		nodeByID[node.ID] = node
+	}
+	requireDependencyPath(t, dag.Edges, "preview_review", "render_review_before")
+	requireDependencyPath(t, dag.Edges, "quality", "package")
+	if nodeByID["render_review_before"].Input["reviewPhase"] != "before_execute" {
+		t.Fatalf("render review must be a before-execute gate: %#v", nodeByID["render_review_before"].Input)
+	}
+}
+
+type videoDirectorAdapter struct {
+	registry *videodirector.Registry
+}
+
+func (a videoDirectorAdapter) Get(stageName string) StageDirector {
+	if a.registry == nil {
+		return nil
+	}
+	d := a.registry.Get(stageName)
+	if d == nil {
+		return nil
+	}
+	return videoStageDirector{Director: d}
+}
+
+type videoStageDirector struct {
+	videodirector.Director
+}
+
+func (d videoStageDirector) RoleID() string {
+	if role, ok := d.Director.(interface{ RoleID() string }); ok {
+		return role.RoleID()
+	}
+	return ""
+}
+
+func (d videoStageDirector) DisplayName() string {
+	if role, ok := d.Director.(interface{ DisplayName() string }); ok {
+		return role.DisplayName()
+	}
+	return ""
+}
+
+func (d videoStageDirector) Goal() string {
+	if role, ok := d.Director.(interface{ Goal() string }); ok {
+		return role.Goal()
+	}
+	return ""
+}
+
+func (d videoStageDirector) RequiredInputs() []string {
+	if role, ok := d.Director.(interface{ RequiredInputs() []string }); ok {
+		return role.RequiredInputs()
+	}
+	return nil
+}
+
+func (d videoStageDirector) RequiredOutputs() []string {
+	if role, ok := d.Director.(interface{ RequiredOutputs() []string }); ok {
+		return role.RequiredOutputs()
+	}
+	return nil
+}
+
+func (d videoStageDirector) HumanReview() *tool.HumanReview {
+	if role, ok := d.Director.(interface{ HumanReview() *tool.HumanReview }); ok {
+		return role.HumanReview()
+	}
+	return nil
+}
+
+func tangyingDirectorBetaPlan() *AgentPlan {
+	return &AgentPlan{
+		Goal:   "躺营导演台 v1.0 内测：生成 45 秒中文 16:9 图文视频并导出本地成片",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:     "proposal",
+				Intent: "确认内测版图文视频创作方向",
+				Tool:   "proposal_generator",
+				Arguments: map[string]interface{}{
+					"stage":             "proposal",
+					"brief":             "做一个45秒中文图文视频，讲智能体改变的是工作流",
+					"aspectRatio":       "16:9",
+					"targetDurationSec": float64(45),
+				},
+				ExpectedOutput:  []string{"proposal", "VIDEO_PROPOSAL"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "script",
+				Intent:    "写中文口播脚本",
+				Tool:      "video_script_generator",
+				DependsOn: []string{"proposal"},
+				Arguments: map[string]interface{}{
+					"stage":             "script",
+					"topic":             "智能体改变的是工作流",
+					"proposal":          "{{proposal.output.proposal}}",
+					"targetDurationSec": float64(45),
+				},
+				ExpectedOutput:  []string{"script", "VIDEO_SCRIPT"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "storyboard",
+				Intent:    "把脚本拆成图文卡片和字幕节奏",
+				Tool:      "card_plan_generator",
+				DependsOn: []string{"script"},
+				Arguments: map[string]interface{}{
+					"stage":       "storyboard",
+					"script":      "{{script.output.script}}",
+					"aspectRatio": "16:9",
+				},
+				ExpectedOutput:  []string{"cardPlan", "CARD_PLAN"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "composition",
+				Intent:    "生成 HyperFrames 可渲染的视频结构和时间轴",
+				Tool:      "video_composition_builder",
+				DependsOn: []string{"storyboard"},
+				Arguments: map[string]interface{}{
+					"stage":       "composition",
+					"cardPlan":    "{{storyboard.output.cardPlan}}",
+					"aspectRatio": "16:9",
+				},
+				ExpectedOutput:  []string{"compositionSpec", "VIDEO_COMPOSITION_SPEC"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "reference",
+				Intent:    "确定背景、字体、图标和参考资产策略",
+				Tool:      "reference_asset_planner",
+				DependsOn: []string{"composition"},
+				Arguments: map[string]interface{}{
+					"stage":           "reference",
+					"compositionSpec": "{{composition.output.compositionSpec}}",
+				},
+				ExpectedOutput:  []string{"referenceAssetPlan", "styleProfile", "REFERENCE_ASSET_PLAN", "STYLE_PROFILE"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "continuity",
+				Intent:    "检查风格、字幕、术语和产物依赖一致性",
+				Tool:      "continuity_checker",
+				DependsOn: []string{"reference"},
+				Arguments: map[string]interface{}{
+					"stage":              "continuity",
+					"referenceAssetPlan": "{{reference.output.referenceAssetPlan}}",
+				},
+				ExpectedOutput:  []string{"continuityReport", "styleProfile", "CONTINUITY_REPORT", "STYLE_PROFILE"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "preview",
+				Intent:    "生成 HyperFrames 项目和预览截图",
+				Tool:      "hyperframes_project_generator",
+				DependsOn: []string{"composition", "reference", "continuity"},
+				Arguments: map[string]interface{}{
+					"stage":            "preview",
+					"compositionSpec":  "{{composition.output.compositionSpec}}",
+					"styleProfile":     "{{continuity.output.styleProfile}}",
+					"previewFrameMode": "snapshots",
+				},
+				ExpectedOutput:  []string{"hyperframesProject", "previewSnapshots", "previewReport", "HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "render",
+				Intent:    "确认预览后创建本地 HyperFrames 渲染任务",
+				Tool:      "hyperframes_renderer",
+				DependsOn: []string{"preview"},
+				Arguments: map[string]interface{}{
+					"stage":           "render",
+					"hyperframesPath": "{{preview.output.hyperframesProject}}",
+					"previewApproved": true,
+					"outputName":      "final.mp4",
+				},
+				ExpectedOutput:  []string{"video", "renderReport", "VIDEO", "RENDER_REPORT"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "quality",
+				Intent:    "对最终视频做体检并生成最终审核报告",
+				Tool:      "final_review_generator",
+				DependsOn: []string{"render"},
+				Arguments: map[string]interface{}{
+					"stage": "quality",
+					"video": "{{render.output.video}}",
+				},
+				ExpectedOutput:  []string{"finalReview", "FINAL_REVIEW"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "package",
+				Intent:    "打包最终视频、预览图、决策日志和审核报告",
+				Tool:      "artifact_packager",
+				DependsOn: []string{"quality"},
+				Arguments: map[string]interface{}{
+					"stage":       "package",
+					"finalReview": "{{quality.output.finalReview}}",
+					"packageName": "tangying-director-beta-package",
+				},
+				ExpectedOutput:  []string{"projectPackage", "PROJECT_PACKAGE"},
+				ProduceArtifact: true,
+			},
+		},
+		Budget: AgentBudget{
+			MaxSteps:     10,
+			MaxToolCalls: 10,
+			MaxLLMCalls:  8,
+			MaxReplans:   1,
+			MaxCostLevel: "medium",
+		},
+		StopPolicy: StopPolicy{StopWhenEnough: true},
+	}
+}
+
+func tangyingDirectorBetaCatalog() staticToolCatalog {
+	return staticToolCatalog{
+		"proposal_generator": betaManifest("proposal_generator", []string{"brief", "aspectRatio"}, map[string]string{
+			"proposal":       "object",
+			"VIDEO_PROPOSAL": "object",
+		}, []string{"VIDEO_PROPOSAL"}, tool.ApprovalAfterArtifact, []string{"主题是否准确", "方向是否适合第一版图文视频"}),
+		"video_script_generator": betaManifest("video_script_generator", []string{"topic", "proposal", "targetDurationSec"}, map[string]string{
+			"script":       "string",
+			"VIDEO_SCRIPT": "string",
+		}, []string{"VIDEO_SCRIPT"}, tool.ApprovalAfterArtifact, []string{"表达是否自然", "节奏是否适合 45 秒"}),
+		"card_plan_generator": betaManifest("card_plan_generator", []string{"script", "aspectRatio"}, map[string]string{
+			"cardPlan":  "object",
+			"CARD_PLAN": "object",
+		}, []string{"CARD_PLAN"}, tool.ApprovalAfterArtifact, []string{"卡片顺序是否合理", "每页文字是否过长"}),
+		"video_composition_builder": betaManifest("video_composition_builder", []string{"cardPlan", "aspectRatio"}, map[string]string{
+			"compositionSpec":        "object",
+			"VIDEO_COMPOSITION_SPEC": "object",
+		}, []string{"VIDEO_COMPOSITION_SPEC"}, tool.ApprovalAfterArtifact, []string{"时间轴是否完整", "布局是否适合渲染"}),
+		"reference_asset_planner": betaManifest("reference_asset_planner", []string{"compositionSpec"}, map[string]string{
+			"referenceAssetPlan":   "object",
+			"styleProfile":         "object",
+			"REFERENCE_ASSET_PLAN": "object",
+			"STYLE_PROFILE":        "object",
+		}, []string{"REFERENCE_ASSET_PLAN", "STYLE_PROFILE"}, tool.ApprovalNone, nil),
+		"continuity_checker": betaManifest("continuity_checker", []string{"referenceAssetPlan"}, map[string]string{
+			"continuityReport":  "object",
+			"styleProfile":      "object",
+			"CONTINUITY_REPORT": "object",
+			"STYLE_PROFILE":     "object",
+		}, []string{"CONTINUITY_REPORT", "STYLE_PROFILE"}, tool.ApprovalNone, nil),
+		"hyperframes_project_generator": betaManifest("hyperframes_project_generator", []string{"compositionSpec", "styleProfile", "previewFrameMode"}, map[string]string{
+			"hyperframesProject":  "string",
+			"previewSnapshots":    "array",
+			"previewReport":       "object",
+			"HYPERFRAMES_PROJECT": "object",
+			"PREVIEW_SNAPSHOTS":   "object",
+			"PREVIEW_REPORT":      "object",
+		}, []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"}, tool.ApprovalAfterArtifact, []string{"画面是否可读", "是否允许最终渲染"}),
+		"hyperframes_renderer": betaManifest("hyperframes_renderer", []string{"hyperframesPath", "previewApproved", "outputName"}, map[string]string{
+			"video":         "string",
+			"renderReport":  "object",
+			"VIDEO":         "object",
+			"RENDER_REPORT": "object",
+		}, []string{"VIDEO", "RENDER_REPORT"}, tool.ApprovalBeforeExecute, []string{"预览是否已确认", "是否允许开始本地渲染"}),
+		"final_review_generator": betaManifest("final_review_generator", []string{"video"}, map[string]string{
+			"finalReview":  "object",
+			"FINAL_REVIEW": "object",
+		}, []string{"FINAL_REVIEW"}, tool.ApprovalNone, nil),
+		"artifact_packager": betaManifest("artifact_packager", []string{"finalReview", "packageName"}, map[string]string{
+			"projectPackage":  "object",
+			"PROJECT_PACKAGE": "object",
+		}, []string{"PROJECT_PACKAGE"}, tool.ApprovalNone, nil),
+	}
+}
+
+func betaManifest(name string, requiredParams []string, outputs map[string]string, artifactKinds []string, approvalMode string, reviewFocus []string) *tool.ToolManifest {
+	params := make(map[string]tool.ParamDef, len(requiredParams)+2)
+	for _, param := range requiredParams {
+		paramType := "string"
+		if strings.Contains(strings.ToLower(param), "approved") {
+			paramType = "boolean"
+		}
+		if strings.Contains(strings.ToLower(param), "duration") {
+			paramType = "number"
+		}
+		params[param] = tool.ParamDef{Type: paramType, Required: true}
+	}
+	out := make(map[string]tool.ParamDef, len(outputs))
+	for field, typ := range outputs {
+		out[field] = tool.ParamDef{Type: typ}
+	}
+	manifest := &tool.ToolManifest{
+		Name:        name,
+		Description: "躺营导演台 v1.0 内测工具：" + name,
+		Type:        "builtin",
+		Parameters:  params,
+		Output:      out,
+		Capabilities: []string{
+			"video_creation",
+			"tangying_director_beta",
+		},
+		Tags:      []string{"video", "director", "beta"},
+		CostLevel: tool.CostLow,
+		RiskLevel: tool.RiskLow,
+		ArtifactPolicy: tool.ArtifactPolicy{
+			ProduceArtifact:       len(artifactKinds) > 0,
+			ArtifactKinds:         artifactKinds,
+			DefaultReviewRequired: approvalMode != "" && approvalMode != tool.ApprovalNone,
+			Storage:               tool.ArtifactLocationLocal,
+		},
+	}
+	if approvalMode != "" && approvalMode != tool.ApprovalNone {
+		manifest.ApprovalPolicy = tool.ApprovalPolicy{
+			Required:            true,
+			Mode:                approvalMode,
+			BlocksDownstream:    true,
+			Reason:              "躺营导演台 v1.0 内测阶段需要人工确认",
+			ReviewArtifactKinds: artifactKinds,
+		}
+		manifest.HumanReview = &tool.HumanReview{
+			Required:    true,
+			Gate:        approvalMode,
+			Title:       "人工审核：" + name,
+			ReviewFocus: reviewFocus,
+			UserActions: []string{"approve", "reject", "edit", "regenerate"},
+		}
+	}
+	if name == "hyperframes_renderer" {
+		manifest.ExecutionPlane = tool.ExecutionPlaneLocal
+		manifest.LocalCommand = "HYPERFRAMES_RENDER"
+		manifest.RequiresUserDevice = true
+	}
+	return manifest
+}
+
+func requireDependencyPath(t *testing.T, edges []model.Edge, from, to string) {
+	t.Helper()
+	queue := []string{from}
+	visited := map[string]bool{from: true}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, edge := range edges {
+			if edge.From != current {
+				continue
+			}
+			if edge.To == to {
+				return
+			}
+			if !visited[edge.To] {
+				visited[edge.To] = true
+				queue = append(queue, edge.To)
+			}
+		}
+	}
+	t.Fatalf("dependency path %s -> %s not found in %#v", from, to, edges)
+}
+
 // dragonBoatPlan returns the expected AgentPlan for the Dragon Boat Festival
 // 60-second knowledge video use case.
 func dragonBoatPlan() *AgentPlan {
@@ -285,16 +699,16 @@ func dragonBoatPlan() *AgentPlan {
 				Intent: "整理端午节和粽子的历史来源、关键事实、讲述角度",
 				Tool:   "knowledge_researcher",
 				Arguments: map[string]interface{}{
-					"topic":      "端午节和粽子的来源",
+					"topic":       "端午节和粽子的来源",
 					"outputStyle": "适合60秒短视频口播",
 				},
 				ExpectedOutput:  []string{"facts", "timeline", "storyAngles", "risks"},
 				ProduceArtifact: true,
 			},
 			{
-				ID:     "fact_check",
-				Intent: "核查端午节和粽子来源的事实准确性",
-				Tool:   "fact_checker",
+				ID:        "fact_check",
+				Intent:    "核查端午节和粽子来源的事实准确性",
+				Tool:      "fact_checker",
 				DependsOn: []string{"knowledge_research"},
 				Arguments: map[string]interface{}{
 					"facts": "{{knowledge_research.output.facts}}",
@@ -304,9 +718,9 @@ func dragonBoatPlan() *AgentPlan {
 				ProduceArtifact: true,
 			},
 			{
-				ID:     "script_generation",
-				Intent: "生成60秒口播知识视频脚本",
-				Tool:   "video_script_generator",
+				ID:        "script_generation",
+				Intent:    "生成60秒口播知识视频脚本",
+				Tool:      "video_script_generator",
 				DependsOn: []string{"fact_check"},
 				Arguments: map[string]interface{}{
 					"topic":             "端午节和粽子的来源",
@@ -318,9 +732,9 @@ func dragonBoatPlan() *AgentPlan {
 				ProduceArtifact: true,
 			},
 			{
-				ID:     "shot_split",
-				Intent: "把60秒口播稿拆成视频分镜",
-				Tool:   "shot_splitter",
+				ID:        "shot_split",
+				Intent:    "把60秒口播稿拆成视频分镜",
+				Tool:      "shot_splitter",
 				DependsOn: []string{"script_generation"},
 				Arguments: map[string]interface{}{
 					"script":           "{{script_generation.output.script}}",
@@ -331,9 +745,9 @@ func dragonBoatPlan() *AgentPlan {
 				ProduceArtifact: true,
 			},
 			{
-				ID:     "video_prompt_generation",
-				Intent: "根据分镜生成视频生成 Prompt",
-				Tool:   "video_prompt_generator",
+				ID:        "video_prompt_generation",
+				Intent:    "根据分镜生成视频生成 Prompt",
+				Tool:      "video_prompt_generator",
 				DependsOn: []string{"shot_split"},
 				Arguments: map[string]interface{}{
 					"shotList": "{{shot_split.output.shotList}}",
@@ -343,9 +757,9 @@ func dragonBoatPlan() *AgentPlan {
 				ProduceArtifact: true,
 			},
 			{
-				ID:     "publish_copy",
-				Intent: "生成标题、简介和标签",
-				Tool:   "publish_copy_generator",
+				ID:        "publish_copy",
+				Intent:    "生成标题、简介和标签",
+				Tool:      "publish_copy_generator",
 				DependsOn: []string{"script_generation"},
 				Arguments: map[string]interface{}{
 					"script":   "{{script_generation.output.script}}",
@@ -368,13 +782,13 @@ func dragonBoatPlan() *AgentPlan {
 					"publish_copy",
 				},
 				Arguments: map[string]interface{}{
-					"topic":         "端午节和粽子的来源",
-					"script":        "{{script_generation.output.script}}",
-					"shotList":      "{{shot_split.output.shotList}}",
-					"videoPrompts":  "{{video_prompt_generation.output.videoPrompts}}",
-					"facts":         "{{knowledge_research.output.facts}}",
-					"checkedFacts":  "{{fact_check.output.checkedFacts}}",
-					"publishCopy":   "{{publish_copy.output.title}}",
+					"topic":        "端午节和粽子的来源",
+					"script":       "{{script_generation.output.script}}",
+					"shotList":     "{{shot_split.output.shotList}}",
+					"videoPrompts": "{{video_prompt_generation.output.videoPrompts}}",
+					"facts":        "{{knowledge_research.output.facts}}",
+					"checkedFacts": "{{fact_check.output.checkedFacts}}",
+					"publishCopy":  "{{publish_copy.output.title}}",
 				},
 				ExpectedOutput:  []string{"packageMarkdown", "packageManifest"},
 				ProduceArtifact: true,
@@ -401,7 +815,7 @@ func dragonBoatToolCatalog() staticToolCatalog {
 			Type:        "builtin_prompt_tool",
 			Endpoint:    "builtin://video-creation/knowledge_researcher",
 			Parameters: map[string]tool.ParamDef{
-				"topic":      {Type: "string", Required: true},
+				"topic":       {Type: "string", Required: true},
 				"outputStyle": {Type: "string", Required: false},
 			},
 			Output: map[string]tool.ParamDef{
@@ -470,11 +884,11 @@ func dragonBoatToolCatalog() staticToolCatalog {
 				"targetDurationSec": {Type: "number", Required: false},
 			},
 			Output: map[string]tool.ParamDef{
-				"script":              {Type: "string"},
-				"summary":             {Type: "string"},
+				"script":               {Type: "string"},
+				"summary":              {Type: "string"},
 				"estimatedDurationSec": {Type: "number"},
-				"sections":            {Type: "array"},
-				"qualityHints":        {Type: "object"},
+				"sections":             {Type: "array"},
+				"qualityHints":         {Type: "object"},
 			},
 			Capabilities: []string{"video_creation", "script_generation"},
 			Tags:         []string{"video", "script", "oral_script"},
@@ -537,9 +951,9 @@ func dragonBoatToolCatalog() staticToolCatalog {
 				"aspectRatio":      {Type: "string", Required: false},
 			},
 			Output: map[string]tool.ParamDef{
-				"shotList":        {Type: "array"},
+				"shotList":         {Type: "array"},
 				"totalDurationSec": {Type: "number"},
-				"summary":         {Type: "string"},
+				"summary":          {Type: "string"},
 			},
 			Capabilities: []string{"video_creation", "shot_split"},
 			Tags:         []string{"video", "shot", "storyboard"},

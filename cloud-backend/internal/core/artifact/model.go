@@ -28,34 +28,45 @@ const (
 
 // Artifact represents a versioned intermediate or final output of a workflow stage.
 type Artifact struct {
-	ID            string                 `json:"id"`
-	ProjectID     string                 `json:"projectId"`
-	WorkflowRunID string                 `json:"workflowRunId,omitempty"`
-	StageName     string                 `json:"stageName"`
-	UnitID        string                 `json:"unitId,omitempty"`
-	Kind          ArtifactKind           `json:"kind"`
-	Name          string                 `json:"name"`
-	Version       int                    `json:"version"`
-	ParentID      string                 `json:"parentId,omitempty"`
-	StorageType   string                 `json:"storageType"` // "local"; legacy reads may be "minio" | "inline"
-	StorageRef    string                 `json:"storageRef,omitempty"`
-	InlineJSON    string                 `json:"inlineJson,omitempty"`
-	MimeType      string                 `json:"mimeType,omitempty"`
-	SizeBytes     int64                  `json:"sizeBytes"`
-	ContentHash   string                 `json:"contentHash"`
-	PromptHash    string                 `json:"promptHash,omitempty"`
-	Provider      string                 `json:"provider,omitempty"`
-	Model         string                 `json:"model,omitempty"`
-	IsCurrent     bool                   `json:"isCurrent"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
-	CreatedAt     time.Time              `json:"createdAt"`
+	ID             string                 `json:"id"`
+	ProjectID      string                 `json:"projectId"`
+	WorkflowRunID  string                 `json:"workflowRunId,omitempty"`
+	TaskID         string                 `json:"taskId,omitempty"`
+	StageName      string                 `json:"stageName"`
+	RoleAgentID    string                 `json:"roleAgentId,omitempty"`
+	UnitID         string                 `json:"unitId,omitempty"`
+	Kind           ArtifactKind           `json:"kind"`
+	Name           string                 `json:"name"`
+	Version        int                    `json:"version"`
+	ParentID       string                 `json:"parentId,omitempty"`
+	StorageType    string                 `json:"storageType"` // "local"; legacy reads may be "minio" | "inline"
+	StorageRef     string                 `json:"storageRef,omitempty"`
+	InlineJSON     string                 `json:"inlineJson,omitempty"`
+	MimeType       string                 `json:"mimeType,omitempty"`
+	SizeBytes      int64                  `json:"sizeBytes"`
+	ContentHash    string                 `json:"contentHash"`
+	PromptHash     string                 `json:"promptHash,omitempty"`
+	Provider       string                 `json:"provider,omitempty"`
+	Model          string                 `json:"model,omitempty"`
+	IsCurrent      bool                   `json:"isCurrent"`
+	Status         string                 `json:"status"`
+	HumanApproved  bool                   `json:"humanApproved"`
+	DependsOn      []string               `json:"dependsOn,omitempty"`
+	ProducedByNode string                 `json:"producedByNode,omitempty"`
+	ProducedByTool string                 `json:"producedByTool,omitempty"`
+	ProducedByRole string                 `json:"producedByRole,omitempty"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt      time.Time              `json:"createdAt"`
+	UpdatedAt      time.Time              `json:"updatedAt"`
 }
 
 // CreateArtifactRequest is the input for creating a new artifact version.
 type CreateArtifactRequest struct {
 	ProjectID     string
 	WorkflowRunID string
+	TaskID        string
 	StageName     string
+	RoleAgentID   string
 	UnitID        string
 	Kind          ArtifactKind
 	Name          string

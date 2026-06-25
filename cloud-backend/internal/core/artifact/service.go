@@ -114,10 +114,12 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		metadata["contentAvailability"] = "cloud-inline"
 	}
 
-	return &Artifact{
+	return promoteArtifactIndexFields(&Artifact{
 		ProjectID:     req.ProjectID,
 		WorkflowRunID: req.WorkflowRunID,
+		TaskID:        req.TaskID,
 		StageName:     req.StageName,
+		RoleAgentID:   req.RoleAgentID,
 		UnitID:        req.UnitID,
 		Kind:          req.Kind,
 		Name:          req.Name,
@@ -134,6 +136,97 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		Model:         req.Model,
 		IsCurrent:     true,
 		Metadata:      metadata,
+	})
+}
+
+func promoteArtifactIndexFields(a *Artifact) *Artifact {
+	if a == nil {
+		return nil
+	}
+	if a.Metadata == nil {
+		a.Metadata = map[string]interface{}{}
+	}
+	if a.Status == "" {
+		a.Status = stringMetadata(a.Metadata, "status")
+		if a.Status == "" {
+			a.Status = "valid"
+		}
+	}
+	if !a.HumanApproved {
+		a.HumanApproved = boolMetadata(a.Metadata, "humanApproved")
+	}
+	if a.TaskID == "" {
+		a.TaskID = stringMetadata(a.Metadata, "taskId")
+	}
+	if a.RoleAgentID == "" {
+		a.RoleAgentID = stringMetadata(a.Metadata, "roleAgentId")
+	}
+	if len(a.DependsOn) == 0 {
+		a.DependsOn = stringSliceMetadata(a.Metadata, "dependsOn")
+	}
+	if a.ProducedByNode == "" {
+		a.ProducedByNode = stringMetadata(a.Metadata, "producedByNode")
+	}
+	if a.ProducedByTool == "" {
+		a.ProducedByTool = stringMetadata(a.Metadata, "producedByTool")
+	}
+	if a.ProducedByRole == "" {
+		a.ProducedByRole = stringMetadata(a.Metadata, "producedByRole")
+	}
+	if !a.CreatedAt.IsZero() && a.UpdatedAt.IsZero() {
+		a.UpdatedAt = a.CreatedAt
+	}
+	a.Metadata["status"] = a.Status
+	a.Metadata["humanApproved"] = a.HumanApproved
+	if a.TaskID != "" {
+		a.Metadata["taskId"] = a.TaskID
+	}
+	if a.RoleAgentID != "" {
+		a.Metadata["roleAgentId"] = a.RoleAgentID
+	}
+	if len(a.DependsOn) > 0 {
+		a.Metadata["dependsOn"] = a.DependsOn
+	}
+	if a.ProducedByNode != "" {
+		a.Metadata["producedByNode"] = a.ProducedByNode
+	}
+	if a.ProducedByTool != "" {
+		a.Metadata["producedByTool"] = a.ProducedByTool
+	}
+	if a.ProducedByRole != "" {
+		a.Metadata["producedByRole"] = a.ProducedByRole
+	}
+	return a
+}
+
+func stringMetadata(metadata map[string]interface{}, key string) string {
+	if value, ok := metadata[key].(string); ok {
+		return value
+	}
+	return ""
+}
+
+func boolMetadata(metadata map[string]interface{}, key string) bool {
+	if value, ok := metadata[key].(bool); ok {
+		return value
+	}
+	return false
+}
+
+func stringSliceMetadata(metadata map[string]interface{}, key string) []string {
+	switch typed := metadata[key].(type) {
+	case []string:
+		return typed
+	case []interface{}:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if value, ok := item.(string); ok {
+				result = append(result, value)
+			}
+		}
+		return result
+	default:
+		return nil
 	}
 }
 

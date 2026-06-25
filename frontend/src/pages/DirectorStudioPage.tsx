@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
+import { APP_ICON_PATH } from '../utils/brand'
 import {
   FiActivity,
   FiArchive,
   FiBell,
-  FiBox,
   FiCheck,
   FiChevronRight,
   FiCpu,
@@ -48,7 +48,10 @@ import {
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
+  canStartFinalRender,
   deriveNextAction,
+  downstreamStaleArtifacts,
+  stageActionLabel,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
   type DirectorNavKey,
@@ -64,25 +67,25 @@ interface Props {
 }
 
 const navItems: Array<{ key: DirectorNavKey; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { key: 'overview', label: '项目总览', icon: FiHome },
-  { key: 'review', label: '审核工作台', icon: FiShield },
-  { key: 'trace', label: '过程追踪', icon: FiLayers },
-  { key: 'assets', label: '产物库', icon: FiArchive },
-  { key: 'roles', label: '团队与角色', icon: FiUsers },
-  { key: 'export', label: '最终预览 / 导出', icon: FiVideo },
-  { key: 'system', label: '系统设置', icon: FiSettings },
+  { key: 'overview', label: '项目', icon: FiHome },
+  { key: 'review', label: '审核', icon: FiShield },
+  { key: 'trace', label: '追踪', icon: FiLayers },
+  { key: 'assets', label: '产物', icon: FiArchive },
+  { key: 'roles', label: '角色', icon: FiUsers },
+  { key: 'export', label: '导出', icon: FiVideo },
+  { key: 'system', label: '设置', icon: FiSettings },
 ]
 
 const fallbackRoles: VideoRoleAgent[] = [
   { id: 'creative_director', name: 'Creative Director', displayName: '创意总监', stage: 'proposal', goal: '理解需求，确定主题、时长、风格与创作方向。', allowedTools: ['proposal_generator', 'capability_preflight'], requiredOutputs: ['VIDEO_PROPOSAL'], humanReview: { required: true, reviewFocus: ['主题是否准确', '目标时长是否合理', '创作方向是否清楚'] } },
   { id: 'script_writer', name: 'Script Writer', displayName: '脚本编剧', stage: 'script', goal: '生成中文口播脚本，控制节奏、观点和表达。', allowedTools: ['video_script_generator', 'script_quality_checker'], requiredOutputs: ['VIDEO_SCRIPT'], humanReview: { required: true, reviewFocus: ['开头是否有吸引力', '表达是否自然', '时长是否合理'] } },
   { id: 'storyboard_artist', name: 'Storyboard Artist', displayName: '卡片设计师', stage: 'storyboard', goal: '把脚本拆成画面页、卡片、字幕与节奏。', allowedTools: ['card_plan_generator', 'caption_splitter'], requiredOutputs: ['CARD_PLAN'], humanReview: { required: true, reviewFocus: ['卡片节奏是否顺畅', '字幕是否适合阅读'] } },
-  { id: 'composition_director', name: 'Composition Director', displayName: '结构导演', stage: 'composition', goal: '生成时间轴、画面轨道和安全区布局。', allowedTools: ['video_composition_builder', 'composition_quality_checker'], requiredOutputs: ['HYPERFRAMES_PROJECT'], humanReview: { required: true, reviewFocus: ['结构是否可渲染', '版式是否清晰'] } },
-  { id: 'reference_selector', name: 'Reference Selector', displayName: '参考选择器', stage: 'reference', goal: '选择背景、图标、字体和参考资产策略。', allowedTools: ['reference_asset_planner'], requiredOutputs: ['REFERENCE_ASSET_PLAN'] },
-  { id: 'continuity_keeper', name: 'Continuity Keeper', displayName: '连续性管理', stage: 'continuity', goal: '维护风格、术语、产物依赖与下游失效规则。', allowedTools: ['continuity_checker', 'stale_tracker'], requiredOutputs: ['CONTINUITY_REPORT'] },
-  { id: 'preview_director', name: 'Preview Director', displayName: '预览导演', stage: 'preview', goal: '生成本地预览图，检查可读性和版式。', allowedTools: ['hyperframes_project_generator', 'hyperframes_snapshot', 'preview_quality_checker'], requiredOutputs: ['PREVIEW_SNAPSHOTS'], humanReview: { required: true, reviewFocus: ['画面是否可读', '文字是否溢出', '是否允许进入最终渲染'] } },
+  { id: 'composition_director', name: 'Composition Director', displayName: '结构导演', stage: 'composition', goal: '生成时间轴、画面轨道和安全区布局。', allowedTools: ['video_composition_builder', 'composition_quality_checker'], requiredOutputs: ['VIDEO_COMPOSITION_SPEC'], humanReview: { required: true, reviewFocus: ['结构是否可渲染', '版式是否清晰'] } },
+  { id: 'reference_selector', name: 'Reference Selector', displayName: '参考选择', stage: 'reference', goal: '选择背景、图标、字体和参考资产策略。', allowedTools: ['reference_asset_planner'], requiredOutputs: ['REFERENCE_ASSET_PLAN', 'STYLE_PROFILE'] },
+  { id: 'continuity_keeper', name: 'Continuity Keeper', displayName: '连续性检查', stage: 'continuity', goal: '维护风格、术语、产物依赖与下游失效规则。', allowedTools: ['continuity_checker', 'stale_tracker'], requiredOutputs: ['CONTINUITY_REPORT'] },
+  { id: 'preview_director', name: 'Preview Director', displayName: '预览导演', stage: 'preview', goal: '生成本地预览图，检查可读性和版式。', allowedTools: ['hyperframes_project_generator', 'hyperframes_snapshot', 'preview_quality_checker'], requiredOutputs: ['HYPERFRAMES_PROJECT', 'PREVIEW_SNAPSHOTS'], humanReview: { required: true, reviewFocus: ['画面是否可读', '文字是否溢出', '是否允许进入最终渲染'] } },
   { id: 'render_producer', name: 'Render Producer', displayName: '渲染制片', stage: 'render', goal: '检查渲染依赖，创建本地渲染任务并追踪状态。', allowedTools: ['render_dependency_guard', 'hyperframes_renderer', 'local_job_status_tracker'], requiredOutputs: ['VIDEO', 'RENDER_REPORT'], humanReview: { required: true, reviewFocus: ['预览是否已确认', '渲染依赖是否完整'] } },
-  { id: 'quality_reviewer', name: 'Quality Reviewer', displayName: '质量审核员', stage: 'quality', goal: '检查文件、时长、分辨率、视频流和产物完整性。', allowedTools: ['ffmpeg_probe', 'final_review_generator'], requiredOutputs: ['FFMPEG_PROBE_REPORT', 'QUALITY_REPORT'] },
+  { id: 'quality_reviewer', name: 'Quality Reviewer', displayName: '质量审核', stage: 'quality', goal: '检查文件、时长、分辨率、视频流和产物完整性。', allowedTools: ['ffmpeg_probe', 'final_review_generator'], requiredOutputs: ['FINAL_REVIEW'] },
   { id: 'package_producer', name: 'Package Producer', displayName: '交付制片', stage: 'package', goal: '打包最终视频、结构说明、预览图、决策日志和审核报告。', allowedTools: ['artifact_packager'], requiredOutputs: ['PROJECT_PACKAGE'] },
 ]
 
@@ -196,6 +199,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               loading={loading}
               canStart={canStart}
               stages={stages}
+              artifacts={artifacts}
               preflight={preflight}
               nextAction={nextAction}
               onTopicChange={setTopic}
@@ -229,13 +233,13 @@ function DirectorSidebar({ active, setActive, user, onLogout }: { active: Direct
   return (
     <aside className="glass sticky top-5 flex h-[calc(100vh-40px)] w-72 shrink-0 flex-col rounded-xl p-4">
       <div className="flex items-center gap-3">
-        <div className="relative grid h-10 w-10 place-items-center rounded-lg tangying-gradient shadow-glow">
-          <FiBox className="text-xl text-white" />
+        <div className="relative h-10 w-10 overflow-hidden rounded-lg shadow-glow">
+          <img src={APP_ICON_PATH} alt="躺营" className="h-full w-full object-cover" />
           <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-success" />
         </div>
         <div>
           <div className="text-base font-black text-ink">躺营导演台</div>
-          <div className="text-[11px] font-medium text-ink-soft">智能视频创作工作台</div>
+          <div className="text-[11px] font-medium text-ink-soft">AI 多角色视频创作工作台</div>
         </div>
       </div>
       <nav className="mt-8 space-y-1">
@@ -272,7 +276,7 @@ function DirectorSidebar({ active, setActive, user, onLogout }: { active: Direct
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
           <div className="rounded-lg bg-green-50 px-3 py-2 text-green-700">本地在线</div>
-          <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v2.1</div>
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v1.0 内测</div>
         </div>
       </div>
     </aside>
@@ -286,7 +290,7 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
         <div className="flex items-center gap-2 text-sm font-semibold text-primary-dark">
           <FiZap /> 多角色协作 · 可追踪 · 分阶段确认 · 本地可控渲染
         </div>
-        <h1 className="mt-2 text-4xl font-black text-gradient">躺营导演台 v2.1</h1>
+        <h1 className="mt-2 text-4xl font-black text-gradient">躺营导演台 v1.0</h1>
       </div>
       <div className="flex items-center gap-3">
         <div className="hidden items-center gap-2 rounded-lg bg-white/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
@@ -306,6 +310,7 @@ function OverviewPage(props: {
   loading: boolean
   canStart: boolean
   stages: DirectorStage[]
+  artifacts: DirectorArtifactRecord[]
   preflight: PreflightResponse | null
   nextAction?: ReturnType<typeof deriveNextAction>
   onTopicChange: (value: string) => void
@@ -313,7 +318,8 @@ function OverviewPage(props: {
   onStart: () => void
   onGoReview: () => void
 }) {
-  const { topic, durationSec, loading, canStart, stages, preflight, nextAction, onTopicChange, onDurationChange, onStart, onGoReview } = props
+  const { topic, durationSec, loading, canStart, stages, artifacts, preflight, nextAction, onTopicChange, onDurationChange, onStart, onGoReview } = props
+  const staleNames = artifacts.filter((artifact) => artifact.status === 'stale').map((artifact) => artifact.name)
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-12 gap-5">
@@ -322,7 +328,7 @@ function OverviewPage(props: {
             <div>
               <p className="text-sm font-bold text-primary-dark">项目总览 / 启动</p>
               <h2 className="mt-2 text-3xl font-black text-ink">智能体改变的是工作流</h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">一句话启动，多角色协作生成创意方案、脚本、卡片设计、结构、预览、渲染与交付。关键节点由用户审核与决策。</p>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">一句话启动中文 16:9 图文视频，分阶段确认创意方案、脚本、卡片、结构、预览、渲染和交付包。</p>
             </div>
             <StatusBadge status={stages.some((stage) => stage.status === 'running' || stage.status === 'review') ? 'active' : 'pending'} />
           </div>
@@ -355,6 +361,14 @@ function OverviewPage(props: {
         </section>
       </div>
       <StageFlow stages={stages} />
+      {staleNames.length > 0 && (
+        <div className="card border-red-200 bg-red-50/80 p-5">
+          <h3 className="text-base font-black text-red-800">下游产物已过期，需要重新生成</h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {staleNames.map((name) => <span key={name} className="rounded-full bg-white px-3 py-1 text-xs font-bold text-red-700 ring-1 ring-red-200">{name}</span>)}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-4 gap-5">
         <InfoCard icon={<FiShield />} title="当前角色" value={nextAction?.label || '待启动'} desc="角色边界由后端 StageGuard 校验。" tone="primary" />
         <InfoCard icon={<FiHardDrive />} title="本地执行器" value={preflight?.capabilityMenu.localRunner.available ? '可用' : '待检测'} desc="HyperFrames 预览与渲染走本地执行面。" tone="green" />
@@ -382,8 +396,8 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
               <div className={clsx('grid h-8 w-8 place-items-center rounded-lg text-sm font-black', stageIconTone(agent.status))}>{stageIcon(agent.status)}</div>
               <span className="text-xs font-black text-ink-soft">{String(index + 1).padStart(2, '0')}</span>
             </div>
-            <div className="mt-3 text-sm font-black text-ink">{agent.displayName}</div>
-            <div className="mt-1 truncate text-xs text-ink-soft">{agent.stage}</div>
+              <div className="mt-3 text-sm font-black text-ink">{stageActionLabel(agent.stage)}</div>
+              <div className="mt-1 truncate text-xs text-ink-soft">{agent.status === 'review' ? `当前负责：${agent.displayName}` : agent.stage}</div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/80">
               <div className="h-full rounded-full bg-primary" style={{ width: `${agent.progress}%` }} />
             </div>
@@ -395,6 +409,9 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
 }
 
 function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void }) {
+  const primaryOutput = (review?.requiredOutputs || stage?.requiredOutputs || [])[0]
+  const staleAfterChange = primaryOutput ? downstreamStaleArtifacts(primaryOutput) : []
+
   return (
     <div className="grid grid-cols-12 gap-5">
       <section className="card col-span-8 p-6">
@@ -423,6 +440,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
               <Panel title="审核重点" items={stage?.reviewFocus.length ? stage.reviewFocus : ['产物是否符合创作目标', '是否允许进入下游阶段']} />
               <Panel title="输入产物" items={review.requiredInputs || stage?.requiredInputs || []} />
               <Panel title="输出产物" items={review.requiredOutputs || stage?.requiredOutputs || []} />
+              <Panel title="修改后需重做" items={staleAfterChange} />
             </div>
           </div>
         ) : (
@@ -530,6 +548,7 @@ function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
   const video = artifacts.find((artifact) => artifact.kind === 'VIDEO')
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
   const ready = video?.status === 'valid' || packageArtifact?.status === 'valid'
+  const renderReadiness = canStartFinalRender(artifacts, true)
   return (
     <div className="grid grid-cols-12 gap-5">
       <section className="card col-span-7 p-6">
@@ -546,8 +565,9 @@ function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
       <aside className="col-span-5 space-y-5">
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">导出操作</h3>
+          {!renderReadiness.allowed && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{renderReadiness.message}</div>}
           <div className="mt-4 grid grid-cols-2 gap-3"><button className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow"><FiPlayCircle /> 预览视频</button><button className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line"><FiFolder /> 打开文件夹</button></div>
-          <button className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white"><FiDownload /> 导出交付包</button>
+          <button disabled={!renderReadiness.allowed} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> 导出交付包</button>
         </section>
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">交付物清单</h3>

@@ -53,6 +53,12 @@ export interface DirectorNextAction {
   description: string
 }
 
+export interface RenderReadiness {
+  allowed: boolean
+  missing: string[]
+  message?: string
+}
+
 interface TraceNodeLike {
   id?: string
   name?: string
@@ -92,6 +98,66 @@ export function buildDirectorStages(
       reviewId: review?.id,
     }
   })
+}
+
+export function stageActionLabel(stage: string): string {
+  const labels: Record<string, string> = {
+    proposal: '定方向',
+    script: '写脚本',
+    storyboard: '拆画面',
+    composition: '排时间轴',
+    reference: '定素材',
+    continuity: '查一致',
+    preview: '看预览',
+    render: '出成片',
+    quality: '做体检',
+    package: '打包',
+  }
+  return labels[stage] || stage
+}
+
+export function downstreamStaleArtifacts(changedKind: string): string[] {
+  const labels: Record<string, string> = {
+    CARD_PLAN: '卡片分镜',
+    VIDEO_COMPOSITION_SPEC: '视频结构',
+    REFERENCE_ASSET_PLAN: '素材策略',
+    CONTINUITY_REPORT: '一致性报告',
+    HYPERFRAMES_PROJECT: '视频项目',
+    PREVIEW_SNAPSHOTS: '预览图',
+    VIDEO: '最终视频',
+    FINAL_REVIEW: '质量报告',
+    PROJECT_PACKAGE: '交付包',
+  }
+  return downstreamKindsFor(changedKind)
+    .map((kind) => labels[kind])
+    .filter((label): label is string => Boolean(label))
+}
+
+export function canStartFinalRender(artifacts: DirectorArtifactRecord[], localRunnerReady: boolean): RenderReadiness {
+  const missing: string[] = []
+  const byKind = new Map(artifacts.map((artifact) => [artifact.kind, artifact]))
+  const composition = byKind.get('VIDEO_COMPOSITION_SPEC')
+  const project = byKind.get('HYPERFRAMES_PROJECT')
+  const preview = byKind.get('PREVIEW_SNAPSHOTS')
+
+  if (!composition || composition.status !== 'valid' || !composition.humanApproved) {
+    missing.push('视频结构尚未确认')
+  }
+  if (!project || project.status !== 'valid') {
+    missing.push('视频项目尚未生成')
+  }
+  if (!preview || preview.status !== 'valid' || !preview.humanApproved) {
+    missing.push('预览图尚未确认')
+  }
+  if (!localRunnerReady) {
+    missing.push('本地执行器未就绪')
+  }
+
+  return {
+    allowed: missing.length === 0,
+    missing,
+    message: missing.length ? `暂不能开始最终渲染：${missing.join('、')}` : undefined,
+  }
 }
 
 export function buildDirectorArtifacts(
@@ -297,6 +363,9 @@ function displayNameForArtifact(kind: string) {
     SCRIPT_SECTIONS: '脚本分段',
     CARD_PLAN: '卡片分镜',
     CAPTION_SEGMENTS: '字幕分段',
+    VIDEO_COMPOSITION_SPEC: '视频结构',
+    REFERENCE_ASSET_PLAN: '素材策略',
+    CONTINUITY_REPORT: '一致性报告',
     HYPERFRAMES_PROJECT: '视频结构',
     PREVIEW_SNAPSHOTS: '预览快照',
     PREVIEW_REPORT: '预览报告',
@@ -306,6 +375,32 @@ function displayNameForArtifact(kind: string) {
     PROJECT_PACKAGE: '交付包',
   }
   return labels[kind] || kind
+}
+
+function downstreamKindsFor(changedKind: string): string[] {
+  const order = [
+    'VIDEO_PROPOSAL',
+    'VIDEO_SCRIPT',
+    'CARD_PLAN',
+    'VIDEO_COMPOSITION_SPEC',
+    'REFERENCE_ASSET_PLAN',
+    'CONTINUITY_REPORT',
+    'HYPERFRAMES_PROJECT',
+    'PREVIEW_SNAPSHOTS',
+    'VIDEO',
+    'FINAL_REVIEW',
+    'PROJECT_PACKAGE',
+  ]
+  const explicit: Record<string, string[]> = {
+    VIDEO_PROPOSAL: order.slice(1),
+    VIDEO_SCRIPT: order.slice(2),
+    CARD_PLAN: order.slice(3),
+    VIDEO_COMPOSITION_SPEC: ['HYPERFRAMES_PROJECT', 'PREVIEW_SNAPSHOTS', 'VIDEO', 'FINAL_REVIEW', 'PROJECT_PACKAGE'],
+    PREVIEW_SNAPSHOTS: ['VIDEO', 'FINAL_REVIEW', 'PROJECT_PACKAGE'],
+  }
+  if (explicit[changedKind]) return explicit[changedKind]
+  const index = order.indexOf(changedKind)
+  return index >= 0 ? order.slice(index + 1) : []
 }
 
 function storageHintForKind(kind: string) {

@@ -4,7 +4,10 @@ import {
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
+  canStartFinalRender,
   deriveNextAction,
+  downstreamStaleArtifacts,
+  stageActionLabel,
 } from '../src/pages/directorStudioLogic.ts'
 import type { AgentReviewItem, VideoRoleAgent } from '../src/utils/types.ts'
 
@@ -104,5 +107,33 @@ assert.equal(traceNodes[0].tool, 'video_script_generator')
 const nextAction = deriveNextAction(stages)
 assert.equal(nextAction?.stageId, 'script_writer')
 assert.equal(nextAction?.kind, 'review')
+
+assert.deepEqual(
+  roleAgents.map((role) => stageActionLabel(role.stage)),
+  ['定方向', '写脚本'],
+)
+
+assert.deepEqual(
+  downstreamStaleArtifacts('VIDEO_SCRIPT'),
+  ['卡片分镜', '视频结构', '素材策略', '一致性报告', '视频项目', '预览图', '最终视频', '质量报告', '交付包'],
+)
+
+assert.equal(
+  canStartFinalRender([
+    { ...artifacts[0], kind: 'VIDEO_COMPOSITION_SPEC', status: 'valid', humanApproved: true },
+    { ...artifacts[0], kind: 'HYPERFRAMES_PROJECT', status: 'valid', humanApproved: false },
+    { ...artifacts[0], kind: 'PREVIEW_SNAPSHOTS', status: 'valid', humanApproved: false },
+  ], true).allowed,
+  false,
+)
+
+assert.equal(
+  canStartFinalRender([
+    { ...artifacts[0], kind: 'VIDEO_COMPOSITION_SPEC', status: 'valid', humanApproved: true },
+    { ...artifacts[0], kind: 'HYPERFRAMES_PROJECT', status: 'valid', humanApproved: false },
+    { ...artifacts[0], kind: 'PREVIEW_SNAPSHOTS', status: 'valid', humanApproved: true },
+  ], true).allowed,
+  true,
+)
 
 console.log('directorStudioLogic tests passed')

@@ -41,7 +41,7 @@ func (r *Repository) FindCurrent(ctx context.Context, projectID, stageName, unit
 	if err != nil {
 		return nil, fmt.Errorf("artifact not found: %w", err)
 	}
-	return &a, nil
+	return promoteArtifactIndexFields(&a), nil
 }
 
 // FindByID returns a single artifact by ID.
@@ -65,7 +65,7 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*Artifact, error)
 	if err != nil {
 		return nil, fmt.Errorf("artifact not found: %w", err)
 	}
-	return &a, nil
+	return promoteArtifactIndexFields(&a), nil
 }
 
 // FindHistory returns all versions of an artifact for a given scope, newest first.
@@ -97,7 +97,7 @@ func (r *Repository) FindHistory(ctx context.Context, projectID, stageName, unit
 		); err != nil {
 			return nil, err
 		}
-		artifacts = append(artifacts, &a)
+		artifacts = append(artifacts, promoteArtifactIndexFields(&a))
 	}
 	return artifacts, nil
 }
@@ -124,7 +124,7 @@ func (r *Repository) FindByHash(ctx context.Context, projectID, stageName, unitI
 	if err != nil {
 		return nil, fmt.Errorf("artifact not found by hash: %w", err)
 	}
-	return &a, nil
+	return promoteArtifactIndexFields(&a), nil
 }
 
 // Save creates a new artifact version. In a transaction:
@@ -204,7 +204,7 @@ func (r *Repository) ListByProject(ctx context.Context, projectID string) ([]*Ar
 		); err != nil {
 			return nil, err
 		}
-		artifacts = append(artifacts, &a)
+		artifacts = append(artifacts, promoteArtifactIndexFields(&a))
 	}
 	return artifacts, nil
 }

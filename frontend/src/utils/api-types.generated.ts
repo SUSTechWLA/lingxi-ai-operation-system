@@ -71,6 +71,8 @@ export interface AgentStartRunRequest {
 export interface Artifact {
   contentHash: string;
   createdAt: string;
+  dependsOn?: string[];
+  humanApproved: boolean;
   id: string;
   inlineJson?: string;
   isCurrent: boolean;
@@ -80,14 +82,21 @@ export interface Artifact {
   model?: string;
   name: string;
   parentId?: string;
+  producedByNode?: string;
+  producedByRole?: string;
+  producedByTool?: string;
   projectId: string;
   promptHash?: string;
   provider?: string;
+  roleAgentId?: string;
   sizeBytes: number;
   stageName: string;
+  status: string;
   storageRef?: string;
   storageType: string;
+  taskId?: string;
   unitId?: string;
+  updatedAt: string;
   version: number;
   workflowRunId?: string;
 }
@@ -96,7 +105,7 @@ export interface Artifact {
 // ArtifactContentResponse
 export interface ArtifactContentResponse {
   code?: number;
-  data?: { artifact?: { contentHash: string; createdAt: string; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; projectId: string; promptHash?: string; provider?: string; sizeBytes: number; stageName: string; storageRef?: string; storageType: string; unitId?: string; version: number; workflowRunId?: string }; content?: Record<string, unknown>; mediaUrl?: string; mediaUrls?: string[] };
+  data?: { artifact?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }; content?: Record<string, unknown>; mediaUrl?: string; mediaUrls?: string[] };
   message?: string;
 }
 
@@ -104,7 +113,7 @@ export interface ArtifactContentResponse {
 // ArtifactDetailResponse
 export interface ArtifactDetailResponse {
   code?: number;
-  data?: { artifact?: { contentHash: string; createdAt: string; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; projectId: string; promptHash?: string; provider?: string; sizeBytes: number; stageName: string; storageRef?: string; storageType: string; unitId?: string; version: number; workflowRunId?: string } };
+  data?: { artifact?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string } };
   message?: string;
 }
 
@@ -112,7 +121,7 @@ export interface ArtifactDetailResponse {
 // ArtifactHistoryResponse
 export interface ArtifactHistoryResponse {
   code?: number;
-  data?: { history?: { contentHash: string; createdAt: string; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; projectId: string; promptHash?: string; provider?: string; sizeBytes: number; stageName: string; storageRef?: string; storageType: string; unitId?: string; version: number; workflowRunId?: string }[] };
+  data?: { history?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }[] };
   message?: string;
 }
 
@@ -120,7 +129,7 @@ export interface ArtifactHistoryResponse {
 // ArtifactListResponse
 export interface ArtifactListResponse {
   code?: number;
-  data?: { artifacts?: { contentHash: string; createdAt: string; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; projectId: string; promptHash?: string; provider?: string; sizeBytes: number; stageName: string; storageRef?: string; storageType: string; unitId?: string; version: number; workflowRunId?: string }[] };
+  data?: { artifacts?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }[] };
   message?: string;
 }
 

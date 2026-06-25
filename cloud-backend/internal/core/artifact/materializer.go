@@ -23,7 +23,7 @@ func BuildArtifactRequestsFromNode(projectID, workflowRunID string, node *model.
 	}
 
 	stage := stageNameFromNode(node)
-	return buildRequestsFromArtifactManifest(projectID, workflowRunID, stage, payload["artifacts"], payload)
+	return buildRequestsFromArtifactManifest(projectID, workflowRunID, stage, payload["artifacts"], payload, node)
 }
 
 func BuildRevisionRequest(base *Artifact, instruction string, data []byte) *CreateArtifactRequest {
@@ -32,14 +32,20 @@ func BuildRevisionRequest(base *Artifact, instruction string, data []byte) *Crea
 		"revisionInstruction": instruction,
 		"revisionOf":          base.ID,
 		"previousStorageRef":  base.StorageRef,
+		"status":              "valid",
+		"humanApproved":       false,
 	}
 	for k, v := range base.Metadata {
 		metadata[k] = v
 	}
+	metadata["status"] = "valid"
+	metadata["humanApproved"] = false
 	return &CreateArtifactRequest{
 		ProjectID:     base.ProjectID,
 		WorkflowRunID: base.WorkflowRunID,
+		TaskID:        base.TaskID,
 		StageName:     base.StageName,
+		RoleAgentID:   base.RoleAgentID,
 		UnitID:        base.UnitID,
 		Kind:          base.Kind,
 		Name:          base.Name,
@@ -82,7 +88,7 @@ func stageNameFromNode(node *model.Node) string {
 	return stage
 }
 
-func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, manifest interface{}, payload map[string]interface{}) []*CreateArtifactRequest {
+func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, manifest interface{}, payload map[string]interface{}, node *model.Node) []*CreateArtifactRequest {
 	items, ok := manifest.([]interface{})
 	if !ok {
 		// Handle single-map format (legacy compatibility with tools that
@@ -136,7 +142,7 @@ func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, m
 		if storageRef == "" {
 			storageRef = LocalArtifactRef(projectID, stage, unitID, contentHash, name)
 		}
-		requests = append(requests, buildLocalManifestRequest(projectID, workflowRunID, stage, unitID, kind, name, mime, storageRef, contentHash, sizeBytes, metadataValue(entry["metadata"]), data))
+		requests = append(requests, buildLocalManifestRequest(projectID, workflowRunID, stage, unitID, kind, name, mime, storageRef, contentHash, sizeBytes, betaArtifactMetadata(metadataValue(entry["metadata"]), node), data))
 	}
 	return requests
 }
@@ -150,7 +156,9 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 	return &CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,
+		TaskID:        stringValue(metadata, "taskId"),
 		StageName:     stage,
+		RoleAgentID:   stringValue(metadata, "roleAgentId"),
 		UnitID:        unitID,
 		Kind:          kind,
 		Name:          name,
@@ -164,6 +172,42 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 		Model:         "artifact-materializer",
 		Metadata:      metadata,
 	}
+}
+
+func betaArtifactMetadata(metadata map[string]interface{}, node *model.Node) map[string]interface{} {
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	if _, ok := metadata["status"]; !ok {
+		metadata["status"] = "valid"
+	}
+	if _, ok := metadata["humanApproved"]; !ok {
+		metadata["humanApproved"] = false
+	}
+	if node == nil {
+		return metadata
+	}
+	metadata["taskId"] = node.TaskID
+	metadata["producedByNode"] = node.ID
+	if toolName, ok := node.Input["tool"].(string); ok && toolName != "" {
+		metadata["producedByTool"] = toolName
+	} else if node.Name != "" {
+		metadata["producedByTool"] = node.Name
+	} else {
+		metadata["producedByTool"] = "external"
+	}
+	if roleAgentID, ok := node.Input["roleAgentId"].(string); ok {
+		metadata["roleAgentId"] = roleAgentID
+	}
+	if roleAgent, ok := node.Input["roleAgent"].(map[string]interface{}); ok {
+		if displayName, ok := roleAgent["displayName"].(string); ok {
+			metadata["producedByRole"] = displayName
+		}
+	}
+	if dependsOn := stringSliceFromInterface(node.Input["requiredInputs"]); len(dependsOn) > 0 {
+		metadata["dependsOn"] = dependsOn
+	}
+	return metadata
 }
 
 // extractArtifactContent pulls inline content from the tool output payload for
@@ -415,6 +459,23 @@ func metadataValue(value interface{}) map[string]interface{} {
 		cloned[key] = item
 	}
 	return cloned
+}
+
+func stringSliceFromInterface(value interface{}) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []interface{}:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				result = append(result, strings.TrimSpace(text))
+			}
+		}
+		return result
+	default:
+		return nil
+	}
 }
 
 func marshalValue(value interface{}) []byte {

@@ -47,8 +47,9 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 		Payload: map[string]interface{}{
 			"tool": "hyperframes_renderer",
 			"parameters": map[string]interface{}{
-				"projectDir": "local://projects/project_001/hyperframes",
-				"fps":        float64(30),
+				"projectDir":      "local://projects/project_001/hyperframes",
+				"previewApproved": true,
+				"fps":             float64(30),
 			},
 		},
 	})

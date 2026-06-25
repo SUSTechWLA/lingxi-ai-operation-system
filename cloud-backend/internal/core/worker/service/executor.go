@@ -30,6 +30,7 @@ type NodeExecutor struct {
 	sandboxExecutor *executor.SandboxExecutor
 	nodeRepo        repository.NodeRepo
 	localDispatcher localJobDispatcher
+	renderChecker   RenderDependencyChecker
 }
 
 type executorInterface interface {
@@ -38,6 +39,41 @@ type executorInterface interface {
 
 type localJobDispatcher interface {
 	DispatchLocalJob(ctx context.Context, req localrunner.DispatchLocalJobRequest) (*localrunner.LocalJob, error)
+}
+
+type RenderDependencyCheckRequest struct {
+	ProjectID string
+	TaskID    string
+	NodeID    string
+	ToolName  string
+	Command   string
+	Payload   map[string]interface{}
+}
+
+type RenderDependencyChecker interface {
+	CheckRenderDependencies(ctx context.Context, req RenderDependencyCheckRequest) error
+}
+
+type DefaultRenderDependencyChecker struct{}
+
+func (DefaultRenderDependencyChecker) CheckRenderDependencies(_ context.Context, req RenderDependencyCheckRequest) error {
+	if req.Command != localrunner.CommandHyperFramesRender && req.ToolName != "hyperframes_renderer" {
+		return nil
+	}
+	missing := make([]string, 0)
+	if !truthy(req.Payload["previewApproved"]) && !truthy(req.Payload["previewHumanApproved"]) {
+		missing = append(missing, "PREVIEW_SNAPSHOTS.humanApproved", "preview_review.APPROVED")
+	}
+	if invalidArtifactState(req.Payload["videoCompositionStatus"]) || invalidArtifactState(req.Payload["compositionStatus"]) {
+		missing = append(missing, "VIDEO_COMPOSITION_SPEC.valid")
+	}
+	if invalidArtifactState(req.Payload["hyperframesProjectStatus"]) || invalidArtifactState(req.Payload["projectStatus"]) {
+		missing = append(missing, "HYPERFRAMES_PROJECT.valid")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("RENDER_DEPENDENCY_MISSING: 预览尚未确认，禁止开始最终渲染。 missing=%v", missing)
+	}
+	return nil
 }
 
 func NewNodeExecutor(
@@ -60,6 +96,10 @@ func NewNodeExecutor(
 
 func (ne *NodeExecutor) SetLocalJobDispatcher(dispatcher localJobDispatcher) {
 	ne.localDispatcher = dispatcher
+}
+
+func (ne *NodeExecutor) SetRenderDependencyChecker(checker RenderDependencyChecker) {
+	ne.renderChecker = checker
 }
 
 func (ne *NodeExecutor) selectExecutor(t tool.Tool) executorInterface {
@@ -125,7 +165,7 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 		isLongRunning, heartbeatTimeoutSec)
 	defer hbCancel()
 
-	_ = ne.producer.Publish(eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
+	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, eventbus.Event{
 		TaskID: taskID,
 		NodeID: nodeID,
 		Status: "RUNNING",
@@ -391,8 +431,26 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		timeoutSec = 1800
 	}
 
+	projectID := firstString(parameters, event.Payload, "projectId", "project_id", "videoProjectId")
+	if isRenderLocalCommand(manifest.Name, command) {
+		checker := ne.renderChecker
+		if checker == nil {
+			checker = DefaultRenderDependencyChecker{}
+		}
+		if err := checker.CheckRenderDependencies(ctx, RenderDependencyCheckRequest{
+			ProjectID: projectID,
+			TaskID:    event.TaskID,
+			NodeID:    event.NodeID,
+			ToolName:  manifest.Name,
+			Command:   command,
+			Payload:   parameters,
+		}); err != nil {
+			return err
+		}
+	}
+
 	job, err := ne.localDispatcher.DispatchLocalJob(ctx, localrunner.DispatchLocalJobRequest{
-		ProjectID:      firstString(parameters, event.Payload, "projectId", "project_id", "videoProjectId"),
+		ProjectID:      projectID,
 		TaskID:         event.TaskID,
 		NodeID:         event.NodeID,
 		ToolName:       manifest.Name,
@@ -424,6 +482,35 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		zap.String("command", command),
 	)
 	return nil
+}
+
+func isRenderLocalCommand(toolName, command string) bool {
+	return toolName == "hyperframes_renderer" || localrunner.NormalizeCommand(command) == localrunner.CommandHyperFramesRender
+}
+
+func truthy(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true") ||
+			strings.EqualFold(strings.TrimSpace(typed), "approved") ||
+			strings.EqualFold(strings.TrimSpace(typed), "valid")
+	default:
+		return false
+	}
+}
+
+func invalidArtifactState(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return normalized != "" && normalized != "valid" && normalized != "approved"
 }
 
 func localArtifactPolicyForManifest(manifest *tool.ToolManifest) localrunner.LocalArtifactPolicy {
@@ -472,7 +559,7 @@ func (ne *NodeExecutor) publishSuccess(taskID, nodeID, traceID string, data map[
 		IdempotencyKey: result.IdempotencyKey,
 	}
 
-	_ = ne.producer.Publish(eventbus.TopicNodeResult, idempotencyKey, event)
+	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, event)
 	zap.L().Info("Node execution succeeded", zap.String("nodeId", nodeID))
 }
 
@@ -497,7 +584,7 @@ func (ne *NodeExecutor) publishFailure(taskID, nodeID, traceID, errMsg, idempote
 		IdempotencyKey: result.IdempotencyKey,
 	}
 
-	_ = ne.producer.Publish(eventbus.TopicNodeResult, idempotencyKey, event)
+	ne.publishEvent(eventbus.TopicNodeResult, idempotencyKey, event)
 	zap.L().Info("Node execution failed",
 		zap.String("nodeId", nodeID),
 		zap.String("error", errMsg),
@@ -515,7 +602,7 @@ func (ne *NodeExecutor) publishHeartbeat(taskID, nodeID, idempotencyKey string) 
 		Status:         "HEARTBEAT",
 		IdempotencyKey: hbKey,
 	}
-	_ = ne.producer.Publish(eventbus.TopicProgress, hbKey, event)
+	ne.publishEvent(eventbus.TopicProgress, hbKey, event)
 }
 
 // publishProgress sends a progress update event for a long-running node.
@@ -529,7 +616,7 @@ func (ne *NodeExecutor) publishProgress(taskID, nodeID string, progress float64,
 			"step":     step,
 		},
 	}
-	_ = ne.producer.Publish(eventbus.TopicProgress, taskID+"-"+nodeID+"-progress", event)
+	ne.publishEvent(eventbus.TopicProgress, taskID+"-"+nodeID+"-progress", event)
 }
 
 // publishCheckpoint sends a checkpoint event for a long-running node.
@@ -544,11 +631,18 @@ func (ne *NodeExecutor) publishCheckpoint(taskID, nodeID string, progress float6
 			"checkpoint": checkpoint,
 		},
 	}
-	_ = ne.producer.Publish(eventbus.TopicProgress, taskID+"-"+nodeID+"-checkpoint", event)
+	ne.publishEvent(eventbus.TopicProgress, taskID+"-"+nodeID+"-checkpoint", event)
 	zap.L().Info("Checkpoint saved",
 		zap.String("nodeId", nodeID),
 		zap.Float64("progress", progress),
 	)
+}
+
+func (ne *NodeExecutor) publishEvent(topic, key string, event eventbus.Event) {
+	if ne == nil || ne.producer == nil {
+		return
+	}
+	_ = ne.producer.Publish(topic, key, event)
 }
 
 // resolveNodeReferences scans parameters for {{node_id.output.field}} references,
