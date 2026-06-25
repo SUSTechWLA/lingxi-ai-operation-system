@@ -32,6 +32,11 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 		NewHyperFramesProjectExecutor(cfg.DataDir),
 		CommandHyperFramesProjectGenerate,
 	)
+	snapshotTimeout := 5 * time.Minute
+	reg.Register(
+		NewHyperFramesSnapshotExecutor(cfg.DataDir, cfg.HyperFramesServiceURL, snapshotTimeout),
+		CommandHyperFramesSnapshot,
+	)
 	reg.Register(
 		NewHyperFramesRenderExecutor(cfg.DataDir, cfg.HyperFramesServiceURL, renderTimeout),
 		CommandHyperFramesRender,

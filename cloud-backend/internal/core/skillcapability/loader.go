@@ -124,6 +124,7 @@ type toolManifestFile struct {
 	Idempotent           bool                     `yaml:"idempotent"`
 	ApprovalPolicy       approvalPolicyFile       `yaml:"approvalPolicy"`
 	ArtifactPolicy       artifactPolicyFile       `yaml:"artifactPolicy"`
+	HumanReview          humanReviewFile          `yaml:"humanReview"`
 	QualityPolicy        qualityPolicyFile        `yaml:"qualityPolicy"`
 	ExecutionPlane       string                   `yaml:"executionPlane"`
 	RequiresUserDevice   bool                     `yaml:"requiresUserDevice"`
@@ -165,6 +166,7 @@ func (f toolManifestFile) toManifest() *tool.ToolManifest {
 		Idempotent:           idempotent,
 		ApprovalPolicy:       f.ApprovalPolicy.toPolicy(),
 		ArtifactPolicy:       f.ArtifactPolicy.toPolicy(),
+		HumanReview:          f.HumanReview.toHumanReview(),
 		QualityPolicy:        f.QualityPolicy.toPolicy(),
 		ExecutionPlane:       f.ExecutionPlane,
 		RequiresUserDevice:   f.RequiresUserDevice,
@@ -203,6 +205,9 @@ type artifactPolicyFile struct {
 	ProduceArtifact       bool     `yaml:"produceArtifact"`
 	ArtifactKinds         []string `yaml:"artifactKinds"`
 	DefaultReviewRequired bool     `yaml:"defaultReviewRequired"`
+	Storage               string   `yaml:"storage"`
+	SyncMetadataToCloud   bool     `yaml:"syncMetadataToCloud"`
+	SyncFileToCloud       bool     `yaml:"syncFileToCloud"`
 }
 
 func (p artifactPolicyFile) toPolicy() tool.ArtifactPolicy {
@@ -210,6 +215,9 @@ func (p artifactPolicyFile) toPolicy() tool.ArtifactPolicy {
 		ProduceArtifact:       p.ProduceArtifact,
 		ArtifactKinds:         p.ArtifactKinds,
 		DefaultReviewRequired: p.DefaultReviewRequired,
+		Storage:               p.Storage,
+		SyncMetadataToCloud:   p.SyncMetadataToCloud,
+		SyncFileToCloud:       p.SyncFileToCloud,
 	}
 }
 
@@ -246,5 +254,26 @@ func (r localRequirementsFile) toRequirements() tool.LocalRequirements {
 		Commands:        r.Commands,
 		MinDiskMb:       r.MinDiskMb,
 		RequiresNetwork: r.RequiresNetwork,
+	}
+}
+
+type humanReviewFile struct {
+	Required    bool     `yaml:"required"`
+	Gate        string   `yaml:"gate"`
+	Title       string   `yaml:"title"`
+	ReviewFocus []string `yaml:"reviewFocus"`
+	UserActions []string `yaml:"userActions"`
+}
+
+func (h humanReviewFile) toHumanReview() *tool.HumanReview {
+	if !h.Required && h.Title == "" {
+		return nil
+	}
+	return &tool.HumanReview{
+		Required:    h.Required,
+		Gate:        h.Gate,
+		Title:       h.Title,
+		ReviewFocus: h.ReviewFocus,
+		UserActions: h.UserActions,
 	}
 }

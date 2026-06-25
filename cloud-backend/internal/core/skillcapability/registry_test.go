@@ -61,6 +61,17 @@ approvalPolicy:
   mode: after_artifact
   blocksDownstream: true
   reason: Script must be reviewed before shots are created.
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核口播脚本
+  reviewFocus:
+    - 开头是否有吸引力
+    - 口播是否自然流畅
+  userActions:
+    - approve
+    - edit
+    - regenerate
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
@@ -115,6 +126,15 @@ nextRecommendedTools:
 	if len(manifest.LocalRequirements.Commands) != 2 || manifest.LocalRequirements.Commands[1] != "ffmpeg" {
 		t.Fatalf("local command requirements not loaded: %#v", manifest.LocalRequirements.Commands)
 	}
+	if manifest.HumanReview == nil {
+		t.Fatal("humanReview not loaded")
+	}
+	if !manifest.HumanReview.Required || manifest.HumanReview.Title != "审核口播脚本" {
+		t.Fatalf("humanReview not loaded correctly: %#v", manifest.HumanReview)
+	}
+	if len(manifest.HumanReview.ReviewFocus) != 2 || len(manifest.HumanReview.UserActions) != 3 {
+		t.Fatalf("humanReview reviewFocus/userActions not loaded: %#v", manifest.HumanReview)
+	}
 }
 
 func TestBundledVideoCapabilityMarksHyperFramesProjectGeneratorLocal(t *testing.T) {
@@ -136,6 +156,34 @@ func TestBundledVideoCapabilityMarksHyperFramesProjectGeneratorLocal(t *testing.
 		return
 	}
 	t.Fatal("hyperframes_project_generator manifest not found")
+}
+
+func TestBundledVideoHumanReviewLoaded(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "skill-capabilities")
+	_, manifests, errs := LoadCapabilities(root)
+	if len(errs) != 0 {
+		t.Fatalf("LoadCapabilities returned errors: %v", errs)
+	}
+	for _, manifest := range manifests {
+		switch manifest.Name {
+		case "hyperframes_renderer", "hyperframes_snapshot":
+			if manifest.HumanReview == nil {
+				t.Fatalf("%s: humanReview not loaded", manifest.Name)
+			}
+			if !manifest.HumanReview.Required {
+				t.Fatalf("%s: humanReview.required should be true", manifest.Name)
+			}
+			if manifest.HumanReview.Title == "" {
+				t.Fatalf("%s: humanReview.title is empty", manifest.Name)
+			}
+			if len(manifest.HumanReview.ReviewFocus) == 0 {
+				t.Fatalf("%s: humanReview.reviewFocus is empty", manifest.Name)
+			}
+			if len(manifest.HumanReview.UserActions) == 0 {
+				t.Fatalf("%s: humanReview.userActions is empty", manifest.Name)
+			}
+		}
+	}
 }
 
 func writeFile(t *testing.T, path, content string) {

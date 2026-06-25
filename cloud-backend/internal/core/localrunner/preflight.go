@@ -84,6 +84,7 @@ func HandleVideoPreflight(svc PreflightService) gin.HandlerFunc {
 		// 2. Check required local commands
 		requiredCommands := []string{
 			"HYPERFRAMES_PROJECT_GENERATE",
+			"HYPERFRAMES_SNAPSHOT",
 			"HYPERFRAMES_RENDER",
 			"FFMPEG_PROBE",
 			"ARTIFACT_PACKAGE",

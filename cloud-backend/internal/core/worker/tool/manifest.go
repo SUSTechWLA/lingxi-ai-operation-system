@@ -84,6 +84,9 @@ type ArtifactPolicy struct {
 	ProduceArtifact       bool     `json:"produceArtifact"`
 	ArtifactKinds         []string `json:"artifactKinds,omitempty"`
 	DefaultReviewRequired bool     `json:"defaultReviewRequired,omitempty"`
+	Storage               string   `json:"storage,omitempty"`             // "local" | "cloud" | "both"
+	SyncMetadataToCloud   bool     `json:"syncMetadataToCloud,omitempty"` // sync artifact metadata to cloud
+	SyncFileToCloud       bool     `json:"syncFileToCloud,omitempty"`     // sync artifact file to cloud
 }
 
 // QualityPolicy defines automated quality checking for a tool.
