@@ -72,6 +72,10 @@ tools:
   - id: video_script_generator
     manifest: tools/video_script_generator.tool.yaml
     prompt: prompts/script_generator.prompt.md
+  - id: card_plan_generator
+    manifest: tools/card_plan_generator.tool.yaml
+  - id: caption_splitter
+    manifest: tools/caption_splitter.tool.yaml
   - id: shot_splitter
     manifest: tools/shot_splitter.tool.yaml
     prompt: prompts/shot_splitter.prompt.md
@@ -82,10 +86,28 @@ tools:
   - id: video_prompt_generator
     manifest: tools/video_prompt_generator.tool.yaml
     prompt: prompts/video_prompt_generator.prompt.md
+  - id: composition_quality_checker
+    manifest: tools/composition_quality_checker.tool.yaml
+  - id: reference_asset_planner
+    manifest: tools/reference_asset_planner.tool.yaml
+  - id: asset_policy_generator
+    manifest: tools/asset_policy_generator.tool.yaml
+  - id: continuity_checker
+    manifest: tools/continuity_checker.tool.yaml
+  - id: style_profile_builder
+    manifest: tools/style_profile_builder.tool.yaml
+  - id: stale_tracker
+    manifest: tools/stale_tracker.tool.yaml
   - id: hyperframes_project_generator
     manifest: tools/hyperframes_project_generator.tool.yaml
   - id: hyperframes_renderer
     manifest: tools/hyperframes_renderer.tool.yaml
+  - id: preview_quality_checker
+    manifest: tools/preview_quality_checker.tool.yaml
+  - id: render_dependency_guard
+    manifest: tools/render_dependency_guard.tool.yaml
+  - id: local_job_status_tracker
+    manifest: tools/local_job_status_tracker.tool.yaml
   - id: publish_copy_generator
     manifest: tools/publish_copy_generator.tool.yaml
   - id: video_package_exporter

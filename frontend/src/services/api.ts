@@ -35,6 +35,7 @@ import {
   AgentRun,
   AgentReviewListResponse,
   AgentReviewActionResponse,
+  VideoRoleAgentListResponse,
 } from '../utils/types'
 
 const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
@@ -587,4 +588,9 @@ export interface PreflightResponse {
 export const fetchVideoPreflight = async (pipeline: string = 'wf-guided-image-text-video'): Promise<PreflightResponse> => {
   const response = await api.get<ApiResponse<PreflightResponse>>('/video/preflight', { params: { pipeline } })
   return response.data.data!
+}
+
+export const fetchVideoRoleAgents = async (): Promise<VideoRoleAgentListResponse> => {
+  const response = await api.get<ApiResponse<VideoRoleAgentListResponse>>('/video/role-agents')
+  return response.data.data
 }

@@ -33,8 +33,9 @@ Version: 0.1.0
 18. [Trace](#18-trace)
 19. [Translate](#19-translate)
 20. [Video Projects](#20-video-projects)
-21. [Workflow Runs](#21-workflow-runs)
-22. [Workflows](#22-workflows)
+21. [Video Role Agents](#21-video-role-agents)
+22. [Workflow Runs](#22-workflow-runs)
+23. [Workflows](#23-workflows)
 
 ---
 
@@ -1811,7 +1812,36 @@ Archive a project (soft delete)
 
 ---
 
-## 21. Workflow Runs
+## 21. Video Role Agents
+
+### GET /api/video/role-agents
+
+List Guided Video Studio role agents
+
+**Responses:**
+
+- **200** — Role agents (JSON)
+
+---
+
+### GET /api/video/role-agents/:roleId
+
+Get Guided Video Studio role agent detail
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `roleId` | path | `string` | **Yes** | Role agent identifier |
+
+**Responses:**
+
+- **200** — Role agent (JSON)
+- **404** — Not found (JSON)
+
+---
+
+## 22. Workflow Runs
 
 ### POST /api/video-projects/:id/workflow-runs
 
@@ -1891,7 +1921,7 @@ Pause a run
 
 ---
 
-## 22. Workflows
+## 23. Workflows
 
 ### GET /api/workflows
 

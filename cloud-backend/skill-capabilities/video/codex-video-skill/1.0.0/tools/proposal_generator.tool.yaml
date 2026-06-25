@@ -84,7 +84,9 @@ humanReview:
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
-    - JSON
+    - VIDEO_PROPOSAL
+    - PROJECT_BRIEF
+    - STYLE_PROFILE
   defaultReviewRequired: true
 
 nextRecommendedTools:

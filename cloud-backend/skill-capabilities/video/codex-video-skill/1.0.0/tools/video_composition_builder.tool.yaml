@@ -2,6 +2,7 @@ name: video_composition_builder
 version: "1.0"
 type: builtin_prompt_tool
 description: 根据已确认的口播脚本生成视频合成结构，包括卡片布局、字幕轨道、时间轴。
+endpoint: builtin://video-creation/video_composition_builder
 
 executionPlane: cloud
 requiresUserDevice: false

@@ -1,0 +1,31 @@
+id: storyboard_artist
+name: StoryboardArtistAgent
+displayName: 分镜/卡片设计师
+stage: storyboard
+goal: 把已确认脚本拆成图文视频卡片页、字幕节奏和画面段落。
+requiredInputs:
+  - VIDEO_SCRIPT
+requiredOutputs:
+  - CARD_PLAN
+allowedTools:
+  - card_plan_generator
+  - caption_splitter
+forbiddenTools:
+  - hyperframes_project_generator
+  - hyperframes_renderer
+  - artifact_packager
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核卡片/分镜计划
+  reviewFocus:
+    - 卡片顺序是否合理
+    - 每页文字是否过长
+    - 字幕拆分是否自然
+    - 重点信息是否突出
+  userActions:
+    - approve
+    - edit
+    - regenerate
+    - reject
+maxToolCalls: 3

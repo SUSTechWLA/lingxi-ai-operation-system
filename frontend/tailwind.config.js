@@ -14,7 +14,17 @@ export default {
         },
         background: {
           DEFAULT: '#FFF8E8',
+          mist: '#FFF4D6',
+          card: '#FFFDF6',
         },
+        ink: {
+          DEFAULT: '#2B1708',
+          muted: '#735C3D',
+          soft: '#9C7A4A',
+        },
+        line: '#EED79A',
+        success: '#22C55E',
+        violet: '#7C3AED',
       },
       borderRadius: {
         '2xl': '1rem',

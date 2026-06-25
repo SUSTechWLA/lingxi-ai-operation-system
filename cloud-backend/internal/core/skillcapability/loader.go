@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"gopkg.in/yaml.v3"
@@ -71,7 +72,55 @@ func loadCapability(dir string) (*Manifest, []*tool.ToolManifest, error) {
 		toolManifests = append(toolManifests, loaded)
 	}
 
+	roleAgents, err := loadRoleAgents(filepath.Join(dir, "agents"))
+	if err != nil {
+		return nil, nil, err
+	}
+	manifest.RoleAgents = roleAgents
+
 	return &manifest, toolManifests, nil
+}
+
+func loadRoleAgents(dir string) ([]RoleAgent, error) {
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cannot read role agents directory %s: %w", dir, err)
+	}
+
+	var agents []RoleAgent
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".agent.yaml") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("cannot read role agent %s: %w", path, err)
+		}
+		var agent RoleAgent
+		if err := yaml.Unmarshal(data, &agent); err != nil {
+			return fmt.Errorf("invalid role agent %s: %w", path, err)
+		}
+		if agent.ID == "" {
+			return fmt.Errorf("role agent %s id is required", path)
+		}
+		if agent.Stage == "" {
+			return fmt.Errorf("role agent %s stage is required", agent.ID)
+		}
+		if agent.Name == "" {
+			agent.Name = agent.ID
+		}
+		agents = append(agents, agent)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return agents, nil
 }
 
 func loadToolManifest(root, skillPackageID string, decl ToolDeclaration) (*tool.ToolManifest, error) {

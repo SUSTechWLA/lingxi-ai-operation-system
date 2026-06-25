@@ -2,6 +2,7 @@ name: hyperframes_snapshot
 version: "1.0"
 type: local_tool
 description: 对已生成的 HyperFrames HTML 项目进行预览截图，生成多时间点静态画面供用户审核确认。
+endpoint: builtin://video-creation/hyperframes_snapshot
 
 executionPlane: local
 requiresUserDevice: true
@@ -69,8 +70,8 @@ humanReview:
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
-    - PREVIEW
-    - IMAGE
+    - PREVIEW_SNAPSHOTS
+    - PREVIEW_REPORT
   defaultReviewRequired: true
 
 nextRecommendedTools:

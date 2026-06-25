@@ -2,6 +2,7 @@ name: artifact_packager
 version: "1.0"
 type: local_tool
 description: 将最终视频、项目元数据、质检报告打包为可下载的 ZIP 文件。
+endpoint: builtin://video-creation/artifact_packager
 
 executionPlane: local
 requiresUserDevice: true
@@ -48,7 +49,7 @@ approvalPolicy:
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
-    - PACKAGE
+    - PROJECT_PACKAGE
   defaultReviewRequired: false
 
 nextRecommendedTools: []

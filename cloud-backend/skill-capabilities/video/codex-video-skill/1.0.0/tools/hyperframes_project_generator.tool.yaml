@@ -101,8 +101,7 @@ humanReview:
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
-    - HTML
-    - JSON
+    - HYPERFRAMES_PROJECT
   defaultReviewRequired: true
 
 nextRecommendedTools:

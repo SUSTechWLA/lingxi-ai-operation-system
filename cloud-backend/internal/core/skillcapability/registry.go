@@ -66,3 +66,18 @@ func (r *Registry) MatchDomain(domain string) []*Manifest {
 	}
 	return matched
 }
+
+func (r *Registry) RoleAgents(domain string) []RoleAgent {
+	caps := r.MatchDomain(domain)
+	var agents []RoleAgent
+	for _, cap := range caps {
+		agents = append(agents, cap.RoleAgents...)
+	}
+	sort.SliceStable(agents, func(i, j int) bool {
+		if agents[i].Stage == agents[j].Stage {
+			return agents[i].ID < agents[j].ID
+		}
+		return agents[i].Stage < agents[j].Stage
+	})
+	return agents
+}

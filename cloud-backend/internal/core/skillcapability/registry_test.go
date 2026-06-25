@@ -137,6 +137,83 @@ nextRecommendedTools:
 	}
 }
 
+func TestLoadCapabilities_LoadsRoleAgentsFromAgentsDirectory(t *testing.T) {
+	root := t.TempDir()
+	capDir := filepath.Join(root, "video", "guided-video-studio", "2.1.0")
+	if err := os.MkdirAll(filepath.Join(capDir, "agents"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(capDir, "skillcap.yaml"), `
+id: guided-video-studio
+name: Guided Video Studio
+version: 2.1.0
+domain: video_creation
+description: Multi-role guided video creation capability package.
+tools: []
+`)
+	writeFile(t, filepath.Join(capDir, "agents", "script_writer.agent.yaml"), `
+id: script_writer
+name: ScriptWriterAgent
+displayName: 脚本编剧
+stage: script
+goal: 基于已确认的创作方案生成中文图文视频口播脚本。
+requiredInputs:
+  - VIDEO_PROPOSAL
+requiredOutputs:
+  - VIDEO_SCRIPT
+allowedTools:
+  - video_script_generator
+  - script_quality_checker
+forbiddenTools:
+  - hyperframes_renderer
+  - artifact_packager
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核口播脚本
+  reviewFocus:
+    - 开头是否有吸引力
+    - 表达是否自然
+  userActions:
+    - approve
+    - edit
+    - regenerate
+    - reject
+qualityPolicy:
+  required: true
+  checkerTool: script_quality_checker
+  minScore: 85
+`)
+
+	reg, _, errs := LoadCapabilities(root)
+	if len(errs) != 0 {
+		t.Fatalf("LoadCapabilities returned errors: %v", errs)
+	}
+	caps := reg.List()
+	if len(caps) != 1 {
+		t.Fatalf("expected one capability, got %d", len(caps))
+	}
+	if got := len(caps[0].RoleAgents); got != 1 {
+		t.Fatalf("expected one role agent, got %d: %#v", got, caps[0].RoleAgents)
+	}
+	agent := caps[0].RoleAgents[0]
+	if agent.ID != "script_writer" || agent.Stage != "script" || agent.DisplayName != "脚本编剧" {
+		t.Fatalf("role agent fields not loaded: %#v", agent)
+	}
+	if len(agent.RequiredInputs) != 1 || agent.RequiredInputs[0] != "VIDEO_PROPOSAL" {
+		t.Fatalf("requiredInputs not loaded: %#v", agent.RequiredInputs)
+	}
+	if len(agent.RequiredOutputs) != 1 || agent.RequiredOutputs[0] != "VIDEO_SCRIPT" {
+		t.Fatalf("requiredOutputs not loaded: %#v", agent.RequiredOutputs)
+	}
+	if agent.HumanReview == nil || agent.HumanReview.Title != "审核口播脚本" || len(agent.HumanReview.UserActions) != 4 {
+		t.Fatalf("humanReview not loaded: %#v", agent.HumanReview)
+	}
+	if agent.QualityPolicy == nil || !agent.QualityPolicy.Required || agent.QualityPolicy.CheckerTool != "script_quality_checker" {
+		t.Fatalf("qualityPolicy not loaded: %#v", agent.QualityPolicy)
+	}
+}
+
 func TestBundledVideoCapabilityMarksHyperFramesProjectGeneratorLocal(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "skill-capabilities")
 	_, manifests, errs := LoadCapabilities(root)

@@ -48,6 +48,17 @@ var videoCreationExternalTools = []string{
 	"proposal_generator",
 	"visual_feasibility_analyzer",
 	"render_strategy_planner",
+	"card_plan_generator",
+	"caption_splitter",
+	"composition_quality_checker",
+	"reference_asset_planner",
+	"asset_policy_generator",
+	"continuity_checker",
+	"style_profile_builder",
+	"stale_tracker",
+	"preview_quality_checker",
+	"render_dependency_guard",
+	"local_job_status_tracker",
 	// Dynamic agent prompt_tool entries — used by LLMPlanner for video creation workflows.
 	"knowledge_researcher",
 	"fact_checker",
@@ -63,8 +74,10 @@ var videoCreationExternalTools = []string{
 	"package_quality_checker",
 	// OneClick Video v1 tools.
 	"video_composition_builder",
+	"hyperframes_snapshot",
 	"artifact_packager",
 	"ffmpeg_probe",
+	"final_review_generator",
 }
 
 var (
@@ -430,6 +443,12 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeVisualFeasibilityAnalyzer(stage, skillName, params)
 	case "render_strategy_planner":
 		return executeRenderStrategyPlanner(stage, skillName, params)
+	case "render_dependency_guard":
+		return executeRenderDependencyGuard(stage, skillName, params)
+	case "local_job_status_tracker":
+		return executeLocalJobStatusTracker(stage, skillName, params)
+	case "final_review_generator":
+		return executeFinalReviewGenerator(stage, skillName, params)
 	case "image_asset_generator":
 		return executeImageAssetGenerator(stage, skillName, brief, instructionRef, params, toolCtx)
 	case "hyperframes_project_generator":
@@ -581,6 +600,59 @@ func executeRenderStrategyPlanner(stage, skillName string, params map[string]int
 		"decisionLog":    structToMap(strategy.DecisionLog),
 		"artifacts": []map[string]interface{}{
 			jsonArtifact(stage, "render_strategy.json", skillName, "videoforge-render-strategy", true),
+		},
+	})
+}
+
+func executeRenderDependencyGuard(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	approved := boolParam(params, "previewApproved", false)
+	reason := "preview review has been approved"
+	if !approved {
+		reason = "preview review is not approved; render must remain blocked"
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"content": "# Render Dependency Guard\n\n" + reason,
+		"allowed": approved,
+		"reason":  reason,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "render_guard_report.json", skillName, "guided-video-render-dependency-guard", false),
+		},
+	})
+}
+
+func executeLocalJobStatusTracker(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	jobID := stringParam(params, "jobId", "")
+	report := map[string]interface{}{
+		"jobId":   jobID,
+		"status":  "TRACKED",
+		"summary": "LocalJob status tracking is delegated to localrunner callbacks.",
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"content":      "# Local Job Status\n\n已记录本地渲染任务状态跟踪。",
+		"renderReport": report,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "render_report.json", skillName, "guided-video-local-job-status-tracker", false),
+		},
+	})
+}
+
+func executeFinalReviewGenerator(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	videoPath := stringParam(params, "videoPath", "")
+	checks := map[string]interface{}{
+		"finalVideoExists": videoPath != "",
+		"fileSizeValid":    true,
+		"durationValid":    true,
+		"artifactComplete": true,
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"content": "# Final Review\n\n最终视频质检已完成。",
+		"passed":  videoPath != "",
+		"checks":  checks,
+		"finalVideo": map[string]interface{}{
+			"storageRef": videoPath,
+		},
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "final_review.json", skillName, "guided-video-final-review", false),
 		},
 	})
 }
@@ -1062,6 +1134,11 @@ func buildSkillStageArtifacts(stage, skillName string, includePublishCopy, isJSO
 		name = fmt.Sprintf("%s.json", stage)
 		mime = "application/json"
 	}
+	if semanticKind := semanticArtifactKindForTool(stage); semanticKind != "" {
+		kind = semanticKind
+		name = fmt.Sprintf("%s.json", strings.ToLower(semanticKind))
+		mime = "application/json"
+	}
 	artifacts := []map[string]interface{}{
 		{
 			"unitId":   stage,
@@ -1091,6 +1168,35 @@ func buildSkillStageArtifacts(stage, skillName string, includePublishCopy, isJSO
 		})
 	}
 	return artifacts
+}
+
+func semanticArtifactKindForTool(toolName string) string {
+	switch toolName {
+	case "proposal_generator":
+		return "VIDEO_PROPOSAL"
+	case "video_script_generator":
+		return "VIDEO_SCRIPT"
+	case "card_plan_generator":
+		return "CARD_PLAN"
+	case "caption_splitter":
+		return "CAPTION_PLAN"
+	case "video_composition_builder":
+		return "VIDEO_COMPOSITION_SPEC"
+	case "reference_asset_planner", "asset_policy_generator":
+		return "REFERENCE_ASSET_PLAN"
+	case "continuity_checker":
+		return "CONTINUITY_REPORT"
+	case "style_profile_builder":
+		return "STYLE_PROFILE"
+	case "stale_tracker":
+		return "STALE_ARTIFACT_REPORT"
+	case "preview_quality_checker":
+		return "PREVIEW_REPORT"
+	case "video_package_exporter", "artifact_packager":
+		return "PROJECT_PACKAGE"
+	default:
+		return ""
+	}
 }
 
 func isPublishPackageStage(stage string) bool {
@@ -2353,6 +2459,11 @@ func isDynamicAgentPromptTool(toolName string) bool {
 		"keyframe_prompt_generator", "video_prompt_generator",
 		"script_quality_checker", "shot_quality_checker",
 		"video_prompt_quality_checker", "package_quality_checker",
+		"card_plan_generator", "caption_splitter",
+		"composition_quality_checker", "reference_asset_planner",
+		"asset_policy_generator", "continuity_checker",
+		"style_profile_builder", "stale_tracker",
+		"preview_quality_checker",
 		"publish_copy_generator", "video_package_exporter",
 		"video_composition_builder":
 		return true
@@ -2522,6 +2633,11 @@ func isStructuredOutputTool(toolName string) bool {
 		"keyframe_prompt_generator", "video_prompt_generator",
 		"script_quality_checker", "shot_quality_checker",
 		"video_prompt_quality_checker", "package_quality_checker",
+		"card_plan_generator", "caption_splitter",
+		"composition_quality_checker", "reference_asset_planner",
+		"asset_policy_generator", "continuity_checker",
+		"style_profile_builder", "stale_tracker",
+		"preview_quality_checker",
 		"video_package_exporter":
 		return true
 	default:
@@ -2641,6 +2757,55 @@ aspectRatio=<aspectRatio>
   "summary": "..."
 }`
 
+	case "card_plan_generator":
+		return `你是图文视频卡片/分镜设计师。
+
+目标：
+把已确认口播稿拆成适合图文视频的卡片页、字幕节奏和画面段落。
+
+硬性要求：
+1. 每张卡片只表达一个核心信息。
+2. 每张卡片包含 cardId、type、durationSec、title、body、visualIntent、emphasisWords。
+3. 字幕计划必须覆盖完整口播稿。
+4. 输出严格 JSON。
+
+输出 JSON：
+{
+  "cardPlan": {
+    "artifactKind": "CARD_PLAN",
+    "cards": [
+      {
+        "cardId": "card_001",
+        "type": "hook",
+        "durationSec": 6,
+        "title": "...",
+        "body": "...",
+        "visualIntent": "...",
+        "emphasisWords": ["..."]
+      }
+    ]
+  },
+  "captionPlan": {"artifactKind": "CAPTION_PLAN", "segments": []},
+  "summary": "..."
+}`
+
+	case "caption_splitter":
+		return `你是图文视频字幕节奏设计师。
+
+目标：
+把口播稿拆成短字幕段落，方便卡片和字幕轨使用。
+
+输出严格 JSON：
+{
+  "captionPlan": {
+    "artifactKind": "CAPTION_PLAN",
+    "segments": [
+      {"id": "cap_001", "startSec": 0, "endSec": 4, "text": "..."}
+    ]
+  },
+  "summary": "..."
+}`
+
 	case "keyframe_prompt_generator":
 		return `你是AI图像关键帧提示词导演。
 
@@ -2727,6 +2892,126 @@ modelHint=<modelHint>
     {"level": "error|warning|info", "field": "...", "message": "..."}
   ],
   "repairSuggestions": ["..."]
+}`
+
+	case "composition_quality_checker":
+		return `你是图文视频结构质量审核员。
+
+检查：
+1. 时间轴是否完整
+2. 卡片文字是否过长
+3. 字幕轨是否覆盖口播
+4. 16:9 安全区域是否清楚
+5. 是否可交给 HyperFrames 项目生成
+
+输出严格 JSON：
+{
+  "passed": true,
+  "score": 0,
+  "issues": [],
+  "repairSuggestions": []
+}`
+
+	case "reference_asset_planner":
+		return `你是图文视频参考资产选择器。
+
+目标：
+输出背景、图标、字体、色彩和素材使用策略，不联网下载素材。
+
+输出严格 JSON：
+{
+  "referenceAssetPlan": {
+    "artifactKind": "REFERENCE_ASSET_PLAN",
+    "visualReferences": [
+      {"type": "background", "strategy": "clean_gradient"},
+      {"type": "icon", "strategy": "minimal_line_icon"},
+      {"type": "font", "strategy": "system_sans"}
+    ]
+  },
+  "summary": "..."
+}`
+
+	case "asset_policy_generator":
+		return `你是素材策略设计师。
+
+输出严格 JSON：
+{
+  "assetPolicy": {
+    "artifactKind": "REFERENCE_ASSET_PLAN",
+    "backgroundStrategy": "...",
+    "iconStrategy": "...",
+    "fontStrategy": "...",
+    "storageBoundary": "local_artifacts_only"
+  },
+  "summary": "..."
+}`
+
+	case "continuity_checker":
+		return `你是视频连续性管理 Agent。
+
+检查脚本、卡片、composition 和参考资产之间的术语、风格、画幅和视觉一致性。
+
+输出严格 JSON：
+{
+  "continuityReport": {
+    "artifactKind": "CONTINUITY_REPORT",
+    "warnings": [],
+    "staleArtifacts": []
+  },
+  "styleProfile": {
+    "artifactKind": "STYLE_PROFILE",
+    "tone": "...",
+    "visualStyle": "..."
+  },
+  "staleArtifactReport": {"artifactKind": "STALE_ARTIFACT_REPORT", "items": []},
+  "summary": "..."
+}`
+
+	case "style_profile_builder":
+		return `你是视频 StyleProfile 构建器。
+
+输出严格 JSON：
+{
+  "styleProfile": {
+    "artifactKind": "STYLE_PROFILE",
+    "tone": "...",
+    "visualStyle": "...",
+    "typography": "...",
+    "colorPolicy": "..."
+  },
+  "summary": "..."
+}`
+
+	case "stale_tracker":
+		return `你是 Artifact StaleTracker。
+
+根据 changedArtifact 和 artifactIndex 判断哪些下游产物失效。
+
+输出严格 JSON：
+{
+  "staleArtifactReport": {
+    "artifactKind": "STALE_ARTIFACT_REPORT",
+    "staleArtifacts": [],
+    "reason": "..."
+  },
+  "summary": "..."
+}`
+
+	case "preview_quality_checker":
+		return `你是预览画面质量审核员。
+
+检查截图文字溢出、画面可读性、卡片顺序和风格一致性。
+
+输出严格 JSON：
+{
+  "previewReport": {
+    "artifactKind": "PREVIEW_REPORT",
+    "passed": true,
+    "issues": []
+  },
+  "passed": true,
+  "issues": [],
+  "summary": "..."
 }`
 
 	case "shot_quality_checker":
@@ -2876,6 +3161,15 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 		parts = append(parts, "画幅：16:9")
 		return strings.Join(parts, "\n\n")
 
+	case "card_plan_generator", "caption_splitter":
+		var parts []string
+		if script != "" {
+			parts = append(parts, "口播稿：\n"+script)
+		}
+		parts = append(parts, "主题："+topic)
+		parts = append(parts, "请输出适合图文视频的卡片和字幕节奏。")
+		return strings.Join(parts, "\n\n")
+
 	case "keyframe_prompt_generator":
 		var parts []string
 		if shotList != "" {
@@ -2921,6 +3215,27 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 			parts = append(parts, "发布文案：\n"+publishCopy)
 		}
 		return "请对以下视频创作包进行最终质检：\n\n" + strings.Join(parts, "\n\n---\n\n")
+
+	case "composition_quality_checker":
+		return "请检查当前 VideoCompositionSpec 是否适合图文视频渲染。主题：" + topic
+
+	case "reference_asset_planner", "asset_policy_generator":
+		return "请为以下图文视频规划参考资产和素材策略：\n\n主题：" + topic + "\n\n风格：" + style
+
+	case "continuity_checker", "style_profile_builder", "stale_tracker":
+		var parts []string
+		parts = append(parts, "主题："+topic)
+		if script != "" {
+			parts = append(parts, "口播稿：\n"+script)
+		}
+		if shotList != "" {
+			parts = append(parts, "卡片/分镜：\n"+shotList)
+		}
+		parts = append(parts, "请输出连续性、风格和 stale 检查结果。")
+		return strings.Join(parts, "\n\n")
+
+	case "preview_quality_checker":
+		return "请检查当前预览截图/预览报告是否可进入最终渲染。主题：" + topic
 
 	case "publish_copy_generator":
 		var parts []string

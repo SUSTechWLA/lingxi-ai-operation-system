@@ -2,6 +2,7 @@ name: ffmpeg_probe
 version: "1.0"
 type: local_tool
 description: 读取本地 MP4 文件的基础信息：分辨率、编码、时长、码率、音频轨道。
+endpoint: builtin://video-creation/ffmpeg_probe
 
 executionPlane: local
 requiresUserDevice: true
@@ -42,7 +43,7 @@ approvalPolicy:
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
-    - JSON
+    - FFMPEG_PROBE_REPORT
     - MEDIA_METADATA
 
 nextRecommendedTools:

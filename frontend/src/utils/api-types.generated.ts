@@ -34,7 +34,7 @@ export interface AgentReviewDecisionResponse {
 // AgentReviewListResponse
 export interface AgentReviewListResponse {
   code?: number;
-  data?: { reviews?: { blocksDownstream?: boolean; id: string; nodeId: string; reviewArtifactKinds?: string[]; reviewPhase?: string; reviewReason?: string; status: string; stepId?: string; tool?: string }[]; runId?: string };
+  data?: { reviews?: { blocksDownstream?: boolean; humanReview?: Record<string, Record<string, unknown>>; id: string; nodeId: string; requiredInputs?: string[]; requiredOutputs?: string[]; reviewArtifactKinds?: string[]; reviewPhase?: string; reviewReason?: string; roleAgent?: Record<string, Record<string, unknown>>; roleAgentId?: string; stage?: string; status: string; stepId?: string; tool?: string }[]; runId?: string };
   message?: string;
 }
 
@@ -59,6 +59,8 @@ export interface AgentRunStartResponse {
 export interface AgentStartRunRequest {
   context?: Record<string, Record<string, unknown>>;
   domain?: string;
+  maxCostLevel?: string;
+  maxRiskLevel?: string;
   message: string;
   mode?: string;
   userId?: string;
@@ -544,7 +546,7 @@ export interface SessionResponse {
 // SkillCapabilityDetailResponse
 export interface SkillCapabilityDetailResponse {
   code?: number;
-  data?: { capability?: { activation: { intents?: string[]; keywords?: string[] }; description: string; domain: string; id: string; loadError?: string; name: string; recipe: { mode?: string; path?: string }; resources: { id: string; loadStrategy?: string; path: string; priority?: number; scope?: string; type: string }[]; rootPath?: string; status: string; tools: { id: string; manifest: string; prompt?: string }[]; version: string } };
+  data?: { capability?: { activation: { intents?: string[]; keywords?: string[] }; description: string; domain: string; id: string; loadError?: string; name: string; recipe: { mode?: string; path?: string }; resources: { id: string; loadStrategy?: string; path: string; priority?: number; scope?: string; type: string }[]; roleAgents?: { allowedTools?: string[]; displayName: string; forbiddenTools?: string[]; goal: string; humanReview?: { gate?: string; required?: boolean; reviewFocus?: string[]; title?: string; userActions?: string[] } | null; id: string; maxToolCalls?: number; name: string; qualityPolicy?: { autoRepair?: boolean; checkerTool?: string; maxRepairAttempts?: number; minScore?: number; repairTool?: string; required?: boolean } | null; requiredInputs?: string[]; requiredOutputs?: string[]; stage: string }[]; rootPath?: string; status: string; tools: { id: string; manifest: string; prompt?: string }[]; version: string } };
   message?: string;
 }
 
@@ -552,7 +554,7 @@ export interface SkillCapabilityDetailResponse {
 // SkillCapabilityListResponse
 export interface SkillCapabilityListResponse {
   code?: number;
-  data?: { capabilities?: { activation: { intents?: string[]; keywords?: string[] }; description: string; domain: string; id: string; loadError?: string; name: string; recipe: { mode?: string; path?: string }; resources: { id: string; loadStrategy?: string; path: string; priority?: number; scope?: string; type: string }[]; rootPath?: string; status: string; tools: { id: string; manifest: string; prompt?: string }[]; version: string }[] };
+  data?: { capabilities?: { activation: { intents?: string[]; keywords?: string[] }; description: string; domain: string; id: string; loadError?: string; name: string; recipe: { mode?: string; path?: string }; resources: { id: string; loadStrategy?: string; path: string; priority?: number; scope?: string; type: string }[]; roleAgents?: { allowedTools?: string[]; displayName: string; forbiddenTools?: string[]; goal: string; humanReview?: { gate?: string; required?: boolean; reviewFocus?: string[]; title?: string; userActions?: string[] } | null; id: string; maxToolCalls?: number; name: string; qualityPolicy?: { autoRepair?: boolean; checkerTool?: string; maxRepairAttempts?: number; minScore?: number; repairTool?: string; required?: boolean } | null; requiredInputs?: string[]; requiredOutputs?: string[]; stage: string }[]; rootPath?: string; status: string; tools: { id: string; manifest: string; prompt?: string }[]; version: string }[] };
   message?: string;
 }
 
@@ -726,6 +728,22 @@ export interface VideoProjectDetailResponse {
 export interface VideoProjectListResponse {
   code?: number;
   data?: { projects?: Record<string, unknown>[]; total?: number };
+  message?: string;
+}
+
+/**  */
+// VideoRoleAgentDetailResponse
+export interface VideoRoleAgentDetailResponse {
+  code?: number;
+  data?: { roleAgent?: { allowedTools?: string[]; displayName: string; forbiddenTools?: string[]; goal: string; humanReview?: { gate?: string; required?: boolean; reviewFocus?: string[]; title?: string; userActions?: string[] } | null; id: string; maxToolCalls?: number; name: string; qualityPolicy?: { autoRepair?: boolean; checkerTool?: string; maxRepairAttempts?: number; minScore?: number; repairTool?: string; required?: boolean } | null; requiredInputs?: string[]; requiredOutputs?: string[]; stage: string } };
+  message?: string;
+}
+
+/**  */
+// VideoRoleAgentListResponse
+export interface VideoRoleAgentListResponse {
+  code?: number;
+  data?: { roleAgents?: { allowedTools?: string[]; displayName: string; forbiddenTools?: string[]; goal: string; humanReview?: { gate?: string; required?: boolean; reviewFocus?: string[]; title?: string; userActions?: string[] } | null; id: string; maxToolCalls?: number; name: string; qualityPolicy?: { autoRepair?: boolean; checkerTool?: string; maxRepairAttempts?: number; minScore?: number; repairTool?: string; required?: boolean } | null; requiredInputs?: string[]; requiredOutputs?: string[]; stage: string }[] };
   message?: string;
 }
 

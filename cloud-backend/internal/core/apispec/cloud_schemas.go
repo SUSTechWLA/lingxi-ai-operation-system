@@ -537,6 +537,34 @@ func registerCloudSchemas(b *Builder) {
 		},
 	})
 
+	// ── Video Role Agents ──
+	b.Schema("VideoRoleAgentListResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"roleAgents": {Schema: ArraySchema(Reflect(skillcapability.RoleAgent{}))},
+				},
+			}},
+		},
+	})
+	b.Schema("VideoRoleAgentDetailResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"roleAgent": {Schema: Reflect(skillcapability.RoleAgent{})},
+				},
+			}},
+		},
+	})
+
 	// ── Dynamic Agent Runs ──
 	b.Schema("AgentStartRunRequest", Reflect(agentruntime.StartRunRequest{}))
 	b.Schema("AgentRunStartResponse", &Schema{

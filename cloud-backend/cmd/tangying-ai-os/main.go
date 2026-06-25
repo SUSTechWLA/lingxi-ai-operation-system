@@ -57,8 +57,8 @@ import (
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
 	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
 	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
-	videodirector "github.com/tangying-ai/aios-core/internal/core/video/director"
 	"github.com/tangying-ai/aios-core/internal/core/skillruntime"
+	videodirector "github.com/tangying-ai/aios-core/internal/core/video/director"
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
 )
 
@@ -167,6 +167,7 @@ func main() {
 		zap.L().Warn("Skill capability load error", zap.Error(err))
 	}
 	for _, manifest := range capabilityToolManifests {
+		toolRegistry.RegisterExternal(manifest)
 		if err := toolManifestSvc.RegisterManifest(ctx, manifest); err != nil {
 			zap.L().Warn("Failed to register skill capability tool",
 				zap.String("name", manifest.Name),
@@ -176,6 +177,10 @@ func main() {
 	zap.L().Info("Skill capability registry initialized",
 		zap.Int("capabilities", len(skillCapabilityReg.List())),
 		zap.Int("tools", len(capabilityToolManifests)))
+	videoDirectorRegistry := videodirector.DefaultRegistry()
+	videoDirectorRegistry.RegisterRoleAgents(skillCapabilityReg.RoleAgents("video_creation"))
+	zap.L().Info("Video role agent registry initialized",
+		zap.Int("roleAgents", len(videoDirectorRegistry.List())))
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL, toolManifestSvc)
@@ -340,8 +345,8 @@ func main() {
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
 	localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth()).RegisterRoutes(r)
-		// Preflight: check local capabilities before starting a video pipeline.
-		r.GET("/api/video/preflight", authMiddleware.RequireAuth(), localrunner.HandleVideoPreflight(localRunnerService))
+	// Preflight: check local capabilities before starting a video pipeline.
+	r.GET("/api/video/preflight", authMiddleware.RequireAuth(), localrunner.HandleVideoPreflight(localRunnerService))
 
 	// Media management — initialize before skill handler so we can resolve media URLs
 	var mediaSvc *media.MediaService
@@ -370,6 +375,7 @@ func main() {
 	).RegisterRoutes(r)
 	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
 	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r)
+	videodirector.NewHandler(videoDirectorRegistry).RegisterRoutes(r)
 
 	agentRunRepo := agentruntime.NewRepository(pool)
 
@@ -416,16 +422,17 @@ func main() {
 	}
 
 	agentPlanner := buildAgentPlanner(cfg, toolRegistry, gw)
+	videoDirectorAdapter := &stageDirectorRegistry{videoDirectorRegistry}
 	agentRunner := agentruntime.NewRunner(
 		orchestratorService,
 		agentRunRepo,
 		agentPlanner,
-		agentruntime.NewPlanGuard(toolRegistry, localRunnerService),
+		agentruntime.NewPlanGuard(toolRegistry, localRunnerService).WithDirectors(videoDirectorAdapter),
 		func() *agentruntime.PlanCompiler {
-		pc := agentruntime.NewPlanCompiler(toolRegistry)
-		pc.WithDirectors(&stageDirectorRegistry{videodirector.DefaultRegistry()})
-		return pc
-	}(),
+			pc := agentruntime.NewPlanCompiler(toolRegistry)
+			pc.WithDirectors(videoDirectorAdapter)
+			return pc
+		}(),
 	)
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine)
 	agentRuntimeHandler.RegisterRoutes(r)

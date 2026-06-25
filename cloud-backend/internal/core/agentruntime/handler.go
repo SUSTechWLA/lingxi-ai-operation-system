@@ -80,8 +80,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		api.GET("/:runId/reviews", h.ListReviews)
 		api.POST("/:runId/reviews/:reviewId/approve", h.ApproveReview)
 		api.POST("/:runId/reviews/:reviewId/reject", h.RejectReview)
-			api.POST("/:runId/reviews/:reviewId/submit-edited", h.SubmitEdited)
-			api.POST("/:runId/reviews/:reviewId/regenerate", h.RegenerateStage)
+		api.POST("/:runId/reviews/:reviewId/submit-edited", h.SubmitEdited)
+		api.POST("/:runId/reviews/:reviewId/regenerate", h.RegenerateStage)
 	}
 }
 
@@ -176,8 +176,11 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 	if err := h.stateMachine.OnSuccess(c.Request.Context(), node.ID, map[string]interface{}{
-		"approved": true,
-		"comment":  req.Comment,
+		"approved":      true,
+		"humanApproved": true,
+		"comment":       req.Comment,
+		"stage":         nodeInputString(node, "stage"),
+		"roleAgentId":   nodeInputString(node, "roleAgentId"),
 	}); err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
@@ -254,7 +257,7 @@ func (h *Handler) writeDecisionLog(ctx context.Context, run *Run, node *model.No
 		ReviewerID:     reviewerID,
 		Comment:        comment,
 	})
-	}
+}
 
 func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Review, error) {
 	run, _, err := h.runner.Get(ctx, runID)
@@ -293,15 +296,21 @@ func (h *Handler) findReviewNode(ctx context.Context, runID, reviewID string) (*
 }
 
 type Review struct {
-	ID                  string   `json:"id"`
-	NodeID              string   `json:"nodeId"`
-	Status              string   `json:"status"`
-	StepID              string   `json:"stepId,omitempty"`
-	Tool                string   `json:"tool,omitempty"`
-	ReviewPhase         string   `json:"reviewPhase,omitempty"`
-	ReviewReason        string   `json:"reviewReason,omitempty"`
-	BlocksDownstream    bool     `json:"blocksDownstream,omitempty"`
-	ReviewArtifactKinds []string `json:"reviewArtifactKinds,omitempty"`
+	ID                  string                 `json:"id"`
+	NodeID              string                 `json:"nodeId"`
+	Status              string                 `json:"status"`
+	StepID              string                 `json:"stepId,omitempty"`
+	Tool                string                 `json:"tool,omitempty"`
+	Stage               string                 `json:"stage,omitempty"`
+	RoleAgentID         string                 `json:"roleAgentId,omitempty"`
+	RoleAgent           map[string]interface{} `json:"roleAgent,omitempty"`
+	HumanReview         map[string]interface{} `json:"humanReview,omitempty"`
+	RequiredInputs      []string               `json:"requiredInputs,omitempty"`
+	RequiredOutputs     []string               `json:"requiredOutputs,omitempty"`
+	ReviewPhase         string                 `json:"reviewPhase,omitempty"`
+	ReviewReason        string                 `json:"reviewReason,omitempty"`
+	BlocksDownstream    bool                   `json:"blocksDownstream,omitempty"`
+	ReviewArtifactKinds []string               `json:"reviewArtifactKinds,omitempty"`
 }
 
 func reviewFromNode(node *model.Node) Review {
@@ -313,6 +322,12 @@ func reviewFromNode(node *model.Node) Review {
 	if node.Input != nil {
 		review.StepID, _ = node.Input["stepId"].(string)
 		review.Tool, _ = node.Input["tool"].(string)
+		review.Stage, _ = node.Input["stage"].(string)
+		review.RoleAgentID, _ = node.Input["roleAgentId"].(string)
+		review.RoleAgent = stringInterfaceMap(node.Input["roleAgent"])
+		review.HumanReview = stringInterfaceMap(node.Input["humanReview"])
+		review.RequiredInputs = stringSlice(node.Input["requiredInputs"])
+		review.RequiredOutputs = stringSlice(node.Input["requiredOutputs"])
 		review.ReviewPhase, _ = node.Input["reviewPhase"].(string)
 		review.ReviewReason, _ = node.Input["reviewReason"].(string)
 		review.BlocksDownstream, _ = node.Input["blocksDownstream"].(bool)
@@ -332,6 +347,23 @@ func reviewStatus(status model.NodeStatus) string {
 	default:
 		return string(status)
 	}
+}
+
+func stringInterfaceMap(value interface{}) map[string]interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed
+	default:
+		return nil
+	}
+}
+
+func nodeInputString(node *model.Node, key string) string {
+	if node == nil || node.Input == nil {
+		return ""
+	}
+	value, _ := node.Input[key].(string)
+	return value
 }
 
 func stringSlice(value interface{}) []string {
@@ -416,10 +448,15 @@ func (h *Handler) SubmitEdited(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	output := map[string]interface{}{
-		"approved":    true,
-		"edited":      true,
-		"editContent": req.Content,
-		"comment":     req.Comment,
+		"approved":              true,
+		"humanApproved":         true,
+		"edited":                true,
+		"editContent":           req.Content,
+		"comment":               req.Comment,
+		"stage":                 nodeInputString(node, "stage"),
+		"roleAgentId":           nodeInputString(node, "roleAgentId"),
+		"staleTrackingRequired": true,
+		"staleTracker":          "stale_tracker",
 	}
 	if err := h.stateMachine.OnSuccess(c.Request.Context(), node.ID, output); err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())

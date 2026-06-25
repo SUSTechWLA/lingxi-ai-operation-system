@@ -24,6 +24,7 @@ func BuildCloudSpec() *Spec {
 		Tag("Tools", "Tool registry management").
 		Tag("Skills", "AI skill catalog and routing").
 		Tag("Skill Capabilities", "Agent capability package catalog").
+		Tag("Video Role Agents", "Guided Video Studio role-agent catalog and stage constraints").
 		Tag("Agent Runs", "Dynamic agent runtime runs and review gates").
 		Tag("Local Runners", "Cloud control-plane protocol for local execution runners").
 		Tag("Workflows", "Reusable workflow templates (blueprints)").
@@ -442,6 +443,16 @@ func BuildCloudSpec() *Spec {
 		Tags("Skill Capabilities").
 		PathParam("id", "Capability package identifier", StringSchema()).
 		ResponseJSON("200", "Capability package", "SkillCapabilityDetailResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
+
+	// ── Video Role Agents ──
+	b.Route("GET", "/api/video/role-agents", "List Guided Video Studio role agents").
+		Tags("Video Role Agents").
+		ResponseJSON("200", "Role agents", "VideoRoleAgentListResponse")
+	b.Route("GET", "/api/video/role-agents/:roleId", "Get Guided Video Studio role agent detail").
+		Tags("Video Role Agents").
+		PathParam("roleId", "Role agent identifier", StringSchema()).
+		ResponseJSON("200", "Role agent", "VideoRoleAgentDetailResponse").
 		ResponseJSON("404", "Not found", "ErrorResponse")
 
 	// ── Dynamic Agent Runs ──

@@ -24,8 +24,8 @@ type ToolManifest struct {
 	SideEffect           bool                   `json:"sideEffect,omitempty"`
 	Idempotent           bool                   `json:"idempotent,omitempty"`
 	ApprovalPolicy       ApprovalPolicy         `json:"approvalPolicy,omitempty"`
-	HumanReview          *HumanReview            `json:"humanReview,omitempty"`
-	ArtifactPolicy       ArtifactPolicy          `json:"artifactPolicy,omitempty"`
+	HumanReview          *HumanReview           `json:"humanReview,omitempty"`
+	ArtifactPolicy       ArtifactPolicy         `json:"artifactPolicy,omitempty"`
 	QualityPolicy        QualityPolicy          `json:"qualityPolicy,omitempty"`
 	ExecutionPlane       string                 `json:"executionPlane,omitempty"`
 	RequiresUserDevice   bool                   `json:"requiresUserDevice,omitempty"`
@@ -94,23 +94,23 @@ type ArtifactPolicy struct {
 // node after this tool's execution node, followed by a quality gate CONTROL node
 // that auto-approves when the checker passes or blocks when it fails.
 type QualityPolicy struct {
-	Required          bool   `json:"required"`
-	CheckerTool       string `json:"checkerTool,omitempty"`
-	MinScore          int    `json:"minScore,omitempty"`
-	AutoRepair        bool   `json:"autoRepair,omitempty"`
-	MaxRepairAttempts int    `json:"maxRepairAttempts,omitempty"`
-	RepairTool        string `json:"repairTool,omitempty"`
+	Required          bool   `json:"required" yaml:"required"`
+	CheckerTool       string `json:"checkerTool,omitempty" yaml:"checkerTool,omitempty"`
+	MinScore          int    `json:"minScore,omitempty" yaml:"minScore,omitempty"`
+	AutoRepair        bool   `json:"autoRepair,omitempty" yaml:"autoRepair,omitempty"`
+	MaxRepairAttempts int    `json:"maxRepairAttempts,omitempty" yaml:"maxRepairAttempts,omitempty"`
+	RepairTool        string `json:"repairTool,omitempty" yaml:"repairTool,omitempty"`
 }
 
 // HumanReview describes how human-in-the-loop review should be presented
 // to the user. It supplements ApprovalPolicy with UI-facing metadata:
 // title, review focus points, and available user actions.
 type HumanReview struct {
-	Required    bool     `json:"required"`
-	Gate        string   `json:"gate,omitempty"`
-	Title       string   `json:"title,omitempty"`
-	ReviewFocus []string `json:"reviewFocus,omitempty"`
-	UserActions []string `json:"userActions,omitempty"`
+	Required    bool     `json:"required" yaml:"required"`
+	Gate        string   `json:"gate,omitempty" yaml:"gate,omitempty"`
+	Title       string   `json:"title,omitempty" yaml:"title,omitempty"`
+	ReviewFocus []string `json:"reviewFocus,omitempty" yaml:"reviewFocus,omitempty"`
+	UserActions []string `json:"userActions,omitempty" yaml:"userActions,omitempty"`
 }
 
 type LocalRequirements struct {

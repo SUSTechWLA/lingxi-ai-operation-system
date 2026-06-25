@@ -1,0 +1,42 @@
+name: preview_quality_checker
+description: 检查预览截图文字溢出、画面可读性、卡片顺序和风格一致性。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/preview_quality_checker
+timeout: 60
+
+capabilities:
+  - video_creation
+  - preview_quality_check
+
+parameters:
+  snapshots:
+    type: array
+    required: false
+  continuityReport:
+    type: object
+    required: false
+
+output:
+  previewReport:
+    type: object
+  passed:
+    type: boolean
+  issues:
+    type: array
+  artifacts:
+    type: object
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - PREVIEW_REPORT
+  defaultReviewRequired: false
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

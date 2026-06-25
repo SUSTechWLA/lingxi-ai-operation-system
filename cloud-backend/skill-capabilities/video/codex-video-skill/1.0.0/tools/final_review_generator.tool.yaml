@@ -2,6 +2,7 @@ name: final_review_generator
 version: "1.0"
 type: builtin_tool
 description: 视频最终质检：确认 final.mp4 存在、文件大小有效、时长合理、产物完整。
+endpoint: builtin://video-creation/final_review_generator
 
 executionPlane: cloud
 requiresUserDevice: false

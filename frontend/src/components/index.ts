@@ -1,4 +1,3 @@
-export { default as Sidebar } from './Sidebar'
 export { default as UploadCard } from './UploadCard'
 export { default as TitleInput } from './TitleInput'
 export { default as DescriptionInput } from './DescriptionInput'

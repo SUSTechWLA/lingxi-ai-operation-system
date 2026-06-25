@@ -1,0 +1,81 @@
+name: card_plan_generator
+description: 将已确认口播脚本拆成图文视频卡片页、字幕节奏和画面段落。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/card_plan_generator
+timeout: 90
+
+capabilities:
+  - video_creation
+  - storyboard_generation
+  - card_plan
+tags:
+  - video
+  - storyboard
+  - card
+
+parameters:
+  script:
+    type: string
+    required: true
+    description: 已审核通过的口播稿
+  targetDurationSec:
+    type: number
+    required: false
+    default: 45
+  style:
+    type: string
+    required: false
+
+output:
+  cardPlan:
+    type: object
+    description: CARD_PLAN canonical artifact
+  captionPlan:
+    type: object
+    description: CAPTION_PLAN canonical artifact
+  content:
+    type: string
+    description: 人类可读摘要
+  artifacts:
+    type: object
+    description: CARD_PLAN 产物索引
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: 卡片/分镜计划决定后续 composition，必须确认。
+
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核卡片/分镜计划
+  reviewFocus:
+    - 卡片顺序是否合理
+    - 每页文字是否过长
+    - 字幕拆分是否自然
+    - 重点信息是否突出
+  userActions:
+    - approve
+    - edit
+    - regenerate
+    - reject
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - CARD_PLAN
+    - CAPTION_PLAN
+  defaultReviewRequired: true
+
+nextRecommendedTools:
+  - video_composition_builder
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

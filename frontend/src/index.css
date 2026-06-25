@@ -8,6 +8,55 @@
   }
 }
 
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.director-root {
+  min-width: 1180px;
+  color: #2B1708;
+  background:
+    radial-gradient(circle at top left, rgba(251, 191, 36, 0.22), transparent 34%),
+    linear-gradient(135deg, #fff8e8 0%, #fffdf6 42%, #fff4d6 100%);
+}
+
+.glass {
+  background: rgba(255, 252, 244, 0.82);
+  border: 1px solid rgba(238, 215, 154, 0.72);
+  box-shadow: 0 24px 70px rgba(124, 62, 8, 0.10);
+  backdrop-filter: blur(18px);
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(238, 215, 154, 0.75);
+  box-shadow: 0 16px 40px rgba(124, 62, 8, 0.08);
+  border-radius: 0.5rem;
+}
+
+.tangying-gradient {
+  background: linear-gradient(135deg, #7C3E08 0%, #D97706 42%, #FBBF24 100%);
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, #7C3E08, #D97706, #7C3AED);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.shadow-glow {
+  box-shadow: 0 14px 30px rgba(217, 119, 6, 0.24);
+}
+
+.shadow-card {
+  box-shadow: 0 16px 40px rgba(124, 62, 8, 0.08);
+}
+
 @layer utilities {
   .scrollbar-thin::-webkit-scrollbar {
     width: 4px;

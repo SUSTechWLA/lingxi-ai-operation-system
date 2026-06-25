@@ -468,6 +468,12 @@ export interface AgentReviewItem {
   status: 'PENDING' | 'APPROVED' | 'REJECTED'
   stepId?: string
   tool?: string
+  stage?: string
+  roleAgentId?: string
+  roleAgent?: Record<string, unknown>
+  humanReview?: RoleHumanReview
+  requiredInputs?: string[]
+  requiredOutputs?: string[]
   reviewPhase?: string
   reviewReason?: string
   blocksDownstream?: boolean
@@ -482,4 +488,40 @@ export interface AgentReviewListResponse {
 export interface AgentReviewActionResponse {
   reviewId: string
   status: 'APPROVED' | 'REJECTED'
+}
+
+export interface RoleHumanReview {
+  required?: boolean
+  title?: string
+  gate?: string
+  reviewFocus?: string[]
+  userActions?: string[]
+}
+
+export interface RoleQualityPolicy {
+  required?: boolean
+  checkerTool?: string
+  minScore?: number
+  autoRepair?: boolean
+  repairTool?: string
+  maxRepairAttempts?: number
+}
+
+export interface VideoRoleAgent {
+  id: string
+  name: string
+  displayName: string
+  stage: string
+  goal: string
+  requiredInputs?: string[]
+  requiredOutputs?: string[]
+  allowedTools?: string[]
+  forbiddenTools?: string[]
+  humanReview?: RoleHumanReview | null
+  qualityPolicy?: RoleQualityPolicy | null
+  maxToolCalls?: number
+}
+
+export interface VideoRoleAgentListResponse {
+  roleAgents: VideoRoleAgent[]
 }

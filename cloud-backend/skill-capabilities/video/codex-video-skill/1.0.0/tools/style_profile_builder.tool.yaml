@@ -1,0 +1,38 @@
+name: style_profile_builder
+description: 根据创作方案和已确认产物生成或刷新 StyleProfile。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/style_profile_builder
+timeout: 60
+
+capabilities:
+  - video_creation
+  - style_profile
+
+parameters:
+  proposal:
+    type: object
+    required: false
+  referenceAssetPlan:
+    type: object
+    required: false
+
+output:
+  styleProfile:
+    type: object
+  artifacts:
+    type: object
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - STYLE_PROFILE
+  defaultReviewRequired: false
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

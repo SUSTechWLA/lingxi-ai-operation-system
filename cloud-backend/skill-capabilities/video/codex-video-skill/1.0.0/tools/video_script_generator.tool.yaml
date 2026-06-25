@@ -105,7 +105,8 @@ humanReview:
 artifactPolicy:
   produceArtifact: true
   artifactKinds:
-    - MARKDOWN
+    - VIDEO_SCRIPT
+    - SCRIPT_SECTIONS
   defaultReviewRequired: true
 
 qualityPolicy:

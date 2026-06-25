@@ -15,6 +15,7 @@ var referencePattern = regexp.MustCompile(`^\{\{([^.]+)\.output\.([^}]+)\}\}$`)
 type PlanGuard struct {
 	tools          ToolCatalog
 	localValidator *LocalCapabilityValidator
+	directors      DirectorRegistry
 }
 
 // NewPlanGuard creates a PlanGuard with the given tool catalog.
@@ -24,6 +25,11 @@ func NewPlanGuard(tools ToolCatalog, localProvider LocalCapabilityProvider) *Pla
 		tools:          tools,
 		localValidator: NewLocalCapabilityValidator(localProvider),
 	}
+}
+
+func (g *PlanGuard) WithDirectors(directors DirectorRegistry) *PlanGuard {
+	g.directors = directors
+	return g
 }
 
 func (g *PlanGuard) Validate(plan *AgentPlan) error {
@@ -103,6 +109,10 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 		}
 	}
 
+	if err := g.validateStageGuard(plan, stepMap, stepManifests); err != nil {
+		return err
+	}
+
 	// MaxToolCalls check.
 	if plan.Budget.MaxToolCalls > 0 {
 		toolCallCount := countToolCalls(plan.Steps)
@@ -112,6 +122,204 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 	}
 
 	return nil
+}
+
+func (g *PlanGuard) validateStageGuard(
+	plan *AgentPlan,
+	stepMap map[string]AgentStep,
+	stepManifests map[string]*tool.ToolManifest,
+) error {
+	if g == nil || g.directors == nil || plan == nil || plan.Domain != "video_creation" {
+		return nil
+	}
+
+	stageByStep := make(map[string]string, len(plan.Steps))
+	for _, step := range plan.Steps {
+		stageByStep[step.ID] = resolveStepStage(step)
+	}
+
+	callCount := map[string]int{}
+	hasReview := map[string]bool{}
+	outputsByStage := map[string]map[string]bool{}
+	stepsByStage := map[string][]AgentStep{}
+
+	for _, step := range plan.Steps {
+		stage := stageByStep[step.ID]
+		if stage == "" {
+			continue
+		}
+		director := g.directors.Get(stage)
+		if director == nil {
+			continue
+		}
+
+		forbidden := stringSet(director.ForbiddenTools())
+		if forbidden[step.Tool] {
+			return fmt.Errorf("stage guard: role %s stage %s forbidden tool %s", roleLabel(director), stage, step.Tool)
+		}
+		allowed := stringSet(director.AllowedTools())
+		if len(allowed) > 0 && !allowed[step.Tool] && !isQualityCheckerTool(step.Tool) {
+			return fmt.Errorf("stage guard: role %s stage %s does not allow tool %s", roleLabel(director), stage, step.Tool)
+		}
+
+		callCount[stage]++
+		if maxCalls := director.MaxToolCalls(); maxCalls > 0 && callCount[stage] > maxCalls {
+			return fmt.Errorf("stage guard: role %s stage %s exceeds max tool calls %d", roleLabel(director), stage, maxCalls)
+		}
+
+		stepsByStage[stage] = append(stepsByStage[stage], step)
+		if _, ok := outputsByStage[stage]; !ok {
+			outputsByStage[stage] = map[string]bool{}
+		}
+		manifest := stepManifests[step.ID]
+		for _, out := range step.ExpectedOutput {
+			outputsByStage[stage][out] = true
+		}
+		if manifest != nil {
+			for out := range manifest.Output {
+				outputsByStage[stage][out] = true
+			}
+			for _, kind := range manifest.ArtifactPolicy.ArtifactKinds {
+				outputsByStage[stage][kind] = true
+			}
+			if manifest.ApprovalPolicy.Required || (manifest.HumanReview != nil && manifest.HumanReview.Required) {
+				hasReview[stage] = true
+			}
+		}
+
+		if isRenderStage(stage, director) && !hasApprovedPreviewDependency(step, stepMap, stageByStep) {
+			return fmt.Errorf("stage guard: role %s stage %s requires an approved preview dependency before render", roleLabel(director), stage)
+		}
+	}
+
+	for stage, steps := range stepsByStage {
+		if len(steps) == 0 {
+			continue
+		}
+		director := g.directors.Get(stage)
+		if director == nil {
+			continue
+		}
+		if director.RequiresApproval() && !hasReview[stage] {
+			return fmt.Errorf("stage guard: role %s stage %s requires human review but no reviewable tool was planned", roleLabel(director), stage)
+		}
+		role, ok := director.(RoleAgentDirector)
+		if !ok {
+			continue
+		}
+		for _, required := range role.RequiredOutputs() {
+			if !outputsByStage[stage][required] {
+				return fmt.Errorf("stage guard: role %s stage %s missing required output %s", roleLabel(director), stage, required)
+			}
+		}
+		if len(role.RequiredInputs()) > 0 && !stageHasRequiredInputs(steps, role.RequiredInputs()) {
+			return fmt.Errorf("stage guard: role %s stage %s missing required inputs %v", roleLabel(director), stage, role.RequiredInputs())
+		}
+	}
+
+	return nil
+}
+
+func resolveStepStage(step AgentStep) string {
+	if step.Arguments == nil {
+		return ""
+	}
+	stage, _ := step.Arguments["stage"].(string)
+	return stage
+}
+
+func roleLabel(director StageDirector) string {
+	if role, ok := director.(RoleAgentDirector); ok && role.RoleID() != "" {
+		return role.RoleID()
+	}
+	return director.Name()
+}
+
+func stageHasRequiredInputs(steps []AgentStep, required []string) bool {
+	needsArtifactInput := false
+	needsUserRequest := false
+	for _, input := range required {
+		if input == "USER_REQUEST" {
+			needsUserRequest = true
+			continue
+		}
+		needsArtifactInput = true
+	}
+	if needsUserRequest {
+		hasUserRequest := false
+		for _, step := range steps {
+			if step.Arguments == nil {
+				continue
+			}
+			if value, ok := step.Arguments["brief"].(string); ok && value != "" {
+				hasUserRequest = true
+			}
+			if value, ok := step.Arguments["topic"].(string); ok && value != "" {
+				hasUserRequest = true
+			}
+		}
+		if !hasUserRequest {
+			return false
+		}
+	}
+	if !needsArtifactInput {
+		return true
+	}
+	for _, step := range steps {
+		if len(step.DependsOn) > 0 {
+			return true
+		}
+		if step.Arguments == nil {
+			continue
+		}
+		if artifacts, ok := step.Arguments["inputArtifacts"]; ok && artifacts != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func isRenderStage(stage string, director StageDirector) bool {
+	if stage == "render" {
+		return true
+	}
+	if role, ok := director.(RoleAgentDirector); ok {
+		return role.RoleID() == "render_producer"
+	}
+	return false
+}
+
+func hasApprovedPreviewDependency(step AgentStep, stepMap map[string]AgentStep, stageByStep map[string]string) bool {
+	return hasApprovedPreviewDependencyRecursive(step, stepMap, stageByStep, map[string]bool{})
+}
+
+func hasApprovedPreviewDependencyRecursive(
+	step AgentStep,
+	stepMap map[string]AgentStep,
+	stageByStep map[string]string,
+	visited map[string]bool,
+) bool {
+	if visited[step.ID] {
+		return false
+	}
+	visited[step.ID] = true
+	for _, dep := range step.DependsOn {
+		if stageByStep[dep] == "preview" {
+			return true
+		}
+		upstream, ok := stepMap[dep]
+		if !ok {
+			continue
+		}
+		switch upstream.Tool {
+		case "hyperframes_snapshot", "preview_quality_checker":
+			return true
+		}
+		if hasApprovedPreviewDependencyRecursive(upstream, stepMap, stageByStep, visited) {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateWithWarnings is like Validate but returns a list of non-fatal warnings
@@ -267,9 +475,9 @@ func matchesParamType(value interface{}, expectedType string) bool {
 // validateReferenceExpressions checks that {{step.output.field}} references
 // point to existing upstream steps with the declared output fields.
 // It validates:
-//   1. The referenced step exists.
-//   2. The referenced step is declared as a dependency.
-//   3. The referenced field exists in the upstream tool's output schema.
+//  1. The referenced step exists.
+//  2. The referenced step is declared as a dependency.
+//  3. The referenced field exists in the upstream tool's output schema.
 func validateReferenceExpressions(
 	step AgentStep,
 	stepMap map[string]AgentStep,

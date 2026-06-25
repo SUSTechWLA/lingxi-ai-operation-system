@@ -22,6 +22,16 @@ type StageDirector interface {
 	RequiresApproval() bool
 }
 
+type RoleAgentDirector interface {
+	StageDirector
+	RoleID() string
+	DisplayName() string
+	Goal() string
+	RequiredInputs() []string
+	RequiredOutputs() []string
+	HumanReview() *tool.HumanReview
+}
+
 // DirectorRegistry maps stage names to their Directors.
 type DirectorRegistry interface {
 	Get(stageName string) StageDirector
@@ -53,8 +63,11 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 	// Detect missing quality checkers and auto-insert them.
 	steps := c.injectQualityGates(plan.Steps)
 
-	// Enforce stage-level tool restrictions via Directors.
-	steps = c.enforceDirectors(steps, plan.Domain)
+	var err error
+	steps, err = c.applyDirectors(steps, plan.Domain)
+	if err != nil {
+		return nil, err
+	}
 
 	nodes := make([]model.NodeRequest, 0, len(steps)*2)
 	edges := make([]model.Edge, 0, len(steps)*2)
@@ -189,72 +202,99 @@ func buildQualityCheckArgs(sourceStep AgentStep) map[string]interface{} {
 	return args
 }
 
-// enforceDirectors checks each step's tool against the stage director's constraints.
-// Forbidden tools and tools exceeding the max call limit are removed from the plan.
-// This is a safety net that prevents the LLM from calling restricted tools regardless
-// of what the prompt says.
-func (c *PlanCompiler) enforceDirectors(steps []AgentStep, domain string) []AgentStep {
+func (c *PlanCompiler) applyDirectors(steps []AgentStep, domain string) ([]AgentStep, error) {
 	if c.directors == nil {
-		return steps
+		return steps, nil
 	}
 	if domain != "video_creation" {
-		return steps
+		return steps, nil
 	}
 
-	// Try to resolve a stage name from the first step's context.
-	stageName := ""
-	for _, s := range steps {
-		if s.Arguments != nil {
-			if sn, ok := s.Arguments["stage"].(string); ok && sn != "" {
-				stageName = sn
-				break
-			}
-		}
-	}
-	if stageName == "" {
-		return steps
-	}
-
-	d := c.directors.Get(stageName)
-	if d == nil {
-		return steps
-	}
-
-	// Build forbid-set and allow-set for fast lookup.
-	forbidden := stringSet(d.ForbiddenTools())
-	allowed := stringSet(d.AllowedTools())
-	maxCalls := d.MaxToolCalls()
-	if maxCalls <= 0 {
-		maxCalls = 10
-	}
-
-	callCount := 0
-	filtered := make([]AgentStep, 0, len(steps))
+	callCount := map[string]int{}
+	annotated := make([]AgentStep, 0, len(steps))
 	for _, s := range steps {
 		// Skip internal marker tools.
 		if s.Tool == "__quality_gate__" {
-			filtered = append(filtered, s)
-			continue
-		}
-		// Quality-checker tools are always allowed.
-		if isQualityCheckerTool(s.Tool) {
-			filtered = append(filtered, s)
+			annotated = append(annotated, s)
 			continue
 		}
 
+		stage := resolveStepStage(s)
+		if stage == "" {
+			annotated = append(annotated, s)
+			continue
+		}
+		director := c.directors.Get(stage)
+		if director == nil {
+			annotated = append(annotated, s)
+			continue
+		}
+
+		forbidden := stringSet(director.ForbiddenTools())
+		allowed := stringSet(director.AllowedTools())
 		if forbidden[s.Tool] {
-			continue // silently drop forbidden tool
+			return nil, fmt.Errorf("stage guard: role %s stage %s forbidden tool %s", roleLabel(director), stage, s.Tool)
 		}
-		if len(allowed) > 0 && !allowed[s.Tool] {
-			continue // tool not in allow-list
+		if len(allowed) > 0 && !allowed[s.Tool] && !isQualityCheckerTool(s.Tool) {
+			return nil, fmt.Errorf("stage guard: role %s stage %s does not allow tool %s", roleLabel(director), stage, s.Tool)
 		}
-		if callCount >= maxCalls {
-			continue // exceeded stage tool limit
+		callCount[stage]++
+		if maxCalls := director.MaxToolCalls(); maxCalls > 0 && callCount[stage] > maxCalls {
+			return nil, fmt.Errorf("stage guard: role %s stage %s exceeds max tool calls %d", roleLabel(director), stage, maxCalls)
 		}
-		callCount++
-		filtered = append(filtered, s)
+
+		s.Arguments = annotateRoleAgentArgs(s.Arguments, stage, director)
+		annotated = append(annotated, s)
 	}
-	return filtered
+	return annotated, nil
+}
+
+func annotateRoleAgentArgs(args map[string]interface{}, stage string, director StageDirector) map[string]interface{} {
+	out := copyMap(args)
+	out["stage"] = stage
+	if role, ok := director.(RoleAgentDirector); ok {
+		if role.RoleID() != "" {
+			out["roleAgentId"] = role.RoleID()
+		}
+		out["roleAgent"] = roleAgentMap(role)
+		if len(role.RequiredInputs()) > 0 {
+			out["requiredInputs"] = role.RequiredInputs()
+		}
+		if len(role.RequiredOutputs()) > 0 {
+			out["requiredOutputs"] = role.RequiredOutputs()
+		}
+		if role.HumanReview() != nil {
+			out["humanReview"] = humanReviewMap(role.HumanReview())
+		}
+	}
+	return out
+}
+
+func roleAgentMap(role RoleAgentDirector) map[string]interface{} {
+	return map[string]interface{}{
+		"id":              role.RoleID(),
+		"name":            role.Name(),
+		"displayName":     role.DisplayName(),
+		"stage":           role.StageName(),
+		"goal":            role.Goal(),
+		"requiredInputs":  role.RequiredInputs(),
+		"requiredOutputs": role.RequiredOutputs(),
+		"allowedTools":    role.AllowedTools(),
+		"forbiddenTools":  role.ForbiddenTools(),
+	}
+}
+
+func humanReviewMap(review *tool.HumanReview) map[string]interface{} {
+	if review == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"required":    review.Required,
+		"gate":        review.Gate,
+		"title":       review.Title,
+		"reviewFocus": review.ReviewFocus,
+		"userActions": review.UserActions,
+	}
 }
 
 func isQualityCheckerTool(toolName string) bool {
@@ -301,7 +341,7 @@ func compileStep(step AgentStep, manifest *tool.ToolManifest) (compiledStep, err
 		execID := step.ID + "_exec"
 		return compiledStep{
 			nodes: []model.NodeRequest{
-				buildReviewNode(beforeID, step, policy, "before_execute"),
+				buildReviewNode(beforeID, step, manifest, policy, "before_execute"),
 				buildToolNode(execID, step, manifest),
 			},
 			internalEdges: []model.Edge{{From: beforeID, To: execID}},
@@ -314,7 +354,7 @@ func compileStep(step AgentStep, manifest *tool.ToolManifest) (compiledStep, err
 		return compiledStep{
 			nodes: []model.NodeRequest{
 				buildToolNode(execID, step, manifest),
-				buildReviewNode(reviewID, step, policy, "after_artifact"),
+				buildReviewNode(reviewID, step, manifest, policy, "after_artifact"),
 			},
 			internalEdges: []model.Edge{{From: execID, To: reviewID}},
 			entryIDs:      []string{execID},
@@ -326,9 +366,9 @@ func compileStep(step AgentStep, manifest *tool.ToolManifest) (compiledStep, err
 		afterID := step.ID + "_review"
 		return compiledStep{
 			nodes: []model.NodeRequest{
-				buildReviewNode(beforeID, step, policy, "before_execute"),
+				buildReviewNode(beforeID, step, manifest, policy, "before_execute"),
 				buildToolNode(execID, step, manifest),
-				buildReviewNode(afterID, step, policy, "after_artifact"),
+				buildReviewNode(afterID, step, manifest, policy, "after_artifact"),
 			},
 			internalEdges: []model.Edge{
 				{From: beforeID, To: execID},
@@ -407,7 +447,7 @@ func requiresExternalBridge(manifest *tool.ToolManifest) bool {
 	return toolType == "external" || strings.Contains(toolType, "prompt_tool") || toolType == "http" || toolType == "grpc"
 }
 
-func buildReviewNode(nodeID string, step AgentStep, policy tool.ApprovalPolicy, phase string) model.NodeRequest {
+func buildReviewNode(nodeID string, step AgentStep, manifest *tool.ToolManifest, policy tool.ApprovalPolicy, phase string) model.NodeRequest {
 	execID := step.ID + "_exec"
 	input := map[string]interface{}{
 		"stepId":              step.ID,
@@ -425,12 +465,35 @@ func buildReviewNode(nodeID string, step AgentStep, policy tool.ApprovalPolicy, 
 		input["artifactKinds"] = policy.ReviewArtifactKinds
 	}
 	input["requiresApprovedArtifacts"] = policy.BlocksDownstream
+	if step.Arguments != nil {
+		copyInputField(input, step.Arguments, "stage")
+		copyInputField(input, step.Arguments, "roleAgentId")
+		copyInputField(input, step.Arguments, "roleAgent")
+		copyInputField(input, step.Arguments, "requiredInputs")
+		copyInputField(input, step.Arguments, "requiredOutputs")
+		copyInputField(input, step.Arguments, "artifactIndex")
+		copyInputField(input, step.Arguments, "roleMemories")
+	}
+	if manifest != nil && manifest.HumanReview != nil {
+		input["humanReview"] = humanReviewMap(manifest.HumanReview)
+	} else if step.Arguments != nil {
+		copyInputField(input, step.Arguments, "humanReview")
+	}
 
 	return model.NodeRequest{
 		ID:    nodeID,
 		Type:  string(model.NodeTypeReviewGate),
 		Name:  "审核-" + step.ID,
 		Input: input,
+	}
+}
+
+func copyInputField(dst, src map[string]interface{}, key string) {
+	if src == nil {
+		return
+	}
+	if value, ok := src[key]; ok {
+		dst[key] = value
 	}
 }
 

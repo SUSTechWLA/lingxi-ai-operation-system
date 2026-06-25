@@ -2,6 +2,7 @@ name: hyperframes_renderer
 description: 调用 HyperFrames Render Service 将 HyperFrames HTML 项目渲染为 MP4 视频文件，不依赖 CLI。渲染耗时较长且会产生大文件。
 type: local_tool
 version: 1.0.0
+endpoint: builtin://video-creation/hyperframes_renderer
 timeout: 1800
 executionPlane: local
 requiresUserDevice: true
@@ -103,6 +104,7 @@ artifactPolicy:
   produceArtifact: true
   artifactKinds:
     - VIDEO
+    - RENDER_REPORT
   defaultReviewRequired: true
 
 nextRecommendedTools:

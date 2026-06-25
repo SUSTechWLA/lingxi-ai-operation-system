@@ -1,0 +1,21 @@
+id: continuity_keeper
+name: ContinuityKeeperAgent
+displayName: 连续性管理
+stage: continuity
+goal: 维护风格、术语和画面一致性，输出下游 stale 与一致性 warning。
+requiredInputs:
+  - VIDEO_PROPOSAL
+  - VIDEO_SCRIPT
+  - CARD_PLAN
+  - VIDEO_COMPOSITION_SPEC
+requiredOutputs:
+  - CONTINUITY_REPORT
+  - STYLE_PROFILE
+allowedTools:
+  - continuity_checker
+  - style_profile_builder
+  - stale_tracker
+forbiddenTools:
+  - hyperframes_renderer
+  - artifact_packager
+maxToolCalls: 3
