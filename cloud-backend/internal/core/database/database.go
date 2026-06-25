@@ -279,7 +279,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    id VARCHAR(64) PRIMARY KEY,
 		    project_id VARCHAR(64) NOT NULL,
 		    workflow_run_id VARCHAR(64),
+		    task_id TEXT,
 		    stage_name VARCHAR(128) NOT NULL,
+		    role_agent_id TEXT,
 		    unit_id VARCHAR(64) DEFAULT '',
 		    kind VARCHAR(32) NOT NULL DEFAULT 'JSON',
 		    name VARCHAR(255) NOT NULL,
@@ -295,11 +297,21 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    provider VARCHAR(128),
 		    model VARCHAR(128),
 		    is_current BOOLEAN NOT NULL DEFAULT true,
+		    status TEXT DEFAULT 'valid',
+		    human_approved BOOLEAN DEFAULT false,
+		    depends_on JSONB DEFAULT '[]',
+		    produced_by_node TEXT,
+		    produced_by_tool TEXT,
+		    produced_by_role TEXT,
 		    metadata JSONB DEFAULT '{}',
-		    created_at TIMESTAMPTZ DEFAULT NOW()
+		    created_at TIMESTAMPTZ DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
 		CREATE INDEX IF NOT EXISTS idx_artifacts_project_stage ON artifacts(project_id, stage_name, unit_id);
 		CREATE INDEX IF NOT EXISTS idx_artifacts_current ON artifacts(project_id, stage_name, unit_id) WHERE is_current = true;
+		CREATE INDEX IF NOT EXISTS idx_artifacts_project_status ON artifacts(project_id, status);
+		CREATE INDEX IF NOT EXISTS idx_artifacts_project_kind_current ON artifacts(project_id, kind, is_current);
+		CREATE INDEX IF NOT EXISTS idx_artifacts_project_human_approved ON artifacts(project_id, human_approved);
 
 		CREATE TABLE IF NOT EXISTS video_projects (
 		    id VARCHAR(64) PRIMARY KEY,
@@ -565,6 +577,19 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		`ALTER TABLE ai_context ADD CONSTRAINT ai_context_context_type_check CHECK (context_type IN ('TASK_CREATED','TASK_SUCCESS','TASK_FAILED','NODE_SCHEDULED','NODE_READY','NODE_SUCCESS','NODE_FAILED','NODE_RETRY','NODE_SNAPSHOT','NODE_PROGRESS','NODE_CHECKPOINT','NODE_HEARTBEAT_TIMEOUT','NODE_REVIEW_REQUIRED','NODE_SKIPPED','DAG_SUBMITTED','DAG_VALIDATED','AI_REVISE','AI_CANCELLED'))`,
 		`UPDATE ai_context SET created_at = NOW() WHERE created_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_node_heartbeat ON ai_node(heartbeat_at) WHERE long_running = TRUE`,
+		// Artifact v1.0-beta-rc1: promote metadata fields to dedicated columns
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS task_id TEXT`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS role_agent_id TEXT`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'valid'`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS human_approved BOOLEAN DEFAULT false`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS depends_on JSONB DEFAULT '[]'`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS produced_by_node TEXT`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS produced_by_tool TEXT`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS produced_by_role TEXT`,
+		`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_project_status ON artifacts(project_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_project_kind_current ON artifacts(project_id, kind, is_current)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_project_human_approved ON artifacts(project_id, human_approved)`,
 	}
 	for _, stmt := range alterStatements {
 		_, _ = pool.Exec(ctx, stmt)

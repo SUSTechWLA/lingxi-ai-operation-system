@@ -344,7 +344,8 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
 	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
-	localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth()).RegisterRoutes(r)
+	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth())
+	localRunnerHandler.RegisterRoutes(r)
 	// Preflight: check local capabilities before starting a video pipeline.
 	r.GET("/api/video/preflight", authMiddleware.RequireAuth(), localrunner.HandleVideoPreflight(localRunnerService))
 
@@ -624,7 +625,30 @@ func main() {
 			return content, nil
 		})
 		artifactHandler.RegisterRoutes(r)
-		zap.L().Info("Video project and workflow run services registered")
+
+		// Wire artifact service into the agent runtime handler for stale tracking
+		// and artifact approval on review actions.
+		agentRuntimeHandler.
+			WithArtifactService(artifactSvc).
+			WithProjectIDResolver(&taskProjectIDResolver{runRepo: workflowRunRepo})
+
+		// Wire repository-backed render dependency checker so HYPERFRAMES_RENDER
+		// validates database facts (artifact status) before dispatching a LocalJob.
+		nodeExecutor.SetRenderDependencyChecker(
+			workerService.NewRepositoryBackedRenderDependencyChecker(
+				&artifactStateAdapter{svc: artifactSvc},
+				nil, // review check: use payload-based fallback via DefaultRenderDependencyChecker
+				nil, // runner check: use existing heartbeat/capability mechanism
+			),
+		)
+
+		// Wire artifact sync callback so local job completions automatically
+		// write artifact metadata to the cloud ArtifactIndex.
+		localRunnerHandler.WithArtifactSyncCallback(func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error {
+			return syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, taskID, nodeID, toolName, command, output)
+		})
+
+		zap.L().Info("Video project and watch workflow run services registered")
 	}
 
 	srv := &http.Server{
@@ -705,6 +729,75 @@ func (s *runStatusSyncer) UpdateStageStatus(ctx context.Context, runID, stageNam
 
 func (s *runStatusSyncer) FindRunIDByTaskID(ctx context.Context, taskID string) (string, error) {
 	return s.runRepo.FindRunIDByTaskID(ctx, taskID)
+}
+
+// taskProjectIDResolver resolves a project ID from a task ID by looking up
+// the workflow run associated with the task.
+type taskProjectIDResolver struct {
+	runRepo *workflow.RunRepository
+}
+
+func (r *taskProjectIDResolver) ResolveProjectID(ctx context.Context, taskID string) (string, error) {
+	run, err := r.runRepo.FindByTaskID(ctx, taskID)
+	if err != nil || run == nil {
+		return "", err
+	}
+	return run.ProjectID, nil
+}
+
+// artifactStateAdapter adapts artifact.Service to workerService.ArtifactStateProvider.
+type artifactStateAdapter struct {
+	svc *artifact.Service
+}
+
+func (a *artifactStateAdapter) FindCurrentByKind(ctx context.Context, projectID, stageName string) (*workerService.ArtifactState, error) {
+	art, err := a.svc.FindCurrentByKind(ctx, projectID, stageName)
+	if err != nil || art == nil {
+		return nil, err
+	}
+	return &workerService.ArtifactState{
+		ID:            art.ID,
+		Kind:          string(art.Kind),
+		Status:        art.Status,
+		HumanApproved: art.HumanApproved,
+	}, nil
+}
+
+// syncArtifactsFromLocalJob materializes artifact records from a local job's
+// output after it completes successfully. This ensures the cloud ArtifactIndex
+// is always in sync with local artifact production.
+func syncArtifactsFromLocalJob(
+	ctx context.Context,
+	artifactSvc *artifact.Service,
+	nodeRepo repository.NodeRepo,
+	projectID, taskID, nodeID, toolName, command string,
+	output map[string]interface{},
+) error {
+	// Get the node to extract stage/role metadata.
+	node, err := nodeRepo.FindByID(ctx, nodeID)
+	if err != nil || node == nil {
+		zap.L().Warn("artifact sync: cannot find node",
+			zap.String("nodeId", nodeID), zap.Error(err))
+		return err
+	}
+
+	// Use the existing BuildArtifactRequestsFromNode to create artifact records.
+	requests := artifact.BuildArtifactRequestsFromNode(projectID, taskID, node)
+	if len(requests) == 0 {
+		return nil // No artifacts to materialize
+	}
+
+	for _, req := range requests {
+		if _, err := artifactSvc.CreateArtifact(ctx, req); err != nil {
+			zap.L().Warn("artifact sync: failed to create artifact",
+				zap.String("projectId", projectID),
+				zap.String("kind", string(req.Kind)),
+				zap.Error(err),
+			)
+		}
+	}
+
+	return nil
 }
 
 // decisionLogAdapter bridges the workflow DecisionLogStore to the

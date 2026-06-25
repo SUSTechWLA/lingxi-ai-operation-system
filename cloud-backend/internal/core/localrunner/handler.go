@@ -28,14 +28,26 @@ type NodeResultSink interface {
 	OnProgress(ctx context.Context, nodeID string, progress float64, step, message string) error
 }
 
+// ArtifactSyncCallback is invoked after a local job completes successfully,
+// allowing the caller to materialize artifact records from the job output.
+type ArtifactSyncCallback func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error
+
 type Handler struct {
-	service    RunnerService
-	results    NodeResultSink
-	middleware []gin.HandlerFunc
+	service          RunnerService
+	results          NodeResultSink
+	artifactSyncCallback ArtifactSyncCallback
+	middleware       []gin.HandlerFunc
 }
 
 func NewHandler(service RunnerService, results NodeResultSink, middleware ...gin.HandlerFunc) *Handler {
 	return &Handler{service: service, results: results, middleware: middleware}
+}
+
+// WithArtifactSyncCallback sets a callback that is invoked after each successful
+// local job completion to sync artifacts to the cloud ArtifactIndex.
+func (h *Handler) WithArtifactSyncCallback(cb ArtifactSyncCallback) *Handler {
+	h.artifactSyncCallback = cb
+	return h
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
@@ -148,6 +160,10 @@ func (h *Handler) completeJob(c *gin.Context) {
 			writeError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
+	}
+	// Sync artifact metadata to cloud ArtifactIndex after local job completion.
+	if h.artifactSyncCallback != nil && job != nil {
+		_ = h.artifactSyncCallback(c.Request.Context(), job.ProjectID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), req.Output)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

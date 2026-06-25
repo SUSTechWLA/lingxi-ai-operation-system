@@ -57,7 +57,12 @@ type RenderDependencyChecker interface {
 type DefaultRenderDependencyChecker struct{}
 
 func (DefaultRenderDependencyChecker) CheckRenderDependencies(_ context.Context, req RenderDependencyCheckRequest) error {
-	if req.Command != localrunner.CommandHyperFramesRender && req.ToolName != "hyperframes_renderer" {
+	if !isRenderLocalCommand(req.ToolName, req.Command) {
+		return nil
+	}
+	if req.ToolName == "artifact_packager" || localrunner.NormalizeCommand(req.Command) == localrunner.CommandArtifactPackage {
+		// Package guard is handled by RepositoryBackedRenderDependencyChecker.
+		// Default checker only handles render commands.
 		return nil
 	}
 	missing := make([]string, 0)
@@ -485,7 +490,11 @@ func (ne *NodeExecutor) dispatchLocalNode(
 }
 
 func isRenderLocalCommand(toolName, command string) bool {
-	return toolName == "hyperframes_renderer" || localrunner.NormalizeCommand(command) == localrunner.CommandHyperFramesRender
+	normalized := localrunner.NormalizeCommand(command)
+	return toolName == "hyperframes_renderer" ||
+		toolName == "artifact_packager" ||
+		normalized == localrunner.CommandHyperFramesRender ||
+		normalized == localrunner.CommandArtifactPackage
 }
 
 func truthy(value interface{}) bool {

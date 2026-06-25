@@ -354,7 +354,7 @@ function extractArtifacts(node: TraceNodeLike | undefined): Array<Record<string,
   return []
 }
 
-function displayNameForArtifact(kind: string) {
+export function displayNameForArtifact(kind: string) {
   const labels: Record<string, string> = {
     VIDEO_PROPOSAL: '创意方案',
     PROJECT_BRIEF: '项目简报',

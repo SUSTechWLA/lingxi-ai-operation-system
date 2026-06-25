@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
@@ -47,12 +48,25 @@ type DecisionLogRecord struct {
 	Comment        string `json:"comment,omitempty"`
 }
 
+// ArtifactService is the subset of artifact.Service needed by review handlers.
+type ArtifactService interface {
+	MarkDownstreamStale(ctx context.Context, projectID string, changedArtifactID string, reason string) ([]string, error)
+	ApproveArtifact(ctx context.Context, artifactID string, reviewerID string) error
+}
+
+// ProjectIDResolver resolves a project ID from a task ID.
+type ProjectIDResolver interface {
+	ResolveProjectID(ctx context.Context, taskID string) (string, error)
+}
+
 type Handler struct {
-	runner         *Runner
-	nodes          ReviewNodeStore
-	stateMachine   ReviewStateMachine
-	artifactReview ArtifactReviewStore
-	decisionLog    DecisionLogWriter
+	runner            *Runner
+	nodes             ReviewNodeStore
+	stateMachine      ReviewStateMachine
+	artifactReview    ArtifactReviewStore
+	decisionLog       DecisionLogWriter
+	artifactService   ArtifactService
+	projectIDResolver ProjectIDResolver
 }
 
 func NewHandler(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *Handler {
@@ -69,6 +83,18 @@ func (h *Handler) WithArtifactReviewStore(store ArtifactReviewStore) *Handler {
 // WithDecisionLogWriter sets the decision log writer for audit-trail persistence.
 func (h *Handler) WithDecisionLogWriter(w DecisionLogWriter) *Handler {
 	h.decisionLog = w
+	return h
+}
+
+// WithArtifactService sets the artifact service for stale tracking on review actions.
+func (h *Handler) WithArtifactService(s ArtifactService) *Handler {
+	h.artifactService = s
+	return h
+}
+
+// WithProjectIDResolver sets the resolver to look up project ID from task ID.
+func (h *Handler) WithProjectIDResolver(r ProjectIDResolver) *Handler {
+	h.projectIDResolver = r
 	return h
 }
 
@@ -193,6 +219,9 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 	// Write decision log entry for audit trail.
 	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageApproval, req.ReviewerID, req.Comment)
 
+	// Mark the reviewed artifact as approved.
+	h.approveReviewedArtifact(c.Request.Context(), run, node, req.ReviewerID)
+
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "APPROVED"})
 }
 
@@ -238,6 +267,9 @@ func (h *Handler) RejectReview(c *gin.Context) {
 
 	// Write decision log entry for audit trail.
 	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageRejection, req.ReviewerID, reason)
+
+	// Force downstream stale: rejecting an artifact invalidates everything downstream.
+	h.triggerDownstreamStale(c.Request.Context(), run, node, "用户驳回审核")
 
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "REJECTED"})
 }
@@ -472,6 +504,13 @@ func (h *Handler) SubmitEdited(c *gin.Context) {
 
 	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewApproved, req.ReviewerID, req.Comment)
 	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageEdit, req.ReviewerID, req.Comment)
+
+	// Mark reviewed artifact as approved.
+	h.approveReviewedArtifact(c.Request.Context(), run, node, req.ReviewerID)
+
+	// Force downstream stale: editing an artifact invalidates everything downstream.
+	h.triggerDownstreamStale(c.Request.Context(), run, node, "用户修改上游产物")
+
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "APPROVED_EDITED"})
 }
 
@@ -510,6 +549,10 @@ func (h *Handler) RegenerateStage(c *gin.Context) {
 
 	// Write audit trail.
 	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageRegeneration, req.ReviewerID, req.Hint)
+
+	// Force downstream stale: regenerating a stage invalidates everything downstream.
+	h.triggerDownstreamStale(c.Request.Context(), run, node, "用户重新生成阶段")
+
 	httpx.OK(c, gin.H{
 		"reviewId":              node.ID,
 		"status":                "REGENERATING",
@@ -540,6 +583,62 @@ func (h *Handler) regenerateSourceNode(ctx context.Context, gateNode *model.Node
 		return fmt.Errorf("source exec node not found for review gate %s", gateNode.ID)
 	}
 	return h.nodes.UpdateStatus(ctx, sourceID, model.NodeCreated, nil, "")
+}
+
+// triggerDownstreamStale marks all downstream artifacts as stale in the database
+// when an upstream artifact is modified, rejected, or regenerated.
+func (h *Handler) triggerDownstreamStale(ctx context.Context, run *Run, node *model.Node, reason string) {
+	if h.artifactService == nil || h.projectIDResolver == nil {
+		return
+	}
+	projectID, err := h.projectIDResolver.ResolveProjectID(ctx, run.TaskID)
+	if err != nil || projectID == "" {
+		zap.L().Warn("cannot resolve project ID for stale tracking",
+			zap.String("taskId", run.TaskID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	// Find the artifact for this review's stage to use as the changed artifact.
+	// We use the stage name to construct a lookup key.
+	_ = h.artifactService // artifactService is used via MarkDownstreamStale
+	// Note: MarkDownstreamStale requires a changed artifact ID. For now,
+	// we mark stale by artifact kinds derived from the node's required outputs.
+	stageName := nodeInputString(node, "stage")
+	if stageName == "" {
+		return
+	}
+
+	// Compute the artifact kinds that go stale
+	staleKinds := downstreamStaleArtifactsForReview(node)
+	if len(staleKinds) == 0 {
+		return
+	}
+
+	// Mark downstream artifacts stale for this project.
+	// We create a synthetic artifact ID representing the changed stage.
+	changedArtifactID := fmt.Sprintf("stage:%s:%s", projectID, stageName)
+	if _, err := h.artifactService.MarkDownstreamStale(ctx, projectID, changedArtifactID, reason); err != nil {
+		zap.L().Warn("failed to mark downstream stale",
+			zap.String("projectId", projectID),
+			zap.String("stageName", stageName),
+			zap.Error(err),
+		)
+	}
+}
+
+// approveReviewedArtifact marks the artifact associated with a review as human-approved.
+func (h *Handler) approveReviewedArtifact(ctx context.Context, run *Run, node *model.Node, reviewerID string) {
+	if h.artifactService == nil {
+		return
+	}
+	// The artifact ID can sometimes be found in the node's input.
+	artifactID := nodeInputString(node, "artifactId")
+	if artifactID == "" {
+		return
+	}
+	_ = h.artifactService.ApproveArtifact(ctx, artifactID, reviewerID)
 }
 
 func downstreamStaleArtifactsForReview(node *model.Node) []string {

@@ -10,6 +10,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// ArtifactStatus represents the lifecycle status of an artifact.
+type ArtifactStatus string
+
+const (
+	ArtifactStatusValid    ArtifactStatus = "valid"
+	ArtifactStatusStale    ArtifactStatus = "stale"
+	ArtifactStatusRejected ArtifactStatus = "rejected"
+	ArtifactStatusFailed   ArtifactStatus = "failed"
+	ArtifactStatusDeleted  ArtifactStatus = "deleted"
+)
+
 // Service provides business logic for artifact management.
 type Service struct {
 	repo *Repository
@@ -79,6 +90,99 @@ func (s *Service) ListByProject(ctx context.Context, projectID string) ([]*Artif
 	return s.repo.ListByProject(ctx, projectID)
 }
 
+// ListUsableByProject returns only current, valid artifacts for a project.
+// Artifacts with status=stale, rejected, failed, or deleted are excluded.
+func (s *Service) ListUsableByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
+	return s.repo.ListUsableByProject(ctx, projectID)
+}
+
+// ListCurrentByProject is an alias for ListByProject (all current artifacts).
+func (s *Service) ListCurrentByProject(ctx context.Context, projectID string) ([]*Artifact, error) {
+	return s.repo.ListByProject(ctx, projectID)
+}
+
+// ApproveArtifact marks an artifact as human-approved.
+func (s *Service) ApproveArtifact(ctx context.Context, artifactID string, reviewerID string) error {
+	artifact, err := s.repo.FindByID(ctx, artifactID)
+	if err != nil {
+		return fmt.Errorf("approve artifact: %w", err)
+	}
+	if err := s.repo.UpdateHumanApproved(ctx, artifactID, true); err != nil {
+		return fmt.Errorf("approve artifact: %w", err)
+	}
+	zap.L().Info("Artifact approved",
+		zap.String("artifactId", artifactID),
+		zap.String("kind", string(artifact.Kind)),
+		zap.String("reviewerId", reviewerID),
+	)
+	return nil
+}
+
+// RejectArtifact marks an artifact as rejected.
+func (s *Service) RejectArtifact(ctx context.Context, artifactID string, reviewerID string, reason string) error {
+	if err := s.repo.UpdateStatus(ctx, artifactID, string(ArtifactStatusRejected)); err != nil {
+		return fmt.Errorf("reject artifact: %w", err)
+	}
+	zap.L().Info("Artifact rejected",
+		zap.String("artifactId", artifactID),
+		zap.String("reviewerId", reviewerID),
+		zap.String("reason", reason),
+	)
+	return nil
+}
+
+// MarkArtifactStale marks a single artifact as stale with a reason.
+func (s *Service) MarkArtifactStale(ctx context.Context, artifactID string, reason string) error {
+	if err := s.repo.UpdateStatus(ctx, artifactID, string(ArtifactStatusStale)); err != nil {
+		return fmt.Errorf("mark artifact stale: %w", err)
+	}
+	zap.L().Info("Artifact marked stale",
+		zap.String("artifactId", artifactID),
+		zap.String("reason", reason),
+	)
+	return nil
+}
+
+// MarkDownstreamStale marks all downstream artifacts as stale when an upstream
+// artifact changes. Returns the list of artifact kinds that were marked stale.
+func (s *Service) MarkDownstreamStale(ctx context.Context, projectID string, changedArtifactID string, reason string) ([]string, error) {
+	// Find the changed artifact to determine its kind
+	changed, err := s.repo.FindByID(ctx, changedArtifactID)
+	if err != nil {
+		return nil, fmt.Errorf("mark downstream stale: %w", err)
+	}
+
+	// Get the downstream kinds to invalidate
+	downstreamKinds := DownstreamStaleArtifactKinds(string(changed.Kind))
+	if len(downstreamKinds) == 0 {
+		zap.L().Debug("No downstream artifacts to stale",
+			zap.String("changedArtifactId", changedArtifactID),
+			zap.String("kind", string(changed.Kind)),
+		)
+		return nil, nil
+	}
+
+	// Mark them stale in the database
+	affectedIDs, err := s.repo.MarkStaleByKind(ctx, projectID, downstreamKinds, reason)
+	if err != nil {
+		return nil, fmt.Errorf("mark downstream stale: %w", err)
+	}
+
+	zap.L().Info("Downstream artifacts marked stale",
+		zap.String("projectId", projectID),
+		zap.String("changedArtifactId", changedArtifactID),
+		zap.String("changedKind", string(changed.Kind)),
+		zap.Strings("downstreamKinds", downstreamKinds),
+		zap.Int("affectedCount", len(affectedIDs)),
+	)
+	return downstreamKinds, nil
+}
+
+// FindCurrentByKind finds the current artifact of a specific stage kind for a project.
+func (s *Service) FindCurrentByKind(ctx context.Context, projectID, stageName string) (*Artifact, error) {
+	return s.repo.FindCurrentByKind(ctx, projectID, stageName)
+}
+
 func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID string) *Artifact {
 	if req.ContentHash == "" && len(req.Data) > 0 {
 		req.ContentHash = HashContent(req.Data)
@@ -114,31 +218,51 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		metadata["contentAvailability"] = "cloud-inline"
 	}
 
-	return promoteArtifactIndexFields(&Artifact{
-		ProjectID:     req.ProjectID,
-		WorkflowRunID: req.WorkflowRunID,
-		TaskID:        req.TaskID,
-		StageName:     req.StageName,
-		RoleAgentID:   req.RoleAgentID,
-		UnitID:        req.UnitID,
-		Kind:          req.Kind,
-		Name:          req.Name,
-		Version:       nextVersion,
-		ParentID:      parentID,
-		StorageType:   storageType,
-		StorageRef:    storageRef,
-		InlineJSON:    inlineJSON,
-		MimeType:      req.MimeType,
-		SizeBytes:     sizeBytes,
-		ContentHash:   req.ContentHash,
-		PromptHash:    req.PromptHash,
-		Provider:      req.Provider,
-		Model:         req.Model,
-		IsCurrent:     true,
-		Metadata:      metadata,
-	})
+	// Determine beta index fields from metadata or default
+	status := stringMetadata(metadata, "status")
+	if status == "" {
+		status = string(ArtifactStatusValid)
+	}
+	humanApproved := boolMetadata(metadata, "humanApproved")
+	dependsOn := stringSliceMetadata(metadata, "dependsOn")
+	producedByNode := stringMetadata(metadata, "producedByNode")
+	producedByTool := stringMetadata(metadata, "producedByTool")
+	producedByRole := stringMetadata(metadata, "producedByRole")
+
+	return &Artifact{
+		ProjectID:      req.ProjectID,
+		WorkflowRunID:  req.WorkflowRunID,
+		TaskID:         req.TaskID,
+		StageName:      req.StageName,
+		RoleAgentID:    req.RoleAgentID,
+		UnitID:         req.UnitID,
+		Kind:           req.Kind,
+		Name:           req.Name,
+		Version:        nextVersion,
+		ParentID:       parentID,
+		StorageType:    storageType,
+		StorageRef:     storageRef,
+		InlineJSON:     inlineJSON,
+		MimeType:       req.MimeType,
+		SizeBytes:      sizeBytes,
+		ContentHash:    req.ContentHash,
+		PromptHash:     req.PromptHash,
+		Provider:       req.Provider,
+		Model:          req.Model,
+		IsCurrent:      true,
+		Status:         status,
+		HumanApproved:  humanApproved,
+		DependsOn:      dependsOn,
+		ProducedByNode: producedByNode,
+		ProducedByTool: producedByTool,
+		ProducedByRole: producedByRole,
+		Metadata:       metadata,
+	}
 }
 
+// promoteArtifactIndexFields ensures backward compatibility by syncing
+// between dedicated columns and metadata. Dedicated columns are the
+// primary source; metadata is updated to match.
 func promoteArtifactIndexFields(a *Artifact) *Artifact {
 	if a == nil {
 		return nil
@@ -146,6 +270,7 @@ func promoteArtifactIndexFields(a *Artifact) *Artifact {
 	if a.Metadata == nil {
 		a.Metadata = map[string]interface{}{}
 	}
+	// If dedicated column is empty, fall back to metadata (backward compat)
 	if a.Status == "" {
 		a.Status = stringMetadata(a.Metadata, "status")
 		if a.Status == "" {
@@ -176,6 +301,7 @@ func promoteArtifactIndexFields(a *Artifact) *Artifact {
 	if !a.CreatedAt.IsZero() && a.UpdatedAt.IsZero() {
 		a.UpdatedAt = a.CreatedAt
 	}
+	// Sync back to metadata for backward compat
 	a.Metadata["status"] = a.Status
 	a.Metadata["humanApproved"] = a.HumanApproved
 	if a.TaskID != "" {

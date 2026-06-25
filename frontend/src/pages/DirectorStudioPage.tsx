@@ -50,6 +50,7 @@ import {
   buildDirectorTraceNodes,
   canStartFinalRender,
   deriveNextAction,
+  displayNameForArtifact,
   downstreamStaleArtifacts,
   stageActionLabel,
   type DirectorArtifactRecord,
@@ -514,9 +515,11 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
 }
 
 function AssetsPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
+  const staleCount = artifacts.filter((a) => a.status === 'stale').length
   return (
     <div className="space-y-5">
       <section className="card p-6"><p className="text-sm font-bold text-primary-dark">产物库</p><h2 className="mt-2 text-3xl font-black text-ink">产物索引</h2><p className="mt-2 text-sm text-ink-muted">记录每个中间产物的版本、状态、依赖、审核和本地/云端路径。</p></section>
+      {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
       <ArtifactTable artifacts={artifacts} />
     </div>
   )
@@ -583,7 +586,7 @@ function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
 function ArtifactTable({ artifacts, compact = false }: { artifacts: DirectorArtifactRecord[]; compact?: boolean }) {
   return (
     <section className={clsx('card overflow-hidden p-0', compact && 'mt-6')}>
-      <table className="w-full text-left text-sm"><thead className="bg-background-mist text-xs text-ink-soft"><tr>{['ID', '名称', '类型', '版本', '状态', '负责人', '已审核', '存储位置'].map((header) => <th className="px-5 py-4" key={header}>{header}</th>)}</tr></thead><tbody className="divide-y divide-line bg-white/70">{artifacts.map((artifact) => <tr key={artifact.id}><td className="px-5 py-4 font-bold">{artifact.id}</td><td className="px-5 py-4 font-black text-ink">{artifact.name}</td><td className="px-5 py-4 text-ink-muted">{artifact.kind}</td><td className="px-5 py-4">{artifact.version}</td><td className="px-5 py-4"><StatusBadge status={artifact.status} /></td><td className="px-5 py-4 text-ink-muted">{artifact.owner}</td><td className="px-5 py-4">{artifact.humanApproved ? '是' : '否'}</td><td className="px-5 py-4 text-xs text-ink-soft">{artifact.storageRef}</td></tr>)}</tbody></table>
+      <table className="w-full text-left text-sm"><thead className="bg-background-mist text-xs text-ink-soft"><tr>{['ID', '名称', '类型', '版本', '状态', '负责人', '已审核', '存储位置'].map((header) => <th className="px-5 py-4" key={header}>{header}</th>)}</tr></thead><tbody className="divide-y divide-line bg-white/70">{artifacts.map((artifact) => <tr key={artifact.id}><td className="px-5 py-4 font-bold">{artifact.id}</td><td className="px-5 py-4 font-black text-ink">{artifact.name}</td><td className="px-5 py-4 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td><td className="px-5 py-4">{artifact.version}</td><td className="px-5 py-4"><StatusBadge status={artifact.status} /></td><td className="px-5 py-4 text-ink-muted">{artifact.owner}</td><td className="px-5 py-4">{artifact.humanApproved ? '是' : '否'}</td><td className="px-5 py-4 text-xs text-ink-soft">{artifact.storageRef}</td></tr>)}</tbody></table>
     </section>
   )
 }
