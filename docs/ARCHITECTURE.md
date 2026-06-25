@@ -1,7 +1,7 @@
 # 躺营 AIOS 产品架构设计说明文档
 
-> 版本：v3.2（动态 Agent Runtime + 质量门禁体系）
-> 最后更新：2026-06-24
+> 版本：v3.2.1（动态 Agent Runtime + 质量门禁体系 + 产物过期追踪）
+> 最后更新：2026-06-26
 > 适用对象：新加入的后端 / 前端 / 部署工程师
 > 配套文档：[README.md](../README.md)、[AGENTS.md](../AGENTS.md)、[docs/upgrade/video-creation-v1/](upgrade/video-creation-v1/)
 
@@ -278,8 +278,10 @@ SKIPPED（条件未满足，对下游等同满足）
 | `PlanGuard` | `plan_guard.go` | 校验工具存在、参数类型、引用表达式含 output schema 字段存在性、风险等级、侧效应、maxToolCalls。 |
 | `PlanCompiler` | `plan_compiler.go` | 编译 AgentPlan→Transient DAG：自动插入审核 CONTROL 节点、quality checker + quality gate CONTROL 节点。 |
 | `Runner` | `runner.go` | 编排 Planner→Guard→Compiler→Orchestrator 全流程。 |
-| `Handler` | `handler.go` | HTTP：`POST/GET /api/agent/runs`，审核 approve/reject，集成 `artifact_reviews` 表。 |
+| `Handler` | `handler.go` | HTTP：`POST/GET /api/agent/runs`，审核 approve/reject，集成 `artifact_reviews` 表。注入 `ArtifactService` + `ProjectIDResolver` 后，审核通过时自动标记产物已审核，驳回/编辑/重生成时级联标记下游产物为 `stale`。 |
 | `ArtifactReviewStore` | `artifact_review.go` | `artifact_reviews` 表持久化：PENDING→APPROVED/REJECTED。 |
+| `ArtifactService` (注入接口) | `handler.go` | 可选注入，提供 `ApproveArtifact` / `MarkDownstreamStale`。审批通过时标记产物已审核；驳回/编辑/重生成时级联标记下游产物为 `stale`。 |
+| `ProjectIDResolver` (注入接口) | `handler.go` | 可选注入，从 `task_id` 反查 `project_id`，供 stale 追踪使用。 |
 | `PlanRepairer` | `llm_planner.go` | Guard 失败后 LLM 修复一次，失败则 fallback。 |
 | `AgentRunRepository` | `repository.go` | `agent_runs` 表持久化（plan JSONB/stage/status）。 |
 | `E2E Smoke Tests` | `e2e_test.go` | 🆕 端到端冒烟测试（~740 行），覆盖 Planner→Guard→Compiler 全链路、质量门禁、Artifact Review。 |
@@ -352,6 +354,8 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 
 **长任务机制：** 节点标 `longRunning:true` 后，按 `heartbeat_interval` 发心跳、`heartbeat_timeout` 判超时；工具实现 `ProgressReporter` 可上报进度百分比和 checkpoint 断点。
 
+**渲染依赖检查器（`service/render_dependency_checker.go`）：** `RepositoryBackedRenderDependencyChecker` 在分发 `HYPERFRAMES_RENDER` 和 `ARTIFACT_PACKAGE` 类 LocalJob 前，校验数据库中的产物状态（已审核、非 stale）、审核门禁状态和本地 Runner 能力。与 `DefaultRenderDependencyChecker`（仅检查 payload 字段中的 upstream 引用）互补，`isRenderLocalCommand` 扩展至覆盖 `artifact_packager` / `CommandArtifactPackage`。
+
 #### 4.2.4 ToolManifest（`tool/manifest.go`）
 
 工具的完整规格说明书（Name/Description/Parameters/Output/Sandbox/Examples），既是 AI DAG 规划的知识库，也是 `/api/tools` 的返回。内置工具若实现 `ManifestProvider` 用自定义 manifest，否则生成最小 manifest。
@@ -411,8 +415,8 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 |------|------|
 | `model.go` | `Artifact`（projectID/stage/unit/kind/version/parentID/storageType/contentHash/promptHash/provider/model/isCurrent）。Kind: JSON/MARKDOWN/IMAGE/AUDIO/VIDEO/BUNDLE/LOG |
 | `repository.go` | 带版本化的写入（同 project+stage+unit 自增 version，旧版 isCurrent=false） |
-| `service.go` | CreateArtifact / GetByID / ListByProject / GetHistory |
-| `materializer.go` | **`BuildArtifactRequestsFromNode`**：只从成功 node output 的 `artifacts` 本地 manifest 提取产物索引并落库 |
+| `service.go` | CreateArtifact / GetByID / ListByProject / GetHistory / ListUsableByProject / ApproveArtifact / RejectArtifact / MarkArtifactStale / MarkDownstreamStale / FindCurrentByKind。`ArtifactStatus` 枚举：`valid`（可用）/ `stale`（过期）/ `rejected`（已驳回）/ `failed`（失败）/ `deleted`（已删除）。`MarkDownstreamStale` 级联标记上游变更影响的所有下游产物。 |
+| `materializer.go` | **`BuildArtifactRequestsFromNode`**：只从成功 node output 的 `artifacts` 本地 manifest 提取产物索引并落库。新增 `MaterializeLocalArtifacts` 回调模式，本地 job 完成后通过 `ArtifactSyncCallback` 自动同步产物索引到云端 ArtifactIndex。 |
 | `handler.go` | HTTP 路由：列表/详情/内容/历史/返工。返工 `ReviseArtifact` 生成新版本元数据，本体由本地 agent 保存 |
 
 **产物存储边界：**
@@ -460,6 +464,8 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 - `POST /api/local-jobs/:jobId/fail`
 
 `NodeExecutor` 会读取 `ToolManifest.executionPlane`，当工具声明 `local` 时创建 `LocalJob` 并把节点置为 `WAITING_LOCAL`，由本地 runner 主动拉取执行；完成或失败回调会进入 StateMachine 推进 DAG。
+
+`Handler` 支持注入 `ArtifactSyncCallback`（`WithArtifactSyncCallback`），本地 job 成功完成时自动将产物 metadata 同步到云端 `artifacts` 表（storage_type=local, storage_ref, contentHash, size, version 等索引元数据），不传输用户正文。
 
 ### 4.8 apispec — OpenAPI 规范自动生成
 
@@ -681,7 +687,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | 表 | 用途 |
 |----|------|
 | `video_projects` | 视频项目（mode/skill/workflow/generation_mode/aspect_ratio/target_duration，软删除 deleted_at） |
-| `artifacts` | 版本化产物索引（project/stage/unit/kind/version/parent_id/storage_type/storage_ref/content_hash/is_current；新产物正文在本地） |
+| `artifacts` | 版本化产物索引（project/stage/unit/kind/version/parent_id/storage_type/storage_ref/content_hash/prompt_hash/is_current/status/human_approved/depends_on/produced_by_node/produced_by_tool/produced_by_role/updated_at；新产物正文在本地）。status 枚举：valid/stale/rejected/failed/deleted。depends_on 跟踪 artifact ID 级依赖链。 |
 | `bid_projects` | 标书项目（task_id/template_id/industry/tender_file/structure/config） |
 | `bid_chapters` | 标书章节（node_id 关联 CONTROL，status, review_comment, score_items） |
 | `bid_templates` | 标书模板（structure JSONB, workflow_dag） |
@@ -835,7 +841,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 4. **启动创作线** — `handleStart`：route → 建 video project → 建 workflow run
 5. **制作进度** — 按 deliverable（publish_pack/script_only/keyframes/video_prompt/shot_learning）过滤展示 stage 卡片
 6. **产物审片台** — 每 3s 轮询 `/api/video-projects/:id/artifacts`；点产物打开大窗 `ArtifactReviewModal`
-7. **产物大窗** — 按 kind 渲染：MARKDOWN（文档）/ IMAGE（画廊）/ VIDEO（播放器+轨道）/ AUDIO（播放器）/ JSON（ReadableValue 树）；右侧返工面板（说修改意见→生成新版本）+ 审核按钮（调 `/api/video-projects/:id/stages/:stage/approve`，由后端映射到底层 CONTROL 节点）
+7. **产物大窗** — 按 kind 渲染：MARKDOWN（文档）/ IMAGE（画廊）/ VIDEO（播放器+轨道）/ AUDIO（播放器）/ JSON（ReadableValue 树）；右侧返工面板（说修改意见→生成新版本）+ 审核按钮（调 `/api/video-projects/:id/stages/:stage/approve`，由后端映射到底层 CONTROL 节点）。**产物库**页如有过期产物（status=stale）会显示琥珀色警告横幅，提示下游需重新生成。产物类型列使用 `displayNameForArtifact` 中文映射。
 8. **制作记录** — `TraceModal` 展示 task 节点状态 + context 时间线
 
 **关键约定：**
@@ -1136,4 +1142,4 @@ make sandbox-build    # 构建 Rust 沙箱
 
 ---
 
-> 本文档基于截至 2026-06-21 的代码现状（分支 `develop_go`）撰写，所有路径、接口、表结构均经源码核对。如代码与本文档冲突，**以代码为准**并及时回更本文档。
+> 本文档基于截至 2026-06-26 的代码现状（分支 `develop_go`，commit `64ae34f`）撰写，所有路径、接口、表结构均经源码核对。如代码与本文档冲突，**以代码为准**并及时回更本文档。

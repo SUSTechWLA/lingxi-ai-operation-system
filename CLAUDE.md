@@ -28,7 +28,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务（:8787），Node.js/Typ
 ### 产物存储边界（v3.0 关键变更）
 
 - **用户生成内容**（脚本、JSON、图片、音频、视频）→ 保存在用户本机 `local-backend` 的 `artifacts/` 目录
-- **云端 artifact 表** → 仅保存 `storage_type=local`、`storage_ref=local://...`、hash、size、version、provider/model 等索引元数据
+- **云端 artifact 表** → 仅保存 `storage_type=local`、`storage_ref=local://...`、hash、size、version、status、human_approved、depends_on、provider/model 等索引元数据
 - **云端不保存**用户产物正文（`inline_json` 为空），不把用户图片/音频/视频默认上传 MinIO
 
 ## 快速启动
@@ -62,6 +62,7 @@ go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
 VIDEO_CREATION_ENABLED=true
 MODEL_PROVIDER_MODE=fake               # 测试用 fake，生产用 real
 SKILL_ROOT=skills
+SKILL_CAPABILITY_ROOT=skill-capabilities  # Dynamic Agent 工具注册表
 ```
 
 ## 目录结构
@@ -78,7 +79,7 @@ cloud-backend/
       skillruntime/                     # Skill 包加载 + LLM Router
       skillcapability/                  # 🆕 Skill Capability 加载（Dynamic Agent 工具注册表）
       modelgateway/                     # 统一模型网关（指纹缓存 + 重试 + Provider 路由）
-      artifact/                         # 版本化产物管理（v3.0: metadata-only，内容在本地）
+      artifact/                         # 版本化产物管理（v3.2: metadata-only + status/stale 追踪 + depends_on 依赖链，内容在本地）
       localrunner/                      # Electron 本地任务协议
       translator/                       # NL→DAG 翻译
       context/                          # 审计追踪
@@ -188,7 +189,7 @@ POST /api/agent/runs/:runId/reviews/:reviewId/reject    # 🆕 审核驳回
 - **HyperFrames Render Service** — 独立 Node.js 渲染服务（:8787），通过 `@hyperframes/producer` 程序化渲染 MP4，不再依赖 `npx hyperframes` CLI。Go 端通过 HTTP Client 调用
 - **Outbox 可靠投递** — 事件先写 DB 再异步 relay 到 Kafka，基础设施抖动时不丢事件
 - **事件驱动** — Kafka topics: `ai.node.ready` → `ai.node.result`（含 executed/failed）→ 状态机驱动
-- **版本化产物** — 每个 stage 产物有 version/contentHash/promptHash，支持返工闭环
+- **版本化产物 + 过期追踪** — 每个 stage 产物有 version/contentHash/promptHash，支持返工闭环；上游变更/驳回/重生成自动级联标记下游产物为 stale（过期），前端产物页显示 stale 警告横幅
 - **沙箱隔离** — Rust gRPC 沙箱执行不受信任代码（setrlimit 资源限制）
 - **就绪健康检查** — `GET /api/health/ready` 探测 PostgreSQL/Redis/Kafka 依赖状态
 - **OpenAPI 自动文档** — `/docs` Swagger UI + `/api/openapi.json`，由代码路由注册自动生成
