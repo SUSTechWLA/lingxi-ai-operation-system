@@ -46,6 +46,10 @@ docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
 | `MODEL_PROVIDER_MODE` | `fake` 用于测试，`real` 用于生产 |
 | `SKILL_ROOT` | Skill 包目录，容器内默认 `/app/skills` |
 | `LOCAL_RUNNER_ENABLED` | 云端保持 `false`，本地执行交给 `local-backend` |
+| `SKILL_CAPABILITY_ROOT` | Skill Capability 根目录（Dynamic Agent 工具注册），默认 `skill-capabilities` |
+| `LEGACY_SKILL_WORKFLOW_AUTOREGISTER` | 是否自动将 legacy Skill 注册为 Workflow 模板，默认 `false` |
+| `AGENT_PLANNER_MODE` | Planner 模式：`llm` / `heuristic` / `hybrid`（默认） |
+| `AGENT_PLANNER_MAX_TOOLS` | HybridToolRetriever 检索 TopK 候选工具数，默认 `8` |
 
 ## 验证
 

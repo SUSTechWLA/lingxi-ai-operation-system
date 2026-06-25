@@ -72,7 +72,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 | 业务线 | 入口 Agent | 状态 |
 |--------|-----------|------|
 | 自媒体视频创作（口播/镜头式/导演级/拉片） | `internal/agents/video` | ✅ MVP 可用（feature-gated） |
-| VideoForge Studio P0（Pipeline/Proposal/Render Strategy） | `video-pipelines/` + `skill-capabilities/video/codex-video-skill` | ✅ 可用（Dynamic Agent 工具链） |
+| VideoForge Studio P0（Pipeline/Proposal/Render Strategy） | 仓库根 `video-pipelines/` + `skill-capabilities/video/codex-video-skill` | ✅ 可用（Dynamic Agent 工具链） |
 | 内容发布 + AI 生成/润色 | `internal/agents/publish` | ✅ 可用 |
 | AI 对话助手（多轮对话 → DAG） | `internal/agents/chat` | ✅ 可用 |
 | 标书/投标文档生成 | `internal/agents/bid` | ✅ 可用 |
@@ -333,7 +333,7 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `video_metadata` | video_metadata.go | Executable | 下载视频→提取时长/分辨率/帧率/编码 |
 | `video_analyzer` | video_analyzer.go | Executable | ffmpeg 关键帧 + Whisper 转录 |
 | `video_copy_generator` | video_copy_generator.go | Executable | 多模态生成短视频文案 |
-| `pipeline_selector` | video_creation_external_tools.go | builtin_prompt_tool | 读取 `video-pipelines/*.yaml`，选择 VideoForge pipeline |
+| `pipeline_selector` | video_creation_external_tools.go | builtin_prompt_tool | 读取仓库根 `video-pipelines/*.yaml`，选择 VideoForge pipeline |
 | `capability_preflight` | video_creation_external_tools.go | builtin_prompt_tool | 输出文本模型、HyperFrames、Seedance、TTS/ASR 能力状态 |
 | `proposal_generator` | video_creation_external_tools.go | builtin_prompt_tool | 生成 `proposal_packet`，需 Artifact Review 后继续 |
 | `visual_feasibility_analyzer` | video_creation_external_tools.go | builtin_prompt_tool | 按镜头和元素评估 HyperFrames/Seedance/Hybrid 可行性 |
@@ -893,7 +893,7 @@ axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CL
 | `ai.progress` | Worker（heartbeat/progress/checkpoint） | ProgressConsumer（更新 DB + 审计） |
 | `ai.task.completed` / `ai.task.failed` | StateService | （外部观察） |
 
-> ⚠️ 旧文档里的 `ai.node.executed` / `ai.node.failed` 已合并进 `ai.node.result`（用 Status 字段区分）。
+> ⚠️ 事件驱动实际只发布/消费 `ai.node.result`（用 Status 字段区分成功/失败）。旧 topic 常量 `ai.node.executed` / `ai.node.failed` 在 `eventbus/eventbus.go` 中保留但未在生产链路中使用。
 
 ### 10.2 消费者组
 
@@ -1083,7 +1083,7 @@ make sandbox-build    # 构建 Rust 沙箱
    - `docs/AIOS_CORE_BACKEND_BOUNDARY.md` 不存在；「2 个 Skill」实为 6 个；「14 个内置工具」需核对。
 
 3. **API 路径文档与代码对齐**
-   - 对话接口实际是 `/api/chat/sessions/*`，旧文档写 `/api/skill/dialog/session/*`；Kafka topic `ai.node.executed/failed` 已合并为 `ai.node.result`。以代码为准统一。
+   - 对话接口实际是 `/api/chat/sessions/*`，旧文档写 `/api/skill/dialog/session/*`；事件驱动使用 `ai.node.result`（Status 区分成功/失败），旧 topic 常量 `ai.node.executed`/`ai.node.failed` 保留但未在生产链路消费。以代码为准统一。
 
 ### 🟠 P1 — 架构一致性
 
@@ -1102,7 +1102,7 @@ make sandbox-build    # 构建 Rust 沙箱
 ### 🟡 P2 — 可靠性与可观测
 
 8. **引入正式 DB 迁移工具**
-   - 现在用 `CREATE TABLE IF NOT EXISTS` + `ALTER ADD COLUMN IF NOT EXISTS` 全堆在 `RunMigrations` 里（已 ~400 行）。建议上 `golang-migrate` 或 `goose`，支持版本回退、CI 校验、生产灰度。
+   - 现在用 `CREATE TABLE IF NOT EXISTS` + `ALTER ADD COLUMN IF NOT EXISTS` 全堆在 `RunMigrations` 里（已 ~600 行）。建议上 `golang-migrate` 或 `goose`，支持版本回退、CI 校验、生产灰度。
 
 9. **SSE 实时进度推送**
    - nginx 已为 `/api/progress/stream` 关闭缓冲，但后端该端点未实现，前端只能 3s 轮询 artifacts。实现 SSE 后体验和负载都更好（KNOWN_LIMITATIONS 也提到）。

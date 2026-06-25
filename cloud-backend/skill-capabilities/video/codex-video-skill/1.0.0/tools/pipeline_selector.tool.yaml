@@ -27,7 +27,7 @@ parameters:
   pipelineRoot:
     type: string
     required: false
-    description: Pipeline manifest 根目录，默认 cloud-backend/video-pipelines
+    description: Pipeline manifest 根目录，默认 video-pipelines（相对于 cloud-backend 工作目录，或指定绝对路径指向仓库根 video-pipelines/）
 
 output:
   pipelineSelection:

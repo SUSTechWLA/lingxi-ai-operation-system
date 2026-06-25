@@ -5,10 +5,11 @@
 AIOS 现在按运行边界拆分为三个主要部分：
 
 ```text
-frontend/       # React + Electron 桌面/Web 前端
-local-backend/  # 本地执行器，无数据库、无 Docker，只处理本地文件/缓存/日志/诊断
-cloud-backend/  # 云端 AIOS Core，负责 LLM/API、配置、编排、云端日志和外部集成
-                #   🆕 Dynamic Agent Runtime: Planner → Guard → Compiler → DAG
+frontend/                    # React + Electron 桌面/Web 前端
+local-backend/               # 本地执行器，无数据库、无 Docker，只处理本地文件/缓存/日志/诊断
+cloud-backend/               # 云端 AIOS Core，负责 LLM/API、配置、编排、云端日志和外部集成
+                             #   🆕 Dynamic Agent Runtime: Planner → Guard → Compiler → DAG
+hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript），无 CLI 依赖
 ```
 
 ## 本地用户
