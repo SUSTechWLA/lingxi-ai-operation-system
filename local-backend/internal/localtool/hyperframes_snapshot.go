@@ -42,17 +42,17 @@ type hyperFramesSnapshotRequest struct {
 }
 
 type hyperFramesSnapshotResponse struct {
-	OK        bool               `json:"ok"`
-	Snapshots []snapshotImage    `json:"snapshots,omitempty"`
-	Count     int                `json:"count"`
-	Error     string             `json:"error,omitempty"`
+	OK        bool            `json:"ok"`
+	Snapshots []snapshotImage `json:"snapshots,omitempty"`
+	Count     int             `json:"count"`
+	Error     string          `json:"error,omitempty"`
 }
 
 type snapshotImage struct {
 	TimePoint string `json:"timePoint"`
-	Data      string `json:"data,omitempty"`      // base64-encoded PNG
-	Path      string `json:"path,omitempty"`       // absolute filesystem path (service-side)
-	Filename  string `json:"filename,omitempty"`   // suggested filename
+	Data      string `json:"data,omitempty"`     // base64-encoded PNG
+	Path      string `json:"path,omitempty"`     // absolute filesystem path (service-side)
+	Filename  string `json:"filename,omitempty"` // suggested filename
 }
 
 // Execute resolves local:// paths, calls the HyperFrames Render Service
@@ -181,13 +181,14 @@ func (e *HyperFramesSnapshotExecutor) Execute(ctx context.Context, job Job) (*Re
 		"previewsDir":  "local://projects/" + projectID + "/previews",
 		"artifacts": []map[string]interface{}{
 			{
+				"unitId":         "preview-snapshots",
 				"kind":           "PREVIEW_SNAPSHOTS",
 				"name":           "preview_snapshots",
 				"storageType":    "local",
 				"storageRef":     "local://projects/" + projectID + "/previews",
 				"mimeType":       "image/png",
 				"sizeBytes":      0,
-				"status":         "pending",
+				"status":         "valid",
 				"humanApproved":  false,
 				"dependsOn":      []string{"HYPERFRAMES_PROJECT"},
 				"producedByTool": "hyperframes_snapshot",

@@ -129,16 +129,18 @@ func (e *ArtifactPackageExecutor) Execute(ctx context.Context, job Job) (*Result
 	}
 
 	localRef := "local://projects/" + projectID + "/packages/project_package.zip"
+	packagedAt := time.Now().UTC().Format(time.RFC3339)
 	return &Result{Output: map[string]interface{}{
-		"success":       true,
-		"summary":       "项目产物打包完成",
-		"outputRef":     localRef,
-		"sizeBytes":     info.Size(),
-		"fileCount":     len(packagedFiles),
-		"files":         packagedFiles,
-		"packagedAt":    time.Now().UTC().Format(time.RFC3339),
+		"success":    true,
+		"summary":    "项目产物打包完成",
+		"outputRef":  localRef,
+		"sizeBytes":  info.Size(),
+		"fileCount":  len(packagedFiles),
+		"files":      packagedFiles,
+		"packagedAt": packagedAt,
 		"artifacts": []map[string]interface{}{
 			{
+				"unitId":         "project-package",
 				"kind":           "PROJECT_PACKAGE",
 				"name":           "project_package.zip",
 				"storageType":    "local",
@@ -150,6 +152,11 @@ func (e *ArtifactPackageExecutor) Execute(ctx context.Context, job Job) (*Result
 				"dependsOn":      []string{"VIDEO", "FFMPEG_PROBE_REPORT", "FINAL_REVIEW"},
 				"producedByTool": "artifact_packager",
 				"producedByRole": "交付制片",
+				"metadata": map[string]interface{}{
+					"fileCount":  len(packagedFiles),
+					"files":      packagedFiles,
+					"packagedAt": packagedAt,
+				},
 			},
 		},
 	}}, nil

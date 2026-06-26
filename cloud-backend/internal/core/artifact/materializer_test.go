@@ -131,6 +131,64 @@ func TestBuildArtifactsFromNodeOutputHandlesSingleMapManifest(t *testing.T) {
 	}
 }
 
+func TestArtifactMaterializerRejectsArtifactWithoutUnitID(t *testing.T) {
+	node := &model.Node{
+		ID:     "render_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "render",
+		},
+		Output: map[string]interface{}{
+			"stdout": `{
+				"artifacts": [
+					{
+						"kind": "VIDEO",
+						"name": "final.mp4",
+						"storageRef": "local://projects/vp-1/renders/final.mp4"
+					}
+				]
+			}`,
+		},
+	}
+
+	_, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err == nil {
+		t.Fatal("expected missing unitId to be rejected")
+	}
+	if !strings.Contains(err.Error(), "ARTIFACT_MANIFEST_INVALID") || !strings.Contains(err.Error(), "unitId is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestArtifactMaterializerRejectsArtifactWithoutKind(t *testing.T) {
+	node := &model.Node{
+		ID:     "render_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "render",
+		},
+		Output: map[string]interface{}{
+			"stdout": `{
+				"artifacts": [
+					{
+						"unitId": "final-video",
+						"name": "final.mp4",
+						"storageRef": "local://projects/vp-1/renders/final.mp4"
+					}
+				]
+			}`,
+		},
+	}
+
+	_, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err == nil {
+		t.Fatal("expected missing kind to be rejected")
+	}
+	if !strings.Contains(err.Error(), "ARTIFACT_MANIFEST_INVALID") || !strings.Contains(err.Error(), "kind is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildArtifactsFromNodeOutputHandlesMapManifestWithValidFields(t *testing.T) {
 	// Verify that a single-map artifacts manifest WITH valid unitId/kind
 	// is correctly materialized into an artifact request.

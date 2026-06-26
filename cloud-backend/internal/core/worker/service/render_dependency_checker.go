@@ -12,13 +12,14 @@ import (
 // ArtifactStateProvider is the subset of artifact.Service needed by the
 // repository-backed render dependency checker.
 type ArtifactStateProvider interface {
-	// FindCurrentByKind returns the current artifact of a given stage kind for a project.
-	FindCurrentByKind(ctx context.Context, projectID, stageName string) (*ArtifactState, error)
+	// FindCurrentByStageAndKind returns the current artifact of an exact stage+kind pair for a project.
+	FindCurrentByStageAndKind(ctx context.Context, projectID, stageName, artifactKind string) (*ArtifactState, error)
 }
 
 // ArtifactState is a lightweight view of an artifact for dependency checking.
 type ArtifactState struct {
 	ID            string
+	StageName     string
 	Kind          string
 	Status        string
 	HumanApproved bool
@@ -52,7 +53,11 @@ func NewRepositoryReviewApprovalChecker(artifactProvider ArtifactStateProvider) 
 // IsReviewApproved checks whether the current artifact for the given project+stage
 // has been reviewed and approved by a human.
 func (c *RepositoryReviewApprovalChecker) IsReviewApproved(ctx context.Context, projectID, stageName string) (bool, error) {
-	artifact, err := c.artifactProvider.FindCurrentByKind(ctx, projectID, stageName)
+	artifactKind := reviewArtifactKindForStage(stageName)
+	if artifactKind == "" {
+		return false, nil
+	}
+	artifact, err := c.artifactProvider.FindCurrentByStageAndKind(ctx, projectID, stageName, artifactKind)
 	if err != nil || artifact == nil {
 		return false, err
 	}
@@ -138,7 +143,7 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 	missing := make([]string, 0)
 
 	// 1. VIDEO_COMPOSITION_SPEC must be valid and human-approved (stage: composition)
-	composition, err := c.findArtifact(ctx, req.ProjectID, "composition")
+	composition, err := c.findArtifact(ctx, req.ProjectID, "composition", "VIDEO_COMPOSITION_SPEC")
 	if err != nil {
 		zap.L().Warn("render guard: cannot check composition artifact", zap.Error(err))
 	}
@@ -149,9 +154,17 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 		missing = append(missing, "视频结构尚未确认")
 	}
 
-	// 2. HYPERFRAMES_PROJECT must be valid (stage: preview, same stage as snapshots)
-	//    We check the preview stage artifact which covers both.
-	preview, err := c.findArtifact(ctx, req.ProjectID, "preview")
+	// 2. HYPERFRAMES_PROJECT must be valid (stage: preview)
+	project, err := c.findArtifact(ctx, req.ProjectID, "preview", "HYPERFRAMES_PROJECT")
+	if err != nil {
+		zap.L().Warn("render guard: cannot check hyperframes project artifact", zap.Error(err))
+	}
+	if project == nil || project.Status != "valid" {
+		missing = append(missing, "渲染项目不存在或已过期")
+	}
+
+	// 3. PREVIEW_SNAPSHOTS must be valid and human-approved (stage: preview)
+	preview, err := c.findArtifact(ctx, req.ProjectID, "preview", "PREVIEW_SNAPSHOTS")
 	if err != nil {
 		zap.L().Warn("render guard: cannot check preview artifact", zap.Error(err))
 	}
@@ -162,7 +175,7 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 		missing = append(missing, "预览尚未确认")
 	}
 
-	// 3. Preview review must be APPROVED
+	// 4. Preview review must be APPROVED
 	if c.reviewChecker != nil {
 		approved, err := c.reviewChecker.IsReviewApproved(ctx, req.ProjectID, "preview")
 		if err != nil {
@@ -173,7 +186,7 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 		}
 	}
 
-	// 4. Local runner must be online and support HYPERFRAMES_RENDER
+	// 5. Local runner must be online and support HYPERFRAMES_RENDER
 	if c.runnerChecker != nil {
 		supported, err := c.runnerChecker.SupportsCommand(ctx, "HYPERFRAMES_RENDER")
 		if err != nil {
@@ -208,7 +221,7 @@ func (c *RepositoryBackedRenderDependencyChecker) checkPackageGuard(
 	missing := make([]string, 0)
 
 	// 1. VIDEO must be valid (stage: render)
-	video, err := c.findArtifact(ctx, req.ProjectID, "render")
+	video, err := c.findArtifact(ctx, req.ProjectID, "render", "VIDEO")
 	if err != nil {
 		zap.L().Warn("package guard: cannot check video artifact", zap.Error(err))
 	}
@@ -216,19 +229,25 @@ func (c *RepositoryBackedRenderDependencyChecker) checkPackageGuard(
 		missing = append(missing, "最终视频不存在或已过期")
 	}
 
-	// 2. FFMPEG_PROBE_REPORT and FINAL_REVIEW share the "quality" stage.
-	//    We check the quality stage artifact which covers both.
-	qualityArtifact, err := c.findArtifact(ctx, req.ProjectID, "quality")
+	// 2. FFMPEG_PROBE_REPORT must be valid (stage: quality)
+	probe, err := c.findArtifact(ctx, req.ProjectID, "quality", "FFMPEG_PROBE_REPORT")
 	if err != nil {
-		zap.L().Warn("package guard: cannot check quality artifacts", zap.Error(err))
+		zap.L().Warn("package guard: cannot check ffmpeg probe artifact", zap.Error(err))
 	}
-	if qualityArtifact == nil || qualityArtifact.Status != "valid" {
+	if probe == nil || probe.Status != "valid" {
 		missing = append(missing, "视频检测报告不存在或已过期")
+	}
+
+	// 3. FINAL_REVIEW must be valid and have metadata.passed == true.
+	review, err := c.findArtifact(ctx, req.ProjectID, "quality", "FINAL_REVIEW")
+	if err != nil {
+		zap.L().Warn("package guard: cannot check final review artifact", zap.Error(err))
+	}
+	if review == nil || review.Status != "valid" {
 		missing = append(missing, "质量报告不存在或已过期")
 	} else {
-		// 3. FINAL_REVIEW must have metadata.passed == true
-		if qualityArtifact.Metadata != nil {
-			if passed, ok := qualityArtifact.Metadata["passed"].(bool); !ok || !passed {
+		if review.Metadata != nil {
+			if passed, ok := review.Metadata["passed"].(bool); !ok || !passed {
 				missing = append(missing, "质量报告未通过")
 			}
 		} else {
@@ -249,12 +268,39 @@ func (c *RepositoryBackedRenderDependencyChecker) checkPackageGuard(
 
 // findArtifact looks up a current artifact by stage name for a project.
 func (c *RepositoryBackedRenderDependencyChecker) findArtifact(
-	ctx context.Context, projectID, stageName string,
+	ctx context.Context, projectID, stageName, artifactKind string,
 ) (*ArtifactState, error) {
 	if c.artifactProvider == nil {
 		return nil, nil
 	}
-	return c.artifactProvider.FindCurrentByKind(ctx, projectID, stageName)
+	return c.artifactProvider.FindCurrentByStageAndKind(ctx, projectID, stageName, artifactKind)
+}
+
+func reviewArtifactKindForStage(stageName string) string {
+	switch stageName {
+	case "proposal":
+		return "VIDEO_PROPOSAL"
+	case "script":
+		return "VIDEO_SCRIPT"
+	case "storyboard":
+		return "CARD_PLAN"
+	case "composition":
+		return "VIDEO_COMPOSITION_SPEC"
+	case "reference":
+		return "REFERENCE_ASSET_PLAN"
+	case "continuity":
+		return "CONTINUITY_REPORT"
+	case "preview":
+		return "PREVIEW_SNAPSHOTS"
+	case "render":
+		return "VIDEO"
+	case "quality":
+		return "FINAL_REVIEW"
+	case "package":
+		return "PROJECT_PACKAGE"
+	default:
+		return ""
+	}
 }
 
 // RenderDependencyError is returned when render preconditions are not met.

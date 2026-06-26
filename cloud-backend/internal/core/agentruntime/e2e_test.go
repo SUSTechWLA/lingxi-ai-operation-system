@@ -292,7 +292,7 @@ func TestE2E_TangyingDirector_FirstUserBeta(t *testing.T) {
 
 	requiredStages := []string{"proposal", "script", "storyboard", "composition", "reference", "continuity", "preview", "render", "quality", "package"}
 	requiredRoles := []string{"CreativeDirectorAgent", "ScriptWriterAgent", "StoryboardArtistAgent", "CompositionDirectorAgent", "ReferenceSelectorAgent", "ContinuityKeeperAgent", "PreviewDirectorAgent", "RenderProducerAgent", "QualityReviewerAgent", "PackageProducerAgent"}
-	requiredArtifacts := []string{"VIDEO_PROPOSAL", "VIDEO_SCRIPT", "CARD_PLAN", "VIDEO_COMPOSITION_SPEC", "REFERENCE_ASSET_PLAN", "STYLE_PROFILE", "CONTINUITY_REPORT", "HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "VIDEO", "FINAL_REVIEW", "PROJECT_PACKAGE"}
+	requiredArtifacts := []string{"VIDEO_PROPOSAL", "VIDEO_SCRIPT", "CARD_PLAN", "VIDEO_COMPOSITION_SPEC", "REFERENCE_ASSET_PLAN", "STYLE_PROFILE", "CONTINUITY_REPORT", "HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "VIDEO", "FFMPEG_PROBE_REPORT", "FINAL_REVIEW", "PROJECT_PACKAGE"}
 
 	stepStages := map[string]bool{}
 	for _, step := range plan.Steps {
@@ -520,7 +520,7 @@ func tangyingDirectorBetaPlan() *AgentPlan {
 					"stage": "quality",
 					"video": "{{render.output.video}}",
 				},
-				ExpectedOutput:  []string{"finalReview", "FINAL_REVIEW"},
+				ExpectedOutput:  []string{"ffmpegProbeReport", "finalReview", "FFMPEG_PROBE_REPORT", "FINAL_REVIEW"},
 				ProduceArtifact: true,
 			},
 			{
@@ -593,9 +593,11 @@ func tangyingDirectorBetaCatalog() staticToolCatalog {
 			"RENDER_REPORT": "object",
 		}, []string{"VIDEO", "RENDER_REPORT"}, tool.ApprovalBeforeExecute, []string{"预览是否已确认", "是否允许开始本地渲染"}),
 		"final_review_generator": betaManifest("final_review_generator", []string{"video"}, map[string]string{
-			"finalReview":  "object",
-			"FINAL_REVIEW": "object",
-		}, []string{"FINAL_REVIEW"}, tool.ApprovalNone, nil),
+			"ffmpegProbeReport":   "object",
+			"finalReview":         "object",
+			"FFMPEG_PROBE_REPORT": "object",
+			"FINAL_REVIEW":        "object",
+		}, []string{"FFMPEG_PROBE_REPORT", "FINAL_REVIEW"}, tool.ApprovalNone, nil),
 		"artifact_packager": betaManifest("artifact_packager", []string{"finalReview", "packageName"}, map[string]string{
 			"projectPackage":  "object",
 			"PROJECT_PACKAGE": "object",

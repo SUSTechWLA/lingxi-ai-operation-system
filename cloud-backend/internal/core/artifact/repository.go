@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -234,7 +236,7 @@ func (r *Repository) ListStaleByProject(ctx context.Context, projectID string) (
 	return scanArtifacts(rows)
 }
 
-// FindCurrentByKind finds the current artifact of a specific kind for a project.
+// FindCurrentByKind finds the current artifact for a project stage.
 func (r *Repository) FindCurrentByKind(ctx context.Context, projectID, stageName string) (*Artifact, error) {
 	return scanArtifact(r.pool.QueryRow(ctx,
 		`SELECT `+fullSelectColumns+`
@@ -243,6 +245,26 @@ func (r *Repository) FindCurrentByKind(ctx context.Context, projectID, stageName
 		 LIMIT 1`,
 		projectID, stageName,
 	))
+}
+
+// FindCurrentByStageAndKind finds the newest current artifact for an exact
+// project stage_name + artifact kind pair.
+func (r *Repository) FindCurrentByStageAndKind(ctx context.Context, projectID, stageName, artifactKind string) (*Artifact, error) {
+	artifact, err := scanArtifact(r.pool.QueryRow(ctx,
+		`SELECT `+fullSelectColumns+`
+		 FROM artifacts
+		 WHERE project_id=$1
+		   AND stage_name=$2
+		   AND kind=$3
+		   AND is_current=true
+		 ORDER BY version DESC, created_at DESC
+		 LIMIT 1`,
+		projectID, stageName, artifactKind,
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return artifact, err
 }
 
 // UpdateStatus updates the status of an artifact.

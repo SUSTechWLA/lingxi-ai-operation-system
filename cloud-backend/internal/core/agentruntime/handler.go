@@ -53,7 +53,9 @@ type ArtifactService interface {
 	MarkDownstreamStale(ctx context.Context, projectID string, changedArtifactID string, reason string) ([]string, error)
 	MarkDownstreamStaleByStageName(ctx context.Context, projectID string, stageName string, reason string) ([]string, error)
 	ApproveArtifact(ctx context.Context, artifactID string, reviewerID string) error
+	ApproveCurrentArtifactsByStageAndKinds(ctx context.Context, projectID string, stageName string, artifactKinds []string, reviewerID string) ([]string, error)
 	FindCurrentByKind(ctx context.Context, projectID, stageName string) (*artifact.Artifact, error)
+	FindCurrentByStageAndKind(ctx context.Context, projectID, stageName, artifactKind string) (*artifact.Artifact, error)
 }
 
 // ProjectIDResolver resolves a project ID from a task ID.
@@ -473,9 +475,21 @@ func (h *Handler) ensureReviewNodeArtifactID(ctx context.Context, run *Run, node
 	if err != nil || projectID == "" {
 		return
 	}
-	current, err := h.artifactService.FindCurrentByKind(ctx, projectID, stageName)
-	if err != nil || current == nil || current.ID == "" {
-		return
+	current := (*artifact.Artifact)(nil)
+	artifactKinds := reviewArtifactKindsFromNode(node)
+	for _, kind := range artifactKinds {
+		candidate, err := h.artifactService.FindCurrentByStageAndKind(ctx, projectID, stageName, kind)
+		if err == nil && candidate != nil && candidate.ID != "" {
+			current = candidate
+			break
+		}
+	}
+	if current == nil {
+		candidate, err := h.artifactService.FindCurrentByKind(ctx, projectID, stageName)
+		if err != nil || candidate == nil || candidate.ID == "" {
+			return
+		}
+		current = candidate
 	}
 	if node.Input == nil {
 		node.Input = map[string]interface{}{}
@@ -485,11 +499,15 @@ func (h *Handler) ensureReviewNodeArtifactID(ctx context.Context, run *Run, node
 	if len(stringSlice(node.Input["requiredOutputs"])) == 0 {
 		node.Input["requiredOutputs"] = []string{string(current.Kind)}
 	}
+	if len(stringSlice(node.Input["artifactKinds"])) == 0 {
+		node.Input["artifactKinds"] = []string{string(current.Kind)}
+	}
 	if updater, ok := h.nodes.(ReviewNodeInputUpdater); ok {
 		_ = updater.UpdateInputFields(ctx, node.ID, map[string]interface{}{
 			"artifactId":      current.ID,
 			"stage":           stageName,
 			"requiredOutputs": stringSlice(node.Input["requiredOutputs"]),
+			"artifactKinds":   stringSlice(node.Input["artifactKinds"]),
 		})
 	}
 }
@@ -677,7 +695,7 @@ func (h *Handler) triggerDownstreamStale(ctx context.Context, run *Run, node *mo
 
 // approveReviewedArtifact marks the artifact associated with a review as human-approved.
 func (h *Handler) approveReviewedArtifact(ctx context.Context, run *Run, node *model.Node, reviewerID string) {
-	if h.artifactService == nil {
+	if h.artifactService == nil || node == nil {
 		return
 	}
 	// The artifact ID can sometimes be found in the node's input.
@@ -688,9 +706,63 @@ func (h *Handler) approveReviewedArtifact(ctx context.Context, run *Run, node *m
 		}
 	}
 	if artifactID == "" {
+		projectID := h.resolveProjectID(ctx, run)
+		stageName := nodeInputString(node, "stage")
+		artifactKinds := reviewArtifactKindsFromNode(node)
+		if projectID == "" || stageName == "" || len(artifactKinds) == 0 {
+			zap.L().Warn("approve artifact skipped: missing fallback fields",
+				zap.String("projectId", projectID),
+				zap.String("stageName", stageName),
+				zap.Strings("artifactKinds", artifactKinds),
+				zap.String("nodeId", node.ID),
+			)
+			return
+		}
+		approvedIDs, err := h.artifactService.ApproveCurrentArtifactsByStageAndKinds(ctx, projectID, stageName, artifactKinds, reviewerID)
+		if err != nil {
+			zap.L().Warn("approve artifacts by stage and kinds failed",
+				zap.String("projectId", projectID),
+				zap.String("stageName", stageName),
+				zap.Strings("artifactKinds", artifactKinds),
+				zap.Error(err),
+			)
+			return
+		}
+		zap.L().Info("approved artifacts by stage and kinds",
+			zap.String("projectId", projectID),
+			zap.String("stageName", stageName),
+			zap.Strings("artifactKinds", artifactKinds),
+			zap.Strings("approvedIds", approvedIDs),
+		)
 		return
 	}
-	_ = h.artifactService.ApproveArtifact(ctx, artifactID, reviewerID)
+	if err := h.artifactService.ApproveArtifact(ctx, artifactID, reviewerID); err != nil {
+		zap.L().Warn("approve artifact by id failed", zap.String("artifactId", artifactID), zap.Error(err))
+	}
+}
+
+func (h *Handler) resolveProjectID(ctx context.Context, run *Run) string {
+	if h.projectIDResolver == nil || run == nil || run.TaskID == "" {
+		return ""
+	}
+	projectID, err := h.projectIDResolver.ResolveProjectID(ctx, run.TaskID)
+	if err != nil {
+		zap.L().Warn("cannot resolve project ID", zap.String("taskId", run.TaskID), zap.Error(err))
+		return ""
+	}
+	return projectID
+}
+
+func reviewArtifactKindsFromNode(node *model.Node) []string {
+	if node == nil || node.Input == nil {
+		return nil
+	}
+	for _, key := range []string{"artifactKinds", "reviewArtifactKinds", "requiredOutputs"} {
+		if values := stringSlice(node.Input[key]); len(values) > 0 {
+			return values
+		}
+	}
+	return nil
 }
 
 func downstreamStaleArtifactsForReview(node *model.Node) []string {

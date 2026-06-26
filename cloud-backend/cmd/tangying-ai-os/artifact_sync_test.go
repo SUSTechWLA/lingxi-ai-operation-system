@@ -47,6 +47,77 @@ func TestBindArtifactIDToReviewGateInput(t *testing.T) {
 	}
 }
 
+func TestLocalJobCompletion_HyperFramesRenderWritesVideoArtifactRequest(t *testing.T) {
+	node := &model.Node{
+		ID:     "render_exec",
+		TaskID: "task-1",
+		Input: map[string]interface{}{
+			"stage":       "render",
+			"roleAgentId": "render_producer",
+		},
+	}
+	rawArtifacts := []interface{}{
+		map[string]interface{}{
+			"unitId":         "final-video",
+			"kind":           "VIDEO",
+			"name":           "final.mp4",
+			"storageType":    "local",
+			"storageRef":     "local://projects/project-1/renders/final.mp4",
+			"mimeType":       "video/mp4",
+			"sizeBytes":      float64(123456),
+			"status":         "valid",
+			"humanApproved":  false,
+			"dependsOn":      []interface{}{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},
+			"producedByTool": "hyperframes_renderer",
+			"producedByRole": "渲染制片",
+			"metadata": map[string]interface{}{
+				"renderTimeMs": float64(12345),
+				"fps":          float64(30),
+			},
+		},
+	}
+
+	requests, err := buildArtifactRequestsFromOutputArtifacts("project-1", "task-1", "render", node, "hyperframes_renderer", rawArtifacts)
+	if err != nil {
+		t.Fatalf("build artifact requests returned error: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one artifact request, got %d", len(requests))
+	}
+	video := requests[0]
+	if video.UnitID != "final-video" {
+		t.Fatalf("VIDEO artifact should preserve executor unitId, got %q", video.UnitID)
+	}
+	if video.Kind != artifact.KindVideo {
+		t.Fatalf("expected VIDEO kind, got %q", video.Kind)
+	}
+	if video.StageName != "render" || video.Metadata["status"] != "valid" {
+		t.Fatalf("unexpected video artifact request: %+v", video)
+	}
+	if video.Metadata["producedByTool"] != "hyperframes_renderer" || video.Metadata["producedByRole"] != "渲染制片" {
+		t.Fatalf("producer metadata not preserved: %+v", video.Metadata)
+	}
+}
+
+func TestLocalJobArtifactManifestRejectsMissingUnitID(t *testing.T) {
+	node := &model.Node{ID: "render_exec", TaskID: "task-1", Input: map[string]interface{}{"stage": "render"}}
+	rawArtifacts := []interface{}{
+		map[string]interface{}{
+			"kind":       "VIDEO",
+			"name":       "final.mp4",
+			"storageRef": "local://projects/project-1/renders/final.mp4",
+		},
+	}
+
+	_, err := buildArtifactRequestsFromOutputArtifacts("project-1", "task-1", "render", node, "hyperframes_renderer", rawArtifacts)
+	if err == nil {
+		t.Fatal("expected local job artifact without unitId to be rejected")
+	}
+	if err.Error() != "ARTIFACT_MANIFEST_INVALID: artifact unitId is required" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 type reviewBindingNodeRepo struct {
 	nodes        []*model.Node
 	inputUpdates map[string]map[string]interface{}

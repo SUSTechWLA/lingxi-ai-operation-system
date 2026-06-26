@@ -66,11 +66,15 @@ func (r staticProjectIDResolver) ResolveProjectID(_ context.Context, _ string) (
 }
 
 type recordingArtifactService struct {
-	markByArtifactID string
-	markByStageName  string
-	markByStageNames []string
-	approvedID       string
-	currentArtifact  *artifact.Artifact
+	markByArtifactID   string
+	markByStageName    string
+	markByStageNames   []string
+	approvedID         string
+	approvedProjectID  string
+	approvedStageName  string
+	approvedKinds      []string
+	approvedReviewerID string
+	currentArtifact    *artifact.Artifact
 }
 
 func (s *recordingArtifactService) MarkDownstreamStale(_ context.Context, _ string, changedArtifactID string, _ string) ([]string, error) {
@@ -88,6 +92,18 @@ func (s *recordingArtifactService) ApproveArtifact(_ context.Context, artifactID
 	return nil
 }
 
+func (s *recordingArtifactService) ApproveCurrentArtifactsByStageAndKinds(_ context.Context, projectID string, stageName string, artifactKinds []string, reviewerID string) ([]string, error) {
+	s.approvedProjectID = projectID
+	s.approvedStageName = stageName
+	s.approvedKinds = artifactKinds
+	s.approvedReviewerID = reviewerID
+	return []string{"art_preview"}, nil
+}
+
 func (s *recordingArtifactService) FindCurrentByKind(_ context.Context, _, _ string) (*artifact.Artifact, error) {
+	return s.currentArtifact, nil
+}
+
+func (s *recordingArtifactService) FindCurrentByStageAndKind(_ context.Context, _, _, _ string) (*artifact.Artifact, error) {
 	return s.currentArtifact, nil
 }

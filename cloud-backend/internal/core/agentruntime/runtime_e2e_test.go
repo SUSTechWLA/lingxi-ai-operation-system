@@ -14,8 +14,9 @@ func TestRuntime_TangyingDirector_FirstBeta(t *testing.T) {
 	t.Run("preview_unapproved_blocks_render", func(t *testing.T) {
 		checker := runtimeRenderChecker(
 			map[string]*workerService.ArtifactState{
-				"composition": {ID: "art_composition", Kind: "VIDEO_COMPOSITION_SPEC", Status: "valid", HumanApproved: true},
-				"preview":     {ID: "art_preview", Kind: "PREVIEW_SNAPSHOTS", Status: "valid", HumanApproved: false},
+				runtimeArtifactKey("composition", "VIDEO_COMPOSITION_SPEC"): {ID: "art_composition", StageName: "composition", Kind: "VIDEO_COMPOSITION_SPEC", Status: "valid", HumanApproved: true},
+				runtimeArtifactKey("preview", "HYPERFRAMES_PROJECT"):        {ID: "art_project", StageName: "preview", Kind: "HYPERFRAMES_PROJECT", Status: "valid"},
+				runtimeArtifactKey("preview", "PREVIEW_SNAPSHOTS"):          {ID: "art_preview", StageName: "preview", Kind: "PREVIEW_SNAPSHOTS", Status: "valid", HumanApproved: false},
 			},
 			false,
 			true,
@@ -31,8 +32,9 @@ func TestRuntime_TangyingDirector_FirstBeta(t *testing.T) {
 	t.Run("preview_approved_allows_render", func(t *testing.T) {
 		checker := runtimeRenderChecker(
 			map[string]*workerService.ArtifactState{
-				"composition": {ID: "art_composition", Kind: "VIDEO_COMPOSITION_SPEC", Status: "valid", HumanApproved: true},
-				"preview":     {ID: "art_preview", Kind: "PREVIEW_SNAPSHOTS", Status: "valid", HumanApproved: true},
+				runtimeArtifactKey("composition", "VIDEO_COMPOSITION_SPEC"): {ID: "art_composition", StageName: "composition", Kind: "VIDEO_COMPOSITION_SPEC", Status: "valid", HumanApproved: true},
+				runtimeArtifactKey("preview", "HYPERFRAMES_PROJECT"):        {ID: "art_project", StageName: "preview", Kind: "HYPERFRAMES_PROJECT", Status: "valid"},
+				runtimeArtifactKey("preview", "PREVIEW_SNAPSHOTS"):          {ID: "art_preview", StageName: "preview", Kind: "PREVIEW_SNAPSHOTS", Status: "valid", HumanApproved: true},
 			},
 			true,
 			true,
@@ -58,8 +60,9 @@ func TestRuntime_TangyingDirector_FirstBeta(t *testing.T) {
 	t.Run("local_runner_offline_blocks_render", func(t *testing.T) {
 		checker := runtimeRenderChecker(
 			map[string]*workerService.ArtifactState{
-				"composition": {ID: "art_composition", Kind: "VIDEO_COMPOSITION_SPEC", Status: "valid", HumanApproved: true},
-				"preview":     {ID: "art_preview", Kind: "PREVIEW_SNAPSHOTS", Status: "valid", HumanApproved: true},
+				runtimeArtifactKey("composition", "VIDEO_COMPOSITION_SPEC"): {ID: "art_composition", StageName: "composition", Kind: "VIDEO_COMPOSITION_SPEC", Status: "valid", HumanApproved: true},
+				runtimeArtifactKey("preview", "HYPERFRAMES_PROJECT"):        {ID: "art_project", StageName: "preview", Kind: "HYPERFRAMES_PROJECT", Status: "valid"},
+				runtimeArtifactKey("preview", "PREVIEW_SNAPSHOTS"):          {ID: "art_preview", StageName: "preview", Kind: "PREVIEW_SNAPSHOTS", Status: "valid", HumanApproved: true},
 			},
 			true,
 			false,
@@ -75,8 +78,9 @@ func TestRuntime_TangyingDirector_FirstBeta(t *testing.T) {
 	t.Run("final_review_failed_blocks_package", func(t *testing.T) {
 		checker := runtimeRenderChecker(
 			map[string]*workerService.ArtifactState{
-				"render":  {ID: "art_video", Kind: "VIDEO", Status: "valid"},
-				"quality": {ID: "art_final_review", Kind: "FINAL_REVIEW", Status: "valid", Metadata: map[string]interface{}{"passed": false}},
+				runtimeArtifactKey("render", "VIDEO"):                {ID: "art_video", StageName: "render", Kind: "VIDEO", Status: "valid"},
+				runtimeArtifactKey("quality", "FFMPEG_PROBE_REPORT"): {ID: "art_probe", StageName: "quality", Kind: "FFMPEG_PROBE_REPORT", Status: "valid"},
+				runtimeArtifactKey("quality", "FINAL_REVIEW"):        {ID: "art_final_review", StageName: "quality", Kind: "FINAL_REVIEW", Status: "valid", Metadata: map[string]interface{}{"passed": false}},
 			},
 			true,
 			true,
@@ -92,8 +96,9 @@ func TestRuntime_TangyingDirector_FirstBeta(t *testing.T) {
 	t.Run("final_review_passed_allows_package", func(t *testing.T) {
 		checker := runtimeRenderChecker(
 			map[string]*workerService.ArtifactState{
-				"render":  {ID: "art_video", Kind: "VIDEO", Status: "valid"},
-				"quality": {ID: "art_final_review", Kind: "FINAL_REVIEW", Status: "valid", Metadata: map[string]interface{}{"passed": true}},
+				runtimeArtifactKey("render", "VIDEO"):                {ID: "art_video", StageName: "render", Kind: "VIDEO", Status: "valid"},
+				runtimeArtifactKey("quality", "FFMPEG_PROBE_REPORT"): {ID: "art_probe", StageName: "quality", Kind: "FFMPEG_PROBE_REPORT", Status: "valid"},
+				runtimeArtifactKey("quality", "FINAL_REVIEW"):        {ID: "art_final_review", StageName: "quality", Kind: "FINAL_REVIEW", Status: "valid", Metadata: map[string]interface{}{"passed": true}},
 			},
 			true,
 			true,
@@ -101,6 +106,42 @@ func TestRuntime_TangyingDirector_FirstBeta(t *testing.T) {
 
 		if err := checker.CheckRenderDependencies(context.Background(), runtimePackageRequest()); err != nil {
 			t.Fatalf("expected package to pass after final review passed, got %v", err)
+		}
+	})
+
+	t.Run("unrelated_preview_artifact_does_not_satisfy_render", func(t *testing.T) {
+		checker := runtimeRenderChecker(
+			map[string]*workerService.ArtifactState{
+				runtimeArtifactKey("composition", "VIDEO_COMPOSITION_SPEC"): {ID: "art_composition", StageName: "composition", Kind: "VIDEO_COMPOSITION_SPEC", Status: "valid", HumanApproved: true},
+				runtimeArtifactKey("preview", "PREVIEW_REPORT"):             {ID: "art_preview_report", StageName: "preview", Kind: "PREVIEW_REPORT", Status: "valid", HumanApproved: true},
+				runtimeArtifactKey("preview", "PREVIEW_SNAPSHOTS"):          {ID: "art_preview", StageName: "preview", Kind: "PREVIEW_SNAPSHOTS", Status: "valid", HumanApproved: true},
+			},
+			true,
+			true,
+		)
+
+		err := checker.CheckRenderDependencies(context.Background(), runtimeRenderRequest())
+		depErr, ok := err.(*workerService.RenderDependencyError)
+		if !ok || depErr.Code != "RENDER_DEPENDENCY_MISSING" {
+			t.Fatalf("expected missing hyperframes project to block render, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("unrelated_quality_artifact_does_not_satisfy_package", func(t *testing.T) {
+		checker := runtimeRenderChecker(
+			map[string]*workerService.ArtifactState{
+				runtimeArtifactKey("render", "VIDEO"):           {ID: "art_video", StageName: "render", Kind: "VIDEO", Status: "valid"},
+				runtimeArtifactKey("quality", "PREVIEW_REPORT"): {ID: "art_quality_other", StageName: "quality", Kind: "PREVIEW_REPORT", Status: "valid", Metadata: map[string]interface{}{"passed": true}},
+				runtimeArtifactKey("quality", "FINAL_REVIEW"):   {ID: "art_final_review", StageName: "quality", Kind: "FINAL_REVIEW", Status: "valid", Metadata: map[string]interface{}{"passed": true}},
+			},
+			true,
+			true,
+		)
+
+		err := checker.CheckRenderDependencies(context.Background(), runtimePackageRequest())
+		depErr, ok := err.(*workerService.RenderDependencyError)
+		if !ok || depErr.Code != "PACKAGE_DEPENDENCY_MISSING" {
+			t.Fatalf("expected missing ffmpeg probe to block package, got %T: %v", err, err)
 		}
 	})
 }
@@ -144,6 +185,14 @@ type runtimeArtifactProvider struct {
 
 func (p runtimeArtifactProvider) FindCurrentByKind(_ context.Context, _ string, stageName string) (*workerService.ArtifactState, error) {
 	return p.states[stageName], nil
+}
+
+func (p runtimeArtifactProvider) FindCurrentByStageAndKind(_ context.Context, _ string, stageName string, artifactKind string) (*workerService.ArtifactState, error) {
+	return p.states[runtimeArtifactKey(stageName, artifactKind)], nil
+}
+
+func runtimeArtifactKey(stageName, artifactKind string) string {
+	return stageName + "|" + artifactKind
 }
 
 type runtimeReviewChecker struct {

@@ -105,6 +105,7 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		"summary":    "HyperFrames project generated locally",
 		"artifacts": []map[string]interface{}{
 			{
+				"unitId":         "hyperframes-project",
 				"kind":           "HYPERFRAMES_PROJECT",
 				"name":           "hyperframes_project",
 				"storageType":    "local",
@@ -116,6 +117,11 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 				"dependsOn":      []string{"VIDEO_COMPOSITION_SPEC"},
 				"producedByTool": "hyperframes_project_generator",
 				"producedByRole": "渲染制片",
+				"metadata": map[string]interface{}{
+					"entry":      "index.html",
+					"fileCount":  len(files),
+					"projectDir": localRef,
+				},
 			},
 		},
 	}}, nil
@@ -165,16 +171,16 @@ func (e *HyperFramesProjectExecutor) writeCompositionProject(projectRoot, assets
 
 	// 4. Write manifest.json.
 	manifest := map[string]interface{}{
-		"entry":           "index.html",
-		"data":            "assets/data.json",
-		"style":           "assets/style.css",
-		"projectId":       projectID,
-		"tool":            "hyperframes_project_generator",
-		"specVersion":     spec.SpecVersion,
-		"projectType":     spec.ProjectType,
-		"durationSec":     spec.DurationSec,
-		"fps":             spec.FPS,
-		"generatedAt":     time.Now().UTC().Format(time.RFC3339),
+		"entry":       "index.html",
+		"data":        "assets/data.json",
+		"style":       "assets/style.css",
+		"projectId":   projectID,
+		"tool":        "hyperframes_project_generator",
+		"specVersion": spec.SpecVersion,
+		"projectType": spec.ProjectType,
+		"durationSec": spec.DurationSec,
+		"fps":         spec.FPS,
+		"generatedAt": time.Now().UTC().Format(time.RFC3339),
 	}
 	manifestJSON, _ := json.MarshalIndent(manifest, "", "  ")
 	if err := os.WriteFile(filepath.Join(projectRoot, "manifest.json"), manifestJSON, 0o644); err != nil {
@@ -271,10 +277,10 @@ func extractCardsAndCaptions(spec *compositionSpec) ([]cardInfo, []captionInfo) 
 					continue
 				}
 				c := cardInfo{
-					ID:     stringFromMap(m, "id"),
-					Kind:   stringFromMap(m, "kind"),
-					Title:  stringFromMap(m, "title"),
-					Body:   stringFromMap(m, "body"),
+					ID:        stringFromMap(m, "id"),
+					Kind:      stringFromMap(m, "kind"),
+					Title:     stringFromMap(m, "title"),
+					Body:      stringFromMap(m, "body"),
 					Animation: stringFromMap(m, "animation"),
 				}
 				if start, ok := m["startSec"].(float64); ok {

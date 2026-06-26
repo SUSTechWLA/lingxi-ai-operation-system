@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,17 +10,43 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
 
+const ArtifactManifestInvalidCode = "ARTIFACT_MANIFEST_INVALID"
+
+type ArtifactManifestInvalidError struct {
+	Message string
+}
+
+func (e *ArtifactManifestInvalidError) Error() string {
+	return ArtifactManifestInvalidCode + ": " + e.Message
+}
+
+func IsArtifactManifestInvalid(err error) bool {
+	var manifestErr *ArtifactManifestInvalidError
+	return errors.As(err, &manifestErr)
+}
+
 // BuildArtifactRequestsFromNode converts a successful workflow node output into
 // displayable artifact versions from a local artifact manifest. User payloads
 // must stay in the local agent; the cloud only receives storageRef/hash/size.
 func BuildArtifactRequestsFromNode(projectID, workflowRunID string, node *model.Node) []*CreateArtifactRequest {
+	requests, err := BuildArtifactRequestsFromNodeChecked(projectID, workflowRunID, node)
+	if err != nil {
+		return []*CreateArtifactRequest{}
+	}
+	return requests
+}
+
+// BuildArtifactRequestsFromNodeChecked is the strict materializer used by
+// production paths. When a node declares artifacts[], every entry must include
+// the required manifest keys; invalid manifests must not be silently skipped.
+func BuildArtifactRequestsFromNodeChecked(projectID, workflowRunID string, node *model.Node) ([]*CreateArtifactRequest, error) {
 	if node == nil || node.Status != model.NodeSuccess {
-		return nil
+		return nil, nil
 	}
 
 	payload := parseNodeOutputPayload(node.Output)
 	if len(payload) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	stage := stageNameFromNode(node)
@@ -88,7 +115,7 @@ func stageNameFromNode(node *model.Node) string {
 	return stage
 }
 
-func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, manifest interface{}, payload map[string]interface{}, node *model.Node) []*CreateArtifactRequest {
+func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, manifest interface{}, payload map[string]interface{}, node *model.Node) ([]*CreateArtifactRequest, error) {
 	items, ok := manifest.([]interface{})
 	if !ok {
 		// Handle single-map format (legacy compatibility with tools that
@@ -96,31 +123,38 @@ func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, m
 		if singleItem, ok2 := manifest.(map[string]interface{}); ok2 {
 			items = []interface{}{singleItem}
 		} else {
-			return nil
+			return nil, nil
 		}
 	}
 	if len(items) == 0 {
-		return nil
+		return nil, nil
 	}
 	requests := make([]*CreateArtifactRequest, 0, len(items))
 	for _, item := range items {
 		entry, ok := item.(map[string]interface{})
 		if !ok {
-			continue
+			return nil, &ArtifactManifestInvalidError{Message: "artifact entry must be an object"}
 		}
 		unitID := stringValue(entry, "unitId")
 		if unitID == "" {
 			unitID = stringValue(entry, "unitID")
 		}
-		kind := parseArtifactKind(stringValue(entry, "kind"))
+		if unitID == "" {
+			return nil, &ArtifactManifestInvalidError{Message: "artifact unitId is required"}
+		}
+		kindValue := stringValue(entry, "kind")
+		if kindValue == "" {
+			return nil, &ArtifactManifestInvalidError{Message: "artifact kind is required"}
+		}
+		kind := parseArtifactKind(kindValue)
+		if kind == "" {
+			return nil, &ArtifactManifestInvalidError{Message: "artifact kind is unsupported: " + kindValue}
+		}
 		name := stringValue(entry, "name")
 		mime := stringValue(entry, "mimeType")
 		contentHash := stringValue(entry, "contentHash")
 		storageRef := stringValue(entry, "storageRef")
 		sizeBytes := int64Value(entry["sizeBytes"])
-		if unitID == "" || kind == "" {
-			continue
-		}
 
 		// Extract inline content from the tool payload so it can be displayed
 		// before the local backend syncs it. This is a materialization-time
@@ -144,7 +178,7 @@ func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, m
 		}
 		requests = append(requests, buildLocalManifestRequest(projectID, workflowRunID, stage, unitID, kind, name, mime, storageRef, contentHash, sizeBytes, betaArtifactMetadata(metadataValue(entry["metadata"]), node), data))
 	}
-	return requests
+	return requests, nil
 }
 
 func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, kind ArtifactKind, name, mime, storageRef, contentHash string, sizeBytes int64, metadata map[string]interface{}, data []byte) *CreateArtifactRequest {
@@ -421,7 +455,7 @@ func parseArtifactKind(value string) ArtifactKind {
 	case string(KindLog):
 		return KindLog
 	default:
-		return ""
+		return ArtifactKind(strings.ToUpper(strings.TrimSpace(value)))
 	}
 }
 

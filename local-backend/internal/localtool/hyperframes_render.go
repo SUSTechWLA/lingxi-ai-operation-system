@@ -110,6 +110,14 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 	if format == "" {
 		format = "mp4"
 	}
+	width := 1920
+	if value, ok := job.Payload["width"].(float64); ok && value > 0 {
+		width = int(value)
+	}
+	height := 1080
+	if value, ok := job.Payload["height"].(float64); ok && value > 0 {
+		height = int(value)
+	}
 
 	// Call HyperFrames Render Service
 	timeoutSec := job.TimeoutSec
@@ -149,6 +157,7 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		"outputRef": localRef,
 		"artifacts": []map[string]interface{}{
 			{
+				"unitId":         "final-video",
 				"kind":           "VIDEO",
 				"name":           "final.mp4",
 				"storageType":    "local",
@@ -160,11 +169,20 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 				"dependsOn":      []string{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},
 				"producedByTool": "hyperframes_renderer",
 				"producedByRole": "渲染制片",
+				"metadata": map[string]interface{}{
+					"renderTimeMs": result.DurationMs,
+					"fps":          fps,
+					"width":        width,
+					"height":       height,
+					"localPath":    outputPath,
+				},
 			},
 		},
 		"metrics": map[string]interface{}{
 			"renderTimeMs": result.DurationMs,
 			"fps":          fps,
+			"width":        width,
+			"height":       height,
 		},
 		"renderJobId": result.JobID,
 	}}, nil

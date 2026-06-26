@@ -25,13 +25,13 @@ type ffprobeOutput struct {
 }
 
 type ffprobeStream struct {
-	CodecType string `json:"codec_type"`
-	CodecName string `json:"codec_name"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
+	CodecType  string `json:"codec_type"`
+	CodecName  string `json:"codec_name"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
 	RFrameRate string `json:"r_frame_rate"`
-	Duration  string `json:"duration"`
-	BitRate   string `json:"bit_rate"`
+	Duration   string `json:"duration"`
+	BitRate    string `json:"bit_rate"`
 }
 
 type ffprobeFormat struct {
@@ -144,6 +144,7 @@ func (e *FFmpegProbeExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		"media":   media,
 		"artifacts": []map[string]interface{}{
 			{
+				"unitId":         "ffmpeg-probe-report",
 				"kind":           "FFMPEG_PROBE_REPORT",
 				"name":           "ffprobe_report.json",
 				"storageType":    "local",

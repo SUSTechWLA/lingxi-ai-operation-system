@@ -761,6 +761,22 @@ func (a *artifactStateAdapter) FindCurrentByKind(ctx context.Context, projectID,
 	}
 	return &workerService.ArtifactState{
 		ID:            art.ID,
+		StageName:     art.StageName,
+		Kind:          string(art.Kind),
+		Status:        art.Status,
+		HumanApproved: art.HumanApproved,
+		Metadata:      art.Metadata,
+	}, nil
+}
+
+func (a *artifactStateAdapter) FindCurrentByStageAndKind(ctx context.Context, projectID, stageName, artifactKind string) (*workerService.ArtifactState, error) {
+	art, err := a.svc.FindCurrentByStageAndKind(ctx, projectID, stageName, artifactKind)
+	if err != nil || art == nil {
+		return nil, err
+	}
+	return &workerService.ArtifactState{
+		ID:            art.ID,
+		StageName:     art.StageName,
 		Kind:          string(art.Kind),
 		Status:        art.Status,
 		HumanApproved: art.HumanApproved,
@@ -811,7 +827,10 @@ func syncArtifactsFromLocalJob(
 
 	// 1. Process artifacts[] from local job output (standardized executor output).
 	if rawArtifacts, ok := output["artifacts"]; ok {
-		requests := buildArtifactRequestsFromOutputArtifacts(projectID, taskID, stage, node, toolName, rawArtifacts)
+		requests, err := buildArtifactRequestsFromOutputArtifacts(projectID, taskID, stage, node, toolName, rawArtifacts)
+		if err != nil {
+			return err
+		}
 		for _, req := range requests {
 			created, err := artifactSvc.CreateArtifact(ctx, req)
 			if err != nil {
@@ -827,7 +846,10 @@ func syncArtifactsFromLocalJob(
 	}
 
 	// 2. Process artifacts from node output (LLM-generated content via BuildArtifactRequestsFromNode).
-	requests := artifact.BuildArtifactRequestsFromNode(projectID, taskID, node)
+	requests, err := artifact.BuildArtifactRequestsFromNodeChecked(projectID, taskID, node)
+	if err != nil {
+		return err
+	}
 	for _, req := range requests {
 		created, err := artifactSvc.CreateArtifact(ctx, req)
 		if err != nil {
@@ -919,10 +941,10 @@ func buildArtifactRequestsFromOutputArtifacts(
 	node *model.Node,
 	toolName string,
 	rawArtifacts interface{},
-) []*artifact.CreateArtifactRequest {
-	items, ok := rawArtifacts.([]interface{})
-	if !ok {
-		return nil
+) ([]*artifact.CreateArtifactRequest, error) {
+	items, err := localJobArtifactItems(rawArtifacts)
+	if err != nil {
+		return nil, err
 	}
 
 	roleAgentID := ""
@@ -934,14 +956,18 @@ func buildArtifactRequestsFromOutputArtifacts(
 
 	requests := make([]*artifact.CreateArtifactRequest, 0, len(items))
 	for _, item := range items {
-		entry, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
+		entry := item
 
 		kind := artifact.ArtifactKind(stringValueFromMap(entry, "kind"))
 		if kind == "" {
-			continue
+			return nil, &artifact.ArtifactManifestInvalidError{Message: "artifact kind is required"}
+		}
+		unitID := stringValueFromMap(entry, "unitId")
+		if unitID == "" {
+			unitID = stringValueFromMap(entry, "unitID")
+		}
+		if unitID == "" {
+			return nil, &artifact.ArtifactManifestInvalidError{Message: "artifact unitId is required"}
 		}
 		name := stringValueFromMap(entry, "name")
 		if name == "" {
@@ -951,6 +977,10 @@ func buildArtifactRequestsFromOutputArtifacts(
 		mimeType := stringValueFromMap(entry, "mimeType")
 		sizeBytes := int64ValueFromMap(entry, "sizeBytes")
 
+		producedByNode := ""
+		if node != nil {
+			producedByNode = node.ID
+		}
 		// Collect metadata
 		meta := map[string]interface{}{
 			"status":         stringValueFromMap(entry, "status"),
@@ -959,7 +989,7 @@ func buildArtifactRequestsFromOutputArtifacts(
 			"producedByRole": stringValueFromMap(entry, "producedByRole"),
 			"taskId":         taskID,
 			"roleAgentId":    roleAgentID,
-			"producedByNode": node.ID,
+			"producedByNode": producedByNode,
 		}
 		if meta["status"] == "" {
 			meta["status"] = "valid"
@@ -996,19 +1026,39 @@ func buildArtifactRequestsFromOutputArtifacts(
 			TaskID:        taskID,
 			StageName:     stage,
 			RoleAgentID:   roleAgentID,
-			UnitID:        stage,
+			UnitID:        unitID,
 			Kind:          kind,
 			Name:          name,
 			StorageType:   artifact.StorageLocal,
 			StorageRef:    storageRef,
 			MimeType:      mimeType,
 			SizeBytes:     sizeBytes,
+			ContentHash:   stringValueFromMap(entry, "contentHash"),
 			Provider:      "local-job",
 			Model:         toolName,
 			Metadata:      meta,
 		})
 	}
-	return requests
+	return requests, nil
+}
+
+func localJobArtifactItems(rawArtifacts interface{}) ([]map[string]interface{}, error) {
+	switch typed := rawArtifacts.(type) {
+	case []interface{}:
+		items := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			entry, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, &artifact.ArtifactManifestInvalidError{Message: "artifact entry must be an object"}
+			}
+			items = append(items, entry)
+		}
+		return items, nil
+	case []map[string]interface{}:
+		return typed, nil
+	default:
+		return nil, &artifact.ArtifactManifestInvalidError{Message: "artifacts must be an array"}
+	}
 }
 
 func stageNameFromNodeInput(node *model.Node) string {

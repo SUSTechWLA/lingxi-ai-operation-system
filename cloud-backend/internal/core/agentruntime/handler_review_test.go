@@ -73,6 +73,57 @@ func TestApproveReviewMarksArtifactAndCarriesArtifactIDInOutput(t *testing.T) {
 	}
 }
 
+func TestApproveReviewApprovesCurrentArtifactByStageAndKindWhenArtifactIDMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{{
+		ID:     "preview_review",
+		TaskID: "task-1",
+		Type:   model.NodeTypeReviewGate,
+		Status: model.NodeReady,
+		Input: map[string]interface{}{
+			"stage":           "preview",
+			"roleAgentId":     "preview_director",
+			"artifactKinds":   []interface{}{"PREVIEW_SNAPSHOTS"},
+			"requiredOutputs": []interface{}{"PREVIEW_SNAPSHOTS"},
+		},
+	}}}
+	stateMachine := &recordingReviewStateMachine{}
+	artifactSvc := &recordingArtifactService{}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		stateMachine,
+	).
+		WithArtifactService(artifactSvc).
+		WithProjectIDResolver(staticProjectIDResolver{projectID: "project-1"})
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/runs/run-1/reviews/preview_review/approve", bytes.NewBufferString(`{"reviewerId":"user-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if artifactSvc.approvedID != "" {
+		t.Fatalf("fallback path should not approve by synthetic artifact id, got %q", artifactSvc.approvedID)
+	}
+	if artifactSvc.approvedProjectID != "project-1" || artifactSvc.approvedStageName != "preview" {
+		t.Fatalf("fallback should use project+stage, got project=%q stage=%q", artifactSvc.approvedProjectID, artifactSvc.approvedStageName)
+	}
+	if len(artifactSvc.approvedKinds) != 1 || artifactSvc.approvedKinds[0] != "PREVIEW_SNAPSHOTS" {
+		t.Fatalf("fallback should approve preview snapshots, got %#v", artifactSvc.approvedKinds)
+	}
+	if artifactSvc.approvedReviewerID != "user-1" {
+		t.Fatalf("fallback should carry reviewer id, got %q", artifactSvc.approvedReviewerID)
+	}
+}
+
 type memoryReviewNodeStore struct {
 	nodes []*model.Node
 }

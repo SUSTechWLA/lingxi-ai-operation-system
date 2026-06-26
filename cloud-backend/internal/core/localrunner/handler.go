@@ -169,7 +169,10 @@ func (h *Handler) completeJob(c *gin.Context) {
 	}
 	// Sync artifact metadata to cloud ArtifactIndex after local job completion.
 	if h.artifactSyncCallback != nil && job != nil {
-		_ = h.artifactSyncCallback(c.Request.Context(), job.ProjectID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), req.Output)
+		if err := h.artifactSyncCallback(c.Request.Context(), job.ProjectID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), req.Output); err != nil {
+			writeError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -225,7 +228,28 @@ func normalizeCompleteJobOutput(job *LocalJob, output map[string]interface{}) ma
 	if value, ok := output["fps"]; ok {
 		metadata["fps"] = value
 	}
+	if value, ok := output["width"]; ok {
+		metadata["width"] = value
+	}
+	if value, ok := output["height"]; ok {
+		metadata["height"] = value
+	}
+	if metrics, ok := output["metrics"].(map[string]interface{}); ok {
+		if value, ok := metrics["renderTimeMs"]; ok {
+			metadata["renderTimeMs"] = value
+		}
+		if value, ok := metrics["fps"]; ok {
+			metadata["fps"] = value
+		}
+		if value, ok := metrics["width"]; ok {
+			metadata["width"] = value
+		}
+		if value, ok := metrics["height"]; ok {
+			metadata["height"] = value
+		}
+	}
 
+	video["unitId"] = "final-video"
 	video["kind"] = "VIDEO"
 	video["name"] = name
 	video["storageType"] = "local"

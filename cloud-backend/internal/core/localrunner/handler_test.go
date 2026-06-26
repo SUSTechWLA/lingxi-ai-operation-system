@@ -177,7 +177,7 @@ func TestHandlerCompleteHyperFramesRenderNormalizesVideoArtifact(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_001/complete", bytes.NewBufferString(`{
 		"success": true,
-		"output": {"renderTimeMs":12345,"fps":30,"sizeBytes":123456}
+		"output": {"renderTimeMs":12345,"fps":30,"width":1920,"height":1080,"sizeBytes":123456}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Runner-ID", "runner_001")
@@ -204,6 +204,7 @@ func TestHandlerCompleteHyperFramesRenderNormalizesVideoArtifact(t *testing.T) {
 func assertVideoArtifactContract(t *testing.T, video map[string]interface{}) {
 	t.Helper()
 	expected := map[string]interface{}{
+		"unitId":         "final-video",
 		"kind":           "VIDEO",
 		"name":           "final.mp4",
 		"storageType":    "local",
@@ -227,6 +228,9 @@ func assertVideoArtifactContract(t *testing.T, video map[string]interface{}) {
 	metadata, ok := video["metadata"].(map[string]interface{})
 	if !ok || metadata["renderTimeMs"] != float64(12345) || metadata["fps"] != float64(30) {
 		t.Fatalf("unexpected metadata: %#v", video["metadata"])
+	}
+	if metadata["width"] != float64(1920) || metadata["height"] != float64(1080) {
+		t.Fatalf("metadata should include output dimensions: %#v", video["metadata"])
 	}
 }
 

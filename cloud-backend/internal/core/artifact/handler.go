@@ -263,7 +263,11 @@ func (h *Handler) materializeProject(ctx context.Context, projectID string) erro
 			if node.Status != model.NodeSuccess {
 				continue
 			}
-			for _, req := range BuildArtifactRequestsFromNode(projectID, run.ID, node) {
+			requests, err := BuildArtifactRequestsFromNodeChecked(projectID, run.ID, node)
+			if err != nil {
+				return err
+			}
+			for _, req := range requests {
 				if _, err := h.service.CreateArtifact(ctx, req); err != nil {
 					return err
 				}
@@ -307,7 +311,10 @@ func contentFromMatchingNodeArtifact(projectID, workflowRunID string, artifact *
 	if artifact == nil || node == nil || node.Status != model.NodeSuccess {
 		return nil, false
 	}
-	requests := BuildArtifactRequestsFromNode(projectID, workflowRunID, node)
+	requests, err := BuildArtifactRequestsFromNodeChecked(projectID, workflowRunID, node)
+	if err != nil {
+		return nil, false
+	}
 	if len(requests) == 0 {
 		return nil, false
 	}

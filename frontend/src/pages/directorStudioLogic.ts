@@ -31,6 +31,7 @@ export interface DirectorArtifactRecord {
   humanApproved: boolean
   storageRef: string
   dependsOn?: string[]
+  metadata?: Record<string, unknown>
 }
 
 export interface DirectorTraceNode {
@@ -175,20 +176,23 @@ export function buildDirectorArtifacts(
 
     return outputs.map((output, outputIndex) => {
       const artifact = artifactOutputs.find((item) => item.kind === output) || artifactOutputs[outputIndex]
-      const status = artifactStatusFor(review, node)
+      const manifestStatus = normalizeArtifactStatus(stringValue(artifact?.status))
+      const status = review?.status ? artifactStatusFor(review, node) : manifestStatus || artifactStatusFor(review, node)
+      const manifestHumanApproved = booleanValue(artifact?.humanApproved)
       const index = roleIndex + 1
 
       return {
-        id: `A${String(index).padStart(2, '0')}${outputIndex ? `-${outputIndex + 1}` : ''}`,
+        id: String(artifact?.id || artifact?.artifactId || `A${String(index).padStart(2, '0')}${outputIndex ? `-${outputIndex + 1}` : ''}`),
         name: String(artifact?.name || displayNameForArtifact(output)),
         kind: output,
         version: artifact ? '第1版' : '-',
         status,
         owner: role.displayName || role.name,
         updatedAt: formatTime(node?.createdAt),
-        humanApproved: status === 'valid',
+        humanApproved: manifestHumanApproved ?? status === 'valid',
         storageRef: String(artifact?.storageRef || artifact?.url || storageHintForKind(output)),
-        dependsOn: role.requiredInputs,
+        dependsOn: stringArrayValue(artifact?.dependsOn) || role.requiredInputs,
+        metadata: objectValue(artifact?.metadata),
       }
     })
   })
@@ -316,6 +320,13 @@ function normalizeDirectorStatus(status?: string): DirectorStageStatus {
   return 'pending'
 }
 
+function normalizeArtifactStatus(status?: string): DirectorArtifactStatus | undefined {
+  const normalized = (status || '').toLowerCase()
+  if (['valid', 'review', 'stale', 'pending', 'running', 'failed', 'blocked'].includes(normalized)) return normalized as DirectorArtifactStatus
+  if (normalized === 'rejected') return 'blocked'
+  return undefined
+}
+
 function progressForStatus(status: DirectorStageStatus) {
   const progress: Record<DirectorStageStatus, number> = {
     done: 100,
@@ -372,6 +383,7 @@ export function displayNameForArtifact(kind: string) {
     VIDEO: '最终视频',
     RENDER_REPORT: '渲染报告',
     FFMPEG_PROBE_REPORT: '视频检测报告',
+    FINAL_REVIEW: '最终审核报告',
     PROJECT_PACKAGE: '交付包',
   }
   return labels[kind] || kind
@@ -439,4 +451,14 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function stringArrayValue(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const values = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  return values.length ? values : undefined
 }

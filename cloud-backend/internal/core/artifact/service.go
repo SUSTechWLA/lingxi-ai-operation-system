@@ -119,6 +119,53 @@ func (s *Service) ApproveArtifact(ctx context.Context, artifactID string, review
 	return nil
 }
 
+// ApproveCurrentArtifactsByStageAndKinds marks current valid artifacts for a
+// stage as human-approved. It is used as the review approval fallback when the
+// review gate does not yet carry a concrete artifact ID.
+func (s *Service) ApproveCurrentArtifactsByStageAndKinds(
+	ctx context.Context,
+	projectID string,
+	stageName string,
+	artifactKinds []string,
+	reviewerID string,
+) ([]string, error) {
+	if projectID == "" || stageName == "" || len(artifactKinds) == 0 {
+		return nil, nil
+	}
+
+	approvedIDs := make([]string, 0, len(artifactKinds))
+	for _, kind := range artifactKinds {
+		kind = strings.TrimSpace(kind)
+		if kind == "" {
+			continue
+		}
+		artifact, err := s.repo.FindCurrentByStageAndKind(ctx, projectID, stageName, kind)
+		if err != nil {
+			return approvedIDs, fmt.Errorf("approve current artifact %s/%s/%s: %w", projectID, stageName, kind, err)
+		}
+		if artifact == nil {
+			continue
+		}
+		switch ArtifactStatus(artifact.Status) {
+		case ArtifactStatusStale, ArtifactStatusRejected, ArtifactStatusFailed, ArtifactStatusDeleted:
+			continue
+		}
+		if err := s.repo.UpdateHumanApproved(ctx, artifact.ID, true); err != nil {
+			return approvedIDs, fmt.Errorf("approve current artifact %s: %w", artifact.ID, err)
+		}
+		approvedIDs = append(approvedIDs, artifact.ID)
+	}
+
+	zap.L().Info("Current stage artifacts approved",
+		zap.String("projectId", projectID),
+		zap.String("stageName", stageName),
+		zap.Strings("artifactKinds", artifactKinds),
+		zap.Strings("approvedIds", approvedIDs),
+		zap.String("reviewerId", reviewerID),
+	)
+	return approvedIDs, nil
+}
+
 // RejectArtifact marks an artifact as rejected.
 func (s *Service) RejectArtifact(ctx context.Context, artifactID string, reviewerID string, reason string) error {
 	if err := s.repo.UpdateStatus(ctx, artifactID, string(ArtifactStatusRejected)); err != nil {
@@ -206,6 +253,11 @@ func (s *Service) MarkDownstreamStaleByStageName(ctx context.Context, projectID 
 // FindCurrentByKind finds the current artifact of a specific stage kind for a project.
 func (s *Service) FindCurrentByKind(ctx context.Context, projectID, stageName string) (*Artifact, error) {
 	return s.repo.FindCurrentByKind(ctx, projectID, stageName)
+}
+
+// FindCurrentByStageAndKind finds the current artifact for an exact stage+kind pair.
+func (s *Service) FindCurrentByStageAndKind(ctx context.Context, projectID, stageName, artifactKind string) (*Artifact, error) {
+	return s.repo.FindCurrentByStageAndKind(ctx, projectID, stageName, artifactKind)
 }
 
 func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID string) *Artifact {

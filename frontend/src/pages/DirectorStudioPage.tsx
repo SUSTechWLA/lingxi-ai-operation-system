@@ -48,7 +48,6 @@ import {
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
-  canStartFinalRender,
   deriveNextAction,
   displayNameForArtifact,
   downstreamStaleArtifacts,
@@ -86,7 +85,7 @@ const fallbackRoles: VideoRoleAgent[] = [
   { id: 'continuity_keeper', name: 'Continuity Keeper', displayName: '连续性检查', stage: 'continuity', goal: '维护风格、术语、产物依赖与下游失效规则。', allowedTools: ['continuity_checker', 'stale_tracker'], requiredOutputs: ['CONTINUITY_REPORT'] },
   { id: 'preview_director', name: 'Preview Director', displayName: '预览导演', stage: 'preview', goal: '生成本地预览图，检查可读性和版式。', allowedTools: ['hyperframes_project_generator', 'hyperframes_snapshot', 'preview_quality_checker'], requiredOutputs: ['HYPERFRAMES_PROJECT', 'PREVIEW_SNAPSHOTS'], humanReview: { required: true, reviewFocus: ['画面是否可读', '文字是否溢出', '是否允许进入最终渲染'] } },
   { id: 'render_producer', name: 'Render Producer', displayName: '渲染制片', stage: 'render', goal: '检查渲染依赖，创建本地渲染任务并追踪状态。', allowedTools: ['render_dependency_guard', 'hyperframes_renderer', 'local_job_status_tracker'], requiredOutputs: ['VIDEO', 'RENDER_REPORT'], humanReview: { required: true, reviewFocus: ['预览是否已确认', '渲染依赖是否完整'] } },
-  { id: 'quality_reviewer', name: 'Quality Reviewer', displayName: '质量审核', stage: 'quality', goal: '检查文件、时长、分辨率、视频流和产物完整性。', allowedTools: ['ffmpeg_probe', 'final_review_generator'], requiredOutputs: ['FINAL_REVIEW'] },
+  { id: 'quality_reviewer', name: 'Quality Reviewer', displayName: '质量审核', stage: 'quality', goal: '检查文件、时长、分辨率、视频流和产物完整性。', allowedTools: ['ffmpeg_probe', 'final_review_generator'], requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'] },
   { id: 'package_producer', name: 'Package Producer', displayName: '交付制片', stage: 'package', goal: '打包最终视频、结构说明、预览图、决策日志和审核报告。', allowedTools: ['artifact_packager'], requiredOutputs: ['PROJECT_PACKAGE'] },
 ]
 
@@ -550,12 +549,12 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
 function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
   const video = artifacts.find((artifact) => artifact.kind === 'VIDEO')
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
-  const ready = video?.status === 'valid' || packageArtifact?.status === 'valid'
-  const renderReadiness = canStartFinalRender(artifacts, true)
+  const videoReady = video?.status === 'valid' && Boolean(video.storageRef)
+  const packageReady = packageArtifact?.status === 'valid' && Boolean(packageArtifact.storageRef)
   return (
     <div className="grid grid-cols-12 gap-5">
       <section className="card col-span-7 p-6">
-        <div className="flex items-center justify-between"><div><p className="text-sm font-bold text-primary-dark">最终预览 / 导出</p><h2 className="mt-2 text-2xl font-black text-ink">最终视频预览</h2></div><StatusBadge status={ready ? 'valid' : 'pending'} label={ready ? '质量审核通过' : '等待渲染'} /></div>
+        <div className="flex items-center justify-between"><div><p className="text-sm font-bold text-primary-dark">最终预览 / 导出</p><h2 className="mt-2 text-2xl font-black text-ink">最终视频预览</h2></div><StatusBadge status={videoReady ? 'valid' : 'pending'} label={videoReady ? 'final.mp4 已生成' : '等待渲染'} /></div>
         <div className="mt-6 overflow-hidden rounded-xl bg-ink shadow-card ring-1 ring-line">
           <div className="relative h-[410px] bg-[radial-gradient(circle_at_70%_30%,rgba(251,191,36,.34),transparent_28%),linear-gradient(135deg,#130b05,#2b1708_40%,#7c3e08)] p-10 text-white">
             <div className="relative z-10 flex h-full flex-col justify-between">
@@ -568,14 +567,14 @@ function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
       <aside className="col-span-5 space-y-5">
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">导出操作</h3>
-          {!renderReadiness.allowed && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{renderReadiness.message}</div>}
-          <div className="mt-4 grid grid-cols-2 gap-3"><button className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow"><FiPlayCircle /> 预览视频</button><button className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line"><FiFolder /> 打开文件夹</button></div>
-          <button disabled={!renderReadiness.allowed} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> 导出交付包</button>
+          {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
+          <div className="mt-4 grid grid-cols-2 gap-3"><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
+          <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
         </section>
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">交付物清单</h3>
           <div className="mt-4 space-y-3 text-sm">
-            {artifacts.filter((artifact) => ['VIDEO', 'PROJECT_PACKAGE', 'RENDER_REPORT', 'QUALITY_REPORT'].includes(artifact.kind)).map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded-lg bg-background-card px-4 py-3 ring-1 ring-line"><span>{artifact.name}</span><StatusBadge status={artifact.status} /></div>)}
+            {artifacts.filter((artifact) => ['VIDEO', 'PROJECT_PACKAGE', 'RENDER_REPORT', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'].includes(artifact.kind)).map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded-lg bg-background-card px-4 py-3 ring-1 ring-line"><span>{artifact.name}</span><StatusBadge status={artifact.status} /></div>)}
           </div>
         </section>
       </aside>

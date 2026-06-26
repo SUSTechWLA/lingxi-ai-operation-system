@@ -24,10 +24,10 @@ type projectService interface {
 
 // ProjectHandler serves HTTP endpoints for video project management.
 type ProjectHandler struct {
-	svc              projectService
-	middleware       []gin.HandlerFunc
-	artifactSvc      *artifact.Service
-	localRunnerSvc   *localrunner.Service
+	svc                 projectService
+	middleware          []gin.HandlerFunc
+	artifactSvc         *artifact.Service
+	localRunnerSvc      *localrunner.Service
 	sessionRouteHandler *SessionRouteHandler
 }
 
@@ -58,7 +58,7 @@ func (h *ProjectHandler) RegisterRoutes(r *gin.Engine) {
 		api.GET("", h.List)
 		api.POST("", h.Create)
 		api.GET("/:id", h.Get)
-			api.GET("/:id/session", h.GetSession)
+		api.GET("/:id/session", h.GetSession)
 		api.PATCH("/:id", h.Update)
 		api.DELETE("/:id", h.Delete)
 	}
@@ -200,14 +200,14 @@ func (h *ProjectHandler) GetSession(c *gin.Context) {
 
 // ProjectSessionView is the aggregated project state for frontend recovery.
 type ProjectSessionView struct {
-	ProjectID          string                `json:"projectId"`
-	CurrentStage       string                `json:"currentStage"`
-	CurrentTask        string                `json:"currentTask"`
-	PendingReview      *PendingReviewInfo    `json:"pendingReview,omitempty"`
-	ConfirmedArtifacts []ArtifactSummary     `json:"confirmedArtifacts"`
-	StaleArtifacts     []ArtifactSummary     `json:"staleArtifacts"`
-	NextActions        []string              `json:"nextActions"`
-	LocalRunner        *LocalRunnerStatus    `json:"localRunner,omitempty"`
+	ProjectID          string             `json:"projectId"`
+	CurrentStage       string             `json:"currentStage"`
+	CurrentTask        string             `json:"currentTask"`
+	PendingReview      *PendingReviewInfo `json:"pendingReview,omitempty"`
+	ConfirmedArtifacts []ArtifactSummary  `json:"confirmedArtifacts"`
+	StaleArtifacts     []ArtifactSummary  `json:"staleArtifacts"`
+	NextActions        []string           `json:"nextActions"`
+	LocalRunner        *LocalRunnerStatus `json:"localRunner,omitempty"`
 }
 
 // PendingReviewInfo describes an artifact awaiting human review.
@@ -338,7 +338,7 @@ func (h *SessionRouteHandler) buildNextActions(ctx context.Context, projectID st
 	previewOK := completed["preview"] == "valid"
 
 	// Check if we should recommend rendering.
-	previewArt, _ := h.artifactSvc.FindCurrentByKind(ctx, projectID, "preview")
+	previewArt, _ := h.artifactSvc.FindCurrentByStageAndKind(ctx, projectID, "preview", "PREVIEW_SNAPSHOTS")
 	previewApproved := previewArt != nil && previewArt.HumanApproved && previewArt.Status == "valid"
 
 	if !compositionOK {
@@ -369,7 +369,7 @@ func (h *SessionRouteHandler) buildNextActions(ctx context.Context, projectID st
 				actions = append(actions, "正在执行质量检查...")
 			} else {
 				// Check FINAL_REVIEW passed.
-				qualityArt, _ := h.artifactSvc.FindCurrentByKind(ctx, projectID, "quality")
+				qualityArt, _ := h.artifactSvc.FindCurrentByStageAndKind(ctx, projectID, "quality", "FINAL_REVIEW")
 				qualityPassed := false
 				if qualityArt != nil && qualityArt.Metadata != nil {
 					if passed, ok := qualityArt.Metadata["passed"].(bool); ok && passed {

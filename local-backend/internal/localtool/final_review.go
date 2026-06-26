@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
 )
 
 // FinalReviewExecutor performs quality checks on a rendered video and produces
 // a FINAL_REVIEW artifact with metadata.passed indicating whether the video
 // meets the production quality standards.
 type FinalReviewExecutor struct {
-	guard  *PathGuard
+	guard   *PathGuard
 	dataDir string
 }
 
@@ -138,6 +137,7 @@ func (e *FinalReviewExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		"checks":  checks,
 		"artifacts": []map[string]interface{}{
 			{
+				"unitId":         "final-review",
 				"kind":           "FINAL_REVIEW",
 				"name":           "final_review.json",
 				"storageType":    "local",
