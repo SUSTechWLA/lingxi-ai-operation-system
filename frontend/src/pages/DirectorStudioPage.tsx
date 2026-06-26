@@ -667,6 +667,11 @@ function statusBadgeTone(status: DirectorArtifactStatus | DirectorStageStatus) {
 }
 
 function errorMessage(err: unknown, fallback: string) {
-  if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') return err.message
+  if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+    if (err.message.includes('ARTIFACT_MANIFEST_INVALID')) {
+      return '本地任务返回的产物信息不完整，无法写入项目产物库。请重新执行该步骤。'
+    }
+    return err.message
+  }
   return fallback
 }

@@ -177,7 +177,11 @@ export function buildDirectorArtifacts(
     return outputs.map((output, outputIndex) => {
       const artifact = artifactOutputs.find((item) => item.kind === output) || artifactOutputs[outputIndex]
       const manifestStatus = normalizeArtifactStatus(stringValue(artifact?.status))
-      const status = review?.status ? artifactStatusFor(review, node) : manifestStatus || artifactStatusFor(review, node)
+      const requiresManifest = requiresMaterializedArtifact(output)
+      const fallbackStatus = artifactStatusFor(review, node)
+      const status = artifact
+        ? manifestStatus || fallbackStatus
+        : requiresManifest ? 'pending' : fallbackStatus
       const manifestHumanApproved = booleanValue(artifact?.humanApproved)
       const index = roleIndex + 1
 
@@ -189,8 +193,8 @@ export function buildDirectorArtifacts(
         status,
         owner: role.displayName || role.name,
         updatedAt: formatTime(node?.createdAt),
-        humanApproved: manifestHumanApproved ?? status === 'valid',
-        storageRef: String(artifact?.storageRef || artifact?.url || storageHintForKind(output)),
+        humanApproved: artifact ? manifestHumanApproved ?? status === 'valid' : false,
+        storageRef: String(artifact?.storageRef || artifact?.url || (requiresManifest ? '' : storageHintForKind(output))),
         dependsOn: stringArrayValue(artifact?.dependsOn) || role.requiredInputs,
         metadata: objectValue(artifact?.metadata),
       }
@@ -418,6 +422,10 @@ function downstreamKindsFor(changedKind: string): string[] {
 function storageHintForKind(kind: string) {
   if (kind === 'VIDEO' || kind === 'PROJECT_PACKAGE' || kind.includes('PREVIEW')) return '本地项目目录'
   return '云端项目库'
+}
+
+function requiresMaterializedArtifact(kind: string) {
+  return kind === 'VIDEO' || kind === 'PROJECT_PACKAGE'
 }
 
 function executionPlaneForTool(tool: string): 'cloud' | 'local' {

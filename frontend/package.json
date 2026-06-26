@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "vite build && electron-builder",
-    "electron:prod": "vite build && electron ."
+    "electron:prod": "vite build && electron .",
+    "test:director": "node scripts/director-studio-logic-check.mjs"
   },
   "dependencies": {
     "axios": "^1.7.2",
