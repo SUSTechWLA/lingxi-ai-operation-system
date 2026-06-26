@@ -1,7 +1,7 @@
 # 躺营 AIOS 产品架构设计说明文档
 
 > 版本：v3.2.1（动态 Agent Runtime + 质量门禁体系 + 产物过期追踪）
-> 最后更新：2026-06-26
+> 最后更新：2026-06-27
 > 适用对象：新加入的后端 / 前端 / 部署工程师
 > 配套文档：[README.md](../README.md)、[AGENTS.md](../AGENTS.md)、[docs/upgrade/video-creation-v1/](upgrade/video-creation-v1/)
 
@@ -416,6 +416,8 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `model.go` | `Artifact`（projectID/stage/unit/kind/version/parentID/storageType/contentHash/promptHash/provider/model/isCurrent）。Kind: JSON/MARKDOWN/IMAGE/AUDIO/VIDEO/BUNDLE/LOG |
 | `repository.go` | 带版本化的写入（同 project+stage+unit 自增 version，旧版 isCurrent=false） |
 | `service.go` | CreateArtifact / GetByID / ListByProject / GetHistory / ListUsableByProject / ApproveArtifact / RejectArtifact / MarkArtifactStale / MarkDownstreamStale / FindCurrentByKind。`ArtifactStatus` 枚举：`valid`（可用）/ `stale`（过期）/ `rejected`（已驳回）/ `failed`（失败）/ `deleted`（已删除）。`MarkDownstreamStale` 级联标记上游变更影响的所有下游产物。 |
+| `sync_service.go` | **`ArtifactSyncService`** — 从节点输出同步产物索引：`SyncFromNodeOutput` 遍历 `BuildArtifactRequestsFromNodeChecked` 构建的请求列表，调用 `CreateArtifact` 逐条落库。关键产物（VIDEO/FFMPEG_PROBE_REPORT/FINAL_REVIEW/PROJECT_PACKAGE）写入失败时立即返回 `CRITICAL_ARTIFACT_SYNC_FAILED` 错误阻断流程；非关键产物失败仅 warn 并继续。 |
+| `sync_service_test.go` | 🆕 ArtifactSyncService 单元测试：关键产物写入失败阻断、非关键产物失败继续、workflowRunID/taskID 分离、LocalJob→VIDEO 集成测试 |
 | `materializer.go` | **`BuildArtifactRequestsFromNode`**：只从成功 node output 的 `artifacts` 本地 manifest 提取产物索引并落库。新增 `MaterializeLocalArtifacts` 回调模式，本地 job 完成后通过 `ArtifactSyncCallback` 自动同步产物索引到云端 ArtifactIndex。 |
 | `handler.go` | HTTP 路由：列表/详情/内容/历史/返工。返工 `ReviseArtifact` 生成新版本元数据，本体由本地 agent 保存 |
 
@@ -831,7 +833,25 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
 > ⚠️ 旧文档里的 `PublishPage` 仍在文件树中但**已不被 App.tsx 引用**（遗留文件），实际入口是 CreatorWorkbenchPage。
 
-### 9.2 创作台 CreatorWorkbenchPage（核心新页面）
+### 9.2 导演台 DirectorStudioPage（v1.0-beta 新增）
+
+躺营导演台是面向创作者的多角色视频生产工作台，提供 7 个功能页：
+
+| nav key | 页面 | 功能 |
+|---------|------|------|
+| `overview` | 项目总览 | 一句话需求输入（主题 + 时长）→ 一键启动 Dynamic Agent Run；展示十阶段多角色流程（创意总监→脚本编剧→卡片设计→结构导演→参考选择→连续性检查→预览导演→渲染制片→质量审核→交付制片） |
+| `review` | 审核工作台 | 人工审核门禁：通过/驳回/修改提交/重新生成；展示审核重点、输入产物、输出产物、修改影响范围（下游 stale 提示） |
+| `trace` | 过程追踪 | DAG 执行追踪：节点列表 + 中间件详情（角色/工具/执行平面/输入输出/审核状态）+ 事件流 |
+| `assets` | 产物库 | 产物索引表格：ID/名称/类型/版本/状态/负责人/审核/存储位置；过期产物琥珀色警告横幅 |
+| `roles` | 角色团队 | 展示全部 10 个创作角色：职责、工具权限、输入输出产物、审核边界 |
+| `export` | 导出页 | 最终视频预览 + 导出操作（预览/打开文件夹/下载交付包）；仅依赖 `VIDEO.status=valid` + `storageRef` 非空 |
+| `system` | 系统设置 | 复用 `DesktopPage`：健康检查、本地命令执行、模型配置 |
+
+**错误处理：** 前端统一使用 `normalizeDirectorErrorMessage` 将后端错误码转换为中文提示，覆盖 4 个错误码（`CRITICAL_ARTIFACT_SYNC_FAILED` / `ARTIFACT_MANIFEST_INVALID` / `RENDER_DEPENDENCY_MISSING` / `PACKAGE_DEPENDENCY_MISSING`）。可展开「高级详情」面板显示错误码、节点ID、产物类型、单元ID、原始错误信息。错误提取逻辑 `extractDirectorErrorDetail` 和产物/阶段/追踪构建逻辑集中在 `directorStudioLogic.ts`。配套验证脚本 `scripts/director-studio-logic-check.mjs` 确保关键逻辑可回归。
+
+**内测范围：** v1.0-beta 仅面向 1-3 个真实用户，限定中文图文视频、16:9、45-90 秒。暂不开放公开 beta、自动发布、自动配音、Seedance 动态视频、多人审批、商业权限体系。
+
+### 9.3 创作台 CreatorWorkbenchPage（核心旧页面）
 
 一个自包含的「自然语言视频创作台」，主流程：
 
@@ -850,7 +870,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 - `generationMode` 固定 `manual_import`（当前 MVP 不接视频 API）
 - stage 中文名映射表 `stageNameMap`（覆盖全部 6 个 Skill 的所有 stage）
 
-### 9.3 组件清单（`components/`）
+### 9.4 组件清单（`components/`）
 
 | 组件 | 用途 | 所属页面 |
 |------|------|---------|
@@ -866,7 +886,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 
 > 说明：`appStore.ts`（Zustand）仍保留发布相关状态（title/description/keywords/videos/images/platforms/contentType/chatSessionId），但创作台是自管理 state，不复用 store。
 
-### 9.4 API 服务（`services/api.ts`）
+### 9.5 API 服务（`services/api.ts`）
 
 axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CLOUD_API_BASE` / `TANGYING_CLOUD_API_BASE` 指向云端 `/api`，Web 开发默认走 `/api`（Vite proxy）。本机能力不走这个 axios 实例，而是通过 Electron IPC / `127.0.0.1:18080` 调用 `local-backend`。基础模型 API 设置也走本地 agent，保存用户自配的 OpenAI-compatible `baseUrl/apiKey/model`，不进入云端数据库。按模块分组：
 
@@ -876,7 +896,7 @@ axios 实例，`API_BASE` 按运行环境配置：桌面包优先读取 `VITE_CL
 - **Skill/视频**：fetchSkills / fetchSkillCatalog / fetchSkillDetail / routeSkill / fetchWorkflows / fetchVideoProjects / createVideoProject / createWorkflowRun / fetchProjectArtifacts / fetchArtifact(Content/History) / reviseArtifact
 - **节点/任务**：succeedNode / failNode / failTask / recordContextEvent / fetchTrace / fetchRecentTrace
 
-### 9.5 Electron（`frontend/electron/`）
+### 9.6 Electron（`frontend/electron/`）
 
 | 文件 | 职责 |
 |------|------|
@@ -1061,10 +1081,15 @@ make sandbox-build    # 构建 Rust 沙箱
 
 ### 12.2 测试覆盖现状
 
-- ✅ 有测试：artifact、skillruntime、modelgateway、localrunner、config、video model/service、workflow compiler/run、skill router、retry_policy、dag_validator、node executor、video creation external tools
+- ✅ 有测试：artifact（含 ArtifactSyncService 4 个硬化测试 + materializer 9 个测试）、skillruntime、modelgateway、localrunner、config、video model/service、workflow compiler/run、skill router、retry_policy、dag_validator、node executor、video creation external tools、agentruntime（含 `TestRuntime_TangyingDirector_FirstBeta` E2E 冒烟测试）
+- ✅ 前端逻辑检查：`frontend/scripts/director-studio-logic-check.mjs` 验证产物构建和错误消息转换
 - ⚠️ 待补：Repository 层（需 PostgreSQL）、Handler 层 HTTP 集成、workflow 完整 rerun 流程
 
-### 12.3 新增一条业务线的步骤
+### 12.3 CI/CD
+
+- **`.github/workflows/beta-ci.yml`** — v1.0-beta CI 工作流：push/PR 到 `develop_go` 时自动运行 cloud-backend（Go 1.25）、local-backend（Go 1.23）、frontend（Node 20）三个 job
+
+### 12.4 新增一条业务线的步骤
 
 1. 在 `skills/{name}/1.0.0/` 写 `skill.yaml` + `stages/*.md`（可选 schemas）
 2. （可选）在 `internal/agents/{name}/` 写领域 Agent（model/repository/service/handler），复用 orchestrator/workflow
@@ -1142,4 +1167,4 @@ make sandbox-build    # 构建 Rust 沙箱
 
 ---
 
-> 本文档基于截至 2026-06-26 的代码现状（分支 `develop_go`，commit `64ae34f`）撰写，所有路径、接口、表结构均经源码核对。如代码与本文档冲突，**以代码为准**并及时回更本文档。
+> 本文档基于截至 2026-06-27 的代码现状（分支 `develop_go`，commit `f0e5493`）撰写，所有路径、接口、表结构均经源码核对。如代码与本文档冲突，**以代码为准**并及时回更本文档。
