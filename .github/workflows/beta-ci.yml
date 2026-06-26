@@ -1,0 +1,51 @@
+name: v1.0-beta-ci
+
+on:
+  push:
+    branches:
+      - develop_go_back
+  pull_request:
+    branches:
+      - develop_go_back
+
+jobs:
+  cloud-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Test cloud backend
+        run: go test ./...
+
+  local-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: local-backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Test local backend
+        run: go test ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
