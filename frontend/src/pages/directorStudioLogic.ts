@@ -273,6 +273,33 @@ export interface DirectorErrorDetail {
   rawMessage?: string
 }
 
+export function normalizeDirectorErrorMessage(error: unknown): string {
+  const raw =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+        ? error.message
+        : JSON.stringify(error ?? '')
+
+  if (raw.includes('CRITICAL_ARTIFACT_SYNC_FAILED')) {
+    return '关键产物写入失败，最终视频无法进入项目产物库。请重新执行当前步骤。'
+  }
+
+  if (raw.includes('ARTIFACT_MANIFEST_INVALID')) {
+    return '本地任务返回的产物信息不完整，无法写入项目产物库。请重新执行当前步骤。'
+  }
+
+  if (raw.includes('RENDER_DEPENDENCY_MISSING')) {
+    return '当前项目尚不满足最终渲染条件，请确认预览、本地执行器和前置产物状态。'
+  }
+
+  if (raw.includes('PACKAGE_DEPENDENCY_MISSING')) {
+    return '最终视频尚未通过质量检查，暂时不能打包。'
+  }
+
+  return raw || '操作失败，请稍后重试。'
+}
+
 export function formatDirectorErrorMessage(err: unknown, fallback: string) {
   if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
     if (err.message.includes('CRITICAL_ARTIFACT_SYNC_FAILED')) {
@@ -289,7 +316,7 @@ export function formatDirectorErrorMessage(err: unknown, fallback: string) {
 export function extractDirectorErrorDetail(err: unknown): DirectorErrorDetail | undefined {
   if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
     const msg: string = err.message
-    const codeMatch = msg.match(/^(CRITICAL_ARTIFACT_SYNC_FAILED|ARTIFACT_MANIFEST_INVALID)/)
+    const codeMatch = msg.match(/^(CRITICAL_ARTIFACT_SYNC_FAILED|ARTIFACT_MANIFEST_INVALID|RENDER_DEPENDENCY_MISSING|PACKAGE_DEPENDENCY_MISSING)/)
     if (!codeMatch) return undefined
     const nodeIdMatch = msg.match(/nodeID=(\S+)/)
     const kindMatch = msg.match(/kind=(\S+)/)

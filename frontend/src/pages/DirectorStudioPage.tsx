@@ -52,7 +52,7 @@ import {
   displayNameForArtifact,
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
-  formatDirectorErrorMessage,
+  normalizeDirectorErrorMessage,
   stageActionLabel,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
@@ -162,7 +162,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       await refreshRun(result.runId)
       setActiveNav('review')
     } catch (err) {
-      setError(errorMessage(err, '启动失败，请检查云端服务和模型配置。'))
+      setError(normalizeDirectorErrorMessage(err))
       setErrorDetail(extractDirectorErrorDetail(err))
     } finally {
       setLoading(false)
@@ -182,7 +182,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       setFeedback('')
       await refreshRun(run.id)
     } catch (err) {
-      setError(errorMessage(err, '审核操作失败。'))
+      setError(normalizeDirectorErrorMessage(err))
       setErrorDetail(extractDirectorErrorDetail(err))
     } finally {
       setLoading(false)
@@ -688,6 +688,3 @@ function statusBadgeTone(status: DirectorArtifactStatus | DirectorStageStatus) {
   return 'bg-stone-50 text-stone-600 ring-stone-200'
 }
 
-function errorMessage(err: unknown, fallback: string) {
-  return formatDirectorErrorMessage(err, fallback)
-}
