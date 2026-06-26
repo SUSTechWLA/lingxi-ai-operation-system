@@ -33,10 +33,10 @@ type NodeResultSink interface {
 type ArtifactSyncCallback func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error
 
 type Handler struct {
-	service          RunnerService
-	results          NodeResultSink
+	service              RunnerService
+	results              NodeResultSink
 	artifactSyncCallback ArtifactSyncCallback
-	middleware       []gin.HandlerFunc
+	middleware           []gin.HandlerFunc
 }
 
 func NewHandler(service RunnerService, results NodeResultSink, middleware ...gin.HandlerFunc) *Handler {
@@ -150,11 +150,17 @@ func (h *Handler) completeJob(c *gin.Context) {
 		writeError(c, http.StatusForbidden, err.Error())
 		return
 	}
+	jobContext, _ := h.service.GetJob(c.Request.Context(), c.Param("jobId"))
+	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
 	job, err := h.service.CompleteJob(c.Request.Context(), c.Param("jobId"), req)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if jobContext == nil {
+		jobContext = job
+	}
+	req.Output = normalizeCompleteJobOutput(jobContext, req.Output)
 	if h.results != nil && job != nil && job.NodeID != "" {
 		if err := h.results.OnSuccess(c.Request.Context(), job.NodeID, req.Output); err != nil {
 			writeError(c, http.StatusInternalServerError, err.Error())
@@ -166,6 +172,96 @@ func (h *Handler) completeJob(c *gin.Context) {
 		_ = h.artifactSyncCallback(c.Request.Context(), job.ProjectID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), req.Output)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func normalizeCompleteJobOutput(job *LocalJob, output map[string]interface{}) map[string]interface{} {
+	if output == nil {
+		output = map[string]interface{}{}
+	}
+	if job == nil || NormalizeCommand(string(job.Command)) != CommandHyperFramesRender {
+		return output
+	}
+
+	artifacts, _ := output["artifacts"].([]interface{})
+	video := firstVideoArtifact(artifacts)
+	if video == nil {
+		video = map[string]interface{}{}
+		artifacts = append(artifacts, video)
+	}
+
+	name := stringFromOutput(output, "name")
+	if name == "" {
+		name = stringFromOutput(output, "outputName")
+	}
+	if name == "" {
+		if v, ok := job.Payload["outputName"].(string); ok {
+			name = v
+		}
+	}
+	if name == "" {
+		name = "final.mp4"
+	}
+
+	storageRef := stringFromOutput(output, "storageRef")
+	if storageRef == "" {
+		storageRef = stringFromOutput(video, "storageRef")
+	}
+	if storageRef == "" {
+		storageRef = "local://projects/" + job.ProjectID + "/renders/" + name
+	}
+
+	sizeBytes := output["sizeBytes"]
+	if sizeBytes == nil {
+		sizeBytes = video["sizeBytes"]
+	}
+
+	metadata, _ := video["metadata"].(map[string]interface{})
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	if value, ok := output["renderTimeMs"]; ok {
+		metadata["renderTimeMs"] = value
+	}
+	if value, ok := output["fps"]; ok {
+		metadata["fps"] = value
+	}
+
+	video["kind"] = "VIDEO"
+	video["name"] = name
+	video["storageType"] = "local"
+	video["storageRef"] = storageRef
+	video["mimeType"] = "video/mp4"
+	if sizeBytes != nil {
+		video["sizeBytes"] = sizeBytes
+	}
+	video["status"] = "valid"
+	video["humanApproved"] = false
+	video["dependsOn"] = []interface{}{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"}
+	video["producedByTool"] = "hyperframes_renderer"
+	video["producedByRole"] = "渲染制片"
+	video["metadata"] = metadata
+	output["artifacts"] = artifacts
+	return output
+}
+
+func firstVideoArtifact(artifacts []interface{}) map[string]interface{} {
+	for _, item := range artifacts {
+		artifact, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if kind, _ := artifact["kind"].(string); kind == "VIDEO" {
+			return artifact
+		}
+	}
+	return nil
+}
+
+func stringFromOutput(values map[string]interface{}, key string) string {
+	if value, ok := values[key].(string); ok {
+		return value
+	}
+	return ""
 }
 
 func (h *Handler) failJob(c *gin.Context) {

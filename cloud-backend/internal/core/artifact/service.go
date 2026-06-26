@@ -164,7 +164,7 @@ func (s *Service) MarkDownstreamStale(ctx context.Context, projectID string, cha
 	}
 
 	// Mark them stale in the database
-	affectedIDs, err := s.repo.MarkStaleByKind(ctx, projectID, downstreamStages, reason)
+	affectedIDs, err := s.repo.MarkStaleByStageNames(ctx, projectID, downstreamStages, reason)
 	if err != nil {
 		return nil, fmt.Errorf("mark downstream stale: %w", err)
 	}
@@ -179,26 +179,28 @@ func (s *Service) MarkDownstreamStale(ctx context.Context, projectID string, cha
 	return downstreamStages, nil
 }
 
-// MarkDownstreamStaleByStageNames marks artifacts identified by stage_name values
-// as stale. This bypasses the FindByID lookup and is used when the caller already
-// knows which stage names to invalidate (e.g. from business kind identifiers).
-func (s *Service) MarkDownstreamStaleByStageNames(ctx context.Context, projectID string, stageNames []string, reason string) ([]string, error) {
-	if len(stageNames) == 0 {
+// MarkDownstreamStaleByStageName marks all artifacts downstream of the given
+// changed stage_name as stale. It is used when the review gate cannot carry a
+// concrete artifact ID but does know the changed stage.
+func (s *Service) MarkDownstreamStaleByStageName(ctx context.Context, projectID string, stageName string, reason string) ([]string, error) {
+	downstreamStages := DownstreamStageNamesForStage(stageName)
+	if len(downstreamStages) == 0 {
 		return nil, nil
 	}
 
-	affectedIDs, err := s.repo.MarkStaleByKind(ctx, projectID, stageNames, reason)
+	affectedIDs, err := s.repo.MarkStaleByStageNames(ctx, projectID, downstreamStages, reason)
 	if err != nil {
-		return nil, fmt.Errorf("mark downstream stale by stage names: %w", err)
+		return nil, fmt.Errorf("mark downstream stale by stage name: %w", err)
 	}
 
-	zap.L().Info("Downstream artifacts marked stale by stage names",
+	zap.L().Info("Downstream artifacts marked stale by changed stage name",
 		zap.String("projectId", projectID),
-		zap.Strings("stageNames", stageNames),
+		zap.String("stageName", stageName),
+		zap.Strings("downstreamStages", downstreamStages),
 		zap.String("reason", reason),
 		zap.Int("affectedCount", len(affectedIDs)),
 	)
-	return stageNames, nil
+	return downstreamStages, nil
 }
 
 // FindCurrentByKind finds the current artifact of a specific stage kind for a project.

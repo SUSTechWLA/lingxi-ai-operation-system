@@ -6,7 +6,7 @@ package artifact
 // The input is a business kind identifier (e.g. "VIDEO_PROPOSAL", "VIDEO_SCRIPT")
 // as stored in node.Input["requiredOutputs"]. The returned slice contains
 // artifact stage_name values (e.g. "script", "storyboard", "composition")
-// that match the artifacts.stage_name column and are used by MarkStaleByKind
+// that match the artifacts.stage_name column and are used by MarkStaleByStageNames
 // to UPDATE the correct rows.
 //
 // The dependency graph covers the full v1.0-beta pipeline:
@@ -18,15 +18,15 @@ func DownstreamStaleArtifactKinds(changedKind string) []string {
 	// The stage_names correspond to artifact rows in the DB.
 	graph := map[string][]string{
 		"VIDEO_PROPOSAL": {
-			"script",        // VIDEO_SCRIPT
-			"storyboard",    // CARD_PLAN
-			"composition",   // VIDEO_COMPOSITION_SPEC
-			"reference",     // REFERENCE_ASSET_PLAN
-			"continuity",    // CONTINUITY_REPORT
-			"preview",       // HYPERFRAMES_PROJECT + PREVIEW_SNAPSHOTS
-			"render",        // VIDEO
-			"quality",       // FFMPEG_PROBE_REPORT + FINAL_REVIEW
-			"package",       // PROJECT_PACKAGE
+			"script",      // VIDEO_SCRIPT
+			"storyboard",  // CARD_PLAN
+			"composition", // VIDEO_COMPOSITION_SPEC
+			"reference",   // REFERENCE_ASSET_PLAN
+			"continuity",  // CONTINUITY_REPORT
+			"preview",     // HYPERFRAMES_PROJECT + PREVIEW_SNAPSHOTS
+			"render",      // VIDEO
+			"quality",     // FFMPEG_PROBE_REPORT + FINAL_REVIEW
+			"package",     // PROJECT_PACKAGE
 		},
 		"VIDEO_SCRIPT": {
 			"storyboard",
@@ -48,10 +48,10 @@ func DownstreamStaleArtifactKinds(changedKind string) []string {
 			"package",
 		},
 		"VIDEO_COMPOSITION_SPEC": {
-			"preview",  // HYPERFRAMES_PROJECT + PREVIEW_SNAPSHOTS
-			"render",   // VIDEO
-			"quality",  // FFMPEG_PROBE_REPORT + FINAL_REVIEW
-			"package",  // PROJECT_PACKAGE
+			"preview", // HYPERFRAMES_PROJECT + PREVIEW_SNAPSHOTS
+			"render",  // VIDEO
+			"quality", // FFMPEG_PROBE_REPORT + FINAL_REVIEW
+			"package", // PROJECT_PACKAGE
 		},
 		"REFERENCE_ASSET_PLAN": {
 			"continuity",

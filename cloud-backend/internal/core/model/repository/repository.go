@@ -358,6 +358,16 @@ func (r *NodeRepository) UpdateStatus(ctx context.Context, id string, status mod
 	return err
 }
 
+// UpdateInputFields merges the provided JSON fields into ai_node.input.
+func (r *NodeRepository) UpdateInputFields(ctx context.Context, id string, fields map[string]interface{}) error {
+	fieldsJSON, _ := json.Marshal(fields)
+	_, err := r.pool.Exec(ctx,
+		`UPDATE ai_node SET input = COALESCE(input, '{}'::jsonb) || $1::jsonb WHERE id=$2`,
+		string(fieldsJSON), id,
+	)
+	return err
+}
+
 // FindStaleRunningNodes returns long-running nodes in RUNNING status
 // whose heartbeat_at is NULL or older than now - timeoutSec seconds.
 func (r *NodeRepository) FindStaleRunningNodes(ctx context.Context, timeoutSec int) ([]*model.Node, error) {

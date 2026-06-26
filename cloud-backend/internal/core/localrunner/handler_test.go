@@ -141,7 +141,7 @@ func TestHandlerCompleteJobAdvancesNodeResult(t *testing.T) {
 		"output": {"summary":"视频渲染完成","artifacts":[{"kind":"VIDEO","storageRef":"local://projects/project_001/renders/final.mp4"}]}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Runner-ID", "runner_001")
+	req.Header.Set("X-Runner-ID", "runner_001")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -153,6 +153,80 @@ func TestHandlerCompleteJobAdvancesNodeResult(t *testing.T) {
 	}
 	if sink.successNodeID != "node_hyperframes_render" || sink.successOutput["summary"] != "视频渲染完成" {
 		t.Fatalf("node success not reported: %#v", sink)
+	}
+}
+
+func TestHandlerCompleteHyperFramesRenderNormalizesVideoArtifact(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakeRunnerService{
+		job: &LocalJob{
+			ID:        "local_job_001",
+			ProjectID: "project_001",
+			TaskID:    "task_001",
+			NodeID:    "render_exec",
+			ToolName:  "hyperframes_renderer",
+			Command:   CommandHyperFramesRender,
+			Payload: map[string]interface{}{
+				"outputName": "final.mp4",
+			},
+		},
+	}
+	sink := &fakeNodeResultSink{}
+	router := gin.New()
+	NewHandler(service, sink).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local-jobs/local_job_001/complete", bytes.NewBufferString(`{
+		"success": true,
+		"output": {"renderTimeMs":12345,"fps":30,"sizeBytes":123456}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Runner-ID", "runner_001")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	artifacts, ok := service.completeReq.Output["artifacts"].([]interface{})
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("expected one normalized artifact, got %#v", service.completeReq.Output["artifacts"])
+	}
+	video, ok := artifacts[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("artifact should be object, got %#v", artifacts[0])
+	}
+	assertVideoArtifactContract(t, video)
+	if sink.successOutput["artifacts"] == nil {
+		t.Fatalf("node success output should receive normalized artifacts: %#v", sink.successOutput)
+	}
+}
+
+func assertVideoArtifactContract(t *testing.T, video map[string]interface{}) {
+	t.Helper()
+	expected := map[string]interface{}{
+		"kind":           "VIDEO",
+		"name":           "final.mp4",
+		"storageType":    "local",
+		"storageRef":     "local://projects/project_001/renders/final.mp4",
+		"mimeType":       "video/mp4",
+		"sizeBytes":      float64(123456),
+		"status":         "valid",
+		"humanApproved":  false,
+		"producedByTool": "hyperframes_renderer",
+		"producedByRole": "渲染制片",
+	}
+	for key, want := range expected {
+		if got := video[key]; got != want {
+			t.Fatalf("video[%s] = %#v, want %#v; artifact=%#v", key, got, want, video)
+		}
+	}
+	dependsOn, ok := video["dependsOn"].([]interface{})
+	if !ok || len(dependsOn) != 2 || dependsOn[0] != "PREVIEW_SNAPSHOTS" || dependsOn[1] != "HYPERFRAMES_PROJECT" {
+		t.Fatalf("unexpected dependsOn: %#v", video["dependsOn"])
+	}
+	metadata, ok := video["metadata"].(map[string]interface{})
+	if !ok || metadata["renderTimeMs"] != float64(12345) || metadata["fps"] != float64(30) {
+		t.Fatalf("unexpected metadata: %#v", video["metadata"])
 	}
 }
 
@@ -174,7 +248,7 @@ func TestHandlerFailJobAdvancesNodeFailure(t *testing.T) {
 		"retryable": true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Runner-ID", "runner_001")
+	req.Header.Set("X-Runner-ID", "runner_001")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -190,6 +264,7 @@ type fakeRunnerService struct {
 	registerReq   RegisterRunnerRequest
 	claimRunnerID string
 	completeJobID string
+	completeReq   CompleteJobRequest
 	job           *LocalJob
 }
 
@@ -216,8 +291,9 @@ func (f *fakeRunnerService) ReportProgress(_ context.Context, _ string, _ Progre
 	return nil
 }
 
-func (f *fakeRunnerService) CompleteJob(_ context.Context, jobID string, _ CompleteJobRequest) (*LocalJob, error) {
+func (f *fakeRunnerService) CompleteJob(_ context.Context, jobID string, req CompleteJobRequest) (*LocalJob, error) {
 	f.completeJobID = jobID
+	f.completeReq = req
 	return f.job, nil
 }
 

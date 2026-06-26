@@ -643,8 +643,8 @@ func main() {
 				&artifactStateAdapter{svc: artifactSvc},
 				workerService.NewRepositoryReviewApprovalChecker(&artifactStateAdapter{svc: artifactSvc}),
 				workerService.NewRunnerCapabilityChecker(&runnerServiceAdapter{svc: localRunnerService}),
-				),
-			)
+			),
+		)
 
 		// Wire artifact sync callback so local job completions automatically
 		// write artifact metadata to the cloud ArtifactIndex.
@@ -813,29 +813,102 @@ func syncArtifactsFromLocalJob(
 	if rawArtifacts, ok := output["artifacts"]; ok {
 		requests := buildArtifactRequestsFromOutputArtifacts(projectID, taskID, stage, node, toolName, rawArtifacts)
 		for _, req := range requests {
-			if _, err := artifactSvc.CreateArtifact(ctx, req); err != nil {
+			created, err := artifactSvc.CreateArtifact(ctx, req)
+			if err != nil {
 				zap.L().Warn("artifact sync: failed to create artifact from local job output",
 					zap.String("projectId", projectID),
 					zap.String("kind", string(req.Kind)),
 					zap.Error(err),
 				)
+				continue
 			}
+			_ = bindArtifactIDToReviewGates(ctx, nodeRepo, taskID, nodeID, created)
 		}
 	}
 
 	// 2. Process artifacts from node output (LLM-generated content via BuildArtifactRequestsFromNode).
 	requests := artifact.BuildArtifactRequestsFromNode(projectID, taskID, node)
 	for _, req := range requests {
-		if _, err := artifactSvc.CreateArtifact(ctx, req); err != nil {
+		created, err := artifactSvc.CreateArtifact(ctx, req)
+		if err != nil {
 			zap.L().Warn("artifact sync: failed to create artifact from node output",
 				zap.String("projectId", projectID),
 				zap.String("kind", string(req.Kind)),
 				zap.Error(err),
 			)
+			continue
 		}
+		_ = bindArtifactIDToReviewGates(ctx, nodeRepo, taskID, nodeID, created)
 	}
 
 	return nil
+}
+
+type reviewGateNodeFinder interface {
+	FindByTaskID(ctx context.Context, taskID string) ([]*model.Node, error)
+}
+
+type nodeInputFieldUpdater interface {
+	UpdateInputFields(ctx context.Context, id string, fields map[string]interface{}) error
+}
+
+func bindArtifactIDToReviewGates(
+	ctx context.Context,
+	nodeRepo reviewGateNodeFinder,
+	taskID, sourceNodeID string,
+	created *artifact.Artifact,
+) error {
+	if nodeRepo == nil || created == nil || created.ID == "" {
+		return nil
+	}
+	updater, ok := nodeRepo.(nodeInputFieldUpdater)
+	if !ok {
+		return nil
+	}
+	nodes, err := nodeRepo.FindByTaskID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		if !reviewGateMatchesArtifact(node, sourceNodeID, created) {
+			continue
+		}
+		requiredOutputs := stringSliceFromInterface(node.Input["requiredOutputs"])
+		if len(requiredOutputs) == 0 {
+			requiredOutputs = []string{string(created.Kind)}
+		}
+		fields := map[string]interface{}{
+			"artifactId":      created.ID,
+			"stage":           created.StageName,
+			"requiredOutputs": requiredOutputs,
+		}
+		if err := updater.UpdateInputFields(ctx, node.ID, fields); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reviewGateMatchesArtifact(node *model.Node, sourceNodeID string, created *artifact.Artifact) bool {
+	if node == nil || created == nil || node.Input == nil {
+		return false
+	}
+	if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
+		return false
+	}
+	if existing, _ := node.Input["artifactId"].(string); existing != "" {
+		return false
+	}
+	if source, _ := node.Input["sourceNode"].(string); source != "" && source == sourceNodeID {
+		return true
+	}
+	stage, _ := node.Input["stage"].(string)
+	if stage != "" && stage != created.StageName {
+		return false
+	}
+	return containsString(stringSliceFromInterface(node.Input["requiredOutputs"]), string(created.Kind)) ||
+		containsString(stringSliceFromInterface(node.Input["reviewArtifactKinds"]), string(created.Kind)) ||
+		containsString(stringSliceFromInterface(node.Input["artifactKinds"]), string(created.Kind))
 }
 
 // buildArtifactRequestsFromOutputArtifacts converts a local job's output.artifacts[]
@@ -880,8 +953,8 @@ func buildArtifactRequestsFromOutputArtifacts(
 
 		// Collect metadata
 		meta := map[string]interface{}{
-			"status":        stringValueFromMap(entry, "status"),
-			"humanApproved": boolValueFromMap(entry, "humanApproved"),
+			"status":         stringValueFromMap(entry, "status"),
+			"humanApproved":  boolValueFromMap(entry, "humanApproved"),
 			"producedByTool": stringValueFromMap(entry, "producedByTool"),
 			"producedByRole": stringValueFromMap(entry, "producedByRole"),
 			"taskId":         taskID,
@@ -984,6 +1057,32 @@ func int64ValueFromMap(m map[string]interface{}, key string) int64 {
 		return n
 	}
 	return 0
+}
+
+func stringSliceFromInterface(value interface{}) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []interface{}:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				result = append(result, text)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 // decisionLogAdapter bridges the workflow DecisionLogStore to the

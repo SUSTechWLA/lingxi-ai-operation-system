@@ -51,13 +51,18 @@ type DecisionLogRecord struct {
 // ArtifactService is the subset of artifact.Service needed by review handlers.
 type ArtifactService interface {
 	MarkDownstreamStale(ctx context.Context, projectID string, changedArtifactID string, reason string) ([]string, error)
-	MarkDownstreamStaleByStageNames(ctx context.Context, projectID string, stageNames []string, reason string) ([]string, error)
+	MarkDownstreamStaleByStageName(ctx context.Context, projectID string, stageName string, reason string) ([]string, error)
 	ApproveArtifact(ctx context.Context, artifactID string, reviewerID string) error
+	FindCurrentByKind(ctx context.Context, projectID, stageName string) (*artifact.Artifact, error)
 }
 
 // ProjectIDResolver resolves a project ID from a task ID.
 type ProjectIDResolver interface {
 	ResolveProjectID(ctx context.Context, taskID string) (string, error)
+}
+
+type ReviewNodeInputUpdater interface {
+	UpdateInputFields(ctx context.Context, id string, fields map[string]interface{}) error
 }
 
 type Handler struct {
@@ -197,6 +202,7 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 		httpx.Fail(c, http.StatusConflict, "review is not pending")
 		return
 	}
+	h.ensureReviewNodeArtifactID(c.Request.Context(), run, node)
 
 	var req struct {
 		Comment    string `json:"comment,omitempty"`
@@ -207,6 +213,7 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 		"approved":      true,
 		"humanApproved": true,
 		"comment":       req.Comment,
+		"artifactId":    nodeInputString(node, "artifactId"),
 		"stage":         nodeInputString(node, "stage"),
 		"roleAgentId":   nodeInputString(node, "roleAgentId"),
 	}); err != nil {
@@ -240,6 +247,7 @@ func (h *Handler) RejectReview(c *gin.Context) {
 		httpx.Fail(c, http.StatusConflict, "review is not pending")
 		return
 	}
+	h.ensureReviewNodeArtifactID(c.Request.Context(), run, node)
 
 	var req struct {
 		Comment    string `json:"comment,omitempty"`
@@ -312,6 +320,7 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 		if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
 			continue
 		}
+		h.ensureReviewNodeArtifactID(ctx, run, node)
 		reviews = append(reviews, reviewFromNode(node))
 	}
 	return run, reviews, nil
@@ -350,6 +359,7 @@ type Review struct {
 	ReviewReason        string                 `json:"reviewReason,omitempty"`
 	BlocksDownstream    bool                   `json:"blocksDownstream,omitempty"`
 	ReviewArtifactKinds []string               `json:"reviewArtifactKinds,omitempty"`
+	ArtifactID          string                 `json:"artifactId,omitempty"`
 }
 
 func reviewFromNode(node *model.Node) Review {
@@ -371,6 +381,7 @@ func reviewFromNode(node *model.Node) Review {
 		review.ReviewReason, _ = node.Input["reviewReason"].(string)
 		review.BlocksDownstream, _ = node.Input["blocksDownstream"].(bool)
 		review.ReviewArtifactKinds = stringSlice(node.Input["reviewArtifactKinds"])
+		review.ArtifactID, _ = node.Input["artifactId"].(string)
 	}
 	return review
 }
@@ -440,10 +451,47 @@ func (h *Handler) ensureArtifactReview(ctx context.Context, taskID string, r Rev
 		ID:           r.NodeID,
 		TaskID:       taskID,
 		NodeID:       r.NodeID,
+		ArtifactID:   r.ArtifactID,
 		Status:       ArtifactReviewPending,
 		ReviewReason: r.ReviewReason,
 	}
 	_ = h.artifactReview.Save(ctx, review)
+}
+
+func (h *Handler) ensureReviewNodeArtifactID(ctx context.Context, run *Run, node *model.Node) {
+	if h.artifactService == nil || h.projectIDResolver == nil || run == nil || node == nil {
+		return
+	}
+	if nodeInputString(node, "artifactId") != "" {
+		return
+	}
+	stageName := nodeInputString(node, "stage")
+	if stageName == "" {
+		return
+	}
+	projectID, err := h.projectIDResolver.ResolveProjectID(ctx, run.TaskID)
+	if err != nil || projectID == "" {
+		return
+	}
+	current, err := h.artifactService.FindCurrentByKind(ctx, projectID, stageName)
+	if err != nil || current == nil || current.ID == "" {
+		return
+	}
+	if node.Input == nil {
+		node.Input = map[string]interface{}{}
+	}
+	node.Input["artifactId"] = current.ID
+	node.Input["stage"] = stageName
+	if len(stringSlice(node.Input["requiredOutputs"])) == 0 {
+		node.Input["requiredOutputs"] = []string{string(current.Kind)}
+	}
+	if updater, ok := h.nodes.(ReviewNodeInputUpdater); ok {
+		_ = updater.UpdateInputFields(ctx, node.ID, map[string]interface{}{
+			"artifactId":      current.ID,
+			"stage":           stageName,
+			"requiredOutputs": stringSlice(node.Input["requiredOutputs"]),
+		})
+	}
 }
 
 // updateArtifactReviewStatus syncs the artifact_review table when a review
@@ -478,6 +526,7 @@ func (h *Handler) SubmitEdited(c *gin.Context) {
 		httpx.Fail(c, http.StatusConflict, "review is not pending")
 		return
 	}
+	h.ensureReviewNodeArtifactID(c.Request.Context(), run, node)
 
 	var req struct {
 		Content    interface{} `json:"content"`
@@ -601,20 +650,26 @@ func (h *Handler) triggerDownstreamStale(ctx context.Context, run *Run, node *mo
 		return
 	}
 
-	// Compute the downstream stage names that must be marked stale from the
-	// node's required outputs (business kind identifiers like "VIDEO_PROPOSAL").
-	staleStageNames := downstreamStaleArtifactsForReview(node)
-	if len(staleStageNames) == 0 {
+	artifactID := nodeInputString(node, "artifactId")
+	if artifactID != "" {
+		if _, err := h.artifactService.MarkDownstreamStale(ctx, projectID, artifactID, reason); err != nil {
+			zap.L().Warn("failed to mark downstream stale by artifact id",
+				zap.String("projectId", projectID),
+				zap.String("artifactId", artifactID),
+				zap.Error(err),
+			)
+		}
 		return
 	}
 
-	// Mark downstream artifacts stale by their stage_name values.
-	// This bypasses the FindByID lookup since we already know which stages
-	// need invalidation from the dependency graph.
-	if _, err := h.artifactService.MarkDownstreamStaleByStageNames(ctx, projectID, staleStageNames, reason); err != nil {
+	stageName := nodeInputString(node, "stage")
+	if stageName == "" {
+		return
+	}
+	if _, err := h.artifactService.MarkDownstreamStaleByStageName(ctx, projectID, stageName, reason); err != nil {
 		zap.L().Warn("failed to mark downstream stale",
 			zap.String("projectId", projectID),
-			zap.Strings("stageNames", staleStageNames),
+			zap.String("stageName", stageName),
 			zap.Error(err),
 		)
 	}
@@ -627,6 +682,11 @@ func (h *Handler) approveReviewedArtifact(ctx context.Context, run *Run, node *m
 	}
 	// The artifact ID can sometimes be found in the node's input.
 	artifactID := nodeInputString(node, "artifactId")
+	if artifactID == "" && h.artifactReview != nil {
+		if review, err := h.artifactReview.FindByNodeID(ctx, node.ID); err == nil && review != nil {
+			artifactID = review.ArtifactID
+		}
+	}
 	if artifactID == "" {
 		return
 	}

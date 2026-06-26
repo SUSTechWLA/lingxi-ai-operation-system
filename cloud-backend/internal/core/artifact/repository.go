@@ -263,9 +263,9 @@ func (r *Repository) UpdateHumanApproved(ctx context.Context, artifactID string,
 	return err
 }
 
-// MarkStaleByKind marks all current artifacts of the given kinds as stale for a project.
+// MarkStaleByStageNames marks all current artifacts of the given stage_name values as stale for a project.
 // Returns the list of affected artifact IDs.
-func (r *Repository) MarkStaleByKind(ctx context.Context, projectID string, kinds []string, reason string) ([]string, error) {
+func (r *Repository) MarkStaleByStageNames(ctx context.Context, projectID string, stageNames []string, reason string) ([]string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -289,7 +289,7 @@ func (r *Repository) MarkStaleByKind(ctx context.Context, projectID string, kind
 		   AND stage_name = ANY($2)
 		   AND status <> 'stale'
 		 RETURNING id`,
-		projectID, kinds, reason,
+		projectID, stageNames, reason,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mark artifacts stale: %w", err)
