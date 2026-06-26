@@ -654,6 +654,9 @@ func main() {
 				zap.L().Warn("artifact sync: workflowRunID missing, fallback to taskID",
 					zap.String("taskID", taskID),
 					zap.String("nodeID", nodeID),
+					zap.String("projectID", projectID),
+					zap.String("toolName", toolName),
+					zap.String("command", command),
 					zap.Error(err),
 				)
 				workflowRunID = taskID
@@ -838,6 +841,9 @@ func syncArtifactsFromLocalJob(
 		zap.L().Warn("artifact sync: workflowRunID missing, fallback to taskID",
 			zap.String("taskID", taskID),
 			zap.String("nodeID", nodeID),
+			zap.String("projectID", projectID),
+			zap.String("toolName", toolName),
+			zap.String("command", command),
 		)
 		workflowRunID = taskID
 	}

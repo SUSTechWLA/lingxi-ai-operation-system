@@ -265,17 +265,44 @@ export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | 
   }
 }
 
+export interface DirectorErrorDetail {
+  code: string
+  nodeId?: string
+  artifactKind?: string
+  unitId?: string
+  rawMessage?: string
+}
+
 export function formatDirectorErrorMessage(err: unknown, fallback: string) {
   if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
     if (err.message.includes('CRITICAL_ARTIFACT_SYNC_FAILED')) {
-      return '最终视频已生成，但写入项目产物库失败。请重新执行渲染步骤，或查看高级错误信息。'
+      return '关键产物写入失败，最终视频无法进入项目产物库。\n请重新执行当前步骤。'
     }
     if (err.message.includes('ARTIFACT_MANIFEST_INVALID')) {
-      return '本地任务返回的产物信息不完整，无法写入项目产物库。请重新执行该步骤。'
+      return '本地任务返回的产物信息不完整，无法写入项目产物库。\n请重新执行当前步骤。'
     }
     return err.message
   }
   return fallback
+}
+
+export function extractDirectorErrorDetail(err: unknown): DirectorErrorDetail | undefined {
+  if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+    const msg: string = err.message
+    const codeMatch = msg.match(/^(CRITICAL_ARTIFACT_SYNC_FAILED|ARTIFACT_MANIFEST_INVALID)/)
+    if (!codeMatch) return undefined
+    const nodeIdMatch = msg.match(/nodeID=(\S+)/)
+    const kindMatch = msg.match(/kind=(\S+)/)
+    const unitIdMatch = msg.match(/unitID=(\S+)/)
+    return {
+      code: codeMatch[1],
+      nodeId: nodeIdMatch?.[1],
+      artifactKind: kindMatch?.[1],
+      unitId: unitIdMatch?.[1],
+      rawMessage: msg,
+    }
+  }
+  return undefined
 }
 
 function findReviewForRole(role: VideoRoleAgent, reviews: AgentReviewItem[]) {

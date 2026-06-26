@@ -51,10 +51,12 @@ import {
   deriveNextAction,
   displayNameForArtifact,
   downstreamStaleArtifacts,
+  extractDirectorErrorDetail,
   formatDirectorErrorMessage,
   stageActionLabel,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
+  type DirectorErrorDetail,
   type DirectorNavKey,
   type DirectorStage,
   type DirectorStageStatus,
@@ -102,6 +104,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [feedback, setFeedback] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
 
   const refreshRun = useCallback(async (runId: string) => {
     const [nextRun, nextReviews, nextTrace] = await Promise.all([
@@ -148,6 +151,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     if (!topic.trim()) return
     setLoading(true)
     setError(null)
+    setErrorDetail(undefined)
     try {
       const result = await startAgentRun({
         message: `请帮我创作一个${durationSec}秒图文视频：${topic.trim()}`,
@@ -159,6 +163,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       setActiveNav('review')
     } catch (err) {
       setError(errorMessage(err, '启动失败，请检查云端服务和模型配置。'))
+      setErrorDetail(extractDirectorErrorDetail(err))
     } finally {
       setLoading(false)
     }
@@ -168,6 +173,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     if (!run?.id || !activeReview) return
     setLoading(true)
     setError(null)
+    setErrorDetail(undefined)
     try {
       if (action === 'approve') await approveAgentReview(run.id, activeReview.id, feedback || undefined)
       if (action === 'reject') await rejectAgentReview(run.id, activeReview.id, feedback || '请根据审核意见重新生成。')
@@ -177,6 +183,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       await refreshRun(run.id)
     } catch (err) {
       setError(errorMessage(err, '审核操作失败。'))
+      setErrorDetail(extractDirectorErrorDetail(err))
     } finally {
       setLoading(false)
     }
@@ -188,8 +195,22 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       <main className="min-w-0 flex-1 p-5 pr-6">
         <TopBar preflight={preflight} serviceStatus={serviceStatus} run={run} />
         {error && (
-          <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-            <FiShield /> {error}
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="flex items-center gap-2 font-semibold">
+              <FiShield /> {error}
+            </div>
+            {errorDetail && (
+              <details className="mt-3 border-t border-red-200 pt-3">
+                <summary className="cursor-pointer text-xs font-semibold text-red-500 hover:text-red-700">高级详情</summary>
+                <div className="mt-2 space-y-1.5 text-xs">
+                  <div><span className="font-bold">错误码：</span>{errorDetail.code}</div>
+                  {errorDetail.nodeId && <div><span className="font-bold">节点ID：</span>{errorDetail.nodeId}</div>}
+                  {errorDetail.artifactKind && <div><span className="font-bold">产物类型：</span>{errorDetail.artifactKind}</div>}
+                  {errorDetail.unitId && <div><span className="font-bold">单元ID：</span>{errorDetail.unitId}</div>}
+                  {errorDetail.rawMessage && <div className="break-all"><span className="font-bold">原始错误：</span>{errorDetail.rawMessage}</div>}
+                </div>
+              </details>
+            )}
           </div>
         )}
         <div className="mt-6">
