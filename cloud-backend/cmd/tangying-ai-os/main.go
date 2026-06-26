@@ -649,7 +649,16 @@ func main() {
 		// Wire artifact sync callback so local job completions automatically
 		// write artifact metadata to the cloud ArtifactIndex.
 		localRunnerHandler.WithArtifactSyncCallback(func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error {
-			return syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, taskID, nodeID, toolName, command, output)
+			workflowRunID, err := workflowRunRepo.FindRunIDByTaskID(ctx, taskID)
+			if err != nil || workflowRunID == "" {
+				zap.L().Warn("artifact sync: workflowRunID missing, fallback to taskID",
+					zap.String("taskID", taskID),
+					zap.String("nodeID", nodeID),
+					zap.Error(err),
+				)
+				workflowRunID = taskID
+			}
+			return syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, workflowRunID, taskID, nodeID, toolName, command, output)
 		})
 
 		zap.L().Info("Video project and watch workflow run services registered")
@@ -812,7 +821,7 @@ func syncArtifactsFromLocalJob(
 	ctx context.Context,
 	artifactSvc *artifact.Service,
 	nodeRepo repository.NodeRepo,
-	projectID, taskID, nodeID, toolName, command string,
+	projectID, workflowRunID, taskID, nodeID, toolName, command string,
 	output map[string]interface{},
 ) error {
 	// Get the node to extract stage/role metadata.
@@ -825,41 +834,38 @@ func syncArtifactsFromLocalJob(
 
 	stage := stageNameFromNodeInput(node)
 
-	// 1. Process artifacts[] from local job output (standardized executor output).
-	if rawArtifacts, ok := output["artifacts"]; ok {
-		requests, err := buildArtifactRequestsFromOutputArtifacts(projectID, taskID, stage, node, toolName, rawArtifacts)
-		if err != nil {
-			return err
-		}
-		for _, req := range requests {
-			created, err := artifactSvc.CreateArtifact(ctx, req)
-			if err != nil {
-				zap.L().Warn("artifact sync: failed to create artifact from local job output",
-					zap.String("projectId", projectID),
-					zap.String("kind", string(req.Kind)),
-					zap.Error(err),
-				)
-				continue
-			}
-			_ = bindArtifactIDToReviewGates(ctx, nodeRepo, taskID, nodeID, created)
-		}
+	if workflowRunID == "" {
+		zap.L().Warn("artifact sync: workflowRunID missing, fallback to taskID",
+			zap.String("taskID", taskID),
+			zap.String("nodeID", nodeID),
+		)
+		workflowRunID = taskID
 	}
 
-	// 2. Process artifacts from node output (LLM-generated content via BuildArtifactRequestsFromNode).
-	requests, err := artifact.BuildArtifactRequestsFromNodeChecked(projectID, taskID, node)
+	syncNode := *node
+	syncNode.Status = model.NodeSuccess
+	syncNode.Output = output
+	if syncNode.Input == nil {
+		syncNode.Input = map[string]interface{}{}
+	}
+	if _, ok := syncNode.Input["stage"]; !ok && stage != "" {
+		syncNode.Input["stage"] = stage
+	}
+	if toolName != "" {
+		syncNode.Input["tool"] = toolName
+	}
+
+	createdArtifacts, err := artifact.NewArtifactSyncService(artifactSvc, zap.L()).SyncFromNodeOutput(
+		ctx,
+		projectID,
+		workflowRunID,
+		taskID,
+		&syncNode,
+	)
 	if err != nil {
 		return err
 	}
-	for _, req := range requests {
-		created, err := artifactSvc.CreateArtifact(ctx, req)
-		if err != nil {
-			zap.L().Warn("artifact sync: failed to create artifact from node output",
-				zap.String("projectId", projectID),
-				zap.String("kind", string(req.Kind)),
-				zap.Error(err),
-			)
-			continue
-		}
+	for _, created := range createdArtifacts {
 		_ = bindArtifactIDToReviewGates(ctx, nodeRepo, taskID, nodeID, created)
 	}
 
@@ -937,7 +943,7 @@ func reviewGateMatchesArtifact(node *model.Node, sourceNodeID string, created *a
 // into CreateArtifactRequest records. It uses the node's input metadata to fill in
 // stage_name, task_id, and role_agent_id context.
 func buildArtifactRequestsFromOutputArtifacts(
-	projectID, taskID, stage string,
+	projectID, workflowRunID, taskID, stage string,
 	node *model.Node,
 	toolName string,
 	rawArtifacts interface{},
@@ -1022,7 +1028,7 @@ func buildArtifactRequestsFromOutputArtifacts(
 
 		requests = append(requests, &artifact.CreateArtifactRequest{
 			ProjectID:     projectID,
-			WorkflowRunID: taskID,
+			WorkflowRunID: workflowRunID,
 			TaskID:        taskID,
 			StageName:     stage,
 			RoleAgentID:   roleAgentID,

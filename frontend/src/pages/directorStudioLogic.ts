@@ -265,6 +265,19 @@ export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | 
   }
 }
 
+export function formatDirectorErrorMessage(err: unknown, fallback: string) {
+  if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
+    if (err.message.includes('CRITICAL_ARTIFACT_SYNC_FAILED')) {
+      return '最终视频已生成，但写入项目产物库失败。请重新执行渲染步骤，或查看高级错误信息。'
+    }
+    if (err.message.includes('ARTIFACT_MANIFEST_INVALID')) {
+      return '本地任务返回的产物信息不完整，无法写入项目产物库。请重新执行该步骤。'
+    }
+    return err.message
+  }
+  return fallback
+}
+
 function findReviewForRole(role: VideoRoleAgent, reviews: AgentReviewItem[]) {
   return reviews.find((review) => {
     if (review.roleAgentId === role.id) return true

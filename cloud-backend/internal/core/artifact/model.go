@@ -18,6 +18,21 @@ const (
 )
 
 const (
+	KindFFmpegProbeReport ArtifactKind = "FFMPEG_PROBE_REPORT"
+	KindFinalReview       ArtifactKind = "FINAL_REVIEW"
+	KindProjectPackage    ArtifactKind = "PROJECT_PACKAGE"
+)
+
+func IsCriticalArtifactKind(kind ArtifactKind) bool {
+	switch kind {
+	case KindVideo, KindFFmpegProbeReport, KindFinalReview, KindProjectPackage:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
 	// StorageLocal means the user payload is stored by the local desktop agent.
 	StorageLocal = "local"
 	// StorageInline is retained for reading legacy rows created before local-only storage.
