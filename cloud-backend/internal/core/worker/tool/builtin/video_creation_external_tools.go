@@ -438,7 +438,7 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 	case "capability_preflight":
 		return executeCapabilityPreflight(stage, skillName, params)
 	case "proposal_generator":
-		return executeProposalGenerator(stage, skillName, brief, params)
+		return executeProposalGenerator(stage, skillName, brief, params, toolCtx)
 	case "visual_feasibility_analyzer":
 		return executeVisualFeasibilityAnalyzer(stage, skillName, params)
 	case "render_strategy_planner":
@@ -546,7 +546,7 @@ func executeCapabilityPreflight(stage, skillName string, params map[string]inter
 	})
 }
 
-func executeProposalGenerator(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
+func executeProposalGenerator(stage, skillName, brief string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	manifest := loadRequestedPipeline(params)
 	packet := videopipeline.BuildProposalPacket(videopipeline.ProposalRequest{
 		Pipeline:          manifest,
@@ -554,7 +554,14 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 		TargetDurationSec: intParam(params, "targetDurationSec", 60),
 		Capabilities:      capabilitySnapshot(params),
 	})
-	packetMap := structToMap(packet)
+
+	// Use LLM to intelligently recommend the best option based on the user's topic.
+	llmRecommended, llmReason := callProposalRecommendationLLM(brief, packet.Options)
+	if llmRecommended != "" {
+		packet.RecommendedOptionID = llmRecommended
+		packet.DecisionLog.Selected = llmRecommended
+	}
+
 	optionName := packet.RecommendedOptionID
 	optionDesc := ""
 	for _, opt := range packet.Options {
@@ -564,12 +571,15 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 			break
 		}
 	}
+
 	var content string
-	if optionDesc != "" {
-		content = fmt.Sprintf("# Proposal Packet\n\n推荐方案：%s\n\n%s\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", optionName, optionDesc)
+	if llmReason != "" {
+		content = fmt.Sprintf("# Proposal Packet\n\n推荐方案：%s\n\n%s\n\n**AI 分析**：%s\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", optionName, optionDesc, llmReason)
 	} else {
-		content = fmt.Sprintf("# Proposal Packet\n\n推荐方案：%s\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", optionName)
+		content = fmt.Sprintf("# Proposal Packet\n\n推荐方案：%s\n\n%s\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", optionName, optionDesc)
 	}
+
+	packetMap := structToMap(packet)
 	return tool.SuccessResult(map[string]interface{}{
 		"content":        content,
 		"proposalPacket": packetMap,
@@ -578,6 +588,82 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 			jsonArtifact(stage, "proposal_packet.json", skillName, "videoforge-proposal-generator", true),
 		},
 	})
+}
+
+// callProposalRecommendationLLM uses the LLM to analyze the user's topic and
+// recommend the most suitable creative option. Falls back to empty on any error.
+func callProposalRecommendationLLM(brief string, options []videopipeline.ProposalOption) (recommendedID, reason string) {
+	cfg := GetVideoCreationOpenAIConfig()
+	// Also try local agent config (set via frontend Desktop page)
+	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
+		if localCfg.APIKey != "" {
+			cfg.APIKey = localCfg.APIKey
+		}
+		if localCfg.BaseURL != "" {
+			cfg.BaseURL = localCfg.BaseURL
+		}
+		if localCfg.Model != "" {
+			cfg.Model = localCfg.Model
+		}
+	}
+	if cfg.APIKey == "" {
+		zap.L().Warn("LLM proposal recommendation skipped: no API key configured")
+		return "", ""
+	}
+
+	// Build a compact summary of options for the prompt.
+	var optsDesc strings.Builder
+	for _, opt := range options {
+		optsDesc.WriteString(fmt.Sprintf("- %s：%s — %s\n", opt.ID, opt.Name, opt.Description))
+	}
+
+	systemPrompt := `你是一个专业的视频创作顾问。根据用户的视频主题，从可选方案中推荐最合适的一个。
+
+你必须分析用户主题的内容特点、目标受众、情感基调，然后判断哪个方案最匹配。只输出 JSON，不要输出其他内容。`
+
+	userPrompt := fmt.Sprintf(`用户视频主题：%s
+
+可选方案：
+%s
+请推荐最合适的方案。输出 JSON：
+{"recommendedOptionId": "<方案ID>", "reason": "<简短分析理由，100字以内>"}`, brief, optsDesc.String())
+
+	callTool := &LlmApiTool{cfg: cfg}
+	result := callTool.Execute(context.Background(), map[string]interface{}{
+		"prompt":          systemPrompt + "\n\n" + userPrompt,
+		"max_tokens":      500,
+		"temperature":     0.3,
+		"response_format": map[string]string{"type": "json_object"},
+	}, tool.ToolContext{})
+
+	if !result.Success {
+		zap.L().Warn("LLM proposal recommendation failed, falling back to default",
+			zap.String("error", result.Error))
+		return "", ""
+	}
+
+	rawContent, _ := result.Data["content"].(string)
+	var parsed struct {
+		RecommendedOptionID string `json:"recommendedOptionId"`
+		Reason              string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(rawContent)), &parsed); err != nil {
+		zap.L().Warn("Failed to parse LLM proposal recommendation",
+			zap.String("raw", rawContent),
+			zap.Error(err))
+		return "", ""
+	}
+
+	// Validate the recommended ID is one of the known options.
+	for _, opt := range options {
+		if opt.ID == parsed.RecommendedOptionID {
+			return parsed.RecommendedOptionID, parsed.Reason
+		}
+	}
+
+	zap.L().Warn("LLM recommended unknown option, ignoring",
+		zap.String("recommended", parsed.RecommendedOptionID))
+	return "", ""
 }
 
 func executeVisualFeasibilityAnalyzer(stage, skillName string, params map[string]interface{}) tool.ToolResult {

@@ -95,10 +95,8 @@ func BuildProposalPacket(req ProposalRequest) ProposalPacket {
 		},
 	}
 
+	// Default to option_a; the caller may override this with an LLM recommendation.
 	recommended := "option_a"
-	if req.Capabilities.SeedanceAvailable {
-		recommended = "option_b"
-	}
 	return ProposalPacket{
 		ArtifactKind:        ArtifactProposalPacket,
 		PipelineID:          pipelineID,

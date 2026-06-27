@@ -39,11 +39,15 @@ export interface DirectorTraceNode {
   role: string
   stage: string
   status: DirectorStageStatus
-  tool: string
+  tool: string          // readable tool name
+  rawName: string       // original node name for debugging
+  rawType: string       // node type (TOOL / REVIEW_GATE / CONTROL)
   plane: 'cloud' | 'local'
   input: string
   output: string
+  error: string
   duration: string
+  createdAt: string
   review: boolean
 }
 
@@ -77,10 +81,12 @@ interface TraceNodeLike {
   name?: string
   type?: string
   status?: string
+  error?: string
   input?: Record<string, unknown>
   output?: Record<string, unknown>
   createdAt?: string
   updatedAt?: string
+  durationMs?: number
 }
 
 export function buildDirectorStages(
@@ -283,10 +289,13 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
   return extractTraceNodes(trace).map((node, index) => {
     const input = node.input || {}
     const output = node.output || {}
+    const rawName = node.name || ''
+    const rawType = node.type || ''
+    const tool = readableToolName(rawName)
     const roleAgent = objectValue(input.roleAgent) || objectValue(output.roleAgent)
-    const roleName = stringValue(roleAgent?.displayName) || stringValue(roleAgent?.name) || stringValue(input.roleAgentId) || '系统'
-    const tool = node.name || node.type || 'unknown_tool'
+    const roleName = stringValue(roleAgent?.displayName) || stringValue(roleAgent?.name) || toolRoleFromName(rawName) || readableNodeType(rawType) || tool || '步骤'
     const stage = stringValue(input.stage) || stringValue(output.stage) || ''
+    const duration = formatDurationMs(node.durationMs, node.createdAt, node.updatedAt)
 
     return {
       id: node.id || String(index + 1),
@@ -294,10 +303,14 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
       stage,
       status: normalizeDirectorStatus(node.status),
       tool,
-      plane: executionPlaneForTool(tool),
+      rawName,
+      rawType,
+      plane: executionPlaneForTool(rawName),
       input: summarizeValue(input.requiredInputs || input.input || input),
       output: summarizeValue(output.artifactKind || output.artifacts || output),
-      duration: '-',
+      error: stringValue(output.error) || node.error || '',
+      duration,
+      createdAt: node.createdAt || '',
       review: Boolean(input.humanReview || output.humanReview),
     }
   })
@@ -525,6 +538,114 @@ function extractArtifacts(node: TraceNodeLike | undefined): Array<Record<string,
   return []
 }
 
+// readableToolName maps internal tool names / node types to human-readable Chinese labels.
+function readableToolName(raw: string): string {
+  const map: Record<string, string> = {
+    proposal_generator: '生成创意方案',
+    capability_preflight: '环境预检',
+    pipeline_selector: '流水线选择',
+    knowledge_researcher: '知识调研',
+    fact_checker: '事实核查',
+    video_script_generator: '生成口播脚本',
+    shot_splitter: '拆分分镜',
+    card_plan_generator: '生成卡片计划',
+    caption_splitter: '拆分子幕',
+    video_composition_builder: '构建视频结构',
+    composition_quality_checker: '结构质检',
+    reference_asset_planner: '素材策略规划',
+    asset_policy_generator: '生成素材策略',
+    continuity_checker: '一致性检查',
+    style_profile_builder: '风格配置',
+    stale_tracker: '过期追踪',
+    hyperframes_project_generator: '生成 HyperFrames 项目',
+    hyperframes_snapshot: '预览快照',
+    preview_quality_checker: '预览质检',
+    render_strategy_planner: '渲染策略规划',
+    render_dependency_guard: '渲染依赖检查',
+    hyperframes_renderer: '渲染视频',
+    local_job_status_tracker: '本地任务追踪',
+    video_prompt_generator: '生成视频提示词',
+    keyframe_prompt_generator: '关键帧提示词',
+    image_asset_generator: '生成图片素材',
+    script_quality_checker: '脚本质检',
+    shot_quality_checker: '分镜质检',
+    video_prompt_quality_checker: '提示词质检',
+    package_quality_checker: '打包质检',
+    final_review_generator: '生成终审报告',
+    ffmpeg_probe: '视频文件检测',
+    artifact_packager: '打包产物',
+    publish_copy_generator: '生成发布文案',
+    video_package_exporter: '导出视频包',
+    material_library_importer: '导入素材库',
+    voice_post_process: '语音后处理',
+    audio_artifact_packager: '音频打包',
+    visual_feasibility_analyzer: '视觉可行性分析',
+    REVIEW_GATE: '人工审核',
+    CONTROL: '流程控制',
+    TOOL: '工具执行',
+  }
+  if (map[raw]) return map[raw]
+  // Handle review gate node names like "proposal_generator_review"
+  if (raw.endsWith('_review')) {
+    const base = raw.replace(/_review$/, '')
+    if (map[base]) return `审核：${map[base]}`
+  }
+  // Handle exec node names like "proposal_generator_exec"
+  if (raw.endsWith('_exec')) {
+    const base = raw.replace(/_exec$/, '')
+    if (map[base]) return map[base]
+  }
+  return raw
+}
+
+// toolRoleFromName derives a role label from the tool/node name.
+function toolRoleFromName(raw: string): string {
+  const map: Record<string, string> = {
+    proposal_generator: '创意总监',
+    capability_preflight: '能力检测',
+    pipeline_selector: '流程调度',
+    knowledge_researcher: '知识调研员',
+    fact_checker: '事实核查员',
+    video_script_generator: '脚本编剧',
+    shot_splitter: '分镜导演',
+    card_plan_generator: '卡片设计师',
+    caption_splitter: '字幕编辑',
+    video_composition_builder: '结构导演',
+    composition_quality_checker: '结构质检员',
+    reference_asset_planner: '参考选择',
+    asset_policy_generator: '素材策略师',
+    continuity_checker: '连续性检查',
+    style_profile_builder: '风格配置师',
+    stale_tracker: '过期追踪器',
+    hyperframes_project_generator: '预览导演',
+    hyperframes_snapshot: '预览快照',
+    preview_quality_checker: '预览质检员',
+    render_strategy_planner: '渲染策略师',
+    render_dependency_guard: '渲染制片',
+    hyperframes_renderer: '渲染制片',
+    local_job_status_tracker: '任务追踪',
+    video_prompt_generator: '提示词工程师',
+    keyframe_prompt_generator: '关键帧设计师',
+    image_asset_generator: '图片生成',
+    script_quality_checker: '脚本质检员',
+    shot_quality_checker: '分镜质检员',
+    video_prompt_quality_checker: '提示词质检员',
+    package_quality_checker: '打包质检员',
+    final_review_generator: '质量审核',
+    ffmpeg_probe: '视频检测',
+    artifact_packager: '交付制片',
+    publish_copy_generator: '文案生成',
+    video_package_exporter: '交付制片',
+    REVIEW_GATE: '人工审核',
+    CONTROL: '流程控制',
+  }
+  // Handle _review and _exec suffixes
+  const base = raw.replace(/_review$/, '').replace(/_exec$/, '')
+  if (map[base]) return map[base]
+  if (map[raw]) return map[raw]
+  return ''
+}
+
 export function reviewDisplayTitle(review: AgentReviewItem | undefined): string {
   if (!review) return '暂无待审核'
   const title = stringValue(review.humanReview?.title)
@@ -645,6 +766,36 @@ function titleWithin(value: string, maxLength: number) {
   const cleaned = value.trim()
   if (cleaned.length <= maxLength) return cleaned
   return cleaned.slice(0, Math.max(1, maxLength - 1)) + '…'
+}
+
+// readableNodeType maps backend node types to Chinese labels.
+function readableNodeType(nodeType: string): string {
+  const map: Record<string, string> = {
+    TOOL: '工具执行',
+    REVIEW_GATE: '人工审核',
+    CONTROL: '流程控制',
+    GATE: '门禁',
+    SYSTEM: '系统',
+  }
+  return map[nodeType] || nodeType
+}
+
+// formatDurationMs formats a duration in ms or computes it from timestamps.
+function formatDurationMs(durationMs: number | undefined, createdAt: string | undefined, updatedAt: string | undefined): string {
+  if (durationMs && durationMs > 0) {
+    if (durationMs < 1000) return `${durationMs}ms`
+    return `${(durationMs / 1000).toFixed(1)}s`
+  }
+  if (createdAt && updatedAt) {
+    const start = new Date(createdAt).getTime()
+    const end = new Date(updatedAt).getTime()
+    const ms = end - start
+    if (ms > 0) {
+      if (ms < 1000) return `${ms}ms`
+      return `${(ms / 1000).toFixed(1)}s`
+    }
+  }
+  return '-'
 }
 
 function executionPlaneForTool(tool: string): 'cloud' | 'local' {

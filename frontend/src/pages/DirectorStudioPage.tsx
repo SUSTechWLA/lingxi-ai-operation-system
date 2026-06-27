@@ -509,41 +509,82 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
     if (!selectedId && traceNodes[0]) setSelectedId(traceNodes[0].id)
   }, [selectedId, traceNodes])
 
+  const hasError = (node: DirectorTraceNode) => node.status === 'failed' || node.status === 'blocked' || !!node.error
+
   return (
     <div className="grid grid-cols-12 gap-5">
       <section className="card col-span-8 p-6">
         <div className="flex items-center justify-between">
-          <div><p className="text-sm font-bold text-primary-dark">过程追踪 / 中间件</p><h2 className="mt-2 text-2xl font-black text-ink">工作流总览</h2></div>
-          <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary-dark">运行编号：{run?.id.slice(0, 8) || '未启动'}</span>
+          <div>
+            <p className="text-sm font-bold text-primary-dark">过程追踪 · 调试视图</p>
+            <h2 className="mt-2 text-2xl font-black text-ink">执行追踪</h2>
+          </div>
+          <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary-dark">Run {run?.id?.slice(0, 12) || '未启动'}</span>
         </div>
         <div className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
-          {traceNodes.length ? traceNodes.map((node) => (
-            <button key={node.id} onClick={() => setSelectedId(node.id)} className={clsx('rounded-lg border p-4 text-left transition hover:-translate-y-0.5', selected?.id === node.id ? 'border-primary bg-primary-soft shadow-card' : 'border-line bg-white/70')}>
-              <div className="flex items-center justify-between"><span className="grid h-8 w-8 place-items-center rounded-lg bg-ink text-xs font-black text-white">{node.id.slice(0, 2)}</span><StatusBadge status={node.status} /></div>
-              <div className="mt-3 text-sm font-black text-ink">{node.role}</div>
-              <div className="text-xs text-ink-soft">{node.tool}</div>
-              <div className="mt-3 flex items-center gap-2 text-xs text-ink-muted"><FiChevronRight /> {node.output}</div>
+          {traceNodes.length ? traceNodes.map((node, index) => (
+            <button key={node.id} onClick={() => setSelectedId(node.id)}
+              className={clsx(
+                'rounded-lg border p-4 text-left transition hover:-translate-y-0.5',
+                selected?.id === node.id ? 'border-primary bg-primary-soft shadow-card' : 'border-line bg-white/70',
+                hasError(node) && 'border-red-300 bg-red-50/60',
+              )}>
+              <div className="flex items-center justify-between">
+                <span className={clsx('grid h-8 w-8 place-items-center rounded-lg text-xs font-black text-white', hasError(node) ? 'bg-red-500' : 'bg-ink')}>
+                  {String(index + 1).padStart(2, '0')}
+                </span>
+                <StatusBadge status={node.status} />
+              </div>
+              <div className="mt-3 text-sm font-black text-ink leading-tight">{node.tool}</div>
+              <div className="mt-1 text-[11px] text-ink-soft font-mono">{node.rawName || node.rawType}</div>
+              {node.error && <div className="mt-2 truncate text-[11px] font-semibold text-red-600" title={node.error}>⚠ {node.error.slice(0, 40)}</div>}
             </button>
-          )) : <EmptyState text="还没有执行 trace。启动项目后，工具调用会显示在这里。" />}
+          )) : <EmptyState text="还没有执行 trace。启动项目后，每个步骤会显示在这里。" />}
         </div>
         <ArtifactTable artifacts={artifacts} compact />
       </section>
       <aside className="col-span-4 space-y-5">
         <section className="card p-6">
-          <div className="flex items-center gap-3"><div className="rounded-lg bg-primary-soft p-3 text-primary-dark"><FiActivity /></div><div><p className="text-sm text-ink-soft">中间件详情</p><h3 className="text-xl font-black text-ink">{selected?.role || '-'}</h3></div></div>
-          <div className="mt-5 space-y-3 text-sm">
-            <Field label="角色" value={selected?.role || '-'} />
-            <Field label="工具名称" value={selected?.tool || '-'} />
-            <Field label="执行平面" value={selected?.plane === 'local' ? '本地' : '云端'} />
-            <Field label="输入产物" value={selected?.input || '-'} />
-            <Field label="输出产物" value={selected?.output || '-'} />
-            <Field label="人工审核" value={selected?.review ? '需要' : '不需要'} />
+          <div className="flex items-center gap-3">
+            <div className={clsx('rounded-lg p-3', hasError(selected) ? 'bg-red-50 text-red-600' : 'bg-primary-soft text-primary-dark')}>
+              {hasError(selected) ? <FiShield /> : <FiActivity />}
+            </div>
+            <div>
+              <p className="text-sm text-ink-soft">节点详情</p>
+              <h3 className="text-lg font-black text-ink">{selected?.tool || '-'}</h3>
+            </div>
           </div>
+          <div className="mt-5 space-y-2 text-sm">
+            <DebugField label="节点 ID" value={selected?.id || '-'} mono />
+            <DebugField label="类型" value={selected?.rawType ? `${selected.rawType}${selected?.rawName ? ` · ${selected.rawName}` : ''}` : '-'} mono />
+            <DebugField label="状态" value={selected?.status || '-'} />
+            <DebugField label="执行位置" value={selected?.plane === 'local' ? '本地' : '云端'} />
+            {selected?.duration && selected.duration !== '-' && <DebugField label="耗时" value={selected.duration} />}
+            {selected?.createdAt && <DebugField label="创建时间" value={selected.createdAt} mono />}
+            <DebugField label="输入" value={selected?.input || '-'} />
+            <DebugField label="输出" value={selected?.output || '-'} />
+          </div>
+          {selected?.error && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
+              <div className="text-xs font-black text-red-700 mb-2">错误信息</div>
+              <pre className="whitespace-pre-wrap break-words text-xs text-red-600">{selected.error}</pre>
+            </div>
+          )}
         </section>
         <section className="card p-6">
-          <div className="flex items-center gap-2"><FiCpu className="text-primary" /><h3 className="text-lg font-black text-ink">事件流</h3></div>
-          <div className="mt-4 space-y-3 text-xs text-ink-muted">
-            {traceNodes.slice(-5).map((node) => <div key={node.id} className="rounded-lg bg-white p-3 ring-1 ring-line">[{node.status}] {node.tool} · {node.output}</div>)}
+          <div className="flex items-center gap-2"><FiCpu className="text-primary" /><h3 className="text-lg font-black text-ink">时间线</h3></div>
+          <div className="mt-4 space-y-2 text-xs">
+            {traceNodes.length ? traceNodes.map((node) => (
+              <div key={node.id}
+                onClick={() => setSelectedId(node.id)}
+                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition', hasError(node) ? 'bg-red-50 ring-red-200' : 'bg-white ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
+                <div className="flex items-center justify-between">
+                  <span className={clsx('font-bold', hasError(node) ? 'text-red-700' : 'text-ink')}>{node.tool}</span>
+                  <StatusBadge status={node.status} />
+                </div>
+                <div className="mt-1 text-ink-soft">{node.output || node.rawName}</div>
+              </div>
+            )) : <div className="text-ink-muted">暂无事件</div>}
           </div>
         </section>
       </aside>
@@ -779,8 +820,13 @@ function ActionButton({ color, icon, label, disabled, onClick }: { color: 'green
   return <button disabled={disabled} onClick={onClick} className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-45 ${map[color]}`}>{icon}{label}</button>
 }
 
-function Field({ label, value }: { label: string; value: string }) {
-  return <div className="flex items-center justify-between rounded-lg bg-background-card px-4 py-3 ring-1 ring-line"><span className="text-ink-soft">{label}</span><b className="text-right text-ink">{value}</b></div>
+function DebugField({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="rounded-lg bg-background-card px-4 py-2.5 ring-1 ring-line">
+      <div className="text-[11px] font-bold text-primary-dark">{label}</div>
+      <div className={clsx('mt-1 text-xs text-ink-muted break-all', mono && 'font-mono')}>{value}</div>
+    </div>
+  )
 }
 
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {

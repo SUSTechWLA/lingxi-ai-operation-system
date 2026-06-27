@@ -80,8 +80,8 @@ func TestBuildProposalPacketCreatesReviewableOptions(t *testing.T) {
 	if len(packet.Options) != 3 {
 		t.Fatalf("expected three proposal options, got %#v", packet.Options)
 	}
-	if packet.RecommendedOptionID != "option_b" {
-		t.Fatalf("expected hybrid recommendation when Seedance is available: %#v", packet)
+	if packet.RecommendedOptionID != "option_a" {
+		t.Fatalf("expected default option_a; LLM-driven recommendation happens at the tool layer: %#v", packet)
 	}
 	if !packet.RequiresApproval || packet.DecisionLog.DecisionType != DecisionProposalSelection {
 		t.Fatalf("proposal must require approval and carry a decision log: %#v", packet)
