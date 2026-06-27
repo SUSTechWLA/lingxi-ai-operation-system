@@ -60,12 +60,30 @@ type RunStore interface {
 	FindRun(ctx context.Context, id string) (*Run, error)
 }
 
+type PlanJudge interface {
+	Evaluate(plan *AgentPlan) PlanJudgeReport
+}
+
+type PlanJudgeReport struct {
+	Passed   bool               `json:"passed"`
+	Warnings []PlanJudgeWarning `json:"warnings,omitempty"`
+}
+
+type PlanJudgeWarning struct {
+	Code     string `json:"code"`
+	StepID   string `json:"stepId,omitempty"`
+	Tool     string `json:"tool,omitempty"`
+	Message  string `json:"message"`
+	Severity string `json:"severity"`
+}
+
 type Runner struct {
 	orchestrator Orchestrator
 	store        RunStore
 	planner      Planner
 	guard        *PlanGuard
 	compiler     *PlanCompiler
+	planJudge    PlanJudge
 }
 
 func NewRunner(orchestrator Orchestrator, store RunStore, planner Planner, guard *PlanGuard, compiler *PlanCompiler) *Runner {
@@ -76,6 +94,11 @@ func NewRunner(orchestrator Orchestrator, store RunStore, planner Planner, guard
 		guard:        guard,
 		compiler:     compiler,
 	}
+}
+
+func (r *Runner) WithPlanJudge(judge PlanJudge) *Runner {
+	r.planJudge = judge
+	return r
 }
 
 func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
@@ -99,6 +122,10 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
+	judgeReport := PlanJudgeReport{Passed: true}
+	if r.planJudge != nil {
+		judgeReport = r.planJudge.Evaluate(plan)
+	}
 
 	dag, err := r.compiler.Compile(plan)
 	if err != nil {
@@ -117,8 +144,12 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 		UpdatedAt: time.Now(),
 		Metadata:  map[string]interface{}{"mode": req.Mode},
 	}
+	if len(judgeReport.Warnings) > 0 {
+		run.Metadata["planJudgeWarnings"] = judgeReport.Warnings
+		run.Metadata["planJudgePassed"] = judgeReport.Passed
+	}
 
-	task, err := r.orchestrator.CreateTask(ctx, map[string]interface{}{
+	taskInput := map[string]interface{}{
 		"source":     "agentruntime",
 		"agentRunId": run.ID,
 		"userId":     req.UserID,
@@ -126,7 +157,12 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 		"domain":     plan.Domain,
 		"context":    req.Context,
 		"plan":       plan,
-	})
+	}
+	if len(judgeReport.Warnings) > 0 {
+		taskInput["planJudgeWarnings"] = judgeReport.Warnings
+		taskInput["planJudgePassed"] = judgeReport.Passed
+	}
+	task, err := r.orchestrator.CreateTask(ctx, taskInput)
 	if err != nil {
 		return nil, fmt.Errorf("create agent task: %w", err)
 	}

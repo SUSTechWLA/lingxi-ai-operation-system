@@ -52,6 +52,52 @@ func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 	}
 }
 
+func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "make video",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "script", Tool: "video_script_generator", Arguments: map[string]interface{}{"topic": "AI workflows"}},
+		},
+	}}
+	catalog := staticToolCatalog{
+		"video_script_generator": &tool.ToolManifest{
+			Name:     "video_script_generator",
+			Endpoint: "builtin://video-creation/video_script_generator",
+		},
+	}
+	judge := recordingPlanJudge{warnings: []PlanJudgeWarning{{Code: "missing_publish_copy", Message: "publish copy missing"}}}
+
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
+		WithPlanJudge(&judge)
+	run, err := runner.Start(context.Background(), StartRunRequest{
+		UserID:  "user-1",
+		Message: "make a video about AI workflows",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if !judge.called {
+		t.Fatalf("plan judge was not called")
+	}
+	warnings, ok := run.Metadata["planJudgeWarnings"].([]PlanJudgeWarning)
+	if !ok || len(warnings) != 1 || warnings[0].Code != "missing_publish_copy" {
+		t.Fatalf("plan judge warnings not stored on run metadata: %#v", run.Metadata)
+	}
+	taskWarnings, ok := orch.createdInput["planJudgeWarnings"].([]PlanJudgeWarning)
+	if !ok || len(taskWarnings) != 1 {
+		t.Fatalf("plan judge warnings not included in task input: %#v", orch.createdInput)
+	}
+	if run.Status != RunStatusRunning {
+		t.Fatalf("warnings must not block execution, run status = %s", run.Status)
+	}
+}
+
 func TestScopeDAGToTask_RewritesNodeReferences(t *testing.T) {
 	scoped := scopeDAGToTask("task-1", &model.DAGRequest{
 		Nodes: []model.NodeRequest{
@@ -100,11 +146,13 @@ func (p staticPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPla
 
 type fakeOrchestrator struct {
 	taskID          string
+	createdInput    map[string]interface{}
 	submittedTaskID string
 	submitted       *model.DAGRequest
 }
 
-func (o *fakeOrchestrator) CreateTask(context.Context, map[string]interface{}) (*model.Task, error) {
+func (o *fakeOrchestrator) CreateTask(_ context.Context, input map[string]interface{}) (*model.Task, error) {
+	o.createdInput = input
 	return &model.Task{ID: o.taskID, Status: model.TaskCreated, CreatedAt: time.Now()}, nil
 }
 
@@ -133,4 +181,14 @@ func (s *memoryRunStore) SaveRun(_ context.Context, run *Run) error {
 
 func (s *memoryRunStore) FindRun(_ context.Context, id string) (*Run, error) {
 	return s.runs[id], nil
+}
+
+type recordingPlanJudge struct {
+	called   bool
+	warnings []PlanJudgeWarning
+}
+
+func (j *recordingPlanJudge) Evaluate(*AgentPlan) PlanJudgeReport {
+	j.called = true
+	return PlanJudgeReport{Warnings: j.warnings}
 }

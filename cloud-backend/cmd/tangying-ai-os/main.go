@@ -50,6 +50,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
+	videoPlanJudge "github.com/tangying-ai/aios-core/internal/agents/video/planjudge"
 	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
 	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
 	"github.com/tangying-ai/aios-core/internal/core/skillruntime"
@@ -418,7 +419,7 @@ func main() {
 			pc.WithDirectors(videoDirectorAdapter)
 			return pc
 		}(),
-	)
+	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge())
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine)
 	agentRuntimeHandler.RegisterRoutes(r)
 
