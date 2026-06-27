@@ -2201,7 +2201,98 @@ Text: no readable text, no letters, no numbers
 Constraints: no watermark, no logo, no photorealism, no clutter, no distorted hands or faces`, brief)
 }
 
-// elaborateImagePrompt uses the LLM to expand a brief image prompt into the
+// WebSearchResult holds a single web search result snippet.
+type WebSearchResult struct {
+	Title   string `json:"title"`
+	Snippet string `json:"snippet"`
+	URL     string `json:"url"`
+	Date    string `json:"date,omitempty"`
+}
+
+// performWebSearch executes a web search for the given query and returns
+// structured snippets that can be fed to the LLM as reference material.
+// Uses the configured SEARCH_API_KEY / SEARCH_ENDPOINT env vars.
+// Falls back gracefully when search is not configured.
+func performWebSearch(ctx context.Context, query string) ([]WebSearchResult, error) {
+	apiKey := os.Getenv("SEARCH_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("SEARCH_API_KEY not configured")
+	}
+
+	endpoint := os.Getenv("SEARCH_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "https://google.serper.dev/search"
+	}
+
+	reqBody := map[string]interface{}{
+		"q":   query,
+		"num": 10,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("search request: %w", err)
+	}
+	httpReq.Header.Set("X-API-KEY", apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("search call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("search returned %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	// Serper.dev response format
+	var result struct {
+		Organic []struct {
+			Title   string `json:"title"`
+			Snippet string `json:"snippet"`
+			Link    string `json:"link"`
+			Date    string `json:"date"`
+		} `json:"organic"`
+		KnowledgeGraph *struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+		} `json:"knowledgeGraph"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return nil, fmt.Errorf("parse search response: %w", err)
+	}
+
+	results := make([]WebSearchResult, 0, len(result.Organic))
+	for _, o := range result.Organic {
+		results = append(results, WebSearchResult{
+			Title:   o.Title,
+			Snippet: o.Snippet,
+			URL:     o.Link,
+			Date:    o.Date,
+		})
+	}
+	return results, nil
+}
+
+// formatSearchResults formats web search results as a readable text block for LLM prompts.
+func formatSearchResults(results []WebSearchResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("【最新网络搜索结果】\n以下是从网络搜索获得的最新信息，请优先参考这些信息进行知识整理：\n\n")
+	for i, r := range results {
+		b.WriteString(fmt.Sprintf("%d. %s\n   %s\n", i+1, r.Title, r.Snippet))
+		if r.Date != "" {
+			b.WriteString(fmt.Sprintf("   日期：%s\n", r.Date))
+		}
+	}
+	return b.String()
+}
 // full default template format.
 func elaborateImagePrompt(cfg config.OpenAIConfig, briefPrompt string, toolCtx tool.ToolContext) string {
 	systemPrompt := `你是一个专业的自媒体视频图片提示词工程师。
@@ -2587,6 +2678,28 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	systemPrompt := buildDynamicAgentSystemPrompt(toolName, topic, style, platform)
 	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform)
 
+	// For knowledge_researcher: perform actual web search to get current facts.
+	// This ensures the LLM produces timely, accurate content rather than relying
+	// on stale training data.
+	if toolName == "knowledge_researcher" && topic != "" {
+		searchQuery := topic
+		if researchQuery, ok := params["searchQuery"].(string); ok && researchQuery != "" {
+			searchQuery = researchQuery
+		}
+		if results, err := performWebSearch(context.Background(), searchQuery); err == nil && len(results) > 0 {
+			searchText := formatSearchResults(results)
+			userPrompt = searchText + "\n\n---\n\n" + userPrompt
+			zap.L().Info("Web search results injected into knowledge_researcher",
+				zap.Int("resultCount", len(results)),
+				zap.String("topic", topic))
+		} else if err != nil {
+			zap.L().Warn("Web search skipped, LLM may use stale data",
+				zap.String("tool", toolName),
+				zap.String("topic", topic),
+				zap.Error(err))
+		}
+	}
+
 	effectiveCfg := GetVideoCreationOpenAIConfig()
 	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
 		if localCfg.BaseURL != "" {
@@ -2757,12 +2870,12 @@ func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) stri
 		return fmt.Sprintf(`你是知识分享视频资料研究员。
 
 任务：
-根据 topic 整理适合短视频口播的事实材料、讲述角度、风险点。
+根据 topic 和提供的网络搜索结果，整理适合短视频口播的事实材料、讲述角度、风险点。优先使用搜索结果中的实时数据。
 
 要求：
 1. 不要输出 Markdown。
 2. 只输出 JSON。
-3. 不要编造明确历史细节。
+3. 不要编造事实。对搜索结果中没有覆盖的内容，标注为"未经最新确认"。
 4. 对不确定内容写入 risks。
 5. facts 应该短句化，适合后续口播稿生成。
 6. storyAngles 给出 3-5 个短视频讲述角度。
