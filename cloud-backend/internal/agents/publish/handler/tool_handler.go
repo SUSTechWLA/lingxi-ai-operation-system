@@ -5,16 +5,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 type ToolHandler struct {
 	registry     *tool.ToolRegistry
-	manifestSvc  *skillSvc.ToolManifestService
+	manifestSvc  *tool.ToolManifestService
 }
 
-func NewToolHandler(registry *tool.ToolRegistry, manifestSvc *skillSvc.ToolManifestService) *ToolHandler {
+func NewToolHandler(registry *tool.ToolRegistry, manifestSvc *tool.ToolManifestService) *ToolHandler {
 	return &ToolHandler{registry: registry, manifestSvc: manifestSvc}
 }
 

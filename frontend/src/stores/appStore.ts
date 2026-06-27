@@ -11,7 +11,6 @@ interface AppState {
   cover: MediaFile | null
   platforms: Platform[]
   isPublishing: boolean
-  chatSessionId: string | null
   contentType: ContentType
   aiLoadingMessage: string | null
 
@@ -28,7 +27,6 @@ interface AppState {
   toggleAllPlatforms: (enabled: boolean) => void
   clearAll: () => void
   setIsPublishing: (isPublishing: boolean) => void
-  setChatSessionId: (id: string | null) => void
   setContentType: (type: ContentType) => void
   clearMedia: () => void
   setAILoadingMessage: (msg: string | null) => void
@@ -59,7 +57,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   cover: null,
   platforms: defaultPlatforms,
   isPublishing: false,
-  chatSessionId: null,
   contentType: null,
   aiLoadingMessage: null,
 
@@ -71,25 +68,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   addVideos: (files) =>
     set((state) => ({
       videos: [...state.videos, ...files].slice(0, 5),
-      chatSessionId: null,
     })),
   removeVideo: (index) =>
     set((state) => ({
       videos: state.videos.filter((_, i) => i !== index),
-      chatSessionId: null,
     })),
 
   addImages: (files) =>
     set((state) => ({
       images: [...state.images, ...files].slice(0, 9),
-      chatSessionId: null,
     })),
   removeImage: (index) =>
     set((state) => ({
       images: state.images.filter((_, i) => i !== index),
-      chatSessionId: null,
     })),
-  setCover: (cover) => set({ cover, chatSessionId: null }),
+  setCover: (cover) => set({ cover }),
 
   togglePlatform: (id) =>
     set((state) => ({
@@ -115,13 +108,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       videos: [],
       images: [],
       cover: null,
-      chatSessionId: null,
     }),
 
   setIsPublishing: (isPublishing) => set({ isPublishing }),
-  setChatSessionId: (chatSessionId) => set({ chatSessionId }),
   setContentType: (contentType) => set({ contentType }),
-  clearMedia: () => set({ videos: [], images: [], cover: null, chatSessionId: null }),
+  clearMedia: () => set({ videos: [], images: [], cover: null }),
   setAILoadingMessage: (aiLoadingMessage) => set({ aiLoadingMessage }),
 
   applyFields: (fields) => set((state) => ({

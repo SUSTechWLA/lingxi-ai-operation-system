@@ -5,11 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **权威架构文档：** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 完整的模块说明（含 v3.2 动态 Agent Runtime）、数据模型、API 清单、前端架构、基础设施。
 > 本文档为快速上手指南，详细内容请查阅架构文档。
 
-> **v3.2 核心新增：** Dynamic Agent Runtime — `LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`，从自然语言一步生成可执行 DAG，含质量门禁体系和 Artifact Review 闭环。
+> **v4.0 核心：** Dynamic Agent Runtime — `LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`，从自然语言一步生成可执行 DAG，含质量门禁体系和 Artifact Review 闭环。聚焦视频创作业务。
 
 ## 系统概览
 
-**躺营 AIOS** — 「本地执行面 + 云端控制面」的自媒体内容运营系统。
+**躺营 AIOS** — 「本地执行面 + 云端控制面」的视频创作 Agent。
 
 ```text
 frontend/       # React + Electron UI（桌面端 & Web）
@@ -91,9 +91,7 @@ cloud-backend/
       hyperframes/                       # HyperFrames Render Service HTTP 客户端（替代 CLI）
     agents/                             # 业务 Agent 层
       video/                            # 视频创作（Project/Run/审核/产物）
-      bid/                              # 标书生成
-      chat/                             # AI 对话助手
-      publish/                          # 内容发布 + AI 生成
+      publish/                          # 内容发布（后续重构为 distribution）
   skills/                               # 6 个 Skill Package（create-opinion-videos 等）
   skill-capabilities/                   # 🆕 Skill Capability（codex-video-skill 工具注册表）
   deploy/                               # 云端 Docker Compose + nginx 配置
@@ -230,12 +228,9 @@ cd local-backend && go test ./...
 cd frontend && npm run build
 ```
 
-## 新增业务线步骤
+## 扩展开发
 
-1. 在 `skills/{name}/1.0.0/` 写 `skill.yaml` + `stages/*.md`
-2. （可选）在 `internal/agents/{name}/` 写领域 Agent，复用 orchestrator/workflow
-3. 在 `main.go` 注册 handler（feature-gated）
-4. 启动时自动加载 Skill → 编译 → 注册为 Workflow 模板
+系统已收敛为视频创作 Agent。新增视频创作能力通过 Skill Package（`skills/`）和 Skill Capability（`skill-capabilities/`）注册，无需新增业务线。
 
 ## 常见问题
 

@@ -15,8 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	skillHandler "github.com/tangying-ai/aios-core/internal/agents/chat/handler"
-	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
 	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
 	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
@@ -51,9 +49,6 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 
-	bidHandler "github.com/tangying-ai/aios-core/internal/agents/bid/handler"
-	bidRepo "github.com/tangying-ai/aios-core/internal/agents/bid/repository"
-	bidsvc "github.com/tangying-ai/aios-core/internal/agents/bid/service"
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
 	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
 	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
@@ -133,8 +128,6 @@ func main() {
 	toolRegistry.Register(builtin.NewContentGeneratorTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewContentCheckerTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewPlatformAdapterTool(cfg.OpenAI))
-	toolRegistry.Register(builtin.NewChatReviseTool(cfg.OpenAI))
-	toolRegistry.Register(builtin.NewChatGenerateTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewExternalTool(toolRegistry))
 	if cfg.Video.VideoCreationEnabled {
 		builtin.RegisterVideoCreationExternalTools(toolRegistry)
@@ -157,7 +150,7 @@ func main() {
 	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
 
 	// Tool manifest service (DB-persisted + Redis-cached tool knowledge base)
-	toolManifestSvc := skillSvc.NewToolManifestService(toolManifestRepo, rdb, toolRegistry)
+	toolManifestSvc := tool.NewToolManifestService(toolManifestRepo, rdb, toolRegistry)
 	if err := toolManifestSvc.SyncBuiltinTools(ctx); err != nil {
 		zap.L().Warn("Failed to sync builtin tools to DB", zap.Error(err))
 	}
@@ -184,12 +177,6 @@ func main() {
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL, toolManifestSvc)
-
-	// Chat (AI assistant dialog system — each chat turn = one Task via orchestrator)
-	skillLlmClient := skillSvc.NewLLMClient(cfg.OpenAI)
-	skillSessionManager := skillSvc.NewSessionManager(rdb)
-	skillPlanService := skillSvc.NewPlanService(skillLlmClient, toolManifestSvc)
-	skillResultAssembler := skillSvc.NewResultAssembler(orchestratorService, contextService)
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -371,9 +358,6 @@ func main() {
 	}
 	toolRegistry.Register(builtin.NewVideoCopyGeneratorTool(cfg.OpenAI))
 
-	skillHandler.NewSessionHandler(
-		skillSessionManager, skillPlanService, skillResultAssembler, mediaSvc,
-	).RegisterRoutes(r)
 	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
 	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r)
 	videodirector.NewHandler(videoDirectorRegistry).RegisterRoutes(r)
@@ -437,12 +421,6 @@ func main() {
 	)
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine)
 	agentRuntimeHandler.RegisterRoutes(r)
-
-	// Bid (tender) generation module
-	bidRepository := bidRepo.NewBidRepository(pool)
-	bidService := bidsvc.NewBidService(bidRepository, orchestratorService, taskExecutionCtrl, stateService, taskRepo, nodeRepo)
-	bidHandler.NewBidHandler(bidService, authMiddleware.RequireAuth()).RegisterRoutes(r)
-	zap.L().Info("Bid service registered")
 
 	// Workflow templates — reusable DAG blueprints
 	workflowRepo := workflow.NewRepository(pool)

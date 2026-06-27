@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> **架构版本：v3.2** — Dynamic Agent Runtime (`LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`)，含质量门禁体系和 Artifact Review 闭环。
+> **架构版本：v4.0** — 视频创作 Agent，Dynamic Agent Runtime (`LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`)，含质量门禁体系和 Artifact Review 闭环。
 
 This repository is split by runtime boundary:
 

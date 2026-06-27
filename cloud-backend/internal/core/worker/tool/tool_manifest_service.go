@@ -1,4 +1,4 @@
-package service
+package tool
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
-	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 const (
@@ -25,10 +24,10 @@ const (
 type ToolManifestService struct {
 	repo     repository.ToolManifestRepo
 	rdb      *redis.Client
-	registry *tool.ToolRegistry
+	registry *ToolRegistry
 }
 
-func NewToolManifestService(repo repository.ToolManifestRepo, rdb *redis.Client, registry *tool.ToolRegistry) *ToolManifestService {
+func NewToolManifestService(repo repository.ToolManifestRepo, rdb *redis.Client, registry *ToolRegistry) *ToolManifestService {
 	return &ToolManifestService{
 		repo:     repo,
 		rdb:      rdb,
@@ -54,7 +53,7 @@ func (s *ToolManifestService) SyncBuiltinTools(ctx context.Context) error {
 }
 
 // RegisterExternal persists an external tool to DB and registry, then invalidates cache.
-func (s *ToolManifestService) RegisterExternal(ctx context.Context, manifest *tool.ToolManifest) error {
+func (s *ToolManifestService) RegisterExternal(ctx context.Context, manifest *ToolManifest) error {
 	record := manifestToRecord(manifest)
 	record.Type = "external"
 	if err := s.repo.Upsert(ctx, record); err != nil {
@@ -69,7 +68,7 @@ func (s *ToolManifestService) RegisterExternal(ctx context.Context, manifest *to
 // RegisterManifest persists a manifest and makes it discoverable through the
 // external bridge without rewriting its declared type. Skill capability prompt
 // tools use this path because their type is meaningful to the agent planner.
-func (s *ToolManifestService) RegisterManifest(ctx context.Context, manifest *tool.ToolManifest) error {
+func (s *ToolManifestService) RegisterManifest(ctx context.Context, manifest *ToolManifest) error {
 	record := manifestToRecord(manifest)
 	if err := s.repo.Upsert(ctx, record); err != nil {
 		return fmt.Errorf("failed to persist tool manifest: %w", err)
@@ -134,7 +133,7 @@ func (s *ToolManifestService) FormatForPrompt(ctx context.Context) (string, erro
 
 		// Parse and include parameter info
 		if len(m.Parameters) > 0 {
-			var params map[string]tool.ParamDef
+			var params map[string]ParamDef
 			if err := json.Unmarshal(m.Parameters, &params); err == nil && len(params) > 0 {
 				desc += "  参数: "
 				for name, param := range params {
@@ -150,7 +149,7 @@ func (s *ToolManifestService) FormatForPrompt(ctx context.Context) (string, erro
 
 		// Include output schema
 		if len(m.Output) > 0 {
-			var output map[string]tool.ParamDef
+			var output map[string]ParamDef
 			if err := json.Unmarshal(m.Output, &output); err == nil && len(output) > 0 {
 				desc += "  输出: "
 				for name, param := range output {
@@ -162,7 +161,7 @@ func (s *ToolManifestService) FormatForPrompt(ctx context.Context) (string, erro
 	}
 
 	if desc == "" {
-		desc = "chat_generate: 通用内容生成\nchat_revise: 修改已有内容"
+		desc = "llm_api: 通用大模型调用，可执行任意文本生成任务"
 	}
 	return desc, nil
 }
@@ -171,8 +170,8 @@ func (s *ToolManifestService) invalidateCache(ctx context.Context) error {
 	return s.rdb.Del(ctx, toolCacheKey).Err()
 }
 
-// manifestToRecord converts a tool.ToolManifest to a model.ToolManifestRecord for DB storage.
-func manifestToRecord(m *tool.ToolManifest) *model.ToolManifestRecord {
+// manifestToRecord converts a ToolManifest to a model.ToolManifestRecord for DB storage.
+func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 	params, _ := json.Marshal(m.Parameters)
 	output, _ := json.Marshal(m.Output)
 	examples, _ := json.Marshal(m.Examples)
@@ -188,23 +187,23 @@ func manifestToRecord(m *tool.ToolManifest) *model.ToolManifestRecord {
 
 	costLevel := m.CostLevel
 	if costLevel == "" {
-		costLevel = tool.CostLow
+		costLevel = CostLow
 	}
 	latencyLevel := m.LatencyLevel
 	if latencyLevel == "" {
-		latencyLevel = tool.LatencyMedium
+		latencyLevel = LatencyMedium
 	}
 	riskLevel := m.RiskLevel
 	if riskLevel == "" {
-		riskLevel = tool.RiskLow
+		riskLevel = RiskLow
 	}
 	executionPlane := m.ExecutionPlane
 	if executionPlane == "" {
-		executionPlane = tool.ExecutionPlaneCloud
+		executionPlane = ExecutionPlaneCloud
 	}
 	artifactLocation := m.ArtifactLocation
 	if artifactLocation == "" {
-		artifactLocation = tool.ArtifactLocationCloud
+		artifactLocation = ArtifactLocationCloud
 	}
 
 	return &model.ToolManifestRecord{

@@ -1,6 +1,6 @@
 # 躺营 AIOS 产品架构设计说明文档
 
-> 版本：v3.2.1（动态 Agent Runtime + 质量门禁体系 + 产物过期追踪）
+> 版本：v4.0（视频创作 Agent，动态 Agent Runtime + 质量门禁体系 + 产物过期追踪）
 > 最后更新：2026-06-27
 > 适用对象：新加入的后端 / 前端 / 部署工程师
 > 配套文档：[README.md](../README.md)、[AGENTS.md](../AGENTS.md)、[docs/upgrade/video-creation-v1/](upgrade/video-creation-v1/)
@@ -29,7 +29,7 @@
 
 ### 1.1 一句话定位
 
-**躺营 AIOS（AI Operation System）** 是一套面向自媒体内容运营的「本地执行面 + 云端控制面」系统：本地桌面端负责用户电脑上的文件、缓存、日志、诊断包和用户自配的基础模型 Provider；云端负责远程配置、编排、外部服务元数据、账号体系和云端日志分析。
+**躺营 AIOS** 是一套面向视频创作的「本地执行面 + 云端控制面」Agent：本地桌面端负责用户电脑上的文件、缓存、日志、诊断包和用户自配的基础模型 Provider；云端负责远程配置、编排、外部服务元数据、账号体系和云端日志分析。
 
 当前代码仓按运行边界拆为：
 
@@ -46,8 +46,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 
 - **一句话描述成片目标**，系统自动理解需求、选择最合适的「技能（Skill）」、编排成可执行的工作流；
 - **全程可追踪、可审核、可返工**，每个中间产物都有版本，能回溯能改；
-- **工具可插拔**，内置 30+ 工具（含 17 个通用内置工具 + 33 个视频创作工具 + Skill Capability 动态注册工具），外部工具通过 HTTP 注册即可接入；
-- **同一套引擎服务多条业务线**（视频、发布、标书、对话），不重复造轮子。
+- **工具可插拔**，内置 30+ 工具（含 17 个通用内置工具 + 33 个视频创作工具 + Skill Capability 动态注册工具），外部工具通过 HTTP 注册即可接入。
 
 ### 1.3 核心优势
 
@@ -67,15 +66,13 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 | **事件驱动 + Outbox 可靠投递** | 事件先写 DB 再异步 relay 到 Kafka，保证基础设施抖动时不丢事件。 |
 | **HybridToolRetriever** | 多信号评分（能力0.3 + 关键词0.25 + 标签0.2 + 推荐链0.1 + 领域0.15）从工具库中检索 TopK 候选工具供给 LLMPlanner。预留向量检索接口。 |
 
-### 1.4 当前业务线
+### 1.4 当前业务
 
-| 业务线 | 入口 Agent | 状态 |
-|--------|-----------|------|
+| 业务 | 入口 Agent | 状态 |
+|------|-----------|------|
 | 自媒体视频创作（口播/镜头式/导演级/拉片） | `internal/agents/video` | ✅ MVP 可用（feature-gated） |
 | VideoForge Studio P0（Pipeline/Proposal/Render Strategy） | 仓库根 `video-pipelines/` + `skill-capabilities/video/codex-video-skill` | ✅ 可用（Dynamic Agent 工具链） |
-| 内容发布 + AI 生成/润色 | `internal/agents/publish` | ✅ 可用 |
-| AI 对话助手（多轮对话 → DAG） | `internal/agents/chat` | ✅ 可用 |
-| 标书/投标文档生成 | `internal/agents/bid` | ✅ 可用 |
+| 内容发布 + AI 生成/润色 | `internal/agents/publish` | ✅ 可用（后续重构为 distribution） |
 
 ---
 
@@ -96,8 +93,8 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 └───────────────────────────────┘ │                        │
 │                                                          │
 │  ┌──────────── 业务 Agent 层（internal/agents）────────┐ │
-│  │  video   │  bid   │  chat   │  publish              │ │
-│  │ (项目/Run)│(标书) │(对话)  │ (发布/AI)              │ │
+│  │  video          │  publish               │ │
+│  │ (项目/Run/审核) │ (发布/分发)            │ │
 │  └───────────────────┬─────────────────────────────────┘ │
 │                      │ 复用                              │
 │  ┌───────────────────▼─────────────────────────────────┐ │
@@ -121,9 +118,9 @@ PostgreSQL  Redis   Redpanda     MinIO    (Qdrant)
 ### 2.2 两个关键分层原则
 
 1. **`internal/core`（通用引擎）不绑定业务**：编排、工具执行、工作流、模型网关都是通用能力，不知道「视频」或「标书」的存在。
-2. **`internal/agents`（业务 Agent）编排领域逻辑**：每个 Agent 用 core 提供的能力拼出自己的领域流程（如视频的 Project→Run，标书的 Project→Chapter）。
+2. **`internal/agents`（业务 Agent）编排领域逻辑**：每个 Agent 用 core 提供的能力拼出自己的领域流程（如视频的 Project→Run）。
 
-> 这种分层让「加一条新业务线」≈「加一个 Agent 包 + 一个 Skill 包」，不动引擎。
+> 这种分层让「加新能力」≈「加一个 Skill 包 + 一个 Skill Capability」，不动引擎。
 
 ### 2.3 一次「视频创作」的完整时序
 
@@ -329,8 +326,6 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 | `content_generator` | content_generator.go | Executable | 基于媒体分析生成内容包 |
 | `content_checker` | content_checker.go | Executable | 合规检查（敏感词、广告法、平台规则） |
 | `platform_adapter` | platform_adapter.go | Executable | 跨平台适配（7 平台语气/格式/长度） |
-| `chat_generate` | chat_generate_tool.go | Executable | 多轮对话内容生成 |
-| `chat_revise` | chat_revise_tool.go | Executable | 自然语言改写 title/description/keywords |
 | `external` | external_tool.go | Executable + ExternalToolProvider | HTTP 桥接已注册外部工具 |
 | `video_metadata` | video_metadata.go | Executable | 下载视频→提取时长/分辨率/帧率/编码 |
 | `video_analyzer` | video_analyzer.go | Executable | ffmpeg 关键帧 + Whisper 转录 |
@@ -558,30 +553,7 @@ ProgressReporter     // 长任务进度回调（heartbeat + progress + checkpoin
 - `provider_api` — 调外部模型 API
 - `manual_import` — 手动导入成片（当前 MVP 默认，无需视频 API）
 
-### 5.2 bid — 标书/投标文档生成
-
-目录：`internal/agents/bid/`。完整的项目→章节→审核→导出流程：
-
-- **模型：** `BidProject`（status: DRAFT/PARSING/GENERATING/...）、`BidChapter`（node_id 关联 CONTROL 节点）、`BidTemplate`
-- **Service 流程：** 上传标书 → `SetTenderFile` → `StartGeneration`（建 task + 提交 `BuildBidDAG`）→ 逐章 `ApproveChapter`（把 CONTROL 节点标 SUCCESS 解锁下游）/ `RejectChapter`（标 FAILED 触发重试）→ `GetExportStatus`（查 doc_exporter 节点）
-- **路由：** `/api/bid/projects/*`、`/api/bid/templates`
-
-### 5.3 chat — AI 对话助手
-
-目录：`internal/agents/chat/`。多轮对话，每轮 = 一个 Task。
-
-| 组件 | 职责 |
-|------|------|
-| `SessionManager` | Redis 会话（30min TTL, 50 条消息上限），存消息历史 + 媒体上下文 + task IDs |
-| `PlanService` | 用对话历史 + 媒体上下文 + 工具清单构建 prompt → LLM 生成 DAG |
-| `ResultAssembler` | 建 task + 提交 DAG + 轮询 + 从 node output 提取 title/description/keywords |
-| `LLMClient` | 类型化 OpenAI 客户端（JSON schema 响应） |
-| `ToolManifestService` | DB 持久化 + Redis 缓存的工具知识库，启动同步内置工具 |
-| `handler/session_handler.go` | **路由 `/api/chat/sessions`**（create/get/:id/chat/progress/terminate）。⚠️ 注意：旧文档写的 `/api/skill/dialog/session/*` 已废弃，实际是 `/api/chat/sessions/*` |
-
-**对话流程：** append 用户消息 → GeneratePlan（DAG）→ CreateTask+SubmitDAG → PollAndExtract → append 助手回复 → 返回 reply + fields。
-
-### 5.4 publish — 内容发布 + AI 生成
+### 5.2 publish — 内容发布 + AI 生成
 
 目录：`internal/agents/publish/`。
 
@@ -690,10 +662,6 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 |----|------|
 | `video_projects` | 视频项目（mode/skill/workflow/generation_mode/aspect_ratio/target_duration，软删除 deleted_at） |
 | `artifacts` | 版本化产物索引（project/stage/unit/kind/version/parent_id/storage_type/storage_ref/content_hash/prompt_hash/is_current/status/human_approved/depends_on/produced_by_node/produced_by_tool/produced_by_role/updated_at；新产物正文在本地）。status 枚举：valid/stale/rejected/failed/deleted。depends_on 跟踪 artifact ID 级依赖链。 |
-| `bid_projects` | 标书项目（task_id/template_id/industry/tender_file/structure/config） |
-| `bid_chapters` | 标书章节（node_id 关联 CONTROL，status, review_comment, score_items） |
-| `bid_templates` | 标书模板（structure JSONB, workflow_dag） |
-
 ---
 
 ## 8. 完整 API 接口清单
@@ -751,17 +719,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | GET | `/api/task/:taskId/context` | 任务上下文历史 |
 | POST | `/api/context/record` | 记录上下文事件 |
 
-### 8.4 AI 对话助手
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/chat/sessions/create` | 建会话（带媒体上下文 + mediaIds→presigned URLs） |
-| GET | `/api/chat/sessions/:id` | 会话状态（消息历史 + 媒体 + task IDs） |
-| POST | `/api/chat/sessions/:id/chat` | 发消息 → LLM 规划 DAG → 执行 → 返回 reply + fields |
-| GET | `/api/chat/sessions/:id/progress` | 进度（IDLE/EXECUTING/TERMINATED） |
-| POST | `/api/chat/sessions/:id/terminate` | 终止会话 |
-
-### 8.5 工具注册与媒体
+### 8.4 工具注册与媒体
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -773,24 +731,11 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | GET | `/api/media/:id` | 单个资产 |
 | PUT | `/api/media/:id/tags` | 更新标签 |
 
-### 8.6 标书生成
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET/POST | `/api/bid/projects` | 列表 / 创建 |
-| GET/PUT/DELETE | `/api/bid/projects/:id` | 详情(含章节) / 更新 / 删除 |
-| POST | `/api/bid/projects/:id/upload-tender` | 上传标书文件 |
-| POST | `/api/bid/projects/:id/start` `/pause` `/resume` | 生成生命周期 |
-| POST | `/api/bid/projects/:id/chapters/:chId/approve` `/reject` `/regenerate` | 章节审核（触发 CONTROL 节点） |
-| POST | `/api/bid/projects/:id/export` | 导出（docx） |
-| GET | `/api/bid/projects/:id/export/status` `/progress` `/trace` | 导出/进度/追踪 |
-| GET | `/api/bid/templates` | 标书模板 |
-
-### 8.7 健康检查
+### 8.5 健康检查
 
 `GET /api/health/ready` — 就绪检查（readiness probe），供 Docker compose / Kubernetes / Electron 判活。
 
-### 8.8 配置与能力注册
+### 8.6 配置与能力注册
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -800,7 +745,7 @@ curl -X POST http://localhost:8080/api/skills/aigc-shot-video/1.0.0/compile
 | GET | `/api/skill-capabilities` | 🆕 列出已加载的 Skill Capability 包 |
 | GET | `/api/skill-capabilities/:id` | 🆕 获取 Capability 包详情（含 tools） |
 
-### 8.9 健康检查响应格式
+### 8.7 健康检查响应格式
 
 ```json
 {

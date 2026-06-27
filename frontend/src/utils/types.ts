@@ -6,7 +6,7 @@
 // When the generated file drifts, the CI `make api-docs-check` fails and both
 // should be reconciled.
 //
-// UI-only types: MediaFile, Platform, Suggestion, etc. (no spec equivalent).
+// UI-only types: MediaFile, Platform, etc. (no spec equivalent).
 // Data types: Artifact, VideoProject, etc. — keep these aligned manually.
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -117,66 +117,6 @@ export interface TraceData {
     metadata?: Record<string, unknown>
     createdAt: string
   }>
-}
-
-// Chat types for conversational AI generation
-export interface Suggestion {
-  text: string
-  type: string
-}
-
-export interface ChatGeneratedFields {
-  title?: string
-  description?: string
-  body?: string
-  keywords?: string[]
-}
-
-// Skill dialog session types
-export interface CreateSessionResponse {
-  session_id: string
-}
-
-export interface SkillChatResponse {
-  reply: string
-  suggestions?: Suggestion[]
-  fields?: ChatGeneratedFields
-  progress?: SkillProgress
-}
-
-export interface SkillProgress {
-  status: string
-  phase: string
-  task_id?: string
-}
-
-export interface ProgressResponse {
-  status: string
-  current_phase: string
-  task_id?: string
-}
-
-export interface SkillSessionResponse {
-  session_id: string
-  messages: ChatMessageItem[]
-  media_context: {
-    media_count: number
-    media_names: string[]
-    media_ids?: string[]
-    title?: string
-    description?: string
-    keywords?: string[]
-  }
-  task_ids: string[]
-  terminated: boolean
-  created_at: string
-}
-
-export interface ChatMessageItem {
-  role: 'user' | 'assistant'
-  content: string
-  suggestions?: Suggestion[]
-  fields?: ChatGeneratedFields
 }
 
 export type ContentType = 'image' | 'video' | null

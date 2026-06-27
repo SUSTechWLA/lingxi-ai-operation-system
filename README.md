@@ -1,8 +1,8 @@
-# 躺营 AIOS
+# 躺营 AIOS — 视频创作 Agent
 
-> **版本：v3.2** — 动态 Agent Runtime：从自然语言一步生成可执行 DAG，含质量门禁 + 人工审核 + 完整包导出。
+> **版本：v4.0** — 聚焦视频创作，基于动态 Agent Runtime 的一站式视频内容生产系统。
 
-AIOS 现在按运行边界拆分为三个主要部分：
+躺营 AIOS 按运行边界拆分为三个主要部分：
 
 ```text
 frontend/                    # React + Electron 桌面/Web 前端

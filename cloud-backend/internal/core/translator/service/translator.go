@@ -14,7 +14,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/common/jsonx"
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/model"
-	skillSvc "github.com/tangying-ai/aios-core/internal/agents/chat/service"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 const systemPromptTmpl = `你是一个任务分解专家。请将用户的自然语言任务分解为多个执行节点（Node），并构建一个有向无环图（DAG）。
@@ -62,10 +62,10 @@ type NlToDagService struct {
 	cfg             config.OpenAIConfig
 	orchestratorURL string
 	httpClient      *http.Client
-	toolManifestSvc *skillSvc.ToolManifestService
+	toolManifestSvc *tool.ToolManifestService
 }
 
-func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string, toolManifestSvc *skillSvc.ToolManifestService) *NlToDagService {
+func NewNlToDagService(cfg config.OpenAIConfig, orchestratorURL string, toolManifestSvc *tool.ToolManifestService) *NlToDagService {
 	return &NlToDagService{
 		cfg:             cfg,
 		orchestratorURL: orchestratorURL,
@@ -89,7 +89,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*mo
 		}
 	}
 	if toolsDesc == "" {
-		toolsDesc = "llm_api: 通用大模型调用，可执行任意文本生成任务\nchat_generate: 通用内容生成\nchat_revise: 修改已有内容"
+		toolsDesc = "llm_api: 通用大模型调用，可执行任意文本生成任务"
 	}
 
 	nodeID := fmt.Sprintf("nl-translate-%d", time.Now().UnixMilli())

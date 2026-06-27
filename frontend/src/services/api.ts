@@ -10,10 +10,6 @@ import {
   TraceData,
   MediaListResponse,
   MediaAsset,
-  CreateSessionResponse,
-  SkillChatResponse,
-  SkillSessionResponse,
-  ProgressResponse,
   SkillCatalogResponse,
   SkillDetailResponse,
   SkillRouteResponse,
@@ -164,63 +160,6 @@ export const fetchTrace = async (taskId: string): Promise<TraceData> => {
 export const fetchRecentTrace = async (): Promise<TraceData> => {
   const response = await api.get<ApiResponse<TraceData>>('/trace/recent')
   return response.data.data
-}
-
-// Skill Dialog API - Conversational AI generation
-// Uses a longer timeout (120s) because the chat flow may involve:
-// intent → clarify → plan → execute → assemble
-
-export const createSkillSession = async (
-  context?: {
-    title?: string
-    description?: string
-    body?: string
-    keywords?: string[]
-    media_count?: number
-    media_names?: string[]
-    media_ids?: string[]
-    platforms?: string[]
-  }
-): Promise<CreateSessionResponse> => {
-  const response = await api.post<ApiResponse<CreateSessionResponse>>('/chat/sessions/create', context || {})
-  return response.data.data
-}
-
-export const chatSkillSession = async (
-  sessionId: string,
-  message: string,
-  signal?: AbortSignal
-): Promise<SkillChatResponse> => {
-  const response = await api.post<ApiResponse<SkillChatResponse>>(
-    `/chat/sessions/${sessionId}/chat`,
-    { message },
-    { signal, timeout: 180000 }
-  )
-  return response.data.data
-}
-
-export const getSkillSessionProgress = async (
-  sessionId: string
-): Promise<ProgressResponse> => {
-  const response = await api.get<ApiResponse<ProgressResponse>>(
-    `/chat/sessions/${sessionId}/progress`
-  )
-  return response.data.data
-}
-
-export const getSkillSession = async (
-  sessionId: string
-): Promise<SkillSessionResponse> => {
-  const response = await api.get<ApiResponse<SkillSessionResponse>>(
-    `/chat/sessions/${sessionId}`
-  )
-  return response.data.data
-}
-
-export const terminateSkillSession = async (
-  sessionId: string
-): Promise<void> => {
-  await api.post(`/chat/sessions/${sessionId}/terminate`, {})
 }
 
 // Media management API

@@ -1,23 +1,21 @@
-package service
+package tool
 
 import (
 	"encoding/json"
 	"testing"
-
-	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
-	record := manifestToRecord(&tool.ToolManifest{
+	record := manifestToRecord(&ToolManifest{
 		Name:               "video_script_generator",
 		Description:        "Generate a reviewable script",
 		Type:               "builtin_prompt_tool",
 		Version:            "1.0.0",
-		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		ExecutionPlane:     ExecutionPlaneLocal,
 		RequiresUserDevice: true,
-		ArtifactLocation:   tool.ArtifactLocationLocal,
+		ArtifactLocation:   ArtifactLocationLocal,
 		LocalCommand:       "HYPERFRAMES_RENDER",
-		LocalRequirements: tool.LocalRequirements{
+		LocalRequirements: LocalRequirements{
 			OS:              []string{"darwin", "linux"},
 			Commands:        []string{"node", "ffmpeg"},
 			MinDiskMb:       2048,
@@ -25,9 +23,9 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 		},
 		Capabilities:   []string{"video_creation", "script_generation"},
 		Tags:           []string{"video", "script"},
-		CostLevel:      tool.CostLow,
-		LatencyLevel:   tool.LatencyMedium,
-		RiskLevel:      tool.RiskLow,
+		CostLevel:      CostLow,
+		LatencyLevel:   LatencyMedium,
+		RiskLevel:      RiskLow,
 		SideEffect:     false,
 		Idempotent:     true,
 		SkillPackageID: "codex-video-skill",
@@ -38,14 +36,14 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 			"shot_splitter",
 			"publish_copy_generator",
 		},
-		ApprovalPolicy: tool.ApprovalPolicy{
+		ApprovalPolicy: ApprovalPolicy{
 			Required:            true,
-			Mode:                tool.ApprovalAfterArtifact,
+			Mode:                ApprovalAfterArtifact,
 			BlocksDownstream:    true,
 			Reason:              "Script drives downstream generation",
 			ReviewArtifactKinds: []string{"MARKDOWN"},
 		},
-		ArtifactPolicy: tool.ArtifactPolicy{
+		ArtifactPolicy: ArtifactPolicy{
 			ProduceArtifact:       true,
 			ArtifactKinds:         []string{"MARKDOWN"},
 			DefaultReviewRequired: true,
@@ -60,7 +58,7 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 		t.Fatalf("capabilities not preserved: %#v", capabilities)
 	}
 
-	if record.CostLevel != tool.CostLow || record.LatencyLevel != tool.LatencyMedium || record.RiskLevel != tool.RiskLow {
+	if record.CostLevel != CostLow || record.LatencyLevel != LatencyMedium || record.RiskLevel != RiskLow {
 		t.Fatalf("levels not preserved: cost=%q latency=%q risk=%q", record.CostLevel, record.LatencyLevel, record.RiskLevel)
 	}
 	if !record.Idempotent || record.SideEffect {
@@ -69,14 +67,14 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 	if record.SkillPackageID != "codex-video-skill" || record.PromptRef == "" {
 		t.Fatalf("skill capability metadata not preserved: %#v", record)
 	}
-	if record.ExecutionPlane != tool.ExecutionPlaneLocal || !record.RequiresUserDevice || record.ArtifactLocation != tool.ArtifactLocationLocal {
+	if record.ExecutionPlane != ExecutionPlaneLocal || !record.RequiresUserDevice || record.ArtifactLocation != ArtifactLocationLocal {
 		t.Fatalf("edge execution metadata not preserved: %#v", record)
 	}
 	if record.LocalCommand != "HYPERFRAMES_RENDER" {
 		t.Fatalf("local command not preserved: %#v", record)
 	}
 
-	var localRequirements tool.LocalRequirements
+	var localRequirements LocalRequirements
 	if err := json.Unmarshal(record.LocalRequirements, &localRequirements); err != nil {
 		t.Fatalf("local requirements not valid JSON: %v", err)
 	}
@@ -84,11 +82,11 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 		t.Fatalf("local requirements not preserved: %#v", localRequirements)
 	}
 
-	var approval tool.ApprovalPolicy
+	var approval ApprovalPolicy
 	if err := json.Unmarshal(record.ApprovalPolicy, &approval); err != nil {
 		t.Fatalf("approval policy not valid JSON: %v", err)
 	}
-	if !approval.Required || approval.Mode != tool.ApprovalAfterArtifact || !approval.BlocksDownstream {
+	if !approval.Required || approval.Mode != ApprovalAfterArtifact || !approval.BlocksDownstream {
 		t.Fatalf("approval policy not preserved: %#v", approval)
 	}
 }

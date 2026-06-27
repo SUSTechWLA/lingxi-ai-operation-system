@@ -9,7 +9,6 @@ import ContentTypeSelector from '../components/ContentTypeSelector'
 import PlatformSelector from '../components/PlatformSelector'
 import PublishButton from '../components/PublishButton'
 import MediaLibraryPanel from '../components/MediaLibraryPanel'
-import AIAssistantTab from '../components/AIAssistantTab'
 import BlockingOverlay from '../components/BlockingOverlay'
 import { useAppStore } from '../stores/appStore'
 import { publishContent, fetchRecentTrace, recordContextEvent } from '../services/api'
@@ -46,7 +45,6 @@ const PublishPage: React.FC = () => {
   const [debugLoading, setDebugLoading] = useState(false)
 
   const [showMediaLibrary, setShowMediaLibrary] = useState(false)
-  const [rightPanelTab, setRightPanelTab] = useState<'platform' | 'ai-assistant'>('platform')
 
   // Type switch confirmation
   const [pendingTypeChange, setPendingTypeChange] = useState<ContentType>(null)
@@ -398,56 +396,21 @@ const PublishPage: React.FC = () => {
         </main>
 
         <aside className="w-96 bg-white border-l border-gray-100 flex flex-col">
-          {/* Right panel tab bar */}
-          <div className="flex border-b border-gray-100">
-            <button
-              onClick={() => setRightPanelTab('platform')}
-              className={`flex-1 px-5 py-3.5 text-sm font-medium transition-colors relative ${
-                rightPanelTab === 'platform'
-                  ? 'text-primary'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              发布平台
-              {rightPanelTab === 'platform' && (
-                <div className="absolute bottom-0 left-5 right-5 h-0.5 bg-primary rounded-full" />
-              )}
-            </button>
-            <button
-              onClick={() => setRightPanelTab('ai-assistant')}
-              className={`flex-1 px-5 py-3.5 text-sm font-medium transition-colors relative ${
-                rightPanelTab === 'ai-assistant'
-                  ? 'text-primary'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              AI 助手
-              {rightPanelTab === 'ai-assistant' && (
-                <div className="absolute bottom-0 left-5 right-5 h-0.5 bg-primary rounded-full" />
-              )}
-            </button>
-          </div>
-
-          {/* Tab content */}
           <div className="flex-1 p-6 overflow-y-auto">
-            {rightPanelTab === 'platform' ? (
-              <div className="space-y-6">
-                <PlatformSelector />
+            <div className="space-y-6">
+              <PlatformSelector />
 
-                <div className="pt-4 border-t border-gray-100">
-                  <PublishButton
-                    onClick={handlePublish}
-                    disabled={selectedCount === 0}
-                    loading={isPublishing}
-                  />
-                  <p className="text-xs text-gray-400 mt-3 text-center">
-                    发布前请确保内容遵守各平台规范
-                  </p>
-                </div>
+              <div className="pt-4 border-t border-gray-100">
+                <PublishButton
+                  onClick={handlePublish}
+                  disabled={selectedCount === 0}
+                  loading={isPublishing}
+                />
+                <p className="text-xs text-gray-400 mt-3 text-center">
+                  发布前请确保内容遵守各平台规范
+                </p>
               </div>
-            ) : (
-              <AIAssistantTab />
-            )}
+            </div>
           </div>
         </aside>
       </div>
