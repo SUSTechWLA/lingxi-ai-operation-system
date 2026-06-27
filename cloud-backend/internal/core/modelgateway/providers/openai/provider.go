@@ -114,6 +114,11 @@ func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.
 		"max_tokens":  maxTokens,
 	}
 
+	// Pass response_format if specified (DeepSeek/OpenAI JSON mode)
+	if rf, ok := req.Parameters["response_format"]; ok {
+		body["response_format"] = rf
+	}
+
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, &modelgateway.GatewayError{

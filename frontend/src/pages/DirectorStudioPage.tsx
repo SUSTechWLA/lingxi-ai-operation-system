@@ -456,9 +456,9 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
         {review ? (
           <div className="mt-6 grid grid-cols-12 gap-5">
             <div className="col-span-8 rounded-lg bg-white p-6 ring-1 ring-line">
-              <div className="mb-5 flex items-center justify-between">
-                <h3 className="text-lg font-black text-ink">{reviewDisplayTitle(review)}</h3>
-                <span className="text-xs font-bold text-ink-soft">节点编号：{review.id}</span>
+              <div className="mb-5">
+                <h3 className="truncate text-lg font-black text-ink">{reviewDisplayTitle(review)}</h3>
+                <span className="mt-1 block whitespace-nowrap text-xs font-bold text-ink-soft">节点编号：{review.id}</span>
               </div>
               <div className="space-y-4">
                 <ReviewField label="工具" value={review.tool || '-'} />

@@ -83,6 +83,11 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 		"messages":    []interface{}{msg},
 	}
 
+	// Support DeepSeek/OpenAI JSON mode when caller passes response_format
+	if rf, ok := params["response_format"]; ok {
+		requestBody["response_format"] = rf
+	}
+
 	body, _ := json.Marshal(requestBody)
 
 	baseURL := t.cfg.BaseURL

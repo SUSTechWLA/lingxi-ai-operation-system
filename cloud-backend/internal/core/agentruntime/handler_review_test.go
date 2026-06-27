@@ -137,7 +137,7 @@ func TestListReviewsIncludesSourceNodeOutputForOnlineReview(t *testing.T) {
 			Status: model.NodeSuccess,
 			Output: map[string]interface{}{
 				"stdout": `{
-					"content":"# Proposal Packet\n\n推荐方案：option_a",
+					"content":"# Proposal Packet\n\n推荐方案：低成本图文口播版\n\n主要使用 HyperFrames，少量 AI 图片，成本低、可控性高。",
 					"artifacts":[{"kind":"JSON","name":"proposal_packet.json","unitId":"proposal_generator"}],
 					"proposalPacket":{"recommendedOptionId":"option_a"}
 				}`,
@@ -187,7 +187,7 @@ func TestListReviewsIncludesSourceNodeOutputForOnlineReview(t *testing.T) {
 	if review.SourceNodeID != "proposal_exec" {
 		t.Fatalf("review should expose source node id, got %#v", review)
 	}
-	if review.ReviewContent != "# Proposal Packet\n\n推荐方案：option_a" {
+	if review.ReviewContent != "# Proposal Packet\n\n推荐方案：低成本图文口播版\n\n主要使用 HyperFrames，少量 AI 图片，成本低、可控性高。" {
 		t.Fatalf("review should expose source content, got %#v", review.ReviewContent)
 	}
 	if len(review.ReviewArtifacts) != 1 || review.ReviewArtifacts[0]["name"] != "proposal_packet.json" {

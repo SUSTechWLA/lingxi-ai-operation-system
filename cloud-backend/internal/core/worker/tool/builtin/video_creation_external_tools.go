@@ -555,7 +555,21 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 		Capabilities:      capabilitySnapshot(params),
 	})
 	packetMap := structToMap(packet)
-	content := fmt.Sprintf("# Proposal Packet\n\n推荐方案：`%s`\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", packet.RecommendedOptionID)
+	optionName := packet.RecommendedOptionID
+	optionDesc := ""
+	for _, opt := range packet.Options {
+		if opt.ID == packet.RecommendedOptionID {
+			optionName = opt.Name
+			optionDesc = opt.Description
+			break
+		}
+	}
+	var content string
+	if optionDesc != "" {
+		content = fmt.Sprintf("# Proposal Packet\n\n推荐方案：%s\n\n%s\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", optionName, optionDesc)
+	} else {
+		content = fmt.Sprintf("# Proposal Packet\n\n推荐方案：%s\n\n该阶段必须经用户确认后才能进入脚本和高成本生成阶段。", optionName)
+	}
 	return tool.SuccessResult(map[string]interface{}{
 		"content":        content,
 		"proposalPacket": packetMap,
@@ -2508,11 +2522,17 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 		})
 	}
 
-	callTool := &LlmApiTool{cfg: effectiveCfg}
-	result := callTool.Execute(context.Background(), map[string]interface{}{
+	callParams := map[string]interface{}{
 		"prompt":     systemPrompt + "\n\n---\n\n" + userPrompt,
 		"max_tokens": 8000,
-	}, toolCtx)
+	}
+	// Enable DeepSeek JSON mode for tools that require structured JSON output
+	if isStructuredOutputTool(toolName) {
+		callParams["response_format"] = map[string]string{"type": "json_object"}
+	}
+
+	callTool := &LlmApiTool{cfg: effectiveCfg}
+	result := callTool.Execute(context.Background(), callParams, toolCtx)
 
 	if !result.Success {
 		zap.L().Error("LLM API call failed for dynamic agent prompt tool",
