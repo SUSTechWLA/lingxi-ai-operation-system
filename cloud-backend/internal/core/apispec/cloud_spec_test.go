@@ -1,6 +1,7 @@
 package apispec
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,25 @@ func TestBuildCloudSpec_AllPathsHave200Response(t *testing.T) {
 			}
 			if _, ok := op.Responses["200"]; !ok {
 				t.Errorf("%s %s missing 200 response", method, path)
+			}
+		}
+	}
+}
+
+func TestBuildCloudSpec_DoesNotExposeRemovedBusinessLines(t *testing.T) {
+	spec := BuildCloudSpec()
+
+	for _, tag := range spec.Tags {
+		if tag.Name == "Bid" || tag.Name == "Chat" {
+			t.Fatalf("removed business line tag %q must not be exposed", tag.Name)
+		}
+	}
+
+	for _, removed := range []string{"bid", "chat"} {
+		prefix := "/api/" + removed
+		for path := range spec.Paths {
+			if strings.HasPrefix(path, prefix) {
+				t.Fatalf("removed business line path %q must not be exposed", path)
 			}
 		}
 	}

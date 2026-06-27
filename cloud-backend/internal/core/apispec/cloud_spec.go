@@ -20,7 +20,6 @@ func BuildCloudSpec() *Spec {
 		Tag("Translate", "Natural language → DAG translation").
 		Tag("Context", "Task/node context auditing").
 		Tag("Media", "Media asset upload, listing, and tagging").
-		Tag("Chat", "AI assistant conversational dialog").
 		Tag("Tools", "Tool registry management").
 		Tag("Skills", "AI skill catalog and routing").
 		Tag("Skill Capabilities", "Agent capability package catalog").
@@ -31,8 +30,7 @@ func BuildCloudSpec() *Spec {
 		Tag("Video Projects", "Video creation project CRUD").
 		Tag("Workflow Runs", "Video workflow run lifecycle").
 		Tag("Stages", "Stage-level approval for video pipelines").
-		Tag("Artifacts", "Video creation artifacts (JSON, Markdown, media)").
-		Tag("Bid", "Bid/tender document generation")
+		Tag("Artifacts", "Video creation artifacts (JSON, Markdown, media)")
 
 	// ── Health ──
 	b.Route("GET", "/api/health", "Liveness check").

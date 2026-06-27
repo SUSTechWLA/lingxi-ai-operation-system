@@ -17,25 +17,23 @@ Version: 0.1.0
 2. [Agent Runs](#2-agent-runs)
 3. [Artifacts](#3-artifacts)
 4. [Auth](#4-auth)
-5. [Bid](#5-bid)
-6. [Chat](#6-chat)
-7. [Context](#7-context)
-8. [Health](#8-health)
-9. [Local Runners](#9-local-runners)
-10. [Media](#10-media)
-11. [Node](#11-node)
-12. [Orchestrator](#12-orchestrator)
-13. [Publish](#13-publish)
-14. [Skill Capabilities](#14-skill-capabilities)
-15. [Skills](#15-skills)
-16. [Stages](#16-stages)
-17. [Tools](#17-tools)
-18. [Trace](#18-trace)
-19. [Translate](#19-translate)
-20. [Video Projects](#20-video-projects)
-21. [Video Role Agents](#21-video-role-agents)
-22. [Workflow Runs](#22-workflow-runs)
-23. [Workflows](#23-workflows)
+5. [Context](#5-context)
+6. [Health](#6-health)
+7. [Local Runners](#7-local-runners)
+8. [Media](#8-media)
+9. [Node](#9-node)
+10. [Orchestrator](#10-orchestrator)
+11. [Publish](#11-publish)
+12. [Skill Capabilities](#12-skill-capabilities)
+13. [Skills](#13-skills)
+14. [Stages](#14-stages)
+15. [Tools](#15-tools)
+16. [Trace](#16-trace)
+17. [Translate](#17-translate)
+18. [Video Projects](#18-video-projects)
+19. [Video Role Agents](#19-video-role-agents)
+20. [Workflow Runs](#20-workflow-runs)
+21. [Workflows](#21-workflows)
 
 ---
 
@@ -422,420 +420,7 @@ Register a user with email and password
 
 ---
 
-## 5. Bid
-
-### GET /api/bid/projects
-
-List bid projects
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `status` | query | `string` | No | Filter by status |
-| `userId` | query | `string` | No | Filter by user |
-| `offset` | query | `integer` | No | Pagination offset |
-| `limit` | query | `integer` | No | Page size |
-
-**Responses:**
-
-- **200** — Projects list (JSON)
-
----
-
-### POST /api/bid/projects
-
-Create a bid project
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{}
-```
-
-**Responses:**
-
-- **200** — Created (JSON)
-
----
-
-### GET /api/bid/projects/:id
-
-Get project detail
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Project + chapters (JSON)
-- **404** — Not found (JSON)
-
----
-
-### PUT /api/bid/projects/:id
-
-Update a project
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{}
-```
-
-**Responses:**
-
-- **200** — Updated (JSON)
-
----
-
-### DELETE /api/bid/projects/:id
-
-Delete a project
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Deleted (JSON)
-
----
-
-### POST /api/bid/projects/:id/chapters/:chId/approve
-
-Approve a chapter
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-| `chId` | path | `string` | **Yes** | Chapter identifier |
-
-**Responses:**
-
-- **200** — Approved (JSON)
-
----
-
-### POST /api/bid/projects/:id/chapters/:chId/regenerate
-
-Trigger chapter regeneration
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-| `chId` | path | `string` | **Yes** | Chapter identifier |
-
-**Responses:**
-
-- **200** — Regeneration triggered (JSON)
-
----
-
-### POST /api/bid/projects/:id/chapters/:chId/reject
-
-Reject a chapter
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-| `chId` | path | `string` | **Yes** | Chapter identifier |
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{
-  "comment": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Rejected (JSON)
-
----
-
-### POST /api/bid/projects/:id/export
-
-Export project to document
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Request body:** Optional (Content-Type: `application/json`)
-
-```json
-{
-  "format": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Export started (JSON)
-
----
-
-### GET /api/bid/projects/:id/export/status
-
-Get export status
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Export status (JSON)
-
----
-
-### POST /api/bid/projects/:id/pause
-
-Pause generation
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Request body:** Optional (Content-Type: `application/json`)
-
-```json
-{
-  "reason": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Paused (JSON)
-
----
-
-### GET /api/bid/projects/:id/progress
-
-Get generation progress
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Progress data (JSON)
-
----
-
-### POST /api/bid/projects/:id/resume
-
-Resume generation
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Resumed (JSON)
-
----
-
-### POST /api/bid/projects/:id/start
-
-Start bid generation
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Started (JSON)
-
----
-
-### GET /api/bid/projects/:id/trace
-
-Get project trace redirect
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Responses:**
-
-- **200** — Trace URL (JSON)
-
----
-
-### POST /api/bid/projects/:id/upload-tender
-
-Upload tender document
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `id` | path | `string` | **Yes** | Project identifier |
-
-**Request body:** **Required** (Content-Type: `multipart/form-data`)
-
-```json
-{
-  "file": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Uploaded (JSON)
-
----
-
-### GET /api/bid/templates
-
-List bid templates
-
-**Responses:**
-
-- **200** — Templates list (JSON)
-
----
-
-## 6. Chat
-
-### GET /api/chat/sessions/:session_id
-
-Get session state
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `session_id` | path | `string` | **Yes** | Session identifier |
-
-**Responses:**
-
-- **200** — Session state (JSON)
-- **404** — Not found (JSON)
-
----
-
-### POST /api/chat/sessions/:session_id/chat
-
-Send a chat message
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `session_id` | path | `string` | **Yes** | Session identifier |
-
-**Request body:** **Required** (Content-Type: `application/json`)
-
-```json
-{
-  "message": "string",
-}
-```
-
-**Responses:**
-
-- **200** — Assistant reply (JSON)
-- **410** — Session terminated (JSON)
-
----
-
-### GET /api/chat/sessions/:session_id/progress
-
-Get session progress
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `session_id` | path | `string` | **Yes** | Session identifier |
-
-**Responses:**
-
-- **200** — Progress state (JSON)
-
----
-
-### POST /api/chat/sessions/:session_id/terminate
-
-Terminate session
-
-**Parameters:**
-
-| Name | In | Type | Required | Description |
-|------|----|------|----------|-------------|
-| `session_id` | path | `string` | **Yes** | Session identifier |
-
-**Responses:**
-
-- **200** — Terminated (JSON)
-
----
-
-### POST /api/chat/sessions/create
-
-Create a new chat session
-
-**Request body:** Optional (Content-Type: `application/json`)
-
-```json
-{
-  "description": "string",
-  "keywords": ["string"],
-  "media_count": 0,
-  "media_ids": ["string"],
-  "platforms": ["string"],
-  "title": "string",
-  ...
-}
-```
-
-**Responses:**
-
-- **200** — Session created (JSON)
-
----
-
-## 7. Context
+## 5. Context
 
 ### GET /api/context/:taskId
 
@@ -908,7 +493,7 @@ Record a context event manually
 
 ---
 
-## 8. Health
+## 6. Health
 
 ### GET /api/health
 
@@ -931,7 +516,7 @@ Readiness check with dependencies
 
 ---
 
-## 9. Local Runners
+## 7. Local Runners
 
 ### POST /api/local-jobs/:jobId/complete
 
@@ -1064,7 +649,7 @@ Register a local execution runner and create a runner session
 
 ---
 
-## 10. Media
+## 8. Media
 
 ### GET /api/media/:id
 
@@ -1145,7 +730,7 @@ Upload media files
 
 ---
 
-## 11. Node
+## 9. Node
 
 ### POST /api/node
 
@@ -1258,7 +843,7 @@ Report node execution success
 
 ---
 
-## 12. Orchestrator
+## 10. Orchestrator
 
 ### GET /api/task/:taskId
 
@@ -1418,7 +1003,7 @@ Create a new empty task
 
 ---
 
-## 13. Publish
+## 11. Publish
 
 ### POST /api/publish
 
@@ -1443,7 +1028,7 @@ Submit content for multi-platform publishing
 
 ---
 
-## 14. Skill Capabilities
+## 12. Skill Capabilities
 
 ### GET /api/skill-capabilities
 
@@ -1472,7 +1057,7 @@ Get capability package detail
 
 ---
 
-## 15. Skills
+## 13. Skills
 
 ### GET /api/skills
 
@@ -1553,7 +1138,7 @@ Route a brief to a skill
 
 ---
 
-## 16. Stages
+## 14. Stages
 
 ### POST /api/video-projects/:id/stages/:stage/approve
 
@@ -1583,7 +1168,7 @@ Approve a stage
 
 ---
 
-## 17. Tools
+## 15. Tools
 
 ### GET /api/tools
 
@@ -1645,7 +1230,7 @@ Register an external tool
 
 ---
 
-## 18. Trace
+## 16. Trace
 
 ### GET /api/trace/:taskId
 
@@ -1675,7 +1260,7 @@ Get most recent task trace
 
 ---
 
-## 19. Translate
+## 17. Translate
 
 ### GET /api/task/:taskId/status
 
@@ -1729,7 +1314,7 @@ Translate NL prompt and submit DAG
 
 ---
 
-## 20. Video Projects
+## 18. Video Projects
 
 ### GET /api/video-projects
 
@@ -1812,7 +1397,7 @@ Archive a project (soft delete)
 
 ---
 
-## 21. Video Role Agents
+## 19. Video Role Agents
 
 ### GET /api/video/role-agents
 
@@ -1841,7 +1426,7 @@ Get Guided Video Studio role agent detail
 
 ---
 
-## 22. Workflow Runs
+## 20. Workflow Runs
 
 ### POST /api/video-projects/:id/workflow-runs
 
@@ -1921,7 +1506,7 @@ Pause a run
 
 ---
 
-## 23. Workflows
+## 21. Workflows
 
 ### GET /api/workflows
 

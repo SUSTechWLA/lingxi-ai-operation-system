@@ -169,146 +169,6 @@ export interface AuthResponse {
 }
 
 /**  */
-// BidChapter
-export interface BidChapter {
-  content?: string;
-  createdAt: string;
-  id: string;
-  nodeId?: string;
-  projectId: string;
-  reviewComment?: string;
-  scoreItems?: string;
-  sortOrder: number;
-  status: string;
-  title: string;
-  updatedAt: string;
-}
-
-/**  */
-// BidChapterResponse
-export interface BidChapterResponse {
-  code?: number;
-  data?: { chapter?: { content?: string; createdAt: string; id: string; nodeId?: string; projectId: string; reviewComment?: string; scoreItems?: string; sortOrder: number; status: string; title: string; updatedAt: string } };
-  message?: string;
-}
-
-/**  */
-// BidExportResponse
-export interface BidExportResponse {
-  code?: number;
-  data?: { format?: string; message?: string };
-  message?: string;
-}
-
-/**  */
-// BidExportStatusResponse
-export interface BidExportStatusResponse {
-  code?: number;
-  data?: { status?: Record<string, unknown> };
-  message?: string;
-}
-
-/**  */
-// BidProgressResponse
-export interface BidProgressResponse {
-  code?: number;
-  data?: { progress?: Record<string, unknown> };
-  message?: string;
-}
-
-/**  */
-// BidProject
-export interface BidProject {
-  config?: string;
-  createdAt: string;
-  id: string;
-  industry?: string;
-  name: string;
-  progress: number;
-  status: string;
-  structure?: string;
-  taskId?: string;
-  templateId?: string;
-  tenderAnalysis?: string;
-  tenderFileName?: string;
-  tenderFilePath?: string;
-  updatedAt: string;
-  userId?: string;
-}
-
-/**  */
-// BidProjectCreateResponse
-export interface BidProjectCreateResponse {
-  code?: number;
-  data?: { project?: { config?: string; createdAt: string; id: string; industry?: string; name: string; progress: number; status: string; structure?: string; taskId?: string; templateId?: string; tenderAnalysis?: string; tenderFileName?: string; tenderFilePath?: string; updatedAt: string; userId?: string } };
-  message?: string;
-}
-
-/**  */
-// BidProjectDetailResponse
-export interface BidProjectDetailResponse {
-  code?: number;
-  data?: { chapters?: Record<string, unknown>[]; project?: { config?: string; createdAt: string; id: string; industry?: string; name: string; progress: number; status: string; structure?: string; taskId?: string; templateId?: string; tenderAnalysis?: string; tenderFileName?: string; tenderFilePath?: string; updatedAt: string; userId?: string } };
-  message?: string;
-}
-
-/**  */
-// BidProjectListResponse
-export interface BidProjectListResponse {
-  code?: number;
-  data?: { items?: { config?: string; createdAt: string; id: string; industry?: string; name: string; progress: number; status: string; structure?: string; taskId?: string; templateId?: string; tenderAnalysis?: string; tenderFileName?: string; tenderFilePath?: string; updatedAt: string; userId?: string }[]; total?: number };
-  message?: string;
-}
-
-/**  */
-// BidRegenResponse
-export interface BidRegenResponse {
-  code?: number;
-  data?: { chapter_id?: string; message?: string };
-  message?: string;
-}
-
-/**  */
-// BidStartResponse
-export interface BidStartResponse {
-  code?: number;
-  data?: { message?: string; task_id?: string };
-  message?: string;
-}
-
-/**  */
-// BidTemplatesResponse
-export interface BidTemplatesResponse {
-  code?: number;
-  data?: { templates?: Record<string, unknown>[] };
-  message?: string;
-}
-
-/**  */
-// BidTraceResponse
-export interface BidTraceResponse {
-  code?: number;
-  data?: { project_id?: string; task_id?: string; trace_url?: string };
-  message?: string;
-}
-
-/**  */
-// BidUploadResponse
-export interface BidUploadResponse {
-  code?: number;
-  data?: { file_name?: string; file_path?: string; file_size?: number };
-  message?: string;
-}
-
-/**  */
-// ChatResponse
-export interface ChatResponse {
-  code?: number;
-  data?: { fields?: Record<string, unknown>; reply?: string };
-  message?: string;
-}
-
-/**  */
 // ClaimJobResponse
 export interface ClaimJobResponse {
   job?: { artifactPolicy?: { location: string; syncFileToCloud: boolean; syncMetadataToCloud: boolean }; attempt?: number; command?: string; createdAt?: string; currentStep?: string; diagnostics?: Record<string, Record<string, unknown>>; error?: Record<string, Record<string, unknown>>; errorMessage?: string; idempotencyKey?: string; jobId?: string; leaseExpiresAt?: string | null; message?: string; nodeId?: string; output?: Record<string, Record<string, unknown>>; payload?: Record<string, Record<string, unknown>>; progress?: number; projectId?: string; retryable?: boolean; runnerId?: string; status?: string; taskId?: string; timeoutSec?: number; toolName?: string; updatedAt?: string } | null;
@@ -326,14 +186,6 @@ export interface CompleteJobRequest {
 export interface ContextListResponse {
   code?: number;
   data?: Record<string, unknown>[];
-  message?: string;
-}
-
-/**  */
-// CreateSessionResponse
-export interface CreateSessionResponse {
-  code?: number;
-  data?: { session_id?: string };
   message?: string;
 }
 
@@ -500,14 +352,6 @@ export interface ProgressRequest {
 }
 
 /**  */
-// ProgressResponse
-export interface ProgressResponse {
-  code?: number;
-  data?: { status?: string; task_id?: string };
-  message?: string;
-}
-
-/**  */
 // PublishResponse
 export interface PublishResponse {
   code?: number;
@@ -541,14 +385,6 @@ export interface RegisterRunnerResponse {
   pollIntervalSec: number;
   runnerId: string;
   sessionId: string;
-}
-
-/**  */
-// SessionResponse
-export interface SessionResponse {
-  code?: number;
-  data?: { created_at?: string; media_context?: Record<string, unknown>; messages?: Record<string, unknown>[]; session_id?: string; task_ids?: string[]; terminated?: boolean };
-  message?: string;
 }
 
 /**  */
