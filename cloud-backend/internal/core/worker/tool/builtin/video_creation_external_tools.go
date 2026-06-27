@@ -2228,6 +2228,21 @@ func performWebSearch(ctx context.Context, query string) ([]WebSearchResult, err
 		"q":   query,
 		"num": 10,
 	}
+
+	// Default to English search for higher-quality global coverage.
+	// The knowledge_researcher LLM will read English snippets and produce
+	// Chinese facts — translation/summarization is what LLMs excel at.
+	// Override via SEARCH_GL / SEARCH_HL env vars if needed.
+	if gl := os.Getenv("SEARCH_GL"); gl != "" {
+		reqBody["gl"] = gl
+	} else {
+		reqBody["gl"] = "us"
+	}
+	if hl := os.Getenv("SEARCH_HL"); hl != "" {
+		reqBody["hl"] = hl
+	} else {
+		reqBody["hl"] = "en"
+	}
 	bodyBytes, _ := json.Marshal(reqBody)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(bodyBytes)))
@@ -2284,7 +2299,7 @@ func formatSearchResults(results []WebSearchResult) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("【最新网络搜索结果】\n以下是从网络搜索获得的最新信息，请优先参考这些信息进行知识整理：\n\n")
+	b.WriteString("【最新网络搜索结果（英文）】\n以下是从网络搜索获得的最新信息。请将英文内容翻译提炼为简体中文后进行知识整理。所有输出字段必须使用中文：\n\n")
 	for i, r := range results {
 		b.WriteString(fmt.Sprintf("%d. %s\n   %s\n", i+1, r.Title, r.Snippet))
 		if r.Date != "" {
@@ -2870,7 +2885,7 @@ func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) stri
 		return fmt.Sprintf(`你是知识分享视频资料研究员。
 
 任务：
-根据 topic 和提供的网络搜索结果，整理适合短视频口播的事实材料、讲述角度、风险点。优先使用搜索结果中的实时数据。
+根据 topic 和提供的网络搜索结果（可能为英文），整理适合中文短视频口播的事实材料、讲述角度、风险点。优先使用搜索结果中的实时数据。
 
 要求：
 1. 不要输出 Markdown。
