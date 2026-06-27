@@ -351,12 +351,7 @@ export interface DirectorErrorDetail {
 }
 
 export function normalizeDirectorErrorMessage(error: unknown): string {
-  const raw =
-    typeof error === 'string'
-      ? error
-      : error instanceof Error
-        ? error.message
-        : JSON.stringify(error ?? '')
+  const raw = rawDirectorErrorMessage(error)
 
   if (raw.includes('CRITICAL_ARTIFACT_SYNC_FAILED')) {
     return '关键产物写入失败，最终视频无法进入项目产物库。请重新执行当前步骤。'
@@ -391,8 +386,8 @@ export function formatDirectorErrorMessage(err: unknown, fallback: string) {
 }
 
 export function extractDirectorErrorDetail(err: unknown): DirectorErrorDetail | undefined {
-  if (err && typeof err === 'object' && 'message' in err && typeof err.message === 'string') {
-    const msg: string = err.message
+  const msg = rawDirectorErrorMessage(err)
+  if (msg) {
     const codeMatch = msg.match(/^(CRITICAL_ARTIFACT_SYNC_FAILED|ARTIFACT_MANIFEST_INVALID|RENDER_DEPENDENCY_MISSING|PACKAGE_DEPENDENCY_MISSING)/)
     if (!codeMatch) return undefined
     const nodeIdMatch = msg.match(/nodeID=(\S+)/)
@@ -407,6 +402,23 @@ export function extractDirectorErrorDetail(err: unknown): DirectorErrorDetail | 
     }
   }
   return undefined
+}
+
+function rawDirectorErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    const response = objectValue(record.response)
+    const data = objectValue(response?.data)
+    const detail = objectValue(data?.detail)
+    const backendMessage = stringValue(detail?.rawMessage) || stringValue(data?.message)
+    if (backendMessage) return backendMessage
+    if (error instanceof Error) return error.message
+    const directMessage = stringValue(record.message)
+    if (directMessage) return directMessage
+    return JSON.stringify(error)
+  }
+  return JSON.stringify(error ?? '')
 }
 
 function findReviewForRole(role: VideoRoleAgent, reviews: AgentReviewItem[]) {

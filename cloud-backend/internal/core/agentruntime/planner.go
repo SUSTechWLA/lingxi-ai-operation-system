@@ -44,6 +44,7 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		return nil, fmt.Errorf("no tools matched domain %q", domain)
 	}
 
+	manifests := manifestMap(p.tools.ListManifests())
 	steps := make([]AgentStep, 0, len(selected))
 	var previous string
 	for _, manifest := range selected {
@@ -63,6 +64,7 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		steps = append(steps, step)
 		previous = stepID
 	}
+	wireRequiredStepInputs(steps, manifests)
 
 	return &AgentPlan{
 		Goal:   req.Message,
@@ -212,6 +214,100 @@ func copyRequestContext(req StartRunRequest) map[string]interface{} {
 	args["brief"] = req.Message
 	args["topic"] = req.Message
 	return args
+}
+
+func manifestMap(manifests []*tool.ToolManifest) map[string]*tool.ToolManifest {
+	result := make(map[string]*tool.ToolManifest, len(manifests))
+	for _, manifest := range manifests {
+		if manifest == nil || manifest.Name == "" {
+			continue
+		}
+		result[manifest.Name] = manifest
+	}
+	return result
+}
+
+func wireRequiredStepInputs(steps []AgentStep, manifests map[string]*tool.ToolManifest) {
+	producedByField := make(map[string]string)
+	for i := range steps {
+		step := &steps[i]
+		if step.Arguments == nil {
+			step.Arguments = map[string]interface{}{}
+		}
+		manifest := manifests[step.Tool]
+		if manifest != nil {
+			for _, name := range requiredParamNames(manifest.Parameters) {
+				if _, ok := step.Arguments[name]; ok {
+					continue
+				}
+				producerID, ok := producedByField[name]
+				if !ok {
+					continue
+				}
+				step.Arguments[name] = fmt.Sprintf("{{%s.output.%s}}", producerID, name)
+				appendDependencyIfMissing(step, producerID)
+			}
+		}
+		if manifest == nil {
+			continue
+		}
+		for _, field := range outputKeys(manifest.Output) {
+			producedByField[field] = step.ID
+		}
+	}
+}
+
+func fillRequestRequiredInputs(steps []AgentStep, manifests map[string]*tool.ToolManifest, req StartRunRequest) {
+	for i := range steps {
+		step := &steps[i]
+		if step.Arguments == nil {
+			step.Arguments = map[string]interface{}{}
+		}
+		manifest := manifests[step.Tool]
+		if manifest == nil {
+			continue
+		}
+		for _, name := range requiredParamNames(manifest.Parameters) {
+			if _, ok := step.Arguments[name]; ok {
+				continue
+			}
+			if req.Context != nil {
+				if value, ok := req.Context[name]; ok {
+					step.Arguments[name] = value
+					continue
+				}
+			}
+			switch name {
+			case "topic", "brief":
+				if req.Message != "" {
+					step.Arguments[name] = req.Message
+				}
+			}
+		}
+	}
+}
+
+func requiredParamNames(params map[string]tool.ParamDef) []string {
+	names := make([]string, 0, len(params))
+	for name, param := range params {
+		if param.Required {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func appendDependencyIfMissing(step *AgentStep, dep string) {
+	if step == nil || dep == "" || dep == step.ID {
+		return
+	}
+	for _, existing := range step.DependsOn {
+		if existing == dep {
+			return
+		}
+	}
+	step.DependsOn = append(step.DependsOn, dep)
 }
 
 func outputKeys(output map[string]tool.ParamDef) []string {

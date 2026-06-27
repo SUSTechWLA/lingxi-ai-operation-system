@@ -36,6 +36,50 @@ func TestHeuristicPlanner_SelectsCapabilityToolsForDomain(t *testing.T) {
 	}
 }
 
+func TestHeuristicPlanner_WiresRequiredInputsFromPreviousOutputs(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "video_script_generator",
+			Capabilities: []string{"video_creation", "script_generation"},
+			Parameters: map[string]tool.ParamDef{
+				"topic": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		{
+			Name:         "shot_splitter",
+			Capabilities: []string{"video_creation", "shot_split"},
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+	}
+	planner := NewHeuristicPlanner(tools)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{"targetDurationSec": 30},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if len(plan.Steps) != 2 {
+		t.Fatalf("expected two video steps, got %#v", plan.Steps)
+	}
+	if got := plan.Steps[1].Arguments["script"]; got != "{{video_script_generator.output.script}}" {
+		t.Fatalf("shot_splitter should reference generated script, got %#v", plan.Steps[1].Arguments)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("wired fallback plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestHeuristicPlanner_DomainFilterRecomputesLimit(t *testing.T) {
 	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
 		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},
@@ -103,4 +147,13 @@ func (l staticToolList) ListManifests() []*tool.ToolManifest {
 		result = append(result, &l[i])
 	}
 	return result
+}
+
+func (l staticToolList) GetManifest(name string) *tool.ToolManifest {
+	for i := range l {
+		if l[i].Name == name {
+			return &l[i]
+		}
+	}
+	return nil
 }

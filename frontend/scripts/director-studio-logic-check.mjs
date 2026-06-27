@@ -22,6 +22,7 @@ try {
     buildDirectorArtifacts,
     buildPublishCopies,
     formatDirectorErrorMessage,
+    normalizeDirectorErrorMessage,
     publishCopiesToJSON,
     publishCopiesToMarkdown,
   } = await import(pathToFileURL(outfile))
@@ -71,6 +72,13 @@ try {
       'fallback',
     ),
     '关键产物写入失败，最终视频无法进入项目产物库。\n请重新执行当前步骤。',
+  )
+  assert.equal(
+    normalizeDirectorErrorMessage({
+      message: 'Request failed with status code 400',
+      response: { data: { message: 'guard agent plan: agent plan has no steps' } },
+    }),
+    'guard agent plan: agent plan has no steps',
   )
 
   const copies = buildPublishCopies('智能体改变的是工作流', 45, artifacts)

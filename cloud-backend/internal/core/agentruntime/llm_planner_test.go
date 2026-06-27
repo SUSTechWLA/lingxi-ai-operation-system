@@ -80,6 +80,98 @@ func TestHybridPlanner_FallsBackWhenLLMPlannerFails(t *testing.T) {
 	}
 }
 
+func TestHybridPlanner_FallsBackWhenLLMPlannerReturnsEmptySteps(t *testing.T) {
+	tools := staticToolList{
+		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},
+	}
+	llmPlanner := NewLLMPlanner(tools, &fakePlannerLLM{
+		response: `{
+			"goal": "生成 30 秒视频",
+			"domain": "video_creation",
+			"mode": "dynamic_agent",
+			"steps": []
+		}`,
+	}, LLMPlannerOptions{MaxTools: 1})
+	fallback := NewHeuristicPlanner(tools)
+	planner := NewHybridPlanner(llmPlanner, fallback)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "video_script_generator" {
+		t.Fatalf("fallback plan not used for empty LLM plan: %#v", plan.Steps)
+	}
+}
+
+func TestLLMPlanner_WiresMissingRequiredInputsFromPriorOutputs(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "video_script_generator",
+			Capabilities: []string{"video_creation", "script_generation"},
+			Parameters: map[string]tool.ParamDef{
+				"topic": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		{
+			Name:         "shot_splitter",
+			Capabilities: []string{"video_creation", "shot_split"},
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+	}
+	planner := NewLLMPlanner(tools, &fakePlannerLLM{
+		response: `{
+			"goal": "生成 30 秒视频",
+			"domain": "video_creation",
+			"mode": "dynamic_agent",
+			"steps": [
+				{
+					"id": "script_generation",
+					"intent": "生成口播稿",
+					"tool": "video_script_generator",
+					"arguments": {"topic": "佛得角国家以及佛得角世界杯出线奇迹"},
+					"expectedOutput": ["script"],
+					"produceArtifact": true
+				},
+				{
+					"id": "shot_split",
+					"intent": "拆分分镜",
+					"tool": "shot_splitter",
+					"arguments": {},
+					"dependsOn": ["script_generation"],
+					"expectedOutput": ["shotList"],
+					"produceArtifact": true
+				}
+			]
+		}`,
+	}, LLMPlannerOptions{MaxTools: 2})
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if got := plan.Steps[1].Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("shot_splitter should reference generated script, got %#v", plan.Steps[1].Arguments)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("wired LLM plan should pass PlanGuard: %v", err)
+	}
+}
+
 type fakePlannerLLM struct {
 	response       string
 	errText        string

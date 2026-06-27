@@ -51,12 +51,12 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	// and risk relevance rather than a single-domain filter.
 	retriever := NewHybridToolRetriever(p.tools.ListManifests())
 	candidates, err := retriever.Retrieve(ctx, RetrieveRequest{
-		Query:       req.Message,
-		Domain:      domain,
+		Query:        req.Message,
+		Domain:       domain,
 		MaxCostLevel: req.MaxCostLevel,
 		MaxRiskLevel: req.MaxRiskLevel,
-		CoarseTopK:  30,
-		PlannerTopK: p.maxTools,
+		CoarseTopK:   30,
+		PlannerTopK:  p.maxTools,
 		IncludeCapabilities: []string{
 			"video_planning",
 			"script_generation",
@@ -89,6 +89,12 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 		return nil, fmt.Errorf("parse llm agent plan: %w", err)
 	}
 	normalizeLLMPlan(&plan, req, domain, p.maxTools)
+	manifestsByName := manifestMap(p.tools.ListManifests())
+	fillRequestRequiredInputs(plan.Steps, manifestsByName, req)
+	wireRequiredStepInputs(plan.Steps, manifestsByName)
+	if len(plan.Steps) == 0 {
+		return nil, fmt.Errorf("llm planner returned no steps")
+	}
 	return &plan, nil
 }
 
@@ -115,8 +121,8 @@ func (p *LLMPlanner) RepairPlan(ctx context.Context, originalPlan *AgentPlan, gu
 	}
 
 	userPayload := map[string]interface{}{
-		"guardError":  guardError,
-		"originalPlan": json.RawMessage(planJSON),
+		"guardError":     guardError,
+		"originalPlan":   json.RawMessage(planJSON),
 		"candidateTools": compactToolManifests(manifests),
 	}
 
@@ -143,6 +149,7 @@ func (p *LLMPlanner) RepairPlan(ctx context.Context, originalPlan *AgentPlan, gu
 		return nil, fmt.Errorf("parse repaired agent plan: %w", err)
 	}
 	normalizeLLMPlan(&plan, StartRunRequest{}, "", p.maxTools)
+	wireRequiredStepInputs(plan.Steps, manifestMap(manifests))
 	return &plan, nil
 }
 
