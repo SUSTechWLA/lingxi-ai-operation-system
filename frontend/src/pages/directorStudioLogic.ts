@@ -60,6 +60,18 @@ export interface RenderReadiness {
   message?: string
 }
 
+export type PublishPlatform = 'xiaohongshu' | 'bilibili'
+
+export interface PublishCopy {
+  platform: PublishPlatform
+  platformName: string
+  title: string
+  description: string
+  tags: string[]
+  coverText: string
+  publishTips: string[]
+}
+
 interface TraceNodeLike {
   id?: string
   name?: string
@@ -159,6 +171,71 @@ export function canStartFinalRender(artifacts: DirectorArtifactRecord[], localRu
     missing,
     message: missing.length ? `暂不能开始最终渲染：${missing.join('、')}` : undefined,
   }
+}
+
+export function buildPublishCopies(topic: string, durationSec: number, artifacts: DirectorArtifactRecord[]): PublishCopy[] {
+  const normalizedTopic = normalizePublishTopic(topic)
+  const hasVideo = artifacts.some((artifact) => artifact.kind === 'VIDEO' && artifact.status === 'valid')
+  const hasPrompt = artifacts.some((artifact) => ['CARD_PLAN', 'SHOT_LIST', 'KEYFRAME_PROMPTS'].includes(artifact.kind))
+  const baseTags = publishTagsFor(normalizedTopic, hasPrompt)
+
+  return [
+    {
+      platform: 'xiaohongshu',
+      platformName: '小红书',
+      title: titleWithin(`${normalizedTopic}：${durationSec}秒讲清楚`, 20),
+      description: [
+        `这条视频用${durationSec}秒讲「${normalizedTopic}」。`,
+        '核心不是堆更多工具，而是把想法、执行、审核和返工放进同一条可追踪工作流。',
+        hasVideo ? '成片已生成，可直接手动发布。' : '当前已整理脚本、分镜和 Prompt，可先手动打磨后发布。',
+      ].join('\n'),
+      tags: baseTags.slice(0, 6),
+      coverText: titleWithin(normalizedTopic, 12),
+      publishTips: ['封面保留一个核心判断', '正文前两行直接给结论', '发布前检查字幕是否完整'],
+    },
+    {
+      platform: 'bilibili',
+      platformName: 'B站',
+      title: titleWithin(`${normalizedTopic}｜工作流视角`, 40),
+      description: [
+        `本视频围绕「${normalizedTopic}」展开，目标时长约 ${durationSec} 秒。`,
+        '内容结构：开场观点、关键解释、案例化展开、结尾总结。',
+        hasVideo ? '视频文件已进入产物库，请结合最终审核报告检查后手动投稿。' : '当前版本适合作为短片前期稿件，建议确认镜头和 Prompt 后再进入渲染。',
+      ].join('\n'),
+      tags: uniqueStrings([...baseTags, '知识分享', 'AI工具']).slice(0, 10),
+      coverText: titleWithin(`${normalizedTopic}\n工作流视角`, 18),
+      publishTips: ['标题保留关键词和明确角度', '简介写清楚视频结构', '选择知识/科技相关分区'],
+    },
+  ]
+}
+
+export function publishCopiesToMarkdown(copies: PublishCopy[]): string {
+  return copies.map((copy) => [
+    `## ${copy.platformName}`,
+    '',
+    `**标题**：${copy.title}`,
+    '',
+    '**正文**：',
+    copy.description,
+    '',
+    `**标签**：${copy.tags.map((tag) => `#${tag}`).join(' ')}`,
+    '',
+    `**封面文案**：${copy.coverText}`,
+    '',
+    '**发布建议**：',
+    ...copy.publishTips.map((tip) => `- ${tip}`),
+  ].join('\n')).join('\n\n')
+}
+
+export function publishCopiesToJSON(copies: PublishCopy[]): string {
+  return JSON.stringify(copies.map(({ platform, title, description, tags, coverText, publishTips }) => ({
+    platform,
+    title,
+    description,
+    tags,
+    coverText,
+    publishTips,
+  })), null, 2)
 }
 
 export function buildDirectorArtifacts(
@@ -493,6 +570,32 @@ function storageHintForKind(kind: string) {
 
 function requiresMaterializedArtifact(kind: string) {
   return kind === 'VIDEO' || kind === 'PROJECT_PACKAGE'
+}
+
+function normalizePublishTopic(topic: string) {
+  const cleaned = topic
+    .replace(/^请帮我(做|创作|生成)?一个?\d*秒?(图文|动画|口播)?视频[，,:：]*/u, '')
+    .replace(/^讲/u, '')
+    .trim()
+  return cleaned || '视频主题'
+}
+
+function publishTagsFor(topic: string, hasPrompt: boolean) {
+  const tags = ['视频创作', 'AI', '工作流']
+  if (topic.includes('智能体') || topic.toLowerCase().includes('agent')) tags.push('智能体')
+  if (topic.includes('故事') || topic.includes('动画')) tags.push('动画短片')
+  if (hasPrompt) tags.push('分镜脚本')
+  return uniqueStrings(tags)
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+}
+
+function titleWithin(value: string, maxLength: number) {
+  const cleaned = value.trim()
+  if (cleaned.length <= maxLength) return cleaned
+  return cleaned.slice(0, Math.max(1, maxLength - 1)) + '…'
 }
 
 function executionPlaneForTool(tool: string): 'cloud' | 'local' {

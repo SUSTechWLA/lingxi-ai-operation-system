@@ -1,6 +1,7 @@
 package apispec
 
 import (
+	videoassistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
 	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
 	artifacts "github.com/tangying-ai/aios-core/internal/core/artifact"
@@ -642,6 +643,35 @@ func registerCloudSchemas(b *Builder) {
 			}},
 		},
 	}))
+
+	// ── Video Project Assistant ──
+	b.Schema("VideoAssistantMessageRequest", Reflect(videoassistant.MessageRequest{}))
+	b.Schema("VideoAssistantReviseRequest", Reflect(videoassistant.ReviseRequest{}))
+	b.Schema("VideoAssistantExplainStageRequest", Reflect(videoassistant.ExplainStageRequest{}))
+	b.Schema("VideoAssistantMessageResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data":    {Schema: Reflect(videoassistant.MessageResponse{})},
+		},
+	})
+	b.Schema("VideoAssistantReviseResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data":    {Schema: Reflect(videoassistant.ReviseResponse{})},
+		},
+	})
+	b.Schema("VideoAssistantExplainStageResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data":    {Schema: Reflect(videoassistant.ExplainStageResponse{})},
+		},
+	})
 
 	// ── Workflow Runs ──
 	b.Schema("WorkflowRunCreateResponse", &Schema{

@@ -49,6 +49,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 
+	videoAssistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
 	videoPlanJudge "github.com/tangying-ai/aios-core/internal/agents/video/planjudge"
 	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
@@ -540,6 +541,7 @@ func main() {
 		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
 		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, authMiddleware.RequireAuth())
 		projectHandler.RegisterRoutes(r)
+		videoAssistant.NewHandler(authMiddleware.RequireAuth()).RegisterRoutes(r)
 
 		// Workflow Runs
 		workflowRunRepo := workflow.NewRunRepository(pool)

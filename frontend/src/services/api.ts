@@ -32,6 +32,12 @@ import {
   AgentReviewListResponse,
   AgentReviewActionResponse,
   VideoRoleAgentListResponse,
+  VideoAssistantExplainStageRequest,
+  VideoAssistantExplainStageResponse,
+  VideoAssistantMessageRequest,
+  VideoAssistantMessageResponse,
+  VideoAssistantReviseRequest,
+  VideoAssistantReviseResponse,
 } from '../utils/types'
 
 const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
@@ -531,5 +537,38 @@ export const fetchVideoPreflight = async (pipeline: string = 'wf-guided-image-te
 
 export const fetchVideoRoleAgents = async (): Promise<VideoRoleAgentListResponse> => {
   const response = await api.get<ApiResponse<VideoRoleAgentListResponse>>('/video/role-agents')
+  return response.data.data
+}
+
+export const askVideoProjectAssistant = async (
+  projectId: string,
+  payload: VideoAssistantMessageRequest
+): Promise<VideoAssistantMessageResponse> => {
+  const response = await api.post<ApiResponse<VideoAssistantMessageResponse>>(
+    `/video-projects/${projectId}/assistant/message`,
+    payload
+  )
+  return response.data.data
+}
+
+export const reviseWithVideoProjectAssistant = async (
+  projectId: string,
+  payload: VideoAssistantReviseRequest
+): Promise<VideoAssistantReviseResponse> => {
+  const response = await api.post<ApiResponse<VideoAssistantReviseResponse>>(
+    `/video-projects/${projectId}/assistant/revise`,
+    payload
+  )
+  return response.data.data
+}
+
+export const explainVideoProjectStage = async (
+  projectId: string,
+  payload: VideoAssistantExplainStageRequest
+): Promise<VideoAssistantExplainStageResponse> => {
+  const response = await api.post<ApiResponse<VideoAssistantExplainStageResponse>>(
+    `/video-projects/${projectId}/assistant/explain-stage`,
+    payload
+  )
   return response.data.data
 }

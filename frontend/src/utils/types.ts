@@ -465,3 +465,62 @@ export interface VideoRoleAgent {
 export interface VideoRoleAgentListResponse {
   roleAgents: VideoRoleAgent[]
 }
+
+export interface VideoAssistantAction {
+  type: string
+  label: string
+  method?: string
+  path?: string
+  body?: Record<string, unknown>
+}
+
+export interface VideoAssistantMessageRequest {
+  message: string
+  stage?: string
+  runId?: string
+  artifactIds?: string[]
+}
+
+export interface VideoAssistantMessageResponse {
+  projectId: string
+  scope: 'video_project'
+  answer: string
+  stage?: string
+  runId?: string
+  suggestedActions: VideoAssistantAction[]
+  forbiddenCapabilities: string[]
+  referencedArtifactIds?: string[]
+}
+
+export interface VideoAssistantReviseRequest {
+  artifactId: string
+  message: string
+  runId?: string
+  reviewId?: string
+}
+
+export interface VideoAssistantReviseResponse {
+  projectId: string
+  artifactId: string
+  runId?: string
+  reviewId?: string
+  answer: string
+  bypassesArtifact: boolean
+  artifactAction: VideoAssistantAction
+}
+
+export interface VideoAssistantExplainStageRequest {
+  stage: string
+}
+
+export interface VideoAssistantExplainStageResponse {
+  projectId: string
+  stage: string
+  displayName: string
+  explanation: string
+  requiredInputs: string[]
+  requiredOutputs: string[]
+  reviewFocus: string[]
+  nextUserActions: string[]
+  betaLimitations: string[]
+}

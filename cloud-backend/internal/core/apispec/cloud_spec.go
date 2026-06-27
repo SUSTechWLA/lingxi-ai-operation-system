@@ -30,7 +30,8 @@ func BuildCloudSpec() *Spec {
 		Tag("Video Projects", "Video creation project CRUD").
 		Tag("Workflow Runs", "Video workflow run lifecycle").
 		Tag("Stages", "Stage-level approval for video pipelines").
-		Tag("Artifacts", "Video creation artifacts (JSON, Markdown, media)")
+		Tag("Artifacts", "Video creation artifacts (JSON, Markdown, media)").
+		Tag("Video Project Assistant", "Video-project-scoped assistant for stage explanation and artifact revision guidance")
 
 	// ── Health ──
 	b.Route("GET", "/api/health", "Liveness check").
@@ -495,6 +496,27 @@ func BuildCloudSpec() *Spec {
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
 		ResponseJSON("200", "Archived", "GenericOKResponse")
+	b.Route("POST", "/api/video-projects/:id/assistant/message", "Ask the video-project-scoped assistant").
+		Tags("Video Project Assistant").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("VideoAssistantMessageRequest", "Project-scoped assistant question", true).
+		ResponseJSON("200", "Assistant answer", "VideoAssistantMessageResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/assistant/revise", "Convert assistant feedback into an Artifact revision action").
+		Tags("Video Project Assistant").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("VideoAssistantReviseRequest", "Artifact revision instruction", true).
+		ResponseJSON("200", "Revision action", "VideoAssistantReviseResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/assistant/explain-stage", "Explain a video workflow stage").
+		Tags("Video Project Assistant").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("VideoAssistantExplainStageRequest", "Stage to explain", true).
+		ResponseJSON("200", "Stage explanation", "VideoAssistantExplainStageResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 
 	// ── Workflow Runs ──
 	b.Route("POST", "/api/video-projects/:id/workflow-runs", "Create a workflow run").

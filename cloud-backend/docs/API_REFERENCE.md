@@ -30,10 +30,11 @@ Version: 0.1.0
 15. [Tools](#15-tools)
 16. [Trace](#16-trace)
 17. [Translate](#17-translate)
-18. [Video Projects](#18-video-projects)
-19. [Video Role Agents](#19-video-role-agents)
-20. [Workflow Runs](#20-workflow-runs)
-21. [Workflows](#21-workflows)
+18. [Video Project Assistant](#18-video-project-assistant)
+19. [Video Projects](#19-video-projects)
+20. [Video Role Agents](#20-video-role-agents)
+21. [Workflow Runs](#21-workflow-runs)
+22. [Workflows](#22-workflows)
 
 ---
 
@@ -1314,7 +1315,81 @@ Translate NL prompt and submit DAG
 
 ---
 
-## 18. Video Projects
+## 18. Video Project Assistant
+
+### POST /api/video-projects/:id/assistant/explain-stage
+
+Explain a video workflow stage
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/VideoAssistantExplainStageRequest" }
+```
+
+**Responses:**
+
+- **200** — Stage explanation (JSON)
+- **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+### POST /api/video-projects/:id/assistant/message
+
+Ask the video-project-scoped assistant
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/VideoAssistantMessageRequest" }
+```
+
+**Responses:**
+
+- **200** — Assistant answer (JSON)
+- **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+### POST /api/video-projects/:id/assistant/revise
+
+Convert assistant feedback into an Artifact revision action
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/VideoAssistantReviseRequest" }
+```
+
+**Responses:**
+
+- **200** — Revision action (JSON)
+- **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+## 19. Video Projects
 
 ### GET /api/video-projects
 
@@ -1397,7 +1472,7 @@ Archive a project (soft delete)
 
 ---
 
-## 19. Video Role Agents
+## 20. Video Role Agents
 
 ### GET /api/video/role-agents
 
@@ -1426,7 +1501,7 @@ Get Guided Video Studio role agent detail
 
 ---
 
-## 20. Workflow Runs
+## 21. Workflow Runs
 
 ### POST /api/video-projects/:id/workflow-runs
 
@@ -1506,7 +1581,7 @@ Pause a run
 
 ---
 
-## 21. Workflows
+## 22. Workflows
 
 ### GET /api/workflows
 

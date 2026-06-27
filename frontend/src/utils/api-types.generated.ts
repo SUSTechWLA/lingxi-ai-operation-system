@@ -528,6 +528,54 @@ export interface TranslateSubmitResponse {
 }
 
 /**  */
+// VideoAssistantExplainStageRequest
+export interface VideoAssistantExplainStageRequest {
+  stage: string;
+}
+
+/**  */
+// VideoAssistantExplainStageResponse
+export interface VideoAssistantExplainStageResponse {
+  code?: number;
+  data?: { betaLimitations: string[]; displayName: string; explanation: string; nextUserActions: string[]; projectId: string; requiredInputs: string[]; requiredOutputs: string[]; reviewFocus: string[]; stage: string };
+  message?: string;
+}
+
+/**  */
+// VideoAssistantMessageRequest
+export interface VideoAssistantMessageRequest {
+  artifactIds?: string[];
+  message: string;
+  runId?: string;
+  stage?: string;
+}
+
+/**  */
+// VideoAssistantMessageResponse
+export interface VideoAssistantMessageResponse {
+  code?: number;
+  data?: { answer: string; forbiddenCapabilities: string[]; projectId: string; referencedArtifactIds?: string[]; runId?: string; scope: string; stage?: string; suggestedActions: { body?: Record<string, Record<string, unknown>>; label: string; method?: string; path?: string; type: string }[] };
+  message?: string;
+}
+
+/**  */
+// VideoAssistantReviseRequest
+export interface VideoAssistantReviseRequest {
+  artifactId: string;
+  message: string;
+  reviewId?: string;
+  runId?: string;
+}
+
+/**  */
+// VideoAssistantReviseResponse
+export interface VideoAssistantReviseResponse {
+  code?: number;
+  data?: { answer: string; artifactAction: { body?: Record<string, Record<string, unknown>>; label: string; method?: string; path?: string; type: string }; artifactId: string; bypassesArtifact: boolean; projectId: string; reviewId?: string; runId?: string };
+  message?: string;
+}
+
+/**  */
 // VideoProject
 export interface VideoProject {
   aspectRatio?: string;

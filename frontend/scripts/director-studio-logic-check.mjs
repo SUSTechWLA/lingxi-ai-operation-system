@@ -18,7 +18,13 @@ try {
     logLevel: 'silent',
   })
 
-  const { buildDirectorArtifacts, formatDirectorErrorMessage } = await import(pathToFileURL(outfile))
+  const {
+    buildDirectorArtifacts,
+    buildPublishCopies,
+    formatDirectorErrorMessage,
+    publishCopiesToJSON,
+    publishCopiesToMarkdown,
+  } = await import(pathToFileURL(outfile))
   const roleAgents = [
     {
       id: 'render_producer',
@@ -66,6 +72,15 @@ try {
     ),
     '关键产物写入失败，最终视频无法进入项目产物库。\n请重新执行当前步骤。',
   )
+
+  const copies = buildPublishCopies('智能体改变的是工作流', 45, artifacts)
+  assert.equal(copies.length, 2)
+  assert.equal(copies[0].platform, 'xiaohongshu')
+  assert.equal(copies[1].platform, 'bilibili')
+  assert.ok(copies.every((copy) => copy.title && copy.description && copy.coverText))
+  assert.ok(publishCopiesToMarkdown(copies).includes('## 小红书'))
+  assert.ok(publishCopiesToMarkdown(copies).includes('## B站'))
+  assert.equal(JSON.parse(publishCopiesToJSON(copies))[0].platform, 'xiaohongshu')
 } finally {
   await rm(tempDir, { recursive: true, force: true })
 }

@@ -7,9 +7,11 @@ import {
   FiBell,
   FiCheck,
   FiChevronRight,
+  FiCopy,
   FiCpu,
   FiDownload,
   FiEdit3,
+  FiFileText,
   FiFolder,
   FiHardDrive,
   FiHome,
@@ -48,11 +50,14 @@ import {
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
+  buildPublishCopies,
   deriveNextAction,
   displayNameForArtifact,
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
   normalizeDirectorErrorMessage,
+  publishCopiesToJSON,
+  publishCopiesToMarkdown,
   stageActionLabel,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
@@ -243,7 +248,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           {activeNav === 'trace' && <TracePage traceNodes={traceNodes} artifacts={artifacts} run={run} />}
           {activeNav === 'assets' && <AssetsPage artifacts={artifacts} />}
           {activeNav === 'roles' && <RolesPage stages={stages} />}
-          {activeNav === 'export' && <ExportPage artifacts={artifacts} />}
+          {activeNav === 'export' && <ExportPage artifacts={artifacts} topic={topic} durationSec={durationSec} />}
           {activeNav === 'system' && <DesktopPage />}
         </div>
       </main>
@@ -568,14 +573,18 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
   )
 }
 
-function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
+function ExportPage({ artifacts, topic, durationSec }: { artifacts: DirectorArtifactRecord[]; topic: string; durationSec: number }) {
   const video = artifacts.find((artifact) => artifact.kind === 'VIDEO')
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
   const videoReady = video?.status === 'valid' && Boolean(video.storageRef)
   const packageReady = packageArtifact?.status === 'valid' && Boolean(packageArtifact.storageRef)
+  const publishCopies = buildPublishCopies(topic, durationSec, artifacts)
+  const markdown = publishCopiesToMarkdown(publishCopies)
+  const json = publishCopiesToJSON(publishCopies)
   return (
-    <div className="grid grid-cols-12 gap-5">
-      <section className="card col-span-7 p-6">
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+      <section className="card p-6 xl:col-span-7">
         <div className="flex items-center justify-between"><div><p className="text-sm font-bold text-primary-dark">最终预览 / 导出</p><h2 className="mt-2 text-2xl font-black text-ink">最终视频预览</h2></div><StatusBadge status={videoReady ? 'valid' : 'pending'} label={videoReady ? 'final.mp4 已生成' : '等待渲染'} /></div>
         <div className="mt-6 overflow-hidden rounded-xl bg-ink shadow-card ring-1 ring-line">
           <div className="relative h-[410px] bg-[radial-gradient(circle_at_70%_30%,rgba(251,191,36,.34),transparent_28%),linear-gradient(135deg,#130b05,#2b1708_40%,#7c3e08)] p-10 text-white">
@@ -586,12 +595,16 @@ function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
           </div>
         </div>
       </section>
-      <aside className="col-span-5 space-y-5">
+      <aside className="space-y-5 xl:col-span-5">
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">导出操作</h3>
           {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
           <div className="mt-4 grid grid-cols-2 gap-3"><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <button onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line"><FiFileText /> Markdown</button>
+            <button onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line"><FiDownload /> JSON</button>
+          </div>
         </section>
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">交付物清单</h3>
@@ -600,6 +613,31 @@ function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
           </div>
         </section>
       </aside>
+      </div>
+      <section className="card p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-bold text-primary-dark">发布素材</p>
+            <h2 className="mt-2 text-2xl font-black text-ink">小红书 / B站</h2>
+          </div>
+          <CopyButton value={markdown} label="复制全部" />
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
+          {publishCopies.map((copy) => (
+            <div key={copy.platform} className="rounded-lg bg-white p-5 ring-1 ring-line">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-black text-ink">{copy.platformName}</h3>
+                <CopyButton value={JSON.stringify(copy, null, 2)} label="复制 JSON" />
+              </div>
+              <PublishCopyField label="标题" value={copy.title} />
+              <PublishCopyField label="正文" value={copy.description} multiline />
+              <PublishCopyField label="标签" value={copy.tags.map((tag) => `#${tag}`).join(' ')} />
+              <PublishCopyField label="封面文案" value={copy.coverText} />
+              <PublishCopyField label="发布建议" value={copy.publishTips.join('\n')} multiline />
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   )
 }
@@ -607,9 +645,73 @@ function ExportPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
 function ArtifactTable({ artifacts, compact = false }: { artifacts: DirectorArtifactRecord[]; compact?: boolean }) {
   return (
     <section className={clsx('card overflow-hidden p-0', compact && 'mt-6')}>
-      <table className="w-full text-left text-sm"><thead className="bg-background-mist text-xs text-ink-soft"><tr>{['ID', '名称', '类型', '版本', '状态', '负责人', '已审核', '存储位置'].map((header) => <th className="px-5 py-4" key={header}>{header}</th>)}</tr></thead><tbody className="divide-y divide-line bg-white/70">{artifacts.map((artifact) => <tr key={artifact.id}><td className="px-5 py-4 font-bold">{artifact.id}</td><td className="px-5 py-4 font-black text-ink">{artifact.name}</td><td className="px-5 py-4 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td><td className="px-5 py-4">{artifact.version}</td><td className="px-5 py-4"><StatusBadge status={artifact.status} /></td><td className="px-5 py-4 text-ink-muted">{artifact.owner}</td><td className="px-5 py-4">{artifact.humanApproved ? '是' : '否'}</td><td className="px-5 py-4 text-xs text-ink-soft">{artifact.storageRef}</td></tr>)}</tbody></table>
+      <table className="w-full text-left text-sm"><thead className="bg-background-mist text-xs text-ink-soft"><tr>{['ID', '名称', '类型', '版本', '状态', '负责人', '已审核', '存储位置', '操作'].map((header) => <th className="px-5 py-4" key={header}>{header}</th>)}</tr></thead><tbody className="divide-y divide-line bg-white/70">{artifacts.map((artifact) => <tr key={artifact.id}><td className="px-5 py-4 font-bold">{artifact.id}</td><td className="px-5 py-4 font-black text-ink">{artifact.name}</td><td className="px-5 py-4 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td><td className="px-5 py-4">{artifact.version}</td><td className="px-5 py-4"><StatusBadge status={artifact.status} /></td><td className="px-5 py-4 text-ink-muted">{artifact.owner}</td><td className="px-5 py-4">{artifact.humanApproved ? '是' : '否'}</td><td className="max-w-64 truncate px-5 py-4 text-xs text-ink-soft">{artifact.storageRef || '-'}</td><td className="px-5 py-4"><CopyButton value={artifactToCopyText(artifact)} label="复制" /></td></tr>)}</tbody></table>
     </section>
   )
+}
+
+function PublishCopyField({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {
+  return (
+    <div className="mt-4 rounded-lg bg-background-card p-4 ring-1 ring-line">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-black text-primary-dark">{label}</span>
+        <CopyButton value={value} label="复制" />
+      </div>
+      <p className={clsx('mt-2 whitespace-pre-wrap text-sm leading-6 text-ink-muted', !multiline && 'line-clamp-2')}>{value}</p>
+    </div>
+  )
+}
+
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    await copyText(value)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+  return <button onClick={handleCopy} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiCopy /> {copied ? '已复制' : label}</button>
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+function downloadTextFile(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: `${mimeType};charset=utf-8` })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function artifactToCopyText(artifact: DirectorArtifactRecord) {
+  return JSON.stringify({
+    id: artifact.id,
+    name: artifact.name,
+    kind: artifact.kind,
+    version: artifact.version,
+    status: artifact.status,
+    owner: artifact.owner,
+    humanApproved: artifact.humanApproved,
+    storageRef: artifact.storageRef,
+    dependsOn: artifact.dependsOn,
+  }, null, 2)
 }
 
 function StatusBadge({ status, label }: { status: DirectorArtifactStatus | DirectorStageStatus; label?: string }) {
@@ -687,4 +789,3 @@ function statusBadgeTone(status: DirectorArtifactStatus | DirectorStageStatus) {
   if (status === 'blocked' || status === 'stale' || status === 'failed') return 'bg-red-50 text-red-700 ring-red-200'
   return 'bg-stone-50 text-stone-600 ring-stone-200'
 }
-
