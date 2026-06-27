@@ -87,6 +87,10 @@ interface TraceNodeLike {
   createdAt?: string
   updatedAt?: string
   durationMs?: number
+  // Direct node fields (used by some executor implementations)
+  tool?: string
+  intent?: string
+  dependsOn?: string[]
 }
 
 export function buildDirectorStages(
@@ -289,13 +293,38 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
   return extractTraceNodes(trace).map((node, index) => {
     const input = node.input || {}
     const output = node.output || {}
-    const rawName = node.name || ''
+
+    // Real tool name: the orchestrator stores "external" in node.name;
+    // the actual tool is in input.capabilityTool or node.tool.
+    const realTool = stringValue(input.capabilityTool) || node.tool || ''
+    const nodeName = node.name || ''
+
+    // Distinguish exec vs review nodes from the node name or id suffix.
+    const rawName = realTool || nodeName || node.id || ''
     const rawType = node.type || ''
     const tool = readableToolName(rawName)
     const roleAgent = objectValue(input.roleAgent) || objectValue(output.roleAgent)
     const roleName = stringValue(roleAgent?.displayName) || stringValue(roleAgent?.name) || toolRoleFromName(rawName) || readableNodeType(rawType) || tool || '步骤'
     const stage = stringValue(input.stage) || stringValue(output.stage) || ''
-    const duration = formatDurationMs(node.durationMs, node.createdAt, node.updatedAt)
+    const outDuration = typeof output.durationMs === 'number' ? output.durationMs : undefined
+    const nodeDuration = typeof node.durationMs === 'number' ? node.durationMs : undefined
+    const duration = formatDurationMs(outDuration || nodeDuration, node.createdAt, node.updatedAt)
+    const intent = node.intent || stringValue(input.intent) || ''
+
+    // Extract error from stdout/result if present
+    const errStr = stringValue(output.error) || node.error || stringValue(output.stderr) || ''
+    // Parse stdout JSON for error field
+    let stdoutErr = ''
+    if (output.stdout) {
+      const stdoutStr = stringValue(output.stdout)
+      if (stdoutStr) {
+        try {
+          const parsed = JSON.parse(stdoutStr)
+          if (parsed.error) stdoutErr = stringValue(parsed.error as unknown) || ''
+        } catch { /* not JSON */ }
+      }
+    }
+    const combinedError = errStr || stdoutErr || ''
 
     return {
       id: node.id || String(index + 1),
@@ -303,15 +332,15 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
       stage,
       status: normalizeDirectorStatus(node.status),
       tool,
-      rawName,
+      rawName: rawName || node.id || '',
       rawType,
       plane: executionPlaneForTool(rawName),
-      input: summarizeValue(input.requiredInputs || input.input || input),
-      output: summarizeValue(output.artifactKind || output.artifacts || output),
-      error: stringValue(output.error) || node.error || '',
+      input: summarizeValue(input.requiredInputs || input.input || intent || input),
+      output: summarizeValue(output.artifactKind || output.artifacts || (stringValue(output.stdout) || '').slice(0, 100) || output),
+      error: combinedError,
       duration,
       createdAt: node.createdAt || '',
-      review: Boolean(input.humanReview || output.humanReview),
+      review: rawType === 'REVIEW_GATE' || Boolean(input.humanReview || output.humanReview),
     }
   })
 }

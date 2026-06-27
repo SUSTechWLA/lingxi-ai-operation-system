@@ -65,6 +65,9 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 			"video_render",
 			"artifact_package",
 			"quality_check",
+				"knowledge_research",
+				"fact_gathering",
+				"video_creation",
 		},
 		ExcludeCapabilities: []string{
 			"seedance",
@@ -297,6 +300,7 @@ func plannerSystemPrompt() string {
 8. 你不得绕过需要人工审核的工具。
 9. 第一版只生成图文视频，不使用 Seedance、TTS、ASR、平台发布工具。
 10. hyperframes_renderer 只能在 preview 或 composition 已确认后执行。
+	11. 知识时效性判断：如果用户主题涉及新闻事件、历史事实、统计数据、人物传记、科技进展、地理文化等需要事实核查的内容，必须将 knowledge_researcher 作为最早步骤之一。如果是纯观点评论、情感分享、产品介绍等无需外部知识的主题，可以跳过 knowledge_researcher 和 fact_checker。
 
 只输出 JSON，不要输出 Markdown。
 禁止输出 DAGRequest、节点类型、ai_node、workflow_template 或执行图细节。
@@ -404,4 +408,5 @@ func normalizeLLMPlan(plan *AgentPlan, req StartRunRequest, domain string, maxTo
 	if !plan.StopPolicy.StopWhenEnough {
 		plan.StopPolicy.StopWhenEnough = true
 	}
+
 }

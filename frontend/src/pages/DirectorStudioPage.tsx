@@ -521,23 +521,27 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
           </div>
           <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary-dark">Run {run?.id?.slice(0, 12) || '未启动'}</span>
         </div>
-        <div className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4 [&>*]:min-w-0">
           {traceNodes.length ? traceNodes.map((node, index) => (
             <button key={node.id} onClick={() => setSelectedId(node.id)}
               className={clsx(
-                'rounded-lg border p-4 text-left transition hover:-translate-y-0.5',
+                'rounded-lg border p-4 text-left transition hover:-translate-y-0.5 min-w-0 overflow-hidden',
                 selected?.id === node.id ? 'border-primary bg-primary-soft shadow-card' : 'border-line bg-white/70',
                 hasError(node) && 'border-red-300 bg-red-50/60',
               )}>
-              <div className="flex items-center justify-between">
-                <span className={clsx('grid h-8 w-8 place-items-center rounded-lg text-xs font-black text-white', hasError(node) ? 'bg-red-500' : 'bg-ink')}>
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <span className={clsx('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black text-white', hasError(node) ? 'bg-red-500' : 'bg-ink')}>
                   {String(index + 1).padStart(2, '0')}
                 </span>
                 <StatusBadge status={node.status} />
               </div>
-              <div className="mt-3 text-sm font-black text-ink leading-tight">{node.tool}</div>
-              <div className="mt-1 text-[11px] text-ink-soft font-mono">{node.rawName || node.rawType}</div>
-              {node.error && <div className="mt-2 truncate text-[11px] font-semibold text-red-600" title={node.error}>⚠ {node.error.slice(0, 40)}</div>}
+              <div className="mt-3 truncate text-sm font-black text-ink leading-tight" title={node.tool}>{node.tool}</div>
+              <div className="mt-1 flex items-center gap-2 min-w-0">
+                <span className="truncate text-[11px] text-ink-soft font-mono" title={node.rawName}>{node.rawName}</span>
+                {node.rawType && <span className="shrink-0 rounded bg-ink/10 px-1 py-0.5 text-[10px] font-bold text-ink-soft">{node.rawType}</span>}
+              </div>
+              {node.duration !== '-' && <div className="mt-1 text-[10px] text-ink-muted">{node.duration}</div>}
+              {node.error && <div className="mt-2 truncate text-[11px] font-semibold text-red-600" title={node.error}>⚠ {node.error.slice(0, 50)}</div>}
             </button>
           )) : <EmptyState text="还没有执行 trace。启动项目后，每个步骤会显示在这里。" />}
         </div>
@@ -555,8 +559,9 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
             </div>
           </div>
           <div className="mt-5 space-y-2 text-sm">
-            <DebugField label="节点 ID" value={selected?.id || '-'} mono />
-            <DebugField label="类型" value={selected?.rawType ? `${selected.rawType}${selected?.rawName ? ` · ${selected.rawName}` : ''}` : '-'} mono />
+            <DebugField label="节点 ID" value={(selected?.id || '-').replace(/^[a-z0-9]+-/, '')} mono />
+            <DebugField label="步骤类型" value={selected?.rawType || '-'} />
+            <DebugField label="工具名" value={selected?.rawName || '-'} mono />
             <DebugField label="状态" value={selected?.status || '-'} />
             <DebugField label="执行位置" value={selected?.plane === 'local' ? '本地' : '云端'} />
             {selected?.duration && selected.duration !== '-' && <DebugField label="耗时" value={selected.duration} />}
@@ -577,12 +582,12 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
             {traceNodes.length ? traceNodes.map((node) => (
               <div key={node.id}
                 onClick={() => setSelectedId(node.id)}
-                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition', hasError(node) ? 'bg-red-50 ring-red-200' : 'bg-white ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
-                <div className="flex items-center justify-between">
-                  <span className={clsx('font-bold', hasError(node) ? 'text-red-700' : 'text-ink')}>{node.tool}</span>
+                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition min-w-0 overflow-hidden', hasError(node) ? 'bg-red-50 ring-red-200' : 'bg-white ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className={clsx('truncate font-bold', hasError(node) ? 'text-red-700' : 'text-ink')} title={node.tool}>{node.tool}</span>
                   <StatusBadge status={node.status} />
                 </div>
-                <div className="mt-1 text-ink-soft">{node.output || node.rawName}</div>
+                <div className="mt-1 truncate text-ink-soft">{node.output || node.rawName}</div>
               </div>
             )) : <div className="text-ink-muted">暂无事件</div>}
           </div>
