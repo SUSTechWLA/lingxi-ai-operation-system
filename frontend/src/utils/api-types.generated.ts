@@ -34,7 +34,7 @@ export interface AgentReviewDecisionResponse {
 // AgentReviewListResponse
 export interface AgentReviewListResponse {
   code?: number;
-  data?: { reviews?: { artifactId?: string; blocksDownstream?: boolean; humanReview?: Record<string, Record<string, unknown>>; id: string; nodeId: string; requiredInputs?: string[]; requiredOutputs?: string[]; reviewArtifactKinds?: string[]; reviewPhase?: string; reviewReason?: string; roleAgent?: Record<string, Record<string, unknown>>; roleAgentId?: string; stage?: string; status: string; stepId?: string; tool?: string }[]; runId?: string };
+  data?: { reviews?: { artifactId?: string; blocksDownstream?: boolean; humanReview?: Record<string, Record<string, unknown>>; id: string; nodeId: string; requiredInputs?: string[]; requiredOutputs?: string[]; reviewArtifactKinds?: string[]; reviewArtifacts?: Record<string, Record<string, unknown>>[]; reviewContent?: string; reviewOutput?: Record<string, Record<string, unknown>>; reviewPhase?: string; reviewReason?: string; roleAgent?: Record<string, Record<string, unknown>>; roleAgentId?: string; sourceNodeId?: string; stage?: string; status: string; stepId?: string; tool?: string }[]; runId?: string };
   message?: string;
 }
 

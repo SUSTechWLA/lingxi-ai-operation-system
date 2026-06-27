@@ -118,3 +118,32 @@ func TestBuildArtifactRecordStoresOnlyLocalMetadata(t *testing.T) {
 		t.Fatalf("metadata should mark cloud payload as not stored: %+v", record.Metadata)
 	}
 }
+
+func TestBuildArtifactRecordWorkflowNodeDoesNotStoreInlinePayload(t *testing.T) {
+	req := &CreateArtifactRequest{
+		ProjectID:   "proj-1",
+		StageName:   "proposal",
+		UnitID:      "proposal_generator",
+		Kind:        KindMarkdown,
+		Name:        "proposal.md",
+		StorageType: StorageLocal,
+		Data:        []byte("# 创作方案\n这里是待审核正文。"),
+		MimeType:    "text/markdown; charset=utf-8",
+		Provider:    "workflow-node",
+	}
+
+	record := buildArtifactRecord(req, 1, "")
+
+	if record.StorageType != StorageLocal {
+		t.Fatalf("workflow-node artifact storage type = %q, want %q", record.StorageType, StorageLocal)
+	}
+	if record.InlineJSON != "" {
+		t.Fatalf("workflow-node payload must not be stored inline, got %q", record.InlineJSON)
+	}
+	if stored, ok := record.Metadata["cloudPayloadStored"].(bool); !ok || stored {
+		t.Fatalf("workflow-node artifact should remain cloudPayloadStored=false: %+v", record.Metadata)
+	}
+	if localOnly, ok := record.Metadata["localOnly"].(bool); !ok || !localOnly {
+		t.Fatalf("workflow-node artifact should remain localOnly=true: %+v", record.Metadata)
+	}
+}

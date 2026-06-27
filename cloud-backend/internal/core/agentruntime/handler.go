@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -317,13 +318,23 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 	if err != nil {
 		return nil, nil, err
 	}
+	nodesByID := make(map[string]*model.Node, len(nodes))
+	nodesByOriginalID := make(map[string]*model.Node, len(nodes))
+	for _, node := range nodes {
+		nodesByID[node.ID] = node
+		if originalID := nodeInputString(node, "agentOriginalNodeId"); originalID != "" {
+			nodesByOriginalID[originalID] = node
+		}
+	}
 	reviews := make([]Review, 0)
 	for _, node := range nodes {
 		if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
 			continue
 		}
 		h.ensureReviewNodeArtifactID(ctx, run, node)
-		reviews = append(reviews, reviewFromNode(node))
+		review := reviewFromNode(node)
+		enrichReviewFromSourceNode(&review, node, nodesByID, nodesByOriginalID)
+		reviews = append(reviews, review)
 	}
 	return run, reviews, nil
 }
@@ -346,22 +357,26 @@ func (h *Handler) findReviewNode(ctx context.Context, runID, reviewID string) (*
 }
 
 type Review struct {
-	ID                  string                 `json:"id"`
-	NodeID              string                 `json:"nodeId"`
-	Status              string                 `json:"status"`
-	StepID              string                 `json:"stepId,omitempty"`
-	Tool                string                 `json:"tool,omitempty"`
-	Stage               string                 `json:"stage,omitempty"`
-	RoleAgentID         string                 `json:"roleAgentId,omitempty"`
-	RoleAgent           map[string]interface{} `json:"roleAgent,omitempty"`
-	HumanReview         map[string]interface{} `json:"humanReview,omitempty"`
-	RequiredInputs      []string               `json:"requiredInputs,omitempty"`
-	RequiredOutputs     []string               `json:"requiredOutputs,omitempty"`
-	ReviewPhase         string                 `json:"reviewPhase,omitempty"`
-	ReviewReason        string                 `json:"reviewReason,omitempty"`
-	BlocksDownstream    bool                   `json:"blocksDownstream,omitempty"`
-	ReviewArtifactKinds []string               `json:"reviewArtifactKinds,omitempty"`
-	ArtifactID          string                 `json:"artifactId,omitempty"`
+	ID                  string                   `json:"id"`
+	NodeID              string                   `json:"nodeId"`
+	Status              string                   `json:"status"`
+	StepID              string                   `json:"stepId,omitempty"`
+	Tool                string                   `json:"tool,omitempty"`
+	Stage               string                   `json:"stage,omitempty"`
+	RoleAgentID         string                   `json:"roleAgentId,omitempty"`
+	RoleAgent           map[string]interface{}   `json:"roleAgent,omitempty"`
+	HumanReview         map[string]interface{}   `json:"humanReview,omitempty"`
+	RequiredInputs      []string                 `json:"requiredInputs,omitempty"`
+	RequiredOutputs     []string                 `json:"requiredOutputs,omitempty"`
+	ReviewPhase         string                   `json:"reviewPhase,omitempty"`
+	ReviewReason        string                   `json:"reviewReason,omitempty"`
+	BlocksDownstream    bool                     `json:"blocksDownstream,omitempty"`
+	ReviewArtifactKinds []string                 `json:"reviewArtifactKinds,omitempty"`
+	ArtifactID          string                   `json:"artifactId,omitempty"`
+	SourceNodeID        string                   `json:"sourceNodeId,omitempty"`
+	ReviewContent       string                   `json:"reviewContent,omitempty"`
+	ReviewArtifacts     []map[string]interface{} `json:"reviewArtifacts,omitempty"`
+	ReviewOutput        map[string]interface{}   `json:"reviewOutput,omitempty"`
 }
 
 func reviewFromNode(node *model.Node) Review {
@@ -384,8 +399,68 @@ func reviewFromNode(node *model.Node) Review {
 		review.BlocksDownstream, _ = node.Input["blocksDownstream"].(bool)
 		review.ReviewArtifactKinds = stringSlice(node.Input["reviewArtifactKinds"])
 		review.ArtifactID, _ = node.Input["artifactId"].(string)
+		review.SourceNodeID, _ = node.Input["sourceNode"].(string)
 	}
 	return review
+}
+
+func enrichReviewFromSourceNode(review *Review, reviewNode *model.Node, nodesByID, nodesByOriginalID map[string]*model.Node) {
+	if review == nil || reviewNode == nil || reviewNode.Input == nil {
+		return
+	}
+	sourceNodeID, _ := reviewNode.Input["sourceNode"].(string)
+	if sourceNodeID == "" {
+		return
+	}
+	source := nodesByID[sourceNodeID]
+	if source == nil {
+		source = nodesByOriginalID[sourceNodeID]
+	}
+	if source == nil {
+		return
+	}
+	review.SourceNodeID = source.ID
+	payload := parseReviewOutputPayload(source.Output)
+	if len(payload) == 0 {
+		return
+	}
+	if content, ok := payload["content"].(string); ok {
+		review.ReviewContent = content
+	}
+	review.ReviewArtifacts = reviewArtifactList(payload["artifacts"])
+	review.ReviewOutput = payload
+}
+
+func parseReviewOutputPayload(output map[string]interface{}) map[string]interface{} {
+	if output == nil {
+		return nil
+	}
+	if stdout, ok := output["stdout"].(string); ok && stdout != "" {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(stdout), &parsed); err == nil {
+			return parsed
+		}
+	}
+	return output
+}
+
+func reviewArtifactList(value interface{}) []map[string]interface{} {
+	switch typed := value.(type) {
+	case []map[string]interface{}:
+		return typed
+	case []interface{}:
+		result := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if artifact, ok := item.(map[string]interface{}); ok {
+				result = append(result, artifact)
+			}
+		}
+		return result
+	case map[string]interface{}:
+		return []map[string]interface{}{typed}
+	default:
+		return nil
+	}
 }
 
 func reviewStatus(status model.NodeStatus) string {

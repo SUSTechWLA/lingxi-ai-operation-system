@@ -25,6 +25,8 @@ try {
     normalizeDirectorErrorMessage,
     publishCopiesToJSON,
     publishCopiesToMarkdown,
+    reviewDisplayTitle,
+    reviewOutputText,
   } = await import(pathToFileURL(outfile))
   const roleAgents = [
     {
@@ -65,6 +67,35 @@ try {
   assert.equal(artifacts[0].kind, 'VIDEO')
   assert.equal(artifacts[0].storageRef, '')
   assert.notEqual(artifacts[0].status, 'valid')
+
+  const proposalArtifacts = buildDirectorArtifacts(
+    [{
+      id: 'creative_director',
+      name: 'Creative Director',
+      displayName: '创意总监',
+      stage: 'proposal',
+      goal: '',
+      allowedTools: ['proposal_generator'],
+      forbiddenTools: [],
+      requiredInputs: [],
+      requiredOutputs: ['VIDEO_PROPOSAL'],
+    }],
+    [],
+    { nodes: [{ id: 'proposal', name: 'proposal_generator', status: 'SUCCESS', input: { stage: 'proposal' }, output: { artifacts: [{ kind: 'VIDEO_PROPOSAL', name: '创意方案', storageRef: 'cloud://proposal' }] } }] },
+  )
+  assert.equal(proposalArtifacts[0].storageRef, '本地项目目录（仅同步索引）')
+
+  const proposalReview = {
+    id: 'td39d3460d8-proposal_generator_review',
+    nodeId: 'td39d3460d8-proposal_generator_review',
+    status: 'PENDING',
+    tool: 'proposal_generator',
+    reviewPhase: 'after_artifact',
+    humanReview: { title: '审核创作方案' },
+    reviewContent: '# Proposal Packet\n\n推荐方案：option_a',
+  }
+  assert.equal(reviewDisplayTitle(proposalReview), '审核创作方案')
+  assert.equal(reviewOutputText(proposalReview), '# Proposal Packet\n\n推荐方案：option_a')
 
   assert.equal(
     formatDirectorErrorMessage(

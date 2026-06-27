@@ -418,6 +418,11 @@ export interface AgentReviewItem {
   reviewReason?: string
   blocksDownstream?: boolean
   reviewArtifactKinds?: string[]
+  artifactId?: string
+  sourceNodeId?: string
+  reviewContent?: string
+  reviewArtifacts?: Array<Record<string, unknown>>
+  reviewOutput?: Record<string, unknown>
 }
 
 export interface AgentReviewListResponse {

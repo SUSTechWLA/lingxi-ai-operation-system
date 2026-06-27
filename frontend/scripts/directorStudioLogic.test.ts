@@ -83,7 +83,7 @@ const artifacts = buildDirectorArtifacts(roleAgents, reviews, {
 
 assert.equal(artifacts.length, 2)
 assert.equal(artifacts[0].status, 'valid')
-assert.equal(artifacts[0].storageRef, 'cloud://proposal')
+assert.equal(artifacts[0].storageRef, '本地项目目录（仅同步索引）')
 assert.equal(artifacts[1].status, 'review')
 assert.equal(artifacts[1].humanApproved, false)
 

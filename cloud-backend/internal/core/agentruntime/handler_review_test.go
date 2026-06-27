@@ -124,6 +124,80 @@ func TestApproveReviewApprovesCurrentArtifactByStageAndKindWhenArtifactIDMissing
 	}
 }
 
+func TestListReviewsIncludesSourceNodeOutputForOnlineReview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{
+		{
+			ID:     "proposal_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeSuccess,
+			Output: map[string]interface{}{
+				"stdout": `{
+					"content":"# Proposal Packet\n\n推荐方案：option_a",
+					"artifacts":[{"kind":"JSON","name":"proposal_packet.json","unitId":"proposal_generator"}],
+					"proposalPacket":{"recommendedOptionId":"option_a"}
+				}`,
+			},
+		},
+		{
+			ID:     "proposal_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"sourceNode":   "proposal_exec",
+				"stepId":       "proposal_generator",
+				"tool":         "proposal_generator",
+				"reviewPhase":  "after_artifact",
+				"reviewReason": "确认创作方案后继续",
+			},
+		},
+	}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/reviews", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Reviews []Review `json:"reviews"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data.Reviews) != 1 {
+		t.Fatalf("expected one review, got %#v", resp.Data.Reviews)
+	}
+	review := resp.Data.Reviews[0]
+	if review.SourceNodeID != "proposal_exec" {
+		t.Fatalf("review should expose source node id, got %#v", review)
+	}
+	if review.ReviewContent != "# Proposal Packet\n\n推荐方案：option_a" {
+		t.Fatalf("review should expose source content, got %#v", review.ReviewContent)
+	}
+	if len(review.ReviewArtifacts) != 1 || review.ReviewArtifacts[0]["name"] != "proposal_packet.json" {
+		t.Fatalf("review should expose source artifacts, got %#v", review.ReviewArtifacts)
+	}
+	if review.ReviewOutput["proposalPacket"] == nil {
+		t.Fatalf("review should expose parsed review output, got %#v", review.ReviewOutput)
+	}
+}
+
 type memoryReviewNodeStore struct {
 	nodes []*model.Node
 }

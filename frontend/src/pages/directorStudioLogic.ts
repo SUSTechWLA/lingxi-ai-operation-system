@@ -271,7 +271,7 @@ export function buildDirectorArtifacts(
         owner: role.displayName || role.name,
         updatedAt: formatTime(node?.createdAt),
         humanApproved: artifact ? manifestHumanApproved ?? status === 'valid' : false,
-        storageRef: String(artifact?.storageRef || artifact?.url || (requiresManifest ? '' : storageHintForKind(output))),
+        storageRef: displayStorageRef(artifact?.storageRef || artifact?.url || (requiresManifest ? '' : storageHintForKind(output))),
         dependsOn: stringArrayValue(artifact?.dependsOn) || role.requiredInputs,
         metadata: objectValue(artifact?.metadata),
       }
@@ -525,6 +525,35 @@ function extractArtifacts(node: TraceNodeLike | undefined): Array<Record<string,
   return []
 }
 
+export function reviewDisplayTitle(review: AgentReviewItem | undefined): string {
+  if (!review) return '暂无待审核'
+  const title = stringValue(review.humanReview?.title)
+  if (title) return title
+  const labels: Record<string, string> = {
+    proposal_generator: '审核创作方案',
+    video_script_generator: '审核口播脚本',
+    shot_splitter: '审核分镜计划',
+    card_plan_generator: '审核卡片计划',
+    render_strategy_planner: '审核渲染策略',
+  }
+  if (review.tool && labels[review.tool]) return labels[review.tool]
+  if (review.reviewPhase === 'quality_gate') return '审核质量门禁'
+  return '审核阶段产物'
+}
+
+export function reviewOutputText(review: AgentReviewItem | undefined): string {
+  if (!review) return ''
+  const content = stringValue(review.reviewContent)
+  if (content) return content
+  const output = objectValue(review.reviewOutput)
+  if (!output) return ''
+  const summary = stringValue(output.summary)
+  if (summary) return summary
+  const packageValue = objectValue(output.package)
+  if (packageValue) return JSON.stringify(packageValue, null, 2)
+  return JSON.stringify(output, null, 2)
+}
+
 export function displayNameForArtifact(kind: string) {
   const labels: Record<string, string> = {
     VIDEO_PROPOSAL: '创意方案',
@@ -577,7 +606,15 @@ function downstreamKindsFor(changedKind: string): string[] {
 
 function storageHintForKind(kind: string) {
   if (kind === 'VIDEO' || kind === 'PROJECT_PACKAGE' || kind.includes('PREVIEW')) return '本地项目目录'
-  return '云端项目库'
+  return '本地项目目录（仅同步索引）'
+}
+
+function displayStorageRef(value: unknown): string {
+  const ref = stringValue(value)
+  if (!ref) return ''
+  if (ref.startsWith('local://')) return ref
+  if (ref.startsWith('cloud://')) return '本地项目目录（仅同步索引）'
+  return ref
 }
 
 function requiresMaterializedArtifact(kind: string) {

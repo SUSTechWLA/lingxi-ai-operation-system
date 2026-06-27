@@ -58,6 +58,8 @@ import {
   normalizeDirectorErrorMessage,
   publishCopiesToJSON,
   publishCopiesToMarkdown,
+  reviewDisplayTitle,
+  reviewOutputText,
   stageActionLabel,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
@@ -438,6 +440,8 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
 function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void }) {
   const primaryOutput = (review?.requiredOutputs || stage?.requiredOutputs || [])[0]
   const staleAfterChange = primaryOutput ? downstreamStaleArtifacts(primaryOutput) : []
+  const outputText = reviewOutputText(review)
+  const reviewArtifacts = review?.reviewArtifacts || []
 
   return (
     <div className="grid grid-cols-12 gap-5">
@@ -453,14 +457,21 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
           <div className="mt-6 grid grid-cols-12 gap-5">
             <div className="col-span-8 rounded-lg bg-white p-6 ring-1 ring-line">
               <div className="mb-5 flex items-center justify-between">
-                <h3 className="text-lg font-black text-ink">{review.reviewPhase || stage?.stage || review.tool}</h3>
-                <span className="text-xs font-bold text-ink-soft">{review.id}</span>
+                <h3 className="text-lg font-black text-ink">{reviewDisplayTitle(review)}</h3>
+                <span className="text-xs font-bold text-ink-soft">节点编号：{review.id}</span>
               </div>
               <div className="space-y-4">
                 <ReviewField label="工具" value={review.tool || '-'} />
                 <ReviewField label="审核原因" value={review.reviewReason || '等待人工确认后放行下游阶段。'} />
-                <ReviewField label="输出产物" value={(review.requiredOutputs || review.reviewArtifactKinds || []).join(' / ') || '-'} />
+                <ReviewField label="输出产物" value={reviewArtifacts.map((artifact) => String(artifact.name || artifact.kind || artifact.unitId || '产物')).join(' / ') || (review.requiredOutputs || review.reviewArtifactKinds || []).join(' / ') || '-'} />
                 <ReviewField label="阻塞下游" value={review.blocksDownstream === false ? '否' : '是'} />
+              </div>
+              <div className="mt-5 rounded-lg bg-background-card p-4 ring-1 ring-line">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-black text-ink">待审核内容</span>
+                  {outputText ? <CopyButton value={outputText} label="复制" /> : null}
+                </div>
+                <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-sm leading-6 text-ink-muted">{outputText || '当前审核节点尚未返回可展示内容，请等待上游执行完成或重新生成。'}</pre>
               </div>
             </div>
             <div className="col-span-4 space-y-4">
@@ -564,7 +575,7 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
           <div key={role.id} className="card p-5">
             <div className="flex items-start justify-between"><div className="flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-lg tangying-gradient text-white"><FiUserCheck /></div><div><h3 className="font-black text-ink">{role.displayName}</h3><p className="text-xs text-ink-soft">{role.name}</p></div></div><StatusBadge status={role.status} /></div>
             <p className="mt-4 min-h-12 text-sm leading-6 text-ink-muted">{role.goal}</p>
-            <div className="mt-4"><b className="text-xs text-ink-soft">允许工具</b><div className="mt-2 flex flex-wrap gap-2">{role.allowedTools.map((tool) => <span key={tool} className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-bold text-primary-dark">{tool}</span>)}</div></div>
+            <div className="mt-4"><b className="text-xs text-ink-soft">允许工具</b><div className="mt-2 flex flex-col gap-2">{role.allowedTools.map((tool) => <span key={tool} className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-bold text-primary-dark">{tool}</span>)}</div></div>
             <div className="mt-4 flex items-center gap-2 text-xs text-ink-muted"><FiLock /> 输出：{role.requiredOutputs.join(' / ') || '-'}</div>
           </div>
         ))}
@@ -643,9 +654,30 @@ function ExportPage({ artifacts, topic, durationSec }: { artifacts: DirectorArti
 }
 
 function ArtifactTable({ artifacts, compact = false }: { artifacts: DirectorArtifactRecord[]; compact?: boolean }) {
+  const headers = ['ID', '名称', '类型', '状态', '负责人', '操作']
   return (
     <section className={clsx('card overflow-hidden p-0', compact && 'mt-6')}>
-      <table className="w-full text-left text-sm"><thead className="bg-background-mist text-xs text-ink-soft"><tr>{['ID', '名称', '类型', '版本', '状态', '负责人', '已审核', '存储位置', '操作'].map((header) => <th className="px-5 py-4" key={header}>{header}</th>)}</tr></thead><tbody className="divide-y divide-line bg-white/70">{artifacts.map((artifact) => <tr key={artifact.id}><td className="px-5 py-4 font-bold">{artifact.id}</td><td className="px-5 py-4 font-black text-ink">{artifact.name}</td><td className="px-5 py-4 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td><td className="px-5 py-4">{artifact.version}</td><td className="px-5 py-4"><StatusBadge status={artifact.status} /></td><td className="px-5 py-4 text-ink-muted">{artifact.owner}</td><td className="px-5 py-4">{artifact.humanApproved ? '是' : '否'}</td><td className="max-w-64 truncate px-5 py-4 text-xs text-ink-soft">{artifact.storageRef || '-'}</td><td className="px-5 py-4"><CopyButton value={artifactToCopyText(artifact)} label="复制" /></td></tr>)}</tbody></table>
+      <table className="w-full text-left text-sm">
+        <thead className="bg-background-mist text-xs text-ink-soft">
+          <tr>
+            {headers.map((h) => (
+              <th className="whitespace-nowrap px-4 py-3" key={h}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line bg-white/70">
+          {artifacts.map((artifact) => (
+            <tr key={artifact.id}>
+              <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
+              <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">{artifact.name}</td>
+              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td>
+              <td className="whitespace-nowrap px-4 py-3"><StatusBadge status={artifact.status} /></td>
+              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{artifact.owner}</td>
+              <td className="whitespace-nowrap px-4 py-3"><CopyButton value={artifactToCopyText(artifact)} label="复制" /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   )
 }

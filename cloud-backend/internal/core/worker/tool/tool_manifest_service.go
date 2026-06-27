@@ -178,7 +178,6 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 	capabilities, _ := json.Marshal(m.Capabilities)
 	tags, _ := json.Marshal(m.Tags)
 	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
-	artifactPolicy, _ := json.Marshal(m.ArtifactPolicy)
 	localRequirements, _ := json.Marshal(m.LocalRequirements)
 	providerCapabilities, _ := json.Marshal(m.ProviderCapabilities)
 	nextRecommendedTools, _ := json.Marshal(m.NextRecommendedTools)
@@ -203,8 +202,16 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 	}
 	artifactLocation := m.ArtifactLocation
 	if artifactLocation == "" {
-		artifactLocation = ArtifactLocationCloud
+		artifactLocation = ArtifactLocationLocal
 	}
+	artifactPolicyValue := m.ArtifactPolicy
+	if artifactPolicyValue.Storage == "" {
+		artifactPolicyValue.Storage = artifactLocation
+	}
+	if artifactPolicyValue.Storage == ArtifactLocationLocal {
+		artifactPolicyValue.SyncFileToCloud = false
+	}
+	artifactPolicy, _ := json.Marshal(artifactPolicyValue)
 
 	return &model.ToolManifestRecord{
 		Name:                 m.Name,

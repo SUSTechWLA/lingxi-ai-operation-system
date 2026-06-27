@@ -90,3 +90,29 @@ func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
 		t.Fatalf("approval policy not preserved: %#v", approval)
 	}
 }
+
+func TestManifestToRecordDefaultsArtifactLocationToLocalOnly(t *testing.T) {
+	record := manifestToRecord(&ToolManifest{
+		Name:        "proposal_generator",
+		Description: "Generate a proposal",
+		Type:        "builtin_prompt_tool",
+		ArtifactPolicy: ArtifactPolicy{
+			ProduceArtifact: true,
+			ArtifactKinds:   []string{"VIDEO_PROPOSAL"},
+		},
+	})
+
+	if record.ArtifactLocation != ArtifactLocationLocal {
+		t.Fatalf("artifact location default = %q, want %q", record.ArtifactLocation, ArtifactLocationLocal)
+	}
+	var policy ArtifactPolicy
+	if err := json.Unmarshal(record.ArtifactPolicy, &policy); err != nil {
+		t.Fatalf("artifact policy not valid JSON: %v", err)
+	}
+	if policy.Storage != ArtifactLocationLocal {
+		t.Fatalf("artifact policy storage = %q, want %q", policy.Storage, ArtifactLocationLocal)
+	}
+	if policy.SyncFileToCloud {
+		t.Fatalf("local-only artifact policy must not sync files to cloud: %#v", policy)
+	}
+}
