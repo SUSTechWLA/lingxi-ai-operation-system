@@ -26,7 +26,10 @@ try {
     publishCopiesToJSON,
     publishCopiesToMarkdown,
     reviewDisplayTitle,
+    reviewQualityReportLines,
+    reviewStatusLabel,
     reviewOutputText,
+    visibleReviewHistory,
   } = await import(pathToFileURL(outfile))
   const roleAgents = [
     {
@@ -103,11 +106,28 @@ try {
     status: 'PENDING',
     tool: 'video_script_generator',
     reviewPhase: 'quality_gate',
+    reviewReason: '质量门禁：script_quality_checker 评分需 >=85',
     reviewContent: '佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。',
     reviewOutput: { qualityReport: { score: 82, issues: ['事实来源需要更明确'] } },
   }
   assert.equal(reviewDisplayTitle(qualityGateReview), '审核口播脚本')
   assert.equal(reviewOutputText(qualityGateReview), '佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。')
+  assert.deepEqual(reviewQualityReportLines(qualityGateReview), [
+    '质量评分 82/100，门禁阈值 85',
+    '事实来源需要更明确',
+  ])
+
+  const noisyJsonReview = {
+    id: 'knowledge-review',
+    nodeId: 'knowledge-review',
+    status: 'PENDING',
+    tool: 'knowledge_researcher',
+    reviewContent: '我们被要求输出一个JSON，先分析。\n{"facts":["佛得角是西非岛国"],"summary":"佛得角首次晋级世界杯。"}\n以上是最终结果。',
+  }
+  assert.equal(
+    reviewOutputText(noisyJsonReview),
+    '{\n  "facts": [\n    "佛得角是西非岛国"\n  ],\n  "summary": "佛得角首次晋级世界杯。"\n}',
+  )
 
   const legacyQualityGateReview = {
     id: 'legacy_quality_gate',
@@ -117,6 +137,17 @@ try {
     reviewPhase: 'quality_gate',
   }
   assert.equal(reviewDisplayTitle(legacyQualityGateReview), '审核创作产物')
+
+  const visibleReviews = visibleReviewHistory([
+    { id: 'future-storyboard', nodeId: 'future-storyboard', status: 'CREATED', tool: 'card_plan_generator' },
+    { id: 'proposal-review', nodeId: 'proposal-review', status: 'APPROVED', tool: 'proposal_generator' },
+    { id: 'script-review', nodeId: 'script-review', status: 'PENDING', tool: 'video_script_generator' },
+    { id: 'rejected-review', nodeId: 'rejected-review', status: 'REJECTED', tool: 'card_plan_generator' },
+  ])
+  assert.deepEqual(visibleReviews.map((review) => review.id), ['proposal-review', 'script-review', 'rejected-review'])
+  assert.equal(reviewStatusLabel(visibleReviews[0]), '已通过')
+  assert.equal(reviewStatusLabel(visibleReviews[1]), '待审核')
+  assert.equal(reviewStatusLabel(visibleReviews[2]), '已驳回')
 
   assert.equal(
     formatDirectorErrorMessage(

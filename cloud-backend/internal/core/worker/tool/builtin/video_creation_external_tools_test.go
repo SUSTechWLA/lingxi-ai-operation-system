@@ -1,8 +1,10 @@
 package builtin
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
@@ -115,6 +117,35 @@ func TestVideoScriptGeneratorConsumesKnowledgeContextWithoutModelFallback(t *tes
 	trace, ok := result.Data["knowledgeTrace"].(map[string]interface{})
 	if !ok || trace["hasKnowledgeContext"] != true || trace["knowledgeItemCount"] != 1 {
 		t.Fatalf("expected knowledgeTrace to describe consumed context: %#v", result.Data["knowledgeTrace"])
+	}
+}
+
+func TestNormalizeStructuredToolContentUsesCanonicalJSON(t *testing.T) {
+	raw := `我们被要求输出一个JSON，先分析事实。
+
+{
+  "facts": ["佛得角是西非岛国"],
+  "timeline": [{"date": "2025-10-13", "event": "首次晋级世界杯"}],
+  "storyAngles": ["小国奇迹"],
+  "risks": ["赔率数据需谨慎"],
+  "sourceNotes": ["ESPN"],
+  "summary": "佛得角首次晋级世界杯。"
+}
+
+以上是最终结果。`
+
+	content, pkg, ok := normalizeStructuredToolContent("knowledge_researcher", raw)
+	if !ok {
+		t.Fatalf("expected structured content to parse")
+	}
+	if strings.Contains(content, "先分析事实") || strings.Contains(content, "以上是最终结果") {
+		t.Fatalf("content should strip model reasoning, got %q", content)
+	}
+	if !json.Valid([]byte(content)) {
+		t.Fatalf("content should be canonical JSON, got %q", content)
+	}
+	if pkg["summary"] != "佛得角首次晋级世界杯。" {
+		t.Fatalf("expected parsed package, got %#v", pkg)
 	}
 }
 

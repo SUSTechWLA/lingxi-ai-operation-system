@@ -198,6 +198,79 @@ func TestListReviewsIncludesSourceNodeOutputForOnlineReview(t *testing.T) {
 	}
 }
 
+func TestListReviewsOmitsUnreachedReviewGates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{
+		{
+			ID:     "proposal_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeSuccess,
+			Input: map[string]interface{}{
+				"stepId":      "proposal_generator",
+				"tool":        "proposal_generator",
+				"reviewPhase": "after_artifact",
+			},
+		},
+		{
+			ID:     "script_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"stepId":      "video_script_generator",
+				"tool":        "video_script_generator",
+				"reviewPhase": "after_artifact",
+			},
+		},
+		{
+			ID:     "storyboard_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeCreated,
+			Input: map[string]interface{}{
+				"stepId":      "card_plan_generator",
+				"tool":        "card_plan_generator",
+				"reviewPhase": "after_artifact",
+			},
+		},
+	}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/reviews", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Reviews []Review `json:"reviews"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data.Reviews) != 2 {
+		t.Fatalf("expected reached reviews only, got %#v", resp.Data.Reviews)
+	}
+	for _, review := range resp.Data.Reviews {
+		if review.ID == "storyboard_review" || review.Status == string(model.NodeCreated) {
+			t.Fatalf("unreached review gate should not be visible, got %#v", resp.Data.Reviews)
+		}
+	}
+}
+
 func TestListReviewsQualityGateShowsProductionOutputWithQualityReport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

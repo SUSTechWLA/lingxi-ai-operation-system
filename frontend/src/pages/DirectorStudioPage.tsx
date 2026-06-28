@@ -59,8 +59,11 @@ import {
   publishCopiesToJSON,
   publishCopiesToMarkdown,
   reviewDisplayTitle,
+  reviewQualityReportLines,
   reviewOutputText,
+  reviewStatusLabel,
   stageActionLabel,
+  visibleReviewHistory,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
   type DirectorErrorDetail,
@@ -101,7 +104,7 @@ const fallbackRoles: VideoRoleAgent[] = [
 
 export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Props) {
   const [activeNav, setActiveNav] = useState<DirectorNavKey>('overview')
-  const [topic, setTopic] = useState('请帮我做一个45秒视频，讲智能体改变的是工作流')
+  const [topic, setTopic] = useState('')
   const [durationSec, setDurationSec] = useState(45)
   const [roleAgents, setRoleAgents] = useState<VideoRoleAgent[]>(fallbackRoles)
   const [run, setRun] = useState<AgentRun | null>(null)
@@ -245,6 +248,8 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               loading={loading}
               onFeedbackChange={setFeedback}
               onAction={actOnReview}
+              allReviews={reviews || []}
+              stages={stages}
             />
           )}
           {activeNav === 'trace' && <TracePage traceNodes={traceNodes} artifacts={artifacts} run={run} />}
@@ -353,39 +358,38 @@ function OverviewPage(props: {
     <div className="space-y-5">
       <div className="grid grid-cols-12 gap-5">
         <section className="card col-span-8 p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-sm font-bold text-primary-dark">项目总览 / 启动</p>
-              <h2 className="mt-2 text-3xl font-black text-ink">智能体改变的是工作流</h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-ink-muted">一句话启动中文 16:9 图文视频，分阶段确认创意方案、脚本、卡片、结构、预览、渲染和交付包。</p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary-dark"><FiZap /></div>
+              <div>
+                <p className="text-sm font-bold text-primary-dark">创建新项目</p>
+                <p className="text-xs text-ink-soft">一句话描述你想做的视频，AI 会自动规划执行流程</p>
+              </div>
             </div>
             <StatusBadge status={stages.some((stage) => stage.status === 'running' || stage.status === 'review') ? 'active' : 'pending'} />
           </div>
-          <div className="mt-6 rounded-lg bg-background-mist p-4 ring-1 ring-line">
-            <label className="text-sm font-black text-ink">一句话需求</label>
-            <textarea
-              className="mt-3 h-24 w-full resize-none rounded-lg border border-line bg-white p-3 text-sm text-ink outline-none focus:border-primary"
-              value={topic}
-              onChange={(event) => onTopicChange(event.target.value)}
-              placeholder="例如：做一个 45 秒图文视频，讲 AI Agent 为什么改变的是工作流"
-            />
-            <div className="mt-3 flex items-center gap-3">
-              <select className="rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink" value={durationSec} onChange={(event) => onDurationChange(Number(event.target.value))}>
-                {[30, 45, 60, 90, 120].map((duration) => <option key={duration} value={duration}>{duration} 秒</option>)}
-              </select>
-              <button disabled={!canStart || !topic.trim()} onClick={onStart} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-50">
-                <FiPlay /> {loading ? '启动中...' : '开始项目'}
-              </button>
-              {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : null}
-            </div>
+          <textarea
+            className="mt-5 h-36 w-full resize-none rounded-xl border-2 border-line bg-white p-5 text-base leading-7 text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-primary focus:shadow-glow"
+            value={topic}
+            onChange={(event) => onTopicChange(event.target.value)}
+            placeholder="输入你想制作的视频主题..."
+          />
+          <div className="mt-4 flex items-center gap-3">
+            <select className="rounded-lg border border-line bg-white px-4 py-2.5 text-sm text-ink" value={durationSec} onChange={(event) => onDurationChange(Number(event.target.value))}>
+              {[30, 45, 60, 90, 120].map((duration) => <option key={duration} value={duration}>{duration} 秒</option>)}
+            </select>
+            <button disabled={!canStart || !topic.trim()} onClick={onStart} className="flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-bold text-white shadow-glow transition hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50">
+              <FiPlay /> {loading ? '启动中...' : '开始项目'}
+            </button>
+            {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : null}
           </div>
         </section>
         <section className="card col-span-4 p-6">
-          <p className="text-sm font-bold text-primary-dark">下一步动作</p>
-          <h3 className="mt-2 text-xl font-black text-ink">{nextAction?.label || '启动新项目'}</h3>
+          <p className="text-sm font-bold text-primary-dark">项目状态</p>
+          <h3 className="mt-2 text-xl font-black text-ink">{nextAction?.label || '准备开始'}</h3>
           <p className="mt-3 text-sm leading-6 text-ink-muted">{nextAction?.description || '输入需求后开始动态 Agent 创作线。'}</p>
-          <button onClick={onGoReview} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-black text-white shadow-glow">
-            进入审核工作台 <FiChevronRight />
+          <button onClick={onGoReview} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-black text-white shadow-glow transition hover:bg-primary-dark">
+            {stages.some((stage) => stage.status === 'review') ? '前往审核' : '查看工作台'} <FiChevronRight />
           </button>
         </section>
       </div>
@@ -437,67 +441,169 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
   )
 }
 
-function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void }) {
-  const primaryOutput = (review?.requiredOutputs || stage?.requiredOutputs || [])[0]
+function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction, allReviews, stages }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void; allReviews: AgentReviewItem[]; stages: DirectorStage[] }) {
+  const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>(review?.id)
+  const reviewHistory = useMemo(() => visibleReviewHistory(allReviews), [allReviews])
+  const selectedReview = reviewHistory.find((item) => item.id === selectedReviewId) || review || reviewHistory[0]
+  const selectedStage = useMemo(() => {
+    if (!selectedReview) return stage
+    return stages.find((item) =>
+      item.reviewId === selectedReview.id ||
+      item.id === selectedReview.roleAgentId ||
+      item.stage === selectedReview.stage ||
+      Boolean(selectedReview.tool && item.allowedTools.includes(selectedReview.tool)),
+    ) || stage
+  }, [selectedReview, stage, stages])
+  const primaryOutput = (selectedReview?.requiredOutputs || selectedStage?.requiredOutputs || [])[0]
   const staleAfterChange = primaryOutput ? downstreamStaleArtifacts(primaryOutput) : []
-  const outputText = reviewOutputText(review)
-  const reviewArtifacts = review?.reviewArtifacts || []
+  const outputText = reviewOutputText(selectedReview)
+  const reviewArtifacts = selectedReview?.reviewArtifacts || []
+  const qualityLines = reviewQualityReportLines(selectedReview)
+
+  const isPending = selectedReview?.status === 'PENDING'
+
+  useEffect(() => {
+    if (review?.id && (selectedReviewId === undefined || !reviewHistory.some((item) => item.id === selectedReviewId))) {
+      setSelectedReviewId(review.id)
+      return
+    }
+    if (!review?.id && reviewHistory.length && !reviewHistory.some((item) => item.id === selectedReviewId)) {
+      setSelectedReviewId(reviewHistory[0].id)
+    }
+  }, [review?.id, reviewHistory, selectedReviewId])
 
   return (
     <div className="grid grid-cols-12 gap-5">
-      <section className="card col-span-8 p-6">
-        <div className="flex items-center justify-between border-b border-line pb-5">
-          <div>
-            <p className="text-sm font-bold text-primary-dark">审核工作台</p>
-            <h2 className="mt-2 text-2xl font-black text-ink">当前角色：{stage?.displayName || '暂无待审核'}</h2>
+      <section className="card col-span-4 overflow-hidden p-0 xl:col-span-3">
+        <div className="border-b border-line bg-white/65 px-5 py-4">
+          <p className="text-xs font-black text-primary-dark">审核台账</p>
+          <div className="mt-1 flex items-end justify-between gap-3">
+            <h3 className="text-lg font-black text-ink">审核记录</h3>
+            <span className="text-xs font-bold text-ink-soft">{reviewHistory.length} 条</span>
           </div>
-          <div className="flex items-center gap-2"><StatusBadge status={review ? 'review' : 'done'} label={review ? '待审核' : '暂无阻塞'} /></div>
         </div>
-        {review ? (
-          <div className="mt-6 grid grid-cols-12 gap-5">
-            <div className="col-span-8 rounded-lg bg-white p-6 ring-1 ring-line">
-              <div className="mb-5">
-                <h3 className="truncate text-lg font-black text-ink">{reviewDisplayTitle(review)}</h3>
-                <span className="mt-1 block whitespace-nowrap text-xs font-bold text-ink-soft">节点编号：{review.id}</span>
-              </div>
-              <div className="space-y-4">
-                <ReviewField label="工具" value={review.tool || '-'} />
-                <ReviewField label="审核原因" value={review.reviewReason || '等待人工确认后放行下游阶段。'} />
-                <ReviewField label="输出产物" value={reviewArtifacts.map((artifact) => String(artifact.name || artifact.kind || artifact.unitId || '产物')).join(' / ') || (review.requiredOutputs || review.reviewArtifactKinds || []).join(' / ') || '-'} />
-                <ReviewField label="阻塞下游" value={review.blocksDownstream === false ? '否' : '是'} />
-              </div>
-              <div className="mt-5 rounded-lg bg-background-card p-4 ring-1 ring-line">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm font-black text-ink">待审核内容</span>
-                  {outputText ? <CopyButton value={outputText} label="复制" /> : null}
+        <div className="max-h-[calc(100vh-250px)] overflow-auto p-3">
+          {reviewHistory.length ? reviewHistory.map((item, index) => {
+            const active = selectedReview?.id === item.id
+            const pending = item.status === 'PENDING'
+            const rejected = item.status === 'REJECTED'
+            return (
+              <button
+                key={item.id}
+                onClick={() => setSelectedReviewId(item.id)}
+                className={clsx(
+                  'group relative w-full rounded-lg px-3 py-3 text-left transition',
+                  active ? 'bg-white shadow-card ring-1 ring-primary/40' : 'hover:bg-white/70',
+                )}
+              >
+                <span className={clsx(
+                  'absolute left-0 top-3 h-[calc(100%-24px)] w-1 rounded-r-full',
+                  pending ? 'bg-primary' : rejected ? 'bg-red-500' : 'bg-green-500',
+                )} />
+                <div className="flex items-center justify-between gap-3 pl-2">
+                  <span className="text-[11px] font-black text-ink-soft">{String(index + 1).padStart(2, '0')}</span>
+                  <span className={clsx(
+                    'rounded-full px-2 py-0.5 text-[11px] font-black ring-1',
+                    pending ? 'bg-amber-50 text-primary-dark ring-amber-200' : rejected ? 'bg-red-50 text-red-700 ring-red-200' : 'bg-green-50 text-green-700 ring-green-200',
+                  )}>{reviewStatusLabel(item)}</span>
                 </div>
-                <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-sm leading-6 text-ink-muted">{outputText || '当前审核节点尚未返回可展示内容，请等待上游执行完成或重新生成。'}</pre>
+                <div className="mt-2 truncate pl-2 text-sm font-black text-ink" title={reviewDisplayTitle(item)}>{reviewDisplayTitle(item)}</div>
+                <div className="mt-1 truncate pl-2 text-[11px] font-semibold text-ink-soft" title={item.id}>{item.stage || item.tool || item.id}</div>
+              </button>
+            )
+          }) : (
+            <div className="rounded-lg bg-background-card p-4 text-sm leading-6 text-ink-muted ring-1 ring-line">
+              当前项目还没有可回看的审核记录。阶段产出进入人工确认后会显示在这里。
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="card col-span-8 overflow-hidden p-0 xl:col-span-9">
+        {selectedReview ? (
+          <>
+            <div className="border-b border-line bg-white/70 px-6 py-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-primary-dark">审阅区</p>
+                  <h2 className="mt-2 truncate text-2xl font-black text-ink">{reviewDisplayTitle(selectedReview)}</h2>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-ink-soft">
+                    <span className="max-w-full rounded-full bg-background-card px-2.5 py-1 ring-1 ring-line [overflow-wrap:anywhere]">{selectedReview.stage || '未标记阶段'}</span>
+                    <span className="max-w-full rounded-full bg-background-card px-2.5 py-1 ring-1 ring-line [overflow-wrap:anywhere]">{selectedReview.tool || '未标记工具'}</span>
+                    <span className="max-w-md rounded-full bg-background-card px-2.5 py-1 ring-1 ring-line [overflow-wrap:anywhere]" title={selectedReview.id}>{selectedReview.id}</span>
+                  </div>
+                </div>
+                <StatusBadge
+                  status={selectedReview.status === 'PENDING' ? 'review' : selectedReview.status === 'REJECTED' ? 'blocked' : 'done'}
+                  label={reviewStatusLabel(selectedReview)}
+                />
               </div>
             </div>
-            <div className="col-span-4 space-y-4">
-              <Panel title="审核重点" items={stage?.reviewFocus.length ? stage.reviewFocus : ['产物是否符合创作目标', '是否允许进入下游阶段']} />
-              <Panel title="输入产物" items={review.requiredInputs || stage?.requiredInputs || []} />
-              <Panel title="输出产物" items={review.requiredOutputs || stage?.requiredOutputs || []} />
-              <Panel title="修改后需重做" items={staleAfterChange} />
+            <div className="grid grid-cols-12 gap-5 p-6">
+              <div className="col-span-8 min-w-0">
+                <div className="grid grid-cols-3 gap-3">
+                  <ReviewField label="工具" value={selectedReview.tool || '-'} />
+                  <ReviewField label="阻塞下游" value={selectedReview.blocksDownstream === false ? '否' : '是'} />
+                  <ReviewField label="输出产物" value={reviewArtifacts.map((a) => String(a.name || a.kind || a.unitId || '产物')).join(' / ') || (selectedReview.requiredOutputs || []).join(' / ') || '-'} />
+                </div>
+                <div className="mt-4 rounded-lg bg-white p-5 ring-1 ring-line">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <span className="text-sm font-black text-ink">审核内容</span>
+                      <p className="mt-1 text-xs text-ink-soft">保留原始产物文本，方便回看和复制。</p>
+                    </div>
+                    {outputText ? <CopyButton value={outputText} label="复制" /> : null}
+                  </div>
+                  <div className="mt-4 max-h-[520px] overflow-auto rounded-lg bg-background-card p-5 ring-1 ring-line">
+                    {outputText ? <ReviewContent text={outputText} /> : <p className="text-sm text-ink-muted">当前审核记录没有可展示正文。</p>}
+                  </div>
+                </div>
+              </div>
+              <div className="col-span-4 space-y-3">
+                <Panel title="审核原因" items={[selectedReview.reviewReason || '等待人工确认后放行下游阶段。']} />
+                {qualityLines.length > 0 && <Panel title="质量门禁" items={qualityLines} />}
+                <Panel title="审核重点" items={selectedStage?.reviewFocus?.length ? selectedStage.reviewFocus : ['产物是否符合创作目标', '是否允许进入下游阶段']} />
+                <Panel title="输入产物" items={selectedReview.requiredInputs || selectedStage?.requiredInputs || []} />
+                <Panel title="输出产物" items={selectedReview.requiredOutputs || selectedStage?.requiredOutputs || []} />
+                {staleAfterChange.length > 0 && <Panel title="修改后需重做" items={staleAfterChange} />}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="grid min-h-[460px] place-items-center p-6 text-center">
+            <div>
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-background-card text-primary-dark ring-1 ring-line"><FiShield /></div>
+              <h3 className="mt-4 text-lg font-black text-ink">暂无待回看的审核内容</h3>
+              <p className="mt-2 text-sm text-ink-muted">启动项目后，当前待审和已审核产物会按阶段沉淀在左侧记录里。</p>
             </div>
           </div>
-        ) : (
-          <div className="mt-6 rounded-lg bg-background-card p-6 text-sm leading-7 text-ink-muted ring-1 ring-line">当前没有待审核节点。启动项目或等待当前阶段完成后，这里会显示需要你确认的产物。</div>
         )}
       </section>
-      <aside className="col-span-4 space-y-5">
-        <section className="card p-6">
-          <h3 className="text-lg font-black text-ink">决策操作</h3>
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <ActionButton color="green" icon={<FiCheck />} label="通过" disabled={!review || loading} onClick={() => onAction('approve')} />
-            <ActionButton color="red" icon={<FiX />} label="驳回" disabled={!review || loading} onClick={() => onAction('reject')} />
-            <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" disabled={!review || loading} onClick={() => onAction('edit')} />
-            <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" disabled={!review || loading} onClick={() => onAction('regenerate')} />
-          </div>
-          <label className="mt-5 block text-sm font-black text-ink">反馈意见</label>
-          <textarea value={feedback} onChange={(event) => onFeedbackChange(event.target.value)} placeholder="请输入审核意见或修改建议，供下个角色优化..." className="mt-3 h-36 w-full resize-none rounded-lg border border-line bg-white p-4 text-sm outline-none focus:border-primary" />
-        </section>
-      </aside>
+
+      {isPending && (
+        <aside className="col-span-12">
+          <section className="card border-primary/30 bg-white/90 p-6">
+            <div className="flex items-start gap-6">
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <FiShield className="text-primary" />
+                  <h3 className="text-lg font-black text-ink">决策操作</h3>
+                </div>
+                <div className="mt-4 grid grid-cols-4 gap-3">
+                  <ActionButton color="green" icon={<FiCheck />} label="通过" disabled={loading} onClick={() => onAction('approve')} />
+                  <ActionButton color="red" icon={<FiX />} label="驳回" disabled={loading} onClick={() => onAction('reject')} />
+                  <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" disabled={loading} onClick={() => onAction('edit')} />
+                  <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" disabled={loading} onClick={() => onAction('regenerate')} />
+                </div>
+              </div>
+              <div className="w-80">
+                <label className="block text-sm font-black text-ink">反馈意见</label>
+                <textarea value={feedback} onChange={(event) => onFeedbackChange(event.target.value)} placeholder="请输入审核意见或修改建议..." className="mt-2 h-24 w-full resize-none rounded-lg border border-line bg-white p-3 text-sm outline-none focus:border-primary" />
+              </div>
+            </div>
+          </section>
+        </aside>
+      )}
     </div>
   )
 }
@@ -549,13 +655,13 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
       </section>
       <aside className="col-span-4 space-y-5">
         <section className="card p-6">
-          <div className="flex items-center gap-3">
-            <div className={clsx('rounded-lg p-3', hasError(selected) ? 'bg-red-50 text-red-600' : 'bg-primary-soft text-primary-dark')}>
-              {hasError(selected) ? <FiShield /> : <FiActivity />}
-            </div>
-            <div>
+            <div className="flex min-w-0 items-center gap-3">
+              <div className={clsx('rounded-lg p-3', hasError(selected) ? 'bg-red-50 text-red-600' : 'bg-primary-soft text-primary-dark')}>
+                {hasError(selected) ? <FiShield /> : <FiActivity />}
+              </div>
+            <div className="min-w-0">
               <p className="text-sm text-ink-soft">节点详情</p>
-              <h3 className="text-lg font-black text-ink">{selected?.tool || '-'}</h3>
+              <h3 className="text-lg font-black text-ink [overflow-wrap:anywhere]">{selected?.tool || '-'}</h3>
             </div>
           </div>
           <div className="mt-5 space-y-2 text-sm">
@@ -813,11 +919,11 @@ function InfoCard({ icon, title, value, desc, tone }: { icon: React.ReactNode; t
 }
 
 function Panel({ title, items }: { title: string; items: string[] }) {
-  return <div className="rounded-lg bg-background-card p-4 ring-1 ring-line"><b className="text-sm text-ink">{title}</b><ul className="mt-3 space-y-2 text-xs text-ink-muted">{(items.length ? items : ['-']).map((item) => <li key={item}>{item}</li>)}</ul></div>
+  return <div className="min-w-0 rounded-lg bg-background-card p-4 ring-1 ring-line"><b className="text-sm text-ink">{title}</b><ul className="mt-3 space-y-2 text-xs text-ink-muted">{(items.length ? items : ['-']).map((item) => <li key={item} className="[overflow-wrap:anywhere]">{item}</li>)}</ul></div>
 }
 
 function ReviewField({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-lg bg-background-card p-4 ring-1 ring-line"><span className="text-xs font-black text-primary-dark">{label}</span><p className="mt-2 text-sm leading-7 text-ink-muted">{value}</p></div>
+  return <div className="min-w-0 rounded-lg bg-background-card p-4 ring-1 ring-line"><span className="text-xs font-black text-primary-dark">{label}</span><p className="mt-2 text-sm leading-7 text-ink-muted [overflow-wrap:anywhere]">{value}</p></div>
 }
 
 function ActionButton({ color, icon, label, disabled, onClick }: { color: 'green' | 'red' | 'amber' | 'violet'; icon: React.ReactNode; label: string; disabled: boolean; onClick: () => void }) {
@@ -827,9 +933,9 @@ function ActionButton({ color, icon, label, disabled, onClick }: { color: 'green
 
 function DebugField({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="rounded-lg bg-background-card px-4 py-2.5 ring-1 ring-line">
+    <div className="min-w-0 rounded-lg bg-background-card px-4 py-2.5 ring-1 ring-line">
       <div className="text-[11px] font-bold text-primary-dark">{label}</div>
-      <div className={clsx('mt-1 text-xs text-ink-muted break-all', mono && 'font-mono')}>{value}</div>
+      <div className={clsx('mt-1 whitespace-pre-wrap text-xs text-ink-muted [overflow-wrap:anywhere]', mono && 'font-mono')}>{value}</div>
     </div>
   )
 }
@@ -840,6 +946,49 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 
 function EmptyState({ text }: { text: string }) {
   return <div className="col-span-full rounded-lg bg-white/70 p-6 text-sm text-ink-muted ring-1 ring-line">{text}</div>
+}
+
+// ReviewContent renders review text with auto-detection of JSON and Markdown.
+function ReviewContent({ text }: { text: string }) {
+  // Try to detect and pretty-format JSON
+  const trimmed = text.trim()
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      return <pre className="whitespace-pre-wrap text-xs leading-6 text-ink-muted font-mono bg-white rounded-lg p-4 ring-1 ring-line [overflow-wrap:anywhere]">{JSON.stringify(parsed, null, 2)}</pre>
+    } catch { /* not valid JSON, fall through */ }
+  }
+
+  // Render markdown-like content
+  return <div className="text-sm leading-7 text-ink [overflow-wrap:anywhere]" dangerouslySetInnerHTML={{ __html: simpleMarkdown(text) }} />
+}
+
+// simpleMarkdown converts basic markdown to HTML.
+function simpleMarkdown(text: string): string {
+  let html = text
+    // Escape HTML
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // Headers
+    .replace(/^### (.+)$/gm, '<h4 class="font-bold text-ink mt-3 mb-1">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 class="font-bold text-lg text-ink mt-4 mb-2">$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2 class="font-black text-xl text-ink mt-5 mb-2">$1</h2>')
+    // Bold and italic
+    .replace(/\*\*(.+?)\*\*/g, '<strong class="font-bold">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code class="bg-amber-50 text-amber-800 px-1 rounded text-xs">$1</code>')
+    // Lists
+    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
+    .replace(/^(\d+)\. (.+)$/gm, '<li class="ml-4 list-decimal">$1</li>')
+    // Line breaks
+    .replace(/\n\n/g, '</p><p class="mt-2">')
+    .replace(/\n/g, '<br/>')
+    // Horizontal rules
+    .replace(/^---$/gm, '<hr class="my-3 border-line"/>')
+    // Email/URL auto-link
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="text-primary underline" target="_blank">$1</a>')
+
+  return '<p class="mt-2">' + html + '</p>'
 }
 
 function stageIcon(status: DirectorStageStatus) {

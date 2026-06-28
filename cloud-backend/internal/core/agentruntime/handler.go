@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -331,12 +332,19 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 		if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
 			continue
 		}
+		if !visibleReviewNodeStatus(node.Status) {
+			continue
+		}
 		h.ensureReviewNodeArtifactID(ctx, run, node)
 		review := reviewFromNode(node)
 		enrichReviewFromSourceNode(&review, node, nodesByID, nodesByOriginalID)
 		reviews = append(reviews, review)
 	}
 	return run, reviews, nil
+}
+
+func visibleReviewNodeStatus(status model.NodeStatus) bool {
+	return status == model.NodeReady || status == model.NodeSuccess || status == model.NodeFailed
 }
 
 func (h *Handler) findReviewNode(ctx context.Context, runID, reviewID string) (*Run, *model.Node, error) {
@@ -414,6 +422,10 @@ func enrichReviewFromSourceNode(review *Review, reviewNode *model.Node, nodesByI
 		return
 	}
 	sourceNodeID, _ := reviewNode.Input["sourceNode"].(string)
+	// For quality gate nodes, the production source is stored under a different key.
+	if sourceNodeID == "" {
+		sourceNodeID, _ = reviewNode.Input["productionSourceNode"].(string)
+	}
 	if sourceNodeID == "" {
 		return
 	}
@@ -451,9 +463,35 @@ func enrichQualityReport(review *Review, reviewNode *model.Node, nodesByID, node
 	if checkerNodeID == "" {
 		return
 	}
+	// Try exact match first, then original ID, then fuzzy substring match.
 	checker := nodesByID[checkerNodeID]
 	if checker == nil {
 		checker = nodesByOriginalID[checkerNodeID]
+	}
+	// The compiled node ID may include a suffix (_review, _exec) that doesn't
+	// match the actual node ID. Try substring matching within the same task.
+	if checker == nil {
+		// Strip common suffixes for a broader match.
+		for _, suffix := range []string{"_review", "_exec"} {
+			if base, ok := strings.CutSuffix(checkerNodeID, suffix); ok {
+				checker = nodesByOriginalID[base]
+				if checker == nil {
+					checker = nodesByID[base]
+				}
+				if checker != nil {
+					break
+				}
+			}
+		}
+		// Last resort: iterate and match by substring.
+		if checker == nil {
+			for id, node := range nodesByID {
+				if strings.Contains(id, checkerNodeID) || strings.Contains(checkerNodeID, id) {
+					checker = node
+					break
+				}
+			}
+		}
 	}
 	if checker == nil {
 		return

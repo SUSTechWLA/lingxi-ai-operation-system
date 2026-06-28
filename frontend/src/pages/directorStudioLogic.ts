@@ -691,10 +691,67 @@ export function reviewDisplayTitle(review: AgentReviewItem | undefined): string 
   return '审核阶段产物'
 }
 
+export function visibleReviewHistory(reviews: AgentReviewItem[] = []): AgentReviewItem[] {
+  return reviews.filter((review) => ['PENDING', 'APPROVED', 'REJECTED'].includes(String(review.status)))
+}
+
+export function reviewStatusLabel(review: AgentReviewItem | undefined): string {
+  switch (String(review?.status || '')) {
+    case 'PENDING':
+      return '待审核'
+    case 'APPROVED':
+      return '已通过'
+    case 'REJECTED':
+      return '已驳回'
+    default:
+      return '未触达'
+  }
+}
+
+export function reviewQualityReportLines(review: AgentReviewItem | undefined): string[] {
+  if (!review || review.reviewPhase !== 'quality_gate') return []
+  const output = objectValue(review.reviewOutput)
+  const report = output ? objectValue(output.qualityReport) : undefined
+  if (!report) return []
+
+  const lines: string[] = []
+  const score = typeof report.score === 'number' ? report.score : Number(report.score)
+  if (Number.isFinite(score)) {
+    const threshold = review.reviewReason?.match(/(\d+)/)?.[1]
+    lines.push(threshold ? `质量评分 ${score}/100，门禁阈值 ${threshold}` : `质量评分 ${score}/100`)
+  }
+  if (typeof report.passed === 'boolean') {
+    lines.push(`门禁结果：${report.passed ? '已通过' : '未通过'}`)
+  }
+
+  const issues = Array.isArray(report.issues) ? report.issues : []
+  for (const issue of issues) {
+    if (typeof issue === 'string') {
+      lines.push(issue)
+      continue
+    }
+    const item = objectValue(issue)
+    if (!item) continue
+    const level = stringValue(item.level)
+    const field = stringValue(item.field)
+    const message = stringValue(item.message) || JSON.stringify(item)
+    lines.push([level && `[${level}]`, field, message].filter(Boolean).join(' '))
+  }
+
+  const suggestions = Array.isArray(report.repairSuggestions) ? report.repairSuggestions : []
+  for (const suggestion of suggestions) {
+    if (typeof suggestion === 'string') {
+      lines.push(`建议：${suggestion}`)
+    }
+  }
+
+  return lines
+}
+
 export function reviewOutputText(review: AgentReviewItem | undefined): string {
   if (!review) return ''
   const content = stringValue(review.reviewContent)
-  if (content) return content
+  if (content) return normalizeReviewContentText(content)
   const output = objectValue(review.reviewOutput)
   if (!output) return ''
   const summary = stringValue(output.summary)
@@ -702,6 +759,68 @@ export function reviewOutputText(review: AgentReviewItem | undefined): string {
   const packageValue = objectValue(output.package)
   if (packageValue) return JSON.stringify(packageValue, null, 2)
   return JSON.stringify(output, null, 2)
+}
+
+function normalizeReviewContentText(content: string): string {
+  const trimmed = content.trim()
+  if (!trimmed) return ''
+  const parsed = parseEmbeddedJSON(trimmed)
+  if (parsed !== undefined) {
+    return JSON.stringify(parsed, null, 2)
+  }
+  return content
+}
+
+function parseEmbeddedJSON(text: string): unknown | undefined {
+  const direct = tryParseJSON(text)
+  if (direct !== undefined) return direct
+
+  for (let i = 0; i < text.length; i += 1) {
+    const open = text[i]
+    if (open !== '{' && open !== '[') continue
+    const close = open === '{' ? '}' : ']'
+    const candidate = extractBalancedJSON(text.slice(i), open, close)
+    if (!candidate) continue
+    const parsed = tryParseJSON(candidate)
+    if (parsed !== undefined) return parsed
+  }
+  return undefined
+}
+
+function tryParseJSON(text: string): unknown | undefined {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+function extractBalancedJSON(text: string, open: string, close: string): string {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\' && inString) {
+      escaped = true
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (char === open) depth += 1
+    if (char === close) {
+      depth -= 1
+      if (depth === 0) return text.slice(0, i + 1)
+    }
+  }
+  return ''
 }
 
 export function displayNameForArtifact(kind: string) {

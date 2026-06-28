@@ -39,6 +39,7 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 	if prompt == "" {
 		return tool.FailureResult("Prompt is required (provide 'prompt', 'message', or 'content' field)")
 	}
+	systemPrompt, _ := params["system_prompt"].(string)
 
 	if t.cfg.APIKey == "" {
 		return tool.FailureResult("OpenAI API key not configured")
@@ -75,12 +76,11 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 		}
 	}
 
-	msg := llmutil.BuildUserMessage(prompt, imageURLs)
 	requestBody := map[string]interface{}{
 		"model":       model,
 		"max_tokens":  maxTokens,
 		"temperature": temperature,
-		"messages":    []interface{}{msg},
+		"messages":    buildChatMessages(systemPrompt, prompt, imageURLs),
 	}
 
 	// Support DeepSeek/OpenAI JSON mode when caller passes response_format
@@ -133,6 +133,18 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 	})
 }
 
+func buildChatMessages(systemPrompt, userPrompt string, imageURLs []string) []interface{} {
+	messages := make([]interface{}, 0, 2)
+	if systemPrompt != "" {
+		messages = append(messages, map[string]interface{}{
+			"role":    "system",
+			"content": systemPrompt,
+		})
+	}
+	messages = append(messages, llmutil.BuildUserMessage(userPrompt, imageURLs))
+	return messages
+}
+
 func (t *LlmApiTool) Manifest() tool.ToolManifest {
 	return tool.ToolManifest{
 		Name:        t.Name(),
@@ -143,6 +155,11 @@ func (t *LlmApiTool) Manifest() tool.ToolManifest {
 			"prompt": {
 				Type:        "string",
 				Description: "Primary prompt text (one of prompt/message/content is required)",
+				Required:    false,
+			},
+			"system_prompt": {
+				Type:        "string",
+				Description: "Optional system prompt sent as a separate system message",
 				Required:    false,
 			},
 			"message": {
@@ -219,13 +236,8 @@ func extractContent(response map[string]interface{}) string {
 		return ""
 	}
 
-	// Standard chat models return content. Reasoning models (e.g. deepseek-v4-pro)
-	// return reasoning_content and may leave content empty.
 	if content, _ := message["content"].(string); content != "" {
 		return content
-	}
-	if reasoning, _ := message["reasoning_content"].(string); reasoning != "" {
-		return reasoning
 	}
 	return ""
 }

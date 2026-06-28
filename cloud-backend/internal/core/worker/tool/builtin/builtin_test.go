@@ -195,6 +195,21 @@ func TestLlmApiTool_Execute_NoPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildChatMessagesIncludesSystemPrompt(t *testing.T) {
+	messages := buildChatMessages("只输出JSON", "生成事实包", nil)
+	if len(messages) != 2 {
+		t.Fatalf("expected system and user messages, got %#v", messages)
+	}
+	system, ok := messages[0].(map[string]interface{})
+	if !ok || system["role"] != "system" || system["content"] != "只输出JSON" {
+		t.Fatalf("unexpected system message: %#v", messages[0])
+	}
+	user, ok := messages[1].(map[string]interface{})
+	if !ok || user["role"] != "user" {
+		t.Fatalf("unexpected user message: %#v", messages[1])
+	}
+}
+
 // ===== extractContent tests =====
 
 func TestExtractContent_ValidResponse(t *testing.T) {
@@ -211,6 +226,24 @@ func TestExtractContent_ValidResponse(t *testing.T) {
 	content := extractContent(response)
 	if content != "Hello, world!" {
 		t.Errorf("Expected 'Hello, world!', got '%s'", content)
+	}
+}
+
+func TestExtractContent_DoesNotExposeReasoningContent(t *testing.T) {
+	response := map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"message": map[string]interface{}{
+					"content":           "",
+					"reasoning_content": "先分析，再输出答案。",
+				},
+			},
+		},
+	}
+
+	content := extractContent(response)
+	if content != "" {
+		t.Errorf("Expected empty content when only reasoning_content is present, got %q", content)
 	}
 }
 

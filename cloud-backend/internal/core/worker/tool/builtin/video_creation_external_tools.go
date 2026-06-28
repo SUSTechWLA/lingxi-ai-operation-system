@@ -2520,18 +2520,76 @@ func performWebSearch(ctx context.Context, query string) ([]WebSearchResult, err
 
 	endpoint := os.Getenv("SEARCH_ENDPOINT")
 	if endpoint == "" {
-		endpoint = "https://google.serper.dev/search"
+		endpoint = "https://newsapi.org/v2/everything"
 	}
 
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	// Detect provider: NewsAPI.org uses GET with query params, Serper uses POST with JSON body.
+	if strings.Contains(endpoint, "newsapi.org") {
+		return searchNewsAPI(ctx, client, endpoint, apiKey, query)
+	}
+	return searchSerper(ctx, client, endpoint, apiKey, query)
+}
+
+func searchNewsAPI(ctx context.Context, client *http.Client, endpoint, apiKey, query string) ([]WebSearchResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("newsapi request: %w", err)
+	}
+	q := req.URL.Query()
+	q.Set("q", query)
+	q.Set("pageSize", "10")
+	q.Set("sortBy", "publishedAt")
+	// Narrow to recent articles for faster, more relevant results.
+	q.Set("from", time.Now().AddDate(0, 0, -7).Format("2006-01-02"))
+	q.Set("language", "en")
+	q.Set("apiKey", apiKey)
+	req.URL.RawQuery = q.Encode()
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("newsapi call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("newsapi returned %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var result struct {
+		Articles []struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			URL         string `json:"url"`
+			PublishedAt string `json:"publishedAt"`
+			Source      struct {
+				Name string `json:"name"`
+			} `json:"source"`
+		} `json:"articles"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return nil, fmt.Errorf("parse newsapi response: %w", err)
+	}
+
+	results := make([]WebSearchResult, 0, len(result.Articles))
+	for _, a := range result.Articles {
+		results = append(results, WebSearchResult{
+			Title:   a.Title,
+			Snippet: a.Description,
+			URL:     a.URL,
+			Date:    a.PublishedAt,
+		})
+	}
+	return results, nil
+}
+
+func searchSerper(ctx context.Context, client *http.Client, endpoint, apiKey, query string) ([]WebSearchResult, error) {
 	reqBody := map[string]interface{}{
 		"q":   query,
 		"num": 10,
 	}
-
-	// Default to English search for higher-quality global coverage.
-	// The knowledge_researcher LLM will read English snippets and produce
-	// Chinese facts — translation/summarization is what LLMs excel at.
-	// Override via SEARCH_GL / SEARCH_HL env vars if needed.
 	if gl := os.Getenv("SEARCH_GL"); gl != "" {
 		reqBody["gl"] = gl
 	} else {
@@ -2546,24 +2604,22 @@ func performWebSearch(ctx context.Context, query string) ([]WebSearchResult, err
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(bodyBytes)))
 	if err != nil {
-		return nil, fmt.Errorf("search request: %w", err)
+		return nil, fmt.Errorf("serper request: %w", err)
 	}
 	httpReq.Header.Set("X-API-KEY", apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("search call: %w", err)
+		return nil, fmt.Errorf("serper call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("search returned %d: %s", resp.StatusCode, string(respBytes))
+		return nil, fmt.Errorf("serper returned %d: %s", resp.StatusCode, string(respBytes))
 	}
 
-	// Serper.dev response format
 	var result struct {
 		Organic []struct {
 			Title   string `json:"title"`
@@ -2571,17 +2627,24 @@ func performWebSearch(ctx context.Context, query string) ([]WebSearchResult, err
 			Link    string `json:"link"`
 			Date    string `json:"date"`
 		} `json:"organic"`
-		KnowledgeGraph *struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
-		} `json:"knowledgeGraph"`
+		News []struct {
+			Title   string `json:"title"`
+			Snippet string `json:"snippet"`
+			Link    string `json:"link"`
+			Date    string `json:"date"`
+		} `json:"news"`
 	}
 	if err := json.Unmarshal(respBytes, &result); err != nil {
-		return nil, fmt.Errorf("parse search response: %w", err)
+		return nil, fmt.Errorf("parse serper response: %w", err)
 	}
 
-	results := make([]WebSearchResult, 0, len(result.Organic))
-	for _, o := range result.Organic {
+	items := result.News
+	if len(items) == 0 {
+		items = result.Organic
+	}
+
+	results := make([]WebSearchResult, 0, len(items))
+	for _, o := range items {
 		results = append(results, WebSearchResult{
 			Title:   o.Title,
 			Snippet: o.Snippet,
@@ -2592,20 +2655,213 @@ func performWebSearch(ctx context.Context, query string) ([]WebSearchResult, err
 	return results, nil
 }
 
+// buildSearchQuery uses a fast LLM call to extract concise English search
+// keywords from a verbose Chinese user message. Falls back to heuristic
+// extraction if the LLM is unavailable.
+func buildSearchQuery(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	cfg := GetVideoCreationOpenAIConfig()
+	// Also try local agent config
+	if localCfg, ok := localAgentConfigFetcher(); ok {
+		if localCfg.APIKey != "" {
+			cfg.APIKey = localCfg.APIKey
+		}
+		if localCfg.BaseURL != "" {
+			cfg.BaseURL = localCfg.BaseURL
+		}
+		if localCfg.Model != "" {
+			cfg.Model = localCfg.Model
+		}
+	}
+
+	if cfg.APIKey != "" {
+		callTool := &LlmApiTool{cfg: cfg}
+		prompt := fmt.Sprintf(
+			`Extract the core topic and key entities from the following video request. Output ONLY a concise English search query (max 15 words) suitable for news search APIs like Serper/Google News. Focus on proper nouns, events, dates, and key concepts. Do NOT include filler words like "video", "make", "create", "帮我", "做一个".
+
+Input: %s
+
+Output (just the search query, nothing else):`, raw)
+		result := callTool.Execute(context.Background(), map[string]interface{}{
+			"prompt":      prompt,
+			"max_tokens":  80,
+			"temperature": 0.0,
+		}, tool.ToolContext{})
+		if result.Success {
+			if content, ok := result.Data["content"].(string); ok {
+				query := strings.TrimSpace(content)
+				// Clean up common LLM artifacts
+				query = strings.TrimPrefix(query, "\"")
+				query = strings.TrimSuffix(query, "\"")
+				query = strings.TrimSpace(query)
+				if query != "" && len(query) < 200 {
+					return query
+				}
+			}
+		}
+		zap.L().Warn("LLM search query extraction failed, using raw input")
+	}
+
+	// Fallback heuristic: strip common Chinese command patterns.
+	clean := raw
+	for _, p := range []string{"请帮我创作", "请帮我制作", "请帮我生成", "请帮我做", "请帮我", "帮我创作", "帮我制作", "帮我做", "帮我"} {
+		if strings.HasPrefix(clean, p) {
+			clean = strings.TrimPrefix(clean, p)
+			break
+		}
+	}
+	clean = strings.TrimSpace(clean)
+	for _, s := range []string{"图文视频", "短视频", "视频"} {
+		if idx := strings.Index(clean, s); idx >= 0 {
+			clean = clean[:idx] + clean[idx+len(s):]
+		}
+	}
+	clean = strings.TrimLeft(clean, "，,。.：:、 ")
+	clean = strings.TrimRight(clean, "，,。.：:、。")
+	// Remove duration patterns like "一个30秒" "30秒的"
+	for _, d := range []string{"一个30秒", "一个45秒", "一个60秒", "一个90秒", "30秒的", "45秒的", "60秒的", "30秒", "45秒", "60秒", "90秒", "120秒"} {
+		clean = strings.ReplaceAll(clean, d, "")
+	}
+	clean = strings.TrimSpace(clean)
+	clean = strings.TrimLeft(clean, "，,。.：:、 ")
+	if clean == "" {
+		return raw
+	}
+	return clean
+}
+
 // formatSearchResults formats web search results as a readable text block for LLM prompts.
+// For top results, it attempts to fetch the full article content for richer context.
 func formatSearchResults(results []WebSearchResult) string {
 	if len(results) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("【最新网络搜索结果（英文）】\n以下是从网络搜索获得的最新信息。请将英文内容翻译提炼为简体中文后进行知识整理。所有输出字段必须使用中文：\n\n")
+	articleClient := &http.Client{Timeout: 8 * time.Second}
 	for i, r := range results {
 		b.WriteString(fmt.Sprintf("%d. %s\n   %s\n", i+1, r.Title, r.Snippet))
 		if r.Date != "" {
 			b.WriteString(fmt.Sprintf("   日期：%s\n", r.Date))
 		}
+		b.WriteString(fmt.Sprintf("   来源：%s\n", r.URL))
+		// Fetch full article content for top 3 results for better accuracy.
+		if i < 3 && r.URL != "" {
+			if content := fetchArticleText(articleClient, r.URL); content != "" {
+				b.WriteString(fmt.Sprintf("   全文摘要：%s\n", content))
+			}
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// fetchArticleText fetches a URL and extracts readable text content from the HTML.
+// Returns up to 1500 chars of text, or empty string on any error.
+func fetchArticleText(client *http.Client, url string) string {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TangyingBot/1.0)")
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024)) // max 512KB
+	if err != nil {
+		return ""
+	}
+	text := extractTextFromHTML(string(bodyBytes))
+	if len(text) > 1500 {
+		text = text[:1500]
+	}
+	return text
+}
+
+// extractTextFromHTML strips HTML tags and extracts readable text content.
+func extractTextFromHTML(html string) string {
+	// Remove script and style blocks.
+	inTag := false
+	inScript := false
+	var b strings.Builder
+	tagName := ""
+	tagNameStart := -1
+
+	for i := 0; i < len(html); i++ {
+		ch := html[i]
+		if ch == '<' {
+			inTag = true
+			tagName = ""
+			tagNameStart = i + 1
+			continue
+		}
+		if ch == '>' && inTag {
+			inTag = false
+			if tagName == "script" || tagName == "style" || tagName == "noscript" || tagName == "iframe" {
+				inScript = true
+			}
+			if tagName == "/script" || tagName == "/style" || tagName == "/noscript" || tagName == "/iframe" {
+				inScript = false
+			}
+			// Add space after block elements.
+			switch tagName {
+			case "/p", "/div", "/h1", "/h2", "/h3", "/h4", "/h5", "/h6", "/li", "/tr", "br", "br/":
+				b.WriteByte(' ')
+			}
+			tagName = ""
+			continue
+		}
+		if inTag && tagNameStart >= 0 {
+			// Build tag name until space or closing bracket.
+			if ch == ' ' || ch == '/' || ch == '\t' || ch == '\n' || ch == '\r' {
+				// Tag name complete.
+			} else if tagNameStart >= 0 {
+				tagName += string(ch)
+			}
+			continue
+		}
+		if !inTag && !inScript {
+			// Replace HTML entities roughly.
+			if ch == '&' {
+				semi := strings.IndexByte(html[i:], ';')
+				if semi > 0 && semi < 10 {
+					entity := html[i : i+semi+1]
+					switch entity {
+					case "&amp;":
+						b.WriteByte('&')
+					case "&lt;":
+						b.WriteByte('<')
+					case "&gt;":
+						b.WriteByte('>')
+					case "&quot;":
+						b.WriteByte('"')
+					case "&apos;":
+						b.WriteByte('\'')
+					case "&nbsp;":
+						b.WriteByte(' ')
+					default:
+						b.WriteByte(' ')
+					}
+					i += semi
+					continue
+				}
+			}
+			b.WriteByte(ch)
+		}
+	}
+
+	// Collapse whitespace.
+	result := strings.Join(strings.Fields(b.String()), " ")
+	return strings.TrimSpace(result)
 }
 
 // full default template format.
@@ -3011,24 +3267,31 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform)
 
 	// For knowledge_researcher: perform actual web search to get current facts.
-	// This ensures the LLM produces timely, accurate content rather than relying
-	// on stale training data.
-	if toolName == "knowledge_researcher" && topic != "" {
-		searchQuery := topic
-		if researchQuery, ok := params["searchQuery"].(string); ok && researchQuery != "" {
-			searchQuery = researchQuery
+	if toolName == "knowledge_researcher" {
+		// Build a clean search query from the user's topic, stripping command wrappers.
+		rawQuery := topic
+		if rawQuery == "" {
+			rawQuery = brief
 		}
-		if results, err := performWebSearch(context.Background(), searchQuery); err == nil && len(results) > 0 {
-			searchText := formatSearchResults(results)
-			userPrompt = searchText + "\n\n---\n\n" + userPrompt
-			zap.L().Info("Web search results injected into knowledge_researcher",
-				zap.Int("resultCount", len(results)),
-				zap.String("topic", topic))
-		} else if err != nil {
-			zap.L().Warn("Web search skipped, LLM may use stale data",
-				zap.String("tool", toolName),
-				zap.String("topic", topic),
-				zap.Error(err))
+		if researchQuery, ok := params["searchQuery"].(string); ok && researchQuery != "" {
+			rawQuery = researchQuery
+		}
+		// Strip common Chinese AI command prefixes and keep the real topic.
+		clean := buildSearchQuery(rawQuery)
+		if clean != "" {
+			zap.L().Info("Performing web search for knowledge_researcher",
+				zap.String("query", clean))
+			if results, err := performWebSearch(context.Background(), clean); err == nil && len(results) > 0 {
+				searchText := formatSearchResults(results)
+				userPrompt = searchText + "\n\n---\n\n" + userPrompt
+				zap.L().Info("Web search results injected into knowledge_researcher",
+					zap.Int("resultCount", len(results)))
+			} else if err != nil {
+				zap.L().Warn("Web search failed, falling back to LLM knowledge",
+					zap.Error(err))
+			}
+		} else {
+			zap.L().Warn("Web search skipped: no query available for knowledge_researcher")
 		}
 	}
 
@@ -3060,8 +3323,9 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 
 	callParams := map[string]interface{}{
-		"prompt":     systemPrompt + "\n\n---\n\n" + userPrompt,
-		"max_tokens": 8000,
+		"system_prompt": systemPrompt,
+		"prompt":        userPrompt,
+		"max_tokens":    8000,
 	}
 	// Enable DeepSeek JSON mode for tools that require structured JSON output
 	if isStructuredOutputTool(toolName) {
@@ -3082,8 +3346,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	finishReason, _ := result.Data["finishReason"].(string)
 	rawContent = continueSkillStageIfNeeded(callTool, toolName, systemPrompt+"\n\n---\n\n"+userPrompt, rawContent, finishReason, toolCtx)
 
-	var contentPkg map[string]interface{}
-	isJSON := jsonx.ExtractJSON(rawContent, &contentPkg) == nil
+	displayContent, contentPkg, isJSON := normalizeStructuredToolContent(toolName, rawContent)
 
 	// For tools that require structured JSON output, fail on parse error
 	// instead of silently accepting markdown.
@@ -3101,7 +3364,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	artifacts := buildSkillStageArtifacts(toolName, skillName, toolName == "publish_copy_generator", isJSON)
 
 	data := map[string]interface{}{
-		"content":   rawContent,
+		"content":   displayContent,
 		"package":   contentPkg,
 		"artifacts": artifacts,
 	}
@@ -3455,38 +3718,38 @@ func isStructuredOutputTool(toolName string) bool {
 	}
 }
 
+func normalizeStructuredToolContent(toolName, rawContent string) (string, map[string]interface{}, bool) {
+	var contentPkg map[string]interface{}
+	if err := jsonx.ExtractJSON(rawContent, &contentPkg); err != nil {
+		return rawContent, contentPkg, false
+	}
+	if isStructuredOutputTool(toolName) {
+		if canonical, err := json.Marshal(contentPkg); err == nil {
+			return string(canonical), contentPkg, true
+		}
+	}
+	return rawContent, contentPkg, true
+}
+
 func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) string {
 	switch toolName {
 	case "knowledge_researcher":
-		return fmt.Sprintf(`你是知识分享视频资料研究员。
+		return fmt.Sprintf(`你是一个事实整理器。只输出JSON，禁止输出推理过程、分析或任何其他文字。
 
-任务：
-根据 topic 和提供的网络搜索结果（可能为英文），整理适合中文短视频口播的事实材料、讲述角度、风险点。优先使用搜索结果中的实时数据。
+规则：
+- draw/tie=战平 win/beat=击败 lose=不敌。绝不混淆。
+- 每个fact必须直接来源于搜索结果，不得编造。
+- facts简洁，每条≤30字，最多10条。
+- 搜索结果为英文时翻译为中文，保留专有名词原文。
 
-要求：
-1. 不要输出 Markdown。
-2. 只输出 JSON。
-3. 不要编造事实。对搜索结果中没有覆盖的内容，标注为"未经最新确认"。
-4. 对不确定内容写入 risks。
-5. facts 应该短句化，适合后续口播稿生成。
-6. storyAngles 给出 3-5 个短视频讲述角度。
-
-输入：
 topic=%s
 style=%s
 
-输出 JSON：
-{
-  "facts": ["事实短句1", "事实短句2", ...],
-  "timeline": [{"date": "时间", "event": "事件"}, ...],
-  "storyAngles": ["讲述角度1", "讲述角度2", ...],
-  "risks": ["需要注意的事实风险点", ...],
-  "sourceNotes": ["来源说明", ...],
-  "summary": "资料整理摘要"
-}`, topic, style)
+只输出这个JSON（不要输出其他任何内容）：
+{"facts":[""],"timeline":[{"date":"","event":""}],"storyAngles":[""],"risks":[""],"sourceNotes":[""],"summary":""}`, topic, style)
 
 	case "fact_checker":
-		return "你是知识类短视频事实核查员。\n\n任务：\n检查 facts 中是否存在不稳妥、过度简化、容易误导或需要谨慎表达的内容。\n\n要求：\n1. 不要输出 Markdown。\n2. 只输出 JSON。\n3. 保留稳妥事实到 checkedFacts。\n4. 把不确定或争议内容写入 warnings。\n5. 对需要改写的内容写入 corrections。\n\n输出 JSON：\n{\n  \"checkedFacts\": [\"已核查的事实短句\"],\n  \"warnings\": [\"需要谨慎表达的内容\"],\n  \"corrections\": [{\"original\": \"原文\", \"corrected\": \"修正后\", \"reason\": \"修正原因\"}],\n  \"passed\": true,\n  \"summary\": \"核查摘要\"\n}"
+		return "你是严格的事实核查员。\n\n任务：\n逐一检查 facts 每一条是否准确。重点核查：\n- 体育比赛结果（击败vs战平vs不敌，比分是否正确）\n- 人名地名队名拼写\n- 数字（人口比分排名日期）\n- 搜索结果不支持的主观评价\n\n要求：\n1. 只输出 JSON。\n2. 通过的事实写入 checkedFacts。\n3. 疑似编造或搜索结果不支持的写入 warnings。\n4. 需要修正的给出 原文→修正后→原因。\n5. passed 仅在所有事实均核查通过时为 true。\n\n输出 JSON：\n{\n  \"checkedFacts\": [\"已核查的事实短句\"],\n  \"warnings\": [\"需要谨慎表达的内容\"],\n  \"corrections\": [{\"original\": \"原文\", \"corrected\": \"修正后\", \"reason\": \"修正原因\"}],\n  \"passed\": true,\n  \"summary\": \"核查摘要\"\n}"
 
 	case "video_script_generator":
 		return fmt.Sprintf(`你是短视频口播稿创作专家。

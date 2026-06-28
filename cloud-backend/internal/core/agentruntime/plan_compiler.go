@@ -310,6 +310,24 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 		toolSet[gateID] = true
 	}
 
+	// Rewire downstream dependencies through quality gates.
+	// Any step that depends on a production step with a quality gate
+	// must wait for the gate instead of the production step directly.
+	for i := range out {
+		s := &out[i]
+		for j, dep := range s.DependsOn {
+			for _, prev := range out {
+				if prev.Tool == "__quality_gate__" {
+					prod, _ := prev.Arguments["productionStep"].(string)
+						checker, _ := prev.Arguments["checkerStep"].(string)
+					if prod != "" && dep == prod && s.ID != checker && s.Tool != checker {
+						s.DependsOn[j] = prev.ID
+					}
+				}
+			}
+		}
+	}
+
 	return out
 }
 
