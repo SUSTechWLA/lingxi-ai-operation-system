@@ -1091,6 +1091,6 @@ export function getStageStateDisplay(status: DirectorStageStatus): StageStateDis
       return { icon: 'x', label: '已阻断', colorClass: 'border-red-300 bg-red-50 text-red-700', dotColor: 'bg-red-500', animate: false, active: false }
     case 'pending':
     default:
-      return { icon: 'cpu', label: '等待中', colorClass: 'border-stone-200 bg-stone-50/60 text-stone-400', dotColor: 'bg-stone-300', animate: true, active: false }
+      return { icon: 'cpu', label: '等待中', colorClass: 'border-stone-200 bg-stone-50/60 text-stone-400', dotColor: 'bg-stone-300', animate: false, active: false }
   }
 }
