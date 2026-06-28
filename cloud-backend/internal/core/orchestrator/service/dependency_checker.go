@@ -70,10 +70,11 @@ func (dc *DependencyChecker) OnNodeExecuted(ctx context.Context, nodeID, taskID 
 			continue
 		}
 
-		// CONTROL nodes are handled by InitializeNodeReady (pauses task for review),
+		// CONTROL/REVIEW_GATE nodes are handled by InitializeNodeReady
+		// (pauses task for review),
 		// they should NOT be published to the worker for execution.
-		if child.Type == model.NodeTypeControl {
-			zap.L().Info("Child CONTROL node is now READY (awaiting review)", zap.String("nodeId", child.ID))
+		if child.Type == model.NodeTypeControl || child.Type == model.NodeTypeReviewGate {
+			zap.L().Info("Child review node is now READY (awaiting review)", zap.String("nodeId", child.ID), zap.String("type", string(child.Type)))
 			continue
 		}
 

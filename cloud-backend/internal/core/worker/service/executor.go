@@ -145,6 +145,13 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	// Hydrate payload from DB (image URLs, long-running metadata).
 	payload, isLongRunning, heartbeatTimeoutSec := ne.hydratePayloadFromDB(ctx, nodeID, payload)
 
+	// REVIEW_GATE and CONTROL nodes are synchronization points, not executable tools.
+	// They pause execution and wait for human approval via the review API.
+	if event.Type == string(model.NodeTypeReviewGate) || event.Type == string(model.NodeTypeControl) {
+		ne.publishSuccess(taskID, nodeID, traceID, payload, idempotencyKey)
+		return
+	}
+
 	toolName := tool.DetermineToolName(event.Type, payload)
 	parameters := tool.ExtractParameters(payload)
 	manifest := ne.toolRegistry.GetManifest(toolName)

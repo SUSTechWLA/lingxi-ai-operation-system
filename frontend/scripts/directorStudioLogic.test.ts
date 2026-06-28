@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
 
 import {
+  applyOptimisticRunningStage,
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
   canStartFinalRender,
   deriveNextAction,
   downstreamStaleArtifacts,
+  nextStageIdAfterReview,
   stageActionLabel,
+  traceNodeHasError,
 } from '../src/pages/directorStudioLogic.ts'
 import type { AgentReviewItem, VideoRoleAgent } from '../src/utils/types.ts'
 
@@ -103,6 +106,41 @@ const traceNodes = buildDirectorTraceNodes({
 assert.equal(traceNodes[0].role, '脚本编剧')
 assert.equal(traceNodes[0].status, 'running')
 assert.equal(traceNodes[0].tool, 'video_script_generator')
+assert.equal(traceNodeHasError(undefined), false)
+assert.equal(nextStageIdAfterReview(stages, reviews[0]), 'storyboard_artist')
+
+const optimisticStages = applyOptimisticRunningStage(stages, 'storyboard_artist')
+assert.equal(optimisticStages[2].status, 'running')
+assert.equal(optimisticStages[2].progress, 18)
+assert.equal(stages[2].status, 'pending')
+
+const actualRunningStages = applyOptimisticRunningStage(
+  stages.map((stage) => stage.id === 'storyboard_artist' ? { ...stage, status: 'review' } : stage),
+  'storyboard_artist',
+)
+assert.equal(actualRunningStages[2].status, 'review')
+
+const nestedTraceNodes = buildDirectorTraceNodes({
+  data: {
+    task: {
+      nodes: [
+        {
+          id: 'gate-1',
+          name: '质量门禁-video_script_generator_quality_gate',
+          type: 'REVIEW_GATE',
+          status: 'FAILED',
+          errorMessage: '评分未达标',
+          input: { stage: 'script' },
+          output: {},
+        },
+      ],
+    },
+  },
+})
+assert.equal(nestedTraceNodes.length, 1)
+assert.equal(nestedTraceNodes[0].tool, '质量门禁-video_script_generator_quality_gate')
+assert.equal(nestedTraceNodes[0].error, '评分未达标')
+assert.equal(traceNodeHasError(nestedTraceNodes[0]), true)
 
 const nextAction = deriveNextAction(stages)
 assert.equal(nextAction?.stageId, 'script_writer')

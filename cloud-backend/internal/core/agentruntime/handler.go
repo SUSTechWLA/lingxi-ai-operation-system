@@ -164,7 +164,15 @@ func (h *Handler) GetTrace(c *gin.Context) {
 		httpx.Fail(c, http.StatusNotFound, "agent run not found")
 		return
 	}
-	httpx.OK(c, task)
+	nodes := []*model.Node{}
+	if h.nodes != nil && run.TaskID != "" {
+		nodes, err = h.nodes.FindByTaskID(c.Request.Context(), run.TaskID)
+		if err != nil {
+			httpx.Fail(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	httpx.OK(c, gin.H{"task": task, "nodes": nodes})
 }
 
 func (h *Handler) ListReviews(c *gin.Context) {

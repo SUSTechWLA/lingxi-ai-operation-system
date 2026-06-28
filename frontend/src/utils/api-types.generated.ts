@@ -55,6 +55,14 @@ export interface AgentRunStartResponse {
 }
 
 /**  */
+// AgentRunTraceResponse
+export interface AgentRunTraceResponse {
+  code?: number;
+  data?: { nodes?: { completedAt?: string | null; condition?: string; createdAt: string; currentStep?: string; errorMessage?: string; heartbeatAt?: string | null; heartbeatTimeoutSec?: number; id: string; idempotencyKey?: string; input?: Record<string, Record<string, unknown>>; longRunning: boolean; maxRetry: number; name: string; output?: Record<string, Record<string, unknown>>; priority: number; progress: number; retryCount: number; startedAt?: string | null; status: string; taskId: string; type: string; version: number; workerGroup: string }[]; task?: Record<string, unknown> };
+  message?: string;
+}
+
+/**  */
 // AgentStartRunRequest
 export interface AgentStartRunRequest {
   context?: Record<string, Record<string, unknown>>;

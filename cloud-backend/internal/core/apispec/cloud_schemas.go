@@ -536,6 +536,20 @@ func registerCloudSchemas(b *Builder) {
 			}},
 		},
 	})
+	b.Schema("AgentRunTraceResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"task":  {Schema: ObjectSchema()},
+					"nodes": {Schema: ArraySchema(Reflect(model.Node{}))},
+				},
+			}},
+		},
+	})
 	b.Schema("AgentReviewListResponse", &Schema{
 		Type: "object",
 		Properties: map[string]*SchemaRef{

@@ -47,6 +47,7 @@ import {
 import type { AuthUser } from '../services/auth'
 import type { AgentReviewItem, AgentRun, VideoRoleAgent } from '../utils/types'
 import {
+  applyOptimisticRunningStage,
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
@@ -56,6 +57,7 @@ import {
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
   normalizeDirectorErrorMessage,
+  nextStageIdAfterReview,
   publishCopiesToJSON,
   publishCopiesToMarkdown,
   reviewDisplayTitle,
@@ -63,6 +65,7 @@ import {
   reviewOutputText,
   reviewStatusLabel,
   stageActionLabel,
+  traceNodeHasError,
   visibleReviewHistory,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
@@ -115,6 +118,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
+  const [optimisticRunningStageId, setOptimisticRunningStageId] = useState<string | undefined>()
 
   const refreshRun = useCallback(async (runId: string) => {
     const [nextRun, nextReviews, nextTrace] = await Promise.all([
@@ -149,13 +153,20 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [refreshRun, run?.id, run?.status])
 
   const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace), [roleAgents, reviews, trace])
+  const displayStages = useMemo(() => applyOptimisticRunningStage(stages, optimisticRunningStageId), [stages, optimisticRunningStageId])
   const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace), [roleAgents, reviews, trace])
   const traceNodes = useMemo(() => buildDirectorTraceNodes(trace), [trace])
-  const nextAction = useMemo(() => deriveNextAction(stages), [stages])
+  const nextAction = useMemo(() => deriveNextAction(displayStages), [displayStages])
   const pendingReviews = reviews.filter((review) => review.status === 'PENDING')
   const activeReview = pendingReviews[0]
-  const activeReviewStage = activeReview ? stages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
+  const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
   const canStart = preflight?.canStart !== false && !loading
+
+  useEffect(() => {
+    if (!optimisticRunningStageId) return
+    const stage = stages.find((item) => item.id === optimisticRunningStageId)
+    if (!stage || stage.status !== 'pending') setOptimisticRunningStageId(undefined)
+  }, [optimisticRunningStageId, stages])
 
   const handleStart = async () => {
     if (!topic.trim()) return
@@ -169,6 +180,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
         mode: 'dynamic_agent',
         context: { topic: topic.trim(), durationSec, targetDurationSec: durationSec },
       })
+      setOptimisticRunningStageId(undefined)
       await refreshRun(result.runId)
       setActiveNav('review')
     } catch (err) {
@@ -184,6 +196,8 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     setLoading(true)
     setError(null)
     setErrorDetail(undefined)
+    const nextOptimisticStageId = action === 'approve' ? nextStageIdAfterReview(stages, activeReview) : undefined
+    if (nextOptimisticStageId) setOptimisticRunningStageId(nextOptimisticStageId)
     try {
       if (action === 'approve') await approveAgentReview(run.id, activeReview.id, feedback || undefined)
       if (action === 'reject') await rejectAgentReview(run.id, activeReview.id, feedback || '请根据审核意见重新生成。')
@@ -192,6 +206,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       setFeedback('')
       await refreshRun(run.id)
     } catch (err) {
+      if (nextOptimisticStageId) setOptimisticRunningStageId(undefined)
       setError(normalizeDirectorErrorMessage(err))
       setErrorDetail(extractDirectorErrorDetail(err))
     } finally {
@@ -230,7 +245,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               durationSec={durationSec}
               loading={loading}
               canStart={canStart}
-              stages={stages}
+              stages={displayStages}
               artifacts={artifacts}
               preflight={preflight}
               nextAction={nextAction}
@@ -249,12 +264,12 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               onFeedbackChange={setFeedback}
               onAction={actOnReview}
               allReviews={reviews || []}
-              stages={stages}
+              stages={displayStages}
             />
           )}
           {activeNav === 'trace' && <TracePage traceNodes={traceNodes} artifacts={artifacts} run={run} />}
           {activeNav === 'assets' && <AssetsPage artifacts={artifacts} />}
-          {activeNav === 'roles' && <RolesPage stages={stages} />}
+          {activeNav === 'roles' && <RolesPage stages={displayStages} />}
           {activeNav === 'export' && <ExportPage artifacts={artifacts} topic={topic} durationSec={durationSec} />}
           {activeNav === 'system' && <DesktopPage />}
         </div>
@@ -441,6 +456,44 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
   )
 }
 
+function ReviewStageRelay({ stages }: { stages: DirectorStage[] }) {
+  const runningStage = stages.find((stage) => stage.status === 'running' || stage.status === 'active')
+  return (
+    <section className="card col-span-12 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-base font-black text-ink">阶段接力</h3>
+          <p className="mt-1 text-xs text-ink-soft">
+            {runningStage ? `${runningStage.displayName}正在生成，产物完成后会进入下一次审核。` : '审核通过后，下个角色会立即进入生成中。'}
+          </p>
+        </div>
+        {runningStage && (
+          <span className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700 ring-1 ring-blue-200">
+            <FiRefreshCw className="animate-spin" /> 生成中
+          </span>
+        )}
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-5">
+        {stages.map((item, index) => (
+          <div key={item.id} className={clsx('min-w-0 rounded-lg border px-3 py-2.5 transition', stageTone(item.status))}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className={clsx('grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-black', stageIconTone(item.status))}>{stageIcon(item.status)}</span>
+                <span className="truncate text-xs font-black text-ink" title={item.displayName}>{stageActionLabel(item.stage)}</span>
+              </div>
+              <span className="shrink-0 text-[10px] font-black text-ink-soft">{String(index + 1).padStart(2, '0')}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="truncate text-[11px] font-semibold text-ink-soft" title={item.displayName}>{item.displayName}</span>
+              <span className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', item.status === 'running' || item.status === 'active' ? 'bg-blue-500' : item.status === 'done' ? 'bg-green-500' : item.status === 'review' ? 'bg-primary' : item.status === 'blocked' || item.status === 'failed' ? 'bg-red-500' : 'bg-stone-300')} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction, allReviews, stages }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void; allReviews: AgentReviewItem[]; stages: DirectorStage[] }) {
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>(review?.id)
   const reviewHistory = useMemo(() => visibleReviewHistory(allReviews), [allReviews])
@@ -457,7 +510,6 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
   const primaryOutput = (selectedReview?.requiredOutputs || selectedStage?.requiredOutputs || [])[0]
   const staleAfterChange = primaryOutput ? downstreamStaleArtifacts(primaryOutput) : []
   const outputText = reviewOutputText(selectedReview)
-  const reviewArtifacts = selectedReview?.reviewArtifacts || []
   const qualityLines = reviewQualityReportLines(selectedReview)
 
   const isPending = selectedReview?.status === 'PENDING'
@@ -474,52 +526,8 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
 
   return (
     <div className="grid grid-cols-12 gap-5">
-      <section className="card col-span-4 overflow-hidden p-0 xl:col-span-3">
-        <div className="border-b border-line bg-white/65 px-5 py-4">
-          <p className="text-xs font-black text-primary-dark">审核台账</p>
-          <div className="mt-1 flex items-end justify-between gap-3">
-            <h3 className="text-lg font-black text-ink">审核记录</h3>
-            <span className="text-xs font-bold text-ink-soft">{reviewHistory.length} 条</span>
-          </div>
-        </div>
-        <div className="max-h-[calc(100vh-250px)] overflow-auto p-3">
-          {reviewHistory.length ? reviewHistory.map((item, index) => {
-            const active = selectedReview?.id === item.id
-            const pending = item.status === 'PENDING'
-            const rejected = item.status === 'REJECTED'
-            return (
-              <button
-                key={item.id}
-                onClick={() => setSelectedReviewId(item.id)}
-                className={clsx(
-                  'group relative w-full rounded-lg px-3 py-3 text-left transition',
-                  active ? 'bg-white shadow-card ring-1 ring-primary/40' : 'hover:bg-white/70',
-                )}
-              >
-                <span className={clsx(
-                  'absolute left-0 top-3 h-[calc(100%-24px)] w-1 rounded-r-full',
-                  pending ? 'bg-primary' : rejected ? 'bg-red-500' : 'bg-green-500',
-                )} />
-                <div className="flex items-center justify-between gap-3 pl-2">
-                  <span className="text-[11px] font-black text-ink-soft">{String(index + 1).padStart(2, '0')}</span>
-                  <span className={clsx(
-                    'rounded-full px-2 py-0.5 text-[11px] font-black ring-1',
-                    pending ? 'bg-amber-50 text-primary-dark ring-amber-200' : rejected ? 'bg-red-50 text-red-700 ring-red-200' : 'bg-green-50 text-green-700 ring-green-200',
-                  )}>{reviewStatusLabel(item)}</span>
-                </div>
-                <div className="mt-2 truncate pl-2 text-sm font-black text-ink" title={reviewDisplayTitle(item)}>{reviewDisplayTitle(item)}</div>
-                <div className="mt-1 truncate pl-2 text-[11px] font-semibold text-ink-soft" title={item.id}>{item.stage || item.tool || item.id}</div>
-              </button>
-            )
-          }) : (
-            <div className="rounded-lg bg-background-card p-4 text-sm leading-6 text-ink-muted ring-1 ring-line">
-              当前项目还没有可回看的审核记录。阶段产出进入人工确认后会显示在这里。
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="card col-span-8 overflow-hidden p-0 xl:col-span-9">
+      <ReviewStageRelay stages={stages} />
+      <section className="card col-span-12 overflow-hidden p-0">
         {selectedReview ? (
           <>
             <div className="border-b border-line bg-white/70 px-6 py-5">
@@ -541,25 +549,67 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
             </div>
             <div className="grid grid-cols-12 gap-5 p-6">
               <div className="col-span-8 min-w-0">
-                <div className="grid grid-cols-3 gap-3">
-                  <ReviewField label="工具" value={selectedReview.tool || '-'} />
-                  <ReviewField label="阻塞下游" value={selectedReview.blocksDownstream === false ? '否' : '是'} />
-                  <ReviewField label="输出产物" value={reviewArtifacts.map((a) => String(a.name || a.kind || a.unitId || '产物')).join(' / ') || (selectedReview.requiredOutputs || []).join(' / ') || '-'} />
-                </div>
-                <div className="mt-4 rounded-lg bg-white p-5 ring-1 ring-line">
+                <div className="rounded-lg bg-white p-5 ring-1 ring-line">
                   <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <span className="text-sm font-black text-ink">审核内容</span>
-                      <p className="mt-1 text-xs text-ink-soft">保留原始产物文本，方便回看和复制。</p>
+                    <div className="min-w-0">
+                      <span className="text-sm font-black text-ink">审核阶段产物</span>
+                      <p className="mt-1 text-xs text-ink-soft">选择任一记录即可回看对应产物。</p>
                     </div>
                     {outputText ? <CopyButton value={outputText} label="复制" /> : null}
                   </div>
+                  {reviewHistory.length > 1 && (
+                    <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+                      {reviewHistory.map((item, index) => {
+                        const active = selectedReview?.id === item.id
+                        const pending = item.status === 'PENDING'
+                        const rejected = item.status === 'REJECTED'
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => setSelectedReviewId(item.id)}
+                            className={clsx(
+                              'min-w-[150px] max-w-[220px] rounded-lg px-3 py-2 text-left text-xs transition ring-1',
+                              active ? 'bg-primary-soft text-primary-dark ring-primary/50' : 'bg-background-card text-ink-muted ring-line hover:bg-white',
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-black">{String(index + 1).padStart(2, '0')}</span>
+                              <span className={clsx('h-2 w-2 shrink-0 rounded-full', pending ? 'bg-primary' : rejected ? 'bg-red-500' : 'bg-green-500')} />
+                            </div>
+                            <div className="mt-1 truncate font-black text-ink" title={reviewDisplayTitle(item)}>{reviewDisplayTitle(item)}</div>
+                            <div className="mt-0.5 truncate text-[11px]" title={item.tool || item.id}>{reviewStatusLabel(item)}</div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
                   <div className="mt-4 max-h-[520px] overflow-auto rounded-lg bg-background-card p-5 ring-1 ring-line">
                     {outputText ? <ReviewContent text={outputText} /> : <p className="text-sm text-ink-muted">当前审核记录没有可展示正文。</p>}
                   </div>
                 </div>
               </div>
-              <div className="col-span-4 space-y-3">
+              <div className="col-span-4 space-y-3 self-start xl:sticky xl:top-5">
+                {isPending && (
+                  <section className="rounded-lg border border-primary/30 bg-white p-4 shadow-card ring-1 ring-primary/10">
+                    <div className="flex items-center gap-2">
+                      <FiShield className="text-primary" />
+                      <h3 className="text-base font-black text-ink">决策操作</h3>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <ActionButton color="green" icon={<FiCheck />} label="通过" disabled={loading} onClick={() => onAction('approve')} />
+                      <ActionButton color="red" icon={<FiX />} label="驳回" disabled={loading} onClick={() => onAction('reject')} />
+                      <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" disabled={loading} onClick={() => onAction('edit')} />
+                      <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" disabled={loading} onClick={() => onAction('regenerate')} />
+                    </div>
+                    <label className="mt-4 block text-sm font-black text-ink">反馈意见</label>
+                    <textarea
+                      value={feedback}
+                      onChange={(event) => onFeedbackChange(event.target.value)}
+                      placeholder="请输入审核意见或修改建议..."
+                      className="mt-2 h-28 w-full resize-none rounded-lg border border-line bg-background-card p-3 text-sm leading-6 outline-none focus:border-primary"
+                    />
+                  </section>
+                )}
                 <Panel title="审核原因" items={[selectedReview.reviewReason || '等待人工确认后放行下游阶段。']} />
                 {qualityLines.length > 0 && <Panel title="质量门禁" items={qualityLines} />}
                 <Panel title="审核重点" items={selectedStage?.reviewFocus?.length ? selectedStage.reviewFocus : ['产物是否符合创作目标', '是否允许进入下游阶段']} />
@@ -579,31 +629,6 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
           </div>
         )}
       </section>
-
-      {isPending && (
-        <aside className="col-span-12">
-          <section className="card border-primary/30 bg-white/90 p-6">
-            <div className="flex items-start gap-6">
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <FiShield className="text-primary" />
-                  <h3 className="text-lg font-black text-ink">决策操作</h3>
-                </div>
-                <div className="mt-4 grid grid-cols-4 gap-3">
-                  <ActionButton color="green" icon={<FiCheck />} label="通过" disabled={loading} onClick={() => onAction('approve')} />
-                  <ActionButton color="red" icon={<FiX />} label="驳回" disabled={loading} onClick={() => onAction('reject')} />
-                  <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" disabled={loading} onClick={() => onAction('edit')} />
-                  <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" disabled={loading} onClick={() => onAction('regenerate')} />
-                </div>
-              </div>
-              <div className="w-80">
-                <label className="block text-sm font-black text-ink">反馈意见</label>
-                <textarea value={feedback} onChange={(event) => onFeedbackChange(event.target.value)} placeholder="请输入审核意见或修改建议..." className="mt-2 h-24 w-full resize-none rounded-lg border border-line bg-white p-3 text-sm outline-none focus:border-primary" />
-              </div>
-            </div>
-          </section>
-        </aside>
-      )}
     </div>
   )
 }
@@ -615,7 +640,7 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
     if (!selectedId && traceNodes[0]) setSelectedId(traceNodes[0].id)
   }, [selectedId, traceNodes])
 
-  const hasError = (node: DirectorTraceNode) => node.status === 'failed' || node.status === 'blocked' || !!node.error
+  const selectedHasError = traceNodeHasError(selected)
 
   return (
     <div className="grid grid-cols-12 gap-5">
@@ -633,10 +658,10 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
               className={clsx(
                 'rounded-lg border p-4 text-left transition hover:-translate-y-0.5 min-w-0 overflow-hidden',
                 selected?.id === node.id ? 'border-primary bg-primary-soft shadow-card' : 'border-line bg-white/70',
-                hasError(node) && 'border-red-300 bg-red-50/60',
+                traceNodeHasError(node) && 'border-red-300 bg-red-50/60',
               )}>
               <div className="flex items-center justify-between gap-2 min-w-0">
-                <span className={clsx('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black text-white', hasError(node) ? 'bg-red-500' : 'bg-ink')}>
+                <span className={clsx('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black text-white', traceNodeHasError(node) ? 'bg-red-500' : 'bg-ink')}>
                   {String(index + 1).padStart(2, '0')}
                 </span>
                 <StatusBadge status={node.status} />
@@ -656,8 +681,8 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
       <aside className="col-span-4 space-y-5">
         <section className="card p-6">
             <div className="flex min-w-0 items-center gap-3">
-              <div className={clsx('rounded-lg p-3', hasError(selected) ? 'bg-red-50 text-red-600' : 'bg-primary-soft text-primary-dark')}>
-                {hasError(selected) ? <FiShield /> : <FiActivity />}
+              <div className={clsx('rounded-lg p-3', selectedHasError ? 'bg-red-50 text-red-600' : 'bg-primary-soft text-primary-dark')}>
+                {selectedHasError ? <FiShield /> : <FiActivity />}
               </div>
             <div className="min-w-0">
               <p className="text-sm text-ink-soft">节点详情</p>
@@ -669,7 +694,7 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
             <DebugField label="步骤类型" value={selected?.rawType || '-'} />
             <DebugField label="工具名" value={selected?.rawName || '-'} mono />
             <DebugField label="状态" value={selected?.status || '-'} />
-            <DebugField label="执行位置" value={selected?.plane === 'local' ? '本地' : '云端'} />
+            <DebugField label="执行位置" value={selected ? (selected.plane === 'local' ? '本地' : '云端') : '-'} />
             {selected?.duration && selected.duration !== '-' && <DebugField label="耗时" value={selected.duration} />}
             {selected?.createdAt && <DebugField label="创建时间" value={selected.createdAt} mono />}
             <DebugField label="输入" value={selected?.input || '-'} />
@@ -688,9 +713,9 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
             {traceNodes.length ? traceNodes.map((node) => (
               <div key={node.id}
                 onClick={() => setSelectedId(node.id)}
-                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition min-w-0 overflow-hidden', hasError(node) ? 'bg-red-50 ring-red-200' : 'bg-white ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
+                className={clsx('cursor-pointer rounded-lg p-3 ring-1 transition min-w-0 overflow-hidden', traceNodeHasError(node) ? 'bg-red-50 ring-red-200' : 'bg-white ring-line', selected?.id === node.id && 'ring-primary bg-primary-soft')}>
                 <div className="flex items-center justify-between gap-2 min-w-0">
-                  <span className={clsx('truncate font-bold', hasError(node) ? 'text-red-700' : 'text-ink')} title={node.tool}>{node.tool}</span>
+                  <span className={clsx('truncate font-bold', traceNodeHasError(node) ? 'text-red-700' : 'text-ink')} title={node.tool}>{node.tool}</span>
                   <StatusBadge status={node.status} />
                 </div>
                 <div className="mt-1 truncate text-ink-soft">{node.output || node.rawName}</div>
@@ -922,13 +947,9 @@ function Panel({ title, items }: { title: string; items: string[] }) {
   return <div className="min-w-0 rounded-lg bg-background-card p-4 ring-1 ring-line"><b className="text-sm text-ink">{title}</b><ul className="mt-3 space-y-2 text-xs text-ink-muted">{(items.length ? items : ['-']).map((item) => <li key={item} className="[overflow-wrap:anywhere]">{item}</li>)}</ul></div>
 }
 
-function ReviewField({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 rounded-lg bg-background-card p-4 ring-1 ring-line"><span className="text-xs font-black text-primary-dark">{label}</span><p className="mt-2 text-sm leading-7 text-ink-muted [overflow-wrap:anywhere]">{value}</p></div>
-}
-
 function ActionButton({ color, icon, label, disabled, onClick }: { color: 'green' | 'red' | 'amber' | 'violet'; icon: React.ReactNode; label: string; disabled: boolean; onClick: () => void }) {
   const map = { green: 'border-green-200 bg-green-50 text-green-700', red: 'border-red-200 bg-red-50 text-red-700', amber: 'border-amber-200 bg-amber-50 text-primary-dark', violet: 'border-violet-200 bg-violet-50 text-violet' }
-  return <button disabled={disabled} onClick={onClick} className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-45 ${map[color]}`}>{icon}{label}</button>
+  return <button disabled={disabled} onClick={onClick} className={`flex min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-3 text-sm font-black leading-tight transition disabled:cursor-not-allowed disabled:opacity-45 ${map[color]}`}><span className="shrink-0">{icon}</span><span className="[overflow-wrap:anywhere]">{label}</span></button>
 }
 
 function DebugField({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
@@ -994,7 +1015,8 @@ function simpleMarkdown(text: string): string {
 function stageIcon(status: DirectorStageStatus) {
   if (status === 'done') return <FiCheck />
   if (status === 'blocked' || status === 'failed') return <FiLock />
-  if (status === 'running' || status === 'active') return <FiPlay />
+  if (status === 'running') return <FiRefreshCw className="animate-spin" />
+  if (status === 'active') return <FiPlay />
   return <FiCpu />
 }
 

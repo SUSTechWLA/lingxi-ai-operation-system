@@ -426,7 +426,7 @@ func BuildCloudSpec() *Spec {
 	b.Route("GET", "/api/agent/runs/:runId/trace", "Get dynamic agent task trace").
 		Tags("Agent Runs").
 		PathParam("runId", "Agent run identifier", StringSchema()).
-		ResponseJSON("200", "Agent task trace", "TaskDetailResponse").
+		ResponseJSON("200", "Agent task trace", "AgentRunTraceResponse").
 		ResponseJSON("404", "Not found", "ErrorResponse")
 	b.Route("GET", "/api/agent/runs/:runId/reviews", "List review gates for a dynamic agent run").
 		Tags("Agent Runs").

@@ -12,8 +12,8 @@ type mockTool struct {
 }
 
 func (m *mockTool) Name() string        { return m.name }
-func (m *mockTool) Description() string  { return "mock tool" }
-func (m *mockTool) Type() ToolType       { return ToolTypeCustom }
+func (m *mockTool) Description() string { return "mock tool" }
+func (m *mockTool) Type() ToolType      { return ToolTypeCustom }
 func (m *mockTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx ToolContext) ToolResult {
 	return SuccessResult(map[string]interface{}{"ok": true})
 }
@@ -73,6 +73,16 @@ func TestDetermineToolName_ToolTypeUsesName(t *testing.T) {
 	result := DetermineToolName(string(model.NodeTypeTool), map[string]interface{}{"name": "test_tool"})
 	if result != "test_tool" {
 		t.Errorf("Expected 'test_tool', got '%s'", result)
+	}
+}
+
+func TestDetermineToolName_ExternalBridgeNameOverridesCapabilityTool(t *testing.T) {
+	result := DetermineToolName(string(model.NodeTypeTool), map[string]interface{}{
+		"name": "external",
+		"tool": "knowledge_researcher",
+	})
+	if result != "external" {
+		t.Errorf("Expected external bridge tool, got '%s'", result)
 	}
 }
 

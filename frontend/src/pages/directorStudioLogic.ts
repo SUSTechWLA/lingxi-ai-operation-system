@@ -84,8 +84,11 @@ interface TraceNodeLike {
   error?: string
   input?: Record<string, unknown>
   output?: Record<string, unknown>
+  errorMessage?: string
   createdAt?: string
+  startedAt?: string
   updatedAt?: string
+  completedAt?: string
   durationMs?: number
   // Direct node fields (used by some executor implementations)
   tool?: string
@@ -308,11 +311,11 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
     const stage = stringValue(input.stage) || stringValue(output.stage) || ''
     const outDuration = typeof output.durationMs === 'number' ? output.durationMs : undefined
     const nodeDuration = typeof node.durationMs === 'number' ? node.durationMs : undefined
-    const duration = formatDurationMs(outDuration || nodeDuration, node.createdAt, node.updatedAt)
+    const duration = formatDurationMs(outDuration || nodeDuration, node.startedAt || node.createdAt, node.updatedAt || node.completedAt)
     const intent = node.intent || stringValue(input.intent) || ''
 
     // Extract error from stdout/result if present
-    const errStr = stringValue(output.error) || node.error || stringValue(output.stderr) || ''
+    const errStr = stringValue(output.error) || node.error || node.errorMessage || stringValue(output.stderr) || ''
     // Parse stdout JSON for error field
     let stdoutErr = ''
     if (output.stdout) {
@@ -343,6 +346,34 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
       review: rawType === 'REVIEW_GATE' || Boolean(input.humanReview || output.humanReview),
     }
   })
+}
+
+export function nextStageIdAfterReview(stages: DirectorStage[], review: AgentReviewItem | undefined): string | undefined {
+  if (!review) return undefined
+  const index = stages.findIndex((stage) =>
+    stage.reviewId === review.id ||
+    stage.id === review.roleAgentId ||
+    stage.stage === review.stage ||
+    Boolean(review.tool && stage.allowedTools.includes(review.tool)),
+  )
+  if (index < 0) return undefined
+  return stages[index + 1]?.id
+}
+
+export function applyOptimisticRunningStage(stages: DirectorStage[], stageId: string | undefined): DirectorStage[] {
+  if (!stageId) return stages
+  return stages.map((stage) => {
+    if (stage.id !== stageId || stage.status !== 'pending') return stage
+    return {
+      ...stage,
+      status: 'running',
+      progress: Math.max(stage.progress, 18),
+    }
+  })
+}
+
+export function traceNodeHasError(node: DirectorTraceNode | undefined): boolean {
+  return Boolean(node && (node.status === 'failed' || node.status === 'blocked' || node.error))
 }
 
 export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | undefined {

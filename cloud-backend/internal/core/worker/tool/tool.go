@@ -18,11 +18,11 @@ const (
 )
 
 type ToolResult struct {
-	Success    bool                   `json:"success"`
-	Data       map[string]interface{} `json:"data,omitempty"`
-	Error      string                 `json:"error,omitempty"`
-	StartTime  interface{}            `json:"startTime"`
-	EndTime    interface{}            `json:"endTime"`
+	Success   bool                   `json:"success"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+	StartTime interface{}            `json:"startTime"`
+	EndTime   interface{}            `json:"endTime"`
 }
 
 func SuccessResult(data map[string]interface{}) ToolResult {
@@ -215,6 +215,13 @@ func (r *ToolRegistry) ListExternalManifests() []*ToolManifest {
 // --- Tool Routing ---
 
 func DetermineToolName(nodeType string, payload map[string]interface{}) string {
+	if nodeType == string(model.NodeTypeTool) {
+		if name, ok := payload["name"]; ok {
+			if s, ok := name.(string); ok && s == "external" {
+				return s
+			}
+		}
+	}
 	if tool, ok := payload["tool"]; ok {
 		if s, ok := tool.(string); ok && s != "" {
 			return s
@@ -267,4 +274,3 @@ func ExtractParameters(payload map[string]interface{}) map[string]interface{} {
 
 	return result
 }
-

@@ -359,6 +359,57 @@ func TestListReviewsQualityGateShowsProductionOutputWithQualityReport(t *testing
 	}
 }
 
+func TestGetTraceIncludesTaskNodes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{{
+		ID:     "knowledge_researcher_exec",
+		TaskID: "task-1",
+		Type:   model.NodeTypeTool,
+		Name:   "external",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"capabilityTool": "knowledge_researcher",
+			"stage":          "research",
+		},
+		Output: map[string]interface{}{
+			"summary": "佛得角国家与世界杯奇迹资料",
+		},
+	}}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/trace", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Task  map[string]interface{} `json:"task"`
+			Nodes []model.Node           `json:"nodes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data.Nodes) != 1 {
+		t.Fatalf("trace should include task nodes, got %#v", resp.Data.Nodes)
+	}
+	if resp.Data.Nodes[0].ID != "knowledge_researcher_exec" {
+		t.Fatalf("trace should include the execution node, got %#v", resp.Data.Nodes[0])
+	}
+}
+
 type memoryReviewNodeStore struct {
 	nodes []*model.Node
 }

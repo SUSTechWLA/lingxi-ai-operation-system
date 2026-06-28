@@ -19,16 +19,21 @@ try {
   })
 
   const {
+    applyOptimisticRunningStage,
     buildDirectorArtifacts,
     buildPublishCopies,
+    buildDirectorStages,
     formatDirectorErrorMessage,
     normalizeDirectorErrorMessage,
+    nextStageIdAfterReview,
     publishCopiesToJSON,
     publishCopiesToMarkdown,
     reviewDisplayTitle,
     reviewQualityReportLines,
     reviewStatusLabel,
     reviewOutputText,
+    buildDirectorTraceNodes,
+    traceNodeHasError,
     visibleReviewHistory,
   } = await import(pathToFileURL(outfile))
   const roleAgents = [
@@ -70,6 +75,17 @@ try {
   assert.equal(artifacts[0].kind, 'VIDEO')
   assert.equal(artifacts[0].storageRef, '')
   assert.notEqual(artifacts[0].status, 'valid')
+
+  const stagedRoles = [
+    { ...roleAgents[0], id: 'script_writer', stage: 'script', displayName: '脚本编剧', allowedTools: ['video_script_generator'], requiredOutputs: ['VIDEO_SCRIPT'] },
+    { ...roleAgents[0], id: 'storyboard_artist', stage: 'storyboard', displayName: '卡片设计师', allowedTools: ['card_plan_generator'], requiredOutputs: ['CARD_PLAN'] },
+  ]
+  const stagedReviews = [{ id: 'review-script', nodeId: 'review-script-node', status: 'PENDING', roleAgentId: 'script_writer', stage: 'script', tool: 'video_script_generator' }]
+  const stagedFlow = buildDirectorStages(stagedRoles, stagedReviews, { nodes: [] })
+  assert.equal(nextStageIdAfterReview(stagedFlow, stagedReviews[0]), 'storyboard_artist')
+  const optimisticFlow = applyOptimisticRunningStage(stagedFlow, 'storyboard_artist')
+  assert.equal(optimisticFlow[1].status, 'running')
+  assert.equal(stagedFlow[1].status, 'pending')
 
   const proposalArtifacts = buildDirectorArtifacts(
     [{
@@ -148,6 +164,28 @@ try {
   assert.equal(reviewStatusLabel(visibleReviews[0]), '已通过')
   assert.equal(reviewStatusLabel(visibleReviews[1]), '待审核')
   assert.equal(reviewStatusLabel(visibleReviews[2]), '已驳回')
+
+  const nestedTraceNodes = buildDirectorTraceNodes({
+    data: {
+      task: {
+        nodes: [
+          {
+            id: 'gate-1',
+            name: '质量门禁-video_script_generator_quality_gate',
+            type: 'REVIEW_GATE',
+            status: 'FAILED',
+            errorMessage: '评分未达标',
+            input: { stage: 'script' },
+            output: {},
+          },
+        ],
+      },
+    },
+  })
+  assert.equal(nestedTraceNodes.length, 1)
+  assert.equal(nestedTraceNodes[0].error, '评分未达标')
+  assert.equal(traceNodeHasError(undefined), false)
+  assert.equal(traceNodeHasError(nestedTraceNodes[0]), true)
 
   assert.equal(
     formatDirectorErrorMessage(

@@ -1275,6 +1275,59 @@ func TestDependencyChecker_OnNodeExecuted_ChildBecomesReady(t *testing.T) {
 	}
 }
 
+func TestDependencyChecker_OnNodeExecuted_ReviewGatePausesWithoutDispatch(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	depRepo := newMockDepRepo()
+	ctxRepo := newMockContextRepo()
+	eventSaver := newMockEventSaver()
+
+	taskRepo.tasks["t1"] = &model.Task{ID: "t1", Status: model.TaskRunning}
+	nodeRepo.nodes["knowledge_researcher_exec"] = &model.Node{
+		ID:     "knowledge_researcher_exec",
+		TaskID: "t1",
+		Status: model.NodeSuccess,
+	}
+	review := &model.Node{
+		ID:     "knowledge_researcher_review",
+		TaskID: "t1",
+		Status: model.NodeCreated,
+		Type:   model.NodeTypeReviewGate,
+		Name:   "审核-knowledge_researcher",
+		Input: map[string]interface{}{
+			"tool":        "knowledge_researcher",
+			"reviewPhase": "after_artifact",
+		},
+	}
+	nodeRepo.nodes["knowledge_researcher_review"] = review
+	depRepo.deps["knowledge_researcher_review"] = []*model.NodeDependency{
+		{ParentNodeID: "knowledge_researcher_exec", ChildNodeID: "knowledge_researcher_review"},
+	}
+
+	nodeRepoWithChildren := &mockNodeRepoWithChildren{
+		mockNodeRepo: nodeRepo,
+		children: map[string][]*model.Node{
+			"knowledge_researcher_exec": {review},
+		},
+	}
+	ss := NewStateService(nodeRepoWithChildren, taskRepo, depRepo, ctxRepo, eventSaver)
+	dc := NewDependencyChecker(nodeRepoWithChildren, ss, eventSaver)
+
+	dc.OnNodeExecuted(context.Background(), "knowledge_researcher_exec", "t1")
+
+	if nodeRepoWithChildren.nodes["knowledge_researcher_review"].Status != model.NodeReady {
+		t.Errorf("Expected review gate READY, got %s", nodeRepoWithChildren.nodes["knowledge_researcher_review"].Status)
+	}
+	if taskRepo.tasks["t1"].Status != model.TaskPaused {
+		t.Errorf("Expected task PAUSED for review gate, got %s", taskRepo.tasks["t1"].Status)
+	}
+	for _, e := range eventSaver.events {
+		if e.eventType == eventbus.TopicNodeReady && e.event.NodeID == "knowledge_researcher_review" {
+			t.Fatalf("REVIEW_GATE should not be dispatched to worker, got event: %+v", e.event)
+		}
+	}
+}
+
 // Extended mock that supports FindChildNodes
 type mockNodeRepoWithChildren struct {
 	*mockNodeRepo
