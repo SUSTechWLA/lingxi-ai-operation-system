@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
 import { APP_ICON_PATH } from '../utils/brand'
 import {
@@ -56,6 +56,7 @@ import {
   displayNameForArtifact,
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
+  getStageStateDisplay,
   normalizeDirectorErrorMessage,
   nextStageIdAfterReview,
   publishCopiesToJSON,
@@ -456,51 +457,144 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
   )
 }
 
-function ReviewStageRelay({ stages }: { stages: DirectorStage[] }) {
+function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
   const runningStage = stages.find((stage) => stage.status === 'running')
   const reviewStage = stages.find((stage) => stage.status === 'review')
+
   return (
-    <section className="card col-span-12 p-4">
-      <div className="flex items-center justify-between gap-3">
+    <section className="card col-span-12 p-5">
+      <div className="flex items-center justify-between gap-3 mb-4">
         <div>
-          <h3 className="text-base font-black text-ink">阶段接力</h3>
+          <h3 className="text-base font-black text-ink">任务状态机</h3>
           <p className="mt-1 text-xs text-ink-soft">
-            {runningStage ? `${runningStage.displayName}正在生成，产物完成后会进入下一次审核。` : reviewStage ? `${reviewStage.displayName}产物已输出，等待确认。` : '审核通过后，下个角色会立即进入生成中。'}
+            {runningStage ? `${runningStage.displayName} 正在生成，产物完成后进入审核。` : reviewStage ? `${reviewStage.displayName} 产物已输出，等待确认。` : '审核通过后，下个角色立即进入生成中。'}
           </p>
         </div>
-        {runningStage ? (
-          <span className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700 ring-1 ring-blue-200">
-            <FiRefreshCw className="animate-spin" /> 生成中
-          </span>
-        ) : reviewStage ? (
-          <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-primary-dark ring-1 ring-amber-200">
-            <FiShield /> 待审核
-          </span>
-        ) : null}
+        <div className="flex items-center gap-3 text-xs font-semibold text-ink-soft">
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" /> 生成中</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> 待审核</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500" /> 已通过</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-stone-300" /> 等待中</span>
+        </div>
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-5">
-        {stages.map((item, index) => (
-          <div key={item.id} className={clsx('min-w-0 rounded-lg border px-3 py-2.5 transition', stageTone(item.status))}>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className={clsx('grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-black', stageIconTone(item.status))}>{stageIcon(item.status)}</span>
-                <span className="truncate text-xs font-black text-ink" title={item.displayName}>{stageActionLabel(item.stage)}</span>
+      <div className="flex items-center gap-1 overflow-x-auto pb-1">
+        {stages.map((item, index) => {
+          const display = getStageStateDisplay(item.status)
+          return (
+            <Fragment key={item.id}>
+              {index > 0 && (
+                <span className="shrink-0 text-stone-300 text-sm font-bold px-1">→</span>
+              )}
+              <div
+                className={clsx(
+                  'relative shrink-0 rounded-xl border-2 px-4 py-3 text-center transition-all min-w-[110px]',
+                  display.colorClass,
+                  display.active && 'shadow-md scale-105 ring-2 ring-offset-1',
+                  display.active && display.animate && 'animate-pulse',
+                )}
+                title={item.goal}
+              >
+                <div className="flex items-center justify-center gap-1.5">
+                  <span className="text-lg">
+                    {display.icon === 'check' && <FiCheck />}
+                    {display.icon === 'shield' && <FiShield />}
+                    {display.icon === 'refresh' && <FiRefreshCw className="animate-spin" />}
+                    {display.icon === 'x' && <FiX />}
+                    {display.icon === 'cpu' && <FiCpu />}
+                  </span>
+                </div>
+                <div className="mt-1.5 text-xs font-black truncate" title={item.displayName}>
+                  {stageActionLabel(item.stage)}
+                </div>
+                <div className="mt-0.5 text-[10px] font-semibold opacity-70">
+                  {display.label}
+                </div>
               </div>
-              <span className="shrink-0 text-[10px] font-black text-ink-soft">{String(index + 1).padStart(2, '0')}</span>
-            </div>
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <span className="truncate text-[11px] font-semibold text-ink-soft" title={item.displayName}>{item.displayName}</span>
-              <span className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', item.status === 'running' || item.status === 'active' ? 'bg-blue-500' : item.status === 'done' ? 'bg-green-500' : item.status === 'review' ? 'bg-primary' : item.status === 'blocked' || item.status === 'failed' ? 'bg-red-500' : 'bg-stone-300')} />
-            </div>
-          </div>
-        ))}
+            </Fragment>
+          )
+        })}
       </div>
     </section>
   )
 }
 
+function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
+  const runningStage = stages.find((stage) => stage.status === 'running' || stage.status === 'active')
+  const reviewStage = stages.find((stage) => stage.status === 'review')
+  const allDone = stages.length > 0 && stages.every((stage) => stage.status === 'done')
+
+  if (allDone) {
+    return (
+      <div className="col-span-12 rounded-xl border border-green-200 bg-green-50 px-5 py-4 transition-all">
+        <div className="flex items-center gap-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-green-500 text-white">
+            <FiCheck />
+          </span>
+          <div>
+            <p className="text-sm font-black text-green-800">全部阶段已完成</p>
+            <p className="text-xs text-green-600 mt-0.5">所有审核已通过，可在产物页查看和导出最终视频。</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (runningStage) {
+    return (
+      <div className="col-span-12 rounded-xl border border-blue-200 bg-blue-50 px-5 py-4 transition-all">
+        <div className="flex items-center gap-3">
+          <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-500 text-white">
+            <span className="absolute inset-0 rounded-lg bg-blue-400 animate-ping opacity-30" />
+            <FiRefreshCw className="animate-spin relative z-10" />
+          </span>
+          <div>
+            <p className="text-sm font-black text-blue-800">
+              系统正在生成【{runningStage.displayName}】的{stageActionLabel(runningStage.stage)}
+            </p>
+            <p className="text-xs text-blue-600 mt-0.5">生成完成后将自动进入审核阶段，请稍候…</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (reviewStage) {
+    return (
+      <div className="col-span-12 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 transition-all">
+        <div className="flex items-center gap-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-amber-500 text-white">
+            <FiShield />
+          </span>
+          <div>
+            <p className="text-sm font-black text-amber-800">
+              【{reviewStage.displayName}】产物已输出，等待你的确认
+            </p>
+            <p className="text-xs text-amber-600 mt-0.5">请审核下方内容，确认后下游阶段将自动继续执行。</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // No stages active yet
+  return (
+    <div className="col-span-12 rounded-xl border border-stone-200 bg-stone-50 px-5 py-4 transition-all">
+      <div className="flex items-center gap-3">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-stone-400 text-white">
+          <FiCpu />
+        </span>
+        <div>
+          <p className="text-sm font-black text-stone-700">等待任务启动</p>
+          <p className="text-xs text-stone-500 mt-0.5">在概览页输入主题并启动项目，审核内容将显示在这里。</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction, allReviews, stages }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void; allReviews: AgentReviewItem[]; stages: DirectorStage[] }) {
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>(review?.id)
+  const [activeAction, setActiveAction] = useState<string | null>(null)
   const reviewHistory = useMemo(() => visibleReviewHistory(allReviews), [allReviews])
   const selectedReview = reviewHistory.find((item) => item.id === selectedReviewId) || review || reviewHistory[0]
   const selectedStage = useMemo(() => {
@@ -529,9 +623,15 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
     }
   }, [review?.id, reviewHistory, selectedReviewId])
 
+  useEffect(() => {
+    if (!loading) setActiveAction(null)
+    return () => { setActiveAction(null) }
+  }, [loading])
+
   return (
     <div className="grid grid-cols-12 gap-5">
-      <ReviewStageRelay stages={stages} />
+      <NowGeneratingBanner stages={stages} />
+      <StateMachineBar stages={stages} />
       <section className="card col-span-12 overflow-hidden p-0">
         {selectedReview ? (
           <>
@@ -601,10 +701,10 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                       <h3 className="text-base font-black text-ink">决策操作</h3>
                     </div>
                     <div className="mt-4 grid grid-cols-2 gap-2">
-                      <ActionButton color="green" icon={<FiCheck />} label="通过" disabled={loading} onClick={() => onAction('approve')} />
-                      <ActionButton color="red" icon={<FiX />} label="驳回" disabled={loading} onClick={() => onAction('reject')} />
-                      <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" disabled={loading} onClick={() => onAction('edit')} />
-                      <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" disabled={loading} onClick={() => onAction('regenerate')} />
+                      <ActionButton color="green" icon={<FiCheck />} label="通过" loadingLabel="通过中…" loading={loading && activeAction === 'approve'} disabled={loading} onClick={() => { setActiveAction('approve'); onAction('approve'); }} />
+                      <ActionButton color="red" icon={<FiX />} label="驳回" loadingLabel="驳回中…" loading={loading && activeAction === 'reject'} disabled={loading} onClick={() => { setActiveAction('reject'); onAction('reject'); }} />
+                      <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" loadingLabel="提交中…" loading={loading && activeAction === 'edit'} disabled={loading} onClick={() => { setActiveAction('edit'); onAction('edit'); }} />
+                      <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" loadingLabel="重新生成中…" loading={loading && activeAction === 'regenerate'} disabled={loading} onClick={() => { setActiveAction('regenerate'); onAction('regenerate'); }} />
                     </div>
                     <label className="mt-4 block text-sm font-black text-ink">反馈意见</label>
                     <textarea
@@ -952,9 +1052,23 @@ function Panel({ title, items }: { title: string; items: string[] }) {
   return <div className="min-w-0 rounded-lg bg-background-card p-4 ring-1 ring-line"><b className="text-sm text-ink">{title}</b><ul className="mt-3 space-y-2 text-xs text-ink-muted">{(items.length ? items : ['-']).map((item) => <li key={item} className="[overflow-wrap:anywhere]">{item}</li>)}</ul></div>
 }
 
-function ActionButton({ color, icon, label, disabled, onClick }: { color: 'green' | 'red' | 'amber' | 'violet'; icon: React.ReactNode; label: string; disabled: boolean; onClick: () => void }) {
-  const map = { green: 'border-green-200 bg-green-50 text-green-700', red: 'border-red-200 bg-red-50 text-red-700', amber: 'border-amber-200 bg-amber-50 text-primary-dark', violet: 'border-violet-200 bg-violet-50 text-violet' }
-  return <button disabled={disabled} onClick={onClick} className={`flex min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-3 text-sm font-black leading-tight transition disabled:cursor-not-allowed disabled:opacity-45 ${map[color]}`}><span className="shrink-0">{icon}</span><span className="[overflow-wrap:anywhere]">{label}</span></button>
+function ActionButton({ color, icon, label, disabled, onClick, loading = false, loadingLabel = '' }: { color: 'green' | 'red' | 'amber' | 'violet'; icon: React.ReactNode; label: string; disabled: boolean; onClick: () => void; loading?: boolean; loadingLabel?: string }) {
+  const map = { green: 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100', red: 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100', amber: 'border-amber-200 bg-amber-50 text-primary-dark hover:bg-amber-100', violet: 'border-violet-200 bg-violet-50 text-violet hover:bg-violet-100' }
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      className={clsx(
+        'flex min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-3 text-sm font-black leading-tight transition disabled:cursor-not-allowed',
+        loading ? 'opacity-70' : '',
+        disabled && !loading ? 'opacity-45' : '',
+        map[color],
+      )}
+    >
+      <span className="shrink-0">{loading ? <FiRefreshCw className="animate-spin" /> : icon}</span>
+      <span className="[overflow-wrap:anywhere]">{loading && loadingLabel ? loadingLabel : label}</span>
+    </button>
+  )
 }
 
 function DebugField({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
