@@ -521,7 +521,19 @@ function stageStatusFor(
   review: AgentReviewItem | undefined,
   node: TraceNodeLike | undefined,
 ): DirectorStageStatus {
-  if (review?.status === 'PENDING') return 'review'
+  // When a PENDING review exists, check whether content is still generating.
+  // If the trace node is a tool execution (not a review gate) and is still
+  // running, show "生成中" so the user knows the system is still working.
+  // Once the exec completes and the review gate appears, show "待审核".
+  if (review?.status === 'PENDING') {
+    if (node?.status) {
+      const normalizedStatus = normalizeDirectorStatus(node.status)
+      if (!isReviewTraceNode(node) && (normalizedStatus === 'running' || normalizedStatus === 'active')) {
+        return 'running'
+      }
+    }
+    return 'review'
+  }
   if (review?.status === 'REJECTED') return 'blocked'
   if (review?.status === 'APPROVED') return 'done'
   if (node?.status) {
@@ -547,7 +559,15 @@ function artifactStatusFor(
   review: AgentReviewItem | undefined,
   node: TraceNodeLike | undefined,
 ): DirectorArtifactStatus {
-  if (review?.status === 'PENDING') return 'review'
+  if (review?.status === 'PENDING') {
+    if (node?.status) {
+      const normalizedStatus = normalizeDirectorStatus(node.status)
+      if (!isReviewTraceNode(node) && (normalizedStatus === 'running' || normalizedStatus === 'active')) {
+        return 'running'
+      }
+    }
+    return 'review'
+  }
   if (review?.status === 'REJECTED') return 'blocked'
   if (review?.status === 'APPROVED') return 'valid'
   const status = normalizeDirectorStatus(node?.status)
