@@ -761,8 +761,17 @@ func executeNewsSearch(params map[string]interface{}) tool.ToolResult {
 	if len(queries) == 0 {
 		queries = searchQueriesParam(params["query"])
 	}
+	// Fall back to topic/brief when PlanCompiler doesn't inject explicit search queries
 	if len(queries) == 0 {
-		return tool.FailureResult("news_search requires at least one query")
+		if topic := stringParam(params, "topic", ""); topic != "" {
+			queries = append(queries, topic)
+		}
+		if brief := stringParam(params, "brief", ""); brief != "" && len(queries) == 0 {
+			queries = append(queries, brief)
+		}
+	}
+	if len(queries) == 0 {
+		return tool.FailureResult("news_search requires at least one query (or topic/brief)")
 	}
 	topK := intParam(params, "topK", 8)
 	if topK <= 0 {
