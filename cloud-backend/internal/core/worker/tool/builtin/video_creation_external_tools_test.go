@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -310,6 +312,16 @@ stages:
 }
 
 func TestExecuteProposalGeneratorReturnsDecisionLoggedPacket(t *testing.T) {
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		localAgentConfigFetcher = previousFetcher
+	})
+
 	result := executeLocalVideoCreationTool("proposal_generator", map[string]interface{}{
 		"brief":             "请帮我根据端午节的来历创作一个 60 秒知识分享视频",
 		"targetDurationSec": float64(60),
@@ -363,6 +375,127 @@ func TestExecuteRenderStrategyPlannerReturnsHybridStrategy(t *testing.T) {
 	}
 	if result.Data["decisionLog"] == nil {
 		t.Fatalf("render_strategy_planner should expose decisionLog: %#v", result.Data)
+	}
+}
+
+func TestExecuteAssetDecisionAgentReturnsReferenceAssetPlan(t *testing.T) {
+	result := executeLocalVideoCreationTool("asset_decision_agent", map[string]interface{}{
+		"stage": "reference",
+		"cardPlan": map[string]interface{}{
+			"cards": []interface{}{
+				map[string]interface{}{"cardId": "card_001", "title": "佛得角奇迹"},
+			},
+		},
+		"shotList": []interface{}{
+			map[string]interface{}{"shotId": "shot_001", "visual": "佛得角群岛地图与世界杯标志", "durationSec": float64(6)},
+			map[string]interface{}{"shotId": "shot_002", "visual": "数据卡片和时间轴动画", "durationSec": float64(8)},
+		},
+		"compositionSpec": map[string]interface{}{
+			"totalDurationSec": float64(30),
+		},
+	}, tool.ToolContext{TaskID: "task-asset", NodeID: "asset_decision_agent_exec"})
+
+	if !result.Success {
+		t.Fatalf("asset_decision_agent failed: %s", result.Error)
+	}
+	plan, ok := result.Data["referenceAssetPlan"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing referenceAssetPlan: %#v", result.Data)
+	}
+	shots, ok := plan["shots"].([]map[string]interface{})
+	if !ok || len(shots) != 2 {
+		t.Fatalf("expected two shot asset decisions, got %#v", plan["shots"])
+	}
+	allowed := map[string]bool{
+		"open_asset_search":    true,
+		"hyperframes_html":     true,
+		"aigc_image_video_api": true,
+		"manual_upload":        true,
+		"placeholder_fallback": true,
+	}
+	for _, shot := range shots {
+		source := ensureStringValue(shot["source"])
+		if !allowed[source] {
+			t.Fatalf("unexpected asset source %q in shot decision %#v", source, shot)
+		}
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) == 0 {
+		t.Fatalf("asset_decision_agent should expose artifacts: %#v", result.Data["artifacts"])
+	}
+	if artifacts[0]["kind"] != "REFERENCE_ASSET_PLAN" {
+		t.Fatalf("expected REFERENCE_ASSET_PLAN artifact, got %#v", artifacts[0])
+	}
+}
+
+func TestTextImageToVideoGeneratorUsesFakeModelGatewayForFinalVideoArtifact(t *testing.T) {
+	gw := modelgateway.NewGateway("fake")
+	fp := fake.NewProvider()
+	fp.LatencyMs = 0
+	gw.RegisterProvider(fp, modelgateway.CapTextToVideo, modelgateway.CapImageToVideo)
+	previousGateway := modelGateway
+	SetModelGateway(gw)
+	t.Cleanup(func() {
+		SetModelGateway(previousGateway)
+	})
+
+	result := executeLocalVideoCreationTool("text_image_to_video_generator", map[string]interface{}{
+		"stage":    "render",
+		"prompt":   "生成一段佛得角世界杯奇迹的动态图文视频",
+		"imageUrl": "local://projects/vp-1/keyframes/shot_001.png",
+	}, tool.ToolContext{TaskID: "task-video", NodeID: "text_image_to_video_generator_exec"})
+
+	if !result.Success {
+		t.Fatalf("text_image_to_video_generator failed: %s", result.Error)
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) == 0 {
+		t.Fatalf("expected final video artifact manifest, got %#v", result.Data["artifacts"])
+	}
+	if artifacts[0]["kind"] != "VIDEO" {
+		t.Fatalf("expected VIDEO artifact, got %#v", artifacts[0])
+	}
+	if ensureStringValue(artifacts[0]["storageRef"]) == "" {
+		t.Fatalf("VIDEO artifact should include storageRef: %#v", artifacts[0])
+	}
+}
+
+func TestOneSentenceFakeProviderChainReachesFinalVideoArtifact(t *testing.T) {
+	gw := modelgateway.NewGateway("fake")
+	fp := fake.NewProvider()
+	fp.LatencyMs = 0
+	gw.RegisterProvider(fp, modelgateway.CapTextToVideo, modelgateway.CapImageToVideo)
+	previousGateway := modelGateway
+	SetModelGateway(gw)
+	t.Cleanup(func() {
+		SetModelGateway(previousGateway)
+	})
+
+	assetResult := executeLocalVideoCreationTool("asset_decision_agent", map[string]interface{}{
+		"stage": "reference",
+		"brief": "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		"shotList": []interface{}{
+			map[string]interface{}{"shotId": "shot_001", "visual": "佛得角地图、国旗和数据卡片动画", "durationSec": float64(8)},
+		},
+		"compositionSpec": map[string]interface{}{"totalDurationSec": float64(30)},
+	}, tool.ToolContext{TaskID: "task-chain", NodeID: "asset_decision_agent_exec"})
+	if !assetResult.Success {
+		t.Fatalf("asset_decision_agent failed: %s", assetResult.Error)
+	}
+	if _, ok := assetResult.Data["referenceAssetPlan"].(map[string]interface{}); !ok {
+		t.Fatalf("asset decision should return referenceAssetPlan: %#v", assetResult.Data)
+	}
+
+	videoResult := executeLocalVideoCreationTool("text_image_to_video_generator", map[string]interface{}{
+		"stage":  "render",
+		"prompt": "根据审核后的卡片、分镜和视频结构生成最终视频占位产物",
+	}, tool.ToolContext{TaskID: "task-chain", NodeID: "text_image_to_video_generator_exec"})
+	if !videoResult.Success {
+		t.Fatalf("fake video generation failed: %s", videoResult.Error)
+	}
+	artifacts, ok := videoResult.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) == 0 || artifacts[0]["kind"] != "VIDEO" {
+		t.Fatalf("fake chain should reach final VIDEO artifact, got %#v", videoResult.Data["artifacts"])
 	}
 }
 

@@ -382,6 +382,8 @@ func main() {
 		} else {
 			fakeProvider := fake.NewProvider()
 			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToImage)
+			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToVideo)
+			gw.RegisterProvider(fakeProvider, modelgateway.CapImageToVideo)
 			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
 		}
 		builtin.SetModelGateway(gw)
@@ -565,11 +567,12 @@ func main() {
 		// writes audit-trail entries automatically.
 		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore})
 
+		artifactRepo := artifact.NewRepository(pool)
+		artifactSvc := artifact.NewService(artifactRepo)
+		stageApprovalSvc.WithArtifactApprover(artifactSvc)
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
 			WithCheckpointService(checkpointSvc).
 			RegisterRoutes(r)
-		artifactRepo := artifact.NewRepository(pool)
-		artifactSvc := artifact.NewService(artifactRepo)
 		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo)
 
 		// Wire session dependencies into the project handler

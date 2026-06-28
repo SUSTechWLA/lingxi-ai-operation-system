@@ -261,6 +261,10 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 		if content, ok := payload["content"].(string); ok {
 			return []byte(content)
 		}
+	case "composition":
+		if spec, ok := payload["compositionSpec"]; ok && spec != nil {
+			return marshalValue(spec)
+		}
 	case "publish-copy":
 		if pc, ok := payload["publishCopy"].(map[string]interface{}); ok {
 			return normalizePublishCopy(pc)
@@ -293,11 +297,34 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 			return []byte(content)
 		}
 		// Generic JSON artifacts: serialize the whole payload.
-		if kind == KindJSON && len(payload) > 0 {
+		if isStructuredJSONArtifactKind(kind) && len(payload) > 0 {
 			return marshalValue(payload)
 		}
 	}
 	return nil
+}
+
+func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
+	if kind == KindJSON {
+		return true
+	}
+	switch strings.ToUpper(string(kind)) {
+	case "VIDEO_PROPOSAL",
+		"CARD_PLAN",
+		"CAPTION_PLAN",
+		"SHOT_LIST",
+		"VIDEO_COMPOSITION_SPEC",
+		"REFERENCE_ASSET_PLAN",
+		"STYLE_PROFILE",
+		"CONTINUITY_REPORT",
+		"PREVIEW_REPORT",
+		"RENDER_REPORT",
+		"FINAL_REVIEW",
+		"PROJECT_PACKAGE":
+		return true
+	default:
+		return false
+	}
 }
 
 // normalizePublishCopy ensures publish-copy content has the keys the frontend

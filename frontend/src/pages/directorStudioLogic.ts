@@ -2,7 +2,7 @@ import type { AgentReviewItem, VideoRoleAgent } from '../utils/types'
 
 export type DirectorNavKey = 'overview' | 'review' | 'trace' | 'assets' | 'roles' | 'export' | 'system'
 export type DirectorStageStatus = 'done' | 'active' | 'review' | 'blocked' | 'pending' | 'running' | 'failed'
-export type DirectorArtifactStatus = 'valid' | 'review' | 'stale' | 'pending' | 'running' | 'failed' | 'blocked'
+export type DirectorArtifactStatus = 'valid' | 'review' | 'stale' | 'pending' | 'running' | 'failed' | 'blocked' | 'missing'
 
 export interface DirectorStage {
   id: string
@@ -96,6 +96,12 @@ interface TraceNodeLike {
   dependsOn?: string[]
 }
 
+interface RoleTraceMatch {
+  execNode?: TraceNodeLike
+  reviewNode?: TraceNodeLike
+  currentNode?: TraceNodeLike
+}
+
 export function buildDirectorStages(
   roleAgents: VideoRoleAgent[],
   reviews: AgentReviewItem[] = [],
@@ -106,8 +112,8 @@ export function buildDirectorStages(
 
   return roleAgents.map((role) => {
     const review = findReviewForRole(role, reviews)
-    const node = findTraceNodeForRole(role, traceNodes)
-    const status = stageStatusFor(role, review, node, projectStarted)
+    const match = findTraceNodesForRole(role, traceNodes)
+    const status = stageStatusFor(role, review, match, projectStarted)
 
     return {
       id: role.id,
@@ -262,7 +268,8 @@ export function buildDirectorArtifacts(
   return roleAgents.flatMap((role, roleIndex) => {
     const outputs = role.requiredOutputs?.length ? role.requiredOutputs : [`${role.stage}_OUTPUT`]
     const review = findReviewForRole(role, reviews)
-    const node = findTraceNodeForRole(role, traceNodes)
+    const match = findTraceNodesForRole(role, traceNodes)
+    const node = match.execNode || match.currentNode
     const artifactOutputs = extractArtifacts(node)
 
     return outputs.map((output, outputIndex) => {
@@ -270,9 +277,10 @@ export function buildDirectorArtifacts(
       const manifestStatus = normalizeArtifactStatus(stringValue(artifact?.status))
       const requiresManifest = requiresMaterializedArtifact(output)
       const fallbackStatus = artifactStatusFor(review, node)
+      const missingManifest = !artifact && requiresManifest && execSucceeded(node)
       const status = artifact
         ? manifestStatus || fallbackStatus
-        : requiresManifest ? 'pending' : fallbackStatus
+        : missingManifest ? 'missing' : requiresManifest ? 'pending' : fallbackStatus
       const manifestHumanApproved = booleanValue(artifact?.humanApproved)
       const index = roleIndex + 1
 
@@ -506,7 +514,7 @@ function findReviewForRole(role: VideoRoleAgent, reviews: AgentReviewItem[]) {
   })
 }
 
-function findTraceNodeForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]) {
+function findTraceNodesForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]): RoleTraceMatch {
   const reversed = [...nodes].reverse()
 
   const matchNode = (node: TraceNodeLike): boolean => {
@@ -526,41 +534,60 @@ function findTraceNodeForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]) {
   // correctly show "生成中" while the tool runs and "待审核" once
   // the exec completes and the review gate is ready.
   const execNode = reversed.find((node) => matchNode(node) && !isReviewTraceNode(node))
-  if (execNode) return execNode
+  const reviewNode = reversed.find((node) => matchNode(node) && isReviewTraceNode(node))
+  const execStatus = normalizeDirectorStatus(execNode?.status)
+  if (execNode && (execStatus === 'running' || execStatus === 'active')) {
+    return { execNode, reviewNode, currentNode: execNode }
+  }
+  if (reviewNode) {
+    return { execNode, reviewNode, currentNode: reviewNode }
+  }
+  if (execNode) {
+    return { execNode, currentNode: execNode }
+  }
 
-  return reversed.find(matchNode)
+  const currentNode = reversed.find(matchNode)
+  return { currentNode }
 }
 
 function stageStatusFor(
   role: VideoRoleAgent,
   review: AgentReviewItem | undefined,
-  node: TraceNodeLike | undefined,
+  match: RoleTraceMatch,
   projectStarted: boolean,
 ): DirectorStageStatus {
+  const execNode = match.execNode
+  const reviewNode = match.reviewNode
+  const node = match.currentNode
+  const execStatus = normalizeDirectorStatus(execNode?.status)
+  const hasRequiredArtifacts = hasRequiredMaterializedArtifacts(role, execNode) || hasReviewArtifactsForRole(role, review)
+  const missingRequiredArtifacts = requiredMaterializedArtifactsMissing(role, execNode)
+
+  if (execNode && (execStatus === 'running' || execStatus === 'active')) {
+    return 'running'
+  }
+  if (execStatus === 'failed' || missingRequiredArtifacts) {
+    return 'failed'
+  }
+
   // When a PENDING review exists, check whether content is still generating.
   // If the trace node is a tool execution (not a review gate) and is still
   // running, show "生成中" so the user knows the system is still working.
   // Once the exec completes and the review gate appears, show "待审核".
   if (review?.status === 'PENDING') {
-    if (!isActionablePendingReview(review)) {
-      if (node?.status) {
-        const normalizedStatus = normalizeDirectorStatus(node.status)
-        if (!isReviewTraceNode(node) && (normalizedStatus === 'running' || normalizedStatus === 'active')) {
-          return 'running'
-        }
-      }
-      return projectStarted ? 'running' : 'pending'
-    }
-    if (node?.status) {
-      const normalizedStatus = normalizeDirectorStatus(node.status)
-      if (!isReviewTraceNode(node) && (normalizedStatus === 'running' || normalizedStatus === 'active')) {
-        return 'running'
-      }
-    }
-    return 'review'
+    if (isActionablePendingReview(review) || hasRequiredArtifacts) return 'review'
+    return 'pending'
   }
   if (review?.status === 'REJECTED') return 'blocked'
   if (review?.status === 'APPROVED') return 'done'
+  if (reviewNode) {
+    const reviewStatus = normalizeDirectorStatus(reviewNode.status)
+    if (reviewStatus === 'failed') return 'failed'
+    if (reviewStatus === 'pending' || reviewStatus === 'running') {
+      if (isActionableTraceReviewNode(reviewNode) || hasRequiredArtifacts) return 'review'
+      return projectStarted ? 'pending' : 'pending'
+    }
+  }
   if (node?.status) {
     const status = normalizeDirectorStatus(node.status)
     if (isReviewTraceNode(node) && (status === 'running' || status === 'pending')) {
@@ -609,11 +636,37 @@ function artifactStatusFor(
   return 'pending'
 }
 
+function execSucceeded(node: TraceNodeLike | undefined): boolean {
+  return Boolean(node && !isReviewTraceNode(node) && normalizeDirectorStatus(node.status) === 'done')
+}
+
+function hasRequiredMaterializedArtifacts(role: VideoRoleAgent, node: TraceNodeLike | undefined): boolean {
+  const required = (role.requiredOutputs || []).filter(requiresMaterializedArtifact)
+  if (!required.length) return false
+  const artifacts = extractArtifacts(node)
+  if (!artifacts.length) return false
+  return required.every((kind) => artifacts.some((artifact) => stringValue(artifact.kind) === kind))
+}
+
+function requiredMaterializedArtifactsMissing(role: VideoRoleAgent, node: TraceNodeLike | undefined): boolean {
+  const required = (role.requiredOutputs || []).filter(requiresMaterializedArtifact)
+  if (!required.length || !execSucceeded(node)) return false
+  const artifacts = extractArtifacts(node)
+  return required.some((kind) => !artifacts.some((artifact) => stringValue(artifact.kind) === kind))
+}
+
+function hasReviewArtifactsForRole(role: VideoRoleAgent, review: AgentReviewItem | undefined): boolean {
+  if (!review || !Array.isArray(review.reviewArtifacts) || review.reviewArtifacts.length === 0) return false
+  const required = (role.requiredOutputs || []).filter(requiresMaterializedArtifact)
+  if (!required.length) return true
+  return required.every((kind) => review.reviewArtifacts?.some((artifact) => stringValue(artifact.kind) === kind))
+}
+
 function normalizeDirectorStatus(status?: string): DirectorStageStatus {
   const normalized = (status || '').toUpperCase()
   if (['SUCCESS', 'SUCCEEDED', 'COMPLETED', 'APPROVED'].includes(normalized)) return 'done'
-  if (['RUNNING', 'READY'].includes(normalized)) return 'running'
-  if (['PENDING', 'CREATED'].includes(normalized)) return 'pending'
+  if (['RUNNING'].includes(normalized)) return 'running'
+  if (['READY', 'PENDING', 'CREATED'].includes(normalized)) return 'pending'
   if (['FAILED', 'ERROR', 'CANCELLED'].includes(normalized)) return 'failed'
   if (['REJECTED', 'BLOCKED'].includes(normalized)) return 'blocked'
   return 'pending'
@@ -621,7 +674,7 @@ function normalizeDirectorStatus(status?: string): DirectorStageStatus {
 
 function normalizeArtifactStatus(status?: string): DirectorArtifactStatus | undefined {
   const normalized = (status || '').toLowerCase()
-  if (['valid', 'review', 'stale', 'pending', 'running', 'failed', 'blocked'].includes(normalized)) return normalized as DirectorArtifactStatus
+  if (['valid', 'review', 'stale', 'pending', 'running', 'failed', 'blocked', 'missing'].includes(normalized)) return normalized as DirectorArtifactStatus
   if (normalized === 'rejected') return 'blocked'
   return undefined
 }
@@ -1044,7 +1097,23 @@ function displayStorageRef(value: unknown): string {
 }
 
 function requiresMaterializedArtifact(kind: string) {
-  return kind === 'VIDEO' || kind === 'PROJECT_PACKAGE'
+  return [
+    'VIDEO_PROPOSAL',
+    'VIDEO_SCRIPT',
+    'CARD_PLAN',
+    'CAPTION_PLAN',
+    'SHOT_LIST',
+    'VIDEO_COMPOSITION_SPEC',
+    'REFERENCE_ASSET_PLAN',
+    'STYLE_PROFILE',
+    'CONTINUITY_REPORT',
+    'HYPERFRAMES_PROJECT',
+    'PREVIEW_SNAPSHOTS',
+    'VIDEO',
+    'FFMPEG_PROBE_REPORT',
+    'FINAL_REVIEW',
+    'PROJECT_PACKAGE',
+  ].includes(kind)
 }
 
 function normalizePublishTopic(topic: string) {

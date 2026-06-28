@@ -66,6 +66,8 @@ func (p *Provider) Execute(ctx context.Context, req *modelgateway.ModelRequest) 
 		content = `{"url":"https://fake.example.com/generated.png","width":1024,"height":1024}`
 	case modelgateway.CapTextToVideo:
 		content = `{"jobId":"fake-job-123","status":"completed","url":"https://fake.example.com/video.mp4"}`
+	case modelgateway.CapImageToVideo:
+		content = `{"jobId":"fake-image-video-123","status":"completed","url":"https://fake.example.com/image-to-video.mp4"}`
 	case modelgateway.CapImageToText:
 		content = `{"description":"A well-composed scene with balanced lighting and clear subject focus."}`
 	default:

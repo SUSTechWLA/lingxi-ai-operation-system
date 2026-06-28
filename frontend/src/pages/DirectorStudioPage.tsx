@@ -1043,6 +1043,7 @@ function StatusBadge({ status, label }: { status: DirectorArtifactStatus | Direc
     valid: '有效',
     stale: '已过期',
     failed: '失败',
+    missing: '产物缺失',
   }
   return <span className={clsx('inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1', statusBadgeTone(status))}>{label ?? labelMap[status]}</span>
 }
@@ -1164,6 +1165,6 @@ function statusBadgeTone(status: DirectorArtifactStatus | DirectorStageStatus) {
   if (status === 'done' || status === 'valid') return 'bg-green-50 text-green-700 ring-green-200'
   if (status === 'review') return 'bg-amber-50 text-primary-dark ring-amber-200'
   if (status === 'running' || status === 'active') return 'bg-blue-50 text-blue-700 ring-blue-200'
-  if (status === 'blocked' || status === 'stale' || status === 'failed') return 'bg-red-50 text-red-700 ring-red-200'
+  if (status === 'blocked' || status === 'stale' || status === 'failed' || status === 'missing') return 'bg-red-50 text-red-700 ring-red-200'
   return 'bg-stone-50 text-stone-600 ring-stone-200'
 }

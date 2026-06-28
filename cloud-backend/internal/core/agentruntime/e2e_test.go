@@ -461,14 +461,15 @@ func tangyingDirectorBetaPlan() *AgentPlan {
 			},
 			{
 				ID:        "reference",
-				Intent:    "确定背景、字体、图标和参考资产策略",
-				Tool:      "reference_asset_planner",
-				DependsOn: []string{"composition"},
+				Intent:    "按审核卡片、分镜计划和视频结构判断每个 shot 的素材来源",
+				Tool:      "asset_decision_agent",
+				DependsOn: []string{"storyboard", "composition"},
 				Arguments: map[string]interface{}{
 					"stage":           "reference",
+					"cardPlan":        "{{storyboard.output.cardPlan}}",
 					"compositionSpec": "{{composition.output.compositionSpec}}",
 				},
-				ExpectedOutput:  []string{"referenceAssetPlan", "styleProfile", "REFERENCE_ASSET_PLAN", "STYLE_PROFILE"},
+				ExpectedOutput:  []string{"referenceAssetPlan", "REFERENCE_ASSET_PLAN"},
 				ProduceArtifact: true,
 			},
 			{
@@ -572,6 +573,10 @@ func tangyingDirectorBetaCatalog() staticToolCatalog {
 			"REFERENCE_ASSET_PLAN": "object",
 			"STYLE_PROFILE":        "object",
 		}, []string{"REFERENCE_ASSET_PLAN", "STYLE_PROFILE"}, tool.ApprovalNone, nil),
+		"asset_decision_agent": betaManifest("asset_decision_agent", []string{"cardPlan", "compositionSpec"}, map[string]string{
+			"referenceAssetPlan":   "object",
+			"REFERENCE_ASSET_PLAN": "object",
+		}, []string{"REFERENCE_ASSET_PLAN"}, tool.ApprovalNone, nil),
 		"continuity_checker": betaManifest("continuity_checker", []string{"referenceAssetPlan"}, map[string]string{
 			"continuityReport":  "object",
 			"styleProfile":      "object",

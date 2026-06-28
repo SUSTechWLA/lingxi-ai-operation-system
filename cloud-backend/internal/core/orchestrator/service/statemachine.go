@@ -142,9 +142,7 @@ func (sm *StateMachine) OnSuccess(ctx context.Context, nodeID string, output map
 		}
 	}
 
-	if sm.stateService.dependencyChecker != nil {
-		sm.stateService.dependencyChecker.OnNodeExecuted(ctx, node.ID, node.TaskID)
-	}
+	sm.wakeDownstreamNodes(ctx, node)
 
 	completed, _ := sm.stateService.CheckTaskCompleted(ctx, node.TaskID)
 	if completed {
@@ -152,6 +150,17 @@ func (sm *StateMachine) OnSuccess(ctx context.Context, nodeID string, output map
 	}
 
 	return nil
+}
+
+func (sm *StateMachine) wakeDownstreamNodes(ctx context.Context, node *model.Node) {
+	if node == nil || sm.stateService == nil {
+		return
+	}
+	if sm.stateService.dependencyChecker != nil {
+		sm.stateService.dependencyChecker.OnNodeExecuted(ctx, node.ID, node.TaskID)
+		return
+	}
+	NewDependencyChecker(sm.nodeRepo, sm.stateService, sm.eventSaver).OnNodeExecuted(ctx, node.ID, node.TaskID)
 }
 
 func (sm *StateMachine) OnFailure(ctx context.Context, nodeID string, errorMessage string) error {

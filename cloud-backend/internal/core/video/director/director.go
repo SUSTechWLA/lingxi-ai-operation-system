@@ -183,7 +183,7 @@ func DefaultRoleAgents() []skillcapability.RoleAgent {
 			Goal:            "选择图文视频风格参考、背景策略、图标策略和字体策略。",
 			RequiredInputs:  []string{"VIDEO_PROPOSAL", "VIDEO_COMPOSITION_SPEC"},
 			RequiredOutputs: []string{"REFERENCE_ASSET_PLAN"},
-			AllowedTools:    []string{"reference_asset_planner", "asset_policy_generator"},
+			AllowedTools:    []string{"asset_decision_agent", "reference_asset_planner", "asset_policy_generator"},
 			ForbiddenTools:  []string{"hyperframes_renderer", "artifact_packager"},
 			MaxToolCalls:    2,
 		},

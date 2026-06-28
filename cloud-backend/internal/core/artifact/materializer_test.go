@@ -235,6 +235,59 @@ func TestBuildArtifactsFromNodeOutputHandlesMapManifestWithValidFields(t *testin
 	}
 }
 
+func TestBuildArtifactsFromCompositionExecMaterializesReviewableVideoCompositionSpec(t *testing.T) {
+	node := &model.Node{
+		ID:     "composition_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "composition",
+			"tool":  "video_composition_builder",
+		},
+		Output: map[string]interface{}{
+			"content": "视频结构已生成。",
+			"compositionSpec": map[string]interface{}{
+				"totalDurationSec": 30,
+				"tracks":           []interface{}{},
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "composition",
+					"kind":     "VIDEO_COMPOSITION_SPEC",
+					"name":     "composition.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"requiresReview": true,
+					},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("composition artifact should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one composition artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.StageName != "composition" {
+		t.Fatalf("expected composition stage, got %q", req.StageName)
+	}
+	if req.Kind != ArtifactKind("VIDEO_COMPOSITION_SPEC") {
+		t.Fatalf("expected VIDEO_COMPOSITION_SPEC artifact, got %q", req.Kind)
+	}
+	if req.Metadata["requiresReview"] != true {
+		t.Fatalf("composition artifact must be reviewable, got metadata %+v", req.Metadata)
+	}
+	if req.Metadata["humanApproved"] != false || req.Metadata["status"] != "valid" {
+		t.Fatalf("new composition artifact should start valid and not human-approved, got metadata %+v", req.Metadata)
+	}
+	if len(req.Data) == 0 {
+		t.Fatalf("composition artifact should carry inline cloud preview data for review")
+	}
+}
+
 func TestBuildArtifactsFromNodeOutputSkipsEmptyPublishCopyArtifact(t *testing.T) {
 	node := &model.Node{
 		ID:     "viewpoint_dossier",

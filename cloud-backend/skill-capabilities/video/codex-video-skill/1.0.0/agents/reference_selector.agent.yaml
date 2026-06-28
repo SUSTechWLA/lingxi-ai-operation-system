@@ -9,6 +9,7 @@ requiredInputs:
 requiredOutputs:
   - REFERENCE_ASSET_PLAN
 allowedTools:
+  - asset_decision_agent
   - reference_asset_planner
   - asset_policy_generator
 forbiddenTools:

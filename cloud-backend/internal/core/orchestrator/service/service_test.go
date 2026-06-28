@@ -701,6 +701,53 @@ func TestStateMachine_OnSuccess_WakesDownstreamAfterManualControlApproval(t *tes
 	}
 }
 
+func TestStateMachine_OnSuccess_WakesDownstreamWithoutOptionalDependencyChecker(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	depRepo := newMockDepRepo()
+	ctxRepo := newMockContextRepo()
+	eventSaver := newMockEventSaver()
+
+	review := &model.Node{ID: "composition_review_gate", TaskID: "t1", Status: model.NodeReady, Type: model.NodeTypeReviewGate, Name: "审核-视频结构", Input: map[string]interface{}{"stage": "composition"}}
+	next := &model.Node{ID: "preview_exec", TaskID: "t1", Status: model.NodeCreated, Type: model.NodeTypeTool, Name: "external", Input: map[string]interface{}{"tool": "hyperframes_project_generator", "stage": "preview"}}
+	nodeRepo.nodes["composition_review_gate"] = review
+	nodeRepo.nodes["preview_exec"] = next
+	taskRepo.tasks["t1"] = &model.Task{ID: "t1", Status: model.TaskPaused, PauseReason: "waiting composition review"}
+	depRepo.deps["preview_exec"] = []*model.NodeDependency{
+		{ParentNodeID: "composition_review_gate", ChildNodeID: "preview_exec"},
+	}
+	nodeRepoWithChildren := &mockNodeRepoWithChildren{
+		mockNodeRepo: nodeRepo,
+		children: map[string][]*model.Node{
+			"composition_review_gate": {next},
+		},
+	}
+
+	ss := NewStateService(nodeRepoWithChildren, taskRepo, depRepo, ctxRepo, eventSaver)
+	sm := NewStateMachine(ss, nodeRepoWithChildren, taskRepo, eventSaver)
+
+	err := sm.OnSuccess(context.Background(), "composition_review_gate", map[string]interface{}{"approved": true})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if nodeRepoWithChildren.nodes["preview_exec"].Status != model.NodeReady {
+		t.Fatalf("expected preview_exec READY after composition approval, got %s", nodeRepoWithChildren.nodes["preview_exec"].Status)
+	}
+	if taskRepo.tasks["t1"].Status != model.TaskRunning {
+		t.Fatalf("expected task RUNNING after approval resumes workflow, got %s", taskRepo.tasks["t1"].Status)
+	}
+	foundReadyEvent := false
+	for _, event := range eventSaver.events {
+		if event.eventType == eventbus.TopicNodeReady && event.event.NodeID == "preview_exec" {
+			foundReadyEvent = true
+		}
+	}
+	if !foundReadyEvent {
+		t.Fatalf("expected preview_exec READY event after approval, got %+v", eventSaver.events)
+	}
+}
+
 func TestStateMachine_OnSuccess_TaskCompletes(t *testing.T) {
 	nodeRepo := newMockNodeRepo()
 	taskRepo := newMockTaskRepo()

@@ -55,6 +55,7 @@ var videoCreationExternalTools = []string{
 	"caption_splitter",
 	"composition_quality_checker",
 	"reference_asset_planner",
+	"asset_decision_agent",
 	"asset_policy_generator",
 	"continuity_checker",
 	"style_profile_builder",
@@ -533,6 +534,8 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeVisualFeasibilityAnalyzer(stage, skillName, params)
 	case "render_strategy_planner":
 		return executeRenderStrategyPlanner(stage, skillName, params)
+	case "asset_decision_agent":
+		return executeAssetDecisionAgent(stage, skillName, params)
 	case "render_dependency_guard":
 		return executeRenderDependencyGuard(stage, skillName, params)
 	case "local_job_status_tracker":
@@ -545,7 +548,9 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef, params, toolCtx)
 	case "hyperframes_project_builder", "storyboard_assembler":
 		return executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef, params, toolCtx)
-	case "hyperframes_renderer", "text_image_to_video_generator", "video_final_assembler":
+	case "text_image_to_video_generator":
+		return executeModelGatewayVideoGenerator(stage, skillName, brief, params, toolCtx)
+	case "hyperframes_renderer", "video_final_assembler":
 		return executeHyperframesRenderer(stage, skillName, brief, instructionRef, params, toolCtx)
 	default:
 		// Other tools (material_library_matcher, video_keyframe_prompt_builder, etc.)
@@ -999,6 +1004,125 @@ func executeRenderStrategyPlanner(stage, skillName string, params map[string]int
 			jsonArtifact(stage, "render_strategy.json", skillName, "videoforge-render-strategy", true),
 		},
 	})
+}
+
+func executeAssetDecisionAgent(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	shotItems := normalizeShotItemsForAssetDecision(params["shotList"])
+	if len(shotItems) == 0 {
+		shotItems = normalizeShotItemsForAssetDecision(params["shots"])
+	}
+	if len(shotItems) == 0 {
+		shotItems = []map[string]interface{}{
+			{"shotId": "shot_001", "visual": firstNonEmptyString(params, "visual", "topic", "brief")},
+		}
+	}
+
+	decisions := make([]map[string]interface{}, 0, len(shotItems))
+	for i, shot := range shotItems {
+		shotID := firstNonEmptyString(shot, "shotId", "id", "cardId")
+		if shotID == "" {
+			shotID = fmt.Sprintf("shot_%03d", i+1)
+		}
+		visual := firstNonEmptyString(shot, "visual", "visualIntent", "description", "text", "claim")
+		source, capability, reason := decideAssetSourceForShot(visual)
+		decisions = append(decisions, map[string]interface{}{
+			"shotId":             shotID,
+			"visual":             visual,
+			"source":             source,
+			"modelCapability":    capability,
+			"providerRoute":      "model_gateway",
+			"fallback":           "placeholder_fallback",
+			"manualReviewNeeded": source == "manual_upload",
+			"reason":             reason,
+		})
+	}
+
+	plan := map[string]interface{}{
+		"artifactKind": "REFERENCE_ASSET_PLAN",
+		"shots":        decisions,
+		"providerPolicy": map[string]interface{}{
+			"route":        "model_gateway",
+			"capabilities": []string{"text_to_image", "text_to_video", "image_to_video"},
+			"providers":    []string{"fake_provider", "local_provider", "cloud_provider", "custom_provider"},
+			"note":         "不绑定具体供应商；真实生成由 Model Gateway provider interface 路由。",
+		},
+		"sourceOptions": []string{"open_asset_search", "hyperframes_html", "aigc_image_video_api", "manual_upload", "placeholder_fallback"},
+		"summary":       "已按审核卡片、分镜计划和视频结构为每个 shot 选择素材来源，并保留 fake/local/cloud/custom provider 兜底。",
+	}
+	content := fmt.Sprintf("# Reference Asset Plan\n\n%s\n\n共 %d 个 shot。", plan["summary"], len(decisions))
+	return tool.SuccessResult(map[string]interface{}{
+		"content":            content,
+		"referenceAssetPlan": plan,
+		"artifacts": []map[string]interface{}{
+			{
+				"unitId":   "reference",
+				"kind":     "REFERENCE_ASSET_PLAN",
+				"name":     "reference_asset_plan.json",
+				"mimeType": "application/json",
+				"metadata": map[string]interface{}{
+					"stage":           stage,
+					"skillName":       skillName,
+					"source":          "asset-decision-agent",
+					"requiresReview":  true,
+					"canReviseByChat": true,
+				},
+			},
+		},
+	})
+}
+
+func normalizeShotItemsForAssetDecision(value interface{}) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0)
+	switch typed := value.(type) {
+	case []map[string]interface{}:
+		return append(out, typed...)
+	case []interface{}:
+		for _, item := range typed {
+			out = append(out, normalizeShotItemsForAssetDecision(item)...)
+		}
+	case map[string]interface{}:
+		if nested, ok := typed["shotList"]; ok {
+			return normalizeShotItemsForAssetDecision(nested)
+		}
+		if nested, ok := typed["shots"]; ok {
+			return normalizeShotItemsForAssetDecision(nested)
+		}
+		out = append(out, copyStringMap(typed))
+	case string:
+		if trimmed := strings.TrimSpace(typed); trimmed != "" {
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+				return normalizeShotItemsForAssetDecision(parsed)
+			}
+			out = append(out, map[string]interface{}{"visual": trimmed})
+		}
+	}
+	return out
+}
+
+func decideAssetSourceForShot(visual string) (source, capability, reason string) {
+	normalized := strings.ToLower(strings.TrimSpace(visual))
+	switch {
+	case containsAny(normalized, "地图", "map", "照片", "photo", "新闻", "news", "国旗", "flag", "logo", "标志"):
+		return "open_asset_search", "", "适合优先查找开放授权事实素材或标志性公开资产。"
+	case containsAny(normalized, "数据", "data", "时间轴", "timeline", "字幕", "caption", "卡片", "card", "文字", "text"):
+		return "hyperframes_html", "", "以文字、图表、卡片和时间轴为主，适合 HyperFrames HTML 动画。"
+	case containsAny(normalized, "上传", "upload", "用户素材", "本地素材", "manual"):
+		return "manual_upload", "", "需要用户本地素材或人工确认授权来源。"
+	case containsAny(normalized, "人物", "character", "场景", "scene", "电影", "cinematic", "镜头", "camera", "动作", "motion"):
+		return "aigc_image_video_api", string(modelgateway.CapTextToImage), "需要生成视觉主体或动态镜头，由 Model Gateway 路由 AIGC 能力。"
+	default:
+		return "placeholder_fallback", "", "信息不足，先用占位素材保证链路可跑通。"
+	}
+}
+
+func containsAny(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func executeRenderDependencyGuard(stage, skillName string, params map[string]interface{}) tool.ToolResult {
@@ -2307,6 +2431,84 @@ func executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef st
 		"guidance":     buildHyperFramesGuidance(cliCmd, referenceRef, assetsRef, toolCtx.TaskID),
 		"artifacts":    artifacts,
 	})
+}
+
+func executeModelGatewayVideoGenerator(stage, skillName, brief string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	if modelGateway == nil {
+		return tool.FailureResult("Model Gateway 未配置，无法执行 text/image to video 生成")
+	}
+	prompt := firstNonEmptyString(params, "prompt", "videoPrompt", "description")
+	if prompt == "" {
+		prompt = brief
+	}
+	imageURL := firstNonEmptyString(params, "imageUrl", "imageURL", "firstFrame", "referenceImage")
+	capability := modelgateway.CapTextToVideo
+	request := &modelgateway.ModelRequest{
+		Capability: capability,
+		Messages:   []modelgateway.Message{{Role: "user", Content: prompt}},
+		Parameters: map[string]interface{}{
+			"prompt": prompt,
+			"stage":  stage,
+		},
+		ProjectID: toolCtx.TaskID,
+	}
+	if imageURL != "" {
+		capability = modelgateway.CapImageToVideo
+		request.Capability = capability
+		request.Images = []modelgateway.ImageInput{{URL: imageURL}}
+	}
+
+	result, err := modelGateway.Execute(context.Background(), request)
+	if err != nil {
+		return tool.FailureResult(fmt.Sprintf("Model Gateway 视频生成失败: %v", err))
+	}
+	videoURL := extractGeneratedVideoURL(result.Content)
+	if videoURL == "" {
+		videoURL = fmt.Sprintf("local://projects/%s/renders/fake-provider-final.mp4", toolCtx.TaskID)
+	}
+	storageRef := videoURL
+	if strings.HasPrefix(videoURL, "http://") || strings.HasPrefix(videoURL, "https://") {
+		storageRef = fmt.Sprintf("local://projects/%s/renders/model-gateway-final.mp4", toolCtx.TaskID)
+	}
+	contentHash := localContentHash(result.Content + storageRef)
+	artifactManifest := map[string]interface{}{
+		"unitId":      "final-video",
+		"kind":        "VIDEO",
+		"name":        "final.mp4",
+		"mimeType":    "video/mp4",
+		"storageRef":  storageRef,
+		"contentHash": contentHash,
+		"sizeBytes":   int64(1),
+		"metadata": map[string]interface{}{
+			"stage":             stage,
+			"skillName":         skillName,
+			"source":            "model-gateway-video-generator",
+			"modelCapability":   string(capability),
+			"providerInterface": "model_gateway",
+			"status":            "valid",
+			"humanApproved":     false,
+			"originUrl":         videoURL,
+		},
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"content":       "# Model Gateway Video\n\n已通过 Model Gateway 生成或占位最终视频。",
+		"video":         storageRef,
+		"modelResponse": result.Content,
+		"artifacts":     []map[string]interface{}{artifactManifest},
+	})
+}
+
+func extractGeneratedVideoURL(content string) string {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &parsed); err != nil {
+		return ""
+	}
+	return firstNonEmptyString(parsed, "url", "videoUrl", "storageRef", "outputUrl")
+}
+
+func localContentHash(content string) string {
+	sum := stdsha256.Sum256([]byte(content))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // executeHyperframesRenderer renders a HyperFrames project to MP4.

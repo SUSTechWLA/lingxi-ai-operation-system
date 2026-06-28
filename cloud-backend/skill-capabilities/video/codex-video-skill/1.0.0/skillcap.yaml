@@ -90,6 +90,8 @@ tools:
     manifest: tools/composition_quality_checker.tool.yaml
   - id: reference_asset_planner
     manifest: tools/reference_asset_planner.tool.yaml
+  - id: asset_decision_agent
+    manifest: tools/asset_decision_agent.tool.yaml
   - id: asset_policy_generator
     manifest: tools/asset_policy_generator.tool.yaml
   - id: continuity_checker

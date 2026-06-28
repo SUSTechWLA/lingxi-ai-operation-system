@@ -3,6 +3,7 @@ package modelgateway_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,6 +153,25 @@ func TestCapabilityConstants(t *testing.T) {
 		if string(c) == "" {
 			t.Error("capability should not be empty")
 		}
+	}
+}
+
+func TestFakeProviderImageToVideoReturnsPlaceholderVideo(t *testing.T) {
+	g := modelgateway.NewGateway("fake")
+	fp := fake.NewProvider()
+	fp.LatencyMs = 0
+	g.RegisterProvider(fp, modelgateway.CapImageToVideo)
+
+	result, err := g.Execute(context.Background(), &modelgateway.ModelRequest{
+		Capability: modelgateway.CapImageToVideo,
+		Images:     []modelgateway.ImageInput{{URL: "local://placeholder.png"}},
+		Parameters: map[string]interface{}{"prompt": "animate this frame"},
+	})
+	if err != nil {
+		t.Fatalf("image_to_video fake provider should succeed: %v", err)
+	}
+	if !strings.Contains(result.Content, "video.mp4") {
+		t.Fatalf("fake image_to_video should return placeholder video content, got %s", result.Content)
 	}
 }
 

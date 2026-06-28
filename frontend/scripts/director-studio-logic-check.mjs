@@ -102,7 +102,7 @@ try {
   assert.equal(isActionablePendingReview(unactionableStartupReviews[0]), false)
   assert.deepEqual(visibleReviewHistory(unactionableStartupReviews), [])
   const generatingFlow = buildDirectorStages(startupRoles, unactionableStartupReviews, { nodes: [] }, true)
-  assert.deepEqual(generatingFlow.map((stage) => stage.status), ['running', 'running'])
+  assert.deepEqual(generatingFlow.map((stage) => stage.status), ['pending', 'pending'])
 
   const technicalOutputReviews = startupRoles.map((role) => ({
     id: `${role.stage}_technical_review`,
@@ -120,7 +120,7 @@ try {
   assert.equal(isActionablePendingReview(technicalOutputReviews[0]), false)
   assert.deepEqual(visibleReviewHistory(technicalOutputReviews), [])
   const technicalOutputFlow = buildDirectorStages(startupRoles, technicalOutputReviews, { nodes: [] }, true)
-  assert.deepEqual(technicalOutputFlow.map((stage) => stage.status), ['running', 'running'])
+  assert.deepEqual(technicalOutputFlow.map((stage) => stage.status), ['pending', 'pending'])
 
   const technicalGateTraceFlow = buildDirectorStages(startupRoles, [], {
     nodes: startupRoles.map((role) => ({
@@ -140,7 +140,7 @@ try {
       },
     })),
   }, true)
-  assert.deepEqual(technicalGateTraceFlow.map((stage) => stage.status), ['running', 'running'])
+  assert.deepEqual(technicalGateTraceFlow.map((stage) => stage.status), ['pending', 'pending'])
 
   const actionableGateTraceFlow = buildDirectorStages(startupRoles, [], {
     nodes: [
@@ -268,6 +268,65 @@ try {
     { nodes: [{ id: 'proposal', name: 'proposal_generator', status: 'SUCCESS', input: { stage: 'proposal' }, output: { artifacts: [{ kind: 'VIDEO_PROPOSAL', name: '创意方案', storageRef: 'cloud://proposal' }] } }] },
   )
   assert.equal(proposalArtifacts[0].storageRef, '本地项目目录（仅同步索引）')
+
+  const compositionRole = {
+    id: 'composition_director',
+    name: 'Composition Director',
+    displayName: '结构导演',
+    stage: 'composition',
+    goal: '生成时间轴',
+    allowedTools: ['video_composition_builder'],
+    forbiddenTools: [],
+    requiredInputs: ['VIDEO_SCRIPT'],
+    requiredOutputs: ['VIDEO_COMPOSITION_SPEC'],
+  }
+  const missingCompositionTrace = {
+    nodes: [
+      {
+        id: 'composition_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'SUCCESS',
+        input: { tool: 'video_composition_builder', stage: 'composition', roleAgentId: 'composition_director' },
+        output: { content: 'composition finished without artifact manifest' },
+      },
+      {
+        id: 'composition_review_gate',
+        name: '审核-视频结构',
+        type: 'REVIEW_GATE',
+        status: 'READY',
+        input: { stage: 'composition', requiredOutputs: ['VIDEO_COMPOSITION_SPEC'], reviewPhase: 'after_artifact' },
+        output: {},
+      },
+    ],
+  }
+  const missingCompositionArtifacts = buildDirectorArtifacts([compositionRole], [], missingCompositionTrace)
+  assert.equal(missingCompositionArtifacts[0].status, 'missing')
+  const missingCompositionStages = buildDirectorStages([compositionRole], [], missingCompositionTrace, true)
+  assert.equal(missingCompositionStages[0].status, 'failed')
+
+  const readyCompositionTrace = {
+    nodes: [
+      {
+        id: 'composition_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'SUCCESS',
+        input: { tool: 'video_composition_builder', stage: 'composition', roleAgentId: 'composition_director' },
+        output: { artifacts: [{ kind: 'VIDEO_COMPOSITION_SPEC', name: '视频结构', storageRef: 'local://projects/vp-1/artifacts/composition/composition/hash/composition.json' }] },
+      },
+      {
+        id: 'composition_review_gate',
+        name: '审核-视频结构',
+        type: 'REVIEW_GATE',
+        status: 'READY',
+        input: { stage: 'composition', requiredOutputs: ['VIDEO_COMPOSITION_SPEC'], reviewPhase: 'after_artifact' },
+        output: {},
+      },
+    ],
+  }
+  const readyCompositionStages = buildDirectorStages([compositionRole], [], readyCompositionTrace, true)
+  assert.equal(readyCompositionStages[0].status, 'review')
 
   const proposalReview = {
     id: 'td39d3460d8-proposal_generator_review',
