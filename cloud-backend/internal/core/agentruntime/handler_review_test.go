@@ -198,6 +198,94 @@ func TestListReviewsIncludesSourceNodeOutputForOnlineReview(t *testing.T) {
 	}
 }
 
+func TestListReviewsQualityGateShowsProductionOutputWithQualityReport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{
+		{
+			ID:     "video_script_generator_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeSuccess,
+			Output: map[string]interface{}{
+				"script":  "佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。",
+				"summary": "佛得角世界杯奇迹口播",
+			},
+		},
+		{
+			ID:     "script_quality_checker_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeSuccess,
+			Output: map[string]interface{}{
+				"score":             82,
+				"issues":            []interface{}{"事实来源需要更明确"},
+				"repairSuggestions": []interface{}{"补充出线事实来源"},
+			},
+		},
+		{
+			ID:     "video_script_generator_quality_gate",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"sourceNode":         "video_script_generator_exec",
+				"qualityCheckerNode": "script_quality_checker_exec",
+				"stepId":             "video_script_generator_quality_gate",
+				"tool":               "__quality_gate__",
+				"reviewTool":         "video_script_generator",
+				"reviewPhase":        "quality_gate",
+				"reviewReason":       "质量门禁：script_quality_checker 评分需 >=85",
+			},
+		},
+	}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/reviews", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Reviews []Review `json:"reviews"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data.Reviews) != 1 {
+		t.Fatalf("expected one review, got %#v", resp.Data.Reviews)
+	}
+	review := resp.Data.Reviews[0]
+	if review.SourceNodeID != "video_script_generator_exec" {
+		t.Fatalf("quality gate should expose production source node id, got %#v", review)
+	}
+	if review.Tool != "video_script_generator" {
+		t.Fatalf("quality gate should be presented as production tool review, got %#v", review.Tool)
+	}
+	if review.ReviewContent != "佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。" {
+		t.Fatalf("quality gate should expose production script content, got %#v", review.ReviewContent)
+	}
+	qualityReport, ok := review.ReviewOutput["qualityReport"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("quality gate should include quality report metadata, got %#v", review.ReviewOutput)
+	}
+	if score, ok := qualityReport["score"].(float64); !ok || score != 82 {
+		t.Fatalf("quality report should include checker score, got %#v", qualityReport)
+	}
+}
+
 type memoryReviewNodeStore struct {
 	nodes []*model.Node
 }

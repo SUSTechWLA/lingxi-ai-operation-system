@@ -294,8 +294,10 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 			DependsOn: []string{checkerName},
 			Arguments: map[string]interface{}{
 				"checkerStep":           checkerName,
+				"qualityCheckerNode":    compiledToolOutputNodeID(checkerName, c.manifestFor(checkerName)),
 				"productionStep":        step.ID,
 				"productionTool":        step.Tool,
+				"productionSourceNode":  compiledToolSourceNodeID(step.ID, manifest),
 				"minScore":              minScore,
 				"autoApproveWhenPassed": true,
 				"autoRepair":            manifest.QualityPolicy.AutoRepair,
@@ -309,6 +311,26 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 	}
 
 	return out
+}
+
+func compiledToolSourceNodeID(stepID string, manifest *tool.ToolManifest) string {
+	policy := normalizedApprovalPolicy(manifest)
+	switch policy.Mode {
+	case tool.ApprovalBeforeExecute, tool.ApprovalBeforeSideEffect, tool.ApprovalAfterArtifact, tool.ApprovalBeforeDownstream, tool.ApprovalAlways:
+		return stepID + "_exec"
+	default:
+		return stepID
+	}
+}
+
+func compiledToolOutputNodeID(stepID string, manifest *tool.ToolManifest) string {
+	policy := normalizedApprovalPolicy(manifest)
+	switch policy.Mode {
+	case tool.ApprovalBeforeExecute, tool.ApprovalBeforeSideEffect, tool.ApprovalNone, "":
+		return compiledToolSourceNodeID(stepID, manifest)
+	default:
+		return stepID + "_review"
+	}
 }
 
 func qualityCheckerFor(toolName string, manifest *tool.ToolManifest) (string, bool) {
@@ -663,6 +685,13 @@ func compileQualityGate(step AgentStep) compiledStep {
 		}
 		if v, ok := step.Arguments["productionTool"]; ok {
 			input["productionTool"] = v
+			input["reviewTool"] = v
+		}
+		if v, ok := step.Arguments["productionSourceNode"]; ok {
+			input["sourceNode"] = v
+		}
+		if v, ok := step.Arguments["qualityCheckerNode"]; ok {
+			input["qualityCheckerNode"] = v
 		}
 		if v, ok := step.Arguments["minScore"]; ok {
 			input["minScore"] = v

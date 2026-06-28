@@ -687,7 +687,7 @@ export function reviewDisplayTitle(review: AgentReviewItem | undefined): string 
     render_strategy_planner: '审核渲染策略',
   }
   if (review.tool && labels[review.tool]) return labels[review.tool]
-  if (review.reviewPhase === 'quality_gate') return '审核质量门禁'
+  if (review.reviewPhase === 'quality_gate') return '审核创作产物'
   return '审核阶段产物'
 }
 

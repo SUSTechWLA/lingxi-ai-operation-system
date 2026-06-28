@@ -400,6 +400,11 @@ func reviewFromNode(node *model.Node) Review {
 		review.ReviewArtifactKinds = stringSlice(node.Input["reviewArtifactKinds"])
 		review.ArtifactID, _ = node.Input["artifactId"].(string)
 		review.SourceNodeID, _ = node.Input["sourceNode"].(string)
+		if review.ReviewPhase == "quality_gate" {
+			if reviewTool, _ := node.Input["reviewTool"].(string); reviewTool != "" {
+				review.Tool = reviewTool
+			}
+		}
 	}
 	return review
 }
@@ -424,11 +429,43 @@ func enrichReviewFromSourceNode(review *Review, reviewNode *model.Node, nodesByI
 	if len(payload) == 0 {
 		return
 	}
-	if content, ok := payload["content"].(string); ok {
+	if content := reviewContentFromPayload(payload); content != "" {
 		review.ReviewContent = content
 	}
 	review.ReviewArtifacts = reviewArtifactList(payload["artifacts"])
 	review.ReviewOutput = payload
+	enrichQualityReport(review, reviewNode, nodesByID, nodesByOriginalID)
+}
+
+func enrichQualityReport(review *Review, reviewNode *model.Node, nodesByID, nodesByOriginalID map[string]*model.Node) {
+	if review == nil || reviewNode == nil || reviewNode.Input == nil {
+		return
+	}
+	if phase, _ := reviewNode.Input["reviewPhase"].(string); phase != "quality_gate" {
+		return
+	}
+	checkerNodeID, _ := reviewNode.Input["qualityCheckerNode"].(string)
+	if checkerNodeID == "" {
+		checkerNodeID, _ = reviewNode.Input["checkerStep"].(string)
+	}
+	if checkerNodeID == "" {
+		return
+	}
+	checker := nodesByID[checkerNodeID]
+	if checker == nil {
+		checker = nodesByOriginalID[checkerNodeID]
+	}
+	if checker == nil {
+		return
+	}
+	report := parseReviewOutputPayload(checker.Output)
+	if len(report) == 0 {
+		return
+	}
+	if review.ReviewOutput == nil {
+		review.ReviewOutput = map[string]interface{}{}
+	}
+	review.ReviewOutput["qualityReport"] = report
 }
 
 func parseReviewOutputPayload(output map[string]interface{}) map[string]interface{} {
@@ -442,6 +479,15 @@ func parseReviewOutputPayload(output map[string]interface{}) map[string]interfac
 		}
 	}
 	return output
+}
+
+func reviewContentFromPayload(payload map[string]interface{}) string {
+	for _, key := range []string{"content", "script", "text", "markdown", "summary"} {
+		if value, ok := payload[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func reviewArtifactList(value interface{}) []map[string]interface{} {

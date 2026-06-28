@@ -97,6 +97,27 @@ try {
   assert.equal(reviewDisplayTitle(proposalReview), '审核创作方案')
   assert.equal(reviewOutputText(proposalReview), '# Proposal Packet\n\n推荐方案：option_a')
 
+  const qualityGateReview = {
+    id: 'video_script_generator_quality_gate',
+    nodeId: 'video_script_generator_quality_gate',
+    status: 'PENDING',
+    tool: 'video_script_generator',
+    reviewPhase: 'quality_gate',
+    reviewContent: '佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。',
+    reviewOutput: { qualityReport: { score: 82, issues: ['事实来源需要更明确'] } },
+  }
+  assert.equal(reviewDisplayTitle(qualityGateReview), '审核口播脚本')
+  assert.equal(reviewOutputText(qualityGateReview), '佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。')
+
+  const legacyQualityGateReview = {
+    id: 'legacy_quality_gate',
+    nodeId: 'legacy_quality_gate',
+    status: 'PENDING',
+    tool: '__quality_gate__',
+    reviewPhase: 'quality_gate',
+  }
+  assert.equal(reviewDisplayTitle(legacyQualityGateReview), '审核创作产物')
+
   assert.equal(
     formatDirectorErrorMessage(
       new Error('CRITICAL_ARTIFACT_SYNC_FAILED: critical artifact sync failed: kind=VIDEO unitID=final-video'),

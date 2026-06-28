@@ -130,6 +130,54 @@ func TestPlanCompiler_InsertsQualityCheckerFromManifestPolicy(t *testing.T) {
 	requireEdge(t, dag, "proposal_quality_checker", "proposal_quality_gate")
 }
 
+func TestPlanCompiler_QualityGateReviewsProductionOutput(t *testing.T) {
+	compiler := NewPlanCompiler(staticToolCatalog{
+		"video_script_generator": &tool.ToolManifest{
+			Name:     "video_script_generator",
+			Type:     "builtin_prompt_tool",
+			Endpoint: "builtin://video-creation/video_script_generator",
+			QualityPolicy: tool.QualityPolicy{
+				Required:    true,
+				CheckerTool: "script_quality_checker",
+				MinScore:    85,
+			},
+			ApprovalPolicy: tool.ApprovalPolicy{
+				Required:         true,
+				Mode:             tool.ApprovalAfterArtifact,
+				BlocksDownstream: true,
+			},
+		},
+		"script_quality_checker": &tool.ToolManifest{
+			Name:     "script_quality_checker",
+			Type:     "builtin_prompt_tool",
+			Endpoint: "builtin://video-creation/script_quality_checker",
+		},
+	})
+
+	dag, err := compiler.Compile(&AgentPlan{
+		Goal:   "make a script",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "video_script_generator", Tool: "video_script_generator", Arguments: map[string]interface{}{"topic": "佛得角世界杯出线"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Compile returned error: %v", err)
+	}
+
+	gate := requireNode(t, dag, "video_script_generator_quality_gate", string(model.NodeTypeReviewGate), "质量门禁-video_script_generator_quality_gate")
+	if got, _ := gate.Input["sourceNode"].(string); got != "video_script_generator_exec" {
+		t.Fatalf("quality gate should review production output, got input %#v", gate.Input)
+	}
+	if got, _ := gate.Input["reviewTool"].(string); got != "video_script_generator" {
+		t.Fatalf("quality gate should expose production tool as review tool, got input %#v", gate.Input)
+	}
+	if got, _ := gate.Input["qualityCheckerNode"].(string); got != "script_quality_checker" {
+		t.Fatalf("quality gate should expose checker node for score metadata, got input %#v", gate.Input)
+	}
+}
+
 type staticToolCatalog map[string]*tool.ToolManifest
 
 func (c staticToolCatalog) GetManifest(name string) *tool.ToolManifest {
