@@ -107,18 +107,49 @@ assert.equal(traceNodes[0].role, '脚本编剧')
 assert.equal(traceNodes[0].status, 'running')
 assert.equal(traceNodes[0].tool, 'video_script_generator')
 assert.equal(traceNodeHasError(undefined), false)
-assert.equal(nextStageIdAfterReview(stages, reviews[0]), 'storyboard_artist')
 
-const optimisticStages = applyOptimisticRunningStage(stages, 'storyboard_artist')
-assert.equal(optimisticStages[2].status, 'running')
-assert.equal(optimisticStages[2].progress, 18)
-assert.equal(stages[2].status, 'pending')
+const stagedFlow = buildDirectorStages(
+  [
+    { ...roleAgents[1] },
+    {
+      id: 'storyboard_artist',
+      name: 'Storyboard Artist',
+      displayName: '卡片设计师',
+      stage: 'storyboard',
+      goal: '生成卡片计划',
+      allowedTools: ['card_plan_generator'],
+      requiredOutputs: ['CARD_PLAN'],
+    },
+  ],
+  reviews,
+  { nodes: [] },
+)
+assert.equal(nextStageIdAfterReview(stagedFlow, reviews[0]), 'storyboard_artist')
+
+const optimisticStages = applyOptimisticRunningStage(stagedFlow, 'storyboard_artist')
+assert.equal(optimisticStages[1].status, 'running')
+assert.equal(optimisticStages[1].progress, 18)
+assert.equal(stagedFlow[1].status, 'pending')
 
 const actualRunningStages = applyOptimisticRunningStage(
-  stages.map((stage) => stage.id === 'storyboard_artist' ? { ...stage, status: 'review' } : stage),
+  stagedFlow.map((stage) => stage.id === 'storyboard_artist' ? { ...stage, status: 'review' } : stage),
   'storyboard_artist',
 )
-assert.equal(actualRunningStages[2].status, 'review')
+assert.equal(actualRunningStages[1].status, 'review')
+
+const reviewGateStages = buildDirectorStages(roleAgents, [], {
+  nodes: [
+    {
+      id: 'proposal-review',
+      name: '审核-proposal_generator',
+      type: 'REVIEW_GATE',
+      status: 'READY',
+      input: { tool: 'proposal_generator', stage: 'proposal', reviewPhase: 'after_artifact' },
+      output: { content: '# 创作方案' },
+    },
+  ],
+})
+assert.equal(reviewGateStages[0].status, 'review')
 
 const nestedTraceNodes = buildDirectorTraceNodes({
   data: {

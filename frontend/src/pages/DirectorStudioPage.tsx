@@ -457,21 +457,26 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
 }
 
 function ReviewStageRelay({ stages }: { stages: DirectorStage[] }) {
-  const runningStage = stages.find((stage) => stage.status === 'running' || stage.status === 'active')
+  const runningStage = stages.find((stage) => stage.status === 'running')
+  const reviewStage = stages.find((stage) => stage.status === 'review')
   return (
     <section className="card col-span-12 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-base font-black text-ink">阶段接力</h3>
           <p className="mt-1 text-xs text-ink-soft">
-            {runningStage ? `${runningStage.displayName}正在生成，产物完成后会进入下一次审核。` : '审核通过后，下个角色会立即进入生成中。'}
+            {runningStage ? `${runningStage.displayName}正在生成，产物完成后会进入下一次审核。` : reviewStage ? `${reviewStage.displayName}产物已输出，等待确认。` : '审核通过后，下个角色会立即进入生成中。'}
           </p>
         </div>
-        {runningStage && (
+        {runningStage ? (
           <span className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700 ring-1 ring-blue-200">
             <FiRefreshCw className="animate-spin" /> 生成中
           </span>
-        )}
+        ) : reviewStage ? (
+          <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-primary-dark ring-1 ring-amber-200">
+            <FiShield /> 待审核
+          </span>
+        ) : null}
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-5">
         {stages.map((item, index) => (
@@ -1014,6 +1019,7 @@ function simpleMarkdown(text: string): string {
 
 function stageIcon(status: DirectorStageStatus) {
   if (status === 'done') return <FiCheck />
+  if (status === 'review') return <FiShield />
   if (status === 'blocked' || status === 'failed') return <FiLock />
   if (status === 'running') return <FiRefreshCw className="animate-spin" />
   if (status === 'active') return <FiPlay />

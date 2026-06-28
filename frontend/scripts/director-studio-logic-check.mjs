@@ -86,6 +86,19 @@ try {
   const optimisticFlow = applyOptimisticRunningStage(stagedFlow, 'storyboard_artist')
   assert.equal(optimisticFlow[1].status, 'running')
   assert.equal(stagedFlow[1].status, 'pending')
+  const reviewGateFlow = buildDirectorStages(stagedRoles, [], {
+    nodes: [
+      {
+        id: 'script-review',
+        name: '审核-video_script_generator',
+        type: 'REVIEW_GATE',
+        status: 'READY',
+        input: { tool: 'video_script_generator', stage: 'script', reviewPhase: 'after_artifact' },
+        output: { content: '# 口播脚本' },
+      },
+    ],
+  })
+  assert.equal(reviewGateFlow[0].status, 'review')
 
   const proposalArtifacts = buildDirectorArtifacts(
     [{

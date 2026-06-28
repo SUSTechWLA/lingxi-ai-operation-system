@@ -333,7 +333,7 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
       id: node.id || String(index + 1),
       role: roleName,
       stage,
-      status: normalizeDirectorStatus(node.status),
+      status: isReviewTraceNode(node) && normalizeDirectorStatus(node.status) === 'running' ? 'review' : normalizeDirectorStatus(node.status),
       tool,
       rawName: rawName || node.id || '',
       rawType,
@@ -508,7 +508,7 @@ function findTraceNodeForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]) {
   return [...nodes].reverse().find((node) => {
     const input = node.input || {}
     const output = node.output || {}
-    const tool = node.name || node.type || ''
+    const tool = stringValue(input.tool) || stringValue(input.capabilityTool) || stringValue(input.reviewTool) || node.name || node.type || ''
     if (stringValue(input.roleAgentId) === role.id || stringValue(output.roleAgentId) === role.id) return true
     if (stringValue(input.stage) === role.stage || stringValue(output.stage) === role.stage) return true
     if (tool && role.allowedTools?.includes(tool)) return true
@@ -524,9 +524,23 @@ function stageStatusFor(
   if (review?.status === 'PENDING') return 'review'
   if (review?.status === 'REJECTED') return 'blocked'
   if (review?.status === 'APPROVED') return 'done'
-  if (node?.status) return normalizeDirectorStatus(node.status)
+  if (node?.status) {
+    const status = normalizeDirectorStatus(node.status)
+    if (isReviewTraceNode(node) && (status === 'running' || status === 'pending')) return 'review'
+    return status
+  }
   if (role.stage === 'proposal') return 'active'
   return 'pending'
+}
+
+function isReviewTraceNode(node: TraceNodeLike | undefined): boolean {
+  if (!node) return false
+  const input = node.input || {}
+  const rawType = String(node.type || '').toUpperCase()
+  if (rawType === 'REVIEW_GATE') return true
+  if (stringValue(input.reviewPhase) || stringValue(input.reviewReason)) return true
+  if (node.name?.startsWith('审核-')) return true
+  return false
 }
 
 function artifactStatusFor(
