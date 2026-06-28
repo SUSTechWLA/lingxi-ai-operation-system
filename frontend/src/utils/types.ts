@@ -358,16 +358,42 @@ export interface AgentStep {
   id: string
   intent?: string
   tool: string
+  reason?: string
   arguments: Record<string, unknown>
   dependsOn?: string[]
   expectedOutput?: string[]
   produceArtifact?: boolean
 }
 
+export interface ToolCandidateTrace {
+  name: string
+  score: number
+  reason: string
+}
+
+export interface KnowledgeContextInfo {
+  itemCount: number
+  sourceCount: number
+  generatedBy?: string[]
+}
+
+export interface ToolTrace {
+  candidateTools?: ToolCandidateTrace[]
+  plannedTools?: string[]
+  executedTools?: string[]
+  guardDecision?: {
+    passed: boolean
+    warnings?: string[]
+  }
+  knowledgeContext?: KnowledgeContextInfo
+}
+
 export interface AgentPlan {
   goal: string
   domain: string
   mode: string
+  knowledgePolicy?: Record<string, unknown>
+  toolTrace?: ToolTrace
   steps: AgentStep[]
   budget?: AgentBudget
   stopPolicy?: { stopWhenEnough?: boolean }

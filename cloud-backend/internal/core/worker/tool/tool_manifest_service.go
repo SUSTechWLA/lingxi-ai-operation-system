@@ -175,6 +175,7 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 	params, _ := json.Marshal(m.Parameters)
 	output, _ := json.Marshal(m.Output)
 	examples, _ := json.Marshal(m.Examples)
+	transport, _ := json.Marshal(m.Transport)
 	capabilities, _ := json.Marshal(m.Capabilities)
 	tags, _ := json.Marshal(m.Tags)
 	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
@@ -219,6 +220,7 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		Type:                 m.Type,
 		Version:              m.Version,
 		Endpoint:             m.Endpoint,
+		Transport:            transport,
 		TimeoutMs:            m.Timeout,
 		Parameters:           params,
 		Output:               output,

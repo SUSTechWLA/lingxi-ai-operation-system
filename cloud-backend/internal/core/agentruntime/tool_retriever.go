@@ -2,294 +2,328 @@ package agentruntime
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
-// ToolRetriever selects relevant tools for a planning request.
-// It replaces the simple HeuristicPlanner.selectTools with multi-signal scoring.
+// ToolRetriever selects relevant tool candidates for a planning request.
 type ToolRetriever interface {
-	Retrieve(ctx context.Context, req RetrieveRequest) ([]*tool.ToolManifest, error)
+	Retrieve(ctx context.Context, req ToolRetrieveRequest) ([]ToolCandidate, error)
 }
 
-// RetrieveRequest carries the parameters for tool retrieval.
-type RetrieveRequest struct {
-	Query              string   // Natural language user query.
-	Domain             string   // Target domain (e.g., "video_creation").
-	Stage              string   // Optional pipeline stage hint.
-	PreviousTools      []string // Tools already in the plan (for next-tool boosting).
-	MaxCostLevel       string   // Maximum allowed cost level.
-	MaxRiskLevel       string   // Maximum allowed risk level.
-	CoarseTopK         int      // Number of candidates to retrieve before reranking.
-	PlannerTopK        int      // Number of tools to return to the LLM planner.
-	IncludeCapabilities []string // Only include tools with at least one of these capabilities.
-	ExcludeCapabilities []string // Exclude tools whose capabilities overlap with these.
+type ToolRetrieveRequest struct {
+	UserInput     string
+	Domain        string
+	Stage         string
+	MaxCandidates int
+
+	// Compatibility fields used by existing planner call sites.
+	Query               string
+	PreviousTools       []string
+	MaxCostLevel        string
+	MaxRiskLevel        string
+	CoarseTopK          int
+	PlannerTopK         int
+	IncludeCapabilities []string
+	ExcludeCapabilities []string
 }
 
-// HybridToolRetriever implements ToolRetriever with multi-signal scoring:
-// hard filter → capability/tag/keyword recall → nextRecommendedTools boost →
-// cost/risk penalty → topK rerank.
+type RetrieveRequest = ToolRetrieveRequest
+
+type ToolCandidate struct {
+	Name         string                   `json:"name"`
+	Description  string                   `json:"description,omitempty"`
+	Capabilities []string                 `json:"capabilities,omitempty"`
+	Tags         []string                 `json:"tags,omitempty"`
+	Reason       string                   `json:"reason"`
+	Score        float64                  `json:"score"`
+	InputSchema  map[string]tool.ParamDef `json:"inputSchema,omitempty"`
+	OutputSchema map[string]tool.ParamDef `json:"outputSchema,omitempty"`
+	CostLevel    string                   `json:"costLevel,omitempty"`
+	RiskLevel    string                   `json:"riskLevel,omitempty"`
+	Type         string                   `json:"type,omitempty"`
+	Manifest     *tool.ToolManifest       `json:"-"`
+}
+
 type HybridToolRetriever struct {
-	// allTools is the full list of tool manifests.
 	allTools []*tool.ToolManifest
 
-	// When vectorStore is set (future), an embedding-based recall is blended in.
 	vectorStore interface {
 		Search(ctx context.Context, query string, topK int) ([]string, error)
 	}
 }
 
-// NewHybridToolRetriever creates a retriever backed by a list of tool manifests.
-// The manifests are typically obtained from tool.ToolRegistry.ListManifests().
 func NewHybridToolRetriever(manifests []*tool.ToolManifest) *HybridToolRetriever {
 	return &HybridToolRetriever{allTools: manifests}
 }
 
-// Retrieve executes the hybrid retrieval pipeline.
-func (r *HybridToolRetriever) Retrieve(ctx context.Context, req RetrieveRequest) ([]*tool.ToolManifest, error) {
+func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequest) ([]ToolCandidate, error) {
+	_ = ctx
+	query := strings.TrimSpace(req.UserInput)
+	if query == "" {
+		query = strings.TrimSpace(req.Query)
+	}
+	maxCandidates := req.MaxCandidates
+	if maxCandidates <= 0 {
+		maxCandidates = req.PlannerTopK
+	}
+	if maxCandidates <= 0 {
+		maxCandidates = 8
+	}
 	coarseK := req.CoarseTopK
 	if coarseK <= 0 {
-		coarseK = 30
-	}
-	plannerK := req.PlannerTopK
-	if plannerK <= 0 {
-		plannerK = 8
+		coarseK = max(30, maxCandidates)
 	}
 
-	// Stage 1: Hard filter.
-	candidates := r.hardFilter(req)
-
-	// Stage 2: Score each candidate.
+	freshRequired := RequiresFreshKnowledge(query)
 	prevSet := toSet(req.PreviousTools)
-	scored := make([]scoredTool, 0, len(candidates))
-	for _, m := range candidates {
-		score := r.score(m, req.Query, req.Domain, prevSet)
-		// Apply cost/risk penalties.
-		score -= costPenalty(m.CostLevel)
-		score -= riskPenalty(m.RiskLevel)
-		scored = append(scored, scoredTool{manifest: m, score: score})
+	candidates := make([]ToolCandidate, 0, len(r.allTools))
+	for _, manifest := range r.hardFilter(req, query, freshRequired) {
+		score, reasonParts := r.score(manifest, query, req.Domain, freshRequired, prevSet)
+		score -= costPenalty(manifest.CostLevel)
+		score -= riskPenalty(manifest.RiskLevel)
+		if manifest.SideEffect {
+			score -= 0.4
+			reasonParts = append(reasonParts, "sideEffect=true penalty")
+		} else {
+			score += 0.05
+		}
+		if score <= 0 {
+			continue
+		}
+		candidates = append(candidates, ToolCandidate{
+			Name:         manifest.Name,
+			Description:  manifest.Description,
+			Capabilities: append([]string(nil), manifest.Capabilities...),
+			Tags:         append([]string(nil), manifest.Tags...),
+			Reason:       strings.Join(reasonParts, "; "),
+			Score:        score,
+			InputSchema:  manifest.Parameters,
+			OutputSchema: manifest.Output,
+			CostLevel:    manifest.CostLevel,
+			RiskLevel:    manifest.RiskLevel,
+			Type:         manifest.Type,
+			Manifest:     manifest,
+		})
 	}
 
-	// Stage 3: Sort descending by score.
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Score == candidates[j].Score {
+			return candidates[i].Name < candidates[j].Name
+		}
+		return candidates[i].Score > candidates[j].Score
 	})
-
-	// Stage 4: TopK to planner.
-	if len(scored) > coarseK {
-		scored = scored[:coarseK]
+	if len(candidates) > coarseK {
+		candidates = candidates[:coarseK]
 	}
-	if len(scored) > plannerK {
-		scored = scored[:plannerK]
+	if len(candidates) > maxCandidates {
+		candidates = candidates[:maxCandidates]
 	}
-
-	result := make([]*tool.ToolManifest, len(scored))
-	for i, s := range scored {
-		result[i] = s.manifest
-	}
-	return result, nil
+	return candidates, nil
 }
 
-type scoredTool struct {
-	manifest *tool.ToolManifest
-	score    float64
-}
-
-// hardFilter removes tools that are incompatible with the request.
-func (r *HybridToolRetriever) hardFilter(req RetrieveRequest) []*tool.ToolManifest {
+func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, freshRequired bool) []*tool.ToolManifest {
 	filtered := make([]*tool.ToolManifest, 0, len(r.allTools))
-	for _, m := range r.allTools {
-		if m.Name == "" {
+	for _, manifest := range r.allTools {
+		if manifest == nil || manifest.Name == "" || manifest.Name == "__quality_gate__" {
 			continue
 		}
-		// Filter by domain: keep tools that match the domain capability or have no domain constraint.
-		if req.Domain != "" && !hasCapability(m, req.Domain) {
-			// Also keep tools that don't specify capabilities (generic tools).
-			if len(m.Capabilities) > 0 {
-				continue
-			}
-		}
-		// Filter by cost level.
-		if req.MaxCostLevel != "" && m.CostLevel != "" {
-			if costRankStr(m.CostLevel) > costRankStr(req.MaxCostLevel) {
-				continue
-			}
-		}
-		// Filter by risk level.
-		if req.MaxRiskLevel != "" && m.RiskLevel != "" {
-			if riskRankStr(m.RiskLevel) > riskRankStr(req.MaxRiskLevel) {
-				continue
-			}
-		}
-		// Exclude quality gate marker.
-		if m.Name == "__quality_gate__" {
+		if req.MaxCostLevel != "" && manifest.CostLevel != "" && costRankStr(manifest.CostLevel) > costRankStr(req.MaxCostLevel) {
 			continue
 		}
-		// Include-only filter: skip tools that don't match any required capability.
-		if len(req.IncludeCapabilities) > 0 {
-			has := false
-			for _, ic := range req.IncludeCapabilities {
-				if hasCapability(m, ic) {
-					has = true
-					break
-				}
-			}
-			if !has {
+		if req.MaxRiskLevel != "" && manifest.RiskLevel != "" && riskRankStr(manifest.RiskLevel) > riskRankStr(req.MaxRiskLevel) {
+			continue
+		}
+		if capabilityOverlaps(manifest, req.ExcludeCapabilities) {
+			continue
+		}
+		if len(req.IncludeCapabilities) > 0 && !capabilityOverlaps(manifest, req.IncludeCapabilities) {
+			if !(freshRequired && hasFreshKnowledgeCapability(manifest)) {
 				continue
 			}
 		}
-		// Exclude filter: skip tools whose capabilities overlap with excluded set.
-		if len(req.ExcludeCapabilities) > 0 {
-			skip := false
-			for _, ec := range req.ExcludeCapabilities {
-				if hasCapability(m, ec) {
-					skip = true
-					break
-				}
-			}
-			if skip {
-				continue
-			}
+		if req.Domain != "" && len(manifest.Capabilities) > 0 &&
+			!hasCapability(manifest, req.Domain) &&
+			!(freshRequired && hasFreshKnowledgeCapability(manifest)) &&
+			!isContentGenerationTool(manifest.Name, manifest) {
+			continue
 		}
-		filtered = append(filtered, m)
+		if !toolCanAcceptRequest(manifest, query, freshRequired) {
+			continue
+		}
+		filtered = append(filtered, manifest)
 	}
 	return filtered
 }
 
-// score computes a relevance score for a tool against the request.
-func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, prevSet map[string]bool) float64 {
+func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, freshRequired bool, prevSet map[string]bool) (float64, []string) {
 	var score float64
+	reasons := make([]string, 0, 5)
 
-	// Capability match (weight: 0.30).
-	score += 0.30 * capabilityScore(m, domain)
-
-	// Keyword match in name + description (weight: 0.25).
-	score += 0.25 * keywordScore(m, query)
-
-	// Tag match (weight: 0.20).
-	score += 0.20 * tagScore(m, query)
-
-	// Next-tool boost (weight: 0.10).
-	score += 0.10 * nextToolScore(m, prevSet)
-
-	// Domain relevance (weight: 0.15).
-	score += 0.15 * domainScore(m, domain)
-
-	return score
+	if domain != "" && hasCapability(m, domain) {
+		score += 0.8
+		reasons = append(reasons, "matched domain "+domain)
+	}
+	if freshRequired && hasFreshKnowledgeCapability(m) {
+		score += 1.4
+		reasons = append(reasons, "matched fresh_knowledge and current-event keywords")
+	}
+	if !freshRequired && hasFreshKnowledgeCapability(m) {
+		score -= 0.8
+		reasons = append(reasons, "fresh knowledge not required")
+	}
+	if isContentGenerationTool(m.Name, m) {
+		score += 0.5
+		reasons = append(reasons, "matched content generation stage")
+	}
+	if kw := keywordScore(m, query); kw > 0 {
+		score += kw
+		reasons = append(reasons, fmt.Sprintf("matched request text %.2f", kw))
+	}
+	if ts := tagScore(m, query); ts > 0 {
+		score += ts
+		reasons = append(reasons, fmt.Sprintf("matched tags %.2f", ts))
+	}
+	if ns := nextToolScore(m, prevSet); ns > 0 {
+		score += ns
+		reasons = append(reasons, "matched recommended tool chain")
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "low-confidence manifest match")
+	}
+	return score, reasons
 }
 
-// capabilityScore returns 1.0 if the tool has the target domain capability, 0 otherwise.
-func capabilityScore(m *tool.ToolManifest, domain string) float64 {
-	if domain == "" {
-		return 0
+func toolCanAcceptRequest(manifest *tool.ToolManifest, query string, freshRequired bool) bool {
+	if manifest == nil {
+		return false
 	}
-	if hasCapability(m, domain) {
-		return 1.0
+	if !freshRequired || !hasFreshKnowledgeCapability(manifest) {
+		return true
 	}
-	if len(m.Capabilities) == 0 {
-		return 0.5 // generic tools get a moderate score
+	if len(manifest.Parameters) == 0 {
+		return true
 	}
-	return 0
+	for name, param := range manifest.Parameters {
+		if !param.Required {
+			continue
+		}
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "query") || strings.Contains(lower, "queries") ||
+			strings.Contains(lower, "q") || strings.Contains(lower, "keyword") ||
+			strings.Contains(lower, "topic") {
+			continue
+		}
+		return false
+	}
+	return strings.TrimSpace(query) != ""
 }
 
-// keywordScore measures how well the tool matches query keywords.
+func candidateManifests(candidates []ToolCandidate) []*tool.ToolManifest {
+	manifests := make([]*tool.ToolManifest, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Manifest != nil {
+			manifests = append(manifests, candidate.Manifest)
+		}
+	}
+	return manifests
+}
+
+func candidateTrace(candidates []ToolCandidate) []ToolCandidateTrace {
+	trace := make([]ToolCandidateTrace, 0, len(candidates))
+	for _, candidate := range candidates {
+		trace = append(trace, ToolCandidateTrace{
+			Name:   candidate.Name,
+			Score:  candidate.Score,
+			Reason: candidate.Reason,
+		})
+	}
+	return trace
+}
+
+func hasFreshKnowledgeCapability(manifest *tool.ToolManifest) bool {
+	return capabilityOverlaps(manifest, FreshKnowledgeCapabilities())
+}
+
+func capabilityOverlaps(manifest *tool.ToolManifest, capabilities []string) bool {
+	if manifest == nil || len(capabilities) == 0 {
+		return false
+	}
+	allowed := toSetLower(capabilities)
+	for _, capability := range manifest.Capabilities {
+		if allowed[strings.ToLower(strings.TrimSpace(capability))] {
+			return true
+		}
+	}
+	return false
+}
+
+func toSetLower(items []string) map[string]bool {
+	out := make(map[string]bool, len(items))
+	for _, item := range items {
+		if trimmed := strings.ToLower(strings.TrimSpace(item)); trimmed != "" {
+			out[trimmed] = true
+		}
+	}
+	return out
+}
+
 func keywordScore(m *tool.ToolManifest, query string) float64 {
 	if query == "" {
 		return 0
 	}
-	queryLower := strings.ToLower(query)
-
-	// Name match.
-	nameLower := strings.ToLower(m.Name)
-	queryWords := strings.Split(queryLower, " ")
-	nameMatch := 0
-	for _, qw := range queryWords {
-		if len(qw) < 2 {
+	haystack := strings.ToLower(strings.Join(append(append([]string{m.Name, m.Description}, m.Capabilities...), m.Tags...), " "))
+	var score float64
+	for _, token := range tokenize(query) {
+		if len(token) < 2 {
 			continue
 		}
-		if strings.Contains(nameLower, qw) {
-			nameMatch++
+		if strings.Contains(haystack, token) {
+			score += 0.12
 		}
 	}
-	nameScore := float64(nameMatch) / float64(max(1, len(queryWords)))
-
-	// Description match.
-	descLower := strings.ToLower(m.Description)
-	descMatch := 0
-	for _, qw := range queryWords {
-		if len(qw) < 2 {
-			continue
-		}
-		if strings.Contains(descLower, qw) {
-			descMatch++
-		}
-	}
-	descScore := float64(descMatch) / float64(max(1, len(queryWords)))
-
-	return 0.6*nameScore + 0.4*descScore
+	return score
 }
 
-// tagScore measures tag overlap with query keywords.
 func tagScore(m *tool.ToolManifest, query string) float64 {
 	if query == "" || len(m.Tags) == 0 {
 		return 0
 	}
 	queryLower := strings.ToLower(query)
-	match := 0
+	matches := 0
 	for _, tag := range m.Tags {
 		if strings.Contains(queryLower, strings.ToLower(tag)) {
-			match++
+			matches++
 		}
 	}
-	if match == 0 {
+	if matches == 0 {
 		return 0
 	}
-	return float64(match) / float64(len(m.Tags))
+	return 0.2 * float64(matches) / float64(len(m.Tags))
 }
 
-// nextToolScore boosts tools that are recommended by tools already in the plan.
 func nextToolScore(m *tool.ToolManifest, prevSet map[string]bool) float64 {
-	if len(prevSet) == 0 || len(m.NextRecommendedTools) == 0 {
+	if len(prevSet) == 0 {
 		return 0
 	}
-	overlap := 0
 	for _, next := range m.NextRecommendedTools {
 		if prevSet[next] {
-			overlap++
-		}
-	}
-	// This is the opposite direction: we want tools that are recommended NEXT
-	// by tools that are ALREADY in the plan. But the manifest stores what THIS tool
-	// recommends, not who recommends this tool.
-	//
-	// For simplicity, we boost tools whose NextRecommendedTools overlap with
-	// already-chosen tools (these tools "recommend similar next steps").
-	return 0
-}
-
-// domainScore gives a small boost to tools that have the target domain in capabilities.
-func domainScore(m *tool.ToolManifest, domain string) float64 {
-	if domain == "" || len(m.Capabilities) == 0 {
-		return 0
-	}
-	if hasCapability(m, domain) {
-		return 1.0
-	}
-	// Partial domain match (e.g., "video" matches "video_creation").
-	domainParts := strings.Split(domain, "_")
-	for _, cap := range m.Capabilities {
-		for _, part := range domainParts {
-			if strings.Contains(strings.ToLower(cap), strings.ToLower(part)) {
-				return 0.5
-			}
+			return 0.1
 		}
 	}
 	return 0
 }
 
-// Penalty helpers.
+func toSet(items []string) map[string]bool {
+	out := make(map[string]bool, len(items))
+	for _, item := range items {
+		out[item] = true
+	}
+	return out
+}
 
 func costPenalty(level string) float64 {
 	switch level {
@@ -311,16 +345,6 @@ func riskPenalty(level string) float64 {
 	default:
 		return 0
 	}
-}
-
-// Helper functions.
-
-func toSet(items []string) map[string]bool {
-	s := make(map[string]bool, len(items))
-	for _, item := range items {
-		s[item] = true
-	}
-	return s
 }
 
 func costRankStr(level string) int {

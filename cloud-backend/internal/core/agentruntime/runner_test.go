@@ -98,6 +98,92 @@ func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
 	}
 }
 
+func TestRunnerStart_RecordsAgentToolTrace(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "make current event video",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		ToolTrace: &ToolTrace{
+			CandidateTools: []ToolCandidateTrace{
+				{Name: "custom_news_search", Score: 0.91, Reason: "matched fresh_knowledge and current-event keywords"},
+			},
+		},
+		KnowledgePolicy: &KnowledgePolicy{
+			FreshnessLevel:    FreshnessHigh,
+			RetrievalPolicy:   RetrievalRequired,
+			SearchQueries:     []string{"佛得角 世界杯 出线 最新"},
+			BlockOnEmptyFacts: true,
+			MustUseFacts:      true,
+		},
+		Steps: []AgentStep{
+			{
+				ID:             "retrieve_fresh_facts",
+				Intent:         "获取最新事实",
+				Tool:           "custom_news_search",
+				Reason:         "用户提到世界杯出线，需要外部事实确认",
+				Arguments:      map[string]interface{}{"query": "佛得角 世界杯 出线 最新"},
+				ExpectedOutput: []string{"facts", "sources"},
+			},
+			{
+				ID:        "script",
+				Tool:      "video_script_generator",
+				DependsOn: []string{"retrieve_fresh_facts"},
+				Arguments: map[string]interface{}{"topic": "佛得角世界杯出线"},
+			},
+		},
+	}}
+	catalog := staticToolCatalog{
+		"custom_news_search": &tool.ToolManifest{
+			Name:         "custom_news_search",
+			Type:         "http",
+			Endpoint:     "https://search.example.test/query",
+			Capabilities: []string{"fresh_knowledge", "news_search", "web_search"},
+			Parameters:   map[string]tool.ParamDef{"query": {Type: "string", Required: true}},
+			Output:       map[string]tool.ParamDef{"facts": {Type: "array"}, "sources": {Type: "array"}},
+			RiskLevel:    tool.RiskLow,
+			CostLevel:    tool.CostLow,
+		},
+		"video_script_generator": &tool.ToolManifest{
+			Name:       "video_script_generator",
+			Type:       "builtin_prompt_tool",
+			Endpoint:   "builtin://video-creation/video_script_generator",
+			Parameters: map[string]tool.ParamDef{"topic": {Type: "string", Required: true}, "knowledgeContext": {Type: "object"}},
+		},
+	}
+
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	run, err := runner.Start(context.Background(), StartRunRequest{
+		UserID:  "user-1",
+		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	trace, ok := run.Metadata["agentToolTrace"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("run metadata should include agentToolTrace: %#v", run.Metadata)
+	}
+	planned, _ := trace["plannedTools"].([]string)
+	if len(planned) != 2 || planned[0] != "custom_news_search" || planned[1] != "video_script_generator" {
+		t.Fatalf("trace should record planned tools: %#v", trace)
+	}
+	guardDecision, _ := trace["guardDecision"].(map[string]interface{})
+	if guardDecision["passed"] != true {
+		t.Fatalf("trace should record guard decision: %#v", trace)
+	}
+	knowledgeSummary, _ := trace["knowledgeContext"].(map[string]interface{})
+	if knowledgeSummary["generatedBy"] == nil {
+		t.Fatalf("trace should summarize planned knowledge context: %#v", trace)
+	}
+	if orch.createdInput["agentToolTrace"] == nil {
+		t.Fatalf("task input should include agentToolTrace: %#v", orch.createdInput)
+	}
+}
+
 func TestScopeDAGToTask_RewritesNodeReferences(t *testing.T) {
 	scoped := scopeDAGToTask("task-1", &model.DAGRequest{
 		Nodes: []model.NodeRequest{

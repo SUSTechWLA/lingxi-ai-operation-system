@@ -51,7 +51,7 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	// and risk relevance rather than a single-domain filter.
 	retriever := NewHybridToolRetriever(p.tools.ListManifests())
 	candidates, err := retriever.Retrieve(ctx, RetrieveRequest{
-		Query:        req.Message,
+		UserInput:    req.Message,
 		Domain:       domain,
 		MaxCostLevel: req.MaxCostLevel,
 		MaxRiskLevel: req.MaxRiskLevel,
@@ -65,9 +65,14 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 			"video_render",
 			"artifact_package",
 			"quality_check",
-				"knowledge_research",
-				"fact_gathering",
-				"video_creation",
+			"knowledge_research",
+			"fact_gathering",
+			"fresh_knowledge",
+			"news_search",
+			"web_search",
+			"fact_retrieval",
+			"current_event_retrieval",
+			"video_creation",
 		},
 		ExcludeCapabilities: []string{
 			"seedance",
@@ -91,8 +96,13 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	if err := jsonx.ExtractJSON(raw, &plan); err != nil {
 		return nil, fmt.Errorf("parse llm agent plan: %w", err)
 	}
-	normalizeLLMPlan(&plan, req, domain, p.maxTools)
-	manifestsByName := manifestMap(p.tools.ListManifests())
+	allManifests := p.tools.ListManifests()
+	normalizeLLMPlan(&plan, req, domain, p.maxTools, allManifests)
+	if plan.ToolTrace == nil {
+		plan.ToolTrace = &ToolTrace{}
+	}
+	plan.ToolTrace.CandidateTools = candidateTrace(candidates)
+	manifestsByName := manifestMap(allManifests)
 	fillRequestRequiredInputs(plan.Steps, manifestsByName, req)
 	wireRequiredStepInputs(plan.Steps, manifestsByName)
 	if len(plan.Steps) == 0 {
@@ -151,7 +161,7 @@ func (p *LLMPlanner) RepairPlan(ctx context.Context, originalPlan *AgentPlan, gu
 	if err := jsonx.ExtractJSON(raw, &plan); err != nil {
 		return nil, fmt.Errorf("parse repaired agent plan: %w", err)
 	}
-	normalizeLLMPlan(&plan, StartRunRequest{}, "", p.maxTools)
+	normalizeLLMPlan(&plan, StartRunRequest{}, "", p.maxTools, manifests)
 	wireRequiredStepInputs(plan.Steps, manifestMap(manifests))
 	return &plan, nil
 }
@@ -262,6 +272,25 @@ const AgentPlanJSONSchema = `{
     "goal": { "type": "string" },
     "domain": { "type": "string" },
     "mode": { "type": "string", "enum": ["dynamic_agent"] },
+    "knowledgePolicy": {
+      "type": "object",
+      "properties": {
+        "contentType": { "type": "string" },
+        "freshnessLevel": { "type": "string", "enum": ["none", "low", "medium", "high"] },
+        "retrievalPolicy": { "type": "string", "enum": ["none", "optional", "required", "forbidden"] },
+        "knowledgeType": { "type": "string" },
+        "allowedTools": { "type": "array", "items": { "type": "string" } },
+        "forbiddenTools": { "type": "array", "items": { "type": "string" } },
+        "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+        "forbiddenCapabilities": { "type": "array", "items": { "type": "string" } },
+        "searchQueries": { "type": "array", "items": { "type": "string" } },
+        "freshnessDays": { "type": "integer" },
+        "maxSearchResults": { "type": "integer" },
+        "mustUseFacts": { "type": "boolean" },
+        "mustCiteFacts": { "type": "boolean" },
+        "blockOnEmptyFacts": { "type": "boolean" }
+      }
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -273,6 +302,7 @@ const AgentPlanJSONSchema = `{
           "id": { "type": "string" },
           "intent": { "type": "string" },
           "tool": { "type": "string" },
+          "reason": { "type": "string" },
           "arguments": { "type": "object" },
           "dependsOn": { "type": "array", "items": { "type": "string" } },
           "expectedOutput": { "type": "array", "items": { "type": "string" } },
@@ -300,7 +330,15 @@ func plannerSystemPrompt() string {
 8. 你不得绕过需要人工审核的工具。
 9. 第一版只生成图文视频，不使用 Seedance、TTS、ASR、平台发布工具。
 10. hyperframes_renderer 只能在 preview 或 composition 已确认后执行。
-	11. 知识时效性判断：如果用户主题涉及新闻事件、历史事实、统计数据、人物传记、科技进展、地理文化等需要事实核查的内容，必须将 knowledge_researcher 作为最早步骤之一。如果是纯观点评论、情感分享、产品介绍等无需外部知识的主题，可以跳过 knowledge_researcher 和 fact_checker。
+11. 必须输出 knowledgePolicy。
+12. 检索策略：
+    - 用户请求包含最新、最近、今天、昨天、刚刚、实时、现在、出线、夺冠、晋级、比赛结果、世界杯、奥运会、发布、上线、政策、法规、价格、票房、榜单、2026、今年、本届、现任等强时效内容时，freshnessLevel 必须为 high，retrievalPolicy 必须为 required。
+    - 强时效检索必须从 candidateTools 中选择具备 fresh_knowledge / news_search / web_search / current_event_retrieval / fact_retrieval 等 capability 的工具，不得按固定工具名臆造。
+    - 纯观点、创意故事、情感表达、稳定知识口播时，retrievalPolicy 应为 none 或 optional；没有明确理由时不要选择 fresh knowledge/search 类工具。
+    - fresh knowledge/search 类工具只用于需要外部事实、新闻、实时结果或当前事件确认的任务。
+    - retrievalPolicy=required 时必须设置 searchQueries、mustUseFacts=true、mustCiteFacts=true、blockOnEmptyFacts=true。
+    - 如果 required 检索失败，后续脚本生成必须阻断，不得回退到模型旧知识。
+13. 每个选择工具的 step 必须填写 reason，说明为什么这个工具适合当前任务。
 
 只输出 JSON，不要输出 Markdown。
 禁止输出 DAGRequest、节点类型、ai_node、workflow_template 或执行图细节。
@@ -311,7 +349,7 @@ func plannerSystemPrompt() string {
 `)
 }
 
-func plannerUserPrompt(req StartRunRequest, domain string, manifests []*tool.ToolManifest) string {
+func plannerUserPrompt(req StartRunRequest, domain string, candidates []ToolCandidate) string {
 	payload := map[string]interface{}{
 		"userRequest": map[string]interface{}{
 			"message": req.Message,
@@ -319,11 +357,17 @@ func plannerUserPrompt(req StartRunRequest, domain string, manifests []*tool.Too
 			"context": req.Context,
 			"mode":    req.Mode,
 		},
-		"candidateTools": compactToolManifests(manifests),
+		"candidateTools": compactToolCandidates(candidates),
 		"requiredSchema": map[string]interface{}{
-			"goal":       "string",
-			"domain":     "string",
-			"mode":       "dynamic_agent",
+			"goal":   "string",
+			"domain": "string",
+			"mode":   "dynamic_agent",
+			"knowledgePolicy": map[string]string{
+				"contentType":     "current_event|sports_event|opinion|evergreen_knowledge|creative_story|historical_story",
+				"freshnessLevel":  "none|low|medium|high",
+				"retrievalPolicy": "none|optional|required|forbidden",
+				"knowledgeType":   "latest_news|background_facts|none",
+			},
 			"steps":      "array<AgentStep>",
 			"budget":     "AgentBudget",
 			"stopPolicy": "StopPolicy",
@@ -332,12 +376,52 @@ func plannerUserPrompt(req StartRunRequest, domain string, manifests []*tool.Too
 			"每个 step.tool 必须来自 candidateTools.name",
 			"dependsOn 只能引用更早出现的 step.id",
 			"arguments 必须补齐工具 required parameters；可使用 {{step_id.output.field}} 引用上游输出",
+			"每个使用工具的 step.reason 必须解释选择该工具的任务依据和 capability 依据",
 			"需要产物时设置 produceArtifact=true；审核策略不要写入计划，系统会从 ToolManifest 自动处理",
 			"默认 plan once，maxReplans 不超过 1",
 		},
 	}
 	encoded, _ := json.MarshalIndent(payload, "", "  ")
 	return "请严格返回 AgentPlan JSON，不能返回 DAGRequest。\n" + string(encoded)
+}
+
+func compactToolCandidates(candidates []ToolCandidate) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(candidates))
+	for _, candidate := range candidates {
+		entry := map[string]interface{}{
+			"name":         candidate.Name,
+			"description":  candidate.Description,
+			"type":         candidate.Type,
+			"parameters":   candidate.InputSchema,
+			"output":       candidate.OutputSchema,
+			"capabilities": candidate.Capabilities,
+			"tags":         candidate.Tags,
+			"costLevel":    candidate.CostLevel,
+			"riskLevel":    candidate.RiskLevel,
+			"score":        candidate.Score,
+			"reason":       candidate.Reason,
+		}
+		if candidate.Manifest != nil {
+			entry["executionPlane"] = candidate.Manifest.ExecutionPlane
+			entry["requiresUserDevice"] = candidate.Manifest.RequiresUserDevice
+			entry["artifactLocation"] = candidate.Manifest.ArtifactLocation
+			entry["sideEffect"] = candidate.Manifest.SideEffect
+			entry["approvalPolicy"] = candidate.Manifest.ApprovalPolicy
+			entry["artifactPolicy"] = candidate.Manifest.ArtifactPolicy
+			entry["qualityPolicy"] = candidate.Manifest.QualityPolicy
+			entry["nextRecommendedTools"] = candidate.Manifest.NextRecommendedTools
+			entry["skillPackageId"] = candidate.Manifest.SkillPackageID
+			if candidate.Manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+				entry["localCommand"] = candidate.Manifest.LocalCommand
+				entry["localRequirements"] = candidate.Manifest.LocalRequirements
+			}
+			if candidate.Manifest.HumanReview != nil {
+				entry["humanReview"] = candidate.Manifest.HumanReview
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface{} {
@@ -380,7 +464,7 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 	return out
 }
 
-func normalizeLLMPlan(plan *AgentPlan, req StartRunRequest, domain string, maxTools int) {
+func normalizeLLMPlan(plan *AgentPlan, req StartRunRequest, domain string, maxTools int, manifests []*tool.ToolManifest) {
 	if plan.Goal == "" {
 		plan.Goal = req.Message
 	}
@@ -389,6 +473,9 @@ func normalizeLLMPlan(plan *AgentPlan, req StartRunRequest, domain string, maxTo
 	}
 	if plan.Mode == "" {
 		plan.Mode = "dynamic_agent"
+	}
+	if plan.KnowledgePolicy == nil {
+		plan.KnowledgePolicy = defaultKnowledgePolicyForTools(req.Message, plan.Domain, manifests)
 	}
 	if plan.Budget.MaxSteps == 0 {
 		plan.Budget.MaxSteps = max(maxTools, len(plan.Steps))

@@ -11,6 +11,7 @@ type ToolManifest struct {
 	Author               string                 `json:"author,omitempty"`
 	Type                 string                 `json:"type"`               // "builtin", "http", "grpc", "executable"
 	Endpoint             string                 `json:"endpoint,omitempty"` // URL for external tools
+	Transport            *ToolTransport         `json:"transport,omitempty"`
 	Timeout              int                    `json:"timeout,omitempty"`
 	Parameters           map[string]ParamDef    `json:"parameters"`
 	Output               map[string]ParamDef    `json:"output"`
@@ -40,6 +41,12 @@ type ToolManifest struct {
 	PromptRef            string                 `json:"promptRef,omitempty"`
 	ResourceRefs         []string               `json:"resourceRefs,omitempty"`
 	RegisteredAt         time.Time              `json:"registeredAt,omitempty"`
+}
+
+type ToolTransport struct {
+	Type     string            `json:"type,omitempty"`
+	Endpoint string            `json:"endpoint,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
 }
 
 const (

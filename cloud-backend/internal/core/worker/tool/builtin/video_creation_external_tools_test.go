@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -39,6 +40,81 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoForgeDependencies(t *tes
 		if registry.GetExternalManifest(name) == nil {
 			t.Fatalf("expected VideoForge tool %q to be registered", name)
 		}
+	}
+}
+
+func TestRegisterVideoCreationExternalToolsInstallsKnowledgeTools(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	for _, name := range []string{"news_search", "fact_extractor"} {
+		manifest := registry.GetExternalManifest(name)
+		if manifest == nil {
+			t.Fatalf("expected knowledge tool %q to be registered", name)
+		}
+		if len(manifest.Output) == 0 {
+			t.Fatalf("knowledge tool %q should declare output schema", name)
+		}
+	}
+}
+
+func TestVideoScriptGeneratorBlocksRequiredRetrievalWithEmptyFacts(t *testing.T) {
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic":                 "佛得角世界杯出线",
+		"retrievalPolicy":       "required",
+		"mustUseFreshKnowledge": true,
+		"knowledgePack":         []interface{}{},
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "script"})
+
+	if result.Success {
+		t.Fatalf("expected script generator to fail when required facts are empty: %#v", result.Data)
+	}
+}
+
+func TestVideoScriptGeneratorConsumesKnowledgeContextWithoutModelFallback(t *testing.T) {
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		localAgentConfigFetcher = previousFetcher
+	})
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic":             "佛得角世界杯出线",
+		"retrievalPolicy":   "required",
+		"requireFreshFacts": true,
+		"knowledgeContext": map[string]interface{}{
+			"items": []interface{}{
+				[]interface{}{
+					map[string]interface{}{
+						"claim":       "佛得角已经获得世界杯出线资格，这是该国足球历史上的里程碑。",
+						"source":      "mock_news",
+						"url":         "https://example.test/cape-verde",
+						"publishedAt": "2026-06-28",
+					},
+				},
+			},
+			"sources": []interface{}{
+				[]interface{}{map[string]interface{}{"source": "mock_news", "url": "https://example.test/cape-verde"}},
+			},
+			"generatedBy": []interface{}{"custom_news_search"},
+		},
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "script"})
+
+	if !result.Success {
+		t.Fatalf("expected script generator to accept non-empty knowledgeContext: %s", result.Error)
+	}
+	usedFacts, ok := result.Data["usedFacts"].([]map[string]interface{})
+	if !ok || len(usedFacts) != 1 {
+		t.Fatalf("expected usedFacts from knowledgeContext: %#v", result.Data["usedFacts"])
+	}
+	if usedFacts[0]["claim"] != "佛得角已经获得世界杯出线资格，这是该国足球历史上的里程碑。" {
+		t.Fatalf("unexpected used fact: %#v", usedFacts[0])
+	}
+	trace, ok := result.Data["knowledgeTrace"].(map[string]interface{})
+	if !ok || trace["hasKnowledgeContext"] != true || trace["knowledgeItemCount"] != 1 {
+		t.Fatalf("expected knowledgeTrace to describe consumed context: %#v", result.Data["knowledgeTrace"])
 	}
 }
 
@@ -93,7 +169,7 @@ func TestExecuteProposalGeneratorReturnsDecisionLoggedPacket(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing proposalPacket: %#v", result.Data)
 	}
-	if packet["artifactKind"] != "proposal_packet" || packet["recommendedOptionId"] != "option_b" {
+	if packet["artifactKind"] != "proposal_packet" || packet["recommendedOptionId"] != "option_a" {
 		t.Fatalf("unexpected proposal packet: %#v", packet)
 	}
 	if result.Data["decisionLog"] == nil {

@@ -40,6 +40,23 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 	}
 
 	selected := p.selectTools(domain, req.Message)
+	var traceCandidates []ToolCandidateTrace
+	if RequiresFreshKnowledge(req.Message) {
+		candidates, err := NewHybridToolRetriever(p.tools.ListManifests()).Retrieve(context.Background(), ToolRetrieveRequest{
+			UserInput:     req.Message,
+			Domain:        domain,
+			MaxCandidates: p.maxTools,
+			MaxCostLevel:  req.MaxCostLevel,
+			MaxRiskLevel:  req.MaxRiskLevel,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) > 0 {
+			selected = candidateManifests(candidates)
+			traceCandidates = candidateTrace(candidates)
+		}
+	}
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("no tools matched domain %q", domain)
 	}
@@ -67,10 +84,12 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 	wireRequiredStepInputs(steps, manifests)
 
 	return &AgentPlan{
-		Goal:   req.Message,
-		Domain: domain,
-		Mode:   "dynamic_agent",
-		Steps:  steps,
+		Goal:            req.Message,
+		Domain:          domain,
+		Mode:            "dynamic_agent",
+		KnowledgePolicy: defaultKnowledgePolicyForTools(req.Message, domain, p.tools.ListManifests()),
+		ToolTrace:       &ToolTrace{CandidateTools: traceCandidates},
+		Steps:           steps,
 		Budget: AgentBudget{
 			MaxToolCalls: len(steps),
 			MaxSteps:     max(len(steps), p.maxTools),
@@ -79,6 +98,24 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		},
 		StopPolicy: StopPolicy{StopWhenEnough: true},
 	}, nil
+}
+
+func defaultKnowledgePolicyForTools(message, domain string, manifests []*tool.ToolManifest) *KnowledgePolicy {
+	policy := DefaultKnowledgePolicy(message, domain)
+	if policy == nil {
+		return nil
+	}
+	_ = manifests
+	return policy
+}
+
+func manifestListHasTool(manifests []*tool.ToolManifest, name string) bool {
+	for _, manifest := range manifests {
+		if manifest != nil && manifest.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *HeuristicPlanner) selectTools(domain, message string) []*tool.ToolManifest {

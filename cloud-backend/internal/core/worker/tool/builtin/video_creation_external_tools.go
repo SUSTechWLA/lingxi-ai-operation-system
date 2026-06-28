@@ -2,10 +2,13 @@ package builtin
 
 import (
 	"context"
+	stdsha256 "crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +63,8 @@ var videoCreationExternalTools = []string{
 	"render_dependency_guard",
 	"local_job_status_tracker",
 	// Dynamic agent prompt_tool entries — used by LLMPlanner for video creation workflows.
+	"news_search",
+	"fact_extractor",
 	"knowledge_researcher",
 	"fact_checker",
 	"video_script_generator",
@@ -356,6 +361,8 @@ func RegisterVideoCreationExternalTools(registry *tool.ToolRegistry) {
 			Sandbox: false,
 		}
 
+		applyVideoCreationManifestOverrides(name, manifest)
+
 		// Configure local execution plane tools.
 		if localManifest, ok := localToolManifests[name]; ok {
 			manifest.ExecutionPlane = localManifest.ExecutionPlane
@@ -367,6 +374,85 @@ func RegisterVideoCreationExternalTools(registry *tool.ToolRegistry) {
 		}
 
 		registry.RegisterExternal(manifest)
+	}
+}
+
+func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifest) {
+	if manifest == nil {
+		return
+	}
+	switch name {
+	case "news_search":
+		manifest.Description = "Search latest news for current-event video scripts."
+		manifest.Type = "http"
+		manifest.CostLevel = tool.CostMedium
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"fresh_knowledge", "news_search", "web_search", "current_event_retrieval", "fact_retrieval"}
+		manifest.Tags = []string{"search", "news", "realtime", "knowledge", "fact"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"query":         {Type: "string", Description: "Single search query", Required: false},
+			"queries":       {Type: "array", Description: "Search queries", Required: false},
+			"freshnessDays": {Type: "number", Description: "Freshness window in days", Required: false},
+			"topK":          {Type: "number", Description: "Max result count", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"results":    {Type: "array", Description: "Structured search results"},
+			"facts":      {Type: "array", Description: "Fact-like result snippets"},
+			"sources":    {Type: "array", Description: "Source list"},
+			"queryUsed":  {Type: "array", Description: "Queries sent to the search provider"},
+			"searchedAt": {Type: "string", Description: "RFC3339 search timestamp"},
+		}
+	case "fact_extractor":
+		manifest.Description = "Extract a traceable fact pack from news search results."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"fact_retrieval", "fact_extraction", "knowledge_pack"}
+		manifest.Tags = []string{"fact", "knowledge", "freshness"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"searchResults": {Type: "array", Description: "news_search results", Required: true},
+			"outputMode":    {Type: "string", Description: "Output mode", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"facts":             {Type: "array", Description: "Traceable facts"},
+			"sources":           {Type: "array", Description: "Source list"},
+			"warnings":          {Type: "array", Description: "Fact extraction warnings"},
+			"freshness":         {Type: "object", Description: "Freshness summary"},
+			"knowledgePackHash": {Type: "string", Description: "Stable fact pack hash"},
+		}
+		manifest.ArtifactPolicy = tool.ArtifactPolicy{
+			ProduceArtifact:       true,
+			ArtifactKinds:         []string{"KNOWLEDGE_PACK"},
+			DefaultReviewRequired: false,
+			Storage:               tool.ArtifactLocationCloud,
+		}
+	case "video_script_generator":
+		manifest.Parameters = map[string]tool.ParamDef{
+			"topic":                 {Type: "string", Description: "Video topic", Required: true},
+			"facts":                 {Type: "string", Description: "Plain-text facts", Required: false},
+			"knowledgePack":         {Type: "array", Description: "Traceable fact pack", Required: false},
+			"knowledgeSources":      {Type: "array", Description: "Fact sources", Required: false},
+			"knowledgeContext":      {Type: "object", Description: "Generic facts, sources, evidence, and source tool names", Required: false},
+			"toolContext":           {Type: "object", Description: "Generic upstream tool context", Required: false},
+			"retrievalPolicy":       {Type: "string", Description: "none|optional|required|forbidden", Required: false},
+			"mustUseFreshKnowledge": {Type: "boolean", Description: "Require fresh facts in generation", Required: false},
+			"requireFreshFacts":     {Type: "boolean", Description: "Block generation when fresh facts are required but absent", Required: false},
+			"currentDate":           {Type: "string", Description: "Current date for freshness-aware scripts", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"script":               {Type: "string", Description: "Voiceover script"},
+			"summary":              {Type: "string", Description: "Script summary"},
+			"estimatedDurationSec": {Type: "number", Description: "Estimated duration"},
+			"sections":             {Type: "array", Description: "Script sections"},
+			"usedFacts":            {Type: "array", Description: "Facts used by the script"},
+			"unusedFacts":          {Type: "array", Description: "Facts not used by the script"},
+			"factCheckWarnings":    {Type: "array", Description: "Fact check warnings"},
+			"knowledgeTrace":       {Type: "object", Description: "Knowledge usage trace"},
+		}
 	}
 }
 
@@ -433,6 +519,10 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 
 	// Dispatch to tool-specific implementations.
 	switch toolName {
+	case "news_search":
+		return executeNewsSearch(params)
+	case "fact_extractor":
+		return executeFactExtractor(stage, skillName, params)
 	case "pipeline_selector":
 		return executePipelineSelector(stage, skillName, brief, params, toolCtx)
 	case "capability_preflight":
@@ -595,7 +685,7 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 func callProposalRecommendationLLM(brief string, options []videopipeline.ProposalOption) (recommendedID, reason string) {
 	cfg := GetVideoCreationOpenAIConfig()
 	// Also try local agent config (set via frontend Desktop page)
-	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
+	if localCfg, ok := localAgentConfigFetcher(); ok {
 		if localCfg.APIKey != "" {
 			cfg.APIKey = localCfg.APIKey
 		}
@@ -664,6 +754,204 @@ func callProposalRecommendationLLM(brief string, options []videopipeline.Proposa
 	zap.L().Warn("LLM recommended unknown option, ignoring",
 		zap.String("recommended", parsed.RecommendedOptionID))
 	return "", ""
+}
+
+func executeNewsSearch(params map[string]interface{}) tool.ToolResult {
+	queries := searchQueriesParam(params["queries"])
+	if len(queries) == 0 {
+		queries = searchQueriesParam(params["query"])
+	}
+	if len(queries) == 0 {
+		return tool.FailureResult("news_search requires at least one query")
+	}
+	topK := intParam(params, "topK", 8)
+	if topK <= 0 {
+		topK = 8
+	}
+	results := make([]map[string]interface{}, 0, topK)
+	for _, query := range queries {
+		found, err := performWebSearch(context.Background(), query)
+		if err != nil {
+			return tool.FailureResult(fmt.Sprintf("news_search failed for query %q: %v", query, err))
+		}
+		for _, item := range found {
+			if len(results) >= topK {
+				break
+			}
+			results = append(results, map[string]interface{}{
+				"title":       item.Title,
+				"url":         item.URL,
+				"source":      sourceFromURL(item.URL),
+				"publishedAt": item.Date,
+				"snippet":     item.Snippet,
+				"language":    "en",
+				"credibility": "unknown",
+			})
+		}
+		if len(results) >= topK {
+			break
+		}
+	}
+	if len(results) == 0 {
+		return tool.FailureResult("news_search returned no results")
+	}
+	facts := make([]map[string]interface{}, 0, len(results))
+	sources := make([]map[string]interface{}, 0, len(results))
+	for _, result := range results {
+		facts = append(facts, map[string]interface{}{
+			"claim":       result["snippet"],
+			"source":      result["source"],
+			"url":         result["url"],
+			"publishedAt": result["publishedAt"],
+			"confidence":  result["credibility"],
+		})
+		sources = append(sources, map[string]interface{}{
+			"source":      result["source"],
+			"url":         result["url"],
+			"publishedAt": result["publishedAt"],
+			"title":       result["title"],
+		})
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"results":    results,
+		"facts":      facts,
+		"sources":    sources,
+		"queryUsed":  queries,
+		"searchedAt": time.Now().Format(time.RFC3339),
+	})
+}
+
+func executeFactExtractor(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	searchResults := searchResultsParam(params["searchResults"])
+	if len(searchResults) == 0 {
+		return tool.FailureResult("fact_extractor requires non-empty searchResults")
+	}
+	facts := make([]map[string]interface{}, 0, len(searchResults))
+	sources := make([]map[string]interface{}, 0, len(searchResults))
+	warnings := make([]interface{}, 0)
+	latestDate := ""
+	for i, result := range searchResults {
+		title := stringFromMap(result, "title")
+		snippet := stringFromMap(result, "snippet")
+		urlValue := stringFromMap(result, "url")
+		source := stringFromMap(result, "source")
+		publishedAt := stringFromMap(result, "publishedAt")
+		if title == "" && snippet == "" {
+			warnings = append(warnings, map[string]interface{}{
+				"index":   i,
+				"message": "search result missing title and snippet",
+			})
+			continue
+		}
+		claim := strings.TrimSpace(snippet)
+		if claim == "" {
+			claim = title
+		}
+		facts = append(facts, map[string]interface{}{
+			"claim":      claim,
+			"date":       publishedAt,
+			"source":     source,
+			"url":        urlValue,
+			"confidence": "medium",
+			"type":       "event_result",
+		})
+		sources = append(sources, map[string]interface{}{
+			"source":      source,
+			"url":         urlValue,
+			"publishedAt": publishedAt,
+			"title":       title,
+		})
+		if publishedAt > latestDate {
+			latestDate = publishedAt
+		}
+	}
+	if len(facts) == 0 {
+		return tool.FailureResult("fact_extractor produced no facts")
+	}
+	hash := knowledgePackHash(facts, sources)
+	return tool.SuccessResult(map[string]interface{}{
+		"content":           fmt.Sprintf("# Knowledge Pack\n\nFacts: %d\nSources: %d", len(facts), len(sources)),
+		"facts":             facts,
+		"sources":           sources,
+		"freshness":         map[string]interface{}{"latestDate": latestDate, "isFresh": latestDate != ""},
+		"warnings":          warnings,
+		"knowledgePackHash": hash,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "knowledge_pack.json", skillName, "fact-extractor", false),
+		},
+	})
+}
+
+func searchQueriesParam(value interface{}) []string {
+	switch typed := value.(type) {
+	case []string:
+		return nonEmptyParamStrings(typed)
+	case []interface{}:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if s := strings.TrimSpace(ensureStringValue(item)); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if trimmed := strings.TrimSpace(typed); trimmed != "" {
+			return []string{trimmed}
+		}
+	}
+	return nil
+}
+
+func nonEmptyParamStrings(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func searchResultsParam(value interface{}) []map[string]interface{} {
+	switch typed := value.(type) {
+	case []map[string]interface{}:
+		return typed
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if m, ok := item.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	case string:
+		var parsed []map[string]interface{}
+		if json.Unmarshal([]byte(typed), &parsed) == nil {
+			return parsed
+		}
+	}
+	return nil
+}
+
+func sourceFromURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return raw
+	}
+	return strings.TrimPrefix(parsed.Host, "www.")
+}
+
+func stringFromMap(values map[string]interface{}, key string) string {
+	if values == nil {
+		return ""
+	}
+	return strings.TrimSpace(ensureStringValue(values[key]))
+}
+
+func knowledgePackHash(facts, sources []map[string]interface{}) string {
+	payload, _ := json.Marshal(map[string]interface{}{"facts": facts, "sources": sources})
+	sum := stdsha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func executeVisualFeasibilityAnalyzer(stage, skillName string, params map[string]interface{}) tool.ToolResult {
@@ -975,6 +1263,8 @@ func TryFetchLocalAgentConfig() (RuntimeModelProviderConfig, bool) {
 	return RuntimeModelProviderConfig{BaseURL: t2t.BaseURL, APIKey: t2t.APIKey, Model: t2t.Model}, true
 }
 
+var localAgentConfigFetcher = TryFetchLocalAgentConfig
+
 func stringParam(params map[string]interface{}, key string, fallback string) string {
 	if value, ok := params[key].(string); ok && value != "" {
 		return value
@@ -1031,7 +1321,7 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 	// Also try to pull from local agent (127.0.0.1:18080) — this catches config set
 	// by the frontend Desktop page even when cloud sync is unavailable.
 	effectiveCfg := GetVideoCreationOpenAIConfig()
-	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
+	if localCfg, ok := localAgentConfigFetcher(); ok {
 		if localCfg.BaseURL != "" {
 			effectiveCfg.BaseURL = localCfg.BaseURL
 		}
@@ -1742,7 +2032,7 @@ html, body {
 // video page from the topic, script, shot list, and style parameters.
 func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style string, toolCtx tool.ToolContext) string {
 	effectiveCfg := GetVideoCreationOpenAIConfig()
-	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
+	if localCfg, ok := localAgentConfigFetcher(); ok {
 		if localCfg.BaseURL != "" {
 			effectiveCfg.BaseURL = localCfg.BaseURL
 		}
@@ -2308,6 +2598,7 @@ func formatSearchResults(results []WebSearchResult) string {
 	}
 	return b.String()
 }
+
 // full default template format.
 func elaborateImagePrompt(cfg config.OpenAIConfig, briefPrompt string, toolCtx tool.ToolContext) string {
 	systemPrompt := `你是一个专业的自媒体视频图片提示词工程师。
@@ -2683,6 +2974,23 @@ func isDynamicAgentPromptTool(toolName string) bool {
 func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	topic := stringParam(params, "topic", brief)
 	facts := stringParam(params, "facts", "")
+	usedFacts := []map[string]interface{}{}
+	knowledgeTrace := map[string]interface{}{}
+	if toolName == "video_script_generator" {
+		if facts == "" {
+			facts = formatKnowledgeContextForPrompt(params["knowledgeContext"])
+			usedFacts = usedFactsFromKnowledgeContext(params["knowledgeContext"])
+		}
+		if facts == "" {
+			facts = formatKnowledgePackForPrompt(params["knowledgePack"], params["knowledgeSources"])
+			usedFacts = usedFactsFromKnowledgePack(params["knowledgePack"])
+		}
+		if requiresFreshKnowledge(params) && !hasKnowledgeFacts(params["knowledgePack"], facts) && !hasKnowledgeContextFacts(params["knowledgeContext"]) {
+			return tool.FailureResult("video_script_generator: retrievalPolicy=required but knowledgeContext is empty")
+		}
+		facts = appendKnowledgePolicyForPrompt(facts, params)
+		knowledgeTrace = knowledgeTraceFromParams(params, usedFacts)
+	}
 	style := stringParam(params, "outputStyle", "")
 	platform := stringParam(params, "platform", "通用平台")
 	script := stringParam(params, "script", "")
@@ -2716,7 +3024,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 
 	effectiveCfg := GetVideoCreationOpenAIConfig()
-	if localCfg, ok := TryFetchLocalAgentConfig(); ok {
+	if localCfg, ok := localAgentConfigFetcher(); ok {
 		if localCfg.BaseURL != "" {
 			effectiveCfg.BaseURL = localCfg.BaseURL
 		}
@@ -2730,10 +3038,16 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 
 	if effectiveCfg.APIKey == "" {
 		content := fmt.Sprintf("# %s\n\n主题：%s\n\n> ⚠️ LLM API Key 未配置。请设置 API Key 以启用 AI 内容生成。", toolName, topic)
-		return tool.SuccessResult(map[string]interface{}{
+		data := map[string]interface{}{
 			"content":   content,
 			"artifacts": buildSkillStageArtifacts(toolName, skillName, false, false),
-		})
+		}
+		if toolName == "video_script_generator" {
+			data["usedFacts"] = usedFacts
+			data["factCheckWarnings"] = []interface{}{}
+			data["knowledgeTrace"] = knowledgeTrace
+		}
+		return tool.SuccessResult(data)
 	}
 
 	callParams := map[string]interface{}{
@@ -2853,8 +3167,261 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	if unreviewedArtifacts, ok := contentPkg["unreviewedArtifacts"]; ok {
 		data["unreviewedArtifacts"] = unreviewedArtifacts
 	}
+	if usedFacts, ok := contentPkg["usedFacts"]; ok {
+		data["usedFacts"] = usedFacts
+	}
+	if unusedFacts, ok := contentPkg["unusedFacts"]; ok {
+		data["unusedFacts"] = unusedFacts
+	}
+	if factCheckWarnings, ok := contentPkg["factCheckWarnings"]; ok {
+		data["factCheckWarnings"] = factCheckWarnings
+	}
+	if knowledgeTrace, ok := contentPkg["knowledgeTrace"]; ok {
+		data["knowledgeTrace"] = knowledgeTrace
+	}
+	if toolName == "video_script_generator" {
+		if _, ok := data["usedFacts"]; !ok {
+			data["usedFacts"] = usedFacts
+		}
+		if _, ok := data["factCheckWarnings"]; !ok {
+			data["factCheckWarnings"] = []interface{}{}
+		}
+		if _, ok := data["knowledgeTrace"]; !ok {
+			data["knowledgeTrace"] = knowledgeTrace
+		}
+	}
 
 	return tool.SuccessResult(data)
+}
+
+func requiresFreshKnowledge(params map[string]interface{}) bool {
+	return strings.EqualFold(stringParam(params, "retrievalPolicy", ""), "required") ||
+		boolParam(params, "mustUseFreshKnowledge", false) ||
+		boolParam(params, "requireFreshFacts", false)
+}
+
+func hasKnowledgeFacts(value interface{}, fallbackFacts string) bool {
+	if strings.TrimSpace(fallbackFacts) != "" {
+		return true
+	}
+	switch typed := value.(type) {
+	case []interface{}:
+		return len(typed) > 0
+	case []map[string]interface{}:
+		return len(typed) > 0
+	case map[string]interface{}:
+		if facts, ok := typed["facts"]; ok {
+			return hasKnowledgeFacts(facts, "")
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		return trimmed != "" && !strings.HasPrefix(trimmed, "{{")
+	}
+	return false
+}
+
+func hasKnowledgeContextFacts(value interface{}) bool {
+	return len(usedFactsFromKnowledgeContext(value)) > 0
+}
+
+func formatKnowledgeContextForPrompt(value interface{}) string {
+	items := usedFactsFromKnowledgeContext(value)
+	if len(items) == 0 {
+		return ""
+	}
+	sources := knowledgeSourcesFromContext(value)
+	var b strings.Builder
+	b.WriteString("knowledgeContext facts:\n")
+	for i, item := range items {
+		claim := firstNonEmptyString(item, "claim", "snippet", "title", "text", "summary")
+		if claim == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("%d. %s", i+1, claim))
+		if source := firstNonEmptyString(item, "source"); source != "" {
+			b.WriteString(" 来源：" + source)
+		}
+		if date := firstNonEmptyString(item, "publishedAt", "date"); date != "" {
+			b.WriteString(" 日期：" + date)
+		}
+		if urlValue := firstNonEmptyString(item, "url"); urlValue != "" {
+			b.WriteString(" URL：" + urlValue)
+		}
+		b.WriteString("\n")
+	}
+	if len(sources) > 0 {
+		b.WriteString("\nknowledgeContext sources:\n")
+		for i, source := range sources {
+			b.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, firstNonEmptyString(source, "source", "title"), firstNonEmptyString(source, "url")))
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func usedFactsFromKnowledgeContext(value interface{}) []map[string]interface{} {
+	ctx, ok := value.(map[string]interface{})
+	if !ok {
+		return normalizeKnowledgeItems(value)
+	}
+	return normalizeKnowledgeItems(ctx["items"])
+}
+
+func knowledgeSourcesFromContext(value interface{}) []map[string]interface{} {
+	ctx, ok := value.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return normalizeKnowledgeItems(ctx["sources"])
+}
+
+func usedFactsFromKnowledgePack(value interface{}) []map[string]interface{} {
+	return normalizeKnowledgeItems(value)
+}
+
+func normalizeKnowledgeItems(value interface{}) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0)
+	switch typed := value.(type) {
+	case nil:
+		return out
+	case []map[string]interface{}:
+		return append(out, typed...)
+	case []interface{}:
+		for _, item := range typed {
+			out = append(out, normalizeKnowledgeItems(item)...)
+		}
+	case map[string]interface{}:
+		if nested, ok := typed["facts"]; ok {
+			return normalizeKnowledgeItems(nested)
+		}
+		if nested, ok := typed["items"]; ok {
+			return normalizeKnowledgeItems(nested)
+		}
+		if claim := firstNonEmptyString(typed, "claim", "snippet", "title", "text", "summary"); claim != "" {
+			item := copyStringMap(typed)
+			item["claim"] = claim
+			out = append(out, item)
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "{{") {
+			out = append(out, map[string]interface{}{"claim": trimmed})
+		}
+	}
+	return out
+}
+
+func copyStringMap(values map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(values))
+	for k, v := range values {
+		out[k] = v
+	}
+	return out
+}
+
+func knowledgeTraceFromParams(params map[string]interface{}, usedFacts []map[string]interface{}) map[string]interface{} {
+	ctx, hasContext := params["knowledgeContext"].(map[string]interface{})
+	items := usedFactsFromKnowledgeContext(params["knowledgeContext"])
+	sources := knowledgeSourcesFromContext(params["knowledgeContext"])
+	toolNames := []interface{}{}
+	if hasContext {
+		toolNames = append(toolNames, interfaceSliceForPrompt(ctx["generatedBy"])...)
+	}
+	return map[string]interface{}{
+		"hasKnowledgeContext": hasContext,
+		"knowledgeItemCount":  len(items),
+		"sourceCount":         len(sources),
+		"usedFactCount":       len(usedFacts),
+		"toolNames":           toolNames,
+		"retrievalPolicy":     stringParam(params, "retrievalPolicy", "none"),
+	}
+}
+
+func interfaceSliceForPrompt(value interface{}) []interface{} {
+	switch typed := value.(type) {
+	case []interface{}:
+		return typed
+	case []string:
+		out := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, item)
+		}
+		return out
+	case string:
+		if typed != "" {
+			return []interface{}{typed}
+		}
+	}
+	return nil
+}
+
+func formatKnowledgePackForPrompt(value interface{}, sources interface{}) string {
+	facts := searchResultsParam(value)
+	if len(facts) == 0 {
+		if items, ok := value.([]interface{}); ok {
+			facts = make([]map[string]interface{}, 0, len(items))
+			for _, item := range items {
+				switch typed := item.(type) {
+				case map[string]interface{}:
+					facts = append(facts, typed)
+				case string:
+					facts = append(facts, map[string]interface{}{"claim": typed})
+				}
+			}
+		}
+	}
+	if len(facts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("knowledgePack facts:\n")
+	for i, fact := range facts {
+		claim := firstNonEmptyString(fact, "claim", "snippet", "title", "text")
+		if claim == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("%d. %s", i+1, claim))
+		source := firstNonEmptyString(fact, "source")
+		if source != "" {
+			b.WriteString(" 来源：" + source)
+		}
+		if date := firstNonEmptyString(fact, "date", "publishedAt"); date != "" {
+			b.WriteString(" 日期：" + date)
+		}
+		b.WriteString("\n")
+	}
+	sourceItems := searchResultsParam(sources)
+	if len(sourceItems) > 0 {
+		b.WriteString("\nknowledgeSources:\n")
+		for i, source := range sourceItems {
+			b.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, firstNonEmptyString(source, "source", "title"), firstNonEmptyString(source, "url")))
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func appendKnowledgePolicyForPrompt(facts string, params map[string]interface{}) string {
+	policy := stringParam(params, "retrievalPolicy", "none")
+	currentDate := stringParam(params, "currentDate", time.Now().Format("2006-01-02"))
+	mustUse := boolParam(params, "mustUseFreshKnowledge", false)
+	var parts []string
+	parts = append(parts, "retrievalPolicy="+policy)
+	parts = append(parts, "currentDate="+currentDate)
+	if mustUse {
+		parts = append(parts, "mustUseFreshKnowledge=true")
+	}
+	if strings.TrimSpace(facts) != "" {
+		parts = append(parts, facts)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func firstNonEmptyString(values map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(ensureStringValue(values[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // isStructuredOutputTool reports whether toolName requires structured JSON output
@@ -2920,13 +3487,17 @@ style=%s
 
 硬性要求：
 1. 开头 5-8 秒必须有明确钩子。
-2. 内容必须基于 facts，不允许编造历史事实。
+2. 内容必须基于 facts / knowledgePack，不允许编造历史事实或最新事件结果。
 3. 语言自然，适合真人或 AI 配音口播。
 4. 总时长接近 targetDurationSec。
 5. 分段清晰：开场、背景、核心讲述、总结。
 6. 不要写成论文，不要堆砌百科。
 7. 每句话尽量短，适合口播。
 8. 输出严格 JSON。
+9. 如果提供了 knowledgePack，必须优先使用其中事实；如果 knowledgePack 与你的模型记忆冲突，以 knowledgePack 为准。
+10. 如果 retrievalPolicy=required 但没有事实材料，返回错误 JSON，不得继续创作。
+11. 不得编造 knowledgePack 中没有的比分、排名、出线结果、日期、人物职位、政策变化。
+12. 输出必须包含 usedFacts、unusedFacts、factCheckWarnings 和 knowledgeTrace。
 
 输入：
 topic=%s
@@ -2949,6 +3520,15 @@ style=%s
     "hasHook": true,
     "hasStory": true,
     "hasKnowledgeValue": true
+  },
+  "usedFacts": [{"claim": "使用到的事实", "source": "来源"}],
+  "unusedFacts": [],
+  "factCheckWarnings": [],
+  "knowledgeTrace": {
+    "retrievalPolicy": "none|optional|required|forbidden",
+    "knowledgePackHash": "",
+    "factCount": 0,
+    "sourceCount": 0
   }
 }`, topic, style)
 

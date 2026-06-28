@@ -59,6 +59,89 @@ func TestLLMPlanner_GeneratesAgentPlanFromTopKTools(t *testing.T) {
 	}
 }
 
+func TestLLMPlannerPromptIncludesFreshKnowledgeCandidateForCurrentEvent(t *testing.T) {
+	client := &fakePlannerLLM{
+		response: `{
+			"goal": "生成佛得角世界杯出线短视频",
+			"domain": "video_creation",
+			"mode": "dynamic_agent",
+			"knowledgePolicy": {
+				"contentType": "sports_event",
+				"freshnessLevel": "high",
+				"retrievalPolicy": "required",
+				"knowledgeType": "latest_news",
+				"searchQueries": ["佛得角 世界杯 出线 最新"],
+				"mustUseFacts": true,
+				"mustCiteFacts": true,
+				"blockOnEmptyFacts": true
+			},
+			"steps": [
+				{
+					"id": "retrieve_fresh_facts",
+					"intent": "获取与用户主题相关的最新事实",
+					"tool": "custom_news_search",
+					"reason": "用户提到世界杯出线，属于强时效体育事实，需要外部事实确认",
+					"arguments": {"query": "佛得角 世界杯 出线 最新", "topK": 5},
+					"expectedOutput": ["facts", "sources"]
+				},
+				{
+					"id": "script_generation",
+					"intent": "基于事实生成口播稿",
+					"tool": "video_script_generator",
+					"arguments": {"topic": "佛得角世界杯出线奇迹"},
+					"dependsOn": ["retrieve_fresh_facts"],
+					"expectedOutput": ["script", "usedFacts", "knowledgeTrace"],
+					"produceArtifact": true
+				}
+			],
+			"budget": {"maxLLMCalls": 2, "maxToolCalls": 3, "maxSteps": 3, "maxReplans": 1, "maxCostLevel": "medium"},
+			"stopPolicy": {"stopWhenEnough": true}
+		}`,
+	}
+	planner := NewLLMPlanner(staticToolList{
+		{
+			Name:         "custom_news_search",
+			Description:  "Search latest news and current event facts for script generation.",
+			Type:         "http",
+			Capabilities: []string{"fresh_knowledge", "news_search", "web_search"},
+			Tags:         []string{"news", "search", "fact"},
+			Parameters: map[string]tool.ParamDef{
+				"query": {Type: "string", Required: true},
+				"topK":  {Type: "number"},
+			},
+			Output: map[string]tool.ParamDef{"facts": {Type: "array"}, "sources": {Type: "array"}},
+		},
+		{
+			Name:         "video_script_generator",
+			Description:  "Generate video voiceover scripts.",
+			Type:         "builtin_prompt_tool",
+			Capabilities: []string{"video_creation", "script_generation"},
+			Parameters:   map[string]tool.ParamDef{"topic": {Type: "string", Required: true}},
+			Output:       map[string]tool.ParamDef{"script": {Type: "string"}},
+		},
+	}, client, LLMPlannerOptions{MaxTools: 3})
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if !strings.Contains(client.lastUserPrompt, "custom_news_search") {
+		t.Fatalf("planner prompt should include fresh knowledge candidate, got: %s", client.lastUserPrompt)
+	}
+	if !strings.Contains(client.lastUserPrompt, "matched fresh_knowledge") {
+		t.Fatalf("planner prompt should include candidate reason, got: %s", client.lastUserPrompt)
+	}
+	if len(plan.Steps) == 0 || plan.Steps[0].Tool != "custom_news_search" {
+		t.Fatalf("planner should preserve selected custom search tool: %#v", plan.Steps)
+	}
+	if plan.Steps[0].Reason == "" {
+		t.Fatalf("planner should preserve tool selection reason: %#v", plan.Steps[0])
+	}
+}
+
 func TestHybridPlanner_FallsBackWhenLLMPlannerFails(t *testing.T) {
 	llmPlanner := NewLLMPlanner(staticToolList{
 		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},
@@ -140,7 +223,7 @@ func TestLLMPlanner_WiresMissingRequiredInputsFromPriorOutputs(t *testing.T) {
 					"id": "script_generation",
 					"intent": "生成口播稿",
 					"tool": "video_script_generator",
-					"arguments": {"topic": "佛得角国家以及佛得角世界杯出线奇迹"},
+					"arguments": {"topic": "端午节和粽子的来历"},
 					"expectedOutput": ["script"],
 					"produceArtifact": true
 				},
@@ -158,7 +241,7 @@ func TestLLMPlanner_WiresMissingRequiredInputsFromPriorOutputs(t *testing.T) {
 	}, LLMPlannerOptions{MaxTools: 2})
 
 	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
-		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Message: "请帮我做一个30秒视频，讲端午节和粽子的来历。",
 		Domain:  "video_creation",
 	})
 	if err != nil {

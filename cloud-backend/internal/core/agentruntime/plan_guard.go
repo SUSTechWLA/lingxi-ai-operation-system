@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
@@ -48,13 +49,15 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 	if plan.Budget.MaxSteps > 0 && len(plan.Steps) > plan.Budget.MaxSteps {
 		return fmt.Errorf("agent plan has %d steps, exceeds maxSteps %d", len(plan.Steps), plan.Budget.MaxSteps)
 	}
-
 	// Collect step info for reference validation.
 	stepMap := make(map[string]AgentStep, len(plan.Steps))
 	stepManifests := make(map[string]*tool.ToolManifest, len(plan.Steps))
 	for _, step := range plan.Steps {
 		stepMap[step.ID] = step
 		stepManifests[step.ID] = g.manifestFor(step.Tool)
+	}
+	if err := g.validateKnowledgePolicy(plan, stepManifests); err != nil {
+		return err
 	}
 
 	seen := make(map[string]bool, len(plan.Steps))
@@ -218,6 +221,78 @@ func (g *PlanGuard) validateStageGuard(
 	}
 
 	return nil
+}
+
+func (g *PlanGuard) validateKnowledgePolicy(plan *AgentPlan, stepManifests map[string]*tool.ToolManifest) error {
+	if plan == nil || plan.KnowledgePolicy == nil {
+		return nil
+	}
+	policy := plan.KnowledgePolicy
+	if policy.RetrievalPolicy == RetrievalNone || policy.RetrievalPolicy == RetrievalForbidden {
+		for _, step := range plan.Steps {
+			manifest := stepManifests[step.ID]
+			if hasFreshKnowledgeCapability(manifest) && strings.TrimSpace(step.Reason) == "" {
+				return fmt.Errorf("knowledge policy forbids fresh knowledge tool %s when retrievalPolicy=%s without explicit reason", step.Tool, policy.RetrievalPolicy)
+			}
+		}
+	}
+	if policy.FreshnessLevel == FreshnessHigh && policy.RetrievalPolicy != RetrievalRequired {
+		return fmt.Errorf("high freshness task requires retrievalPolicy=required")
+	}
+	for _, step := range plan.Steps {
+		manifest := stepManifests[step.ID]
+		if isFreshKnowledgeIntent(step) && !hasFreshKnowledgeCapability(manifest) {
+			return fmt.Errorf("capability mismatch: step %s intent requires fresh knowledge but tool %s lacks required capability", step.ID, step.Tool)
+		}
+		if hasFreshKnowledgeCapability(manifest) && manifest.SideEffect {
+			return fmt.Errorf("fresh knowledge tool %s must be sideEffect=false", step.Tool)
+		}
+	}
+	if policy.RetrievalPolicy != RetrievalRequired {
+		return nil
+	}
+	if len(nonEmptyStrings(policy.SearchQueries)) == 0 {
+		return fmt.Errorf("required retrieval must include searchQueries")
+	}
+	if !policy.BlockOnEmptyFacts {
+		return fmt.Errorf("required retrieval must set blockOnEmptyFacts=true")
+	}
+	if !planHasFreshKnowledgeTool(plan, stepManifests) {
+		return fmt.Errorf("required retrieval requires a registered tool with fresh knowledge capability")
+	}
+	return nil
+}
+
+func planHasFreshKnowledgeTool(plan *AgentPlan, stepManifests map[string]*tool.ToolManifest) bool {
+	for _, step := range plan.Steps {
+		if hasFreshKnowledgeCapability(stepManifests[step.ID]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFreshKnowledgeIntent(step AgentStep) bool {
+	text := strings.ToLower(strings.Join([]string{step.ID, step.Intent, step.Reason}, " "))
+	for _, keyword := range []string{
+		"搜索", "检索", "获取最新", "最新事实", "实时", "新闻", "当前事件",
+		"search", "fresh facts", "current event retrieval", "retrieve facts",
+	} {
+		if strings.Contains(text, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+func nonEmptyStrings(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func resolveStepStage(step AgentStep) string {
@@ -462,8 +537,12 @@ func matchesParamType(value interface{}, expectedType string) bool {
 		_, ok := value.(bool)
 		return ok
 	case "array":
-		_, ok := value.([]interface{})
-		return ok
+		switch value.(type) {
+		case []interface{}, []string, []map[string]interface{}:
+			return true
+		default:
+			return false
+		}
 	case "object":
 		_, ok := value.(map[string]interface{})
 		return ok

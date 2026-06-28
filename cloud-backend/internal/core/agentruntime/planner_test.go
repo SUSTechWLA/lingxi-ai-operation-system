@@ -62,7 +62,7 @@ func TestHeuristicPlanner_WiresRequiredInputsFromPreviousOutputs(t *testing.T) {
 	planner := NewHeuristicPlanner(tools)
 
 	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
-		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Message: "请帮我做一个30秒视频，讲端午节和粽子的来历。",
 		Domain:  "video_creation",
 		Context: map[string]interface{}{"targetDurationSec": 30},
 	})

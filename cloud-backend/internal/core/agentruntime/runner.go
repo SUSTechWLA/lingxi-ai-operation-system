@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
 )
@@ -119,9 +120,12 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	if plan.Mode == "" {
 		plan.Mode = "dynamic_agent"
 	}
+	plan = r.compiler.PreparePlan(plan)
 	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
+	agentToolTrace := buildAgentToolTrace(plan, GuardDecisionTrace{Passed: true})
+	logAgentToolTrace(req, plan, agentToolTrace)
 	judgeReport := PlanJudgeReport{Passed: true}
 	if r.planJudge != nil {
 		judgeReport = r.planJudge.Evaluate(plan)
@@ -142,7 +146,7 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 		Budget:    plan.Budget,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		Metadata:  map[string]interface{}{"mode": req.Mode},
+		Metadata:  map[string]interface{}{"mode": req.Mode, "agentToolTrace": agentToolTrace},
 	}
 	if len(judgeReport.Warnings) > 0 {
 		run.Metadata["planJudgeWarnings"] = judgeReport.Warnings
@@ -150,13 +154,14 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	}
 
 	taskInput := map[string]interface{}{
-		"source":     "agentruntime",
-		"agentRunId": run.ID,
-		"userId":     req.UserID,
-		"message":    req.Message,
-		"domain":     plan.Domain,
-		"context":    req.Context,
-		"plan":       plan,
+		"source":         "agentruntime",
+		"agentRunId":     run.ID,
+		"userId":         req.UserID,
+		"message":        req.Message,
+		"domain":         plan.Domain,
+		"context":        req.Context,
+		"plan":           plan,
+		"agentToolTrace": agentToolTrace,
 	}
 	if len(judgeReport.Warnings) > 0 {
 		taskInput["planJudgeWarnings"] = judgeReport.Warnings
@@ -182,6 +187,97 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 		return nil, fmt.Errorf("store agent run: %w", err)
 	}
 	return run, nil
+}
+
+func logAgentToolTrace(req StartRunRequest, plan *AgentPlan, trace map[string]interface{}) {
+	planned, _ := trace["plannedTools"].([]string)
+	candidates, _ := trace["candidateTools"].([]ToolCandidateTrace)
+	knowledgeInfo, _ := trace["knowledgeContext"].(map[string]interface{})
+	zap.L().Info("agent runtime tool trace",
+		zap.String("userInput", req.Message),
+		zap.String("domain", plan.Domain),
+		zap.Int("candidateToolCount", len(candidates)),
+		zap.Strings("plannedTools", planned),
+		zap.Any("candidateTools", candidates),
+		zap.Any("knowledgeContext", knowledgeInfo),
+		zap.Bool("guardPassed", true),
+	)
+}
+
+func buildAgentToolTrace(plan *AgentPlan, guard GuardDecisionTrace) map[string]interface{} {
+	trace := map[string]interface{}{
+		"plannedTools":     plannedTools(plan),
+		"guardDecision":    map[string]interface{}{"passed": guard.Passed, "warnings": guard.Warnings},
+		"knowledgeContext": plannedKnowledgeContextInfo(plan),
+	}
+	if plan != nil && plan.ToolTrace != nil {
+		trace["candidateTools"] = plan.ToolTrace.CandidateTools
+		plan.ToolTrace.PlannedTools = plannedTools(plan)
+		plan.ToolTrace.GuardDecision = &guard
+		info := plannedKnowledgeContextStruct(plan)
+		plan.ToolTrace.KnowledgeContext = &info
+	} else {
+		trace["candidateTools"] = []ToolCandidateTrace{}
+	}
+	return trace
+}
+
+func plannedTools(plan *AgentPlan) []string {
+	if plan == nil {
+		return nil
+	}
+	out := make([]string, 0, len(plan.Steps))
+	for _, step := range plan.Steps {
+		out = append(out, step.Tool)
+	}
+	return out
+}
+
+func plannedKnowledgeContextInfo(plan *AgentPlan) map[string]interface{} {
+	info := plannedKnowledgeContextStruct(plan)
+	return map[string]interface{}{
+		"itemCount":   info.ItemCount,
+		"sourceCount": info.SourceCount,
+		"generatedBy": info.GeneratedBy,
+	}
+}
+
+func plannedKnowledgeContextStruct(plan *AgentPlan) KnowledgeContextInfo {
+	info := KnowledgeContextInfo{}
+	if plan == nil {
+		return info
+	}
+	generated := map[string]bool{}
+	for _, step := range plan.Steps {
+		kc, ok := step.Arguments["knowledgeContext"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		info.ItemCount += len(interfaceSlice(kc["items"]))
+		info.SourceCount += len(interfaceSlice(kc["sources"]))
+		for _, item := range interfaceSlice(kc["generatedBy"]) {
+			if name, ok := item.(string); ok && name != "" && !generated[name] {
+				generated[name] = true
+				info.GeneratedBy = append(info.GeneratedBy, name)
+			}
+		}
+	}
+	return info
+}
+
+func interfaceSlice(value interface{}) []interface{} {
+	switch typed := value.(type) {
+	case []interface{}:
+		return typed
+	case []string:
+		out := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface{}, error) {

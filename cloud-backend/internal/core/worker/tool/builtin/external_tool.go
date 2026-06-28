@@ -51,8 +51,13 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 		return tool.FailureResult(fmt.Sprintf("external tool '%s' not found in registry", toolName))
 	}
 
-	if manifest.Endpoint == "" {
+	targetURL := externalToolEndpoint(manifest)
+	if targetURL == "" {
 		return tool.FailureResult(fmt.Sprintf("external tool '%s' has no endpoint configured", toolName))
+	}
+	if strings.EqualFold(manifest.Type, "mcp") && manifest.Transport != nil &&
+		strings.EqualFold(manifest.Transport.Type, "stdio") {
+		return tool.FailureResult(fmt.Sprintf("external tool '%s' uses MCP stdio transport; stdio adapter is not implemented in this runtime", toolName))
 	}
 
 	// Extract actual parameters (exclude meta fields)
@@ -76,8 +81,7 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 		return tool.FailureResult(fmt.Sprintf("failed to marshal request: %s", err.Error()))
 	}
 
-	// Use endpoint override if provided, otherwise use registered endpoint
-	targetURL := manifest.Endpoint
+	// Use endpoint override if provided, otherwise use registered endpoint or transport endpoint.
 	if ep, ok := params["endpoint"].(string); ok && ep != "" {
 		targetURL = ep
 	}
@@ -125,6 +129,19 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 
 	result["tool"] = toolName
 	return tool.SuccessResult(result)
+}
+
+func externalToolEndpoint(manifest *tool.ToolManifest) string {
+	if manifest == nil {
+		return ""
+	}
+	if manifest.Endpoint != "" {
+		return manifest.Endpoint
+	}
+	if manifest.Transport != nil {
+		return manifest.Transport.Endpoint
+	}
+	return ""
 }
 
 func (t *ExternalTool) Manifest() tool.ToolManifest {

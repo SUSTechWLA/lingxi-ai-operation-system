@@ -191,6 +191,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		);
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS capabilities JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS transport JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS cost_level VARCHAR(16) DEFAULT 'low';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS latency_level VARCHAR(16) DEFAULT 'medium';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS risk_level VARCHAR(16) DEFAULT 'low';

@@ -29,6 +29,7 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 	params, _ := json.Marshal(m.Parameters)
 	output, _ := json.Marshal(m.Output)
 	examples, _ := json.Marshal(m.Examples)
+	transport, _ := json.Marshal(m.Transport)
 	capabilities, _ := json.Marshal(m.Capabilities)
 	tags, _ := json.Marshal(m.Tags)
 	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
@@ -40,7 +41,7 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 	resourceRefs, _ := json.Marshal(m.ResourceRefs)
 
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO tool_manifests (name, description, type, version, endpoint, timeout_ms,
+		`INSERT INTO tool_manifests (name, description, type, version, endpoint, transport, timeout_ms,
 		 parameters, output, examples, sandbox, capabilities, tags, cost_level, latency_level,
 		 risk_level, side_effect, idempotent, approval_policy, artifact_policy,
 		 execution_plane, requires_user_device, artifact_location, local_command, local_requirements,
@@ -49,17 +50,17 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 		         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
 		         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-		         $31, $32, $33)
+		         $31, $32, $33, $34)
 		 ON CONFLICT (name) DO UPDATE SET
-		   description=$2, type=$3, version=$4, endpoint=$5, timeout_ms=$6,
-		   parameters=$7, output=$8, examples=$9, sandbox=$10, capabilities=$11,
-		   tags=$12, cost_level=$13, latency_level=$14, risk_level=$15,
-		   side_effect=$16, idempotent=$17, approval_policy=$18, artifact_policy=$19,
-		   execution_plane=$20, requires_user_device=$21, artifact_location=$22,
-		   local_command=$23, local_requirements=$24, provider=$25, provider_capabilities=$26,
-		   next_recommended_tools=$27, failure_modes=$28, skill_package_id=$29,
-		   prompt_ref=$30, resource_refs=$31, updated_at=$33`,
-		m.Name, m.Description, m.Type, m.Version, m.Endpoint, m.TimeoutMs,
+		   description=$2, type=$3, version=$4, endpoint=$5, transport=$6, timeout_ms=$7,
+		   parameters=$8, output=$9, examples=$10, sandbox=$11, capabilities=$12,
+		   tags=$13, cost_level=$14, latency_level=$15, risk_level=$16,
+		   side_effect=$17, idempotent=$18, approval_policy=$19, artifact_policy=$20,
+		   execution_plane=$21, requires_user_device=$22, artifact_location=$23,
+		   local_command=$24, local_requirements=$25, provider=$26, provider_capabilities=$27,
+		   next_recommended_tools=$28, failure_modes=$29, skill_package_id=$30,
+		   prompt_ref=$31, resource_refs=$32, updated_at=$34`,
+		m.Name, m.Description, m.Type, m.Version, m.Endpoint, transport, m.TimeoutMs,
 		params, output, examples, m.Sandbox,
 		capabilities, tags, m.CostLevel, m.LatencyLevel, m.RiskLevel,
 		m.SideEffect, m.Idempotent, approvalPolicy, artifactPolicy,
@@ -72,7 +73,7 @@ func (r *ToolManifestRepository) Upsert(ctx context.Context, m *model.ToolManife
 
 func (r *ToolManifestRepository) FindByName(ctx context.Context, name string) (*model.ToolManifestRecord, error) {
 	row := r.pool.QueryRow(ctx,
-		`SELECT name, description, type, version, endpoint, timeout_ms,
+		`SELECT name, description, type, version, endpoint, transport, timeout_ms,
 		        parameters, output, examples, sandbox, capabilities, tags,
 		        cost_level, latency_level, risk_level, side_effect, idempotent,
 		        approval_policy, artifact_policy, execution_plane, requires_user_device,
@@ -87,7 +88,7 @@ func (r *ToolManifestRepository) FindByName(ctx context.Context, name string) (*
 
 func (r *ToolManifestRepository) FindAll(ctx context.Context) ([]*model.ToolManifestRecord, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT name, description, type, version, endpoint, timeout_ms,
+		`SELECT name, description, type, version, endpoint, transport, timeout_ms,
 		        parameters, output, examples, sandbox, capabilities, tags,
 		        cost_level, latency_level, risk_level, side_effect, idempotent,
 		        approval_policy, artifact_policy, execution_plane, requires_user_device,
@@ -120,7 +121,7 @@ func (r *ToolManifestRepository) Delete(ctx context.Context, name string) error 
 // scanManifest scans a single tool_manifests row into a ToolManifestRecord.
 func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	var m model.ToolManifestRecord
-	var params, output, examples []byte
+	var params, output, examples, transport []byte
 	var capabilities, tags, approvalPolicy, artifactPolicy, localRequirements, providerCapabilities []byte
 	var nextRecommendedTools, failureModes, resourceRefs []byte
 	var endpoint *string
@@ -130,7 +131,7 @@ func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	var skillPackageID, promptRef *string
 
 	if err := row.Scan(
-		&m.Name, &m.Description, &m.Type, &version, &endpoint, &m.TimeoutMs,
+		&m.Name, &m.Description, &m.Type, &version, &endpoint, &transport, &m.TimeoutMs,
 		&params, &output, &examples, &m.Sandbox, &capabilities, &tags,
 		&costLevel, &latencyLevel, &riskLevel, &m.SideEffect, &m.Idempotent,
 		&approvalPolicy, &artifactPolicy, &executionPlane, &m.RequiresUserDevice,
@@ -149,6 +150,9 @@ func scanManifest(row pgx.Row) (*model.ToolManifestRecord, error) {
 	}
 	if endpoint != nil {
 		m.Endpoint = *endpoint
+	}
+	if len(transport) > 0 {
+		m.Transport = transport
 	}
 	if costLevel != nil {
 		m.CostLevel = *costLevel

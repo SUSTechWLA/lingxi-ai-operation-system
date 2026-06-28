@@ -1,0 +1,7 @@
+review_type: SELF_REVIEW
+decision: PROVISIONALLY_APPROVED
+reviewer: codex
+date: "2026-06-28"
+notes:
+  - "Core changes are limited to plan contract, guard, and compiler."
+  - "Video-specific request classification remains outside core."

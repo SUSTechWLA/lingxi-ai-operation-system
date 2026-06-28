@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
@@ -56,6 +57,7 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("agent plan is required")
 	}
+	plan = c.PreparePlan(plan)
 	if len(plan.Steps) == 0 {
 		return nil, fmt.Errorf("agent plan has no steps")
 	}
@@ -105,6 +107,137 @@ func (c *PlanCompiler) Compile(plan *AgentPlan) (*model.DAGRequest, error) {
 	}
 
 	return &model.DAGRequest{Nodes: nodes, Edges: edges}, nil
+}
+
+// PreparePlan completes policy-driven steps that must exist before Guard and
+// DAG compilation. It is idempotent and mutates the supplied plan.
+func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
+	if plan == nil {
+		return nil
+	}
+	c.injectKnowledgeContext(plan)
+	if plan.Budget.MaxSteps > 0 && len(plan.Steps) > plan.Budget.MaxSteps {
+		plan.Budget.MaxSteps = len(plan.Steps)
+	}
+	if plan.Budget.MaxToolCalls > 0 && len(plan.Steps) > plan.Budget.MaxToolCalls {
+		plan.Budget.MaxToolCalls = len(plan.Steps)
+	}
+	return plan
+}
+
+func (c *PlanCompiler) injectKnowledgeContext(plan *AgentPlan) {
+	if plan == nil {
+		return
+	}
+	knowledgeSteps := make([]knowledgeProducer, 0)
+	for i := range plan.Steps {
+		step := &plan.Steps[i]
+		manifest := c.manifestFor(step.Tool)
+		if isContentGenerationTool(step.Tool, manifest) {
+			c.applyKnowledgeContextToGenerationStep(step, knowledgeSteps, plan.KnowledgePolicy)
+			continue
+		}
+		if producer, ok := knowledgeProducerForStep(*step, manifest); ok {
+			knowledgeSteps = append(knowledgeSteps, producer)
+		}
+	}
+}
+
+type knowledgeProducer struct {
+	StepID       string
+	ToolName     string
+	ItemRefs     []interface{}
+	SourceRefs   []interface{}
+	EvidenceRefs []interface{}
+}
+
+func knowledgeProducerForStep(step AgentStep, manifest *tool.ToolManifest) (knowledgeProducer, bool) {
+	if manifest == nil || len(manifest.Output) == 0 {
+		return knowledgeProducer{}, false
+	}
+	itemRefs := refsForOutputFields(step.ID, manifest, "facts", "evidence", "searchResults", "knowledge", "context", "summary", "results")
+	sourceRefs := refsForOutputFields(step.ID, manifest, "sources", "citations", "references")
+	evidenceRefs := refsForOutputFields(step.ID, manifest, "evidence", "searchResults", "results")
+	if len(itemRefs) == 0 && len(sourceRefs) == 0 && len(evidenceRefs) == 0 {
+		return knowledgeProducer{}, false
+	}
+	return knowledgeProducer{
+		StepID:       step.ID,
+		ToolName:     step.Tool,
+		ItemRefs:     itemRefs,
+		SourceRefs:   sourceRefs,
+		EvidenceRefs: evidenceRefs,
+	}, true
+}
+
+func refsForOutputFields(stepID string, manifest *tool.ToolManifest, fields ...string) []interface{} {
+	refs := make([]interface{}, 0, len(fields))
+	for _, field := range fields {
+		if _, ok := manifest.Output[field]; ok {
+			refs = append(refs, fmt.Sprintf("{{%s.output.%s}}", stepID, field))
+		}
+	}
+	return refs
+}
+
+func (c *PlanCompiler) applyKnowledgeContextToGenerationStep(step *AgentStep, producers []knowledgeProducer, policy *KnowledgePolicy) {
+	if step == nil {
+		return
+	}
+	if step.Arguments == nil {
+		step.Arguments = map[string]interface{}{}
+	}
+	if len(producers) > 0 {
+		for _, producer := range producers {
+			appendDependencyIfMissing(step, producer.StepID)
+		}
+		if _, exists := step.Arguments["knowledgeContext"]; !exists {
+			items := make([]interface{}, 0)
+			sources := make([]interface{}, 0)
+			evidence := make([]interface{}, 0)
+			generatedBy := make([]interface{}, 0, len(producers))
+			for _, producer := range producers {
+				items = append(items, producer.ItemRefs...)
+				sources = append(sources, producer.SourceRefs...)
+				evidence = append(evidence, producer.EvidenceRefs...)
+				generatedBy = append(generatedBy, producer.ToolName)
+			}
+			step.Arguments["knowledgeContext"] = map[string]interface{}{
+				"items":       items,
+				"sources":     sources,
+				"evidence":    evidence,
+				"generatedBy": generatedBy,
+			}
+		}
+	}
+	if policy != nil {
+		step.Arguments["retrievalPolicy"] = string(policy.RetrievalPolicy)
+		step.Arguments["requireFreshFacts"] = policy.MustUseFacts || policy.RetrievalPolicy == RetrievalRequired
+		if _, ok := step.Arguments["currentDate"]; !ok {
+			step.Arguments["currentDate"] = time.Now().Format("2006-01-02")
+		}
+	}
+}
+
+func isContentGenerationTool(toolName string, manifest *tool.ToolManifest) bool {
+	joined := strings.ToLower(toolName)
+	if manifest != nil {
+		joined = strings.ToLower(strings.Join(append([]string{toolName, manifest.Description}, manifest.Capabilities...), " "))
+	}
+	for _, marker := range []string{
+		"script_generation",
+		"content_generation",
+		"proposal_generation",
+		"video_script_generator",
+		"script_generator",
+		"proposal_generator",
+		"image_text_video_generator",
+	} {
+		if strings.Contains(joined, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // injectQualityGates scans the plan steps and auto-inserts quality checker steps
