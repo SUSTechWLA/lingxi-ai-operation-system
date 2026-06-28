@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -193,7 +194,14 @@ func (s *StateService) TransitionTask(ctx context.Context, taskID string, newSta
 
 // handleControlNodeReady pauses the task when a CONTROL node becomes READY,
 // signaling that human review is required before the workflow proceeds.
+// For quality gates with autoApproveWhenPassed=true, it auto-approves when the
+// quality checker passes, so the workflow continues without human intervention.
 func (s *StateService) handleControlNodeReady(ctx context.Context, node *model.Node) {
+	// Auto-approve quality gates when the checker score meets the threshold.
+	if s.tryAutoApproveQualityGate(ctx, node) {
+		return
+	}
+
 	task, err := s.taskRepo.FindByID(ctx, node.TaskID)
 	if err != nil || task == nil {
 		zap.L().Error("Failed to find task for CONTROL node pause", zap.Error(err))
@@ -228,6 +236,124 @@ func (s *StateService) handleControlNodeReady(ctx context.Context, node *model.N
 		zap.String("nodeId", node.ID),
 		zap.String("nodeName", node.Name),
 	)
+}
+
+// tryAutoApproveQualityGate checks if a REVIEW_GATE node is a quality gate
+// with autoApproveWhenPassed, and if the quality checker passed with a
+// sufficient score, auto-approves the gate and resumes the task.
+// Returns true if the gate was auto-approved (caller should not pause).
+func (s *StateService) tryAutoApproveQualityGate(ctx context.Context, gateNode *model.Node) bool {
+	if gateNode == nil || gateNode.Input == nil {
+		return false
+	}
+	reviewPhase, _ := gateNode.Input["reviewPhase"].(string)
+	if reviewPhase != "quality_gate" {
+		return false
+	}
+	autoApprove, _ := gateNode.Input["autoApproveWhenPassed"].(bool)
+	if !autoApprove {
+		return false
+	}
+
+	// Find the quality checker node.
+	checkerNodeID, _ := gateNode.Input["qualityCheckerNode"].(string)
+	if checkerNodeID == "" {
+		checkerNodeID, _ = gateNode.Input["checkerStep"].(string)
+	}
+	if checkerNodeID == "" {
+		zap.L().Warn("Quality gate has autoApproveWhenPassed but no checkerNodeID",
+			zap.String("gateNodeId", gateNode.ID))
+		return false
+	}
+	checker, err := s.nodeRepo.FindByID(ctx, checkerNodeID)
+	if err != nil || checker == nil {
+		// Try finding by original node ID or substring match.
+		allNodes, findErr := s.nodeRepo.FindByTaskID(ctx, gateNode.TaskID)
+		if findErr == nil {
+			for _, n := range allNodes {
+				if n == nil {
+					continue
+				}
+				// Match by scoped ID (e.g. "tXXXX-script_quality_checker")
+				if strings.HasSuffix(n.ID, checkerNodeID) || strings.HasSuffix(checkerNodeID, n.ID) {
+					checker = n
+					break
+				}
+			}
+		}
+	}
+	if checker == nil {
+		zap.L().Warn("Quality gate auto-approve: checker node not found",
+			zap.String("gateNodeId", gateNode.ID),
+			zap.String("checkerNodeId", checkerNodeID))
+		return false
+	}
+
+	if checker.Status != model.NodeSuccess {
+		zap.L().Info("Quality gate auto-approve: checker not yet succeeded",
+			zap.String("gateNodeId", gateNode.ID),
+			zap.String("checkerNodeId", checker.ID),
+			zap.String("checkerStatus", string(checker.Status)))
+		return false
+	}
+
+	// Read the checker output.
+	score := 0.0
+	passed := false
+	if checker.Output != nil {
+		if s, ok := checker.Output["score"].(float64); ok {
+			score = s
+		}
+		if p, ok := checker.Output["passed"].(bool); ok {
+			passed = p
+		}
+	}
+
+	minScore := 85.0
+	if ms, ok := gateNode.Input["minScore"].(float64); ok {
+		minScore = ms
+	}
+	if gateScore, ok := gateNode.Input["minScore"].(int); ok {
+		minScore = float64(gateScore)
+	}
+
+	gateResult := map[string]interface{}{
+		"autoApproved": true,
+		"score":        score,
+		"minScore":     minScore,
+		"passed":       passed,
+		"phase":        "quality_gate",
+	}
+
+	if passed && score >= minScore {
+		gateResult["gateResult"] = "auto_approved"
+		_, err := s.TransitionNode(ctx, gateNode.ID, model.NodeSuccess, gateResult, "")
+		if err != nil {
+			zap.L().Error("Quality gate auto-approve: transition failed", zap.Error(err))
+			return false
+		}
+
+		// Resume the task if it was paused by a prior review gate.
+		task, taskErr := s.taskRepo.FindByID(ctx, gateNode.TaskID)
+		if taskErr == nil && task != nil && task.Status == model.TaskPaused {
+			_ = s.TransitionTask(ctx, gateNode.TaskID, model.TaskRunning)
+		}
+
+		zap.L().Info("Quality gate auto-approved",
+			zap.String("gateNodeId", gateNode.ID),
+			zap.Float64("score", score),
+			zap.Float64("minScore", minScore))
+		return true
+	}
+
+	// Quality check failed — gate remains open for human review.
+	gateResult["gateResult"] = "failed"
+	_, _ = s.TransitionNode(ctx, gateNode.ID, model.NodeReady, gateResult, "")
+	zap.L().Warn("Quality gate did not pass, waiting for human review",
+		zap.String("gateNodeId", gateNode.ID),
+		zap.Float64("score", score),
+		zap.Float64("minScore", minScore))
+	return false
 }
 
 func (s *StateService) CheckDependenciesMet(ctx context.Context, nodeID string) (bool, error) {

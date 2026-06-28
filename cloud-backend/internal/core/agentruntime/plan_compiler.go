@@ -360,6 +360,9 @@ func qualityCheckerFor(toolName string, manifest *tool.ToolManifest) (string, bo
 }
 
 // buildQualityCheckArgs constructs arguments for an auto-inserted quality checker step.
+// It forwards the primary artifact reference AND the source step's context arguments
+// (durationSec, knowledgeContext, knowledgePack, topic, etc.) so the quality checker
+// can evaluate against the user's actual requirements and current facts.
 func buildQualityCheckArgs(sourceStep AgentStep) map[string]interface{} {
 	args := map[string]interface{}{}
 	switch sourceStep.Tool {
@@ -372,6 +375,21 @@ func buildQualityCheckArgs(sourceStep AgentStep) map[string]interface{} {
 	case "video_package_exporter":
 		args["script"] = fmt.Sprintf("{{%s.output.package}}", sourceStep.ID)
 	}
+
+	// Forward context arguments from the source step so the quality checker
+	// has access to the user's target duration, current facts, and topic.
+	for _, key := range []string{
+		"durationSec", "targetDurationSec",
+		"knowledgeContext", "knowledgePack", "knowledgeSources",
+		"facts", "searchResults",
+		"topic", "brief",
+		"currentDate", "retrievalPolicy", "mustUseFreshKnowledge", "requireFreshFacts",
+	} {
+		if v, ok := sourceStep.Arguments[key]; ok && v != nil {
+			args[key] = v
+		}
+	}
+
 	return args
 }
 
