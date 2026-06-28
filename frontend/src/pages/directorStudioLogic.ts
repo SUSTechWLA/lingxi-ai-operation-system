@@ -505,7 +505,9 @@ function findReviewForRole(role: VideoRoleAgent, reviews: AgentReviewItem[]) {
 }
 
 function findTraceNodeForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]) {
-  return [...nodes].reverse().find((node) => {
+  const reversed = [...nodes].reverse()
+
+  const matchNode = (node: TraceNodeLike): boolean => {
     const input = node.input || {}
     const output = node.output || {}
     const tool = stringValue(input.tool) || stringValue(input.capabilityTool) || stringValue(input.reviewTool) || node.name || node.type || ''
@@ -513,7 +515,19 @@ function findTraceNodeForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]) {
     if (stringValue(input.stage) === role.stage || stringValue(output.stage) === role.stage) return true
     if (tool && role.allowedTools?.includes(tool)) return true
     return false
-  })
+  }
+
+  // Prefer the latest exec / tool node over review gate nodes.
+  // When both an exec node and its review gate exist in the trace,
+  // the exec node's RUNNING/SUCCESS status tells us whether content
+  // is still generating — whereas the review gate only tells us a
+  // review slot exists. Preferring the exec node lets stageStatusFor
+  // correctly show "生成中" while the tool runs and "待审核" once
+  // the exec completes and the review gate is ready.
+  const execNode = reversed.find((node) => matchNode(node) && !isReviewTraceNode(node))
+  if (execNode) return execNode
+
+  return reversed.find(matchNode)
 }
 
 function stageStatusFor(
