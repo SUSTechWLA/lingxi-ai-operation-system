@@ -1072,6 +1072,7 @@ export interface StageStateDisplay {
   icon: 'check' | 'shield' | 'refresh' | 'x' | 'cpu'
   label: string
   colorClass: string
+  dotColor: string
   animate: boolean
   active: boolean
 }
@@ -1079,17 +1080,17 @@ export interface StageStateDisplay {
 export function getStageStateDisplay(status: DirectorStageStatus): StageStateDisplay {
   switch (status) {
     case 'done':
-      return { icon: 'check', label: '已通过', colorClass: 'border-green-300 bg-green-50 text-green-700', animate: false, active: false }
+      return { icon: 'check', label: '已通过', colorClass: 'border-green-300 bg-green-50 text-green-700', dotColor: 'bg-green-500', animate: false, active: false }
     case 'review':
-      return { icon: 'shield', label: '待审核', colorClass: 'border-amber-300 bg-amber-50 text-amber-700', animate: false, active: true }
+      return { icon: 'shield', label: '待审核', colorClass: 'border-amber-400 bg-amber-50 text-amber-700 ring-2 ring-amber-300 ring-offset-1', dotColor: 'bg-amber-500', animate: true, active: true }
     case 'running':
     case 'active':
-      return { icon: 'refresh', label: '生成中', colorClass: 'border-blue-300 bg-blue-50 text-blue-700', animate: true, active: true }
+      return { icon: 'refresh', label: '生成中', colorClass: 'border-blue-400 bg-blue-50 text-blue-700 ring-2 ring-blue-300 ring-offset-1', dotColor: 'bg-blue-500', animate: true, active: true }
     case 'blocked':
     case 'failed':
-      return { icon: 'x', label: '已阻断', colorClass: 'border-red-300 bg-red-50 text-red-700', animate: false, active: false }
+      return { icon: 'x', label: '已阻断', colorClass: 'border-red-300 bg-red-50 text-red-700', dotColor: 'bg-red-500', animate: false, active: false }
     case 'pending':
     default:
-      return { icon: 'cpu', label: '等待中', colorClass: 'border-stone-200 bg-stone-50/60 text-stone-400', animate: false, active: false }
+      return { icon: 'cpu', label: '等待中', colorClass: 'border-stone-200 bg-stone-50/60 text-stone-400', dotColor: 'bg-stone-300', animate: true, active: false }
   }
 }

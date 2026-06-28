@@ -489,11 +489,13 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
                 className={clsx(
                   'relative shrink-0 rounded-xl border-2 px-4 py-3 text-center transition-all min-w-[110px]',
                   display.colorClass,
-                  display.active && 'shadow-md scale-105 ring-2 ring-offset-1',
-                  display.active && display.animate && 'animate-pulse',
+                  display.active && 'shadow-md scale-105',
+                  display.animate && 'animate-pulse',
                 )}
                 title={item.goal}
               >
+                {/* Colored status indicator dot */}
+                <div className={clsx('mx-auto h-2.5 w-2.5 rounded-full mb-2', display.dotColor)} />
                 <div className="flex items-center justify-center gap-1.5">
                   <span className="text-lg">
                     {display.icon === 'check' && <FiCheck />}
