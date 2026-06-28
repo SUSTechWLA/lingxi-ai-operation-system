@@ -102,13 +102,47 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 		plan.ToolTrace = &ToolTrace{}
 	}
 	plan.ToolTrace.CandidateTools = candidateTrace(candidates)
+	if err := validatePlanUsesCandidateTools(&plan, candidates); err != nil {
+		return nil, err
+	}
 	manifestsByName := manifestMap(allManifests)
 	fillRequestRequiredInputs(plan.Steps, manifestsByName, req)
 	wireRequiredStepInputs(plan.Steps, manifestsByName)
+	if err := NewPlanGuard(toolManifestCatalog(manifestsByName), nil).Validate(&plan); err != nil {
+		return nil, fmt.Errorf("llm planner returned invalid plan: %w", err)
+	}
 	if len(plan.Steps) == 0 {
 		return nil, fmt.Errorf("llm planner returned no steps")
 	}
 	return &plan, nil
+}
+
+type toolManifestCatalog map[string]*tool.ToolManifest
+
+func (c toolManifestCatalog) GetManifest(name string) *tool.ToolManifest {
+	return c[name]
+}
+
+func validatePlanUsesCandidateTools(plan *AgentPlan, candidates []ToolCandidate) error {
+	if plan == nil {
+		return nil
+	}
+	allowed := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Name != "" {
+			allowed[candidate.Name] = true
+		}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	for _, step := range plan.Steps {
+		if step.Tool == "" || allowed[step.Tool] {
+			continue
+		}
+		return fmt.Errorf("llm planner selected tool %q outside retrieved candidates", step.Tool)
+	}
+	return nil
 }
 
 type HybridPlanner struct {
@@ -122,8 +156,17 @@ func NewHybridPlanner(primary Planner, fallback Planner) *HybridPlanner {
 
 // RepairPlan attempts to fix a Guard-rejected AgentPlan by sending the error
 // and the original plan back to the LLM for one repair attempt.
-// Returns the repaired plan or an error if repair fails.
-func (p *LLMPlanner) RepairPlan(ctx context.Context, originalPlan *AgentPlan, guardError string, manifests []*tool.ToolManifest) (*AgentPlan, error) {
+// It implements the PlanRepairer interface, obtaining tool manifests internally.
+func (p *LLMPlanner) RepairPlan(ctx context.Context, originalPlan *AgentPlan, guardError string) (*AgentPlan, error) {
+	if p == nil || p.tools == nil {
+		return nil, fmt.Errorf("llm planner not configured for repair")
+	}
+	manifests := p.tools.ListManifests()
+	return p.repairPlanWithManifests(ctx, originalPlan, guardError, manifests)
+}
+
+// repairPlanWithManifests is the core repair logic with explicit manifests.
+func (p *LLMPlanner) repairPlanWithManifests(ctx context.Context, originalPlan *AgentPlan, guardError string, manifests []*tool.ToolManifest) (*AgentPlan, error) {
 	if p.client == nil {
 		return nil, fmt.Errorf("llm client not configured")
 	}
@@ -183,6 +226,21 @@ func (p *HybridPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (
 		return nil, fmt.Errorf("hybrid planner fallback is not configured")
 	}
 	return p.fallback.GeneratePlan(ctx, req)
+}
+
+// RepairPlan implements PlanRepairer by delegating to the primary planner
+// (if it supports repair), falling back to the fallback planner.
+func (p *HybridPlanner) RepairPlan(ctx context.Context, plan *AgentPlan, guardError string) (*AgentPlan, error) {
+	if p == nil {
+		return nil, fmt.Errorf("hybrid planner is not configured")
+	}
+	if repairer, ok := p.primary.(PlanRepairer); ok {
+		return repairer.RepairPlan(ctx, plan, guardError)
+	}
+	if repairer, ok := p.fallback.(PlanRepairer); ok {
+		return repairer.RepairPlan(ctx, plan, guardError)
+	}
+	return nil, fmt.Errorf("no planner in hybrid chain supports plan repair")
 }
 
 type OpenAIPlannerClient struct {

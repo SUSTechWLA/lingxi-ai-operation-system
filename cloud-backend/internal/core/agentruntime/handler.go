@@ -343,9 +343,15 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 		if !visibleReviewNodeStatus(node.Status) {
 			continue
 		}
+		if !reviewNodeSourceComplete(node, nodesByID, nodesByOriginalID) {
+			continue
+		}
 		h.ensureReviewNodeArtifactID(ctx, run, node)
 		review := reviewFromNode(node)
 		enrichReviewFromSourceNode(&review, node, nodesByID, nodesByOriginalID)
+		if !reviewReadyForDecision(review, node) {
+			continue
+		}
 		reviews = append(reviews, review)
 	}
 	return run, reviews, nil
@@ -353,6 +359,84 @@ func (h *Handler) reviewsForRun(ctx context.Context, runID string) (*Run, []Revi
 
 func visibleReviewNodeStatus(status model.NodeStatus) bool {
 	return status == model.NodeReady || status == model.NodeSuccess || status == model.NodeFailed
+}
+
+func reviewNodeSourceComplete(reviewNode *model.Node, nodesByID, nodesByOriginalID map[string]*model.Node) bool {
+	if reviewNode == nil || reviewNode.Status != model.NodeReady || reviewNode.Input == nil {
+		return true
+	}
+	phase, _ := reviewNode.Input["reviewPhase"].(string)
+	if phase != "after_artifact" && phase != "quality_gate" && phase != "before_downstream" {
+		return true
+	}
+	sourceNodeID, _ := reviewNode.Input["sourceNode"].(string)
+	if sourceNodeID == "" {
+		sourceNodeID, _ = reviewNode.Input["productionSourceNode"].(string)
+	}
+	if sourceNodeID == "" {
+		return false
+	}
+	source := nodesByID[sourceNodeID]
+	if source == nil {
+		source = nodesByOriginalID[sourceNodeID]
+	}
+	return source != nil && source.Status == model.NodeSuccess
+}
+
+func reviewReadyForDecision(review Review, node *model.Node) bool {
+	if review.Status != "PENDING" || node == nil || node.Input == nil {
+		return true
+	}
+	phase, _ := node.Input["reviewPhase"].(string)
+	if phase != "after_artifact" && phase != "quality_gate" && phase != "before_downstream" {
+		return true
+	}
+	if strings.TrimSpace(review.ReviewContent) != "" {
+		return true
+	}
+	if len(review.ReviewArtifacts) > 0 {
+		return true
+	}
+	return reviewOutputReadyForDecision(review.ReviewOutput)
+}
+
+func reviewOutputReadyForDecision(output map[string]interface{}) bool {
+	if len(output) == 0 {
+		return false
+	}
+	if strings.TrimSpace(reviewContentFromPayload(output)) != "" {
+		return true
+	}
+	if len(reviewArtifactList(output["artifacts"])) > 0 {
+		return true
+	}
+	for _, key := range []string{"proposalPacket", "qualityReport", "package", "cardPlan", "shotList", "compositionSpec", "preview", "renderReport", "publishCopy", "finalReview"} {
+		if reviewValuePresent(output[key]) {
+			return true
+		}
+	}
+	if stdout, ok := output["stdout"].(string); ok && strings.TrimSpace(stdout) != "" {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(stdout), &parsed); err == nil {
+			return reviewOutputReadyForDecision(parsed)
+		}
+	}
+	return false
+}
+
+func reviewValuePresent(value interface{}) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []interface{}:
+		return len(typed) > 0
+	case []map[string]interface{}:
+		return len(typed) > 0
+	case map[string]interface{}:
+		return len(typed) > 0
+	default:
+		return value != nil
+	}
 }
 
 func (h *Handler) findReviewNode(ctx context.Context, runID, reviewID string) (*Run, *model.Node, error) {

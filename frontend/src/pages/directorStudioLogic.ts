@@ -100,13 +100,14 @@ export function buildDirectorStages(
   roleAgents: VideoRoleAgent[],
   reviews: AgentReviewItem[] = [],
   trace: unknown = undefined,
+  projectStarted = false,
 ): DirectorStage[] {
   const traceNodes = extractTraceNodes(trace)
 
   return roleAgents.map((role) => {
     const review = findReviewForRole(role, reviews)
     const node = findTraceNodeForRole(role, traceNodes)
-    const status = stageStatusFor(role, review, node)
+    const status = stageStatusFor(role, review, node, projectStarted)
 
     return {
       id: role.id,
@@ -306,9 +307,10 @@ export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
     const rawName = realTool || nodeName || node.id || ''
     const rawType = node.type || ''
     const tool = readableToolName(rawName)
-    const roleAgent = objectValue(input.roleAgent) || objectValue(output.roleAgent)
+    const parameters = objectValue(input.parameters)
+    const roleAgent = objectValue(input.roleAgent) || objectValue(parameters?.roleAgent) || objectValue(output.roleAgent)
     const roleName = stringValue(roleAgent?.displayName) || stringValue(roleAgent?.name) || toolRoleFromName(rawName) || readableNodeType(rawType) || tool || '步骤'
-    const stage = stringValue(input.stage) || stringValue(output.stage) || ''
+    const stage = nodeFieldString(node, 'stage') || stringValue(output.stage) || ''
     const outDuration = typeof output.durationMs === 'number' ? output.durationMs : undefined
     const nodeDuration = typeof node.durationMs === 'number' ? node.durationMs : undefined
     const duration = formatDurationMs(outDuration || nodeDuration, node.startedAt || node.createdAt, node.updatedAt || node.completedAt)
@@ -508,11 +510,10 @@ function findTraceNodeForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]) {
   const reversed = [...nodes].reverse()
 
   const matchNode = (node: TraceNodeLike): boolean => {
-    const input = node.input || {}
     const output = node.output || {}
-    const tool = stringValue(input.tool) || stringValue(input.capabilityTool) || stringValue(input.reviewTool) || node.name || node.type || ''
-    if (stringValue(input.roleAgentId) === role.id || stringValue(output.roleAgentId) === role.id) return true
-    if (stringValue(input.stage) === role.stage || stringValue(output.stage) === role.stage) return true
+    const tool = nodeToolName(node)
+    if (nodeFieldString(node, 'roleAgentId') === role.id || stringValue(output.roleAgentId) === role.id) return true
+    if (nodeFieldString(node, 'stage') === role.stage || stringValue(output.stage) === role.stage) return true
     if (tool && role.allowedTools?.includes(tool)) return true
     return false
   }
@@ -534,12 +535,22 @@ function stageStatusFor(
   role: VideoRoleAgent,
   review: AgentReviewItem | undefined,
   node: TraceNodeLike | undefined,
+  projectStarted: boolean,
 ): DirectorStageStatus {
   // When a PENDING review exists, check whether content is still generating.
   // If the trace node is a tool execution (not a review gate) and is still
   // running, show "生成中" so the user knows the system is still working.
   // Once the exec completes and the review gate appears, show "待审核".
   if (review?.status === 'PENDING') {
+    if (!isActionablePendingReview(review)) {
+      if (node?.status) {
+        const normalizedStatus = normalizeDirectorStatus(node.status)
+        if (!isReviewTraceNode(node) && (normalizedStatus === 'running' || normalizedStatus === 'active')) {
+          return 'running'
+        }
+      }
+      return projectStarted ? 'running' : 'pending'
+    }
     if (node?.status) {
       const normalizedStatus = normalizeDirectorStatus(node.status)
       if (!isReviewTraceNode(node) && (normalizedStatus === 'running' || normalizedStatus === 'active')) {
@@ -552,10 +563,12 @@ function stageStatusFor(
   if (review?.status === 'APPROVED') return 'done'
   if (node?.status) {
     const status = normalizeDirectorStatus(node.status)
-    if (isReviewTraceNode(node) && (status === 'running' || status === 'pending')) return 'review'
+    if (isReviewTraceNode(node) && (status === 'running' || status === 'pending')) {
+      return isActionableTraceReviewNode(node) ? 'review' : projectStarted ? 'running' : 'pending'
+    }
     return status
   }
-  if (role.stage === 'proposal') return 'active'
+  if (projectStarted && role.stage === 'proposal') return 'active'
   return 'pending'
 }
 
@@ -567,6 +580,11 @@ function isReviewTraceNode(node: TraceNodeLike | undefined): boolean {
   if (stringValue(input.reviewPhase) || stringValue(input.reviewReason)) return true
   if (node.name?.startsWith('审核-')) return true
   return false
+}
+
+function isActionableTraceReviewNode(node: TraceNodeLike | undefined): boolean {
+  if (!isReviewTraceNode(node)) return false
+  return hasDecisionReviewOutput(node?.output)
 }
 
 function artifactStatusFor(
@@ -636,6 +654,26 @@ function extractTraceNodes(trace: unknown): TraceNodeLike[] {
 
 function isTraceNodeLike(value: unknown): value is TraceNodeLike {
   return Boolean(value && typeof value === 'object')
+}
+
+function nodeToolName(node: TraceNodeLike): string {
+  const input = node.input || {}
+  return stringValue(input.tool) ||
+    stringValue(input.capabilityTool) ||
+    stringValue(input.reviewTool) ||
+    stringValue(objectValue(input.parameters)?.tool) ||
+    node.tool ||
+    node.name ||
+    node.type ||
+    ''
+}
+
+function nodeFieldString(node: TraceNodeLike, key: string): string | undefined {
+  const input = node.input || {}
+  const direct = stringValue(input[key])
+  if (direct) return direct
+  const parameters = objectValue(input.parameters)
+  return stringValue(parameters?.[key])
 }
 
 function extractArtifacts(node: TraceNodeLike | undefined): Array<Record<string, unknown>> {
@@ -771,7 +809,47 @@ export function reviewDisplayTitle(review: AgentReviewItem | undefined): string 
 }
 
 export function visibleReviewHistory(reviews: AgentReviewItem[] = []): AgentReviewItem[] {
-  return reviews.filter((review) => ['PENDING', 'APPROVED', 'REJECTED'].includes(String(review.status)))
+  return reviews.filter((review) => {
+    if (review.status === 'PENDING') return isActionablePendingReview(review)
+    return ['APPROVED', 'REJECTED'].includes(String(review.status))
+  })
+}
+
+export function isActionablePendingReview(review: AgentReviewItem | undefined): boolean {
+  if (!review || review.status !== 'PENDING') return false
+  if (typeof review.reviewContent === 'string' && review.reviewContent.trim()) return true
+  if (Array.isArray(review.reviewArtifacts) && review.reviewArtifacts.length > 0) return true
+  return hasDecisionReviewOutput(review.reviewOutput)
+}
+
+function hasDecisionReviewOutput(output: Record<string, unknown> | undefined): boolean {
+  if (!output || Object.keys(output).length === 0) return false
+
+  for (const key of ['content', 'script', 'text', 'markdown', 'summary']) {
+    if (typeof output[key] === 'string' && output[key].trim()) return true
+  }
+
+  if (Array.isArray(output.artifacts) && output.artifacts.length > 0) return true
+
+  for (const key of ['proposalPacket', 'qualityReport', 'package', 'cardPlan', 'shotList', 'compositionSpec', 'preview', 'renderReport', 'publishCopy', 'finalReview']) {
+    const value = output[key]
+    if (value && typeof value === 'object') {
+      if (Array.isArray(value)) {
+        if (value.length > 0) return true
+      } else if (Object.keys(value as Record<string, unknown>).length > 0) {
+        return true
+      }
+    }
+  }
+
+  if (typeof output.stdout === 'string' && output.stdout.trim()) {
+    const parsed = tryParseJSON(output.stdout)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return hasDecisionReviewOutput(parsed as Record<string, unknown>)
+    }
+  }
+
+  return false
 }
 
 export function reviewStatusLabel(review: AgentReviewItem | undefined): string {
@@ -1082,10 +1160,10 @@ export function getStageStateDisplay(status: DirectorStageStatus): StageStateDis
     case 'done':
       return { icon: 'check', label: '已通过', colorClass: 'border-green-300 bg-green-50 text-green-700', dotColor: 'bg-green-500', animate: false, active: false }
     case 'review':
-      return { icon: 'shield', label: '待审核', colorClass: 'border-amber-400 bg-amber-50 text-amber-700 ring-2 ring-amber-300 ring-offset-1', dotColor: 'bg-amber-500', animate: true, active: true }
+      return { icon: 'shield', label: '待审核', colorClass: 'border-amber-400 bg-amber-50 text-amber-700', dotColor: 'bg-amber-500', animate: true, active: true }
     case 'running':
     case 'active':
-      return { icon: 'refresh', label: '生成中', colorClass: 'border-blue-400 bg-blue-50 text-blue-700 ring-2 ring-blue-300 ring-offset-1', dotColor: 'bg-blue-500', animate: true, active: true }
+      return { icon: 'refresh', label: '生成中', colorClass: 'border-blue-400 bg-blue-50 text-blue-700', dotColor: 'bg-blue-500', animate: true, active: true }
     case 'blocked':
     case 'failed':
       return { icon: 'x', label: '已阻断', colorClass: 'border-red-300 bg-red-50 text-red-700', dotColor: 'bg-red-500', animate: false, active: false }

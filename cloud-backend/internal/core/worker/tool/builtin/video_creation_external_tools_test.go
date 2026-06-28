@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +148,73 @@ func TestNormalizeStructuredToolContentUsesCanonicalJSON(t *testing.T) {
 	}
 	if pkg["summary"] != "佛得角首次晋级世界杯。" {
 		t.Fatalf("expected parsed package, got %#v", pkg)
+	}
+}
+
+func TestExecuteDynamicAgentPromptToolRetriesStructuredJSONOutput(t *testing.T) {
+	requests := make([]map[string]interface{}, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		requests = append(requests, body)
+		w.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"我先分析一下，这不是 JSON。"},"finish_reason":"stop"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"checkedFacts\":[\"佛得角是西非岛国\"],\"warnings\":[],\"corrections\":[],\"passed\":true,\"summary\":\"核查完成\"}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	SetVideoCreationConfig(config.OpenAIConfig{
+		APIKey:      "test-key",
+		BaseURL:     server.URL,
+		Model:       "deepseek-v4-pro",
+		MaxTokens:   512,
+		Temperature: 0.7,
+		Timeout:     5,
+	}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	result := executeDynamicAgentPromptTool("fact_checker", "proposal", "video", "佛得角世界杯出线", "", map[string]interface{}{
+		"topic": "佛得角世界杯出线",
+		"facts": "佛得角首次晋级世界杯。",
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "fact_checker_exec"})
+	if !result.Success {
+		t.Fatalf("expected retry to recover structured JSON, got %s", result.Error)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("expected one retry after non-JSON output, got %d requests", len(requests))
+	}
+	if requests[0]["max_tokens"] != float64(8000) {
+		t.Fatalf("expected max_tokens 8000 on first request, got %#v", requests[0]["max_tokens"])
+	}
+	if requests[0]["temperature"] != float64(0) {
+		t.Fatalf("expected temperature 0 for structured request, got %#v", requests[0]["temperature"])
+	}
+	rf, ok := requests[0]["response_format"].(map[string]interface{})
+	if !ok || rf["type"] != "json_object" {
+		t.Fatalf("expected json_object response_format, got %#v", requests[0]["response_format"])
+	}
+	messages, ok := requests[1]["messages"].([]interface{})
+	if !ok || len(messages) == 0 {
+		t.Fatalf("expected retry messages, got %#v", requests[1]["messages"])
+	}
+	last, ok := messages[len(messages)-1].(map[string]interface{})
+	if !ok || !strings.Contains(strings.ToLower(ensureStringValue(last["content"])), "json") {
+		t.Fatalf("expected retry prompt to reinforce JSON mode, got %#v", last)
+	}
+	if passed, ok := result.Data["passed"].(bool); !ok || !passed {
+		t.Fatalf("expected parsed JSON package fields in result, got %#v", result.Data)
 	}
 }
 

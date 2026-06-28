@@ -35,6 +35,7 @@ try {
     buildDirectorTraceNodes,
     traceNodeHasError,
     visibleReviewHistory,
+    isActionablePendingReview,
   } = await import(pathToFileURL(outfile))
   const roleAgents = [
     {
@@ -81,6 +82,84 @@ try {
     { ...roleAgents[0], id: 'storyboard_artist', stage: 'storyboard', displayName: '卡片设计师', allowedTools: ['card_plan_generator'], requiredOutputs: ['CARD_PLAN'] },
   ]
   const stagedReviews = [{ id: 'review-script', nodeId: 'review-script-node', status: 'PENDING', roleAgentId: 'script_writer', stage: 'script', tool: 'video_script_generator' }]
+  const startupRoles = [
+    { ...roleAgents[0], id: 'creative_director', stage: 'proposal', displayName: '创意总监', allowedTools: ['proposal_generator'], requiredOutputs: ['VIDEO_PROPOSAL'] },
+    stagedRoles[0],
+  ]
+  const notStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] })
+  assert.deepEqual(notStartedFlow.map((stage) => stage.status), ['pending', 'pending'])
+  const justStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] }, true)
+  assert.deepEqual(justStartedFlow.map((stage) => stage.status), ['active', 'pending'])
+
+  const unactionableStartupReviews = startupRoles.map((role) => ({
+    id: `${role.stage}_review`,
+    nodeId: `${role.stage}_review`,
+    status: 'PENDING',
+    stage: role.stage,
+    tool: role.allowedTools[0],
+    reviewPhase: 'after_artifact',
+  }))
+  assert.equal(isActionablePendingReview(unactionableStartupReviews[0]), false)
+  assert.deepEqual(visibleReviewHistory(unactionableStartupReviews), [])
+  const generatingFlow = buildDirectorStages(startupRoles, unactionableStartupReviews, { nodes: [] }, true)
+  assert.deepEqual(generatingFlow.map((stage) => stage.status), ['running', 'running'])
+
+  const technicalOutputReviews = startupRoles.map((role) => ({
+    id: `${role.stage}_technical_review`,
+    nodeId: `${role.stage}_technical_review`,
+    status: 'PENDING',
+    stage: role.stage,
+    tool: role.allowedTools[0],
+    reviewPhase: 'after_artifact',
+    reviewOutput: {
+      stage: role.stage,
+      status: 'READY',
+      stdout: `${role.stage} gate created`,
+    },
+  }))
+  assert.equal(isActionablePendingReview(technicalOutputReviews[0]), false)
+  assert.deepEqual(visibleReviewHistory(technicalOutputReviews), [])
+  const technicalOutputFlow = buildDirectorStages(startupRoles, technicalOutputReviews, { nodes: [] }, true)
+  assert.deepEqual(technicalOutputFlow.map((stage) => stage.status), ['running', 'running'])
+
+  const technicalGateTraceFlow = buildDirectorStages(startupRoles, [], {
+    nodes: startupRoles.map((role) => ({
+      id: `${role.stage}_review`,
+      name: `审核-${role.allowedTools[0]}`,
+      type: 'REVIEW_GATE',
+      status: 'READY',
+      input: {
+        stage: role.stage,
+        tool: role.allowedTools[0],
+        reviewPhase: 'after_artifact',
+      },
+      output: {
+        stage: role.stage,
+        status: 'READY',
+        stdout: `${role.stage} gate created`,
+      },
+    })),
+  }, true)
+  assert.deepEqual(technicalGateTraceFlow.map((stage) => stage.status), ['running', 'running'])
+
+  const actionableGateTraceFlow = buildDirectorStages(startupRoles, [], {
+    nodes: [
+      {
+        id: 'proposal_review',
+        name: '审核-proposal_generator',
+        type: 'REVIEW_GATE',
+        status: 'READY',
+        input: {
+          stage: 'proposal',
+          tool: 'proposal_generator',
+          reviewPhase: 'after_artifact',
+        },
+        output: { content: '# 创作方向\n\n可以审核的方案正文' },
+      },
+    ],
+  }, true)
+  assert.deepEqual(actionableGateTraceFlow.map((stage) => stage.status), ['review', 'pending'])
+
   const stagedFlow = buildDirectorStages(stagedRoles, stagedReviews, { nodes: [] })
   assert.equal(nextStageIdAfterReview(stagedFlow, stagedReviews[0]), 'storyboard_artist')
   const optimisticFlow = applyOptimisticRunningStage(stagedFlow, 'storyboard_artist')
@@ -99,6 +178,79 @@ try {
     ],
   })
   assert.equal(reviewGateFlow[0].status, 'review')
+
+  const nestedParameterFlow = buildDirectorStages(
+    [{
+      id: 'storyboard_artist',
+      name: 'Storyboard Artist',
+      displayName: '卡片设计师',
+      stage: 'storyboard',
+      goal: '拆画面',
+      allowedTools: ['card_plan_generator'],
+      forbiddenTools: [],
+      requiredInputs: ['VIDEO_SCRIPT'],
+      requiredOutputs: ['CARD_PLAN'],
+    }],
+    [{
+      id: 'shot_splitter_review',
+      nodeId: 'shot_splitter_review',
+      status: 'PENDING',
+      stage: 'storyboard',
+      tool: 'shot_splitter',
+      reviewPhase: 'after_artifact',
+    }],
+    {
+      nodes: [
+        {
+          id: 'shot_splitter_exec',
+          name: 'external',
+          type: 'TOOL',
+          status: 'RUNNING',
+          input: {
+            tool: 'external',
+            capabilityTool: 'shot_splitter',
+            parameters: {
+              stage: 'storyboard',
+              roleAgentId: 'storyboard_artist',
+            },
+          },
+          output: {},
+        },
+        {
+          id: 'shot_splitter_review',
+          name: '审核-shot_splitter',
+          type: 'REVIEW_GATE',
+          status: 'READY',
+          input: {
+            stage: 'storyboard',
+            tool: 'shot_splitter',
+            sourceNode: 'shot_splitter_exec',
+            reviewPhase: 'after_artifact',
+          },
+          output: {},
+        },
+      ],
+    },
+  )
+  assert.equal(nestedParameterFlow[0].status, 'running')
+
+  const nestedParameterTrace = buildDirectorTraceNodes({
+    nodes: [
+      {
+        id: 'shot_splitter_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'RUNNING',
+        input: {
+          tool: 'external',
+          capabilityTool: 'shot_splitter',
+          parameters: { stage: 'storyboard' },
+        },
+        output: {},
+      },
+    ],
+  })
+  assert.equal(nestedParameterTrace[0].stage, 'storyboard')
 
   const proposalArtifacts = buildDirectorArtifacts(
     [{
@@ -171,9 +323,10 @@ try {
     { id: 'future-storyboard', nodeId: 'future-storyboard', status: 'CREATED', tool: 'card_plan_generator' },
     { id: 'proposal-review', nodeId: 'proposal-review', status: 'APPROVED', tool: 'proposal_generator' },
     { id: 'script-review', nodeId: 'script-review', status: 'PENDING', tool: 'video_script_generator' },
+    { id: 'ready-script-review', nodeId: 'ready-script-review', status: 'PENDING', tool: 'video_script_generator', reviewContent: '可审核脚本正文' },
     { id: 'rejected-review', nodeId: 'rejected-review', status: 'REJECTED', tool: 'card_plan_generator' },
   ])
-  assert.deepEqual(visibleReviews.map((review) => review.id), ['proposal-review', 'script-review', 'rejected-review'])
+  assert.deepEqual(visibleReviews.map((review) => review.id), ['proposal-review', 'ready-script-review', 'rejected-review'])
   assert.equal(reviewStatusLabel(visibleReviews[0]), '已通过')
   assert.equal(reviewStatusLabel(visibleReviews[1]), '待审核')
   assert.equal(reviewStatusLabel(visibleReviews[2]), '已驳回')

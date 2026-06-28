@@ -81,9 +81,10 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		steps = append(steps, step)
 		previous = stepID
 	}
+	fillRequestRequiredInputs(steps, manifests, req)
 	wireRequiredStepInputs(steps, manifests)
 
-	return &AgentPlan{
+	plan := &AgentPlan{
 		Goal:            req.Message,
 		Domain:          domain,
 		Mode:            "dynamic_agent",
@@ -97,7 +98,14 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 			MaxCostLevel: tool.CostMedium,
 		},
 		StopPolicy: StopPolicy{StopWhenEnough: true},
-	}, nil
+	}
+
+	// Validate the plan before returning, same as LLMPlanner does.
+	if err := NewPlanGuard(toolManifestCatalog(manifests), nil).Validate(plan); err != nil {
+		return nil, fmt.Errorf("heuristic planner returned invalid plan: %w", err)
+	}
+
+	return plan, nil
 }
 
 func defaultKnowledgePolicyForTools(message, domain string, manifests []*tool.ToolManifest) *KnowledgePolicy {
@@ -130,6 +138,9 @@ func (p *HeuristicPlanner) selectTools(domain, message string) []*tool.ToolManif
 	hasDomainCapability := false
 	for i, manifest := range all {
 		if manifest == nil || manifest.Name == "" {
+			continue
+		}
+		if plannerDisallowsToolForDomain(manifest.Name, domain) {
 			continue
 		}
 		if hasCapability(manifest, domain) {
@@ -315,9 +326,13 @@ func fillRequestRequiredInputs(steps []AgentStep, manifests map[string]*tool.Too
 				}
 			}
 			switch name {
-			case "topic", "brief":
+			case "topic", "brief", "query", "searchQuery", "prompt":
 				if req.Message != "" {
 					step.Arguments[name] = req.Message
+				}
+			case "queries", "searchQueries":
+				if req.Message != "" {
+					step.Arguments[name] = []string{req.Message}
 				}
 			}
 		}

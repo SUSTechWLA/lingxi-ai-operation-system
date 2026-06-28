@@ -131,6 +131,9 @@ func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, 
 		if manifest == nil || manifest.Name == "" || manifest.Name == "__quality_gate__" {
 			continue
 		}
+		if plannerDisallowsToolForDomain(manifest.Name, req.Domain) {
+			continue
+		}
 		if req.MaxCostLevel != "" && manifest.CostLevel != "" && costRankStr(manifest.CostLevel) > costRankStr(req.MaxCostLevel) {
 			continue
 		}
@@ -138,6 +141,9 @@ func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, 
 			continue
 		}
 		if capabilityOverlaps(manifest, req.ExcludeCapabilities) {
+			continue
+		}
+		if req.Domain != "" && req.Domain != "general" && len(manifest.Capabilities) == 0 {
 			continue
 		}
 		if len(req.IncludeCapabilities) > 0 && !capabilityOverlaps(manifest, req.IncludeCapabilities) {
@@ -157,6 +163,18 @@ func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, 
 		filtered = append(filtered, manifest)
 	}
 	return filtered
+}
+
+func plannerDisallowsToolForDomain(toolName, domain string) bool {
+	if domain != "video_creation" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "bash", "python", "llm_api", "external":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, freshRequired bool, prevSet map[string]bool) (float64, []string) {

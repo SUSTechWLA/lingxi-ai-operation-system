@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -51,17 +52,13 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 	}
 
 	maxTokens := t.cfg.MaxTokens
-	if mt, ok := params["max_tokens"]; ok {
-		if f, ok := mt.(float64); ok {
-			maxTokens = int(f)
-		}
+	if mt, ok := intValue(params["max_tokens"]); ok {
+		maxTokens = mt
 	}
 
 	temperature := t.cfg.Temperature
-	if temp, ok := params["temperature"]; ok {
-		if f, ok := temp.(float64); ok {
-			temperature = f
-		}
+	if temp, ok := floatValue(params["temperature"]); ok {
+		temperature = temp
 	}
 
 	zap.L().Info("Calling LLM API", zap.String("taskId", toolCtx.TaskID), zap.String("model", model))
@@ -131,6 +128,85 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 		"finishReason": finishReason,
 		"rawResponse":  responseMap,
 	})
+}
+
+func intValue(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int8:
+		return int(v), true
+	case int16:
+		return int(v), true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case uint:
+		return int(v), true
+	case uint8:
+		return int(v), true
+	case uint16:
+		return int(v), true
+	case uint32:
+		return int(v), true
+	case uint64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return int(i), true
+		}
+		if f, err := v.Float64(); err == nil {
+			return int(f), true
+		}
+	case string:
+		if i, err := strconv.Atoi(v); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func floatValue(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int8:
+		return float64(v), true
+	case int16:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f, true
+		}
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
 }
 
 func buildChatMessages(systemPrompt, userPrompt string, imageURLs []string) []interface{} {

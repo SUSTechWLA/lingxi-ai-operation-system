@@ -57,6 +57,7 @@ import {
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
   getStageStateDisplay,
+  isActionablePendingReview,
   normalizeDirectorErrorMessage,
   nextStageIdAfterReview,
   publishCopiesToJSON,
@@ -153,12 +154,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     return () => window.clearInterval(timer)
   }, [refreshRun, run?.id, run?.status])
 
-  const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace), [roleAgents, reviews, trace])
+  const projectStarted = Boolean(run?.id) || loading
+  const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted), [roleAgents, reviews, trace, projectStarted])
   const displayStages = useMemo(() => applyOptimisticRunningStage(stages, optimisticRunningStageId), [stages, optimisticRunningStageId])
   const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace), [roleAgents, reviews, trace])
   const traceNodes = useMemo(() => buildDirectorTraceNodes(trace), [trace])
   const nextAction = useMemo(() => deriveNextAction(displayStages), [displayStages])
-  const pendingReviews = reviews.filter((review) => review.status === 'PENDING')
+  const pendingReviews = reviews.filter(isActionablePendingReview)
   const activeReview = pendingReviews[0]
   const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
   const canStart = preflight?.canStart !== false && !loading
@@ -477,7 +479,7 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
           <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-stone-300" /> 等待中</span>
         </div>
       </div>
-      <div className="flex items-center gap-1 overflow-x-auto pb-1">
+      <div className="flex items-center gap-1 overflow-x-auto px-1 py-1">
         {stages.map((item, index) => {
           const display = getStageStateDisplay(item.status)
           return (
@@ -487,9 +489,9 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
               )}
               <div
                 className={clsx(
-                  'relative shrink-0 rounded-xl border-2 px-4 py-3 text-center transition-all min-w-[110px]',
+                  'relative min-w-[110px] shrink-0 rounded-xl border px-4 py-3 text-center transition-all',
                   display.colorClass,
-                  display.active && 'shadow-md scale-105',
+                  display.active && 'shadow-md',
                   display.animate && 'animate-pulse',
                 )}
                 title={item.goal}
@@ -1033,11 +1035,11 @@ function artifactToCopyText(artifact: DirectorArtifactRecord) {
 function StatusBadge({ status, label }: { status: DirectorArtifactStatus | DirectorStageStatus; label?: string }) {
   const labelMap: Record<DirectorArtifactStatus | DirectorStageStatus, string> = {
     done: '已完成',
-    active: '进行中',
+    active: '生成中',
     review: '待审核',
     blocked: '已阻断',
     pending: '待开始',
-    running: '运行中',
+    running: '生成中',
     valid: '有效',
     stale: '已过期',
     failed: '失败',

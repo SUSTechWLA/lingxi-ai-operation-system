@@ -2,6 +2,9 @@ package builtin
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
@@ -192,6 +195,50 @@ func TestLlmApiTool_Execute_NoPrompt(t *testing.T) {
 	result := lt.Execute(context.Background(), map[string]interface{}{}, tool.ToolContext{})
 	if result.Success {
 		t.Error("Expected failure when no prompt provided")
+	}
+}
+
+func TestLlmApiTool_Execute_UsesIntegerMaxTokensAndJSONMode(t *testing.T) {
+	var gotBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"facts\":[\"ok\"],\"summary\":\"done\"}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	lt := NewLlmApiTool(config.OpenAIConfig{
+		APIKey:      "test-key",
+		BaseURL:     server.URL,
+		Model:       "deepseek-v4-pro",
+		MaxTokens:   512,
+		Temperature: 0.7,
+		Timeout:     5,
+	})
+
+	result := lt.Execute(context.Background(), map[string]interface{}{
+		"prompt":          "只输出 JSON",
+		"max_tokens":      8000,
+		"temperature":     0,
+		"response_format": map[string]string{"type": "json_object"},
+	}, tool.ToolContext{TaskID: "task-1"})
+	if !result.Success {
+		t.Fatalf("expected success, got %s", result.Error)
+	}
+	if gotBody["max_tokens"] != float64(8000) {
+		t.Fatalf("expected max_tokens 8000, got %#v", gotBody["max_tokens"])
+	}
+	if gotBody["temperature"] != float64(0) {
+		t.Fatalf("expected temperature 0, got %#v", gotBody["temperature"])
+	}
+	rf, ok := gotBody["response_format"].(map[string]interface{})
+	if !ok || rf["type"] != "json_object" {
+		t.Fatalf("expected json_object response_format, got %#v", gotBody["response_format"])
 	}
 }
 

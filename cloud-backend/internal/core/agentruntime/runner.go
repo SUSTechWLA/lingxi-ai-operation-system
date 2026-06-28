@@ -50,6 +50,13 @@ type Planner interface {
 	GeneratePlan(ctx context.Context, req StartRunRequest) (*AgentPlan, error)
 }
 
+// PlanRepairer is an optional interface that planners can implement
+// to attempt plan repair after guard validation fails. The planner
+// is responsible for obtaining the tool manifests it needs internally.
+type PlanRepairer interface {
+	RepairPlan(ctx context.Context, plan *AgentPlan, guardError string) (*AgentPlan, error)
+}
+
 type Orchestrator interface {
 	CreateTask(ctx context.Context, input map[string]interface{}) (*model.Task, error)
 	SubmitDAG(ctx context.Context, taskID string, dagReq *model.DAGRequest) error
@@ -122,8 +129,28 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	}
 	plan = r.compiler.PreparePlan(plan)
 	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
+		// Attempt plan repair if the planner supports it.
+		if repairer, ok := r.planner.(PlanRepairer); ok {
+			zap.L().Warn("agent plan guard validation failed, attempting repair",
+				zap.Error(err),
+			)
+			repaired, repairErr := repairer.RepairPlan(ctx, plan, err.Error())
+			if repairErr == nil && repaired != nil {
+				repaired = r.compiler.PreparePlan(repaired)
+				revalidateErr := r.guard.ValidatePlan(ctx, req.UserID, repaired)
+				if revalidateErr == nil {
+					plan = repaired
+					zap.L().Info("agent plan repaired successfully")
+					goto planOK
+				}
+				zap.L().Warn("agent plan repair did not pass revalidation", zap.Error(revalidateErr))
+			} else if repairErr != nil {
+				zap.L().Warn("agent plan repair failed", zap.Error(repairErr))
+			}
+		}
 		return nil, fmt.Errorf("guard agent plan: %w", err)
 	}
+planOK:
 	agentToolTrace := buildAgentToolTrace(plan, GuardDecisionTrace{Passed: true})
 	logAgentToolTrace(req, plan, agentToolTrace)
 	judgeReport := PlanJudgeReport{Passed: true}

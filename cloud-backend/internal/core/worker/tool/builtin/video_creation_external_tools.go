@@ -3265,6 +3265,11 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 
 	systemPrompt := buildDynamicAgentSystemPrompt(toolName, topic, style, platform)
 	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform)
+	structuredOutput := isStructuredOutputTool(toolName)
+	if structuredOutput {
+		systemPrompt = appendJSONModeSystemInstruction(systemPrompt)
+		userPrompt = appendJSONModeUserInstruction(userPrompt)
+	}
 
 	// For knowledge_researcher: perform actual web search to get current facts.
 	if toolName == "knowledge_researcher" {
@@ -3328,8 +3333,9 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 		"max_tokens":    8000,
 	}
 	// Enable DeepSeek JSON mode for tools that require structured JSON output
-	if isStructuredOutputTool(toolName) {
+	if structuredOutput {
 		callParams["response_format"] = map[string]string{"type": "json_object"}
+		callParams["temperature"] = 0
 	}
 
 	callTool := &LlmApiTool{cfg: effectiveCfg}
@@ -3347,10 +3353,16 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	rawContent = continueSkillStageIfNeeded(callTool, toolName, systemPrompt+"\n\n---\n\n"+userPrompt, rawContent, finishReason, toolCtx)
 
 	displayContent, contentPkg, isJSON := normalizeStructuredToolContent(toolName, rawContent)
+	if !isJSON && structuredOutput {
+		if retryContent, retryFinishReason, ok := retryStructuredJSONOutput(callTool, toolName, systemPrompt, userPrompt, rawContent, toolCtx); ok {
+			rawContent = continueSkillStageIfNeeded(callTool, toolName, systemPrompt+"\n\n---\n\n"+userPrompt, retryContent, retryFinishReason, toolCtx)
+			displayContent, contentPkg, isJSON = normalizeStructuredToolContent(toolName, rawContent)
+		}
+	}
 
 	// For tools that require structured JSON output, fail on parse error
 	// instead of silently accepting markdown.
-	if !isJSON && isStructuredOutputTool(toolName) {
+	if !isJSON && structuredOutput {
 		preview := rawContent
 		if len(preview) > 500 {
 			preview = preview[:500]
@@ -3464,6 +3476,61 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 
 	return tool.SuccessResult(data)
+}
+
+func appendJSONModeSystemInstruction(systemPrompt string) string {
+	const instruction = `
+
+JSON mode requirements:
+- You must output one valid JSON object only.
+- Do not output markdown fences, explanations, reasoning, comments, or text outside JSON.
+- Use double-quoted JSON property names and strings.`
+	if strings.Contains(strings.ToLower(systemPrompt), "json mode requirements") {
+		return systemPrompt
+	}
+	return strings.TrimSpace(systemPrompt) + instruction
+}
+
+func appendJSONModeUserInstruction(userPrompt string) string {
+	const instruction = `
+
+请严格只返回一个合法 JSON object。不要输出 Markdown，不要输出代码块，不要输出分析过程，不要在 JSON 前后添加任何文字。`
+	if strings.Contains(strings.ToLower(userPrompt), "json") && strings.Contains(userPrompt, "不要输出 Markdown") {
+		return userPrompt
+	}
+	return strings.TrimSpace(userPrompt) + instruction
+}
+
+func retryStructuredJSONOutput(callTool *LlmApiTool, toolName, systemPrompt, userPrompt, rawContent string, toolCtx tool.ToolContext) (string, string, bool) {
+	preview := rawContent
+	if len(preview) > 1000 {
+		preview = preview[:1000]
+	}
+	retryPrompt := fmt.Sprintf(`上一次输出不是合法 JSON object，系统无法解析。
+
+上一次输出：
+%s
+
+请重新执行原始任务，并且严格只输出一个合法 JSON object。不要输出 Markdown、代码块、解释、分析过程或 JSON 外文字。
+
+原始任务：
+%s`, preview, userPrompt)
+	result := callTool.Execute(context.Background(), map[string]interface{}{
+		"system_prompt":   appendJSONModeSystemInstruction(systemPrompt),
+		"prompt":          retryPrompt,
+		"max_tokens":      8000,
+		"temperature":     0,
+		"response_format": map[string]string{"type": "json_object"},
+	}, toolCtx)
+	if !result.Success {
+		zap.L().Warn("structured JSON retry failed",
+			zap.String("tool", toolName),
+			zap.String("error", result.Error))
+		return "", "", false
+	}
+	content, _ := result.Data["content"].(string)
+	finishReason, _ := result.Data["finishReason"].(string)
+	return content, finishReason, strings.TrimSpace(content) != ""
 }
 
 func requiresFreshKnowledge(params map[string]interface{}) bool {

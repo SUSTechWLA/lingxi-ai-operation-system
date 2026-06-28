@@ -261,13 +261,158 @@ func TestListReviewsOmitsUnreachedReviewGates(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp.Data.Reviews) != 2 {
+	if len(resp.Data.Reviews) != 1 {
 		t.Fatalf("expected reached reviews only, got %#v", resp.Data.Reviews)
 	}
 	for _, review := range resp.Data.Reviews {
-		if review.ID == "storyboard_review" || review.Status == string(model.NodeCreated) {
-			t.Fatalf("unreached review gate should not be visible, got %#v", resp.Data.Reviews)
+		if review.ID == "script_review" || review.ID == "storyboard_review" || review.Status == string(model.NodeCreated) {
+			t.Fatalf("unactionable review gate should not be visible, got %#v", resp.Data.Reviews)
 		}
+	}
+}
+
+func TestListReviewsOmitsPendingAfterArtifactReviewUntilSourceSucceeds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{
+		{
+			ID:     "script_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeRunning,
+			Input: map[string]interface{}{
+				"capabilityTool": "video_script_generator",
+				"parameters": map[string]interface{}{
+					"stage": "script",
+				},
+			},
+		},
+		{
+			ID:     "script_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"sourceNode":  "script_exec",
+				"stepId":      "video_script_generator",
+				"tool":        "video_script_generator",
+				"stage":       "script",
+				"reviewPhase": "after_artifact",
+			},
+		},
+		{
+			ID:     "proposal_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeSuccess,
+			Output: map[string]interface{}{
+				"content": "创作方向已生成",
+			},
+		},
+		{
+			ID:     "proposal_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"sourceNode":  "proposal_exec",
+				"stepId":      "proposal_generator",
+				"tool":        "proposal_generator",
+				"stage":       "proposal",
+				"reviewPhase": "after_artifact",
+			},
+		},
+	}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/reviews", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Reviews []Review `json:"reviews"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data.Reviews) != 1 {
+		t.Fatalf("expected only source-complete reviews, got %#v", resp.Data.Reviews)
+	}
+	if resp.Data.Reviews[0].ID != "proposal_review" {
+		t.Fatalf("running source review should be omitted, got %#v", resp.Data.Reviews)
+	}
+}
+
+func TestListReviewsOmitsPendingAfterArtifactReviewWithoutReadableOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{
+		{
+			ID:     "script_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeSuccess,
+			Output: map[string]interface{}{
+				"stage":    "script",
+				"status":   "READY",
+				"stdout":   "script gate created",
+				"duration": 12,
+			},
+		},
+		{
+			ID:     "script_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"sourceNode":  "script_exec",
+				"stepId":      "video_script_generator",
+				"tool":        "video_script_generator",
+				"stage":       "script",
+				"reviewPhase": "after_artifact",
+			},
+		},
+	}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/runs/run-1/reviews", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Reviews []Review `json:"reviews"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data.Reviews) != 0 {
+		t.Fatalf("expected unreadable pending review to be omitted, got %#v", resp.Data.Reviews)
 	}
 }
 

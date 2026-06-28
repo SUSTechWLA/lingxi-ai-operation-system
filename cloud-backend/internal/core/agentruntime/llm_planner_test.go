@@ -179,7 +179,7 @@ func TestHybridPlanner_FallsBackWhenLLMPlannerReturnsEmptySteps(t *testing.T) {
 	planner := NewHybridPlanner(llmPlanner, fallback)
 
 	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
-		Message: "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
+		Message: "帮我做一个30秒观点类视频",
 		Domain:  "video_creation",
 	})
 	if err != nil {
