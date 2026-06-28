@@ -3234,6 +3234,15 @@ func isDynamicAgentPromptTool(toolName string) bool {
 	}
 }
 
+func promptToolUsesKnowledgeFacts(toolName string) bool {
+	switch toolName {
+	case "video_script_generator", "script_quality_checker", "package_quality_checker":
+		return true
+	default:
+		return false
+	}
+}
+
 // executeDynamicAgentPromptTool executes a dynamic-agent prompt_tool by building
 // an LLM prompt from the tool parameters and calling the LLM API.
 func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
@@ -3241,7 +3250,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	facts := stringParam(params, "facts", "")
 	usedFacts := []map[string]interface{}{}
 	knowledgeTrace := map[string]interface{}{}
-	if toolName == "video_script_generator" {
+	if promptToolUsesKnowledgeFacts(toolName) {
 		if facts == "" {
 			facts = formatKnowledgeContextForPrompt(params["knowledgeContext"])
 			usedFacts = usedFactsFromKnowledgeContext(params["knowledgeContext"])
@@ -3250,7 +3259,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 			facts = formatKnowledgePackForPrompt(params["knowledgePack"], params["knowledgeSources"])
 			usedFacts = usedFactsFromKnowledgePack(params["knowledgePack"])
 		}
-		if requiresFreshKnowledge(params) && !hasKnowledgeFacts(params["knowledgePack"], facts) && !hasKnowledgeContextFacts(params["knowledgeContext"]) {
+		if toolName == "video_script_generator" && requiresFreshKnowledge(params) && !hasKnowledgeFacts(params["knowledgePack"], facts) && !hasKnowledgeContextFacts(params["knowledgeContext"]) {
 			return tool.FailureResult("video_script_generator: retrievalPolicy=required but knowledgeContext is empty")
 		}
 		facts = appendKnowledgePolicyForPrompt(facts, params)
@@ -3262,9 +3271,10 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	shotList := stringParam(params, "shotList", "")
 	videoPrompts := stringParam(params, "videoPrompts", "")
 	publishCopy := stringParam(params, "publishCopy", "")
+	targetDurationSec := intParam(params, "targetDurationSec", intParam(params, "durationSec", 60))
 
 	systemPrompt := buildDynamicAgentSystemPrompt(toolName, topic, style, platform)
-	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform)
+	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform, targetDurationSec)
 	structuredOutput := isStructuredOutputTool(toolName)
 	if structuredOutput {
 		systemPrompt = appendJSONModeSystemInstruction(systemPrompt)
@@ -4032,10 +4042,16 @@ modelHint=<modelHint>
 检查以下内容：
 1. 结构完整性：是否有钩子开头、核心内容、总结
 2. 节奏：每段时长是否合理
-3. 时长：总时长是否接近目标
-4. 知识准确性：是否基于事实
+3. 时长：总时长是否接近用户输入的目标时长，不得自行假设为90秒
+4. 知识准确性：必须以本次输入的 facts / knowledgeContext / knowledgePack / news_search 结果为优先事实依据
 5. 开头吸引力：前 5-8 秒是否有钩子
 6. 语言自然度：是否适合口播
+
+事实判断规则：
+- 如果输入事实材料与模型内置记忆冲突，以输入事实材料为准。
+- 不得用模型内置旧知识否定输入中带来源、日期或URL的新闻事实。
+- 如果缺少可核查来源，标记为 warning，并建议补充来源；不要直接把最新事件判为“未发生”。
+- duration 问题必须按用户提示中的目标时长评估，30秒脚本不得按90秒标准扣分。
 
 输出严格 JSON：
 {
@@ -4286,7 +4302,7 @@ modelHint=<modelHint>
 	}
 }
 
-func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform string) string {
+func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform string, targetDurationSec int) string {
 	switch toolName {
 	case "knowledge_researcher":
 		return fmt.Sprintf("请围绕以下主题进行深度知识研究：%s\n\n输出风格：%s", topic, style)
@@ -4297,6 +4313,7 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 	case "video_script_generator":
 		var parts []string
 		parts = append(parts, "主题："+topic)
+		parts = append(parts, fmt.Sprintf("目标时长：%d秒", targetDurationSec))
 		if facts != "" {
 			parts = append(parts, "事实材料：\n"+facts)
 		}
@@ -4310,6 +4327,7 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 		if script != "" {
 			parts = append(parts, "口播稿：\n"+script)
 		}
+		parts = append(parts, fmt.Sprintf("目标总时长：%d秒", targetDurationSec))
 		parts = append(parts, "分镜时长规则：3-15秒")
 		parts = append(parts, "画幅：16:9")
 		return strings.Join(parts, "\n\n")
@@ -4320,6 +4338,7 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 			parts = append(parts, "口播稿：\n"+script)
 		}
 		parts = append(parts, "主题："+topic)
+		parts = append(parts, fmt.Sprintf("目标总时长：%d秒", targetDurationSec))
 		parts = append(parts, "请输出适合图文视频的卡片和字幕节奏。")
 		return strings.Join(parts, "\n\n")
 
@@ -4344,7 +4363,15 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 		return strings.Join(parts, "\n\n")
 
 	case "script_quality_checker":
-		return fmt.Sprintf("请检查以下口播稿的质量：\n\n%s\n\n目标时长：90秒", script)
+		var parts []string
+		parts = append(parts, "请检查以下口播稿的质量：\n\n"+script)
+		parts = append(parts, fmt.Sprintf("目标时长：%d秒", targetDurationSec))
+		parts = append(parts, "时长判定规则：以目标时长为中心，允许约20%浮动；若脚本约30-40秒且目标为30秒，不应判为偏离90秒。")
+		if facts != "" {
+			parts = append(parts, "本次知识/新闻材料（事实判定优先依据）：\n"+facts)
+		}
+		parts = append(parts, "事实判定规则：不得用模型内置旧知识否定本次输入中带来源、日期或URL的新闻事实；如果来源不足，只能标记为需补充来源或谨慎表达。")
+		return strings.Join(parts, "\n\n")
 
 	case "shot_quality_checker":
 		return fmt.Sprintf("请检查以下分镜的质量：\n\n%s", shotList)
@@ -4355,6 +4382,7 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 	case "package_quality_checker":
 		var parts []string
 		parts = append(parts, "主题："+topic)
+		parts = append(parts, fmt.Sprintf("目标总时长：%d秒", targetDurationSec))
 		if script != "" {
 			parts = append(parts, "口播稿：\n"+script)
 		}

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -376,6 +376,16 @@ try {
   assert.ok(publishCopiesToMarkdown(copies).includes('## 小红书'))
   assert.ok(publishCopiesToMarkdown(copies).includes('## B站'))
   assert.equal(JSON.parse(publishCopiesToJSON(copies))[0].platform, 'xiaohongshu')
+
+  const pageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
+  assert.ok(
+    pageSource.includes('card col-span-12 overflow-visible p-0'),
+    'review page shell must not clip inner review panel borders',
+  )
+  assert.ok(
+    pageSource.includes('mt-4 flex gap-2 overflow-x-auto px-1 py-1'),
+    'review history scroller needs padding so item borders are not clipped',
+  )
 } finally {
   await rm(tempDir, { recursive: true, force: true })
 }

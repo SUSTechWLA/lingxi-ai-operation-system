@@ -122,6 +122,60 @@ func TestVideoScriptGeneratorConsumesKnowledgeContextWithoutModelFallback(t *tes
 	}
 }
 
+func TestScriptQualityCheckerPromptUsesRequestedDurationAndFreshFacts(t *testing.T) {
+	facts := appendKnowledgePolicyForPrompt(`knowledgeContext facts:
+1. 佛得角已经获得2026年世界杯出线资格，这是该国足球历史上的里程碑。 来源：mock_news 日期：2026-06-28 URL：https://example.test/cape-verde`, map[string]interface{}{
+		"retrievalPolicy":       "required",
+		"mustUseFreshKnowledge": true,
+		"currentDate":           "2026-06-28",
+	})
+
+	prompt := buildDynamicAgentUserPrompt(
+		"script_quality_checker",
+		"佛得角世界杯出线",
+		facts,
+		"",
+		"佛得角首次进入世界杯，这是小国足球的奇迹。",
+		"",
+		"",
+		"",
+		"通用平台",
+		30,
+	)
+
+	if !strings.Contains(prompt, "目标时长：30秒") {
+		t.Fatalf("script quality checker should use requested target duration, got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "目标时长：90秒") {
+		t.Fatalf("script quality checker should not hardcode 90 seconds, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "佛得角已经获得2026年世界杯出线资格") || !strings.Contains(prompt, "2026-06-28") {
+		t.Fatalf("script quality checker should receive fresh knowledge facts, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "不得用模型内置旧知识否定") {
+		t.Fatalf("script quality checker should prioritize provided facts over stale model memory, got:\n%s", prompt)
+	}
+}
+
+func TestVideoScriptGeneratorPromptIncludesRequestedDuration(t *testing.T) {
+	prompt := buildDynamicAgentUserPrompt(
+		"video_script_generator",
+		"佛得角世界杯出线",
+		"retrievalPolicy=required\ncurrentDate=2026-06-28",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"通用平台",
+		30,
+	)
+
+	if !strings.Contains(prompt, "目标时长：30秒") {
+		t.Fatalf("script generator should receive concrete target duration, got:\n%s", prompt)
+	}
+}
+
 func TestNormalizeStructuredToolContentUsesCanonicalJSON(t *testing.T) {
 	raw := `我们被要求输出一个JSON，先分析事实。
 

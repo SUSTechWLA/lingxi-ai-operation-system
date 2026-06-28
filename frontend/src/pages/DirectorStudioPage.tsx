@@ -636,10 +636,10 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
     <div className="grid grid-cols-12 gap-5">
       <NowGeneratingBanner stages={stages} />
       <StateMachineBar stages={stages} />
-      <section className="card col-span-12 overflow-hidden p-0">
+      <section className="card col-span-12 overflow-visible p-0">
         {selectedReview ? (
           <>
-            <div className="border-b border-line bg-white/70 px-6 py-5">
+            <div className="rounded-t-lg border-b border-line bg-white/70 px-6 py-5">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <p className="text-xs font-black text-primary-dark">审阅区</p>
@@ -658,7 +658,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
             </div>
             <div className="grid grid-cols-12 gap-5 p-6">
               <div className="col-span-8 min-w-0">
-                <div className="rounded-lg bg-white p-5 ring-1 ring-line">
+                <div className="rounded-lg border border-line bg-white p-5 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <span className="text-sm font-black text-ink">审核阶段产物</span>
@@ -667,7 +667,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                     {outputText ? <CopyButton value={outputText} label="复制" /> : null}
                   </div>
                   {reviewHistory.length > 1 && (
-                    <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+                    <div className="mt-4 flex gap-2 overflow-x-auto px-1 py-1">
                       {reviewHistory.map((item, index) => {
                         const active = selectedReview?.id === item.id
                         const pending = item.status === 'PENDING'
@@ -677,8 +677,8 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                             key={item.id}
                             onClick={() => setSelectedReviewId(item.id)}
                             className={clsx(
-                              'min-w-[150px] max-w-[220px] rounded-lg px-3 py-2 text-left text-xs transition ring-1',
-                              active ? 'bg-primary-soft text-primary-dark ring-primary/50' : 'bg-background-card text-ink-muted ring-line hover:bg-white',
+                              'min-w-[156px] max-w-[224px] rounded-lg border px-3 py-2 text-left text-xs shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary/30',
+                              active ? 'border-primary/55 bg-primary-soft text-primary-dark' : 'border-line bg-background-card text-ink-muted hover:border-primary/30 hover:bg-white',
                             )}
                           >
                             <div className="flex items-center justify-between gap-2">
@@ -692,14 +692,14 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                       })}
                     </div>
                   )}
-                  <div className="mt-4 max-h-[520px] overflow-auto rounded-lg bg-background-card p-5 ring-1 ring-line">
+                  <div className="mt-4 max-h-[520px] overflow-auto rounded-lg border border-line bg-background-card p-5 shadow-inner">
                     {outputText ? <ReviewContent text={outputText} /> : <p className="text-sm text-ink-muted">当前审核记录没有可展示正文。</p>}
                   </div>
                 </div>
               </div>
               <div className="col-span-4 space-y-3 self-start xl:sticky xl:top-5">
                 {isPending && (
-                  <section className="rounded-lg border border-primary/30 bg-white p-4 shadow-card ring-1 ring-primary/10">
+                  <section className="rounded-lg border border-primary/35 bg-white p-4 shadow-sm">
                     <div className="flex items-center gap-2">
                       <FiShield className="text-primary" />
                       <h3 className="text-base font-black text-ink">决策操作</h3>
@@ -1053,7 +1053,7 @@ function InfoCard({ icon, title, value, desc, tone }: { icon: React.ReactNode; t
 }
 
 function Panel({ title, items }: { title: string; items: string[] }) {
-  return <div className="min-w-0 rounded-lg bg-background-card p-4 ring-1 ring-line"><b className="text-sm text-ink">{title}</b><ul className="mt-3 space-y-2 text-xs text-ink-muted">{(items.length ? items : ['-']).map((item) => <li key={item} className="[overflow-wrap:anywhere]">{item}</li>)}</ul></div>
+  return <div className="min-w-0 rounded-lg border border-line bg-background-card p-4 shadow-sm"><b className="text-sm text-ink">{title}</b><ul className="mt-3 space-y-2 text-xs text-ink-muted">{(items.length ? items : ['-']).map((item) => <li key={item} className="[overflow-wrap:anywhere]">{item}</li>)}</ul></div>
 }
 
 function ActionButton({ color, icon, label, disabled, onClick, loading = false, loadingLabel = '' }: { color: 'green' | 'red' | 'amber' | 'violet'; icon: React.ReactNode; label: string; disabled: boolean; onClick: () => void; loading?: boolean; loadingLabel?: string }) {
@@ -1099,7 +1099,7 @@ function ReviewContent({ text }: { text: string }) {
   if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
     try {
       const parsed = JSON.parse(trimmed)
-      return <pre className="whitespace-pre-wrap text-xs leading-6 text-ink-muted font-mono bg-white rounded-lg p-4 ring-1 ring-line [overflow-wrap:anywhere]">{JSON.stringify(parsed, null, 2)}</pre>
+      return <pre className="whitespace-pre-wrap rounded-lg border border-line bg-white p-4 font-mono text-xs leading-6 text-ink-muted [overflow-wrap:anywhere]">{JSON.stringify(parsed, null, 2)}</pre>
     } catch { /* not valid JSON, fall through */ }
   }
 
