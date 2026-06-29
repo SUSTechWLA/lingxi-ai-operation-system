@@ -496,6 +496,123 @@ func BuildCloudSpec() *Spec {
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
 		ResponseJSON("200", "Archived", "GenericOKResponse")
+	b.Route("GET", "/api/video-projects/:id/spec", "Get video creation spec").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		ResponseJSON("200", "Video creation spec", "VideoCreationSpecResponse").
+		ResponseJSON("404", "Spec not found", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/spec", "Create or update video creation spec").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("VideoCreationSpec", "Video creation spec", true).
+		ResponseJSON("200", "Video creation spec", "VideoCreationSpecResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/spec/generate", "Generate video creation spec from source message").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("GenerateVideoCreationSpecRequest", "Source message", true).
+		ResponseJSON("200", "Generated video creation spec", "VideoCreationSpecResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/spec/approve", "Approve video creation spec").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		ResponseJSON("200", "Approved video creation spec", "VideoCreationSpecResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/spec/reject", "Reject video creation spec").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("RejectVideoCreationArtifactRequest", "Reject reason", false).
+		ResponseJSON("200", "Rejected video creation spec", "VideoCreationSpecResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("GET", "/api/video-projects/:id/shots", "List shot units").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		ResponseJSON("200", "Shot units", "ShotUnitListResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots", "Create or update a shot unit").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("ShotUnit", "Shot unit", true).
+		ResponseJSON("200", "Shot unit", "ShotUnitResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/generate", "Generate shot units from video creation spec").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		ResponseJSON("200", "Generated shot units", "ShotUnitListResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("GET", "/api/video-projects/:id/shots/:shotId", "Get shot unit").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		ResponseJSON("200", "Shot unit", "ShotUnitResponse").
+		ResponseJSON("404", "Shot not found", "ErrorResponse")
+	b.Route("PATCH", "/api/video-projects/:id/shots/:shotId", "Update shot unit").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		BodyJSON("ShotUnit", "Shot unit update", true).
+		ResponseJSON("200", "Shot unit", "ShotUnitResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/approve", "Approve shot unit").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		ResponseJSON("200", "Approved shot unit", "ShotUnitResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/reject", "Reject shot unit").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		BodyJSON("RejectVideoCreationArtifactRequest", "Reject reason", false).
+		ResponseJSON("200", "Rejected shot unit", "ShotUnitResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/lock", "Lock shot unit").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		ResponseJSON("200", "Locked shot unit", "ShotUnitResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/unlock", "Unlock shot unit").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		ResponseJSON("200", "Unlocked shot unit", "ShotUnitResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/regenerate", "Regenerate shot unit scope").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		BodyJSON("RegenerateShotRequest", "Regeneration scope and instruction", false).
+		ResponseJSON("200", "Regenerated shot unit", "ShotUnitResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/visual-plan/generate", "Generate visual plan for shot").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		ResponseJSON("200", "Generated visual plan", "VisualPlanResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/render-strategy/decide", "Decide render strategy for shot").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		ResponseJSON("200", "Render strategy", "RenderStrategyResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/text-layers/generate", "Generate text layers for shot").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		ResponseJSON("200", "Text layers", "TextLayersResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/assemble", "Validate final assembly readiness").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		ResponseJSON("200", "Assembly validation issues", "AssemblyValidationResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/publish-package/generate", "Generate publish package metadata").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		ResponseJSON("200", "Publish package", "PublishPackageResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse")
 	b.Route("POST", "/api/video-projects/:id/assistant/message", "Ask the video-project-scoped assistant").
 		Tags("Video Project Assistant").
 		PathParam("id", "Project identifier", StringSchema()).

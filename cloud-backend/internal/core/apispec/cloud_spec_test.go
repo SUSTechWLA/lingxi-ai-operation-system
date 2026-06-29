@@ -88,6 +88,44 @@ func TestBuildCloudSpec_ExposesVideoScopedAssistant(t *testing.T) {
 	}
 }
 
+func TestBuildCloudSpec_ExposesShotDrivenVideoRoutes(t *testing.T) {
+	spec := BuildCloudSpec()
+	required := map[string]string{
+		"/api/video-projects/:id/spec":                                 "GET",
+		"/api/video-projects/:id/spec/generate":                        "POST",
+		"/api/video-projects/:id/shots":                                "GET",
+		"/api/video-projects/:id/shots/generate":                       "POST",
+		"/api/video-projects/:id/shots/:shotId/lock":                   "POST",
+		"/api/video-projects/:id/shots/:shotId/regenerate":             "POST",
+		"/api/video-projects/:id/shots/:shotId/visual-plan/generate":   "POST",
+		"/api/video-projects/:id/shots/:shotId/render-strategy/decide": "POST",
+		"/api/video-projects/:id/shots/:shotId/text-layers/generate":   "POST",
+		"/api/video-projects/:id/assemble":                             "POST",
+		"/api/video-projects/:id/publish-package/generate":             "POST",
+	}
+	for path, method := range required {
+		item := spec.Paths[path]
+		if item == nil {
+			t.Fatalf("shot-driven route %q missing", path)
+		}
+		var op *Operation
+		switch method {
+		case "GET":
+			op = item.Get
+		case "POST":
+			op = item.Post
+		default:
+			t.Fatalf("unsupported method %s", method)
+		}
+		if op == nil {
+			t.Fatalf("shot-driven route %s %s missing operation", method, path)
+		}
+		if len(op.Tags) == 0 || op.Tags[0] != "Video Projects" {
+			t.Fatalf("shot-driven route %s %s tag = %v", method, path, op.Tags)
+		}
+	}
+}
+
 func TestBuildCloudSpec_SnapshotPathCount(t *testing.T) {
 	spec := BuildCloudSpec()
 	// Snapshot: total number of unique paths (should grow with new endpoints)

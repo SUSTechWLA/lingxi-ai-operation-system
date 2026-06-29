@@ -142,6 +142,14 @@ export interface ArtifactListResponse {
 }
 
 /**  */
+// AssemblyValidationResponse
+export interface AssemblyValidationResponse {
+  code?: number;
+  data?: { issues?: { code: string; field?: string; message: string; severity: string }[] };
+  message?: string;
+}
+
+/**  */
 // AuthLoginRequest
 export interface AuthLoginRequest {
   email: string;
@@ -243,6 +251,13 @@ export interface FailJobRequest {
   error: Record<string, Record<string, unknown>>;
   retryable: boolean;
   success: boolean;
+}
+
+/**  */
+// GenerateVideoCreationSpecRequest
+export interface GenerateVideoCreationSpecRequest {
+  platform?: string;
+  sourceMessage: string;
 }
 
 /**  */
@@ -360,6 +375,14 @@ export interface ProgressRequest {
 }
 
 /**  */
+// PublishPackageResponse
+export interface PublishPackageResponse {
+  code?: number;
+  data?: { publishPackage?: Record<string, unknown> };
+  message?: string;
+}
+
+/**  */
 // PublishResponse
 export interface PublishResponse {
   code?: number;
@@ -373,6 +396,13 @@ export interface ReadinessResponse {
   dependencies?: Record<string, unknown>;
   service?: string;
   status?: string;
+}
+
+/**  */
+// RegenerateShotRequest
+export interface RegenerateShotRequest {
+  instruction?: string;
+  scope: string;
 }
 
 /**  */
@@ -393,6 +423,85 @@ export interface RegisterRunnerResponse {
   pollIntervalSec: number;
   runnerId: string;
   sessionId: string;
+}
+
+/**  */
+// RejectVideoCreationArtifactRequest
+export interface RejectVideoCreationArtifactRequest {
+  reason: string;
+}
+
+/**  */
+// RenderStrategy
+export interface RenderStrategy {
+  aigcInput?: { durationSec?: number; negativePrompt?: string; prompt?: string } | null;
+  aigcRequired: boolean;
+  compositePlan?: { backgroundArtifactId?: string; outputArtifactType?: string; overlayArtifactId?: string } | null;
+  htmlInput?: { durationSec?: number; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[] } | null;
+  htmlRequired: boolean;
+  mode: string;
+  needsCompositing: boolean;
+  primaryTool?: string;
+  reason?: string;
+  secondaryTools?: string[];
+  textOverlayNeeded: boolean;
+}
+
+/**  */
+// RenderStrategyResponse
+export interface RenderStrategyResponse {
+  code?: number;
+  data?: { renderStrategy?: { aigcInput?: { durationSec?: number; negativePrompt?: string; prompt?: string } | null; aigcRequired: boolean; compositePlan?: { backgroundArtifactId?: string; outputArtifactType?: string; overlayArtifactId?: string } | null; htmlInput?: { durationSec?: number; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[] } | null; htmlRequired: boolean; mode: string; needsCompositing: boolean; primaryTool?: string; reason?: string; secondaryTools?: string[]; textOverlayNeeded: boolean } };
+  message?: string;
+}
+
+/**  */
+// ShotUnit
+export interface ShotUnit {
+  artifactRefs?: { aigcBackgroundVideoArtifactId?: string; compositedShotVideoArtifactId?: string; htmlOverlayVideoArtifactId?: string; htmlPreviewVideoArtifactId?: string; htmlSourceArtifactId?: string; keyframeImageArtifactId?: string; keyframePromptArtifactId?: string; renderStrategyArtifactId?: string; subtitleArtifactId?: string; videoClipArtifactId?: string; videoPromptArtifactId?: string; visualPlanArtifactId?: string };
+  camera?: string;
+  continuity: { characters?: string[]; endState?: string; mustMatchNext?: boolean; mustMatchPrevious?: boolean; previousState?: string; props?: string[]; styleTags?: string[] };
+  createdAt: string;
+  durationSec: number;
+  id: string;
+  lastRejectReason?: string;
+  locked: boolean;
+  mainAction?: string;
+  narration?: string;
+  projectId: string;
+  promptConstraints: { mustAvoid?: string[]; mustInclude?: string[] };
+  renderStrategy?: { aigcInput?: { durationSec?: number; negativePrompt?: string; prompt?: string } | null; aigcRequired: boolean; compositePlan?: { backgroundArtifactId?: string; outputArtifactType?: string; overlayArtifactId?: string } | null; htmlInput?: { durationSec?: number; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[] } | null; htmlRequired: boolean; mode: string; needsCompositing: boolean; primaryTool?: string; reason?: string; secondaryTools?: string[]; textOverlayNeeded: boolean };
+  reviewStatus: string;
+  sceneId?: string;
+  sceneSummary?: string;
+  screenText?: string[];
+  sequenceIndex: number;
+  singleScene: boolean;
+  stale: boolean;
+  title: string;
+  transitionIn?: string;
+  transitionOut?: string;
+  updatedAt: string;
+  version: number;
+  videoType?: string;
+  visualChangeLevel: string;
+  visualPlan?: { background?: { description?: string; requiresAigc?: boolean }; cameraPlan?: { description?: string; movement?: string; requiresAigc?: boolean }; canvas: { aspectRatio: string; durationSec: number; fps: number; height: number; width: number }; characters?: { description?: string; emotion?: string; id: string; motion?: string; requiresAigc?: boolean }[]; constraints?: { mustAvoid?: string[]; mustInclude?: string[] }; dataVisuals?: { description?: string; id: string; type?: string }[]; motionPlan?: { description?: string; requiresAigc?: boolean }; props?: { description?: string; id: string }[]; style?: { description?: string; tags?: string[] }; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[]; transitionIn?: string; transitionOut?: string; uiLayers?: { description?: string; id: string }[] };
+}
+
+/**  */
+// ShotUnitListResponse
+export interface ShotUnitListResponse {
+  code?: number;
+  data?: { shots?: { artifactRefs?: { aigcBackgroundVideoArtifactId?: string; compositedShotVideoArtifactId?: string; htmlOverlayVideoArtifactId?: string; htmlPreviewVideoArtifactId?: string; htmlSourceArtifactId?: string; keyframeImageArtifactId?: string; keyframePromptArtifactId?: string; renderStrategyArtifactId?: string; subtitleArtifactId?: string; videoClipArtifactId?: string; videoPromptArtifactId?: string; visualPlanArtifactId?: string }; camera?: string; continuity: { characters?: string[]; endState?: string; mustMatchNext?: boolean; mustMatchPrevious?: boolean; previousState?: string; props?: string[]; styleTags?: string[] }; createdAt: string; durationSec: number; id: string; lastRejectReason?: string; locked: boolean; mainAction?: string; narration?: string; projectId: string; promptConstraints: { mustAvoid?: string[]; mustInclude?: string[] }; renderStrategy?: { aigcInput?: { durationSec?: number; negativePrompt?: string; prompt?: string } | null; aigcRequired: boolean; compositePlan?: { backgroundArtifactId?: string; outputArtifactType?: string; overlayArtifactId?: string } | null; htmlInput?: { durationSec?: number; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[] } | null; htmlRequired: boolean; mode: string; needsCompositing: boolean; primaryTool?: string; reason?: string; secondaryTools?: string[]; textOverlayNeeded: boolean }; reviewStatus: string; sceneId?: string; sceneSummary?: string; screenText?: string[]; sequenceIndex: number; singleScene: boolean; stale: boolean; title: string; transitionIn?: string; transitionOut?: string; updatedAt: string; version: number; videoType?: string; visualChangeLevel: string; visualPlan?: { background?: { description?: string; requiresAigc?: boolean }; cameraPlan?: { description?: string; movement?: string; requiresAigc?: boolean }; canvas: { aspectRatio: string; durationSec: number; fps: number; height: number; width: number }; characters?: { description?: string; emotion?: string; id: string; motion?: string; requiresAigc?: boolean }[]; constraints?: { mustAvoid?: string[]; mustInclude?: string[] }; dataVisuals?: { description?: string; id: string; type?: string }[]; motionPlan?: { description?: string; requiresAigc?: boolean }; props?: { description?: string; id: string }[]; style?: { description?: string; tags?: string[] }; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[]; transitionIn?: string; transitionOut?: string; uiLayers?: { description?: string; id: string }[] } }[] };
+  message?: string;
+}
+
+/**  */
+// ShotUnitResponse
+export interface ShotUnitResponse {
+  code?: number;
+  data?: { shot?: { artifactRefs?: { aigcBackgroundVideoArtifactId?: string; compositedShotVideoArtifactId?: string; htmlOverlayVideoArtifactId?: string; htmlPreviewVideoArtifactId?: string; htmlSourceArtifactId?: string; keyframeImageArtifactId?: string; keyframePromptArtifactId?: string; renderStrategyArtifactId?: string; subtitleArtifactId?: string; videoClipArtifactId?: string; videoPromptArtifactId?: string; visualPlanArtifactId?: string }; camera?: string; continuity: { characters?: string[]; endState?: string; mustMatchNext?: boolean; mustMatchPrevious?: boolean; previousState?: string; props?: string[]; styleTags?: string[] }; createdAt: string; durationSec: number; id: string; lastRejectReason?: string; locked: boolean; mainAction?: string; narration?: string; projectId: string; promptConstraints: { mustAvoid?: string[]; mustInclude?: string[] }; renderStrategy?: { aigcInput?: { durationSec?: number; negativePrompt?: string; prompt?: string } | null; aigcRequired: boolean; compositePlan?: { backgroundArtifactId?: string; outputArtifactType?: string; overlayArtifactId?: string } | null; htmlInput?: { durationSec?: number; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[] } | null; htmlRequired: boolean; mode: string; needsCompositing: boolean; primaryTool?: string; reason?: string; secondaryTools?: string[]; textOverlayNeeded: boolean }; reviewStatus: string; sceneId?: string; sceneSummary?: string; screenText?: string[]; sequenceIndex: number; singleScene: boolean; stale: boolean; title: string; transitionIn?: string; transitionOut?: string; updatedAt: string; version: number; videoType?: string; visualChangeLevel: string; visualPlan?: { background?: { description?: string; requiresAigc?: boolean }; cameraPlan?: { description?: string; movement?: string; requiresAigc?: boolean }; canvas: { aspectRatio: string; durationSec: number; fps: number; height: number; width: number }; characters?: { description?: string; emotion?: string; id: string; motion?: string; requiresAigc?: boolean }[]; constraints?: { mustAvoid?: string[]; mustInclude?: string[] }; dataVisuals?: { description?: string; id: string; type?: string }[]; motionPlan?: { description?: string; requiresAigc?: boolean }; props?: { description?: string; id: string }[]; style?: { description?: string; tags?: string[] }; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[]; transitionIn?: string; transitionOut?: string; uiLayers?: { description?: string; id: string }[] } } };
+  message?: string;
 }
 
 /**  */
@@ -496,6 +605,14 @@ export interface TaskStatusResponse {
 }
 
 /**  */
+// TextLayersResponse
+export interface TextLayersResponse {
+  code?: number;
+  data?: { textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[] };
+  message?: string;
+}
+
+/**  */
 // ToolDetailResponse
 export interface ToolDetailResponse {
   code?: number;
@@ -584,6 +701,37 @@ export interface VideoAssistantReviseResponse {
 }
 
 /**  */
+// VideoCreationSpec
+export interface VideoCreationSpec {
+  aspectRatio: string;
+  audience?: string;
+  createdAt: string;
+  id: string;
+  language: string;
+  platform?: string;
+  projectId: string;
+  renderPreference: { allowHybridRender: boolean; defaultRenderStrategy: string; preferAIGCForPeople: boolean; preferAIGCForScene: boolean; preferHTMLForCharts: boolean; preferHTMLForText: boolean; preferHTMLForUI: boolean; preferLowCostPreview: boolean };
+  reviewMode: string;
+  shotPolicy: { avoidCrossShotDependency: boolean; lowVisualChangeRequired: boolean; maxDurationSec: number; minDurationSec: number; preferDurationSec: number; singleSceneRequired: boolean };
+  sourceMessage: string;
+  status: string;
+  targetDurationSec?: number;
+  tone?: string;
+  topic?: string;
+  updatedAt: string;
+  videoType?: string;
+  visualStyle?: string;
+}
+
+/**  */
+// VideoCreationSpecResponse
+export interface VideoCreationSpecResponse {
+  code?: number;
+  data?: { spec?: { aspectRatio: string; audience?: string; createdAt: string; id: string; language: string; platform?: string; projectId: string; renderPreference: { allowHybridRender: boolean; defaultRenderStrategy: string; preferAIGCForPeople: boolean; preferAIGCForScene: boolean; preferHTMLForCharts: boolean; preferHTMLForText: boolean; preferHTMLForUI: boolean; preferLowCostPreview: boolean }; reviewMode: string; shotPolicy: { avoidCrossShotDependency: boolean; lowVisualChangeRequired: boolean; maxDurationSec: number; minDurationSec: number; preferDurationSec: number; singleSceneRequired: boolean }; sourceMessage: string; status: string; targetDurationSec?: number; tone?: string; topic?: string; updatedAt: string; videoType?: string; visualStyle?: string } };
+  message?: string;
+}
+
+/**  */
 // VideoProject
 export interface VideoProject {
   aspectRatio?: string;
@@ -645,6 +793,32 @@ export interface VideoRoleAgentDetailResponse {
 export interface VideoRoleAgentListResponse {
   code?: number;
   data?: { roleAgents?: { allowedTools?: string[]; displayName: string; forbiddenTools?: string[]; goal: string; humanReview?: { gate?: string; required?: boolean; reviewFocus?: string[]; title?: string; userActions?: string[] } | null; id: string; maxToolCalls?: number; name: string; qualityPolicy?: { autoRepair?: boolean; checkerTool?: string; maxRepairAttempts?: number; minScore?: number; repairTool?: string; required?: boolean } | null; requiredInputs?: string[]; requiredOutputs?: string[]; stage: string }[] };
+  message?: string;
+}
+
+/**  */
+// VisualPlan
+export interface VisualPlan {
+  background?: { description?: string; requiresAigc?: boolean };
+  cameraPlan?: { description?: string; movement?: string; requiresAigc?: boolean };
+  canvas: { aspectRatio: string; durationSec: number; fps: number; height: number; width: number };
+  characters?: { description?: string; emotion?: string; id: string; motion?: string; requiresAigc?: boolean }[];
+  constraints?: { mustAvoid?: string[]; mustInclude?: string[] };
+  dataVisuals?: { description?: string; id: string; type?: string }[];
+  motionPlan?: { description?: string; requiresAigc?: boolean };
+  props?: { description?: string; id: string }[];
+  style?: { description?: string; tags?: string[] };
+  textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[];
+  transitionIn?: string;
+  transitionOut?: string;
+  uiLayers?: { description?: string; id: string }[];
+}
+
+/**  */
+// VisualPlanResponse
+export interface VisualPlanResponse {
+  code?: number;
+  data?: { visualPlan?: { background?: { description?: string; requiresAigc?: boolean }; cameraPlan?: { description?: string; movement?: string; requiresAigc?: boolean }; canvas: { aspectRatio: string; durationSec: number; fps: number; height: number; width: number }; characters?: { description?: string; emotion?: string; id: string; motion?: string; requiresAigc?: boolean }[]; constraints?: { mustAvoid?: string[]; mustInclude?: string[] }; dataVisuals?: { description?: string; id: string; type?: string }[]; motionPlan?: { description?: string; requiresAigc?: boolean }; props?: { description?: string; id: string }[]; style?: { description?: string; tags?: string[] }; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[]; transitionIn?: string; transitionOut?: string; uiLayers?: { description?: string; id: string }[] } };
   message?: string;
 }
 

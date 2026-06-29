@@ -1472,6 +1472,398 @@ Archive a project (soft delete)
 
 ---
 
+### POST /api/video-projects/:id/assemble
+
+Validate final assembly readiness
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Assembly validation issues (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/publish-package/generate
+
+Generate publish package metadata
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Publish package (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### GET /api/video-projects/:id/shots
+
+List shot units
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Shot units (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots
+
+Create or update a shot unit
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/ShotUnit" }
+```
+
+**Responses:**
+
+- **200** — Shot unit (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### GET /api/video-projects/:id/shots/:shotId
+
+Get shot unit
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Responses:**
+
+- **200** — Shot unit (JSON)
+- **404** — Shot not found (JSON)
+
+---
+
+### PATCH /api/video-projects/:id/shots/:shotId
+
+Update shot unit
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/ShotUnit" }
+```
+
+**Responses:**
+
+- **200** — Shot unit (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/approve
+
+Approve shot unit
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Responses:**
+
+- **200** — Approved shot unit (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/lock
+
+Lock shot unit
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Responses:**
+
+- **200** — Locked shot unit (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/regenerate
+
+Regenerate shot unit scope
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/RegenerateShotRequest" }
+```
+
+**Responses:**
+
+- **200** — Regenerated shot unit (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/reject
+
+Reject shot unit
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/RejectVideoCreationArtifactRequest" }
+```
+
+**Responses:**
+
+- **200** — Rejected shot unit (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/render-strategy/decide
+
+Decide render strategy for shot
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Responses:**
+
+- **200** — Render strategy (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/text-layers/generate
+
+Generate text layers for shot
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Responses:**
+
+- **200** — Text layers (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/unlock
+
+Unlock shot unit
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Responses:**
+
+- **200** — Unlocked shot unit (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/:shotId/visual-plan/generate
+
+Generate visual plan for shot
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `shotId` | path | `string` | **Yes** | Shot identifier |
+
+**Responses:**
+
+- **200** — Generated visual plan (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/shots/generate
+
+Generate shot units from video creation spec
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Generated shot units (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### GET /api/video-projects/:id/spec
+
+Get video creation spec
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Video creation spec (JSON)
+- **404** — Spec not found (JSON)
+
+---
+
+### POST /api/video-projects/:id/spec
+
+Create or update video creation spec
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/VideoCreationSpec" }
+```
+
+**Responses:**
+
+- **200** — Video creation spec (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/spec/approve
+
+Approve video creation spec
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Responses:**
+
+- **200** — Approved video creation spec (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/spec/generate
+
+Generate video creation spec from source message
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/GenerateVideoCreationSpecRequest" }
+```
+
+**Responses:**
+
+- **200** — Generated video creation spec (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
+### POST /api/video-projects/:id/spec/reject
+
+Reject video creation spec
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/RejectVideoCreationArtifactRequest" }
+```
+
+**Responses:**
+
+- **200** — Rejected video creation spec (JSON)
+- **400** — Invalid request (JSON)
+
+---
+
 ## 20. Video Role Agents
 
 ### GET /api/video/role-agents

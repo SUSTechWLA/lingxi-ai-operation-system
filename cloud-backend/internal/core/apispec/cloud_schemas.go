@@ -3,6 +3,7 @@ package apispec
 import (
 	videoassistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
 	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
+	videoservice "github.com/tangying-ai/aios-core/internal/agents/video/service"
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
 	artifacts "github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/auth"
@@ -657,6 +658,97 @@ func registerCloudSchemas(b *Builder) {
 			}},
 		},
 	}))
+	b.Schema("GenerateVideoCreationSpecRequest", Reflect(videoservice.GenerateSpecRequest{}))
+	b.Schema("RejectVideoCreationArtifactRequest", Reflect(videoservice.RejectRequest{}))
+	b.Schema("RegenerateShotRequest", Reflect(videoservice.RegenerateShotRequest{}))
+	b.Schema("VideoCreationSpecResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"spec": {Schema: Reflect(videomodel.VideoCreationSpec{})}},
+			}},
+		},
+	})
+	b.Schema("ShotUnitListResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"shots": {Schema: ArraySchema(Reflect(videomodel.ShotUnit{}))}},
+			}},
+		},
+	})
+	b.Schema("ShotUnitResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"shot": {Schema: Reflect(videomodel.ShotUnit{})}},
+			}},
+		},
+	})
+	b.Schema("VisualPlanResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"visualPlan": {Schema: Reflect(videomodel.VisualPlan{})}},
+			}},
+		},
+	})
+	b.Schema("RenderStrategyResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"renderStrategy": {Schema: Reflect(videomodel.RenderStrategy{})}},
+			}},
+		},
+	})
+	b.Schema("TextLayersResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"textLayers": {Schema: ArraySchema(Reflect(videomodel.TextLayerSpec{}))}},
+			}},
+		},
+	})
+	b.Schema("AssemblyValidationResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"issues": {Schema: ArraySchema(Reflect(videoservice.ValidationIssue{}))}},
+			}},
+		},
+	})
+	b.Schema("PublishPackageResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"publishPackage": {Schema: ObjectSchema()}},
+			}},
+		},
+	})
 
 	// ── Video Project Assistant ──
 	b.Schema("VideoAssistantMessageRequest", Reflect(videoassistant.MessageRequest{}))
@@ -781,6 +873,10 @@ func registerCloudSchemas(b *Builder) {
 
 	// ── Real Go model types (used by multiple responses) ──
 	b.Schema("VideoProject", Reflect(videomodel.VideoProject{}))
+	b.Schema("VideoCreationSpec", Reflect(videomodel.VideoCreationSpec{}))
+	b.Schema("ShotUnit", Reflect(videomodel.ShotUnit{}))
+	b.Schema("VisualPlan", Reflect(videomodel.VisualPlan{}))
+	b.Schema("RenderStrategy", Reflect(videomodel.RenderStrategy{}))
 	b.Schema("Artifact", Reflect(artifacts.Artifact{}))
 	b.Schema("WorkflowTemplate", Reflect(workflow.Template{}))
 
