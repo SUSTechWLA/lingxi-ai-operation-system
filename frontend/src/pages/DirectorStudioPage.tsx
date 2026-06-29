@@ -60,10 +60,13 @@ import {
   buildDirectorStages,
   buildDirectorTraceNodes,
   buildPublishCopies,
+  buildShotReviewGroups,
   deriveNextAction,
   displayNameForArtifact,
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
+  findPublishCopyArtifact,
+  getArtifactViewerSelection,
   getStageStateDisplay,
   isActionablePendingReview,
   normalizeDirectorErrorMessage,
@@ -312,7 +315,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           {activeNav === 'trace' && <TracePage traceNodes={traceNodes} artifacts={artifacts} run={run} projectId={project?.id} onArtifactsChanged={refreshArtifacts} />}
           {activeNav === 'assets' && <AssetsPage artifacts={artifacts} projectId={project?.id} onArtifactsChanged={refreshArtifacts} />}
           {activeNav === 'roles' && <RolesPage stages={displayStages} />}
-          {activeNav === 'export' && <ExportPage artifacts={artifacts} topic={topic} durationSec={durationSec} />}
+          {activeNav === 'export' && <ExportPage artifacts={artifacts} durationSec={durationSec} />}
           {activeNav === 'system' && <DesktopPage />}
         </div>
       </main>
@@ -824,6 +827,7 @@ function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }
             </button>
           )) : <EmptyState text="还没有执行 trace。启动项目后，每个步骤会显示在这里。" />}
         </div>
+        <ShotReviewPanel artifacts={artifacts} compact />
         <ArtifactTable artifacts={artifacts} compact projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
       </section>
       <aside className="col-span-4 space-y-5">
@@ -882,8 +886,52 @@ function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: D
     <div className="space-y-5">
       <section className="card p-6"><p className="text-sm font-bold text-primary-dark">产物库</p><h2 className="mt-2 text-3xl font-black text-ink">产物索引</h2><p className="mt-2 text-sm text-ink-muted">记录每个中间产物的版本、状态、依赖、审核和本地/云端路径。</p></section>
       {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
+      <ShotReviewPanel artifacts={artifacts} />
       <ArtifactTable artifacts={artifacts} projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
     </div>
+  )
+}
+
+function ShotReviewPanel({ artifacts, compact = false }: { artifacts: DirectorArtifactRecord[]; compact?: boolean }) {
+  const groups = useMemo(() => buildShotReviewGroups(artifacts), [artifacts])
+  if (!groups.length) return null
+  return (
+    <section className={compact ? 'mt-6 rounded-lg border border-line bg-background-card p-4' : 'card p-6'}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-primary-dark">Shot 审核</p>
+          <h3 className="mt-1 text-xl font-black text-ink">按 shot 查看产物链</h3>
+        </div>
+        <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary-dark">{groups.length} shots</span>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {groups.map((group) => (
+          <div key={group.shotId} className="rounded-lg bg-white p-4 ring-1 ring-line">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-mono text-xs font-black text-primary-dark">{group.shotId}</div>
+                <div className="mt-1 truncate text-sm font-black text-ink" title={group.title}>{group.title}</div>
+              </div>
+              <StatusBadge status={group.status} />
+            </div>
+            {group.narrationText ? <p className="mt-3 line-clamp-2 text-sm leading-6 text-ink-muted">{group.narrationText}</p> : null}
+            <div className="mt-3 grid grid-cols-4 gap-2 text-center text-[11px] font-bold text-ink-muted">
+              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">总 {group.artifactCounts.total}</span>
+              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">参考 {group.artifactCounts.references}</span>
+              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">媒体 {group.artifactCounts.media}</span>
+              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">审核 {group.artifactCounts.reviewPackets}</span>
+            </div>
+            {group.referenceRoles.length ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {group.referenceRoles.map((role) => (
+                  <span key={role} className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-bold text-primary-dark">{role}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -909,12 +957,41 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
   )
 }
 
-function ExportPage({ artifacts, topic, durationSec }: { artifacts: DirectorArtifactRecord[]; topic: string; durationSec: number }) {
+function ExportPage({ artifacts, durationSec }: { artifacts: DirectorArtifactRecord[]; durationSec: number }) {
   const video = artifacts.find((artifact) => artifact.kind === 'VIDEO')
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
+  const publishArtifact = useMemo(() => findPublishCopyArtifact(artifacts), [artifacts])
+  const [publishContent, setPublishContent] = useState<unknown>(null)
+  const [publishLoading, setPublishLoading] = useState(false)
+  const [publishError, setPublishError] = useState<string | null>(null)
   const videoReady = video?.status === 'valid' && Boolean(video.storageRef)
   const packageReady = packageArtifact?.status === 'valid' && Boolean(packageArtifact.storageRef)
-  const publishCopies = buildPublishCopies(topic, durationSec, artifacts)
+  useEffect(() => {
+    let cancelled = false
+    setPublishContent(null)
+    setPublishError(null)
+    if (!publishArtifact) return undefined
+    if (!isInspectableArtifact(publishArtifact)) {
+      setPublishError('发布文案产物还未写入项目产物库。')
+      return undefined
+    }
+    setPublishLoading(true)
+    fetchArtifactContent(publishArtifact.id)
+      .then((result) => {
+        if (!cancelled) setPublishContent(result.content)
+      })
+      .catch((err) => {
+        if (!cancelled) setPublishError(normalizeDirectorErrorMessage(err))
+      })
+      .finally(() => {
+        if (!cancelled) setPublishLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [publishArtifact])
+  const publishCopies = useMemo(() => buildPublishCopies(publishContent), [publishContent])
+  const publishReady = publishCopies.length > 0
   const markdown = publishCopiesToMarkdown(publishCopies)
   const json = publishCopiesToJSON(publishCopies)
   return (
@@ -926,7 +1003,7 @@ function ExportPage({ artifacts, topic, durationSec }: { artifacts: DirectorArti
           <div className="relative h-[410px] bg-[radial-gradient(circle_at_70%_30%,rgba(251,191,36,.34),transparent_28%),linear-gradient(135deg,#130b05,#2b1708_40%,#7c3e08)] p-10 text-white">
             <div className="relative z-10 flex h-full flex-col justify-between">
               <div><span className="rounded-full bg-white/15 px-4 py-2 text-xs font-bold ring-1 ring-white/20">智能视频创作工作台</span><h3 className="mt-10 max-w-lg text-5xl font-black">智能体<br />改变的是工作流</h3><p className="mt-5 text-lg text-amber-100">连接工具 · 协同团队 · 释放创造力</p></div>
-              <div className="flex items-center gap-4 rounded-lg bg-black/25 p-4 ring-1 ring-white/10"><FiPlayCircle className="text-3xl" /><div className="h-1 flex-1 overflow-hidden rounded-full bg-white/20"><div className="h-full w-[28%] rounded-full bg-primary-light" /></div><span className="text-sm">0:00 / 0:45</span></div>
+              <div className="flex items-center gap-4 rounded-lg bg-black/25 p-4 ring-1 ring-white/10"><FiPlayCircle className="text-3xl" /><div className="h-1 flex-1 overflow-hidden rounded-full bg-white/20"><div className="h-full w-[28%] rounded-full bg-primary-light" /></div><span className="text-sm">0:00 / {formatSeconds(durationSec)}</span></div>
             </div>
           </div>
         </div>
@@ -938,8 +1015,8 @@ function ExportPage({ artifacts, topic, durationSec }: { artifacts: DirectorArti
           <div className="mt-4 grid grid-cols-2 gap-3"><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
           <div className="mt-3 grid grid-cols-2 gap-3">
-            <button onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line"><FiFileText /> Markdown</button>
-            <button onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line"><FiDownload /> JSON</button>
+            <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
+            <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> JSON</button>
           </div>
         </section>
         <section className="card p-6">
@@ -956,10 +1033,16 @@ function ExportPage({ artifacts, topic, durationSec }: { artifacts: DirectorArti
             <p className="text-sm font-bold text-primary-dark">发布素材</p>
             <h2 className="mt-2 text-2xl font-black text-ink">小红书 / B站</h2>
           </div>
-          <CopyButton value={markdown} label="复制全部" />
+          {publishReady ? <CopyButton value={markdown} label="复制全部" /> : null}
         </div>
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
-          {publishCopies.map((copy) => (
+          {publishLoading ? (
+            <div className="rounded-lg bg-white p-5 text-sm font-semibold text-ink-muted ring-1 ring-line">正在读取发布文案产物...</div>
+          ) : publishError ? (
+            <div className="rounded-lg bg-red-50 p-5 text-sm font-semibold text-red-700 ring-1 ring-red-200">{publishError}</div>
+          ) : !publishReady ? (
+            <div className="rounded-lg bg-amber-50 p-5 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">等待 publish_copy_generator 根据口播稿生成标题、简介和关键词。</div>
+          ) : publishCopies.map((copy) => (
             <div key={copy.platform} className="rounded-lg bg-white p-5 ring-1 ring-line">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-black text-ink">{copy.platformName}</h3>
@@ -1002,20 +1085,18 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
   }, [artifacts, selectedId])
 
   const loadArtifact = async (artifact: DirectorArtifactRecord) => {
-    setContent(null)
-    setHistory([])
+    const selection = getArtifactViewerSelection(selectedId, artifact)
+    setSelectedId(selection.selectedId)
     setExternalUploadMessage(null)
-    if (!isInspectableArtifact(artifact)) {
-      setSelectedId(artifact.id)
-      setContent('该产物还没有 materialized artifact ID，等待对应阶段生成完成后可查看正文。')
+    setViewerError(null)
+    if (!selection.shouldLoad) {
+      setViewerLoading(false)
+      setContent(selection.placeholder ?? null)
       setHistory([])
-      setViewerError(null)
       return
     }
-    const nextSelectedId = selectedId === artifact.id ? undefined : artifact.id
-    setSelectedId(nextSelectedId)
-    setViewerError(null)
-    if (!nextSelectedId) return
+    setContent(null)
+    setHistory([])
     setViewerLoading(true)
     try {
       const [nextContent, nextHistory] = await Promise.all([
@@ -1396,6 +1477,13 @@ function artifactContentText(content: unknown): string {
   } catch {
     return String(content)
   }
+}
+
+function formatSeconds(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds))
+  const minutes = Math.floor(total / 60)
+  const rest = total % 60
+  return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
 function formatArtifactHistoryLabel(artifact: Artifact): string {

@@ -116,6 +116,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 		return nil
 	}
 	c.injectKnowledgeContext(plan)
+	c.completeVideoBetaPlan(plan)
 	if plan.Budget.MaxSteps > 0 && len(plan.Steps) > plan.Budget.MaxSteps {
 		plan.Budget.MaxSteps = len(plan.Steps)
 	}
@@ -123,6 +124,173 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 		plan.Budget.MaxToolCalls = len(plan.Steps)
 	}
 	return plan
+}
+
+func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
+	if plan == nil || plan.Domain != "video_creation" || len(plan.Steps) == 0 {
+		return
+	}
+	if !c.hasVideoBetaCompletionTools() {
+		return
+	}
+	if !planHasToolOrTerm(plan, []string{"video_script_generator", "script", "voiceover_script"}) {
+		return
+	}
+	anchor := lastStepID(plan)
+	if !planHasToolOrTerm(plan, []string{"beat_plan", "shot_list", "visual_component_plan", "shot_splitter"}) {
+		anchor = appendPlanStep(plan, AgentStep{
+			ID:        uniqueStepID(plan, "beat_plan"),
+			Intent:    "将口播稿拆成可视化节奏、分镜和画面段落",
+			Tool:      "shot_splitter",
+			DependsOn: dependencyList(anchor),
+			Arguments: map[string]interface{}{
+				"stage":  "beat",
+				"script": stepOutputRef(anchor, "script"),
+				"topic":  plan.Goal,
+			},
+			ExpectedOutput:  []string{"beat_plan", "shot_list"},
+			ProduceArtifact: true,
+		})
+	} else if stepID := lastStepMatching(plan, []string{"beat_plan", "shot_list", "visual_component_plan", "shot_splitter"}); stepID != "" {
+		anchor = stepID
+	}
+
+	if !planHasToolOrTerm(plan, []string{"video_prompt", "keyframe_prompt", "preview", "hyperframes_project", "hyperframes_project_generator"}) {
+		anchor = appendPlanStep(plan, AgentStep{
+			ID:        uniqueStepID(plan, "preview"),
+			Intent:    "生成可审核的 HyperFrames 预览项目和画面预览",
+			Tool:      "hyperframes_project_generator",
+			DependsOn: dependencyList(anchor),
+			Arguments: map[string]interface{}{
+				"stage":    "preview",
+				"brief":    plan.Goal,
+				"shotList": stepOutputRef(anchor, "shotList"),
+			},
+			ExpectedOutput:  []string{"hyperframes_project", "preview"},
+			ProduceArtifact: true,
+		})
+	} else if stepID := lastStepMatching(plan, []string{"video_prompt", "keyframe_prompt", "preview", "hyperframes_project", "hyperframes_project_generator"}); stepID != "" {
+		anchor = stepID
+	}
+
+	if !planHasToolOrTerm(plan, []string{"render", "final_video", "final-video", "hyperframes_renderer"}) {
+		anchor = appendPlanStep(plan, AgentStep{
+			ID:        uniqueStepID(plan, "render"),
+			Intent:    "在预览确认后渲染本地视频文件",
+			Tool:      "hyperframes_renderer",
+			DependsOn: dependencyList(anchor),
+			Arguments: map[string]interface{}{
+				"stage":           "render",
+				"brief":           plan.Goal,
+				"hyperframesPath": stepOutputRef(anchor, "hyperframesPath"),
+				"previewApproved": true,
+				"outputName":      "final.mp4",
+			},
+			ExpectedOutput:  []string{"final_video"},
+			ProduceArtifact: true,
+		})
+	} else if stepID := lastStepMatching(plan, []string{"render", "final_video", "final-video", "hyperframes_renderer"}); stepID != "" {
+		anchor = stepID
+	}
+
+	if !planHasToolOrTerm(plan, []string{"publish_copy", "publishcopy", "publish-copy", "publish_copy_generator"}) {
+		appendPlanStep(plan, AgentStep{
+			ID:        uniqueStepID(plan, "publish_copy"),
+			Intent:    "基于成片和脚本生成多平台发布文案",
+			Tool:      "publish_copy_generator",
+			DependsOn: dependencyList(anchor),
+			Arguments: map[string]interface{}{
+				"stage":      "publish",
+				"brief":      plan.Goal,
+				"finalVideo": stepOutputRef(anchor, "finalVideo"),
+			},
+			ExpectedOutput:  []string{"publish_copy"},
+			ProduceArtifact: true,
+		})
+	}
+}
+
+func appendPlanStep(plan *AgentPlan, step AgentStep) string {
+	plan.Steps = append(plan.Steps, step)
+	return step.ID
+}
+
+func dependencyList(stepID string) []string {
+	if stepID == "" {
+		return nil
+	}
+	return []string{stepID}
+}
+
+func lastStepID(plan *AgentPlan) string {
+	if plan == nil || len(plan.Steps) == 0 {
+		return ""
+	}
+	return plan.Steps[len(plan.Steps)-1].ID
+}
+
+func uniqueStepID(plan *AgentPlan, base string) string {
+	existing := map[string]bool{}
+	for _, step := range plan.Steps {
+		existing[step.ID] = true
+	}
+	if !existing[base] {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s_%d", base, i)
+		if !existing[candidate] {
+			return candidate
+		}
+	}
+}
+
+func planHasToolOrTerm(plan *AgentPlan, terms []string) bool {
+	return lastStepMatching(plan, terms) != ""
+}
+
+func lastStepMatching(plan *AgentPlan, terms []string) string {
+	if plan == nil {
+		return ""
+	}
+	for i := len(plan.Steps) - 1; i >= 0; i-- {
+		if stepMentionsAny(plan.Steps[i], terms) {
+			return plan.Steps[i].ID
+		}
+	}
+	return ""
+}
+
+func stepMentionsAny(step AgentStep, terms []string) bool {
+	haystack := strings.ToLower(step.ID + " " + step.Intent + " " + step.Tool)
+	if stage, ok := step.Arguments["stage"].(string); ok {
+		haystack += " " + stage
+	}
+	for _, out := range step.ExpectedOutput {
+		haystack += " " + strings.ToLower(out)
+	}
+	for _, term := range terms {
+		if strings.Contains(haystack, strings.ToLower(term)) {
+			return true
+		}
+	}
+	return false
+}
+
+func stepOutputRef(stepID, field string) string {
+	if stepID == "" || field == "" {
+		return ""
+	}
+	return fmt.Sprintf("{{%s.output.%s}}", stepID, field)
+}
+
+func (c *PlanCompiler) hasVideoBetaCompletionTools() bool {
+	for _, name := range []string{"shot_splitter", "hyperframes_project_generator", "hyperframes_renderer", "publish_copy_generator"} {
+		if c.manifestFor(name) == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *PlanCompiler) injectKnowledgeContext(plan *AgentPlan) {
@@ -319,7 +487,7 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 			for _, prev := range out {
 				if prev.Tool == "__quality_gate__" {
 					prod, _ := prev.Arguments["productionStep"].(string)
-						checker, _ := prev.Arguments["checkerStep"].(string)
+					checker, _ := prev.Arguments["checkerStep"].(string)
 					if prod != "" && dep == prod && s.ID != checker && s.Tool != checker {
 						s.DependsOn[j] = prev.ID
 					}

@@ -22,8 +22,11 @@ try {
     applyOptimisticRunningStage,
     buildDirectorArtifacts,
     buildPublishCopies,
+    buildShotReviewGroups,
     buildDirectorStages,
     formatDirectorErrorMessage,
+    findPublishCopyArtifact,
+    getArtifactViewerSelection,
     normalizeDirectorErrorMessage,
     nextStageIdAfterReview,
     publishCopiesToJSON,
@@ -327,6 +330,101 @@ try {
   assert.equal(materializedCompositionArtifacts[0].humanApproved, true)
   assert.equal(materializedCompositionArtifacts[0].storageRef, 'local://projects/vp-1/artifacts/composition/composition/hash/composition.json')
 
+  const artifactsWithPublishCopy = buildDirectorArtifacts([compositionRole], [], missingCompositionTrace, [
+    {
+      id: 'art-publish-copy-1',
+      projectId: 'vp-1',
+      stageName: 'publish',
+      unitId: 'publish-copy',
+      kind: 'PUBLISH_COPY',
+      name: '发布文案.json',
+      version: 1,
+      status: 'valid',
+      humanApproved: true,
+      storageRef: 'local://projects/vp-1/artifacts/publish/publish-copy/hash/publish_copy.json',
+      metadata: { artifactType: 'publish_copy' },
+      updatedAt: '2026-06-29T08:00:00Z',
+    },
+  ])
+  assert.ok(artifactsWithPublishCopy.some((artifact) => artifact.kind === 'PUBLISH_COPY'))
+  assert.equal(findPublishCopyArtifact(artifactsWithPublishCopy)?.id, 'art-publish-copy-1')
+
+  const shotReviewGroups = buildShotReviewGroups([
+    {
+      id: 'shot-packet-1',
+      kind: 'SHOT_REVIEW_PACKET',
+      name: 'SHOT_01 审核包',
+      status: 'review',
+      owner: '分镜导演',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'local://shot-1/review.json',
+      metadata: { relatedShotId: 'SHOT_01', narrationText: '佛得角是西非岛国。', artifactType: 'shot_review_packet' },
+    },
+    {
+      id: 'shot-ref-1',
+      kind: 'REFERENCE_ASSET_PLAN',
+      name: '人物三视角参考图',
+      status: 'valid',
+      owner: '参考选择',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-1/character-views.png',
+      metadata: { relatedShotId: 'SHOT_01', referenceRole: 'character', viewSet: ['front', 'side', 'back'] },
+    },
+    {
+      id: 'shot-audio-1',
+      kind: 'SHOT_AUDIO',
+      name: 'SHOT_01 口播音频',
+      status: 'valid',
+      owner: '音频',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-1/audio.wav',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'shot_audio' },
+    },
+    {
+      id: 'shot-video-1',
+      kind: 'SHOT_VIDEO_CLIP',
+      name: 'SHOT_01 视频片段',
+      status: 'pending',
+      owner: '视频',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'local://shot-1/clip.mp4',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'shot_video_clip' },
+    },
+    {
+      id: 'shot-packet-2',
+      kind: 'SHOT_REVIEW_PACKET',
+      name: 'SHOT_02 审核包',
+      status: 'valid',
+      owner: '分镜导演',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-2/review.json',
+      metadata: { shotId: 'SHOT_02', scriptText: '世界杯出线是小国奇迹。', artifactType: 'shot_review_packet' },
+    },
+  ])
+  assert.equal(shotReviewGroups.length, 2)
+  assert.equal(shotReviewGroups[0].shotId, 'SHOT_01')
+  assert.equal(shotReviewGroups[0].status, 'review')
+  assert.equal(shotReviewGroups[0].narrationText, '佛得角是西非岛国。')
+  assert.deepEqual(shotReviewGroups[0].referenceRoles, ['character'])
+  assert.deepEqual(shotReviewGroups[0].artifactCounts, { total: 4, references: 1, media: 2, reviewPackets: 1 })
+  assert.equal(shotReviewGroups[1].shotId, 'SHOT_02')
+  assert.equal(shotReviewGroups[1].status, 'valid')
+
+  assert.deepEqual(
+    getArtifactViewerSelection('art-publish-copy-1', artifactsWithPublishCopy.find((artifact) => artifact.id === 'art-publish-copy-1')),
+    { selectedId: undefined, shouldLoad: false, placeholder: undefined },
+  )
+
   const readyCompositionTrace = {
     nodes: [
       {
@@ -473,10 +571,34 @@ try {
     'guard agent plan: agent plan has no steps',
   )
 
-  const copies = buildPublishCopies('智能体改变的是工作流', 45, artifacts)
+  const rawTopic = '帮我介绍一下佛得角国家以及说明佛得角世界杯从小组赛出线是一个奇迹'
+  assert.deepEqual(buildPublishCopies(rawTopic), [])
+
+  const copies = buildPublishCopies({
+    publishCopies: [
+      {
+        platform: 'xiaohongshu',
+        title: '佛得角出线为什么是奇迹',
+        description: '这条口播先介绍佛得角，再解释小国足球如何突破人口、资源与历史成绩限制。',
+        keywords: ['佛得角', '世界杯', '小国奇迹'],
+        coverText: '小国出线奇迹',
+        publishTips: ['前两行直接写结论'],
+      },
+      {
+        platform: 'bilibili',
+        title: '佛得角：一个小国的世界杯奇迹',
+        description: '从国家背景、足球基础和小组赛突围难度三个层次说明佛得角出线的罕见性。',
+        tags: ['佛得角', '世界杯', '足球史'],
+        coverText: '佛得角奇迹',
+        publishTips: ['分区选择足球或知识'],
+      },
+    ],
+  })
   assert.equal(copies.length, 2)
   assert.equal(copies[0].platform, 'xiaohongshu')
   assert.equal(copies[1].platform, 'bilibili')
+  assert.equal(copies[0].tags[0], '佛得角')
+  assert.ok(!copies.some((copy) => copy.title.includes('帮我介绍一下')))
   assert.ok(copies.every((copy) => copy.title && copy.description && copy.coverText))
   assert.ok(publishCopiesToMarkdown(copies).includes('## 小红书'))
   assert.ok(publishCopiesToMarkdown(copies).includes('## B站'))

@@ -1677,7 +1677,7 @@ func buildSkillStageArtifacts(stage, skillName string, includePublishCopy, isJSO
 			},
 		},
 	}
-	if includePublishCopy {
+	if includePublishCopy && kind != "PUBLISH_COPY" {
 		artifacts = append(artifacts, map[string]interface{}{
 			"unitId":   "publish-copy",
 			"kind":     "JSON",
@@ -1701,6 +1701,12 @@ func semanticArtifactKindForTool(toolName string) string {
 		return "VIDEO_SCRIPT"
 	case "card_plan_generator":
 		return "CARD_PLAN"
+	case "shot_splitter":
+		return "SHOT_LIST"
+	case "keyframe_prompt_generator":
+		return "KEYFRAME_PROMPTS"
+	case "video_prompt_generator":
+		return "VIDEO_PROMPTS"
 	case "caption_splitter":
 		return "CAPTION_PLAN"
 	case "video_composition_builder":
@@ -1715,6 +1721,8 @@ func semanticArtifactKindForTool(toolName string) string {
 		return "STALE_ARTIFACT_REPORT"
 	case "preview_quality_checker":
 		return "PREVIEW_REPORT"
+	case "publish_copy_generator":
+		return "PUBLISH_COPY"
 	case "video_package_exporter", "artifact_packager":
 		return "PROJECT_PACKAGE"
 	default:
@@ -2040,6 +2048,9 @@ func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, sty
 	return fmt.Sprintf(`{
   "topic": %s,
   "script": %s,
+  "productionMode": "shot_first",
+  "reviewUnit": "shot",
+  "requiresNarrationSync": true,
   "shots": %s,
   "videoPrompts": %s,
   "style": {
@@ -2192,17 +2203,19 @@ HyperFrames 是一个 HTML-to-Video 渲染框架。你生成的 HTML 页面将�
 
 硬性要求：
 1. 页面尺寸为 1920x1080（16:9 画幅），所有元素定位基于此分辨率。
-2. 每个镜头（shot）应生成对应的 <div class="scene"> 或 <section>，包含该镜头的视觉描述和口播文字。
+2. HyperFrames 也必须按 shot 创作；每个镜头（shot）应生成对应的 <div class="scene" data-shot-id="SHOT_xx"> 或 <section>，包含该镜头的视觉描述和口播文字。
 3. 使用 CSS @keyframes 动画实现镜头切换效果（淡入淡出、滑动、缩放等）。
 4. 文字以字幕/标题/要点形式呈现，适合视频观看，不要长段落。
 5. 基调为非写实动画风格，去 AI 感，配色低饱和知识分享风格。
 6. 背景色使用深色系（#0a0a0f 或类似），文字使用浅色系。
 7. 每个场景的字幕/口播文字放在底部 caption-bar 中。
-8. 不要使用任何外部依赖或 CDN 链接。
-9. 所有 CSS 内联或放在 <style> 标签中。
-10. 整个页面必须是一个独立的、可以直接在浏览器中打开的完整 HTML 文件。
-11. 不要包含任何 JavaScript 框架（React、Vue 等）。
-12. 不要输出 Markdown 代码块标记，只输出纯 HTML。
+8. 每个 shot 的画面节奏必须和该 shot 的 scriptText 或 narrationText 对齐，不能让整片口播和画面脱节。
+9. 每个 shot 添加 shot-review-packet 标记或 data-review-unit="shot"，方便前端按 shot 审核和返工。
+10. 不要使用任何外部依赖或 CDN 链接。
+11. 所有 CSS 内联或放在 <style> 标签中。
+12. 整个页面必须是一个独立的、可以直接在浏览器中打开的完整 HTML 文件。
+13. 不要包含任何 JavaScript 框架（React、Vue 等）。
+14. 不要输出 Markdown 代码块标记，只输出纯 HTML。
 
 视觉风格要求：
 - 低饱和配色：背景 #0a0a0f，主文字 #f0f0f0，强调色使用低饱和蓝/青/金色
@@ -2269,6 +2282,7 @@ func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) stri
 		ShotID        string `json:"shotId"`
 		DurationSec   int    `json:"durationSec"`
 		ScriptText    string `json:"scriptText"`
+		NarrationText string `json:"narrationText"`
 		Visual        string `json:"visual"`
 		Camera        string `json:"camera"`
 		TransitionIn  string `json:"transitionIn"`
@@ -2310,12 +2324,16 @@ func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) stri
 			if body == "" {
 				body = shot.TransitionIn
 			}
-			scenesBuilder.WriteString(fmt.Sprintf(`  <div class="scene %s" style="animation-delay: %ds">
+			narration := shot.ScriptText
+			if narration == "" {
+				narration = shot.NarrationText
+			}
+			scenesBuilder.WriteString(fmt.Sprintf(`  <div class="scene shot-review-packet %s" data-review-unit="shot" data-shot-id="%s" data-duration-sec="%d" style="animation-delay: %ds">
     <div class="scene-title">%s</div>
     <div class="scene-subtitle">%s</div>
     <div class="caption-bar">%s</div>
   </div>
-`, animClass, i*1, templateEscape(title), templateEscape(body), templateEscape(shot.ScriptText)))
+`, animClass, templateEscape(shot.ShotID), shot.DurationSec, i*1, templateEscape(title), templateEscape(body), templateEscape(narration)))
 		}
 	}
 
@@ -3995,7 +4013,7 @@ func isStructuredOutputTool(toolName string) bool {
 		"asset_policy_generator", "continuity_checker",
 		"style_profile_builder", "stale_tracker",
 		"preview_quality_checker",
-		"video_package_exporter":
+		"publish_copy_generator", "video_package_exporter":
 		return true
 	default:
 		return false
@@ -4092,15 +4110,19 @@ style=%s
 		return `你是短视频分镜导演。
 
 目标：
-把已确认口播稿拆成适合 AI 视频生成的镜头列表。
+把已确认口播稿拆成适合逐 shot 生产、审核和返工的镜头列表。
 
 硬性要求：
-1. 每个 shot 时长 3-15 秒。
-2. 每个 shot 只表达一个主要画面变化。
-3. 每个 shot 必须包含：shotId、durationSec、scriptText、visual、camera、composition、lighting、transitionIn、transitionOut。
-4. 分镜必须覆盖完整口播稿，不要遗漏。
-5. 视觉风格默认 16:9，非写实动画，去 AI 感。
-6. 输出严格 JSON。
+1. 不论 AIGC 还是 HyperFrames，视频创作都必须先分 shot；每个 shot 都是最小生产、审核和返工单元。
+2. 每个 shot 时长 3-15 秒，只表达一个主要画面变化，必须覆盖完整口播稿，不要遗漏。
+3. 每个 shot 必须包含：shotId、durationSec、scriptText、narrationText、visual、camera、composition、lighting、transitionIn、transitionOut。
+4. 每个 shot 必须包含 materialLibraryHints，说明可检索或复用的素材库方向、镜头语法、构图或运动参考。
+5. 每个 shot 必须包含 referenceRequirements，列出当前 shot 需要的人物、场景、道具、故事板或首帧参考；主要人物、场景、核心道具应尽量要求 front/side/back 三视角设定图。
+6. 每个 shot 必须包含 expectedArtifacts，明确该 shot 后续会生成或上传的 voiceover/audio、keyframe、image、videoClip、subtitle、hyperframesSegment、reviewPacket。
+7. 每个 shot 必须包含 reviewPacket，用于前端按 shot 审核，字段至少包括 artifactKind="SHOT_REVIEW_PACKET"、reviewFocus、rerunScope、dependencies。
+8. AIGC shot 的 reviewFocus 必须覆盖参考图一致性、提示词、音频口播、关键帧、视频片段、字幕；HyperFrames shot 的 reviewFocus 必须覆盖画面和口播一致性、文字层可读性、时间轴节奏。
+9. 视觉风格默认 16:9，非写实动画，去 AI 感。
+10. 输出严格 JSON。
 
 输入：
 script=<script>
@@ -4114,12 +4136,28 @@ aspectRatio=<aspectRatio>
       "shotId": "SHOT_01",
       "durationSec": 6,
       "scriptText": "...",
+      "narrationText": "...",
       "visual": "...",
       "camera": "...",
       "composition": "...",
       "lighting": "...",
       "transitionIn": "...",
       "transitionOut": "...",
+      "materialLibraryHints": ["可迁移拍摄语法或素材方向"],
+      "referenceRequirements": {
+        "characters": [{"id": "char_main", "views": ["front", "side", "back"], "reason": "保持主角一致"}],
+        "scenes": [{"id": "scene_main", "views": ["front", "side", "back"], "reason": "保持空间一致"}],
+        "props": [{"id": "prop_main", "views": ["front", "side", "back"], "reason": "保持道具一致"}],
+        "storyboard": true,
+        "firstFrame": true
+      },
+      "expectedArtifacts": ["SHOT_REVIEW_PACKET", "SHOT_AUDIO", "SHOT_KEYFRAME", "SHOT_VIDEO_CLIP", "SHOT_SUBTITLE", "HYPERFRAMES_SHOT"],
+      "reviewPacket": {
+        "artifactKind": "SHOT_REVIEW_PACKET",
+        "reviewFocus": ["口播是否覆盖", "画面是否匹配", "参考图是否足够", "是否只需返工本 shot"],
+        "rerunScope": ["SHOT_01"],
+        "dependencies": ["script", "reference_assets", "material_library"]
+      },
       "notes": "..."
     }
   ],
@@ -4187,10 +4225,12 @@ aspectRatio=<aspectRatio>
 2. 提示词必须描述：画面主体、场景、构图、光影、色彩、风格、景别。
 3. 视觉风格统一为非写实动画，去 AI 感。
 4. 关键帧画面应能代表该镜头的高潮或典型画面。
-5. 同时输出 externalGenerationRequests，供没有文生图 API 的用户复制 prompt 到外部平台生成，再上传结果。
-6. 每个 externalGenerationRequest 的 prompt 不超过 2000 字，references 最多 6 张，只能引用人物、主要道具、场景、故事板、关键帧或用户上传参考图。
-7. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request。
-8. 输出严格 JSON。
+5. 每个 shot 都必须引用相关参考图，优先包含主要人物、场景、道具；主要人物、场景、道具尽量使用 front/side/back 三视角参考图来保持后续一致性。
+6. 每个 shot 必须输出 referenceCoverage，说明该 shot 已使用哪些人物、场景、道具、故事板、首帧或用户上传参考图，以及缺少哪些三视角参考。
+7. 同时输出 externalGenerationRequests，供没有文生图 API 的用户复制 prompt 到外部平台生成，再上传结果。
+8. 每个 externalGenerationRequest 的 prompt 不超过 2000 字，references 最多 6 张，只能引用人物、主要道具、场景、故事板、关键帧或用户上传参考图。
+9. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request，metadata.relatedShotId 必须等于 shotId，并为关键帧产物建 SHOT_KEYFRAME artifact。
+10. 输出严格 JSON。
 
 输入：
 shotList=<shotList>
@@ -4202,6 +4242,12 @@ style=<style>
     {
       "shotId": "SHOT_01",
       "prompt": "非写实动画风格，...",
+      "referenceCoverage": {
+        "characters": [{"id": "char_main", "viewsUsed": ["front", "side", "back"]}],
+        "scenes": [{"id": "scene_main", "viewsUsed": ["front", "side", "back"]}],
+        "props": [{"id": "prop_main", "viewsUsed": ["front", "side", "back"]}],
+        "missing": []
+      },
       "styleNotes": "..."
     }
   ],
@@ -4228,6 +4274,13 @@ style=<style>
       "name": "external_generation_request.json",
       "mimeType": "application/json",
       "metadata": {"artifactType": "external_generation_request", "generationKind": "image", "relatedShotId": "SHOT_01"}
+    },
+    {
+      "unitId": "shot_keyframe_SHOT_01",
+      "kind": "SHOT_KEYFRAME",
+      "name": "SHOT_01_keyframe_prompt.json",
+      "mimeType": "application/json",
+      "metadata": {"artifactType": "shot_keyframe", "relatedShotId": "SHOT_01"}
     }
   ],
   "summary": "..."
@@ -4240,16 +4293,21 @@ style=<style>
 根据分镜生成每个镜头可直接用于视频生成模型的 Prompt。
 
 硬性要求：
-1. 每个 shot 输出一个 video prompt。
+1. 每个 shot 都必须作为独立视频片段生成，每个 shot 输出一个 video prompt，可单独复制给模型调用。
 2. prompt 必须包含：画面主体、场景、动作、镜头运动、光影、色彩、风格、持续时间、转场。
-3. 必须写清楚该镜头内部的时间线变化。
-4. 不依赖上下文记忆，因为视频模型每个 shot 独立生成。
-5. 禁止真人写实，默认非写实动画，去 AI 感。
-6. 同时输出 externalGenerationRequests，供没有文生视频/API 的用户复制 prompt 到外部平台生成，再上传结果。
-7. 视频 request 可以依赖图片+prompt；references 最多 6 张，优先引用人物、主要道具、场景、故事板、关键帧，明确每张参考图锁定什么。
-8. 每个 externalGenerationRequest 的 prompt 不超过 2000 字，不能写“同上/沿用上一镜”等依赖上下文的描述。
-9. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request。
-10. 输出严格 JSON。
+3. 必须写清楚该镜头内部的时间线变化；转场设计写在本 shot 内部，例如开头如何进入、结尾如何自然收束，不能要求上一个或下一个 shot 配合。
+4. 不依赖上下文记忆，因为视频模型每个 shot 独立生成；不能写“同上/沿用上一镜/接上一镜/延续前一镜”等表达。
+5. 不要使用尾帧、末帧、首尾帧对齐、前后 shot frame matching 或任何会限制模型创作的跨 shot 帧约束。
+6. 视频 request 可以依赖图片+prompt，但只使用首帧+参考故事板作为本 shot 的图像约束；只使用首帧锁定起始构图，参考故事板锁定动作节奏和关键状态。
+7. 同时输出 externalGenerationRequests，供没有文生视频/API 的用户复制 prompt 到外部平台生成，再上传结果。
+8. references 最多 6 张，优先引用人物、主要道具、场景、首帧、参考故事板，明确每张参考图锁定什么；不要引用尾帧或下一 shot 的画面。
+9. 每个 externalGenerationRequest 的 prompt 不超过 2000 字。
+10. 最终成片按 shot 顺序简单剪辑拼接即可，允许最简单硬切或轻微交叉淡化，不要求模型生成跨 shot 衔接。
+11. 每个 shot 都必须绑定自己的口播 narrationText、可选素材库 materialLibraryHints、音频生成要求、字幕要求和对应视频片段；纯 AIGC 可以配字幕，字幕必须来自该 shot 的口播。
+12. 输出 shotAssemblyPlan，说明该 shot 生成 SHOT_AUDIO、SHOT_SUBTITLE、SHOT_VIDEO_CLIP 后如何进入最终简单拼接。
+13. 禁止真人写实，默认非写实动画，去 AI 感。
+14. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request，并为每个 shot 建 SHOT_VIDEO_CLIP、SHOT_AUDIO、SHOT_SUBTITLE 的占位 artifact metadata。
+15. 输出严格 JSON。
 
 输入：
 shotList=<shotList>
@@ -4263,9 +4321,18 @@ modelHint=<modelHint>
     {
       "shotId": "SHOT_01",
       "durationSec": 6,
+      "narrationText": "...",
       "prompt": "...",
       "negativePrompt": "...",
       "continuity": "...",
+      "materialLibraryHints": ["..."],
+      "subtitleText": "...",
+      "shotAssemblyPlan": {
+        "audioArtifactKind": "SHOT_AUDIO",
+        "subtitleArtifactKind": "SHOT_SUBTITLE",
+        "videoArtifactKind": "SHOT_VIDEO_CLIP",
+        "concatMode": "simple_cut"
+      },
       "modelTips": {
         "cameraMotion": "...",
         "subjectMotion": "..."
@@ -4295,6 +4362,27 @@ modelHint=<modelHint>
       "name": "external_generation_request.json",
       "mimeType": "application/json",
       "metadata": {"artifactType": "external_generation_request", "generationKind": "video", "relatedShotId": "SHOT_01"}
+    },
+    {
+      "unitId": "shot_video_SHOT_01",
+      "kind": "SHOT_VIDEO_CLIP",
+      "name": "SHOT_01_video_clip.mp4",
+      "mimeType": "video/mp4",
+      "metadata": {"artifactType": "shot_video_clip", "relatedShotId": "SHOT_01"}
+    },
+    {
+      "unitId": "shot_audio_SHOT_01",
+      "kind": "SHOT_AUDIO",
+      "name": "SHOT_01_voiceover.wav",
+      "mimeType": "audio/wav",
+      "metadata": {"artifactType": "shot_audio", "relatedShotId": "SHOT_01"}
+    },
+    {
+      "unitId": "shot_subtitle_SHOT_01",
+      "kind": "SHOT_SUBTITLE",
+      "name": "SHOT_01_subtitle.srt",
+      "mimeType": "text/plain",
+      "metadata": {"artifactType": "shot_subtitle", "relatedShotId": "SHOT_01"}
     }
   ],
   "summary": "..."
@@ -4524,7 +4612,39 @@ duration 硬规则：
 }`
 
 	case "publish_copy_generator":
-		return fmt.Sprintf("你是一个专业的短视频平台运营专家。根据视频内容生成发布文案。\n\n目标平台：%s\n\n生成：1.视频标题（吸引眼球，不超过30字）2.视频简介（100-200字）3.话题标签（5-8个）4.平台适配建议。输出Markdown。", platform)
+		return fmt.Sprintf(`你是一个专业的短视频平台运营专家。根据视频内容生成发布文案。
+
+目标平台：%s
+
+硬性要求：
+1. 必须根据口播稿生成标题、简介、keywords 和平台建议；如果有分镜，只能作为辅助理解。
+2. 不要直接把用户原始输入当标题，不要照抄“帮我介绍一下...”这类需求句。
+3. 标题要来自口播稿中的核心判断、冲突或结论。
+4. keywords 必须从口播稿主题、事实主体、受众检索词中提取。
+5. 同时给出 xiaohongshu 和 bilibili 两个平台版本。
+6. 输出严格 JSON，不要输出 Markdown。
+
+输出 JSON：
+{
+  "publishCopies": [
+    {
+      "platform": "xiaohongshu",
+      "title": "不超过30字",
+      "description": "100-200字，来自口播稿内容",
+      "keywords": ["5-8个关键词"],
+      "coverText": "封面短句",
+      "publishTips": ["平台适配建议"]
+    },
+    {
+      "platform": "bilibili",
+      "title": "不超过40字",
+      "description": "150-300字，来自口播稿内容",
+      "keywords": ["5-10个关键词"],
+      "coverText": "封面短句",
+      "publishTips": ["平台适配建议"]
+    }
+  ]
+}`, platform)
 
 	case "video_package_exporter":
 		return `你是视频创作包交付经理。
@@ -4702,8 +4822,9 @@ func buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList
 		if shotList != "" {
 			parts = append(parts, "分镜：\n"+shotList)
 		}
-		parts = append(parts, "主题："+topic)
+		parts = append(parts, "用户原始输入仅供理解背景，不能直接当标题："+topic)
 		parts = append(parts, "目标平台："+platform)
+		parts = append(parts, "请只根据口播稿的核心内容生成 publishCopies JSON。")
 		return strings.Join(parts, "\n\n")
 
 	case "video_package_exporter":

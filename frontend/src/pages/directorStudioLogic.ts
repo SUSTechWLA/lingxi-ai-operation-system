@@ -76,6 +76,21 @@ export interface PublishCopy {
   publishTips: string[]
 }
 
+export interface DirectorShotReviewGroup {
+  shotId: string
+  status: DirectorArtifactStatus
+  title: string
+  narrationText: string
+  referenceRoles: string[]
+  artifactCounts: {
+    total: number
+    references: number
+    media: number
+    reviewPackets: number
+  }
+  artifacts: DirectorArtifactRecord[]
+}
+
 interface TraceNodeLike {
   id?: string
   name?: string
@@ -193,40 +208,14 @@ export function canStartFinalRender(artifacts: DirectorArtifactRecord[], localRu
   }
 }
 
-export function buildPublishCopies(topic: string, durationSec: number, artifacts: DirectorArtifactRecord[]): PublishCopy[] {
-  const normalizedTopic = normalizePublishTopic(topic)
-  const hasVideo = artifacts.some((artifact) => artifact.kind === 'VIDEO' && artifact.status === 'valid')
-  const hasPrompt = artifacts.some((artifact) => ['CARD_PLAN', 'SHOT_LIST', 'KEYFRAME_PROMPTS'].includes(artifact.kind))
-  const baseTags = publishTagsFor(normalizedTopic, hasPrompt)
+export function buildPublishCopies(publishCopyContent: unknown): PublishCopy[] {
+  const parsed = parsePublishCopyPayload(publishCopyContent)
+  if (!parsed) return []
 
-  return [
-    {
-      platform: 'xiaohongshu',
-      platformName: '小红书',
-      title: titleWithin(`${normalizedTopic}：${durationSec}秒讲清楚`, 20),
-      description: [
-        `这条视频用${durationSec}秒讲「${normalizedTopic}」。`,
-        '核心不是堆更多工具，而是把想法、执行、审核和返工放进同一条可追踪工作流。',
-        hasVideo ? '成片已生成，可直接手动发布。' : '当前已整理脚本、分镜和 Prompt，可先手动打磨后发布。',
-      ].join('\n'),
-      tags: baseTags.slice(0, 6),
-      coverText: titleWithin(normalizedTopic, 12),
-      publishTips: ['封面保留一个核心判断', '正文前两行直接给结论', '发布前检查字幕是否完整'],
-    },
-    {
-      platform: 'bilibili',
-      platformName: 'B站',
-      title: titleWithin(`${normalizedTopic}｜工作流视角`, 40),
-      description: [
-        `本视频围绕「${normalizedTopic}」展开，目标时长约 ${durationSec} 秒。`,
-        '内容结构：开场观点、关键解释、案例化展开、结尾总结。',
-        hasVideo ? '视频文件已进入产物库，请结合最终审核报告检查后手动投稿。' : '当前版本适合作为短片前期稿件，建议确认镜头和 Prompt 后再进入渲染。',
-      ].join('\n'),
-      tags: uniqueStrings([...baseTags, '知识分享', 'AI工具']).slice(0, 10),
-      coverText: titleWithin(`${normalizedTopic}\n工作流视角`, 18),
-      publishTips: ['标题保留关键词和明确角度', '简介写清楚视频结构', '选择知识/科技相关分区'],
-    },
-  ]
+  const records = publishCopyRecords(parsed)
+  return records
+    .map((record, index) => normalizePublishCopy(record, index))
+    .filter((copy): copy is PublishCopy => Boolean(copy))
 }
 
 export function publishCopiesToMarkdown(copies: PublishCopy[]): string {
@@ -258,6 +247,157 @@ export function publishCopiesToJSON(copies: PublishCopy[]): string {
   })), null, 2)
 }
 
+function parsePublishCopyPayload(content: unknown): unknown {
+  if (!content) return undefined
+  if (typeof content === 'string') {
+    const trimmed = content.trim()
+    if (!trimmed) return undefined
+    const parsed = tryParseJSON(trimmed)
+    if (parsed) return parsed
+    return parsePublishCopyMarkdown(trimmed)
+  }
+  return content
+}
+
+function publishCopyRecords(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) return payload.map(objectValue).filter((item): item is Record<string, unknown> => Boolean(item))
+  const root = unwrapPublishCopyPayload(payload)
+  if (!root) return []
+
+  for (const key of ['publishCopies', 'platformCopies', 'copies']) {
+    const value = root[key]
+    if (Array.isArray(value)) return value.map(objectValue).filter((item): item is Record<string, unknown> => Boolean(item))
+  }
+
+  const platforms = objectValue(root.platforms)
+  if (platforms) {
+    return Object.entries(platforms)
+      .flatMap(([platform, value]) => {
+        const record = objectValue(value)
+        return record ? [{ platform, ...record }] : []
+      })
+  }
+
+  if (hasPublishCopyFields(root)) {
+    return [
+      { platform: 'xiaohongshu', ...root },
+      { platform: 'bilibili', ...root },
+    ]
+  }
+
+  return []
+}
+
+function unwrapPublishCopyPayload(payload: unknown): Record<string, unknown> | undefined {
+  const root = objectValue(payload)
+  if (!root) return undefined
+  for (const key of ['publishCopy', 'publish_copy', 'data', 'package']) {
+    const nested = objectValue(root[key])
+    if (nested && (hasPublishCopyFields(nested) || nested.publishCopies || nested.platformCopies || nested.copies || nested.platforms)) {
+      return nested
+    }
+  }
+  return root
+}
+
+function normalizePublishCopy(record: Record<string, unknown>, index: number): PublishCopy | undefined {
+  const title = firstString(record, ['title', 'headline', 'videoTitle'])
+  const description = firstString(record, ['description', 'intro', 'summary', 'body', 'copy'])
+  if (!title || !description) return undefined
+
+  const platform = normalizePublishPlatform(firstString(record, ['platform', 'platformId']) || (index === 1 ? 'bilibili' : 'xiaohongshu'))
+  const tags = normalizePublishTags(record.keywords || record.tags || record.hashtags)
+  const coverText = firstString(record, ['coverText', 'cover_text', 'cover', 'coverTitle']) || title
+  const publishTips = normalizeStringList(record.publishTips || record.tips || record.suggestions)
+
+  return {
+    platform,
+    platformName: platform === 'bilibili' ? 'B站' : '小红书',
+    title,
+    description,
+    tags,
+    coverText,
+    publishTips,
+  }
+}
+
+function normalizePublishPlatform(value: string): PublishPlatform {
+  const normalized = value.trim().toLowerCase()
+  if (normalized.includes('bilibili') || normalized.includes('b站') || normalized === 'bili') return 'bilibili'
+  return 'xiaohongshu'
+}
+
+function normalizePublishTags(value: unknown): string[] {
+  return uniqueStrings(normalizeStringList(value).map((tag) => tag.replace(/^#+/, ''))).slice(0, 10)
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean)
+  if (typeof value === 'string') {
+    return value
+      .split(/[,\n，、\s]+/u)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function hasPublishCopyFields(record: Record<string, unknown>): boolean {
+  return Boolean(firstString(record, ['title', 'headline', 'videoTitle']) && firstString(record, ['description', 'intro', 'summary', 'body', 'copy']))
+}
+
+function parsePublishCopyMarkdown(markdown: string): Record<string, unknown>[] {
+  const sections = markdown.split(/^##\s+/mu).map((section) => section.trim()).filter(Boolean)
+  return sections
+    .map((section) => {
+      const lines = section.split('\n')
+      const heading = lines.shift() || ''
+      const body = lines.join('\n')
+      const record: Record<string, unknown> = {
+        platform: heading,
+        title: markdownField(body, ['标题']),
+        description: markdownField(body, ['正文', '简介', '描述']),
+        tags: markdownField(body, ['标签', '关键词']),
+        coverText: markdownField(body, ['封面文案', '封面']),
+      }
+      const tips = markdownListAfterHeading(body, ['发布建议', '平台适配建议'])
+      if (tips.length) record.publishTips = tips
+      return record
+    })
+    .filter(hasPublishCopyFields)
+}
+
+function markdownField(markdown: string, labels: string[]): string {
+  for (const label of labels) {
+    const inline = new RegExp(`\\*\\*${label}\\*\\*\\s*[：:]\\s*([^\\n]+)`, 'u').exec(markdown)
+    if (inline?.[1]) return inline[1].trim()
+    const plain = new RegExp(`^${label}\\s*[：:]\\s*([^\\n]+)`, 'mu').exec(markdown)
+    if (plain?.[1]) return plain[1].trim()
+  }
+  return ''
+}
+
+function markdownListAfterHeading(markdown: string, labels: string[]): string[] {
+  for (const label of labels) {
+    const pattern = new RegExp(`\\*\\*${label}\\*\\*\\s*[：:]?\\s*\\n([\\s\\S]*?)(?:\\n\\*\\*|\\n##|$)`, 'u')
+    const match = pattern.exec(markdown)
+    if (!match?.[1]) continue
+    return match[1]
+      .split('\n')
+      .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
 export function buildDirectorArtifacts(
   roleAgents: VideoRoleAgent[],
   reviews: AgentReviewItem[] = [],
@@ -266,7 +406,7 @@ export function buildDirectorArtifacts(
 ): DirectorArtifactRecord[] {
   const traceNodes = extractTraceNodes(trace)
 
-  return roleAgents.flatMap((role, roleIndex) => {
+  const projected = roleAgents.flatMap((role, roleIndex) => {
     const outputs = role.requiredOutputs?.length ? role.requiredOutputs : [`${role.stage}_OUTPUT`]
     const review = findReviewForRole(role, reviews)
     const match = findTraceNodesForRole(role, traceNodes)
@@ -301,6 +441,76 @@ export function buildDirectorArtifacts(
       }
     })
   })
+
+  const projectedIds = new Set(projected.map((artifact) => artifact.id))
+  const extraProjectArtifacts = projectArtifacts
+    .filter((artifact) => shouldExposeUnprojectedArtifact(artifact, projectedIds))
+    .map(projectArtifactRecord)
+
+  return [...projected, ...extraProjectArtifacts]
+}
+
+export function findPublishCopyArtifact(artifacts: DirectorArtifactRecord[]): DirectorArtifactRecord | undefined {
+  return artifacts.find((artifact) => {
+    if (artifact.kind === 'PUBLISH_COPY') return true
+    const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
+    return artifactType === 'publish_copy'
+  })
+}
+
+export interface ArtifactViewerSelection {
+  selectedId?: string
+  shouldLoad: boolean
+  placeholder?: string
+}
+
+export function getArtifactViewerSelection(
+  currentSelectedId: string | undefined,
+  artifact: DirectorArtifactRecord | undefined,
+): ArtifactViewerSelection {
+  if (!artifact) return { selectedId: undefined, shouldLoad: false, placeholder: undefined }
+  if (currentSelectedId === artifact.id) return { selectedId: undefined, shouldLoad: false, placeholder: undefined }
+  if (!isInspectableDirectorArtifact(artifact)) {
+    return {
+      selectedId: artifact.id,
+      shouldLoad: false,
+      placeholder: '该产物还没有 materialized artifact ID，等待对应阶段生成完成后可查看正文。',
+    }
+  }
+  return { selectedId: artifact.id, shouldLoad: true, placeholder: undefined }
+}
+
+export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): DirectorShotReviewGroup[] {
+  const groups = new Map<string, DirectorArtifactRecord[]>()
+  for (const artifact of artifacts) {
+    const shotId = shotIdForArtifact(artifact)
+    if (!shotId) continue
+    const list = groups.get(shotId) || []
+    list.push(artifact)
+    groups.set(shotId, list)
+  }
+
+  return Array.from(groups.entries())
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+    .map(([shotId, shotArtifacts]) => {
+      const reviewPacket = shotArtifacts.find(isShotReviewPacket)
+      const references = shotArtifacts.filter(isShotReferenceArtifact)
+      const media = shotArtifacts.filter(isShotMediaArtifact)
+      return {
+        shotId,
+        status: aggregateShotStatus(shotArtifacts),
+        title: shotTitle(shotId, reviewPacket || shotArtifacts[0]),
+        narrationText: shotNarrationText(reviewPacket || shotArtifacts[0]),
+        referenceRoles: uniqueStrings(references.map((artifact) => stringValue(artifact.metadata?.referenceRole) || stringValue(artifact.metadata?.role) || displayNameForArtifact(artifact.kind))),
+        artifactCounts: {
+          total: shotArtifacts.length,
+          references: references.length,
+          media: media.length,
+          reviewPackets: shotArtifacts.filter(isShotReviewPacket).length,
+        },
+        artifacts: shotArtifacts,
+      }
+    })
 }
 
 function findProjectArtifactForOutput(
@@ -318,6 +528,85 @@ function findProjectArtifactForOutput(
   })
 }
 
+function shouldExposeUnprojectedArtifact(artifact: Record<string, unknown>, projectedIds: Set<string>): boolean {
+  const id = String(artifact.id || artifact.artifactId || '')
+  if (!id || projectedIds.has(id)) return false
+  const metadata = objectValue(artifact.metadata)
+  const kind = stringValue(artifact.kind) || stringValue(metadata?.artifactKind) || stringValue(metadata?.kind)
+  const artifactType = stringValue(metadata?.artifactType) || stringValue(metadata?.artifact_kind)
+  const shotId = firstString(metadata || {}, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id'])
+  return kind === 'PUBLISH_COPY' ||
+    artifactType === 'publish_copy' ||
+    Boolean(shotId) ||
+    Boolean(kind && (kind.startsWith('SHOT_') || kind === 'HYPERFRAMES_SHOT'))
+}
+
+function projectArtifactRecord(artifact: Record<string, unknown>): DirectorArtifactRecord {
+  const metadata = objectValue(artifact.metadata)
+  const kind = stringValue(artifact.kind) || stringValue(metadata?.artifactKind) || stringValue(metadata?.kind) || 'JSON'
+  const status = normalizeArtifactStatus(stringValue(artifact.status)) || 'valid'
+  return {
+    id: String(artifact.id || artifact.artifactId || ''),
+    name: String(artifact.name || displayNameForArtifact(kind)),
+    kind,
+    version: artifactVersionLabel(artifact),
+    status,
+    owner: stringValue(metadata?.producedByRole) || stringValue(metadata?.owner) || '项目产物',
+    updatedAt: formatTime(stringValue(artifact.updatedAt) || stringValue(artifact.createdAt)),
+    humanApproved: booleanValue(artifact.humanApproved) ?? status === 'valid',
+    storageRef: displayStorageRef(artifact.storageRef || artifact.url || ''),
+    dependsOn: stringArrayValue(artifact.dependsOn) || stringArrayValue(metadata?.dependsOn),
+    metadata,
+  }
+}
+
+function shotIdForArtifact(artifact: DirectorArtifactRecord): string {
+  const metadata = artifact.metadata || {}
+  const direct = firstString(metadata, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id'])
+  if (direct) return direct
+  const unitMatch = [artifact.id, artifact.name, artifact.storageRef]
+    .map((value) => /SHOT[_-]?\d+/i.exec(value || '')?.[0])
+    .find(Boolean)
+  return unitMatch ? unitMatch.replace(/shot/i, 'SHOT').replace(/SHOT-/, 'SHOT_') : ''
+}
+
+function isShotReviewPacket(artifact: DirectorArtifactRecord): boolean {
+  const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
+  return artifact.kind === 'SHOT_REVIEW_PACKET' || artifactType === 'shot_review_packet'
+}
+
+function isShotReferenceArtifact(artifact: DirectorArtifactRecord): boolean {
+  const metadata = artifact.metadata || {}
+  if (stringValue(metadata.referenceRole) || stringValue(metadata.role)) return true
+  const artifactType = stringValue(metadata.artifactType) || stringValue(metadata.artifact_kind)
+  return artifactType === 'shot_reference' || artifact.kind === 'REFERENCE_ASSET_PLAN'
+}
+
+function isShotMediaArtifact(artifact: DirectorArtifactRecord): boolean {
+  const mediaKinds = ['SHOT_AUDIO', 'SHOT_KEYFRAME', 'SHOT_VIDEO_CLIP', 'SHOT_SUBTITLE', 'HYPERFRAMES_SHOT']
+  if (mediaKinds.includes(artifact.kind)) return true
+  const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
+  return ['shot_audio', 'shot_keyframe', 'shot_video_clip', 'shot_subtitle', 'hyperframes_shot'].includes(artifactType || '')
+}
+
+function aggregateShotStatus(artifacts: DirectorArtifactRecord[]): DirectorArtifactStatus {
+  const priority: DirectorArtifactStatus[] = ['failed', 'blocked', 'review', 'stale', 'running', 'pending', 'valid', 'missing']
+  for (const status of priority) {
+    if (artifacts.some((artifact) => artifact.status === status)) return status
+  }
+  return 'pending'
+}
+
+function shotTitle(shotId: string, artifact: DirectorArtifactRecord | undefined): string {
+  if (!artifact) return shotId
+  return firstString(artifact.metadata || {}, ['title', 'visual', 'name']) || artifact.name || shotId
+}
+
+function shotNarrationText(artifact: DirectorArtifactRecord | undefined): string {
+  if (!artifact) return ''
+  return firstString(artifact.metadata || {}, ['narrationText', 'scriptText', 'voiceoverText', 'subtitleText'])
+}
+
 function semanticKindForStage(stageName: string | undefined): string | undefined {
   const map: Record<string, string> = {
     proposal: 'VIDEO_PROPOSAL',
@@ -330,6 +619,9 @@ function semanticKindForStage(stageName: string | undefined): string | undefined
     render: 'VIDEO',
     quality: 'FINAL_REVIEW',
     package: 'PROJECT_PACKAGE',
+    publish: 'PUBLISH_COPY',
+    publish_copy: 'PUBLISH_COPY',
+    publish_package: 'PUBLISH_COPY',
   }
   return stageName ? map[stageName] : undefined
 }
@@ -1110,6 +1402,9 @@ export function displayNameForArtifact(kind: string) {
     VIDEO_SCRIPT: '视频脚本',
     SCRIPT_SECTIONS: '脚本分段',
     CARD_PLAN: '卡片分镜',
+    SHOT_LIST: 'Shot清单',
+    KEYFRAME_PROMPTS: '关键帧提示词',
+    VIDEO_PROMPTS: '视频提示词',
     CAPTION_SEGMENTS: '字幕分段',
     VIDEO_COMPOSITION_SPEC: '视频结构',
     REFERENCE_ASSET_PLAN: '素材策略',
@@ -1121,6 +1416,13 @@ export function displayNameForArtifact(kind: string) {
     RENDER_REPORT: '渲染报告',
     FFMPEG_PROBE_REPORT: '视频检测报告',
     FINAL_REVIEW: '最终审核报告',
+    SHOT_REVIEW_PACKET: 'Shot审核包',
+    SHOT_AUDIO: 'Shot口播音频',
+    SHOT_KEYFRAME: 'Shot关键帧',
+    SHOT_VIDEO_CLIP: 'Shot视频片段',
+    SHOT_SUBTITLE: 'Shot字幕',
+    HYPERFRAMES_SHOT: 'HyperFrames片段',
+    PUBLISH_COPY: '发布文案',
     PROJECT_PACKAGE: '交付包',
   }
   return labels[kind] || kind
@@ -1138,14 +1440,15 @@ function downstreamKindsFor(changedKind: string): string[] {
     'PREVIEW_SNAPSHOTS',
     'VIDEO',
     'FINAL_REVIEW',
+    'PUBLISH_COPY',
     'PROJECT_PACKAGE',
   ]
   const explicit: Record<string, string[]> = {
     VIDEO_PROPOSAL: order.slice(1),
     VIDEO_SCRIPT: order.slice(2),
     CARD_PLAN: order.slice(3),
-    VIDEO_COMPOSITION_SPEC: ['HYPERFRAMES_PROJECT', 'PREVIEW_SNAPSHOTS', 'VIDEO', 'FINAL_REVIEW', 'PROJECT_PACKAGE'],
-    PREVIEW_SNAPSHOTS: ['VIDEO', 'FINAL_REVIEW', 'PROJECT_PACKAGE'],
+    VIDEO_COMPOSITION_SPEC: ['HYPERFRAMES_PROJECT', 'PREVIEW_SNAPSHOTS', 'VIDEO', 'FINAL_REVIEW', 'PUBLISH_COPY', 'PROJECT_PACKAGE'],
+    PREVIEW_SNAPSHOTS: ['VIDEO', 'FINAL_REVIEW', 'PUBLISH_COPY', 'PROJECT_PACKAGE'],
   }
   if (explicit[changedKind]) return explicit[changedKind]
   const index = order.indexOf(changedKind)
@@ -1172,6 +1475,8 @@ function requiresMaterializedArtifact(kind: string) {
     'CARD_PLAN',
     'CAPTION_PLAN',
     'SHOT_LIST',
+    'KEYFRAME_PROMPTS',
+    'VIDEO_PROMPTS',
     'VIDEO_COMPOSITION_SPEC',
     'REFERENCE_ASSET_PLAN',
     'STYLE_PROFILE',
@@ -1181,34 +1486,23 @@ function requiresMaterializedArtifact(kind: string) {
     'VIDEO',
     'FFMPEG_PROBE_REPORT',
     'FINAL_REVIEW',
+    'SHOT_REVIEW_PACKET',
+    'SHOT_AUDIO',
+    'SHOT_KEYFRAME',
+    'SHOT_VIDEO_CLIP',
+    'SHOT_SUBTITLE',
+    'HYPERFRAMES_SHOT',
+    'PUBLISH_COPY',
     'PROJECT_PACKAGE',
   ].includes(kind)
-}
-
-function normalizePublishTopic(topic: string) {
-  const cleaned = topic
-    .replace(/^请帮我(做|创作|生成)?一个?\d*秒?(图文|动画|口播)?视频[，,:：]*/u, '')
-    .replace(/^讲/u, '')
-    .trim()
-  return cleaned || '视频主题'
-}
-
-function publishTagsFor(topic: string, hasPrompt: boolean) {
-  const tags = ['视频创作', 'AI', '工作流']
-  if (topic.includes('智能体') || topic.toLowerCase().includes('agent')) tags.push('智能体')
-  if (topic.includes('故事') || topic.includes('动画')) tags.push('动画短片')
-  if (hasPrompt) tags.push('分镜脚本')
-  return uniqueStrings(tags)
 }
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }
 
-function titleWithin(value: string, maxLength: number) {
-  const cleaned = value.trim()
-  if (cleaned.length <= maxLength) return cleaned
-  return cleaned.slice(0, Math.max(1, maxLength - 1)) + '…'
+function isInspectableDirectorArtifact(artifact: DirectorArtifactRecord) {
+  return Boolean(artifact.id && !/^A\d{2}/.test(artifact.id))
 }
 
 // readableNodeType maps backend node types to Chinese labels.

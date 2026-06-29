@@ -168,6 +168,110 @@ func TestScriptQualityCheckerSystemPromptRequiresExplainableReport(t *testing.T)
 	}
 }
 
+func TestShotSplitterPromptRequiresShotProductionPackets(t *testing.T) {
+	prompt := buildDynamicAgentSystemPrompt("shot_splitter", "佛得角世界杯出线", "", "视频创作平台")
+	for _, required := range []string{
+		"不论 AIGC 还是 HyperFrames",
+		"每个 shot 都是最小生产、审核和返工单元",
+		"narrationText",
+		"materialLibraryHints",
+		"referenceRequirements",
+		"expectedArtifacts",
+		"reviewPacket",
+		"SHOT_REVIEW_PACKET",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("shot splitter prompt should contain %q, got:\n%s", required, prompt)
+		}
+	}
+}
+
+func TestKeyframePromptGeneratorRequiresPerShotReferenceCoverage(t *testing.T) {
+	prompt := buildDynamicAgentSystemPrompt("keyframe_prompt_generator", "佛得角世界杯出线", "", "视频创作平台")
+	for _, required := range []string{
+		"每个 shot 都必须引用相关参考图",
+		"主要人物、场景、道具",
+		"三视角",
+		"referenceCoverage",
+		"relatedShotId",
+		"SHOT_KEYFRAME",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("keyframe prompt generator prompt should contain %q, got:\n%s", required, prompt)
+		}
+	}
+}
+
+func TestVideoPromptGeneratorPromptRequiresIndependentShotGeneration(t *testing.T) {
+	prompt := buildDynamicAgentSystemPrompt("video_prompt_generator", "佛得角世界杯出线", "", "视频创作平台")
+	for _, required := range []string{
+		"每个 shot 都必须作为独立视频片段生成",
+		"不要使用尾帧",
+		"只使用首帧",
+		"参考故事板",
+		"转场设计写在本 shot 内部",
+		"简单剪辑拼接",
+		"每个 shot 都必须绑定自己的口播",
+		"素材库",
+		"SHOT_VIDEO_CLIP",
+		"SHOT_AUDIO",
+		"SHOT_SUBTITLE",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("video prompt generator prompt should contain %q, got:\n%s", required, prompt)
+		}
+	}
+}
+
+func TestHyperFramesShotFirstFallbackUsesShotSectionsAndNarration(t *testing.T) {
+	shotList := `{"shotList":[{"shotId":"SHOT_01","durationSec":6,"scriptText":"佛得角是一个西非岛国。","visual":"地图上出现佛得角群岛","camera":"缓慢推近"},{"shotId":"SHOT_02","durationSec":7,"narrationText":"世界杯出线对它来说是奇迹。","visual":"球场灯光亮起","camera":"横向移动"}]}`
+	html := buildMinimalHyperFramesHTML("佛得角奇迹", "完整口播", shotList, "16:9")
+	for _, required := range []string{
+		`data-shot-id="SHOT_01"`,
+		`data-shot-id="SHOT_02"`,
+		"shot-review-packet",
+		"佛得角是一个西非岛国。",
+		"世界杯出线对它来说是奇迹。",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("hyperframes fallback should contain %q, got:\n%s", required, html)
+		}
+	}
+}
+
+func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
+	data := buildHyperFramesDataJSON("佛得角奇迹", "完整口播", `[{"shotId":"SHOT_01","scriptText":"..."}]`, `[]`, "16:9", "{}")
+	for _, required := range []string{
+		`"productionMode": "shot_first"`,
+		`"reviewUnit": "shot"`,
+		`"requiresNarrationSync": true`,
+		`"shots"`,
+	} {
+		if !strings.Contains(data, required) {
+			t.Fatalf("hyperframes data json should contain %q, got:\n%s", required, data)
+		}
+	}
+}
+
+func TestPublishCopyGeneratorPromptRequiresScriptDerivedStructuredCopy(t *testing.T) {
+	if !isStructuredOutputTool("publish_copy_generator") {
+		t.Fatal("publish_copy_generator should require structured JSON output")
+	}
+	prompt := buildDynamicAgentSystemPrompt("publish_copy_generator", "帮我介绍一下佛得角国家以及说明佛得角世界杯从小组赛出线是一个奇迹", "", "视频创作平台")
+	for _, required := range []string{
+		"必须根据口播稿生成",
+		"不要直接把用户原始输入当标题",
+		"publishCopies",
+		"keywords",
+		"xiaohongshu",
+		"bilibili",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("publish copy generator prompt should contain %q, got:\n%s", required, prompt)
+		}
+	}
+}
+
 func TestVideoScriptGeneratorPromptIncludesRequestedDuration(t *testing.T) {
 	prompt := buildDynamicAgentUserPrompt(
 		"video_script_generator",
@@ -527,6 +631,20 @@ func TestBuildSkillStageArtifactsEmitsPublishCopyForPublishPackageStage(t *testi
 	}
 	if !found {
 		t.Fatalf("publish_package stage should emit a publish-copy artifact: %+v", artifacts)
+	}
+}
+
+func TestBuildSkillStageArtifactsUsesShotSemanticKinds(t *testing.T) {
+	cases := map[string]string{
+		"shot_splitter":             "SHOT_LIST",
+		"keyframe_prompt_generator": "KEYFRAME_PROMPTS",
+		"video_prompt_generator":    "VIDEO_PROMPTS",
+	}
+	for toolName, wantKind := range cases {
+		artifacts := buildSkillStageArtifacts(toolName, "video-creator", false, true)
+		if len(artifacts) == 0 || artifacts[0]["kind"] != wantKind {
+			t.Fatalf("%s should produce semantic kind %s, got %+v", toolName, wantKind, artifacts)
+		}
 	}
 }
 

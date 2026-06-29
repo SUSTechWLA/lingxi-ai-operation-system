@@ -178,6 +178,58 @@ func TestPlanCompiler_QualityGateReviewsProductionOutput(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
+	compiler := NewPlanCompiler(staticToolCatalog{
+		"shot_splitter":                 {Name: "shot_splitter"},
+		"hyperframes_project_generator": {Name: "hyperframes_project_generator"},
+		"hyperframes_renderer":          {Name: "hyperframes_renderer"},
+		"publish_copy_generator":        {Name: "publish_copy_generator"},
+	})
+	plan := &AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯从小组赛出线是一个奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "brief", Tool: "proposal_generator", Arguments: map[string]interface{}{"brief": "佛得角国家介绍"}},
+			{ID: "script", Tool: "video_script_generator", DependsOn: []string{"brief"}, Arguments: map[string]interface{}{"topic": "佛得角世界杯出线奇迹"}, ExpectedOutput: []string{"voiceover_script"}},
+		},
+		Budget: AgentBudget{MaxSteps: 2, MaxToolCalls: 2},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	expected := []struct {
+		id   string
+		tool string
+		dep  string
+	}{
+		{"brief", "proposal_generator", ""},
+		{"script", "video_script_generator", "brief"},
+		{"beat_plan", "shot_splitter", "script"},
+		{"preview", "hyperframes_project_generator", "beat_plan"},
+		{"render", "hyperframes_renderer", "preview"},
+		{"publish_copy", "publish_copy_generator", "render"},
+	}
+	if len(prepared.Steps) != len(expected) {
+		t.Fatalf("expected completed beta plan with %d steps, got %#v", len(expected), prepared.Steps)
+	}
+	for i, want := range expected {
+		step := prepared.Steps[i]
+		if step.ID != want.id || step.Tool != want.tool {
+			t.Fatalf("step %d = %s/%s, want %s/%s", i, step.ID, step.Tool, want.id, want.tool)
+		}
+		if want.dep == "" {
+			continue
+		}
+		if len(step.DependsOn) != 1 || step.DependsOn[0] != want.dep {
+			t.Fatalf("step %s depends on %#v, want [%s]", step.ID, step.DependsOn, want.dep)
+		}
+	}
+	if prepared.Budget.MaxSteps < len(expected) || prepared.Budget.MaxToolCalls < len(expected) {
+		t.Fatalf("budget should expand with completed beta plan, got %+v", prepared.Budget)
+	}
+}
+
 type staticToolCatalog map[string]*tool.ToolManifest
 
 func (c staticToolCatalog) GetManifest(name string) *tool.ToolManifest {
