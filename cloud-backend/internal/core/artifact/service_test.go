@@ -147,3 +147,61 @@ func TestBuildArtifactRecordWorkflowNodeDoesNotStoreInlinePayload(t *testing.T) 
 		t.Fatalf("workflow-node artifact should remain localOnly=true: %+v", record.Metadata)
 	}
 }
+
+func TestBuildArtifactRecordKeepsRevisionPayloadReviewable(t *testing.T) {
+	req := &CreateArtifactRequest{
+		ProjectID:   "proj-1",
+		StageName:   "script",
+		UnitID:      "content",
+		Kind:        KindMarkdown,
+		Name:        "script.md",
+		StorageType: StorageInline,
+		Data:        []byte("## 新稿\n开头更强。"),
+		MimeType:    "text/markdown; charset=utf-8",
+		Provider:    "artifact-revision",
+	}
+
+	record := buildArtifactRecord(req, 2, "art-1")
+
+	if record.StorageType != StorageInline {
+		t.Fatalf("revision storage type = %q, want %q", record.StorageType, StorageInline)
+	}
+	if record.InlineJSON != "## 新稿\n开头更强。" {
+		t.Fatalf("revision payload should be reviewable inline, got %q", record.InlineJSON)
+	}
+	if stored, ok := record.Metadata["cloudPayloadStored"].(bool); !ok || !stored {
+		t.Fatalf("revision metadata should mark cloudPayloadStored=true: %+v", record.Metadata)
+	}
+	if localOnly, ok := record.Metadata["localOnly"].(bool); !ok || localOnly {
+		t.Fatalf("revision metadata should mark localOnly=false: %+v", record.Metadata)
+	}
+}
+
+func TestBuildArtifactRecordKeepsExternalGenerationRequestReviewable(t *testing.T) {
+	req := &CreateArtifactRequest{
+		ProjectID:   "proj-1",
+		StageName:   "external_generation_request",
+		UnitID:      "shot-1",
+		Kind:        KindJSON,
+		Name:        "external_generation_request.json",
+		StorageType: StorageInline,
+		Data:        []byte(`{"prompt":"复制到外部平台生成视频","referenceImageLimit":6,"promptCharLimit":2000}`),
+		MimeType:    "application/json",
+		Provider:    "external-generation-request",
+	}
+
+	record := buildArtifactRecord(req, 1, "")
+
+	if record.StorageType != StorageInline {
+		t.Fatalf("external generation request storage type = %q, want %q", record.StorageType, StorageInline)
+	}
+	if record.InlineJSON == "" {
+		t.Fatalf("external generation request must remain reviewable inline")
+	}
+	if stored, ok := record.Metadata["cloudPayloadStored"].(bool); !ok || !stored {
+		t.Fatalf("request metadata should mark cloudPayloadStored=true: %+v", record.Metadata)
+	}
+	if localOnly, ok := record.Metadata["localOnly"].(bool); !ok || localOnly {
+		t.Fatalf("request metadata should mark localOnly=false: %+v", record.Metadata)
+	}
+}

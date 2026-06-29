@@ -339,6 +339,30 @@ List project artifacts
 
 ---
 
+### POST /api/video-projects/:id/external-generation-results
+
+Register an externally generated image or video artifact by local reference
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{ "$ref": "#/components/schemas/RegisterExternalGenerationResultRequest" }
+```
+
+**Responses:**
+
+- **200** — External generation result registered (JSON)
+- **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
 ## 4. Auth
 
 ### POST /api/auth/login

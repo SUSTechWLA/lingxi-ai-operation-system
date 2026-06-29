@@ -18,5 +18,5 @@ fi
 export SKILL_ROOT="${SKILL_ROOT:-$CLOUD_DIR/skills}"
 
 docker compose up -d
-go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 exec ./build/tangying-ai-os

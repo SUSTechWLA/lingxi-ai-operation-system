@@ -26,6 +26,7 @@ import {
   ArtifactListResponse,
   ArtifactContentResponse,
   ArtifactHistoryResponse,
+  Artifact,
   AgentStartRunRequest,
   AgentStartRunResponse,
   AgentRun,
@@ -390,6 +391,40 @@ export const reviseArtifact = async (
   message: string
 ): Promise<ArtifactContentResponse> => {
   const response = await api.post<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/revise`, { message })
+  return response.data.data
+}
+
+export interface RegisterExternalGenerationResultPayload {
+  kind: 'image' | 'video'
+  storageType?: string
+  storageRef: string
+  mimeType?: string
+  sizeBytes?: number
+  contentHash?: string
+  promptHash?: string
+  durationSec?: number
+  description?: string
+  tags?: string[]
+  relatedShotId?: string
+  source?: string
+  generationRequestId?: string
+  externalPlatform?: string
+  referenceAssetIds?: string[]
+}
+
+export interface ExternalGenerationResultResponse {
+  manifest: Record<string, unknown>
+  artifact: Artifact
+}
+
+export const registerExternalGenerationResult = async (
+  projectId: string,
+  payload: RegisterExternalGenerationResultPayload
+): Promise<ExternalGenerationResultResponse> => {
+  const response = await api.post<ApiResponse<ExternalGenerationResultResponse>>(
+    `/video-projects/${projectId}/external-generation-results`,
+    payload
+  )
   return response.data.data
 }
 

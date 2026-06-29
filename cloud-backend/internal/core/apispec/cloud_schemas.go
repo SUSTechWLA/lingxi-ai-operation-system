@@ -1,6 +1,7 @@
 package apispec
 
 import (
+	videoassets "github.com/tangying-ai/aios-core/internal/agents/video/assets"
 	videoassistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
 	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	videoservice "github.com/tangying-ai/aios-core/internal/agents/video/service"
@@ -840,6 +841,21 @@ func registerCloudSchemas(b *Builder) {
 			"data": {Schema: &Schema{
 				Type:       "object",
 				Properties: map[string]*SchemaRef{"artifact": {Schema: Reflect(artifacts.Artifact{})}},
+			}},
+		},
+	})
+	b.Schema("RegisterExternalGenerationResultRequest", Reflect(videoassets.RegisterExternalGenerationResultRequest{}))
+	b.Schema("ExternalGenerationResultResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"manifest": {Schema: Reflect(videoassets.ManualAssetManifest{})},
+					"artifact": {Schema: Reflect(artifacts.Artifact{})},
+				},
 			}},
 		},
 	})

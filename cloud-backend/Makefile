@@ -2,12 +2,12 @@
 
 APP_NAME := tangying-ai-os
 BUILD_DIR := build
-MAIN := cmd/tangying-ai-os/main.go
+MAIN_PKG := ./cmd/tangying-ai-os
 
 backend-build:
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	go build -o $(BUILD_DIR)/$(APP_NAME) $(MAIN)
+	go build -o $(BUILD_DIR)/$(APP_NAME) $(MAIN_PKG)
 	@echo "Build complete: $(BUILD_DIR)/$(APP_NAME)"
 
 backend-run: backend-build
@@ -31,7 +31,7 @@ clean:
 
 migrate:
 	@echo "Running migrations..."
-	go run $(MAIN) -migrate
+	go run $(MAIN_PKG) -migrate
 
 docker-up:
 	docker compose up -d

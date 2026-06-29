@@ -901,7 +901,32 @@ func (h *Handler) regenerateSourceNode(ctx context.Context, gateNode *model.Node
 	if sourceID == "" {
 		return fmt.Errorf("source exec node not found for review gate %s", gateNode.ID)
 	}
-	return h.nodes.UpdateStatus(ctx, sourceID, model.NodeCreated, nil, "")
+	resolvedID, err := h.resolveSourceNodeID(ctx, gateNode, sourceID)
+	if err != nil {
+		return err
+	}
+	return h.nodes.UpdateStatus(ctx, resolvedID, model.NodeCreated, nil, "")
+}
+
+func (h *Handler) resolveSourceNodeID(ctx context.Context, gateNode *model.Node, sourceID string) (string, error) {
+	if h == nil || h.nodes == nil || gateNode == nil || gateNode.TaskID == "" {
+		return sourceID, nil
+	}
+	nodes, err := h.nodes.FindByTaskID(ctx, gateNode.TaskID)
+	if err != nil {
+		return sourceID, nil
+	}
+	for _, node := range nodes {
+		if node.ID == sourceID {
+			return node.ID, nil
+		}
+	}
+	for _, node := range nodes {
+		if originalID, _ := node.Input["agentOriginalNodeId"].(string); originalID == sourceID {
+			return node.ID, nil
+		}
+	}
+	return "", fmt.Errorf("source exec node %q not found for review gate %s", sourceID, gateNode.ID)
 }
 
 // triggerDownstreamStale marks all downstream artifacts as stale in the database

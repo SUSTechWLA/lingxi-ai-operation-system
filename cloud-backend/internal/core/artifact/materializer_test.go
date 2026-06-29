@@ -288,6 +288,133 @@ func TestBuildArtifactsFromCompositionExecMaterializesReviewableVideoComposition
 	}
 }
 
+func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *testing.T) {
+	node := &model.Node{
+		ID:     "video_prompt_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "video_prompt",
+			"tool":  "video_prompt_generator",
+		},
+		Output: map[string]interface{}{
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId":           "extgen_123",
+					"kind":                "video",
+					"shotId":              "shot-1",
+					"prompt":              "生成 8 秒视频，保持人物、道具和旧书店场景一致。",
+					"promptCharLimit":     2000,
+					"referenceImageLimit": 6,
+					"references": []interface{}{
+						map[string]interface{}{"id": "char-a", "role": "character", "storageRef": "local://projects/vp-1/characters/a.png"},
+					},
+				},
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "extgen_123",
+					"kind":     "JSON",
+					"name":     "external_generation_request.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"artifactType":   "external_generation_request",
+						"generationKind": "video",
+					},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("external generation request should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one request artifact, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Provider != "external-generation-request" {
+		t.Fatalf("provider = %q, want external-generation-request", req.Provider)
+	}
+	if req.StorageType != StorageInline {
+		t.Fatalf("storage type = %q, want inline", req.StorageType)
+	}
+	if !strings.Contains(string(req.Data), "生成 8 秒视频") {
+		t.Fatalf("request payload should contain prompt, got %s", string(req.Data))
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil {
+		t.Fatalf("request payload should be JSON: %v", err)
+	}
+	if decoded["prompt"] == nil || decoded["externalGenerationRequests"] != nil {
+		t.Fatalf("request payload should be the individual request, got %+v", decoded)
+	}
+}
+
+func TestBuildArtifactsExternalGenerationRequestRejectsPromptOverLimit(t *testing.T) {
+	node := externalGenerationRequestNode("extgen_too_long", map[string]interface{}{
+		"requestId":           "extgen_too_long",
+		"kind":                "image",
+		"prompt":              strings.Repeat("字", 2001),
+		"promptCharLimit":     2000,
+		"referenceImageLimit": 6,
+	})
+
+	_, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err == nil || !IsArtifactManifestInvalid(err) {
+		t.Fatalf("expected manifest validation error for prompt limit, got %v", err)
+	}
+}
+
+func TestBuildArtifactsExternalGenerationRequestRejectsTooManyReferenceImages(t *testing.T) {
+	refs := make([]interface{}, 0, 7)
+	for i := 0; i < 7; i++ {
+		refs = append(refs, map[string]interface{}{
+			"id":         "ref",
+			"role":       "keyframe",
+			"storageRef": "local://projects/vp-1/ref.png",
+		})
+	}
+	node := externalGenerationRequestNode("extgen_too_many_refs", map[string]interface{}{
+		"requestId":           "extgen_too_many_refs",
+		"kind":                "video",
+		"prompt":              "生成 6 秒视频。",
+		"references":          refs,
+		"promptCharLimit":     2000,
+		"referenceImageLimit": 6,
+	})
+
+	_, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err == nil || !IsArtifactManifestInvalid(err) {
+		t.Fatalf("expected manifest validation error for reference limit, got %v", err)
+	}
+}
+
+func externalGenerationRequestNode(unitID string, request map[string]interface{}) *model.Node {
+	return &model.Node{
+		ID:     "external_generation_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "video_prompt",
+			"tool":  "video_prompt_generator",
+		},
+		Output: map[string]interface{}{
+			"externalGenerationRequests": []interface{}{request},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   unitID,
+					"kind":     "JSON",
+					"name":     "external_generation_request.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"artifactType": "external_generation_request",
+					},
+				},
+			},
+		},
+	}
+}
+
 func TestBuildArtifactsFromNodeOutputSkipsEmptyPublishCopyArtifact(t *testing.T) {
 	node := &model.Node{
 		ID:     "viewpoint_dossier",
@@ -391,14 +518,14 @@ func TestReviseInlineArtifactCreatesNewVersionPayload(t *testing.T) {
 	if req.Metadata["revisionInstruction"] != "开头更犀利一点" {
 		t.Fatalf("revision instruction missing from metadata: %+v", req.Metadata)
 	}
-	if req.StorageType != StorageLocal {
-		t.Fatalf("revision should be stored locally, got %q", req.StorageType)
+	if req.StorageType != StorageInline {
+		t.Fatalf("revision should be stored inline for immediate review, got %q", req.StorageType)
 	}
 	if req.StorageRef == "" {
 		t.Fatalf("revision should include a local storage ref")
 	}
-	if len(req.Data) != 0 {
-		t.Fatalf("revision request should not carry user payload through cloud: %s", string(req.Data))
+	if string(req.Data) != "## 新稿\n开头更犀利。" {
+		t.Fatalf("revision request should carry reviewable revised content, got %q", string(req.Data))
 	}
 }
 

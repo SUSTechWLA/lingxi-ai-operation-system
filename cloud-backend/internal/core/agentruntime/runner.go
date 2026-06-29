@@ -157,6 +157,9 @@ planOK:
 	if r.planJudge != nil {
 		judgeReport = r.planJudge.Evaluate(plan)
 	}
+	if !judgeReport.Passed {
+		return nil, fmt.Errorf("agent plan failed video beta validation: %s", summarizePlanJudgeWarnings(judgeReport.Warnings))
+	}
 
 	dag, err := r.compiler.Compile(plan)
 	if err != nil {
@@ -395,6 +398,12 @@ func rewriteNodeReferences(value interface{}, idMap map[string]string) interface
 	case map[string]interface{}:
 		out := make(map[string]interface{}, len(v))
 		for key, item := range v {
+			if s, ok := item.(string); ok && isNodeIDReferenceField(key) {
+				if mapped, found := idMap[s]; found {
+					out[key] = mapped
+					continue
+				}
+			}
 			out[key] = rewriteNodeReferences(item, idMap)
 		}
 		return out
@@ -407,4 +416,33 @@ func rewriteNodeReferences(value interface{}, idMap map[string]string) interface
 	default:
 		return value
 	}
+}
+
+func isNodeIDReferenceField(key string) bool {
+	switch key {
+	case "sourceNode", "productionSourceNode", "qualityCheckerNode":
+		return true
+	default:
+		return false
+	}
+}
+
+func summarizePlanJudgeWarnings(warnings []PlanJudgeWarning) string {
+	if len(warnings) == 0 {
+		return "plan judge did not pass"
+	}
+	parts := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		if warning.Message != "" {
+			parts = append(parts, warning.Message)
+			continue
+		}
+		if warning.Code != "" {
+			parts = append(parts, warning.Code)
+		}
+	}
+	if len(parts) == 0 {
+		return "plan judge did not pass"
+	}
+	return strings.Join(parts, "; ")
 }

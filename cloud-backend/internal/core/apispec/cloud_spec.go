@@ -687,6 +687,13 @@ func BuildCloudSpec() *Spec {
 		Tags("Artifacts").
 		PathParam("id", "Project identifier", StringSchema()).
 		ResponseJSON("200", "Artifacts list", "ArtifactListResponse")
+	b.Route("POST", "/api/video-projects/:id/external-generation-results", "Register an externally generated image or video artifact by local reference").
+		Tags("Artifacts").
+		PathParam("id", "Project identifier", StringSchema()).
+		BodyJSON("RegisterExternalGenerationResultRequest", "Local storage reference and external generation metadata", true).
+		ResponseJSON("200", "External generation result registered", "ExternalGenerationResultResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 	b.Route("GET", "/api/artifacts/:id", "Get artifact by ID").
 		Tags("Artifacts").
 		PathParam("id", "Artifact identifier", StringSchema()).

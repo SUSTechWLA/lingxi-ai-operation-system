@@ -3,9 +3,9 @@ package localagent
 
 // LocalSpec is the OpenAPI 3.0 document for the local agent.
 type LocalSpec struct {
-	OpenAPI string                     `json:"openapi"`
-	Info    LocalInfo                  `json:"info"`
-	Servers []LocalServer              `json:"servers,omitempty"`
+	OpenAPI string                        `json:"openapi"`
+	Info    LocalInfo                     `json:"info"`
+	Servers []LocalServer                 `json:"servers,omitempty"`
 	Paths   map[string]map[string]LocalOp `json:"paths"`
 }
 
@@ -20,31 +20,31 @@ type LocalServer struct {
 }
 
 type LocalOp struct {
-	OperationID string              `json:"operationId"`
-	Summary     string              `json:"summary"`
-	Description string              `json:"description,omitempty"`
-	Tags        []string            `json:"tags,omitempty"`
-	Parameters  []LocalParam        `json:"parameters,omitempty"`
-	RequestBody *LocalRequestBody   `json:"requestBody,omitempty"`
+	OperationID string                    `json:"operationId"`
+	Summary     string                    `json:"summary"`
+	Description string                    `json:"description,omitempty"`
+	Tags        []string                  `json:"tags,omitempty"`
+	Parameters  []LocalParam              `json:"parameters,omitempty"`
+	RequestBody *LocalRequestBody         `json:"requestBody,omitempty"`
 	Responses   map[string]*LocalResponse `json:"responses"`
 }
 
 type LocalParam struct {
-	Name        string      `json:"name"`
-	In          string      `json:"in"`
-	Description string      `json:"description,omitempty"`
-	Required    bool        `json:"required"`
+	Name        string       `json:"name"`
+	In          string       `json:"in"`
+	Description string       `json:"description,omitempty"`
+	Required    bool         `json:"required"`
 	Schema      *LocalSchema `json:"schema,omitempty"`
 }
 
 type LocalRequestBody struct {
-	Description string                    `json:"description,omitempty"`
-	Required    bool                      `json:"required"`
+	Description string                     `json:"description,omitempty"`
+	Required    bool                       `json:"required"`
 	Content     map[string]*LocalMediaType `json:"content"`
 }
 
 type LocalResponse struct {
-	Description string                    `json:"description"`
+	Description string                     `json:"description"`
 	Content     map[string]*LocalMediaType `json:"content,omitempty"`
 }
 
@@ -53,12 +53,12 @@ type LocalMediaType struct {
 }
 
 type LocalSchema struct {
-	Type       string                 `json:"type,omitempty"`
-	Format     string                 `json:"format,omitempty"`
+	Type       string                  `json:"type,omitempty"`
+	Format     string                  `json:"format,omitempty"`
 	Properties map[string]*LocalSchema `json:"properties,omitempty"`
-	Required   []string               `json:"required,omitempty"`
-	Nullable   bool                   `json:"nullable,omitempty"`
-	Items      *LocalSchema           `json:"items,omitempty"`
+	Required   []string                `json:"required,omitempty"`
+	Nullable   bool                    `json:"nullable,omitempty"`
+	Items      *LocalSchema            `json:"items,omitempty"`
 }
 
 // BuildLocalSpec constructs the OpenAPI spec for the local agent (8 routes).
@@ -130,8 +130,8 @@ func BuildLocalSpec() *LocalSpec {
 			}}},
 		},
 		Responses: map[string]*LocalResponse{
-			"200":  {Description: "Logged"},
-			"400":  {Description: "Invalid payload"},
+			"200": {Description: "Logged"},
+			"400": {Description: "Invalid payload"},
 		},
 	})
 
@@ -175,21 +175,51 @@ func BuildLocalSpec() *LocalSpec {
 		Tags:        []string{"Artifacts"},
 		RequestBody: &LocalRequestBody{
 			Required: true,
-			Content: map[string]*LocalMediaType{"application/json": {Schema: &LocalSchema{
-				Type: "object",
-				Properties: map[string]*LocalSchema{
-					"id":            {Type: "string"},
-					"projectId":     {Type: "string"},
-					"storageRef":    {Type: "string"},
-					"mimeType":      {Type: "string"},
-					"content":       {Type: "string"},
-					"contentBase64": {Type: "string"},
-				},
-				Required: []string{"id", "projectId"},
-			}}},
+			Content: map[string]*LocalMediaType{
+				"application/json": {Schema: &LocalSchema{
+					Type: "object",
+					Properties: map[string]*LocalSchema{
+						"id":            {Type: "string"},
+						"projectId":     {Type: "string"},
+						"storageRef":    {Type: "string"},
+						"mimeType":      {Type: "string"},
+						"content":       {Type: "string"},
+						"contentBase64": {Type: "string"},
+						"metadata":      {Type: "object"},
+					},
+					Required: []string{"id", "projectId"},
+				}},
+				"multipart/form-data": {Schema: &LocalSchema{
+					Type: "object",
+					Properties: map[string]*LocalSchema{
+						"id":         {Type: "string"},
+						"projectId":  {Type: "string"},
+						"storageRef": {Type: "string"},
+						"mimeType":   {Type: "string"},
+						"metadata":   {Type: "string"},
+						"file":       {Type: "string", Format: "binary"},
+					},
+					Required: []string{"id", "projectId", "file"},
+				}},
+			},
 		},
 		Responses: map[string]*LocalResponse{
-			"200": {Description: "Stored"},
+			"200": {Description: "Stored",
+				Content: map[string]*LocalMediaType{"application/json": {Schema: &LocalSchema{
+					Type: "object",
+					Properties: map[string]*LocalSchema{
+						"id":           {Type: "string"},
+						"projectId":    {Type: "string"},
+						"storageRef":   {Type: "string"},
+						"mimeType":     {Type: "string"},
+						"contentHash":  {Type: "string"},
+						"sizeBytes":    {Type: "integer", Format: "int64"},
+						"path":         {Type: "string"},
+						"metadataPath": {Type: "string"},
+						"metadata":     {Type: "object"},
+					},
+				}}},
+			},
 			"400": {Description: "Invalid payload"},
 		},
 	})

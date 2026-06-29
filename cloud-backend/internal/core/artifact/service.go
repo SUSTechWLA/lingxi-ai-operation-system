@@ -284,7 +284,14 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 
 	storageType := StorageLocal
 	inlineJSON := ""
-	if len(req.Data) > 0 {
+	if isReviewableInlineProvider(req.Provider) && req.StorageType == StorageInline && len(req.Data) > 0 {
+		storageType = StorageInline
+		inlineJSON = string(req.Data)
+		metadata["cloudPayloadStored"] = true
+		metadata["localOnly"] = false
+		metadata["contentAvailability"] = "inline"
+	}
+	if len(req.Data) > 0 && storageType == StorageLocal {
 		metadata["contentAvailability"] = "local-agent"
 	}
 
@@ -327,6 +334,15 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		ProducedByTool: producedByTool,
 		ProducedByRole: producedByRole,
 		Metadata:       metadata,
+	}
+}
+
+func isReviewableInlineProvider(provider string) bool {
+	switch provider {
+	case "artifact-revision", "external-generation-request":
+		return true
+	default:
+		return false
 	}
 }
 

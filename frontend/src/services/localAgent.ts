@@ -14,6 +14,18 @@ export interface ModelProviderSettingsResponse {
   providers: Partial<Record<ModelCapability, ModelProviderConfig>>
 }
 
+export interface LocalArtifactUploadResponse {
+  id: string
+  projectId: string
+  storageRef?: string
+  mimeType?: string
+  contentHash?: string
+  sizeBytes?: number
+  path: string
+  metadataPath: string
+  metadata: Record<string, unknown>
+}
+
 export const DEFAULT_LOCAL_AGENT_URL = 'http://127.0.0.1:18080'
 const configuredLocalAgentUrl = import.meta.env.VITE_LOCAL_AGENT_URL || import.meta.env.VITE_LOCAL_BACKEND_URL
 
@@ -70,6 +82,32 @@ export async function saveModelProviderSettings(
     throw new Error(await errorMessage(response, '保存模型设置失败'))
   }
   return response.json() as Promise<ModelProviderSettingsResponse>
+}
+
+export async function uploadLocalArtifactFile(params: {
+  projectId: string
+  id: string
+  file: File
+  storageRef?: string
+  mimeType?: string
+  metadata?: Record<string, unknown>
+}): Promise<LocalArtifactUploadResponse> {
+  const formData = new FormData()
+  formData.append('projectId', params.projectId)
+  formData.append('id', params.id)
+  if (params.storageRef) formData.append('storageRef', params.storageRef)
+  if (params.mimeType || params.file.type) formData.append('mimeType', params.mimeType || params.file.type)
+  if (params.metadata) formData.append('metadata', JSON.stringify(params.metadata))
+  formData.append('file', params.file)
+
+  const response = await fetch(localAgentUrl('/api/local/artifacts'), {
+    method: 'POST',
+    body: formData,
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '上传本地产物失败'))
+  }
+  return response.json() as Promise<LocalArtifactUploadResponse>
 }
 
 function localAgentUrl(path: string): string {

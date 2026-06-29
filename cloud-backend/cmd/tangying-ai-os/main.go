@@ -49,6 +49,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 
+	videoAssets "github.com/tangying-ai/aios-core/internal/agents/video/assets"
 	videoAssistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
 	videoPlanJudge "github.com/tangying-ai/aios-core/internal/agents/video/planjudge"
@@ -572,6 +573,7 @@ func main() {
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
 		stageApprovalSvc.WithArtifactApprover(artifactSvc)
+		videoAssets.NewHandler(artifactSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
 			WithCheckpointService(checkpointSvc).
 			RegisterRoutes(r)
@@ -619,6 +621,9 @@ func main() {
 
 		// Wire artifact service into the agent runtime handler for stale tracking
 		// and artifact approval on review actions.
+		if artifactReviewStore := newAgentRuntimeArtifactReviewStore(pool); artifactReviewStore != nil {
+			agentRuntimeHandler.WithArtifactReviewStore(artifactReviewStore)
+		}
 		agentRuntimeHandler.
 			WithArtifactService(artifactSvc).
 			WithProjectIDResolver(&taskProjectIDResolver{runRepo: workflowRunRepo, taskRepo: taskRepo})

@@ -69,7 +69,10 @@ func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
 			Endpoint: "builtin://video-creation/video_script_generator",
 		},
 	}
-	judge := recordingPlanJudge{warnings: []PlanJudgeWarning{{Code: "missing_publish_copy", Message: "publish copy missing"}}}
+	judge := recordingPlanJudge{
+		passed:   true,
+		warnings: []PlanJudgeWarning{{Code: "missing_publish_copy", Message: "publish copy missing", Severity: "warning"}},
+	}
 
 	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
 		WithPlanJudge(&judge)
@@ -95,6 +98,50 @@ func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
 	}
 	if run.Status != RunStatusRunning {
 		t.Fatalf("warnings must not block execution, run status = %s", run.Status)
+	}
+}
+
+func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "make video",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "script", Tool: "video_script_generator", Arguments: map[string]interface{}{"topic": "AI workflows"}},
+		},
+	}}
+	catalog := staticToolCatalog{
+		"video_script_generator": &tool.ToolManifest{
+			Name:     "video_script_generator",
+			Endpoint: "builtin://video-creation/video_script_generator",
+		},
+	}
+	judge := recordingPlanJudge{
+		passed: false,
+		warnings: []PlanJudgeWarning{{
+			Code:     "missing_required_video_stage",
+			Message:  "render stage missing",
+			Severity: "error",
+		}},
+	}
+
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
+		WithPlanJudge(&judge)
+	_, err := runner.Start(context.Background(), StartRunRequest{
+		UserID:  "user-1",
+		Message: "make a video about AI workflows",
+		Domain:  "video_creation",
+	})
+	if err == nil {
+		t.Fatal("expected failed plan judge to block run start")
+	}
+	if orch.createdInput != nil || orch.submitted != nil {
+		t.Fatalf("runner should not create or submit DAG after plan judge failure: input=%#v submitted=%#v", orch.createdInput, orch.submitted)
+	}
+	if len(store.runs) != 0 {
+		t.Fatalf("failed plan should not be persisted as a run: %#v", store.runs)
 	}
 }
 
@@ -209,6 +256,33 @@ func TestScopeDAGToTask_RewritesNodeReferences(t *testing.T) {
 	}
 }
 
+func TestScopeDAGToTask_RewritesReviewSourceNodeIDs(t *testing.T) {
+	scoped := scopeDAGToTask("task-1", &model.DAGRequest{
+		Nodes: []model.NodeRequest{
+			{ID: "script_exec", Input: map[string]interface{}{"parameters": map[string]interface{}{"topic": "AI"}}},
+			{ID: "script_review", Input: map[string]interface{}{
+				"sourceNode":         "script_exec",
+				"qualityCheckerNode": "script_quality_exec",
+				"checkerStep":        "script_quality",
+				"productionStep":     "script",
+			}},
+			{ID: "script_quality_exec", Input: map[string]interface{}{}},
+		},
+		Edges: []model.Edge{{From: "script_exec", To: "script_review"}},
+	})
+
+	reviewInput := scoped.Nodes[1].Input
+	if reviewInput["sourceNode"] != scopedNodeID("task-1", "script_exec") {
+		t.Fatalf("sourceNode should be scoped, got %#v", reviewInput["sourceNode"])
+	}
+	if reviewInput["qualityCheckerNode"] != scopedNodeID("task-1", "script_quality_exec") {
+		t.Fatalf("qualityCheckerNode should be scoped, got %#v", reviewInput["qualityCheckerNode"])
+	}
+	if reviewInput["checkerStep"] != "script_quality" || reviewInput["productionStep"] != "script" {
+		t.Fatalf("step metadata should not be rewritten as node IDs: %#v", reviewInput)
+	}
+}
+
 func TestScopeDAGToTask_KeepsNodeIDsWithinDatabaseLimit(t *testing.T) {
 	longStepID := "script_generation_with_reference_content_review_before_and_extra_suffix"
 	scoped := scopeDAGToTask("20260623152045-a3f2", &model.DAGRequest{
@@ -271,10 +345,11 @@ func (s *memoryRunStore) FindRun(_ context.Context, id string) (*Run, error) {
 
 type recordingPlanJudge struct {
 	called   bool
+	passed   bool
 	warnings []PlanJudgeWarning
 }
 
 func (j *recordingPlanJudge) Evaluate(*AgentPlan) PlanJudgeReport {
 	j.called = true
-	return PlanJudgeReport{Warnings: j.warnings}
+	return PlanJudgeReport{Passed: j.passed, Warnings: j.warnings}
 }

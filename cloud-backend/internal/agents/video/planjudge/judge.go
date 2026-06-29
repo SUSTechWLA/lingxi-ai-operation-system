@@ -57,7 +57,7 @@ func New() Judge {
 
 func (j Judge) Evaluate(plan *agentruntime.AgentPlan) Report {
 	if plan == nil {
-		return Report{Passed: false, Warnings: []Warning{{Code: WarningMissingStage, Message: "agent plan is nil", Severity: "warning"}}}
+		return Report{Passed: false, Warnings: []Warning{{Code: WarningMissingStage, Message: "agent plan is nil", Severity: "error"}}}
 	}
 	warnings := make([]Warning, 0)
 	warnings = append(warnings, j.disabledCapabilityWarnings(plan)...)
@@ -68,10 +68,10 @@ func (j Judge) Evaluate(plan *agentruntime.AgentPlan) Report {
 		warnings = append(warnings, Warning{
 			Code:     WarningMissingPublishCopy,
 			Message:  "plan should include publish_copy_generator before package/export in beta",
-			Severity: "warning",
+			Severity: "error",
 		})
 	}
-	return Report{Passed: len(warnings) == 0, Warnings: warnings}
+	return Report{Passed: !hasErrorWarning(warnings), Warnings: warnings}
 }
 
 func NewRuntimeJudge() agentruntime.PlanJudge {
@@ -144,6 +144,7 @@ func missingStageWarnings(plan *agentruntime.AgentPlan) []Warning {
 		{"script", []string{"script", "voiceover_script"}},
 		{"visual_or_shot_plan", []string{"beat_plan", "shot_list", "visual_component_plan"}},
 		{"prompt_or_preview", []string{"video_prompt", "keyframe_prompt", "preview", "hyperframes_project"}},
+		{"render_or_final_video", []string{"render", "final_video", "final-video", "hyperframes_renderer"}},
 	}
 	out := []Warning{}
 	for _, check := range checks {
@@ -151,7 +152,7 @@ func missingStageWarnings(plan *agentruntime.AgentPlan) []Warning {
 			out = append(out, Warning{
 				Code:     WarningMissingStage,
 				Message:  "plan is missing expected beta stage: " + check.codeName,
-				Severity: "warning",
+				Severity: "error",
 			})
 		}
 	}
@@ -159,7 +160,7 @@ func missingStageWarnings(plan *agentruntime.AgentPlan) []Warning {
 		out = append(out, Warning{
 			Code:     WarningMissingStage,
 			Message:  "aigc_shot-style plan has shot_list but is missing keyframe/video prompt stage",
-			Severity: "warning",
+			Severity: "error",
 		})
 	}
 	return out
@@ -181,11 +182,20 @@ func renderPreviewWarnings(plan *agentruntime.AgentPlan) []Warning {
 				StepID:   step.ID,
 				Tool:     step.Tool,
 				Message:  "render step should depend on preview/composition/render_strategy output before execution",
-				Severity: "warning",
+				Severity: "error",
 			})
 		}
 	}
 	return out
+}
+
+func hasErrorWarning(warnings []Warning) bool {
+	for _, warning := range warnings {
+		if strings.EqualFold(warning.Severity, "error") {
+			return true
+		}
+	}
+	return false
 }
 
 func hasPublishCopy(plan *agentruntime.AgentPlan) bool {

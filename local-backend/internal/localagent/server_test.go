@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -103,6 +104,71 @@ func TestLocalArtifactStoreSupportsBinaryPayloads(t *testing.T) {
 	}
 	if loaded.ContentBase64 != base64.StdEncoding.EncodeToString(payload) {
 		t.Fatalf("binary response base64 mismatch: %q", loaded.ContentBase64)
+	}
+}
+
+func TestLocalArtifactStoreAcceptsMultipartUpload(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	payload := []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'm', 'p', '4', '2'}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("id", "extgen-video-1"); err != nil {
+		t.Fatalf("write id field: %v", err)
+	}
+	if err := writer.WriteField("projectId", "vp-1"); err != nil {
+		t.Fatalf("write project field: %v", err)
+	}
+	if err := writer.WriteField("mimeType", "video/mp4"); err != nil {
+		t.Fatalf("write mime field: %v", err)
+	}
+	if err := writer.WriteField("metadata", `{"artifactType":"external_generation_result","externalGenerationRequestId":"extgen_123","cloudPayloadStored":false}`); err != nil {
+		t.Fatalf("write metadata field: %v", err)
+	}
+	part, err := writer.CreateFormFile("file", "shot-1.mp4")
+	if err != nil {
+		t.Fatalf("create upload part: %v", err)
+	}
+	if _, err := part.Write(payload); err != nil {
+		t.Fatalf("write upload payload: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var stored LocalArtifactResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("invalid upload response: %v", err)
+	}
+	if !strings.HasPrefix(stored.StorageRef, "local://projects/vp-1/artifacts/extgen-video-1/") {
+		t.Fatalf("unexpected storageRef: %q", stored.StorageRef)
+	}
+	if !strings.HasPrefix(stored.ContentHash, "sha256:") {
+		t.Fatalf("expected sha256 content hash, got %q", stored.ContentHash)
+	}
+	if stored.SizeBytes != int64(len(payload)) {
+		t.Fatalf("sizeBytes = %d, want %d", stored.SizeBytes, len(payload))
+	}
+	content, err := os.ReadFile(stored.Path)
+	if err != nil {
+		t.Fatalf("expected uploaded artifact payload: %v", err)
+	}
+	if !bytes.Equal(content, payload) {
+		t.Fatalf("uploaded payload mismatch: %#v", content)
+	}
+	if stored.Metadata["externalGenerationRequestId"] != "extgen_123" {
+		t.Fatalf("metadata should preserve request link: %+v", stored.Metadata)
+	}
+	if stored.Metadata["contentHash"] != stored.ContentHash {
+		t.Fatalf("metadata should include returned hash: %+v", stored.Metadata)
 	}
 }
 

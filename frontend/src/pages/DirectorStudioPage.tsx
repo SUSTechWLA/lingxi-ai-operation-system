@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import clsx from 'clsx'
 import { APP_ICON_PATH } from '../utils/brand'
 import {
@@ -24,6 +24,7 @@ import {
   FiSearch,
   FiSettings,
   FiShield,
+  FiUpload,
   FiUserCheck,
   FiUsers,
   FiVideo,
@@ -34,6 +35,8 @@ import DesktopPage from './DesktopPage'
 import {
   approveAgentReview,
   createVideoProject,
+  fetchArtifactContent,
+  fetchArtifactHistory,
   fetchVideoPreflight,
   fetchProjectArtifacts,
   fetchVideoRoleAgents,
@@ -41,12 +44,15 @@ import {
   getAgentRunReviews,
   getAgentRunTrace,
   regenerateAgentStage,
+  registerExternalGenerationResult,
   rejectAgentReview,
+  reviseArtifact,
   startAgentRun,
   submitEditedArtifact,
   type PreflightResponse,
 } from '../services/api'
 import type { AuthUser } from '../services/auth'
+import { uploadLocalArtifactFile } from '../services/localAgent'
 import type { AgentReviewItem, AgentRun, Artifact, VideoProject, VideoRoleAgent } from '../utils/types'
 import {
   applyOptimisticRunningStage,
@@ -240,6 +246,16 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     }
   }
 
+  const refreshArtifacts = useCallback(async () => {
+    if (run?.id) {
+      await refreshRun(run.id, project?.id)
+      return
+    }
+    if (!project?.id) return
+    const nextArtifacts = await fetchProjectArtifacts(project.id)
+    setProjectArtifacts(nextArtifacts.artifacts || [])
+  }, [project?.id, refreshRun, run?.id])
+
   return (
     <div className="director-root flex min-h-screen gap-5 p-5">
       <DirectorSidebar active={activeNav} setActive={setActiveNav} user={user} onLogout={onLogout} />
@@ -293,8 +309,8 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               stages={displayStages}
             />
           )}
-          {activeNav === 'trace' && <TracePage traceNodes={traceNodes} artifacts={artifacts} run={run} />}
-          {activeNav === 'assets' && <AssetsPage artifacts={artifacts} />}
+          {activeNav === 'trace' && <TracePage traceNodes={traceNodes} artifacts={artifacts} run={run} projectId={project?.id} onArtifactsChanged={refreshArtifacts} />}
+          {activeNav === 'assets' && <AssetsPage artifacts={artifacts} projectId={project?.id} onArtifactsChanged={refreshArtifacts} />}
           {activeNav === 'roles' && <RolesPage stages={displayStages} />}
           {activeNav === 'export' && <ExportPage artifacts={artifacts} topic={topic} durationSec={durationSec} />}
           {activeNav === 'system' && <DesktopPage />}
@@ -765,7 +781,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
   )
 }
 
-function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNode[]; artifacts: DirectorArtifactRecord[]; run: AgentRun | null }) {
+function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }: { traceNodes: DirectorTraceNode[]; artifacts: DirectorArtifactRecord[]; run: AgentRun | null; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {
   const [selectedId, setSelectedId] = useState<string | undefined>(traceNodes[0]?.id)
   const selected = traceNodes.find((node) => node.id === selectedId) || traceNodes[0]
   useEffect(() => {
@@ -808,7 +824,7 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
             </button>
           )) : <EmptyState text="还没有执行 trace。启动项目后，每个步骤会显示在这里。" />}
         </div>
-        <ArtifactTable artifacts={artifacts} compact />
+        <ArtifactTable artifacts={artifacts} compact projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
       </section>
       <aside className="col-span-4 space-y-5">
         <section className="card p-6">
@@ -860,13 +876,13 @@ function TracePage({ traceNodes, artifacts, run }: { traceNodes: DirectorTraceNo
   )
 }
 
-function AssetsPage({ artifacts }: { artifacts: DirectorArtifactRecord[] }) {
+function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: DirectorArtifactRecord[]; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {
   const staleCount = artifacts.filter((a) => a.status === 'stale').length
   return (
     <div className="space-y-5">
       <section className="card p-6"><p className="text-sm font-bold text-primary-dark">产物库</p><h2 className="mt-2 text-3xl font-black text-ink">产物索引</h2><p className="mt-2 text-sm text-ink-muted">记录每个中间产物的版本、状态、依赖、审核和本地/云端路径。</p></section>
       {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
-      <ArtifactTable artifacts={artifacts} />
+      <ArtifactTable artifacts={artifacts} projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
     </div>
   )
 }
@@ -962,8 +978,132 @@ function ExportPage({ artifacts, topic, durationSec }: { artifacts: DirectorArti
   )
 }
 
-function ArtifactTable({ artifacts, compact = false }: { artifacts: DirectorArtifactRecord[]; compact?: boolean }) {
+function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChanged }: { artifacts: DirectorArtifactRecord[]; compact?: boolean; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {
+  const [selectedId, setSelectedId] = useState<string | undefined>()
+  const [content, setContent] = useState<unknown>(null)
+  const [history, setHistory] = useState<Artifact[]>([])
+  const [viewerLoading, setViewerLoading] = useState(false)
+  const [viewerError, setViewerError] = useState<string | null>(null)
+  const [revisionMessage, setRevisionMessage] = useState('')
+  const [revisionLoading, setRevisionLoading] = useState(false)
+  const [externalUploading, setExternalUploading] = useState(false)
+  const [externalUploadMessage, setExternalUploadMessage] = useState<string | null>(null)
   const headers = ['ID', '名称', '类型', '状态', '负责人', '操作']
+  const selected = artifacts.find((artifact) => artifact.id === selectedId)
+  const externalRequest = useMemo(() => externalGenerationRequestFromContent(content), [content])
+
+  useEffect(() => {
+    if (selectedId && !artifacts.some((artifact) => artifact.id === selectedId)) {
+      setSelectedId(undefined)
+      setContent(null)
+      setHistory([])
+      setViewerError(null)
+    }
+  }, [artifacts, selectedId])
+
+  const loadArtifact = async (artifact: DirectorArtifactRecord) => {
+    setContent(null)
+    setHistory([])
+    setExternalUploadMessage(null)
+    if (!isInspectableArtifact(artifact)) {
+      setSelectedId(artifact.id)
+      setContent('该产物还没有 materialized artifact ID，等待对应阶段生成完成后可查看正文。')
+      setHistory([])
+      setViewerError(null)
+      return
+    }
+    const nextSelectedId = selectedId === artifact.id ? undefined : artifact.id
+    setSelectedId(nextSelectedId)
+    setViewerError(null)
+    if (!nextSelectedId) return
+    setViewerLoading(true)
+    try {
+      const [nextContent, nextHistory] = await Promise.all([
+        fetchArtifactContent(artifact.id),
+        fetchArtifactHistory(artifact.id),
+      ])
+      setContent(nextContent.content)
+      setHistory(nextHistory.history || [])
+    } catch (err) {
+      setContent(null)
+      setHistory([])
+      setViewerError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setViewerLoading(false)
+    }
+  }
+
+  const submitRevision = async () => {
+    if (!selected || !revisionMessage.trim() || !isInspectableArtifact(selected)) return
+    setRevisionLoading(true)
+    setViewerError(null)
+    try {
+      const revised = await reviseArtifact(selected.id, revisionMessage.trim())
+      setContent(revised.content)
+      const nextHistory = await fetchArtifactHistory(selected.id)
+      setHistory(nextHistory.history || [])
+      setRevisionMessage('')
+      await onArtifactsChanged?.()
+    } catch (err) {
+      setViewerError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setRevisionLoading(false)
+    }
+  }
+
+  const uploadExternalResult = async (event: ChangeEvent<HTMLInputElement>, request: ExternalGenerationRequestContent) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !selected) return
+    if (!projectId) {
+      setViewerError('缺少项目 ID，无法登记外部生成结果。')
+      return
+    }
+    setExternalUploading(true)
+    setViewerError(null)
+    setExternalUploadMessage(null)
+    try {
+      const kind = request.kind === 'image' ? 'image' : 'video'
+      const referenceAssetIds = (request.references || []).map((ref) => ref.id).filter(Boolean).slice(0, 6)
+      const localArtifact = await uploadLocalArtifactFile({
+        projectId,
+        id: safeLocalUploadId(`${request.requestId || selected.id}-result`),
+        file,
+        mimeType: file.type || (kind === 'image' ? 'image/png' : 'video/mp4'),
+        metadata: {
+          artifactType: 'external_generation_result',
+          externalGenerationRequestId: request.requestId,
+          generationKind: kind,
+          relatedShotId: request.shotId,
+          referenceAssetIds,
+          cloudPayloadStored: false,
+          localOnly: true,
+        },
+      })
+      if (!localArtifact.storageRef) {
+        throw new Error('local agent 未返回 storageRef')
+      }
+      const registered = await registerExternalGenerationResult(projectId, {
+        kind,
+        storageType: 'local',
+        storageRef: localArtifact.storageRef,
+        mimeType: localArtifact.mimeType || file.type || undefined,
+        sizeBytes: localArtifact.sizeBytes,
+        contentHash: localArtifact.contentHash,
+        relatedShotId: request.shotId,
+        generationRequestId: request.requestId,
+        source: 'external_generation_upload',
+        referenceAssetIds,
+      })
+      setExternalUploadMessage(`已登记 ${registered.artifact?.name || registered.artifact?.id || '外部生成结果'}`)
+      await onArtifactsChanged?.()
+    } catch (err) {
+      setViewerError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setExternalUploading(false)
+    }
+  }
+
   return (
     <section className={clsx('card overflow-hidden p-0', compact && 'mt-6')}>
       <table className="w-full text-left text-sm">
@@ -975,20 +1115,297 @@ function ArtifactTable({ artifacts, compact = false }: { artifacts: DirectorArti
           </tr>
         </thead>
         <tbody className="divide-y divide-line bg-white/70">
-          {artifacts.map((artifact) => (
-            <tr key={artifact.id}>
-              <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
-              <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">{artifact.name}</td>
-              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td>
-              <td className="whitespace-nowrap px-4 py-3"><StatusBadge status={artifact.status} /></td>
-              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{artifact.owner}</td>
-              <td className="whitespace-nowrap px-4 py-3"><CopyButton value={artifactToCopyText(artifact)} label="复制" /></td>
-            </tr>
-          ))}
+          {artifacts.map((artifact) => {
+            const active = selectedId === artifact.id
+            return (
+              <Fragment key={artifact.id}>
+                <tr>
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
+                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">{artifact.name}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td>
+                  <td className="whitespace-nowrap px-4 py-3"><StatusBadge status={artifact.status} /></td>
+                  <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{artifact.owner}</td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => loadArtifact(artifact)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+                      >
+                        <FiFileText /> {active ? '收起' : '查看'}
+                      </button>
+                      <CopyButton value={artifactToCopyText(artifact)} label="复制" />
+                    </div>
+                  </td>
+                </tr>
+                {active && (
+                  <tr>
+                    <td colSpan={headers.length} className="bg-background-card px-4 py-4">
+                      <div className={clsx('grid gap-4', compact ? 'grid-cols-1' : 'grid-cols-12')}>
+                        <div className={clsx('min-w-0 rounded-lg border border-line bg-white p-4 shadow-sm', compact ? '' : 'col-span-8')}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-black text-ink">{artifact.name}</div>
+                              <div className="mt-1 truncate font-mono text-[11px] text-ink-soft">{artifact.storageRef || 'storage_ref pending'}</div>
+                            </div>
+                            {content !== null && content !== undefined ? <CopyButton value={artifactContentText(content)} label="复制正文" /> : null}
+                          </div>
+                          <div className="mt-4 max-h-[420px] overflow-auto rounded-lg border border-line bg-background-card p-4">
+                            {viewerLoading ? (
+                              <p className="text-sm text-ink-muted">正在加载产物正文...</p>
+                            ) : viewerError ? (
+                              <p className="text-sm font-semibold text-red-600">{viewerError}</p>
+                            ) : content !== null && content !== undefined ? (
+                              <ReviewContent text={artifactContentText(content)} />
+                            ) : (
+                              <p className="text-sm text-ink-muted">暂无可展示正文。</p>
+                            )}
+                          </div>
+                          {externalRequest ? (
+                            <ExternalGenerationRequestPanel
+                              request={externalRequest}
+                              disabled={!projectId || externalUploading}
+                              uploading={externalUploading}
+                              message={externalUploadMessage}
+                              onUpload={uploadExternalResult}
+                            />
+                          ) : null}
+                        </div>
+                        <div className={clsx('space-y-3', compact ? '' : 'col-span-4')}>
+                          <div className="rounded-lg border border-line bg-white p-4 shadow-sm">
+                            <div className="flex items-center gap-2 text-sm font-black text-ink"><FiLayers /> 版本历史</div>
+                            <div className="mt-3 space-y-2">
+                              {history.length ? history.map((item) => (
+                                <div key={item.id} className="rounded-lg bg-background-card p-3 ring-1 ring-line">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-mono text-xs font-bold text-ink">v{item.version}</span>
+                                    <span className="text-xs text-ink-soft">{artifactHistoryStatus(item)}</span>
+                                  </div>
+                                  <div className="mt-1 truncate text-xs text-ink-muted" title={item.storageRef}>{formatArtifactHistoryLabel(item)}</div>
+                                </div>
+                              )) : <p className="text-xs text-ink-muted">暂无历史版本。</p>}
+                            </div>
+                          </div>
+                          <div className="rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
+                            <div className="flex items-center gap-2 text-sm font-black text-ink"><FiEdit3 /> 返工意见</div>
+                            <textarea
+                              value={revisionMessage}
+                              onChange={(event) => setRevisionMessage(event.target.value)}
+                              placeholder="输入希望修改的方向..."
+                              className="mt-3 h-24 w-full resize-none rounded-lg border border-line bg-background-card p-3 text-sm leading-6 outline-none focus:border-primary"
+                            />
+                            <button
+                              onClick={submitRevision}
+                              disabled={revisionLoading || !revisionMessage.trim() || !selected || !isInspectableArtifact(selected)}
+                              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <FiRefreshCw /> {revisionLoading ? '返工中...' : '提交返工'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
         </tbody>
       </table>
     </section>
   )
+}
+
+interface ExternalGenerationReference {
+  id: string
+  label?: string
+  role?: string
+  storageRef: string
+  artifactId?: string
+}
+
+interface ExternalGenerationRequestContent {
+  requestId: string
+  kind: 'image' | 'video'
+  shotId?: string
+  prompt: string
+  negativePrompt?: string
+  references: ExternalGenerationReference[]
+  target?: {
+    aspectRatio?: string
+    durationSec?: number
+    resolution?: string
+  }
+  promptCharLimit?: number
+  referenceImageLimit?: number
+}
+
+function ExternalGenerationRequestPanel({
+  request,
+  disabled,
+  uploading,
+  message,
+  onUpload,
+}: {
+  request: ExternalGenerationRequestContent
+  disabled: boolean
+  uploading: boolean
+  message: string | null
+  onUpload: (event: ChangeEvent<HTMLInputElement>, request: ExternalGenerationRequestContent) => void
+}) {
+  const accept = request.kind === 'image' ? 'image/*' : 'video/*'
+  const targetText = [
+    request.target?.aspectRatio,
+    request.target?.resolution,
+    request.target?.durationSec ? `${request.target.durationSec}s` : '',
+  ].filter(Boolean).join(' / ')
+
+  return (
+    <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-black text-ink">外部生成请求</div>
+          <div className="mt-1 text-xs text-ink-muted">
+            {request.kind === 'image' ? '图片' : '视频'} · 参考图 {request.references.length}/{request.referenceImageLimit || 6}
+            {targetText ? ` · ${targetText}` : ''}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <CopyButton value={request.prompt} label="复制 Prompt" />
+          <label className={clsx(
+            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
+            disabled && 'cursor-not-allowed opacity-50'
+          )}>
+            <FiUpload /> {uploading ? '上传中...' : '上传结果'}
+            <input
+              type="file"
+              accept={accept}
+              disabled={disabled}
+              className="sr-only"
+              onChange={(event) => onUpload(event, request)}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="mt-3 rounded-lg border border-line bg-background-card p-3">
+        <div className="text-xs font-black text-ink-soft">Prompt</div>
+        <pre className="mt-2 max-h-48 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.prompt}</pre>
+      </div>
+      {request.negativePrompt ? (
+        <div className="mt-3 rounded-lg border border-line bg-background-card p-3">
+          <div className="text-xs font-black text-ink-soft">Negative Prompt</div>
+          <pre className="mt-2 max-h-32 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.negativePrompt}</pre>
+        </div>
+      ) : null}
+      {request.references.length ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {request.references.slice(0, 6).map((ref) => (
+            <div key={`${ref.id}-${ref.storageRef}`} className="min-w-0 rounded-lg bg-background-card p-3 ring-1 ring-line">
+              <div className="truncate text-xs font-black text-ink">{ref.label || ref.id}</div>
+              <div className="mt-1 text-[11px] text-ink-muted">{ref.role || 'reference'}</div>
+              <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={ref.storageRef}>{ref.storageRef}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {message ? <p className="mt-3 text-xs font-semibold text-green-700">{message}</p> : null}
+    </div>
+  )
+}
+
+function isInspectableArtifact(artifact: DirectorArtifactRecord) {
+  return Boolean(artifact.id && !/^A\d{2}/.test(artifact.id))
+}
+
+function externalGenerationRequestFromContent(content: unknown): ExternalGenerationRequestContent | null {
+  const raw = parseMaybeJSON(content)
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const data = raw as Record<string, unknown>
+  const prompt = stringField(data.prompt)
+  const kind = stringField(data.kind)
+  if (!prompt || (kind !== 'image' && kind !== 'video')) return null
+  const references = Array.isArray(data.references)
+    ? data.references
+      .map((item) => referenceFromUnknown(item))
+      .filter((item): item is ExternalGenerationReference => Boolean(item))
+      .slice(0, 6)
+    : []
+  const target = objectField(data.target)
+  return {
+    requestId: stringField(data.requestId) || safeLocalUploadId(`${kind}-${prompt}`).slice(0, 48),
+    kind,
+    shotId: stringField(data.shotId) || undefined,
+    prompt,
+    negativePrompt: stringField(data.negativePrompt) || undefined,
+    references,
+    target: target ? {
+      aspectRatio: stringField(target.aspectRatio) || undefined,
+      durationSec: numberField(target.durationSec),
+      resolution: stringField(target.resolution) || undefined,
+    } : undefined,
+    promptCharLimit: numberField(data.promptCharLimit),
+    referenceImageLimit: numberField(data.referenceImageLimit),
+  }
+}
+
+function referenceFromUnknown(value: unknown): ExternalGenerationReference | null {
+  const item = objectField(value)
+  if (!item) return null
+  const storageRef = stringField(item.storageRef)
+  if (!storageRef) return null
+  return {
+    id: stringField(item.id) || safeLocalUploadId(storageRef).slice(0, 32),
+    label: stringField(item.label) || undefined,
+    role: stringField(item.role) || undefined,
+    storageRef,
+    artifactId: stringField(item.artifactId) || undefined,
+  }
+}
+
+function parseMaybeJSON(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+function objectField(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function safeLocalUploadId(value: string): string {
+  const cleaned = value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^[._-]+|[._-]+$/g, '')
+  return cleaned || 'external-result'
+}
+
+function artifactContentText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (content == null) return ''
+  try {
+    return JSON.stringify(content, null, 2)
+  } catch {
+    return String(content)
+  }
+}
+
+function formatArtifactHistoryLabel(artifact: Artifact): string {
+  return artifact.createdAt || artifact.storageRef || artifact.name
+}
+
+function artifactHistoryStatus(artifact: Artifact): string {
+  const metadataStatus = typeof artifact.metadata?.status === 'string' ? artifact.metadata.status : ''
+  if (metadataStatus) return metadataStatus
+  return artifact.isCurrent ? 'current' : 'archived'
 }
 
 function PublishCopyField({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {

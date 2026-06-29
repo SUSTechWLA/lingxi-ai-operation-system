@@ -11,9 +11,9 @@ import (
 type ArtifactReviewStatus string
 
 const (
-	ArtifactReviewPending   ArtifactReviewStatus = "PENDING"
-	ArtifactReviewApproved  ArtifactReviewStatus = "APPROVED"
-	ArtifactReviewRejected  ArtifactReviewStatus = "REJECTED"
+	ArtifactReviewPending  ArtifactReviewStatus = "PENDING"
+	ArtifactReviewApproved ArtifactReviewStatus = "APPROVED"
+	ArtifactReviewRejected ArtifactReviewStatus = "REJECTED"
 )
 
 // ArtifactReview binds a CONTROL node to the artifacts it is reviewing,
@@ -52,6 +52,10 @@ func NewSQLArtifactReviewStore(db *sql.DB) ArtifactReviewStore {
 }
 
 func (s *sqlArtifactReviewStore) Save(ctx context.Context, review *ArtifactReview) error {
+	createdAt := review.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
 	const query = `
 		INSERT INTO artifact_reviews (id, task_id, node_id, artifact_id, storage_ref, status, review_reason, reviewer_id, review_comment, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -66,7 +70,7 @@ func (s *sqlArtifactReviewStore) Save(ctx context.Context, review *ArtifactRevie
 		review.ArtifactID, review.StorageRef,
 		string(review.Status), review.ReviewReason,
 		review.ReviewerID, review.ReviewComment,
-		review.CreatedAt,
+		createdAt,
 	)
 	return err
 }

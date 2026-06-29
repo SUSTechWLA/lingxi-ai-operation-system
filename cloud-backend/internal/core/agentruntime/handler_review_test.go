@@ -555,6 +555,102 @@ func TestGetTraceIncludesTaskNodes(t *testing.T) {
 	}
 }
 
+func TestRegenerateStageResetsScopedSourceNode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{
+		{
+			ID:     "t123-script_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeSuccess,
+		},
+		{
+			ID:     "t123-script_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"sourceNode":  "t123-script_exec",
+				"stepId":      "script",
+				"reviewPhase": "after_artifact",
+			},
+		},
+	}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/runs/run-1/reviews/t123-script_review/regenerate", bytes.NewBufferString(`{"comment":"重做脚本"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeStore.nodes[0].Status != model.NodeCreated {
+		t.Fatalf("source node should be reset to CREATED, got %s", nodeStore.nodes[0].Status)
+	}
+	if nodeStore.nodes[1].Status != model.NodeCreated {
+		t.Fatalf("review gate should be reset to CREATED, got %s", nodeStore.nodes[1].Status)
+	}
+}
+
+func TestRegenerateStageFindsSourceByOriginalNodeID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runStore := newMemoryRunStore()
+	runStore.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodeStore := &memoryReviewNodeStore{nodes: []*model.Node{
+		{
+			ID:     "t123-script_exec",
+			TaskID: "task-1",
+			Type:   model.NodeTypeTool,
+			Status: model.NodeSuccess,
+			Input: map[string]interface{}{
+				"agentOriginalNodeId": "script_exec",
+			},
+		},
+		{
+			ID:     "t123-script_review",
+			TaskID: "task-1",
+			Type:   model.NodeTypeReviewGate,
+			Status: model.NodeReady,
+			Input: map[string]interface{}{
+				"sourceNode":  "script_exec",
+				"stepId":      "script",
+				"reviewPhase": "after_artifact",
+			},
+		},
+	}}
+	handler := NewHandler(
+		NewRunner(nil, runStore, nil, nil, nil),
+		nodeStore,
+		&recordingReviewStateMachine{},
+	)
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/runs/run-1/reviews/t123-script_review/regenerate", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if nodeStore.nodes[0].Status != model.NodeCreated {
+		t.Fatalf("source node should be resolved by agentOriginalNodeId, got %s", nodeStore.nodes[0].Status)
+	}
+}
+
 type memoryReviewNodeStore struct {
 	nodes []*model.Node
 }

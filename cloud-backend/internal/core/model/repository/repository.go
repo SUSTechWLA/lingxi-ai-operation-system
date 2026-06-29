@@ -390,10 +390,13 @@ func (r *NodeRepository) FindChildNodes(ctx context.Context, parentID string) ([
 
 func (r *NodeRepository) UpdateStatus(ctx context.Context, id string, status model.NodeStatus, output map[string]interface{}, errMsg string) error {
 	outputJSON, _ := json.Marshal(SanitizeOutputForPersistence(output))
-	_, err := r.pool.Exec(ctx,
+	tag, err := r.pool.Exec(ctx,
 		`UPDATE ai_node SET status=$1, output=COALESCE($2::jsonb, output), error_message=$3 WHERE id=$4`,
 		string(status), string(outputJSON), errMsg, id,
 	)
+	if err == nil && tag.RowsAffected() == 0 {
+		return fmt.Errorf("node %s not found", id)
+	}
 	return err
 }
 

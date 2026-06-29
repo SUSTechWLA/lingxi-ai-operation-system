@@ -245,6 +245,14 @@ export interface ErrorResponse {
 }
 
 /**  */
+// ExternalGenerationResultResponse
+export interface ExternalGenerationResultResponse {
+  code?: number;
+  data?: { artifact?: { contentHash: string; createdAt: string; dependsOn?: string[]; humanApproved: boolean; id: string; inlineJson?: string; isCurrent: boolean; kind: string; metadata?: Record<string, Record<string, unknown>>; mimeType?: string; model?: string; name: string; parentId?: string; producedByNode?: string; producedByRole?: string; producedByTool?: string; projectId: string; promptHash?: string; provider?: string; roleAgentId?: string; sizeBytes: number; stageName: string; status: string; storageRef?: string; storageType: string; taskId?: string; unitId?: string; updatedAt: string; version: number; workflowRunId?: string }; manifest?: { assetId: string; contentHash?: string; description?: string; durationSec?: number; externalPlatform?: string; generationRequestId?: string; mimeType?: string; promptHash?: string; referenceAssetIds?: string[]; relatedShotId?: string; sizeBytes?: number; source: string; storageRef: string; storageType: string; tags?: string[]; type: string } };
+  message?: string;
+}
+
+/**  */
 // FailJobRequest
 export interface FailJobRequest {
   diagnostics?: Record<string, Record<string, unknown>>;
@@ -403,6 +411,26 @@ export interface ReadinessResponse {
 export interface RegenerateShotRequest {
   instruction?: string;
   scope: string;
+}
+
+/**  */
+// RegisterExternalGenerationResultRequest
+export interface RegisterExternalGenerationResultRequest {
+  contentHash?: string;
+  description?: string;
+  durationSec?: number;
+  externalPlatform?: string;
+  generationRequestId?: string;
+  kind: string;
+  mimeType?: string;
+  promptHash?: string;
+  referenceAssetIds?: string[];
+  relatedShotId?: string;
+  sizeBytes?: number;
+  source?: string;
+  storageRef: string;
+  storageType?: string;
+  tags?: string[];
 }
 
 /**  */

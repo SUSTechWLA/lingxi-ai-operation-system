@@ -8,7 +8,7 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY skills ./skills
-RUN CGO_ENABLED=0 GOOS=linux go build -o /tangying-ai-os cmd/tangying-ai-os/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /tangying-ai-os ./cmd/tangying-ai-os
 
 FROM alpine:3.19
 

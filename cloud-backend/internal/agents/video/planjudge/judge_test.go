@@ -20,6 +20,9 @@ func TestJudgeWarnsWhenPublishCopyMissing(t *testing.T) {
 	if !hasWarning(report, WarningMissingPublishCopy) {
 		t.Fatalf("expected missing publish copy warning, got %+v", report.Warnings)
 	}
+	if report.Passed {
+		t.Fatalf("missing publish copy should fail the beta video plan")
+	}
 }
 
 func TestJudgeWarnsForBetaDisabledTool(t *testing.T) {
@@ -28,6 +31,9 @@ func TestJudgeWarnsForBetaDisabledTool(t *testing.T) {
 	report := New().Evaluate(plan)
 	if !hasWarning(report, WarningBetaDisabledCapability) {
 		t.Fatalf("expected beta disabled capability warning, got %+v", report.Warnings)
+	}
+	if !report.Passed {
+		t.Fatalf("non-critical beta capability warning should not block plan: %+v", report.Warnings)
 	}
 }
 
@@ -42,6 +48,9 @@ func TestJudgeWarnsForRenderWithoutPreviewDependency(t *testing.T) {
 	if !hasWarning(report, WarningRenderRequiresPreview) {
 		t.Fatalf("expected render preview warning, got %+v", report.Warnings)
 	}
+	if report.Passed {
+		t.Fatalf("render without preview dependency should fail the beta video plan")
+	}
 }
 
 func TestJudgeWarnsForRedundantTool(t *testing.T) {
@@ -50,6 +59,30 @@ func TestJudgeWarnsForRedundantTool(t *testing.T) {
 	report := New().Evaluate(plan)
 	if !hasWarning(report, WarningRedundantTool) {
 		t.Fatalf("expected redundant tool warning, got %+v", report.Warnings)
+	}
+	if !report.Passed {
+		t.Fatalf("redundant tool warning should not block plan: %+v", report.Warnings)
+	}
+}
+
+func TestJudgeFailsWhenRequiredVideoStagesMissing(t *testing.T) {
+	plan := &agentruntime.AgentPlan{
+		Goal:   "make incomplete video",
+		Domain: "video_creation",
+		Steps: []agentruntime.AgentStep{
+			{ID: "script", Tool: "video_script_generator", Arguments: map[string]interface{}{"stage": "script"}, ExpectedOutput: []string{"voiceover_script"}},
+		},
+	}
+
+	report := New().Evaluate(plan)
+
+	if report.Passed {
+		t.Fatalf("plan missing visual, preview, render and publish stages should fail: %+v", report.Warnings)
+	}
+	for _, code := range []string{WarningMissingStage, WarningMissingPublishCopy} {
+		if !hasWarning(report, code) {
+			t.Fatalf("expected warning code %s, got %+v", code, report.Warnings)
+		}
 	}
 }
 

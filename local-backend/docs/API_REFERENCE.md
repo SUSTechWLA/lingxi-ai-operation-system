@@ -36,8 +36,8 @@ Get a local artifact by ID
 | `id` | path | `string` | Yes |  |
 | `projectId` | query | `string` | Yes |  |
 
-- **404** — Not found
 - **200** — Artifact data
+- **404** — Not found
 
 ---
 

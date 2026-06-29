@@ -89,7 +89,7 @@ section "Step 2: Build Backend"
 
 mkdir -p build
 info "Building Go binary..."
-go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 info "Backend build complete"
 
 # ============================================

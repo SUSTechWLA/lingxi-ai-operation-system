@@ -4187,7 +4187,10 @@ aspectRatio=<aspectRatio>
 2. 提示词必须描述：画面主体、场景、构图、光影、色彩、风格、景别。
 3. 视觉风格统一为非写实动画，去 AI 感。
 4. 关键帧画面应能代表该镜头的高潮或典型画面。
-5. 输出严格 JSON。
+5. 同时输出 externalGenerationRequests，供没有文生图 API 的用户复制 prompt 到外部平台生成，再上传结果。
+6. 每个 externalGenerationRequest 的 prompt 不超过 2000 字，references 最多 6 张，只能引用人物、主要道具、场景、故事板、关键帧或用户上传参考图。
+7. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request。
+8. 输出严格 JSON。
 
 输入：
 shotList=<shotList>
@@ -4200,6 +4203,31 @@ style=<style>
       "shotId": "SHOT_01",
       "prompt": "非写实动画风格，...",
       "styleNotes": "..."
+    }
+  ],
+  "externalGenerationRequests": [
+    {
+      "requestId": "extgen_keyframe_SHOT_01",
+      "kind": "image",
+      "shotId": "SHOT_01",
+      "prompt": "可复制到外部图片生成平台的完整提示词，<=2000字",
+      "negativePrompt": "写清楚需要避免的画面问题",
+      "references": [
+        {"id": "char_main", "label": "主角", "role": "character", "storageRef": "local://..."}
+      ],
+      "target": {"aspectRatio": "16:9", "resolution": "1920x1080"},
+      "promptCharLimit": 2000,
+      "referenceImageLimit": 6,
+      "status": "pending_upload"
+    }
+  ],
+  "artifacts": [
+    {
+      "unitId": "extgen_keyframe_SHOT_01",
+      "kind": "JSON",
+      "name": "external_generation_request.json",
+      "mimeType": "application/json",
+      "metadata": {"artifactType": "external_generation_request", "generationKind": "image", "relatedShotId": "SHOT_01"}
     }
   ],
   "summary": "..."
@@ -4217,7 +4245,11 @@ style=<style>
 3. 必须写清楚该镜头内部的时间线变化。
 4. 不依赖上下文记忆，因为视频模型每个 shot 独立生成。
 5. 禁止真人写实，默认非写实动画，去 AI 感。
-6. 输出严格 JSON。
+6. 同时输出 externalGenerationRequests，供没有文生视频/API 的用户复制 prompt 到外部平台生成，再上传结果。
+7. 视频 request 可以依赖图片+prompt；references 最多 6 张，优先引用人物、主要道具、场景、故事板、关键帧，明确每张参考图锁定什么。
+8. 每个 externalGenerationRequest 的 prompt 不超过 2000 字，不能写“同上/沿用上一镜”等依赖上下文的描述。
+9. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request。
+10. 输出严格 JSON。
 
 输入：
 shotList=<shotList>
@@ -4238,6 +4270,31 @@ modelHint=<modelHint>
         "cameraMotion": "...",
         "subjectMotion": "..."
       }
+    }
+  ],
+  "externalGenerationRequests": [
+    {
+      "requestId": "extgen_video_SHOT_01",
+      "kind": "video",
+      "shotId": "SHOT_01",
+      "prompt": "可复制到外部视频生成平台的完整提示词，包含参考图使用方式，<=2000字",
+      "negativePrompt": "写清楚需要避免的画面问题",
+      "references": [
+        {"id": "keyframe_SHOT_01", "label": "首帧/关键帧", "role": "keyframe", "storageRef": "local://..."}
+      ],
+      "target": {"aspectRatio": "16:9", "durationSec": 6, "resolution": "1920x1080"},
+      "promptCharLimit": 2000,
+      "referenceImageLimit": 6,
+      "status": "pending_upload"
+    }
+  ],
+  "artifacts": [
+    {
+      "unitId": "extgen_video_SHOT_01",
+      "kind": "JSON",
+      "name": "external_generation_request.json",
+      "mimeType": "application/json",
+      "metadata": {"artifactType": "external_generation_request", "generationKind": "video", "relatedShotId": "SHOT_01"}
     }
   ],
   "summary": "..."

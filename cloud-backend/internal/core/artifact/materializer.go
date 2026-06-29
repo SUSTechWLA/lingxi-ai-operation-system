@@ -54,7 +54,10 @@ func BuildArtifactRequestsFromNodeChecked(projectID, workflowRunID string, node 
 }
 
 func BuildRevisionRequest(base *Artifact, instruction string, data []byte) *CreateArtifactRequest {
-	contentHash := HashContent([]byte(base.ID + "\n" + base.StorageRef + "\n" + instruction))
+	contentHash := HashContent(data)
+	if contentHash == "" {
+		contentHash = HashContent([]byte(base.ID + "\n" + base.StorageRef + "\n" + instruction))
+	}
 	metadata := map[string]interface{}{
 		"revisionInstruction": instruction,
 		"revisionOf":          base.ID,
@@ -76,8 +79,9 @@ func BuildRevisionRequest(base *Artifact, instruction string, data []byte) *Crea
 		UnitID:        base.UnitID,
 		Kind:          base.Kind,
 		Name:          base.Name,
-		StorageType:   StorageLocal,
+		StorageType:   StorageInline,
 		StorageRef:    LocalArtifactRef(base.ProjectID, base.StageName, base.UnitID, contentHash, base.Name),
+		Data:          data,
 		MimeType:      base.MimeType,
 		ContentHash:   contentHash,
 		Provider:      "artifact-revision",
@@ -176,7 +180,13 @@ func buildRequestsFromArtifactManifest(projectID, workflowRunID, stage string, m
 		if storageRef == "" {
 			storageRef = LocalArtifactRef(projectID, stage, unitID, contentHash, name)
 		}
-		requests = append(requests, buildLocalManifestRequest(projectID, workflowRunID, stage, unitID, kind, name, mime, storageRef, contentHash, sizeBytes, betaArtifactMetadata(metadataValue(entry["metadata"]), node), data))
+		metadata := betaArtifactMetadata(metadataValue(entry["metadata"]), node)
+		if isExternalGenerationRequestMetadata(metadata) {
+			if err := validateExternalGenerationRequestData(data); err != nil {
+				return nil, &ArtifactManifestInvalidError{Message: err.Error()}
+			}
+		}
+		requests = append(requests, buildLocalManifestRequest(projectID, workflowRunID, stage, unitID, kind, name, mime, storageRef, contentHash, sizeBytes, metadata, data))
 	}
 	return requests, nil
 }
@@ -187,6 +197,12 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 	}
 	metadata["displayable"] = true
 	metadata["cloudPayloadStored"] = len(data) > 0
+	storageType := StorageLocal
+	provider := "workflow-node"
+	if stringValue(metadata, "artifactType") == "external_generation_request" {
+		storageType = StorageInline
+		provider = "external-generation-request"
+	}
 	return &CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,
@@ -196,13 +212,13 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 		UnitID:        unitID,
 		Kind:          kind,
 		Name:          name,
-		StorageType:   StorageLocal,
+		StorageType:   storageType,
 		StorageRef:    storageRef,
 		MimeType:      mime,
 		SizeBytes:     sizeBytes,
 		ContentHash:   contentHash,
 		Data:          data,
-		Provider:      "workflow-node",
+		Provider:      provider,
 		Model:         "artifact-materializer",
 		Metadata:      metadata,
 	}
@@ -274,6 +290,9 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 	if payload == nil {
 		return nil
 	}
+	if request, ok := externalGenerationRequestPayload(payload, unitID); ok {
+		return marshalValue(request)
+	}
 	switch unitID {
 	case "script-content":
 		// Prefer the parsed script; the raw "content" field often contains
@@ -322,6 +341,68 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 		// Generic JSON artifacts: serialize the whole payload.
 		if isStructuredJSONArtifactKind(kind) && len(payload) > 0 {
 			return marshalValue(payload)
+		}
+	}
+	return nil
+}
+
+func externalGenerationRequestPayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {
+	if unitID == "" {
+		return nil, false
+	}
+	items, ok := payload["externalGenerationRequests"].([]interface{})
+	if !ok {
+		return nil, false
+	}
+	for _, item := range items {
+		request, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if stringValue(request, "requestId") == unitID {
+			return request, true
+		}
+	}
+	return nil, false
+}
+
+func isExternalGenerationRequestMetadata(metadata map[string]interface{}) bool {
+	return stringValue(metadata, "artifactType") == "external_generation_request"
+}
+
+func validateExternalGenerationRequestData(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("external generation request payload is required")
+	}
+	var request map[string]interface{}
+	if err := json.Unmarshal(data, &request); err != nil {
+		return fmt.Errorf("external generation request payload must be JSON")
+	}
+	kind := stringValue(request, "kind")
+	if kind != "image" && kind != "video" {
+		return fmt.Errorf("external generation request kind must be image or video")
+	}
+	prompt := stringValue(request, "prompt")
+	if prompt == "" {
+		return fmt.Errorf("external generation request prompt is required")
+	}
+	if len([]rune(prompt)) > 2000 {
+		return fmt.Errorf("external generation request prompt exceeds 2000 characters")
+	}
+	refs, ok := request["references"].([]interface{})
+	if !ok {
+		return nil
+	}
+	if len(refs) > 6 {
+		return fmt.Errorf("external generation request references exceed 6 images")
+	}
+	for i, item := range refs {
+		ref, ok := item.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("external generation request reference %d must be an object", i+1)
+		}
+		if stringValue(ref, "storageRef") == "" {
+			return fmt.Errorf("external generation request reference %d storageRef is required", i+1)
 		}
 	}
 	return nil

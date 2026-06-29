@@ -2,7 +2,9 @@ package localagent
 
 import (
 	"archive/zip"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +48,8 @@ type LocalArtifactResponse struct {
 	ProjectID     string                 `json:"projectId"`
 	StorageRef    string                 `json:"storageRef,omitempty"`
 	MimeType      string                 `json:"mimeType,omitempty"`
+	ContentHash   string                 `json:"contentHash,omitempty"`
+	SizeBytes     int64                  `json:"sizeBytes,omitempty"`
 	Path          string                 `json:"path"`
 	MetadataPath  string                 `json:"metadataPath"`
 	Content       string                 `json:"content,omitempty"`
@@ -253,6 +257,10 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data") {
+		s.handleArtifactUpload(w, r)
+		return
+	}
 	var req localArtifactRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact payload")
@@ -276,6 +284,11 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	contentHash := localContentHash(payload)
+	sizeBytes := int64(len(payload))
+	if strings.TrimSpace(req.StorageRef) == "" {
+		req.StorageRef = localUploadedArtifactRef(req.ProjectID, req.ID, contentHash, "content")
+	}
 	if err := os.WriteFile(contentPath, payload, 0o644); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -288,6 +301,8 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	metadata["projectId"] = req.ProjectID
 	metadata["storageRef"] = req.StorageRef
 	metadata["mimeType"] = req.MimeType
+	metadata["contentHash"] = contentHash
+	metadata["sizeBytes"] = sizeBytes
 	metadata["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := writeIndentedJSON(metadataPath, metadata); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -298,6 +313,98 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		ProjectID:    req.ProjectID,
 		StorageRef:   req.StorageRef,
 		MimeType:     req.MimeType,
+		ContentHash:  contentHash,
+		SizeBytes:    sizeBytes,
+		Path:         contentPath,
+		MetadataPath: metadataPath,
+		Metadata:     metadata,
+	})
+}
+
+func (s *Server) handleArtifactUpload(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid multipart artifact payload")
+		return
+	}
+	projectID := strings.TrimSpace(r.FormValue("projectId"))
+	id := strings.TrimSpace(r.FormValue("id"))
+	if err := validateLocalArtifactScope(projectID, id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+	if err := s.EnsureDirs(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	contentPath, metadataPath := s.localArtifactPaths(projectID, id)
+	if err := os.MkdirAll(filepath.Dir(contentPath), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	dst, err := os.Create(contentPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	hasher := sha256.New()
+	sizeBytes, copyErr := io.Copy(io.MultiWriter(dst, hasher), file)
+	closeErr := dst.Close()
+	if copyErr != nil {
+		writeError(w, http.StatusInternalServerError, copyErr.Error())
+		return
+	}
+	if closeErr != nil {
+		writeError(w, http.StatusInternalServerError, closeErr.Error())
+		return
+	}
+	contentHash := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	mimeType := strings.TrimSpace(r.FormValue("mimeType"))
+	if mimeType == "" && header != nil {
+		mimeType = strings.TrimSpace(header.Header.Get("Content-Type"))
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	storageRef := strings.TrimSpace(r.FormValue("storageRef"))
+	if storageRef == "" {
+		filename := "upload"
+		if header != nil && strings.TrimSpace(header.Filename) != "" {
+			filename = header.Filename
+		}
+		storageRef = localUploadedArtifactRef(projectID, id, contentHash, filename)
+	}
+	metadata, err := parseLocalArtifactMetadataField(r.FormValue("metadata"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	metadata["id"] = id
+	metadata["projectId"] = projectID
+	metadata["storageRef"] = storageRef
+	metadata["mimeType"] = mimeType
+	metadata["contentHash"] = contentHash
+	metadata["sizeBytes"] = sizeBytes
+	if header != nil && strings.TrimSpace(header.Filename) != "" {
+		metadata["originalFilename"] = header.Filename
+	}
+	metadata["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := writeIndentedJSON(metadataPath, metadata); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, LocalArtifactResponse{
+		ID:           id,
+		ProjectID:    projectID,
+		StorageRef:   storageRef,
+		MimeType:     mimeType,
+		ContentHash:  contentHash,
+		SizeBytes:    sizeBytes,
 		Path:         contentPath,
 		MetadataPath: metadataPath,
 		Metadata:     metadata,
@@ -357,6 +464,12 @@ func (s *Server) handleArtifactByID(w http.ResponseWriter, r *http.Request) {
 			resp.Content = ""
 			resp.ContentBase64 = base64.StdEncoding.EncodeToString(content)
 		}
+	}
+	if value, ok := metadata["contentHash"].(string); ok {
+		resp.ContentHash = value
+	}
+	if value, ok := metadata["sizeBytes"].(float64); ok {
+		resp.SizeBytes = int64(value)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -503,6 +616,64 @@ func localArtifactPayload(req localArtifactRequest) ([]byte, error) {
 		return payload, nil
 	}
 	return []byte(req.Content), nil
+}
+
+func localContentHash(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func parseLocalArtifactMetadataField(raw string) (map[string]interface{}, error) {
+	if strings.TrimSpace(raw) == "" {
+		return map[string]interface{}{}, nil
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		return nil, errors.New("metadata must be a JSON object")
+	}
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	return metadata, nil
+}
+
+func localUploadedArtifactRef(projectID, artifactID, contentHash, filename string) string {
+	hash := strings.TrimPrefix(strings.TrimSpace(contentHash), "sha256:")
+	if hash == "" {
+		hash = "pending"
+	}
+	return "local://projects/" +
+		safeLocalRefSegment(projectID) +
+		"/artifacts/" +
+		safeLocalRefSegment(artifactID) +
+		"/" +
+		safeLocalRefSegment(hash) +
+		"/" +
+		safeLocalRefSegment(filename)
+}
+
+func safeLocalRefSegment(value string) string {
+	value = filepath.Base(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.' || r == '_' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	cleaned := strings.Trim(b.String(), ".-_")
+	if cleaned == "" {
+		return "artifact"
+	}
+	return cleaned
 }
 
 func isTextMime(mimeType string) bool {
