@@ -35,6 +35,7 @@ func (c *GatewayPlannerClient) Complete(ctx context.Context, systemPrompt, userP
 			{Role: "user", Content: userPrompt},
 		},
 		Parameters: map[string]interface{}{
+			"model":            c.model,
 			"temperature":     0.2,
 			"max_tokens":      2000,
 			"response_format": map[string]string{"type": "json_object"},

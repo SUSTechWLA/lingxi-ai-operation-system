@@ -1,8 +1,11 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/tangying-ai/aios-core/internal/core/model"
 )
 
 func TestManifestToRecord_PreservesAgentRuntimePolicyFields(t *testing.T) {
@@ -116,3 +119,64 @@ func TestManifestToRecordDefaultsArtifactLocationToLocalOnly(t *testing.T) {
 		t.Fatalf("local-only artifact policy must not sync files to cloud: %#v", policy)
 	}
 }
+
+func TestRestorePersistedManifests_ReloadsExternalToolsIntoRegistry(t *testing.T) {
+	record := manifestToRecord(&ToolManifest{
+		Name:         "parse_bid_files",
+		Description:  "Parse bid files",
+		Type:         "http",
+		Endpoint:     "http://127.0.0.1:9001/tools/parse_bid_files",
+		Capabilities: []string{"bid_writing", "bid_parsing"},
+		Parameters: map[string]ParamDef{
+			"file_path": {Type: "string", Required: true},
+		},
+		Output: map[string]ParamDef{
+			"stdout": {Type: "string"},
+		},
+	})
+	builtinRecord := manifestToRecord(&ToolManifest{
+		Name:        "llm_api",
+		Description: "built in",
+		Type:        "builtin",
+	})
+	registry := NewToolRegistry()
+	service := NewToolManifestService(&fakeManifestRepo{records: []*model.ToolManifestRecord{record, builtinRecord}}, nil, registry)
+
+	if err := service.RestorePersistedManifests(context.Background()); err != nil {
+		t.Fatalf("RestorePersistedManifests returned error: %v", err)
+	}
+	restored := registry.GetManifest("parse_bid_files")
+	if restored == nil {
+		t.Fatalf("parse_bid_files should be restored")
+	}
+	if restored.Endpoint != "http://127.0.0.1:9001/tools/parse_bid_files" {
+		t.Fatalf("endpoint not restored: %#v", restored)
+	}
+	if len(restored.Capabilities) != 2 || restored.Capabilities[0] != "bid_writing" {
+		t.Fatalf("capabilities not restored: %#v", restored.Capabilities)
+	}
+	if registry.GetExternalManifest("llm_api") != nil {
+		t.Fatalf("builtin records should not be restored as external manifests")
+	}
+}
+
+type fakeManifestRepo struct {
+	records []*model.ToolManifestRecord
+}
+
+func (r *fakeManifestRepo) Upsert(context.Context, *model.ToolManifestRecord) error { return nil }
+
+func (r *fakeManifestRepo) FindByName(_ context.Context, name string) (*model.ToolManifestRecord, error) {
+	for _, record := range r.records {
+		if record.Name == name {
+			return record, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeManifestRepo) FindAll(context.Context) ([]*model.ToolManifestRecord, error) {
+	return r.records, nil
+}
+
+func (r *fakeManifestRepo) Delete(context.Context, string) error { return nil }

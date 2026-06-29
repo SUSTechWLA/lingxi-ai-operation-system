@@ -49,6 +49,21 @@ const api = axios.create({
   timeout: 30000,
 })
 
+const apiErrorMessage = (error: unknown): string | null => {
+  if (!axios.isAxiosError(error)) return null
+  const data = error.response?.data
+  if (!data || typeof data !== 'object') return null
+  const body = data as { message?: unknown; error?: unknown; data?: unknown }
+  if (typeof body.message === 'string' && body.message.trim()) return body.message
+  if (typeof body.error === 'string' && body.error.trim()) return body.error
+  if (body.data && typeof body.data === 'object') {
+    const nested = body.data as { message?: unknown; error?: unknown }
+    if (typeof nested.message === 'string' && nested.message.trim()) return nested.message
+    if (typeof nested.error === 'string' && nested.error.trim()) return nested.error
+  }
+  return null
+}
+
 api.interceptors.request.use((config) => {
   const token = getAuthAccessToken()
   if (token) {
@@ -77,6 +92,10 @@ api.interceptors.response.use(
         logout()
         throw refreshError
       }
+    }
+    const message = apiErrorMessage(error)
+    if (message && error instanceof Error) {
+      error.message = message
     }
     throw error
   }

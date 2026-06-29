@@ -99,6 +99,41 @@ func TestHeuristicPlanner_DomainFilterRecomputesLimit(t *testing.T) {
 	}
 }
 
+func TestHeuristicPlanner_BidWritingUsesSnakeCaseFilePath(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "parse_bid_files",
+			Capabilities: []string{"bid_writing", "bid_parsing", "document_parsing"},
+			Parameters: map[string]tool.ParamDef{
+				"file_path": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"stdout": {Type: "string"},
+			},
+		},
+		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},
+	}
+	planner := NewHeuristicPlanner(tools)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "please parse the tender document",
+		Domain:  "bid_writing",
+		Context: map[string]interface{}{"file_path": "E:\\bid\\sample.docx"},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "parse_bid_files" {
+		t.Fatalf("expected parse_bid_files step, got %#v", plan.Steps)
+	}
+	if got := plan.Steps[0].Arguments["file_path"]; got != "E:\\bid\\sample.docx" {
+		t.Fatalf("file_path should be copied into arguments, got %#v", plan.Steps[0].Arguments)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("bid writing plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T) {
 	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
 		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},

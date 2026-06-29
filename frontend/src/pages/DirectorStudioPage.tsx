@@ -31,6 +31,7 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import DesktopPage from './DesktopPage'
+import BiaoshuWorkbench from './BiaoshuWorkbench'
 import {
   approveAgentReview,
   createVideoProject,
@@ -94,6 +95,7 @@ const navItems: Array<{ key: DirectorNavKey; label: string; icon: React.Componen
   { key: 'roles', label: '角色', icon: FiUsers },
   { key: 'export', label: '导出', icon: FiVideo },
   { key: 'system', label: '设置', icon: FiSettings },
+  { key: 'biaoshu', label: '标书', icon: FiFileText },
 ]
 
 const fallbackRoles: VideoRoleAgent[] = [
@@ -298,6 +300,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           {activeNav === 'roles' && <RolesPage stages={displayStages} />}
           {activeNav === 'export' && <ExportPage artifacts={artifacts} topic={topic} durationSec={durationSec} />}
           {activeNav === 'system' && <DesktopPage />}
+          {activeNav === 'biaoshu' && <BiaoshuWorkbench />}
         </div>
       </main>
     </div>

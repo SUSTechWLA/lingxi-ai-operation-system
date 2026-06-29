@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -77,6 +78,37 @@ func (s *ToolManifestService) RegisterManifest(ctx context.Context, manifest *To
 
 	zap.L().Info("Registered tool manifest", zap.String("name", manifest.Name), zap.String("type", manifest.Type))
 	return s.invalidateCache(ctx)
+}
+
+// RestorePersistedManifests reloads non-builtin manifests from the database into
+// the in-memory registry. This is needed on process restart: HTTP tools registered
+// through /api/tools/register are persisted, but the planner only sees tools that
+// are present in the registry.
+func (s *ToolManifestService) RestorePersistedManifests(ctx context.Context) error {
+	if s == nil || s.repo == nil || s.registry == nil {
+		return nil
+	}
+	records, err := s.repo.FindAll(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to restore persisted tool manifests: %w", err)
+	}
+	restored := 0
+	for _, record := range records {
+		if record == nil || record.Name == "" {
+			continue
+		}
+		if s.registry.Has(record.Name) || s.registry.GetExternalManifest(record.Name) != nil {
+			continue
+		}
+		manifest := recordToManifest(record)
+		if strings.EqualFold(manifest.Type, "builtin") {
+			continue
+		}
+		s.registry.RegisterExternal(manifest)
+		restored++
+	}
+	zap.L().Info("Restored persisted tool manifests", zap.Int("count", restored))
+	return nil
 }
 
 // DeregisterExternal removes an external tool from DB and registry, then invalidates cache.
@@ -248,4 +280,52 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		PromptRef:            m.PromptRef,
 		ResourceRefs:         resourceRefs,
 	}
+}
+
+func recordToManifest(record *model.ToolManifestRecord) *ToolManifest {
+	if record == nil {
+		return nil
+	}
+	manifest := &ToolManifest{
+		Name:               record.Name,
+		Description:        record.Description,
+		Version:            record.Version,
+		Type:               record.Type,
+		Endpoint:           record.Endpoint,
+		Timeout:            record.TimeoutMs,
+		Sandbox:            record.Sandbox,
+		CostLevel:          record.CostLevel,
+		LatencyLevel:       record.LatencyLevel,
+		RiskLevel:          record.RiskLevel,
+		SideEffect:         record.SideEffect,
+		Idempotent:         record.Idempotent,
+		ExecutionPlane:     record.ExecutionPlane,
+		RequiresUserDevice: record.RequiresUserDevice,
+		ArtifactLocation:   record.ArtifactLocation,
+		LocalCommand:       record.LocalCommand,
+		Provider:           record.Provider,
+		SkillPackageID:     record.SkillPackageID,
+		PromptRef:          record.PromptRef,
+	}
+	unmarshalJSON(record.Transport, &manifest.Transport)
+	unmarshalJSON(record.Parameters, &manifest.Parameters)
+	unmarshalJSON(record.Output, &manifest.Output)
+	unmarshalJSON(record.Examples, &manifest.Examples)
+	unmarshalJSON(record.Capabilities, &manifest.Capabilities)
+	unmarshalJSON(record.Tags, &manifest.Tags)
+	unmarshalJSON(record.ApprovalPolicy, &manifest.ApprovalPolicy)
+	unmarshalJSON(record.ArtifactPolicy, &manifest.ArtifactPolicy)
+	unmarshalJSON(record.LocalRequirements, &manifest.LocalRequirements)
+	unmarshalJSON(record.ProviderCapabilities, &manifest.ProviderCapabilities)
+	unmarshalJSON(record.NextRecommendedTools, &manifest.NextRecommendedTools)
+	unmarshalJSON(record.FailureModes, &manifest.FailureModes)
+	unmarshalJSON(record.ResourceRefs, &manifest.ResourceRefs)
+	return manifest
+}
+
+func unmarshalJSON(data json.RawMessage, target interface{}) {
+	if len(data) == 0 || string(data) == "null" {
+		return
+	}
+	_ = json.Unmarshal(data, target)
 }

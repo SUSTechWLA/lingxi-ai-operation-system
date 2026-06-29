@@ -50,36 +50,16 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	// heuristic selection. This selects tools by capability, keyword, tag, cost,
 	// and risk relevance rather than a single-domain filter.
 	retriever := NewHybridToolRetriever(p.tools.ListManifests())
+	includeCapabilities, excludeCapabilities := domainCapabilities(domain)
 	candidates, err := retriever.Retrieve(ctx, RetrieveRequest{
-		UserInput:    req.Message,
-		Domain:       domain,
-		MaxCostLevel: req.MaxCostLevel,
-		MaxRiskLevel: req.MaxRiskLevel,
-		CoarseTopK:   30,
-		PlannerTopK:  p.maxTools,
-		IncludeCapabilities: []string{
-			"video_planning",
-			"script_generation",
-			"video_composition",
-			"hyperframes",
-			"video_render",
-			"artifact_package",
-			"quality_check",
-			"knowledge_research",
-			"fact_gathering",
-			"fresh_knowledge",
-			"news_search",
-			"web_search",
-			"fact_retrieval",
-			"current_event_retrieval",
-			"video_creation",
-		},
-		ExcludeCapabilities: []string{
-			"seedance",
-			"tts",
-			"asr",
-			"platform_publish",
-		},
+		UserInput:           req.Message,
+		Domain:              domain,
+		MaxCostLevel:        req.MaxCostLevel,
+		MaxRiskLevel:        req.MaxRiskLevel,
+		CoarseTopK:          30,
+		PlannerTopK:         p.maxTools,
+		IncludeCapabilities: includeCapabilities,
+		ExcludeCapabilities: excludeCapabilities,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tool retrieval failed: %w", err)
@@ -375,32 +355,18 @@ const AgentPlanJSONSchema = `{
 
 func plannerSystemPrompt() string {
 	return strings.TrimSpace(`
-你是 Dynamic Guided Video Planner。
+你是 AIOS Dynamic Agent Planner。根据用户需求领域自动适配规划策略。
 
 你的职责：
 1. 根据用户需求和候选工具生成 AgentPlan。
 2. 自主决定工具顺序、依赖关系和参数引用。
 3. 只使用候选工具，不得发明工具。
-4. 尊重每个工具的 approvalPolicy 和 humanReview。
-5. 尊重每个工具的 executionPlane：local 工具需要用户本地设备在线。
-6. 本地工具 requiresUserDevice=true 时，必须确保前置包含 capability_preflight。
-7. 你不需要手写审核节点，系统会根据 ToolManifest 自动插入。
-8. 你不得绕过需要人工审核的工具。
-9. 第一版只生成图文视频，不使用 Seedance、TTS、ASR、平台发布工具。
-10. hyperframes_renderer 只能在 preview 或 composition 已确认后执行。
-11. 必须输出 knowledgePolicy。
-12. 检索策略：
-    - 用户请求包含最新、最近、今天、昨天、刚刚、实时、现在、出线、夺冠、晋级、比赛结果、世界杯、奥运会、发布、上线、政策、法规、价格、票房、榜单、2026、今年、本届、现任等强时效内容时，freshnessLevel 必须为 high，retrievalPolicy 必须为 required。
-    - 强时效检索必须从 candidateTools 中选择具备 fresh_knowledge / news_search / web_search / current_event_retrieval / fact_retrieval 等 capability 的工具，不得按固定工具名臆造。
-    - 纯观点、创意故事、情感表达、稳定知识口播时，retrievalPolicy 应为 none 或 optional；没有明确理由时不要选择 fresh knowledge/search 类工具。
-    - fresh knowledge/search 类工具只用于需要外部事实、新闻、实时结果或当前事件确认的任务。
-    - retrievalPolicy=required 时必须设置 searchQueries、mustUseFacts=true、mustCiteFacts=true、blockOnEmptyFacts=true。
-    - 如果 required 检索失败，后续脚本生成必须阻断，不得回退到模型旧知识。
-13. 每个选择工具的 step 必须填写 reason，说明为什么这个工具适合当前任务。
+4. 必须补齐每个工具声明为 required 的参数，从用户消息中提取对应值。
+5. 你不需要手写审核节点，系统会根据 ToolManifest 自动插入。
+6. 每个选择工具的 step 必须填写 reason，说明为什么这个工具适合当前任务。
 
 只输出 JSON，不要输出 Markdown。
 禁止输出 DAGRequest、节点类型、ai_node、workflow_template 或执行图细节。
-系统会在你输出后通过 PlanGuard 校验并由 PlanCompiler 自动插入审核节点。
 
 必须遵守以下 JSON Schema：
 ` + AgentPlanJSONSchema + `
@@ -554,4 +520,31 @@ func normalizeLLMPlan(plan *AgentPlan, req StartRunRequest, domain string, maxTo
 		plan.StopPolicy.StopWhenEnough = true
 	}
 
+}
+
+// domainCapabilities returns allow/deny capability lists for tool retrieval
+// based on the target domain. This replaces the hardcoded video-only filter.
+func domainCapabilities(domain string) (include, exclude []string) {
+	switch domain {
+	case "bid_writing":
+		return []string{
+			"bid_writing", "bid_parsing", "document_parsing",
+			"text_extraction", "quality_check", "word_count",
+			"batch_processing", "document_export", "format_conversion",
+			"word_export", "document_merge", "file_operations",
+			"knowledge_retrieval", "rag", "semantic_search",
+			"knowledge_indexing", "text_chunking", "rag_preparation",
+			"vector_embedding", "knowledge_research", "fact_gathering",
+		}, nil
+	case "video_creation":
+		return []string{
+			"video_planning", "script_generation", "video_composition",
+			"hyperframes", "video_render", "artifact_package",
+			"quality_check", "knowledge_research", "fact_gathering",
+			"fresh_knowledge", "news_search", "web_search",
+			"fact_retrieval", "current_event_retrieval", "video_creation",
+		}, []string{"seedance", "tts", "asr", "platform_publish"}
+	default:
+		return nil, nil
+	}
 }

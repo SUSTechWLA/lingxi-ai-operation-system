@@ -222,6 +222,35 @@ func TestScopeDAGToTask_KeepsNodeIDsWithinDatabaseLimit(t *testing.T) {
 	}
 }
 
+func TestRunnerGet_SyncsStatusFromCompletedTask(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}
+	run := &Run{
+		ID:        "agent_run_1",
+		TaskID:    "task-1",
+		Message:   "parse bid",
+		Status:    RunStatusRunning,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	store.runs[run.ID] = run
+
+	runner := NewRunner(orch, store, staticPlanner{}, NewPlanGuard(staticToolCatalog{}, nil), NewPlanCompiler(staticToolCatalog{}))
+	got, task, err := runner.Get(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.Status != RunStatusSuccess {
+		t.Fatalf("run status should sync to SUCCESS, got %s", got.Status)
+	}
+	if store.runs[run.ID].Status != RunStatusSuccess {
+		t.Fatalf("synced run status should be persisted, got %s", store.runs[run.ID].Status)
+	}
+	if task["status"] != string(model.TaskSuccess) {
+		t.Fatalf("task details should be returned: %#v", task)
+	}
+}
+
 type staticPlanner struct {
 	plan *AgentPlan
 }
@@ -232,6 +261,7 @@ func (p staticPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPla
 
 type fakeOrchestrator struct {
 	taskID          string
+	taskStatus      model.TaskStatus
 	createdInput    map[string]interface{}
 	submittedTaskID string
 	submitted       *model.DAGRequest
@@ -249,7 +279,11 @@ func (o *fakeOrchestrator) SubmitDAG(_ context.Context, taskID string, dag *mode
 }
 
 func (o *fakeOrchestrator) GetTaskWithDetails(context.Context, string) (map[string]interface{}, error) {
-	return map[string]interface{}{"status": string(model.TaskRunning)}, nil
+	status := o.taskStatus
+	if status == "" {
+		status = model.TaskRunning
+	}
+	return map[string]interface{}{"status": string(status)}, nil
 }
 
 type memoryRunStore struct {

@@ -248,8 +248,13 @@ func scoreTool(manifest *tool.ToolManifest, domain, message string) int {
 }
 
 func inferDomain(message string) string {
-	if strings.Contains(message, "视频") || strings.Contains(strings.ToLower(message), "video") {
+	lower := strings.ToLower(message)
+	if strings.Contains(message, "视频") || strings.Contains(lower, "video") {
 		return "video_creation"
+	}
+	if strings.Contains(message, "标书") || strings.Contains(message, "招标") ||
+		strings.Contains(message, "投标") || strings.Contains(lower, "bid") {
+		return "bid_writing"
 	}
 	return "general"
 }

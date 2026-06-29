@@ -19,6 +19,7 @@ type RunStatus string
 const (
 	RunStatusCreated RunStatus = "CREATED"
 	RunStatusRunning RunStatus = "RUNNING"
+	RunStatusSuccess RunStatus = "SUCCESS"
 	RunStatusFailed  RunStatus = "FAILED"
 )
 
@@ -319,7 +320,39 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 		return run, nil, nil
 	}
 	task, err := r.orchestrator.GetTaskWithDetails(ctx, run.TaskID)
+	if err == nil {
+		r.syncRunStatusFromTask(ctx, run, task)
+	}
 	return run, task, err
+}
+
+func (r *Runner) syncRunStatusFromTask(ctx context.Context, run *Run, task map[string]interface{}) {
+	if r == nil || r.store == nil || run == nil || task == nil {
+		return
+	}
+	status, _ := task["status"].(string)
+	var next RunStatus
+	switch model.TaskStatus(status) {
+	case model.TaskSuccess:
+		next = RunStatusSuccess
+	case model.TaskFailed:
+		next = RunStatusFailed
+	default:
+		return
+	}
+	if run.Status == next {
+		return
+	}
+	run.Status = next
+	run.UpdatedAt = time.Now()
+	if err := r.store.SaveRun(ctx, run); err != nil {
+		zap.L().Warn("failed to sync agent run status from task",
+			zap.String("runId", run.ID),
+			zap.String("taskId", run.TaskID),
+			zap.String("taskStatus", status),
+			zap.Error(err),
+		)
+	}
 }
 
 func scopeDAGToTask(taskID string, dag *model.DAGRequest) *model.DAGRequest {

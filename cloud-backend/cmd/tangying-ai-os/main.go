@@ -172,6 +172,9 @@ func main() {
 	zap.L().Info("Skill capability registry initialized",
 		zap.Int("capabilities", len(skillCapabilityReg.List())),
 		zap.Int("tools", len(capabilityToolManifests)))
+	if err := toolManifestSvc.RestorePersistedManifests(ctx); err != nil {
+		zap.L().Warn("Failed to restore persisted tool manifests", zap.Error(err))
+	}
 	videoDirectorRegistry := videodirector.DefaultRegistry()
 	videoDirectorRegistry.RegisterRoleAgents(skillCapabilityReg.RoleAgents("video_creation"))
 	zap.L().Info("Video role agent registry initialized",
