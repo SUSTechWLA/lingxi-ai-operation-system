@@ -69,7 +69,7 @@ const DesktopPage: React.FC = () => {
     checkHealth()
     const interval = setInterval(checkHealth, 15000)
     return () => clearInterval(interval)
-  }, [])
+  }, [api])
 
   useEffect(() => {
     loadModelProviderSettings()

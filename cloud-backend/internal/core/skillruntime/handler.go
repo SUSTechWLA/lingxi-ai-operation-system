@@ -35,8 +35,8 @@ func (h *Handler) SetOpenAIConfig(cfg config.OpenAIConfig) {
 	h.router = NewSkillRouter(h.reg, cfg)
 }
 
-func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/skills")
+func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api/skills", middleware...)
 	{
 		api.GET("", h.List)
 		api.GET("/catalog", h.Catalog)

@@ -32,8 +32,8 @@ func (h *WorkflowHandler) WithCheckpointService(svc *workflow.CheckpointService)
 	return h
 }
 
-func (h *WorkflowHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/video-projects/:id/workflow-runs")
+func (h *WorkflowHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api/video-projects/:id/workflow-runs", middleware...)
 	{
 		api.POST("", h.CreateRun)
 		api.GET("/:rid", h.GetRun)
@@ -43,7 +43,7 @@ func (h *WorkflowHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/:rid/recover", h.RecoverRun)
 	}
 
-	stages := r.Group("/api/video-projects/:id/stages")
+	stages := r.Group("/api/video-projects/:id/stages", middleware...)
 	{
 		stages.POST("/:stage/approve", h.ApproveStage)
 	}

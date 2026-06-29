@@ -17,44 +17,43 @@ body {
 }
 
 .director-root {
-  min-width: 1180px;
-  color: #2B1708;
+  color: #1E2420;
   background:
-    radial-gradient(circle at top left, rgba(251, 191, 36, 0.22), transparent 34%),
-    linear-gradient(135deg, #fff8e8 0%, #fffdf6 42%, #fff4d6 100%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(244, 245, 241, 0.96) 42%),
+    #F4F5F1;
 }
 
 .glass {
-  background: rgba(255, 252, 244, 0.82);
-  border: 1px solid rgba(238, 215, 154, 0.72);
-  box-shadow: 0 24px 70px rgba(124, 62, 8, 0.10);
-  backdrop-filter: blur(18px);
+  background: rgba(254, 252, 247, 0.92);
+  border: 1px solid rgba(217, 215, 203, 0.9);
+  box-shadow: 0 18px 44px rgba(35, 31, 24, 0.08);
+  backdrop-filter: blur(16px);
 }
 
 .card {
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid rgba(238, 215, 154, 0.75);
-  box-shadow: 0 16px 40px rgba(124, 62, 8, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(217, 215, 203, 0.9);
+  box-shadow: 0 14px 32px rgba(35, 31, 24, 0.07);
   border-radius: 0.5rem;
 }
 
 .tangying-gradient {
-  background: linear-gradient(135deg, #7C3E08 0%, #D97706 42%, #FBBF24 100%);
+  background: linear-gradient(135deg, #1E2420 0%, #A65F1A 58%, #38546E 100%);
 }
 
 .text-gradient {
-  background: linear-gradient(135deg, #7C3E08, #D97706, #7C3AED);
+  background: linear-gradient(135deg, #1E2420, #A65F1A, #38546E);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
 .shadow-glow {
-  box-shadow: 0 14px 30px rgba(217, 119, 6, 0.24);
+  box-shadow: 0 12px 26px rgba(166, 95, 26, 0.2);
 }
 
 .shadow-card {
-  box-shadow: 0 16px 40px rgba(124, 62, 8, 0.08);
+  box-shadow: 0 14px 32px rgba(35, 31, 24, 0.07);
 }
 
 @layer utilities {

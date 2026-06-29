@@ -5,10 +5,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 	contextSvc "github.com/tangying-ai/aios-core/internal/core/context/service"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
-	"github.com/tangying-ai/aios-core/internal/core/common/httpx"
 )
 
 type OrchestratorHandler struct {
@@ -32,8 +32,9 @@ func NewOrchestratorHandler(
 	}
 }
 
-func (h *OrchestratorHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api")
+func (h *OrchestratorHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	r.GET("/api/health", h.Health)
+	api := r.Group("/api", middleware...)
 	{
 		api.POST("/task/create", h.CreateTask)
 		api.POST("/task/:taskId/dag", h.SubmitDAG)
@@ -50,7 +51,6 @@ func (h *OrchestratorHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/node/:nodeId/restore", h.RestoreFromSnapshot)
 		api.POST("/node/:nodeId/retry", h.RetryNode)
 		api.POST("/node", h.SubmitDAGFromNL)
-		api.GET("/health", h.Health)
 	}
 }
 

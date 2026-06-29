@@ -108,8 +108,8 @@ func (h *Handler) WithProjectIDResolver(r ProjectIDResolver) *Handler {
 	return h
 }
 
-func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/agent/runs")
+func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api/agent/runs", middleware...)
 	{
 		api.POST("", h.StartRun)
 		api.GET("/:runId", h.GetRun)

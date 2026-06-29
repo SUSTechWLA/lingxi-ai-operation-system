@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path = require('path')
-const { exec, spawn } = require('child_process')
+const { spawn } = require('child_process')
 const fs = require('fs')
 const http = require('http')
 
@@ -220,7 +220,11 @@ async function publishToPlatform(platform, content) {
       let out = ''
       child.stdout.on('data', (d) => { out += d.toString() })
       child.on('close', (code) => {
-        code === 0 ? resolve(out) : reject(new Error(`Script exited with code ${code}: ${out}`))
+        if (code === 0) {
+          resolve(out)
+          return
+        }
+        reject(new Error(`Script exited with code ${code}: ${out}`))
       })
       child.on('error', reject)
     })

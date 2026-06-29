@@ -15,8 +15,8 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/workflows")
+func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api/workflows", middleware...)
 	{
 		api.GET("", h.List)
 		api.GET("/:id", h.Get)
@@ -107,8 +107,8 @@ func (h *Handler) Instantiate(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{
-		"task_id": taskID,
-		"message": "workflow instantiated, task created",
+		"task_id":   taskID,
+		"message":   "workflow instantiated, task created",
 		"trace_url": "/api/trace/" + taskID,
 	})
 }

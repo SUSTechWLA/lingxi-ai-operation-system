@@ -58,8 +58,8 @@ func (h *Handler) SetRevisionConfig(skillRoot string, llm ReviseLLMFunc) {
 	h.reviseLLM = llm
 }
 
-func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api")
+func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api", middleware...)
 	{
 		api.GET("/video-projects/:id/artifacts", h.ListProjectArtifacts)
 		api.GET("/artifacts/:id", h.GetArtifact)

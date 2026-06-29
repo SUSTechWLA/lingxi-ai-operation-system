@@ -9,16 +9,16 @@ import (
 )
 
 type ToolHandler struct {
-	registry     *tool.ToolRegistry
-	manifestSvc  *tool.ToolManifestService
+	registry    *tool.ToolRegistry
+	manifestSvc *tool.ToolManifestService
 }
 
 func NewToolHandler(registry *tool.ToolRegistry, manifestSvc *tool.ToolManifestService) *ToolHandler {
 	return &ToolHandler{registry: registry, manifestSvc: manifestSvc}
 }
 
-func (h *ToolHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/tools")
+func (h *ToolHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api/tools", middleware...)
 	{
 		api.GET("", h.ListTools)
 		api.GET("/:name", h.GetTool)

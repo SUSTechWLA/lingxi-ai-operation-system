@@ -100,6 +100,7 @@ func main() {
 		RefreshTokenTTL: time.Duration(cfg.Auth.RefreshTokenTTLSeconds) * time.Second,
 	}))
 	authMiddleware := auth.NewMiddleware(authService)
+	requireAuth := authMiddleware.RequireAuth()
 	eventSaver := outbox.NewOutboxSaver(pool)
 	stateService := service.NewStateService(nodeRepo, taskRepo, depRepo, contextRepo, eventSaver)
 	orchestratorService := service.NewOrchestratorService(taskRepo, nodeRepo, depRepo, contextRepo, stateService)
@@ -322,7 +323,7 @@ func main() {
 	})
 
 	auth.NewHandler(authService).RegisterRoutes(r)
-	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r)
+	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r, requireAuth)
 	health.NewHandler([]health.DependencyCheck{
 		{Name: "postgres", Check: pool.Ping},
 		{Name: "redis", Check: func(ctx context.Context) error {
@@ -330,20 +331,20 @@ func main() {
 		}},
 		{Name: "kafka", Check: health.KafkaCheck(cfg.Kafka.BootstrapServers)},
 	}).RegisterRoutes(r)
-	translatorHandler.NewTranslatorHandler(nlService).RegisterRoutes(r)
-	handler.NewContextHandler(contextService).RegisterRoutes(r)
-	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
-	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
-	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth())
+	translatorHandler.NewTranslatorHandler(nlService).RegisterRoutes(r, requireAuth)
+	handler.NewContextHandler(contextService).RegisterRoutes(r, requireAuth)
+	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r, requireAuth)
+	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r, requireAuth)
+	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, requireAuth)
 	localRunnerHandler.RegisterRoutes(r)
 	// Preflight: check local capabilities before starting a video pipeline.
-	r.GET("/api/video/preflight", authMiddleware.RequireAuth(), localrunner.HandleVideoPreflight(localRunnerService))
+	r.GET("/api/video/preflight", requireAuth, localrunner.HandleVideoPreflight(localRunnerService))
 
 	// Media management — initialize before skill handler so we can resolve media URLs
 	var mediaSvc *media.MediaService
 	if storageSvc, err := media.NewStorageService(cfg.MinIO); err == nil {
 		mediaSvc = media.NewMediaService(pool, storageSvc)
-		media.NewMediaHandler(mediaSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
+		media.NewMediaHandler(mediaSvc, requireAuth).RegisterRoutes(r)
 		zap.L().Info("Media service initialized with MinIO storage")
 	} else {
 		zap.L().Warn("MinIO storage not available, media uploads disabled", zap.Error(err))
@@ -361,9 +362,9 @@ func main() {
 	}
 	toolRegistry.Register(builtin.NewVideoCopyGeneratorTool(cfg.OpenAI))
 
-	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
-	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r)
-	videodirector.NewHandler(videoDirectorRegistry).RegisterRoutes(r)
+	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r, requireAuth)
+	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r, requireAuth)
+	videodirector.NewHandler(videoDirectorRegistry).RegisterRoutes(r, requireAuth)
 
 	agentRunRepo := agentruntime.NewRepository(pool)
 
@@ -425,12 +426,12 @@ func main() {
 		}(),
 	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge())
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine)
-	agentRuntimeHandler.RegisterRoutes(r)
+	agentRuntimeHandler.RegisterRoutes(r, requireAuth)
 
 	// Workflow templates — reusable DAG blueprints
 	workflowRepo := workflow.NewRepository(pool)
 	workflowService := workflow.NewService(workflowRepo, orchestratorService)
-	workflow.NewHandler(workflowService).RegisterRoutes(r)
+	workflow.NewHandler(workflowService).RegisterRoutes(r, requireAuth)
 	// Ensure schema and seed built-in templates
 	workflow.EnsureSchema(ctx, pool)
 	zap.L().Info("Workflow service registered")
@@ -491,9 +492,9 @@ func main() {
 				c.JSON(405, gin.H{"code": 405, "message": "method not allowed", "data": nil})
 			}
 		}
-		r.GET("/api/config/model-provider", modelProviderHandler)
-		r.PUT("/api/config/model-provider", modelProviderHandler)
-		r.DELETE("/api/config/model-provider", modelProviderHandler)
+		r.GET("/api/config/model-provider", requireAuth, modelProviderHandler)
+		r.PUT("/api/config/model-provider", requireAuth, modelProviderHandler)
+		r.DELETE("/api/config/model-provider", requireAuth, modelProviderHandler)
 
 		// Skill Runtime
 		skillReg, skillErrs := skillruntime.LoadSkills(cfg.Video.SkillRoot)
@@ -505,7 +506,7 @@ func main() {
 		skillHandler.SetCompiler(func(s *skillruntime.SkillManifest) (json.RawMessage, error) {
 			return workflow.CompileSkillToDAG(s)
 		})
-		skillHandler.RegisterRoutes(r)
+		skillHandler.RegisterRoutes(r, requireAuth)
 		zap.L().Info("Skill runtime registered", zap.Int("skills_loaded", len(skillReg.List())))
 
 		if cfg.Video.LegacySkillWorkflowAutoRegister {
@@ -542,11 +543,11 @@ func main() {
 		// Video Projects
 		videoProjectRepo := videoRepo.NewProjectRepository(pool)
 		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
-		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, authMiddleware.RequireAuth())
+		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, requireAuth)
 		projectHandler.RegisterRoutes(r)
 		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo)
-		videoHandler.NewCreationHandler(videoCreationSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
-		videoAssistant.NewHandler(authMiddleware.RequireAuth()).RegisterRoutes(r)
+		videoHandler.NewCreationHandler(videoCreationSvc, requireAuth).RegisterRoutes(r)
+		videoAssistant.NewHandler(requireAuth).RegisterRoutes(r)
 
 		// Workflow Runs
 		workflowRunRepo := workflow.NewRunRepository(pool)
@@ -573,10 +574,10 @@ func main() {
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
 		stageApprovalSvc.WithArtifactApprover(artifactSvc)
-		videoAssets.NewHandler(artifactSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
+		videoAssets.NewHandler(artifactSvc, requireAuth).RegisterRoutes(r)
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
 			WithCheckpointService(checkpointSvc).
-			RegisterRoutes(r)
+			RegisterRoutes(r, requireAuth)
 		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo).
 			WithAgentTaskStore(taskRepo)
 
@@ -617,7 +618,7 @@ func main() {
 			}
 			return content, nil
 		})
-		artifactHandler.RegisterRoutes(r)
+		artifactHandler.RegisterRoutes(r, requireAuth)
 
 		// Wire artifact service into the agent runtime handler for stale tracking
 		// and artifact approval on review actions.

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -217,7 +218,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
-	includeKey := r.URL.Query().Get("include_key") == "true" && isLocalhost(r)
+	includeKey := r.URL.Query().Get("include_key") == "true" && isLocalhost(r) && strings.TrimSpace(r.Header.Get("Origin")) == ""
 	switch r.Method {
 	case http.MethodGet:
 		settings, err := s.readModelProviderSettings()
@@ -863,7 +864,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if origin := allowedLocalOrigin(r.Header.Get("Origin")); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
@@ -872,6 +876,28 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func allowedLocalOrigin(origin string) string {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return ""
+	}
+	if origin == "null" {
+		return origin
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return ""
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	host := parsed.Hostname()
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return origin
+	}
+	return ""
 }
 
 func defaultDataDir() string {

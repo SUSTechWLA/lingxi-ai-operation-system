@@ -18,9 +18,10 @@ func NewTraceHandler(orchestratorService *orchSvc.OrchestratorService, contextSe
 	return &TraceHandler{orchestratorService: orchestratorService, contextService: contextService}
 }
 
-func (h *TraceHandler) RegisterRoutes(r *gin.Engine) {
-	r.GET("/api/trace/recent", h.GetRecentTrace)
-	r.GET("/api/trace/:taskId", h.GetTrace)
+func (h *TraceHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api", middleware...)
+	api.GET("/trace/recent", h.GetRecentTrace)
+	api.GET("/trace/:taskId", h.GetTrace)
 }
 
 func (h *TraceHandler) GetRecentTrace(c *gin.Context) {

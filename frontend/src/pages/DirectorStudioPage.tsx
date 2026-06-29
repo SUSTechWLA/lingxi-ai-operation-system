@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import clsx from 'clsx'
+import ReactMarkdown from 'react-markdown'
 import { APP_ICON_PATH } from '../utils/brand'
 import {
   FiActivity,
@@ -260,9 +261,9 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [project?.id, refreshRun, run?.id])
 
   return (
-    <div className="director-root flex min-h-screen gap-5 p-5">
-      <DirectorSidebar active={activeNav} setActive={setActiveNav} user={user} onLogout={onLogout} />
-      <main className="min-w-0 flex-1 p-5 pr-6">
+    <div className="director-root flex min-h-screen flex-col gap-4 p-4 lg:flex-row lg:gap-5 lg:p-5">
+      <DirectorSidebar active={activeNav} setActive={setActiveNav} user={user} serviceStatus={serviceStatus} onLogout={onLogout} />
+      <main className="min-w-0 flex-1 lg:p-5 lg:pr-6">
         <TopBar preflight={preflight} serviceStatus={serviceStatus} run={run} />
         {error && (
           <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -323,9 +324,15 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   )
 }
 
-function DirectorSidebar({ active, setActive, user, onLogout }: { active: DirectorNavKey; setActive: (key: DirectorNavKey) => void; user: AuthUser; onLogout: () => void }) {
+function DirectorSidebar({ active, setActive, user, serviceStatus, onLogout }: { active: DirectorNavKey; setActive: (key: DirectorNavKey) => void; user: AuthUser; serviceStatus: Props['serviceStatus']; onLogout: () => void }) {
+  const localStatus = serviceStatus === 'ok'
+    ? { label: '本地在线', className: 'bg-green-50 text-green-700' }
+    : serviceStatus === 'unhealthy'
+      ? { label: '本地离线', className: 'bg-red-50 text-red-700' }
+      : { label: '本地未检测', className: 'bg-stone-50 text-ink-muted' }
+
   return (
-    <aside className="glass sticky top-5 flex h-[calc(100vh-40px)] w-72 shrink-0 flex-col rounded-xl p-4">
+    <aside className="glass flex w-full shrink-0 flex-col rounded-xl p-4 lg:sticky lg:top-5 lg:h-[calc(100vh-40px)] lg:w-72">
       <div className="flex items-center gap-3">
         <div className="relative h-10 w-10 overflow-hidden rounded-lg shadow-glow">
           <img src={APP_ICON_PATH} alt="躺营" className="h-full w-full object-cover" />
@@ -336,7 +343,7 @@ function DirectorSidebar({ active, setActive, user, onLogout }: { active: Direct
           <div className="text-[11px] font-medium text-ink-soft">AI 多角色视频创作工作台</div>
         </div>
       </div>
-      <nav className="mt-8 space-y-1">
+      <nav className="mt-5 flex gap-1 overflow-x-auto pb-1 lg:mt-8 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0">
         {navItems.map((item) => {
           const Icon = item.icon
           const isActive = active === item.key
@@ -345,7 +352,7 @@ function DirectorSidebar({ active, setActive, user, onLogout }: { active: Direct
               key={item.key}
               onClick={() => setActive(item.key)}
               className={clsx(
-                'flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-semibold transition',
+                'flex shrink-0 items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-semibold transition lg:w-full',
                 isActive ? 'bg-primary text-white shadow-glow' : 'text-ink-muted hover:bg-primary-soft hover:text-primary-dark',
               )}
             >
@@ -355,7 +362,7 @@ function DirectorSidebar({ active, setActive, user, onLogout }: { active: Direct
           )
         })}
       </nav>
-      <div className="mt-auto rounded-lg bg-white/70 p-4 ring-1 ring-line">
+      <div className="mt-4 rounded-lg bg-white/70 p-4 ring-1 ring-line lg:mt-auto">
         <div className="flex items-center gap-3">
           <div className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-primary-dark to-primary font-black text-white">
             {(user.nickname || user.email || '用').slice(0, 1).toUpperCase()}
@@ -369,7 +376,7 @@ function DirectorSidebar({ active, setActive, user, onLogout }: { active: Direct
           </button>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded-lg bg-green-50 px-3 py-2 text-green-700">本地在线</div>
+          <div className={clsx('rounded-lg px-3 py-2', localStatus.className)}>{localStatus.label}</div>
           <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v1.0 内测</div>
         </div>
       </div>
@@ -379,14 +386,14 @@ function DirectorSidebar({ active, setActive, user, onLogout }: { active: Direct
 
 function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightResponse | null; serviceStatus: string; run: AgentRun | null }) {
   return (
-    <header className="flex items-center justify-between">
+    <header className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
         <div className="flex items-center gap-2 text-sm font-semibold text-primary-dark">
           <FiZap /> 多角色协作 · 可追踪 · 分阶段确认 · 本地可控渲染
         </div>
-        <h1 className="mt-2 text-4xl font-black text-gradient">躺营导演台 v1.0</h1>
+        <h1 className="mt-2 text-3xl font-black text-gradient md:text-4xl">躺营导演台 v1.0</h1>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="hidden items-center gap-2 rounded-lg bg-white/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
           <FiSearch /> 搜索项目、产物、过程事件
         </div>
@@ -417,7 +424,7 @@ function OverviewPage(props: {
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-12 gap-5">
-        <section className="card col-span-8 p-6">
+        <section className="card col-span-12 p-6 xl:col-span-8">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary-dark"><FiZap /></div>
@@ -434,7 +441,7 @@ function OverviewPage(props: {
             onChange={(event) => onTopicChange(event.target.value)}
             placeholder="输入你想制作的视频主题..."
           />
-          <div className="mt-4 flex items-center gap-3">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
             <select className="rounded-lg border border-line bg-white px-4 py-2.5 text-sm text-ink" value={durationSec} onChange={(event) => onDurationChange(Number(event.target.value))}>
               {[30, 45, 60, 90, 120].map((duration) => <option key={duration} value={duration}>{duration} 秒</option>)}
             </select>
@@ -444,7 +451,7 @@ function OverviewPage(props: {
             {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : null}
           </div>
         </section>
-        <section className="card col-span-4 p-6">
+        <section className="card col-span-12 p-6 xl:col-span-4">
           <p className="text-sm font-bold text-primary-dark">项目状态</p>
           <h3 className="mt-2 text-xl font-black text-ink">{nextAction?.label || '准备开始'}</h3>
           <p className="mt-3 text-sm leading-6 text-ink-muted">{nextAction?.description || '输入需求后开始动态 Agent 创作线。'}</p>
@@ -462,7 +469,7 @@ function OverviewPage(props: {
           </div>
         </div>
       )}
-      <div className="grid grid-cols-4 gap-5">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
         <InfoCard icon={<FiShield />} title="当前角色" value={nextAction?.label || '待启动'} desc="角色边界由后端 StageGuard 校验。" tone="primary" />
         <InfoCard icon={<FiHardDrive />} title="本地执行器" value={preflight?.capabilityMenu.localRunner.available ? '可用' : '待检测'} desc="HyperFrames 预览与渲染走本地执行面。" tone="green" />
         <InfoCard icon={<FiRefreshCw />} title="会话状态" value="可恢复" desc="Run、Trace、Review 由后端持久化。" tone="blue" />
@@ -482,7 +489,7 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
         </div>
         <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary-dark">{stages.length} 个角色 · {stages.filter((stage) => stage.reviewFocus.length > 0).length} 个审核门</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {stages.map((agent, index) => (
           <div key={agent.id} className={clsx('relative rounded-lg border p-3', stageTone(agent.status))}>
             <div className="flex items-center justify-between">
@@ -699,7 +706,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
               </div>
             </div>
             <div className="grid grid-cols-12 gap-5 p-6">
-              <div className="col-span-8 min-w-0">
+              <div className="col-span-12 min-w-0 xl:col-span-8">
                 <div className="rounded-lg border border-line bg-white p-5 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -739,7 +746,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                   </div>
                 </div>
               </div>
-              <div className="col-span-4 space-y-3 self-start xl:sticky xl:top-5">
+              <div className="col-span-12 space-y-3 self-start xl:sticky xl:top-5 xl:col-span-4">
                 {isPending && (
                   <section className="rounded-lg border border-primary/35 bg-white p-4 shadow-sm">
                     <div className="flex items-center gap-2">
@@ -795,7 +802,7 @@ function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }
 
   return (
     <div className="grid grid-cols-12 gap-5">
-      <section className="card col-span-8 p-6">
+      <section className="card col-span-12 p-6 xl:col-span-8">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm font-bold text-primary-dark">过程追踪 · 调试视图</p>
@@ -803,7 +810,7 @@ function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }
           </div>
           <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary-dark">Run {run?.id?.slice(0, 12) || '未启动'}</span>
         </div>
-        <div className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4 [&>*]:min-w-0">
+        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 [&>*]:min-w-0">
           {traceNodes.length ? traceNodes.map((node, index) => (
             <button key={node.id} onClick={() => setSelectedId(node.id)}
               className={clsx(
@@ -830,7 +837,7 @@ function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }
         <ShotReviewPanel artifacts={artifacts} compact />
         <ArtifactTable artifacts={artifacts} compact projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
       </section>
-      <aside className="col-span-4 space-y-5">
+      <aside className="col-span-12 space-y-5 xl:col-span-4">
         <section className="card p-6">
             <div className="flex min-w-0 items-center gap-3">
               <div className={clsx('rounded-lg p-3', selectedHasError ? 'bg-red-50 text-red-600' : 'bg-primary-soft text-primary-dark')}>
@@ -915,7 +922,7 @@ function ShotReviewPanel({ artifacts, compact = false }: { artifacts: DirectorAr
               <StatusBadge status={group.status} />
             </div>
             {group.narrationText ? <p className="mt-3 line-clamp-2 text-sm leading-6 text-ink-muted">{group.narrationText}</p> : null}
-            <div className="mt-3 grid grid-cols-4 gap-2 text-center text-[11px] font-bold text-ink-muted">
+            <div className="mt-3 grid grid-cols-2 gap-2 text-center text-[11px] font-bold text-ink-muted sm:grid-cols-4">
               <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">总 {group.artifactCounts.total}</span>
               <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">参考 {group.artifactCounts.references}</span>
               <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">媒体 {group.artifactCounts.media}</span>
@@ -943,7 +950,7 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
         <h2 className="mt-2 text-3xl font-black text-ink">智能体多角色创作团队</h2>
         <p className="mt-2 text-sm leading-6 text-ink-muted">每个角色都有固定职责、工具权限、输入产物、输出产物和审核边界。阶段守卫防止角色越权调用工具。</p>
       </section>
-      <div className="grid grid-cols-2 gap-5 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
         {stages.map((role) => (
           <div key={role.id} className="card p-5">
             <div className="flex items-start justify-between"><div className="flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-lg tangying-gradient text-white"><FiUserCheck /></div><div><h3 className="font-black text-ink">{role.displayName}</h3><p className="text-xs text-ink-soft">{role.name}</p></div></div><StatusBadge status={role.status} /></div>
@@ -1012,9 +1019,9 @@ function ExportPage({ artifacts, durationSec }: { artifacts: DirectorArtifactRec
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">导出操作</h3>
           {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
-          <div className="mt-4 grid grid-cols-2 gap-3"><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
-          <div className="mt-3 grid grid-cols-2 gap-3">
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> JSON</button>
           </div>
@@ -1186,8 +1193,8 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
   }
 
   return (
-    <section className={clsx('card overflow-hidden p-0', compact && 'mt-6')}>
-      <table className="w-full text-left text-sm">
+    <section className={clsx('card overflow-x-auto p-0', compact && 'mt-6')}>
+      <table className="min-w-[760px] w-full text-left text-sm">
         <thead className="bg-background-mist text-xs text-ink-soft">
           <tr>
             {headers.map((h) => (
@@ -1222,7 +1229,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
                   <tr>
                     <td colSpan={headers.length} className="bg-background-card px-4 py-4">
                       <div className={clsx('grid gap-4', compact ? 'grid-cols-1' : 'grid-cols-12')}>
-                        <div className={clsx('min-w-0 rounded-lg border border-line bg-white p-4 shadow-sm', compact ? '' : 'col-span-8')}>
+                        <div className={clsx('min-w-0 rounded-lg border border-line bg-white p-4 shadow-sm', compact ? '' : 'col-span-12 xl:col-span-8')}>
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
                               <div className="truncate text-sm font-black text-ink">{artifact.name}</div>
@@ -1251,7 +1258,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
                             />
                           ) : null}
                         </div>
-                        <div className={clsx('space-y-3', compact ? '' : 'col-span-4')}>
+                        <div className={clsx('space-y-3', compact ? '' : 'col-span-12 xl:col-span-4')}>
                           <div className="rounded-lg border border-line bg-white p-4 shadow-sm">
                             <div className="flex items-center gap-2 text-sm font-black text-ink"><FiLayers /> 版本历史</div>
                             <div className="mt-3 space-y-2">
@@ -1632,36 +1639,11 @@ function ReviewContent({ text }: { text: string }) {
     } catch { /* not valid JSON, fall through */ }
   }
 
-  // Render markdown-like content
-  return <div className="text-sm leading-7 text-ink [overflow-wrap:anywhere]" dangerouslySetInnerHTML={{ __html: simpleMarkdown(text) }} />
-}
-
-// simpleMarkdown converts basic markdown to HTML.
-function simpleMarkdown(text: string): string {
-  let html = text
-    // Escape HTML
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Headers
-    .replace(/^### (.+)$/gm, '<h4 class="font-bold text-ink mt-3 mb-1">$1</h4>')
-    .replace(/^## (.+)$/gm, '<h3 class="font-bold text-lg text-ink mt-4 mb-2">$1</h3>')
-    .replace(/^# (.+)$/gm, '<h2 class="font-black text-xl text-ink mt-5 mb-2">$1</h2>')
-    // Bold and italic
-    .replace(/\*\*(.+?)\*\*/g, '<strong class="font-bold">$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // Inline code
-    .replace(/`([^`]+)`/g, '<code class="bg-amber-50 text-amber-800 px-1 rounded text-xs">$1</code>')
-    // Lists
-    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
-    .replace(/^(\d+)\. (.+)$/gm, '<li class="ml-4 list-decimal">$1</li>')
-    // Line breaks
-    .replace(/\n\n/g, '</p><p class="mt-2">')
-    .replace(/\n/g, '<br/>')
-    // Horizontal rules
-    .replace(/^---$/gm, '<hr class="my-3 border-line"/>')
-    // Email/URL auto-link
-    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="text-primary underline" target="_blank">$1</a>')
-
-  return '<p class="mt-2">' + html + '</p>'
+  return (
+    <div className="markdown-body text-sm leading-7 text-ink [overflow-wrap:anywhere]">
+      <ReactMarkdown>{text}</ReactMarkdown>
+    </div>
+  )
 }
 
 function stageIcon(status: DirectorStageStatus) {

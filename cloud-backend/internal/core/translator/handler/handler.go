@@ -17,8 +17,8 @@ func NewTranslatorHandler(nlService *service.NlToDagService) *TranslatorHandler 
 	return &TranslatorHandler{nlService: nlService}
 }
 
-func (h *TranslatorHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api")
+func (h *TranslatorHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api", middleware...)
 	{
 		api.POST("/translate", h.Translate)
 		api.POST("/translate/submit", h.TranslateAndSubmit)

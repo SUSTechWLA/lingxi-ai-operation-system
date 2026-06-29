@@ -16,8 +16,8 @@ func NewHandler(registry *Registry) *Handler {
 	return &Handler{registry: registry}
 }
 
-func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/skill-capabilities")
+func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api/skill-capabilities", middleware...)
 	{
 		api.GET("", h.List)
 		api.GET("/:id", h.Get)

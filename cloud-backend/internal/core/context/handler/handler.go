@@ -18,8 +18,8 @@ func NewContextHandler(contextService *service.ContextService) *ContextHandler {
 	return &ContextHandler{contextService: contextService}
 }
 
-func (h *ContextHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api")
+func (h *ContextHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api", middleware...)
 	{
 		api.GET("/context/:taskId", h.GetContextForTask)
 		api.GET("/context/:taskId/node/:nodeId/snapshot/latest", h.GetLatestSnapshot)

@@ -24,12 +24,12 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
     ? { 'video/*': ['.mp4', '.mov', '.avi'] }
     : { 'image/*': ['.jpg', '.jpeg', '.png', '.webp'] }
 
-  const createMediaFile = (file: File): MediaFile => ({
+  const createMediaFile = useCallback((file: File): MediaFile => ({
     file,
     preview: isVideo ? undefined : URL.createObjectURL(file),
     name: file.name,
     size: file.size,
-  })
+  }), [isVideo])
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
@@ -40,7 +40,7 @@ const UploadCard: React.FC<UploadCardProps> = ({ type }) => {
         addImages(mediaFiles)
       }
     },
-    [isVideo, addVideos, addImages]
+    [isVideo, addVideos, addImages, createMediaFile]
   )
 
   const { getRootProps, getInputProps } = useDropzone({

@@ -242,6 +242,46 @@ func TestModelProviderSettingsSaveListAndPreserveSecrets(t *testing.T) {
 	}
 }
 
+func TestModelProviderSettingsIncludeKeyRequiresNonBrowserLocalRequest(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{
+		"providers":{
+			"text_to_text":{"baseUrl":"https://api.openai.com/v1","model":"gpt-4.1","apiKey":"sk-text-secret"}
+		}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/local/model-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/model-providers?include_key=true", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local include_key status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("sk-text-secret")) {
+		t.Fatalf("non-browser localhost request should include full key: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/model-providers?include_key=true", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("browser include_key status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("sk-text-secret")) {
+		t.Fatalf("browser-origin request must not expose full api key: %s", rec.Body.String())
+	}
+}
+
 func TestModelProviderSettingsRejectUnsupportedCapability(t *testing.T) {
 	server := NewServer(Config{DataDir: t.TempDir()})
 	body := bytes.NewBufferString(`{
@@ -325,8 +365,8 @@ func TestHandlerAllowsLocalFrontendCORS(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("preflight status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
-		t.Fatalf("allow-origin = %q, want *", got)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
+		t.Fatalf("allow-origin = %q, want local frontend origin", got)
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPut) {
 		t.Fatalf("allow-methods = %q, want PUT", got)

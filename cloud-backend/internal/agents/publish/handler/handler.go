@@ -21,8 +21,8 @@ func NewPublishHandler(publishService *service.PublishService) *PublishHandler {
 	return &PublishHandler{publishService: publishService}
 }
 
-func (h *PublishHandler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api")
+func (h *PublishHandler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
+	api := r.Group("/api", middleware...)
 	{
 		api.POST("/publish", h.PublishContent)
 		api.POST("/ai/generate", h.AIGenerateContent)

@@ -17,38 +17,32 @@ const MediaLibraryPanel: React.FC<MediaLibraryPanelProps> = ({ isOpen, onClose, 
   const [error, setError] = useState('')
   const limit = 20
 
-  const loadMedia = useCallback(async (reset = false) => {
+  const loadMedia = useCallback(async (loadOffset: number, append: boolean) => {
     setLoading(true)
     setError('')
     try {
-      const newOffset = reset ? 0 : offset
-      const data = await fetchMediaList(newOffset, limit, tagFilter || undefined)
-      if (reset) {
-        setAssets(data.items)
-      } else {
-        setAssets(prev => [...prev, ...data.items])
-      }
+      const data = await fetchMediaList(loadOffset, limit, tagFilter || undefined)
+      setAssets(prev => append ? [...prev, ...data.items] : data.items)
       setTotal(data.total)
-      if (!reset) setOffset(newOffset + data.items.length)
-      else setOffset(data.items.length)
+      setOffset(loadOffset + data.items.length)
     } catch {
       setError('加载素材库失败')
     } finally {
       setLoading(false)
     }
-  }, [offset, tagFilter, limit])
+  }, [tagFilter, limit])
 
   useEffect(() => {
     if (isOpen) {
       setAssets([])
       setOffset(0)
-      loadMedia(true)
+      loadMedia(0, false)
     }
-  }, [isOpen, tagFilter])
+  }, [isOpen, tagFilter, loadMedia])
 
   const handleLoadMore = () => {
     if (!loading && assets.length < total) {
-      loadMedia(false)
+      loadMedia(offset, true)
     }
   }
 
