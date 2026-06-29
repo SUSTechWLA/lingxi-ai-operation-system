@@ -53,6 +53,35 @@ func TestJudgeWarnsForRenderWithoutPreviewDependency(t *testing.T) {
 	}
 }
 
+func TestJudgeAcceptsCardPlanGeneratorAsVisualStage(t *testing.T) {
+	plan := goodVoicePlan()
+	for i := range plan.Steps {
+		switch plan.Steps[i].ID {
+		case "beat":
+			plan.Steps[i] = agentruntime.AgentStep{
+				ID:        "storyboard",
+				Intent:    "把脚本拆成图文卡片和字幕节奏",
+				Tool:      "card_plan_generator",
+				DependsOn: []string{"script"},
+				Arguments: map[string]interface{}{"stage": "storyboard"},
+				ExpectedOutput: []string{
+					"cardPlan",
+					"CARD_PLAN",
+				},
+				ProduceArtifact: true,
+			}
+		case "preview":
+			plan.Steps[i].DependsOn = []string{"storyboard"}
+		}
+	}
+
+	report := New().Evaluate(plan)
+
+	if !report.Passed {
+		t.Fatalf("card plan should satisfy visual beta stage, warnings: %+v", report.Warnings)
+	}
+}
+
 func TestJudgeWarnsForRedundantTool(t *testing.T) {
 	plan := goodVoicePlan()
 	plan.Steps = append(plan.Steps, agentruntime.AgentStep{ID: "script_again", Tool: "video_script_generator", Arguments: map[string]interface{}{"stage": "script"}})

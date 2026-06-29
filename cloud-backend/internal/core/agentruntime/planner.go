@@ -305,6 +305,155 @@ func wireRequiredStepInputs(steps []AgentStep, manifests map[string]*tool.ToolMa
 	}
 }
 
+type stepOutputReference struct {
+	stepID string
+	field  string
+}
+
+func repairInvalidOutputReferences(steps []AgentStep, manifests map[string]*tool.ToolManifest) {
+	producedByField := make(map[string]stepOutputReference)
+	stepByID := make(map[string]AgentStep, len(steps))
+	for _, step := range steps {
+		stepByID[step.ID] = step
+	}
+
+	for i := range steps {
+		step := &steps[i]
+		if step.Arguments == nil {
+			step.Arguments = map[string]interface{}{}
+		}
+		for argName, value := range step.Arguments {
+			refStepID, refField, ok := outputReference(value)
+			if !ok {
+				continue
+			}
+			refStep, exists := stepByID[refStepID]
+			if !exists {
+				continue
+			}
+			refManifest := manifests[refStep.Tool]
+			if manifestDeclaresOutput(refManifest, refField) {
+				appendDependencyIfMissing(step, refStepID)
+				continue
+			}
+			if replacement, ok := replacementOutputReference(argName, refField, producedByField); ok {
+				step.Arguments[argName] = stepOutputRef(replacement.stepID, replacement.field)
+				appendDependencyIfMissing(step, replacement.stepID)
+			}
+		}
+
+		manifest := manifests[step.Tool]
+		for field := range manifestOutputs(manifest) {
+			ref := stepOutputReference{stepID: step.ID, field: field}
+			producedByField[field] = ref
+			for _, alias := range aliasesForOutputField(field) {
+				producedByField[alias] = ref
+			}
+		}
+		for _, field := range fallbackOutputsForTool(step.Tool, manifest) {
+			ref := stepOutputReference{stepID: step.ID, field: field}
+			producedByField[field] = ref
+			for _, alias := range aliasesForOutputField(field) {
+				producedByField[alias] = ref
+			}
+		}
+	}
+}
+
+func outputReference(value interface{}) (string, string, bool) {
+	s, ok := value.(string)
+	if !ok {
+		return "", "", false
+	}
+	matches := referencePattern.FindStringSubmatch(s)
+	if matches == nil {
+		return "", "", false
+	}
+	return matches[1], matches[2], true
+}
+
+func manifestDeclaresOutput(manifest *tool.ToolManifest, field string) bool {
+	if manifest == nil || len(manifest.Output) == 0 {
+		return true
+	}
+	_, ok := manifest.Output[field]
+	return ok
+}
+
+func replacementOutputReference(argName, refField string, producedByField map[string]stepOutputReference) (stepOutputReference, bool) {
+	for _, key := range referenceRepairKeys(argName, refField) {
+		if ref, ok := producedByField[key]; ok {
+			return ref, true
+		}
+	}
+	return stepOutputReference{}, false
+}
+
+func referenceRepairKeys(argName, refField string) []string {
+	keys := make([]string, 0, 6)
+	add := func(key string) {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return
+		}
+		for _, existing := range keys {
+			if existing == key {
+				return
+			}
+		}
+		keys = append(keys, key)
+	}
+	add(argName)
+	add(refField)
+	for _, alias := range aliasesForOutputField(argName) {
+		add(alias)
+	}
+	for _, alias := range aliasesForOutputField(refField) {
+		add(alias)
+	}
+	return keys
+}
+
+func manifestOutputs(manifest *tool.ToolManifest) map[string]tool.ParamDef {
+	if manifest == nil || manifest.Output == nil {
+		return nil
+	}
+	return manifest.Output
+}
+
+func fallbackOutputsForTool(toolName string, manifest *tool.ToolManifest) []string {
+	if manifest != nil && len(manifest.Output) > 0 {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "video_script_generator", "script_generator":
+		return []string{"script"}
+	case "shot_splitter":
+		return []string{"shotList"}
+	case "hyperframes_project_generator":
+		return []string{"projectDir"}
+	case "hyperframes_renderer":
+		return []string{"outputPath"}
+	default:
+		return nil
+	}
+}
+
+func aliasesForOutputField(field string) []string {
+	switch field {
+	case "script":
+		return []string{"voiceover_script"}
+	case "shotList":
+		return []string{"shot_list", "beat_plan", "visual_component_plan"}
+	case "projectDir":
+		return []string{"hyperframesPath", "hyperframesProject", "hyperframes_project"}
+	case "outputPath":
+		return []string{"finalVideo", "final_video", "video"}
+	default:
+		return nil
+	}
+}
+
 func fillRequestRequiredInputs(steps []AgentStep, manifests map[string]*tool.ToolManifest, req StartRunRequest) {
 	for i := range steps {
 		step := &steps[i]

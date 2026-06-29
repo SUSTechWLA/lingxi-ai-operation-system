@@ -142,7 +142,21 @@ func missingStageWarnings(plan *agentruntime.AgentPlan) []Warning {
 		terms    []string
 	}{
 		{"script", []string{"script", "voiceover_script"}},
-		{"visual_or_shot_plan", []string{"beat_plan", "shot_list", "visual_component_plan"}},
+		{"visual_or_shot_plan", []string{
+			"beat_plan",
+			"shot_list",
+			"shotlist",
+			"shot_splitter",
+			"visual_component_plan",
+			"visual_plan",
+			"storyboard",
+			"card_plan",
+			"cardplan",
+			"card_plan_generator",
+			"caption_plan",
+			"captionplan",
+			"caption_splitter",
+		}},
 		{"prompt_or_preview", []string{"video_prompt", "keyframe_prompt", "preview", "hyperframes_project"}},
 		{"render_or_final_video", []string{"render", "final_video", "final-video", "hyperframes_renderer"}},
 	}

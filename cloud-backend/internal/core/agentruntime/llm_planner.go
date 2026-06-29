@@ -108,6 +108,7 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	manifestsByName := manifestMap(allManifests)
 	fillRequestRequiredInputs(plan.Steps, manifestsByName, req)
 	wireRequiredStepInputs(plan.Steps, manifestsByName)
+	repairInvalidOutputReferences(plan.Steps, manifestsByName)
 	if err := NewPlanGuard(toolManifestCatalog(manifestsByName), nil).Validate(&plan); err != nil {
 		return nil, fmt.Errorf("llm planner returned invalid plan: %w", err)
 	}
@@ -205,7 +206,9 @@ func (p *LLMPlanner) repairPlanWithManifests(ctx context.Context, originalPlan *
 		return nil, fmt.Errorf("parse repaired agent plan: %w", err)
 	}
 	normalizeLLMPlan(&plan, StartRunRequest{}, "", p.maxTools, manifests)
-	wireRequiredStepInputs(plan.Steps, manifestMap(manifests))
+	manifestsByName := manifestMap(manifests)
+	wireRequiredStepInputs(plan.Steps, manifestsByName)
+	repairInvalidOutputReferences(plan.Steps, manifestsByName)
 	return &plan, nil
 }
 

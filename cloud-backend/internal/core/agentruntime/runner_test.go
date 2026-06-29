@@ -52,6 +52,135 @@ func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 	}
 }
 
+func TestRunnerStart_PreparesVideoBetaPlanBeforeGuard(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯奇迹"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+		Budget: AgentBudget{
+			MaxSteps:     1,
+			MaxToolCalls: 1,
+			MaxCostLevel: tool.CostMedium,
+		},
+	}}
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name:      "video_script_generator",
+			CostLevel: tool.CostLow,
+			Output:    map[string]tool.ParamDef{"script": {Type: "string"}},
+		},
+		"shot_splitter": {
+			Name:       "shot_splitter",
+			CostLevel:  tool.CostLow,
+			Parameters: map[string]tool.ParamDef{"script": {Type: "string", Required: true}},
+			Output:     map[string]tool.ParamDef{"shotList": {Type: "array"}},
+		},
+		"hyperframes_project_generator": {
+			Name:      "hyperframes_project_generator",
+			CostLevel: tool.CostLow,
+			Parameters: map[string]tool.ParamDef{
+				"topic":    {Type: "string", Required: true},
+				"script":   {Type: "string", Required: true},
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{"projectDir": {Type: "string"}},
+		},
+		"hyperframes_renderer": {
+			Name:       "hyperframes_renderer",
+			CostLevel:  tool.CostHigh,
+			RiskLevel:  tool.RiskMedium,
+			SideEffect: true,
+			ApprovalPolicy: tool.ApprovalPolicy{
+				Required: true,
+				Mode:     tool.ApprovalBeforeExecute,
+			},
+			Parameters: map[string]tool.ParamDef{"projectDir": {Type: "string", Required: true}},
+			Output:     map[string]tool.ParamDef{"outputPath": {Type: "string"}},
+		},
+		"publish_copy_generator": {
+			Name:       "publish_copy_generator",
+			CostLevel:  tool.CostLow,
+			Parameters: map[string]tool.ParamDef{"script": {Type: "string", Required: true}},
+			Output:     map[string]tool.ParamDef{"title": {Type: "string"}},
+		},
+	}
+
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	run, err := runner.Start(context.Background(), StartRunRequest{
+		UserID:  "user-1",
+		Message: "请帮我创作一个45秒图文视频：帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if run.Budget.MaxCostLevel != tool.CostHigh {
+		t.Fatalf("runner should store prepared high cost budget, got %+v", run.Budget)
+	}
+	if findPlanStep(run.Plan, "render").Tool != "hyperframes_renderer" {
+		t.Fatalf("prepared run plan should include render step: %#v", run.Plan.Steps)
+	}
+	if orch.submitted == nil {
+		t.Fatal("runner should submit the compiled DAG")
+	}
+	if !dagHasNode(orch.submitted, scopedNodeID("task-1", "render_review_before")) {
+		t.Fatalf("submitted DAG should include scoped render review node: %#v", orch.submitted.Nodes)
+	}
+}
+
+func TestRunnerStart_UsesRequestDomainBeforePreparingVideoPlan(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain: "content_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯奇迹"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+		Budget: AgentBudget{
+			MaxSteps:     1,
+			MaxToolCalls: 1,
+			MaxCostLevel: tool.CostMedium,
+		},
+	}}
+	catalog := videoBetaCompletionCatalog()
+
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)).
+		WithPlanJudge(betaCompletionJudge{})
+	run, err := runner.Start(context.Background(), StartRunRequest{
+		UserID:  "user-1",
+		Message: "请帮我创作一个45秒图文视频：帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if run.Plan.Domain != "video_creation" {
+		t.Fatalf("request domain should override planner domain, got %q", run.Plan.Domain)
+	}
+	if findPlanStep(run.Plan, "publish_copy").Tool != "publish_copy_generator" {
+		t.Fatalf("prepared video plan should include publish_copy step: %#v", run.Plan.Steps)
+	}
+}
+
 func TestRunnerStart_RecordsPlanJudgeWarningsAfterGuardPasses(t *testing.T) {
 	store := newMemoryRunStore()
 	orch := &fakeOrchestrator{taskID: "task-1"}
@@ -298,6 +427,102 @@ func TestScopeDAGToTask_KeepsNodeIDsWithinDatabaseLimit(t *testing.T) {
 
 type staticPlanner struct {
 	plan *AgentPlan
+}
+
+func findPlanStep(plan *AgentPlan, id string) AgentStep {
+	if plan == nil {
+		return AgentStep{}
+	}
+	for _, step := range plan.Steps {
+		if step.ID == id {
+			return step
+		}
+	}
+	return AgentStep{}
+}
+
+func dagHasNode(dag *model.DAGRequest, id string) bool {
+	if dag == nil {
+		return false
+	}
+	for _, node := range dag.Nodes {
+		if node.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func videoBetaCompletionCatalog() staticToolCatalog {
+	return staticToolCatalog{
+		"video_script_generator": {
+			Name:      "video_script_generator",
+			CostLevel: tool.CostLow,
+			Output:    map[string]tool.ParamDef{"script": {Type: "string"}},
+		},
+		"shot_splitter": {
+			Name:       "shot_splitter",
+			CostLevel:  tool.CostLow,
+			Parameters: map[string]tool.ParamDef{"script": {Type: "string", Required: true}},
+			Output:     map[string]tool.ParamDef{"shotList": {Type: "array"}},
+		},
+		"hyperframes_project_generator": {
+			Name:      "hyperframes_project_generator",
+			CostLevel: tool.CostLow,
+			Parameters: map[string]tool.ParamDef{
+				"topic":    {Type: "string", Required: true},
+				"script":   {Type: "string", Required: true},
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{"projectDir": {Type: "string"}},
+		},
+		"hyperframes_renderer": {
+			Name:       "hyperframes_renderer",
+			CostLevel:  tool.CostHigh,
+			RiskLevel:  tool.RiskMedium,
+			SideEffect: true,
+			ApprovalPolicy: tool.ApprovalPolicy{
+				Required: true,
+				Mode:     tool.ApprovalBeforeExecute,
+			},
+			Parameters: map[string]tool.ParamDef{"projectDir": {Type: "string", Required: true}},
+			Output:     map[string]tool.ParamDef{"outputPath": {Type: "string"}},
+		},
+		"publish_copy_generator": {
+			Name:       "publish_copy_generator",
+			CostLevel:  tool.CostLow,
+			Parameters: map[string]tool.ParamDef{"script": {Type: "string", Required: true}},
+			Output:     map[string]tool.ParamDef{"title": {Type: "string"}},
+		},
+	}
+}
+
+type betaCompletionJudge struct{}
+
+func (betaCompletionJudge) Evaluate(plan *AgentPlan) PlanJudgeReport {
+	required := map[string]bool{
+		"beat_plan":    false,
+		"preview":      false,
+		"render":       false,
+		"publish_copy": false,
+	}
+	for _, step := range plan.Steps {
+		if _, ok := required[step.ID]; ok {
+			required[step.ID] = true
+		}
+	}
+	warnings := make([]PlanJudgeWarning, 0)
+	for stepID, present := range required {
+		if !present {
+			warnings = append(warnings, PlanJudgeWarning{
+				Code:     "missing_stage",
+				StepID:   stepID,
+				Message:  "plan is missing expected beta stage: " + stepID,
+				Severity: "error",
+			})
+		}
+	}
+	return PlanJudgeReport{Passed: len(warnings) == 0, Warnings: warnings}
 }
 
 func (p staticPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {

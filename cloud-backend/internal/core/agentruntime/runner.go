@@ -121,12 +121,7 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate agent plan: %w", err)
 	}
-	if plan.Domain == "" {
-		plan.Domain = req.Domain
-	}
-	if plan.Mode == "" {
-		plan.Mode = "dynamic_agent"
-	}
+	applyRequestPlanDefaults(plan, req)
 	plan = r.compiler.PreparePlan(plan)
 	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
 		// Attempt plan repair if the planner supports it.
@@ -136,6 +131,7 @@ func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 			)
 			repaired, repairErr := repairer.RepairPlan(ctx, plan, err.Error())
 			if repairErr == nil && repaired != nil {
+				applyRequestPlanDefaults(repaired, req)
 				repaired = r.compiler.PreparePlan(repaired)
 				revalidateErr := r.guard.ValidatePlan(ctx, req.UserID, repaired)
 				if revalidateErr == nil {
@@ -217,6 +213,20 @@ planOK:
 		return nil, fmt.Errorf("store agent run: %w", err)
 	}
 	return run, nil
+}
+
+func applyRequestPlanDefaults(plan *AgentPlan, req StartRunRequest) {
+	if plan == nil {
+		return
+	}
+	if req.Domain != "" {
+		plan.Domain = req.Domain
+	} else if plan.Domain == "" {
+		plan.Domain = req.Domain
+	}
+	if plan.Mode == "" {
+		plan.Mode = "dynamic_agent"
+	}
 }
 
 func logAgentToolTrace(req StartRunRequest, plan *AgentPlan, trace map[string]interface{}) {

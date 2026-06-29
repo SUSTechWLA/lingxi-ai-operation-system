@@ -255,6 +255,109 @@ func TestLLMPlanner_WiresMissingRequiredInputsFromPriorOutputs(t *testing.T) {
 	}
 }
 
+func TestLLMPlanner_RewritesInvalidScriptReferenceFromNewsSearch(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "news_search",
+			Description:  "Search current sports news.",
+			Type:         "http",
+			Capabilities: []string{"video_creation", "fresh_knowledge", "news_search"},
+			Parameters: map[string]tool.ParamDef{
+				"query": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"facts":   {Type: "array"},
+				"sources": {Type: "array"},
+			},
+		},
+		{
+			Name:         "video_script_generator",
+			Description:  "Generate video voiceover scripts.",
+			Type:         "builtin_prompt_tool",
+			Capabilities: []string{"video_creation", "script_generation"},
+			Parameters: map[string]tool.ParamDef{
+				"topic": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		{
+			Name:         "shot_splitter",
+			Description:  "Split script into visual beats.",
+			Type:         "builtin_prompt_tool",
+			Capabilities: []string{"video_creation", "shot_planning"},
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+	}
+	planner := NewLLMPlanner(tools, &fakePlannerLLM{
+		response: `{
+			"goal": "生成佛得角世界杯奇迹视频",
+			"domain": "video_creation",
+			"mode": "dynamic_agent",
+			"knowledgePolicy": {
+				"contentType": "sports_event",
+				"freshnessLevel": "high",
+				"retrievalPolicy": "required",
+				"knowledgeType": "latest_news",
+				"searchQueries": ["Cape Verde World Cup knockout"],
+				"mustUseFacts": true,
+				"mustCiteFacts": true,
+				"blockOnEmptyFacts": true
+			},
+			"steps": [
+				{
+					"id": "news_search",
+					"intent": "检索最新事实",
+					"tool": "news_search",
+					"arguments": {"query": "Cape Verde World Cup knockout"},
+					"expectedOutput": ["facts", "sources", "script"]
+				},
+				{
+					"id": "script_generation",
+					"intent": "生成口播稿",
+					"tool": "video_script_generator",
+					"arguments": {"topic": "佛得角世界杯奇迹"},
+					"dependsOn": ["news_search"],
+					"expectedOutput": ["script"],
+					"produceArtifact": true
+				},
+				{
+					"id": "beat_plan",
+					"intent": "拆分分镜",
+					"tool": "shot_splitter",
+					"arguments": {"script": "{{news_search.output.script}}"},
+					"dependsOn": ["news_search"],
+					"expectedOutput": ["shotList"],
+					"produceArtifact": true
+				}
+			]
+		}`,
+	}, LLMPlannerOptions{MaxTools: 3})
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if got := plan.Steps[2].Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("beat_plan should reference script_generation output, got %#v", plan.Steps[2].Arguments)
+	}
+	if !containsString(plan.Steps[2].DependsOn, "script_generation") {
+		t.Fatalf("beat_plan should depend on script_generation, got %#v", plan.Steps[2].DependsOn)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("rewritten LLM plan should pass PlanGuard: %v", err)
+	}
+}
+
 type fakePlannerLLM struct {
 	response       string
 	errText        string

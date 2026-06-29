@@ -117,13 +117,49 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	}
 	c.injectKnowledgeContext(plan)
 	c.completeVideoBetaPlan(plan)
+	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
+	c.expandPreparedPlanBudget(plan)
+	return plan
+}
+
+func (c *PlanCompiler) expandPreparedPlanBudget(plan *AgentPlan) {
+	if plan == nil {
+		return
+	}
 	if plan.Budget.MaxSteps > 0 && len(plan.Steps) > plan.Budget.MaxSteps {
 		plan.Budget.MaxSteps = len(plan.Steps)
 	}
 	if plan.Budget.MaxToolCalls > 0 && len(plan.Steps) > plan.Budget.MaxToolCalls {
 		plan.Budget.MaxToolCalls = len(plan.Steps)
 	}
-	return plan
+	for _, step := range plan.Steps {
+		manifest := c.manifestFor(step.Tool)
+		if manifest == nil || manifest.CostLevel == "" {
+			continue
+		}
+		if plan.Budget.MaxCostLevel == "" || costRank(manifest.CostLevel) > costRank(plan.Budget.MaxCostLevel) {
+			plan.Budget.MaxCostLevel = manifest.CostLevel
+		}
+	}
+}
+
+func (c *PlanCompiler) manifestsByPlan(plan *AgentPlan) map[string]*tool.ToolManifest {
+	result := make(map[string]*tool.ToolManifest, len(plan.Steps))
+	if c == nil || c.tools == nil || plan == nil {
+		return result
+	}
+	for _, step := range plan.Steps {
+		if step.Tool == "" {
+			continue
+		}
+		if _, ok := result[step.Tool]; ok {
+			continue
+		}
+		if manifest := c.manifestFor(step.Tool); manifest != nil {
+			result[step.Tool] = manifest
+		}
+	}
+	return result
 }
 
 func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
@@ -133,64 +169,76 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 	if !c.hasVideoBetaCompletionTools() {
 		return
 	}
-	if !planHasToolOrTerm(plan, []string{"video_script_generator", "script", "voiceover_script"}) {
+	scriptAnchor, scriptField := c.lastProducerStepForFields(plan, []string{"script"}, []string{
+		"video_script_generator",
+		"script_generator",
+	})
+	if scriptAnchor == "" {
 		return
 	}
-	anchor := lastStepID(plan)
-	if !planHasToolOrTerm(plan, []string{"beat_plan", "shot_list", "visual_component_plan", "shot_splitter"}) {
-		anchor = appendPlanStep(plan, AgentStep{
+	scriptRef := stepOutputRef(scriptAnchor, scriptField)
+
+	shotAnchor, shotField := c.lastProducerStepForFields(plan, []string{"shotList"}, []string{"shot_splitter"})
+	if shotAnchor == "" {
+		shotAnchor = appendPlanStep(plan, AgentStep{
 			ID:        uniqueStepID(plan, "beat_plan"),
 			Intent:    "将口播稿拆成可视化节奏、分镜和画面段落",
 			Tool:      "shot_splitter",
-			DependsOn: dependencyList(anchor),
+			DependsOn: dependencyList(scriptAnchor),
 			Arguments: map[string]interface{}{
 				"stage":  "beat",
-				"script": stepOutputRef(anchor, "script"),
+				"script": scriptRef,
 				"topic":  plan.Goal,
 			},
 			ExpectedOutput:  []string{"beat_plan", "shot_list"},
 			ProduceArtifact: true,
 		})
-	} else if stepID := lastStepMatching(plan, []string{"beat_plan", "shot_list", "visual_component_plan", "shot_splitter"}); stepID != "" {
-		anchor = stepID
+		shotField = preferredOutputField(c.manifestFor("shot_splitter"), "shotList")
 	}
 
-	if !planHasToolOrTerm(plan, []string{"video_prompt", "keyframe_prompt", "preview", "hyperframes_project", "hyperframes_project_generator"}) {
-		anchor = appendPlanStep(plan, AgentStep{
+	projectAnchor, projectField := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
+	if projectAnchor == "" {
+		projectAnchor = appendPlanStep(plan, AgentStep{
 			ID:        uniqueStepID(plan, "preview"),
 			Intent:    "生成可审核的 HyperFrames 预览项目和画面预览",
 			Tool:      "hyperframes_project_generator",
-			DependsOn: dependencyList(anchor),
+			DependsOn: dependencyListUnique(shotAnchor, scriptAnchor),
 			Arguments: map[string]interface{}{
 				"stage":    "preview",
 				"brief":    plan.Goal,
-				"shotList": stepOutputRef(anchor, "shotList"),
+				"topic":    plan.Goal,
+				"script":   scriptRef,
+				"shotList": stepOutputRef(shotAnchor, shotField),
 			},
-			ExpectedOutput:  []string{"hyperframes_project", "preview"},
+			ExpectedOutput:  []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT", "hyperframes_project", "preview"},
 			ProduceArtifact: true,
 		})
-	} else if stepID := lastStepMatching(plan, []string{"video_prompt", "keyframe_prompt", "preview", "hyperframes_project", "hyperframes_project_generator"}); stepID != "" {
-		anchor = stepID
+		projectField = preferredOutputField(c.manifestFor("hyperframes_project_generator"), "projectDir", "hyperframesPath")
 	}
 
-	if !planHasToolOrTerm(plan, []string{"render", "final_video", "final-video", "hyperframes_renderer"}) {
-		anchor = appendPlanStep(plan, AgentStep{
-			ID:        uniqueStepID(plan, "render"),
-			Intent:    "在预览确认后渲染本地视频文件",
-			Tool:      "hyperframes_renderer",
-			DependsOn: dependencyList(anchor),
-			Arguments: map[string]interface{}{
-				"stage":           "render",
-				"brief":           plan.Goal,
-				"hyperframesPath": stepOutputRef(anchor, "hyperframesPath"),
-				"previewApproved": true,
-				"outputName":      "final.mp4",
-			},
-			ExpectedOutput:  []string{"final_video"},
+	renderAnchor, _ := c.lastProducerStepForFields(plan, []string{"outputPath", "finalVideo", "video"}, []string{"hyperframes_renderer"})
+	if renderAnchor == "" {
+		renderManifest := c.manifestFor("hyperframes_renderer")
+		projectParam := preferredParamName(renderManifest, "projectDir", "hyperframesPath")
+		renderArgs := map[string]interface{}{
+			"stage":           "render",
+			"brief":           plan.Goal,
+			projectParam:      stepOutputRef(projectAnchor, projectField),
+			"previewApproved": true,
+			"outputName":      "final.mp4",
+		}
+		if firstManifestOutput(renderManifest, "entry") != "" {
+			renderArgs["entry"] = stepOutputRef(projectAnchor, "entry")
+		}
+		renderAnchor = appendPlanStep(plan, AgentStep{
+			ID:              uniqueStepID(plan, "render"),
+			Intent:          "在预览确认后渲染本地视频文件",
+			Tool:            "hyperframes_renderer",
+			DependsOn:       dependencyList(projectAnchor),
+			Arguments:       renderArgs,
+			ExpectedOutput:  []string{"VIDEO", "RENDER_REPORT", "final_video"},
 			ProduceArtifact: true,
 		})
-	} else if stepID := lastStepMatching(plan, []string{"render", "final_video", "final-video", "hyperframes_renderer"}); stepID != "" {
-		anchor = stepID
 	}
 
 	if !planHasToolOrTerm(plan, []string{"publish_copy", "publishcopy", "publish-copy", "publish_copy_generator"}) {
@@ -198,11 +246,12 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 			ID:        uniqueStepID(plan, "publish_copy"),
 			Intent:    "基于成片和脚本生成多平台发布文案",
 			Tool:      "publish_copy_generator",
-			DependsOn: dependencyList(anchor),
+			DependsOn: dependencyListUnique(renderAnchor, scriptAnchor, shotAnchor),
 			Arguments: map[string]interface{}{
-				"stage":      "publish",
-				"brief":      plan.Goal,
-				"finalVideo": stepOutputRef(anchor, "finalVideo"),
+				"stage":    "publish",
+				"brief":    plan.Goal,
+				"script":   scriptRef,
+				"shotList": stepOutputRef(shotAnchor, shotField),
 			},
 			ExpectedOutput:  []string{"publish_copy"},
 			ProduceArtifact: true,
@@ -222,11 +271,17 @@ func dependencyList(stepID string) []string {
 	return []string{stepID}
 }
 
-func lastStepID(plan *AgentPlan) string {
-	if plan == nil || len(plan.Steps) == 0 {
-		return ""
+func dependencyListUnique(stepIDs ...string) []string {
+	deps := make([]string, 0, len(stepIDs))
+	seen := map[string]bool{}
+	for _, stepID := range stepIDs {
+		if stepID == "" || seen[stepID] {
+			continue
+		}
+		seen[stepID] = true
+		deps = append(deps, stepID)
 	}
-	return plan.Steps[len(plan.Steps)-1].ID
+	return deps
 }
 
 func uniqueStepID(plan *AgentPlan, base string) string {
@@ -257,6 +312,59 @@ func lastStepMatching(plan *AgentPlan, terms []string) string {
 		if stepMentionsAny(plan.Steps[i], terms) {
 			return plan.Steps[i].ID
 		}
+	}
+	return ""
+}
+
+func (c *PlanCompiler) lastProducerStepForFields(plan *AgentPlan, fields []string, fallbackTools []string) (string, string) {
+	if plan == nil {
+		return "", ""
+	}
+	fallback := stringSet(fallbackTools)
+	for i := len(plan.Steps) - 1; i >= 0; i-- {
+		step := plan.Steps[i]
+		manifest := c.manifestFor(step.Tool)
+		if field := firstManifestOutput(manifest, fields...); field != "" {
+			return step.ID, field
+		}
+		if (manifest == nil || len(manifest.Output) == 0) && fallback[strings.ToLower(strings.TrimSpace(step.Tool))] && len(fields) > 0 {
+			return step.ID, fields[0]
+		}
+	}
+	return "", ""
+}
+
+func firstManifestOutput(manifest *tool.ToolManifest, fields ...string) string {
+	if manifest != nil {
+		for _, field := range fields {
+			if _, ok := manifest.Output[field]; ok {
+				return field
+			}
+		}
+	}
+	return ""
+}
+
+func preferredOutputField(manifest *tool.ToolManifest, fields ...string) string {
+	if field := firstManifestOutput(manifest, fields...); field != "" {
+		return field
+	}
+	if len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
+}
+
+func preferredParamName(manifest *tool.ToolManifest, names ...string) string {
+	if manifest != nil {
+		for _, name := range names {
+			if _, ok := manifest.Parameters[name]; ok {
+				return name
+			}
+		}
+	}
+	if len(names) > 0 {
+		return names[0]
 	}
 	return ""
 }

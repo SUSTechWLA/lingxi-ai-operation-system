@@ -201,14 +201,14 @@ func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
 	expected := []struct {
 		id   string
 		tool string
-		dep  string
+		deps []string
 	}{
-		{"brief", "proposal_generator", ""},
-		{"script", "video_script_generator", "brief"},
-		{"beat_plan", "shot_splitter", "script"},
-		{"preview", "hyperframes_project_generator", "beat_plan"},
-		{"render", "hyperframes_renderer", "preview"},
-		{"publish_copy", "publish_copy_generator", "render"},
+		{"brief", "proposal_generator", nil},
+		{"script", "video_script_generator", []string{"brief"}},
+		{"beat_plan", "shot_splitter", []string{"script"}},
+		{"preview", "hyperframes_project_generator", []string{"beat_plan", "script"}},
+		{"render", "hyperframes_renderer", []string{"preview"}},
+		{"publish_copy", "publish_copy_generator", []string{"render", "script", "beat_plan"}},
 	}
 	if len(prepared.Steps) != len(expected) {
 		t.Fatalf("expected completed beta plan with %d steps, got %#v", len(expected), prepared.Steps)
@@ -218,15 +218,468 @@ func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
 		if step.ID != want.id || step.Tool != want.tool {
 			t.Fatalf("step %d = %s/%s, want %s/%s", i, step.ID, step.Tool, want.id, want.tool)
 		}
-		if want.dep == "" {
-			continue
-		}
-		if len(step.DependsOn) != 1 || step.DependsOn[0] != want.dep {
-			t.Fatalf("step %s depends on %#v, want [%s]", step.ID, step.DependsOn, want.dep)
-		}
+		requireStepDeps(t, step, want.deps)
 	}
 	if prepared.Budget.MaxSteps < len(expected) || prepared.Budget.MaxToolCalls < len(expected) {
 		t.Fatalf("budget should expand with completed beta plan, got %+v", prepared.Budget)
+	}
+}
+
+func TestPlanCompiler_PreparePlanExpandsCostBudgetForInjectedRender(t *testing.T) {
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name:      "video_script_generator",
+			CostLevel: tool.CostLow,
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"shot_splitter": {
+			Name:      "shot_splitter",
+			CostLevel: tool.CostLow,
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name:      "hyperframes_project_generator",
+			CostLevel: tool.CostLow,
+			Parameters: map[string]tool.ParamDef{
+				"topic":    {Type: "string", Required: true},
+				"script":   {Type: "string", Required: true},
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"projectDir": {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name:       "hyperframes_renderer",
+			CostLevel:  tool.CostHigh,
+			RiskLevel:  tool.RiskMedium,
+			SideEffect: true,
+			ApprovalPolicy: tool.ApprovalPolicy{
+				Required: true,
+			},
+			Parameters: map[string]tool.ParamDef{
+				"projectDir": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"outputPath": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name:      "publish_copy_generator",
+			CostLevel: tool.CostLow,
+			Parameters: map[string]tool.ParamDef{
+				"script":   {Type: "string", Required: true},
+				"shotList": {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"title": {Type: "string"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯奇迹"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+		Budget: AgentBudget{
+			MaxSteps:     1,
+			MaxToolCalls: 1,
+			MaxCostLevel: tool.CostMedium,
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	if got := prepared.Budget.MaxCostLevel; got != tool.CostHigh {
+		t.Fatalf("budget should expand to render cost %q, got %q", tool.CostHigh, got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanAlignsInjectedPreviewWithStageGuard(t *testing.T) {
+	catalog := videoBetaCompletionCatalog()
+	catalog["hyperframes_project_generator"].ApprovalPolicy = tool.ApprovalPolicy{
+		Required:         true,
+		Mode:             tool.ApprovalAfterArtifact,
+		BlocksDownstream: true,
+	}
+	catalog["hyperframes_project_generator"].HumanReview = &tool.HumanReview{Required: true, Title: "审核画面预览"}
+	catalog["hyperframes_project_generator"].ArtifactPolicy = tool.ArtifactPolicy{
+		ProduceArtifact: true,
+		ArtifactKinds:   []string{"HYPERFRAMES_PROJECT"},
+	}
+	catalog["hyperframes_renderer"].ArtifactPolicy = tool.ArtifactPolicy{
+		ProduceArtifact: true,
+		ArtifactKinds:   []string{"VIDEO", "RENDER_REPORT"},
+	}
+	directors := testRoleRegistry{
+		"preview": testRoleDirector{
+			roleID:       "preview_director",
+			stage:        "preview",
+			allowedTools: []string{"hyperframes_project_generator"},
+			inputs:       []string{"VIDEO_COMPOSITION_SPEC"},
+			outputs:      []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"},
+			review:       &tool.HumanReview{Required: true, Title: "审核画面预览"},
+		},
+		"render": testRoleDirector{
+			roleID:       "render_producer",
+			stage:        "render",
+			allowedTools: []string{"hyperframes_renderer"},
+			inputs:       []string{"PREVIEW_SNAPSHOTS"},
+			outputs:      []string{"VIDEO", "RENDER_REPORT"},
+			review:       &tool.HumanReview{Required: true, Gate: tool.ApprovalBeforeExecute, Title: "确认最终渲染"},
+		},
+	}
+	compiler := NewPlanCompiler(catalog).WithDirectors(directors)
+	plan := &AgentPlan{
+		Goal:   "一段测试文字",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "一段测试文字"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+		Budget: AgentBudget{MaxCostLevel: tool.CostMedium},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	if err := NewPlanGuard(catalog, nil).WithDirectors(directors).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should satisfy stage guard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanUsesScriptProducerWhenCaptionSplitterIsLastStep(t *testing.T) {
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name: "video_script_generator",
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"caption_splitter": {
+			Name: "caption_splitter",
+			Output: map[string]tool.ParamDef{
+				"captionPlan": {Type: "object"},
+				"artifacts":   {Type: "object"},
+			},
+		},
+		"shot_splitter": {
+			Name: "shot_splitter",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name: "hyperframes_project_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"hyperframesPath": {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name: "hyperframes_renderer",
+			Parameters: map[string]tool.ParamDef{
+				"hyperframesPath": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"finalVideo": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name: "publish_copy_generator",
+			Output: map[string]tool.ParamDef{
+				"publish_copy": {Type: "object"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯奇迹"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "caption_splitter",
+				Tool:      "caption_splitter",
+				DependsOn: []string{"script_generation"},
+				Arguments: map[string]interface{}{
+					"script": "{{script_generation.output.script}}",
+				},
+				ExpectedOutput:  []string{"captionPlan"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	beat := prepared.Steps[2]
+	if beat.ID != "beat_plan" || beat.Tool != "shot_splitter" {
+		t.Fatalf("expected injected beat_plan as third step, got %#v", prepared.Steps)
+	}
+	if got := beat.Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("beat_plan should reference script producer, got %#v", beat.Arguments)
+	}
+	if len(beat.DependsOn) != 1 || beat.DependsOn[0] != "script_generation" {
+		t.Fatalf("beat_plan should depend on script producer, got %#v", beat.DependsOn)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanIgnoresHallucinatedScriptExpectedOutputFromNewsSearch(t *testing.T) {
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name: "video_script_generator",
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"news_search": {
+			Name: "news_search",
+			Output: map[string]tool.ParamDef{
+				"facts":   {Type: "array"},
+				"sources": {Type: "array"},
+			},
+		},
+		"shot_splitter": {
+			Name: "shot_splitter",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name: "hyperframes_project_generator",
+			Parameters: map[string]tool.ParamDef{
+				"topic":    {Type: "string", Required: true},
+				"script":   {Type: "string", Required: true},
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"projectDir": {Type: "string"},
+				"entry":      {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name: "hyperframes_renderer",
+			Parameters: map[string]tool.ParamDef{
+				"projectDir": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"outputPath": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name: "publish_copy_generator",
+			Parameters: map[string]tool.ParamDef{
+				"script":   {Type: "string", Required: true},
+				"shotList": {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"title":       {Type: "string"},
+				"description": {Type: "string"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯奇迹"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "news_search",
+				Tool:      "news_search",
+				DependsOn: []string{"script_generation"},
+				Arguments: map[string]interface{}{
+					"query": "Cape Verde World Cup knockout latest",
+				},
+				ExpectedOutput: []string{"facts", "sources", "script"},
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	beat := findStep(t, prepared, "beat_plan")
+	if got := beat.Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("beat_plan should reference script producer, got %#v", beat.Arguments)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("preview should reference script producer, got %#v", preview.Arguments)
+	}
+	if got := preview.Arguments["shotList"]; got != "{{beat_plan.output.shotList}}" {
+		t.Fatalf("preview should reference shot list producer, got %#v", preview.Arguments)
+	}
+	render := findStep(t, prepared, "render")
+	if got := render.Arguments["projectDir"]; got != "{{preview.output.projectDir}}" {
+		t.Fatalf("render should reference projectDir producer, got %#v", render.Arguments)
+	}
+	if _, ok := render.Arguments["hyperframesPath"]; ok {
+		t.Fatalf("render must not reference undeclared hyperframesPath, got %#v", render.Arguments)
+	}
+	publish := findStep(t, prepared, "publish_copy")
+	if got := publish.Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("publish_copy should reference script producer, got %#v", publish.Arguments)
+	}
+	if got := publish.Arguments["shotList"]; got != "{{beat_plan.output.shotList}}" {
+		t.Fatalf("publish_copy should reference shot list producer, got %#v", publish.Arguments)
+	}
+	if _, ok := publish.Arguments["finalVideo"]; ok {
+		t.Fatalf("publish_copy must not reference undeclared finalVideo, got %#v", publish.Arguments)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanRepairsExistingBeatPlanInvalidScriptReference(t *testing.T) {
+	catalog := staticToolCatalog{
+		"news_search": {
+			Name: "news_search",
+			Output: map[string]tool.ParamDef{
+				"facts":   {Type: "array"},
+				"sources": {Type: "array"},
+			},
+		},
+		"video_script_generator": {
+			Name: "video_script_generator",
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"shot_splitter": {
+			Name: "shot_splitter",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name: "hyperframes_project_generator",
+			Parameters: map[string]tool.ParamDef{
+				"topic":    {Type: "string", Required: true},
+				"script":   {Type: "string", Required: true},
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"projectDir": {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name: "hyperframes_renderer",
+			Parameters: map[string]tool.ParamDef{
+				"projectDir": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"outputPath": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name: "publish_copy_generator",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"title": {Type: "string"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "news_search",
+				Tool:            "news_search",
+				Arguments:       map[string]interface{}{"query": "Cape Verde World Cup"},
+				ExpectedOutput:  []string{"facts", "sources", "script"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				DependsOn:       []string{"news_search"},
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯奇迹"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "beat_plan",
+				Tool:      "shot_splitter",
+				DependsOn: []string{"news_search"},
+				Arguments: map[string]interface{}{
+					"script": "{{news_search.output.script}}",
+				},
+				ExpectedOutput:  []string{"shotList"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	beat := findStep(t, prepared, "beat_plan")
+	if got := beat.Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("beat_plan should reference script producer, got %#v", beat.Arguments)
+	}
+	if !containsString(beat.DependsOn, "script_generation") {
+		t.Fatalf("beat_plan should depend on script_generation, got %#v", beat.DependsOn)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
 	}
 }
 
@@ -234,6 +687,29 @@ type staticToolCatalog map[string]*tool.ToolManifest
 
 func (c staticToolCatalog) GetManifest(name string) *tool.ToolManifest {
 	return c[name]
+}
+
+func findStep(t *testing.T, plan *AgentPlan, id string) AgentStep {
+	t.Helper()
+	for _, step := range plan.Steps {
+		if step.ID == id {
+			return step
+		}
+	}
+	t.Fatalf("step %s not found in %#v", id, plan.Steps)
+	return AgentStep{}
+}
+
+func requireStepDeps(t *testing.T, step AgentStep, want []string) {
+	t.Helper()
+	if len(step.DependsOn) != len(want) {
+		t.Fatalf("step %s depends on %#v, want %#v", step.ID, step.DependsOn, want)
+	}
+	for i, dep := range want {
+		if step.DependsOn[i] != dep {
+			t.Fatalf("step %s depends on %#v, want %#v", step.ID, step.DependsOn, want)
+		}
+	}
 }
 
 func requireNode(t *testing.T, dag *model.DAGRequest, id, typ, name string) model.NodeRequest {
