@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 from flask import Flask, request, jsonify
@@ -40,12 +42,17 @@ def run_script(script_name: str, args: list[str], timeout: int = 120) -> dict:
         return {"success": False, "error": f"脚本不存在: {script_path}"}
 
     try:
+        env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
         result = subprocess.run(
             ["python", str(script_path)] + args,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
             cwd=str(SCRIPTS_DIR),
+            env=env,
+            errors="replace",
         )
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
@@ -101,6 +108,78 @@ def health():
 
 # ─── 工具端点 ─────────────────────────────────────────
 
+BID_ANALYSIS_PROMPT = """你是一个专业的招标文件分析师。请分析以下招标文件内容，提取关键信息并生成结构化报告。
+
+报告必须包含以下章节：
+
+## 一、项目基本信息
+- 项目名称、编号、招标单位
+- 项目概况（工程范围、规模、标准）
+
+## 二、评分标准拆解
+用表格列出所有评分项，包含：
+| 评分项 | 分值 | 评审要点 |
+
+## 三、技术规格要求
+列出所有关键技术指标
+
+## 四、工期与关键节点
+计划工期及里程碑
+
+## 五、采购需求清单
+用表格列出主要材料/设备需求：
+| 材料/设备 | 规格型号 | 预估数量 |
+
+## 六、投标人资格要求
+列出资质、业绩、人员等门槛条件
+
+## 七、投标策略建议
+根据评分标准，给出3-5条提高得分的策略建议
+
+## 八、注意事项提示
+列出标书需要注意的事项，如文本图表、字体要求等，尤其注意可能会导致废标的事项
+
+--- 以下是招标文件原文 ---
+
+"""
+
+
+def analyze_bid_content(raw_text: str) -> str:
+    """调用 LLM 分析招标文件内容"""
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com")
+    model = os.environ.get("OPENAI_MODEL", "deepseek-v4-pro")
+
+    if not api_key:
+        return "> ⚠️ 未配置 OPENAI_API_KEY，跳过 AI 分析。请在环境变量中设置 API 密钥。"
+
+    body = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": BID_ANALYSIS_PROMPT},
+            {"role": "user", "content": raw_text[:30000]},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 4000,
+    }, ensure_ascii=False).encode("utf-8")
+
+    url = base_url.rstrip("/") + "/v1/chat/completions"
+    req = urllib.request.Request(url, data=body, headers={
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    })
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        return f"> ⚠️ AI 分析请求失败 (HTTP {e.code}): {err_body[:200]}"
+    except Exception as e:
+        return f"> ⚠️ AI 分析请求异常: {str(e)[:200]}"
+
+
 @app.route("/tools/parse_bid_files", methods=["POST"])
 def tool_parse_bid_files():
     """解析招标文件（txt/pdf/docx/xlsx），输出产物到项目目录"""
@@ -127,15 +206,25 @@ def tool_parse_bid_files():
         return jsonify({"success": False, "error": stdout}), 400
 
     # 保存阶段产物：00_招标文件解析报告.md
-    if result.get("success") and params.get("output_dir"):
-        project_dir = os.path.join(OUTPUT_DIR, str(params["output_dir"]))
+    if result.get("success"):
+        # 优先用传入的 output_dir，否则从文件名推导
+        project_dir_name = str(params.get("output_dir", "")).strip()
+        if not project_dir_name:
+            base = os.path.splitext(os.path.basename(file_path))[0]
+            project_dir_name = base if base else "bid_output"
+        project_dir = os.path.join(OUTPUT_DIR, project_dir_name)
         os.makedirs(project_dir, exist_ok=True)
         report_path = os.path.join(project_dir, "00_招标文件解析报告.md")
+        content = result.get("data", {}).get("stdout", "")
+        # AI 分析
+        analysis = analyze_bid_content(content)
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(f"# 招标文件解析报告\n\n")
             f.write(f"**源文件**: {file_path}\n\n")
             f.write(f"---\n\n")
-            f.write(result["data"]["stdout"])
+            f.write(analysis)
+            f.write(f"\n\n---\n\n## 附录：招标文件原文\n\n")
+            f.write(content)
         result["data"]["report_path"] = report_path
 
     return jsonify(result)
