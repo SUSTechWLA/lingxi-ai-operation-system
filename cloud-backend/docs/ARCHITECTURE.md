@@ -145,7 +145,7 @@ PublishService (业务逻辑)
 ├── AIPolishText()      → 调用 LLM 润色指定文本（同步）
 ├── AIPolishSubmit()    → 提交异步润色任务（返回 taskId+nodeId）
 ├── AIPolishQuery()     → 查询异步润色结果
-└── callOpenAI()        → 通用 OpenAI API 调用封装
+└── callOpenAI()        → 视频创作 OpenAI API 调用封装
 
 TraceHandler (追踪查询)
 ├── GET /api/trace/recent    → 查询最近一次任务的完整链路数据（任务详情 + 上下文列表）

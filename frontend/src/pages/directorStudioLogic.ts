@@ -262,6 +262,7 @@ export function buildDirectorArtifacts(
   roleAgents: VideoRoleAgent[],
   reviews: AgentReviewItem[] = [],
   trace: unknown = undefined,
+  projectArtifacts: Array<Record<string, unknown>> = [],
 ): DirectorArtifactRecord[] {
   const traceNodes = extractTraceNodes(trace)
 
@@ -273,7 +274,8 @@ export function buildDirectorArtifacts(
     const artifactOutputs = extractArtifacts(node)
 
     return outputs.map((output, outputIndex) => {
-      const artifact = artifactOutputs.find((item) => item.kind === output) || artifactOutputs[outputIndex]
+      const projectArtifact = findProjectArtifactForOutput(projectArtifacts, output, role)
+      const artifact = projectArtifact || artifactOutputs.find((item) => item.kind === output) || artifactOutputs[outputIndex]
       const manifestStatus = normalizeArtifactStatus(stringValue(artifact?.status))
       const requiresManifest = requiresMaterializedArtifact(output)
       const fallbackStatus = artifactStatusFor(review, node)
@@ -288,17 +290,57 @@ export function buildDirectorArtifacts(
         id: String(artifact?.id || artifact?.artifactId || `A${String(index).padStart(2, '0')}${outputIndex ? `-${outputIndex + 1}` : ''}`),
         name: String(artifact?.name || displayNameForArtifact(output)),
         kind: output,
-        version: artifact ? '第1版' : '-',
+        version: artifact ? artifactVersionLabel(artifact) : '-',
         status,
         owner: role.displayName || role.name,
-        updatedAt: formatTime(node?.createdAt),
+        updatedAt: formatTime(stringValue(artifact?.updatedAt) || stringValue(artifact?.createdAt) || node?.createdAt),
         humanApproved: artifact ? manifestHumanApproved ?? status === 'valid' : false,
         storageRef: displayStorageRef(artifact?.storageRef || artifact?.url || (requiresManifest ? '' : storageHintForKind(output))),
-        dependsOn: stringArrayValue(artifact?.dependsOn) || role.requiredInputs,
+        dependsOn: stringArrayValue(artifact?.dependsOn) || stringArrayValue(objectValue(artifact?.metadata)?.dependsOn) || role.requiredInputs,
         metadata: objectValue(artifact?.metadata),
       }
     })
   })
+}
+
+function findProjectArtifactForOutput(
+  projectArtifacts: Array<Record<string, unknown>>,
+  output: string,
+  role: VideoRoleAgent,
+): Record<string, unknown> | undefined {
+  return projectArtifacts.find((artifact) => {
+    const metadata = objectValue(artifact.metadata)
+    const kind = stringValue(artifact.kind)
+    const metadataKind = stringValue(metadata?.artifactKind) || stringValue(metadata?.kind)
+    const stageName = stringValue(artifact.stageName)
+    if (kind === output || metadataKind === output) return true
+    return stageName === role.stage && semanticKindForStage(stageName) === output
+  })
+}
+
+function semanticKindForStage(stageName: string | undefined): string | undefined {
+  const map: Record<string, string> = {
+    proposal: 'VIDEO_PROPOSAL',
+    script: 'VIDEO_SCRIPT',
+    storyboard: 'CARD_PLAN',
+    composition: 'VIDEO_COMPOSITION_SPEC',
+    reference: 'REFERENCE_ASSET_PLAN',
+    continuity: 'CONTINUITY_REPORT',
+    preview: 'PREVIEW_SNAPSHOTS',
+    render: 'VIDEO',
+    quality: 'FINAL_REVIEW',
+    package: 'PROJECT_PACKAGE',
+  }
+  return stageName ? map[stageName] : undefined
+}
+
+function artifactVersionLabel(artifact: Record<string, unknown>): string {
+  const version = artifact.version
+  if (typeof version === 'number' && Number.isFinite(version)) return `第${version}版`
+  if (typeof version === 'string' && version.trim()) {
+    return version.startsWith('第') ? version : `第${version}版`
+  }
+  return '第1版'
 }
 
 export function buildDirectorTraceNodes(trace: unknown): DirectorTraceNode[] {
@@ -933,6 +975,27 @@ export function reviewQualityReportLines(review: AgentReviewItem | undefined): s
   if (typeof report.passed === 'boolean') {
     lines.push(`门禁结果：${report.passed ? '已通过' : '未通过'}`)
   }
+  const analysis = stringValue(report.analysisSummary) || stringValue(report.analysis) || stringValue(report.summary)
+  if (analysis) {
+    lines.push(`分析：${analysis}`)
+  }
+
+  const rubricBreakdown = Array.isArray(report.rubricBreakdown) ? report.rubricBreakdown : []
+  for (const item of rubricBreakdown) {
+    const rubric = objectValue(item)
+    if (!rubric) continue
+    const criterion = stringValue(rubric.criterion) || stringValue(rubric.dimension) || stringValue(rubric.name)
+    const itemScore = numberValue(rubric.score)
+    const maxScore = numberValue(rubric.maxScore)
+    const reason = stringValue(rubric.reason) || stringValue(rubric.comment)
+    const scoreText = itemScore !== undefined && maxScore !== undefined
+      ? `${itemScore}/${maxScore}`
+      : itemScore !== undefined ? String(itemScore) : ''
+    const prefix = [criterion, scoreText].filter(Boolean).join('：')
+    if (prefix || reason) {
+      lines.push([prefix, reason].filter(Boolean).join('，'))
+    }
+  }
 
   const issues = Array.isArray(report.issues) ? report.issues : []
   for (const issue of issues) {
@@ -952,6 +1015,12 @@ export function reviewQualityReportLines(review: AgentReviewItem | undefined): s
   for (const suggestion of suggestions) {
     if (typeof suggestion === 'string') {
       lines.push(`建议：${suggestion}`)
+    }
+  }
+  const keepDoing = Array.isArray(report.keepDoing) ? report.keepDoing : Array.isArray(report.whatWorked) ? report.whatWorked : []
+  for (const item of keepDoing) {
+    if (typeof item === 'string' && item.trim()) {
+      lines.push(`保持：${item}`)
     }
   }
 
@@ -1207,6 +1276,15 @@ function stringValue(value: unknown): string | undefined {
 
 function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
 }
 
 function stringArrayValue(value: unknown): string[] | undefined {

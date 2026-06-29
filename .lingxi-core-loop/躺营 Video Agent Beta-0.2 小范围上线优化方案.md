@@ -183,7 +183,7 @@ Publish 兼容层
 执行：
 
 ```bash
-grep -R "internal/agents/bid\|internal/agents/chat\|/api/bid\|/api/chat\|标书\|投标\|通用对话\|AI 对话助手" . -n
+grep -R "internal/agents/bid\|internal/agents/chat\|/api/bid\|/api/chat\|标书\|投标\|视频创作对话\|AI 对话助手" . -n
 ```
 
 ## 5.3 处理规则
@@ -194,8 +194,8 @@ grep -R "internal/agents/bid\|internal/agents/chat\|/api/bid\|/api/chat\|标书\
 1. /api/bid/*
 2. /api/chat/*
 3. 标书入口
-4. 通用 Chat 页面
-5. 通用 Chat 菜单
+4. 视频创作 Chat 页面
+5. 视频创作 Chat 菜单
 6. README / ARCHITECTURE / AGENTS / CLAUDE 中的旧业务描述
 ```
 
@@ -216,7 +216,7 @@ grep -R "internal/agents/bid\|internal/agents/chat\|/api/bid\|/api/chat\|标书\
 ## 5.4 验收标准
 
 ```text
-1. 前端导航不出现 bid / 标书 / 通用聊天。
+1. 前端导航不出现 bid / 标书 / 视频创作聊天。
 2. OpenAPI 不暴露 /api/bid/*。
 3. OpenAPI 不暴露 /api/chat/*。
 4. 架构文档只描述 video + publish 兼容层。
@@ -571,7 +571,7 @@ docs/BETA_USAGE.md
 
 ## 11.1 目标
 
-用 video-scoped assistant 替代通用 chat，但本轮只做最小可用。
+用 video-scoped assistant 替代视频创作 chat，但本轮只做最小可用。
 
 ## 11.2 新增接口
 
@@ -907,7 +907,7 @@ docs: add beta usage and test cases
 1. 清理业务边界：
    - 不再暴露 /api/bid/*
    - 不再暴露 /api/chat/*
-   - 前端不出现标书和通用聊天入口
+   - 前端不出现标书和视频创作聊天入口
    - 文档只描述 video + publish 兼容层
 
 2. 保持当前核心链路：
@@ -952,7 +952,7 @@ docs: add beta usage and test cases
 1. 不要新增完整 operation 模块。
 2. 不要重构 publish 为 distribution。
 3. 不要接入多个视频生成 Provider。
-4. 不要恢复通用 chat。
+4. 不要恢复视频创作 chat。
 5. 不要恢复 bid。
 6. 不要重写 Agent Runtime。
 7. 不要引入复杂 Python 视频工具链。

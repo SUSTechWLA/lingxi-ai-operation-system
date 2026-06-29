@@ -230,18 +230,41 @@ func betaArtifactMetadata(metadata map[string]interface{}, node *model.Node) map
 	} else {
 		metadata["producedByTool"] = "external"
 	}
-	if roleAgentID, ok := node.Input["roleAgentId"].(string); ok {
+	if roleAgentID := nodeInputString(node, "roleAgentId"); roleAgentID != "" {
 		metadata["roleAgentId"] = roleAgentID
 	}
-	if roleAgent, ok := node.Input["roleAgent"].(map[string]interface{}); ok {
+	if roleAgent := nodeInputMap(node, "roleAgent"); roleAgent != nil {
 		if displayName, ok := roleAgent["displayName"].(string); ok {
 			metadata["producedByRole"] = displayName
 		}
 	}
-	if dependsOn := stringSliceFromInterface(node.Input["requiredInputs"]); len(dependsOn) > 0 {
+	if dependsOn := stringSliceFromInterface(nodeInputValue(node, "requiredInputs")); len(dependsOn) > 0 {
 		metadata["dependsOn"] = dependsOn
 	}
 	return metadata
+}
+
+func nodeInputValue(node *model.Node, key string) interface{} {
+	if node == nil || node.Input == nil || key == "" {
+		return nil
+	}
+	if value, ok := node.Input[key]; ok {
+		return value
+	}
+	if params, ok := node.Input["parameters"].(map[string]interface{}); ok {
+		return params[key]
+	}
+	return nil
+}
+
+func nodeInputString(node *model.Node, key string) string {
+	value, _ := nodeInputValue(node, key).(string)
+	return strings.TrimSpace(value)
+}
+
+func nodeInputMap(node *model.Node, key string) map[string]interface{} {
+	value, _ := nodeInputValue(node, key).(map[string]interface{})
+	return value
 }
 
 // extractArtifactContent pulls inline content from the tool output payload for

@@ -183,7 +183,7 @@ func TestExtractJSON_TargetStruct(t *testing.T) {
 
 func TestExtractJSON_RealWorldKeywordsArray(t *testing.T) {
 	// Simulates the actual issue: keywords returned as bare JSON array
-	raw := `["AIOS", "AIOS 通用智能体平台", "AI运营工具"]`
+	raw := `["AIOS", "AIOS 视频创作智能体平台", "AI运营工具"]`
 	var keywords []string
 	if err := ExtractJSON(raw, &keywords); err != nil {
 		t.Fatalf("unexpected error: %v", err)

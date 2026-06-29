@@ -929,7 +929,7 @@ CompositionDirectorAgent 基于 CARD_PLAN 输出 VIDEO_COMPOSITION_SPEC
 
 # 12. 多角色 Agent 的 Prompt 模板
 
-## 12.1 通用模板
+## 12.1 视频创作模板
 
 ```text
 你是 {{RoleName}}。

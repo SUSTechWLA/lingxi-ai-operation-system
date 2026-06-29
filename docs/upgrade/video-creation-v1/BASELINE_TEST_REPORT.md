@@ -10,7 +10,7 @@
 
 ## 1. 实际目录树
 
-### internal/core/ (通用核心)
+### internal/core/ (视频创作核心)
 ```
 internal/core/
 ├── common/

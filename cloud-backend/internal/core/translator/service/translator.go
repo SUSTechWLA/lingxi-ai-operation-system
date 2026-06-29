@@ -89,7 +89,7 @@ func (s *NlToDagService) TranslateToDag(ctx context.Context, prompt string) (*mo
 		}
 	}
 	if toolsDesc == "" {
-		toolsDesc = "llm_api: 通用大模型调用，可执行任意文本生成任务"
+		toolsDesc = "llm_api: 视频创作大模型调用，可执行任意文本生成任务"
 	}
 
 	nodeID := fmt.Sprintf("nl-translate-%d", time.Now().UnixMilli())

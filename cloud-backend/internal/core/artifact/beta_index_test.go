@@ -79,6 +79,54 @@ func TestBuildArtifactRequestsFromNodeCarriesBetaIndexMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildArtifactRequestsFromNodeCarriesNestedRoleMetadata(t *testing.T) {
+	node := &model.Node{
+		ID:     "storyboard_exec",
+		TaskID: "task-2",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"tool": "external",
+			"parameters": map[string]interface{}{
+				"stage":       "storyboard",
+				"roleAgentId": "storyboard_artist",
+				"roleAgent": map[string]interface{}{
+					"displayName": "分镜导演",
+				},
+				"requiredInputs": []interface{}{"VIDEO_SCRIPT"},
+			},
+		},
+		Output: map[string]interface{}{
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "card-plan",
+					"kind":     "CARD_PLAN",
+					"name":     "卡片分镜",
+					"mimeType": "application/json",
+				},
+			},
+			"cardPlan": map[string]interface{}{
+				"cards": []interface{}{},
+			},
+		},
+	}
+
+	requests := BuildArtifactRequestsFromNode("project-1", "task-2", node)
+	if len(requests) != 1 {
+		t.Fatalf("expected one artifact request, got %d", len(requests))
+	}
+	req := requests[0]
+	if req.TaskID != "task-2" || req.RoleAgentID != "storyboard_artist" {
+		t.Fatalf("request should carry nested task and role agent: %+v", req)
+	}
+	if req.Metadata["producedByRole"] != "分镜导演" {
+		t.Fatalf("request should carry nested role display name: %+v", req.Metadata)
+	}
+	dependsOn, ok := req.Metadata["dependsOn"].([]string)
+	if !ok || len(dependsOn) != 1 || dependsOn[0] != "VIDEO_SCRIPT" {
+		t.Fatalf("request should carry nested dependency list: %+v", req.Metadata)
+	}
+}
+
 func TestDownstreamStaleArtifactKinds(t *testing.T) {
 	// DownstreamStaleArtifactKinds now returns stage_name values (matching the
 	// artifacts.stage_name column) for use with MarkStaleByStageNames.

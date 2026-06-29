@@ -56,7 +56,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务
 ```text
 1. 不再新增非视频业务线。
 2. 不再恢复 bid / generic chat。
-3. 保留 core 通用引擎，但业务入口只服务视频创作。
+3. 保留 core 视频创作引擎，但业务入口只服务视频创作。
 4. publish 后续重构为 distribution。
 5. 新增 operation，用于发布后数据复盘。
 6. 所有能力围绕“视频生产闭环”建设。
@@ -77,7 +77,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务
 - /api/bid/*
 - /api/chat/*
 - 标书相关文档
-- 通用聊天前端入口
+- 视频创作聊天前端入口
 
 保留：
 - internal/core/agentruntime
@@ -95,7 +95,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务
 
 ```bash
 grep -R "internal/agents/bid\|internal/agents/chat\|/api/bid\|/api/chat" . -n
-grep -R "标书\|投标\|通用对话\|AI 对话助手" . -n
+grep -R "标书\|投标\|视频创作对话\|AI 对话助手" . -n
 find cloud-backend/internal/agents -maxdepth 1 -type d
 ```
 
@@ -103,7 +103,7 @@ find cloud-backend/internal/agents -maxdepth 1 -type d
 
 ```text
 1. cloud-backend/internal/agents 下不再存在 bid 和 chat 目录。
-2. 前端导航不再出现标书、通用对话。
+2. 前端导航不再出现标书、视频创作对话。
 3. OpenAPI 文档不再暴露 /api/bid/* 和 /api/chat/*。
 4. docs/ARCHITECTURE.md 不再把 bid/chat 写成当前业务线。
 5. README、AGENTS.md、CLAUDE.md、ARCHITECTURE.md 对产品定位一致。
@@ -121,7 +121,7 @@ find cloud-backend/internal/agents -maxdepth 1 -type d
 不要再保留“同一套引擎服务多条业务线”的表达。新的表达应该是：
 
 ```text
-系统底层 core 保持通用，但当前产品只面向视频创作、发布管理和运营复盘。
+系统底层 core 保持视频创作，但当前产品只面向视频创作、发布管理和运营复盘。
 ```
 
 ### 4.2 新文档结构
@@ -134,7 +134,7 @@ find cloud-backend/internal/agents -maxdepth 1 -type d
 1. 产品定位
 2. 系统运行边界
 3. 总体架构
-4. Core 通用引擎
+4. Core 视频创作引擎
 5. Video Agent 业务层
 6. Distribution Agent 发布层
 7. Operation Agent 运营复盘层
@@ -681,7 +681,7 @@ POST /api/video/projects/:id/runs/:runId/cancel
 
 ### 11.3 视频助手
 
-不要恢复通用 chat。只允许视频项目内助手。
+不要恢复视频创作 chat。只允许视频项目内助手。
 
 ```http
 POST /api/video/projects/:id/assistant/message
@@ -993,7 +993,7 @@ cd cloud-backend && make api-docs-check
 
 ```text
 1. 新增 bid、合同、标书、论文等非视频业务线。
-2. 恢复通用 chat 产品入口。
+2. 恢复视频创作 chat 产品入口。
 3. 让视频项目绕过 Artifact 直接生成最终结果。
 4. 让高成本视频生成绕过人工审核。
 5. 将用户 API Key 明文写入日志。

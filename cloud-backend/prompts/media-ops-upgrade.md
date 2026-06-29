@@ -71,7 +71,7 @@
 
 **后端**：
 1. 在 `internal/worker/tools/` 下新建 `media_analyzer.go`，实现 `Tool` 接口。
-2. `Execute` 内调用 `callOpenAI()`（复用 `PublishService` 的通用封装），将图片/视频转文字，输出标签和向量。
+2. `Execute` 内调用 `callOpenAI()`（复用 `PublishService` 的视频创作封装），将图片/视频转文字，输出标签和向量。
 3. 在 `main.go` 的 `initTools()` 中注册 `MediaAnalyzerTool{}`。
 4. 在 `internal/handler/media/` 新增 handler（`MediaHandler`），提供素材列表、详情、标签更新接口，复用现有 `PostgreSQL` 连接池。
 5. 素材元数据存储于新表 `media_assets`（字段：`id`, `user_id`, `original_name`, `mime_type`, `size`, `minio_path`, `tags JSONB`, `embedding_id`, `created_at`）。

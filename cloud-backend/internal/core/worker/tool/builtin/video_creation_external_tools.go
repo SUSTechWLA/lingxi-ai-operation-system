@@ -3468,7 +3468,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 		knowledgeTrace = knowledgeTraceFromParams(params, usedFacts)
 	}
 	style := stringParam(params, "outputStyle", "")
-	platform := stringParam(params, "platform", "通用平台")
+	platform := stringParam(params, "platform", "视频创作平台")
 	script := stringParam(params, "script", "")
 	shotList := stringParam(params, "shotList", "")
 	videoPrompts := stringParam(params, "videoPrompts", "")
@@ -3656,6 +3656,11 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 	if repairSuggestions, ok := contentPkg["repairSuggestions"]; ok {
 		data["repairSuggestions"] = repairSuggestions
+	}
+	for _, key := range []string{"analysisSummary", "rubricBreakdown", "scoringRules", "evidence", "whatWorked", "keepDoing"} {
+		if value, ok := contentPkg[key]; ok {
+			data[key] = value
+		}
 	}
 	if missingArtifacts, ok := contentPkg["missingArtifacts"]; ok {
 		data["missingArtifacts"] = missingArtifacts
@@ -4269,7 +4274,12 @@ duration 硬规则：
   “issues”: [
     {“level”: “error|warning|info”, “field”: “...”, “message”: “...”}
   ],
-  “repairSuggestions”: [“...”]
+  “repairSuggestions”: [“...”],
+  “analysisSummary”: “用一句话说明为什么得到这个分数，以及最重要的通过/扣分依据。”,
+  “rubricBreakdown”: [
+    {“criterion”: “结构完整性|节奏与时长|知识准确性|开头吸引力|口播自然度”, “score”: 0, “maxScore”: 20, “reason”: “具体依据”}
+  ],
+  “keepDoing”: [“用户后续应该继续保持的写法或策略”]
 }`
 
 	case "composition_quality_checker":

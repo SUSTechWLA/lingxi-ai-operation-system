@@ -177,7 +177,7 @@ interface ApiResponse<T> {
 
 ### 3.1 AIOS AI OS 是什么
 
-AIOS 是一个**通用智能体编排平台**：
+AIOS 是一个**视频创作智能体编排平台**：
 
 ```
 用户使用场景：

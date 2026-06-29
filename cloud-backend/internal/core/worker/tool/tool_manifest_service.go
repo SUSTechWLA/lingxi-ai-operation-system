@@ -161,7 +161,7 @@ func (s *ToolManifestService) FormatForPrompt(ctx context.Context) (string, erro
 	}
 
 	if desc == "" {
-		desc = "llm_api: 通用大模型调用，可执行任意文本生成任务"
+		desc = "llm_api: 视频创作大模型调用，可执行任意文本生成任务"
 	}
 	return desc, nil
 }

@@ -106,6 +106,45 @@ func (r *TaskRepository) FindRecent(ctx context.Context) (*model.Task, error) {
 	return &task, nil
 }
 
+func (r *TaskRepository) FindAgentRuntimeTasksByProject(ctx context.Context, projectID string) ([]*model.Task, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, user_id, status, input, output, pause_reason, created_at
+		 FROM ai_task
+		 WHERE input->>'source' = 'agentruntime'
+		   AND COALESCE(input->'context'->>'projectId', input->'context'->>'projectID', input->>'projectId', input->>'projectID') = $1
+		 ORDER BY created_at DESC`, projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tasks := make([]*model.Task, 0)
+	for rows.Next() {
+		var task model.Task
+		var input, output []byte
+		var userID *string
+		var pauseReason *string
+		if err := rows.Scan(&task.ID, &userID, &task.Status, &input, &output, &pauseReason, &task.CreatedAt); err != nil {
+			return nil, err
+		}
+		if userID != nil {
+			task.UserID = *userID
+		}
+		if pauseReason != nil {
+			task.PauseReason = *pauseReason
+		}
+		if len(input) > 0 {
+			_ = json.Unmarshal(input, &task.Input)
+		}
+		if len(output) > 0 {
+			_ = json.Unmarshal(output, &task.Output)
+		}
+		tasks = append(tasks, &task)
+	}
+	return tasks, rows.Err()
+}
+
 type NodeRepository struct {
 	pool *pgxpool.Pool
 }

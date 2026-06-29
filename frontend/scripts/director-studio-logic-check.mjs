@@ -304,6 +304,28 @@ try {
   assert.equal(missingCompositionArtifacts[0].status, 'missing')
   const missingCompositionStages = buildDirectorStages([compositionRole], [], missingCompositionTrace, true)
   assert.equal(missingCompositionStages[0].status, 'failed')
+  const materializedCompositionArtifacts = buildDirectorArtifacts([compositionRole], [], missingCompositionTrace, [
+    {
+      id: 'art-composition-1',
+      projectId: 'vp-1',
+      stageName: 'composition',
+      unitId: 'composition',
+      kind: 'VIDEO_COMPOSITION_SPEC',
+      name: '视频结构',
+      version: 2,
+      status: 'valid',
+      humanApproved: true,
+      storageRef: 'local://projects/vp-1/artifacts/composition/composition/hash/composition.json',
+      dependsOn: ['VIDEO_SCRIPT'],
+      metadata: { producedByRole: '结构导演' },
+      updatedAt: '2026-06-29T08:00:00Z',
+    },
+  ])
+  assert.equal(materializedCompositionArtifacts[0].id, 'art-composition-1')
+  assert.equal(materializedCompositionArtifacts[0].version, '第2版')
+  assert.equal(materializedCompositionArtifacts[0].status, 'valid')
+  assert.equal(materializedCompositionArtifacts[0].humanApproved, true)
+  assert.equal(materializedCompositionArtifacts[0].storageRef, 'local://projects/vp-1/artifacts/composition/composition/hash/composition.json')
 
   const readyCompositionTrace = {
     nodes: [
@@ -355,6 +377,30 @@ try {
   assert.deepEqual(reviewQualityReportLines(qualityGateReview), [
     '质量评分 82/100，门禁阈值 85',
     '事实来源需要更明确',
+  ])
+  const explainableQualityGateReview = {
+    ...qualityGateReview,
+    reviewOutput: {
+      qualityReport: {
+        score: 95,
+        passed: true,
+        analysisSummary: '脚本结构完整，开头钩子明确，时长与事实引用都满足本轮要求。',
+        rubricBreakdown: [
+          { criterion: '结构完整性', score: 20, maxScore: 20, reason: '包含钩子、主体和总结。' },
+          { criterion: '口播自然度', score: 18, maxScore: 20, reason: '表达清楚，个别句子可更短。' },
+        ],
+        keepDoing: ['保留开头的反差钩子', '继续引用本次知识材料中的事实'],
+      },
+    },
+  }
+  assert.deepEqual(reviewQualityReportLines(explainableQualityGateReview), [
+    '质量评分 95/100，门禁阈值 85',
+    '门禁结果：已通过',
+    '分析：脚本结构完整，开头钩子明确，时长与事实引用都满足本轮要求。',
+    '结构完整性：20/20，包含钩子、主体和总结。',
+    '口播自然度：18/20，表达清楚，个别句子可更短。',
+    '保持：保留开头的反差钩子',
+    '保持：继续引用本次知识材料中的事实',
   ])
 
   const noisyJsonReview = {
@@ -444,6 +490,18 @@ try {
   assert.ok(
     pageSource.includes('mt-4 flex gap-2 overflow-x-auto px-1 py-1'),
     'review history scroller needs padding so item borders are not clipped',
+  )
+  assert.ok(
+    pageSource.includes('createVideoProject'),
+    'director studio should create a video project before starting a dynamic agent run',
+  )
+  assert.ok(
+    pageSource.includes('fetchProjectArtifacts'),
+    'director studio should refresh project artifacts as part of the shared state source',
+  )
+  assert.ok(
+    pageSource.includes('projectId: nextProject.id'),
+    'dynamic agent run context must include the bound project id',
   )
 } finally {
   await rm(tempDir, { recursive: true, force: true })

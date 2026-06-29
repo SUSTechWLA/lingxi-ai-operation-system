@@ -160,7 +160,7 @@ P3 门禁：
 
 ### P4 Model Gateway
 
-#### P4-T01 通用接口和 Router
+#### P4-T01 视频创作接口和 Router
 
 实现 capability、provider、request/result、error mapping。
 
@@ -378,11 +378,11 @@ docker compose -f deploy/docker-compose.cloud.yml up -d
 
 ### 应新增到 Core
 
-- 通用 Skill loader。
-- 通用 Artifact。
-- 通用 Model Gateway。
-- 通用 Workflow Run/Approval/Rerun。
-- 通用 Local Runner 协议。
+- 视频创作 Skill loader。
+- 视频创作 Artifact。
+- 视频创作 Model Gateway。
+- 视频创作 Workflow Run/Approval/Rerun。
+- 视频创作 Local Runner 协议。
 
 ### 应新增到 Agent
 

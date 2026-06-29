@@ -20,8 +20,10 @@ func NewContentGeneratorTool(cfg config.OpenAIConfig) *ContentGeneratorTool {
 	return &ContentGeneratorTool{cfg: cfg}
 }
 
-func (t *ContentGeneratorTool) Name() string       { return "content_generator" }
-func (t *ContentGeneratorTool) Description() string { return "Generate full content package (title, description, script, tags) from media analysis" }
+func (t *ContentGeneratorTool) Name() string { return "content_generator" }
+func (t *ContentGeneratorTool) Description() string {
+	return "Generate full content package (title, description, script, tags) from media analysis"
+}
 func (t *ContentGeneratorTool) Type() tool.ToolType { return tool.ToolTypeCustom }
 
 func (t *ContentGeneratorTool) Manifest() tool.ToolManifest {
@@ -38,7 +40,7 @@ func (t *ContentGeneratorTool) Manifest() tool.ToolManifest {
 			},
 			"platform": {
 				Type:        "string",
-				Description: "Target platform name (default: 通用平台)",
+				Description: "Target platform name (default: 视频创作平台)",
 				Required:    false,
 			},
 			"style": {
@@ -92,7 +94,7 @@ func (t *ContentGeneratorTool) Execute(ctx context.Context, params map[string]in
 	keywords, _ := params["keywords"].(string)
 
 	if platform == "" {
-		platform = "通用平台"
+		platform = "视频创作平台"
 	}
 	if style == "" {
 		style = "轻松自然"

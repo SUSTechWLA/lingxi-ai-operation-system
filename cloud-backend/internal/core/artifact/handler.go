@@ -24,17 +24,31 @@ import (
 type ReviseLLMFunc func(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 
 type Handler struct {
-	service  *Service
-	runRepo  *workflow.RunRepository
-	nodeRepo modelRepo.NodeRepo
+	service    *Service
+	runRepo    *workflow.RunRepository
+	nodeRepo   modelRepo.NodeRepo
+	agentTasks AgentTaskStore
 
 	// Revision support — set via SetRevisionConfig.
 	skillRoot string
 	reviseLLM ReviseLLMFunc
 }
 
+type AgentTaskStore interface {
+	FindAgentRuntimeTasksByProject(ctx context.Context, projectID string) ([]*model.Task, error)
+}
+
+type taskNodeFinder interface {
+	FindByTaskID(ctx context.Context, taskID string) ([]*model.Node, error)
+}
+
 func NewHandler(service *Service, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
 	return &Handler{service: service, runRepo: runRepo, nodeRepo: nodeRepo}
+}
+
+func (h *Handler) WithAgentTaskStore(store AgentTaskStore) *Handler {
+	h.agentTasks = store
+	return h
 }
 
 // SetRevisionConfig wires the skill root path and LLM call function needed for
@@ -250,11 +264,15 @@ func buildRevisionSystemPrompt(stageName string, stageInstruction string) string
 }
 
 func (h *Handler) materializeProject(ctx context.Context, projectID string) error {
+	seenTaskIDs := map[string]bool{}
 	runs, err := h.runRepo.FindByProject(ctx, projectID)
 	if err != nil {
 		return err
 	}
 	for _, run := range runs {
+		if run.TaskID != "" {
+			seenTaskIDs[run.TaskID] = true
+		}
 		nodes, err := h.nodeRepo.FindByTaskID(ctx, run.TaskID)
 		if err != nil {
 			return err
@@ -274,18 +292,91 @@ func (h *Handler) materializeProject(ctx context.Context, projectID string) erro
 			}
 		}
 	}
+	requests, err := buildAgentTaskArtifactRequests(ctx, projectID, h.agentTasks, h.nodeRepo, seenTaskIDs)
+	if err != nil {
+		return err
+	}
+	for _, req := range requests {
+		if _, err := h.service.CreateArtifact(ctx, req); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func buildAgentTaskArtifactRequests(ctx context.Context, projectID string, tasks AgentTaskStore, nodes taskNodeFinder, seenTaskIDs map[string]bool) ([]*CreateArtifactRequest, error) {
+	if tasks == nil || nodes == nil || projectID == "" {
+		return nil, nil
+	}
+	agentTasks, err := tasks.FindAgentRuntimeTasksByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	requests := make([]*CreateArtifactRequest, 0)
+	for _, task := range agentTasks {
+		if task == nil || task.ID == "" || taskProjectID(task) != projectID {
+			continue
+		}
+		if seenTaskIDs != nil && seenTaskIDs[task.ID] {
+			continue
+		}
+		taskNodes, err := nodes.FindByTaskID(ctx, task.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, node := range taskNodes {
+			if node == nil || node.Status != model.NodeSuccess {
+				continue
+			}
+			next, err := BuildArtifactRequestsFromNodeChecked(projectID, task.ID, node)
+			if err != nil {
+				return nil, err
+			}
+			requests = append(requests, next...)
+		}
+	}
+	return requests, nil
+}
+
+func taskProjectID(task *model.Task) string {
+	if task == nil || task.Input == nil {
+		return ""
+	}
+	if projectID, ok := task.Input["projectId"].(string); ok && strings.TrimSpace(projectID) != "" {
+		return strings.TrimSpace(projectID)
+	}
+	if projectID, ok := task.Input["projectID"].(string); ok && strings.TrimSpace(projectID) != "" {
+		return strings.TrimSpace(projectID)
+	}
+	contextMap, _ := task.Input["context"].(map[string]interface{})
+	if contextMap == nil {
+		return ""
+	}
+	if projectID, ok := contextMap["projectId"].(string); ok {
+		return strings.TrimSpace(projectID)
+	}
+	if projectID, ok := contextMap["projectID"].(string); ok {
+		return strings.TrimSpace(projectID)
+	}
+	return ""
 }
 
 func (h *Handler) hydrateLocalTextArtifactContent(ctx context.Context, artifact *Artifact) ([]byte, bool) {
 	if !shouldHydrateLocalTextArtifact(artifact) || h.runRepo == nil || h.nodeRepo == nil {
 		return nil, false
 	}
+	taskID := strings.TrimSpace(artifact.TaskID)
 	run, err := h.runRepo.FindByID(ctx, artifact.WorkflowRunID)
-	if err != nil || run == nil || strings.TrimSpace(run.TaskID) == "" {
+	if err == nil && run != nil && strings.TrimSpace(run.TaskID) != "" {
+		taskID = strings.TrimSpace(run.TaskID)
+	}
+	if taskID == "" {
+		taskID = strings.TrimSpace(artifact.WorkflowRunID)
+	}
+	if taskID == "" {
 		return nil, false
 	}
-	nodes, err := h.nodeRepo.FindByTaskID(ctx, run.TaskID)
+	nodes, err := h.nodeRepo.FindByTaskID(ctx, taskID)
 	if err != nil {
 		return nil, false
 	}
@@ -298,7 +389,10 @@ func (h *Handler) hydrateLocalTextArtifactContent(ctx context.Context, artifact 
 }
 
 func shouldHydrateLocalTextArtifact(artifact *Artifact) bool {
-	if artifact == nil || artifact.StorageType != StorageLocal || strings.TrimSpace(artifact.WorkflowRunID) == "" {
+	if artifact == nil || artifact.StorageType != StorageLocal {
+		return false
+	}
+	if strings.TrimSpace(artifact.WorkflowRunID) == "" && strings.TrimSpace(artifact.TaskID) == "" {
 		return false
 	}
 	if strings.TrimSpace(artifact.InlineJSON) != "" {

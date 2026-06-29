@@ -6,7 +6,7 @@
 
 ## 1. 产品定位
 
-躺营 Video Agent 是面向个人创作者的视频生产系统。底层 `internal/core` 保持通用引擎能力，但当前产品入口只服务视频创作、发布准备和后续运营复盘。
+躺营 Video Agent 是面向个人创作者的视频生产系统。底层 `internal/core` 保持视频创作引擎能力，但当前产品入口只服务视频创作、发布准备和后续运营复盘。
 
 当前 beta 的目标不是做泛办公平台，而是稳定支撑这一条主链路：
 
@@ -91,7 +91,7 @@ hyperframes-render-service
 └── html/css/js → video render
 ```
 
-## 5. Core 通用引擎
+## 5. Core 视频创作引擎
 
 `cloud-backend/internal/core` 提供平台机制，不绑定具体业务。
 

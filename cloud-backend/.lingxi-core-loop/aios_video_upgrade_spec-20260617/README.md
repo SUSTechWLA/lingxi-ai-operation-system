@@ -40,7 +40,7 @@ cp -R aios_video_upgrade_spec/* docs/upgrade/video-creation-v1/
 - 先建立基线测试，再修改代码。
 - 保留现有 `/api/publish`、`/api/skill/dialog/*`、`/api/task/*`、素材库和旧前端能力。
 - 不重写 Orchestrator、Worker、Outbox、Tool Registry 和 Rust 沙箱。
-- 新增通用能力进入 `internal/core`；视频业务进入 `internal/agents/video`。
+- 新增视频创作能力进入 `internal/core`；视频业务进入 `internal/agents/video`。
 - 所有外部模型调用必须通过统一 Model Gateway，默认测试禁止调用真实付费 API。
 - 每个阶段必须具备单元测试、集成测试或契约测试，失败不得进入下一阶段。
 - 所有数据库变更必须可重复执行、可回滚或向后兼容。

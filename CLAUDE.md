@@ -71,7 +71,7 @@ SKILL_CAPABILITY_ROOT=skill-capabilities  # Dynamic Agent 工具注册表
 cloud-backend/
   cmd/tangying-ai-os/main.go           # 入口，路由注册，优雅关闭
   internal/
-    core/                               # 通用引擎层（不绑定业务）
+    core/                               # 视频创作引擎层（不绑定业务）
       agentruntime/                     # 🆕 动态 Agent Runtime（Planner→Guard→Compiler→DAG）
       orchestrator/                     # DAG 调度引擎
       workflow/                         # 工作流模板 + Run + Skill→DAG 编译器

@@ -49,7 +49,7 @@
 - 当前没有统一的“最终发布包”API。
 - Artifact 有后端模型，但缺少面向前端的查询与下载接口。
 - 第三类视频 Skill 没有独立 `video_project.mode` 枚举。
-- 图片生成当前只能通过 Codex 的 `$imagegen` 技能完成，后端不得假装已有通用图片生成 API。
+- 图片生成当前只能通过 Codex 的 `$imagegen` 技能完成，后端不得假装已有视频创作图片生成 API。
 - 视频生成 API 尚未接入，后端不得假装可以直接生成最终视频。
 
 ## 生成能力边界
@@ -350,7 +350,7 @@
 - 需求不是单个客户页面变化，而是平台需要把任意视频 Skill 稳定暴露成前端可消费的软件功能。
 - 当前 `/api/skills`、`/api/workflows`、`/api/video-projects` 能支撑临时拼装，但不能提供 UI schema、输出契约和最终发布包。
 - 如果不新增 facade，未来每增加一种视频 Skill，前端都需要硬编码一次，这会破坏 Skill Package 的扩展价值。
-- 新增 `skill-functions` facade 属于入口层和 workflow/skillruntime 的通用平台能力，不包含具体业务规则。
+- 新增 `skill-functions` facade 属于入口层和 workflow/skillruntime 的视频创作平台能力，不包含具体业务规则。
 
 本轮实现应包含后端 `skill-functions` facade 和前端创作台。兼容层只用于后端接口尚未启动或本地开发环境缺失时的降级展示。
 

@@ -18,8 +18,10 @@ func NewContentCheckerTool(cfg config.OpenAIConfig) *ContentCheckerTool {
 	return &ContentCheckerTool{cfg: cfg}
 }
 
-func (t *ContentCheckerTool) Name() string       { return "content_checker" }
-func (t *ContentCheckerTool) Description() string { return "Check content for compliance, sensitive content, and quality issues" }
+func (t *ContentCheckerTool) Name() string { return "content_checker" }
+func (t *ContentCheckerTool) Description() string {
+	return "Check content for compliance, sensitive content, and quality issues"
+}
 func (t *ContentCheckerTool) Type() tool.ToolType { return tool.ToolTypeCustom }
 
 func (t *ContentCheckerTool) Manifest() tool.ToolManifest {
@@ -41,7 +43,7 @@ func (t *ContentCheckerTool) Manifest() tool.ToolManifest {
 			},
 			"platform": {
 				Type:        "string",
-				Description: "Target platform name (default: 通用平台)",
+				Description: "Target platform name (default: 视频创作平台)",
 				Required:    false,
 			},
 		},
@@ -73,9 +75,8 @@ func (t *ContentCheckerTool) Execute(ctx context.Context, params map[string]inte
 	platform, _ := params["platform"].(string)
 
 	if platform == "" {
-		platform = "通用平台"
+		platform = "视频创作平台"
 	}
-
 
 	systemPrompt := fmt.Sprintf(`你是一个内容合规审查助手。请审查以下内容是否适合在"%s"发布。
 检查项：

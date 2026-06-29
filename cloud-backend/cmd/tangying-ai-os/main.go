@@ -573,7 +573,8 @@ func main() {
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
 			WithCheckpointService(checkpointSvc).
 			RegisterRoutes(r)
-		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo)
+		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo).
+			WithAgentTaskStore(taskRepo)
 
 		// Wire session dependencies into the project handler
 		projectHandler.WithSessionDependencies(artifactSvc, localRunnerService)
@@ -618,7 +619,7 @@ func main() {
 		// and artifact approval on review actions.
 		agentRuntimeHandler.
 			WithArtifactService(artifactSvc).
-			WithProjectIDResolver(&taskProjectIDResolver{runRepo: workflowRunRepo})
+			WithProjectIDResolver(&taskProjectIDResolver{runRepo: workflowRunRepo, taskRepo: taskRepo})
 
 		// Wire repository-backed render dependency checker so HYPERFRAMES_RENDER
 		// validates database facts (artifact status) before dispatching a LocalJob.
@@ -734,15 +735,50 @@ func (s *runStatusSyncer) FindRunIDByTaskID(ctx context.Context, taskID string) 
 // taskProjectIDResolver resolves a project ID from a task ID by looking up
 // the workflow run associated with the task.
 type taskProjectIDResolver struct {
-	runRepo *workflow.RunRepository
+	runRepo  *workflow.RunRepository
+	taskRepo interface {
+		FindByID(ctx context.Context, id string) (*model.Task, error)
+	}
 }
 
 func (r *taskProjectIDResolver) ResolveProjectID(ctx context.Context, taskID string) (string, error) {
-	run, err := r.runRepo.FindByTaskID(ctx, taskID)
-	if err != nil || run == nil {
+	if r.runRepo != nil {
+		run, err := r.runRepo.FindByTaskID(ctx, taskID)
+		if err == nil && run != nil && strings.TrimSpace(run.ProjectID) != "" {
+			return run.ProjectID, nil
+		}
+	}
+	if r.taskRepo == nil {
+		return "", nil
+	}
+	task, err := r.taskRepo.FindByID(ctx, taskID)
+	if err != nil || task == nil {
 		return "", err
 	}
-	return run.ProjectID, nil
+	return projectIDFromTaskInput(task.Input), nil
+}
+
+func projectIDFromTaskInput(input map[string]interface{}) string {
+	if input == nil {
+		return ""
+	}
+	if projectID, ok := input["projectId"].(string); ok && strings.TrimSpace(projectID) != "" {
+		return strings.TrimSpace(projectID)
+	}
+	if projectID, ok := input["projectID"].(string); ok && strings.TrimSpace(projectID) != "" {
+		return strings.TrimSpace(projectID)
+	}
+	contextMap, _ := input["context"].(map[string]interface{})
+	if contextMap == nil {
+		return ""
+	}
+	if projectID, ok := contextMap["projectId"].(string); ok {
+		return strings.TrimSpace(projectID)
+	}
+	if projectID, ok := contextMap["projectID"].(string); ok {
+		return strings.TrimSpace(projectID)
+	}
+	return ""
 }
 
 // artifactStateAdapter adapts artifact.Service to workerService.ArtifactStateProvider.

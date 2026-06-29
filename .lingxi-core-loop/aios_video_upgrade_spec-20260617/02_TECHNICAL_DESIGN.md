@@ -196,7 +196,7 @@ skills/
 Stage 调用模型时只加载：
 
 ```text
-系统通用约束
+系统视频创作约束
 + 当前 Skill stage instruction
 + 必要 references
 + 当前项目摘要

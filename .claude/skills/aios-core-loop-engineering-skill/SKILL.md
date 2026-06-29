@@ -84,10 +84,10 @@ Core 新需求 / Bug / 重构 / 性能或可靠性问题
 
 本 Skill 的目标：
 
-1. 保持 AIOS 作为通用 Agent 平台；
+1. 保持 AIOS 作为视频专用 Agent 平台；
 2. 将客户需求稳定转成可开发、可验收、可集成的 solution；
 3. 清楚定义客户前端、Workflow、外部工具和 Core 的边界；
-4. 只吸收真正的平台通用能力；
+4. 只吸收真正的平台视频创作能力；
 5. 每次 Core 更新都有需求、设计、测试、证据、审核、发布和回滚；
 6. 不因单一客户场景污染 Core；
 7. 可以长期用于后续 AIOS 更新。
@@ -198,7 +198,7 @@ Core 如何调用
 
 | 模式 | 说明 |
 |---|---|
-| `core-update` | 新增 Core 通用能力 |
+| `core-update` | 新增 Core 视频创作能力 |
 | `bugfix` | 修复 Core 缺陷 |
 | `refactor` | 保持外部行为的内部重构 |
 | `performance` | 优化延迟、吞吐和资源使用 |
@@ -424,7 +424,7 @@ Core 需求必须明确：
 ### 必须拆分
 
 - 客户业务目标、用户角色和主流程；
-- AIOS Core 需要承担的通用职责；
+- AIOS Core 需要承担的视频创作职责；
 - Workflow / DAG / Session / Artifact / Trace 规格；
 - 客户前端需要呈现的页面、状态、动作和错误；
 - 外部 Tool 能力清单；
@@ -443,7 +443,7 @@ Core 需求必须明确：
 ### Solution 判定原则
 
 1. 客户专属差异优先放在前端、Workflow 配置、Prompt、模板或外部 Tool。
-2. Core 只提供通用入口、编排、工具治理、Artifact、Trace、状态和中间件能力。
+2. Core 只提供视频创作入口、编排、工具治理、Artifact、Trace、状态和中间件能力。
 3. 前端要求必须足够具体，让前端开发可以独立实施。
 4. 外部 Tool 要求必须足够具体，让工具开发可以独立实施和黑盒验收。
 5. 若当前 Core API 不足，只记录为 Core Gap 候选，不在 solution 阶段直接改代码。
@@ -505,7 +505,7 @@ decision: PROVISIONALLY_APPROVED
 是否只需前端 client 新页面或状态编排？
 → 是：NO_CORE_CHANGE，并输出 frontend-requirements
 
-剩余缺口是否属于通用平台机制？
+剩余缺口是否属于视频创作平台机制？
 → 否：CORE_CHANGE_REJECTED
 → 是：CORE_CHANGE_CANDIDATE
 ```
@@ -514,7 +514,7 @@ decision: PROVISIONALLY_APPROVED
 
 必须同时满足：
 
-1. 属于入口、编排、工具治理、日志或中间件通用职责；
+1. 属于入口、编排、工具治理、日志或中间件视频创作职责；
 2. 不包含具体业务规则；
 3. 可被多个场景复用，或属于平台完整性要求；
 4. 无法通过外部 Tool、Workflow 或配置合理实现；
@@ -948,14 +948,14 @@ Word 导出
 
 这些属于外部能力，不进入 Core。
 
-只有以下通用缺口才考虑 Core：
+只有以下视频创作缺口才考虑 Core：
 
 - 编排层不能表达长任务；
 - 不能保存和恢复执行状态；
 - 不能锁定 Tool 版本；
-- 缺少通用节点重试和错误路由；
+- 缺少视频创作节点重试和错误路由；
 - 缺少跨 Tool Trace；
-- 缺少通用 Artifact 管理；
+- 缺少视频创作 Artifact 管理；
 - 工具注册、发现和调用机制不足。
 
 “标书需要人工审核”本身不意味着要新增登录、IAM 或审批模块。第一版使用外部人工检查点。

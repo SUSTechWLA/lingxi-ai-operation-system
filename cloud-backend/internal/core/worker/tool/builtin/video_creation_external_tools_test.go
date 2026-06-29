@@ -141,7 +141,7 @@ func TestScriptQualityCheckerPromptUsesRequestedDurationAndFreshFacts(t *testing
 		"",
 		"",
 		"",
-		"通用平台",
+		"视频创作平台",
 		30,
 	)
 
@@ -159,6 +159,15 @@ func TestScriptQualityCheckerPromptUsesRequestedDurationAndFreshFacts(t *testing
 	}
 }
 
+func TestScriptQualityCheckerSystemPromptRequiresExplainableReport(t *testing.T) {
+	prompt := buildDynamicAgentSystemPrompt("script_quality_checker", "端午节知识视频", "", "视频创作平台")
+	for _, field := range []string{"analysisSummary", "rubricBreakdown", "keepDoing"} {
+		if !strings.Contains(prompt, field) {
+			t.Fatalf("script quality checker prompt should require %s, got:\n%s", field, prompt)
+		}
+	}
+}
+
 func TestVideoScriptGeneratorPromptIncludesRequestedDuration(t *testing.T) {
 	prompt := buildDynamicAgentUserPrompt(
 		"video_script_generator",
@@ -169,7 +178,7 @@ func TestVideoScriptGeneratorPromptIncludesRequestedDuration(t *testing.T) {
 		"",
 		"",
 		"",
-		"通用平台",
+		"视频创作平台",
 		30,
 	)
 

@@ -33,7 +33,9 @@ import {
 import DesktopPage from './DesktopPage'
 import {
   approveAgentReview,
+  createVideoProject,
   fetchVideoPreflight,
+  fetchProjectArtifacts,
   fetchVideoRoleAgents,
   getAgentRun,
   getAgentRunReviews,
@@ -45,7 +47,7 @@ import {
   type PreflightResponse,
 } from '../services/api'
 import type { AuthUser } from '../services/auth'
-import type { AgentReviewItem, AgentRun, VideoRoleAgent } from '../utils/types'
+import type { AgentReviewItem, AgentRun, Artifact, VideoProject, VideoRoleAgent } from '../utils/types'
 import {
   applyOptimisticRunningStage,
   buildDirectorArtifacts,
@@ -112,6 +114,8 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [topic, setTopic] = useState('')
   const [durationSec, setDurationSec] = useState(45)
   const [roleAgents, setRoleAgents] = useState<VideoRoleAgent[]>(fallbackRoles)
+  const [project, setProject] = useState<VideoProject | null>(null)
+  const [projectArtifacts, setProjectArtifacts] = useState<Artifact[]>([])
   const [run, setRun] = useState<AgentRun | null>(null)
   const [reviews, setReviews] = useState<AgentReviewItem[]>([])
   const [trace, setTrace] = useState<unknown>(null)
@@ -122,16 +126,19 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
   const [optimisticRunningStageId, setOptimisticRunningStageId] = useState<string | undefined>()
 
-  const refreshRun = useCallback(async (runId: string) => {
-    const [nextRun, nextReviews, nextTrace] = await Promise.all([
+  const refreshRun = useCallback(async (runId: string, projectId?: string) => {
+    const boundProjectId = projectId || project?.id
+    const [nextRun, nextReviews, nextTrace, nextArtifacts] = await Promise.all([
       getAgentRun(runId).catch(() => null),
       getAgentRunReviews(runId).catch(() => ({ runId, reviews: [] })),
       getAgentRunTrace(runId).catch(() => null),
+      boundProjectId ? fetchProjectArtifacts(boundProjectId).catch(() => ({ artifacts: [] })) : Promise.resolve({ artifacts: [] }),
     ])
     if (nextRun) setRun(nextRun)
     setReviews(nextReviews.reviews || [])
     setTrace(nextTrace)
-  }, [])
+    setProjectArtifacts(nextArtifacts.artifacts || [])
+  }, [project?.id])
 
   useEffect(() => {
     let mounted = true
@@ -154,10 +161,10 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     return () => window.clearInterval(timer)
   }, [refreshRun, run?.id, run?.status])
 
-  const projectStarted = Boolean(run?.id) || loading
+  const projectStarted = Boolean(project?.id || run?.id) || loading
   const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted), [roleAgents, reviews, trace, projectStarted])
   const displayStages = useMemo(() => applyOptimisticRunningStage(stages, optimisticRunningStageId), [stages, optimisticRunningStageId])
-  const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace), [roleAgents, reviews, trace])
+  const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace, projectArtifacts as unknown as Array<Record<string, unknown>>), [roleAgents, reviews, trace, projectArtifacts])
   const traceNodes = useMemo(() => buildDirectorTraceNodes(trace), [trace])
   const nextAction = useMemo(() => deriveNextAction(displayStages), [displayStages])
   const pendingReviews = reviews.filter(isActionablePendingReview)
@@ -177,14 +184,30 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     setError(null)
     setErrorDetail(undefined)
     try {
+      const cleanTopic = topic.trim()
+      const nextProject = await createVideoProject({
+        name: cleanTopic.slice(0, 40) || '视频创作项目',
+        description: `一句话视频创作：${cleanTopic}`,
+        mode: 'voice_visual',
+        skillName: 'video-creator',
+        skillVersion: 'v4.0',
+        workflowName: 'dynamic-agent-video-creation',
+        workflowVersion: 'v4.0',
+        generationMode: 'provider_api',
+        aspectRatio: '16:9',
+        targetDurationSec: durationSec,
+        language: 'zh-CN',
+        config: { entry: 'director_studio', topic: cleanTopic, durationSec },
+      })
+      setProject(nextProject)
       const result = await startAgentRun({
-        message: `请帮我创作一个${durationSec}秒图文视频：${topic.trim()}`,
+        message: `请帮我创作一个${durationSec}秒图文视频：${cleanTopic}`,
         domain: 'video_creation',
         mode: 'dynamic_agent',
-        context: { topic: topic.trim(), durationSec, targetDurationSec: durationSec },
+        context: { projectId: nextProject.id, topic: cleanTopic, durationSec, targetDurationSec: durationSec },
       })
       setOptimisticRunningStageId(undefined)
-      await refreshRun(result.runId)
+      await refreshRun(result.runId, nextProject.id)
       setActiveNav('review')
     } catch (err) {
       setError(normalizeDirectorErrorMessage(err))
@@ -207,7 +230,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       if (action === 'edit') await submitEditedArtifact(run.id, activeReview.id, { editedContent: feedback || topic }, feedback || undefined)
       if (action === 'regenerate') await regenerateAgentStage(run.id, activeReview.id, feedback || undefined)
       setFeedback('')
-      await refreshRun(run.id)
+      await refreshRun(run.id, project?.id)
     } catch (err) {
       if (nextOptimisticStageId) setOptimisticRunningStageId(undefined)
       setError(normalizeDirectorErrorMessage(err))

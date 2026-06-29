@@ -14,7 +14,7 @@
 
 ## 1. 文档目的
 
-本说明用于指导 Coding Agent 在现有 `develop_go` 分支上完成增量升级。目标不是重写通用 Agent 平台，而是把两套已经通过 Codex Skill 实际验证的视频生产方法，转化为可持续运行、可审核、可恢复、可局部重跑的正式产品能力。
+本说明用于指导 Coding Agent 在现有 `develop_go` 分支上完成增量升级。目标不是重写视频创作 Agent 平台，而是把两套已经通过 Codex Skill 实际验证的视频生产方法，转化为可持续运行、可审核、可恢复、可局部重跑的正式产品能力。
 
 两条目标生产线：
 
@@ -102,7 +102,7 @@
 - Skill Package 注册、版本和加载。
 - Workflow Run/Stage/Approval/Artifact。
 - 两套内置工作流。
-- 通用 Model Gateway 与 Fake Provider。
+- 视频创作 Model Gateway 与 Fake Provider。
 - AIGC Shot/VisualBeat 领域模型。
 - 阶段审核、局部重跑和版本。
 - 云端任务事件流。
@@ -129,7 +129,7 @@
 2. **Agent 负责判断**：模式选择、内容理解、失败分析和返修策略由 Agent 完成。
 3. **Skill 保存方法**：提示词、参考规范、Schema、示例和质量门禁放入 Skill Package。
 4. **Tool 负责动作**：模型 API、FFmpeg、本地渲染和文件处理均作为受控工具。
-5. **Core 与业务隔离**：通用 Runtime 放 `internal/core`；视频领域放 `internal/agents/video`。
+5. **Core 与业务隔离**：视频创作 Runtime 放 `internal/core`；视频领域放 `internal/agents/video`。
 6. **双格式产物**：JSON 作为机器执行真相；Markdown、图片和视频供人审核。
 7. **版本不可覆盖**：修改产生新 Artifact Version，不直接覆盖旧结果。
 8. **人工审核优先**：高成本视频生成前必须存在可配置审核节点。
@@ -546,7 +546,7 @@ skills/
 Stage 调用模型时只加载：
 
 ```text
-系统通用约束
+系统视频创作约束
 + 当前 Skill stage instruction
 + 必要 references
 + 当前项目摘要
@@ -1393,7 +1393,7 @@ P3 门禁：
 
 ### P4 Model Gateway
 
-#### P4-T01 通用接口和 Router
+#### P4-T01 视频创作接口和 Router
 
 实现 capability、provider、request/result、error mapping。
 
@@ -1611,11 +1611,11 @@ docker compose -f deploy/docker-compose.cloud.yml up -d
 
 ### 应新增到 Core
 
-- 通用 Skill loader。
-- 通用 Artifact。
-- 通用 Model Gateway。
-- 通用 Workflow Run/Approval/Rerun。
-- 通用 Local Runner 协议。
+- 视频创作 Skill loader。
+- 视频创作 Artifact。
+- 视频创作 Model Gateway。
+- 视频创作 Workflow Run/Approval/Rerun。
+- 视频创作 Local Runner 协议。
 
 ### 应新增到 Agent
 

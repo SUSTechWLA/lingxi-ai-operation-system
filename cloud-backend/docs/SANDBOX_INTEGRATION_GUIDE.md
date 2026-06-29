@@ -81,7 +81,7 @@ SandboxExecutor 初始化成功
 
 | 原则 | 说明 |
 |------|------|
-| **通用** | 对接 Go/Rust/Python 任意语言实现的沙箱，通过 gRPC 解耦 |
+| **视频创作** | 对接 Go/Rust/Python 任意语言实现的沙箱，通过 gRPC 解耦 |
 | **可扩展** | 执行请求和结果结构支持未来增加字段（如 GPU、网络限制） |
 | **兼容** | 不修改现有 BuildableTool 接口；各工具通过 `selectExecutor` 自动路由 |
 | **兜底** | 沙箱不可用时自动回退到 DirectExecutor（受配置控制） |

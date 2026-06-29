@@ -100,7 +100,7 @@ Write a concise architecture document with these sections:
 2. Beta 自用全流程
 3. 系统运行边界
 4. 总体架构
-5. Core 通用引擎
+5. Core 视频创作引擎
 6. Video Agent 业务层
 7. Publish 兼容发布层与 Distribution 路线
 8. Operation 运营复盘路线
@@ -119,7 +119,7 @@ Use current route names such as `/api/video-projects`, `/api/agent/runs`, `/api/
 
 - [ ] **Step 2: Check architecture doc for forbidden current product claims**
 
-Run: `rg -n "标书|投标|通用对话|AI 对话助手|/api/bid|/api/chat|internal/agents/bid|internal/agents/chat" docs/ARCHITECTURE.md`
+Run: `rg -n "标书|投标|视频创作对话|AI 对话助手|/api/bid|/api/chat|internal/agents/bid|internal/agents/chat" docs/ARCHITECTURE.md`
 
 Expected: no matches.
 
