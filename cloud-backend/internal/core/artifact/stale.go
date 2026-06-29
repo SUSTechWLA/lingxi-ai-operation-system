@@ -128,3 +128,113 @@ func DownstreamStageNamesForStage(stageName string) []string {
 	}
 	return nil
 }
+
+// DownstreamShotStageNamesForStage returns shot-scoped stage_name values that
+// must be invalidated when a shot-scoped artifact changes. Callers should apply
+// these to the same Artifact.UnitID as the changed shot artifact.
+func DownstreamShotStageNamesForStage(stageName string) []string {
+	graph := map[string][]string{
+		"shot_unit": {
+			"visual_plan",
+			"render_strategy",
+			"text_layers",
+			"keyframe_prompt",
+			"keyframe_image",
+			"aigc_prompt",
+			"html_source",
+			"html_preview_video",
+			"html_overlay_video",
+			"html_overlay_alpha_video",
+			"aigc_background_video",
+			"aigc_shot_video",
+			"composited_shot_video",
+		},
+		"visual_plan": {
+			"render_strategy",
+			"text_layers",
+			"keyframe_prompt",
+			"keyframe_image",
+			"aigc_prompt",
+			"html_source",
+			"html_preview_video",
+			"html_overlay_video",
+			"html_overlay_alpha_video",
+			"aigc_background_video",
+			"aigc_shot_video",
+			"composited_shot_video",
+		},
+		"render_strategy": {
+			"text_layers",
+			"keyframe_prompt",
+			"keyframe_image",
+			"aigc_prompt",
+			"html_source",
+			"html_preview_video",
+			"html_overlay_video",
+			"html_overlay_alpha_video",
+			"aigc_background_video",
+			"aigc_shot_video",
+			"composited_shot_video",
+		},
+		"text_layers": {
+			"html_source",
+			"html_preview_video",
+			"html_overlay_video",
+			"html_overlay_alpha_video",
+			"composited_shot_video",
+		},
+		"aigc_prompt": {
+			"aigc_background_video",
+			"aigc_shot_video",
+			"composited_shot_video",
+		},
+		"html_source": {
+			"html_preview_video",
+			"html_overlay_video",
+			"html_overlay_alpha_video",
+			"composited_shot_video",
+		},
+		"html_preview_video": {
+			"composited_shot_video",
+		},
+		"html_overlay_video": {
+			"composited_shot_video",
+		},
+		"html_overlay_alpha_video": {
+			"composited_shot_video",
+		},
+		"aigc_background_video": {
+			"composited_shot_video",
+		},
+	}
+	if downstream, ok := graph[stageName]; ok {
+		result := make([]string, len(downstream))
+		copy(result, downstream)
+		return result
+	}
+	return nil
+}
+
+// ProjectStageNamesForShotStageChange returns project-scoped artifacts that
+// must be invalidated whenever a shot-scoped artifact changes.
+func ProjectStageNamesForShotStageChange(stageName string) []string {
+	switch stageName {
+	case "shot_unit",
+		"visual_plan",
+		"render_strategy",
+		"text_layers",
+		"keyframe_prompt",
+		"keyframe_image",
+		"aigc_prompt",
+		"html_source",
+		"html_preview_video",
+		"html_overlay_video",
+		"html_overlay_alpha_video",
+		"aigc_background_video",
+		"aigc_shot_video",
+		"composited_shot_video":
+		return []string{"final_video", "publish_package"}
+	default:
+		return nil
+	}
+}
