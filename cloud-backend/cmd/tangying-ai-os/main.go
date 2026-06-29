@@ -543,6 +543,8 @@ func main() {
 		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
 		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, authMiddleware.RequireAuth())
 		projectHandler.RegisterRoutes(r)
+		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo)
+		videoHandler.NewCreationHandler(videoCreationSvc, authMiddleware.RequireAuth()).RegisterRoutes(r)
 		videoAssistant.NewHandler(authMiddleware.RequireAuth()).RegisterRoutes(r)
 
 		// Workflow Runs
