@@ -522,7 +522,7 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs font-semibold text-ink-soft">
-          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" /> 生成中</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-primary" /> 生成中</span>
           <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> 待审核</span>
           <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-green-500" /> 已通过</span>
           <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-stone-300" /> 等待中</span>
@@ -594,17 +594,17 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
 
   if (runningStage) {
     return (
-      <div className="col-span-12 rounded-xl border border-blue-200 bg-blue-50 px-5 py-4 transition-all">
+      <div className="col-span-12 rounded-xl border border-line bg-primary-soft px-5 py-4 transition-all">
         <div className="flex items-center gap-3">
-          <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-500 text-white">
-            <span className="absolute inset-0 rounded-lg bg-blue-400 animate-ping opacity-30" />
+          <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-white">
+            <span className="absolute inset-0 rounded-lg bg-primary-light animate-ping opacity-30" />
             <FiRefreshCw className="animate-spin relative z-10" />
           </span>
           <div>
-            <p className="text-sm font-black text-blue-800">
+            <p className="text-sm font-black text-primary-dark">
               系统正在生成【{runningStage.displayName}】的{stageActionLabel(runningStage.stage)}
             </p>
-            <p className="text-xs text-blue-600 mt-0.5">生成完成后将自动进入审核阶段，请稍候…</p>
+            <p className="text-xs text-ink-muted mt-0.5">生成完成后将自动进入审核阶段，请稍候…</p>
           </div>
         </div>
       </div>
@@ -1007,7 +1007,7 @@ function ExportPage({ artifacts, durationSec }: { artifacts: DirectorArtifactRec
       <section className="card p-6 xl:col-span-7">
         <div className="flex items-center justify-between"><div><p className="text-sm font-bold text-primary-dark">最终预览 / 导出</p><h2 className="mt-2 text-2xl font-black text-ink">最终视频预览</h2></div><StatusBadge status={videoReady ? 'valid' : 'pending'} label={videoReady ? 'final.mp4 已生成' : '等待渲染'} /></div>
         <div className="mt-6 overflow-hidden rounded-xl bg-ink shadow-card ring-1 ring-line">
-          <div className="relative h-[410px] bg-[radial-gradient(circle_at_70%_30%,rgba(251,191,36,.34),transparent_28%),linear-gradient(135deg,#130b05,#2b1708_40%,#7c3e08)] p-10 text-white">
+          <div className="relative h-[410px] bg-[linear-gradient(135deg,#1A0B02,#2B1606_42%,#8B4A12_74%,#E89412)] p-10 text-white">
             <div className="relative z-10 flex h-full flex-col justify-between">
               <div><span className="rounded-full bg-white/15 px-4 py-2 text-xs font-bold ring-1 ring-white/20">智能视频创作工作台</span><h3 className="mt-10 max-w-lg text-5xl font-black">智能体<br />改变的是工作流</h3><p className="mt-5 text-lg text-amber-100">连接工具 · 协同团队 · 释放创造力</p></div>
               <div className="flex items-center gap-4 rounded-lg bg-black/25 p-4 ring-1 ring-white/10"><FiPlayCircle className="text-3xl" /><div className="h-1 flex-1 overflow-hidden rounded-full bg-white/20"><div className="h-full w-[28%] rounded-full bg-primary-light" /></div><span className="text-sm">0:00 / {formatSeconds(durationSec)}</span></div>
@@ -1584,7 +1584,7 @@ function StatusBadge({ status, label }: { status: DirectorArtifactStatus | Direc
 }
 
 function InfoCard({ icon, title, value, desc, tone }: { icon: React.ReactNode; title: string; value: string; desc: string; tone: 'primary' | 'green' | 'blue' | 'violet' }) {
-  const toneMap = { primary: 'bg-primary-soft text-primary-dark', green: 'bg-green-50 text-green-700', blue: 'bg-blue-50 text-blue-700', violet: 'bg-violet-50 text-violet' }
+  const toneMap = { primary: 'bg-primary-soft text-primary-dark', green: 'bg-green-50 text-green-700', blue: 'bg-background-mist text-primary-dark', violet: 'bg-primary-soft text-violet' }
   return <div className="card p-5"><div className="flex items-center gap-3"><div className={`rounded-lg p-3 ${toneMap[tone]}`}>{icon}</div><div><p className="text-sm text-ink-soft">{title}</p><p className="font-black text-ink">{value}</p></div></div><p className="mt-4 text-sm leading-6 text-ink-muted">{desc}</p></div>
 }
 
@@ -1657,7 +1657,7 @@ function stageIcon(status: DirectorStageStatus) {
 
 function stageTone(status: DirectorStageStatus) {
   if (status === 'review') return 'border-primary bg-primary-soft'
-  if (status === 'running' || status === 'active') return 'border-blue-200 bg-blue-50'
+  if (status === 'running' || status === 'active') return 'border-line bg-primary-soft'
   if (status === 'done') return 'border-green-200 bg-green-50'
   if (status === 'blocked' || status === 'failed') return 'border-red-100 bg-red-50/60'
   return 'border-line bg-white/65'
@@ -1666,7 +1666,7 @@ function stageTone(status: DirectorStageStatus) {
 function stageIconTone(status: DirectorStageStatus) {
   if (status === 'done') return 'bg-green-600 text-white'
   if (status === 'review') return 'bg-primary text-white'
-  if (status === 'running' || status === 'active') return 'bg-blue-600 text-white'
+  if (status === 'running' || status === 'active') return 'bg-primary text-white'
   if (status === 'blocked' || status === 'failed') return 'bg-red-500 text-white'
   return 'bg-stone-200 text-stone-600'
 }
@@ -1674,7 +1674,7 @@ function stageIconTone(status: DirectorStageStatus) {
 function statusBadgeTone(status: DirectorArtifactStatus | DirectorStageStatus) {
   if (status === 'done' || status === 'valid') return 'bg-green-50 text-green-700 ring-green-200'
   if (status === 'review') return 'bg-amber-50 text-primary-dark ring-amber-200'
-  if (status === 'running' || status === 'active') return 'bg-blue-50 text-blue-700 ring-blue-200'
+  if (status === 'running' || status === 'active') return 'bg-primary-soft text-primary-dark ring-line'
   if (status === 'blocked' || status === 'stale' || status === 'failed' || status === 'missing') return 'bg-red-50 text-red-700 ring-red-200'
   return 'bg-stone-50 text-stone-600 ring-stone-200'
 }

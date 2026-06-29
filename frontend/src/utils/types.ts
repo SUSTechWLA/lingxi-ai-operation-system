@@ -6,120 +6,14 @@
 // When the generated file drifts, the CI `make api-docs-check` fails and both
 // should be reconciled.
 //
-// UI-only types: MediaFile, Platform, etc. (no spec equivalent).
 // Data types: Artifact, VideoProject, etc. — keep these aligned manually.
 // ─────────────────────────────────────────────────────────────────────────
-
-export interface MediaFile {
-  file: File
-  preview?: string
-  name: string
-  size: number
-}
-
-export interface Platform {
-  id: string
-  name: string
-  icon: string
-  enabled: boolean
-  status: 'available' | 'developing'
-}
 
 export interface ApiResponse<T> {
   code: number
   message: string
   data: T
 }
-
-export interface TaskResponse {
-  taskId: string
-  message: string
-}
-
-export interface AIGenerateData {
-  title: string
-  description: string
-  body?: string
-  keywords?: string[]
-}
-
-export interface AIPolishData {
-  content: string
-  taskId: string
-  traceUrl: string
-}
-
-export interface PolishSubmitData {
-  taskId: string
-  nodeId: string
-  message: string
-  traceUrl: string
-}
-
-export interface PolishQueryData {
-  taskId: string
-  nodeId: string
-  status: string
-  content?: string
-  error?: string
-  traceUrl: string
-}
-
-export interface MediaAsset {
-  id: string
-  userId: string
-  originalName: string
-  mimeType: string
-  size: number
-  minioPath: string
-  tags: string[]
-  embeddingId?: string
-  createdAt: string
-  updatedAt: string
-  url?: string
-}
-
-export interface MediaListResponse {
-  items: MediaAsset[]
-  total: number
-  offset: number
-  limit: number
-}
-
-export interface TraceNode {
-  id: string
-  taskId: string
-  type: string
-  name: string
-  status: string
-  input?: Record<string, unknown>
-  output?: Record<string, unknown>
-  errorMessage?: string
-  retryCount: number
-  createdAt: string
-}
-
-export interface TraceData {
-  task: {
-    taskId: string
-    status: string
-    input?: Record<string, unknown>
-    output?: Record<string, unknown>
-    createdAt: string
-    nodes: TraceNode[]
-  }
-  contexts: Array<{
-    id: number
-    contextType: string
-    taskId: string
-    nodeId: string
-    message: string
-    metadata?: Record<string, unknown>
-    createdAt: string
-  }>
-}
-
-export type ContentType = 'image' | 'video' | null
 
 export interface SkillStage {
   name: string

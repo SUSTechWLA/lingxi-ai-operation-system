@@ -8,23 +8,24 @@ export default {
     extend: {
       colors: {
         primary: {
-          DEFAULT: '#A65F1A',
-          light: '#D49A36',
-          dark: '#3A2414',
+          DEFAULT: '#E89412',
+          soft: '#FFE9A8',
+          light: '#FFD65A',
+          dark: '#2B1606',
         },
         background: {
-          DEFAULT: '#F4F5F1',
-          mist: '#ECEFE8',
-          card: '#FEFCF7',
+          DEFAULT: '#FFF6D6',
+          mist: '#FFE9A8',
+          card: '#FFFDF6',
         },
         ink: {
-          DEFAULT: '#1E2420',
-          muted: '#586158',
-          soft: '#7A8278',
+          DEFAULT: '#2B1606',
+          muted: '#6F4D24',
+          soft: '#98723A',
         },
-        line: '#D9D7CB',
-        success: '#22C55E',
-        violet: '#38546E',
+        line: '#E8CF86',
+        success: '#1F9D62',
+        violet: '#8B4A12',
       },
       borderRadius: {
         '2xl': '1rem',

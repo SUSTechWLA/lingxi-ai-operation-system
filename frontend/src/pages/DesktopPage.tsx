@@ -173,14 +173,14 @@ const DesktopPage: React.FC = () => {
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
-              <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="w-10 h-10 bg-primary-soft rounded-xl flex items-center justify-center">
+              <svg className="w-5 h-5 text-primary-dark" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-gray-800">桌面工具</h2>
-              <p className="text-sm text-gray-500">系统状态监控与命令执行</p>
+              <h2 className="text-2xl font-bold text-ink">桌面工具</h2>
+              <p className="text-sm text-ink-soft">系统状态监控与命令执行</p>
             </div>
           </div>
         </div>
@@ -189,16 +189,16 @@ const DesktopPage: React.FC = () => {
           {/* Left: Status & Info */}
           <div className="lg:col-span-1 space-y-6">
             {/* Backend Status */}
-            <div className="bg-white rounded-2xl border border-gray-100 p-5">
-              <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-background-card rounded-2xl border border-line p-5 shadow-card">
+              <h3 className="text-sm font-semibold text-ink mb-4 flex items-center gap-2">
+                <svg className="w-4 h-4 text-ink-soft" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                 </svg>
                 本地服务
               </h3>
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">连接状态</span>
+                  <span className="text-xs text-ink-soft">连接状态</span>
                   <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${
                     backendStatus === 'connected' ? 'text-green-600' :
                     backendStatus === 'checking' ? 'text-yellow-600' : 'text-red-600'
@@ -212,13 +212,13 @@ const DesktopPage: React.FC = () => {
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">服务地址</span>
-                  <span className="text-xs font-mono text-gray-700">{serviceInfo.host}</span>
+                  <span className="text-xs text-ink-soft">服务地址</span>
+                  <span className="text-xs font-mono text-ink-muted">{serviceInfo.host}</span>
                 </div>
                 <div className="pt-2">
                   <button
                     onClick={handlePickSaveDir}
-                    className="w-full px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-600 rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5"
+                    className="w-full px-3 py-2 bg-background hover:bg-background-mist text-ink-muted rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
@@ -230,14 +230,14 @@ const DesktopPage: React.FC = () => {
             </div>
 
             {/* App Info */}
-            <div className="bg-white rounded-2xl border border-gray-100 p-5">
-              <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-background-card rounded-2xl border border-line p-5 shadow-card">
+              <h3 className="text-sm font-semibold text-ink mb-4 flex items-center gap-2">
+                <svg className="w-4 h-4 text-ink-soft" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 应用信息
               </h3>
-              <div className="space-y-2 text-xs text-gray-600">
+              <div className="space-y-2 text-xs text-ink-muted">
                 <div className="flex justify-between">
                   <span>版本</span>
                   <span className="font-mono">0.0.1</span>
@@ -248,7 +248,7 @@ const DesktopPage: React.FC = () => {
                 </div>
                 <div className="flex justify-between">
                   <span>本地目录</span>
-                  <span className="font-mono text-gray-400 truncate w-32 text-right">{localDirectory}</span>
+                  <span className="font-mono text-ink-soft truncate w-32 text-right">{localDirectory}</span>
                 </div>
               </div>
             </div>
@@ -256,21 +256,21 @@ const DesktopPage: React.FC = () => {
 
           {/* Right: Model Configuration & Command Execution */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white rounded-2xl border border-gray-100 p-5">
+            <div className="bg-background-card rounded-2xl border border-line p-5 shadow-card">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-5">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-                    <FiCpu className="w-4 h-4 text-gray-500" />
+                  <h3 className="text-sm font-semibold text-ink flex items-center gap-2">
+                    <FiCpu className="w-4 h-4 text-ink-soft" />
                     基础模型 API
                   </h3>
-                  <p className="mt-1 text-xs text-gray-500">OpenAI-compatible 接口地址 / 模型名 / 密钥，按能力分别配置</p>
+                  <p className="mt-1 text-xs text-ink-soft">OpenAI-compatible 接口地址 / 模型名 / 密钥，按能力分别配置</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={loadModelProviderSettings}
                     disabled={providerLoading || providerSaving}
-                    className="h-8 w-8 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-center"
+                    className="h-8 w-8 rounded-lg border border-line text-ink-soft hover:bg-background disabled:opacity-50 flex items-center justify-center"
                     title="重新读取"
                   >
                     <FiRefreshCw className={`w-4 h-4 ${providerLoading ? 'animate-spin' : ''}`} />
@@ -279,7 +279,7 @@ const DesktopPage: React.FC = () => {
                     type="button"
                     onClick={handleSaveProviders}
                     disabled={providerLoading || providerSaving}
-                    className="h-8 px-3 rounded-lg bg-gray-900 text-white text-xs font-medium hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1.5"
+                    className="h-8 px-3 rounded-lg bg-primary-dark text-white text-xs font-medium hover:bg-[#1A0B02] disabled:opacity-50 flex items-center gap-1.5"
                   >
                     {providerSaving ? <FiRefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FiSave className="w-3.5 h-3.5" />}
                     保存
@@ -296,7 +296,7 @@ const DesktopPage: React.FC = () => {
               </div>
 
               {/* Tab bar */}
-              <div className="flex rounded-lg border border-gray-200 bg-gray-100 p-1 mb-4">
+              <div className="flex rounded-lg border border-line bg-background p-1 mb-4">
                 {providerRows.map((row) => (
                   <button
                     key={row.id}
@@ -304,8 +304,8 @@ const DesktopPage: React.FC = () => {
                     onClick={() => setActiveTab(row.id)}
                     className={`flex-1 h-9 rounded-md text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
                       activeTab === row.id
-                        ? 'bg-white text-gray-800 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
+                        ? 'bg-white text-ink shadow-sm'
+                        : 'text-ink-soft hover:text-ink-muted'
                     }`}
                   >
                     <row.icon className="w-4 h-4" />
@@ -323,55 +323,55 @@ const DesktopPage: React.FC = () => {
                   : 'sk-... 输入 API Key'
 
                 return (
-                  <div className="rounded-lg border border-gray-100 bg-gray-50/70 p-5 space-y-4">
-                    <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
-                      <div className="w-9 h-9 rounded-xl bg-white border border-gray-100 flex items-center justify-center text-gray-600">
+                  <div className="rounded-lg border border-line bg-background/70 p-5 space-y-4">
+                    <div className="flex items-center gap-3 pb-3 border-b border-line">
+                      <div className="w-9 h-9 rounded-xl bg-white border border-line flex items-center justify-center text-primary-dark">
                         <row.icon className="w-5 h-5" />
                       </div>
                       <div>
-                        <div className="text-sm font-semibold text-gray-800">{row.label} · API 配置</div>
-                        <div className="text-xs text-gray-500">{row.desc}</div>
+                        <div className="text-sm font-semibold text-ink">{row.label} · API 配置</div>
+                        <div className="text-xs text-ink-soft">{row.desc}</div>
                       </div>
                     </div>
 
                     {/* API URL — full width */}
                     <label className="block">
-                      <span className="text-xs font-semibold text-gray-600">接口地址 (Base URL)</span>
+                      <span className="text-xs font-semibold text-ink-muted">接口地址 (Base URL)</span>
                       <input
                         value={provider.baseUrl}
                         onChange={(event) => updateProvider(activeTab, 'baseUrl', event.target.value)}
-                        className="mt-1.5 w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono text-gray-700 outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                        className="mt-1.5 w-full h-10 rounded-lg border border-line bg-white px-3 text-sm font-mono text-ink-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                         placeholder="https://api.openai.com/v1"
                       />
-                      <span className="mt-1 text-[11px] text-gray-400">OpenAI-compatible 端点，例如 https://ark.cn-beijing.volces.com/api/coding/v3</span>
+                      <span className="mt-1 text-[11px] text-ink-soft">OpenAI-compatible 端点，例如 https://ark.cn-beijing.volces.com/api/coding/v3</span>
                     </label>
 
                     {/* Model + Token side by side */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <label className="block">
-                        <span className="text-xs font-semibold text-gray-600">模型名称 (Model)</span>
+                        <span className="text-xs font-semibold text-ink-muted">模型名称 (Model)</span>
                         <input
                           value={provider.model}
                           onChange={(event) => updateProvider(activeTab, 'model', event.target.value)}
-                          className="mt-1.5 w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono text-gray-700 outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                          className="mt-1.5 w-full h-10 rounded-lg border border-line bg-white px-3 text-sm font-mono text-ink-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                           placeholder="model-name"
                         />
-                        <span className="mt-1 text-[11px] text-gray-400">例如 gpt-4.1 / doubao-seed-2.0-pro</span>
+                        <span className="mt-1 text-[11px] text-ink-soft">例如 gpt-4.1 / doubao-seed-2.0-pro</span>
                       </label>
                       <label className="block">
-                        <span className="text-xs font-semibold text-gray-600 flex items-center gap-1">
+                        <span className="text-xs font-semibold text-ink-muted flex items-center gap-1">
                           <FiKey className="w-3 h-3" />
                           API 密钥 (Token)
                         </span>
                         <input
                           value={provider.apiKey || ''}
                           onChange={(event) => updateProvider(activeTab, 'apiKey', event.target.value)}
-                          className="mt-1.5 w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono text-gray-700 outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-200"
+                          className="mt-1.5 w-full h-10 rounded-lg border border-line bg-white px-3 text-sm font-mono text-ink-muted outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                           placeholder={tokenPlaceholder}
                           type="password"
                           autoComplete="off"
                         />
-                        <span className="mt-1 text-[11px] text-gray-400">密钥仅保存在本机，不上传云端</span>
+                        <span className="mt-1 text-[11px] text-ink-soft">密钥仅保存在本机，不上传云端</span>
                       </label>
                     </div>
                   </div>

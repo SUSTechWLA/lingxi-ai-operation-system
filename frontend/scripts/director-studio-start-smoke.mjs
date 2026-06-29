@@ -253,7 +253,7 @@ app.whenReady().then(async () => {
       )
       button.click()
     \`)
-    await waitForDOM(win, \`document.body.innerText.includes('Run run-smok') || document.body.innerText.includes('查看工作台')\`, 15000)
+    await waitForDOM(win, \`document.body.innerText.includes('Run run-smok')\`, 15000)
     const bodyText = await win.webContents.executeJavaScript('document.body.innerText')
     if (bodyText.includes('guard agent plan')) {
       throw new Error(bodyText)

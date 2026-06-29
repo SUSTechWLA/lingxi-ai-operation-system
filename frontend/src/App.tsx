@@ -47,7 +47,7 @@ function App() {
   }, [])
 
   if (authChecking) {
-    return <div className="flex h-screen items-center justify-center bg-[#FFF8E8] text-sm text-[#735C3D]">正在检查登录状态...</div>
+    return <div className="flex h-screen items-center justify-center bg-background text-sm text-ink-muted">正在检查登录状态...</div>
   }
 
   if (!authUser) {

@@ -1604,7 +1604,7 @@ export function getStageStateDisplay(status: DirectorStageStatus): StageStateDis
       return { icon: 'shield', label: '待审核', colorClass: 'border-amber-400 bg-amber-50 text-amber-700', dotColor: 'bg-amber-500', animate: true, active: true }
     case 'running':
     case 'active':
-      return { icon: 'refresh', label: '生成中', colorClass: 'border-blue-400 bg-blue-50 text-blue-700', dotColor: 'bg-blue-500', animate: true, active: true }
+      return { icon: 'refresh', label: '生成中', colorClass: 'border-line bg-primary-soft text-primary-dark', dotColor: 'bg-primary', animate: true, active: true }
     case 'blocked':
     case 'failed':
       return { icon: 'x', label: '已阻断', colorClass: 'border-red-300 bg-red-50 text-red-700', dotColor: 'bg-red-500', animate: false, active: false }
