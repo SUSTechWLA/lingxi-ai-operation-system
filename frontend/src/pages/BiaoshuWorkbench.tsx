@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool } from 'react-icons/fi'
-import { getAgentRun, startAgentRun } from '../services/api'
-import type { AgentPlan, AgentRun, AgentStep } from '../utils/types'
+import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch } from 'react-icons/fi'
+import ReactMarkdown from 'react-markdown'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, startAgentRun } from '../services/api'
+import { fetchBiaoshuProjects, saveBiaoshuProject, type BiaoshuProjectStatus, type LocalBiaoshuProject } from '../services/localAgent'
+import type { AgentPlan, AgentReviewItem, AgentRun, AgentStep } from '../utils/types'
+import {
+  biaoshuArtifactToCopyText,
+  buildBiaoshuArtifacts,
+  displayNameForBiaoshuArtifact,
+  type BiaoshuArtifactRecord,
+  type BiaoshuArtifactStatus,
+} from './biaoshuArtifactLogic'
 
 const BID_WORKFLOW_STAGES = [
   { key: 'parse', label: '解析招标文件', icon: '📄', tool: 'parse_bid_files' },
@@ -13,6 +22,11 @@ const BID_WORKFLOW_STAGES = [
 ]
 
 const SUPPORTED_BID_EXTENSIONS = ['.txt', '.docx', '.pdf', '.xlsx', '.xls']
+const DEFAULT_PROJECT_NAME = '广惠高速改扩建'
+const DEFAULT_BID_FILE_PATH = 'e:\\lingxi\\tangying-ai-operation-system\\biaoshu-tools\\test_bid.txt'
+
+type BiaoshuView = 'workbench' | 'artifacts' | 'history'
+type BiaoshuProjectHistoryItem = LocalBiaoshuProject
 
 const fileExtension = (path: string) => {
   const normalized = path.trim().toLowerCase()
@@ -20,11 +34,38 @@ const fileExtension = (path: string) => {
   return dot >= 0 ? normalized.slice(dot) : ''
 }
 
+const statusText = (status: BiaoshuProjectStatus) => {
+  if (status === 'CREATED') return '已创建'
+  if (status === 'RUNNING') return '运行中'
+  if (status === 'FAILED') return '失败'
+  if (status === 'SUCCESS') return '完成'
+  if (status === 'UNKNOWN') return '未知'
+  return status
+}
+
+const extractProjectNameFromRun = (run: AgentRun | null, fallback: string) => {
+  const source = run as (AgentRun & { context?: Record<string, unknown> }) | null
+  const context = source?.context || source?.metadata
+  const contextName = context?.projectName || context?.project_name || context?.output_dir
+  return typeof contextName === 'string' && contextName.trim() ? contextName : fallback
+}
+
+const extractBidFilePathFromRun = (run: AgentRun | null, fallback: string) => {
+  const source = run as (AgentRun & { context?: Record<string, unknown> }) | null
+  const context = source?.context || source?.metadata
+  const contextPath = context?.filePath || context?.file_path || context?.bidFilePath
+  return typeof contextPath === 'string' && contextPath.trim() ? contextPath : fallback
+}
+
 export default function BiaoshuWorkbench() {
-  const [projectName, setProjectName] = useState('广惠高速改扩建')
-  const [bidFilePath, setBidFilePath] = useState('e:\\lingxi\\tangying-ai-operation-system\\biaoshu-tools\\test_bid.txt')
+  const [projectName, setProjectName] = useState(DEFAULT_PROJECT_NAME)
+  const [bidFilePath, setBidFilePath] = useState(DEFAULT_BID_FILE_PATH)
   const [customMessage, setCustomMessage] = useState('')
   const [run, setRun] = useState<AgentRun | null>(null)
+  const [trace, setTrace] = useState<unknown>(null)
+  const [reviews, setReviews] = useState<AgentReviewItem[]>([])
+  const [activeView, setActiveView] = useState<BiaoshuView>('workbench')
+  const [projectHistory, setProjectHistory] = useState<BiaoshuProjectHistoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [runLog, setRunLog] = useState<string[]>([])
@@ -32,23 +73,79 @@ export default function BiaoshuWorkbench() {
   const plan = run?.plan as AgentPlan | undefined
   const steps = plan?.steps || []
   const isTerminalStatus = run?.status === 'SUCCESS' || run?.status === 'FAILED'
+  const artifacts = useMemo(() => buildBiaoshuArtifacts(run, trace, reviews), [run, trace, reviews])
 
   const addLog = useCallback((msg: string) => {
     setRunLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   }, [])
 
+  const refreshRunData = useCallback(async (runId: string) => {
+    const [nextRun, nextTrace, nextReviews] = await Promise.all([
+      getAgentRun(runId),
+      getAgentRunTrace(runId).catch(() => null),
+      getAgentRunReviews(runId).catch(() => ({ runId, reviews: [] })),
+    ])
+    const reviewItems = nextReviews.reviews || []
+    setRun(nextRun)
+    setTrace(nextTrace)
+    setReviews(reviewItems)
+    return { run: nextRun, trace: nextTrace, reviews: reviewItems }
+  }, [])
+
+  const saveHistoryFromRun = useCallback(async (nextRun: AgentRun, options?: { projectName?: string; bidFilePath?: string; trace?: unknown; reviews?: AgentReviewItem[] }) => {
+    const nextArtifacts = buildBiaoshuArtifacts(nextRun, options?.trace ?? trace, options?.reviews ?? reviews)
+    const historyItem: BiaoshuProjectHistoryItem = {
+      runId: nextRun.id,
+      projectName: options?.projectName || extractProjectNameFromRun(nextRun, projectName || '未命名项目'),
+      bidFilePath: options?.bidFilePath || extractBidFilePathFromRun(nextRun, bidFilePath),
+      status: (nextRun.status || 'UNKNOWN') as BiaoshuProjectStatus,
+      createdAt: nextRun.createdAt || new Date().toISOString(),
+      updatedAt: nextRun.updatedAt || new Date().toISOString(),
+      artifactCount: nextArtifacts.length,
+      validArtifactCount: nextArtifacts.filter((artifact) => artifact.status === 'valid').length,
+    }
+    const response = await saveBiaoshuProject(historyItem)
+    setProjectHistory(response.projects)
+  }, [bidFilePath, projectName, reviews, trace])
+
+  // 页面加载时从本地后端恢复历史项目
+  useEffect(() => {
+    fetchBiaoshuProjects().then(async (response) => {
+      setProjectHistory(response.projects)
+      const latest = response.projects[0]
+      if (!latest) return
+      setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
+      setBidFilePath(latest.bidFilePath || DEFAULT_BID_FILE_PATH)
+      addLog(`恢复最近标书项目: ${latest.projectName}`)
+      try {
+        const snapshot = await refreshRunData(latest.runId)
+        await saveHistoryFromRun(snapshot.run, {
+          projectName: latest.projectName,
+          bidFilePath: latest.bidFilePath,
+          trace: snapshot.trace,
+          reviews: snapshot.reviews,
+        })
+        if (snapshot.run.status === 'SUCCESS' || snapshot.run.status === 'FAILED') setActiveView('artifacts')
+      } catch {
+        addLog('最近标书项目的云端任务暂不可读取，可从历史项目列表稍后重试')
+      }
+    }).catch((err: unknown) => {
+      addLog(`本地标书项目库读取失败: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!run?.id || isTerminalStatus) return
     const timer = setInterval(async () => {
       try {
-        const r = await getAgentRun(run.id)
-        setRun(r)
-        if (r.status === 'SUCCESS') addLog('运行完成')
-        if (r.status === 'FAILED') addLog('运行失败')
+        const snapshot = await refreshRunData(run.id)
+        await saveHistoryFromRun(snapshot.run, { trace: snapshot.trace, reviews: snapshot.reviews })
+        if (snapshot.run.status === 'SUCCESS') addLog('运行完成')
+        if (snapshot.run.status === 'FAILED') addLog('运行失败')
       } catch { /* polling */ }
     }, 2000)
     return () => clearInterval(timer)
-  }, [run?.id, isTerminalStatus, addLog])
+  }, [run?.id, isTerminalStatus, addLog, refreshRunData])
 
   const handleStart = async () => {
     if (!bidFilePath.trim()) return
@@ -62,6 +159,8 @@ export default function BiaoshuWorkbench() {
     setLoading(true)
     setError(null)
     setRunLog([])
+    setTrace(null)
+    setReviews([])
 
     const message = customMessage.trim()
       || `请解析招标文件并生成技术标文档。文件路径：${bidFilePath}，项目名称：${projectName || '未命名项目'}`
@@ -82,8 +181,14 @@ export default function BiaoshuWorkbench() {
         },
       })
       addLog(`任务已创建: ${result.runId}`)
-      const r = await getAgentRun(result.runId)
-      setRun(r)
+      const snapshot = await refreshRunData(result.runId)
+      await saveHistoryFromRun(snapshot.run, {
+        projectName: projectName || '未命名项目',
+        bidFilePath,
+        trace: snapshot.trace,
+        reviews: snapshot.reviews,
+      })
+      setActiveView('artifacts')
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
@@ -107,9 +212,33 @@ export default function BiaoshuWorkbench() {
     return BID_WORKFLOW_STAGES.find(s => step.tool.includes(s.key) || s.tool.includes(step.tool))
   }
 
+  const handleOpenHistoryItem = async (item: BiaoshuProjectHistoryItem) => {
+    setLoading(true)
+    setError(null)
+    try {
+      setProjectName(item.projectName)
+      setBidFilePath(item.bidFilePath)
+      const snapshot = await refreshRunData(item.runId)
+      await saveHistoryFromRun(snapshot.run, {
+        projectName: item.projectName,
+        bidFilePath: item.bidFilePath,
+        trace: snapshot.trace,
+        reviews: snapshot.reviews,
+      })
+      addLog(`打开历史项目: ${item.projectName}`)
+      setActiveView('artifacts')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
+      addLog(`历史项目读取失败: ${msg}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="flex-1 p-8 overflow-y-auto">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
@@ -123,6 +252,38 @@ export default function BiaoshuWorkbench() {
           </div>
         </div>
 
+        <div className="mb-6 flex rounded-xl border border-amber-100 bg-white/80 p-1 shadow-sm">
+          <button
+            onClick={() => setActiveView('workbench')}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${activeView === 'workbench' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-500 hover:bg-amber-50 hover:text-amber-700'}`}
+          >
+            <FiTool /> 工作台
+          </button>
+          <button
+            onClick={() => setActiveView('artifacts')}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${activeView === 'artifacts' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-500 hover:bg-amber-50 hover:text-amber-700'}`}
+          >
+            <FiArchive /> 产物
+          </button>
+          <button
+            onClick={() => setActiveView('history')}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${activeView === 'history' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-500 hover:bg-amber-50 hover:text-amber-700'}`}
+          >
+            <FiFolder /> 历史项目
+          </button>
+        </div>
+
+        {activeView === 'artifacts' ? (
+          <BiaoshuArtifactsPage artifacts={artifacts} run={run} onGoWorkbench={() => setActiveView('workbench')} />
+        ) : activeView === 'history' ? (
+          <BiaoshuProjectHistoryPage
+            currentRunId={run?.id}
+            history={projectHistory}
+            loading={loading}
+            onOpenProject={handleOpenHistoryItem}
+            onGoWorkbench={() => setActiveView('workbench')}
+          />
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left: Input Panel */}
           <div className="lg:col-span-1 space-y-4">
@@ -336,6 +497,396 @@ export default function BiaoshuWorkbench() {
               </div>
             )}
           </div>
+        </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function BiaoshuProjectHistoryPage({
+  currentRunId,
+  history,
+  loading,
+  onOpenProject,
+  onGoWorkbench,
+}: {
+  currentRunId?: string
+  history: BiaoshuProjectHistoryItem[]
+  loading: boolean
+  onOpenProject: (item: BiaoshuProjectHistoryItem) => void
+  onGoWorkbench: () => void
+}) {
+  const [keyword, setKeyword] = useState('')
+  const normalizedKeyword = keyword.trim().toLowerCase()
+  const filteredHistory = normalizedKeyword
+    ? history.filter((item) =>
+      [item.projectName, item.bidFilePath, item.runId, item.status]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedKeyword),
+    )
+    : history
+  const completedCount = history.filter((item) => item.status === 'SUCCESS').length
+  const runningCount = history.filter((item) => item.status === 'RUNNING' || item.status === 'CREATED').length
+
+  return (
+    <div className="space-y-5">
+      <section className="card p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-bold text-primary-dark">历史项目</p>
+            <h2 className="mt-2 text-3xl font-black text-ink">以往标书项目</h2>
+            <p className="mt-2 text-sm leading-6 text-ink-muted">
+              本机保存的标书任务索引，包含项目名称、招标文件路径、运行状态和产物生成进度。
+            </p>
+          </div>
+          <button
+            onClick={onGoWorkbench}
+            className="shrink-0 rounded-lg bg-white px-4 py-2 text-sm font-bold text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+          >
+            新建标书任务
+          </button>
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-4">
+          <BiaoshuMetric label="项目总数" value={String(history.length)} />
+          <BiaoshuMetric label="已完成" value={String(completedCount)} />
+          <BiaoshuMetric label="进行中" value={String(runningCount)} />
+          <BiaoshuMetric label="当前任务" value={currentRunId ? currentRunId.slice(0, 8) : '-'} />
+        </div>
+      </section>
+
+      <div className="flex items-center gap-3 rounded-lg bg-white/80 px-4 py-3 ring-1 ring-line">
+        <FiSearch className="shrink-0 text-ink-soft" />
+        <input
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+          className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-soft"
+          placeholder="搜索项目名、文件路径、Run ID"
+        />
+      </div>
+
+      {history.length === 0 ? (
+        <div className="rounded-lg bg-amber-50 p-5 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">
+          暂无历史项目。启动一次标书任务后，这里会自动记录。
+        </div>
+      ) : filteredHistory.length === 0 ? (
+        <div className="rounded-lg bg-white/75 p-5 text-sm font-semibold text-ink-muted ring-1 ring-line">
+          没有匹配的历史项目。
+        </div>
+      ) : (
+        <section className="card overflow-hidden p-0">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-background-mist text-xs text-ink-soft">
+              <tr>
+                <th className="whitespace-nowrap px-4 py-3">项目</th>
+                <th className="whitespace-nowrap px-4 py-3">状态</th>
+                <th className="whitespace-nowrap px-4 py-3">产物</th>
+                <th className="whitespace-nowrap px-4 py-3">最近更新</th>
+                <th className="whitespace-nowrap px-4 py-3">Run ID</th>
+                <th className="whitespace-nowrap px-4 py-3">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line bg-white/70">
+              {filteredHistory.map((item) => (
+                <tr key={item.runId} className={item.runId === currentRunId ? 'bg-amber-50/70' : undefined}>
+                  <td className="min-w-[260px] px-4 py-3">
+                    <div className="font-semibold text-ink">{item.projectName || '未命名项目'}</div>
+                    <div className="mt-1 max-w-md truncate font-mono text-xs text-ink-soft" title={item.bidFilePath}>
+                      {item.bidFilePath || '-'}
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <BiaoshuRunStatusBadge status={item.status} />
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-ink-muted">
+                    {typeof item.validArtifactCount === 'number' && typeof item.artifactCount === 'number'
+                      ? `${item.validArtifactCount}/${item.artifactCount}`
+                      : '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{formatHistoryDate(item.updatedAt)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-muted">{item.runId.slice(0, 12)}</td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <button
+                      onClick={() => onOpenProject(item)}
+                      disabled={loading}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-primary-200 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {loading ? <FiRefreshCw className="animate-spin" /> : <FiEye />}
+                      查看产物
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </div>
+  )
+}
+
+function BiaoshuRunStatusBadge({ status }: { status: BiaoshuProjectStatus }) {
+  const tone = status === 'SUCCESS'
+    ? 'bg-green-50 text-green-700 ring-green-200'
+    : status === 'RUNNING' || status === 'CREATED'
+      ? 'bg-blue-50 text-blue-700 ring-blue-200'
+      : status === 'FAILED'
+        ? 'bg-red-50 text-red-700 ring-red-200'
+        : 'bg-stone-50 text-stone-600 ring-stone-200'
+  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${tone}`}>{statusText(status)}</span>
+}
+
+function formatHistoryDate(value?: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function BiaoshuArtifactsPage({ artifacts, run, onGoWorkbench }: { artifacts: BiaoshuArtifactRecord[]; run: AgentRun | null; onGoWorkbench: () => void }) {
+  const validCount = artifacts.filter((artifact) => artifact.status === 'valid').length
+  const activeCount = artifacts.filter((artifact) => artifact.status === 'running' || artifact.status === 'review').length
+  const blockedCount = artifacts.filter((artifact) => artifact.status === 'failed' || artifact.status === 'missing').length
+
+  const [viewingArtifact, setViewingArtifact] = useState<BiaoshuArtifactRecord | null>(null)
+  const [viewContent, setViewContent] = useState<string>('')
+  const [viewFormat, setViewFormat] = useState<string>('')
+  const [viewLoading, setViewLoading] = useState(false)
+  const [viewError, setViewError] = useState<string | null>(null)
+
+  const handleView = async (artifact: BiaoshuArtifactRecord) => {
+    if (!artifact.storageRef) return
+    setViewingArtifact(artifact)
+    setViewLoading(true)
+    setViewError(null)
+    try {
+      const data = await readBiaoshuArtifact(artifact.storageRef)
+      setViewContent(data.content)
+      setViewFormat(data.format)
+    } catch (e: unknown) {
+      setViewError(e instanceof Error ? e.message : '读取失败')
+    } finally {
+      setViewLoading(false)
+    }
+  }
+
+  const handleCloseViewer = () => {
+    setViewingArtifact(null)
+    setViewContent('')
+    setViewFormat('')
+    setViewError(null)
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="card p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-bold text-primary-dark">标书产物库</p>
+            <h2 className="mt-2 text-3xl font-black text-ink">技术标产物索引</h2>
+            <p className="mt-2 text-sm leading-6 text-ink-muted">
+              汇总招标解析、大纲、章节、字数检查、整合成稿和 Word 文档，便于追踪每个阶段的状态与本地输出路径。
+            </p>
+          </div>
+          <button
+            onClick={onGoWorkbench}
+            className="shrink-0 rounded-lg bg-white px-4 py-2 text-sm font-bold text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+          >
+            返回工作台
+          </button>
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-4">
+          <BiaoshuMetric label="任务状态" value={run ? run.status : '未启动'} />
+          <BiaoshuMetric label="已生成" value={`${validCount}/${artifacts.length}`} />
+          <BiaoshuMetric label="进行中" value={String(activeCount)} />
+          <BiaoshuMetric label="需处理" value={String(blockedCount)} />
+        </div>
+      </section>
+
+      {!run && (
+        <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">
+          尚未启动标书任务。启动后这里会自动展示本次运行的产物状态。
+        </div>
+      )}
+
+      <BiaoshuArtifactTable artifacts={artifacts} onView={handleView} />
+
+      {viewingArtifact && (
+        <BiaoshuArtifactViewer
+          artifact={viewingArtifact}
+          content={viewContent}
+          format={viewFormat}
+          loading={viewLoading}
+          error={viewError}
+          onClose={handleCloseViewer}
+        />
+      )}
+    </div>
+  )
+}
+
+function BiaoshuMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-background-card px-4 py-3 ring-1 ring-line">
+      <div className="text-xs font-bold text-ink-soft">{label}</div>
+      <div className="mt-1 text-lg font-black text-ink">{value}</div>
+    </div>
+  )
+}
+
+function BiaoshuArtifactTable({ artifacts, onView }: { artifacts: BiaoshuArtifactRecord[]; onView: (a: BiaoshuArtifactRecord) => void }) {
+  const headers = ['ID', '名称', '类型', '状态', '负责人', '路径', '操作']
+  return (
+    <section className="card overflow-hidden p-0">
+      <table className="w-full text-left text-sm">
+        <thead className="bg-background-mist text-xs text-ink-soft">
+          <tr>
+            {headers.map((header) => (
+              <th className="whitespace-nowrap px-4 py-3" key={header}>{header}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line bg-white/70">
+          {artifacts.map((artifact) => (
+            <tr key={artifact.id}>
+              <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
+              <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">
+                <div>{artifact.name}</div>
+                <div className="mt-1 max-w-xs truncate text-xs font-normal text-ink-soft" title={artifact.summary}>{artifact.summary}</div>
+              </td>
+              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForBiaoshuArtifact(artifact.kind)}</td>
+              <td className="whitespace-nowrap px-4 py-3"><BiaoshuStatusBadge status={artifact.status} /></td>
+              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{artifact.owner}</td>
+              <td className="max-w-sm truncate px-4 py-3 font-mono text-xs text-ink-muted" title={artifact.storageRef}>{artifact.storageRef || '-'}</td>
+              <td className="whitespace-nowrap px-4 py-3">
+                <div className="flex items-center gap-1.5">
+                  <BiaoshuCopyButton value={biaoshuArtifactToCopyText(artifact)} label="复制" />
+                  {artifact.status === 'valid' && artifact.storageRef && (
+                    <button
+                      onClick={() => onView(artifact)}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-primary-200 hover:bg-primary-100"
+                    >
+                      <FiEye /> 查看
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
+function BiaoshuStatusBadge({ status }: { status: BiaoshuArtifactStatus }) {
+  const labelMap: Record<BiaoshuArtifactStatus, string> = {
+    valid: '有效',
+    review: '待审核',
+    pending: '待生成',
+    running: '生成中',
+    failed: '失败',
+    missing: '缺少文件',
+  }
+  const toneMap: Record<BiaoshuArtifactStatus, string> = {
+    valid: 'bg-green-50 text-green-700 ring-green-200',
+    review: 'bg-amber-50 text-primary-dark ring-amber-200',
+    pending: 'bg-stone-50 text-stone-600 ring-stone-200',
+    running: 'bg-blue-50 text-blue-700 ring-blue-200',
+    failed: 'bg-red-50 text-red-700 ring-red-200',
+    missing: 'bg-red-50 text-red-700 ring-red-200',
+  }
+  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${toneMap[status]}`}>{labelMap[status]}</span>
+}
+
+function BiaoshuCopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    await copyText(value)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+  return (
+    <button onClick={handleCopy} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft">
+      <FiCopy /> {copied ? '已复制' : label}
+    </button>
+  )
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+function BiaoshuArtifactViewer({
+  artifact, content, format, loading, error, onClose,
+}: {
+  artifact: BiaoshuArtifactRecord
+  content: string
+  format: string
+  loading: boolean
+  error: string | null
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="relative mx-4 max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-line px-6 py-4">
+          <div>
+            <h3 className="text-lg font-black text-ink">{artifact.name}</h3>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              {displayNameForBiaoshuArtifact(artifact.kind)} · {format.toUpperCase()} · {artifact.storageRef}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-ink-muted hover:bg-background-mist hover:text-ink"
+          >
+            <FiX size={20} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="overflow-y-auto px-6 py-5" style={{ maxHeight: 'calc(90vh - 80px)' }}>
+          {loading && (
+            <div className="flex items-center justify-center py-20 text-ink-muted">
+              <FiRefreshCw className="mr-2 animate-spin" /> 加载中...
+            </div>
+          )}
+          {error && (
+            <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
+              <FiAlertTriangle className="mr-2 inline" />{error}
+            </div>
+          )}
+          {!loading && !error && format === 'md' && (
+            <div className="prose prose-sm max-w-none">
+              <ReactMarkdown>{content}</ReactMarkdown>
+            </div>
+          )}
+          {!loading && !error && format !== 'md' && content && (
+            <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
+              {content}
+            </pre>
+          )}
+          {!loading && !error && !content && (
+            <p className="py-10 text-center text-sm text-ink-muted">暂无内容</p>
+          )}
         </div>
       </div>
     </div>

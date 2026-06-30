@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -94,6 +95,38 @@ type localArtifactRequest struct {
 	Metadata      map[string]interface{} `json:"metadata"`
 }
 
+type biaoshuArtifactReadRequest struct {
+	FilePath    string `json:"filePath"`
+	FilePathAlt string `json:"file_path"`
+}
+
+type BiaoshuArtifactReadResponse struct {
+	FilePath string `json:"filePath"`
+	Format   string `json:"format"`
+	Content  string `json:"content"`
+	Size     int64  `json:"size"`
+}
+
+type BiaoshuProjectRecord struct {
+	RunID              string `json:"runId"`
+	ProjectName        string `json:"projectName"`
+	BidFilePath        string `json:"bidFilePath"`
+	Status             string `json:"status"`
+	CreatedAt          string `json:"createdAt"`
+	UpdatedAt          string `json:"updatedAt"`
+	ArtifactCount      int    `json:"artifactCount,omitempty"`
+	ValidArtifactCount int    `json:"validArtifactCount,omitempty"`
+}
+
+type BiaoshuProjectListResponse struct {
+	Projects []BiaoshuProjectRecord `json:"projects"`
+}
+
+type BiaoshuProjectUpsertResponse struct {
+	Project  BiaoshuProjectRecord   `json:"project"`
+	Projects []BiaoshuProjectRecord `json:"projects"`
+}
+
 func NewServer(cfg Config) *Server {
 	if strings.TrimSpace(cfg.DataDir) == "" {
 		cfg.DataDir = defaultDataDir()
@@ -135,6 +168,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/paths", s.handlePaths)
 	s.mux.HandleFunc("/api/local/logs", s.handleLogs)
 	s.mux.HandleFunc("/api/local/model-providers", s.handleModelProviders)
+	s.mux.HandleFunc("/api/local/biaoshu-projects", s.handleBiaoshuProjects)
+	s.mux.HandleFunc("/api/local/biaoshu-projects/", s.handleBiaoshuProjectByRunID)
+	s.mux.HandleFunc("/api/local/biaoshu-artifacts/read", s.handleReadBiaoshuArtifact)
 	s.mux.HandleFunc("/api/local/artifacts", s.handleArtifacts)
 	s.mux.HandleFunc("/api/local/artifacts/", s.handleArtifactByID)
 	s.mux.HandleFunc("/api/local/projects/", s.handleProjectByID)
@@ -246,6 +282,65 @@ func (s *Server) handleModelProviders(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) handleBiaoshuProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projects, err := s.readBiaoshuProjects()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, BiaoshuProjectListResponse{Projects: projects})
+}
+
+func (s *Server) handleBiaoshuProjectByRunID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	runID := strings.TrimPrefix(r.URL.Path, "/api/local/biaoshu-projects/")
+	if !isSafePathSegment(runID) {
+		writeError(w, http.StatusBadRequest, "runId is required and must be a safe path segment")
+		return
+	}
+	var req BiaoshuProjectRecord
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid biaoshu project payload")
+		return
+	}
+	req.RunID = runID
+	project, projects, err := s.upsertBiaoshuProject(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, BiaoshuProjectUpsertResponse{Project: project, Projects: projects})
+}
+
+func (s *Server) handleReadBiaoshuArtifact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req biaoshuArtifactReadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid biaoshu artifact read payload")
+		return
+	}
+	filePath := strings.TrimSpace(req.FilePath)
+	if filePath == "" {
+		filePath = strings.TrimSpace(req.FilePathAlt)
+	}
+	resp, err := s.readBiaoshuArtifactFile(filePath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -670,6 +765,54 @@ func isSafePathSegment(value string) bool {
 	return true
 }
 
+func detectWorkspaceRoot() (string, bool) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for {
+		if hasWorkspaceMarkers(cwd) {
+			return cwd, true
+		}
+		parent := filepath.Dir(cwd)
+		if parent == cwd {
+			return "", false
+		}
+		cwd = parent
+	}
+}
+
+func hasWorkspaceMarkers(dir string) bool {
+	for _, name := range []string{"frontend", "local-backend", "cloud-backend"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+func pathWithinAnyRoot(path string, roots []string) bool {
+	for _, root := range roots {
+		if pathWithinRoot(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathWithinRoot(path, root string) bool {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 func removeLocalDir(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -726,6 +869,187 @@ func defaultDataDir() string {
 
 func (s *Server) modelProviderConfigPath() string {
 	return filepath.Join(s.paths.ConfigDir, "model-providers.json")
+}
+
+func (s *Server) biaoshuProjectsPath() string {
+	return filepath.Join(s.paths.ProjectDir, "biaoshu-projects.json")
+}
+
+func (s *Server) readBiaoshuProjects() ([]BiaoshuProjectRecord, error) {
+	if err := s.EnsureDirs(); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(s.biaoshuProjectsPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []BiaoshuProjectRecord{}, nil
+		}
+		return nil, err
+	}
+	var stored BiaoshuProjectListResponse
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return nil, err
+	}
+	projects := normalizeBiaoshuProjects(stored.Projects)
+	sortBiaoshuProjects(projects)
+	return projects, nil
+}
+
+func (s *Server) upsertBiaoshuProject(project BiaoshuProjectRecord) (BiaoshuProjectRecord, []BiaoshuProjectRecord, error) {
+	if err := validateBiaoshuProject(project); err != nil {
+		return BiaoshuProjectRecord{}, nil, err
+	}
+	projects, err := s.readBiaoshuProjects()
+	if err != nil {
+		return BiaoshuProjectRecord{}, nil, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	hasCreatedAt := strings.TrimSpace(project.CreatedAt) != ""
+	if strings.TrimSpace(project.UpdatedAt) == "" {
+		project.UpdatedAt = now
+	}
+	next := make([]BiaoshuProjectRecord, 0, len(projects)+1)
+	for _, existing := range projects {
+		if existing.RunID == project.RunID {
+			if strings.TrimSpace(project.ProjectName) == "" {
+				project.ProjectName = existing.ProjectName
+			}
+			if strings.TrimSpace(project.BidFilePath) == "" {
+				project.BidFilePath = existing.BidFilePath
+			}
+			if !hasCreatedAt {
+				project.CreatedAt = existing.CreatedAt
+			}
+			continue
+		}
+		next = append(next, existing)
+	}
+	if strings.TrimSpace(project.CreatedAt) == "" {
+		project.CreatedAt = now
+	}
+	next = append(next, project)
+	next = normalizeBiaoshuProjects(next)
+	sortBiaoshuProjects(next)
+	if len(next) > 50 {
+		next = next[:50]
+	}
+	if err := s.writeBiaoshuProjects(next); err != nil {
+		return BiaoshuProjectRecord{}, nil, err
+	}
+	for _, item := range next {
+		if item.RunID == project.RunID {
+			return item, next, nil
+		}
+	}
+	return project, next, nil
+}
+
+func (s *Server) writeBiaoshuProjects(projects []BiaoshuProjectRecord) error {
+	if err := s.EnsureDirs(); err != nil {
+		return err
+	}
+	return writeIndentedJSON(s.biaoshuProjectsPath(), BiaoshuProjectListResponse{Projects: projects})
+}
+
+func (s *Server) readBiaoshuArtifactFile(filePath string) (BiaoshuArtifactReadResponse, error) {
+	if strings.TrimSpace(filePath) == "" {
+		return BiaoshuArtifactReadResponse{}, errors.New("filePath is required")
+	}
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return BiaoshuArtifactReadResponse{}, err
+	}
+	if !pathWithinAnyRoot(absPath, s.biaoshuArtifactReadRoots()) {
+		return BiaoshuArtifactReadResponse{}, errors.New("filePath is outside trusted local artifact roots")
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return BiaoshuArtifactReadResponse{}, errors.New("artifact file not found")
+		}
+		return BiaoshuArtifactReadResponse{}, err
+	}
+	if info.IsDir() {
+		return BiaoshuArtifactReadResponse{}, errors.New("filePath must point to a file")
+	}
+	if info.Size() > 10*1024*1024 {
+		return BiaoshuArtifactReadResponse{}, errors.New("artifact file is too large to preview")
+	}
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return BiaoshuArtifactReadResponse{}, err
+	}
+	return BiaoshuArtifactReadResponse{
+		FilePath: absPath,
+		Format:   strings.TrimPrefix(strings.ToLower(filepath.Ext(absPath)), "."),
+		Content:  string(content),
+		Size:     info.Size(),
+	}, nil
+}
+
+func (s *Server) biaoshuArtifactReadRoots() []string {
+	roots := []string{s.paths.DataDir}
+	if workspaceRoot, ok := detectWorkspaceRoot(); ok {
+		roots = append(roots, workspaceRoot)
+	}
+	return roots
+}
+
+func validateBiaoshuProject(project BiaoshuProjectRecord) error {
+	if !isSafePathSegment(project.RunID) {
+		return errors.New("runId is required and must be a safe path segment")
+	}
+	if strings.TrimSpace(project.ProjectName) == "" {
+		return errors.New("projectName is required")
+	}
+	if strings.TrimSpace(project.BidFilePath) == "" {
+		return errors.New("bidFilePath is required")
+	}
+	if project.ArtifactCount < 0 || project.ValidArtifactCount < 0 {
+		return errors.New("artifact counts must be non-negative")
+	}
+	if project.ValidArtifactCount > project.ArtifactCount {
+		return errors.New("validArtifactCount cannot exceed artifactCount")
+	}
+	if !isBiaoshuProjectStatus(project.Status) {
+		return fmt.Errorf("unsupported status: %s", project.Status)
+	}
+	return nil
+}
+
+func normalizeBiaoshuProjects(projects []BiaoshuProjectRecord) []BiaoshuProjectRecord {
+	next := make([]BiaoshuProjectRecord, 0, len(projects))
+	seen := map[string]bool{}
+	for _, item := range projects {
+		item.RunID = strings.TrimSpace(item.RunID)
+		item.ProjectName = strings.TrimSpace(item.ProjectName)
+		item.BidFilePath = strings.TrimSpace(item.BidFilePath)
+		item.Status = strings.TrimSpace(item.Status)
+		if item.Status == "" {
+			item.Status = "UNKNOWN"
+		}
+		if item.RunID == "" || seen[item.RunID] || !isBiaoshuProjectStatus(item.Status) {
+			continue
+		}
+		seen[item.RunID] = true
+		next = append(next, item)
+	}
+	return next
+}
+
+func isBiaoshuProjectStatus(status string) bool {
+	switch status {
+	case "CREATED", "RUNNING", "SUCCESS", "FAILED", "UNKNOWN":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortBiaoshuProjects(projects []BiaoshuProjectRecord) {
+	sort.SliceStable(projects, func(i, j int) bool {
+		return projects[i].UpdatedAt > projects[j].UpdatedAt
+	})
 }
 
 func (s *Server) readModelProviderSettings() (map[ModelCapability]ModelProviderConfig, error) {

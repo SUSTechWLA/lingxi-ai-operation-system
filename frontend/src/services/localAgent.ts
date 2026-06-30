@@ -14,6 +14,35 @@ export interface ModelProviderSettingsResponse {
   providers: Partial<Record<ModelCapability, ModelProviderConfig>>
 }
 
+export type BiaoshuProjectStatus = 'CREATED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'UNKNOWN'
+
+export interface LocalBiaoshuProject {
+  runId: string
+  projectName: string
+  bidFilePath: string
+  status: BiaoshuProjectStatus
+  createdAt: string
+  updatedAt: string
+  artifactCount?: number
+  validArtifactCount?: number
+}
+
+export interface BiaoshuProjectListResponse {
+  projects: LocalBiaoshuProject[]
+}
+
+export interface BiaoshuProjectUpsertResponse {
+  project: LocalBiaoshuProject
+  projects: LocalBiaoshuProject[]
+}
+
+export interface LocalBiaoshuArtifactContent {
+  filePath: string
+  format: string
+  content: string
+  size: number
+}
+
 export const DEFAULT_LOCAL_AGENT_URL = 'http://127.0.0.1:18080'
 const configuredLocalAgentUrl = import.meta.env.VITE_LOCAL_AGENT_URL || import.meta.env.VITE_LOCAL_BACKEND_URL
 
@@ -70,6 +99,40 @@ export async function saveModelProviderSettings(
     throw new Error(await errorMessage(response, '保存模型设置失败'))
   }
   return response.json() as Promise<ModelProviderSettingsResponse>
+}
+
+export async function fetchBiaoshuProjects(): Promise<BiaoshuProjectListResponse> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu-projects'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取历史标书项目失败'))
+  }
+  return response.json() as Promise<BiaoshuProjectListResponse>
+}
+
+export async function saveBiaoshuProject(
+  project: LocalBiaoshuProject
+): Promise<BiaoshuProjectUpsertResponse> {
+  const response = await fetch(localAgentUrl(`/api/local/biaoshu-projects/${encodeURIComponent(project.runId)}`), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(project),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '保存历史标书项目失败'))
+  }
+  return response.json() as Promise<BiaoshuProjectUpsertResponse>
+}
+
+export async function readLocalBiaoshuArtifact(filePath: string): Promise<LocalBiaoshuArtifactContent> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu-artifacts/read'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filePath }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取本地产物失败'))
+  }
+  return response.json() as Promise<LocalBiaoshuArtifactContent>
 }
 
 function localAgentUrl(path: string): string {

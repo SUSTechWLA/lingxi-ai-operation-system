@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -190,6 +191,124 @@ func TestModelProviderSettingsRejectUnsupportedCapability(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unsupported capability should return 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBiaoshuProjectStoreUpsertListAndRejectUnsafeRunID(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	body := bytes.NewBufferString(`{
+		"projectName":"广惠高速改扩建",
+		"bidFilePath":"E:\\bid\\test_bid.pdf",
+		"status":"RUNNING",
+		"createdAt":"2026-06-30T01:00:00Z",
+		"updatedAt":"2026-06-30T01:05:00Z",
+		"artifactCount":6,
+		"validArtifactCount":2
+	}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/local/biaoshu-projects/run-1", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upsert status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	indexPath := filepath.Join(root, "projects", "biaoshu-projects.json")
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("expected biaoshu project index: %v", err)
+	}
+	if !bytes.Contains(raw, []byte("广惠高速改扩建")) {
+		t.Fatalf("project index missing project name: %s", string(raw))
+	}
+
+	body = bytes.NewBufferString(`{
+		"projectName":"广惠高速改扩建",
+		"bidFilePath":"E:\\bid\\test_bid.pdf",
+		"status":"SUCCESS",
+		"updatedAt":"2026-06-30T01:10:00Z",
+		"artifactCount":6,
+		"validArtifactCount":6
+	}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/local/biaoshu-projects/run-1", body)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/biaoshu-projects", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var listed BiaoshuProjectListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("invalid biaoshu project list: %v", err)
+	}
+	if len(listed.Projects) != 1 {
+		t.Fatalf("project count = %d, want 1", len(listed.Projects))
+	}
+	got := listed.Projects[0]
+	if got.Status != "SUCCESS" || got.ValidArtifactCount != 6 {
+		t.Fatalf("project not updated: %+v", got)
+	}
+	if got.CreatedAt != "2026-06-30T01:00:00Z" {
+		t.Fatalf("createdAt should be preserved, got %q", got.CreatedAt)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/api/local/biaoshu-projects/bad%5Crun", bytes.NewBufferString(`{}`))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unsafe run id should return 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReadBiaoshuArtifactReadsTrustedTextFileAndRejectsOutsidePath(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	artifactPath := filepath.Join(root, "biaoshu-output", "analysis.md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("# 招标文件解析\n\n正文"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	body := bytes.NewBufferString(fmt.Sprintf(`{"filePath":%q}`, artifactPath))
+	req := httptest.NewRequest(http.MethodPost, "/api/local/biaoshu-artifacts/read", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		FilePath string `json:"filePath"`
+		Format   string `json:"format"`
+		Content  string `json:"content"`
+		Size     int64  `json:"size"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid read response: %v", err)
+	}
+	if resp.FilePath != artifactPath || resp.Format != "md" || resp.Content != "# 招标文件解析\n\n正文" {
+		t.Fatalf("unexpected read response: %+v", resp)
+	}
+
+	outsidePath := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outsidePath, []byte("outside"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	body = bytes.NewBufferString(fmt.Sprintf(`{"filePath":%q}`, outsidePath))
+	req = httptest.NewRequest(http.MethodPost, "/api/local/biaoshu-artifacts/read", body)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("outside path should return 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

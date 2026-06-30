@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 
 const tempDir = await mkdtemp(join(tmpdir(), 'director-studio-logic-'))
@@ -10,7 +10,7 @@ const outfile = join(tempDir, 'directorStudioLogic.mjs')
 
 try {
   await build({
-    entryPoints: [new URL('../src/pages/directorStudioLogic.ts', import.meta.url).pathname],
+    entryPoints: [fileURLToPath(new URL('../src/pages/directorStudioLogic.ts', import.meta.url))],
     outfile,
     bundle: true,
     format: 'esm',

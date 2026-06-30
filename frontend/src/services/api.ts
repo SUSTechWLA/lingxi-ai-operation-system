@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getAuthAccessToken, refreshAuthSession, logout } from './auth'
+import { readLocalBiaoshuArtifact } from './localAgent'
 import {
   ApiResponse,
   TaskResponse,
@@ -507,6 +508,43 @@ export const regenerateAgentStage = async (
     { hint }
   )
   return response.data.data
+}
+
+// ─── Biaoshu Tools ─────────────────────────────────
+
+export interface BiaoshuArtifactContent {
+  filePath?: string
+  file_path: string
+  format: string
+  content: string
+  size: number
+}
+
+export const readBiaoshuArtifact = async (filePath: string): Promise<BiaoshuArtifactContent> => {
+  try {
+    const local = await readLocalBiaoshuArtifact(filePath)
+    return {
+      filePath: local.filePath,
+      file_path: local.filePath,
+      format: local.format,
+      content: local.content,
+      size: local.size,
+    }
+  } catch (localError) {
+    try {
+      const response = await axios.post('http://127.0.0.1:9001/tools/read_artifact', {
+        params: { file_path: filePath },
+      }, { timeout: 5000 })
+      if (!response.data?.success) {
+        throw new Error(response.data?.error || '读取产物失败')
+      }
+      return response.data.data
+    } catch (toolError) {
+      const localMessage = localError instanceof Error ? localError.message : String(localError)
+      const toolMessage = toolError instanceof Error ? toolError.message : String(toolError)
+      throw new Error(`读取产物失败：${localMessage}；标书工具服务也不可用：${toolMessage}`)
+    }
+  }
 }
 
 export interface CheckpointItem {

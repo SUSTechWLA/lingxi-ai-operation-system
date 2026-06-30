@@ -18,6 +18,8 @@ target/
 !.env.*.example
 
 # Go
+.gocache/
+.gocache-local/
 *.exe
 *.exe~
 *.dll

@@ -20,8 +20,8 @@ Store a local artifact
 {}
 ```
 
-- **200** — Stored
 - **400** — Invalid payload
+- **200** — Stored
 
 ---
 
@@ -53,6 +53,50 @@ Delete a local artifact
 | `projectId` | query | `string` | Yes |  |
 
 - **200** — Deleted
+
+---
+
+### POST /api/local/biaoshu-artifacts/read
+
+Read a local bid-writing artifact file
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+- **400** — Invalid or untrusted file path
+- **200** — Artifact content
+
+---
+
+### GET /api/local/biaoshu-projects
+
+List local bid-writing projects
+
+- **200** — Project list
+
+---
+
+### PUT /api/local/biaoshu-projects/:runId
+
+Create or update a local bid-writing project
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | Yes |  |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{}
+```
+
+- **200** — Project stored
+- **400** — Invalid payload
 
 ---
 

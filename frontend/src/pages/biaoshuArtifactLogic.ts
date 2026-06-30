@@ -1,0 +1,291 @@
+import type { AgentReviewItem, AgentRun, AgentStep } from '../utils/types'
+
+export type BiaoshuArtifactStatus = 'valid' | 'review' | 'pending' | 'running' | 'failed' | 'missing'
+
+export interface BiaoshuArtifactRecord {
+  id: string
+  name: string
+  kind: string
+  version: string
+  status: BiaoshuArtifactStatus
+  owner: string
+  updatedAt: string
+  storageRef: string
+  summary: string
+  sourceTool: string
+  metadata?: Record<string, unknown>
+}
+
+interface BiaoshuStageDefinition {
+  key: string
+  label: string
+  tool: string
+  kind: string
+  owner: string
+}
+
+interface TraceNodeLike {
+  id?: string
+  name?: string
+  type?: string
+  status?: string
+  input?: Record<string, unknown>
+  output?: Record<string, unknown>
+  error?: string
+  errorMessage?: string
+  createdAt?: string
+  updatedAt?: string
+  completedAt?: string
+  tool?: string
+}
+
+const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
+  { key: 'parse', label: '招标文件解析', tool: 'parse_bid_files', kind: 'BID_ANALYSIS', owner: '文件解析' },
+  { key: 'outline', label: '技术标大纲', tool: 'outline_generator', kind: 'BID_OUTLINE', owner: '大纲规划' },
+  { key: 'chapters', label: '章节初稿', tool: 'chapter_writer', kind: 'BID_CHAPTERS', owner: '章节编写' },
+  { key: 'wordcheck', label: '字数检查报告', tool: 'chapter_word_checker', kind: 'WORD_COUNT_REPORT', owner: '质量检查' },
+  { key: 'merge', label: '整合成稿', tool: 'merge_chapters', kind: 'MERGED_DRAFT', owner: '成稿整合' },
+  { key: 'word', label: '技术标 Word 文档', tool: 'convert_to_word', kind: 'TECHNICAL_BID_DOCX', owner: 'Word 导出' },
+]
+
+export function buildBiaoshuArtifacts(
+  run: AgentRun | null | undefined,
+  trace: unknown = undefined,
+  reviews: AgentReviewItem[] = [],
+): BiaoshuArtifactRecord[] {
+  const steps = run?.plan?.steps || []
+  const traceNodes = extractTraceNodes(trace)
+  const plannedStages = BIAOSHU_STAGES.filter((stage) =>
+    steps.length === 0 || steps.some((step) => stepMatchesStage(step, stage)),
+  )
+  const stages = plannedStages.length ? plannedStages : BIAOSHU_STAGES
+
+  return stages.map((stage, index) => {
+    const step = steps.find((item) => stepMatchesStage(item, stage))
+    const node = traceNodes.find((item) => nodeMatchesStage(item, stage))
+    const artifact = findOutputArtifact(node?.output, stage.kind)
+    const review = reviews.find((item) => itemMatchesStage(item, stage))
+    const storageRef = storageRefFor(node?.output, artifact)
+    const status = statusFor(step, node, review, storageRef)
+    const updatedAt = formatTime(
+      stringValue(artifact?.updatedAt) ||
+      stringValue(artifact?.createdAt) ||
+      node?.completedAt ||
+      node?.updatedAt ||
+      node?.createdAt ||
+      run?.updatedAt,
+    )
+
+    return {
+      id: String(artifact?.id || artifact?.artifactId || `B${String(index + 1).padStart(2, '0')}`),
+      name: String(artifact?.name || stage.label),
+      kind: String(artifact?.kind || stage.kind),
+      version: versionLabel(artifact),
+      status,
+      owner: stage.owner,
+      updatedAt,
+      storageRef,
+      summary: summaryFor(node?.output, artifact, review),
+      sourceTool: stage.tool,
+      metadata: objectValue(artifact?.metadata) || objectValue(node?.output),
+    }
+  })
+}
+
+export function displayNameForBiaoshuArtifact(kind: string): string {
+  const labels: Record<string, string> = {
+    BID_ANALYSIS: '招标解析',
+    BID_OUTLINE: '标书大纲',
+    BID_CHAPTERS: '章节稿件',
+    WORD_COUNT_REPORT: '字数检查',
+    MERGED_DRAFT: '整合成稿',
+    TECHNICAL_BID_DOCX: 'Word 文档',
+  }
+  return labels[kind] || kind
+}
+
+export function biaoshuArtifactToCopyText(artifact: BiaoshuArtifactRecord): string {
+  return JSON.stringify({
+    id: artifact.id,
+    name: artifact.name,
+    kind: artifact.kind,
+    version: artifact.version,
+    status: artifact.status,
+    owner: artifact.owner,
+    updatedAt: artifact.updatedAt,
+    storageRef: artifact.storageRef,
+    summary: artifact.summary,
+    sourceTool: artifact.sourceTool,
+  }, null, 2)
+}
+
+function stepMatchesStage(step: AgentStep, stage: BiaoshuStageDefinition): boolean {
+  const tool = step.tool || ''
+  const expected = step.expectedOutput || []
+  return tool.includes(stage.tool) ||
+    tool.includes(stage.key) ||
+    expected.includes(stage.kind) ||
+    Object.values(step.arguments || {}).some((value) => String(value).includes(stage.tool))
+}
+
+function nodeMatchesStage(node: TraceNodeLike, stage: BiaoshuStageDefinition): boolean {
+  const input = node.input || {}
+  const output = node.output || {}
+  const candidates = [
+    node.tool,
+    node.name,
+    stringValue(input.tool),
+    stringValue(input.capabilityTool),
+    stringValue(input.capability_tool),
+    stringValue(output.tool),
+    stringValue(output.capabilityTool),
+  ].filter(Boolean).join(' ')
+
+  return candidates.includes(stage.tool) || candidates.includes(stage.key)
+}
+
+function itemMatchesStage(review: AgentReviewItem, stage: BiaoshuStageDefinition): boolean {
+  return Boolean(
+    review.tool?.includes(stage.tool) ||
+    review.tool?.includes(stage.key) ||
+    review.stage?.includes(stage.key) ||
+    review.requiredOutputs?.includes(stage.kind) ||
+    review.reviewArtifactKinds?.includes(stage.kind),
+  )
+}
+
+function statusFor(
+  step: AgentStep | undefined,
+  node: TraceNodeLike | undefined,
+  review: AgentReviewItem | undefined,
+  storageRef: string,
+): BiaoshuArtifactStatus {
+  if (review?.status === 'PENDING') return 'review'
+  if (!step && !node) return 'pending'
+  const raw = String(node?.status || '').toUpperCase()
+  if (['FAILED', 'ERROR', 'CANCELED', 'CANCELLED'].includes(raw)) return 'failed'
+  if (['RUNNING', 'PROCESSING', 'IN_PROGRESS', 'READY'].includes(raw)) return 'running'
+  if (['SUCCESS', 'SUCCEEDED', 'COMPLETED', 'DONE'].includes(raw)) return storageRef ? 'valid' : 'missing'
+  return step ? 'pending' : 'missing'
+}
+
+function findOutputArtifact(output: Record<string, unknown> | undefined, kind: string): Record<string, unknown> | undefined {
+  if (!output) return undefined
+  const artifacts = Array.isArray(output.artifacts) ? output.artifacts : []
+  for (const item of artifacts) {
+    const artifact = objectValue(item)
+    if (!artifact) continue
+    const artifactKind = stringValue(artifact.kind) || stringValue(artifact.artifactKind)
+    if (!artifactKind || artifactKind === kind) return artifact
+  }
+  return undefined
+}
+
+function storageRefFor(
+  output: Record<string, unknown> | undefined,
+  artifact: Record<string, unknown> | undefined,
+): string {
+  const fromArtifact = artifact && (
+    stringValue(artifact.storageRef) ||
+    stringValue(artifact.storage_ref) ||
+    stringValue(artifact.url) ||
+    stringValue(artifact.path)
+  )
+  if (fromArtifact) return fromArtifact
+  if (!output) return ''
+
+  // 顶层字段
+  const topLevel = stringValue(output.storageRef) ||
+    stringValue(output.storage_ref) ||
+    stringValue(output.output_file) ||
+    stringValue(output.outputFile) ||
+    stringValue(output.output_path) ||
+    stringValue(output.outputPath) ||
+    stringValue(output.file) ||
+    stringValue(output.path)
+  if (topLevel) return topLevel
+
+  // 解析 stdout JSON 字符串，提取嵌套的路径字段（如 data.report_path）
+  const stdout = stringValue(output.stdout)
+  if (stdout) {
+    try {
+      const parsed = JSON.parse(stdout) as Record<string, unknown>
+      const data = objectValue(parsed.data)
+      return stringValue(parsed.output_path) ||
+        stringValue(parsed.report_path) ||
+        stringValue(parsed.file) ||
+        stringValue(parsed.path) ||
+        (data && (
+          stringValue(data.output_path) ||
+          stringValue(data.report_path) ||
+          stringValue(data.file) ||
+          stringValue(data.path)
+        )) ||
+        ''
+    } catch {
+      // stdout 不是 JSON，忽略
+    }
+  }
+
+  return ''
+}
+
+function summaryFor(
+  output: Record<string, unknown> | undefined,
+  artifact: Record<string, unknown> | undefined,
+  review: AgentReviewItem | undefined,
+): string {
+  return stringValue(artifact?.summary) ||
+    stringValue(output?.summary) ||
+    stringValue(output?.message) ||
+    stringValue(output?.content) ||
+    stringValue(review?.reviewContent) ||
+    stringValue(review?.reviewReason) ||
+    '-'
+}
+
+function extractTraceNodes(trace: unknown): TraceNodeLike[] {
+  if (Array.isArray(trace)) return toTraceNodes(trace)
+  const root = objectValue(trace)
+  if (!root) return []
+  const direct = arrayValue(root.nodes) || arrayValue(root.traceNodes)
+  if (direct) return toTraceNodes(direct)
+  const data = objectValue(root.data)
+  const task = objectValue(data?.task)
+  const nested = arrayValue(task?.nodes) || arrayValue(data?.nodes)
+  if (nested) return toTraceNodes(nested)
+  return []
+}
+
+function toTraceNodes(values: unknown[]): TraceNodeLike[] {
+  return values
+    .map(objectValue)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item) => item as TraceNodeLike)
+}
+
+function versionLabel(artifact: Record<string, unknown> | undefined): string {
+  const version = artifact?.version
+  if (typeof version === 'number' && Number.isFinite(version)) return `第 ${version} 版`
+  if (typeof version === 'string' && version.trim()) return version.startsWith('第') ? version : `第 ${version} 版`
+  return '-'
+}
+
+function formatTime(value?: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function arrayValue(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) ? value : undefined
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}

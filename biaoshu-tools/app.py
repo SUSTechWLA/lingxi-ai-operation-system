@@ -458,6 +458,34 @@ def tool_embed_chunks():
     return jsonify(result)
 
 
+@app.route("/tools/read_artifact", methods=["POST"])
+def tool_read_artifact():
+    """读取产物文件内容"""
+    params = extract_payload()
+    err = require_param(params, "file_path")
+    if err:
+        return err
+    file_path = params["file_path"]
+    if not os.path.exists(file_path):
+        return jsonify({"success": False, "error": f"文件不存在: {file_path}"}), 400
+
+    ext = os.path.splitext(file_path)[1].lower()
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        return jsonify({
+            "success": True,
+            "data": {
+                "file_path": file_path,
+                "format": ext.lstrip("."),
+                "content": content,
+                "size": len(content),
+            },
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": f"读取失败: {str(e)}"}), 500
+
+
 # ─── 主入口 ───────────────────────────────────────────
 
 if __name__ == "__main__":
