@@ -167,6 +167,32 @@ Get dynamic agent run state
 
 ---
 
+### POST /api/agent/runs/:runId/cancel
+
+Cancel a dynamic agent run
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{
+  "projectId": "string",
+  "reason": "string",
+}
+```
+
+**Responses:**
+
+- **200** — Agent run cancelled (JSON)
+- **404** — Not found (JSON)
+
+---
+
 ### GET /api/agent/runs/:runId/reviews
 
 List review gates for a dynamic agent run

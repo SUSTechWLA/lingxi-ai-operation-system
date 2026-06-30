@@ -376,6 +376,26 @@ app.whenReady().then(async () => {
     \`)
     await waitForDOM(win, \`document.body.innerText.includes('Run run-smok')\`, 15000)
     await win.webContents.executeJavaScript(\`
+      const projectButton = Array.from(document.querySelectorAll('button')).find((item) =>
+        item.textContent.trim() === '项目'
+      )
+      if (!projectButton) throw new Error('missing project nav button')
+      projectButton.click()
+    \`)
+    await waitForDOM(win, \`document.querySelector('textarea')\`, 15000)
+    await waitForDOM(win, \`
+      document.body.innerText.includes('生成中') &&
+      Array.from(document.querySelectorAll('button')).some((button) =>
+        button.textContent.includes('停止项目') && !button.disabled
+      )
+    \`, 15000)
+    await win.webContents.executeJavaScript(\`
+      const enabledStartButton = Array.from(document.querySelectorAll('button')).find((button) =>
+        button.textContent.includes('开始项目') && !button.disabled
+      )
+      if (enabledStartButton) throw new Error('start project button is still enabled after run starts')
+    \`)
+    await win.webContents.executeJavaScript(\`
       const assetsButton = Array.from(document.querySelectorAll('button')).find((item) =>
         item.textContent.trim() === '产物'
       )

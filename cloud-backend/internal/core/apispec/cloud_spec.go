@@ -429,6 +429,18 @@ func BuildCloudSpec() *Spec {
 		PathParam("runId", "Agent run identifier", StringSchema()).
 		ResponseJSON("200", "Agent run detail", "AgentRunDetailResponse").
 		ResponseJSON("404", "Not found", "ErrorResponse")
+	b.Route("POST", "/api/agent/runs/:runId/cancel", "Cancel a dynamic agent run").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"projectId": {Schema: StringSchema()},
+				"reason":    {Schema: StringSchema()},
+			},
+		}, "Cancel request", false).
+		ResponseJSON("200", "Agent run cancelled", "AgentRunStartResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
 	b.Route("GET", "/api/agent/runs/:runId/trace", "Get dynamic agent task trace").
 		Tags("Agent Runs").
 		PathParam("runId", "Agent run identifier", StringSchema()).

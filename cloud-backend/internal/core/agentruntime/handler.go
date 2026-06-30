@@ -68,10 +68,15 @@ type ProjectIDResolver interface {
 // ProjectLifecycleUpdater updates the project shell when an agent run starts.
 type ProjectLifecycleUpdater interface {
 	MarkAgentRunStarted(ctx context.Context, userID, projectID, runID string) error
+	MarkAgentRunStopped(ctx context.Context, userID, projectID, runID string) error
 }
 
 type ReviewNodeInputUpdater interface {
 	UpdateInputFields(ctx context.Context, id string, fields map[string]interface{}) error
+}
+
+type TaskPauser interface {
+	PauseTask(ctx context.Context, taskID, reason string) error
 }
 
 type Handler struct {
@@ -83,6 +88,7 @@ type Handler struct {
 	artifactService   ArtifactService
 	projectIDResolver ProjectIDResolver
 	projectLifecycle  ProjectLifecycleUpdater
+	taskPauser        TaskPauser
 }
 
 func NewHandler(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *Handler {
@@ -121,11 +127,17 @@ func (h *Handler) WithProjectLifecycleUpdater(updater ProjectLifecycleUpdater) *
 	return h
 }
 
+func (h *Handler) WithTaskPauser(pauser TaskPauser) *Handler {
+	h.taskPauser = pauser
+	return h
+}
+
 func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
 	api := r.Group("/api/agent/runs", middleware...)
 	{
 		api.POST("", h.StartRun)
 		api.GET("/:runId", h.GetRun)
+		api.POST("/:runId/cancel", h.CancelRun)
 		api.GET("/:runId/trace", h.GetTrace)
 		api.GET("/:runId/reviews", h.ListReviews)
 		api.POST("/:runId/reviews/:reviewId/approve", h.ApproveReview)
@@ -155,6 +167,49 @@ func (h *Handler) StartRun(c *gin.Context) {
 		"taskId": run.TaskID,
 		"status": run.Status,
 		"plan":   run.Plan,
+	})
+}
+
+func (h *Handler) CancelRun(c *gin.Context) {
+	var req struct {
+		ProjectID string `json:"projectId"`
+		Reason    string `json:"reason"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if req.Reason == "" {
+		req.Reason = "user requested"
+	}
+	run, err := h.runner.Cancel(c.Request.Context(), c.Param("runId"))
+	if err != nil {
+		httpx.Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if run == nil {
+		httpx.Fail(c, http.StatusNotFound, "agent run not found")
+		return
+	}
+	if h.taskPauser != nil && run.TaskID != "" {
+		if err := h.taskPauser.PauseTask(c.Request.Context(), run.TaskID, req.Reason); err != nil {
+			zap.L().Warn("agent run cancelled but task pause failed",
+				zap.String("runId", run.ID),
+				zap.String("taskId", run.TaskID),
+				zap.Error(err),
+			)
+		}
+	}
+	if h.projectLifecycle != nil && req.ProjectID != "" && run.UserID != "" {
+		if err := h.projectLifecycle.MarkAgentRunStopped(c.Request.Context(), run.UserID, req.ProjectID, run.ID); err != nil {
+			zap.L().Warn("agent run cancelled but project status update failed",
+				zap.String("projectId", req.ProjectID),
+				zap.String("runId", run.ID),
+				zap.Error(err),
+			)
+		}
+	}
+	httpx.OK(c, gin.H{
+		"runId":  run.ID,
+		"taskId": run.TaskID,
+		"status": run.Status,
 	})
 }
 

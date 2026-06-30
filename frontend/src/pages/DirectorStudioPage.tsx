@@ -26,6 +26,7 @@ import {
   FiSearch,
   FiSettings,
   FiShield,
+  FiSquare,
   FiUpload,
   FiUserCheck,
   FiUsers,
@@ -36,6 +37,7 @@ import {
 import DesktopPage from './DesktopPage'
 import {
   approveAgentReview,
+  cancelAgentRun,
   createVideoProject,
   fetchVideoProjects,
   fetchArtifactContent,
@@ -81,6 +83,8 @@ import {
   isActionablePendingReview,
   normalizeDirectorErrorMessage,
   nextStageIdAfterReview,
+  overviewProjectStatus,
+  projectPrimaryAction,
   publishCopiesToJSON,
   publishCopiesToMarkdown,
   reviewDisplayTitle,
@@ -170,18 +174,17 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [])
 
   const refreshRun = useCallback(async (runId: string, projectId?: string) => {
-    const boundProjectId = projectId || project?.id
     const [nextRun, nextReviews, nextTrace, nextArtifacts] = await Promise.all([
       getAgentRun(runId).catch(() => null),
       getAgentRunReviews(runId).catch(() => ({ runId, reviews: [] })),
       getAgentRunTrace(runId).catch(() => null),
-      boundProjectId ? fetchProjectArtifacts(boundProjectId).catch(() => ({ artifacts: [] })) : Promise.resolve({ artifacts: [] }),
+      projectId ? fetchProjectArtifacts(projectId).catch(() => ({ artifacts: [] })) : Promise.resolve({ artifacts: [] }),
     ])
     if (nextRun) setRun(nextRun)
     setReviews(nextReviews.reviews || [])
     setTrace(nextTrace)
     setProjectArtifacts(nextArtifacts.artifacts || [])
-  }, [project?.id])
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -214,9 +217,12 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           if (!mounted) return
           setProjectArtifacts([])
         })
+      if (latestProject.currentRunId) {
+        refreshRun(latestProject.currentRunId, latestProject.id).catch(() => {})
+      }
     })
     return () => { mounted = false }
-  }, [])
+  }, [refreshRun])
 
   useEffect(() => {
     if (activeNav === 'overview') {
@@ -227,12 +233,12 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   useEffect(() => {
     if (!run?.id || run.status === 'FAILED') return undefined
     const timer = window.setInterval(() => {
-      refreshRun(run.id).catch(() => {})
+      refreshRun(run.id, project?.id).catch(() => {})
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [refreshRun, run?.id, run?.status])
+  }, [project?.id, refreshRun, run?.id, run?.status])
 
-  const projectStarted = Boolean(project?.id || run?.id) || loading
+  const projectStarted = loading || project?.status === 'RUNNING' || Boolean(run?.id && run.status !== 'CANCELLED')
   const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted), [roleAgents, reviews, trace, projectStarted])
   const displayStages = useMemo(() => applyOptimisticRunningStage(stages, optimisticRunningStageId), [stages, optimisticRunningStageId])
   const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace, projectArtifacts as unknown as Array<Record<string, unknown>>), [roleAgents, reviews, trace, projectArtifacts])
@@ -241,7 +247,18 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const pendingReviews = reviews.filter(isActionablePendingReview)
   const activeReview = pendingReviews[0]
   const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
-  const canStart = preflight?.canStart !== false && !loading
+  const activeRunId = run?.id || project?.currentRunId
+  const basePrimaryProjectAction = projectPrimaryAction({
+    preflightCanStart: preflight?.canStart !== false,
+    loading,
+    projectStatus: project?.status,
+    runStatus: run?.status,
+    stages: displayStages,
+    topic,
+  })
+  const primaryProjectAction = basePrimaryProjectAction.kind === 'stop' && !activeRunId
+    ? { ...basePrimaryProjectAction, disabled: true }
+    : basePrimaryProjectAction
 
   useEffect(() => {
     if (!optimisticRunningStageId) return
@@ -270,7 +287,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
         language: 'zh-CN',
         config: { entry: 'director_studio', topic: cleanTopic, durationSec },
       })
-      setProject(nextProject)
+      setProject({ ...nextProject, status: 'RUNNING' })
       const clientModelProviders = await buildClientModelProvidersForRun()
       const result = await startAgentRun({
         message: `请帮我创作一个${durationSec}秒图文视频：${cleanTopic}`,
@@ -284,9 +301,29 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           ...(clientModelProviders ? { modelProviders: clientModelProviders } : {}),
         },
       })
+      setProject((current) => current?.id === nextProject.id ? { ...current, status: 'RUNNING', currentRunId: result.runId } : current)
       setOptimisticRunningStageId(undefined)
       await refreshRun(result.runId, nextProject.id)
       setActiveNav('review')
+    } catch (err) {
+      setError(normalizeDirectorErrorMessage(err))
+      setErrorDetail(extractDirectorErrorDetail(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleStopProject = async () => {
+    const nextRunId = run?.id || project?.currentRunId
+    if (!nextRunId) return
+    setLoading(true)
+    setError(null)
+    setErrorDetail(undefined)
+    try {
+      const result = await cancelAgentRun(nextRunId, project?.id, 'user requested')
+      setRun((current) => current ? { ...current, status: 'CANCELLED', updatedAt: new Date().toISOString() } : current)
+      setProject((current) => current ? { ...current, status: 'PAUSED', currentRunId: result.runId || current.currentRunId } : current)
+      await refreshRun(nextRunId, project?.id)
     } catch (err) {
       setError(normalizeDirectorErrorMessage(err))
       setErrorDetail(extractDirectorErrorDetail(err))
@@ -361,7 +398,8 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               topic={topic}
               durationSec={durationSec}
               loading={loading}
-              canStart={canStart}
+              primaryAction={primaryProjectAction}
+              overviewStatus={overviewProjectStatus(displayStages, project?.status)}
               stages={displayStages}
               artifacts={artifacts}
               preflight={preflight}
@@ -369,6 +407,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               onTopicChange={setTopic}
               onDurationChange={setDurationSec}
               onStart={handleStart}
+              onStop={handleStopProject}
               onGoReview={() => setActiveNav('review')}
             />
           )}
@@ -519,7 +558,8 @@ function OverviewPage(props: {
   topic: string
   durationSec: number
   loading: boolean
-  canStart: boolean
+  primaryAction: ReturnType<typeof projectPrimaryAction>
+  overviewStatus: DirectorStageStatus
   stages: DirectorStage[]
   artifacts: DirectorArtifactRecord[]
   preflight: PreflightResponse | null
@@ -527,10 +567,12 @@ function OverviewPage(props: {
   onTopicChange: (value: string) => void
   onDurationChange: (value: number) => void
   onStart: () => void
+  onStop: () => void
   onGoReview: () => void
 }) {
-  const { topic, durationSec, loading, canStart, stages, artifacts, preflight, nextAction, onTopicChange, onDurationChange, onStart, onGoReview } = props
+  const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, nextAction, onTopicChange, onDurationChange, onStart, onStop, onGoReview } = props
   const staleNames = artifacts.filter((artifact) => artifact.status === 'stale').map((artifact) => artifact.name)
+  const isStopAction = primaryAction.kind === 'stop'
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-12 gap-5">
@@ -543,7 +585,7 @@ function OverviewPage(props: {
                 <p className="text-xs text-ink-soft">一句话描述你想做的视频，AI 会自动规划执行流程</p>
               </div>
             </div>
-            <StatusBadge status={stages.some((stage) => stage.status === 'running' || stage.status === 'review') ? 'active' : 'pending'} />
+            <StatusBadge status={overviewStatus} />
           </div>
           <textarea
             className="mt-5 h-36 w-full resize-none rounded-xl border-2 border-line bg-white p-5 text-base leading-7 text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-primary focus:shadow-glow"
@@ -555,8 +597,15 @@ function OverviewPage(props: {
             <select className="rounded-lg border border-line bg-white px-4 py-2.5 text-sm text-ink" value={durationSec} onChange={(event) => onDurationChange(Number(event.target.value))}>
               {[30, 45, 60, 90, 120].map((duration) => <option key={duration} value={duration}>{duration} 秒</option>)}
             </select>
-            <button disabled={!canStart || !topic.trim()} onClick={onStart} className="flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-bold text-white shadow-glow transition hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50">
-              <FiPlay /> {loading ? '启动中...' : '开始项目'}
+            <button
+              disabled={primaryAction.disabled}
+              onClick={isStopAction ? onStop : onStart}
+              className={clsx(
+                'flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50',
+                isStopAction ? 'bg-red-600 hover:bg-red-700' : 'bg-primary shadow-glow hover:bg-primary-dark',
+              )}
+            >
+              {isStopAction ? <FiSquare /> : <FiPlay />} {primaryAction.label}
             </button>
             {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : null}
           </div>

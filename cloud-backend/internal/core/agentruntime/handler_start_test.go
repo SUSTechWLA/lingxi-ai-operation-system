@@ -185,10 +185,58 @@ func TestStartRunReturnsRunIDBeforeSlowPlannerCompletes(t *testing.T) {
 	}
 }
 
+func TestCancelRunPausesTaskAndMarksProjectStopped(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newMemoryRunStore()
+	_ = store.SaveRun(context.Background(), &Run{
+		ID:     "run-1",
+		TaskID: "task-1",
+		UserID: "user-1",
+		Status: RunStatusRunning,
+	})
+	projectUpdater := &recordingProjectLifecycleUpdater{}
+	taskPauser := &recordingTaskPauser{}
+	handler := NewHandler(
+		NewRunner(&fakeOrchestrator{taskID: "task-1"}, store, staticPlanner{}, NewPlanGuard(nil, nil), NewPlanCompiler(nil)),
+		nil,
+		nil,
+	).WithProjectLifecycleUpdater(projectUpdater).WithTaskPauser(taskPauser)
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("userID", "user-1")
+		c.Next()
+	})
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/runs/run-1/cancel", bytes.NewBufferString(`{"projectId":"project-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	run, _ := store.FindRun(context.Background(), "run-1")
+	if run == nil || run.Status != RunStatusCancelled {
+		t.Fatalf("run status = %#v, want CANCELLED", run)
+	}
+	if taskPauser.taskID != "task-1" {
+		t.Fatalf("task pauser taskID = %q, want task-1", taskPauser.taskID)
+	}
+	if projectUpdater.stoppedProjectID != "project-1" || projectUpdater.stoppedRunID != "run-1" {
+		t.Fatalf("project stop updater got project=%q run=%q", projectUpdater.stoppedProjectID, projectUpdater.stoppedRunID)
+	}
+}
+
 type recordingProjectLifecycleUpdater struct {
-	userID    string
-	projectID string
-	runID     string
+	userID           string
+	projectID        string
+	runID            string
+	stoppedUserID    string
+	stoppedProjectID string
+	stoppedRunID     string
 }
 
 func (u *recordingProjectLifecycleUpdater) MarkAgentRunStarted(_ context.Context, userID, projectID, runID string) error {
@@ -198,7 +246,25 @@ func (u *recordingProjectLifecycleUpdater) MarkAgentRunStarted(_ context.Context
 	return nil
 }
 
+func (u *recordingProjectLifecycleUpdater) MarkAgentRunStopped(_ context.Context, userID, projectID, runID string) error {
+	u.stoppedUserID = userID
+	u.stoppedProjectID = projectID
+	u.stoppedRunID = runID
+	return nil
+}
+
 var _ ProjectLifecycleUpdater = (*recordingProjectLifecycleUpdater)(nil)
+
+type recordingTaskPauser struct {
+	taskID string
+	reason string
+}
+
+func (p *recordingTaskPauser) PauseTask(_ context.Context, taskID, reason string) error {
+	p.taskID = taskID
+	p.reason = reason
+	return nil
+}
 
 type blockingPlanner struct {
 	started chan struct{}

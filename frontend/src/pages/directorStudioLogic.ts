@@ -3,6 +3,15 @@ import type { AgentReviewItem, VideoRoleAgent } from '../utils/types'
 export type DirectorNavKey = 'overview' | 'review' | 'trace' | 'assets' | 'roles' | 'export' | 'system'
 export type DirectorStageStatus = 'done' | 'active' | 'review' | 'blocked' | 'pending' | 'running' | 'failed'
 export type DirectorArtifactStatus = 'valid' | 'review' | 'stale' | 'pending' | 'running' | 'failed' | 'blocked' | 'missing'
+export type DirectorProjectLifecycleStatus = 'DRAFT' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED' | string | undefined
+export type DirectorRunLifecycleStatus = 'CREATED' | 'RUNNING' | 'FAILED' | 'CANCELLED' | string | undefined
+export type DirectorProjectPrimaryActionKind = 'start' | 'stop' | 'stopped'
+
+export interface DirectorProjectPrimaryAction {
+  kind: DirectorProjectPrimaryActionKind
+  label: string
+  disabled: boolean
+}
 
 export interface DirectorStage {
   id: string
@@ -776,6 +785,54 @@ export function applyOptimisticRunningStage(stages: DirectorStage[], stageId: st
 
 export function traceNodeHasError(node: DirectorTraceNode | undefined): boolean {
   return Boolean(node && (node.status === 'failed' || node.status === 'blocked' || node.error))
+}
+
+export function canStartProject(preflightCanStart: boolean, loading: boolean, projectStarted: boolean): boolean {
+  return preflightCanStart && !loading && !projectStarted
+}
+
+export function isProjectInProgress(
+  projectStatus: DirectorProjectLifecycleStatus,
+  runStatus: DirectorRunLifecycleStatus,
+  stages: DirectorStage[] = [],
+): boolean {
+  if (projectStatus === 'PAUSED' || projectStatus === 'COMPLETED' || projectStatus === 'ARCHIVED' || runStatus === 'CANCELLED') {
+    return false
+  }
+  return projectStatus === 'RUNNING' ||
+    runStatus === 'CREATED' ||
+    runStatus === 'RUNNING' ||
+    stages.some((stage) => stage.status === 'active' || stage.status === 'running' || stage.status === 'review')
+}
+
+export function overviewProjectStatus(stages: DirectorStage[], projectStatus?: DirectorProjectLifecycleStatus): DirectorStageStatus {
+  if (projectStatus === 'PAUSED' || projectStatus === 'ARCHIVED') {
+    return 'pending'
+  }
+  return projectStatus === 'RUNNING' || stages.some((stage) => stage.status === 'active' || stage.status === 'running' || stage.status === 'review')
+    ? 'active'
+    : 'pending'
+}
+
+export function projectPrimaryAction(input: {
+  preflightCanStart: boolean
+  loading: boolean
+  projectStatus?: DirectorProjectLifecycleStatus
+  runStatus?: DirectorRunLifecycleStatus
+  stages?: DirectorStage[]
+  topic: string
+}): DirectorProjectPrimaryAction {
+  if (input.projectStatus === 'PAUSED' || input.runStatus === 'CANCELLED') {
+    return { kind: 'stopped', label: '项目已停止', disabled: true }
+  }
+  if (isProjectInProgress(input.projectStatus, input.runStatus, input.stages || [])) {
+    return { kind: 'stop', label: '停止项目', disabled: input.loading }
+  }
+  return {
+    kind: 'start',
+    label: input.loading ? '启动中...' : '开始项目',
+    disabled: !input.preflightCanStart || input.loading || !input.topic.trim(),
+  }
 }
 
 export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | undefined {

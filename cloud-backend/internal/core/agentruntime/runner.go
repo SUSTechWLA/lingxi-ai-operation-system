@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,10 +18,13 @@ import (
 type RunStatus string
 
 const (
-	RunStatusCreated RunStatus = "CREATED"
-	RunStatusRunning RunStatus = "RUNNING"
-	RunStatusFailed  RunStatus = "FAILED"
+	RunStatusCreated   RunStatus = "CREATED"
+	RunStatusRunning   RunStatus = "RUNNING"
+	RunStatusFailed    RunStatus = "FAILED"
+	RunStatusCancelled RunStatus = "CANCELLED"
 )
+
+var errRunCancelled = errors.New("agent run cancelled")
 
 type StartRunRequest struct {
 	UserID       string                 `json:"userId,omitempty"`
@@ -167,6 +171,12 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
 	ctx, cancel := context.WithTimeout(context.Background(), asyncRunStartTimeout)
 	defer cancel()
 	if _, err := r.completeStart(ctx, req, run); err != nil {
+		if errors.Is(err, errRunCancelled) {
+			zap.L().Info("async agent run start aborted after cancellation",
+				zap.String("runId", run.ID),
+			)
+			return
+		}
 		failed := *run
 		failed.Status = RunStatusFailed
 		failed.UpdatedAt = time.Now()
@@ -189,9 +199,15 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
 }
 
 func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Run) (*Run, error) {
+	if err := r.abortIfCancelled(ctx, run); err != nil {
+		return nil, err
+	}
 	plan, err := r.planner.GeneratePlan(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("generate agent plan: %w", err)
+	}
+	if err := r.abortIfCancelled(ctx, run); err != nil {
+		return nil, err
 	}
 	applyRequestPlanDefaults(plan, req)
 	plan = r.compiler.PreparePlan(plan)
@@ -236,6 +252,9 @@ planOK:
 	if providers := clientModelProvidersFromContext(req.Context); len(providers) > 0 {
 		injectClientModelProviders(dag, providers)
 	}
+	if err := r.abortIfCancelled(ctx, run); err != nil {
+		return nil, err
+	}
 
 	if run == nil {
 		run = newRunShell(req)
@@ -279,6 +298,15 @@ planOK:
 		return nil, fmt.Errorf("create agent task: %w", err)
 	}
 	run.TaskID = task.ID
+	if err := r.abortIfCancelled(ctx, run); err != nil {
+		return nil, err
+	}
+	if err := r.store.SaveRun(ctx, run); err != nil {
+		return nil, fmt.Errorf("store agent run task link: %w", err)
+	}
+	if err := r.abortIfCancelled(ctx, run); err != nil {
+		return nil, err
+	}
 
 	scoped := scopeDAGToTask(task.ID, dag)
 	if err := r.orchestrator.SubmitDAG(ctx, task.ID, scoped); err != nil {
@@ -287,6 +315,9 @@ planOK:
 		_ = r.store.SaveRun(ctx, run)
 		return nil, fmt.Errorf("submit agent DAG: %w", err)
 	}
+	if err := r.abortIfCancelled(ctx, run); err != nil {
+		return nil, err
+	}
 
 	run.Status = RunStatusRunning
 	run.UpdatedAt = time.Now()
@@ -294,6 +325,20 @@ planOK:
 		return nil, fmt.Errorf("store agent run: %w", err)
 	}
 	return run, nil
+}
+
+func (r *Runner) abortIfCancelled(ctx context.Context, run *Run) error {
+	if r == nil || r.store == nil || run == nil || run.ID == "" {
+		return nil
+	}
+	current, err := r.store.FindRun(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	if current != nil && current.Status == RunStatusCancelled {
+		return errRunCancelled
+	}
+	return nil
 }
 
 func applyRequestPlanDefaults(plan *AgentPlan, req StartRunRequest) {
@@ -550,6 +595,29 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 	}
 	task, err := r.orchestrator.GetTaskWithDetails(ctx, run.TaskID)
 	return run, task, err
+}
+
+func (r *Runner) Cancel(ctx context.Context, id string) (*Run, error) {
+	if r == nil || r.store == nil {
+		return nil, fmt.Errorf("agent runner is not configured")
+	}
+	run, err := r.store.FindRun(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, nil
+	}
+	run.Status = RunStatusCancelled
+	run.UpdatedAt = time.Now()
+	if run.Metadata == nil {
+		run.Metadata = map[string]interface{}{}
+	}
+	run.Metadata["cancelledBy"] = "user"
+	if err := r.store.SaveRun(ctx, run); err != nil {
+		return nil, err
+	}
+	return run, nil
 }
 
 func scopeDAGToTask(taskID string, dag *model.DAGRequest) *model.DAGRequest {

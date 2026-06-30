@@ -5,10 +5,13 @@ import {
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
+  canStartProject,
   canStartFinalRender,
   deriveNextAction,
   downstreamStaleArtifacts,
   nextStageIdAfterReview,
+  overviewProjectStatus,
+  projectPrimaryAction,
   stageActionLabel,
   traceNodeHasError,
 } from '../src/pages/directorStudioLogic.ts'
@@ -70,6 +73,35 @@ assert.equal(stages[0].status, 'done')
 assert.equal(stages[1].status, 'review')
 assert.equal(stages[1].reviewId, 'review-script')
 assert.deepEqual(stages[1].reviewFocus, ['口播是否自然'])
+
+const justStartedStages = buildDirectorStages(roleAgents, [], { nodes: [] }, true)
+assert.equal(canStartProject(true, false, false), true)
+assert.equal(canStartProject(true, false, true), false)
+assert.equal(overviewProjectStatus(justStartedStages, 'RUNNING'), 'active')
+assert.equal(overviewProjectStatus(buildDirectorStages(roleAgents, [], { nodes: [] })), 'pending')
+assert.deepEqual(projectPrimaryAction({
+  preflightCanStart: true,
+  loading: false,
+  projectStatus: 'RUNNING',
+  runStatus: 'RUNNING',
+  stages: justStartedStages,
+  topic: '佛得角世界杯奇迹',
+}), { kind: 'stop', label: '停止项目', disabled: false })
+assert.deepEqual(projectPrimaryAction({
+  preflightCanStart: true,
+  loading: false,
+  projectStatus: 'DRAFT',
+  stages: buildDirectorStages(roleAgents, [], { nodes: [] }),
+  topic: '佛得角世界杯奇迹',
+}), { kind: 'start', label: '开始项目', disabled: false })
+assert.deepEqual(projectPrimaryAction({
+  preflightCanStart: true,
+  loading: false,
+  projectStatus: 'PAUSED',
+  runStatus: 'CANCELLED',
+  stages: justStartedStages,
+  topic: '佛得角世界杯奇迹',
+}), { kind: 'stopped', label: '项目已停止', disabled: true })
 
 const artifacts = buildDirectorArtifacts(roleAgents, reviews, {
   nodes: [

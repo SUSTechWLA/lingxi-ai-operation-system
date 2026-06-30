@@ -133,6 +133,24 @@ func (s *ProjectService) MarkAgentRunStarted(ctx context.Context, userID, projec
 	return s.repo.UpdateForUser(ctx, userID, project)
 }
 
+// MarkAgentRunStopped marks a linked project as paused after a user stops the
+// active dynamic agent run.
+func (s *ProjectService) MarkAgentRunStopped(ctx context.Context, userID, projectID, runID string) error {
+	if userID == "" {
+		return fmt.Errorf("user_id is required")
+	}
+	if projectID == "" {
+		return fmt.Errorf("project_id is required")
+	}
+	project, err := s.repo.FindByIDForUser(ctx, userID, projectID)
+	if err != nil {
+		return err
+	}
+	project.Status = model.StatusPaused
+	project.CurrentRunID = runID
+	return s.repo.UpdateForUser(ctx, userID, project)
+}
+
 // UpdateProject updates a project. Mode and version fields cannot be changed.
 func (s *ProjectService) UpdateProject(ctx context.Context, userID string, id string, req *model.UpdateProjectRequest) (*model.VideoProject, error) {
 	project, err := s.repo.FindByIDForUser(ctx, userID, id)

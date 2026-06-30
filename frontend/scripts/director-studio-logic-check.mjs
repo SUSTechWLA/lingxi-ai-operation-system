@@ -24,11 +24,14 @@ try {
     buildPublishCopies,
     buildShotReviewGroups,
     buildDirectorStages,
+    canStartProject,
     formatDirectorErrorMessage,
     findPublishCopyArtifact,
     getArtifactViewerSelection,
     normalizeDirectorErrorMessage,
     nextStageIdAfterReview,
+    overviewProjectStatus,
+    projectPrimaryAction,
     publishCopiesToJSON,
     publishCopiesToMarkdown,
     reviewDisplayTitle,
@@ -94,6 +97,33 @@ try {
   assert.deepEqual(notStartedFlow.map((stage) => stage.status), ['pending', 'pending'])
   const justStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] }, true)
   assert.deepEqual(justStartedFlow.map((stage) => stage.status), ['active', 'pending'])
+  assert.equal(canStartProject(true, false, false), true)
+  assert.equal(canStartProject(true, false, true), false)
+  assert.equal(overviewProjectStatus(justStartedFlow, 'RUNNING'), 'active')
+  assert.equal(overviewProjectStatus(notStartedFlow), 'pending')
+  assert.deepEqual(projectPrimaryAction({
+    preflightCanStart: true,
+    loading: false,
+    projectStatus: 'RUNNING',
+    runStatus: 'RUNNING',
+    stages: justStartedFlow,
+    topic: '佛得角世界杯奇迹',
+  }), { kind: 'stop', label: '停止项目', disabled: false })
+  assert.deepEqual(projectPrimaryAction({
+    preflightCanStart: true,
+    loading: false,
+    projectStatus: 'DRAFT',
+    stages: notStartedFlow,
+    topic: '佛得角世界杯奇迹',
+  }), { kind: 'start', label: '开始项目', disabled: false })
+  assert.deepEqual(projectPrimaryAction({
+    preflightCanStart: true,
+    loading: false,
+    projectStatus: 'PAUSED',
+    runStatus: 'CANCELLED',
+    stages: justStartedFlow,
+    topic: '佛得角世界杯奇迹',
+  }), { kind: 'stopped', label: '项目已停止', disabled: true })
   const createdDagFlow = buildDirectorStages(startupRoles, [], {
     nodes: [
       {

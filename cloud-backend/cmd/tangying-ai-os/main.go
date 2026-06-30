@@ -486,6 +486,7 @@ func main() {
 		videoProjectRepo := videoRepo.NewProjectRepository(pool)
 		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
 		agentRuntimeHandler.WithProjectLifecycleUpdater(videoProjectSvc)
+		agentRuntimeHandler.WithTaskPauser(taskExecutionCtrl)
 		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, requireAuth)
 		projectHandler.RegisterRoutes(r)
 		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo)

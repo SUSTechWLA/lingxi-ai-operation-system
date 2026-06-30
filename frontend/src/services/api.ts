@@ -268,6 +268,18 @@ export const getAgentRunReviews = async (
   return response.data.data
 }
 
+export const cancelAgentRun = async (
+  runId: string,
+  projectId?: string,
+  reason?: string
+): Promise<AgentStartRunResponse> => {
+  const response = await api.post<ApiResponse<AgentStartRunResponse>>(
+    `/agent/runs/${runId}/cancel`,
+    { projectId, reason }
+  )
+  return response.data.data
+}
+
 export const approveAgentReview = async (
   runId: string,
   reviewId: string,

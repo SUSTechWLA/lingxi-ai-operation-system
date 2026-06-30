@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -89,6 +90,54 @@ func TestRunnerCompleteStart_PreservesProvidedRunID(t *testing.T) {
 	}
 	if stored, _ := store.FindRun(context.Background(), originalRunID); stored == nil {
 		t.Fatalf("provided run ID %q was not stored", originalRunID)
+	}
+}
+
+func TestRunnerCompleteStart_DoesNotReviveCancelledRun(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "make video",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "script", Tool: "video_script_generator", Arguments: map[string]interface{}{"topic": "AI workflows"}},
+		},
+	}}
+	catalog := staticToolCatalog{
+		"video_script_generator": &tool.ToolManifest{
+			Name:     "video_script_generator",
+			Endpoint: "builtin://video-creation/video_script_generator",
+		},
+	}
+	req := StartRunRequest{
+		UserID:  "user-1",
+		Message: "make a video about AI workflows",
+		Domain:  "video_creation",
+	}
+	shell := newRunShell(req)
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	if err := store.SaveRun(context.Background(), shell); err != nil {
+		t.Fatalf("SaveRun returned error: %v", err)
+	}
+	backgroundRun := *shell
+	if _, err := runner.Cancel(context.Background(), shell.ID); err != nil {
+		t.Fatalf("Cancel returned error: %v", err)
+	}
+
+	run, err := runner.completeStart(context.Background(), req, &backgroundRun)
+	if !errors.Is(err, errRunCancelled) {
+		t.Fatalf("completeStart error = %v, want errRunCancelled", err)
+	}
+	if run != nil {
+		t.Fatalf("completeStart returned run after cancellation: %#v", run)
+	}
+	stored, _ := store.FindRun(context.Background(), shell.ID)
+	if stored == nil || stored.Status != RunStatusCancelled {
+		t.Fatalf("stored run = %#v, want CANCELLED", stored)
+	}
+	if orch.submittedTaskID != "" || orch.submitted != nil {
+		t.Fatalf("cancelled run should not submit DAG, submitted task=%q dag=%#v", orch.submittedTaskID, orch.submitted)
 	}
 }
 
