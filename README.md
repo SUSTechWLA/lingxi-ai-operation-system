@@ -28,7 +28,7 @@
 ```text
 frontend/                    # React + Electron 桌面/Web 前端
 local-backend/               # 本地执行器，无数据库、无 Docker，只处理本地文件/缓存/日志/诊断
-cloud-backend/               # 云端 AIOS Core，负责 LLM/API、配置、编排、云端日志和外部集成
+cloud-backend/               # 云端 AIOS Core，负责账号、编排、云端日志、外部集成和产物索引
                              #   Dynamic Agent Runtime: Planner → Guard → Compiler → DAG
 hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript），无 CLI 依赖
 ```
@@ -37,7 +37,7 @@ hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript）�
 |------|----------|--------|
 | `frontend/` | React + Electron UI、登录、导演工作台、审核、素材依赖点回填、本地设置 | 任意命令执行、自动发布 |
 | `local-backend/` | 本地文件、缓存、产物、日志、诊断包、本机模型 Provider 配置 | PostgreSQL、Redis、Kafka、MinIO、云端业务编排 |
-| `cloud-backend/` | 账号、Dynamic Agent Runtime、DAG 编排、Artifact/Review、模型网关、视频项目 API、云端日志 | 保存用户本地大文件、保存桌面用户 API Key |
+| `cloud-backend/` | 账号、Dynamic Agent Runtime、DAG 编排、Artifact/Review、视频项目 API、云端日志 | 提供模型 API 服务、保存用户本地大文件、保存桌面用户 API Key |
 | `hyperframes-render-service/` | HyperFrames lint、snapshot、render HTTP 服务 | 业务编排、用户账户、资产索引 |
 
 ## 当前关键能力
@@ -73,7 +73,7 @@ bash scripts/build-local-desktop.sh
 
 ## 云端部署
 
-云端运行 `cloud-backend`，包含 Go AIOS Core、PostgreSQL、Redis、Redpanda、MinIO、Nginx、HyperFrames Render Service 和 LLM/外部服务配置。
+云端运行 `cloud-backend`，包含 Go AIOS Core、PostgreSQL、Redis、Redpanda、MinIO、Nginx 和 HyperFrames Render Service。LLM、文生图片、文生视频 Provider 均由桌面客户端本机配置后随请求传入；云端不提供模型 API 服务，也不保存用户 token。
 
 开发模式：
 

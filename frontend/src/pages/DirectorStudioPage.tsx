@@ -16,6 +16,7 @@ import {
   FiFolder,
   FiHardDrive,
   FiHome,
+  FiKey,
   FiLayers,
   FiLock,
   FiLogOut,
@@ -54,7 +55,13 @@ import {
   type PreflightResponse,
 } from '../services/api'
 import type { AuthUser } from '../services/auth'
-import { uploadLocalArtifactFile } from '../services/localAgent'
+import {
+  buildClientModelProvidersForRun,
+  fetchModelProviderSettings,
+  uploadLocalArtifactFile,
+  type ModelCapability,
+  type ModelProviderSettingsResponse,
+} from '../services/localAgent'
 import type { AgentReviewItem, AgentRun, Artifact, VideoProject, VideoRoleAgent } from '../utils/types'
 import {
   applyOptimisticRunningStage,
@@ -121,6 +128,18 @@ const fallbackRoles: VideoRoleAgent[] = [
   { id: 'package_producer', name: 'Package Producer', displayName: '交付制片', stage: 'package', goal: '打包最终视频、结构说明、预览图、决策日志和审核报告。', allowedTools: ['artifact_packager'], requiredOutputs: ['PROJECT_PACKAGE'] },
 ]
 
+const requiredModelProviderCapabilities: ModelCapability[] = ['text_to_text', 'text_to_image', 'text_to_video']
+const modelProviderCapabilityLabels: Record<ModelCapability, string> = {
+  text_to_text: '文生文',
+  text_to_image: '文生图片',
+  text_to_video: '文生视频',
+}
+
+type ModelProviderStatus = {
+  state: 'checking' | 'configured' | 'missing' | 'unavailable'
+  missing: ModelCapability[]
+}
+
 export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Props) {
   const [activeNav, setActiveNav] = useState<DirectorNavKey>('overview')
   const [topic, setTopic] = useState('')
@@ -137,6 +156,18 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [error, setError] = useState<string | null>(null)
   const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
   const [optimisticRunningStageId, setOptimisticRunningStageId] = useState<string | undefined>()
+  const [modelProviderStatus, setModelProviderStatus] = useState<ModelProviderStatus>({ state: 'checking', missing: [] })
+
+  const refreshModelProviderStatus = useCallback(async () => {
+    setModelProviderStatus((current) => ({ ...current, state: 'checking' }))
+    try {
+      const response = await fetchModelProviderSettings()
+      const missing = missingModelProviderCapabilities(response)
+      setModelProviderStatus({ state: missing.length > 0 ? 'missing' : 'configured', missing })
+    } catch {
+      setModelProviderStatus({ state: 'unavailable', missing: requiredModelProviderCapabilities })
+    }
+  }, [])
 
   const refreshRun = useCallback(async (runId: string, projectId?: string) => {
     const boundProjectId = projectId || project?.id
@@ -188,6 +219,12 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [])
 
   useEffect(() => {
+    if (activeNav === 'overview') {
+      refreshModelProviderStatus().catch(() => {})
+    }
+  }, [activeNav, refreshModelProviderStatus])
+
+  useEffect(() => {
     if (!run?.id || run.status === 'FAILED') return undefined
     const timer = window.setInterval(() => {
       refreshRun(run.id).catch(() => {})
@@ -234,11 +271,18 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
         config: { entry: 'director_studio', topic: cleanTopic, durationSec },
       })
       setProject(nextProject)
+      const clientModelProviders = await buildClientModelProvidersForRun()
       const result = await startAgentRun({
         message: `请帮我创作一个${durationSec}秒图文视频：${cleanTopic}`,
         domain: 'video_creation',
         mode: 'dynamic_agent',
-        context: { projectId: nextProject.id, topic: cleanTopic, durationSec, targetDurationSec: durationSec },
+        context: {
+          projectId: nextProject.id,
+          topic: cleanTopic,
+          durationSec,
+          targetDurationSec: durationSec,
+          ...(clientModelProviders ? { modelProviders: clientModelProviders } : {}),
+        },
       })
       setOptimisticRunningStageId(undefined)
       await refreshRun(result.runId, nextProject.id)
@@ -307,6 +351,9 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               </details>
             )}
           </div>
+        )}
+        {activeNav !== 'system' && (
+          <ModelProviderNotice status={modelProviderStatus} onOpenSettings={() => setActiveNav('system')} />
         )}
         <div className="mt-6">
           {activeNav === 'overview' && (
@@ -427,6 +474,45 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
       </div>
     </header>
   )
+}
+
+function ModelProviderNotice({ status, onOpenSettings }: { status: ModelProviderStatus; onOpenSettings: () => void }) {
+  if (status.state === 'checking' || status.state === 'configured') return null
+  const missingText = status.missing.map((capability) => modelProviderCapabilityLabels[capability]).join('、')
+  const title = status.state === 'unavailable' ? '本地模型配置未读取' : '基础模型 API 未配置完整'
+  const message = status.state === 'unavailable'
+    ? '请先确认本地服务已启动，然后在设置中配置 OpenAI-compatible 接口。'
+    : `缺少 ${missingText || '基础模型'} Provider，请在设置中填写接口地址、模型名和 Token。`
+
+  return (
+    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-amber-700 ring-1 ring-amber-200">
+            <FiKey />
+          </span>
+          <div className="min-w-0">
+            <div className="font-black">{title}</div>
+            <div className="mt-1 text-xs leading-5 text-amber-800">{message}</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-700 px-4 py-2 text-xs font-black text-white hover:bg-amber-800"
+        >
+          <FiSettings /> 打开设置
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function missingModelProviderCapabilities(response: ModelProviderSettingsResponse): ModelCapability[] {
+  return requiredModelProviderCapabilities.filter((capability) => {
+    const provider = response.providers?.[capability]
+    return !provider?.hasApiKey && !provider?.apiKey
+  })
 }
 
 function OverviewPage(props: {
@@ -1164,7 +1250,8 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
     setRevisionLoading(true)
     setViewerError(null)
     try {
-      const revised = await reviseArtifact(selected.id, revisionMessage.trim())
+      const clientModelProviders = await buildClientModelProvidersForRun()
+      const revised = await reviseArtifact(selected.id, revisionMessage.trim(), clientModelProviders as Record<string, unknown> | undefined)
       setContent(revised.content)
       const nextHistory = await fetchArtifactHistory(selected.id)
       setHistory(nextHistory.history || [])

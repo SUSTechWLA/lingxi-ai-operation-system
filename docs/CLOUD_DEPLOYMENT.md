@@ -36,7 +36,7 @@ cloud-backend/
 ```bash
 cd cloud-backend
 cp .env.example .env
-# 填 OPENAI_API_KEY / OPENAI_BASE_URL
+# 填 AUTH_TOKEN_SECRET；模型 API 由桌面端本机配置
 docker compose up -d
 go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os
@@ -55,7 +55,8 @@ bash scripts/start-cloud-backend.sh
 ```bash
 cd cloud-backend/deploy
 cp .env.cloud.example .env.cloud
-# 填 OPENAI_API_KEY / POSTGRES_PASSWORD / MINIO_SECRET_KEY
+# 填 AUTH_TOKEN_SECRET / POSTGRES_PASSWORD / MINIO_SECRET_KEY
+# 不填写模型 API Key，桌面端会随请求传入用户本机配置的 provider
 docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
 ```
 
@@ -71,7 +72,7 @@ docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
 
 Compose 会把 `cloud-backend/skill-capabilities` 打入 backend 镜像，并设置 `SKILL_CAPABILITY_ROOT=/app/skill-capabilities`。动态 Agent 依赖这个目录加载视频能力包。
 
-`AUTH_TOKEN_SECRET` 和 `OPENAI_API_KEY` 是必填变量；缺失时 compose 会在启动前失败。Redpanda 在容器网络内广播 `internal://redpanda:9092`，不要改回 `localhost`，否则 backend 容器无法连接 Kafka。
+`AUTH_TOKEN_SECRET` 是必填变量；缺失时 compose 会在启动前失败。封闭内测桌面用户默认在本机 local agent 配置 Provider，启动 run 或返工时由客户端随请求传入，云端不保存 token。Redpanda 在容器网络内广播 `internal://redpanda:9092`，不要改回 `localhost`，否则 backend 容器无法连接 Kafka。
 
 ## 当前云端服务职责
 
@@ -84,7 +85,7 @@ Go backend 启动入口为 `cloud-backend/cmd/tangying-ai-os/main.go`。当前�
 - Artifact：版本化索引、内容读取、历史、返工、Review、stale tracking。
 - 素材依赖点回填登记：`POST /api/video-projects/:id/external-generation-results`。
 - Local Runner 协议：runner register、heartbeat、claim、progress、complete/fail。
-- Model Gateway 与云端运维 override：服务端模型配置，不接收桌面用户 token。
+- 模型 Provider 策略：桌面用户 token 由客户端按次请求传入，不作为云端全局配置保存。
 - Publish 兼容层：封闭内测的发布包/文案准备，不触发自动发布。
 - OpenAPI 与 Swagger UI：`/openapi.json`、`/docs`。
 
@@ -158,11 +159,11 @@ POST /api/video-projects/:id/workflow-runs/:rid/recover     # 从等待人工阶
 - 用户生成图片、配音音频、最终视频。
 - 本地项目文件和缓存文件。
 
-桌面端调用基础模型服务商的长期形态应由本地 agent 直连 Provider；云端只下发远程配置和策略，不代理用户大正文或二进制资产。
+桌面端调用基础模型服务商的长期形态应由本地 agent 直连 Provider；当前封闭内测由客户端把本机 Provider 配置随请求传入云端执行节点，云端不提供模型 API 服务。
 
 桌面端文生文、文生图片、文生视频的 Provider 配置位于本地「系统 → 基础模型 API」，字段为 OpenAI-compatible 的 `baseUrl`、`apiKey`、`model`。云端不保存这些用户 token。
 
-`/api/config/model-provider` 是云端运维 runtime override 接口，用于服务端模型配置热更新；它不是桌面端用户 token 同步接口。封闭内测桌面端不会调用它保存用户 API Key。
+云端已移除 `/api/config/model-provider`。不要把用户或运维模型 token 写入云端配置；需要模型能力时由桌面端在「系统 → 基础模型 API」保存，并在启动 run 或返工请求中按次传入。
 
 推荐诊断流程：
 

@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRuntimeConfig: () =>
     ipcRenderer.invoke('get-runtime-config'),
 
+  getModelProviderSettingsWithKeys: () =>
+    ipcRenderer.invoke('get-model-provider-settings-with-keys'),
+
   openExternal: (url) =>
     ipcRenderer.invoke('open-external', url),
 })

@@ -44,7 +44,7 @@
 
 ### 生产
 - Docker Compose
-- 有效的 OPENAI_API_KEY (或兼容 API)
+- 桌面端已配置 OpenAI-compatible 文生文、文生图片、文生视频 Provider
 - 可选: Electron 桌面客户端 (用于本地渲染)
 
 ## 下一步计划

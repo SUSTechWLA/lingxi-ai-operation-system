@@ -35,8 +35,6 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/model/repository"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
-	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/openai"
-	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/stability"
 	orchestratorHandler "github.com/tangying-ai/aios-core/internal/core/orchestrator/handler"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
@@ -124,14 +122,15 @@ func main() {
 
 	// Worker
 	toolRegistry := tool.NewToolRegistry()
+	serverModelConfig := config.OpenAIConfig{}
 	toolRegistry.Register(builtin.NewBashTool(cfg.BashTool))
-	toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewLlmApiTool(serverModelConfig))
 	toolRegistry.Register(builtin.NewPythonTool())
-	toolRegistry.Register(builtin.NewPolisherTool(cfg.OpenAI))
-	toolRegistry.Register(builtin.NewMediaAnalyzerTool(cfg.OpenAI))
-	toolRegistry.Register(builtin.NewContentGeneratorTool(cfg.OpenAI))
-	toolRegistry.Register(builtin.NewContentCheckerTool(cfg.OpenAI))
-	toolRegistry.Register(builtin.NewPlatformAdapterTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewPolisherTool(serverModelConfig))
+	toolRegistry.Register(builtin.NewMediaAnalyzerTool(serverModelConfig))
+	toolRegistry.Register(builtin.NewContentGeneratorTool(serverModelConfig))
+	toolRegistry.Register(builtin.NewContentCheckerTool(serverModelConfig))
+	toolRegistry.Register(builtin.NewPlatformAdapterTool(serverModelConfig))
 	toolRegistry.Register(builtin.NewExternalTool(toolRegistry))
 	if cfg.Video.VideoCreationEnabled {
 		builtin.RegisterVideoCreationExternalTools(toolRegistry)
@@ -151,7 +150,7 @@ func main() {
 	nodeExecutor.SetLocalJobDispatcher(localRunnerService)
 
 	// Publish
-	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
+	publishService := publishSvc.NewPublishService(serverModelConfig, cfg.Services.OrchestratorURL)
 
 	// Tool manifest service (DB-persisted + Redis-cached tool knowledge base)
 	toolManifestSvc := tool.NewToolManifestService(toolManifestRepo, rdb, toolRegistry)
@@ -180,7 +179,7 @@ func main() {
 		zap.Int("roleAgents", len(videoDirectorRegistry.List())))
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
-	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL, toolManifestSvc)
+	nlService := translatorSvc.NewNlToDagService(serverModelConfig, cfg.Services.OrchestratorURL, toolManifestSvc)
 
 	// Kafka consumers
 	workerConsumer := eventbus.NewConsumer(cfg.Kafka, "ai-worker-group",
@@ -357,10 +356,10 @@ func main() {
 
 	// Register video pipeline tools — requires mediaSvc for MinIO download
 	if mediaSvc != nil {
-		toolRegistry.Register(builtin.NewVideoMetadataTool(cfg.OpenAI, mediaSvc))
-		toolRegistry.Register(builtin.NewVideoAnalyzerTool(cfg.OpenAI, mediaSvc))
+		toolRegistry.Register(builtin.NewVideoMetadataTool(serverModelConfig, mediaSvc))
+		toolRegistry.Register(builtin.NewVideoAnalyzerTool(serverModelConfig, mediaSvc))
 	}
-	toolRegistry.Register(builtin.NewVideoCopyGeneratorTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewVideoCopyGeneratorTool(serverModelConfig))
 
 	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r, requireAuth)
 	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r, requireAuth)
@@ -368,28 +367,20 @@ func main() {
 
 	agentRunRepo := agentruntime.NewRepository(pool)
 
-	// ── ModelGateway (initialized early so LLMPlanner and PromptTools can use it) ──
+	// ── ModelGateway fake provider only ──
 	var gw *modelgateway.Gateway
 	if cfg.Video.VideoCreationEnabled {
-		gw = modelgateway.NewGateway(cfg.Video.ModelProviderMode)
 		if cfg.Video.ModelProviderMode == "real" {
-			openaiProvider := openai.NewProvider()
-			switch cfg.Video.ImageProvider {
-			case "stability":
-				gw.RegisterProvider(stability.NewProvider(), modelgateway.CapTextToImage)
-			default:
-				gw.RegisterProvider(openaiProvider, modelgateway.CapTextToImage)
-			}
-			gw.RegisterProvider(openaiProvider, modelgateway.CapTextToText)
-		} else {
-			fakeProvider := fake.NewProvider()
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToImage)
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToVideo)
-			gw.RegisterProvider(fakeProvider, modelgateway.CapImageToVideo)
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
+			zap.L().Warn("MODEL_PROVIDER_MODE=real is ignored in closed beta; model providers must be supplied by the desktop client")
 		}
+		gw = modelgateway.NewGateway("fake")
+		fakeProvider := fake.NewProvider()
+		gw.RegisterProvider(fakeProvider, modelgateway.CapTextToImage)
+		gw.RegisterProvider(fakeProvider, modelgateway.CapTextToVideo)
+		gw.RegisterProvider(fakeProvider, modelgateway.CapImageToVideo)
+		gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
 		builtin.SetModelGateway(gw)
-		builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
+		builtin.SetVideoCreationConfig(serverModelConfig, cfg.Video.SkillRoot)
 		builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
 		builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
 		// HyperFrames Render Service config (replaces CLI dependency).
@@ -412,7 +403,7 @@ func main() {
 			zap.String("mode", cfg.Video.ModelProviderMode))
 	}
 
-	agentPlanner := buildAgentPlanner(cfg, toolRegistry, gw)
+	agentPlanner := buildAgentPlanner(cfg, toolRegistry)
 	videoDirectorAdapter := &stageDirectorRegistry{videoDirectorRegistry}
 	agentRunner := agentruntime.NewRunner(
 		orchestratorService,
@@ -444,57 +435,8 @@ func main() {
 		// ModelGateway and builtin config are initialized earlier (before buildAgentPlanner).
 		// gw is already created and providers registered; we just reference it here.
 
-		// Runtime model-provider config — operator-scoped cloud override, persisted to disk.
-		modelProviderHandler := func(c *gin.Context) {
-			switch c.Request.Method {
-			case "GET":
-				effective := builtin.GetVideoCreationOpenAIConfig()
-				runtime := builtin.GetRuntimeModelProviderConfig()
-				c.JSON(200, gin.H{"code": 200, "message": "ok", "data": gin.H{
-					"baseUrl":  effective.BaseURL,
-					"model":    effective.Model,
-					"hasKey":   effective.APIKey != "",
-					"endpoint": strings.TrimRight(effective.BaseURL, "/") + "/chat/completions",
-					"fromUser": runtime.BaseURL != "",
-					"fromEnv":  builtin.GetEnvOpenAIConfig().APIKey != "" || runtime.APIKey == "",
-				}})
-			case "PUT":
-				var req struct {
-					BaseURL string `json:"baseUrl"`
-					APIKey  string `json:"apiKey"`
-					Model   string `json:"model"`
-				}
-				if err := c.ShouldBindJSON(&req); err != nil {
-					c.JSON(400, gin.H{"code": 400, "message": "invalid request", "data": nil})
-					return
-				}
-				// Merge with existing: keep old key when not provided
-				existing := builtin.GetRuntimeModelProviderConfig()
-				if req.APIKey == "" {
-					req.APIKey = existing.APIKey
-				}
-				builtin.SetRuntimeModelProviderConfig(builtin.RuntimeModelProviderConfig{
-					BaseURL: req.BaseURL,
-					APIKey:  req.APIKey,
-					Model:   req.Model,
-				})
-				zap.L().Info("Runtime model-provider config updated",
-					zap.String("baseUrl", req.BaseURL),
-					zap.String("model", req.Model),
-					zap.Bool("hasApiKey", req.APIKey != ""),
-				)
-				c.JSON(200, gin.H{"code": 200, "message": "ok", "data": nil})
-			case "DELETE":
-				builtin.ClearRuntimeModelProviderConfig()
-				zap.L().Info("Runtime model-provider config cleared — using env defaults")
-				c.JSON(200, gin.H{"code": 200, "message": "cleared, using env defaults", "data": nil})
-			default:
-				c.JSON(405, gin.H{"code": 405, "message": "method not allowed", "data": nil})
-			}
-		}
-		r.GET("/api/config/model-provider", requireAuth, modelProviderHandler)
-		r.PUT("/api/config/model-provider", requireAuth, modelProviderHandler)
-		r.DELETE("/api/config/model-provider", requireAuth, modelProviderHandler)
+		// Cloud no longer exposes model-provider configuration. Desktop clients
+		// attach OpenAI-compatible providers per request from the local agent.
 
 		// Skill Runtime
 		skillReg, skillErrs := skillruntime.LoadSkills(cfg.Video.SkillRoot)
@@ -502,7 +444,7 @@ func main() {
 			zap.L().Warn("Skill load error", zap.Error(err))
 		}
 		skillHandler := skillruntime.NewHandler(skillReg)
-		skillHandler.SetOpenAIConfig(cfg.OpenAI)
+		skillHandler.SetOpenAIConfig(serverModelConfig)
 		skillHandler.SetCompiler(func(s *skillruntime.SkillManifest) (json.RawMessage, error) {
 			return workflow.CompileSkillToDAG(s)
 		})
@@ -586,10 +528,10 @@ func main() {
 		projectHandler.WithSessionDependencies(artifactSvc, localRunnerService)
 		// Wire LLM-based revision support so the /artifacts/:id/revise endpoint
 		// can actually call the LLM with original content + revision instruction.
-		artifactHandler.SetRevisionConfig(cfg.Video.SkillRoot, func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-			effectiveCfg := builtin.GetVideoCreationOpenAIConfig()
+		artifactHandler.SetRevisionConfig(cfg.Video.SkillRoot, func(ctx context.Context, systemPrompt, userPrompt string, opts artifact.ReviseLLMOptions) (string, error) {
+			effectiveCfg := builtin.ApplyClientModelProviderConfig(config.OpenAIConfig{}, map[string]interface{}{"modelProvider": opts.ModelProvider})
 			if effectiveCfg.APIKey == "" {
-				return "", fmt.Errorf("LLM API key 未配置，无法执行返工。请设置服务端 OPENAI_API_KEY 或云端 runtime model-provider 配置。")
+				return "", fmt.Errorf("LLM API key 未配置，无法执行返工。请在桌面端「系统 → 基础模型 API」配置文生文 Provider 后重试。")
 			}
 			llmTool := builtin.NewLlmApiTool(effectiveCfg)
 			var toolCtx tool.ToolContext
@@ -681,35 +623,21 @@ func main() {
 	zap.L().Info("Server exited")
 }
 
-func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry, gw *modelgateway.Gateway) agentruntime.Planner {
+func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry) agentruntime.Planner {
 	maxTools := cfg.Agent.PlannerMaxTools
 	if maxTools <= 0 {
 		maxTools = 6
 	}
 	heuristic := agentruntime.NewHeuristicPlannerWithMaxTools(toolRegistry, maxTools)
-
-	// Prefer ModelGateway for LLMPlanner (caching + retry + provider routing),
-	// fall back to direct OpenAI HTTP client when gateway is unavailable.
-	var plannerClient agentruntime.PlannerLLMClient
-	if gw != nil {
-		plannerClient = agentruntime.NewGatewayPlannerClient(gw, cfg.OpenAI.Model)
-	} else {
-		plannerClient = agentruntime.NewOpenAIPlannerClient(cfg.OpenAI)
-	}
-
-	llm := agentruntime.NewLLMPlanner(
-		toolRegistry,
-		plannerClient,
-		agentruntime.LLMPlannerOptions{MaxTools: maxTools},
-	)
+	clientProviderPlanner := agentruntime.NewClientProviderPlanner(toolRegistry, heuristic, maxTools)
 
 	switch strings.ToLower(strings.TrimSpace(cfg.Agent.PlannerMode)) {
 	case "llm":
-		return llm
+		return clientProviderPlanner
 	case "heuristic":
 		return heuristic
 	default:
-		return agentruntime.NewHybridPlanner(llm, heuristic)
+		return clientProviderPlanner
 	}
 }
 

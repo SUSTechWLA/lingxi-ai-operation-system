@@ -70,6 +70,37 @@ export async function fetchModelProviderSettings(): Promise<ModelProviderSetting
   return response.json() as Promise<ModelProviderSettingsResponse>
 }
 
+export async function fetchModelProviderSettingsWithKeys(): Promise<ModelProviderSettingsResponse> {
+  const api = getElectronAPI()
+  if (api?.getModelProviderSettingsWithKeys) {
+    return api.getModelProviderSettingsWithKeys() as Promise<ModelProviderSettingsResponse>
+  }
+  const response = await fetch(localAgentUrl('/api/local/model-providers?include_key=true'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取模型密钥设置失败'))
+  }
+  return response.json() as Promise<ModelProviderSettingsResponse>
+}
+
+export async function buildClientModelProvidersForRun(): Promise<Partial<Record<ModelCapability, ModelProviderConfig>> | undefined> {
+  try {
+    const response = await fetchModelProviderSettingsWithKeys()
+    const providers: Partial<Record<ModelCapability, ModelProviderConfig>> = {}
+    for (const capability of ['text_to_text', 'text_to_image', 'text_to_video'] as const) {
+      const provider = response.providers[capability]
+      if (!provider?.apiKey) continue
+      providers[capability] = {
+        baseUrl: provider.baseUrl,
+        model: provider.model,
+        apiKey: provider.apiKey,
+      }
+    }
+    return Object.keys(providers).length > 0 ? providers : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export async function saveModelProviderSettings(
   providers: Record<ModelCapability, ModelProviderConfig>
 ): Promise<ModelProviderSettingsResponse> {

@@ -19,6 +19,15 @@ export interface ElectronAPI {
     localAgentUrl: string
     cloudApiBase: string
   }>
+  getModelProviderSettingsWithKeys: () => Promise<{
+    providers: Partial<Record<string, {
+      baseUrl: string
+      model: string
+      apiKey?: string
+      hasApiKey?: boolean
+      apiKeyPreview?: string
+    }>>
+  }>
   openExternal: (url: string) => Promise<void>
   isElectron: boolean
 }

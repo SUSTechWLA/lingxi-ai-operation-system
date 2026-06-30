@@ -190,9 +190,13 @@ export const fetchArtifactHistory = async (
 
 export const reviseArtifact = async (
   artifactId: string,
-  message: string
+  message: string,
+  modelProviders?: Record<string, unknown>
 ): Promise<ArtifactContentResponse> => {
-  const response = await api.post<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/revise`, { message })
+  const response = await api.post<ApiResponse<ArtifactContentResponse>>(`/artifacts/${artifactId}/revise`, {
+    message,
+    ...(modelProviders ? { modelProviders } : {}),
+  })
   return response.data.data
 }
 
@@ -228,24 +232,6 @@ export const registerExternalGenerationResult = async (
     payload
   )
   return response.data.data
-}
-
-// ── Model Provider Config Sync ──
-
-export interface ModelProviderSyncPayload {
-  baseUrl: string
-  apiKey?: string
-  model: string
-}
-
-export const syncModelProviderConfig = async (
-  payload: ModelProviderSyncPayload
-): Promise<void> => {
-  await api.put('/config/model-provider', payload)
-}
-
-export const clearModelProviderConfig = async (): Promise<void> => {
-  await api.delete('/config/model-provider')
 }
 
 // ── Agent Run API (dynamic agent runtime) ──────────────────────────────

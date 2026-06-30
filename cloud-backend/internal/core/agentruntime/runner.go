@@ -161,6 +161,9 @@ planOK:
 	if err != nil {
 		return nil, fmt.Errorf("compile agent plan: %w", err)
 	}
+	if providers := clientModelProvidersFromContext(req.Context); len(providers) > 0 {
+		injectClientModelProviders(dag, providers)
+	}
 
 	run := &Run{
 		ID:        "agent_run_" + uuid.NewString(),
@@ -185,7 +188,7 @@ planOK:
 		"userId":         req.UserID,
 		"message":        req.Message,
 		"domain":         plan.Domain,
-		"context":        req.Context,
+		"context":        sanitizedRunContext(req.Context),
 		"plan":           plan,
 		"agentToolTrace": agentToolTrace,
 	}
@@ -227,6 +230,142 @@ func applyRequestPlanDefaults(plan *AgentPlan, req StartRunRequest) {
 	if plan.Mode == "" {
 		plan.Mode = "dynamic_agent"
 	}
+}
+
+func clientModelProvidersFromContext(ctx map[string]interface{}) map[string]map[string]interface{} {
+	out := map[string]map[string]interface{}{}
+	if provider, ok := normalizeClientModelProvider(ctx["modelProvider"]); ok {
+		out["text_to_text"] = provider
+	}
+	providers, ok := ctx["modelProviders"]
+	if !ok {
+		return out
+	}
+	switch typed := providers.(type) {
+	case map[string]interface{}:
+		for _, capability := range []string{"text_to_text", "text_to_image", "text_to_video"} {
+			if provider, ok := normalizeClientModelProvider(typed[capability]); ok {
+				out[capability] = provider
+			}
+		}
+	case map[string]map[string]interface{}:
+		for _, capability := range []string{"text_to_text", "text_to_image", "text_to_video"} {
+			if provider, ok := normalizeClientModelProvider(typed[capability]); ok {
+				out[capability] = provider
+			}
+		}
+	}
+	return out
+}
+
+func normalizeClientModelProvider(value interface{}) (map[string]interface{}, bool) {
+	raw, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	provider := map[string]interface{}{}
+	for _, key := range []string{"baseUrl", "apiKey", "model"} {
+		text := strings.TrimSpace(fmt.Sprint(raw[key]))
+		if text != "" && text != "<nil>" {
+			provider[key] = text
+		}
+	}
+	if provider["apiKey"] == nil {
+		return nil, false
+	}
+	return provider, true
+}
+
+func injectClientModelProviders(dag *model.DAGRequest, providers map[string]map[string]interface{}) {
+	if dag == nil || len(providers) == 0 {
+		return
+	}
+	for i := range dag.Nodes {
+		input := dag.Nodes[i].Input
+		if input == nil {
+			continue
+		}
+		params, ok := input["parameters"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, exists := params["modelProvider"]; exists {
+			continue
+		}
+		capability := modelProviderCapabilityForTool(params)
+		if capability == "" {
+			continue
+		}
+		provider := providers[capability]
+		if len(provider) == 0 && capability != "text_to_text" {
+			provider = providers["text_to_text"]
+		}
+		if len(provider) == 0 {
+			continue
+		}
+		params["modelProvider"] = copyMap(provider)
+	}
+}
+
+func modelProviderCapabilityForTool(params map[string]interface{}) string {
+	toolName := strings.TrimSpace(fmt.Sprint(params["tool"]))
+	if toolName == "" || toolName == "<nil>" {
+		return ""
+	}
+	if capability, ok := clientModelProviderToolCapabilities[toolName]; ok {
+		return capability
+	}
+	return ""
+}
+
+var clientModelProviderToolCapabilities = map[string]string{
+	"image_asset_generator":         "text_to_image",
+	"text_image_to_video_generator": "text_to_video",
+
+	"skill_stage_agent":             "text_to_text",
+	"proposal_generator":            "text_to_text",
+	"visual_feasibility_analyzer":   "text_to_text",
+	"render_strategy_planner":       "text_to_text",
+	"card_plan_generator":           "text_to_text",
+	"caption_splitter":              "text_to_text",
+	"composition_quality_checker":   "text_to_text",
+	"reference_asset_planner":       "text_to_text",
+	"asset_decision_agent":          "text_to_text",
+	"asset_policy_generator":        "text_to_text",
+	"continuity_checker":            "text_to_text",
+	"style_profile_builder":         "text_to_text",
+	"preview_quality_checker":       "text_to_text",
+	"knowledge_researcher":          "text_to_text",
+	"fact_checker":                  "text_to_text",
+	"video_script_generator":        "text_to_text",
+	"shot_splitter":                 "text_to_text",
+	"keyframe_prompt_generator":     "text_to_text",
+	"video_prompt_generator":        "text_to_text",
+	"script_quality_checker":        "text_to_text",
+	"shot_quality_checker":          "text_to_text",
+	"video_prompt_quality_checker":  "text_to_text",
+	"publish_copy_generator":        "text_to_text",
+	"package_quality_checker":       "text_to_text",
+	"hyperframes_project_generator": "text_to_text",
+}
+
+func sanitizedRunContext(ctx map[string]interface{}) map[string]interface{} {
+	if len(ctx) == 0 {
+		return ctx
+	}
+	out := make(map[string]interface{}, len(ctx))
+	for k, v := range ctx {
+		if isSensitiveModelProviderContextKey(k) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func isSensitiveModelProviderContextKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	return normalized == "modelprovider" || normalized == "modelproviders"
 }
 
 func logAgentToolTrace(req StartRunRequest, plan *AgentPlan, trace map[string]interface{}) {

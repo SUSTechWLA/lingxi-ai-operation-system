@@ -35,11 +35,9 @@ services:
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-changeme}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - VIDEO_CREATION_ENABLED=true
       - LOCAL_RUNNER_ENABLED=false
-      - MODEL_PROVIDER_MODE=real
+      - MODEL_PROVIDER_MODE=${MODEL_PROVIDER_MODE:-fake}
       - SKILL_ROOT=/app/skills
       - SKILL_CAPABILITY_ROOT=/app/skill-capabilities
       - HYPERFRAMES_MODE=service

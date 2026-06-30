@@ -94,7 +94,6 @@ func TestBuildCloudSpec_ExposesClosedBetaRuntimeRoutes(t *testing.T) {
 		"/api/agent/runs/:runId/reviews/:reviewId/submit-edited": "POST",
 		"/api/agent/runs/:runId/reviews/:reviewId/regenerate":    "POST",
 		"/api/video/preflight":                                   "GET",
-		"/api/config/model-provider":                             "GET",
 		"/api/video-projects/:id/workflow-runs/:rid/checkpoints": "GET",
 		"/api/video-projects/:id/workflow-runs/:rid/recover":     "POST",
 	}

@@ -203,6 +203,16 @@ const mockServer = createServer(async (req, res) => {
     })
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/local/model-providers') {
+    return sendJSON(res, 200, {
+      providers: {
+        text_to_text: { baseUrl: 'https://text.example/v1', model: 'text-model', apiKey: 'sk-text' },
+        text_to_image: { baseUrl: 'https://image.example/v1', model: 'image-model', apiKey: 'sk-image' },
+        text_to_video: { baseUrl: 'https://video.example/v1', model: 'video-model', apiKey: 'sk-video' },
+      },
+    })
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/video-projects/project-smoke/external-generation-results') {
     registeredExternalResults.push({
       id: 'artifact-uploaded-video',
@@ -261,6 +271,9 @@ try {
   assert.equal(runCall.body?.mode, 'dynamic_agent')
   assert.match(runCall.body?.message || '', /佛得角/)
   assert.equal(runCall.body?.context?.projectId, 'project-smoke')
+  assert.equal(runCall.body?.context?.modelProviders?.text_to_text?.apiKey, 'sk-text')
+  assert.equal(runCall.body?.context?.modelProviders?.text_to_image?.apiKey, 'sk-image')
+  assert.equal(runCall.body?.context?.modelProviders?.text_to_video?.apiKey, 'sk-video')
   const localUploadCall = calls.find((call) => call.method === 'POST' && call.path === '/api/local/artifacts')
   const externalResultCall = calls.find((call) => call.method === 'POST' && call.path === '/api/video-projects/project-smoke/external-generation-results')
   assert.ok(localUploadCall, 'expected UI to upload the user-generated asset to the local agent')

@@ -52,6 +52,31 @@ function startLocalAgent() {
   })
 }
 
+function requestLocalAgentJSON(pathname) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`${LOCAL_AGENT_URL}${pathname}`, (res) => {
+      let data = ''
+      res.on('data', (chunk) => { data += chunk })
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          reject(new Error(`local agent returned ${res.statusCode}: ${data}`))
+          return
+        }
+        try {
+          resolve(JSON.parse(data))
+        } catch (err) {
+          reject(err)
+        }
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(3000, () => {
+      req.destroy()
+      reject(new Error('local agent request timeout'))
+    })
+  })
+}
+
 function stopLocalAgent() {
   if (localAgentProcess) {
     localAgentProcess.kill()
@@ -158,6 +183,10 @@ ipcMain.handle('get-runtime-config', async () => ({
   localAgentUrl: LOCAL_AGENT_URL,
   cloudApiBase: CLOUD_API_BASE,
 }))
+
+ipcMain.handle('get-model-provider-settings-with-keys', async () =>
+  requestLocalAgentJSON('/api/local/model-providers?include_key=true')
+)
 
 // Open external URL in system browser
 ipcMain.handle('open-external', async (_, url) => {

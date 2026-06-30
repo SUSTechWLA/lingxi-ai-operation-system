@@ -2,6 +2,9 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -56,6 +59,55 @@ func TestLLMPlanner_GeneratesAgentPlanFromTopKTools(t *testing.T) {
 	}
 	if !strings.Contains(client.lastUserPrompt, "AgentPlan") || !strings.Contains(client.lastSystemText, "禁止输出 DAGRequest") {
 		t.Fatalf("planner prompt must ask for AgentPlan and forbid DAGRequest, system=%q user=%q", client.lastSystemText, client.lastUserPrompt)
+	}
+}
+
+func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
+	var gotAuthorization string
+	var gotModel string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected planner path: %s", r.URL.Path)
+		}
+		gotAuthorization = r.Header.Get("Authorization")
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode planner request: %v", err)
+		}
+		gotModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"goal\":\"生成品牌故事视频\",\"domain\":\"video_creation\",\"mode\":\"dynamic_agent\",\"steps\":[{\"id\":\"script_generation\",\"intent\":\"生成口播稿\",\"tool\":\"video_script_generator\",\"arguments\":{\"topic\":\"独立咖啡店品牌故事\"},\"expectedOutput\":[\"script\"],\"produceArtifact\":true}],\"budget\":{\"maxLLMCalls\":1,\"maxToolCalls\":1,\"maxSteps\":1,\"maxReplans\":0,\"maxCostLevel\":\"medium\"},\"stopPolicy\":{\"stopWhenEnough\":true}}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	tools := staticToolList{
+		{Name: "video_script_generator", Description: "生成视频口播稿", Capabilities: []string{"video_creation", "script_generation"}, Parameters: map[string]tool.ParamDef{"topic": {Type: "string", Required: true}}},
+	}
+	planner := NewClientProviderPlanner(tools, NewHeuristicPlannerWithMaxTools(tools, 1), 1)
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "帮我做一个独立咖啡店品牌故事视频",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"modelProviders": map[string]interface{}{
+				"text_to_text": map[string]interface{}{
+					"baseUrl": server.URL,
+					"apiKey":  "sk-client-planner",
+					"model":   "client-planner-model",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if gotAuthorization != "Bearer sk-client-planner" {
+		t.Fatalf("expected planner to use client API key, got %q", gotAuthorization)
+	}
+	if gotModel != "client-planner-model" {
+		t.Fatalf("expected planner to use client model, got %q", gotModel)
+	}
+	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "video_script_generator" {
+		t.Fatalf("unexpected plan: %#v", plan)
 	}
 }
 

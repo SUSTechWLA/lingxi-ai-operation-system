@@ -21,7 +21,11 @@ import (
 // ReviseLLMFunc is called to generate revised content via an LLM.
 // systemPrompt provides the stage instruction context; userPrompt contains
 // the original content and the user's revision instruction.
-type ReviseLLMFunc func(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+type ReviseLLMFunc func(ctx context.Context, systemPrompt, userPrompt string, opts ReviseLLMOptions) (string, error)
+
+type ReviseLLMOptions struct {
+	ModelProvider map[string]interface{}
+}
 
 type Handler struct {
 	service    *Service
@@ -132,7 +136,9 @@ func (h *Handler) GetArtifactHistory(c *gin.Context) {
 
 func (h *Handler) ReviseArtifact(c *gin.Context) {
 	var req struct {
-		Message string `json:"message" binding:"required"`
+		Message        string                 `json:"message" binding:"required"`
+		ModelProvider  map[string]interface{} `json:"modelProvider,omitempty"`
+		ModelProviders map[string]interface{} `json:"modelProviders,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request: " + err.Error(), "data": nil})
@@ -159,7 +165,9 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 	// 3. Call the LLM to generate revised content.
 	var revisedData []byte
 	if h.reviseLLM != nil {
-		revisedText, err := h.reviseLLM(c.Request.Context(), systemPrompt, userPrompt)
+		revisedText, err := h.reviseLLM(c.Request.Context(), systemPrompt, userPrompt, ReviseLLMOptions{
+			ModelProvider: textModelProviderFromRevisionRequest(req.ModelProvider, req.ModelProviders),
+		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "返工生成失败: " + err.Error(), "data": nil})
 			return
@@ -195,6 +203,19 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 		"mediaUrl":  mediaURL,
 		"mediaUrls": mediaURLs,
 	}})
+}
+
+func textModelProviderFromRevisionRequest(modelProvider, modelProviders map[string]interface{}) map[string]interface{} {
+	if len(modelProvider) > 0 {
+		return modelProvider
+	}
+	if len(modelProviders) == 0 {
+		return nil
+	}
+	if textProvider, ok := modelProviders["text_to_text"].(map[string]interface{}); ok {
+		return textProvider
+	}
+	return nil
 }
 
 // resolveOriginalContent returns the full original artifact content as a string.

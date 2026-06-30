@@ -45,7 +45,7 @@
 ```text
 frontend/                    # React + Electron UI，默认入口是导演工作台
 local-backend/               # 本地轻量执行器，无 DB / Docker / Redis / Kafka / MinIO
-cloud-backend/               # 云端 AIOS Core，负责编排、模型网关、API、日志和远程配置
+cloud-backend/               # 云端 AIOS Core，负责账号、编排、API、日志和远程配置
 hyperframes-render-service/  # HyperFrames HTML/CSS/JS → 视频渲染服务
 ```
 
@@ -54,7 +54,7 @@ hyperframes-render-service/  # HyperFrames HTML/CSS/JS → 视频渲染服务
 - `local-backend` 不引入数据库、Docker、Redis、Kafka、MinIO 或云端 LLM API Key。
 - 用户本地素材和大文件默认留在本地，云端保存索引、hash、状态和 trace。
 - 封闭内测不要求用户在项目开始前主动上传素材；流程在具体素材依赖点暂停，把 Prompt、参考图和规格交给用户，用户自由选择外部网站生成后回填。
-- 用户在桌面端填写的模型 Provider token 只保存到 local-backend；云端 LLM 使用服务端 `OPENAI_API_KEY` 或运维 runtime override。
+- 用户在桌面端填写的模型 Provider token 只保存到 local-backend；云端不提供 LLM、文生图片或文生视频 API 服务。
 - `cloud-backend/internal/core` 不写具体视频业务规则；视频业务位于 `internal/agents/video` 和视频 skill/capability。
 - 当前 `publish` 模块保留为 beta 兼容发布包/发布准备层，后续迁移到 `distribution`。
 
@@ -121,7 +121,7 @@ cloud-backend/cmd/tangying-ai-os/main.go
 ├── artifact index / artifact review / stale tracking
 ├── video external-generation result registration
 ├── local runner protocol
-├── cloud operator model-provider runtime override
+├── client-provided model provider injection
 ├── publish compatibility API
 └── OpenAPI: /docs, /openapi.json
 ```
@@ -153,7 +153,7 @@ hyperframes-render-service/src/server.ts
 - `orchestrator`：DAG 任务、节点状态机、暂停/恢复、重试、CONTROL 节点和质量门禁。
 - `workflow`：Workflow Template、Workflow Run、Skill 编译为 DAG。
 - `skillruntime`：加载 `skills/*/*/skill.yaml`，提供 Skill catalog、route、compile。
-- `modelgateway`：统一模型调用、Provider 路由、重试和缓存。
+- `modelgateway`：保留 Provider 抽象与 fake provider 测试能力；封闭内测主链路使用客户端随请求传入的 OpenAI-compatible provider。
 - `artifact`：版本化产物索引、审核状态、stale 级联追踪。
 - `localrunner`：云端控制本地执行器的 job/heartbeat/progress 协议。
 - `eventbus` / `outbox`：事件可靠投递与异步执行。
@@ -297,7 +297,7 @@ cloud-backend 生成 external_generation_request Artifact
 
 ## 10. Local Runner 本地执行体系
 
-Local Runner 是桌面用户的本地执行面。云端负责调度，本地负责文件、媒体处理和用户自配 Provider。
+Local Runner 是桌面用户的本地执行面。云端负责调度，本地负责文件、媒体处理和本机 Provider 配置。
 
 云端协议：
 
@@ -317,17 +317,16 @@ Local Runner 是桌面用户的本地执行面。云端负责调度，本地负�
 - 大文件默认不上传云端。
 - 本地任务必须可取消并上报 progress/heartbeat。
 
-## 11. Model Gateway 模型网关
+## 11. 模型 Provider 策略
 
-Model Gateway 是模型调用统一出口，提供：
+封闭内测不在云端提供模型 API 服务。用户在桌面端「系统 → 基础模型 API」分别配置文生文、文生图片、文生视频 Provider，字段统一为 OpenAI-compatible 的 `baseUrl`、`model`、`token`。客户端在启动 run 或返工时按次把 provider 传入云端执行节点。
 
-- Capability 路由：text_to_text、image_to_text、text_to_image、text_to_video、image_to_video。
-- Provider 抽象与 fake provider 测试能力。
-- 请求指纹缓存。
-- 指数退避重试。
-- 错误结构统一。
+如果没有配置 provider：
 
-beta 验收要求：动态 Agent Planner 和视频工具链优先走 Gateway；仍未接入的 legacy 调用需要在后续路线中收敛，不新增绕过 Gateway 的模型调用。
+- 文生文节点输出明确配置提示，不调用云端 Key。
+- 图片素材节点停在素材依赖点，输出 Prompt、参考信息和目标规格。
+- 视频素材节点要求用户配置文生视频 Provider，或到外部网站生成后回填。
+- 云端 OpenAPI 不暴露 `/api/config/model-provider`，用户 token 不进入云端持久化。
 
 ## 12. HyperFrames 渲染链路
 
@@ -380,11 +379,6 @@ Video Runtime:
 GET /api/video/preflight
 GET /api/video/role-agents
 GET /api/video/role-agents/:roleId
-
-Cloud operator config:
-GET    /api/config/model-provider
-PUT    /api/config/model-provider
-DELETE /api/config/model-provider
 
 Video Projects:
 GET    /api/video-projects
@@ -490,7 +484,7 @@ beta 自用验收：
 - 能执行审核、驳回或返工。
 - PlanJudge 阻断封闭内测禁用工具、缺失发布文案、缺失预览依赖和重复非质量工具。
 - 桌面端无任意命令执行 IPC、无自动发布 IPC。
-- 用户模型 API Key 不从桌面端同步到云端。
+- 用户模型 API Key 不从桌面端同步到云端，云端也不提供模型 API fallback。
 - 本地 Runner 可注册、心跳、领取任务并回传状态。
 - HyperFrames 服务可健康检查并用于渲染链路。
 - 当前发布兼容接口可生成发布文案或发布准备任务。

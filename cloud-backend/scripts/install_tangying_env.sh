@@ -53,7 +53,7 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 else
     cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
     info "Created .env from .env.example"
-    warn "Please edit .env and set OPENAI_API_KEY and POSTGRES_PASSWORD"
+    warn "Please edit .env and set POSTGRES_PASSWORD / AUTH_TOKEN_SECRET as needed"
 fi
 
 # Step 4: Start infrastructure
@@ -97,8 +97,9 @@ info "Build complete: build/tangying-ai-os"
 section "Setup Complete!"
 echo ""
 echo -e "${GREEN}Next steps:${NC}"
-echo "  1. Edit .env and set OPENAI_API_KEY and POSTGRES_PASSWORD"
+echo "  1. Edit .env and set POSTGRES_PASSWORD / AUTH_TOKEN_SECRET as needed"
 echo "     vim $PROJECT_DIR/.env"
+echo "     Model providers are configured in the desktop app local settings"
 echo ""
 echo "  2. Run the service"
 echo "     make run"

@@ -51,7 +51,7 @@ AIOS AI OS — 一键部署脚本
 
 部署前准备:
   1. 将项目代码放到服务器上（git clone / scp / rsync）
-  2. 准备 OPENAI_API_KEY（或其他兼容 API 的 Key）
+  2. 准备 AUTH_TOKEN_SECRET；模型 API 在桌面端本机设置
 
 部署后:
   访问 http://<服务器IP>/  即可使用
@@ -296,39 +296,13 @@ install_rust() {
 setup_env() {
     section "Step 7: 配置环境变量"
 
-    if [ -f "$PROJECT_DIR/.env" ] && grep -q 'OPENAI_API_KEY=your-api-key-here' "$PROJECT_DIR/.env"; then
-        warn ".env 文件存在但 API Key 未配置"
-        echo ""
-        echo -e "  ${BOLD}请输入你的 OPENAI_API_KEY:${NC}"
-        read -rp "  > " api_key
-        if [ -n "$api_key" ]; then
-            sed -i "s|OPENAI_API_KEY=.*|OPENAI_API_KEY=$api_key|" "$PROJECT_DIR/.env"
-            info "API Key 已更新"
-        fi
-    elif [ ! -f "$PROJECT_DIR/.env" ]; then
+    if [ -f "$PROJECT_DIR/.env" ] && grep -q '^OPENAI_' "$PROJECT_DIR/.env"; then
+        warn ".env 中的 OPENAI_* 变量不再用于云端模型服务；请在桌面端「系统 → 基础模型 API」配置 Provider"
+    fi
+
+    if [ ! -f "$PROJECT_DIR/.env" ]; then
         step "从 .env.example 创建 .env..."
         cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
-
-        echo ""
-        echo -e "  ${BOLD}请输入你的 OPENAI_API_KEY (必填):${NC}"
-        read -rp "  > " api_key
-        if [ -n "$api_key" ]; then
-            sed -i "s|OPENAI_API_KEY=.*|OPENAI_API_KEY=$api_key|" "$PROJECT_DIR/.env"
-        fi
-
-        echo ""
-        echo -e "  ${BOLD}请输入 OPENAI_BASE_URL (直接回车使用默认 OpenAI):${NC}"
-        read -rp "  > " base_url
-        if [ -n "$base_url" ]; then
-            sed -i "s|OPENAI_BASE_URL=.*|OPENAI_BASE_URL=$base_url|" "$PROJECT_DIR/.env"
-        fi
-
-        echo ""
-        echo -e "  ${BOLD}请输入 OPENAI_MODEL (直接回车使用默认 gpt-4):${NC}"
-        read -rp "  > " model
-        if [ -n "$model" ]; then
-            sed -i "s|OPENAI_MODEL=.*|OPENAI_MODEL=$model|" "$PROJECT_DIR/.env"
-        fi
 
         # 生成随机数据库密码
         local db_pass=$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)
@@ -721,7 +695,7 @@ print_summary() {
     echo -e "    cd $INSTALL_DIR && git pull"
     echo -e "    sudo bash scripts/deploy.sh --update"
     echo ""
-    echo -e "  ${BOLD}⚠  首次使用前，请确保已正确配置 .env 中的 OPENAI_API_KEY${NC}"
+    echo -e "  ${BOLD}⚠  首次使用前，请在桌面端「系统 → 基础模型 API」配置用户 Provider${NC}"
     echo ""
 }
 

@@ -83,7 +83,7 @@ cloud-backend/cmd/tangying-ai-os/main.go
 - Artifact：版本化索引、内容读取、历史、返工、Review、stale tracking。
 - Video Assets：外部生成素材结果登记。
 - Local Runner：runner 注册、心跳、领取任务、进度和完成回传。
-- Model Gateway：模型能力路由、服务端 Provider 配置、fake provider 测试。
+- Model Gateway：保留 Provider 抽象和 fake provider 测试；封闭内测真实模型调用由客户端 provider 随请求传入。
 - Publish Compatibility：封闭内测发布包/文案准备兼容层。
 - OpenAPI：`/docs`、`/openapi.json`。
 
@@ -361,7 +361,7 @@ bash scripts/start-cloud-backend.sh
 ```bash
 cd cloud-backend
 cp .env.example .env
-# 填 OPENAI_API_KEY / AUTH_TOKEN_SECRET
+# 填 AUTH_TOKEN_SECRET；模型 API 由桌面端本机配置
 docker compose up -d
 go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os
@@ -449,7 +449,7 @@ curl http://localhost:8080/api/health/ready
 
 ### Agent 规划失败
 
-检查服务端 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`，或云端 `/api/config/model-provider` 运维 override。不要把桌面用户 token 上传到云端。
+先检查桌面端「系统 → 基础模型 API」里的文生文 Provider 是否有 `baseUrl`、`model` 和 `apiKey`。封闭内测由客户端把本机 provider 随启动 run 或返工请求传给云端执行节点；云端不读取服务端模型 Key，也不暴露 `/api/config/model-provider`。
 
 ### 素材依赖点卡住
 

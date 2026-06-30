@@ -54,7 +54,8 @@
 ```bash
 cd cloud-backend
 cp .env.example .env
-# 真实内测需填写 OPENAI_API_KEY 和 AUTH_TOKEN_SECRET
+# 真实内测需填写 AUTH_TOKEN_SECRET；模型 API 由测试者在桌面端本机配置
+# 测试者在「系统 → 基础模型 API」配置文生文、文生图片、文生视频 Provider
 docker compose up -d
 go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os
@@ -99,7 +100,7 @@ compose 栈包含 PostgreSQL、Redis、Redpanda、MinIO、backend、nginx 和 Hy
 11. 打开 Trace 检查节点状态和错误。
 12. 打开 Export 复制发布文案或下载 Markdown/JSON 发布包。
 
-不要要求测试人员把个人模型 Provider token 填到云端。桌面端模型设置是本地配置；云端 LLM 执行使用运维管理的服务端凭证。
+不要要求测试人员把个人模型 Provider token 填到云端。桌面端模型设置是本地配置；云端不提供 LLM、文生图片或文生视频 API 服务，只接收客户端在启动 run 或返工请求中按次传入的 OpenAI-compatible provider。
 
 ## 6. 素材依赖点验收标准
 

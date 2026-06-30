@@ -52,6 +52,87 @@ func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 	}
 }
 
+func TestRunnerStart_InjectsClientTextProviderIntoExecutableNodesOnly(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "make video",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "research", Tool: "knowledge_researcher", Arguments: map[string]interface{}{"topic": "佛得角世界杯"}},
+			{ID: "image", Tool: "image_asset_generator", Arguments: map[string]interface{}{"brief": "佛得角地图"}},
+			{ID: "video", Tool: "text_image_to_video_generator", Arguments: map[string]interface{}{"prompt": "佛得角奇迹"}},
+		},
+	}}
+	catalog := staticToolCatalog{
+		"knowledge_researcher": &tool.ToolManifest{
+			Name:     "knowledge_researcher",
+			Endpoint: "builtin://video-creation/knowledge_researcher",
+		},
+		"image_asset_generator": &tool.ToolManifest{
+			Name:     "image_asset_generator",
+			Endpoint: "builtin://video-creation/image_asset_generator",
+		},
+		"text_image_to_video_generator": &tool.ToolManifest{
+			Name:     "text_image_to_video_generator",
+			Endpoint: "builtin://video-creation/text_image_to_video_generator",
+		},
+	}
+
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	run, err := runner.Start(context.Background(), StartRunRequest{
+		UserID:  "user-1",
+		Message: "make a video about Cape Verde",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"modelProviders": map[string]interface{}{
+				"text_to_text": map[string]interface{}{
+					"baseUrl": "https://client.example/v1",
+					"apiKey":  "sk-client",
+					"model":   "client-model",
+				},
+				"text_to_image": map[string]interface{}{
+					"baseUrl": "https://image.example/v1",
+					"apiKey":  "sk-image",
+					"model":   "image-model",
+				},
+				"text_to_video": map[string]interface{}{
+					"baseUrl": "https://video.example/v1",
+					"apiKey":  "sk-video",
+					"model":   "video-model",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if len(orch.submitted.Nodes) != 3 {
+		t.Fatalf("expected three nodes, got %#v", orch.submitted.Nodes)
+	}
+	expected := map[string]string{
+		"knowledge_researcher":          "sk-client",
+		"image_asset_generator":         "sk-image",
+		"text_image_to_video_generator": "sk-video",
+	}
+	for _, node := range orch.submitted.Nodes {
+		params, _ := node.Input["parameters"].(map[string]interface{})
+		provider, _ := params["modelProvider"].(map[string]interface{})
+		toolName, _ := params["tool"].(string)
+		if provider["apiKey"] != expected[toolName] {
+			t.Fatalf("node %s should receive matching client provider, got %#v", node.ID, provider)
+		}
+	}
+	if _, exists := run.Plan.Steps[0].Arguments["modelProvider"]; exists {
+		t.Fatalf("run plan should not persist raw client provider: %#v", run.Plan.Steps[0].Arguments)
+	}
+	taskContext, _ := orch.createdInput["context"].(map[string]interface{})
+	if _, exists := taskContext["modelProviders"]; exists {
+		t.Fatalf("task input context should not persist raw model providers: %#v", taskContext)
+	}
+}
+
 func TestRunnerStart_PreparesVideoBetaPlanBeforeGuard(t *testing.T) {
 	store := newMemoryRunStore()
 	orch := &fakeOrchestrator{taskID: "task-1"}

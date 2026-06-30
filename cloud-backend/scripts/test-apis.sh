@@ -96,7 +96,7 @@ if [ "$TRANSLATE_CODE" = "200" ]; then
     echo -e "  ${GREEN}✓${NC} NL-Translator working (HTTP 200)"
     passed=$((passed + 1))
 else
-    echo -e "  ${YELLOW}⚠${NC}  NL-Translator needs OPENAI_API_KEY (HTTP $TRANSLATE_CODE)"
+    echo -e "  ${YELLOW}⚠${NC}  NL-Translator requires a client-provided model provider (HTTP $TRANSLATE_CODE)"
     passed=$((passed + 1))
 fi
 

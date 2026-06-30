@@ -507,26 +507,6 @@ func registerCloudSchemas(b *Builder) {
 	})
 	b.Schema("VideoPreflightResponse", Reflect(localrunner.PreflightResponse{}))
 
-	// ── Runtime Config ──
-	b.Schema("ModelProviderConfigResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"baseUrl":  {Schema: StringSchema()},
-					"model":    {Schema: StringSchema()},
-					"hasKey":   {Schema: BoolSchema()},
-					"endpoint": {Schema: StringSchema()},
-					"fromUser": {Schema: BoolSchema()},
-					"fromEnv":  {Schema: BoolSchema()},
-				},
-			}},
-		},
-	})
-
 	// ── Dynamic Agent Runs ──
 	b.Schema("AgentStartRunRequest", Reflect(agentruntime.StartRunRequest{}))
 	b.Schema("AgentRunStartResponse", &Schema{

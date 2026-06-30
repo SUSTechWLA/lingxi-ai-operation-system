@@ -257,6 +257,9 @@ func inferDomain(message string) string {
 func copyRequestContext(req StartRunRequest) map[string]interface{} {
 	args := make(map[string]interface{}, len(req.Context)+2)
 	for k, v := range req.Context {
+		if isSensitiveModelProviderContextKey(k) {
+			continue
+		}
 		args[k] = v
 	}
 	args["brief"] = req.Message

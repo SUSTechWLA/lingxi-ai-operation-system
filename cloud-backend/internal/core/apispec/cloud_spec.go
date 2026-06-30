@@ -418,30 +418,6 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("200", "Capability preflight result", "VideoPreflightResponse").
 		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 
-	// ── Runtime Config ──
-	b.Route("GET", "/api/config/model-provider", "Get effective cloud model-provider runtime configuration").
-		Tags("Config").
-		ResponseJSON("200", "Effective model-provider config without raw key", "ModelProviderConfigResponse").
-		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
-	b.Route("PUT", "/api/config/model-provider", "Update cloud model-provider runtime configuration").
-		Tags("Config").
-		BodyInlineJSON(&Schema{
-			Type: "object",
-			Properties: map[string]*SchemaRef{
-				"baseUrl": {Schema: StringSchema()},
-				"apiKey":  {Schema: StringSchema()},
-				"model":   {Schema: StringSchema()},
-			},
-			Required: []string{"baseUrl", "model"},
-		}, "Operator-provided runtime model config", true).
-		ResponseJSON("200", "Updated", "GenericOKResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse").
-		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
-	b.Route("DELETE", "/api/config/model-provider", "Clear cloud runtime model-provider override").
-		Tags("Config").
-		ResponseJSON("200", "Cleared", "GenericOKResponse").
-		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
-
 	// ── Dynamic Agent Runs ──
 	b.Route("POST", "/api/agent/runs", "Start a dynamic agent run from natural language").
 		Tags("Agent Runs").
@@ -785,7 +761,8 @@ func BuildCloudSpec() *Spec {
 		BodyInlineJSON(&Schema{
 			Type: "object",
 			Properties: map[string]*SchemaRef{
-				"message": {Schema: StringSchema()},
+				"message":        {Schema: StringSchema()},
+				"modelProviders": {Schema: &Schema{Type: "object"}},
 			},
 			Required: []string{"message"},
 		}, "Revision instruction", true).

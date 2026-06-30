@@ -325,14 +325,6 @@ export interface MediaListResponse {
 }
 
 /**  */
-// ModelProviderConfigResponse
-export interface ModelProviderConfigResponse {
-  code?: number;
-  data?: { baseUrl?: string; endpoint?: string; fromEnv?: boolean; fromUser?: boolean; hasKey?: boolean; model?: string };
-  message?: string;
-}
-
-/**  */
 // NodeRetryResponse
 export interface NodeRetryResponse {
   code?: number;

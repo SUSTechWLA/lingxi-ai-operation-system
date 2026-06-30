@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"bytes"
 	"context"
 	stdsha256 "crypto/sha256"
 	"encoding/hex"
@@ -109,9 +110,8 @@ func GetEnvOpenAIConfig() config.OpenAIConfig {
 	return videoCreationOpenAICfg
 }
 
-// GetVideoCreationOpenAIConfig returns the effective OpenAI config by merging
-// the env-based config with persisted cloud runtime overrides.
-// Runtime BaseURL/Model/APIKey take priority; env values serve as fallbacks.
+// GetVideoCreationOpenAIConfig returns the legacy server-side OpenAI config.
+// Video creation tools use per-request client providers instead.
 func GetVideoCreationOpenAIConfig() config.OpenAIConfig {
 	cfg := videoCreationOpenAICfg // env defaults
 	runtime := GetRuntimeModelProviderConfig()
@@ -148,6 +148,85 @@ func applyOptionalLocalAgentConfig(cfg config.OpenAIConfig) config.OpenAIConfig 
 		}
 	}
 	return cfg
+}
+
+func effectiveVideoCreationOpenAIConfig(params map[string]interface{}) config.OpenAIConfig {
+	return ApplyClientModelProviderConfig(config.OpenAIConfig{}, params)
+}
+
+// ApplyClientModelProviderConfig overlays a per-request OpenAI-compatible
+// provider onto the server default config. It is intentionally not persisted.
+func ApplyClientModelProviderConfig(cfg config.OpenAIConfig, params map[string]interface{}) config.OpenAIConfig {
+	if len(params) == 0 {
+		return cfg
+	}
+	provider, ok := clientModelProviderFromParams(params)
+	if !ok {
+		return cfg
+	}
+	if provider.BaseURL != "" {
+		cfg.BaseURL = provider.BaseURL
+	}
+	if provider.APIKey != "" {
+		cfg.APIKey = provider.APIKey
+	}
+	if provider.Model != "" {
+		cfg.Model = provider.Model
+	}
+	return cfg
+}
+
+func clientModelProviderFromParams(params map[string]interface{}) (RuntimeModelProviderConfig, bool) {
+	if provider, ok := normalizeRuntimeModelProvider(params["modelProvider"]); ok {
+		return provider, true
+	}
+	return clientModelProviderFromParamsForCapability(params, "text_to_text")
+}
+
+func clientModelProviderFromParamsForCapability(params map[string]interface{}, capability string) (RuntimeModelProviderConfig, bool) {
+	providers, ok := params["modelProviders"]
+	if !ok {
+		return RuntimeModelProviderConfig{}, false
+	}
+	switch typed := providers.(type) {
+	case map[string]interface{}:
+		return normalizeRuntimeModelProvider(typed[capability])
+	case map[string]map[string]interface{}:
+		return normalizeRuntimeModelProvider(typed[capability])
+	default:
+		return RuntimeModelProviderConfig{}, false
+	}
+}
+
+func clientGenerationProviderFromParams(params map[string]interface{}, capability string) (RuntimeModelProviderConfig, bool) {
+	if provider, ok := normalizeRuntimeModelProvider(params["modelProvider"]); ok {
+		return provider, true
+	}
+	return clientModelProviderFromParamsForCapability(params, capability)
+}
+
+func normalizeRuntimeModelProvider(value interface{}) (RuntimeModelProviderConfig, bool) {
+	raw, ok := value.(map[string]interface{})
+	if !ok {
+		return RuntimeModelProviderConfig{}, false
+	}
+	cfg := RuntimeModelProviderConfig{
+		BaseURL: cleanModelProviderString(raw["baseUrl"]),
+		APIKey:  cleanModelProviderString(raw["apiKey"]),
+		Model:   cleanModelProviderString(raw["model"]),
+	}
+	if cfg.APIKey == "" {
+		return RuntimeModelProviderConfig{}, false
+	}
+	return cfg, true
+}
+
+func cleanModelProviderString(value interface{}) string {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "<nil>" {
+		return ""
+	}
+	return text
 }
 
 // --- HyperFrames CLI support (deprecated, use service mode below) ---
@@ -594,7 +673,7 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 	// skill_stage_agent is the default tool for LLM stages. Call the LLM API
 	// with a prompt built from the stage instruction and user's brief.
 	if toolName == "skill_stage_agent" {
-		return executeSkillStageAgent(stage, skillName, brief, instructionRef, toolCtx)
+		return executeSkillStageAgent(stage, skillName, brief, instructionRef, params, toolCtx)
 	}
 
 	// Dynamic agent prompt_tool entries — use the LLM API to generate content
@@ -736,7 +815,7 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 	})
 
 	// Use LLM to intelligently recommend the best option based on the user's topic.
-	llmRecommended, llmReason := callProposalRecommendationLLM(brief, packet.Options)
+	llmRecommended, llmReason := callProposalRecommendationLLM(brief, packet.Options, params)
 	if llmRecommended != "" {
 		packet.RecommendedOptionID = llmRecommended
 		packet.DecisionLog.Selected = llmRecommended
@@ -772,8 +851,8 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 
 // callProposalRecommendationLLM uses the LLM to analyze the user's topic and
 // recommend the most suitable creative option. Falls back to empty on any error.
-func callProposalRecommendationLLM(brief string, options []videopipeline.ProposalOption) (recommendedID, reason string) {
-	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+func callProposalRecommendationLLM(brief string, options []videopipeline.ProposalOption, params map[string]interface{}) (recommendedID, reason string) {
+	cfg := effectiveVideoCreationOpenAIConfig(params)
 	if cfg.APIKey == "" {
 		zap.L().Warn("LLM proposal recommendation skipped: no API key configured")
 		return "", ""
@@ -1130,7 +1209,7 @@ func executeAssetDecisionAgent(stage, skillName string, params map[string]interf
 			"visual":             visual,
 			"source":             source,
 			"modelCapability":    capability,
-			"providerRoute":      "model_gateway",
+			"providerRoute":      "client_openai_compatible",
 			"fallback":           "placeholder_fallback",
 			"manualReviewNeeded": source == "manual_upload",
 			"reason":             reason,
@@ -1141,13 +1220,13 @@ func executeAssetDecisionAgent(stage, skillName string, params map[string]interf
 		"artifactKind": "REFERENCE_ASSET_PLAN",
 		"shots":        decisions,
 		"providerPolicy": map[string]interface{}{
-			"route":        "model_gateway",
+			"route":        "client_openai_compatible",
 			"capabilities": []string{"text_to_image", "text_to_video", "image_to_video"},
-			"providers":    []string{"fake_provider", "local_provider", "cloud_provider", "custom_provider"},
-			"note":         "不绑定具体供应商；真实生成由 Model Gateway provider interface 路由。",
+			"providers":    []string{"openai_compatible_client_provider", "external_website_manual_fill"},
+			"note":         "不绑定具体供应商；真实生成由用户在桌面端配置 Provider 或在外部网站生成后回填。",
 		},
 		"sourceOptions": []string{"open_asset_search", "hyperframes_html", "aigc_image_video_api", "manual_upload", "placeholder_fallback"},
-		"summary":       "已按审核卡片、分镜计划和视频结构为每个 shot 选择素材来源，并保留 fake/local/cloud/custom provider 兜底。",
+		"summary":       "已按审核卡片、分镜计划和视频结构为每个 shot 选择素材来源；缺少 Provider 时停在素材依赖点，由用户外部生成后回填。",
 	}
 	content := fmt.Sprintf("# Reference Asset Plan\n\n%s\n\n共 %d 个 shot。", plan["summary"], len(decisions))
 	return tool.SuccessResult(map[string]interface{}{
@@ -1210,7 +1289,7 @@ func decideAssetSourceForShot(visual string) (source, capability, reason string)
 	case containsAny(normalized, "上传", "upload", "用户素材", "本地素材", "manual"):
 		return "manual_upload", "", "需要用户本地素材或人工确认授权来源。"
 	case containsAny(normalized, "人物", "character", "场景", "scene", "电影", "cinematic", "镜头", "camera", "动作", "motion"):
-		return "aigc_image_video_api", string(modelgateway.CapTextToImage), "需要生成视觉主体或动态镜头，由 Model Gateway 路由 AIGC 能力。"
+		return "aigc_image_video_api", string(modelgateway.CapTextToImage), "需要生成视觉主体或动态镜头，由用户配置的 OpenAI-compatible Provider 或外部网站生成后回填。"
 	default:
 		return "placeholder_fallback", "", "信息不足，先用占位素材保证链路可跑通。"
 	}
@@ -1329,7 +1408,7 @@ func loadRequestedPipeline(params map[string]interface{}) *videopipeline.Manifes
 }
 
 func capabilitySnapshot(params map[string]interface{}) videopipeline.CapabilitySnapshot {
-	cfg := GetVideoCreationOpenAIConfig()
+	cfg := effectiveVideoCreationOpenAIConfig(params)
 	return videopipeline.CapabilitySnapshot{
 		TextModelAvailable:   boolParam(params, "textModelAvailable", cfg.APIKey != ""),
 		HyperFramesAvailable: boolParam(params, "hyperframesAvailable", hyperFramesServiceAvailable()),
@@ -1518,7 +1597,7 @@ func promptStringParam(params map[string]interface{}, key string, fallback strin
 // executeSkillStageAgent is the LLM-backed implementation of skill_stage_agent.
 // It reads the stage instruction markdown, combines it with the user's brief and
 // upstream outputs, builds a prompt, and calls the LLM API to generate content.
-func executeSkillStageAgent(stage, skillName, brief, instructionRef string, toolCtx tool.ToolContext) tool.ToolResult {
+func executeSkillStageAgent(stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	// Read instruction file content
 	instructionContent := ""
 	if instructionRef != "" {
@@ -1560,14 +1639,12 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 
 	userPrompt := fmt.Sprintf("请严格围绕以下主题进行创作，不要偏离：\n\n%s", brief)
 
-	// Use cloud runtime model-provider config if available, otherwise fall back
-	// to env config. Local desktop config is opt-in for one-box development only.
-	effectiveCfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+	effectiveCfg := effectiveVideoCreationOpenAIConfig(params)
 
 	// Call LLM via the configured OpenAI endpoint
 	if effectiveCfg.APIKey == "" {
 		// No API key configured — return a structured placeholder
-		content := fmt.Sprintf("# %s\n\n用户需求：%s\n\n阶段说明：\n%s\n\n> ⚠️ LLM API Key 未配置。请设置 OPENAI_API_KEY 环境变量以启用 AI 内容生成。",
+		content := fmt.Sprintf("# %s\n\n用户需求：%s\n\n阶段说明：\n%s\n\n> ⚠️ LLM API Key 未配置。请在桌面端「设置 → 基础模型 API」配置文生文 Provider 后重试。",
 			stage, brief, instructionContent)
 		return tool.SuccessResult(map[string]interface{}{
 			"content":   content,
@@ -2691,11 +2768,15 @@ func executeImageAssetGenerator(stage, skillName, brief, instructionRef string, 
 		}
 	} else {
 		// Elaborate each prompt with the default template using LLM if available.
-		cfg := GetVideoCreationOpenAIConfig()
-		if cfg.APIKey != "" {
+		cfg, hasTextProvider := clientModelProviderFromParamsForCapability(params, "text_to_text")
+		if hasTextProvider {
 			for i, req := range imageRequests {
 				if prompt, ok := req["prompt"].(string); ok && !strings.Contains(prompt, "Use case:") {
-					elaborated := elaborateImagePrompt(cfg, prompt, toolCtx)
+					elaborated := elaborateImagePrompt(config.OpenAIConfig{
+						BaseURL: cfg.BaseURL,
+						APIKey:  cfg.APIKey,
+						Model:   cfg.Model,
+					}, prompt, toolCtx)
 					if elaborated != "" {
 						imageRequests[i]["prompt"] = elaborated
 					}
@@ -2704,25 +2785,19 @@ func executeImageAssetGenerator(stage, skillName, brief, instructionRef string, 
 		}
 	}
 
-	// Generate images via the model gateway (supports OpenAI DALL-E, Stability AI, etc.)
+	// Generate images via the user's OpenAI-compatible image provider first.
 	generatedCount := 0
-	if modelGateway != nil {
+	clientProvider, hasClientProvider := clientGenerationProviderFromParams(params, "text_to_image")
+	if hasClientProvider {
 		for i, req := range imageRequests {
 			if prompt, ok := req["prompt"].(string); ok && prompt != "" {
-				result, err := modelGateway.Execute(context.Background(), &modelgateway.ModelRequest{
-					Capability: modelgateway.CapTextToImage,
-					Parameters: map[string]interface{}{
-						"prompt":       prompt,
-						"size":         "1792x1024",
-						"aspect_ratio": "16:9",
-					},
-				})
-				if err == nil && len(result.Images) > 0 {
+				imageURL, err := callOpenAICompatibleImageGeneration(context.Background(), clientProvider, prompt)
+				if err == nil && imageURL != "" {
 					imageRequests[i]["status"] = "generated"
-					imageRequests[i]["storageRef"] = result.Images[0].URL
+					imageRequests[i]["storageRef"] = imageURL
 					generatedCount++
 				} else if err != nil {
-					zap.L().Warn("Image generation via gateway failed, keeping as prompt-only",
+					zap.L().Warn("Image generation via client provider failed, keeping as prompt-only",
 						zap.String("id", stringParam(req, "id", "unknown")),
 						zap.Error(err))
 				}
@@ -2731,8 +2806,8 @@ func executeImageAssetGenerator(stage, skillName, brief, instructionRef string, 
 	}
 
 	providerNote := "图片生成服务未配置，已输出完整提示词"
-	if modelGateway != nil {
-		providerNote = "已通过模型网关生成图片"
+	if hasClientProvider {
+		providerNote = "已通过用户客户端图片 API 生成图片"
 	}
 
 	summary := map[string]interface{}{
@@ -2784,7 +2859,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	styleCSS := hyperFramesDefaultStyleCSS()
 
 	// Use LLM to generate the index.html.
-	indexHTML := generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style, toolCtx)
+	indexHTML := generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style, params, toolCtx)
 
 	// Write files to disk.
 	files := []string{}
@@ -3029,8 +3104,8 @@ html, body {
 
 // generateHyperFramesIndexHTML uses the LLM to generate a complete HyperFrames HTML
 // video page from the topic, script, shot list, and style parameters.
-func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style string, toolCtx tool.ToolContext) string {
-	effectiveCfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style string, params map[string]interface{}, toolCtx tool.ToolContext) string {
+	effectiveCfg := effectiveVideoCreationOpenAIConfig(params)
 
 	// If no LLM is configured, generate a minimal static HTML from the data.
 	if effectiveCfg.APIKey == "" {
@@ -3296,43 +3371,44 @@ func executeHyperframesProjectBuilder(stage, skillName, brief, instructionRef st
 }
 
 func executeModelGatewayVideoGenerator(stage, skillName, brief string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
-	if modelGateway == nil {
-		return tool.FailureResult("Model Gateway 未配置，无法执行 text/image to video 生成")
-	}
 	prompt := firstNonEmptyString(params, "prompt", "videoPrompt", "description")
 	if prompt == "" {
 		prompt = brief
 	}
 	imageURL := firstNonEmptyString(params, "imageUrl", "imageURL", "firstFrame", "referenceImage")
-	capability := modelgateway.CapTextToVideo
-	request := &modelgateway.ModelRequest{
-		Capability: capability,
-		Messages:   []modelgateway.Message{{Role: "user", Content: prompt}},
-		Parameters: map[string]interface{}{
-			"prompt": prompt,
-			"stage":  stage,
-		},
-		ProjectID: toolCtx.TaskID,
-	}
-	if imageURL != "" {
-		capability = modelgateway.CapImageToVideo
-		request.Capability = capability
-		request.Images = []modelgateway.ImageInput{{URL: imageURL}}
+
+	if clientProvider, ok := clientGenerationProviderFromParams(params, "text_to_video"); ok {
+		videoURL, err := callOpenAICompatibleVideoGeneration(context.Background(), clientProvider, prompt, imageURL)
+		if err != nil {
+			return tool.FailureResult(fmt.Sprintf("客户端视频 API 生成失败: %v", err))
+		}
+		return videoGenerationSuccessResult(stage, skillName, toolCtx.TaskID, string(capabilityForVideoInput(imageURL)), "client-openai-compatible-video-generator", "client_openai_compatible", videoURL, map[string]interface{}{
+			"url": videoURL,
+		})
 	}
 
-	result, err := modelGateway.Execute(context.Background(), request)
-	if err != nil {
-		return tool.FailureResult(fmt.Sprintf("Model Gateway 视频生成失败: %v", err))
+	return tool.FailureResult("视频 API 未配置，请在客户端设置 OpenAI-compatible 文生视频 Provider 后重试")
+}
+
+func capabilityForVideoInput(imageURL string) modelgateway.Capability {
+	if strings.TrimSpace(imageURL) != "" {
+		return modelgateway.CapImageToVideo
 	}
-	videoURL := extractGeneratedVideoURL(result.Content)
-	if videoURL == "" {
-		videoURL = fmt.Sprintf("local://projects/%s/renders/fake-provider-final.mp4", toolCtx.TaskID)
-	}
+	return modelgateway.CapTextToVideo
+}
+
+func videoGenerationSuccessResult(stage, skillName, taskID, capability, source, providerInterface, videoURL string, modelResponse interface{}) tool.ToolResult {
 	storageRef := videoURL
 	if strings.HasPrefix(videoURL, "http://") || strings.HasPrefix(videoURL, "https://") {
-		storageRef = fmt.Sprintf("local://projects/%s/renders/model-gateway-final.mp4", toolCtx.TaskID)
+		storageRef = fmt.Sprintf("local://projects/%s/renders/model-gateway-final.mp4", taskID)
 	}
-	contentHash := localContentHash(result.Content + storageRef)
+	responseText := ensureStringValue(modelResponse)
+	if responseText == "" {
+		if data, err := json.Marshal(modelResponse); err == nil {
+			responseText = string(data)
+		}
+	}
+	contentHash := localContentHash(responseText + storageRef)
 	artifactManifest := map[string]interface{}{
 		"unitId":      "final-video",
 		"kind":        "VIDEO",
@@ -3344,20 +3420,116 @@ func executeModelGatewayVideoGenerator(stage, skillName, brief string, params ma
 		"metadata": map[string]interface{}{
 			"stage":             stage,
 			"skillName":         skillName,
-			"source":            "model-gateway-video-generator",
-			"modelCapability":   string(capability),
-			"providerInterface": "model_gateway",
+			"source":            source,
+			"modelCapability":   capability,
+			"providerInterface": providerInterface,
 			"status":            "valid",
 			"humanApproved":     false,
 			"originUrl":         videoURL,
 		},
 	}
 	return tool.SuccessResult(map[string]interface{}{
-		"content":       "# Model Gateway Video\n\n已通过 Model Gateway 生成或占位最终视频。",
+		"content":       "# Video Generation\n\n已通过用户配置的视频 API 生成或登记最终视频。",
 		"video":         storageRef,
-		"modelResponse": result.Content,
+		"modelResponse": modelResponse,
 		"artifacts":     []map[string]interface{}{artifactManifest},
 	})
+}
+
+func callOpenAICompatibleImageGeneration(ctx context.Context, provider RuntimeModelProviderConfig, prompt string) (string, error) {
+	body := map[string]interface{}{
+		"model":           provider.Model,
+		"prompt":          prompt,
+		"size":            "1792x1024",
+		"response_format": "url",
+	}
+	return postOpenAICompatibleGeneration(ctx, provider, "images/generations", body)
+}
+
+func callOpenAICompatibleVideoGeneration(ctx context.Context, provider RuntimeModelProviderConfig, prompt, imageURL string) (string, error) {
+	body := map[string]interface{}{
+		"model":  provider.Model,
+		"prompt": prompt,
+	}
+	if strings.TrimSpace(imageURL) != "" {
+		body["image_url"] = imageURL
+	}
+	return postOpenAICompatibleGeneration(ctx, provider, "videos/generations", body)
+}
+
+func postOpenAICompatibleGeneration(ctx context.Context, provider RuntimeModelProviderConfig, path string, payload map[string]interface{}) (string, error) {
+	if strings.TrimSpace(provider.BaseURL) == "" {
+		return "", fmt.Errorf("baseUrl is required")
+	}
+	if strings.TrimSpace(provider.APIKey) == "" {
+		return "", fmt.Errorf("apiKey is required")
+	}
+	if strings.TrimSpace(provider.Model) == "" {
+		return "", fmt.Errorf("model is required")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAICompatibleEndpoint(provider.BaseURL, path), bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request provider: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("provider returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+	var parsed interface{}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+	if generatedURL := firstGeneratedMediaURL(parsed); generatedURL != "" {
+		return generatedURL, nil
+	}
+	return "", fmt.Errorf("response did not include generated media URL")
+}
+
+func openAICompatibleEndpoint(baseURL, path string) string {
+	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
+}
+
+func firstGeneratedMediaURL(value interface{}) string {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for _, key := range []string{"url", "videoUrl", "video_url", "outputUrl", "output_url", "storageRef", "b64_json"} {
+			if text := strings.TrimSpace(ensureStringValue(typed[key])); text != "" {
+				return text
+			}
+		}
+		for _, key := range []string{"data", "output", "result", "video", "image"} {
+			if text := firstGeneratedMediaURL(typed[key]); text != "" {
+				return text
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if text := firstGeneratedMediaURL(item); text != "" {
+				return text
+			}
+		}
+	case []map[string]interface{}:
+		for _, item := range typed {
+			if text := firstGeneratedMediaURL(item); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func extractGeneratedVideoURL(content string) string {
@@ -3722,13 +3894,13 @@ func searchSerper(ctx context.Context, client *http.Client, endpoint, apiKey, qu
 // buildSearchQuery uses a fast LLM call to extract concise English search
 // keywords from a verbose Chinese user message. Falls back to heuristic
 // extraction if the LLM is unavailable.
-func buildSearchQuery(raw string) string {
+func buildSearchQuery(raw string, params map[string]interface{}) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
 	}
 
-	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+	cfg := effectiveVideoCreationOpenAIConfig(params)
 
 	if cfg.APIKey != "" {
 		callTool := &LlmApiTool{cfg: cfg}
@@ -4355,7 +4527,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 			rawQuery = researchQuery
 		}
 		// Strip common Chinese AI command prefixes and keep the real topic.
-		clean := buildSearchQuery(rawQuery)
+		clean := buildSearchQuery(rawQuery, params)
 		if clean != "" {
 			zap.L().Info("Performing web search for knowledge_researcher",
 				zap.String("query", clean))
@@ -4373,7 +4545,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 		}
 	}
 
-	effectiveCfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+	effectiveCfg := effectiveVideoCreationOpenAIConfig(params)
 
 	if effectiveCfg.APIKey == "" {
 		content := fmt.Sprintf("# %s\n\n主题：%s\n\n> ⚠️ LLM API Key 未配置。请设置 API Key 以启用 AI 内容生成。", toolName, topic)

@@ -10,8 +10,6 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
-	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
-	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -75,6 +73,145 @@ func TestOptionalLocalAgentModelConfigRequiresExplicitOptIn(t *testing.T) {
 	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
 	if cfg.APIKey != "local-key" || cfg.BaseURL != "https://local.example/v1" || cfg.Model != "local-model" {
 		t.Fatalf("expected opted-in local config to override env config, got %+v", cfg)
+	}
+}
+
+func TestKnowledgeResearcherUsesClientModelProviderParam(t *testing.T) {
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	ClearRuntimeModelProviderConfig()
+	t.Setenv("SEARCH_API_KEY", "")
+
+	var gotAuthorization string
+	var gotModel string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		gotAuthorization = r.Header.Get("Authorization")
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		gotModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"summary\":\"佛得角奇迹\",\"facts\":[{\"claim\":\"佛得角小组出线进入淘汰赛是历史性突破\"}],\"sources\":[]}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	result := executeLocalVideoCreationTool("knowledge_researcher", map[string]interface{}{
+		"topic": "佛得角世界杯小组赛出线进入淘汰赛",
+		"modelProvider": map[string]interface{}{
+			"baseUrl": server.URL,
+			"apiKey":  "sk-client",
+			"model":   "client-model",
+		},
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "knowledge"})
+
+	if !result.Success {
+		t.Fatalf("expected knowledge_researcher to use client provider, got %s", result.Error)
+	}
+	content, _ := result.Data["content"].(string)
+	if strings.Contains(content, "LLM API Key 未配置") {
+		t.Fatalf("should not return missing-key placeholder when client provider is present: %s", content)
+	}
+	if gotAuthorization != "Bearer sk-client" {
+		t.Fatalf("expected client API key to be used, got %q", gotAuthorization)
+	}
+	if gotModel != "client-model" {
+		t.Fatalf("expected client model, got %q", gotModel)
+	}
+}
+
+func TestImageAssetGeneratorUsesClientOpenAICompatibleImageProvider(t *testing.T) {
+	var gotAuthorization string
+	var gotPath string
+	var gotModel string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuthorization = r.Header.Get("Authorization")
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		gotModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"url":"https://cdn.example/cape-verde.png"}]}`))
+	}))
+	defer server.Close()
+
+	result := executeLocalVideoCreationTool("image_asset_generator", map[string]interface{}{
+		"brief": "佛得角地图和足球",
+		"modelProvider": map[string]interface{}{
+			"baseUrl": server.URL + "/v1",
+			"apiKey":  "sk-image",
+			"model":   "gpt-image-1",
+		},
+	}, tool.ToolContext{TaskID: "task-image", NodeID: "image_asset_generator_exec"})
+
+	if !result.Success {
+		t.Fatalf("image_asset_generator failed: %s", result.Error)
+	}
+	if gotPath != "/v1/images/generations" {
+		t.Fatalf("expected OpenAI-compatible image path, got %s", gotPath)
+	}
+	if gotAuthorization != "Bearer sk-image" {
+		t.Fatalf("expected image API key, got %q", gotAuthorization)
+	}
+	if gotModel != "gpt-image-1" {
+		t.Fatalf("expected configured image model, got %q", gotModel)
+	}
+	requests, ok := result.Data["imageRequests"].([]map[string]interface{})
+	if !ok || len(requests) == 0 || requests[0]["storageRef"] != "https://cdn.example/cape-verde.png" {
+		t.Fatalf("expected generated image storage ref, got %#v", result.Data["imageRequests"])
+	}
+}
+
+func TestTextImageToVideoGeneratorUsesClientOpenAICompatibleVideoProvider(t *testing.T) {
+	previousGateway := modelGateway
+	SetModelGateway(nil)
+	t.Cleanup(func() {
+		SetModelGateway(previousGateway)
+	})
+
+	var gotAuthorization string
+	var gotPath string
+	var gotModel string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuthorization = r.Header.Get("Authorization")
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		gotModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"url":"https://cdn.example/cape-verde.mp4"}]}`))
+	}))
+	defer server.Close()
+
+	result := executeLocalVideoCreationTool("text_image_to_video_generator", map[string]interface{}{
+		"prompt": "佛得角世界杯奇迹",
+		"modelProvider": map[string]interface{}{
+			"baseUrl": server.URL + "/v1",
+			"apiKey":  "sk-video",
+			"model":   "sora",
+		},
+	}, tool.ToolContext{TaskID: "task-video", NodeID: "text_image_to_video_generator_exec"})
+
+	if !result.Success {
+		t.Fatalf("text_image_to_video_generator failed: %s", result.Error)
+	}
+	if gotPath != "/v1/videos/generations" {
+		t.Fatalf("expected OpenAI-compatible video path, got %s", gotPath)
+	}
+	if gotAuthorization != "Bearer sk-video" {
+		t.Fatalf("expected video API key, got %q", gotAuthorization)
+	}
+	if gotModel != "sora" {
+		t.Fatalf("expected configured video model, got %q", gotModel)
+	}
+	if result.Data["video"] != "local://projects/task-video/renders/model-gateway-final.mp4" {
+		t.Fatalf("expected remote video to be converted to local storage ref, got %#v", result.Data["video"])
 	}
 }
 
@@ -542,14 +679,6 @@ func TestExecuteDynamicAgentPromptToolRetriesStructuredJSONOutput(t *testing.T) 
 	}))
 	defer server.Close()
 
-	SetVideoCreationConfig(config.OpenAIConfig{
-		APIKey:      "test-key",
-		BaseURL:     server.URL,
-		Model:       "deepseek-v4-pro",
-		MaxTokens:   512,
-		Temperature: 0.7,
-		Timeout:     5,
-	}, "")
 	previousFetcher := localAgentConfigFetcher
 	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
 		return RuntimeModelProviderConfig{}, false
@@ -562,6 +691,11 @@ func TestExecuteDynamicAgentPromptToolRetriesStructuredJSONOutput(t *testing.T) 
 	result := executeDynamicAgentPromptTool("fact_checker", "proposal", "video", "佛得角世界杯出线", "", map[string]interface{}{
 		"topic": "佛得角世界杯出线",
 		"facts": "佛得角首次晋级世界杯。",
+		"modelProvider": map[string]interface{}{
+			"baseUrl": server.URL,
+			"apiKey":  "test-key",
+			"model":   "deepseek-v4-pro",
+		},
 	}, tool.ToolContext{TaskID: "task-1", NodeID: "fact_checker_exec"})
 	if !result.Success {
 		t.Fatalf("expected retry to recover structured JSON, got %s", result.Error)
@@ -746,49 +880,22 @@ func TestExecuteAssetDecisionAgentReturnsReferenceAssetPlan(t *testing.T) {
 	}
 }
 
-func TestTextImageToVideoGeneratorUsesFakeModelGatewayForFinalVideoArtifact(t *testing.T) {
-	gw := modelgateway.NewGateway("fake")
-	fp := fake.NewProvider()
-	fp.LatencyMs = 0
-	gw.RegisterProvider(fp, modelgateway.CapTextToVideo, modelgateway.CapImageToVideo)
-	previousGateway := modelGateway
-	SetModelGateway(gw)
-	t.Cleanup(func() {
-		SetModelGateway(previousGateway)
-	})
-
+func TestTextImageToVideoGeneratorRequiresClientProvider(t *testing.T) {
 	result := executeLocalVideoCreationTool("text_image_to_video_generator", map[string]interface{}{
 		"stage":    "render",
 		"prompt":   "生成一段佛得角世界杯奇迹的动态图文视频",
 		"imageUrl": "local://projects/vp-1/keyframes/shot_001.png",
 	}, tool.ToolContext{TaskID: "task-video", NodeID: "text_image_to_video_generator_exec"})
 
-	if !result.Success {
-		t.Fatalf("text_image_to_video_generator failed: %s", result.Error)
+	if result.Success {
+		t.Fatalf("text_image_to_video_generator should stop without client provider: %#v", result.Data)
 	}
-	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
-	if !ok || len(artifacts) == 0 {
-		t.Fatalf("expected final video artifact manifest, got %#v", result.Data["artifacts"])
-	}
-	if artifacts[0]["kind"] != "VIDEO" {
-		t.Fatalf("expected VIDEO artifact, got %#v", artifacts[0])
-	}
-	if ensureStringValue(artifacts[0]["storageRef"]) == "" {
-		t.Fatalf("VIDEO artifact should include storageRef: %#v", artifacts[0])
+	if !strings.Contains(result.Error, "文生视频 Provider") {
+		t.Fatalf("expected provider configuration error, got %q", result.Error)
 	}
 }
 
-func TestOneSentenceFakeProviderChainReachesFinalVideoArtifact(t *testing.T) {
-	gw := modelgateway.NewGateway("fake")
-	fp := fake.NewProvider()
-	fp.LatencyMs = 0
-	gw.RegisterProvider(fp, modelgateway.CapTextToVideo, modelgateway.CapImageToVideo)
-	previousGateway := modelGateway
-	SetModelGateway(gw)
-	t.Cleanup(func() {
-		SetModelGateway(previousGateway)
-	})
-
+func TestOneSentenceChainStopsAtMissingVideoProvider(t *testing.T) {
 	assetResult := executeLocalVideoCreationTool("asset_decision_agent", map[string]interface{}{
 		"stage": "reference",
 		"brief": "请帮我做一个30秒视频，讲佛得角国家以及佛得角世界杯出线是一个奇迹。",
@@ -808,12 +915,11 @@ func TestOneSentenceFakeProviderChainReachesFinalVideoArtifact(t *testing.T) {
 		"stage":  "render",
 		"prompt": "根据审核后的卡片、分镜和视频结构生成最终视频占位产物",
 	}, tool.ToolContext{TaskID: "task-chain", NodeID: "text_image_to_video_generator_exec"})
-	if !videoResult.Success {
-		t.Fatalf("fake video generation failed: %s", videoResult.Error)
+	if videoResult.Success {
+		t.Fatalf("video generator should stop without client provider: %#v", videoResult.Data)
 	}
-	artifacts, ok := videoResult.Data["artifacts"].([]map[string]interface{})
-	if !ok || len(artifacts) == 0 || artifacts[0]["kind"] != "VIDEO" {
-		t.Fatalf("fake chain should reach final VIDEO artifact, got %#v", videoResult.Data["artifacts"])
+	if !strings.Contains(videoResult.Error, "文生视频 Provider") {
+		t.Fatalf("expected provider configuration error, got %q", videoResult.Error)
 	}
 }
 
