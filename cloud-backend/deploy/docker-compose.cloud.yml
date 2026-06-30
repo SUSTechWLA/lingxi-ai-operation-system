@@ -26,7 +26,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
       - POSTGRES_DB=tangying_db
-      - AUTH_TOKEN_SECRET=${AUTH_TOKEN_SECRET}
+      - AUTH_TOKEN_SECRET=${AUTH_TOKEN_SECRET:?AUTH_TOKEN_SECRET is required}
       - AUTH_ACCESS_TOKEN_TTL_SECONDS=${AUTH_ACCESS_TOKEN_TTL_SECONDS:-3600}
       - AUTH_REFRESH_TOKEN_TTL_SECONDS=${AUTH_REFRESH_TOKEN_TTL_SECONDS:-2592000}
       - REDIS_HOST=redis
@@ -35,12 +35,16 @@ services:
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-changeme}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - VIDEO_CREATION_ENABLED=true
       - LOCAL_RUNNER_ENABLED=false
       - MODEL_PROVIDER_MODE=real
       - SKILL_ROOT=/app/skills
+      - SKILL_CAPABILITY_ROOT=/app/skill-capabilities
+      - HYPERFRAMES_MODE=service
+      - HYPERFRAMES_SERVICE_URL=http://hyperframes-render-service:8787
+      - AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG=false
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,8 +54,29 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      hyperframes-render-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  hyperframes-render-service:
+    build:
+      context: ../../hyperframes-render-service
+      dockerfile: Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      - PORT=8787
+      - HYPERFRAMES_PROJECT_ROOT=/data/aios/projects
+      - HYPERFRAMES_OUTPUT_ROOT=/data/aios/projects
+    volumes:
+      - hyperframes_projects:/data/aios/projects
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -96,7 +121,7 @@ services:
       - --smp 1
       - --overprovisioned
       - --kafka-addr internal://0.0.0.0:9092
-      - --advertise-kafka-addr internal://localhost:9092
+      - --advertise-kafka-addr internal://redpanda:9092
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     healthcheck:
@@ -126,3 +151,4 @@ volumes:
   redis_data:
   redpanda_data:
   minio_data:
+  hyperframes_projects:

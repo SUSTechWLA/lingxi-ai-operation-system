@@ -16,6 +16,9 @@ func TestRunVideoBetaEvalProducesPassFailReport(t *testing.T) {
 	if report.Passed == 0 {
 		t.Fatalf("expected at least one passing eval case")
 	}
+	if report.Passed != report.Total {
+		t.Fatalf("video beta eval must pass every case before closed beta:\n%s", report.String())
+	}
 	rendered := report.String()
 	for _, metric := range []string{
 		"intent_correct",

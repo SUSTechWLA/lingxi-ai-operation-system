@@ -17,24 +17,25 @@ Version: 0.1.0
 2. [Agent Runs](#2-agent-runs)
 3. [Artifacts](#3-artifacts)
 4. [Auth](#4-auth)
-5. [Context](#5-context)
-6. [Health](#6-health)
-7. [Local Runners](#7-local-runners)
-8. [Media](#8-media)
-9. [Node](#9-node)
-10. [Orchestrator](#10-orchestrator)
-11. [Publish](#11-publish)
-12. [Skill Capabilities](#12-skill-capabilities)
-13. [Skills](#13-skills)
-14. [Stages](#14-stages)
-15. [Tools](#15-tools)
-16. [Trace](#16-trace)
-17. [Translate](#17-translate)
-18. [Video Project Assistant](#18-video-project-assistant)
-19. [Video Projects](#19-video-projects)
-20. [Video Role Agents](#20-video-role-agents)
-21. [Workflow Runs](#21-workflow-runs)
-22. [Workflows](#22-workflows)
+5. [Config](#5-config)
+6. [Context](#6-context)
+7. [Health](#7-health)
+8. [Local Runners](#8-local-runners)
+9. [Media](#9-media)
+10. [Node](#10-node)
+11. [Orchestrator](#11-orchestrator)
+12. [Publish](#12-publish)
+13. [Skill Capabilities](#13-skill-capabilities)
+14. [Skills](#14-skills)
+15. [Stages](#15-stages)
+16. [Tools](#16-tools)
+17. [Trace](#17-trace)
+18. [Translate](#18-translate)
+19. [Video Project Assistant](#19-video-project-assistant)
+20. [Video Projects](#20-video-projects)
+21. [Video Role Agents](#21-video-role-agents)
+22. [Workflow Runs](#22-workflow-runs)
+23. [Workflows](#23-workflows)
 
 ---
 
@@ -207,6 +208,34 @@ Approve a dynamic agent review gate
 
 ---
 
+### POST /api/agent/runs/:runId/reviews/:reviewId/regenerate
+
+Request regeneration for the upstream stage of a dynamic agent review gate
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+| `reviewId` | path | `string` | **Yes** | Review node identifier |
+
+**Request body:** Optional (Content-Type: `application/json`)
+
+```json
+{
+  "comment": "string",
+  "hint": "string",
+}
+```
+
+**Responses:**
+
+- **200** — Stage regeneration requested (JSON)
+- **400** — Invalid request (JSON)
+- **404** — Not found (JSON)
+
+---
+
 ### POST /api/agent/runs/:runId/reviews/:reviewId/reject
 
 Reject a dynamic agent review gate
@@ -227,6 +256,34 @@ Reject a dynamic agent review gate
 **Responses:**
 
 - **200** — Rejected (JSON)
+
+---
+
+### POST /api/agent/runs/:runId/reviews/:reviewId/submit-edited
+
+Submit edited artifact content for a dynamic agent review gate
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `runId` | path | `string` | **Yes** | Agent run identifier |
+| `reviewId` | path | `string` | **Yes** | Review node identifier |
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{
+  "comment": "string",
+  "content": {},
+}
+```
+
+**Responses:**
+
+- **200** — Edited artifact submitted (JSON)
+- **400** — Invalid request (JSON)
+- **404** — Not found (JSON)
 
 ---
 
@@ -445,7 +502,53 @@ Register a user with email and password
 
 ---
 
-## 5. Context
+## 5. Config
+
+### GET /api/config/model-provider
+
+Get effective cloud model-provider runtime configuration
+
+**Responses:**
+
+- **200** — Effective model-provider config without raw key (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+### PUT /api/config/model-provider
+
+Update cloud model-provider runtime configuration
+
+**Request body:** **Required** (Content-Type: `application/json`)
+
+```json
+{
+  "apiKey": "string",
+  "baseUrl": "string",
+  "model": "string",
+}
+```
+
+**Responses:**
+
+- **200** — Updated (JSON)
+- **400** — Invalid request (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+### DELETE /api/config/model-provider
+
+Clear cloud runtime model-provider override
+
+**Responses:**
+
+- **200** — Cleared (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
+
+## 6. Context
 
 ### GET /api/context/:taskId
 
@@ -518,7 +621,7 @@ Record a context event manually
 
 ---
 
-## 6. Health
+## 7. Health
 
 ### GET /api/health
 
@@ -541,7 +644,7 @@ Readiness check with dependencies
 
 ---
 
-## 7. Local Runners
+## 8. Local Runners
 
 ### POST /api/local-jobs/:jobId/complete
 
@@ -674,7 +777,7 @@ Register a local execution runner and create a runner session
 
 ---
 
-## 8. Media
+## 9. Media
 
 ### GET /api/media/:id
 
@@ -755,7 +858,7 @@ Upload media files
 
 ---
 
-## 9. Node
+## 10. Node
 
 ### POST /api/node
 
@@ -868,7 +971,7 @@ Report node execution success
 
 ---
 
-## 10. Orchestrator
+## 11. Orchestrator
 
 ### GET /api/task/:taskId
 
@@ -1028,7 +1131,7 @@ Create a new empty task
 
 ---
 
-## 11. Publish
+## 12. Publish
 
 ### POST /api/publish
 
@@ -1053,7 +1156,7 @@ Submit content for multi-platform publishing
 
 ---
 
-## 12. Skill Capabilities
+## 13. Skill Capabilities
 
 ### GET /api/skill-capabilities
 
@@ -1082,7 +1185,7 @@ Get capability package detail
 
 ---
 
-## 13. Skills
+## 14. Skills
 
 ### GET /api/skills
 
@@ -1163,7 +1266,7 @@ Route a brief to a skill
 
 ---
 
-## 14. Stages
+## 15. Stages
 
 ### POST /api/video-projects/:id/stages/:stage/approve
 
@@ -1193,7 +1296,7 @@ Approve a stage
 
 ---
 
-## 15. Tools
+## 16. Tools
 
 ### GET /api/tools
 
@@ -1255,7 +1358,7 @@ Register an external tool
 
 ---
 
-## 16. Trace
+## 17. Trace
 
 ### GET /api/trace/:taskId
 
@@ -1285,7 +1388,7 @@ Get most recent task trace
 
 ---
 
-## 17. Translate
+## 18. Translate
 
 ### GET /api/task/:taskId/status
 
@@ -1339,7 +1442,7 @@ Translate NL prompt and submit DAG
 
 ---
 
-## 18. Video Project Assistant
+## 19. Video Project Assistant
 
 ### POST /api/video-projects/:id/assistant/explain-stage
 
@@ -1413,7 +1516,7 @@ Convert assistant feedback into an Artifact revision action
 
 ---
 
-## 19. Video Projects
+## 20. Video Projects
 
 ### GET /api/video-projects
 
@@ -1888,7 +1991,24 @@ Reject video creation spec
 
 ---
 
-## 20. Video Role Agents
+## 21. Video Role Agents
+
+### GET /api/video/preflight
+
+Check runtime readiness before starting a video pipeline
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `pipeline` | query | `string` | No | Pipeline identifier to check |
+
+**Responses:**
+
+- **200** — Capability preflight result (JSON)
+- **401** — Missing or invalid access token (JSON)
+
+---
 
 ### GET /api/video/role-agents
 
@@ -1917,7 +2037,7 @@ Get Guided Video Studio role agent detail
 
 ---
 
-## 21. Workflow Runs
+## 22. Workflow Runs
 
 ### POST /api/video-projects/:id/workflow-runs
 
@@ -1980,6 +2100,24 @@ Cancel a run
 
 ---
 
+### GET /api/video-projects/:id/workflow-runs/:rid/checkpoints
+
+List recovery checkpoints for a workflow run
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `rid` | path | `string` | **Yes** | Run identifier |
+
+**Responses:**
+
+- **200** — Workflow run checkpoints (JSON)
+- **404** — Not found (JSON)
+
+---
+
 ### POST /api/video-projects/:id/workflow-runs/:rid/pause
 
 Pause a run
@@ -1997,7 +2135,25 @@ Pause a run
 
 ---
 
-## 22. Workflows
+### POST /api/video-projects/:id/workflow-runs/:rid/recover
+
+Recover a workflow run from the latest awaiting checkpoint
+
+**Parameters:**
+
+| Name | In | Type | Required | Description |
+|------|----|------|----------|-------------|
+| `id` | path | `string` | **Yes** | Project identifier |
+| `rid` | path | `string` | **Yes** | Run identifier |
+
+**Responses:**
+
+- **200** — Recovered workflow run checkpoint (JSON)
+- **404** — No awaiting checkpoint found (JSON)
+
+---
+
+## 23. Workflows
 
 ### GET /api/workflows
 

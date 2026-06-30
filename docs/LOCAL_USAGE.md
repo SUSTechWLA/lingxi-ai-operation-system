@@ -1,6 +1,6 @@
 # 本地使用说明
 
-> **版本：v3.2** — 桌面端可通过 Dynamic Agent API 直接从自然语言生成视频创作包。
+> **版本：v4.0 closed beta** — 本地端服务 Director Studio、素材依赖点回填、本地文件/日志/诊断和本机模型 Provider 配置。
 
 本文面向桌面端用户和交付同学。新的本地形态是：
 
@@ -8,7 +8,7 @@
 frontend/Electron UI
   -> local-backend local-agent, 127.0.0.1:18080
   -> cloud-backend API, configured by VITE_CLOUD_API_BASE or TANGYING_CLOUD_API_BASE
-     🆕 Dynamic Agent: POST /api/agent/runs（自然语言 → 自动规划 → 执行）
+     -> Dynamic Agent: POST /api/agent/runs（自然语言 → 自动规划 → 执行）
 ```
 
 本地端不启动 PostgreSQL、Redis、Kafka、MinIO，也不要求 Docker。它只负责和用户电脑强相关的事情。
@@ -20,8 +20,11 @@ frontend/Electron UI
 - 管理本地缓存、项目文件、产物文件。
 - 写本地执行日志。
 - 生成诊断包，由用户授权后上传云端分析。
+- 接收“素材依赖点”回填文件，计算 hash/size/mime type，并返回本机 `storageRef`。
 
 本地端不内置平台 LLM API Key，不维护云端业务数据。用户可以在「系统 → 基础模型 API」里为文生文、文生图片、文生视频分别配置 OpenAI-compatible Provider；这些 token 只保存在用户本机，不上传云端。
+
+桌面端渲染进程不暴露任意命令执行 IPC，也不提供自动发布入口。需要本地执行的媒体任务由 local agent / Local Runner 的受控协议承接。
 
 ## 本地数据目录
 
@@ -151,6 +154,33 @@ curl -X POST http://127.0.0.1:18080/api/local/artifacts \
 ```
 
 文本类产物使用 `content`；图片、音频、视频等二进制产物使用 `contentBase64`，读取时也会以 `contentBase64` 返回。
+
+保存素材依赖点回填文件：
+
+```bash
+curl -X POST http://127.0.0.1:18080/api/local/artifacts \
+  -F 'id=extgen-shot-01-result' \
+  -F 'projectId=vp-1' \
+  -F 'mimeType=video/mp4' \
+  -F 'metadata={
+    "artifactType":"external_manual_generation_result",
+    "externalGenerationRequestId":"extgen-shot-01",
+    "generationKind":"video",
+    "relatedShotId":"shot-01",
+    "source":"external_manual_upload",
+    "cloudPayloadStored":false,
+    "localOnly":true
+  }' \
+  -F 'file=@shot-01.mp4'
+```
+
+本地 agent 返回 `storageRef`、`contentHash`、`sizeBytes` 后，前端再调用云端：
+
+```text
+POST /api/video-projects/:id/external-generation-results
+```
+
+云端只登记本地引用和依赖关系，不接收用户生成的视频正文。
 
 读取本地产物：
 

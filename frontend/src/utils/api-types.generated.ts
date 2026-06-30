@@ -325,6 +325,14 @@ export interface MediaListResponse {
 }
 
 /**  */
+// ModelProviderConfigResponse
+export interface ModelProviderConfigResponse {
+  code?: number;
+  data?: { baseUrl?: string; endpoint?: string; fromEnv?: boolean; fromUser?: boolean; hasKey?: boolean; model?: string };
+  message?: string;
+}
+
+/**  */
 // NodeRetryResponse
 export interface NodeRetryResponse {
   code?: number;
@@ -760,6 +768,16 @@ export interface VideoCreationSpecResponse {
 }
 
 /**  */
+// VideoPreflightResponse
+export interface VideoPreflightResponse {
+  blockers?: { code: string; message: string }[];
+  canStart: boolean;
+  capabilityMenu: { compositionRuntime: { hyperframes: { available: boolean; reason?: string } }; localRunner: { available: boolean; reason?: string; runnerId?: string }; localTools: { available: boolean; command: string }[]; warnings: string[] };
+  pipeline: string;
+  status: string;
+}
+
+/**  */
 // VideoProject
 export interface VideoProject {
   aspectRatio?: string;
@@ -847,6 +865,22 @@ export interface VisualPlan {
 export interface VisualPlanResponse {
   code?: number;
   data?: { visualPlan?: { background?: { description?: string; requiresAigc?: boolean }; cameraPlan?: { description?: string; movement?: string; requiresAigc?: boolean }; canvas: { aspectRatio: string; durationSec: number; fps: number; height: number; width: number }; characters?: { description?: string; emotion?: string; id: string; motion?: string; requiresAigc?: boolean }[]; constraints?: { mustAvoid?: string[]; mustInclude?: string[] }; dataVisuals?: { description?: string; id: string; type?: string }[]; motionPlan?: { description?: string; requiresAigc?: boolean }; props?: { description?: string; id: string }[]; style?: { description?: string; tags?: string[] }; textLayers?: { animation?: string; background?: string; color?: string; endSec: number; fontSize?: number; fontWeight?: string; id: string; language?: string; mustBeExact: boolean; position?: string; role: string; startSec: number; text: string }[]; transitionIn?: string; transitionOut?: string; uiLayers?: { description?: string; id: string }[] } };
+  message?: string;
+}
+
+/**  */
+// WorkflowCheckpointListResponse
+export interface WorkflowCheckpointListResponse {
+  code?: number;
+  data?: { checkpoints?: { createdAt: string; id: string; nodeId: string; recoveredAt?: string | null; snapshot?: string; stageIndex: number; stageName: string; state: string; taskId: string; workflowRunId: string }[] };
+  message?: string;
+}
+
+/**  */
+// WorkflowCheckpointRecoverResponse
+export interface WorkflowCheckpointRecoverResponse {
+  code?: number;
+  data?: { checkpoint?: { createdAt: string; id: string; nodeId: string; recoveredAt?: string | null; snapshot?: string; stageIndex: number; stageName: string; state: string; taskId: string; workflowRunId: string }; message?: string };
   message?: string;
 }
 

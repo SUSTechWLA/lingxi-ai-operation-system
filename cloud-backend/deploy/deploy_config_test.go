@@ -35,6 +35,30 @@ func TestBackendComposeUsesReadinessHealthcheck(t *testing.T) {
 	}
 }
 
+func TestBackendImageIncludesSkillCapabilities(t *testing.T) {
+	dockerfile := readFile(t, filepath.Join("..", "Dockerfile"))
+	if !strings.Contains(dockerfile, "COPY skill-capabilities ./skill-capabilities") {
+		t.Fatalf("backend image must copy skill-capabilities for dynamic agent tool registration")
+	}
+}
+
+func TestBackendComposeConfiguresSkillCapabilityRoot(t *testing.T) {
+	compose := readFile(t, "docker-compose.cloud.yml")
+	if !strings.Contains(compose, "SKILL_CAPABILITY_ROOT=/app/skill-capabilities") {
+		t.Fatalf("backend compose must set SKILL_CAPABILITY_ROOT=/app/skill-capabilities")
+	}
+}
+
+func TestRedpandaAdvertisesDockerServiceAddress(t *testing.T) {
+	compose := readFile(t, "docker-compose.cloud.yml")
+	if strings.Contains(compose, "--advertise-kafka-addr internal://localhost:9092") {
+		t.Fatalf("redpanda must not advertise localhost to backend containers")
+	}
+	if !strings.Contains(compose, "--advertise-kafka-addr internal://redpanda:9092") {
+		t.Fatalf("redpanda must advertise internal://redpanda:9092")
+	}
+}
+
 func readModuleGoVersion(t *testing.T, path string) string {
 	t.Helper()
 	content := readFile(t, path)

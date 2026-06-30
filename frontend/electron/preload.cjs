@@ -7,9 +7,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cloudApiBase: process.env.TANGYING_CLOUD_API_BASE || process.env.VITE_CLOUD_API_BASE || 'http://localhost:8080/api',
   },
 
-  executeCommand: (command, args, workDir) =>
-    ipcRenderer.invoke('execute-command', command, args, workDir),
-
   openFileDialog: (options) =>
     ipcRenderer.invoke('open-file-dialog', options),
 
@@ -27,9 +24,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getRuntimeConfig: () =>
     ipcRenderer.invoke('get-runtime-config'),
-
-  publishToPlatforms: (payload) =>
-    ipcRenderer.invoke('publish-to-platforms', payload),
 
   openExternal: (url) =>
     ipcRenderer.invoke('open-external', url),

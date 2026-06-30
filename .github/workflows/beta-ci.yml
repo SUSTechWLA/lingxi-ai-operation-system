@@ -21,6 +21,10 @@ jobs:
           go-version: '1.25'
       - name: Test cloud backend
         run: go test ./...
+      - name: Run video beta eval
+        run: go run ./evals/video_beta
+      - name: Check generated API docs
+        run: make api-docs-check
 
   local-backend:
     runs-on: ubuntu-latest
@@ -45,7 +49,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Install dependencies
+        run: |
+          npm ci
+      - name: Lint frontend
+        run: npm run lint
+      - name: Check director logic
+        run: npm run test:director
+      - name: Check Electron security boundary
+        run: npm run test:security
       - name: Build frontend
+        run: |
+          npm run build
+
+  hyperframes-render-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hyperframes-render-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build render service
         run: |
           npm ci
           npm run build

@@ -23,6 +23,7 @@ func BuildCloudSpec() *Spec {
 		Tag("Tools", "Tool registry management").
 		Tag("Skills", "AI skill catalog and routing").
 		Tag("Skill Capabilities", "Agent capability package catalog").
+		Tag("Config", "Operator-scoped runtime configuration for cloud-side model providers").
 		Tag("Video Role Agents", "Guided Video Studio role-agent catalog and stage constraints").
 		Tag("Agent Runs", "Dynamic agent runtime runs and review gates").
 		Tag("Local Runners", "Cloud control-plane protocol for local execution runners").
@@ -411,6 +412,35 @@ func BuildCloudSpec() *Spec {
 		PathParam("roleId", "Role agent identifier", StringSchema()).
 		ResponseJSON("200", "Role agent", "VideoRoleAgentDetailResponse").
 		ResponseJSON("404", "Not found", "ErrorResponse")
+	b.Route("GET", "/api/video/preflight", "Check runtime readiness before starting a video pipeline").
+		Tags("Video Role Agents").
+		QueryParam("pipeline", "Pipeline identifier to check", StringSchema(), false).
+		ResponseJSON("200", "Capability preflight result", "VideoPreflightResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+
+	// ── Runtime Config ──
+	b.Route("GET", "/api/config/model-provider", "Get effective cloud model-provider runtime configuration").
+		Tags("Config").
+		ResponseJSON("200", "Effective model-provider config without raw key", "ModelProviderConfigResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("PUT", "/api/config/model-provider", "Update cloud model-provider runtime configuration").
+		Tags("Config").
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"baseUrl": {Schema: StringSchema()},
+				"apiKey":  {Schema: StringSchema()},
+				"model":   {Schema: StringSchema()},
+			},
+			Required: []string{"baseUrl", "model"},
+		}, "Operator-provided runtime model config", true).
+		ResponseJSON("200", "Updated", "GenericOKResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("DELETE", "/api/config/model-provider", "Clear cloud runtime model-provider override").
+		Tags("Config").
+		ResponseJSON("200", "Cleared", "GenericOKResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
 
 	// ── Dynamic Agent Runs ──
 	b.Route("POST", "/api/agent/runs", "Start a dynamic agent run from natural language").
@@ -445,6 +475,35 @@ func BuildCloudSpec() *Spec {
 		PathParam("reviewId", "Review node identifier", StringSchema()).
 		BodyInlineJSON(ObjectSchema(), "Optional rejection comment", false).
 		ResponseJSON("200", "Rejected", "AgentReviewDecisionResponse")
+	b.Route("POST", "/api/agent/runs/:runId/reviews/:reviewId/submit-edited", "Submit edited artifact content for a dynamic agent review gate").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		PathParam("reviewId", "Review node identifier", StringSchema()).
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"content": {Schema: ObjectSchema()},
+				"comment": {Schema: StringSchema()},
+			},
+			Required: []string{"content"},
+		}, "Edited artifact content and optional comment", true).
+		ResponseJSON("200", "Edited artifact submitted", "AgentReviewDecisionResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
+	b.Route("POST", "/api/agent/runs/:runId/reviews/:reviewId/regenerate", "Request regeneration for the upstream stage of a dynamic agent review gate").
+		Tags("Agent Runs").
+		PathParam("runId", "Agent run identifier", StringSchema()).
+		PathParam("reviewId", "Review node identifier", StringSchema()).
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"hint":    {Schema: StringSchema()},
+				"comment": {Schema: StringSchema()},
+			},
+		}, "Optional regeneration hint", false).
+		ResponseJSON("200", "Stage regeneration requested", "AgentReviewDecisionResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
 
 	// ── Workflows ──
 	b.Route("GET", "/api/workflows", "List workflow templates").
@@ -665,6 +724,18 @@ func BuildCloudSpec() *Spec {
 		PathParam("id", "Project identifier", StringSchema()).
 		PathParam("rid", "Run identifier", StringSchema()).
 		ResponseJSON("200", "Cancelled", "GenericOKResponse")
+	b.Route("GET", "/api/video-projects/:id/workflow-runs/:rid/checkpoints", "List recovery checkpoints for a workflow run").
+		Tags("Workflow Runs").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("rid", "Run identifier", StringSchema()).
+		ResponseJSON("200", "Workflow run checkpoints", "WorkflowCheckpointListResponse").
+		ResponseJSON("404", "Not found", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/workflow-runs/:rid/recover", "Recover a workflow run from the latest awaiting checkpoint").
+		Tags("Workflow Runs").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("rid", "Run identifier", StringSchema()).
+		ResponseJSON("200", "Recovered workflow run checkpoint", "WorkflowCheckpointRecoverResponse").
+		ResponseJSON("404", "No awaiting checkpoint found", "ErrorResponse")
 
 	// ── Stages ──
 	b.Route("POST", "/api/video-projects/:id/stages/:stage/approve", "Approve a stage").

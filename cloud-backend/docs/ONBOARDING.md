@@ -1,909 +1,466 @@
-# AIOS - 新开发者上手指南
+# Tangying AIOS 新开发者上手指南
 
-> 本文档面向**新加入的开发者**，帮助你从零理解项目并快速上手开发。
+> 当前代码基线：v4.0 closed beta，最后更新 2026-06-30。
+> 本文面向刚加入项目的开发者，按当前仓库代码介绍项目定位、运行边界、关键目录、主流程和验证方式。
 
----
+## 1. 项目是什么
 
-## 目录
+Tangying AIOS 是面向个人创作者的视频创作 Agent 系统。当前封闭内测版本的目标不是“自动发布平台”，而是稳定跑通：
 
-1. [Go 语言速成](#1-go-语言速成)
-2. [React 前端速成](#2-react-前端速成)
-3. [项目总览](#3-项目总览)
-4. [项目结构详解](#4-项目结构详解)
-5. [核心概念](#5-核心概念)
-6. [从零启动项目](#6-从零启动项目)
-7. [代码阅读路线](#7-代码阅读路线)
-8. [如何开发新功能](#8-如何开发新功能)
-9. [前端开发指南](#9-前端开发指南)
-10. [完整 API 测试](#10-完整-api-测试)
-11. [常见问题](#11-常见问题)
-
----
-
-## 1. Go 语言速成
-
-### 1.1 安装 Go
-
-```bash
-# macOS
-brew install go
-
-# 验证安装
-go version
-# 应输出: go version go1.23.x darwin/arm64
+```text
+视频想法
+→ Dynamic Agent Runtime 自动规划
+→ 脚本 / 分镜 / Shot List / Prompt
+→ 素材依赖点
+→ 用户外部生成素材并回填
+→ Artifact Review 审核与返工
+→ Local Runner / HyperFrames 渲染或校验
+→ 小红书 / Bilibili 发布包导出
 ```
 
-### 1.2 Go vs Java 关键对照
+系统不会要求用户在项目开始前批量上传素材。当某个 shot 需要参考图、关键帧或 AIGC 视频片段时，Director Studio 会停在“素材依赖点”，把 Prompt、Negative Prompt、参考图、目标规格和上传入口展示给用户。用户可以使用任意外部网站生成素材，然后上传回这个依赖点。
 
-| 概念 | Java | Go |
-|------|------|-----|
-| 包管理 | Maven (pom.xml) | Go Modules (go.mod) |
-| 入口函数 | `public static void main(String[] args)` | `func main()` |
-| 类 | `class Foo { ... }` | `type Foo struct { ... }` |
-| 方法 | `class Foo { void bar() {} }` | `func (f *Foo) bar() {}` |
-| 接口 | `interface IFoo { void bar(); }` | `type IFoo interface { bar() }` (隐式实现) |
-| 异常 | `try/catch/finally` | `func foo() (result, error)` 返回 error |
-| 空值 | `null` | `nil` |
-| 继承 | `class Child extends Parent` | 组合嵌入 `type Child struct { Parent }` |
-| 并发 | `Thread`, `ExecutorService` | `goroutine`: `go func(){}()` |
-| 集合 | `List<T>`, `Map<K,V>` | 切片 `[]T`, 映射 `map[K]V` |
-| 字符串 | `String` (引用类型) | `string` (值类型, UTF-8) |
-| 访问控制 | `public`, `private`, `protected` | 首字母大写 = 公开, 小写 = 私有 |
-| 初始化 | 构造函数 | 工厂函数 `func NewFoo() *Foo` |
-| JSON | Jackson `@JsonProperty` | struct tag `` `json:"name"` `` |
-| HTTP | Spring `@RestController` + `@RequestMapping` | Gin `r.GET("/path", handler)` |
+桌面端不提供任意命令执行入口，也不触发自动发布。桌面用户配置的模型 API Key 只保存在本机 local agent。
 
-### 1.3 Go 代码示例
+## 2. 运行边界
 
-```go
-package main
+仓库按运行边界拆分：
 
-import "fmt"
-
-// 定义结构体（类似 Java 的 class）
-type User struct {
-    Name string  // 大写开头 = 公开（public）
-    Age  int
-}
-
-// 方法（类似 Java 的实例方法）
-func (u *User) Greet() string {
-    return fmt.Sprintf("Hello, I'm %s, age %d", u.Name, u.Age)
-}
-
-// 工厂函数
-func NewUser(name string, age int) *User {
-    return &User{Name: name, Age: age}
-}
-
-func main() {
-    user := NewUser("Alice", 30)
-    fmt.Println(user.Greet())
-}
+```text
+frontend/                    # React + Electron UI
+local-backend/               # 本地轻量 agent，无 DB/Docker/Redis/Kafka/MinIO
+cloud-backend/               # Go AIOS Core 云端 backend
+hyperframes-render-service/  # HyperFrames HTTP 渲染服务
+docs/                        # 顶层架构、部署、内测和本地使用文档
+scripts/                     # 开发启动、构建、文档生成辅助脚本
 ```
 
-### 1.4 Go 习惯用法
+职责表：
 
-```go
-// 错误处理
-result, err := someFunc()
-if err != nil {
-    return fmt.Errorf("wrapped: %w", err)
-}
+| 边界 | 负责 | 不负责 |
+|------|------|--------|
+| `frontend/` | 登录、Director Studio、Artifact 审核、Trace、素材依赖点回填、本地设置 | 任意 shell、自动发布 |
+| `local-backend/` | 本地文件、产物、缓存、日志、诊断、本机模型 Provider token | 云端编排、数据库、对象存储 |
+| `cloud-backend/` | 账号、Agent Runtime、DAG 编排、Artifact/Review、视频项目 API、模型网关、云端日志 | 保存桌面用户大文件、保存桌面用户 token |
+| `hyperframes-render-service/` | HyperFrames lint、snapshot、render | 业务编排、账号、资产索引 |
 
-// goroutine 并发
-go func() {
-    doSomething()
-}()
+## 3. 当前产品入口
 
-// context 取消
-ctx, cancel := context.WithCancel(context.Background())
-defer cancel()
+当前默认入口是 Director Studio：
 
-// defer 延迟执行（类似 Java finally）
-file, _ := os.Open("file.txt")
-defer file.Close()
+```text
+frontend/src/pages/DirectorStudioPage.tsx
+frontend/src/pages/directorStudioLogic.ts
 ```
 
----
+它覆盖：
 
-## 2. React 前端速成
+- 创建或启动视频创作流程。
+- 查看阶段树、运行状态、Trace。
+- 查看、审核、编辑、返工 Artifact。
+- 查看素材依赖点，复制 Prompt 和参考信息。
+- 上传用户在外部网站生成的图片/视频结果。
+- 导出手动发布材料。
 
-### 2.1 前置知识
+旧式单页发布表单和 publish 兼容接口保留是为了封闭内测不中断，不是新功能的首选入口。
 
-如果你熟悉以下概念，前端部分就容易上手：
-- **JavaScript/TypeScript**：和 Java 类似，但更灵活
-- **组件**：类似 HTML 标签，但可以包含逻辑和样式
-- **Props**：组件的输入参数（类似 Java 的方法参数）
-- **State**：组件的内部状态（类似 Java 的类字段）
-- **Hooks**：在函数组件中使用状态和其他 React 特性的函数
+## 4. Cloud Backend 代码地图
 
-### 2.2 基本概念
+云端启动入口：
 
-```tsx
-// 组件 = 函数 + 返回值（JSX 语法，类似 HTML）
-interface Props {
-  name: string        // 组件的输入参数
-}
+```text
+cloud-backend/cmd/tangying-ai-os/main.go
+```
 
-// 函数组件
-const Greeting: React.FC<Props> = ({ name }) => {
-  const [count, setCount] = useState(0)  // State Hook
+启动时会组装：
 
-  return (
-    <div>
-      <h1>Hello, {name}!</h1>
-      <p>Count: {count}</p>
-      <button onClick={() => setCount(c => c + 1)}>+1</button>
-    </div>
-  )
+- Auth：注册、登录、当前用户。
+- Health：`/api/health`、`/api/health/ready`。
+- Orchestrator / Worker / Outbox / Eventbus：DAG 执行、状态机、异步事件。
+- Dynamic Agent Runtime：`LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`，API 为 `/api/agent/runs`。
+- Workflow / SkillRuntime / Skill Capabilities：视频能力包、workflow run、checkpoint/recover。
+- Video Project：项目 CRUD、session 聚合、阶段审批。
+- Artifact：版本化索引、内容读取、历史、返工、Review、stale tracking。
+- Video Assets：外部生成素材结果登记。
+- Local Runner：runner 注册、心跳、领取任务、进度和完成回传。
+- Model Gateway：模型能力路由、服务端 Provider 配置、fake provider 测试。
+- Publish Compatibility：封闭内测发布包/文案准备兼容层。
+- OpenAPI：`/docs`、`/openapi.json`。
+
+重要目录：
+
+```text
+cloud-backend/internal/core/
+├── agentruntime/       # Dynamic Agent Runtime
+├── orchestrator/       # DAG 任务与节点状态机
+├── worker/             # 节点执行器与工具注册
+├── workflow/           # workflow template / run / checkpoint
+├── skillruntime/       # skill catalog / route / compile
+├── modelgateway/       # 模型调用统一出口
+├── artifact/           # Artifact、Review、stale tracking
+├── localrunner/        # 云端到本地执行器协议
+├── eventbus/           # Kafka/Redpanda 事件总线
+└── outbox/             # 可靠事件投递
+
+cloud-backend/internal/agents/video/
+├── handler/            # video projects、workflow runs、stage approve
+├── assistant/          # 项目级 assistant
+├── assets/             # 素材依赖点和外部生成结果 manifest
+├── service/            # 视频创作服务、渲染策略、验证
+├── planjudge/          # 封闭内测计划质量与禁用能力拦截
+├── inputresolver/      # 输入解析
+└── knowledgepolicy/    # 知识策略
+```
+
+## 5. Dynamic Agent Runtime
+
+动态 Agent 入口：
+
+```text
+POST /api/agent/runs
+```
+
+请求示例：
+
+```json
+{
+  "message": "请帮我根据端午节的来历创作一个口播知识分享视频"
 }
 ```
 
-### 2.3 项目中使用的核心技术
+执行链路：
 
-| 技术 | 用途 | 类似 Java 中的 |
-|------|------|---------------|
-| React 函数组件 | UI 构建 | JSP/Thymeleaf 模板 |
-| TypeScript | 类型安全 | 编译期类型检查 |
-| Zustand | 全局状态管理 | Spring Singleton Bean |
-| Axios | HTTP 请求 | RestTemplate / WebClient |
-| TailwindCSS | 样式 | CSS（无需额外框架） |
-| Vite | 构建 + 开发服务器 | Maven + Tomcat |
-
-### 2.4 TypeScript 速览
-
-```typescript
-// 类型定义（类似 Java 的类）
-interface User {
-  id: string
-  name: string
-  age?: number        // ? 表示可选
-}
-
-// 联合类型
-type Status = 'success' | 'error' | 'loading'
-
-// 泛型
-interface ApiResponse<T> {
-  code: number
-  data: T
-}
+```text
+LLMPlanner 生成 AgentPlan JSON
+→ PlanGuard 校验工具、参数、引用、风险
+→ PlanCompiler 插入质量门禁和人工审核 CONTROL 节点
+→ Transient DAG 提交 Orchestrator
+→ Worker 执行节点
+→ Artifact Review 暂停等待人工审核
+→ 审核通过后继续，下游失败或返工时记录 trace/stale
 ```
 
----
+常用 API：
 
-## 3. 项目总览
-
-### 3.1 AIOS AI OS 是什么
-
-AIOS 是一个**视频创作智能体编排平台**：
-
-```
-用户使用场景：
-1. 用户上传图片/视频素材
-2. 输入创作想法或使用 AI 生成内容
-3. AI 润色标题和简介
-4. 选择发布平台
-5. 一键提交发布任务
+```text
+POST /api/agent/runs
+GET  /api/agent/runs/:runId
+GET  /api/agent/runs/:runId/trace
+GET  /api/agent/runs/:runId/reviews
+POST /api/agent/runs/:runId/reviews/:reviewId/approve
+POST /api/agent/runs/:runId/reviews/:reviewId/reject
+POST /api/agent/runs/:runId/reviews/:reviewId/submit-edited
+POST /api/agent/runs/:runId/reviews/:reviewId/regenerate
 ```
 
-### 3.2 系统架构
+## 6. 素材依赖点
 
-```
-用户浏览器 (React SPA)
-         │
-    Vite Proxy (/api/* → localhost:8080)
-         │
-    ┌────▼────────────────────────────┐
-    │        Go 后端 (端口 8080)        │
-    │                                  │
-    │  ┌──────────┐                    │
-    │  │ Publish   │ ← 你主要开发的模块   │
-    │  │ 发布服务   │                    │
-    │  ├──────────┤                    │
-    │  │ Orchestr │ ← 任务调度引擎       │
-    │  │ 调度服务   │                    │
-    │  ├──────────┤                    │
-    │  │ Worker    │ ← 工具执行引擎      │
-    │  │ 执行服务   │                    │
-    │  ├──────────┤                    │
-    │  │ Translator│ ← 自然语言翻译      │
-    │  │ 翻译服务   │                    │
-    │  └──────────┘                    │
-    └──────────────────────────────────┘
+这是当前内测最重要的产品边界之一：不要让系统绝对依赖图片/视频生成 API，也不要要求用户在开始项目前主动上传所有素材。
+
+数据流：
+
+```text
+cloud-backend 生成 external_generation_request Artifact
+→ frontend 展示素材依赖点
+→ 用户复制 Prompt / 参考信息到外部网站生成素材
+→ frontend 调用 local-backend POST /api/local/artifacts 上传文件
+→ local-backend 返回 storageRef / contentHash / sizeBytes / mimeType
+→ frontend 调用 cloud-backend POST /api/video-projects/:id/external-generation-results
+→ cloud-backend 登记 external_generation_result Artifact
 ```
 
-### 3.3 技术栈
+相关代码：
 
-| 组件 | 技术 | 说明 |
-|------|------|------|
-| Web 框架 | [Gin](https://gin-gonic.com/) | Go 最流行的 HTTP 框架 |
-| 数据库 | [pgx](https://github.com/jackc/pgx) | 原生 PostgreSQL 驱动 |
-| 缓存 | [go-redis](https://github.com/redis/go-redis) | Redis 官方 Go 客户端 |
-| 消息队列 | [IBM/sarama](https://github.com/IBM/sarama) | Kafka 兼容客户端 |
-| 前端 | React 18 + TypeScript + Vite | 用户界面 |
-| 样式 | TailwindCSS 3 | 无需写 CSS |
-| 状态管理 | Zustand | 轻量级状态管理 |
-| HTTP 客户端 | Axios | 前端 HTTP 请求 |
-| 配置 | Viper | .env 文件管理 |
-| 日志 | Zap | 高性能结构化日志 |
-
----
-
-## 4. 项目结构详解
-
-```
-aios-core/
-│
-├── cmd/tangying-ai-os/
-│   └── main.go                    # ★ 启动入口，所有组件在此组装
-│
-├── internal/                      # 后端代码
-│   ├── config/config.go           # 配置加载（从 .env 读取）
-│   ├── logger/logger.go           # 日志初始化
-│   ├── database/database.go       # 数据库连接 + 迁移
-│   ├── redis/redis.go             # Redis 连接
-│   ├── eventbus/eventbus.go       # Kafka 生产者/消费者
-│   ├── outbox/relay.go            # Outbox 发件箱模式
-│   ├── model/
-│   │   ├── model.go               # Task, Node 等数据模型
-│   │   └── repository/            # 数据库 CRUD 操作
-│   │
-│   ├── publish/                   # ★ 用户发布模块（主要开发模块）
-│   │   ├── handler/
-│   │   │   ├── handler.go         #   发布/AI生成/AI润色接口
-│   │   │   └── trace_handler.go   #   任务追踪查询接口
-│   │   ├── service/
-│   │   │   └── service.go         #   发布/AI生成/AI润色业务逻辑
-│   │   └── handler_test.go        #   单元测试
-│   │
-│   ├── orchestrator/              # 任务调度引擎
-│   │   ├── service/
-│   │   │   ├── orchestrator.go    #   任务创建、DAG 提交
-│   │   │   ├── state.go           #   状态转换服务
-│   │   │   ├── statemachine.go    #   节点状态机
-│   │   │   ├── dependency_checker.go  # 依赖检查 + 条件分支
-│   │   │   ├── scheduler.go       #   兜底恢复调度
-│   │   │   ├── dag_validator.go   #   DAG 验证
-│   │   │   └── retry_policy.go    #   重试策略
-│   │   └── handler/handler.go     #   HTTP 接口
-│   │
-│   ├── worker/                    # 工具执行引擎
-│   │   ├── service/executor.go    #   节点执行器
-│   │   └── tool/
-│   │       ├── tool.go            #   Tool 接口 + 注册表
-│   │       └── builtin/
-│   │           ├── bash_tool.go   #   Bash 沙箱工具
-│   │           ├── polisher_tool.go #   文本润色工具
-│   │           ├── builtin.go      #   LLM API 工具 (LlmApiTool)
-│   │           ├── python_tool.go #   Python 执行工具
-│   │           ├── media_analyzer.go # 素材分析工具
-│   │           ├── content_generator.go # 内容生成工具
-│   │           ├── content_checker.go #  合规检查工具
-│   │           ├── platform_adapter.go # 平台适配工具
-│   │           ├── chat_generate_tool.go # 对话式内容生成工具
-│   │           ├── chat_revise_tool.go # 对话式内容修改工具
-│   │           ├── external_tool.go  #   外部工具代理
-│   │           ├── video_metadata.go #  视频元数据提取工具
-│   │           ├── video_analyzer.go #  视频关键帧+音频分析工具
-│   │           └── video_copy_generator.go # 短视频文案生成工具
-│   │
-│   ├── skill/                      # AI 对话助手（会话管理+DAG规划）
-│   │   ├── handler/
-│   │   │   └── session_handler.go #   会话 CRUD + 对话接口
-│   │   ├── service/
-│   │   │   ├── session_manager.go #   Redis 会话状态管理
-│   │   │   ├── plan_service.go    #   LLM DAG 规划
-│   │   │   ├── result_assembler.go #   任务提交 + 结果轮询
-│   │   │   ├── llm_client.go      #   OpenAI 客户端封装
-│   │   │   └── tool_manifest_service.go # 工具知识库管理
-│   │   └── prompts/
-│   │       └── prompts.go         #   System prompt 模板
-│   │
-│   ├── translator/                # 自然语言翻译
-│   └── context/                   # 上下文审计
-│
-├── frontend/                      # ★ 前端代码
-│   ├── src/
-│   │   ├── App.tsx                #   主入口
-│   │   ├── components/            #   UI 组件
-│   │   │   ├── UploadCard.tsx     #     上传素材（拖拽/点击）
-│   │   │   ├── TitleInput.tsx     #     标题输入 + AI 润色
-│   │   │   ├── DescriptionInput.tsx #   简介输入 + AI 润色
-│   │   │   ├── KeywordInput.tsx   #     关键词标签输入
-│   │   │   ├── AIHelperPanel.tsx  #     AI 助手面板
-│   │   │   ├── BlockingOverlay.tsx #     AI 操作全屏遮罩（含取消按钮）
-│   │   │   ├── AIAssistantTab.tsx  #     AI 对话式创作面板
-│   │   │   ├── ContentTypeSelector.tsx # 内容类型选择
-│   │   │   ├── MediaLibraryPanel.tsx # 素材库浏览面板
-│   │   │   ├── PlatformSelector.tsx #  平台选择（10个平台）
-│   │   │   ├── PublishButton.tsx  #     发布按钮
-│   │   │   ├── Sidebar.tsx        #     侧边导航
-│   │   │   ├── DesktopToolbar.tsx #     Electron 桌面工具栏
-│   │   │   ├── CommandPanel.tsx   #     命令面板
-│   │   │   # （PublishPage.tsx 内嵌）
-│   │   │   # - AI 加载遮罩（BlockingOverlay）：全屏进度条+spinner+取消按钮
-│   │   │   # - 调试追踪按钮：右下角浮动，点击查询最近任务链路
-│   │   ├── pages/
-│   │   │   └── PublishPage.tsx    #   创作发布主页面
-│   │   ├── services/api.ts        #   Axios API 调用封装
-│   │   ├── stores/appStore.ts     #   Zustand 状态管理
-│   │   └── utils/
-│   │       ├── types.ts           #   类型定义
-│   │       └── electron.ts        #   Electron 工具函数
-│   └── vite.config.ts             #   Vite 配置（代理等）
-│
-├── docs/                          # 文档
-├── scripts/
-│   ├── startup.sh                 # 一键启动脚本
-│   ├── test-apis.sh               # API 测试脚本
-│   └── install_tangying_env.sh      # 环境安装脚本
-├── docker-compose.yml             # 基础设施容器
-├── Makefile                       # 常用命令
-├── go.mod / go.sum                # Go 依赖
-├── .env.example                   # 环境变量模板
-└── CLAUDE.md                      # Claude Code 项目指引
+```text
+frontend/src/pages/DirectorStudioPage.tsx
+frontend/src/pages/directorStudioLogic.ts
+frontend/src/services/localAgent.ts
+cloud-backend/internal/agents/video/assets/handler.go
+cloud-backend/internal/agents/video/assets/manifest.go
+local-backend/internal/localagent/server.go
 ```
 
-### 后端文件命名规则
+云端登记 payload 关注字段：
 
-- `model.go` - 数据结构定义
-- `repository.go` - 数据库操作
-- `service.go` / 功能名如 `state.go` - 业务逻辑
-- `handler.go` - HTTP 接口处理
-- `*_test.go` - 测试文件
-
----
-
-## 5. 核心概念
-
-### 5.1 用户操作流程
-
-用户在前端的使用流程如下：
-
-```
-1. 上传素材 ──→ 图片/视频拖拽到上传区域
-      │
-2. 生成内容 ──→ 点击"AI 生成标题和简介"
-      │         ├── 有素材 → 调用 /api/ai/generate-from-media
-      │         └── 无素材 → 调用 /api/ai/generate
-      │
-3. 润色内容 ──→ 点击标题或简介旁的"AI润色"按钮
-      │         调用 /api/ai/polish
-      │
-4. 素材库 ────→ 点击素材区"素材库"按钮，浏览已上传素材
-      │
-5. 内容工作台 ──→ 在右侧工作台选择平台和风格，AI智能生成
-      │
-6. 选平台 ────→ 勾选要发布的平台
-      │
-7. 发布 ──────→ 点击"一键发布"
-                 调用 /api/publish
-                 后端创建 DAG 任务并执行
-```
-
-### 5.2 DAG 任务图
-
-DAG（有向无环图）是本系统的核心抽象：
-
-```
-  [节点A: 写文章] ──→ [节点B: 总结] ──→ [节点C: 发布]
-```
-
-- **节点 (Node)**：一个执行单元
-- **边 (Edge)**：依赖关系，`from → to` 表示 to 依赖 from
-- **条件 (Condition)**：如 `"nodeA.status == success"`，不满足则 SKIPPED
-
-### 5.3 前端的组件状态管理
-
-使用 Zustand 管理全局状态：
-
-```typescript
-// Zustand Store ≈ 全局的 Java Service 类
-const store = useAppStore()
-store.title          // 读取标题
-store.setTitle(x)    // 更新标题
-store.images         // 读取已上传的图片
-store.addImages(f)   // 添加图片
-```
-
-### 5.4 前端 API 调用
-
-通过 Axios 封装的 API 函数调用后端：
-
-```typescript
-// api.ts 中的函数
-const result = await aiGenerateContent("周末去哪儿玩")
-// → POST /api/ai/generate { prompt: "周末去哪儿玩" }
-// → 返回 { title: "...", description: "..." }
-```
-
----
-
-## 6. 从零启动项目
-
-### 6.1 前置条件
-
-| 工具 | 最低版本 | 安装 |
-|------|---------|------|
-| Go | 1.23+ | `brew install go` |
-| Node.js | 18+ | `brew install node` |
-| Docker | 20+ | `brew install --cask docker` |
-
-### 6.2 一键启动
-
-```bash
-# 克隆项目
-git clone <repo-url>
-cd aios-core
-
-# 配置 API Key（必须）
-cp .env.example .env
-# 编辑 .env，设置 OPENAI_API_KEY
-
-# 一键启动
-bash ./scripts/startup.sh
-```
-
-### 6.3 分步启动
-
-```bash
-# 终端 1：启动基础设施
-docker compose up -d
-
-# 终端 2：构建并运行后端
-make run
-
-# 终端 3：启动前端
-cd frontend && npm install && npm run dev
-```
-
-### 6.4 环境变量说明
-
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `OPENAI_API_KEY` | **是** | LLM API 密钥 |
-| `OPENAI_BASE_URL` | 否 | LLM API 地址 |
-| `OPENAI_MODEL` | 否 | 使用的模型（默认 doubao） |
-| `SERVER_PORT` | 否 | 后端端口（默认 8080） |
-| `POSTGRES_PASSWORD` | 否 | 数据库密码 |
-| `MINIO_ENDPOINT` | 否 | MinIO 对象存储地址（默认 localhost:9000） |
-| `MINIO_ACCESS_KEY` | 否 | MinIO 访问密钥 |
-| `MINIO_SECRET_KEY` | 否 | MinIO 密钥 |
-
----
-
-## 7. 代码阅读路线
-
-### 后端阅读顺序
-
-```
-第 1 站：Publish 模块（最常用）
-  internal/publish/handler/handler.go
-  internal/publish/service/service.go
-  → 理解 AI 生成、润色、发布的业务流程
-
-第 2 站：程序入口
-  cmd/tangying-ai-os/main.go
-  → 看清所有组件如何组装
-
-第 3 站：数据模型
-  internal/model/model.go
-  → Task, Node 等核心数据结构
-
-第 4 站：Orchestrator 调度引擎
-  internal/orchestrator/service/orchestrator.go
-  internal/orchestrator/service/state.go
-  internal/orchestrator/service/statemachine.go
-
-第 5 站：Worker 工具执行
-  internal/worker/tool/tool.go
-  internal/worker/tool/builtin/polisher_tool.go
-
-第 6 站：Skill 对话助手
-  internal/skill/handler/session_handler.go
-  internal/skill/service/plan_service.go
-  internal/skill/service/session_manager.go
-
-第 7 站：HTTP 路由注册
-  cmd/tangying-ai-os/main.go
-```
-
-### 前端阅读顺序
-
-```
-第 1 站：主页面
-  frontend/src/pages/PublishPage.tsx
-  → 理解页面布局和组件组合
-
-第 2 站：API 层
-  frontend/src/services/api.ts
-  → 所有后端 API 调用
-
-第 3 站：状态管理
-  frontend/src/stores/appStore.ts
-  → 全局状态
-
-第 4 站：各个组件
-  frontend/src/components/
-  → 逐个查看组件实现
-```
-
----
-
-## 8. 如何开发新功能
-
-### 8.1 添加新的后端 API
-
-**示例**：在 publish 模块下添加一个内容分类接口。
-
-**第 1 步**：在 service 中添加方法
-
-```go
-// internal/publish/service/service.go
-func (s *PublishService) CategorizeContent(ctx context.Context, content string) (string, error) {
-    systemPrompt := "你是一个内容分类专家。请将以下内容分类为：科技、美食、旅行、娱乐、教育。只返回分类名称。"
-    return s.callOpenAI(ctx, systemPrompt, content)
+```json
+{
+  "kind": "video",
+  "storageType": "local",
+  "storageRef": "local://projects/vp-1/artifacts/...",
+  "mimeType": "video/mp4",
+  "sizeBytes": 123456,
+  "contentHash": "sha256...",
+  "relatedShotId": "shot-01",
+  "generationRequestId": "extgen-shot-01",
+  "source": "external_manual_upload",
+  "tags": ["external_manual_upload", "material_dependency_result"]
 }
 ```
 
-**第 2 步**：在 handler 中添加路由
+云端不默认接收图片/视频正文，只保存本地引用、hash、大小、依赖关系和 trace。
 
-```go
-// internal/publish/handler/handler.go
-func (h *PublishHandler) CategorizeContent(c *gin.Context) {
-    var req struct {
-        Content string `json:"content" binding:"required"`
-    }
-    if err := c.ShouldBindJSON(&req); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
-        return
-    }
-    category, err := h.publishService.CategorizeContent(c.Request.Context(), req.Content)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
-        return
-    }
-    c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{"category": category}})
-}
-```
+## 7. Frontend 代码地图
 
-**第 3 步**：注册路由
+技术栈：React 18、TypeScript、Vite、Electron 33、TailwindCSS。
 
-```go
-func (h *PublishHandler) RegisterRoutes(r *gin.Engine) {
-    api := r.Group("/api")
-    {
-        api.POST("/publish", h.PublishContent)
-        api.POST("/ai/categorize", h.CategorizeContent)  // ← 新增
-        // ...
-    }
-}
-```
+当前关键文件：
 
-### 8.2 添加新的内置工具
-
-**示例**：添加一个 HTTP 请求工具（参考 `bash_tool.go` 作为最简模板）。
-
-```go
-// internal/worker/tool/builtin/http_tool.go
-package builtin
-
-import (
-    "context"
-    "github.com/tangying-ai/aios-core/internal/worker/tool"
-)
-
-type HttpTool struct{}
-
-func NewHttpTool() *HttpTool { return &HttpTool{} }
-
-func (t *HttpTool) Name() string             { return "http" }
-func (t *HttpTool) Description() string       { return "Send HTTP GET requests" }
-func (t *HttpTool) Type() tool.ToolType       { return tool.ToolTypeCustom }
-func (t *HttpTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
-    url, _ := params["url"].(string)
-    if url == "" {
-        return tool.FailureResult("url is required")
-    }
-    // ... 执行 HTTP 请求 ...
-    return tool.SuccessResult(map[string]interface{}{
-        "statusCode": 200,
-        "body":       "response body",
-    })
-}
-func (t *HttpTool) ValidateParameters(params map[string]interface{}) bool {
-    _, ok := params["url"].(string)
-    return ok
-}
-```
-
-然后在 `cmd/tangying-ai-os/main.go` 注册：
-
-```go
-toolRegistry.Register(builtin.NewHttpTool())  // ← 新增
-```
-
-### 8.3 添加新的前端组件
-
-参考已有的 `AIHelperPanel.tsx` 模式。详见下面的第 9 节。
-
-### 8.4 运行测试
-
-```bash
-# 全部测试
-go test ./... -v
-
-# 指定包测试
-go test ./internal/publish/... -v
-
-# 覆盖率
-go test ./... -cover
-```
-
-### 8.5 开发常用命令
-
-```bash
-go fmt ./...     # 格式化代码
-go vet ./...     # 代码检查
-go mod tidy      # 整理依赖
-make build       # 构建
-make run         # 构建并运行
-make test        # 运行测试
-```
-
----
-
-## 9. 前端开发指南
-
-### 9.1 前端目录结构
-
-```
+```text
 frontend/src/
-├── App.tsx                  # 主入口：布局 + 服务状态检查
-├── main.tsx                 # React 挂载点
-├── index.css                # 全局样式 + TailwindCSS 导入
-│
-├── components/              # UI 组件
-│   ├── Sidebar.tsx          #   侧边导航
-│   ├── UploadCard.tsx       #   文件上传（拖拽/点击）
-│   ├── TitleInput.tsx       #   标题输入框
-│   ├── DescriptionInput.tsx #   简介文本域
-│   ├── KeywordInput.tsx     #   关键词标签输入
-│   ├── AIHelperPanel.tsx    #   AI 助手面板
-│   ├── PlatformSelector.tsx #   平台选择器
-│   ├── PublishButton.tsx    #   发布按钮
-│   ├── DesktopToolbar.tsx   #   桌面工具栏
-│   ├── CommandPanel.tsx     #   命令面板
-│   └── index.ts             #   统一导出
-│
-├── pages/
-│   └── PublishPage.tsx      # 创作发布页面
-│
-├── services/
-│   └── api.ts               # Axios API 封装
-│
-├── stores/
-│   └── appStore.ts          # Zustand 状态管理
-│
-└── utils/
-    ├── types.ts             # TypeScript 类型定义
-    └── electron.ts          # Electron 检测和 API
+├── App.tsx                         # App 入口和登录态
+├── components/AuthScreen.tsx       # 登录 / 注册
+├── pages/DirectorStudioPage.tsx    # 当前主工作台
+├── pages/directorStudioLogic.ts    # 阶段、Artifact、Trace 映射
+├── pages/DesktopPage.tsx           # local agent 和本机 Provider 设置
+├── services/api.ts                 # cloud API client
+├── services/auth.ts                # auth API client
+├── services/localAgent.ts          # local agent API client
+├── utils/api-types.generated.ts    # 生成类型，不手写
+└── utils/electron.ts               # Electron 环境能力封装
 ```
 
-### 9.2 添加新前端组件的步骤
-
-**第 1 步**：在 `frontend/src/components/` 创建组件文件
-
-```tsx
-// frontend/src/components/CategorySelector.tsx
-import React, { useState } from 'react'
-
-interface CategorySelectorProps {
-  onSelect: (category: string) => void
-}
-
-const categories = ['科技', '美食', '旅行', '娱乐', '教育']
-
-const CategorySelector: React.FC<CategorySelectorProps> = ({ onSelect }) => {
-  const [selected, setSelected] = useState('')
-
-  return (
-    <div className="p-4 border rounded-xl">
-      <h3 className="text-sm font-medium text-gray-700 mb-3">内容分类</h3>
-      <div className="flex flex-wrap gap-2">
-        {categories.map(cat => (
-          <button
-            key={cat}
-            onClick={() => { setSelected(cat); onSelect(cat) }}
-            className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              selected === cat
-                ? 'bg-primary text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {cat}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-export default CategorySelector
-```
-
-**第 2 步**：在需要的页面中引入
-
-```tsx
-// PublishPage.tsx
-import CategorySelector from '../components/CategorySelector'
-
-// 在 JSX 中使用
-<CategorySelector onSelect={(cat) => console.log(cat)} />
-```
-
-### 9.3 前端状态管理
-
-使用 Zustand 管理全局状态：
-
-```typescript
-// 读取状态
-const title = useAppStore((state) => state.title)
-const images = useAppStore((state) => state.images)
-
-// 更新状态
-const setTitle = useAppStore((state) => state.setTitle)
-setTitle('新的标题')
-
-// 如果需要添加新的全局状态：
-// 在 appStore.ts 的 AppState 接口中添加字段
-// 在 create 调用中添加对应的值和 setter
-```
-
-### 9.4 前端调用 API
-
-在 `api.ts` 中添加新函数，然后在组件中调用：
-
-```typescript
-// services/api.ts
-export const categorizeContent = async (content: string): Promise<string> => {
-  const response = await api.post<ApiResponse<{ category: string }>>('/ai/categorize', { content })
-  return response.data.data.category
-}
-
-// 在组件中使用
-const handleCategorize = async () => {
-  const category = await categorizeContent("一些内容")
-  showNotification(`分类结果: ${category}`)
-}
-```
-
-### 9.5 样式说明
-
-项目使用 TailwindCSS，无需写自定义 CSS：
-
-```tsx
-// TailwindCSS 类名说明
-<div className="
-  p-4          // padding: 16px
-  bg-white     // 背景白色
-  rounded-xl   // 圆角
-  shadow-lg    // 大阴影
-  border       // 边框
-  border-gray-100 // 边框颜色
-  hover:bg-gray-50 // 鼠标悬停效果
-">
-```
-
-主题颜色在 `tailwind.config.js` 中定义：
-
-```javascript
-colors: {
-  primary: {
-    DEFAULT: '#7C5CFF',  // 主色（紫色）
-    light: '#9B82FF',
-    dark: '#6645E0',
-  },
-}
-```
-
----
-
-## 10. 完整 API 测试
-
-### 10.1 基本测试
+常用命令：
 
 ```bash
-# 健康检查
-curl http://localhost:8080/api/health
-
-# AI 生成内容
-curl -X POST http://localhost:8080/api/ai/generate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"周末去哪儿玩"}'
-
-# AI 润色
-curl -X POST http://localhost:8080/api/ai/polish \
-  -H "Content-Type: application/json" \
-  -d '{"text":"今天是个好日子","type":"description"}'
-
-# 从媒体文件生成
-curl -X POST http://localhost:8080/api/ai/generate-from-media \
-  -F "prompt=风景" \
-  -F "images=@photo.jpg"
-
-# 发布内容
-curl -X POST http://localhost:8080/api/publish \
-  -F "title=测试发布" \
-  -F "description=测试内容" \
-  -F "keywords=测试" \
-  -F 'platforms=["douyin"]'
+cd frontend
+npm install
+npm run dev
+npm run lint
+npm run test:director
+npm run test:security
+npm run build
 ```
 
-### 10.2 DAG 任务创建和提交流程
+Electron 开发：
 
 ```bash
-# 1. 创建任务
-TASK_ID=$(curl -s -X POST http://localhost:8080/api/task/create \
-  -H "Content-Type: application/json" \
-  -d '{"userId":"test"}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('taskId',''))")
-
-# 2. 提交 DAG
-curl -X POST "http://localhost:8080/api/task/${TASK_ID}/dag" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nodes": [
-      {"id": "n1", "type": "TOOL", "name": "bash", "input": {"command": "echo 'Hello'"}},
-      {"id": "n2", "type": "LLM", "name": "summary", "input": {"prompt": "根据执行结果生成总结"}}
-    ],
-    "edges": [
-      {"from": "n1", "to": "n2"}
-    ]
-  }'
-
-# 3. 查看任务状态
-curl "http://localhost:8080/api/task/${TASK_ID}"
+cd frontend
+npm run electron:dev
 ```
 
-### 10.3 API 测试脚本
+## 8. Local Backend 代码地图
 
-项目提供一键测试脚本：
+本地 agent 入口：
+
+```text
+local-backend/cmd/tangying-local-agent/main.go
+local-backend/internal/localagent/server.go
+```
+
+本地 API：
+
+```text
+GET    /api/local/health
+GET    /api/local/paths
+GET    /api/local/model-providers
+PUT    /api/local/model-providers
+POST   /api/local/artifacts
+GET    /api/local/artifacts/:id?projectId=<projectId>
+DELETE /api/local/artifacts/:id?projectId=<projectId>
+DELETE /api/local/projects/:id
+POST   /api/local/logs
+POST   /api/local/diagnostics
+GET    /api/local/openapi.json
+GET    /api/local/docs
+```
+
+本地数据目录：
+
+```text
+macOS:   ~/Library/Application Support/TangyingAIOS/
+Windows: %APPDATA%/TangyingAIOS/
+Linux:   ~/.tangying-aios/
+```
+
+本地端不能新增 PostgreSQL、Redis、Kafka、MinIO、Docker 或云端 API Key 依赖。涉及用户文件的功能优先通过 local agent 受控接口实现。
+
+## 9. HyperFrames Render Service
+
+目录：
+
+```text
+hyperframes-render-service/
+```
+
+它是 Node.js/TypeScript HTTP 服务，供 Go backend 或本地执行链路调用，不依赖 shell 调 `npx hyperframes`。
+
+API：
+
+```text
+GET  /health
+POST /lint
+POST /snapshot
+POST /render
+POST /render/stream
+GET  /jobs
+GET  /jobs/:jobId
+```
+
+常用命令：
 
 ```bash
-bash ./scripts/test-apis.sh
+cd hyperframes-render-service
+npm install
+npm run build
+npm run dev
 ```
 
----
+## 10. API 文档规则
 
-## 11. 常见问题
+API 文档从代码规范生成，不手写生成物。
 
-### Q: Go 编译报错
+Cloud:
+
+```text
+source: cloud-backend/internal/core/apispec/cloud_spec.go
+docs:   cloud-backend/docs/API_REFERENCE.md
+types:  frontend/src/utils/api-types.generated.ts
+ui:     http://localhost:8080/docs
+json:   http://localhost:8080/openapi.json
+```
+
+Local:
+
+```text
+source: local-backend/internal/localagent/openapi.go
+docs:   local-backend/docs/API_REFERENCE.md
+ui:     http://localhost:18080/api/local/docs
+json:   http://localhost:18080/api/local/openapi.json
+```
+
+变更 API 时：
+
 ```bash
-go mod tidy   # 重新整理依赖
+cd cloud-backend
+make gen-docs
+make api-docs-check
+
+cd ../local-backend
+go run ./cmd/gen-local-apidocs
 ```
 
-### Q: 数据库连接失败
+不要手改带有 `DO NOT EDIT` banner 的生成文件。
+
+## 11. 启动开发环境
+
+本地桌面开发：
+
 ```bash
-docker compose up -d           # 启动 PostgreSQL
-docker ps                      # 检查容器状态
+bash scripts/start-local-backend.sh
+bash scripts/start-frontend.sh
 ```
 
-### Q: 前端页面打不开
+云端开发：
+
 ```bash
-cd frontend && npm install && npm run dev  # 启动前端
+bash scripts/start-cloud-backend.sh
 ```
 
-### Q: AI 功能不工作
-检查 `.env` 中的 `OPENAI_API_KEY` 是否配置正确。
+手动启动云端：
 
-### Q: 如何添加 API 测试
-编辑 `scripts/test-apis.sh`，使用 `test_api` 函数添加新测试。
+```bash
+cd cloud-backend
+cp .env.example .env
+# 填 OPENAI_API_KEY / AUTH_TOKEN_SECRET
+docker compose up -d
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
+./build/tangying-ai-os
+```
 
-### Q: 如何调试前端
-在 Chrome 中按 F12 打开开发者工具 → Console 查看日志 → Network 查看 API 请求。
+Cloud Compose 部署：
 
----
+```bash
+cd cloud-backend/deploy
+cp .env.cloud.example .env.cloud
+docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
+```
 
-> 更多信息查看 [ARCHITECTURE.md](./ARCHITECTURE.md) 和 [API_REFERENCE.md](./API_REFERENCE.md)。
+桌面打包：
+
+```bash
+VITE_CLOUD_API_BASE=https://your-cloud.example.com/api \
+TANGYING_CLOUD_API_BASE=https://your-cloud.example.com/api \
+bash scripts/build-local-desktop.sh
+```
+
+## 12. 验证命令
+
+提交前按变更范围运行。封闭内测完整验证建议：
+
+```bash
+(cd local-backend && go test ./...)
+(cd cloud-backend && go test ./...)
+(cd cloud-backend && go test -race ./...)
+(cd cloud-backend && go run ./evals/video_beta)
+(cd cloud-backend && make api-docs-check)
+(cd frontend && npm run lint)
+(cd frontend && npm run test:director)
+(cd frontend && npm run test:security)
+(cd frontend && npm run build)
+(cd hyperframes-render-service && npm run build)
+```
+
+浏览器/桌面冒烟测试需要覆盖：
+
+- 登录和会话恢复。
+- Director Studio 启动创作流程。
+- Preflight 显示。
+- Artifact 审核、编辑、返工。
+- Trace / Artifacts / Export tabs。
+- 素材依赖点 Prompt 展示。
+- 素材依赖点上传回填：local agent 保存文件，cloud 登记结果。
+- Desktop 设置页无任意命令执行 UI。
+
+## 13. 开发原则
+
+- 新视频业务优先放在 `cloud-backend/internal/agents/video`，不要把业务规则写进 `internal/core`。
+- `internal/core` 只承载通用 runtime、编排、Artifact、模型网关和本地执行协议。
+- 不给 `local-backend` 增加数据库、Docker、Redis、Kafka、MinIO 或云端 LLM Key 依赖。
+- 不在 Electron renderer 暴露任意命令执行 IPC。
+- 不新增自动发布入口；封闭内测只导出发布材料。
+- 用户素材默认本地保存；云端只登记引用、hash、大小、状态和 trace。
+- 新增或修改 API 必须同步 OpenAPI source，并重新生成文档和类型。
+- 新功能优先补强 Director Studio，不恢复旧式单页发布表单作为主入口。
+
+## 14. 常见问题
+
+### 前端连不上云端
+
+检查 `VITE_CLOUD_API_BASE` 或 `TANGYING_CLOUD_API_BASE`。Web 同域部署可以使用 `/api`。
+
+### local agent 不在线
+
+运行：
+
+```bash
+bash scripts/start-local-backend.sh
+curl http://127.0.0.1:18080/api/local/health
+```
+
+### 云端 ready 不通过
+
+检查 PostgreSQL、Redis、Redpanda 是否启动：
+
+```bash
+cd cloud-backend
+docker compose ps
+curl http://localhost:8080/api/health/ready
+```
+
+### Agent 规划失败
+
+检查服务端 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`，或云端 `/api/config/model-provider` 运维 override。不要把桌面用户 token 上传到云端。
+
+### 素材依赖点卡住
+
+这是预期的人工暂停点。复制页面里的 Prompt 和参考信息，到外部图片/视频网站生成素材，然后上传回同一个依赖点。
+
+### API 文档漂移
+
+运行：
+
+```bash
+cd cloud-backend
+make gen-docs
+make api-docs-check
+```

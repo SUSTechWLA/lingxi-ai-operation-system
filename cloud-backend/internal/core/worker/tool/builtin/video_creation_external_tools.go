@@ -110,7 +110,7 @@ func GetEnvOpenAIConfig() config.OpenAIConfig {
 }
 
 // GetVideoCreationOpenAIConfig returns the effective OpenAI config by merging
-// the env-based config with persisted runtime overrides synced from the frontend.
+// the env-based config with persisted cloud runtime overrides.
 // Runtime BaseURL/Model/APIKey take priority; env values serve as fallbacks.
 func GetVideoCreationOpenAIConfig() config.OpenAIConfig {
 	cfg := videoCreationOpenAICfg // env defaults
@@ -123,6 +123,29 @@ func GetVideoCreationOpenAIConfig() config.OpenAIConfig {
 	}
 	if runtime.Model != "" {
 		cfg.Model = runtime.Model
+	}
+	return cfg
+}
+
+func localAgentModelConfigEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG")))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func applyOptionalLocalAgentConfig(cfg config.OpenAIConfig) config.OpenAIConfig {
+	if !localAgentModelConfigEnabled() {
+		return cfg
+	}
+	if localCfg, ok := localAgentConfigFetcher(); ok {
+		if localCfg.BaseURL != "" {
+			cfg.BaseURL = localCfg.BaseURL
+		}
+		if localCfg.APIKey != "" {
+			cfg.APIKey = localCfg.APIKey
+		}
+		if localCfg.Model != "" {
+			cfg.Model = localCfg.Model
+		}
 	}
 	return cfg
 }
@@ -200,8 +223,8 @@ func hyperFramesServiceAvailable() bool {
 	return hyperFramesClient != nil && hyperFramesConfig.IsEnabled()
 }
 
-// RuntimeModelProviderConfig holds model-provider settings synced from the
-// frontend Desktop page at runtime (overrides env-based config when set).
+// RuntimeModelProviderConfig holds cloud operator model-provider settings
+// persisted at runtime (overrides env-based config when set).
 type RuntimeModelProviderConfig struct {
 	BaseURL string `json:"baseUrl"`
 	APIKey  string `json:"apiKey"`
@@ -750,19 +773,7 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 // callProposalRecommendationLLM uses the LLM to analyze the user's topic and
 // recommend the most suitable creative option. Falls back to empty on any error.
 func callProposalRecommendationLLM(brief string, options []videopipeline.ProposalOption) (recommendedID, reason string) {
-	cfg := GetVideoCreationOpenAIConfig()
-	// Also try local agent config (set via frontend Desktop page)
-	if localCfg, ok := localAgentConfigFetcher(); ok {
-		if localCfg.APIKey != "" {
-			cfg.APIKey = localCfg.APIKey
-		}
-		if localCfg.BaseURL != "" {
-			cfg.BaseURL = localCfg.BaseURL
-		}
-		if localCfg.Model != "" {
-			cfg.Model = localCfg.Model
-		}
-	}
+	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
 	if cfg.APIKey == "" {
 		zap.L().Warn("LLM proposal recommendation skipped: no API key configured")
 		return "", ""
@@ -1447,12 +1458,10 @@ func jsonArtifact(stage, name, skillName, source string, requiresReview bool) ma
 	}
 }
 
-// tryFetchLocalAgentConfig attempts to read the user's model-provider config
-// from the local agent (127.0.0.1:18080). This covers the case where the
-// frontend Desktop page saved config to the local agent but the cloud sync
-// (PUT /api/config/model-provider) failed.
 // TryFetchLocalAgentConfig fetches model-provider config from the local
-// desktop agent (127.0.0.1:18080). Returns the config and true when found.
+// desktop agent (127.0.0.1:18080). It is only used when
+// AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG is explicitly enabled for one-box
+// development, not in the closed-beta cloud deployment.
 func TryFetchLocalAgentConfig() (RuntimeModelProviderConfig, bool) {
 	url := "http://127.0.0.1:18080/api/local/model-providers?include_key=true"
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -1551,21 +1560,9 @@ func executeSkillStageAgent(stage, skillName, brief, instructionRef string, tool
 
 	userPrompt := fmt.Sprintf("请严格围绕以下主题进行创作，不要偏离：\n\n%s", brief)
 
-	// Use runtime model-provider config if available, otherwise fall back to env config.
-	// Also try to pull from local agent (127.0.0.1:18080) — this catches config set
-	// by the frontend Desktop page even when cloud sync is unavailable.
-	effectiveCfg := GetVideoCreationOpenAIConfig()
-	if localCfg, ok := localAgentConfigFetcher(); ok {
-		if localCfg.BaseURL != "" {
-			effectiveCfg.BaseURL = localCfg.BaseURL
-		}
-		if localCfg.APIKey != "" {
-			effectiveCfg.APIKey = localCfg.APIKey
-		}
-		if localCfg.Model != "" {
-			effectiveCfg.Model = localCfg.Model
-		}
-	}
+	// Use cloud runtime model-provider config if available, otherwise fall back
+	// to env config. Local desktop config is opt-in for one-box development only.
+	effectiveCfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
 
 	// Call LLM via the configured OpenAI endpoint
 	if effectiveCfg.APIKey == "" {
@@ -3033,18 +3030,7 @@ html, body {
 // generateHyperFramesIndexHTML uses the LLM to generate a complete HyperFrames HTML
 // video page from the topic, script, shot list, and style parameters.
 func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style string, toolCtx tool.ToolContext) string {
-	effectiveCfg := GetVideoCreationOpenAIConfig()
-	if localCfg, ok := localAgentConfigFetcher(); ok {
-		if localCfg.BaseURL != "" {
-			effectiveCfg.BaseURL = localCfg.BaseURL
-		}
-		if localCfg.APIKey != "" {
-			effectiveCfg.APIKey = localCfg.APIKey
-		}
-		if localCfg.Model != "" {
-			effectiveCfg.Model = localCfg.Model
-		}
-	}
+	effectiveCfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
 
 	// If no LLM is configured, generate a minimal static HTML from the data.
 	if effectiveCfg.APIKey == "" {
@@ -3742,19 +3728,7 @@ func buildSearchQuery(raw string) string {
 		return ""
 	}
 
-	cfg := GetVideoCreationOpenAIConfig()
-	// Also try local agent config
-	if localCfg, ok := localAgentConfigFetcher(); ok {
-		if localCfg.APIKey != "" {
-			cfg.APIKey = localCfg.APIKey
-		}
-		if localCfg.BaseURL != "" {
-			cfg.BaseURL = localCfg.BaseURL
-		}
-		if localCfg.Model != "" {
-			cfg.Model = localCfg.Model
-		}
-	}
+	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
 
 	if cfg.APIKey != "" {
 		callTool := &LlmApiTool{cfg: cfg}
@@ -4399,18 +4373,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 		}
 	}
 
-	effectiveCfg := GetVideoCreationOpenAIConfig()
-	if localCfg, ok := localAgentConfigFetcher(); ok {
-		if localCfg.BaseURL != "" {
-			effectiveCfg.BaseURL = localCfg.BaseURL
-		}
-		if localCfg.APIKey != "" {
-			effectiveCfg.APIKey = localCfg.APIKey
-		}
-		if localCfg.Model != "" {
-			effectiveCfg.Model = localCfg.Model
-		}
-	}
+	effectiveCfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
 
 	if effectiveCfg.APIKey == "" {
 		content := fmt.Sprintf("# %s\n\n主题：%s\n\n> ⚠️ LLM API Key 未配置。请设置 API Key 以启用 AI 内容生成。", toolName, topic)

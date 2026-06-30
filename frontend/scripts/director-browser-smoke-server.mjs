@@ -1,14 +1,9 @@
-import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
-const require = createRequire(import.meta.url)
 const frontendDir = fileURLToPath(new URL('..', import.meta.url))
 const defaultTopic = '帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹'
 const topic = process.env.DIRECTOR_SMOKE_TOPIC || defaultTopic
@@ -23,7 +18,7 @@ const registeredExternalResults = []
 const mockServer = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, DeviceID')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
   if (req.method === 'OPTIONS') {
     res.writeHead(204)
     res.end()
@@ -34,13 +29,17 @@ const mockServer = createServer(async (req, res) => {
   const body = await readBody(req)
   calls.push({ method: req.method, path: url.pathname, body })
 
-  if (req.method === 'GET' && url.pathname === '/api/auth/me') {
+  if (req.method === 'POST' && (url.pathname === '/api/auth/login' || url.pathname === '/api/auth/register')) {
     return sendJSON(res, 200, ok({
-      id: 'smoke-user',
-      email: 'smoke@example.com',
-      nickname: 'Smoke Tester',
-      status: 'active',
+      user: smokeUser(),
+      access_token: 'smoke-access-token',
+      refresh_token: 'smoke-refresh-token',
+      expires_in: 3600,
     }))
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/auth/me') {
+    return sendJSON(res, 200, ok(smokeUser()))
   }
 
   if (req.method === 'GET' && url.pathname === '/api/video/role-agents') {
@@ -53,11 +52,12 @@ const mockServer = createServer(async (req, res) => {
       status: 'passed',
       canStart: true,
       capabilityMenu: {
-        localRunner: { available: true },
+        localRunner: { available: true, runnerId: 'runner-smoke' },
         compositionRuntime: { hyperframes: { available: true } },
         localTools: [
-          { command: 'node', available: true },
-          { command: 'ffmpeg', available: true },
+          { command: 'HYPERFRAMES_PROJECT_GENERATE', available: true },
+          { command: 'HYPERFRAMES_RENDER', available: true },
+          { command: 'FFMPEG_PROBE', available: true },
         ],
         warnings: [],
       },
@@ -66,28 +66,7 @@ const mockServer = createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/video-projects') {
-    return sendJSON(res, 200, ok({
-      project: {
-        id: 'project-smoke',
-        userId: 'smoke-user',
-        name: body?.name || '视频创作项目',
-        description: body?.description,
-        mode: body?.mode || 'voice_visual',
-        status: 'RUNNING',
-        skillName: body?.skillName || 'video-creator',
-        skillVersion: body?.skillVersion || 'v4.0',
-        workflowName: body?.workflowName || 'dynamic-agent-video-creation',
-        workflowVersion: body?.workflowVersion || 'v4.0',
-        generationMode: body?.generationMode || 'provider_api',
-        aspectRatio: body?.aspectRatio || '16:9',
-        targetDurationSec: body?.targetDurationSec || 60,
-        language: body?.language || 'zh-CN',
-        config: body?.config || {},
-        currentRunId: 'run-smoke',
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      },
-    }))
+    return sendJSON(res, 200, ok({ project: smokeProject(body) }))
   }
 
   if (req.method === 'POST' && url.pathname === '/api/agent/runs') {
@@ -117,7 +96,39 @@ const mockServer = createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/agent/runs/run-smoke/reviews') {
-    return sendJSON(res, 200, ok({ runId: 'run-smoke', reviews: [] }))
+    return sendJSON(res, 200, ok({
+      runId: 'run-smoke',
+      reviews: [
+        {
+          id: 'review-script',
+          runId: 'run-smoke',
+          taskId: 'task-smoke',
+          nodeId: 'script_review',
+          stage: 'script',
+          roleAgentId: 'script_writer',
+          tool: 'video_script_generator',
+          status: 'PENDING',
+          requiredInputs: ['VIDEO_PROPOSAL'],
+          requiredOutputs: ['VIDEO_SCRIPT'],
+          reviewReason: '脚本产物需要人工确认后进入发布包生成。',
+          reviewContent: '# 口播脚本\n\n佛得角足球的逆袭故事。',
+          reviewOutput: { content: '# 口播脚本\n\n佛得角足球的逆袭故事。' },
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    }))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/agent/runs/run-smoke/reviews/review-script/approve') {
+    return sendJSON(res, 200, ok({ reviewId: 'review-script', status: 'APPROVED' }))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/agent/runs/run-smoke/reviews/review-script/submit-edited') {
+    return sendJSON(res, 200, ok({ reviewId: 'review-script', status: 'APPROVED' }))
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/agent/runs/run-smoke/reviews/review-script/regenerate') {
+    return sendJSON(res, 200, ok({ reviewId: 'review-script', status: 'REGENERATING' }))
   }
 
   if (req.method === 'GET' && url.pathname === '/api/agent/runs/run-smoke/trace') {
@@ -125,11 +136,11 @@ const mockServer = createServer(async (req, res) => {
       nodes: [
         {
           id: 'script_generation_exec',
-          name: 'external',
+          name: 'video_script_generator',
           type: 'TOOL',
-          status: 'RUNNING',
-          input: { tool: 'external', capabilityTool: 'video_script_generator' },
-          output: {},
+          status: 'COMPLETED',
+          input: { tool: 'video_script_generator' },
+          output: { artifactId: 'artifact-script' },
         },
       ],
     }))
@@ -138,6 +149,16 @@ const mockServer = createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/video-projects/project-smoke/artifacts') {
     return sendJSON(res, 200, ok({
       artifacts: [
+        {
+          id: 'artifact-script',
+          projectId: 'project-smoke',
+          name: 'voiceover_script.md',
+          kind: 'MARKDOWN',
+          status: 'valid',
+          version: 1,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
         {
           id: 'artifact-external-request',
           projectId: 'project-smoke',
@@ -237,46 +258,24 @@ const mockServer = createServer(async (req, res) => {
     }))
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/video-projects/project-smoke/workflow-runs/run-smoke/checkpoints') {
+    return sendJSON(res, 200, ok({ checkpoints: [] }))
+  }
+
   sendJSON(res, 404, { code: 404, message: `No mock route for ${req.method} ${url.pathname}`, data: null })
 })
 
-let vite
-let tempDir
+let shuttingDown = false
 
-try {
-  await listen(mockServer, apiPort)
-  vite = startVite()
-  await waitForHTTP(appURL, 20_000)
-  tempDir = await mkdtemp(join(tmpdir(), 'director-start-smoke-'))
-  const mainPath = join(tempDir, 'electron-main.cjs')
-  await writeFile(mainPath, electronMainSource(), 'utf8')
-  await runElectron(mainPath)
+await listen(mockServer, apiPort)
+const vite = startVite()
+await waitForHTTP(appURL, 20_000)
+console.log(JSON.stringify({ appURL, apiBase, topic }))
 
-  const projectCall = calls.find((call) => call.method === 'POST' && call.path === '/api/video-projects')
-  const runCall = calls.find((call) => call.method === 'POST' && call.path === '/api/agent/runs')
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
 
-  assert.ok(projectCall, 'expected UI to create a video project')
-  assert.ok(runCall, 'expected UI to start a dynamic agent run')
-  assert.equal(runCall.body?.domain, 'video_creation')
-  assert.equal(runCall.body?.mode, 'dynamic_agent')
-  assert.match(runCall.body?.message || '', /佛得角/)
-  assert.equal(runCall.body?.context?.projectId, 'project-smoke')
-  const localUploadCall = calls.find((call) => call.method === 'POST' && call.path === '/api/local/artifacts')
-  const externalResultCall = calls.find((call) => call.method === 'POST' && call.path === '/api/video-projects/project-smoke/external-generation-results')
-  assert.ok(localUploadCall, 'expected UI to upload the user-generated asset to the local agent')
-  assert.ok(externalResultCall, 'expected UI to register the uploaded asset against the project dependency')
-  assert.equal(externalResultCall.body?.source, 'external_manual_upload')
-  assert.equal(externalResultCall.body?.generationRequestId, 'extgen_video_SHOT_01')
-  assert.equal(externalResultCall.body?.relatedShotId, 'SHOT_01')
-
-  console.log('director start smoke passed')
-  console.log(`topic: ${topic}`)
-  console.log(`agent run payload: ${JSON.stringify(runCall.body)}`)
-} finally {
-  if (vite) vite.kill('SIGTERM')
-  await closeServer(mockServer)
-  if (tempDir) await rm(tempDir, { recursive: true, force: true })
-}
+setInterval(() => {}, 1_000)
 
 function startVite() {
   const viteBin = join(frontendDir, 'node_modules', 'vite', 'bin', 'vite.js')
@@ -302,142 +301,36 @@ function startVite() {
   return child
 }
 
-async function runElectron(mainPath) {
-  const electronPath = require('electron')
-  const child = spawn(electronPath, [mainPath, appURL, topic], {
-    cwd: frontendDir,
-    env: {
-      ...process.env,
-      ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  child.stdout.on('data', (chunk) => process.stdout.write(prefixLines('electron', chunk)))
-  child.stderr.on('data', (chunk) => process.stderr.write(prefixLines('electron', chunk)))
-  const code = await new Promise((resolve) => child.on('close', resolve))
-  assert.equal(code, 0, `electron smoke runner exited with ${code}`)
-}
-
-function electronMainSource() {
-  return `
-const { app, BrowserWindow } = require('electron')
-
-const appURL = process.argv[2]
-const topic = process.argv[3]
-
-app.whenReady().then(async () => {
-  const win = new BrowserWindow({
-    show: false,
-    width: 1280,
-    height: 900,
-    webPreferences: { contextIsolation: true, sandbox: true },
-  })
-  try {
-    await load(win, appURL)
-    await win.webContents.executeJavaScript(\`
-      localStorage.setItem('tangying.auth.session', JSON.stringify({
-        user: { id: 'smoke-user', email: 'smoke@example.com', nickname: 'Smoke Tester', status: 'active' },
-        accessToken: 'smoke-access-token',
-        refreshToken: 'smoke-refresh-token',
-        expiresIn: 3600
-      }))
-    \`)
-    await load(win, appURL)
-    await waitForDOM(win, \`document.querySelector('textarea')\`)
-    await win.webContents.executeJavaScript(\`
-      const textarea = document.querySelector('textarea')
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
-      setter.call(textarea, \${JSON.stringify(topic)})
-      textarea.dispatchEvent(new Event('input', { bubbles: true }))
-    \`)
-    await waitForDOM(win, \`
-      Array.from(document.querySelectorAll('button')).some((button) =>
-        button.textContent.includes('开始项目') && !button.disabled
-      )
-    \`)
-    await win.webContents.executeJavaScript(\`
-      const button = Array.from(document.querySelectorAll('button')).find((item) =>
-        item.textContent.includes('开始项目')
-      )
-      button.click()
-    \`)
-    await waitForDOM(win, \`document.body.innerText.includes('Run run-smok')\`, 15000)
-    await win.webContents.executeJavaScript(\`
-      const assetsButton = Array.from(document.querySelectorAll('button')).find((item) =>
-        item.textContent.trim() === '产物'
-      )
-      if (!assetsButton) throw new Error('missing assets nav button')
-      assetsButton.click()
-    \`)
-    await waitForDOM(win, \`document.body.innerText.includes('素材依赖点')\`, 15000)
-    await win.webContents.executeJavaScript(\`
-      const requestRow = Array.from(document.querySelectorAll('tr')).find((row) =>
-        row.innerText.includes('素材依赖请求') || row.innerText.includes('external_generation_request')
-      )
-      const requestButton = requestRow && Array.from(requestRow.querySelectorAll('button')).find((button) =>
-        button.textContent.includes('查看')
-      )
-      if (!requestButton) throw new Error('missing external request view button')
-      requestButton.click()
-    \`)
-    await waitForDOM(win, \`document.body.innerText.includes('待用户回填')\`, 15000)
-    await waitForDOM(win, \`document.body.innerText.includes('非真人风格化动画')\`, 15000)
-    await win.webContents.executeJavaScript(\`
-      const input = document.querySelector('input[type="file"][data-smoke-id="external-generation-upload"]')
-      if (!input) throw new Error('missing external generation upload input')
-      const file = new File(['smoke video bytes'], 'SHOT_01.mp4', { type: 'video/mp4' })
-      const data = new DataTransfer()
-      data.items.add(file)
-      input.files = data.files
-      input.dispatchEvent(new Event('change', { bubbles: true }))
-    \`)
-    await waitForDOM(win, \`document.body.innerText.includes('已登记')\`, 15000)
-    const bodyText = await win.webContents.executeJavaScript('document.body.innerText')
-    if (bodyText.includes('guard agent plan')) {
-      throw new Error(bodyText)
-    }
-    console.log('clicked start project successfully')
-    app.exit(0)
-  } catch (error) {
-    console.error(error && error.stack ? error.stack : error)
-    app.exit(1)
+function smokeUser() {
+  return {
+    id: 'smoke-user',
+    email: 'smoke@example.com',
+    nickname: 'Smoke Tester',
+    status: 'active',
   }
-})
-
-function load(win, url) {
-  return new Promise((resolve, reject) => {
-    const done = () => {
-      cleanup()
-      resolve()
-    }
-    const failed = (_event, _code, description) => {
-      cleanup()
-      reject(new Error(description || 'load failed'))
-    }
-    const cleanup = () => {
-      win.webContents.off('did-finish-load', done)
-      win.webContents.off('did-fail-load', failed)
-    }
-    win.webContents.once('did-finish-load', done)
-    win.webContents.once('did-fail-load', failed)
-    win.loadURL(url)
-  })
 }
 
-async function waitForDOM(win, expression, timeoutMs = 10000) {
-  const started = Date.now()
-  while (Date.now() - started < timeoutMs) {
-    const ok = await win.webContents.executeJavaScript(\`Boolean(\${expression})\`)
-    if (ok) return
-    await new Promise((resolve) => setTimeout(resolve, 100))
+function smokeProject(body) {
+  return {
+    id: 'project-smoke',
+    userId: 'smoke-user',
+    name: body?.name || '视频创作项目',
+    description: body?.description,
+    mode: body?.mode || 'voice_visual',
+    status: 'RUNNING',
+    skillName: body?.skillName || 'video-creator',
+    skillVersion: body?.skillVersion || 'v4.0',
+    workflowName: body?.workflowName || 'dynamic-agent-video-creation',
+    workflowVersion: body?.workflowVersion || 'v4.0',
+    generationMode: body?.generationMode || 'provider_api',
+    aspectRatio: body?.aspectRatio || '16:9',
+    targetDurationSec: body?.targetDurationSec || 60,
+    language: body?.language || 'zh-CN',
+    config: body?.config || {},
+    currentRunId: 'run-smoke',
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
   }
-  throw new Error('Timed out waiting for DOM expression: ' + expression)
-}
-`
-}
-
-function ok(data) {
-  return { code: 0, message: 'ok', data }
 }
 
 function roleAgents() {
@@ -462,16 +355,6 @@ function roleAgents() {
       requiredOutputs: ['VIDEO_SCRIPT'],
       humanReview: { required: true },
     },
-    {
-      id: 'render_producer',
-      name: 'Render Producer',
-      displayName: '渲染制片',
-      stage: 'render',
-      goal: '确认并执行最终渲染。',
-      allowedTools: ['render_dependency_guard', 'hyperframes_renderer', 'local_job_status_tracker'],
-      requiredOutputs: ['VIDEO', 'RENDER_REPORT'],
-      humanReview: { required: true },
-    },
   ]
 }
 
@@ -485,26 +368,21 @@ function smokePlan(message) {
         id: 'script_generation',
         intent: '生成口播脚本',
         tool: 'video_script_generator',
-        arguments: { topic },
+        arguments: { topic: message },
         expectedOutput: ['script'],
         produceArtifact: true,
       },
       {
-        id: 'render',
-        intent: '渲染视频',
-        tool: 'hyperframes_renderer',
+        id: 'publish_package',
+        intent: '生成发布包',
+        tool: 'publish_copy_generator',
         dependsOn: ['script_generation'],
-        arguments: { projectDir: '{{preview.output.projectDir}}', previewApproved: true },
-        expectedOutput: ['outputPath'],
+        arguments: { platform: 'xiaohongshu' },
+        expectedOutput: ['publishCopy'],
         produceArtifact: true,
       },
     ],
-    budget: {
-      maxSteps: 6,
-      maxToolCalls: 6,
-      maxReplans: 1,
-      maxCostLevel: 'high',
-    },
+    budget: { maxSteps: 6, maxToolCalls: 6, maxReplans: 1, maxCostLevel: 'medium' },
     stopPolicy: { stopWhenEnough: true },
   }
 }
@@ -525,6 +403,10 @@ async function readBody(req) {
 function sendJSON(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(payload))
+}
+
+function ok(data) {
+  return { code: 0, message: 'ok', data }
 }
 
 function listen(server, port) {
@@ -554,10 +436,6 @@ function freePort() {
   })
 }
 
-function closeServer(server) {
-  return new Promise((resolve) => server.close(() => resolve()))
-}
-
 async function waitForHTTP(url, timeoutMs) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
@@ -574,4 +452,12 @@ async function waitForHTTP(url, timeoutMs) {
 
 function prefixLines(label, chunk) {
   return String(chunk).split(/(?<=\n)/).map((line) => line ? `[${label}] ${line}` : '').join('')
+}
+
+function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  if (vite) vite.kill('SIGTERM')
+  mockServer.close(() => process.exit(0))
+  setTimeout(() => process.exit(0), 1_000).unref()
 }

@@ -8,6 +8,7 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY skills ./skills
+COPY skill-capabilities ./skill-capabilities
 RUN CGO_ENABLED=0 GOOS=linux go build -o /tangying-ai-os ./cmd/tangying-ai-os
 
 FROM alpine:3.19
@@ -17,6 +18,8 @@ WORKDIR /app
 
 COPY --from=builder /tangying-ai-os .
 COPY .env.example .env
+COPY --from=builder /app/skills ./skills
+COPY --from=builder /app/skill-capabilities ./skill-capabilities
 
 EXPOSE 8080
 

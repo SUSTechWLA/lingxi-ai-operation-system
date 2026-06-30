@@ -33,8 +33,8 @@ func TestJudgeWarnsForBetaDisabledTool(t *testing.T) {
 	if !hasWarning(report, WarningBetaDisabledCapability) {
 		t.Fatalf("expected beta disabled capability warning, got %+v", report.Warnings)
 	}
-	if !report.Passed {
-		t.Fatalf("non-critical beta capability warning should not block plan: %+v", report.Warnings)
+	if report.Passed {
+		t.Fatalf("beta-disabled capability must block closed beta plan: %+v", report.Warnings)
 	}
 }
 
@@ -90,8 +90,8 @@ func TestJudgeWarnsForRedundantTool(t *testing.T) {
 	if !hasWarning(report, WarningRedundantTool) {
 		t.Fatalf("expected redundant tool warning, got %+v", report.Warnings)
 	}
-	if !report.Passed {
-		t.Fatalf("redundant tool warning should not block plan: %+v", report.Warnings)
+	if report.Passed {
+		t.Fatalf("redundant non-quality tool must block closed beta plan: %+v", report.Warnings)
 	}
 }
 

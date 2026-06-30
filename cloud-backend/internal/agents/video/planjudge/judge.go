@@ -107,7 +107,7 @@ func (j Judge) disabledCapabilityWarnings(plan *agentruntime.AgentPlan) []Warnin
 				StepID:   step.ID,
 				Tool:     step.Tool,
 				Message:  "tool is disabled in the lightweight video beta",
-				Severity: "warning",
+				Severity: "error",
 			})
 		}
 	}
@@ -129,7 +129,7 @@ func redundantToolWarnings(plan *agentruntime.AgentPlan) []Warning {
 				StepID:   step.ID,
 				Tool:     step.Tool,
 				Message:  "same non-quality tool appears multiple times; check whether this duplicates an existing stage",
-				Severity: "warning",
+				Severity: "error",
 			})
 		}
 	}

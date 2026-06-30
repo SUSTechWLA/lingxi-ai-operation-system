@@ -15,6 +15,8 @@
     "electron:build": "vite build && electron-builder",
     "electron:prod": "vite build && electron .",
     "test:director": "node scripts/director-studio-logic-check.mjs",
+    "test:security": "node scripts/electron-security-check.mjs",
+    "test:director:browser-server": "node scripts/director-browser-smoke-server.mjs",
     "test:director:start": "node scripts/director-studio-start-smoke.mjs"
   },
   "dependencies": {
@@ -55,7 +57,6 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "scripts/**/*",
       "resources/bin/**/*"
     ],
     "extraResources": [

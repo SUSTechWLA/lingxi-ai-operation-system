@@ -586,21 +586,30 @@ function shouldExposeUnprojectedArtifact(artifact: Record<string, unknown>, proj
   const shotId = firstString(metadata || {}, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id'])
   return kind === 'PUBLISH_COPY' ||
     artifactType === 'publish_copy' ||
+    artifactType === 'external_generation_request' ||
+    artifactType === 'external_generation_result' ||
     Boolean(shotId) ||
     Boolean(kind && (kind.startsWith('SHOT_') || kind === 'HYPERFRAMES_SHOT'))
 }
 
 function projectArtifactRecord(artifact: Record<string, unknown>): DirectorArtifactRecord {
   const metadata = objectValue(artifact.metadata)
-  const kind = stringValue(artifact.kind) || stringValue(metadata?.artifactKind) || stringValue(metadata?.kind) || 'JSON'
-  const status = normalizeArtifactStatus(stringValue(artifact.status)) || 'valid'
+  const artifactType = stringValue(metadata?.artifactType) || stringValue(metadata?.artifact_kind)
+  const rawKind = stringValue(artifact.kind) || stringValue(metadata?.artifactKind) || stringValue(metadata?.kind) || 'JSON'
+  const kind = artifactType === 'external_generation_request' ? 'EXTERNAL_GENERATION_REQUEST' : rawKind
+  const requestStatus = stringValue(metadata?.status)
+  const status = artifactType === 'external_generation_request' && requestStatus === 'pending_upload'
+    ? 'review'
+    : normalizeArtifactStatus(stringValue(artifact.status)) || 'valid'
   return {
     id: String(artifact.id || artifact.artifactId || ''),
     name: String(artifact.name || displayNameForArtifact(kind)),
     kind,
     version: artifactVersionLabel(artifact),
     status,
-    owner: stringValue(metadata?.producedByRole) || stringValue(metadata?.owner) || '项目产物',
+    owner: artifactType === 'external_generation_request'
+      ? '素材依赖点'
+      : stringValue(metadata?.producedByRole) || stringValue(metadata?.owner) || '项目产物',
     updatedAt: formatTime(stringValue(artifact.updatedAt) || stringValue(artifact.createdAt)),
     humanApproved: booleanValue(artifact.humanApproved) ?? status === 'valid',
     storageRef: displayStorageRef(artifact.storageRef || artifact.url || ''),
@@ -1478,6 +1487,7 @@ export function displayNameForArtifact(kind: string) {
     SHOT_VIDEO_CLIP: 'Shot视频片段',
     SHOT_SUBTITLE: 'Shot字幕',
     HYPERFRAMES_SHOT: 'HyperFrames片段',
+    EXTERNAL_GENERATION_REQUEST: '素材依赖请求',
     PUBLISH_COPY: '发布文案',
     PROJECT_PACKAGE: '交付包',
   }

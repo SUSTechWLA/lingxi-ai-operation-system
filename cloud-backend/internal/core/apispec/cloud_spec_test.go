@@ -88,6 +88,36 @@ func TestBuildCloudSpec_ExposesVideoScopedAssistant(t *testing.T) {
 	}
 }
 
+func TestBuildCloudSpec_ExposesClosedBetaRuntimeRoutes(t *testing.T) {
+	spec := BuildCloudSpec()
+	required := map[string]string{
+		"/api/agent/runs/:runId/reviews/:reviewId/submit-edited": "POST",
+		"/api/agent/runs/:runId/reviews/:reviewId/regenerate":    "POST",
+		"/api/video/preflight":                                   "GET",
+		"/api/config/model-provider":                             "GET",
+		"/api/video-projects/:id/workflow-runs/:rid/checkpoints": "GET",
+		"/api/video-projects/:id/workflow-runs/:rid/recover":     "POST",
+	}
+	for path, method := range required {
+		item := spec.Paths[path]
+		if item == nil {
+			t.Fatalf("closed beta route %q missing from cloud spec", path)
+		}
+		var op *Operation
+		switch method {
+		case "GET":
+			op = item.Get
+		case "POST":
+			op = item.Post
+		default:
+			t.Fatalf("unsupported method %s", method)
+		}
+		if op == nil {
+			t.Fatalf("closed beta route %s %s missing operation", method, path)
+		}
+	}
+}
+
 func TestBuildCloudSpec_ExposesShotDrivenVideoRoutes(t *testing.T) {
 	spec := BuildCloudSpec()
 	required := map[string]string{

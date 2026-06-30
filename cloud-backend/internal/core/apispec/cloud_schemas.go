@@ -505,6 +505,27 @@ func registerCloudSchemas(b *Builder) {
 			}},
 		},
 	})
+	b.Schema("VideoPreflightResponse", Reflect(localrunner.PreflightResponse{}))
+
+	// ── Runtime Config ──
+	b.Schema("ModelProviderConfigResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"baseUrl":  {Schema: StringSchema()},
+					"model":    {Schema: StringSchema()},
+					"hasKey":   {Schema: BoolSchema()},
+					"endpoint": {Schema: StringSchema()},
+					"fromUser": {Schema: BoolSchema()},
+					"fromEnv":  {Schema: BoolSchema()},
+				},
+			}},
+		},
+	})
 
 	// ── Dynamic Agent Runs ──
 	b.Schema("AgentStartRunRequest", Reflect(agentruntime.StartRunRequest{}))
@@ -800,6 +821,31 @@ func registerCloudSchemas(b *Builder) {
 			"data": {Schema: &Schema{
 				Type:       "object",
 				Properties: map[string]*SchemaRef{"run": {Schema: ObjectSchema()}},
+			}},
+		},
+	})
+	b.Schema("WorkflowCheckpointListResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type:       "object",
+				Properties: map[string]*SchemaRef{"checkpoints": {Schema: ArraySchema(Reflect(workflow.Checkpoint{}))}},
+			}},
+		},
+	})
+	b.Schema("WorkflowCheckpointRecoverResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"code":    {Schema: IntegerSchema()},
+			"message": {Schema: StringSchema()},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"checkpoint": {Schema: Reflect(workflow.Checkpoint{})},
+					"message":    {Schema: StringSchema()},
+				},
 			}},
 		},
 	})

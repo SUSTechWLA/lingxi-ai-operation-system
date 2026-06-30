@@ -423,7 +423,7 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
         </div>
         <StatusPill ok={preflight?.canStart !== false && serviceStatus !== 'unhealthy'} label={serviceStatus === 'unhealthy' ? '服务未连接' : preflight?.status === 'blocked' ? '环境待处理' : '执行环境就绪'} />
         {run && <div className="rounded-lg bg-white/80 px-4 py-3 text-xs font-bold text-ink-muted ring-1 ring-line">Run {run.id.slice(0, 8)}</div>}
-        <button className="rounded-lg bg-white/80 p-3 text-ink-muted ring-1 ring-line hover:text-primary-dark" title="命令面板"><FiBell /></button>
+        <button className="rounded-lg bg-white/80 p-3 text-ink-muted ring-1 ring-line hover:text-primary-dark" title="通知"><FiBell /></button>
       </div>
     </header>
   )
@@ -913,10 +913,24 @@ function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }
 
 function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: DirectorArtifactRecord[]; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {
   const staleCount = artifacts.filter((a) => a.status === 'stale').length
+  const materialDependencyCount = artifacts.filter(isMaterialDependencyRequest).length
   return (
     <div className="space-y-5">
       <section className="card p-6"><p className="text-sm font-bold text-primary-dark">产物库</p><h2 className="mt-2 text-3xl font-black text-ink">产物索引</h2><p className="mt-2 text-sm text-ink-muted">记录每个中间产物的版本、状态、依赖、审核和本地/云端路径。</p></section>
       {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
+      {materialDependencyCount > 0 && (
+        <div className="rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-primary-dark">素材依赖点</p>
+              <p className="mt-1 text-sm leading-6 text-ink-muted">
+                当前有 {materialDependencyCount} 个素材等待用户在外部网站生成后回填。系统不会强制调用图片或视频 API，上传后只登记本地引用、hash 和依赖关系。
+              </p>
+            </div>
+            <StatusBadge status="review" label="待用户回填" />
+          </div>
+        </div>
+      )}
       <ShotReviewPanel artifacts={artifacts} />
       <ArtifactTable artifacts={artifacts} projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
     </div>
@@ -1183,11 +1197,12 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
         file,
         mimeType: file.type || (kind === 'image' ? 'image/png' : 'video/mp4'),
         metadata: {
-          artifactType: 'external_generation_result',
+          artifactType: 'external_manual_generation_result',
           externalGenerationRequestId: request.requestId,
           generationKind: kind,
           relatedShotId: request.shotId,
           referenceAssetIds,
+          source: 'external_manual_upload',
           cloudPayloadStored: false,
           localOnly: true,
         },
@@ -1204,7 +1219,8 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
         contentHash: localArtifact.contentHash,
         relatedShotId: request.shotId,
         generationRequestId: request.requestId,
-        source: 'external_generation_upload',
+        source: 'external_manual_upload',
+        tags: ['external_manual_upload', 'material_dependency_result'],
         referenceAssetIds,
       })
       setExternalUploadMessage(`已登记 ${registered.artifact?.name || registered.artifact?.id || '外部生成结果'}`)
@@ -1235,7 +1251,12 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
                   <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">{artifact.name}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td>
-                  <td className="whitespace-nowrap px-4 py-3"><StatusBadge status={artifact.status} /></td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <StatusBadge
+                      status={artifact.status}
+                      label={isMaterialDependencyRequest(artifact) && artifact.status === 'review' ? '素材待回填' : undefined}
+                    />
+                  </td>
                   <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{artifact.owner}</td>
                   <td className="whitespace-nowrap px-4 py-3">
                     <div className="flex flex-wrap gap-2">
@@ -1376,22 +1397,24 @@ function ExternalGenerationRequestPanel({
     <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-black text-ink">外部生成请求</div>
+          <div className="text-sm font-black text-ink">素材依赖点</div>
           <div className="mt-1 text-xs text-ink-muted">
             {request.kind === 'image' ? '图片' : '视频'} · 参考图 {request.references.length}/{request.referenceImageLimit || 6}
             {targetText ? ` · ${targetText}` : ''}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <CopyButton value={request.prompt} label="复制 Prompt" />
+          <StatusBadge status="review" label="待用户回填" />
+          <CopyButton value={request.prompt} label="复制给外部网站" />
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
             disabled && 'cursor-not-allowed opacity-50'
           )}>
-            <FiUpload /> {uploading ? '上传中...' : '上传结果'}
+            <FiUpload /> {uploading ? '上传中...' : '上传回此依赖点'}
             <input
               type="file"
               accept={accept}
+              data-smoke-id="external-generation-upload"
               disabled={disabled}
               className="sr-only"
               onChange={(event) => onUpload(event, request)}
@@ -1399,6 +1422,9 @@ function ExternalGenerationRequestPanel({
           </label>
         </div>
       </div>
+      <p className="mt-3 text-xs leading-5 text-ink-muted">
+        流程在这里等待用户提供素材。你可以把 Prompt 和参考图复制到任意图片或视频生成网站，生成后上传文件回填；系统只登记本地引用和依赖关系。
+      </p>
       <div className="mt-3 rounded-lg border border-line bg-background-card p-3">
         <div className="text-xs font-black text-ink-soft">Prompt</div>
         <pre className="mt-2 max-h-48 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.prompt}</pre>
@@ -1431,6 +1457,12 @@ function ExternalGenerationRequestPanel({
       {message ? <p className="mt-3 text-xs font-semibold text-green-700">{message}</p> : null}
     </div>
   )
+}
+
+function isMaterialDependencyRequest(artifact: DirectorArtifactRecord): boolean {
+  return artifact.kind === 'EXTERNAL_GENERATION_REQUEST' ||
+    artifact.metadata?.artifactType === 'external_generation_request' ||
+    artifact.metadata?.artifact_kind === 'external_generation_request'
 }
 
 function isInspectableArtifact(artifact: DirectorArtifactRecord) {

@@ -1,16 +1,3 @@
-export interface CommandResult {
-  stdout: string
-  stderr: string
-  exitCode: number
-}
-
-export interface PublishResult {
-  platform: string
-  success: boolean
-  result?: string
-  error?: string
-}
-
 export interface FileReadResult {
   data: string      // base64-encoded file content
   mimeType: string
@@ -23,7 +10,6 @@ export interface ElectronAPI {
     localAgentUrl: string
     cloudApiBase: string
   }
-  executeCommand: (command: string, args?: string[], workDir?: string) => Promise<CommandResult>
   openFileDialog: (options?: Record<string, unknown>) => Promise<string[]>
   readFile: (filePath: string) => Promise<FileReadResult>
   openDirectoryDialog: (options?: Record<string, unknown>) => Promise<string[]>
@@ -33,12 +19,6 @@ export interface ElectronAPI {
     localAgentUrl: string
     cloudApiBase: string
   }>
-  publishToPlatforms: (payload: {
-    title: string
-    description: string
-    images: string[]
-    platforms: string[]
-  }) => Promise<PublishResult[]>
   openExternal: (url: string) => Promise<void>
   isElectron: boolean
 }

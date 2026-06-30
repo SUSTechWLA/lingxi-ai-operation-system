@@ -15,6 +15,69 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
+func TestOptionalLocalAgentModelConfigDisabledByDefault(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	ClearRuntimeModelProviderConfig()
+	SetVideoCreationConfig(config.OpenAIConfig{
+		APIKey:  "env-key",
+		BaseURL: "https://env.example/v1",
+		Model:   "env-model",
+	}, "")
+
+	previousFetcher := localAgentConfigFetcher
+	called := false
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		called = true
+		return RuntimeModelProviderConfig{
+			APIKey:  "local-key",
+			BaseURL: "https://local.example/v1",
+			Model:   "local-model",
+		}, true
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		ClearRuntimeModelProviderConfig()
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+	if called {
+		t.Fatalf("local agent model config fetcher must not run unless explicitly enabled")
+	}
+	if cfg.APIKey != "env-key" || cfg.BaseURL != "https://env.example/v1" || cfg.Model != "env-model" {
+		t.Fatalf("expected env config to remain effective, got %+v", cfg)
+	}
+}
+
+func TestOptionalLocalAgentModelConfigRequiresExplicitOptIn(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "true")
+	ClearRuntimeModelProviderConfig()
+	SetVideoCreationConfig(config.OpenAIConfig{
+		APIKey:  "env-key",
+		BaseURL: "https://env.example/v1",
+		Model:   "env-model",
+	}, "")
+
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{
+			APIKey:  "local-key",
+			BaseURL: "https://local.example/v1",
+			Model:   "local-model",
+		}, true
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		ClearRuntimeModelProviderConfig()
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+	if cfg.APIKey != "local-key" || cfg.BaseURL != "https://local.example/v1" || cfg.Model != "local-model" {
+		t.Fatalf("expected opted-in local config to override env config, got %+v", cfg)
+	}
+}
+
 func TestRegisterVideoCreationExternalToolsInstallsOpinionVideoDependencies(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)

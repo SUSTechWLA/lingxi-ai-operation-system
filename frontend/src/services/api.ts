@@ -339,17 +339,19 @@ export interface CheckpointItem {
   recoveredAt?: string
 }
 
-export const fetchCheckpoints = async (runId: string): Promise<CheckpointItem[]> => {
-  // Uses the video workflow endpoint; project ID is resolved server-side via the run.
+export const fetchCheckpoints = async (projectId: string, runId: string): Promise<CheckpointItem[]> => {
   const response = await api.get<ApiResponse<{ checkpoints: CheckpointItem[] }>>(
-    `/video-projects/checkpoints`, { params: { runId } }
+    `/video-projects/${projectId}/workflow-runs/${runId}/checkpoints`
   )
   return response.data.data?.checkpoints ?? []
 }
 
-export const recoverRun = async (runId: string): Promise<{ checkpoint: CheckpointItem; message: string }> => {
+export const recoverRun = async (
+  projectId: string,
+  runId: string
+): Promise<{ checkpoint: CheckpointItem; message: string }> => {
   const response = await api.post<ApiResponse<{ checkpoint: CheckpointItem; message: string }>>(
-    `/video-projects/checkpoints/recover`, { runId }
+    `/video-projects/${projectId}/workflow-runs/${runId}/recover`
   )
   return response.data.data!
 }

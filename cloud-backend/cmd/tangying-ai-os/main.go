@@ -444,7 +444,7 @@ func main() {
 		// ModelGateway and builtin config are initialized earlier (before buildAgentPlanner).
 		// gw is already created and providers registered; we just reference it here.
 
-		// Runtime model-provider config — synced from frontend Desktop page, persisted to disk
+		// Runtime model-provider config — operator-scoped cloud override, persisted to disk.
 		modelProviderHandler := func(c *gin.Context) {
 			switch c.Request.Method {
 			case "GET":
@@ -588,21 +588,8 @@ func main() {
 		// can actually call the LLM with original content + revision instruction.
 		artifactHandler.SetRevisionConfig(cfg.Video.SkillRoot, func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 			effectiveCfg := builtin.GetVideoCreationOpenAIConfig()
-			// Also try to pull config from the local desktop agent, matching
-			// the behavior of executeSkillStageAgent (the workflow LLM call path).
-			if localCfg, ok := builtin.TryFetchLocalAgentConfig(); ok {
-				if localCfg.BaseURL != "" {
-					effectiveCfg.BaseURL = localCfg.BaseURL
-				}
-				if localCfg.APIKey != "" {
-					effectiveCfg.APIKey = localCfg.APIKey
-				}
-				if localCfg.Model != "" {
-					effectiveCfg.Model = localCfg.Model
-				}
-			}
 			if effectiveCfg.APIKey == "" {
-				return "", fmt.Errorf("LLM API key 未配置，无法执行返工。请在桌面端设置页面配置 API Key。")
+				return "", fmt.Errorf("LLM API key 未配置，无法执行返工。请设置服务端 OPENAI_API_KEY 或云端 runtime model-provider 配置。")
 			}
 			llmTool := builtin.NewLlmApiTool(effectiveCfg)
 			var toolCtx tool.ToolContext
