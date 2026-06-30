@@ -1,6 +1,0 @@
-review_type: SELF_REVIEW
-decision: PROVISIONALLY_APPROVED
-reviewer: codex
-date: "2026-06-28"
-notes:
-  - "Focused tests, full cloud tests, vet, race, local tests, and frontend build passed."

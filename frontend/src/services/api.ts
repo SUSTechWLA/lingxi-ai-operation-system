@@ -36,10 +36,12 @@ import {
 const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
 const electronCloudBase = typeof window !== 'undefined' ? window.electronAPI?.runtimeConfig?.cloudApiBase : ''
 const API_BASE = configuredCloudBase || electronCloudBase || '/api'
+const DEFAULT_API_TIMEOUT_MS = 30000
+const AGENT_RUN_REQUEST_TIMEOUT_MS = 300000
 
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 30000,
+  timeout: DEFAULT_API_TIMEOUT_MS,
 })
 
 api.interceptors.request.use((config) => {
@@ -239,7 +241,9 @@ export const registerExternalGenerationResult = async (
 export const startAgentRun = async (
   payload: AgentStartRunRequest
 ): Promise<AgentStartRunResponse> => {
-  const response = await api.post<ApiResponse<AgentStartRunResponse>>('/agent/runs', payload)
+  const response = await api.post<ApiResponse<AgentStartRunResponse>>('/agent/runs', payload, {
+    timeout: AGENT_RUN_REQUEST_TIMEOUT_MS,
+  })
   return response.data.data
 }
 

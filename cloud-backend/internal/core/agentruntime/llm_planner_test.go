@@ -111,6 +111,18 @@ func TestClientProviderPlannerUsesRequestTextProvider(t *testing.T) {
 	}
 }
 
+func TestClientProviderPlannerAllowsSlowProviderBackedPlanning(t *testing.T) {
+	cfg := providerConfigFromMap(map[string]interface{}{
+		"baseUrl": "https://text.example/v1",
+		"apiKey":  "sk-client-planner",
+		"model":   "client-planner-model",
+	})
+
+	if cfg.Timeout < 180 {
+		t.Fatalf("client provider planner timeout = %d, want at least 180 seconds", cfg.Timeout)
+	}
+}
+
 func TestLLMPlannerPromptIncludesFreshKnowledgeCandidateForCurrentEvent(t *testing.T) {
 	client := &fakePlannerLLM{
 		response: `{

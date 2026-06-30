@@ -1,7 +1,0 @@
-review_type: SELF_REVIEW
-decision: PROVISIONALLY_APPROVED
-reviewer: codex
-date: "2026-06-28"
-notes:
-  - "P0 scope is taken directly from the source requirement document."
-  - "Frontend and advanced source ranking are deferred."

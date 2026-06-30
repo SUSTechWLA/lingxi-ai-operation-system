@@ -672,6 +672,18 @@ try {
     pageSource.includes('projectId: nextProject.id'),
     'dynamic agent run context must include the bound project id',
   )
+
+  const apiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
+  const agentRunTimeout = Number(apiSource.match(/const AGENT_RUN_REQUEST_TIMEOUT_MS = (\d+)/)?.[1] || 0)
+  assert.ok(
+    agentRunTimeout >= 300000,
+    'agent run start timeout must allow slow provider-backed planning and fallback',
+  )
+  assert.ok(
+    apiSource.includes('AGENT_RUN_REQUEST_TIMEOUT_MS') &&
+      /api\.post[\s\S]*?\('\/agent\/runs', payload,\s*\{[\s\S]*timeout:\s*AGENT_RUN_REQUEST_TIMEOUT_MS/.test(apiSource),
+    'startAgentRun must override the default 30000ms axios timeout for slower provider-backed planning',
+  )
 } finally {
   await rm(tempDir, { recursive: true, force: true })
 }

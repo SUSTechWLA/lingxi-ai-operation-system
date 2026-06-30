@@ -14,6 +14,8 @@ type ClientProviderPlanner struct {
 	maxTools int
 }
 
+const clientProviderPlannerTimeoutSeconds = 180
+
 func NewClientProviderPlanner(tools ToolListProvider, fallback Planner, maxTools int) *ClientProviderPlanner {
 	if maxTools <= 0 {
 		maxTools = 6
@@ -75,7 +77,7 @@ func providerConfigFromMap(provider map[string]interface{}) config.OpenAIConfig 
 		BaseURL: strings.TrimSpace(fmt.Sprint(provider["baseUrl"])),
 		APIKey:  strings.TrimSpace(fmt.Sprint(provider["apiKey"])),
 		Model:   strings.TrimSpace(fmt.Sprint(provider["model"])),
-		Timeout: 60,
+		Timeout: clientProviderPlannerTimeoutSeconds,
 	}
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 4000

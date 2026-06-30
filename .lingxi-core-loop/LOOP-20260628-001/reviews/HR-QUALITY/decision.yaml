@@ -1,8 +1,0 @@
-review_type: SELF_REVIEW
-decision: PROVISIONALLY_APPROVED
-reviewer: codex
-date: "2026-06-28"
-notes:
-  - "No database migration required."
-  - "No local-backend dependency boundary violation."
-  - "Frontend display is intentionally deferred."
