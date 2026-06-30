@@ -67,12 +67,13 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 	} else {
 		// Legacy demo fallback.
 		data := map[string]interface{}{
-			"topic":        topic,
-			"script":       script,
-			"shotList":     job.Payload["shotList"],
-			"videoPrompts": job.Payload["videoPrompts"],
-			"style":        job.Payload["style"],
-			"publishCopy":  job.Payload["publishCopy"],
+			"topic":             topic,
+			"script":            script,
+			"shotList":          job.Payload["shotList"],
+			"videoPrompts":      job.Payload["videoPrompts"],
+			"shotAssetPackages": job.Payload["shotAssetPackages"],
+			"style":             job.Payload["style"],
+			"publishCopy":       job.Payload["publishCopy"],
 		}
 		dataJSON, _ := json.MarshalIndent(data, "", "  ")
 		if err := os.WriteFile(filepath.Join(assetsDir, "data.json"), dataJSON, 0o644); err != nil {

@@ -583,10 +583,10 @@ function isShotReferenceArtifact(artifact: DirectorArtifactRecord): boolean {
 }
 
 function isShotMediaArtifact(artifact: DirectorArtifactRecord): boolean {
-  const mediaKinds = ['SHOT_AUDIO', 'SHOT_KEYFRAME', 'SHOT_VIDEO_CLIP', 'SHOT_SUBTITLE', 'HYPERFRAMES_SHOT']
+  const mediaKinds = ['SHOT_ASSET_PACKAGE', 'SHOT_AUDIO', 'SHOT_KEYFRAME', 'SHOT_VIDEO_CLIP', 'SHOT_SUBTITLE', 'HYPERFRAMES_SHOT']
   if (mediaKinds.includes(artifact.kind)) return true
   const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
-  return ['shot_audio', 'shot_keyframe', 'shot_video_clip', 'shot_subtitle', 'hyperframes_shot'].includes(artifactType || '')
+  return ['shot_asset_package', 'shot_audio', 'shot_keyframe', 'shot_video_clip', 'shot_subtitle', 'hyperframes_shot'].includes(artifactType || '')
 }
 
 function aggregateShotStatus(artifacts: DirectorArtifactRecord[]): DirectorArtifactStatus {
@@ -1417,6 +1417,7 @@ export function displayNameForArtifact(kind: string) {
     FFMPEG_PROBE_REPORT: '视频检测报告',
     FINAL_REVIEW: '最终审核报告',
     SHOT_REVIEW_PACKET: 'Shot审核包',
+    SHOT_ASSET_PACKAGE: 'Shot独立素材包',
     SHOT_AUDIO: 'Shot口播音频',
     SHOT_KEYFRAME: 'Shot关键帧',
     SHOT_VIDEO_CLIP: 'Shot视频片段',
@@ -1487,6 +1488,7 @@ function requiresMaterializedArtifact(kind: string) {
     'FFMPEG_PROBE_REPORT',
     'FINAL_REVIEW',
     'SHOT_REVIEW_PACKET',
+    'SHOT_ASSET_PACKAGE',
     'SHOT_AUDIO',
     'SHOT_KEYFRAME',
     'SHOT_VIDEO_CLIP',

@@ -181,6 +181,7 @@ func TestPlanCompiler_QualityGateReviewsProductionOutput(t *testing.T) {
 func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
 	compiler := NewPlanCompiler(staticToolCatalog{
 		"shot_splitter":                 {Name: "shot_splitter"},
+		"video_prompt_generator":        {Name: "video_prompt_generator"},
 		"hyperframes_project_generator": {Name: "hyperframes_project_generator"},
 		"hyperframes_renderer":          {Name: "hyperframes_renderer"},
 		"publish_copy_generator":        {Name: "publish_copy_generator"},
@@ -206,7 +207,8 @@ func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
 		{"brief", "proposal_generator", nil},
 		{"script", "video_script_generator", []string{"brief"}},
 		{"beat_plan", "shot_splitter", []string{"script"}},
-		{"preview", "hyperframes_project_generator", []string{"beat_plan", "script"}},
+		{"video_prompt", "video_prompt_generator", []string{"beat_plan"}},
+		{"preview", "hyperframes_project_generator", []string{"beat_plan", "video_prompt", "script"}},
 		{"render", "hyperframes_renderer", []string{"preview"}},
 		{"publish_copy", "publish_copy_generator", []string{"render", "script", "beat_plan"}},
 	}
@@ -242,6 +244,16 @@ func TestPlanCompiler_PreparePlanExpandsCostBudgetForInjectedRender(t *testing.T
 			},
 			Output: map[string]tool.ParamDef{
 				"shotList": {Type: "array"},
+			},
+		},
+		"video_prompt_generator": {
+			Name:      "video_prompt_generator",
+			CostLevel: tool.CostMedium,
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts": {Type: "array"},
 			},
 		},
 		"hyperframes_project_generator": {
@@ -396,6 +408,15 @@ func TestPlanCompiler_PreparePlanUsesScriptProducerWhenCaptionSplitterIsLastStep
 				"shotList": {Type: "array"},
 			},
 		},
+		"video_prompt_generator": {
+			Name: "video_prompt_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts": {Type: "array"},
+			},
+		},
 		"hyperframes_project_generator": {
 			Name: "hyperframes_project_generator",
 			Parameters: map[string]tool.ParamDef{
@@ -488,12 +509,23 @@ func TestPlanCompiler_PreparePlanIgnoresHallucinatedScriptExpectedOutputFromNews
 				"shotList": {Type: "array"},
 			},
 		},
+		"video_prompt_generator": {
+			Name: "video_prompt_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts":      {Type: "array"},
+				"shotAssetPackages": {Type: "array"},
+			},
+		},
 		"hyperframes_project_generator": {
 			Name: "hyperframes_project_generator",
 			Parameters: map[string]tool.ParamDef{
-				"topic":    {Type: "string", Required: true},
-				"script":   {Type: "string", Required: true},
-				"shotList": {Type: "array", Required: true},
+				"topic":             {Type: "string", Required: true},
+				"script":            {Type: "string", Required: true},
+				"shotList":          {Type: "array", Required: true},
+				"shotAssetPackages": {Type: "array", Required: false},
 			},
 			Output: map[string]tool.ParamDef{
 				"projectDir": {Type: "string"},
@@ -559,6 +591,16 @@ func TestPlanCompiler_PreparePlanIgnoresHallucinatedScriptExpectedOutputFromNews
 	if got := preview.Arguments["shotList"]; got != "{{beat_plan.output.shotList}}" {
 		t.Fatalf("preview should reference shot list producer, got %#v", preview.Arguments)
 	}
+	prompt := findStep(t, prepared, "video_prompt")
+	if got := prompt.Arguments["shotList"]; got != "{{beat_plan.output.shotList}}" {
+		t.Fatalf("video_prompt should reference shot list producer, got %#v", prompt.Arguments)
+	}
+	if got := preview.Arguments["videoPrompts"]; got != "{{video_prompt.output.videoPrompts}}" {
+		t.Fatalf("preview should reference video prompt producer, got %#v", preview.Arguments)
+	}
+	if got := preview.Arguments["shotAssetPackages"]; got != "{{video_prompt.output.shotAssetPackages}}" {
+		t.Fatalf("preview should reference shot asset package producer, got %#v", preview.Arguments)
+	}
 	render := findStep(t, prepared, "render")
 	if got := render.Arguments["projectDir"]; got != "{{preview.output.projectDir}}" {
 		t.Fatalf("render should reference projectDir producer, got %#v", render.Arguments)
@@ -603,6 +645,15 @@ func TestPlanCompiler_PreparePlanRepairsExistingBeatPlanInvalidScriptReference(t
 			},
 			Output: map[string]tool.ParamDef{
 				"shotList": {Type: "array"},
+			},
+		},
+		"video_prompt_generator": {
+			Name: "video_prompt_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts": {Type: "array"},
 			},
 		},
 		"hyperframes_project_generator": {

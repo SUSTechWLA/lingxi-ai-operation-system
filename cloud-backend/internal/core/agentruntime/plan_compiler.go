@@ -196,20 +196,52 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 		shotField = preferredOutputField(c.manifestFor("shot_splitter"), "shotList")
 	}
 
-	projectAnchor, projectField := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
-	if projectAnchor == "" {
-		projectAnchor = appendPlanStep(plan, AgentStep{
-			ID:        uniqueStepID(plan, "preview"),
-			Intent:    "生成可审核的 HyperFrames 预览项目和画面预览",
-			Tool:      "hyperframes_project_generator",
-			DependsOn: dependencyListUnique(shotAnchor, scriptAnchor),
+	promptAnchor, promptField := c.lastProducerStepForFields(plan,
+		[]string{"videoPrompts", "video_prompt", "keyframePrompts", "keyframe_prompt"},
+		[]string{"video_prompt_generator", "keyframe_prompt_generator"},
+	)
+	if promptAnchor == "" {
+		promptAnchor = appendPlanStep(plan, AgentStep{
+			ID:        uniqueStepID(plan, "video_prompt"),
+			Intent:    "根据分镜生成可审核的视频生成提示词",
+			Tool:      "video_prompt_generator",
+			DependsOn: dependencyList(shotAnchor),
 			Arguments: map[string]interface{}{
-				"stage":    "preview",
+				"stage":    "video_prompt",
 				"brief":    plan.Goal,
-				"topic":    plan.Goal,
-				"script":   scriptRef,
 				"shotList": stepOutputRef(shotAnchor, shotField),
 			},
+			ExpectedOutput:  []string{"videoPrompts", "video_prompt"},
+			ProduceArtifact: true,
+		})
+		promptField = preferredOutputField(c.manifestFor("video_prompt_generator"), "videoPrompts", "video_prompt")
+	}
+
+	projectAnchor, projectField := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
+	if projectAnchor == "" {
+		previewArgs := map[string]interface{}{
+			"stage":    "preview",
+			"brief":    plan.Goal,
+			"topic":    plan.Goal,
+			"script":   scriptRef,
+			"shotList": stepOutputRef(shotAnchor, shotField),
+		}
+		if promptAnchor != "" && (promptField == "videoPrompts" || promptField == "video_prompt") {
+			previewArgs["videoPrompts"] = stepOutputRef(promptAnchor, promptField)
+		}
+		if packageField := c.outputFieldForStep(plan, promptAnchor, "shotAssetPackages"); packageField != "" {
+			if projectManifest := c.manifestFor("hyperframes_project_generator"); projectManifest == nil || projectManifest.Parameters == nil {
+				previewArgs["shotAssetPackages"] = stepOutputRef(promptAnchor, packageField)
+			} else if _, ok := projectManifest.Parameters["shotAssetPackages"]; ok {
+				previewArgs["shotAssetPackages"] = stepOutputRef(promptAnchor, packageField)
+			}
+		}
+		projectAnchor = appendPlanStep(plan, AgentStep{
+			ID:              uniqueStepID(plan, "preview"),
+			Intent:          "生成可审核的 HyperFrames 预览项目和画面预览",
+			Tool:            "hyperframes_project_generator",
+			DependsOn:       dependencyListUnique(shotAnchor, promptAnchor, scriptAnchor),
+			Arguments:       previewArgs,
 			ExpectedOutput:  []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT", "hyperframes_project", "preview"},
 			ProduceArtifact: true,
 		})
@@ -345,6 +377,19 @@ func firstManifestOutput(manifest *tool.ToolManifest, fields ...string) string {
 	return ""
 }
 
+func (c *PlanCompiler) outputFieldForStep(plan *AgentPlan, stepID string, fields ...string) string {
+	if plan == nil || stepID == "" {
+		return ""
+	}
+	for _, step := range plan.Steps {
+		if step.ID != stepID {
+			continue
+		}
+		return firstManifestOutput(c.manifestFor(step.Tool), fields...)
+	}
+	return ""
+}
+
 func preferredOutputField(manifest *tool.ToolManifest, fields ...string) string {
 	if field := firstManifestOutput(manifest, fields...); field != "" {
 		return field
@@ -393,7 +438,7 @@ func stepOutputRef(stepID, field string) string {
 }
 
 func (c *PlanCompiler) hasVideoBetaCompletionTools() bool {
-	for _, name := range []string{"shot_splitter", "hyperframes_project_generator", "hyperframes_renderer", "publish_copy_generator"} {
+	for _, name := range []string{"shot_splitter", "video_prompt_generator", "hyperframes_project_generator", "hyperframes_renderer", "publish_copy_generator"} {
 		if c.manifestFor(name) == nil {
 			return false
 		}

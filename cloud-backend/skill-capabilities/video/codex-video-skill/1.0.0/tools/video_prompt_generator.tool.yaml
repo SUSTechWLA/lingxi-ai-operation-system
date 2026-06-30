@@ -47,6 +47,12 @@ output:
   videoPrompts:
     type: array
     description: 视频提示词列表
+  shotAssetPackages:
+    type: array
+    description: 每个 shot 的独立素材包，包含 referenceImages、prompts、voiceover、aigcVideo、subtitle 和 concatPlan
+  externalGenerationRequests:
+    type: array
+    description: 可复制到外部图片/视频生成平台的请求列表
   summary:
     type: string
     description: 提示词概览

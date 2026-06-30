@@ -351,6 +351,84 @@ func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *
 	}
 }
 
+func TestBuildArtifactsShotAssetPackageMaterializesIndividualPackage(t *testing.T) {
+	node := &model.Node{
+		ID:     "video_prompt_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "video_prompt",
+			"tool":  "video_prompt_generator",
+		},
+		Output: map[string]interface{}{
+			"shotAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "SHOT_01",
+					"durationSec": 6,
+					"referenceImages": []interface{}{
+						map[string]interface{}{"id": "keyframe_SHOT_01", "role": "keyframe", "storageRef": "local://projects/vp-1/keyframes/SHOT_01.png"},
+					},
+					"prompts": map[string]interface{}{
+						"videoPrompt":    "独立生成6秒视频，结尾0.5秒完成淡出转场。",
+						"negativePrompt": "禁止真人写实。",
+					},
+					"voiceover": map[string]interface{}{
+						"text":         "佛得角是西非岛国。",
+						"artifactKind": "SHOT_AUDIO",
+					},
+					"aigcVideo": map[string]interface{}{
+						"requestId":       "extgen_video_SHOT_01",
+						"artifactKind":    "SHOT_VIDEO_CLIP",
+						"concatMode":      "simple_cut",
+						"transitionAtEnd": "结尾0.5秒淡出",
+					},
+					"subtitle": map[string]interface{}{
+						"text":         "佛得角是西非岛国。",
+						"artifactKind": "SHOT_SUBTITLE",
+					},
+				},
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "shot_asset_package_SHOT_01",
+					"kind":     "SHOT_ASSET_PACKAGE",
+					"name":     "SHOT_01_asset_package.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"artifactType":   "shot_asset_package",
+						"relatedShotId":  "SHOT_01",
+						"ffmpegConcatOK": true,
+					},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("shot asset package should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one shot asset package artifact, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Kind != ArtifactKind("SHOT_ASSET_PACKAGE") {
+		t.Fatalf("kind = %q, want SHOT_ASSET_PACKAGE", req.Kind)
+	}
+	if req.StorageType != StorageInline {
+		t.Fatalf("shot asset package should be inline review JSON, got %q", req.StorageType)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil {
+		t.Fatalf("shot asset package data should be JSON: %v; data=%s", err, string(req.Data))
+	}
+	if decoded["shotId"] != "SHOT_01" || decoded["shotAssetPackages"] != nil {
+		t.Fatalf("data should contain the individual package only, got %+v", decoded)
+	}
+	if _, ok := decoded["aigcVideo"].(map[string]interface{}); !ok {
+		t.Fatalf("package should include aigcVideo data, got %+v", decoded)
+	}
+}
+
 func TestBuildArtifactsExternalGenerationRequestRejectsPromptOverLimit(t *testing.T) {
 	node := externalGenerationRequestNode("extgen_too_long", map[string]interface{}{
 		"requestId":           "extgen_too_long",

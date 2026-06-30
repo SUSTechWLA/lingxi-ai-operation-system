@@ -203,6 +203,10 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 		storageType = StorageInline
 		provider = "external-generation-request"
 	}
+	if isShotAssetPackageMetadata(metadata) {
+		storageType = StorageInline
+		provider = "shot-asset-package"
+	}
 	return &CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,
@@ -293,6 +297,9 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 	if request, ok := externalGenerationRequestPayload(payload, unitID); ok {
 		return marshalValue(request)
 	}
+	if packageData, ok := shotAssetPackagePayload(payload, unitID); ok {
+		return marshalValue(packageData)
+	}
 	switch unitID {
 	case "script-content":
 		// Prefer the parsed script; the raw "content" field often contains
@@ -366,8 +373,41 @@ func externalGenerationRequestPayload(payload map[string]interface{}, unitID str
 	return nil, false
 }
 
+func shotAssetPackagePayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {
+	if unitID == "" {
+		return nil, false
+	}
+	items, ok := payload["shotAssetPackages"].([]interface{})
+	if !ok {
+		return nil, false
+	}
+	normalizedUnit := strings.ToLower(strings.ReplaceAll(unitID, "-", "_"))
+	for _, item := range items {
+		pkg, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		shotID := stringValue(pkg, "shotId")
+		if shotID == "" {
+			shotID = stringValue(pkg, "id")
+		}
+		if shotID == "" {
+			continue
+		}
+		normalizedShot := strings.ToLower(strings.ReplaceAll(shotID, "-", "_"))
+		if strings.Contains(normalizedUnit, normalizedShot) {
+			return pkg, true
+		}
+	}
+	return nil, false
+}
+
 func isExternalGenerationRequestMetadata(metadata map[string]interface{}) bool {
 	return stringValue(metadata, "artifactType") == "external_generation_request"
+}
+
+func isShotAssetPackageMetadata(metadata map[string]interface{}) bool {
+	return stringValue(metadata, "artifactType") == "shot_asset_package"
 }
 
 func validateExternalGenerationRequestData(data []byte) error {
@@ -424,6 +464,7 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 		"PREVIEW_REPORT",
 		"RENDER_REPORT",
 		"FINAL_REVIEW",
+		"SHOT_ASSET_PACKAGE",
 		"PROJECT_PACKAGE":
 		return true
 	default:

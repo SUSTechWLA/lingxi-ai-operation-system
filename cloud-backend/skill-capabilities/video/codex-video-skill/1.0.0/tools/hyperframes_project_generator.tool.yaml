@@ -46,6 +46,10 @@ parameters:
     type: array
     required: false
     description: 视频生成提示词
+  shotAssetPackages:
+    type: array
+    required: false
+    description: 每个 shot 的独立素材包，用于预览、审核和后续 ffmpeg 拼接
   style:
     type: string
     required: false

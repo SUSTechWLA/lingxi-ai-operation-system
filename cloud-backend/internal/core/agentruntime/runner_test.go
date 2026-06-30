@@ -86,6 +86,12 @@ func TestRunnerStart_PreparesVideoBetaPlanBeforeGuard(t *testing.T) {
 			Parameters: map[string]tool.ParamDef{"script": {Type: "string", Required: true}},
 			Output:     map[string]tool.ParamDef{"shotList": {Type: "array"}},
 		},
+		"video_prompt_generator": {
+			Name:       "video_prompt_generator",
+			CostLevel:  tool.CostMedium,
+			Parameters: map[string]tool.ParamDef{"shotList": {Type: "array", Required: true}},
+			Output:     map[string]tool.ParamDef{"videoPrompts": {Type: "array"}},
+		},
 		"hyperframes_project_generator": {
 			Name:      "hyperframes_project_generator",
 			CostLevel: tool.CostLow,
@@ -466,6 +472,12 @@ func videoBetaCompletionCatalog() staticToolCatalog {
 			Parameters: map[string]tool.ParamDef{"script": {Type: "string", Required: true}},
 			Output:     map[string]tool.ParamDef{"shotList": {Type: "array"}},
 		},
+		"video_prompt_generator": {
+			Name:       "video_prompt_generator",
+			CostLevel:  tool.CostMedium,
+			Parameters: map[string]tool.ParamDef{"shotList": {Type: "array", Required: true}},
+			Output:     map[string]tool.ParamDef{"videoPrompts": {Type: "array"}},
+		},
 		"hyperframes_project_generator": {
 			Name:      "hyperframes_project_generator",
 			CostLevel: tool.CostLow,
@@ -502,6 +514,7 @@ type betaCompletionJudge struct{}
 func (betaCompletionJudge) Evaluate(plan *AgentPlan) PlanJudgeReport {
 	required := map[string]bool{
 		"beat_plan":    false,
+		"video_prompt": false,
 		"preview":      false,
 		"render":       false,
 		"publish_copy": false,

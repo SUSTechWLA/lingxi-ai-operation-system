@@ -41,6 +41,9 @@ output:
   shotList:
     type: array
     description: 分镜列表
+  shotAssetPackages:
+    type: array
+    description: 每个 shot 的独立素材包规划，包含参考图、提示词、口播、AIGC 视频、字幕和拼接要求
   totalDurationSec:
     type: number
     description: 总时长（秒）

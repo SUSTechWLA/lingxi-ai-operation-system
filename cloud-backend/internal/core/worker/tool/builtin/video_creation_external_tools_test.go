@@ -173,11 +173,14 @@ func TestShotSplitterPromptRequiresShotProductionPackets(t *testing.T) {
 	for _, required := range []string{
 		"不论 AIGC 还是 HyperFrames",
 		"每个 shot 都是最小生产、审核和返工单元",
+		"每个 shot 时长 3-15 秒",
+		"每个 shot 的素材包必须完全独立",
 		"narrationText",
 		"materialLibraryHints",
 		"referenceRequirements",
 		"expectedArtifacts",
 		"reviewPacket",
+		"shotAssetPackages",
 		"SHOT_REVIEW_PACKET",
 	} {
 		if !strings.Contains(prompt, required) {
@@ -206,10 +209,16 @@ func TestVideoPromptGeneratorPromptRequiresIndependentShotGeneration(t *testing.
 	prompt := buildDynamicAgentSystemPrompt("video_prompt_generator", "佛得角世界杯出线", "", "视频创作平台")
 	for _, required := range []string{
 		"每个 shot 都必须作为独立视频片段生成",
+		"shotAssetPackages",
+		"referenceImages",
+		"voiceover",
+		"aigcVideo",
 		"不要使用尾帧",
 		"只使用首帧",
 		"参考故事板",
 		"转场设计写在本 shot 内部",
+		"转场覆盖在本 shot 结尾",
+		"ffmpeg",
 		"简单剪辑拼接",
 		"每个 shot 都必须绑定自己的口播",
 		"素材库",
@@ -220,6 +229,45 @@ func TestVideoPromptGeneratorPromptRequiresIndependentShotGeneration(t *testing.
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("video prompt generator prompt should contain %q, got:\n%s", required, prompt)
 		}
+	}
+}
+
+func TestExecuteDynamicAgentPromptToolExposesShotAssetPackages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"videoPrompts\":[{\"shotId\":\"SHOT_01\",\"durationSec\":6,\"narrationText\":\"佛得角是西非岛国。\",\"prompt\":\"独立生成6秒视频，结尾0.5秒完成淡出转场。\"}],\"shotAssetPackages\":[{\"shotId\":\"SHOT_01\",\"durationSec\":6,\"referenceImages\":[{\"id\":\"keyframe_SHOT_01\",\"role\":\"keyframe\",\"storageRef\":\"local://projects/p/keyframes/SHOT_01.png\"}],\"prompts\":{\"videoPrompt\":\"独立生成6秒视频\",\"negativePrompt\":\"禁止真人写实\"},\"voiceover\":{\"text\":\"佛得角是西非岛国。\",\"artifactKind\":\"SHOT_AUDIO\"},\"aigcVideo\":{\"requestId\":\"extgen_video_SHOT_01\",\"artifactKind\":\"SHOT_VIDEO_CLIP\",\"concatMode\":\"simple_cut\",\"transitionAtEnd\":\"结尾0.5秒淡出\"},\"subtitle\":{\"text\":\"佛得角是西非岛国。\",\"artifactKind\":\"SHOT_SUBTITLE\"}}],\"summary\":\"ok\"}"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	SetVideoCreationConfig(config.OpenAIConfig{
+		APIKey:    "test-key",
+		BaseURL:   server.URL,
+		Model:     "deepseek-v4-pro",
+		MaxTokens: 512,
+		Timeout:   5,
+	}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "佛得角世界杯出线", "", map[string]interface{}{
+		"topic": "佛得角世界杯出线",
+		"shotList": []interface{}{
+			map[string]interface{}{"shotId": "SHOT_01", "durationSec": 6, "narrationText": "佛得角是西非岛国。"},
+		},
+	}, tool.ToolContext{TaskID: "task-shot-packages", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]interface{})
+	if !ok || len(packages) != 1 {
+		t.Fatalf("expected shotAssetPackages to be exposed from structured output, got %#v", result.Data["shotAssetPackages"])
 	}
 }
 
@@ -240,11 +288,12 @@ func TestHyperFramesShotFirstFallbackUsesShotSectionsAndNarration(t *testing.T) 
 }
 
 func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
-	data := buildHyperFramesDataJSON("佛得角奇迹", "完整口播", `[{"shotId":"SHOT_01","scriptText":"..."}]`, `[]`, "16:9", "{}")
+	data := buildHyperFramesDataJSON("佛得角奇迹", "完整口播", `[{"shotId":"SHOT_01","scriptText":"..."}]`, `[]`, `[]`, "16:9", "{}")
 	for _, required := range []string{
 		`"productionMode": "shot_first"`,
 		`"reviewUnit": "shot"`,
 		`"requiresNarrationSync": true`,
+		`"shotAssetPackages"`,
 		`"shots"`,
 	} {
 		if !strings.Contains(data, required) {

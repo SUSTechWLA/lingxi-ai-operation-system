@@ -454,6 +454,68 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"factCheckWarnings":    {Type: "array", Description: "Fact check warnings"},
 			"knowledgeTrace":       {Type: "object", Description: "Knowledge usage trace"},
 		}
+	case "shot_splitter":
+		manifest.Description = "Split a video script into independent 3-15 second shot production units."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "storyboard_generation", "shot_planning"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"script":           {Type: "string", Description: "Approved voiceover script", Required: true},
+			"brief":            {Type: "string", Description: "Original video brief", Required: false},
+			"shotDurationRule": {Type: "string", Description: "Shot duration rule, default 3-15 seconds", Required: false},
+			"aspectRatio":      {Type: "string", Description: "Video aspect ratio", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"shotList":          {Type: "array", Description: "Independent 3-15 second shot list"},
+			"shotAssetPackages": {Type: "array", Description: "Per-shot independent asset package requirements"},
+			"totalDurationSec":  {Type: "number", Description: "Total duration in seconds"},
+			"summary":           {Type: "string", Description: "Shot list summary"},
+			"content":           {Type: "string", Description: "Reviewable shot package content"},
+			"artifacts":         {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+	case "video_prompt_generator":
+		manifest.Description = "Generate independent per-shot video prompts and shot asset packages."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostMedium
+		manifest.RiskLevel = tool.RiskMedium
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "video_prompt_generation", "text_to_video"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"shotList":        {Type: "array", Description: "Approved shot list", Required: true},
+			"brief":           {Type: "string", Description: "Original video brief", Required: false},
+			"keyframePrompts": {Type: "array", Description: "Optional keyframe prompts", Required: false},
+			"style":           {Type: "string", Description: "Visual style", Required: false},
+			"modelHint":       {Type: "string", Description: "Target video generation model", Required: false},
+			"aspectRatio":     {Type: "string", Description: "Video aspect ratio", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"videoPrompts":               {Type: "array", Description: "Independent per-shot video prompts"},
+			"shotAssetPackages":          {Type: "array", Description: "Per-shot packages containing references, prompts, voiceover, AIGC video, subtitles, and concat plan"},
+			"externalGenerationRequests": {Type: "array", Description: "Copyable external image/video generation requests"},
+			"summary":                    {Type: "string", Description: "Prompt package summary"},
+			"content":                    {Type: "string", Description: "Reviewable prompt package content"},
+			"artifacts":                  {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+	case "hyperframes_project_generator":
+		manifest.Parameters = map[string]tool.ParamDef{
+			"topic":             {Type: "string", Description: "Video topic", Required: true},
+			"script":            {Type: "string", Description: "Full voiceover script", Required: true},
+			"shotList":          {Type: "array", Description: "Shot list", Required: true},
+			"videoPrompts":      {Type: "array", Description: "Video prompts", Required: false},
+			"shotAssetPackages": {Type: "array", Description: "Independent per-shot asset packages", Required: false},
+			"style":             {Type: "string", Description: "Visual style", Required: false},
+			"publishCopy":       {Type: "object", Description: "Publish copy", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"projectDir": {Type: "string", Description: "HyperFrames project directory"},
+			"entry":      {Type: "string", Description: "Entry HTML file"},
+			"files":      {Type: "array", Description: "Generated files"},
+			"summary":    {Type: "string", Description: "Generation summary"},
+		}
 	}
 }
 
@@ -1693,6 +1755,242 @@ func buildSkillStageArtifacts(stage, skillName string, includePublishCopy, isJSO
 	return artifacts
 }
 
+func ensureVideoPromptShotAssetPackages(pkg map[string]interface{}) {
+	if len(pkg) == 0 {
+		return
+	}
+	normalizeDurationInItems(pkg["videoPrompts"])
+	normalizeDurationInItems(pkg["shotAssetPackages"])
+	if len(interfaceItems(pkg["shotAssetPackages"])) > 0 {
+		return
+	}
+	videoPrompts := interfaceItems(pkg["videoPrompts"])
+	if len(videoPrompts) == 0 {
+		return
+	}
+	requestsByShot := videoRequestsByShot(pkg["externalGenerationRequests"])
+	packages := make([]interface{}, 0, len(videoPrompts))
+	for _, item := range videoPrompts {
+		prompt, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		shotID := firstStringInMap(prompt, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", len(packages)+1)
+		}
+		duration := normalizedDurationSec(prompt["durationSec"])
+		prompt["durationSec"] = duration
+		videoRequest := requestsByShot[shotID]
+		requestID := firstStringInMap(videoRequest, "requestId", "id")
+		if requestID == "" {
+			requestID = "extgen_video_" + sanitizeUnitPart(shotID)
+		}
+		references := videoRequest["references"]
+		if references == nil {
+			references = []interface{}{}
+		}
+		transitionAtEnd := firstStringInMap(prompt, "transitionOut", "transitionAtEnd")
+		if transitionAtEnd == "" {
+			if assembly, ok := mapValue(prompt["shotAssemblyPlan"]); ok {
+				transitionAtEnd = firstStringInMap(assembly, "transitionAtEnd")
+			}
+		}
+		if transitionAtEnd == "" {
+			transitionAtEnd = "本 shot 结尾 0.3-0.8 秒内完成稳定收束或淡出，方便 ffmpeg 直接拼接"
+		}
+		narration := firstStringInMap(prompt, "narrationText", "voiceoverText", "scriptText")
+		subtitle := firstStringInMap(prompt, "subtitleText", "narrationText")
+		packageItem := map[string]interface{}{
+			"shotId":          shotID,
+			"durationSec":     duration,
+			"referenceImages": references,
+			"prompts": map[string]interface{}{
+				"videoPrompt":    firstStringInMap(prompt, "prompt", "videoPrompt"),
+				"negativePrompt": firstStringInMap(prompt, "negativePrompt"),
+			},
+			"voiceover": map[string]interface{}{
+				"text":         narration,
+				"artifactKind": "SHOT_AUDIO",
+				"fileName":     fmt.Sprintf("%s_voiceover.wav", shotID),
+			},
+			"aigcVideo": map[string]interface{}{
+				"requestId":       requestID,
+				"artifactKind":    "SHOT_VIDEO_CLIP",
+				"fileName":        fmt.Sprintf("%s_video_clip.mp4", shotID),
+				"concatMode":      "simple_cut",
+				"transitionAtEnd": transitionAtEnd,
+			},
+			"subtitle": map[string]interface{}{
+				"text":         subtitle,
+				"artifactKind": "SHOT_SUBTITLE",
+				"fileName":     fmt.Sprintf("%s_subtitle.srt", shotID),
+			},
+			"concatPlan": map[string]interface{}{
+				"ffmpegReady":                      true,
+				"mode":                             "simple_cut",
+				"transitionCoveredInShotEnd":       true,
+				"transitionCoverageRequirementSec": "0.3-0.8",
+			},
+			"independence": map[string]interface{}{
+				"crossShotDependencyForbidden": true,
+				"allowedSharedConsistency":     []string{"主要角色", "主要道具", "主场景", "全片风格"},
+			},
+		}
+		packages = append(packages, packageItem)
+	}
+	if len(packages) > 0 {
+		pkg["shotAssetPackages"] = packages
+	}
+}
+
+func buildShotAssetPackageArtifacts(raw interface{}) []map[string]interface{} {
+	items := interfaceItems(raw)
+	if len(items) == 0 {
+		return nil
+	}
+	artifacts := make([]map[string]interface{}, 0, len(items))
+	for i, item := range items {
+		pkg, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		shotID := firstStringInMap(pkg, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		unitShotID := sanitizeUnitPart(shotID)
+		artifacts = append(artifacts, map[string]interface{}{
+			"unitId":   "shot_asset_package_" + unitShotID,
+			"kind":     "SHOT_ASSET_PACKAGE",
+			"name":     shotID + "_asset_package.json",
+			"mimeType": "application/json",
+			"metadata": map[string]interface{}{
+				"artifactType":   "shot_asset_package",
+				"relatedShotId":  shotID,
+				"ffmpegConcatOK": true,
+			},
+		})
+	}
+	return artifacts
+}
+
+func videoRequestsByShot(raw interface{}) map[string]map[string]interface{} {
+	result := map[string]map[string]interface{}{}
+	for _, item := range interfaceItems(raw) {
+		request, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		if strings.ToLower(firstStringInMap(request, "kind")) != "video" {
+			continue
+		}
+		shotID := firstStringInMap(request, "shotId", "id")
+		if shotID != "" {
+			result[shotID] = request
+		}
+	}
+	return result
+}
+
+func normalizeDurationInItems(raw interface{}) {
+	for _, item := range interfaceItems(raw) {
+		if entry, ok := mapValue(item); ok {
+			entry["durationSec"] = normalizedDurationSec(entry["durationSec"])
+		}
+	}
+}
+
+func normalizedDurationSec(value interface{}) int {
+	duration := intFromInterface(value, 6)
+	if duration < 3 {
+		return 3
+	}
+	if duration > 15 {
+		return 15
+	}
+	return duration
+}
+
+func intFromInterface(value interface{}, fallback int) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		if n, err := typed.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		var parsed int
+		if _, err := fmt.Sscanf(typed, "%d", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func interfaceItems(raw interface{}) []interface{} {
+	switch typed := raw.(type) {
+	case []interface{}:
+		return typed
+	case []map[string]interface{}:
+		items := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func mapValue(raw interface{}) (map[string]interface{}, bool) {
+	if typed, ok := raw.(map[string]interface{}); ok {
+		return typed, true
+	}
+	data, err := json.Marshal(raw)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return nil, false
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func firstStringInMap(values map[string]interface{}, keys ...string) string {
+	if values == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if text := strings.TrimSpace(ensureStringValue(values[key])); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func sanitizeUnitPart(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "SHOT"
+	}
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteRune('_')
+	}
+	return strings.Trim(b.String(), "_-")
+}
+
 func semanticArtifactKindForTool(toolName string) string {
 	switch toolName {
 	case "proposal_generator":
@@ -1918,6 +2216,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	// Serialize structured params for the LLM prompt.
 	shotListJSON := serializeParamJSON(params["shotList"])
 	videoPromptsJSON := serializeParamJSON(params["videoPrompts"])
+	shotAssetPackagesJSON := serializeParamJSON(params["shotAssetPackages"])
 	publishCopyJSON := serializeParamJSON(params["publishCopy"])
 
 	// Determine project directory.
@@ -1929,7 +2228,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	assetsDir := filepath.Join(projectDir, "assets")
 
 	// Build data.json content.
-	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, style, publishCopyJSON)
+	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON)
 	manifestJSON := buildHyperFramesManifestJSON(topic, toolCtx.TaskID)
 	styleCSS := hyperFramesDefaultStyleCSS()
 
@@ -2030,7 +2329,7 @@ func serializeParamJSON(value interface{}) string {
 }
 
 // buildHyperFramesDataJSON builds the data.json content for a HyperFrames project.
-func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, style, publishCopyJSON string) string {
+func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON string) string {
 	// Always emit valid JSON even when upstream fields are empty.
 	safeShots := shotListJSON
 	if safeShots == "" {
@@ -2039,6 +2338,10 @@ func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, sty
 	safePrompts := videoPromptsJSON
 	if safePrompts == "" {
 		safePrompts = "[]"
+	}
+	safeShotAssetPackages := shotAssetPackagesJSON
+	if safeShotAssetPackages == "" {
+		safeShotAssetPackages = "[]"
 	}
 	safePublish := publishCopyJSON
 	if safePublish == "" {
@@ -2053,6 +2356,7 @@ func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, sty
   "requiresNarrationSync": true,
   "shots": %s,
   "videoPrompts": %s,
+  "shotAssetPackages": %s,
   "style": {
     "aspectRatio": "16:9",
     "language": "zh-CN",
@@ -2060,7 +2364,7 @@ func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, sty
   },
   "publishCopy": %s
 }
-`, jsonString(topic), jsonString(script), safeShots, safePrompts, jsonString(style), safePublish)
+`, jsonString(topic), jsonString(script), safeShots, safePrompts, safeShotAssetPackages, jsonString(style), safePublish)
 }
 
 // buildHyperFramesManifestJSON builds the manifest.json for a HyperFrames project.
@@ -3603,7 +3907,14 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 		return tool.FailureResult(fmt.Sprintf("%s: LLM 未返回结构化 JSON，请重试", toolName))
 	}
 
+	if toolName == "video_prompt_generator" {
+		ensureVideoPromptShotAssetPackages(contentPkg)
+	}
+
 	artifacts := buildSkillStageArtifacts(toolName, skillName, toolName == "publish_copy_generator", isJSON)
+	if toolName == "video_prompt_generator" {
+		artifacts = append(artifacts, buildShotAssetPackageArtifacts(contentPkg["shotAssetPackages"])...)
+	}
 
 	data := map[string]interface{}{
 		"content":   displayContent,
@@ -3649,6 +3960,9 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 	if videoPromptsOut, ok := contentPkg["videoPrompts"]; ok {
 		data["videoPrompts"] = videoPromptsOut
+	}
+	if shotAssetPackages, ok := contentPkg["shotAssetPackages"]; ok {
+		data["shotAssetPackages"] = shotAssetPackages
 	}
 	if totalDurationSec, ok := contentPkg["totalDurationSec"]; ok {
 		data["totalDurationSec"] = totalDurationSec
@@ -4121,8 +4435,11 @@ style=%s
 6. 每个 shot 必须包含 expectedArtifacts，明确该 shot 后续会生成或上传的 voiceover/audio、keyframe、image、videoClip、subtitle、hyperframesSegment、reviewPacket。
 7. 每个 shot 必须包含 reviewPacket，用于前端按 shot 审核，字段至少包括 artifactKind="SHOT_REVIEW_PACKET"、reviewFocus、rerunScope、dependencies。
 8. AIGC shot 的 reviewFocus 必须覆盖参考图一致性、提示词、音频口播、关键帧、视频片段、字幕；HyperFrames shot 的 reviewFocus 必须覆盖画面和口播一致性、文字层可读性、时间轴节奏。
-9. 视觉风格默认 16:9，非写实动画，去 AI 感。
-10. 输出严格 JSON。
+9. 每个 shot 的素材包必须完全独立，不得要求读取上一个或下一个 shot；唯一允许共用的是为了一致性锁定的主要角色、主要道具、主场景和全片风格。
+10. transitionOut 必须描述覆盖在本 shot 结尾 0.3-0.8 秒内的收束或转场，方便 ffmpeg 直接按 shot 顺序拼接。
+11. 输出 shotAssetPackages，作为每个 shot 后续参考图、提示词、口播、AIGC 视频、字幕和拼接计划的独立素材包规划。
+12. 视觉风格默认 16:9，非写实动画，去 AI 感。
+13. 输出严格 JSON。
 
 输入：
 script=<script>
@@ -4159,6 +4476,27 @@ aspectRatio=<aspectRatio>
         "dependencies": ["script", "reference_assets", "material_library"]
       },
       "notes": "..."
+    }
+  ],
+  "shotAssetPackages": [
+    {
+      "shotId": "SHOT_01",
+      "durationSec": 6,
+      "independence": {
+        "crossShotDependencyForbidden": true,
+        "allowedSharedConsistency": ["主要角色", "主要道具", "主场景", "全片风格"]
+      },
+      "requiredAssets": {
+        "referenceImages": ["首帧/关键帧", "角色三视图", "主道具三视图", "主场景参考图"],
+        "prompts": ["keyframe_prompt", "video_prompt", "negative_prompt"],
+        "voiceover": "SHOT_AUDIO",
+        "aigcVideo": "SHOT_VIDEO_CLIP",
+        "subtitle": "SHOT_SUBTITLE"
+      },
+      "concatPlan": {
+        "mode": "simple_cut",
+        "transitionAtEnd": "本 shot 结尾 0.3-0.8 秒内完成收束或淡出，不依赖下一 shot"
+      }
     }
   ],
   "totalDurationSec": 90,
@@ -4295,19 +4633,20 @@ style=<style>
 硬性要求：
 1. 每个 shot 都必须作为独立视频片段生成，每个 shot 输出一个 video prompt，可单独复制给模型调用。
 2. prompt 必须包含：画面主体、场景、动作、镜头运动、光影、色彩、风格、持续时间、转场。
-3. 必须写清楚该镜头内部的时间线变化；转场设计写在本 shot 内部，例如开头如何进入、结尾如何自然收束，不能要求上一个或下一个 shot 配合。
+3. 必须写清楚该镜头内部的时间线变化；转场设计写在本 shot 内部，例如开头如何进入、结尾如何自然收束，不能要求上一个或下一个 shot 配合；转场覆盖在本 shot 结尾 0.3-0.8 秒内完成。
 4. 不依赖上下文记忆，因为视频模型每个 shot 独立生成；不能写“同上/沿用上一镜/接上一镜/延续前一镜”等表达。
 5. 不要使用尾帧、末帧、首尾帧对齐、前后 shot frame matching 或任何会限制模型创作的跨 shot 帧约束。
 6. 视频 request 可以依赖图片+prompt，但只使用首帧+参考故事板作为本 shot 的图像约束；只使用首帧锁定起始构图，参考故事板锁定动作节奏和关键状态。
 7. 同时输出 externalGenerationRequests，供没有文生视频/API 的用户复制 prompt 到外部平台生成，再上传结果。
 8. references 最多 6 张，优先引用人物、主要道具、场景、首帧、参考故事板，明确每张参考图锁定什么；不要引用尾帧或下一 shot 的画面。
 9. 每个 externalGenerationRequest 的 prompt 不超过 2000 字。
-10. 最终成片按 shot 顺序简单剪辑拼接即可，允许最简单硬切或轻微交叉淡化，不要求模型生成跨 shot 衔接。
+10. 最终成片按 shot 顺序用 ffmpeg 直接拼接即可，默认 simple_cut；这是简单剪辑拼接，不要求复杂跨 shot 衔接；允许轻微交叉淡化，但淡化素材必须已覆盖在当前 shot 结尾。
 11. 每个 shot 都必须绑定自己的口播 narrationText、可选素材库 materialLibraryHints、音频生成要求、字幕要求和对应视频片段；纯 AIGC 可以配字幕，字幕必须来自该 shot 的口播。
 12. 输出 shotAssemblyPlan，说明该 shot 生成 SHOT_AUDIO、SHOT_SUBTITLE、SHOT_VIDEO_CLIP 后如何进入最终简单拼接。
-13. 禁止真人写实，默认非写实动画，去 AI 感。
-14. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request，并为每个 shot 建 SHOT_VIDEO_CLIP、SHOT_AUDIO、SHOT_SUBTITLE 的占位 artifact metadata。
-15. 输出严格 JSON。
+13. 输出 shotAssetPackages。每个 package 必须完全独立包含 referenceImages、prompts、voiceover、aigcVideo、subtitle、concatPlan；只允许通过 allowedSharedConsistency 共用主要角色、主要道具、主场景和全片风格。
+14. 禁止真人写实，默认非写实动画，去 AI 感。
+15. artifacts[] 必须为每个 externalGenerationRequest 建一个 JSON artifact，metadata.artifactType 固定为 external_generation_request，并为每个 shot 建 SHOT_ASSET_PACKAGE、SHOT_VIDEO_CLIP、SHOT_AUDIO、SHOT_SUBTITLE 的占位 artifact metadata。
+16. 输出严格 JSON。
 
 输入：
 shotList=<shotList>
@@ -4331,12 +4670,32 @@ modelHint=<modelHint>
         "audioArtifactKind": "SHOT_AUDIO",
         "subtitleArtifactKind": "SHOT_SUBTITLE",
         "videoArtifactKind": "SHOT_VIDEO_CLIP",
-        "concatMode": "simple_cut"
+        "concatMode": "simple_cut",
+        "transitionAtEnd": "本 shot 结尾 0.3-0.8 秒内完成淡出或稳定收束"
       },
       "modelTips": {
         "cameraMotion": "...",
         "subjectMotion": "..."
       }
+    }
+  ],
+  "shotAssetPackages": [
+    {
+      "shotId": "SHOT_01",
+      "durationSec": 6,
+      "referenceImages": [
+        {"id": "keyframe_SHOT_01", "label": "首帧/关键帧", "role": "keyframe", "storageRef": "local://...", "locks": ["起始构图", "主体站位"]},
+        {"id": "char_main", "label": "主要角色", "role": "character", "storageRef": "local://...", "locks": ["角色一致性"]}
+      ],
+      "prompts": {
+        "videoPrompt": "可直接投放给视频模型的本 shot prompt",
+        "negativePrompt": "禁止真人写实、禁止跨 shot 依赖、禁止尾帧对齐"
+      },
+      "voiceover": {"text": "...", "artifactKind": "SHOT_AUDIO", "fileName": "SHOT_01_voiceover.wav"},
+      "aigcVideo": {"requestId": "extgen_video_SHOT_01", "artifactKind": "SHOT_VIDEO_CLIP", "fileName": "SHOT_01_video_clip.mp4", "concatMode": "simple_cut", "transitionAtEnd": "结尾0.5秒淡出"},
+      "subtitle": {"text": "...", "artifactKind": "SHOT_SUBTITLE", "fileName": "SHOT_01_subtitle.srt"},
+      "concatPlan": {"ffmpegReady": true, "mode": "simple_cut", "transitionCoveredInShotEnd": true},
+      "independence": {"crossShotDependencyForbidden": true, "allowedSharedConsistency": ["主要角色", "主要道具", "主场景", "全片风格"]}
     }
   ],
   "externalGenerationRequests": [
@@ -4362,6 +4721,13 @@ modelHint=<modelHint>
       "name": "external_generation_request.json",
       "mimeType": "application/json",
       "metadata": {"artifactType": "external_generation_request", "generationKind": "video", "relatedShotId": "SHOT_01"}
+    },
+    {
+      "unitId": "shot_asset_package_SHOT_01",
+      "kind": "SHOT_ASSET_PACKAGE",
+      "name": "SHOT_01_asset_package.json",
+      "mimeType": "application/json",
+      "metadata": {"artifactType": "shot_asset_package", "relatedShotId": "SHOT_01", "ffmpegConcatOK": true}
     },
     {
       "unitId": "shot_video_SHOT_01",
