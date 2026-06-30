@@ -848,6 +848,9 @@ func executeNewsSearch(params map[string]interface{}) tool.ToolResult {
 	for _, query := range queries {
 		found, err := performWebSearch(context.Background(), query)
 		if err != nil {
+			if isSearchNotConfiguredError(err) {
+				return newsSearchManualFallback(queries, err.Error())
+			}
 			return tool.FailureResult(fmt.Sprintf("news_search failed for query %q: %v", query, err))
 		}
 		for _, item := range found {
@@ -894,6 +897,30 @@ func executeNewsSearch(params map[string]interface{}) tool.ToolResult {
 		"sources":    sources,
 		"queryUsed":  queries,
 		"searchedAt": time.Now().Format(time.RFC3339),
+	})
+}
+
+func isSearchNotConfiguredError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "SEARCH_API_KEY not configured")
+}
+
+func newsSearchManualFallback(queries []string, reason string) tool.ToolResult {
+	if strings.TrimSpace(reason) == "" {
+		reason = "SEARCH_API_KEY not configured"
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"results":        []map[string]interface{}{},
+		"facts":          []map[string]interface{}{},
+		"sources":        []map[string]interface{}{},
+		"queryUsed":      queries,
+		"searchedAt":     time.Now().Format(time.RFC3339),
+		"degraded":       true,
+		"manualRequired": true,
+		"status":         "manual_required",
+		"warnings": []string{
+			fmt.Sprintf("%s；已跳过联网检索，请在浏览器手动核对事实并补充参考来源。", reason),
+		},
+		"userInstruction": "未配置 SEARCH_API_KEY，系统不会自动联网检索。请用户在浏览器检索权威来源，补充事实、参考链接和素材，再继续审核。",
 	})
 }
 
@@ -1467,6 +1494,18 @@ func stringParam(params map[string]interface{}, key string, fallback string) str
 	return fallback
 }
 
+func promptStringParam(params map[string]interface{}, key string, fallback string) string {
+	value, ok := params[key]
+	if !ok {
+		return fallback
+	}
+	text := strings.TrimSpace(ensureStringValue(value))
+	if text == "" || text == "null" {
+		return fallback
+	}
+	return text
+}
+
 // executeSkillStageAgent is the LLM-backed implementation of skill_stage_agent.
 // It reads the stage instruction markdown, combines it with the user's brief and
 // upstream outputs, builds a prompt, and calls the LLM API to generate content.
@@ -1841,6 +1880,521 @@ func ensureVideoPromptShotAssetPackages(pkg map[string]interface{}) {
 	}
 	if len(packages) > 0 {
 		pkg["shotAssetPackages"] = packages
+	}
+}
+
+func buildDeterministicVideoPromptData(toolName, skillName, topic string, params map[string]interface{}) (map[string]interface{}, bool) {
+	shots := normalizeShotItemsForAssetDecision(params["shotList"])
+	if len(shots) == 0 {
+		return nil, false
+	}
+
+	videoPrompts := make([]interface{}, 0, len(shots))
+	requests := make([]interface{}, 0, len(shots))
+	packages := make([]interface{}, 0, len(shots))
+	artifacts := make([]interface{}, 0, len(shots)*5)
+
+	for i, shot := range shots {
+		shotID := firstStringInMap(shot, "shotId", "id", "cardId")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		unitShotID := sanitizeUnitPart(shotID)
+		duration := normalizedDurationSec(firstExistingValue(shot, "durationSec", "duration", "seconds"))
+		narration := firstStringInMap(shot, "narrationText", "scriptText", "voiceover", "text", "claim")
+		if narration == "" {
+			narration = fmt.Sprintf("%s 的第 %d 个独立镜头口播。", topic, i+1)
+		}
+		visual := firstStringInMap(shot, "visual", "visualIntent", "description", "composition")
+		camera := firstStringInMap(shot, "camera", "cameraMove", "cameraMotion")
+		lighting := firstStringInMap(shot, "lighting", "light", "mood")
+		composition := firstStringInMap(shot, "composition", "framing")
+		transitionAtEnd := transitionTextForShot(shot)
+		materialHints := stringListFromInterface(shot["materialLibraryHints"])
+		references := referenceImagesFromHints(shotID, materialHints)
+
+		promptParts := []string{
+			fmt.Sprintf("独立生成 %d 秒非写实动画 AIGC 视频，主题：%s。", duration, topic),
+			fmt.Sprintf("镜头 %s：%s", shotID, fallbackText(visual, narration)),
+			"口播/字幕内容：" + narration,
+			"画面需包含主体、场景、动作、镜头运动、光影、色彩和风格，禁止真人写实，保持干净、知识分享、电影感动画。",
+			"本 shot 完全独立生成，不依赖上一镜或下一镜，不写同上、接上一镜、延续前一镜。",
+			"转场只覆盖在本 shot 结尾：" + transitionAtEnd,
+			"生成后可直接作为 SHOT_VIDEO_CLIP，用 ffmpeg 按 shot 顺序 simple_cut 拼接。",
+		}
+		if camera != "" {
+			promptParts = append(promptParts, "镜头运动："+camera)
+		}
+		if composition != "" {
+			promptParts = append(promptParts, "构图："+composition)
+		}
+		if lighting != "" {
+			promptParts = append(promptParts, "光影："+lighting)
+		}
+		if len(materialHints) > 0 {
+			promptParts = append(promptParts, "可参考素材库关键词："+strings.Join(materialHints, "、"))
+		}
+		videoPrompt := strings.Join(promptParts, "\n")
+		negativePrompt := "禁止真人写实、禁止跨 shot 依赖、禁止尾帧对齐、禁止要求上一镜或下一镜配合、禁止水印、禁止文字乱码、禁止画面崩坏。"
+		requestID := "extgen_video_" + unitShotID
+
+		videoPrompts = append(videoPrompts, map[string]interface{}{
+			"shotId":               shotID,
+			"durationSec":          duration,
+			"narrationText":        narration,
+			"prompt":               videoPrompt,
+			"negativePrompt":       negativePrompt,
+			"continuity":           "仅共享主要角色、主要道具、主场景和全片风格；不得依赖其他 shot 的画面。",
+			"materialLibraryHints": materialHints,
+			"subtitleText":         narration,
+			"shotAssemblyPlan": map[string]interface{}{
+				"audioArtifactKind":    "SHOT_AUDIO",
+				"subtitleArtifactKind": "SHOT_SUBTITLE",
+				"videoArtifactKind":    "SHOT_VIDEO_CLIP",
+				"concatMode":           "simple_cut",
+				"transitionAtEnd":      transitionAtEnd,
+			},
+		})
+
+		requests = append(requests, map[string]interface{}{
+			"requestId":           requestID,
+			"kind":                "video",
+			"shotId":              shotID,
+			"prompt":              videoPrompt,
+			"promptText":          videoPrompt,
+			"negativePrompt":      negativePrompt,
+			"references":          references,
+			"target":              map[string]interface{}{"aspectRatio": "16:9", "durationSec": duration, "resolution": "1920x1080"},
+			"promptCharLimit":     2000,
+			"referenceImageLimit": 6,
+			"status":              "pending_upload",
+			"manualInstruction":   "当前没有可用的视频生成 API 配置，请在浏览器外部视频平台复制 Prompt 生成本 shot，再回传上传结果。",
+		})
+
+		packages = append(packages, map[string]interface{}{
+			"shotId":          shotID,
+			"durationSec":     duration,
+			"referenceImages": references,
+			"prompts": map[string]interface{}{
+				"videoPrompt":    videoPrompt,
+				"negativePrompt": negativePrompt,
+			},
+			"voiceover": map[string]interface{}{
+				"text":         narration,
+				"artifactKind": "SHOT_AUDIO",
+				"fileName":     fmt.Sprintf("%s_voiceover.wav", shotID),
+			},
+			"aigcVideo": map[string]interface{}{
+				"requestId":       requestID,
+				"artifactKind":    "SHOT_VIDEO_CLIP",
+				"fileName":        fmt.Sprintf("%s_video_clip.mp4", shotID),
+				"concatMode":      "simple_cut",
+				"transitionAtEnd": transitionAtEnd,
+			},
+			"subtitle": map[string]interface{}{
+				"text":         narration,
+				"artifactKind": "SHOT_SUBTITLE",
+				"fileName":     fmt.Sprintf("%s_subtitle.srt", shotID),
+			},
+			"concatPlan": map[string]interface{}{
+				"ffmpegReady":                true,
+				"mode":                       "simple_cut",
+				"transitionCoveredInShotEnd": true,
+			},
+			"independence": map[string]interface{}{
+				"crossShotDependencyForbidden": true,
+				"allowedSharedConsistency":     []string{"主要角色", "主要道具", "主场景", "全片风格"},
+			},
+		})
+
+		artifacts = append(artifacts,
+			externalGenerationArtifact(requestID, shotID, "video"),
+			shotPlaceholderArtifact("shot_video_"+unitShotID, "SHOT_VIDEO_CLIP", fmt.Sprintf("%s_video_clip.mp4", shotID), "video/mp4", "shot_video_clip", shotID),
+			shotPlaceholderArtifact("shot_audio_"+unitShotID, "SHOT_AUDIO", fmt.Sprintf("%s_voiceover.wav", shotID), "audio/wav", "shot_audio", shotID),
+			shotPlaceholderArtifact("shot_subtitle_"+unitShotID, "SHOT_SUBTITLE", fmt.Sprintf("%s_subtitle.srt", shotID), "text/plain", "shot_subtitle", shotID),
+			shotPlaceholderArtifact("shot_asset_package_"+unitShotID, "SHOT_ASSET_PACKAGE", fmt.Sprintf("%s_asset_package.json", shotID), "application/json", "shot_asset_package", shotID),
+		)
+	}
+
+	contentPkg := map[string]interface{}{
+		"videoPrompts":               videoPrompts,
+		"externalGenerationRequests": requests,
+		"shotAssetPackages":          packages,
+		"artifacts":                  artifacts,
+		"summary":                    "已基于 shotList 本地生成可复制到浏览器外部平台的独立 shot 视频提示词；当前不依赖图片或视频生成 API。",
+	}
+	contentBytes, _ := json.Marshal(contentPkg)
+	topArtifacts := buildSkillStageArtifacts(toolName, skillName, false, true)
+	for _, item := range artifacts {
+		if artifact, ok := item.(map[string]interface{}); ok {
+			topArtifacts = append(topArtifacts, artifact)
+		}
+	}
+	return map[string]interface{}{
+		"content":                    string(contentBytes),
+		"package":                    contentPkg,
+		"artifacts":                  topArtifacts,
+		"videoPrompts":               videoPrompts,
+		"externalGenerationRequests": requests,
+		"shotAssetPackages":          packages,
+		"summary":                    contentPkg["summary"],
+	}, true
+}
+
+func buildDeterministicShotSplitterData(toolName, skillName, topic, script string, targetDurationSec int) (map[string]interface{}, bool) {
+	scriptText := extractPlainScriptText(script)
+	if strings.TrimSpace(scriptText) == "" {
+		return nil, false
+	}
+	if targetDurationSec <= 0 {
+		targetDurationSec = 45
+	}
+	if targetDurationSec < 15 {
+		targetDurationSec = 15
+	}
+	segments := splitScriptIntoShotSegments(scriptText, targetDurationSec)
+	if len(segments) == 0 {
+		return nil, false
+	}
+	durations := distributeShotDurations(targetDurationSec, len(segments))
+	shotList := make([]interface{}, 0, len(segments))
+	shotAssetPackages := make([]interface{}, 0, len(segments))
+	for i, segment := range segments {
+		shotID := fmt.Sprintf("SHOT_%02d", i+1)
+		duration := durations[i]
+		transitionAtEnd := "本 shot 结尾 0.3-0.8 秒淡出或稳定收束，方便 ffmpeg 直接拼接"
+		if i < len(segments)-1 {
+			transitionAtEnd = "本 shot 结尾 0.3-0.8 秒完成轻微淡出转场，下一 shot 可直接 simple_cut 拼接"
+		}
+		hints := shotMaterialHints(topic, segment)
+		shot := map[string]interface{}{
+			"shotId":               shotID,
+			"durationSec":          duration,
+			"narrationText":        segment,
+			"visual":               deterministicVisualForSegment(topic, segment, i),
+			"camera":               deterministicCameraForIndex(i),
+			"composition":          "主体居中偏三分线，保留字幕安全区，画面信息密度适中。",
+			"lighting":             "干净明亮的知识分享光影，非写实动画质感。",
+			"materialLibraryHints": hints,
+			"expectedArtifacts": []string{
+				"SHOT_REVIEW_PACKET", "SHOT_AUDIO", "SHOT_KEYFRAME", "SHOT_VIDEO_CLIP", "SHOT_SUBTITLE", "HYPERFRAMES_SHOT",
+			},
+			"concatPlan": map[string]interface{}{
+				"mode":            "simple_cut",
+				"transitionAtEnd": transitionAtEnd,
+			},
+			"independence": map[string]interface{}{
+				"crossShotDependencyForbidden": true,
+				"allowedSharedConsistency":     []string{"主要角色", "主要道具", "主场景", "全片风格"},
+			},
+		}
+		shotList = append(shotList, shot)
+		shotAssetPackages = append(shotAssetPackages, map[string]interface{}{
+			"shotId":      shotID,
+			"durationSec": duration,
+			"requiredAssets": map[string]interface{}{
+				"referenceImages": hints,
+				"prompts":         []string{"keyframe_prompt", "video_prompt", "negative_prompt"},
+				"voiceover":       "SHOT_AUDIO",
+				"subtitle":        "SHOT_SUBTITLE",
+				"aigcVideo":       "SHOT_VIDEO_CLIP",
+			},
+			"concatPlan":   shot["concatPlan"],
+			"independence": shot["independence"],
+		})
+	}
+	contentPkg := map[string]interface{}{
+		"shotList":          shotList,
+		"shotAssetPackages": shotAssetPackages,
+		"totalDurationSec":  sumDurations(durations),
+		"summary":           "已本地自动拆分为 3-15 秒独立 shot；每个 shot 可独立生成素材并在结尾覆盖转场。",
+	}
+	contentBytes, _ := json.Marshal(contentPkg)
+	return map[string]interface{}{
+		"content":           string(contentBytes),
+		"package":           contentPkg,
+		"artifacts":         buildSkillStageArtifacts(toolName, skillName, false, true),
+		"shotList":          shotList,
+		"shotAssetPackages": shotAssetPackages,
+		"totalDurationSec":  contentPkg["totalDurationSec"],
+		"summary":           contentPkg["summary"],
+	}, true
+}
+
+func extractPlainScriptText(script string) string {
+	trimmed := strings.TrimSpace(script)
+	if trimmed == "" {
+		return ""
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+		for _, key := range []string{"script", "content", "text", "narrationText"} {
+			if text := strings.TrimSpace(ensureStringValue(parsed[key])); text != "" && text != "null" {
+				return text
+			}
+		}
+		if sections, ok := parsed["sections"]; ok {
+			parts := []string{}
+			for _, item := range interfaceItems(sections) {
+				if section, ok := mapValue(item); ok {
+					if text := firstStringInMap(section, "narrationText", "scriptText", "text", "content"); text != "" {
+						parts = append(parts, text)
+					}
+				}
+			}
+			if len(parts) > 0 {
+				return strings.Join(parts, " ")
+			}
+		}
+	}
+	return trimmed
+}
+
+func splitScriptIntoShotSegments(script string, targetDurationSec int) []string {
+	cleaned := strings.Join(strings.Fields(script), " ")
+	if cleaned == "" {
+		return nil
+	}
+	rawParts := splitTextByPunctuation(cleaned)
+	targetCount := targetDurationSec / 8
+	if targetDurationSec%8 != 0 {
+		targetCount++
+	}
+	if targetCount < 1 {
+		targetCount = 1
+	}
+	if targetCount > 10 {
+		targetCount = 10
+	}
+	if len(rawParts) == 0 {
+		rawParts = []string{cleaned}
+	}
+	segments := make([]string, 0, targetCount)
+	for _, part := range rawParts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if len(segments) < targetCount {
+			segments = append(segments, part)
+			continue
+		}
+		segments[len(segments)-1] = strings.TrimSpace(segments[len(segments)-1] + " " + part)
+	}
+	for len(segments) < targetCount && len(segments) > 0 {
+		longest := 0
+		for i := range segments {
+			if len([]rune(segments[i])) > len([]rune(segments[longest])) {
+				longest = i
+			}
+		}
+		left, right := splitSegmentInHalf(segments[longest])
+		if right == "" {
+			break
+		}
+		next := append([]string{}, segments[:longest]...)
+		next = append(next, left, right)
+		next = append(next, segments[longest+1:]...)
+		segments = next
+	}
+	return segments
+}
+
+func splitTextByPunctuation(text string) []string {
+	parts := []string{}
+	var current strings.Builder
+	for _, r := range text {
+		current.WriteRune(r)
+		switch r {
+		case '。', '！', '？', '.', '!', '?', ';', '；':
+			if part := strings.TrimSpace(current.String()); part != "" {
+				parts = append(parts, part)
+			}
+			current.Reset()
+		}
+	}
+	if part := strings.TrimSpace(current.String()); part != "" {
+		parts = append(parts, part)
+	}
+	return parts
+}
+
+func splitSegmentInHalf(segment string) (string, string) {
+	runes := []rune(strings.TrimSpace(segment))
+	if len(runes) < 12 {
+		return segment, ""
+	}
+	mid := len(runes) / 2
+	return strings.TrimSpace(string(runes[:mid])), strings.TrimSpace(string(runes[mid:]))
+}
+
+func distributeShotDurations(total, count int) []int {
+	if count <= 0 {
+		return nil
+	}
+	durations := make([]int, count)
+	remaining := total
+	for i := 0; i < count; i++ {
+		left := count - i
+		duration := remaining / left
+		if duration < 3 {
+			duration = 3
+		}
+		if duration > 15 {
+			duration = 15
+		}
+		durations[i] = duration
+		remaining -= duration
+	}
+	for remaining > 0 {
+		changed := false
+		for i := range durations {
+			if durations[i] < 15 && remaining > 0 {
+				durations[i]++
+				remaining--
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return durations
+}
+
+func sumDurations(durations []int) int {
+	total := 0
+	for _, duration := range durations {
+		total += duration
+	}
+	return total
+}
+
+func shotMaterialHints(topic, segment string) []string {
+	hints := []string{topic, "非写实动画知识分享", "字幕安全区"}
+	if strings.Contains(segment, "佛得角") || strings.Contains(topic, "佛得角") {
+		hints = append(hints, "佛得角群岛地图", "西非海岛航拍")
+	}
+	if strings.Contains(segment, "世界杯") || strings.Contains(segment, "足球") || strings.Contains(topic, "世界杯") {
+		hints = append(hints, "足球场", "球迷欢呼", "国家队球员剪影")
+	}
+	if len(hints) > 6 {
+		return hints[:6]
+	}
+	return hints
+}
+
+func deterministicVisualForSegment(topic, segment string, index int) string {
+	base := []string{
+		"地图与地理位置动画",
+		"国家风貌和海岛生活画面",
+		"足球场与国家队训练画面",
+		"小国逆袭的赛事数据可视化",
+		"球迷庆祝与奇迹情绪画面",
+	}
+	visual := base[index%len(base)]
+	return fmt.Sprintf("%s：围绕“%s”呈现，口播重点为“%s”。", visual, topic, segment)
+}
+
+func deterministicCameraForIndex(index int) string {
+	options := []string{
+		"缓慢推近，建立地理和主题信息。",
+		"横向平移，展示环境和细节。",
+		"从中景推进到特写，突出情绪。",
+		"轻微俯拍转正视角，强调数据和反差。",
+	}
+	return options[index%len(options)]
+}
+
+func firstExistingValue(values map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := values[key]; ok && value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func fallbackText(primary, fallback string) string {
+	if strings.TrimSpace(primary) != "" {
+		return primary
+	}
+	return fallback
+}
+
+func transitionTextForShot(shot map[string]interface{}) string {
+	if concatPlan, ok := mapValue(shot["concatPlan"]); ok {
+		if text := firstStringInMap(concatPlan, "transitionAtEnd", "transition", "transitionOut"); text != "" {
+			return text
+		}
+	}
+	if text := firstStringInMap(shot, "transitionAtEnd", "transitionOut", "transition"); text != "" {
+		return text
+	}
+	return "本 shot 结尾 0.3-0.8 秒内完成淡出或稳定收束，方便 ffmpeg 直接拼接"
+}
+
+func stringListFromInterface(value interface{}) []string {
+	out := []string{}
+	switch typed := value.(type) {
+	case []string:
+		out = append(out, typed...)
+	case []interface{}:
+		for _, item := range typed {
+			if text := strings.TrimSpace(ensureStringValue(item)); text != "" && text != "null" {
+				out = append(out, text)
+			}
+		}
+	case string:
+		if strings.TrimSpace(typed) != "" {
+			out = append(out, strings.TrimSpace(typed))
+		}
+	}
+	return out
+}
+
+func referenceImagesFromHints(shotID string, hints []string) []interface{} {
+	limit := len(hints)
+	if limit > 6 {
+		limit = 6
+	}
+	references := make([]interface{}, 0, limit)
+	for i := 0; i < limit; i++ {
+		references = append(references, map[string]interface{}{
+			"id":         fmt.Sprintf("ref_%s_%02d", sanitizeUnitPart(shotID), i+1),
+			"label":      hints[i],
+			"role":       "reference",
+			"storageRef": fmt.Sprintf("manual://references/%s/%02d", sanitizeUnitPart(shotID), i+1),
+			"locks":      []string{"本 shot 视觉参考"},
+		})
+	}
+	return references
+}
+
+func externalGenerationArtifact(unitID, shotID, kind string) map[string]interface{} {
+	return map[string]interface{}{
+		"unitId":   unitID,
+		"kind":     "JSON",
+		"name":     "external_generation_request.json",
+		"mimeType": "application/json",
+		"metadata": map[string]interface{}{
+			"artifactType":   "external_generation_request",
+			"generationKind": kind,
+			"relatedShotId":  shotID,
+		},
+	}
+}
+
+func shotPlaceholderArtifact(unitID, kind, name, mimeType, artifactType, shotID string) map[string]interface{} {
+	return map[string]interface{}{
+		"unitId":   unitID,
+		"kind":     kind,
+		"name":     name,
+		"mimeType": mimeType,
+		"metadata": map[string]interface{}{
+			"artifactType":  artifactType,
+			"relatedShotId": shotID,
+		},
 	}
 }
 
@@ -3791,11 +4345,22 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 	style := stringParam(params, "outputStyle", "")
 	platform := stringParam(params, "platform", "视频创作平台")
-	script := stringParam(params, "script", "")
-	shotList := stringParam(params, "shotList", "")
-	videoPrompts := stringParam(params, "videoPrompts", "")
-	publishCopy := stringParam(params, "publishCopy", "")
+	script := promptStringParam(params, "script", "")
+	shotList := promptStringParam(params, "shotList", "")
+	videoPrompts := promptStringParam(params, "videoPrompts", "")
+	publishCopy := promptStringParam(params, "publishCopy", "")
 	targetDurationSec := intParam(params, "targetDurationSec", intParam(params, "durationSec", 60))
+
+	if toolName == "shot_splitter" {
+		if data, ok := buildDeterministicShotSplitterData(toolName, skillName, topic, script, targetDurationSec); ok {
+			return tool.SuccessResult(data)
+		}
+	}
+	if toolName == "video_prompt_generator" {
+		if data, ok := buildDeterministicVideoPromptData(toolName, skillName, topic, params); ok {
+			return tool.SuccessResult(data)
+		}
+	}
 
 	systemPrompt := buildDynamicAgentSystemPrompt(toolName, topic, style, platform)
 	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform, targetDurationSec)

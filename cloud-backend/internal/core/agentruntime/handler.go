@@ -65,6 +65,11 @@ type ProjectIDResolver interface {
 	ResolveProjectID(ctx context.Context, taskID string) (string, error)
 }
 
+// ProjectLifecycleUpdater updates the project shell when an agent run starts.
+type ProjectLifecycleUpdater interface {
+	MarkAgentRunStarted(ctx context.Context, userID, projectID, runID string) error
+}
+
 type ReviewNodeInputUpdater interface {
 	UpdateInputFields(ctx context.Context, id string, fields map[string]interface{}) error
 }
@@ -77,6 +82,7 @@ type Handler struct {
 	decisionLog       DecisionLogWriter
 	artifactService   ArtifactService
 	projectIDResolver ProjectIDResolver
+	projectLifecycle  ProjectLifecycleUpdater
 }
 
 func NewHandler(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *Handler {
@@ -108,6 +114,13 @@ func (h *Handler) WithProjectIDResolver(r ProjectIDResolver) *Handler {
 	return h
 }
 
+// WithProjectLifecycleUpdater sets the updater used to reflect agent run
+// lifecycle changes on the parent video project.
+func (h *Handler) WithProjectLifecycleUpdater(updater ProjectLifecycleUpdater) *Handler {
+	h.projectLifecycle = updater
+	return h
+}
+
 func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
 	api := r.Group("/api/agent/runs", middleware...)
 	{
@@ -128,17 +141,50 @@ func (h *Handler) StartRun(c *gin.Context) {
 		httpx.Fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	if req.UserID == "" {
+		req.UserID = ginUserID(c)
+	}
 	run, err := h.runner.Start(c.Request.Context(), req)
 	if err != nil {
 		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.markProjectRunStarted(c.Request.Context(), req, run)
 	httpx.OK(c, gin.H{
 		"runId":  run.ID,
 		"taskId": run.TaskID,
 		"status": run.Status,
 		"plan":   run.Plan,
 	})
+}
+
+func ginUserID(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if value, ok := c.Get("userID"); ok {
+		if userID, ok := value.(string); ok {
+			return userID
+		}
+	}
+	return ""
+}
+
+func (h *Handler) markProjectRunStarted(ctx context.Context, req StartRunRequest, run *Run) {
+	if h == nil || h.projectLifecycle == nil || run == nil {
+		return
+	}
+	projectID, _ := req.Context["projectId"].(string)
+	if projectID == "" || req.UserID == "" {
+		return
+	}
+	if err := h.projectLifecycle.MarkAgentRunStarted(ctx, req.UserID, projectID, run.ID); err != nil {
+		zap.L().Warn("agent run started but project status update failed",
+			zap.String("projectId", projectID),
+			zap.String("runId", run.ID),
+			zap.Error(err),
+		)
+	}
 }
 
 func (h *Handler) GetRun(c *gin.Context) {

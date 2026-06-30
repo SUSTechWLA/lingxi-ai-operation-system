@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
 func TestJudgePassesGoodVoiceVisualPlan(t *testing.T) {
@@ -115,6 +116,37 @@ func TestJudgeFailsWhenRequiredVideoStagesMissing(t *testing.T) {
 	}
 }
 
+func TestPreparedScriptOnlyPlanPassesBetaJudge(t *testing.T) {
+	plan := &agentruntime.AgentPlan{
+		Goal:   "帮我介绍一下佛得角国家以及说明佛得角世界杯小组赛出线进入淘汰赛是一个奇迹",
+		Domain: "video_creation",
+		Steps: []agentruntime.AgentStep{
+			{
+				ID:              "script",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"stage": "script"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	compiler := agentruntime.NewPlanCompiler(judgeStaticToolCatalog{
+		"video_script_generator":        {Name: "video_script_generator"},
+		"shot_splitter":                 {Name: "shot_splitter", Output: map[string]tool.ParamDef{"shotList": {Type: "array"}}},
+		"video_prompt_generator":        {Name: "video_prompt_generator", Output: map[string]tool.ParamDef{"videoPrompts": {Type: "array"}}},
+		"hyperframes_project_generator": {Name: "hyperframes_project_generator", Parameters: map[string]tool.ParamDef{"shotList": {Type: "array"}, "videoPrompts": {Type: "array"}}, Output: map[string]tool.ParamDef{"projectDir": {Type: "string"}}},
+		"hyperframes_renderer":          {Name: "hyperframes_renderer", Parameters: map[string]tool.ParamDef{"projectDir": {Type: "string"}}, Output: map[string]tool.ParamDef{"outputPath": {Type: "string"}}},
+		"publish_copy_generator":        {Name: "publish_copy_generator"},
+	})
+	prepared := compiler.PreparePlan(plan)
+
+	report := New().Evaluate(prepared)
+	if !report.Passed {
+		t.Fatalf("prepared script-only plan should pass beta judge, warnings: %+v, steps: %+v", report.Warnings, prepared.Steps)
+	}
+}
+
 func goodVoicePlan() *agentruntime.AgentPlan {
 	return &agentruntime.AgentPlan{
 		Goal:   "make voice visual video",
@@ -128,6 +160,12 @@ func goodVoicePlan() *agentruntime.AgentPlan {
 			{ID: "publish", Tool: "publish_copy_generator", DependsOn: []string{"render"}, Arguments: map[string]interface{}{"stage": "publish"}, ExpectedOutput: []string{"publish_copy"}},
 		},
 	}
+}
+
+type judgeStaticToolCatalog map[string]*tool.ToolManifest
+
+func (c judgeStaticToolCatalog) GetManifest(name string) *tool.ToolManifest {
+	return c[name]
 }
 
 func hasWarning(report Report, code string) bool {

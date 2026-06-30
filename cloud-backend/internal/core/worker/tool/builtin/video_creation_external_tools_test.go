@@ -64,6 +64,29 @@ func TestRegisterVideoCreationExternalToolsInstallsKnowledgeTools(t *testing.T) 
 	}
 }
 
+func TestNewsSearchDegradesWhenSearchAPIKeyMissing(t *testing.T) {
+	t.Setenv("SEARCH_API_KEY", "")
+
+	result := executeNewsSearch(map[string]interface{}{
+		"query": "佛得角 世界杯 小组赛 出线 奇迹",
+		"topK":  3,
+	})
+	if !result.Success {
+		t.Fatalf("news_search should not block when SEARCH_API_KEY is missing: %s", result.Error)
+	}
+	if result.Data["manualRequired"] != true || result.Data["status"] != "manual_required" {
+		t.Fatalf("expected manual-required fallback metadata: %#v", result.Data)
+	}
+	results, ok := result.Data["results"].([]map[string]interface{})
+	if !ok || len(results) != 0 {
+		t.Fatalf("expected empty search results in manual fallback, got %#v", result.Data["results"])
+	}
+	instruction, _ := result.Data["userInstruction"].(string)
+	if !strings.Contains(instruction, "SEARCH_API_KEY") || !strings.Contains(instruction, "浏览器") {
+		t.Fatalf("fallback should instruct browser/manual supplementation, got %q", instruction)
+	}
+}
+
 func TestVideoScriptGeneratorBlocksRequiredRetrievalWithEmptyFacts(t *testing.T) {
 	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
 		"topic":                 "佛得角世界杯出线",
@@ -233,7 +256,9 @@ func TestVideoPromptGeneratorPromptRequiresIndependentShotGeneration(t *testing.
 }
 
 func TestExecuteDynamicAgentPromptToolExposesShotAssetPackages(t *testing.T) {
+	llmCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCalled = true
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"videoPrompts\":[{\"shotId\":\"SHOT_01\",\"durationSec\":6,\"narrationText\":\"佛得角是西非岛国。\",\"prompt\":\"独立生成6秒视频，结尾0.5秒完成淡出转场。\"}],\"shotAssetPackages\":[{\"shotId\":\"SHOT_01\",\"durationSec\":6,\"referenceImages\":[{\"id\":\"keyframe_SHOT_01\",\"role\":\"keyframe\",\"storageRef\":\"local://projects/p/keyframes/SHOT_01.png\"}],\"prompts\":{\"videoPrompt\":\"独立生成6秒视频\",\"negativePrompt\":\"禁止真人写实\"},\"voiceover\":{\"text\":\"佛得角是西非岛国。\",\"artifactKind\":\"SHOT_AUDIO\"},\"aigcVideo\":{\"requestId\":\"extgen_video_SHOT_01\",\"artifactKind\":\"SHOT_VIDEO_CLIP\",\"concatMode\":\"simple_cut\",\"transitionAtEnd\":\"结尾0.5秒淡出\"},\"subtitle\":{\"text\":\"佛得角是西非岛国。\",\"artifactKind\":\"SHOT_SUBTITLE\"}}],\"summary\":\"ok\"}"},"finish_reason":"stop"}]}`))
 	}))
@@ -265,9 +290,77 @@ func TestExecuteDynamicAgentPromptToolExposesShotAssetPackages(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
 	}
+	if llmCalled {
+		t.Fatalf("video_prompt_generator should build browser/manual requests locally when shotList is present")
+	}
 	packages, ok := result.Data["shotAssetPackages"].([]interface{})
 	if !ok || len(packages) != 1 {
 		t.Fatalf("expected shotAssetPackages to be exposed from structured output, got %#v", result.Data["shotAssetPackages"])
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected externalGenerationRequests to be exposed, got %#v", result.Data["externalGenerationRequests"])
+	}
+	if !strings.Contains(ensureStringValue(requests[0]), "佛得角是西非岛国") {
+		t.Fatalf("external generation request should include shot narration, got %#v", requests[0])
+	}
+}
+
+func TestExecuteDynamicAgentPromptToolSplitsShotsLocally(t *testing.T) {
+	llmCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	SetVideoCreationConfig(config.OpenAIConfig{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Model:   "deepseek-v4-pro",
+		Timeout: 5,
+	}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	result := executeDynamicAgentPromptTool("shot_splitter", "beat_plan", "video", "佛得角世界杯出线", "", map[string]interface{}{
+		"topic":             "佛得角世界杯出线",
+		"targetDurationSec": 45,
+		"script":            "佛得角是西非大西洋上的岛国。它人口不多，却有鲜明的克里奥尔文化。足球让这个国家被更多人看见。世界杯小组赛出线进入淘汰赛，对这样的小国来说是巨大的奇迹。",
+	}, tool.ToolContext{TaskID: "task-shot-split", NodeID: "beat_plan_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected local shot split to succeed: %s", result.Error)
+	}
+	if llmCalled {
+		t.Fatalf("shot_splitter should split locally when script is present")
+	}
+	shots, ok := result.Data["shotList"].([]interface{})
+	if !ok || len(shots) == 0 {
+		t.Fatalf("expected shotList, got %#v", result.Data["shotList"])
+	}
+	for _, item := range shots {
+		shot, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("shot should be map, got %#v", item)
+		}
+		duration := intFromInterface(shot["durationSec"], 0)
+		if duration < 3 || duration > 15 {
+			t.Fatalf("shot duration should be 3-15s, got %#v", shot)
+		}
+		if !strings.Contains(ensureStringValue(shot), "crossShotDependencyForbidden") {
+			t.Fatalf("shot should declare independence, got %#v", shot)
+		}
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]interface{})
+	if !ok || len(packages) != len(shots) {
+		t.Fatalf("expected per-shot packages, got %#v", result.Data["shotAssetPackages"])
 	}
 }
 

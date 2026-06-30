@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -724,26 +725,9 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 	refNodeID := strings.TrimSpace(matches[1])
 	field := strings.TrimSpace(matches[2])
 
-	_, output := findNodeOutput(ctx, nodeRepo, taskID, refNodeID)
-	if output == nil {
+	node, val, ok := findNodeOutputField(ctx, nodeRepo, taskID, refNodeID, field)
+	if !ok {
 		zap.L().Warn("Cannot resolve node reference: referenced node output not found",
-			zap.String("taskId", taskID),
-			zap.String("refNodeID", refNodeID),
-			zap.String("ref", ref))
-		return ref, false
-	}
-
-	val, ok := output[field]
-	if !ok {
-		if stdout, sOk := output["stdout"].(string); sOk && stdout != "" {
-			var parsed map[string]interface{}
-			if json.Unmarshal([]byte(stdout), &parsed) == nil {
-				val, ok = parsed[field]
-			}
-		}
-	}
-	if !ok {
-		zap.L().Warn("Cannot resolve node reference: field not found in output",
 			zap.String("taskId", taskID),
 			zap.String("refNodeID", refNodeID),
 			zap.String("field", field),
@@ -751,6 +735,13 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 		return ref, false
 	}
 
+	if node != nil {
+		zap.L().Debug("Resolved node reference",
+			zap.String("taskId", taskID),
+			zap.String("refNodeID", refNodeID),
+			zap.String("resolvedNodeID", node.ID),
+			zap.String("field", field))
+	}
 	return val, true
 }
 
@@ -790,6 +781,76 @@ func findNodeOutput(ctx context.Context, nodeRepo repository.NodeRepo, taskID, r
 	return nil, nil
 }
 
+func findNodeOutputField(ctx context.Context, nodeRepo repository.NodeRepo, taskID, refNodeID, field string) (*model.Node, interface{}, bool) {
+	candidates := findNodeOutputCandidates(ctx, nodeRepo, taskID, refNodeID)
+	for _, node := range candidates {
+		if node == nil || node.Output == nil {
+			continue
+		}
+		if val, ok := lookupOutputField(node.Output, field); ok {
+			return node, val, true
+		}
+	}
+	return nil, nil, false
+}
+
+func findNodeOutputCandidates(ctx context.Context, nodeRepo repository.NodeRepo, taskID, refNodeID string) []*model.Node {
+	seen := map[string]bool{}
+	candidates := make([]*model.Node, 0, 4)
+	add := func(node *model.Node) {
+		if node == nil || node.ID == "" || seen[node.ID] {
+			return
+		}
+		seen[node.ID] = true
+		candidates = append(candidates, node)
+	}
+
+	for _, candidate := range []string{refNodeID, taskID + "-" + refNodeID} {
+		node, err := nodeRepo.FindByID(ctx, candidate)
+		if err == nil {
+			add(node)
+		}
+	}
+
+	nodes, err := nodeRepo.FindByTaskID(ctx, taskID)
+	if err == nil {
+		for _, node := range nodes {
+			if node != nil && strings.Contains(node.ID, refNodeID) {
+				add(node)
+			}
+		}
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := nodeRefCandidatePriority(candidates[i].ID, taskID, refNodeID)
+		right := nodeRefCandidatePriority(candidates[j].ID, taskID, refNodeID)
+		if left != right {
+			return left < right
+		}
+		return candidates[i].ID < candidates[j].ID
+	})
+
+	return candidates
+}
+
+func nodeRefCandidatePriority(nodeID, taskID, refNodeID string) int {
+	switch {
+	case nodeID == refNodeID || nodeID == taskID+"-"+refNodeID:
+		return 0
+	case isExecNodeForRef(nodeID, refNodeID):
+		return 1
+	default:
+		return 2
+	}
+}
+
+func isExecNodeForRef(nodeID, refNodeID string) bool {
+	return strings.HasSuffix(nodeID, refNodeID+"_exec") ||
+		strings.HasSuffix(nodeID, refNodeID+"-exec") ||
+		strings.Contains(nodeID, refNodeID+"_exec_") ||
+		strings.Contains(nodeID, refNodeID+"-exec-")
+}
+
 func resolveString(ctx context.Context, nodeRepo repository.NodeRepo, taskID string, s string) string {
 	matches := nodeRefPattern.FindAllStringSubmatch(s, -1)
 	if len(matches) == 0 {
@@ -801,27 +862,9 @@ func resolveString(ctx context.Context, nodeRepo repository.NodeRepo, taskID str
 		refNodeID := strings.TrimSpace(m[1])
 		field := strings.TrimSpace(m[2])
 
-		_, output := findNodeOutput(ctx, nodeRepo, taskID, refNodeID)
-		if output == nil {
+		_, val, ok := findNodeOutputField(ctx, nodeRepo, taskID, refNodeID, field)
+		if !ok {
 			zap.L().Warn("Cannot resolve node reference: node not found",
-				zap.String("refNodeId", refNodeID),
-				zap.String("field", field),
-			)
-			continue
-		}
-
-		val, ok := output[field]
-		if !ok {
-			// Field not at top level — try parsing stdout (tool output is JSON-marshaled there)
-			if stdout, sOk := output["stdout"].(string); sOk && stdout != "" {
-				var parsed map[string]interface{}
-				if json.Unmarshal([]byte(stdout), &parsed) == nil {
-					val, ok = parsed[field]
-				}
-			}
-		}
-		if !ok {
-			zap.L().Warn("Cannot resolve node reference: field not found in output",
 				zap.String("refNodeId", refNodeID),
 				zap.String("field", field),
 			)
@@ -845,4 +888,57 @@ func resolveString(ctx context.Context, nodeRepo repository.NodeRepo, taskID str
 	}
 
 	return result
+}
+
+func lookupOutputField(output map[string]interface{}, field string) (interface{}, bool) {
+	if output == nil || strings.TrimSpace(field) == "" {
+		return nil, false
+	}
+	if val, ok := output[field]; ok {
+		return val, true
+	}
+	for _, payload := range structuredOutputPayloads(output) {
+		if val, ok := payload[field]; ok {
+			return val, true
+		}
+	}
+	return nil, false
+}
+
+func structuredOutputPayloads(output map[string]interface{}) []map[string]interface{} {
+	payloads := make([]map[string]interface{}, 0, 4)
+	if parsed := parseObjectPayload(output["stdout"]); parsed != nil {
+		payloads = append(payloads, parsed)
+		if embedded := parseObjectPayload(parsed["content"]); embedded != nil {
+			payloads = append(payloads, embedded)
+		}
+		if pkg := parseObjectPayload(parsed["package"]); pkg != nil {
+			payloads = append(payloads, pkg)
+		}
+	}
+	if embedded := parseObjectPayload(output["content"]); embedded != nil {
+		payloads = append(payloads, embedded)
+	}
+	if pkg := parseObjectPayload(output["package"]); pkg != nil {
+		payloads = append(payloads, pkg)
+	}
+	return payloads
+}
+
+func parseObjectPayload(value interface{}) map[string]interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(typed), &parsed); err != nil {
+			return nil
+		}
+		return parsed
+	default:
+		return nil
+	}
 }

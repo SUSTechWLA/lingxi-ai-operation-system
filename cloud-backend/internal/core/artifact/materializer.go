@@ -97,10 +97,96 @@ func parseNodeOutputPayload(output map[string]interface{}) map[string]interface{
 	if stdout, ok := output["stdout"].(string); ok && strings.TrimSpace(stdout) != "" {
 		var parsed map[string]interface{}
 		if err := json.Unmarshal([]byte(stdout), &parsed); err == nil {
-			return parsed
+			return expandEmbeddedContentPayload(parsed)
 		}
 	}
-	return output
+	return expandEmbeddedContentPayload(output)
+}
+
+func expandEmbeddedContentPayload(payload map[string]interface{}) map[string]interface{} {
+	if len(payload) == 0 {
+		return payload
+	}
+	embedded := parseEmbeddedObjectPayload(payload["content"])
+	if len(embedded) == 0 {
+		embedded = parseEmbeddedObjectPayload(payload["package"])
+	}
+	if len(embedded) == 0 {
+		return payload
+	}
+	merged := make(map[string]interface{}, len(payload)+len(embedded))
+	for key, value := range payload {
+		merged[key] = value
+	}
+	for key, value := range embedded {
+		if key == "artifacts" {
+			merged[key] = mergeArtifactManifests(payload["artifacts"], value)
+			continue
+		}
+		merged[key] = value
+	}
+	if _, ok := embedded["artifacts"]; !ok {
+		merged["artifacts"] = payload["artifacts"]
+	}
+	return merged
+}
+
+func parseEmbeddedObjectPayload(value interface{}) map[string]interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(typed), &parsed); err != nil {
+			return nil
+		}
+		return parsed
+	default:
+		return nil
+	}
+}
+
+func mergeArtifactManifests(primary, secondary interface{}) []interface{} {
+	merged := make([]interface{}, 0)
+	seen := map[string]bool{}
+	for _, source := range []interface{}{primary, secondary} {
+		for _, item := range artifactManifestItems(source) {
+			unitID := artifactManifestUnitID(item)
+			if unitID != "" {
+				if seen[unitID] {
+					continue
+				}
+				seen[unitID] = true
+			}
+			merged = append(merged, item)
+		}
+	}
+	return merged
+}
+
+func artifactManifestItems(value interface{}) []interface{} {
+	switch typed := value.(type) {
+	case []interface{}:
+		return typed
+	case map[string]interface{}:
+		return []interface{}{typed}
+	default:
+		return nil
+	}
+}
+
+func artifactManifestUnitID(value interface{}) string {
+	entry, ok := value.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if unitID := stringValue(entry, "unitId"); unitID != "" {
+		return unitID
+	}
+	return stringValue(entry, "unitID")
 }
 
 func stageNameFromNode(node *model.Node) string {
@@ -367,10 +453,29 @@ func externalGenerationRequestPayload(payload map[string]interface{}, unitID str
 			continue
 		}
 		if stringValue(request, "requestId") == unitID {
-			return request, true
+			return normalizeExternalGenerationRequestPayload(request), true
 		}
 	}
 	return nil, false
+}
+
+func normalizeExternalGenerationRequestPayload(request map[string]interface{}) map[string]interface{} {
+	if request == nil {
+		return nil
+	}
+	normalized := make(map[string]interface{}, len(request)+1)
+	for key, value := range request {
+		normalized[key] = value
+	}
+	if stringValue(normalized, "prompt") == "" {
+		for _, key := range []string{"promptText", "copyablePrompt", "browserPrompt"} {
+			if prompt := stringValue(normalized, key); prompt != "" {
+				normalized["prompt"] = prompt
+				break
+			}
+		}
+	}
+	return normalized
 }
 
 func shotAssetPackagePayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {
@@ -457,6 +562,7 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 		"CARD_PLAN",
 		"CAPTION_PLAN",
 		"SHOT_LIST",
+		"VIDEO_PROMPTS",
 		"VIDEO_COMPOSITION_SPEC",
 		"REFERENCE_ASSET_PLAN",
 		"STYLE_PROFILE",

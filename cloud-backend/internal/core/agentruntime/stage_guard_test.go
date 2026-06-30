@@ -122,6 +122,63 @@ func TestPlanGuardRenderStageRequiresApprovedPreviewDependency(t *testing.T) {
 	}
 }
 
+func TestPlanGuardAllowsVideoPlanStartWhenFutureLocalRunnerIsOffline(t *testing.T) {
+	catalog := stageGuardCatalog()
+	catalog["hyperframes_snapshot"].ExecutionPlane = tool.ExecutionPlaneLocal
+	catalog["hyperframes_renderer"].ExecutionPlane = tool.ExecutionPlaneLocal
+	guard := NewPlanGuard(catalog, offlineLocalCapabilityProvider{}).WithDirectors(testRoleRegistry{
+		"script": testRoleDirector{
+			roleID:       "script_writer",
+			stage:        "script",
+			allowedTools: []string{"video_script_generator"},
+			outputs:      []string{"VIDEO_SCRIPT"},
+			review:       &tool.HumanReview{Required: true, Title: "审核口播脚本"},
+		},
+		"preview": testRoleDirector{
+			roleID:       "preview_director",
+			stage:        "preview",
+			allowedTools: []string{"hyperframes_snapshot"},
+			outputs:      []string{"PREVIEW_SNAPSHOTS"},
+			review:       &tool.HumanReview{Required: true, Title: "审核画面预览"},
+		},
+		"render": testRoleDirector{
+			roleID:       "render_producer",
+			stage:        "render",
+			allowedTools: []string{"hyperframes_renderer"},
+			inputs:       []string{"PREVIEW_SNAPSHOTS"},
+			outputs:      []string{"VIDEO", "RENDER_REPORT"},
+			review:       &tool.HumanReview{Required: true, Gate: tool.ApprovalBeforeExecute, Title: "确认最终渲染"},
+		},
+	})
+
+	err := guard.ValidatePlan(context.Background(), "user-1", &AgentPlan{
+		Goal:   "make a video",
+		Domain: "video_creation",
+		Steps: []AgentStep{
+			{
+				ID:        "script",
+				Tool:      "video_script_generator",
+				Arguments: map[string]interface{}{"stage": "script", "topic": "AI workflows"},
+			},
+			{
+				ID:        "preview",
+				Tool:      "hyperframes_snapshot",
+				DependsOn: []string{"script"},
+				Arguments: map[string]interface{}{"stage": "preview", "projectDir": "local://project"},
+			},
+			{
+				ID:        "render",
+				Tool:      "hyperframes_renderer",
+				DependsOn: []string{"preview"},
+				Arguments: map[string]interface{}{"stage": "render", "projectDir": "local://project"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("video plan startup should not require future local runner availability: %v", err)
+	}
+}
+
 func TestPlanCompilerAddsRoleAgentAndHumanReviewMetadataToReviewNode(t *testing.T) {
 	compiler := NewPlanCompiler(stageGuardCatalog()).WithDirectors(testRoleRegistry{
 		"script": testRoleDirector{
@@ -263,3 +320,17 @@ func (d testRoleDirector) Goal() string                   { return d.goal }
 func (d testRoleDirector) RequiredInputs() []string       { return d.inputs }
 func (d testRoleDirector) RequiredOutputs() []string      { return d.outputs }
 func (d testRoleDirector) HumanReview() *tool.HumanReview { return d.review }
+
+type offlineLocalCapabilityProvider struct{}
+
+func (offlineLocalCapabilityProvider) HasOnlineRunner(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func (offlineLocalCapabilityProvider) SupportsCommand(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (offlineLocalCapabilityProvider) SatisfiesRequirements(context.Context, string, *tool.LocalRequirements) (bool, []string, error) {
+	return false, []string{"runner offline"}, nil
+}

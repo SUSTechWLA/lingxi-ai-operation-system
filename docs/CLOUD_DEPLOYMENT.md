@@ -35,7 +35,7 @@ cd cloud-backend
 cp .env.example .env
 # 填 OPENAI_API_KEY / OPENAI_BASE_URL
 docker compose up -d
-go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os
 ```
 

@@ -43,7 +43,7 @@ Start cloud backend:
 cd cloud-backend
 cp .env.example .env
 docker compose up -d
-go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os
 ```
 

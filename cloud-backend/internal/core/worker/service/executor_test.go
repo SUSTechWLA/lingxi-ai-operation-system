@@ -71,6 +71,63 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 	}
 }
 
+func TestResolveSingleRefReadsStructuredStdoutContent(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID:     "task_001-beat_plan_exec",
+		TaskID: "task_001",
+		Output: map[string]interface{}{
+			"stdout": `{"content":"{\"shotList\":[{\"shotId\":\"SHOT_01\",\"durationSec\":8}],\"summary\":\"ok\"}"}`,
+		},
+	})
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{beat_plan.output.shotList}}")
+	if !ok {
+		t.Fatalf("reference should resolve")
+	}
+	shots, ok := resolved.([]interface{})
+	if !ok || len(shots) != 1 {
+		t.Fatalf("shotList should resolve as typed array, got %#v", resolved)
+	}
+	shot, ok := shots[0].(map[string]interface{})
+	if !ok || shot["shotId"] != "SHOT_01" {
+		t.Fatalf("unexpected shot payload: %#v", resolved)
+	}
+}
+
+func TestResolveSingleRefPrefersFuzzyExecNodeWithRequestedField(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(
+		&model.Node{
+			ID:     "task_001-beat_plan_review",
+			TaskID: "task_001",
+			Output: map[string]interface{}{
+				"approved": true,
+			},
+		},
+		&model.Node{
+			ID:     "task_001-beat_plan_exec",
+			TaskID: "task_001",
+			Output: map[string]interface{}{
+				"stdout": `{"content":"{\"shotList\":[{\"shotId\":\"SHOT_02\",\"durationSec\":9}]}"}`,
+			},
+		},
+	)
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{beat_plan.output.shotList}}")
+	if !ok {
+		t.Fatalf("reference should resolve from exec node, not review node")
+	}
+	shots, ok := resolved.([]interface{})
+	if !ok || len(shots) != 1 {
+		t.Fatalf("shotList should resolve as typed array, got %#v", resolved)
+	}
+	shot := shots[0].(map[string]interface{})
+	if shot["shotId"] != "SHOT_02" {
+		t.Fatalf("unexpected shot payload: %#v", resolved)
+	}
+}
+
 type fakeLocalJobDispatcher struct {
 	req localrunner.DispatchLocalJobRequest
 	job *localrunner.LocalJob

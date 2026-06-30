@@ -91,6 +91,18 @@ export interface DirectorShotReviewGroup {
   artifacts: DirectorArtifactRecord[]
 }
 
+export interface ExternalGenerationGuideRequest {
+  kind: 'image' | 'video'
+  references?: unknown[]
+  target?: {
+    aspectRatio?: string
+    durationSec?: number
+    resolution?: string
+  }
+  promptCharLimit?: number
+  referenceImageLimit?: number
+}
+
 interface TraceNodeLike {
   id?: string
   name?: string
@@ -111,6 +123,29 @@ interface TraceNodeLike {
   dependsOn?: string[]
 }
 
+export function externalGenerationGuideSteps(request: ExternalGenerationGuideRequest): string[] {
+  const kindLabel = request.kind === 'image' ? '参考图或关键帧' : 'AIGC 视频'
+  const platformLabel = request.kind === 'image' ? '图片生成平台' : '视频生成平台'
+  const referenceCount = Array.isArray(request.references) ? request.references.length : 0
+  const referenceLimit = request.referenceImageLimit || 6
+  const targetParts = [
+    request.target?.aspectRatio ? `画幅 ${request.target.aspectRatio}` : '',
+    request.target?.resolution ? `分辨率 ${request.target.resolution}` : '',
+    request.target?.durationSec ? `时长 ${request.target.durationSec}s` : '',
+  ].filter(Boolean)
+  const targetText = targetParts.length ? `，参数按 ${targetParts.join('、')} 设置` : ''
+
+  return [
+    '当前没有可用的图片或视频 API 配置，系统不会自动生成素材；请用下面的 Prompt 在浏览器中的外部生成平台完成。',
+    `点击“复制 Prompt”，在浏览器打开你常用的${platformLabel}，把 Prompt 粘贴进去${targetText}。`,
+    referenceCount > 0
+      ? `如平台支持参考图，按顺序添加本卡片列出的参考图，最多使用 ${referenceLimit} 张。`
+      : '如果没有参考图，直接使用 Prompt 生成，不需要等待系统补图。',
+    `每个 shot 单独生成，尽量不要引用其他 shot 的未确认画面；如果需要转场，把转场放在本 shot 结尾。`,
+    `生成完成后导出${kindLabel}文件，回到本页点击“上传结果”，系统会登记到素材库并关联当前 shot。`,
+  ]
+}
+
 interface RoleTraceMatch {
   execNode?: TraceNodeLike
   reviewNode?: TraceNodeLike
@@ -125,7 +160,7 @@ export function buildDirectorStages(
 ): DirectorStage[] {
   const traceNodes = extractTraceNodes(trace)
 
-  return roleAgents.map((role) => {
+  const stages = roleAgents.map((role) => {
     const review = findReviewForRole(role, reviews)
     const match = findTraceNodesForRole(role, traceNodes)
     const status = stageStatusFor(role, review, match, projectStarted)
@@ -146,6 +181,20 @@ export function buildDirectorStages(
       reviewId: review?.id,
     }
   })
+
+  if (stages.some((stage) => !['pending', 'active'].includes(stage.status))) {
+    return stages.map((stage) => stage.status === 'active' ? { ...stage, status: 'pending', progress: progressForStatus('pending') } : stage)
+  }
+
+  if (
+    projectStarted &&
+    stages.length > 0 &&
+    stages.every((stage) => stage.status === 'pending')
+  ) {
+    return stages.map((stage, index) => index === 0 ? { ...stage, status: 'active', progress: progressForStatus('active') } : stage)
+  }
+
+  return stages
 }
 
 export function stageActionLabel(stage: string): string {
@@ -1045,10 +1094,16 @@ function isTraceNodeLike(value: unknown): value is TraceNodeLike {
 
 function nodeToolName(node: TraceNodeLike): string {
   const input = node.input || {}
-  return stringValue(input.tool) ||
-    stringValue(input.capabilityTool) ||
+  const directTool = stringValue(input.tool)
+  const capabilityTool = stringValue(input.capabilityTool)
+  const parameterTool = stringValue(objectValue(input.parameters)?.tool)
+  if (directTool === 'external') {
+    return capabilityTool || parameterTool || directTool
+  }
+  return directTool ||
+    capabilityTool ||
     stringValue(input.reviewTool) ||
-    stringValue(objectValue(input.parameters)?.tool) ||
+    parameterTool ||
     node.tool ||
     node.name ||
     node.type ||

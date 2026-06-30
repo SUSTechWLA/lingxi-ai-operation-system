@@ -51,7 +51,7 @@ bash scripts/start-frontend.sh          # http://localhost:3000
 cd cloud-backend
 cp .env.example .env                    # 填 OPENAI_API_KEY
 docker compose up -d                    # 启动 PG/Redis/Redpanda/MinIO
-go build -o build/tangying-ai-os cmd/tangying-ai-os/main.go
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os                  # 监听 :8080
 ```
 

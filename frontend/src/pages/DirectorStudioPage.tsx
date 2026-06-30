@@ -36,6 +36,7 @@ import DesktopPage from './DesktopPage'
 import {
   approveAgentReview,
   createVideoProject,
+  fetchVideoProjects,
   fetchArtifactContent,
   fetchArtifactHistory,
   fetchVideoPreflight,
@@ -66,6 +67,7 @@ import {
   displayNameForArtifact,
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
+  externalGenerationGuideSteps,
   findPublishCopyArtifact,
   getArtifactViewerSelection,
   getStageStateDisplay,
@@ -155,10 +157,32 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     Promise.all([
       fetchVideoRoleAgents().catch(() => ({ roleAgents: fallbackRoles })),
       fetchVideoPreflight('wf-guided-image-text-video').catch(() => null),
-    ]).then(([roles, nextPreflight]) => {
+      fetchVideoProjects().catch(() => ({ projects: [] })),
+    ]).then(([roles, nextPreflight, projects]) => {
       if (!mounted) return
       if (roles.roleAgents?.length) setRoleAgents(roles.roleAgents)
       if (nextPreflight) setPreflight(nextPreflight)
+      const latestProject = [...(projects.projects || [])].sort((a, b) => {
+        const bTime = Date.parse(b.updatedAt || b.createdAt || '')
+        const aTime = Date.parse(a.updatedAt || a.createdAt || '')
+        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime)
+      })[0]
+      if (!latestProject) return
+      setProject(latestProject)
+      const restoredTopic = typeof latestProject.config?.topic === 'string' ? latestProject.config.topic : latestProject.name
+      if (restoredTopic) setTopic(restoredTopic)
+      if (typeof latestProject.targetDurationSec === 'number' && latestProject.targetDurationSec > 0) {
+        setDurationSec(latestProject.targetDurationSec)
+      }
+      fetchProjectArtifacts(latestProject.id)
+        .then((nextArtifacts) => {
+          if (!mounted) return
+          setProjectArtifacts(nextArtifacts.artifacts || [])
+        })
+        .catch(() => {
+          if (!mounted) return
+          setProjectArtifacts([])
+        })
     })
     return () => { mounted = false }
   }, [])
@@ -1346,6 +1370,7 @@ function ExternalGenerationRequestPanel({
     request.target?.resolution,
     request.target?.durationSec ? `${request.target.durationSec}s` : '',
   ].filter(Boolean).join(' / ')
+  const guideSteps = externalGenerationGuideSteps(request)
 
   return (
     <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
@@ -1377,6 +1402,14 @@ function ExternalGenerationRequestPanel({
       <div className="mt-3 rounded-lg border border-line bg-background-card p-3">
         <div className="text-xs font-black text-ink-soft">Prompt</div>
         <pre className="mt-2 max-h-48 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.prompt}</pre>
+      </div>
+      <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <div className="text-xs font-black text-primary-dark">浏览器手动生成步骤</div>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs leading-5 text-primary-dark">
+          {guideSteps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
       </div>
       {request.negativePrompt ? (
         <div className="mt-3 rounded-lg border border-line bg-background-card p-3">

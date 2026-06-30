@@ -36,6 +36,7 @@ try {
     reviewStatusLabel,
     reviewOutputText,
     buildDirectorTraceNodes,
+    externalGenerationGuideSteps,
     traceNodeHasError,
     visibleReviewHistory,
     isActionablePendingReview,
@@ -93,6 +94,40 @@ try {
   assert.deepEqual(notStartedFlow.map((stage) => stage.status), ['pending', 'pending'])
   const justStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] }, true)
   assert.deepEqual(justStartedFlow.map((stage) => stage.status), ['active', 'pending'])
+  const createdDagFlow = buildDirectorStages(startupRoles, [], {
+    nodes: [
+      {
+        id: 'proposal_generator_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'CREATED',
+        input: { tool: 'external', capabilityTool: 'proposal_generator' },
+        output: {},
+      },
+      {
+        id: 'video_script_generator_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'CREATED',
+        input: { tool: 'external', capabilityTool: 'video_script_generator' },
+        output: {},
+      },
+    ],
+  }, true)
+  assert.deepEqual(createdDagFlow.map((stage) => stage.status), ['active', 'pending'])
+  const bridgedToolFlow = buildDirectorStages(startupRoles, [], {
+    nodes: [
+      {
+        id: 'video_script_generator_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'RUNNING',
+        input: { tool: 'external', capabilityTool: 'video_script_generator' },
+        output: {},
+      },
+    ],
+  }, true)
+  assert.deepEqual(bridgedToolFlow.map((stage) => stage.status), ['pending', 'running'])
 
   const unactionableStartupReviews = startupRoles.map((role) => ({
     id: `${role.stage}_review`,
@@ -105,7 +140,7 @@ try {
   assert.equal(isActionablePendingReview(unactionableStartupReviews[0]), false)
   assert.deepEqual(visibleReviewHistory(unactionableStartupReviews), [])
   const generatingFlow = buildDirectorStages(startupRoles, unactionableStartupReviews, { nodes: [] }, true)
-  assert.deepEqual(generatingFlow.map((stage) => stage.status), ['pending', 'pending'])
+  assert.deepEqual(generatingFlow.map((stage) => stage.status), ['active', 'pending'])
 
   const technicalOutputReviews = startupRoles.map((role) => ({
     id: `${role.stage}_technical_review`,
@@ -123,7 +158,7 @@ try {
   assert.equal(isActionablePendingReview(technicalOutputReviews[0]), false)
   assert.deepEqual(visibleReviewHistory(technicalOutputReviews), [])
   const technicalOutputFlow = buildDirectorStages(startupRoles, technicalOutputReviews, { nodes: [] }, true)
-  assert.deepEqual(technicalOutputFlow.map((stage) => stage.status), ['pending', 'pending'])
+  assert.deepEqual(technicalOutputFlow.map((stage) => stage.status), ['active', 'pending'])
 
   const technicalGateTraceFlow = buildDirectorStages(startupRoles, [], {
     nodes: startupRoles.map((role) => ({
@@ -143,7 +178,7 @@ try {
       },
     })),
   }, true)
-  assert.deepEqual(technicalGateTraceFlow.map((stage) => stage.status), ['pending', 'pending'])
+  assert.deepEqual(technicalGateTraceFlow.map((stage) => stage.status), ['active', 'pending'])
 
   const actionableGateTraceFlow = buildDirectorStages(startupRoles, [], {
     nodes: [
@@ -603,6 +638,18 @@ try {
   assert.ok(publishCopiesToMarkdown(copies).includes('## 小红书'))
   assert.ok(publishCopiesToMarkdown(copies).includes('## B站'))
   assert.equal(JSON.parse(publishCopiesToJSON(copies))[0].platform, 'xiaohongshu')
+
+  const videoGuideSteps = externalGenerationGuideSteps({
+    kind: 'video',
+    references: [{ id: 'keyframe-1' }, { id: 'scene-1' }],
+    target: { durationSec: 8, aspectRatio: '16:9', resolution: '1920x1080' },
+    promptCharLimit: 2000,
+    referenceImageLimit: 6,
+  })
+  assert.ok(videoGuideSteps[0].includes('没有可用的图片或视频 API 配置'))
+  assert.ok(videoGuideSteps.some((step) => step.includes('复制 Prompt') && step.includes('浏览器')))
+  assert.ok(videoGuideSteps.some((step) => step.includes('每个 shot 单独生成') && step.includes('转场放在本 shot 结尾')))
+  assert.ok(videoGuideSteps.some((step) => step.includes('上传结果') && step.includes('素材库')))
 
   const pageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   assert.ok(

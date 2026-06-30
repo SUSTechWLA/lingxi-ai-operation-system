@@ -116,6 +116,23 @@ func (s *ProjectService) ListProjects(ctx context.Context, userID string, modeFi
 	return s.repo.FindAllForUser(ctx, userID, modeFilter, statusFilter, offset, limit)
 }
 
+// MarkAgentRunStarted links an agent run to a project and marks it running.
+func (s *ProjectService) MarkAgentRunStarted(ctx context.Context, userID, projectID, runID string) error {
+	if userID == "" {
+		return fmt.Errorf("user_id is required")
+	}
+	if projectID == "" {
+		return fmt.Errorf("project_id is required")
+	}
+	project, err := s.repo.FindByIDForUser(ctx, userID, projectID)
+	if err != nil {
+		return err
+	}
+	project.Status = model.StatusRunning
+	project.CurrentRunID = runID
+	return s.repo.UpdateForUser(ctx, userID, project)
+}
+
 // UpdateProject updates a project. Mode and version fields cannot be changed.
 func (s *ProjectService) UpdateProject(ctx context.Context, userID string, id string, req *model.UpdateProjectRequest) (*model.VideoProject, error) {
 	project, err := s.repo.FindByIDForUser(ctx, userID, id)

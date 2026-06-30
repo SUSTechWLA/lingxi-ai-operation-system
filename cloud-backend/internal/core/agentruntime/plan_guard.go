@@ -37,8 +37,9 @@ func (g *PlanGuard) Validate(plan *AgentPlan) error {
 	return g.ValidatePlan(context.Background(), "", plan)
 }
 
-// ValidatePlan performs full plan validation including local capability checks
-// when a user ID is provided.
+// ValidatePlan performs full plan validation. Runtime availability for video
+// local tools is deferred until the execution stage so early cloud/review work
+// can start before a user's desktop runner is online.
 func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *AgentPlan) error {
 	if plan == nil {
 		return fmt.Errorf("agent plan is required")
@@ -78,9 +79,10 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 			return fmt.Errorf("agent step %s references unknown tool %s", step.ID, step.Tool)
 		}
 
-		// Local capability check: if this tool requires local execution,
-		// verify the user's local runner is online and supports it.
-		if userID != "" && g.localValidator != nil {
+		// Local capability check: for video plans, local runner availability is
+		// an execution-time dependency because local preview/render steps occur
+		// after cloud-generated artifacts and human review gates.
+		if userID != "" && g.localValidator != nil && !deferLocalCapabilityChecks(plan) {
 			if err := g.localValidator.ValidateForLocalExecution(ctx, userID, step, manifest); err != nil {
 				return err
 			}
@@ -125,6 +127,10 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 	}
 
 	return nil
+}
+
+func deferLocalCapabilityChecks(plan *AgentPlan) bool {
+	return plan != nil && plan.Domain == "video_creation"
 }
 
 func (g *PlanGuard) validateStageGuard(

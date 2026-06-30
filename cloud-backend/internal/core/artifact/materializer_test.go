@@ -351,6 +351,169 @@ func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *
 	}
 }
 
+func TestBuildArtifactsParsesExternalRequestsFromStdoutContent(t *testing.T) {
+	embedded := map[string]interface{}{
+		"externalGenerationRequests": []interface{}{
+			map[string]interface{}{
+				"requestId":           "extgen_video_SHOT_01",
+				"kind":                "video",
+				"shotId":              "SHOT_01",
+				"prompt":              "独立生成 8 秒 AIGC 视频，结尾 0.5 秒淡出，方便 ffmpeg 直接拼接。",
+				"negativePrompt":      "禁止跨 shot 依赖。",
+				"promptCharLimit":     2000,
+				"referenceImageLimit": 6,
+				"references": []interface{}{
+					map[string]interface{}{"id": "keyframe_SHOT_01", "role": "keyframe", "storageRef": "local://projects/vp-1/keyframes/SHOT_01.png"},
+				},
+			},
+		},
+		"shotAssetPackages": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": 8,
+				"prompts": map[string]interface{}{
+					"videoPrompt":    "独立生成 8 秒 AIGC 视频，结尾 0.5 秒淡出。",
+					"negativePrompt": "禁止跨 shot 依赖。",
+				},
+				"aigcVideo": map[string]interface{}{"requestId": "extgen_video_SHOT_01", "artifactKind": "SHOT_VIDEO_CLIP"},
+			},
+		},
+		"artifacts": []interface{}{
+			map[string]interface{}{
+				"unitId":   "extgen_video_SHOT_01",
+				"kind":     "JSON",
+				"name":     "external_generation_request.json",
+				"mimeType": "application/json",
+				"metadata": map[string]interface{}{
+					"artifactType":   "external_generation_request",
+					"generationKind": "video",
+					"relatedShotId":  "SHOT_01",
+				},
+			},
+			map[string]interface{}{
+				"unitId":   "shot_asset_package_SHOT_01",
+				"kind":     "SHOT_ASSET_PACKAGE",
+				"name":     "SHOT_01_asset_package.json",
+				"mimeType": "application/json",
+				"metadata": map[string]interface{}{
+					"artifactType":  "shot_asset_package",
+					"relatedShotId": "SHOT_01",
+				},
+			},
+		},
+	}
+	embeddedBytes, err := json.Marshal(embedded)
+	if err != nil {
+		t.Fatalf("marshal embedded payload: %v", err)
+	}
+	stdoutPayload := map[string]interface{}{
+		"artifacts": []interface{}{
+			map[string]interface{}{
+				"unitId":   "video_prompt_generator",
+				"kind":     "VIDEO_PROMPTS",
+				"name":     "video_prompts.json",
+				"mimeType": "application/json",
+				"metadata": map[string]interface{}{"stage": "video_prompt_generator"},
+			},
+			map[string]interface{}{
+				"unitId":   "shot_asset_package_SHOT_01",
+				"kind":     "SHOT_ASSET_PACKAGE",
+				"name":     "SHOT_01_asset_package.json",
+				"mimeType": "application/json",
+				"metadata": map[string]interface{}{"artifactType": "shot_asset_package", "relatedShotId": "SHOT_01"},
+			},
+		},
+		"content": string(embeddedBytes),
+	}
+	stdoutBytes, err := json.Marshal(stdoutPayload)
+	if err != nil {
+		t.Fatalf("marshal stdout payload: %v", err)
+	}
+	node := &model.Node{
+		ID:     "video_prompt_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"parameters": map[string]interface{}{"stage": "video_prompt", "tool": "video_prompt_generator"},
+			"tool":       "external",
+		},
+		Output: map[string]interface{}{"stdout": string(stdoutBytes)},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("stdout content should materialize: %v", err)
+	}
+	byUnit := map[string]*CreateArtifactRequest{}
+	for _, req := range requests {
+		byUnit[req.UnitID] = req
+	}
+	request := byUnit["extgen_video_SHOT_01"]
+	if request == nil {
+		t.Fatalf("missing external generation request, got units %+v", byUnit)
+	}
+	if request.StorageType != StorageInline || request.Provider != "external-generation-request" {
+		t.Fatalf("external request should be inline provider, got storage=%q provider=%q", request.StorageType, request.Provider)
+	}
+	if !strings.Contains(string(request.Data), "独立生成 8 秒") {
+		t.Fatalf("external request should include prompt from embedded content, got %s", string(request.Data))
+	}
+	shotPackage := byUnit["shot_asset_package_SHOT_01"]
+	if shotPackage == nil || shotPackage.StorageType != StorageInline {
+		t.Fatalf("shot package should be inline, got %+v", shotPackage)
+	}
+	if promptBundle := byUnit["video_prompt_generator"]; promptBundle == nil || len(promptBundle.Data) == 0 {
+		t.Fatalf("video prompts should keep displayable JSON content, got %+v", promptBundle)
+	}
+}
+
+func TestBuildArtifactsExternalRequestUsesPromptTextFallback(t *testing.T) {
+	payload := map[string]interface{}{
+		"externalGenerationRequests": []interface{}{
+			map[string]interface{}{
+				"requestId":  "extgen_video_SHOT_01",
+				"kind":       "video",
+				"shotId":     "SHOT_01",
+				"prompt":     map[string]interface{}{"redacted": true, "reason": "USER_ASSET_REDACTED"},
+				"promptText": "独立生成 7 秒佛得角世界杯奇迹视频，结尾淡出，方便 ffmpeg 拼接。",
+				"references": []interface{}{
+					map[string]interface{}{"id": "ref_SHOT_01_01", "role": "reference", "storageRef": "manual://references/SHOT_01/01"},
+				},
+				"target": map[string]interface{}{"durationSec": 7, "aspectRatio": "16:9"},
+			},
+		},
+		"artifacts": []interface{}{
+			map[string]interface{}{
+				"unitId":   "extgen_video_SHOT_01",
+				"kind":     "JSON",
+				"name":     "external_generation_request.json",
+				"mimeType": "application/json",
+				"metadata": map[string]interface{}{
+					"artifactType":   "external_generation_request",
+					"generationKind": "video",
+					"relatedShotId":  "SHOT_01",
+				},
+			},
+		},
+	}
+	node := &model.Node{
+		ID:     "video_prompt_exec",
+		Status: model.NodeSuccess,
+		Input:  map[string]interface{}{"parameters": map[string]interface{}{"stage": "video_prompt"}},
+		Output: payload,
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("promptText fallback should be valid: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one request, got %+v", requests)
+	}
+	if !strings.Contains(string(requests[0].Data), "佛得角世界杯奇迹") {
+		t.Fatalf("request data should include fallback prompt, got %s", string(requests[0].Data))
+	}
+}
+
 func TestBuildArtifactsShotAssetPackageMaterializesIndividualPackage(t *testing.T) {
 	node := &model.Node{
 		ID:     "video_prompt_exec",
