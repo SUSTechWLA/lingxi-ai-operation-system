@@ -1,4 +1,0 @@
-review_type: SELF_REVIEW
-decision: PROVISIONALLY_APPROVED
-reviewer: codex
-notes: "Single-developer provisional approval. Core change is limited to generic workflow runtime and orchestration behavior; external media tools remain black-box contracts."

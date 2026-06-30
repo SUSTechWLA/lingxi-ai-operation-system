@@ -367,13 +367,17 @@ go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os
 ```
 
-Cloud Compose 部署：
+Cloud Compose 启动：
 
 ```bash
-cd cloud-backend/deploy
-cp .env.cloud.example .env.cloud
-docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
+cd cloud-backend
+cp .env.example .env
+docker compose up -d
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
+./build/tangying-ai-os
 ```
+
+Compose project 名称应为 `cloud-backend`。
 
 桌面打包：
 

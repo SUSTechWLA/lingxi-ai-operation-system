@@ -35,7 +35,7 @@ go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 ./build/tangying-ai-os
 ```
 
-Cloud deployment docs: [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md).
+Cloud backend runtime docs: [cloud-backend/README.md](cloud-backend/README.md).
 
 ## Frontend
 

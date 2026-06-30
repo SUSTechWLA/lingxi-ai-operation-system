@@ -4,6 +4,7 @@
 
 # Logs
 *.log
+.run/
 
 # Build output
 /build/
@@ -35,11 +36,15 @@ frontend/node_modules
 electron/node_modules
 node_modules/
 .codex/
+.lingxi-core-loop/
+.superpowers/
 cloud-backend/build/
 cloud-backend/sandbox/target/
 local-backend/build/
 local-backend/dist/
 frontend/resources/bin/
 *.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
 cloud-backend/tangying-ai-os
 cloud-backend/runtime-model-provider.json

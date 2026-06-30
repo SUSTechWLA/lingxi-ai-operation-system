@@ -144,7 +144,7 @@ func (h *Handler) StartRun(c *gin.Context) {
 	if req.UserID == "" {
 		req.UserID = ginUserID(c)
 	}
-	run, err := h.runner.Start(c.Request.Context(), req)
+	run, err := h.runner.StartAsync(c.Request.Context(), req)
 	if err != nil {
 		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return

@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,8 +48,47 @@ func TestRunnerStart_CreatesTaskScopesDAGAndStoresRun(t *testing.T) {
 	if len(orch.submitted.Nodes) != 1 || orch.submitted.Nodes[0].ID != expectedNodeID {
 		t.Fatalf("node IDs were not scoped by task: %#v", orch.submitted.Nodes)
 	}
-	if _, ok := store.runs[run.ID]; !ok {
+	if stored, _ := store.FindRun(context.Background(), run.ID); stored == nil {
 		t.Fatalf("run was not stored")
+	}
+}
+
+func TestRunnerCompleteStart_PreservesProvidedRunID(t *testing.T) {
+	store := newMemoryRunStore()
+	orch := &fakeOrchestrator{taskID: "task-1"}
+	planner := staticPlanner{plan: &AgentPlan{
+		Goal:   "make video",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "script", Tool: "video_script_generator", Arguments: map[string]interface{}{"topic": "AI workflows"}},
+		},
+	}}
+	catalog := staticToolCatalog{
+		"video_script_generator": &tool.ToolManifest{
+			Name:     "video_script_generator",
+			Endpoint: "builtin://video-creation/video_script_generator",
+		},
+	}
+	req := StartRunRequest{
+		UserID:  "user-1",
+		Message: "make a video about AI workflows",
+		Domain:  "video_creation",
+	}
+	shell := newRunShell(req)
+	originalRunID := shell.ID
+
+	runner := NewRunner(orch, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog))
+	run, err := runner.completeStart(context.Background(), req, shell)
+	if err != nil {
+		t.Fatalf("completeStart returned error: %v", err)
+	}
+
+	if run.ID != originalRunID {
+		t.Fatalf("completeStart changed run ID: got %q, want %q", run.ID, originalRunID)
+	}
+	if stored, _ := store.FindRun(context.Background(), originalRunID); stored == nil {
+		t.Fatalf("provided run ID %q was not stored", originalRunID)
 	}
 }
 
@@ -356,8 +396,8 @@ func TestRunnerStart_BlocksWhenPlanJudgeFails(t *testing.T) {
 	if orch.createdInput != nil || orch.submitted != nil {
 		t.Fatalf("runner should not create or submit DAG after plan judge failure: input=%#v submitted=%#v", orch.createdInput, orch.submitted)
 	}
-	if len(store.runs) != 0 {
-		t.Fatalf("failed plan should not be persisted as a run: %#v", store.runs)
+	if got := store.Len(); got != 0 {
+		t.Fatalf("failed plan should not be persisted as a run, got %d stored runs", got)
 	}
 }
 
@@ -646,6 +686,7 @@ func (o *fakeOrchestrator) GetTaskWithDetails(context.Context, string) (map[stri
 }
 
 type memoryRunStore struct {
+	mu   sync.RWMutex
 	runs map[string]*Run
 }
 
@@ -654,12 +695,22 @@ func newMemoryRunStore() *memoryRunStore {
 }
 
 func (s *memoryRunStore) SaveRun(_ context.Context, run *Run) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.runs[run.ID] = run
 	return nil
 }
 
 func (s *memoryRunStore) FindRun(_ context.Context, id string) (*Run, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.runs[id], nil
+}
+
+func (s *memoryRunStore) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.runs)
 }
 
 type recordingPlanJudge struct {

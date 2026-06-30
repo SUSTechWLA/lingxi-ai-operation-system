@@ -19,23 +19,24 @@ go build -o build/tangying-ai-os ./cmd/tangying-ai-os
 bash scripts/start-cloud-backend.sh
 ```
 
-## 云端部署
+## Docker Compose
 
 ```bash
-cd deploy
-cp .env.cloud.example .env.cloud
-# 填 AUTH_TOKEN_SECRET、数据库/MinIO 密码等；模型 API 在桌面端本机设置
-docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
+cp .env.example .env
+docker compose up -d
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
+./build/tangying-ai-os
 ```
 
-部署包含：
+Compose project 名称以当前目录为准，应为 `cloud-backend`。
 
-- `backend`: Go 单体服务，端口 `8080`
+本地云端依赖包含：
+
 - `postgres`: 主数据库
 - `redis`: 会话与缓存
 - `redpanda`: Kafka 兼容事件流
 - `minio`: 媒体对象存储
-- `nginx`: 前端静态文件和 `/api` 反向代理
+- `qdrant`: 向量检索服务
 
 ## 关键环境变量
 
@@ -59,4 +60,4 @@ curl http://localhost:8080/api/health/ready
 ./scripts/test-apis.sh
 ```
 
-完整架构与 API 见根目录 `docs/ARCHITECTURE.md`、`docs/CLOUD_DEPLOYMENT.md`。
+完整架构与 API 见 `docs/ARCHITECTURE.md` 和 `docs/API_REFERENCE.md`。

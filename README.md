@@ -81,15 +81,17 @@ bash scripts/build-local-desktop.sh
 bash scripts/start-cloud-backend.sh
 ```
 
-Docker Compose 部署：
+Docker Compose 启动：
 
 ```bash
-cd cloud-backend/deploy
-cp .env.cloud.example .env.cloud
-docker compose --env-file .env.cloud -f docker-compose.cloud.yml up -d --build
+cd cloud-backend
+cp .env.example .env
+docker compose up -d
+go build -o build/tangying-ai-os ./cmd/tangying-ai-os
+./build/tangying-ai-os
 ```
 
-详细说明见 [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)。
+Docker Compose project 以 `cloud-backend` 为准。
 
 ## 常用验证
 
@@ -109,6 +111,6 @@ cd ../hyperframes-render-service && npm run build
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/LOCAL_USAGE.md](docs/LOCAL_USAGE.md)
-- [docs/CLOUD_DEPLOYMENT.md](docs/CLOUD_DEPLOYMENT.md)
+- [cloud-backend/README.md](cloud-backend/README.md)
 - [docs/BETA_USAGE.md](docs/BETA_USAGE.md)
 - [cloud-backend/docs/ONBOARDING.md](cloud-backend/docs/ONBOARDING.md)

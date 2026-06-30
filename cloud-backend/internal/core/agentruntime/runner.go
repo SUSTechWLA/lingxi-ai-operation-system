@@ -126,7 +126,8 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 	if err := r.store.SaveRun(ctx, run); err != nil {
 		return nil, fmt.Errorf("store agent run: %w", err)
 	}
-	go r.completeStartInBackground(req, run)
+	backgroundRun := *run
+	go r.completeStartInBackground(req, &backgroundRun)
 	return run, nil
 }
 
@@ -236,18 +237,24 @@ planOK:
 		injectClientModelProviders(dag, providers)
 	}
 
-	run := &Run{
-		ID:        "agent_run_" + uuid.NewString(),
-		UserID:    req.UserID,
-		Domain:    plan.Domain,
-		Message:   req.Message,
-		Plan:      plan,
-		Status:    RunStatusCreated,
-		Budget:    plan.Budget,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Metadata:  map[string]interface{}{"mode": req.Mode, "agentToolTrace": agentToolTrace},
+	if run == nil {
+		run = newRunShell(req)
 	}
+	now := time.Now()
+	if run.ID == "" {
+		run.ID = "agent_run_" + uuid.NewString()
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = now
+	}
+	run.UserID = req.UserID
+	run.Domain = plan.Domain
+	run.Message = req.Message
+	run.Plan = plan
+	run.Status = RunStatusCreated
+	run.Budget = plan.Budget
+	run.UpdatedAt = now
+	run.Metadata = map[string]interface{}{"mode": plan.Mode, "agentToolTrace": agentToolTrace}
 	if len(judgeReport.Warnings) > 0 {
 		run.Metadata["planJudgeWarnings"] = judgeReport.Warnings
 		run.Metadata["planJudgePassed"] = judgeReport.Passed

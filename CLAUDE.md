@@ -94,7 +94,6 @@ cloud-backend/
       publish/                          # 内容发布（后续重构为 distribution）
   skills/                               # 6 个 Skill Package（create-opinion-videos 等）
   skill-capabilities/                   # 🆕 Skill Capability（codex-video-skill 工具注册表）
-  deploy/                               # 云端 Docker Compose + nginx 配置
   scripts/                              # 启动/测试脚本
 
 local-backend/

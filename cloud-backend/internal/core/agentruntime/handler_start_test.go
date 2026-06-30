@@ -14,7 +14,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
-func TestStartRunMarksLinkedProjectRunning(t *testing.T) {
+func TestStartRunMarksLinkedProjectAndReturnsCreatedRun(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	store := newMemoryRunStore()
@@ -73,7 +73,7 @@ func TestStartRunMarksLinkedProjectRunning(t *testing.T) {
 	if projectUpdater.runID == "" {
 		t.Fatalf("project lifecycle updater should receive runID")
 	}
-	run := store.runs[projectUpdater.runID]
+	run, _ := store.FindRun(context.Background(), projectUpdater.runID)
 	if run == nil {
 		t.Fatalf("run %q was not stored", projectUpdater.runID)
 	}
@@ -88,8 +88,8 @@ func TestStartRunMarksLinkedProjectRunning(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not JSON: %v", err)
 	}
-	if body.Data.Status != RunStatusRunning {
-		t.Fatalf("response status = %q, want RUNNING", body.Data.Status)
+	if body.Data.Status != RunStatusCreated {
+		t.Fatalf("response status = %q, want CREATED", body.Data.Status)
 	}
 }
 
