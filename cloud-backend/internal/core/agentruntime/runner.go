@@ -94,6 +94,8 @@ type Runner struct {
 	planJudge    PlanJudge
 }
 
+const asyncRunStartTimeout = 10 * time.Minute
+
 func NewRunner(orchestrator Orchestrator, store RunStore, planner Planner, guard *PlanGuard, compiler *PlanCompiler) *Runner {
 	return &Runner{
 		orchestrator: orchestrator,
@@ -110,13 +112,82 @@ func (r *Runner) WithPlanJudge(judge PlanJudge) *Runner {
 }
 
 func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
+	if err := r.validateStartRequest(req); err != nil {
+		return nil, err
+	}
+	return r.completeStart(ctx, req, newRunShell(req))
+}
+
+func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, error) {
+	if err := r.validateStartRequest(req); err != nil {
+		return nil, err
+	}
+	run := newRunShell(req)
+	if err := r.store.SaveRun(ctx, run); err != nil {
+		return nil, fmt.Errorf("store agent run: %w", err)
+	}
+	go r.completeStartInBackground(req, run)
+	return run, nil
+}
+
+func (r *Runner) validateStartRequest(req StartRunRequest) error {
 	if req.Message == "" {
-		return nil, fmt.Errorf("message is required")
+		return fmt.Errorf("message is required")
 	}
 	if r == nil || r.orchestrator == nil || r.store == nil || r.planner == nil || r.guard == nil || r.compiler == nil {
-		return nil, fmt.Errorf("agent runner is not configured")
+		return fmt.Errorf("agent runner is not configured")
 	}
+	return nil
+}
 
+func newRunShell(req StartRunRequest) *Run {
+	domain := req.Domain
+	if domain == "" {
+		domain = inferDomain(req.Message)
+	}
+	mode := req.Mode
+	if mode == "" {
+		mode = "dynamic_agent"
+	}
+	now := time.Now()
+	return &Run{
+		ID:        "agent_run_" + uuid.NewString(),
+		UserID:    req.UserID,
+		Domain:    domain,
+		Message:   req.Message,
+		Status:    RunStatusCreated,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Metadata:  map[string]interface{}{"mode": mode, "startPhase": "planning"},
+	}
+}
+
+func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
+	ctx, cancel := context.WithTimeout(context.Background(), asyncRunStartTimeout)
+	defer cancel()
+	if _, err := r.completeStart(ctx, req, run); err != nil {
+		failed := *run
+		failed.Status = RunStatusFailed
+		failed.UpdatedAt = time.Now()
+		if failed.Metadata == nil {
+			failed.Metadata = map[string]interface{}{}
+		}
+		failed.Metadata["startPhase"] = "failed"
+		failed.Metadata["error"] = err.Error()
+		if saveErr := r.store.SaveRun(context.Background(), &failed); saveErr != nil {
+			zap.L().Warn("failed to persist async agent run failure",
+				zap.String("runId", run.ID),
+				zap.Error(saveErr),
+			)
+		}
+		zap.L().Warn("async agent run start failed",
+			zap.String("runId", run.ID),
+			zap.Error(err),
+		)
+	}
+}
+
+func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Run) (*Run, error) {
 	plan, err := r.planner.GeneratePlan(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("generate agent plan: %w", err)
