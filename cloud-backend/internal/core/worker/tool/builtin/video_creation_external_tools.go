@@ -571,6 +571,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"aspectRatio":      {Type: "string", Description: "Video aspect ratio", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
+			"shotQueue":         {Type: "object", Description: "Lightweight sequential shot queue for user-facing review"},
 			"shotList":          {Type: "array", Description: "Independent 3-15 second shot list"},
 			"shotAssetPackages": {Type: "array", Description: "Per-shot independent asset package requirements"},
 			"totalDurationSec":  {Type: "number", Description: "Total duration in seconds"},
@@ -2178,21 +2179,113 @@ func buildDeterministicShotSplitterData(toolName, skillName, topic, script strin
 		})
 	}
 	contentPkg := map[string]interface{}{
+		"shotQueue": map[string]interface{}{
+			"mode":         "linear",
+			"activeShotId": firstShotID(shotList),
+			"reviewUnit":   "single_shot",
+			"status":       "INITIALIZED",
+		},
 		"shotList":          shotList,
 		"shotAssetPackages": shotAssetPackages,
 		"totalDurationSec":  sumDurations(durations),
 		"summary":           "已本地自动拆分为 3-15 秒独立 shot；每个 shot 可独立生成素材并在结尾覆盖转场。",
 	}
-	contentBytes, _ := json.Marshal(contentPkg)
 	return map[string]interface{}{
-		"content":           string(contentBytes),
+		"content":           buildShotQueueReviewContent(contentPkg),
 		"package":           contentPkg,
 		"artifacts":         buildSkillStageArtifacts(toolName, skillName, false, true),
+		"shotQueue":         contentPkg["shotQueue"],
 		"shotList":          shotList,
 		"shotAssetPackages": shotAssetPackages,
 		"totalDurationSec":  contentPkg["totalDurationSec"],
 		"summary":           contentPkg["summary"],
 	}, true
+}
+
+func firstShotID(shotList []interface{}) string {
+	for _, item := range shotList {
+		shot, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		if shotID := firstStringInMap(shot, "shotId", "id"); shotID != "" {
+			return shotID
+		}
+	}
+	return ""
+}
+
+func buildShotQueueReviewContent(pkg map[string]interface{}) string {
+	shots := interfaceItems(pkg["shotList"])
+	totalDuration := intFromInterface(pkg["totalDurationSec"], 0)
+	summary := firstStringInMap(pkg, "summary")
+	activeShotID := ""
+	if queue, ok := mapValue(pkg["shotQueue"]); ok {
+		activeShotID = firstStringInMap(queue, "activeShotId")
+	}
+	if activeShotID == "" {
+		activeShotID = firstShotID(shots)
+	}
+
+	var b strings.Builder
+	b.WriteString("# 分镜队列\n\n")
+	if len(shots) == 0 {
+		b.WriteString("脚本已进入分镜阶段，但还没有生成可审核的 shot。")
+		return b.String()
+	}
+	if totalDuration > 0 {
+		fmt.Fprintf(&b, "共 %d 个 shot，预计 %d 秒。\n\n", len(shots), totalDuration)
+	} else {
+		fmt.Fprintf(&b, "共 %d 个 shot。\n\n", len(shots))
+	}
+	if activeShotID != "" {
+		fmt.Fprintf(&b, "**当前先审核：%s**\n\n", activeShotID)
+	}
+	b.WriteString("系统会按顺序处理，每次只展开当前 shot 的脚本、参考图、关键帧和视频生成任务。后续 shot 暂不展开素材包，避免一次给出过多信息。\n\n")
+	if summary != "" {
+		fmt.Fprintf(&b, "%s\n\n", summary)
+	}
+	for i, item := range shots {
+		shot, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		shotID := firstStringInMap(shot, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		duration := intFromInterface(shot["durationSec"], 0)
+		narration := firstStringInMap(shot, "narrationText", "scriptText", "text")
+		visual := firstStringInMap(shot, "visual", "visualGoal", "description")
+		fmt.Fprintf(&b, "## %s", shotID)
+		if duration > 0 {
+			fmt.Fprintf(&b, " · %ds", duration)
+		}
+		b.WriteString("\n\n")
+		if narration != "" {
+			fmt.Fprintf(&b, "- 口播：%s\n", truncateText(narration, 120))
+		}
+		if visual != "" {
+			fmt.Fprintf(&b, "- 画面：%s\n", truncateText(visual, 120))
+		}
+		if hints := interfaceItems(shot["materialLibraryHints"]); len(hints) > 0 {
+			parts := make([]string, 0, len(hints))
+			for _, hint := range hints {
+				text := strings.TrimSpace(ensureStringValue(hint))
+				if text != "" {
+					parts = append(parts, text)
+				}
+				if len(parts) >= 4 {
+					break
+				}
+			}
+			if len(parts) > 0 {
+				fmt.Fprintf(&b, "- 参考方向：%s\n", strings.Join(parts, "、"))
+			}
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func extractPlainScriptText(script string) string {
@@ -5039,6 +5132,9 @@ func normalizeStructuredToolContent(toolName, rawContent string) (string, map[st
 	if err := jsonx.ExtractJSON(rawContent, &contentPkg); err != nil {
 		return rawContent, contentPkg, false
 	}
+	if toolName == "shot_splitter" {
+		return buildShotQueueReviewContent(contentPkg), contentPkg, true
+	}
 	if isStructuredOutputTool(toolName) {
 		if canonical, err := json.Marshal(contentPkg); err == nil {
 			return string(canonical), contentPkg, true
@@ -5124,20 +5220,20 @@ style=%s
 		return `你是短视频分镜导演。
 
 目标：
-把已确认口播稿拆成适合逐 shot 生产、审核和返工的镜头列表。
+把已确认口播稿拆成适合逐 shot 生产、审核和返工的轻量分镜队列。AIGC 视频必须先依赖已确认的全局一致性资产包，再进入逐 shot 生产。
 
 硬性要求：
 1. 不论 AIGC 还是 HyperFrames，视频创作都必须先分 shot；每个 shot 都是最小生产、审核和返工单元。
 2. 每个 shot 时长 3-15 秒，只表达一个主要画面变化，必须覆盖完整口播稿，不要遗漏。
 3. 每个 shot 必须包含：shotId、durationSec、scriptText、narrationText、visual、camera、composition、lighting、transitionIn、transitionOut。
 4. 每个 shot 必须包含 materialLibraryHints，说明可检索或复用的素材库方向、镜头语法、构图或运动参考。
-5. 每个 shot 必须包含 referenceRequirements，列出当前 shot 需要的人物、场景、道具、故事板或首帧参考；主要人物、场景、核心道具应尽量要求 front/side/back 三视角设定图。
+5. 每个 shot 必须包含 referenceRequirements，列出当前 shot 需要引用的全局一致性资产包条目；主要人物、场景、核心道具必须来自已确认的 front/side/back 多视角参考图，不得临时发散。
 6. 每个 shot 必须包含 expectedArtifacts，明确该 shot 后续会生成或上传的 voiceover/audio、keyframe、image、videoClip、subtitle、hyperframesSegment、reviewPacket。
 7. 每个 shot 必须包含 reviewPacket，用于前端按 shot 审核，字段至少包括 artifactKind="SHOT_REVIEW_PACKET"、reviewFocus、rerunScope、dependencies。
 8. AIGC shot 的 reviewFocus 必须覆盖参考图一致性、提示词、音频口播、关键帧、视频片段、字幕；HyperFrames shot 的 reviewFocus 必须覆盖画面和口播一致性、文字层可读性、时间轴节奏。
 9. 每个 shot 的素材包必须完全独立，不得要求读取上一个或下一个 shot；唯一允许共用的是为了一致性锁定的主要角色、主要道具、主场景和全片风格。
 10. transitionOut 必须描述覆盖在本 shot 结尾 0.3-0.8 秒内的收束或转场，方便 ffmpeg 直接按 shot 顺序拼接。
-11. 输出 shotAssetPackages，作为每个 shot 后续参考图、提示词、口播、AIGC 视频、字幕和拼接计划的独立素材包规划。
+11. 输出 shotQueue，表达线性执行状态和当前建议先审核的 shot；不要在用户审核内容里一次性暴露所有 shot 的素材包、prompt 和拼接细节。
 12. 视觉风格默认 16:9，非写实动画，去 AI 感。
 13. 输出严格 JSON。
 
@@ -5148,6 +5244,12 @@ aspectRatio=<aspectRatio>
 
 输出 JSON：
 {
+  "shotQueue": {
+    "mode": "linear",
+    "reviewUnit": "single_shot",
+    "activeShotId": "SHOT_01",
+    "status": "INITIALIZED"
+  },
   "shotList": [
     {
       "shotId": "SHOT_01",
@@ -5176,27 +5278,6 @@ aspectRatio=<aspectRatio>
         "dependencies": ["script", "reference_assets", "material_library"]
       },
       "notes": "..."
-    }
-  ],
-  "shotAssetPackages": [
-    {
-      "shotId": "SHOT_01",
-      "durationSec": 6,
-      "independence": {
-        "crossShotDependencyForbidden": true,
-        "allowedSharedConsistency": ["主要角色", "主要道具", "主场景", "全片风格"]
-      },
-      "requiredAssets": {
-        "referenceImages": ["首帧/关键帧", "角色三视图", "主道具三视图", "主场景参考图"],
-        "prompts": ["keyframe_prompt", "video_prompt", "negative_prompt"],
-        "voiceover": "SHOT_AUDIO",
-        "aigcVideo": "SHOT_VIDEO_CLIP",
-        "subtitle": "SHOT_SUBTITLE"
-      },
-      "concatPlan": {
-        "mode": "simple_cut",
-        "transitionAtEnd": "本 shot 结尾 0.3-0.8 秒内完成收束或淡出，不依赖下一 shot"
-      }
     }
   ],
   "totalDurationSec": 90,

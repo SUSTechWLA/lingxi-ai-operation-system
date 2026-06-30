@@ -1446,10 +1446,16 @@ export function reviewOutputText(review: AgentReviewItem | undefined): string {
   if (content) return normalizeReviewContentText(content)
   const output = objectValue(review.reviewOutput)
   if (!output) return ''
+  const outputShotQueueText = formatShotQueueReviewText(output)
+  if (outputShotQueueText) return outputShotQueueText
   const summary = stringValue(output.summary)
   if (summary) return summary
   const packageValue = objectValue(output.package)
-  if (packageValue) return JSON.stringify(packageValue, null, 2)
+  if (packageValue) {
+    const packageShotQueueText = formatShotQueueReviewText(packageValue)
+    if (packageShotQueueText) return packageShotQueueText
+    return JSON.stringify(packageValue, null, 2)
+  }
   return JSON.stringify(output, null, 2)
 }
 
@@ -1458,9 +1464,51 @@ function normalizeReviewContentText(content: string): string {
   if (!trimmed) return ''
   const parsed = parseEmbeddedJSON(trimmed)
   if (parsed !== undefined) {
+    const shotQueueText = formatShotQueueReviewText(parsed)
+    if (shotQueueText) return shotQueueText
     return JSON.stringify(parsed, null, 2)
   }
   return content
+}
+
+function formatShotQueueReviewText(value: unknown): string {
+  const record = objectValue(value)
+  if (!record) return ''
+  const shots = arrayOfObjects(record.shotList)
+  if (shots.length === 0) return ''
+  const queue = objectValue(record.shotQueue)
+  const activeShotId = stringValue(queue?.activeShotId) || firstString(shots[0], ['shotId', 'id']) || 'SHOT_01'
+  const totalDuration = numberValue(record.totalDurationSec)
+  const summary = stringValue(record.summary)
+  const lines: string[] = ['# 分镜队列', '']
+  lines.push(totalDuration ? `共 ${shots.length} 个 shot，预计 ${totalDuration} 秒。` : `共 ${shots.length} 个 shot。`)
+  lines.push('', `**当前先审核：${activeShotId}**`, '')
+  lines.push('系统会按顺序处理，每次只展开当前 shot 的脚本、参考图、关键帧和视频生成任务。后续 shot 暂不展开素材包，避免一次给出过多信息。')
+  if (summary) lines.push('', summary)
+  for (const [index, shot] of shots.entries()) {
+    const shotId = firstString(shot, ['shotId', 'id']) || `SHOT_${String(index + 1).padStart(2, '0')}`
+    const duration = numberValue(shot.durationSec)
+    const narration = firstString(shot, ['narrationText', 'scriptText', 'text'])
+    const visual = firstString(shot, ['visual', 'visualGoal', 'description'])
+    const hints = Array.isArray(shot.materialLibraryHints)
+      ? shot.materialLibraryHints.map((item) => stringValue(item)).filter((item): item is string => Boolean(item)).slice(0, 4)
+      : []
+    lines.push('', `## ${shotId}${duration ? ` · ${duration}s` : ''}`, '')
+    if (narration) lines.push(`- 口播：${truncateReviewLine(narration, 120)}`)
+    if (visual) lines.push(`- 画面：${truncateReviewLine(visual, 120)}`)
+    if (hints.length > 0) lines.push(`- 参考方向：${hints.join('、')}`)
+  }
+  return lines.join('\n').trim()
+}
+
+function arrayOfObjects(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.map((item) => objectValue(item)).filter((item): item is Record<string, unknown> => Boolean(item))
+    : []
+}
+
+function truncateReviewLine(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value
 }
 
 function parseEmbeddedJSON(text: string): unknown | undefined {

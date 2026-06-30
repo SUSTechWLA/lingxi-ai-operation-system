@@ -396,6 +396,7 @@ func TestShotSplitterPromptRequiresShotProductionPackets(t *testing.T) {
 	for _, required := range []string{
 		"不论 AIGC 还是 HyperFrames",
 		"每个 shot 都是最小生产、审核和返工单元",
+		"全局一致性资产包",
 		"每个 shot 时长 3-15 秒",
 		"每个 shot 的素材包必须完全独立",
 		"narrationText",
@@ -403,7 +404,7 @@ func TestShotSplitterPromptRequiresShotProductionPackets(t *testing.T) {
 		"referenceRequirements",
 		"expectedArtifacts",
 		"reviewPacket",
-		"shotAssetPackages",
+		"shotQueue",
 		"SHOT_REVIEW_PACKET",
 	} {
 		if !strings.Contains(prompt, required) {
@@ -561,6 +562,15 @@ func TestExecuteDynamicAgentPromptToolSplitsShotsLocally(t *testing.T) {
 	packages, ok := result.Data["shotAssetPackages"].([]interface{})
 	if !ok || len(packages) != len(shots) {
 		t.Fatalf("expected per-shot packages, got %#v", result.Data["shotAssetPackages"])
+	}
+	content := ensureStringValue(result.Data["content"])
+	if strings.HasPrefix(strings.TrimSpace(content), "{") || strings.Contains(content, `"shotAssetPackages"`) {
+		t.Fatalf("shot splitter review content should be human-readable, got %s", content)
+	}
+	for _, required := range []string{"分镜队列", "当前先审核", "SHOT_01"} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("shot splitter review content should contain %q, got %s", required, content)
+		}
 	}
 }
 

@@ -578,6 +578,37 @@ try {
     '{\n  "facts": [\n    "佛得角是西非岛国"\n  ],\n  "summary": "佛得角首次晋级世界杯。"\n}',
   )
 
+  const shotJsonReview = {
+    id: 'shot-review',
+    nodeId: 'shot-review',
+    status: 'PENDING',
+    tool: 'shot_splitter',
+    reviewContent: JSON.stringify({
+      shotList: [
+        {
+          shotId: 'SHOT_01',
+          durationSec: 7,
+          narrationText: '佛得角是西非岛国。',
+          visual: '地图上突出佛得角群岛。',
+          materialLibraryHints: ['佛得角群岛地图', '足球场'],
+        },
+        {
+          shotId: 'SHOT_02',
+          durationSec: 8,
+          narrationText: '世界杯出线是小国奇迹。',
+          visual: '球迷庆祝与比分数据可视化。',
+        },
+      ],
+      shotAssetPackages: [{ shotId: 'SHOT_01' }, { shotId: 'SHOT_02' }],
+      totalDurationSec: 15,
+    }),
+  }
+  const shotReviewText = reviewOutputText(shotJsonReview)
+  assert.match(shotReviewText, /分镜队列/)
+  assert.match(shotReviewText, /当前先审核：SHOT_01/)
+  assert.match(shotReviewText, /佛得角是西非岛国/)
+  assert.ok(!shotReviewText.includes('shotAssetPackages'), shotReviewText)
+
   const legacyQualityGateReview = {
     id: 'legacy_quality_gate',
     nodeId: 'legacy_quality_gate',
