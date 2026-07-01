@@ -10,7 +10,7 @@ local-backend/  # local desktop agent, no DB/Docker dependency
 cloud-backend/  # Go AIOS Core cloud backend
 ```
 
-Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first for the full architecture.
+Read [cloud-backend/docs/ARCHITECTURE.md](cloud-backend/docs/ARCHITECTURE.md) first for the full architecture.
 
 ## Local Runtime
 

@@ -69,7 +69,7 @@ TANGYING_CLOUD_API_BASE=https://your-cloud.example.com/api \
 bash scripts/build-local-desktop.sh
 ```
 
-详细说明见 [docs/LOCAL_USAGE.md](docs/LOCAL_USAGE.md)。
+本地桌面运行入口以 `scripts/start-local-backend.sh` 和 `scripts/start-frontend.sh` 为准。
 
 ## 云端部署
 
@@ -109,8 +109,8 @@ cd ../hyperframes-render-service && npm run build
 
 ## 架构文档
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- [docs/LOCAL_USAGE.md](docs/LOCAL_USAGE.md)
+- [cloud-backend/docs/ARCHITECTURE.md](cloud-backend/docs/ARCHITECTURE.md)
+- [cloud-backend/docs/AIOS_CORE_BACKEND_BOUNDARY.md](cloud-backend/docs/AIOS_CORE_BACKEND_BOUNDARY.md)
 - [cloud-backend/README.md](cloud-backend/README.md)
-- [docs/BETA_USAGE.md](docs/BETA_USAGE.md)
-- [cloud-backend/docs/ONBOARDING.md](cloud-backend/docs/ONBOARDING.md)
+- [cloud-backend/docs/API_REFERENCE.md](cloud-backend/docs/API_REFERENCE.md)
+- [local-backend/docs/API_REFERENCE.md](local-backend/docs/API_REFERENCE.md)
