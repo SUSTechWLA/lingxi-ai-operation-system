@@ -101,6 +101,12 @@ export interface DirectorShotReviewGroup {
   narrationText: string
   visualText: string
   durationSec?: number
+  generationStrategy?: {
+    mode: string
+    label: string
+    reason: string
+    riskLevel?: string
+  }
   referenceRoles: string[]
   artifactCounts: {
     total: number
@@ -112,7 +118,7 @@ export interface DirectorShotReviewGroup {
   slots: DirectorShotAssetSlot[]
 }
 
-export type DirectorShotAssetSlotKind = 'prompt' | 'reference' | 'storyboard' | 'video'
+export type DirectorShotAssetSlotKind = 'prompt' | 'reference' | 'storyboard' | 'video' | 'base-media' | 'overlay'
 
 export interface DirectorShotAssetSlot {
   kind: DirectorShotAssetSlotKind
@@ -663,6 +669,7 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
         narrationText: shotNarrationText(sourceArtifact),
         visualText: shotVisualText(sourceArtifact),
         durationSec: shotDurationSec(sourceArtifact),
+        generationStrategy: shotGenerationStrategy(shotArtifacts),
         referenceRoles: uniqueStrings(references.map((artifact) => stringValue(artifact.metadata?.referenceRole) || stringValue(artifact.metadata?.role) || displayNameForArtifact(artifact.kind))),
         artifactCounts: {
           total: shotArtifacts.length,
@@ -702,6 +709,17 @@ function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotA
       uploadKind: 'image',
     },
     {
+      kind: 'base-media',
+      label: '基础画面',
+      description: 'AIGC 背景视频、首帧图片或用户上传素材。',
+      uploadKind: 'video',
+    },
+    {
+      kind: 'overlay',
+      label: '文字叠层',
+      description: 'HyperFrames 字幕、卡片、UI、图表和精确文字层。',
+    },
+    {
       kind: 'video',
       label: '视频',
       description: '外部视频平台生成后的本 shot 视频片段。',
@@ -729,10 +747,143 @@ export function unresolvedMaterialDependencyCount(groups: DirectorShotReviewGrou
   return groups.reduce((total, group) => total + group.slots.reduce((slotTotal, slot) => slotTotal + slot.dependencyRequests.length, 0), 0)
 }
 
+function shotGenerationStrategy(artifacts: DirectorArtifactRecord[]): DirectorShotReviewGroup['generationStrategy'] {
+  const shotId = artifacts.map(shotIdForArtifact).find(Boolean) || ''
+  for (const artifact of artifacts) {
+    const candidates = shotGenerationStrategyCandidates(artifact, shotId)
+    for (const candidate of candidates) {
+      const strategy = normalizeShotGenerationStrategy(candidate)
+      if (strategy) return strategy
+    }
+  }
+  return undefined
+}
+
+function shotGenerationStrategyCandidates(artifact: DirectorArtifactRecord, shotId: string): Record<string, unknown>[] {
+  const metadata = artifact.metadata || {}
+  const candidates = [
+    ...strategyCandidatesFromPayload(metadata, shotId),
+    ...strategyCandidatesFromPayload(metadata.inlineContent, shotId),
+  ]
+
+  if (artifactLooksLikeGenerationPlan(artifact)) {
+    candidates.push(...strategyCandidatesFromPayload(artifact, shotId))
+  }
+
+  return candidates
+}
+
+function strategyCandidatesFromPayload(payload: unknown, shotId: string): Record<string, unknown>[] {
+  const parsed = parseStrategyPayload(payload)
+  if (Array.isArray(parsed)) {
+    return parsed.flatMap((item) => strategyCandidatesFromPayload(item, shotId))
+  }
+
+  const record = objectValue(parsed)
+  if (!record) return []
+
+  const candidates: Record<string, unknown>[] = []
+  if (strategyRecordMatchesShot(record, shotId)) candidates.push(record)
+
+  for (const key of ['generationPlan', 'renderStrategy', 'shotGenerationPlan', 'strategy', 'plan']) {
+    const nested = objectValue(record[key])
+    if (nested && strategyRecordMatchesShot(nested, shotId, record)) candidates.push(nested)
+  }
+
+  for (const key of ['shotGenerationPlans', 'generationPlans', 'plans', 'shotAssetPackages', 'shots']) {
+    const items = record[key]
+    if (!Array.isArray(items)) continue
+    for (const item of items) {
+      const itemRecord = objectValue(item)
+      if (!itemRecord || !strategyRecordMatchesShot(itemRecord, shotId)) continue
+      candidates.push(itemRecord)
+      for (const nestedKey of ['generationPlan', 'renderStrategy', 'shotGenerationPlan']) {
+        const nested = objectValue(itemRecord[nestedKey])
+        if (nested) candidates.push(nested)
+      }
+    }
+  }
+
+  for (const key of ['data', 'package', 'payload']) {
+    const nested = objectValue(record[key])
+    if (nested) candidates.push(...strategyCandidatesFromPayload(nested, shotId))
+  }
+
+  return candidates
+}
+
+function parseStrategyPayload(payload: unknown): unknown {
+  if (typeof payload !== 'string') return payload
+  const trimmed = payload.trim()
+  if (!trimmed) return undefined
+  return parseEmbeddedJSON(trimmed)
+}
+
+function strategyRecordMatchesShot(record: Record<string, unknown>, shotId: string, parent?: Record<string, unknown>): boolean {
+  if (!shotId) return true
+  const recordShotId = shotIdFromStrategyRecord(record) || (parent ? shotIdFromStrategyRecord(parent) : '')
+  return !recordShotId || normalizeShotIdForCompare(recordShotId) === normalizeShotIdForCompare(shotId)
+}
+
+function shotIdFromStrategyRecord(record: Record<string, unknown>): string {
+  const direct = firstString(record, ['shotId', 'relatedShotId', 'shotID', 'related_shot_id'])
+  if (direct) return direct
+  const id = stringValue(record.id)
+  if (id && /SHOT[_-]?\d+/i.test(id)) return id
+  const fusionPlan = objectValue(record.fusionPlan)
+  if (fusionPlan) {
+    return shotIdFromStrategyRecord(fusionPlan)
+  }
+  return ''
+}
+
+function normalizeShotIdForCompare(value: string): string {
+  return value.trim().toLowerCase().replace(/-/g, '_')
+}
+
+function normalizeShotGenerationStrategy(record: Record<string, unknown>): DirectorShotReviewGroup['generationStrategy'] {
+  const mode = firstString(record, ['mode', 'generationMode', 'renderMode', 'strategyMode', 'overallMode'])
+  if (!mode) return undefined
+  return {
+    mode,
+    label: generationStrategyLabel(mode),
+    reason: firstString(record, ['reason', 'renderReason', 'decisionReason', 'explanation', 'summary']),
+    riskLevel: firstString(record, ['riskLevel', 'risk_level', 'risk', 'riskTier']) || undefined,
+  }
+}
+
+function generationStrategyLabel(mode: string): string {
+  const labels: Record<string, string> = {
+    html_only: 'HyperFrames',
+    aigc_video: 'AIGC',
+    aigc_image_then_hyperframes: 'Image + HyperFrames',
+    hybrid_aigc_bg_html_overlay: 'Hybrid',
+    external_or_user_asset: 'User Asset',
+    placeholder_preview: 'Preview',
+  }
+  return labels[mode.trim().toLowerCase()] || mode
+}
+
+function artifactLooksLikeGenerationPlan(artifact: DirectorArtifactRecord): boolean {
+  const metadata = artifact.metadata || {}
+  const searchable = [
+    artifact.kind,
+    artifact.name,
+    stringValue(metadata.artifactKind),
+    stringValue(metadata.kind),
+    stringValue(metadata.source),
+    stringValue(metadata.artifactType),
+    stringValue(metadata.artifact_kind),
+  ].join(' ').toUpperCase()
+  return searchable.includes('SHOT_GENERATION_PLAN') || searchable.includes('SHOT_MEDIA_FUSION_PLAN')
+}
+
 function isShotPromptArtifact(artifact: DirectorArtifactRecord): boolean {
   return isExternalGenerationRequestArtifact(artifact) ||
     isShotReviewPacket(artifact) ||
     artifact.kind === 'SHOT_ASSET_PACKAGE' ||
+    artifact.kind === 'SHOT_GENERATION_PLAN' ||
+    artifact.kind === 'SHOT_MEDIA_FUSION_PLAN' ||
     artifact.kind === 'VIDEO_PROMPTS' ||
     artifact.kind === 'KEYFRAME_PROMPTS'
 }
@@ -754,15 +905,39 @@ function shotAssetSlotForArtifact(artifact: DirectorArtifactRecord): DirectorSho
   ].join(' ').toLowerCase()
 
   if (isExternalGenerationRequestArtifact(artifact)) {
-    return generationKind === 'video' ? 'video' : 'storyboard'
+    return generationKind === 'video' ? 'base-media' : 'storyboard'
   }
-  if (artifact.kind === 'VIDEO_PROMPTS' || artifact.kind === 'KEYFRAME_PROMPTS' || artifact.kind === 'SHOT_ASSET_PACKAGE' || isShotReviewPacket(artifact)) {
+  if (artifact.kind === 'VIDEO_PROMPTS' ||
+    artifact.kind === 'KEYFRAME_PROMPTS' ||
+    artifact.kind === 'SHOT_ASSET_PACKAGE' ||
+    artifact.kind === 'SHOT_GENERATION_PLAN' ||
+    artifact.kind === 'SHOT_MEDIA_FUSION_PLAN' ||
+    isShotReviewPacket(artifact)
+  ) {
     return 'prompt'
   }
   if (artifact.kind === 'SHOT_VIDEO_CLIP' || artifact.kind === 'VIDEO' || artifactType === 'shot_video_clip' || (artifactType === 'external_generation_result' && generationKind === 'video')) {
+    return 'base-media'
+  }
+  if (artifact.kind === 'COMPOSITED_SHOT_VIDEO' || artifactType === 'composited_shot_video') {
     return 'video'
   }
-  if (artifact.kind === 'SHOT_KEYFRAME' || artifact.kind === 'HYPERFRAMES_SHOT' || searchable.includes('storyboard') || searchable.includes('keyframe') || searchable.includes('首帧') || searchable.includes('关键帧')) {
+  if (
+    artifact.kind === 'HYPERFRAMES_SHOT' ||
+    artifact.kind === 'SHOT_SUBTITLE' ||
+    artifactType === 'hyperframes_shot' ||
+    artifactType === 'shot_subtitle' ||
+    generationKind === 'overlay' ||
+    generationKind === 'html_overlay' ||
+    generationKind === 'text_overlay' ||
+    searchable.includes('html_overlay') ||
+    searchable.includes('exact_text_overlay') ||
+    searchable.includes('text overlay') ||
+    searchable.includes('文字叠层')
+  ) {
+    return 'overlay'
+  }
+  if (artifact.kind === 'SHOT_KEYFRAME' || searchable.includes('storyboard') || searchable.includes('keyframe') || searchable.includes('首帧') || searchable.includes('关键帧')) {
     return 'storyboard'
   }
   if (isShotReferenceArtifact(artifact) || (artifactType === 'external_generation_result' && generationKind === 'image')) {
@@ -838,7 +1013,13 @@ function shotIdForArtifact(artifact: DirectorArtifactRecord): string {
   const metadata = artifact.metadata || {}
   const direct = firstString(metadata, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id'])
   if (direct) return direct
-  const unitMatch = [artifact.id, artifact.name, artifact.storageRef]
+  const generationPlan = objectValue(metadata.generationPlan) || objectValue(metadata.renderStrategy) || objectValue(metadata.shotGenerationPlan)
+  const generationPlanShotId = generationPlan ? shotIdFromStrategyRecord(generationPlan) : ''
+  if (generationPlanShotId) return generationPlanShotId
+  const fusionPlan = objectValue(metadata.fusionPlan)
+  const fusionPlanShotId = fusionPlan ? shotIdFromStrategyRecord(fusionPlan) : ''
+  if (fusionPlanShotId) return fusionPlanShotId
+  const unitMatch = [artifact.id, artifact.name, artifact.unitId, artifact.storageRef]
     .map((value) => /SHOT[_-]?\d+/i.exec(value || '')?.[0])
     .find(Boolean)
   return unitMatch ? unitMatch.replace(/shot/i, 'SHOT').replace(/SHOT-/, 'SHOT_') : ''
