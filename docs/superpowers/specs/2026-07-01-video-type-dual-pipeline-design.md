@@ -74,6 +74,7 @@ Quality contract:
 
 - Spoken script is complete, natural, and matches target duration.
 - Every visual segment maps to a script sentence or paragraph.
+- Script timing is the source of truth for visual timing; the system fills needed materials into the spoken timeline.
 - Captions cover the script without changing meaning.
 - Visuals clarify the script and do not introduce contradictory information.
 - Exact text, charts, subtitles, title cards, and data labels are owned by HyperFrames.
@@ -84,6 +85,8 @@ Default visual generation bias:
 - Prefer `html_only`, `aigc_image_then_hyperframes`, or `external_or_user_asset`.
 - Use `hybrid_aigc_bg_html_overlay` when a richer background is useful but exact text is required.
 - Use `aigc_video` sparingly, mainly for abstract B-roll or concept illustration.
+- If AIGC is used, each requested creative clip must target a single 3-15 second visual unit and must carry the matching script span.
+- AIGC can be executed directly through a configured API or represented as a reviewable prompt package with reference images so the user can generate it in an external client and upload the result back.
 
 Audio expectation:
 
@@ -102,6 +105,7 @@ Quality contract:
 - Characters, costumes, major props, and main scenes stay consistent.
 - Every shot has director reasoning: composition, lighting, movement, action, emotion, and story function.
 - Every continuous time window has a locked first frame or storyboard reference.
+- Every AIGC video request targets one 3-15 second time window. Longer scenes are first coarse-split by dramatic beat, then fine-split into 3-15 second generation windows after script and global references are approved.
 - Scene geography and prop state do not drift without an explicit story reason.
 - Prompt generation is self-contained and follows cinematic continuity constraints.
 - Sound design includes dialogue, environment sound, action sound, or intentional silence per shot.
@@ -137,11 +141,11 @@ Recommended stage order:
 4. `script_segmentation`
    - Tools: `caption_splitter`, `shot_splitter`.
    - Output: `SCRIPT_SEGMENT_PLAN`, `SHOT_LIST`.
-   - Contract: every segment references script spans.
+   - Contract: every segment references script spans and carries `startSec`, `endSec`, and `durationSec`. Segments that require AIGC media must be split or merged into 3-15 second generation windows.
 5. `visual_alignment`
    - Tools: `visual_alignment_planner`, `asset_decision_agent`.
    - Output: `VISUAL_ALIGNMENT_PLAN`, optional `REFERENCE_ASSET_PLAN`.
-   - Contract: every visual element must explain or support a script span.
+   - Contract: every visual element must explain or support a script span. The planner may choose HyperFrames/keyframes for deterministic visuals, direct AIGC API requests, or external prompt packages with reference images and upload slots.
 6. `shot_generation_strategy`
    - Tool: `shot_generation_planner`.
    - Output: `SHOT_GENERATION_PLAN`, `SHOT_ASSET_PACKAGE`.
@@ -187,11 +191,12 @@ Recommended stage order:
 6. `shot_design`
    - Tools: `cinematic_shot_designer`, `shot_splitter`.
    - Output: `SHOT_LIST`, `DIRECTOR_DESIGN`.
-   - Contract: each shot has scene, characters, props, time window, action, emotion, and director reason.
+   - Contract: each coarse shot has scene, characters, props, dramatic beat, action, emotion, and director reason.
 7. `keyframes_storyboards`
    - Tools: `keyframe_prompt_generator`, `storyboard_prompt_generator`, `image_asset_generator`.
-   - Output: `KEYFRAME_PROMPTS`, `STORYBOARD_PROMPTS`, keyframe/storyboard artifacts.
-   - Human review: frame continuity and scene readability.
+   - Output: `TIME_WINDOW_PLAN`, `KEYFRAME_PROMPTS`, `STORYBOARD_PROMPTS`, keyframe/storyboard artifacts.
+   - Contract: each coarse shot is fine-split into 3-15 second continuous time windows before any AIGC video request is produced.
+   - Human review: frame continuity, time-window continuity, and scene readability.
 8. `shot_generation_strategy`
    - Tool: `shot_generation_planner`.
    - Output: `SHOT_GENERATION_PLAN`, `SHOT_ASSET_PACKAGE`, external generation requests.
@@ -199,6 +204,7 @@ Recommended stage order:
 9. `video_generation`
    - Tools: external AIGC video request tools, upload binding, local artifact packaging.
    - Output: `SHOT_VIDEO_CLIP` or `COMPOSITED_SHOT_VIDEO`.
+   - Contract: every external generation request includes prompt text, optional reference image refs, target duration between 3 and 15 seconds, direct API eligibility, and a manual upload binding path.
    - Human review: per-shot continuity and performance.
 10. `sound_design`
     - Tools: `sound_design_planner`; audio generation can be optional in MVP.
@@ -219,8 +225,11 @@ The first implementation should add a profile-aware branch before `completeVideo
 Recommended components:
 
 - `VideoCreationProfile` model in the video creation model layer.
+- `TimeWindowPlan` model that represents 3-15 second AIGC-safe creative units.
 - `BuildVideoCreationProfile` service function with deterministic fallback rules.
+- `BuildTimeWindowPlan` service function for both script-timed talking-head segments and cinematic coarse-to-fine shot splitting.
 - `video_profile_classifier` builtin tool manifest and executor.
+- `time_window_planner` builtin tool manifest and executor.
 - `PlanCompiler.completeVideoPlanByProfile(plan, profile)` dispatcher.
 - `completeTalkingHeadPlan`.
 - `completeCinematicStoryPlan`.
@@ -239,6 +248,7 @@ MVP can use existing tools where possible and introduce aliases or lightweight w
 Required manifests/contracts for MVP:
 
 - `video_profile_classifier`
+- `time_window_planner`
 - `visual_alignment_planner`
 - `cinematic_shot_designer`
 - `sound_design_planner`
@@ -292,6 +302,7 @@ Existing shot slots (`prompt`, `reference`, `storyboard`, `base-media`, `overlay
 ## Error Handling
 
 - Low profile confidence: create `VIDEO_CREATION_PROFILE` with `needsUserReview=true` and offer the two profile choices.
+- AIGC duration outside 3-15 seconds: split long creative units before request creation; merge or mark sub-3-second units as HyperFrames/transition overlays unless the user explicitly approves a provider-specific exception.
 - Missing talking-head dependencies: keep producing HyperFrames placeholder preview if script and captions exist.
 - Missing cinematic dependencies: block AIGC shot generation until required continuity assets or user-approved fallback are present.
 - External provider unavailable: produce reviewable external generation requests and placeholder preview, not a fake final.
@@ -303,6 +314,9 @@ Unit tests:
 
 - Profile classifier maps clear口播 briefs to `talking_head`.
 - Profile classifier maps剧情、角色、场景、导演级、短片 briefs to `cinematic_story`.
+- Time-window planner splits 40 second cinematic coarse shots into 3-15 second windows after references exist.
+- Time-window planner maps talking-head script spans to timed material windows without changing script text.
+- External generation requests include prompt, reference images, duration, direct API mode, and manual upload binding.
 - Plan compiler inserts talking-head stages in the expected order.
 - Plan compiler inserts cinematic stages in the expected order.
 - Existing generic video beta plan tests continue to pass.
