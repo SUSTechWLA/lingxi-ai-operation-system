@@ -316,8 +316,12 @@ func TestVideoProfileClassifierReturnsTalkingHeadProfile(t *testing.T) {
 	if profile["profileId"] != "talking_head" {
 		t.Fatalf("profileId = %#v", profile["profileId"])
 	}
-	if result.Data["artifacts"] == nil {
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) == 0 {
 		t.Fatalf("profile classifier should create reviewable artifacts")
+	}
+	if artifacts[0]["kind"] != "VIDEO_CREATION_PROFILE" {
+		t.Fatalf("profile artifact kind = %#v", artifacts[0]["kind"])
 	}
 }
 
@@ -348,6 +352,53 @@ func TestTimeWindowPlannerSplitsCinematicShot(t *testing.T) {
 		duration := intFromInterface(window["durationSec"], 0)
 		if duration < 3 || duration > 15 {
 			t.Fatalf("duration outside 3-15s: %#v", window)
+		}
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) == 0 {
+		t.Fatalf("time window planner should create reviewable artifacts")
+	}
+	if artifacts[0]["kind"] != "TIME_WINDOW_PLAN" {
+		t.Fatalf("time window artifact kind = %#v", artifacts[0]["kind"])
+	}
+}
+
+func TestCinematicShotDesignerManifestMatchesExecutor(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("cinematic_shot_designer")
+	if manifest == nil {
+		t.Fatal("expected cinematic_shot_designer manifest")
+	}
+	for _, name := range []string{"timeWindows", "timeWindowPlan", "shotList"} {
+		if _, ok := manifest.Parameters[name]; !ok {
+			t.Fatalf("cinematic_shot_designer should declare parameter %q: %#v", name, manifest.Parameters)
+		}
+	}
+	for _, name := range []string{"directorDesign", "shotList", "content", "artifacts"} {
+		if _, ok := manifest.Output[name]; !ok {
+			t.Fatalf("cinematic_shot_designer should declare output %q: %#v", name, manifest.Output)
+		}
+	}
+}
+
+func TestSoundDesignPlannerManifestMatchesExecutor(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("sound_design_planner")
+	if manifest == nil {
+		t.Fatal("expected sound_design_planner manifest")
+	}
+	for _, name := range []string{"timeWindows", "timeWindowPlan", "shotList"} {
+		if _, ok := manifest.Parameters[name]; !ok {
+			t.Fatalf("sound_design_planner should declare parameter %q: %#v", name, manifest.Parameters)
+		}
+	}
+	for _, name := range []string{"soundDesignPlan", "content", "artifacts"} {
+		if _, ok := manifest.Output[name]; !ok {
+			t.Fatalf("sound_design_planner should declare output %q: %#v", name, manifest.Output)
 		}
 	}
 }

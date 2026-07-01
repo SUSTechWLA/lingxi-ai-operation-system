@@ -646,12 +646,8 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"content":             {Type: "string", Description: "Reviewable markdown content"},
 			"artifacts":           {Type: "object", Description: "Reviewable artifact manifest"},
 		}
-	case "cinematic_shot_designer", "sound_design_planner":
-		if name == "cinematic_shot_designer" {
-			manifest.Description = "Design cinematic shot intent and review notes without generating media."
-		} else {
-			manifest.Description = "Plan per-shot sound cues and music intent without generating audio."
-		}
+	case "cinematic_shot_designer":
+		manifest.Description = "Design cinematic shot intent and review notes without generating media."
 		manifest.Type = "builtin_prompt_tool"
 		manifest.CostLevel = tool.CostLow
 		manifest.RiskLevel = tool.RiskMedium
@@ -661,10 +657,35 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Parameters = map[string]tool.ParamDef{
 			"brief":           {Type: "string", Description: "Original user brief", Required: false},
 			"creationProfile": {Type: "object", Description: "Video creation profile", Required: false},
+			"timeWindows":     {Type: "array", Description: "Planned time windows", Required: false},
+			"timeWindowPlan":  {Type: "object", Description: "Full time-window plan", Required: false},
+			"shotList":        {Type: "array", Description: "Existing shot list fallback", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
-			"content":   {Type: "string", Description: "Reviewable markdown content"},
-			"artifacts": {Type: "object", Description: "Reviewable artifact manifest"},
+			"directorDesign": {Type: "object", Description: "Cinematic director design summary"},
+			"shotList":       {Type: "array", Description: "Cinematic shot list for downstream planning"},
+			"content":        {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":      {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+	case "sound_design_planner":
+		manifest.Description = "Plan per-shot sound cues and music intent without generating audio."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskMedium
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "cinematic_planning"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"brief":           {Type: "string", Description: "Original user brief", Required: false},
+			"creationProfile": {Type: "object", Description: "Video creation profile", Required: false},
+			"timeWindows":     {Type: "array", Description: "Planned time windows", Required: false},
+			"timeWindowPlan":  {Type: "object", Description: "Full time-window plan", Required: false},
+			"shotList":        {Type: "array", Description: "Shot list for sound cue planning", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"soundDesignPlan": {Type: "object", Description: "Per-shot sound design plan"},
+			"content":         {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":       {Type: "object", Description: "Reviewable artifact manifest"},
 		}
 	case "shot_generation_planner":
 		manifest.Description = "Plan per-shot generation mode, asset needs, and fusion strategy."
@@ -1326,7 +1347,7 @@ func executeVideoProfileClassifier(stage, skillName, brief string, params map[st
 		"summary":         fmt.Sprintf("已选择 `%s` 创作主线。", profile.ProfileID),
 		"content":         content,
 		"artifacts": []map[string]interface{}{
-			jsonArtifact(stage, "video_creation_profile.json", skillName, videomodel.ArtifactKindVideoCreationProfile, true),
+			typedJSONArtifact(stage, "video_creation_profile.json", skillName, videomodel.ArtifactKindVideoCreationProfile, true),
 		},
 	})
 }
@@ -1351,7 +1372,7 @@ func executeTimeWindowPlanner(stage, skillName string, params map[string]interfa
 		"summary":        fmt.Sprintf("已生成 %d 个 3-15 秒时间窗。", len(windowMaps)),
 		"content":        buildTimeWindowReviewContent(windowMaps),
 		"artifacts": []map[string]interface{}{
-			jsonArtifact(stage, "time_window_plan.json", skillName, videomodel.ArtifactKindTimeWindowPlan, true),
+			typedJSONArtifact(stage, "time_window_plan.json", skillName, videomodel.ArtifactKindTimeWindowPlan, true),
 		},
 	})
 }
@@ -2472,6 +2493,12 @@ func jsonArtifact(stage, name, skillName, source string, requiresReview bool) ma
 			"canReviseByChat": requiresReview,
 		},
 	}
+}
+
+func typedJSONArtifact(stage, name, skillName, kind string, requiresReview bool) map[string]interface{} {
+	artifact := jsonArtifact(stage, name, skillName, kind, requiresReview)
+	artifact["kind"] = kind
+	return artifact
 }
 
 // TryFetchLocalAgentConfig fetches model-provider config from the local
