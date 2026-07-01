@@ -54,6 +54,11 @@ var videoCreationExternalTools = []string{
 	"proposal_generator",
 	"visual_feasibility_analyzer",
 	"render_strategy_planner",
+	"video_profile_classifier",
+	"time_window_planner",
+	"visual_alignment_planner",
+	"cinematic_shot_designer",
+	"sound_design_planner",
 	"shot_generation_planner",
 	"card_plan_generator",
 	"caption_splitter",
@@ -583,6 +588,84 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"content":           {Type: "string", Description: "Reviewable shot package content"},
 			"artifacts":         {Type: "object", Description: "Reviewable artifact manifest"},
 		}
+	case "video_profile_classifier":
+		manifest.Description = "Classify the video brief into a creation profile and DAG template."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "workflow_routing"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"brief":       {Type: "string", Description: "Original user brief", Required: true},
+			"route":       {Type: "string", Description: "Optional route from skill runtime", Required: false},
+			"deliverable": {Type: "string", Description: "Optional deliverable from skill runtime", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"creationProfile": {Type: "object", Description: "Selected video creation profile"},
+			"summary":         {Type: "string", Description: "Human-readable profile summary"},
+			"content":         {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":       {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+	case "time_window_planner":
+		manifest.Description = "Plan script-timed or cinematic 3-15 second AIGC-safe time windows."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "shot_planning", "timing"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"creationProfile": {Type: "object", Description: "Video creation profile", Required: true},
+			"shotList":        {Type: "array", Description: "Coarse shots", Required: false},
+			"scriptSpans":     {Type: "array", Description: "Timed script spans", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"timeWindowPlan": {Type: "object", Description: "Full time-window plan"},
+			"timeWindows":    {Type: "array", Description: "3-15 second time windows"},
+			"summary":        {Type: "string", Description: "Human-readable summary"},
+			"content":        {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":      {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+	case "visual_alignment_planner":
+		manifest.Description = "Align talking-head visuals, materials, captions, and AIGC needs to script time windows."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "visual_alignment"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"script":        {Type: "string", Description: "Approved script", Required: false},
+			"timeWindows":   {Type: "array", Description: "Script-timed windows", Required: true},
+			"assetStrategy": {Type: "string", Description: "Optional asset strategy", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"visualAlignmentPlan": {Type: "object", Description: "Visual-to-script alignment plan"},
+			"shotList":            {Type: "array", Description: "Visual shot list for downstream generation"},
+			"content":             {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":           {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+	case "cinematic_shot_designer", "sound_design_planner":
+		if name == "cinematic_shot_designer" {
+			manifest.Description = "Design cinematic shot intent and review notes without generating media."
+		} else {
+			manifest.Description = "Plan per-shot sound cues and music intent without generating audio."
+		}
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskMedium
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "cinematic_planning"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"brief":           {Type: "string", Description: "Original user brief", Required: false},
+			"creationProfile": {Type: "object", Description: "Video creation profile", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"content":   {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts": {Type: "object", Description: "Reviewable artifact manifest"},
+		}
 	case "shot_generation_planner":
 		manifest.Description = "Plan per-shot generation mode, asset needs, and fusion strategy."
 		manifest.Type = "builtin_prompt_tool"
@@ -727,6 +810,16 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeVisualFeasibilityAnalyzer(stage, skillName, params)
 	case "render_strategy_planner":
 		return executeRenderStrategyPlanner(stage, skillName, params)
+	case "video_profile_classifier":
+		return executeVideoProfileClassifier(stage, skillName, brief, params)
+	case "time_window_planner":
+		return executeTimeWindowPlanner(stage, skillName, params)
+	case "visual_alignment_planner":
+		return executeVisualAlignmentPlanner(stage, skillName, params)
+	case "cinematic_shot_designer":
+		return executeCinematicShotDesigner(stage, skillName, brief, params)
+	case "sound_design_planner":
+		return executeSoundDesignPlanner(stage, skillName, brief, params)
 	case "shot_generation_planner":
 		return executeShotGenerationPlanner(stage, skillName, params)
 	case "asset_decision_agent":
@@ -1214,6 +1307,361 @@ func executeRenderStrategyPlanner(stage, skillName string, params map[string]int
 			jsonArtifact(stage, "render_strategy.json", skillName, "videoforge-render-strategy", true),
 		},
 	})
+}
+
+func executeVideoProfileClassifier(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
+	profileBrief := firstNonEmptyString(params, "brief", "topic", "goal")
+	if profileBrief == "" {
+		profileBrief = brief
+	}
+	profile := videoservice.BuildVideoCreationProfile(videoservice.ProfileRequest{
+		Route:       stringParam(params, "route", ""),
+		Deliverable: stringParam(params, "deliverable", ""),
+		Brief:       profileBrief,
+	})
+	profileMap := structToMap(profile)
+	content := fmt.Sprintf("# Video Creation Profile\n\nProfile: `%s`\n\nReason: %s\n", profile.ProfileID, profile.Reason)
+	return tool.SuccessResult(map[string]interface{}{
+		"creationProfile": profileMap,
+		"summary":         fmt.Sprintf("已选择 `%s` 创作主线。", profile.ProfileID),
+		"content":         content,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "video_creation_profile.json", skillName, videomodel.ArtifactKindVideoCreationProfile, true),
+		},
+	})
+}
+
+func executeTimeWindowPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	profile := creationProfileFromToolValue(params["creationProfile"])
+	shots := shotUnitsFromToolValue(params["shotList"])
+	spans := scriptSpansFromToolValue(params["scriptSpans"])
+	plan := videoservice.BuildTimeWindowPlan(videoservice.TimeWindowRequest{
+		Profile:     profile,
+		Shots:       shots,
+		ScriptSpans: spans,
+	})
+	planMap := structToMap(plan)
+	windowMaps := make([]map[string]interface{}, 0, len(plan.Windows))
+	for _, window := range plan.Windows {
+		windowMaps = append(windowMaps, structToMap(window))
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"timeWindowPlan": planMap,
+		"timeWindows":    windowMaps,
+		"summary":        fmt.Sprintf("已生成 %d 个 3-15 秒时间窗。", len(windowMaps)),
+		"content":        buildTimeWindowReviewContent(windowMaps),
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "time_window_plan.json", skillName, videomodel.ArtifactKindTimeWindowPlan, true),
+		},
+	})
+}
+
+func executeVisualAlignmentPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	windows := timeWindowMapsFromParams(params)
+	shotList := make([]map[string]interface{}, 0, len(windows))
+	for i, window := range windows {
+		shotID := firstNonEmptyString(window, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		visual := firstNonEmptyString(window, "sceneSummary", "visual", "mainAction", "description")
+		if visual == "" {
+			visual = "围绕该口播时间窗补充可视化素材、字幕、图表或B-roll。"
+		}
+		shotList = append(shotList, map[string]interface{}{
+			"shotId":        shotID,
+			"durationSec":   normalizedDurationSec(window["durationSec"]),
+			"narrationText": firstNonEmptyString(window, "scriptText", "narrationText", "text"),
+			"visual":        visual,
+			"timeWindowId":  firstNonEmptyString(window, "id"),
+		})
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"visualAlignmentPlan": map[string]interface{}{"shotCount": len(shotList), "source": "time_window_planner"},
+		"shotList":            shotList,
+		"content":             buildShotListMarkdown("Visual Alignment", shotList),
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "visual_alignment_plan.json", skillName, "VISUAL_ALIGNMENT_PLAN", true),
+		},
+	})
+}
+
+func executeCinematicShotDesigner(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
+	sourceShots := timeWindowMapsFromParams(params)
+	if len(sourceShots) == 0 {
+		sourceShots = toolMapsFromValue(params["shotList"], "shotList", "shots")
+	}
+	if len(sourceShots) == 0 {
+		sourceShots = []map[string]interface{}{
+			{"shotId": "SHOT_01", "durationSec": 6, "visual": firstNonEmptyString(params, "brief", "topic", "goal")},
+		}
+	}
+	profile := creationProfileFromToolValue(params["creationProfile"])
+	shotList := make([]map[string]interface{}, 0, len(sourceShots))
+	for i, source := range sourceShots {
+		shotID := firstNonEmptyString(source, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		visual := firstNonEmptyString(source, "visual", "sceneSummary", "description", "mainAction")
+		if visual == "" {
+			visual = firstNonEmptyString(params, "brief", "topic", "goal")
+		}
+		if visual == "" {
+			visual = brief
+		}
+		if visual == "" {
+			visual = "待导演设计的故事镜头。"
+		}
+		shotList = append(shotList, map[string]interface{}{
+			"shotId":       shotID,
+			"durationSec":  normalizedDurationSec(firstExistingValue(source, "durationSec", "duration", "seconds")),
+			"visual":       visual,
+			"mainAction":   firstNonEmptyString(source, "mainAction", "action"),
+			"directorNote": "镜头设计草案；仅生成规划，不生成媒体。",
+		})
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"directorDesign": map[string]interface{}{
+			"profileId":      profile.ProfileID,
+			"shotCount":      len(shotList),
+			"mediaGenerated": false,
+		},
+		"shotList": shotList,
+		"content":  buildShotListMarkdown("Cinematic Shot Design", shotList),
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "cinematic_shot_design.json", skillName, "CINEMATIC_SHOT_DESIGN", true),
+		},
+	})
+}
+
+func executeSoundDesignPlanner(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
+	sourceShots := toolMapsFromValue(params["shotList"], "shotList", "shots")
+	if len(sourceShots) == 0 {
+		sourceShots = timeWindowMapsFromParams(params)
+	}
+	if len(sourceShots) == 0 {
+		sourceShots = []map[string]interface{}{
+			{"shotId": "SHOT_01", "durationSec": 6, "visual": firstNonEmptyString(params, "brief", "topic", "goal")},
+		}
+	}
+	cues := make([]map[string]interface{}, 0, len(sourceShots))
+	for i, source := range sourceShots {
+		shotID := firstNonEmptyString(source, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		visual := firstNonEmptyString(source, "visual", "sceneSummary", "description", "mainAction")
+		if visual == "" {
+			visual = brief
+		}
+		cues = append(cues, map[string]interface{}{
+			"shotId":        shotID,
+			"durationSec":   normalizedDurationSec(firstExistingValue(source, "durationSec", "duration", "seconds")),
+			"narrationText": firstNonEmptyString(source, "narrationText", "scriptText", "text"),
+			"soundCue":      fmt.Sprintf("围绕“%s”规划环境声、转场点和音乐情绪；仅生成声音设计说明，不生成音频。", fallbackText(visual, shotID)),
+		})
+	}
+	return tool.SuccessResult(map[string]interface{}{
+		"soundDesignPlan": map[string]interface{}{
+			"cueCount":       len(cues),
+			"cues":           cues,
+			"mediaGenerated": false,
+		},
+		"content": buildShotListMarkdown("Sound Design Plan", cues),
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "sound_design_plan.json", skillName, "SOUND_DESIGN_PLAN", true),
+		},
+	})
+}
+
+func creationProfileFromToolValue(value interface{}) videomodel.VideoCreationProfile {
+	profile := videomodel.VideoCreationProfile{}
+	if values, ok := mapValue(value); ok {
+		data, err := json.Marshal(values)
+		if err == nil {
+			_ = json.Unmarshal(data, &profile)
+		}
+		if profile.ProfileID == "" {
+			profile.ProfileID = firstStringInMap(values, "profileId", "profileID", "id")
+		}
+	}
+	if profile.ProfileID == "" {
+		if text := strings.TrimSpace(ensureStringValue(value)); text != "" && text != "null" && !strings.HasPrefix(text, "{") {
+			profile.ProfileID = text
+		}
+	}
+	if profile.ProfileID == "" {
+		profile.ProfileID = videomodel.VideoProfileTalkingHead
+	}
+	return profile
+}
+
+func shotUnitsFromToolValue(value interface{}) []videomodel.ShotUnit {
+	items := toolMapsFromValue(value, "shotList", "shots")
+	shots := make([]videomodel.ShotUnit, 0, len(items))
+	for i, item := range items {
+		shotID := firstStringInMap(item, "shotId", "id", "cardId")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		shots = append(shots, videomodel.ShotUnit{
+			ID:                shotID,
+			SequenceIndex:     i,
+			Title:             firstStringInMap(item, "title", "name"),
+			DurationSec:       intFromInterface(firstExistingValue(item, "durationSec", "duration", "seconds"), 0),
+			SceneSummary:      firstStringInMap(item, "sceneSummary", "visual", "description"),
+			SingleScene:       true,
+			VisualChangeLevel: videomodel.VisualChangeLow,
+			Narration:         firstStringInMap(item, "narrationText", "scriptText", "text"),
+			MainAction:        firstStringInMap(item, "mainAction", "action", "visual"),
+			ReviewStatus:      videomodel.ReviewStatusPending,
+			Version:           1,
+		})
+	}
+	return shots
+}
+
+func scriptSpansFromToolValue(value interface{}) []videomodel.ScriptSpan {
+	items := toolMapsFromValue(value, "scriptSpans", "spans", "sections")
+	spans := make([]videomodel.ScriptSpan, 0, len(items))
+	for i, item := range items {
+		spanID := firstStringInMap(item, "id", "spanId", "scriptSpanId")
+		if spanID == "" {
+			spanID = fmt.Sprintf("SPAN_%02d", i+1)
+		}
+		startSec := floatFromInterface(firstExistingValue(item, "startSec", "start", "startTime"), 0)
+		endSec := floatFromInterface(firstExistingValue(item, "endSec", "end", "endTime"), 0)
+		if endSec <= startSec {
+			duration := floatFromInterface(firstExistingValue(item, "durationSec", "duration", "seconds"), 0)
+			if duration > 0 {
+				endSec = startSec + duration
+			}
+		}
+		spans = append(spans, videomodel.ScriptSpan{
+			ID:       spanID,
+			StartSec: startSec,
+			EndSec:   endSec,
+			Text:     firstStringInMap(item, "text", "scriptText", "narrationText", "content"),
+		})
+	}
+	return spans
+}
+
+func timeWindowMapsFromParams(params map[string]interface{}) []map[string]interface{} {
+	windows := toolMapsFromValue(params["timeWindows"], "timeWindows", "windows")
+	if len(windows) > 0 {
+		return windows
+	}
+	return toolMapsFromValue(params["timeWindowPlan"], "timeWindows", "windows")
+}
+
+func toolMapsFromValue(value interface{}, nestedKeys ...string) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0)
+	switch typed := value.(type) {
+	case []map[string]interface{}:
+		for _, item := range typed {
+			out = append(out, copyStringMap(item))
+		}
+	case []interface{}:
+		for _, item := range typed {
+			out = append(out, toolMapsFromValue(item, nestedKeys...)...)
+		}
+	case map[string]interface{}:
+		for _, key := range nestedKeys {
+			if nested, ok := typed[key]; ok {
+				return toolMapsFromValue(nested, nestedKeys...)
+			}
+		}
+		out = append(out, copyStringMap(typed))
+	case string:
+		if trimmed := strings.TrimSpace(typed); trimmed != "" {
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+				return toolMapsFromValue(parsed, nestedKeys...)
+			}
+		}
+	default:
+		if values, ok := mapValue(value); ok {
+			out = append(out, copyStringMap(values))
+		}
+	}
+	return out
+}
+
+func floatFromInterface(value interface{}, fallback float64) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		if n, err := typed.Float64(); err == nil {
+			return n
+		}
+	case string:
+		var parsed float64
+		if _, err := fmt.Sscanf(typed, "%f", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func buildTimeWindowReviewContent(windows []map[string]interface{}) string {
+	var b strings.Builder
+	b.WriteString("# Time Window Plan\n\n")
+	for i, window := range windows {
+		windowID := firstNonEmptyString(window, "id", "shotId")
+		if windowID == "" {
+			windowID = fmt.Sprintf("TW_%02d", i+1)
+		}
+		b.WriteString(fmt.Sprintf("## %d. %s\n\n", i+1, windowID))
+		b.WriteString(fmt.Sprintf("- Duration: %.1fs\n", floatFromInterface(window["durationSec"], 0)))
+		if scriptText := firstNonEmptyString(window, "scriptText"); scriptText != "" {
+			b.WriteString(fmt.Sprintf("- Script: %s\n", scriptText))
+		}
+		if visual := firstNonEmptyString(window, "sceneSummary", "mainAction"); visual != "" {
+			b.WriteString(fmt.Sprintf("- Visual: %s\n", visual))
+		}
+		if mode := firstNonEmptyString(window, "recommendedMode"); mode != "" {
+			b.WriteString(fmt.Sprintf("- Mode: `%s`\n", mode))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func buildShotListMarkdown(title string, shots []map[string]interface{}) string {
+	var b strings.Builder
+	b.WriteString("# ")
+	b.WriteString(title)
+	b.WriteString("\n\n")
+	for i, shot := range shots {
+		shotID := firstNonEmptyString(shot, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		b.WriteString(fmt.Sprintf("## %d. %s\n\n", i+1, shotID))
+		if duration := intFromInterface(firstExistingValue(shot, "durationSec", "duration", "seconds"), 0); duration > 0 {
+			b.WriteString(fmt.Sprintf("- Duration: %ds\n", duration))
+		}
+		if narration := firstNonEmptyString(shot, "narrationText", "scriptText", "text"); narration != "" {
+			b.WriteString(fmt.Sprintf("- Narration: %s\n", narration))
+		}
+		if visual := firstNonEmptyString(shot, "visual", "sceneSummary", "description", "soundCue"); visual != "" {
+			b.WriteString(fmt.Sprintf("- Plan: %s\n", visual))
+		}
+		if note := firstNonEmptyString(shot, "directorNote"); note != "" {
+			b.WriteString(fmt.Sprintf("- Note: %s\n", note))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func executeShotGenerationPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {

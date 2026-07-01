@@ -298,6 +298,60 @@ func TestRegisterVideoCreationExternalToolsInstallsKnowledgeTools(t *testing.T) 
 	}
 }
 
+func TestVideoProfileClassifierReturnsTalkingHeadProfile(t *testing.T) {
+	result := executeLocalVideoCreationTool("video_profile_classifier", map[string]interface{}{
+		"stage":       "profile_selection",
+		"route":       "talking_head",
+		"deliverable": "publish_pack",
+		"brief":       "做一期60秒口播知识视频",
+	}, tool.ToolContext{TaskID: "task-profile", NodeID: "profile_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_profile_classifier failed: %s", result.Error)
+	}
+	profile, ok := result.Data["creationProfile"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing creationProfile: %#v", result.Data)
+	}
+	if profile["profileId"] != "talking_head" {
+		t.Fatalf("profileId = %#v", profile["profileId"])
+	}
+	if result.Data["artifacts"] == nil {
+		t.Fatalf("profile classifier should create reviewable artifacts")
+	}
+}
+
+func TestTimeWindowPlannerSplitsCinematicShot(t *testing.T) {
+	result := executeLocalVideoCreationTool("time_window_planner", map[string]interface{}{
+		"stage": "time_window",
+		"creationProfile": map[string]interface{}{
+			"profileId": "cinematic_story",
+		},
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(40),
+				"visual":      "夜晚街道追逐",
+				"mainAction":  "角色穿过街道并躲入巷子",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-time-window", NodeID: "time_window_exec"})
+
+	if !result.Success {
+		t.Fatalf("time_window_planner failed: %s", result.Error)
+	}
+	windows, ok := result.Data["timeWindows"].([]map[string]interface{})
+	if !ok || len(windows) != 4 {
+		t.Fatalf("expected four time windows, got %#v", result.Data["timeWindows"])
+	}
+	for _, window := range windows {
+		duration := intFromInterface(window["durationSec"], 0)
+		if duration < 3 || duration > 15 {
+			t.Fatalf("duration outside 3-15s: %#v", window)
+		}
+	}
+}
+
 func TestNewsSearchDegradesWhenSearchAPIKeyMissing(t *testing.T) {
 	t.Setenv("SEARCH_API_KEY", "")
 
