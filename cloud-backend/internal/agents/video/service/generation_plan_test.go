@@ -66,6 +66,100 @@ func TestBuildShotGenerationPlanMotionSceneUsesAIGCVideo(t *testing.T) {
 	}
 }
 
+func TestBuildShotGenerationPlanAIGCDurationClampsToProviderWindow(t *testing.T) {
+	tests := []struct {
+		name        string
+		durationSec int
+		want        int
+	}{
+		{name: "too_long", durationSec: 40, want: 15},
+		{name: "too_short", durationSec: 1, want: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shot := model.ShotUnit{
+				ID:          "SHOT_" + tt.name,
+				DurationSec: tt.durationSec,
+				MainAction:  "角色在雨夜街口回头并向前走",
+			}
+			plan := model.VisualPlan{
+				Background: model.BackgroundSpec{Description: "雨夜街口电影感场景", RequiresAIGC: true},
+				Characters: []model.CharacterVisualSpec{{
+					ID:           "lead",
+					Description:  "主角站在雨夜街口",
+					Motion:       "walks forward and turns back",
+					RequiresAIGC: true,
+				}},
+				CameraPlan: model.CameraPlan{
+					Description:  "镜头缓慢推进",
+					Movement:     "tracking shot",
+					RequiresAIGC: true,
+				},
+			}
+
+			generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+			if generationPlan.Mode != model.GenerationModeAIGCVideo {
+				t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModeAIGCVideo)
+			}
+			if generationPlan.RenderInputs["durationSec"] != tt.want {
+				t.Fatalf("render duration = %#v, want %d", generationPlan.RenderInputs["durationSec"], tt.want)
+			}
+			if generationPlan.FusionPlan.BaseLayer.DurationSec != float64(tt.want) {
+				t.Fatalf("base layer duration = %v, want %d", generationPlan.FusionPlan.BaseLayer.DurationSec, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildShotGenerationPlanExternalAIGCNeedClampsDurationToProviderWindow(t *testing.T) {
+	tests := []struct {
+		name        string
+		durationSec int
+		want        int
+	}{
+		{name: "too_long", durationSec: 40, want: 15},
+		{name: "too_short", durationSec: 1, want: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shot := model.ShotUnit{
+				ID:          "SHOT_EXTERNAL_" + tt.name,
+				DurationSec: tt.durationSec,
+				MainAction:  "角色在雨夜街口回头并向前走",
+			}
+			plan := model.VisualPlan{
+				Background: model.BackgroundSpec{Description: "雨夜街口电影感场景", RequiresAIGC: true},
+				Characters: []model.CharacterVisualSpec{{
+					ID:           "lead",
+					Description:  "主角站在雨夜街口",
+					Motion:       "walks forward and turns back",
+					RequiresAIGC: true,
+				}},
+				CameraPlan: model.CameraPlan{
+					Description:  "镜头缓慢推进",
+					Movement:     "tracking shot",
+					RequiresAIGC: true,
+				},
+			}
+
+			generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: false, HTMLAvailable: true})
+
+			if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+				t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)
+			}
+			if generationPlan.RenderInputs["durationSec"] != tt.want {
+				t.Fatalf("render duration = %#v, want %d", generationPlan.RenderInputs["durationSec"], tt.want)
+			}
+			if generationPlan.FusionPlan.BaseLayer.DurationSec != float64(tt.want) {
+				t.Fatalf("base layer duration = %v, want %d", generationPlan.FusionPlan.BaseLayer.DurationSec, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildShotGenerationPlanExactTextWithAIGCSceneUsesHybrid(t *testing.T) {
 	shot := model.ShotUnit{ID: "SHOT_03", DurationSec: 7, ScreenText: []string{"几个表格"}}
 	plan := model.VisualPlan{

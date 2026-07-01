@@ -1260,9 +1260,10 @@ func TestShotGenerationPlannerExternalRequestIncludesReferencesAndDelivery(t *te
 		"stage": "generation_strategy",
 		"shotList": []interface{}{
 			map[string]interface{}{
-				"shotId":      "SHOT_01_TW_01",
-				"durationSec": float64(8),
-				"visual":      "角色在雨夜街口回头，镜头缓慢靠近",
+				"shotId":       "SHOT_01_TW_01",
+				"timeWindowId": "TW_01",
+				"durationSec":  float64(8),
+				"visual":       "角色在雨夜街口回头，镜头缓慢靠近",
 				"referenceImages": []interface{}{
 					map[string]interface{}{"role": "character_reference", "storageRef": "local://projects/p/artifacts/char/hash/char.png"},
 					map[string]interface{}{"role": "scene_reference", "storageRef": "local://projects/p/artifacts/street/hash/street.png"},
@@ -1294,8 +1295,34 @@ func TestShotGenerationPlannerExternalRequestIncludesReferencesAndDelivery(t *te
 	if !ok || len(refs) != 2 {
 		t.Fatalf("reference images should be preserved: %#v", req["referenceImages"])
 	}
-	if strings.TrimSpace(ensureStringValue(req["promptPackage"])) == "" {
+	promptPackageText := strings.TrimSpace(ensureStringValue(req["promptPackage"]))
+	if promptPackageText == "" {
 		t.Fatalf("promptPackage should be copyable for external clients: %#v", req)
+	}
+	var promptPackage map[string]interface{}
+	if err := json.Unmarshal([]byte(promptPackageText), &promptPackage); err != nil {
+		t.Fatalf("promptPackage should be JSON: %v, raw=%s", err, promptPackageText)
+	}
+	if strings.TrimSpace(ensureStringValue(promptPackage["prompt"])) == "" {
+		t.Fatalf("promptPackage should include prompt: %#v", promptPackage)
+	}
+	if intFromInterface(promptPackage["duration"], 0) != 8 {
+		t.Fatalf("promptPackage should include duration=8: %#v", promptPackage)
+	}
+	promptRefs, ok := promptPackage["references"].([]interface{})
+	if !ok || len(promptRefs) != 2 {
+		t.Fatalf("promptPackage should include references: %#v", promptPackage)
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]map[string]interface{})
+	if !ok || len(packages) != 1 {
+		t.Fatalf("expected one shot asset package, got %#v", result.Data["shotAssetPackages"])
+	}
+	packageRefs, ok := packages[0]["referenceImages"].([]interface{})
+	if !ok || len(packageRefs) != 2 {
+		t.Fatalf("shot asset package should expose referenceImages at top level: %#v", packages[0])
+	}
+	if packages[0]["timeWindowId"] != "TW_01" {
+		t.Fatalf("shot asset package should expose timeWindowId at top level: %#v", packages[0])
 	}
 }
 

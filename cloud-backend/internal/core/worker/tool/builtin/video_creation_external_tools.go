@@ -1917,13 +1917,15 @@ func visualPlanFromToolMap(shot videomodel.ShotUnit, values map[string]interface
 
 func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan videomodel.ShotGenerationPlan) map[string]interface{} {
 	planMap := structToMap(plan)
-	if refs := interfaceSliceFromAny(firstValueInMap(shotMap, "referenceImages", "references")); len(refs) > 0 {
+	refs := interfaceSliceFromAny(firstValueInMap(shotMap, "referenceImages", "references"))
+	if len(refs) > 0 {
 		planMap["referenceImages"] = refs
 	}
-	if timeWindowID := firstNonEmptyString(shotMap, "timeWindowId", "id"); timeWindowID != "" {
+	timeWindowID := firstNonEmptyString(shotMap, "timeWindowId", "id")
+	if timeWindowID != "" {
 		planMap["timeWindowId"] = timeWindowID
 	}
-	return map[string]interface{}{
+	pkg := map[string]interface{}{
 		"shotId":         plan.ShotID,
 		"durationSec":    normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
 		"visual":         firstNonEmptyString(shotMap, "visual", "visualIntent", "description", "sceneSummary"),
@@ -1933,6 +1935,13 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 		"status":         videomodel.ReviewStatusPending,
 		"reviewStatus":   videomodel.ReviewStatusPending,
 	}
+	if len(refs) > 0 {
+		pkg["referenceImages"] = refs
+	}
+	if timeWindowID != "" {
+		pkg["timeWindowId"] = timeWindowID
+	}
+	return pkg
 }
 
 func externalRequestsFromGenerationPlan(plan videomodel.ShotGenerationPlan) []map[string]interface{} {
@@ -2012,8 +2021,10 @@ func buildExternalPromptPackage(shotID, kind string, durationSec int, prompt, ne
 	payload := map[string]interface{}{
 		"shotId":      shotID,
 		"kind":        kind,
+		"duration":    durationSec,
 		"durationSec": durationSec,
 		"prompt":      prompt,
+		"references":  referenceImages,
 		"delivery": map[string]interface{}{
 			"directApiEligible":    false,
 			"manualUploadRequired": true,
@@ -2024,6 +2035,8 @@ func buildExternalPromptPackage(shotID, kind string, durationSec int, prompt, ne
 	}
 	if len(referenceImages) > 0 {
 		payload["referenceImages"] = referenceImages
+	} else {
+		payload["referenceImages"] = []interface{}{}
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

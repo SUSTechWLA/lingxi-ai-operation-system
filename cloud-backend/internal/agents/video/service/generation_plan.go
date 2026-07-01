@@ -32,6 +32,7 @@ func BuildShotGenerationPlan(
 ) model.ShotGenerationPlan {
 	signals := scoreShotGenerationSignals(shot, visual, pref)
 	durationSec := resolveShotDuration(shot, visual)
+	aigcDurationSec := normalizeAIGCGenerationDurationSec(durationSec)
 	htmlNeeded := signals.HTMLScore > 0
 	aigcNeeded := signals.AIGCScore > 0
 
@@ -40,13 +41,13 @@ func BuildShotGenerationPlan(
 		return buildUserAssetPlan(shot, visual, signals, durationSec, caps.HTMLAvailable)
 	case htmlNeeded && aigcNeeded:
 		if pref.AllowHybridRender && caps.HTMLAvailable && caps.AIGCAvailable {
-			return buildHybridPlan(shot, visual, signals, durationSec)
+			return buildHybridPlan(shot, visual, signals, aigcDurationSec)
 		}
 		return buildPlaceholderPlan(
 			shot,
 			visual,
 			signals,
-			durationSec,
+			aigcDurationSec,
 			"exact text and AIGC both required but safe hybrid rendering is unavailable",
 			[]string{"text_safety_boundary", "hybrid_render_unavailable", "provider_availability"},
 		)
@@ -56,25 +57,25 @@ func BuildShotGenerationPlan(
 				shot,
 				visual,
 				signals,
-				durationSec,
+				aigcDurationSec,
 				"AIGC is required but no video provider is available",
 				[]string{"external_generation_needed", "placeholder_accuracy", "provider_availability"},
 			)
 		}
 		if signals.DynamicAIGC {
-			return buildAIGCVideoPlan(shot, visual, signals, durationSec)
+			return buildAIGCVideoPlan(shot, visual, signals, aigcDurationSec)
 		}
 		if !caps.HTMLAvailable {
 			return buildPlaceholderPlan(
 				shot,
 				visual,
 				signals,
-				durationSec,
+				aigcDurationSec,
 				"static AIGC image plus HyperFrames requires HTML rendering but HyperFrames is unavailable",
 				[]string{"html_provider_required", "placeholder_accuracy", "provider_availability"},
 			)
 		}
-		return buildAIGCImageThenHyperFramesPlan(shot, visual, signals, durationSec, caps.HTMLAvailable)
+		return buildAIGCImageThenHyperFramesPlan(shot, visual, signals, aigcDurationSec, caps.HTMLAvailable)
 	case htmlNeeded:
 		if !caps.HTMLAvailable {
 			return buildPlaceholderPlan(
@@ -100,6 +101,17 @@ func BuildShotGenerationPlan(
 			[]string{"html_provider_required", "placeholder_accuracy", "provider_availability"},
 		)
 	}
+}
+
+func normalizeAIGCGenerationDurationSec(durationSec int) int {
+	policy := model.DefaultShotPolicy()
+	if durationSec < policy.MinDurationSec {
+		return policy.MinDurationSec
+	}
+	if durationSec > policy.MaxDurationSec {
+		return policy.MaxDurationSec
+	}
+	return durationSec
 }
 
 func scoreShotGenerationSignals(shot model.ShotUnit, visual model.VisualPlan, pref model.RenderPreference) shotGenerationSignals {
