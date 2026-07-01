@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import clsx from 'clsx'
 import ReactMarkdown from 'react-markdown'
 import { APP_ICON_PATH } from '../utils/brand'
@@ -59,8 +59,10 @@ import {
 import type { AuthUser } from '../services/auth'
 import {
   buildClientModelProvidersForRun,
+  fetchLocalArtifactFile,
   fetchModelProviderSettings,
   uploadLocalArtifactFile,
+  type LocalArtifactFileResponse,
   type ModelCapability,
   type ModelProviderSettingsResponse,
 } from '../services/localAgent'
@@ -77,12 +79,17 @@ import {
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
   externalGenerationGuideSteps,
+  findFinalVideoArtifact,
   findPublishCopyArtifact,
   getArtifactViewerSelection,
   getStageStateDisplay,
   isActionablePendingReview,
+  isProjectSessionStarted,
+  localArtifactIdFromStorageRef,
+  localServiceStatusDisplay,
   normalizeDirectorErrorMessage,
   nextStageIdAfterReview,
+  nextSelectedReviewId,
   overviewProjectStatus,
   projectPrimaryAction,
   publishCopiesToJSON,
@@ -93,6 +100,7 @@ import {
   reviewStatusLabel,
   stageActionLabel,
   traceNodeHasError,
+  unresolvedMaterialDependencyCount,
   visibleReviewHistory,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
@@ -232,14 +240,14 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [activeNav, refreshModelProviderStatus])
 
   useEffect(() => {
-    if (!run?.id || run.status === 'FAILED') return undefined
+    if (!run?.id || run.status === 'SUCCESS' || run.status === 'FAILED' || run.status === 'CANCELLED') return undefined
     const timer = window.setInterval(() => {
       refreshRun(run.id, project?.id).catch(() => {})
     }, 2500)
     return () => window.clearInterval(timer)
   }, [project?.id, refreshRun, run?.id, run?.status])
 
-  const projectStarted = loading || project?.status === 'RUNNING' || Boolean(run?.id && run.status !== 'CANCELLED')
+  const projectStarted = isProjectSessionStarted(loading, project?.status, run?.status)
   const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted), [roleAgents, reviews, trace, projectStarted])
   const displayStages = useMemo(() => applyOptimisticRunningStage(stages, optimisticRunningStageId), [stages, optimisticRunningStageId])
   const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace, projectArtifacts as unknown as Array<Record<string, unknown>>), [roleAgents, reviews, trace, projectArtifacts])
@@ -368,7 +376,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
 
   return (
     <div className="director-root flex min-h-screen flex-col gap-4 p-4 lg:flex-row lg:gap-5 lg:p-5">
-      <DirectorSidebar active={activeNav} setActive={setActiveNav} user={user} serviceStatus={serviceStatus} onLogout={onLogout} />
+      <DirectorSidebar active={activeNav} setActive={setActiveNav} user={user} serviceStatus={serviceStatus} preflight={preflight} onLogout={onLogout} />
       <main className="min-w-0 flex-1 lg:p-5 lg:pr-6">
         <TopBar preflight={preflight} serviceStatus={serviceStatus} run={run} />
         {error && (
@@ -400,7 +408,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               durationSec={durationSec}
               loading={loading}
               primaryAction={primaryProjectAction}
-              overviewStatus={overviewProjectStatus(displayStages, project?.status)}
+              overviewStatus={overviewProjectStatus(displayStages, project?.status, run?.status)}
               stages={displayStages}
               artifacts={artifacts}
               preflight={preflight}
@@ -427,7 +435,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           {activeNav === 'trace' && <TracePage traceNodes={traceNodes} run={run} />}
           {activeNav === 'assets' && <AssetsPage artifacts={artifacts} projectId={project?.id} onArtifactsChanged={refreshArtifacts} />}
           {activeNav === 'roles' && <RolesPage stages={displayStages} />}
-          {activeNav === 'export' && <ExportPage artifacts={artifacts} durationSec={durationSec} />}
+          {activeNav === 'export' && <ExportPage artifacts={artifacts} durationSec={durationSec} projectId={project?.id} />}
           {activeNav === 'system' && <DesktopPage />}
         </div>
       </main>
@@ -435,12 +443,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   )
 }
 
-function DirectorSidebar({ active, setActive, user, serviceStatus, onLogout }: { active: DirectorNavKey; setActive: (key: DirectorNavKey) => void; user: AuthUser; serviceStatus: Props['serviceStatus']; onLogout: () => void }) {
-  const localStatus = serviceStatus === 'ok'
-    ? { label: '本地在线', className: 'bg-green-50 text-green-700' }
-    : serviceStatus === 'unhealthy'
-      ? { label: '本地离线', className: 'bg-red-50 text-red-700' }
-      : { label: '本地未检测', className: 'bg-stone-50 text-ink-muted' }
+function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, onLogout }: { active: DirectorNavKey; setActive: (key: DirectorNavKey) => void; user: AuthUser; serviceStatus: Props['serviceStatus']; preflight: PreflightResponse | null; onLogout: () => void }) {
+  const localStatus = localServiceStatusDisplay(serviceStatus, preflight?.capabilityMenu.localRunner.available)
+  const localStatusClassName = localStatus.tone === 'ok'
+    ? 'bg-green-50 text-green-700'
+    : localStatus.tone === 'error'
+      ? 'bg-red-50 text-red-700'
+      : 'bg-stone-50 text-ink-muted'
 
   return (
     <aside className="glass flex w-full shrink-0 flex-col rounded-xl p-4 lg:sticky lg:top-5 lg:h-[calc(100vh-40px)] lg:w-72">
@@ -487,7 +496,7 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, onLogout }: {
           </button>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-          <div className={clsx('rounded-lg px-3 py-2', localStatus.className)}>{localStatus.label}</div>
+          <div className={clsx('rounded-lg px-3 py-2', localStatusClassName)}>{localStatus.label}</div>
           <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v1.0 内测</div>
         </div>
       </div>
@@ -808,6 +817,7 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
 function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction, allReviews, stages }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void; allReviews: AgentReviewItem[]; stages: DirectorStage[] }) {
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>(review?.id)
   const [activeAction, setActiveAction] = useState<string | null>(null)
+  const lastAutoSelectedActiveReviewIdRef = useRef<string | undefined>(review?.id)
   const reviewHistory = useMemo(() => visibleReviewHistory(allReviews), [allReviews])
   const selectedReview = reviewHistory.find((item) => item.id === selectedReviewId) || review || reviewHistory[0]
   const selectedStage = useMemo(() => {
@@ -827,12 +837,17 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
   const isPending = selectedReview?.status === 'PENDING'
 
   useEffect(() => {
-    if (review?.id && (selectedReviewId === undefined || !reviewHistory.some((item) => item.id === selectedReviewId))) {
-      setSelectedReviewId(review.id)
-      return
+    const nextId = nextSelectedReviewId(
+      selectedReviewId,
+      review?.id,
+      reviewHistory,
+      lastAutoSelectedActiveReviewIdRef.current,
+    )
+    if (nextId !== selectedReviewId) {
+      setSelectedReviewId(nextId)
     }
-    if (!review?.id && reviewHistory.length && !reviewHistory.some((item) => item.id === selectedReviewId)) {
-      setSelectedReviewId(reviewHistory[0].id)
+    if (review?.id && review.id !== lastAutoSelectedActiveReviewIdRef.current) {
+      lastAutoSelectedActiveReviewIdRef.current = review.id
     }
   }, [review?.id, reviewHistory, selectedReviewId])
 
@@ -1047,7 +1062,7 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
 
 function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: DirectorArtifactRecord[]; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {
   const staleCount = artifacts.filter((a) => a.status === 'stale').length
-  const materialDependencyCount = artifacts.filter(isMaterialDependencyRequest).length
+  const materialDependencyCount = useMemo(() => unresolvedMaterialDependencyCount(buildShotReviewGroups(artifacts)), [artifacts])
   return (
     <div className="space-y-5">
       <section className="card p-6">
@@ -1518,15 +1533,64 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
   )
 }
 
-function ExportPage({ artifacts, durationSec }: { artifacts: DirectorArtifactRecord[]; durationSec: number }) {
-  const video = artifacts.find((artifact) => artifact.kind === 'VIDEO')
+function ExportPage({ artifacts, durationSec, projectId }: { artifacts: DirectorArtifactRecord[]; durationSec: number; projectId?: string }) {
+  const video = useMemo(() => findFinalVideoArtifact(artifacts), [artifacts])
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
   const publishArtifact = useMemo(() => findPublishCopyArtifact(artifacts), [artifacts])
+  const previewVideoRef = useRef<HTMLVideoElement>(null)
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null)
+  const [videoPreviewLoading, setVideoPreviewLoading] = useState(false)
+  const [videoPreviewError, setVideoPreviewError] = useState<string | null>(null)
   const [publishContent, setPublishContent] = useState<unknown>(null)
   const [publishLoading, setPublishLoading] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
   const videoReady = video?.status === 'valid' && Boolean(video.storageRef)
   const packageReady = packageArtifact?.status === 'valid' && Boolean(packageArtifact.storageRef)
+  const videoStorageRef = video?.storageRef || ''
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl: string | null = null
+    setVideoPreviewUrl(null)
+    setVideoPreviewError(null)
+    setVideoPreviewLoading(false)
+
+    if (!videoReady || !videoStorageRef) return undefined
+    const directUrl = directMediaPreviewUrl(videoStorageRef)
+    if (directUrl) {
+      setVideoPreviewUrl(directUrl)
+      return undefined
+    }
+
+    const localArtifactId = localArtifactIdFromStorageRef(videoStorageRef)
+    if (!localArtifactId) {
+      setVideoPreviewError('最终视频已登记，但还没有可读取的本地视频文件。')
+      return undefined
+    }
+    if (!projectId) {
+      setVideoPreviewError('缺少项目 ID，无法读取本地视频文件。')
+      return undefined
+    }
+
+    setVideoPreviewLoading(true)
+    fetchLocalArtifactFile({ projectId, id: localArtifactId })
+      .then((localArtifact) => {
+        if (cancelled) return
+        const blob = localArtifactFileToBlob(localArtifact, video?.metadata)
+        objectUrl = URL.createObjectURL(blob)
+        setVideoPreviewUrl(objectUrl)
+      })
+      .catch((err) => {
+        if (!cancelled) setVideoPreviewError(normalizeDirectorErrorMessage(err))
+      })
+      .finally(() => {
+        if (!cancelled) setVideoPreviewLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [projectId, video?.id, video?.metadata, videoReady, videoStorageRef])
   useEffect(() => {
     let cancelled = false
     setPublishContent(null)
@@ -1553,27 +1617,41 @@ function ExportPage({ artifacts, durationSec }: { artifacts: DirectorArtifactRec
   }, [publishArtifact])
   const publishCopies = useMemo(() => buildPublishCopies(publishContent), [publishContent])
   const publishReady = publishCopies.length > 0
+  const publishLocalOnlyPointer = isLocalOnlyArtifactPointer(publishContent)
   const markdown = publishCopiesToMarkdown(publishCopies)
   const json = publishCopiesToJSON(publishCopies)
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
       <section className="card p-6 xl:col-span-7">
-        <div className="flex items-center justify-between"><div><p className="text-sm font-bold text-primary-dark">最终预览 / 导出</p><h2 className="mt-2 text-2xl font-black text-ink">最终视频预览</h2></div><StatusBadge status={videoReady ? 'valid' : 'pending'} label={videoReady ? 'final.mp4 已生成' : '等待渲染'} /></div>
+        <div className="flex items-center justify-between"><div><p className="text-sm font-bold text-primary-dark">最终预览 / 导出</p><h2 className="mt-2 text-2xl font-black text-ink">最终视频预览</h2></div><StatusBadge status={videoReady ? (videoPreviewError ? 'review' : 'valid') : 'pending'} label={videoReady ? (videoPreviewError ? '已登记待读取' : 'final.mp4 已生成') : '等待渲染'} /></div>
         <div className="mt-6 overflow-hidden rounded-xl bg-ink shadow-card ring-1 ring-line">
-          <div className="relative h-[410px] bg-[linear-gradient(135deg,#1A0B02,#2B1606_42%,#8B4A12_74%,#E89412)] p-10 text-white">
-            <div className="relative z-10 flex h-full flex-col justify-between">
-              <div><span className="rounded-full bg-white/15 px-4 py-2 text-xs font-bold ring-1 ring-white/20">智能视频创作工作台</span><h3 className="mt-10 max-w-lg text-5xl font-black">智能体<br />改变的是工作流</h3><p className="mt-5 text-lg text-amber-100">连接工具 · 协同团队 · 释放创造力</p></div>
-              <div className="flex items-center gap-4 rounded-lg bg-black/25 p-4 ring-1 ring-white/10"><FiPlayCircle className="text-3xl" /><div className="h-1 flex-1 overflow-hidden rounded-full bg-white/20"><div className="h-full w-[28%] rounded-full bg-primary-light" /></div><span className="text-sm">0:00 / {formatSeconds(durationSec)}</span></div>
+          {videoPreviewUrl ? (
+            <video
+              ref={previewVideoRef}
+              data-testid="final-video-preview"
+              className="h-[410px] w-full bg-black object-contain"
+              src={videoPreviewUrl}
+              controls
+              playsInline
+              preload="metadata"
+            />
+          ) : (
+            <div className="relative h-[410px] bg-[linear-gradient(135deg,#1A0B02,#2B1606_42%,#8B4A12_74%,#E89412)] p-10 text-white">
+              <div className="relative z-10 flex h-full flex-col justify-between">
+                <div><span className="rounded-full bg-white/15 px-4 py-2 text-xs font-bold ring-1 ring-white/20">智能视频创作工作台</span><h3 className="mt-10 max-w-lg text-5xl font-black">等待最终视频</h3><p className="mt-5 text-lg text-amber-100">{videoPreviewLoading ? '正在读取本地视频文件...' : videoPreviewError || '生成完成后会在这里出现播放器'}</p></div>
+                <div className="flex items-center gap-4 rounded-lg bg-black/25 p-4 ring-1 ring-white/10"><FiPlayCircle className="text-3xl" /><div className="h-1 flex-1 overflow-hidden rounded-full bg-white/20"><div className="h-full w-[28%] rounded-full bg-primary-light" /></div><span className="text-sm">0:00 / {formatSeconds(durationSec)}</span></div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </section>
       <aside className="space-y-5 xl:col-span-5">
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">导出操作</h3>
           {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
+          {videoPreviewError && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{videoPreviewError}</div>}
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
@@ -1602,7 +1680,9 @@ function ExportPage({ artifacts, durationSec }: { artifacts: DirectorArtifactRec
           ) : publishError ? (
             <div className="rounded-lg bg-red-50 p-5 text-sm font-semibold text-red-700 ring-1 ring-red-200">{publishError}</div>
           ) : !publishReady ? (
-            <div className="rounded-lg bg-amber-50 p-5 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">等待 publish_copy_generator 根据口播稿生成标题、简介和关键词。</div>
+            <div className="rounded-lg bg-amber-50 p-5 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">
+              {publishLocalOnlyPointer ? '发布文案产物已生成，但正文只返回了本地索引，当前客户端无法读取完整文案。' : '等待 publish_copy_generator 根据口播稿生成标题、简介和关键词。'}
+            </div>
           ) : publishCopies.map((copy) => (
             <div key={copy.platform} className="rounded-lg bg-white p-5 ring-1 ring-line">
               <div className="flex items-center justify-between">
@@ -1620,6 +1700,48 @@ function ExportPage({ artifacts, durationSec }: { artifacts: DirectorArtifactRec
       </section>
     </div>
   )
+}
+
+function directMediaPreviewUrl(storageRef: string): string | null {
+  const ref = storageRef.trim()
+  return /^(https?:|blob:|data:)/u.test(ref) ? ref : null
+}
+
+function isLocalOnlyArtifactPointer(content: unknown): boolean {
+  if (!content || typeof content !== 'object') return false
+  const record = content as Record<string, unknown>
+  return record.contentAvailability === 'local-agent' ||
+    (record.localOnly === true && typeof record.storageRef === 'string' && record.storageRef.startsWith('local://'))
+}
+
+function localArtifactFileToBlob(localArtifact: LocalArtifactFileResponse, metadata?: Record<string, unknown>): Blob {
+  const metadataMimeType =
+    typeof metadata?.mimeType === 'string' ? metadata.mimeType :
+      typeof metadata?.mime_type === 'string' ? metadata.mime_type : ''
+  const mimeType = localArtifact.mimeType || metadataMimeType || 'video/mp4'
+  if (localArtifact.contentBase64) {
+    return blobFromBase64(localArtifact.contentBase64, mimeType)
+  }
+  if (typeof localArtifact.content === 'string') {
+    return new Blob([localArtifact.content], { type: mimeType })
+  }
+  throw new Error('本地视频文件没有可读取内容')
+}
+
+function blobFromBase64(contentBase64: string, mimeType: string): Blob {
+  const binary = window.atob(contentBase64)
+  const chunks: ArrayBuffer[] = []
+  const chunkSize = 8192
+  for (let offset = 0; offset < binary.length; offset += chunkSize) {
+    const slice = binary.slice(offset, offset + chunkSize)
+    const buffer = new ArrayBuffer(slice.length)
+    const bytes = new Uint8Array(buffer)
+    for (let index = 0; index < slice.length; index += 1) {
+      bytes[index] = slice.charCodeAt(index)
+    }
+    chunks.push(buffer)
+  }
+  return new Blob(chunks, { type: mimeType })
 }
 
 function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChanged }: { artifacts: DirectorArtifactRecord[]; compact?: boolean; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {

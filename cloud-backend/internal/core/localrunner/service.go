@@ -139,8 +139,7 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 	now := time.Now()
 	jobID := "local_job_" + uuid.NewString()[:8]
 	row := s.pool.QueryRow(ctx,
-		localJobSelectPrefix()+`
-		 FROM (
+		`WITH upserted AS (
 		  INSERT INTO local_jobs
 		   (id, project_id, task_id, node_id, tool_name, command, payload, status, progress,
 		    timeout_sec, artifact_policy, idempotency_key, created_at, updated_at)
@@ -148,7 +147,7 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		  ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
 		  DO UPDATE SET updated_at=local_jobs.updated_at
 		  RETURNING *
-		 ) AS local_jobs`,
+		 ) `+localJobSelectPrefix()+` FROM upserted`,
 		jobID, projectID, req.TaskID, req.NodeID, req.ToolName, command, string(payloadJSON),
 		string(JobPending), timeoutSec, string(artifactPolicyJSON), idempotencyKey, now, now,
 	)
@@ -165,10 +164,9 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 	leaseExpires := time.Now().Add(5 * time.Minute)
 
 	job, err := scanJob(s.pool.QueryRow(ctx,
-		localJobSelectPrefix()+`
-		 FROM (
+		`WITH claimed AS (
 		 UPDATE local_jobs
-		 SET status='CLAIMED', runner_id=$2, lease_expires_at=$3, claimed_at=NOW(), updated_at=NOW()
+		 SET status='CLAIMED', runner_id=$1, lease_expires_at=$2, claimed_at=NOW(), updated_at=NOW()
 		 WHERE id = (
 		   SELECT lj.id
 		   FROM local_jobs lj
@@ -177,7 +175,7 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 		       SELECT 1
 		       FROM local_runners lr
 		       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lr.capabilities, '[]'::jsonb)) cap
-		       WHERE lr.id=$2
+		       WHERE lr.id=$1
 		         AND lr.status='ONLINE'
 		         AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
 		         AND cap->>'command' = lj.command
@@ -188,7 +186,7 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 		   FOR UPDATE SKIP LOCKED
 		 )
 		 RETURNING *
-		 ) AS local_jobs`,
+		 ) `+localJobSelectPrefix()+` FROM claimed`,
 		runnerID, leaseExpires,
 	))
 	if err != nil {
@@ -234,13 +232,12 @@ func (s *Service) CompleteJob(ctx context.Context, jobID string, req CompleteJob
 	}
 	outputJSON, _ := json.Marshal(req.Output)
 	row := s.pool.QueryRow(ctx,
-		localJobSelectPrefix()+`
-		 FROM (
+		`WITH completed AS (
 		  UPDATE local_jobs
 		  SET status='COMPLETED', progress=1.0, output=$2, completed_at=NOW(), updated_at=NOW()
 		  WHERE id=$1 AND status NOT IN ('COMPLETED', 'FAILED')
 		  RETURNING *
-		 ) AS local_jobs`,
+		 ) `+localJobSelectPrefix()+` FROM completed`,
 		jobID, string(outputJSON),
 	)
 	return scanJob(row)
@@ -259,14 +256,13 @@ func (s *Service) FailJob(ctx context.Context, jobID string, req FailJobRequest)
 	errorJSON, _ := json.Marshal(req.Error)
 	diagnosticsJSON, _ := json.Marshal(req.Diagnostics)
 	row := s.pool.QueryRow(ctx,
-		localJobSelectPrefix()+`
-		 FROM (
+		`WITH failed AS (
 		  UPDATE local_jobs
 		  SET status='FAILED', error_message=$2, error_json=$3::jsonb, diagnostics=$4::jsonb, retryable=$5,
 		      completed_at=NOW(), updated_at=NOW()
 		  WHERE id=$1 AND status NOT IN ('COMPLETED', 'FAILED')
 		  RETURNING *
-		 ) AS local_jobs`,
+		 ) `+localJobSelectPrefix()+` FROM failed`,
 		jobID, errorMessage, string(errorJSON), string(diagnosticsJSON), req.Retryable,
 	)
 	return scanJob(row)
@@ -495,25 +491,25 @@ func (s *Service) SupportsCommand(ctx context.Context, userID string, command st
 	return count > 0, nil
 }
 
-	// SupportsCommandForAnyUser checks whether any online runner (regardless of user)
-	// has registered the specified local command as available. This is used by the
-	// render dependency guard to check infrastructure readiness without a user context.
-	func (s *Service) SupportsCommandForAnyUser(ctx context.Context, command string) (bool, error) {
-		var count int
-		err := s.pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM local_runners lr
+// SupportsCommandForAnyUser checks whether any online runner (regardless of user)
+// has registered the specified local command as available. This is used by the
+// render dependency guard to check infrastructure readiness without a user context.
+func (s *Service) SupportsCommandForAnyUser(ctx context.Context, command string) (bool, error) {
+	var count int
+	err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM local_runners lr
 			 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lr.capabilities, '[]'::jsonb)) cap
 			 WHERE lr.status='ONLINE'
 			   AND lr.last_heartbeat > NOW() - INTERVAL '90 seconds'
 			   AND cap->>'command' = $1
 			   AND COALESCE((cap->>'available')::boolean, false) = true`,
-			command,
-		).Scan(&count)
-		if err != nil {
-			return false, fmt.Errorf("check command support for any user: %w", err)
-		}
-		return count > 0, nil
+		command,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check command support for any user: %w", err)
 	}
+	return count > 0, nil
+}
 
 // SatisfiesRequirements checks whether the user's online runners satisfy
 // the given local requirements. Returns a list of human-readable descriptions

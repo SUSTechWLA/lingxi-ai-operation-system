@@ -139,9 +139,9 @@ func (c *Client) FailJob(ctx context.Context, jobID string, req FailJobRequest) 
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, body interface{}, out interface{}) error {
-	base := strings.TrimRight(c.cfg.CloudAPIBase, "/")
-	if base == "" {
-		return fmt.Errorf("cloud API base is required")
+	targetURL, err := c.cloudURL(path)
+	if err != nil {
+		return err
 	}
 	var reader *bytes.Reader
 	if body != nil {
@@ -153,7 +153,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body interface
 	} else {
 		reader = bytes.NewReader(nil)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, base+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, targetURL, reader)
 	if err != nil {
 		return err
 	}
@@ -183,4 +183,15 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body interface
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (c *Client) cloudURL(path string) (string, error) {
+	base := strings.TrimRight(c.cfg.CloudAPIBase, "/")
+	if base == "" {
+		return "", fmt.Errorf("cloud API base is required")
+	}
+	if strings.HasSuffix(base, "/api") && strings.HasPrefix(path, "/api/") {
+		path = strings.TrimPrefix(path, "/api")
+	}
+	return base + path, nil
 }

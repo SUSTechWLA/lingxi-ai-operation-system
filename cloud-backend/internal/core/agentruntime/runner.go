@@ -20,6 +20,7 @@ type RunStatus string
 const (
 	RunStatusCreated   RunStatus = "CREATED"
 	RunStatusRunning   RunStatus = "RUNNING"
+	RunStatusSuccess   RunStatus = "SUCCESS"
 	RunStatusFailed    RunStatus = "FAILED"
 	RunStatusCancelled RunStatus = "CANCELLED"
 )
@@ -596,7 +597,32 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 		return run, nil, nil
 	}
 	task, err := r.orchestrator.GetTaskWithDetails(ctx, run.TaskID)
-	return run, task, err
+	if err != nil {
+		return run, task, err
+	}
+	taskStatus := taskStatusString(task)
+	if taskStatus == string(model.TaskSuccess) && run.Status != RunStatusSuccess && run.Status != RunStatusFailed && run.Status != RunStatusCancelled {
+		run.Status = RunStatusSuccess
+		run.UpdatedAt = time.Now()
+		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
+			return run, task, saveErr
+		}
+	}
+	if taskStatus == string(model.TaskFailed) && run.Status != RunStatusFailed && run.Status != RunStatusCancelled {
+		run.Status = RunStatusFailed
+		run.UpdatedAt = time.Now()
+		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
+			return run, task, saveErr
+		}
+	}
+	return run, task, nil
+}
+
+func taskStatusString(task map[string]interface{}) string {
+	if len(task) == 0 {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(fmt.Sprint(task["status"])))
 }
 
 func (r *Runner) Cancel(ctx context.Context, id string) (*Run, error) {

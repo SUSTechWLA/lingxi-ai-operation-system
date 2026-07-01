@@ -141,6 +141,56 @@ func TestRunnerCompleteStart_DoesNotReviveCancelledRun(t *testing.T) {
 	}
 }
 
+func TestRunnerGetSyncsFailedTaskStatusToRun(t *testing.T) {
+	store := newMemoryRunStore()
+	_ = store.SaveRun(context.Background(), &Run{
+		ID:     "run-1",
+		TaskID: "task-1",
+		Status: RunStatusRunning,
+	})
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskFailed}, store, nil, nil, nil)
+
+	run, task, err := runner.Get(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if run == nil || run.Status != RunStatusFailed {
+		t.Fatalf("run status = %#v, want FAILED", run)
+	}
+	if task["status"] != string(model.TaskFailed) {
+		t.Fatalf("task status = %#v, want FAILED", task["status"])
+	}
+	stored, _ := store.FindRun(context.Background(), "run-1")
+	if stored == nil || stored.Status != RunStatusFailed {
+		t.Fatalf("stored run status = %#v, want FAILED", stored)
+	}
+}
+
+func TestRunnerGetSyncsSuccessfulTaskStatusToRun(t *testing.T) {
+	store := newMemoryRunStore()
+	_ = store.SaveRun(context.Background(), &Run{
+		ID:     "run-1",
+		TaskID: "task-1",
+		Status: RunStatusRunning,
+	})
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil)
+
+	run, task, err := runner.Get(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if run == nil || run.Status != RunStatus("SUCCESS") {
+		t.Fatalf("run status = %#v, want SUCCESS", run)
+	}
+	if task["status"] != string(model.TaskSuccess) {
+		t.Fatalf("task status = %#v, want SUCCESS", task["status"])
+	}
+	stored, _ := store.FindRun(context.Background(), "run-1")
+	if stored == nil || stored.Status != RunStatus("SUCCESS") {
+		t.Fatalf("stored run status = %#v, want SUCCESS", stored)
+	}
+}
+
 func TestRunnerStart_InjectsClientTextProviderIntoExecutableNodesOnly(t *testing.T) {
 	store := newMemoryRunStore()
 	orch := &fakeOrchestrator{taskID: "task-1"}
@@ -743,6 +793,7 @@ func (p staticPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPla
 
 type fakeOrchestrator struct {
 	taskID          string
+	taskStatus      model.TaskStatus
 	createdInput    map[string]interface{}
 	submittedTaskID string
 	submitted       *model.DAGRequest
@@ -760,7 +811,11 @@ func (o *fakeOrchestrator) SubmitDAG(_ context.Context, taskID string, dag *mode
 }
 
 func (o *fakeOrchestrator) GetTaskWithDetails(context.Context, string) (map[string]interface{}, error) {
-	return map[string]interface{}{"status": string(model.TaskRunning)}, nil
+	status := o.taskStatus
+	if status == "" {
+		status = model.TaskRunning
+	}
+	return map[string]interface{}{"status": string(status)}, nil
 }
 
 type memoryRunStore struct {

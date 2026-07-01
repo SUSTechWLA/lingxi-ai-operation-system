@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
+	"github.com/tangying-ai/aios-core/internal/core/hyperframes"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -633,6 +634,37 @@ func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
 		if !strings.Contains(data, required) {
 			t.Fatalf("hyperframes data json should contain %q, got:\n%s", required, data)
 		}
+	}
+}
+
+func TestHyperFramesRendererDisabledReturnsManualVideoArtifact(t *testing.T) {
+	SetHyperFramesConfig(hyperframes.Config{Mode: hyperframes.ModeDisabled})
+	t.Cleanup(func() {
+		SetHyperFramesConfig(hyperframes.Config{})
+	})
+
+	result := executeLocalVideoCreationTool("hyperframes_renderer", map[string]interface{}{
+		"projectDir": "projects/task-1-hyperframes",
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "render_exec"})
+
+	if !result.Success {
+		t.Fatalf("disabled renderer should return manual upload guidance, got error: %s", result.Error)
+	}
+	if result.Data["outputPath"] == "" {
+		t.Fatalf("disabled renderer should expose a placeholder outputPath, got %#v", result.Data)
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("expected render artifacts, got %#v", result.Data["artifacts"])
+	}
+	hasVideo := false
+	for _, artifact := range artifacts {
+		if artifact["kind"] == "VIDEO" {
+			hasVideo = true
+		}
+	}
+	if !hasVideo {
+		t.Fatalf("disabled renderer should emit a VIDEO artifact for manual upload, got %#v", artifacts)
 	}
 }
 

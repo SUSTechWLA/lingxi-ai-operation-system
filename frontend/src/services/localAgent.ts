@@ -26,6 +26,11 @@ export interface LocalArtifactUploadResponse {
   metadata: Record<string, unknown>
 }
 
+export interface LocalArtifactFileResponse extends LocalArtifactUploadResponse {
+  content?: string
+  contentBase64?: string
+}
+
 export const DEFAULT_LOCAL_AGENT_URL = 'http://127.0.0.1:18080'
 const configuredLocalAgentUrl = import.meta.env.VITE_LOCAL_AGENT_URL || import.meta.env.VITE_LOCAL_BACKEND_URL
 
@@ -139,6 +144,17 @@ export async function uploadLocalArtifactFile(params: {
     throw new Error(await errorMessage(response, '上传本地产物失败'))
   }
   return response.json() as Promise<LocalArtifactUploadResponse>
+}
+
+export async function fetchLocalArtifactFile(params: {
+  projectId: string
+  id: string
+}): Promise<LocalArtifactFileResponse> {
+  const response = await fetch(localAgentUrl(`/api/local/artifacts/${encodeURIComponent(params.id)}?projectId=${encodeURIComponent(params.projectId)}`))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取本地产物失败'))
+  }
+  return response.json() as Promise<LocalArtifactFileResponse>
 }
 
 function localAgentUrl(path: string): string {
