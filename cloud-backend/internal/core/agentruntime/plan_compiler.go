@@ -196,21 +196,47 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 		shotField = preferredOutputField(c.manifestFor("shot_splitter"), "shotList")
 	}
 
+	generationAnchor, generationField := c.lastProducerStepForFields(plan, []string{"shotGenerationPlans"}, []string{"shot_generation_planner"})
+	if generationAnchor == "" && c.hasOptionalTool("shot_generation_planner") {
+		generationAnchor = appendPlanStep(plan, AgentStep{
+			ID:        uniqueStepID(plan, "shot_generation"),
+			Intent:    "为每个分镜决定 AIGC、HyperFrames、混合生成、用户素材或占位素材策略",
+			Tool:      "shot_generation_planner",
+			DependsOn: dependencyList(shotAnchor),
+			Arguments: map[string]interface{}{
+				"stage":    "generation_strategy",
+				"brief":    plan.Goal,
+				"shotList": stepOutputRef(shotAnchor, shotField),
+			},
+			ExpectedOutput:  []string{"shotGenerationPlans", "shotAssetPackages", "externalGenerationRequests"},
+			ProduceArtifact: true,
+		})
+		generationField = preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
+	}
+	generationPackageField := c.outputFieldForStep(plan, generationAnchor, "shotAssetPackages")
+
 	promptAnchor, promptField := c.lastProducerStepForFields(plan,
 		[]string{"videoPrompts", "video_prompt", "keyframePrompts", "keyframe_prompt"},
 		[]string{"video_prompt_generator", "keyframe_prompt_generator"},
 	)
 	if promptAnchor == "" {
+		promptArgs := map[string]interface{}{
+			"stage":    "video_prompt",
+			"brief":    plan.Goal,
+			"shotList": stepOutputRef(shotAnchor, shotField),
+		}
+		if generationAnchor != "" && generationField != "" {
+			promptArgs["shotGenerationPlans"] = stepOutputRef(generationAnchor, generationField)
+		}
+		if generationPackageField != "" {
+			promptArgs["shotAssetPackages"] = stepOutputRef(generationAnchor, generationPackageField)
+		}
 		promptAnchor = appendPlanStep(plan, AgentStep{
-			ID:        uniqueStepID(plan, "video_prompt"),
-			Intent:    "根据分镜生成可审核的视频生成提示词",
-			Tool:      "video_prompt_generator",
-			DependsOn: dependencyList(shotAnchor),
-			Arguments: map[string]interface{}{
-				"stage":    "video_prompt",
-				"brief":    plan.Goal,
-				"shotList": stepOutputRef(shotAnchor, shotField),
-			},
+			ID:              uniqueStepID(plan, "video_prompt"),
+			Intent:          "根据分镜生成可审核的视频生成提示词",
+			Tool:            "video_prompt_generator",
+			DependsOn:       dependencyListUnique(shotAnchor, generationAnchor),
+			Arguments:       promptArgs,
 			ExpectedOutput:  []string{"videoPrompts", "video_prompt"},
 			ProduceArtifact: true,
 		})
@@ -229,18 +255,22 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 		if promptAnchor != "" && (promptField == "videoPrompts" || promptField == "video_prompt") {
 			previewArgs["videoPrompts"] = stepOutputRef(promptAnchor, promptField)
 		}
+		projectManifest := c.manifestFor("hyperframes_project_generator")
+		if generationAnchor != "" && generationField != "" && manifestAcceptsParam(projectManifest, "shotGenerationPlans") {
+			previewArgs["shotGenerationPlans"] = stepOutputRef(generationAnchor, generationField)
+		}
 		if packageField := c.outputFieldForStep(plan, promptAnchor, "shotAssetPackages"); packageField != "" {
-			if projectManifest := c.manifestFor("hyperframes_project_generator"); projectManifest == nil || projectManifest.Parameters == nil {
-				previewArgs["shotAssetPackages"] = stepOutputRef(promptAnchor, packageField)
-			} else if _, ok := projectManifest.Parameters["shotAssetPackages"]; ok {
+			if manifestAcceptsParam(projectManifest, "shotAssetPackages") {
 				previewArgs["shotAssetPackages"] = stepOutputRef(promptAnchor, packageField)
 			}
+		} else if generationPackageField != "" && manifestAcceptsParam(projectManifest, "shotAssetPackages") {
+			previewArgs["shotAssetPackages"] = stepOutputRef(generationAnchor, generationPackageField)
 		}
 		projectAnchor = appendPlanStep(plan, AgentStep{
 			ID:              uniqueStepID(plan, "preview"),
 			Intent:          "生成可审核的 HyperFrames 预览项目和画面预览",
 			Tool:            "hyperframes_project_generator",
-			DependsOn:       dependencyListUnique(shotAnchor, promptAnchor, scriptAnchor),
+			DependsOn:       dependencyListUnique(shotAnchor, promptAnchor, generationAnchor, scriptAnchor),
 			Arguments:       previewArgs,
 			ExpectedOutput:  []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT", "hyperframes_project", "preview"},
 			ProduceArtifact: true,
@@ -414,6 +444,14 @@ func preferredParamName(manifest *tool.ToolManifest, names ...string) string {
 	return ""
 }
 
+func manifestAcceptsParam(manifest *tool.ToolManifest, name string) bool {
+	if manifest == nil || len(manifest.Parameters) == 0 {
+		return true
+	}
+	_, ok := manifest.Parameters[name]
+	return ok
+}
+
 func stepMentionsAny(step AgentStep, terms []string) bool {
 	haystack := strings.ToLower(step.ID + " " + step.Intent + " " + step.Tool)
 	if stage, ok := step.Arguments["stage"].(string); ok {
@@ -444,6 +482,10 @@ func (c *PlanCompiler) hasVideoBetaCompletionTools() bool {
 		}
 	}
 	return true
+}
+
+func (c *PlanCompiler) hasOptionalTool(name string) bool {
+	return c.manifestFor(name) != nil
 }
 
 func (c *PlanCompiler) injectKnowledgeContext(plan *AgentPlan) {

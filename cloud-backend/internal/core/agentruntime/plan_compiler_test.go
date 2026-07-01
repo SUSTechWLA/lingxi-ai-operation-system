@@ -227,6 +227,121 @@ func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanInsertsShotGenerationPlanner(t *testing.T) {
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name: "video_script_generator",
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"shot_splitter": {
+			Name: "shot_splitter",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList":          {Type: "array"},
+				"shotAssetPackages": {Type: "array"},
+			},
+		},
+		"shot_generation_planner": {
+			Name: "shot_generation_planner",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotGenerationPlans": {Type: "array"},
+				"shotAssetPackages":   {Type: "array"},
+			},
+		},
+		"video_prompt_generator": {
+			Name: "video_prompt_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList":            {Type: "array", Required: true},
+				"shotGenerationPlans": {Type: "array", Required: false},
+				"shotAssetPackages":   {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts":      {Type: "array"},
+				"shotAssetPackages": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name: "hyperframes_project_generator",
+			Parameters: map[string]tool.ParamDef{
+				"topic":               {Type: "string", Required: true},
+				"script":              {Type: "string", Required: true},
+				"shotList":            {Type: "array", Required: true},
+				"videoPrompts":        {Type: "array", Required: false},
+				"shotGenerationPlans": {Type: "array", Required: false},
+				"shotAssetPackages":   {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"projectDir": {Type: "string"},
+				"entry":      {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name: "hyperframes_renderer",
+			Parameters: map[string]tool.ParamDef{
+				"projectDir": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"outputPath": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name: "publish_copy_generator",
+			Output: map[string]tool.ParamDef{
+				"title": {Type: "string"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请做一条端午节来历的口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	generation := findStep(t, prepared, "shot_generation")
+	if generation.Tool != "shot_generation_planner" {
+		t.Fatalf("shot_generation tool = %s, want shot_generation_planner", generation.Tool)
+	}
+	if got := generation.Arguments["shotList"]; got != "{{beat_plan.output.shotList}}" {
+		t.Fatalf("shot_generation should reference beat_plan shot list, got %#v", generation.Arguments)
+	}
+	prompt := findStep(t, prepared, "video_prompt")
+	if got := prompt.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("video_prompt should reference shot generation plans, got %#v", prompt.Arguments)
+	}
+	if got := prompt.Arguments["shotAssetPackages"]; got != "{{shot_generation.output.shotAssetPackages}}" {
+		t.Fatalf("video_prompt should reference generation asset packages, got %#v", prompt.Arguments)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("preview should reference shot generation plans, got %#v", preview.Arguments)
+	}
+	if got := preview.Arguments["shotAssetPackages"]; got != "{{video_prompt.output.shotAssetPackages}}" {
+		t.Fatalf("preview should prefer prompt asset packages, got %#v", preview.Arguments)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanExpandsCostBudgetForInjectedRender(t *testing.T) {
 	catalog := staticToolCatalog{
 		"video_script_generator": {
