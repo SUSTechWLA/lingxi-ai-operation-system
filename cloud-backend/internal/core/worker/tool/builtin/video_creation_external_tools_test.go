@@ -936,6 +936,72 @@ func TestExecuteRenderStrategyPlannerReturnsHybridStrategy(t *testing.T) {
 	}
 }
 
+func TestShotGenerationPlannerRoutesHybridAndExternalNeeds(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":        "SHOT_01",
+				"durationSec":   float64(6),
+				"visual":        "非真人风格化办公室里人物被文件包围，同时画面必须显示“几个表格”",
+				"narrationText": "几个表格就能改变判断。",
+				"screenText":    []interface{}{"几个表格"},
+			},
+			map[string]interface{}{
+				"shotId":      "SHOT_02",
+				"durationSec": float64(5),
+				"visual":      "展示客户上传 logo 和产品截图",
+			},
+		},
+		"aigcAvailable": true,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 2 {
+		t.Fatalf("expected two shotGenerationPlans, got %#v", result.Data["shotGenerationPlans"])
+	}
+	if plans[0]["mode"] != "hybrid_aigc_bg_html_overlay" {
+		t.Fatalf("SHOT_01 should route to hybrid mode, got %#v", plans[0])
+	}
+	if plans[1]["mode"] != "external_or_user_asset" {
+		t.Fatalf("SHOT_02 should route to external/user asset mode, got %#v", plans[1])
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]map[string]interface{})
+	if !ok || len(packages) != 2 {
+		t.Fatalf("expected shotAssetPackages, got %#v", result.Data["shotAssetPackages"])
+	}
+}
+
+func TestShotGenerationPlannerMissingProviderCreatesExternalRequest(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(6),
+				"visual":      "人物跑过街口，镜头跟随，电影感运动",
+			},
+		},
+		"aigcAvailable": false,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]map[string]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one externalGenerationRequest, got %#v", result.Data["externalGenerationRequests"])
+	}
+	if requests[0]["kind"] != "video" || requests[0]["shotId"] != "SHOT_01" {
+		t.Fatalf("unexpected external generation request: %#v", requests[0])
+	}
+}
+
 func TestExecuteAssetDecisionAgentReturnsReferenceAssetPlan(t *testing.T) {
 	result := executeLocalVideoCreationTool("asset_decision_agent", map[string]interface{}{
 		"stage": "reference",

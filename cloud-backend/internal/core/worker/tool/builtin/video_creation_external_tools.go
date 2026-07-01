@@ -19,6 +19,8 @@ import (
 
 	"go.uber.org/zap"
 
+	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
+	videoservice "github.com/tangying-ai/aios-core/internal/agents/video/service"
 	"github.com/tangying-ai/aios-core/internal/core/common/crypto"
 	"github.com/tangying-ai/aios-core/internal/core/common/jsonx"
 	"github.com/tangying-ai/aios-core/internal/core/config"
@@ -52,6 +54,7 @@ var videoCreationExternalTools = []string{
 	"proposal_generator",
 	"visual_feasibility_analyzer",
 	"render_strategy_planner",
+	"shot_generation_planner",
 	"card_plan_generator",
 	"caption_splitter",
 	"composition_quality_checker",
@@ -580,6 +583,30 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"content":           {Type: "string", Description: "Reviewable shot package content"},
 			"artifacts":         {Type: "object", Description: "Reviewable artifact manifest"},
 		}
+	case "shot_generation_planner":
+		manifest.Description = "Plan per-shot generation mode, asset needs, and fusion strategy."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "render_strategy", "asset_routing", "shot_planning"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"shotList":             {Type: "array", Description: "Approved shot list", Required: true},
+			"visualPlans":          {Type: "array", Description: "Optional per-shot visual plans", Required: false},
+			"renderPreference":     {Type: "object", Description: "Optional render preference snapshot", Required: false},
+			"aigcAvailable":        {Type: "boolean", Description: "Whether AIGC video/image generation is available", Required: false},
+			"htmlAvailable":        {Type: "boolean", Description: "Whether HyperFrames HTML rendering is available", Required: false},
+			"providerCapabilities": {Type: "object", Description: "Optional nested provider capability snapshot", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"shotGenerationPlans":        {Type: "array", Description: "Per-shot generation plans"},
+			"shotAssetPackages":          {Type: "array", Description: "Per-shot reviewable asset packages"},
+			"externalGenerationRequests": {Type: "array", Description: "External generation requests for missing providers or manual generation"},
+			"summary":                    {Type: "string", Description: "Human-readable planner summary"},
+			"content":                    {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":                  {Type: "object", Description: "Reviewable artifact manifest"},
+		}
 	case "video_prompt_generator":
 		manifest.Description = "Generate independent per-shot video prompts and shot asset packages."
 		manifest.Type = "builtin_prompt_tool"
@@ -700,6 +727,8 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeVisualFeasibilityAnalyzer(stage, skillName, params)
 	case "render_strategy_planner":
 		return executeRenderStrategyPlanner(stage, skillName, params)
+	case "shot_generation_planner":
+		return executeShotGenerationPlanner(stage, skillName, params)
 	case "asset_decision_agent":
 		return executeAssetDecisionAgent(stage, skillName, params)
 	case "render_dependency_guard":
@@ -1185,6 +1214,409 @@ func executeRenderStrategyPlanner(stage, skillName string, params map[string]int
 			jsonArtifact(stage, "render_strategy.json", skillName, "videoforge-render-strategy", true),
 		},
 	})
+}
+
+func executeShotGenerationPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	shotItems := normalizeShotItemsForAssetDecision(params["shotList"])
+	if len(shotItems) == 0 {
+		shotItems = normalizeShotItemsForAssetDecision(params["shots"])
+	}
+	if len(shotItems) == 0 {
+		return tool.FailureResult("shot_generation_planner requires shotList")
+	}
+
+	caps := capabilitySnapshot(params)
+	providerCaps, _ := mapValue(params["providerCapabilities"])
+	aigcDefault := caps.SeedanceAvailable
+	if value, ok := boolFromToolMap(providerCaps, "aigcAvailable", "seedanceAvailable", "textToVideoAvailable", "videoAvailable"); ok {
+		aigcDefault = value
+	}
+	htmlDefault := caps.HyperFramesAvailable
+	if value, ok := boolFromToolMap(providerCaps, "htmlAvailable", "hyperframesAvailable", "htmlRenderAvailable"); ok {
+		htmlDefault = value
+	} else if _, ok := params["htmlAvailable"]; !ok {
+		htmlDefault = true
+	}
+	aigcAvailable := boolParam(params, "aigcAvailable", aigcDefault)
+	htmlAvailable := boolParam(params, "htmlAvailable", htmlDefault)
+
+	visualPlans := normalizeShotItemsForAssetDecision(params["visualPlans"])
+	shotGenerationPlans := make([]map[string]interface{}, 0, len(shotItems))
+	shotAssetPackages := make([]map[string]interface{}, 0, len(shotItems))
+	externalRequests := []map[string]interface{}{}
+	for i, shotMap := range shotItems {
+		values := mergeShotGenerationToolValues(shotMap, visualPlans, i)
+		shot := shotUnitFromToolMap(values, i)
+		visual := visualPlanFromToolMap(shot, values)
+		plan := videoservice.BuildShotGenerationPlan(
+			shot,
+			visual,
+			videomodel.DefaultRenderPreference(),
+			videoservice.RenderCapabilities{AIGCAvailable: aigcAvailable, HTMLAvailable: htmlAvailable},
+		)
+		shotGenerationPlans = append(shotGenerationPlans, structToMap(plan))
+		shotAssetPackages = append(shotAssetPackages, shotAssetPackageFromGenerationPlan(values, plan))
+		externalRequests = append(externalRequests, externalRequestsFromGenerationPlan(plan)...)
+	}
+
+	summary := fmt.Sprintf("已为 %d 个镜头生成逐镜头生成计划，包含 %d 个外部生成请求。", len(shotGenerationPlans), len(externalRequests))
+	return tool.SuccessResult(map[string]interface{}{
+		"content":                    buildShotGenerationPlanReviewContent(shotGenerationPlans),
+		"shotGenerationPlans":        shotGenerationPlans,
+		"shotAssetPackages":          shotAssetPackages,
+		"externalGenerationRequests": externalRequests,
+		"summary":                    summary,
+		"artifacts": []map[string]interface{}{
+			jsonArtifact(stage, "shot_generation_plans.json", skillName, "SHOT_GENERATION_PLAN", true),
+		},
+	})
+}
+
+func mergeShotGenerationToolValues(shotMap map[string]interface{}, visualPlans []map[string]interface{}, index int) map[string]interface{} {
+	values := copyStringMap(shotMap)
+	shotID := firstNonEmptyString(shotMap, "shotId", "id", "cardId")
+	var selected map[string]interface{}
+	if shotID != "" {
+		for _, visualPlan := range visualPlans {
+			if firstNonEmptyString(visualPlan, "shotId", "id", "cardId") == shotID {
+				selected = visualPlan
+				break
+			}
+		}
+	}
+	if selected == nil && index >= 0 && index < len(visualPlans) {
+		selected = visualPlans[index]
+	}
+	if selected == nil {
+		return values
+	}
+	values["visualPlan"] = selected
+	for _, key := range []string{"visual", "visualIntent", "description", "sceneSummary", "mainAction", "action", "screenText", "textLayers", "background", "characters", "props", "motionPlan", "cameraPlan"} {
+		if _, exists := values[key]; !exists {
+			values[key] = selected[key]
+		}
+	}
+	return values
+}
+
+func shotUnitFromToolMap(values map[string]interface{}, fallbackIndex int) videomodel.ShotUnit {
+	shotID := firstNonEmptyString(values, "shotId", "id", "cardId")
+	if shotID == "" {
+		shotID = fmt.Sprintf("SHOT_%02d", fallbackIndex+1)
+	}
+	return videomodel.ShotUnit{
+		ID:                shotID,
+		SequenceIndex:     fallbackIndex,
+		Title:             firstNonEmptyString(values, "title", "name"),
+		DurationSec:       normalizedDurationSec(firstValueInMap(values, "durationSec", "duration", "seconds")),
+		SceneSummary:      firstNonEmptyString(values, "sceneSummary", "visual", "description"),
+		SingleScene:       true,
+		VisualChangeLevel: videomodel.VisualChangeLow,
+		Narration:         firstNonEmptyString(values, "narrationText", "scriptText", "text"),
+		ScreenText:        firstStringListInMap(values, "screenText", "screenTexts"),
+		MainAction:        firstNonEmptyString(values, "mainAction", "action", "visual"),
+		ReviewStatus:      videomodel.ReviewStatusPending,
+		Version:           1,
+	}
+}
+
+func visualPlanFromToolMap(shot videomodel.ShotUnit, values map[string]interface{}) videomodel.VisualPlan {
+	plan := videomodel.VisualPlan{}
+	if raw, ok := values["visualPlan"]; ok {
+		data, err := json.Marshal(raw)
+		if err == nil {
+			_ = json.Unmarshal(data, &plan)
+		}
+	}
+	durationSec := maxInt(shot.DurationSec, 1)
+	plan.Canvas = videomodel.CanvasSpec{AspectRatio: "16:9", Width: 1920, Height: 1080, FPS: 30, DurationSec: durationSec}
+
+	visualText := joinedShotVisualText(shot, values)
+	if plan.Background.Description == "" {
+		plan.Background.Description = visualText
+	}
+	if textLooksAIGC(visualText) || textLooksDynamic(visualText) {
+		plan.Background.RequiresAIGC = true
+	}
+
+	for _, text := range shot.ScreenText {
+		if textLayerExists(plan.TextLayers, text) {
+			continue
+		}
+		plan.TextLayers = append(plan.TextLayers, videomodel.TextLayerSpec{
+			ID:          fmt.Sprintf("%s-text-%02d", shot.ID, len(plan.TextLayers)+1),
+			Text:        text,
+			Language:    "zh-CN",
+			Role:        videomodel.TextRoleKeyword,
+			Position:    "center",
+			FontSize:    72,
+			FontWeight:  "700",
+			Color:       "#FFFFFF",
+			StartSec:    0,
+			EndSec:      float64(durationSec),
+			MustBeExact: true,
+		})
+	}
+
+	if len(plan.Props) == 0 {
+		plan.Props = propsFromVisualText(visualText)
+	}
+	if len(plan.DataVisuals) == 0 && containsAny(strings.ToLower(visualText), "表格", "图表", "数据", "chart", "table", "data") {
+		plan.DataVisuals = append(plan.DataVisuals, videomodel.DataVisualSpec{
+			ID:          shot.ID + "-data-visual",
+			Type:        "table_or_chart",
+			Description: visualText,
+		})
+	}
+	if len(plan.UILayers) == 0 && containsAny(strings.ToLower(visualText), "ui", "界面", "按钮", "网页", "app") {
+		plan.UILayers = append(plan.UILayers, videomodel.UILayerSpec{
+			ID:          shot.ID + "-ui-layer",
+			Description: visualText,
+		})
+	}
+
+	dynamic := textLooksDynamic(visualText)
+	if dynamic && plan.MotionPlan.Description == "" {
+		plan.MotionPlan.Description = visualText
+		plan.MotionPlan.RequiresAIGC = true
+	}
+	if cameraMovement := cameraMovementFromVisualText(visualText); cameraMovement != "" {
+		if plan.CameraPlan.Description == "" {
+			plan.CameraPlan.Description = visualText
+		}
+		plan.CameraPlan.Movement = cameraMovement
+		plan.CameraPlan.RequiresAIGC = true
+	}
+	if len(plan.Characters) == 0 && textLooksCharacter(visualText) {
+		character := videomodel.CharacterVisualSpec{
+			ID:           shot.ID + "-character",
+			Description:  visualText,
+			RequiresAIGC: true,
+		}
+		if dynamic {
+			character.Motion = visualText
+		}
+		plan.Characters = append(plan.Characters, character)
+	}
+	return plan
+}
+
+func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan videomodel.ShotGenerationPlan) map[string]interface{} {
+	planMap := structToMap(plan)
+	return map[string]interface{}{
+		"shotId":         plan.ShotID,
+		"durationSec":    normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
+		"visual":         firstNonEmptyString(shotMap, "visual", "visualIntent", "description", "sceneSummary"),
+		"generationPlan": planMap,
+		"requiredAssets": planMap["requiredAssets"],
+		"fusionPlan":     planMap["fusionPlan"],
+		"status":         videomodel.ReviewStatusPending,
+		"reviewStatus":   videomodel.ReviewStatusPending,
+	}
+}
+
+func externalRequestsFromGenerationPlan(plan videomodel.ShotGenerationPlan) []map[string]interface{} {
+	requests := []map[string]interface{}{}
+	for _, asset := range plan.RequiredAssets {
+		if asset.Source != videomodel.AssetSourceExternalGeneration {
+			continue
+		}
+		shotID := asset.RelatedShotID
+		if shotID == "" {
+			shotID = plan.ShotID
+		}
+		requests = append(requests, map[string]interface{}{
+			"shotId":  shotID,
+			"assetId": asset.ID,
+			"kind":    asset.Kind,
+			"role":    asset.Role,
+			"mode":    plan.Mode,
+			"reason":  plan.Reason,
+			"status":  videomodel.ReviewStatusPending,
+		})
+	}
+	return requests
+}
+
+func buildShotGenerationPlanReviewContent(plans []map[string]interface{}) string {
+	var b strings.Builder
+	b.WriteString("# Shot Generation Plans\n\n")
+	for i, plan := range plans {
+		shotID := firstNonEmptyString(plan, "shotId")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		mode := firstNonEmptyString(plan, "mode")
+		reason := firstNonEmptyString(plan, "reason")
+		assetCount := len(interfaceItems(plan["requiredAssets"]))
+		b.WriteString(fmt.Sprintf("## %d. %s\n\n", i+1, shotID))
+		b.WriteString(fmt.Sprintf("- Mode: `%s`\n", mode))
+		b.WriteString(fmt.Sprintf("- Required assets: %d\n", assetCount))
+		if reason != "" {
+			b.WriteString(fmt.Sprintf("- Reason: %s\n", reason))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func joinedShotVisualText(shot videomodel.ShotUnit, values map[string]interface{}) string {
+	parts := []string{
+		shot.SceneSummary,
+		shot.MainAction,
+		shot.Title,
+		firstNonEmptyString(values, "visual", "visualIntent", "description", "sceneSummary"),
+		firstNonEmptyString(values, "mainAction", "action"),
+	}
+	out := []string{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return strings.Join(out, "。")
+}
+
+func firstValueInMap(values map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstStringListInMap(values map[string]interface{}, keys ...string) []string {
+	for _, key := range keys {
+		if list := stringsFromToolValue(values[key]); len(list) > 0 {
+			return list
+		}
+	}
+	return nil
+}
+
+func stringsFromToolValue(value interface{}) []string {
+	switch typed := value.(type) {
+	case []string:
+		return compactStrings(typed)
+	case []interface{}:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(ensureStringValue(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		var decoded []string
+		if json.Unmarshal([]byte(trimmed), &decoded) == nil {
+			return compactStrings(decoded)
+		}
+		return []string{trimmed}
+	default:
+		return nil
+	}
+}
+
+func compactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func textLayerExists(layers []videomodel.TextLayerSpec, text string) bool {
+	for _, layer := range layers {
+		if strings.TrimSpace(layer.Text) == strings.TrimSpace(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func textLooksAIGC(value string) bool {
+	normalized := strings.ToLower(value)
+	return containsAny(normalized,
+		"人物", "角色", "真人", "人像", "character", "person",
+		"场景", "scene", "电影", "cinematic",
+		"动作", "motion", "镜头", "camera",
+		"跑", "走", "转身",
+	)
+}
+
+func textLooksCharacter(value string) bool {
+	return containsAny(strings.ToLower(value), "人物", "角色", "真人", "人像", "character", "person")
+}
+
+func textLooksDynamic(value string) bool {
+	return containsAny(strings.ToLower(value),
+		"跑", "走", "穿过", "转身", "跟随", "运动", "移动", "奔跑",
+		"run", "walk", "turn", "move", "motion", "tracking", "pan", "tilt", "dolly", "zoom",
+	)
+}
+
+func cameraMovementFromVisualText(value string) string {
+	normalized := strings.ToLower(value)
+	if containsAny(normalized, "跟随", "tracking", "镜头跟随") {
+		return "tracking shot"
+	}
+	if containsAny(normalized, "推镜", "拉镜", "zoom", "dolly") {
+		return "dolly zoom"
+	}
+	if containsAny(normalized, "摇镜", "pan", "tilt", "镜头") {
+		return "camera movement"
+	}
+	return ""
+}
+
+func propsFromVisualText(value string) []videomodel.PropVisualSpec {
+	normalized := strings.ToLower(value)
+	props := []videomodel.PropVisualSpec{}
+	if containsAny(normalized, "logo", "品牌", "brand") {
+		props = append(props, videomodel.PropVisualSpec{ID: "brand-logo", Description: "logo or brand asset"})
+	}
+	if containsAny(normalized, "截图", "screenshot", "产品图", "产品", "product") {
+		props = append(props, videomodel.PropVisualSpec{ID: "product-screenshot", Description: "product screenshot or product asset"})
+	}
+	if len(props) == 0 && containsAny(normalized, "上传", "客户提供", "提供素材", "uploaded", "user upload", "user-provided") {
+		props = append(props, videomodel.PropVisualSpec{ID: "user-provided-asset", Description: "uploaded or customer-provided asset"})
+	}
+	return props
+}
+
+func boolFromToolMap(values map[string]interface{}, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed, true
+		case string:
+			return strings.EqualFold(typed, "true") || typed == "1" || strings.EqualFold(typed, "yes"), true
+		case float64:
+			return typed != 0, true
+		case int:
+			return typed != 0, true
+		}
+	}
+	return false, false
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func executeAssetDecisionAgent(stage, skillName string, params map[string]interface{}) tool.ToolResult {
