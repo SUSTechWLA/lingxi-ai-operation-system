@@ -1139,6 +1139,28 @@ try {
     metadata: { profileId: 'talking_head' },
   }]).label, '口播解说')
   assert.equal(creationProfileSummary([]).label, '未选择')
+  assert.equal(creationProfileSummary([{
+    ...profileArtifacts[0],
+    metadata: { cloudPayloadStored: true },
+    inlineJson: JSON.stringify({
+      profileId: 'cinematic_story',
+      primaryArtifact: 'CONTINUITY_BIBLE',
+      qualityContract: ['aigc_time_windows_3_15s'],
+    }),
+  }]).profileId, 'cinematic_story')
+  assert.equal(creationProfileSummary([{
+    ...profileArtifacts[0],
+    metadata: {
+      cloudPayloadStored: true,
+      inlineContent: {
+        creationProfile: {
+          profileId: 'talking_head',
+          primaryArtifact: 'VIDEO_SCRIPT',
+          qualityContract: ['script_timeline_first'],
+        },
+      },
+    },
+  }]).primaryArtifact, 'VIDEO_SCRIPT')
   assert.deepEqual(timeWindowPlanSummary(profileArtifacts), {
     totalWindows: 1,
     aigcWindowCount: 1,
@@ -1158,6 +1180,37 @@ try {
   }]), {
     totalWindows: 3,
     aigcWindowCount: 2,
+    invalidDurationCount: 1,
+  })
+  assert.deepEqual(timeWindowPlanSummary([{
+    ...profileArtifacts[1],
+    metadata: { cloudPayloadStored: true },
+    inlineJson: JSON.stringify({
+      timeWindowPlan: {
+        windows: [
+          { durationSec: 8, aigcEligible: 'yes' },
+          { durationSec: 2, aigcEligible: 'off' },
+        ],
+      },
+    }),
+  }]), {
+    totalWindows: 2,
+    aigcWindowCount: 1,
+    invalidDurationCount: 0,
+  })
+  assert.deepEqual(timeWindowPlanSummary([{
+    ...profileArtifacts[1],
+    metadata: {
+      cloudPayloadStored: true,
+      inlineContent: {
+        timeWindows: [
+          { durationSec: 16, aigcEligible: true },
+        ],
+      },
+    },
+  }]), {
+    totalWindows: 1,
+    aigcWindowCount: 1,
     invalidDurationCount: 1,
   })
 

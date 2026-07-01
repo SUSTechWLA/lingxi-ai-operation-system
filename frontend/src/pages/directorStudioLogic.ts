@@ -50,6 +50,7 @@ export interface DirectorArtifactRecord {
   storageRef: string
   dependsOn?: string[]
   metadata?: Record<string, unknown>
+  inlineJson?: string
 }
 
 export interface DirectorTraceNode {
@@ -177,19 +178,20 @@ interface TraceNodeLike {
 
 export function creationProfileSummary(artifacts: DirectorArtifactRecord[]): DirectorCreationProfileSummary {
   const profile = artifacts.find((item) => item.kind === 'VIDEO_CREATION_PROFILE')
-  const metadata = profile?.metadata || {}
-  const profileId = stringValue(metadata.profileId)
+  const payload = summaryPayloadForArtifact(profile)
+  const profilePayload = objectValue(payload.creationProfile) || payload
+  const profileId = stringValue(profilePayload.profileId)
   return {
     profileId,
     label: creationProfileLabel(profileId),
-    primaryArtifact: stringValue(metadata.primaryArtifact),
-    qualityContract: normalizeStringList(metadata.qualityContract),
+    primaryArtifact: stringValue(profilePayload.primaryArtifact),
+    qualityContract: normalizeStringList(profilePayload.qualityContract),
   }
 }
 
 export function timeWindowPlanSummary(artifacts: DirectorArtifactRecord[]): DirectorTimeWindowSummary {
   const plan = artifacts.find((item) => item.kind === 'TIME_WINDOW_PLAN')
-  const windows = timeWindowRecords(plan?.metadata)
+  const windows = timeWindowRecords(summaryPayloadForArtifact(plan))
   const aigcWindows = windows.filter((window) => isTruthyAigcEligible(window.aigcEligible))
   return {
     totalWindows: windows.length,
@@ -233,10 +235,11 @@ function creationProfileLabel(profileId: string | undefined): string {
 }
 
 function timeWindowRecords(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
-  const directWindows = Array.isArray(metadata?.windows) ? metadata.windows : undefined
+  const directWindows = nonEmptyArrayValue(metadata?.windows)
   const nestedPlan = objectValue(metadata?.timeWindowPlan)
-  const nestedWindows = Array.isArray(nestedPlan?.windows) ? nestedPlan.windows : undefined
-  return (directWindows || nestedWindows || [])
+  const nestedWindows = nonEmptyArrayValue(nestedPlan?.windows)
+  const timeWindows = nonEmptyArrayValue(metadata?.timeWindows)
+  return (directWindows || nestedWindows || timeWindows || [])
     .map(objectValue)
     .filter((item): item is Record<string, unknown> => Boolean(item))
 }
@@ -245,7 +248,30 @@ function isTruthyAigcEligible(value: unknown): boolean {
   const bool = booleanValue(value)
   if (bool !== undefined) return bool
   const text = stringValue(value)?.trim().toLowerCase()
-  return Boolean(text && !['false', '0', 'no', '否'].includes(text))
+  return Boolean(text && !['false', '0', '0.0', 'no', 'off', '否'].includes(text))
+}
+
+function summaryPayloadForArtifact(artifact: DirectorArtifactRecord | undefined): Record<string, unknown> {
+  const metadata = artifact?.metadata || {}
+  const inlineJson = parseJSONObject(stringValue(artifact?.inlineJson))
+  if (inlineJson) return inlineJson
+
+  const inlineContentObject = objectValue(metadata.inlineContent)
+  if (inlineContentObject) return inlineContentObject
+
+  const inlineContentJson = parseJSONObject(stringValue(metadata.inlineContent))
+  if (inlineContentJson) return inlineContentJson
+
+  return metadata
+}
+
+function parseJSONObject(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined
+  return objectValue(tryParseJSON(value))
+}
+
+function nonEmptyArrayValue(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) && value.length > 0 ? value : undefined
 }
 
 interface RoleTraceMatch {
@@ -599,6 +625,7 @@ export function buildDirectorArtifacts(
         storageRef: displayStorageRef(artifact?.storageRef || artifact?.url || (requiresManifest ? '' : storageHintForKind(output))),
         dependsOn: stringArrayValue(artifact?.dependsOn) || stringArrayValue(metadata?.dependsOn) || role.requiredInputs,
         metadata,
+        inlineJson: stringValue(artifact?.inlineJson),
       }
     })
   })
@@ -1074,6 +1101,7 @@ function projectArtifactRecord(artifact: Record<string, unknown>): DirectorArtif
     storageRef: displayStorageRef(artifact.storageRef || artifact.url || ''),
     dependsOn: stringArrayValue(artifact.dependsOn) || stringArrayValue(metadata?.dependsOn),
     metadata,
+    inlineJson: stringValue(artifact.inlineJson),
   }
 }
 
