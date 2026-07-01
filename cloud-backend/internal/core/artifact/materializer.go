@@ -293,6 +293,10 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 		storageType = StorageInline
 		provider = "shot-asset-package"
 	}
+	if isVideoCreationProfileKind(kind) && len(data) > 0 {
+		storageType = StorageInline
+		provider = "video-creation-profile"
+	}
 	return &CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,

@@ -329,6 +329,12 @@ func TestBuildArtifactsFromProfileSelectionMaterializesVideoCreationProfile(t *t
 	if req.Kind != ArtifactKind("VIDEO_CREATION_PROFILE") {
 		t.Fatalf("expected VIDEO_CREATION_PROFILE artifact, got %q", req.Kind)
 	}
+	if req.StorageType != StorageInline {
+		t.Fatalf("video creation profile storage type = %q, want %q", req.StorageType, StorageInline)
+	}
+	if req.Provider != "video-creation-profile" {
+		t.Fatalf("video creation profile provider = %q, want video-creation-profile", req.Provider)
+	}
 	if req.Metadata["requiresReview"] != true {
 		t.Fatalf("video creation profile artifact must be reviewable, got metadata %+v", req.Metadata)
 	}
