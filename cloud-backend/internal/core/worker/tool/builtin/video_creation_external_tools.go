@@ -1239,6 +1239,7 @@ func executeShotGenerationPlanner(stage, skillName string, params map[string]int
 	}
 	aigcAvailable := boolParam(params, "aigcAvailable", aigcDefault)
 	htmlAvailable := boolParam(params, "htmlAvailable", htmlDefault)
+	renderPreference := renderPreferenceFromToolValue(params["renderPreference"])
 
 	visualPlans := normalizeShotItemsForAssetDecision(params["visualPlans"])
 	shotGenerationPlans := make([]map[string]interface{}, 0, len(shotItems))
@@ -1251,7 +1252,7 @@ func executeShotGenerationPlanner(stage, skillName string, params map[string]int
 		plan := videoservice.BuildShotGenerationPlan(
 			shot,
 			visual,
-			videomodel.DefaultRenderPreference(),
+			renderPreference,
 			videoservice.RenderCapabilities{AIGCAvailable: aigcAvailable, HTMLAvailable: htmlAvailable},
 		)
 		shotGenerationPlans = append(shotGenerationPlans, structToMap(plan))
@@ -1425,15 +1426,29 @@ func externalRequestsFromGenerationPlan(plan videomodel.ShotGenerationPlan) []ma
 		if shotID == "" {
 			shotID = plan.ShotID
 		}
-		requests = append(requests, map[string]interface{}{
-			"shotId":  shotID,
-			"assetId": asset.ID,
-			"kind":    asset.Kind,
-			"role":    asset.Role,
-			"mode":    plan.Mode,
-			"reason":  plan.Reason,
-			"status":  videomodel.ReviewStatusPending,
-		})
+		durationSec := intFromInterface(plan.RenderInputs["durationSec"], 0)
+		if durationSec == 0 && plan.FusionPlan.BaseLayer.DurationSec > 0 {
+			durationSec = int(plan.FusionPlan.BaseLayer.DurationSec)
+		}
+		request := map[string]interface{}{
+			"requestId":     fmt.Sprintf("%s-%s-external-request", shotID, asset.ID),
+			"shotId":        shotID,
+			"relatedShotId": shotID,
+			"assetId":       asset.ID,
+			"kind":          asset.Kind,
+			"role":          asset.Role,
+			"mode":          plan.Mode,
+			"reason":        plan.Reason,
+			"status":        videomodel.ReviewStatusPending,
+			"prompt":        strings.TrimSpace(ensureStringValue(plan.RenderInputs["prompt"])),
+			"target": map[string]interface{}{
+				"durationSec": durationSec,
+			},
+		}
+		if negativePrompt := strings.TrimSpace(ensureStringValue(plan.RenderInputs["negativePrompt"])); negativePrompt != "" {
+			request["negativePrompt"] = negativePrompt
+		}
+		requests = append(requests, request)
 	}
 	return requests
 }
@@ -1590,6 +1605,46 @@ func propsFromVisualText(value string) []videomodel.PropVisualSpec {
 		props = append(props, videomodel.PropVisualSpec{ID: "user-provided-asset", Description: "uploaded or customer-provided asset"})
 	}
 	return props
+}
+
+func renderPreferenceFromToolValue(raw interface{}) videomodel.RenderPreference {
+	pref := videomodel.DefaultRenderPreference()
+	values := map[string]interface{}{}
+	switch typed := raw.(type) {
+	case map[string]interface{}:
+		values = typed
+	case string:
+		if trimmed := strings.TrimSpace(typed); trimmed != "" {
+			_ = json.Unmarshal([]byte(trimmed), &values)
+		}
+	default:
+		if decoded, ok := mapValue(raw); ok {
+			values = decoded
+		}
+	}
+	if len(values) == 0 {
+		return pref
+	}
+	for _, field := range []struct {
+		key   string
+		apply func(bool)
+	}{
+		{key: "allowHybridRender", apply: func(value bool) { pref.AllowHybridRender = value }},
+		{key: "preferHTMLForText", apply: func(value bool) { pref.PreferHTMLForText = value }},
+		{key: "preferAIGCForPeople", apply: func(value bool) { pref.PreferAIGCForPeople = value }},
+		{key: "preferAIGCForScene", apply: func(value bool) { pref.PreferAIGCForScene = value }},
+		{key: "preferHTMLForCharts", apply: func(value bool) { pref.PreferHTMLForCharts = value }},
+		{key: "preferHTMLForUI", apply: func(value bool) { pref.PreferHTMLForUI = value }},
+		{key: "preferLowCostPreview", apply: func(value bool) { pref.PreferLowCostPreview = value }},
+	} {
+		if value, ok := boolFromToolMap(values, field.key); ok {
+			field.apply(value)
+		}
+	}
+	if strategy := strings.TrimSpace(ensureStringValue(values["defaultRenderStrategy"])); strategy != "" && strategy != "null" {
+		pref.DefaultRenderStrategy = strategy
+	}
+	return pref
 }
 
 func boolFromToolMap(values map[string]interface{}, keys ...string) (bool, bool) {

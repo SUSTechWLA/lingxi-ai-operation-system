@@ -268,10 +268,18 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoForgeDependencies(t *tes
 		"proposal_generator",
 		"visual_feasibility_analyzer",
 		"render_strategy_planner",
+		"shot_generation_planner",
 	} {
 		if registry.GetExternalManifest(name) == nil {
 			t.Fatalf("expected VideoForge tool %q to be registered", name)
 		}
+	}
+	manifest := registry.GetExternalManifest("shot_generation_planner")
+	if manifest.Parameters["shotList"].Type != "array" || !manifest.Parameters["shotList"].Required {
+		t.Fatalf("shot_generation_planner should require shotList array, got %#v", manifest.Parameters["shotList"])
+	}
+	if manifest.Output["shotGenerationPlans"].Type != "array" {
+		t.Fatalf("shot_generation_planner should output shotGenerationPlans array, got %#v", manifest.Output["shotGenerationPlans"])
 	}
 }
 
@@ -999,6 +1007,77 @@ func TestShotGenerationPlannerMissingProviderCreatesExternalRequest(t *testing.T
 	}
 	if requests[0]["kind"] != "video" || requests[0]["shotId"] != "SHOT_01" {
 		t.Fatalf("unexpected external generation request: %#v", requests[0])
+	}
+	if strings.TrimSpace(ensureStringValue(requests[0]["requestId"])) == "" {
+		t.Fatalf("external generation request should include requestId: %#v", requests[0])
+	}
+	if strings.TrimSpace(ensureStringValue(requests[0]["prompt"])) == "" {
+		t.Fatalf("external generation request should include prompt: %#v", requests[0])
+	}
+	target, ok := requests[0]["target"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("external generation request should include target: %#v", requests[0])
+	}
+	if intFromInterface(target["durationSec"], 0) != 6 {
+		t.Fatalf("external generation request target should preserve durationSec=6, got %#v", target)
+	}
+}
+
+func TestShotGenerationPlannerRenderPreferenceDisablesHybrid(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(6),
+				"visual":      "办公室人物指向屏幕，同时画面必须显示“增长42%”",
+				"screenText":  []interface{}{"增长42%"},
+			},
+		},
+		"renderPreference": map[string]interface{}{
+			"allowHybridRender": false,
+		},
+		"aigcAvailable": true,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 1 {
+		t.Fatalf("expected one shotGenerationPlan, got %#v", result.Data["shotGenerationPlans"])
+	}
+	if plans[0]["mode"] != "placeholder_preview" {
+		t.Fatalf("allowHybridRender=false should force placeholder_preview, got %#v", plans[0])
+	}
+}
+
+func TestShotGenerationPlannerParsesRenderPreferenceJSONString(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(6),
+				"visual":      "办公室人物指向屏幕，同时画面必须显示“增长42%”",
+				"screenText":  []interface{}{"增长42%"},
+			},
+		},
+		"renderPreference": `{"allowHybridRender":false}`,
+		"aigcAvailable":    true,
+		"htmlAvailable":    true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 1 {
+		t.Fatalf("expected one shotGenerationPlan, got %#v", result.Data["shotGenerationPlans"])
+	}
+	if plans[0]["mode"] != "placeholder_preview" {
+		t.Fatalf("JSON renderPreference should disable hybrid, got %#v", plans[0])
 	}
 }
 
