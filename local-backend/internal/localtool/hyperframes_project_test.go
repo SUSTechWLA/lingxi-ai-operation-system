@@ -141,6 +141,68 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 	}
 }
 
+func TestHyperFramesProjectExecutorRejectsMalformedShotAssetPackageMediaRef(t *testing.T) {
+	cases := map[string]string{
+		"extra segment": "local://projects/project_001/artifacts/shot-video-01/hash/clip.mp4/extra",
+		"empty hash":    "local://projects/project_001/artifacts/shot-video-01//clip.mp4",
+		"missing name":  "local://projects/project_001/artifacts/shot-video-01/hash",
+	}
+
+	for name, storageRef := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			artifactDir := filepath.Join(root, "artifacts", "project_001", "shot-video-01")
+			if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+				t.Fatalf("mkdir artifact: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("fake video bytes"), 0o644); err != nil {
+				t.Fatalf("write artifact content: %v", err)
+			}
+
+			executor := NewHyperFramesProjectExecutor(root)
+			_, err := executor.Execute(context.Background(), Job{
+				ID:        "job-1",
+				ProjectID: "project_001",
+				Command:   CommandHyperFramesProjectGenerate,
+				Payload: map[string]interface{}{
+					"topic":  "端午节的来历",
+					"script": "端午节源于纪念屈原。",
+					"shotAssetPackages": []interface{}{
+						map[string]interface{}{
+							"shotId":      "SHOT_01",
+							"durationSec": float64(4),
+							"generationPlan": map[string]interface{}{
+								"mode": "hybrid_aigc_bg_html_overlay",
+								"fusionPlan": map[string]interface{}{
+									"baseLayer": map[string]interface{}{
+										"kind":       "video",
+										"storageRef": storageRef,
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+
+			raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+			if err != nil {
+				t.Fatalf("read index.html: %v", err)
+			}
+			html := string(raw)
+			if !strings.Contains(html, `Missing media for SHOT_01`) {
+				t.Fatalf("index.html missing media placeholder:\n%s", html)
+			}
+			if strings.Contains(html, `/api/local/artifacts/shot-video-01`) {
+				t.Fatalf("malformed storage ref should not resolve to artifact URL:\n%s", html)
+			}
+		})
+	}
+}
+
 func TestHyperFramesProjectExecutorShowsMissingMediaPlaceholder(t *testing.T) {
 	root := t.TempDir()
 	executor := NewHyperFramesProjectExecutor(root)

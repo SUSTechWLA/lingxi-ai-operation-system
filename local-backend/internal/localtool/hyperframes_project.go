@@ -529,11 +529,13 @@ func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool
 		return "", true
 	}
 	parts := strings.Split(strings.TrimPrefix(storageRef, prefix), "/")
-	if len(parts) < 5 || parts[1] != "artifacts" {
+	if len(parts) != 5 || parts[1] != "artifacts" {
 		return "", true
 	}
 	refProjectID := parts[0]
 	artifactID := parts[2]
+	hash := parts[3]
+	name := parts[4]
 	if refProjectID != projectID {
 		return "", true
 	}
@@ -541,6 +543,12 @@ func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool
 		return "", true
 	}
 	if err := validateLocalSegment(artifactID); err != nil {
+		return "", true
+	}
+	if err := validateLocalSegment(hash); err != nil {
+		return "", true
+	}
+	if err := validateLocalSegment(name); err != nil {
 		return "", true
 	}
 
