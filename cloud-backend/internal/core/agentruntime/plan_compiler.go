@@ -423,6 +423,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		Arguments: map[string]interface{}{
 			"stage":           "cinematic_script",
 			"brief":           plan.Goal,
+			"topic":           plan.Goal,
 			"proposal":        stepOutputRef(storyAnchor, "proposal"),
 			"creationProfile": profileRef,
 		},
@@ -431,11 +432,13 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	})
 	scriptStep := planStepByID(plan, scriptAnchor)
 	mergeStepArgsAndDeps(scriptStep, map[string]interface{}{
+		"topic":           plan.Goal,
 		"proposal":        stepOutputRef(storyAnchor, "proposal"),
 		"creationProfile": profileRef,
 	}, storyAnchor, profileAnchor)
 	scriptRef := stepOutputRef(scriptAnchor, "script")
 
+	continuityField := preferredOutputField(c.manifestFor("continuity_checker"), "continuityBible", "continuityReport", "styleProfile", "report")
 	continuityAnchor := c.ensureProfileStepAfter(plan, "continuity_bible", "continuity_checker", scriptAnchor, AgentStep{
 		ID:        "continuity_bible",
 		Intent:    "整理角色、场景、道具、风格和连续性圣经",
@@ -446,7 +449,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 			"script":          scriptRef,
 			"creationProfile": profileRef,
 		},
-		ExpectedOutput:  []string{"continuityBible"},
+		ExpectedOutput:  []string{continuityField},
 		ProduceArtifact: true,
 	})
 	continuityStep := planStepByID(plan, continuityAnchor)
@@ -454,7 +457,10 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		"script":          scriptRef,
 		"creationProfile": profileRef,
 	}, scriptAnchor, profileAnchor)
-	continuityRef := stepOutputRef(continuityAnchor, "continuityBible")
+	if continuityField != "" && !containsString(continuityStep.ExpectedOutput, continuityField) {
+		continuityStep.ExpectedOutput = append(continuityStep.ExpectedOutput, continuityField)
+	}
+	continuityRef := stepOutputRef(continuityAnchor, continuityField)
 
 	referenceAnchor := c.ensureProfileStepAfter(plan, "reference_assets", "reference_asset_planner", continuityAnchor, AgentStep{
 		ID:        "reference_assets",
@@ -530,6 +536,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		DependsOn: dependencyListUnique(referenceAnchor, timeWindowAnchor),
 		Arguments: map[string]interface{}{
 			"stage":              "keyframes_storyboards",
+			"shotList":           timeWindowRef,
 			"timeWindows":        timeWindowRef,
 			"referenceAssetPlan": referenceRef,
 		},
@@ -538,6 +545,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	})
 	keyframeStep := planStepByID(plan, keyframesAnchor)
 	mergeStepArgsAndDeps(keyframeStep, map[string]interface{}{
+		"shotList":           timeWindowRef,
 		"timeWindows":        timeWindowRef,
 		"referenceAssetPlan": referenceRef,
 	}, referenceAnchor, timeWindowAnchor)

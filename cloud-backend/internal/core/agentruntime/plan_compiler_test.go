@@ -426,6 +426,18 @@ func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
 		t.Fatalf("time_window creationProfile = %#v, want profile selection output", got)
 	}
+	script := findStep(t, prepared, "cinematic_script")
+	if got := script.Arguments["topic"]; got != plan.Goal {
+		t.Fatalf("cinematic_script topic = %#v, want plan goal", got)
+	}
+	continuity := findStep(t, prepared, "continuity_bible")
+	if !containsString(continuity.ExpectedOutput, "continuityReport") {
+		t.Fatalf("continuity_bible should declare real continuityReport output, got %#v", continuity.ExpectedOutput)
+	}
+	referenceAssets := findStep(t, prepared, "reference_assets")
+	if got := referenceAssets.Arguments["continuityBible"]; got != "{{continuity_bible.output.continuityReport}}" {
+		t.Fatalf("reference_assets continuity context = %#v, want continuityReport ref", got)
+	}
 	generation := findStep(t, prepared, "shot_generation")
 	if got := generation.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
 		t.Fatalf("shot_generation timeWindows = %#v, want time window output", got)
@@ -436,8 +448,14 @@ func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	if got := generation.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
 		t.Fatalf("shot_generation creationProfile = %#v, want profile selection output", got)
 	}
+	if got := generation.Arguments["continuityBible"]; got != "{{continuity_bible.output.continuityReport}}" {
+		t.Fatalf("shot_generation continuity context = %#v, want continuityReport ref", got)
+	}
 	keyframes := findStep(t, prepared, "keyframes_storyboards")
 	requireStepDeps(t, keyframes, []string{"reference_assets", "time_window"})
+	if got := keyframes.Arguments["shotList"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("keyframes_storyboards shotList = %#v, want time window shot list", got)
+	}
 	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
 		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
 	}
@@ -1165,6 +1183,9 @@ func assertStepOrder(t *testing.T, plan *AgentPlan, want []string) {
 
 func videoProfileTemplateCatalog() staticToolCatalog {
 	catalog := videoBetaCompletionCatalog()
+	catalog["video_script_generator"].Parameters = map[string]tool.ParamDef{
+		"topic": {Type: "string", Required: true},
+	}
 	catalog["video_profile_classifier"] = &tool.ToolManifest{
 		Name: "video_profile_classifier",
 		Parameters: map[string]tool.ParamDef{
@@ -1228,7 +1249,8 @@ func videoProfileTemplateCatalog() staticToolCatalog {
 			"script": {Type: "string", Required: true},
 		},
 		Output: map[string]tool.ParamDef{
-			"continuityBible": {Type: "object"},
+			"continuityReport": {Type: "object"},
+			"styleProfile":     {Type: "object"},
 		},
 	}
 	catalog["reference_asset_planner"] = &tool.ToolManifest{
@@ -1258,6 +1280,7 @@ func videoProfileTemplateCatalog() staticToolCatalog {
 	catalog["keyframe_prompt_generator"] = &tool.ToolManifest{
 		Name: "keyframe_prompt_generator",
 		Parameters: map[string]tool.ParamDef{
+			"shotList":           {Type: "array", Required: true},
 			"timeWindows":        {Type: "array", Required: true},
 			"referenceAssetPlan": {Type: "object", Required: true},
 			"continuityBible":    {Type: "object", Required: false},
