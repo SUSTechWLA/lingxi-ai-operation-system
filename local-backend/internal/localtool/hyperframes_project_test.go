@@ -145,7 +145,9 @@ func TestHyperFramesProjectExecutorRejectsMalformedShotAssetPackageMediaRef(t *t
 	cases := map[string]string{
 		"extra segment": "local://projects/project_001/artifacts/shot-video-01/hash/clip.mp4/extra",
 		"empty hash":    "local://projects/project_001/artifacts/shot-video-01//clip.mp4",
+		"fragment":      "local://projects/project_001/artifacts/shot-video-01/hash/clip.mp4#frag",
 		"missing name":  "local://projects/project_001/artifacts/shot-video-01/hash",
+		"query":         "local://projects/project_001/artifacts/shot-video-01/hash/clip.mp4?x=1",
 	}
 
 	for name, storageRef := range cases {

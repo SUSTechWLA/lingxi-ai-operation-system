@@ -528,7 +528,11 @@ func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool
 	if !strings.HasPrefix(storageRef, prefix) {
 		return "", true
 	}
-	parts := strings.Split(strings.TrimPrefix(storageRef, prefix), "/")
+	localPath := strings.TrimPrefix(storageRef, prefix)
+	if strings.ContainsAny(localPath, "?#") {
+		return "", true
+	}
+	parts := strings.Split(localPath, "/")
 	if len(parts) != 5 || parts[1] != "artifacts" {
 		return "", true
 	}
