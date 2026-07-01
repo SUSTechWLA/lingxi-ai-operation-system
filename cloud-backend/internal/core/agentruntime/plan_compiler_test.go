@@ -341,6 +341,167 @@ func TestPlanCompiler_PreparePlanInsertsShotGenerationPlanner(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanAugmentsExistingShotGenerationConsumers(t *testing.T) {
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name: "video_script_generator",
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"shot_splitter": {
+			Name: "shot_splitter",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		"shot_generation_planner": {
+			Name: "shot_generation_planner",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotGenerationPlans": {Type: "array"},
+				"shotAssetPackages":   {Type: "array"},
+			},
+		},
+		"video_prompt_generator": {
+			Name: "video_prompt_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList":            {Type: "array", Required: true},
+				"shotGenerationPlans": {Type: "array", Required: false},
+				"shotAssetPackages":   {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts":      {Type: "array"},
+				"shotAssetPackages": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name: "hyperframes_project_generator",
+			Parameters: map[string]tool.ParamDef{
+				"topic":               {Type: "string", Required: true},
+				"script":              {Type: "string", Required: true},
+				"shotList":            {Type: "array", Required: true},
+				"videoPrompts":        {Type: "array", Required: false},
+				"shotGenerationPlans": {Type: "array", Required: false},
+				"shotAssetPackages":   {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"projectDir": {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name: "hyperframes_renderer",
+			Parameters: map[string]tool.ParamDef{
+				"projectDir": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"outputPath": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name: "publish_copy_generator",
+			Output: map[string]tool.ParamDef{
+				"title": {Type: "string"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请做一条端午节来历的口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "beat_plan",
+				Tool:      "shot_splitter",
+				DependsOn: []string{"script_generation"},
+				Arguments: map[string]interface{}{
+					"script": "{{script_generation.output.script}}",
+				},
+				ExpectedOutput:  []string{"shotList"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "video_prompt",
+				Tool:      "video_prompt_generator",
+				DependsOn: []string{"beat_plan"},
+				Arguments: map[string]interface{}{
+					"shotList": "{{beat_plan.output.shotList}}",
+				},
+				ExpectedOutput:  []string{"videoPrompts", "shotAssetPackages"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "preview",
+				Tool:      "hyperframes_project_generator",
+				DependsOn: []string{"beat_plan", "video_prompt", "script_generation"},
+				Arguments: map[string]interface{}{
+					"topic":             "端午节来历",
+					"script":            "{{script_generation.output.script}}",
+					"shotList":          "{{beat_plan.output.shotList}}",
+					"videoPrompts":      "{{video_prompt.output.videoPrompts}}",
+					"shotAssetPackages": []string{"custom-preview-packages"},
+				},
+				ExpectedOutput:  []string{"projectDir"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "render",
+				Tool:      "hyperframes_renderer",
+				DependsOn: []string{"preview"},
+				Arguments: map[string]interface{}{
+					"projectDir": "{{preview.output.projectDir}}",
+				},
+				ExpectedOutput:  []string{"outputPath"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	beatIndex := stepIndex(t, prepared, "beat_plan")
+	if got := prepared.Steps[beatIndex+1].ID; got != "shot_generation" {
+		t.Fatalf("shot_generation should be inserted immediately after beat_plan, got next step %s in %#v", got, prepared.Steps)
+	}
+	prompt := findStep(t, prepared, "video_prompt")
+	if got := prompt.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("existing video_prompt should reference shot generation plans, got %#v", prompt.Arguments)
+	}
+	if got := prompt.Arguments["shotAssetPackages"]; got != "{{shot_generation.output.shotAssetPackages}}" {
+		t.Fatalf("existing video_prompt should reference generation asset packages, got %#v", prompt.Arguments)
+	}
+	if !containsString(prompt.DependsOn, "shot_generation") {
+		t.Fatalf("existing video_prompt should depend on shot_generation, got %#v", prompt.DependsOn)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("existing preview should reference shot generation plans, got %#v", preview.Arguments)
+	}
+	packages, ok := preview.Arguments["shotAssetPackages"].([]string)
+	if !ok || len(packages) != 1 || packages[0] != "custom-preview-packages" {
+		t.Fatalf("existing preview shotAssetPackages should be preserved, got %#v", preview.Arguments)
+	}
+	if !containsString(preview.DependsOn, "shot_generation") {
+		t.Fatalf("existing preview should depend on shot_generation, got %#v", preview.DependsOn)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanExpandsCostBudgetForInjectedRender(t *testing.T) {
 	catalog := staticToolCatalog{
 		"video_script_generator": {
@@ -863,6 +1024,17 @@ func findStep(t *testing.T, plan *AgentPlan, id string) AgentStep {
 	}
 	t.Fatalf("step %s not found in %#v", id, plan.Steps)
 	return AgentStep{}
+}
+
+func stepIndex(t *testing.T, plan *AgentPlan, id string) int {
+	t.Helper()
+	for i, step := range plan.Steps {
+		if step.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("step %s not found in %#v", id, plan.Steps)
+	return -1
 }
 
 func requireStepDeps(t *testing.T, step AgentStep, want []string) {

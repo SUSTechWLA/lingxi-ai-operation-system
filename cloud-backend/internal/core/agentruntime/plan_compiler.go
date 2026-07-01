@@ -198,7 +198,7 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 
 	generationAnchor, generationField := c.lastProducerStepForFields(plan, []string{"shotGenerationPlans"}, []string{"shot_generation_planner"})
 	if generationAnchor == "" && c.hasOptionalTool("shot_generation_planner") {
-		generationAnchor = appendPlanStep(plan, AgentStep{
+		generationAnchor = insertPlanStepAfter(plan, shotAnchor, AgentStep{
 			ID:        uniqueStepID(plan, "shot_generation"),
 			Intent:    "为每个分镜决定 AIGC、HyperFrames、混合生成、用户素材或占位素材策略",
 			Tool:      "shot_generation_planner",
@@ -242,6 +242,7 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 		})
 		promptField = preferredOutputField(c.manifestFor("video_prompt_generator"), "videoPrompts", "video_prompt")
 	}
+	c.augmentVideoPromptGenerationInputs(plan, promptAnchor, generationAnchor, generationField, generationPackageField)
 
 	projectAnchor, projectField := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
 	if projectAnchor == "" {
@@ -277,6 +278,7 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 		})
 		projectField = preferredOutputField(c.manifestFor("hyperframes_project_generator"), "projectDir", "hyperframesPath")
 	}
+	c.augmentPreviewGenerationInputs(plan, projectAnchor, promptAnchor, generationAnchor, generationField, generationPackageField)
 
 	renderAnchor, _ := c.lastProducerStepForFields(plan, []string{"outputPath", "finalVideo", "video"}, []string{"hyperframes_renderer"})
 	if renderAnchor == "" {
@@ -324,6 +326,85 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 func appendPlanStep(plan *AgentPlan, step AgentStep) string {
 	plan.Steps = append(plan.Steps, step)
 	return step.ID
+}
+
+func insertPlanStepAfter(plan *AgentPlan, afterID string, step AgentStep) string {
+	if plan == nil {
+		return step.ID
+	}
+	for i := range plan.Steps {
+		if plan.Steps[i].ID != afterID {
+			continue
+		}
+		plan.Steps = append(plan.Steps, AgentStep{})
+		copy(plan.Steps[i+2:], plan.Steps[i+1:])
+		plan.Steps[i+1] = step
+		return step.ID
+	}
+	return appendPlanStep(plan, step)
+}
+
+func (c *PlanCompiler) augmentVideoPromptGenerationInputs(plan *AgentPlan, promptAnchor, generationAnchor, generationField, generationPackageField string) {
+	if generationAnchor == "" {
+		return
+	}
+	step := planStepByID(plan, promptAnchor)
+	if step == nil {
+		return
+	}
+	if step.Arguments == nil {
+		step.Arguments = map[string]interface{}{}
+	}
+	if generationField != "" {
+		if _, exists := step.Arguments["shotGenerationPlans"]; !exists {
+			step.Arguments["shotGenerationPlans"] = stepOutputRef(generationAnchor, generationField)
+		}
+	}
+	if generationPackageField != "" && manifestAcceptsParam(c.manifestFor(step.Tool), "shotAssetPackages") {
+		if _, exists := step.Arguments["shotAssetPackages"]; !exists {
+			step.Arguments["shotAssetPackages"] = stepOutputRef(generationAnchor, generationPackageField)
+		}
+	}
+	appendDependencyIfMissing(step, generationAnchor)
+}
+
+func (c *PlanCompiler) augmentPreviewGenerationInputs(plan *AgentPlan, projectAnchor, promptAnchor, generationAnchor, generationField, generationPackageField string) {
+	if generationAnchor == "" {
+		return
+	}
+	step := planStepByID(plan, projectAnchor)
+	if step == nil {
+		return
+	}
+	if step.Arguments == nil {
+		step.Arguments = map[string]interface{}{}
+	}
+	if generationField != "" {
+		if _, exists := step.Arguments["shotGenerationPlans"]; !exists {
+			step.Arguments["shotGenerationPlans"] = stepOutputRef(generationAnchor, generationField)
+		}
+	}
+	if _, exists := step.Arguments["shotAssetPackages"]; !exists {
+		if packageField := c.outputFieldForStep(plan, promptAnchor, "shotAssetPackages"); packageField != "" {
+			step.Arguments["shotAssetPackages"] = stepOutputRef(promptAnchor, packageField)
+			appendDependencyIfMissing(step, promptAnchor)
+		} else if generationPackageField != "" && manifestAcceptsParam(c.manifestFor(step.Tool), "shotAssetPackages") {
+			step.Arguments["shotAssetPackages"] = stepOutputRef(generationAnchor, generationPackageField)
+		}
+	}
+	appendDependencyIfMissing(step, generationAnchor)
+}
+
+func planStepByID(plan *AgentPlan, id string) *AgentStep {
+	if plan == nil || id == "" {
+		return nil
+	}
+	for i := range plan.Steps {
+		if plan.Steps[i].ID == id {
+			return &plan.Steps[i]
+		}
+	}
+	return nil
 }
 
 func dependencyList(stepID string) []string {
