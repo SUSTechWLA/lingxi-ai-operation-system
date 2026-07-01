@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -203,5 +204,71 @@ func TestBuildArtifactRecordKeepsExternalGenerationRequestReviewable(t *testing.
 	}
 	if localOnly, ok := record.Metadata["localOnly"].(bool); !ok || localOnly {
 		t.Fatalf("request metadata should mark localOnly=false: %+v", record.Metadata)
+	}
+}
+
+func TestBuildArtifactRecordKeepsVideoCreationProfileReviewable(t *testing.T) {
+	req := &CreateArtifactRequest{
+		ProjectID:   "proj-1",
+		StageName:   "profile_selection",
+		UnitID:      "video-creation-profile",
+		Kind:        ArtifactKind("VIDEO_CREATION_PROFILE"),
+		Name:        "video_creation_profile.json",
+		StorageType: StorageInline,
+		Data:        []byte(`{"profileId":"talking_head"}`),
+		MimeType:    "application/json",
+		Provider:    "video-creation-profile",
+	}
+
+	record := buildArtifactRecord(req, 1, "")
+
+	if record.StorageType != StorageInline {
+		t.Fatalf("video creation profile storage type = %q, want %q", record.StorageType, StorageInline)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(record.InlineJSON), &decoded); err != nil {
+		t.Fatalf("video creation profile inline JSON should decode: %v; inline=%q", err, record.InlineJSON)
+	}
+	if decoded["profileId"] != "talking_head" {
+		t.Fatalf("video creation profile inline profileId = %v, want talking_head", decoded["profileId"])
+	}
+	if stored, ok := record.Metadata["cloudPayloadStored"].(bool); !ok || !stored {
+		t.Fatalf("video creation profile metadata should mark cloudPayloadStored=true: %+v", record.Metadata)
+	}
+	if localOnly, ok := record.Metadata["localOnly"].(bool); !ok || localOnly {
+		t.Fatalf("video creation profile metadata should mark localOnly=false: %+v", record.Metadata)
+	}
+}
+
+func TestBuildArtifactRecordKeepsTimeWindowPlanReviewable(t *testing.T) {
+	req := &CreateArtifactRequest{
+		ProjectID:   "proj-1",
+		StageName:   "time_window",
+		UnitID:      "time_window",
+		Kind:        ArtifactKind("TIME_WINDOW_PLAN"),
+		Name:        "time_window_plan.json",
+		StorageType: StorageInline,
+		Data:        []byte(`{"profileId":"cinematic_story","windows":[{"id":"SHOT_01_TW_01","durationSec":10}]}`),
+		MimeType:    "application/json",
+		Provider:    "time-window-plan",
+	}
+
+	record := buildArtifactRecord(req, 1, "")
+
+	if record.StorageType != StorageInline {
+		t.Fatalf("time window plan storage type = %q, want %q", record.StorageType, StorageInline)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(record.InlineJSON), &decoded); err != nil {
+		t.Fatalf("time window plan inline JSON should decode: %v; inline=%q", err, record.InlineJSON)
+	}
+	if _, ok := decoded["windows"].([]interface{}); !ok {
+		t.Fatalf("time window plan inline data should include windows, got %+v", decoded)
+	}
+	if stored, ok := record.Metadata["cloudPayloadStored"].(bool); !ok || !stored {
+		t.Fatalf("time window plan metadata should mark cloudPayloadStored=true: %+v", record.Metadata)
+	}
+	if localOnly, ok := record.Metadata["localOnly"].(bool); !ok || localOnly {
+		t.Fatalf("time window plan metadata should mark localOnly=false: %+v", record.Metadata)
 	}
 }

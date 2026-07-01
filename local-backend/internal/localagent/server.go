@@ -413,7 +413,7 @@ func (s *Server) handleArtifactUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArtifactByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodDelete {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -428,6 +428,14 @@ func (s *Server) handleArtifactByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contentPath, metadataPath := s.localArtifactPaths(projectID, id)
+	if isRawLocalArtifactRequest(r) {
+		s.serveLocalArtifactContent(w, r, projectID, id, contentPath, metadataPath)
+		return
+	}
+	if r.Method == http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	content, err := os.ReadFile(contentPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -473,6 +481,46 @@ func (s *Server) handleArtifactByID(w http.ResponseWriter, r *http.Request) {
 		resp.SizeBytes = int64(value)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func isRawLocalArtifactRequest(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("raw"))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) serveLocalArtifactContent(w http.ResponseWriter, r *http.Request, projectID, artifactID, contentPath, metadataPath string) {
+	file, err := os.Open(contentPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusNotFound, "artifact not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	metadata := map[string]interface{}{}
+	if data, err := os.ReadFile(metadataPath); err == nil {
+		_ = json.Unmarshal(data, &metadata)
+	}
+	mimeType, _ := metadata["mimeType"].(string)
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("X-Tangying-Artifact-ID", artifactID)
+	w.Header().Set("X-Tangying-Project-ID", projectID)
+	http.ServeContent(w, r, artifactID, info.ModTime(), file)
 }
 
 func (s *Server) deleteLocalArtifact(w http.ResponseWriter, projectID, artifactID string) {
@@ -868,8 +916,9 @@ func withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range")
+		w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range, Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

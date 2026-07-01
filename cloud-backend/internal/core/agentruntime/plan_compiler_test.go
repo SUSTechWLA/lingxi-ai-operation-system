@@ -227,6 +227,546 @@ func TestPlanCompiler_PreparePlanCompletesPartialVideoBetaPlan(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanInsertsShotGenerationPlanner(t *testing.T) {
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name: "video_script_generator",
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"shot_splitter": {
+			Name: "shot_splitter",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList":          {Type: "array"},
+				"shotAssetPackages": {Type: "array"},
+			},
+		},
+		"shot_generation_planner": {
+			Name: "shot_generation_planner",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotGenerationPlans": {Type: "array"},
+				"shotAssetPackages":   {Type: "array"},
+			},
+		},
+		"video_prompt_generator": {
+			Name: "video_prompt_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList":            {Type: "array", Required: true},
+				"shotGenerationPlans": {Type: "array", Required: false},
+				"shotAssetPackages":   {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts":      {Type: "array"},
+				"shotAssetPackages": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name: "hyperframes_project_generator",
+			Parameters: map[string]tool.ParamDef{
+				"topic":             {Type: "string", Required: true},
+				"script":            {Type: "string", Required: true},
+				"shotList":          {Type: "array", Required: true},
+				"videoPrompts":      {Type: "array", Required: false},
+				"shotAssetPackages": {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"projectDir": {Type: "string"},
+				"entry":      {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name: "hyperframes_renderer",
+			Parameters: map[string]tool.ParamDef{
+				"projectDir": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"outputPath": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name: "publish_copy_generator",
+			Output: map[string]tool.ParamDef{
+				"title": {Type: "string"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请做一条端午节来历的口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	generation := findStep(t, prepared, "shot_generation")
+	if generation.Tool != "shot_generation_planner" {
+		t.Fatalf("shot_generation tool = %s, want shot_generation_planner", generation.Tool)
+	}
+	if got := generation.Arguments["shotList"]; got != "{{beat_plan.output.shotList}}" {
+		t.Fatalf("shot_generation should reference beat_plan shot list, got %#v", generation.Arguments)
+	}
+	prompt := findStep(t, prepared, "video_prompt")
+	if got := prompt.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("video_prompt should reference shot generation plans, got %#v", prompt.Arguments)
+	}
+	if got := prompt.Arguments["shotAssetPackages"]; got != "{{shot_generation.output.shotAssetPackages}}" {
+		t.Fatalf("video_prompt should reference generation asset packages, got %#v", prompt.Arguments)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("preview should reference shot generation plans, got %#v", preview.Arguments)
+	}
+	if got := preview.Arguments["shotAssetPackages"]; got != "{{video_prompt.output.shotAssetPackages}}" {
+		t.Fatalf("preview should prefer prompt asset packages, got %#v", preview.Arguments)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请帮我根据端午节的来历创作一个口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	assertStepOrder(t, prepared, []string{
+		"profile_selection",
+		"script_generation",
+		"time_window",
+		"visual_alignment",
+		"shot_generation",
+		"video_prompt",
+		"preview",
+		"render",
+	})
+	timeWindow := findStep(t, prepared, "time_window")
+	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("time_window creationProfile = %#v, want profile selection output", got)
+	}
+	if got := timeWindow.Arguments["scriptSpans"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("time_window scriptSpans = %#v, want script output", got)
+	}
+	alignment := findStep(t, prepared, "visual_alignment")
+	if got := alignment.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("visual_alignment timeWindows = %#v, want time window output", got)
+	}
+	generation := findStep(t, prepared, "shot_generation")
+	if got := generation.Arguments["shotList"]; got != "{{visual_alignment.output.shotList}}" {
+		t.Fatalf("shot_generation shotList = %#v, want visual alignment shot list", got)
+	}
+	if got := generation.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("shot_generation timeWindows = %#v, want time window output", got)
+	}
+	if got := generation.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("shot_generation creationProfile = %#v, want profile selection output", got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "创作一支有角色、场景和道具连续性的 cinematic story 影视短片",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	assertStepOrder(t, prepared, []string{
+		"profile_selection",
+		"story_foundation",
+		"cinematic_script",
+		"continuity_bible",
+		"reference_assets",
+		"cinematic_shot_design",
+		"time_window",
+		"keyframes_storyboards",
+		"shot_generation",
+	})
+	timeWindow := findStep(t, prepared, "time_window")
+	if got := timeWindow.Arguments["shotList"]; got != "{{cinematic_shot_design.output.shotList}}" {
+		t.Fatalf("time_window shotList = %#v, want cinematic shot design shot list", got)
+	}
+	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("time_window creationProfile = %#v, want profile selection output", got)
+	}
+	script := findStep(t, prepared, "cinematic_script")
+	if got := script.Arguments["topic"]; got != plan.Goal {
+		t.Fatalf("cinematic_script topic = %#v, want plan goal", got)
+	}
+	if got := script.Arguments["proposal"]; got != "{{story_foundation.output.proposalPacket}}" {
+		t.Fatalf("cinematic_script proposal = %#v, want proposalPacket ref", got)
+	}
+	continuity := findStep(t, prepared, "continuity_bible")
+	if !containsString(continuity.ExpectedOutput, "continuityReport") {
+		t.Fatalf("continuity_bible should declare real continuityReport output, got %#v", continuity.ExpectedOutput)
+	}
+	referenceAssets := findStep(t, prepared, "reference_assets")
+	if got := referenceAssets.Arguments["continuityBible"]; got != "{{continuity_bible.output.continuityReport}}" {
+		t.Fatalf("reference_assets continuity context = %#v, want continuityReport ref", got)
+	}
+	generation := findStep(t, prepared, "shot_generation")
+	if got := generation.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("shot_generation timeWindows = %#v, want time window output", got)
+	}
+	if got := generation.Arguments["shotList"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("shot_generation shotList = %#v, want fine time-window shot list", got)
+	}
+	if got := generation.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("shot_generation creationProfile = %#v, want profile selection output", got)
+	}
+	if got := generation.Arguments["continuityBible"]; got != "{{continuity_bible.output.continuityReport}}" {
+		t.Fatalf("shot_generation continuity context = %#v, want continuityReport ref", got)
+	}
+	if got := generation.Arguments["keyframePrompts"]; got != "{{keyframes_storyboards.output.keyframePrompts}}" {
+		t.Fatalf("shot_generation keyframe prompts = %#v, want keyframePrompts ref", got)
+	}
+	if _, ok := generation.Arguments["keyframeStoryboards"]; ok {
+		t.Fatalf("shot_generation must not reference virtual keyframeStoryboards output, got %#v", generation.Arguments)
+	}
+	keyframes := findStep(t, prepared, "keyframes_storyboards")
+	requireStepDeps(t, keyframes, []string{"reference_assets", "time_window"})
+	if got := keyframes.Arguments["shotList"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("keyframes_storyboards shotList = %#v, want time window shot list", got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanProfileRewiresExistingVideoPrompt(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请做一条端午节来历的口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "beat_plan",
+				Tool:      "shot_splitter",
+				DependsOn: []string{"script_generation"},
+				Arguments: map[string]interface{}{
+					"script": "{{script_generation.output.script}}",
+				},
+				ExpectedOutput:  []string{"shotList"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "video_prompt",
+				Tool:      "video_prompt_generator",
+				DependsOn: []string{"beat_plan"},
+				Arguments: map[string]interface{}{
+					"stage":    "video_prompt",
+					"shotList": "{{beat_plan.output.shotList}}",
+				},
+				ExpectedOutput:  []string{"videoPrompts"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	prompt := findStep(t, prepared, "video_prompt")
+	if got := prompt.Arguments["shotList"]; got != "{{visual_alignment.output.shotList}}" {
+		t.Fatalf("existing video_prompt shotList = %#v, want profile visual alignment shot list", got)
+	}
+	if !containsString(prompt.DependsOn, "visual_alignment") {
+		t.Fatalf("existing video_prompt should depend on visual_alignment, got %#v", prompt.DependsOn)
+	}
+	if !containsString(prompt.DependsOn, "shot_generation") {
+		t.Fatalf("existing video_prompt should depend on shot_generation, got %#v", prompt.DependsOn)
+	}
+	if containsString(prompt.DependsOn, "beat_plan") {
+		t.Fatalf("existing video_prompt should not keep beat_plan dependency, got %#v", prompt.DependsOn)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanCinematicProfileDoesNotReuseLegacyKeyframesAsPrompt(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "创作一个有角色和场景连续性的 cinematic story 短片",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:   "legacy_keyframes",
+				Tool: "keyframe_prompt_generator",
+				Arguments: map[string]interface{}{
+					"shotList":           []interface{}{},
+					"timeWindows":        []interface{}{},
+					"referenceAssetPlan": map[string]interface{}{},
+				},
+				ExpectedOutput:  []string{"keyframePrompts"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	keyframes := findStep(t, prepared, "keyframes_storyboards")
+	if keyframes.Tool != "keyframe_prompt_generator" {
+		t.Fatalf("profile keyframes tool = %s, want keyframe_prompt_generator", keyframes.Tool)
+	}
+	videoPrompt := findStep(t, prepared, "video_prompt")
+	if videoPrompt.Tool != "video_prompt_generator" {
+		t.Fatalf("video_prompt tool = %s, want video_prompt_generator", videoPrompt.Tool)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["videoPrompts"]; got != "{{video_prompt.output.videoPrompts}}" {
+		t.Fatalf("preview videoPrompts = %#v, want canonical video_prompt output", got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanCinematicProfileDoesNotReuseUnrelatedProposalStep(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "创作一个有角色和道具连续性的 cinematic story 短片",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "marketing_proposal",
+				Tool:            "proposal_generator",
+				Arguments:       map[string]interface{}{"brief": "另一个营销提案"},
+				ExpectedOutput:  []string{"proposalPacket"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	story := findStep(t, prepared, "story_foundation")
+	if story.Tool != "proposal_generator" {
+		t.Fatalf("story_foundation tool = %s, want proposal_generator", story.Tool)
+	}
+	if got := story.Arguments["brief"]; got != plan.Goal {
+		t.Fatalf("story_foundation brief = %#v, want plan goal", got)
+	}
+	marketing := findStep(t, prepared, "marketing_proposal")
+	if got := marketing.Arguments["brief"]; got != "另一个营销提案" {
+		t.Fatalf("unrelated proposal step was rewritten: %#v", marketing.Arguments)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanAugmentsExistingShotGenerationConsumers(t *testing.T) {
+	catalog := staticToolCatalog{
+		"video_script_generator": {
+			Name: "video_script_generator",
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		"shot_splitter": {
+			Name: "shot_splitter",
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		"shot_generation_planner": {
+			Name: "shot_generation_planner",
+			Parameters: map[string]tool.ParamDef{
+				"shotList": {Type: "array", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotGenerationPlans": {Type: "array"},
+				"shotAssetPackages":   {Type: "array"},
+			},
+		},
+		"video_prompt_generator": {
+			Name: "video_prompt_generator",
+			Parameters: map[string]tool.ParamDef{
+				"shotList":            {Type: "array", Required: true},
+				"shotGenerationPlans": {Type: "array", Required: false},
+				"shotAssetPackages":   {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"videoPrompts":      {Type: "array"},
+				"shotAssetPackages": {Type: "array"},
+			},
+		},
+		"hyperframes_project_generator": {
+			Name: "hyperframes_project_generator",
+			Parameters: map[string]tool.ParamDef{
+				"topic":               {Type: "string", Required: true},
+				"script":              {Type: "string", Required: true},
+				"shotList":            {Type: "array", Required: true},
+				"videoPrompts":        {Type: "array", Required: false},
+				"shotGenerationPlans": {Type: "array", Required: false},
+				"shotAssetPackages":   {Type: "array", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"projectDir": {Type: "string"},
+			},
+		},
+		"hyperframes_renderer": {
+			Name: "hyperframes_renderer",
+			Parameters: map[string]tool.ParamDef{
+				"projectDir": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"outputPath": {Type: "string"},
+			},
+		},
+		"publish_copy_generator": {
+			Name: "publish_copy_generator",
+			Output: map[string]tool.ParamDef{
+				"title": {Type: "string"},
+			},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请做一条端午节来历的口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "beat_plan",
+				Tool:      "shot_splitter",
+				DependsOn: []string{"script_generation"},
+				Arguments: map[string]interface{}{
+					"script": "{{script_generation.output.script}}",
+				},
+				ExpectedOutput:  []string{"shotList"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "video_prompt",
+				Tool:      "video_prompt_generator",
+				DependsOn: []string{"beat_plan"},
+				Arguments: map[string]interface{}{
+					"shotList": "{{beat_plan.output.shotList}}",
+				},
+				ExpectedOutput:  []string{"videoPrompts", "shotAssetPackages"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "preview",
+				Tool:      "hyperframes_project_generator",
+				DependsOn: []string{"beat_plan", "video_prompt", "script_generation"},
+				Arguments: map[string]interface{}{
+					"topic":             "端午节来历",
+					"script":            "{{script_generation.output.script}}",
+					"shotList":          "{{beat_plan.output.shotList}}",
+					"videoPrompts":      "{{video_prompt.output.videoPrompts}}",
+					"shotAssetPackages": []string{"custom-preview-packages"},
+				},
+				ExpectedOutput:  []string{"projectDir"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:        "render",
+				Tool:      "hyperframes_renderer",
+				DependsOn: []string{"preview"},
+				Arguments: map[string]interface{}{
+					"projectDir": "{{preview.output.projectDir}}",
+				},
+				ExpectedOutput:  []string{"outputPath"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	beatIndex := stepIndex(t, prepared, "beat_plan")
+	if got := prepared.Steps[beatIndex+1].ID; got != "shot_generation" {
+		t.Fatalf("shot_generation should be inserted immediately after beat_plan, got next step %s in %#v", got, prepared.Steps)
+	}
+	prompt := findStep(t, prepared, "video_prompt")
+	if got := prompt.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("existing video_prompt should reference shot generation plans, got %#v", prompt.Arguments)
+	}
+	if got := prompt.Arguments["shotAssetPackages"]; got != "{{shot_generation.output.shotAssetPackages}}" {
+		t.Fatalf("existing video_prompt should reference generation asset packages, got %#v", prompt.Arguments)
+	}
+	if !containsString(prompt.DependsOn, "shot_generation") {
+		t.Fatalf("existing video_prompt should depend on shot_generation, got %#v", prompt.DependsOn)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["shotGenerationPlans"]; got != "{{shot_generation.output.shotGenerationPlans}}" {
+		t.Fatalf("existing preview should reference shot generation plans, got %#v", preview.Arguments)
+	}
+	packages, ok := preview.Arguments["shotAssetPackages"].([]string)
+	if !ok || len(packages) != 1 || packages[0] != "custom-preview-packages" {
+		t.Fatalf("existing preview shotAssetPackages should be preserved, got %#v", preview.Arguments)
+	}
+	if !containsString(preview.DependsOn, "shot_generation") {
+		t.Fatalf("existing preview should depend on shot_generation, got %#v", preview.DependsOn)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanExpandsCostBudgetForInjectedRender(t *testing.T) {
 	catalog := staticToolCatalog{
 		"video_script_generator": {
@@ -751,6 +1291,17 @@ func findStep(t *testing.T, plan *AgentPlan, id string) AgentStep {
 	return AgentStep{}
 }
 
+func stepIndex(t *testing.T, plan *AgentPlan, id string) int {
+	t.Helper()
+	for i, step := range plan.Steps {
+		if step.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("step %s not found in %#v", id, plan.Steps)
+	return -1
+}
+
 func requireStepDeps(t *testing.T, step AgentStep, want []string) {
 	t.Helper()
 	if len(step.DependsOn) != len(want) {
@@ -761,6 +1312,131 @@ func requireStepDeps(t *testing.T, step AgentStep, want []string) {
 			t.Fatalf("step %s depends on %#v, want %#v", step.ID, step.DependsOn, want)
 		}
 	}
+}
+
+func assertStepOrder(t *testing.T, plan *AgentPlan, want []string) {
+	t.Helper()
+	last := -1
+	for _, id := range want {
+		index := stepIndex(t, plan, id)
+		if index <= last {
+			t.Fatalf("step %s index %d should be after prior index %d in %#v", id, index, last, plan.Steps)
+		}
+		last = index
+	}
+}
+
+func videoProfileTemplateCatalog() staticToolCatalog {
+	catalog := videoBetaCompletionCatalog()
+	catalog["video_script_generator"].Parameters = map[string]tool.ParamDef{
+		"topic": {Type: "string", Required: true},
+	}
+	catalog["video_profile_classifier"] = &tool.ToolManifest{
+		Name: "video_profile_classifier",
+		Parameters: map[string]tool.ParamDef{
+			"stage": {Type: "string", Required: true},
+			"brief": {Type: "string", Required: true},
+			"route": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"creationProfile": {Type: "string"},
+			"routingReason":   {Type: "string"},
+		},
+	}
+	catalog["time_window_planner"] = &tool.ToolManifest{
+		Name: "time_window_planner",
+		Parameters: map[string]tool.ParamDef{
+			"brief":           {Type: "string", Required: true},
+			"creationProfile": {Type: "string", Required: true},
+			"scriptSpans":     {Type: "string", Required: false},
+			"shotList":        {Type: "array", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"timeWindows": {Type: "array"},
+		},
+	}
+	catalog["visual_alignment_planner"] = &tool.ToolManifest{
+		Name: "visual_alignment_planner",
+		Parameters: map[string]tool.ParamDef{
+			"brief":           {Type: "string", Required: true},
+			"script":          {Type: "string", Required: true},
+			"timeWindows":     {Type: "array", Required: true},
+			"creationProfile": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotList": {Type: "array"},
+		},
+	}
+	catalog["shot_generation_planner"] = &tool.ToolManifest{
+		Name: "shot_generation_planner",
+		Parameters: map[string]tool.ParamDef{
+			"shotList":           {Type: "array", Required: true},
+			"timeWindows":        {Type: "array", Required: false},
+			"creationProfile":    {Type: "string", Required: true},
+			"referenceAssetPlan": {Type: "object", Required: false},
+			"continuityBible":    {Type: "object", Required: false},
+			"keyframePrompts":    {Type: "array", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotGenerationPlans":        {Type: "array"},
+			"shotAssetPackages":          {Type: "array"},
+			"externalGenerationRequests": {Type: "array"},
+		},
+	}
+	catalog["proposal_generator"] = &tool.ToolManifest{
+		Name:       "proposal_generator",
+		Parameters: map[string]tool.ParamDef{"brief": {Type: "string", Required: true}},
+		Output:     map[string]tool.ParamDef{"proposalPacket": {Type: "object"}},
+	}
+	catalog["continuity_checker"] = &tool.ToolManifest{
+		Name: "continuity_checker",
+		Parameters: map[string]tool.ParamDef{
+			"script": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"continuityReport": {Type: "object"},
+			"styleProfile":     {Type: "object"},
+		},
+	}
+	catalog["reference_asset_planner"] = &tool.ToolManifest{
+		Name: "reference_asset_planner",
+		Parameters: map[string]tool.ParamDef{
+			"brief":           {Type: "string", Required: true},
+			"script":          {Type: "string", Required: true},
+			"continuityBible": {Type: "object", Required: true},
+			"creationProfile": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"referenceAssetPlan": {Type: "object"},
+		},
+	}
+	catalog["cinematic_shot_designer"] = &tool.ToolManifest{
+		Name: "cinematic_shot_designer",
+		Parameters: map[string]tool.ParamDef{
+			"script":             {Type: "string", Required: true},
+			"continuityBible":    {Type: "object", Required: true},
+			"referenceAssetPlan": {Type: "object", Required: true},
+			"creationProfile":    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotList": {Type: "array"},
+		},
+	}
+	catalog["keyframe_prompt_generator"] = &tool.ToolManifest{
+		Name: "keyframe_prompt_generator",
+		Parameters: map[string]tool.ParamDef{
+			"shotList":           {Type: "array", Required: true},
+			"timeWindows":        {Type: "array", Required: true},
+			"referenceAssetPlan": {Type: "object", Required: true},
+			"continuityBible":    {Type: "object", Required: false},
+			"creationProfile":    {Type: "string", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"keyframePrompts": {Type: "array"},
+			"summary":         {Type: "string"},
+		},
+	}
+	return catalog
 }
 
 func requireNode(t *testing.T, dag *model.DAGRequest, id, typ, name string) model.NodeRequest {

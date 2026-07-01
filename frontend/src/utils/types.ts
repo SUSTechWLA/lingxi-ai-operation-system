@@ -1,9 +1,10 @@
 // ── Note ────────────────────────────────────────────────────────────────
-// api-types.generated.ts is generated from the OpenAPI spec in development
-// branches. Release consumers should use the live /openapi.json endpoint.
+// api-types.generated.ts is regenerated from the OpenAPI spec via
+//   cd ../cloud-backend && make gen-docs
 //
 // The hand-crafted types below MAY be more precise (enum unions, UI types).
-// When the generated file drifts, reconcile it with the live API contract.
+// When the generated file drifts, the CI `make api-docs-check` fails and both
+// should be reconciled.
 //
 // Data types: Artifact, VideoProject, etc. — keep these aligned manually.
 // ─────────────────────────────────────────────────────────────────────────

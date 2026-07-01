@@ -268,10 +268,18 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoForgeDependencies(t *tes
 		"proposal_generator",
 		"visual_feasibility_analyzer",
 		"render_strategy_planner",
+		"shot_generation_planner",
 	} {
 		if registry.GetExternalManifest(name) == nil {
 			t.Fatalf("expected VideoForge tool %q to be registered", name)
 		}
+	}
+	manifest := registry.GetExternalManifest("shot_generation_planner")
+	if manifest.Parameters["shotList"].Type != "array" || !manifest.Parameters["shotList"].Required {
+		t.Fatalf("shot_generation_planner should require shotList array, got %#v", manifest.Parameters["shotList"])
+	}
+	if manifest.Output["shotGenerationPlans"].Type != "array" {
+		t.Fatalf("shot_generation_planner should output shotGenerationPlans array, got %#v", manifest.Output["shotGenerationPlans"])
 	}
 }
 
@@ -287,6 +295,238 @@ func TestRegisterVideoCreationExternalToolsInstallsKnowledgeTools(t *testing.T) 
 		if len(manifest.Output) == 0 {
 			t.Fatalf("knowledge tool %q should declare output schema", name)
 		}
+	}
+}
+
+func TestVideoProfileClassifierReturnsTalkingHeadProfile(t *testing.T) {
+	result := executeLocalVideoCreationTool("video_profile_classifier", map[string]interface{}{
+		"stage":       "profile_selection",
+		"route":       "talking_head",
+		"deliverable": "publish_pack",
+		"brief":       "做一期60秒口播知识视频",
+	}, tool.ToolContext{TaskID: "task-profile", NodeID: "profile_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_profile_classifier failed: %s", result.Error)
+	}
+	profile, ok := result.Data["creationProfile"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing creationProfile: %#v", result.Data)
+	}
+	if profile["profileId"] != "talking_head" {
+		t.Fatalf("profileId = %#v", profile["profileId"])
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) == 0 {
+		t.Fatalf("profile classifier should create reviewable artifacts")
+	}
+	if artifacts[0]["kind"] != "VIDEO_CREATION_PROFILE" {
+		t.Fatalf("profile artifact kind = %#v", artifacts[0]["kind"])
+	}
+}
+
+func TestTimeWindowPlannerSplitsCinematicShot(t *testing.T) {
+	result := executeLocalVideoCreationTool("time_window_planner", map[string]interface{}{
+		"stage": "time_window",
+		"creationProfile": map[string]interface{}{
+			"profileId": "cinematic_story",
+		},
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(40),
+				"visual":      "夜晚街道追逐",
+				"mainAction":  "角色穿过街道并躲入巷子",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-time-window", NodeID: "time_window_exec"})
+
+	if !result.Success {
+		t.Fatalf("time_window_planner failed: %s", result.Error)
+	}
+	windows, ok := result.Data["timeWindows"].([]map[string]interface{})
+	if !ok || len(windows) != 4 {
+		t.Fatalf("expected four time windows, got %#v", result.Data["timeWindows"])
+	}
+	for _, window := range windows {
+		duration := intFromInterface(window["durationSec"], 0)
+		if duration < 3 || duration > 15 {
+			t.Fatalf("duration outside 3-15s: %#v", window)
+		}
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) == 0 {
+		t.Fatalf("time window planner should create reviewable artifacts")
+	}
+	if artifacts[0]["kind"] != "TIME_WINDOW_PLAN" {
+		t.Fatalf("time window artifact kind = %#v", artifacts[0]["kind"])
+	}
+}
+
+func TestTimeWindowPlannerRequiresScriptSpansForTalkingHead(t *testing.T) {
+	result := executeLocalVideoCreationTool("time_window_planner", map[string]interface{}{
+		"stage": "time_window",
+		"creationProfile": map[string]interface{}{
+			"profileId": "talking_head",
+		},
+	}, tool.ToolContext{TaskID: "task-time-window", NodeID: "time_window_exec"})
+
+	if result.Success {
+		t.Fatalf("talking-head time_window_planner should fail without scriptSpans: %#v", result.Data)
+	}
+	if !strings.Contains(result.Error, "scriptSpans") {
+		t.Fatalf("failure should clearly mention scriptSpans, got %q", result.Error)
+	}
+}
+
+func TestVisualAlignmentPlannerPreservesTimeWindowDuration(t *testing.T) {
+	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
+		"stage": "visual_alignment",
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":           "TW_SHORT",
+				"shotId":       "SHOT_SHORT",
+				"durationSec":  float64(2),
+				"scriptText":   "短转场口播",
+				"sceneSummary": "字幕和B-roll补充",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-visual-alignment", NodeID: "visual_alignment_exec"})
+
+	if !result.Success {
+		t.Fatalf("visual_alignment_planner failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 1 {
+		t.Fatalf("expected one visual alignment shot, got %#v", result.Data["shotList"])
+	}
+	shot := shotList[0]
+	if intFromInterface(shot["durationSec"], 0) != 2 {
+		t.Fatalf("visual alignment should preserve 2s duration, got %#v", shot)
+	}
+	if shot["timeWindowId"] != "TW_SHORT" {
+		t.Fatalf("expected timeWindowId TW_SHORT, got %#v", shot["timeWindowId"])
+	}
+	if shot["narrationText"] != "短转场口播" {
+		t.Fatalf("expected narrationText from scriptText, got %#v", shot["narrationText"])
+	}
+	if shot["visual"] != "字幕和B-roll补充" {
+		t.Fatalf("expected visual from sceneSummary, got %#v", shot["visual"])
+	}
+}
+
+func TestCinematicShotDesignerManifestMatchesExecutor(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("cinematic_shot_designer")
+	if manifest == nil {
+		t.Fatal("expected cinematic_shot_designer manifest")
+	}
+	for _, name := range []string{"timeWindows", "timeWindowPlan", "shotList"} {
+		if _, ok := manifest.Parameters[name]; !ok {
+			t.Fatalf("cinematic_shot_designer should declare parameter %q: %#v", name, manifest.Parameters)
+		}
+	}
+	for _, name := range []string{"directorDesign", "shotList", "content", "artifacts"} {
+		if _, ok := manifest.Output[name]; !ok {
+			t.Fatalf("cinematic_shot_designer should declare output %q: %#v", name, manifest.Output)
+		}
+	}
+}
+
+func TestCinematicShotDesignerUsesTimeWindowsWithoutGeneratingMedia(t *testing.T) {
+	result := executeLocalVideoCreationTool("cinematic_shot_designer", map[string]interface{}{
+		"stage": "cinematic_shot_design",
+		"creationProfile": map[string]interface{}{
+			"profileId": "cinematic_story",
+		},
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":           "SHOT_01_TW_01",
+				"shotId":       "SHOT_01_TW_01",
+				"durationSec":  float64(2),
+				"sceneSummary": "雨夜街口回头",
+				"mainAction":   "角色停下并回望",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-cinematic", NodeID: "cinematic_shot_design_exec"})
+
+	if !result.Success {
+		t.Fatalf("cinematic_shot_designer failed: %s", result.Error)
+	}
+	design, ok := result.Data["directorDesign"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing directorDesign: %#v", result.Data)
+	}
+	if design["mediaGenerated"] != false {
+		t.Fatalf("cinematic designer must not claim media generation: %#v", design)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 1 {
+		t.Fatalf("expected shotList from timeWindows, got %#v", result.Data["shotList"])
+	}
+	if intFromInterface(shotList[0]["durationSec"], 0) != 2 {
+		t.Fatalf("cinematic designer should preserve 2s duration, got %#v", shotList[0])
+	}
+}
+
+func TestSoundDesignPlannerManifestMatchesExecutor(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("sound_design_planner")
+	if manifest == nil {
+		t.Fatal("expected sound_design_planner manifest")
+	}
+	for _, name := range []string{"timeWindows", "timeWindowPlan", "shotList"} {
+		if _, ok := manifest.Parameters[name]; !ok {
+			t.Fatalf("sound_design_planner should declare parameter %q: %#v", name, manifest.Parameters)
+		}
+	}
+	for _, name := range []string{"soundDesignPlan", "content", "artifacts"} {
+		if _, ok := manifest.Output[name]; !ok {
+			t.Fatalf("sound_design_planner should declare output %q: %#v", name, manifest.Output)
+		}
+	}
+}
+
+func TestSoundDesignPlannerUsesTimeWindowsWithoutGeneratingAudio(t *testing.T) {
+	result := executeLocalVideoCreationTool("sound_design_planner", map[string]interface{}{
+		"stage": "sound_design",
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":            "TW_SOUND",
+				"shotId":        "SHOT_SOUND",
+				"durationSec":   float64(2),
+				"narrationText": "脚步声渐近",
+				"sceneSummary":  "巷口雨声",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-sound", NodeID: "sound_design_exec"})
+
+	if !result.Success {
+		t.Fatalf("sound_design_planner failed: %s", result.Error)
+	}
+	plan, ok := result.Data["soundDesignPlan"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing soundDesignPlan: %#v", result.Data)
+	}
+	if plan["mediaGenerated"] != false {
+		t.Fatalf("sound designer must not claim audio generation: %#v", plan)
+	}
+	if intFromInterface(plan["cueCount"], 0) != 1 {
+		t.Fatalf("expected one sound cue, got %#v", plan)
+	}
+	cues, ok := plan["cues"].([]map[string]interface{})
+	if !ok || len(cues) != 1 {
+		t.Fatalf("expected cue list, got %#v", plan["cues"])
+	}
+	if intFromInterface(cues[0]["durationSec"], 0) != 2 {
+		t.Fatalf("sound planner should preserve 2s duration, got %#v", cues[0])
+	}
+	if !strings.Contains(ensureStringValue(cues[0]), "不生成音频") {
+		t.Fatalf("sound cue should avoid audio-generation claim, got %#v", cues[0])
 	}
 }
 
@@ -933,6 +1173,288 @@ func TestExecuteRenderStrategyPlannerReturnsHybridStrategy(t *testing.T) {
 	}
 	if result.Data["decisionLog"] == nil {
 		t.Fatalf("render_strategy_planner should expose decisionLog: %#v", result.Data)
+	}
+}
+
+func TestShotGenerationPlannerRoutesHybridAndExternalNeeds(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":        "SHOT_01",
+				"durationSec":   float64(6),
+				"visual":        "非真人风格化办公室里人物被文件包围，同时画面必须显示“几个表格”",
+				"narrationText": "几个表格就能改变判断。",
+				"screenText":    []interface{}{"几个表格"},
+			},
+			map[string]interface{}{
+				"shotId":      "SHOT_02",
+				"durationSec": float64(5),
+				"visual":      "展示客户上传 logo 和产品截图",
+			},
+		},
+		"aigcAvailable": true,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 2 {
+		t.Fatalf("expected two shotGenerationPlans, got %#v", result.Data["shotGenerationPlans"])
+	}
+	if plans[0]["mode"] != "hybrid_aigc_bg_html_overlay" {
+		t.Fatalf("SHOT_01 should route to hybrid mode, got %#v", plans[0])
+	}
+	if plans[1]["mode"] != "external_or_user_asset" {
+		t.Fatalf("SHOT_02 should route to external/user asset mode, got %#v", plans[1])
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]map[string]interface{})
+	if !ok || len(packages) != 2 {
+		t.Fatalf("expected shotAssetPackages, got %#v", result.Data["shotAssetPackages"])
+	}
+}
+
+func TestShotGenerationPlannerMissingProviderCreatesExternalRequest(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(6),
+				"visual":      "人物跑过街口，镜头跟随，电影感运动",
+			},
+		},
+		"aigcAvailable": false,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]map[string]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one externalGenerationRequest, got %#v", result.Data["externalGenerationRequests"])
+	}
+	if requests[0]["kind"] != "video" || requests[0]["shotId"] != "SHOT_01" {
+		t.Fatalf("unexpected external generation request: %#v", requests[0])
+	}
+	if strings.TrimSpace(ensureStringValue(requests[0]["requestId"])) == "" {
+		t.Fatalf("external generation request should include requestId: %#v", requests[0])
+	}
+	if strings.TrimSpace(ensureStringValue(requests[0]["prompt"])) == "" {
+		t.Fatalf("external generation request should include prompt: %#v", requests[0])
+	}
+	target, ok := requests[0]["target"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("external generation request should include target: %#v", requests[0])
+	}
+	if intFromInterface(target["durationSec"], 0) != 6 {
+		t.Fatalf("external generation request target should preserve durationSec=6, got %#v", target)
+	}
+}
+
+func TestShotGenerationPlannerExternalRequestIncludesReferencesAndDelivery(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":       "SHOT_01_TW_01",
+				"timeWindowId": "TW_01",
+				"durationSec":  float64(8),
+				"visual":       "角色在雨夜街口回头，镜头缓慢靠近",
+				"referenceImages": []interface{}{
+					map[string]interface{}{"role": "character_reference", "storageRef": "local://projects/p/artifacts/char/hash/char.png"},
+					map[string]interface{}{"role": "scene_reference", "storageRef": "local://projects/p/artifacts/street/hash/street.png"},
+				},
+			},
+		},
+		"aigcAvailable": false,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]map[string]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req := requests[0]
+	if intFromInterface(req["durationSec"], 0) != 8 {
+		t.Fatalf("request should expose durationSec=8: %#v", req)
+	}
+	if req["directApiEligible"] != false {
+		t.Fatalf("direct API should be false when AIGC provider unavailable: %#v", req)
+	}
+	if req["manualUploadRequired"] != true {
+		t.Fatalf("manual upload should be required: %#v", req)
+	}
+	refs, ok := req["referenceImages"].([]interface{})
+	if !ok || len(refs) != 2 {
+		t.Fatalf("reference images should be preserved: %#v", req["referenceImages"])
+	}
+	compatRefs, ok := req["references"].([]interface{})
+	if !ok || len(compatRefs) != 2 {
+		t.Fatalf("request-level references should be preserved for consumers: %#v", req["references"])
+	}
+	promptPackageText := strings.TrimSpace(ensureStringValue(req["promptPackage"]))
+	if promptPackageText == "" {
+		t.Fatalf("promptPackage should be copyable for external clients: %#v", req)
+	}
+	var promptPackage map[string]interface{}
+	if err := json.Unmarshal([]byte(promptPackageText), &promptPackage); err != nil {
+		t.Fatalf("promptPackage should be JSON: %v, raw=%s", err, promptPackageText)
+	}
+	if strings.TrimSpace(ensureStringValue(promptPackage["prompt"])) == "" {
+		t.Fatalf("promptPackage should include prompt: %#v", promptPackage)
+	}
+	if intFromInterface(promptPackage["duration"], 0) != 8 {
+		t.Fatalf("promptPackage should include duration=8: %#v", promptPackage)
+	}
+	promptRefs, ok := promptPackage["references"].([]interface{})
+	if !ok || len(promptRefs) != 2 {
+		t.Fatalf("promptPackage should include references: %#v", promptPackage)
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]map[string]interface{})
+	if !ok || len(packages) != 1 {
+		t.Fatalf("expected one shot asset package, got %#v", result.Data["shotAssetPackages"])
+	}
+	packageRefs, ok := packages[0]["referenceImages"].([]interface{})
+	if !ok || len(packageRefs) != 2 {
+		t.Fatalf("shot asset package should expose referenceImages at top level: %#v", packages[0])
+	}
+	if packages[0]["timeWindowId"] != "TW_01" {
+		t.Fatalf("shot asset package should expose timeWindowId at top level: %#v", packages[0])
+	}
+}
+
+func TestShotGenerationPlannerPreservesReferencesWhenVisualPlanLacksReferenceImages(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_REF_ONLY",
+				"durationSec": float64(8),
+				"visual":      "角色在雨夜街口回头，镜头缓慢靠近",
+				"references": []interface{}{
+					map[string]interface{}{"role": "character_reference", "storageRef": "local://projects/p/artifacts/char/hash/char.png"},
+					map[string]interface{}{"role": "scene_reference", "storageRef": "local://projects/p/artifacts/street/hash/street.png"},
+				},
+			},
+		},
+		"visualPlans": []interface{}{
+			map[string]interface{}{
+				"shotId":     "SHOT_REF_ONLY",
+				"background": map[string]interface{}{"description": "雨夜街口", "requiresAigc": true},
+				"cameraPlan": map[string]interface{}{"description": "镜头缓慢靠近", "movement": "tracking shot", "requiresAigc": true},
+			},
+		},
+		"aigcAvailable": false,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]map[string]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	reqRefs, ok := requests[0]["references"].([]interface{})
+	if !ok || len(reqRefs) != 2 {
+		t.Fatalf("request references should survive visualPlans merge: %#v", requests[0])
+	}
+	reqReferenceImages, ok := requests[0]["referenceImages"].([]interface{})
+	if !ok || len(reqReferenceImages) != 2 {
+		t.Fatalf("request referenceImages should survive visualPlans merge: %#v", requests[0])
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]map[string]interface{})
+	if !ok || len(packages) != 1 {
+		t.Fatalf("expected one shot asset package, got %#v", result.Data["shotAssetPackages"])
+	}
+	packageRefs, ok := packages[0]["references"].([]interface{})
+	if !ok || len(packageRefs) != 2 {
+		t.Fatalf("package references should survive visualPlans merge: %#v", packages[0])
+	}
+	packageReferenceImages, ok := packages[0]["referenceImages"].([]interface{})
+	if !ok || len(packageReferenceImages) != 2 {
+		t.Fatalf("package referenceImages should survive visualPlans merge: %#v", packages[0])
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 1 {
+		t.Fatalf("expected one shot generation plan, got %#v", result.Data["shotGenerationPlans"])
+	}
+	renderInputs, ok := plans[0]["renderInputs"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected renderInputs, got %#v", plans[0])
+	}
+	renderRefs, ok := renderInputs["referenceImages"].([]interface{})
+	if !ok || len(renderRefs) != 2 {
+		t.Fatalf("renderInputs should retain references as referenceImages: %#v", renderInputs)
+	}
+	renderCompatRefs, ok := renderInputs["references"].([]interface{})
+	if !ok || len(renderCompatRefs) != 2 {
+		t.Fatalf("renderInputs should retain references: %#v", renderInputs)
+	}
+}
+
+func TestShotGenerationPlannerRenderPreferenceDisablesHybrid(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(6),
+				"visual":      "办公室人物指向屏幕，同时画面必须显示“增长42%”",
+				"screenText":  []interface{}{"增长42%"},
+			},
+		},
+		"renderPreference": map[string]interface{}{
+			"allowHybridRender": false,
+		},
+		"aigcAvailable": true,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 1 {
+		t.Fatalf("expected one shotGenerationPlan, got %#v", result.Data["shotGenerationPlans"])
+	}
+	if plans[0]["mode"] != "placeholder_preview" {
+		t.Fatalf("allowHybridRender=false should force placeholder_preview, got %#v", plans[0])
+	}
+}
+
+func TestShotGenerationPlannerParsesRenderPreferenceJSONString(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01",
+				"durationSec": float64(6),
+				"visual":      "办公室人物指向屏幕，同时画面必须显示“增长42%”",
+				"screenText":  []interface{}{"增长42%"},
+			},
+		},
+		"renderPreference": `{"allowHybridRender":false}`,
+		"aigcAvailable":    true,
+		"htmlAvailable":    true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 1 {
+		t.Fatalf("expected one shotGenerationPlan, got %#v", result.Data["shotGenerationPlans"])
+	}
+	if plans[0]["mode"] != "placeholder_preview" {
+		t.Fatalf("JSON renderPreference should disable hybrid, got %#v", plans[0])
 	}
 }
 

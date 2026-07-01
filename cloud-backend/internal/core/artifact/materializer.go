@@ -293,6 +293,14 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 		storageType = StorageInline
 		provider = "shot-asset-package"
 	}
+	if isVideoCreationProfileKind(kind) && len(data) > 0 {
+		storageType = StorageInline
+		provider = "video-creation-profile"
+	}
+	if isTimeWindowPlanKind(kind) && len(data) > 0 {
+		storageType = StorageInline
+		provider = "time-window-plan"
+	}
 	return &CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,
@@ -386,6 +394,18 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 	if packageData, ok := shotAssetPackagePayload(payload, unitID); ok {
 		return marshalValue(packageData)
 	}
+	if isVideoCreationProfileKind(kind) {
+		if profile, ok := videoCreationProfilePayload(payload); ok {
+			return marshalValue(profile)
+		}
+		return nil
+	}
+	if isTimeWindowPlanKind(kind) {
+		if plan, ok := timeWindowPlanPayload(payload); ok {
+			return marshalValue(plan)
+		}
+		return nil
+	}
 	switch unitID {
 	case "script-content":
 		// Prefer the parsed script; the raw "content" field often contains
@@ -437,6 +457,36 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 		}
 	}
 	return nil
+}
+
+func videoCreationProfilePayload(payload map[string]interface{}) (map[string]interface{}, bool) {
+	for _, key := range []string{"creationProfile", "videoCreationProfile"} {
+		profile, ok := payload[key].(map[string]interface{})
+		if ok && validVideoCreationProfileID(stringValue(profile, "profileId")) {
+			return profile, true
+		}
+	}
+	return nil, false
+}
+
+func validVideoCreationProfileID(profileID string) bool {
+	switch profileID {
+	case "talking_head", "cinematic_story":
+		return true
+	default:
+		return false
+	}
+}
+
+func timeWindowPlanPayload(payload map[string]interface{}) (map[string]interface{}, bool) {
+	plan, ok := payload["timeWindowPlan"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	if _, ok := plan["windows"].([]interface{}); !ok {
+		return nil, false
+	}
+	return plan, true
 }
 
 func externalGenerationRequestPayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {
@@ -563,6 +613,7 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 		"CAPTION_PLAN",
 		"SHOT_LIST",
 		"VIDEO_PROMPTS",
+		"VIDEO_CREATION_PROFILE",
 		"VIDEO_COMPOSITION_SPEC",
 		"REFERENCE_ASSET_PLAN",
 		"STYLE_PROFILE",
@@ -576,6 +627,14 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 	default:
 		return false
 	}
+}
+
+func isVideoCreationProfileKind(kind ArtifactKind) bool {
+	return strings.ToUpper(string(kind)) == "VIDEO_CREATION_PROFILE"
+}
+
+func isTimeWindowPlanKind(kind ArtifactKind) bool {
+	return strings.ToUpper(string(kind)) == "TIME_WINDOW_PLAN"
 }
 
 // normalizePublishCopy ensures publish-copy content has the keys the frontend
