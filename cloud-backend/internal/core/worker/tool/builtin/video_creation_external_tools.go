@@ -1745,6 +1745,7 @@ func executeShotGenerationPlanner(stage, skillName string, params map[string]int
 			renderPreference,
 			videoservice.RenderCapabilities{AIGCAvailable: aigcAvailable, HTMLAvailable: htmlAvailable},
 		)
+		enrichShotGenerationPlanInputs(values, &plan)
 		shotGenerationPlans = append(shotGenerationPlans, structToMap(plan))
 		shotAssetPackages = append(shotAssetPackages, shotAssetPackageFromGenerationPlan(values, plan))
 		externalRequests = append(externalRequests, externalRequestsFromGenerationPlan(plan)...)
@@ -1782,12 +1783,34 @@ func mergeShotGenerationToolValues(shotMap map[string]interface{}, visualPlans [
 		return values
 	}
 	values["visualPlan"] = selected
-	for _, key := range []string{"visual", "visualIntent", "description", "sceneSummary", "mainAction", "action", "screenText", "textLayers", "background", "characters", "props", "motionPlan", "cameraPlan"} {
+	for _, key := range []string{
+		"visualPlan", "visual", "visualIntent", "description", "sceneSummary", "mainAction", "action",
+		"screenText", "textLayers", "background", "characters", "props", "motionPlan", "cameraPlan",
+		"referenceImages", "references", "timeWindowId", "parentShotId",
+	} {
 		if _, exists := values[key]; !exists {
 			values[key] = selected[key]
 		}
 	}
 	return values
+}
+
+func enrichShotGenerationPlanInputs(values map[string]interface{}, plan *videomodel.ShotGenerationPlan) {
+	if plan == nil {
+		return
+	}
+	if plan.RenderInputs == nil {
+		plan.RenderInputs = map[string]interface{}{}
+	}
+	if refs := interfaceSliceFromAny(firstValueInMap(values, "referenceImages", "references")); len(refs) > 0 {
+		plan.RenderInputs["referenceImages"] = refs
+	}
+	if timeWindowID := firstNonEmptyString(values, "timeWindowId", "id"); timeWindowID != "" {
+		plan.RenderInputs["timeWindowId"] = timeWindowID
+	}
+	if parentShotID := firstNonEmptyString(values, "parentShotId"); parentShotID != "" {
+		plan.RenderInputs["parentShotId"] = parentShotID
+	}
 }
 
 func shotUnitFromToolMap(values map[string]interface{}, fallbackIndex int) videomodel.ShotUnit {
@@ -1894,6 +1917,12 @@ func visualPlanFromToolMap(shot videomodel.ShotUnit, values map[string]interface
 
 func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan videomodel.ShotGenerationPlan) map[string]interface{} {
 	planMap := structToMap(plan)
+	if refs := interfaceSliceFromAny(firstValueInMap(shotMap, "referenceImages", "references")); len(refs) > 0 {
+		planMap["referenceImages"] = refs
+	}
+	if timeWindowID := firstNonEmptyString(shotMap, "timeWindowId", "id"); timeWindowID != "" {
+		planMap["timeWindowId"] = timeWindowID
+	}
 	return map[string]interface{}{
 		"shotId":         plan.ShotID,
 		"durationSec":    normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
@@ -1920,27 +1949,87 @@ func externalRequestsFromGenerationPlan(plan videomodel.ShotGenerationPlan) []ma
 		if durationSec == 0 && plan.FusionPlan.BaseLayer.DurationSec > 0 {
 			durationSec = int(plan.FusionPlan.BaseLayer.DurationSec)
 		}
+		if durationSec == 0 {
+			durationSec = normalizedDurationSec(nil)
+		} else {
+			durationSec = normalizedDurationSec(durationSec)
+		}
+		referenceImages := interfaceSliceFromAny(firstValueInMap(plan.RenderInputs, "referenceImages", "references"))
+		prompt := strings.TrimSpace(ensureStringValue(plan.RenderInputs["prompt"]))
+		negativePrompt := strings.TrimSpace(ensureStringValue(plan.RenderInputs["negativePrompt"]))
+		delivery := videomodel.ExternalGenerationDelivery{
+			DirectAPIEligible:    false,
+			ManualUploadRequired: true,
+			ReferenceImages:      externalGenerationReferencesFromAny(referenceImages),
+		}
+		delivery.PromptPackage = buildExternalPromptPackage(shotID, asset.Kind, durationSec, prompt, negativePrompt, referenceImages)
 		request := map[string]interface{}{
-			"requestId":     fmt.Sprintf("%s-%s-external-request", shotID, asset.ID),
-			"shotId":        shotID,
-			"relatedShotId": shotID,
-			"assetId":       asset.ID,
-			"kind":          asset.Kind,
-			"role":          asset.Role,
-			"mode":          plan.Mode,
-			"reason":        plan.Reason,
-			"status":        videomodel.ReviewStatusPending,
-			"prompt":        strings.TrimSpace(ensureStringValue(plan.RenderInputs["prompt"])),
+			"requestId":            fmt.Sprintf("%s-%s-external-request", shotID, asset.ID),
+			"shotId":               shotID,
+			"relatedShotId":        shotID,
+			"assetId":              asset.ID,
+			"kind":                 asset.Kind,
+			"role":                 asset.Role,
+			"mode":                 plan.Mode,
+			"reason":               plan.Reason,
+			"status":               videomodel.ReviewStatusPending,
+			"prompt":               prompt,
+			"durationSec":          durationSec,
+			"directApiEligible":    delivery.DirectAPIEligible,
+			"manualUploadRequired": delivery.ManualUploadRequired,
+			"promptPackage":        delivery.PromptPackage,
 			"target": map[string]interface{}{
 				"durationSec": durationSec,
 			},
 		}
-		if negativePrompt := strings.TrimSpace(ensureStringValue(plan.RenderInputs["negativePrompt"])); negativePrompt != "" {
+		if negativePrompt != "" {
 			request["negativePrompt"] = negativePrompt
+		}
+		if len(referenceImages) > 0 {
+			request["referenceImages"] = referenceImages
 		}
 		requests = append(requests, request)
 	}
 	return requests
+}
+
+func externalGenerationReferencesFromAny(items []interface{}) []videomodel.ExternalGenerationReference {
+	references := make([]videomodel.ExternalGenerationReference, 0, len(items))
+	for _, item := range items {
+		ref, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		references = append(references, videomodel.ExternalGenerationReference{
+			Role:       firstNonEmptyString(ref, "role"),
+			StorageRef: firstNonEmptyString(ref, "storageRef", "url", "uri"),
+		})
+	}
+	return references
+}
+
+func buildExternalPromptPackage(shotID, kind string, durationSec int, prompt, negativePrompt string, referenceImages []interface{}) string {
+	payload := map[string]interface{}{
+		"shotId":      shotID,
+		"kind":        kind,
+		"durationSec": durationSec,
+		"prompt":      prompt,
+		"delivery": map[string]interface{}{
+			"directApiEligible":    false,
+			"manualUploadRequired": true,
+		},
+	}
+	if negativePrompt != "" {
+		payload["negativePrompt"] = negativePrompt
+	}
+	if len(referenceImages) > 0 {
+		payload["referenceImages"] = referenceImages
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return prompt
+	}
+	return string(data)
 }
 
 func buildShotGenerationPlanReviewContent(plans []map[string]interface{}) string {
@@ -3651,6 +3740,45 @@ func interfaceItems(raw interface{}) []interface{} {
 	default:
 		return nil
 	}
+}
+
+func interfaceSliceFromAny(value interface{}) []interface{} {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []interface{}:
+		return typed
+	case []map[string]interface{}:
+		items := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items
+	case []string:
+		items := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		var decoded []interface{}
+		if json.Unmarshal([]byte(trimmed), &decoded) == nil {
+			return decoded
+		}
+	default:
+		data, err := json.Marshal(value)
+		if err == nil && len(data) > 0 && string(data) != "null" {
+			var decoded []interface{}
+			if json.Unmarshal(data, &decoded) == nil {
+				return decoded
+			}
+		}
+	}
+	return nil
 }
 
 func mapValue(raw interface{}) (map[string]interface{}, bool) {

@@ -338,6 +338,18 @@ type ShotGenerationFallback struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+type ExternalGenerationReference struct {
+	Role       string `json:"role,omitempty"`
+	StorageRef string `json:"storageRef,omitempty"`
+}
+
+type ExternalGenerationDelivery struct {
+	DirectAPIEligible    bool                          `json:"directApiEligible"`
+	ManualUploadRequired bool                          `json:"manualUploadRequired"`
+	ReferenceImages      []ExternalGenerationReference `json:"referenceImages,omitempty"`
+	PromptPackage        string                        `json:"promptPackage,omitempty"`
+}
+
 type ShotAssetNeed struct {
 	ID             string   `json:"id"`
 	Kind           string   `json:"kind,omitempty"`

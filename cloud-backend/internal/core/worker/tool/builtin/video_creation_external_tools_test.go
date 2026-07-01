@@ -1255,6 +1255,50 @@ func TestShotGenerationPlannerMissingProviderCreatesExternalRequest(t *testing.T
 	}
 }
 
+func TestShotGenerationPlannerExternalRequestIncludesReferencesAndDelivery(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_01_TW_01",
+				"durationSec": float64(8),
+				"visual":      "角色在雨夜街口回头，镜头缓慢靠近",
+				"referenceImages": []interface{}{
+					map[string]interface{}{"role": "character_reference", "storageRef": "local://projects/p/artifacts/char/hash/char.png"},
+					map[string]interface{}{"role": "scene_reference", "storageRef": "local://projects/p/artifacts/street/hash/street.png"},
+				},
+			},
+		},
+		"aigcAvailable": false,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]map[string]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req := requests[0]
+	if intFromInterface(req["durationSec"], 0) != 8 {
+		t.Fatalf("request should expose durationSec=8: %#v", req)
+	}
+	if req["directApiEligible"] != false {
+		t.Fatalf("direct API should be false when AIGC provider unavailable: %#v", req)
+	}
+	if req["manualUploadRequired"] != true {
+		t.Fatalf("manual upload should be required: %#v", req)
+	}
+	refs, ok := req["referenceImages"].([]interface{})
+	if !ok || len(refs) != 2 {
+		t.Fatalf("reference images should be preserved: %#v", req["referenceImages"])
+	}
+	if strings.TrimSpace(ensureStringValue(req["promptPackage"])) == "" {
+		t.Fatalf("promptPackage should be copyable for external clients: %#v", req)
+	}
+}
+
 func TestShotGenerationPlannerRenderPreferenceDisablesHybrid(t *testing.T) {
 	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
 		"stage": "generation_strategy",
