@@ -68,12 +68,13 @@ func buildTalkingHeadTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan 
 func buildCinematicTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 	plan := model.TimeWindowPlan{
 		ProfileID: req.Profile.ProfileID,
+		Windows:   make([]model.TimeWindowUnit, 0, len(req.Shots)),
 	}
 
 	var sequenceIndex int
-	parentIDCounts := map[string]int{}
+	emittedParentIDs := map[string]bool{}
 	for shotIndex, shot := range req.Shots {
-		parentShotID := effectiveCinematicParentShotID(shot.ID, shotIndex, parentIDCounts)
+		parentShotID := effectiveCinematicParentShotID(shot.ID, shotIndex, emittedParentIDs)
 		durationSec := float64(shot.DurationSec)
 		if durationSec <= 0 {
 			durationSec = defaultWindowDurationSec
@@ -125,16 +126,22 @@ func buildCinematicTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 	return plan
 }
 
-func effectiveCinematicParentShotID(rawID string, shotIndex int, counts map[string]int) string {
+func effectiveCinematicParentShotID(rawID string, shotIndex int, used map[string]bool) string {
 	baseID := strings.TrimSpace(rawID)
 	if baseID == "" {
 		baseID = fmt.Sprintf("SHOT_%02d", shotIndex+1)
 	}
-	counts[baseID]++
-	if counts[baseID] == 1 {
+	if !used[baseID] {
+		used[baseID] = true
 		return baseID
 	}
-	return fmt.Sprintf("%s_DUP_%02d", baseID, counts[baseID])
+	for suffix := 2; ; suffix++ {
+		candidateID := fmt.Sprintf("%s_DUP_%02d", baseID, suffix)
+		if !used[candidateID] {
+			used[candidateID] = true
+			return candidateID
+		}
+	}
 }
 
 func cinematicWindowCount(durationSec float64) int {

@@ -188,6 +188,52 @@ func TestBuildTimeWindowPlanUsesUniqueEffectiveCinematicShotIDs(t *testing.T) {
 	}
 }
 
+func TestBuildTimeWindowPlanAvoidsEffectiveCinematicIDCollisionWithAuthoredDuplicateSuffix(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileCinematicStory},
+		Shots: []model.ShotUnit{
+			{ID: "", DurationSec: 6},
+			{ID: "SHOT_01", DurationSec: 6},
+			{ID: "SHOT_01_DUP_02", DurationSec: 6},
+		},
+	})
+
+	if len(plan.Windows) != 3 {
+		t.Fatalf("window count = %d, want 3: %#v", len(plan.Windows), plan.Windows)
+	}
+	parentIDs := map[string]bool{}
+	windowIDs := map[string]bool{}
+	for _, window := range plan.Windows {
+		if window.ParentShotID == "" {
+			t.Fatalf("parent shot ID should not be empty: %#v", window)
+		}
+		if parentIDs[window.ParentShotID] {
+			t.Fatalf("parent shot ID should be globally unique: %#v", plan.Windows)
+		}
+		parentIDs[window.ParentShotID] = true
+		if window.ID == "" {
+			t.Fatalf("window ID should not be empty: %#v", window)
+		}
+		if windowIDs[window.ID] {
+			t.Fatalf("window ID should be globally unique: %#v", plan.Windows)
+		}
+		windowIDs[window.ID] = true
+	}
+}
+
+func TestBuildTimeWindowPlanCinematicNoShotsUsesEmptyWindowsSlice(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileCinematicStory},
+	})
+
+	if plan.Windows == nil {
+		t.Fatal("windows should be an initialized empty slice, got nil")
+	}
+	if len(plan.Windows) != 0 {
+		t.Fatalf("window count = %d, want 0: %#v", len(plan.Windows), plan.Windows)
+	}
+}
+
 func TestBuildTimeWindowPlanTalkingHeadEligibilityBoundaries(t *testing.T) {
 	plan := BuildTimeWindowPlan(TimeWindowRequest{
 		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileTalkingHead},
