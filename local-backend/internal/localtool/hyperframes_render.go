@@ -3,8 +3,11 @@ package localtool
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +19,7 @@ import (
 // a HyperFrames HTML project into an MP4 video file.
 type HyperFramesRenderExecutor struct {
 	guard      *PathGuard
+	dataDir    string
 	serviceURL string
 	timeout    time.Duration
 }
@@ -29,6 +33,7 @@ func NewHyperFramesRenderExecutor(dataDir, serviceURL string, timeout time.Durat
 	}
 	return &HyperFramesRenderExecutor{
 		guard:      NewPathGuard(dataDir),
+		dataDir:    dataDir,
 		serviceURL: strings.TrimRight(serviceURL, "/"),
 		timeout:    timeout,
 	}
@@ -150,7 +155,10 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		return nil, fmt.Errorf("render output is empty: %s", outputPath)
 	}
 
-	localRef := "local://projects/" + projectID + "/renders/final.mp4"
+	localRef, err := e.mirrorFinalVideoArtifact(projectID, outputPath, info.Size(), fps, width, height, result.DurationMs)
+	if err != nil {
+		return nil, err
+	}
 	return &Result{Output: map[string]interface{}{
 		"success":   true,
 		"summary":   "HyperFrames 渲染完成",
@@ -220,4 +228,78 @@ func (e *HyperFramesRenderExecutor) callRenderService(ctx context.Context, reqBo
 	}
 
 	return &result, nil
+}
+
+func (e *HyperFramesRenderExecutor) mirrorFinalVideoArtifact(projectID, outputPath string, sizeBytes int64, fps, width, height int, renderTimeMs int64) (string, error) {
+	artifactID := "final-video"
+	if err := validateLocalSegment(projectID); err != nil {
+		return "", fmt.Errorf("invalid project id: %w", err)
+	}
+	if err := validateLocalSegment(artifactID); err != nil {
+		return "", fmt.Errorf("invalid artifact id: %w", err)
+	}
+
+	contentPath := filepath.Join(e.dataDir, "artifacts", projectID, artifactID, "content")
+	metadataPath := filepath.Join(e.dataDir, "artifacts", projectID, artifactID, "metadata.json")
+	if err := ensureInside(e.dataDir, contentPath); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(contentPath), 0o755); err != nil {
+		return "", fmt.Errorf("create artifact dir: %w", err)
+	}
+
+	source, err := os.Open(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("open render output: %w", err)
+	}
+	defer source.Close()
+
+	target, err := os.Create(contentPath)
+	if err != nil {
+		return "", fmt.Errorf("create artifact content: %w", err)
+	}
+	hasher := sha256.New()
+	copied, copyErr := io.Copy(io.MultiWriter(target, hasher), source)
+	closeErr := target.Close()
+	if copyErr != nil {
+		return "", fmt.Errorf("copy render output to artifact: %w", copyErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("close artifact content: %w", closeErr)
+	}
+	if copied > 0 {
+		sizeBytes = copied
+	}
+
+	hash := hex.EncodeToString(hasher.Sum(nil))
+	storageRef := "local://projects/" + projectID + "/artifacts/" + artifactID + "/" + hash + "/final.mp4"
+	metadata := map[string]interface{}{
+		"id":           artifactID,
+		"projectId":    projectID,
+		"storageRef":   storageRef,
+		"mimeType":     "video/mp4",
+		"contentHash":  "sha256:" + hash,
+		"sizeBytes":    sizeBytes,
+		"sourcePath":   outputPath,
+		"renderTimeMs": renderTimeMs,
+		"fps":          fps,
+		"width":        width,
+		"height":       height,
+		"updatedAt":    time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := writeLocalToolJSON(metadataPath, metadata); err != nil {
+		return "", fmt.Errorf("write artifact metadata: %w", err)
+	}
+	return storageRef, nil
+}
+
+func writeLocalToolJSON(path string, value interface{}) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", "  ")
+	return enc.Encode(value)
 }

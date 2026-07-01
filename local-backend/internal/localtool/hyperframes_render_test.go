@@ -2,8 +2,12 @@ package localtool
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,9 +107,9 @@ func TestHyperFramesRenderExecutorServiceUnreachable(t *testing.T) {
 	}
 
 	_, err := executor.Execute(context.Background(), Job{
-		ID:        "job-1",
-		ProjectID: "project_001",
-		Command:   CommandHyperFramesRender,
+		ID:         "job-1",
+		ProjectID:  "project_001",
+		Command:    CommandHyperFramesRender,
 		TimeoutSec: 1, // short timeout for test
 		Payload: map[string]interface{}{
 			"projectDir": "local://projects/project_001/hyperframes",
@@ -123,5 +127,71 @@ func TestHyperFramesRenderExecutorDefaultTimeout(t *testing.T) {
 	executor := NewHyperFramesRenderExecutor(root, "http://127.0.0.1:8787", 0)
 	if executor.timeout.Seconds() < 60 {
 		t.Fatalf("expected default timeout >= 60s, got %v", executor.timeout)
+	}
+}
+
+func TestHyperFramesRenderExecutorReturnsClientFetchableLocalArtifactRef(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "projects", "project_001", "hyperframes")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req hyperFramesRenderRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode render request: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(req.OutputPath), 0o755); err != nil {
+			t.Fatalf("mkdir output: %v", err)
+		}
+		if err := os.WriteFile(req.OutputPath, []byte("fake mp4 bytes"), 0o644); err != nil {
+			t.Fatalf("write output: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(hyperFramesRenderResponse{
+			OK:         true,
+			JobID:      "render_test",
+			OutputPath: req.OutputPath,
+			DurationMs: 12,
+		})
+	}))
+	defer server.Close()
+
+	executor := NewHyperFramesRenderExecutor(root, server.URL, 0)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesRender,
+		Payload: map[string]interface{}{
+			"projectDir": "local://projects/project_001/hyperframes",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	outputRef, _ := result.Output["outputRef"].(string)
+	if !strings.HasPrefix(outputRef, "local://projects/project_001/artifacts/final-video/") {
+		t.Fatalf("outputRef should be fetchable by client artifact endpoint, got %q", outputRef)
+	}
+	if !strings.HasSuffix(outputRef, "/final.mp4") {
+		t.Fatalf("outputRef should preserve final filename, got %q", outputRef)
+	}
+	if _, err := os.Stat(filepath.Join(root, "artifacts", "project_001", "final-video", "content")); err != nil {
+		t.Fatalf("final video should be mirrored into local artifact content path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "artifacts", "project_001", "final-video", "metadata.json")); err != nil {
+		t.Fatalf("final video should have local artifact metadata: %v", err)
+	}
+
+	artifacts, ok := result.Output["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("expected one artifact manifest, got %#v", result.Output["artifacts"])
+	}
+	if artifacts[0]["storageRef"] != outputRef {
+		t.Fatalf("artifact storageRef should match outputRef: %#v", artifacts[0])
 	}
 }
