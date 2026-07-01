@@ -328,7 +328,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 	scriptRef := stepOutputRef(scriptAnchor, scriptField)
 	profileRef := stepOutputRef(profileAnchor, "creationProfile")
 
-	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", "time_window_planner", scriptAnchor, AgentStep{
+	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", scriptAnchor, AgentStep{
 		ID:        "time_window",
 		Intent:    "按口播稿时间轴规划可执行的画面时间窗",
 		Tool:      "time_window_planner",
@@ -348,7 +348,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 		"scriptSpans":     scriptRef,
 	}, scriptAnchor, profileAnchor)
 
-	visualAnchor := c.ensureProfileStepAfter(plan, "visual_alignment", "visual_alignment_planner", timeWindowAnchor, AgentStep{
+	visualAnchor := c.ensureProfileStepAfter(plan, "visual_alignment", timeWindowAnchor, AgentStep{
 		ID:        "visual_alignment",
 		Intent:    "将口播脚本与素材、字幕和画面服务关系对齐成分镜清单",
 		Tool:      "visual_alignment_planner",
@@ -370,7 +370,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 		"creationProfile": profileRef,
 	}, scriptAnchor, timeWindowAnchor, profileAnchor)
 
-	generationAnchor := c.ensureProfileStepAfter(plan, "shot_generation", "shot_generation_planner", visualAnchor, AgentStep{
+	generationAnchor := c.ensureProfileStepAfter(plan, "shot_generation", visualAnchor, AgentStep{
 		ID:        "shot_generation",
 		Intent:    "为口播画面段落决定 AIGC、素材、字幕和占位画面生成策略",
 		Tool:      "shot_generation_planner",
@@ -400,7 +400,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnchor string) {
 	profileRef := stepOutputRef(profileAnchor, "creationProfile")
 	storyField := preferredOutputField(c.manifestFor("proposal_generator"), "proposalPacket", "proposal")
-	storyAnchor := c.ensureProfileStepAfter(plan, "story_foundation", "proposal_generator", profileAnchor, AgentStep{
+	storyAnchor := c.ensureProfileStepAfter(plan, "story_foundation", profileAnchor, AgentStep{
 		ID:        "story_foundation",
 		Intent:    "建立影视短片的故事基础、主题、人物和冲突方向",
 		Tool:      "proposal_generator",
@@ -420,7 +420,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	}
 	storyRef := stepOutputRef(storyAnchor, storyField)
 
-	scriptAnchor := c.ensureProfileStepAfter(plan, "cinematic_script", "video_script_generator", storyAnchor, AgentStep{
+	scriptAnchor := c.ensureProfileStepAfter(plan, "cinematic_script", storyAnchor, AgentStep{
 		ID:        "cinematic_script",
 		Intent:    "生成包含角色、场景和动作连续性的影视短片剧本",
 		Tool:      "video_script_generator",
@@ -444,7 +444,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	scriptRef := stepOutputRef(scriptAnchor, "script")
 
 	continuityField := preferredOutputField(c.manifestFor("continuity_checker"), "continuityBible", "continuityReport", "styleProfile", "report")
-	continuityAnchor := c.ensureProfileStepAfter(plan, "continuity_bible", "continuity_checker", scriptAnchor, AgentStep{
+	continuityAnchor := c.ensureProfileStepAfter(plan, "continuity_bible", scriptAnchor, AgentStep{
 		ID:        "continuity_bible",
 		Intent:    "整理角色、场景、道具、风格和连续性圣经",
 		Tool:      "continuity_checker",
@@ -467,7 +467,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	}
 	continuityRef := stepOutputRef(continuityAnchor, continuityField)
 
-	referenceAnchor := c.ensureProfileStepAfter(plan, "reference_assets", "reference_asset_planner", continuityAnchor, AgentStep{
+	referenceAnchor := c.ensureProfileStepAfter(plan, "reference_assets", continuityAnchor, AgentStep{
 		ID:        "reference_assets",
 		Intent:    "规划角色、场景、道具和风格参考资产",
 		Tool:      "reference_asset_planner",
@@ -490,7 +490,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	}, scriptAnchor, continuityAnchor, profileAnchor)
 	referenceRef := stepOutputRef(referenceAnchor, "referenceAssetPlan")
 
-	shotDesignAnchor := c.ensureProfileStepAfter(plan, "cinematic_shot_design", "cinematic_shot_designer", referenceAnchor, AgentStep{
+	shotDesignAnchor := c.ensureProfileStepAfter(plan, "cinematic_shot_design", referenceAnchor, AgentStep{
 		ID:        "cinematic_shot_design",
 		Intent:    "设计导演分镜、镜头调度和粗颗粒剧情镜头清单",
 		Tool:      "cinematic_shot_designer",
@@ -513,7 +513,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		"creationProfile":    profileRef,
 	}, scriptAnchor, continuityAnchor, referenceAnchor, profileAnchor)
 
-	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", "time_window_planner", shotDesignAnchor, AgentStep{
+	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", shotDesignAnchor, AgentStep{
 		ID:        "time_window",
 		Intent:    "将影视粗分镜细拆成 3-15 秒 AIGC 生成时间窗",
 		Tool:      "time_window_planner",
@@ -535,7 +535,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	timeWindowRef := stepOutputRef(timeWindowAnchor, "timeWindows")
 
 	keyframeField := preferredOutputField(c.manifestFor("keyframe_prompt_generator"), "keyframeStoryboards", "keyframePrompts", "summary")
-	keyframesAnchor := c.ensureProfileStepAfter(plan, "keyframes_storyboards", "keyframe_prompt_generator", timeWindowAnchor, AgentStep{
+	keyframesAnchor := c.ensureProfileStepAfter(plan, "keyframes_storyboards", timeWindowAnchor, AgentStep{
 		ID:        "keyframes_storyboards",
 		Intent:    "基于参考资产和细分时间窗生成关键帧与故事板提示",
 		Tool:      "keyframe_prompt_generator",
@@ -560,7 +560,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	}
 	keyframeRef := stepOutputRef(keyframesAnchor, keyframeField)
 
-	generationAnchor := c.ensureProfileStepAfter(plan, "shot_generation", "shot_generation_planner", keyframesAnchor, AgentStep{
+	generationAnchor := c.ensureProfileStepAfter(plan, "shot_generation", keyframesAnchor, AgentStep{
 		ID:        "shot_generation",
 		Intent:    "为细分影视时间窗规划生成策略、参考资产和外部 AIGC 请求",
 		Tool:      "shot_generation_planner",
@@ -623,6 +623,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 		})
 		promptField = preferredOutputField(c.manifestFor("video_prompt_generator"), "videoPrompts", "video_prompt")
 	}
+	rewireVideoPromptShotSource(planStepByID(plan, promptAnchor), shotAnchor, shotField)
 	c.augmentVideoPromptGenerationInputs(plan, promptAnchor, generationAnchor, generationField, generationPackageField)
 
 	projectAnchor, projectField := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
@@ -710,14 +711,7 @@ func (c *PlanCompiler) lastVideoPromptProducer(plan *AgentPlan) (string, string)
 	}
 	for i := len(plan.Steps) - 1; i >= 0; i-- {
 		step := plan.Steps[i]
-		if step.ID == "keyframes_storyboards" {
-			continue
-		}
-		if stage, ok := step.Arguments["stage"].(string); ok && stage == "keyframes_storyboards" {
-			continue
-		}
-		switch step.Tool {
-		case "video_prompt_generator", "keyframe_prompt_generator":
+		if step.Tool == "video_prompt_generator" {
 			if field := firstManifestOutput(c.manifestFor(step.Tool), "videoPrompts", "video_prompt", "keyframePrompts", "keyframe_prompt"); field != "" {
 				return step.ID, field
 			}
@@ -755,14 +749,40 @@ func (c *PlanCompiler) ensureProfileSelectionStep(plan *AgentPlan, profile strin
 	return step.ID
 }
 
-func (c *PlanCompiler) ensureProfileStepAfter(plan *AgentPlan, id, toolName, afterID string, step AgentStep) string {
+func (c *PlanCompiler) ensureProfileStepAfter(plan *AgentPlan, id, afterID string, step AgentStep) string {
 	if existing := planStepByID(plan, id); existing != nil {
 		return existing.ID
 	}
-	if existingID := lastStepByTool(plan, toolName); existingID != "" {
-		return existingID
-	}
 	return insertPlanStepAfter(plan, afterID, step)
+}
+
+func rewireVideoPromptShotSource(step *AgentStep, shotAnchor, shotField string) {
+	if step == nil || shotAnchor == "" || shotField == "" {
+		return
+	}
+	if step.Arguments == nil {
+		step.Arguments = map[string]interface{}{}
+	}
+	oldStepID, _, hadOldShotRef := outputReference(step.Arguments["shotList"])
+	step.Arguments["shotList"] = stepOutputRef(shotAnchor, shotField)
+	if hadOldShotRef && oldStepID != "" && oldStepID != shotAnchor {
+		step.DependsOn = removeDependency(step.DependsOn, oldStepID)
+	}
+	appendDependencyIfMissing(step, shotAnchor)
+}
+
+func removeDependency(deps []string, remove string) []string {
+	if remove == "" || len(deps) == 0 {
+		return deps
+	}
+	out := deps[:0]
+	for _, dep := range deps {
+		if dep == remove {
+			continue
+		}
+		out = append(out, dep)
+	}
+	return out
 }
 
 func insertPlanStepAt(plan *AgentPlan, index int, step AgentStep) string {
@@ -779,18 +799,6 @@ func insertPlanStepAt(plan *AgentPlan, index int, step AgentStep) string {
 	copy(plan.Steps[index+1:], plan.Steps[index:])
 	plan.Steps[index] = step
 	return step.ID
-}
-
-func lastStepByTool(plan *AgentPlan, toolName string) string {
-	if plan == nil || toolName == "" {
-		return ""
-	}
-	for i := len(plan.Steps) - 1; i >= 0; i-- {
-		if plan.Steps[i].Tool == toolName {
-			return plan.Steps[i].ID
-		}
-	}
-	return ""
 }
 
 func mergeStepArgsAndDeps(step *AgentStep, args map[string]interface{}, deps ...string) {
