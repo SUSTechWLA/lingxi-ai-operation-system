@@ -133,12 +133,22 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 		`data-track-index="0"`,
 		`data-duration="4.0"`,
 		`data-shot-id="SHOT_01"`,
-		`/api/local/artifacts/shot-video-01?projectId=project_001&amp;raw=1`,
+		`http://127.0.0.1:18080/api/local/artifacts/shot-video-01?projectId=project_001&amp;raw=1`,
 		`精确文字`,
 	} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("index.html missing %q:\n%s", expected, html)
 		}
+	}
+}
+
+func TestLocalAgentRawArtifactURLUsesConfiguredBase(t *testing.T) {
+	t.Setenv("TANGYING_LOCAL_AGENT_BASE_URL", "http://127.0.0.1:19090/")
+
+	got := localAgentRawArtifactURL("project_001", "shot-video-01")
+	want := "http://127.0.0.1:19090/api/local/artifacts/shot-video-01?projectId=project_001&raw=1"
+	if got != want {
+		t.Fatalf("raw artifact url = %q, want %q", got, want)
 	}
 }
 

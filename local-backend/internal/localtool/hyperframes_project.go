@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -563,7 +564,16 @@ func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool
 	if info, err := os.Stat(contentPath); err != nil || info.IsDir() {
 		return "", true
 	}
-	return "/api/local/artifacts/" + artifactID + "?projectId=" + refProjectID + "&raw=1", false
+	return localAgentRawArtifactURL(refProjectID, artifactID), false
+}
+
+func localAgentRawArtifactURL(projectID, artifactID string) string {
+	baseURL := strings.TrimSpace(os.Getenv("TANGYING_LOCAL_AGENT_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:18080"
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	return baseURL + "/api/local/artifacts/" + url.PathEscape(artifactID) + "?projectId=" + url.QueryEscape(projectID) + "&raw=1"
 }
 
 // ---- HTML/CSS generation ----
