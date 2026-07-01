@@ -116,7 +116,9 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 		return nil
 	}
 	c.injectKnowledgeContext(plan)
-	c.completeVideoBetaPlan(plan)
+	if !c.completeVideoPlanByProfile(plan) {
+		c.completeVideoBetaPlan(plan)
+	}
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
 	c.expandPreparedPlanBudget(plan)
 	return plan
@@ -213,12 +215,373 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 		})
 		generationField = preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
 	}
+
+	c.completeVideoOutputPlanFromAnchors(plan, scriptAnchor, scriptField, shotAnchor, shotField, generationAnchor, generationField)
+}
+
+func (c *PlanCompiler) completeVideoPlanByProfile(plan *AgentPlan) bool {
+	if plan == nil || plan.Domain != "video_creation" {
+		return false
+	}
+	if c.manifestFor("video_profile_classifier") == nil || c.manifestFor("time_window_planner") == nil {
+		return false
+	}
+	profile := inferVideoCreationProfile(plan.Goal)
+	switch profile {
+	case "cinematic_story":
+		if !c.canCompleteCinematicProfilePlan() {
+			return false
+		}
+		profileAnchor := c.ensureProfileSelectionStep(plan, profile)
+		c.completeCinematicProfilePlan(plan, profileAnchor)
+		return true
+	default:
+		if !c.canCompleteTalkingHeadProfilePlan(plan) {
+			return false
+		}
+		profileAnchor := c.ensureProfileSelectionStep(plan, "talking_head")
+		return c.completeTalkingHeadProfilePlan(plan, profileAnchor)
+	}
+}
+
+func inferVideoCreationProfile(goal string) string {
+	normalized := strings.ToLower(goal)
+	for _, term := range []string{
+		"影视", "剧情", "角色", "场景", "道具", "导演", "短片",
+		"cinematic", "story",
+	} {
+		if strings.Contains(normalized, strings.ToLower(term)) {
+			return "cinematic_story"
+		}
+	}
+	for _, term := range []string{
+		"口播", "知识", "讲解", "分享", "voiceover", "talking head",
+	} {
+		if strings.Contains(normalized, strings.ToLower(term)) {
+			return "talking_head"
+		}
+	}
+	return "talking_head"
+}
+
+func (c *PlanCompiler) canCompleteTalkingHeadProfilePlan(plan *AgentPlan) bool {
+	if c.manifestFor("visual_alignment_planner") == nil ||
+		c.manifestFor("shot_generation_planner") == nil ||
+		!c.hasVideoOutputCompletionTools() {
+		return false
+	}
+	if scriptAnchor, _ := c.lastProducerStepForFields(plan, []string{"script"}, []string{
+		"video_script_generator",
+		"script_generator",
+	}); scriptAnchor != "" {
+		return true
+	}
+	return c.manifestFor("video_script_generator") != nil || c.manifestFor("script_generator") != nil
+}
+
+func (c *PlanCompiler) canCompleteCinematicProfilePlan() bool {
+	for _, name := range []string{
+		"proposal_generator",
+		"video_script_generator",
+		"continuity_checker",
+		"reference_asset_planner",
+		"cinematic_shot_designer",
+		"keyframe_prompt_generator",
+		"shot_generation_planner",
+	} {
+		if c.manifestFor(name) == nil {
+			return false
+		}
+	}
+	return c.hasVideoOutputCompletionTools()
+}
+
+func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAnchor string) bool {
+	scriptAnchor, scriptField := c.lastProducerStepForFields(plan, []string{"script"}, []string{
+		"video_script_generator",
+		"script_generator",
+	})
+	if scriptAnchor == "" {
+		scriptTool := "video_script_generator"
+		if c.manifestFor(scriptTool) == nil {
+			scriptTool = "script_generator"
+		}
+		if c.manifestFor(scriptTool) == nil {
+			return false
+		}
+		scriptAnchor = insertPlanStepAfter(plan, profileAnchor, AgentStep{
+			ID:        uniqueStepID(plan, "script_generation"),
+			Intent:    "生成口播主线脚本",
+			Tool:      scriptTool,
+			DependsOn: dependencyList(profileAnchor),
+			Arguments: map[string]interface{}{
+				"stage":           "script_generation",
+				"brief":           plan.Goal,
+				"topic":           plan.Goal,
+				"creationProfile": stepOutputRef(profileAnchor, "creationProfile"),
+			},
+			ExpectedOutput:  []string{"script"},
+			ProduceArtifact: true,
+		})
+		scriptField = preferredOutputField(c.manifestFor(scriptTool), "script")
+	}
+	scriptRef := stepOutputRef(scriptAnchor, scriptField)
+	profileRef := stepOutputRef(profileAnchor, "creationProfile")
+
+	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", "time_window_planner", scriptAnchor, AgentStep{
+		ID:        "time_window",
+		Intent:    "按口播稿时间轴规划可执行的画面时间窗",
+		Tool:      "time_window_planner",
+		DependsOn: dependencyListUnique(scriptAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "time_window",
+			"brief":           plan.Goal,
+			"scriptSpans":     scriptRef,
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"timeWindows"},
+		ProduceArtifact: true,
+	})
+	timeWindowStep := planStepByID(plan, timeWindowAnchor)
+	mergeStepArgsAndDeps(timeWindowStep, map[string]interface{}{
+		"creationProfile": profileRef,
+		"scriptSpans":     scriptRef,
+	}, scriptAnchor, profileAnchor)
+
+	visualAnchor := c.ensureProfileStepAfter(plan, "visual_alignment", "visual_alignment_planner", timeWindowAnchor, AgentStep{
+		ID:        "visual_alignment",
+		Intent:    "将口播脚本与素材、字幕和画面服务关系对齐成分镜清单",
+		Tool:      "visual_alignment_planner",
+		DependsOn: dependencyListUnique(scriptAnchor, timeWindowAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "visual_alignment",
+			"brief":           plan.Goal,
+			"script":          scriptRef,
+			"timeWindows":     stepOutputRef(timeWindowAnchor, "timeWindows"),
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"shotList"},
+		ProduceArtifact: true,
+	})
+	visualStep := planStepByID(plan, visualAnchor)
+	mergeStepArgsAndDeps(visualStep, map[string]interface{}{
+		"script":          scriptRef,
+		"timeWindows":     stepOutputRef(timeWindowAnchor, "timeWindows"),
+		"creationProfile": profileRef,
+	}, scriptAnchor, timeWindowAnchor, profileAnchor)
+
+	generationAnchor := c.ensureProfileStepAfter(plan, "shot_generation", "shot_generation_planner", visualAnchor, AgentStep{
+		ID:        "shot_generation",
+		Intent:    "为口播画面段落决定 AIGC、素材、字幕和占位画面生成策略",
+		Tool:      "shot_generation_planner",
+		DependsOn: dependencyListUnique(visualAnchor, timeWindowAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "generation_strategy",
+			"brief":           plan.Goal,
+			"shotList":        stepOutputRef(visualAnchor, "shotList"),
+			"timeWindows":     stepOutputRef(timeWindowAnchor, "timeWindows"),
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"shotGenerationPlans", "shotAssetPackages", "externalGenerationRequests"},
+		ProduceArtifact: true,
+	})
+	generationStep := planStepByID(plan, generationAnchor)
+	mergeStepArgsAndDeps(generationStep, map[string]interface{}{
+		"shotList":        stepOutputRef(visualAnchor, "shotList"),
+		"timeWindows":     stepOutputRef(timeWindowAnchor, "timeWindows"),
+		"creationProfile": profileRef,
+	}, visualAnchor, timeWindowAnchor, profileAnchor)
+
+	generationField := preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
+	c.completeVideoOutputPlanFromAnchors(plan, scriptAnchor, scriptField, visualAnchor, "shotList", generationAnchor, generationField)
+	return true
+}
+
+func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnchor string) {
+	profileRef := stepOutputRef(profileAnchor, "creationProfile")
+	storyAnchor := c.ensureProfileStepAfter(plan, "story_foundation", "proposal_generator", profileAnchor, AgentStep{
+		ID:        "story_foundation",
+		Intent:    "建立影视短片的故事基础、主题、人物和冲突方向",
+		Tool:      "proposal_generator",
+		DependsOn: dependencyList(profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "story_foundation",
+			"brief":           plan.Goal,
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"proposal"},
+		ProduceArtifact: true,
+	})
+	storyStep := planStepByID(plan, storyAnchor)
+	mergeStepArgsAndDeps(storyStep, map[string]interface{}{"creationProfile": profileRef}, profileAnchor)
+
+	scriptAnchor := c.ensureProfileStepAfter(plan, "cinematic_script", "video_script_generator", storyAnchor, AgentStep{
+		ID:        "cinematic_script",
+		Intent:    "生成包含角色、场景和动作连续性的影视短片剧本",
+		Tool:      "video_script_generator",
+		DependsOn: dependencyListUnique(storyAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "cinematic_script",
+			"brief":           plan.Goal,
+			"proposal":        stepOutputRef(storyAnchor, "proposal"),
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"script"},
+		ProduceArtifact: true,
+	})
+	scriptStep := planStepByID(plan, scriptAnchor)
+	mergeStepArgsAndDeps(scriptStep, map[string]interface{}{
+		"proposal":        stepOutputRef(storyAnchor, "proposal"),
+		"creationProfile": profileRef,
+	}, storyAnchor, profileAnchor)
+	scriptRef := stepOutputRef(scriptAnchor, "script")
+
+	continuityAnchor := c.ensureProfileStepAfter(plan, "continuity_bible", "continuity_checker", scriptAnchor, AgentStep{
+		ID:        "continuity_bible",
+		Intent:    "整理角色、场景、道具、风格和连续性圣经",
+		Tool:      "continuity_checker",
+		DependsOn: dependencyListUnique(scriptAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "continuity_bible",
+			"script":          scriptRef,
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"continuityBible"},
+		ProduceArtifact: true,
+	})
+	continuityStep := planStepByID(plan, continuityAnchor)
+	mergeStepArgsAndDeps(continuityStep, map[string]interface{}{
+		"script":          scriptRef,
+		"creationProfile": profileRef,
+	}, scriptAnchor, profileAnchor)
+	continuityRef := stepOutputRef(continuityAnchor, "continuityBible")
+
+	referenceAnchor := c.ensureProfileStepAfter(plan, "reference_assets", "reference_asset_planner", continuityAnchor, AgentStep{
+		ID:        "reference_assets",
+		Intent:    "规划角色、场景、道具和风格参考资产",
+		Tool:      "reference_asset_planner",
+		DependsOn: dependencyListUnique(scriptAnchor, continuityAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "reference_assets",
+			"brief":           plan.Goal,
+			"script":          scriptRef,
+			"continuityBible": continuityRef,
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"referenceAssetPlan"},
+		ProduceArtifact: true,
+	})
+	referenceStep := planStepByID(plan, referenceAnchor)
+	mergeStepArgsAndDeps(referenceStep, map[string]interface{}{
+		"script":          scriptRef,
+		"continuityBible": continuityRef,
+		"creationProfile": profileRef,
+	}, scriptAnchor, continuityAnchor, profileAnchor)
+	referenceRef := stepOutputRef(referenceAnchor, "referenceAssetPlan")
+
+	shotDesignAnchor := c.ensureProfileStepAfter(plan, "cinematic_shot_design", "cinematic_shot_designer", referenceAnchor, AgentStep{
+		ID:        "cinematic_shot_design",
+		Intent:    "设计导演分镜、镜头调度和粗颗粒剧情镜头清单",
+		Tool:      "cinematic_shot_designer",
+		DependsOn: dependencyListUnique(scriptAnchor, continuityAnchor, referenceAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":              "cinematic_shot_design",
+			"script":             scriptRef,
+			"continuityBible":    continuityRef,
+			"referenceAssetPlan": referenceRef,
+			"creationProfile":    profileRef,
+		},
+		ExpectedOutput:  []string{"shotList"},
+		ProduceArtifact: true,
+	})
+	shotDesignStep := planStepByID(plan, shotDesignAnchor)
+	mergeStepArgsAndDeps(shotDesignStep, map[string]interface{}{
+		"script":             scriptRef,
+		"continuityBible":    continuityRef,
+		"referenceAssetPlan": referenceRef,
+		"creationProfile":    profileRef,
+	}, scriptAnchor, continuityAnchor, referenceAnchor, profileAnchor)
+
+	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", "time_window_planner", shotDesignAnchor, AgentStep{
+		ID:        "time_window",
+		Intent:    "将影视粗分镜细拆成 3-15 秒 AIGC 生成时间窗",
+		Tool:      "time_window_planner",
+		DependsOn: dependencyListUnique(shotDesignAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":           "time_window",
+			"brief":           plan.Goal,
+			"shotList":        stepOutputRef(shotDesignAnchor, "shotList"),
+			"creationProfile": profileRef,
+		},
+		ExpectedOutput:  []string{"timeWindows"},
+		ProduceArtifact: true,
+	})
+	timeWindowStep := planStepByID(plan, timeWindowAnchor)
+	mergeStepArgsAndDeps(timeWindowStep, map[string]interface{}{
+		"shotList":        stepOutputRef(shotDesignAnchor, "shotList"),
+		"creationProfile": profileRef,
+	}, shotDesignAnchor, profileAnchor)
+	timeWindowRef := stepOutputRef(timeWindowAnchor, "timeWindows")
+
+	keyframesAnchor := c.ensureProfileStepAfter(plan, "keyframes_storyboards", "keyframe_prompt_generator", timeWindowAnchor, AgentStep{
+		ID:        "keyframes_storyboards",
+		Intent:    "基于参考资产和细分时间窗生成关键帧与故事板提示",
+		Tool:      "keyframe_prompt_generator",
+		DependsOn: dependencyListUnique(referenceAnchor, timeWindowAnchor),
+		Arguments: map[string]interface{}{
+			"stage":              "keyframes_storyboards",
+			"timeWindows":        timeWindowRef,
+			"referenceAssetPlan": referenceRef,
+		},
+		ExpectedOutput:  []string{"keyframeStoryboards", "keyframePrompts"},
+		ProduceArtifact: true,
+	})
+	keyframeStep := planStepByID(plan, keyframesAnchor)
+	mergeStepArgsAndDeps(keyframeStep, map[string]interface{}{
+		"timeWindows":        timeWindowRef,
+		"referenceAssetPlan": referenceRef,
+	}, referenceAnchor, timeWindowAnchor)
+
+	generationAnchor := c.ensureProfileStepAfter(plan, "shot_generation", "shot_generation_planner", keyframesAnchor, AgentStep{
+		ID:        "shot_generation",
+		Intent:    "为细分影视时间窗规划生成策略、参考资产和外部 AIGC 请求",
+		Tool:      "shot_generation_planner",
+		DependsOn: dependencyListUnique(timeWindowAnchor, referenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor),
+		Arguments: map[string]interface{}{
+			"stage":               "generation_strategy",
+			"brief":               plan.Goal,
+			"shotList":            timeWindowRef,
+			"timeWindows":         timeWindowRef,
+			"creationProfile":     profileRef,
+			"referenceAssetPlan":  referenceRef,
+			"continuityBible":     continuityRef,
+			"keyframeStoryboards": stepOutputRef(keyframesAnchor, "keyframeStoryboards"),
+		},
+		ExpectedOutput:  []string{"shotGenerationPlans", "shotAssetPackages", "externalGenerationRequests"},
+		ProduceArtifact: true,
+	})
+	generationStep := planStepByID(plan, generationAnchor)
+	mergeStepArgsAndDeps(generationStep, map[string]interface{}{
+		"shotList":            timeWindowRef,
+		"timeWindows":         timeWindowRef,
+		"creationProfile":     profileRef,
+		"referenceAssetPlan":  referenceRef,
+		"continuityBible":     continuityRef,
+		"keyframeStoryboards": stepOutputRef(keyframesAnchor, "keyframeStoryboards"),
+	}, timeWindowAnchor, referenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor)
+
+	generationField := preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
+	c.completeVideoOutputPlanFromAnchors(plan, scriptAnchor, "script", timeWindowAnchor, "timeWindows", generationAnchor, generationField)
+}
+
+func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scriptAnchor, scriptField, shotAnchor, shotField, generationAnchor, generationField string) {
+	if plan == nil || scriptAnchor == "" || scriptField == "" || shotAnchor == "" || shotField == "" {
+		return
+	}
+	scriptRef := stepOutputRef(scriptAnchor, scriptField)
 	generationPackageField := c.outputFieldForStep(plan, generationAnchor, "shotAssetPackages")
 
-	promptAnchor, promptField := c.lastProducerStepForFields(plan,
-		[]string{"videoPrompts", "video_prompt", "keyframePrompts", "keyframe_prompt"},
-		[]string{"video_prompt_generator", "keyframe_prompt_generator"},
-	)
+	promptAnchor, promptField := c.lastVideoPromptProducer(plan)
 	if promptAnchor == "" {
 		promptArgs := map[string]interface{}{
 			"stage":    "video_prompt",
@@ -320,6 +683,110 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 			ExpectedOutput:  []string{"publish_copy"},
 			ProduceArtifact: true,
 		})
+	}
+}
+
+func (c *PlanCompiler) lastVideoPromptProducer(plan *AgentPlan) (string, string) {
+	if plan == nil {
+		return "", ""
+	}
+	for i := len(plan.Steps) - 1; i >= 0; i-- {
+		step := plan.Steps[i]
+		if step.ID == "keyframes_storyboards" {
+			continue
+		}
+		if stage, ok := step.Arguments["stage"].(string); ok && stage == "keyframes_storyboards" {
+			continue
+		}
+		switch step.Tool {
+		case "video_prompt_generator", "keyframe_prompt_generator":
+			if field := firstManifestOutput(c.manifestFor(step.Tool), "videoPrompts", "video_prompt", "keyframePrompts", "keyframe_prompt"); field != "" {
+				return step.ID, field
+			}
+		}
+	}
+	return "", ""
+}
+
+func (c *PlanCompiler) ensureProfileSelectionStep(plan *AgentPlan, profile string) string {
+	if step := planStepByID(plan, "profile_selection"); step != nil {
+		if step.Arguments == nil {
+			step.Arguments = map[string]interface{}{}
+		}
+		step.Arguments["stage"] = "profile_selection"
+		step.Arguments["brief"] = plan.Goal
+		step.Arguments["route"] = profile
+		if len(step.ExpectedOutput) == 0 {
+			step.ExpectedOutput = []string{"creationProfile", "routingReason"}
+		}
+		return step.ID
+	}
+	step := AgentStep{
+		ID:     "profile_selection",
+		Intent: "识别视频创作主线并选择编排模板",
+		Tool:   "video_profile_classifier",
+		Arguments: map[string]interface{}{
+			"stage": "profile_selection",
+			"brief": plan.Goal,
+			"route": profile,
+		},
+		ExpectedOutput:  []string{"creationProfile", "routingReason"},
+		ProduceArtifact: true,
+	}
+	insertPlanStepAt(plan, 0, step)
+	return step.ID
+}
+
+func (c *PlanCompiler) ensureProfileStepAfter(plan *AgentPlan, id, toolName, afterID string, step AgentStep) string {
+	if existing := planStepByID(plan, id); existing != nil {
+		return existing.ID
+	}
+	if existingID := lastStepByTool(plan, toolName); existingID != "" {
+		return existingID
+	}
+	return insertPlanStepAfter(plan, afterID, step)
+}
+
+func insertPlanStepAt(plan *AgentPlan, index int, step AgentStep) string {
+	if plan == nil {
+		return step.ID
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index > len(plan.Steps) {
+		index = len(plan.Steps)
+	}
+	plan.Steps = append(plan.Steps, AgentStep{})
+	copy(plan.Steps[index+1:], plan.Steps[index:])
+	plan.Steps[index] = step
+	return step.ID
+}
+
+func lastStepByTool(plan *AgentPlan, toolName string) string {
+	if plan == nil || toolName == "" {
+		return ""
+	}
+	for i := len(plan.Steps) - 1; i >= 0; i-- {
+		if plan.Steps[i].Tool == toolName {
+			return plan.Steps[i].ID
+		}
+	}
+	return ""
+}
+
+func mergeStepArgsAndDeps(step *AgentStep, args map[string]interface{}, deps ...string) {
+	if step == nil {
+		return
+	}
+	if step.Arguments == nil {
+		step.Arguments = map[string]interface{}{}
+	}
+	for key, value := range args {
+		step.Arguments[key] = value
+	}
+	for _, dep := range deps {
+		appendDependencyIfMissing(step, dep)
 	}
 }
 
@@ -558,6 +1025,15 @@ func stepOutputRef(stepID, field string) string {
 
 func (c *PlanCompiler) hasVideoBetaCompletionTools() bool {
 	for _, name := range []string{"shot_splitter", "video_prompt_generator", "hyperframes_project_generator", "hyperframes_renderer", "publish_copy_generator"} {
+		if c.manifestFor(name) == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *PlanCompiler) hasVideoOutputCompletionTools() bool {
+	for _, name := range []string{"video_prompt_generator", "hyperframes_project_generator", "hyperframes_renderer", "publish_copy_generator"} {
 		if c.manifestFor(name) == nil {
 			return false
 		}

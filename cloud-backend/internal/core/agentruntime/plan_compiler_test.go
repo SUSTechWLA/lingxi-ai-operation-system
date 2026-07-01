@@ -341,6 +341,108 @@ func TestPlanCompiler_PreparePlanInsertsShotGenerationPlanner(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请帮我根据端午节的来历创作一个口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	assertStepOrder(t, prepared, []string{
+		"profile_selection",
+		"script_generation",
+		"time_window",
+		"visual_alignment",
+		"shot_generation",
+		"video_prompt",
+		"preview",
+		"render",
+	})
+	timeWindow := findStep(t, prepared, "time_window")
+	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("time_window creationProfile = %#v, want profile selection output", got)
+	}
+	if got := timeWindow.Arguments["scriptSpans"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("time_window scriptSpans = %#v, want script output", got)
+	}
+	alignment := findStep(t, prepared, "visual_alignment")
+	if got := alignment.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("visual_alignment timeWindows = %#v, want time window output", got)
+	}
+	generation := findStep(t, prepared, "shot_generation")
+	if got := generation.Arguments["shotList"]; got != "{{visual_alignment.output.shotList}}" {
+		t.Fatalf("shot_generation shotList = %#v, want visual alignment shot list", got)
+	}
+	if got := generation.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("shot_generation timeWindows = %#v, want time window output", got)
+	}
+	if got := generation.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("shot_generation creationProfile = %#v, want profile selection output", got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "创作一支有角色、场景和道具连续性的 cinematic story 影视短片",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	assertStepOrder(t, prepared, []string{
+		"profile_selection",
+		"story_foundation",
+		"cinematic_script",
+		"continuity_bible",
+		"reference_assets",
+		"cinematic_shot_design",
+		"time_window",
+		"keyframes_storyboards",
+		"shot_generation",
+	})
+	timeWindow := findStep(t, prepared, "time_window")
+	if got := timeWindow.Arguments["shotList"]; got != "{{cinematic_shot_design.output.shotList}}" {
+		t.Fatalf("time_window shotList = %#v, want cinematic shot design shot list", got)
+	}
+	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("time_window creationProfile = %#v, want profile selection output", got)
+	}
+	generation := findStep(t, prepared, "shot_generation")
+	if got := generation.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("shot_generation timeWindows = %#v, want time window output", got)
+	}
+	if got := generation.Arguments["shotList"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("shot_generation shotList = %#v, want fine time-window shot list", got)
+	}
+	if got := generation.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("shot_generation creationProfile = %#v, want profile selection output", got)
+	}
+	keyframes := findStep(t, prepared, "keyframes_storyboards")
+	requireStepDeps(t, keyframes, []string{"reference_assets", "time_window"})
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanAugmentsExistingShotGenerationConsumers(t *testing.T) {
 	catalog := staticToolCatalog{
 		"video_script_generator": {
@@ -1047,6 +1149,126 @@ func requireStepDeps(t *testing.T, step AgentStep, want []string) {
 			t.Fatalf("step %s depends on %#v, want %#v", step.ID, step.DependsOn, want)
 		}
 	}
+}
+
+func assertStepOrder(t *testing.T, plan *AgentPlan, want []string) {
+	t.Helper()
+	last := -1
+	for _, id := range want {
+		index := stepIndex(t, plan, id)
+		if index <= last {
+			t.Fatalf("step %s index %d should be after prior index %d in %#v", id, index, last, plan.Steps)
+		}
+		last = index
+	}
+}
+
+func videoProfileTemplateCatalog() staticToolCatalog {
+	catalog := videoBetaCompletionCatalog()
+	catalog["video_profile_classifier"] = &tool.ToolManifest{
+		Name: "video_profile_classifier",
+		Parameters: map[string]tool.ParamDef{
+			"stage": {Type: "string", Required: true},
+			"brief": {Type: "string", Required: true},
+			"route": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"creationProfile": {Type: "string"},
+			"routingReason":   {Type: "string"},
+		},
+	}
+	catalog["time_window_planner"] = &tool.ToolManifest{
+		Name: "time_window_planner",
+		Parameters: map[string]tool.ParamDef{
+			"brief":           {Type: "string", Required: true},
+			"creationProfile": {Type: "string", Required: true},
+			"scriptSpans":     {Type: "string", Required: false},
+			"shotList":        {Type: "array", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"timeWindows": {Type: "array"},
+		},
+	}
+	catalog["visual_alignment_planner"] = &tool.ToolManifest{
+		Name: "visual_alignment_planner",
+		Parameters: map[string]tool.ParamDef{
+			"brief":           {Type: "string", Required: true},
+			"script":          {Type: "string", Required: true},
+			"timeWindows":     {Type: "array", Required: true},
+			"creationProfile": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotList": {Type: "array"},
+		},
+	}
+	catalog["shot_generation_planner"] = &tool.ToolManifest{
+		Name: "shot_generation_planner",
+		Parameters: map[string]tool.ParamDef{
+			"shotList":            {Type: "array", Required: true},
+			"timeWindows":         {Type: "array", Required: false},
+			"creationProfile":     {Type: "string", Required: true},
+			"referenceAssetPlan":  {Type: "object", Required: false},
+			"continuityBible":     {Type: "object", Required: false},
+			"keyframeStoryboards": {Type: "array", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotGenerationPlans":        {Type: "array"},
+			"shotAssetPackages":          {Type: "array"},
+			"externalGenerationRequests": {Type: "array"},
+		},
+	}
+	catalog["proposal_generator"] = &tool.ToolManifest{
+		Name:       "proposal_generator",
+		Parameters: map[string]tool.ParamDef{"brief": {Type: "string", Required: true}},
+		Output:     map[string]tool.ParamDef{"proposal": {Type: "object"}},
+	}
+	catalog["continuity_checker"] = &tool.ToolManifest{
+		Name: "continuity_checker",
+		Parameters: map[string]tool.ParamDef{
+			"script": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"continuityBible": {Type: "object"},
+		},
+	}
+	catalog["reference_asset_planner"] = &tool.ToolManifest{
+		Name: "reference_asset_planner",
+		Parameters: map[string]tool.ParamDef{
+			"brief":           {Type: "string", Required: true},
+			"script":          {Type: "string", Required: true},
+			"continuityBible": {Type: "object", Required: true},
+			"creationProfile": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"referenceAssetPlan": {Type: "object"},
+		},
+	}
+	catalog["cinematic_shot_designer"] = &tool.ToolManifest{
+		Name: "cinematic_shot_designer",
+		Parameters: map[string]tool.ParamDef{
+			"script":             {Type: "string", Required: true},
+			"continuityBible":    {Type: "object", Required: true},
+			"referenceAssetPlan": {Type: "object", Required: true},
+			"creationProfile":    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotList": {Type: "array"},
+		},
+	}
+	catalog["keyframe_prompt_generator"] = &tool.ToolManifest{
+		Name: "keyframe_prompt_generator",
+		Parameters: map[string]tool.ParamDef{
+			"timeWindows":        {Type: "array", Required: true},
+			"referenceAssetPlan": {Type: "object", Required: true},
+			"continuityBible":    {Type: "object", Required: false},
+			"creationProfile":    {Type: "string", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"keyframeStoryboards": {Type: "array"},
+			"keyframePrompts":     {Type: "array"},
+		},
+	}
+	return catalog
 }
 
 func requireNode(t *testing.T, dag *model.DAGRequest, id, typ, name string) model.NodeRequest {
