@@ -57,6 +57,16 @@ func BuildShotGenerationPlan(
 		if signals.DynamicAIGC {
 			return buildAIGCVideoPlan(shot, visual, signals, durationSec)
 		}
+		if !caps.HTMLAvailable {
+			return buildPlaceholderPlan(
+				shot,
+				visual,
+				signals,
+				durationSec,
+				"static AIGC image plus HyperFrames requires HTML rendering but HyperFrames is unavailable",
+				[]string{"html_provider_required", "placeholder_accuracy", "provider_availability"},
+			)
+		}
 		return buildAIGCImageThenHyperFramesPlan(shot, visual, signals, durationSec, caps.HTMLAvailable)
 	case htmlNeeded:
 		if !caps.HTMLAvailable {
@@ -88,7 +98,7 @@ func BuildShotGenerationPlan(
 func scoreShotGenerationSignals(shot model.ShotUnit, visual model.VisualPlan, pref model.RenderPreference) shotGenerationSignals {
 	var signals shotGenerationSignals
 
-	if pref.PreferHTMLForText && len(shot.ScreenText) > 0 {
+	if len(shot.ScreenText) > 0 {
 		signals.HTMLScore += 2
 		signals.HTMLReasons = append(signals.HTMLReasons, "screen text needs deterministic typography")
 	}

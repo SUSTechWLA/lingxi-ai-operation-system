@@ -165,6 +165,30 @@ func TestBuildShotGenerationPlanExactTextAIGCWithoutHybridUsesPlaceholder(t *tes
 	}
 }
 
+func TestBuildShotGenerationPlanScreenTextStaysExactWhenHTMLPreferenceDisabled(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_06B", DurationSec: 7, ScreenText: []string{"必须准确"}}
+	plan := model.VisualPlan{
+		Background: model.BackgroundSpec{Description: "办公室运动场景", RequiresAIGC: true},
+		Characters: []model.CharacterVisualSpec{{
+			ID:     "host",
+			Motion: "walks through office",
+		}},
+		CameraPlan: model.CameraPlan{Movement: "tracking shot"},
+	}
+	pref := model.DefaultRenderPreference()
+	pref.PreferHTMLForText = false
+	pref.AllowHybridRender = false
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, pref, RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+	if generationPlan.Mode == model.GenerationModeAIGCVideo {
+		t.Fatalf("mode = %q, screen text must not be sent to pure AIGC when HTML preference is disabled", generationPlan.Mode)
+	}
+	if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)
+	}
+}
+
 func TestBuildShotGenerationPlanExactTextAIGCWithoutHTMLUsesPlaceholder(t *testing.T) {
 	shot := model.ShotUnit{ID: "SHOT_07", DurationSec: 7, ScreenText: []string{"增长 42%"}, MainAction: "角色穿过办公室"}
 	plan := model.VisualPlan{
@@ -290,6 +314,22 @@ func TestBuildShotGenerationPlanAIGCImageHyperFramesAddsOverlayLayer(t *testing.
 	}
 	if generationPlan.FusionPlan.OverlayLayers[0].Kind != "html_overlay" {
 		t.Fatalf("overlay layer = %+v, want html_overlay", generationPlan.FusionPlan.OverlayLayers[0])
+	}
+}
+
+func TestBuildShotGenerationPlanStaticAIGCWithoutHTMLDoesNotDeclareHyperFrames(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_11B", DurationSec: 6}
+	plan := model.VisualPlan{
+		Background: model.BackgroundSpec{Description: "静态未来办公室背景", RequiresAIGC: true},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: false})
+
+	if generationPlan.Mode == model.GenerationModeAIGCImageThenHyperFrames {
+		t.Fatalf("mode = %q, image+HyperFrames must not be declared when HTML is unavailable", generationPlan.Mode)
+	}
+	if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)
 	}
 }
 
