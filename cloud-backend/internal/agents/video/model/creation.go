@@ -380,6 +380,40 @@ type TimedMediaLayer struct {
 	Opacity     float64 `json:"opacity,omitempty"`
 }
 
+const (
+	ArtifactKindTimeWindowPlan = "TIME_WINDOW_PLAN"
+)
+
+type ScriptSpan struct {
+	ID       string  `json:"id"`
+	StartSec float64 `json:"startSec"`
+	EndSec   float64 `json:"endSec"`
+	Text     string  `json:"text"`
+}
+
+type TimeWindowPlan struct {
+	ProfileID string           `json:"profileId"`
+	Windows   []TimeWindowUnit `json:"windows"`
+	Warnings  []string         `json:"warnings,omitempty"`
+}
+
+type TimeWindowUnit struct {
+	ID              string  `json:"id"`
+	ShotID          string  `json:"shotId"`
+	ParentShotID    string  `json:"parentShotId,omitempty"`
+	SequenceIndex   int     `json:"sequenceIndex"`
+	StartSec        float64 `json:"startSec"`
+	EndSec          float64 `json:"endSec"`
+	DurationSec     float64 `json:"durationSec"`
+	ScriptSpanID    string  `json:"scriptSpanId,omitempty"`
+	ScriptText      string  `json:"scriptText,omitempty"`
+	SceneSummary    string  `json:"sceneSummary,omitempty"`
+	MainAction      string  `json:"mainAction,omitempty"`
+	AIGCEligible    bool    `json:"aigcEligible"`
+	RecommendedMode string  `json:"recommendedMode,omitempty"`
+	Reason          string  `json:"reason,omitempty"`
+}
+
 type AIGCInputSpec struct {
 	Prompt         string `json:"prompt,omitempty"`
 	NegativePrompt string `json:"negativePrompt,omitempty"`
