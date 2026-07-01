@@ -84,7 +84,8 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		if err := os.WriteFile(filepath.Join(assetsDir, "style.css"), []byte(buildCompositionStyle()), 0o644); err != nil {
 			return nil, err
 		}
-		index := buildHyperFramesIndex(topic, script)
+		mediaPackages := shotMediaPackagesFromPayload(e.dataDir, projectID, job.Payload)
+		index := buildHyperFramesIndexWithMedia(topic, script, mediaPackages)
 		if err := os.WriteFile(filepath.Join(projectRoot, "index.html"), []byte(index), 0o644); err != nil {
 			return nil, err
 		}
@@ -239,6 +240,29 @@ type captionInfo struct {
 	Text     string  `json:"text"`
 }
 
+type shotMediaPackage struct {
+	ShotID      string
+	DurationSec float64
+	Mode        string
+	BaseLayer   mediaLayer
+	Overlays    []mediaOverlay
+	StartSec    float64
+}
+
+type mediaLayer struct {
+	Kind        string
+	StorageRef  string
+	ResolvedSrc string
+	Missing     bool
+}
+
+type mediaOverlay struct {
+	ID   string
+	Kind string
+	Role string
+	Text string
+}
+
 // compositionSpecFromPayload extracts a VideoCompositionSpec from the job payload.
 func compositionSpecFromPayload(payload map[string]interface{}) *compositionSpec {
 	raw, ok := payload["compositionSpec"]
@@ -333,6 +357,201 @@ func stringFromMap(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+func floatFromMap(m map[string]interface{}, key string, fallback float64) float64 {
+	if m == nil {
+		return fallback
+	}
+	switch v := m[key].(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case int32:
+		return float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
+	}
+	return fallback
+}
+
+func mapFromInterface(value interface{}) map[string]interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		return v
+	case map[string]string:
+		m := make(map[string]interface{}, len(v))
+		for key, item := range v {
+			m[key] = item
+		}
+		return m
+	case string:
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(v), &m); err == nil {
+			return m
+		}
+	}
+	return nil
+}
+
+func mapFromMap(m map[string]interface{}, key string) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	return mapFromInterface(m[key])
+}
+
+func interfaceSlice(value interface{}) []interface{} {
+	switch v := value.(type) {
+	case []interface{}:
+		return v
+	case []map[string]interface{}:
+		items := make([]interface{}, 0, len(v))
+		for _, item := range v {
+			items = append(items, item)
+		}
+		return items
+	case string:
+		var items []interface{}
+		if err := json.Unmarshal([]byte(v), &items); err == nil {
+			return items
+		}
+	}
+	return nil
+}
+
+func firstStringFromMap(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(stringFromMap(m, key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func shotMediaPackagesFromPayload(dataDir, projectID string, payload map[string]interface{}) []shotMediaPackage {
+	if payload == nil {
+		return nil
+	}
+	items := interfaceSlice(payload["shotAssetPackages"])
+	if len(items) == 0 {
+		return nil
+	}
+
+	packages := make([]shotMediaPackage, 0, len(items))
+	nextStart := 0.0
+	for index, item := range items {
+		m := mapFromInterface(item)
+		if m == nil {
+			continue
+		}
+
+		generationPlan := mapFromMap(m, "generationPlan")
+		fusionPlan := mapFromMap(generationPlan, "fusionPlan")
+		baseLayerMap := mapFromMap(fusionPlan, "baseLayer")
+		overlayItems := interfaceSlice(fusionPlan["overlayLayers"])
+		screenText := firstStringFromMap(m, "screenText")
+		if baseLayerMap == nil && len(overlayItems) == 0 && screenText == "" {
+			continue
+		}
+
+		shotID := strings.TrimSpace(stringFromMap(m, "shotId"))
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", index+1)
+		}
+		duration := floatFromMap(m, "durationSec", 4)
+		if duration <= 0 {
+			duration = 4
+		}
+
+		baseLayer := mediaLayer{
+			Kind:       strings.TrimSpace(stringFromMap(baseLayerMap, "kind")),
+			StorageRef: strings.TrimSpace(stringFromMap(baseLayerMap, "storageRef")),
+		}
+		baseLayer.ResolvedSrc, baseLayer.Missing = resolveMediaStorageRef(dataDir, projectID, baseLayer.StorageRef)
+
+		overlays := make([]mediaOverlay, 0, len(overlayItems))
+		for overlayIndex, overlayItem := range overlayItems {
+			overlayMap := mapFromInterface(overlayItem)
+			if overlayMap == nil {
+				continue
+			}
+			text := firstStringFromMap(overlayMap, "text", "label", "title")
+			if text == "" {
+				continue
+			}
+			overlayID := strings.TrimSpace(stringFromMap(overlayMap, "id"))
+			if overlayID == "" {
+				overlayID = fmt.Sprintf("overlay-%d", overlayIndex+1)
+			}
+			overlays = append(overlays, mediaOverlay{
+				ID:   overlayID,
+				Kind: strings.TrimSpace(stringFromMap(overlayMap, "kind")),
+				Role: strings.TrimSpace(stringFromMap(overlayMap, "role")),
+				Text: text,
+			})
+		}
+		if len(overlays) == 0 && screenText != "" {
+			overlays = append(overlays, mediaOverlay{ID: "screen-text", Kind: "html_overlay", Role: "screen_text", Text: screenText})
+		}
+
+		packages = append(packages, shotMediaPackage{
+			ShotID:      shotID,
+			DurationSec: duration,
+			Mode:        strings.TrimSpace(stringFromMap(generationPlan, "mode")),
+			BaseLayer:   baseLayer,
+			Overlays:    overlays,
+			StartSec:    nextStart,
+		})
+		nextStart += duration
+	}
+	return packages
+}
+
+func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool) {
+	storageRef = strings.TrimSpace(storageRef)
+	if storageRef == "" {
+		return "", true
+	}
+	if strings.HasPrefix(storageRef, "http://") || strings.HasPrefix(storageRef, "https://") {
+		return storageRef, false
+	}
+
+	const prefix = "local://projects/"
+	if !strings.HasPrefix(storageRef, prefix) {
+		return "", true
+	}
+	parts := strings.Split(strings.TrimPrefix(storageRef, prefix), "/")
+	if len(parts) < 5 || parts[1] != "artifacts" {
+		return "", true
+	}
+	refProjectID := parts[0]
+	artifactID := parts[2]
+	if refProjectID != projectID {
+		return "", true
+	}
+	if err := validateLocalSegment(refProjectID); err != nil {
+		return "", true
+	}
+	if err := validateLocalSegment(artifactID); err != nil {
+		return "", true
+	}
+
+	contentPath := filepath.Join(dataDir, "artifacts", refProjectID, artifactID, "content")
+	if err := ensureInside(dataDir, contentPath); err != nil {
+		return "", true
+	}
+	if info, err := os.Stat(contentPath); err != nil || info.IsDir() {
+		return "", true
+	}
+	return "/api/local/artifacts/" + artifactID + "?projectId=" + refProjectID, false
 }
 
 // ---- HTML/CSS generation ----
@@ -519,7 +738,36 @@ body {
   inset: 0;
   z-index: 0;
 }
+.shot-media,
+.missing-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity;
+}
+.missing-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 80px;
+  background:
+    linear-gradient(135deg, rgba(16, 24, 32, 0.9), rgba(79, 138, 139, 0.55)),
+    repeating-linear-gradient(45deg, rgba(242, 239, 228, 0.08) 0 12px, transparent 12px 24px);
+  color: rgba(242, 239, 228, 0.9);
+  font-size: 46px;
+  font-weight: 850;
+  line-height: 1.2;
+  text-align: center;
+}
 .bg-field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
   width: 100%;
   height: 100%;
   background:
@@ -819,6 +1067,166 @@ func buildHyperFramesIndex(topic, script string) string {
 	}
 	spec := fallbackCompositionSpec()
 	return buildCompositionIndex(topic, spec, buildFallbackCards(topic, script), buildFallbackCaptions(), spec.Style)
+}
+
+func buildHyperFramesIndexWithMedia(topic, script string, mediaPackages []shotMediaPackage) string {
+	if len(mediaPackages) == 0 {
+		return buildHyperFramesIndex(topic, script)
+	}
+	if topic == "" {
+		topic = "Tangying AIOS Video"
+	}
+	spec := fallbackCompositionSpec()
+	if duration := totalMediaDuration(mediaPackages); duration > 0 {
+		spec.DurationSec = duration
+	}
+	index := buildCompositionIndex(topic, spec, mediaPackageCards(topic, script, mediaPackages), mediaPackageCaptions(mediaPackages), spec.Style)
+	return injectTimedMedia(index, mediaPackages)
+}
+
+func totalMediaDuration(mediaPackages []shotMediaPackage) float64 {
+	total := 0.0
+	for _, pkg := range mediaPackages {
+		duration := pkg.DurationSec
+		if duration <= 0 {
+			duration = 4
+		}
+		if end := pkg.StartSec + duration; end > total {
+			total = end
+		}
+	}
+	return total
+}
+
+func mediaPackageCards(topic, script string, mediaPackages []shotMediaPackage) []cardInfo {
+	cards := make([]cardInfo, 0, len(mediaPackages))
+	for index, pkg := range mediaPackages {
+		duration := pkg.DurationSec
+		if duration <= 0 {
+			duration = 4
+		}
+		title := pkg.ShotID
+		if index == 0 && strings.TrimSpace(topic) != "" {
+			title = topic
+		}
+		cards = append(cards, cardInfo{
+			ID:       "card-" + pkg.ShotID,
+			Kind:     "content_card",
+			StartSec: pkg.StartSec,
+			EndSec:   pkg.StartSec + duration,
+			Title:    title,
+			Body:     mediaPackageBody(pkg, script),
+		})
+	}
+	return cards
+}
+
+func mediaPackageBody(pkg shotMediaPackage, script string) string {
+	for _, overlay := range pkg.Overlays {
+		if strings.TrimSpace(overlay.Text) != "" {
+			return overlay.Text
+		}
+	}
+	if strings.TrimSpace(script) != "" {
+		return script
+	}
+	if pkg.BaseLayer.Missing {
+		return "素材暂缺，渲染时显示占位层。"
+	}
+	return "素材已接入本地 HyperFrames 预览。"
+}
+
+func mediaPackageCaptions(mediaPackages []shotMediaPackage) []captionInfo {
+	var captions []captionInfo
+	for pkgIndex, pkg := range mediaPackages {
+		duration := pkg.DurationSec
+		if duration <= 0 {
+			duration = 4
+		}
+		for overlayIndex, overlay := range pkg.Overlays {
+			if strings.TrimSpace(overlay.Text) == "" {
+				continue
+			}
+			id := overlay.ID
+			if strings.TrimSpace(id) == "" {
+				id = fmt.Sprintf("overlay-%d", overlayIndex+1)
+			}
+			captions = append(captions, captionInfo{
+				ID:       fmt.Sprintf("caption-%d-%s", pkgIndex+1, id),
+				StartSec: pkg.StartSec,
+				EndSec:   pkg.StartSec + duration,
+				Text:     overlay.Text,
+			})
+		}
+	}
+	return captions
+}
+
+func injectTimedMedia(index string, mediaPackages []shotMediaPackage) string {
+	bgMarker := "      <div class=\"bg-layer\" data-layout-ignore>\n"
+	index = strings.Replace(index, bgMarker, bgMarker+timedMediaElements(mediaPackages), 1)
+
+	setMarker := "    tl.set(\".video-card, .caption\", { opacity: 0, y: 0, scale: 1 }, 0);\n"
+	index = strings.Replace(index, setMarker, setMarker+"    tl.set(\".shot-media, .missing-media\", { opacity: 0 }, 0);\n", 1)
+
+	timelineMarker := "    window.__timelines[\"tangying-main\"] = tl;"
+	index = strings.Replace(index, timelineMarker, timedMediaTimeline(mediaPackages)+timelineMarker, 1)
+	return index
+}
+
+func timedMediaElements(mediaPackages []shotMediaPackage) string {
+	var b strings.Builder
+	for index, pkg := range mediaPackages {
+		duration := pkg.DurationSec
+		if duration <= 0 {
+			duration = 4
+		}
+		shotID := html.EscapeString(pkg.ShotID)
+		elementID := safeMediaElementID(pkg, index)
+		if pkg.BaseLayer.Missing || pkg.BaseLayer.ResolvedSrc == "" {
+			b.WriteString(fmt.Sprintf(`        <div id="%s" class="missing-media" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d">Missing media for %s</div>
+`, elementID, shotID, pkg.StartSec, duration, index, shotID))
+			continue
+		}
+		src := html.EscapeString(pkg.BaseLayer.ResolvedSrc)
+		switch strings.ToLower(pkg.BaseLayer.Kind) {
+		case "image", "img", "still":
+			b.WriteString(fmt.Sprintf(`        <img id="%s" class="shot-media" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d" src="%s" crossorigin="anonymous" alt="" />
+`, elementID, shotID, pkg.StartSec, duration, index, src))
+		default:
+			b.WriteString(fmt.Sprintf(`        <video id="%s" class="shot-media" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d" src="%s" muted playsinline crossorigin="anonymous"></video>
+`, elementID, shotID, pkg.StartSec, duration, index, src))
+		}
+	}
+	return b.String()
+}
+
+func timedMediaTimeline(mediaPackages []shotMediaPackage) string {
+	var b strings.Builder
+	for index, pkg := range mediaPackages {
+		duration := pkg.DurationSec
+		if duration <= 0 {
+			duration = 4
+		}
+		start := pkg.StartSec
+		exitAt := start + duration - 0.2
+		if exitAt < start {
+			exitAt = start
+		}
+		elementID := safeMediaElementID(pkg, index)
+		b.WriteString(fmt.Sprintf(`    tl.fromTo("#%s", { opacity: 0 }, { opacity: 1, duration: 0.18, ease: "none" }, %.3f);
+    tl.to("#%s", { opacity: 0, duration: 0.18, ease: "none" }, %.3f);
+`, elementID, start, elementID, exitAt))
+	}
+	return b.String()
+}
+
+func safeMediaElementID(pkg shotMediaPackage, index int) string {
+	prefix := "media-"
+	if pkg.BaseLayer.Missing || pkg.BaseLayer.ResolvedSrc == "" {
+		prefix = "missing-"
+	}
+	return safeElementID(prefix+pkg.ShotID, fmt.Sprintf("%s%d", prefix, index+1))
 }
 
 func buildDesignDoc(projectID, topic string, spec *compositionSpec) string {

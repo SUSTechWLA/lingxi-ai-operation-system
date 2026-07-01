@@ -74,6 +74,114 @@ func TestHyperFramesProjectExecutorRejectsTraversalProjectID(t *testing.T) {
 	}
 }
 
+func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts", "project_001", "shot-video-01")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("fake video bytes"), 0o644); err != nil {
+		t.Fatalf("write artifact content: %v", err)
+	}
+
+	executor := NewHyperFramesProjectExecutor(root)
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "端午节的来历",
+			"script": "端午节源于纪念屈原。",
+			"shotAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "SHOT_01",
+					"durationSec": float64(4),
+					"generationPlan": map[string]interface{}{
+						"mode": "hybrid_aigc_bg_html_overlay",
+						"fusionPlan": map[string]interface{}{
+							"baseLayer": map[string]interface{}{
+								"kind":       "video",
+								"storageRef": "local://projects/project_001/artifacts/shot-video-01/hash/clip.mp4",
+							},
+							"overlayLayers": []interface{}{
+								map[string]interface{}{
+									"id":   "title",
+									"kind": "html_overlay",
+									"role": "title",
+									"text": "精确文字",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(raw)
+	for _, expected := range []string{
+		`<video`,
+		`muted`,
+		`playsinline`,
+		`data-track-index="0"`,
+		`data-duration="4.0"`,
+		`data-shot-id="SHOT_01"`,
+		`精确文字`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("index.html missing %q:\n%s", expected, html)
+		}
+	}
+}
+
+func TestHyperFramesProjectExecutorShowsMissingMediaPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	executor := NewHyperFramesProjectExecutor(root)
+
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "端午节的来历",
+			"script": "端午节源于纪念屈原。",
+			"shotAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "SHOT_01",
+					"durationSec": float64(4),
+					"generationPlan": map[string]interface{}{
+						"mode": "hybrid_aigc_bg_html_overlay",
+						"fusionPlan": map[string]interface{}{
+							"baseLayer": map[string]interface{}{
+								"kind":       "video",
+								"storageRef": "local://projects/project_001/artifacts/missing-video/hash/clip.mp4",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if html := string(raw); !strings.Contains(html, `Missing media for SHOT_01`) {
+		t.Fatalf("index.html missing media placeholder:\n%s", html)
+	}
+}
+
 func TestHyperFramesProjectExecutorWritesHyperFramesCompositionContract(t *testing.T) {
 	root := t.TempDir()
 	executor := NewHyperFramesProjectExecutor(root)
