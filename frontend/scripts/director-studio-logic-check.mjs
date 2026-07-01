@@ -53,7 +53,9 @@ try {
     reviewStatusLabel,
     reviewOutputText,
     buildDirectorTraceNodes,
+    creationProfileSummary,
     externalGenerationGuideSteps,
+    timeWindowPlanSummary,
     traceNodeHasError,
     unresolvedMaterialDependencyCount,
     visibleReviewHistory,
@@ -1086,6 +1088,57 @@ try {
   assert.equal(shotReviewGroups[1].shotId, 'SHOT_02')
   assert.equal(shotReviewGroups[1].status, 'valid')
   assert.equal(shotReviewGroups[1].generationStrategy?.label, 'HyperFrames')
+
+  const profileArtifacts = [
+    {
+      id: 'video-creation-profile-1',
+      kind: 'VIDEO_CREATION_PROFILE',
+      name: '创作主线',
+      status: 'valid',
+      owner: '创意总监',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'inline://video-creation-profile',
+      metadata: {
+        profileId: 'cinematic_story',
+        primaryArtifact: 'CONTINUITY_BIBLE',
+        qualityContract: ['aigc_time_windows_3_15s'],
+      },
+    },
+    {
+      id: 'time-window-plan-1',
+      kind: 'TIME_WINDOW_PLAN',
+      name: '时间窗计划',
+      status: 'valid',
+      owner: '结构导演',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'inline://time-window-plan',
+      metadata: {
+        windows: [
+          {
+            id: 'SHOT_01_TW_01',
+            shotId: 'SHOT_01_TW_01',
+            parentShotId: 'SHOT_01',
+            durationSec: 8,
+            aigcEligible: true,
+          },
+        ],
+      },
+    },
+  ]
+  const profileSummary = creationProfileSummary(profileArtifacts)
+  assert.equal(profileSummary.profileId, 'cinematic_story')
+  assert.equal(profileSummary.label, '影视剧情')
+  assert.equal(profileSummary.primaryArtifact, 'CONTINUITY_BIBLE')
+  assert.ok(profileSummary.qualityContract.includes('aigc_time_windows_3_15s'))
+  assert.deepEqual(timeWindowPlanSummary(profileArtifacts), {
+    totalWindows: 1,
+    aigcWindowCount: 1,
+    invalidDurationCount: 0,
+  })
 
   assert.deepEqual(
     getArtifactViewerSelection('art-publish-copy-1', artifactsWithPublishCopy.find((artifact) => artifact.id === 'art-publish-copy-1')),

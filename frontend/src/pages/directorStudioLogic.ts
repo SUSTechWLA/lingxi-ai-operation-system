@@ -142,6 +142,19 @@ export interface ExternalGenerationGuideRequest {
   referenceImageLimit?: number
 }
 
+export interface DirectorCreationProfileSummary {
+  profileId?: string
+  label: string
+  primaryArtifact?: string
+  qualityContract: string[]
+}
+
+export interface DirectorTimeWindowSummary {
+  totalWindows: number
+  aigcWindowCount: number
+  invalidDurationCount: number
+}
+
 interface TraceNodeLike {
   id?: string
   name?: string
@@ -160,6 +173,32 @@ interface TraceNodeLike {
   tool?: string
   intent?: string
   dependsOn?: string[]
+}
+
+export function creationProfileSummary(artifacts: DirectorArtifactRecord[]): DirectorCreationProfileSummary {
+  const profile = artifacts.find((item) => item.kind === 'VIDEO_CREATION_PROFILE')
+  const metadata = profile?.metadata || {}
+  const profileId = stringValue(metadata.profileId)
+  return {
+    profileId,
+    label: creationProfileLabel(profileId),
+    primaryArtifact: stringValue(metadata.primaryArtifact),
+    qualityContract: normalizeStringList(metadata.qualityContract),
+  }
+}
+
+export function timeWindowPlanSummary(artifacts: DirectorArtifactRecord[]): DirectorTimeWindowSummary {
+  const plan = artifacts.find((item) => item.kind === 'TIME_WINDOW_PLAN')
+  const windows = timeWindowRecords(plan?.metadata)
+  const aigcWindows = windows.filter((window) => isTruthyAigcEligible(window.aigcEligible))
+  return {
+    totalWindows: windows.length,
+    aigcWindowCount: aigcWindows.length,
+    invalidDurationCount: aigcWindows.filter((window) => {
+      const durationSec = numberValue(window.durationSec)
+      return durationSec === undefined || durationSec < 3 || durationSec > 15
+    }).length,
+  }
 }
 
 export function externalGenerationGuideSteps(request: ExternalGenerationGuideRequest): string[] {
@@ -183,6 +222,30 @@ export function externalGenerationGuideSteps(request: ExternalGenerationGuideReq
     `每个 shot 单独生成，尽量不要引用其他 shot 的未确认画面；如果需要转场，把转场放在本 shot 结尾。`,
     `生成完成后导出${kindLabel}文件，回到本页点击“上传结果”，系统会登记到素材库并关联当前 shot。`,
   ]
+}
+
+function creationProfileLabel(profileId: string | undefined): string {
+  const labels: Record<string, string> = {
+    cinematic_story: '影视剧情',
+    talking_head: '口播解说',
+  }
+  return profileId ? labels[profileId] || profileId : '未选择'
+}
+
+function timeWindowRecords(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  const directWindows = Array.isArray(metadata?.windows) ? metadata.windows : undefined
+  const nestedPlan = objectValue(metadata?.timeWindowPlan)
+  const nestedWindows = Array.isArray(nestedPlan?.windows) ? nestedPlan.windows : undefined
+  return (directWindows || nestedWindows || [])
+    .map(objectValue)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+}
+
+function isTruthyAigcEligible(value: unknown): boolean {
+  const bool = booleanValue(value)
+  if (bool !== undefined) return bool
+  const text = stringValue(value)?.trim().toLowerCase()
+  return Boolean(text && !['false', '0', 'no', '否'].includes(text))
 }
 
 interface RoleTraceMatch {
