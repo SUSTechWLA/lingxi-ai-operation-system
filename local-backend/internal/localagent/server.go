@@ -2,6 +2,7 @@ package localagent
 
 import (
 	"archive/zip"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -48,6 +49,34 @@ const (
 type DiagnosticResponse struct {
 	Path      string `json:"path"`
 	CreatedAt string `json:"createdAt"`
+}
+
+type BiaoshuConversationMessage struct {
+	ID        string                 `json:"id"`
+	Role      string                 `json:"role"`
+	Content   string                 `json:"content"`
+	CreatedAt string                 `json:"createdAt"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type BiaoshuConversationResponse struct {
+	ThreadID string                       `json:"threadId"`
+	Messages []BiaoshuConversationMessage `json:"messages"`
+}
+
+type BiaoshuConversationMessageRequest struct {
+	RunID        string                 `json:"runId"`
+	ArtifactPath string                 `json:"artifactPath"`
+	ArtifactKind string                 `json:"artifactKind"`
+	Role         string                 `json:"role"`
+	Content      string                 `json:"content"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type BiaoshuArtifactWriteRequest struct {
+	FilePath                string `json:"filePath"`
+	Content                 string `json:"content"`
+	ExpectedPreviousContent string `json:"expectedPreviousContent"`
 }
 
 type LocalArtifactResponse struct {
@@ -183,6 +212,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/biaoshu-projects", s.handleBiaoshuProjects)
 	s.mux.HandleFunc("/api/local/biaoshu-projects/", s.handleBiaoshuProjectByRunID)
 	s.mux.HandleFunc("/api/local/biaoshu-artifacts/read", s.handleReadBiaoshuArtifact)
+	s.mux.HandleFunc("/api/local/biaoshu-artifacts/write", s.handleWriteBiaoshuArtifact)
+	s.mux.HandleFunc("/api/local/biaoshu-conversations", s.handleBiaoshuConversation)
+	s.mux.HandleFunc("/api/local/biaoshu-conversations/messages", s.handleBiaoshuConversationMessage)
 	s.mux.HandleFunc("/api/local/artifacts", s.handleArtifacts)
 	s.mux.HandleFunc("/api/local/artifacts/", s.handleArtifactByID)
 	s.mux.HandleFunc("/api/local/projects/", s.handleProjectByID)
@@ -1252,4 +1284,184 @@ func (s *Server) writeModelProviderSettings(settings map[ModelCapability]ModelPr
 		return err
 	}
 	return os.WriteFile(s.modelProviderConfigPath(), append(data, '\n'), 0o600)
+}
+
+// ── Biaoshu conversation store ───────────────────────────────────────────
+
+func biaoshuThreadID(runID, artifactPath string) string {
+	hash := sha256.Sum256([]byte(artifactPath))
+	return runID + "__" + fmt.Sprintf("%x", hash[:8])
+}
+
+func (s *Server) biaoshuConversationPath(runID, artifactPath string) string {
+	artifactHash := fmt.Sprintf("%x", sha256.Sum256([]byte(artifactPath)))
+	return filepath.Join(s.paths.ConfigDir, "biaoshu-conversations", runID, artifactHash+".json")
+}
+
+func (s *Server) handleBiaoshuConversation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	runID := r.URL.Query().Get("runId")
+	if !isSafePathSegment(runID) {
+		writeError(w, http.StatusBadRequest, "runId is required and must be a safe path segment")
+		return
+	}
+	artifactPath := r.URL.Query().Get("artifactPath")
+	if strings.TrimSpace(artifactPath) == "" {
+		writeError(w, http.StatusBadRequest, "artifactPath is required")
+		return
+	}
+	messages, err := s.readBiaoshuConversation(runID, artifactPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	threadID := biaoshuThreadID(runID, artifactPath)
+	writeJSON(w, http.StatusOK, BiaoshuConversationResponse{
+		ThreadID: threadID,
+		Messages: messages,
+	})
+}
+
+func (s *Server) handleBiaoshuConversationMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req BiaoshuConversationMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if !isSafePathSegment(req.RunID) {
+		writeError(w, http.StatusBadRequest, "runId is required and must be a safe path segment")
+		return
+	}
+	if strings.TrimSpace(req.ArtifactPath) == "" {
+		writeError(w, http.StatusBadRequest, "artifactPath is required")
+		return
+	}
+	if req.Role != "user" && req.Role != "assistant" && req.Role != "system" {
+		writeError(w, http.StatusBadRequest, "role must be user, assistant, or system")
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" || len(req.Content) > 200*1024 {
+		writeError(w, http.StatusBadRequest, "content is required and must be under 200KB")
+		return
+	}
+	msg := BiaoshuConversationMessage{
+		ID:        fmt.Sprintf("msg-%d", time.Now().UTC().UnixNano()),
+		Role:      req.Role,
+		Content:   req.Content,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Metadata:  req.Metadata,
+	}
+	if err := s.appendBiaoshuConversationMessage(req.RunID, req.ArtifactPath, msg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	threadID := biaoshuThreadID(req.RunID, req.ArtifactPath)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"threadId": threadID,
+		"message":  msg,
+	})
+}
+
+func (s *Server) readBiaoshuConversation(runID, artifactPath string) ([]BiaoshuConversationMessage, error) {
+	path := s.biaoshuConversationPath(runID, artifactPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []BiaoshuConversationMessage{}, nil
+		}
+		return nil, err
+	}
+	var messages []BiaoshuConversationMessage
+	if err := json.Unmarshal(data, &messages); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func (s *Server) appendBiaoshuConversationMessage(runID, artifactPath string, msg BiaoshuConversationMessage) error {
+	messages, err := s.readBiaoshuConversation(runID, artifactPath)
+	if err != nil {
+		return err
+	}
+	messages = append(messages, msg)
+	return s.writeBiaoshuConversation(runID, artifactPath, messages)
+}
+
+func (s *Server) writeBiaoshuConversation(runID, artifactPath string, messages []BiaoshuConversationMessage) error {
+	path := s.biaoshuConversationPath(runID, artifactPath)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(messages, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+func (s *Server) handleWriteBiaoshuArtifact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req BiaoshuArtifactWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	filePath := strings.TrimSpace(req.FilePath)
+	if filePath == "" {
+		writeError(w, http.StatusBadRequest, "filePath is required")
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" {
+		writeError(w, http.StatusBadRequest, "content is required")
+		return
+	}
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid filePath: "+err.Error())
+		return
+	}
+	if !pathWithinAnyRoot(absPath, s.biaoshuArtifactReadRoots()) {
+		writeError(w, http.StatusForbidden, "filePath is outside trusted local artifact roots")
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(absPath))
+	if ext != ".md" && ext != ".txt" && ext != ".json" {
+		writeError(w, http.StatusBadRequest, "only .md, .txt, and .json files can be written")
+		return
+	}
+	if req.ExpectedPreviousContent != "" {
+		current, readErr := os.ReadFile(absPath)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				writeError(w, http.StatusNotFound, "artifact file not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to read current file: "+readErr.Error())
+			return
+		}
+		if string(current) != req.ExpectedPreviousContent {
+			writeError(w, http.StatusConflict, "file has been modified since last read; please re-open and try again")
+			return
+		}
+	}
+	data := []byte(req.Content)
+	if err := os.WriteFile(absPath, data, 0o600); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to write file: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"filePath": absPath,
+		"written":  true,
+	})
 }

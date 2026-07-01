@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch } from 'react-icons/fi'
+import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
-import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, startAgentRun } from '../services/api'
-import { fetchBiaoshuProjects, saveBiaoshuProject, type BiaoshuProjectStatus, type LocalBiaoshuProject } from '../services/localAgent'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, type BiaoshuReviseRequest } from '../services/api'
+import { 
+  fetchBiaoshuConversation, 
+  fetchBiaoshuProjects, 
+  saveBiaoshuProject, 
+  sendBiaoshuConversationMessage, 
+  writeLocalBiaoshuArtifact,
+  type BiaoshuConversationMessage,
+  type BiaoshuProjectStatus, 
+  type LocalBiaoshuProject,
+} from '../services/localAgent'
 import type { AgentPlan, AgentReviewItem, AgentRun, AgentStep } from '../utils/types'
 import {
   biaoshuArtifactToCopyText,
@@ -719,7 +728,12 @@ function BiaoshuArtifactsPage({ artifacts, run, onGoWorkbench }: { artifacts: Bi
           format={viewFormat}
           loading={viewLoading}
           error={viewError}
+          run={run}
           onClose={handleCloseViewer}
+          onContentUpdate={(newContent: string) => {
+            // Refresh the viewed content after write-back
+            setViewContent(newContent)
+          }}
         />
       )}
     </div>
@@ -831,19 +845,164 @@ async function copyText(value: string) {
 }
 
 function BiaoshuArtifactViewer({
-  artifact, content, format, loading, error, onClose,
+  artifact, content, format, loading, error, run, onClose, onContentUpdate,
 }: {
   artifact: BiaoshuArtifactRecord
   content: string
   format: string
   loading: boolean
   error: string | null
+  run: AgentRun | null
   onClose: () => void
+  onContentUpdate?: (newContent: string) => void
 }) {
+  // AI chat state
+  const [chatMessages, setChatMessages] = useState<BiaoshuConversationMessage[]>([])
+  const [inputValue, setInputValue] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  // Preview state
+  const [revisedContent, setRevisedContent] = useState<string | null>(null)
+  const [reviseSummary, setReviseSummary] = useState<string | null>(null)
+  const [applying, setApplying] = useState(false)
+  // Track whether we've loaded conversation history
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+
+  const artifactPath = artifact.storageRef || ''
+  const runId = run?.id || ''
+
+  // Load conversation history when viewer opens
+  useEffect(() => {
+    if (!runId || !artifactPath || historyLoaded) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const res = await fetchBiaoshuConversation(runId, artifactPath)
+        if (!cancelled) {
+          setChatMessages(res.messages)
+          setHistoryLoaded(true)
+        }
+      } catch {
+        // If conversation doesn't exist yet, that's fine — start fresh
+        if (!cancelled) setHistoryLoaded(true)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [runId, artifactPath, historyLoaded])
+
+  const handleSend = async () => {
+    const instruction = inputValue.trim()
+    if (!instruction || aiLoading) return
+    setInputValue('')
+    setAiError(null)
+    setRevisedContent(null)
+    setReviseSummary(null)
+    setAiLoading(true)
+
+    try {
+      // 1. Save user message locally
+      const userMsg: BiaoshuConversationMessage = {
+        id: `msg-${Date.now()}`,
+        role: 'user',
+        content: instruction,
+        createdAt: new Date().toISOString(),
+      }
+      if (runId && artifactPath) {
+        await sendBiaoshuConversationMessage({
+          runId,
+          artifactPath,
+          artifactKind: artifact.kind,
+          role: 'user',
+          content: instruction,
+        })
+      }
+      setChatMessages(prev => [...prev, userMsg])
+
+      // 2. Call cloud revise endpoint
+      const contextMessages = chatMessages.slice(-10).map(m => ({
+        role: m.role,
+        content: m.content,
+      }))
+      const revisePayload: BiaoshuReviseRequest = {
+        runId: runId || undefined,
+        artifactKind: artifact.kind,
+        artifactName: artifact.name,
+        artifactContent: content,
+        userInstruction: instruction,
+        contextMessages,
+      }
+      const result = await reviseBiaoshuArtifact(revisePayload)
+
+      // 3. Save assistant response locally
+      const assistantMsg: BiaoshuConversationMessage = {
+        id: `msg-${Date.now()}-assistant`,
+        role: 'assistant',
+        content: `修改完成：${result.summary}`,
+        createdAt: new Date().toISOString(),
+        metadata: { revisedContent: result.revisedContent, summary: result.summary, model: result.model },
+      }
+      if (runId && artifactPath) {
+        await sendBiaoshuConversationMessage({
+          runId,
+          artifactPath,
+          artifactKind: artifact.kind,
+          role: 'assistant',
+          content: assistantMsg.content,
+          metadata: assistantMsg.metadata,
+        })
+      }
+      setChatMessages(prev => [...prev, assistantMsg])
+
+      // 4. Show preview
+      setRevisedContent(result.revisedContent)
+      setReviseSummary(result.summary)
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'AI修改请求失败')
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const handleApplyChanges = async () => {
+    if (!revisedContent || !artifactPath) return
+    setApplying(true)
+    setAiError(null)
+    try {
+      await writeLocalBiaoshuArtifact({
+        filePath: artifactPath,
+        content: revisedContent,
+        expectedPreviousContent: content,
+      })
+      onContentUpdate?.(revisedContent)
+      // Clear preview after apply
+      setRevisedContent(null)
+      setReviseSummary(null)
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : '应用修改失败')
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  const handleDiscardPreview = () => {
+    setRevisedContent(null)
+    setReviseSummary(null)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  const isTextFormat = format === 'md' || format === 'txt' || format === 'json'
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
-        className="relative mx-4 max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+        className="relative mx-4 max-h-[90vh] w-full max-w-7xl overflow-hidden rounded-2xl bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -851,7 +1010,8 @@ function BiaoshuArtifactViewer({
           <div>
             <h3 className="text-lg font-black text-ink">{artifact.name}</h3>
             <p className="mt-0.5 text-xs text-ink-muted">
-              {displayNameForBiaoshuArtifact(artifact.kind)} · {format.toUpperCase()} · {artifact.storageRef}
+              {displayNameForBiaoshuArtifact(artifact.kind)} · {format.toUpperCase()}
+              {artifact.storageRef && ` · ${artifact.storageRef}`}
             </p>
           </div>
           <button
@@ -862,31 +1022,145 @@ function BiaoshuArtifactViewer({
           </button>
         </div>
 
-        {/* Content */}
-        <div className="overflow-y-auto px-6 py-5" style={{ maxHeight: 'calc(90vh - 80px)' }}>
-          {loading && (
-            <div className="flex items-center justify-center py-20 text-ink-muted">
-              <FiRefreshCw className="mr-2 animate-spin" /> 加载中...
+        {/* Two-column body */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line" style={{ height: 'calc(90vh - 77px)' }}>
+          {/* Left: Artifact content */}
+          <div className="overflow-y-auto px-6 py-5">
+            {loading && (
+              <div className="flex items-center justify-center py-20 text-ink-muted">
+                <FiRefreshCw className="mr-2 animate-spin" /> 加载中...
+              </div>
+            )}
+            {error && (
+              <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
+                <FiAlertTriangle className="mr-2 inline" />{error}
+              </div>
+            )}
+            {!loading && !error && format === 'md' && (
+              <div className="prose prose-sm max-w-none">
+                <ReactMarkdown>{content}</ReactMarkdown>
+              </div>
+            )}
+            {!loading && !error && format !== 'md' && content && (
+              <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
+                {content}
+              </pre>
+            )}
+            {!loading && !error && !content && (
+              <p className="py-10 text-center text-sm text-ink-muted">暂无内容</p>
+            )}
+          </div>
+
+          {/* Right: AI Chat panel */}
+          <div className="flex flex-col">
+            {/* Chat messages */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {!isTextFormat && (
+                <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-700 ring-1 ring-amber-200">
+                  此格式暂不支持 AI 修改
+                </div>
+              )}
+              
+              {isTextFormat && chatMessages.length === 0 && !aiLoading && (
+                <div className="py-8 text-center text-sm text-ink-muted">
+                  <p>在下方输入修改指令，AI 将帮你修订此产物</p>
+                  <p className="mt-1 text-xs">例如：把第一章标题改为"项目概述"</p>
+                </div>
+              )}
+
+              {chatMessages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-xl px-4 py-2 text-sm whitespace-pre-wrap break-words ${
+                      msg.role === 'user'
+                        ? 'bg-primary text-white'
+                        : 'bg-background-mist text-ink'
+                    }`}
+                  >
+                    <p>{msg.content}</p>
+                    <p className={`mt-1 text-xs ${msg.role === 'user' ? 'text-white/60' : 'text-ink-muted'}`}>
+                      {new Date(msg.createdAt).toLocaleTimeString()}
+                    </p>
+                  </div>
+                </div>
+              ))}
+
+              {aiLoading && (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] rounded-xl bg-background-mist px-4 py-3 text-sm text-ink-muted">
+                    <FiRefreshCw className="mr-2 inline animate-spin" />
+                    正在分析修改...
+                  </div>
+                </div>
+              )}
+
+              {aiError && (
+                <div className="rounded-lg bg-red-50 p-3 text-xs text-red-700 ring-1 ring-red-200">
+                  <FiAlertTriangle className="mr-2 inline" />{aiError}
+                </div>
+              )}
+
+              {/* Preview panel */}
+              {revisedContent && (
+                <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-bold text-primary">AI 修订预览</h4>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleDiscardPreview}
+                        className="rounded-md px-2 py-1 text-xs font-medium text-ink-muted hover:bg-white hover:text-ink"
+                      >
+                        放弃预览
+                      </button>
+                      <button
+                        onClick={handleApplyChanges}
+                        disabled={applying}
+                        className="rounded-md bg-primary px-3 py-1 text-xs font-bold text-white hover:bg-primary-dark disabled:opacity-50"
+                      >
+                        {applying ? '应用中...' : '应用修改'}
+                      </button>
+                    </div>
+                  </div>
+                  {reviseSummary && (
+                    <p className="mb-2 text-xs text-primary/70">{reviseSummary}</p>
+                  )}
+                  <div className="max-h-60 overflow-y-auto rounded-lg bg-white p-3 text-xs leading-relaxed whitespace-pre-wrap border border-line">
+                    {revisedContent.slice(0, 3000)}
+                    {revisedContent.length > 3000 && (
+                      <p className="mt-2 text-ink-muted">... 内容已截断，应用修改可查看完整内容</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-          {error && (
-            <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
-              <FiAlertTriangle className="mr-2 inline" />{error}
-            </div>
-          )}
-          {!loading && !error && format === 'md' && (
-            <div className="prose prose-sm max-w-none">
-              <ReactMarkdown>{content}</ReactMarkdown>
-            </div>
-          )}
-          {!loading && !error && format !== 'md' && content && (
-            <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
-              {content}
-            </pre>
-          )}
-          {!loading && !error && !content && (
-            <p className="py-10 text-center text-sm text-ink-muted">暂无内容</p>
-          )}
+
+            {/* Chat input */}
+            {isTextFormat && (
+              <div className="border-t border-line px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="输入修改指令，例如：把第一章标题改为'项目概述'"
+                    disabled={aiLoading}
+                    className="flex-1 rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink placeholder-ink-muted focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={!inputValue.trim() || aiLoading}
+                    className="rounded-lg bg-primary p-2 text-white hover:bg-primary-dark disabled:opacity-40"
+                  >
+                    <FiSend size={18} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	biaoshu_handler "github.com/tangying-ai/aios-core/internal/agents/biaoshu/handler"
 	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
 	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
@@ -436,6 +437,13 @@ func main() {
 	// Ensure schema and seed built-in templates
 	workflow.EnsureSchema(ctx, pool)
 	zap.L().Info("Workflow service registered")
+
+	// ── Biaoshu artifact revision ──
+	if gw != nil {
+		biaoshuHandler := biaoshu_handler.NewReviseHandler(gw)
+		biaoshuHandler.RegisterRoutes(r)
+	}
+	zap.L().Info("Biaoshu service registered")
 
 	// ── Video Creation Upgrade (feature-gated) ──
 	if cfg.Video.VideoCreationEnabled {

@@ -414,6 +414,30 @@ export const reviseArtifact = async (
   return response.data.data
 }
 
+// ── Biaoshu Artifact AI Revision ──
+
+export interface BiaoshuReviseRequest {
+  runId?: string
+  artifactKind?: string
+  artifactName?: string
+  artifactContent: string
+  userInstruction: string
+  contextMessages?: { role: string; content: string }[]
+}
+
+export interface BiaoshuReviseResponse {
+  revisedContent: string
+  summary: string
+  model: string
+}
+
+export const reviseBiaoshuArtifact = async (
+  payload: BiaoshuReviseRequest
+): Promise<BiaoshuReviseResponse> => {
+  const response = await api.post<ApiResponse<BiaoshuReviseResponse>>('/biaoshu/artifacts/revise', payload)
+  return response.data.data
+}
+
 // ── Model Provider Config Sync ──
 
 export interface ModelProviderSyncPayload {

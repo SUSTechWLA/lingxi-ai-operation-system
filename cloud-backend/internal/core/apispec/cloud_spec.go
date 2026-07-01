@@ -31,7 +31,8 @@ func BuildCloudSpec() *Spec {
 		Tag("Workflow Runs", "Video workflow run lifecycle").
 		Tag("Stages", "Stage-level approval for video pipelines").
 		Tag("Artifacts", "Video creation artifacts (JSON, Markdown, media)").
-		Tag("Video Project Assistant", "Video-project-scoped assistant for stage explanation and artifact revision guidance")
+		Tag("Video Project Assistant", "Video-project-scoped assistant for stage explanation and artifact revision guidance").
+		Tag("Biaoshu", "Bid-writing artifact AI revision and assistant")
 
 	// ── Health ──
 	b.Route("GET", "/api/health", "Liveness check").
@@ -595,6 +596,14 @@ func BuildCloudSpec() *Spec {
 			Required: []string{"message"},
 		}, "Revision instruction", true).
 		ResponseJSON("200", "Revised", "ArtifactContentResponse")
+
+	// ── Biaoshu ──
+	b.Route("POST", "/api/biaoshu/artifacts/revise", "AI artifact revision for bid-writing artifacts").
+		Tags("Biaoshu").
+		BodyInlineJSON(ObjectSchema(), "Revise request", true).
+		ResponseJSON("200", "AI-revised content", "BiaoshuReviseResponse").
+		ResponseJSON("400", "Validation error", "ErrorResponse").
+		ResponseJSON("500", "AI revision failed", "ErrorResponse")
 
 	// ── Register automatic schemas (derived from real Go types) ──
 	registerCloudSchemas(b)

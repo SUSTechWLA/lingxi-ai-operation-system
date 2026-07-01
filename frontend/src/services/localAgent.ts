@@ -147,3 +147,80 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
     return fallback
   }
 }
+
+// ── Biaoshu AI Conversation ──
+
+export interface BiaoshuConversationMessage {
+  id: string
+  role: string
+  content: string
+  createdAt: string
+  metadata?: Record<string, unknown>
+}
+
+export interface BiaoshuConversationResponse {
+  threadId: string
+  messages: BiaoshuConversationMessage[]
+}
+
+export interface BiaoshuConversationMessageRequest {
+  runId: string
+  artifactPath: string
+  artifactKind?: string
+  role: string
+  content: string
+  metadata?: Record<string, unknown>
+}
+
+export async function fetchBiaoshuConversation(
+  runId: string,
+  artifactPath: string
+): Promise<BiaoshuConversationResponse> {
+  const params = new URLSearchParams({ runId, artifactPath })
+  const response = await fetch(localAgentUrl(`/api/local/biaoshu-conversations?${params.toString()}`))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取会话消息失败'))
+  }
+  return response.json() as Promise<BiaoshuConversationResponse>
+}
+
+export async function sendBiaoshuConversationMessage(
+  payload: BiaoshuConversationMessageRequest
+): Promise<{ threadId: string; message: BiaoshuConversationMessage }> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu-conversations/messages'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '发送消息失败'))
+  }
+  return response.json() as Promise<{ threadId: string; message: BiaoshuConversationMessage }>
+}
+
+// ── Biaoshu Artifact Write-Back ──
+
+export interface BiaoshuArtifactWriteRequest {
+  filePath: string
+  content: string
+  expectedPreviousContent?: string
+}
+
+export interface BiaoshuArtifactWriteResponse {
+  filePath: string
+  written: boolean
+}
+
+export async function writeLocalBiaoshuArtifact(
+  payload: BiaoshuArtifactWriteRequest
+): Promise<BiaoshuArtifactWriteResponse> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu-artifacts/write'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '写入产物文件失败'))
+  }
+  return response.json() as Promise<BiaoshuArtifactWriteResponse>
+}

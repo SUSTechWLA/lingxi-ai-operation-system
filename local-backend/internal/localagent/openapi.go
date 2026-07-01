@@ -245,6 +245,95 @@ func BuildLocalSpec() *LocalSpec {
 		},
 	})
 
+	s.add("POST", "/api/local/biaoshu-artifacts/write", LocalOp{
+		OperationID: "writeLocalBiaoshuArtifact",
+		Summary:     "Write revised content to a local bid-writing artifact",
+		Description: "Writes text content back to a trusted local artifact file. Supports .md, .txt, .json only. Returns 409 if expectedPreviousContent does not match.",
+		Tags:        []string{"Biaoshu Projects"},
+		RequestBody: &LocalRequestBody{
+			Required: true,
+			Content: map[string]*LocalMediaType{"application/json": {Schema: &LocalSchema{
+				Type: "object",
+				Properties: map[string]*LocalSchema{
+					"filePath":                {Type: "string"},
+					"content":                 {Type: "string"},
+					"expectedPreviousContent": {Type: "string"},
+				},
+				Required: []string{"filePath", "content"},
+			}}},
+		},
+		Responses: map[string]*LocalResponse{
+			"200": {Description: "File written successfully"},
+			"400": {Description: "Invalid payload or unsupported format"},
+			"403": {Description: "File path outside trusted roots"},
+			"409": {Description: "File has been modified since last read"},
+		},
+	})
+
+	s.add("GET", "/api/local/biaoshu-conversations", LocalOp{
+		OperationID: "getLocalBiaoshuConversation",
+		Summary:     "Get conversation messages for a bid-writing artifact",
+		Description: "Returns the thread ID and all messages stored for a given runId + artifactPath.",
+		Tags:        []string{"Biaoshu Projects"},
+		Parameters: []LocalParam{
+			{Name: "runId", In: "query", Required: true, Schema: &LocalSchema{Type: "string"}},
+			{Name: "artifactPath", In: "query", Required: true, Schema: &LocalSchema{Type: "string"}},
+		},
+		Responses: map[string]*LocalResponse{
+			"200": {Description: "Conversation messages",
+				Content: map[string]*LocalMediaType{"application/json": {Schema: &LocalSchema{
+					Type: "object",
+					Properties: map[string]*LocalSchema{
+						"threadId": {Type: "string"},
+						"messages": {Type: "array", Items: &LocalSchema{
+							Type: "object",
+							Properties: map[string]*LocalSchema{
+								"id":        {Type: "string"},
+								"role":      {Type: "string"},
+								"content":   {Type: "string"},
+								"createdAt": {Type: "string", Format: "date-time"},
+							},
+						}},
+					},
+				}}},
+			},
+			"400": {Description: "Missing or invalid parameters"},
+		},
+	})
+
+	s.add("POST", "/api/local/biaoshu-conversations/messages", LocalOp{
+		OperationID: "postLocalBiaoshuConversationMessage",
+		Summary:     "Append a message to a bid-writing conversation",
+		Description: "Appends a user/assistant/system message to the conversation store for a given artifact.",
+		Tags:        []string{"Biaoshu Projects"},
+		RequestBody: &LocalRequestBody{
+			Required: true,
+			Content: map[string]*LocalMediaType{"application/json": {Schema: &LocalSchema{
+				Type: "object",
+				Properties: map[string]*LocalSchema{
+					"runId":        {Type: "string"},
+					"artifactPath": {Type: "string"},
+					"artifactKind": {Type: "string"},
+					"role":         {Type: "string"},
+					"content":      {Type: "string"},
+				},
+				Required: []string{"runId", "artifactPath", "role", "content"},
+			}}},
+		},
+		Responses: map[string]*LocalResponse{
+			"200": {Description: "Message appended",
+				Content: map[string]*LocalMediaType{"application/json": {Schema: &LocalSchema{
+					Type: "object",
+					Properties: map[string]*LocalSchema{
+						"threadId": {Type: "string"},
+						"message":  {Type: "object"},
+					},
+				}}},
+			},
+			"400": {Description: "Invalid or missing parameters"},
+		},
+	})
+
 	s.add("POST", "/api/local/artifacts", LocalOp{
 		OperationID: "postLocalArtifact",
 		Summary:     "Store a local artifact",

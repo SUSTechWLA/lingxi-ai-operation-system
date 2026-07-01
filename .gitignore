@@ -45,3 +45,11 @@ frontend/resources/bin/
 *.tsbuildinfo
 cloud-backend/tangying-ai-os
 cloud-backend/runtime-model-provider.json
+
+# Biaoshu AI conversation records (local storage)
+biaoshu-conversations/
+
+# Project docs - modification plans
+docs/修改计划.md
+docs/修改计划分析.md
+docs/superpowers/plans/2026-07-01-biaoshu-artifact-ai-chat.md
