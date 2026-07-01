@@ -110,6 +110,34 @@ func TestVideoCreationProfileExplicitTalkingHeadRouteBeatsIncidentalCinematicBri
 	}
 }
 
+func TestVideoCreationProfileNoRouteMixedBriefPrefersCinematicSpecificTerms(t *testing.T) {
+	cinematic := BuildVideoCreationProfile(ProfileRequest{
+		Brief: "讲一个影视剧情短片",
+	})
+	if cinematic.ProfileID != model.VideoProfileCinematicStory {
+		t.Fatalf("mixed brief profile = %s, want %s", cinematic.ProfileID, model.VideoProfileCinematicStory)
+	}
+	if cinematic.Confidence != 0.82 {
+		t.Fatalf("mixed brief confidence = %v, want 0.82", cinematic.Confidence)
+	}
+	if cinematic.Reason != "brief requires cinematic continuity" {
+		t.Fatalf("mixed brief reason = %q", cinematic.Reason)
+	}
+
+	talkingHead := BuildVideoCreationProfile(ProfileRequest{
+		Brief: "讲AI工作流",
+	})
+	if talkingHead.ProfileID != model.VideoProfileTalkingHead {
+		t.Fatalf("script-led brief profile = %s, want %s", talkingHead.ProfileID, model.VideoProfileTalkingHead)
+	}
+	if talkingHead.Confidence != 0.84 {
+		t.Fatalf("script-led brief confidence = %v, want 0.84", talkingHead.Confidence)
+	}
+	if talkingHead.Reason != "brief is script-led" {
+		t.Fatalf("script-led brief reason = %q", talkingHead.Reason)
+	}
+}
+
 func TestVideoCreationProfileFallbackMetadata(t *testing.T) {
 	profile := BuildVideoCreationProfile(ProfileRequest{
 		Route:       "unknown",

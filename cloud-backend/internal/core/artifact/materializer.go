@@ -386,6 +386,11 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 	if packageData, ok := shotAssetPackagePayload(payload, unitID); ok {
 		return marshalValue(packageData)
 	}
+	if isVideoCreationProfileKind(kind) {
+		if profile, ok := videoCreationProfilePayload(payload); ok {
+			return marshalValue(profile)
+		}
+	}
 	switch unitID {
 	case "script-content":
 		// Prefer the parsed script; the raw "content" field often contains
@@ -437,6 +442,15 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 		}
 	}
 	return nil
+}
+
+func videoCreationProfilePayload(payload map[string]interface{}) (interface{}, bool) {
+	for _, key := range []string{"creationProfile", "videoCreationProfile"} {
+		if profile, ok := payload[key]; ok && profile != nil {
+			return profile, true
+		}
+	}
+	return nil, false
 }
 
 func externalGenerationRequestPayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {
@@ -577,6 +591,10 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 	default:
 		return false
 	}
+}
+
+func isVideoCreationProfileKind(kind ArtifactKind) bool {
+	return strings.ToUpper(string(kind)) == "VIDEO_CREATION_PROFILE"
 }
 
 // normalizePublishCopy ensures publish-copy content has the keys the frontend

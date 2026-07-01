@@ -338,6 +338,16 @@ func TestBuildArtifactsFromProfileSelectionMaterializesVideoCreationProfile(t *t
 	if len(req.Data) == 0 {
 		t.Fatalf("video creation profile artifact should carry inline cloud preview data for review")
 	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil {
+		t.Fatalf("video creation profile data should be JSON: %v; data=%s", err, string(req.Data))
+	}
+	if decoded["profileId"] != "talking_head" {
+		t.Fatalf("video creation profile data profileId = %v, want talking_head; data=%+v", decoded["profileId"], decoded)
+	}
+	if _, ok := decoded["artifacts"]; ok {
+		t.Fatalf("video creation profile data should not include output envelope artifacts: %+v", decoded)
+	}
 }
 
 func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *testing.T) {
