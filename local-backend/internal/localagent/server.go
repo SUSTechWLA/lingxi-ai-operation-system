@@ -413,7 +413,7 @@ func (s *Server) handleArtifactUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArtifactByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodDelete {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -430,6 +430,10 @@ func (s *Server) handleArtifactByID(w http.ResponseWriter, r *http.Request) {
 	contentPath, metadataPath := s.localArtifactPaths(projectID, id)
 	if isRawLocalArtifactRequest(r) {
 		s.serveLocalArtifactContent(w, r, projectID, id, contentPath, metadataPath)
+		return
+	}
+	if r.Method == http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	content, err := os.ReadFile(contentPath)
@@ -912,8 +916,9 @@ func withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range")
+		w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range, Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

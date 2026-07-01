@@ -371,6 +371,9 @@ func TestHandlerAllowsLocalFrontendCORS(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, http.MethodPut) {
 		t.Fatalf("allow-methods = %q, want PUT", got)
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Range") {
+		t.Fatalf("allow-headers = %q, want Range", got)
+	}
 }
 
 func TestLocalArtifactStoreWritesAndReadsUserPayload(t *testing.T) {
@@ -454,6 +457,20 @@ func TestLocalArtifactRawReturnsMediaBytes(t *testing.T) {
 	}
 	if !bytes.Equal(rec.Body.Bytes(), content) {
 		t.Fatalf("raw content mismatch: %v", rec.Body.Bytes())
+	}
+
+	req = httptest.NewRequest(http.MethodHead, "/api/local/artifacts/video-1?projectId=vp-1&raw=1", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("raw head status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "video/mp4") {
+		t.Fatalf("raw head content-type = %q", contentType)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("raw head should not write body, got %d bytes", rec.Body.Len())
 	}
 }
 
