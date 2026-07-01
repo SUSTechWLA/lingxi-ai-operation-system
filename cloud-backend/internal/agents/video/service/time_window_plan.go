@@ -3,18 +3,19 @@ package service
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
 )
 
 const (
-	minAIGCWindowDurationSec       = 3.0
-	maxAIGCWindowDurationSec       = 15.0
-	preferredCinematicWindowSec    = 10.0
-	talkingHeadWindowReason        = "script-aligned talking head window"
-	defaultWindowDurationSec       = 6.0
-	cinematicWindowReason          = "cinematic coarse shot split into AIGC-safe 3-15s window"
-	shortCinematicWindowWarningFmt = "shot %s duration %.2fs was extended to 3.00s for AIGC eligibility"
+	minAIGCWindowDurationSec    = 3.0
+	maxAIGCWindowDurationSec    = 15.0
+	preferredCinematicWindowSec = 10.0
+	talkingHeadWindowReason     = "script-aligned talking head window"
+	defaultWindowDurationSec    = 6.0
+	cinematicWindowReason       = "cinematic coarse shot split into AIGC-safe 3-15s window"
+	cinematicTransitionReason   = "cinematic window is shorter than AIGC minimum and should be handled as transition/overlay"
 )
 
 type TimeWindowRequest struct {
@@ -70,27 +71,43 @@ func buildCinematicTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 	}
 
 	var sequenceIndex int
-	var timelineStartSec float64
-	for _, shot := range req.Shots {
+	parentIDCounts := map[string]int{}
+	for shotIndex, shot := range req.Shots {
+		parentShotID := effectiveCinematicParentShotID(shot.ID, shotIndex, parentIDCounts)
 		durationSec := float64(shot.DurationSec)
 		if durationSec <= 0 {
 			durationSec = defaultWindowDurationSec
 		}
 		if durationSec < minAIGCWindowDurationSec {
-			plan.Warnings = append(plan.Warnings, fmt.Sprintf(shortCinematicWindowWarningFmt, shot.ID, durationSec))
-			durationSec = minAIGCWindowDurationSec
+			windowID := fmt.Sprintf("%s_TW_01", parentShotID)
+			plan.Windows = append(plan.Windows, model.TimeWindowUnit{
+				ID:              windowID,
+				ShotID:          windowID,
+				ParentShotID:    parentShotID,
+				SequenceIndex:   sequenceIndex,
+				StartSec:        0,
+				EndSec:          durationSec,
+				DurationSec:     durationSec,
+				SceneSummary:    shot.SceneSummary,
+				MainAction:      shot.MainAction,
+				AIGCEligible:    false,
+				RecommendedMode: model.GenerationModeHTMLOnly,
+				Reason:          cinematicTransitionReason,
+			})
+			sequenceIndex++
+			continue
 		}
 
 		windowCount := cinematicWindowCount(durationSec)
 		windowDurationSec := durationSec / float64(windowCount)
 		for i := 0; i < windowCount; i++ {
-			startSec := timelineStartSec + (float64(i) * windowDurationSec)
+			startSec := float64(i) * windowDurationSec
 			endSec := startSec + windowDurationSec
-			windowID := fmt.Sprintf("%s_TW_%02d", shot.ID, i+1)
+			windowID := fmt.Sprintf("%s_TW_%02d", parentShotID, i+1)
 			plan.Windows = append(plan.Windows, model.TimeWindowUnit{
 				ID:              windowID,
 				ShotID:          windowID,
-				ParentShotID:    shot.ID,
+				ParentShotID:    parentShotID,
 				SequenceIndex:   sequenceIndex,
 				StartSec:        startSec,
 				EndSec:          endSec,
@@ -103,10 +120,21 @@ func buildCinematicTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 			})
 			sequenceIndex++
 		}
-		timelineStartSec += durationSec
 	}
 
 	return plan
+}
+
+func effectiveCinematicParentShotID(rawID string, shotIndex int, counts map[string]int) string {
+	baseID := strings.TrimSpace(rawID)
+	if baseID == "" {
+		baseID = fmt.Sprintf("SHOT_%02d", shotIndex+1)
+	}
+	counts[baseID]++
+	if counts[baseID] == 1 {
+		return baseID
+	}
+	return fmt.Sprintf("%s_DUP_%02d", baseID, counts[baseID])
 }
 
 func cinematicWindowCount(durationSec float64) int {

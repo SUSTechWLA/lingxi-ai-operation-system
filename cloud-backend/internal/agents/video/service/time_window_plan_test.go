@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -101,5 +102,117 @@ func TestBuildTimeWindowPlanDefaultsCinematicZeroDurationShot(t *testing.T) {
 	}
 	if window.Reason != "cinematic coarse shot split into AIGC-safe 3-15s window" {
 		t.Fatalf("reason = %q", window.Reason)
+	}
+}
+
+func TestBuildTimeWindowPlanUsesParentRelativeCinematicTiming(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileCinematicStory},
+		Shots: []model.ShotUnit{
+			{ID: "SHOT_A", DurationSec: 6},
+			{ID: "SHOT_B", DurationSec: 6},
+		},
+	})
+
+	if len(plan.Windows) != 2 {
+		t.Fatalf("window count = %d, want 2: %#v", len(plan.Windows), plan.Windows)
+	}
+	for _, window := range plan.Windows {
+		if window.StartSec != 0 || window.EndSec != 6 {
+			t.Fatalf("cinematic timing should be parent-shot-relative: %#v", plan.Windows)
+		}
+	}
+}
+
+func TestBuildTimeWindowPlanKeepsSubThreeSecondCinematicAsTransitionOverlay(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileCinematicStory},
+		Shots: []model.ShotUnit{
+			{ID: "SHOT_SHORT", DurationSec: 2},
+			{ID: "SHOT_NEXT", DurationSec: 6},
+		},
+	})
+
+	if len(plan.Windows) != 2 {
+		t.Fatalf("window count = %d, want 2: %#v", len(plan.Windows), plan.Windows)
+	}
+	shortWindow := plan.Windows[0]
+	if shortWindow.DurationSec != 2 || shortWindow.EndSec != 2 {
+		t.Fatalf("sub-3s cinematic duration should stay authored: %#v", shortWindow)
+	}
+	if shortWindow.AIGCEligible {
+		t.Fatalf("sub-3s cinematic window should not be AIGC eligible: %#v", shortWindow)
+	}
+	if shortWindow.RecommendedMode != model.GenerationModeHTMLOnly {
+		t.Fatalf("mode = %q, want %q", shortWindow.RecommendedMode, model.GenerationModeHTMLOnly)
+	}
+	if !strings.Contains(shortWindow.Reason, "shorter than AIGC minimum") ||
+		!strings.Contains(shortWindow.Reason, "transition/overlay") {
+		t.Fatalf("reason should explain transition/overlay handling: %q", shortWindow.Reason)
+	}
+	if plan.Windows[1].StartSec != 0 || plan.Windows[1].EndSec != 6 {
+		t.Fatalf("short prior shot should not shift later parent-relative timing: %#v", plan.Windows[1])
+	}
+}
+
+func TestBuildTimeWindowPlanUsesUniqueEffectiveCinematicShotIDs(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileCinematicStory},
+		Shots: []model.ShotUnit{
+			{ID: "", DurationSec: 6},
+			{ID: "SHOT_01", DurationSec: 6},
+			{ID: "SHOT_01", DurationSec: 6},
+		},
+	})
+
+	if len(plan.Windows) != 3 {
+		t.Fatalf("window count = %d, want 3: %#v", len(plan.Windows), plan.Windows)
+	}
+	parentIDs := map[string]bool{}
+	windowIDs := map[string]bool{}
+	for _, window := range plan.Windows {
+		if window.ParentShotID == "" {
+			t.Fatalf("parent shot ID should not be empty: %#v", window)
+		}
+		if parentIDs[window.ParentShotID] {
+			t.Fatalf("parent shot ID should be unique: %#v", plan.Windows)
+		}
+		parentIDs[window.ParentShotID] = true
+		if window.ID == "" {
+			t.Fatalf("window ID should not be empty: %#v", window)
+		}
+		if windowIDs[window.ID] {
+			t.Fatalf("window ID should be unique: %#v", plan.Windows)
+		}
+		windowIDs[window.ID] = true
+	}
+}
+
+func TestBuildTimeWindowPlanTalkingHeadEligibilityBoundaries(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileTalkingHead},
+		ScriptSpans: []model.ScriptSpan{
+			{ID: "short", StartSec: 0, EndSec: 2},
+			{ID: "max", StartSec: 2, EndSec: 17},
+			{ID: "long", StartSec: 17, EndSec: 33},
+		},
+	})
+
+	if len(plan.Windows) != 3 {
+		t.Fatalf("window count = %d, want 3: %#v", len(plan.Windows), plan.Windows)
+	}
+	if plan.Windows[0].DurationSec != 2 || plan.Windows[0].AIGCEligible {
+		t.Fatalf("short talking-head span should preserve duration and be ineligible: %#v", plan.Windows[0])
+	}
+	if !plan.Windows[1].AIGCEligible {
+		t.Fatalf("15s talking-head span should be eligible: %#v", plan.Windows[1])
+	}
+	if plan.Windows[2].AIGCEligible {
+		t.Fatalf(">15s talking-head span should be ineligible: %#v", plan.Windows[2])
+	}
+	for _, window := range plan.Windows {
+		if window.RecommendedMode != model.GenerationModeHTMLOnly {
+			t.Fatalf("talking-head windows should stay HTML-only: %#v", window)
+		}
 	}
 }
