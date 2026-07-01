@@ -16,10 +16,10 @@ func BuildVideoCreationProfile(req ProfileRequest) model.VideoCreationProfile {
 	switch {
 	case isPublishPackScriptLedOverride(req):
 		return talkingHeadProfileWithMetadata(req, 0.74, "publish pack brief is script-led", false, "")
-	case isCinematicProfileRequest(req):
-		return cinematicStoryProfile(req)
 	case isTalkingHeadProfileRequest(req):
 		return talkingHeadProfile(req)
+	case isCinematicProfileRequest(req):
+		return cinematicStoryProfile(req)
 	default:
 		return fallbackTalkingHeadProfile(req)
 	}
@@ -106,11 +106,15 @@ func isPublishPackScriptLedOverride(req ProfileRequest) bool {
 }
 
 func isTalkingHeadProfileRequest(req ProfileRequest) bool {
-	return isTalkingHeadRoute(req.Route) || isTalkingHeadBrief(req.Brief)
+	return isTalkingHeadRoute(req.Route) || (!hasExplicitProfileRoute(req.Route) && isTalkingHeadBrief(req.Brief))
 }
 
 func isCinematicProfileRequest(req ProfileRequest) bool {
-	return isCinematicRoute(req.Route) || isCinematicBrief(req.Brief)
+	return isCinematicRoute(req.Route) || (!hasExplicitProfileRoute(req.Route) && isCinematicBrief(req.Brief))
+}
+
+func hasExplicitProfileRoute(route string) bool {
+	return isTalkingHeadRoute(route) || isCinematicRoute(route)
 }
 
 func isTalkingHeadRoute(route string) bool {

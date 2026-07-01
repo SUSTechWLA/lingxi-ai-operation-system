@@ -93,6 +93,23 @@ func TestVideoCreationProfileDirectorPipelineUsesCinematicContract(t *testing.T)
 	}
 }
 
+func TestVideoCreationProfileExplicitTalkingHeadRouteBeatsIncidentalCinematicBrief(t *testing.T) {
+	profile := BuildVideoCreationProfile(ProfileRequest{
+		Route: "talking_head",
+		Brief: "口播讲一个创业故事，镜头感强",
+	})
+
+	if profile.ProfileID != model.VideoProfileTalkingHead {
+		t.Fatalf("profile = %s, want %s", profile.ProfileID, model.VideoProfileTalkingHead)
+	}
+	if profile.Confidence != 0.84 {
+		t.Fatalf("confidence = %v, want 0.84", profile.Confidence)
+	}
+	if profile.Reason != "brief is script-led" {
+		t.Fatalf("reason = %q", profile.Reason)
+	}
+}
+
 func TestVideoCreationProfileFallbackMetadata(t *testing.T) {
 	profile := BuildVideoCreationProfile(ProfileRequest{
 		Route:       "unknown",

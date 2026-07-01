@@ -563,6 +563,7 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 		"CAPTION_PLAN",
 		"SHOT_LIST",
 		"VIDEO_PROMPTS",
+		"VIDEO_CREATION_PROFILE",
 		"VIDEO_COMPOSITION_SPEC",
 		"REFERENCE_ASSET_PLAN",
 		"STYLE_PROFILE",

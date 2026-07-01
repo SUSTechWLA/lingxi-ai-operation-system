@@ -288,6 +288,58 @@ func TestBuildArtifactsFromCompositionExecMaterializesReviewableVideoComposition
 	}
 }
 
+func TestBuildArtifactsFromProfileSelectionMaterializesVideoCreationProfile(t *testing.T) {
+	node := &model.Node{
+		ID:     "profile_selection_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "profile_selection",
+			"tool":  "video_profile_classifier",
+		},
+		Output: map[string]interface{}{
+			"content": "视频创作 profile 已选择。",
+			"creationProfile": map[string]interface{}{
+				"profileId": "talking_head",
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "video-creation-profile",
+					"kind":     "VIDEO_CREATION_PROFILE",
+					"name":     "video_creation_profile.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"requiresReview": true,
+					},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("video creation profile artifact should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one video creation profile artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.StageName != "profile_selection" {
+		t.Fatalf("expected profile_selection stage, got %q", req.StageName)
+	}
+	if req.Kind != ArtifactKind("VIDEO_CREATION_PROFILE") {
+		t.Fatalf("expected VIDEO_CREATION_PROFILE artifact, got %q", req.Kind)
+	}
+	if req.Metadata["requiresReview"] != true {
+		t.Fatalf("video creation profile artifact must be reviewable, got metadata %+v", req.Metadata)
+	}
+	if req.Metadata["humanApproved"] != false || req.Metadata["status"] != "valid" {
+		t.Fatalf("new video creation profile artifact should start valid and not human-approved, got metadata %+v", req.Metadata)
+	}
+	if len(req.Data) == 0 {
+		t.Fatalf("video creation profile artifact should carry inline cloud preview data for review")
+	}
+}
+
 func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *testing.T) {
 	node := &model.Node{
 		ID:     "video_prompt_exec",
