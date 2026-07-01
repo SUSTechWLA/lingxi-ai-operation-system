@@ -111,6 +111,19 @@ func TestVideoCreationProfileExplicitTalkingHeadRouteBeatsIncidentalCinematicBri
 }
 
 func TestVideoCreationProfileNoRouteMixedBriefPrefersCinematicSpecificTerms(t *testing.T) {
+	clearTalkingHead := BuildVideoCreationProfile(ProfileRequest{
+		Brief: "口播讲一个创业故事，镜头感强",
+	})
+	if clearTalkingHead.ProfileID != model.VideoProfileTalkingHead {
+		t.Fatalf("clear talking-head mixed brief profile = %s, want %s", clearTalkingHead.ProfileID, model.VideoProfileTalkingHead)
+	}
+	if clearTalkingHead.Confidence != 0.84 {
+		t.Fatalf("clear talking-head mixed brief confidence = %v, want 0.84", clearTalkingHead.Confidence)
+	}
+	if clearTalkingHead.Reason != "brief is script-led" {
+		t.Fatalf("clear talking-head mixed brief reason = %q", clearTalkingHead.Reason)
+	}
+
 	cinematic := BuildVideoCreationProfile(ProfileRequest{
 		Brief: "讲一个影视剧情短片",
 	})

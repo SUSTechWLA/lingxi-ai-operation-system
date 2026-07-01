@@ -449,13 +449,23 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 	return nil
 }
 
-func videoCreationProfilePayload(payload map[string]interface{}) (interface{}, bool) {
+func videoCreationProfilePayload(payload map[string]interface{}) (map[string]interface{}, bool) {
 	for _, key := range []string{"creationProfile", "videoCreationProfile"} {
-		if profile, ok := payload[key]; ok && profile != nil {
+		profile, ok := payload[key].(map[string]interface{})
+		if ok && validVideoCreationProfileID(stringValue(profile, "profileId")) {
 			return profile, true
 		}
 	}
 	return nil, false
+}
+
+func validVideoCreationProfileID(profileID string) bool {
+	switch profileID {
+	case "talking_head", "cinematic_story":
+		return true
+	default:
+		return false
+	}
 }
 
 func externalGenerationRequestPayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {

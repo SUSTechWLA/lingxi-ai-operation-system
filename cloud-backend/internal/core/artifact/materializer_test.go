@@ -393,6 +393,51 @@ func TestBuildArtifactsFromProfileSelectionWithoutProfilePayloadDoesNotStoreEnve
 	}
 }
 
+func TestBuildArtifactsFromProfileSelectionRejectsMalformedProfilePayload(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload interface{}
+	}{
+		{name: "scalar", payload: "talking_head"},
+		{name: "unknown_profile", payload: map[string]interface{}{"profileId": "unknown"}},
+		{name: "empty_object", payload: map[string]interface{}{}},
+		{name: "array", payload: []interface{}{map[string]interface{}{"profileId": "talking_head"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &model.Node{
+				ID:     "profile_selection_exec",
+				Status: model.NodeSuccess,
+				Input: map[string]interface{}{
+					"stage": "profile_selection",
+					"tool":  "video_profile_classifier",
+				},
+				Output: map[string]interface{}{
+					"creationProfile": tc.payload,
+					"artifacts": []interface{}{
+						map[string]interface{}{
+							"unitId":   "video-creation-profile",
+							"kind":     "VIDEO_CREATION_PROFILE",
+							"name":     "video_creation_profile.json",
+							"mimeType": "application/json",
+						},
+					},
+				},
+			}
+
+			requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+			if err != nil {
+				t.Fatalf("video creation profile manifest should materialize without inline data: %v", err)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("expected one video creation profile artifact request, got %+v", requests)
+			}
+			if len(requests[0].Data) != 0 {
+				t.Fatalf("malformed video creation profile should fail closed with empty data, got %s", string(requests[0].Data))
+			}
+		})
+	}
+}
+
 func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *testing.T) {
 	node := &model.Node{
 		ID:     "video_prompt_exec",

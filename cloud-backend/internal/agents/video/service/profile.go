@@ -20,10 +20,12 @@ func BuildVideoCreationProfile(req ProfileRequest) model.VideoCreationProfile {
 		return talkingHeadProfile(req)
 	case isCinematicRoute(req.Route):
 		return cinematicStoryProfile(req)
-	case isCinematicBrief(req.Brief):
+	case isStrongCinematicBrief(req.Brief):
 		return cinematicStoryProfile(req)
 	case isTalkingHeadBrief(req.Brief):
 		return talkingHeadProfile(req)
+	case isCinematicBrief(req.Brief):
+		return cinematicStoryProfile(req)
 	default:
 		return fallbackTalkingHeadProfile(req)
 	}
@@ -141,6 +143,15 @@ func isTalkingHeadBrief(brief string) bool {
 }
 
 func isCinematicBrief(brief string) bool {
+	return isStrongCinematicBrief(brief) || containsAnyString(brief, []string{
+		"镜头",
+		"故事",
+		"电影感",
+		"cinematic",
+	})
+}
+
+func isStrongCinematicBrief(brief string) bool {
 	return containsAnyString(brief, []string{
 		"影视",
 		"剧情",
@@ -149,12 +160,8 @@ func isCinematicBrief(brief string) bool {
 		"场景",
 		"道具",
 		"导演",
-		"镜头",
-		"故事",
 		"连续性",
 		"影视短片",
-		"电影感",
-		"cinematic",
 	})
 }
 
