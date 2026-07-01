@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -32,6 +33,9 @@ func TestBuildShotGenerationPlanExactTextUsesHTMLOnly(t *testing.T) {
 	if generationPlan.FusionPlan.Assembler != "hyperframes" {
 		t.Fatalf("assembler = %q, want hyperframes", generationPlan.FusionPlan.Assembler)
 	}
+	if generationPlan.FusionPlan.OutputArtifactKind != "HYPERFRAMES_SHOT" {
+		t.Fatalf("output artifact kind = %q, want HYPERFRAMES_SHOT", generationPlan.FusionPlan.OutputArtifactKind)
+	}
 }
 
 func TestBuildShotGenerationPlanMotionSceneUsesAIGCVideo(t *testing.T) {
@@ -56,6 +60,9 @@ func TestBuildShotGenerationPlanMotionSceneUsesAIGCVideo(t *testing.T) {
 	}
 	if generationPlan.PrimaryTool != "text_image_to_video_generator" {
 		t.Fatalf("primary tool = %q", generationPlan.PrimaryTool)
+	}
+	if generationPlan.FusionPlan.OutputArtifactKind != "SHOT_VIDEO_CLIP" {
+		t.Fatalf("output artifact kind = %q, want SHOT_VIDEO_CLIP", generationPlan.FusionPlan.OutputArtifactKind)
 	}
 }
 
@@ -89,6 +96,9 @@ func TestBuildShotGenerationPlanExactTextWithAIGCSceneUsesHybrid(t *testing.T) {
 	if len(generationPlan.FusionPlan.OverlayLayers) == 0 {
 		t.Fatalf("overlay layers = %+v, want non-empty", generationPlan.FusionPlan.OverlayLayers)
 	}
+	if generationPlan.FusionPlan.OutputArtifactKind != "COMPOSITED_SHOT_VIDEO" {
+		t.Fatalf("output artifact kind = %q, want COMPOSITED_SHOT_VIDEO", generationPlan.FusionPlan.OutputArtifactKind)
+	}
 }
 
 func TestBuildShotGenerationPlanLogoRoutesToUserAsset(t *testing.T) {
@@ -107,6 +117,9 @@ func TestBuildShotGenerationPlanLogoRoutesToUserAsset(t *testing.T) {
 	}
 	if len(generationPlan.RequiredAssets) == 0 || generationPlan.RequiredAssets[0].Source != model.AssetSourceUserUpload {
 		t.Fatalf("required assets = %+v, want first source %q", generationPlan.RequiredAssets, model.AssetSourceUserUpload)
+	}
+	if generationPlan.FusionPlan.OutputArtifactKind != "SHOT_MEDIA_FUSION_PLAN" {
+		t.Fatalf("output artifact kind = %q, want SHOT_MEDIA_FUSION_PLAN", generationPlan.FusionPlan.OutputArtifactKind)
 	}
 }
 
@@ -134,6 +147,9 @@ func TestBuildShotGenerationPlanMissingVideoProviderCreatesExternalNeed(t *testi
 	}
 	if generationPlan.FallbackPlan == nil || generationPlan.FallbackPlan.Mode != model.GenerationModePlaceholderPreview {
 		t.Fatalf("fallback plan = %+v, want placeholder preview", generationPlan.FallbackPlan)
+	}
+	if generationPlan.FusionPlan.OutputArtifactKind != "SHOT_MEDIA_FUSION_PLAN" {
+		t.Fatalf("output artifact kind = %q, want SHOT_MEDIA_FUSION_PLAN", generationPlan.FusionPlan.OutputArtifactKind)
 	}
 }
 
@@ -233,6 +249,26 @@ func TestBuildShotGenerationPlanHTMLOnlyWithoutHTMLUsesPlaceholder(t *testing.T)
 	}
 }
 
+func TestBuildShotGenerationPlanExactTextRoleCreatesTextLock(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_08A", DurationSec: 6}
+	plan := model.VisualPlan{
+		TextLayers: []model.TextLayerSpec{{
+			ID:   "txt-1",
+			Text: "  增长 42%  ",
+			Role: model.TextRoleDataText,
+		}},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+	if len(generationPlan.RequiredAssets) == 0 {
+		t.Fatalf("required assets = %+v, want HyperFrames asset", generationPlan.RequiredAssets)
+	}
+	if !assetLocksContain(generationPlan.RequiredAssets, model.AssetSourceHyperFrames, "text:增长 42%") {
+		t.Fatalf("required assets = %+v, want trimmed data_text lock", generationPlan.RequiredAssets)
+	}
+}
+
 func TestBuildShotGenerationPlanDefaultPreviewWithoutHTMLUsesPlaceholder(t *testing.T) {
 	shot := model.ShotUnit{ID: "SHOT_08B", DurationSec: 6}
 
@@ -315,6 +351,9 @@ func TestBuildShotGenerationPlanAIGCImageHyperFramesAddsOverlayLayer(t *testing.
 	if generationPlan.FusionPlan.OverlayLayers[0].Kind != "html_overlay" {
 		t.Fatalf("overlay layer = %+v, want html_overlay", generationPlan.FusionPlan.OverlayLayers[0])
 	}
+	if generationPlan.FusionPlan.OutputArtifactKind != "HYPERFRAMES_SHOT" {
+		t.Fatalf("output artifact kind = %q, want HYPERFRAMES_SHOT", generationPlan.FusionPlan.OutputArtifactKind)
+	}
 }
 
 func TestBuildShotGenerationPlanStaticAIGCWithoutHTMLDoesNotDeclareHyperFrames(t *testing.T) {
@@ -333,6 +372,43 @@ func TestBuildShotGenerationPlanStaticAIGCWithoutHTMLDoesNotDeclareHyperFrames(t
 	}
 }
 
+func TestBuildShotGenerationPlanUserAssetWithTextAddsHyperFramesOverlay(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_11C", DurationSec: 6, SceneSummary: "展示客户上传 logo", ScreenText: []string{"必须准确"}}
+	plan := model.VisualPlan{
+		Props: []model.PropVisualSpec{{
+			ID:          "brand-logo",
+			Description: "客户上传 logo",
+		}},
+		TextLayers: []model.TextLayerSpec{{
+			ID:   "txt-1",
+			Text: "必须准确",
+			Role: model.TextRoleKeyword,
+		}},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+	if generationPlan.Mode != model.GenerationModeExternalOrUserAsset {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModeExternalOrUserAsset)
+	}
+	if !assetSourceExists(generationPlan.RequiredAssets, model.AssetSourceUserUpload) {
+		t.Fatalf("required assets = %+v, want user upload", generationPlan.RequiredAssets)
+	}
+	if !assetSourceExists(generationPlan.RequiredAssets, model.AssetSourceHyperFrames) {
+		t.Fatalf("required assets = %+v, want HyperFrames overlay asset", generationPlan.RequiredAssets)
+	}
+	if len(generationPlan.FusionPlan.OverlayLayers) == 0 {
+		t.Fatalf("overlay layers = %+v, want text overlay", generationPlan.FusionPlan.OverlayLayers)
+	}
+	layers, ok := generationPlan.RenderInputs["textLayers"].([]model.TextLayerSpec)
+	if !ok || len(layers) == 0 {
+		t.Fatalf("render text layers = %#v, want text layers", generationPlan.RenderInputs["textLayers"])
+	}
+	if !assetLocksContain(generationPlan.RequiredAssets, model.AssetSourceHyperFrames, "text:必须准确") {
+		t.Fatalf("required assets = %+v, want exact text lock", generationPlan.RequiredAssets)
+	}
+}
+
 func TestBuildShotGenerationPlanCustomerMentionAloneDoesNotRouteToUserAsset(t *testing.T) {
 	shot := model.ShotUnit{ID: "SHOT_12", DurationSec: 5, SceneSummary: "客户在会议中讨论年度预算"}
 
@@ -343,10 +419,46 @@ func TestBuildShotGenerationPlanCustomerMentionAloneDoesNotRouteToUserAsset(t *t
 	}
 }
 
+func TestTimedMediaLayerJSONKeepsZeroTimingFields(t *testing.T) {
+	payload, err := json.Marshal(model.TimedMediaLayer{ID: "txt-1", Kind: "text", Role: model.TextRoleDataText})
+	if err != nil {
+		t.Fatalf("marshal TimedMediaLayer: %v", err)
+	}
+	text := string(payload)
+	for _, field := range []string{`"startSec":0`, `"durationSec":0`, `"trackIndex":0`} {
+		if !strings.Contains(text, field) {
+			t.Fatalf("json = %s, missing %s", text, field)
+		}
+	}
+}
+
 func containsGenerationPlanString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
 			return true
+		}
+	}
+	return false
+}
+
+func assetSourceExists(assets []model.ShotAssetNeed, source string) bool {
+	for _, asset := range assets {
+		if asset.Source == source {
+			return true
+		}
+	}
+	return false
+}
+
+func assetLocksContain(assets []model.ShotAssetNeed, source string, want string) bool {
+	for _, asset := range assets {
+		if asset.Source != source {
+			continue
+		}
+		for _, lock := range asset.Locks {
+			if lock == want {
+				return true
+			}
 		}
 	}
 	return false

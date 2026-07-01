@@ -7,6 +7,13 @@ import (
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
 )
 
+const (
+	artifactKindHyperFramesShot     = "HYPERFRAMES_SHOT"
+	artifactKindShotVideoClip       = "SHOT_VIDEO_CLIP"
+	artifactKindCompositedShotVideo = "COMPOSITED_SHOT_VIDEO"
+	artifactKindShotMediaFusionPlan = "SHOT_MEDIA_FUSION_PLAN"
+)
+
 type shotGenerationSignals struct {
 	HTMLScore        int
 	AIGCScore        int
@@ -30,7 +37,7 @@ func BuildShotGenerationPlan(
 
 	switch {
 	case signals.UserAssetScore > 0:
-		return buildUserAssetPlan(shot, visual, signals, durationSec)
+		return buildUserAssetPlan(shot, visual, signals, durationSec, caps.HTMLAvailable)
 	case htmlNeeded && aigcNeeded:
 		if pref.AllowHybridRender && caps.HTMLAvailable && caps.AIGCAvailable {
 			return buildHybridPlan(shot, visual, signals, durationSec)
@@ -190,7 +197,7 @@ func buildHTMLOnlyPlan(shot model.ShotUnit, visual model.VisualPlan, signals sho
 			ShotID:             shot.ID,
 			BaseLayer:          fusionLayer(asset, 0, float64(durationSec)),
 			Assembler:          "hyperframes",
-			OutputArtifactKind: "shot_video",
+			OutputArtifactKind: artifactKindHyperFramesShot,
 		},
 		ReviewFocus: []string{"exact_text", "layout", "timing"},
 	}
@@ -217,7 +224,7 @@ func buildAIGCVideoPlan(shot model.ShotUnit, visual model.VisualPlan, signals sh
 			ShotID:             shot.ID,
 			BaseLayer:          fusionLayer(asset, 0, float64(durationSec)),
 			Assembler:          "aigc_video_generator",
-			OutputArtifactKind: "shot_video",
+			OutputArtifactKind: artifactKindShotVideoClip,
 		},
 		ReviewFocus: []string{"motion", "character_consistency", "scene_consistency"},
 	}
@@ -262,7 +269,7 @@ func buildAIGCImageThenHyperFramesPlan(shot model.ShotUnit, visual model.VisualP
 			OverlayLayers:      overlayLayers,
 			TimedMedia:         timedTextLayers(durationSec, visual),
 			Assembler:          assembler,
-			OutputArtifactKind: "shot_video",
+			OutputArtifactKind: artifactKindHyperFramesShot,
 		},
 		ReviewFocus: []string{"background_image", "html_animation", "timing"},
 	}
@@ -307,38 +314,55 @@ func buildHybridPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotG
 			}},
 			TimedMedia:         timedTextLayers(durationSec, visual),
 			Assembler:          "ffmpeg_compositor",
-			OutputArtifactKind: "composited_shot_video",
+			OutputArtifactKind: artifactKindCompositedShotVideo,
 		},
 		ReviewFocus: []string{"aigc_prompt_bans_text", "overlay_text_exactness", "composite_timing"},
 	}
 }
 
-func buildUserAssetPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int) model.ShotGenerationPlan {
+func buildUserAssetPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int, htmlAvailable bool) model.ShotGenerationPlan {
 	assetID := shot.ID + "-user-asset"
 	if len(visual.Props) > 0 && strings.TrimSpace(visual.Props[0].ID) != "" {
 		assetID = visual.Props[0].ID
 	}
 	asset := shotAssetNeed(assetID, "image_or_video", "reference_asset", model.AssetSourceUserUpload, shot.ID, nil)
+	required := []model.ShotAssetNeed{asset}
+	overlayLayers := []model.FusionLayer{}
+	timedMedia := []model.TimedMediaLayer{}
+	if signals.HTMLScore > 0 && htmlAvailable {
+		overlay := shotAssetNeed(shot.ID+"-html-overlay", "video", "overlay", model.AssetSourceHyperFrames, shot.ID, textLocks(shot, visual))
+		required = append(required, overlay)
+		overlayLayers = append(overlayLayers, model.FusionLayer{
+			ID:          overlay.ID,
+			Kind:        "html_overlay",
+			Role:        "exact_text_overlay",
+			StartSec:    0,
+			DurationSec: float64(durationSec),
+		})
+		timedMedia = timedTextLayers(durationSec, visual)
+	}
 	return model.ShotGenerationPlan{
-		ShotID:      shot.ID,
-		Mode:        model.GenerationModeExternalOrUserAsset,
-		PrimaryTool: "user_asset_resolver",
-		Reason:      planReason("shot depends on uploaded or external brand/product asset", signals.UserAssetReasons, nil),
-		Confidence:  0.9,
-		RiskLevel:   "low",
-		RequiredAssets: []model.ShotAssetNeed{
-			asset,
-		},
+		ShotID:         shot.ID,
+		Mode:           model.GenerationModeExternalOrUserAsset,
+		PrimaryTool:    "user_asset_resolver",
+		Reason:         planReason("shot depends on uploaded or external brand/product asset", signals.UserAssetReasons, nil),
+		Confidence:     0.9,
+		RiskLevel:      "low",
+		RequiredAssets: required,
 		RenderInputs: map[string]interface{}{
 			"durationSec":  durationSec,
 			"sceneSummary": shot.SceneSummary,
 			"props":        visual.Props,
+			"textLayers":   visual.TextLayers,
+			"screenText":   shot.ScreenText,
 		},
 		FusionPlan: model.FusionPlan{
 			ShotID:             shot.ID,
 			BaseLayer:          fusionLayer(asset, 0, float64(durationSec)),
+			OverlayLayers:      overlayLayers,
+			TimedMedia:         timedMedia,
 			Assembler:          "user_asset_resolver",
-			OutputArtifactKind: "shot_asset_reference",
+			OutputArtifactKind: artifactKindShotMediaFusionPlan,
 		},
 		ReviewFocus: []string{"asset_rights", "asset_quality", "brand_accuracy"},
 	}
@@ -367,7 +391,7 @@ func buildPlaceholderPlan(shot model.ShotUnit, visual model.VisualPlan, signals 
 			ShotID:             shot.ID,
 			BaseLayer:          fusionLayer(placeholder, 0, float64(durationSec)),
 			Assembler:          "placeholder_renderer",
-			OutputArtifactKind: "preview_video",
+			OutputArtifactKind: artifactKindShotMediaFusionPlan,
 		},
 		FallbackPlan: &model.ShotGenerationFallback{
 			Mode:   model.GenerationModePlaceholderPreview,
@@ -444,13 +468,13 @@ func timedTextLayers(durationSec int, visual model.VisualPlan) []model.TimedMedi
 func textLocks(shot model.ShotUnit, visual model.VisualPlan) []string {
 	locks := make([]string, 0, len(shot.ScreenText)+len(visual.TextLayers))
 	for _, text := range shot.ScreenText {
-		if strings.TrimSpace(text) != "" {
-			locks = append(locks, "text:"+text)
+		if trimmed := strings.TrimSpace(text); trimmed != "" {
+			locks = append(locks, "text:"+trimmed)
 		}
 	}
 	for _, layer := range visual.TextLayers {
-		if layer.MustBeExact && strings.TrimSpace(layer.Text) != "" {
-			locks = append(locks, "text:"+layer.Text)
+		if (layer.MustBeExact || exactTextRole(layer.Role)) && strings.TrimSpace(layer.Text) != "" {
+			locks = append(locks, "text:"+strings.TrimSpace(layer.Text))
 		}
 	}
 	return uniqueStrings(locks)

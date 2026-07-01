@@ -354,9 +354,9 @@ type TimedMediaLayer struct {
 	Kind        string  `json:"kind,omitempty"`
 	Role        string  `json:"role,omitempty"`
 	StorageRef  string  `json:"storageRef,omitempty"`
-	StartSec    float64 `json:"startSec,omitempty"`
-	DurationSec float64 `json:"durationSec,omitempty"`
-	TrackIndex  int     `json:"trackIndex,omitempty"`
+	StartSec    float64 `json:"startSec"`
+	DurationSec float64 `json:"durationSec"`
+	TrackIndex  int     `json:"trackIndex"`
 	Fit         string  `json:"fit,omitempty"`
 	Opacity     float64 `json:"opacity,omitempty"`
 }
