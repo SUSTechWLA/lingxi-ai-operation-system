@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -85,7 +87,7 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		if err := os.WriteFile(filepath.Join(assetsDir, "style.css"), []byte(buildCompositionStyle()), 0o644); err != nil {
 			return nil, err
 		}
-		mediaPackages := shotMediaPackagesFromPayload(e.dataDir, projectID, job.Payload)
+		mediaPackages := shotMediaPackagesFromPayload(e.dataDir, projectID, projectRoot, job.Payload)
 		index := buildHyperFramesIndexWithMedia(topic, script, mediaPackages)
 		if err := os.WriteFile(filepath.Join(projectRoot, "index.html"), []byte(index), 0o644); err != nil {
 			return nil, err
@@ -437,7 +439,7 @@ func firstStringFromMap(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func shotMediaPackagesFromPayload(dataDir, projectID string, payload map[string]interface{}) []shotMediaPackage {
+func shotMediaPackagesFromPayload(dataDir, projectID, projectRoot string, payload map[string]interface{}) []shotMediaPackage {
 	if payload == nil {
 		return nil
 	}
@@ -476,7 +478,7 @@ func shotMediaPackagesFromPayload(dataDir, projectID string, payload map[string]
 			Kind:       strings.TrimSpace(stringFromMap(baseLayerMap, "kind")),
 			StorageRef: strings.TrimSpace(stringFromMap(baseLayerMap, "storageRef")),
 		}
-		baseLayer.ResolvedSrc, baseLayer.Missing = resolveMediaStorageRef(dataDir, projectID, baseLayer.StorageRef)
+		baseLayer.ResolvedSrc, baseLayer.Missing = resolveMediaStorageRef(dataDir, projectID, projectRoot, baseLayer.StorageRef)
 
 		overlays := make([]mediaOverlay, 0, len(overlayItems))
 		for overlayIndex, overlayItem := range overlayItems {
@@ -516,7 +518,7 @@ func shotMediaPackagesFromPayload(dataDir, projectID string, payload map[string]
 	return packages
 }
 
-func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool) {
+func resolveMediaStorageRef(dataDir, projectID, projectRoot, storageRef string) (string, bool) {
 	storageRef = strings.TrimSpace(storageRef)
 	if storageRef == "" {
 		return "", true
@@ -564,7 +566,51 @@ func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool
 	if info, err := os.Stat(contentPath); err != nil || info.IsDir() {
 		return "", true
 	}
+	if strings.TrimSpace(projectRoot) != "" {
+		if localSrc, err := copyLocalMediaIntoProject(projectRoot, contentPath, artifactID, hash, name); err == nil {
+			return localSrc, false
+		}
+	}
 	return localAgentRawArtifactURL(refProjectID, artifactID), false
+}
+
+func copyLocalMediaIntoProject(projectRoot, contentPath, artifactID, hash, name string) (string, error) {
+	shortHash := hash
+	if len(shortHash) > 12 {
+		shortHash = shortHash[:12]
+	}
+	fileName := artifactID + "-" + shortHash + "-" + name
+	if err := validateLocalSegment(fileName); err != nil {
+		return "", err
+	}
+	mediaDir := filepath.Join(projectRoot, "assets", "media")
+	if err := ensureInside(projectRoot, mediaDir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		return "", err
+	}
+	destPath := filepath.Join(mediaDir, fileName)
+	if err := ensureInside(projectRoot, destPath); err != nil {
+		return "", err
+	}
+	source, err := os.Open(contentPath)
+	if err != nil {
+		return "", err
+	}
+	defer source.Close()
+	target, err := os.Create(destPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		_ = target.Close()
+		return "", err
+	}
+	if err := target.Close(); err != nil {
+		return "", err
+	}
+	return path.Join("assets", "media", fileName), nil
 }
 
 func localAgentRawArtifactURL(projectID, artifactID string) string {

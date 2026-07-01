@@ -133,12 +133,15 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 		`data-track-index="0"`,
 		`data-duration="4.0"`,
 		`data-shot-id="SHOT_01"`,
-		`http://127.0.0.1:18080/api/local/artifacts/shot-video-01?projectId=project_001&amp;raw=1`,
+		`assets/media/shot-video-01-hash-clip.mp4`,
 		`精确文字`,
 	} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("index.html missing %q:\n%s", expected, html)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", "project_001", "hyperframes", "assets", "media", "shot-video-01-hash-clip.mp4")); err != nil {
+		t.Fatalf("expected copied media asset: %v", err)
 	}
 }
 
