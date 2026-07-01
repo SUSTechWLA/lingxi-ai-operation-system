@@ -350,6 +350,43 @@ func TestBuildArtifactsFromProfileSelectionMaterializesVideoCreationProfile(t *t
 	}
 }
 
+func TestBuildArtifactsFromProfileSelectionWithoutProfilePayloadDoesNotStoreEnvelope(t *testing.T) {
+	node := &model.Node{
+		ID:     "profile_selection_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "profile_selection",
+			"tool":  "video_profile_classifier",
+		},
+		Output: map[string]interface{}{
+			"content": "视频创作 profile 已选择。",
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "video-creation-profile",
+					"kind":     "VIDEO_CREATION_PROFILE",
+					"name":     "video_creation_profile.json",
+					"mimeType": "application/json",
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("video creation profile manifest should materialize without inline data: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one video creation profile artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Kind != ArtifactKind("VIDEO_CREATION_PROFILE") {
+		t.Fatalf("expected VIDEO_CREATION_PROFILE artifact, got %q", req.Kind)
+	}
+	if len(req.Data) != 0 {
+		t.Fatalf("video creation profile without profile payload should fail closed with empty data, got %s", string(req.Data))
+	}
+}
+
 func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *testing.T) {
 	node := &model.Node{
 		ID:     "video_prompt_exec",

@@ -390,6 +390,7 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 		if profile, ok := videoCreationProfilePayload(payload); ok {
 			return marshalValue(profile)
 		}
+		return nil
 	}
 	switch unitID {
 	case "script-content":
