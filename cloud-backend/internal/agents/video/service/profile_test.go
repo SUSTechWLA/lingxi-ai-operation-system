@@ -25,6 +25,9 @@ func TestBuildVideoCreationProfileTalkingHead(t *testing.T) {
 	if profile.DAGTemplateID != "talking_head_v1" {
 		t.Fatalf("dag template = %s", profile.DAGTemplateID)
 	}
+	if profile.FallbackProfile != "" {
+		t.Fatalf("normal talking-head fallback profile = %s, want empty", profile.FallbackProfile)
+	}
 }
 
 func TestBuildVideoCreationProfileCinematic(t *testing.T) {
@@ -45,6 +48,9 @@ func TestBuildVideoCreationProfileCinematic(t *testing.T) {
 	}
 	if profile.DAGTemplateID != "cinematic_story_v1" {
 		t.Fatalf("dag template = %s", profile.DAGTemplateID)
+	}
+	if profile.FallbackProfile != "" {
+		t.Fatalf("normal cinematic fallback profile = %s, want empty", profile.FallbackProfile)
 	}
 }
 

@@ -26,7 +26,7 @@ func BuildVideoCreationProfile(req ProfileRequest) model.VideoCreationProfile {
 }
 
 func talkingHeadProfile(req ProfileRequest) model.VideoCreationProfile {
-	return talkingHeadProfileWithMetadata(req, 0.84, "brief is script-led", false, model.VideoProfileTalkingHead)
+	return talkingHeadProfileWithMetadata(req, 0.84, "brief is script-led", false, "")
 }
 
 func talkingHeadProfileWithMetadata(req ProfileRequest, confidence float64, reason string, needsUserReview bool, fallbackProfile string) model.VideoCreationProfile {
@@ -83,9 +83,8 @@ func cinematicStoryProfile(req ProfileRequest) model.VideoCreationProfile {
 			"primaryRenderer": "aigc_then_assembly",
 			"hyperframesUse":  "deterministic_text_overlay",
 		},
-		FallbackProfile: model.VideoProfileTalkingHead,
-		Confidence:      0.82,
-		Reason:          "brief requires cinematic continuity",
+		Confidence: 0.82,
+		Reason:     "brief requires cinematic continuity",
 	}
 }
 
