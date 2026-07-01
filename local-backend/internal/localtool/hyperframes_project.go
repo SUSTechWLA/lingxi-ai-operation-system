@@ -563,7 +563,7 @@ func resolveMediaStorageRef(dataDir, projectID, storageRef string) (string, bool
 	if info, err := os.Stat(contentPath); err != nil || info.IsDir() {
 		return "", true
 	}
-	return "/api/local/artifacts/" + artifactID + "?projectId=" + refProjectID, false
+	return "/api/local/artifacts/" + artifactID + "?projectId=" + refProjectID + "&raw=1", false
 }
 
 // ---- HTML/CSS generation ----

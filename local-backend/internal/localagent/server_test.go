@@ -426,6 +426,37 @@ func TestLocalArtifactStoreWritesAndReadsUserPayload(t *testing.T) {
 	}
 }
 
+func TestLocalArtifactRawReturnsMediaBytes(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	content := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'm', 'p', '4', '2'}
+	if err := os.WriteFile(filepath.Join(artifactDir, "content"), content, 0o644); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+	metadata := []byte(`{"id":"video-1","projectId":"vp-1","mimeType":"video/mp4","storageRef":"local://projects/vp-1/artifacts/video-1/hash/final.mp4"}`)
+	if err := os.WriteFile(filepath.Join(artifactDir, "metadata.json"), metadata, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/local/artifacts/video-1?projectId=vp-1&raw=1", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("raw status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "video/mp4") {
+		t.Fatalf("raw content-type = %q", contentType)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), content) {
+		t.Fatalf("raw content mismatch: %v", rec.Body.Bytes())
+	}
+}
+
 func TestLocalArtifactDeleteRemovesPayloadAndMetadata(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})

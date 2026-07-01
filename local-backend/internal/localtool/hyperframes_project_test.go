@@ -133,6 +133,7 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 		`data-track-index="0"`,
 		`data-duration="4.0"`,
 		`data-shot-id="SHOT_01"`,
+		`/api/local/artifacts/shot-video-01?projectId=project_001&amp;raw=1`,
 		`精确文字`,
 	} {
 		if !strings.Contains(html, expected) {
