@@ -214,8 +214,7 @@ func TestBiaoshuProjectStoreUpsertListAndRejectUnsafeRunID(t *testing.T) {
 		t.Fatalf("upsert status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	indexPath := filepath.Join(root, "projects", "biaoshu-projects.json")
-	raw, err := os.ReadFile(indexPath)
+	raw, err := readOnlyBiaoshuProjectSnapshot(root)
 	if err != nil {
 		t.Fatalf("expected biaoshu project index: %v", err)
 	}
@@ -265,6 +264,114 @@ func TestBiaoshuProjectStoreUpsertListAndRejectUnsafeRunID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unsafe run id should return 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestBiaoshuProjectStoreRecoversWhenLegacyIndexCannotBeOpened(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	if err := server.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "projects", "biaoshu-projects.json"), 0o755); err != nil {
+		t.Fatalf("create inaccessible legacy index path: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{
+		"projectName":"养护",
+		"bidFilePath":"E:\\yhbs\\招标文件\\招标文件_converted.docx",
+		"status":"SUCCESS",
+		"createdAt":"2026-06-30T09:00:00Z",
+		"updatedAt":"2026-06-30T09:05:00Z"
+	}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/local/biaoshu-projects/run-recovered", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upsert should recover from inaccessible legacy index, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	raw, err := readOnlyBiaoshuProjectSnapshot(root)
+	if err != nil {
+		t.Fatalf("expected recovered biaoshu project index: %v", err)
+	}
+	if !bytes.Contains(raw, []byte("run-recovered")) {
+		t.Fatalf("recovered project index missing run id: %s", string(raw))
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/biaoshu-projects", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list should use recovered index, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listed BiaoshuProjectListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("invalid recovered biaoshu project list: %v", err)
+	}
+	if len(listed.Projects) != 1 || listed.Projects[0].RunID != "run-recovered" {
+		t.Fatalf("recovered projects = %+v, want run-recovered", listed.Projects)
+	}
+}
+
+func TestBiaoshuProjectStoreWritesSnapshotWhenIndexCannotBeOverwritten(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	if err := server.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	indexPath := filepath.Join(root, "projects", "biaoshu-project-index.json")
+	if err := os.WriteFile(indexPath, []byte(`{"projects":[]}`), 0o444); err != nil {
+		t.Fatalf("write read-only index: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(indexPath, 0o644)
+	}()
+
+	body := bytes.NewBufferString(`{
+		"projectName":"不可覆盖索引",
+		"bidFilePath":"E:\\bid\\readonly-index.pdf",
+		"status":"SUCCESS",
+		"createdAt":"2026-06-30T10:00:00Z",
+		"updatedAt":"2026-06-30T10:05:00Z"
+	}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/local/biaoshu-projects/run-snapshot", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upsert should write snapshot when index cannot be overwritten, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/biaoshu-projects", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list should read latest snapshot, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listed BiaoshuProjectListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("invalid snapshot-backed project list: %v", err)
+	}
+	if len(listed.Projects) != 1 || listed.Projects[0].RunID != "run-snapshot" {
+		t.Fatalf("snapshot-backed projects = %+v, want run-snapshot", listed.Projects)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "config", "biaoshu-project-history"))
+	if err != nil {
+		t.Fatalf("expected snapshot history dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("snapshot count = %d, want 1", len(entries))
+	}
+}
+
+func readOnlyBiaoshuProjectSnapshot(root string) ([]byte, error) {
+	entries, err := os.ReadDir(filepath.Join(root, "config", "biaoshu-project-history"))
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return os.ReadFile(filepath.Join(root, "config", "biaoshu-project-history", entries[len(entries)-1].Name()))
 }
 
 func TestReadBiaoshuArtifactReadsTrustedTextFileAndRejectsOutsidePath(t *testing.T) {

@@ -1,5 +1,9 @@
 $API = "http://localhost:8080/api/tools/register"
 $HEADERS = @{ "Content-Type" = "application/json" }
+$BIAOSHU_TOOLS_BASE = $env:BIAOSHU_TOOLS_BASE
+if (-not $BIAOSHU_TOOLS_BASE) {
+    $BIAOSHU_TOOLS_BASE = "http://127.0.0.1:9001"
+}
 
 function Register-BiaoshuTool {
     param(
@@ -25,8 +29,8 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("bid_writing", "bid_parsing", "document_parsing")
     tags = @("bid_writing", "bid", "tender", "biaoshu")
-    endpoint = "http://127.0.0.1:9001/tools/parse_bid_files"
-    timeout = 120
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/parse_bid_files"
+    timeout = 300
     parameters = @{
         file_path = @{ type = "string"; description = "Absolute path of the tender file"; required = $true }
         output_dir = @{ type = "string"; description = "Optional output subdirectory name"; required = $false }
@@ -44,7 +48,7 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("bid_quality_check")
     tags = @("bid", "biaoshu", "word_count")
-    endpoint = "http://127.0.0.1:9001/tools/check_chapter_words"
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/check_chapter_words"
     timeout = 30
     parameters = @{
         content = @{ type = "string"; description = "Markdown chapter content"; required = $false }
@@ -62,7 +66,7 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("bid_quality_check")
     tags = @("bid", "biaoshu", "word_count")
-    endpoint = "http://127.0.0.1:9001/tools/check_all_chapters_words"
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/check_all_chapters_words"
     timeout = 60
     parameters = @{
         chapter_dir = @{ type = "string"; description = "Chapter directory path"; required = $true }
@@ -83,7 +87,7 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("document_export")
     tags = @("bid", "biaoshu", "word", "docx")
-    endpoint = "http://127.0.0.1:9001/tools/convert_to_word"
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/convert_to_word"
     timeout = 60
     parameters = @{
         content = @{ type = "string"; description = "Markdown content"; required = $false }
@@ -105,7 +109,7 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("document_assembly")
     tags = @("bid", "biaoshu", "markdown")
-    endpoint = "http://127.0.0.1:9001/tools/merge_chapters"
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/merge_chapters"
     timeout = 30
     parameters = @{
         chapter_dir = @{ type = "string"; description = "Chapter directory path"; required = $true }
@@ -123,7 +127,7 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("bid_reference_retrieval")
     tags = @("bid", "biaoshu", "rag", "retrieval")
-    endpoint = "http://127.0.0.1:9001/tools/rag_retrieve"
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/rag_retrieve"
     timeout = 60
     parameters = @{
         query = @{ type = "string"; description = "Retrieval query"; required = $true }
@@ -144,7 +148,7 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("bid_reference_indexing")
     tags = @("bid", "biaoshu", "rag", "chunking")
-    endpoint = "http://127.0.0.1:9001/tools/chapter_chunker"
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/chapter_chunker"
     timeout = 60
     parameters = @{
         input_file = @{ type = "string"; description = "Markdown input file"; required = $true }
@@ -164,7 +168,7 @@ Register-BiaoshuTool @{
     type = "http"
     capabilities = @("bid_reference_indexing")
     tags = @("bid", "biaoshu", "rag", "embedding")
-    endpoint = "http://127.0.0.1:9001/tools/embed_chunks"
+    endpoint = "$BIAOSHU_TOOLS_BASE/tools/embed_chunks"
     timeout = 120
     parameters = @{
         input_file = @{ type = "string"; description = "Chunk JSONL input file"; required = $true }
@@ -178,4 +182,4 @@ Register-BiaoshuTool @{
 }
 
 Write-Host ""
-Write-Host "Done. Verify with: curl http://localhost:8080/api/tools/parse_bid_files" -ForegroundColor Yellow
+Write-Host "Done. Verify with: curl http://localhost:9090/api/tools/parse_bid_files" -ForegroundColor Yellow

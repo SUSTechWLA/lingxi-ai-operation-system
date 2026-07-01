@@ -7,10 +7,12 @@ const http = require('http')
 const isDev = !app.isPackaged
 const LOCAL_AGENT_URL = process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080'
 const CLOUD_API_BASE = process.env.TANGYING_CLOUD_API_BASE || process.env.VITE_CLOUD_API_BASE || 'http://localhost:8080/api'
+const BIAOSHU_TOOLS_URL = process.env.TANGYING_BIAOSHU_TOOLS_URL || process.env.VITE_BIAOSHU_TOOLS_URL || 'http://127.0.0.1:9001'
 const APP_ICON_FILE = '躺营ai自媒体运营助手.png'
 
 let mainWindow = null
 let localAgentProcess = null
+let biaoshuToolsProcess = null
 
 function localAgentBinaryPath() {
   const binaryName = process.platform === 'win32' ? 'tangying-local-agent.exe' : 'tangying-local-agent'
@@ -25,6 +27,13 @@ function appIconPath() {
     return path.join(__dirname, '..', 'dist', APP_ICON_FILE)
   }
   return path.join(__dirname, '..', 'public', APP_ICON_FILE)
+}
+
+function biaoshuToolsDir() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'biaoshu-tools')
+  }
+  return path.join(__dirname, '..', '..', 'biaoshu-tools')
 }
 
 function startLocalAgent() {
@@ -52,11 +61,70 @@ function startLocalAgent() {
   })
 }
 
+function startBiaoshuTools() {
+  if (process.env.TANGYING_SKIP_BIAOSHU_TOOLS === 'true') return
+  if (biaoshuToolsProcess) return
+  const toolsDir = biaoshuToolsDir()
+  if (!fs.existsSync(path.join(toolsDir, 'app.py'))) {
+    console.warn(`Biaoshu tools app not found: ${toolsDir}`)
+    return
+  }
+  const toolsURL = new URL(BIAOSHU_TOOLS_URL)
+  const port = toolsURL.port || '9001'
+  const python = process.env.TANGYING_PYTHON || 'python'
+  biaoshuToolsProcess = spawn(python, ['app.py', '--port', port], {
+    cwd: toolsDir,
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+    },
+    windowsHide: true,
+  })
+  biaoshuToolsProcess.stderr.on('data', (data) => {
+    console.warn(`[biaoshu-tools] ${data.toString().trim()}`)
+  })
+  biaoshuToolsProcess.on('error', (err) => {
+    console.warn(`Biaoshu tools failed to start: ${err.message}`)
+    biaoshuToolsProcess = null
+  })
+  biaoshuToolsProcess.on('exit', (code) => {
+    console.warn(`Biaoshu tools exited with code ${code}`)
+    biaoshuToolsProcess = null
+  })
+}
+
 function stopLocalAgent() {
   if (localAgentProcess) {
     localAgentProcess.kill()
     localAgentProcess = null
   }
+}
+
+function stopBiaoshuTools() {
+  if (biaoshuToolsProcess) {
+    biaoshuToolsProcess.kill()
+    biaoshuToolsProcess = null
+  }
+}
+
+function checkHTTPJSON(url, predicate, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      let data = ''
+      res.on('data', (chunk) => { data += chunk })
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data)
+          resolve(predicate(parsed) ? 'ok' : 'unhealthy')
+        } catch {
+          resolve('unhealthy')
+        }
+      })
+    })
+    req.on('error', () => resolve('unreachable'))
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve('timeout') })
+  })
 }
 
 function createWindow() {
@@ -160,27 +228,17 @@ ipcMain.handle('save-file-dialog', async (_, options = {}) => {
 
 // Check if backend is healthy
 ipcMain.handle('check-service-health', async () => {
-  return new Promise((resolve) => {
-    const req = http.get(`${LOCAL_AGENT_URL}/api/local/health`, (res) => {
-      let data = ''
-      res.on('data', (chunk) => { data += chunk })
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data)
-          resolve(parsed.status === 'ok' ? 'ok' : 'unhealthy')
-        } catch {
-          resolve(data)
-        }
-      })
-    })
-    req.on('error', () => resolve('unreachable'))
-    req.setTimeout(3000, () => { req.destroy(); resolve('timeout') })
-  })
+  const [localAgent, biaoshuTools] = await Promise.all([
+    checkHTTPJSON(`${LOCAL_AGENT_URL}/api/local/health`, (parsed) => parsed.status === 'ok'),
+    checkHTTPJSON(`${BIAOSHU_TOOLS_URL}/health`, (parsed) => parsed.success === true && parsed.data?.status === 'UP'),
+  ])
+  return localAgent === 'ok' && biaoshuTools === 'ok' ? 'ok' : 'unhealthy'
 })
 
 ipcMain.handle('get-runtime-config', async () => ({
   localAgentUrl: LOCAL_AGENT_URL,
   cloudApiBase: CLOUD_API_BASE,
+  biaoshuToolsUrl: BIAOSHU_TOOLS_URL,
 }))
 
 // Open external URL in system browser
@@ -232,6 +290,7 @@ async function publishToPlatform(platform, content) {
 
 app.whenReady().then(() => {
   startLocalAgent()
+  startBiaoshuTools()
   createWindow()
 })
 
@@ -243,4 +302,7 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })
 
-app.on('before-quit', stopLocalAgent)
+app.on('before-quit', () => {
+  stopLocalAgent()
+  stopBiaoshuTools()
+})

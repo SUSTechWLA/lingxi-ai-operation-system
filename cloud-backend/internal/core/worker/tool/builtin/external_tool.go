@@ -26,7 +26,7 @@ type ExternalTool struct {
 func NewExternalTool(registry *tool.ToolRegistry) *ExternalTool {
 	return &ExternalTool{
 		registry: registry,
-		client:   &http.Client{Timeout: 60 * time.Second},
+		client:   &http.Client{},
 	}
 }
 
@@ -94,7 +94,10 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 		zap.String("endpoint", targetURL),
 		zap.String("taskId", toolCtx.TaskID))
 
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(reqBody))
+	reqCtx, cancel := context.WithTimeout(ctx, externalHTTPRequestTimeout(manifest))
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", targetURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return tool.FailureResult(fmt.Sprintf("failed to create HTTP request: %s", err.Error()))
 	}
@@ -119,16 +122,30 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 	// Try to parse as JSON
 	var result map[string]interface{}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		// Return raw text output if not valid JSON
-		return tool.SuccessResult(map[string]interface{}{
-			"content":    string(respBody),
-			"tool":       toolName,
-			"statusCode": resp.StatusCode,
-		})
+		snippet := strings.TrimSpace(string(respBody))
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return tool.FailureResult(fmt.Sprintf("external tool '%s' returned non-JSON response from %s: %s", toolName, targetURL, snippet))
+	}
+
+	if success, ok := result["success"].(bool); ok && !success {
+		message := "external tool reported failure"
+		if errText, ok := result["error"].(string); ok && strings.TrimSpace(errText) != "" {
+			message = errText
+		}
+		return tool.FailureResult(fmt.Sprintf("external tool '%s' failed: %s", toolName, message))
 	}
 
 	result["tool"] = toolName
 	return tool.SuccessResult(result)
+}
+
+func externalHTTPRequestTimeout(manifest *tool.ToolManifest) time.Duration {
+	if manifest != nil && manifest.Timeout > 0 {
+		return time.Duration(manifest.Timeout) * time.Second
+	}
+	return 60 * time.Second
 }
 
 func externalToolEndpoint(manifest *tool.ToolManifest) string {

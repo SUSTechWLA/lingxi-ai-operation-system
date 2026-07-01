@@ -63,6 +63,10 @@
       {
         "from": "resources/bin",
         "to": "bin"
+      },
+      {
+        "from": "../biaoshu-tools",
+        "to": "biaoshu-tools"
       }
     ],
     "mac": {

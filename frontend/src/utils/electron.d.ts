@@ -22,6 +22,7 @@ export interface ElectronAPI {
   runtimeConfig: {
     localAgentUrl: string
     cloudApiBase: string
+    biaoshuToolsUrl?: string
   }
   executeCommand: (command: string, args?: string[], workDir?: string) => Promise<CommandResult>
   openFileDialog: (options?: Record<string, unknown>) => Promise<string[]>
@@ -32,6 +33,7 @@ export interface ElectronAPI {
   getRuntimeConfig: () => Promise<{
     localAgentUrl: string
     cloudApiBase: string
+    biaoshuToolsUrl?: string
   }>
   publishToPlatforms: (payload: {
     title: string

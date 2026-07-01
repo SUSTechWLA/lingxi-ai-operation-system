@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 )
 
 func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
@@ -68,6 +72,49 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 	}
 	if nodeRepo.updatedOutput["localJobId"] != "local_job_001" || nodeRepo.updatedOutput["executionPlane"] != tool.ExecutionPlaneLocal {
 		t.Fatalf("node output should include local dispatch metadata: %#v", nodeRepo.updatedOutput)
+	}
+}
+
+func TestExecuteToolUsesExternalManifestTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(1500 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"report_path":"E:/bid/out/analysis.md"}}`))
+	}))
+	defer server.Close()
+
+	registry := tool.NewToolRegistry()
+	registry.Register(builtin.NewExternalTool(registry))
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name:     "parse_bid_files",
+		Type:     "http",
+		Endpoint: server.URL,
+		Timeout:  2,
+	})
+
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{ToolTimeoutSeconds: 1}, nil, nil, nil)
+	result, err := nodeExecutor.executeTool(
+		context.Background(),
+		"external",
+		map[string]interface{}{"tool": "parse_bid_files", "file_path": "E:/bid/test_bid.txt"},
+		tool.ToolContext{TaskID: "task-1", NodeID: "node-1"},
+		false,
+		nil,
+	)
+
+	if err != nil {
+		t.Fatalf("executeTool returned error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("external manifest timeout should allow tool to finish; error=%q", result.Error)
+	}
+	var output map[string]interface{}
+	if err := json.Unmarshal(result.Stdout, &output); err != nil {
+		t.Fatalf("stdout should be JSON output: %v", err)
+	}
+	data, _ := output["data"].(map[string]interface{})
+	if data["report_path"] != "E:/bid/out/analysis.md" {
+		t.Fatalf("unexpected output: %#v", output)
 	}
 }
 

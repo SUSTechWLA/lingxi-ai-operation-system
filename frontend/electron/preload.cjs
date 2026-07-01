@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runtimeConfig: {
     localAgentUrl: process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080',
     cloudApiBase: process.env.TANGYING_CLOUD_API_BASE || process.env.VITE_CLOUD_API_BASE || 'http://localhost:8080/api',
+    biaoshuToolsUrl: process.env.TANGYING_BIAOSHU_TOOLS_URL || process.env.VITE_BIAOSHU_TOOLS_URL || 'http://127.0.0.1:9001',
   },
 
   executeCommand: (command, args, workDir) =>

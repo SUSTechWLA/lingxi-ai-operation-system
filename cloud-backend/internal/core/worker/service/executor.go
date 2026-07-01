@@ -389,11 +389,13 @@ func (ne *NodeExecutor) executeTool(
 		}
 	} else if et, ok := t.(tool.ExecutableTool); ok {
 		resultCh := make(chan tool.ToolResult, 1)
+		timeout := ne.executionTimeout(toolName, parameters)
+		execCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
 		go func() {
-			resultCh <- et.Execute(ctx, parameters, toolCtx)
+			resultCh <- et.Execute(execCtx, parameters, toolCtx)
 		}()
 
-		timeout := time.Duration(ne.cfg.ToolTimeoutSeconds) * time.Second
 		select {
 		case toolResult := <-resultCh:
 			if toolResult.Success {
@@ -403,9 +405,10 @@ func (ne *NodeExecutor) executeTool(
 				result = executor.ExecutionResult{ExitCode: 1, Error: toolResult.Error}
 			}
 		case <-time.After(timeout):
+			cancel()
 			result = executor.ExecutionResult{
 				TimedOut: true,
-				Error:    fmt.Sprintf("Tool execution timed out after %d seconds", ne.cfg.ToolTimeoutSeconds),
+				Error:    fmt.Sprintf("Tool execution timed out after %d seconds", int(timeout.Seconds())),
 			}
 		}
 	} else {
@@ -413,6 +416,31 @@ func (ne *NodeExecutor) executeTool(
 	}
 
 	return result, execErr
+}
+
+func (ne *NodeExecutor) executionTimeout(toolName string, parameters map[string]interface{}) time.Duration {
+	timeoutSec := ne.cfg.ToolTimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = 120
+	}
+	if manifest := ne.executionManifest(toolName, parameters); manifest != nil && manifest.Timeout > 0 {
+		timeoutSec = manifest.Timeout
+	}
+	return time.Duration(timeoutSec) * time.Second
+}
+
+func (ne *NodeExecutor) executionManifest(toolName string, parameters map[string]interface{}) *tool.ToolManifest {
+	if ne == nil || ne.toolRegistry == nil {
+		return nil
+	}
+	if toolName == "external" {
+		if externalToolName, _ := parameters["tool"].(string); strings.TrimSpace(externalToolName) != "" {
+			if manifest := ne.toolRegistry.GetManifest(externalToolName); manifest != nil {
+				return manifest
+			}
+		}
+	}
+	return ne.toolRegistry.GetManifest(toolName)
 }
 
 func (ne *NodeExecutor) dispatchLocalNode(

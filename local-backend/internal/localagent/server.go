@@ -17,14 +17,16 @@ import (
 )
 
 type Config struct {
-	DataDir      string
-	CloudAPIBase string
+	DataDir           string
+	CloudAPIBase      string
+	BiaoshuHistoryDir string
 }
 
 type Server struct {
-	cfg   Config
-	paths Paths
-	mux   *http.ServeMux
+	cfg               Config
+	paths             Paths
+	biaoshuHistoryDir string
+	mux               *http.ServeMux
 }
 
 type Paths struct {
@@ -36,6 +38,12 @@ type Paths struct {
 	LogDir         string `json:"logDir"`
 	DiagnosticsDir string `json:"diagnosticsDir"`
 }
+
+const (
+	legacyBiaoshuProjectsFilename = "biaoshu-projects.json"
+	biaoshuProjectsIndexFilename  = "biaoshu-project-index.json"
+	biaoshuProjectsHistoryDirName = "biaoshu-project-history"
+)
 
 type DiagnosticResponse struct {
 	Path      string `json:"path"`
@@ -131,7 +139,11 @@ func NewServer(cfg Config) *Server {
 	if strings.TrimSpace(cfg.DataDir) == "" {
 		cfg.DataDir = defaultDataDir()
 	}
-	s := &Server{cfg: cfg}
+	biaoshuHistoryDir := strings.TrimSpace(cfg.BiaoshuHistoryDir)
+	if biaoshuHistoryDir == "" {
+		biaoshuHistoryDir = defaultBiaoshuProjectsHistoryDir(cfg.DataDir)
+	}
+	s := &Server{cfg: cfg, biaoshuHistoryDir: biaoshuHistoryDir}
 	s.paths = Paths{
 		DataDir:        cfg.DataDir,
 		CacheDir:       filepath.Join(cfg.DataDir, "cache"),
@@ -589,6 +601,17 @@ func writeIndentedJSON(path string, value interface{}) error {
 	return enc.Encode(value)
 }
 
+func writeNewIndentedJSON(path string, value interface{}) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", "  ")
+	return enc.Encode(value)
+}
+
 func localArtifactPayload(req localArtifactRequest) ([]byte, error) {
 	if strings.TrimSpace(req.ContentBase64) != "" {
 		payload, err := base64.StdEncoding.DecodeString(req.ContentBase64)
@@ -867,25 +890,119 @@ func defaultDataDir() string {
 	}
 }
 
+func defaultBiaoshuProjectsHistoryDir(dataDir string) string {
+	if runtime.GOOS == "windows" {
+		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" && isDefaultWindowsRoamingDataDir(dataDir) {
+			return filepath.Join(localAppData, "TangyingAIOS", "config", biaoshuProjectsHistoryDirName)
+		}
+	}
+	return filepath.Join(dataDir, "config", biaoshuProjectsHistoryDirName)
+}
+
+func isDefaultWindowsRoamingDataDir(dataDir string) bool {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		appData = filepath.Join(home, "AppData", "Roaming")
+	}
+	return filepath.Clean(dataDir) == filepath.Clean(filepath.Join(appData, "TangyingAIOS"))
+}
+
 func (s *Server) modelProviderConfigPath() string {
 	return filepath.Join(s.paths.ConfigDir, "model-providers.json")
 }
 
 func (s *Server) biaoshuProjectsPath() string {
-	return filepath.Join(s.paths.ProjectDir, "biaoshu-projects.json")
+	return filepath.Join(s.paths.ProjectDir, legacyBiaoshuProjectsFilename)
+}
+
+func (s *Server) biaoshuProjectsIndexPath() string {
+	return filepath.Join(s.paths.ProjectDir, biaoshuProjectsIndexFilename)
+}
+
+func (s *Server) biaoshuProjectsHistoryDir() string {
+	return s.biaoshuHistoryDir
+}
+
+func (s *Server) biaoshuProjectsHistoryDirs() []string {
+	dirs := []string{s.biaoshuProjectsHistoryDir()}
+	if !isDefaultWindowsRoamingDataDir(s.cfg.DataDir) {
+		return dirs
+	}
+	tempDir := filepath.Join(os.TempDir(), "TangyingAIOS", biaoshuProjectsHistoryDirName)
+	if filepath.Clean(tempDir) != filepath.Clean(dirs[0]) {
+		dirs = append(dirs, tempDir)
+	}
+	return dirs
 }
 
 func (s *Server) readBiaoshuProjects() ([]BiaoshuProjectRecord, error) {
 	if err := s.EnsureDirs(); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(s.biaoshuProjectsPath())
+	if projects, ok, err := s.readLatestBiaoshuProjectsSnapshot(); ok || err != nil {
+		return projects, err
+	}
+	data, err := os.ReadFile(s.biaoshuProjectsIndexPath())
+	if err == nil {
+		return parseBiaoshuProjects(data)
+	}
+	// Index file unavailable for any reason; fall back to legacy projects file.
+	legacyPath := s.biaoshuProjectsPath()
+	data, err = os.ReadFile(legacyPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if biaoshuIndexUnavailable(legacyPath, err) || os.IsNotExist(err) || os.IsPermission(err) {
 			return []BiaoshuProjectRecord{}, nil
 		}
 		return nil, err
 	}
+	return parseBiaoshuProjects(data)
+}
+
+func (s *Server) readLatestBiaoshuProjectsSnapshot() ([]BiaoshuProjectRecord, bool, error) {
+	type snapshot struct {
+		name string
+		path string
+	}
+	snapshots := []snapshot{}
+	for _, dir := range s.biaoshuProjectsHistoryDirs() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+				continue
+			}
+			return nil, false, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+				snapshots = append(snapshots, snapshot{
+					name: entry.Name(),
+					path: filepath.Join(dir, entry.Name()),
+				})
+			}
+		}
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].name > snapshots[j].name
+	})
+	for _, item := range snapshots {
+		data, err := os.ReadFile(item.path)
+		if err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				continue
+			}
+			return nil, false, err
+		}
+		projects, err := parseBiaoshuProjects(data)
+		return projects, true, err
+	}
+	return nil, false, nil
+}
+
+func parseBiaoshuProjects(data []byte) ([]BiaoshuProjectRecord, error) {
 	var stored BiaoshuProjectListResponse
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return nil, err
@@ -948,7 +1065,59 @@ func (s *Server) writeBiaoshuProjects(projects []BiaoshuProjectRecord) error {
 	if err := s.EnsureDirs(); err != nil {
 		return err
 	}
-	return writeIndentedJSON(s.biaoshuProjectsPath(), BiaoshuProjectListResponse{Projects: projects})
+	value := BiaoshuProjectListResponse{Projects: projects}
+	if err := s.writeBiaoshuProjectsSnapshot(value); err == nil {
+		return nil
+	}
+	indexPath := s.biaoshuProjectsIndexPath()
+	if _, err := os.Stat(indexPath); err == nil {
+		if writeErr := writeIndentedJSON(indexPath, value); writeErr == nil {
+			return nil
+		}
+		// Index file write failed; fall back to legacy path.
+	}
+	legacyPath := s.biaoshuProjectsPath()
+	if err := writeIndentedJSON(legacyPath, value); err != nil {
+		if biaoshuIndexUnavailable(legacyPath, err) {
+			return writeIndentedJSON(indexPath, value)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Server) writeBiaoshuProjectsSnapshot(value BiaoshuProjectListResponse) error {
+	var lastErr error
+	for _, dir := range s.biaoshuProjectsHistoryDirs() {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			lastErr = err
+			continue
+		}
+		for attempt := 0; attempt < 5; attempt++ {
+			name := fmt.Sprintf("%020d-%d.json", time.Now().UTC().UnixNano(), attempt)
+			path := filepath.Join(dir, name)
+			if err := writeNewIndentedJSON(path, value); err != nil {
+				if errors.Is(err, os.ErrExist) {
+					continue
+				}
+				lastErr = err
+				break
+			}
+			return nil
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("could not create biaoshu project snapshot")
+}
+
+func biaoshuIndexUnavailable(path string, err error) bool {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	info, statErr := os.Stat(path)
+	return statErr == nil && info.IsDir()
 }
 
 func (s *Server) readBiaoshuArtifactFile(filePath string) (BiaoshuArtifactReadResponse, error) {

@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getAuthAccessToken, refreshAuthSession, logout } from './auth'
+import { getElectronAPI } from '../utils/electron'
 import { readLocalBiaoshuArtifact } from './localAgent'
 import {
   ApiResponse,
@@ -520,6 +521,16 @@ export interface BiaoshuArtifactContent {
   size: number
 }
 
+const DEFAULT_BIAOSHU_TOOLS_BASE_URL = 'http://127.0.0.1:9001'
+
+function getBiaoshuToolsBaseURL(): string {
+  return (
+    getElectronAPI()?.runtimeConfig?.biaoshuToolsUrl ||
+    import.meta.env.VITE_BIAOSHU_TOOLS_URL ||
+    DEFAULT_BIAOSHU_TOOLS_BASE_URL
+  ).replace(/\/$/, '')
+}
+
 export const readBiaoshuArtifact = async (filePath: string): Promise<BiaoshuArtifactContent> => {
   try {
     const local = await readLocalBiaoshuArtifact(filePath)
@@ -532,7 +543,7 @@ export const readBiaoshuArtifact = async (filePath: string): Promise<BiaoshuArti
     }
   } catch (localError) {
     try {
-      const response = await axios.post('http://127.0.0.1:9001/tools/read_artifact', {
+      const response = await axios.post(`${getBiaoshuToolsBaseURL()}/tools/read_artifact`, {
         params: { file_path: filePath },
       }, { timeout: 5000 })
       if (!response.data?.success) {
