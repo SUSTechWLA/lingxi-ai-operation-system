@@ -12,7 +12,8 @@ const (
 	maxAIGCWindowDurationSec       = 15.0
 	preferredCinematicWindowSec    = 10.0
 	talkingHeadWindowReason        = "script-aligned talking head window"
-	cinematicWindowReason          = "cinematic shot split into AIGC-safe time window"
+	defaultWindowDurationSec       = 6.0
+	cinematicWindowReason          = "cinematic coarse shot split into AIGC-safe 3-15s window"
 	shortCinematicWindowWarningFmt = "shot %s duration %.2fs was extended to 3.00s for AIGC eligibility"
 )
 
@@ -31,23 +32,26 @@ func BuildTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 
 func buildTalkingHeadTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 	plan := model.TimeWindowPlan{
-		ProfileID: req.Profile.ProfileID,
+		ProfileID: model.VideoProfileTalkingHead,
 		Windows:   make([]model.TimeWindowUnit, 0, len(req.ScriptSpans)),
 	}
 
 	for i, span := range req.ScriptSpans {
 		durationSec := span.EndSec - span.StartSec
-		windowID := span.ID
-		if windowID == "" {
-			windowID = fmt.Sprintf("TW_%02d", i+1)
+		endSec := span.EndSec
+		if durationSec <= 0 {
+			durationSec = defaultWindowDurationSec
+			endSec = span.StartSec + durationSec
 		}
+		windowID := fmt.Sprintf("TW_%02d", i+1)
+		shotID := fmt.Sprintf("SHOT_%02d", i+1)
 
 		plan.Windows = append(plan.Windows, model.TimeWindowUnit{
 			ID:              windowID,
-			ShotID:          windowID,
+			ShotID:          shotID,
 			SequenceIndex:   i,
 			StartSec:        span.StartSec,
-			EndSec:          span.EndSec,
+			EndSec:          endSec,
 			DurationSec:     durationSec,
 			ScriptSpanID:    span.ID,
 			ScriptText:      span.Text,
@@ -70,7 +74,7 @@ func buildCinematicTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 	for _, shot := range req.Shots {
 		durationSec := float64(shot.DurationSec)
 		if durationSec <= 0 {
-			continue
+			durationSec = defaultWindowDurationSec
 		}
 		if durationSec < minAIGCWindowDurationSec {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf(shortCinematicWindowWarningFmt, shot.ID, durationSec))

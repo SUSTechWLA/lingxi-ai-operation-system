@@ -51,3 +51,55 @@ func TestBuildTimeWindowPlanKeepsTalkingHeadScriptTiming(t *testing.T) {
 		t.Fatalf("script timing should be preserved: %#v", plan.Windows)
 	}
 }
+
+func TestBuildTimeWindowPlanDefaultsUnknownProfileInvalidScriptSpan(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: "unknown"},
+		ScriptSpans: []model.ScriptSpan{
+			{ID: "seg-invalid", StartSec: 10, EndSec: 8},
+		},
+	})
+
+	if plan.ProfileID != model.VideoProfileTalkingHead {
+		t.Fatalf("profile ID = %q, want %q", plan.ProfileID, model.VideoProfileTalkingHead)
+	}
+	if len(plan.Windows) != 1 {
+		t.Fatalf("window count = %d, want 1: %#v", len(plan.Windows), plan.Windows)
+	}
+	window := plan.Windows[0]
+	if window.ID != "TW_01" {
+		t.Fatalf("window ID = %q, want TW_01", window.ID)
+	}
+	if window.ShotID != "SHOT_01" {
+		t.Fatalf("shot ID = %q, want SHOT_01", window.ShotID)
+	}
+	if window.ScriptSpanID != "seg-invalid" {
+		t.Fatalf("script span ID = %q, want seg-invalid", window.ScriptSpanID)
+	}
+	if window.StartSec != 10 || window.EndSec != 16 || window.DurationSec != 6 {
+		t.Fatalf("invalid span should default to 6s from start: %#v", window)
+	}
+}
+
+func TestBuildTimeWindowPlanDefaultsCinematicZeroDurationShot(t *testing.T) {
+	plan := BuildTimeWindowPlan(TimeWindowRequest{
+		Profile: model.VideoCreationProfile{ProfileID: model.VideoProfileCinematicStory},
+		Shots: []model.ShotUnit{
+			{ID: "SHOT_ZERO", DurationSec: 0},
+		},
+	})
+
+	if len(plan.Windows) != 1 {
+		t.Fatalf("window count = %d, want 1: %#v", len(plan.Windows), plan.Windows)
+	}
+	window := plan.Windows[0]
+	if window.DurationSec != 6 || window.EndSec != 6 {
+		t.Fatalf("zero-duration cinematic shot should default to 6s: %#v", window)
+	}
+	if !window.AIGCEligible {
+		t.Fatalf("default cinematic window should be AIGC eligible: %#v", window)
+	}
+	if window.Reason != "cinematic coarse shot split into AIGC-safe 3-15s window" {
+		t.Fatalf("reason = %q", window.Reason)
+	}
+}
