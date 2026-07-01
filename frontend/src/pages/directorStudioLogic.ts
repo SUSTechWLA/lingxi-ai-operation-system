@@ -4,13 +4,20 @@ export type DirectorNavKey = 'overview' | 'review' | 'trace' | 'assets' | 'roles
 export type DirectorStageStatus = 'done' | 'active' | 'review' | 'blocked' | 'pending' | 'running' | 'failed'
 export type DirectorArtifactStatus = 'valid' | 'review' | 'stale' | 'pending' | 'running' | 'failed' | 'blocked' | 'missing'
 export type DirectorProjectLifecycleStatus = 'DRAFT' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED' | string | undefined
-export type DirectorRunLifecycleStatus = 'CREATED' | 'RUNNING' | 'FAILED' | 'CANCELLED' | string | undefined
+export type DirectorRunLifecycleStatus = 'CREATED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | string | undefined
 export type DirectorProjectPrimaryActionKind = 'start' | 'stop' | 'stopped'
+export type LocalServiceHealthStatus = 'unknown' | 'ok' | 'unhealthy'
+export type LocalServiceStatusTone = 'ok' | 'error' | 'unknown'
 
 export interface DirectorProjectPrimaryAction {
   kind: DirectorProjectPrimaryActionKind
   label: string
   disabled: boolean
+}
+
+export interface LocalServiceStatusDisplay {
+  label: string
+  tone: LocalServiceStatusTone
 }
 
 export interface DirectorStage {
@@ -33,6 +40,8 @@ export interface DirectorArtifactRecord {
   id: string
   name: string
   kind: string
+  stageName?: string
+  unitId?: string
   version: string
   status: DirectorArtifactStatus
   owner: string
@@ -504,20 +513,23 @@ export function buildDirectorArtifacts(
         ? manifestStatus || fallbackStatus
         : missingManifest ? 'missing' : requiresManifest ? 'pending' : fallbackStatus
       const manifestHumanApproved = booleanValue(artifact?.humanApproved)
+      const metadata = objectValue(artifact?.metadata)
       const index = roleIndex + 1
 
       return {
         id: String(artifact?.id || artifact?.artifactId || `A${String(index).padStart(2, '0')}${outputIndex ? `-${outputIndex + 1}` : ''}`),
         name: String(artifact?.name || displayNameForArtifact(output)),
         kind: output,
+        stageName: stringValue(artifact?.stageName) || stringValue(metadata?.stageName) || role.stage,
+        unitId: stringValue(artifact?.unitId) || stringValue(metadata?.unitId) || stringValue(metadata?.unit_id),
         version: artifact ? artifactVersionLabel(artifact) : '-',
         status,
         owner: role.displayName || role.name,
         updatedAt: formatTime(stringValue(artifact?.updatedAt) || stringValue(artifact?.createdAt) || node?.createdAt),
         humanApproved: artifact ? manifestHumanApproved ?? status === 'valid' : false,
         storageRef: displayStorageRef(artifact?.storageRef || artifact?.url || (requiresManifest ? '' : storageHintForKind(output))),
-        dependsOn: stringArrayValue(artifact?.dependsOn) || stringArrayValue(objectValue(artifact?.metadata)?.dependsOn) || role.requiredInputs,
-        metadata: objectValue(artifact?.metadata),
+        dependsOn: stringArrayValue(artifact?.dependsOn) || stringArrayValue(metadata?.dependsOn) || role.requiredInputs,
+        metadata,
       }
     })
   })
@@ -536,6 +548,72 @@ export function findPublishCopyArtifact(artifacts: DirectorArtifactRecord[]): Di
     const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
     return artifactType === 'publish_copy'
   })
+}
+
+export function findFinalVideoArtifact(artifacts: DirectorArtifactRecord[]): DirectorArtifactRecord | undefined {
+  return artifacts
+    .filter((artifact) => artifact.kind === 'VIDEO')
+    .map((artifact, index) => ({ artifact, index, score: finalVideoArtifactScore(artifact) }))
+    .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
+    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.artifact
+}
+
+export function localArtifactIdFromStorageRef(storageRef: string | undefined): string | undefined {
+  const ref = stringValue(storageRef) || ''
+  const match = /^local:\/\/projects\/[^/]+\/artifacts\/([^/]+)(?:\/|$)/u.exec(ref)
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined
+}
+
+function finalVideoArtifactScore(artifact: DirectorArtifactRecord): number {
+  if (artifact.kind !== 'VIDEO') return Number.NEGATIVE_INFINITY
+  const metadata = artifact.metadata || {}
+  const stageName = (artifact.stageName || stringValue(metadata.stageName) || stringValue(metadata.stage) || '').toLowerCase()
+  const unitId = (artifact.unitId || stringValue(metadata.unitId) || stringValue(metadata.unit_id) || '').toLowerCase()
+  const artifactType = (stringValue(metadata.artifactType) || stringValue(metadata.artifact_kind) || '').toLowerCase()
+  const requestId = (firstString(metadata, ['externalGenerationRequestId', 'generationRequestId', 'requestId'])).toLowerCase()
+  const relatedShotId = firstString(metadata, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id'])
+  const tags = normalizeStringList(metadata.tags).map((tag) => tag.toLowerCase())
+  const searchableName = `${artifact.id} ${artifact.name} ${artifact.storageRef}`.toLowerCase()
+  const hasFetchableRef = Boolean(localArtifactIdFromStorageRef(artifact.storageRef)) || isDirectMediaStorageRef(artifact.storageRef)
+  const manualPlaceholder = Boolean(booleanValue(metadata.manualUpload)) ||
+    stringValue(metadata.status) === 'manual_upload_required' ||
+    /\/manual-final\.[a-z0-9]+$/u.test(artifact.storageRef)
+
+  let score = 1
+  let finalSignals = 0
+  if (stageName === 'render') {
+    score += 100
+    finalSignals += 1
+  }
+  if (['final-video', 'final_video', 'final'].includes(unitId)) {
+    score += 90
+    finalSignals += 1
+  }
+  if (['final-video', 'final_video', 'final'].includes(requestId)) {
+    score += 100
+    finalSignals += 1
+  }
+  if (tags.some((tag) => ['final', 'final-video', 'final_video', 'final_video_output'].includes(tag))) {
+    score += 100
+    finalSignals += 1
+  }
+  if (/(^|[._\-\s])(final|final-video)([._\-\s]|$)|最终|成片/u.test(searchableName)) {
+    score += 30
+    finalSignals += 1
+  }
+  if (hasFetchableRef) score += 50
+  if (artifact.status === 'valid') score += 20
+  if (artifactType === 'external_generation_result') score += 5
+  if (manualPlaceholder) score -= 70
+  if (relatedShotId) score -= finalSignals > 0 ? 30 : 140
+  if (/^extgen_video_/u.test(requestId)) score -= 90
+
+  return score
+}
+
+function isDirectMediaStorageRef(storageRef: string | undefined): boolean {
+  const ref = stringValue(storageRef) || ''
+  return /^(https?:|blob:|data:)/u.test(ref)
 }
 
 export interface ArtifactViewerSelection {
@@ -599,6 +677,12 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
 }
 
 function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotAssetSlot[] {
+  const fulfilledRequestIds = new Set(
+    artifacts
+      .filter(isExternalGenerationResultArtifact)
+      .map(externalGenerationRequestIdForArtifact)
+      .filter(Boolean),
+  )
   const slotSpecs: Array<Omit<DirectorShotAssetSlot, 'status' | 'artifacts' | 'dependencyRequests'>> = [
     {
       kind: 'prompt',
@@ -627,7 +711,11 @@ function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotA
 
   return slotSpecs.map((slot) => {
     const slotArtifacts = artifacts.filter((artifact) => slot.kind === 'prompt' ? isShotPromptArtifact(artifact) : shotAssetSlotForArtifact(artifact) === slot.kind)
-    const dependencyRequests = slotArtifacts.filter(isExternalGenerationRequestArtifact)
+    const dependencyRequests = slotArtifacts.filter((artifact) => {
+      if (!isExternalGenerationRequestArtifact(artifact)) return false
+      const requestId = externalGenerationRequestIdForArtifact(artifact)
+      return !requestId || !fulfilledRequestIds.has(requestId)
+    })
     return {
       ...slot,
       status: aggregateShotSlotStatus(slotArtifacts, slot.kind),
@@ -635,6 +723,10 @@ function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotA
       dependencyRequests,
     }
   })
+}
+
+export function unresolvedMaterialDependencyCount(groups: DirectorShotReviewGroup[]): number {
+  return groups.reduce((total, group) => total + group.slots.reduce((slotTotal, slot) => slotTotal + slot.dependencyRequests.length, 0), 0)
 }
 
 function isShotPromptArtifact(artifact: DirectorArtifactRecord): boolean {
@@ -727,6 +819,8 @@ function projectArtifactRecord(artifact: Record<string, unknown>): DirectorArtif
     id: String(artifact.id || artifact.artifactId || ''),
     name: String(artifact.name || displayNameForArtifact(kind)),
     kind,
+    stageName: stringValue(artifact.stageName) || stringValue(metadata?.stageName),
+    unitId: stringValue(artifact.unitId) || stringValue(metadata?.unitId) || stringValue(metadata?.unit_id),
     version: artifactVersionLabel(artifact),
     status,
     owner: artifactType === 'external_generation_request'
@@ -758,6 +852,19 @@ function isShotReviewPacket(artifact: DirectorArtifactRecord): boolean {
 function isExternalGenerationRequestArtifact(artifact: DirectorArtifactRecord): boolean {
   const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
   return artifact.kind === 'EXTERNAL_GENERATION_REQUEST' || artifactType === 'external_generation_request'
+}
+
+function isExternalGenerationResultArtifact(artifact: DirectorArtifactRecord): boolean {
+  const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
+  return artifactType === 'external_generation_result'
+}
+
+function externalGenerationRequestIdForArtifact(artifact: DirectorArtifactRecord): string {
+  const metadata = artifact.metadata || {}
+  const direct = firstString(metadata, ['externalGenerationRequestId', 'generationRequestId', 'requestId'])
+  if (direct) return direct
+  const searchable = [artifact.storageRef, artifact.name, artifact.id].join(' ')
+  return /extgen_[A-Za-z0-9_-]+/.exec(searchable)?.[0] || ''
 }
 
 function isShotReferenceArtifact(artifact: DirectorArtifactRecord): boolean {
@@ -926,12 +1033,33 @@ export function canStartProject(preflightCanStart: boolean, loading: boolean, pr
   return preflightCanStart && !loading && !projectStarted
 }
 
+export function localServiceStatusDisplay(serviceStatus: LocalServiceHealthStatus, localRunnerAvailable?: boolean): LocalServiceStatusDisplay {
+  if (serviceStatus === 'ok' || localRunnerAvailable) {
+    return { label: '本地在线', tone: 'ok' }
+  }
+  if (serviceStatus === 'unhealthy') {
+    return { label: '本地离线', tone: 'error' }
+  }
+  return { label: '本地未检测', tone: 'unknown' }
+}
+
+export function isProjectSessionStarted(
+  loading: boolean,
+  projectStatus?: DirectorProjectLifecycleStatus,
+  runStatus?: DirectorRunLifecycleStatus,
+): boolean {
+  if (loading) return true
+  if (runStatus === 'SUCCESS' || runStatus === 'FAILED' || runStatus === 'CANCELLED') return false
+  if (runStatus === 'CREATED' || runStatus === 'RUNNING') return true
+  return projectStatus === 'RUNNING'
+}
+
 export function isProjectInProgress(
   projectStatus: DirectorProjectLifecycleStatus,
   runStatus: DirectorRunLifecycleStatus,
   stages: DirectorStage[] = [],
 ): boolean {
-  if (projectStatus === 'PAUSED' || projectStatus === 'COMPLETED' || projectStatus === 'ARCHIVED' || runStatus === 'CANCELLED') {
+  if (projectStatus === 'PAUSED' || projectStatus === 'COMPLETED' || projectStatus === 'ARCHIVED' || runStatus === 'SUCCESS' || runStatus === 'CANCELLED' || runStatus === 'FAILED') {
     return false
   }
   return projectStatus === 'RUNNING' ||
@@ -940,7 +1068,10 @@ export function isProjectInProgress(
     stages.some((stage) => stage.status === 'active' || stage.status === 'running' || stage.status === 'review')
 }
 
-export function overviewProjectStatus(stages: DirectorStage[], projectStatus?: DirectorProjectLifecycleStatus): DirectorStageStatus {
+export function overviewProjectStatus(stages: DirectorStage[], projectStatus?: DirectorProjectLifecycleStatus, runStatus?: DirectorRunLifecycleStatus): DirectorStageStatus {
+  if (runStatus === 'SUCCESS' || projectStatus === 'COMPLETED' || (stages.length > 0 && stages.every((stage) => stage.status === 'done'))) {
+    return 'done'
+  }
   if (projectStatus === 'PAUSED' || projectStatus === 'ARCHIVED') {
     return 'pending'
   }
@@ -1651,6 +1782,24 @@ export function visibleReviewHistory(reviews: AgentReviewItem[] = []): AgentRevi
     if (review.status === 'PENDING') return isActionablePendingReview(review)
     return ['APPROVED', 'REJECTED'].includes(String(review.status))
   })
+}
+
+export function nextSelectedReviewId(
+  currentSelectedId: string | undefined,
+  activeReviewId: string | undefined,
+  reviewHistory: AgentReviewItem[] = [],
+  lastAutoSelectedActiveId?: string,
+): string | undefined {
+  if (activeReviewId && activeReviewId !== lastAutoSelectedActiveId) {
+    return activeReviewId
+  }
+  if (currentSelectedId && reviewHistory.some((item) => item.id === currentSelectedId)) {
+    return currentSelectedId
+  }
+  if (activeReviewId) {
+    return activeReviewId
+  }
+  return reviewHistory[0]?.id
 }
 
 export function isActionablePendingReview(review: AgentReviewItem | undefined): boolean {

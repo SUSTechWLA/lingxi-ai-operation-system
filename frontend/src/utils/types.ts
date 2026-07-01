@@ -300,7 +300,7 @@ export interface AgentRun {
   domain?: string
   message: string
   plan?: AgentPlan
-  status: 'CREATED' | 'RUNNING' | 'FAILED' | 'CANCELLED'
+  status: 'CREATED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED'
   budget?: AgentBudget
   createdAt: string
   updatedAt: string

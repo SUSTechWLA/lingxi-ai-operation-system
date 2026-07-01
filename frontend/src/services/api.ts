@@ -32,6 +32,7 @@ import {
   VideoAssistantReviseRequest,
   VideoAssistantReviseResponse,
 } from '../utils/types'
+import { unwrapApiData } from '../utils/apiResponse'
 
 const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
 const electronCloudBase = typeof window !== 'undefined' ? window.electronAPI?.runtimeConfig?.cloudApiBase : ''
@@ -373,7 +374,9 @@ export interface PreflightResponse {
 
 export const fetchVideoPreflight = async (pipeline: string = 'wf-guided-image-text-video'): Promise<PreflightResponse> => {
   const response = await api.get<ApiResponse<PreflightResponse>>('/video/preflight', { params: { pipeline } })
-  return response.data.data!
+  const preflight = unwrapApiData<PreflightResponse>(response.data)
+  if (!preflight) throw new Error('invalid video preflight response')
+  return preflight
 }
 
 export const fetchVideoRoleAgents = async (): Promise<VideoRoleAgentListResponse> => {

@@ -3758,7 +3758,8 @@ func localContentHash(content string) string {
 // When HyperFrames mode is "service", it calls the Render Service HTTP API.
 // CLI fallback is explicitly forbidden in service mode — if the service is
 // unavailable the tool returns a failure. When mode is "disabled" the tool
-// refuses to render.
+// returns a manual-upload placeholder so the workflow can continue in local
+// smoke and browser-driven runs.
 func executeHyperframesRenderer(stage, skillName, brief, instructionRef string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
 	projectRef := stringParam(params, "project_ref", "")
 	projectDir := stringParam(params, "projectDir", projectRef)
@@ -3814,7 +3815,8 @@ func executeHyperframesRenderer(stage, skillName, brief, instructionRef string, 
 			zap.Int64("durationMs", result.DurationMs))
 
 	case hyperframes.ModeDisabled:
-		return tool.FailureResult("HyperFrames 渲染已禁用（HYPERFRAMES_MODE=disabled）")
+		renderPath = fmt.Sprintf("projects/%s/manual-final.mp4", toolCtx.TaskID)
+		status = "manual_upload_required"
 
 	default:
 		// Unknown mode — refuse to render.
@@ -4531,6 +4533,10 @@ func buildRenderContent(stage, skillName, status string, cliFound bool, renderPa
 	if status == "rendered" {
 		b.WriteString(fmt.Sprintf("Render completed.\n"))
 		b.WriteString(fmt.Sprintf("- Output: `%s`\n", renderPath))
+	} else if status == "manual_upload_required" {
+		b.WriteString("## Manual Video Result\n\n")
+		b.WriteString("HyperFrames rendering is disabled in this environment. Upload or register an externally rendered MP4 for this placeholder path:\n\n")
+		b.WriteString(fmt.Sprintf("- Expected output: `%s`\n", renderPath))
 	} else {
 		b.WriteString("## Render Guidance\n\n")
 		b.WriteString("HyperFrames CLI not available. To render this project manually:\n\n")
@@ -4573,6 +4579,24 @@ func buildRenderArtifacts(stage, skillName, status, renderPath string) []map[str
 				"renderPath": renderPath,
 			},
 		},
+	}
+	if renderPath != "" {
+		artifacts = append(artifacts, map[string]interface{}{
+			"unitId":     "final-video",
+			"kind":       "VIDEO",
+			"name":       "final.mp4",
+			"mimeType":   "video/mp4",
+			"storageRef": fmt.Sprintf("local://%s", strings.TrimPrefix(renderPath, "local://")),
+			"metadata": map[string]interface{}{
+				"stage":         stage,
+				"skillName":     skillName,
+				"status":        status,
+				"renderPath":    renderPath,
+				"source":        "hyperframes-renderer",
+				"manualUpload":  status == "manual_upload_required",
+				"humanApproved": false,
+			},
+		})
 	}
 	return artifacts
 }

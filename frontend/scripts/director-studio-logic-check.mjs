@@ -7,11 +7,20 @@ import { build } from 'esbuild'
 
 const tempDir = await mkdtemp(join(tmpdir(), 'director-studio-logic-'))
 const outfile = join(tempDir, 'directorStudioLogic.mjs')
+const apiResponseOutfile = join(tempDir, 'apiResponse.mjs')
 
 try {
   await build({
     entryPoints: [new URL('../src/pages/directorStudioLogic.ts', import.meta.url).pathname],
     outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/utils/apiResponse.ts', import.meta.url).pathname],
+    outfile: apiResponseOutfile,
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -26,10 +35,15 @@ try {
     buildDirectorStages,
     canStartProject,
     formatDirectorErrorMessage,
+    findFinalVideoArtifact,
     findPublishCopyArtifact,
     getArtifactViewerSelection,
+    isProjectSessionStarted,
+    localArtifactIdFromStorageRef,
+    localServiceStatusDisplay,
     normalizeDirectorErrorMessage,
     nextStageIdAfterReview,
+    nextSelectedReviewId,
     overviewProjectStatus,
     projectPrimaryAction,
     publishCopiesToJSON,
@@ -41,9 +55,11 @@ try {
     buildDirectorTraceNodes,
     externalGenerationGuideSteps,
     traceNodeHasError,
+    unresolvedMaterialDependencyCount,
     visibleReviewHistory,
     isActionablePendingReview,
   } = await import(pathToFileURL(outfile))
+  const { unwrapApiData } = await import(pathToFileURL(apiResponseOutfile))
   const roleAgents = [
     {
       id: 'render_producer',
@@ -99,8 +115,22 @@ try {
   assert.deepEqual(justStartedFlow.map((stage) => stage.status), ['active', 'pending'])
   assert.equal(canStartProject(true, false, false), true)
   assert.equal(canStartProject(true, false, true), false)
+  assert.equal(isProjectSessionStarted(false, 'RUNNING', 'FAILED'), false)
+  assert.equal(isProjectSessionStarted(false, 'RUNNING', 'SUCCESS'), false)
+  assert.equal(isProjectSessionStarted(false, 'RUNNING', 'RUNNING'), true)
   assert.equal(overviewProjectStatus(justStartedFlow, 'RUNNING'), 'active')
+  assert.equal(overviewProjectStatus(justStartedFlow, 'RUNNING', 'SUCCESS'), 'done')
   assert.equal(overviewProjectStatus(notStartedFlow), 'pending')
+  const rawPreflight = {
+    pipeline: 'wf-guided-image-text-video',
+    status: 'passed',
+    canStart: true,
+    capabilityMenu: { localRunner: { available: true } },
+  }
+  assert.equal(unwrapApiData({ data: rawPreflight }), rawPreflight)
+  assert.equal(unwrapApiData(rawPreflight), rawPreflight)
+  assert.deepEqual(localServiceStatusDisplay('unknown', true), { label: '本地在线', tone: 'ok' })
+  assert.deepEqual(localServiceStatusDisplay('unhealthy', false), { label: '本地离线', tone: 'error' })
   assert.deepEqual(projectPrimaryAction({
     preflightCanStart: true,
     loading: false,
@@ -109,6 +139,22 @@ try {
     stages: justStartedFlow,
     topic: '佛得角世界杯奇迹',
   }), { kind: 'stop', label: '停止项目', disabled: false })
+  assert.deepEqual(projectPrimaryAction({
+    preflightCanStart: true,
+    loading: false,
+    projectStatus: 'RUNNING',
+    runStatus: 'FAILED',
+    stages: notStartedFlow,
+    topic: '佛得角世界杯奇迹',
+  }), { kind: 'start', label: '开始项目', disabled: false })
+  assert.deepEqual(projectPrimaryAction({
+    preflightCanStart: true,
+    loading: false,
+    projectStatus: 'RUNNING',
+    runStatus: 'SUCCESS',
+    stages: notStartedFlow,
+    topic: '佛得角世界杯奇迹',
+  }), { kind: 'start', label: '开始项目', disabled: false })
   assert.deepEqual(projectPrimaryAction({
     preflightCanStart: true,
     loading: false,
@@ -163,6 +209,17 @@ try {
   }, true)
   assert.equal(isActionablePendingReview(preRenderReview), true)
   assert.equal(visibleReviewHistory([preRenderReview]).length, 1)
+  assert.equal(nextSelectedReviewId('review-proposal', 'review-script', [
+    { id: 'review-proposal', status: 'APPROVED' },
+    { id: 'review-script', status: 'PENDING', reviewContent: 'script ready' },
+  ], 'review-proposal'), 'review-script')
+  assert.equal(nextSelectedReviewId('review-proposal', 'review-script', [
+    { id: 'review-proposal', status: 'APPROVED' },
+    { id: 'review-script', status: 'PENDING', reviewContent: 'script ready' },
+  ], 'review-script'), 'review-proposal')
+  assert.equal(nextSelectedReviewId('missing-review', undefined, [
+    { id: 'review-proposal', status: 'APPROVED' },
+  ]), 'review-proposal')
   assert.equal(preRenderFlow[0].status, 'review')
   assert.equal(preRenderFlow[0].reviewId, 'render-review-before')
   assert.equal(reviewDisplayTitle(preRenderReview), '审核最终渲染')
@@ -836,6 +893,60 @@ try {
   ])
   assert.ok(artifactsWithPublishCopy.some((artifact) => artifact.kind === 'PUBLISH_COPY'))
   assert.equal(findPublishCopyArtifact(artifactsWithPublishCopy)?.id, 'art-publish-copy-1')
+  assert.equal(
+    localArtifactIdFromStorageRef('local://projects/vp-1/artifacts/final-video/final-video/hash/final.mp4'),
+    'final-video',
+  )
+  assert.equal(
+    localArtifactIdFromStorageRef('local://projects/20260701090839-40404040/manual-final.mp4'),
+    undefined,
+  )
+  const finalVideoCandidates = [
+    {
+      id: 'shot-video-result-1',
+      kind: 'VIDEO',
+      name: 'SHOT_01 视频回填结果',
+      stageName: 'external_generation_result',
+      unitId: 'extgen_video_SHOT_01',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://projects/vp-1/artifacts/shot-video-result-1/shot-video-result-1/hash/result.mp4',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_result', generationKind: 'video', externalGenerationRequestId: 'extgen_video_SHOT_01' },
+    },
+    {
+      id: 'art-render-placeholder',
+      kind: 'VIDEO',
+      name: 'final.mp4',
+      stageName: 'render',
+      unitId: 'final-video',
+      status: 'valid',
+      owner: '渲染制片',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://projects/20260701090839-40404040/manual-final.mp4',
+      metadata: { manualUpload: true, status: 'manual_upload_required' },
+    },
+    {
+      id: 'art-final-upload',
+      kind: 'VIDEO',
+      name: 'final_video.mp4',
+      stageName: 'external_generation_result',
+      unitId: 'final-video',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://projects/vp-1/artifacts/codex-smoke-final-video/codex-smoke-final-video/hash/final.mp4',
+      metadata: { artifactType: 'external_generation_result', generationKind: 'video', generationRequestId: 'final-video', tags: ['final_video'] },
+    },
+  ]
+  assert.equal(findFinalVideoArtifact(finalVideoCandidates)?.id, 'art-final-upload')
+  assert.equal(findFinalVideoArtifact(finalVideoCandidates.slice(0, 2))?.id, 'art-render-placeholder')
 
   const shotReviewGroups = buildShotReviewGroups([
     {
@@ -896,7 +1007,19 @@ try {
       updatedAt: '-',
       humanApproved: false,
       storageRef: 'inline://extgen-video',
-      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_request', generationKind: 'video' },
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_request', generationKind: 'video', externalGenerationRequestId: 'extgen_video_SHOT_01' },
+    },
+    {
+      id: 'shot-video-result-1',
+      kind: 'VIDEO',
+      name: 'SHOT_01 视频回填结果',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-1/result.mp4',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_result', generationKind: 'video', externalGenerationRequestId: 'extgen_video_SHOT_01' },
     },
     {
       id: 'shot-storyboard-result-1',
@@ -928,10 +1051,11 @@ try {
   assert.equal(shotReviewGroups[0].status, 'review')
   assert.equal(shotReviewGroups[0].narrationText, '佛得角是西非岛国。')
   assert.deepEqual(shotReviewGroups[0].referenceRoles, ['character'])
-  assert.deepEqual(shotReviewGroups[0].artifactCounts, { total: 6, references: 1, media: 2, reviewPackets: 1 })
+  assert.deepEqual(shotReviewGroups[0].artifactCounts, { total: 7, references: 1, media: 2, reviewPackets: 1 })
   assert.deepEqual(shotReviewGroups[0].slots.map((slot) => slot.kind), ['prompt', 'reference', 'storyboard', 'video'])
-  assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'prompt')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'))
-  assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'video')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'))
+  assert.equal(shotReviewGroups[0].slots.find((slot) => slot.kind === 'prompt')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'), false)
+  assert.equal(shotReviewGroups[0].slots.find((slot) => slot.kind === 'video')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'), false)
+  assert.equal(unresolvedMaterialDependencyCount(shotReviewGroups), 0)
   assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'storyboard')?.artifacts.some((artifact) => artifact.id === 'shot-storyboard-result-1'))
   assert.equal(shotReviewGroups[1].shotId, 'SHOT_02')
   assert.equal(shotReviewGroups[1].status, 'valid')

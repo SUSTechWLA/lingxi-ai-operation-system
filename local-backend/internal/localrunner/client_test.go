@@ -53,3 +53,18 @@ func TestClientClaimsNullJob(t *testing.T) {
 		t.Fatalf("expected nil job, got %#v", job)
 	}
 }
+
+func TestClientAcceptsCloudAPIBaseWithAPISuffix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/local-runners/runner_001/jobs/claim" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(ClaimJobResponse{})
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{CloudAPIBase: server.URL + "/api"})
+	if _, err := client.ClaimJob(context.Background(), "runner_001"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+}
