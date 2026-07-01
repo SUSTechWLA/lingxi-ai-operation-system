@@ -1295,6 +1295,10 @@ func TestShotGenerationPlannerExternalRequestIncludesReferencesAndDelivery(t *te
 	if !ok || len(refs) != 2 {
 		t.Fatalf("reference images should be preserved: %#v", req["referenceImages"])
 	}
+	compatRefs, ok := req["references"].([]interface{})
+	if !ok || len(compatRefs) != 2 {
+		t.Fatalf("request-level references should be preserved for consumers: %#v", req["references"])
+	}
 	promptPackageText := strings.TrimSpace(ensureStringValue(req["promptPackage"]))
 	if promptPackageText == "" {
 		t.Fatalf("promptPackage should be copyable for external clients: %#v", req)
@@ -1323,6 +1327,76 @@ func TestShotGenerationPlannerExternalRequestIncludesReferencesAndDelivery(t *te
 	}
 	if packages[0]["timeWindowId"] != "TW_01" {
 		t.Fatalf("shot asset package should expose timeWindowId at top level: %#v", packages[0])
+	}
+}
+
+func TestShotGenerationPlannerPreservesReferencesWhenVisualPlanLacksReferenceImages(t *testing.T) {
+	result := executeLocalVideoCreationTool("shot_generation_planner", map[string]interface{}{
+		"stage": "generation_strategy",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":      "SHOT_REF_ONLY",
+				"durationSec": float64(8),
+				"visual":      "角色在雨夜街口回头，镜头缓慢靠近",
+				"references": []interface{}{
+					map[string]interface{}{"role": "character_reference", "storageRef": "local://projects/p/artifacts/char/hash/char.png"},
+					map[string]interface{}{"role": "scene_reference", "storageRef": "local://projects/p/artifacts/street/hash/street.png"},
+				},
+			},
+		},
+		"visualPlans": []interface{}{
+			map[string]interface{}{
+				"shotId":     "SHOT_REF_ONLY",
+				"background": map[string]interface{}{"description": "雨夜街口", "requiresAigc": true},
+				"cameraPlan": map[string]interface{}{"description": "镜头缓慢靠近", "movement": "tracking shot", "requiresAigc": true},
+			},
+		},
+		"aigcAvailable": false,
+		"htmlAvailable": true,
+	}, tool.ToolContext{TaskID: "task-generation-plan", NodeID: "shot_generation_planner_exec"})
+
+	if !result.Success {
+		t.Fatalf("shot_generation_planner failed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]map[string]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	reqRefs, ok := requests[0]["references"].([]interface{})
+	if !ok || len(reqRefs) != 2 {
+		t.Fatalf("request references should survive visualPlans merge: %#v", requests[0])
+	}
+	reqReferenceImages, ok := requests[0]["referenceImages"].([]interface{})
+	if !ok || len(reqReferenceImages) != 2 {
+		t.Fatalf("request referenceImages should survive visualPlans merge: %#v", requests[0])
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]map[string]interface{})
+	if !ok || len(packages) != 1 {
+		t.Fatalf("expected one shot asset package, got %#v", result.Data["shotAssetPackages"])
+	}
+	packageRefs, ok := packages[0]["references"].([]interface{})
+	if !ok || len(packageRefs) != 2 {
+		t.Fatalf("package references should survive visualPlans merge: %#v", packages[0])
+	}
+	packageReferenceImages, ok := packages[0]["referenceImages"].([]interface{})
+	if !ok || len(packageReferenceImages) != 2 {
+		t.Fatalf("package referenceImages should survive visualPlans merge: %#v", packages[0])
+	}
+	plans, ok := result.Data["shotGenerationPlans"].([]map[string]interface{})
+	if !ok || len(plans) != 1 {
+		t.Fatalf("expected one shot generation plan, got %#v", result.Data["shotGenerationPlans"])
+	}
+	renderInputs, ok := plans[0]["renderInputs"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected renderInputs, got %#v", plans[0])
+	}
+	renderRefs, ok := renderInputs["referenceImages"].([]interface{})
+	if !ok || len(renderRefs) != 2 {
+		t.Fatalf("renderInputs should retain references as referenceImages: %#v", renderInputs)
+	}
+	renderCompatRefs, ok := renderInputs["references"].([]interface{})
+	if !ok || len(renderCompatRefs) != 2 {
+		t.Fatalf("renderInputs should retain references: %#v", renderInputs)
 	}
 }
 

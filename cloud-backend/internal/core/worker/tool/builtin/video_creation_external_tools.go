@@ -1789,7 +1789,9 @@ func mergeShotGenerationToolValues(shotMap map[string]interface{}, visualPlans [
 		"referenceImages", "references", "timeWindowId", "parentShotId",
 	} {
 		if _, exists := values[key]; !exists {
-			values[key] = selected[key]
+			if selectedValue, ok := selected[key]; ok && selectedValue != nil {
+				values[key] = selectedValue
+			}
 		}
 	}
 	return values
@@ -1804,6 +1806,7 @@ func enrichShotGenerationPlanInputs(values map[string]interface{}, plan *videomo
 	}
 	if refs := interfaceSliceFromAny(firstValueInMap(values, "referenceImages", "references")); len(refs) > 0 {
 		plan.RenderInputs["referenceImages"] = refs
+		plan.RenderInputs["references"] = refs
 	}
 	if timeWindowID := firstNonEmptyString(values, "timeWindowId", "id"); timeWindowID != "" {
 		plan.RenderInputs["timeWindowId"] = timeWindowID
@@ -1920,6 +1923,7 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	refs := interfaceSliceFromAny(firstValueInMap(shotMap, "referenceImages", "references"))
 	if len(refs) > 0 {
 		planMap["referenceImages"] = refs
+		planMap["references"] = refs
 	}
 	timeWindowID := firstNonEmptyString(shotMap, "timeWindowId", "id")
 	if timeWindowID != "" {
@@ -1937,6 +1941,7 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	}
 	if len(refs) > 0 {
 		pkg["referenceImages"] = refs
+		pkg["references"] = refs
 	}
 	if timeWindowID != "" {
 		pkg["timeWindowId"] = timeWindowID
@@ -1996,6 +2001,7 @@ func externalRequestsFromGenerationPlan(plan videomodel.ShotGenerationPlan) []ma
 		}
 		if len(referenceImages) > 0 {
 			request["referenceImages"] = referenceImages
+			request["references"] = referenceImages
 		}
 		requests = append(requests, request)
 	}
@@ -2088,6 +2094,9 @@ func joinedShotVisualText(shot videomodel.ShotUnit, values map[string]interface{
 func firstValueInMap(values map[string]interface{}, keys ...string) interface{} {
 	for _, key := range keys {
 		if value, ok := values[key]; ok {
+			if value == nil {
+				continue
+			}
 			return value
 		}
 	}
