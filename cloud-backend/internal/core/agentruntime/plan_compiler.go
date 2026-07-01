@@ -256,7 +256,7 @@ func (c *PlanCompiler) completeVideoBetaPlan(plan *AgentPlan) {
 			previewArgs["videoPrompts"] = stepOutputRef(promptAnchor, promptField)
 		}
 		projectManifest := c.manifestFor("hyperframes_project_generator")
-		if generationAnchor != "" && generationField != "" && manifestAcceptsParam(projectManifest, "shotGenerationPlans") {
+		if generationAnchor != "" && generationField != "" {
 			previewArgs["shotGenerationPlans"] = stepOutputRef(generationAnchor, generationField)
 		}
 		if packageField := c.outputFieldForStep(plan, promptAnchor, "shotAssetPackages"); packageField != "" {

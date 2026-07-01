@@ -270,12 +270,11 @@ func TestPlanCompiler_PreparePlanInsertsShotGenerationPlanner(t *testing.T) {
 		"hyperframes_project_generator": {
 			Name: "hyperframes_project_generator",
 			Parameters: map[string]tool.ParamDef{
-				"topic":               {Type: "string", Required: true},
-				"script":              {Type: "string", Required: true},
-				"shotList":            {Type: "array", Required: true},
-				"videoPrompts":        {Type: "array", Required: false},
-				"shotGenerationPlans": {Type: "array", Required: false},
-				"shotAssetPackages":   {Type: "array", Required: false},
+				"topic":             {Type: "string", Required: true},
+				"script":            {Type: "string", Required: true},
+				"shotList":          {Type: "array", Required: true},
+				"videoPrompts":      {Type: "array", Required: false},
+				"shotAssetPackages": {Type: "array", Required: false},
 			},
 			Output: map[string]tool.ParamDef{
 				"projectDir": {Type: "string"},
