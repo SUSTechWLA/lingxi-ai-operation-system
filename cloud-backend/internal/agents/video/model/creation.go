@@ -50,7 +50,26 @@ const (
 	TextRoleCode        = "code"
 	TextRoleNumber      = "number"
 	TextRoleBrandName   = "brand_name"
+
+	VideoProfileTalkingHead    = "talking_head"
+	VideoProfileCinematicStory = "cinematic_story"
+
+	ArtifactKindVideoCreationProfile = "VIDEO_CREATION_PROFILE"
 )
+
+type VideoCreationProfile struct {
+	ProfileID        string            `json:"profileId"`
+	SourceRoute      string            `json:"sourceRoute,omitempty"`
+	PrimaryArtifact  string            `json:"primaryArtifact"`
+	QualityContract  []string          `json:"qualityContract,omitempty"`
+	DAGTemplateID    string            `json:"dagTemplateId"`
+	ReviewGatePolicy []string          `json:"reviewGatePolicy,omitempty"`
+	ToolBias         map[string]string `json:"toolBias,omitempty"`
+	FallbackProfile  string            `json:"fallbackProfile,omitempty"`
+	Confidence       float64           `json:"confidence,omitempty"`
+	Reason           string            `json:"reason,omitempty"`
+	NeedsUserReview  bool              `json:"needsUserReview,omitempty"`
+}
 
 type ShotPolicy struct {
 	MinDurationSec           int  `json:"minDurationSec"`
