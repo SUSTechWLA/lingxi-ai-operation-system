@@ -430,6 +430,9 @@ func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	if got := script.Arguments["topic"]; got != plan.Goal {
 		t.Fatalf("cinematic_script topic = %#v, want plan goal", got)
 	}
+	if got := script.Arguments["proposal"]; got != "{{story_foundation.output.proposalPacket}}" {
+		t.Fatalf("cinematic_script proposal = %#v, want proposalPacket ref", got)
+	}
 	continuity := findStep(t, prepared, "continuity_bible")
 	if !containsString(continuity.ExpectedOutput, "continuityReport") {
 		t.Fatalf("continuity_bible should declare real continuityReport output, got %#v", continuity.ExpectedOutput)
@@ -450,6 +453,12 @@ func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	}
 	if got := generation.Arguments["continuityBible"]; got != "{{continuity_bible.output.continuityReport}}" {
 		t.Fatalf("shot_generation continuity context = %#v, want continuityReport ref", got)
+	}
+	if got := generation.Arguments["keyframePrompts"]; got != "{{keyframes_storyboards.output.keyframePrompts}}" {
+		t.Fatalf("shot_generation keyframe prompts = %#v, want keyframePrompts ref", got)
+	}
+	if _, ok := generation.Arguments["keyframeStoryboards"]; ok {
+		t.Fatalf("shot_generation must not reference virtual keyframeStoryboards output, got %#v", generation.Arguments)
 	}
 	keyframes := findStep(t, prepared, "keyframes_storyboards")
 	requireStepDeps(t, keyframes, []string{"reference_assets", "time_window"})
@@ -1225,12 +1234,12 @@ func videoProfileTemplateCatalog() staticToolCatalog {
 	catalog["shot_generation_planner"] = &tool.ToolManifest{
 		Name: "shot_generation_planner",
 		Parameters: map[string]tool.ParamDef{
-			"shotList":            {Type: "array", Required: true},
-			"timeWindows":         {Type: "array", Required: false},
-			"creationProfile":     {Type: "string", Required: true},
-			"referenceAssetPlan":  {Type: "object", Required: false},
-			"continuityBible":     {Type: "object", Required: false},
-			"keyframeStoryboards": {Type: "array", Required: false},
+			"shotList":           {Type: "array", Required: true},
+			"timeWindows":        {Type: "array", Required: false},
+			"creationProfile":    {Type: "string", Required: true},
+			"referenceAssetPlan": {Type: "object", Required: false},
+			"continuityBible":    {Type: "object", Required: false},
+			"keyframePrompts":    {Type: "array", Required: false},
 		},
 		Output: map[string]tool.ParamDef{
 			"shotGenerationPlans":        {Type: "array"},
@@ -1241,7 +1250,7 @@ func videoProfileTemplateCatalog() staticToolCatalog {
 	catalog["proposal_generator"] = &tool.ToolManifest{
 		Name:       "proposal_generator",
 		Parameters: map[string]tool.ParamDef{"brief": {Type: "string", Required: true}},
-		Output:     map[string]tool.ParamDef{"proposal": {Type: "object"}},
+		Output:     map[string]tool.ParamDef{"proposalPacket": {Type: "object"}},
 	}
 	catalog["continuity_checker"] = &tool.ToolManifest{
 		Name: "continuity_checker",
@@ -1287,8 +1296,8 @@ func videoProfileTemplateCatalog() staticToolCatalog {
 			"creationProfile":    {Type: "string", Required: false},
 		},
 		Output: map[string]tool.ParamDef{
-			"keyframeStoryboards": {Type: "array"},
-			"keyframePrompts":     {Type: "array"},
+			"keyframePrompts": {Type: "array"},
+			"summary":         {Type: "string"},
 		},
 	}
 	return catalog

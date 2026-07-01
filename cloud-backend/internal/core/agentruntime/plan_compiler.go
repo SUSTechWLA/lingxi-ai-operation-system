@@ -399,6 +399,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 
 func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnchor string) {
 	profileRef := stepOutputRef(profileAnchor, "creationProfile")
+	storyField := preferredOutputField(c.manifestFor("proposal_generator"), "proposalPacket", "proposal")
 	storyAnchor := c.ensureProfileStepAfter(plan, "story_foundation", "proposal_generator", profileAnchor, AgentStep{
 		ID:        "story_foundation",
 		Intent:    "建立影视短片的故事基础、主题、人物和冲突方向",
@@ -409,11 +410,15 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 			"brief":           plan.Goal,
 			"creationProfile": profileRef,
 		},
-		ExpectedOutput:  []string{"proposal"},
+		ExpectedOutput:  []string{storyField},
 		ProduceArtifact: true,
 	})
 	storyStep := planStepByID(plan, storyAnchor)
 	mergeStepArgsAndDeps(storyStep, map[string]interface{}{"creationProfile": profileRef}, profileAnchor)
+	if storyField != "" && !containsString(storyStep.ExpectedOutput, storyField) {
+		storyStep.ExpectedOutput = append(storyStep.ExpectedOutput, storyField)
+	}
+	storyRef := stepOutputRef(storyAnchor, storyField)
 
 	scriptAnchor := c.ensureProfileStepAfter(plan, "cinematic_script", "video_script_generator", storyAnchor, AgentStep{
 		ID:        "cinematic_script",
@@ -424,7 +429,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 			"stage":           "cinematic_script",
 			"brief":           plan.Goal,
 			"topic":           plan.Goal,
-			"proposal":        stepOutputRef(storyAnchor, "proposal"),
+			"proposal":        storyRef,
 			"creationProfile": profileRef,
 		},
 		ExpectedOutput:  []string{"script"},
@@ -433,7 +438,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	scriptStep := planStepByID(plan, scriptAnchor)
 	mergeStepArgsAndDeps(scriptStep, map[string]interface{}{
 		"topic":           plan.Goal,
-		"proposal":        stepOutputRef(storyAnchor, "proposal"),
+		"proposal":        storyRef,
 		"creationProfile": profileRef,
 	}, storyAnchor, profileAnchor)
 	scriptRef := stepOutputRef(scriptAnchor, "script")
@@ -529,6 +534,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	}, shotDesignAnchor, profileAnchor)
 	timeWindowRef := stepOutputRef(timeWindowAnchor, "timeWindows")
 
+	keyframeField := preferredOutputField(c.manifestFor("keyframe_prompt_generator"), "keyframeStoryboards", "keyframePrompts", "summary")
 	keyframesAnchor := c.ensureProfileStepAfter(plan, "keyframes_storyboards", "keyframe_prompt_generator", timeWindowAnchor, AgentStep{
 		ID:        "keyframes_storyboards",
 		Intent:    "基于参考资产和细分时间窗生成关键帧与故事板提示",
@@ -540,7 +546,7 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 			"timeWindows":        timeWindowRef,
 			"referenceAssetPlan": referenceRef,
 		},
-		ExpectedOutput:  []string{"keyframeStoryboards", "keyframePrompts"},
+		ExpectedOutput:  []string{keyframeField},
 		ProduceArtifact: true,
 	})
 	keyframeStep := planStepByID(plan, keyframesAnchor)
@@ -549,6 +555,10 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		"timeWindows":        timeWindowRef,
 		"referenceAssetPlan": referenceRef,
 	}, referenceAnchor, timeWindowAnchor)
+	if keyframeField != "" && !containsString(keyframeStep.ExpectedOutput, keyframeField) {
+		keyframeStep.ExpectedOutput = append(keyframeStep.ExpectedOutput, keyframeField)
+	}
+	keyframeRef := stepOutputRef(keyframesAnchor, keyframeField)
 
 	generationAnchor := c.ensureProfileStepAfter(plan, "shot_generation", "shot_generation_planner", keyframesAnchor, AgentStep{
 		ID:        "shot_generation",
@@ -556,26 +566,26 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		Tool:      "shot_generation_planner",
 		DependsOn: dependencyListUnique(timeWindowAnchor, referenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor),
 		Arguments: map[string]interface{}{
-			"stage":               "generation_strategy",
-			"brief":               plan.Goal,
-			"shotList":            timeWindowRef,
-			"timeWindows":         timeWindowRef,
-			"creationProfile":     profileRef,
-			"referenceAssetPlan":  referenceRef,
-			"continuityBible":     continuityRef,
-			"keyframeStoryboards": stepOutputRef(keyframesAnchor, "keyframeStoryboards"),
+			"stage":              "generation_strategy",
+			"brief":              plan.Goal,
+			"shotList":           timeWindowRef,
+			"timeWindows":        timeWindowRef,
+			"creationProfile":    profileRef,
+			"referenceAssetPlan": referenceRef,
+			"continuityBible":    continuityRef,
+			"keyframePrompts":    keyframeRef,
 		},
 		ExpectedOutput:  []string{"shotGenerationPlans", "shotAssetPackages", "externalGenerationRequests"},
 		ProduceArtifact: true,
 	})
 	generationStep := planStepByID(plan, generationAnchor)
 	mergeStepArgsAndDeps(generationStep, map[string]interface{}{
-		"shotList":            timeWindowRef,
-		"timeWindows":         timeWindowRef,
-		"creationProfile":     profileRef,
-		"referenceAssetPlan":  referenceRef,
-		"continuityBible":     continuityRef,
-		"keyframeStoryboards": stepOutputRef(keyframesAnchor, "keyframeStoryboards"),
+		"shotList":           timeWindowRef,
+		"timeWindows":        timeWindowRef,
+		"creationProfile":    profileRef,
+		"referenceAssetPlan": referenceRef,
+		"continuityBible":    continuityRef,
+		"keyframePrompts":    keyframeRef,
 	}, timeWindowAnchor, referenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor)
 
 	generationField := preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
