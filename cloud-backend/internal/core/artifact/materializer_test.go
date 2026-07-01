@@ -438,6 +438,113 @@ func TestBuildArtifactsFromProfileSelectionRejectsMalformedProfilePayload(t *tes
 	}
 }
 
+func TestBuildArtifactsFromTimeWindowPlanMaterializesReviewableInlineArtifact(t *testing.T) {
+	node := &model.Node{
+		ID:     "time_window_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "time_window",
+			"tool":  "time_window_planner",
+		},
+		Output: map[string]interface{}{
+			"content": "时间窗已生成。",
+			"timeWindowPlan": map[string]interface{}{
+				"profileId": "cinematic_story",
+				"windows": []interface{}{
+					map[string]interface{}{
+						"id":          "SHOT_01_TW_01",
+						"shotId":      "SHOT_01_TW_01",
+						"durationSec": float64(10),
+					},
+				},
+			},
+			"timeWindows": []interface{}{
+				map[string]interface{}{"id": "SHOT_01_TW_01", "durationSec": float64(10)},
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "time_window",
+					"kind":     "TIME_WINDOW_PLAN",
+					"name":     "time_window_plan.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"requiresReview": true,
+					},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("time window plan artifact should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one time window plan artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Kind != ArtifactKind("TIME_WINDOW_PLAN") {
+		t.Fatalf("expected TIME_WINDOW_PLAN artifact, got %q", req.Kind)
+	}
+	if req.StorageType != StorageInline {
+		t.Fatalf("time window plan storage type = %q, want %q", req.StorageType, StorageInline)
+	}
+	if req.Provider != "time-window-plan" {
+		t.Fatalf("time window plan provider = %q, want time-window-plan", req.Provider)
+	}
+	if len(req.Data) == 0 {
+		t.Fatalf("time window plan artifact should carry inline data for review")
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil {
+		t.Fatalf("time window plan data should be JSON: %v; data=%s", err, string(req.Data))
+	}
+	if _, ok := decoded["windows"].([]interface{}); !ok {
+		t.Fatalf("time window plan data should include windows, got %+v", decoded)
+	}
+	if _, ok := decoded["artifacts"]; ok {
+		t.Fatalf("time window plan data should not include output envelope artifacts: %+v", decoded)
+	}
+}
+
+func TestBuildArtifactsFromTimeWindowPlanWithoutPlanPayloadDoesNotStoreEnvelope(t *testing.T) {
+	node := &model.Node{
+		ID:     "time_window_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "time_window",
+			"tool":  "time_window_planner",
+		},
+		Output: map[string]interface{}{
+			"content":     "时间窗已生成。",
+			"timeWindows": []interface{}{map[string]interface{}{"id": "TW_01", "durationSec": float64(2)}},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "time_window",
+					"kind":     "TIME_WINDOW_PLAN",
+					"name":     "time_window_plan.json",
+					"mimeType": "application/json",
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("time window plan manifest should materialize without inline data: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one time window plan artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Kind != ArtifactKind("TIME_WINDOW_PLAN") {
+		t.Fatalf("expected TIME_WINDOW_PLAN artifact, got %q", req.Kind)
+	}
+	if len(req.Data) != 0 {
+		t.Fatalf("time window plan without timeWindowPlan payload should fail closed with empty data, got %s", string(req.Data))
+	}
+}
+
 func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *testing.T) {
 	node := &model.Node{
 		ID:     "video_prompt_exec",

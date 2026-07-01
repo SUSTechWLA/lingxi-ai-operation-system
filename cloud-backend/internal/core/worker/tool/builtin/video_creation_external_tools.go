@@ -1356,6 +1356,9 @@ func executeTimeWindowPlanner(stage, skillName string, params map[string]interfa
 	profile := creationProfileFromToolValue(params["creationProfile"])
 	shots := shotUnitsFromToolValue(params["shotList"])
 	spans := scriptSpansFromToolValue(params["scriptSpans"])
+	if profile.ProfileID != videomodel.VideoProfileCinematicStory && len(spans) == 0 {
+		return tool.FailureResult("time_window_planner requires scriptSpans for talking_head profile")
+	}
 	plan := videoservice.BuildTimeWindowPlan(videoservice.TimeWindowRequest{
 		Profile:     profile,
 		Shots:       shots,
@@ -1391,7 +1394,7 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 		}
 		shotList = append(shotList, map[string]interface{}{
 			"shotId":        shotID,
-			"durationSec":   normalizedDurationSec(window["durationSec"]),
+			"durationSec":   authoredDurationSec(window),
 			"narrationText": firstNonEmptyString(window, "scriptText", "narrationText", "text"),
 			"visual":        visual,
 			"timeWindowId":  firstNonEmptyString(window, "id"),
@@ -1409,6 +1412,7 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 
 func executeCinematicShotDesigner(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
 	sourceShots := timeWindowMapsFromParams(params)
+	preserveAuthoredDuration := len(sourceShots) > 0
 	if len(sourceShots) == 0 {
 		sourceShots = toolMapsFromValue(params["shotList"], "shotList", "shots")
 	}
@@ -1436,7 +1440,7 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 		}
 		shotList = append(shotList, map[string]interface{}{
 			"shotId":       shotID,
-			"durationSec":  normalizedDurationSec(firstExistingValue(source, "durationSec", "duration", "seconds")),
+			"durationSec":  plannerOutputDurationSec(source, preserveAuthoredDuration),
 			"visual":       visual,
 			"mainAction":   firstNonEmptyString(source, "mainAction", "action"),
 			"directorNote": "镜头设计草案；仅生成规划，不生成媒体。",
@@ -1458,8 +1462,10 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 
 func executeSoundDesignPlanner(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
 	sourceShots := toolMapsFromValue(params["shotList"], "shotList", "shots")
+	preserveAuthoredDuration := false
 	if len(sourceShots) == 0 {
 		sourceShots = timeWindowMapsFromParams(params)
+		preserveAuthoredDuration = len(sourceShots) > 0
 	}
 	if len(sourceShots) == 0 {
 		sourceShots = []map[string]interface{}{
@@ -1478,7 +1484,7 @@ func executeSoundDesignPlanner(stage, skillName, brief string, params map[string
 		}
 		cues = append(cues, map[string]interface{}{
 			"shotId":        shotID,
-			"durationSec":   normalizedDurationSec(firstExistingValue(source, "durationSec", "duration", "seconds")),
+			"durationSec":   plannerOutputDurationSec(source, preserveAuthoredDuration),
 			"narrationText": firstNonEmptyString(source, "narrationText", "scriptText", "text"),
 			"soundCue":      fmt.Sprintf("围绕“%s”规划环境声、转场点和音乐情绪；仅生成声音设计说明，不生成音频。", fallbackText(visual, shotID)),
 		})
@@ -1516,6 +1522,21 @@ func creationProfileFromToolValue(value interface{}) videomodel.VideoCreationPro
 		profile.ProfileID = videomodel.VideoProfileTalkingHead
 	}
 	return profile
+}
+
+func plannerOutputDurationSec(values map[string]interface{}, preserveAuthored bool) int {
+	if preserveAuthored {
+		return authoredDurationSec(values)
+	}
+	return normalizedDurationSec(firstExistingValue(values, "durationSec", "duration", "seconds"))
+}
+
+func authoredDurationSec(values map[string]interface{}) int {
+	duration := intFromInterface(firstExistingValue(values, "durationSec", "duration", "seconds"), 0)
+	if duration > 0 {
+		return duration
+	}
+	return normalizedDurationSec(nil)
 }
 
 func shotUnitsFromToolValue(value interface{}) []videomodel.ShotUnit {

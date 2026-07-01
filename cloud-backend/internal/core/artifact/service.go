@@ -339,7 +339,7 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 
 func isReviewableInlineProvider(provider string) bool {
 	switch provider {
-	case "artifact-revision", "external-generation-request", "video-creation-profile":
+	case "artifact-revision", "external-generation-request", "video-creation-profile", "time-window-plan":
 		return true
 	default:
 		return false

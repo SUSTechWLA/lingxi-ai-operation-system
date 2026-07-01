@@ -297,6 +297,10 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 		storageType = StorageInline
 		provider = "video-creation-profile"
 	}
+	if isTimeWindowPlanKind(kind) && len(data) > 0 {
+		storageType = StorageInline
+		provider = "time-window-plan"
+	}
 	return &CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,
@@ -396,6 +400,12 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 		}
 		return nil
 	}
+	if isTimeWindowPlanKind(kind) {
+		if plan, ok := timeWindowPlanPayload(payload); ok {
+			return marshalValue(plan)
+		}
+		return nil
+	}
 	switch unitID {
 	case "script-content":
 		// Prefer the parsed script; the raw "content" field often contains
@@ -466,6 +476,17 @@ func validVideoCreationProfileID(profileID string) bool {
 	default:
 		return false
 	}
+}
+
+func timeWindowPlanPayload(payload map[string]interface{}) (map[string]interface{}, bool) {
+	plan, ok := payload["timeWindowPlan"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	if _, ok := plan["windows"].([]interface{}); !ok {
+		return nil, false
+	}
+	return plan, true
 }
 
 func externalGenerationRequestPayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {
@@ -610,6 +631,10 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 
 func isVideoCreationProfileKind(kind ArtifactKind) bool {
 	return strings.ToUpper(string(kind)) == "VIDEO_CREATION_PROFILE"
+}
+
+func isTimeWindowPlanKind(kind ArtifactKind) bool {
+	return strings.ToUpper(string(kind)) == "TIME_WINDOW_PLAN"
 }
 
 // normalizePublishCopy ensures publish-copy content has the keys the frontend

@@ -363,6 +363,58 @@ func TestTimeWindowPlannerSplitsCinematicShot(t *testing.T) {
 	}
 }
 
+func TestTimeWindowPlannerRequiresScriptSpansForTalkingHead(t *testing.T) {
+	result := executeLocalVideoCreationTool("time_window_planner", map[string]interface{}{
+		"stage": "time_window",
+		"creationProfile": map[string]interface{}{
+			"profileId": "talking_head",
+		},
+	}, tool.ToolContext{TaskID: "task-time-window", NodeID: "time_window_exec"})
+
+	if result.Success {
+		t.Fatalf("talking-head time_window_planner should fail without scriptSpans: %#v", result.Data)
+	}
+	if !strings.Contains(result.Error, "scriptSpans") {
+		t.Fatalf("failure should clearly mention scriptSpans, got %q", result.Error)
+	}
+}
+
+func TestVisualAlignmentPlannerPreservesTimeWindowDuration(t *testing.T) {
+	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
+		"stage": "visual_alignment",
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":           "TW_SHORT",
+				"shotId":       "SHOT_SHORT",
+				"durationSec":  float64(2),
+				"scriptText":   "短转场口播",
+				"sceneSummary": "字幕和B-roll补充",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-visual-alignment", NodeID: "visual_alignment_exec"})
+
+	if !result.Success {
+		t.Fatalf("visual_alignment_planner failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 1 {
+		t.Fatalf("expected one visual alignment shot, got %#v", result.Data["shotList"])
+	}
+	shot := shotList[0]
+	if intFromInterface(shot["durationSec"], 0) != 2 {
+		t.Fatalf("visual alignment should preserve 2s duration, got %#v", shot)
+	}
+	if shot["timeWindowId"] != "TW_SHORT" {
+		t.Fatalf("expected timeWindowId TW_SHORT, got %#v", shot["timeWindowId"])
+	}
+	if shot["narrationText"] != "短转场口播" {
+		t.Fatalf("expected narrationText from scriptText, got %#v", shot["narrationText"])
+	}
+	if shot["visual"] != "字幕和B-roll补充" {
+		t.Fatalf("expected visual from sceneSummary, got %#v", shot["visual"])
+	}
+}
+
 func TestCinematicShotDesignerManifestMatchesExecutor(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
@@ -383,6 +435,42 @@ func TestCinematicShotDesignerManifestMatchesExecutor(t *testing.T) {
 	}
 }
 
+func TestCinematicShotDesignerUsesTimeWindowsWithoutGeneratingMedia(t *testing.T) {
+	result := executeLocalVideoCreationTool("cinematic_shot_designer", map[string]interface{}{
+		"stage": "cinematic_shot_design",
+		"creationProfile": map[string]interface{}{
+			"profileId": "cinematic_story",
+		},
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":           "SHOT_01_TW_01",
+				"shotId":       "SHOT_01_TW_01",
+				"durationSec":  float64(2),
+				"sceneSummary": "雨夜街口回头",
+				"mainAction":   "角色停下并回望",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-cinematic", NodeID: "cinematic_shot_design_exec"})
+
+	if !result.Success {
+		t.Fatalf("cinematic_shot_designer failed: %s", result.Error)
+	}
+	design, ok := result.Data["directorDesign"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing directorDesign: %#v", result.Data)
+	}
+	if design["mediaGenerated"] != false {
+		t.Fatalf("cinematic designer must not claim media generation: %#v", design)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 1 {
+		t.Fatalf("expected shotList from timeWindows, got %#v", result.Data["shotList"])
+	}
+	if intFromInterface(shotList[0]["durationSec"], 0) != 2 {
+		t.Fatalf("cinematic designer should preserve 2s duration, got %#v", shotList[0])
+	}
+}
+
 func TestSoundDesignPlannerManifestMatchesExecutor(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
@@ -400,6 +488,45 @@ func TestSoundDesignPlannerManifestMatchesExecutor(t *testing.T) {
 		if _, ok := manifest.Output[name]; !ok {
 			t.Fatalf("sound_design_planner should declare output %q: %#v", name, manifest.Output)
 		}
+	}
+}
+
+func TestSoundDesignPlannerUsesTimeWindowsWithoutGeneratingAudio(t *testing.T) {
+	result := executeLocalVideoCreationTool("sound_design_planner", map[string]interface{}{
+		"stage": "sound_design",
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":            "TW_SOUND",
+				"shotId":        "SHOT_SOUND",
+				"durationSec":   float64(2),
+				"narrationText": "脚步声渐近",
+				"sceneSummary":  "巷口雨声",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-sound", NodeID: "sound_design_exec"})
+
+	if !result.Success {
+		t.Fatalf("sound_design_planner failed: %s", result.Error)
+	}
+	plan, ok := result.Data["soundDesignPlan"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing soundDesignPlan: %#v", result.Data)
+	}
+	if plan["mediaGenerated"] != false {
+		t.Fatalf("sound designer must not claim audio generation: %#v", plan)
+	}
+	if intFromInterface(plan["cueCount"], 0) != 1 {
+		t.Fatalf("expected one sound cue, got %#v", plan)
+	}
+	cues, ok := plan["cues"].([]map[string]interface{})
+	if !ok || len(cues) != 1 {
+		t.Fatalf("expected cue list, got %#v", plan["cues"])
+	}
+	if intFromInterface(cues[0]["durationSec"], 0) != 2 {
+		t.Fatalf("sound planner should preserve 2s duration, got %#v", cues[0])
+	}
+	if !strings.Contains(ensureStringValue(cues[0]), "不生成音频") {
+		t.Fatalf("sound cue should avoid audio-generation claim, got %#v", cues[0])
 	}
 }
 
