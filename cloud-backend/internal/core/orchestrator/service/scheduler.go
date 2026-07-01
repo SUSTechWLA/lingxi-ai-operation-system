@@ -52,6 +52,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.recoverStaleCreatedNodes(schedCtx)
+				s.recoverReadyReviewNodes(schedCtx)
 				s.detectHeartbeatTimeout(schedCtx)
 			}
 		}
@@ -91,6 +92,29 @@ func (s *Scheduler) detectHeartbeatTimeout(ctx context.Context) {
 func (s *Scheduler) Stop() {
 	if s.cancel != nil {
 		s.cancel()
+	}
+}
+
+// recoverReadyReviewNodes handles review/control nodes that are already READY
+// but missed the READY transition side effect, usually after a process restart.
+func (s *Scheduler) recoverReadyReviewNodes(ctx context.Context) {
+	nodes, err := s.nodeRepo.FindByStatus(ctx, model.NodeReady)
+	if err != nil {
+		zap.L().Error("Scheduler: failed to find READY nodes", zap.Error(err))
+		return
+	}
+
+	for _, node := range nodes {
+		if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
+			continue
+		}
+
+		zap.L().Warn("Scheduler: recovering READY review/control node",
+			zap.String("nodeId", node.ID),
+			zap.String("taskId", node.TaskID),
+			zap.String("type", string(node.Type)),
+		)
+		s.stateService.handleControlNodeReady(ctx, node)
 	}
 }
 

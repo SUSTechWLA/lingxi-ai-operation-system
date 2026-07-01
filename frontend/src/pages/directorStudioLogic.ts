@@ -90,6 +90,8 @@ export interface DirectorShotReviewGroup {
   status: DirectorArtifactStatus
   title: string
   narrationText: string
+  visualText: string
+  durationSec?: number
   referenceRoles: string[]
   artifactCounts: {
     total: number
@@ -98,6 +100,19 @@ export interface DirectorShotReviewGroup {
     reviewPackets: number
   }
   artifacts: DirectorArtifactRecord[]
+  slots: DirectorShotAssetSlot[]
+}
+
+export type DirectorShotAssetSlotKind = 'prompt' | 'reference' | 'storyboard' | 'video'
+
+export interface DirectorShotAssetSlot {
+  kind: DirectorShotAssetSlotKind
+  label: string
+  description: string
+  status: DirectorArtifactStatus
+  uploadKind?: 'image' | 'video'
+  artifacts: DirectorArtifactRecord[]
+  dependencyRequests: DirectorArtifactRecord[]
 }
 
 export interface ExternalGenerationGuideRequest {
@@ -470,10 +485,17 @@ export function buildDirectorArtifacts(
     const match = findTraceNodesForRole(role, traceNodes)
     const node = match.execNode || match.currentNode
     const artifactOutputs = extractArtifacts(node)
+    const reviewArtifacts = extractReviewArtifacts(review)
 
     return outputs.map((output, outputIndex) => {
       const projectArtifact = findProjectArtifactForOutput(projectArtifacts, output, role)
-      const artifact = projectArtifact || artifactOutputs.find((item) => item.kind === output) || artifactOutputs[outputIndex]
+      const reviewDerivedArtifact = reviewDerivedArtifactForOutput(review, output, role, roleIndex, outputIndex, node)
+      const artifact = projectArtifact ||
+        artifactOutputs.find((item) => item.kind === output) ||
+        reviewArtifacts.find((item) => item.kind === output) ||
+        artifactOutputs[outputIndex] ||
+        reviewArtifacts[outputIndex] ||
+        reviewDerivedArtifact
       const manifestStatus = normalizeArtifactStatus(stringValue(artifact?.status))
       const requiresManifest = requiresMaterializedArtifact(output)
       const fallbackStatus = artifactStatusFor(review, node)
@@ -529,10 +551,11 @@ export function getArtifactViewerSelection(
   if (!artifact) return { selectedId: undefined, shouldLoad: false, placeholder: undefined }
   if (currentSelectedId === artifact.id) return { selectedId: undefined, shouldLoad: false, placeholder: undefined }
   if (!isInspectableDirectorArtifact(artifact)) {
+    const inlineContent = inlineContentForArtifact(artifact)
     return {
       selectedId: artifact.id,
       shouldLoad: false,
-      placeholder: '该产物还没有 materialized artifact ID，等待对应阶段生成完成后可查看正文。',
+      placeholder: inlineContent || '该产物还没有 materialized artifact ID，等待对应阶段生成完成后可查看正文。',
     }
   }
   return { selectedId: artifact.id, shouldLoad: true, placeholder: undefined }
@@ -554,11 +577,14 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
       const reviewPacket = shotArtifacts.find(isShotReviewPacket)
       const references = shotArtifacts.filter(isShotReferenceArtifact)
       const media = shotArtifacts.filter(isShotMediaArtifact)
+      const sourceArtifact = reviewPacket || shotArtifacts[0]
       return {
         shotId,
         status: aggregateShotStatus(shotArtifacts),
-        title: shotTitle(shotId, reviewPacket || shotArtifacts[0]),
-        narrationText: shotNarrationText(reviewPacket || shotArtifacts[0]),
+        title: shotTitle(shotId, sourceArtifact),
+        narrationText: shotNarrationText(sourceArtifact),
+        visualText: shotVisualText(sourceArtifact),
+        durationSec: shotDurationSec(sourceArtifact),
         referenceRoles: uniqueStrings(references.map((artifact) => stringValue(artifact.metadata?.referenceRole) || stringValue(artifact.metadata?.role) || displayNameForArtifact(artifact.kind))),
         artifactCounts: {
           total: shotArtifacts.length,
@@ -567,8 +593,95 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
           reviewPackets: shotArtifacts.filter(isShotReviewPacket).length,
         },
         artifacts: shotArtifacts,
+        slots: buildShotAssetSlots(shotArtifacts),
       }
     })
+}
+
+function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotAssetSlot[] {
+  const slotSpecs: Array<Omit<DirectorShotAssetSlot, 'status' | 'artifacts' | 'dependencyRequests'>> = [
+    {
+      kind: 'prompt',
+      label: '提示词',
+      description: '关键帧、故事板和视频生成提示词，复制到外部网站使用。',
+    },
+    {
+      kind: 'reference',
+      label: '参考图',
+      description: '角色、场景、道具或风格参考图，可直接本地上传。',
+      uploadKind: 'image',
+    },
+    {
+      kind: 'storyboard',
+      label: '故事板',
+      description: '首帧、关键帧、故事板画面或干净帧。',
+      uploadKind: 'image',
+    },
+    {
+      kind: 'video',
+      label: '视频',
+      description: '外部视频平台生成后的本 shot 视频片段。',
+      uploadKind: 'video',
+    },
+  ]
+
+  return slotSpecs.map((slot) => {
+    const slotArtifacts = artifacts.filter((artifact) => slot.kind === 'prompt' ? isShotPromptArtifact(artifact) : shotAssetSlotForArtifact(artifact) === slot.kind)
+    const dependencyRequests = slotArtifacts.filter(isExternalGenerationRequestArtifact)
+    return {
+      ...slot,
+      status: aggregateShotSlotStatus(slotArtifacts, slot.kind),
+      artifacts: slotArtifacts,
+      dependencyRequests,
+    }
+  })
+}
+
+function isShotPromptArtifact(artifact: DirectorArtifactRecord): boolean {
+  return isExternalGenerationRequestArtifact(artifact) ||
+    isShotReviewPacket(artifact) ||
+    artifact.kind === 'SHOT_ASSET_PACKAGE' ||
+    artifact.kind === 'VIDEO_PROMPTS' ||
+    artifact.kind === 'KEYFRAME_PROMPTS'
+}
+
+function shotAssetSlotForArtifact(artifact: DirectorArtifactRecord): DirectorShotAssetSlotKind {
+  const metadata = artifact.metadata || {}
+  const artifactType = (stringValue(metadata.artifactType) || stringValue(metadata.artifact_kind) || '').toLowerCase()
+  const generationKind = (stringValue(metadata.generationKind) || stringValue(metadata.assetType) || '').toLowerCase()
+  const searchable = [
+    artifact.id,
+    artifact.name,
+    artifact.kind,
+    artifactType,
+    generationKind,
+    stringValue(metadata.referenceRole),
+    stringValue(metadata.role),
+    normalizeStringList(metadata.tags).join(' '),
+    stringValue(metadata.description),
+  ].join(' ').toLowerCase()
+
+  if (isExternalGenerationRequestArtifact(artifact)) {
+    return generationKind === 'video' ? 'video' : 'storyboard'
+  }
+  if (artifact.kind === 'VIDEO_PROMPTS' || artifact.kind === 'KEYFRAME_PROMPTS' || artifact.kind === 'SHOT_ASSET_PACKAGE' || isShotReviewPacket(artifact)) {
+    return 'prompt'
+  }
+  if (artifact.kind === 'SHOT_VIDEO_CLIP' || artifact.kind === 'VIDEO' || artifactType === 'shot_video_clip' || (artifactType === 'external_generation_result' && generationKind === 'video')) {
+    return 'video'
+  }
+  if (artifact.kind === 'SHOT_KEYFRAME' || artifact.kind === 'HYPERFRAMES_SHOT' || searchable.includes('storyboard') || searchable.includes('keyframe') || searchable.includes('首帧') || searchable.includes('关键帧')) {
+    return 'storyboard'
+  }
+  if (isShotReferenceArtifact(artifact) || (artifactType === 'external_generation_result' && generationKind === 'image')) {
+    return 'reference'
+  }
+  return 'prompt'
+}
+
+function aggregateShotSlotStatus(artifacts: DirectorArtifactRecord[], slotKind: DirectorShotAssetSlotKind): DirectorArtifactStatus {
+  if (artifacts.length === 0) return slotKind === 'prompt' ? 'pending' : 'review'
+  return aggregateShotStatus(artifacts)
 }
 
 function findProjectArtifactForOutput(
@@ -642,6 +755,11 @@ function isShotReviewPacket(artifact: DirectorArtifactRecord): boolean {
   return artifact.kind === 'SHOT_REVIEW_PACKET' || artifactType === 'shot_review_packet'
 }
 
+function isExternalGenerationRequestArtifact(artifact: DirectorArtifactRecord): boolean {
+  const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
+  return artifact.kind === 'EXTERNAL_GENERATION_REQUEST' || artifactType === 'external_generation_request'
+}
+
 function isShotReferenceArtifact(artifact: DirectorArtifactRecord): boolean {
   const metadata = artifact.metadata || {}
   if (stringValue(metadata.referenceRole) || stringValue(metadata.role)) return true
@@ -672,6 +790,23 @@ function shotTitle(shotId: string, artifact: DirectorArtifactRecord | undefined)
 function shotNarrationText(artifact: DirectorArtifactRecord | undefined): string {
   if (!artifact) return ''
   return firstString(artifact.metadata || {}, ['narrationText', 'scriptText', 'voiceoverText', 'subtitleText'])
+}
+
+function shotVisualText(artifact: DirectorArtifactRecord | undefined): string {
+  if (!artifact) return ''
+  return firstString(artifact.metadata || {}, ['visual', 'visualText', 'visualGoal', 'description'])
+}
+
+function shotDurationSec(artifact: DirectorArtifactRecord | undefined): number | undefined {
+  if (!artifact) return undefined
+  const metadata = artifact.metadata || {}
+  const value = metadata.durationSec
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
 }
 
 function semanticKindForStage(stageName: string | undefined): string | undefined {
@@ -822,9 +957,6 @@ export function projectPrimaryAction(input: {
   stages?: DirectorStage[]
   topic: string
 }): DirectorProjectPrimaryAction {
-  if (input.projectStatus === 'PAUSED' || input.runStatus === 'CANCELLED') {
-    return { kind: 'stopped', label: '项目已停止', disabled: true }
-  }
   if (isProjectInProgress(input.projectStatus, input.runStatus, input.stages || [])) {
     return { kind: 'stop', label: '停止项目', disabled: input.loading }
   }
@@ -954,13 +1086,94 @@ function rawDirectorErrorMessage(error: unknown): string {
 }
 
 function findReviewForRole(role: VideoRoleAgent, reviews: AgentReviewItem[]) {
-  return reviews.find((review) => {
+  const matches = reviews.filter((review) => {
+    if (isQualityGateReview(review)) return qualityGateMatchesRole(role, review)
+    const inferredStage = inferredReviewStage(review)
+    if (inferredStage) return role.stage === inferredStage
     if (review.roleAgentId === role.id) return true
     if (review.stage === role.stage) return true
     if (review.stepId?.includes(role.id) || review.stepId?.includes(role.stage)) return true
     if (review.tool && role.allowedTools?.includes(review.tool)) return true
+    if (reviewMatchesRoleKeywords(role, review)) return true
     return false
   })
+  if (matches.length === 0) return undefined
+  return lastMatchingReview(matches, (review) => review.status === 'PENDING' && isActionablePendingReview(review)) ||
+    lastMatchingReview(matches, (review) => review.status === 'PENDING') ||
+    lastMatchingReview(matches, (review) => review.status === 'REJECTED') ||
+    lastMatchingReview(matches, (review) => review.status === 'APPROVED') ||
+    matches[matches.length - 1]
+}
+
+function inferredReviewStage(review: AgentReviewItem): string | undefined {
+  if (review.roleAgentId || review.stage) return undefined
+  const target = [
+    review.stepId,
+    review.nodeId,
+    review.tool,
+    review.reviewReason,
+  ].filter(Boolean).join(' ').toLowerCase()
+  if (!target) return undefined
+  for (const [stage, keywords] of Object.entries(reviewStageKeywords)) {
+    if (keywords.some((keyword) => target.includes(keyword))) return stage
+  }
+  return undefined
+}
+
+function isQualityGateReview(review: AgentReviewItem): boolean {
+  return review.reviewPhase === 'quality_gate' ||
+    review.stepId?.includes('quality_gate') === true ||
+    review.nodeId?.includes('quality_gate') === true
+}
+
+function qualityGateMatchesRole(role: VideoRoleAgent, review: AgentReviewItem): boolean {
+  if (review.roleAgentId === role.id) return true
+  if (review.stage === role.stage) return true
+  return reviewMatchesRoleKeywords(role, review)
+}
+
+function reviewMatchesRoleKeywords(role: VideoRoleAgent, review: AgentReviewItem): boolean {
+  const gateTarget = [
+    review.stepId,
+    review.nodeId,
+    review.tool,
+    review.reviewReason,
+  ].filter(Boolean).join(' ').toLowerCase()
+  const roleKeywords = [
+    ...(role.allowedTools || []),
+    ...(qualityGateStageKeywords[role.stage] || []),
+  ]
+  return roleKeywords.some((tool) => tool && gateTarget.includes(tool.toLowerCase()))
+}
+
+const qualityGateStageKeywords: Record<string, string[]> = {
+  script: ['video_script_generator', 'script_quality_checker'],
+  storyboard: ['shot_splitter', 'beat_plan', 'card_plan_generator', 'shot_quality_checker'],
+  composition: ['video_composition_builder', 'composition_quality_checker'],
+  reference: ['style_reference_selector', 'visual_reference_planner', 'video_prompt_generator', 'video_prompt_quality_checker'],
+  preview: ['hyperframes_project_generator', 'hyperframes_snapshot', 'preview_quality_checker'],
+  render: ['hyperframes_renderer', 'render_quality_checker'],
+  package: ['delivery_package_builder', 'package_quality_checker'],
+}
+
+const reviewStageKeywords: Record<string, string[]> = {
+  proposal: ['knowledge_researcher', 'proposal_generator', 'pipeline_selector', 'capability_preflight'],
+  script: ['video_script_generator', 'script_quality_checker', 'fact_checker'],
+  storyboard: ['shot_splitter', 'beat_plan', 'card_plan_generator', 'caption_splitter', 'shot_quality_checker'],
+  composition: ['video_composition_builder', 'composition_quality_checker'],
+  reference: ['style_reference_selector', 'visual_reference_planner', 'reference_asset_planner', 'asset_decision_agent', 'asset_policy_generator', 'keyframe_prompt_generator', 'video_prompt_generator', 'video_prompt_quality_checker'],
+  continuity: ['continuity_checker', 'style_profile_builder', 'stale_tracker'],
+  preview: ['hyperframes_project_generator', 'hyperframes_snapshot', 'preview_quality_checker'],
+  render: ['hyperframes_renderer'],
+  quality: ['ffmpeg_probe', 'final_review_generator'],
+  package: ['artifact_packager', 'video_package_exporter', 'package_quality_checker', 'publish_copy_generator'],
+}
+
+function lastMatchingReview(reviews: AgentReviewItem[], predicate: (review: AgentReviewItem) => boolean): AgentReviewItem | undefined {
+  for (let index = reviews.length - 1; index >= 0; index -= 1) {
+    if (predicate(reviews[index])) return reviews[index]
+  }
+  return undefined
 }
 
 function findTraceNodesForRole(role: VideoRoleAgent, nodes: TraceNodeLike[]): RoleTraceMatch {
@@ -1015,9 +1228,9 @@ function stageStatusFor(
   if (execNode && (execStatus === 'running' || execStatus === 'active')) {
     return 'running'
   }
-  if (execStatus === 'failed' || missingRequiredArtifacts) {
-    return 'failed'
-  }
+  if (review?.status === 'REJECTED') return 'blocked'
+  if (execStatus === 'failed') return 'failed'
+  if (review?.status === 'APPROVED') return 'done'
 
   // When a PENDING review exists, check whether content is still generating.
   // If the trace node is a tool execution (not a review gate) and is still
@@ -1027,8 +1240,11 @@ function stageStatusFor(
     if (isActionablePendingReview(review) || hasRequiredArtifacts) return 'review'
     return 'pending'
   }
-  if (review?.status === 'REJECTED') return 'blocked'
-  if (review?.status === 'APPROVED') return 'done'
+
+  if (missingRequiredArtifacts) {
+    return 'failed'
+  }
+
   if (reviewNode) {
     const reviewStatus = normalizeDirectorStatus(reviewNode.status)
     if (reviewStatus === 'failed') return 'failed'
@@ -1037,6 +1253,7 @@ function stageStatusFor(
       return projectStarted ? 'pending' : 'pending'
     }
   }
+
   if (node?.status) {
     const status = normalizeDirectorStatus(node.status)
     if (isReviewTraceNode(node) && (status === 'running' || status === 'pending')) {
@@ -1100,8 +1317,20 @@ function hasRequiredMaterializedArtifacts(role: VideoRoleAgent, node: TraceNodeL
 function requiredMaterializedArtifactsMissing(role: VideoRoleAgent, node: TraceNodeLike | undefined): boolean {
   const required = (role.requiredOutputs || []).filter(requiresMaterializedArtifact)
   if (!required.length || !execSucceeded(node)) return false
+  if (!nodeProducesRoleOutputs(role, node, required)) return false
   const artifacts = extractArtifacts(node)
   return required.some((kind) => !artifacts.some((artifact) => stringValue(artifact.kind) === kind))
+}
+
+function nodeProducesRoleOutputs(role: VideoRoleAgent, node: TraceNodeLike | undefined, requiredOutputs: string[]): boolean {
+  if (!node) return false
+  const output = node.output || {}
+  if (nodeFieldString(node, 'roleAgentId') === role.id || stringValue(output.roleAgentId) === role.id) return true
+  if (nodeFieldString(node, 'stage') === role.stage || stringValue(output.stage) === role.stage) return true
+  const tool = nodeToolName(node)
+  if (tool && role.allowedTools?.[0] === tool) return true
+  const artifacts = extractArtifacts(node)
+  return requiredOutputs.some((kind) => artifacts.some((artifact) => stringValue(artifact.kind) === kind))
 }
 
 function hasReviewArtifactsForRole(role: VideoRoleAgent, review: AgentReviewItem | undefined): boolean {
@@ -1109,6 +1338,106 @@ function hasReviewArtifactsForRole(role: VideoRoleAgent, review: AgentReviewItem
   const required = (role.requiredOutputs || []).filter(requiresMaterializedArtifact)
   if (!required.length) return true
   return required.every((kind) => review.reviewArtifacts?.some((artifact) => stringValue(artifact.kind) === kind))
+}
+
+function extractReviewArtifacts(review: AgentReviewItem | undefined): Array<Record<string, unknown>> {
+  return Array.isArray(review?.reviewArtifacts)
+    ? review.reviewArtifacts.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    : []
+}
+
+function reviewDerivedArtifactForOutput(
+  review: AgentReviewItem | undefined,
+  output: string,
+  role: VideoRoleAgent,
+  roleIndex: number,
+  outputIndex: number,
+  node: TraceNodeLike | undefined,
+): Record<string, unknown> | undefined {
+  const inlineContent = reviewInlineContentForOutput(review, output)
+  if (!review || !inlineContent) return undefined
+  const status = artifactStatusFor(review, node)
+  const safeReviewId = review.id.replace(/[^a-zA-Z0-9_-]/g, '-')
+  const syntheticId = `review-${safeReviewId || `r${roleIndex + 1}`}-${outputIndex + 1}`
+  return {
+    id: syntheticId,
+    artifactId: syntheticId,
+    kind: output,
+    name: displayNameForArtifact(output),
+    status,
+    humanApproved: review.status === 'APPROVED',
+    storageRef: '审核输出（可查看）',
+    dependsOn: role.requiredInputs,
+    createdAt: node?.createdAt,
+    updatedAt: node?.updatedAt || node?.completedAt,
+    metadata: {
+      artifactKind: output,
+      artifactType: 'review_output_fallback',
+      inlineContent,
+      inlineSource: 'review_output',
+      reviewId: review.id,
+      reviewStatus: review.status,
+      roleAgentId: role.id,
+      stage: role.stage,
+    },
+  }
+}
+
+function reviewInlineContentForOutput(review: AgentReviewItem | undefined, output: string): string {
+  if (!review) return ''
+
+  const content = stringValue(review.reviewContent)
+  if (content) return normalizeReviewContentText(content)
+
+  const reviewOutput = objectValue(review.reviewOutput)
+  if (!reviewOutput || !hasDecisionReviewOutput(reviewOutput)) return ''
+
+  if (kindUsesShotQueueText(output)) {
+    const shotQueueText = formatShotQueueReviewText(reviewOutput)
+    if (shotQueueText) return shotQueueText
+  }
+
+  const targeted = reviewOutputValueForKind(reviewOutput, output)
+  if (targeted !== undefined) return formatInlineReviewValue(targeted)
+
+  return reviewOutputText(review)
+}
+
+function kindUsesShotQueueText(kind: string): boolean {
+  return ['CARD_PLAN', 'SHOT_LIST', 'SHOT_REVIEW_PACKET', 'SHOT_ASSET_PACKAGE'].includes(kind)
+}
+
+function reviewOutputValueForKind(output: Record<string, unknown>, kind: string): unknown {
+  const keysByKind: Record<string, string[]> = {
+    VIDEO_PROPOSAL: ['proposalPacket', 'proposal', 'creativeProposal', 'plan', 'content', 'markdown', 'summary', 'package'],
+    VIDEO_SCRIPT: ['script', 'videoScript', 'scriptText', 'sections', 'content', 'text', 'markdown', 'package'],
+    CARD_PLAN: ['cardPlan', 'shotList', 'shotQueue', 'shotAssetPackages', 'storyboard', 'content', 'markdown', 'package'],
+    SHOT_LIST: ['shotList', 'shotQueue', 'shotAssetPackages', 'storyboard', 'content', 'markdown', 'package'],
+    VIDEO_COMPOSITION_SPEC: ['compositionSpec', 'composition', 'timeline', 'content', 'markdown', 'package'],
+    REFERENCE_ASSET_PLAN: ['referenceAssetPlan', 'assetPlan', 'referenceAssets', 'materials', 'content', 'markdown', 'package'],
+    STYLE_PROFILE: ['styleProfile', 'style', 'content', 'markdown', 'package'],
+    CONTINUITY_REPORT: ['continuityReport', 'report', 'content', 'markdown', 'package'],
+    PREVIEW_SNAPSHOTS: ['preview', 'snapshots', 'content', 'markdown', 'package'],
+    FINAL_REVIEW: ['finalReview', 'qualityReport', 'report', 'content', 'markdown', 'package'],
+    PUBLISH_COPY: ['publishCopy', 'publishCopies', 'content', 'markdown', 'package'],
+    PROJECT_PACKAGE: ['package', 'deliveryPackage', 'content', 'markdown'],
+  }
+  const keys = keysByKind[kind] || ['content', 'markdown', 'text', 'summary', 'package']
+  for (const key of keys) {
+    if (output[key] !== undefined && output[key] !== null) return output[key]
+  }
+  return undefined
+}
+
+function formatInlineReviewValue(value: unknown): string {
+  const shotQueueText = formatShotQueueReviewText(value)
+  if (shotQueueText) return shotQueueText
+  if (typeof value === 'string') return normalizeReviewContentText(value)
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
 }
 
 function normalizeDirectorStatus(status?: string): DirectorStageStatus {
@@ -1310,6 +1639,7 @@ export function reviewDisplayTitle(review: AgentReviewItem | undefined): string 
     shot_splitter: '审核分镜计划',
     card_plan_generator: '审核卡片计划',
     render_strategy_planner: '审核渲染策略',
+    hyperframes_renderer: '审核最终渲染',
   }
   if (review.tool && labels[review.tool]) return labels[review.tool]
   if (review.reviewPhase === 'quality_gate') return '审核创作产物'
@@ -1325,6 +1655,8 @@ export function visibleReviewHistory(reviews: AgentReviewItem[] = []): AgentRevi
 
 export function isActionablePendingReview(review: AgentReviewItem | undefined): boolean {
   if (!review || review.status !== 'PENDING') return false
+  if (typeof review.reviewReason === 'string' && review.reviewReason.trim()) return true
+  if (review.humanReview && Object.keys(review.humanReview).length > 0) return true
   if (typeof review.reviewContent === 'string' && review.reviewContent.trim()) return true
   if (Array.isArray(review.reviewArtifacts) && review.reviewArtifacts.length > 0) return true
   return hasDecisionReviewOutput(review.reviewOutput)
@@ -1674,7 +2006,12 @@ function uniqueStrings(values: string[]) {
 }
 
 function isInspectableDirectorArtifact(artifact: DirectorArtifactRecord) {
+  if (inlineContentForArtifact(artifact)) return false
   return Boolean(artifact.id && !/^A\d{2}/.test(artifact.id))
+}
+
+function inlineContentForArtifact(artifact: DirectorArtifactRecord): string {
+  return stringValue(artifact.metadata?.inlineContent) || ''
 }
 
 // readableNodeType maps backend node types to Chinese labels.

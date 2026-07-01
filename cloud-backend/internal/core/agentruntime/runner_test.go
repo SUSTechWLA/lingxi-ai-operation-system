@@ -222,6 +222,35 @@ func TestRunnerStart_InjectsClientTextProviderIntoExecutableNodesOnly(t *testing
 	}
 }
 
+func TestInjectClientModelProvidersUsesCapabilityTool(t *testing.T) {
+	dag := &model.DAGRequest{
+		Nodes: []model.NodeRequest{
+			{
+				ID:   "knowledge_researcher_exec",
+				Type: "TOOL",
+				Name: "external",
+				Input: map[string]interface{}{
+					"capabilityTool": "knowledge_researcher",
+					"parameters":     map[string]interface{}{"topic": "Cape Verde"},
+				},
+			},
+		},
+	}
+	injectClientModelProviders(dag, map[string]map[string]interface{}{
+		"text_to_text": {
+			"baseUrl": "https://client.example/v1",
+			"apiKey":  "sk-client",
+			"model":   "client-model",
+		},
+	})
+
+	params, _ := dag.Nodes[0].Input["parameters"].(map[string]interface{})
+	provider, _ := params["modelProvider"].(map[string]interface{})
+	if provider["apiKey"] != "sk-client" {
+		t.Fatalf("capabilityTool node should receive text provider, got %#v", provider)
+	}
+}
+
 func TestRunnerStart_PreparesVideoBetaPlanBeforeGuard(t *testing.T) {
 	store := newMemoryRunStore()
 	orch := &fakeOrchestrator{taskID: "task-1"}

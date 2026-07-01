@@ -98,6 +98,7 @@ import {
   type DirectorArtifactStatus,
   type DirectorErrorDetail,
   type DirectorNavKey,
+  type DirectorShotAssetSlot,
   type DirectorStage,
   type DirectorStageStatus,
   type DirectorTraceNode,
@@ -423,7 +424,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               stages={displayStages}
             />
           )}
-          {activeNav === 'trace' && <TracePage traceNodes={traceNodes} artifacts={artifacts} run={run} projectId={project?.id} onArtifactsChanged={refreshArtifacts} />}
+          {activeNav === 'trace' && <TracePage traceNodes={traceNodes} run={run} />}
           {activeNav === 'assets' && <AssetsPage artifacts={artifacts} projectId={project?.id} onArtifactsChanged={refreshArtifacts} />}
           {activeNav === 'roles' && <RolesPage stages={displayStages} />}
           {activeNav === 'export' && <ExportPage artifacts={artifacts} durationSec={durationSec} />}
@@ -950,7 +951,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
   )
 }
 
-function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }: { traceNodes: DirectorTraceNode[]; artifacts: DirectorArtifactRecord[]; run: AgentRun | null; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {
+function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: AgentRun | null }) {
   const [selectedId, setSelectedId] = useState<string | undefined>(traceNodes[0]?.id)
   const selected = traceNodes.find((node) => node.id === selectedId) || traceNodes[0]
   useEffect(() => {
@@ -993,8 +994,6 @@ function TracePage({ traceNodes, artifacts, run, projectId, onArtifactsChanged }
             </button>
           )) : <EmptyState text="还没有执行 trace。启动项目后，每个步骤会显示在这里。" />}
         </div>
-        <ShotReviewPanel artifacts={artifacts} compact />
-        <ArtifactTable artifacts={artifacts} compact projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
       </section>
       <aside className="col-span-12 space-y-5 xl:col-span-4">
         <section className="card p-6">
@@ -1051,42 +1050,143 @@ function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: D
   const materialDependencyCount = artifacts.filter(isMaterialDependencyRequest).length
   return (
     <div className="space-y-5">
-      <section className="card p-6"><p className="text-sm font-bold text-primary-dark">产物库</p><h2 className="mt-2 text-3xl font-black text-ink">产物索引</h2><p className="mt-2 text-sm text-ink-muted">记录每个中间产物的版本、状态、依赖、审核和本地/云端路径。</p></section>
+      <section className="card p-6">
+        <p className="text-sm font-bold text-primary-dark">Shot 素材工作台</p>
+        <h2 className="mt-2 text-3xl font-black text-ink">按 shot 回填与查看</h2>
+        <p className="mt-2 text-sm leading-6 text-ink-muted">先按 SHOT 查看脚本、提示词、参考图、故事板和视频片段；底部保留原始产物索引用于查 ID、版本和路径。</p>
+      </section>
       {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
       {materialDependencyCount > 0 && (
         <div className="rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-black text-primary-dark">素材依赖点</p>
+              <p className="text-sm font-black text-primary-dark">待回填素材</p>
               <p className="mt-1 text-sm leading-6 text-ink-muted">
-                当前有 {materialDependencyCount} 个素材等待用户在外部网站生成后回填。系统不会强制调用图片或视频 API，上传后只登记本地引用、hash 和依赖关系。
+                {materialDependencyCount} 个外部生成请求已按 shot 放入下方槽位。复制 Prompt 到网页端生成后，直接在对应 shot 的参考图、故事板或视频槽上传回填。
               </p>
             </div>
             <StatusBadge status="review" label="待用户回填" />
           </div>
         </div>
       )}
-      <ShotReviewPanel artifacts={artifacts} />
-      <ArtifactTable artifacts={artifacts} projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
+      <ShotAssetWorkbench artifacts={artifacts} projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-primary-dark">原始产物索引</p>
+            <h3 className="mt-1 text-xl font-black text-ink">ID、状态与版本</h3>
+          </div>
+          <span className="rounded-full bg-background-card px-3 py-1 text-xs font-bold text-ink-muted ring-1 ring-line">{artifacts.length} artifacts</span>
+        </div>
+        <ArtifactTable artifacts={artifacts} projectId={projectId} onArtifactsChanged={onArtifactsChanged} />
+      </section>
     </div>
   )
 }
 
-function ShotReviewPanel({ artifacts, compact = false }: { artifacts: DirectorArtifactRecord[]; compact?: boolean }) {
+interface ShotPromptPreview {
+  artifactId: string
+  loading: boolean
+  error?: string
+  request?: ExternalGenerationRequestContent
+}
+
+function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { artifacts: DirectorArtifactRecord[]; projectId?: string; onArtifactsChanged?: () => Promise<void> | void }) {
   const groups = useMemo(() => buildShotReviewGroups(artifacts), [artifacts])
+  const [openShotId, setOpenShotId] = useState<string | undefined>(groups[0]?.shotId)
+  const [promptPreviews, setPromptPreviews] = useState<Record<string, ShotPromptPreview>>({})
+  const [uploadingKey, setUploadingKey] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (openShotId && groups.some((group) => group.shotId === openShotId)) return
+    setOpenShotId(groups[0]?.shotId)
+  }, [groups, openShotId])
+
+  const openGroup = groups.find((group) => group.shotId === openShotId) || groups[0]
+
+  useEffect(() => {
+    if (!openGroup) return
+    const requests = openGroup.slots.flatMap((slot) => slot.dependencyRequests)
+    for (const artifact of requests) {
+      if (promptPreviews[artifact.id]) continue
+      setPromptPreviews((current) => ({
+        ...current,
+        [artifact.id]: { artifactId: artifact.id, loading: true },
+      }))
+      fetchArtifactContent(artifact.id)
+        .then((response) => {
+          const request = externalGenerationRequestFromContent(response.content)
+          setPromptPreviews((current) => ({
+            ...current,
+            [artifact.id]: { artifactId: artifact.id, loading: false, request: request || undefined, error: request ? undefined : '无法解析生成请求' },
+          }))
+        })
+        .catch((err) => {
+          setPromptPreviews((current) => ({
+            ...current,
+            [artifact.id]: { artifactId: artifact.id, loading: false, error: normalizeDirectorErrorMessage(err) },
+          }))
+        })
+    }
+  }, [openGroup, promptPreviews])
+
+  const uploadShotAsset = async (
+    event: ChangeEvent<HTMLInputElement>,
+    shotId: string,
+    slot: DirectorShotAssetSlot,
+    request?: ExternalGenerationRequestContent,
+  ) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !slot.uploadKind) return
+    if (!projectId) {
+      setError('缺少项目 ID，无法登记 shot 素材。')
+      return
+    }
+    const uploadKey = `${shotId}-${slot.kind}-${request?.requestId || 'manual'}`
+    setUploadingKey(uploadKey)
+    setMessage(null)
+    setError(null)
+    try {
+      const registered = await uploadAndRegisterShotAsset({
+        projectId,
+        shotId,
+        slot,
+        request,
+        file,
+      })
+      setMessage(`已回填 ${shotId} · ${slot.label}：${registered.artifact?.name || registered.artifact?.id || file.name}`)
+      await onArtifactsChanged?.()
+    } catch (err) {
+      setError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setUploadingKey(null)
+    }
+  }
+
   if (!groups.length) return null
   return (
-    <section className={compact ? 'mt-6 rounded-lg border border-line bg-background-card p-4' : 'card p-6'}>
-      <div className="flex items-center justify-between gap-3">
+    <section className="card p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-bold text-primary-dark">Shot 审核</p>
-          <h3 className="mt-1 text-xl font-black text-ink">按 shot 查看产物链</h3>
+          <p className="text-sm font-bold text-primary-dark">Shot 素材工作台</p>
+          <h3 className="mt-1 text-xl font-black text-ink">逐 shot 查看、复制、上传</h3>
         </div>
         <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary-dark">{groups.length} shots</span>
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
         {groups.map((group) => (
-          <div key={group.shotId} className="rounded-lg bg-white p-4 ring-1 ring-line">
+          <button
+            key={group.shotId}
+            type="button"
+            onClick={() => setOpenShotId(group.shotId)}
+            className={clsx(
+              'rounded-lg p-4 text-left ring-1 transition',
+              openGroup?.shotId === group.shotId ? 'bg-primary-soft ring-primary' : 'bg-white ring-line hover:bg-background-card',
+            )}
+          >
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-mono text-xs font-black text-primary-dark">{group.shotId}</div>
@@ -1095,24 +1195,305 @@ function ShotReviewPanel({ artifacts, compact = false }: { artifacts: DirectorAr
               <StatusBadge status={group.status} />
             </div>
             {group.narrationText ? <p className="mt-3 line-clamp-2 text-sm leading-6 text-ink-muted">{group.narrationText}</p> : null}
-            <div className="mt-3 grid grid-cols-2 gap-2 text-center text-[11px] font-bold text-ink-muted sm:grid-cols-4">
-              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">总 {group.artifactCounts.total}</span>
-              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">参考 {group.artifactCounts.references}</span>
-              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">媒体 {group.artifactCounts.media}</span>
-              <span className="rounded bg-background-card px-2 py-1 ring-1 ring-line">审核 {group.artifactCounts.reviewPackets}</span>
+            <div className="mt-3 grid grid-cols-4 gap-1 text-center text-[10px] font-black text-ink-muted">
+              {group.slots.map((slot) => (
+                <span key={slot.kind} className={clsx('rounded px-2 py-1 ring-1', slot.status === 'valid' ? 'bg-green-50 text-green-700 ring-green-100' : slot.status === 'review' ? 'bg-amber-50 text-primary-dark ring-amber-100' : 'bg-background-card ring-line')}>
+                  {slot.label}
+                </span>
+              ))}
             </div>
-            {group.referenceRoles.length ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {group.referenceRoles.map((role) => (
-                  <span key={role} className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-bold text-primary-dark">{role}</span>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          </button>
         ))}
       </div>
+      {openGroup ? (
+        <div className="mt-5 rounded-lg border border-line bg-background-card p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-mono text-xs font-black text-primary-dark">{openGroup.shotId}</div>
+              <h4 className="mt-1 text-lg font-black text-ink [overflow-wrap:anywhere]">{openGroup.title}</h4>
+              <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-ink-muted">
+                {openGroup.durationSec ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">{openGroup.durationSec}s</span> : null}
+                <span className="rounded bg-white px-2 py-1 ring-1 ring-line">产物 {openGroup.artifactCounts.total}</span>
+                <span className="rounded bg-white px-2 py-1 ring-1 ring-line">参考 {openGroup.artifactCounts.references}</span>
+                <span className="rounded bg-white px-2 py-1 ring-1 ring-line">媒体 {openGroup.artifactCounts.media}</span>
+              </div>
+            </div>
+            <StatusBadge status={openGroup.status} />
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            {openGroup.narrationText ? <ShotTextBlock title="口播脚本" value={openGroup.narrationText} /> : null}
+            {openGroup.visualText ? <ShotTextBlock title="画面说明" value={openGroup.visualText} /> : null}
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {openGroup.slots.map((slot) => (
+              <ShotAssetSlotCard
+                key={slot.kind}
+                shotId={openGroup.shotId}
+                slot={slot}
+                promptPreviews={promptPreviews}
+                projectReady={Boolean(projectId)}
+                uploadingKey={uploadingKey}
+                onUpload={uploadShotAsset}
+              />
+            ))}
+          </div>
+          {message ? <p className="mt-4 text-sm font-semibold text-green-700">{message}</p> : null}
+          {error ? <p className="mt-4 text-sm font-semibold text-red-600">{error}</p> : null}
+        </div>
+      ) : null}
     </section>
   )
+}
+
+function ShotTextBlock({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-black text-primary-dark">{title}</span>
+        <CopyButton value={value} label="复制" />
+      </div>
+      <p className="mt-2 text-sm leading-6 text-ink-muted">{value}</p>
+    </div>
+  )
+}
+
+function ShotAssetSlotCard({
+  shotId,
+  slot,
+  promptPreviews,
+  projectReady,
+  uploadingKey,
+  onUpload,
+}: {
+  shotId: string
+  slot: DirectorShotAssetSlot
+  promptPreviews: Record<string, ShotPromptPreview>
+  projectReady: boolean
+  uploadingKey: string | null
+  onUpload: (event: ChangeEvent<HTMLInputElement>, shotId: string, slot: DirectorShotAssetSlot, request?: ExternalGenerationRequestContent) => void
+}) {
+  const requests = slot.dependencyRequests
+    .map((artifact) => promptPreviews[artifact.id]?.request)
+    .filter((request): request is ExternalGenerationRequestContent => Boolean(request))
+  const copyValue = requests.length
+    ? requests.map((request) => request.prompt).join('\n\n---\n\n')
+    : slot.artifacts.map(artifactToCopyText).join('\n\n')
+  const canUpload = Boolean(slot.uploadKind)
+  const accept = slot.uploadKind === 'video' ? 'video/*' : 'image/*'
+  const manualUploadKey = `${shotId}-${slot.kind}-manual`
+
+  return (
+    <div className="rounded-lg border border-line bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary-soft text-primary-dark">{slotIcon(slot.kind)}</span>
+            <div>
+              <div className="text-sm font-black text-ink">{slot.label}</div>
+              <div className="mt-0.5 text-xs text-ink-muted">{slot.description}</div>
+            </div>
+          </div>
+        </div>
+        <StatusBadge status={slot.status} label={slot.kind === 'prompt' ? '可复制' : slot.status === 'review' && canUpload ? '可回填' : undefined} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {copyValue ? <CopyButton value={copyValue} label={slot.kind === 'prompt' ? '复制提示词' : '复制信息'} /> : null}
+        {canUpload ? (
+          <label className={clsx(
+            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
+            (!projectReady || uploadingKey === manualUploadKey) && 'cursor-not-allowed opacity-50',
+          )}>
+            <FiUpload /> {uploadingKey === manualUploadKey ? '上传中...' : `上传${slot.label}`}
+            <input
+              type="file"
+              accept={accept}
+              data-smoke-id={`shot-${slot.kind}-upload`}
+              disabled={!projectReady || uploadingKey === manualUploadKey}
+              className="sr-only"
+              onChange={(event) => onUpload(event, shotId, slot)}
+            />
+          </label>
+        ) : null}
+      </div>
+      <div className="mt-3 space-y-3">
+        {slot.kind === 'prompt' && !requests.length && slot.artifacts.length === 0 ? (
+          <p className="rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">当前 shot 的提示词还未生成；生成后会在这里展示，可直接复制到外部网站。</p>
+        ) : null}
+        {requests.map((request) => (
+          <ShotExternalRequestCard
+            key={request.requestId}
+            shotId={shotId}
+            slot={slot}
+            request={request}
+            projectReady={projectReady}
+            allowUpload={slot.kind !== 'prompt'}
+            uploading={uploadingKey === `${shotId}-${slot.kind}-${request.requestId}`}
+            onUpload={onUpload}
+          />
+        ))}
+        {slot.dependencyRequests.map((artifact) => {
+          const preview = promptPreviews[artifact.id]
+          if (!preview || preview.request) return null
+          return (
+            <div key={artifact.id} className="rounded-lg bg-background-card p-3 text-xs text-ink-muted ring-1 ring-line">
+              {preview.loading ? '正在读取外部生成请求...' : preview.error || '生成请求暂不可读'}
+            </div>
+          )
+        })}
+        {slot.artifacts.filter((artifact) => !slot.dependencyRequests.some((request) => request.id === artifact.id)).map((artifact) => (
+          <div key={artifact.id} className="min-w-0 rounded-lg bg-background-card p-3 ring-1 ring-line">
+            <div className="flex items-center justify-between gap-2">
+              <div className="truncate text-xs font-black text-ink" title={artifact.name}>{artifact.name}</div>
+              <StatusBadge status={artifact.status} />
+            </div>
+            <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={artifact.storageRef}>{artifact.storageRef || artifact.id}</div>
+          </div>
+        ))}
+        {slot.kind !== 'prompt' && !slot.artifacts.length ? (
+          <p className="rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">暂无已登记素材。可以先在本地或外部网页生成，再用上方按钮上传到这个 shot。</p>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ShotExternalRequestCard({
+  shotId,
+  slot,
+  request,
+  projectReady,
+  allowUpload,
+  uploading,
+  onUpload,
+}: {
+  shotId: string
+  slot: DirectorShotAssetSlot
+  request: ExternalGenerationRequestContent
+  projectReady: boolean
+  allowUpload: boolean
+  uploading: boolean
+  onUpload: (event: ChangeEvent<HTMLInputElement>, shotId: string, slot: DirectorShotAssetSlot, request?: ExternalGenerationRequestContent) => void
+}) {
+  const targetText = [
+    request.target?.aspectRatio,
+    request.target?.resolution,
+    request.target?.durationSec ? `${request.target.durationSec}s` : '',
+  ].filter(Boolean).join(' / ')
+  const accept = request.kind === 'video' ? 'video/*' : 'image/*'
+  const guideSteps = externalGenerationGuideSteps(request)
+
+  return (
+    <div className="rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate font-mono text-[11px] font-black text-primary-dark">{request.requestId}</div>
+          <div className="mt-0.5 text-xs text-ink-muted">{request.kind === 'image' ? '图片生成请求' : '视频生成请求'}{targetText ? ` · ${targetText}` : ''}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <CopyButton value={request.prompt} label="复制 Prompt" />
+          {allowUpload ? (
+            <label className={clsx(
+              'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
+              (!projectReady || uploading) && 'cursor-not-allowed opacity-50',
+            )}>
+              <FiUpload /> {uploading ? '上传中...' : '上传结果'}
+              <input
+                type="file"
+                accept={accept}
+                data-smoke-id="external-generation-upload"
+                disabled={!projectReady || uploading}
+                className="sr-only"
+                onChange={(event) => onUpload(event, shotId, slot, request)}
+              />
+            </label>
+          ) : null}
+        </div>
+      </div>
+      <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-xs leading-5 text-ink ring-1 ring-line">{request.prompt}</pre>
+      {request.references.length ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {request.references.map((ref) => (
+            <div key={`${ref.id}-${ref.storageRef}`} className="min-w-0 rounded-lg bg-white p-2 ring-1 ring-line">
+              <div className="truncate text-xs font-black text-ink">{ref.label || ref.id}</div>
+              <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={ref.storageRef}>{ref.storageRef}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-black text-primary-dark">网页端生成步骤</summary>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs leading-5 text-primary-dark">
+          {guideSteps.map((step) => <li key={step}>{step}</li>)}
+        </ol>
+      </details>
+    </div>
+  )
+}
+
+function slotIcon(kind: DirectorShotAssetSlot['kind']) {
+  if (kind === 'video') return <FiVideo />
+  if (kind === 'storyboard') return <FiLayers />
+  if (kind === 'reference') return <FiFolder />
+  return <FiFileText />
+}
+
+async function uploadAndRegisterShotAsset({
+  projectId,
+  shotId,
+  slot,
+  request,
+  file,
+}: {
+  projectId: string
+  shotId: string
+  slot: DirectorShotAssetSlot
+  request?: ExternalGenerationRequestContent
+  file: File
+}) {
+  if (!slot.uploadKind) throw new Error('该素材槽不支持文件上传')
+  const kind = request?.kind || slot.uploadKind
+  const referenceAssetIds = (request?.references || []).map((ref) => ref.id).filter(Boolean).slice(0, 6)
+  const uploadId = safeLocalUploadId([
+    shotId,
+    slot.kind,
+    request?.requestId || file.name,
+  ].filter(Boolean).join('-'))
+  const tags = ['manual_shot_upload', `shot_${slot.kind}`]
+  if (request?.requestId) tags.push('external_manual_upload', 'material_dependency_result')
+  const localArtifact = await uploadLocalArtifactFile({
+    projectId,
+    id: uploadId,
+    file,
+    mimeType: file.type || (kind === 'image' ? 'image/png' : 'video/mp4'),
+    metadata: {
+      artifactType: request?.requestId ? 'external_manual_generation_result' : `manual_shot_${slot.kind}`,
+      externalGenerationRequestId: request?.requestId,
+      generationKind: kind,
+      relatedShotId: shotId,
+      shotAssetSlot: slot.kind,
+      source: request?.requestId ? 'external_manual_upload' : 'manual_shot_upload',
+      cloudPayloadStored: false,
+      localOnly: true,
+      tags,
+    },
+  })
+  if (!localArtifact.storageRef) {
+    throw new Error('local agent 未返回 storageRef')
+  }
+  return registerExternalGenerationResult(projectId, {
+    kind,
+    storageType: 'local',
+    storageRef: localArtifact.storageRef,
+    mimeType: localArtifact.mimeType || file.type || undefined,
+    sizeBytes: localArtifact.sizeBytes,
+    contentHash: localArtifact.contentHash,
+    relatedShotId: shotId,
+    generationRequestId: request?.requestId,
+    source: request?.requestId ? 'external_manual_upload' : 'manual_shot_upload',
+    description: `${shotId} ${slot.label}`,
+    tags,
+    referenceAssetIds,
+  })
 }
 
 function RolesPage({ stages }: { stages: DirectorStage[] }) {

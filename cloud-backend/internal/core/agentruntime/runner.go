@@ -415,7 +415,7 @@ func injectClientModelProviders(dag *model.DAGRequest, providers map[string]map[
 		if _, exists := params["modelProvider"]; exists {
 			continue
 		}
-		capability := modelProviderCapabilityForTool(params)
+		capability := modelProviderCapabilityForTool(input, params)
 		if capability == "" {
 			continue
 		}
@@ -430,13 +430,15 @@ func injectClientModelProviders(dag *model.DAGRequest, providers map[string]map[
 	}
 }
 
-func modelProviderCapabilityForTool(params map[string]interface{}) string {
-	toolName := strings.TrimSpace(fmt.Sprint(params["tool"]))
-	if toolName == "" || toolName == "<nil>" {
-		return ""
-	}
-	if capability, ok := clientModelProviderToolCapabilities[toolName]; ok {
-		return capability
+func modelProviderCapabilityForTool(input, params map[string]interface{}) string {
+	for _, value := range []interface{}{params["tool"], params["capabilityTool"], input["capabilityTool"], input["tool"]} {
+		toolName := strings.TrimSpace(fmt.Sprint(value))
+		if toolName == "" || toolName == "<nil>" {
+			continue
+		}
+		if capability, ok := clientModelProviderToolCapabilities[toolName]; ok {
+			return capability
+		}
 	}
 	return ""
 }

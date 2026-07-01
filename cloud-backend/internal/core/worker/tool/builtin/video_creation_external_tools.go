@@ -151,7 +151,8 @@ func applyOptionalLocalAgentConfig(cfg config.OpenAIConfig) config.OpenAIConfig 
 }
 
 func effectiveVideoCreationOpenAIConfig(params map[string]interface{}) config.OpenAIConfig {
-	return ApplyClientModelProviderConfig(config.OpenAIConfig{}, params)
+	cfg := applyOptionalLocalAgentConfig(GetVideoCreationOpenAIConfig())
+	return ApplyClientModelProviderConfig(cfg, params)
 }
 
 // ApplyClientModelProviderConfig overlays a per-request OpenAI-compatible
@@ -2939,10 +2940,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	publishCopyJSON := serializeParamJSON(params["publishCopy"])
 
 	// Determine project directory.
-	projectRoot := hyperFramesConfig.ProjectRoot
-	if projectRoot == "" {
-		projectRoot = "/data/aios/projects"
-	}
+	projectRoot := resolveHyperFramesProjectRoot(hyperFramesConfig.ProjectRoot)
 	projectDir := filepath.Join(projectRoot, toolCtx.TaskID, "hyperframes")
 	assetsDir := filepath.Join(projectDir, "assets")
 
@@ -2986,7 +2984,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 
 	summary := fmt.Sprintf("已生成 HyperFrames HTML 视频项目（主题：%s），包含 %d 个文件。", topic, len(files))
 	if writeErr != nil {
-		summary = fmt.Sprintf("HyperFrames 项目内容已通过 LLM 生成，但写入磁盘失败：%v。项目目录：%s", writeErr, projectDir)
+		summary = fmt.Sprintf("HyperFrames 项目内容已生成，但写入磁盘失败：%v。项目目录：%s", writeErr, projectDir)
 	}
 
 	zap.L().Info("HyperFrames project generated",
@@ -3029,6 +3027,46 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 		"summary":    summary,
 		"artifacts":  artifacts,
 	})
+}
+
+func resolveHyperFramesProjectRoot(preferred string) string {
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" && ensureWritableDir(preferred) == nil {
+		return preferred
+	}
+	if preferred != "" {
+		zap.L().Warn("Configured HyperFrames project root is not writable, falling back to user cache",
+			zap.String("projectRoot", preferred))
+	}
+	fallback := filepath.Join(os.TempDir(), "tangying-ai-os", "hyperframes-projects")
+	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
+		fallback = filepath.Join(cacheDir, "tangying-ai-os", "hyperframes-projects")
+	}
+	if err := ensureWritableDir(fallback); err != nil {
+		zap.L().Warn("Fallback HyperFrames project root is not writable, using temp directory",
+			zap.String("projectRoot", fallback),
+			zap.Error(err))
+		tempFallback := filepath.Join(os.TempDir(), "tangying-ai-os", "hyperframes-projects")
+		_ = os.MkdirAll(tempFallback, 0755)
+		return tempFallback
+	}
+	return fallback
+}
+
+func ensureWritableDir(path string) error {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(path, ".write-check-*")
+	if err != nil {
+		return err
+	}
+	name := probe.Name()
+	if err := probe.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return os.Remove(name)
 }
 
 // serializeParamJSON converts a param value (which may be []interface{}, string, or
@@ -3198,6 +3236,11 @@ html, body {
 // generateHyperFramesIndexHTML uses the LLM to generate a complete HyperFrames HTML
 // video page from the topic, script, shot list, and style parameters.
 func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style string, params map[string]interface{}, toolCtx tool.ToolContext) string {
+	if !shouldUseLLMHyperFramesLayout(params) {
+		zap.L().Info("Generating deterministic HyperFrames HTML without LLM layout")
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+	}
+
 	effectiveCfg := effectiveVideoCreationOpenAIConfig(params)
 
 	// If no LLM is configured, generate a minimal static HTML from the data.
@@ -3255,7 +3298,13 @@ HyperFrames 是一个 HTML-to-Video 渲染框架。你生成的 HTML 页面将�
 请生成完整的 HyperFrames HTML 视频页面。`, topic, script, shotListJSON, videoPromptsJSON, style)
 
 	callTool := &LlmApiTool{cfg: effectiveCfg}
-	result := callTool.Execute(context.Background(), map[string]interface{}{
+	timeoutSec := intParam(params, "llmLayoutTimeoutSec", 45)
+	if timeoutSec <= 0 || timeoutSec > 90 {
+		timeoutSec = 45
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+	result := callTool.Execute(ctx, map[string]interface{}{
 		"prompt":     systemPrompt + "\n\n---\n\n" + userPrompt,
 		"max_tokens": 16000,
 	}, toolCtx)
@@ -3286,6 +3335,12 @@ HyperFrames 是一个 HTML-to-Video 渲染框架。你生成的 HTML 页面将�
 	return rawHTML
 }
 
+func shouldUseLLMHyperFramesLayout(params map[string]interface{}) bool {
+	return boolParam(params, "useLLMLayout", false) ||
+		boolParam(params, "use_llm_layout", false) ||
+		boolParam(params, "llmLayout", false)
+}
+
 // buildMinimalHyperFramesHTML generates a basic HyperFrames HTML page from the given
 // data without calling the LLM. Used as fallback when no API key is configured.
 func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) string {
@@ -3301,32 +3356,48 @@ func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) stri
 		TransitionOut string `json:"transitionOut"`
 	}
 	var shots []shotEntry
+	totalDurationSec := 0
 	if err := json.Unmarshal([]byte(shotListJSON), &shots); err != nil {
 		// shotListJSON might be a wrapper object with a "shotList" field.
 		var wrapper struct {
-			ShotList []shotEntry `json:"shotList"`
+			ShotList         []shotEntry `json:"shotList"`
+			TotalDurationSec int         `json:"totalDurationSec"`
 		}
 		if err2 := json.Unmarshal([]byte(shotListJSON), &wrapper); err2 == nil && len(wrapper.ShotList) > 0 {
 			shots = wrapper.ShotList
+			totalDurationSec = wrapper.TotalDurationSec
 		}
+	}
+	if totalDurationSec <= 0 {
+		for _, shot := range shots {
+			if shot.DurationSec > 0 {
+				totalDurationSec += shot.DurationSec
+			}
+		}
+	}
+	if totalDurationSec <= 0 {
+		totalDurationSec = 30
 	}
 
 	var scenesBuilder strings.Builder
 	if len(shots) == 0 {
 		// No structured shots — generate a single-scene page from the script.
-		escapedScript := strings.ReplaceAll(script, "`", "\\`")
-		escapedScript = strings.ReplaceAll(escapedScript, "${", "\\${")
-		scenesBuilder.WriteString(fmt.Sprintf(`  <div class="scene anim-fade-in">
+		scenesBuilder.WriteString(fmt.Sprintf(`  <div id="scene-0" class="scene clip anim-fade-in" data-start="0" data-duration="%d" data-track-index="0">
     <div class="scene-title">%s</div>
     <div class="scene-body">%s</div>
     <div class="caption-bar">%s</div>
   </div>
-`, templateEscape(topic), templateEscape(truncateText(script, 200)), templateEscape(truncateText(script, 80))))
+`, totalDurationSec, templateEscape(topic), templateEscape(truncateText(script, 200)), templateEscape(truncateText(script, 80))))
 	} else {
+		startSec := 0
 		for i, shot := range shots {
 			animClass := "anim-fade-in"
 			if i > 0 {
 				animClass = "anim-fade-in"
+			}
+			durationSec := shot.DurationSec
+			if durationSec <= 0 {
+				durationSec = 5
 			}
 			title := shot.Visual
 			if title == "" {
@@ -3340,12 +3411,13 @@ func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) stri
 			if narration == "" {
 				narration = shot.NarrationText
 			}
-			scenesBuilder.WriteString(fmt.Sprintf(`  <div class="scene shot-review-packet %s" data-review-unit="shot" data-shot-id="%s" data-duration-sec="%d" style="animation-delay: %ds">
+			scenesBuilder.WriteString(fmt.Sprintf(`  <div id="scene-%d" class="scene clip shot-review-packet %s" data-review-unit="shot" data-shot-id="%s" data-duration-sec="%d" data-start="%d" data-duration="%d" data-track-index="0">
     <div class="scene-title">%s</div>
     <div class="scene-subtitle">%s</div>
     <div class="caption-bar">%s</div>
   </div>
-`, animClass, templateEscape(shot.ShotID), shot.DurationSec, i*1, templateEscape(title), templateEscape(body), templateEscape(narration)))
+`, i, animClass, templateEscape(shot.ShotID), durationSec, startSec, durationSec, templateEscape(title), templateEscape(body), templateEscape(narration)))
+			startSec += durationSec
 		}
 	}
 
@@ -3354,11 +3426,13 @@ func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) stri
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta data-composition-id="main" data-width="1920" data-height="1080">
 <title>%s</title>
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 1920px; height: 1080px; overflow: hidden; font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif; background: #0a0a0f; color: #f0f0f0; }
 #app { width: 100%%; height: 100%%; position: relative; }
+.clip { visibility: hidden; }
 .scene { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .scene-title { font-size: 56px; font-weight: 700; letter-spacing: 0.05em; text-align: center; padding: 0 10%%; line-height: 1.3; color: #e8e8f0; }
 .scene-subtitle { font-size: 28px; font-weight: 400; opacity: 0.65; margin-top: 20px; text-align: center; padding: 0 15%%; color: #b0b0c0; }
@@ -3371,11 +3445,52 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; font-family: "Noto
 </style>
 </head>
 <body>
-<div id="app">
+<div id="app" data-composition-id="main" data-duration="%d">
 %s
 </div>
+<script>
+(function () {
+  var durationSec = %d;
+  window.__timelines = window.__timelines || {};
+  if (window.gsap && typeof window.gsap.timeline === "function") {
+    var tl = window.gsap.timeline({ paused: true });
+    tl.to({}, { duration: durationSec });
+    window.__timelines["main"] = tl;
+    return;
+  }
+  var currentTime = 0;
+  var paused = true;
+  function clampTime(value) {
+    var next = Number(value);
+    if (!Number.isFinite(next)) return currentTime;
+    return Math.max(0, Math.min(durationSec, next));
+  }
+  window.__timelines["main"] = {
+    duration: function () { return durationSec; },
+    time: function () { return currentTime; },
+    totalTime: function (value) {
+      if (arguments.length > 0) currentTime = clampTime(value);
+      return currentTime;
+    },
+    seek: function (value) {
+      currentTime = clampTime(value);
+      return currentTime;
+    },
+    pause: function () {
+      paused = true;
+      return this;
+    },
+    play: function () {
+      paused = false;
+      return this;
+    },
+    paused: function () { return paused; },
+    timeScale: function () { return 1; }
+  };
+})();
+</script>
 </body>
-</html>`, templateEscape(topic), scenesBuilder.String())
+</html>`, templateEscape(topic), totalDurationSec, scenesBuilder.String(), totalDurationSec)
 }
 
 // templateEscape escapes text for safe embedding in HTML templates.

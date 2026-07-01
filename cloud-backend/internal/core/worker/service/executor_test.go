@@ -128,6 +128,23 @@ func TestResolveSingleRefPrefersFuzzyExecNodeWithRequestedField(t *testing.T) {
 	}
 }
 
+func TestExecutableToolTimeoutUsesDelegatedExternalManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name:    "hyperframes_renderer",
+		Timeout: 1800,
+	})
+
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{ToolTimeoutSeconds: 120}, nil, nil, nil)
+	timeout := nodeExecutor.executableToolTimeout("external", map[string]interface{}{
+		"tool": "hyperframes_renderer",
+	}, &tool.ToolManifest{Name: "external"})
+
+	if timeout != 1800*time.Second {
+		t.Fatalf("expected delegated hyperframes_renderer timeout, got %s", timeout)
+	}
+}
+
 type fakeLocalJobDispatcher struct {
 	req localrunner.DispatchLocalJobRequest
 	job *localrunner.LocalJob

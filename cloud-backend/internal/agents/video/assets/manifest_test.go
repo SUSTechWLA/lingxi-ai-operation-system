@@ -150,6 +150,8 @@ func TestBuildExternalGenerationResultArtifactRequestKeepsMediaLocal(t *testing.
 		ExternalPlatform:    "seedance-web",
 		PromptHash:          "prompt-sha",
 		ReferenceAssetIDs:   []string{"char-a", "scene-bookstore"},
+		Description:         "SHOT_01 视频",
+		Tags:                []string{"manual_shot_upload", "shot_video"},
 	})
 	if err != nil {
 		t.Fatalf("BuildManualAssetManifest returned error: %v", err)
@@ -169,6 +171,13 @@ func TestBuildExternalGenerationResultArtifactRequestKeepsMediaLocal(t *testing.
 	}
 	if req.Metadata["externalGenerationRequestId"] != "extgen_123" {
 		t.Fatalf("missing request link metadata: %+v", req.Metadata)
+	}
+	if req.Metadata["description"] != "SHOT_01 视频" {
+		t.Fatalf("missing description metadata: %+v", req.Metadata)
+	}
+	tags, ok := req.Metadata["tags"].([]string)
+	if !ok || len(tags) != 2 || tags[1] != "shot_video" {
+		t.Fatalf("missing tags metadata: %+v", req.Metadata)
 	}
 }
 

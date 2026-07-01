@@ -166,6 +166,9 @@ func (s *StateService) TransitionTask(ctx context.Context, taskID string, newSta
 	)
 
 	task.Status = newStatus
+	if newStatus != model.TaskPaused {
+		task.PauseReason = ""
+	}
 	if err := s.taskRepo.Save(ctx, task); err != nil {
 		return fmt.Errorf("failed to save task: %w", err)
 	}

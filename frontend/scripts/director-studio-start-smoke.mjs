@@ -402,19 +402,14 @@ app.whenReady().then(async () => {
       if (!assetsButton) throw new Error('missing assets nav button')
       assetsButton.click()
     \`)
-    await waitForDOM(win, \`document.body.innerText.includes('素材依赖点')\`, 15000)
-    await win.webContents.executeJavaScript(\`
-      const requestRow = Array.from(document.querySelectorAll('tr')).find((row) =>
-        row.innerText.includes('素材依赖请求') || row.innerText.includes('external_generation_request')
-      )
-      const requestButton = requestRow && Array.from(requestRow.querySelectorAll('button')).find((button) =>
-        button.textContent.includes('查看')
-      )
-      if (!requestButton) throw new Error('missing external request view button')
-      requestButton.click()
-    \`)
+    await waitForDOM(win, \`document.body.innerText.includes('Shot 素材工作台')\`, 15000)
     await waitForDOM(win, \`document.body.innerText.includes('待用户回填')\`, 15000)
     await waitForDOM(win, \`document.body.innerText.includes('非真人风格化动画')\`, 15000)
+    await waitForDOM(win, \`
+      Array.from(document.querySelectorAll('label')).some((label) =>
+        label.textContent.includes('上传结果')
+      )
+    \`, 15000)
     await win.webContents.executeJavaScript(\`
       const input = document.querySelector('input[type="file"][data-smoke-id="external-generation-upload"]')
       if (!input) throw new Error('missing external generation upload input')
@@ -425,6 +420,20 @@ app.whenReady().then(async () => {
       input.dispatchEvent(new Event('change', { bubbles: true }))
     \`)
     await waitForDOM(win, \`document.body.innerText.includes('已登记')\`, 15000)
+    await win.webContents.executeJavaScript(\`
+      const traceButton = Array.from(document.querySelectorAll('button')).find((item) =>
+        item.textContent.trim() === '追踪'
+      )
+      if (!traceButton) throw new Error('missing trace nav button')
+      traceButton.click()
+    \`)
+    await waitForDOM(win, \`document.body.innerText.includes('执行追踪')\`, 15000)
+    await win.webContents.executeJavaScript(\`
+      const text = document.body.innerText
+      if (text.includes('原始产物索引') || text.includes('Shot 素材工作台')) {
+        throw new Error('trace page still contains asset workspace/table content')
+      }
+    \`)
     const bodyText = await win.webContents.executeJavaScript('document.body.innerText')
     if (bodyText.includes('guard agent plan')) {
       throw new Error(bodyText)

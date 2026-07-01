@@ -349,6 +349,8 @@ func BuildExternalGenerationResultArtifactRequest(projectID, workflowRunID, task
 			"externalPlatform":            manifest.ExternalPlatform,
 			"source":                      manifest.Source,
 			"referenceAssetIds":           manifest.ReferenceAssetIDs,
+			"description":                 manifest.Description,
+			"tags":                        manifest.Tags,
 		},
 	}, nil
 }

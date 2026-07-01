@@ -699,6 +699,9 @@ func TestStateMachine_OnSuccess_WakesDownstreamAfterManualControlApproval(t *tes
 	if taskRepo.tasks["t1"].Status != model.TaskRunning {
 		t.Errorf("Expected task RUNNING after approval resumes workflow, got %s", taskRepo.tasks["t1"].Status)
 	}
+	if taskRepo.tasks["t1"].PauseReason != "" {
+		t.Errorf("Expected pause reason cleared after approval resumes workflow, got %q", taskRepo.tasks["t1"].PauseReason)
+	}
 }
 
 func TestStateMachine_OnSuccess_WakesDownstreamWithoutOptionalDependencyChecker(t *testing.T) {
@@ -736,6 +739,9 @@ func TestStateMachine_OnSuccess_WakesDownstreamWithoutOptionalDependencyChecker(
 	}
 	if taskRepo.tasks["t1"].Status != model.TaskRunning {
 		t.Fatalf("expected task RUNNING after approval resumes workflow, got %s", taskRepo.tasks["t1"].Status)
+	}
+	if taskRepo.tasks["t1"].PauseReason != "" {
+		t.Fatalf("expected pause reason cleared after approval resumes workflow, got %q", taskRepo.tasks["t1"].PauseReason)
 	}
 	foundReadyEvent := false
 	for _, event := range eventSaver.events {
@@ -1611,5 +1617,47 @@ func TestScheduler_RecentNodeNotRecovered(t *testing.T) {
 
 	if nodeRepo.nodes["n1"].Status != model.NodeCreated {
 		t.Errorf("Recent node should not be recovered, got %s", nodeRepo.nodes["n1"].Status)
+	}
+}
+
+func TestScheduler_RecoverReadyReviewNodePausesTask(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	depRepo := newMockDepRepo()
+	ctxRepo := newMockContextRepo()
+	eventSaver := newMockEventSaver()
+
+	taskRepo.tasks["t1"] = &model.Task{ID: "t1", Status: model.TaskRunning}
+	nodeRepo.nodes["review"] = &model.Node{
+		ID:     "review",
+		TaskID: "t1",
+		Status: model.NodeReady,
+		Type:   model.NodeTypeReviewGate,
+		Name:   "审核-发布文案",
+		Input: map[string]interface{}{
+			"reviewPhase": "after_artifact",
+		},
+	}
+	nodeRepo.nodes["exec"] = &model.Node{
+		ID:     "exec",
+		TaskID: "t1",
+		Status: model.NodeReady,
+		Type:   model.NodeTypeLLM,
+		Name:   "普通执行节点",
+	}
+
+	ss := NewStateService(nodeRepo, taskRepo, depRepo, ctxRepo, eventSaver)
+	scheduler := NewScheduler(nodeRepo, ss, newMockPublisher())
+
+	scheduler.recoverReadyReviewNodes(context.Background())
+
+	if taskRepo.tasks["t1"].Status != model.TaskPaused {
+		t.Fatalf("Expected task PAUSED for READY review gate, got %s", taskRepo.tasks["t1"].Status)
+	}
+	if taskRepo.tasks["t1"].PauseReason == "" {
+		t.Fatal("Expected pause reason for recovered READY review gate")
+	}
+	if nodeRepo.nodes["exec"].Status != model.NodeReady {
+		t.Fatalf("non-review READY node should not be changed, got %s", nodeRepo.nodes["exec"].Status)
 	}
 }

@@ -361,6 +361,7 @@ func (ne *NodeExecutor) executeTool(
 	if !t.ValidateParameters(parameters) {
 		return executor.ExecutionResult{Error: fmt.Sprintf("Invalid parameters for tool: %s", toolName)}, nil
 	}
+	manifest := ne.toolRegistry.GetManifest(toolName)
 
 	// Wire progress reporter for long-running tasks.
 	if isLongRunning && progressCb != nil {
@@ -394,7 +395,7 @@ func (ne *NodeExecutor) executeTool(
 			resultCh <- et.Execute(ctx, parameters, toolCtx)
 		}()
 
-		timeout := time.Duration(ne.cfg.ToolTimeoutSeconds) * time.Second
+		timeout := ne.executableToolTimeout(toolName, parameters, manifest)
 		select {
 		case toolResult := <-resultCh:
 			if toolResult.Success {
@@ -406,7 +407,7 @@ func (ne *NodeExecutor) executeTool(
 		case <-time.After(timeout):
 			result = executor.ExecutionResult{
 				TimedOut: true,
-				Error:    fmt.Sprintf("Tool execution timed out after %d seconds", ne.cfg.ToolTimeoutSeconds),
+				Error:    fmt.Sprintf("Tool execution timed out after %d seconds", int(timeout/time.Second)),
 			}
 		}
 	} else {
@@ -414,6 +415,35 @@ func (ne *NodeExecutor) executeTool(
 	}
 
 	return result, execErr
+}
+
+func (ne *NodeExecutor) executableToolTimeout(toolName string, parameters map[string]interface{}, manifest *tool.ToolManifest) time.Duration {
+	timeoutSec := 0
+	if toolName == "external" {
+		if delegatedTool := firstString(parameters, nil, "tool", "capabilityTool"); delegatedTool != "" {
+			if delegatedManifest := ne.toolRegistry.GetManifest(delegatedTool); delegatedManifest != nil {
+				timeoutSec = normalizedManifestTimeoutSec(delegatedManifest.Timeout)
+			}
+		}
+	}
+	if timeoutSec <= 0 && manifest != nil {
+		timeoutSec = normalizedManifestTimeoutSec(manifest.Timeout)
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = ne.cfg.ToolTimeoutSeconds
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 1800
+	}
+	return time.Duration(timeoutSec) * time.Second
+}
+
+func normalizedManifestTimeoutSec(timeoutSec int) int {
+	const maxReasonableTimeoutSec = 86400 // 24 hours
+	if timeoutSec > maxReasonableTimeoutSec {
+		return timeoutSec / 1000
+	}
+	return timeoutSec
 }
 
 func (ne *NodeExecutor) dispatchLocalNode(
@@ -431,12 +461,7 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		return fmt.Errorf("local execution requested for %s but localCommand is empty", manifest.Name)
 	}
 	timeoutSec := manifest.Timeout
-	// Guard: if the manifest timeout is implausibly large (>24h in seconds),
-	// assume it was specified in milliseconds and convert to seconds.
-	const maxReasonableTimeoutSec = 86400 // 24 hours
-	if timeoutSec > maxReasonableTimeoutSec {
-		timeoutSec = timeoutSec / 1000
-	}
+	timeoutSec = normalizedManifestTimeoutSec(timeoutSec)
 	if timeoutSec <= 0 {
 		timeoutSec = ne.cfg.ToolTimeoutSeconds
 	}

@@ -76,6 +76,31 @@ func TestOptionalLocalAgentModelConfigRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestEffectiveVideoCreationConfigUsesOptedInLocalAgentConfig(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "true")
+	ClearRuntimeModelProviderConfig()
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{
+			APIKey:  "local-key",
+			BaseURL: "https://local.example/v1",
+			Model:   "local-model",
+		}, true
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		ClearRuntimeModelProviderConfig()
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	cfg := effectiveVideoCreationOpenAIConfig(map[string]interface{}{})
+	if cfg.APIKey != "local-key" || cfg.BaseURL != "https://local.example/v1" || cfg.Model != "local-model" {
+		t.Fatalf("expected effective config to use opted-in local agent config, got %+v", cfg)
+	}
+}
+
 func TestKnowledgeResearcherUsesClientModelProviderParam(t *testing.T) {
 	SetVideoCreationConfig(config.OpenAIConfig{}, "")
 	ClearRuntimeModelProviderConfig()
@@ -578,8 +603,14 @@ func TestHyperFramesShotFirstFallbackUsesShotSectionsAndNarration(t *testing.T) 
 	shotList := `{"shotList":[{"shotId":"SHOT_01","durationSec":6,"scriptText":"佛得角是一个西非岛国。","visual":"地图上出现佛得角群岛","camera":"缓慢推近"},{"shotId":"SHOT_02","durationSec":7,"narrationText":"世界杯出线对它来说是奇迹。","visual":"球场灯光亮起","camera":"横向移动"}]}`
 	html := buildMinimalHyperFramesHTML("佛得角奇迹", "完整口播", shotList, "16:9")
 	for _, required := range []string{
+		`data-composition-id="main"`,
+		`data-duration="13"`,
+		`class="scene clip shot-review-packet`,
+		`data-start="0"`,
+		`data-start="6"`,
 		`data-shot-id="SHOT_01"`,
 		`data-shot-id="SHOT_02"`,
+		`window.__timelines["main"]`,
 		"shot-review-packet",
 		"佛得角是一个西非岛国。",
 		"世界杯出线对它来说是奇迹。",
@@ -602,6 +633,39 @@ func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
 		if !strings.Contains(data, required) {
 			t.Fatalf("hyperframes data json should contain %q, got:\n%s", required, data)
 		}
+	}
+}
+
+func TestHyperFramesLayoutLLMRequiresExplicitOptIn(t *testing.T) {
+	if shouldUseLLMHyperFramesLayout(map[string]interface{}{}) {
+		t.Fatal("HyperFrames layout generation should not call LLM by default")
+	}
+	if !shouldUseLLMHyperFramesLayout(map[string]interface{}{"useLLMLayout": true}) {
+		t.Fatal("useLLMLayout=true should opt into LLM layout generation")
+	}
+	if !shouldUseLLMHyperFramesLayout(map[string]interface{}{"use_llm_layout": "yes"}) {
+		t.Fatal("use_llm_layout=yes should opt into LLM layout generation")
+	}
+}
+
+func TestResolveHyperFramesProjectRootUsesWritablePreferred(t *testing.T) {
+	preferred := t.TempDir()
+	if got := resolveHyperFramesProjectRoot(preferred); got != preferred {
+		t.Fatalf("expected writable preferred root, got %q", got)
+	}
+}
+
+func TestResolveHyperFramesProjectRootFallsBackWhenPreferredIsNotDirectory(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(filePath, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveHyperFramesProjectRoot(filePath)
+	if got == filePath {
+		t.Fatalf("expected fallback root, got preferred file path %q", got)
+	}
+	if !strings.Contains(got, "hyperframes-projects") {
+		t.Fatalf("fallback root should be hyperframes project cache, got %q", got)
 	}
 }
 

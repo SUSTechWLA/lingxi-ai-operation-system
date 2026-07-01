@@ -119,11 +119,80 @@ try {
   assert.deepEqual(projectPrimaryAction({
     preflightCanStart: true,
     loading: false,
+    projectStatus: 'DRAFT',
+    runStatus: 'CANCELLED',
+    stages: notStartedFlow,
+    topic: '佛得角世界杯奇迹',
+  }), { kind: 'start', label: '开始项目', disabled: false })
+  assert.deepEqual(projectPrimaryAction({
+    preflightCanStart: true,
+    loading: false,
     projectStatus: 'PAUSED',
     runStatus: 'CANCELLED',
     stages: justStartedFlow,
     topic: '佛得角世界杯奇迹',
-  }), { kind: 'stopped', label: '项目已停止', disabled: true })
+  }), { kind: 'start', label: '开始项目', disabled: false })
+
+  const preRenderReview = {
+    id: 'render-review-before',
+    nodeId: 'render_review_before',
+    status: 'PENDING',
+    stage: 'render',
+    tool: 'hyperframes_renderer',
+    reviewReason: '渲染视频耗时较长且会产生大文件，必须用户确认后执行。',
+  }
+  const preRenderFlow = buildDirectorStages(roleAgents, [preRenderReview], {
+    nodes: [
+      {
+        id: 'render_review_before',
+        name: '审核-render',
+        type: 'REVIEW_GATE',
+        status: 'READY',
+        input: { stage: 'render', tool: 'hyperframes_renderer', reviewPhase: 'before_execute' },
+        output: {},
+      },
+      {
+        id: 'render_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'CREATED',
+        input: { tool: 'external', capabilityTool: 'hyperframes_renderer', stage: 'render' },
+        output: {},
+      },
+    ],
+  }, true)
+  assert.equal(isActionablePendingReview(preRenderReview), true)
+  assert.equal(visibleReviewHistory([preRenderReview]).length, 1)
+  assert.equal(preRenderFlow[0].status, 'review')
+  assert.equal(preRenderFlow[0].reviewId, 'render-review-before')
+  assert.equal(reviewDisplayTitle(preRenderReview), '审核最终渲染')
+
+  const failedAfterPreRenderApprovalFlow = buildDirectorStages(roleAgents, [{
+    ...preRenderReview,
+    status: 'APPROVED',
+  }], {
+    nodes: [
+      {
+        id: 'render_review_before',
+        name: '审核-render',
+        type: 'REVIEW_GATE',
+        status: 'SUCCESS',
+        input: { stage: 'render', tool: 'hyperframes_renderer', reviewPhase: 'before_execute' },
+        output: { approved: true },
+      },
+      {
+        id: 'render_exec',
+        name: 'external',
+        type: 'TOOL',
+        status: 'FAILED',
+        input: { tool: 'external', capabilityTool: 'hyperframes_renderer', stage: 'render' },
+        output: {},
+        error: 'HyperFrames 渲染已禁用',
+      },
+    ],
+  }, true)
+  assert.equal(failedAfterPreRenderApprovalFlow[0].status, 'failed')
+
   const createdDagFlow = buildDirectorStages(startupRoles, [], {
     nodes: [
       {
@@ -233,6 +302,254 @@ try {
   const optimisticFlow = applyOptimisticRunningStage(stagedFlow, 'storyboard_artist')
   assert.equal(optimisticFlow[1].status, 'running')
   assert.equal(stagedFlow[1].status, 'pending')
+
+  const duplicateScriptReviewsFlow = buildDirectorStages(
+    [stagedRoles[0]],
+    [
+      {
+        id: 'knowledge-approved',
+        nodeId: 'knowledge-approved',
+        status: 'APPROVED',
+        stage: 'script',
+        tool: 'knowledge_researcher',
+        reviewContent: '已通过的知识调研',
+      },
+      {
+        id: 'script-pending',
+        nodeId: 'script-pending',
+        status: 'PENDING',
+        stage: 'script',
+        tool: 'video_script_generator',
+        reviewContent: '当前待审核口播脚本',
+      },
+    ],
+    { nodes: [] },
+  )
+  assert.equal(duplicateScriptReviewsFlow[0].status, 'review')
+  assert.equal(duplicateScriptReviewsFlow[0].reviewId, 'script-pending')
+
+  const knowledgeReviewFlow = buildDirectorStages(
+    [
+      { ...startupRoles[0], allowedTools: ['proposal_generator'] },
+      { ...stagedRoles[0], allowedTools: ['video_script_generator', 'script_quality_checker', 'knowledge_researcher'] },
+    ],
+    [
+      {
+        id: 'knowledge-pending',
+        nodeId: 'knowledge_researcher_review',
+        status: 'PENDING',
+        tool: 'knowledge_researcher',
+        reviewContent: '佛得角是西非岛国。',
+      },
+    ],
+    { nodes: [] },
+  )
+  assert.equal(knowledgeReviewFlow[0].status, 'review')
+  assert.equal(knowledgeReviewFlow[0].reviewId, 'knowledge-pending')
+  assert.equal(knowledgeReviewFlow[1].status, 'pending')
+
+  const scriptQualityGateFlow = buildDirectorStages(
+    [{
+      ...stagedRoles[0],
+      allowedTools: ['video_script_generator', 'script_quality_checker'],
+    }],
+    [
+      {
+        id: 'script-approved-before-quality',
+        nodeId: 'script-approved-before-quality',
+        status: 'APPROVED',
+        stage: 'script',
+        tool: 'video_script_generator',
+        reviewContent: '已通过的口播脚本',
+      },
+      {
+        id: 'script-quality-gate-pending',
+        nodeId: 'video_script_generator_quality_gate',
+        stepId: 'video_script_generator_quality_gate',
+        status: 'PENDING',
+        reviewPhase: 'quality_gate',
+        reviewReason: '质量门禁：script_quality_checker 评分需 >=85',
+        reviewOutput: { qualityReport: { score: 82, issues: ['事实年份错误'] } },
+      },
+    ],
+    {
+      nodes: [
+        {
+          id: 'script-exec',
+          name: 'external',
+          type: 'TOOL',
+          status: 'SUCCESS',
+          input: { tool: 'external', capabilityTool: 'video_script_generator', stage: 'script', roleAgentId: 'script_writer' },
+          output: { artifacts: [{ kind: 'VIDEO_SCRIPT', name: '视频脚本', storageRef: 'local://script.json' }] },
+        },
+        {
+          id: 'script-quality',
+          name: 'external',
+          type: 'TOOL',
+          status: 'SUCCESS',
+          input: { tool: 'external', capabilityTool: 'script_quality_checker' },
+          output: { artifacts: [{ kind: 'JSON', name: '脚本质检报告' }] },
+        },
+      ],
+    },
+  )
+  assert.equal(scriptQualityGateFlow[0].status, 'review')
+  assert.equal(scriptQualityGateFlow[0].reviewId, 'script-quality-gate-pending')
+
+  const qualityGateScopedFlow = buildDirectorStages(
+    [
+      {
+        ...stagedRoles[0],
+        allowedTools: ['video_script_generator', 'script_quality_checker'],
+      },
+      {
+        id: 'quality_reviewer',
+        name: 'Quality Reviewer',
+        displayName: '质量审核',
+        stage: 'quality',
+        goal: '',
+        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        forbiddenTools: [],
+        requiredInputs: [],
+        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+      },
+    ],
+    [
+      {
+        id: 'script-quality-gate-pending',
+        nodeId: 'video_script_generator_quality_gate',
+        stepId: 'video_script_generator_quality_gate',
+        status: 'PENDING',
+        reviewPhase: 'quality_gate',
+        reviewReason: '质量门禁：script_quality_checker 评分需 >=85',
+        reviewOutput: { qualityReport: { score: 82, issues: ['事实年份错误'] } },
+      },
+    ],
+    { nodes: [] },
+  )
+  assert.equal(qualityGateScopedFlow[0].status, 'review')
+  assert.equal(qualityGateScopedFlow[1].status, 'pending')
+
+  const storyboardGateAliasFlow = buildDirectorStages(
+    [
+      {
+        ...stagedRoles[1],
+        allowedTools: ['card_plan_generator'],
+      },
+      {
+        id: 'quality_reviewer',
+        name: 'Quality Reviewer',
+        displayName: '质量审核',
+        stage: 'quality',
+        goal: '',
+        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        forbiddenTools: [],
+        requiredInputs: [],
+        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+      },
+    ],
+    [
+      {
+        id: 'beat-plan-quality-gate-pending',
+        nodeId: 'beat_plan_quality_gate',
+        stepId: 'beat_plan_quality_gate',
+        status: 'PENDING',
+        tool: 'shot_splitter',
+        reviewPhase: 'quality_gate',
+        reviewReason: '质量门禁：shot_quality_checker 评分需 >=85',
+        reviewOutput: { qualityReport: { score: 30, issues: ['总时长超出目标'] } },
+      },
+    ],
+    { nodes: [] },
+  )
+  assert.equal(storyboardGateAliasFlow[0].status, 'review')
+  assert.equal(storyboardGateAliasFlow[1].status, 'pending')
+
+  const referenceToolAliasFlow = buildDirectorStages(
+    [
+      {
+        id: 'reference_selector',
+        name: 'Reference Selector',
+        displayName: '参考资产选择器',
+        stage: 'reference',
+        goal: '',
+        allowedTools: ['style_reference_selector'],
+        forbiddenTools: [],
+        requiredInputs: [],
+        requiredOutputs: ['REFERENCE_PACKAGE'],
+      },
+      {
+        id: 'quality_reviewer',
+        name: 'Quality Reviewer',
+        displayName: '质量审核',
+        stage: 'quality',
+        goal: '',
+        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        forbiddenTools: [],
+        requiredInputs: [],
+        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+      },
+    ],
+    [
+      {
+        id: 'video-prompt-review',
+        nodeId: 'video_prompt_generator_review',
+        stepId: 'video_prompt_generator_review',
+        status: 'PENDING',
+        tool: 'video_prompt_generator',
+        reviewContent: 'SHOT_01 keyframe prompt',
+      },
+    ],
+    { nodes: [] },
+  )
+  assert.equal(referenceToolAliasFlow[0].status, 'review')
+  assert.equal(referenceToolAliasFlow[1].status, 'pending')
+
+  const previewPendingWithUnmaterializedOutputsFlow = buildDirectorStages(
+    [{
+      id: 'preview_director',
+      name: 'Preview Director',
+      displayName: '预览导演',
+      stage: 'preview',
+      goal: '',
+      allowedTools: ['hyperframes_project_generator', 'hyperframes_snapshot'],
+      forbiddenTools: [],
+      requiredInputs: ['VIDEO_COMPOSITION_SPEC'],
+      requiredOutputs: ['HYPERFRAMES_PROJECT', 'PREVIEW_SNAPSHOTS'],
+    }],
+    [
+      {
+        id: 'preview-review',
+        nodeId: 'preview_review',
+        status: 'PENDING',
+        stage: 'preview',
+        tool: 'hyperframes_project_generator',
+        reviewContent: 'HyperFrames 项目已生成，等待审核。',
+      },
+    ],
+    {
+      nodes: [
+        {
+          id: 'preview_exec',
+          name: 'external',
+          type: 'TOOL',
+          status: 'SUCCESS',
+          input: { tool: 'external', capabilityTool: 'hyperframes_project_generator', stage: 'preview' },
+          output: { artifacts: [{ kind: 'HTML', name: 'index.html', storageRef: '' }] },
+        },
+        {
+          id: 'preview_review',
+          name: '审核-preview',
+          type: 'REVIEW_GATE',
+          status: 'READY',
+          input: { stage: 'preview', tool: 'hyperframes_project_generator', reviewPhase: 'after_artifact' },
+          output: {},
+        },
+      ],
+    },
+  )
+  assert.equal(previewPendingWithUnmaterializedOutputsFlow[0].status, 'review')
+
   const reviewGateFlow = buildDirectorStages(stagedRoles, [], {
     nodes: [
       {
@@ -372,6 +689,112 @@ try {
   assert.equal(missingCompositionArtifacts[0].status, 'missing')
   const missingCompositionStages = buildDirectorStages([compositionRole], [], missingCompositionTrace, true)
   assert.equal(missingCompositionStages[0].status, 'failed')
+
+  const approvedReviewFallbackRoles = [
+    {
+      id: 'creative_director',
+      name: 'Creative Director',
+      displayName: '创意总监',
+      stage: 'proposal',
+      goal: '定方向',
+      allowedTools: ['proposal_generator'],
+      forbiddenTools: [],
+      requiredInputs: [],
+      requiredOutputs: ['VIDEO_PROPOSAL'],
+    },
+    {
+      id: 'script_writer',
+      name: 'Script Writer',
+      displayName: '脚本编剧',
+      stage: 'script',
+      goal: '写脚本',
+      allowedTools: ['video_script_generator'],
+      forbiddenTools: [],
+      requiredInputs: ['VIDEO_PROPOSAL'],
+      requiredOutputs: ['VIDEO_SCRIPT'],
+    },
+    {
+      id: 'storyboard_artist',
+      name: 'Storyboard Artist',
+      displayName: '分镜导演',
+      stage: 'storyboard',
+      goal: '拆画面',
+      allowedTools: ['shot_splitter'],
+      forbiddenTools: [],
+      requiredInputs: ['VIDEO_SCRIPT'],
+      requiredOutputs: ['CARD_PLAN'],
+    },
+  ]
+  const approvedReviewFallbackReviews = [
+    {
+      id: 'proposal-approved',
+      nodeId: 'proposal-review',
+      status: 'APPROVED',
+      roleAgentId: 'creative_director',
+      stage: 'proposal',
+      tool: 'proposal_generator',
+      reviewContent: '# 创意方案\n\n佛得角国家介绍与世界杯奇迹。',
+    },
+    {
+      id: 'script-approved',
+      nodeId: 'script-review',
+      status: 'APPROVED',
+      roleAgentId: 'script_writer',
+      stage: 'script',
+      tool: 'video_script_generator',
+      reviewOutput: { script: '佛得角是西非岛国，人口不多，却踢出了世界杯奇迹。' },
+    },
+    {
+      id: 'storyboard-approved',
+      nodeId: 'storyboard-review',
+      status: 'APPROVED',
+      roleAgentId: 'storyboard_artist',
+      stage: 'storyboard',
+      tool: 'shot_splitter',
+      reviewOutput: {
+        shotList: [
+          {
+            shotId: 'SHOT_01',
+            durationSec: 7,
+            narrationText: '佛得角是西非岛国。',
+            visual: '地图上突出佛得角群岛。',
+          },
+        ],
+        totalDurationSec: 7,
+      },
+    },
+  ]
+  const approvedReviewFallbackTrace = {
+    nodes: approvedReviewFallbackRoles.map((role) => ({
+      id: `${role.stage}-exec`,
+      name: 'external',
+      type: 'TOOL',
+      status: 'SUCCESS',
+      input: { tool: 'external', capabilityTool: role.allowedTools[0], stage: role.stage, roleAgentId: role.id },
+      output: { content: `${role.stage} finished without artifact manifest` },
+    })),
+  }
+  const approvedReviewFallbackStages = buildDirectorStages(
+    approvedReviewFallbackRoles,
+    approvedReviewFallbackReviews,
+    approvedReviewFallbackTrace,
+    true,
+  )
+  assert.deepEqual(approvedReviewFallbackStages.map((stage) => stage.status), ['done', 'done', 'done'])
+  const approvedReviewFallbackArtifacts = buildDirectorArtifacts(
+    approvedReviewFallbackRoles,
+    approvedReviewFallbackReviews,
+    approvedReviewFallbackTrace,
+  )
+  assert.deepEqual(approvedReviewFallbackArtifacts.map((artifact) => artifact.status), ['valid', 'valid', 'valid'])
+  assert.deepEqual(approvedReviewFallbackArtifacts.map((artifact) => artifact.humanApproved), [true, true, true])
+  const proposalSelection = getArtifactViewerSelection(undefined, approvedReviewFallbackArtifacts[0])
+  assert.equal(proposalSelection.shouldLoad, false)
+  assert.match(proposalSelection.placeholder || '', /佛得角国家介绍/)
+  const storyboardSelection = getArtifactViewerSelection(undefined, approvedReviewFallbackArtifacts[2])
+  assert.match(storyboardSelection.placeholder || '', /分镜队列/)
+  assert.match(storyboardSelection.placeholder || '', /SHOT_01/)
+
   const materializedCompositionArtifacts = buildDirectorArtifacts([compositionRole], [], missingCompositionTrace, [
     {
       id: 'art-composition-1',
@@ -464,6 +887,30 @@ try {
       metadata: { relatedShotId: 'SHOT_01', artifactType: 'shot_video_clip' },
     },
     {
+      id: 'shot-video-request-1',
+      kind: 'EXTERNAL_GENERATION_REQUEST',
+      name: 'SHOT_01 视频生成请求',
+      status: 'review',
+      owner: '素材依赖点',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'inline://extgen-video',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_request', generationKind: 'video' },
+    },
+    {
+      id: 'shot-storyboard-result-1',
+      kind: 'IMAGE',
+      name: 'SHOT_01 故事板上传结果',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-1/storyboard.png',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_result', assetType: 'image', tags: ['manual_shot_upload', 'shot_storyboard'] },
+    },
+    {
       id: 'shot-packet-2',
       kind: 'SHOT_REVIEW_PACKET',
       name: 'SHOT_02 审核包',
@@ -481,7 +928,11 @@ try {
   assert.equal(shotReviewGroups[0].status, 'review')
   assert.equal(shotReviewGroups[0].narrationText, '佛得角是西非岛国。')
   assert.deepEqual(shotReviewGroups[0].referenceRoles, ['character'])
-  assert.deepEqual(shotReviewGroups[0].artifactCounts, { total: 4, references: 1, media: 2, reviewPackets: 1 })
+  assert.deepEqual(shotReviewGroups[0].artifactCounts, { total: 6, references: 1, media: 2, reviewPackets: 1 })
+  assert.deepEqual(shotReviewGroups[0].slots.map((slot) => slot.kind), ['prompt', 'reference', 'storyboard', 'video'])
+  assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'prompt')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'))
+  assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'video')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'))
+  assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'storyboard')?.artifacts.some((artifact) => artifact.id === 'shot-storyboard-result-1'))
   assert.equal(shotReviewGroups[1].shotId, 'SHOT_02')
   assert.equal(shotReviewGroups[1].status, 'valid')
 
