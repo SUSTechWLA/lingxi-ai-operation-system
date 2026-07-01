@@ -1134,10 +1134,31 @@ try {
   assert.equal(profileSummary.label, '影视剧情')
   assert.equal(profileSummary.primaryArtifact, 'CONTINUITY_BIBLE')
   assert.ok(profileSummary.qualityContract.includes('aigc_time_windows_3_15s'))
+  assert.equal(creationProfileSummary([{
+    ...profileArtifacts[0],
+    metadata: { profileId: 'talking_head' },
+  }]).label, '口播解说')
+  assert.equal(creationProfileSummary([]).label, '未选择')
   assert.deepEqual(timeWindowPlanSummary(profileArtifacts), {
     totalWindows: 1,
     aigcWindowCount: 1,
     invalidDurationCount: 0,
+  })
+  assert.deepEqual(timeWindowPlanSummary([{
+    ...profileArtifacts[1],
+    metadata: {
+      timeWindowPlan: {
+        windows: [
+          { durationSec: '16', aigcEligible: 'true' },
+          { durationSec: 2, aigcEligible: false },
+          { aigcEligible: true },
+        ],
+      },
+    },
+  }]), {
+    totalWindows: 3,
+    aigcWindowCount: 2,
+    invalidDurationCount: 1,
   })
 
   assert.deepEqual(

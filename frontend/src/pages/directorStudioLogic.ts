@@ -196,7 +196,7 @@ export function timeWindowPlanSummary(artifacts: DirectorArtifactRecord[]): Dire
     aigcWindowCount: aigcWindows.length,
     invalidDurationCount: aigcWindows.filter((window) => {
       const durationSec = numberValue(window.durationSec)
-      return durationSec === undefined || durationSec < 3 || durationSec > 15
+      return durationSec !== undefined && (durationSec < 3 || durationSec > 15)
     }).length,
   }
 }
