@@ -24,23 +24,64 @@ func BuildShotGenerationPlan(
 	caps RenderCapabilities,
 ) model.ShotGenerationPlan {
 	signals := scoreShotGenerationSignals(shot, visual, pref)
+	durationSec := resolveShotDuration(shot, visual)
+	htmlNeeded := signals.HTMLScore > 0
+	aigcNeeded := signals.AIGCScore > 0
 
 	switch {
 	case signals.UserAssetScore > 0:
-		return buildUserAssetPlan(shot, visual, signals)
-	case signals.AIGCScore > 0 && !caps.AIGCAvailable:
-		return buildPlaceholderPlan(shot, visual, signals)
-	case signals.HTMLScore > 0 && signals.AIGCScore > 0 && pref.AllowHybridRender && caps.HTMLAvailable && caps.AIGCAvailable:
-		return buildHybridPlan(shot, visual, signals)
-	case signals.AIGCScore > 0 && caps.AIGCAvailable:
-		if signals.DynamicAIGC {
-			return buildAIGCVideoPlan(shot, visual, signals)
+		return buildUserAssetPlan(shot, visual, signals, durationSec)
+	case htmlNeeded && aigcNeeded:
+		if pref.AllowHybridRender && caps.HTMLAvailable && caps.AIGCAvailable {
+			return buildHybridPlan(shot, visual, signals, durationSec)
 		}
-		return buildAIGCImageThenHyperFramesPlan(shot, visual, signals, caps.HTMLAvailable)
-	case signals.HTMLScore > 0 && caps.HTMLAvailable:
-		return buildHTMLOnlyPlan(shot, visual, signals)
+		return buildPlaceholderPlan(
+			shot,
+			visual,
+			signals,
+			durationSec,
+			"exact text and AIGC both required but safe hybrid rendering is unavailable",
+			[]string{"text_safety_boundary", "hybrid_render_unavailable", "provider_availability"},
+		)
+	case aigcNeeded:
+		if !caps.AIGCAvailable {
+			return buildPlaceholderPlan(
+				shot,
+				visual,
+				signals,
+				durationSec,
+				"AIGC is required but no video provider is available",
+				[]string{"external_generation_needed", "placeholder_accuracy", "provider_availability"},
+			)
+		}
+		if signals.DynamicAIGC {
+			return buildAIGCVideoPlan(shot, visual, signals, durationSec)
+		}
+		return buildAIGCImageThenHyperFramesPlan(shot, visual, signals, durationSec, caps.HTMLAvailable)
+	case htmlNeeded:
+		if !caps.HTMLAvailable {
+			return buildPlaceholderPlan(
+				shot,
+				visual,
+				signals,
+				durationSec,
+				"HTML rendering is required but HyperFrames is unavailable",
+				[]string{"html_provider_required", "placeholder_accuracy", "provider_availability"},
+			)
+		}
+		return buildHTMLOnlyPlan(shot, visual, signals, durationSec)
 	default:
-		return buildHTMLOnlyPlan(shot, visual, signals)
+		if caps.HTMLAvailable {
+			return buildHTMLOnlyPlan(shot, visual, signals, durationSec)
+		}
+		return buildPlaceholderPlan(
+			shot,
+			visual,
+			signals,
+			durationSec,
+			"no executable renderer is available for a default preview",
+			[]string{"html_provider_required", "placeholder_accuracy", "provider_availability"},
+		)
 	}
 }
 
@@ -118,7 +159,7 @@ func scoreShotGenerationSignals(shot model.ShotUnit, visual model.VisualPlan, pr
 	return signals
 }
 
-func buildHTMLOnlyPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals) model.ShotGenerationPlan {
+func buildHTMLOnlyPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int) model.ShotGenerationPlan {
 	asset := shotAssetNeed(shot.ID+"-html-render", "video", "base", model.AssetSourceHyperFrames, shot.ID, textLocks(shot, visual))
 	return model.ShotGenerationPlan{
 		ShotID:      shot.ID,
@@ -131,13 +172,13 @@ func buildHTMLOnlyPlan(shot model.ShotUnit, visual model.VisualPlan, signals sho
 			asset,
 		},
 		RenderInputs: map[string]interface{}{
-			"durationSec": shot.DurationSec,
+			"durationSec": durationSec,
 			"textLayers":  visual.TextLayers,
 			"screenText":  shot.ScreenText,
 		},
 		FusionPlan: model.FusionPlan{
 			ShotID:             shot.ID,
-			BaseLayer:          fusionLayer(asset, 0, float64(shot.DurationSec)),
+			BaseLayer:          fusionLayer(asset, 0, float64(durationSec)),
 			Assembler:          "hyperframes",
 			OutputArtifactKind: "shot_video",
 		},
@@ -145,7 +186,7 @@ func buildHTMLOnlyPlan(shot model.ShotUnit, visual model.VisualPlan, signals sho
 	}
 }
 
-func buildAIGCVideoPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals) model.ShotGenerationPlan {
+func buildAIGCVideoPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int) model.ShotGenerationPlan {
 	asset := shotAssetNeed(shot.ID+"-aigc-video", "video", "base", model.AssetSourceAIGCVideo, shot.ID, nil)
 	return model.ShotGenerationPlan{
 		ShotID:      shot.ID,
@@ -158,13 +199,13 @@ func buildAIGCVideoPlan(shot model.ShotUnit, visual model.VisualPlan, signals sh
 			asset,
 		},
 		RenderInputs: map[string]interface{}{
-			"durationSec":    shot.DurationSec,
+			"durationSec":    durationSec,
 			"prompt":         aigcPrompt(shot, visual, false),
 			"negativePrompt": "",
 		},
 		FusionPlan: model.FusionPlan{
 			ShotID:             shot.ID,
-			BaseLayer:          fusionLayer(asset, 0, float64(shot.DurationSec)),
+			BaseLayer:          fusionLayer(asset, 0, float64(durationSec)),
 			Assembler:          "aigc_video_generator",
 			OutputArtifactKind: "shot_video",
 		},
@@ -172,15 +213,23 @@ func buildAIGCVideoPlan(shot model.ShotUnit, visual model.VisualPlan, signals sh
 	}
 }
 
-func buildAIGCImageThenHyperFramesPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, htmlAvailable bool) model.ShotGenerationPlan {
+func buildAIGCImageThenHyperFramesPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int, htmlAvailable bool) model.ShotGenerationPlan {
 	base := shotAssetNeed(shot.ID+"-aigc-image", "image", "base", model.AssetSourceAIGCImage, shot.ID, nil)
 	required := []model.ShotAssetNeed{base}
 	secondaryTools := []string{}
+	overlayLayers := []model.FusionLayer{}
 	assembler := "image_to_video"
 	if htmlAvailable {
 		html := shotAssetNeed(shot.ID+"-html-animation", "video", "animation", model.AssetSourceHyperFrames, shot.ID, textLocks(shot, visual))
 		required = append(required, html)
 		secondaryTools = append(secondaryTools, "hyperframes_renderer")
+		overlayLayers = append(overlayLayers, model.FusionLayer{
+			ID:          html.ID,
+			Kind:        "html_overlay",
+			Role:        "animation_overlay",
+			StartSec:    0,
+			DurationSec: float64(durationSec),
+		})
 		assembler = "hyperframes"
 	}
 	return model.ShotGenerationPlan{
@@ -193,13 +242,15 @@ func buildAIGCImageThenHyperFramesPlan(shot model.ShotUnit, visual model.VisualP
 		RiskLevel:      "medium",
 		RequiredAssets: required,
 		RenderInputs: map[string]interface{}{
-			"durationSec": shot.DurationSec,
-			"prompt":      aigcPrompt(shot, visual, false),
+			"durationSec": durationSec,
+			"prompt":      aigcPrompt(shot, visual, signals.HTMLScore > 0),
 			"textLayers":  visual.TextLayers,
 		},
 		FusionPlan: model.FusionPlan{
 			ShotID:             shot.ID,
-			BaseLayer:          fusionLayer(base, 0, float64(shot.DurationSec)),
+			BaseLayer:          fusionLayer(base, 0, float64(durationSec)),
+			OverlayLayers:      overlayLayers,
+			TimedMedia:         timedTextLayers(durationSec, visual),
 			Assembler:          assembler,
 			OutputArtifactKind: "shot_video",
 		},
@@ -207,7 +258,7 @@ func buildAIGCImageThenHyperFramesPlan(shot model.ShotUnit, visual model.VisualP
 	}
 }
 
-func buildHybridPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals) model.ShotGenerationPlan {
+func buildHybridPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int) model.ShotGenerationPlan {
 	base := shotAssetNeed(shot.ID+"-aigc-background-video", "video", "base", model.AssetSourceAIGCVideo, shot.ID, nil)
 	overlay := shotAssetNeed(shot.ID+"-html-overlay", "video", "overlay", model.AssetSourceHyperFrames, shot.ID, textLocks(shot, visual))
 	return model.ShotGenerationPlan{
@@ -223,7 +274,7 @@ func buildHybridPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotG
 			overlay,
 		},
 		RenderInputs: map[string]interface{}{
-			"durationSec":    shot.DurationSec,
+			"durationSec":    durationSec,
 			"prompt":         aigcPrompt(shot, visual, true),
 			"textLayers":     visual.TextLayers,
 			"negativePrompt": noReadableTextPrompt(),
@@ -235,16 +286,16 @@ func buildHybridPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotG
 				Kind:        "video",
 				Role:        "aigc_background",
 				StartSec:    0,
-				DurationSec: float64(shot.DurationSec),
+				DurationSec: float64(durationSec),
 			},
 			OverlayLayers: []model.FusionLayer{{
 				ID:          overlay.ID,
 				Kind:        "html_overlay",
 				Role:        "exact_text_overlay",
 				StartSec:    0,
-				DurationSec: float64(shot.DurationSec),
+				DurationSec: float64(durationSec),
 			}},
-			TimedMedia:         timedTextLayers(shot, visual),
+			TimedMedia:         timedTextLayers(durationSec, visual),
 			Assembler:          "ffmpeg_compositor",
 			OutputArtifactKind: "composited_shot_video",
 		},
@@ -252,7 +303,7 @@ func buildHybridPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotG
 	}
 }
 
-func buildUserAssetPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals) model.ShotGenerationPlan {
+func buildUserAssetPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int) model.ShotGenerationPlan {
 	assetID := shot.ID + "-user-asset"
 	if len(visual.Props) > 0 && strings.TrimSpace(visual.Props[0].ID) != "" {
 		assetID = visual.Props[0].ID
@@ -269,12 +320,13 @@ func buildUserAssetPlan(shot model.ShotUnit, visual model.VisualPlan, signals sh
 			asset,
 		},
 		RenderInputs: map[string]interface{}{
+			"durationSec":  durationSec,
 			"sceneSummary": shot.SceneSummary,
 			"props":        visual.Props,
 		},
 		FusionPlan: model.FusionPlan{
 			ShotID:             shot.ID,
-			BaseLayer:          fusionLayer(asset, 0, float64(shot.DurationSec)),
+			BaseLayer:          fusionLayer(asset, 0, float64(durationSec)),
 			Assembler:          "user_asset_resolver",
 			OutputArtifactKind: "shot_asset_reference",
 		},
@@ -282,14 +334,14 @@ func buildUserAssetPlan(shot model.ShotUnit, visual model.VisualPlan, signals sh
 	}
 }
 
-func buildPlaceholderPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals) model.ShotGenerationPlan {
+func buildPlaceholderPlan(shot model.ShotUnit, visual model.VisualPlan, signals shotGenerationSignals, durationSec int, reason string, reviewFocus []string) model.ShotGenerationPlan {
 	need := shotAssetNeed(shot.ID+"-external-generation", "video", "base", model.AssetSourceExternalGeneration, shot.ID, nil)
 	placeholder := shotAssetNeed(shot.ID+"-placeholder-preview", "video", "preview", model.AssetSourcePlaceholder, shot.ID, nil)
 	return model.ShotGenerationPlan{
 		ShotID:      shot.ID,
 		Mode:        model.GenerationModePlaceholderPreview,
-		PrimaryTool: "hyperframes_renderer",
-		Reason:      planReason("AIGC is required but no video provider is available", signals.AIGCReasons, signals.HTMLReasons),
+		PrimaryTool: "placeholder_renderer",
+		Reason:      planReason(reason, signals.AIGCReasons, signals.HTMLReasons),
 		Confidence:  0.62,
 		RiskLevel:   "high",
 		RequiredAssets: []model.ShotAssetNeed{
@@ -297,21 +349,21 @@ func buildPlaceholderPlan(shot model.ShotUnit, visual model.VisualPlan, signals 
 			placeholder,
 		},
 		RenderInputs: map[string]interface{}{
-			"durationSec": shot.DurationSec,
-			"prompt":      aigcPrompt(shot, visual, false),
+			"durationSec": durationSec,
+			"prompt":      aigcPrompt(shot, visual, signals.HTMLScore > 0),
 			"textLayers":  visual.TextLayers,
 		},
 		FusionPlan: model.FusionPlan{
 			ShotID:             shot.ID,
-			BaseLayer:          fusionLayer(placeholder, 0, float64(shot.DurationSec)),
+			BaseLayer:          fusionLayer(placeholder, 0, float64(durationSec)),
 			Assembler:          "placeholder_renderer",
 			OutputArtifactKind: "preview_video",
 		},
 		FallbackPlan: &model.ShotGenerationFallback{
 			Mode:   model.GenerationModePlaceholderPreview,
-			Reason: "external AIGC video generation is required before final assembly",
+			Reason: reason,
 		},
-		ReviewFocus: []string{"external_generation_needed", "placeholder_accuracy", "provider_availability"},
+		ReviewFocus: reviewFocus,
 	}
 }
 
@@ -339,23 +391,38 @@ func fusionLayer(asset model.ShotAssetNeed, startSec, durationSec float64) model
 	}
 }
 
-func timedTextLayers(shot model.ShotUnit, visual model.VisualPlan) []model.TimedMediaLayer {
+func resolveShotDuration(shot model.ShotUnit, visual model.VisualPlan) int {
+	switch {
+	case shot.DurationSec > 0:
+		return shot.DurationSec
+	case visual.Canvas.DurationSec > 0:
+		return visual.Canvas.DurationSec
+	default:
+		return model.DefaultShotPolicy().PreferDurationSec
+	}
+}
+
+func timedTextLayers(durationSec int, visual model.VisualPlan) []model.TimedMediaLayer {
 	layers := make([]model.TimedMediaLayer, 0, len(visual.TextLayers))
 	for index, layer := range visual.TextLayers {
 		startSec := layer.StartSec
-		durationSec := layer.EndSec - layer.StartSec
-		if durationSec <= 0 {
-			durationSec = float64(shot.DurationSec) - startSec
+		if startSec < 0 {
+			startSec = 0
 		}
-		if durationSec < 0 {
-			durationSec = 0
+		endSec := layer.EndSec
+		if endSec <= 0 || endSec > float64(durationSec) {
+			endSec = float64(durationSec)
+		}
+		layerDurationSec := endSec - startSec
+		if layerDurationSec < 0 {
+			layerDurationSec = 0
 		}
 		layers = append(layers, model.TimedMediaLayer{
 			ID:          layer.ID,
 			Kind:        "text",
 			Role:        layer.Role,
 			StartSec:    startSec,
-			DurationSec: durationSec,
+			DurationSec: layerDurationSec,
 			TrackIndex:  index,
 			Fit:         "contain",
 			Opacity:     1,
@@ -399,6 +466,12 @@ func aigcPrompt(shot model.ShotUnit, visual model.VisualPlan, banText bool) stri
 	for _, character := range visual.Characters {
 		parts = append(parts, character.Description, character.Motion, character.Emotion)
 	}
+	if banText {
+		exactTexts := exactTextValues(shot, visual)
+		for i := range parts {
+			parts[i] = removeExactTexts(parts[i], exactTexts)
+		}
+	}
 	prompt := strings.Join(nonEmptyStrings(parts), "。")
 	if banText {
 		if prompt != "" {
@@ -413,6 +486,28 @@ func noReadableTextPrompt() string {
 	return "禁止生成任何可读文字。禁止生成中文字符。禁止生成英文单词。禁止生成 UI 文字。禁止生成字幕、标签、水印"
 }
 
+func exactTextValues(shot model.ShotUnit, visual model.VisualPlan) []string {
+	values := make([]string, 0, len(shot.ScreenText)+len(visual.TextLayers))
+	for _, text := range shot.ScreenText {
+		if strings.TrimSpace(text) != "" {
+			values = append(values, strings.TrimSpace(text))
+		}
+	}
+	for _, layer := range visual.TextLayers {
+		if (layer.MustBeExact || exactTextRole(layer.Role)) && strings.TrimSpace(layer.Text) != "" {
+			values = append(values, strings.TrimSpace(layer.Text))
+		}
+	}
+	return uniqueStrings(values)
+}
+
+func removeExactTexts(value string, exactTexts []string) string {
+	for _, text := range exactTexts {
+		value = strings.ReplaceAll(value, text, "")
+	}
+	return strings.Trim(value, " \t\n\r，,。;；:：")
+}
+
 func userAssetReason(shot model.ShotUnit, visual model.VisualPlan) string {
 	values := []string{shot.SceneSummary, shot.MainAction, shot.Title}
 	for _, prop := range visual.Props {
@@ -420,7 +515,7 @@ func userAssetReason(shot model.ShotUnit, visual model.VisualPlan) string {
 	}
 	combined := strings.ToLower(strings.Join(values, " "))
 	switch {
-	case containsAny(combined, "上传", "user upload", "uploaded", "客户"):
+	case containsAny(combined, "上传", "user upload", "uploaded", "客户提供", "提供素材", "提供的素材", "provided asset", "user-provided"):
 		return "mentions uploaded or customer-provided asset"
 	case containsAny(combined, "logo", "品牌", "brand"):
 		return "mentions logo or brand asset"

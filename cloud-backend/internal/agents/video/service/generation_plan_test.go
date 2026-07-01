@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -133,6 +134,172 @@ func TestBuildShotGenerationPlanMissingVideoProviderCreatesExternalNeed(t *testi
 	}
 	if generationPlan.FallbackPlan == nil || generationPlan.FallbackPlan.Mode != model.GenerationModePlaceholderPreview {
 		t.Fatalf("fallback plan = %+v, want placeholder preview", generationPlan.FallbackPlan)
+	}
+}
+
+func TestBuildShotGenerationPlanExactTextAIGCWithoutHybridUsesPlaceholder(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_06", DurationSec: 7, ScreenText: []string{"增长 42%"}, MainAction: "角色穿过办公室"}
+	plan := model.VisualPlan{
+		Background: model.BackgroundSpec{Description: "办公室数据场景", RequiresAIGC: true},
+		Characters: []model.CharacterVisualSpec{{
+			ID:     "host",
+			Motion: "walks through office",
+		}},
+		TextLayers: []model.TextLayerSpec{{
+			ID:          "txt-1",
+			Text:        "增长 42%",
+			Role:        model.TextRoleDataText,
+			MustBeExact: true,
+		}},
+	}
+	pref := model.DefaultRenderPreference()
+	pref.AllowHybridRender = false
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, pref, RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+	if generationPlan.Mode == model.GenerationModeAIGCVideo {
+		t.Fatalf("mode = %q, exact text with AIGC must not use pure AIGC video", generationPlan.Mode)
+	}
+	if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)
+	}
+}
+
+func TestBuildShotGenerationPlanExactTextAIGCWithoutHTMLUsesPlaceholder(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_07", DurationSec: 7, ScreenText: []string{"增长 42%"}, MainAction: "角色穿过办公室"}
+	plan := model.VisualPlan{
+		Background: model.BackgroundSpec{Description: "办公室数据场景", RequiresAIGC: true},
+		Characters: []model.CharacterVisualSpec{{
+			ID:     "host",
+			Motion: "walks through office",
+		}},
+		TextLayers: []model.TextLayerSpec{{
+			ID:          "txt-1",
+			Text:        "增长 42%",
+			Role:        model.TextRoleDataText,
+			MustBeExact: true,
+		}},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: false})
+
+	if generationPlan.Mode == model.GenerationModeAIGCVideo {
+		t.Fatalf("mode = %q, exact text with unavailable HTML must not use pure AIGC video", generationPlan.Mode)
+	}
+	if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)
+	}
+}
+
+func TestBuildShotGenerationPlanHTMLOnlyWithoutHTMLUsesPlaceholder(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_08", DurationSec: 6, ScreenText: []string{"增长 42%"}}
+	plan := model.VisualPlan{
+		TextLayers: []model.TextLayerSpec{{
+			ID:          "txt-1",
+			Text:        "增长 42%",
+			Role:        model.TextRoleDataText,
+			MustBeExact: true,
+		}},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: false})
+
+	if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)
+	}
+}
+
+func TestBuildShotGenerationPlanDefaultPreviewWithoutHTMLUsesPlaceholder(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_08B", DurationSec: 6}
+
+	generationPlan := BuildShotGenerationPlan(shot, model.VisualPlan{}, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: false})
+
+	if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)
+	}
+	if generationPlan.PrimaryTool == "hyperframes_renderer" {
+		t.Fatalf("primary tool = %q, HyperFrames is unavailable", generationPlan.PrimaryTool)
+	}
+}
+
+func TestBuildShotGenerationPlanUsesCanvasDurationWhenShotDurationMissing(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_09", ScreenText: []string{"增长 42%"}}
+	plan := model.VisualPlan{
+		Canvas: model.CanvasSpec{DurationSec: 9},
+		TextLayers: []model.TextLayerSpec{{
+			ID:          "txt-1",
+			Text:        "增长 42%",
+			Role:        model.TextRoleDataText,
+			MustBeExact: true,
+		}},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+	if generationPlan.FusionPlan.BaseLayer.DurationSec != 9 {
+		t.Fatalf("base duration = %v, want 9", generationPlan.FusionPlan.BaseLayer.DurationSec)
+	}
+	if generationPlan.RenderInputs["durationSec"] != 9 {
+		t.Fatalf("render duration = %#v, want 9", generationPlan.RenderInputs["durationSec"])
+	}
+}
+
+func TestBuildShotGenerationPlanHybridPromptExcludesExactText(t *testing.T) {
+	shot := model.ShotUnit{
+		ID:           "SHOT_10",
+		DurationSec:  7,
+		SceneSummary: "办公室大屏展示增长 42%",
+		ScreenText:   []string{"增长 42%"},
+	}
+	plan := model.VisualPlan{
+		Background: model.BackgroundSpec{Description: "办公室背景墙出现增长 42%", RequiresAIGC: true},
+		TextLayers: []model.TextLayerSpec{{
+			ID:          "txt-1",
+			Text:        "增长 42%",
+			Role:        model.TextRoleDataText,
+			MustBeExact: true,
+		}},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+	prompt, ok := generationPlan.RenderInputs["prompt"].(string)
+	if !ok {
+		t.Fatalf("prompt = %#v, want string", generationPlan.RenderInputs["prompt"])
+	}
+	if strings.Contains(prompt, "增长 42%") {
+		t.Fatalf("prompt %q contains exact text that should stay in HTML overlay", prompt)
+	}
+	if !strings.Contains(prompt, "禁止生成任何可读文字") {
+		t.Fatalf("prompt %q missing no-readable-text guidance", prompt)
+	}
+}
+
+func TestBuildShotGenerationPlanAIGCImageHyperFramesAddsOverlayLayer(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_11", DurationSec: 6}
+	plan := model.VisualPlan{
+		Background: model.BackgroundSpec{Description: "静态未来办公室背景", RequiresAIGC: true},
+	}
+
+	generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+	if generationPlan.Mode != model.GenerationModeAIGCImageThenHyperFrames {
+		t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModeAIGCImageThenHyperFrames)
+	}
+	if len(generationPlan.FusionPlan.OverlayLayers) == 0 {
+		t.Fatalf("overlay layers = %+v, want HyperFrames overlay", generationPlan.FusionPlan.OverlayLayers)
+	}
+	if generationPlan.FusionPlan.OverlayLayers[0].Kind != "html_overlay" {
+		t.Fatalf("overlay layer = %+v, want html_overlay", generationPlan.FusionPlan.OverlayLayers[0])
+	}
+}
+
+func TestBuildShotGenerationPlanCustomerMentionAloneDoesNotRouteToUserAsset(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_12", DurationSec: 5, SceneSummary: "客户在会议中讨论年度预算"}
+
+	generationPlan := BuildShotGenerationPlan(shot, model.VisualPlan{}, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+
+	if generationPlan.Mode == model.GenerationModeExternalOrUserAsset {
+		t.Fatalf("mode = %q, bare customer mention must not route to user asset", generationPlan.Mode)
 	}
 }
 
