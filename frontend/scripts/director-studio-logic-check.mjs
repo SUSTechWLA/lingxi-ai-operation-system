@@ -1034,6 +1034,26 @@ try {
       metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_result', assetType: 'image', tags: ['manual_shot_upload', 'shot_storyboard'] },
     },
     {
+      id: 'shot-generation-plan',
+      kind: 'SHOT_GENERATION_PLAN',
+      name: 'Shot generation plan',
+      status: 'valid',
+      owner: '策略规划',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'inline://shot-generation-plan',
+      metadata: {
+        artifactType: 'shot_generation_plan',
+        inlineContent: {
+          shotGenerationPlans: [
+            { shotId: 'SHOT_01', mode: 'hybrid_aigc_bg_html_overlay', reason: '需要 AIGC 背景视频配合 HyperFrames 精确文字层。', riskLevel: 'medium' },
+            { shotId: 'SHOT_02', mode: 'html_only', reason: '纯文字和图表动画可由 HyperFrames 完成。', riskLevel: 'low' },
+          ],
+        },
+      },
+    },
+    {
       id: 'shot-packet-2',
       kind: 'SHOT_REVIEW_PACKET',
       name: 'SHOT_02 审核包',
@@ -1052,13 +1072,20 @@ try {
   assert.equal(shotReviewGroups[0].narrationText, '佛得角是西非岛国。')
   assert.deepEqual(shotReviewGroups[0].referenceRoles, ['character'])
   assert.deepEqual(shotReviewGroups[0].artifactCounts, { total: 7, references: 1, media: 2, reviewPackets: 1 })
-  assert.deepEqual(shotReviewGroups[0].slots.map((slot) => slot.kind), ['prompt', 'reference', 'storyboard', 'video'])
+  assert.deepEqual(shotReviewGroups[0].slots.map((slot) => slot.kind), ['prompt', 'reference', 'storyboard', 'base-media', 'overlay', 'video'])
+  assert.deepEqual(shotReviewGroups[0].generationStrategy, {
+    mode: 'hybrid_aigc_bg_html_overlay',
+    label: 'Hybrid',
+    reason: '需要 AIGC 背景视频配合 HyperFrames 精确文字层。',
+    riskLevel: 'medium',
+  })
   assert.equal(shotReviewGroups[0].slots.find((slot) => slot.kind === 'prompt')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'), false)
-  assert.equal(shotReviewGroups[0].slots.find((slot) => slot.kind === 'video')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'), false)
+  assert.equal(shotReviewGroups[0].slots.find((slot) => slot.kind === 'base-media')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'), false)
   assert.equal(unresolvedMaterialDependencyCount(shotReviewGroups), 0)
   assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'storyboard')?.artifacts.some((artifact) => artifact.id === 'shot-storyboard-result-1'))
   assert.equal(shotReviewGroups[1].shotId, 'SHOT_02')
   assert.equal(shotReviewGroups[1].status, 'valid')
+  assert.equal(shotReviewGroups[1].generationStrategy?.label, 'HyperFrames')
 
   assert.deepEqual(
     getArtifactViewerSelection('art-publish-copy-1', artifactsWithPublishCopy.find((artifact) => artifact.id === 'art-publish-copy-1')),

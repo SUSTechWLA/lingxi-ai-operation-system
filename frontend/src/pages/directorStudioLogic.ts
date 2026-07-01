@@ -647,9 +647,13 @@ export function getArtifactViewerSelection(
 
 export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): DirectorShotReviewGroup[] {
   const groups = new Map<string, DirectorArtifactRecord[]>()
+  const globalStrategyArtifacts: DirectorArtifactRecord[] = []
   for (const artifact of artifacts) {
     const shotId = shotIdForArtifact(artifact)
-    if (!shotId) continue
+    if (!shotId) {
+      if (artifactLooksLikeGenerationPlan(artifact)) globalStrategyArtifacts.push(artifact)
+      continue
+    }
     const list = groups.get(shotId) || []
     list.push(artifact)
     groups.set(shotId, list)
@@ -662,6 +666,7 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
       const references = shotArtifacts.filter(isShotReferenceArtifact)
       const media = shotArtifacts.filter(isShotMediaArtifact)
       const sourceArtifact = reviewPacket || shotArtifacts[0]
+      const strategyArtifacts = globalStrategyArtifacts.length > 0 ? [...shotArtifacts, ...globalStrategyArtifacts] : shotArtifacts
       return {
         shotId,
         status: aggregateShotStatus(shotArtifacts),
@@ -669,7 +674,7 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
         narrationText: shotNarrationText(sourceArtifact),
         visualText: shotVisualText(sourceArtifact),
         durationSec: shotDurationSec(sourceArtifact),
-        generationStrategy: shotGenerationStrategy(shotArtifacts),
+        generationStrategy: shotGenerationStrategy(strategyArtifacts),
         referenceRoles: uniqueStrings(references.map((artifact) => stringValue(artifact.metadata?.referenceRole) || stringValue(artifact.metadata?.role) || displayNameForArtifact(artifact.kind))),
         artifactCounts: {
           total: shotArtifacts.length,
