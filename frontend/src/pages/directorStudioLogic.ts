@@ -143,6 +143,28 @@ export interface ExternalGenerationGuideRequest {
   referenceImageLimit?: number
 }
 
+export interface ExternalGenerationReferenceForCopy {
+  id?: string
+  label?: string
+  role?: string
+  storageRef?: string
+  artifactId?: string
+  locks?: unknown
+}
+
+export interface ExternalGenerationCopyRequest extends ExternalGenerationGuideRequest {
+  requestId?: string
+  shotId?: string
+  prompt: string
+  negativePrompt?: string
+  references?: ExternalGenerationReferenceForCopy[]
+}
+
+export interface ExternalGenerationCopyOptions {
+  uploadSlotLabel?: string
+  uploadActionLabel?: string
+}
+
 export interface DirectorCreationProfileSummary {
   profileId?: string
   label: string
@@ -224,6 +246,83 @@ export function externalGenerationGuideSteps(request: ExternalGenerationGuideReq
     `每个 shot 单独生成，尽量不要引用其他 shot 的未确认画面；如果需要转场，把转场放在本 shot 结尾。`,
     `生成完成后导出${kindLabel}文件，回到本页点击“上传结果”，系统会登记到素材库并关联当前 shot。`,
   ]
+}
+
+export function buildExternalGenerationCopyPackage(
+  request: ExternalGenerationCopyRequest,
+  options: ExternalGenerationCopyOptions = {},
+): string {
+  const shotLabel = request.shotId || '当前 shot'
+  const kindLabel = request.kind === 'image' ? '图片' : '视频'
+  const uploadSlotLabel = options.uploadSlotLabel || (request.kind === 'image' ? '故事板/参考图' : '视频')
+  const uploadActionLabel = options.uploadActionLabel || '上传结果'
+  const lines = [
+    `# ${shotLabel} ${kindLabel}生成包`,
+    '',
+  ]
+  if (request.requestId) lines.push(`请求 ID: ${request.requestId}`)
+  if (request.shotId) lines.push(`Shot: ${request.shotId}`)
+  lines.push(`类型: ${kindLabel}`)
+  lines.push(`上传位置: 回到当前 shot 的「${uploadSlotLabel}」槽，点击“${uploadActionLabel}”`)
+  lines.push('')
+  lines.push('## 生成参数')
+  const targetLines = externalGenerationTargetLines(request)
+  if (targetLines.length) {
+    lines.push(...targetLines.map((line) => `- ${line}`))
+  } else {
+    lines.push('- 使用外部平台默认参数；如平台支持，请保持 16:9。')
+  }
+  if (request.promptCharLimit) lines.push(`- Prompt 字数上限: ${request.promptCharLimit}`)
+  if (request.referenceImageLimit) lines.push(`- 参考图上限: ${request.referenceImageLimit}`)
+  lines.push('')
+  lines.push('## Prompt')
+  lines.push(request.prompt.trim())
+  if (request.negativePrompt?.trim()) {
+    lines.push('')
+    lines.push('## Negative Prompt')
+    lines.push(request.negativePrompt.trim())
+  }
+  const references = (request.references || []).filter((ref) => ref.storageRef)
+  lines.push('')
+  lines.push('## 参考图')
+  if (references.length) {
+    references.forEach((ref, index) => {
+      const label = ref.label || ref.id || `参考图 ${index + 1}`
+      lines.push(`${index + 1}. ${label}`)
+      if (ref.id) lines.push(`   - ID: ${ref.id}`)
+      if (ref.role) lines.push(`   - 用途: ${ref.role}`)
+      const locks = normalizeStringList(ref.locks)
+      if (locks.length) lines.push(`   - 锁定: ${locks.join('、')}`)
+      if (ref.storageRef) lines.push(`   - 文件: ${ref.storageRef}`)
+    })
+  } else {
+    lines.push('- 无参考图；直接使用 Prompt 生成。')
+  }
+  lines.push('')
+  lines.push('## 操作')
+  externalGenerationGuideSteps(request).forEach((step, index) => {
+    lines.push(`${index + 1}. ${step}`)
+  })
+  return lines.join('\n')
+}
+
+export function externalGenerationReferenceCopyText(reference: ExternalGenerationReferenceForCopy, index?: number): string {
+  const title = reference.label || reference.id || reference.storageRef || '未命名参考图'
+  const lines = [`参考图${index ? ` ${index}` : ''}: ${title}`]
+  if (reference.id) lines.push(`ID: ${reference.id}`)
+  if (reference.role) lines.push(`用途: ${reference.role}`)
+  const locks = normalizeStringList(reference.locks)
+  if (locks.length) lines.push(`锁定: ${locks.join('、')}`)
+  if (reference.storageRef) lines.push(`文件: ${reference.storageRef}`)
+  return lines.join('\n')
+}
+
+function externalGenerationTargetLines(request: ExternalGenerationGuideRequest): string[] {
+  return [
+    request.target?.aspectRatio ? `画幅: ${request.target.aspectRatio}` : '',
+    request.target?.resolution ? `分辨率: ${request.target.resolution}` : '',
+    request.target?.durationSec ? `时长: ${request.target.durationSec}s` : '',
+  ].filter(Boolean)
 }
 
 function creationProfileLabel(profileId: string | undefined): string {

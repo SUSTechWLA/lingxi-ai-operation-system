@@ -12,6 +12,7 @@ import {
   FiCpu,
   FiDownload,
   FiEdit3,
+  FiExternalLink,
   FiFileText,
   FiFolder,
   FiHardDrive,
@@ -72,6 +73,7 @@ import {
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
+  buildExternalGenerationCopyPackage,
   buildPublishCopies,
   buildShotReviewGroups,
   deriveNextAction,
@@ -79,6 +81,7 @@ import {
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
   externalGenerationGuideSteps,
+  externalGenerationReferenceCopyText,
   findFinalVideoArtifact,
   findPublishCopyArtifact,
   getArtifactViewerSelection,
@@ -1301,7 +1304,9 @@ function ShotAssetSlotCard({
     .map((artifact) => promptPreviews[artifact.id]?.request)
     .filter((request): request is ExternalGenerationRequestContent => Boolean(request))
   const copyValue = requests.length
-    ? requests.map((request) => request.prompt).join('\n\n---\n\n')
+    ? requests.map((request) => buildExternalGenerationCopyPackage(request, {
+      uploadSlotLabel: externalRequestUploadSlotLabel(slot, request),
+    })).join('\n\n---\n\n')
     : slot.artifacts.map(artifactToCopyText).join('\n\n')
   const canUpload = Boolean(slot.uploadKind)
   const accept = slot.uploadKind === 'video' ? 'video/*' : 'image/*'
@@ -1322,7 +1327,7 @@ function ShotAssetSlotCard({
         <StatusBadge status={slot.status} label={slot.kind === 'prompt' ? '可复制' : slot.status === 'review' && canUpload ? '可回填' : undefined} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        {copyValue ? <CopyButton value={copyValue} label={slot.kind === 'prompt' ? '复制提示词' : '复制信息'} /> : null}
+        {copyValue ? <CopyButton value={copyValue} label={requests.length ? '复制生成包' : slot.kind === 'prompt' ? '复制提示词' : '复制信息'} /> : null}
         {canUpload ? (
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
@@ -1406,16 +1411,22 @@ function ShotExternalRequestCard({
   ].filter(Boolean).join(' / ')
   const accept = request.kind === 'video' ? 'video/*' : 'image/*'
   const guideSteps = externalGenerationGuideSteps(request)
+  const handoffPackage = buildExternalGenerationCopyPackage(request, {
+    uploadSlotLabel: externalRequestUploadSlotLabel(slot, request),
+  })
 
   return (
     <div className="rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
+          <div className="text-[11px] font-black text-primary-dark">外部生成交付单</div>
           <div className="truncate font-mono text-[11px] font-black text-primary-dark">{request.requestId}</div>
           <div className="mt-0.5 text-xs text-ink-muted">{request.kind === 'image' ? '图片生成请求' : '视频生成请求'}{targetText ? ` · ${targetText}` : ''}</div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <CopyButton value={handoffPackage} label="复制生成包" />
           <CopyButton value={request.prompt} label="复制 Prompt" />
+          {request.negativePrompt ? <CopyButton value={request.negativePrompt} label="复制负面提示" /> : null}
           {allowUpload ? (
             <label className={clsx(
               'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
@@ -1434,15 +1445,24 @@ function ShotExternalRequestCard({
           ) : null}
         </div>
       </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px] font-black text-primary-dark">
+        <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">1 复制生成包</span>
+        <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">2 外部生成</span>
+        <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">3 上传结果</span>
+      </div>
       <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-xs leading-5 text-ink ring-1 ring-line">{request.prompt}</pre>
+      {request.negativePrompt ? (
+        <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-black text-ink-soft">Negative Prompt</div>
+            <CopyButton value={request.negativePrompt} label="复制负面提示" />
+          </div>
+          <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.negativePrompt}</pre>
+        </div>
+      ) : null}
       {request.references.length ? (
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {request.references.map((ref) => (
-            <div key={`${ref.id}-${ref.storageRef}`} className="min-w-0 rounded-lg bg-white p-2 ring-1 ring-line">
-              <div className="truncate text-xs font-black text-ink">{ref.label || ref.id}</div>
-              <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={ref.storageRef}>{ref.storageRef}</div>
-            </div>
-          ))}
+          {request.references.map((ref, index) => <ExternalReferenceCard key={`${ref.id}-${ref.storageRef}`} reference={ref} index={index + 1} />)}
         </div>
       ) : null}
       <details className="mt-3">
@@ -1451,6 +1471,43 @@ function ShotExternalRequestCard({
           {guideSteps.map((step) => <li key={step}>{step}</li>)}
         </ol>
       </details>
+    </div>
+  )
+}
+
+function externalRequestUploadSlotLabel(slot: DirectorShotAssetSlot, request: ExternalGenerationRequestContent): string {
+  if (slot.uploadKind) return slot.label
+  return request.kind === 'video' ? '视频' : '故事板/参考图'
+}
+
+function ExternalReferenceCard({ reference, index }: { reference: ExternalGenerationReference; index: number }) {
+  const directHref = directMediaPreviewUrl(reference.storageRef)
+  return (
+    <div className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-line">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-xs font-black text-ink">{reference.label || reference.id}</div>
+          <div className="mt-1 text-[11px] text-ink-muted">{reference.role || 'reference'}</div>
+        </div>
+        <CopyButton value={externalGenerationReferenceCopyText(reference, index)} label="复制参考信息" />
+      </div>
+      {reference.locks?.length ? (
+        <div className="mt-2 line-clamp-2 text-[11px] text-ink-muted">锁定：{reference.locks.join('、')}</div>
+      ) : null}
+      <div className="mt-2 truncate font-mono text-[11px] text-ink-soft" title={reference.storageRef}>{reference.storageRef}</div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <CopyButton value={reference.storageRef} label="复制路径" />
+        {directHref ? (
+          <a
+            href={directHref}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+          >
+            <FiExternalLink /> 打开
+          </a>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -2005,6 +2062,7 @@ interface ExternalGenerationReference {
   role?: string
   storageRef: string
   artifactId?: string
+  locks?: string[]
 }
 
 interface ExternalGenerationRequestContent {
@@ -2043,6 +2101,10 @@ function ExternalGenerationRequestPanel({
     request.target?.durationSec ? `${request.target.durationSec}s` : '',
   ].filter(Boolean).join(' / ')
   const guideSteps = externalGenerationGuideSteps(request)
+  const handoffPackage = buildExternalGenerationCopyPackage(request, {
+    uploadSlotLabel: '素材依赖点',
+    uploadActionLabel: '上传回此依赖点',
+  })
 
   return (
     <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
@@ -2056,7 +2118,9 @@ function ExternalGenerationRequestPanel({
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge status="review" label="待用户回填" />
+          <CopyButton value={handoffPackage} label="复制生成包" />
           <CopyButton value={request.prompt} label="复制给外部网站" />
+          {request.negativePrompt ? <CopyButton value={request.negativePrompt} label="复制负面提示" /> : null}
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
             disabled && 'cursor-not-allowed opacity-50'
@@ -2071,6 +2135,14 @@ function ExternalGenerationRequestPanel({
               onChange={(event) => onUpload(event, request)}
             />
           </label>
+        </div>
+      </div>
+      <div className="mt-3 rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
+        <div className="text-xs font-black text-primary-dark">外部生成交付单</div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px] font-black text-primary-dark">
+          <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">1 复制生成包</span>
+          <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">2 外部生成</span>
+          <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">3 上传回填</span>
         </div>
       </div>
       <p className="mt-3 text-xs leading-5 text-ink-muted">
@@ -2096,13 +2168,7 @@ function ExternalGenerationRequestPanel({
       ) : null}
       {request.references.length ? (
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {request.references.slice(0, 6).map((ref) => (
-            <div key={`${ref.id}-${ref.storageRef}`} className="min-w-0 rounded-lg bg-background-card p-3 ring-1 ring-line">
-              <div className="truncate text-xs font-black text-ink">{ref.label || ref.id}</div>
-              <div className="mt-1 text-[11px] text-ink-muted">{ref.role || 'reference'}</div>
-              <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={ref.storageRef}>{ref.storageRef}</div>
-            </div>
-          ))}
+          {request.references.slice(0, 6).map((ref, index) => <ExternalReferenceCard key={`${ref.id}-${ref.storageRef}`} reference={ref} index={index + 1} />)}
         </div>
       ) : null}
       {message ? <p className="mt-3 text-xs font-semibold text-green-700">{message}</p> : null}
@@ -2162,6 +2228,7 @@ function referenceFromUnknown(value: unknown): ExternalGenerationReference | nul
     role: stringField(item.role) || undefined,
     storageRef,
     artifactId: stringField(item.artifactId) || undefined,
+    locks: stringListField(item.locks),
   }
 }
 
@@ -2185,6 +2252,18 @@ function stringField(value: unknown): string {
 
 function numberField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function stringListField(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    const items = value.map((item) => stringField(item)).filter(Boolean)
+    return items.length ? items : undefined
+  }
+  if (typeof value === 'string') {
+    const items = value.split(/[,\n，、]+/u).map((item) => item.trim()).filter(Boolean)
+    return items.length ? items : undefined
+  }
+  return undefined
 }
 
 function safeLocalUploadId(value: string): string {

@@ -53,7 +53,9 @@ try {
     reviewStatusLabel,
     reviewOutputText,
     buildDirectorTraceNodes,
+    buildExternalGenerationCopyPackage,
     creationProfileSummary,
+    externalGenerationReferenceCopyText,
     externalGenerationGuideSteps,
     timeWindowPlanSummary,
     traceNodeHasError,
@@ -1441,6 +1443,58 @@ try {
   assert.ok(videoGuideSteps.some((step) => step.includes('每个 shot 单独生成') && step.includes('转场放在本 shot 结尾')))
   assert.ok(videoGuideSteps.some((step) => step.includes('上传结果') && step.includes('素材库')))
 
+  const externalVideoRequest = {
+    requestId: 'extgen_video_SHOT_01',
+    kind: 'video',
+    shotId: 'SHOT_01',
+    prompt: '独立生成 8 秒非写实动画视频，地图上突出佛得角群岛。',
+    negativePrompt: '禁止真人写实、禁止水印、禁止文字乱码。',
+    references: [
+      {
+        id: 'keyframe_SHOT_01',
+        label: '首帧/关键帧',
+        role: 'keyframe',
+        storageRef: 'local://projects/vp-1/artifacts/keyframe-shot-01/hash/keyframe.png',
+        locks: ['起始构图', '主体站位'],
+      },
+      {
+        id: 'scene_cape_verde',
+        label: '佛得角地图风格',
+        role: 'scene',
+        storageRef: 'local://projects/vp-1/artifacts/scene-ref/hash/scene.png',
+      },
+    ],
+    target: { durationSec: 8, aspectRatio: '16:9', resolution: '1920x1080' },
+    promptCharLimit: 2000,
+    referenceImageLimit: 6,
+  }
+  const handoffPackage = buildExternalGenerationCopyPackage(externalVideoRequest, {
+    uploadSlotLabel: '视频',
+  })
+  assert.match(handoffPackage, /^# SHOT_01 视频生成包/m)
+  assert.ok(handoffPackage.includes('请求 ID: extgen_video_SHOT_01'))
+  assert.ok(handoffPackage.includes('画幅: 16:9'))
+  assert.ok(handoffPackage.includes('分辨率: 1920x1080'))
+  assert.ok(handoffPackage.includes('时长: 8s'))
+  assert.ok(handoffPackage.includes('## Prompt'))
+  assert.ok(handoffPackage.includes('独立生成 8 秒非写实动画视频'))
+  assert.ok(handoffPackage.includes('## Negative Prompt'))
+  assert.ok(handoffPackage.includes('禁止真人写实'))
+  assert.ok(handoffPackage.includes('1. 首帧/关键帧'))
+  assert.ok(handoffPackage.includes('锁定: 起始构图、主体站位'))
+  assert.ok(handoffPackage.includes('local://projects/vp-1/artifacts/keyframe-shot-01/hash/keyframe.png'))
+  assert.ok(handoffPackage.includes('上传位置: 回到当前 shot 的「视频」槽，点击“上传结果”'))
+  assert.equal(
+    externalGenerationReferenceCopyText(externalVideoRequest.references[0], 1),
+    [
+      '参考图 1: 首帧/关键帧',
+      'ID: keyframe_SHOT_01',
+      '用途: keyframe',
+      '锁定: 起始构图、主体站位',
+      '文件: local://projects/vp-1/artifacts/keyframe-shot-01/hash/keyframe.png',
+    ].join('\n'),
+  )
+
   const pageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   assert.ok(
     pageSource.includes('card col-span-12 overflow-visible p-0'),
@@ -1462,6 +1516,10 @@ try {
     pageSource.includes('projectId: nextProject.id'),
     'dynamic agent run context must include the bound project id',
   )
+  assert.ok(pageSource.includes('外部生成交付单'), 'shot external request card should label the copyable handoff panel')
+  assert.ok(pageSource.includes('复制生成包'), 'shot external request card should copy the complete handoff package')
+  assert.ok(pageSource.includes('复制负面提示'), 'shot external request card should expose negative prompt copying')
+  assert.ok(pageSource.includes('复制参考信息'), 'shot external request card should expose reference copying')
 
   const apiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const agentRunTimeout = Number(apiSource.match(/const AGENT_RUN_REQUEST_TIMEOUT_MS = (\d+)/)?.[1] || 0)
