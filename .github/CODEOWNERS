@@ -1,0 +1,12 @@
+# Branch flow is enforced by GitHub rulesets and .github/workflows/branch-guard.yml.
+# CODEOWNERS keeps review routing path-based and explicit.
+
+* @SUSTechWLA
+
+/.github/ @SUSTechWLA
+/cloud-backend/ @SUSTechWLA
+/local-backend/ @SUSTechWLA
+/frontend/ @SUSTechWLA
+/hyperframes-render-service/ @SUSTechWLA
+/scripts/ @SUSTechWLA
+/docs/ @SUSTechWLA
