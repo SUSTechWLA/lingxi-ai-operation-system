@@ -82,6 +82,18 @@ export interface RenderReadiness {
   message?: string
 }
 
+export interface VideoStartConfig {
+  mode: 'aigc_shot' | 'voice_visual'
+  pipeline: 'wf-aigc-shot-video' | 'wf-guided-image-text-video'
+  skillName: string
+  skillVersion: string
+  workflowName: string
+  workflowVersion: string
+  creationRoute: 'cinematic_story' | 'talking_head'
+  descriptionPrefix: string
+  agentMessage: string
+}
+
 export type PublishPlatform = 'xiaohongshu' | 'bilibili'
 
 export interface PublishCopy {
@@ -1096,6 +1108,59 @@ export function projectPrimaryAction(input: {
     label: input.loading ? '启动中...' : '开始项目',
     disabled: !input.preflightCanStart || input.loading || !input.topic.trim(),
   }
+}
+
+export function buildVideoStartConfig(topic: string, durationSec: number): VideoStartConfig {
+  const cleanTopic = topic.trim()
+  const safeDurationSec = Number.isFinite(durationSec) && durationSec > 0 ? Math.round(durationSec) : 60
+  if (isCinematicVideoBrief(cleanTopic)) {
+    return {
+      mode: 'aigc_shot',
+      pipeline: 'wf-aigc-shot-video',
+      skillName: 'aigc-shot-video',
+      skillVersion: '1.0.0',
+      workflowName: 'aigc-shot-video-workflow',
+      workflowVersion: '1.0.0',
+      creationRoute: 'cinematic_story',
+      descriptionPrefix: '影视类镜头视频创作',
+      agentMessage: `请帮我创作一个${safeDurationSec}秒影视类镜头视频：${cleanTopic}`,
+    }
+  }
+  return {
+    mode: 'voice_visual',
+    pipeline: 'wf-guided-image-text-video',
+    skillName: 'video-creator',
+    skillVersion: 'v4.0',
+    workflowName: 'dynamic-agent-video-creation',
+    workflowVersion: 'v4.0',
+    creationRoute: 'talking_head',
+    descriptionPrefix: '口播类图文视频创作',
+    agentMessage: `请帮我创作一个${safeDurationSec}秒口播类图文视频：${cleanTopic}`,
+  }
+}
+
+function isCinematicVideoBrief(topic: string): boolean {
+  const normalized = topic.toLowerCase()
+  const cinematicTerms = [
+    '影视',
+    '电影',
+    '剧情',
+    '短片',
+    '角色',
+    '场景',
+    '道具',
+    '导演',
+    '分镜',
+    '镜头调度',
+    'cinematic',
+    'story film',
+    'short film',
+  ]
+  const talkingHeadTerms = ['口播', '知识', '讲解', '分享', '科普', 'talking head', 'voiceover']
+  const hasCinematic = cinematicTerms.some((term) => normalized.includes(term.toLowerCase()))
+  if (!hasCinematic) return false
+  const hasTalkingHead = talkingHeadTerms.some((term) => normalized.includes(term.toLowerCase()))
+  return !hasTalkingHead || normalized.includes('影视') || normalized.includes('剧情') || normalized.includes('cinematic')
 }
 
 export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | undefined {

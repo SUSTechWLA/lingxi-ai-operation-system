@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -264,6 +265,49 @@ func TestHandlerFailJobAdvancesNodeFailure(t *testing.T) {
 	}
 }
 
+func TestVideoPreflightUsesRequestedCinematicPipeline(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service := &fakePreflightService{
+		online: true,
+		supported: map[string]bool{
+			CommandHyperFramesProjectGenerate: true,
+			CommandHyperFramesSnapshot:        true,
+			CommandHyperFramesRender:          true,
+			CommandFFmpegProbe:                true,
+			CommandArtifactPackage:            true,
+		},
+	}
+	router := gin.New()
+	router.GET("/api/video/preflight", func(c *gin.Context) {
+		c.Set("userID", "user-1")
+		HandleVideoPreflight(service)(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/video/preflight?pipeline=wf-aigc-shot-video", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp PreflightResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Pipeline != "wf-aigc-shot-video" {
+		t.Fatalf("pipeline = %q, want requested cinematic pipeline", resp.Pipeline)
+	}
+	if !resp.CanStart || resp.Status != "passed" {
+		t.Fatalf("cinematic preflight should pass when required local tools exist: %#v", resp)
+	}
+	if !localToolAvailable(resp, CommandHyperFramesRender) {
+		t.Fatalf("cinematic preflight should expose render capability: %#v", resp.CapabilityMenu.LocalTools)
+	}
+	if len(resp.CapabilityMenu.Warnings) == 0 || !strings.Contains(resp.CapabilityMenu.Warnings[0], "影视") {
+		t.Fatalf("cinematic preflight should explain provider/external-generation boundary: %#v", resp.CapabilityMenu.Warnings)
+	}
+}
+
 type fakeRunnerService struct {
 	registerReq   RegisterRunnerRequest
 	claimRunnerID string
@@ -346,4 +390,26 @@ func (f *fakeNodeResultSink) OnProgress(_ context.Context, nodeID string, progre
 	f.progressStep = step
 	f.progressMsg = message
 	return nil
+}
+
+type fakePreflightService struct {
+	online    bool
+	supported map[string]bool
+}
+
+func (f *fakePreflightService) HasOnlineRunner(_ context.Context, _ string) (bool, error) {
+	return f.online, nil
+}
+
+func (f *fakePreflightService) SupportsCommand(_ context.Context, _ string, command string) (bool, error) {
+	return f.supported[NormalizeCommand(command)], nil
+}
+
+func localToolAvailable(resp PreflightResponse, command string) bool {
+	for _, item := range resp.CapabilityMenu.LocalTools {
+		if item.Command == command {
+			return item.Available
+		}
+	}
+	return false
 }

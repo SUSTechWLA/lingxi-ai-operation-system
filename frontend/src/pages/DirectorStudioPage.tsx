@@ -74,6 +74,7 @@ import {
   buildDirectorTraceNodes,
   buildPublishCopies,
   buildShotReviewGroups,
+  buildVideoStartConfig,
   deriveNextAction,
   displayNameForArtifact,
   downstreamStaleArtifacts,
@@ -170,6 +171,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
   const [optimisticRunningStageId, setOptimisticRunningStageId] = useState<string | undefined>()
   const [modelProviderStatus, setModelProviderStatus] = useState<ModelProviderStatus>({ state: 'checking', missing: [] })
+  const videoStartConfig = useMemo(() => buildVideoStartConfig(topic, durationSec), [durationSec, topic])
 
   const refreshModelProviderStatus = useCallback(async () => {
     setModelProviderStatus((current) => ({ ...current, state: 'checking' }))
@@ -234,6 +236,16 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [refreshRun])
 
   useEffect(() => {
+    let mounted = true
+    fetchVideoPreflight(videoStartConfig.pipeline)
+      .then((nextPreflight) => {
+        if (mounted) setPreflight(nextPreflight)
+      })
+      .catch(() => {})
+    return () => { mounted = false }
+  }, [videoStartConfig.pipeline])
+
+  useEffect(() => {
     if (activeNav === 'overview') {
       refreshModelProviderStatus().catch(() => {})
     }
@@ -282,24 +294,39 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     setErrorDetail(undefined)
     try {
       const cleanTopic = topic.trim()
+      const selectedStartConfig = buildVideoStartConfig(cleanTopic, durationSec)
+      const selectedPreflight = await fetchVideoPreflight(selectedStartConfig.pipeline).catch(() => null)
+      if (selectedPreflight) {
+        setPreflight(selectedPreflight)
+        if (!selectedPreflight.canStart) {
+          throw new Error(selectedPreflight.blockers?.[0]?.message || '当前视频类型的本地执行环境未就绪')
+        }
+      }
       const nextProject = await createVideoProject({
         name: cleanTopic.slice(0, 40) || '视频创作项目',
-        description: `一句话视频创作：${cleanTopic}`,
-        mode: 'voice_visual',
-        skillName: 'video-creator',
-        skillVersion: 'v4.0',
-        workflowName: 'dynamic-agent-video-creation',
-        workflowVersion: 'v4.0',
+        description: `${selectedStartConfig.descriptionPrefix}：${cleanTopic}`,
+        mode: selectedStartConfig.mode,
+        skillName: selectedStartConfig.skillName,
+        skillVersion: selectedStartConfig.skillVersion,
+        workflowName: selectedStartConfig.workflowName,
+        workflowVersion: selectedStartConfig.workflowVersion,
         generationMode: 'provider_api',
         aspectRatio: '16:9',
         targetDurationSec: durationSec,
         language: 'zh-CN',
-        config: { entry: 'director_studio', topic: cleanTopic, durationSec },
+        config: {
+          entry: 'director_studio',
+          topic: cleanTopic,
+          durationSec,
+          pipeline: selectedStartConfig.pipeline,
+          creationRoute: selectedStartConfig.creationRoute,
+          projectMode: selectedStartConfig.mode,
+        },
       })
       setProject({ ...nextProject, status: 'RUNNING' })
       const clientModelProviders = await buildClientModelProvidersForRun()
       const result = await startAgentRun({
-        message: `请帮我创作一个${durationSec}秒图文视频：${cleanTopic}`,
+        message: selectedStartConfig.agentMessage,
         domain: 'video_creation',
         mode: 'dynamic_agent',
         context: {
@@ -307,6 +334,9 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           topic: cleanTopic,
           durationSec,
           targetDurationSec: durationSec,
+          pipeline: selectedStartConfig.pipeline,
+          creationRoute: selectedStartConfig.creationRoute,
+          videoType: selectedStartConfig.mode,
           ...(clientModelProviders ? { modelProviders: clientModelProviders } : {}),
         },
       })
