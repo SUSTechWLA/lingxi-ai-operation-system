@@ -30,4 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   openExternal: (url) =>
     ipcRenderer.invoke('open-external', url),
+
+  openPath: (targetPath) =>
+    ipcRenderer.invoke('open-path', targetPath),
 })

@@ -29,6 +29,7 @@ export interface ElectronAPI {
     }>>
   }>
   openExternal: (url: string) => Promise<void>
+  openPath: (targetPath: string) => Promise<boolean>
   isElectron: boolean
 }
 
