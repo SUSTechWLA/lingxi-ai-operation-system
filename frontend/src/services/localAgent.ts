@@ -40,6 +40,52 @@ export interface LocalArtifactFileResponse extends LocalArtifactUploadResponse {
   contentBase64?: string
 }
 
+export interface LocalMCPProviderConfig {
+  id: string
+  label: string
+  endpoint: string
+  enabled: boolean
+}
+
+export interface LocalMCPTool {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
+export interface LocalMCPProviderStatus extends LocalMCPProviderConfig {
+  reachable: boolean
+  error?: string
+  tools?: LocalMCPTool[]
+}
+
+export interface JiMengSetupStatusResponse {
+  dreaminaAvailable: boolean
+  dreaminaVersion?: string
+  installCommand: string
+  installScriptUrl: string
+  logDir: string
+  mcpProvider?: LocalMCPProviderConfig
+  mcpProviders?: LocalMCPProviderStatus[]
+  defaultMcpEndpoint: string
+  mcpStartCommand: string
+}
+
+export interface JiMengInstallCLIResponse {
+  status: 'ok' | 'failed'
+  command: string
+  installScriptUrl: string
+  stdout?: string
+  stderr?: string
+  error?: string
+}
+
+export interface MCPToolCallResult {
+  content?: Array<{ type: string; text?: string }>
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
+}
+
 export const DEFAULT_LOCAL_AGENT_URL = 'http://127.0.0.1:18080'
 const configuredLocalAgentUrl = import.meta.env.VITE_LOCAL_AGENT_URL || import.meta.env.VITE_LOCAL_BACKEND_URL
 
@@ -187,6 +233,60 @@ export async function fetchLocalArtifactFile(params: {
     throw new Error(await errorMessage(response, '读取本地产物失败'))
   }
   return response.json() as Promise<LocalArtifactFileResponse>
+}
+
+export async function fetchJiMengSetupStatus(): Promise<JiMengSetupStatusResponse> {
+  const response = await fetch(localAgentUrl('/api/local/jimeng/setup/status'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取即梦设置失败'))
+  }
+  return response.json() as Promise<JiMengSetupStatusResponse>
+}
+
+export async function installJiMengCLI(): Promise<JiMengInstallCLIResponse> {
+  const response = await fetch(localAgentUrl('/api/local/jimeng/setup/install-cli'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: true }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '安装即梦 CLI 失败'))
+  }
+  return response.json() as Promise<JiMengInstallCLIResponse>
+}
+
+export async function registerJiMengMCP(endpoint?: string): Promise<{ status: string; provider: LocalMCPProviderConfig; mcpStartCommand: string }> {
+  const response = await fetch(localAgentUrl('/api/local/jimeng/setup/register-mcp'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '注册即梦 MCP 失败'))
+  }
+  return response.json() as Promise<{ status: string; provider: LocalMCPProviderConfig; mcpStartCommand: string }>
+}
+
+export async function loginJiMengHeadless(): Promise<MCPToolCallResult> {
+  const response = await fetch(localAgentUrl('/api/local/jimeng/setup/login-headless'), {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '获取即梦登录码失败'))
+  }
+  return response.json() as Promise<MCPToolCallResult>
+}
+
+export async function checkJiMengLogin(deviceCode: string, poll = 30): Promise<MCPToolCallResult> {
+  const response = await fetch(localAgentUrl('/api/local/jimeng/setup/check-login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_code: deviceCode, poll }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '检查即梦登录失败'))
+  }
+  return response.json() as Promise<MCPToolCallResult>
 }
 
 function localAgentUrl(path: string): string {

@@ -52,6 +52,7 @@ type PreflightBlocker struct {
 type preflightPipelineProfile struct {
 	id               string
 	requiredCommands []string
+	optionalCommands []string
 }
 
 // PreflightService provides capability checks for video pipeline startup.
@@ -102,6 +103,13 @@ func HandleVideoPreflight(svc PreflightService) gin.HandlerFunc {
 				})
 			}
 		}
+		for _, cmd := range profile.optionalCommands {
+			supported, err := svc.SupportsCommand(c.Request.Context(), uid, cmd)
+			resp.CapabilityMenu.LocalTools = append(resp.CapabilityMenu.LocalTools, LocalToolStatus{
+				Command:   cmd,
+				Available: err == nil && supported,
+			})
+		}
 
 		// 3. Composition runtime — HyperFrames is the only runtime for v1
 		resp.CapabilityMenu.CompositionRuntime = CompositionRuntime{
@@ -131,6 +139,7 @@ func preflightProfileForPipeline(raw string) preflightPipelineProfile {
 				"FFMPEG_PROBE",
 				"ARTIFACT_PACKAGE",
 			},
+			optionalCommands: []string{"LOCAL_MCP_TOOL_CALL"},
 		}
 	default:
 		return preflightPipelineProfile{

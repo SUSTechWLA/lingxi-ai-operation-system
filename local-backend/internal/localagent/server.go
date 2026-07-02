@@ -19,8 +19,9 @@ import (
 )
 
 type Config struct {
-	DataDir      string
-	CloudAPIBase string
+	DataDir       string
+	CloudAPIBase  string
+	CommandRunner CommandRunner
 }
 
 type Server struct {
@@ -140,6 +141,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/paths", s.handlePaths)
 	s.mux.HandleFunc("/api/local/logs", s.handleLogs)
 	s.mux.HandleFunc("/api/local/model-providers", s.handleModelProviders)
+	s.mux.HandleFunc("/api/local/mcp-providers", s.handleMCPProviders)
+	s.mux.HandleFunc("/api/local/mcp-providers/status", s.handleMCPProviderStatus)
+	s.mux.HandleFunc("/api/local/jimeng/setup/status", s.handleJiMengSetupStatus)
+	s.mux.HandleFunc("/api/local/jimeng/setup/install-cli", s.handleJiMengInstallCLI)
+	s.mux.HandleFunc("/api/local/jimeng/setup/register-mcp", s.handleJiMengRegisterMCP)
+	s.mux.HandleFunc("/api/local/jimeng/setup/login-headless", s.handleJiMengLoginHeadless)
+	s.mux.HandleFunc("/api/local/jimeng/setup/check-login", s.handleJiMengCheckLogin)
 	s.mux.HandleFunc("/api/local/artifacts", s.handleArtifacts)
 	s.mux.HandleFunc("/api/local/artifacts/", s.handleArtifactByID)
 	s.mux.HandleFunc("/api/local/projects/", s.handleProjectByID)

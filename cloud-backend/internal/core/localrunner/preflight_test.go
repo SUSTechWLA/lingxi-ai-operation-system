@@ -91,6 +91,9 @@ func TestHandleVideoPreflightAIGCShotProfileRequiresExternalImport(t *testing.T)
 	if !hasTool(body.CapabilityMenu.LocalTools, "LOCAL_FILE_IMPORT") {
 		t.Fatalf("expected LOCAL_FILE_IMPORT in capability menu: %+v", body.CapabilityMenu.LocalTools)
 	}
+	if !hasToolCommand(body.CapabilityMenu.LocalTools, "LOCAL_MCP_TOOL_CALL") {
+		t.Fatalf("expected optional LOCAL_MCP_TOOL_CALL in capability menu: %+v", body.CapabilityMenu.LocalTools)
+	}
 }
 
 func TestHandleVideoPreflightBlocksWhenAIGCShotImportMissing(t *testing.T) {
@@ -130,6 +133,15 @@ func withUser(userID string, next gin.HandlerFunc) gin.HandlerFunc {
 func hasTool(tools []LocalToolStatus, command string) bool {
 	for _, tool := range tools {
 		if tool.Command == command && tool.Available {
+			return true
+		}
+	}
+	return false
+}
+
+func hasToolCommand(tools []LocalToolStatus, command string) bool {
+	for _, tool := range tools {
+		if tool.Command == command {
 			return true
 		}
 	}

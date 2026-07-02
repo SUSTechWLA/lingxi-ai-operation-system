@@ -18,6 +18,7 @@ func TestIsValidCommand(t *testing.T) {
 		"ARTIFACT_PACKAGE",
 		"LOCAL_FILE_IMPORT",
 		"LOCAL_MEDIA_INDEX",
+		"LOCAL_MCP_TOOL_CALL",
 		"BUNDLE_EXTRACT",
 	}
 	for _, cmd := range valid {

@@ -59,11 +59,18 @@ import {
 import type { AuthUser } from '../services/auth'
 import {
   buildClientModelProvidersForRun,
+  checkJiMengLogin,
+  fetchJiMengSetupStatus,
   fetchLocalArtifactFile,
   fetchModelProviderSettings,
+  installJiMengCLI,
+  loginJiMengHeadless,
   openLocalPath,
+  registerJiMengMCP,
   uploadLocalArtifactFile,
+  type JiMengSetupStatusResponse,
   type LocalArtifactFileResponse,
+  type MCPToolCallResult,
   type ModelCapability,
   type ModelProviderSettingsResponse,
 } from '../services/localAgent'
@@ -179,8 +186,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
   const [optimisticRunningStageId, setOptimisticRunningStageId] = useState<string | undefined>()
   const [modelProviderStatus, setModelProviderStatus] = useState<ModelProviderStatus>({ state: 'checking', missing: [] })
+  const [jimengSetupStatus, setJimengSetupStatus] = useState<JiMengSetupStatusResponse | null>(null)
+  const [jimengSetupLoading, setJimengSetupLoading] = useState(false)
+  const [jimengSetupError, setJimengSetupError] = useState<string | null>(null)
+  const [useJiMengMCP, setUseJiMengMCP] = useState(false)
   const selectedProfile = useMemo(() => videoCreationProfileForId(selectedProfileId), [selectedProfileId])
   const profileOptions = useMemo(() => videoCreationProfiles(), [])
+  const jimengReady = useMemo(() => isJiMengReady(jimengSetupStatus), [jimengSetupStatus])
 
   const refreshModelProviderStatus = useCallback(async () => {
     setModelProviderStatus((current) => ({ ...current, state: 'checking' }))
@@ -190,6 +202,22 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       setModelProviderStatus({ state: missing.length > 0 ? 'missing' : 'configured', missing })
     } catch {
       setModelProviderStatus({ state: 'unavailable', missing: requiredModelProviderCapabilities })
+    }
+  }, [])
+
+  const refreshJiMengSetupStatus = useCallback(async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      const status = await fetchJiMengSetupStatus()
+      setJimengSetupStatus(status)
+      if (!isJiMengReady(status)) setUseJiMengMCP(false)
+    } catch (err) {
+      setJimengSetupError(normalizeDirectorErrorMessage(err))
+      setJimengSetupStatus(null)
+      setUseJiMengMCP(false)
+    } finally {
+      setJimengSetupLoading(false)
     }
   }, [])
 
@@ -263,6 +291,12 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       refreshModelProviderStatus().catch(() => {})
     }
   }, [activeNav, refreshModelProviderStatus])
+
+  useEffect(() => {
+    if (activeNav === 'overview' || activeNav === 'system') {
+      refreshJiMengSetupStatus().catch(() => {})
+    }
+  }, [activeNav, refreshJiMengSetupStatus])
 
   useEffect(() => {
     if (!run?.id || run.status === 'SUCCESS' || run.status === 'FAILED' || run.status === 'CANCELLED') return undefined
@@ -351,6 +385,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           projectMode: selectedProfile.projectMode,
           generationMode: selectedProfile.generationMode,
           preflightPipeline: selectedProfile.preflightPipeline,
+          ...(useJiMengMCP && jimengReady ? { aigcProvider: 'jimeng_mcp' } : {}),
           ...(clientModelProviders ? { modelProviders: clientModelProviders } : {}),
         },
       })
@@ -363,6 +398,32 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       setErrorDetail(extractDirectorErrorDetail(err))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleInstallJiMengCLI = async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      await installJiMengCLI()
+      await refreshJiMengSetupStatus()
+    } catch (err) {
+      setJimengSetupError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setJimengSetupLoading(false)
+    }
+  }
+
+  const handleRegisterJiMengMCP = async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      await registerJiMengMCP(jimengSetupStatus?.mcpProvider?.endpoint || jimengSetupStatus?.defaultMcpEndpoint)
+      await refreshJiMengSetupStatus()
+    } catch (err) {
+      setJimengSetupError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setJimengSetupLoading(false)
     }
   }
 
@@ -459,10 +520,19 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               selectedProfile={selectedProfile}
               profileOptions={profileOptions}
               environmentChecklist={environmentChecklist}
+              jimengSetupStatus={jimengSetupStatus}
+              jimengSetupLoading={jimengSetupLoading}
+              jimengSetupError={jimengSetupError}
+              useJiMengMCP={useJiMengMCP}
+              jimengReady={jimengReady}
               nextAction={nextAction}
               onTopicChange={setTopic}
               onDurationChange={setDurationSec}
               onProfileChange={setSelectedProfileId}
+              onToggleJiMengMCP={setUseJiMengMCP}
+              onRefreshJiMeng={refreshJiMengSetupStatus}
+              onInstallJiMengCLI={handleInstallJiMengCLI}
+              onRegisterJiMengMCP={handleRegisterJiMengMCP}
               onStart={handleStart}
               onStop={handleStopProject}
               onOpenSettings={() => setActiveNav('system')}
@@ -490,6 +560,227 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       </main>
     </div>
   )
+}
+
+function JiMengSetupPanel(props: {
+  status: JiMengSetupStatusResponse | null
+  loading: boolean
+  error: string | null
+  enabled: boolean
+  ready: boolean
+  selectedProfile: VideoCreationProfile
+  onToggle: (enabled: boolean) => void
+  onRefresh: () => void
+  onInstallCLI: () => void
+  onRegisterMCP: () => void
+}) {
+  const { status, loading, error, enabled, ready, selectedProfile, onToggle, onRefresh, onInstallCLI, onRegisterMCP } = props
+  const providerStatus = status?.mcpProviders?.find((item) => item.id === 'jimeng')
+  const mcpRegistered = Boolean(status?.mcpProvider)
+  const mcpReachable = providerStatus?.reachable === true
+  const canUseForProfile = selectedProfile.projectMode === 'aigc_shot' || selectedProfile.generationMode === 'manual_import'
+  const startCommand = status?.mcpStartCommand || 'jimeng-mcp -addr 127.0.0.1:18180'
+  const installCommand = status?.installCommand || 'curl -fsSL https://jimeng.jianying.com/cli | bash'
+  const [loginResult, setLoginResult] = useState<MCPToolCallResult | null>(null)
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const loginData = loginResult?.structuredContent || {}
+  const verificationUri = stringRecordValue(loginData, 'verification_uri') || stringRecordValue(loginData, 'verificationUri')
+  const userCode = stringRecordValue(loginData, 'user_code') || stringRecordValue(loginData, 'userCode')
+  const deviceCode = stringRecordValue(loginData, 'device_code') || stringRecordValue(loginData, 'deviceCode')
+  const headline = ready
+    ? '即梦自动生成已就绪'
+      : status?.dreaminaAvailable
+        ? '即梦 CLI 已安装，等待 MCP 连接'
+        : '即梦 CLI 未检测到'
+  const handleLoginHeadless = async () => {
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const result = await loginJiMengHeadless()
+      setLoginResult(result)
+      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录启动失败')
+    } catch (err) {
+      setLoginError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+  const handleCheckLogin = async () => {
+    if (!deviceCode) return
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const result = await checkJiMengLogin(deviceCode, 30)
+      setLoginResult(result)
+      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录未完成')
+    } catch (err) {
+      setLoginError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
+  return (
+    <section className="card overflow-hidden p-0">
+      <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="border-b border-line p-5 lg:border-b-0 lg:border-r">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary-soft text-primary-dark">
+                <FiCpu />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-black text-primary-dark">即梦 AIGC 扩展</p>
+                <h3 className="mt-1 text-lg font-black text-ink">{headline}</h3>
+                <p className="mt-2 text-sm leading-6 text-ink-muted">
+                  用户自己的 Dreamina 登录态保留在本机，躺营只调用已注册的本地 MCP endpoint。
+                </p>
+              </div>
+            </div>
+            <StatusBadge status={ready ? 'valid' : mcpRegistered || status?.dreaminaAvailable ? 'review' : 'pending'} label={ready ? '可自动生成' : '需配置'} />
+          </div>
+          {error ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{error}</div> : null}
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <JiMengStep label="Dreamina CLI" detail={status?.dreaminaVersion || installCommand} done={status?.dreaminaAvailable === true} />
+            <JiMengStep label="MCP 注册" detail={status?.mcpProvider?.endpoint || status?.defaultMcpEndpoint || '127.0.0.1:18180'} done={mcpRegistered} />
+            <JiMengStep label="MCP 连接" detail={providerStatus?.error || (mcpReachable ? 'tools/list 正常' : '等待服务启动')} done={mcpReachable} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onInstallCLI}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiDownload /> 安装/更新 CLI
+            </button>
+            <button
+              type="button"
+              onClick={onRegisterMCP}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiCheck /> 注册 MCP
+            </button>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiRefreshCw className={clsx(loading && 'animate-spin')} /> 刷新状态
+            </button>
+          </div>
+        </div>
+        <div className="bg-background-card p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-ink">自动调用即梦生成素材</p>
+              <p className="mt-1 text-xs leading-5 text-ink-muted">
+                开启后，新项目会把 AIGC 请求交给本地 JiMeng MCP；未开启时继续展示可复制提示词和手动上传。
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={!ready || !canUseForProfile}
+              onClick={() => onToggle(!enabled)}
+              className={clsx(
+                'relative h-7 w-12 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50',
+                enabled ? 'bg-primary' : 'bg-line',
+              )}
+              aria-pressed={enabled}
+              title="自动调用即梦生成素材"
+            >
+              <span className={clsx('absolute top-1 h-5 w-5 rounded-full bg-white shadow transition', enabled ? 'left-6' : 'left-1')} />
+            </button>
+          </div>
+          <div className="mt-4 rounded-lg bg-white p-3 ring-1 ring-line">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-black text-primary-dark">MCP 启动命令</span>
+              <CopyButton value={startCommand} label="复制命令" />
+            </div>
+            <code className="mt-2 block break-all rounded bg-ink px-3 py-2 font-mono text-[11px] leading-5 text-white">{startCommand}</code>
+          </div>
+          <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-black text-primary-dark">首次登录授权</span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleLoginHeadless}
+                  disabled={!mcpReachable || loginLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FiUserCheck /> 获取登录码
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCheckLogin}
+                  disabled={!deviceCode || loginLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FiRefreshCw className={clsx(loginLoading && 'animate-spin')} /> 检查登录
+                </button>
+              </div>
+            </div>
+            {loginError ? <div className="mt-2 text-xs font-semibold text-red-700">{loginError}</div> : null}
+            {verificationUri || userCode ? (
+              <div className="mt-3 space-y-2">
+                {verificationUri ? <LoginCopyRow label="授权页面" value={verificationUri} /> : null}
+                {userCode ? <LoginCopyRow label="用户码" value={userCode} /> : null}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs leading-5 text-ink-muted">MCP 连接后可生成登录码，按即梦页面提示完成授权。</p>
+            )}
+          </div>
+          {!canUseForProfile ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+              当前入口以本地编排为主，切到影视/AIGC 入口后可启用即梦自动素材生成。
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function LoginCopyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-background-card px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-black text-ink-soft">{label}</span>
+        <CopyButton value={value} label="复制" />
+      </div>
+      <div className="mt-1 break-all font-mono text-[11px] leading-4 text-ink">{value}</div>
+    </div>
+  )
+}
+
+function JiMengStep({ label, detail, done }: { label: string; detail: string; done: boolean }) {
+  return (
+    <div className={clsx('rounded-lg border p-3', done ? 'border-green-100 bg-green-50/70' : 'border-line bg-white')}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-black text-ink">{label}</span>
+        <span className={clsx('grid h-5 w-5 place-items-center rounded-full text-[11px]', done ? 'bg-green-600 text-white' : 'bg-stone-100 text-ink-soft')}>
+          {done ? <FiCheck /> : <FiX />}
+        </span>
+      </div>
+      <p className="mt-2 line-clamp-2 break-all text-[11px] leading-4 text-ink-muted">{detail}</p>
+    </div>
+  )
+}
+
+function isJiMengReady(status: JiMengSetupStatusResponse | null): boolean {
+  if (!status?.dreaminaAvailable) return false
+  const provider = status.mcpProviders?.find((item) => item.id === 'jimeng')
+  if (!provider?.reachable) return false
+  return Boolean(provider.tools?.some((tool) => tool.name === 'jimeng.generate_video'))
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  return typeof value === 'string' ? value : ''
 }
 
 function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, onLogout }: { active: DirectorNavKey; setActive: (key: DirectorNavKey) => void; user: AuthUser; serviceStatus: Props['serviceStatus']; preflight: PreflightResponse | null; onLogout: () => void }) {
@@ -632,16 +923,25 @@ function OverviewPage(props: {
   selectedProfile: VideoCreationProfile
   profileOptions: VideoCreationProfile[]
   environmentChecklist: EnvironmentChecklistItem[]
+  jimengSetupStatus: JiMengSetupStatusResponse | null
+  jimengSetupLoading: boolean
+  jimengSetupError: string | null
+  useJiMengMCP: boolean
+  jimengReady: boolean
   nextAction?: ReturnType<typeof deriveNextAction>
   onTopicChange: (value: string) => void
   onDurationChange: (value: number) => void
   onProfileChange: (value: VideoCreationProfileId) => void
+  onToggleJiMengMCP: (enabled: boolean) => void
+  onRefreshJiMeng: () => void
+  onInstallJiMengCLI: () => void
+  onRegisterJiMengMCP: () => void
   onStart: () => void
   onStop: () => void
   onOpenSettings: () => void
   onGoReview: () => void
 }) {
-  const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, selectedProfile, profileOptions, environmentChecklist, nextAction, onTopicChange, onDurationChange, onProfileChange, onStart, onStop, onOpenSettings, onGoReview } = props
+  const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, selectedProfile, profileOptions, environmentChecklist, jimengSetupStatus, jimengSetupLoading, jimengSetupError, useJiMengMCP, jimengReady, nextAction, onTopicChange, onDurationChange, onProfileChange, onToggleJiMengMCP, onRefreshJiMeng, onInstallJiMengCLI, onRegisterJiMengMCP, onStart, onStop, onOpenSettings, onGoReview } = props
   const staleNames = artifacts.filter((artifact) => artifact.status === 'stale').map((artifact) => artifact.name)
   const isStopAction = primaryAction.kind === 'stop'
   return (
@@ -719,6 +1019,18 @@ function OverviewPage(props: {
           </button>
         </section>
       </div>
+      <JiMengSetupPanel
+        status={jimengSetupStatus}
+        loading={jimengSetupLoading}
+        error={jimengSetupError}
+        enabled={useJiMengMCP}
+        ready={jimengReady}
+        selectedProfile={selectedProfile}
+        onToggle={onToggleJiMengMCP}
+        onRefresh={onRefreshJiMeng}
+        onInstallCLI={onInstallJiMengCLI}
+        onRegisterMCP={onRegisterJiMengMCP}
+      />
       <EnvironmentChecklistPanel items={environmentChecklist} onOpenSettings={onOpenSettings} />
       <StageFlow stages={stages} />
       {staleNames.length > 0 && (

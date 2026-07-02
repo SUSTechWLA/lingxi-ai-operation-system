@@ -540,6 +540,72 @@ func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanInsertsJiMengRunnerWhenRequested(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
+	catalog["video_prompt_generator"].Parameters["aigcProvider"] = tool.ParamDef{Type: "string", Required: false}
+	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["jimeng_generation_runner"] = &tool.ToolManifest{
+		Name:           "jimeng_generation_runner",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+		Parameters: map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Required: true},
+			"providerId":                 {Type: "string", Required: true},
+			"mcpTool":                    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotAssetPackages": {Type: "array"},
+			"generationResults": {Type: "array"},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请帮我根据端午节的来历创作一个口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历", "aigcProvider": "jimeng_mcp"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	jimeng := findStep(t, prepared, "jimeng_generation")
+	if jimeng.Tool != "jimeng_generation_runner" {
+		t.Fatalf("jimeng_generation tool = %s, want jimeng_generation_runner", jimeng.Tool)
+	}
+	if got := jimeng.Arguments["providerId"]; got != "jimeng" {
+		t.Fatalf("providerId = %#v, want jimeng", got)
+	}
+	if got := jimeng.Arguments["mcpTool"]; got != "jimeng.generate_video" {
+		t.Fatalf("mcpTool = %#v, want jimeng.generate_video", got)
+	}
+	if got := jimeng.Arguments["externalGenerationRequests"]; got != "{{video_prompt.output.externalGenerationRequests}}" {
+		t.Fatalf("externalGenerationRequests = %#v", got)
+	}
+	videoPrompt := findStep(t, prepared, "video_prompt")
+	if got := videoPrompt.Arguments["aigcProvider"]; got != "jimeng_mcp" {
+		t.Fatalf("video_prompt aigcProvider = %#v", got)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["shotAssetPackages"]; got != "{{jimeng_generation.output.shotAssetPackages}}" {
+		t.Fatalf("preview shotAssetPackages = %#v, want JiMeng output", got)
+	}
+	if stepIndex(t, prepared, "jimeng_generation") <= stepIndex(t, prepared, "video_prompt") {
+		t.Fatalf("jimeng_generation should be inserted after video_prompt")
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanProfileRewiresExistingVideoPrompt(t *testing.T) {
 	catalog := videoProfileTemplateCatalog()
 	compiler := NewPlanCompiler(catalog)

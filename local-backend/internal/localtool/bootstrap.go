@@ -1,6 +1,10 @@
 package localtool
 
-import "time"
+import (
+	"time"
+
+	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
+)
 
 // ExecutorConfig holds configuration for all local tool executors.
 type ExecutorConfig struct {
@@ -15,6 +19,9 @@ type ExecutorConfig struct {
 
 	// FFmpegPath is the path to the ffmpeg/ffprobe binaries. Leave empty to use PATH lookup.
 	FFmpegPath string
+
+	// MCPProviderLoader loads user-configured local MCP providers at execution time.
+	MCPProviderLoader MCPProviderLoader
 }
 
 // RegisterDefaultExecutors registers all standard local tool executors on the
@@ -57,6 +64,12 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 		NewFinalReviewExecutor(guard, cfg.DataDir),
 		CommandFinalReview,
 	)
+	if cfg.MCPProviderLoader != nil {
+		reg.Register(
+			NewMCPToolCallExecutor(cfg.MCPProviderLoader),
+			CommandLocalMCPToolCall,
+		)
+	}
 
 	// Prevent unused variable warning — guard is passed to each New*Executor
 	// constructor above for executors that accept a *PathGuard directly.
@@ -65,3 +78,5 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 
 	return nil
 }
+
+type MCPProviderLoader func() ([]localmcp.ProviderConfig, error)
