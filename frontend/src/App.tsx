@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import AuthScreen from './components/AuthScreen'
 import DirectorStudioPage from './pages/DirectorStudioPage'
 import { fetchCurrentUser, getStoredAuthSession, logout, type AuthUser } from './services/auth'
-import { isElectron, getElectronAPI } from './utils/electron'
+import { fetchLocalAgentHealth } from './services/localAgent'
 
 function App() {
   const [serviceStatus, setServiceStatus] = useState<'unknown' | 'ok' | 'unhealthy'>('unknown')
@@ -28,14 +28,10 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!isElectron()) return
-
     const checkHealth = async () => {
-      const api = getElectronAPI()
-      if (!api) return
       try {
-        const status = await api.checkServiceHealth()
-        setServiceStatus(status === 'ok' ? 'ok' : 'unhealthy')
+        const health = await fetchLocalAgentHealth()
+        setServiceStatus(health.status === 'ok' ? 'ok' : 'unhealthy')
       } catch {
         setServiceStatus('unhealthy')
       }

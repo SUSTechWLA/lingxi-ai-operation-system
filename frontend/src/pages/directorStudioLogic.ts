@@ -20,6 +20,53 @@ export interface LocalServiceStatusDisplay {
   tone: LocalServiceStatusTone
 }
 
+export type VideoCreationProfileId = 'voice_visual' | 'aigc_shot'
+
+export interface VideoCreationProfile {
+  id: VideoCreationProfileId
+  label: string
+  shortLabel: string
+  description: string
+  projectMode: 'voice_visual' | 'aigc_shot'
+  generationMode: 'provider_api' | 'manual_import'
+  preflightPipeline: string
+  startMessagePrefix: string
+  requiredLocalCommands: string[]
+  nextStep: string
+}
+
+export interface PreflightLike {
+  pipeline?: string
+  status?: string
+  canStart?: boolean
+  capabilityMenu?: {
+    localRunner?: { available?: boolean }
+    compositionRuntime?: { hyperframes?: { available?: boolean } }
+    localTools?: Array<{ command: string; available: boolean }>
+    warnings?: string[]
+  }
+  blockers?: Array<{ code: string; message: string }>
+}
+
+export type EnvironmentChecklistStatus = 'passed' | 'blocked' | 'warning' | 'unknown'
+
+export interface EnvironmentChecklistItem {
+  id: string
+  label: string
+  status: EnvironmentChecklistStatus
+  detail: string
+  actionLabel?: string
+  blockerCode?: string
+}
+
+export interface EnvironmentChecklistInput {
+  serviceStatus: LocalServiceHealthStatus
+  selectedProfile: VideoCreationProfile
+  preflight?: PreflightLike | null
+  modelProviderState?: 'checking' | 'configured' | 'missing' | 'unavailable'
+  missingModelCapabilities?: string[]
+}
+
 export interface DirectorStage {
   id: string
   name: string
@@ -136,6 +183,48 @@ export interface ExternalGenerationGuideRequest {
   referenceImageLimit?: number
 }
 
+export interface ExternalGenerationTaskReference {
+  id: string
+  label?: string
+  role?: string
+  storageRef: string
+  artifactId?: string
+}
+
+export interface ExternalGenerationTaskRequest {
+  requestId: string
+  kind: 'image' | 'video'
+  shotId?: string
+  prompt: string
+  negativePrompt?: string
+  references?: ExternalGenerationTaskReference[]
+  target?: {
+    aspectRatio?: string
+    durationSec?: number
+    resolution?: string
+  }
+  promptCharLimit?: number
+  referenceImageLimit?: number
+}
+
+export interface ExternalGenerationTaskPackage {
+  fullText: string
+  positivePrompt: string
+  negativePrompt: string
+  parameterText: string
+  referenceManifest: string
+}
+
+export interface ExportDeliveryItem {
+  id: 'final-video' | 'project-package' | 'publish-copy' | 'quality-report' | 'folder-entry'
+  label: string
+  status: DirectorArtifactStatus
+  description: string
+  artifact?: DirectorArtifactRecord
+  storageRef?: string
+  actionLabel: string
+}
+
 interface TraceNodeLike {
   id?: string
   name?: string
@@ -154,6 +243,258 @@ interface TraceNodeLike {
   tool?: string
   intent?: string
   dependsOn?: string[]
+}
+
+const videoCreationProfileList: VideoCreationProfile[] = [
+  {
+    id: 'voice_visual',
+    label: '口播 / 知识类视频',
+    shortLabel: '口播知识',
+    description: '适合观点、知识、教程和图文卡片视频，由系统生成脚本、画面结构、预览和本地成片。',
+    projectMode: 'voice_visual',
+    generationMode: 'provider_api',
+    preflightPipeline: 'wf-guided-image-text-video',
+    startMessagePrefix: '请帮我创作一个',
+    requiredLocalCommands: [
+      'HYPERFRAMES_PROJECT_GENERATE',
+      'HYPERFRAMES_SNAPSHOT',
+      'HYPERFRAMES_RENDER',
+      'FFMPEG_PROBE',
+      'ARTIFACT_PACKAGE',
+    ],
+    nextStep: '先配置基础模型 API，启动后按审核门确认脚本、画面和预览，最后由本地 runner 渲染成片。',
+  },
+  {
+    id: 'aigc_shot',
+    label: '影视化 / AIGC shot 视频',
+    shortLabel: '影视分镜',
+    description: '适合分镜化、角色一致性和外部图生视频平台接力，系统输出逐 shot 任务包并等待用户上传结果。',
+    projectMode: 'aigc_shot',
+    generationMode: 'manual_import',
+    preflightPipeline: 'wf-aigc-shot-video',
+    startMessagePrefix: '请帮我创作一个影视化 AIGC shot 视频：',
+    requiredLocalCommands: [
+      'LOCAL_FILE_IMPORT',
+      'FFMPEG_PROBE',
+      'ARTIFACT_PACKAGE',
+    ],
+    nextStep: '启动后到产物页逐 shot 复制完整任务包，去外部图片或视频平台生成，再上传回对应素材槽。',
+  },
+]
+
+export function videoCreationProfiles(): VideoCreationProfile[] {
+  return videoCreationProfileList.map(copyVideoCreationProfile)
+}
+
+export function videoCreationProfileForId(id: string | undefined): VideoCreationProfile {
+  const profile = videoCreationProfileList.find((item) => item.id === id)
+  return copyVideoCreationProfile(profile || videoCreationProfileList[0])
+}
+
+export function buildEnvironmentChecklist(input: EnvironmentChecklistInput): EnvironmentChecklistItem[] {
+  const preflight = input.preflight
+  const localRunnerAvailable = Boolean(preflight?.capabilityMenu?.localRunner?.available)
+  const localStatus = localServiceStatusDisplay(input.serviceStatus, localRunnerAvailable)
+  const localRunner: EnvironmentChecklistItem = {
+    id: 'local-runner',
+    label: '本地执行器',
+    status: localStatus.tone === 'ok' ? 'passed' : localStatus.tone === 'error' ? 'blocked' : 'unknown',
+    detail: localStatus.tone === 'ok'
+      ? '本地 runner 已在线，云端可以下发本地工具任务。'
+      : '请启动桌面端或 local-backend，然后重新体检。',
+    actionLabel: localStatus.tone === 'ok' ? undefined : '打开设置',
+    blockerCode: preflight?.blockers?.find((blocker) => blocker.code === 'LOCAL_RUNNER_NOT_AVAILABLE')?.code,
+  }
+
+  const missingModelCapabilities = input.missingModelCapabilities || []
+  const blockingModelCapabilities = input.selectedProfile.generationMode === 'manual_import'
+    ? missingModelCapabilities.filter((capability) => capability === 'text_to_text')
+    : missingModelCapabilities
+  const optionalExternalModelCapabilities = missingModelCapabilities.filter((capability) => !blockingModelCapabilities.includes(capability))
+  const missingModelLabels = missingModelCapabilities.map(modelCapabilityLabel).join('、')
+  const optionalModelLabels = optionalExternalModelCapabilities.map(modelCapabilityLabel).join('、')
+  const modelState = input.modelProviderState || 'checking'
+  const effectiveModelStatus: EnvironmentChecklistStatus = modelState === 'configured'
+    ? 'passed'
+    : modelState === 'checking'
+      ? 'unknown'
+      : modelState === 'missing' && blockingModelCapabilities.length === 0 && optionalExternalModelCapabilities.length > 0
+        ? 'warning'
+        : 'blocked'
+  const modelProvider: EnvironmentChecklistItem = {
+    id: 'model-provider',
+    label: '基础模型 API',
+    status: effectiveModelStatus,
+    detail: modelState === 'configured'
+      ? '文生文、文生图和文生视频 Provider 已保存到本机。'
+      : modelState === 'checking'
+        ? '正在读取本机模型 Provider 配置。'
+        : modelState === 'unavailable'
+          ? '本地服务未返回模型配置，请先确认本地服务可用。'
+          : effectiveModelStatus === 'warning'
+            ? `${optionalModelLabels || missingModelLabels} 未配置，将按当前视频入口走外部网站手动生成和上传回填。`
+            : `缺少 ${missingModelLabels || '基础模型'} Provider，外部模型接力前需要补齐。`,
+    actionLabel: modelState === 'configured' || modelState === 'checking' ? undefined : '打开设置',
+  }
+
+  const profile: EnvironmentChecklistItem = {
+    id: 'video-profile',
+    label: '视频类型入口',
+    status: preflight?.status === 'blocked' ? 'warning' : preflight ? 'passed' : 'unknown',
+    detail: `${input.selectedProfile.label} · ${input.selectedProfile.nextStep}`,
+    actionLabel: preflight?.status === 'blocked' ? '查看阻断项' : undefined,
+  }
+
+  const toolMap = new Map((preflight?.capabilityMenu?.localTools || []).map((tool) => [tool.command, tool.available]))
+  const blockerByCode = new Map((preflight?.blockers || []).map((blocker) => [blocker.code, blocker]))
+  const toolItems = input.selectedProfile.requiredLocalCommands.map((command) => {
+    const known = toolMap.has(command)
+    const available = toolMap.get(command) === true
+    const blocker = blockerByCode.get(`${command}_NOT_AVAILABLE`)
+    return {
+      id: `local-tool-${command}`,
+      label: localToolLabel(command),
+      status: known ? available ? 'passed' : 'blocked' : 'unknown',
+      detail: available
+        ? `${command} 已就绪。`
+        : blocker?.message || `未检测到 ${command}，当前 profile 可能无法完整执行。`,
+      actionLabel: available ? undefined : command === 'LOCAL_FILE_IMPORT' ? '检查上传入口' : '检查本地工具',
+      blockerCode: blocker?.code,
+    } satisfies EnvironmentChecklistItem
+  })
+
+  return [localRunner, modelProvider, profile, ...toolItems]
+}
+
+export function buildExternalGenerationTaskPackage(request: ExternalGenerationTaskRequest): ExternalGenerationTaskPackage {
+  const references = (request.references || []).slice(0, request.referenceImageLimit || 6)
+  const parameters = [
+    request.target?.aspectRatio ? `画幅：${request.target.aspectRatio}` : '',
+    request.target?.resolution ? `分辨率：${request.target.resolution}` : '',
+    request.target?.durationSec ? `时长：${request.target.durationSec}s` : '',
+    request.promptCharLimit ? `Prompt 字数上限：${request.promptCharLimit}` : '',
+    `参考图上限：${request.referenceImageLimit || 6}`,
+  ].filter(Boolean)
+  const parameterText = parameters.length ? parameters.join('\n') : '按外部平台默认参数生成。'
+  const referenceManifest = references.length
+    ? references.map((ref, index) => [
+      `参考图 ${index + 1}`,
+      `名称：${ref.label || ref.id}`,
+      ref.role ? `用途：${ref.role}` : '',
+      `地址：${ref.storageRef}`,
+    ].filter(Boolean).join('\n')).join('\n\n')
+    : '无参考图；直接使用 Prompt 生成。'
+  const negativePrompt = request.negativePrompt?.trim() || '无'
+  const fullText = [
+    '# 完整任务包',
+    '',
+    `Request ID：${request.requestId}`,
+    request.shotId ? `Shot：${request.shotId}` : '',
+    `类型：${request.kind === 'image' ? '图片 / 关键帧' : '视频片段'}`,
+    '',
+    '## Positive Prompt',
+    request.prompt.trim(),
+    '',
+    '## Negative Prompt',
+    negativePrompt,
+    '',
+    '## 参数',
+    parameterText,
+    '',
+    '## 参考图',
+    referenceManifest,
+    '',
+    '## 上传回填',
+    `生成完成后导出${request.kind === 'image' ? '图片' : '视频'}文件，回到躺营导演台当前 shot 的素材槽点击“上传结果”。系统会把文件绑定到 requestId=${request.requestId}。`,
+  ].filter((line) => line !== '').join('\n')
+
+  return {
+    fullText,
+    positivePrompt: request.prompt.trim(),
+    negativePrompt,
+    parameterText,
+    referenceManifest,
+  }
+}
+
+export function buildExportDeliveryItems(artifacts: DirectorArtifactRecord[]): ExportDeliveryItem[] {
+  const finalVideo = findFinalVideoArtifact(artifacts)
+  const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
+  const publishArtifact = findPublishCopyArtifact(artifacts)
+  const qualityArtifact = artifacts.find((artifact) => artifact.kind === 'FINAL_REVIEW') ||
+    artifacts.find((artifact) => artifact.kind === 'FFMPEG_PROBE_REPORT')
+
+  return [
+    {
+      id: 'final-video',
+      label: 'final.mp4',
+      status: finalVideo?.status || 'missing',
+      description: finalVideo?.storageRef ? '最终成片已登记，可预览或打开本地文件。' : '等待最终视频生成。',
+      artifact: finalVideo,
+      storageRef: finalVideo?.storageRef,
+      actionLabel: finalVideo?.storageRef ? '预览视频' : '等待渲染',
+    },
+    {
+      id: 'project-package',
+      label: '项目包',
+      status: packageArtifact?.status || 'missing',
+      description: packageArtifact?.storageRef ? '交付包已生成，包含项目结构和关键产物。' : '等待打包阶段生成交付包。',
+      artifact: packageArtifact,
+      storageRef: packageArtifact?.storageRef,
+      actionLabel: packageArtifact?.storageRef ? '下载交付包' : '等待打包',
+    },
+    {
+      id: 'publish-copy',
+      label: '发布文案',
+      status: publishArtifact?.status || 'missing',
+      description: publishArtifact?.storageRef ? '标题、简介、标签和平台发布建议已生成。' : '等待发布文案产物生成。',
+      artifact: publishArtifact,
+      storageRef: publishArtifact?.storageRef,
+      actionLabel: publishArtifact?.storageRef ? '复制文案' : '等待文案',
+    },
+    {
+      id: 'quality-report',
+      label: '质量报告',
+      status: qualityArtifact?.status || 'missing',
+      description: qualityArtifact?.storageRef ? '视频探测或最终审核报告已生成。' : '等待质量审核产物生成。',
+      artifact: qualityArtifact,
+      storageRef: qualityArtifact?.storageRef,
+      actionLabel: qualityArtifact?.storageRef ? '查看报告' : '等待检测',
+    },
+    {
+      id: 'folder-entry',
+      label: '文件夹入口',
+      status: finalVideo?.storageRef || packageArtifact?.storageRef ? 'valid' : 'missing',
+      description: finalVideo?.storageRef || packageArtifact?.storageRef ? '可从本地 storageRef 定位交付文件。' : '有本地文件后会显示可定位的路径信息。',
+      storageRef: finalVideo?.storageRef || packageArtifact?.storageRef,
+      actionLabel: finalVideo?.storageRef || packageArtifact?.storageRef ? '打开文件夹' : '等待文件',
+    },
+  ]
+}
+
+function copyVideoCreationProfile(profile: VideoCreationProfile): VideoCreationProfile {
+  return { ...profile, requiredLocalCommands: [...profile.requiredLocalCommands] }
+}
+
+function modelCapabilityLabel(capability: string): string {
+  const labels: Record<string, string> = {
+    text_to_text: '文生文',
+    text_to_image: '文生图片',
+    text_to_video: '文生视频',
+  }
+  return labels[capability] || capability
+}
+
+function localToolLabel(command: string): string {
+  const labels: Record<string, string> = {
+    HYPERFRAMES_PROJECT_GENERATE: '生成视频项目',
+    HYPERFRAMES_SNAPSHOT: '生成预览快照',
+    HYPERFRAMES_RENDER: '本地渲染',
+    LOCAL_FILE_IMPORT: '上传导入',
+    FFMPEG_PROBE: '视频检测',
+    ARTIFACT_PACKAGE: '交付打包',
+  }
+  return labels[command] || command
 }
 
 export function externalGenerationGuideSteps(request: ExternalGenerationGuideRequest): string[] {
@@ -1162,6 +1503,10 @@ export function normalizeDirectorErrorMessage(error: unknown): string {
 
   if (raw.includes('PACKAGE_DEPENDENCY_MISSING')) {
     return '最终视频尚未通过质量检查，暂时不能打包。'
+  }
+
+  if (/artifact not found/i.test(raw)) {
+    return '产物文件还没有同步到本机，请重新生成或回到产物页确认该文件是否已上传。'
   }
 
   return raw || '操作失败，请稍后重试。'
