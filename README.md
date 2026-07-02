@@ -138,6 +138,8 @@ Local agent:   http://localhost:18080/api/local/docs
 
 ## 项目文档
 
+- [项目介绍（中文）](docs/PROJECT_INTRODUCTION.md)
+- [Project Introduction (English)](docs/PROJECT_INTRODUCTION_EN.md)
 - [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
 - [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
 
