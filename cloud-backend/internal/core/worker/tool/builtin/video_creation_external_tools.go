@@ -81,6 +81,7 @@ var videoCreationExternalTools = []string{
 	"shot_splitter",
 	"keyframe_prompt_generator",
 	"video_prompt_generator",
+	"jimeng_generation_runner",
 	"script_quality_checker",
 	"shot_quality_checker",
 	"video_prompt_quality_checker",
@@ -726,6 +727,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"style":           {Type: "string", Description: "Visual style", Required: false},
 			"modelHint":       {Type: "string", Description: "Target video generation model", Required: false},
 			"aspectRatio":     {Type: "string", Description: "Video aspect ratio", Required: false},
+			"aigcProvider":    {Type: "string", Description: "Optional automatic AIGC provider, such as jimeng_mcp", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"videoPrompts":               {Type: "array", Description: "Independent per-shot video prompts"},
@@ -734,6 +736,26 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"summary":                    {Type: "string", Description: "Prompt package summary"},
 			"content":                    {Type: "string", Description: "Reviewable prompt package content"},
 			"artifacts":                  {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+	case "jimeng_generation_runner":
+		manifest.Description = "Call the user's local JiMeng MCP provider to generate AIGC video assets from external generation requests."
+		manifest.Type = "local_mcp_tool"
+		manifest.CostLevel = tool.CostHigh
+		manifest.RiskLevel = tool.RiskMedium
+		manifest.SideEffect = true
+		manifest.Idempotent = false
+		manifest.Capabilities = []string{"video_creation", "aigc_generation", "text_to_video", "image_to_video", "local_mcp"}
+		manifest.Tags = []string{"jimeng", "dreamina", "mcp", "aigc", "local"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Description: "External generation requests produced by prompt generation", Required: true},
+			"providerId":                 {Type: "string", Description: "Local MCP provider id, default jimeng", Required: true},
+			"mcpTool":                    {Type: "string", Description: "JiMeng MCP tool name, for example jimeng.generate_video", Required: true},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"shotAssetPackages":          {Type: "array", Description: "Per-shot asset packages with generated JiMeng results"},
+			"generationResults":          {Type: "array", Description: "Raw JiMeng MCP generation results"},
+			"externalGenerationRequests": {Type: "array", Description: "Requests that remain manual or failed"},
+			"summary":                    {Type: "string", Description: "JiMeng generation summary"},
 		}
 	case "hyperframes_project_generator":
 		manifest.Parameters = map[string]tool.ParamDef{
@@ -794,6 +816,14 @@ var localToolManifests = map[string]struct {
 		ArtifactLocation:   tool.ArtifactLocationLocal,
 		Description:        "使用 ffprobe 检查视频文件元数据（时长、分辨率、编码）",
 		Timeout:            60,
+	},
+	"jimeng_generation_runner": {
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		LocalCommand:       "LOCAL_MCP_TOOL_CALL",
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		Description:        "调用用户本地 JiMeng MCP 生成 AIGC 图片或视频素材",
+		Timeout:            1800,
 	},
 }
 

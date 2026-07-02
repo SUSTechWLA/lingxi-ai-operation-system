@@ -3,6 +3,7 @@ package localagent
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"mime/multipart"
@@ -279,6 +280,182 @@ func TestModelProviderSettingsIncludeKeyRequiresNonBrowserLocalRequest(t *testin
 	}
 	if bytes.Contains(rec.Body.Bytes(), []byte("sk-text-secret")) {
 		t.Fatalf("browser-origin request must not expose full api key: %s", rec.Body.String())
+	}
+}
+
+type fakeAgentCommandRunner struct {
+	calls []fakeAgentCommandCall
+	out   CommandOutput
+	err   error
+}
+
+type fakeAgentCommandCall struct {
+	name string
+	args []string
+}
+
+func (r *fakeAgentCommandRunner) Run(_ context.Context, name string, args ...string) (CommandOutput, error) {
+	r.calls = append(r.calls, fakeAgentCommandCall{name: name, args: append([]string(nil), args...)})
+	return r.out, r.err
+}
+
+func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
+	root := t.TempDir()
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode mcp request: %v", err)
+		}
+		if req["method"] != "tools/list" {
+			t.Fatalf("method = %v, want tools/list", req["method"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"tools": []map[string]interface{}{
+					{"name": "jimeng.generate_video", "description": "generate video"},
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{"providers":[{"id":"jimeng","label":"JiMeng","endpoint":"` + mcp.URL + `","enabled":true}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/mcp-providers/status", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var status LocalMCPProviderStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if len(status.Providers) != 1 {
+		t.Fatalf("provider count = %d, want 1", len(status.Providers))
+	}
+	if !status.Providers[0].Reachable {
+		t.Fatalf("provider should be reachable: %+v", status.Providers[0])
+	}
+	if len(status.Providers[0].Tools) != 1 || status.Providers[0].Tools[0].Name != "jimeng.generate_video" {
+		t.Fatalf("tools = %+v", status.Providers[0].Tools)
+	}
+}
+
+func TestJiMengInstallCLIRequiresExplicitConfirmation(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeAgentCommandRunner{out: CommandOutput{Stdout: "installed"}}
+	server := NewServer(Config{DataDir: root, CommandRunner: runner})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/install-cli", bytes.NewBufferString(`{"confirm":false}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("install should not run without confirmation: %+v", runner.calls)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/install-cli", bytes.NewBufferString(`{"confirm":true}`))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("install status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("install calls = %d, want 1", len(runner.calls))
+	}
+	if runner.calls[0].name != "sh" || runner.calls[0].args[0] != "-c" {
+		t.Fatalf("install command = %s %#v", runner.calls[0].name, runner.calls[0].args)
+	}
+	if !strings.Contains(runner.calls[0].args[1], "https://jimeng.jianying.com/cli") {
+		t.Fatalf("install script URL missing: %#v", runner.calls[0].args)
+	}
+}
+
+func TestJiMengRegisterMCPStoresDefaultProvider(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/register-mcp", bytes.NewBufferString(`{"endpoint":"http://127.0.0.1:18180"}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/mcp-providers", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get providers status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var listed LocalMCPProviderSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode providers: %v", err)
+	}
+	if len(listed.Providers) != 1 || listed.Providers[0].ID != "jimeng" || !listed.Providers[0].Enabled {
+		t.Fatalf("providers = %+v", listed.Providers)
+	}
+}
+
+func TestJiMengLoginHeadlessCallsRegisteredMCPProvider(t *testing.T) {
+	root := t.TempDir()
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode mcp request: %v", err)
+		}
+		params := req["params"].(map[string]interface{})
+		if params["name"] != "jimeng.login_headless" {
+			t.Fatalf("tool = %v, want jimeng.login_headless", params["name"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"verification_uri": "https://example.com/device",
+					"user_code":        "ABCD-EFGH",
+					"device_code":      "device-1",
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{"providers":[{"id":"jimeng","label":"JiMeng","endpoint":"` + mcp.URL + `","enabled":true}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/login-headless", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	structured := result["structuredContent"].(map[string]interface{})
+	if structured["user_code"] != "ABCD-EFGH" {
+		t.Fatalf("user_code = %#v", structured["user_code"])
 	}
 }
 

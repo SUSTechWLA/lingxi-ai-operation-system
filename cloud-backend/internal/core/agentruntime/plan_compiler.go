@@ -120,6 +120,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 		c.completeVideoBetaPlan(plan)
 	}
 	c.injectKnowledgeContext(plan)
+	c.injectJiMengGenerationRunner(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
 	c.expandPreparedPlanBudget(plan)
 	return plan
@@ -626,6 +627,9 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 		if generationPackageField != "" {
 			promptArgs["shotAssetPackages"] = stepOutputRef(generationAnchor, generationPackageField)
 		}
+		if provider := requestedAIGCProvider(plan); provider != "" {
+			promptArgs["aigcProvider"] = provider
+		}
 		promptAnchor = appendPlanStep(plan, AgentStep{
 			ID:              uniqueStepID(plan, "video_prompt"),
 			Intent:          "根据分镜生成可审核的视频生成提示词",
@@ -638,6 +642,14 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 		promptField = preferredOutputField(c.manifestFor("video_prompt_generator"), "videoPrompts", "video_prompt")
 	}
 	rewireVideoPromptShotSource(planStepByID(plan, promptAnchor), shotAnchor, shotField)
+	if provider := requestedAIGCProvider(plan); provider != "" {
+		if promptStep := planStepByID(plan, promptAnchor); promptStep != nil {
+			if promptStep.Arguments == nil {
+				promptStep.Arguments = map[string]interface{}{}
+			}
+			promptStep.Arguments["aigcProvider"] = provider
+		}
+	}
 	c.augmentVideoPromptGenerationInputs(plan, promptAnchor, generationAnchor, generationField, generationPackageField)
 
 	projectAnchor, projectField := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
@@ -717,6 +729,52 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			ProduceArtifact: true,
 		})
 	}
+}
+
+func (c *PlanCompiler) injectJiMengGenerationRunner(plan *AgentPlan) {
+	if plan == nil || plan.Domain != "video_creation" || requestedAIGCProvider(plan) != "jimeng_mcp" {
+		return
+	}
+	if c.manifestFor("jimeng_generation_runner") == nil {
+		return
+	}
+	if planHasToolOrTerm(plan, []string{"jimeng_generation_runner", "jimeng_generation"}) {
+		return
+	}
+	promptAnchor, _ := c.lastVideoPromptProducer(plan)
+	if promptAnchor == "" {
+		return
+	}
+	externalField := c.outputFieldForStep(plan, promptAnchor, "externalGenerationRequests")
+	if externalField == "" {
+		externalField = "externalGenerationRequests"
+	}
+	stepID := uniqueStepID(plan, "jimeng_generation")
+	insertPlanStepAfter(plan, promptAnchor, AgentStep{
+		ID:     stepID,
+		Intent: "调用用户本地 JiMeng MCP，将外部 AIGC 请求转换为已生成素材包",
+		Tool:   "jimeng_generation_runner",
+		Arguments: map[string]interface{}{
+			"stage":                      "aigc_generation",
+			"providerId":                 "jimeng",
+			"mcpTool":                    "jimeng.generate_video",
+			"externalGenerationRequests": stepOutputRef(promptAnchor, externalField),
+		},
+		DependsOn:       dependencyList(promptAnchor),
+		ExpectedOutput:  []string{"shotAssetPackages", "generationResults", "externalGenerationResults"},
+		ProduceArtifact: true,
+	})
+	jimengPackageField := preferredOutputField(c.manifestFor("jimeng_generation_runner"), "shotAssetPackages")
+	projectAnchor, _ := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
+	projectStep := planStepByID(plan, projectAnchor)
+	if projectStep == nil || !manifestAcceptsParam(c.manifestFor(projectStep.Tool), "shotAssetPackages") {
+		return
+	}
+	if projectStep.Arguments == nil {
+		projectStep.Arguments = map[string]interface{}{}
+	}
+	projectStep.Arguments["shotAssetPackages"] = stepOutputRef(stepID, jimengPackageField)
+	appendDependencyIfMissing(projectStep, stepID)
 }
 
 func (c *PlanCompiler) lastVideoPromptProducer(plan *AgentPlan) (string, string) {
@@ -1054,6 +1112,21 @@ func stepMentionsAny(step AgentStep, terms []string) bool {
 		}
 	}
 	return false
+}
+
+func requestedAIGCProvider(plan *AgentPlan) string {
+	if plan == nil {
+		return ""
+	}
+	for _, step := range plan.Steps {
+		if provider, ok := step.Arguments["aigcProvider"].(string); ok && strings.TrimSpace(provider) != "" {
+			return strings.ToLower(strings.TrimSpace(provider))
+		}
+		if provider, ok := step.Arguments["aigc_provider"].(string); ok && strings.TrimSpace(provider) != "" {
+			return strings.ToLower(strings.TrimSpace(provider))
+		}
+	}
+	return ""
 }
 
 func stepOutputRef(stepID, field string) string {
