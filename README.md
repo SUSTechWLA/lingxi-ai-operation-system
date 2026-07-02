@@ -2,6 +2,13 @@
 
 躺营 AI 自媒体运营助手是一个面向视频创作工作流的本地桌面 + 云端编排系统。当前核心能力是从一句话视频需求出发，生成可审核的多阶段产物，并在客户端查看最终视频。
 
+## Project Wiki / 项目 Wiki
+
+For product screenshots, walkthroughs, and bilingual project introductions, see the GitHub Wiki:
+
+- 中文 Wiki: https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki
+- English Wiki: https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English
+
 ## Runtime Boundaries
 
 ```text
