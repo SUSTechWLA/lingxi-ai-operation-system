@@ -1,0 +1,55 @@
+name: Branch Guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: branch-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  branch-guard:
+    name: branch-guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate branch flow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base="${{ github.base_ref }}"
+          head="${{ github.head_ref }}"
+
+          echo "base: ${base}"
+          echo "head: ${head}"
+
+          case "${base}" in
+            release)
+              if [[ "${head}" != "develop_go" && "${head}" != hotfix/* ]]; then
+                echo "ERROR: release only accepts PRs from develop_go or hotfix/*."
+                exit 1
+              fi
+              ;;
+            develop_go)
+              if [[ "${head}" != feature/* ]]; then
+                echo "ERROR: develop_go only accepts PRs from feature/*."
+                exit 1
+              fi
+              ;;
+            main)
+              if [[ "${head}" != "release" && "${head}" != hotfix/* ]]; then
+                echo "ERROR: main only accepts PRs from release or hotfix/*."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "No branch-flow rule configured for base '${base}'."
+              ;;
+          esac
