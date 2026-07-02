@@ -13,6 +13,21 @@ const (
 	RenderModeHTMLPreviewThenAIGC     = "html_preview_then_aigc"
 	RenderModeHTMLPreviewThenHybrid   = "html_preview_then_hybrid"
 
+	GenerationModeHTMLOnly                 = "html_only"
+	GenerationModeAIGCVideo                = "aigc_video"
+	GenerationModeAIGCImageThenHyperFrames = "aigc_image_then_hyperframes"
+	GenerationModeHybridAIGCBGHTMLOverlay  = "hybrid_aigc_bg_html_overlay"
+	GenerationModeExternalOrUserAsset      = "external_or_user_asset"
+	GenerationModePlaceholderPreview       = "placeholder_preview"
+
+	AssetSourceAIGCImage          = "aigc_image"
+	AssetSourceAIGCVideo          = "aigc_video"
+	AssetSourceHyperFrames        = "hyperframes"
+	AssetSourceUserUpload         = "user_upload"
+	AssetSourceExternalGeneration = "external_generation"
+	AssetSourceOpenAsset          = "open_asset"
+	AssetSourcePlaceholder        = "placeholder"
+
 	ReviewStatusPending  = "pending"
 	ReviewStatusApproved = "approved"
 	ReviewStatusRejected = "rejected"
@@ -35,7 +50,26 @@ const (
 	TextRoleCode        = "code"
 	TextRoleNumber      = "number"
 	TextRoleBrandName   = "brand_name"
+
+	VideoProfileTalkingHead    = "talking_head"
+	VideoProfileCinematicStory = "cinematic_story"
+
+	ArtifactKindVideoCreationProfile = "VIDEO_CREATION_PROFILE"
 )
+
+type VideoCreationProfile struct {
+	ProfileID        string            `json:"profileId"`
+	SourceRoute      string            `json:"sourceRoute,omitempty"`
+	PrimaryArtifact  string            `json:"primaryArtifact"`
+	QualityContract  []string          `json:"qualityContract,omitempty"`
+	DAGTemplateID    string            `json:"dagTemplateId"`
+	ReviewGatePolicy []string          `json:"reviewGatePolicy,omitempty"`
+	ToolBias         map[string]string `json:"toolBias,omitempty"`
+	FallbackProfile  string            `json:"fallbackProfile,omitempty"`
+	Confidence       float64           `json:"confidence,omitempty"`
+	Reason           string            `json:"reason,omitempty"`
+	NeedsUserReview  bool              `json:"needsUserReview,omitempty"`
+}
 
 type ShotPolicy struct {
 	MinDurationSec           int  `json:"minDurationSec"`
@@ -282,6 +316,114 @@ type RenderStrategy struct {
 	AIGCInput         *AIGCInputSpec `json:"aigcInput,omitempty"`
 	HTMLInput         *HTMLInputSpec `json:"htmlInput,omitempty"`
 	CompositePlan     *CompositePlan `json:"compositePlan,omitempty"`
+}
+
+type ShotGenerationPlan struct {
+	ShotID         string                  `json:"shotId"`
+	Mode           string                  `json:"mode"`
+	PrimaryTool    string                  `json:"primaryTool,omitempty"`
+	SecondaryTools []string                `json:"secondaryTools,omitempty"`
+	Reason         string                  `json:"reason,omitempty"`
+	Confidence     float64                 `json:"confidence,omitempty"`
+	RiskLevel      string                  `json:"riskLevel,omitempty"`
+	RequiredAssets []ShotAssetNeed         `json:"requiredAssets,omitempty"`
+	RenderInputs   map[string]interface{}  `json:"renderInputs,omitempty"`
+	FusionPlan     FusionPlan              `json:"fusionPlan"`
+	FallbackPlan   *ShotGenerationFallback `json:"fallbackPlan,omitempty"`
+	ReviewFocus    []string                `json:"reviewFocus,omitempty"`
+}
+
+type ShotGenerationFallback struct {
+	Mode   string `json:"mode"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type ExternalGenerationReference struct {
+	Role       string `json:"role,omitempty"`
+	StorageRef string `json:"storageRef,omitempty"`
+}
+
+type ExternalGenerationDelivery struct {
+	DirectAPIEligible    bool                          `json:"directApiEligible"`
+	ManualUploadRequired bool                          `json:"manualUploadRequired"`
+	ReferenceImages      []ExternalGenerationReference `json:"referenceImages,omitempty"`
+	PromptPackage        string                        `json:"promptPackage,omitempty"`
+}
+
+type ShotAssetNeed struct {
+	ID             string   `json:"id"`
+	Kind           string   `json:"kind,omitempty"`
+	Role           string   `json:"role,omitempty"`
+	Source         string   `json:"source"`
+	Required       bool     `json:"required"`
+	ApprovalStatus string   `json:"approvalStatus,omitempty"`
+	StorageRef     string   `json:"storageRef,omitempty"`
+	RelatedShotID  string   `json:"relatedShotId,omitempty"`
+	Locks          []string `json:"locks,omitempty"`
+}
+
+type FusionPlan struct {
+	ShotID             string            `json:"shotId"`
+	BaseLayer          FusionLayer       `json:"baseLayer"`
+	OverlayLayers      []FusionLayer     `json:"overlayLayers,omitempty"`
+	TimedMedia         []TimedMediaLayer `json:"timedMedia,omitempty"`
+	Assembler          string            `json:"assembler,omitempty"`
+	OutputArtifactKind string            `json:"outputArtifactKind,omitempty"`
+}
+
+type FusionLayer struct {
+	ID          string  `json:"id"`
+	Kind        string  `json:"kind,omitempty"`
+	Role        string  `json:"role,omitempty"`
+	StorageRef  string  `json:"storageRef,omitempty"`
+	StartSec    float64 `json:"startSec,omitempty"`
+	DurationSec float64 `json:"durationSec,omitempty"`
+}
+
+type TimedMediaLayer struct {
+	ID          string  `json:"id"`
+	Kind        string  `json:"kind,omitempty"`
+	Role        string  `json:"role,omitempty"`
+	StorageRef  string  `json:"storageRef,omitempty"`
+	StartSec    float64 `json:"startSec"`
+	DurationSec float64 `json:"durationSec"`
+	TrackIndex  int     `json:"trackIndex"`
+	Fit         string  `json:"fit,omitempty"`
+	Opacity     float64 `json:"opacity,omitempty"`
+}
+
+const (
+	ArtifactKindTimeWindowPlan = "TIME_WINDOW_PLAN"
+)
+
+type ScriptSpan struct {
+	ID       string  `json:"id"`
+	StartSec float64 `json:"startSec"`
+	EndSec   float64 `json:"endSec"`
+	Text     string  `json:"text"`
+}
+
+type TimeWindowPlan struct {
+	ProfileID string           `json:"profileId"`
+	Windows   []TimeWindowUnit `json:"windows"`
+	Warnings  []string         `json:"warnings,omitempty"`
+}
+
+type TimeWindowUnit struct {
+	ID              string  `json:"id"`
+	ShotID          string  `json:"shotId"`
+	ParentShotID    string  `json:"parentShotId,omitempty"`
+	SequenceIndex   int     `json:"sequenceIndex"`
+	StartSec        float64 `json:"startSec"`
+	EndSec          float64 `json:"endSec"`
+	DurationSec     float64 `json:"durationSec"`
+	ScriptSpanID    string  `json:"scriptSpanId,omitempty"`
+	ScriptText      string  `json:"scriptText,omitempty"`
+	SceneSummary    string  `json:"sceneSummary,omitempty"`
+	MainAction      string  `json:"mainAction,omitempty"`
+	AIGCEligible    bool    `json:"aigcEligible"`
+	RecommendedMode string  `json:"recommendedMode,omitempty"`
+	Reason          string  `json:"reason,omitempty"`
 }
 
 type AIGCInputSpec struct {

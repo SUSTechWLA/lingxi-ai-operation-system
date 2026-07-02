@@ -288,6 +288,263 @@ func TestBuildArtifactsFromCompositionExecMaterializesReviewableVideoComposition
 	}
 }
 
+func TestBuildArtifactsFromProfileSelectionMaterializesVideoCreationProfile(t *testing.T) {
+	node := &model.Node{
+		ID:     "profile_selection_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "profile_selection",
+			"tool":  "video_profile_classifier",
+		},
+		Output: map[string]interface{}{
+			"content": "视频创作 profile 已选择。",
+			"creationProfile": map[string]interface{}{
+				"profileId": "talking_head",
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "video-creation-profile",
+					"kind":     "VIDEO_CREATION_PROFILE",
+					"name":     "video_creation_profile.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"requiresReview": true,
+					},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("video creation profile artifact should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one video creation profile artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.StageName != "profile_selection" {
+		t.Fatalf("expected profile_selection stage, got %q", req.StageName)
+	}
+	if req.Kind != ArtifactKind("VIDEO_CREATION_PROFILE") {
+		t.Fatalf("expected VIDEO_CREATION_PROFILE artifact, got %q", req.Kind)
+	}
+	if req.StorageType != StorageInline {
+		t.Fatalf("video creation profile storage type = %q, want %q", req.StorageType, StorageInline)
+	}
+	if req.Provider != "video-creation-profile" {
+		t.Fatalf("video creation profile provider = %q, want video-creation-profile", req.Provider)
+	}
+	if req.Metadata["requiresReview"] != true {
+		t.Fatalf("video creation profile artifact must be reviewable, got metadata %+v", req.Metadata)
+	}
+	if req.Metadata["humanApproved"] != false || req.Metadata["status"] != "valid" {
+		t.Fatalf("new video creation profile artifact should start valid and not human-approved, got metadata %+v", req.Metadata)
+	}
+	if len(req.Data) == 0 {
+		t.Fatalf("video creation profile artifact should carry inline cloud preview data for review")
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil {
+		t.Fatalf("video creation profile data should be JSON: %v; data=%s", err, string(req.Data))
+	}
+	if decoded["profileId"] != "talking_head" {
+		t.Fatalf("video creation profile data profileId = %v, want talking_head; data=%+v", decoded["profileId"], decoded)
+	}
+	if _, ok := decoded["artifacts"]; ok {
+		t.Fatalf("video creation profile data should not include output envelope artifacts: %+v", decoded)
+	}
+}
+
+func TestBuildArtifactsFromProfileSelectionWithoutProfilePayloadDoesNotStoreEnvelope(t *testing.T) {
+	node := &model.Node{
+		ID:     "profile_selection_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "profile_selection",
+			"tool":  "video_profile_classifier",
+		},
+		Output: map[string]interface{}{
+			"content": "视频创作 profile 已选择。",
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "video-creation-profile",
+					"kind":     "VIDEO_CREATION_PROFILE",
+					"name":     "video_creation_profile.json",
+					"mimeType": "application/json",
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("video creation profile manifest should materialize without inline data: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one video creation profile artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Kind != ArtifactKind("VIDEO_CREATION_PROFILE") {
+		t.Fatalf("expected VIDEO_CREATION_PROFILE artifact, got %q", req.Kind)
+	}
+	if len(req.Data) != 0 {
+		t.Fatalf("video creation profile without profile payload should fail closed with empty data, got %s", string(req.Data))
+	}
+}
+
+func TestBuildArtifactsFromProfileSelectionRejectsMalformedProfilePayload(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload interface{}
+	}{
+		{name: "scalar", payload: "talking_head"},
+		{name: "unknown_profile", payload: map[string]interface{}{"profileId": "unknown"}},
+		{name: "empty_object", payload: map[string]interface{}{}},
+		{name: "array", payload: []interface{}{map[string]interface{}{"profileId": "talking_head"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &model.Node{
+				ID:     "profile_selection_exec",
+				Status: model.NodeSuccess,
+				Input: map[string]interface{}{
+					"stage": "profile_selection",
+					"tool":  "video_profile_classifier",
+				},
+				Output: map[string]interface{}{
+					"creationProfile": tc.payload,
+					"artifacts": []interface{}{
+						map[string]interface{}{
+							"unitId":   "video-creation-profile",
+							"kind":     "VIDEO_CREATION_PROFILE",
+							"name":     "video_creation_profile.json",
+							"mimeType": "application/json",
+						},
+					},
+				},
+			}
+
+			requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+			if err != nil {
+				t.Fatalf("video creation profile manifest should materialize without inline data: %v", err)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("expected one video creation profile artifact request, got %+v", requests)
+			}
+			if len(requests[0].Data) != 0 {
+				t.Fatalf("malformed video creation profile should fail closed with empty data, got %s", string(requests[0].Data))
+			}
+		})
+	}
+}
+
+func TestBuildArtifactsFromTimeWindowPlanMaterializesReviewableInlineArtifact(t *testing.T) {
+	node := &model.Node{
+		ID:     "time_window_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "time_window",
+			"tool":  "time_window_planner",
+		},
+		Output: map[string]interface{}{
+			"content": "时间窗已生成。",
+			"timeWindowPlan": map[string]interface{}{
+				"profileId": "cinematic_story",
+				"windows": []interface{}{
+					map[string]interface{}{
+						"id":          "SHOT_01_TW_01",
+						"shotId":      "SHOT_01_TW_01",
+						"durationSec": float64(10),
+					},
+				},
+			},
+			"timeWindows": []interface{}{
+				map[string]interface{}{"id": "SHOT_01_TW_01", "durationSec": float64(10)},
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "time_window",
+					"kind":     "TIME_WINDOW_PLAN",
+					"name":     "time_window_plan.json",
+					"mimeType": "application/json",
+					"metadata": map[string]interface{}{
+						"requiresReview": true,
+					},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("time window plan artifact should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one time window plan artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Kind != ArtifactKind("TIME_WINDOW_PLAN") {
+		t.Fatalf("expected TIME_WINDOW_PLAN artifact, got %q", req.Kind)
+	}
+	if req.StorageType != StorageInline {
+		t.Fatalf("time window plan storage type = %q, want %q", req.StorageType, StorageInline)
+	}
+	if req.Provider != "time-window-plan" {
+		t.Fatalf("time window plan provider = %q, want time-window-plan", req.Provider)
+	}
+	if len(req.Data) == 0 {
+		t.Fatalf("time window plan artifact should carry inline data for review")
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil {
+		t.Fatalf("time window plan data should be JSON: %v; data=%s", err, string(req.Data))
+	}
+	if _, ok := decoded["windows"].([]interface{}); !ok {
+		t.Fatalf("time window plan data should include windows, got %+v", decoded)
+	}
+	if _, ok := decoded["artifacts"]; ok {
+		t.Fatalf("time window plan data should not include output envelope artifacts: %+v", decoded)
+	}
+}
+
+func TestBuildArtifactsFromTimeWindowPlanWithoutPlanPayloadDoesNotStoreEnvelope(t *testing.T) {
+	node := &model.Node{
+		ID:     "time_window_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "time_window",
+			"tool":  "time_window_planner",
+		},
+		Output: map[string]interface{}{
+			"content":     "时间窗已生成。",
+			"timeWindows": []interface{}{map[string]interface{}{"id": "TW_01", "durationSec": float64(2)}},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId":   "time_window",
+					"kind":     "TIME_WINDOW_PLAN",
+					"name":     "time_window_plan.json",
+					"mimeType": "application/json",
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("time window plan manifest should materialize without inline data: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one time window plan artifact request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.Kind != ArtifactKind("TIME_WINDOW_PLAN") {
+		t.Fatalf("expected TIME_WINDOW_PLAN artifact, got %q", req.Kind)
+	}
+	if len(req.Data) != 0 {
+		t.Fatalf("time window plan without timeWindowPlan payload should fail closed with empty data, got %s", string(req.Data))
+	}
+}
+
 func TestBuildArtifactsExternalGenerationRequestUsesInlineReviewableProvider(t *testing.T) {
 	node := &model.Node{
 		ID:     "video_prompt_exec",

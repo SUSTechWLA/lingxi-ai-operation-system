@@ -1068,7 +1068,7 @@ function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: D
       <section className="card p-6">
         <p className="text-sm font-bold text-primary-dark">Shot 素材工作台</p>
         <h2 className="mt-2 text-3xl font-black text-ink">按 shot 回填与查看</h2>
-        <p className="mt-2 text-sm leading-6 text-ink-muted">先按 SHOT 查看脚本、提示词、参考图、故事板和视频片段；底部保留原始产物索引用于查 ID、版本和路径。</p>
+        <p className="mt-2 text-sm leading-6 text-ink-muted">先按 SHOT 查看脚本、提示词、参考图、故事板、基础画面和文字叠层；底部保留原始产物索引用于查 ID、版本和路径。</p>
       </section>
       {staleCount > 0 && <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">⚠ 有 {staleCount} 个下游产物已过期。上游产物被修改、驳回或重新生成后，下游产物需要重新生成才能使用。</div>}
       {materialDependencyCount > 0 && (
@@ -1077,7 +1077,7 @@ function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: D
             <div>
               <p className="text-sm font-black text-primary-dark">待回填素材</p>
               <p className="mt-1 text-sm leading-6 text-ink-muted">
-                {materialDependencyCount} 个外部生成请求已按 shot 放入下方槽位。复制 Prompt 到网页端生成后，直接在对应 shot 的参考图、故事板或视频槽上传回填。
+                {materialDependencyCount} 个外部生成请求已按 shot 放入下方槽位。复制 Prompt 到网页端生成后，直接在对应 shot 的参考图、故事板或基础画面槽上传回填。
               </p>
             </div>
             <StatusBadge status="review" label="待用户回填" />
@@ -1210,7 +1210,7 @@ function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { arti
               <StatusBadge status={group.status} />
             </div>
             {group.narrationText ? <p className="mt-3 line-clamp-2 text-sm leading-6 text-ink-muted">{group.narrationText}</p> : null}
-            <div className="mt-3 grid grid-cols-4 gap-1 text-center text-[10px] font-black text-ink-muted">
+            <div className="mt-3 grid grid-cols-2 gap-1 text-center text-[10px] font-black text-ink-muted sm:grid-cols-3">
               {group.slots.map((slot) => (
                 <span key={slot.kind} className={clsx('rounded px-2 py-1 ring-1', slot.status === 'valid' ? 'bg-green-50 text-green-700 ring-green-100' : slot.status === 'review' ? 'bg-amber-50 text-primary-dark ring-amber-100' : 'bg-background-card ring-line')}>
                   {slot.label}
@@ -1232,6 +1232,16 @@ function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { arti
                 <span className="rounded bg-white px-2 py-1 ring-1 ring-line">参考 {openGroup.artifactCounts.references}</span>
                 <span className="rounded bg-white px-2 py-1 ring-1 ring-line">媒体 {openGroup.artifactCounts.media}</span>
               </div>
+              {openGroup.generationStrategy && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-black text-primary-dark">
+                    {openGroup.generationStrategy.label}
+                  </span>
+                  {openGroup.generationStrategy.reason && (
+                    <span className="max-w-full text-xs leading-5 text-ink-muted [overflow-wrap:anywhere]">{openGroup.generationStrategy.reason}</span>
+                  )}
+                </div>
+              )}
             </div>
             <StatusBadge status={openGroup.status} />
           </div>
@@ -1446,6 +1456,8 @@ function ShotExternalRequestCard({
 }
 
 function slotIcon(kind: DirectorShotAssetSlot['kind']) {
+  if (kind === 'base-media') return <FiVideo />
+  if (kind === 'overlay') return <FiLayers />
   if (kind === 'video') return <FiVideo />
   if (kind === 'storyboard') return <FiLayers />
   if (kind === 'reference') return <FiFolder />
