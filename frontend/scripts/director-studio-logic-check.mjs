@@ -57,6 +57,7 @@ try {
     buildExportDeliveryItems,
     buildExternalGenerationTaskPackage,
     creationProfileSummary,
+    deriveNextAction,
     externalGenerationGuideSteps,
     videoCreationProfileForId,
     videoCreationProfiles,
@@ -118,6 +119,35 @@ try {
   ]
   const notStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] })
   assert.deepEqual(notStartedFlow.map((stage) => stage.status), ['pending', 'pending'])
+
+  const failedScriptStage = {
+    id: 'script_writer',
+    name: 'Script Writer',
+    displayName: '脚本编剧',
+    stage: 'script',
+    goal: '',
+    status: 'failed',
+    progress: 0,
+    allowedTools: ['video_script_generator'],
+    forbiddenTools: [],
+    requiredInputs: [],
+    requiredOutputs: ['VIDEO_SCRIPT'],
+    reviewFocus: [],
+  }
+  const runningStoryboardStage = {
+    ...failedScriptStage,
+    id: 'storyboard_artist',
+    name: 'Storyboard Artist',
+    displayName: '分镜设计',
+    stage: 'storyboard',
+    status: 'running',
+    allowedTools: ['shot_generation_planner'],
+    requiredOutputs: ['SHOT_LIST'],
+  }
+  const blockedNextAction = deriveNextAction([failedScriptStage, runningStoryboardStage])
+  assert.equal(blockedNextAction.kind, 'blocked')
+  assert.equal(blockedNextAction.stageId, 'script_writer')
+  assert.equal(overviewProjectStatus([failedScriptStage, runningStoryboardStage], 'RUNNING', 'RUNNING'), 'failed')
   const justStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] }, true)
   assert.deepEqual(justStartedFlow.map((stage) => stage.status), ['active', 'pending'])
   assert.equal(canStartProject(true, false, false), true)

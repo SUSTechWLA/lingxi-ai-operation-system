@@ -25,6 +25,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRuntimeConfig: () =>
     ipcRenderer.invoke('get-runtime-config'),
 
+  getOrCreateDeviceID: () =>
+    ipcRenderer.invoke('get-or-create-device-id'),
+
+  configureLocalRunnerSession: (session) =>
+    ipcRenderer.invoke('configure-local-runner-session', session),
+
+  clearLocalRunnerSession: () =>
+    ipcRenderer.invoke('clear-local-runner-session'),
+
   getModelProviderSettingsWithKeys: () =>
     ipcRenderer.invoke('get-model-provider-settings-with-keys'),
 

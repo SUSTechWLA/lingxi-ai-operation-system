@@ -50,6 +50,10 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 		CommandArtifactPackage,
 	)
 	reg.Register(
+		NewLocalFileImportExecutor(cfg.DataDir),
+		CommandLocalFileImport,
+	)
+	reg.Register(
 		NewFinalReviewExecutor(guard, cfg.DataDir),
 		CommandFinalReview,
 	)

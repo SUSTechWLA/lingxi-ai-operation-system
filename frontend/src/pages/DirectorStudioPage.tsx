@@ -832,6 +832,7 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
 }
 
 function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
+  const blockedStage = stages.find((stage) => stage.status === 'blocked' || stage.status === 'failed')
   const runningStage = stages.find((stage) => stage.status === 'running')
   const reviewStage = stages.find((stage) => stage.status === 'review')
 
@@ -841,7 +842,7 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
         <div>
           <h3 className="text-base font-black text-ink">任务状态机</h3>
           <p className="mt-1 text-xs text-ink-soft">
-            {runningStage ? `${runningStage.displayName} 正在生成，产物完成后进入审核。` : reviewStage ? `${reviewStage.displayName} 产物已输出，等待确认。` : '审核通过后，下个角色立即进入生成中。'}
+            {blockedStage ? `${blockedStage.displayName} 执行失败或被阻断，请查看追踪页错误并重新生成。` : runningStage ? `${runningStage.displayName} 正在生成，产物完成后进入审核。` : reviewStage ? `${reviewStage.displayName} 产物已输出，等待确认。` : '审核通过后，下个角色立即进入生成中。'}
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs font-semibold text-ink-soft">
@@ -895,6 +896,7 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
 }
 
 function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
+  const blockedStage = stages.find((stage) => stage.status === 'blocked' || stage.status === 'failed')
   const runningStage = stages.find((stage) => stage.status === 'running' || stage.status === 'active')
   const reviewStage = stages.find((stage) => stage.status === 'review')
   const allDone = stages.length > 0 && stages.every((stage) => stage.status === 'done')
@@ -909,6 +911,24 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
           <div>
             <p className="text-sm font-black text-green-800">全部阶段已完成</p>
             <p className="text-xs text-green-600 mt-0.5">所有审核已通过，可在产物页查看和导出最终视频。</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (blockedStage) {
+    return (
+      <div className="col-span-12 rounded-xl border border-red-200 bg-red-50 px-5 py-4 transition-all">
+        <div className="flex items-center gap-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-red-500 text-white">
+            <FiX />
+          </span>
+          <div>
+            <p className="text-sm font-black text-red-800">
+              【{blockedStage.displayName}】执行失败或被阻断
+            </p>
+            <p className="text-xs text-red-600 mt-0.5">请切到追踪页查看错误详情，或在审核页重新生成当前阶段。</p>
           </div>
         </div>
       </div>
