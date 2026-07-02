@@ -61,6 +61,7 @@ import {
   buildClientModelProvidersForRun,
   fetchLocalArtifactFile,
   fetchModelProviderSettings,
+  openLocalPath,
   uploadLocalArtifactFile,
   type LocalArtifactFileResponse,
   type ModelCapability,
@@ -69,9 +70,12 @@ import {
 import type { AgentReviewItem, AgentRun, Artifact, VideoProject, VideoRoleAgent } from '../utils/types'
 import {
   applyOptimisticRunningStage,
+  buildEnvironmentChecklist,
+  buildExportDeliveryItems,
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
+  buildExternalGenerationTaskPackage,
   buildPublishCopies,
   buildShotReviewGroups,
   deriveNextAction,
@@ -79,8 +83,6 @@ import {
   downstreamStaleArtifacts,
   extractDirectorErrorDetail,
   externalGenerationGuideSteps,
-  findFinalVideoArtifact,
-  findPublishCopyArtifact,
   getArtifactViewerSelection,
   getStageStateDisplay,
   isActionablePendingReview,
@@ -102,6 +104,8 @@ import {
   traceNodeHasError,
   unresolvedMaterialDependencyCount,
   visibleReviewHistory,
+  videoCreationProfileForId,
+  videoCreationProfiles,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
   type DirectorErrorDetail,
@@ -110,6 +114,10 @@ import {
   type DirectorStage,
   type DirectorStageStatus,
   type DirectorTraceNode,
+  type EnvironmentChecklistItem,
+  type ExportDeliveryItem,
+  type VideoCreationProfile,
+  type VideoCreationProfileId,
 } from './directorStudioLogic'
 
 interface Props {
@@ -158,6 +166,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [topic, setTopic] = useState('')
   const [durationSec, setDurationSec] = useState(45)
   const [roleAgents, setRoleAgents] = useState<VideoRoleAgent[]>(fallbackRoles)
+  const [selectedProfileId, setSelectedProfileId] = useState<VideoCreationProfileId>('voice_visual')
   const [project, setProject] = useState<VideoProject | null>(null)
   const [projectArtifacts, setProjectArtifacts] = useState<Artifact[]>([])
   const [run, setRun] = useState<AgentRun | null>(null)
@@ -170,6 +179,8 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
   const [optimisticRunningStageId, setOptimisticRunningStageId] = useState<string | undefined>()
   const [modelProviderStatus, setModelProviderStatus] = useState<ModelProviderStatus>({ state: 'checking', missing: [] })
+  const selectedProfile = useMemo(() => videoCreationProfileForId(selectedProfileId), [selectedProfileId])
+  const profileOptions = useMemo(() => videoCreationProfiles(), [])
 
   const refreshModelProviderStatus = useCallback(async () => {
     setModelProviderStatus((current) => ({ ...current, state: 'checking' }))
@@ -199,12 +210,10 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     let mounted = true
     Promise.all([
       fetchVideoRoleAgents().catch(() => ({ roleAgents: fallbackRoles })),
-      fetchVideoPreflight('wf-guided-image-text-video').catch(() => null),
       fetchVideoProjects().catch(() => ({ projects: [] })),
-    ]).then(([roles, nextPreflight, projects]) => {
+    ]).then(([roles, projects]) => {
       if (!mounted) return
       if (roles.roleAgents?.length) setRoleAgents(roles.roleAgents)
-      if (nextPreflight) setPreflight(nextPreflight)
       const latestProject = [...(projects.projects || [])].sort((a, b) => {
         const bTime = Date.parse(b.updatedAt || b.createdAt || '')
         const aTime = Date.parse(a.updatedAt || a.createdAt || '')
@@ -212,6 +221,9 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       })[0]
       if (!latestProject) return
       setProject(latestProject)
+      if (latestProject.mode === 'aigc_shot' || latestProject.mode === 'voice_visual') {
+        setSelectedProfileId(latestProject.mode)
+      }
       const restoredTopic = typeof latestProject.config?.topic === 'string' ? latestProject.config.topic : latestProject.name
       if (restoredTopic) setTopic(restoredTopic)
       if (typeof latestProject.targetDurationSec === 'number' && latestProject.targetDurationSec > 0) {
@@ -232,6 +244,19 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     })
     return () => { mounted = false }
   }, [refreshRun])
+
+  useEffect(() => {
+    let mounted = true
+    setPreflight(null)
+    fetchVideoPreflight(selectedProfile.preflightPipeline)
+      .then((nextPreflight) => {
+        if (mounted) setPreflight(nextPreflight)
+      })
+      .catch(() => {
+        if (mounted) setPreflight(null)
+      })
+    return () => { mounted = false }
+  }, [selectedProfile.preflightPipeline])
 
   useEffect(() => {
     if (activeNav === 'overview') {
@@ -258,7 +283,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
   const activeRunId = run?.id || project?.currentRunId
   const basePrimaryProjectAction = projectPrimaryAction({
-    preflightCanStart: preflight?.canStart !== false,
+    preflightCanStart: preflight?.canStart === true,
     loading,
     projectStatus: project?.status,
     runStatus: run?.status,
@@ -268,6 +293,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const primaryProjectAction = basePrimaryProjectAction.kind === 'stop' && !activeRunId
     ? { ...basePrimaryProjectAction, disabled: true }
     : basePrimaryProjectAction
+  const environmentChecklist = useMemo(() => buildEnvironmentChecklist({
+    serviceStatus,
+    selectedProfile,
+    preflight,
+    modelProviderState: modelProviderStatus.state,
+    missingModelCapabilities: modelProviderStatus.missing,
+  }), [modelProviderStatus.missing, modelProviderStatus.state, preflight, selectedProfile, serviceStatus])
 
   useEffect(() => {
     if (!optimisticRunningStageId) return
@@ -284,22 +316,29 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       const cleanTopic = topic.trim()
       const nextProject = await createVideoProject({
         name: cleanTopic.slice(0, 40) || '视频创作项目',
-        description: `一句话视频创作：${cleanTopic}`,
-        mode: 'voice_visual',
+        description: `${selectedProfile.label}：${cleanTopic}`,
+        mode: selectedProfile.projectMode,
         skillName: 'video-creator',
         skillVersion: 'v4.0',
         workflowName: 'dynamic-agent-video-creation',
         workflowVersion: 'v4.0',
-        generationMode: 'provider_api',
+        generationMode: selectedProfile.generationMode,
         aspectRatio: '16:9',
         targetDurationSec: durationSec,
         language: 'zh-CN',
-        config: { entry: 'director_studio', topic: cleanTopic, durationSec },
+        config: {
+          entry: 'director_studio',
+          topic: cleanTopic,
+          durationSec,
+          videoType: selectedProfile.id,
+          profileId: selectedProfile.id,
+          preflightPipeline: selectedProfile.preflightPipeline,
+        },
       })
       setProject({ ...nextProject, status: 'RUNNING' })
       const clientModelProviders = await buildClientModelProvidersForRun()
       const result = await startAgentRun({
-        message: `请帮我创作一个${durationSec}秒图文视频：${cleanTopic}`,
+        message: `${selectedProfile.startMessagePrefix}${durationSec}秒视频：${cleanTopic}`,
         domain: 'video_creation',
         mode: 'dynamic_agent',
         context: {
@@ -307,6 +346,11 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           topic: cleanTopic,
           durationSec,
           targetDurationSec: durationSec,
+          videoType: selectedProfile.id,
+          profileId: selectedProfile.id,
+          projectMode: selectedProfile.projectMode,
+          generationMode: selectedProfile.generationMode,
+          preflightPipeline: selectedProfile.preflightPipeline,
           ...(clientModelProviders ? { modelProviders: clientModelProviders } : {}),
         },
       })
@@ -399,7 +443,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           </div>
         )}
         {activeNav !== 'system' && (
-          <ModelProviderNotice status={modelProviderStatus} onOpenSettings={() => setActiveNav('system')} />
+          <ModelProviderNotice status={modelProviderStatus} selectedProfile={selectedProfile} onOpenSettings={() => setActiveNav('system')} />
         )}
         <div className="mt-6">
           {activeNav === 'overview' && (
@@ -412,11 +456,16 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               stages={displayStages}
               artifacts={artifacts}
               preflight={preflight}
+              selectedProfile={selectedProfile}
+              profileOptions={profileOptions}
+              environmentChecklist={environmentChecklist}
               nextAction={nextAction}
               onTopicChange={setTopic}
               onDurationChange={setDurationSec}
+              onProfileChange={setSelectedProfileId}
               onStart={handleStart}
               onStop={handleStopProject}
+              onOpenSettings={() => setActiveNav('system')}
               onGoReview={() => setActiveNav('review')}
             />
           )}
@@ -505,6 +554,9 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, on
 }
 
 function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightResponse | null; serviceStatus: string; run: AgentRun | null }) {
+  const localRunnerAvailable = preflight?.capabilityMenu.localRunner.available === true
+  const localUnavailable = serviceStatus === 'unhealthy' && !localRunnerAvailable
+  const executionReady = preflight?.canStart === true && !localUnavailable
   return (
     <header className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
@@ -517,7 +569,7 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
         <div className="hidden items-center gap-2 rounded-lg bg-white/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
           <FiSearch /> 搜索项目、产物、过程事件
         </div>
-        <StatusPill ok={preflight?.canStart !== false && serviceStatus !== 'unhealthy'} label={serviceStatus === 'unhealthy' ? '服务未连接' : preflight?.status === 'blocked' ? '环境待处理' : '执行环境就绪'} />
+        <StatusPill ok={executionReady} label={localUnavailable ? '服务未连接' : !preflight ? '环境体检中' : preflight.status === 'blocked' ? '环境待处理' : '执行环境就绪'} />
         {run && <div className="rounded-lg bg-white/80 px-4 py-3 text-xs font-bold text-ink-muted ring-1 ring-line">Run {run.id.slice(0, 8)}</div>}
         <button className="rounded-lg bg-white/80 p-3 text-ink-muted ring-1 ring-line hover:text-primary-dark" title="通知"><FiBell /></button>
       </div>
@@ -525,9 +577,13 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
   )
 }
 
-function ModelProviderNotice({ status, onOpenSettings }: { status: ModelProviderStatus; onOpenSettings: () => void }) {
+function ModelProviderNotice({ status, selectedProfile, onOpenSettings }: { status: ModelProviderStatus; selectedProfile: VideoCreationProfile; onOpenSettings: () => void }) {
   if (status.state === 'checking' || status.state === 'configured') return null
-  const missingText = status.missing.map((capability) => modelProviderCapabilityLabels[capability]).join('、')
+  const blockingMissing = selectedProfile.generationMode === 'manual_import'
+    ? status.missing.filter((capability) => capability === 'text_to_text')
+    : status.missing
+  if (status.state === 'missing' && blockingMissing.length === 0) return null
+  const missingText = blockingMissing.map((capability) => modelProviderCapabilityLabels[capability]).join('、')
   const title = status.state === 'unavailable' ? '本地模型配置未读取' : '基础模型 API 未配置完整'
   const message = status.state === 'unavailable'
     ? '请先确认本地服务已启动，然后在设置中配置 OpenAI-compatible 接口。'
@@ -573,14 +629,19 @@ function OverviewPage(props: {
   stages: DirectorStage[]
   artifacts: DirectorArtifactRecord[]
   preflight: PreflightResponse | null
+  selectedProfile: VideoCreationProfile
+  profileOptions: VideoCreationProfile[]
+  environmentChecklist: EnvironmentChecklistItem[]
   nextAction?: ReturnType<typeof deriveNextAction>
   onTopicChange: (value: string) => void
   onDurationChange: (value: number) => void
+  onProfileChange: (value: VideoCreationProfileId) => void
   onStart: () => void
   onStop: () => void
+  onOpenSettings: () => void
   onGoReview: () => void
 }) {
-  const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, nextAction, onTopicChange, onDurationChange, onStart, onStop, onGoReview } = props
+  const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, selectedProfile, profileOptions, environmentChecklist, nextAction, onTopicChange, onDurationChange, onProfileChange, onStart, onStop, onOpenSettings, onGoReview } = props
   const staleNames = artifacts.filter((artifact) => artifact.status === 'stale').map((artifact) => artifact.name)
   const isStopAction = primaryAction.kind === 'stop'
   return (
@@ -596,6 +657,35 @@ function OverviewPage(props: {
               </div>
             </div>
             <StatusBadge status={overviewStatus} />
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            {profileOptions.map((profile) => {
+              const active = selectedProfile.id === profile.id
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  onClick={() => onProfileChange(profile.id)}
+                  className={clsx(
+                    'min-w-0 rounded-lg border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30',
+                    active ? 'border-primary bg-primary-soft shadow-sm' : 'border-line bg-white hover:border-primary/35 hover:bg-background-card',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-black text-ink">{profile.label}</div>
+                      <div className="mt-1 text-xs leading-5 text-ink-muted">{profile.description}</div>
+                    </div>
+                    <StatusBadge status={active ? 'valid' : 'pending'} label={active ? '当前入口' : '可选择'} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {profile.requiredLocalCommands.map((command) => (
+                      <span key={command} className="rounded bg-white px-2 py-1 font-mono text-[10px] font-bold text-primary-dark ring-1 ring-line">{command}</span>
+                    ))}
+                  </div>
+                </button>
+              )
+            })}
           </div>
           <textarea
             className="mt-5 h-36 w-full resize-none rounded-xl border-2 border-line bg-white p-5 text-base leading-7 text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-primary focus:shadow-glow"
@@ -617,7 +707,7 @@ function OverviewPage(props: {
             >
               {isStopAction ? <FiSquare /> : <FiPlay />} {primaryAction.label}
             </button>
-            {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : null}
+            {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : !preflight ? <span className="text-xs font-semibold text-primary-dark">正在体检当前视频入口...</span> : null}
           </div>
         </section>
         <section className="card col-span-12 p-6 xl:col-span-4">
@@ -629,6 +719,7 @@ function OverviewPage(props: {
           </button>
         </section>
       </div>
+      <EnvironmentChecklistPanel items={environmentChecklist} onOpenSettings={onOpenSettings} />
       <StageFlow stages={stages} />
       {staleNames.length > 0 && (
         <div className="card border-red-200 bg-red-50/80 p-5">
@@ -646,6 +737,69 @@ function OverviewPage(props: {
       </div>
     </div>
   )
+}
+
+function EnvironmentChecklistPanel({ items, onOpenSettings }: { items: EnvironmentChecklistItem[]; onOpenSettings: () => void }) {
+  const blockedCount = items.filter((item) => item.status === 'blocked').length
+  const warningCount = items.filter((item) => item.status === 'warning').length
+  return (
+    <section className="card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-primary-dark">启动体检</p>
+          <h3 className="mt-1 text-lg font-black text-ink">云端编排、本地工具和模型配置</h3>
+        </div>
+        <StatusBadge
+          status={blockedCount ? 'blocked' : warningCount ? 'review' : 'valid'}
+          label={blockedCount ? `${blockedCount} 项待处理` : warningCount ? '可启动但需留意' : '体检通过'}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {items.map((item) => (
+          <div key={item.id} className={clsx('rounded-lg border p-4', environmentItemTone(item.status))}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-black text-ink">{item.label}</div>
+                <p className="mt-1 text-xs leading-5 text-ink-muted">{item.detail}</p>
+                {item.blockerCode ? <div className="mt-2 font-mono text-[10px] font-bold text-red-600">{item.blockerCode}</div> : null}
+              </div>
+              <StatusBadge status={environmentStatusToBadge(item.status)} label={environmentStatusLabel(item.status)} />
+            </div>
+            {item.actionLabel ? (
+              <button
+                type="button"
+                onClick={item.actionLabel === '打开设置' ? onOpenSettings : undefined}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+              >
+                <FiSettings /> {item.actionLabel}
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function environmentItemTone(status: EnvironmentChecklistItem['status']) {
+  if (status === 'passed') return 'border-green-100 bg-green-50/70'
+  if (status === 'blocked') return 'border-red-200 bg-red-50/75'
+  if (status === 'warning') return 'border-amber-200 bg-amber-50/75'
+  return 'border-line bg-background-card'
+}
+
+function environmentStatusToBadge(status: EnvironmentChecklistItem['status']): DirectorArtifactStatus {
+  if (status === 'passed') return 'valid'
+  if (status === 'blocked') return 'blocked'
+  if (status === 'warning') return 'review'
+  return 'pending'
+}
+
+function environmentStatusLabel(status: EnvironmentChecklistItem['status']) {
+  if (status === 'passed') return '通过'
+  if (status === 'blocked') return '待处理'
+  if (status === 'warning') return '注意'
+  return '检测中'
 }
 
 function StageFlow({ stages }: { stages: DirectorStage[] }) {
@@ -1301,7 +1455,7 @@ function ShotAssetSlotCard({
     .map((artifact) => promptPreviews[artifact.id]?.request)
     .filter((request): request is ExternalGenerationRequestContent => Boolean(request))
   const copyValue = requests.length
-    ? requests.map((request) => request.prompt).join('\n\n---\n\n')
+    ? requests.map((request) => buildExternalGenerationTaskPackage(request).fullText).join('\n\n---\n\n')
     : slot.artifacts.map(artifactToCopyText).join('\n\n')
   const canUpload = Boolean(slot.uploadKind)
   const accept = slot.uploadKind === 'video' ? 'video/*' : 'image/*'
@@ -1322,7 +1476,7 @@ function ShotAssetSlotCard({
         <StatusBadge status={slot.status} label={slot.kind === 'prompt' ? '可复制' : slot.status === 'review' && canUpload ? '可回填' : undefined} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        {copyValue ? <CopyButton value={copyValue} label={slot.kind === 'prompt' ? '复制提示词' : '复制信息'} /> : null}
+        {copyValue ? <CopyButton value={copyValue} label={slot.kind === 'prompt' ? '复制任务包' : '复制信息'} /> : null}
         {canUpload ? (
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
@@ -1406,6 +1560,7 @@ function ShotExternalRequestCard({
   ].filter(Boolean).join(' / ')
   const accept = request.kind === 'video' ? 'video/*' : 'image/*'
   const guideSteps = externalGenerationGuideSteps(request)
+  const taskPackage = buildExternalGenerationTaskPackage(request)
 
   return (
     <div className="rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
@@ -1415,7 +1570,18 @@ function ShotExternalRequestCard({
           <div className="mt-0.5 text-xs text-ink-muted">{request.kind === 'image' ? '图片生成请求' : '视频生成请求'}{targetText ? ` · ${targetText}` : ''}</div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <CopyButton value={request.prompt} label="复制 Prompt" />
+          <CopyButton value={taskPackage.fullText} label="复制完整任务包" />
+          <CopyButton value={taskPackage.positivePrompt} label="正向词" />
+          {request.negativePrompt ? <CopyButton value={taskPackage.negativePrompt} label="负向词" /> : null}
+          <CopyButton value={taskPackage.parameterText} label="参数" />
+          <CopyButton value={taskPackage.referenceManifest} label="参考图" />
+          <button
+            type="button"
+            onClick={() => downloadTextFile(`${request.requestId || shotId}-reference-package.md`, taskPackage.fullText, 'text/markdown')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+          >
+            <FiDownload /> 下载包
+          </button>
           {allowUpload ? (
             <label className={clsx(
               'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
@@ -1546,13 +1712,15 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
 }
 
 function ExportPage({ artifacts, durationSec, projectId }: { artifacts: DirectorArtifactRecord[]; durationSec: number; projectId?: string }) {
-  const video = useMemo(() => findFinalVideoArtifact(artifacts), [artifacts])
-  const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
-  const publishArtifact = useMemo(() => findPublishCopyArtifact(artifacts), [artifacts])
+  const deliveryItems = useMemo(() => buildExportDeliveryItems(artifacts), [artifacts])
+  const video = deliveryItems.find((item) => item.id === 'final-video')?.artifact
+  const packageArtifact = deliveryItems.find((item) => item.id === 'project-package')?.artifact
+  const publishArtifact = deliveryItems.find((item) => item.id === 'publish-copy')?.artifact
   const previewVideoRef = useRef<HTMLVideoElement>(null)
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null)
   const [videoPreviewLoading, setVideoPreviewLoading] = useState(false)
   const [videoPreviewError, setVideoPreviewError] = useState<string | null>(null)
+  const [videoLocalPath, setVideoLocalPath] = useState<string | null>(null)
   const [publishContent, setPublishContent] = useState<unknown>(null)
   const [publishLoading, setPublishLoading] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
@@ -1565,6 +1733,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
     setVideoPreviewUrl(null)
     setVideoPreviewError(null)
     setVideoPreviewLoading(false)
+    setVideoLocalPath(null)
 
     if (!videoReady || !videoStorageRef) return undefined
     const directUrl = directMediaPreviewUrl(videoStorageRef)
@@ -1589,6 +1758,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
         if (cancelled) return
         const blob = localArtifactFileToBlob(localArtifact, video?.metadata)
         objectUrl = URL.createObjectURL(blob)
+        setVideoLocalPath(localArtifact.path || null)
         setVideoPreviewUrl(objectUrl)
       })
       .catch((err) => {
@@ -1632,6 +1802,14 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
   const publishLocalOnlyPointer = isLocalOnlyArtifactPointer(publishContent)
   const markdown = publishCopiesToMarkdown(publishCopies)
   const json = publishCopiesToJSON(publishCopies)
+  const openFinalVideoFolder = async () => {
+    if (!videoLocalPath) {
+      setVideoPreviewError('当前环境无法直接打开本地文件夹，请复制交付物清单中的 storageRef 定位文件。')
+      return
+    }
+    const opened = await openLocalPath(videoLocalPath)
+    if (!opened) setVideoPreviewError('当前浏览器环境不能打开本地文件夹，请在桌面端使用该功能。')
+  }
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
@@ -1663,7 +1841,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           <h3 className="text-lg font-black text-ink">导出操作</h3>
           {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
           {videoPreviewError && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{videoPreviewError}</div>}
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} onClick={() => { void openFinalVideoFolder() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
@@ -1673,7 +1851,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">交付物清单</h3>
           <div className="mt-4 space-y-3 text-sm">
-            {artifacts.filter((artifact) => ['VIDEO', 'PROJECT_PACKAGE', 'RENDER_REPORT', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'].includes(artifact.kind)).map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded-lg bg-background-card px-4 py-3 ring-1 ring-line"><span>{artifact.name}</span><StatusBadge status={artifact.status} /></div>)}
+            {deliveryItems.map((item) => <ExportDeliveryRow key={item.id} item={item} />)}
           </div>
         </section>
       </aside>
@@ -1710,6 +1888,21 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           ))}
         </div>
       </section>
+    </div>
+  )
+}
+
+function ExportDeliveryRow({ item }: { item: ExportDeliveryItem }) {
+  return (
+    <div className="rounded-lg bg-background-card px-4 py-3 ring-1 ring-line">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-black text-ink">{item.label}</div>
+          <div className="mt-1 text-xs leading-5 text-ink-muted">{item.description}</div>
+          {item.storageRef ? <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={item.storageRef}>{item.storageRef}</div> : null}
+        </div>
+        <StatusBadge status={item.status} />
+      </div>
     </div>
   )
 }
@@ -2043,6 +2236,7 @@ function ExternalGenerationRequestPanel({
     request.target?.durationSec ? `${request.target.durationSec}s` : '',
   ].filter(Boolean).join(' / ')
   const guideSteps = externalGenerationGuideSteps(request)
+  const taskPackage = buildExternalGenerationTaskPackage(request)
 
   return (
     <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
@@ -2056,7 +2250,18 @@ function ExternalGenerationRequestPanel({
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge status="review" label="待用户回填" />
-          <CopyButton value={request.prompt} label="复制给外部网站" />
+          <CopyButton value={taskPackage.fullText} label="复制完整任务包" />
+          <CopyButton value={taskPackage.positivePrompt} label="正向词" />
+          {request.negativePrompt ? <CopyButton value={taskPackage.negativePrompt} label="负向词" /> : null}
+          <CopyButton value={taskPackage.parameterText} label="参数" />
+          <CopyButton value={taskPackage.referenceManifest} label="参考图" />
+          <button
+            type="button"
+            onClick={() => downloadTextFile(`${request.requestId}-external-task.md`, taskPackage.fullText, 'text/markdown')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+          >
+            <FiDownload /> 下载包
+          </button>
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
             disabled && 'cursor-not-allowed opacity-50'

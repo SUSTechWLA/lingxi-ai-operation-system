@@ -14,6 +14,15 @@ export interface ModelProviderSettingsResponse {
   providers: Partial<Record<ModelCapability, ModelProviderConfig>>
 }
 
+export interface LocalAgentHealthResponse {
+  status: string
+  service?: string
+  cloudApiBase?: string
+  dataDir?: string
+  os?: string
+  arch?: string
+}
+
 export interface LocalArtifactUploadResponse {
   id: string
   projectId: string
@@ -55,6 +64,29 @@ export const DEFAULT_MODEL_PROVIDER_SETTINGS: Record<ModelCapability, ModelProvi
 export function getLocalAgentBaseUrl(): string {
   const api = getElectronAPI()
   return configuredLocalAgentUrl || api?.runtimeConfig?.localAgentUrl || DEFAULT_LOCAL_AGENT_URL
+}
+
+export async function fetchLocalAgentHealth(): Promise<LocalAgentHealthResponse> {
+  const api = getElectronAPI()
+  if (api?.checkServiceHealth) {
+    const status = await api.checkServiceHealth()
+    return {
+      status: status === 'ok' ? 'ok' : 'unhealthy',
+      service: 'tangying-local-agent',
+      cloudApiBase: api.runtimeConfig?.cloudApiBase,
+    }
+  }
+  const response = await fetch(localAgentUrl('/api/local/health'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '本地服务未连接'))
+  }
+  return response.json() as Promise<LocalAgentHealthResponse>
+}
+
+export async function openLocalPath(targetPath: string): Promise<boolean> {
+  const api = getElectronAPI()
+  if (!api?.openPath) return false
+  return api.openPath(targetPath)
 }
 
 export function mergeModelProviderSettings(

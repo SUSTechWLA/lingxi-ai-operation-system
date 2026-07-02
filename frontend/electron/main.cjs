@@ -195,6 +195,18 @@ ipcMain.handle('open-external', async (_, url) => {
   }
 })
 
+// Open a local file or directory from the renderer. Used for generated video/package handoff.
+ipcMain.handle('open-path', async (_, targetPath) => {
+  if (typeof targetPath !== 'string' || !targetPath.trim()) return false
+  const cleanPath = targetPath.trim()
+  if (fs.existsSync(cleanPath) && fs.statSync(cleanPath).isFile()) {
+    shell.showItemInFolder(cleanPath)
+    return true
+  }
+  const result = await shell.openPath(cleanPath)
+  return result === ''
+})
+
 // ── App lifecycle ─────────────────────────────────────────
 
 app.whenReady().then(() => {
