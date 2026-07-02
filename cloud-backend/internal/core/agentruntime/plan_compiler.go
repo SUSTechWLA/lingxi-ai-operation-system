@@ -119,6 +119,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	if !c.completeVideoPlanByProfile(plan) {
 		c.completeVideoBetaPlan(plan)
 	}
+	c.injectKnowledgeContext(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
 	c.expandPreparedPlanBudget(plan)
 	return plan
@@ -309,17 +310,30 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 		if c.manifestFor(scriptTool) == nil {
 			return false
 		}
-		scriptAnchor = insertPlanStepAfter(plan, profileAnchor, AgentStep{
-			ID:        uniqueStepID(plan, "script_generation"),
-			Intent:    "生成口播主线脚本",
-			Tool:      scriptTool,
-			DependsOn: dependencyList(profileAnchor),
-			Arguments: map[string]interface{}{
-				"stage":           "script_generation",
-				"brief":           plan.Goal,
-				"topic":           plan.Goal,
-				"creationProfile": stepOutputRef(profileAnchor, "creationProfile"),
-			},
+		insertAfter := profileAnchor
+		scriptDeps := dependencyList(profileAnchor)
+		scriptArgs := map[string]interface{}{
+			"stage":           "script_generation",
+			"brief":           plan.Goal,
+			"topic":           plan.Goal,
+			"creationProfile": stepOutputRef(profileAnchor, "creationProfile"),
+		}
+		if proposalAnchor, proposalField := c.lastProducerStepForFields(plan, []string{"proposalPacket", "proposal", "creativeBrief"}, []string{"proposal_generator"}); proposalAnchor != "" {
+			insertAfter = proposalAnchor
+			scriptDeps = dependencyListUnique(proposalAnchor, profileAnchor)
+			if proposalField != "" {
+				scriptArgs["proposal"] = stepOutputRef(proposalAnchor, proposalField)
+			}
+		} else if knowledgeAnchor, _ := c.lastProducerStepForFields(plan, []string{"facts", "sources", "summary", "knowledge"}, []string{"knowledge_researcher", "news_search", "fact_checker"}); knowledgeAnchor != "" {
+			insertAfter = knowledgeAnchor
+			scriptDeps = dependencyListUnique(knowledgeAnchor, profileAnchor)
+		}
+		scriptAnchor = insertPlanStepAfter(plan, insertAfter, AgentStep{
+			ID:              uniqueStepID(plan, "script_generation"),
+			Intent:          "生成口播主线脚本",
+			Tool:            scriptTool,
+			DependsOn:       scriptDeps,
+			Arguments:       scriptArgs,
 			ExpectedOutput:  []string{"script"},
 			ProduceArtifact: true,
 		})

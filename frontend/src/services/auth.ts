@@ -115,6 +115,7 @@ export function logout(): void {
   cachedSession = null
   if (typeof window !== 'undefined') {
     window.localStorage.removeItem(STORAGE_KEY)
+    void window.electronAPI?.clearLocalRunnerSession?.()
   }
 }
 
@@ -122,6 +123,7 @@ function storeSession(session: AuthSession): void {
   cachedSession = session
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session))
+    syncLocalRunnerSession(session)
   }
 }
 
@@ -172,7 +174,7 @@ function cloudUrl(path: string): string {
   return `${API_BASE.replace(/\/$/, '')}${path}`
 }
 
-function getDeviceID(): string {
+export function getDeviceID(): string {
   const key = 'tangying.device.id'
   if (typeof window === 'undefined') return 'web'
   const existing = window.localStorage.getItem(key)
@@ -180,6 +182,16 @@ function getDeviceID(): string {
   const next = `web-${crypto.randomUUID?.() || Date.now().toString(36)}`
   window.localStorage.setItem(key, next)
   return next
+}
+
+function syncLocalRunnerSession(session: AuthSession): void {
+  if (typeof window === 'undefined') return
+  const api = window.electronAPI
+  if (!api?.configureLocalRunnerSession) return
+  void api.configureLocalRunnerSession({
+    userToken: session.accessToken,
+    deviceID: getDeviceID(),
+  })
 }
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {

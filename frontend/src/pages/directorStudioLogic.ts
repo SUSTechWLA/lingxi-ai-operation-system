@@ -1687,6 +1687,9 @@ export function isProjectInProgress(
 }
 
 export function overviewProjectStatus(stages: DirectorStage[], projectStatus?: DirectorProjectLifecycleStatus, runStatus?: DirectorRunLifecycleStatus): DirectorStageStatus {
+  if (runStatus === 'FAILED' || stages.some((stage) => stage.status === 'failed' || stage.status === 'blocked')) {
+    return 'failed'
+  }
   if (runStatus === 'SUCCESS' || projectStatus === 'COMPLETED' || (stages.length > 0 && stages.every((stage) => stage.status === 'done'))) {
     return 'done'
   }
@@ -1727,16 +1730,6 @@ export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | 
     }
   }
 
-  const runningStage = stages.find((stage) => stage.status === 'running' || stage.status === 'active')
-  if (runningStage) {
-    return {
-      stageId: runningStage.id,
-      kind: 'running',
-      label: `${runningStage.displayName}执行中`,
-      description: '当前阶段正在运行，完成后会生成新的审核或产物记录。',
-    }
-  }
-
   const blockedStage = stages.find((stage) => stage.status === 'blocked' || stage.status === 'failed')
   if (blockedStage) {
     return {
@@ -1744,6 +1737,16 @@ export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | 
       kind: 'blocked',
       label: `处理${blockedStage.displayName}阻断`,
       description: '该阶段被驳回或执行失败，需要根据反馈重新生成或修正输入。',
+    }
+  }
+
+  const runningStage = stages.find((stage) => stage.status === 'running' || stage.status === 'active')
+  if (runningStage) {
+    return {
+      stageId: runningStage.id,
+      kind: 'running',
+      label: `${runningStage.displayName}执行中`,
+      description: '当前阶段正在运行，完成后会生成新的审核或产物记录。',
     }
   }
 

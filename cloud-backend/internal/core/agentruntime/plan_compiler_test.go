@@ -397,6 +397,76 @@ func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanKeepsResearchAndProposalBeforeAutoScript(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["knowledge_researcher"] = &tool.ToolManifest{
+		Name:         "knowledge_researcher",
+		Capabilities: []string{"fresh_knowledge", "news_search", "web_search", "current_event_retrieval", "fact_retrieval"},
+		SideEffect:   false,
+		Output: map[string]tool.ParamDef{
+			"facts":   {Type: "array"},
+			"sources": {Type: "array"},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "做一个15秒知识口播：介绍佛得角世界杯出线为什么是奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		KnowledgePolicy: &KnowledgePolicy{
+			RetrievalPolicy:   RetrievalRequired,
+			FreshnessLevel:    FreshnessHigh,
+			SearchQueries:     []string{"佛得角 2026 世界杯 出线 最新"},
+			MustUseFacts:      true,
+			BlockOnEmptyFacts: true,
+		},
+		Steps: []AgentStep{
+			{
+				ID:              "knowledge_researcher",
+				Tool:            "knowledge_researcher",
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯出线"},
+				ExpectedOutput:  []string{"facts", "sources"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:              "proposal_generator",
+				Tool:            "proposal_generator",
+				DependsOn:       []string{"knowledge_researcher"},
+				Arguments:       map[string]interface{}{"brief": "佛得角世界杯出线"},
+				ExpectedOutput:  []string{"proposalPacket"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	assertStepOrder(t, prepared, []string{"profile_selection", "knowledge_researcher", "proposal_generator", "script_generation"})
+	script := findStep(t, prepared, "script_generation")
+	requireStepDeps(t, script, []string{"proposal_generator", "profile_selection", "knowledge_researcher"})
+	if got := script.Arguments["proposal"]; got != "{{proposal_generator.output.proposalPacket}}" {
+		t.Fatalf("script_generation proposal = %#v, want proposal output ref", got)
+	}
+	if got := script.Arguments["retrievalPolicy"]; got != "required" {
+		t.Fatalf("script_generation retrievalPolicy = %#v, want required", got)
+	}
+	kc, ok := script.Arguments["knowledgeContext"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("script_generation should receive knowledgeContext, got %#v", script.Arguments)
+	}
+	items, _ := kc["items"].([]interface{})
+	if len(items) != 1 || items[0] != "{{knowledge_researcher.output.facts}}" {
+		t.Fatalf("script_generation knowledgeContext items should reference research facts, got %#v", kc)
+	}
+	sources, _ := kc["sources"].([]interface{})
+	if len(sources) != 1 || sources[0] != "{{knowledge_researcher.output.sources}}" {
+		t.Fatalf("script_generation knowledgeContext sources should reference research sources, got %#v", kc)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	catalog := videoProfileTemplateCatalog()
 	compiler := NewPlanCompiler(catalog)
