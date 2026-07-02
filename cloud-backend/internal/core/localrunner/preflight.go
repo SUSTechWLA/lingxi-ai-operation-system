@@ -3,6 +3,7 @@ package localrunner
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,10 +18,10 @@ type PreflightResponse struct {
 }
 
 type CapabilityMenu struct {
-	LocalRunner         LocalRunnerStatus  `json:"localRunner"`
-	CompositionRuntime  CompositionRuntime `json:"compositionRuntime"`
-	LocalTools          []LocalToolStatus  `json:"localTools"`
-	Warnings            []string           `json:"warnings"`
+	LocalRunner        LocalRunnerStatus  `json:"localRunner"`
+	CompositionRuntime CompositionRuntime `json:"compositionRuntime"`
+	LocalTools         []LocalToolStatus  `json:"localTools"`
+	Warnings           []string           `json:"warnings"`
 }
 
 type LocalRunnerStatus struct {
@@ -48,6 +49,11 @@ type PreflightBlocker struct {
 	Message string `json:"message"`
 }
 
+type preflightPipelineProfile struct {
+	id               string
+	requiredCommands []string
+}
+
 // PreflightService provides capability checks for video pipeline startup.
 type PreflightService interface {
 	HasOnlineRunner(ctx context.Context, userID string) (bool, error)
@@ -60,9 +66,9 @@ func HandleVideoPreflight(svc PreflightService) gin.HandlerFunc {
 		userID, _ := c.Get("userID") // set by auth middleware
 		uid, _ := userID.(string)
 
-		pipeline := "wf-guided-image-text-video"
+		profile := preflightProfileForPipeline(c.Query("pipeline"))
 		resp := PreflightResponse{
-			Pipeline: pipeline,
+			Pipeline: profile.id,
 			Status:   "passed",
 			CanStart: true,
 		}
@@ -82,14 +88,7 @@ func HandleVideoPreflight(svc PreflightService) gin.HandlerFunc {
 		}
 
 		// 2. Check required local commands
-		requiredCommands := []string{
-			"HYPERFRAMES_PROJECT_GENERATE",
-			"HYPERFRAMES_SNAPSHOT",
-			"HYPERFRAMES_RENDER",
-			"FFMPEG_PROBE",
-			"ARTIFACT_PACKAGE",
-		}
-		for _, cmd := range requiredCommands {
+		for _, cmd := range profile.requiredCommands {
 			supported, err := svc.SupportsCommand(c.Request.Context(), uid, cmd)
 			available := err == nil && supported
 			resp.CapabilityMenu.LocalTools = append(resp.CapabilityMenu.LocalTools, LocalToolStatus{
@@ -119,5 +118,30 @@ func HandleVideoPreflight(svc PreflightService) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, resp)
+	}
+}
+
+func preflightProfileForPipeline(raw string) preflightPipelineProfile {
+	switch strings.TrimSpace(raw) {
+	case "wf-aigc-shot-video", "aigc-shot-video", "cinematic-aigc-shot-video":
+		return preflightPipelineProfile{
+			id: "wf-aigc-shot-video",
+			requiredCommands: []string{
+				"LOCAL_FILE_IMPORT",
+				"FFMPEG_PROBE",
+				"ARTIFACT_PACKAGE",
+			},
+		}
+	default:
+		return preflightPipelineProfile{
+			id: "wf-guided-image-text-video",
+			requiredCommands: []string{
+				"HYPERFRAMES_PROJECT_GENERATE",
+				"HYPERFRAMES_SNAPSHOT",
+				"HYPERFRAMES_RENDER",
+				"FFMPEG_PROBE",
+				"ARTIFACT_PACKAGE",
+			},
+		}
 	}
 }
