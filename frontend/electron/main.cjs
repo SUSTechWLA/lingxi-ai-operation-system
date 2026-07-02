@@ -3,6 +3,11 @@ const path = require('path')
 const { spawn } = require('child_process')
 const fs = require('fs')
 const http = require('http')
+const {
+  buildLocalAgentLaunchOptions,
+  normalizeRunnerSession,
+  readOrCreateDeviceID,
+} = require('./local-agent-runtime.cjs')
 
 const isDev = !app.isPackaged
 const LOCAL_AGENT_URL = process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080'
@@ -11,6 +16,10 @@ const APP_ICON_FILE = '躺营ai自媒体运营助手.png'
 
 let mainWindow = null
 let localAgentProcess = null
+let localRunnerSession = normalizeRunnerSession({
+  userToken: process.env.TANGYING_USER_TOKEN,
+  deviceID: process.env.TANGYING_DEVICE_ID,
+})
 
 function localAgentBinaryPath() {
   const binaryName = process.platform === 'win32' ? 'tangying-local-agent.exe' : 'tangying-local-agent'
@@ -27,21 +36,27 @@ function appIconPath() {
   return path.join(__dirname, '..', 'public', APP_ICON_FILE)
 }
 
+function localAgentDataDir() {
+  return path.join(app.getPath('userData'), 'local-agent')
+}
+
 function startLocalAgent() {
   if (process.env.TANGYING_SKIP_LOCAL_AGENT === 'true') return
+  if (localAgentProcess) return
   const binary = localAgentBinaryPath()
   if (!fs.existsSync(binary)) {
     console.warn(`Local agent binary not found: ${binary}`)
     return
   }
-  const url = new URL(LOCAL_AGENT_URL)
-  const addr = `${url.hostname}:${url.port || '18080'}`
-  localAgentProcess = spawn(binary, ['-addr', addr, '-cloud-api-base', CLOUD_API_BASE], {
+  const launch = buildLocalAgentLaunchOptions({
+    localAgentUrl: LOCAL_AGENT_URL,
+    cloudApiBase: CLOUD_API_BASE,
+    dataDir: localAgentDataDir(),
+    session: localRunnerSession,
+  })
+  localAgentProcess = spawn(binary, launch.args, {
     stdio: ['ignore', 'ignore', 'pipe'],
-    env: {
-      ...process.env,
-      TANGYING_LOCAL_DATA_DIR: path.join(app.getPath('userData'), 'local-agent'),
-    },
+    env: launch.env,
   })
   localAgentProcess.stderr.on('data', (data) => {
     console.warn(`[local-agent] ${data.toString().trim()}`)
@@ -79,9 +94,26 @@ function requestLocalAgentJSON(pathname) {
 
 function stopLocalAgent() {
   if (localAgentProcess) {
-    localAgentProcess.kill()
+    const proc = localAgentProcess
     localAgentProcess = null
+    return new Promise((resolve) => {
+      let resolved = false
+      const finish = () => {
+        if (resolved) return
+        resolved = true
+        resolve()
+      }
+      proc.once('exit', finish)
+      proc.kill()
+      setTimeout(finish, 3000).unref?.()
+    })
   }
+  return Promise.resolve()
+}
+
+async function restartLocalAgent() {
+  await stopLocalAgent()
+  startLocalAgent()
 }
 
 function createWindow() {
@@ -184,6 +216,32 @@ ipcMain.handle('get-runtime-config', async () => ({
   cloudApiBase: CLOUD_API_BASE,
 }))
 
+ipcMain.handle('get-or-create-device-id', async () =>
+  readOrCreateDeviceID(localAgentDataDir())
+)
+
+ipcMain.handle('configure-local-runner-session', async (_, session) => {
+  const userToken = typeof session?.userToken === 'string' ? session.userToken.trim() : ''
+  const deviceID = typeof session?.deviceID === 'string' && session.deviceID.trim()
+    ? session.deviceID.trim()
+    : readOrCreateDeviceID(localAgentDataDir())
+  const next = normalizeRunnerSession({ userToken, deviceID })
+  if (!next) return { enabled: false }
+  if (localRunnerSession?.userToken === next.userToken && localRunnerSession?.deviceID === next.deviceID) {
+    return { enabled: true, deviceID: next.deviceID }
+  }
+  localRunnerSession = next
+  await restartLocalAgent()
+  return { enabled: true, deviceID: next.deviceID }
+})
+
+ipcMain.handle('clear-local-runner-session', async () => {
+  if (!localRunnerSession) return { enabled: false }
+  localRunnerSession = null
+  await restartLocalAgent()
+  return { enabled: false }
+})
+
 ipcMain.handle('get-model-provider-settings-with-keys', async () =>
   requestLocalAgentJSON('/api/local/model-providers?include_key=true')
 )
@@ -193,6 +251,18 @@ ipcMain.handle('open-external', async (_, url) => {
   if (typeof url === 'string' && url.startsWith('http')) {
     shell.openExternal(url)
   }
+})
+
+// Open a local file or directory from the renderer. Used for generated video/package handoff.
+ipcMain.handle('open-path', async (_, targetPath) => {
+  if (typeof targetPath !== 'string' || !targetPath.trim()) return false
+  const cleanPath = targetPath.trim()
+  if (fs.existsSync(cleanPath) && fs.statSync(cleanPath).isFile()) {
+    shell.showItemInFolder(cleanPath)
+    return true
+  }
+  const result = await shell.openPath(cleanPath)
+  return result === ''
 })
 
 // ── App lifecycle ─────────────────────────────────────────
@@ -210,4 +280,6 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })
 
-app.on('before-quit', stopLocalAgent)
+app.on('before-quit', () => {
+  void stopLocalAgent()
+})

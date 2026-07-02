@@ -1,116 +1,144 @@
-# 躺营 AIOS — 视频创作 Agent
+<p align="center">
+  <img src="frontend/src/assets/aios-icon.png" width="112" alt="Tangying AI Operation System" />
+</p>
 
-> **版本：v4.0 closed beta** — 面向封闭内测的视频创作 Agent 系统，核心是 Director Studio + Dynamic Agent Runtime。
+<h1 align="center">躺营 AI 自媒体运营系统</h1>
 
-躺营 AIOS 当前不是泛办公平台，也不是自动发布工具。它聚焦一条可验证的视频生产闭环：创作者输入视频想法，系统规划并执行创作流程，生成脚本、分镜、Prompt、素材清单、可审核产物和发布包。封闭内测目标是让 1-3 位熟悉创作者稳定跑通从想法到可手动发布材料的流程。
+<p align="center">
+  从一个想法开始，把选题、脚本、分镜、素材生成、审核、渲染和交付串成一条可追踪的视频创作流水线。
+</p>
 
-当前主链路：
+<p align="center">
+  <a href="https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki">项目 Wiki</a>
+  ·
+  <a href="https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English">English Wiki</a>
+  ·
+  <a href="#快速开始">快速开始</a>
+  ·
+  <a href="#适合谁">适合谁</a>
+</p>
 
-```text
-视频想法
-→ Dynamic Agent Runtime 规划
-→ 脚本 / 分镜 / Shot List / Prompt
-→ 素材依赖点
-→ 用户外部生成素材并回填
-→ Artifact Review 人工审核
-→ Local Runner / HyperFrames 渲染或校验
-→ 小红书 / Bilibili 发布包导出
+<p align="center">
+  <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
+  <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
+  <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
+</p>
+
+---
+
+## 一句话理解
+
+躺营不是一个单点的“文生视频按钮”，而是一个把真实创作过程拆成可审核阶段的 AI 视频制片台。它让云端负责编排，让用户电脑负责本地工具执行和文件生产，让创作者在关键节点确认方向，避免黑盒式生成。
+
+<table>
+  <tr>
+    <td width="33%">
+      <h3>给内容创作者</h3>
+      <p>输入主题后，系统按视频类型拆出方案、脚本、分镜、素材需求、预览和成片，减少从零组织流程的成本。</p>
+    </td>
+    <td width="33%">
+      <h3>给团队负责人</h3>
+      <p>每个阶段都有产物、状态和审核记录，方便知道项目卡在哪里、谁需要确认、哪些素材还缺。</p>
+    </td>
+    <td width="33%">
+      <h3>给技术团队</h3>
+      <p>云端编排、本地 runner、工具 manifest、MCP 扩展和桌面端解耦，方便继续接入新模型和新工具。</p>
+    </td>
+  </tr>
+</table>
+
+## 当前能做什么
+
+| 能力 | 体验结果 |
+|---|---|
+| 影视化 / AIGC shot 视频 | 规划角色、场景、连续性、关键帧、外部生成请求和本地预览渲染 |
+| 口播 / 知识类视频 | 生成脚本、时间窗、画面段落、提示词、预览项目和最终视频 |
+| 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
+| 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
+| 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
+| 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
+
+## 创作流程
+
+```mermaid
+flowchart LR
+  A["一句话视频需求"] --> B["云端 Agent 编排"]
+  B --> C["方案 / 脚本 / 分镜"]
+  C --> D["人工审核"]
+  D --> E["AIGC 素材或手动上传"]
+  E --> F["本地预览项目"]
+  F --> G["确认后渲染成片"]
+  G --> H["导出交付包"]
 ```
 
-系统不会要求用户在项目开始前批量上传素材。当某个 shot 需要参考图、关键帧或 AIGC 视频片段时，导演台会停在“素材依赖点”，展示 Prompt、Negative Prompt、参考图和目标规格。用户可以用任意外部图片/视频网站生成素材，再上传回这个依赖点；本地 agent 保存文件，云端只登记 `storage_ref`、hash、size、shot 关联和 trace。
+## 产品架构
 
-桌面端不暴露任意命令执行或自动发布入口。用户在桌面端配置的模型 API Key 仅保存在本机 `local-backend`，不会同步到云端。
+<table>
+  <tr>
+    <td width="25%"><strong>桌面客户端</strong><br/>React + Electron，给真实用户操作项目、审核、追踪和导出。</td>
+    <td width="25%"><strong>本地 Agent</strong><br/>管理本机目录、模型配置、本地 artifacts、MCP provider 和 runner。</td>
+    <td width="25%"><strong>云端 Backend</strong><br/>负责任务编排、DAG、审核门、工具 manifest、持久化和 API。</td>
+    <td width="25%"><strong>工具扩展</strong><br/>HyperFrames、FFmpeg、JiMeng MCP 等工具通过明确命令边界接入。</td>
+  </tr>
+</table>
 
-## 运行边界
+## 适合谁
 
-躺营 AIOS 按运行边界拆分为四个部分：
+- 想把短视频生产流程标准化的个人创作者和小团队
+- 需要“AI 生成 + 人工确认 + 本地交付”的视频工作流
+- 希望保留本地文件控制权，不把所有素材、密钥和中间产物交给云端的团队
+- 正在验证 AIGC 影视化、口播视频、自动分镜和多 Agent 编排的产品原型
 
-```text
-frontend/                    # React + Electron 桌面/Web 前端
-local-backend/               # 本地执行器，无数据库、无 Docker，只处理本地文件/缓存/日志/诊断
-cloud-backend/               # 云端 AIOS Core，负责账号、编排、云端日志、外部集成和产物索引
-                             #   Dynamic Agent Runtime: Planner → Guard → Compiler → DAG
-hyperframes-render-service/  # HyperFrames 渲染服务（Node.js/TypeScript），无 CLI 依赖
-```
+## 快速开始
 
-| 边界 | 当前职责 | 不负责 |
-|------|----------|--------|
-| `frontend/` | React + Electron UI、登录、导演工作台、审核、素材依赖点回填、本地设置 | 任意命令执行、自动发布 |
-| `local-backend/` | 本地文件、缓存、产物、日志、诊断包、本机模型 Provider 配置 | PostgreSQL、Redis、Kafka、MinIO、云端业务编排 |
-| `cloud-backend/` | 账号、Dynamic Agent Runtime、DAG 编排、Artifact/Review、视频项目 API、云端日志 | 提供模型 API 服务、保存用户本地大文件、保存桌面用户 API Key |
-| `hyperframes-render-service/` | HyperFrames lint、snapshot、render HTTP 服务 | 业务编排、用户账户、资产索引 |
-
-## 当前关键能力
-
-- Director Studio：当前默认产品入口，覆盖项目创建、阶段视图、Artifact 审核、Trace、素材依赖点和发布包导出。
-- Dynamic Agent Runtime：`LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`，入口为 `POST /api/agent/runs`。
-- Artifact Review：关键产物进入 PENDING / APPROVED / REJECTED 流程，返工会触发下游 stale 标记。
-- 素材依赖点：`external_generation_request` 展示外部生成所需 Prompt 与参考材料，回填后登记为 `external_generation_result`。
-- Local Runner：云端调度，本地执行文件和媒体任务，只回传 manifest、hash、状态和日志。
-- HyperFrames Render Service：通过 HTTP 提供 `/health`、`/lint`、`/snapshot`、`/render`、`/render/stream`。
-- 发布包导出：封闭内测提供手动发布材料，不触发自动发布。
-
-## 本地用户
-
-本地用户只需要桌面应用。桌面应用会自动启动 `local-backend` 的轻量 local-agent，用于本机文件、缓存、日志和诊断包。
-
-开发模式：
+> 当前版本适合作为内测版、工程演示版和私有部署原型。真实商用前建议先用自己的模型账号、即梦账号和本地 runner 跑完整链路。
 
 ```bash
+# 本地 Agent
 bash scripts/start-local-backend.sh
+
+# 桌面前端
 bash scripts/start-frontend.sh
-```
 
-桌面打包：
-
-```bash
-VITE_CLOUD_API_BASE=https://your-cloud.example.com/api \
-TANGYING_CLOUD_API_BASE=https://your-cloud.example.com/api \
-bash scripts/build-local-desktop.sh
-```
-
-详细说明见 [docs/LOCAL_USAGE.md](docs/LOCAL_USAGE.md)。
-
-## 云端部署
-
-云端运行 `cloud-backend`，包含 Go AIOS Core、PostgreSQL、Redis、Redpanda、MinIO、Nginx 和 HyperFrames Render Service。LLM、文生图片、文生视频 Provider 均由桌面客户端本机配置后随请求传入；云端不提供模型 API 服务，也不保存用户 token。
-
-开发模式：
-
-```bash
+# 云端 Backend
 bash scripts/start-cloud-backend.sh
 ```
 
-Docker Compose 启动：
+打开桌面端后，进入“躺营导演台”，输入视频主题，选择“口播知识视频”或“影视/AIGC shot 视频”入口即可开始。
 
-```bash
-cd cloud-backend
-cp .env.example .env
-docker compose up -d
-go build -o build/tangying-ai-os ./cmd/tangying-ai-os
-./build/tangying-ai-os
-```
+## 即梦 JiMeng MCP 扩展
 
-Docker Compose project 以 `cloud-backend` 为准。
+用户端提供显式授权的一键安装向导：
 
-## 常用验证
+1. 安装或更新 Dreamina CLI。
+2. 注册本地 JiMeng MCP endpoint。
+3. 启动 `jimeng-mcp` 服务。
+4. 获取即梦登录码，在即梦页面完成授权。
+5. 开启“自动调用即梦生成素材”。
+
+Dreamina OAuth、积分、任务记录和日志仍保留在用户自己的机器和即梦 CLI 目录中，云端不保存即梦凭据。
+
+<details>
+<summary><strong>开发者验证命令</strong></summary>
 
 ```bash
 cd local-backend && go test ./...
 cd ../cloud-backend && go test ./...
-cd ../cloud-backend && go run ./evals/video_beta
-cd ../cloud-backend && make api-docs-check
-cd ../frontend && npm run lint
-cd ../frontend && npm run test:director
-cd ../frontend && npm run test:security
-cd ../frontend && npm run build
-cd ../hyperframes-render-service && npm run build
+cd ../frontend && npm run test:director && npm run lint && npm run build
 ```
 
-## 架构文档
+API 文档：
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- [docs/LOCAL_USAGE.md](docs/LOCAL_USAGE.md)
-- [cloud-backend/README.md](cloud-backend/README.md)
-- [docs/BETA_USAGE.md](docs/BETA_USAGE.md)
-- [cloud-backend/docs/ONBOARDING.md](cloud-backend/docs/ONBOARDING.md)
+```text
+Cloud backend: http://localhost:8080/docs
+Local agent:   http://localhost:18080/api/local/docs
+```
+
+</details>
+
+## 项目文档
+
+- [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
+- [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
+
+Wiki 中包含产品介绍、系统边界、核心流程、即梦 MCP 使用方式和后续路线图。

@@ -9,15 +9,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
+    "test:director": "node scripts/director-studio-logic-check.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "vite build && electron-builder",
-    "electron:prod": "vite build && electron .",
-    "test:director": "node scripts/director-studio-logic-check.mjs",
-    "test:security": "node scripts/electron-security-check.mjs",
-    "test:director:browser-server": "node scripts/director-browser-smoke-server.mjs",
-    "test:director:start": "node scripts/director-studio-start-smoke.mjs"
+    "electron:prod": "vite build && electron ."
   },
   "dependencies": {
     "axios": "^1.7.2",

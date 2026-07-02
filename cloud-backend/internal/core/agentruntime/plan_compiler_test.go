@@ -397,6 +397,76 @@ func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_PreparePlanKeepsResearchAndProposalBeforeAutoScript(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["knowledge_researcher"] = &tool.ToolManifest{
+		Name:         "knowledge_researcher",
+		Capabilities: []string{"fresh_knowledge", "news_search", "web_search", "current_event_retrieval", "fact_retrieval"},
+		SideEffect:   false,
+		Output: map[string]tool.ParamDef{
+			"facts":   {Type: "array"},
+			"sources": {Type: "array"},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "做一个15秒知识口播：介绍佛得角世界杯出线为什么是奇迹",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		KnowledgePolicy: &KnowledgePolicy{
+			RetrievalPolicy:   RetrievalRequired,
+			FreshnessLevel:    FreshnessHigh,
+			SearchQueries:     []string{"佛得角 2026 世界杯 出线 最新"},
+			MustUseFacts:      true,
+			BlockOnEmptyFacts: true,
+		},
+		Steps: []AgentStep{
+			{
+				ID:              "knowledge_researcher",
+				Tool:            "knowledge_researcher",
+				Arguments:       map[string]interface{}{"topic": "佛得角世界杯出线"},
+				ExpectedOutput:  []string{"facts", "sources"},
+				ProduceArtifact: true,
+			},
+			{
+				ID:              "proposal_generator",
+				Tool:            "proposal_generator",
+				DependsOn:       []string{"knowledge_researcher"},
+				Arguments:       map[string]interface{}{"brief": "佛得角世界杯出线"},
+				ExpectedOutput:  []string{"proposalPacket"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	assertStepOrder(t, prepared, []string{"profile_selection", "knowledge_researcher", "proposal_generator", "script_generation"})
+	script := findStep(t, prepared, "script_generation")
+	requireStepDeps(t, script, []string{"proposal_generator", "profile_selection", "knowledge_researcher"})
+	if got := script.Arguments["proposal"]; got != "{{proposal_generator.output.proposalPacket}}" {
+		t.Fatalf("script_generation proposal = %#v, want proposal output ref", got)
+	}
+	if got := script.Arguments["retrievalPolicy"]; got != "required" {
+		t.Fatalf("script_generation retrievalPolicy = %#v, want required", got)
+	}
+	kc, ok := script.Arguments["knowledgeContext"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("script_generation should receive knowledgeContext, got %#v", script.Arguments)
+	}
+	items, _ := kc["items"].([]interface{})
+	if len(items) != 1 || items[0] != "{{knowledge_researcher.output.facts}}" {
+		t.Fatalf("script_generation knowledgeContext items should reference research facts, got %#v", kc)
+	}
+	sources, _ := kc["sources"].([]interface{})
+	if len(sources) != 1 || sources[0] != "{{knowledge_researcher.output.sources}}" {
+		t.Fatalf("script_generation knowledgeContext sources should reference research sources, got %#v", kc)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	catalog := videoProfileTemplateCatalog()
 	compiler := NewPlanCompiler(catalog)
@@ -464,6 +534,72 @@ func TestPlanCompiler_PreparePlanUsesCinematicProfileTemplate(t *testing.T) {
 	requireStepDeps(t, keyframes, []string{"reference_assets", "time_window"})
 	if got := keyframes.Arguments["shotList"]; got != "{{time_window.output.timeWindows}}" {
 		t.Fatalf("keyframes_storyboards shotList = %#v, want time window shot list", got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanInsertsJiMengRunnerWhenRequested(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
+	catalog["video_prompt_generator"].Parameters["aigcProvider"] = tool.ParamDef{Type: "string", Required: false}
+	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["jimeng_generation_runner"] = &tool.ToolManifest{
+		Name:           "jimeng_generation_runner",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+		Parameters: map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Required: true},
+			"providerId":                 {Type: "string", Required: true},
+			"mcpTool":                    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotAssetPackages": {Type: "array"},
+			"generationResults": {Type: "array"},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请帮我根据端午节的来历创作一个口播知识分享视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "端午节来历", "aigcProvider": "jimeng_mcp"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	jimeng := findStep(t, prepared, "jimeng_generation")
+	if jimeng.Tool != "jimeng_generation_runner" {
+		t.Fatalf("jimeng_generation tool = %s, want jimeng_generation_runner", jimeng.Tool)
+	}
+	if got := jimeng.Arguments["providerId"]; got != "jimeng" {
+		t.Fatalf("providerId = %#v, want jimeng", got)
+	}
+	if got := jimeng.Arguments["mcpTool"]; got != "jimeng.generate_video" {
+		t.Fatalf("mcpTool = %#v, want jimeng.generate_video", got)
+	}
+	if got := jimeng.Arguments["externalGenerationRequests"]; got != "{{video_prompt.output.externalGenerationRequests}}" {
+		t.Fatalf("externalGenerationRequests = %#v", got)
+	}
+	videoPrompt := findStep(t, prepared, "video_prompt")
+	if got := videoPrompt.Arguments["aigcProvider"]; got != "jimeng_mcp" {
+		t.Fatalf("video_prompt aigcProvider = %#v", got)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["shotAssetPackages"]; got != "{{jimeng_generation.output.shotAssetPackages}}" {
+		t.Fatalf("preview shotAssetPackages = %#v, want JiMeng output", got)
+	}
+	if stepIndex(t, prepared, "jimeng_generation") <= stepIndex(t, prepared, "video_prompt") {
+		t.Fatalf("jimeng_generation should be inserted after video_prompt")
 	}
 	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
 		t.Fatalf("prepared plan should pass PlanGuard: %v", err)

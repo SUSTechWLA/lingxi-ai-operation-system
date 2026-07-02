@@ -46,6 +46,7 @@ func main() {
 			DataDir:               server.Paths().DataDir,
 			HyperFramesServiceURL: *hfServiceURL,
 			RenderTimeoutSec:      *renderTimeoutSec,
+			MCPProviderLoader:     server.ReadMCPProviders,
 		}); err != nil {
 			log.Fatalf("register local tool executors: %v", err)
 		}

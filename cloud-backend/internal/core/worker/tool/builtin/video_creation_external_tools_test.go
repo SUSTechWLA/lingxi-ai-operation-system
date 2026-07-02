@@ -283,6 +283,25 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoForgeDependencies(t *tes
 	}
 }
 
+func TestRegisterVideoCreationExternalToolsInstallsJiMengRunnerManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("jimeng_generation_runner")
+	if manifest == nil {
+		t.Fatal("expected jimeng_generation_runner to be registered")
+	}
+	if manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
+		t.Fatalf("ExecutionPlane = %q, want local", manifest.ExecutionPlane)
+	}
+	if manifest.LocalCommand != "LOCAL_MCP_TOOL_CALL" {
+		t.Fatalf("LocalCommand = %q, want LOCAL_MCP_TOOL_CALL", manifest.LocalCommand)
+	}
+	if !manifest.RequiresUserDevice {
+		t.Fatal("jimeng_generation_runner should require user device")
+	}
+}
+
 func TestRegisterVideoCreationExternalToolsInstallsKnowledgeTools(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)

@@ -19,6 +19,12 @@ export interface ElectronAPI {
     localAgentUrl: string
     cloudApiBase: string
   }>
+  getOrCreateDeviceID: () => Promise<string>
+  configureLocalRunnerSession: (session: {
+    userToken: string
+    deviceID: string
+  }) => Promise<{ enabled: boolean; deviceID?: string }>
+  clearLocalRunnerSession: () => Promise<{ enabled: boolean }>
   getModelProviderSettingsWithKeys: () => Promise<{
     providers: Partial<Record<string, {
       baseUrl: string
@@ -29,6 +35,7 @@ export interface ElectronAPI {
     }>>
   }>
   openExternal: (url: string) => Promise<void>
+  openPath: (targetPath: string) => Promise<boolean>
   isElectron: boolean
 }
 

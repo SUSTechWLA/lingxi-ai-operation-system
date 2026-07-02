@@ -112,6 +112,7 @@ const (
 	CommandArtifactPackage            = "ARTIFACT_PACKAGE"
 	CommandLocalFileImport            = "LOCAL_FILE_IMPORT"
 	CommandLocalMediaIndex            = "LOCAL_MEDIA_INDEX"
+	CommandLocalMCPToolCall           = "LOCAL_MCP_TOOL_CALL"
 	CommandBundleExtract              = "BUNDLE_EXTRACT"
 	CommandFinalReview                = "FINAL_REVIEW"
 )
@@ -131,6 +132,7 @@ var allowedCommands = map[string]bool{
 	CommandArtifactPackage:            true,
 	CommandLocalFileImport:            true,
 	CommandLocalMediaIndex:            true,
+	CommandLocalMCPToolCall:           true,
 	CommandBundleExtract:              true,
 	CommandFinalReview:                true,
 }

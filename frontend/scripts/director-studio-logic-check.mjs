@@ -53,10 +53,15 @@ try {
     reviewStatusLabel,
     reviewOutputText,
     buildDirectorTraceNodes,
-    buildExternalGenerationCopyPackage,
+    buildEnvironmentChecklist,
+    buildExportDeliveryItems,
+    buildExternalGenerationTaskPackage,
     creationProfileSummary,
-    externalGenerationReferenceCopyText,
+    deriveNextAction,
     externalGenerationGuideSteps,
+    externalGenerationReferenceCopyText,
+    videoCreationProfileForId,
+    videoCreationProfiles,
     timeWindowPlanSummary,
     traceNodeHasError,
     unresolvedMaterialDependencyCount,
@@ -115,6 +120,35 @@ try {
   ]
   const notStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] })
   assert.deepEqual(notStartedFlow.map((stage) => stage.status), ['pending', 'pending'])
+
+  const failedScriptStage = {
+    id: 'script_writer',
+    name: 'Script Writer',
+    displayName: '脚本编剧',
+    stage: 'script',
+    goal: '',
+    status: 'failed',
+    progress: 0,
+    allowedTools: ['video_script_generator'],
+    forbiddenTools: [],
+    requiredInputs: [],
+    requiredOutputs: ['VIDEO_SCRIPT'],
+    reviewFocus: [],
+  }
+  const runningStoryboardStage = {
+    ...failedScriptStage,
+    id: 'storyboard_artist',
+    name: 'Storyboard Artist',
+    displayName: '分镜设计',
+    stage: 'storyboard',
+    status: 'running',
+    allowedTools: ['shot_generation_planner'],
+    requiredOutputs: ['SHOT_LIST'],
+  }
+  const blockedNextAction = deriveNextAction([failedScriptStage, runningStoryboardStage])
+  assert.equal(blockedNextAction.kind, 'blocked')
+  assert.equal(blockedNextAction.stageId, 'script_writer')
+  assert.equal(overviewProjectStatus([failedScriptStage, runningStoryboardStage], 'RUNNING', 'RUNNING'), 'failed')
   const justStartedFlow = buildDirectorStages(startupRoles, [], { nodes: [] }, true)
   assert.deepEqual(justStartedFlow.map((stage) => stage.status), ['active', 'pending'])
   assert.equal(canStartProject(true, false, false), true)
@@ -1443,56 +1477,137 @@ try {
   assert.ok(videoGuideSteps.some((step) => step.includes('每个 shot 单独生成') && step.includes('转场放在本 shot 结尾')))
   assert.ok(videoGuideSteps.some((step) => step.includes('上传结果') && step.includes('素材库')))
 
-  const externalVideoRequest = {
+  const profiles = videoCreationProfiles()
+  assert.equal(profiles.length, 2, 'director studio should expose two stable video profiles')
+  assert.equal(
+    videoCreationProfileForId('aigc_shot').preflightPipeline,
+    'wf-aigc-shot-video',
+    'cinematic profile should use the AIGC shot preflight',
+  )
+  assert.equal(
+    videoCreationProfileForId('voice_visual').preflightPipeline,
+    'wf-guided-image-text-video',
+    'voice/knowledge profile should use the guided render preflight',
+  )
+  assert.ok(
+    videoCreationProfileForId('aigc_shot').requiredLocalCommands.includes('LOCAL_FILE_IMPORT'),
+    'cinematic profile should tell users local import is required',
+  )
+
+  const healthItems = buildEnvironmentChecklist({
+    serviceStatus: 'unknown',
+    selectedProfile: videoCreationProfileForId('aigc_shot'),
+    preflight: {
+      pipeline: 'wf-aigc-shot-video',
+      status: 'blocked',
+      canStart: false,
+      capabilityMenu: {
+        localRunner: { available: true },
+        compositionRuntime: { hyperframes: { available: true } },
+        localTools: [
+          { command: 'LOCAL_FILE_IMPORT', available: true },
+          { command: 'FFMPEG_PROBE', available: false },
+          { command: 'ARTIFACT_PACKAGE', available: true },
+        ],
+        warnings: [],
+      },
+      blockers: [{ code: 'FFMPEG_PROBE_NOT_AVAILABLE', message: '本地未检测到 FFMPEG_PROBE 执行能力' }],
+    },
+    modelProviderState: 'missing',
+    missingModelCapabilities: ['text_to_video'],
+  })
+  assert.ok(
+    healthItems.some((item) => item.id === 'local-runner' && item.status === 'passed'),
+    'environment checklist should trust cloud runner availability when web service status is unknown',
+  )
+  assert.ok(
+    healthItems.some((item) => item.id === 'model-provider' && item.status === 'warning' && item.actionLabel === '打开设置'),
+    'manual-import environment checklist should not block when only external image/video providers are missing',
+  )
+  assert.ok(
+    healthItems.some((item) => item.id === 'local-tool-FFMPEG_PROBE' && item.status === 'blocked'),
+    'environment checklist should show exact missing local tool blockers',
+  )
+
+  const externalTaskPackage = buildExternalGenerationTaskPackage({
     requestId: 'extgen_video_SHOT_01',
     kind: 'video',
     shotId: 'SHOT_01',
-    prompt: '独立生成 8 秒非写实动画视频，地图上突出佛得角群岛。',
-    negativePrompt: '禁止真人写实、禁止水印、禁止文字乱码。',
+    prompt: 'A cinematic football underdog scene',
+    negativePrompt: 'low quality, blurry',
     references: [
-      {
-        id: 'keyframe_SHOT_01',
-        label: '首帧/关键帧',
-        role: 'keyframe',
-        storageRef: 'local://projects/vp-1/artifacts/keyframe-shot-01/hash/keyframe.png',
-        locks: ['起始构图', '主体站位'],
-      },
-      {
-        id: 'scene_cape_verde',
-        label: '佛得角地图风格',
-        role: 'scene',
-        storageRef: 'local://projects/vp-1/artifacts/scene-ref/hash/scene.png',
-      },
+      { id: 'ref-player', label: '主角参考', role: 'character', storageRef: 'local://projects/vp-1/artifacts/ref-player/content.png', locks: ['角色发型', '服装颜色'] },
+      { id: 'storyboard-1', label: '故事板 1', role: 'storyboard', storageRef: 'local://projects/vp-1/artifacts/storyboard-1/content.png' },
     ],
-    target: { durationSec: 8, aspectRatio: '16:9', resolution: '1920x1080' },
+    target: { aspectRatio: '16:9', durationSec: 5, resolution: '1080p' },
     promptCharLimit: 2000,
     referenceImageLimit: 6,
-  }
-  const handoffPackage = buildExternalGenerationCopyPackage(externalVideoRequest, {
-    uploadSlotLabel: '视频',
   })
-  assert.match(handoffPackage, /^# SHOT_01 视频生成包/m)
-  assert.ok(handoffPackage.includes('请求 ID: extgen_video_SHOT_01'))
-  assert.ok(handoffPackage.includes('画幅: 16:9'))
-  assert.ok(handoffPackage.includes('分辨率: 1920x1080'))
-  assert.ok(handoffPackage.includes('时长: 8s'))
-  assert.ok(handoffPackage.includes('## Prompt'))
-  assert.ok(handoffPackage.includes('独立生成 8 秒非写实动画视频'))
-  assert.ok(handoffPackage.includes('## Negative Prompt'))
-  assert.ok(handoffPackage.includes('禁止真人写实'))
-  assert.ok(handoffPackage.includes('1. 首帧/关键帧'))
-  assert.ok(handoffPackage.includes('锁定: 起始构图、主体站位'))
-  assert.ok(handoffPackage.includes('local://projects/vp-1/artifacts/keyframe-shot-01/hash/keyframe.png'))
-  assert.ok(handoffPackage.includes('上传位置: 回到当前 shot 的「视频」槽，点击“上传结果”'))
+  assert.ok(externalTaskPackage.fullText.includes('完整任务包'), 'external package should be copyable as a full task package')
+  assert.ok(externalTaskPackage.fullText.includes('Positive Prompt'), 'external package should include a positive prompt section')
+  assert.ok(externalTaskPackage.fullText.includes('Negative Prompt'), 'external package should include a negative prompt section')
+  assert.ok(externalTaskPackage.referenceManifest.includes('参考图 1'), 'external package should include ordered reference image manifest')
+  assert.ok(externalTaskPackage.fullText.includes('上传回填'), 'external package should tell users how to upload the result back')
+  assert.ok(externalTaskPackage.referenceManifest.includes('锁定：角色发型、服装颜色'), 'external package should preserve reference lock constraints')
   assert.equal(
-    externalGenerationReferenceCopyText(externalVideoRequest.references[0], 1),
+    externalGenerationReferenceCopyText({
+      id: 'ref-player',
+      label: '主角参考',
+      role: 'character',
+      storageRef: 'local://projects/vp-1/artifacts/ref-player/content.png',
+      locks: ['角色发型', '服装颜色'],
+    }, 1),
     [
-      '参考图 1: 首帧/关键帧',
-      'ID: keyframe_SHOT_01',
-      '用途: keyframe',
-      '锁定: 起始构图、主体站位',
-      '文件: local://projects/vp-1/artifacts/keyframe-shot-01/hash/keyframe.png',
+      '参考图 1: 主角参考',
+      'ID: ref-player',
+      '用途: character',
+      '锁定: 角色发型、服装颜色',
+      '文件: local://projects/vp-1/artifacts/ref-player/content.png',
     ].join('\n'),
+    'single reference copy text should include id, role, locks, and storage ref',
+  )
+
+  const deliveryItems = buildExportDeliveryItems([
+    finalVideoCandidates[2],
+    {
+      id: 'probe-report',
+      name: 'ffmpeg_probe.json',
+      kind: 'FFMPEG_PROBE_REPORT',
+      status: 'valid',
+      owner: '质量审核',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://projects/vp-1/artifacts/probe-report/report.json',
+      metadata: {},
+    },
+    {
+      id: 'publish-copy',
+      name: 'publish-copy.md',
+      kind: 'PUBLISH_COPY',
+      status: 'valid',
+      owner: '文案生成',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://projects/vp-1/artifacts/publish-copy/publish.md',
+      metadata: { artifactType: 'publish_copy' },
+    },
+  ])
+  assert.deepEqual(
+    deliveryItems.map((item) => item.id),
+    ['final-video', 'project-package', 'publish-copy', 'quality-report', 'folder-entry'],
+    'export delivery checklist should render stable required rows even when optional artifacts are missing',
+  )
+  assert.equal(
+    deliveryItems.find((item) => item.id === 'project-package')?.status,
+    'missing',
+    'export delivery checklist should turn missing package into a friendly state instead of artifact not found',
+  )
+  assert.equal(
+    normalizeDirectorErrorMessage(new Error('artifact not found')),
+    '产物文件还没有同步到本机，请重新生成或回到产物页确认该文件是否已上传。',
+    'raw artifact not found errors should not be exposed to beta users',
   )
 
   const pageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
@@ -1516,10 +1631,10 @@ try {
     pageSource.includes('projectId: nextProject.id'),
     'dynamic agent run context must include the bound project id',
   )
-  assert.ok(pageSource.includes('外部生成交付单'), 'shot external request card should label the copyable handoff panel')
-  assert.ok(pageSource.includes('复制生成包'), 'shot external request card should copy the complete handoff package')
-  assert.ok(pageSource.includes('复制负面提示'), 'shot external request card should expose negative prompt copying')
-  assert.ok(pageSource.includes('复制参考信息'), 'shot external request card should expose reference copying')
+  assert.ok(pageSource.includes('外部生成交付单'), 'external generation card should label the copyable handoff panel')
+  assert.ok(pageSource.includes('复制生成包'), 'external generation card should expose a complete copy package action')
+  assert.ok(pageSource.includes('复制负面提示'), 'external generation card should expose negative prompt copying')
+  assert.ok(pageSource.includes('复制参考信息'), 'external generation card should expose reference copying')
 
   const apiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const agentRunTimeout = Number(apiSource.match(/const AGENT_RUN_REQUEST_TIMEOUT_MS = (\d+)/)?.[1] || 0)
@@ -1532,6 +1647,8 @@ try {
       /api\.post[\s\S]*?\('\/agent\/runs', payload,\s*\{[\s\S]*timeout:\s*AGENT_RUN_REQUEST_TIMEOUT_MS/.test(apiSource),
     'startAgentRun must override the default 30000ms axios timeout for slower provider-backed planning',
   )
+
+  console.log('director studio logic checks passed')
 } finally {
   await rm(tempDir, { recursive: true, force: true })
 }

@@ -6,7 +6,7 @@ package apispec
 //
 // Regenerate docs after changes:
 //
-//	make gen-docs  # overwrites docs/API_REFERENCE.md + frontend types
+//	OpenAPI consumers should read the live /openapi.json endpoint.
 func BuildCloudSpec() *Spec {
 	b := New("Tangying AIOS Cloud API", "0.1.0").
 		Server("http://localhost:8080", "Local development server").

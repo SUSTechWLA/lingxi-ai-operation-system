@@ -17,7 +17,7 @@ func RenderMarkdown(spec *Spec) []byte {
 
 	// Header banner
 	b.WriteString("<!-- GENERATED — do not edit.\n")
-	b.WriteString("     Regenerate: cd cloud-backend && make gen-docs\n")
+	b.WriteString("     Development branches may regenerate this from the OpenAPI spec.\n")
 	b.WriteString("     Source of truth: internal/core/apispec/cloud_spec.go\n")
 	b.WriteString("-->\n\n")
 

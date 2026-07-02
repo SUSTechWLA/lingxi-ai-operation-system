@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { FiCheckCircle, FiCpu, FiFilm, FiImage, FiKey, FiMessageSquare, FiRefreshCw, FiSave } from 'react-icons/fi'
 import {
+  fetchLocalAgentHealth,
   fetchModelProviderSettings,
   getLocalAgentBaseUrl,
   mergeModelProviderSettings,
@@ -49,16 +50,12 @@ const DesktopPage: React.FC = () => {
 
   useEffect(() => {
     const checkHealth = async () => {
-      if (!api) {
-        setBackendStatus('disconnected')
-        return
-      }
       try {
-        if (api.runtimeConfig?.localAgentUrl) {
+        if (api?.runtimeConfig?.localAgentUrl) {
           setServiceInfo(prev => ({ ...prev, host: api.runtimeConfig.localAgentUrl }))
         }
-        const status = await api.checkServiceHealth()
-        setBackendStatus(status === 'ok' ? 'connected' : 'disconnected')
+        const health = await fetchLocalAgentHealth()
+        setBackendStatus(health.status === 'ok' ? 'connected' : 'disconnected')
       } catch {
         setBackendStatus('disconnected')
       }

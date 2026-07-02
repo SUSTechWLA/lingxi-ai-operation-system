@@ -60,20 +60,30 @@ import {
 import type { AuthUser } from '../services/auth'
 import {
   buildClientModelProvidersForRun,
+  checkJiMengLogin,
+  fetchJiMengSetupStatus,
   fetchLocalArtifactFile,
   fetchModelProviderSettings,
+  installJiMengCLI,
+  loginJiMengHeadless,
+  openLocalPath,
+  registerJiMengMCP,
   uploadLocalArtifactFile,
+  type JiMengSetupStatusResponse,
   type LocalArtifactFileResponse,
+  type MCPToolCallResult,
   type ModelCapability,
   type ModelProviderSettingsResponse,
 } from '../services/localAgent'
 import type { AgentReviewItem, AgentRun, Artifact, VideoProject, VideoRoleAgent } from '../utils/types'
 import {
   applyOptimisticRunningStage,
+  buildEnvironmentChecklist,
+  buildExportDeliveryItems,
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
-  buildExternalGenerationCopyPackage,
+  buildExternalGenerationTaskPackage,
   buildPublishCopies,
   buildShotReviewGroups,
   deriveNextAction,
@@ -82,8 +92,6 @@ import {
   extractDirectorErrorDetail,
   externalGenerationGuideSteps,
   externalGenerationReferenceCopyText,
-  findFinalVideoArtifact,
-  findPublishCopyArtifact,
   getArtifactViewerSelection,
   getStageStateDisplay,
   isActionablePendingReview,
@@ -105,6 +113,8 @@ import {
   traceNodeHasError,
   unresolvedMaterialDependencyCount,
   visibleReviewHistory,
+  videoCreationProfileForId,
+  videoCreationProfiles,
   type DirectorArtifactRecord,
   type DirectorArtifactStatus,
   type DirectorErrorDetail,
@@ -113,6 +123,10 @@ import {
   type DirectorStage,
   type DirectorStageStatus,
   type DirectorTraceNode,
+  type EnvironmentChecklistItem,
+  type ExportDeliveryItem,
+  type VideoCreationProfile,
+  type VideoCreationProfileId,
 } from './directorStudioLogic'
 
 interface Props {
@@ -161,6 +175,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [topic, setTopic] = useState('')
   const [durationSec, setDurationSec] = useState(45)
   const [roleAgents, setRoleAgents] = useState<VideoRoleAgent[]>(fallbackRoles)
+  const [selectedProfileId, setSelectedProfileId] = useState<VideoCreationProfileId>('voice_visual')
   const [project, setProject] = useState<VideoProject | null>(null)
   const [projectArtifacts, setProjectArtifacts] = useState<Artifact[]>([])
   const [run, setRun] = useState<AgentRun | null>(null)
@@ -173,6 +188,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [errorDetail, setErrorDetail] = useState<DirectorErrorDetail | undefined>(undefined)
   const [optimisticRunningStageId, setOptimisticRunningStageId] = useState<string | undefined>()
   const [modelProviderStatus, setModelProviderStatus] = useState<ModelProviderStatus>({ state: 'checking', missing: [] })
+  const [jimengSetupStatus, setJimengSetupStatus] = useState<JiMengSetupStatusResponse | null>(null)
+  const [jimengSetupLoading, setJimengSetupLoading] = useState(false)
+  const [jimengSetupError, setJimengSetupError] = useState<string | null>(null)
+  const [useJiMengMCP, setUseJiMengMCP] = useState(false)
+  const selectedProfile = useMemo(() => videoCreationProfileForId(selectedProfileId), [selectedProfileId])
+  const profileOptions = useMemo(() => videoCreationProfiles(), [])
+  const jimengReady = useMemo(() => isJiMengReady(jimengSetupStatus), [jimengSetupStatus])
 
   const refreshModelProviderStatus = useCallback(async () => {
     setModelProviderStatus((current) => ({ ...current, state: 'checking' }))
@@ -182,6 +204,22 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       setModelProviderStatus({ state: missing.length > 0 ? 'missing' : 'configured', missing })
     } catch {
       setModelProviderStatus({ state: 'unavailable', missing: requiredModelProviderCapabilities })
+    }
+  }, [])
+
+  const refreshJiMengSetupStatus = useCallback(async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      const status = await fetchJiMengSetupStatus()
+      setJimengSetupStatus(status)
+      if (!isJiMengReady(status)) setUseJiMengMCP(false)
+    } catch (err) {
+      setJimengSetupError(normalizeDirectorErrorMessage(err))
+      setJimengSetupStatus(null)
+      setUseJiMengMCP(false)
+    } finally {
+      setJimengSetupLoading(false)
     }
   }, [])
 
@@ -202,12 +240,10 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     let mounted = true
     Promise.all([
       fetchVideoRoleAgents().catch(() => ({ roleAgents: fallbackRoles })),
-      fetchVideoPreflight('wf-guided-image-text-video').catch(() => null),
       fetchVideoProjects().catch(() => ({ projects: [] })),
-    ]).then(([roles, nextPreflight, projects]) => {
+    ]).then(([roles, projects]) => {
       if (!mounted) return
       if (roles.roleAgents?.length) setRoleAgents(roles.roleAgents)
-      if (nextPreflight) setPreflight(nextPreflight)
       const latestProject = [...(projects.projects || [])].sort((a, b) => {
         const bTime = Date.parse(b.updatedAt || b.createdAt || '')
         const aTime = Date.parse(a.updatedAt || a.createdAt || '')
@@ -215,6 +251,9 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       })[0]
       if (!latestProject) return
       setProject(latestProject)
+      if (latestProject.mode === 'aigc_shot' || latestProject.mode === 'voice_visual') {
+        setSelectedProfileId(latestProject.mode)
+      }
       const restoredTopic = typeof latestProject.config?.topic === 'string' ? latestProject.config.topic : latestProject.name
       if (restoredTopic) setTopic(restoredTopic)
       if (typeof latestProject.targetDurationSec === 'number' && latestProject.targetDurationSec > 0) {
@@ -237,10 +276,29 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [refreshRun])
 
   useEffect(() => {
+    let mounted = true
+    setPreflight(null)
+    fetchVideoPreflight(selectedProfile.preflightPipeline)
+      .then((nextPreflight) => {
+        if (mounted) setPreflight(nextPreflight)
+      })
+      .catch(() => {
+        if (mounted) setPreflight(null)
+      })
+    return () => { mounted = false }
+  }, [selectedProfile.preflightPipeline])
+
+  useEffect(() => {
     if (activeNav === 'overview') {
       refreshModelProviderStatus().catch(() => {})
     }
   }, [activeNav, refreshModelProviderStatus])
+
+  useEffect(() => {
+    if (activeNav === 'overview' || activeNav === 'system') {
+      refreshJiMengSetupStatus().catch(() => {})
+    }
+  }, [activeNav, refreshJiMengSetupStatus])
 
   useEffect(() => {
     if (!run?.id || run.status === 'SUCCESS' || run.status === 'FAILED' || run.status === 'CANCELLED') return undefined
@@ -261,7 +319,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
   const activeRunId = run?.id || project?.currentRunId
   const basePrimaryProjectAction = projectPrimaryAction({
-    preflightCanStart: preflight?.canStart !== false,
+    preflightCanStart: preflight?.canStart === true,
     loading,
     projectStatus: project?.status,
     runStatus: run?.status,
@@ -271,6 +329,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const primaryProjectAction = basePrimaryProjectAction.kind === 'stop' && !activeRunId
     ? { ...basePrimaryProjectAction, disabled: true }
     : basePrimaryProjectAction
+  const environmentChecklist = useMemo(() => buildEnvironmentChecklist({
+    serviceStatus,
+    selectedProfile,
+    preflight,
+    modelProviderState: modelProviderStatus.state,
+    missingModelCapabilities: modelProviderStatus.missing,
+  }), [modelProviderStatus.missing, modelProviderStatus.state, preflight, selectedProfile, serviceStatus])
 
   useEffect(() => {
     if (!optimisticRunningStageId) return
@@ -287,22 +352,29 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       const cleanTopic = topic.trim()
       const nextProject = await createVideoProject({
         name: cleanTopic.slice(0, 40) || '视频创作项目',
-        description: `一句话视频创作：${cleanTopic}`,
-        mode: 'voice_visual',
+        description: `${selectedProfile.label}：${cleanTopic}`,
+        mode: selectedProfile.projectMode,
         skillName: 'video-creator',
         skillVersion: 'v4.0',
         workflowName: 'dynamic-agent-video-creation',
         workflowVersion: 'v4.0',
-        generationMode: 'provider_api',
+        generationMode: selectedProfile.generationMode,
         aspectRatio: '16:9',
         targetDurationSec: durationSec,
         language: 'zh-CN',
-        config: { entry: 'director_studio', topic: cleanTopic, durationSec },
+        config: {
+          entry: 'director_studio',
+          topic: cleanTopic,
+          durationSec,
+          videoType: selectedProfile.id,
+          profileId: selectedProfile.id,
+          preflightPipeline: selectedProfile.preflightPipeline,
+        },
       })
       setProject({ ...nextProject, status: 'RUNNING' })
       const clientModelProviders = await buildClientModelProvidersForRun()
       const result = await startAgentRun({
-        message: `请帮我创作一个${durationSec}秒图文视频：${cleanTopic}`,
+        message: `${selectedProfile.startMessagePrefix}${durationSec}秒视频：${cleanTopic}`,
         domain: 'video_creation',
         mode: 'dynamic_agent',
         context: {
@@ -310,6 +382,12 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           topic: cleanTopic,
           durationSec,
           targetDurationSec: durationSec,
+          videoType: selectedProfile.id,
+          profileId: selectedProfile.id,
+          projectMode: selectedProfile.projectMode,
+          generationMode: selectedProfile.generationMode,
+          preflightPipeline: selectedProfile.preflightPipeline,
+          ...(useJiMengMCP && jimengReady ? { aigcProvider: 'jimeng_mcp' } : {}),
           ...(clientModelProviders ? { modelProviders: clientModelProviders } : {}),
         },
       })
@@ -322,6 +400,32 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       setErrorDetail(extractDirectorErrorDetail(err))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleInstallJiMengCLI = async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      await installJiMengCLI()
+      await refreshJiMengSetupStatus()
+    } catch (err) {
+      setJimengSetupError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setJimengSetupLoading(false)
+    }
+  }
+
+  const handleRegisterJiMengMCP = async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      await registerJiMengMCP(jimengSetupStatus?.mcpProvider?.endpoint || jimengSetupStatus?.defaultMcpEndpoint)
+      await refreshJiMengSetupStatus()
+    } catch (err) {
+      setJimengSetupError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setJimengSetupLoading(false)
     }
   }
 
@@ -402,7 +506,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
           </div>
         )}
         {activeNav !== 'system' && (
-          <ModelProviderNotice status={modelProviderStatus} onOpenSettings={() => setActiveNav('system')} />
+          <ModelProviderNotice status={modelProviderStatus} selectedProfile={selectedProfile} onOpenSettings={() => setActiveNav('system')} />
         )}
         <div className="mt-6">
           {activeNav === 'overview' && (
@@ -415,11 +519,25 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               stages={displayStages}
               artifacts={artifacts}
               preflight={preflight}
+              selectedProfile={selectedProfile}
+              profileOptions={profileOptions}
+              environmentChecklist={environmentChecklist}
+              jimengSetupStatus={jimengSetupStatus}
+              jimengSetupLoading={jimengSetupLoading}
+              jimengSetupError={jimengSetupError}
+              useJiMengMCP={useJiMengMCP}
+              jimengReady={jimengReady}
               nextAction={nextAction}
               onTopicChange={setTopic}
               onDurationChange={setDurationSec}
+              onProfileChange={setSelectedProfileId}
+              onToggleJiMengMCP={setUseJiMengMCP}
+              onRefreshJiMeng={refreshJiMengSetupStatus}
+              onInstallJiMengCLI={handleInstallJiMengCLI}
+              onRegisterJiMengMCP={handleRegisterJiMengMCP}
               onStart={handleStart}
               onStop={handleStopProject}
+              onOpenSettings={() => setActiveNav('system')}
               onGoReview={() => setActiveNav('review')}
             />
           )}
@@ -444,6 +562,227 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       </main>
     </div>
   )
+}
+
+function JiMengSetupPanel(props: {
+  status: JiMengSetupStatusResponse | null
+  loading: boolean
+  error: string | null
+  enabled: boolean
+  ready: boolean
+  selectedProfile: VideoCreationProfile
+  onToggle: (enabled: boolean) => void
+  onRefresh: () => void
+  onInstallCLI: () => void
+  onRegisterMCP: () => void
+}) {
+  const { status, loading, error, enabled, ready, selectedProfile, onToggle, onRefresh, onInstallCLI, onRegisterMCP } = props
+  const providerStatus = status?.mcpProviders?.find((item) => item.id === 'jimeng')
+  const mcpRegistered = Boolean(status?.mcpProvider)
+  const mcpReachable = providerStatus?.reachable === true
+  const canUseForProfile = selectedProfile.projectMode === 'aigc_shot' || selectedProfile.generationMode === 'manual_import'
+  const startCommand = status?.mcpStartCommand || 'jimeng-mcp -addr 127.0.0.1:18180'
+  const installCommand = status?.installCommand || 'curl -fsSL https://jimeng.jianying.com/cli | bash'
+  const [loginResult, setLoginResult] = useState<MCPToolCallResult | null>(null)
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const loginData = loginResult?.structuredContent || {}
+  const verificationUri = stringRecordValue(loginData, 'verification_uri') || stringRecordValue(loginData, 'verificationUri')
+  const userCode = stringRecordValue(loginData, 'user_code') || stringRecordValue(loginData, 'userCode')
+  const deviceCode = stringRecordValue(loginData, 'device_code') || stringRecordValue(loginData, 'deviceCode')
+  const headline = ready
+    ? '即梦自动生成已就绪'
+      : status?.dreaminaAvailable
+        ? '即梦 CLI 已安装，等待 MCP 连接'
+        : '即梦 CLI 未检测到'
+  const handleLoginHeadless = async () => {
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const result = await loginJiMengHeadless()
+      setLoginResult(result)
+      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录启动失败')
+    } catch (err) {
+      setLoginError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+  const handleCheckLogin = async () => {
+    if (!deviceCode) return
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const result = await checkJiMengLogin(deviceCode, 30)
+      setLoginResult(result)
+      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录未完成')
+    } catch (err) {
+      setLoginError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
+  return (
+    <section className="card overflow-hidden p-0">
+      <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="border-b border-line p-5 lg:border-b-0 lg:border-r">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary-soft text-primary-dark">
+                <FiCpu />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-black text-primary-dark">即梦 AIGC 扩展</p>
+                <h3 className="mt-1 text-lg font-black text-ink">{headline}</h3>
+                <p className="mt-2 text-sm leading-6 text-ink-muted">
+                  用户自己的 Dreamina 登录态保留在本机，躺营只调用已注册的本地 MCP endpoint。
+                </p>
+              </div>
+            </div>
+            <StatusBadge status={ready ? 'valid' : mcpRegistered || status?.dreaminaAvailable ? 'review' : 'pending'} label={ready ? '可自动生成' : '需配置'} />
+          </div>
+          {error ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{error}</div> : null}
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <JiMengStep label="Dreamina CLI" detail={status?.dreaminaVersion || installCommand} done={status?.dreaminaAvailable === true} />
+            <JiMengStep label="MCP 注册" detail={status?.mcpProvider?.endpoint || status?.defaultMcpEndpoint || '127.0.0.1:18180'} done={mcpRegistered} />
+            <JiMengStep label="MCP 连接" detail={providerStatus?.error || (mcpReachable ? 'tools/list 正常' : '等待服务启动')} done={mcpReachable} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onInstallCLI}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiDownload /> 安装/更新 CLI
+            </button>
+            <button
+              type="button"
+              onClick={onRegisterMCP}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiCheck /> 注册 MCP
+            </button>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FiRefreshCw className={clsx(loading && 'animate-spin')} /> 刷新状态
+            </button>
+          </div>
+        </div>
+        <div className="bg-background-card p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-ink">自动调用即梦生成素材</p>
+              <p className="mt-1 text-xs leading-5 text-ink-muted">
+                开启后，新项目会把 AIGC 请求交给本地 JiMeng MCP；未开启时继续展示可复制提示词和手动上传。
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={!ready || !canUseForProfile}
+              onClick={() => onToggle(!enabled)}
+              className={clsx(
+                'relative h-7 w-12 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50',
+                enabled ? 'bg-primary' : 'bg-line',
+              )}
+              aria-pressed={enabled}
+              title="自动调用即梦生成素材"
+            >
+              <span className={clsx('absolute top-1 h-5 w-5 rounded-full bg-white shadow transition', enabled ? 'left-6' : 'left-1')} />
+            </button>
+          </div>
+          <div className="mt-4 rounded-lg bg-white p-3 ring-1 ring-line">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-black text-primary-dark">MCP 启动命令</span>
+              <CopyButton value={startCommand} label="复制命令" />
+            </div>
+            <code className="mt-2 block break-all rounded bg-ink px-3 py-2 font-mono text-[11px] leading-5 text-white">{startCommand}</code>
+          </div>
+          <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-black text-primary-dark">首次登录授权</span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleLoginHeadless}
+                  disabled={!mcpReachable || loginLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FiUserCheck /> 获取登录码
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCheckLogin}
+                  disabled={!deviceCode || loginLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FiRefreshCw className={clsx(loginLoading && 'animate-spin')} /> 检查登录
+                </button>
+              </div>
+            </div>
+            {loginError ? <div className="mt-2 text-xs font-semibold text-red-700">{loginError}</div> : null}
+            {verificationUri || userCode ? (
+              <div className="mt-3 space-y-2">
+                {verificationUri ? <LoginCopyRow label="授权页面" value={verificationUri} /> : null}
+                {userCode ? <LoginCopyRow label="用户码" value={userCode} /> : null}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs leading-5 text-ink-muted">MCP 连接后可生成登录码，按即梦页面提示完成授权。</p>
+            )}
+          </div>
+          {!canUseForProfile ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+              当前入口以本地编排为主，切到影视/AIGC 入口后可启用即梦自动素材生成。
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function LoginCopyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-background-card px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-black text-ink-soft">{label}</span>
+        <CopyButton value={value} label="复制" />
+      </div>
+      <div className="mt-1 break-all font-mono text-[11px] leading-4 text-ink">{value}</div>
+    </div>
+  )
+}
+
+function JiMengStep({ label, detail, done }: { label: string; detail: string; done: boolean }) {
+  return (
+    <div className={clsx('rounded-lg border p-3', done ? 'border-green-100 bg-green-50/70' : 'border-line bg-white')}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-black text-ink">{label}</span>
+        <span className={clsx('grid h-5 w-5 place-items-center rounded-full text-[11px]', done ? 'bg-green-600 text-white' : 'bg-stone-100 text-ink-soft')}>
+          {done ? <FiCheck /> : <FiX />}
+        </span>
+      </div>
+      <p className="mt-2 line-clamp-2 break-all text-[11px] leading-4 text-ink-muted">{detail}</p>
+    </div>
+  )
+}
+
+function isJiMengReady(status: JiMengSetupStatusResponse | null): boolean {
+  if (!status?.dreaminaAvailable) return false
+  const provider = status.mcpProviders?.find((item) => item.id === 'jimeng')
+  if (!provider?.reachable) return false
+  return Boolean(provider.tools?.some((tool) => tool.name === 'jimeng.generate_video'))
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  return typeof value === 'string' ? value : ''
 }
 
 function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, onLogout }: { active: DirectorNavKey; setActive: (key: DirectorNavKey) => void; user: AuthUser; serviceStatus: Props['serviceStatus']; preflight: PreflightResponse | null; onLogout: () => void }) {
@@ -508,6 +847,9 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, on
 }
 
 function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightResponse | null; serviceStatus: string; run: AgentRun | null }) {
+  const localRunnerAvailable = preflight?.capabilityMenu.localRunner.available === true
+  const localUnavailable = serviceStatus === 'unhealthy' && !localRunnerAvailable
+  const executionReady = preflight?.canStart === true && !localUnavailable
   return (
     <header className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
@@ -520,7 +862,7 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
         <div className="hidden items-center gap-2 rounded-lg bg-white/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
           <FiSearch /> 搜索项目、产物、过程事件
         </div>
-        <StatusPill ok={preflight?.canStart !== false && serviceStatus !== 'unhealthy'} label={serviceStatus === 'unhealthy' ? '服务未连接' : preflight?.status === 'blocked' ? '环境待处理' : '执行环境就绪'} />
+        <StatusPill ok={executionReady} label={localUnavailable ? '服务未连接' : !preflight ? '环境体检中' : preflight.status === 'blocked' ? '环境待处理' : '执行环境就绪'} />
         {run && <div className="rounded-lg bg-white/80 px-4 py-3 text-xs font-bold text-ink-muted ring-1 ring-line">Run {run.id.slice(0, 8)}</div>}
         <button className="rounded-lg bg-white/80 p-3 text-ink-muted ring-1 ring-line hover:text-primary-dark" title="通知"><FiBell /></button>
       </div>
@@ -528,9 +870,13 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
   )
 }
 
-function ModelProviderNotice({ status, onOpenSettings }: { status: ModelProviderStatus; onOpenSettings: () => void }) {
+function ModelProviderNotice({ status, selectedProfile, onOpenSettings }: { status: ModelProviderStatus; selectedProfile: VideoCreationProfile; onOpenSettings: () => void }) {
   if (status.state === 'checking' || status.state === 'configured') return null
-  const missingText = status.missing.map((capability) => modelProviderCapabilityLabels[capability]).join('、')
+  const blockingMissing = selectedProfile.generationMode === 'manual_import'
+    ? status.missing.filter((capability) => capability === 'text_to_text')
+    : status.missing
+  if (status.state === 'missing' && blockingMissing.length === 0) return null
+  const missingText = blockingMissing.map((capability) => modelProviderCapabilityLabels[capability]).join('、')
   const title = status.state === 'unavailable' ? '本地模型配置未读取' : '基础模型 API 未配置完整'
   const message = status.state === 'unavailable'
     ? '请先确认本地服务已启动，然后在设置中配置 OpenAI-compatible 接口。'
@@ -576,14 +922,28 @@ function OverviewPage(props: {
   stages: DirectorStage[]
   artifacts: DirectorArtifactRecord[]
   preflight: PreflightResponse | null
+  selectedProfile: VideoCreationProfile
+  profileOptions: VideoCreationProfile[]
+  environmentChecklist: EnvironmentChecklistItem[]
+  jimengSetupStatus: JiMengSetupStatusResponse | null
+  jimengSetupLoading: boolean
+  jimengSetupError: string | null
+  useJiMengMCP: boolean
+  jimengReady: boolean
   nextAction?: ReturnType<typeof deriveNextAction>
   onTopicChange: (value: string) => void
   onDurationChange: (value: number) => void
+  onProfileChange: (value: VideoCreationProfileId) => void
+  onToggleJiMengMCP: (enabled: boolean) => void
+  onRefreshJiMeng: () => void
+  onInstallJiMengCLI: () => void
+  onRegisterJiMengMCP: () => void
   onStart: () => void
   onStop: () => void
+  onOpenSettings: () => void
   onGoReview: () => void
 }) {
-  const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, nextAction, onTopicChange, onDurationChange, onStart, onStop, onGoReview } = props
+  const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, selectedProfile, profileOptions, environmentChecklist, jimengSetupStatus, jimengSetupLoading, jimengSetupError, useJiMengMCP, jimengReady, nextAction, onTopicChange, onDurationChange, onProfileChange, onToggleJiMengMCP, onRefreshJiMeng, onInstallJiMengCLI, onRegisterJiMengMCP, onStart, onStop, onOpenSettings, onGoReview } = props
   const staleNames = artifacts.filter((artifact) => artifact.status === 'stale').map((artifact) => artifact.name)
   const isStopAction = primaryAction.kind === 'stop'
   return (
@@ -599,6 +959,35 @@ function OverviewPage(props: {
               </div>
             </div>
             <StatusBadge status={overviewStatus} />
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            {profileOptions.map((profile) => {
+              const active = selectedProfile.id === profile.id
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  onClick={() => onProfileChange(profile.id)}
+                  className={clsx(
+                    'min-w-0 rounded-lg border p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30',
+                    active ? 'border-primary bg-primary-soft shadow-sm' : 'border-line bg-white hover:border-primary/35 hover:bg-background-card',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-black text-ink">{profile.label}</div>
+                      <div className="mt-1 text-xs leading-5 text-ink-muted">{profile.description}</div>
+                    </div>
+                    <StatusBadge status={active ? 'valid' : 'pending'} label={active ? '当前入口' : '可选择'} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {profile.requiredLocalCommands.map((command) => (
+                      <span key={command} className="rounded bg-white px-2 py-1 font-mono text-[10px] font-bold text-primary-dark ring-1 ring-line">{command}</span>
+                    ))}
+                  </div>
+                </button>
+              )
+            })}
           </div>
           <textarea
             className="mt-5 h-36 w-full resize-none rounded-xl border-2 border-line bg-white p-5 text-base leading-7 text-ink outline-none transition placeholder:text-ink-soft/60 focus:border-primary focus:shadow-glow"
@@ -620,7 +1009,7 @@ function OverviewPage(props: {
             >
               {isStopAction ? <FiSquare /> : <FiPlay />} {primaryAction.label}
             </button>
-            {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : null}
+            {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : !preflight ? <span className="text-xs font-semibold text-primary-dark">正在体检当前视频入口...</span> : null}
           </div>
         </section>
         <section className="card col-span-12 p-6 xl:col-span-4">
@@ -632,6 +1021,19 @@ function OverviewPage(props: {
           </button>
         </section>
       </div>
+      <JiMengSetupPanel
+        status={jimengSetupStatus}
+        loading={jimengSetupLoading}
+        error={jimengSetupError}
+        enabled={useJiMengMCP}
+        ready={jimengReady}
+        selectedProfile={selectedProfile}
+        onToggle={onToggleJiMengMCP}
+        onRefresh={onRefreshJiMeng}
+        onInstallCLI={onInstallJiMengCLI}
+        onRegisterMCP={onRegisterJiMengMCP}
+      />
+      <EnvironmentChecklistPanel items={environmentChecklist} onOpenSettings={onOpenSettings} />
       <StageFlow stages={stages} />
       {staleNames.length > 0 && (
         <div className="card border-red-200 bg-red-50/80 p-5">
@@ -649,6 +1051,69 @@ function OverviewPage(props: {
       </div>
     </div>
   )
+}
+
+function EnvironmentChecklistPanel({ items, onOpenSettings }: { items: EnvironmentChecklistItem[]; onOpenSettings: () => void }) {
+  const blockedCount = items.filter((item) => item.status === 'blocked').length
+  const warningCount = items.filter((item) => item.status === 'warning').length
+  return (
+    <section className="card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-primary-dark">启动体检</p>
+          <h3 className="mt-1 text-lg font-black text-ink">云端编排、本地工具和模型配置</h3>
+        </div>
+        <StatusBadge
+          status={blockedCount ? 'blocked' : warningCount ? 'review' : 'valid'}
+          label={blockedCount ? `${blockedCount} 项待处理` : warningCount ? '可启动但需留意' : '体检通过'}
+        />
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {items.map((item) => (
+          <div key={item.id} className={clsx('rounded-lg border p-4', environmentItemTone(item.status))}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-black text-ink">{item.label}</div>
+                <p className="mt-1 text-xs leading-5 text-ink-muted">{item.detail}</p>
+                {item.blockerCode ? <div className="mt-2 font-mono text-[10px] font-bold text-red-600">{item.blockerCode}</div> : null}
+              </div>
+              <StatusBadge status={environmentStatusToBadge(item.status)} label={environmentStatusLabel(item.status)} />
+            </div>
+            {item.actionLabel ? (
+              <button
+                type="button"
+                onClick={item.actionLabel === '打开设置' ? onOpenSettings : undefined}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+              >
+                <FiSettings /> {item.actionLabel}
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function environmentItemTone(status: EnvironmentChecklistItem['status']) {
+  if (status === 'passed') return 'border-green-100 bg-green-50/70'
+  if (status === 'blocked') return 'border-red-200 bg-red-50/75'
+  if (status === 'warning') return 'border-amber-200 bg-amber-50/75'
+  return 'border-line bg-background-card'
+}
+
+function environmentStatusToBadge(status: EnvironmentChecklistItem['status']): DirectorArtifactStatus {
+  if (status === 'passed') return 'valid'
+  if (status === 'blocked') return 'blocked'
+  if (status === 'warning') return 'review'
+  return 'pending'
+}
+
+function environmentStatusLabel(status: EnvironmentChecklistItem['status']) {
+  if (status === 'passed') return '通过'
+  if (status === 'blocked') return '待处理'
+  if (status === 'warning') return '注意'
+  return '检测中'
 }
 
 function StageFlow({ stages }: { stages: DirectorStage[] }) {
@@ -681,6 +1146,7 @@ function StageFlow({ stages }: { stages: DirectorStage[] }) {
 }
 
 function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
+  const blockedStage = stages.find((stage) => stage.status === 'blocked' || stage.status === 'failed')
   const runningStage = stages.find((stage) => stage.status === 'running')
   const reviewStage = stages.find((stage) => stage.status === 'review')
 
@@ -690,7 +1156,7 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
         <div>
           <h3 className="text-base font-black text-ink">任务状态机</h3>
           <p className="mt-1 text-xs text-ink-soft">
-            {runningStage ? `${runningStage.displayName} 正在生成，产物完成后进入审核。` : reviewStage ? `${reviewStage.displayName} 产物已输出，等待确认。` : '审核通过后，下个角色立即进入生成中。'}
+            {blockedStage ? `${blockedStage.displayName} 执行失败或被阻断，请查看追踪页错误并重新生成。` : runningStage ? `${runningStage.displayName} 正在生成，产物完成后进入审核。` : reviewStage ? `${reviewStage.displayName} 产物已输出，等待确认。` : '审核通过后，下个角色立即进入生成中。'}
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs font-semibold text-ink-soft">
@@ -744,6 +1210,7 @@ function StateMachineBar({ stages }: { stages: DirectorStage[] }) {
 }
 
 function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
+  const blockedStage = stages.find((stage) => stage.status === 'blocked' || stage.status === 'failed')
   const runningStage = stages.find((stage) => stage.status === 'running' || stage.status === 'active')
   const reviewStage = stages.find((stage) => stage.status === 'review')
   const allDone = stages.length > 0 && stages.every((stage) => stage.status === 'done')
@@ -758,6 +1225,24 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
           <div>
             <p className="text-sm font-black text-green-800">全部阶段已完成</p>
             <p className="text-xs text-green-600 mt-0.5">所有审核已通过，可在产物页查看和导出最终视频。</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (blockedStage) {
+    return (
+      <div className="col-span-12 rounded-xl border border-red-200 bg-red-50 px-5 py-4 transition-all">
+        <div className="flex items-center gap-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-red-500 text-white">
+            <FiX />
+          </span>
+          <div>
+            <p className="text-sm font-black text-red-800">
+              【{blockedStage.displayName}】执行失败或被阻断
+            </p>
+            <p className="text-xs text-red-600 mt-0.5">请切到追踪页查看错误详情，或在审核页重新生成当前阶段。</p>
           </div>
         </div>
       </div>
@@ -1304,9 +1789,7 @@ function ShotAssetSlotCard({
     .map((artifact) => promptPreviews[artifact.id]?.request)
     .filter((request): request is ExternalGenerationRequestContent => Boolean(request))
   const copyValue = requests.length
-    ? requests.map((request) => buildExternalGenerationCopyPackage(request, {
-      uploadSlotLabel: externalRequestUploadSlotLabel(slot, request),
-    })).join('\n\n---\n\n')
+    ? requests.map((request) => buildExternalGenerationTaskPackage(request).fullText).join('\n\n---\n\n')
     : slot.artifacts.map(artifactToCopyText).join('\n\n')
   const canUpload = Boolean(slot.uploadKind)
   const accept = slot.uploadKind === 'video' ? 'video/*' : 'image/*'
@@ -1327,7 +1810,7 @@ function ShotAssetSlotCard({
         <StatusBadge status={slot.status} label={slot.kind === 'prompt' ? '可复制' : slot.status === 'review' && canUpload ? '可回填' : undefined} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        {copyValue ? <CopyButton value={copyValue} label={requests.length ? '复制生成包' : slot.kind === 'prompt' ? '复制提示词' : '复制信息'} /> : null}
+        {copyValue ? <CopyButton value={copyValue} label={requests.length ? '复制生成包' : slot.kind === 'prompt' ? '复制任务包' : '复制信息'} /> : null}
         {canUpload ? (
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
@@ -1411,9 +1894,7 @@ function ShotExternalRequestCard({
   ].filter(Boolean).join(' / ')
   const accept = request.kind === 'video' ? 'video/*' : 'image/*'
   const guideSteps = externalGenerationGuideSteps(request)
-  const handoffPackage = buildExternalGenerationCopyPackage(request, {
-    uploadSlotLabel: externalRequestUploadSlotLabel(slot, request),
-  })
+  const taskPackage = buildExternalGenerationTaskPackage(request)
 
   return (
     <div className="rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
@@ -1424,9 +1905,18 @@ function ShotExternalRequestCard({
           <div className="mt-0.5 text-xs text-ink-muted">{request.kind === 'image' ? '图片生成请求' : '视频生成请求'}{targetText ? ` · ${targetText}` : ''}</div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <CopyButton value={handoffPackage} label="复制生成包" />
-          <CopyButton value={request.prompt} label="复制 Prompt" />
-          {request.negativePrompt ? <CopyButton value={request.negativePrompt} label="复制负面提示" /> : null}
+          <CopyButton value={taskPackage.fullText} label="复制生成包" />
+          <CopyButton value={taskPackage.positivePrompt} label="复制 Prompt" />
+          {request.negativePrompt ? <CopyButton value={taskPackage.negativePrompt} label="复制负面提示" /> : null}
+          <CopyButton value={taskPackage.parameterText} label="复制参数" />
+          <CopyButton value={taskPackage.referenceManifest} label="复制参考图" />
+          <button
+            type="button"
+            onClick={() => downloadTextFile(`${request.requestId || shotId}-reference-package.md`, taskPackage.fullText, 'text/markdown')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+          >
+            <FiDownload /> 下载包
+          </button>
           {allowUpload ? (
             <label className={clsx(
               'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
@@ -1455,7 +1945,7 @@ function ShotExternalRequestCard({
         <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
           <div className="flex items-center justify-between gap-2">
             <div className="text-xs font-black text-ink-soft">Negative Prompt</div>
-            <CopyButton value={request.negativePrompt} label="复制负面提示" />
+            <CopyButton value={taskPackage.negativePrompt} label="复制负面提示" />
           </div>
           <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.negativePrompt}</pre>
         </div>
@@ -1473,11 +1963,6 @@ function ShotExternalRequestCard({
       </details>
     </div>
   )
-}
-
-function externalRequestUploadSlotLabel(slot: DirectorShotAssetSlot, request: ExternalGenerationRequestContent): string {
-  if (slot.uploadKind) return slot.label
-  return request.kind === 'video' ? '视频' : '故事板/参考图'
 }
 
 function ExternalReferenceCard({ reference, index }: { reference: ExternalGenerationReference; index: number }) {
@@ -1603,13 +2088,15 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
 }
 
 function ExportPage({ artifacts, durationSec, projectId }: { artifacts: DirectorArtifactRecord[]; durationSec: number; projectId?: string }) {
-  const video = useMemo(() => findFinalVideoArtifact(artifacts), [artifacts])
-  const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
-  const publishArtifact = useMemo(() => findPublishCopyArtifact(artifacts), [artifacts])
+  const deliveryItems = useMemo(() => buildExportDeliveryItems(artifacts), [artifacts])
+  const video = deliveryItems.find((item) => item.id === 'final-video')?.artifact
+  const packageArtifact = deliveryItems.find((item) => item.id === 'project-package')?.artifact
+  const publishArtifact = deliveryItems.find((item) => item.id === 'publish-copy')?.artifact
   const previewVideoRef = useRef<HTMLVideoElement>(null)
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null)
   const [videoPreviewLoading, setVideoPreviewLoading] = useState(false)
   const [videoPreviewError, setVideoPreviewError] = useState<string | null>(null)
+  const [videoLocalPath, setVideoLocalPath] = useState<string | null>(null)
   const [publishContent, setPublishContent] = useState<unknown>(null)
   const [publishLoading, setPublishLoading] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
@@ -1622,6 +2109,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
     setVideoPreviewUrl(null)
     setVideoPreviewError(null)
     setVideoPreviewLoading(false)
+    setVideoLocalPath(null)
 
     if (!videoReady || !videoStorageRef) return undefined
     const directUrl = directMediaPreviewUrl(videoStorageRef)
@@ -1646,6 +2134,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
         if (cancelled) return
         const blob = localArtifactFileToBlob(localArtifact, video?.metadata)
         objectUrl = URL.createObjectURL(blob)
+        setVideoLocalPath(localArtifact.path || null)
         setVideoPreviewUrl(objectUrl)
       })
       .catch((err) => {
@@ -1689,6 +2178,14 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
   const publishLocalOnlyPointer = isLocalOnlyArtifactPointer(publishContent)
   const markdown = publishCopiesToMarkdown(publishCopies)
   const json = publishCopiesToJSON(publishCopies)
+  const openFinalVideoFolder = async () => {
+    if (!videoLocalPath) {
+      setVideoPreviewError('当前环境无法直接打开本地文件夹，请复制交付物清单中的 storageRef 定位文件。')
+      return
+    }
+    const opened = await openLocalPath(videoLocalPath)
+    if (!opened) setVideoPreviewError('当前浏览器环境不能打开本地文件夹，请在桌面端使用该功能。')
+  }
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
@@ -1720,7 +2217,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           <h3 className="text-lg font-black text-ink">导出操作</h3>
           {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
           {videoPreviewError && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{videoPreviewError}</div>}
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} onClick={() => { void openFinalVideoFolder() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
@@ -1730,7 +2227,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
         <section className="card p-6">
           <h3 className="text-lg font-black text-ink">交付物清单</h3>
           <div className="mt-4 space-y-3 text-sm">
-            {artifacts.filter((artifact) => ['VIDEO', 'PROJECT_PACKAGE', 'RENDER_REPORT', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'].includes(artifact.kind)).map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded-lg bg-background-card px-4 py-3 ring-1 ring-line"><span>{artifact.name}</span><StatusBadge status={artifact.status} /></div>)}
+            {deliveryItems.map((item) => <ExportDeliveryRow key={item.id} item={item} />)}
           </div>
         </section>
       </aside>
@@ -1767,6 +2264,21 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           ))}
         </div>
       </section>
+    </div>
+  )
+}
+
+function ExportDeliveryRow({ item }: { item: ExportDeliveryItem }) {
+  return (
+    <div className="rounded-lg bg-background-card px-4 py-3 ring-1 ring-line">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-black text-ink">{item.label}</div>
+          <div className="mt-1 text-xs leading-5 text-ink-muted">{item.description}</div>
+          {item.storageRef ? <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={item.storageRef}>{item.storageRef}</div> : null}
+        </div>
+        <StatusBadge status={item.status} />
+      </div>
     </div>
   )
 }
@@ -2101,10 +2613,7 @@ function ExternalGenerationRequestPanel({
     request.target?.durationSec ? `${request.target.durationSec}s` : '',
   ].filter(Boolean).join(' / ')
   const guideSteps = externalGenerationGuideSteps(request)
-  const handoffPackage = buildExternalGenerationCopyPackage(request, {
-    uploadSlotLabel: '素材依赖点',
-    uploadActionLabel: '上传回此依赖点',
-  })
+  const taskPackage = buildExternalGenerationTaskPackage(request)
 
   return (
     <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
@@ -2118,9 +2627,18 @@ function ExternalGenerationRequestPanel({
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge status="review" label="待用户回填" />
-          <CopyButton value={handoffPackage} label="复制生成包" />
-          <CopyButton value={request.prompt} label="复制给外部网站" />
-          {request.negativePrompt ? <CopyButton value={request.negativePrompt} label="复制负面提示" /> : null}
+          <CopyButton value={taskPackage.fullText} label="复制生成包" />
+          <CopyButton value={taskPackage.positivePrompt} label="复制 Prompt" />
+          {request.negativePrompt ? <CopyButton value={taskPackage.negativePrompt} label="复制负面提示" /> : null}
+          <CopyButton value={taskPackage.parameterText} label="复制参数" />
+          <CopyButton value={taskPackage.referenceManifest} label="复制参考图" />
+          <button
+            type="button"
+            onClick={() => downloadTextFile(`${request.requestId}-external-task.md`, taskPackage.fullText, 'text/markdown')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+          >
+            <FiDownload /> 下载包
+          </button>
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
             disabled && 'cursor-not-allowed opacity-50'
@@ -2137,6 +2655,9 @@ function ExternalGenerationRequestPanel({
           </label>
         </div>
       </div>
+      <p className="mt-3 text-xs leading-5 text-ink-muted">
+        流程在这里等待用户提供素材。你可以把 Prompt 和参考图复制到任意图片或视频生成网站，生成后上传文件回填；系统只登记本地引用和依赖关系。
+      </p>
       <div className="mt-3 rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
         <div className="text-xs font-black text-primary-dark">外部生成交付单</div>
         <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px] font-black text-primary-dark">
@@ -2145,9 +2666,6 @@ function ExternalGenerationRequestPanel({
           <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">3 上传回填</span>
         </div>
       </div>
-      <p className="mt-3 text-xs leading-5 text-ink-muted">
-        流程在这里等待用户提供素材。你可以把 Prompt 和参考图复制到任意图片或视频生成网站，生成后上传文件回填；系统只登记本地引用和依赖关系。
-      </p>
       <div className="mt-3 rounded-lg border border-line bg-background-card p-3">
         <div className="text-xs font-black text-ink-soft">Prompt</div>
         <pre className="mt-2 max-h-48 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.prompt}</pre>
