@@ -1,1 +1,0 @@
-{"type": "object", "required": ["id", "shot_number", "duration_sec", "description"], "properties": {"id": {"type": "string"}, "shot_number": {"type": "integer"}, "duration_sec": {"type": "number"}, "description": {"type": "string"}}}

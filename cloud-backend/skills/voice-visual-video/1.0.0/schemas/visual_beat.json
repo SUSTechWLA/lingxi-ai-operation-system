@@ -1,1 +1,0 @@
-{"type": "object", "required": ["id", "start_time_sec", "duration_sec", "components"], "properties": {"id": {"type": "string"}, "start_time_sec": {"type": "number"}, "duration_sec": {"type": "number"}, "components": {"type": "array"}}}

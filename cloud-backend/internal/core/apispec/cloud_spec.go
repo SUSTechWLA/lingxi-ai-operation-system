@@ -21,17 +21,10 @@ func BuildCloudSpec() *Spec {
 		Tag("Context", "Task/node context auditing").
 		Tag("Media", "Media asset upload, listing, and tagging").
 		Tag("Tools", "Tool registry management").
-		Tag("Skills", "AI skill catalog and routing").
-		Tag("Skill Capabilities", "Agent capability package catalog").
-		Tag("Video Role Agents", "Guided Video Studio role-agent catalog and stage constraints").
 		Tag("Agent Runs", "Dynamic agent runtime runs and review gates").
 		Tag("Local Runners", "Cloud control-plane protocol for local execution runners").
 		Tag("Workflows", "Reusable workflow templates (blueprints)").
-		Tag("Video Projects", "Video creation project CRUD").
-		Tag("Workflow Runs", "Video workflow run lifecycle").
-		Tag("Stages", "Stage-level approval for video pipelines").
-		Tag("Artifacts", "Video creation artifacts (JSON, Markdown, media)").
-		Tag("Video Project Assistant", "Video-project-scoped assistant for stage explanation and artifact revision guidance").
+		Tag("Artifacts", "Artifact management (JSON, Markdown, media)").
 		Tag("Biaoshu", "Bid-writing artifact AI revision and assistant")
 
 	// ── Health ──
@@ -363,56 +356,6 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("200", "Deregistered", "GenericOKResponse").
 		ResponseJSON("404", "Not found", "ErrorResponse")
 
-	// ── Skills ──
-	b.Route("GET", "/api/skills", "List all loaded skills").
-		Tags("Skills").
-		ResponseJSON("200", "Skills list", "SkillsResponse")
-	b.Route("GET", "/api/skills/catalog", "Get skill catalog").
-		Tags("Skills").
-		QueryParam("includeHidden", "Include hidden skills", BoolSchema(), false).
-		ResponseJSON("200", "Catalog", "SkillCatalogResponse")
-	b.Route("POST", "/api/skills/route", "Route a brief to a skill").
-		Tags("Skills").
-		BodyInlineJSON(&Schema{
-			Type: "object",
-			Properties: map[string]*SchemaRef{
-				"brief": {Schema: StringSchema()},
-			},
-			Required: []string{"brief"},
-		}, "Brief description", true).
-		ResponseJSON("200", "Route result", "SkillRouteResponse")
-	b.Route("GET", "/api/skills/:name/:version", "Get skill detail").
-		Tags("Skills").
-		PathParam("name", "Skill name", StringSchema()).
-		PathParam("version", "Skill version", StringSchema()).
-		ResponseJSON("200", "Skill detail", "SkillDetailResponse").
-		ResponseJSON("404", "Not found", "ErrorResponse")
-	b.Route("POST", "/api/skills/:name/:version/compile", "Compile skill to DAG").
-		Tags("Skills").
-		PathParam("name", "Skill name", StringSchema()).
-		PathParam("version", "Skill version", StringSchema()).
-		ResponseJSON("200", "Compiled DAG", "DAGResponse")
-
-	// ── Skill Capabilities ──
-	b.Route("GET", "/api/skill-capabilities", "List agent capability packages").
-		Tags("Skill Capabilities").
-		ResponseJSON("200", "Capability packages", "SkillCapabilityListResponse")
-	b.Route("GET", "/api/skill-capabilities/:id", "Get capability package detail").
-		Tags("Skill Capabilities").
-		PathParam("id", "Capability package identifier", StringSchema()).
-		ResponseJSON("200", "Capability package", "SkillCapabilityDetailResponse").
-		ResponseJSON("404", "Not found", "ErrorResponse")
-
-	// ── Video Role Agents ──
-	b.Route("GET", "/api/video/role-agents", "List Guided Video Studio role agents").
-		Tags("Video Role Agents").
-		ResponseJSON("200", "Role agents", "VideoRoleAgentListResponse")
-	b.Route("GET", "/api/video/role-agents/:roleId", "Get Guided Video Studio role agent detail").
-		Tags("Video Role Agents").
-		PathParam("roleId", "Role agent identifier", StringSchema()).
-		ResponseJSON("200", "Role agent", "VideoRoleAgentDetailResponse").
-		ResponseJSON("404", "Not found", "ErrorResponse")
-
 	// ── Dynamic Agent Runs ──
 	b.Route("POST", "/api/agent/runs", "Start a dynamic agent run from natural language").
 		Tags("Agent Runs").
@@ -475,102 +418,7 @@ func BuildCloudSpec() *Spec {
 		BodyInlineJSON(ObjectSchema(), "Input overrides", false).
 		ResponseJSON("200", "Task created", "InstantiateResponse")
 
-	// ── Video Projects ──
-	b.Route("GET", "/api/video-projects", "List video projects").
-		Tags("Video Projects").
-		ResponseJSON("200", "Projects list", "VideoProjectListResponse")
-	b.Route("POST", "/api/video-projects", "Create a video project").
-		Tags("Video Projects").
-		BodyInlineJSON(ObjectSchema(), "Project definition", true).
-		ResponseJSON("200", "Created", "VideoProjectCreateResponse")
-	b.Route("GET", "/api/video-projects/:id", "Get project detail").
-		Tags("Video Projects").
-		PathParam("id", "Project identifier", StringSchema()).
-		ResponseJSON("200", "Project", "VideoProjectDetailResponse").
-		ResponseJSON("404", "Not found", "ErrorResponse")
-	b.Route("PATCH", "/api/video-projects/:id", "Update a project").
-		Tags("Video Projects").
-		PathParam("id", "Project identifier", StringSchema()).
-		BodyInlineJSON(ObjectSchema(), "Updated fields", true).
-		ResponseJSON("200", "Updated", "VideoProjectDetailResponse")
-	b.Route("DELETE", "/api/video-projects/:id", "Archive a project (soft delete)").
-		Tags("Video Projects").
-		PathParam("id", "Project identifier", StringSchema()).
-		ResponseJSON("200", "Archived", "GenericOKResponse")
-	b.Route("POST", "/api/video-projects/:id/assistant/message", "Ask the video-project-scoped assistant").
-		Tags("Video Project Assistant").
-		PathParam("id", "Project identifier", StringSchema()).
-		BodyJSON("VideoAssistantMessageRequest", "Project-scoped assistant question", true).
-		ResponseJSON("200", "Assistant answer", "VideoAssistantMessageResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse").
-		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
-	b.Route("POST", "/api/video-projects/:id/assistant/revise", "Convert assistant feedback into an Artifact revision action").
-		Tags("Video Project Assistant").
-		PathParam("id", "Project identifier", StringSchema()).
-		BodyJSON("VideoAssistantReviseRequest", "Artifact revision instruction", true).
-		ResponseJSON("200", "Revision action", "VideoAssistantReviseResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse").
-		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
-	b.Route("POST", "/api/video-projects/:id/assistant/explain-stage", "Explain a video workflow stage").
-		Tags("Video Project Assistant").
-		PathParam("id", "Project identifier", StringSchema()).
-		BodyJSON("VideoAssistantExplainStageRequest", "Stage to explain", true).
-		ResponseJSON("200", "Stage explanation", "VideoAssistantExplainStageResponse").
-		ResponseJSON("400", "Invalid request", "ErrorResponse").
-		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
-
-	// ── Workflow Runs ──
-	b.Route("POST", "/api/video-projects/:id/workflow-runs", "Create a workflow run").
-		Tags("Workflow Runs").
-		PathParam("id", "Project identifier", StringSchema()).
-		BodyInlineJSON(&Schema{
-			Type: "object",
-			Properties: map[string]*SchemaRef{
-				"templateId":      {Schema: StringSchema()},
-				"templateVersion": {Schema: StringSchema()},
-				"input":           {Schema: ObjectSchema()},
-			},
-			Required: []string{"templateId"},
-		}, "Run configuration", true).
-		ResponseJSON("200", "Run created", "WorkflowRunCreateResponse")
-	b.Route("GET", "/api/video-projects/:id/workflow-runs/:rid", "Get run detail").
-		Tags("Workflow Runs").
-		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("rid", "Run identifier", StringSchema()).
-		ResponseJSON("200", "Run detail", "WorkflowRunDetailResponse").
-		ResponseJSON("404", "Not found", "ErrorResponse")
-	b.Route("POST", "/api/video-projects/:id/workflow-runs/:rid/pause", "Pause a run").
-		Tags("Workflow Runs").
-		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("rid", "Run identifier", StringSchema()).
-		ResponseJSON("200", "Paused", "GenericOKResponse")
-	b.Route("POST", "/api/video-projects/:id/workflow-runs/:rid/cancel", "Cancel a run").
-		Tags("Workflow Runs").
-		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("rid", "Run identifier", StringSchema()).
-		ResponseJSON("200", "Cancelled", "GenericOKResponse")
-
-	// ── Stages ──
-	b.Route("POST", "/api/video-projects/:id/stages/:stage/approve", "Approve a stage").
-		Tags("Stages").
-		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("stage", "Stage name", StringSchema()).
-		BodyInlineJSON(&Schema{
-			Type: "object",
-			Properties: map[string]*SchemaRef{
-				"runId":   {Schema: StringSchema()},
-				"output":  {Schema: ObjectSchema()},
-				"comment": {Schema: StringSchema()},
-			},
-		}, "Approval data", false).
-		ResponseJSON("200", "Approved", "StageApprovalResponse").
-		ResponseJSON("409", "Stage not ready", "ErrorResponse")
-
 	// ── Artifacts ──
-	b.Route("GET", "/api/video-projects/:id/artifacts", "List project artifacts").
-		Tags("Artifacts").
-		PathParam("id", "Project identifier", StringSchema()).
-		ResponseJSON("200", "Artifacts list", "ArtifactListResponse")
 	b.Route("GET", "/api/artifacts/:id", "Get artifact by ID").
 		Tags("Artifacts").
 		PathParam("id", "Artifact identifier", StringSchema()).

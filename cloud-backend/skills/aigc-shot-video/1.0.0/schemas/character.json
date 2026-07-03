@@ -1,1 +1,0 @@
-{"type": "object", "required": ["name", "description", "role"], "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "role": {"type": "string"}, "appearance": {"type": "string"}}}

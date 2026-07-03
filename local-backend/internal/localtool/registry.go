@@ -98,39 +98,15 @@ func IsAllowedCommand(command string) bool {
 
 // Local command constants — aligned with cloud-backend ValidCommands.
 const (
-	CommandHyperFramesProjectGenerate = "HYPERFRAMES_PROJECT_GENERATE"
-	CommandHyperFramesRender          = "HYPERFRAMES_RENDER"
-	CommandHyperFramesLint            = "HYPERFRAMES_LINT"
-	CommandHyperFramesSnapshot        = "HYPERFRAMES_SNAPSHOT"
-	CommandHyperGenRender             = "HYPERGEN_RENDER"
-	CommandFFmpegProbe                = "FFMPEG_PROBE"
-	CommandFFmpegClipExtract          = "FFMPEG_CLIP_EXTRACT"
-	CommandFFmpegAssemble             = "FFMPEG_ASSEMBLE"
-	CommandAudioExtract               = "AUDIO_EXTRACT"
-	CommandAudioNormalize             = "AUDIO_NORMALIZE"
-	CommandASRTranscribe              = "ASR_TRANSCRIBE"
-	CommandArtifactPackage            = "ARTIFACT_PACKAGE"
-	CommandLocalFileImport            = "LOCAL_FILE_IMPORT"
-	CommandLocalMediaIndex            = "LOCAL_MEDIA_INDEX"
-	CommandBundleExtract              = "BUNDLE_EXTRACT"
-	CommandFinalReview                = "FINAL_REVIEW"
+	CommandLocalFileImport = "LOCAL_FILE_IMPORT"
+	CommandLocalMediaIndex = "LOCAL_MEDIA_INDEX"
+	CommandBundleExtract   = "BUNDLE_EXTRACT"
+	CommandFinalReview     = "FINAL_REVIEW"
 )
 
 var allowedCommands = map[string]bool{
-	CommandHyperFramesProjectGenerate: true,
-	CommandHyperFramesRender:          true,
-	CommandHyperFramesLint:            true,
-	CommandHyperFramesSnapshot:        true,
-	CommandHyperGenRender:             true,
-	CommandFFmpegProbe:                true,
-	CommandFFmpegClipExtract:          true,
-	CommandFFmpegAssemble:             true,
-	CommandAudioExtract:               true,
-	CommandAudioNormalize:             true,
-	CommandASRTranscribe:              true,
-	CommandArtifactPackage:            true,
-	CommandLocalFileImport:            true,
-	CommandLocalMediaIndex:            true,
-	CommandBundleExtract:              true,
-	CommandFinalReview:                true,
+	CommandLocalFileImport: true,
+	CommandLocalMediaIndex: true,
+	CommandBundleExtract:   true,
+	CommandFinalReview:     true,
 }

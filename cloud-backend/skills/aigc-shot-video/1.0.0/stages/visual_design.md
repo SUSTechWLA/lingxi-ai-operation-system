@@ -1,1 +1,0 @@
-# Visual Design Stage - Design characters, scenes, and props

@@ -1,12 +1,1 @@
-export { default as UploadCard } from './UploadCard'
-export { default as TitleInput } from './TitleInput'
-export { default as DescriptionInput } from './DescriptionInput'
-export { default as KeywordInput } from './KeywordInput'
-export { default as AIHelperPanel } from './AIHelperPanel'
-export { default as PlatformSelector } from './PlatformSelector'
-export { default as PublishButton } from './PublishButton'
-export { default as CommandPanel } from './CommandPanel'
-export { default as DesktopToolbar } from './DesktopToolbar'
-export { default as MediaLibraryPanel } from './MediaLibraryPanel'
-
-export { default as BlockingOverlay } from './BlockingOverlay'
+// Biaoshu workbench components — video publishing components removed

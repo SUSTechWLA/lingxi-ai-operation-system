@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -23,8 +22,6 @@ func main() {
 	cloudAPIBase := flag.String("cloud-api-base", os.Getenv("TANGYING_CLOUD_API_BASE"), "cloud API base URL")
 	userToken := flag.String("user-token", os.Getenv("TANGYING_USER_TOKEN"), "cloud user access token for local runner")
 	deviceID := flag.String("device-id", os.Getenv("TANGYING_DEVICE_ID"), "stable local device identifier")
-	hfServiceURL := flag.String("hf-service-url", envOrDefault("TANGYING_HYPERFRAMES_SERVICE_URL", "http://127.0.0.1:8787"), "HyperFrames Render Service base URL")
-	renderTimeoutSec := flag.Int("render-timeout-sec", envOrDefaultInt("TANGYING_RENDER_TIMEOUT_SEC", 1800), "HyperFrames render timeout in seconds")
 	flag.Parse()
 
 	server := localagent.NewServer(localagent.Config{DataDir: *dataDir, CloudAPIBase: *cloudAPIBase})
@@ -43,9 +40,7 @@ func main() {
 		registry := localtool.NewRegistry()
 
 		if err := localtool.RegisterDefaultExecutors(registry, localtool.ExecutorConfig{
-			DataDir:               server.Paths().DataDir,
-			HyperFramesServiceURL: *hfServiceURL,
-			RenderTimeoutSec:      *renderTimeoutSec,
+			DataDir: server.Paths().DataDir,
 		}); err != nil {
 			log.Fatalf("register local tool executors: %v", err)
 		}
@@ -85,15 +80,6 @@ func main() {
 func envOrDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
-	}
-	return fallback
-}
-
-func envOrDefaultInt(key string, fallback int) int {
-	if value := os.Getenv(key); value != "" {
-		if n, err := strconv.Atoi(value); err == nil && n > 0 {
-			return n
-		}
 	}
 	return fallback
 }

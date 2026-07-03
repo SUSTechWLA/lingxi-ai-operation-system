@@ -1,1 +1,0 @@
-{"type": "object", "required": ["id", "text", "duration_sec"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "duration_sec": {"type": "number"}, "tone": {"type": "string"}}}

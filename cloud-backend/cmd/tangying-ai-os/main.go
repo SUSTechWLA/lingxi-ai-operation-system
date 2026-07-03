@@ -16,8 +16,6 @@ import (
 	"go.uber.org/zap"
 
 	biaoshu_handler "github.com/tangying-ai/aios-core/internal/agents/biaoshu/handler"
-	publishHandler "github.com/tangying-ai/aios-core/internal/agents/publish/handler"
-	publishSvc "github.com/tangying-ai/aios-core/internal/agents/publish/service"
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
 	"github.com/tangying-ai/aios-core/internal/core/apispec"
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
@@ -28,7 +26,6 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/database"
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/health"
-	"github.com/tangying-ai/aios-core/internal/core/hyperframes"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/logger"
 	"github.com/tangying-ai/aios-core/internal/core/media"
@@ -37,12 +34,10 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/openai"
-	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/stability"
 	orchestratorHandler "github.com/tangying-ai/aios-core/internal/core/orchestrator/handler"
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
 	redisClient "github.com/tangying-ai/aios-core/internal/core/redis"
-	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	translatorHandler "github.com/tangying-ai/aios-core/internal/core/translator/handler"
 	translatorSvc "github.com/tangying-ai/aios-core/internal/core/translator/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
@@ -50,13 +45,6 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 
-	videoAssistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
-	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
-	videoPlanJudge "github.com/tangying-ai/aios-core/internal/agents/video/planjudge"
-	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
-	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
-	"github.com/tangying-ai/aios-core/internal/core/skillruntime"
-	videodirector "github.com/tangying-ai/aios-core/internal/core/video/director"
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
 )
 
@@ -132,9 +120,7 @@ func main() {
 	toolRegistry.Register(builtin.NewContentCheckerTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewPlatformAdapterTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewExternalTool(toolRegistry))
-	if cfg.Video.VideoCreationEnabled {
-		builtin.RegisterVideoCreationExternalTools(toolRegistry)
-	}
+	// Video creation external tools removed — biaoshu core edition
 
 	directExec := executor.NewDirectExecutor()
 	var sandboxExec *executor.SandboxExecutor
@@ -149,37 +135,15 @@ func main() {
 	nodeExecutor := workerService.NewNodeExecutor(toolRegistry, producer, cfg.Worker, directExec, sandboxExec, nodeRepo)
 	nodeExecutor.SetLocalJobDispatcher(localRunnerService)
 
-	// Publish
-	publishService := publishSvc.NewPublishService(cfg.OpenAI, cfg.Services.OrchestratorURL)
-
 	// Tool manifest service (DB-persisted + Redis-cached tool knowledge base)
 	toolManifestSvc := tool.NewToolManifestService(toolManifestRepo, rdb, toolRegistry)
 	if err := toolManifestSvc.SyncBuiltinTools(ctx); err != nil {
 		zap.L().Warn("Failed to sync builtin tools to DB", zap.Error(err))
 	}
 
-	skillCapabilityReg, capabilityToolManifests, skillCapErrs := skillcapability.LoadCapabilities(cfg.Video.SkillCapabilityRoot)
-	for _, err := range skillCapErrs {
-		zap.L().Warn("Skill capability load error", zap.Error(err))
-	}
-	for _, manifest := range capabilityToolManifests {
-		toolRegistry.RegisterExternal(manifest)
-		if err := toolManifestSvc.RegisterManifest(ctx, manifest); err != nil {
-			zap.L().Warn("Failed to register skill capability tool",
-				zap.String("name", manifest.Name),
-				zap.Error(err))
-		}
-	}
-	zap.L().Info("Skill capability registry initialized",
-		zap.Int("capabilities", len(skillCapabilityReg.List())),
-		zap.Int("tools", len(capabilityToolManifests)))
 	if err := toolManifestSvc.RestorePersistedManifests(ctx); err != nil {
 		zap.L().Warn("Failed to restore persisted tool manifests", zap.Error(err))
 	}
-	videoDirectorRegistry := videodirector.DefaultRegistry()
-	videoDirectorRegistry.RegisterRoleAgents(skillCapabilityReg.RoleAgents("video_creation"))
-	zap.L().Info("Video role agent registry initialized",
-		zap.Int("roleAgents", len(videoDirectorRegistry.List())))
 
 	// Translator — uses toolManifestSvc to inject available tool list into LLM prompt
 	nlService := translatorSvc.NewNlToDagService(cfg.OpenAI, cfg.Services.OrchestratorURL, toolManifestSvc)
@@ -335,14 +299,10 @@ func main() {
 	}).RegisterRoutes(r)
 	translatorHandler.NewTranslatorHandler(nlService).RegisterRoutes(r)
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
-	publishHandler.NewPublishHandler(publishService).RegisterRoutes(r)
-	publishHandler.NewTraceHandler(orchestratorService, contextService).RegisterRoutes(r)
 	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth())
 	localRunnerHandler.RegisterRoutes(r)
-	// Preflight: check local capabilities before starting a video pipeline.
-	r.GET("/api/video/preflight", authMiddleware.RequireAuth(), localrunner.HandleVideoPreflight(localRunnerService))
 
-	// Media management — initialize before skill handler so we can resolve media URLs
+	// Media management
 	var mediaSvc *media.MediaService
 	if storageSvc, err := media.NewStorageService(cfg.MinIO); err == nil {
 		mediaSvc = media.NewMediaService(pool, storageSvc)
@@ -352,81 +312,35 @@ func main() {
 		zap.L().Warn("MinIO storage not available, media uploads disabled", zap.Error(err))
 	}
 
-	// Wire media service into publish service for video pipeline support
-	if mediaSvc != nil {
-		publishService.SetMediaService(mediaSvc)
-	}
-
-	// Register video pipeline tools — requires mediaSvc for MinIO download
-	if mediaSvc != nil {
-		toolRegistry.Register(builtin.NewVideoMetadataTool(cfg.OpenAI, mediaSvc))
-		toolRegistry.Register(builtin.NewVideoAnalyzerTool(cfg.OpenAI, mediaSvc))
-	}
-	toolRegistry.Register(builtin.NewVideoCopyGeneratorTool(cfg.OpenAI))
-
-	publishHandler.NewToolHandler(toolRegistry, toolManifestSvc).RegisterRoutes(r)
-	skillcapability.NewHandler(skillCapabilityReg).RegisterRoutes(r)
-	videodirector.NewHandler(videoDirectorRegistry).RegisterRoutes(r)
+	_ = mediaSvc // reserved for future biaoshu media needs
 
 	agentRunRepo := agentruntime.NewRepository(pool)
 
-	// ── ModelGateway (initialized early so LLMPlanner and PromptTools can use it) ──
+	// ── ModelGateway (text-only, decoupled from VideoCreationEnabled) ──
 	var gw *modelgateway.Gateway
-	if cfg.Video.VideoCreationEnabled {
-		gw = modelgateway.NewGateway(cfg.Video.ModelProviderMode)
-		if cfg.Video.ModelProviderMode == "real" {
-			openaiProvider := openai.NewProvider()
-			switch cfg.Video.ImageProvider {
-			case "stability":
-				gw.RegisterProvider(stability.NewProvider(), modelgateway.CapTextToImage)
-			default:
-				gw.RegisterProvider(openaiProvider, modelgateway.CapTextToImage)
-			}
-			gw.RegisterProvider(openaiProvider, modelgateway.CapTextToText)
-		} else {
-			fakeProvider := fake.NewProvider()
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToImage)
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToVideo)
-			gw.RegisterProvider(fakeProvider, modelgateway.CapImageToVideo)
-			gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
-		}
-		builtin.SetModelGateway(gw)
-		builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
-		builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
-		builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
-		// HyperFrames Render Service config (replaces CLI dependency).
-		if cfg.Video.HyperFramesCLIPath != "" {
-			builtin.SetHyperFramesCLIPath(cfg.Video.HyperFramesCLIPath)
-		}
-		builtin.SetHyperFramesConfig(hyperframes.Config{
-			Mode:           hyperframes.Mode(cfg.HyperFrames.Mode),
-			ServiceURL:     cfg.HyperFrames.ServiceURL,
-			TimeoutSec:     cfg.HyperFrames.TimeoutSec,
-			DefaultFPS:     cfg.HyperFrames.DefaultFPS,
-			DefaultQuality: cfg.HyperFrames.DefaultQuality,
-			DefaultFormat:  cfg.HyperFrames.DefaultFormat,
-			MaxWorkers:     cfg.HyperFrames.MaxWorkers,
-			UseGPU:         cfg.HyperFrames.UseGPU,
-			ProjectRoot:    cfg.HyperFrames.ProjectRoot,
-			OutputRoot:     cfg.HyperFrames.OutputRoot,
-		})
-		zap.L().Info("ModelGateway initialized for agent planner and video tools",
-			zap.String("mode", cfg.Video.ModelProviderMode))
+	gw = modelgateway.NewGateway(cfg.Video.ModelProviderMode)
+	if cfg.Video.ModelProviderMode == "real" {
+		openaiProvider := openai.NewProvider()
+		gw.RegisterProvider(openaiProvider, modelgateway.CapTextToText)
+	} else {
+		fakeProvider := fake.NewProvider()
+		gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
 	}
+	builtin.SetModelGateway(gw)
+	builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
+	builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
+	builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
+	zap.L().Info("ModelGateway initialized (text-only, biaoshu core edition)",
+		zap.String("mode", cfg.Video.ModelProviderMode))
 
 	agentPlanner := buildAgentPlanner(cfg, toolRegistry, gw)
-	videoDirectorAdapter := &stageDirectorRegistry{videoDirectorRegistry}
 	agentRunner := agentruntime.NewRunner(
 		orchestratorService,
 		agentRunRepo,
 		agentPlanner,
-		agentruntime.NewPlanGuard(toolRegistry, localRunnerService).WithDirectors(videoDirectorAdapter),
-		func() *agentruntime.PlanCompiler {
-			pc := agentruntime.NewPlanCompiler(toolRegistry)
-			pc.WithDirectors(videoDirectorAdapter)
-			return pc
-		}(),
-	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge())
+		agentruntime.NewPlanGuard(toolRegistry, localRunnerService),
+		agentruntime.NewPlanCompiler(toolRegistry),
+	)
 	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine)
 	agentRuntimeHandler.RegisterRoutes(r)
 
@@ -445,15 +359,8 @@ func main() {
 	}
 	zap.L().Info("Biaoshu service registered")
 
-	// ── Video Creation Upgrade (feature-gated) ──
-	if cfg.Video.VideoCreationEnabled {
-		zap.L().Info("Video creation enabled — registering video modules",
-			zap.String("model_provider_mode", cfg.Video.ModelProviderMode),
-		)
-		// ModelGateway and builtin config are initialized earlier (before buildAgentPlanner).
-		// gw is already created and providers registered; we just reference it here.
-
-		// Runtime model-provider config — synced from frontend Desktop page, persisted to disk
+	// ── Runtime model-provider config (decoupled from VideoCreationEnabled) ──
+	{
 		modelProviderHandler := func(c *gin.Context) {
 			switch c.Request.Method {
 			case "GET":
@@ -477,7 +384,6 @@ func main() {
 					c.JSON(400, gin.H{"code": 400, "message": "invalid request", "data": nil})
 					return
 				}
-				// Merge with existing: keep old key when not provided
 				existing := builtin.GetRuntimeModelProviderConfig()
 				if req.APIKey == "" {
 					req.APIKey = existing.APIKey
@@ -504,163 +410,6 @@ func main() {
 		r.GET("/api/config/model-provider", modelProviderHandler)
 		r.PUT("/api/config/model-provider", modelProviderHandler)
 		r.DELETE("/api/config/model-provider", modelProviderHandler)
-
-		// Skill Runtime
-		skillReg, skillErrs := skillruntime.LoadSkills(cfg.Video.SkillRoot)
-		for _, err := range skillErrs {
-			zap.L().Warn("Skill load error", zap.Error(err))
-		}
-		skillHandler := skillruntime.NewHandler(skillReg)
-		skillHandler.SetOpenAIConfig(cfg.OpenAI)
-		skillHandler.SetCompiler(func(s *skillruntime.SkillManifest) (json.RawMessage, error) {
-			return workflow.CompileSkillToDAG(s)
-		})
-		skillHandler.RegisterRoutes(r)
-		zap.L().Info("Skill runtime registered", zap.Int("skills_loaded", len(skillReg.List())))
-
-		if cfg.Video.LegacySkillWorkflowAutoRegister {
-			// Legacy compatibility only: dynamic agent runs are the primary path,
-			// so Skill packages are no longer forced into workflow_templates.
-			for _, skill := range skillReg.List() {
-				if skill.Health != skillruntime.HealthHealthy {
-					continue
-				}
-				dag, err := workflow.CompileSkillToDAG(skill)
-				if err != nil {
-					zap.L().Warn("Skill compile failed", zap.String("skill", skill.Name), zap.Error(err))
-					continue
-				}
-				templateID := workflow.TemplateIDForSkill(skill.Name, skill.Version)
-				tmpl, err := workflowService.Upsert(ctx, &workflow.CreateTemplateRequest{
-					ID:          templateID,
-					Version:     skill.Version,
-					Name:        skill.Name + "-workflow",
-					Description: skill.Description,
-					Category:    skill.Category,
-					DAG:         dag,
-				})
-				if err != nil {
-					zap.L().Warn("Auto-register workflow failed", zap.String("skill", skill.Name), zap.Error(err))
-				} else {
-					zap.L().Info("Auto-registered workflow", zap.String("id", tmpl.ID), zap.String("skill", skill.Name+"@"+skill.Version))
-				}
-			}
-		} else {
-			zap.L().Info("Legacy skill-to-workflow auto-register disabled; dynamic agent runtime is primary")
-		}
-
-		// Video Projects
-		videoProjectRepo := videoRepo.NewProjectRepository(pool)
-		videoProjectSvc := videoSvc.NewProjectService(videoProjectRepo)
-		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, authMiddleware.RequireAuth())
-		projectHandler.RegisterRoutes(r)
-		videoAssistant.NewHandler(authMiddleware.RequireAuth()).RegisterRoutes(r)
-
-		// Workflow Runs
-		workflowRunRepo := workflow.NewRunRepository(pool)
-		// Wire the state machine to sync node statuses to the workflow run's
-		// stage_statuses JSONB so the frontend progress panel shows live status.
-		stateMachine.SetStageStatusSyncer(&runStatusSyncer{runRepo: workflowRunRepo})
-		workflowRunSvc := workflow.NewRunService(workflowRepo, workflowRunRepo, orchestratorService)
-		stageApprovalSvc := workflow.NewStageApprovalService(workflowRunRepo, nodeRepo, stateMachine)
-
-		// Checkpoint store and service — persists stage boundaries for recovery.
-		checkpointStore := workflow.NewCheckpointStore(pool)
-		checkpointSvc := workflow.NewCheckpointService(checkpointStore, workflowRunRepo, nodeRepo)
-		stateService.SetTransitionHook(checkpointSvc.TransitionHook())
-		_ = workflow.EnsureCheckpointSchema(ctx, pool)
-
-		// Decision log store — audit trail for every approval, rejection, and pipeline decision.
-		decisionLogStore := workflow.NewDecisionLogStore(pool)
-		_ = workflow.EnsureDecisionLogSchema(ctx, pool)
-
-		// Wire decision log into the agent runtime handler so approve/reject
-		// writes audit-trail entries automatically.
-		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore})
-
-		artifactRepo := artifact.NewRepository(pool)
-		artifactSvc := artifact.NewService(artifactRepo)
-		stageApprovalSvc.WithArtifactApprover(artifactSvc)
-		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
-			WithCheckpointService(checkpointSvc).
-			RegisterRoutes(r)
-		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo).
-			WithAgentTaskStore(taskRepo)
-
-		// Wire session dependencies into the project handler
-		projectHandler.WithSessionDependencies(artifactSvc, localRunnerService)
-		// Wire LLM-based revision support so the /artifacts/:id/revise endpoint
-		// can actually call the LLM with original content + revision instruction.
-		artifactHandler.SetRevisionConfig(cfg.Video.SkillRoot, func(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-			effectiveCfg := builtin.GetVideoCreationOpenAIConfig()
-			// Also try to pull config from the local desktop agent, matching
-			// the behavior of executeSkillStageAgent (the workflow LLM call path).
-			if localCfg, ok := builtin.TryFetchLocalAgentConfig(); ok {
-				if localCfg.BaseURL != "" {
-					effectiveCfg.BaseURL = localCfg.BaseURL
-				}
-				if localCfg.APIKey != "" {
-					effectiveCfg.APIKey = localCfg.APIKey
-				}
-				if localCfg.Model != "" {
-					effectiveCfg.Model = localCfg.Model
-				}
-			}
-			if effectiveCfg.APIKey == "" {
-				return "", fmt.Errorf("LLM API key 未配置，无法执行返工。请在桌面端设置页面配置 API Key。")
-			}
-			llmTool := builtin.NewLlmApiTool(effectiveCfg)
-			var toolCtx tool.ToolContext
-			result := llmTool.Execute(ctx, map[string]interface{}{
-				"prompt":     systemPrompt + "\n\n---\n\n" + userPrompt,
-				"max_tokens": 8000,
-			}, toolCtx)
-			if !result.Success {
-				return "", fmt.Errorf("LLM 返工调用失败: %s", result.Error)
-			}
-			content, _ := result.Data["content"].(string)
-			if content == "" {
-				return "", fmt.Errorf("LLM 返回了空内容")
-			}
-			return content, nil
-		})
-		artifactHandler.RegisterRoutes(r)
-
-		// Wire artifact service into the agent runtime handler for stale tracking
-		// and artifact approval on review actions.
-		agentRuntimeHandler.
-			WithArtifactService(artifactSvc).
-			WithProjectIDResolver(&taskProjectIDResolver{runRepo: workflowRunRepo, taskRepo: taskRepo})
-
-		// Wire repository-backed render dependency checker so HYPERFRAMES_RENDER
-		// validates database facts (artifact status) before dispatching a LocalJob.
-		nodeExecutor.SetRenderDependencyChecker(
-			workerService.NewRepositoryBackedRenderDependencyChecker(
-				&artifactStateAdapter{svc: artifactSvc},
-				workerService.NewRepositoryReviewApprovalChecker(&artifactStateAdapter{svc: artifactSvc}),
-				workerService.NewRunnerCapabilityChecker(&runnerServiceAdapter{svc: localRunnerService}),
-			),
-		)
-
-		// Wire artifact sync callback so local job completions automatically
-		// write artifact metadata to the cloud ArtifactIndex.
-		localRunnerHandler.WithArtifactSyncCallback(func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error {
-			workflowRunID, err := workflowRunRepo.FindRunIDByTaskID(ctx, taskID)
-			if err != nil || workflowRunID == "" {
-				zap.L().Warn("artifact sync: workflowRunID missing, fallback to taskID",
-					zap.String("taskID", taskID),
-					zap.String("nodeID", nodeID),
-					zap.String("projectID", projectID),
-					zap.String("toolName", toolName),
-					zap.String("command", command),
-					zap.Error(err),
-				)
-				workflowRunID = taskID
-			}
-			return syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, workflowRunID, taskID, nodeID, toolName, command, output)
-		})
-
-		zap.L().Info("Video project and watch workflow run services registered")
 	}
 
 	srv := &http.Server{
@@ -1176,40 +925,4 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// decisionLogAdapter bridges the workflow DecisionLogStore to the
-// agentruntime.DecisionLogWriter interface, allowing the agent runtime
-// handler to write audit-trail entries without importing the workflow package.
-type decisionLogAdapter struct {
-	store workflow.DecisionLogStore
-}
-
-// stageDirectorRegistry adapts videodirector.Registry to agentruntime.DirectorRegistry.
-// Go's structural typing allows director.Director to satisfy agentruntime.StageDirector.
-type stageDirectorRegistry struct {
-	inner *videodirector.Registry
-}
-
-func (r *stageDirectorRegistry) Get(stageName string) agentruntime.StageDirector {
-	d := r.inner.Get(stageName)
-	if d == nil {
-		return nil
-	}
-	// director.Director and agentruntime.StageDirector have the same method set;
-	// Go's structural typing handles the conversion.
-	return d
-}
-
-func (a *decisionLogAdapter) Save(ctx context.Context, r *agentruntime.DecisionLogRecord) error {
-	return a.store.Save(ctx, &workflow.DecisionLogRecord{
-		WorkflowRunID:  r.WorkflowRunID,
-		TaskID:         r.TaskID,
-		StageName:      r.StageName,
-		DecisionType:   r.DecisionType,
-		Selected:       r.Selected,
-		ApprovedByUser: r.ApprovedByUser,
-		ReviewerID:     r.ReviewerID,
-		Comment:        r.Comment,
-	})
 }

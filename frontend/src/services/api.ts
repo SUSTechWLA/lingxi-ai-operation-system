@@ -18,14 +18,6 @@ import {
   SkillsResponse,
   WorkflowListResponse,
   WorkflowTemplate,
-  VideoProjectListResponse,
-  CreateVideoProjectPayload,
-  VideoProject,
-  CreateWorkflowRunPayload,
-  WorkflowRun,
-  ApproveVideoStagePayload,
-  ApproveVideoStageResponse,
-  ArtifactListResponse,
   ArtifactContentResponse,
   ArtifactHistoryResponse,
   AgentStartRunRequest,
@@ -33,13 +25,6 @@ import {
   AgentRun,
   AgentReviewListResponse,
   AgentReviewActionResponse,
-  VideoRoleAgentListResponse,
-  VideoAssistantExplainStageRequest,
-  VideoAssistantExplainStageResponse,
-  VideoAssistantMessageRequest,
-  VideoAssistantMessageResponse,
-  VideoAssistantReviseRequest,
-  VideoAssistantReviseResponse,
 } from '../utils/types'
 
 const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.env.VITE_API_BASE
@@ -340,58 +325,6 @@ export const instantiateWorkflow = async (
   return response.data.data
 }
 
-export const fetchVideoProjects = async (): Promise<VideoProjectListResponse> => {
-  const response = await api.get<ApiResponse<VideoProjectListResponse>>('/video-projects')
-  return response.data.data
-}
-
-export const createVideoProject = async (
-  payload: CreateVideoProjectPayload
-): Promise<VideoProject> => {
-  const response = await api.post<ApiResponse<{ project: VideoProject }>>('/video-projects', payload)
-  return response.data.data.project
-}
-
-export const createWorkflowRun = async (
-  projectId: string,
-  payload: CreateWorkflowRunPayload
-): Promise<WorkflowRun> => {
-  const response = await api.post<ApiResponse<{ run: WorkflowRun }>>(
-    `/video-projects/${projectId}/workflow-runs`,
-    payload
-  )
-  return response.data.data.run
-}
-
-export const fetchWorkflowRun = async (
-  projectId: string,
-  runId: string
-): Promise<WorkflowRun> => {
-  const response = await api.get<ApiResponse<{ run: WorkflowRun }>>(
-    `/video-projects/${projectId}/workflow-runs/${runId}`
-  )
-  return response.data.data.run
-}
-
-export const approveVideoStage = async (
-  projectId: string,
-  stageName: string,
-  payload: ApproveVideoStagePayload
-): Promise<ApproveVideoStageResponse> => {
-  const response = await api.post<ApiResponse<ApproveVideoStageResponse>>(
-    `/video-projects/${projectId}/stages/${stageName}/approve`,
-    payload
-  )
-  return response.data.data
-}
-
-export const fetchProjectArtifacts = async (
-  projectId: string
-): Promise<ArtifactListResponse> => {
-  const response = await api.get<ApiResponse<ArtifactListResponse>>(`/video-projects/${projectId}/artifacts`)
-  return response.data.data
-}
-
 export const fetchArtifactContent = async (
   artifactId: string
 ): Promise<ArtifactContentResponse> => {
@@ -582,85 +515,4 @@ export const readBiaoshuArtifact = async (filePath: string): Promise<BiaoshuArti
   }
 }
 
-export interface CheckpointItem {
-  id: string
-  workflowRunId: string
-  taskId: string
-  stageName: string
-  stageIndex: number
-  nodeId: string
-  state: 'AWAITING_HUMAN' | 'IN_PROGRESS' | 'COMPLETED'
-  createdAt: string
-  recoveredAt?: string
-}
 
-export const fetchCheckpoints = async (runId: string): Promise<CheckpointItem[]> => {
-  // Uses the video workflow endpoint; project ID is resolved server-side via the run.
-  const response = await api.get<ApiResponse<{ checkpoints: CheckpointItem[] }>>(
-    `/video-projects/checkpoints`, { params: { runId } }
-  )
-  return response.data.data?.checkpoints ?? []
-}
-
-export const recoverRun = async (runId: string): Promise<{ checkpoint: CheckpointItem; message: string }> => {
-  const response = await api.post<ApiResponse<{ checkpoint: CheckpointItem; message: string }>>(
-    `/video-projects/checkpoints/recover`, { runId }
-  )
-  return response.data.data!
-}
-
-export interface PreflightResponse {
-  pipeline: string
-  status: 'passed' | 'blocked'
-  canStart: boolean
-  capabilityMenu: {
-    localRunner: { available: boolean }
-    compositionRuntime: { hyperframes: { available: boolean } }
-    localTools: { command: string; available: boolean }[]
-    warnings: string[]
-  }
-  blockers?: { code: string; message: string }[]
-}
-
-export const fetchVideoPreflight = async (pipeline: string = 'wf-guided-image-text-video'): Promise<PreflightResponse> => {
-  const response = await api.get<ApiResponse<PreflightResponse>>('/video/preflight', { params: { pipeline } })
-  return response.data.data!
-}
-
-export const fetchVideoRoleAgents = async (): Promise<VideoRoleAgentListResponse> => {
-  const response = await api.get<ApiResponse<VideoRoleAgentListResponse>>('/video/role-agents')
-  return response.data.data
-}
-
-export const askVideoProjectAssistant = async (
-  projectId: string,
-  payload: VideoAssistantMessageRequest
-): Promise<VideoAssistantMessageResponse> => {
-  const response = await api.post<ApiResponse<VideoAssistantMessageResponse>>(
-    `/video-projects/${projectId}/assistant/message`,
-    payload
-  )
-  return response.data.data
-}
-
-export const reviseWithVideoProjectAssistant = async (
-  projectId: string,
-  payload: VideoAssistantReviseRequest
-): Promise<VideoAssistantReviseResponse> => {
-  const response = await api.post<ApiResponse<VideoAssistantReviseResponse>>(
-    `/video-projects/${projectId}/assistant/revise`,
-    payload
-  )
-  return response.data.data
-}
-
-export const explainVideoProjectStage = async (
-  projectId: string,
-  payload: VideoAssistantExplainStageRequest
-): Promise<VideoAssistantExplainStageResponse> => {
-  const response = await api.post<ApiResponse<VideoAssistantExplainStageResponse>>(
-    `/video-projects/${projectId}/assistant/explain-stage`,
-    payload
-  )
-  return response.data.data
-}

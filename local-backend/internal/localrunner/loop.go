@@ -151,36 +151,14 @@ func (l *Loop) executableCapabilities(probe ProbeResult) []Capability {
 
 func toolNameForCommand(command string) string {
 	switch command {
-	case localtool.CommandHyperFramesProjectGenerate:
-		return "hyperframes_project_generator"
-	case localtool.CommandHyperFramesRender:
-		return "hyperframes_renderer"
-	case localtool.CommandHyperFramesLint:
-		return "hyperframes_linter"
-	case localtool.CommandHyperFramesSnapshot:
-		return "hyperframes_snapshot"
-	case localtool.CommandHyperGenRender:
-		return "hypergen_renderer"
-	case localtool.CommandFFmpegProbe:
-		return "ffmpeg_probe"
-	case localtool.CommandFFmpegClipExtract:
-		return "ffmpeg_clip_extractor"
-	case localtool.CommandFFmpegAssemble:
-		return "ffmpeg_assembler"
-	case localtool.CommandAudioExtract:
-		return "audio_extractor"
-	case localtool.CommandAudioNormalize:
-		return "audio_normalizer"
-	case localtool.CommandASRTranscribe:
-		return "asr_transcriber_local"
-	case localtool.CommandArtifactPackage:
-		return "artifact_packager"
 	case localtool.CommandLocalFileImport:
 		return "local_file_importer"
 	case localtool.CommandLocalMediaIndex:
 		return "local_media_indexer"
 	case localtool.CommandBundleExtract:
 		return "bundle_extractor"
+	case localtool.CommandFinalReview:
+		return "final_review"
 	default:
 		return command
 	}

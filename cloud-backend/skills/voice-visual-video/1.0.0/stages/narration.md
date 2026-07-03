@@ -1,1 +1,0 @@
-# Narration Stage - Generate beat-based narration script

@@ -1,1 +1,0 @@
-# Storyboard Stage - Visual layout for each shot

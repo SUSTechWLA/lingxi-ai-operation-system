@@ -1,1 +1,0 @@
-{"type": "object", "required": ["title", "logline", "scenes"], "properties": {"title": {"type": "string"}, "logline": {"type": "string"}, "scenes": {"type": "array"}}}

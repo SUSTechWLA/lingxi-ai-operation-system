@@ -1,1 +1,0 @@
-# Image Generation Stage - Generate images where needed (optional)

@@ -85,10 +85,6 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 	if ep, ok := params["endpoint"].(string); ok && ep != "" {
 		targetURL = ep
 	}
-	if strings.HasPrefix(targetURL, "builtin://video-creation/") {
-		return executeLocalVideoCreationTool(toolName, execParams, toolCtx)
-	}
-
 	zap.L().Info("Executing external tool",
 		zap.String("tool", toolName),
 		zap.String("endpoint", targetURL),

@@ -119,8 +119,6 @@ export interface TraceData {
   }>
 }
 
-export type ContentType = 'image' | 'video' | null
-
 export interface SkillStage {
   name: string
   kind?: string
@@ -221,86 +219,6 @@ export interface WorkflowTemplate {
 
 export interface WorkflowListResponse {
   templates: WorkflowTemplate[]
-}
-
-export type VideoProjectMode = 'aigc_shot' | 'voice_visual'
-export type VideoGenerationMode = 'provider_api' | 'manual_import'
-
-export interface VideoProject {
-  id: string
-  userId: string
-  name: string
-  description?: string
-  mode: VideoProjectMode
-  status: 'DRAFT' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED'
-  skillName: string
-  skillVersion: string
-  workflowName: string
-  workflowVersion: string
-  generationMode: VideoGenerationMode
-  aspectRatio?: string
-  targetDurationSec?: number
-  language?: string
-  config?: Record<string, unknown>
-  currentRunId?: string
-  localPathHint?: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface VideoProjectListResponse {
-  projects: VideoProject[]
-  total: number
-}
-
-export interface CreateVideoProjectPayload {
-  name: string
-  description?: string
-  mode: VideoProjectMode
-  skillName: string
-  skillVersion: string
-  workflowName: string
-  workflowVersion: string
-  generationMode: VideoGenerationMode
-  aspectRatio?: string
-  targetDurationSec?: number
-  language?: string
-  config?: Record<string, unknown>
-}
-
-export interface WorkflowRun {
-  id: string
-  projectId: string
-  templateId: string
-  templateVersion: string
-  taskId: string
-  status: string
-  attempt: number
-  input?: Record<string, unknown>
-  output?: Record<string, unknown>
-  stageStatuses?: Record<string, string>
-  traceId?: string
-  startedAt?: string
-  finishedAt?: string
-  createdAt: string
-}
-
-export interface CreateWorkflowRunPayload {
-  templateId: string
-  templateVersion: string
-  input: Record<string, unknown>
-}
-
-export interface ApproveVideoStagePayload {
-  runId?: string
-  output?: Record<string, unknown>
-  comment?: string
-}
-
-export interface ApproveVideoStageResponse {
-  nodeId: string
-  stage: string
-  message: string
 }
 
 export type ArtifactKind = 'JSON' | 'MARKDOWN' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'BUNDLE' | 'LOG'
@@ -476,82 +394,4 @@ export interface RoleQualityPolicy {
   autoRepair?: boolean
   repairTool?: string
   maxRepairAttempts?: number
-}
-
-export interface VideoRoleAgent {
-  id: string
-  name: string
-  displayName: string
-  stage: string
-  goal: string
-  requiredInputs?: string[]
-  requiredOutputs?: string[]
-  allowedTools?: string[]
-  forbiddenTools?: string[]
-  humanReview?: RoleHumanReview | null
-  qualityPolicy?: RoleQualityPolicy | null
-  maxToolCalls?: number
-}
-
-export interface VideoRoleAgentListResponse {
-  roleAgents: VideoRoleAgent[]
-}
-
-export interface VideoAssistantAction {
-  type: string
-  label: string
-  method?: string
-  path?: string
-  body?: Record<string, unknown>
-}
-
-export interface VideoAssistantMessageRequest {
-  message: string
-  stage?: string
-  runId?: string
-  artifactIds?: string[]
-}
-
-export interface VideoAssistantMessageResponse {
-  projectId: string
-  scope: 'video_project'
-  answer: string
-  stage?: string
-  runId?: string
-  suggestedActions: VideoAssistantAction[]
-  forbiddenCapabilities: string[]
-  referencedArtifactIds?: string[]
-}
-
-export interface VideoAssistantReviseRequest {
-  artifactId: string
-  message: string
-  runId?: string
-  reviewId?: string
-}
-
-export interface VideoAssistantReviseResponse {
-  projectId: string
-  artifactId: string
-  runId?: string
-  reviewId?: string
-  answer: string
-  bypassesArtifact: boolean
-  artifactAction: VideoAssistantAction
-}
-
-export interface VideoAssistantExplainStageRequest {
-  stage: string
-}
-
-export interface VideoAssistantExplainStageResponse {
-  projectId: string
-  stage: string
-  displayName: string
-  explanation: string
-  requiredInputs: string[]
-  requiredOutputs: string[]
-  reviewFocus: string[]
-  nextUserActions: string[]
-  betaLimitations: string[]
 }

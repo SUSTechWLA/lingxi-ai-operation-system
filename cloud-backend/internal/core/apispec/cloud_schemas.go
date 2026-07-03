@@ -1,14 +1,11 @@
 package apispec
 
 import (
-	videoassistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
-	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	"github.com/tangying-ai/aios-core/internal/core/agentruntime"
 	artifacts "github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
-	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	workflow "github.com/tangying-ai/aios-core/internal/core/workflow"
 )
 
@@ -399,111 +396,6 @@ func registerCloudSchemas(b *Builder) {
 		},
 	})
 
-	// ── Skills ──
-	b.Schema("SkillsResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"skills": {Schema: ArraySchema(ObjectSchema())},
-					"health": {Schema: ObjectSchema()},
-				},
-			}},
-		},
-	})
-	b.Schema("SkillCatalogResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"skills": {Schema: ArraySchema(ObjectSchema())},
-					"health": {Schema: ObjectSchema()},
-				},
-			}},
-		},
-	})
-	b.Schema("SkillRouteResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data":    {Schema: ObjectSchema()},
-		},
-	})
-	b.Schema("SkillDetailResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type:       "object",
-				Properties: map[string]*SchemaRef{"skill": {Schema: ObjectSchema()}},
-			}},
-		},
-	})
-
-	// ── Skill Capabilities ──
-	b.Schema("SkillCapabilityListResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"capabilities": {Schema: ArraySchema(Reflect(skillcapability.Manifest{}))},
-				},
-			}},
-		},
-	})
-	b.Schema("SkillCapabilityDetailResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"capability": {Schema: Reflect(skillcapability.Manifest{})},
-				},
-			}},
-		},
-	})
-
-	// ── Video Role Agents ──
-	b.Schema("VideoRoleAgentListResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"roleAgents": {Schema: ArraySchema(Reflect(skillcapability.RoleAgent{}))},
-				},
-			}},
-		},
-	})
-	b.Schema("VideoRoleAgentDetailResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"roleAgent": {Schema: Reflect(skillcapability.RoleAgent{})},
-				},
-			}},
-		},
-	})
-
 	// ── Dynamic Agent Runs ──
 	b.Schema("AgentStartRunRequest", Reflect(agentruntime.StartRunRequest{}))
 	b.Schema("AgentRunStartResponse", &Schema{
@@ -620,114 +512,6 @@ func registerCloudSchemas(b *Builder) {
 		},
 	})
 
-	// ── Video Projects ──
-	b.Schema("VideoProjectListResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"projects": {Schema: ArraySchema(ObjectSchema())},
-					"total":    {Schema: IntegerSchema()},
-				},
-			}},
-		},
-	})
-	b.Schema("VideoProjectCreateResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type:       "object",
-				Properties: map[string]*SchemaRef{"project": {Schema: Reflect(videomodel.VideoProject{})}},
-			}},
-		},
-	})
-	b.Schema("VideoProjectDetailResponse", (&Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type:       "object",
-				Properties: map[string]*SchemaRef{"project": {Schema: Reflect(videomodel.VideoProject{})}},
-			}},
-		},
-	}))
-
-	// ── Video Project Assistant ──
-	b.Schema("VideoAssistantMessageRequest", Reflect(videoassistant.MessageRequest{}))
-	b.Schema("VideoAssistantReviseRequest", Reflect(videoassistant.ReviseRequest{}))
-	b.Schema("VideoAssistantExplainStageRequest", Reflect(videoassistant.ExplainStageRequest{}))
-	b.Schema("VideoAssistantMessageResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data":    {Schema: Reflect(videoassistant.MessageResponse{})},
-		},
-	})
-	b.Schema("VideoAssistantReviseResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data":    {Schema: Reflect(videoassistant.ReviseResponse{})},
-		},
-	})
-	b.Schema("VideoAssistantExplainStageResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data":    {Schema: Reflect(videoassistant.ExplainStageResponse{})},
-		},
-	})
-
-	// ── Workflow Runs ──
-	b.Schema("WorkflowRunCreateResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type:       "object",
-				Properties: map[string]*SchemaRef{"run": {Schema: ObjectSchema()}},
-			}},
-		},
-	})
-	b.Schema("WorkflowRunDetailResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type:       "object",
-				Properties: map[string]*SchemaRef{"run": {Schema: ObjectSchema()}},
-			}},
-		},
-	})
-
-	// ── Stages ──
-	b.Schema("StageApprovalResponse", &Schema{
-		Type: "object",
-		Properties: map[string]*SchemaRef{
-			"code":    {Schema: IntegerSchema()},
-			"message": {Schema: StringSchema()},
-			"data": {Schema: &Schema{
-				Type: "object",
-				Properties: map[string]*SchemaRef{
-					"nodeId":  {Schema: StringSchema()},
-					"stage":   {Schema: StringSchema()},
-					"message": {Schema: StringSchema()},
-				},
-			}},
-		},
-	})
-
 	// ── Artifacts ──
 	b.Schema("ArtifactListResponse", &Schema{
 		Type: "object",
@@ -780,7 +564,6 @@ func registerCloudSchemas(b *Builder) {
 	})
 
 	// ── Real Go model types (used by multiple responses) ──
-	b.Schema("VideoProject", Reflect(videomodel.VideoProject{}))
 	b.Schema("Artifact", Reflect(artifacts.Artifact{}))
 	b.Schema("WorkflowTemplate", Reflect(workflow.Template{}))
 

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> **架构版本：v4.0** — 视频创作 Agent，Dynamic Agent Runtime (`LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`)，含质量门禁体系和 Artifact Review 闭环。
+> **架构版本：v4.0-biaoshu** — 标书创作 Agent，Dynamic Agent Runtime (`LLMPlanner → PlanGuard → PlanCompiler → Transient DAG`)，含质量门禁体系和 Artifact Review 闭环。
 
 This repository is split by runtime boundary:
 
@@ -67,7 +67,7 @@ cd ../frontend && npm run build
 The cloud backend now supports a dynamic agent path that does NOT require workflow_templates:
 
 ```text
-POST /api/agent/runs  {"message": "请帮我根据端午节的来历创作一个口播知识分享视频"}
+POST /api/agent/runs  {"message": "请帮我根据招标文件生成技术标书"}
     → LLMPlanner generates AgentPlan JSON (via ModelGateway)
     → PlanGuard validates (tools, params, types, references, risk)
     → PlanCompiler inserts quality gates + approval CONTROL nodes

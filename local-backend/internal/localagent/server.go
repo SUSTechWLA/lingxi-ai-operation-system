@@ -196,7 +196,7 @@ func (s *Server) Paths() Paths {
 }
 
 func (s *Server) EnsureDirs() error {
-	for _, dir := range []string{s.paths.DataDir, s.paths.CacheDir, s.paths.ConfigDir, s.paths.ProjectDir, s.paths.ArtifactDir, s.paths.LogDir, s.paths.DiagnosticsDir} {
+	for _, dir := range []string{s.paths.DataDir, s.paths.CacheDir, s.paths.ConfigDir, s.paths.ProjectDir, s.paths.ArtifactDir, s.paths.LogDir, s.paths.DiagnosticsDir, filepath.Join(s.paths.ConfigDir, "biaoshu-conversations")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -913,10 +913,7 @@ func defaultDataDir() string {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "TangyingAIOS")
 	case "windows":
-		if appData := os.Getenv("APPDATA"); appData != "" {
-			return filepath.Join(appData, "TangyingAIOS")
-		}
-		return filepath.Join(home, "AppData", "Roaming", "TangyingAIOS")
+		return filepath.Join(os.TempDir(), "TangyingAIOS")
 	default:
 		return filepath.Join(home, ".tangying-aios")
 	}
@@ -1373,7 +1370,7 @@ func (s *Server) readBiaoshuConversation(runID, artifactPath string) ([]BiaoshuC
 	path := s.biaoshuConversationPath(runID, artifactPath)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if os.IsNotExist(err) {
 			return []BiaoshuConversationMessage{}, nil
 		}
 		return nil, err

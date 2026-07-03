@@ -71,23 +71,6 @@ func TestBuildCloudSpec_DoesNotExposeRemovedBusinessLines(t *testing.T) {
 	}
 }
 
-func TestBuildCloudSpec_ExposesVideoScopedAssistant(t *testing.T) {
-	spec := BuildCloudSpec()
-	for _, path := range []string{
-		"/api/video-projects/:id/assistant/message",
-		"/api/video-projects/:id/assistant/revise",
-		"/api/video-projects/:id/assistant/explain-stage",
-	} {
-		item := spec.Paths[path]
-		if item == nil || item.Post == nil {
-			t.Fatalf("video project assistant route %q must be exposed as POST", path)
-		}
-		if len(item.Post.Tags) == 0 || item.Post.Tags[0] != "Video Project Assistant" {
-			t.Fatalf("video project assistant route %q tag = %v", path, item.Post.Tags)
-		}
-	}
-}
-
 func TestBuildCloudSpec_SnapshotPathCount(t *testing.T) {
 	spec := BuildCloudSpec()
 	// Snapshot: total number of unique paths (should grow with new endpoints)

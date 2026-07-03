@@ -1,1 +1,0 @@
-# Visual Design Stage - Define visual reference document

@@ -16,8 +16,8 @@ func TestLoopClaimsExecutesAndCompletesOneJob(t *testing.T) {
 			ID:         "local_job_001",
 			ProjectID:  "project_001",
 			NodeID:     "node_001",
-			ToolName:   "artifact_packager",
-			Command:    "ARTIFACT_PACKAGE",
+			ToolName:   "bundle_extractor",
+			Command:    "BUNDLE_EXTRACT",
 			Payload:    map[string]interface{}{"name": "bundle"},
 			TimeoutSec: 30,
 		},
@@ -28,7 +28,7 @@ func TestLoopClaimsExecutesAndCompletesOneJob(t *testing.T) {
 			t.Fatalf("unexpected job: %#v", job)
 		}
 		return &localtool.Result{Output: map[string]interface{}{"summary": "packaged"}}, nil
-	}), "ARTIFACT_PACKAGE")
+	}), "BUNDLE_EXTRACT")
 
 	loop := NewLoop(client, reg, LoopOptions{
 		DeviceID:      "device_001",
@@ -54,7 +54,7 @@ func TestLoopRegistersOnlyExecutableCapabilities(t *testing.T) {
 	reg := localtool.NewRegistry()
 	reg.Register(localtool.ExecutorFunc(func(context.Context, localtool.Job) (*localtool.Result, error) {
 		return &localtool.Result{Output: map[string]interface{}{}}, nil
-	}), "ARTIFACT_PACKAGE")
+	}), "BUNDLE_EXTRACT")
 
 	loop := NewLoop(client, reg, LoopOptions{PollInterval: time.Millisecond})
 	if err := loop.RunOnce(context.Background()); err != nil {
@@ -63,7 +63,7 @@ func TestLoopRegistersOnlyExecutableCapabilities(t *testing.T) {
 	if len(client.registerReq.Capabilities) != 1 {
 		t.Fatalf("expected only registered executable capabilities, got %#v", client.registerReq.Capabilities)
 	}
-	if client.registerReq.Capabilities[0].Command != "ARTIFACT_PACKAGE" {
+	if client.registerReq.Capabilities[0].Command != "BUNDLE_EXTRACT" {
 		t.Fatalf("unexpected registered capability: %#v", client.registerReq.Capabilities[0])
 	}
 }
