@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.5-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.6-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,13 @@
 ---
 
 ## Release 更新
+
+### v0.1.6 - 2026-07-04
+
+- MCP AIGC 生成结果新增 `sourceSummary` 和 `assetProvenance`：每个请求都会记录 provider、tool、kind、status、storageRef、localPath、失败原因和是否需要 fallback。
+- 自动插入的 `mcp_generation_runner` 默认要求至少 1 个 ready 的 AIGC 视频素材；如果 Dreamina/JiMeng 视频全部失败，系统会明确标记 `externalVideoRequirementSatisfied=false`，不能把 HyperFrames/storyboard fallback 误当成即梦成片。
+- 即梦素材位置更清晰：成功下载的 MCP 素材会保存在本地 `TangyingAIOS/cache/mcp/<projectId>/<requestId>/`，并导入 `TangyingAIOS/artifacts/<projectId>/<requestId>/content`。
+- 文档补充了“ready / failed / deferred / fallback”的区别，避免外部平台额度消耗后看不到哪些素材真正来自即梦。
 
 ### v0.1.5 - 2026-07-04
 

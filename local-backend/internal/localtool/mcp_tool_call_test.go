@@ -811,4 +811,81 @@ func TestMCPToolCallExecutorRoutesImageExternalRequestToGenerateImage(t *testing
 	if pkg["kind"] != "image" {
 		t.Fatalf("image package kind = %#v, want image", pkg["kind"])
 	}
+	summary := result.Output["sourceSummary"].(map[string]interface{})
+	if summary["videoRequestCount"] != 0 || summary["externalVideoRequirementSatisfied"] != true {
+		t.Fatalf("image-only batch should not fail video requirement: %#v", summary)
+	}
+}
+
+func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"isError": true,
+				"content": []map[string]interface{}{
+					{"type": "text", "text": "dreamina generation failed: CreditPreDeductNotEnough"},
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-missing-ready-video",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId":               "jimeng",
+			"mcpTool":                  "jimeng.generate_video",
+			"minReadyVideoGenerations": 1,
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_01",
+					"shotId":     "SHOT_01",
+					"kind":       "video",
+					"promptText": "wide cinematic shot",
+					"target":     map[string]interface{}{"durationSec": 5, "aspectRatio": "16:9"},
+				},
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_02",
+					"shotId":     "SHOT_02",
+					"kind":       "video",
+					"promptText": "second cinematic shot",
+					"target":     map[string]interface{}{"durationSec": 5, "aspectRatio": "16:9"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	summary := result.Output["sourceSummary"].(map[string]interface{})
+	if summary["readyVideoCount"] != 0 {
+		t.Fatalf("readyVideoCount = %#v, want 0", summary["readyVideoCount"])
+	}
+	if summary["requiredReadyVideoCount"] != 1 || summary["externalVideoRequirementSatisfied"] != false {
+		t.Fatalf("video requirement should be unmet: %#v", summary)
+	}
+	if summary["fallbackRequired"] != true || summary["needsAttention"] != true {
+		t.Fatalf("missing ready videos should require attention and fallback: %#v", summary)
+	}
+	if !strings.Contains(result.Output["summary"].(string), "0/2") {
+		t.Fatalf("summary should expose ready/total video count, got %q", result.Output["summary"])
+	}
+	provenance := result.Output["assetProvenance"].([]interface{})
+	if len(provenance) != 2 {
+		t.Fatalf("assetProvenance length = %d, want 2", len(provenance))
+	}
+	first := provenance[0].(map[string]interface{})
+	if first["requestId"] != "extgen_video_SHOT_01" || first["status"] != "failed" || first["kind"] != "video" {
+		t.Fatalf("unexpected provenance item: %#v", first)
+	}
 }

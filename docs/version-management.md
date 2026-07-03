@@ -46,6 +46,21 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
+v0.1.6 对应能力：
+
+- MCP AIGC 生成结果必须输出 `sourceSummary` 和 `assetProvenance`，让用户能直接看到哪些素材真实来自 provider，哪些请求失败、延迟或需要 fallback。
+- 自动插入的 `mcp_generation_runner` 默认携带 `minReadyVideoGenerations=1`，避免 Dreamina/JiMeng 视频全失败时仍把 HyperFrames/storyboard fallback 误认为即梦成片。
+- 即梦素材本地路径规范为 `TangyingAIOS/cache/mcp/<projectId>/<requestId>/` 和 `TangyingAIOS/artifacts/<projectId>/<requestId>/content`。
+- 版本文档、MCP provider 文档和影视流程文档都要说明 ready / failed / deferred / fallback 的区别。
+
+发布 v0.1.6 tag 前必须确认：
+
+1. README 已追加 v0.1.6 release note。
+2. `docs/mcp-providers.md` 和 `docs/cinematic-video-workflow.md` 已说明素材来源、路径和 fallback 规则。
+3. 本地 MCP 执行器测试覆盖“视频请求全失败时 sourceSummary 明确标记未满足 ready 视频要求”。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.6 <release_commit>` 只在 release 提交后创建。
+
 v0.1.5 对应能力：
 
 - `cinematic_story` 影视创作模式已进入 release：故事大纲、详细剧本、角色/场景/道具档案、参考图、shot 设计、MCP 生成、render、QA 和发布文案全链路可跑通。

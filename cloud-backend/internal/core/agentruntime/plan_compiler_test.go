@@ -779,6 +779,7 @@ func TestPlanCompiler_PreparePlanInsertsMCPGenerationRunnerWhenRequested(t *test
 			"providerId":                 {Type: "string", Required: true},
 			"mcpTool":                    {Type: "string", Required: true},
 			"maxReadyGenerations":        {Type: "number", Required: false},
+			"minReadyVideoGenerations":   {Type: "number", Required: false},
 			"mcpBatchTimeoutSec":         {Type: "number", Required: false},
 			"mcpToolCallTimeoutSec":      {Type: "number", Required: false},
 		},
@@ -821,6 +822,9 @@ func TestPlanCompiler_PreparePlanInsertsMCPGenerationRunnerWhenRequested(t *test
 	if got := mcpStep.Arguments["maxReadyGenerations"]; got != 1 {
 		t.Fatalf("maxReadyGenerations = %#v, want 1", got)
 	}
+	if got := mcpStep.Arguments["minReadyVideoGenerations"]; got != 1 {
+		t.Fatalf("minReadyVideoGenerations = %#v, want 1", got)
+	}
 	if got := mcpStep.Arguments["mcpBatchTimeoutSec"]; got != 120 {
 		t.Fatalf("mcpBatchTimeoutSec = %#v, want 120", got)
 	}
@@ -856,6 +860,7 @@ func TestPlanCompiler_PreparePlanDefaultsExternalGenerationToMCPRunner(t *testin
 			"providerId":                 {Type: "string", Required: true},
 			"mcpTool":                    {Type: "string", Required: true},
 			"maxReadyGenerations":        {Type: "number", Required: false},
+			"minReadyVideoGenerations":   {Type: "number", Required: false},
 			"mcpBatchTimeoutSec":         {Type: "number", Required: false},
 			"mcpToolCallTimeoutSec":      {Type: "number", Required: false},
 		},
@@ -897,6 +902,9 @@ func TestPlanCompiler_PreparePlanDefaultsExternalGenerationToMCPRunner(t *testin
 	}
 	if got := mcpStep.Arguments["maxReadyGenerations"]; got != 1 {
 		t.Fatalf("maxReadyGenerations = %#v, want 1", got)
+	}
+	if got := mcpStep.Arguments["minReadyVideoGenerations"]; got != 1 {
+		t.Fatalf("minReadyVideoGenerations = %#v, want 1", got)
 	}
 	if got := mcpStep.Arguments["mcpBatchTimeoutSec"]; got != 120 {
 		t.Fatalf("mcpBatchTimeoutSec = %#v, want 120", got)

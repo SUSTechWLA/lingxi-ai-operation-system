@@ -86,7 +86,17 @@ resolution_type: 2k 或 4k
 | 角色、场景、道具设定图 | Dreamina `generate_image` MCP | 生成全局参考图 |
 | 情绪化动作、无厘头视觉隐喻 | Dreamina `generate_video` MCP | 生成 3-15 秒独立 shot |
 
-Dreamina 视频 MCP 如果返回余额不足、并发限制或超时，系统保留 `externalGenerationRequests`，并继续使用 storyboard / HyperFrames fallback 生成可 QA 的成片。
+Dreamina 视频 MCP 如果返回余额不足、并发限制或超时，系统保留 `externalGenerationRequests`，并可以继续使用 storyboard / HyperFrames fallback 生成可 QA 的成片。但 fallback 必须被明确标记，不能被当成 AIGC 视频素材交付。
+
+v0.1.6 起，`mcp_generation_runner` 会输出：
+
+- `sourceSummary.readyVideoCount`
+- `sourceSummary.videoRequestCount`
+- `sourceSummary.externalVideoRequirementSatisfied`
+- `sourceSummary.fallbackRequired`
+- `assetProvenance[]`
+
+影视模式默认至少要求 1 个 ready 的 MCP 视频素材。如果 `readyVideoCount=0` 且 `videoRequestCount>0`，则这次成片只能算 fallback 预览，应该提示用户充值、重试、降低请求数，或改为纯 HyperFrames/录屏路线。
 
 ## QA 质量门
 
@@ -101,6 +111,18 @@ Dreamina 视频 MCP 如果返回余额不足、并发限制或超时，系统保
 
 发布文案必须等 `visual_qa` 审核门通过后才继续。
 
+## v0.1.6 素材来源规则
+
+影视视频最终交付时，必须能回答：
+
+| 问题 | 检查字段 |
+|---|---|
+| 哪些素材真的来自即梦？ | `assetProvenance[].providerId=jimeng` 且 `status=ready` |
+| 文件在哪里？ | `assetProvenance[].storageRef` / `localPath` |
+| 有几个即梦视频片段 ready？ | `sourceSummary.readyVideoCount` |
+| 是否只是 fallback 成片？ | `sourceSummary.fallbackRequired=true` 或 `externalVideoRequirementSatisfied=false` |
+| 为什么没用上即梦视频？ | `assetProvenance[].error` / `reason` |
+
 ## v0.1.5 验证记录
 
 - project: `vp-b1a3a300`
@@ -109,4 +131,4 @@ Dreamina 视频 MCP 如果返回余额不足、并发限制或超时，系统保
 - output: `final.mp4`
 - video: 1920x1080, 18 秒, 16:9
 - QA: `passed=true`, `score=100`, `shotCount=4`, `frameCount=5`, `blockingIssueCount=0`, `warningIssueCount=0`
-- MCP: `jimeng.generate_image` 成功 ready 1 个参考图，`jimeng.generate_video` 因 Dreamina 账户余额不足返回 `CreditPreDeductNotEnough`，系统自动 fallback 并完成 QA。
+- MCP: `jimeng.generate_image` 成功 ready 1 个参考图，`jimeng.generate_video` 因 Dreamina 账户余额不足返回 `CreditPreDeductNotEnough`，没有 ready 视频素材；该成片应视为 fallback 预览，不应视为即梦视频素材主导的成片。

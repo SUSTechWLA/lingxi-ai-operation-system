@@ -793,11 +793,17 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"externalGenerationRequests": {Type: "array", Description: "External generation requests produced by prompt generation", Required: true},
 			"providerId":                 {Type: "string", Description: "Local MCP provider id, for example jimeng", Required: true},
 			"mcpTool":                    {Type: "string", Description: "Logical MCP tool name, for example jimeng.generate_video", Required: true},
+			"minReadyVideoGenerations":   {Type: "number", Description: "Minimum ready MCP video assets required before the result can satisfy the external AIGC video requirement.", Required: false},
+			"maxReadyGenerations":        {Type: "number", Description: "Maximum ready MCP assets to create in one automatic batch to control quota spend.", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"shotAssetPackages":          {Type: "array", Description: "Per-shot asset packages with generated MCP results"},
 			"generationResults":          {Type: "array", Description: "Raw MCP generation results"},
+			"externalGenerationResults":  {Type: "array", Description: "Alias of raw MCP generation results for review and provenance panels"},
 			"externalGenerationRequests": {Type: "array", Description: "Requests that remain manual or failed"},
+			"assetProvenance":            {Type: "array", Description: "Per-request source provenance showing provider, tool, status, storageRef, localPath, and failure reason"},
+			"sourceSummary":              {Type: "object", Description: "Quantitative source summary: ready video/image counts, failed/deferred counts, fallback requirement, and AIGC video satisfaction"},
+			"requirementsSatisfied":      {Type: "boolean", Description: "Whether the configured minimum ready external video assets were produced"},
 			"summary":                    {Type: "string", Description: "MCP generation summary"},
 		}
 	case "video_frame_qa":

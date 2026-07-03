@@ -94,7 +94,50 @@ Dreamina 图片参数当前按以下规则归一：
 | `target.resolution=3840x2160` / `4k` | `resolution_type=4k` |
 | `target.generateNum` | `generate_num` |
 
-v0.1.5 已验证 `jimeng.generate_image` 可成功生成参考图；`jimeng.generate_video` 如果因 Dreamina 账号余额不足返回 `CreditPreDeductNotEnough`，系统会保留失败请求并继续 fallback 渲染和 QA。
+## 生成结果与素材来源
+
+`LOCAL_MCP_TOOL_CALL` 的输出必须让用户看清楚哪些素材真实来自 MCP provider，哪些只是 fallback。标准输出字段：
+
+| 字段 | 说明 |
+|---|---|
+| `generationResults` / `externalGenerationResults` | 每个请求的原始状态，包含 `requestId`、`shotId`、`kind`、`providerId`、`toolName`、`status`、`storageRef`、`localPath`、`error`。 |
+| `assetProvenance` | 给前端和审查节点展示的素材来源清单。 |
+| `sourceSummary` | 量化统计：视频/图片请求数、ready 数、failed/deferred/pending 数、是否需要 fallback。 |
+| `requirementsSatisfied` | 是否满足本次 MCP 生成的最低 ready 视频素材要求。 |
+
+自动插入的视频 MCP 步骤默认携带：
+
+```json
+{
+  "maxReadyGenerations": 1,
+  "minReadyVideoGenerations": 1
+}
+```
+
+这表示系统会控制自动批量消耗额度，同时要求至少有 1 个真正 ready 的 AIGC 视频素材。如果 `jimeng.generate_video` 全部失败，例如 Dreamina 返回 `CreditPreDeductNotEnough`，输出会明确给出：
+
+```json
+{
+  "sourceSummary": {
+    "readyVideoCount": 0,
+    "videoRequestCount": 4,
+    "externalVideoRequirementSatisfied": false,
+    "fallbackRequired": true,
+    "needsAttention": true
+  }
+}
+```
+
+这种情况下，最终 HyperFrames/storyboard 成片只能算 fallback，不应对用户声明为“即梦 AIGC 视频素材已生成”。
+
+成功下载的 MCP 文件会落在两处：
+
+```text
+~/Library/Application Support/TangyingAIOS/cache/mcp/<projectId>/<requestId>/
+~/Library/Application Support/TangyingAIOS/artifacts/<projectId>/<requestId>/content
+```
+
+v0.1.5 验证中 `jimeng.generate_image` 成功生成 1 个参考图；`jimeng.generate_video` 因 Dreamina 账号余额不足返回 `CreditPreDeductNotEnough`，没有 ready 视频素材。v0.1.6 起该情况会被 `sourceSummary` 和 `assetProvenance` 明确标记。
 
 ## Video QA Python MCP
 

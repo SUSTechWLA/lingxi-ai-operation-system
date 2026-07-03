@@ -97,6 +97,7 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 		result := map[string]interface{}{
 			"requestId":  request["requestId"],
 			"shotId":     request["shotId"],
+			"kind":       mcpExternalRequestKind(request),
 			"providerId": providerID,
 			"toolName":   requestToolName,
 		}
@@ -265,12 +266,19 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 		cancelRequest()
 		results = append(results, result)
 	}
+	sourceSummary := buildMCPSourceSummary(providerID, toolName, job, results)
+	assetProvenance := buildMCPAssetProvenance(results)
 	return &Result{Output: map[string]interface{}{
 		"providerId":                 providerID,
 		"toolName":                   toolName,
 		"shotAssetPackages":          packages,
 		"generationResults":          results,
+		"externalGenerationResults":  results,
 		"externalGenerationRequests": remaining,
+		"assetProvenance":            assetProvenance,
+		"sourceSummary":              sourceSummary,
+		"requirementsSatisfied":      sourceSummary["externalVideoRequirementSatisfied"],
+		"summary":                    mcpGenerationSummaryText(sourceSummary),
 	}}, nil
 }
 
@@ -422,12 +430,144 @@ func (e *mcpToolCallExecutor) deferRemainingRequests(items []interface{}, remain
 		*results = append(*results, map[string]interface{}{
 			"requestId":  future["requestId"],
 			"shotId":     future["shotId"],
+			"kind":       mcpExternalRequestKind(future),
 			"providerId": providerID,
 			"toolName":   futureToolName,
 			"status":     "deferred",
 			"reason":     reason,
 		})
 	}
+}
+
+func buildMCPSourceSummary(providerID, toolName string, job Job, results []interface{}) map[string]interface{} {
+	summary := map[string]interface{}{
+		"providerId":          providerID,
+		"toolName":            toolName,
+		"totalRequestCount":   len(results),
+		"videoRequestCount":   0,
+		"imageRequestCount":   0,
+		"readyCount":          0,
+		"readyVideoCount":     0,
+		"readyImageCount":     0,
+		"pendingCount":        0,
+		"deferredCount":       0,
+		"failedCount":         0,
+		"generatedMediaCount": 0,
+	}
+	for _, item := range results {
+		result := mcpMapFromInterface(item)
+		kind := mcpKindFromResult(result)
+		status := strings.ToLower(strings.TrimSpace(mcpStringFromMap(result, "status")))
+		if kind == "image" {
+			summary["imageRequestCount"] = summary["imageRequestCount"].(int) + 1
+		} else {
+			summary["videoRequestCount"] = summary["videoRequestCount"].(int) + 1
+		}
+		switch status {
+		case "ready":
+			summary["readyCount"] = summary["readyCount"].(int) + 1
+			summary["generatedMediaCount"] = summary["generatedMediaCount"].(int) + 1
+			if kind == "image" {
+				summary["readyImageCount"] = summary["readyImageCount"].(int) + 1
+			} else {
+				summary["readyVideoCount"] = summary["readyVideoCount"].(int) + 1
+			}
+		case "pending":
+			summary["pendingCount"] = summary["pendingCount"].(int) + 1
+		case "deferred":
+			summary["deferredCount"] = summary["deferredCount"].(int) + 1
+		case "failed":
+			summary["failedCount"] = summary["failedCount"].(int) + 1
+		}
+	}
+	requiredReadyVideos := mcpRequiredReadyVideos(job)
+	readyVideos := summary["readyVideoCount"].(int)
+	videoRequests := summary["videoRequestCount"].(int)
+	effectiveRequiredReadyVideos := requiredReadyVideos
+	if videoRequests == 0 {
+		effectiveRequiredReadyVideos = 0
+	}
+	videoSatisfied := effectiveRequiredReadyVideos <= 0 || readyVideos >= effectiveRequiredReadyVideos
+	summary["requiredReadyVideoCount"] = effectiveRequiredReadyVideos
+	summary["externalVideoRequirementSatisfied"] = videoSatisfied
+	summary["unmetReadyVideoCount"] = maxInt(0, effectiveRequiredReadyVideos-readyVideos)
+	summary["fallbackRequired"] = videoRequests > 0 && readyVideos == 0
+	summary["needsAttention"] = !videoSatisfied || summary["failedCount"].(int) > 0
+	return summary
+}
+
+func buildMCPAssetProvenance(results []interface{}) []interface{} {
+	provenance := make([]interface{}, 0, len(results))
+	for _, item := range results {
+		result := mcpMapFromInterface(item)
+		entry := map[string]interface{}{
+			"requestId":  result["requestId"],
+			"shotId":     result["shotId"],
+			"kind":       mcpKindFromResult(result),
+			"providerId": result["providerId"],
+			"toolName":   result["toolName"],
+			"status":     result["status"],
+			"reason":     result["reason"],
+			"error":      result["error"],
+			"storageRef": result["storageRef"],
+			"localPath":  result["localPath"],
+		}
+		provenance = append(provenance, entry)
+	}
+	return provenance
+}
+
+func mcpGenerationSummaryText(summary map[string]interface{}) string {
+	readyVideos := mcpIntFromInterface(summary["readyVideoCount"])
+	totalVideos := mcpIntFromInterface(summary["videoRequestCount"])
+	readyImages := mcpIntFromInterface(summary["readyImageCount"])
+	totalImages := mcpIntFromInterface(summary["imageRequestCount"])
+	failed := mcpIntFromInterface(summary["failedCount"])
+	deferred := mcpIntFromInterface(summary["deferredCount"])
+	pending := mcpIntFromInterface(summary["pendingCount"])
+	text := fmt.Sprintf("MCP 生成结果：视频 ready %d/%d，图片 ready %d/%d，failed %d，deferred %d，pending %d。",
+		readyVideos, totalVideos, readyImages, totalImages, failed, deferred, pending)
+	requiredVideos := mcpIntFromInterface(summary["requiredReadyVideoCount"])
+	if requiredVideos > 0 && !mcpBoolFromInterface(summary["externalVideoRequirementSatisfied"]) {
+		text += fmt.Sprintf(" 未满足至少 %d 个 ready AIGC 视频素材要求，最终渲染只能使用 fallback 或等待重试。", requiredVideos)
+	}
+	return text
+}
+
+func mcpRequiredReadyVideos(job Job) int {
+	for _, key := range []string{"minReadyVideoGenerations", "minimumReadyVideoGenerations", "requiredReadyVideoGenerations"} {
+		if value := mcpIntFromInterface(mcpFirstPresent(job.Payload, key)); value > 0 {
+			return value
+		}
+	}
+	for _, key := range []string{"requireReadyVideoGenerations", "requireReadyVideos", "strictExternalVideoAssets"} {
+		if mcpBoolFromInterface(mcpFirstPresent(job.Payload, key)) {
+			return 1
+		}
+	}
+	return 0
+}
+
+func mcpKindFromResult(result map[string]interface{}) string {
+	if kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(result, "kind", "generationKind", "assetKind"))); kind != "" {
+		if strings.Contains(kind, "image") || strings.Contains(kind, "keyframe") {
+			return "image"
+		}
+		return "video"
+	}
+	toolName := strings.ToLower(strings.TrimSpace(mcpStringFromMap(result, "toolName")))
+	if strings.Contains(toolName, "generate_image") {
+		return "image"
+	}
+	return "video"
+}
+
+func mcpExternalRequestKind(request map[string]interface{}) string {
+	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
+	if strings.Contains(kind, "image") || strings.Contains(kind, "keyframe") {
+		return "image"
+	}
+	return "video"
 }
 
 type mcpGeneratedMedia struct {
@@ -894,4 +1034,23 @@ func mcpIntFromInterface(value interface{}) int {
 	default:
 		return 0
 	}
+}
+
+func mcpBoolFromInterface(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(v))
+		return normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "on"
+	default:
+		return false
+	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

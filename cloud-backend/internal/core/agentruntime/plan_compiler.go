@@ -1283,11 +1283,12 @@ func (c *PlanCompiler) injectMCPGenerationRunner(plan *AgentPlan) {
 			step.Arguments["mcpTool"] = mcpTool
 			step.Arguments["externalGenerationRequests"] = stepOutputRef(promptAnchor, externalField)
 			step.Arguments["maxReadyGenerations"] = defaultMCPMaxReadyGenerations()
+			step.Arguments["minReadyVideoGenerations"] = defaultMCPMinReadyVideoGenerations()
 			step.Arguments["mcpBatchTimeoutSec"] = defaultMCPBatchTimeoutSec()
 			step.Arguments["mcpToolCallTimeoutSec"] = defaultMCPToolCallTimeoutSec()
 			step.DependsOn = dependencyList(promptAnchor)
 			if len(step.ExpectedOutput) == 0 {
-				step.ExpectedOutput = []string{"shotAssetPackages", "generationResults", "externalGenerationResults"}
+				step.ExpectedOutput = []string{"shotAssetPackages", "generationResults", "externalGenerationResults", "sourceSummary", "assetProvenance"}
 			}
 			step.ProduceArtifact = true
 			applyProjectContextToStep(step, projectID)
@@ -1304,11 +1305,12 @@ func (c *PlanCompiler) injectMCPGenerationRunner(plan *AgentPlan) {
 				"mcpTool":                    mcpTool,
 				"externalGenerationRequests": stepOutputRef(promptAnchor, externalField),
 				"maxReadyGenerations":        defaultMCPMaxReadyGenerations(),
+				"minReadyVideoGenerations":   defaultMCPMinReadyVideoGenerations(),
 				"mcpBatchTimeoutSec":         defaultMCPBatchTimeoutSec(),
 				"mcpToolCallTimeoutSec":      defaultMCPToolCallTimeoutSec(),
 			},
 			DependsOn:       dependencyList(promptAnchor),
-			ExpectedOutput:  []string{"shotAssetPackages", "generationResults", "externalGenerationResults"},
+			ExpectedOutput:  []string{"shotAssetPackages", "generationResults", "externalGenerationResults", "sourceSummary", "assetProvenance"},
 			ProduceArtifact: true,
 		})
 		applyProjectContextToStep(planStepByID(plan, stepID), projectID)
@@ -1327,6 +1329,10 @@ func (c *PlanCompiler) injectMCPGenerationRunner(plan *AgentPlan) {
 }
 
 func defaultMCPMaxReadyGenerations() int {
+	return 1
+}
+
+func defaultMCPMinReadyVideoGenerations() int {
 	return 1
 }
 
