@@ -2,6 +2,7 @@ package localrunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -283,7 +284,7 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 				_ = l.pendingReports.Remove(report.JobID, "complete")
 				continue
 			}
-			if err := l.client.CompleteJob(ctx, report.JobID, *report.Complete); err == nil {
+			if err := l.client.CompleteJob(ctx, report.JobID, *report.Complete); err == nil || isTerminalPendingReportError(err) {
 				_ = l.pendingReports.Remove(report.JobID, "complete")
 			}
 		case "fail":
@@ -291,7 +292,7 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 				_ = l.pendingReports.Remove(report.JobID, "fail")
 				continue
 			}
-			if err := l.client.FailJob(ctx, report.JobID, *report.Fail); err == nil {
+			if err := l.client.FailJob(ctx, report.JobID, *report.Fail); err == nil || isTerminalPendingReportError(err) {
 				_ = l.pendingReports.Remove(report.JobID, "fail")
 			}
 		default:
@@ -299,4 +300,20 @@ func (l *Loop) flushPendingReports(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func isTerminalPendingReportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	switch statusErr.StatusCode {
+	case 403, 404, 409:
+		return true
+	default:
+		return false
+	}
 }

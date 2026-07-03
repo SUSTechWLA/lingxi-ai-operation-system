@@ -305,6 +305,41 @@ func TestRegisterVideoCreationExternalToolsInstallsMCPGenerationRunnerManifest(t
 	}
 }
 
+func TestRegisterVideoCreationExternalToolsInstallsVideoFrameQAManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("video_frame_qa")
+	if manifest == nil {
+		t.Fatal("expected video_frame_qa to be registered")
+	}
+	if manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
+		t.Fatalf("ExecutionPlane = %q, want local", manifest.ExecutionPlane)
+	}
+	if manifest.LocalCommand != "VIDEO_FRAME_QA" {
+		t.Fatalf("LocalCommand = %q, want VIDEO_FRAME_QA", manifest.LocalCommand)
+	}
+	if !manifest.RequiresUserDevice {
+		t.Fatal("video_frame_qa should require user device")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact || !manifest.ApprovalPolicy.BlocksDownstream {
+		t.Fatalf("video_frame_qa approval policy = %#v, want blocking after_artifact", manifest.ApprovalPolicy)
+	}
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"} {
+		if !containsString(manifest.ApprovalPolicy.ReviewArtifactKinds, kind) {
+			t.Fatalf("video_frame_qa review artifact kinds missing %s: %#v", kind, manifest.ApprovalPolicy.ReviewArtifactKinds)
+		}
+	}
+	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
+		t.Fatalf("video_frame_qa human review missing: %#v", manifest.HumanReview)
+	}
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"} {
+		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
+			t.Fatalf("video_frame_qa artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+}
+
 func TestRegisterVideoCreationExternalToolsInstallsPreviewReviewManifest(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)

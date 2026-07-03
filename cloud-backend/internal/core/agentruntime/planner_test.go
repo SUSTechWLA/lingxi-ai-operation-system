@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 )
 
 func TestHeuristicPlanner_SelectsCapabilityToolsForDomain(t *testing.T) {
@@ -96,6 +97,79 @@ func TestHeuristicPlanner_DomainFilterRecomputesLimit(t *testing.T) {
 	}
 	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "video_script_generator" {
 		t.Fatalf("domain filter should keep only matching capability tools: %#v", plan.Steps)
+	}
+}
+
+func TestHeuristicPlanner_DoesNotSelectVideoFrameQAAsStandaloneTool(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "video_script_generator",
+			Capabilities: []string{"video_creation", "script_generation"},
+			Parameters: map[string]tool.ParamDef{
+				"topic": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		{
+			Name:         "shot_splitter",
+			Capabilities: []string{"video_creation", "shot_planning"},
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		{
+			Name:         "video_frame_qa",
+			Capabilities: []string{"video_creation", "visual_quality", "frame_sampling", "text_safety"},
+			Parameters: map[string]tool.ParamDef{
+				"input": {Type: "string", Required: true},
+			},
+		},
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, 6)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请创作一个带抽帧 QA 的新视频流程测试",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	for _, step := range plan.Steps {
+		if step.Tool == "video_frame_qa" {
+			t.Fatalf("video_frame_qa should be compiler-inserted after render, not heuristic-selected: %#v", plan.Steps)
+		}
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("heuristic fallback plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestHeuristicPlanner_WithBuiltinVideoToolsProducesValidQAFlow(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	builtin.RegisterVideoCreationExternalTools(registry)
+	planner := NewHeuristicPlannerWithMaxTools(registry, 8)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请创作一个带抽帧 QA 的新视频流程测试",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"projectId":         "vp-qa-flow",
+			"targetDurationSec": 12,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if findStep(t, plan, "visual_qa").Tool != "video_frame_qa" {
+		t.Fatalf("prepared heuristic plan should include compiler-managed visual QA: %#v", plan.Steps)
+	}
+	if err := NewPlanGuard(registry, nil).Validate(plan); err != nil {
+		t.Fatalf("prepared heuristic plan should pass PlanGuard: %v", err)
 	}
 }
 

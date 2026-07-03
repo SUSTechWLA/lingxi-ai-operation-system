@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.1-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.2-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,15 @@
 ---
 
 ## Release 更新
+
+### v0.1.2 - 2026-07-03
+
+- 新增成片抽帧 QA 链路：`VIDEO_FRAME_QA` 会在本地渲染后自动抽帧，输出 `video_frame_qa.json` 和 contact sheet，再进入人工审核门。
+- 动态视频计划会在 render 后、publish 前自动插入 `visual_qa`，QA 未通过或未确认时阻断后续发布文案和交付。
+- 修复本地 artifact 传递：下游本地工具可从上游 `VIDEO` artifact 的 `localPath` 解析出真实 `outputPath`。
+- 优化 local runner 失败回报清理，避免旧 token 或旧 runner 产生的 pending report 反复阻塞新任务。
+- 优化 QA contact sheet 排布，抽帧少于 16 张时按实际帧数动态成图，减少空黑区域，方便人工复看。
+- 已用 30 秒 16:9 项目开源上线宣传视频跑通脚本、审核、预览、渲染、抽帧 QA、发布文案完整链路。
 
 ### v0.1.1 - 2026-07-03
 
@@ -75,6 +84,7 @@
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
+| 成片抽帧 QA | 渲染后自动抽取关键帧，检查文字安全区、底部字幕拥挤和画面复杂度，再由人工确认 |
 | 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
 
 ## 创作流程
@@ -87,7 +97,8 @@ flowchart LR
   D --> E["AIGC 素材或手动上传"]
   E --> F["本地预览项目"]
   F --> G["确认后渲染成片"]
-  G --> H["导出交付包"]
+  G --> H["抽帧 QA / Contact Sheet"]
+  H --> I["发布文案与交付包"]
 ```
 
 ## 产品架构
@@ -161,16 +172,20 @@ Local agent:   http://localhost:18080/api/local/docs
 
 ## 开发与版本管理
 
-- `develop_go` 是 Go/核心系统开发者分支，常规功能开发先从该分支拉出 `feature/*`。
+- `develop_go` 是 Go/核心系统开发者分支，口头简称 `developgo`；常规功能开发先从该分支拉出 `feature/*`。
 - `release` 是发布分支，只接收来自 `develop_go` 或 `hotfix/*` 的合入。
 - 每次合入 `release` 都必须在本 README 的「Release 更新」中追加用户可读的更新内容。
-- 对外发布必须创建语义化 tag，例如 `v0.1.1`；tag 指向对应 release 提交，不复用旧 tag。
+- 对外发布必须创建语义化 tag，例如 `v0.1.2`；tag 指向对应 release 提交，不复用旧 tag。
 - 临时素材、渲染缓存和本地测试输出不进入发布提交。
+
+完整规范见 [版本管理 Wiki](docs/version-management.md)。
 
 ## 项目文档
 
 - [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
 - [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
 - [MCP Provider 接入](docs/mcp-providers.md)
+- [版本管理 Wiki](docs/version-management.md)
+- [视频抽帧 QA Wiki](docs/video-frame-qa.md)
 
 Wiki 中包含产品介绍、系统边界、核心流程、即梦 MCP 使用方式和后续路线图。

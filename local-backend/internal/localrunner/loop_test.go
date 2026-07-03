@@ -3,6 +3,7 @@ package localrunner
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -86,6 +87,42 @@ func TestLoopFailsUnsupportedCommand(t *testing.T) {
 	}
 }
 
+func TestLoopDropsTerminalPendingReportErrors(t *testing.T) {
+	client := &fakeClient{
+		register: RegisterRunnerResponse{RunnerID: "runner_001", SessionID: "session_001", HeartbeatIntervalSec: 15, PollIntervalSec: 3},
+		failErr:  &HTTPStatusError{Method: http.MethodPost, Path: "/api/local-jobs/local_job_stale/fail", StatusCode: http.StatusForbidden},
+	}
+	loop := NewLoop(client, localtool.NewRegistry(), LoopOptions{
+		DataDir:      t.TempDir(),
+		PollInterval: time.Millisecond,
+	})
+	failReq := FailJobRequest{
+		Success:   false,
+		Retryable: false,
+		Error: map[string]interface{}{
+			"message": "stale failure from previous runner session",
+		},
+	}
+	if err := loop.pendingReports.Save(PendingReport{JobID: "local_job_stale", Type: "fail", Fail: &failReq}); err != nil {
+		t.Fatalf("save pending report: %v", err)
+	}
+
+	if err := loop.RunOnce(context.Background()); err != nil {
+		t.Fatalf("run once should drop terminal pending report without failing: %v", err)
+	}
+
+	reports, err := loop.pendingReports.List()
+	if err != nil {
+		t.Fatalf("list pending reports: %v", err)
+	}
+	if len(reports) != 0 {
+		t.Fatalf("terminal pending report should be removed, got %#v", reports)
+	}
+	if client.failedJobID != "local_job_stale" {
+		t.Fatalf("pending failure should have been retried before removal: %#v", client)
+	}
+}
+
 type fakeClient struct {
 	register       RegisterRunnerResponse
 	claim          *localtool.Job
@@ -94,6 +131,8 @@ type fakeClient struct {
 	completed      CompleteJobRequest
 	failedJobID    string
 	failed         FailJobRequest
+	completeErr    error
+	failErr        error
 }
 
 func (f *fakeClient) Register(_ context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {
@@ -118,13 +157,13 @@ func (f *fakeClient) ReportProgress(context.Context, string, ProgressRequest) er
 func (f *fakeClient) CompleteJob(_ context.Context, jobID string, req CompleteJobRequest) error {
 	f.completedJobID = jobID
 	f.completed = req
-	return nil
+	return f.completeErr
 }
 
 func (f *fakeClient) FailJob(_ context.Context, jobID string, req FailJobRequest) error {
 	f.failedJobID = jobID
 	f.failed = req
-	return nil
+	return f.failErr
 }
 
 var errFake = errors.New("fake")

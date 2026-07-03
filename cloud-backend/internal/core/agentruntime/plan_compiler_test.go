@@ -5,6 +5,7 @@ import (
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 )
 
 func TestPlanCompiler_InsertsAfterArtifactReviewFromToolManifest(t *testing.T) {
@@ -716,6 +717,134 @@ func TestPlanCompiler_PreparePlanInsertsMCPGenerationRunnerWhenRequested(t *test
 	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
 		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
 	}
+}
+
+func TestPlanCompiler_PreparePlanInsertsVideoFrameQAAfterRender(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_frame_qa"] = &tool.ToolManifest{
+		Name:           "video_frame_qa",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "VIDEO_FRAME_QA",
+		Parameters: map[string]tool.ParamDef{
+			"input":             {Type: "string", Required: true},
+			"shotList":          {Type: "array", Required: false},
+			"sampleIntervalSec": {Type: "number", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"reportRef": {Type: "string"},
+			"passed":    {Type: "boolean"},
+			"score":     {Type: "number"},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请做一个开源项目上线宣传视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "开源项目上线", "projectId": "vp-visual-qa"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	visualQA := findStep(t, prepared, "visual_qa")
+	if visualQA.Tool != "video_frame_qa" {
+		t.Fatalf("visual_qa tool = %s, want video_frame_qa", visualQA.Tool)
+	}
+	if got := visualQA.Arguments["input"]; got != "{{render.output.outputPath}}" {
+		t.Fatalf("visual_qa input = %#v, want rendered finalVideo", got)
+	}
+	if got := visualQA.Arguments["shotList"]; got != "{{visual_alignment.output.shotList}}" {
+		t.Fatalf("visual_qa shotList = %#v, want visual alignment shot list", got)
+	}
+	requireStepDeps(t, visualQA, []string{"render", "visual_alignment"})
+	publish := findStep(t, prepared, "publish_copy")
+	requireStepDeps(t, publish, []string{"visual_qa", "script_generation", "visual_alignment"})
+	if stepIndex(t, prepared, "visual_qa") <= stepIndex(t, prepared, "render") {
+		t.Fatalf("visual_qa should be inserted after render")
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_CompiledVideoFrameQABlocksPublishThroughReview(t *testing.T) {
+	catalog := tool.NewToolRegistry()
+	builtin.RegisterVideoCreationExternalTools(catalog)
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请做一个开源项目上线宣传视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:              "script_generation",
+				Tool:            "video_script_generator",
+				Arguments:       map[string]interface{}{"topic": "开源项目上线", "projectId": "vp-visual-qa"},
+				ExpectedOutput:  []string{"script"},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	dag, err := compiler.Compile(plan)
+	if err != nil {
+		t.Fatalf("Compile returned error: %v", err)
+	}
+
+	requireNode(t, dag, "visual_qa_exec", string(model.NodeTypeTool), "external")
+	review := requireNode(t, dag, "visual_qa_review", string(model.NodeTypeReviewGate), "审核-visual_qa")
+	if got, _ := review.Input["sourceNode"].(string); got != "visual_qa_exec" {
+		t.Fatalf("visual QA review sourceNode = %#v, want visual_qa_exec", review.Input)
+	}
+	if got, _ := review.Input["blocksDownstream"].(bool); !got {
+		t.Fatalf("visual QA review should block downstream: %#v", review.Input)
+	}
+	if got, _ := review.Input["requiresApprovedArtifacts"].(bool); !got {
+		t.Fatalf("visual QA review should require approved artifacts: %#v", review.Input)
+	}
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"} {
+		if !containsString(stringSlice(review.Input["reviewArtifactKinds"]), kind) {
+			t.Fatalf("visual QA review artifact kinds missing %s: %#v", kind, review.Input)
+		}
+		if !containsString(stringSlice(review.Input["artifactKinds"]), kind) {
+			t.Fatalf("visual QA artifact kinds missing %s: %#v", kind, review.Input)
+		}
+	}
+	requireEdge(t, dag, "visual_qa_exec", "visual_qa_review")
+	requireEdge(t, dag, "visual_qa_review", "publish_copy")
+}
+
+func TestNormalizePreparedPlanDependenciesAddsNestedReferenceDependencies(t *testing.T) {
+	plan := &AgentPlan{
+		Steps: []AgentStep{
+			{
+				ID:   "proposal_generator",
+				Tool: "proposal_generator",
+			},
+			{
+				ID:        "script_generation",
+				Tool:      "video_script_generator",
+				DependsOn: []string{},
+				Arguments: map[string]interface{}{
+					"knowledgeContext": map[string]interface{}{
+						"items": []interface{}{"{{proposal_generator.output.summary}}"},
+					},
+				},
+			},
+		},
+	}
+
+	normalizePreparedPlanDependencies(plan)
+
+	requireStepDeps(t, findStep(t, plan, "script_generation"), []string{"proposal_generator"})
 }
 
 func TestPlanCompiler_PreparePlanProfileRewiresExistingVideoPrompt(t *testing.T) {

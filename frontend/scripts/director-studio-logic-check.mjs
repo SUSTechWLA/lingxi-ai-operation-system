@@ -502,10 +502,10 @@ try {
         displayName: '质量审核',
         stage: 'quality',
         goal: '',
-        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        allowedTools: ['video_frame_qa', 'ffmpeg_probe', 'final_review_generator'],
         forbiddenTools: [],
         requiredInputs: [],
-        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+        requiredOutputs: ['VIDEO_VISUAL_QA_REPORT', 'VIDEO_VISUAL_QA_CONTACT_SHEET', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
       },
     ],
     [
@@ -536,10 +536,10 @@ try {
         displayName: '质量审核',
         stage: 'quality',
         goal: '',
-        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        allowedTools: ['video_frame_qa', 'ffmpeg_probe', 'final_review_generator'],
         forbiddenTools: [],
         requiredInputs: [],
-        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+        requiredOutputs: ['VIDEO_VISUAL_QA_REPORT', 'VIDEO_VISUAL_QA_CONTACT_SHEET', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
       },
     ],
     [
@@ -578,10 +578,10 @@ try {
         displayName: '质量审核',
         stage: 'quality',
         goal: '',
-        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        allowedTools: ['video_frame_qa', 'ffmpeg_probe', 'final_review_generator'],
         forbiddenTools: [],
         requiredInputs: [],
-        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+        requiredOutputs: ['VIDEO_VISUAL_QA_REPORT', 'VIDEO_VISUAL_QA_CONTACT_SHEET', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
       },
     ],
     [
@@ -1516,6 +1516,10 @@ try {
     videoCreationProfileForId('voice_visual').preflightPipeline,
     'wf-guided-image-text-video',
     'voice/knowledge profile should use the guided render preflight',
+  )
+  assert.ok(
+    videoCreationProfileForId('voice_visual').requiredLocalCommands.includes('VIDEO_FRAME_QA'),
+    'voice/knowledge profile should tell users visual frame QA is required',
   )
   assert.ok(
     videoCreationProfileForId('aigc_shot').requiredLocalCommands.includes('LOCAL_FILE_IMPORT'),

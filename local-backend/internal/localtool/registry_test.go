@@ -33,6 +33,9 @@ func TestIsAllowedCommandWithNormalization(t *testing.T) {
 	if !IsAllowedCommand("  ffmpeg_probe  ") {
 		t.Error("whitespace-padded ffmpeg_probe should be allowed after normalization")
 	}
+	if !IsAllowedCommand("video_frame_qa") {
+		t.Error("lowercase video_frame_qa should be allowed after normalization")
+	}
 	if IsAllowedCommand("") {
 		t.Error("empty string should not be allowed")
 	}

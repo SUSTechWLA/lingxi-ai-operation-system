@@ -160,12 +160,12 @@ func normalizePreparedPlanDependencies(plan *AgentPlan) {
 	}
 	for i := range plan.Steps {
 		step := &plan.Steps[i]
-		if len(step.DependsOn) == 0 {
-			continue
-		}
 		seen := map[string]bool{}
-		deps := make([]string, 0, len(step.DependsOn))
-		for _, dep := range step.DependsOn {
+		depCandidates := make([]string, 0, len(step.DependsOn)+4)
+		depCandidates = append(depCandidates, step.DependsOn...)
+		depCandidates = append(depCandidates, referencedStepIDs(step.Arguments)...)
+		deps := make([]string, 0, len(depCandidates))
+		for _, dep := range depCandidates {
 			dep = strings.TrimSpace(dep)
 			if dep == "" || dep == step.ID || seen[dep] {
 				continue
@@ -179,6 +179,40 @@ func normalizePreparedPlanDependencies(plan *AgentPlan) {
 		}
 		step.DependsOn = deps
 	}
+}
+
+func referencedStepIDs(value interface{}) []string {
+	seen := map[string]bool{}
+	refs := make([]string, 0)
+	var walk func(interface{})
+	walk = func(current interface{}) {
+		switch typed := current.(type) {
+		case string:
+			refStepID, _, ok := outputReference(typed)
+			if ok && refStepID != "" && !seen[refStepID] {
+				seen[refStepID] = true
+				refs = append(refs, refStepID)
+			}
+		case []interface{}:
+			for _, item := range typed {
+				walk(item)
+			}
+		case []string:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]interface{}:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]string:
+			for _, item := range typed {
+				walk(item)
+			}
+		}
+	}
+	walk(value)
+	return refs
 }
 
 func (c *PlanCompiler) manifestsByPlan(plan *AgentPlan) map[string]*tool.ToolManifest {
@@ -915,6 +949,44 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 		}
 	}
 
+	visualQAAnchor := ""
+	if c.manifestFor("video_frame_qa") != nil {
+		if step := planStepByID(plan, "visual_qa"); step != nil {
+			visualQAAnchor = step.ID
+			movePlanStepAfter(plan, visualQAAnchor, renderAnchor)
+			if step := planStepByID(plan, visualQAAnchor); step != nil {
+				if step.Arguments == nil {
+					step.Arguments = map[string]interface{}{}
+				}
+				step.Tool = "video_frame_qa"
+				step.Arguments["stage"] = "visual_qa"
+				step.Arguments["input"] = stepOutputRef(renderAnchor, preferredOutputField(renderManifest, "finalVideo", "outputPath", "VIDEO"))
+				step.Arguments["shotList"] = stepOutputRef(shotAnchor, shotField)
+				step.Arguments["sampleIntervalSec"] = 4
+				step.DependsOn = dependencyListUnique(renderAnchor, shotAnchor)
+				ensureStepExpectedOutputs(step, "VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score")
+				step.ProduceArtifact = true
+				applyProjectContextToStep(step, projectID)
+			}
+		} else if renderAnchor != "" {
+			visualQAAnchor = insertPlanStepAfter(plan, renderAnchor, AgentStep{
+				ID:     uniqueStepID(plan, "visual_qa"),
+				Intent: "抽帧检查最终视频的文字安全区、遮挡和画面复杂度",
+				Tool:   "video_frame_qa",
+				Arguments: map[string]interface{}{
+					"stage":             "visual_qa",
+					"input":             stepOutputRef(renderAnchor, preferredOutputField(renderManifest, "finalVideo", "outputPath", "VIDEO")),
+					"shotList":          stepOutputRef(shotAnchor, shotField),
+					"sampleIntervalSec": 4,
+				},
+				DependsOn:       dependencyListUnique(renderAnchor, shotAnchor),
+				ExpectedOutput:  []string{"VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score"},
+				ProduceArtifact: true,
+			})
+			applyProjectContextToStep(planStepByID(plan, visualQAAnchor), projectID)
+		}
+	}
+
 	publishAnchor := ""
 	if step := planStepByID(plan, "publish_copy"); step != nil {
 		publishAnchor = step.ID
@@ -926,7 +998,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			ID:        uniqueStepID(plan, "publish_copy"),
 			Intent:    "基于成片和脚本生成多平台发布文案",
 			Tool:      "publish_copy_generator",
-			DependsOn: dependencyListUnique(renderAnchor, scriptAnchor, shotAnchor),
+			DependsOn: dependencyListUnique(firstNonEmptyStepID(visualQAAnchor, renderAnchor), scriptAnchor, shotAnchor),
 			Arguments: map[string]interface{}{
 				"stage":    "publish",
 				"brief":    plan.Goal,
@@ -937,7 +1009,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			ProduceArtifact: true,
 		})
 	}
-	movePlanStepAfter(plan, publishAnchor, renderAnchor)
+	movePlanStepAfter(plan, publishAnchor, firstNonEmptyStepID(visualQAAnchor, renderAnchor))
 	publishStep := planStepByID(plan, publishAnchor)
 	if publishStep != nil {
 		if publishStep.Arguments == nil {
@@ -947,7 +1019,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 		publishStep.Arguments["brief"] = plan.Goal
 		publishStep.Arguments["script"] = scriptRef
 		publishStep.Arguments["shotList"] = stepOutputRef(shotAnchor, shotField)
-		publishStep.DependsOn = dependencyListUnique(renderAnchor, scriptAnchor, shotAnchor)
+		publishStep.DependsOn = dependencyListUnique(firstNonEmptyStepID(visualQAAnchor, renderAnchor), scriptAnchor, shotAnchor)
 		if len(publishStep.ExpectedOutput) == 0 {
 			publishStep.ExpectedOutput = []string{"publish_copy"}
 		}

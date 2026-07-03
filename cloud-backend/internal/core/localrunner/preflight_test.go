@@ -32,6 +32,7 @@ func TestHandleVideoPreflightGuidedProfileRequiresRenderTools(t *testing.T) {
 			"HYPERFRAMES_PROJECT_GENERATE": true,
 			"HYPERFRAMES_SNAPSHOT":         true,
 			"HYPERFRAMES_RENDER":           true,
+			"VIDEO_FRAME_QA":               true,
 			"FFMPEG_PROBE":                 true,
 			"ARTIFACT_PACKAGE":             true,
 		},
@@ -54,8 +55,11 @@ func TestHandleVideoPreflightGuidedProfileRequiresRenderTools(t *testing.T) {
 	if !body.CanStart || body.Status != "passed" {
 		t.Fatalf("expected passed preflight, got status=%s canStart=%v blockers=%v", body.Status, body.CanStart, body.Blockers)
 	}
-	if len(body.CapabilityMenu.LocalTools) != 5 {
-		t.Fatalf("expected 5 guided render tools, got %d", len(body.CapabilityMenu.LocalTools))
+	if len(body.CapabilityMenu.LocalTools) != 6 {
+		t.Fatalf("expected 6 guided render tools, got %d", len(body.CapabilityMenu.LocalTools))
+	}
+	if !hasTool(body.CapabilityMenu.LocalTools, "VIDEO_FRAME_QA") {
+		t.Fatalf("expected VIDEO_FRAME_QA in capability menu: %+v", body.CapabilityMenu.LocalTools)
 	}
 }
 
