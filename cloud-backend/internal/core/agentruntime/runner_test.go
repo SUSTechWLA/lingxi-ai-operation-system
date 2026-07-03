@@ -191,6 +191,31 @@ func TestRunnerGetSyncsSuccessfulTaskStatusToRun(t *testing.T) {
 	}
 }
 
+func TestRunnerGetRestoresFailedRunWhenTaskRecoveredToSuccess(t *testing.T) {
+	store := newMemoryRunStore()
+	_ = store.SaveRun(context.Background(), &Run{
+		ID:     "run-1",
+		TaskID: "task-1",
+		Status: RunStatusFailed,
+	})
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil)
+
+	run, task, err := runner.Get(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if run == nil || run.Status != RunStatusSuccess {
+		t.Fatalf("run status = %#v, want SUCCESS", run)
+	}
+	if task["status"] != string(model.TaskSuccess) {
+		t.Fatalf("task status = %#v, want SUCCESS", task["status"])
+	}
+	stored, _ := store.FindRun(context.Background(), "run-1")
+	if stored == nil || stored.Status != RunStatusSuccess {
+		t.Fatalf("stored run status = %#v, want SUCCESS", stored)
+	}
+}
+
 func TestRunnerStart_InjectsClientTextProviderIntoExecutableNodesOnly(t *testing.T) {
 	store := newMemoryRunStore()
 	orch := &fakeOrchestrator{taskID: "task-1"}

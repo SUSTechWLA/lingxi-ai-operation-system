@@ -32,6 +32,7 @@ type NodeExecutor struct {
 	nodeRepo        repository.NodeRepo
 	localDispatcher localJobDispatcher
 	renderChecker   RenderDependencyChecker
+	projectResolver ProjectIDResolver
 }
 
 type executorInterface interface {
@@ -53,6 +54,11 @@ type RenderDependencyCheckRequest struct {
 
 type RenderDependencyChecker interface {
 	CheckRenderDependencies(ctx context.Context, req RenderDependencyCheckRequest) error
+}
+
+// ProjectIDResolver resolves a video project ID from a workflow task ID.
+type ProjectIDResolver interface {
+	ResolveProjectID(ctx context.Context, taskID string) (string, error)
 }
 
 type DefaultRenderDependencyChecker struct{}
@@ -106,6 +112,10 @@ func (ne *NodeExecutor) SetLocalJobDispatcher(dispatcher localJobDispatcher) {
 
 func (ne *NodeExecutor) SetRenderDependencyChecker(checker RenderDependencyChecker) {
 	ne.renderChecker = checker
+}
+
+func (ne *NodeExecutor) SetProjectIDResolver(resolver ProjectIDResolver) {
+	ne.projectResolver = resolver
 }
 
 func (ne *NodeExecutor) selectExecutor(t tool.Tool) executorInterface {
@@ -163,9 +173,12 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	// Build tool context with checkpoint data for retries.
 	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
 
-	// Local execution plane: dispatch to local runner and return.
-	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
-		if err := ne.dispatchLocalNode(ctx, event, manifest, parameters, idempotencyKey); err != nil {
+	// Local execution plane: dispatch to local runner and return. External
+	// bridge nodes keep "external" as the executable tool, so also inspect the
+	// delegated manifest before falling back to the cloud-side bridge.
+	if localManifest := ne.localExecutionManifest(toolName, parameters, manifest); localManifest != nil {
+		idempotencyKey = ne.localDispatchIdempotencyKey(ctx, nodeID, idempotencyKey)
+		if err := ne.dispatchLocalNode(ctx, event, localManifest, parameters, idempotencyKey); err != nil {
 			ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
 		}
 		return
@@ -438,6 +451,24 @@ func (ne *NodeExecutor) executableToolTimeout(toolName string, parameters map[st
 	return time.Duration(timeoutSec) * time.Second
 }
 
+func (ne *NodeExecutor) localExecutionManifest(toolName string, parameters map[string]interface{}, manifest *tool.ToolManifest) *tool.ToolManifest {
+	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+		return manifest
+	}
+	if toolName != "external" || ne.toolRegistry == nil {
+		return nil
+	}
+	delegatedTool := firstString(parameters, nil, "tool", "capabilityTool")
+	if delegatedTool == "" {
+		return nil
+	}
+	delegatedManifest := ne.toolRegistry.GetManifest(delegatedTool)
+	if delegatedManifest != nil && delegatedManifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+		return delegatedManifest
+	}
+	return nil
+}
+
 func normalizedManifestTimeoutSec(timeoutSec int) int {
 	const maxReasonableTimeoutSec = 86400 // 24 hours
 	if timeoutSec > maxReasonableTimeoutSec {
@@ -469,7 +500,7 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		timeoutSec = 1800
 	}
 
-	projectID := firstString(parameters, event.Payload, "projectId", "project_id", "videoProjectId")
+	projectID := ne.resolveLocalProjectID(ctx, event, parameters)
 	if isRenderLocalCommand(manifest.Name, command) {
 		checker := ne.renderChecker
 		if checker == nil {
@@ -520,6 +551,48 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		zap.String("command", command),
 	)
 	return nil
+}
+
+func (ne *NodeExecutor) localDispatchIdempotencyKey(ctx context.Context, nodeID, base string) string {
+	if base == "" {
+		return base
+	}
+	if ne.nodeRepo == nil {
+		return base
+	}
+	node, err := ne.nodeRepo.FindByID(ctx, nodeID)
+	if err != nil || node == nil || node.RetryCount <= 0 {
+		return base
+	}
+	return fmt.Sprintf("%s-attempt-%d", base, node.RetryCount+1)
+}
+
+func (ne *NodeExecutor) resolveLocalProjectID(ctx context.Context, event eventbus.Event, parameters map[string]interface{}) string {
+	projectID := firstString(parameters, event.Payload, "projectId", "projectID", "project_id", "videoProjectId", "video_project_id")
+	if projectID != "" {
+		return projectID
+	}
+	if event.Payload != nil {
+		if nested, ok := event.Payload["parameters"].(map[string]interface{}); ok {
+			projectID = firstString(nested, nil, "projectId", "projectID", "project_id", "videoProjectId", "video_project_id")
+			if projectID != "" {
+				return projectID
+			}
+		}
+	}
+	if ne.projectResolver != nil && event.TaskID != "" {
+		resolved, err := ne.projectResolver.ResolveProjectID(ctx, event.TaskID)
+		if err != nil {
+			zap.L().Warn("local dispatch: cannot resolve project ID from task",
+				zap.String("taskId", event.TaskID),
+				zap.String("nodeId", event.NodeID),
+				zap.Error(err),
+			)
+			return ""
+		}
+		return strings.TrimSpace(resolved)
+	}
+	return ""
 }
 
 func isRenderLocalCommand(toolName, command string) bool {

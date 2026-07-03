@@ -81,6 +81,31 @@ def _append_option(args: list[str], name: str, value: Any) -> None:
     args.append(f"--{name}={value}")
 
 
+def _normalize_duration(duration: int) -> int:
+    if duration <= 0:
+        return 5
+    return min(max(duration, 4), 15)
+
+
+def _normalize_video_resolution(video_resolution: str) -> str:
+    value = video_resolution.strip().lower().replace(" ", "").replace("*", "x")
+    if value in {"3840x2160", "2160p", "4k", "uhd"}:
+        return "4k"
+    if value in {"1920x1080", "1080p", "fullhd", "fhd"}:
+        return "1080p"
+    if value in {"1280x720", "720p", "hd"}:
+        return "720p"
+    return video_resolution.strip()
+
+
+def _default_video_model_version(model_version: str, video_resolution: str) -> str:
+    if model_version.strip():
+        return model_version.strip()
+    if video_resolution in {"1080p", "4k"}:
+        return "seedance2.0_vip"
+    return ""
+
+
 def _generation_result(stdout: str) -> dict[str, Any]:
     data = _parse_object(stdout)
     status = data.get("gen_status") or data.get("genStatus") or data.get("status")
@@ -160,6 +185,11 @@ def generate_video(
     poll: int = 0,
 ) -> dict[str, Any]:
     """Generate videos through the user-managed Dreamina CLI."""
+    duration = _normalize_duration(duration)
+    video_resolution = _normalize_video_resolution(video_resolution)
+    model_version = _default_video_model_version(model_version, video_resolution)
+    if not ratio.strip():
+        ratio = "16:9"
     args = [mode]
     _append_option(args, "image", image)
     if images:
@@ -167,7 +197,7 @@ def generate_video(
     _append_option(args, "video", video)
     _append_option(args, "audio", audio)
     _append_option(args, "prompt", prompt)
-    _append_option(args, "duration", duration if duration > 0 else None)
+    _append_option(args, "duration", duration)
     _append_option(args, "ratio", ratio)
     _append_option(args, "video_resolution", video_resolution)
     _append_option(args, "model_version", model_version)

@@ -124,6 +124,24 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		height = int(value)
 	}
 
+	if fastStoryboardRenderEnabled() {
+		started := time.Now()
+		if fallbackResult, handled, fallbackErr := e.renderFastStoryboard(ctx, projectID, projectDir, outputPath, fps, width, height); handled {
+			if fallbackErr != nil {
+				return nil, fallbackErr
+			}
+			info, err := os.Stat(outputPath)
+			if err != nil {
+				return nil, fmt.Errorf("render output not found at %s: %w", outputPath, err)
+			}
+			if info.Size() == 0 {
+				return nil, fmt.Errorf("render output is empty: %s", outputPath)
+			}
+			fallbackResult.DurationMs = time.Since(started).Milliseconds()
+			return e.renderResult(projectID, outputPath, info.Size(), fps, width, height, fallbackResult)
+		}
+	}
+
 	// Call HyperFrames Render Service
 	timeoutSec := job.TimeoutSec
 	if timeoutSec <= 0 {
@@ -155,7 +173,11 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		return nil, fmt.Errorf("render output is empty: %s", outputPath)
 	}
 
-	localRef, err := e.mirrorFinalVideoArtifact(projectID, outputPath, info.Size(), fps, width, height, result.DurationMs)
+	return e.renderResult(projectID, outputPath, info.Size(), fps, width, height, result)
+}
+
+func (e *HyperFramesRenderExecutor) renderResult(projectID, outputPath string, sizeBytes int64, fps, width, height int, result *hyperFramesRenderResponse) (*Result, error) {
+	localRef, err := e.mirrorFinalVideoArtifact(projectID, outputPath, sizeBytes, fps, width, height, result.DurationMs)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +193,7 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 				"storageType":    "local",
 				"storageRef":     localRef,
 				"mimeType":       "video/mp4",
-				"sizeBytes":      info.Size(),
+				"sizeBytes":      sizeBytes,
 				"status":         "valid",
 				"humanApproved":  false,
 				"dependsOn":      []string{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},

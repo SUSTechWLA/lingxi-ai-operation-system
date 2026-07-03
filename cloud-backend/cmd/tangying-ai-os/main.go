@@ -556,9 +556,11 @@ func main() {
 		if artifactReviewStore := newAgentRuntimeArtifactReviewStore(pool); artifactReviewStore != nil {
 			agentRuntimeHandler.WithArtifactReviewStore(artifactReviewStore)
 		}
+		projectIDResolver := &taskProjectIDResolver{runRepo: workflowRunRepo, taskRepo: taskRepo}
 		agentRuntimeHandler.
 			WithArtifactService(artifactSvc).
-			WithProjectIDResolver(&taskProjectIDResolver{runRepo: workflowRunRepo, taskRepo: taskRepo})
+			WithProjectIDResolver(projectIDResolver)
+		nodeExecutor.SetProjectIDResolver(projectIDResolver)
 
 		// Wire repository-backed render dependency checker so HYPERFRAMES_RENDER
 		// validates database facts (artifact status) before dispatching a LocalJob.

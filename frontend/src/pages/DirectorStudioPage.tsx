@@ -308,11 +308,11 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [project?.id, refreshRun, run?.id, run?.status])
 
   const projectStarted = isProjectSessionStarted(loading, project?.status, run?.status)
-  const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted), [roleAgents, reviews, trace, projectStarted])
+  const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted, run?.status), [roleAgents, reviews, trace, projectStarted, run?.status])
   const displayStages = useMemo(() => applyOptimisticRunningStage(stages, optimisticRunningStageId), [stages, optimisticRunningStageId])
   const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace, projectArtifacts as unknown as Array<Record<string, unknown>>), [roleAgents, reviews, trace, projectArtifacts])
   const traceNodes = useMemo(() => buildDirectorTraceNodes(trace), [trace])
-  const nextAction = useMemo(() => deriveNextAction(displayStages), [displayStages])
+  const nextAction = useMemo(() => deriveNextAction(displayStages, run?.status), [displayStages, run?.status])
   const pendingReviews = reviews.filter(isActionablePendingReview)
   const activeReview = pendingReviews[0]
   const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined

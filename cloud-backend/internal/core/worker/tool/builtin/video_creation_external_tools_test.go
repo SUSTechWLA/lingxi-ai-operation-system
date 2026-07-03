@@ -605,6 +605,37 @@ func TestCinematicShotDesignerUsesTimeWindowsWithoutGeneratingMedia(t *testing.T
 	}
 }
 
+func TestCinematicShotDesignerBuildsFallbackLaunchShotList(t *testing.T) {
+	result := executeLocalVideoCreationTool("cinematic_shot_designer", map[string]interface{}{
+		"stage":       "cinematic_shot_design",
+		"brief":       "制作开源项目上线宣传视频，包含页面录屏、HyperFrames 图形包装和 JiMeng AIGC 素材。",
+		"durationSec": 120,
+		"creationProfile": map[string]interface{}{
+			"profileId": "cinematic_story",
+		},
+	}, tool.ToolContext{TaskID: "task-cinematic-fallback", NodeID: "cinematic_shot_design_exec"})
+
+	if !result.Success {
+		t.Fatalf("cinematic_shot_designer failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) < 6 {
+		t.Fatalf("expected multi-shot fallback plan, got %#v", result.Data["shotList"])
+	}
+	routes := map[string]bool{}
+	for _, shot := range shotList {
+		routes[ensureStringValue(shot["plannedAssetRoute"])] = true
+	}
+	for _, route := range []string{"aigc_video", "screen_recording", "hyperframes"} {
+		if !routes[route] {
+			t.Fatalf("fallback shot list should include route %q, got %+v", route, routes)
+		}
+	}
+	if strings.Contains(ensureStringValue(result.Data["content"]), "待导演设计的故事镜头") {
+		t.Fatalf("fallback should not expose generic placeholder content: %s", result.Data["content"])
+	}
+}
+
 func TestSoundDesignPlannerManifestMatchesExecutor(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
@@ -692,11 +723,37 @@ func TestVideoScriptGeneratorBlocksRequiredRetrievalWithEmptyFacts(t *testing.T)
 		"topic":                 "佛得角世界杯出线",
 		"retrievalPolicy":       "required",
 		"mustUseFreshKnowledge": true,
+		"blockOnEmptyFacts":     true,
 		"knowledgePack":         []interface{}{},
 	}, tool.ToolContext{TaskID: "task-1", NodeID: "script"})
 
 	if result.Success {
 		t.Fatalf("expected script generator to fail when required facts are empty: %#v", result.Data)
+	}
+}
+
+func TestVideoScriptGeneratorFallsBackWhenRequiredRetrievalDoesNotBlockEmptyFacts(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		localAgentConfigFetcher = previousFetcher
+	})
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic":                 "开源项目上线宣传片",
+		"retrievalPolicy":       "required",
+		"mustUseFreshKnowledge": true,
+		"knowledgePack":         []interface{}{},
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "script"})
+
+	if !result.Success {
+		t.Fatalf("expected script generator to fall back when empty facts do not block: %s", result.Error)
+	}
+	if result.Data["script"] == "" {
+		t.Fatalf("fallback should return a usable script: %#v", result.Data)
 	}
 }
 
@@ -949,6 +1006,105 @@ func TestExecuteDynamicAgentPromptToolExposesShotAssetPackages(t *testing.T) {
 	}
 	if !strings.Contains(ensureStringValue(requests[0]), "佛得角是西非岛国") {
 		t.Fatalf("external generation request should include shot narration, got %#v", requests[0])
+	}
+}
+
+func TestVideoPromptGeneratorOnlySubmitsAIGCShotsToExternalGeneration(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", strings.Repeat("开源项目宣传 ", 300), "", map[string]interface{}{
+		"topic": strings.Repeat("开源项目宣传 ", 300),
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_01",
+				"durationSec":       6,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "AIGC_VIDEO | 非真人电影感，云端编排和本地执行器连接。",
+				"narrationText":     "真正可控的视频生产线来了。",
+			},
+			map[string]interface{}{
+				"shotId":            "SHOT_02",
+				"durationSec":       8,
+				"plannedAssetRoute": "screen_recording",
+				"visual":            "SCREEN_RECORDING | 真实页面录屏：登录、输入项目、审核门通过。",
+				"narrationText":     "真实页面演示系统完整流程。",
+			},
+			map[string]interface{}{
+				"shotId":            "SHOT_03",
+				"durationSec":       8,
+				"plannedAssetRoute": "hyperframes",
+				"visual":            "HYPERFRAMES | 流程图和数据卡片展示 README、Wiki、release tag。",
+				"narrationText":     "版本管理会写进开源文档。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-routes", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected only the AIGC shot to create an external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, ok := requests[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request should be a map, got %#v", requests[0])
+	}
+	if req["shotId"] != "SHOT_01" {
+		t.Fatalf("unexpected request shot: %#v", req)
+	}
+	if got := len([]rune(ensureStringValue(req["prompt"]))); got > 2000 {
+		t.Fatalf("request prompt should be capped at 2000 runes, got %d", got)
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]interface{})
+	if !ok || len(packages) != 3 {
+		t.Fatalf("all shots should still have packages, got %#v", result.Data["shotAssetPackages"])
+	}
+}
+
+func TestVideoPromptGeneratorUsesTimeWindowSceneSummaryForAIGCRouting(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "躺营 AI OS 开源宣传", "", map[string]interface{}{
+		"topic": "躺营 AI OS 开源宣传\n\n创作要求：包含录屏、HyperFrames 和即梦 AIGC。",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":          "SHOT_01_TW_01",
+				"durationSec":     6,
+				"recommendedMode": "aigc_video",
+				"sceneSummary":    "AIGC_VIDEO | 非真人风格化：云端编排和本地执行器连接。",
+				"mainAction":      "突出 MCP 可扩展。",
+			},
+			map[string]interface{}{
+				"shotId":          "SHOT_02_TW_01",
+				"durationSec":     8,
+				"recommendedMode": "aigc_video",
+				"sceneSummary":    "SCREEN_RECORDING | 真实页面录屏：输入项目、审核门通过。",
+				"mainAction":      "展示真实页面流程。",
+			},
+			map[string]interface{}{
+				"shotId":          "SHOT_03_TW_01",
+				"durationSec":     7,
+				"recommendedMode": "aigc_video",
+				"sceneSummary":    "HYPERFRAMES | 数据卡片：README、Wiki、release tag。",
+				"mainAction":      "展示版本管理。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-time-window-routes", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected only sceneSummary AIGC window to create request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, _ := requests[0].(map[string]interface{})
+	if req["shotId"] != "SHOT_01_TW_01" {
+		t.Fatalf("unexpected request: %#v", req)
+	}
+	prompt := ensureStringValue(req["promptText"])
+	if strings.Contains(prompt, "创作要求：") {
+		t.Fatalf("prompt should use compact topic, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "云端编排和本地执行器连接") {
+		t.Fatalf("prompt should preserve sceneSummary, got %s", prompt)
 	}
 }
 

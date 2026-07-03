@@ -68,6 +68,7 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		"content":           callResult.Content,
 		"structuredContent": callResult.StructuredContent,
 		"isError":           callResult.IsError,
+		"error":             mcpErrorText(callResult),
 	}}, nil
 }
 
@@ -96,12 +97,22 @@ func executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client
 			continue
 		}
 		result["status"] = "submitted"
+		result["content"] = callResult.Content
 		result["structuredContent"] = callResult.StructuredContent
+		result["isError"] = callResult.IsError
 		if callResult.IsError {
+			errorText := mcpErrorText(callResult)
 			result["status"] = "failed"
+			result["error"] = errorText
 			failed := copyMap(request)
 			failed["status"] = "failed"
-			failed["mcpResult"] = callResult.StructuredContent
+			failed["error"] = errorText
+			failed["mcpResult"] = map[string]interface{}{
+				"content":           callResult.Content,
+				"structuredContent": callResult.StructuredContent,
+				"isError":           callResult.IsError,
+				"error":             errorText,
+			}
 			remaining = append(remaining, failed)
 		} else {
 			packages = append(packages, shotAssetPackageFromMCPResult(providerID, request, callResult.StructuredContent))
@@ -128,10 +139,52 @@ func mcpArgumentsFromExternalRequest(request map[string]interface{}) map[string]
 	if ratio := mcpStringFromMap(target, "aspectRatio", "ratio"); ratio != "" {
 		args["ratio"] = ratio
 	}
-	if resolution := mcpStringFromMap(target, "videoResolution", "video_resolution"); resolution != "" {
-		args["video_resolution"] = resolution
+	if resolution := mcpStringFromMap(target, "videoResolution", "video_resolution", "resolution"); resolution != "" {
+		args["video_resolution"] = normalizeMCPVideoResolution(resolution)
+	}
+	if model := mcpStringFromMap(target, "modelVersion", "model_version"); model != "" {
+		args["model_version"] = model
 	}
 	return args
+}
+
+func normalizeMCPVideoResolution(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	normalized = strings.ReplaceAll(normalized, "*", "x")
+	switch normalized {
+	case "3840x2160", "2160p", "4k", "uhd":
+		return "4k"
+	case "1920x1080", "1080p", "fullhd", "fhd":
+		return "1080p"
+	case "1280x720", "720p", "hd":
+		return "720p"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func mcpErrorText(result *localmcp.ToolCallResult) string {
+	if result == nil || !result.IsError {
+		return ""
+	}
+	if text := strings.TrimSpace(mcpContentText(result.Content)); text != "" {
+		return text
+	}
+	if message := mcpStringFromMap(result.StructuredContent, "error", "message", "fail_reason", "failReason"); message != "" {
+		return message
+	}
+	return "mcp tool returned isError=true"
+}
+
+func mcpContentText(content []localmcp.ToolContent) string {
+	var parts []string
+	for _, item := range content {
+		if text := strings.TrimSpace(item.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func shotAssetPackageFromMCPResult(providerID string, request map[string]interface{}, structured map[string]interface{}) map[string]interface{} {

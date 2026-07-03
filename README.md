@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.0-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.1-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,14 @@
 ---
 
 ## Release 更新
+
+### v0.1.1 - 2026-07-03
+
+- 跑通影视化 / AIGC shot 视频从页面启动、审核门确认、即梦 MCP 提交、素材下载、本地渲染到最终 artifact 的完整闭环。
+- 修复成功任务被旧失败状态覆盖的问题：底层 `ai_task` 已成功时，`agent_run` 可恢复为 `SUCCESS`。
+- 修复本地 runner 被已取消或已失败旧任务阻塞的问题，避免 stale local job 影响新项目执行。
+- 增强 HyperFrames 本地快速渲染兜底：可按 storyboard 生成 16:9 成片，并严格控制最终时长。
+- 修复产物页外部生成请求统计：MCP 自动生成落成 `SHOT_VIDEO_CLIP` 后，不再误提示“待回填素材”。
 
 ### v0.1.0 - 2026-07-03
 
@@ -150,6 +158,14 @@ Local agent:   http://localhost:18080/api/local/docs
 ```
 
 </details>
+
+## 开发与版本管理
+
+- `develop_go` 是 Go/核心系统开发者分支，常规功能开发先从该分支拉出 `feature/*`。
+- `release` 是发布分支，只接收来自 `develop_go` 或 `hotfix/*` 的合入。
+- 每次合入 `release` 都必须在本 README 的「Release 更新」中追加用户可读的更新内容。
+- 对外发布必须创建语义化 tag，例如 `v0.1.1`；tag 指向对应 release 提交，不复用旧 tag。
+- 临时素材、渲染缓存和本地测试输出不进入发布提交。
 
 ## 项目文档
 

@@ -210,6 +210,76 @@ func TestHeuristicPlanner_PreparesProfilePlanBeforeValidation(t *testing.T) {
 	}
 }
 
+func TestHeuristicPlanner_PreparesCinematicProfileWithSelectedKeyframes(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
+	catalog["video_prompt_generator"].Parameters["aigcProvider"] = tool.ParamDef{Type: "string", Required: false}
+	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["mcp_generation_runner"] = &tool.ToolManifest{
+		Name:           "mcp_generation_runner",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+		Parameters: map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Required: true},
+			"providerId":                 {Type: "string", Required: true},
+			"mcpTool":                    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotAssetPackages": {Type: "array"},
+			"generationResults": {Type: "array"},
+		},
+	}
+	tools := staticToolList{
+		{Name: "knowledge_researcher", Capabilities: []string{"video_creation", "fresh_knowledge"}, Output: map[string]tool.ParamDef{"facts": {Type: "array"}, "sources": {Type: "array"}}},
+		cloneManifestForPlanner(catalog["proposal_generator"], "proposal_generation"),
+		cloneManifestForPlanner(catalog["video_script_generator"], "script_generation"),
+		cloneManifestForPlanner(catalog["continuity_checker"], "continuity"),
+		cloneManifestForPlanner(catalog["reference_asset_planner"], "reference_assets"),
+		cloneManifestForPlanner(catalog["cinematic_shot_designer"], "shot_planning"),
+		cloneManifestForPlanner(catalog["time_window_planner"], "time_window_planning"),
+		cloneManifestForPlanner(catalog["keyframe_prompt_generator"], "keyframe_generation"),
+		cloneManifestForPlanner(catalog["shot_generation_planner"], "shot_planning"),
+		cloneManifestForPlanner(catalog["video_prompt_generator"], "video_prompt_generation"),
+		cloneManifestForPlanner(catalog["video_profile_classifier"], "profile_selection"),
+		cloneManifestForPlanner(catalog["hyperframes_project_generator"], "composition_generation"),
+		cloneManifestForPlanner(catalog["hyperframes_renderer"], "video_render"),
+		cloneManifestForPlanner(catalog["publish_copy_generator"], "publish_copy"),
+		cloneManifestForPlanner(catalog["mcp_generation_runner"], "aigc_generation"),
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, len(tools))
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我制作一条开源项目上线宣传片",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"profileId":         "aigc_shot",
+			"targetDurationSec": 120,
+			"videoType":         "aigc_shot",
+			"aigcProvider":      "jimeng_mcp",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+
+	keyframes := findStep(t, plan, "keyframes_storyboards")
+	if keyframes.Tool != "keyframe_prompt_generator" {
+		t.Fatalf("keyframes step tool = %s", keyframes.Tool)
+	}
+	if got := keyframes.Arguments["shotList"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("keyframes shotList = %#v, want time window output", got)
+	}
+	if got := keyframes.Arguments["referenceAssetPlan"]; got != "{{reference_assets.output.referenceAssetPlan}}" {
+		t.Fatalf("keyframes reference assets = %#v", got)
+	}
+	if raw := planStepByTool(plan, "keyframe_prompt_generator"); raw != nil && raw.ID != "keyframes_storyboards" {
+		t.Fatalf("unexpected unprepared keyframe step left in plan: %#v", raw)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("prepared cinematic heuristic plan should pass PlanGuard: %v", err)
+	}
+}
+
 type staticToolList []tool.ToolManifest
 
 func (l staticToolList) ListManifests() []*tool.ToolManifest {

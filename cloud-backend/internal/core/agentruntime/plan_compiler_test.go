@@ -285,6 +285,7 @@ func TestPlanCompiler_PreparePlanInsertsShotGenerationPlanner(t *testing.T) {
 			Name: "hyperframes_renderer",
 			Parameters: map[string]tool.ParamDef{
 				"projectDir": {Type: "string", Required: true},
+				"projectId":  {Type: "string", Required: false},
 			},
 			Output: map[string]tool.ParamDef{
 				"outputPath": {Type: "string"},
@@ -306,7 +307,7 @@ func TestPlanCompiler_PreparePlanInsertsShotGenerationPlanner(t *testing.T) {
 			{
 				ID:              "script_generation",
 				Tool:            "video_script_generator",
-				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				Arguments:       map[string]interface{}{"topic": "端午节来历", "projectId": "vp-context-1"},
 				ExpectedOutput:  []string{"script"},
 				ProduceArtifact: true,
 			},
@@ -352,7 +353,7 @@ func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
 			{
 				ID:              "script_generation",
 				Tool:            "video_script_generator",
-				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				Arguments:       map[string]interface{}{"topic": "端午节来历", "projectId": "vp-context-1"},
 				ExpectedOutput:  []string{"script"},
 				ProduceArtifact: true,
 			},
@@ -728,7 +729,7 @@ func TestPlanCompiler_PreparePlanProfileRewiresExistingVideoPrompt(t *testing.T)
 			{
 				ID:              "script_generation",
 				Tool:            "video_script_generator",
-				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				Arguments:       map[string]interface{}{"topic": "端午节来历", "projectId": "vp-context-1"},
 				ExpectedOutput:  []string{"script"},
 				ProduceArtifact: true,
 			},
@@ -931,7 +932,7 @@ func TestPlanCompiler_PreparePlanAugmentsExistingShotGenerationConsumers(t *test
 			{
 				ID:              "script_generation",
 				Tool:            "video_script_generator",
-				Arguments:       map[string]interface{}{"topic": "端午节来历"},
+				Arguments:       map[string]interface{}{"topic": "端午节来历", "projectId": "vp-context-1"},
 				ExpectedOutput:  []string{"script"},
 				ProduceArtifact: true,
 			},
@@ -961,6 +962,7 @@ func TestPlanCompiler_PreparePlanAugmentsExistingShotGenerationConsumers(t *test
 				DependsOn: []string{"beat_plan", "video_prompt", "script_generation"},
 				Arguments: map[string]interface{}{
 					"topic":             "端午节来历",
+					"projectId":         "vp-context-1",
 					"script":            "{{script_generation.output.script}}",
 					"shotList":          "{{beat_plan.output.shotList}}",
 					"videoPrompts":      "{{video_prompt.output.videoPrompts}}",
@@ -1009,8 +1011,50 @@ func TestPlanCompiler_PreparePlanAugmentsExistingShotGenerationConsumers(t *test
 	if !containsString(preview.DependsOn, "shot_generation") {
 		t.Fatalf("existing preview should depend on shot_generation, got %#v", preview.DependsOn)
 	}
+	for _, output := range []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"} {
+		if !containsString(preview.ExpectedOutput, output) {
+			t.Fatalf("existing preview should declare %s for stage guard, got %#v", output, preview.ExpectedOutput)
+		}
+	}
+	render := findStep(t, prepared, "render")
+	if got := render.Arguments["projectId"]; got != "vp-context-1" {
+		t.Fatalf("existing render should inherit projectId context, got %#v", render.Arguments)
+	}
+	for _, output := range []string{"VIDEO", "RENDER_REPORT"} {
+		if !containsString(render.ExpectedOutput, output) {
+			t.Fatalf("existing render should declare %s for stage guard, got %#v", output, render.ExpectedOutput)
+		}
+	}
+	if got := findStep(t, prepared, "preview").Arguments["projectId"]; got != "vp-context-1" {
+		t.Fatalf("existing preview should preserve project context for local execution, got %#v", findStep(t, prepared, "preview").Arguments)
+	}
 	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
 		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+	catalog["hyperframes_project_generator"].ApprovalPolicy = tool.ApprovalPolicy{
+		Required:         true,
+		Mode:             tool.ApprovalAfterArtifact,
+		BlocksDownstream: true,
+	}
+	catalog["hyperframes_project_generator"].HumanReview = &tool.HumanReview{Required: true, Title: "审核画面预览"}
+	directors := testRoleRegistry{
+		"preview": testRoleDirector{
+			roleID:       "preview_director",
+			stage:        "preview",
+			allowedTools: []string{"hyperframes_project_generator"},
+			outputs:      []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"},
+			review:       &tool.HumanReview{Required: true, Title: "审核画面预览"},
+		},
+		"render": testRoleDirector{
+			roleID:       "render_producer",
+			stage:        "render",
+			allowedTools: []string{"hyperframes_renderer"},
+			inputs:       []string{"PREVIEW_SNAPSHOTS"},
+			outputs:      []string{"VIDEO", "RENDER_REPORT"},
+		},
+	}
+	if err := NewPlanGuard(catalog, nil).WithDirectors(directors).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should satisfy stage guard: %v", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
@@ -167,5 +168,83 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	}
 	if result.Output["generationResults"].([]interface{})[0].(map[string]interface{})["requestId"] != "extgen_video_SHOT_01" {
 		t.Fatalf("generationResults should preserve request id: %#v", result.Output["generationResults"])
+	}
+}
+
+func TestMCPToolCallExecutorPreservesToolErrorContentInExternalBatch(t *testing.T) {
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"isError": true,
+				"content": []map[string]interface{}{
+					{"type": "text", "text": "RuntimeError: ExceedConcurrencyLimit"},
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-1",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId": "extgen_video_SHOT_01",
+					"shotId":    "SHOT_01",
+					"prompt":    "wide shot",
+					"target": map[string]interface{}{
+						"durationSec": 5,
+						"aspectRatio": "16:9",
+						"resolution":  "1920x1080",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	results := result.Output["generationResults"].([]interface{})
+	got := results[0].(map[string]interface{})
+	if got["status"] != "failed" {
+		t.Fatalf("status = %#v, want failed", got["status"])
+	}
+	if !strings.Contains(got["error"].(string), "ExceedConcurrencyLimit") {
+		t.Fatalf("error should preserve content text, got %#v", got["error"])
+	}
+	remaining := result.Output["externalGenerationRequests"].([]interface{})
+	failed := remaining[0].(map[string]interface{})
+	if !strings.Contains(failed["error"].(string), "ExceedConcurrencyLimit") {
+		t.Fatalf("remaining request should preserve error text, got %#v", failed)
+	}
+	mcpResult := failed["mcpResult"].(map[string]interface{})
+	if mcpResult["isError"] != true {
+		t.Fatalf("mcpResult isError = %#v, want true", mcpResult["isError"])
+	}
+}
+
+func TestMCPArgumentsFromExternalRequestNormalizesResolution(t *testing.T) {
+	args := mcpArgumentsFromExternalRequest(map[string]interface{}{
+		"prompt": "wide shot",
+		"target": map[string]interface{}{
+			"durationSec": 8,
+			"aspectRatio": "16:9",
+			"resolution":  "1920x1080",
+		},
+	})
+	if args["video_resolution"] != "1080p" {
+		t.Fatalf("video_resolution = %#v, want 1080p", args["video_resolution"])
 	}
 }

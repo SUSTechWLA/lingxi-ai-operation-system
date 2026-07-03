@@ -1124,6 +1124,35 @@ try {
   assert.equal(shotReviewGroups[1].status, 'valid')
   assert.equal(shotReviewGroups[1].generationStrategy?.label, 'HyperFrames')
 
+  const autoMcpShotGroups = buildShotReviewGroups([
+    {
+      id: 'auto-video-request',
+      kind: 'EXTERNAL_GENERATION_REQUEST',
+      name: 'SHOT_01 视频生成请求',
+      status: 'review',
+      owner: '素材依赖点',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'inline://extgen-video',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_request', generationKind: 'video', externalGenerationRequestId: 'extgen_video_SHOT_01' },
+    },
+    {
+      id: 'auto-video-clip',
+      kind: 'SHOT_VIDEO_CLIP',
+      name: 'SHOT_01_TW_01_video_clip.mp4',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-1/jimeng-result.mp4',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'shot_video_clip', contentAvailability: 'local-agent' },
+    },
+  ])
+  assert.equal(unresolvedMaterialDependencyCount(autoMcpShotGroups), 0)
+  assert.equal(autoMcpShotGroups[0].slots.find((slot) => slot.kind === 'base-media')?.dependencyRequests.length, 0)
+
   const profileArtifacts = [
     {
       id: 'video-creation-profile-1',

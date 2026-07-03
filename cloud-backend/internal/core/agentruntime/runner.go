@@ -601,7 +601,7 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 		return run, task, err
 	}
 	taskStatus := taskStatusString(task)
-	if taskStatus == string(model.TaskSuccess) && run.Status != RunStatusSuccess && run.Status != RunStatusFailed && run.Status != RunStatusCancelled {
+	if taskStatus == string(model.TaskSuccess) && run.Status != RunStatusSuccess && run.Status != RunStatusCancelled {
 		run.Status = RunStatusSuccess
 		run.UpdatedAt = time.Now()
 		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {

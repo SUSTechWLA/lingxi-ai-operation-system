@@ -119,7 +119,7 @@ export interface DirectorTraceNode {
 
 export interface DirectorNextAction {
   stageId: string
-  kind: 'review' | 'running' | 'blocked' | 'start'
+  kind: 'review' | 'running' | 'blocked' | 'done' | 'start'
   label: string
   description: string
 }
@@ -626,6 +626,7 @@ export function buildDirectorStages(
   reviews: AgentReviewItem[] = [],
   trace: unknown = undefined,
   projectStarted = false,
+  runStatus?: DirectorRunLifecycleStatus,
 ): DirectorStage[] {
   const traceNodes = extractTraceNodes(trace)
 
@@ -650,6 +651,10 @@ export function buildDirectorStages(
       reviewId: review?.id,
     }
   })
+
+  if (runStatus === 'SUCCESS') {
+    return stages.map((stage) => ({ ...stage, status: 'done', progress: progressForStatus('done') }))
+  }
 
   if (stages.some((stage) => !['pending', 'active'].includes(stage.status))) {
     return stages.map((stage) => stage.status === 'active' ? { ...stage, status: 'pending', progress: progressForStatus('pending') } : stage)
@@ -1165,8 +1170,11 @@ function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotA
 
   return slotSpecs.map((slot) => {
     const slotArtifacts = artifacts.filter((artifact) => slot.kind === 'prompt' ? isShotPromptArtifact(artifact) : shotAssetSlotForArtifact(artifact) === slot.kind)
+    const slotHasMaterializedArtifact = slot.kind !== 'prompt' && slotArtifacts.some(isMaterializedShotSlotArtifact)
     const dependencyRequests = slotArtifacts.filter((artifact) => {
+      if (slot.kind === 'prompt') return false
       if (!isExternalGenerationRequestArtifact(artifact)) return false
+      if (slotHasMaterializedArtifact) return false
       const requestId = externalGenerationRequestIdForArtifact(artifact)
       return !requestId || !fulfilledRequestIds.has(requestId)
     })
@@ -1477,6 +1485,13 @@ function isExternalGenerationResultArtifact(artifact: DirectorArtifactRecord): b
   return artifactType === 'external_generation_result'
 }
 
+function isMaterializedShotSlotArtifact(artifact: DirectorArtifactRecord): boolean {
+  if (isExternalGenerationRequestArtifact(artifact)) return false
+  if (artifact.status !== 'valid') return false
+  if (isExternalGenerationResultArtifact(artifact)) return true
+  return isShotMediaArtifact(artifact) || isShotReferenceArtifact(artifact)
+}
+
 function externalGenerationRequestIdForArtifact(artifact: DirectorArtifactRecord): string {
   const metadata = artifact.metadata || {}
   const direct = firstString(metadata, ['externalGenerationRequestId', 'generationRequestId', 'requestId'])
@@ -1687,11 +1702,11 @@ export function isProjectInProgress(
 }
 
 export function overviewProjectStatus(stages: DirectorStage[], projectStatus?: DirectorProjectLifecycleStatus, runStatus?: DirectorRunLifecycleStatus): DirectorStageStatus {
-  if (runStatus === 'FAILED' || stages.some((stage) => stage.status === 'failed' || stage.status === 'blocked')) {
-    return 'failed'
-  }
   if (runStatus === 'SUCCESS' || projectStatus === 'COMPLETED' || (stages.length > 0 && stages.every((stage) => stage.status === 'done'))) {
     return 'done'
+  }
+  if (runStatus === 'FAILED' || stages.some((stage) => stage.status === 'failed' || stage.status === 'blocked')) {
+    return 'failed'
   }
   if (projectStatus === 'PAUSED' || projectStatus === 'ARCHIVED') {
     return 'pending'
@@ -1719,7 +1734,16 @@ export function projectPrimaryAction(input: {
   }
 }
 
-export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | undefined {
+export function deriveNextAction(stages: DirectorStage[], runStatus?: DirectorRunLifecycleStatus): DirectorNextAction | undefined {
+  if (runStatus === 'SUCCESS' || (stages.length > 0 && stages.every((stage) => stage.status === 'done'))) {
+    return {
+      stageId: 'complete',
+      kind: 'done',
+      label: '项目已完成',
+      description: '完整流程已经跑通，最终视频和发布文案已生成。',
+    }
+  }
+
   const reviewStage = stages.find((stage) => stage.status === 'review')
   if (reviewStage) {
     return {

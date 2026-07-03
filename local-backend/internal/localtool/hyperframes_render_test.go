@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -193,5 +194,78 @@ func TestHyperFramesRenderExecutorReturnsClientFetchableLocalArtifactRef(t *test
 	}
 	if artifacts[0]["storageRef"] != outputRef {
 		t.Fatalf("artifact storageRef should match outputRef: %#v", artifacts[0])
+	}
+}
+
+func TestHyperFramesRenderExecutorFastStoryboardRender(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not available")
+	}
+	if err := exec.Command("python3", "-c", "import PIL").Run(); err != nil {
+		t.Skip("python3 Pillow is not available")
+	}
+
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "projects", "project_001", "hyperframes")
+	if err := os.MkdirAll(filepath.Join(projectDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data := map[string]interface{}{
+		"shotList": []map[string]interface{}{
+			{
+				"id":              "SHOT_01_TW_01",
+				"shotId":          "SHOT_01_TW_01",
+				"sceneSummary":    "AIGC_VIDEO | 非真人风格化：创作者工作台变成可控流水线",
+				"mainAction":      "建立强钩子。",
+				"durationSec":     1,
+				"sequenceIndex":   0,
+				"recommendedMode": "aigc_video",
+			},
+			{
+				"id":              "SHOT_02_TW_01",
+				"shotId":          "SHOT_02_TW_01",
+				"sceneSummary":    "HYPERFRAMES | 审核门、本地 runner、MCP、最终渲染串成流程图",
+				"mainAction":      "解释系统可追踪。",
+				"durationSec":     1,
+				"sequenceIndex":   1,
+				"recommendedMode": "hyperframes",
+			},
+		},
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "assets", "data.json"), dataBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TANGYING_FAST_STORYBOARD_RENDER", "1")
+	executor := NewHyperFramesRenderExecutor(root, "http://127.0.0.1:19999", 0)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesRender,
+		Payload: map[string]interface{}{
+			"projectDir": "local://projects/project_001/hyperframes",
+			"fps":        float64(12),
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute fast storyboard render: %v", err)
+	}
+
+	outputRef, _ := result.Output["outputRef"].(string)
+	if !strings.Contains(outputRef, "/final.mp4") {
+		t.Fatalf("outputRef = %q, want final mp4 ref", outputRef)
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", "project_001", "renders", "final.mp4")); err != nil {
+		t.Fatalf("final video should exist: %v", err)
+	}
+	if result.Output["renderJobId"] != "storyboard_fast_render" {
+		t.Fatalf("renderJobId = %#v, want storyboard_fast_render", result.Output["renderJobId"])
 	}
 }

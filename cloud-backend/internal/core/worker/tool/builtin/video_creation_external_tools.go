@@ -1500,9 +1500,7 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 		sourceShots = toolMapsFromValue(params["shotList"], "shotList", "shots")
 	}
 	if len(sourceShots) == 0 {
-		sourceShots = []map[string]interface{}{
-			{"shotId": "SHOT_01", "durationSec": 6, "visual": firstNonEmptyString(params, "brief", "topic", "goal")},
-		}
+		sourceShots = buildFallbackCinematicSourceShots(firstNonEmptyString(params, "brief", "topic", "goal"), intParam(params, "targetDurationSec", intParam(params, "durationSec", 75)))
 	}
 	profile := creationProfileFromToolValue(params["creationProfile"])
 	shotList := make([]map[string]interface{}, 0, len(sourceShots))
@@ -1522,11 +1520,14 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 			visual = "待导演设计的故事镜头。"
 		}
 		shotList = append(shotList, map[string]interface{}{
-			"shotId":       shotID,
-			"durationSec":  plannerOutputDurationSec(source, preserveAuthoredDuration),
-			"visual":       visual,
-			"mainAction":   firstNonEmptyString(source, "mainAction", "action"),
-			"directorNote": "镜头设计草案；仅生成规划，不生成媒体。",
+			"shotId":            shotID,
+			"durationSec":       plannerOutputDurationSec(source, preserveAuthoredDuration),
+			"visual":            visual,
+			"mainAction":        firstNonEmptyString(source, "mainAction", "action"),
+			"narrationText":     firstNonEmptyString(source, "narrationText", "scriptText", "text"),
+			"camera":            firstNonEmptyString(source, "camera", "cameraMotion"),
+			"plannedAssetRoute": firstNonEmptyString(source, "plannedAssetRoute", "assetRoute", "route"),
+			"directorNote":      "镜头设计草案；仅生成规划，不生成媒体。",
 		})
 	}
 	return tool.SuccessResult(map[string]interface{}{
@@ -1541,6 +1542,91 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 			jsonArtifact(stage, "cinematic_shot_design.json", skillName, "CINEMATIC_SHOT_DESIGN", true),
 		},
 	})
+}
+
+func buildFallbackCinematicSourceShots(topic string, targetDurationSec int) []map[string]interface{} {
+	topic = strings.TrimSpace(topic)
+	if topic == "" {
+		topic = "这个项目"
+	}
+	base := []map[string]interface{}{
+		{
+			"shotId":            "SHOT_01",
+			"durationSec":       6,
+			"plannedAssetRoute": "aigc_video",
+			"visual":            "AIGC_VIDEO | 非真人风格化：混乱的创作者工作台上，多个 AI 工具窗口像碎片一样漂浮，镜头快速推近到一句话需求，形成强钩子。",
+			"mainAction":        "用反差展示盲等 AI 结果的混乱感。",
+			"narrationText":     "别再把一句话丢给 AI 然后盲等结果，真正可控的视频生产线来了。",
+			"camera":            "快速推近，碎片化窗口收束成一条清晰流水线。",
+		},
+		{
+			"shotId":            "SHOT_02",
+			"durationSec":       8,
+			"plannedAssetRoute": "screen_recording",
+			"visual":            "SCREEN_RECORDING | 真实页面录屏：登录项目页，选择影视化 / AIGC shot 视频，在输入框粘贴开源上线宣传片需求，开启 JiMeng MCP。",
+			"mainAction":        "展示从页面输入框启动项目。",
+			"narrationText":     "非技术人员只要写清楚目标，系统会把创作拆成可审核的步骤。",
+			"camera":            "录屏局部放大输入框、模式按钮和即梦 MCP 开关。",
+		},
+		{
+			"shotId":            "SHOT_03",
+			"durationSec":       8,
+			"plannedAssetRoute": "hyperframes",
+			"visual":            "HYPERFRAMES | 图形包装：一句话需求被拆成脚本、分镜、素材、审核门、本地执行器、最终渲染的 DAG 流程图。",
+			"mainAction":        "把复杂流程变成可理解的可视化流水线。",
+			"narrationText":     "它不是一个黑盒 Agent，而是一套可追踪、可回滚、可本地执行的生产流程。",
+			"camera":            "节点依次点亮，审核门用高亮描边通过。",
+		},
+		{
+			"shotId":            "SHOT_04",
+			"durationSec":       8,
+			"plannedAssetRoute": "aigc_video",
+			"visual":            "AIGC_VIDEO | 非真人电影感：云端编排中心和本地 Mac 执行器通过光线连接，MCP 标准协议像插件插槽一样接入不同工具。",
+			"mainAction":        "突出云端编排、本地安全执行、MCP 可扩展。",
+			"narrationText":     "未来所有 CLI 能力都用标准 MCP 接进来，系统不关心工具用什么语言实现。",
+			"camera":            "横向穿梭，云端节点切到本地执行器，再切到 MCP 插槽。",
+		},
+		{
+			"shotId":            "SHOT_05",
+			"durationSec":       8,
+			"plannedAssetRoute": "screen_recording",
+			"visual":            "SCREEN_RECORDING | 真实页面录屏：审核门列表、脚本/分镜/视频提示词产物卡片、即梦 MCP provider 就绪状态逐个出现。",
+			"mainAction":        "证明系统真的跑完整流程。",
+			"narrationText":     "每一个高成本动作之前，都有审核门，用户知道自己在批准什么。",
+			"camera":            "滚动页面，放大审核通过和 MCP 就绪标识。",
+		},
+		{
+			"shotId":            "SHOT_06",
+			"durationSec":       8,
+			"plannedAssetRoute": "aigc_video",
+			"visual":            "AIGC_VIDEO | 非真人风格化：即梦生成的概念素材从提示词变成视频胶片，镜头包、字幕、音频、拼接计划被装入独立 shot 包。",
+			"mainAction":        "展示 AIGC 素材进入可审核资产包。",
+			"narrationText":     "AIGC 不再是散落素材，而是进入每个 shot 的资产包，能追踪、能替换、能复用。",
+			"camera":            "提示词粒子汇聚成胶片，再落入标注清晰的 shot 包。",
+		},
+		{
+			"shotId":            "SHOT_07",
+			"durationSec":       7,
+			"plannedAssetRoute": "hyperframes",
+			"visual":            "HYPERFRAMES | 数据卡片：README 更新、Wiki 版本管理、develop_go 开发分支、release 合入、tag 发布依次弹出。",
+			"mainAction":        "用开源上线 checklist 建立可信度。",
+			"narrationText":     "项目会开源，开发分支、release 分支、README 更新和 tag 版本都会规范管理。",
+			"camera":            "卡片快速切换，最后定格在 Open Source Launch。",
+		},
+		{
+			"shotId":            "SHOT_08",
+			"durationSec":       7,
+			"plannedAssetRoute": "aigc_video",
+			"visual":            "AIGC_VIDEO | 非真人风格化：创作者、运营和开发者围绕同一个项目看板协作，Star、Fork、Follow 图标像信号一样扩散。",
+			"mainAction":        "收束到关注、收藏、开源参与。",
+			"narrationText":     "如果你也想要一条可控的 AI 内容生产线，关注这个开源项目。",
+			"camera":            "慢推到项目 Logo 位和关注 CTA，光线向外扩散。",
+		},
+	}
+	if targetDurationSec > 0 && targetDurationSec < 55 {
+		return base[:6]
+	}
+	return base
 }
 
 func executeSoundDesignPlanner(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
@@ -3154,11 +3240,11 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		}
 		unitShotID := sanitizeUnitPart(shotID)
 		duration := normalizedDurationSec(firstExistingValue(shot, "durationSec", "duration", "seconds"))
-		narration := firstStringInMap(shot, "narrationText", "scriptText", "voiceover", "text", "claim")
+		narration := firstStringInMap(shot, "narrationText", "scriptText", "voiceover", "text", "claim", "mainAction", "sceneSummary")
 		if narration == "" {
-			narration = fmt.Sprintf("%s 的第 %d 个独立镜头口播。", topic, i+1)
+			narration = fmt.Sprintf("%s 的第 %d 个独立镜头口播。", compactTopicForPrompt(topic), i+1)
 		}
-		visual := firstStringInMap(shot, "visual", "visualIntent", "description", "composition")
+		visual := firstStringInMap(shot, "visual", "visualIntent", "sceneSummary", "description", "mainAction", "composition")
 		camera := firstStringInMap(shot, "camera", "cameraMove", "cameraMotion")
 		lighting := firstStringInMap(shot, "lighting", "light", "mood")
 		composition := firstStringInMap(shot, "composition", "framing")
@@ -3167,7 +3253,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		references := referenceImagesFromHints(shotID, materialHints)
 
 		promptParts := []string{
-			fmt.Sprintf("独立生成 %d 秒非写实动画 AIGC 视频，主题：%s。", duration, topic),
+			fmt.Sprintf("独立生成 %d 秒非写实动画 AIGC 视频，主题：%s。", duration, compactTopicForPrompt(topic)),
 			fmt.Sprintf("镜头 %s：%s", shotID, fallbackText(visual, narration)),
 			"口播/字幕内容：" + narration,
 			"画面需包含主体、场景、动作、镜头运动、光影、色彩和风格，禁止真人写实，保持干净、知识分享、电影感动画。",
@@ -3187,9 +3273,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		if len(materialHints) > 0 {
 			promptParts = append(promptParts, "可参考素材库关键词："+strings.Join(materialHints, "、"))
 		}
-		videoPrompt := strings.Join(promptParts, "\n")
+		videoPrompt := limitPromptRunes(strings.Join(promptParts, "\n"), 2000)
 		negativePrompt := "禁止真人写实、禁止跨 shot 依赖、禁止尾帧对齐、禁止要求上一镜或下一镜配合、禁止水印、禁止文字乱码、禁止画面崩坏。"
 		requestID := "extgen_video_" + unitShotID
+		submitExternalRequest := shouldSubmitExternalVideoRequest(shot, visual, materialHints)
 
 		videoPrompts = append(videoPrompts, map[string]interface{}{
 			"shotId":               shotID,
@@ -3209,25 +3296,28 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			},
 		})
 
-		requests = append(requests, map[string]interface{}{
-			"requestId":           requestID,
-			"kind":                "video",
-			"shotId":              shotID,
-			"prompt":              videoPrompt,
-			"promptText":          videoPrompt,
-			"negativePrompt":      negativePrompt,
-			"references":          references,
-			"target":              map[string]interface{}{"aspectRatio": "16:9", "durationSec": duration, "resolution": "1920x1080"},
-			"promptCharLimit":     2000,
-			"referenceImageLimit": 6,
-			"status":              "pending_upload",
-			"manualInstruction":   "当前没有可用的视频生成 API 配置，请在浏览器外部视频平台复制 Prompt 生成本 shot，再回传上传结果。",
-		})
+		if submitExternalRequest {
+			requests = append(requests, map[string]interface{}{
+				"requestId":           requestID,
+				"kind":                "video",
+				"shotId":              shotID,
+				"prompt":              videoPrompt,
+				"promptText":          videoPrompt,
+				"negativePrompt":      negativePrompt,
+				"references":          references,
+				"target":              map[string]interface{}{"aspectRatio": "16:9", "durationSec": duration, "resolution": "1920x1080"},
+				"promptCharLimit":     2000,
+				"referenceImageLimit": 6,
+				"status":              "pending_upload",
+				"manualInstruction":   "当前没有可用的视频生成 API 配置，请在浏览器外部视频平台复制 Prompt 生成本 shot，再回传上传结果。",
+			})
+		}
 
 		packages = append(packages, map[string]interface{}{
 			"shotId":          shotID,
 			"durationSec":     duration,
 			"referenceImages": references,
+			"assetRoute":      firstStringInMap(shot, "plannedAssetRoute", "assetRoute", "route", "recommendedMode"),
 			"prompts": map[string]interface{}{
 				"videoPrompt":    videoPrompt,
 				"negativePrompt": negativePrompt,
@@ -3260,8 +3350,10 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			},
 		})
 
+		if submitExternalRequest {
+			artifacts = append(artifacts, externalGenerationArtifact(requestID, shotID, "video"))
+		}
 		artifacts = append(artifacts,
-			externalGenerationArtifact(requestID, shotID, "video"),
 			shotPlaceholderArtifact("shot_video_"+unitShotID, "SHOT_VIDEO_CLIP", fmt.Sprintf("%s_video_clip.mp4", shotID), "video/mp4", "shot_video_clip", shotID),
 			shotPlaceholderArtifact("shot_audio_"+unitShotID, "SHOT_AUDIO", fmt.Sprintf("%s_voiceover.wav", shotID), "audio/wav", "shot_audio", shotID),
 			shotPlaceholderArtifact("shot_subtitle_"+unitShotID, "SHOT_SUBTITLE", fmt.Sprintf("%s_subtitle.srt", shotID), "text/plain", "shot_subtitle", shotID),
@@ -3292,6 +3384,58 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		"shotAssetPackages":          packages,
 		"summary":                    contentPkg["summary"],
 	}, true
+}
+
+func shouldSubmitExternalVideoRequest(shot map[string]interface{}, visual string, materialHints []string) bool {
+	route := strings.ToLower(firstStringInMap(shot, "plannedAssetRoute", "assetRoute", "route"))
+	if containsAny(route, "screen", "record", "录屏", "hyperframes", "html") {
+		return false
+	}
+	if containsAny(route, "aigc", "jimeng", "即梦", "video") {
+		return true
+	}
+	recommendedMode := strings.ToLower(firstStringInMap(shot, "recommendedMode"))
+	text := strings.ToLower(strings.Join([]string{
+		visual,
+		firstStringInMap(shot, "sceneSummary", "description", "mainAction", "action"),
+		strings.Join(materialHints, " "),
+	}, " "))
+	if containsAny(text, "screen_recording", "screen recording", "真实页面", "录屏", "hyperframes", "html", "流程图", "数据卡片", "标题动效", "图形包装") {
+		return false
+	}
+	if containsAny(recommendedMode, "aigc", "jimeng", "即梦", "video") {
+		return true
+	}
+	return true
+}
+
+func compactTopicForPrompt(topic string) string {
+	trimmed := strings.TrimSpace(topic)
+	if trimmed == "" {
+		return "本项目"
+	}
+	if idx := strings.Index(trimmed, "\n\n创作要求"); idx > 0 {
+		trimmed = trimmed[:idx]
+	}
+	if idx := strings.Index(trimmed, "创作要求："); idx > 0 {
+		trimmed = trimmed[:idx]
+	}
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	return limitPromptRunes(trimmed, 180)
+}
+
+func limitPromptRunes(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return strings.TrimSpace(text)
+	}
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func buildDeterministicShotSplitterData(toolName, skillName, topic, script string, targetDurationSec int) (map[string]interface{}, bool) {
@@ -5995,7 +6139,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 			facts = formatKnowledgePackForPrompt(params["knowledgePack"], params["knowledgeSources"])
 			usedFacts = usedFactsFromKnowledgePack(params["knowledgePack"])
 		}
-		if toolName == "video_script_generator" && requiresFreshKnowledge(params) && !hasKnowledgeFacts(params["knowledgePack"], facts) && !hasKnowledgeContextFacts(params["knowledgeContext"]) {
+		if toolName == "video_script_generator" && shouldBlockOnEmptyFreshFacts(params) && requiresFreshKnowledge(params) && !hasKnowledgeFacts(params["knowledgePack"], facts) && !hasKnowledgeContextFacts(params["knowledgeContext"]) {
 			return tool.FailureResult("video_script_generator: retrievalPolicy=required but knowledgeContext is empty")
 		}
 		facts = appendKnowledgePolicyForPrompt(facts, params)
@@ -6463,6 +6607,10 @@ func requiresFreshKnowledge(params map[string]interface{}) bool {
 	return strings.EqualFold(stringParam(params, "retrievalPolicy", ""), "required") ||
 		boolParam(params, "mustUseFreshKnowledge", false) ||
 		boolParam(params, "requireFreshFacts", false)
+}
+
+func shouldBlockOnEmptyFreshFacts(params map[string]interface{}) bool {
+	return boolParam(params, "blockOnEmptyFacts", false)
 }
 
 func hasKnowledgeFacts(value interface{}, fallbackFacts string) bool {

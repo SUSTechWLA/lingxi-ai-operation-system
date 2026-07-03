@@ -260,6 +260,72 @@ func TestHyperFramesProjectExecutorShowsMissingMediaPlaceholder(t *testing.T) {
 	}
 }
 
+func TestHyperFramesProjectExecutorBuildsShotListCompositionWithoutMediaPackages(t *testing.T) {
+	root := t.TempDir()
+	executor := NewHyperFramesProjectExecutor(root)
+
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "躺营 AIOS 开源发布",
+			"script": "真正可控的视频生产线来了。",
+			"shotList": []interface{}{
+				map[string]interface{}{
+					"shotId":            "SHOT_01",
+					"durationSec":       float64(6),
+					"plannedAssetRoute": "aigc_video",
+					"sceneSummary":      "开头三秒强反差",
+					"mainAction":        "黑箱等待切到可控导演台",
+					"narrationText":     "别再把一句话丢给 AI 然后盲等结果。",
+				},
+				map[string]interface{}{
+					"shotId":            "SHOT_02",
+					"durationSec":       float64(8),
+					"startSec":          float64(0),
+					"endSec":            float64(8),
+					"plannedAssetRoute": "screen_recording",
+					"sceneSummary":      "页面输入启动项目",
+					"mainAction":        "展示登录、输入框、审核门",
+					"narrationText":     "非技术人员也能把需求拆成可审核步骤。",
+				},
+				map[string]interface{}{
+					"shotId":            "SHOT_03",
+					"durationSec":       float64(7),
+					"startSec":          float64(0),
+					"endSec":            float64(7),
+					"plannedAssetRoute": "hyperframes",
+					"sceneSummary":      "开源发布 CTA",
+					"mainAction":        "README、Wiki、release tag 快速扫过",
+					"narrationText":     "关注这个开源项目，一起把 AI 内容生产线跑起来。",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(raw)
+	for _, expected := range []string{
+		`data-duration="21.0"`,
+		`开头三秒强反差`,
+		`页面输入启动项目`,
+		`开源发布 CTA`,
+		`别再把一句话丢给 AI 然后盲等结果。`,
+		`03 / 03`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("index.html missing %q:\n%s", expected, html)
+		}
+	}
+}
+
 func TestHyperFramesProjectExecutorWritesHyperFramesCompositionContract(t *testing.T) {
 	root := t.TempDir()
 	executor := NewHyperFramesProjectExecutor(root)

@@ -83,12 +83,24 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 			return nil, err
 		}
 
-		fallbackSpec := fallbackCompositionSpec()
 		if err := os.WriteFile(filepath.Join(assetsDir, "style.css"), []byte(buildCompositionStyle()), 0o644); err != nil {
 			return nil, err
 		}
 		mediaPackages := shotMediaPackagesFromPayload(e.dataDir, projectID, projectRoot, job.Payload)
-		index := buildHyperFramesIndexWithMedia(topic, script, mediaPackages)
+		fallbackSpec := fallbackCompositionSpec()
+		var index string
+		if len(mediaPackages) > 0 {
+			if duration := totalMediaDuration(mediaPackages); duration > 0 {
+				fallbackSpec.DurationSec = duration
+			}
+			index = buildHyperFramesIndexWithMedia(topic, script, mediaPackages)
+		} else if shotSpec := compositionSpecFromShotListPayload(topic, script, job.Payload); shotSpec != nil {
+			fallbackSpec = shotSpec
+			cards, captions := extractCardsAndCaptions(shotSpec)
+			index = buildCompositionIndex(topic, shotSpec, cards, captions, shotSpec.Style)
+		} else {
+			index = buildHyperFramesIndex(topic, script)
+		}
 		if err := os.WriteFile(filepath.Join(projectRoot, "index.html"), []byte(index), 0o644); err != nil {
 			return nil, err
 		}
@@ -301,6 +313,141 @@ func compositionSpecFromPayload(payload map[string]interface{}) *compositionSpec
 	return &spec
 }
 
+func compositionSpecFromShotListPayload(topic, script string, payload map[string]interface{}) *compositionSpec {
+	items := shotListItemsFromPayload(payload)
+	if len(items) == 0 {
+		return nil
+	}
+	var overlayItems []interface{}
+	var captionItems []interface{}
+	nextStart := 0.0
+	for index, item := range items {
+		shot := mapFromInterface(item)
+		if shot == nil {
+			continue
+		}
+		shotID := firstStringFromMap(shot, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", index+1)
+		}
+		duration := floatFromMap(shot, "durationSec", 0)
+		rawStart, hasStart := floatValueFromMap(shot, "startSec")
+		rawEnd, hasEnd := floatValueFromMap(shot, "endSec")
+		start := nextStart
+		if hasStart && rawStart >= nextStart {
+			start = rawStart
+		}
+		if duration <= 0 && hasStart && hasEnd && rawEnd > rawStart {
+			duration = rawEnd - rawStart
+		}
+		if duration <= 0 {
+			duration = 6
+		}
+		end := start + duration
+		nextStart = end
+
+		title := firstStringFromMap(shot, "sceneSummary", "visual", "description", "title", "mainAction")
+		if title == "" {
+			title = fmt.Sprintf("画面 %02d", index+1)
+		}
+		body := firstStringFromMap(shot, "mainAction", "action", "camera", "composition", "plannedAssetRoute")
+		if body == "" {
+			body = firstStringFromMap(shot, "description", "narrationText", "scriptText")
+		}
+		if body == "" && index == 0 {
+			body = script
+		}
+		caption := firstStringFromMap(shot, "narrationText", "scriptText", "voiceoverText", "subtitleText", "text")
+		route := strings.ToLower(firstStringFromMap(shot, "plannedAssetRoute", "assetRoute", "route", "recommendedMode"))
+		kind := "content_card"
+		switch {
+		case strings.Contains(route, "screen"):
+			kind = "screen_recording_card"
+		case strings.Contains(route, "aigc"):
+			kind = "aigc_card"
+		case strings.Contains(route, "hyperframes"):
+			kind = "motion_card"
+		}
+
+		overlayItems = append(overlayItems, map[string]interface{}{
+			"id":        "card-" + shotID,
+			"kind":      kind,
+			"startSec":  start,
+			"endSec":    end,
+			"title":     title,
+			"body":      body,
+			"animation": "slide_up",
+		})
+		if caption != "" {
+			captionItems = append(captionItems, map[string]interface{}{
+				"id":       "caption-" + shotID,
+				"startSec": start,
+				"endSec":   end,
+				"text":     caption,
+			})
+		}
+	}
+	if len(overlayItems) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(topic) == "" {
+		topic = "Tangying AIOS Video"
+	}
+	duration := nextStart
+	if duration <= 0 {
+		duration = 8
+	}
+	return &compositionSpec{
+		SpecVersion: "oneclick-video/v1",
+		ProjectType: "image_text_video",
+		DurationSec: duration,
+		FPS:         30,
+		Resolution: map[string]interface{}{
+			"width":  float64(1920),
+			"height": float64(1080),
+		},
+		Tracks: []map[string]interface{}{
+			{
+				"id":    "shotlist-overlay",
+				"type":  "overlay",
+				"items": overlayItems,
+			},
+			{
+				"id":    "shotlist-caption",
+				"type":  "caption",
+				"items": captionItems,
+			},
+		},
+		Style: map[string]interface{}{
+			"theme":      "open_source_launch",
+			"background": "production_dark",
+		},
+	}
+}
+
+func shotListItemsFromPayload(payload map[string]interface{}) []interface{} {
+	if payload == nil {
+		return nil
+	}
+	if items := interfaceSlice(payload["shotList"]); len(items) > 0 {
+		return items
+	}
+	if items := interfaceSlice(payload["shots"]); len(items) > 0 {
+		return items
+	}
+	for _, key := range []string{"shotList", "shots"} {
+		if wrapper := mapFromMap(payload, key); wrapper != nil {
+			if items := interfaceSlice(wrapper["shotList"]); len(items) > 0 {
+				return items
+			}
+			if items := interfaceSlice(wrapper["shots"]); len(items) > 0 {
+				return items
+			}
+		}
+	}
+	return nil
+}
+
 // extractCardsAndCaptions extracts card and caption info from the tracks.
 func extractCardsAndCaptions(spec *compositionSpec) ([]cardInfo, []captionInfo) {
 	var cards []cardInfo
@@ -363,26 +510,33 @@ func stringFromMap(m map[string]interface{}, key string) string {
 }
 
 func floatFromMap(m map[string]interface{}, key string, fallback float64) float64 {
+	if value, ok := floatValueFromMap(m, key); ok {
+		return value
+	}
+	return fallback
+}
+
+func floatValueFromMap(m map[string]interface{}, key string) (float64, bool) {
 	if m == nil {
-		return fallback
+		return 0, false
 	}
 	switch v := m[key].(type) {
 	case float64:
-		return v
+		return v, true
 	case float32:
-		return float64(v)
+		return float64(v), true
 	case int:
-		return float64(v)
+		return float64(v), true
 	case int64:
-		return float64(v)
+		return float64(v), true
 	case int32:
-		return float64(v)
+		return float64(v), true
 	case json.Number:
 		if f, err := v.Float64(); err == nil {
-			return f
+			return f, true
 		}
 	}
-	return fallback
+	return 0, false
 }
 
 func mapFromInterface(value interface{}) map[string]interface{} {
