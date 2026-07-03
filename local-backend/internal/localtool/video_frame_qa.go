@@ -60,6 +60,21 @@ type visualQAShotWindow struct {
 	End    float64
 }
 
+type visualQAShotSummary struct {
+	ShotID              string             `json:"shotId"`
+	FrameCount          int                `json:"frameCount"`
+	SampledTimesSec     []float64          `json:"sampledTimesSec,omitempty"`
+	Passed              bool               `json:"passed"`
+	NeedsRegeneration   bool               `json:"needsRegeneration"`
+	Score               int                `json:"score"`
+	BlockingIssueCount  int                `json:"blockingIssueCount"`
+	WarningIssueCount   int                `json:"warningIssueCount"`
+	MetricSummary       map[string]float64 `json:"metricSummary"`
+	Conclusion          string             `json:"conclusion"`
+	Recommendations     []string           `json:"recommendations,omitempty"`
+	RepresentativeIssue []visualQAIssue    `json:"representativeIssues,omitempty"`
+}
+
 func (e *VideoFrameQAExecutor) Execute(ctx context.Context, job Job) (*Result, error) {
 	projectID := strings.TrimSpace(job.ProjectID)
 	if projectID == "" {
@@ -149,6 +164,8 @@ func (e *VideoFrameQAExecutor) Execute(ctx context.Context, job Job) (*Result, e
 		results = append(results, frame)
 	}
 
+	shotSummaries := buildVisualQAShotSummaries(results)
+	repairPlan := visualQARepairPlan(shotSummaries)
 	passed := blockingCount == 0
 	score := 100 - blockingCount*18 - warningCount*5
 	if score < 0 {
@@ -163,6 +180,10 @@ func (e *VideoFrameQAExecutor) Execute(ctx context.Context, job Job) (*Result, e
 		"sampleIntervalSec":  sampleInterval,
 		"summary":            visualQASummary(passed, blockingCount, warningCount),
 		"frames":             results,
+		"shotCount":          len(shotSummaries),
+		"shotSummaries":      shotSummaries,
+		"needsRegeneration":  repairPlan["needsRegeneration"],
+		"repairPlan":         repairPlan,
 		"policy": map[string]interface{}{
 			"topLeftTextZone": "品牌、镜头标签、源画面文字不能同时挤在左上安全区",
 			"lowerThird":      "主标题、字幕、原片字幕不能在底部重复叠加",
@@ -195,6 +216,8 @@ func (e *VideoFrameQAExecutor) Execute(ctx context.Context, job Job) (*Result, e
 				"blockingIssueCount": blockingCount,
 				"warningIssueCount":  warningCount,
 				"frameCount":         len(results),
+				"shotCount":          len(shotSummaries),
+				"needsRegeneration":  repairPlan["needsRegeneration"],
 			},
 		},
 	}
@@ -225,6 +248,10 @@ func (e *VideoFrameQAExecutor) Execute(ctx context.Context, job Job) (*Result, e
 		"blockingIssueCount": blockingCount,
 		"warningIssueCount":  warningCount,
 		"frames":             results,
+		"shotCount":          len(shotSummaries),
+		"shotSummaries":      shotSummaries,
+		"needsRegeneration":  repairPlan["needsRegeneration"],
+		"repairPlan":         repairPlan,
 		"artifacts":          artifacts,
 	}}, nil
 }
@@ -434,6 +461,163 @@ func visualQASummary(passed bool, blockingCount, warningCount int) string {
 		return fmt.Sprintf("抽帧视觉 QA 通过但有 %d 个警告，建议人工复看联系表。", warningCount)
 	}
 	return fmt.Sprintf("抽帧视觉 QA 未通过：发现 %d 个阻断问题、%d 个警告，需要调整对应 shot 后重新渲染。", blockingCount, warningCount)
+}
+
+func buildVisualQAShotSummaries(frames []visualQAFrameResult) []visualQAShotSummary {
+	type accumulator struct {
+		summary                       visualQAShotSummary
+		topLeftSum, lowerSum, fullSum float64
+		maxTopLeft, maxLower, maxFull float64
+		recommendationSet             map[string]bool
+		issueSet                      map[string]bool
+	}
+
+	order := []string{}
+	byShot := map[string]*accumulator{}
+	for _, frame := range frames {
+		shotID := strings.TrimSpace(frame.ShotID)
+		if shotID == "" {
+			shotID = "unmapped_shot"
+		}
+		acc, ok := byShot[shotID]
+		if !ok {
+			acc = &accumulator{
+				summary: visualQAShotSummary{
+					ShotID:        shotID,
+					Passed:        true,
+					MetricSummary: map[string]float64{},
+				},
+				recommendationSet: map[string]bool{},
+				issueSet:          map[string]bool{},
+			}
+			byShot[shotID] = acc
+			order = append(order, shotID)
+		}
+
+		acc.summary.FrameCount++
+		acc.summary.SampledTimesSec = append(acc.summary.SampledTimesSec, frame.TimeSec)
+		topLeft := frame.Metrics["topLeftTextZoneEdgeDensity"]
+		lower := frame.Metrics["lowerThirdEdgeDensity"]
+		full := frame.Metrics["fullFrameEdgeDensity"]
+		acc.topLeftSum += topLeft
+		acc.lowerSum += lower
+		acc.fullSum += full
+		acc.maxTopLeft = math.Max(acc.maxTopLeft, topLeft)
+		acc.maxLower = math.Max(acc.maxLower, lower)
+		acc.maxFull = math.Max(acc.maxFull, full)
+
+		for _, issue := range frame.Issues {
+			if issue.Severity == "blocking" {
+				acc.summary.BlockingIssueCount++
+				acc.summary.Passed = false
+				acc.summary.NeedsRegeneration = true
+			} else {
+				acc.summary.WarningIssueCount++
+			}
+			if issue.Code != "" && !acc.issueSet[issue.Code] {
+				acc.summary.RepresentativeIssue = append(acc.summary.RepresentativeIssue, issue)
+				acc.issueSet[issue.Code] = true
+			}
+			recommendation := strings.TrimSpace(issue.Suggestion)
+			if recommendation == "" {
+				recommendation = visualQARecommendationForIssue(issue)
+			}
+			if recommendation != "" && !acc.recommendationSet[recommendation] {
+				acc.summary.Recommendations = append(acc.summary.Recommendations, recommendation)
+				acc.recommendationSet[recommendation] = true
+			}
+		}
+	}
+
+	summaries := make([]visualQAShotSummary, 0, len(order))
+	for _, shotID := range order {
+		acc := byShot[shotID]
+		frameCount := float64(acc.summary.FrameCount)
+		acc.summary.MetricSummary = map[string]float64{
+			"avgTopLeftTextZoneEdgeDensity": roundMetric(acc.topLeftSum / frameCount),
+			"maxTopLeftTextZoneEdgeDensity": roundMetric(acc.maxTopLeft),
+			"avgLowerThirdEdgeDensity":      roundMetric(acc.lowerSum / frameCount),
+			"maxLowerThirdEdgeDensity":      roundMetric(acc.maxLower),
+			"avgFullFrameEdgeDensity":       roundMetric(acc.fullSum / frameCount),
+			"maxFullFrameEdgeDensity":       roundMetric(acc.maxFull),
+		}
+		acc.summary.Score = 100 - acc.summary.BlockingIssueCount*18 - acc.summary.WarningIssueCount*5
+		if acc.summary.Score < 0 {
+			acc.summary.Score = 0
+		}
+		acc.summary.Conclusion = visualQAShotConclusion(acc.summary)
+		if len(acc.summary.Recommendations) == 0 && !acc.summary.Passed {
+			acc.summary.Recommendations = append(acc.summary.Recommendations, "压缩该 shot 的文字层级，降低背景复杂度后重新生成。")
+		}
+		summaries = append(summaries, acc.summary)
+	}
+	return summaries
+}
+
+func visualQAShotConclusion(summary visualQAShotSummary) string {
+	if summary.BlockingIssueCount > 0 {
+		return fmt.Sprintf("%s 未通过：发现 %d 个阻断问题，建议返修并重生成该 shot。", summary.ShotID, summary.BlockingIssueCount)
+	}
+	if summary.WarningIssueCount > 0 {
+		return fmt.Sprintf("%s 通过但有 %d 个警告，建议人工复看并微调后再进入最终交付。", summary.ShotID, summary.WarningIssueCount)
+	}
+	return fmt.Sprintf("%s 通过：抽帧文字安全区和画面复杂度稳定。", summary.ShotID)
+}
+
+func visualQARecommendationForIssue(issue visualQAIssue) string {
+	switch issue.Code {
+	case "top_left_text_zone_crowded", "top_left_text_zone_busy":
+		return "减少左上角品牌、镜头编号或源画面文字，只保留一个信息层。"
+	case "lower_third_text_zone_crowded", "lower_third_text_zone_busy":
+		return "压缩底部字幕和标题行数，避免主标题、字幕和原片字幕叠加。"
+	case "frame_visual_clutter_high":
+		return "降低背景细节和伪 UI 密度，放大主体并加深遮罩。"
+	default:
+		return ""
+	}
+}
+
+func visualQARepairPlan(summaries []visualQAShotSummary) map[string]interface{} {
+	regenerate := []string{}
+	review := []string{}
+	recommendations := []string{}
+	seenRecommendation := map[string]bool{}
+	for _, summary := range summaries {
+		if summary.NeedsRegeneration {
+			regenerate = append(regenerate, summary.ShotID)
+		} else if summary.WarningIssueCount > 0 {
+			review = append(review, summary.ShotID)
+		}
+		for _, recommendation := range summary.Recommendations {
+			if recommendation == "" || seenRecommendation[recommendation] {
+				continue
+			}
+			recommendations = append(recommendations, recommendation)
+			seenRecommendation[recommendation] = true
+		}
+	}
+
+	nextAction := "approve"
+	conclusion := "所有 shot 抽帧 QA 通过，可以进入发布文案和交付。"
+	if len(regenerate) > 0 {
+		nextAction = "regenerate_shots"
+		conclusion = fmt.Sprintf("%d 个 shot 需要返修重生成：%s。", len(regenerate), strings.Join(regenerate, ", "))
+	} else if len(review) > 0 {
+		nextAction = "manual_review"
+		conclusion = fmt.Sprintf("%d 个 shot 有警告，建议人工复看：%s。", len(review), strings.Join(review, ", "))
+	}
+
+	return map[string]interface{}{
+		"needsRegeneration":       len(regenerate) > 0,
+		"nextAction":              nextAction,
+		"conclusion":              conclusion,
+		"regenerateShotIds":       regenerate,
+		"manualReviewShotIds":     review,
+		"globalRecommendations":   recommendations,
+		"regenerateShotCount":     len(regenerate),
+		"manualReviewShotCount":   len(review),
+		"totalEvaluatedShotCount": len(summaries),
+	}
 }
 
 func visualQAContactSheetTile(frameCount int) string {

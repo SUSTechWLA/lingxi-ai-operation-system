@@ -29,6 +29,26 @@ flowchart LR
 
 contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 `4x2`，避免固定 `4x4` 产生大块空黑区域。
 
+## Shot 级量化输出
+
+每个抽帧都会根据 `shotList` 映射回对应 shot。报告中的 `shotSummaries` 会为每个 shot 输出：
+
+| 字段 | 说明 |
+|---|---|
+| `frameCount` | 当前 shot 被采样到的帧数 |
+| `metricSummary` | 左上文字区、底部三分之一区域、全帧复杂度的平均值和最大值 |
+| `blockingIssueCount` / `warningIssueCount` | 阻断问题和警告数量 |
+| `score` | 当前 shot 的 0-100 分质量分 |
+| `needsRegeneration` | 是否建议返修后重生成该 shot |
+| `conclusion` | 给审核者看的明确结论 |
+| `recommendations` | 可执行修复建议，例如减少左上叠字、压缩底部字幕、降低背景复杂度 |
+
+顶层 `repairPlan` 会把所有 shot 聚合成下一步动作：
+
+- `approve`：所有 shot 通过，可以继续发布。
+- `manual_review`：没有阻断问题，但部分 shot 有警告，需要人工复看。
+- `regenerate_shots`：存在阻断问题，应先重生成指定 shot。
+
 ## 检查维度
 
 当前 QA 是确定性本地检查，不依赖云端视觉模型：
