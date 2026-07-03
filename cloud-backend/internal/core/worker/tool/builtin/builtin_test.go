@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
@@ -239,6 +240,80 @@ func TestLlmApiTool_Execute_UsesIntegerMaxTokensAndJSONMode(t *testing.T) {
 	rf, ok := gotBody["response_format"].(map[string]interface{})
 	if !ok || rf["type"] != "json_object" {
 		t.Fatalf("expected json_object response_format, got %#v", gotBody["response_format"])
+	}
+}
+
+func TestLlmApiTool_Execute_UsesRuntimeModelProviderConfig(t *testing.T) {
+	oldKey := os.Getenv("OPENAI_API_KEY")
+	oldBaseURL := os.Getenv("OPENAI_BASE_URL")
+	oldModel := os.Getenv("OPENAI_MODEL")
+	t.Cleanup(func() {
+		setOrUnsetEnv("OPENAI_API_KEY", oldKey)
+		setOrUnsetEnv("OPENAI_BASE_URL", oldBaseURL)
+		setOrUnsetEnv("OPENAI_MODEL", oldModel)
+		ClearRuntimeModelProviderConfig()
+	})
+
+	var initialHit bool
+	initialServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		initialHit = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"initial"},"finish_reason":"stop"}]}`))
+	}))
+	defer initialServer.Close()
+
+	var runtimeHit bool
+	var gotAuth string
+	var gotBody map[string]interface{}
+	runtimeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runtimeHit = true
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"runtime"},"finish_reason":"stop"}]}`))
+	}))
+	defer runtimeServer.Close()
+
+	SetVideoCreationConfig(config.OpenAIConfig{
+		APIKey:      "initial-key",
+		BaseURL:     initialServer.URL,
+		Model:       "initial-model",
+		MaxTokens:   128,
+		Temperature: 0.7,
+		Timeout:     5,
+	}, "")
+	SetRuntimeModelProviderConfig(RuntimeModelProviderConfig{
+		BaseURL: runtimeServer.URL,
+		APIKey:  "runtime-key",
+		Model:   "runtime-model",
+	})
+
+	lt := NewLlmApiTool(config.OpenAIConfig{
+		APIKey:      "initial-key",
+		BaseURL:     initialServer.URL,
+		Model:       "initial-model",
+		MaxTokens:   128,
+		Temperature: 0.7,
+		Timeout:     5,
+	})
+
+	result := lt.Execute(context.Background(), map[string]interface{}{"prompt": "hello"}, tool.ToolContext{})
+	if !result.Success {
+		t.Fatalf("expected success, got %s", result.Error)
+	}
+	if initialHit {
+		t.Fatal("llm_api used stale startup config instead of runtime model provider config")
+	}
+	if !runtimeHit {
+		t.Fatal("runtime model provider endpoint was not called")
+	}
+	if gotAuth != "Bearer runtime-key" {
+		t.Fatalf("expected runtime API key, got %q", gotAuth)
+	}
+	if gotBody["model"] != "runtime-model" {
+		t.Fatalf("expected runtime model, got %#v", gotBody["model"])
 	}
 }
 

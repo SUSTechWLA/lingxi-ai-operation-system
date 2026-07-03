@@ -26,10 +26,11 @@ func (t *ContentCheckerTool) Type() tool.ToolType { return tool.ToolTypeCustom }
 
 func (t *ContentCheckerTool) Manifest() tool.ToolManifest {
 	return tool.ToolManifest{
-		Name:        t.Name(),
-		Description: t.Description(),
-		Type:        "builtin",
-		Sandbox:     false,
+		Name:         t.Name(),
+		Description:  t.Description(),
+		Type:         "builtin",
+		Sandbox:      false,
+		Capabilities: []string{"bid_writing", "quality_check", "text_extraction"},
 		Parameters: map[string]tool.ParamDef{
 			"content": {
 				Type:        "string",

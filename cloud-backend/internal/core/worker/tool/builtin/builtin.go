@@ -30,6 +30,7 @@ func (t *LlmApiTool) Description() string { return "Call LLM API for chat comple
 func (t *LlmApiTool) Type() tool.ToolType { return tool.ToolTypeLLM }
 
 func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	cfg := mergeRuntimeModelProviderConfig(t.cfg)
 	prompt, _ := params["prompt"].(string)
 	if prompt == "" {
 		prompt, _ = params["message"].(string)
@@ -42,21 +43,21 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 	}
 	systemPrompt, _ := params["system_prompt"].(string)
 
-	if t.cfg.APIKey == "" {
+	if cfg.APIKey == "" {
 		return tool.FailureResult("OpenAI API key not configured")
 	}
 
-	model := t.cfg.Model
+	model := cfg.Model
 	if m, ok := params["model"].(string); ok && m != "" {
 		model = m
 	}
 
-	maxTokens := t.cfg.MaxTokens
+	maxTokens := cfg.MaxTokens
 	if mt, ok := intValue(params["max_tokens"]); ok {
 		maxTokens = mt
 	}
 
-	temperature := t.cfg.Temperature
+	temperature := cfg.Temperature
 	if temp, ok := floatValue(params["temperature"]); ok {
 		temperature = temp
 	}
@@ -87,7 +88,7 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 
 	body, _ := json.Marshal(requestBody)
 
-	baseURL := t.cfg.BaseURL
+	baseURL := cfg.BaseURL
 	if len(baseURL) > 0 && baseURL[len(baseURL)-1] != '/' {
 		baseURL += "/"
 	}
@@ -99,9 +100,9 @@ func (t *LlmApiTool) Execute(ctx context.Context, params map[string]interface{},
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.cfg.APIKey)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 
-	client := &http.Client{Timeout: time.Duration(t.cfg.Timeout) * time.Second}
+	client := &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return tool.FailureResult("LLM API call failed: " + err.Error())
@@ -223,10 +224,11 @@ func buildChatMessages(systemPrompt, userPrompt string, imageURLs []string) []in
 
 func (t *LlmApiTool) Manifest() tool.ToolManifest {
 	return tool.ToolManifest{
-		Name:        t.Name(),
-		Description: t.Description(),
-		Type:        "builtin",
-		Sandbox:     false,
+		Name:         t.Name(),
+		Description:  t.Description(),
+		Type:         "builtin",
+		Sandbox:      false,
+		Capabilities: []string{"bid_writing", "text_extraction", "content_generation", "knowledge_retrieval", "fact_gathering", "quality_check"},
 		Parameters: map[string]tool.ParamDef{
 			"prompt": {
 				Type:        "string",

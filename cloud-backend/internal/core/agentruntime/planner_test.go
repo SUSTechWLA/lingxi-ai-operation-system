@@ -134,6 +134,81 @@ func TestHeuristicPlanner_BidWritingUsesSnakeCaseFilePath(t *testing.T) {
 	}
 }
 
+func TestHeuristicPlanner_BidWritingParsesThenExportsWord(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "parse_bid_files",
+			Capabilities: []string{"bid_writing", "bid_parsing", "document_parsing"},
+			Parameters: map[string]tool.ParamDef{
+				"file_path": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"report_path": {Type: "string"},
+				"stdout":      {Type: "string"},
+			},
+		},
+		{
+			Name:         "convert_to_word",
+			Capabilities: []string{"document_export"},
+			Tags:         []string{"bid", "biaoshu", "word", "docx"},
+			Parameters: map[string]tool.ParamDef{
+				"content":      {Type: "string", Required: false},
+				"input_file":   {Type: "string", Required: false},
+				"project_name": {Type: "string", Required: false},
+			},
+			Output: map[string]tool.ParamDef{
+				"output_path": {Type: "string"},
+			},
+		},
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, 4)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请解析招标文件并生成技术标文档",
+		Domain:  "bid_writing",
+		Context: map[string]interface{}{
+			"file_path":    "E:\\bid\\sample.docx",
+			"project_name": "养护",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if len(plan.Steps) != 2 {
+		t.Fatalf("expected parse and export steps, got %#v", plan.Steps)
+	}
+	if plan.Steps[0].Tool != "parse_bid_files" || plan.Steps[1].Tool != "convert_to_word" {
+		t.Fatalf("unexpected bid writing pipeline: %#v", plan.Steps)
+	}
+	if got := plan.Steps[1].Arguments["input_file"]; got != "{{parse_bid_files.output.report_path}}" {
+		t.Fatalf("convert_to_word should consume parse report_path, got %#v", plan.Steps[1].Arguments)
+	}
+	if _, ok := plan.Steps[1].Arguments["content"]; ok {
+		t.Fatalf("convert_to_word should not receive request text content when input_file is wired: %#v", plan.Steps[1].Arguments)
+	}
+	if len(plan.Steps[1].DependsOn) != 1 || plan.Steps[1].DependsOn[0] != "parse_bid_files" {
+		t.Fatalf("convert_to_word should depend on parse_bid_files: %#v", plan.Steps[1].DependsOn)
+	}
+}
+
+func TestHeuristicPlanner_BidWritingRejectsGenericPublishingTools(t *testing.T) {
+	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
+		{Name: "llm_api", Capabilities: []string{"bid_writing", "content_generation"}},
+		{Name: "polisher", Capabilities: []string{"bid_writing", "quality_check"}},
+		{Name: "content_generator", Capabilities: []string{"bid_writing", "content_generation"}},
+		{Name: "content_checker", Capabilities: []string{"bid_writing", "quality_check"}},
+	}, 4)
+
+	_, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请解析招标文件并生成技术标文档。文件路径：E:\\bid\\sample.docx，项目名称：养护",
+		Domain:  "bid_writing",
+		Context: map[string]interface{}{"file_path": "E:\\bid\\sample.docx"},
+	})
+	if err == nil {
+		t.Fatal("bid_writing should require dedicated bid/document tools instead of generic publishing tools")
+	}
+}
+
 func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T) {
 	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
 		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},

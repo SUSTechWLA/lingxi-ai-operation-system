@@ -16,9 +16,6 @@ type GatewayPlannerClient struct {
 
 // NewGatewayPlannerClient creates a Gateway-backed planner LLM client.
 func NewGatewayPlannerClient(gateway *modelgateway.Gateway, model string) *GatewayPlannerClient {
-	if model == "" {
-		model = "gpt-4"
-	}
 	return &GatewayPlannerClient{gateway: gateway, model: model}
 }
 
@@ -27,20 +24,23 @@ func (c *GatewayPlannerClient) Complete(ctx context.Context, systemPrompt, userP
 		return "", fmt.Errorf("gateway planner client is not configured")
 	}
 
-	result, err := c.gateway.Execute(ctx, &modelgateway.ModelRequest{
+	req := &modelgateway.ModelRequest{
 		Capability: modelgateway.CapTextToText,
-		Model:      c.model,
 		Messages: []modelgateway.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
 		Parameters: map[string]interface{}{
-			"model":            c.model,
 			"temperature":     0.2,
 			"max_tokens":      2000,
 			"response_format": map[string]string{"type": "json_object"},
 		},
-	})
+	}
+	if c.model != "" {
+		req.Model = c.model
+		req.Parameters["model"] = c.model
+	}
+	result, err := c.gateway.Execute(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("gateway planner call: %w", err)
 	}

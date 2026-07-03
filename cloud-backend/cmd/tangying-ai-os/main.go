@@ -301,6 +301,7 @@ func main() {
 	handler.NewContextHandler(contextService).RegisterRoutes(r)
 	localRunnerHandler := localrunner.NewHandler(localRunnerService, stateMachine, authMiddleware.RequireAuth())
 	localRunnerHandler.RegisterRoutes(r)
+	tool.NewManifestHandler(toolManifestSvc).RegisterRoutes(r)
 
 	// Media management
 	var mediaSvc *media.MediaService
@@ -472,7 +473,7 @@ func buildAgentPlanner(cfg *config.Config, toolRegistry *tool.ToolRegistry, gw *
 	// fall back to direct OpenAI HTTP client when gateway is unavailable.
 	var plannerClient agentruntime.PlannerLLMClient
 	if gw != nil {
-		plannerClient = agentruntime.NewGatewayPlannerClient(gw, cfg.OpenAI.Model)
+		plannerClient = agentruntime.NewGatewayPlannerClient(gw, "")
 	} else {
 		plannerClient = agentruntime.NewOpenAIPlannerClient(cfg.OpenAI)
 	}

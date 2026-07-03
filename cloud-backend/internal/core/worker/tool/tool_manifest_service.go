@@ -125,6 +125,9 @@ func (s *ToolManifestService) DeregisterExternal(ctx context.Context, name strin
 // ListAll returns all tool manifests, using Redis cache for speed.
 // Cache miss → query DB → populate cache → return.
 func (s *ToolManifestService) ListAll(ctx context.Context) ([]*model.ToolManifestRecord, error) {
+	if s.rdb == nil {
+		return s.repo.FindAll(ctx)
+	}
 	// 1. Try Redis cache
 	cached, err := s.rdb.Get(ctx, toolCacheKey).Bytes()
 	if err == nil && len(cached) > 0 {
@@ -199,6 +202,9 @@ func (s *ToolManifestService) FormatForPrompt(ctx context.Context) (string, erro
 }
 
 func (s *ToolManifestService) invalidateCache(ctx context.Context) error {
+	if s.rdb == nil {
+		return nil
+	}
 	return s.rdb.Del(ctx, toolCacheKey).Err()
 }
 

@@ -43,6 +43,10 @@ func GetEnvOpenAIConfig() config.OpenAIConfig {
 // Runtime BaseURL/Model/APIKey take priority; env values serve as fallbacks.
 func GetVideoCreationOpenAIConfig() config.OpenAIConfig {
 	cfg := videoCreationOpenAICfg // env defaults
+	return mergeRuntimeModelProviderConfig(cfg)
+}
+
+func mergeRuntimeModelProviderConfig(cfg config.OpenAIConfig) config.OpenAIConfig {
 	runtime := GetRuntimeModelProviderConfig()
 	if runtime.BaseURL != "" {
 		cfg.BaseURL = runtime.BaseURL

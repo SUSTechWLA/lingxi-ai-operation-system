@@ -143,7 +143,7 @@ func (p *HeuristicPlanner) selectTools(domain, message string) []*tool.ToolManif
 		if plannerDisallowsToolForDomain(manifest.Name, domain) {
 			continue
 		}
-		if hasCapability(manifest, domain) {
+		if manifestMatchesPlannerDomain(manifest, domain) {
 			hasDomainCapability = true
 		}
 		score := scoreTool(manifest, domain, message)
@@ -155,7 +155,7 @@ func (p *HeuristicPlanner) selectTools(domain, message string) []*tool.ToolManif
 	if hasDomainCapability {
 		filtered := scoredTools[:0]
 		for _, item := range scoredTools {
-			if hasCapability(item.manifest, domain) {
+			if manifestMatchesPlannerDomain(item.manifest, domain) {
 				filtered = append(filtered, item)
 			}
 		}
@@ -200,6 +200,10 @@ func hasCapability(manifest *tool.ToolManifest, capability string) bool {
 func phaseRank(manifest *tool.ToolManifest) int {
 	joined := strings.Join(append([]string{manifest.Name}, manifest.Capabilities...), " ")
 	switch {
+	case strings.Contains(joined, "bid_parsing") || strings.Contains(joined, "document_parsing"):
+		return 5
+	case strings.Contains(joined, "document_export") || strings.Contains(joined, "word_export"):
+		return 50
 	case strings.Contains(joined, "pipeline_selection"):
 		return 1
 	case strings.Contains(joined, "capability_preflight"):
@@ -230,6 +234,9 @@ func scoreTool(manifest *tool.ToolManifest, domain, message string) int {
 				score += 100
 			}
 		}
+		if manifestMatchesPlannerDomain(manifest, domain) {
+			score += 60
+		}
 		for _, tag := range manifest.Tags {
 			if tag == domain {
 				score += 30
@@ -245,6 +252,17 @@ func scoreTool(manifest *tool.ToolManifest, domain, message string) int {
 		score += 20
 	}
 	return score
+}
+
+func manifestMatchesPlannerDomain(manifest *tool.ToolManifest, domain string) bool {
+	if manifest == nil || domain == "" {
+		return false
+	}
+	if hasCapability(manifest, domain) {
+		return true
+	}
+	include, _ := domainCapabilities(domain)
+	return capabilityOverlaps(manifest, include)
 }
 
 func inferDomain(message string) string {
@@ -331,7 +349,8 @@ func fillRequestRequiredInputs(steps []AgentStep, manifests map[string]*tool.Too
 				}
 			}
 			switch name {
-			case "topic", "brief", "query", "searchQuery", "prompt":
+			case "topic", "brief", "query", "searchQuery", "prompt",
+				"command", "source", "text", "content":
 				if req.Message != "" {
 					step.Arguments[name] = req.Message
 				}
@@ -341,7 +360,47 @@ func fillRequestRequiredInputs(steps []AgentStep, manifests map[string]*tool.Too
 				}
 			}
 		}
+		if _, ok := step.Arguments["input_file"]; !ok {
+			if producerID, ok := producedByField(steps[:i], manifests, "report_path"); ok {
+				step.Arguments["input_file"] = fmt.Sprintf("{{%s.output.report_path}}", producerID)
+				appendDependencyIfMissing(step, producerID)
+			}
+		}
+		// Also fill non-required message-type params that the tool expects.
+		// For file conversion tools, prefer the upstream file reference over
+		// raw request text so the generated artifact uses produced content.
+		for name := range manifest.Parameters {
+			if _, ok := step.Arguments[name]; ok {
+				continue
+			}
+			if name == "content" {
+				if _, hasInputFile := step.Arguments["input_file"]; hasInputFile {
+					continue
+				}
+			}
+			switch name {
+			case "prompt", "topic", "brief", "query", "searchQuery",
+				"text", "content":
+				if req.Message != "" {
+					step.Arguments[name] = req.Message
+				}
+			}
+		}
 	}
+}
+
+func producedByField(steps []AgentStep, manifests map[string]*tool.ToolManifest, field string) (string, bool) {
+	for i := len(steps) - 1; i >= 0; i-- {
+		step := steps[i]
+		manifest := manifests[step.Tool]
+		if manifest == nil {
+			continue
+		}
+		if _, ok := manifest.Output[field]; ok {
+			return step.ID, true
+		}
+	}
+	return "", false
 }
 
 func requiredParamNames(params map[string]tool.ParamDef) []string {

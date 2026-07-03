@@ -57,14 +57,15 @@ func (t *PolisherTool) Execute(ctx context.Context, params map[string]interface{
 }
 
 func (t *PolisherTool) callOpenAI(ctx context.Context, systemPrompt, userPrompt, polishType string, toolCtx tool.ToolContext) tool.ToolResult {
-	if t.cfg.APIKey == "" {
+	cfg := mergeRuntimeModelProviderConfig(t.cfg)
+	if cfg.APIKey == "" {
 		return tool.FailureResult("API key is not configured")
 	}
 
 	requestBody := map[string]interface{}{
-		"model":       t.cfg.Model,
-		"temperature": t.cfg.Temperature,
-		"max_tokens":  t.cfg.MaxTokens,
+		"model":       cfg.Model,
+		"temperature": cfg.Temperature,
+		"max_tokens":  cfg.MaxTokens,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userPrompt},
@@ -73,7 +74,7 @@ func (t *PolisherTool) callOpenAI(ctx context.Context, systemPrompt, userPrompt,
 
 	body, _ := json.Marshal(requestBody)
 
-	baseURL := t.cfg.BaseURL
+	baseURL := cfg.BaseURL
 	if len(baseURL) > 0 && baseURL[len(baseURL)-1] != '/' {
 		baseURL += "/"
 	}
@@ -85,9 +86,9 @@ func (t *PolisherTool) callOpenAI(ctx context.Context, systemPrompt, userPrompt,
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.cfg.APIKey)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 
-	client := &http.Client{Timeout: time.Duration(t.cfg.Timeout) * time.Second}
+	client := &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return tool.FailureResult("LLM API call failed: " + err.Error())
@@ -130,10 +131,11 @@ func (t *PolisherTool) callOpenAI(ctx context.Context, systemPrompt, userPrompt,
 
 func (t *PolisherTool) Manifest() tool.ToolManifest {
 	return tool.ToolManifest{
-		Name:        t.Name(),
-		Description: t.Description(),
-		Type:        "builtin",
-		Sandbox:     false,
+		Name:         t.Name(),
+		Description:  t.Description(),
+		Type:         "builtin",
+		Sandbox:      false,
+		Capabilities: []string{"bid_writing", "quality_check", "text_extraction"},
 		Parameters: map[string]tool.ParamDef{
 			"text": {
 				Type:        "string",

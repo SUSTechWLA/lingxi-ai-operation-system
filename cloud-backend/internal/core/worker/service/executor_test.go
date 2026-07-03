@@ -112,8 +112,7 @@ func TestExecuteToolUsesExternalManifestTimeout(t *testing.T) {
 	if err := json.Unmarshal(result.Stdout, &output); err != nil {
 		t.Fatalf("stdout should be JSON output: %v", err)
 	}
-	data, _ := output["data"].(map[string]interface{})
-	if data["report_path"] != "E:/bid/out/analysis.md" {
+	if output["report_path"] != "E:/bid/out/analysis.md" {
 		t.Fatalf("unexpected output: %#v", output)
 	}
 }

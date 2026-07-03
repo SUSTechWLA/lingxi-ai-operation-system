@@ -133,8 +133,21 @@ func (t *ExternalTool) Execute(ctx context.Context, params map[string]interface{
 		return tool.FailureResult(fmt.Sprintf("external tool '%s' failed: %s", toolName, message))
 	}
 
-	result["tool"] = toolName
-	return tool.SuccessResult(result)
+	output := result
+	if data, ok := result["data"].(map[string]interface{}); ok {
+		output = make(map[string]interface{}, len(data)+3)
+		for k, v := range data {
+			output[k] = v
+		}
+		if stderr, ok := result["stderr"]; ok {
+			output["stderr"] = stderr
+		}
+		if stdout, ok := result["stdout"]; ok {
+			output["stdout"] = stdout
+		}
+	}
+	output["tool"] = toolName
+	return tool.SuccessResult(output)
 }
 
 func externalHTTPRequestTimeout(manifest *tool.ToolManifest) time.Duration {

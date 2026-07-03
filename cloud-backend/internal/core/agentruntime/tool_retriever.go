@@ -166,15 +166,19 @@ func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, 
 }
 
 func plannerDisallowsToolForDomain(toolName, domain string) bool {
-	if domain != "video_creation" {
-		return false
+	switch domain {
+	case "video_creation":
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "bash", "python", "llm_api", "external":
+			return true
+		}
+	case "bid_writing":
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "external", "llm_api", "polisher", "content_generator", "content_checker":
+			return true
+		}
 	}
-	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "bash", "python", "llm_api", "external":
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, freshRequired bool, prevSet map[string]bool) (float64, []string) {

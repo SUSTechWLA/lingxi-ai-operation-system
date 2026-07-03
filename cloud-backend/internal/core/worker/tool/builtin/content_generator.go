@@ -28,10 +28,11 @@ func (t *ContentGeneratorTool) Type() tool.ToolType { return tool.ToolTypeCustom
 
 func (t *ContentGeneratorTool) Manifest() tool.ToolManifest {
 	return tool.ToolManifest{
-		Name:        t.Name(),
-		Description: t.Description(),
-		Type:        "builtin",
-		Sandbox:     false,
+		Name:         t.Name(),
+		Description:  t.Description(),
+		Type:         "builtin",
+		Sandbox:      false,
+		Capabilities: []string{"bid_writing", "content_generation", "text_extraction", "knowledge_retrieval"},
 		Parameters: map[string]tool.ParamDef{
 			"prompt": {
 				Type:        "string",
