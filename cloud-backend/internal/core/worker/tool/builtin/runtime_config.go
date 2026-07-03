@@ -107,6 +107,7 @@ func SetRuntimeModelProviderConfig(cfg RuntimeModelProviderConfig) {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
 	runtimeModelProviderConfig = cfg
+	syncOpenAIEnvLocked(runtimeModelProviderConfig)
 	persistRuntimeConfigLocked()
 }
 
@@ -161,6 +162,19 @@ func loadRuntimeConfigLocked() {
 			APIKey:  apiKey,
 			Model:   disk.Model,
 		}
+		syncOpenAIEnvLocked(runtimeModelProviderConfig)
+	}
+}
+
+func syncOpenAIEnvLocked(cfg RuntimeModelProviderConfig) {
+	if cfg.APIKey != "" {
+		_ = os.Setenv("OPENAI_API_KEY", cfg.APIKey)
+	}
+	if cfg.BaseURL != "" {
+		_ = os.Setenv("OPENAI_BASE_URL", cfg.BaseURL)
+	}
+	if cfg.Model != "" {
+		_ = os.Setenv("OPENAI_MODEL", cfg.Model)
 	}
 }
 

@@ -316,20 +316,36 @@ func main() {
 
 	agentRunRepo := agentruntime.NewRepository(pool)
 
+	builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
+	builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
+	builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
+
 	// ── ModelGateway (text-only, decoupled from VideoCreationEnabled) ──
 	var gw *modelgateway.Gateway
 	gw = modelgateway.NewGateway(cfg.Video.ModelProviderMode)
 	if cfg.Video.ModelProviderMode == "real" {
-		openaiProvider := openai.NewProvider()
+		openaiProvider := openai.NewProviderWithConfigResolver(func() openai.Config {
+			effective := builtin.GetVideoCreationOpenAIConfig()
+			if effective.APIKey == "" {
+				if localCfg, ok := builtin.TryFetchLocalAgentConfig(); ok {
+					builtin.SetRuntimeModelProviderConfig(localCfg)
+					effective = builtin.GetVideoCreationOpenAIConfig()
+				}
+			}
+			return openai.Config{
+				APIKey:      effective.APIKey,
+				BaseURL:     effective.BaseURL,
+				Model:       effective.Model,
+				MaxTokens:   effective.MaxTokens,
+				Temperature: effective.Temperature,
+			}
+		})
 		gw.RegisterProvider(openaiProvider, modelgateway.CapTextToText)
 	} else {
 		fakeProvider := fake.NewProvider()
 		gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
 	}
 	builtin.SetModelGateway(gw)
-	builtin.SetVideoCreationConfig(cfg.OpenAI, cfg.Video.SkillRoot)
-	builtin.SetEncryptionSecret(cfg.Auth.TokenSecret)
-	builtin.SetRuntimeConfigPersistPath(filepath.Join(cfg.Video.SkillRoot, "..", "runtime-model-provider.json"))
 	zap.L().Info("ModelGateway initialized (text-only, biaoshu core edition)",
 		zap.String("mode", cfg.Video.ModelProviderMode))
 

@@ -8,16 +8,30 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
 )
 
+// Config is the effective OpenAI-compatible provider configuration.
+type Config struct {
+	APIKey      string
+	BaseURL     string
+	Model       string
+	MaxTokens   int
+	Temperature float64
+}
+
+// ConfigResolver returns the latest provider configuration.
+type ConfigResolver func() Config
+
 // Provider implements modelgateway.Provider for OpenAI Images API (DALL-E).
 type Provider struct {
-	apiKey  string
-	baseURL string
-	client  *http.Client
+	apiKey         string
+	baseURL        string
+	configResolver ConfigResolver
+	client         *http.Client
 }
 
 // NewProvider creates a new OpenAI image generation provider.
@@ -25,12 +39,34 @@ type Provider struct {
 func NewProvider() *Provider {
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://api.openai.com"
+		baseURL = "https://api.openai.com/v1"
 	}
+	return NewProviderWithConfig(Config{
+		APIKey:  os.Getenv("OPENAI_API_KEY"),
+		BaseURL: baseURL,
+		Model:   os.Getenv("OPENAI_MODEL"),
+	})
+}
+
+// NewProviderWithConfig creates a provider from a fixed configuration.
+func NewProviderWithConfig(cfg Config) *Provider {
+	return NewProviderWithConfigResolver(func() Config {
+		return cfg
+	})
+}
+
+// NewProviderWithConfigResolver creates a provider that resolves configuration
+// for every request, allowing runtime model-provider updates without restart.
+func NewProviderWithConfigResolver(resolver ConfigResolver) *Provider {
+	if resolver == nil {
+		resolver = func() Config { return Config{} }
+	}
+	cfg := resolver()
 	return &Provider{
-		apiKey:  os.Getenv("OPENAI_API_KEY"),
-		baseURL: baseURL,
-		client:  &http.Client{Timeout: 120 * time.Second},
+		apiKey:         cfg.APIKey,
+		baseURL:        cfg.BaseURL,
+		configResolver: resolver,
+		client:         &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -41,11 +77,12 @@ func (p *Provider) Supports(cap modelgateway.Capability) bool {
 }
 
 func (p *Provider) Health(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/v1/models", nil)
+	cfg := p.effectiveConfig()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openAIEndpoint(cfg.BaseURL, "/models"), nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return err
@@ -78,7 +115,8 @@ type imageResponse struct {
 }
 
 func (p *Provider) Execute(ctx context.Context, req *modelgateway.ModelRequest) (*modelgateway.ModelResult, error) {
-	if p.apiKey == "" {
+	cfg := p.effectiveConfig()
+	if cfg.APIKey == "" {
 		return nil, &modelgateway.GatewayError{
 			Code:    modelgateway.ErrAuthFailed,
 			Message: "OPENAI_API_KEY is not set",
@@ -87,16 +125,31 @@ func (p *Provider) Execute(ctx context.Context, req *modelgateway.ModelRequest) 
 	}
 
 	if req.Capability == modelgateway.CapTextToText {
-		return p.executeChatCompletion(ctx, req)
+		return p.executeChatCompletion(ctx, req, cfg)
 	}
 
-	return p.executeImageGeneration(ctx, req)
+	return p.executeImageGeneration(ctx, req, cfg)
 }
 
-func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.ModelRequest) (*modelgateway.ModelResult, error) {
-	model := stringParam(req.Parameters, "model", "gpt-4")
-	temperature := floatParam(req.Parameters, "temperature", 0.2)
-	maxTokens := intParam(req.Parameters, "max_tokens", 2000)
+func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.ModelRequest, cfg Config) (*modelgateway.ModelResult, error) {
+	defaultModel := cfg.Model
+	if defaultModel == "" {
+		defaultModel = "gpt-4"
+	}
+	model := req.Model
+	if model == "" {
+		model = stringParam(req.Parameters, "model", defaultModel)
+	}
+	defaultTemperature := cfg.Temperature
+	if defaultTemperature == 0 {
+		defaultTemperature = 0.2
+	}
+	defaultMaxTokens := cfg.MaxTokens
+	if defaultMaxTokens == 0 {
+		defaultMaxTokens = 2000
+	}
+	temperature := floatParam(req.Parameters, "temperature", defaultTemperature)
+	maxTokens := intParam(req.Parameters, "max_tokens", defaultMaxTokens)
 
 	type chatMessage struct {
 		Role    string `json:"role"`
@@ -128,7 +181,7 @@ func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIEndpoint(cfg.BaseURL, "/chat/completions"), bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, &modelgateway.GatewayError{
 			Code:    modelgateway.ErrUnavailable,
@@ -136,7 +189,7 @@ func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.
 			Retry:   true,
 		}
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
@@ -208,7 +261,7 @@ func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.
 	}
 
 	usage := modelgateway.Usage{
-		Model:     model,
+		Model:      model,
 		DurationMs: time.Since(start).Milliseconds(),
 	}
 	if decoded.Usage != nil {
@@ -222,7 +275,7 @@ func (p *Provider) executeChatCompletion(ctx context.Context, req *modelgateway.
 	}, nil
 }
 
-func (p *Provider) executeImageGeneration(ctx context.Context, req *modelgateway.ModelRequest) (*modelgateway.ModelResult, error) {
+func (p *Provider) executeImageGeneration(ctx context.Context, req *modelgateway.ModelRequest, cfg Config) (*modelgateway.ModelResult, error) {
 	prompt, _ := req.Parameters["prompt"].(string)
 	if prompt == "" {
 		return nil, &modelgateway.GatewayError{
@@ -253,7 +306,7 @@ func (p *Provider) executeImageGeneration(ctx context.Context, req *modelgateway
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/images/generations", bytes.NewReader(bodyBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIEndpoint(cfg.BaseURL, "/images/generations"), bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, &modelgateway.GatewayError{
 			Code:    modelgateway.ErrUnavailable,
@@ -261,7 +314,7 @@ func (p *Provider) executeImageGeneration(ctx context.Context, req *modelgateway
 			Retry:   true,
 		}
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(httpReq)
@@ -325,6 +378,28 @@ func (p *Provider) executeImageGeneration(ctx context.Context, req *modelgateway
 			DurationMs: 0,
 		},
 	}, nil
+}
+
+func (p *Provider) effectiveConfig() Config {
+	cfg := Config{}
+	if p.configResolver != nil {
+		cfg = p.configResolver()
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = p.apiKey
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = p.baseURL
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.openai.com/v1"
+	}
+	return cfg
+}
+
+func openAIEndpoint(baseURL, resourcePath string) string {
+	base := strings.TrimRight(baseURL, "/")
+	return base + resourcePath
 }
 
 func classifyError(statusCode int, body string) *modelgateway.GatewayError {

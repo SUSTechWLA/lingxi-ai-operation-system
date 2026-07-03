@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -91,19 +92,139 @@ func (h *ReviseHandler) Revise(c *gin.Context) {
 		return
 	}
 
-	// Parse the LLM response: expect JSON { "revisedContent": "...", "summary": "..." }
-	var parsed ReviseResponse
-	if parseErr := json.Unmarshal([]byte(result.Content), &parsed); parseErr != nil {
-		// If JSON parsing fails, treat the entire response as revisedContent.
-		parsed.RevisedContent = result.Content
-		parsed.Summary = "AI revision completed"
-	}
-	if parsed.Summary == "" {
-		parsed.Summary = "AI revision completed"
-	}
-	parsed.Model = result.Usage.Model
+	parsed := parseReviseModelResponse(result.Content, result.Usage.Model)
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "ok", "data": parsed})
+}
+
+func parseReviseModelResponse(content, model string) ReviseResponse {
+	normalized := stripMarkdownCodeFence(strings.TrimSpace(content))
+	var parsed ReviseResponse
+	if err := json.Unmarshal([]byte(normalized), &parsed); err == nil && strings.TrimSpace(parsed.RevisedContent) != "" {
+		return finalizeReviseResponse(parsed, model)
+	}
+
+	if loose, ok := parseLooseReviseJSON(normalized); ok {
+		return finalizeReviseResponse(loose, model)
+	}
+
+	return finalizeReviseResponse(ReviseResponse{
+		RevisedContent: content,
+		Summary:        "AI revision completed",
+	}, model)
+}
+
+func finalizeReviseResponse(resp ReviseResponse, model string) ReviseResponse {
+	if resp.Summary == "" {
+		resp.Summary = "AI revision completed"
+	}
+	resp.Model = model
+	return resp
+}
+
+func stripMarkdownCodeFence(content string) string {
+	if !strings.HasPrefix(content, "```") {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) < 2 {
+		return content
+	}
+	if strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+		return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+	}
+	return content
+}
+
+func parseLooseReviseJSON(content string) (ReviseResponse, bool) {
+	revised, ok := extractLooseJSONStringField(content, "revisedContent")
+	if !ok || strings.TrimSpace(revised) == "" {
+		return ReviseResponse{}, false
+	}
+	summary, _ := extractLooseJSONStringField(content, "summary")
+	return ReviseResponse{
+		RevisedContent: revised,
+		Summary:        summary,
+	}, true
+}
+
+func extractLooseJSONStringField(content, field string) (string, bool) {
+	key := `"` + field + `"`
+	keyIndex := strings.Index(content, key)
+	if keyIndex < 0 {
+		return "", false
+	}
+	afterKey := content[keyIndex+len(key):]
+	colonIndex := strings.Index(afterKey, ":")
+	if colonIndex < 0 {
+		return "", false
+	}
+	afterColon := strings.TrimLeft(afterKey[colonIndex+1:], " \t\r\n")
+	if !strings.HasPrefix(afterColon, `"`) {
+		return "", false
+	}
+	return scanLooseJSONString(afterColon[1:])
+}
+
+func scanLooseJSONString(input string) (string, bool) {
+	var sb strings.Builder
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		switch ch {
+		case '\\':
+			if i+1 >= len(input) {
+				sb.WriteByte(ch)
+				continue
+			}
+			next := input[i+1]
+			switch next {
+			case '"', '\\', '/':
+				sb.WriteByte(next)
+				i++
+			case 'b':
+				sb.WriteByte('\b')
+				i++
+			case 'f':
+				sb.WriteByte('\f')
+				i++
+			case 'n':
+				sb.WriteByte('\n')
+				i++
+			case 'r':
+				sb.WriteByte('\r')
+				i++
+			case 't':
+				sb.WriteByte('\t')
+				i++
+			case 'u':
+				if i+5 < len(input) {
+					if value, err := strconv.ParseInt(input[i+2:i+6], 16, 32); err == nil {
+						sb.WriteRune(rune(value))
+						i += 5
+						continue
+					}
+				}
+				sb.WriteByte(ch)
+			default:
+				sb.WriteByte(ch)
+				sb.WriteByte(next)
+				i++
+			}
+		case '"':
+			if isLooseJSONStringTerminator(input[i+1:]) {
+				return sb.String(), true
+			}
+			sb.WriteByte(ch)
+		default:
+			sb.WriteByte(ch)
+		}
+	}
+	return "", false
+}
+
+func isLooseJSONStringTerminator(rest string) bool {
+	trimmed := strings.TrimLeft(rest, " \t\r\n")
+	return strings.HasPrefix(trimmed, ",") || strings.HasPrefix(trimmed, "}")
 }
 
 // buildReviseSystemPrompt constructs the system prompt based on artifact kind.

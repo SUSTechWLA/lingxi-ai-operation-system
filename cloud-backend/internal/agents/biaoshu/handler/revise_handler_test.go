@@ -59,6 +59,34 @@ func TestReviseMissingFields(t *testing.T) {
 	t.Log("handler field validation tested via integration tests")
 }
 
+func TestParseReviseModelResponseExtractsMarkdownFromLooseJSON(t *testing.T) {
+	modelOutput := `{
+  "revisedContent": "# 招标文件解析报告\n\n源文件: E:\yhbs\招标文件\招标文件_converted.docx\n\n## 项目基本信息\n\n保留 Markdown 正文。",
+  "summary": "删除原文部分"
+}`
+
+	parsed := parseReviseModelResponse(modelOutput, "deepseek-v4-pro")
+
+	if strings.HasPrefix(strings.TrimSpace(parsed.RevisedContent), "{") {
+		t.Fatalf("revisedContent should be markdown, got JSON wrapper: %q", parsed.RevisedContent)
+	}
+	if !strings.HasPrefix(parsed.RevisedContent, "# 招标文件解析报告") {
+		t.Fatalf("expected markdown heading, got %q", parsed.RevisedContent)
+	}
+	if !strings.Contains(parsed.RevisedContent, `E:\yhbs\招标文件\招标文件_converted.docx`) {
+		t.Fatalf("expected Windows path to be preserved, got %q", parsed.RevisedContent)
+	}
+	if strings.Contains(parsed.RevisedContent, `"revisedContent"`) {
+		t.Fatalf("revisedContent should not contain JSON field name: %q", parsed.RevisedContent)
+	}
+	if parsed.Summary != "删除原文部分" {
+		t.Fatalf("unexpected summary: %q", parsed.Summary)
+	}
+	if parsed.Model != "deepseek-v4-pro" {
+		t.Fatalf("unexpected model: %q", parsed.Model)
+	}
+}
+
 func TestBuildReviseSystemPrompt(t *testing.T) {
 	prompt := buildReviseSystemPrompt("BID_CHAPTERS", "施工组织方案")
 	if !strings.Contains(prompt, "施工组织方案") {
