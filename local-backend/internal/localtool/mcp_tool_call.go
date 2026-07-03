@@ -2,9 +2,14 @@ package localtool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,10 +18,15 @@ import (
 
 type mcpToolCallExecutor struct {
 	loadProviders MCPProviderLoader
+	dataDir       string
 }
 
 func NewMCPToolCallExecutor(loader MCPProviderLoader) Executor {
 	return &mcpToolCallExecutor{loadProviders: loader}
+}
+
+func NewMCPToolCallExecutorWithDataDir(loader MCPProviderLoader, dataDir string) Executor {
+	return &mcpToolCallExecutor{loadProviders: loader, dataDir: dataDir}
 }
 
 func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, error) {
@@ -55,7 +65,7 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	client := localmcp.NewClient(provider, &http.Client{Timeout: timeout})
 	defer client.Close()
 	if requests := slicePayload(job.Payload, "externalGenerationRequests"); len(requests) > 0 {
-		return executeExternalGenerationBatch(ctx, client, provider.ID, toolName, requests)
+		return e.executeExternalGenerationBatch(ctx, client, provider.ID, toolName, job, requests)
 	}
 	args := mapPayload(job.Payload, "arguments")
 	callResult, err := client.CallTool(ctx, toolName, args)
@@ -72,21 +82,64 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 	}}, nil
 }
 
-func executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client, providerID string, toolName string, requests []interface{}) (*Result, error) {
+func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client, providerID string, toolName string, job Job, requests []interface{}) (*Result, error) {
 	packages := make([]interface{}, 0, len(requests))
 	results := make([]interface{}, 0, len(requests))
 	remaining := make([]interface{}, 0)
-	for _, item := range requests {
+	maxReady := mcpMaxReadyGenerations(job)
+	readyCount := 0
+	batchDeadline := time.Now().Add(mcpBatchTimeout(job))
+	for idx, item := range requests {
 		request := mcpMapFromInterface(item)
+		requestToolName := mcpToolNameForExternalRequest(providerID, toolName, request)
 		args := mcpArgumentsFromExternalRequest(request)
-		callResult, err := client.CallTool(ctx, toolName, args)
+		requestTimeout := mcpRequestTimeout(job, request, batchDeadline)
 		result := map[string]interface{}{
 			"requestId":  request["requestId"],
 			"shotId":     request["shotId"],
 			"providerId": providerID,
-			"toolName":   toolName,
+			"toolName":   requestToolName,
 		}
+		if requestTimeout <= 0 {
+			result["status"] = "deferred"
+			result["reason"] = "generation_batch_timeout"
+			deferred := copyMap(request)
+			deferred["status"] = "deferred"
+			deferred["reason"] = "generation_batch_timeout"
+			remaining = append(remaining, deferred)
+			results = append(results, result)
+			e.deferRemainingRequests(requests[idx+1:], &remaining, &results, providerID, toolName, "generation_batch_timeout")
+			break
+		}
+		requestCtx, cancelRequest := context.WithTimeout(ctx, requestTimeout)
+		callResult, err := client.CallTool(requestCtx, requestToolName, args)
 		if err != nil {
+			cancelRequest()
+			if mcpIsTimeoutError(err) {
+				result["status"] = "deferred"
+				result["reason"] = "tool_call_timeout"
+				result["error"] = err.Error()
+				deferred := copyMap(request)
+				deferred["status"] = "deferred"
+				deferred["reason"] = "tool_call_timeout"
+				deferred["error"] = err.Error()
+				remaining = append(remaining, deferred)
+				results = append(results, result)
+				e.deferRemainingRequests(requests[idx+1:], &remaining, &results, providerID, toolName, "previous_generation_timeout")
+				break
+			}
+			if mcpIsProviderBusyError(err.Error()) {
+				result["status"] = "deferred"
+				result["reason"] = "provider_busy"
+				deferred := copyMap(request)
+				deferred["status"] = "deferred"
+				deferred["reason"] = "provider_busy"
+				deferred["error"] = err.Error()
+				remaining = append(remaining, deferred)
+				results = append(results, result)
+				e.deferRemainingRequests(requests[idx+1:], &remaining, &results, providerID, toolName, "provider_busy")
+				break
+			}
 			result["status"] = "failed"
 			result["error"] = err.Error()
 			failed := copyMap(request)
@@ -102,6 +155,26 @@ func executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client
 		result["isError"] = callResult.IsError
 		if callResult.IsError {
 			errorText := mcpErrorText(callResult)
+			if mcpIsProviderBusyError(errorText) {
+				result["status"] = "deferred"
+				result["reason"] = "provider_busy"
+				result["error"] = errorText
+				deferred := copyMap(request)
+				deferred["status"] = "deferred"
+				deferred["reason"] = "provider_busy"
+				deferred["error"] = errorText
+				deferred["mcpResult"] = map[string]interface{}{
+					"content":           callResult.Content,
+					"structuredContent": callResult.StructuredContent,
+					"isError":           callResult.IsError,
+					"error":             errorText,
+				}
+				remaining = append(remaining, deferred)
+				results = append(results, result)
+				e.deferRemainingRequests(requests[idx+1:], &remaining, &results, providerID, toolName, "provider_busy")
+				cancelRequest()
+				break
+			}
 			result["status"] = "failed"
 			result["error"] = errorText
 			failed := copyMap(request)
@@ -115,8 +188,81 @@ func executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client
 			}
 			remaining = append(remaining, failed)
 		} else {
-			packages = append(packages, shotAssetPackageFromMCPResult(providerID, request, callResult.StructuredContent))
+			structured := callResult.StructuredContent
+			media := e.resolveGeneratedMedia(requestCtx, client, providerID, requestToolName, job, request, structured)
+			cancelRequest()
+			currentReady := false
+			if len(media.StructuredContent) > 0 {
+				structured = media.StructuredContent
+				result["structuredContent"] = structured
+			}
+			if media.StorageRef != "" {
+				result["status"] = "ready"
+				result["storageRef"] = media.StorageRef
+				currentReady = true
+				if media.LocalPath != "" {
+					result["localPath"] = media.LocalPath
+				}
+			} else if submitID := mcpStringFromMap(structured, "submit_id", "submitId"); submitID != "" {
+				status := strings.ToLower(mcpStringFromMap(structured, "gen_status", "genStatus", "status"))
+				if mcpIsFailedGenerationStatus(status) {
+					errorText := mcpStringFromMap(structured, "error", "message", "fail_reason", "failReason")
+					if errorText == "" {
+						errorText = "mcp generation failed"
+					}
+					result["status"] = "failed"
+					result["submitId"] = submitID
+					result["genStatus"] = status
+					result["error"] = errorText
+					failed := copyMap(request)
+					failed["status"] = "failed"
+					failed["submitId"] = submitID
+					failed["genStatus"] = status
+					failed["error"] = errorText
+					failed["mcpResult"] = map[string]interface{}{
+						"content":           callResult.Content,
+						"structuredContent": structured,
+						"isError":           false,
+						"error":             errorText,
+					}
+					remaining = append(remaining, failed)
+					packages = append(packages, e.shotAssetPackageFromMCPResult(providerID, request, structured, media))
+					results = append(results, result)
+					continue
+				}
+				if status == "" {
+					status = "pending"
+				}
+				result["status"] = "pending"
+				result["submitId"] = submitID
+				result["genStatus"] = status
+				pending := copyMap(request)
+				pending["status"] = "pending"
+				pending["submitId"] = submitID
+				pending["genStatus"] = status
+				pending["mcpResult"] = map[string]interface{}{
+					"content":           callResult.Content,
+					"structuredContent": structured,
+					"isError":           false,
+				}
+				remaining = append(remaining, pending)
+				packages = append(packages, e.shotAssetPackageFromMCPResult(providerID, request, structured, media))
+				results = append(results, result)
+				e.deferRemainingRequests(requests[idx+1:], &remaining, &results, providerID, toolName, "previous_generation_pending")
+				break
+			}
+			packages = append(packages, e.shotAssetPackageFromMCPResult(providerID, request, structured, media))
+			if currentReady {
+				readyCount++
+			}
+			results = append(results, result)
+			if currentReady && maxReady > 0 && readyCount >= maxReady && idx+1 < len(requests) {
+				e.deferRemainingRequests(requests[idx+1:], &remaining, &results, providerID, toolName, "generation_budget_reached")
+				break
+			}
+			continue
 		}
+		cancelRequest()
 		results = append(results, result)
 	}
 	return &Result{Output: map[string]interface{}{
@@ -128,24 +274,408 @@ func executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client
 	}}, nil
 }
 
+func mcpMaxReadyGenerations(job Job) int {
+	for _, key := range []string{"maxReadyGenerations", "maxReadyExternalGenerations", "mcpMaxReadyGenerations", "mcp_max_ready_generations"} {
+		if value := mcpIntFromInterface(mcpFirstPresent(job.Payload, key)); value > 0 {
+			return value
+		}
+	}
+	return 2
+}
+
+func mcpToolNameForExternalRequest(providerID, defaultToolName string, request map[string]interface{}) string {
+	if explicit := strings.TrimSpace(mcpStringFromMap(request, "mcpTool", "toolName", "tool")); explicit != "" {
+		return explicit
+	}
+	toolName := strings.TrimSpace(defaultToolName)
+	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
+	if kind == "image" || kind == "reference_image" || kind == "keyframe" {
+		if strings.Contains(toolName, "generate_video") {
+			return strings.Replace(toolName, "generate_video", "generate_image", 1)
+		}
+		if strings.Contains(toolName, "generate_image") {
+			return toolName
+		}
+		if strings.Contains(toolName, ".") {
+			return toolName[:strings.LastIndex(toolName, ".")] + ".generate_image"
+		}
+		if strings.TrimSpace(providerID) != "" {
+			return providerID + ".generate_image"
+		}
+		return "generate_image"
+	}
+	if kind == "video" || kind == "shot_video" || kind == "" {
+		if strings.Contains(toolName, "generate_image") {
+			return strings.Replace(toolName, "generate_image", "generate_video", 1)
+		}
+		if toolName != "" {
+			return toolName
+		}
+		if strings.TrimSpace(providerID) != "" {
+			return providerID + ".generate_video"
+		}
+		return "generate_video"
+	}
+	if toolName != "" {
+		return toolName
+	}
+	if strings.TrimSpace(providerID) != "" {
+		return providerID + ".generate_video"
+	}
+	return "generate_video"
+}
+
+func mcpBatchTimeout(job Job) time.Duration {
+	if timeout := mcpDurationFromPayload(job.Payload, "mcpBatchTimeoutMs", "batchTimeoutMs", "mcp_batch_timeout_ms"); timeout > 0 {
+		return timeout
+	}
+	if timeout := mcpSecondsFromPayload(job.Payload, "mcpBatchTimeoutSec", "batchTimeoutSec", "mcp_batch_timeout_sec"); timeout > 0 {
+		return timeout
+	}
+	return 6 * time.Minute
+}
+
+func mcpRequestTimeout(job Job, request map[string]interface{}, batchDeadline time.Time) time.Duration {
+	timeout := mcpToolCallTimeout(job, request)
+	remaining := time.Until(batchDeadline)
+	if remaining <= 0 {
+		return 0
+	}
+	if timeout <= 0 || remaining < timeout {
+		return remaining
+	}
+	return timeout
+}
+
+func mcpCallToolWithTimeout(ctx context.Context, client *localmcp.Client, toolName string, args map[string]interface{}, timeout time.Duration) (*localmcp.ToolCallResult, error) {
+	if timeout <= 0 {
+		return client.CallTool(ctx, toolName, args)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return client.CallTool(callCtx, toolName, args)
+}
+
+func mcpToolCallTimeout(job Job, request map[string]interface{}) time.Duration {
+	if timeout := mcpDurationFromPayload(job.Payload, "mcpToolCallTimeoutMs", "toolCallTimeoutMs", "mcp_call_timeout_ms"); timeout > 0 {
+		return timeout
+	}
+	if timeout := mcpDurationFromPayload(request, "mcpToolCallTimeoutMs", "toolCallTimeoutMs", "mcp_call_timeout_ms"); timeout > 0 {
+		return timeout
+	}
+	target := mcpMapFromInterface(request["target"])
+	if timeout := mcpDurationFromPayload(target, "mcpToolCallTimeoutMs", "toolCallTimeoutMs", "mcp_call_timeout_ms"); timeout > 0 {
+		return timeout
+	}
+	if timeout := mcpSecondsFromPayload(job.Payload, "mcpToolCallTimeoutSec", "toolCallTimeoutSec", "mcp_call_timeout_sec"); timeout > 0 {
+		return timeout
+	}
+	if timeout := mcpSecondsFromPayload(request, "mcpToolCallTimeoutSec", "toolCallTimeoutSec", "mcp_call_timeout_sec"); timeout > 0 {
+		return timeout
+	}
+	if timeout := mcpSecondsFromPayload(target, "mcpToolCallTimeoutSec", "toolCallTimeoutSec", "mcp_call_timeout_sec"); timeout > 0 {
+		return timeout
+	}
+	return 5 * time.Minute
+}
+
+func mcpDurationFromPayload(payload map[string]interface{}, keys ...string) time.Duration {
+	for _, key := range keys {
+		if value := mcpIntFromInterface(mcpFirstPresent(payload, key)); value > 0 {
+			return time.Duration(value) * time.Millisecond
+		}
+	}
+	return 0
+}
+
+func mcpSecondsFromPayload(payload map[string]interface{}, keys ...string) time.Duration {
+	for _, key := range keys {
+		if value := mcpIntFromInterface(mcpFirstPresent(payload, key)); value > 0 {
+			return time.Duration(value) * time.Second
+		}
+	}
+	return 0
+}
+
+func mcpIsTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "context deadline exceeded") ||
+		strings.Contains(text, "client.timeout") ||
+		strings.Contains(text, "timeout awaiting") ||
+		strings.Contains(text, "i/o timeout")
+}
+
+func (e *mcpToolCallExecutor) deferRemainingRequests(items []interface{}, remaining *[]interface{}, results *[]interface{}, providerID, toolName, reason string) {
+	for _, futureItem := range items {
+		future := mcpMapFromInterface(futureItem)
+		futureToolName := mcpToolNameForExternalRequest(providerID, toolName, future)
+		deferred := copyMap(future)
+		deferred["status"] = "deferred"
+		deferred["reason"] = reason
+		*remaining = append(*remaining, deferred)
+		*results = append(*results, map[string]interface{}{
+			"requestId":  future["requestId"],
+			"shotId":     future["shotId"],
+			"providerId": providerID,
+			"toolName":   futureToolName,
+			"status":     "deferred",
+			"reason":     reason,
+		})
+	}
+}
+
+type mcpGeneratedMedia struct {
+	StorageRef        string
+	LocalPath         string
+	StructuredContent map[string]interface{}
+}
+
+func (e *mcpToolCallExecutor) resolveGeneratedMedia(ctx context.Context, client *localmcp.Client, providerID, toolName string, job Job, request map[string]interface{}, structured map[string]interface{}) mcpGeneratedMedia {
+	media := e.importGeneratedMediaRef(job, request, firstGeneratedMediaRef(structured), structured)
+	if media.StorageRef != "" {
+		return media
+	}
+	submitID := mcpStringFromMap(structured, "submit_id", "submitId")
+	if submitID == "" || strings.TrimSpace(e.dataDir) == "" || strings.TrimSpace(job.ProjectID) == "" {
+		return mcpGeneratedMedia{}
+	}
+	queryTool := mcpQueryResultToolName(providerID, toolName)
+	downloadDir := e.mcpDownloadDir(job.ProjectID, request)
+	if downloadDir == "" {
+		return mcpGeneratedMedia{}
+	}
+	pollTimeout := time.Duration(mcpIntFromInterface(mcpFirstPresent(mcpMapFromInterface(request["target"]), "pollTimeoutSec", "pollTimeout"))) * time.Second
+	if pollTimeout <= 0 {
+		pollTimeout = 4 * time.Minute
+	}
+	deadline := time.Now().Add(pollTimeout)
+	for {
+		callResult, err := mcpCallToolWithTimeout(ctx, client, queryTool, map[string]interface{}{
+			"submit_id":    submitID,
+			"download_dir": downloadDir,
+		}, mcpQueryToolCallTimeout(request))
+		if err != nil {
+			if mcpIsTimeoutError(err) {
+				return mcpGeneratedMedia{StructuredContent: map[string]interface{}{
+					"submit_id":  submitID,
+					"gen_status": "querying",
+					"error":      err.Error(),
+				}}
+			}
+			return mcpGeneratedMedia{StructuredContent: map[string]interface{}{
+				"submit_id":  submitID,
+				"gen_status": "failed",
+				"error":      err.Error(),
+			}}
+		}
+		if callResult != nil && callResult.IsError {
+			return mcpGeneratedMedia{StructuredContent: map[string]interface{}{
+				"submit_id":  submitID,
+				"gen_status": "failed",
+				"error":      mcpErrorText(callResult),
+			}}
+		}
+		if callResult != nil {
+			media = e.importGeneratedMediaRef(job, request, firstGeneratedMediaRef(callResult.StructuredContent), callResult.StructuredContent)
+			if media.StorageRef != "" {
+				return media
+			}
+			status := strings.ToLower(mcpStringFromMap(callResult.StructuredContent, "gen_status", "genStatus", "status"))
+			if status == "failed" || status == "fail" || status == "error" {
+				return mcpGeneratedMedia{StructuredContent: callResult.StructuredContent}
+			}
+		}
+		if time.Now().After(deadline) {
+			return mcpGeneratedMedia{}
+		}
+		select {
+		case <-ctx.Done():
+			return mcpGeneratedMedia{}
+		case <-time.After(8 * time.Second):
+		}
+	}
+}
+
+func mcpQueryToolCallTimeout(request map[string]interface{}) time.Duration {
+	if timeout := mcpDurationFromPayload(request, "mcpQueryToolCallTimeoutMs", "queryToolCallTimeoutMs", "mcp_query_timeout_ms"); timeout > 0 {
+		return timeout
+	}
+	target := mcpMapFromInterface(request["target"])
+	if timeout := mcpDurationFromPayload(target, "mcpQueryToolCallTimeoutMs", "queryToolCallTimeoutMs", "mcp_query_timeout_ms"); timeout > 0 {
+		return timeout
+	}
+	if timeout := mcpSecondsFromPayload(request, "mcpQueryToolCallTimeoutSec", "queryToolCallTimeoutSec", "mcp_query_timeout_sec"); timeout > 0 {
+		return timeout
+	}
+	if timeout := mcpSecondsFromPayload(target, "mcpQueryToolCallTimeoutSec", "queryToolCallTimeoutSec", "mcp_query_timeout_sec"); timeout > 0 {
+		return timeout
+	}
+	return 45 * time.Second
+}
+
+func mcpQueryResultToolName(providerID, toolName string) string {
+	name := strings.TrimSpace(toolName)
+	if strings.Contains(name, "generate_video") {
+		return strings.Replace(name, "generate_video", "query_result", 1)
+	}
+	if strings.Contains(name, "generate_image") {
+		return strings.Replace(name, "generate_image", "query_result", 1)
+	}
+	if strings.Contains(name, ".") {
+		prefix := name[:strings.LastIndex(name, ".")]
+		return prefix + ".query_result"
+	}
+	if providerID != "" {
+		return providerID + ".query_result"
+	}
+	return "query_result"
+}
+
+func (e *mcpToolCallExecutor) mcpDownloadDir(projectID string, request map[string]interface{}) string {
+	projectID = safeImportSegment(projectID, "project")
+	requestID := safeImportSegment(mcpStringFromMap(request, "requestId", "id"), "mcp-request")
+	dir := filepath.Join(e.dataDir, "cache", "mcp", projectID, requestID)
+	if err := ensureInside(e.dataDir, dir); err != nil {
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	return dir
+}
+
+func firstGeneratedMediaRef(structured map[string]interface{}) string {
+	if structured == nil {
+		return ""
+	}
+	for _, key := range []string{"storageRef", "localPath", "path", "videoPath", "imagePath", "mediaPath", "video_url", "videoUrl", "image_url", "imageUrl", "url", "outputUrl"} {
+		if value := mcpStringFromMap(structured, key); value != "" {
+			return value
+		}
+	}
+	resultJSON := mcpMapFromInterface(structured["result_json"])
+	for _, key := range []string{"videos", "images", "files", "outputs"} {
+		if ref := firstGeneratedMediaRefFromItems(interfaceSlice(resultJSON[key])); ref != "" {
+			return ref
+		}
+	}
+	return ""
+}
+
+func firstGeneratedMediaRefFromItems(items []interface{}) string {
+	for _, item := range items {
+		video := mcpMapFromInterface(item)
+		for _, key := range []string{"path", "localPath", "storageRef", "videoUrl", "video_url", "imageUrl", "image_url", "url", "outputUrl"} {
+			if value := mcpStringFromMap(video, key); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func (e *mcpToolCallExecutor) importGeneratedMediaRef(job Job, request map[string]interface{}, mediaRef string, structured map[string]interface{}) mcpGeneratedMedia {
+	mediaRef = strings.TrimSpace(mediaRef)
+	if mediaRef == "" {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	if strings.HasPrefix(mediaRef, "http://") || strings.HasPrefix(mediaRef, "https://") || strings.HasPrefix(mediaRef, "local://") {
+		return mcpGeneratedMedia{StorageRef: mediaRef, StructuredContent: structured}
+	}
+	if strings.TrimSpace(e.dataDir) == "" || strings.TrimSpace(job.ProjectID) == "" || !filepath.IsAbs(mediaRef) {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	source, err := os.Open(mediaRef)
+	if err != nil {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	defer source.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, source); err != nil {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	hashHex := hex.EncodeToString(hasher.Sum(nil))
+	if _, err := source.Seek(0, 0); err != nil {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	projectID := safeImportSegment(job.ProjectID, "project")
+	artifactID := safeImportSegment(mcpStringFromMap(request, "requestId", "id"), "mcp-video")
+	fallbackName := artifactID + ".mp4"
+	if strings.Contains(strings.ToLower(mcpStringFromMap(request, "kind", "generationKind", "assetKind")), "image") {
+		fallbackName = artifactID + ".png"
+	}
+	fileName := safeImportFileName(filepath.Base(mediaRef), fallbackName)
+	contentPath := filepath.Join(e.dataDir, "artifacts", projectID, artifactID, "content")
+	if err := ensureInside(e.dataDir, contentPath); err != nil {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	if err := os.MkdirAll(filepath.Dir(contentPath), 0o755); err != nil {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	target, err := os.Create(contentPath)
+	if err != nil {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		_ = target.Close()
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	if err := target.Close(); err != nil {
+		return mcpGeneratedMedia{StructuredContent: structured}
+	}
+	storageRef := fmt.Sprintf("local://projects/%s/artifacts/%s/sha256_%s/%s", projectID, artifactID, hashHex[:16], fileName)
+	return mcpGeneratedMedia{StorageRef: storageRef, LocalPath: contentPath, StructuredContent: structured}
+}
+
 func mcpArgumentsFromExternalRequest(request map[string]interface{}) map[string]interface{} {
 	target := mcpMapFromInterface(request["target"])
+	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
 	args := map[string]interface{}{
 		"prompt": mcpStringFromMap(request, "prompt", "promptText", "videoPrompt"),
 	}
-	if duration := mcpIntFromInterface(mcpFirstPresent(target, "durationSec", "duration")); duration > 0 {
+	if mode := mcpStringFromMap(request, "mode"); mode != "" {
+		args["mode"] = mode
+	}
+	if duration := mcpIntFromInterface(mcpFirstPresent(target, "durationSec", "duration")); duration > 0 && !strings.Contains(kind, "image") {
 		args["duration"] = duration
 	}
 	if ratio := mcpStringFromMap(target, "aspectRatio", "ratio"); ratio != "" {
 		args["ratio"] = ratio
 	}
 	if resolution := mcpStringFromMap(target, "videoResolution", "video_resolution", "resolution"); resolution != "" {
-		args["video_resolution"] = normalizeMCPVideoResolution(resolution)
+		if strings.Contains(kind, "image") {
+			args["resolution_type"] = normalizeMCPImageResolution(resolution)
+		} else {
+			args["video_resolution"] = normalizeMCPVideoResolution(resolution)
+		}
+	}
+	if generateNum := mcpIntFromInterface(mcpFirstPresent(target, "generateNum", "generate_num", "count")); generateNum > 0 && strings.Contains(kind, "image") {
+		args["generate_num"] = generateNum
 	}
 	if model := mcpStringFromMap(target, "modelVersion", "model_version"); model != "" {
 		args["model_version"] = model
 	}
 	return args
+}
+
+func normalizeMCPImageResolution(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	normalized = strings.ReplaceAll(normalized, "*", "x")
+	switch normalized {
+	case "1920x1080", "1080p", "fullhd", "fhd":
+		return "2k"
+	case "3840x2160", "2160p", "4k", "uhd":
+		return "4k"
+	default:
+		return strings.TrimSpace(value)
+	}
 }
 
 func normalizeMCPVideoResolution(value string) string {
@@ -177,6 +707,22 @@ func mcpErrorText(result *localmcp.ToolCallResult) string {
 	return "mcp tool returned isError=true"
 }
 
+func mcpIsProviderBusyError(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(normalized, "exceedconcurrencylimit") ||
+		strings.Contains(normalized, "concurrency limit") ||
+		strings.Contains(normalized, "too many concurrent")
+}
+
+func mcpIsFailedGenerationStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed", "fail", "error":
+		return true
+	default:
+		return false
+	}
+}
+
 func mcpContentText(content []localmcp.ToolContent) string {
 	var parts []string
 	for _, item := range content {
@@ -187,10 +733,30 @@ func mcpContentText(content []localmcp.ToolContent) string {
 	return strings.Join(parts, "\n")
 }
 
-func shotAssetPackageFromMCPResult(providerID string, request map[string]interface{}, structured map[string]interface{}) map[string]interface{} {
-	return map[string]interface{}{
+func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, request map[string]interface{}, structured map[string]interface{}, media mcpGeneratedMedia) map[string]interface{} {
+	duration := mcpIntFromInterface(mcpFirstPresent(mcpMapFromInterface(request["target"]), "durationSec", "duration"))
+	if duration <= 0 {
+		duration = 5
+	}
+	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
+	isImage := strings.Contains(kind, "image")
+	outputKind := "SHOT_VIDEO_CLIP"
+	mode := "aigc_video"
+	baseKind := "video"
+	if isImage {
+		outputKind = mcpStringFromMap(request, "artifactKind", "outputArtifactKind")
+		if outputKind == "" {
+			outputKind = "REFERENCE_IMAGE"
+		}
+		mode = "aigc_image"
+		baseKind = "image"
+	}
+	packageItem := map[string]interface{}{
 		"shotId":          request["shotId"],
+		"durationSec":     duration,
 		"requestId":       request["requestId"],
+		"assetId":         mcpFirstPresent(request, "assetId", "referenceAssetId"),
+		"kind":            kind,
 		"referenceImages": request["references"],
 		"prompts": map[string]interface{}{
 			"videoPrompt":    mcpStringFromMap(request, "prompt", "promptText", "videoPrompt"),
@@ -204,6 +770,45 @@ func shotAssetPackageFromMCPResult(providerID string, request map[string]interfa
 			"raw":       structured,
 		},
 	}
+	if media.StorageRef != "" {
+		packageItem["generationPlan"] = map[string]interface{}{
+			"mode":        mode,
+			"primaryTool": "mcp_generation_runner",
+			"fusionPlan": map[string]interface{}{
+				"shotId": request["shotId"],
+				"baseLayer": map[string]interface{}{
+					"id":          request["requestId"],
+					"kind":        baseKind,
+					"role":        "base",
+					"storageRef":  media.StorageRef,
+					"durationSec": duration,
+				},
+				"overlayLayers":       []interface{}{},
+				"assembler":           "hyperframes",
+				"outputArtifactKind":  outputKind,
+				"transitionCoveredIn": "shot_end",
+			},
+		}
+		if isImage {
+			packageItem["referenceImage"] = map[string]interface{}{
+				"requestId":  request["requestId"],
+				"storageRef": media.StorageRef,
+				"provider":   providerID,
+				"raw":        structured,
+			}
+			if media.LocalPath != "" {
+				packageItem["referenceImage"].(map[string]interface{})["localPath"] = media.LocalPath
+			}
+			return packageItem
+		}
+		if aigcVideo, ok := packageItem["aigcVideo"].(map[string]interface{}); ok {
+			aigcVideo["storageRef"] = media.StorageRef
+			if media.LocalPath != "" {
+				aigcVideo["localPath"] = media.LocalPath
+			}
+		}
+	}
+	return packageItem
 }
 
 func findProvider(providers []localmcp.ProviderConfig, providerID string) (localmcp.ProviderConfig, bool) {

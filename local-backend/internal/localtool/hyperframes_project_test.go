@@ -145,6 +145,88 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 	}
 }
 
+func TestHyperFramesProjectExecutorKeepsFullShotTimelineWhenOnlySomeMediaReady(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts", "project_001", "shot-video-03")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("fake video bytes"), 0o644); err != nil {
+		t.Fatalf("write artifact content: %v", err)
+	}
+
+	executor := NewHyperFramesProjectExecutor(root)
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "躺营 AIOS 正能量开源介绍",
+			"script": "让创作者少一点焦虑，多一点稳定产出。",
+			"shotList": []interface{}{
+				map[string]interface{}{
+					"shotId":        "SHOT_01",
+					"durationSec":   float64(6),
+					"sceneSummary":  "开头钩子",
+					"mainAction":    "AI 工具排队上工",
+					"narrationText": "AI 工具别再吵架了。",
+				},
+				map[string]interface{}{
+					"shotId":        "SHOT_02",
+					"durationSec":   float64(6),
+					"sceneSummary":  "流程拆解",
+					"mainAction":    "脚本、分镜、素材进入流水线",
+					"narrationText": "系统把想法拆成可审核步骤。",
+				},
+				map[string]interface{}{
+					"shotId":        "SHOT_03",
+					"durationSec":   float64(6),
+					"sceneSummary":  "Dreamina b-roll",
+					"mainAction":    "AIGC 素材作为情绪画面",
+					"narrationText": "即梦 MCP 生成有趣素材。",
+				},
+			},
+			"shotAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "SHOT_03",
+					"durationSec": float64(6),
+					"generationPlan": map[string]interface{}{
+						"mode": "aigc_video",
+						"fusionPlan": map[string]interface{}{
+							"baseLayer": map[string]interface{}{
+								"kind":       "video",
+								"storageRef": "local://projects/project_001/artifacts/shot-video-03/hash/clip.mp4",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(raw)
+	for _, expected := range []string{
+		`data-duration="18.0"`,
+		`开头钩子`,
+		`流程拆解`,
+		`Dreamina b-roll`,
+		`03 / 03`,
+		`data-shot-id="SHOT_03" data-start="12.0" data-duration="6.0"`,
+		`media-safety-mask`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("index.html missing %q:\n%s", expected, html)
+		}
+	}
+}
+
 func TestLocalAgentRawArtifactURLUsesConfiguredBase(t *testing.T) {
 	t.Setenv("TANGYING_LOCAL_AGENT_BASE_URL", "http://127.0.0.1:19090/")
 

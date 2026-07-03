@@ -11,10 +11,13 @@ timeout: 60
 capabilities:
   - video_creation
   - reference_asset_plan
+  - cinematic_story
+  - multi_view_reference_assets
 tags:
   - video
   - reference
   - style
+  - cinematic
 
 parameters:
   proposal:
@@ -23,10 +26,40 @@ parameters:
   compositionSpec:
     type: object
     required: false
+  script:
+    type: string
+    required: false
+  storyOutline:
+    type: object
+    required: false
+  detailedScript:
+    type: string
+    required: false
+  characters:
+    type: array
+    required: false
+  scenes:
+    type: array
+    required: false
+  props:
+    type: array
+    required: false
+  continuityBible:
+    type: object
+    required: false
+  creationProfile:
+    type: object
+    required: false
 
 output:
   referenceAssetPlan:
     type: object
+  referenceAssetIndex:
+    type: array
+  globalReferenceAssets:
+    type: array
+  externalGenerationRequests:
+    type: array
   artifacts:
     type: object
 

@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.4-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.5-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,16 @@
 ---
 
 ## Release 更新
+
+### v0.1.5 - 2026-07-04
+
+- 新增影视类 `cinematic_story` 创作链路：故事大纲、详细剧本、角色/场景/道具档案、多视角参考图、3-15 秒 shot、运镜光影和画面意义会被拆成可审核阶段。
+- 口播和影视视频都强化“口播稿/剧本先行，脚本再决定素材”的流程，系统会区分 HyperFrames 精确文字层、页面录屏、Dreamina/JiMeng AIGC 图片和 AIGC shot。
+- 即梦/Dreamina 图片和视频统一通过标准 MCP 调用：参考图走 `jimeng.generate_image`，shot 视频走 `jimeng.generate_video`，本地 runner 不再新增 provider 专用工具。
+- Shot-level QA 升级为质量门：每个 shot 输出剧本匹配度、导演理由、参考资产覆盖数、动作节拍数、视觉复杂度、文字安全区和返修决策。
+- 修复影视链路中模型输出漂移导致参考资产缺失、MCP 图片空参数、Dreamina 图片分辨率参数不兼容、render 超时阻塞后续 QA 的问题。
+- 已用 release 分支当前代码跑通 16:9 正能量搞笑影视宣传短片 E2E：`vp-b1a3a300`，29 个节点全成功，最终视频 1920x1080 / 18 秒，QA `score=100`，4 个 shot 全部 `PASS`。
+- 验证中 Dreamina 图片 MCP 已成功生成 1 个参考图，其余按预算 defer；Dreamina 视频 MCP 因账号余额不足返回 `CreditPreDeductNotEnough`，系统保留失败请求并自动走可 QA 的 fallback 渲染。
 
 ### v0.1.4 - 2026-07-03
 
@@ -94,12 +104,12 @@
 
 | 能力 | 体验结果 |
 |---|---|
-| 影视化 / AIGC shot 视频 | 规划角色、场景、连续性、关键帧、外部生成请求和本地预览渲染 |
-| 口播 / 知识类视频 | 生成脚本、时间窗、画面段落、提示词、预览项目和最终视频 |
+| 影视化 / AIGC shot 视频 | 从故事大纲、详细剧本、角色/场景/道具档案、多视角参考图到 shot 级生成提示词和 QA |
+| 口播 / 知识类视频 | 先生成口播稿，再按口播设计 HyperFrames、录屏、AIGC 图片/视频素材和最终成片 |
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
-| Shot 级抽帧 QA | 渲染后按 shot 聚合抽帧指标，输出质量分、结论和返修建议，再由人工确认 |
+| Shot 级抽帧 QA | 渲染后按 shot 聚合剧本匹配、参考覆盖、动作节拍、文字安全区和画面复杂度指标，输出返修决策 |
 | 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
 
 ## 创作流程
@@ -202,5 +212,6 @@ Local agent:   http://localhost:18080/api/local/docs
 - [MCP Provider 接入](docs/mcp-providers.md)
 - [版本管理 Wiki](docs/version-management.md)
 - [视频抽帧 QA Wiki](docs/video-frame-qa.md)
+- [影视类视频创作流程](docs/cinematic-video-workflow.md)
 
 Wiki 中包含产品介绍、系统边界、核心流程、即梦 MCP 使用方式和后续路线图。

@@ -1,6 +1,6 @@
 # 视频抽帧 QA Wiki
 
-本文说明 v0.1.4 的成片视觉 QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤和画面复杂度风险提前暴露出来，并把每个 shot 的问题量化成可用于返修的结论。
+本文说明 v0.1.5 的成片视觉 QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤、画面复杂度、剧本匹配和 shot 规格风险提前暴露出来，并把每个 shot 的问题量化成可用于返修的结论。
 
 ## 流程位置
 
@@ -71,6 +71,7 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 | `issues` | 带证据和修复建议的问题列表 |
 | `repairPlan` | 工具级修复计划，包含 `action`、`toolOverrides`、`renderStrategyPatch`、`visualPlanPatch`、`promptPatch` |
 | `shotSpecLint` | 生成前规格检查结果，用来发现过长 shot、精确文字、长画面文本和 continuity reference 需求 |
+| `scriptAlignment` | 剧本、画面描述、拍摄理由和参考资产覆盖是否完整 |
 
 生成前 `shotSpecLints` 先检查不需要视频文件的风险：
 
@@ -78,6 +79,20 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 - `screenText` 过长：建议压缩文字并使用 HTML overlay。
 - `mustBeExact=true`：强制 `RERENDER_HTML` / HyperFrames overlay，禁止 AIGC 内生关键文字。
 - `mustMatchPrevious=true`：要求前一 shot 的 reference image 或 end state。
+- `directorReason` / `whyThisShot` 缺失：建议补充拍摄理由，否则影视 shot 不能解释画面意义。
+- `referenceAssetIds` 为空：建议回到参考资产阶段补充角色、场景或道具锚点。
+- `actionBeats` 不足：建议补充 shot 内动作节奏，避免 AIGC 画面只有静态描述。
+
+影视模式会额外输出硬指标：
+
+| 指标 | 说明 |
+|---|---|
+| `scriptTextChars` | 当前 shot 对应剧本文字长度 |
+| `visualTextChars` | 当前 shot 画面描述长度 |
+| `scriptVisualCompletenessScore` | 剧本和画面信息完整度，0-100 |
+| `directorReasoningPresent` | 是否存在拍摄理由 |
+| `referenceCoverageCount` | 绑定的角色、场景、道具参考资产数量 |
+| `actionBeatCount` | shot 内动作节拍数量 |
 
 顶层 `repairPlan` 会把所有 shot 聚合成下一步动作：
 
@@ -110,6 +125,18 @@ QA 审核门中优先看三件事：
 如果发现问题，应该回到脚本、分镜或模板层压缩文字，而不是只调低 QA 阈值。
 
 ## 本次验证记录
+
+v0.1.5 已用 release 分支当前代码完整生成一条 18 秒、16:9 的正能量搞笑影视宣传短片：
+
+- project: `vp-b1a3a300`
+- run: `agent_run_5ff5fbfe-7a61-4250-a103-17a5077a3882`
+- task: `20260704050335-c8c8c8c8`
+- output: `final.mp4`
+- video: `1920x1080`，`18.000000` 秒
+- QA: `passed=true`，`score=100`，`shotCount=4`，`frameCount=5`，`blockingIssueCount=0`，`warningIssueCount=0`
+- 每个 shot 的 `scriptVisualCompletenessScore=100`，`directorReasoningPresent=true`，`referenceCoverageCount=4`，`actionBeatCount=3`
+
+这条链路覆盖故事大纲、详细剧本、角色/场景/道具档案、参考图 MCP、AIGC shot MCP、预览、渲染、抽帧 QA 和发布文案审核。
 
 v0.1.3 已用系统完整生成一条 30 秒、16:9 的“视频 Agent”开源上线宣传视频：
 

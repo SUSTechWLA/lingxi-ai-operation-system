@@ -205,6 +205,13 @@ func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 		}
 		return err
 	}
+	jobCtx := ctx
+	cancelJob := func() {}
+	if job.TimeoutSec > 0 {
+		jobCtx, cancelJob = context.WithTimeout(ctx, time.Duration(job.TimeoutSec)*time.Second)
+	}
+	defer cancelJob()
+
 	_ = l.client.ReportProgress(ctx, job.ID, ProgressRequest{
 		Status:   "running",
 		Progress: 0.01,
@@ -235,7 +242,7 @@ func (l *Loop) executeAndReport(ctx context.Context, job localtool.Job) error {
 		}
 	}()
 
-	result, err := l.registry.Execute(ctx, job)
+	result, err := l.registry.Execute(jobCtx, job)
 	if err != nil {
 		failReq := FailJobRequest{
 			Success:   false,

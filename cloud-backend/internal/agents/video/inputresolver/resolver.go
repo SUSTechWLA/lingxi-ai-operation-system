@@ -3,8 +3,9 @@ package inputresolver
 import "strings"
 
 const (
-	VideoTypeVoiceVisual = "voice_visual"
-	VideoTypeAIGCShot    = "aigc_shot"
+	VideoTypeVoiceVisual    = "voice_visual"
+	VideoTypeAIGCShot       = "aigc_shot"
+	VideoTypeCinematicStory = "cinematic_story"
 )
 
 type Request struct {
@@ -49,10 +50,10 @@ func Resolve(req Request) Resolution {
 		out.MissingFields = append(out.MissingFields, "topic")
 		out.Questions = append(out.Questions, "请补充这条视频要表达的主题或核心观点。")
 	}
-	if out.VideoType != "" && out.VideoType != VideoTypeVoiceVisual && out.VideoType != VideoTypeAIGCShot {
+	if out.VideoType != "" && out.VideoType != VideoTypeVoiceVisual && out.VideoType != VideoTypeAIGCShot && out.VideoType != VideoTypeCinematicStory {
 		out.NeedsClarification = true
 		out.MissingFields = append(out.MissingFields, "videoType")
-		out.Questions = append(out.Questions, "请选择 voice_visual 或 aigc_shot。")
+		out.Questions = append(out.Questions, "请选择 voice_visual、aigc_shot 或 cinematic_story。")
 	}
 	return out
 }

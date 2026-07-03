@@ -80,6 +80,53 @@ class VideoQAServerTests(unittest.TestCase):
         self.assertTrue(reports[0]["repairPlan"]["toolOverrides"]["textOverlayNeeded"])
         self.assertIn("no embedded text", reports[0]["repairPlan"]["promptPatch"]["negativeAdditions"])
 
+    def test_cinematic_shot_spec_lint_scores_script_alignment_inputs(self) -> None:
+        server = load_server()
+
+        lints = server.build_shot_spec_lints(
+            [
+                {
+                    "id": "SHOT_CINE",
+                    "durationSec": 6,
+                    "visual": "角色在导演台前把任务卡排成队",
+                    "narrationText": "混乱需求终于排队了。",
+                    "plannedAssetRoute": "aigc_video",
+                }
+            ]
+        )
+
+        self.assertIn("director_reason_missing", lints[0]["generationWarnings"])
+        self.assertIn("reference_assets_missing", lints[0]["generationWarnings"])
+        self.assertLess(lints[0]["scriptVisualCompletenessScore"], 100)
+
+        reports = server.build_shot_reports(
+            "vp_test",
+            "cinematic_story",
+            "candidate_01",
+            [
+                {
+                    "shotId": "SHOT_CINE",
+                    "frameCount": 1,
+                    "sampledTimesSec": [2],
+                    "passed": True,
+                    "needsRegeneration": False,
+                    "score": 100,
+                    "blockingIssueCount": 0,
+                    "warningIssueCount": 0,
+                    "metricSummary": {
+                        "maxTopLeftTextZoneEdgeDensity": 0.01,
+                        "maxLowerThirdEdgeDensity": 0.02,
+                        "maxFullFrameEdgeDensity": 0.04,
+                    },
+                    "representativeIssues": [],
+                }
+            ],
+            lints,
+        )
+
+        self.assertIn("scriptAlignment", reports[0])
+        self.assertIn("whyThisShot/dramaticPurpose", reports[0]["scriptAlignment"]["missing"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHyperFramesRenderExecutorInvalidProjectDir(t *testing.T) {
@@ -267,5 +268,139 @@ func TestHyperFramesRenderExecutorFastStoryboardRender(t *testing.T) {
 	}
 	if result.Output["renderJobId"] != "storyboard_fast_render" {
 		t.Fatalf("renderJobId = %#v, want storyboard_fast_render", result.Output["renderJobId"])
+	}
+}
+
+func TestHyperFramesRenderExecutorFallsBackToStoryboardWhenServiceFails(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not available")
+	}
+	if err := exec.Command("python3", "-c", "import PIL").Run(); err != nil {
+		t.Skip("python3 Pillow is not available")
+	}
+
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "projects", "project_001", "hyperframes")
+	if err := os.MkdirAll(filepath.Join(projectDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data := map[string]interface{}{
+		"shotList": []map[string]interface{}{
+			{
+				"id":              "SHOT_01",
+				"shotId":          "SHOT_01",
+				"sceneSummary":    "影视化场景：一个创作者按下按钮，AI 制片台开始有序工作",
+				"mainAction":      "用明确画面表达开源视频流水线的启动。",
+				"durationSec":     1,
+				"sequenceIndex":   0,
+				"recommendedMode": "aigc_video",
+			},
+		},
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "assets", "data.json"), dataBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(hyperFramesRenderResponse{OK: false, Error: "renderer timed out"})
+	}))
+	defer server.Close()
+
+	t.Setenv("TANGYING_FAST_STORYBOARD_RENDER", "")
+	t.Setenv("TANGYING_STORYBOARD_RENDER_FALLBACK", "1")
+	executor := NewHyperFramesRenderExecutor(root, server.URL, 0)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesRender,
+		Payload: map[string]interface{}{
+			"projectDir": "local://projects/project_001/hyperframes",
+			"fps":        float64(12),
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute with storyboard fallback: %v", err)
+	}
+	if result.Output["renderJobId"] != "storyboard_fast_render" {
+		t.Fatalf("renderJobId = %#v, want storyboard_fast_render", result.Output["renderJobId"])
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", "project_001", "renders", "final.mp4")); err != nil {
+		t.Fatalf("fallback final video should exist: %v", err)
+	}
+}
+
+func TestHyperFramesRenderExecutorFallsBackToStoryboardWhenServiceTimesOut(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not available")
+	}
+	if err := exec.Command("python3", "-c", "import PIL").Run(); err != nil {
+		t.Skip("python3 Pillow is not available")
+	}
+
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "projects", "project_001", "hyperframes")
+	if err := os.MkdirAll(filepath.Join(projectDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data := map[string]interface{}{
+		"shotList": []map[string]interface{}{
+			{
+				"id":              "SHOT_01",
+				"shotId":          "SHOT_01",
+				"sceneSummary":    "开场：AI 制片台从混乱变有序，字幕留出安全区",
+				"mainAction":      "展示系统开始自动化创作。",
+				"durationSec":     1,
+				"sequenceIndex":   0,
+				"recommendedMode": "hyperframes",
+			},
+		},
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "assets", "data.json"), dataBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+		_ = json.NewEncoder(w).Encode(hyperFramesRenderResponse{OK: true, JobID: "late"})
+	}))
+	defer server.Close()
+
+	t.Setenv("TANGYING_FAST_STORYBOARD_RENDER", "")
+	t.Setenv("TANGYING_STORYBOARD_RENDER_FALLBACK", "1")
+	executor := NewHyperFramesRenderExecutor(root, server.URL, 0)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:         "job-1",
+		ProjectID:  "project_001",
+		Command:    CommandHyperFramesRender,
+		TimeoutSec: 8,
+		Payload: map[string]interface{}{
+			"projectDir": "local://projects/project_001/hyperframes",
+			"fps":        float64(12),
+			"timeoutSec": float64(1),
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute with storyboard fallback after timeout: %v", err)
+	}
+	if result.Output["renderJobId"] != "storyboard_fast_render" {
+		t.Fatalf("renderJobId = %#v, want storyboard_fast_render", result.Output["renderJobId"])
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", "project_001", "renders", "final.mp4")); err != nil {
+		t.Fatalf("fallback final video should exist: %v", err)
 	}
 }

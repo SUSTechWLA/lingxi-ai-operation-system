@@ -22,6 +22,7 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 		RequiresUserDevice: true,
 		ArtifactLocation:   tool.ArtifactLocationLocal,
 		LocalCommand:       "HYPERFRAMES_RENDER",
+		Timeout:            1800,
 		ArtifactPolicy: tool.ArtifactPolicy{
 			ProduceArtifact: true,
 			ArtifactKinds:   []string{"VIDEO"},
@@ -50,6 +51,7 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 				"projectDir":      "local://projects/project_001/hyperframes",
 				"previewApproved": true,
 				"fps":             float64(30),
+				"timeoutSec":      float64(45),
 			},
 		},
 	})
@@ -62,6 +64,12 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 	}
 	if dispatcher.req.Payload["projectDir"] != "local://projects/project_001/hyperframes" {
 		t.Fatalf("parameters not preserved in local job payload: %#v", dispatcher.req.Payload)
+	}
+	if dispatcher.req.Payload["timeoutSec"] != float64(45) {
+		t.Fatalf("payload timeoutSec should preserve render service timeout: %#v", dispatcher.req.Payload)
+	}
+	if dispatcher.req.TimeoutSec != 90 {
+		t.Fatalf("timeoutSec = %d, want render job timeout with fallback buffer 90", dispatcher.req.TimeoutSec)
 	}
 	if nodeRepo.updatedStatus != model.NodeWaitingLocal {
 		t.Fatalf("node status = %s, want WAITING_LOCAL", nodeRepo.updatedStatus)

@@ -562,6 +562,11 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"script":               {Type: "string", Description: "Voiceover script"},
+			"storyOutline":         {Type: "object", Description: "Cinematic story outline when the profile is cinematic"},
+			"detailedScript":       {Type: "string", Description: "Detailed cinematic script with action beats"},
+			"characters":           {Type: "array", Description: "Main character dossiers"},
+			"scenes":               {Type: "array", Description: "Main scene dossiers"},
+			"props":                {Type: "array", Description: "Main prop dossiers"},
 			"scriptSpans":          {Type: "array", Description: "Timed script spans for time-window planning"},
 			"summary":              {Type: "string", Description: "Script summary"},
 			"estimatedDurationSec": {Type: "number", Description: "Estimated duration"},
@@ -673,6 +678,32 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"content":        {Type: "string", Description: "Reviewable markdown content"},
 			"artifacts":      {Type: "object", Description: "Reviewable artifact manifest"},
 		}
+	case "reference_asset_planner":
+		manifest.Description = "Plan cinematic character, scene, prop, and global reference assets."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskMedium
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "cinematic_planning", "reference_asset_planning"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"brief":           {Type: "string", Description: "Original user brief", Required: false},
+			"script":          {Type: "string", Description: "Detailed script", Required: false},
+			"continuityBible": {Type: "object", Description: "Continuity bible", Required: false},
+			"characters":      {Type: "array", Description: "Character dossiers", Required: false},
+			"scenes":          {Type: "array", Description: "Scene dossiers", Required: false},
+			"props":           {Type: "array", Description: "Prop dossiers", Required: false},
+			"creationProfile": {Type: "object", Description: "Video creation profile", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"referenceAssetPlan":         {Type: "object", Description: "Reference asset plan"},
+			"referenceAssetIndex":        {Type: "array", Description: "Stable reference board index"},
+			"globalReferenceAssets":      {Type: "array", Description: "Global reference assets for shot prompts"},
+			"externalGenerationRequests": {Type: "array", Description: "Image generation requests for reference boards"},
+			"summary":                    {Type: "string", Description: "Human-readable summary"},
+			"content":                    {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":                  {Type: "object", Description: "Reviewable artifact manifest"},
+		}
 	case "sound_design_planner":
 		manifest.Description = "Plan per-shot sound cues and music intent without generating audio."
 		manifest.Type = "builtin_prompt_tool"
@@ -726,13 +757,15 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Idempotent = true
 		manifest.Capabilities = []string{"video_creation", "video_prompt_generation", "text_to_video"}
 		manifest.Parameters = map[string]tool.ParamDef{
-			"shotList":        {Type: "array", Description: "Approved shot list", Required: true},
-			"brief":           {Type: "string", Description: "Original video brief", Required: false},
-			"keyframePrompts": {Type: "array", Description: "Optional keyframe prompts", Required: false},
-			"style":           {Type: "string", Description: "Visual style", Required: false},
-			"modelHint":       {Type: "string", Description: "Target video generation model", Required: false},
-			"aspectRatio":     {Type: "string", Description: "Video aspect ratio", Required: false},
-			"aigcProvider":    {Type: "string", Description: "Optional automatic AIGC provider, such as jimeng_mcp", Required: false},
+			"shotList":           {Type: "array", Description: "Approved shot list", Required: true},
+			"brief":              {Type: "string", Description: "Original video brief", Required: false},
+			"keyframePrompts":    {Type: "array", Description: "Optional keyframe prompts", Required: false},
+			"style":              {Type: "string", Description: "Visual style", Required: false},
+			"modelHint":          {Type: "string", Description: "Target video generation model", Required: false},
+			"aspectRatio":        {Type: "string", Description: "Video aspect ratio", Required: false},
+			"aigcProvider":       {Type: "string", Description: "Optional automatic AIGC provider, such as jimeng_mcp", Required: false},
+			"referenceAssetPlan": {Type: "object", Description: "Optional cinematic reference asset plan", Required: false},
+			"continuityBible":    {Type: "object", Description: "Optional cinematic continuity bible", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"videoPrompts":               {Type: "array", Description: "Independent per-shot video prompts"},
@@ -862,6 +895,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"previewApproved":   {Type: "boolean", Description: "Whether preview has been approved", Required: false},
 			"outputName":        {Type: "string", Description: "Output MP4 file name", Required: false},
 			"targetDurationSec": {Type: "number", Description: "Target video duration", Required: false},
+			"timeoutSec":        {Type: "number", Description: "Optional per-job render timeout in seconds before local fallback can run", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"outputPath":    {Type: "string", Description: "Rendered MP4 path"},
@@ -1488,6 +1522,7 @@ func executeVideoProfileClassifier(stage, skillName, brief string, params map[st
 
 func executeTimeWindowPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
 	profile := creationProfileFromToolValue(params["creationProfile"])
+	sourceShotMaps := toolMapsFromValue(params["shotList"], "shotList", "shots")
 	shots := shotUnitsFromToolValue(params["shotList"])
 	spans := scriptSpansFromToolValue(params["scriptSpans"])
 	if profile.ProfileID != videomodel.VideoProfileCinematicStory && len(spans) == 0 {
@@ -1503,6 +1538,9 @@ func executeTimeWindowPlanner(stage, skillName string, params map[string]interfa
 	for _, window := range plan.Windows {
 		windowMaps = append(windowMaps, structToMap(window))
 	}
+	if profile.ProfileID == videomodel.VideoProfileCinematicStory {
+		enrichCinematicTimeWindowMaps(windowMaps, sourceShotMaps)
+	}
 	return tool.SuccessResult(map[string]interface{}{
 		"timeWindowPlan": planMap,
 		"timeWindows":    windowMaps,
@@ -1517,6 +1555,10 @@ func executeTimeWindowPlanner(stage, skillName string, params map[string]interfa
 func executeVisualAlignmentPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
 	windows := timeWindowMapsFromParams(params)
 	shotList := make([]map[string]interface{}, 0, len(windows))
+	script := firstNonEmptyString(params, "script")
+	assetStrategy := firstNonEmptyString(params, "assetStrategy", "style", "brief", "topic")
+	creativeMode := voiceVisualNeedsRichAIGC(script, assetStrategy)
+	routeCounts := map[string]int{}
 	for i, window := range windows {
 		shotID := firstNonEmptyString(window, "shotId", "id")
 		if shotID == "" {
@@ -1527,19 +1569,45 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 		if visual == "" {
 			visual = visualTitleFromNarration(narration, i)
 		}
-		shotList = append(shotList, map[string]interface{}{
-			"shotId":        shotID,
-			"durationSec":   authoredDurationSec(window),
-			"narrationText": narration,
-			"visual":        visual,
-			"camera":        visualSubtitleFromNarration(narration, i),
-			"timeWindowId":  firstNonEmptyString(window, "id"),
-		})
+		route := "hyperframes"
+		if creativeMode {
+			route = voiceVisualAssetRoute(narration, visual, assetStrategy, i, len(windows), creativeMode)
+			visual = voiceVisualDirectionForRoute(route, narration, visual, i, creativeMode)
+		}
+		routeCounts[route]++
+		shot := map[string]interface{}{
+			"shotId":            shotID,
+			"durationSec":       authoredDurationSec(window),
+			"narrationText":     narration,
+			"visual":            visual,
+			"mainAction":        firstNonEmptyString(window, "mainAction", "action"),
+			"camera":            visualSubtitleFromNarration(narration, i),
+			"timeWindowId":      firstNonEmptyString(window, "id"),
+			"plannedAssetRoute": route,
+			"assetIntent":       voiceVisualAssetIntentForRoute(route, narration),
+			"timeRelationship":  voiceVisualTimeRelationship(route, authoredDurationSec(window)),
+		}
+		if creativeMode {
+			shot["mainAction"] = voiceVisualMainActionForRoute(route, narration, i)
+			shot["camera"] = voiceVisualCameraForRoute(route, narration, i)
+			shot["humorBeat"] = voiceVisualHumorBeat(narration, i)
+			shot["tone"] = "正能量、搞笑、无厘头、解压，但信息表达清楚；不焦虑、不嘲讽用户"
+		}
+		if route == "hyperframes" {
+			shot["screenText"] = []string{visualTitleFromNarration(narration, i)}
+		}
+		shotList = append(shotList, shot)
 	}
 	return tool.SuccessResult(map[string]interface{}{
-		"visualAlignmentPlan": map[string]interface{}{"shotCount": len(shotList), "source": "time_window_planner"},
-		"shotList":            shotList,
-		"content":             buildShotListMarkdown("Visual Alignment", shotList),
+		"visualAlignmentPlan": map[string]interface{}{
+			"shotCount":    len(shotList),
+			"source":       "time_window_planner",
+			"creativeMode": creativeMode,
+			"routeCounts":  routeCounts,
+			"policy":       "AIGC b-roll carries emotion and absurdity; HyperFrames stays for exact text, UI, captions, and CTA overlays.",
+		},
+		"shotList": shotList,
+		"content":  buildShotListMarkdown("Visual Alignment", shotList),
 		"artifacts": []map[string]interface{}{
 			jsonArtifact(stage, "visual_alignment_plan.json", skillName, "VISUAL_ALIGNMENT_PLAN", true),
 		},
@@ -1553,9 +1621,14 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 		sourceShots = toolMapsFromValue(params["shotList"], "shotList", "shots")
 	}
 	if len(sourceShots) == 0 {
+		sourceShots = buildCinematicShotsFromScriptParams(firstNonEmptyString(params, "brief", "topic", "goal"), params)
+	}
+	if len(sourceShots) == 0 {
 		sourceShots = buildFallbackCinematicSourceShots(firstNonEmptyString(params, "brief", "topic", "goal"), intParam(params, "targetDurationSec", intParam(params, "durationSec", 75)))
 	}
 	profile := creationProfileFromToolValue(params["creationProfile"])
+	referenceAssetPlan, _ := mapValue(params["referenceAssetPlan"])
+	globalRefs := interfaceSliceFromAny(firstExistingValue(referenceAssetPlan, "globalReferenceAssets", "referenceAssetIndex"))
 	shotList := make([]map[string]interface{}, 0, len(sourceShots))
 	for i, source := range sourceShots {
 		shotID := firstNonEmptyString(source, "shotId", "id")
@@ -1572,15 +1645,51 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 		if visual == "" {
 			visual = "待导演设计的故事镜头。"
 		}
+		duration := plannerOutputDurationSec(source, preserveAuthoredDuration)
+		shotID = normalizeCinematicShotID(shotID, i)
+		referenceIDs := cinematicReferenceIDsForShot(source, globalRefs, i)
+		references := referencesForShotFromPlan(map[string]interface{}{"referenceAssetIds": referenceIDs}, globalRefs)
+		camera := firstNonEmptyString(source, "camera", "cameraMotion")
+		if camera == "" {
+			camera = fallbackCinematicCamera(i)
+		}
+		lighting := firstNonEmptyString(source, "lighting", "light", "mood")
+		if lighting == "" {
+			lighting = fallbackCinematicLighting(i)
+		}
+		composition := firstNonEmptyString(source, "composition", "framing")
+		if composition == "" {
+			composition = fallbackCinematicComposition(i)
+		}
+		mainAction := firstNonEmptyString(source, "mainAction", "action")
+		if mainAction == "" {
+			mainAction = fallbackCinematicMainAction(visual, i)
+		}
+		why := firstNonEmptyString(source, "whyThisShot", "dramaticPurpose", "directorReason")
+		if why == "" {
+			why = fallbackCinematicWhy(i)
+		}
 		shotList = append(shotList, map[string]interface{}{
 			"shotId":            shotID,
-			"durationSec":       plannerOutputDurationSec(source, preserveAuthoredDuration),
+			"durationSec":       duration,
 			"visual":            visual,
-			"mainAction":        firstNonEmptyString(source, "mainAction", "action"),
+			"mainAction":        mainAction,
 			"narrationText":     firstNonEmptyString(source, "narrationText", "scriptText", "text"),
-			"camera":            firstNonEmptyString(source, "camera", "cameraMotion"),
-			"plannedAssetRoute": firstNonEmptyString(source, "plannedAssetRoute", "assetRoute", "route"),
-			"directorNote":      "镜头设计草案；仅生成规划，不生成媒体。",
+			"camera":            camera,
+			"shotSize":          fallbackCinematicShotSize(i),
+			"composition":       composition,
+			"framing":           composition,
+			"lighting":          lighting,
+			"actionBeats":       fallbackCinematicActionBeats(mainAction, duration),
+			"dramaticPurpose":   why,
+			"whyThisShot":       why,
+			"directorReason":    why,
+			"continuityAnchors": cinematicContinuityAnchors(referenceIDs),
+			"referenceAssetIds": referenceIDs,
+			"referenceImages":   references,
+			"plannedAssetRoute": fallbackText(firstNonEmptyString(source, "plannedAssetRoute", "assetRoute", "route"), "aigc_video"),
+			"assetIntent":       "用 JiMeng/Dreamina MCP 生成非真人风格化 AIGC shot，HyperFrames 只负责安全字幕和精确文字层。",
+			"directorNote":      "镜头设计草案；包含拍摄理由、光影、运镜和参考资产要求，仅生成规划，不直接生成媒体。",
 		})
 	}
 	return tool.SuccessResult(map[string]interface{}{
@@ -1595,6 +1704,246 @@ func executeCinematicShotDesigner(stage, skillName, brief string, params map[str
 			jsonArtifact(stage, "cinematic_shot_design.json", skillName, "CINEMATIC_SHOT_DESIGN", true),
 		},
 	})
+}
+
+func buildCinematicShotsFromScriptParams(topic string, params map[string]interface{}) []map[string]interface{} {
+	spans := toolMapsFromValue(params["scriptSpans"], "scriptSpans", "sections")
+	if len(spans) == 0 {
+		spans = toolMapsFromValue(params["sections"], "sections")
+	}
+	if len(spans) == 0 {
+		script := firstNonEmptyString(params, "detailedScript", "script")
+		if strings.TrimSpace(script) == "" {
+			return nil
+		}
+		spans = scriptSectionsFromPlainText(script)
+	}
+	shots := make([]map[string]interface{}, 0, len(spans))
+	for i, span := range spans {
+		text := firstNonEmptyString(span, "scriptText", "text", "content")
+		if text == "" {
+			continue
+		}
+		duration := intFromInterface(firstExistingValue(span, "durationSec", "duration", "seconds"), 0)
+		if duration <= 0 {
+			startSec := floatFromInterface(firstExistingValue(span, "startSec", "start"), 0)
+			endSec := floatFromInterface(firstExistingValue(span, "endSec", "end"), 0)
+			if endSec > startSec {
+				duration = int(endSec - startSec)
+			}
+		}
+		if duration <= 0 {
+			duration = 6
+		}
+		shotID := firstNonEmptyString(span, "shotId", "id", "spanId")
+		if shotID == "" || strings.HasPrefix(strings.ToUpper(shotID), "SCENE_") || strings.HasPrefix(strings.ToUpper(shotID), "SPAN_") {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		visual := firstNonEmptyString(span, "visual", "sceneSummary", "description")
+		if visual == "" {
+			visual = cinematicVisualFromScriptText(text, topic, i)
+		}
+		shots = append(shots, map[string]interface{}{
+			"shotId":        shotID,
+			"durationSec":   duration,
+			"visual":        visual,
+			"sceneSummary":  visual,
+			"scriptText":    text,
+			"narrationText": text,
+			"mainAction":    fallbackCinematicMainAction(visual, i),
+			"camera":        fallbackCinematicCamera(i),
+			"lighting":      fallbackCinematicLighting(i),
+			"composition":   fallbackCinematicComposition(i),
+			"whyThisShot":   fallbackCinematicWhy(i),
+		})
+	}
+	return shots
+}
+
+func scriptSectionsFromPlainText(script string) []map[string]interface{} {
+	parts := []string{}
+	for _, raw := range strings.Split(script, "\n") {
+		text := strings.TrimSpace(raw)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	if len(parts) == 0 && strings.TrimSpace(script) != "" {
+		parts = []string{strings.TrimSpace(script)}
+	}
+	out := make([]map[string]interface{}, 0, len(parts))
+	start := 0
+	for i, part := range parts {
+		duration := normalizedDurationSec(nil)
+		out = append(out, map[string]interface{}{
+			"id":          fmt.Sprintf("SPAN_%02d", i+1),
+			"startSec":    start,
+			"endSec":      start + duration,
+			"durationSec": duration,
+			"text":        part,
+			"scriptText":  part,
+		})
+		start += duration
+	}
+	return out
+}
+
+func normalizeCinematicShotID(shotID string, index int) string {
+	trimmed := strings.TrimSpace(shotID)
+	if trimmed == "" {
+		return fmt.Sprintf("SHOT_%02d", index+1)
+	}
+	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, "SHOT_") {
+		return trimmed
+	}
+	if strings.HasPrefix(upper, "SCENE_") || strings.HasPrefix(upper, "SPAN_") || strings.HasPrefix(upper, "TW_") {
+		return fmt.Sprintf("SHOT_%02d", index+1)
+	}
+	return trimmed
+}
+
+func cinematicVisualFromScriptText(text, topic string, index int) string {
+	subject := fallbackVideoScriptSubject(topic)
+	switch index % 4 {
+	case 0:
+		return "非真人风格化动画：" + truncateText(text, 80) + "；画面用夸张桌面混乱建立短视频钩子。"
+	case 1:
+		return "非真人风格化动画：" + truncateText(text, 80) + "；导演台和流程节点亮起，展示系统把创意拆成可审核步骤。"
+	case 2:
+		return "非真人风格化动画：" + truncateText(text, 80) + "；MCP 插槽、AIGC 胶片和 QA 放大镜形成喜剧化转折。"
+	default:
+		return fmt.Sprintf("非真人风格化动画：%s 开源上线，角色从焦虑转为轻松，关注信号向外扩散。", subject)
+	}
+}
+
+func fallbackCinematicMainAction(visual string, index int) string {
+	switch index % 4 {
+	case 0:
+		return "任务卡从桌面弹起，混乱信息收束成一个清晰问题。"
+	case 1:
+		return "导演台节点依次点亮，角色跟随流程从左到右移动。"
+	case 2:
+		return "MCP 插槽接入，QA 放大镜扫描画面并标出可修复问题。"
+	default:
+		return "角色把完成的视频包推向镜头，开源关注信号扩散。"
+	}
+}
+
+func fallbackCinematicCamera(index int) string {
+	switch index % 4 {
+	case 0:
+		return "快速推近到桌面中心，再轻微手持晃动制造喜剧紧张感。"
+	case 1:
+		return "稳定横移穿过流程节点，节奏像拆盲盒一样逐格揭示。"
+	case 2:
+		return "跟随 QA 放大镜做短距离推拉，问题点出现时轻微停顿。"
+	default:
+		return "慢推到主角和项目看板，最后稳定停在关注 CTA 安全区。"
+	}
+}
+
+func fallbackCinematicLighting(index int) string {
+	switch index % 4 {
+	case 0:
+		return "夜晚暖台灯加冷色屏幕反光，混乱但不压抑。"
+	case 1:
+		return "明亮控制台光，节点点亮时有柔和蓝绿边缘光。"
+	case 2:
+		return "扫描光束划过画面，问题标记清晰但不制造焦虑。"
+	default:
+		return "温暖清晨光，画面干净明亮，表达积极收束。"
+	}
+}
+
+func fallbackCinematicComposition(index int) string {
+	switch index % 4 {
+	case 0:
+		return "中近景，主体在画面中部偏右，桌面道具形成向心构图。"
+	case 1:
+		return "宽幅横向构图，流程节点占中轴，角色在前景带动视线。"
+	case 2:
+		return "三分法构图，QA 放大镜在前景，问题点在中景安全区。"
+	default:
+		return "中景定格，主角和项目看板分列左右，底部保留字幕安全区。"
+	}
+}
+
+func fallbackCinematicShotSize(index int) string {
+	switch index % 4 {
+	case 0:
+		return "中近景"
+	case 1:
+		return "宽景"
+	case 2:
+		return "特写到中景"
+	default:
+		return "中景"
+	}
+}
+
+func fallbackCinematicWhy(index int) string {
+	switch index % 4 {
+	case 0:
+		return "用夸张混乱制造前三秒钩子，让观众立刻理解创作者痛点。"
+	case 1:
+		return "把抽象系统能力视觉化，证明它不是黑盒，而是可审核流程。"
+	case 2:
+		return "把 MCP 生成和 QA 返修变成可见动作，强调质量可控。"
+	default:
+		return "用轻松正向结尾完成开源关注转化，同时降低技术理解门槛。"
+	}
+}
+
+func fallbackCinematicActionBeats(mainAction string, duration int) []string {
+	if duration <= 0 {
+		duration = 6
+	}
+	return []string{
+		fmt.Sprintf("0-%.1fs：建立主体和空间。", float64(duration)*0.33),
+		fmt.Sprintf("%.1f-%.1fs：%s", float64(duration)*0.33, float64(duration)*0.72, fallbackText(mainAction, "主体发生清晰动作变化。")),
+		fmt.Sprintf("%.1f-%ds：动作收束，保留拼接安全尾段。", float64(duration)*0.72, duration),
+	}
+}
+
+func cinematicReferenceIDsForShot(source map[string]interface{}, globalRefs []interface{}, index int) []string {
+	ids := stringListFromInterface(firstExistingValue(source, "referenceAssetIds", "referenceIds"))
+	if len(ids) > 0 {
+		return ids
+	}
+	out := []string{}
+	for _, refItem := range globalRefs {
+		ref, ok := mapValue(refItem)
+		if !ok {
+			continue
+		}
+		role := firstNonEmptyString(ref, "role")
+		if role == "character" || role == "scene" || (role == "prop" && index%2 == 0) {
+			if id := firstNonEmptyString(ref, "id", "assetId"); id != "" {
+				out = append(out, id)
+			}
+		}
+		if len(out) >= 4 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return []string{"char_creator", "scene_creator_desk", "prop_mcp_slot"}
+	}
+	return out
+}
+
+func cinematicContinuityAnchors(referenceIDs []string) []string {
+	if len(referenceIDs) == 0 {
+		return []string{"主要角色", "主场景", "核心道具", "全片非真人风格"}
+	}
+	anchors := make([]string, 0, len(referenceIDs)+1)
+	for _, id := range referenceIDs {
+		anchors = append(anchors, "锁定参考资产 "+id)
+	}
+	anchors = append(anchors, "全片非真人风格化动画")
+	return anchors
 }
 
 func buildFallbackCinematicSourceShots(topic string, targetDurationSec int) []map[string]interface{} {
@@ -1779,6 +2128,9 @@ func shotUnitsFromToolValue(value interface{}) []videomodel.ShotUnit {
 			VisualChangeLevel: videomodel.VisualChangeLow,
 			Narration:         firstStringInMap(item, "narrationText", "scriptText", "text"),
 			MainAction:        firstStringInMap(item, "mainAction", "action", "visual"),
+			Camera:            firstStringInMap(item, "camera", "cameraMotion"),
+			TransitionIn:      firstStringInMap(item, "transitionIn"),
+			TransitionOut:     firstStringInMap(item, "transitionOut", "transitionAtEnd"),
 			ReviewStatus:      videomodel.ReviewStatusPending,
 			Version:           1,
 		})
@@ -1818,6 +2170,52 @@ func timeWindowMapsFromParams(params map[string]interface{}) []map[string]interf
 		return windows
 	}
 	return toolMapsFromValue(params["timeWindowPlan"], "timeWindows", "windows")
+}
+
+func enrichCinematicTimeWindowMaps(windows []map[string]interface{}, sourceShots []map[string]interface{}) {
+	if len(windows) == 0 || len(sourceShots) == 0 {
+		return
+	}
+	byID := map[string]map[string]interface{}{}
+	for _, shot := range sourceShots {
+		shotID := firstNonEmptyString(shot, "shotId", "id")
+		if shotID != "" {
+			byID[shotID] = shot
+		}
+	}
+	carryKeys := []string{
+		"visual", "sceneSummary", "description", "mainAction", "action",
+		"narrationText", "scriptText", "camera", "cameraMotion", "shotSize",
+		"composition", "framing", "lighting", "light", "mood", "actionBeats",
+		"dramaticPurpose", "whyThisShot", "directorReason", "continuityAnchors",
+		"referenceAssetIds", "referenceImages", "references", "plannedAssetRoute",
+		"assetIntent", "timeRelationship", "humorBeat", "tone", "sceneId",
+		"characters", "props", "materialLibraryHints",
+	}
+	for i, window := range windows {
+		parentID := firstNonEmptyString(window, "parentShotId", "shotId", "id")
+		source := byID[parentID]
+		if source == nil && i >= 0 && i < len(sourceShots) {
+			source = sourceShots[i]
+		}
+		if source == nil {
+			continue
+		}
+		for _, key := range carryKeys {
+			if _, exists := window[key]; exists {
+				continue
+			}
+			if value, ok := source[key]; ok && value != nil {
+				window[key] = value
+			}
+		}
+		if _, exists := window["visual"]; !exists {
+			window["visual"] = firstNonEmptyString(window, "sceneSummary", "mainAction")
+		}
+		if _, exists := window["whyThisShot"]; !exists {
+			window["whyThisShot"] = firstNonEmptyString(source, "dramaticPurpose", "directorReason")
+		}
+	}
 }
 
 func toolMapsFromValue(value interface{}, nestedKeys ...string) []map[string]interface{} {
@@ -1920,6 +2318,24 @@ func buildShotListMarkdown(title string, shots []map[string]interface{}) string 
 		if visual := firstNonEmptyString(shot, "visual", "sceneSummary", "description", "soundCue"); visual != "" {
 			b.WriteString(fmt.Sprintf("- Plan: %s\n", visual))
 		}
+		if camera := firstNonEmptyString(shot, "camera", "cameraMotion"); camera != "" {
+			b.WriteString(fmt.Sprintf("- Camera: %s\n", camera))
+		}
+		if lighting := firstNonEmptyString(shot, "lighting", "light", "mood"); lighting != "" {
+			b.WriteString(fmt.Sprintf("- Lighting: %s\n", lighting))
+		}
+		if why := firstNonEmptyString(shot, "whyThisShot", "dramaticPurpose", "directorReason"); why != "" {
+			b.WriteString(fmt.Sprintf("- Why this shot: %s\n", why))
+		}
+		if route := firstNonEmptyString(shot, "plannedAssetRoute", "assetRoute", "route"); route != "" {
+			b.WriteString(fmt.Sprintf("- Asset route: `%s`\n", route))
+		}
+		if intent := firstNonEmptyString(shot, "assetIntent"); intent != "" {
+			b.WriteString(fmt.Sprintf("- Asset intent: %s\n", intent))
+		}
+		if humorBeat := firstNonEmptyString(shot, "humorBeat"); humorBeat != "" {
+			b.WriteString(fmt.Sprintf("- Humor beat: %s\n", humorBeat))
+		}
 		if note := firstNonEmptyString(shot, "directorNote"); note != "" {
 			b.WriteString(fmt.Sprintf("- Note: %s\n", note))
 		}
@@ -2008,7 +2424,10 @@ func mergeShotGenerationToolValues(shotMap map[string]interface{}, visualPlans [
 	for _, key := range []string{
 		"visualPlan", "visual", "visualIntent", "description", "sceneSummary", "mainAction", "action",
 		"screenText", "textLayers", "background", "characters", "props", "motionPlan", "cameraPlan",
-		"referenceImages", "references", "timeWindowId", "parentShotId",
+		"referenceImages", "references", "referenceAssetIds", "continuityAnchors",
+		"dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting",
+		"composition", "framing", "shotSize", "plannedAssetRoute", "assetIntent",
+		"timeRelationship", "timeWindowId", "parentShotId",
 	} {
 		if _, exists := values[key]; !exists {
 			if selectedValue, ok := selected[key]; ok && selectedValue != nil {
@@ -2036,6 +2455,11 @@ func enrichShotGenerationPlanInputs(values map[string]interface{}, plan *videomo
 	if parentShotID := firstNonEmptyString(values, "parentShotId"); parentShotID != "" {
 		plan.RenderInputs["parentShotId"] = parentShotID
 	}
+	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+		if value, ok := values[key]; ok && value != nil {
+			plan.RenderInputs[key] = value
+		}
+	}
 }
 
 func shotUnitFromToolMap(values map[string]interface{}, fallbackIndex int) videomodel.ShotUnit {
@@ -2054,6 +2478,9 @@ func shotUnitFromToolMap(values map[string]interface{}, fallbackIndex int) video
 		Narration:         firstNonEmptyString(values, "narrationText", "scriptText", "text"),
 		ScreenText:        firstStringListInMap(values, "screenText", "screenTexts"),
 		MainAction:        firstNonEmptyString(values, "mainAction", "action", "visual"),
+		Camera:            firstNonEmptyString(values, "camera", "cameraMotion"),
+		TransitionIn:      firstNonEmptyString(values, "transitionIn"),
+		TransitionOut:     firstNonEmptyString(values, "transitionOut", "transitionAtEnd"),
 		ReviewStatus:      videomodel.ReviewStatusPending,
 		Version:           1,
 	}
@@ -2151,6 +2578,11 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	if timeWindowID != "" {
 		planMap["timeWindowId"] = timeWindowID
 	}
+	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+		if value, ok := shotMap[key]; ok && value != nil {
+			planMap[key] = value
+		}
+	}
 	pkg := map[string]interface{}{
 		"shotId":         plan.ShotID,
 		"durationSec":    normalizedDurationSec(firstValueInMap(shotMap, "durationSec", "duration", "seconds")),
@@ -2167,6 +2599,11 @@ func shotAssetPackageFromGenerationPlan(shotMap map[string]interface{}, plan vid
 	}
 	if timeWindowID != "" {
 		pkg["timeWindowId"] = timeWindowID
+	}
+	for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+		if value, ok := shotMap[key]; ok && value != nil {
+			pkg[key] = value
+		}
 	}
 	return pkg
 }
@@ -2217,6 +2654,11 @@ func externalRequestsFromGenerationPlan(plan videomodel.ShotGenerationPlan) []ma
 			"target": map[string]interface{}{
 				"durationSec": durationSec,
 			},
+		}
+		for _, key := range []string{"referenceAssetIds", "continuityAnchors", "dramaticPurpose", "whyThisShot", "directorReason", "actionBeats", "lighting", "composition", "framing", "shotSize", "assetIntent"} {
+			if value, ok := plan.RenderInputs[key]; ok && value != nil {
+				request[key] = value
+			}
 		}
 		if negativePrompt != "" {
 			request["negativePrompt"] = negativePrompt
@@ -2302,6 +2744,10 @@ func joinedShotVisualText(shot videomodel.ShotUnit, values map[string]interface{
 		shot.Title,
 		firstNonEmptyString(values, "visual", "visualIntent", "description", "sceneSummary"),
 		firstNonEmptyString(values, "mainAction", "action"),
+		firstNonEmptyString(values, "camera", "cameraMotion"),
+		firstNonEmptyString(values, "lighting", "light", "mood"),
+		firstNonEmptyString(values, "composition", "framing"),
+		firstNonEmptyString(values, "dramaticPurpose", "whyThisShot", "directorReason"),
 	}
 	out := []string{}
 	for _, part := range parts {
@@ -2492,6 +2938,13 @@ func boolFromToolMap(values map[string]interface{}, keys ...string) (bool, bool)
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b
@@ -3301,21 +3754,39 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		camera := firstStringInMap(shot, "camera", "cameraMove", "cameraMotion")
 		lighting := firstStringInMap(shot, "lighting", "light", "mood")
 		composition := firstStringInMap(shot, "composition", "framing")
+		assetIntent := firstStringInMap(shot, "assetIntent")
+		humorBeat := firstStringInMap(shot, "humorBeat")
+		timeRelationship := firstStringInMap(shot, "timeRelationship", "timing", "timeline")
+		whyThisShot := firstStringInMap(shot, "whyThisShot", "dramaticPurpose", "directorReason")
+		shotSize := firstStringInMap(shot, "shotSize", "shotType")
+		actionBeats := stringListFromInterface(shot["actionBeats"])
+		continuityAnchors := stringListFromInterface(shot["continuityAnchors"])
+		referenceAssetIDs := stringListFromInterface(shot["referenceAssetIds"])
+		tone := firstStringInMap(shot, "tone", "contentTone", "styleTone")
+		if tone == "" {
+			tone = "正能量、轻松幽默、建设性；不焦虑、不嘲讽用户，用反差表达创作者减负和开源共建。"
+		}
 		transitionAtEnd := transitionTextForShot(shot)
 		materialHints := stringListFromInterface(shot["materialLibraryHints"])
-		references := referenceImagesFromHints(shotID, materialHints)
+		references := interfaceSliceFromAny(firstExistingValue(shot, "referenceImages", "references"))
+		if len(references) == 0 {
+			references = referenceImagesFromHints(shotID, append(materialHints, referenceAssetIDs...))
+		}
 
 		promptParts := []string{
 			fmt.Sprintf("独立生成 %d 秒非写实动画 AIGC 视频，主题：%s。", duration, compactTopicForPrompt(topic)),
 			fmt.Sprintf("镜头 %s：%s", shotID, fallbackText(visual, narration)),
 			"口播/字幕内容：" + narration,
-			"画面需包含主体、场景、动作、镜头运动、光影、色彩和风格，禁止真人写实，保持干净、知识分享、电影感动画。",
-			"本 shot 完全独立生成，不依赖上一镜或下一镜，不写同上、接上一镜、延续前一镜。",
+			"画面需包含主体、场景、动作、镜头运动、光影、色彩和风格，采用非真人动画或图形隐喻，保持干净、明亮、积极、知识分享、电影感动画。",
+			"本 shot 完全独立生成，画面信息自洽，适合直接剪入当前段落。",
 			"转场只覆盖在本 shot 结尾：" + transitionAtEnd,
 			"生成后可直接作为 SHOT_VIDEO_CLIP，用 ffmpeg 按 shot 顺序 simple_cut 拼接。",
 		}
 		if camera != "" {
 			promptParts = append(promptParts, "镜头运动："+camera)
+		}
+		if shotSize != "" {
+			promptParts = append(promptParts, "景别："+shotSize)
 		}
 		if composition != "" {
 			promptParts = append(promptParts, "构图："+composition)
@@ -3323,11 +3794,35 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		if lighting != "" {
 			promptParts = append(promptParts, "光影："+lighting)
 		}
+		if whyThisShot != "" {
+			promptParts = append(promptParts, "画面意义："+whyThisShot)
+		}
+		if len(actionBeats) > 0 {
+			promptParts = append(promptParts, "动作时间线："+strings.Join(actionBeats, " "))
+		}
+		if len(continuityAnchors) > 0 {
+			promptParts = append(promptParts, "一致性锚点："+strings.Join(continuityAnchors, "、"))
+		}
+		if len(referenceAssetIDs) > 0 {
+			promptParts = append(promptParts, "全局参考资产："+strings.Join(referenceAssetIDs, "、"))
+		}
+		if assetIntent != "" {
+			promptParts = append(promptParts, "素材意图："+assetIntent)
+		}
+		if humorBeat != "" {
+			promptParts = append(promptParts, "趣味节拍："+humorBeat)
+		}
+		if timeRelationship != "" {
+			promptParts = append(promptParts, "口播与画面时间关系："+timeRelationship)
+		}
+		if tone != "" {
+			promptParts = append(promptParts, "内容调性："+tone)
+		}
 		if len(materialHints) > 0 {
 			promptParts = append(promptParts, "可参考素材库关键词："+strings.Join(materialHints, "、"))
 		}
 		videoPrompt := limitPromptRunes(strings.Join(promptParts, "\n"), 2000)
-		negativePrompt := "禁止真人写实、禁止跨 shot 依赖、禁止尾帧对齐、禁止要求上一镜或下一镜配合、禁止水印、禁止文字乱码、禁止画面崩坏。"
+		negativePrompt := "避免真人写实、跨 shot 依赖、尾帧对齐要求、水印、不可读文字、画面崩坏。"
 		requestID := "extgen_video_" + unitShotID
 		submitExternalRequest := shouldSubmitExternalVideoRequest(shot, visual, materialHints)
 
@@ -3339,6 +3834,15 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"negativePrompt":       negativePrompt,
 			"continuity":           "仅共享主要角色、主要道具、主场景和全片风格；不得依赖其他 shot 的画面。",
 			"materialLibraryHints": materialHints,
+			"referenceAssetIds":    referenceAssetIDs,
+			"continuityAnchors":    continuityAnchors,
+			"whyThisShot":          whyThisShot,
+			"dramaticPurpose":      whyThisShot,
+			"actionBeats":          actionBeats,
+			"camera":               camera,
+			"lighting":             lighting,
+			"composition":          composition,
+			"shotSize":             shotSize,
 			"subtitleText":         narration,
 			"shotAssemblyPlan": map[string]interface{}{
 				"audioArtifactKind":    "SHOT_AUDIO",
@@ -3362,15 +3866,32 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"promptCharLimit":     2000,
 				"referenceImageLimit": 6,
 				"status":              "pending_upload",
+				"referenceAssetIds":   referenceAssetIDs,
+				"continuityAnchors":   continuityAnchors,
+				"whyThisShot":         whyThisShot,
+				"actionBeats":         actionBeats,
 				"manualInstruction":   "当前没有可用的视频生成 API 配置，请在浏览器外部视频平台复制 Prompt 生成本 shot，再回传上传结果。",
 			})
 		}
 
 		packages = append(packages, map[string]interface{}{
-			"shotId":          shotID,
-			"durationSec":     duration,
-			"referenceImages": references,
-			"assetRoute":      firstStringInMap(shot, "plannedAssetRoute", "assetRoute", "route", "recommendedMode"),
+			"shotId":            shotID,
+			"durationSec":       duration,
+			"referenceImages":   references,
+			"assetRoute":        firstStringInMap(shot, "plannedAssetRoute", "assetRoute", "route", "recommendedMode"),
+			"assetIntent":       assetIntent,
+			"humorBeat":         humorBeat,
+			"tone":              tone,
+			"timeRelationship":  timeRelationship,
+			"referenceAssetIds": referenceAssetIDs,
+			"continuityAnchors": continuityAnchors,
+			"whyThisShot":       whyThisShot,
+			"dramaticPurpose":   whyThisShot,
+			"actionBeats":       actionBeats,
+			"camera":            camera,
+			"lighting":          lighting,
+			"composition":       composition,
+			"shotSize":          shotSize,
 			"prompts": map[string]interface{}{
 				"videoPrompt":    videoPrompt,
 				"negativePrompt": negativePrompt,
@@ -6217,6 +6738,16 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 			return tool.SuccessResult(data)
 		}
 	}
+	if toolName == "reference_asset_planner" && videoParamsLookCinematic(topic, params) {
+		if data, ok := buildFallbackReferenceAssetData(toolName, skillName, topic, params); ok {
+			return tool.SuccessResult(data)
+		}
+	}
+	if toolName == "keyframe_prompt_generator" && videoParamsLookCinematic(topic, params) {
+		if data, ok := buildFallbackKeyframePromptData(toolName, skillName, topic, params); ok {
+			return tool.SuccessResult(data)
+		}
+	}
 
 	systemPrompt := buildDynamicAgentSystemPrompt(toolName, topic, style, platform)
 	userPrompt := buildDynamicAgentUserPrompt(toolName, topic, facts, style, script, shotList, videoPrompts, publishCopy, platform, targetDurationSec)
@@ -6258,8 +6789,21 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	effectiveCfg := effectiveVideoCreationOpenAIConfig(params)
 
 	if effectiveCfg.APIKey == "" {
-		if toolName == "video_script_generator" {
+		switch toolName {
+		case "video_script_generator":
 			return tool.SuccessResult(buildFallbackVideoScriptData(toolName, skillName, topic, targetDurationSec, usedFacts, knowledgeTrace))
+		case "continuity_checker":
+			if data, ok := buildFallbackContinuityData(toolName, skillName, topic, params); ok {
+				return tool.SuccessResult(data)
+			}
+		case "reference_asset_planner":
+			if data, ok := buildFallbackReferenceAssetData(toolName, skillName, topic, params); ok {
+				return tool.SuccessResult(data)
+			}
+		case "keyframe_prompt_generator":
+			if data, ok := buildFallbackKeyframePromptData(toolName, skillName, topic, params); ok {
+				return tool.SuccessResult(data)
+			}
 		}
 		content := fmt.Sprintf("# %s\n\n主题：%s\n\n> ⚠️ LLM API Key 未配置。请设置 API Key 以启用 AI 内容生成。", toolName, topic)
 		data := map[string]interface{}{
@@ -6318,6 +6862,19 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	if toolName == "video_prompt_generator" {
 		ensureVideoPromptShotAssetPackages(contentPkg)
 	}
+	if toolName == "video_script_generator" && videoParamsLookCinematic(topic, params) && !hasCinematicScriptFields(contentPkg) {
+		fallback := buildFallbackVideoScriptData(toolName, skillName, topic, targetDurationSec, usedFacts, knowledgeTrace)
+		if fallbackPkg, ok := fallback["package"].(map[string]interface{}); ok {
+			for _, key := range []string{"script", "detailedScript", "storyOutline", "characters", "scenes", "props", "sections", "scriptSpans", "qualityHints", "summary", "estimatedDurationSec"} {
+				if value, exists := fallbackPkg[key]; exists {
+					contentPkg[key] = value
+				}
+			}
+			if canonical, err := json.Marshal(contentPkg); err == nil {
+				displayContent = string(canonical)
+			}
+		}
+	}
 
 	artifacts := buildSkillStageArtifacts(toolName, skillName, toolName == "publish_copy_generator", isJSON)
 	if toolName == "video_prompt_generator" {
@@ -6358,6 +6915,16 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 	if summary, ok := nonEmptyStringField(contentPkg, "summary"); ok {
 		data["summary"] = summary
+	}
+	for _, key := range []string{
+		"storyOutline", "detailedScript", "characters", "scenes", "props",
+		"continuityReport", "continuityBible", "styleProfile",
+		"referenceAssetPlan", "referenceAssetIndex", "globalReferenceAssets",
+		"externalGenerationRequests",
+	} {
+		if value, ok := contentPkg[key]; ok {
+			data[key] = value
+		}
 	}
 	if estimatedDurationSec, ok := contentPkg["estimatedDurationSec"]; ok {
 		data["estimatedDurationSec"] = estimatedDurationSec
@@ -6445,6 +7012,9 @@ func buildFallbackVideoScriptData(toolName, skillName, topic string, targetDurat
 		targetDurationSec = 30
 	}
 	subject := fallbackVideoScriptSubject(topic)
+	if fallbackTopicLooksCinematic(topic) {
+		return buildFallbackCinematicScriptData(toolName, skillName, topic, subject, targetDurationSec, usedFacts, knowledgeTrace)
+	}
 	sections := fallbackVideoScriptSections(subject, targetDurationSec)
 	lines := make([]string, 0, len(sections))
 	for _, section := range sections {
@@ -6498,6 +7068,574 @@ func buildFallbackVideoScriptData(toolName, skillName, topic string, targetDurat
 		"knowledgeTrace":       knowledgeTrace,
 		"artifacts":            buildSkillStageArtifacts(toolName, skillName, false, true),
 	}
+}
+
+func buildFallbackCinematicScriptData(toolName, skillName, topic, subject string, targetDurationSec int, usedFacts []map[string]interface{}, knowledgeTrace map[string]interface{}) map[string]interface{} {
+	if targetDurationSec <= 0 {
+		targetDurationSec = 45
+	}
+	if targetDurationSec > 90 {
+		targetDurationSec = 90
+	}
+	sections := fallbackCinematicScriptSections(subject, targetDurationSec)
+	lines := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if text := strings.TrimSpace(ensureStringValue(section["text"])); text != "" {
+			lines = append(lines, text)
+		}
+	}
+	characters := fallbackCinematicCharacters(subject)
+	scenes := fallbackCinematicScenes(subject)
+	props := fallbackCinematicProps(subject)
+	storyOutline := map[string]interface{}{
+		"logline": fmt.Sprintf("一个被任务追着跑的创作者，把混乱需求交给%s后，发现视频生产可以像拍短片一样可控。", subject),
+		"theme":   "用正能量、轻松无厘头的方式表达：创作流程透明、可审核、可返修，焦虑可以被系统化工作流化解。",
+		"beats": []map[string]interface{}{
+			{"id": "beat_01", "name": "钩子", "purpose": "用夸张混乱建立共鸣"},
+			{"id": "beat_02", "name": "发现", "purpose": "展示系统把想法拆成流程"},
+			{"id": "beat_03", "name": "转折", "purpose": "MCP 和 QA 让生成结果可控"},
+			{"id": "beat_04", "name": "收束", "purpose": "开源项目邀请关注和共建"},
+		},
+		"ending": "混乱的创作桌面变成干净的导演台，项目开源上线，观众被邀请关注后续真实迭代。",
+	}
+	detailedScript := strings.Join(lines, "\n\n")
+	if len(usedFacts) == 0 {
+		usedFacts = []map[string]interface{}{
+			{"claim": fmt.Sprintf("%s 的影视 fallback 以结构化剧本、角色、场景和道具档案为中心。", subject), "source": "fallback_cinematic_script_generator"},
+		}
+	}
+	if knowledgeTrace == nil {
+		knowledgeTrace = map[string]interface{}{}
+	}
+	knowledgeTrace["fallback"] = true
+	knowledgeTrace["profile"] = videomodel.VideoProfileCinematicStory
+	knowledgeTrace["usedFactCount"] = len(usedFacts)
+	contentPkg := map[string]interface{}{
+		"script":               detailedScript,
+		"detailedScript":       detailedScript,
+		"storyOutline":         storyOutline,
+		"characters":           characters,
+		"scenes":               scenes,
+		"props":                props,
+		"summary":              fmt.Sprintf("%s 的影视短片详细剧本和全局一致性档案。", subject),
+		"estimatedDurationSec": targetDurationSec,
+		"sections":             sections,
+		"scriptSpans":          sections,
+		"qualityHints": map[string]interface{}{
+			"hasHook":              true,
+			"hasStory":             true,
+			"hasCharacterDossiers": true,
+			"hasSceneDossiers":     true,
+			"hasPropDossiers":      true,
+			"nonRealHumanStyle":    true,
+		},
+		"usedFacts":         usedFacts,
+		"unusedFacts":       []interface{}{},
+		"factCheckWarnings": []interface{}{},
+		"knowledgeTrace":    knowledgeTrace,
+	}
+	content := detailedScript
+	if encoded, err := json.Marshal(contentPkg); err == nil {
+		content = string(encoded)
+	}
+	return map[string]interface{}{
+		"content":              content,
+		"package":              contentPkg,
+		"script":               detailedScript,
+		"detailedScript":       detailedScript,
+		"storyOutline":         storyOutline,
+		"characters":           characters,
+		"scenes":               scenes,
+		"props":                props,
+		"summary":              contentPkg["summary"],
+		"estimatedDurationSec": targetDurationSec,
+		"sections":             sections,
+		"scriptSpans":          sections,
+		"qualityHints":         contentPkg["qualityHints"],
+		"usedFacts":            usedFacts,
+		"unusedFacts":          []interface{}{},
+		"factCheckWarnings":    []interface{}{},
+		"knowledgeTrace":       knowledgeTrace,
+		"artifacts":            buildSkillStageArtifacts(toolName, skillName, false, true),
+	}
+}
+
+func fallbackTopicLooksCinematic(topic string) bool {
+	return containsAny(strings.ToLower(topic), "影视", "剧情", "短片", "角色", "场景", "道具", "导演", "连续性", "cinematic", "story")
+}
+
+func videoParamsLookCinematic(topic string, params map[string]interface{}) bool {
+	if fallbackTopicLooksCinematic(topic) {
+		return true
+	}
+	for _, key := range []string{"videoType", "projectMode", "profileId", "creationProfileId", "dagTemplateId"} {
+		if looksCinematicProfile(stringParam(params, key, "")) {
+			return true
+		}
+	}
+	for _, key := range []string{"creationProfile", "profile"} {
+		profile, ok := mapValue(params[key])
+		if !ok {
+			continue
+		}
+		for _, profileKey := range []string{"id", "profileId", "sourceRoute", "dagTemplateId", "videoType", "mode"} {
+			if looksCinematicProfile(firstNonEmptyString(profile, profileKey)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func looksCinematicProfile(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return normalized == "cinematic_story" ||
+		normalized == "cinematic-story" ||
+		normalized == "film_story" ||
+		normalized == "film-story" ||
+		strings.Contains(normalized, "cinematic_story") ||
+		strings.Contains(normalized, "cinematic-story")
+}
+
+func hasCinematicScriptFields(contentPkg map[string]interface{}) bool {
+	if contentPkg == nil {
+		return false
+	}
+	for _, key := range []string{"storyOutline", "detailedScript", "characters", "scenes", "props", "scriptSpans"} {
+		if value, ok := contentPkg[key]; !ok || !hasMeaningfulStructuredValue(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasMeaningfulStructuredValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []interface{}:
+		return len(typed) > 0
+	case []map[string]interface{}:
+		return len(typed) > 0
+	case map[string]interface{}:
+		return len(typed) > 0
+	default:
+		return value != nil
+	}
+}
+
+func fallbackCinematicScriptSections(subject string, targetDurationSec int) []map[string]interface{} {
+	texts := []string{
+		fmt.Sprintf("夜晚的创作桌像刚经历过一场需求暴雨，主角盯着屏幕说：我只是想做条视频，为什么像在解谜。桌上的任务卡突然立起来，把自己排成歪歪扭扭的队。"),
+		fmt.Sprintf("主角把一句话需求放进%s，导演台亮起，故事大纲、角色、场景、道具和 shot 队列像舞台灯一样依次打开。任务卡从乱跳变成排队走路。", subject),
+		"即梦 MCP 插槽弹出，参考图和 AIGC shot 被打包进每个镜头。QA 放大镜从画面边缘扫过，把拥挤字幕、混乱背景和不匹配镜头逐个标红，再给出返修建议。",
+		fmt.Sprintf("最后，创作桌恢复清爽，主角端起咖啡对镜头说：这不是让 AI 乱发挥，是把创作变成可审核流水线。%s 开源上线，关注后续真实迭代。", subject),
+	}
+	durations := distributeFallbackScriptDurations(targetDurationSec, len(texts))
+	names := []string{"混乱钩子", "流程展开", "MCP 与 QA 转折", "开源收束"}
+	sections := make([]map[string]interface{}, 0, len(texts))
+	start := 0
+	for i, text := range texts {
+		duration := durations[i]
+		end := start + duration
+		sectionID := fmt.Sprintf("SCENE_%02d", i+1)
+		sections = append(sections, map[string]interface{}{
+			"id":          sectionID,
+			"spanId":      sectionID,
+			"name":        names[i],
+			"startSec":    start,
+			"endSec":      end,
+			"durationSec": duration,
+			"text":        text,
+			"scriptText":  text,
+			"sceneId":     fmt.Sprintf("scene_%02d", minInt(i+1, 2)),
+		})
+		start = end
+	}
+	return sections
+}
+
+func fallbackCinematicCharacters(subject string) []map[string]interface{} {
+	return []map[string]interface{}{
+		{
+			"id":             "char_creator",
+			"name":           "创作者小唐",
+			"role":           "主角",
+			"description":    "非真人风格化 3D 动画角色，圆润轮廓，表情夸张但积极，代表被工具和需求包围的普通创作者。",
+			"motivation":     "想把混乱创作变成可控流程。",
+			"invariants":     []string{"浅色外套", "圆形眼镜", "积极表情", "不出现真人写实皮肤"},
+			"referenceViews": []string{"front", "side", "back", "expression_sheet"},
+		},
+		{
+			"id":             "char_task_card",
+			"name":           "会排队的任务卡",
+			"role":           "喜剧辅助角色",
+			"description":    "拟物化任务卡片，非真人风格，能跳动、排队和举牌，用无厘头方式表现可审核流程。",
+			"motivation":     fmt.Sprintf("把%s的流程节点变成观众一眼能懂的画面。", subject),
+			"invariants":     []string{"白色卡片主体", "蓝绿状态条", "无真实品牌文字", "动作轻快"},
+			"referenceViews": []string{"front", "side", "back", "pose_sheet"},
+		},
+	}
+}
+
+func fallbackCinematicScenes(subject string) []map[string]interface{} {
+	return []map[string]interface{}{
+		{
+			"id":             "scene_creator_desk",
+			"name":           "夜晚创作桌",
+			"description":    "非真人风格化动画工作台，屏幕、便签、咖啡杯和柔和台灯构成主空间，开场混乱，结尾清爽。",
+			"spatialLocks":   []string{"屏幕在画面右侧", "台灯在左后方", "桌面中央留给任务卡动作", "暖色主光"},
+			"referenceViews": []string{"entrance_view", "reverse_view", "side_view", "top_layout"},
+		},
+		{
+			"id":             "scene_tangying_director_console",
+			"name":           subject + " 导演台",
+			"description":    "像小型制片控制台的抽象界面，节点、审核门、MCP 插槽和 QA 面板清晰分区，不出现密集小字。",
+			"spatialLocks":   []string{"流程节点从左到右", "MCP 插槽在右侧", "QA 面板在下方安全区外", "中心保留主体动作"},
+			"referenceViews": []string{"front_view", "angled_view", "side_view", "wide_layout"},
+		},
+	}
+}
+
+func fallbackCinematicProps(subject string) []map[string]interface{} {
+	return []map[string]interface{}{
+		{
+			"id":             "prop_mcp_slot",
+			"name":           "MCP 插槽",
+			"description":    "标准协议插槽的拟物化道具，像可插拔积木，不绑定具体语言或框架。",
+			"invariants":     []string{"接口形状稳定", "蓝绿色连接光", "无密集文字"},
+			"referenceViews": []string{"front", "side", "back", "detail"},
+		},
+		{
+			"id":             "prop_qa_magnifier",
+			"name":           "QA 放大镜",
+			"description":    "用于扫描 shot 画面质量的放大镜道具，能投射量化指标和返修箭头。",
+			"invariants":     []string{"透明镜片", "绿色通过标记", "红色问题标记", "不遮挡主体"},
+			"referenceViews": []string{"front", "side", "back", "detail"},
+		},
+	}
+}
+
+func buildFallbackContinuityData(toolName, skillName, topic string, params map[string]interface{}) (map[string]interface{}, bool) {
+	script := firstNonEmptyString(params, "script", "detailedScript", "brief", "topic")
+	if script == "" && !fallbackTopicLooksCinematic(topic) {
+		return nil, false
+	}
+	subject := fallbackVideoScriptSubject(topic)
+	characters := toolMapsFromValue(params["characters"], "characters")
+	if len(characters) == 0 {
+		characters = fallbackCinematicCharacters(subject)
+	}
+	scenes := toolMapsFromValue(params["scenes"], "scenes")
+	if len(scenes) == 0 {
+		scenes = fallbackCinematicScenes(subject)
+	}
+	props := toolMapsFromValue(params["props"], "props")
+	if len(props) == 0 {
+		props = fallbackCinematicProps(subject)
+	}
+	styleProfile := map[string]interface{}{
+		"artifactKind": "STYLE_PROFILE",
+		"tone":         "正能量、搞笑、轻松、无厘头但不嘲讽用户",
+		"visualStyle":  "非真人风格化 3D 动画短片，电影感光影，明亮干净，禁止真人写实和照片级真人皮肤。",
+		"aspectRatio":  "16:9",
+	}
+	continuity := map[string]interface{}{
+		"artifactKind": "CONTINUITY_REPORT",
+		"storyPurpose": "保持故事、角色、场景、道具和全片风格在所有 shot 中一致。",
+		"characters":   characters,
+		"scenes":       scenes,
+		"props":        props,
+		"globalLocks": []string{
+			"所有角色、场景和道具保持非真人风格化动画体系。",
+			"每个 shot 可独立生成，但只共享主要角色、主场景、核心道具和全片风格。",
+			"禁止依赖上一镜尾帧或下一镜首帧；连续性通过参考图和档案锁定。",
+			"画面文字交给 HyperFrames/HTML overlay，不要求 AIGC 视频内生生成小字。",
+		},
+		"shotQAPolicy": []string{
+			"每个 shot 都检查 3-15 秒规格。",
+			"每个 shot 必须有剧本作用、画面主体、运镜、光影、参考资产和返修依据。",
+			"最终渲染后按 shot 抽帧 QA，输出量化指标和修复建议。",
+		},
+		"styleProfile": styleProfile,
+	}
+	contentPkg := map[string]interface{}{
+		"continuityReport": continuity,
+		"continuityBible":  continuity,
+		"styleProfile":     styleProfile,
+		"summary":          "已生成影视短片连续性圣经，包含角色、场景、道具、风格和 QA 锁定规则。",
+	}
+	contentBytes, _ := json.Marshal(contentPkg)
+	return map[string]interface{}{
+		"content":          string(contentBytes),
+		"package":          contentPkg,
+		"continuityReport": continuity,
+		"continuityBible":  continuity,
+		"styleProfile":     styleProfile,
+		"summary":          contentPkg["summary"],
+		"artifacts":        buildSkillStageArtifacts(toolName, skillName, false, true),
+	}, true
+}
+
+func buildFallbackReferenceAssetData(toolName, skillName, topic string, params map[string]interface{}) (map[string]interface{}, bool) {
+	subject := fallbackVideoScriptSubject(topic)
+	continuity := map[string]interface{}{}
+	if values, ok := mapValue(params["continuityBible"]); ok {
+		continuity = values
+	}
+	characters := toolMapsFromValue(firstExistingValue(continuity, "characters"), "characters")
+	if len(characters) == 0 {
+		characters = toolMapsFromValue(params["characters"], "characters")
+	}
+	if len(characters) == 0 {
+		characters = fallbackCinematicCharacters(subject)
+	}
+	scenes := toolMapsFromValue(firstExistingValue(continuity, "scenes"), "scenes")
+	if len(scenes) == 0 {
+		scenes = toolMapsFromValue(params["scenes"], "scenes")
+	}
+	if len(scenes) == 0 {
+		scenes = fallbackCinematicScenes(subject)
+	}
+	props := toolMapsFromValue(firstExistingValue(continuity, "props"), "props")
+	if len(props) == 0 {
+		props = toolMapsFromValue(params["props"], "props")
+	}
+	if len(props) == 0 {
+		props = fallbackCinematicProps(subject)
+	}
+
+	index := []map[string]interface{}{}
+	requests := []interface{}{}
+	addRefs := func(items []map[string]interface{}, role string) {
+		for _, item := range items {
+			id := firstNonEmptyString(item, "id", "name")
+			if id == "" {
+				id = fmt.Sprintf("%s_%02d", role, len(index)+1)
+			}
+			name := firstNonEmptyString(item, "name", "label")
+			if name == "" {
+				name = id
+			}
+			views := firstStringListInMap(item, "referenceViews", "views")
+			if len(views) == 0 {
+				views = []string{"front", "side", "back", "detail"}
+			}
+			description := firstNonEmptyString(item, "description", "summary")
+			locks := firstStringListInMap(item, "invariants", "spatialLocks", "locks")
+			ref := map[string]interface{}{
+				"id":          id,
+				"label":       name,
+				"role":        role,
+				"views":       views,
+				"description": description,
+				"locks":       locks,
+				"prompt":      fallbackReferencePrompt(role, name, description, views, locks),
+				"target":      map[string]interface{}{"aspectRatio": "16:9", "resolution": "1920x1080"},
+				"status":      "pending_generation",
+			}
+			index = append(index, ref)
+			requests = append(requests, map[string]interface{}{
+				"requestId":           "extgen_ref_" + sanitizeUnitPart(id),
+				"assetId":             id,
+				"shotId":              "GLOBAL_REFERENCE",
+				"kind":                "image",
+				"role":                role,
+				"prompt":              ref["prompt"],
+				"promptText":          ref["prompt"],
+				"negativePrompt":      "禁止真人写实、照片级真人皮肤、真实演员、明星脸、密集文字、遮挡主体、风格不统一。",
+				"references":          []interface{}{},
+				"target":              map[string]interface{}{"aspectRatio": "16:9", "resolution": "1920x1080", "generateNum": 1},
+				"promptCharLimit":     2000,
+				"referenceImageLimit": 0,
+				"status":              "pending_upload",
+				"artifactKind":        "REFERENCE_IMAGE",
+			})
+		}
+	}
+	addRefs(characters, "character")
+	addRefs(scenes, "scene")
+	addRefs(props, "prop")
+
+	plan := map[string]interface{}{
+		"artifactKind": "REFERENCE_ASSET_PLAN",
+		"stylePackage": map[string]interface{}{
+			"style":       "非真人风格化 3D 动画短片，电影感光影，明亮、解压、正能量。",
+			"aspectRatio": "16:9",
+			"negative":    "禁止真人写实、照片级皮肤、真实演员、密集文字、风格漂移。",
+		},
+		"characters":            characters,
+		"scenes":                scenes,
+		"props":                 props,
+		"referenceAssetIndex":   index,
+		"globalReferenceAssets": index,
+		"generationPolicy":      "先生成主要角色、主场景、核心道具的多视角设定板；shot 视频只引用必要的全局参考，避免跨 shot 画面依赖。",
+		"externalRequestCount":  len(requests),
+	}
+	contentPkg := map[string]interface{}{
+		"referenceAssetPlan":         plan,
+		"referenceAssetIndex":        index,
+		"globalReferenceAssets":      index,
+		"externalGenerationRequests": requests,
+		"summary":                    fmt.Sprintf("已为 %s 规划 %d 个全局一致性参考图请求。", subject, len(requests)),
+	}
+	contentBytes, _ := json.Marshal(contentPkg)
+	artifacts := buildSkillStageArtifacts(toolName, skillName, false, true)
+	for _, item := range requests {
+		if req, ok := item.(map[string]interface{}); ok {
+			artifacts = append(artifacts, externalGenerationArtifact(firstNonEmptyString(req, "requestId"), firstNonEmptyString(req, "shotId"), "image"))
+		}
+	}
+	return map[string]interface{}{
+		"content":                    string(contentBytes),
+		"package":                    contentPkg,
+		"referenceAssetPlan":         plan,
+		"referenceAssetIndex":        index,
+		"globalReferenceAssets":      index,
+		"externalGenerationRequests": requests,
+		"summary":                    contentPkg["summary"],
+		"artifacts":                  artifacts,
+	}, true
+}
+
+func fallbackReferencePrompt(role, name, description string, views []string, locks []string) string {
+	parts := []string{
+		"16:9 横屏 1920x1080，多视角设定板，非真人风格化动画短片画面，禁止真人写实。",
+		fmt.Sprintf("对象：%s（%s）。", name, role),
+		"画面只做参考资产设定，不承载剧情，不放密集说明文字。",
+		"需要展示视角：" + strings.Join(views, "、") + "。",
+		"电影感光影，主体清晰，背景简洁，边缘留白，适合后续 AIGC shot 继承一致性。",
+	}
+	if description != "" {
+		parts = append(parts, "档案描述："+description)
+	}
+	if len(locks) > 0 {
+		parts = append(parts, "不可变化项："+strings.Join(locks, "、"))
+	}
+	return limitPromptRunes(strings.Join(parts, "\n"), 2000)
+}
+
+func buildFallbackKeyframePromptData(toolName, skillName, topic string, params map[string]interface{}) (map[string]interface{}, bool) {
+	shots := normalizeShotItemsForAssetDecision(params["shotList"])
+	if len(shots) == 0 {
+		return nil, false
+	}
+	refPlan, _ := mapValue(params["referenceAssetPlan"])
+	globalRefs := interfaceSliceFromAny(firstExistingValue(refPlan, "globalReferenceAssets", "referenceAssetIndex"))
+	prompts := make([]interface{}, 0, len(shots))
+	requests := make([]interface{}, 0, len(shots))
+	for i, shot := range shots {
+		shotID := firstNonEmptyString(shot, "shotId", "id")
+		if shotID == "" {
+			shotID = fmt.Sprintf("SHOT_%02d", i+1)
+		}
+		visual := firstNonEmptyString(shot, "visual", "sceneSummary", "description", "mainAction")
+		camera := firstNonEmptyString(shot, "camera", "cameraMotion")
+		lighting := firstNonEmptyString(shot, "lighting", "mood")
+		why := firstNonEmptyString(shot, "whyThisShot", "dramaticPurpose", "directorReason")
+		references := referencesForShotFromPlan(shot, globalRefs)
+		promptText := limitPromptRunes(strings.Join(compactStrings([]string{
+			"16:9 横屏 1920x1080，非真人风格化动画短片关键帧，禁止真人写实。",
+			"镜头：" + fallbackText(visual, shotID),
+			"构图/运镜：" + camera,
+			"光影：" + lighting,
+			"画面意义：" + why,
+			"主体清晰，动作单一，留出字幕安全区，不生成密集文字。",
+		}), "\n"), 2000)
+		prompts = append(prompts, map[string]interface{}{
+			"shotId":            shotID,
+			"prompt":            promptText,
+			"referenceCoverage": referenceCoverageForShot(references),
+			"styleNotes":        "非真人风格化动画、电影感光影、统一角色/场景/道具参考。",
+		})
+		requests = append(requests, map[string]interface{}{
+			"requestId":           "extgen_keyframe_" + sanitizeUnitPart(shotID),
+			"kind":                "image",
+			"shotId":              shotID,
+			"prompt":              promptText,
+			"promptText":          promptText,
+			"negativePrompt":      "禁止真人写实、照片级真人皮肤、真实演员、密集文字、主体遮挡、跨 shot 帧对齐。",
+			"references":          references,
+			"target":              map[string]interface{}{"aspectRatio": "16:9", "resolution": "1920x1080", "generateNum": 1},
+			"promptCharLimit":     2000,
+			"referenceImageLimit": 6,
+			"status":              "pending_upload",
+		})
+	}
+	contentPkg := map[string]interface{}{
+		"keyframePrompts":            prompts,
+		"externalGenerationRequests": requests,
+		"summary":                    fmt.Sprintf("已为 %d 个 shot 生成关键帧提示词。", len(prompts)),
+	}
+	contentBytes, _ := json.Marshal(contentPkg)
+	return map[string]interface{}{
+		"content":                    string(contentBytes),
+		"package":                    contentPkg,
+		"keyframePrompts":            prompts,
+		"externalGenerationRequests": requests,
+		"summary":                    contentPkg["summary"],
+		"artifacts":                  buildSkillStageArtifacts(toolName, skillName, false, true),
+	}, true
+}
+
+func referencesForShotFromPlan(shot map[string]interface{}, globalRefs []interface{}) []interface{} {
+	if refs := interfaceSliceFromAny(firstExistingValue(shot, "referenceImages", "references")); len(refs) > 0 {
+		return limitInterfaces(refs, 6)
+	}
+	ids := stringListFromInterface(firstExistingValue(shot, "referenceAssetIds", "referenceIds"))
+	if len(ids) == 0 {
+		return limitInterfaces(globalRefs, 6)
+	}
+	selected := []interface{}{}
+	for _, refItem := range globalRefs {
+		ref, ok := mapValue(refItem)
+		if !ok {
+			continue
+		}
+		refID := firstNonEmptyString(ref, "id", "assetId")
+		for _, id := range ids {
+			if refID == id {
+				selected = append(selected, ref)
+				break
+			}
+		}
+	}
+	if len(selected) == 0 {
+		return limitInterfaces(globalRefs, 6)
+	}
+	return limitInterfaces(selected, 6)
+}
+
+func referenceCoverageForShot(references []interface{}) map[string]interface{} {
+	coverage := map[string]interface{}{
+		"characters": []interface{}{},
+		"scenes":     []interface{}{},
+		"props":      []interface{}{},
+		"missing":    []interface{}{},
+	}
+	for _, item := range references {
+		ref, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		role := firstNonEmptyString(ref, "role")
+		switch role {
+		case "character":
+			coverage["characters"] = append(coverage["characters"].([]interface{}), ref)
+		case "scene":
+			coverage["scenes"] = append(coverage["scenes"].([]interface{}), ref)
+		case "prop":
+			coverage["props"] = append(coverage["props"].([]interface{}), ref)
+		}
+	}
+	return coverage
+}
+
+func limitInterfaces(items []interface{}, limit int) []interface{} {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
 }
 
 func inferTargetDurationSec(topic string, fallback int) int {
@@ -6890,6 +8028,140 @@ func firstNonEmptyString(values map[string]interface{}, keys ...string) string {
 	return ""
 }
 
+func voiceVisualNeedsRichAIGC(script, assetStrategy string) bool {
+	text := strings.ToLower(normalizeInlineText(script + " " + assetStrategy))
+	return containsAny(text,
+		"aigc", "dreamina", "jimeng", "即梦", "素材", "b-roll", "broll",
+		"搞笑", "无厘头", "解压", "爆款", "短视频", "有趣", "好笑", "反差", "荒诞", "沙雕",
+	)
+}
+
+func voiceVisualAssetRoute(narration, visual, assetStrategy string, index, total int, creativeMode bool) string {
+	text := strings.ToLower(normalizeInlineText(strings.Join([]string{narration, visual, assetStrategy}, " ")))
+	switch {
+	case containsAny(text, "录屏", "screen recording", "真实页面", "页面", "按钮", "日志", "输入框", "审核门", "工作台", "开发者能看"):
+		return "screen_recording"
+	case containsAny(text, "readme", "wiki", "tag", "release", "版本", "分支", "指标", "图表", "卡片", "流程图") && !containsAny(text, "无厘头", "搞笑", "解压"):
+		return "hyperframes"
+	case containsAny(text, "即梦", "dreamina", "jimeng", "aigc", "素材", "生成", "视频工厂", "电脑风扇", "打工人", "起飞", "流水线", "工厂", "开工", "爆火", "关注"):
+		return "aigc_video"
+	case creativeMode && total > 0:
+		if index == total-1 || index%3 != 2 {
+			return "aigc_video"
+		}
+		return "hyperframes"
+	default:
+		return "hyperframes"
+	}
+}
+
+func voiceVisualDirectionForRoute(route, narration, fallbackVisual string, index int, creativeMode bool) string {
+	text := normalizeInlineText(narration)
+	lower := strings.ToLower(text)
+	if fallbackVisual == "" {
+		fallbackVisual = visualTitleFromNarration(text, index)
+	}
+	switch route {
+	case "aigc_video":
+		switch {
+		case containsAny(lower, "风扇", "起飞", "十个 ai", "工具"):
+			return "AIGC_VIDEO | 非真人风格化无厘头短视频：一个疲惫但可爱的打工人坐在桌前，十个 AI 工具窗口变成会弹跳的小便利贴，电脑风扇像迷你火箭一样夸张冒光但不危险；镜头快速推近，节奏解压，画面不要真实演员。"
+		case containsAny(lower, "流水线", "脚本", "分镜", "渲染", "qa"):
+			return "AIGC_VIDEO | 非真人风格化：一句口播变成一条会自动运转的迷你视频工厂，脚本、分镜、即梦素材、渲染、抽帧 QA 像传送带上的小工位依次亮起；节奏轻快，有荒诞喜剧感。"
+		case containsAny(lower, "关注", "开源", "项目", "开工"):
+			return "AIGC_VIDEO | 非真人风格化：一台小小的视频工厂自己开灯开工，Star、Fork、Follow 图标像彩色贴纸弹出来，最后收束到开源项目关注 CTA；画面轻松、搞笑、干净。"
+		default:
+			if creativeMode {
+				return fmt.Sprintf("AIGC_VIDEO | 非真人风格化搞笑 b-roll：围绕“%s”设计一个轻松、有反差但清楚的视觉隐喻，主体有明确动作，场景持续变化，镜头在 16:9 横屏中轻快推进，使用清晰符号和可读画面。", fallbackText(fallbackVisual, text))
+			}
+			return fmt.Sprintf("AIGC_VIDEO | 非真人风格化：%s，主体动作清楚，镜头自然运动，16:9 横屏，使用动画化角色、道具或图形隐喻。", fallbackText(fallbackVisual, text))
+		}
+	case "screen_recording":
+		return fmt.Sprintf("SCREEN_RECORDING | 真实系统页面录屏：围绕“%s”展示输入框、审核门、即梦 MCP 开关、运行节点或日志面板，关键 UI 用 HyperFrames 放大框和箭头提示，不让字幕遮挡页面文字。", fallbackText(fallbackVisual, text))
+	case "hyperframes":
+		return fmt.Sprintf("HYPERFRAMES | 信息层/字幕/CTA 包装：把“%s”做成少字、高对比、节奏快的图形层，只展示关键词、流程节点或版本信息，不承担整段情绪 b-roll。", fallbackText(fallbackVisual, text))
+	default:
+		return fallbackVisual
+	}
+}
+
+func voiceVisualMainActionForRoute(route, narration string, index int) string {
+	text := normalizeInlineText(narration)
+	switch route {
+	case "aigc_video":
+		return fmt.Sprintf("用一个可视化反差动作承接口播：%s", truncateVisualTitle(text, 28))
+	case "screen_recording":
+		return "录屏演示真实页面状态，局部放大输入、审核和运行结果。"
+	case "hyperframes":
+		return "用确定性文字和图形信息层解释关键概念。"
+	default:
+		return visualSubtitleFromNarration(text, index)
+	}
+}
+
+func voiceVisualCameraForRoute(route, narration string, index int) string {
+	switch route {
+	case "aigc_video":
+		return "快节奏推近 + 轻微横移，动作在结尾 0.5 秒稳定收束，方便拼接。"
+	case "screen_recording":
+		return "录屏视角保持稳定，局部缩放聚焦关键按钮和状态。"
+	case "hyperframes":
+		return "文字层分批进入，避免同屏堆叠，结尾留 0.5 秒空隙。"
+	default:
+		return visualSubtitleFromNarration(narration, index)
+	}
+}
+
+func voiceVisualAssetIntentForRoute(route, narration string) string {
+	switch route {
+	case "aigc_video":
+		return "用 Dreamina/JiMeng MCP 生成口播对应的动态情绪素材，承担开头钩子、反差和解压感。"
+	case "screen_recording":
+		return "使用真实产品页面或运行记录证明系统能跑通，HyperFrames 只做放大标注。"
+	case "hyperframes":
+		return "使用确定性排版承载少量精确文字、流程节点、版本信息或 CTA。"
+	default:
+		return "根据口播选择最稳妥的素材承载方式。"
+	}
+}
+
+func voiceVisualTimeRelationship(route string, durationSec int) string {
+	if durationSec <= 0 {
+		durationSec = normalizedDurationSec(nil)
+	}
+	switch route {
+	case "aigc_video":
+		return fmt.Sprintf("0-%.1fs 动态 b-roll 承接口播情绪；末尾 0.5s 稳定画面给字幕/转场。", float64(durationSec))
+	case "screen_recording":
+		return fmt.Sprintf("0-%.1fs 页面操作跟随口播关键词推进；关键按钮停留至少 1s。", float64(durationSec))
+	case "hyperframes":
+		return fmt.Sprintf("0-%.1fs 关键词分批进入，任意时刻主标题和字幕不超过两层。", float64(durationSec))
+	default:
+		return fmt.Sprintf("0-%.1fs 与口播同步推进。", float64(durationSec))
+	}
+}
+
+func voiceVisualHumorBeat(narration string, index int) string {
+	text := normalizeInlineText(narration)
+	lower := strings.ToLower(text)
+	switch {
+	case containsAny(lower, "风扇", "起飞", "十个 ai", "工具"):
+		return "把工具焦虑拍成电脑风扇准备起飞的夸张反差。"
+	case containsAny(lower, "流水线", "工厂"):
+		return "把抽象流程变成迷你工厂自动开工，降低技术距离感。"
+	case containsAny(lower, "按钮", "日志"):
+		return "用“只看按钮 vs 能看日志”的双视角做轻喜剧对照。"
+	case containsAny(lower, "关注", "开源"):
+		return "让 Star/Fork/Follow 像弹幕贴纸一样冒出来，轻松收口。"
+	default:
+		return []string{
+			"用夸张视觉隐喻先逗笑，再落到项目能力。",
+			"把技术名词转成可见动作，避免干讲概念。",
+			"保留解压节奏，减少同屏文字。",
+		}[index%3]
+	}
+}
+
 func visualTitleFromNarration(narration string, shotIndex int) string {
 	text := normalizeInlineText(narration)
 	lower := strings.ToLower(text)
@@ -7052,6 +8324,8 @@ style=%s
 10. 如果 retrievalPolicy=required 但没有事实材料，返回错误 JSON，不得继续创作。
 11. 不得编造 knowledgePack 中没有的比分、排名、出线结果、日期、人物职位、政策变化。
 12. 输出必须包含 usedFacts、unusedFacts、factCheckWarnings 和 knowledgeTrace。
+13. 如果 creationProfile/profileId 为 cinematic_story，或主题要求影视/剧情/角色/场景/道具/连续性，必须额外输出 storyOutline、detailedScript、characters、scenes、props；角色、场景、道具档案必须包含 id、name、description、invariants/locks、referenceViews。
+14. 影视剧本必须先有故事大纲，再有详细剧本；详细剧本要按可拍摄 beat 写清动作、画面意义和正能量收束，不要只写口播稿。
 
 输入：
 topic=%s
@@ -7060,6 +8334,11 @@ style=%s
 输出 JSON：
 {
   "script": "完整口播稿正文",
+  "storyOutline": {"logline": "", "theme": "", "beats": [{"id": "beat_01", "name": "", "purpose": ""}], "ending": ""},
+  "detailedScript": "影视类详细剧本；口播类可为空字符串",
+  "characters": [{"id": "char_main", "name": "", "description": "", "invariants": [], "referenceViews": ["front", "side", "back"]}],
+  "scenes": [{"id": "scene_main", "name": "", "description": "", "spatialLocks": [], "referenceViews": ["front_view", "reverse_view", "side_view"]}],
+  "props": [{"id": "prop_main", "name": "", "description": "", "invariants": [], "referenceViews": ["front", "side", "back", "detail"]}],
   "summary": "内容摘要",
   "estimatedDurationSec": 90,
   "sections": [
@@ -7463,21 +8742,39 @@ duration 硬规则：
 }`
 
 	case "reference_asset_planner":
-		return `你是图文视频参考资产选择器。
+		return `你是影视短片参考资产设计师。
 
 目标：
-输出背景、图标、字体、色彩和素材使用策略，不联网下载素材。
+根据故事大纲、详细剧本、角色档案、场景档案、道具档案和连续性圣经，规划全局一致性参考资产。
+
+硬性要求：
+1. 参考图不是成片剧照，而是主要角色、主场景、核心道具的多视角设定板。
+2. 每个主要角色、主场景、核心道具都要有 referenceAssetIndex 条目，包含 id、role、views、description、locks、prompt、target。
+3. 人物默认非真人风格化动画；禁止真人写实、真实演员、照片级真人皮肤、明星脸。
+4. 场景参考图负责空间一致性，不堆信息海报，不放密集文字。
+5. 道具参考图要展示正面、侧面、背面、细节和不可变化项。
+6. 输出 externalGenerationRequests，kind=image，可由 JiMeng/Dreamina MCP generate_image 执行；prompt <= 2000 字。
+7. 输出严格 JSON。
 
 输出严格 JSON：
 {
   "referenceAssetPlan": {
     "artifactKind": "REFERENCE_ASSET_PLAN",
-    "visualReferences": [
-      {"type": "background", "strategy": "clean_gradient"},
-      {"type": "icon", "strategy": "minimal_line_icon"},
-      {"type": "font", "strategy": "system_sans"}
-    ]
+    "stylePackage": {"style": "非真人风格化动画短片", "aspectRatio": "16:9", "negative": "禁止真人写实、密集文字、风格漂移"},
+    "characters": [],
+    "scenes": [],
+    "props": [],
+    "referenceAssetIndex": [],
+    "globalReferenceAssets": [],
+    "generationPolicy": "先生成多视角设定板，再让每个 shot 引用必要资产"
   },
+  "referenceAssetIndex": [
+    {"id": "char_main", "label": "主角", "role": "character", "views": ["front", "side", "back"], "description": "...", "locks": [], "prompt": "...", "target": {"aspectRatio": "16:9", "resolution": "1920x1080"}}
+  ],
+  "globalReferenceAssets": [],
+  "externalGenerationRequests": [
+    {"requestId": "extgen_ref_char_main", "kind": "image", "shotId": "GLOBAL_REFERENCE", "assetId": "char_main", "role": "character", "prompt": "完整图片生成提示词", "negativePrompt": "禁止真人写实、密集文字", "target": {"aspectRatio": "16:9", "resolution": "1920x1080", "generateNum": 1}, "status": "pending_upload"}
+  ],
   "summary": "..."
 }`
 
@@ -7497,17 +8794,29 @@ duration 硬规则：
 }`
 
 	case "continuity_checker":
-		return `你是视频连续性管理 Agent。
+		return `你是影视短片连续性管理 Agent。
 
-检查脚本、卡片、composition 和参考资产之间的术语、风格、画幅和视觉一致性。
+目标：
+根据故事大纲、详细剧本、角色/场景/道具档案，生成后续 shot、参考图、视频 prompt 和 QA 都能使用的连续性圣经。
+
+硬性要求：
+1. 输出 continuityReport 和 continuityBible，二者内容可以相同，必须包含 characters、scenes、props、globalLocks、shotQAPolicy。
+2. globalLocks 写清主要角色、主场景、核心道具、全片风格、字幕安全区和禁止跨 shot 尾帧依赖。
+3. styleProfile 必须写明 16:9、非真人风格化动画、正能量、轻松搞笑但不嘲讽用户。
+4. 输出严格 JSON。
 
 输出严格 JSON：
 {
   "continuityReport": {
     "artifactKind": "CONTINUITY_REPORT",
-    "warnings": [],
-    "staleArtifacts": []
+    "characters": [],
+    "scenes": [],
+    "props": [],
+    "globalLocks": [],
+    "shotQAPolicy": [],
+    "warnings": []
   },
+  "continuityBible": {},
   "styleProfile": {
     "artifactKind": "STYLE_PROFILE",
     "tone": "...",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -451,6 +452,43 @@ func (ne *NodeExecutor) executableToolTimeout(toolName string, parameters map[st
 	return time.Duration(timeoutSec) * time.Second
 }
 
+func timeoutSecFromParameters(parameters map[string]interface{}) int {
+	if parameters == nil {
+		return 0
+	}
+	raw, ok := parameters["timeoutSec"]
+	if !ok {
+		return 0
+	}
+	switch value := raw.(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case int64:
+		if value > 0 {
+			return int(value)
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case json.Number:
+		if n, err := value.Int64(); err == nil && n > 0 {
+			return int(n)
+		}
+	case string:
+		value = strings.TrimSpace(value)
+		if value == "" || strings.Contains(value, "{{") {
+			return 0
+		}
+		if n, err := strconv.Atoi(value); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
 func (ne *NodeExecutor) localExecutionManifest(toolName string, parameters map[string]interface{}, manifest *tool.ToolManifest) *tool.ToolManifest {
 	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
 		return manifest
@@ -491,8 +529,11 @@ func (ne *NodeExecutor) dispatchLocalNode(
 	if command == "" {
 		return fmt.Errorf("local execution requested for %s but localCommand is empty", manifest.Name)
 	}
-	timeoutSec := manifest.Timeout
-	timeoutSec = normalizedManifestTimeoutSec(timeoutSec)
+	timeoutSec := timeoutSecFromParameters(parameters)
+	if timeoutSec <= 0 {
+		timeoutSec = manifest.Timeout
+		timeoutSec = normalizedManifestTimeoutSec(timeoutSec)
+	}
 	if timeoutSec <= 0 {
 		timeoutSec = ne.cfg.ToolTimeoutSeconds
 	}
@@ -518,6 +559,11 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		}
 	}
 
+	jobTimeoutSec := timeoutSec
+	if isRenderLocalCommand(manifest.Name, command) && timeoutSecFromParameters(parameters) > 0 {
+		jobTimeoutSec = timeoutSec + 45
+	}
+
 	job, err := ne.localDispatcher.DispatchLocalJob(ctx, localrunner.DispatchLocalJobRequest{
 		ProjectID:      projectID,
 		TaskID:         event.TaskID,
@@ -525,7 +571,7 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		ToolName:       manifest.Name,
 		Command:        command,
 		Payload:        parameters,
-		TimeoutSec:     timeoutSec,
+		TimeoutSec:     jobTimeoutSec,
 		ArtifactPolicy: localArtifactPolicyForManifest(manifest),
 		IdempotencyKey: idempotencyKey,
 	})

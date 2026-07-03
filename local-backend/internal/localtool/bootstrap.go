@@ -70,7 +70,7 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 	)
 	if cfg.MCPProviderLoader != nil {
 		reg.Register(
-			NewMCPToolCallExecutor(cfg.MCPProviderLoader),
+			NewMCPToolCallExecutorWithDataDir(cfg.MCPProviderLoader, cfg.DataDir),
 			CommandLocalMCPToolCall,
 		)
 	}

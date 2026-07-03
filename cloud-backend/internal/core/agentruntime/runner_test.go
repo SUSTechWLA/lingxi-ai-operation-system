@@ -297,6 +297,50 @@ func TestRunnerStart_InjectsClientTextProviderIntoExecutableNodesOnly(t *testing
 	}
 }
 
+func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
+	plan := &AgentPlan{
+		Goal:   "planner supplied stale goal",
+		Domain: "video_creation",
+		Steps: []AgentStep{
+			{ID: "script_generation", Tool: "video_script_generator"},
+			{ID: "render", Tool: "hyperframes_renderer", Arguments: map[string]interface{}{}},
+		},
+	}
+
+	applyRequestPlanDefaults(plan, StartRunRequest{
+		Message: "user supplied cinematic story request",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"renderTimeoutSec":      float64(12),
+			"profileId":             "cinematic_story",
+			"videoType":             "cinematic_story",
+			"projectMode":           "cinematic_story",
+			"aigcProvider":          "jimeng_mcp",
+			"projectId":             "vp-123",
+			"modelProviders":        map[string]interface{}{"text_to_text": map[string]interface{}{"apiKey": "secret"}},
+			"unrelatedContextValue": "ignored",
+		},
+	})
+
+	if plan.Goal != "user supplied cinematic story request" {
+		t.Fatalf("video plan goal should use request message, got %q", plan.Goal)
+	}
+	if got := plan.Steps[0].Arguments["renderTimeoutSec"]; got != float64(12) {
+		t.Fatalf("renderTimeoutSec was not copied to plan defaults: %#v", plan.Steps[0].Arguments)
+	}
+	for _, key := range []string{"profileId", "videoType", "projectMode", "aigcProvider", "projectId"} {
+		if got := plan.Steps[0].Arguments[key]; got == nil {
+			t.Fatalf("%s was not copied to plan defaults: %#v", key, plan.Steps[0].Arguments)
+		}
+	}
+	if _, exists := plan.Steps[0].Arguments["modelProviders"]; exists {
+		t.Fatalf("sensitive model provider context should not be copied: %#v", plan.Steps[0].Arguments)
+	}
+	if _, exists := plan.Steps[0].Arguments["unrelatedContextValue"]; exists {
+		t.Fatalf("unrelated context should not be copied: %#v", plan.Steps[0].Arguments)
+	}
+}
+
 func TestInjectClientModelProvidersUsesCapabilityTool(t *testing.T) {
 	dag := &model.DAGRequest{
 		Nodes: []model.NodeRequest{

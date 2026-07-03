@@ -46,6 +46,22 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
+v0.1.5 对应能力：
+
+- `cinematic_story` 影视创作模式已进入 release：故事大纲、详细剧本、角色/场景/道具档案、参考图、shot 设计、MCP 生成、render、QA 和发布文案全链路可跑通。
+- 口播和影视视频都坚持“脚本先行，素材跟随脚本”的生成顺序，避免直接用单调 HyperFrames 堆页面。
+- CLI/AIGC provider 统一通过 `mcp/` 下的标准 MCP 服务接入；云端只使用通用 `mcp_generation_runner`，本地只使用 `LOCAL_MCP_TOOL_CALL`。
+- JiMeng/Dreamina 图片请求走 `jimeng.generate_image`，视频请求走 `jimeng.generate_video`；图片 `resolution_type` 已按 Dreamina MCP 要求归一为 `2k/4k`。
+- Shot-level QA 增加剧本匹配、导演理由、参考资产覆盖、动作节拍等指标，最终输出 `SHOT_QA_REPORT` 和 `SHOT_REPAIR_PLAN`。
+- release 分支验证记录：`vp-b1a3a300`，run `agent_run_5ff5fbfe-7a61-4250-a103-17a5077a3882`，29 个节点全成功，最终视频 1920x1080 / 18 秒，QA `score=100`。
+
+发布 v0.1.5 tag 前必须确认：
+
+1. README 已追加 v0.1.5 release note。
+2. `docs/cinematic-video-workflow.md`、`docs/mcp-providers.md`、`docs/video-frame-qa.md` 已同步更新。
+3. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+4. `git tag v0.1.5 <release_commit>` 只在 release 提交后创建。
+
 v0.1.4 对应能力：
 
 - 动态视频计划在 render 后自动插入 `visual_qa`。

@@ -135,6 +135,7 @@ func (e *VideoFrameQAExecutor) Execute(ctx context.Context, job Job) (*Result, e
 	args["outputDir"] = reportDir
 	args["outputRefPrefix"] = "local://projects/" + projectID + "/reports/video_frame_qa"
 	args["sampleIntervalSec"] = sampleInterval
+	args["profile"] = normalizeVideoQAProfile(job.Payload)
 	output, err := client.CallTool(ctx, "video_qa.analyze_video", args)
 	if err != nil {
 		return nil, fmt.Errorf("video_frame_qa: mcp analyze_video: %w", err)
@@ -143,6 +144,29 @@ func (e *VideoFrameQAExecutor) Execute(ctx context.Context, job Job) (*Result, e
 		output = map[string]interface{}{}
 	}
 	return &Result{Output: output}, nil
+}
+
+func normalizeVideoQAProfile(payload map[string]interface{}) string {
+	for _, key := range []string{"profile", "profileId", "projectMode", "videoType", "creationProfile"} {
+		if value := profileStringFromInterface(payload[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func profileStringFromInterface(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]interface{}:
+		for _, key := range []string{"profileId", "id", "sourceRoute", "dagTemplateId"} {
+			if value := profileStringFromInterface(typed[key]); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func numberFromPayload(payload map[string]interface{}, key string, fallback float64) float64 {

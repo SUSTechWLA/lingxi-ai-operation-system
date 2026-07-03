@@ -70,6 +70,32 @@ curl -X POST http://127.0.0.1:18080/api/local/jimeng/setup/register-mcp \
 
 本地 Agent 会自动生成 `python3 <repo>/mcp/jimeng/server.py` 的 provider 配置，并写入 `toolPrefix: "jimeng."`。
 
+## 视频素材路由
+
+未来所有 CLI 模式的 AIGC 接入都必须走 MCP provider，不再给每个 CLI 新增本地工具命令。云端运行计划只指定 `providerId`、`mcpTool` 和 `externalGenerationRequests`；本地 runner 统一执行 `LOCAL_MCP_TOOL_CALL`。
+
+当前视频创作链路的标准路由：
+
+| 阶段 | kind | providerId | MCP tool | 说明 |
+|---|---|---|---|---|
+| 角色/场景/道具参考图 | `image` | `jimeng` | `jimeng.generate_image` | 生成全局一致性多视角参考图 |
+| shot 关键帧 | `image` | `jimeng` | `jimeng.generate_image` | 生成每个 shot 的视觉锚点 |
+| AIGC shot 视频 | `video` | `jimeng` | `jimeng.generate_video` | 生成 3-15 秒独立视频片段 |
+| 结果查询/下载 | - | `jimeng` | `jimeng.query_result` | 轮询并导入本地 artifact |
+
+`LOCAL_MCP_TOOL_CALL` 会根据请求 `kind` 自动把默认视频工具切换为图片工具。例如默认 `mcpTool=jimeng.generate_video`，当请求 `kind=image` 时会调用 `jimeng.generate_image`。
+
+Dreamina 图片参数当前按以下规则归一：
+
+| 输入 | MCP 参数 |
+|---|---|
+| `target.aspectRatio` | `ratio` |
+| `target.resolution=1920x1080` / `1080p` | `resolution_type=2k` |
+| `target.resolution=3840x2160` / `4k` | `resolution_type=4k` |
+| `target.generateNum` | `generate_num` |
+
+v0.1.5 已验证 `jimeng.generate_image` 可成功生成参考图；`jimeng.generate_video` 如果因 Dreamina 账号余额不足返回 `CreditPreDeductNotEnough`，系统会保留失败请求并继续 fallback 渲染和 QA。
+
 ## Video QA Python MCP
 
 仓库内置了成片 QA stdio MCP server：

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
 )
@@ -171,7 +174,487 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	}
 }
 
-func TestMCPToolCallExecutorPreservesToolErrorContentInExternalBatch(t *testing.T) {
+func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *testing.T) {
+	callCount := 0
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		params := req["params"].(map[string]interface{})
+		if params["name"] != "jimeng.generate_video" {
+			t.Fatalf("tool = %v, want jimeng.generate_video", params["name"])
+		}
+		args := params["arguments"].(map[string]interface{})
+		if args["prompt"] != "fallback prompt text" {
+			t.Fatalf("prompt = %#v, want promptText fallback", args["prompt"])
+		}
+		callCount++
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-pending",
+					"gen_status": "querying",
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-1",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_01",
+					"shotId":     "SHOT_01",
+					"kind":       "video",
+					"prompt":     map[string]interface{}{"redacted": true, "reason": "USER_ASSET_REDACTED"},
+					"promptText": "fallback prompt text",
+					"target": map[string]interface{}{
+						"durationSec": 5,
+						"aspectRatio": "16:9",
+					},
+				},
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_02",
+					"shotId":     "SHOT_02",
+					"kind":       "video",
+					"promptText": "second prompt",
+					"target": map[string]interface{}{
+						"durationSec": 5,
+						"aspectRatio": "16:9",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("callCount = %d, want only first request submitted", callCount)
+	}
+	results := result.Output["generationResults"].([]interface{})
+	if got := results[0].(map[string]interface{})["status"]; got != "pending" {
+		t.Fatalf("first status = %#v, want pending", got)
+	}
+	if got := results[1].(map[string]interface{})["status"]; got != "deferred" {
+		t.Fatalf("second status = %#v, want deferred", got)
+	}
+	remaining := result.Output["externalGenerationRequests"].([]interface{})
+	if got := remaining[0].(map[string]interface{})["submitId"]; got != "vid-pending" {
+		t.Fatalf("pending submitId = %#v, want vid-pending", got)
+	}
+	if got := remaining[1].(map[string]interface{})["status"]; got != "deferred" {
+		t.Fatalf("deferred status = %#v, want deferred", got)
+	}
+}
+
+func TestMCPToolCallExecutorDefersBatchWhenGenerateCallTimesOut(t *testing.T) {
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		var req map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-late",
+					"gen_status": "success",
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	started := time.Now()
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-1",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId":           "jimeng",
+			"mcpTool":              "jimeng.generate_video",
+			"mcpToolCallTimeoutMs": 50,
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_01",
+					"shotId":     "SHOT_01",
+					"kind":       "video",
+					"promptText": "positive funny b-roll",
+					"target": map[string]interface{}{
+						"durationSec": 5,
+						"aspectRatio": "16:9",
+					},
+				},
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_02",
+					"shotId":     "SHOT_02",
+					"kind":       "video",
+					"promptText": "more b-roll",
+					"target": map[string]interface{}{
+						"durationSec": 5,
+						"aspectRatio": "16:9",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatalf("timed-out MCP call should return quickly")
+	}
+	results := result.Output["generationResults"].([]interface{})
+	first := results[0].(map[string]interface{})
+	if first["status"] != "deferred" || first["reason"] != "tool_call_timeout" {
+		t.Fatalf("first result should be deferred by timeout: %#v", first)
+	}
+	second := results[1].(map[string]interface{})
+	if second["status"] != "deferred" || second["reason"] != "previous_generation_timeout" {
+		t.Fatalf("second result should be deferred after timeout: %#v", second)
+	}
+	remaining := result.Output["externalGenerationRequests"].([]interface{})
+	if len(remaining) != 2 {
+		t.Fatalf("remaining requests = %d, want 2", len(remaining))
+	}
+}
+
+func TestMCPToolCallExecutorDownloadsGeneratedVideoIntoShotFusionPlan(t *testing.T) {
+	dataDir := t.TempDir()
+	sourceDir := t.TempDir()
+	sourceVideo := filepath.Join(sourceDir, "dreamina-result.mp4")
+	if err := os.WriteFile(sourceVideo, []byte("fake mp4"), 0o644); err != nil {
+		t.Fatalf("write source video: %v", err)
+	}
+
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		params := req["params"].(map[string]interface{})
+		switch params["name"] {
+		case "jimeng.generate_video":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req["id"],
+				"result": map[string]interface{}{
+					"structuredContent": map[string]interface{}{
+						"submit_id":  "vid-1",
+						"gen_status": "querying",
+					},
+				},
+			})
+		case "jimeng.query_result":
+			args := params["arguments"].(map[string]interface{})
+			if args["submit_id"] != "vid-1" {
+				t.Fatalf("query submit_id = %#v, want vid-1", args["submit_id"])
+			}
+			if strings.TrimSpace(args["download_dir"].(string)) == "" {
+				t.Fatalf("query_result should receive download_dir: %#v", args)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req["id"],
+				"result": map[string]interface{}{
+					"structuredContent": map[string]interface{}{
+						"submit_id":  "vid-1",
+						"gen_status": "success",
+						"result_json": map[string]interface{}{
+							"videos": []map[string]interface{}{
+								{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
+							},
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected tool call: %#v", params["name"])
+		}
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	}, dataDir)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId": "extgen_video_SHOT_01",
+					"shotId":    "SHOT_01",
+					"kind":      "video",
+					"prompt":    "wide shot",
+					"target": map[string]interface{}{
+						"durationSec": 5,
+						"aspectRatio": "16:9",
+						"resolution":  "1920x1080",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	packages := result.Output["shotAssetPackages"].([]interface{})
+	pkg := packages[0].(map[string]interface{})
+	generationPlan := pkg["generationPlan"].(map[string]interface{})
+	fusionPlan := generationPlan["fusionPlan"].(map[string]interface{})
+	baseLayer := fusionPlan["baseLayer"].(map[string]interface{})
+	storageRef := baseLayer["storageRef"].(string)
+	if !strings.HasPrefix(storageRef, "local://projects/project_001/artifacts/extgen_video_SHOT_01/sha256_") {
+		t.Fatalf("unexpected storageRef: %q", storageRef)
+	}
+	if baseLayer["kind"] != "video" || fusionPlan["assembler"] != "hyperframes" {
+		t.Fatalf("unexpected fusion plan: %#v", fusionPlan)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "artifacts", "project_001", "extgen_video_SHOT_01", "content")); err != nil {
+		t.Fatalf("expected imported content file: %v", err)
+	}
+	got := result.Output["generationResults"].([]interface{})[0].(map[string]interface{})
+	if got["storageRef"] != storageRef {
+		t.Fatalf("generation result should expose storageRef, got %#v want %q", got, storageRef)
+	}
+}
+
+func TestMCPToolCallExecutorDefersAfterDefaultReadyGenerationBudget(t *testing.T) {
+	dataDir := t.TempDir()
+	sourceDir := t.TempDir()
+	sourceVideo := filepath.Join(sourceDir, "dreamina-ready.mp4")
+	if err := os.WriteFile(sourceVideo, []byte("fake mp4"), 0o644); err != nil {
+		t.Fatalf("write source video: %v", err)
+	}
+
+	callCount := 0
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		callCount++
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-ready",
+					"gen_status": "success",
+					"result_json": map[string]interface{}{
+						"videos": []map[string]interface{}{
+							{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	}, dataDir)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{"requestId": "extgen_video_SHOT_01", "shotId": "SHOT_01", "promptText": "one", "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_02", "shotId": "SHOT_02", "promptText": "two", "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_03", "shotId": "SHOT_03", "promptText": "three", "target": map[string]interface{}{"durationSec": 5}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", callCount)
+	}
+	packages := result.Output["shotAssetPackages"].([]interface{})
+	if len(packages) != 2 {
+		t.Fatalf("packages = %d, want 2", len(packages))
+	}
+	results := result.Output["generationResults"].([]interface{})
+	third := results[2].(map[string]interface{})
+	if third["status"] != "deferred" || third["reason"] != "generation_budget_reached" {
+		t.Fatalf("third result should be deferred by generation budget: %#v", third)
+	}
+	remaining := result.Output["externalGenerationRequests"].([]interface{})
+	if len(remaining) != 1 || remaining[0].(map[string]interface{})["reason"] != "generation_budget_reached" {
+		t.Fatalf("remaining should contain budget-deferred request: %#v", remaining)
+	}
+}
+
+func TestMCPToolCallExecutorDefersWhenBatchTimeoutIsReached(t *testing.T) {
+	dataDir := t.TempDir()
+	sourceDir := t.TempDir()
+	sourceVideo := filepath.Join(sourceDir, "dreamina-ready.mp4")
+	if err := os.WriteFile(sourceVideo, []byte("fake mp4"), 0o644); err != nil {
+		t.Fatalf("write source video: %v", err)
+	}
+
+	callCount := 0
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		callCount++
+		if callCount == 2 {
+			time.Sleep(250 * time.Millisecond)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-ready",
+					"gen_status": "success",
+					"result_json": map[string]interface{}{
+						"videos": []map[string]interface{}{
+							{"path": sourceVideo, "width": 1920, "height": 1080, "duration": 5.0},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	}, dataDir)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId":           "jimeng",
+			"mcpTool":              "jimeng.generate_video",
+			"mcpToolCallTimeoutMs": 500,
+			"mcpBatchTimeoutMs":    100,
+			"maxReadyGenerations":  3,
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{"requestId": "extgen_video_SHOT_01", "shotId": "SHOT_01", "promptText": "one", "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_02", "shotId": "SHOT_02", "promptText": "two", "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_03", "shotId": "SHOT_03", "promptText": "three", "target": map[string]interface{}{"durationSec": 5}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", callCount)
+	}
+	results := result.Output["generationResults"].([]interface{})
+	second := results[1].(map[string]interface{})
+	if second["status"] != "deferred" || second["reason"] != "tool_call_timeout" {
+		t.Fatalf("second result should be deferred by batch-bounded timeout: %#v", second)
+	}
+	third := results[2].(map[string]interface{})
+	if third["status"] != "deferred" || third["reason"] != "previous_generation_timeout" {
+		t.Fatalf("third result should be deferred after previous timeout: %#v", third)
+	}
+}
+
+func TestMCPToolCallExecutorMarksFailedQueryResultWithoutWaiting(t *testing.T) {
+	dataDir := t.TempDir()
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		params := req["params"].(map[string]interface{})
+		switch params["name"] {
+		case "jimeng.generate_video":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req["id"],
+				"result": map[string]interface{}{
+					"structuredContent": map[string]interface{}{
+						"submit_id":  "vid-failed",
+						"gen_status": "querying",
+					},
+				},
+			})
+		case "jimeng.query_result":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req["id"],
+				"result": map[string]interface{}{
+					"isError": true,
+					"content": []map[string]interface{}{
+						{"type": "text", "text": "generation failed: post-TNS check did not pass"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected tool call: %#v", params["name"])
+		}
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	}, dataDir)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId": "extgen_video_SHOT_01",
+					"shotId":    "SHOT_01",
+					"kind":      "video",
+					"prompt":    "wide shot",
+					"target": map[string]interface{}{
+						"durationSec": 5,
+						"aspectRatio": "16:9",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	got := result.Output["generationResults"].([]interface{})[0].(map[string]interface{})
+	if got["status"] != "failed" {
+		t.Fatalf("status = %#v, want failed", got["status"])
+	}
+	if !strings.Contains(got["error"].(string), "post-TNS") {
+		t.Fatalf("error should preserve query_result failure, got %#v", got["error"])
+	}
+}
+
+func TestMCPToolCallExecutorDefersProviderBusyExternalBatch(t *testing.T) {
 	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -218,18 +701,21 @@ func TestMCPToolCallExecutorPreservesToolErrorContentInExternalBatch(t *testing.
 	}
 	results := result.Output["generationResults"].([]interface{})
 	got := results[0].(map[string]interface{})
-	if got["status"] != "failed" {
-		t.Fatalf("status = %#v, want failed", got["status"])
+	if got["status"] != "deferred" {
+		t.Fatalf("status = %#v, want deferred", got["status"])
 	}
 	if !strings.Contains(got["error"].(string), "ExceedConcurrencyLimit") {
 		t.Fatalf("error should preserve content text, got %#v", got["error"])
 	}
 	remaining := result.Output["externalGenerationRequests"].([]interface{})
-	failed := remaining[0].(map[string]interface{})
-	if !strings.Contains(failed["error"].(string), "ExceedConcurrencyLimit") {
-		t.Fatalf("remaining request should preserve error text, got %#v", failed)
+	deferred := remaining[0].(map[string]interface{})
+	if deferred["status"] != "deferred" || deferred["reason"] != "provider_busy" {
+		t.Fatalf("remaining request should be deferred as provider_busy, got %#v", deferred)
 	}
-	mcpResult := failed["mcpResult"].(map[string]interface{})
+	if !strings.Contains(deferred["error"].(string), "ExceedConcurrencyLimit") {
+		t.Fatalf("remaining request should preserve error text, got %#v", deferred)
+	}
+	mcpResult := deferred["mcpResult"].(map[string]interface{})
 	if mcpResult["isError"] != true {
 		t.Fatalf("mcpResult isError = %#v, want true", mcpResult["isError"])
 	}
@@ -246,5 +732,83 @@ func TestMCPArgumentsFromExternalRequestNormalizesResolution(t *testing.T) {
 	})
 	if args["video_resolution"] != "1080p" {
 		t.Fatalf("video_resolution = %#v, want 1080p", args["video_resolution"])
+	}
+}
+
+func TestMCPToolCallExecutorRoutesImageExternalRequestToGenerateImage(t *testing.T) {
+	var toolName string
+	var toolArgs map[string]interface{}
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		params := req["params"].(map[string]interface{})
+		toolName, _ = params["name"].(string)
+		toolArgs, _ = params["arguments"].(map[string]interface{})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "img-1",
+					"gen_status": "querying",
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-image",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId": "extgen_ref_char_main",
+					"shotId":    "GLOBAL_REFERENCE",
+					"kind":      "image",
+					"prompt":    "multi view character sheet",
+					"target": map[string]interface{}{
+						"aspectRatio": "16:9",
+						"resolution":  "1920x1080",
+						"generateNum": 1,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if toolName != "jimeng.generate_image" {
+		t.Fatalf("toolName = %q, want jimeng.generate_image", toolName)
+	}
+	if toolArgs["prompt"] != "multi view character sheet" {
+		t.Fatalf("prompt = %#v, want prompt text", toolArgs["prompt"])
+	}
+	if toolArgs["ratio"] != "16:9" {
+		t.Fatalf("ratio = %#v, want 16:9", toolArgs["ratio"])
+	}
+	if toolArgs["video_resolution"] != nil {
+		t.Fatalf("image request should not send video_resolution: %#v", toolArgs)
+	}
+	if toolArgs["resolution_type"] != "2k" || mcpIntFromInterface(toolArgs["generate_num"]) != 1 {
+		t.Fatalf("image args should map resolution/generate_num, got %#v", toolArgs)
+	}
+	results := result.Output["generationResults"].([]interface{})
+	got := results[0].(map[string]interface{})
+	if got["toolName"] != "jimeng.generate_image" {
+		t.Fatalf("generation result toolName = %#v", got["toolName"])
+	}
+	packages := result.Output["shotAssetPackages"].([]interface{})
+	pkg := packages[0].(map[string]interface{})
+	if pkg["kind"] != "image" {
+		t.Fatalf("image package kind = %#v, want image", pkg["kind"])
 	}
 }

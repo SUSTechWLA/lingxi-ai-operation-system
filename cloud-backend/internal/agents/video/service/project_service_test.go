@@ -13,6 +13,7 @@ func TestIsValidMode(t *testing.T) {
 	}{
 		{model.ModeAIGCShot, true},
 		{model.ModeVoiceVisual, true},
+		{model.ModeCinematicStory, true},
 		{model.VideoMode("invalid"), false},
 		{model.VideoMode(""), false},
 	}

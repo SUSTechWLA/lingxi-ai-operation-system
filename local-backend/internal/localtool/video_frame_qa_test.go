@@ -49,6 +49,9 @@ func TestVideoFrameQAExecutorDelegatesAnalysisToStandardMCPTool(t *testing.T) {
 		Payload: map[string]interface{}{
 			"input":             "local://projects/vp_mcp/renders/final.mp4",
 			"sampleIntervalSec": 3.0,
+			"profile": map[string]interface{}{
+				"profileId": "cinematic_story",
+			},
 			"shotList": []interface{}{
 				map[string]interface{}{"id": "SHOT_01", "durationSec": 6.0},
 			},
@@ -71,6 +74,9 @@ func TestVideoFrameQAExecutorDelegatesAnalysisToStandardMCPTool(t *testing.T) {
 	}
 	if got := fake.args["sampleIntervalSec"]; got != 3.0 {
 		t.Fatalf("sampleIntervalSec arg = %#v, want 3", got)
+	}
+	if got := fake.args["profile"]; got != "cinematic_story" {
+		t.Fatalf("profile arg = %#v, want cinematic_story", got)
 	}
 	if got := result.Output["score"]; got != 91 {
 		t.Fatalf("result score = %#v, want 91", got)

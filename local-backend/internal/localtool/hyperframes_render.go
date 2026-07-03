@@ -124,30 +124,26 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		height = int(value)
 	}
 
+	fastAttempted := false
 	if fastStoryboardRenderEnabled() {
-		started := time.Now()
-		if fallbackResult, handled, fallbackErr := e.renderFastStoryboard(ctx, projectID, projectDir, outputPath, fps, width, height); handled {
+		fastAttempted = true
+		if fallback, handled, fallbackErr := e.tryFastStoryboardRender(ctx, projectID, projectDir, outputPath, fps, width, height); handled {
 			if fallbackErr != nil {
 				return nil, fallbackErr
 			}
-			info, err := os.Stat(outputPath)
-			if err != nil {
-				return nil, fmt.Errorf("render output not found at %s: %w", outputPath, err)
-			}
-			if info.Size() == 0 {
-				return nil, fmt.Errorf("render output is empty: %s", outputPath)
-			}
-			fallbackResult.DurationMs = time.Since(started).Milliseconds()
-			return e.renderResult(projectID, outputPath, info.Size(), fps, width, height, fallbackResult)
+			return fallback, nil
 		}
 	}
 
 	// Call HyperFrames Render Service
-	timeoutSec := job.TimeoutSec
-	if timeoutSec <= 0 {
-		timeoutSec = int(e.timeout.Seconds())
+	renderServiceTimeout := time.Duration(job.TimeoutSec) * time.Second
+	if payloadTimeout := mcpSecondsFromPayload(job.Payload, "timeoutSec", "renderTimeoutSec", "hyperframesRenderTimeoutSec"); payloadTimeout > 0 {
+		renderServiceTimeout = payloadTimeout
 	}
-	renderCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	if renderServiceTimeout <= 0 {
+		renderServiceTimeout = e.timeout
+	}
+	renderCtx, cancel := context.WithTimeout(ctx, renderServiceTimeout)
 	defer cancel()
 
 	renderReq := hyperFramesRenderRequest{
@@ -161,6 +157,14 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 
 	result, err := e.callRenderService(renderCtx, renderReq)
 	if err != nil {
+		if !fastAttempted && storyboardRenderFallbackEnabled() && ctx.Err() == nil {
+			if fallback, handled, fallbackErr := e.tryFastStoryboardRender(ctx, projectID, projectDir, outputPath, fps, width, height); handled {
+				if fallbackErr == nil {
+					return fallback, nil
+				}
+				return nil, fmt.Errorf("hyperframes render failed: %w; storyboard fallback failed: %v", err, fallbackErr)
+			}
+		}
 		return nil, fmt.Errorf("hyperframes render failed: %w", err)
 	}
 
@@ -174,6 +178,30 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 	}
 
 	return e.renderResult(projectID, outputPath, info.Size(), fps, width, height, result)
+}
+
+func (e *HyperFramesRenderExecutor) tryFastStoryboardRender(ctx context.Context, projectID, projectDir, outputPath string, fps, width, height int) (*Result, bool, error) {
+	started := time.Now()
+	fallbackResult, handled, fallbackErr := e.renderFastStoryboard(ctx, projectID, projectDir, outputPath, fps, width, height)
+	if !handled {
+		return nil, false, nil
+	}
+	if fallbackErr != nil {
+		return nil, true, fallbackErr
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return nil, true, fmt.Errorf("render output not found at %s: %w", outputPath, err)
+	}
+	if info.Size() == 0 {
+		return nil, true, fmt.Errorf("render output is empty: %s", outputPath)
+	}
+	fallbackResult.DurationMs = time.Since(started).Milliseconds()
+	result, err := e.renderResult(projectID, outputPath, info.Size(), fps, width, height, fallbackResult)
+	if err != nil {
+		return nil, true, err
+	}
+	return result, true, nil
 }
 
 func (e *HyperFramesRenderExecutor) renderResult(projectID, outputPath string, sizeBytes int64, fps, width, height int, result *hyperFramesRenderResponse) (*Result, error) {

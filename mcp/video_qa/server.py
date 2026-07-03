@@ -86,6 +86,17 @@ def _string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _profile_id(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("profileId", "id", "sourceRoute", "dagTemplateId"):
+            profile = _profile_id(value.get(key))
+            if profile:
+                return profile
+    return ""
+
+
 def _round(value: float) -> float:
     return round(value + 0.0, 4)
 
@@ -134,6 +145,42 @@ def _has_bool_key(value: Any, target: str) -> bool:
     return False
 
 
+def _list_count(value: Any) -> int:
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        return 1
+    if isinstance(value, str) and value.strip():
+        return 1
+    return 0
+
+
+def _reference_count(shot: dict[str, Any]) -> int:
+    return max(
+        _list_count(shot.get("referenceImages")),
+        _list_count(shot.get("references")),
+        _list_count(shot.get("referenceAssetIds")),
+        _list_count(shot.get("referenceRequirements")),
+    )
+
+
+def _script_visual_seed_score(script_chars: int, visual_chars: int, director_reason: bool, reference_count: int) -> int:
+    score = 100
+    if script_chars <= 0:
+        score -= 22
+    elif script_chars < 12:
+        score -= 8
+    if visual_chars <= 0:
+        score -= 28
+    elif visual_chars < 20:
+        score -= 10
+    if not director_reason:
+        score -= 15
+    if reference_count <= 0:
+        score -= 15
+    return max(0, score)
+
+
 def _risk_max(current: str, candidate: str) -> str:
     rank = {"low": 0, "medium": 1, "high": 2}
     return candidate if rank.get(candidate, 0) > rank.get(current, 0) else current or candidate
@@ -145,12 +192,28 @@ def build_shot_spec_lints(shot_list: list[dict[str, Any]]) -> list[dict[str, Any
         shot_id = _string(_first_present(shot.get("shotId"), shot.get("id"))) or f"shot_{idx + 1:02d}"
         duration = _number(_first_present(shot.get("durationSec"), shot.get("duration")), 0)
         screen_text_chars = _text_char_count(_first_present(shot.get("screenText"), shot.get("text"), shot.get("title")))
+        script_text = _string(_first_present(shot.get("scriptText"), shot.get("narrationText"), shot.get("voiceoverText"), shot.get("subtitleText")))
+        visual_text = _string(_first_present(shot.get("visual"), shot.get("sceneSummary"), shot.get("description"), shot.get("mainAction")))
+        director_reason = bool(
+            _string(_first_present(shot.get("whyThisShot"), shot.get("dramaticPurpose"), shot.get("directorReason"), shot.get("directorNote")))
+        )
+        reference_count = _reference_count(shot)
+        action_beat_count = _list_count(shot.get("actionBeats"))
+        route = _string(_first_present(shot.get("plannedAssetRoute"), shot.get("assetRoute"), shot.get("recommendedMode"))).lower()
+        cinematic_like = bool(director_reason or reference_count or "aigc" in route or "cinematic" in route or "影视" in visual_text)
+        script_visual_score = _script_visual_seed_score(len(script_text), len(visual_text), director_reason, reference_count)
         must_be_exact = _has_bool_key(shot, "mustBeExact")
         lint: dict[str, Any] = {
             "shotId": shot_id,
             "riskLevel": "low",
             "durationSec": _round(duration),
             "screenTextChars": screen_text_chars,
+            "scriptTextChars": len(script_text),
+            "visualTextChars": len(visual_text),
+            "directorReasoningPresent": director_reason,
+            "referenceCoverageCount": reference_count,
+            "actionBeatCount": action_beat_count,
+            "scriptVisualCompletenessScore": script_visual_score,
             "requiredAssets": [],
             "generationWarnings": [],
             "fatalGateTriggered": False,
@@ -185,6 +248,28 @@ def build_shot_spec_lints(shot_list: list[dict[str, Any]]) -> list[dict[str, Any
                 lint["recommendedAction"] = "RERENDER_HTML"
             lint.setdefault("recommendedFix", "MustBeExact 文字必须走 HyperFrames/HTML overlay，禁止由 AIGC 视频模型内生生成。")
             lint["generationWarnings"].append("must_be_exact_text_requires_html_overlay")
+
+        if script_visual_score < 65:
+            lint["riskLevel"] = _risk_max(lint["riskLevel"], "medium")
+            lint.setdefault("recommendedAction", "REVISE_SHOT_SPEC")
+            lint.setdefault("recommendedFix", "补齐该 shot 的口播/剧情文本、画面主体、拍摄理由和参考资产，再进入视频生成。")
+            lint["generationWarnings"].append("script_visual_alignment_seed_weak")
+        if cinematic_like and not director_reason:
+            lint["riskLevel"] = _risk_max(lint["riskLevel"], "medium")
+            lint.setdefault("recommendedAction", "REVISE_SHOT_SPEC")
+            lint.setdefault("recommendedFix", "影视类 shot 必须说明 whyThisShot/dramaticPurpose，解释画面为什么这样拍。")
+            lint["generationWarnings"].append("director_reason_missing")
+        if cinematic_like and reference_count <= 0:
+            lint["riskLevel"] = _risk_max(lint["riskLevel"], "medium")
+            lint["requiredAssets"].append({"kind": "reference_image", "role": "character_scene_prop_reference", "required": True})
+            lint.setdefault("recommendedAction", "REVISE_SHOT_SPEC")
+            lint.setdefault("recommendedFix", "影视类 shot 应绑定主要角色、场景或道具参考资产，避免全局一致性漂移。")
+            lint["generationWarnings"].append("reference_assets_missing")
+        if cinematic_like and action_beat_count <= 0:
+            lint["riskLevel"] = _risk_max(lint["riskLevel"], "medium")
+            lint.setdefault("recommendedAction", "PASS_WITH_FIX")
+            lint.setdefault("recommendedFix", "补充 actionBeats，把 3-15 秒内的动作变化拆成可检查的时间关系。")
+            lint["generationWarnings"].append("action_beats_missing")
 
         if _has_bool_key(shot, "mustMatchPrevious"):
             lint["riskLevel"] = _risk_max(lint["riskLevel"], "medium")
@@ -278,6 +363,13 @@ def _scores(summary: dict[str, Any], lint: dict[str, Any] | None = None) -> dict
     metrics = summary.get("metricSummary", {}) if isinstance(summary.get("metricSummary"), dict) else {}
     image_score = 76 if _number(metrics.get("maxFullFrameEdgeDensity"), 0) >= 0.105 else 92
     media_score = 45 if lint and "duration_outside_3_15s" in lint.get("generationWarnings", []) else 96
+    alignment_score = int(_number(lint.get("scriptVisualCompletenessScore"), 82)) if lint else 82
+    continuity_score = 92
+    if lint:
+        if _number(lint.get("referenceCoverageCount"), 0) <= 0:
+            continuity_score -= 18
+        if not lint.get("directorReasoningPresent"):
+            continuity_score -= 10
     return {
         "mediaSpec": media_score,
         "textLayout": text_score,
@@ -285,8 +377,8 @@ def _scores(summary: dict[str, Any], lint: dict[str, Any] | None = None) -> dict
         "humanQuality": 100,
         "imageQuality": image_score,
         "temporalStability": 100,
-        "promptAlignment": 82,
-        "continuity": 82,
+        "promptAlignment": max(0, min(100, alignment_score)),
+        "continuity": max(0, min(100, continuity_score)),
     }
 
 
@@ -300,6 +392,11 @@ def _hard_metrics(summary: dict[str, Any], lint: dict[str, Any] | None = None) -
     if lint:
         out["durationSec"] = _number(lint.get("durationSec"), 0)
         out["screenTextChars"] = _number(lint.get("screenTextChars"), 0)
+        out["scriptTextChars"] = _number(lint.get("scriptTextChars"), 0)
+        out["visualTextChars"] = _number(lint.get("visualTextChars"), 0)
+        out["referenceCoverageCount"] = _number(lint.get("referenceCoverageCount"), 0)
+        out["actionBeatCount"] = _number(lint.get("actionBeatCount"), 0)
+        out["scriptVisualCompletenessScore"] = _number(lint.get("scriptVisualCompletenessScore"), 0)
     return out
 
 
@@ -327,6 +424,35 @@ def _shot_issues(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return issues
 
 
+def _script_alignment(lint: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not lint:
+        return {
+            "score": 82,
+            "method": "frame_only_no_shot_spec",
+            "conclusion": "未收到 shot 规格，只能基于抽帧指标判断画面质量。",
+        }
+    score = int(_number(lint.get("scriptVisualCompletenessScore"), 0))
+    missing: list[str] = []
+    if _number(lint.get("scriptTextChars"), 0) <= 0:
+        missing.append("scriptText/narrationText")
+    if _number(lint.get("visualTextChars"), 0) <= 0:
+        missing.append("visual/sceneSummary")
+    if not lint.get("directorReasoningPresent"):
+        missing.append("whyThisShot/dramaticPurpose")
+    if _number(lint.get("referenceCoverageCount"), 0) <= 0:
+        missing.append("referenceAssets")
+    if missing:
+        conclusion = "剧本匹配前置指标不足，缺少：" + ", ".join(missing) + "。"
+    else:
+        conclusion = "剧本、画面描述、拍摄理由和参考资产覆盖完整，可进入抽帧质量判断。"
+    return {
+        "score": max(0, min(100, score)),
+        "method": "shot_spec_lint_plus_frame_mapping",
+        "missing": missing,
+        "conclusion": conclusion,
+    }
+
+
 def build_shot_reports(
     project_id: str,
     video_type: str,
@@ -352,6 +478,7 @@ def build_shot_reports(
             "fatalGateTriggered": bool(summary.get("blockingIssueCount")) or bool(lint and lint.get("fatalGateTriggered")),
             "scores": _scores(summary, lint),
             "hardMetrics": _hard_metrics(summary, lint),
+            "scriptAlignment": _script_alignment(lint),
             "issues": _shot_issues(summary),
             "repairPlan": _repair_plan(decision, summary, lint),
             "sourceSummary": summary,
@@ -389,6 +516,7 @@ def build_shot_reports(
                 "fatalGateTriggered": bool(lint.get("fatalGateTriggered")),
                 "scores": _scores(summary, lint),
                 "hardMetrics": _hard_metrics(summary, lint),
+                "scriptAlignment": _script_alignment(lint),
                 "issues": [],
                 "repairPlan": _repair_plan(decision, summary, lint),
                 "shotSpecLint": lint,
@@ -682,7 +810,7 @@ def analyze_video(
     shotList: list[dict[str, Any]] | None = None,
     videoType: str = "",
     projectMode: str = "",
-    profile: str = "",
+    profile: Any = "",
     candidateId: str = "",
 ) -> dict[str, Any]:
     """Analyze a rendered video and produce shot-level QA artifacts."""
@@ -752,7 +880,8 @@ def analyze_video(
 
     spec_lints = build_shot_spec_lints(shot_list)
     shot_summaries = _summaries(frames)
-    reports = build_shot_reports(project_id, videoType or projectMode or profile, candidateId, shot_summaries, spec_lints)
+    qa_profile = videoType or projectMode or _profile_id(profile)
+    reports = build_shot_reports(project_id, qa_profile, candidateId, shot_summaries, spec_lints)
     for summary in shot_summaries:
         for report in reports:
             if report["shotId"] == summary["shotId"]:

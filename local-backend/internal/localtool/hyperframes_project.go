@@ -90,10 +90,16 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		fallbackSpec := fallbackCompositionSpec()
 		var index string
 		if len(mediaPackages) > 0 {
-			if duration := totalMediaDuration(mediaPackages); duration > 0 {
-				fallbackSpec.DurationSec = duration
+			if shotSpec := compositionSpecFromShotListPayload(topic, script, job.Payload); shotSpec != nil {
+				fallbackSpec = shotSpec
+				mediaPackages = alignMediaPackagesToComposition(mediaPackages, shotSpec)
+				index = buildHyperFramesIndexWithMediaSpec(topic, script, mediaPackages, shotSpec)
+			} else {
+				if duration := totalMediaDuration(mediaPackages); duration > 0 {
+					fallbackSpec.DurationSec = duration
+				}
+				index = buildHyperFramesIndexWithMedia(topic, script, mediaPackages)
 			}
-			index = buildHyperFramesIndexWithMedia(topic, script, mediaPackages)
 		} else if shotSpec := compositionSpecFromShotListPayload(topic, script, job.Payload); shotSpec != nil {
 			fallbackSpec = shotSpec
 			cards, captions := extractCardsAndCaptions(shotSpec)
@@ -986,6 +992,21 @@ body {
   line-height: 1.2;
   text-align: center;
 }
+.media-safety-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 38%;
+  z-index: 5;
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    rgba(16, 24, 32, 0.94) 0%,
+    rgba(16, 24, 32, 0.78) 46%,
+    rgba(16, 24, 32, 0) 100%
+  );
+}
 .bg-field {
   position: absolute;
   inset: 0;
@@ -1292,17 +1313,37 @@ func buildHyperFramesIndex(topic, script string) string {
 }
 
 func buildHyperFramesIndexWithMedia(topic, script string, mediaPackages []shotMediaPackage) string {
+	return buildHyperFramesIndexWithMediaSpec(topic, script, mediaPackages, nil)
+}
+
+func buildHyperFramesIndexWithMediaSpec(topic, script string, mediaPackages []shotMediaPackage, spec *compositionSpec) string {
 	if len(mediaPackages) == 0 {
 		return buildHyperFramesIndex(topic, script)
 	}
 	if topic == "" {
 		topic = "Tangying AIOS Video"
 	}
-	spec := fallbackCompositionSpec()
-	if duration := totalMediaDuration(mediaPackages); duration > 0 {
-		spec.DurationSec = duration
+	if spec == nil {
+		spec = fallbackCompositionSpec()
+		if duration := totalMediaDuration(mediaPackages); duration > 0 {
+			spec.DurationSec = duration
+		}
 	}
-	index := buildCompositionIndex(topic, spec, mediaPackageCards(topic, script, mediaPackages), mediaPackageCaptions(mediaPackages), spec.Style)
+	if spec.DurationSec <= 0 {
+		if duration := totalMediaDuration(mediaPackages); duration > 0 {
+			spec.DurationSec = duration
+		} else {
+			spec.DurationSec = 8
+		}
+	}
+	cards, captions := mediaPackageCards(topic, script, mediaPackages), mediaPackageCaptions(mediaPackages)
+	if specFromShots := spec; specFromShots != nil && len(specFromShots.Tracks) > 0 {
+		if shotCards, shotCaptions := extractCardsAndCaptions(specFromShots); len(shotCards) > 0 {
+			cards = shotCards
+			captions = shotCaptions
+		}
+	}
+	index := buildCompositionIndex(topic, spec, cards, captions, spec.Style)
 	return injectTimedMedia(index, mediaPackages)
 }
 
@@ -1318,6 +1359,66 @@ func totalMediaDuration(mediaPackages []shotMediaPackage) float64 {
 		}
 	}
 	return total
+}
+
+type shotTiming struct {
+	StartSec    float64
+	DurationSec float64
+}
+
+func alignMediaPackagesToComposition(mediaPackages []shotMediaPackage, spec *compositionSpec) []shotMediaPackage {
+	if len(mediaPackages) == 0 || spec == nil {
+		return mediaPackages
+	}
+	timings := shotTimingsFromComposition(spec)
+	if len(timings) == 0 {
+		return mediaPackages
+	}
+	aligned := make([]shotMediaPackage, len(mediaPackages))
+	copy(aligned, mediaPackages)
+	for index := range aligned {
+		shotID := strings.TrimSpace(aligned[index].ShotID)
+		if timing, ok := timings[shotID]; ok {
+			aligned[index].StartSec = timing.StartSec
+			if timing.DurationSec > 0 {
+				aligned[index].DurationSec = timing.DurationSec
+			}
+		}
+	}
+	return aligned
+}
+
+func shotTimingsFromComposition(spec *compositionSpec) map[string]shotTiming {
+	timings := map[string]shotTiming{}
+	if spec == nil {
+		return timings
+	}
+	for _, track := range spec.Tracks {
+		if stringFromMap(track, "type") != "overlay" {
+			continue
+		}
+		for _, item := range interfaceSlice(track["items"]) {
+			m := mapFromInterface(item)
+			if m == nil {
+				continue
+			}
+			shotID := firstStringFromMap(m, "shotId")
+			if shotID == "" {
+				shotID = strings.TrimPrefix(stringFromMap(m, "id"), "card-")
+			}
+			shotID = strings.TrimSpace(shotID)
+			if shotID == "" {
+				continue
+			}
+			start := floatFromMap(m, "startSec", 0)
+			end := floatFromMap(m, "endSec", start)
+			if end <= start {
+				continue
+			}
+			timings[shotID] = shotTiming{StartSec: start, DurationSec: end - start}
+		}
+	}
+	return timings
 }
 
 func mediaPackageCards(topic, script string, mediaPackages []shotMediaPackage) []cardInfo {
@@ -1386,7 +1487,8 @@ func mediaPackageCaptions(mediaPackages []shotMediaPackage) []captionInfo {
 
 func injectTimedMedia(index string, mediaPackages []shotMediaPackage) string {
 	bgMarker := "      <div class=\"bg-layer\" data-layout-ignore>\n"
-	index = strings.Replace(index, bgMarker, bgMarker+timedMediaElements(mediaPackages), 1)
+	index = strings.Replace(index, bgMarker, bgMarker+timedMediaElements(mediaPackages)+`        <div class="media-safety-mask" data-layout-ignore></div>
+`, 1)
 
 	setMarker := "    tl.set(\".video-card, .caption\", { opacity: 0, y: 0, scale: 1 }, 0);\n"
 	index = strings.Replace(index, setMarker, setMarker+"    tl.set(\".shot-media, .missing-media\", { opacity: 0 }, 0);\n", 1)

@@ -38,6 +38,11 @@ func fastStoryboardRenderEnabled() bool {
 	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
+func storyboardRenderFallbackEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("TANGYING_STORYBOARD_RENDER_FALLBACK")))
+	return value == "" || value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
 func (e *HyperFramesRenderExecutor) renderFastStoryboard(ctx context.Context, projectID, projectDir, outputPath string, fps, width, height int) (*hyperFramesRenderResponse, bool, error) {
 	dataPath := filepath.Join(projectDir, "assets", "data.json")
 	payload, err := os.ReadFile(dataPath)
