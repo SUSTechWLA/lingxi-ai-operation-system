@@ -52,6 +52,71 @@ func TestVideoFrameQAExecutorRejectsUnsafeProjectID(t *testing.T) {
 	}
 }
 
+func TestBuildVisualQAShotSummariesAggregatesMetricsAndRepairGuidance(t *testing.T) {
+	frames := []visualQAFrameResult{
+		{
+			ShotID:  "SHOT_01",
+			TimeSec: 0,
+			Passed:  true,
+			Metrics: map[string]float64{
+				"topLeftTextZoneEdgeDensity": 0.02,
+				"lowerThirdEdgeDensity":      0.01,
+				"fullFrameEdgeDensity":       0.03,
+			},
+		},
+		{
+			ShotID:  "SHOT_02",
+			TimeSec: 4,
+			Passed:  false,
+			Metrics: map[string]float64{
+				"topLeftTextZoneEdgeDensity": 0.12,
+				"lowerThirdEdgeDensity":      0.02,
+				"fullFrameEdgeDensity":       0.04,
+			},
+			Issues: []visualQAIssue{{
+				Code:       "top_left_text_zone_crowded",
+				Severity:   "blocking",
+				Zone:       "top_left",
+				Suggestion: "减少左上角叠字。",
+			}},
+		},
+		{
+			ShotID:  "SHOT_02",
+			TimeSec: 8,
+			Passed:  true,
+			Metrics: map[string]float64{
+				"topLeftTextZoneEdgeDensity": 0.04,
+				"lowerThirdEdgeDensity":      0.01,
+				"fullFrameEdgeDensity":       0.02,
+			},
+		},
+	}
+
+	summaries := buildVisualQAShotSummaries(frames)
+	if len(summaries) != 2 {
+		t.Fatalf("len(summaries) = %d, want 2", len(summaries))
+	}
+	if summaries[0].ShotID != "SHOT_01" || !summaries[0].Passed || summaries[0].NeedsRegeneration {
+		t.Fatalf("unexpected SHOT_01 summary: %#v", summaries[0])
+	}
+	failing := summaries[1]
+	if failing.ShotID != "SHOT_02" {
+		t.Fatalf("second shot id = %q, want SHOT_02", failing.ShotID)
+	}
+	if failing.Passed || !failing.NeedsRegeneration {
+		t.Fatalf("SHOT_02 should require regeneration: %#v", failing)
+	}
+	if failing.Score != 82 {
+		t.Fatalf("SHOT_02 score = %d, want 82", failing.Score)
+	}
+	if failing.MetricSummary["maxTopLeftTextZoneEdgeDensity"] != 0.12 {
+		t.Fatalf("max top-left density = %#v, want 0.12", failing.MetricSummary)
+	}
+	if len(failing.Recommendations) == 0 || failing.Conclusion == "" {
+		t.Fatalf("expected repair guidance, got conclusion=%q recommendations=%#v", failing.Conclusion, failing.Recommendations)
+	}
+}
+
 func TestVisualQAContactSheetTileMinimizesEmptyCells(t *testing.T) {
 	cases := map[int]string{
 		1:  "1x1",

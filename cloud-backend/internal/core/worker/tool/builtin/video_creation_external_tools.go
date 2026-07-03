@@ -768,7 +768,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"summary":                    {Type: "string", Description: "MCP generation summary"},
 		}
 	case "video_frame_qa":
-		manifest.Description = "Extract representative frames and detect visual crowding, text-zone overlap, and clutter before delivery."
+		manifest.Description = "Extract representative frames, score each shot, and detect visual crowding, text-zone overlap, and clutter before delivery."
 		manifest.Type = "local_visual_qa"
 		manifest.CostLevel = tool.CostLow
 		manifest.RiskLevel = tool.RiskLow
@@ -799,6 +799,9 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Output = map[string]tool.ParamDef{
 			"passed":             {Type: "boolean", Description: "Whether no blocking visual issue was detected"},
 			"score":              {Type: "number", Description: "Visual QA score from 0 to 100"},
+			"shotSummaries":      {Type: "array", Description: "Per-shot QA metrics, conclusions, and repair guidance"},
+			"repairPlan":         {Type: "object", Description: "Shot-level regeneration or review plan derived from QA metrics"},
+			"needsRegeneration":  {Type: "boolean", Description: "Whether any shot has blocking issues and should be regenerated"},
 			"reportRef":          {Type: "string", Description: "Local JSON report ref"},
 			"contactSheetRef":    {Type: "string", Description: "Local contact sheet image ref"},
 			"blockingIssueCount": {Type: "number", Description: "Blocking visual issue count"},

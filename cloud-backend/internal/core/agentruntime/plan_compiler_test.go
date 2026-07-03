@@ -764,6 +764,11 @@ func TestPlanCompiler_PreparePlanInsertsVideoFrameQAAfterRender(t *testing.T) {
 	if got := visualQA.Arguments["shotList"]; got != "{{visual_alignment.output.shotList}}" {
 		t.Fatalf("visual_qa shotList = %#v, want visual alignment shot list", got)
 	}
+	for _, output := range []string{"shotSummaries", "repairPlan", "needsRegeneration"} {
+		if !containsString(visualQA.ExpectedOutput, output) {
+			t.Fatalf("visual_qa should declare %s output, got %#v", output, visualQA.ExpectedOutput)
+		}
+	}
 	requireStepDeps(t, visualQA, []string{"render", "visual_alignment"})
 	publish := findStep(t, prepared, "publish_copy")
 	requireStepDeps(t, publish, []string{"visual_qa", "script_generation", "visual_alignment"})

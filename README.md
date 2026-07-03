@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.2-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.3-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,14 @@
 ---
 
 ## Release 更新
+
+### v0.1.3 - 2026-07-03
+
+- 升级视频 QA 为 shot 级质量检查：每个 shot 都输出抽帧数、平均/最大视觉密度指标、质量分、结论和返修建议。
+- 新增 `repairPlan` 聚合结论，可直接区分 `approve`、`manual_review` 和 `regenerate_shots`，为后续自动返修重生成提供稳定接口。
+- 云端 `visual_qa` 节点正式声明 `shotSummaries`、`repairPlan`、`needsRegeneration` 输出，审核门和后续节点可稳定读取。
+- 更新视频 QA Wiki，说明 shot 级量化指标、阻断/警告策略和返修建议字段。
+- 已用 30 秒 16:9 “视频 Agent”宣传片跑通脚本、预览、渲染、shot 级 QA、发布文案完整链路。
 
 ### v0.1.2 - 2026-07-03
 
@@ -84,7 +92,7 @@
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
-| 成片抽帧 QA | 渲染后自动抽取关键帧，检查文字安全区、底部字幕拥挤和画面复杂度，再由人工确认 |
+| Shot 级抽帧 QA | 渲染后按 shot 聚合抽帧指标，输出质量分、结论和返修建议，再由人工确认 |
 | 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
 
 ## 创作流程
