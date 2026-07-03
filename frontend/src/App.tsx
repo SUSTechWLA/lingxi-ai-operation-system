@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import AuthScreen from './components/AuthScreen'
-import BiaoshuWorkbench from './pages/BiaoshuWorkbench'
-import { fetchCurrentUser, getStoredAuthSession, logout, type AuthUser } from './services/auth'
+import { BiaoshuAppShell } from './components/BiaoshuAppShell'
+import { fetchCurrentUser, getStoredAuthSession, logout as doLogout, type AuthUser } from './services/auth'
 
 function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
@@ -17,12 +17,17 @@ function App() {
         const user = await fetchCurrentUser()
         setAuthUser(user)
       } catch {
-        logout()
+        doLogout()
       } finally {
         setAuthChecking(false)
       }
     }
     restoreSession()
+  }, [])
+
+  const handleLogout = useCallback(() => {
+    doLogout()
+    setAuthUser(null)
   }, [])
 
   if (authChecking) {
@@ -34,7 +39,7 @@ function App() {
   }
 
   return (
-    <BiaoshuWorkbench />
+    <BiaoshuAppShell user={authUser} onLogout={handleLogout} />
   )
 }
 

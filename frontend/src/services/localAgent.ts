@@ -73,9 +73,9 @@ export function mergeModelProviderSettings(
   providers?: Partial<Record<ModelCapability, ModelProviderConfig>>
 ): Record<ModelCapability, ModelProviderConfig> {
   return {
-    text_to_text: { ...DEFAULT_MODEL_PROVIDER_SETTINGS.text_to_text, ...providers?.text_to_text, apiKey: '' },
-    text_to_image: { ...DEFAULT_MODEL_PROVIDER_SETTINGS.text_to_image, ...providers?.text_to_image, apiKey: '' },
-    text_to_video: { ...DEFAULT_MODEL_PROVIDER_SETTINGS.text_to_video, ...providers?.text_to_video, apiKey: '' },
+    text_to_text: { ...DEFAULT_MODEL_PROVIDER_SETTINGS.text_to_text, ...providers?.text_to_text },
+    text_to_image: { ...DEFAULT_MODEL_PROVIDER_SETTINGS.text_to_image, ...providers?.text_to_image },
+    text_to_video: { ...DEFAULT_MODEL_PROVIDER_SETTINGS.text_to_video, ...providers?.text_to_video },
   }
 }
 
@@ -146,6 +146,25 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
   } catch {
     return fallback
   }
+}
+
+// ── Local Agent Health ──
+
+export interface LocalAgentHealth {
+  status: string
+  service?: string
+  version?: string
+  dataDir?: string
+  os?: string
+  arch?: string
+}
+
+export async function fetchLocalAgentHealth(): Promise<LocalAgentHealth> {
+  const response = await fetch(localAgentUrl('/api/local/health'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, 'Local Agent 连接失败'))
+  }
+  return response.json() as Promise<LocalAgentHealth>
 }
 
 // ── Biaoshu AI Conversation ──
