@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.6-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.7-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,13 @@
 ---
 
 ## Release 更新
+
+### v0.1.7 - 2026-07-04
+
+- 优化 Dreamina/JiMeng 视频投放提示词：从“工程说明模板”改为 Vibe Creator 画面叙述，按 0-2 秒、2-4 秒、4-6 秒等时间段写清具体画面、对象变化和表达思想。
+- 即梦视频 prompt 不再混入 `AIGC_VIDEO`、`b-roll`、`ffmpeg`、`SHOT_VIDEO_CLIP`、`素材意图`、`镜头运动` 等内部标签或拼接说明。
+- 系统会把导演字段、口播意图和趣味节拍转写成可见画面，例如创作桌、便利贴、传送带、即梦素材工位、抽帧 QA 放大镜、视频胶囊等具体元素。
+- 新增回归测试，防止后续再次把内部生产说明泄漏到外部视频模型 prompt。
 
 ### v0.1.6 - 2026-07-04
 

@@ -3779,55 +3779,22 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			references = referenceImagesFromHints(shotID, append(materialHints, referenceAssetIDs...))
 		}
 
-		promptParts := []string{
-			fmt.Sprintf("独立生成 %d 秒非写实动画 AIGC 视频，主题：%s。", duration, compactTopicForPrompt(topic)),
-			fmt.Sprintf("镜头 %s：%s", shotID, fallbackText(visual, narration)),
-			"口播/字幕内容：" + narration,
-			"画面需包含主体、场景、动作、镜头运动、光影、色彩和风格，采用非真人动画或图形隐喻，保持干净、明亮、积极、知识分享、电影感动画。",
-			"本 shot 完全独立生成，画面信息自洽，适合直接剪入当前段落。",
-			"转场只覆盖在本 shot 结尾：" + transitionAtEnd,
-			"生成后可直接作为 SHOT_VIDEO_CLIP，用 ffmpeg 按 shot 顺序 simple_cut 拼接。",
-		}
-		if camera != "" {
-			promptParts = append(promptParts, "镜头运动："+camera)
-		}
-		if shotSize != "" {
-			promptParts = append(promptParts, "景别："+shotSize)
-		}
-		if composition != "" {
-			promptParts = append(promptParts, "构图："+composition)
-		}
-		if lighting != "" {
-			promptParts = append(promptParts, "光影："+lighting)
-		}
-		if whyThisShot != "" {
-			promptParts = append(promptParts, "画面意义："+whyThisShot)
-		}
-		if len(actionBeats) > 0 {
-			promptParts = append(promptParts, "动作时间线："+strings.Join(actionBeats, " "))
-		}
-		if len(continuityAnchors) > 0 {
-			promptParts = append(promptParts, "一致性锚点："+strings.Join(continuityAnchors, "、"))
-		}
-		if len(referenceAssetIDs) > 0 {
-			promptParts = append(promptParts, "全局参考资产："+strings.Join(referenceAssetIDs, "、"))
-		}
-		if assetIntent != "" {
-			promptParts = append(promptParts, "素材意图："+assetIntent)
-		}
-		if humorBeat != "" {
-			promptParts = append(promptParts, "趣味节拍："+humorBeat)
-		}
-		if timeRelationship != "" {
-			promptParts = append(promptParts, "口播与画面时间关系："+timeRelationship)
-		}
-		if tone != "" {
-			promptParts = append(promptParts, "内容调性："+tone)
-		}
-		if len(materialHints) > 0 {
-			promptParts = append(promptParts, "可参考素材库关键词："+strings.Join(materialHints, "、"))
-		}
-		videoPrompt := limitPromptRunes(strings.Join(promptParts, "\n"), 2000)
+		videoPrompt := buildDreaminaVibeVideoPrompt(dreaminaVibePromptInput{
+			Topic:             topic,
+			DurationSec:       duration,
+			Visual:            visual,
+			Narration:         narration,
+			WhyThisShot:       whyThisShot,
+			AssetIntent:       assetIntent,
+			HumorBeat:         humorBeat,
+			TimeRelationship:  timeRelationship,
+			Tone:              tone,
+			Lighting:          lighting,
+			ActionBeats:       actionBeats,
+			ContinuityAnchors: continuityAnchors,
+			ReferenceAssetIDs: referenceAssetIDs,
+			MaterialHints:     materialHints,
+		})
 		negativePrompt := "避免真人写实、跨 shot 依赖、尾帧对齐要求、水印、不可读文字、画面崩坏。"
 		requestID := "extgen_video_" + unitShotID
 		submitExternalRequest := shouldSubmitExternalVideoRequest(shot, visual, materialHints)
@@ -3964,6 +3931,201 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		"shotAssetPackages":          packages,
 		"summary":                    contentPkg["summary"],
 	}, true
+}
+
+type dreaminaVibePromptInput struct {
+	Topic             string
+	DurationSec       int
+	Visual            string
+	Narration         string
+	WhyThisShot       string
+	AssetIntent       string
+	HumorBeat         string
+	TimeRelationship  string
+	Tone              string
+	Lighting          string
+	ActionBeats       []string
+	ContinuityAnchors []string
+	ReferenceAssetIDs []string
+	MaterialHints     []string
+}
+
+func buildDreaminaVibeVideoPrompt(input dreaminaVibePromptInput) string {
+	duration := input.DurationSec
+	if duration <= 0 {
+		duration = 6
+	}
+	concept := dreaminaVibeConcept(input)
+	thought, first, second, third := dreaminaVibeStoryBeats(concept, input)
+	startA, startB, startC, end := dreaminaVibeWindows(duration)
+	lines := []string{
+		"非真人风格化动画，16:9 横屏，画面干净明亮，色彩积极，像一段轻松的知识分享小短片；不要真人写实，不要照片质感。",
+		thought,
+		fmt.Sprintf("%s-%s秒：%s", startA, startB, first),
+		fmt.Sprintf("%s-%s秒：%s", startB, startC, second),
+		fmt.Sprintf("%s-%s秒：%s", startC, end, third),
+	}
+	if humor := cleanDreaminaVibeText(input.HumorBeat); humor != "" {
+		lines = append(lines, "喜剧感来自"+trimSentencePunctuation(humor)+"，先让人会心一笑，再看懂流程变清楚。")
+	}
+	if intent := dreaminaVibeIntentSentence(input); intent != "" {
+		lines = append(lines, intent)
+	}
+	if tone := cleanDreaminaVibeText(input.Tone); tone != "" {
+		lines = append(lines, "整体情绪保持"+trimSentencePunctuation(tone)+"。")
+	}
+	lines = append(lines, "末尾 0.5s 稳定画面，让观众看清最终结果。")
+	return limitPromptRunes(strings.Join(compactStrings(lines), "\n"), 2000)
+}
+
+func dreaminaVibeConcept(input dreaminaVibePromptInput) string {
+	for _, candidate := range []string{
+		extractChineseQuotedText(input.Visual),
+		cleanDreaminaVibeText(input.Visual),
+		cleanDreaminaVibeText(input.WhyThisShot),
+		cleanDreaminaVibeText(input.Narration),
+		compactTopicForPrompt(input.Topic),
+	} {
+		candidate = trimSentencePunctuation(candidate)
+		if candidate != "" && !isGenericDreaminaPromptText(candidate) {
+			return limitPromptRunes(candidate, 80)
+		}
+	}
+	if quoted := extractChineseQuotedText(input.Visual); quoted != "" {
+		return quoted
+	}
+	return "AI 内容流程，一次跑到底"
+}
+
+func dreaminaVibeStoryBeats(concept string, input dreaminaVibePromptInput) (string, string, string, string) {
+	text := strings.ToLower(strings.Join([]string{
+		concept,
+		input.Topic,
+		input.Visual,
+		input.Narration,
+		input.WhyThisShot,
+		input.HumorBeat,
+		strings.Join(input.MaterialHints, " "),
+	}, " "))
+	switch {
+	case containsAny(text, "ai", "内容", "流程", "一次跑到底", "脚本", "分镜", "qa", "抽帧", "mcp"):
+		return fmt.Sprintf("这个画面表达：%s；灵感不再被一堆工具拖住，而是被一条清楚的流程轻松送到成片。", trimSentencePunctuation(concept)),
+			"明亮的创作桌上，一颗写着“想法”的小星星被脚本纸、分镜卡、素材贴纸和抽帧 QA 放大镜围住，便利贴像小弹簧一样乱跳，一个圆滚滚的小机器人跳出来按下绿色开始按钮。",
+			"桌面打开成迷你传送带，“脚本”“分镜”“即梦素材”“抽帧 QA”四个发光小工位依次亮起；乱飞的便利贴排成小队，一个个盖章通过，原本混乱的纸团变成整齐的视频胶片。",
+			"传送带尽头弹出一枚干净的视频胶囊和开源星标，小机器人松一口气坐在胶囊上挥手，抽帧 QA 放大镜变成笑脸印章，画面从热闹收束到清爽明亮。"
+	case containsAny(text, "开源", "关注", "star", "fork", "follow", "项目"):
+		return "这个画面表达：一个复杂项目被拆成人人看得懂、愿意参与的开放创作流程。",
+			"一台迷你视频工厂在清晨自动亮灯，桌面上散落的代码纸、剧本卡和素材贴纸慢慢漂起来，组成一个温暖的开源项目看板。",
+			"Star、Fork、Follow 三个彩色贴纸像小烟花一样弹出，创作者角色把一颗发光想法递进工厂入口，工位们轻快运转，画面有一点无厘头但很友好。",
+			"最后工厂吐出一条发光视频胶囊，周围的小贴纸排队鼓掌，项目看板保持清晰，整体像一次轻松的开源上线邀请。"
+	case containsAny(text, "工具", "风扇", "起飞", "打工人", "便利贴"):
+		return "这个画面表达：工具不再制造焦虑，而是变成可爱的协作伙伴。",
+			"一个疲惫但可爱的动画创作者坐在创作桌前，十个 AI 工具窗口变成会弹跳的小便利贴，电脑风扇戴着小安全帽假装要起飞。",
+			"小便利贴们突然听到哨声，排成一条整齐小队，分别举着“脚本”“素材”“渲染”“QA”的小牌子向前跑，创作者的表情从懵变成想笑。",
+			"电脑风扇不再乱转，变成一朵小风车给队伍鼓掌，桌面恢复清爽，创作者端起咖啡，画面轻松解压。"
+	default:
+		cleanVisual := fallbackText(cleanDreaminaVibeText(input.Visual), concept)
+		cleanNarration := cleanDreaminaVibeText(input.Narration)
+		if cleanNarration == "" || isGenericDreaminaPromptText(cleanNarration) {
+			cleanNarration = concept
+		}
+		return "这个画面表达：" + trimSentencePunctuation(fallbackText(cleanDreaminaVibeText(input.WhyThisShot), cleanNarration)) + "。",
+			fmt.Sprintf("一个清爽明亮的动画空间里，代表“%s”的主角元素出现在画面中央，旁边有三四个简单符号围绕它，观众第一眼能看懂正在发生的事。", trimSentencePunctuation(cleanNarration)),
+			fmt.Sprintf("主角元素开始发生变化：%s。道具、场景和小符号跟着它一起响应，画面从小混乱慢慢变成有秩序。", trimSentencePunctuation(cleanVisual)),
+			"最后所有元素停在一个干净的结果画面里，保留一点幽默的小动作，让信息表达清楚又不紧绷。"
+	}
+}
+
+func dreaminaVibeWindows(duration int) (string, string, string, string) {
+	if duration <= 0 {
+		duration = 6
+	}
+	firstEnd := duration / 3
+	if firstEnd < 1 {
+		firstEnd = 1
+	}
+	secondEnd := (duration * 2) / 3
+	if secondEnd <= firstEnd {
+		secondEnd = firstEnd + 1
+	}
+	if secondEnd >= duration {
+		secondEnd = duration - 1
+	}
+	if secondEnd <= firstEnd {
+		secondEnd = firstEnd
+	}
+	return "0", strconv.Itoa(firstEnd), strconv.Itoa(secondEnd), strconv.Itoa(duration)
+}
+
+func dreaminaVibeIntentSentence(input dreaminaVibePromptInput) string {
+	intent := strings.ToLower(strings.Join([]string{input.AssetIntent, input.TimeRelationship}, " "))
+	if containsAny(intent, "开头钩子", "解压") {
+		return "开头钩子和解压感来自夸张但友好的反差动作，信息最后落到项目能力。"
+	}
+	if containsAny(intent, "减负", "开源共建") {
+		return "它要让人感觉创作者减负、流程变轻、开源共建是积极可参与的。"
+	}
+	return ""
+}
+
+func cleanDreaminaVibeText(text string) string {
+	cleaned := normalizeInlineText(text)
+	replacements := []string{
+		"AIGC_VIDEO |", "",
+		"SCREEN_RECORDING |", "",
+		"HYPERFRAMES |", "",
+		"AIGC_VIDEO", "",
+		"b-roll", "",
+		"B-roll", "",
+		"非真人风格化搞笑 ：", "非真人风格化：",
+		"非真人风格化搞笑：", "非真人风格化：",
+		"本 shot", "这个画面",
+		"SHOT_VIDEO_CLIP", "视频片段",
+		"ffmpeg", "",
+		"simple_cut", "",
+		"镜头在 16:9 横屏中轻快推进", "画面节奏轻快",
+		"镜头自然运动", "画面自然变化",
+		"主体有明确动作，场景持续变化，", "",
+		"使用清晰符号和可读画面", "用清晰符号表达",
+		"用一个可视化反差动作承接口播：", "",
+		"动态  承接口播情绪", "动态画面承接情绪",
+	}
+	for i := 0; i+1 < len(replacements); i += 2 {
+		cleaned = strings.ReplaceAll(cleaned, replacements[i], replacements[i+1])
+	}
+	cleaned = strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
+	cleaned = strings.Trim(cleaned, " ：:|，,。")
+	return cleaned
+}
+
+func isGenericDreaminaPromptText(text string) bool {
+	normalized := strings.ToLower(normalizeInlineText(text))
+	if normalized == "" {
+		return true
+	}
+	return containsAny(normalized,
+		"设计一个轻松", "视觉隐喻", "主体有明确动作", "场景持续变化", "画面需包含",
+		"独立生成", "可直接剪入", "适合直接", "承接口播", "动态 b-roll", "动态画面承接情绪",
+	)
+}
+
+func extractChineseQuotedText(text string) string {
+	start := strings.Index(text, "“")
+	end := strings.Index(text, "”")
+	if start >= 0 && end > start {
+		return strings.TrimSpace(text[start+len("“") : end])
+	}
+	start = strings.Index(text, "\"")
+	if start >= 0 {
+		if end = strings.Index(text[start+1:], "\""); end >= 0 {
+			return strings.TrimSpace(text[start+1 : start+1+end])
+		}
+	}
+	return ""
+}
+
+func trimSentencePunctuation(text string) string {
+	return strings.Trim(strings.TrimSpace(text), "。；;，,：: ")
 }
 
 func shouldSubmitExternalVideoRequest(shot map[string]interface{}, visual string, materialHints []string) bool {

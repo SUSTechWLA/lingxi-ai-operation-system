@@ -46,6 +46,20 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
+v0.1.7 对应能力：
+
+- Dreamina/JiMeng 视频投放 prompt 改为 Vibe Creator 画面叙述：按时间段写具体主体、道具、场景、变化和表达思想。
+- 外部视频模型 prompt 禁止泄漏 `AIGC_VIDEO`、`b-roll`、`ffmpeg`、`SHOT_VIDEO_CLIP`、`素材意图` 等内部生产标签。
+- 导演字段、口播意图、趣味节拍和 QA 目标必须先转写成具体画面，再进入 `externalGenerationRequests[].prompt`。
+
+发布 v0.1.7 tag 前必须确认：
+
+1. README 已追加 v0.1.7 release note。
+2. `docs/cinematic-video-workflow.md` 和 `docs/mcp-providers.md` 已说明 Dreamina 投放 prompt 契约。
+3. 回归测试覆盖“坏 prompt 不再包含内部工程说明，而是包含时间段画面故事”。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.7 <release_commit>` 只在 release 提交后创建。
+
 v0.1.6 对应能力：
 
 - MCP AIGC 生成结果必须输出 `sourceSummary` 和 `assetProvenance`，让用户能直接看到哪些素材真实来自 provider，哪些请求失败、延迟或需要 fallback。

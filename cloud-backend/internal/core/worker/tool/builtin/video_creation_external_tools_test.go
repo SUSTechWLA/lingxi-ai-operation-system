@@ -1252,6 +1252,51 @@ func TestVideoPromptGeneratorIncludesCreativeDirectorFieldsInAIGCRequests(t *tes
 	}
 }
 
+func TestVideoPromptGeneratorBuildsVibeScenePromptForDreamina(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "测试带抽帧 QA 的短视频创作流程", "", map[string]interface{}{
+		"topic": "测试带抽帧 QA 的短视频创作流程",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_01",
+				"durationSec":       6,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "AIGC_VIDEO | 非真人风格化搞笑 b-roll：围绕“AI 内容流程，一次跑到底”设计一个轻松、有反差但清楚的视觉隐喻，主体有明确动作，场景持续变化，镜头在 16:9 横屏中轻快推进，使用清晰符号和可读画面。",
+				"mainAction":        "用一个可视化反差动作承接口播：",
+				"assetIntent":       "用 Dreamina/JiMeng MCP 生成口播对应的动态情绪素材，承担开头钩子、反差和解压感。",
+				"humorBeat":         "用夸张视觉隐喻先逗笑，再落到项目能力。",
+				"timeRelationship":  "0-6.0s 动态 b-roll 承接口播情绪；末尾 0.5s 稳定画面给字幕/转场。",
+				"tone":              "正能量、搞笑、无厘头、解压，但信息表达清楚；不焦虑、不嘲讽用户",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-vibe-scene", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one AIGC external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, ok := requests[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request should be a map, got %#v", requests[0])
+	}
+	prompt := ensureStringValue(req["prompt"])
+	for _, banned := range []string{
+		"独立生成", "AIGC_VIDEO", "b-roll", "镜头运动", "ffmpeg", "素材意图", "本 shot", "SHOT_VIDEO_CLIP",
+		"生成后可直接", "口播/字幕内容", "画面需包含", "转场只覆盖", "主题：",
+	} {
+		if strings.Contains(prompt, banned) {
+			t.Fatalf("Dreamina prompt should not contain production jargon %q:\n%s", banned, prompt)
+		}
+	}
+	for _, want := range []string{"0-2秒", "2-4秒", "4-6秒", "创作桌", "传送带", "抽帧 QA"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("Dreamina prompt should contain concrete timed story detail %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestVideoPromptGeneratorKeepsHumorousAIGCRequestsPositive(t *testing.T) {
 	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "躺营 AIOS 正能量开源宣传", "", map[string]interface{}{
 		"topic": "躺营 AIOS 正能量开源宣传",
@@ -2332,8 +2377,15 @@ func TestVideoPromptGeneratorIncludesCinematicDirectorFields(t *testing.T) {
 	}
 	prompt := prompts[0].(map[string]interface{})
 	promptText := ensureStringValue(prompt["prompt"])
-	if !strings.Contains(promptText, "画面意义") || !strings.Contains(promptText, "动作时间线") || !strings.Contains(promptText, "全局参考资产") {
-		t.Fatalf("prompt should include cinematic director fields, got %s", promptText)
+	for _, want := range []string{"0-2秒", "2-4秒", "4-6秒", "任务卡", "导演台", "混乱"} {
+		if !strings.Contains(promptText, want) {
+			t.Fatalf("prompt should translate cinematic director fields into visible timed story detail %q, got %s", want, promptText)
+		}
+	}
+	for _, banned := range []string{"画面意义：", "动作时间线：", "全局参考资产：", "ffmpeg", "SHOT_VIDEO_CLIP"} {
+		if strings.Contains(promptText, banned) {
+			t.Fatalf("prompt should not expose internal director labels %q, got %s", banned, promptText)
+		}
 	}
 	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
 	if !ok || len(requests) != 1 {

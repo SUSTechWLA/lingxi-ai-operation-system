@@ -85,6 +85,20 @@ curl -X POST http://127.0.0.1:18080/api/local/jimeng/setup/register-mcp \
 
 `LOCAL_MCP_TOOL_CALL` 会根据请求 `kind` 自动把默认视频工具切换为图片工具。例如默认 `mcpTool=jimeng.generate_video`，当请求 `kind=image` 时会调用 `jimeng.generate_image`。
 
+### 视频 Prompt 契约
+
+`kind=video` 的 `prompt` 必须是可直接投放给视频模型的画面故事，不是系统内部说明。它应该像短片片段描述：
+
+```text
+非真人风格化动画，16:9 横屏，画面干净明亮。
+这个画面表达：灵感被清楚流程轻松送到成片。
+0-2秒：创作桌上，一颗写着“想法”的小星星被脚本纸、分镜卡和抽帧 QA 放大镜围住。
+2-4秒：桌面打开成迷你传送带，“脚本”“分镜”“即梦素材”“抽帧 QA”四个小工位依次亮起。
+4-6秒：传送带尽头弹出视频胶囊和开源星标，小机器人挥手，画面明亮稳定。
+```
+
+不要把 `AIGC_VIDEO`、`b-roll`、`ffmpeg`、`SHOT_VIDEO_CLIP`、`素材意图`、`镜头运动`、artifact、storageRef 或拼接说明写进 provider prompt。导演字段、口播意图和 QA 目标应该先被编译成具体可见画面，再交给 MCP provider。
+
 Dreamina 图片参数当前按以下规则归一：
 
 | 输入 | MCP 参数 |

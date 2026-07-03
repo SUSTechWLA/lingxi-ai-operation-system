@@ -86,6 +86,25 @@ resolution_type: 2k 或 4k
 | 角色、场景、道具设定图 | Dreamina `generate_image` MCP | 生成全局参考图 |
 | 情绪化动作、无厘头视觉隐喻 | Dreamina `generate_video` MCP | 生成 3-15 秒独立 shot |
 
+## Dreamina 投放 Prompt
+
+投放给 Dreamina/JiMeng `generate_video` 的 prompt 是最终画面叙述，不是内部拍摄单、工具说明或拼接说明。
+
+必须写清：
+
+- 这个片段要表达的思想。
+- 画面里具体有什么主体、道具、场景和符号。
+- 每个时间段发生什么变化，例如 `0-2秒`、`2-4秒`、`4-6秒`。
+- 最后半秒画面如何稳定收束，让观众看清结果。
+- 非真人风格化、积极、干净、明亮的整体气质。
+
+禁止混入：
+
+- `AIGC_VIDEO`、`b-roll`、`SHOT_VIDEO_CLIP` 等内部标签。
+- `ffmpeg`、`simple_cut`、拼接、artifact、storageRef 等工程说明。
+- “画面需包含主体、场景、动作、镜头运动...” 这种模板化检查句。
+- 纯镜头技术参数。需要保留的导演意图应转写成观看体验和画面变化。
+
 Dreamina 视频 MCP 如果返回余额不足、并发限制或超时，系统保留 `externalGenerationRequests`，并可以继续使用 storyboard / HyperFrames fallback 生成可 QA 的成片。但 fallback 必须被明确标记，不能被当成 AIGC 视频素材交付。
 
 v0.1.6 起，`mcp_generation_runner` 会输出：
