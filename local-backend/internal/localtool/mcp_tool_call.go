@@ -28,7 +28,7 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		providerID = stringPayload(job.Payload, "provider_id")
 	}
 	if providerID == "" {
-		providerID = "jimeng"
+		return nil, errors.New("providerId is required")
 	}
 	toolName := stringPayload(job.Payload, "toolName")
 	if toolName == "" {
@@ -53,6 +53,7 @@ func (e *mcpToolCallExecutor) Execute(ctx context.Context, job Job) (*Result, er
 		timeout = 10 * time.Minute
 	}
 	client := localmcp.NewClient(provider, &http.Client{Timeout: timeout})
+	defer client.Close()
 	if requests := slicePayload(job.Payload, "externalGenerationRequests"); len(requests) > 0 {
 		return executeExternalGenerationBatch(ctx, client, provider.ID, toolName, requests)
 	}
@@ -103,7 +104,7 @@ func executeExternalGenerationBatch(ctx context.Context, client *localmcp.Client
 			failed["mcpResult"] = callResult.StructuredContent
 			remaining = append(remaining, failed)
 		} else {
-			packages = append(packages, shotAssetPackageFromMCPResult(request, callResult.StructuredContent))
+			packages = append(packages, shotAssetPackageFromMCPResult(providerID, request, callResult.StructuredContent))
 		}
 		results = append(results, result)
 	}
@@ -133,7 +134,7 @@ func mcpArgumentsFromExternalRequest(request map[string]interface{}) map[string]
 	return args
 }
 
-func shotAssetPackageFromMCPResult(request map[string]interface{}, structured map[string]interface{}) map[string]interface{} {
+func shotAssetPackageFromMCPResult(providerID string, request map[string]interface{}, structured map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"shotId":          request["shotId"],
 		"requestId":       request["requestId"],
@@ -146,7 +147,7 @@ func shotAssetPackageFromMCPResult(request map[string]interface{}, structured ma
 			"requestId": request["requestId"],
 			"submitId":  mcpFirstPresent(structured, "submit_id", "submitId"),
 			"genStatus": mcpFirstPresent(structured, "gen_status", "genStatus"),
-			"provider":  "jimeng",
+			"provider":  providerID,
 			"raw":       structured,
 		},
 	}

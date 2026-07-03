@@ -283,13 +283,13 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoForgeDependencies(t *tes
 	}
 }
 
-func TestRegisterVideoCreationExternalToolsInstallsJiMengRunnerManifest(t *testing.T) {
+func TestRegisterVideoCreationExternalToolsInstallsMCPGenerationRunnerManifest(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
 
-	manifest := registry.GetExternalManifest("jimeng_generation_runner")
+	manifest := registry.GetExternalManifest("mcp_generation_runner")
 	if manifest == nil {
-		t.Fatal("expected jimeng_generation_runner to be registered")
+		t.Fatal("expected mcp_generation_runner to be registered")
 	}
 	if manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
 		t.Fatalf("ExecutionPlane = %q, want local", manifest.ExecutionPlane)
@@ -298,7 +298,55 @@ func TestRegisterVideoCreationExternalToolsInstallsJiMengRunnerManifest(t *testi
 		t.Fatalf("LocalCommand = %q, want LOCAL_MCP_TOOL_CALL", manifest.LocalCommand)
 	}
 	if !manifest.RequiresUserDevice {
-		t.Fatal("jimeng_generation_runner should require user device")
+		t.Fatal("mcp_generation_runner should require user device")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalBeforeExecute {
+		t.Fatalf("mcp_generation_runner approval policy = %#v, want before_execute", manifest.ApprovalPolicy)
+	}
+}
+
+func TestRegisterVideoCreationExternalToolsInstallsPreviewReviewManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("hyperframes_project_generator")
+	if manifest == nil {
+		t.Fatal("expected hyperframes_project_generator to be registered")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact {
+		t.Fatalf("preview approval policy = %#v, want after_artifact", manifest.ApprovalPolicy)
+	}
+	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
+		t.Fatalf("preview human review missing: %#v", manifest.HumanReview)
+	}
+	for _, kind := range []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"} {
+		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
+			t.Fatalf("preview artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+}
+
+func TestRegisterVideoCreationExternalToolsInstallsRenderReviewManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("hyperframes_renderer")
+	if manifest == nil {
+		t.Fatal("expected hyperframes_renderer to be registered")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalBeforeExecute {
+		t.Fatalf("render approval policy = %#v, want before_execute", manifest.ApprovalPolicy)
+	}
+	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
+		t.Fatalf("render human review missing: %#v", manifest.HumanReview)
+	}
+	for _, kind := range []string{"VIDEO", "RENDER_REPORT"} {
+		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
+			t.Fatalf("render artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+	if !manifest.SideEffect {
+		t.Fatal("hyperframes_renderer should be marked as a side-effecting local tool")
 	}
 }
 
@@ -398,6 +446,36 @@ func TestTimeWindowPlannerRequiresScriptSpansForTalkingHead(t *testing.T) {
 	}
 }
 
+func TestTimeWindowPlannerPrefersScriptTextOverRedactedTextField(t *testing.T) {
+	result := executeLocalVideoCreationTool("time_window_planner", map[string]interface{}{
+		"stage": "time_window",
+		"creationProfile": map[string]interface{}{
+			"profileId": "talking_head",
+		},
+		"scriptSpans": []interface{}{
+			map[string]interface{}{
+				"id":          "SPAN_01",
+				"startSec":    float64(0),
+				"endSec":      float64(6),
+				"scriptText":  "躺营 AI OS 把脚本、分镜和渲染串成一条流水线。",
+				"text":        map[string]interface{}{"field": "text", "reason": "USER_ASSET_REDACTED", "redacted": true},
+				"durationSec": float64(6),
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-time-window", NodeID: "time_window_exec"})
+
+	if !result.Success {
+		t.Fatalf("time_window_planner failed: %s", result.Error)
+	}
+	windows, ok := result.Data["timeWindows"].([]map[string]interface{})
+	if !ok || len(windows) != 1 {
+		t.Fatalf("expected one window, got %#v", result.Data["timeWindows"])
+	}
+	if windows[0]["scriptText"] != "躺营 AI OS 把脚本、分镜和渲染串成一条流水线。" {
+		t.Fatalf("redacted text field should not override scriptText: %#v", windows[0])
+	}
+}
+
 func TestVisualAlignmentPlannerPreservesTimeWindowDuration(t *testing.T) {
 	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
 		"stage": "visual_alignment",
@@ -431,6 +509,43 @@ func TestVisualAlignmentPlannerPreservesTimeWindowDuration(t *testing.T) {
 	}
 	if shot["visual"] != "字幕和B-roll补充" {
 		t.Fatalf("expected visual from sceneSummary, got %#v", shot["visual"])
+	}
+}
+
+func TestVisualAlignmentPlannerDerivesPublicTitleFromNarration(t *testing.T) {
+	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
+		"stage": "visual_alignment",
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":          "TW_01",
+				"shotId":      "SHOT_01",
+				"durationSec": float64(8),
+				"scriptText":  "躺营 AI OS 把选题、脚本、分镜、审核、生成和打包放进一条可追踪流水线，非技术用户也能按步骤推进。",
+				"text":        map[string]interface{}{"field": "text", "reason": "USER_ASSET_REDACTED", "redacted": true},
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-visual-alignment", NodeID: "visual_alignment_exec"})
+
+	if !result.Success {
+		t.Fatalf("visual_alignment_planner failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 1 {
+		t.Fatalf("expected one visual alignment shot, got %#v", result.Data["shotList"])
+	}
+	shot := shotList[0]
+	if shot["visual"] != "选题到成片，一条流水线" {
+		t.Fatalf("expected public visual title, got %#v", shot["visual"])
+	}
+	visual, _ := shot["visual"].(string)
+	if strings.Contains(visual, "围绕该口播时间窗") {
+		t.Fatalf("visual title leaked internal placeholder: %#v", shot["visual"])
+	}
+	if shot["narrationText"] != "躺营 AI OS 把选题、脚本、分镜、审核、生成和打包放进一条可追踪流水线，非技术用户也能按步骤推进。" {
+		t.Fatalf("redacted text field should not override narration: %#v", shot["narrationText"])
+	}
+	if shot["camera"] == "" {
+		t.Fatalf("expected viewer-facing camera/subtitle hint, got %#v", shot)
 	}
 }
 
@@ -586,6 +701,7 @@ func TestVideoScriptGeneratorBlocksRequiredRetrievalWithEmptyFacts(t *testing.T)
 }
 
 func TestVideoScriptGeneratorConsumesKnowledgeContextWithoutModelFallback(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
 	SetVideoCreationConfig(config.OpenAIConfig{}, "")
 	previousFetcher := localAgentConfigFetcher
 	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
@@ -629,6 +745,50 @@ func TestVideoScriptGeneratorConsumesKnowledgeContextWithoutModelFallback(t *tes
 	trace, ok := result.Data["knowledgeTrace"].(map[string]interface{})
 	if !ok || trace["hasKnowledgeContext"] != true || trace["knowledgeItemCount"] != 1 {
 		t.Fatalf("expected knowledgeTrace to describe consumed context: %#v", result.Data["knowledgeTrace"])
+	}
+}
+
+func TestVideoScriptGeneratorNoKeyFallbackExposesScriptField(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	ClearRuntimeModelProviderConfig()
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		ClearRuntimeModelProviderConfig()
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic": "30秒躺营 AI OS 开源宣传",
+	}, tool.ToolContext{TaskID: "task-script-fallback", NodeID: "script_generation"})
+
+	if !result.Success {
+		t.Fatalf("expected script generator fallback to succeed: %s", result.Error)
+	}
+	script, _ := result.Data["script"].(string)
+	if !strings.Contains(script, "躺营 AI OS") {
+		t.Fatalf("fallback should expose script output for downstream nodes, got %#v", result.Data["script"])
+	}
+	if result.Data["estimatedDurationSec"] != 30 {
+		t.Fatalf("fallback should infer 30 second duration from topic, got %#v", result.Data["estimatedDurationSec"])
+	}
+	pkg, ok := result.Data["package"].(map[string]interface{})
+	if !ok || pkg["script"] != script {
+		t.Fatalf("fallback package should preserve script for artifact review: %#v", result.Data["package"])
+	}
+	spans, ok := result.Data["scriptSpans"].([]map[string]interface{})
+	if !ok || len(spans) == 0 {
+		t.Fatalf("fallback should expose scriptSpans for time-window planning: %#v", result.Data["scriptSpans"])
+	}
+	if spans[0]["startSec"] != 0 {
+		t.Fatalf("first span should start at zero: %#v", spans[0])
+	}
+	if spans[len(spans)-1]["endSec"] != 30 {
+		t.Fatalf("last span should end at inferred target duration: %#v", spans[len(spans)-1])
 	}
 }
 
@@ -893,6 +1053,34 @@ func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
 		if !strings.Contains(data, required) {
 			t.Fatalf("hyperframes data json should contain %q, got:\n%s", required, data)
 		}
+	}
+}
+
+func TestHyperFramesDataJSONSanitizesInternalPlaceholders(t *testing.T) {
+	videoPrompts := `[{"shotId":"SHOT_01","narrationText":"开场口播","prompt":{"field":"prompt","reason":"USER_ASSET_REDACTED","redacted":true}}]`
+	data := buildHyperFramesDataJSON("宣传片", "完整口播", `[{"shotId":"SHOT_01"}]`, videoPrompts, `{{mcp_generation.output.shotAssetPackages}}`, "16:9", "{}")
+	if strings.Contains(data, "USER_ASSET_REDACTED") || strings.Contains(data, "{{") {
+		t.Fatalf("hyperframes data json should not leak internal placeholders, got:\n%s", data)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+		t.Fatalf("hyperframes data json should remain valid JSON: %v\n%s", err, data)
+	}
+	prompts, ok := decoded["videoPrompts"].([]interface{})
+	if !ok || len(prompts) != 1 {
+		t.Fatalf("expected one video prompt, got %#v", decoded["videoPrompts"])
+	}
+	prompt, ok := prompts[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected prompt map, got %#v", prompts[0])
+	}
+	if _, exists := prompt["prompt"]; exists {
+		t.Fatalf("redacted prompt field should be removed, got %#v", prompt)
+	}
+	packages, ok := decoded["shotAssetPackages"].([]interface{})
+	if !ok || len(packages) != 0 {
+		t.Fatalf("unresolved shot asset packages template should fall back to empty array, got %#v", decoded["shotAssetPackages"])
 	}
 }
 
@@ -1670,4 +1858,13 @@ func writeTestFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

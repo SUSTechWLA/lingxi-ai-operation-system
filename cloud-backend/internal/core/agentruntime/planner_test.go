@@ -139,6 +139,77 @@ func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T)
 	}
 }
 
+func TestHeuristicPlanner_PreparesProfilePlanBeforeValidation(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
+	catalog["video_prompt_generator"].Parameters["aigcProvider"] = tool.ParamDef{Type: "string", Required: false}
+	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["mcp_generation_runner"] = &tool.ToolManifest{
+		Name:           "mcp_generation_runner",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+		Parameters: map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Required: true},
+			"providerId":                 {Type: "string", Required: true},
+			"mcpTool":                    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotAssetPackages": {Type: "array"},
+			"generationResults": {Type: "array"},
+		},
+	}
+	tools := staticToolList{
+		cloneManifestForPlanner(catalog["video_script_generator"], "script_generation"),
+		cloneManifestForPlanner(catalog["shot_splitter"], "shot_split"),
+		cloneManifestForPlanner(catalog["time_window_planner"], "time_window_planning"),
+		cloneManifestForPlanner(catalog["visual_alignment_planner"], "visual_alignment"),
+		cloneManifestForPlanner(catalog["shot_generation_planner"], "shot_planning"),
+		cloneManifestForPlanner(catalog["video_prompt_generator"], "video_prompt_generation"),
+		cloneManifestForPlanner(catalog["video_profile_classifier"], "profile_selection"),
+		cloneManifestForPlanner(catalog["hyperframes_project_generator"], "composition_generation"),
+		cloneManifestForPlanner(catalog["hyperframes_renderer"], "video_render"),
+		cloneManifestForPlanner(catalog["publish_copy_generator"], "publish_copy"),
+		cloneManifestForPlanner(catalog["mcp_generation_runner"], "aigc_generation"),
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, len(tools))
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我制作一条宣传躺营 AI OS 的 30 秒视频",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"profileId":         "voice_visual",
+			"targetDurationSec": 30,
+			"videoType":         "voice_visual",
+			"aigcProvider":      "jimeng_mcp",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+
+	if got := plan.Steps[0].ID; got != "profile_selection" {
+		t.Fatalf("profile classifier should be canonicalized first, got %#v", plan.Steps)
+	}
+	timeWindow := findStep(t, plan, "time_window")
+	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("time_window creationProfile = %#v", got)
+	}
+	if got := timeWindow.Arguments["scriptSpans"]; got != "{{script_generation.output.scriptSpans}}" {
+		t.Fatalf("time_window scriptSpans = %#v", got)
+	}
+	shotSplit := findStep(t, plan, "shot_split")
+	if got := shotSplit.Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("shot_split script = %#v", got)
+	}
+	mcpStep := findStep(t, plan, "mcp_generation")
+	if got := mcpStep.Arguments["externalGenerationRequests"]; got != "{{video_prompt.output.externalGenerationRequests}}" {
+		t.Fatalf("mcp_generation externalGenerationRequests = %#v", got)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("prepared heuristic plan should pass PlanGuard: %v", err)
+	}
+}
+
 type staticToolList []tool.ToolManifest
 
 func (l staticToolList) ListManifests() []*tool.ToolManifest {
@@ -156,4 +227,10 @@ func (l staticToolList) GetManifest(name string) *tool.ToolManifest {
 		}
 	}
 	return nil
+}
+
+func cloneManifestForPlanner(manifest *tool.ToolManifest, capability string) tool.ToolManifest {
+	clone := *manifest
+	clone.Capabilities = append([]string{"video_creation"}, capability)
+	return clone
 }

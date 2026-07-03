@@ -351,6 +351,114 @@ func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	}
 }
 
+func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{
+		"providers":[{
+			"id":"echo",
+			"label":"Echo MCP",
+				"transport":"stdio",
+				"command":"python3",
+				"args":["/opt/mcp/echo_server.py"],
+				"env":{"ECHO_MODE":"test"},
+				"toolPrefix":"echo.",
+				"toolNameMap":{"echo.health":"health"},
+				"enabled":true
+			}]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save stdio provider status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var listed LocalMCPProviderSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("invalid mcp provider response: %v", err)
+	}
+	if len(listed.Providers) != 1 {
+		t.Fatalf("providers = %#v, want one", listed.Providers)
+	}
+	provider := listed.Providers[0]
+	if provider.Transport != "stdio" || provider.Command != "python3" || provider.Endpoint != "" {
+		t.Fatalf("stdio provider not normalized as expected: %+v", provider)
+	}
+	if len(provider.Args) != 1 || provider.Args[0] != "/opt/mcp/echo_server.py" {
+		t.Fatalf("stdio args not preserved: %+v", provider.Args)
+	}
+	if provider.Env["ECHO_MODE"] != "test" {
+		t.Fatalf("stdio env not preserved: %+v", provider.Env)
+	}
+	if provider.ToolPrefix != "echo." || provider.ToolNameMap["echo.health"] != "health" {
+		t.Fatalf("stdio tool mapping not preserved: %+v", provider)
+	}
+}
+
+func TestJiMengSetupStatusReadsDreaminaStatusThroughMCP(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeAgentCommandRunner{}
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode mcp request: %v", err)
+		}
+		resp := map[string]interface{}{"jsonrpc": "2.0", "id": req["id"]}
+		switch req["method"] {
+		case "tools/list":
+			resp["result"] = map[string]interface{}{
+				"tools": []map[string]interface{}{
+					{"name": "jimeng.check_status", "description": "check status"},
+					{"name": "jimeng.generate_video", "description": "generate video"},
+				},
+			}
+		case "tools/call":
+			params := req["params"].(map[string]interface{})
+			if params["name"] != "jimeng.check_status" {
+				t.Fatalf("tool = %v, want jimeng.check_status", params["name"])
+			}
+			resp["result"] = map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"available": true,
+					"version":   "dreamina-from-mcp",
+				},
+			}
+		default:
+			t.Fatalf("unexpected mcp method %v", req["method"])
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer mcp.Close()
+
+	server := NewServer(Config{DataDir: root, CommandRunner: runner})
+	body := bytes.NewBufferString(`{"providers":[{"id":"jimeng","label":"JiMeng","endpoint":"` + mcp.URL + `","enabled":true}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/jimeng/setup/status", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var status JiMengSetupStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode setup status: %v", err)
+	}
+	if !status.DreaminaAvailable || status.DreaminaVersion != "dreamina-from-mcp" {
+		t.Fatalf("dreamina status = available:%v version:%q, want MCP result", status.DreaminaAvailable, status.DreaminaVersion)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("setup status must not call Dreamina CLI directly: %+v", runner.calls)
+	}
+}
+
 func TestJiMengInstallCLIRequiresExplicitConfirmation(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeAgentCommandRunner{out: CommandOutput{Stdout: "installed"}}
@@ -406,6 +514,45 @@ func TestJiMengRegisterMCPStoresDefaultProvider(t *testing.T) {
 	}
 	if len(listed.Providers) != 1 || listed.Providers[0].ID != "jimeng" || !listed.Providers[0].Enabled {
 		t.Fatalf("providers = %+v", listed.Providers)
+	}
+}
+
+func TestJiMengRegisterMCPStoresDefaultStandardStdioProvider(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/register-mcp", bytes.NewBufferString(`{"transport":"stdio"}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register stdio status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/mcp-providers", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get providers status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var listed LocalMCPProviderSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode providers: %v", err)
+	}
+	if len(listed.Providers) != 1 {
+		t.Fatalf("providers = %+v", listed.Providers)
+	}
+	provider := listed.Providers[0]
+	if provider.ID != "jimeng" || provider.Transport != "stdio" || provider.Command == "" || len(provider.Args) == 0 {
+		t.Fatalf("stdio provider not registered as expected: %+v", provider)
+	}
+	if provider.ToolPrefix != "jimeng." {
+		t.Fatalf("tool prefix = %q, want jimeng.", provider.ToolPrefix)
+	}
+	if provider.Endpoint != "" {
+		t.Fatalf("stdio provider endpoint = %q, want empty", provider.Endpoint)
+	}
+	if !strings.HasSuffix(provider.Args[0], filepath.Join("mcp", "jimeng", "server.py")) {
+		t.Fatalf("stdio script arg = %q, want jimeng server.py", provider.Args[0])
 	}
 }
 

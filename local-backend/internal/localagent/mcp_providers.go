@@ -19,7 +19,7 @@ import (
 
 const (
 	jimengProviderID         = "jimeng"
-	defaultJiMengMCPEndpoint = "http://127.0.0.1:18180"
+	jimengToolPrefix         = "jimeng."
 	dreaminaInstallCommand   = "curl -fsSL https://jimeng.jianying.com/cli | bash"
 	dreaminaInstallScriptURL = "https://jimeng.jianying.com/cli"
 	dreaminaLogDirectory     = "~/.dreamina_cli/logs"
@@ -78,7 +78,14 @@ type installCLIRequest struct {
 }
 
 type registerMCPRequest struct {
-	Endpoint string `json:"endpoint"`
+	Endpoint    string            `json:"endpoint"`
+	Transport   string            `json:"transport"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args"`
+	Env         map[string]string `json:"env"`
+	WorkingDir  string            `json:"workingDir"`
+	ToolPrefix  string            `json:"toolPrefix"`
+	ToolNameMap map[string]string `json:"toolNameMap"`
 }
 
 type checkLoginRequest struct {
@@ -144,27 +151,30 @@ func (s *Server) handleJiMengSetupStatus(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	defaultCommand, defaultArgs := defaultJiMengStdioCommand()
 	resp := JiMengSetupStatusResponse{
-		InstallCommand:     dreaminaInstallCommand,
-		InstallScriptURL:   dreaminaInstallScriptURL,
-		LogDir:             dreaminaLogDirectory,
-		MCPProviders:       status,
-		DefaultMCPEndpoint: defaultJiMengMCPEndpoint,
-		MCPStartCommand:    fmt.Sprintf("jimeng-mcp -addr %s", strings.TrimPrefix(defaultJiMengMCPEndpoint, "http://")),
+		InstallCommand:   dreaminaInstallCommand,
+		InstallScriptURL: dreaminaInstallScriptURL,
+		LogDir:           dreaminaLogDirectory,
+		MCPProviders:     status,
+		MCPStartCommand:  strings.TrimSpace(defaultCommand + " " + strings.Join(defaultArgs, " ")),
 	}
 	for _, provider := range providers {
 		if provider.ID == jimengProviderID {
 			copy := provider
 			resp.MCPProvider = &copy
+			resp.MCPStartCommand = mcpStartCommand(provider)
 			break
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-	out, runErr := s.commandRunner().Run(ctx, "dreamina", "version")
-	if runErr == nil {
-		resp.DreaminaAvailable = true
-		resp.DreaminaVersion = strings.TrimSpace(out.Stdout)
+	if resp.MCPProvider != nil {
+		checkCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		result, err := s.callJiMengMCPTool(checkCtx, "jimeng.check_status", map[string]interface{}{})
+		cancel()
+		if err == nil && result != nil {
+			resp.DreaminaAvailable = boolFromMap(result.StructuredContent, "available", "loggedIn")
+			resp.DreaminaVersion = stringFromMap(result.StructuredContent, "version", "dreaminaVersion")
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -213,16 +223,50 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid register payload")
 		return
 	}
+	transport := strings.ToLower(strings.TrimSpace(req.Transport))
 	endpoint := strings.TrimSpace(req.Endpoint)
-	if endpoint == "" {
-		endpoint = defaultJiMengMCPEndpoint
+	command := strings.TrimSpace(req.Command)
+	args := append([]string(nil), req.Args...)
+	if transport == "" {
+		if command != "" {
+			transport = "stdio"
+		} else if endpoint != "" {
+			transport = "http"
+		} else {
+			transport = "stdio"
+		}
+	}
+	if transport == "stdio" && command == "" {
+		command, args = defaultJiMengStdioCommand()
+	}
+	toolPrefix := strings.TrimSpace(req.ToolPrefix)
+	if transport == "stdio" && toolPrefix == "" {
+		toolPrefix = jimengToolPrefix
 	}
 	providers, err := s.readMCPProviders()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	provider := localmcp.ProviderConfig{ID: jimengProviderID, Label: "JiMeng MCP", Endpoint: endpoint, Enabled: true}
+	provider := localmcp.ProviderConfig{
+		ID:          jimengProviderID,
+		Label:       "JiMeng MCP",
+		Endpoint:    endpoint,
+		Transport:   transport,
+		Command:     command,
+		Args:        args,
+		Env:         req.Env,
+		WorkingDir:  req.WorkingDir,
+		ToolPrefix:  toolPrefix,
+		ToolNameMap: req.ToolNameMap,
+		Enabled:     true,
+	}
+	normalized, err := normalizeMCPProviders([]localmcp.ProviderConfig{provider})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	provider = normalized[0]
 	providers = upsertMCPProvider(providers, provider)
 	if err := s.writeMCPProviders(providers); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -231,7 +275,7 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":          "ok",
 		"provider":        provider,
-		"mcpStartCommand": fmt.Sprintf("jimeng-mcp -addr %s", strings.TrimPrefix(endpoint, "http://")),
+		"mcpStartCommand": mcpStartCommand(provider),
 	})
 }
 
@@ -286,7 +330,9 @@ func (s *Server) mcpProviderStatus(ctx context.Context) ([]LocalMCPProviderStatu
 		status := LocalMCPProviderStatus{ProviderConfig: provider}
 		if provider.Enabled {
 			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			tools, err := localmcp.NewClient(provider, nil).ListTools(checkCtx)
+			client := localmcp.NewClient(provider, nil)
+			tools, err := client.ListTools(checkCtx)
+			_ = client.Close()
 			cancel()
 			if err != nil {
 				status.Error = err.Error()
@@ -309,7 +355,9 @@ func (s *Server) callJiMengMCPTool(ctx context.Context, toolName string, args ma
 		if provider.ID == jimengProviderID && provider.Enabled {
 			callCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			defer cancel()
-			return localmcp.NewClient(provider, nil).CallTool(callCtx, toolName, args)
+			client := localmcp.NewClient(provider, nil)
+			defer client.Close()
+			return client.CallTool(callCtx, toolName, args)
 		}
 	}
 	return nil, errors.New("JiMeng MCP provider is not registered")
@@ -363,13 +411,40 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.ID = strings.TrimSpace(provider.ID)
 		provider.Label = strings.TrimSpace(provider.Label)
 		provider.Endpoint = strings.TrimSpace(provider.Endpoint)
+		provider.Transport = strings.ToLower(strings.TrimSpace(provider.Transport))
+		provider.Command = strings.TrimSpace(provider.Command)
+		provider.WorkingDir = strings.TrimSpace(provider.WorkingDir)
+		provider.ToolPrefix = strings.TrimSpace(provider.ToolPrefix)
+		provider.Args = compactArgs(provider.Args)
+		provider.Env = compactEnv(provider.Env)
+		provider.ToolNameMap = compactToolNameMap(provider.ToolNameMap)
 		if provider.ID == "" {
 			return nil, errors.New("provider id is required")
 		}
 		if seen[provider.ID] {
 			return nil, fmt.Errorf("duplicate provider id %q", provider.ID)
 		}
-		if provider.Endpoint == "" {
+		if provider.Transport == "" {
+			if provider.Command != "" {
+				provider.Transport = "stdio"
+			} else {
+				provider.Transport = "http"
+			}
+		}
+		switch provider.Transport {
+		case "http":
+			if provider.Endpoint == "" {
+				return nil, fmt.Errorf("provider %q endpoint is required", provider.ID)
+			}
+		case "stdio":
+			if provider.Command == "" {
+				return nil, fmt.Errorf("provider %q command is required for stdio transport", provider.ID)
+			}
+			provider.Endpoint = ""
+		default:
+			return nil, fmt.Errorf("provider %q transport %q is unsupported", provider.ID, provider.Transport)
+		}
+		if provider.Endpoint == "" && provider.Transport == "http" {
 			return nil, fmt.Errorf("provider %q endpoint is required", provider.ID)
 		}
 		if provider.Label == "" {
@@ -379,6 +454,163 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		out = append(out, provider)
 	}
 	return out, nil
+}
+
+func compactArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+func compactEnv(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for key, value := range env {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func compactToolNameMap(toolNameMap map[string]string) map[string]string {
+	if len(toolNameMap) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(toolNameMap))
+	for logical, remote := range toolNameMap {
+		logical = strings.TrimSpace(logical)
+		remote = strings.TrimSpace(remote)
+		if logical == "" || remote == "" {
+			continue
+		}
+		out[logical] = remote
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func boolFromMap(input map[string]interface{}, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := input[key]; ok {
+			if boolValue, ok := value.(bool); ok {
+				return boolValue
+			}
+			if stringValue, ok := value.(string); ok {
+				switch strings.ToLower(strings.TrimSpace(stringValue)) {
+				case "true", "yes", "ok", "available", "authenticated":
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func stringFromMap(input map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := input[key]; ok {
+			if stringValue, ok := value.(string); ok {
+				return strings.TrimSpace(stringValue)
+			}
+		}
+	}
+	return ""
+}
+
+func mcpStartCommand(provider localmcp.ProviderConfig) string {
+	if provider.Transport == "stdio" {
+		return strings.TrimSpace(provider.Command + " " + strings.Join(provider.Args, " "))
+	}
+	return strings.TrimSpace(provider.Endpoint)
+}
+
+func defaultJiMengStdioCommand() (string, []string) {
+	command := strings.TrimSpace(os.Getenv("JIMENG_MCP_COMMAND"))
+	if command == "" {
+		command = detectPython3ForMCP()
+	}
+	return command, []string{defaultJiMengStdioScriptPath()}
+}
+
+func detectPython3ForMCP() string {
+	for _, candidate := range pythonCandidatesForMCP() {
+		command := compatiblePythonExecutable(candidate)
+		if command != "" {
+			return command
+		}
+	}
+	return "python3"
+}
+
+func pythonCandidatesForMCP() []string {
+	candidates := []string{}
+	if path, err := exec.LookPath("python3"); err == nil {
+		candidates = append(candidates, path)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if matches, err := filepath.Glob(filepath.Join(home, ".pyenv", "versions", "*", "bin", "python3")); err == nil {
+			candidates = append(candidates, matches...)
+		}
+	}
+	candidates = append(candidates, "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "python3")
+	seen := map[string]bool{}
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func compatiblePythonExecutable(candidate string) string {
+	out, err := exec.Command(candidate, "-c", "import sys; sys.exit(1) if sys.version_info < (3, 10) else print(sys.executable)").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func defaultJiMengStdioScriptPath() string {
+	if script := strings.TrimSpace(os.Getenv("JIMENG_MCP_STDIO_SCRIPT")); script != "" {
+		return script
+	}
+	cwd, err := os.Getwd()
+	if err == nil {
+		candidates := []string{
+			filepath.Join(cwd, "mcp", "jimeng", "server.py"),
+			filepath.Join(cwd, "..", "mcp", "jimeng", "server.py"),
+			filepath.Join(cwd, "..", "..", "mcp", "jimeng", "server.py"),
+		}
+		for _, candidate := range candidates {
+			if _, err := os.Stat(candidate); err == nil {
+				if abs, err := filepath.Abs(candidate); err == nil {
+					return abs
+				}
+				return candidate
+			}
+		}
+	}
+	return filepath.Join("mcp", "jimeng", "server.py")
 }
 
 func upsertMCPProvider(providers []localmcp.ProviderConfig, next localmcp.ProviderConfig) []localmcp.ProviderConfig {

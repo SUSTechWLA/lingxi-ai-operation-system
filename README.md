@@ -19,12 +19,23 @@
 </p>
 
 <p align="center">
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.0-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
 </p>
 
 ---
+
+## Release 更新
+
+### v0.1.0 - 2026-07-03
+
+- 统一 CLI 扩展接入方式：后续本地 CLI 能力必须封装为标准 MCP server，再通过本地 Agent provider 注册进入系统。
+- 新增 `mcp/` 目录，集中管理所有 MCP 服务；即梦 Dreamina CLI 已迁移到 `mcp/jimeng/server.py`。
+- 删除 Go 版即梦 CLI 直连服务，云端统一使用 `mcp_generation_runner`，本地通过标准 MCP provider 调用具体 CLI 能力。
+- 完整跑通即梦 MCP 的 provider 注册、`tools/list`、登录态复用和本地 stdio 调用验证。
+- 修复视频创作全流程中的计划补全、审核、外部生成请求、本地 artifact 和渲染交付问题。
 
 ## 一句话理解
 
@@ -106,17 +117,21 @@ bash scripts/start-cloud-backend.sh
 
 打开桌面端后，进入“躺营导演台”，输入视频主题，选择“口播知识视频”或“影视/AIGC shot 视频”入口即可开始。
 
-## 即梦 JiMeng MCP 扩展
+## MCP 扩展
 
-用户端提供显式授权的一键安装向导：
+本地 Agent 支持标准 MCP provider 注册。provider 可以用 Python、Node、Go 或其他语言实现，只要暴露标准 `tools/list` 与 `tools/call` 能力即可；系统只保存 provider 配置，不绑定具体实现语言。
+
+即梦 JiMeng 扩展内置了 Python stdio MCP server，用来封装用户本机 Dreamina CLI。用户端提供显式授权的一键安装向导：
 
 1. 安装或更新 Dreamina CLI。
-2. 注册本地 JiMeng MCP endpoint。
-3. 启动 `jimeng-mcp` 服务。
+2. 注册本地 JiMeng MCP provider。
+3. 启动 `python3 mcp/jimeng/server.py` 标准 MCP 服务。
 4. 获取即梦登录码，在即梦页面完成授权。
 5. 开启“自动调用即梦生成素材”。
 
 Dreamina OAuth、积分、任务记录和日志仍保留在用户自己的机器和即梦 CLI 目录中，云端不保存即梦凭据。
+
+更多 provider 配置见 [MCP Provider 接入](docs/mcp-providers.md)。
 
 <details>
 <summary><strong>开发者验证命令</strong></summary>
@@ -140,5 +155,6 @@ Local agent:   http://localhost:18080/api/local/docs
 
 - [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
 - [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
+- [MCP Provider 接入](docs/mcp-providers.md)
 
 Wiki 中包含产品介绍、系统边界、核心流程、即梦 MCP 使用方式和后续路线图。

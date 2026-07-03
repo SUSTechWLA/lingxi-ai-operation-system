@@ -16,7 +16,7 @@ if [[ ! -f .env && -f .env.example ]]; then
 fi
 
 export SKILL_ROOT="${SKILL_ROOT:-$CLOUD_DIR/skills}"
-export AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG="${AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG:-true}"
+export AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG="${AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG:-false}"
 
 docker compose up -d
 go build -o build/tangying-ai-os ./cmd/tangying-ai-os

@@ -20,8 +20,8 @@ func TestMCPToolCallExecutorCallsConfiguredProvider(t *testing.T) {
 			t.Fatalf("method = %v, want tools/call", req["method"])
 		}
 		params := req["params"].(map[string]interface{})
-		if params["name"] != "jimeng.generate_video" {
-			t.Fatalf("tool = %v, want jimeng.generate_video", params["name"])
+		if params["name"] != "runway.generate_video" {
+			t.Fatalf("tool = %v, want runway.generate_video", params["name"])
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
@@ -40,14 +40,14 @@ func TestMCPToolCallExecutorCallsConfiguredProvider(t *testing.T) {
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
-		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng", Endpoint: mcp.URL, Enabled: true}}, nil
+		return []localmcp.ProviderConfig{{ID: "runway", Label: "Runway MCP", Endpoint: mcp.URL, Enabled: true}}, nil
 	})
 	result, err := executor.Execute(context.Background(), Job{
 		ID:      "job-1",
 		Command: CommandLocalMCPToolCall,
 		Payload: map[string]interface{}{
-			"providerId": "jimeng",
-			"toolName":   "jimeng.generate_video",
+			"providerId": "runway",
+			"toolName":   "runway.generate_video",
 			"arguments":  map[string]interface{}{"prompt": "wide shot"},
 		},
 	})
@@ -78,6 +78,23 @@ func TestMCPToolCallExecutorRejectsUnknownProvider(t *testing.T) {
 	}
 }
 
+func TestMCPToolCallExecutorRequiresProviderID(t *testing.T) {
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Endpoint: "http://127.0.0.1:1", Enabled: true}}, nil
+	})
+
+	_, err := executor.Execute(context.Background(), Job{
+		ID:      "job-1",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"toolName": "jimeng.generate_video",
+		},
+	})
+	if err == nil {
+		t.Fatal("Execute error = nil, want missing providerId error")
+	}
+}
+
 func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	callCount := 0
 	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -86,8 +103,8 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		params := req["params"].(map[string]interface{})
-		if params["name"] != "jimeng.generate_video" {
-			t.Fatalf("tool = %v, want jimeng.generate_video", params["name"])
+		if params["name"] != "runway.generate_video" {
+			t.Fatalf("tool = %v, want runway.generate_video", params["name"])
 		}
 		args := params["arguments"].(map[string]interface{})
 		if args["prompt"] != "wide shot" {
@@ -111,14 +128,14 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	defer mcp.Close()
 
 	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
-		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng", Endpoint: mcp.URL, Enabled: true}}, nil
+		return []localmcp.ProviderConfig{{ID: "runway", Label: "Runway MCP", Endpoint: mcp.URL, Enabled: true}}, nil
 	})
 	result, err := executor.Execute(context.Background(), Job{
 		ID:      "job-1",
 		Command: CommandLocalMCPToolCall,
 		Payload: map[string]interface{}{
-			"providerId": "jimeng",
-			"mcpTool":    "jimeng.generate_video",
+			"providerId": "runway",
+			"mcpTool":    "runway.generate_video",
 			"externalGenerationRequests": []interface{}{
 				map[string]interface{}{
 					"requestId": "extgen_video_SHOT_01",
@@ -144,6 +161,9 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	aigcVideo := pkg["aigcVideo"].(map[string]interface{})
 	if aigcVideo["submitId"] != "vid-1" {
 		t.Fatalf("submitId = %#v, want vid-1", aigcVideo["submitId"])
+	}
+	if aigcVideo["provider"] != "runway" {
+		t.Fatalf("provider = %#v, want runway", aigcVideo["provider"])
 	}
 	if result.Output["generationResults"].([]interface{})[0].(map[string]interface{})["requestId"] != "extgen_video_SHOT_01" {
 		t.Fatalf("generationResults should preserve request id: %#v", result.Output["generationResults"])

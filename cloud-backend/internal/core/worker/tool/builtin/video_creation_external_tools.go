@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -81,7 +83,7 @@ var videoCreationExternalTools = []string{
 	"shot_splitter",
 	"keyframe_prompt_generator",
 	"video_prompt_generator",
-	"jimeng_generation_runner",
+	"mcp_generation_runner",
 	"script_quality_checker",
 	"shot_quality_checker",
 	"video_prompt_quality_checker",
@@ -100,6 +102,7 @@ var (
 	videoCreationOpenAICfg config.OpenAIConfig
 	videoCreationSkillRoot string
 	modelGateway           *modelgateway.Gateway
+	durationHintPattern    = regexp.MustCompile(`(?i)(\d{1,3})\s*(秒|s|sec|secs|second|seconds)`)
 )
 
 // SetModelGateway stores the model gateway for image generation tools.
@@ -558,6 +561,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"script":               {Type: "string", Description: "Voiceover script"},
+			"scriptSpans":          {Type: "array", Description: "Timed script spans for time-window planning"},
 			"summary":              {Type: "string", Description: "Script summary"},
 			"estimatedDurationSec": {Type: "number", Description: "Estimated duration"},
 			"sections":             {Type: "array", Description: "Script sections"},
@@ -737,27 +741,44 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"content":                    {Type: "string", Description: "Reviewable prompt package content"},
 			"artifacts":                  {Type: "object", Description: "Reviewable artifact manifest"},
 		}
-	case "jimeng_generation_runner":
-		manifest.Description = "Call the user's local JiMeng MCP provider to generate AIGC video assets from external generation requests."
+	case "mcp_generation_runner":
+		manifest.Description = "Call a user-configured local MCP provider to generate AIGC assets from external generation requests."
 		manifest.Type = "local_mcp_tool"
 		manifest.CostLevel = tool.CostHigh
 		manifest.RiskLevel = tool.RiskMedium
 		manifest.SideEffect = true
 		manifest.Idempotent = false
+		manifest.ApprovalPolicy = tool.ApprovalPolicy{
+			Required: true,
+			Mode:     tool.ApprovalBeforeExecute,
+			Reason:   "The selected MCP provider runs on the user's local device and may spend provider quota.",
+		}
 		manifest.Capabilities = []string{"video_creation", "aigc_generation", "text_to_video", "image_to_video", "local_mcp"}
-		manifest.Tags = []string{"jimeng", "dreamina", "mcp", "aigc", "local"}
+		manifest.Tags = []string{"mcp", "aigc", "local"}
 		manifest.Parameters = map[string]tool.ParamDef{
 			"externalGenerationRequests": {Type: "array", Description: "External generation requests produced by prompt generation", Required: true},
-			"providerId":                 {Type: "string", Description: "Local MCP provider id, default jimeng", Required: true},
-			"mcpTool":                    {Type: "string", Description: "JiMeng MCP tool name, for example jimeng.generate_video", Required: true},
+			"providerId":                 {Type: "string", Description: "Local MCP provider id, for example jimeng", Required: true},
+			"mcpTool":                    {Type: "string", Description: "Logical MCP tool name, for example jimeng.generate_video", Required: true},
 		}
 		manifest.Output = map[string]tool.ParamDef{
-			"shotAssetPackages":          {Type: "array", Description: "Per-shot asset packages with generated JiMeng results"},
-			"generationResults":          {Type: "array", Description: "Raw JiMeng MCP generation results"},
+			"shotAssetPackages":          {Type: "array", Description: "Per-shot asset packages with generated MCP results"},
+			"generationResults":          {Type: "array", Description: "Raw MCP generation results"},
 			"externalGenerationRequests": {Type: "array", Description: "Requests that remain manual or failed"},
-			"summary":                    {Type: "string", Description: "JiMeng generation summary"},
+			"summary":                    {Type: "string", Description: "MCP generation summary"},
 		}
 	case "hyperframes_project_generator":
+		manifest.ArtifactPolicy = tool.ArtifactPolicy{
+			ProduceArtifact:       true,
+			ArtifactKinds:         []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"},
+			DefaultReviewRequired: true,
+		}
+		manifest.ApprovalPolicy = tool.ApprovalPolicy{
+			Required:         true,
+			Mode:             tool.ApprovalAfterArtifact,
+			BlocksDownstream: true,
+			Reason:           "Preview output must be reviewed before local rendering.",
+		}
+		manifest.HumanReview = &tool.HumanReview{Required: true, Gate: tool.ApprovalAfterArtifact, Title: "审核画面预览"}
 		manifest.Parameters = map[string]tool.ParamDef{
 			"topic":             {Type: "string", Description: "Video topic", Required: true},
 			"script":            {Type: "string", Description: "Full voiceover script", Required: true},
@@ -772,6 +793,36 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"entry":      {Type: "string", Description: "Entry HTML file"},
 			"files":      {Type: "array", Description: "Generated files"},
 			"summary":    {Type: "string", Description: "Generation summary"},
+		}
+	case "hyperframes_renderer":
+		manifest.CostLevel = tool.CostHigh
+		manifest.RiskLevel = tool.RiskMedium
+		manifest.SideEffect = true
+		manifest.Idempotent = false
+		manifest.ArtifactPolicy = tool.ArtifactPolicy{
+			ProduceArtifact:       true,
+			ArtifactKinds:         []string{"VIDEO", "RENDER_REPORT"},
+			DefaultReviewRequired: false,
+		}
+		manifest.ApprovalPolicy = tool.ApprovalPolicy{
+			Required: true,
+			Mode:     tool.ApprovalBeforeExecute,
+			Reason:   "Local video rendering should only start after preview approval.",
+		}
+		manifest.HumanReview = &tool.HumanReview{Required: true, Gate: tool.ApprovalBeforeExecute, Title: "确认最终渲染"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"projectDir":        {Type: "string", Description: "HyperFrames project directory", Required: true},
+			"hyperframesPath":   {Type: "string", Description: "HyperFrames project directory alias", Required: false},
+			"entry":             {Type: "string", Description: "Optional HTML entry file", Required: false},
+			"previewApproved":   {Type: "boolean", Description: "Whether preview has been approved", Required: false},
+			"outputName":        {Type: "string", Description: "Output MP4 file name", Required: false},
+			"targetDurationSec": {Type: "number", Description: "Target video duration", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"outputPath":    {Type: "string", Description: "Rendered MP4 path"},
+			"finalVideo":    {Type: "string", Description: "Rendered final video path"},
+			"VIDEO":         {Type: "string", Description: "Rendered video artifact"},
+			"RENDER_REPORT": {Type: "object", Description: "Render report"},
 		}
 	}
 }
@@ -817,12 +868,12 @@ var localToolManifests = map[string]struct {
 		Description:        "使用 ffprobe 检查视频文件元数据（时长、分辨率、编码）",
 		Timeout:            60,
 	},
-	"jimeng_generation_runner": {
+	"mcp_generation_runner": {
 		ExecutionPlane:     tool.ExecutionPlaneLocal,
 		LocalCommand:       "LOCAL_MCP_TOOL_CALL",
 		RequiresUserDevice: true,
 		ArtifactLocation:   tool.ArtifactLocationLocal,
-		Description:        "调用用户本地 JiMeng MCP 生成 AIGC 图片或视频素材",
+		Description:        "调用用户本地 MCP provider 生成 AIGC 图片或视频素材",
 		Timeout:            1800,
 	},
 }
@@ -1418,15 +1469,17 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 		if shotID == "" {
 			shotID = fmt.Sprintf("SHOT_%02d", i+1)
 		}
+		narration := firstReadableStringInMap(window, "scriptText", "narrationText", "content", "text")
 		visual := firstNonEmptyString(window, "sceneSummary", "visual", "mainAction", "description")
 		if visual == "" {
-			visual = "围绕该口播时间窗补充可视化素材、字幕、图表或B-roll。"
+			visual = visualTitleFromNarration(narration, i)
 		}
 		shotList = append(shotList, map[string]interface{}{
 			"shotId":        shotID,
 			"durationSec":   authoredDurationSec(window),
-			"narrationText": firstNonEmptyString(window, "scriptText", "narrationText", "text"),
+			"narrationText": narration,
 			"visual":        visual,
+			"camera":        visualSubtitleFromNarration(narration, i),
 			"timeWindowId":  firstNonEmptyString(window, "id"),
 		})
 	}
@@ -1614,7 +1667,7 @@ func scriptSpansFromToolValue(value interface{}) []videomodel.ScriptSpan {
 			ID:       spanID,
 			StartSec: startSec,
 			EndSec:   endSec,
-			Text:     firstStringInMap(item, "text", "scriptText", "narrationText", "content"),
+			Text:     firstReadableStringInMap(item, "scriptText", "narrationText", "content", "text"),
 		})
 	}
 	return spans
@@ -3860,6 +3913,35 @@ func firstStringInMap(values map[string]interface{}, keys ...string) string {
 	return ""
 }
 
+func firstReadableStringInMap(values map[string]interface{}, keys ...string) string {
+	if values == nil {
+		return ""
+	}
+	for _, key := range keys {
+		value, exists := values[key]
+		if !exists || isRedactedPlaceholder(value) {
+			continue
+		}
+		text := strings.TrimSpace(ensureStringValue(value))
+		if text == "" || strings.Contains(text, "USER_ASSET_REDACTED") {
+			continue
+		}
+		return text
+	}
+	return ""
+}
+
+func isRedactedPlaceholder(value interface{}) bool {
+	values, ok := mapValue(value)
+	if !ok {
+		return false
+	}
+	if redacted, ok := values["redacted"].(bool); !ok || !redacted {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(ensureStringValue(values["reason"])), "USER_ASSET_REDACTED")
+}
+
 func sanitizeUnitPart(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -4250,41 +4332,76 @@ func serializeParamJSON(value interface{}) string {
 
 // buildHyperFramesDataJSON builds the data.json content for a HyperFrames project.
 func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON string) string {
-	// Always emit valid JSON even when upstream fields are empty.
-	safeShots := shotListJSON
-	if safeShots == "" {
-		safeShots = "[]"
+	data := map[string]interface{}{
+		"topic":                 topic,
+		"script":                script,
+		"productionMode":        "shot_first",
+		"reviewUnit":            "shot",
+		"requiresNarrationSync": true,
+		"shots":                 publicJSONValueOrFallback(shotListJSON, []interface{}{}),
+		"videoPrompts":          publicJSONValueOrFallback(videoPromptsJSON, []interface{}{}),
+		"shotAssetPackages":     publicJSONValueOrFallback(shotAssetPackagesJSON, []interface{}{}),
+		"style": map[string]interface{}{
+			"aspectRatio": "16:9",
+			"language":    "zh-CN",
+			"visualStyle": style,
+		},
+		"publishCopy": publicJSONValueOrFallback(publishCopyJSON, map[string]interface{}{}),
 	}
-	safePrompts := videoPromptsJSON
-	if safePrompts == "" {
-		safePrompts = "[]"
+	encoded, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return "{}"
 	}
-	safeShotAssetPackages := shotAssetPackagesJSON
-	if safeShotAssetPackages == "" {
-		safeShotAssetPackages = "[]"
-	}
-	safePublish := publishCopyJSON
-	if safePublish == "" {
-		safePublish = "{}"
-	}
-
-	return fmt.Sprintf(`{
-  "topic": %s,
-  "script": %s,
-  "productionMode": "shot_first",
-  "reviewUnit": "shot",
-  "requiresNarrationSync": true,
-  "shots": %s,
-  "videoPrompts": %s,
-  "shotAssetPackages": %s,
-  "style": {
-    "aspectRatio": "16:9",
-    "language": "zh-CN",
-    "visualStyle": %s
-  },
-  "publishCopy": %s
+	return string(encoded)
 }
-`, jsonString(topic), jsonString(script), safeShots, safePrompts, safeShotAssetPackages, jsonString(style), safePublish)
+
+func publicJSONValueOrFallback(raw string, fallback interface{}) interface{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "{{") {
+		return fallback
+	}
+	var value interface{}
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return fallback
+	}
+	sanitized, keep := sanitizePublicJSONValue(value)
+	if !keep || sanitized == nil {
+		return fallback
+	}
+	return sanitized
+}
+
+func sanitizePublicJSONValue(value interface{}) (interface{}, bool) {
+	if isRedactedPlaceholder(value) {
+		return nil, false
+	}
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, item := range typed {
+			sanitized, keep := sanitizePublicJSONValue(item)
+			if keep {
+				out[key] = sanitized
+			}
+		}
+		return out, true
+	case []interface{}:
+		out := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			sanitized, keep := sanitizePublicJSONValue(item)
+			if keep {
+				out = append(out, sanitized)
+			}
+		}
+		return out, true
+	case string:
+		if strings.Contains(typed, "USER_ASSET_REDACTED") {
+			return nil, false
+		}
+		return typed, true
+	default:
+		return value, true
+	}
 }
 
 // buildHyperFramesManifestJSON builds the manifest.json for a HyperFrames project.
@@ -5891,6 +6008,7 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	videoPrompts := promptStringParam(params, "videoPrompts", "")
 	publishCopy := promptStringParam(params, "publishCopy", "")
 	targetDurationSec := intParam(params, "targetDurationSec", intParam(params, "durationSec", 60))
+	targetDurationSec = inferTargetDurationSec(topic, targetDurationSec)
 
 	if toolName == "shot_splitter" {
 		if data, ok := buildDeterministicShotSplitterData(toolName, skillName, topic, script, targetDurationSec); ok {
@@ -5943,15 +6061,13 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	effectiveCfg := effectiveVideoCreationOpenAIConfig(params)
 
 	if effectiveCfg.APIKey == "" {
+		if toolName == "video_script_generator" {
+			return tool.SuccessResult(buildFallbackVideoScriptData(toolName, skillName, topic, targetDurationSec, usedFacts, knowledgeTrace))
+		}
 		content := fmt.Sprintf("# %s\n\n主题：%s\n\n> ⚠️ LLM API Key 未配置。请设置 API Key 以启用 AI 内容生成。", toolName, topic)
 		data := map[string]interface{}{
 			"content":   content,
 			"artifacts": buildSkillStageArtifacts(toolName, skillName, false, false),
-		}
-		if toolName == "video_script_generator" {
-			data["usedFacts"] = usedFacts
-			data["factCheckWarnings"] = []interface{}{}
-			data["knowledgeTrace"] = knowledgeTrace
 		}
 		return tool.SuccessResult(data)
 	}
@@ -6065,6 +6181,11 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	if sections, ok := contentPkg["sections"]; ok {
 		data["sections"] = sections
 	}
+	if scriptSpans, ok := contentPkg["scriptSpans"]; ok {
+		data["scriptSpans"] = scriptSpans
+	} else if sections, ok := data["sections"]; ok {
+		data["scriptSpans"] = sections
+	}
 	if qualityHints, ok := contentPkg["qualityHints"]; ok {
 		data["qualityHints"] = qualityHints
 	}
@@ -6120,6 +6241,167 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	}
 
 	return tool.SuccessResult(data)
+}
+
+func buildFallbackVideoScriptData(toolName, skillName, topic string, targetDurationSec int, usedFacts []map[string]interface{}, knowledgeTrace map[string]interface{}) map[string]interface{} {
+	if targetDurationSec <= 0 {
+		targetDurationSec = 30
+	}
+	subject := fallbackVideoScriptSubject(topic)
+	sections := fallbackVideoScriptSections(subject, targetDurationSec)
+	lines := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if text := strings.TrimSpace(ensureStringValue(section["text"])); text != "" {
+			lines = append(lines, text)
+		}
+	}
+	script := strings.Join(lines, "\n")
+	if len(usedFacts) == 0 {
+		usedFacts = []map[string]interface{}{
+			{"claim": fmt.Sprintf("围绕%s的产品价值生成确定性 E2E 口播稿。", subject), "source": "fallback_script_generator"},
+		}
+	}
+	if knowledgeTrace == nil {
+		knowledgeTrace = map[string]interface{}{}
+	}
+	knowledgeTrace["fallback"] = true
+	knowledgeTrace["usedFactCount"] = len(usedFacts)
+	contentPkg := map[string]interface{}{
+		"script":               script,
+		"summary":              fmt.Sprintf("%s 的 %d 秒开源宣传口播脚本。", subject, targetDurationSec),
+		"estimatedDurationSec": targetDurationSec,
+		"sections":             sections,
+		"scriptSpans":          sections,
+		"qualityHints": map[string]interface{}{
+			"hasHook":           true,
+			"hasStory":          true,
+			"hasKnowledgeValue": true,
+		},
+		"usedFacts":         usedFacts,
+		"unusedFacts":       []interface{}{},
+		"factCheckWarnings": []interface{}{},
+		"knowledgeTrace":    knowledgeTrace,
+	}
+	content := script
+	if encoded, err := json.Marshal(contentPkg); err == nil {
+		content = string(encoded)
+	}
+	return map[string]interface{}{
+		"content":              content,
+		"package":              contentPkg,
+		"script":               script,
+		"summary":              contentPkg["summary"],
+		"estimatedDurationSec": targetDurationSec,
+		"sections":             sections,
+		"scriptSpans":          sections,
+		"qualityHints":         contentPkg["qualityHints"],
+		"usedFacts":            usedFacts,
+		"unusedFacts":          []interface{}{},
+		"factCheckWarnings":    []interface{}{},
+		"knowledgeTrace":       knowledgeTrace,
+		"artifacts":            buildSkillStageArtifacts(toolName, skillName, false, true),
+	}
+}
+
+func inferTargetDurationSec(topic string, fallback int) int {
+	if fallback <= 0 {
+		fallback = 60
+	}
+	match := durationHintPattern.FindStringSubmatch(strings.TrimSpace(topic))
+	if len(match) < 2 {
+		return fallback
+	}
+	value, err := strconv.Atoi(match[1])
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	if value < 3 {
+		return 3
+	}
+	if value > 300 {
+		return fallback
+	}
+	return value
+}
+
+func fallbackVideoScriptSubject(topic string) string {
+	trimmed := strings.TrimSpace(topic)
+	if strings.Contains(trimmed, "躺营 AI OS") {
+		return "躺营 AI OS"
+	}
+	if strings.Contains(trimmed, "Tangying") || strings.Contains(trimmed, "tangying") {
+		return "Tangying AI OS"
+	}
+	for _, sep := range []string{"：", ":"} {
+		if idx := strings.Index(trimmed, sep); idx >= 0 && idx+len(sep) < len(trimmed) {
+			trimmed = strings.TrimSpace(trimmed[idx+len(sep):])
+			break
+		}
+	}
+	if trimmed == "" {
+		return "这个项目"
+	}
+	return truncateText(trimmed, 28)
+}
+
+func fallbackVideoScriptSections(subject string, targetDurationSec int) []map[string]interface{} {
+	texts := []string{
+		fmt.Sprintf("你是不是也觉得，AI 工具越用越多，真正能跑完的流程却越来越少？%s 解决的就是这个问题。", subject),
+		fmt.Sprintf("%s 把选题、脚本、分镜、审核、生成和打包放进一条可追踪流水线，非技术用户也能按步骤推进。", subject),
+		"你不用理解复杂的 agent 架构，只要确认每个关键节点，系统会调用本机 runner、HyperFrames 和 MCP，把想法变成可交付视频。",
+		fmt.Sprintf("我会开源完整项目，持续记录真实使用和修复过程。关注%s，一起把 AI 内容生产从演示变成日常工具。", subject),
+	}
+	durations := distributeFallbackScriptDurations(targetDurationSec, len(texts))
+	sections := make([]map[string]interface{}, 0, len(texts))
+	start := 0
+	for i, text := range texts {
+		duration := durations[i]
+		end := start + duration
+		sectionID := fmt.Sprintf("SPAN_%02d", i+1)
+		sections = append(sections, map[string]interface{}{
+			"id":          sectionID,
+			"spanId":      sectionID,
+			"name":        []string{"开场钩子", "痛点和方案", "流程演示", "开源关注"}[i],
+			"startSec":    start,
+			"endSec":      end,
+			"durationSec": duration,
+			"text":        text,
+			"scriptText":  text,
+		})
+		start = end
+	}
+	return sections
+}
+
+func distributeFallbackScriptDurations(targetDurationSec, count int) []int {
+	if count <= 0 {
+		return nil
+	}
+	minTotal := count * 3
+	maxTotal := count * 15
+	if targetDurationSec < minTotal {
+		targetDurationSec = minTotal
+	}
+	if targetDurationSec > maxTotal {
+		targetDurationSec = maxTotal
+	}
+	base := targetDurationSec / count
+	remaining := targetDurationSec % count
+	durations := make([]int, count)
+	for i := 0; i < count; i++ {
+		duration := base
+		if i < remaining {
+			duration++
+		}
+		if duration < 3 {
+			duration = 3
+		}
+		if duration > 15 {
+			duration = 15
+		}
+		durations[i] = duration
+	}
+	return durations
 }
 
 func appendJSONModeSystemInstruction(systemPrompt string) string {
@@ -6407,6 +6689,84 @@ func firstNonEmptyString(values map[string]interface{}, keys ...string) string {
 	return ""
 }
 
+func visualTitleFromNarration(narration string, shotIndex int) string {
+	text := normalizeInlineText(narration)
+	lower := strings.ToLower(text)
+	switch {
+	case containsAny(lower, "工具越用越多", "流程却越来越少", "真正能跑完"):
+		return "AI 工具很多，流程没人跑完"
+	case containsAny(lower, "选题", "脚本", "分镜") && containsAny(lower, "审核", "生成", "打包", "流水线"):
+		return "选题到成片，一条流水线"
+	case containsAny(lower, "mcp", "jimeng", "即梦", "hyperframes", "runner"):
+		return "本机能力自动接入视频生产"
+	case containsAny(lower, "开源", "完整项目", "关注"):
+		return "开源完整项目，持续真实迭代"
+	case containsAny(lower, "非技术", "按步骤", "不用理解"):
+		return "非技术用户也能按步骤推进"
+	case text != "":
+		return truncateVisualTitle(text, 20)
+	default:
+		return []string{
+			"AI 内容流程，一次跑到底",
+			"脚本、分镜、生成全链路",
+			"审核可控，产物可追踪",
+			"开源项目，真实交付",
+		}[shotIndex%4]
+	}
+}
+
+func visualSubtitleFromNarration(narration string, shotIndex int) string {
+	text := normalizeInlineText(narration)
+	lower := strings.ToLower(text)
+	switch {
+	case containsAny(lower, "工具越用越多", "流程却越来越少", "真正能跑完"):
+		return "用痛点开场，先让非技术观众产生共鸣"
+	case containsAny(lower, "选题", "脚本", "分镜") && containsAny(lower, "审核", "生成", "打包", "流水线"):
+		return "展示从创意到交付的可追踪步骤"
+	case containsAny(lower, "mcp", "jimeng", "即梦", "hyperframes", "runner"):
+		return "突出 JiMeng MCP、local runner 与渲染链路"
+	case containsAny(lower, "开源", "完整项目", "关注"):
+		return "给出开源和关注理由，承接后续转化"
+	case text != "":
+		return truncateVisualTitle(text, 34)
+	default:
+		return []string{
+			"痛点、方案、演示、关注四段式推进",
+			"把复杂 agent 流程翻译成观众能懂的动作",
+			"每个节点都有审核和产物记录",
+			"用真实流程做项目的第一条宣传片",
+		}[shotIndex%4]
+	}
+}
+
+func normalizeInlineText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" || isRedactedPlaceholder(text) {
+		return ""
+	}
+	replacer := strings.NewReplacer("\n", " ", "\r", " ", "\t", " ")
+	text = replacer.Replace(text)
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func truncateVisualTitle(text string, maxRunes int) string {
+	text = normalizeInlineText(text)
+	if text == "" {
+		return ""
+	}
+	for _, sep := range []string{"。", "！", "？", "；", ".", "!", "?", ";", "，", ","} {
+		if idx := strings.Index(text, sep); idx > 0 {
+			text = strings.TrimSpace(text[:idx])
+			break
+		}
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
 // isStructuredOutputTool reports whether toolName requires structured JSON output
 // (as opposed to free-form Markdown). Quality checkers and content production tools
 // must output valid JSON.
@@ -6433,6 +6793,13 @@ func normalizeStructuredToolContent(toolName, rawContent string) (string, map[st
 	var contentPkg map[string]interface{}
 	if err := jsonx.ExtractJSON(rawContent, &contentPkg); err != nil {
 		return rawContent, contentPkg, false
+	}
+	if toolName == "video_script_generator" {
+		if _, ok := contentPkg["scriptSpans"]; !ok {
+			if sections, exists := contentPkg["sections"]; exists {
+				contentPkg["scriptSpans"] = sections
+			}
+		}
 	}
 	if toolName == "shot_splitter" {
 		return buildShotQueueReviewContent(contentPkg), contentPkg, true

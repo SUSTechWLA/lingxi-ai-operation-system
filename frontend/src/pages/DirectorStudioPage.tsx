@@ -70,6 +70,7 @@ import {
   uploadLocalArtifactFile,
   type JiMengSetupStatusResponse,
   type LocalArtifactFileResponse,
+  type LocalMCPProviderConfig,
   type MCPToolCallResult,
   type ModelCapability,
   type ModelProviderSettingsResponse,
@@ -418,7 +419,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     setJimengSetupLoading(true)
     setJimengSetupError(null)
     try {
-      await registerJiMengMCP(jimengSetupStatus?.mcpProvider?.endpoint || jimengSetupStatus?.defaultMcpEndpoint)
+      await registerJiMengMCP({ transport: 'stdio' })
       await refreshJiMengSetupStatus()
     } catch (err) {
       setJimengSetupError(normalizeDirectorErrorMessage(err))
@@ -579,7 +580,8 @@ function JiMengSetupPanel(props: {
   const mcpRegistered = Boolean(status?.mcpProvider)
   const mcpReachable = providerStatus?.reachable === true
   const canUseForProfile = selectedProfile.projectMode === 'aigc_shot' || selectedProfile.generationMode === 'manual_import'
-  const startCommand = status?.mcpStartCommand || 'jimeng-mcp -addr 127.0.0.1:18180'
+  const startCommand = status?.mcpStartCommand || 'python3 mcp/jimeng/server.py'
+  const providerDetail = status?.mcpProvider ? mcpProviderDetail(status.mcpProvider) : 'stdio provider'
   const installCommand = status?.installCommand || 'curl -fsSL https://jimeng.jianying.com/cli | bash'
   const [loginResult, setLoginResult] = useState<MCPToolCallResult | null>(null)
   const [loginLoading, setLoginLoading] = useState(false)
@@ -634,7 +636,7 @@ function JiMengSetupPanel(props: {
                 <p className="text-sm font-black text-primary-dark">即梦 AIGC 扩展</p>
                 <h3 className="mt-1 text-lg font-black text-ink">{headline}</h3>
                 <p className="mt-2 text-sm leading-6 text-ink-muted">
-                  用户自己的 Dreamina 登录态保留在本机，躺营只调用已注册的本地 MCP endpoint。
+                  用户自己的 Dreamina 登录态保留在本机，躺营只调用已注册的本地 MCP provider。
                 </p>
               </div>
             </div>
@@ -643,7 +645,7 @@ function JiMengSetupPanel(props: {
           {error ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{error}</div> : null}
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <JiMengStep label="Dreamina CLI" detail={status?.dreaminaVersion || installCommand} done={status?.dreaminaAvailable === true} />
-            <JiMengStep label="MCP 注册" detail={status?.mcpProvider?.endpoint || status?.defaultMcpEndpoint || '127.0.0.1:18180'} done={mcpRegistered} />
+            <JiMengStep label="MCP 注册" detail={providerDetail} done={mcpRegistered} />
             <JiMengStep label="MCP 连接" detail={providerStatus?.error || (mcpReachable ? 'tools/list 正常' : '等待服务启动')} done={mcpReachable} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -771,6 +773,13 @@ function JiMengStep({ label, detail, done }: { label: string; detail: string; do
   )
 }
 
+function mcpProviderDetail(provider: LocalMCPProviderConfig): string {
+  if (provider.transport === 'stdio') {
+    return [provider.command, ...(provider.args || [])].filter(Boolean).join(' ') || 'stdio'
+  }
+  return provider.endpoint || provider.transport || 'mcp provider'
+}
+
 function isJiMengReady(status: JiMengSetupStatusResponse | null): boolean {
   if (!status?.dreaminaAvailable) return false
   const provider = status.mcpProviders?.find((item) => item.id === 'jimeng')
@@ -837,7 +846,7 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, on
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
           <div className={clsx('rounded-lg px-3 py-2', localStatusClassName)}>{localStatus.label}</div>
-          <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v1.0 内测</div>
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v0.1.0 内测</div>
         </div>
       </div>
     </aside>
@@ -854,7 +863,7 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
         <div className="flex items-center gap-2 text-sm font-semibold text-primary-dark">
           <FiZap /> 多角色协作 · 可追踪 · 分阶段确认 · 本地可控渲染
         </div>
-        <h1 className="mt-2 text-3xl font-black text-gradient md:text-4xl">躺营导演台 v1.0</h1>
+        <h1 className="mt-2 text-3xl font-black text-gradient md:text-4xl">躺营导演台 v0.1.0</h1>
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <div className="hidden items-center gap-2 rounded-lg bg-white/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
