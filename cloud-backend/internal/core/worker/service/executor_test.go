@@ -261,6 +261,44 @@ func TestResolveSingleRefPrefersFuzzyExecNodeWithRequestedField(t *testing.T) {
 	}
 }
 
+func TestResolveSingleRefReadsLocalVideoArtifactPath(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID:     "task_001-render_exec",
+		TaskID: "task_001",
+		Output: map[string]interface{}{
+			"outputRef": "local://projects/vp-001/artifacts/final-video/hash/final.mp4",
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"kind":       "VIDEO",
+					"storageRef": "local://projects/vp-001/artifacts/final-video/hash/final.mp4",
+					"metadata": map[string]interface{}{
+						"localPath": "/tmp/tangying-final.mp4",
+						"width":     1920,
+						"height":    1080,
+					},
+				},
+			},
+		},
+	})
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{render.output.outputPath}}")
+	if !ok {
+		t.Fatalf("reference should resolve from local VIDEO artifact")
+	}
+	if resolved != "/tmp/tangying-final.mp4" {
+		t.Fatalf("outputPath should resolve to artifact metadata.localPath, got %#v", resolved)
+	}
+
+	resolved, ok = resolveSingleRef(ctx, nodeRepo, "task_001", "{{render.output.finalVideo}}")
+	if !ok {
+		t.Fatalf("finalVideo reference should resolve from local VIDEO artifact")
+	}
+	if resolved != "/tmp/tangying-final.mp4" {
+		t.Fatalf("finalVideo should resolve to artifact metadata.localPath, got %#v", resolved)
+	}
+}
+
 func TestExecutableToolTimeoutUsesDelegatedExternalManifest(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	registry.RegisterExternal(&tool.ToolManifest{

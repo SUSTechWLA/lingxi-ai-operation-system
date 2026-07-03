@@ -170,7 +170,7 @@ func plannerDisallowsToolForDomain(toolName, domain string) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "bash", "python", "llm_api", "external":
+	case "bash", "python", "llm_api", "external", "video_frame_qa":
 		return true
 	default:
 		return false

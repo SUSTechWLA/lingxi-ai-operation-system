@@ -95,6 +95,7 @@ var videoCreationExternalTools = []string{
 	"hyperframes_snapshot",
 	"artifact_packager",
 	"ffmpeg_probe",
+	"video_frame_qa",
 	"final_review_generator",
 }
 
@@ -766,6 +767,45 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"externalGenerationRequests": {Type: "array", Description: "Requests that remain manual or failed"},
 			"summary":                    {Type: "string", Description: "MCP generation summary"},
 		}
+	case "video_frame_qa":
+		manifest.Description = "Extract representative frames and detect visual crowding, text-zone overlap, and clutter before delivery."
+		manifest.Type = "local_visual_qa"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = true
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "visual_quality", "frame_sampling", "text_safety"}
+		manifest.Tags = []string{"qa", "ffmpeg", "visual", "local"}
+		manifest.ArtifactPolicy = tool.ArtifactPolicy{
+			ProduceArtifact:       true,
+			ArtifactKinds:         []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"},
+			DefaultReviewRequired: false,
+			Storage:               tool.ArtifactLocationLocal,
+		}
+		manifest.ApprovalPolicy = tool.ApprovalPolicy{
+			Required:            true,
+			Mode:                tool.ApprovalAfterArtifact,
+			BlocksDownstream:    true,
+			Reason:              "Final video frames must be reviewed for text overlap, clutter, and readability before delivery.",
+			ReviewArtifactKinds: []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"},
+		}
+		manifest.HumanReview = &tool.HumanReview{Required: true, Gate: tool.ApprovalAfterArtifact, Title: "审核视觉抽帧报告"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"input":             {Type: "string", Description: "Rendered video local:// ref or local path", Required: true},
+			"videoRef":          {Type: "string", Description: "Rendered video ref alias", Required: false},
+			"shotList":          {Type: "array", Description: "Shot list for assigning sampled frames to shots", Required: false},
+			"sampleIntervalSec": {Type: "number", Description: "Seconds between sampled frames", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"passed":             {Type: "boolean", Description: "Whether no blocking visual issue was detected"},
+			"score":              {Type: "number", Description: "Visual QA score from 0 to 100"},
+			"reportRef":          {Type: "string", Description: "Local JSON report ref"},
+			"contactSheetRef":    {Type: "string", Description: "Local contact sheet image ref"},
+			"blockingIssueCount": {Type: "number", Description: "Blocking visual issue count"},
+			"warningIssueCount":  {Type: "number", Description: "Warning issue count"},
+			"frames":             {Type: "array", Description: "Per-sampled-frame QA results"},
+			"artifacts":          {Type: "object", Description: "Generated QA artifacts"},
+		}
 	case "hyperframes_project_generator":
 		manifest.ArtifactPolicy = tool.ArtifactPolicy{
 			ProduceArtifact:       true,
@@ -867,6 +907,14 @@ var localToolManifests = map[string]struct {
 		ArtifactLocation:   tool.ArtifactLocationLocal,
 		Description:        "使用 ffprobe 检查视频文件元数据（时长、分辨率、编码）",
 		Timeout:            60,
+	},
+	"video_frame_qa": {
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		LocalCommand:       "VIDEO_FRAME_QA",
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		Description:        "抽帧检查最终视频文字安全区、遮挡和画面复杂度",
+		Timeout:            180,
 	},
 	"mcp_generation_runner": {
 		ExecutionPlane:     tool.ExecutionPlaneLocal,

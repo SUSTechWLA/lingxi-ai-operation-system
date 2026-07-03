@@ -148,6 +148,7 @@ func preflightProfileForPipeline(raw string) preflightPipelineProfile {
 				"HYPERFRAMES_PROJECT_GENERATE",
 				"HYPERFRAMES_SNAPSHOT",
 				"HYPERFRAMES_RENDER",
+				"VIDEO_FRAME_QA",
 				"FFMPEG_PROBE",
 				"ARTIFACT_PACKAGE",
 			},

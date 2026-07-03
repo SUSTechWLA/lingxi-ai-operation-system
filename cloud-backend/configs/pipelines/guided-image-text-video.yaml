@@ -21,6 +21,7 @@ metadata:
     - script
     - composition
     - preview
+    - visual_qa
 
 stages:
   - name: proposal
@@ -67,6 +68,16 @@ stages:
     director: render-director
     skill: video/render-director
     reviewRequired: false
+
+  - name: visual_qa
+    director: quality-director
+    skill: video/quality-director
+    reviewRequired: true
+    reviewFocus:
+      - 每个 shot 抽帧是否清晰
+      - 是否有文字覆盖或字幕互相遮挡
+      - 画面复杂度是否影响理解
+      - 是否需要返工单个 shot 或调整字幕安全区
 
   - name: package
     director: package-director
@@ -183,6 +194,27 @@ dag:
         quality: standard
         timeoutSec: 1800
         stage: render
+    - id: visual_qa_exec
+      type: TOOL
+      name: external
+      input:
+        tool: video_frame_qa
+        projectId: "{{task.id}}"
+        input: "local://projects/{{task.id}}/renders/final.mp4"
+        shotList: "{{composition_exec.output.shotList}}"
+        sampleIntervalSec: 4
+        stage: visual_qa
+    - id: visual_qa_review_gate
+      type: REVIEW_GATE
+      name: 审核-视觉抽帧报告
+      input:
+        phase: after_artifact
+        reviewFocus:
+          - 每个 shot 抽帧是否清晰
+          - 是否有文字覆盖或字幕互相遮挡
+          - 画面复杂度是否影响理解
+          - 是否需要返工单个 shot 或调整字幕安全区
+        stage: visual_qa
     - id: package_exec
       type: TOOL
       name: external
@@ -221,6 +253,10 @@ dag:
     - from: preview_review_gate
       to: render_exec
     - from: render_exec
+      to: visual_qa_exec
+    - from: visual_qa_exec
+      to: visual_qa_review_gate
+    - from: visual_qa_review_gate
       to: package_exec
     - from: package_exec
       to: final_review_exec

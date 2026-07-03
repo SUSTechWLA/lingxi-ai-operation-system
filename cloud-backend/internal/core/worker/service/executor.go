@@ -1000,7 +1000,119 @@ func lookupOutputField(output map[string]interface{}, field string) (interface{}
 			return val, true
 		}
 	}
+	if val, ok := lookupArtifactOutputField(output, field); ok {
+		return val, true
+	}
+	for _, payload := range structuredOutputPayloads(output) {
+		if val, ok := lookupArtifactOutputField(payload, field); ok {
+			return val, true
+		}
+	}
 	return nil, false
+}
+
+func lookupArtifactOutputField(output map[string]interface{}, field string) (interface{}, bool) {
+	field = strings.TrimSpace(field)
+	if output == nil || field == "" {
+		return nil, false
+	}
+	videoPathField := isVideoPathOutputField(field)
+	localPathField := strings.EqualFold(field, "localPath")
+	for _, artifact := range artifactPayloads(output["artifacts"]) {
+		if !localPathField && !artifactMatchesOutputField(artifact, field) {
+			continue
+		}
+		metadata := objectPayload(artifact["metadata"])
+		if metadata != nil {
+			if val, ok := metadata[field]; ok {
+				return val, true
+			}
+			if videoPathField || localPathField {
+				if val, ok := nonEmptyString(metadata["localPath"]); ok {
+					return val, true
+				}
+			}
+		}
+		if videoPathField || strings.EqualFold(field, "storageRef") {
+			if val, ok := nonEmptyString(artifact["storageRef"]); ok {
+				return val, true
+			}
+		}
+	}
+	if videoPathField {
+		if val, ok := nonEmptyString(output["outputRef"]); ok {
+			return val, true
+		}
+	}
+	return nil, false
+}
+
+func artifactPayloads(value interface{}) []map[string]interface{} {
+	switch typed := value.(type) {
+	case []interface{}:
+		result := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if payload := objectPayload(item); payload != nil {
+				result = append(result, payload)
+			}
+		}
+		return result
+	case []map[string]interface{}:
+		return typed
+	default:
+		return nil
+	}
+}
+
+func objectPayload(value interface{}) map[string]interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed
+	case map[string]string:
+		result := make(map[string]interface{}, len(typed))
+		for k, v := range typed {
+			result[k] = v
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func artifactMatchesOutputField(artifact map[string]interface{}, field string) bool {
+	if artifact == nil {
+		return false
+	}
+	kind, _ := nonEmptyString(artifact["kind"])
+	mimeType, _ := nonEmptyString(artifact["mimeType"])
+	unitID, _ := nonEmptyString(artifact["unitId"])
+	if isVideoPathOutputField(field) {
+		return strings.EqualFold(kind, "VIDEO") ||
+			strings.HasPrefix(strings.ToLower(mimeType), "video/") ||
+			strings.EqualFold(unitID, "final-video")
+	}
+	return strings.EqualFold(kind, field)
+}
+
+func isVideoPathOutputField(field string) bool {
+	switch strings.ToLower(strings.TrimSpace(field)) {
+	case "outputpath", "finalvideo", "final_video", "video":
+		return true
+	default:
+		return false
+	}
+}
+
+func nonEmptyString(value interface{}) (string, bool) {
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }
 
 func structuredOutputPayloads(output map[string]interface{}) []map[string]interface{} {
