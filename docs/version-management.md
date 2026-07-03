@@ -29,7 +29,7 @@
 
 | 类型 | 示例 | 场景 |
 |---|---|---|
-| patch | `v0.1.2` | bugfix、小功能、文档和兼容增强 |
+| patch | `v0.1.3` | bugfix、小功能、文档和兼容增强 |
 | minor | `v0.2.0` | 新增稳定用户能力或较大工作流能力 |
 | major | `v1.0.0` | 对外 API、数据结构或使用方式出现破坏性变化 |
 
@@ -46,10 +46,12 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
-v0.1.2 对应能力：
+v0.1.3 对应能力：
 
 - 动态视频计划在 render 后自动插入 `visual_qa`。
-- 本地 `VIDEO_FRAME_QA` 输出 JSON 报告、抽帧图片和 contact sheet。
+- 本地 `VIDEO_FRAME_QA` 输出 JSON 报告、抽帧图片、contact sheet 和 shot 级质量摘要。
+- 每个 shot 都输出 `metricSummary`、`score`、`passed`、`needsRegeneration`、`conclusion` 和 `recommendations`。
+- 顶层 `repairPlan` 输出 `approve`、`manual_review` 或 `regenerate_shots`，并列出需要返修的 shot。
 - QA 审核门阻断 publish，人工确认后才继续发布文案。
 - 本地 artifact 的 `localPath` 可被下游本地工具解析为真实视频路径。
-- 30 秒 16:9 宣传视频完整链路已跑通，QA 得分 100，run 状态 `SUCCESS`。
+- 30 秒 16:9 “视频 Agent”宣传视频完整链路已跑通，QA 得分 100，run 状态 `SUCCESS`。

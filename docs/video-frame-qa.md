@@ -1,6 +1,6 @@
 # 视频抽帧 QA Wiki
 
-本文说明 v0.1.2 新增的成片视觉 QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤和画面复杂度风险提前暴露出来。
+本文说明 v0.1.3 的成片视觉 QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤和画面复杂度风险提前暴露出来，并把每个 shot 的问题量化成可用于返修的结论。
 
 ## 流程位置
 
@@ -36,9 +36,11 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 | 字段 | 说明 |
 |---|---|
 | `frameCount` | 当前 shot 被采样到的帧数 |
+| `sampledTimesSec` | 当前 shot 的采样时间点 |
 | `metricSummary` | 左上文字区、底部三分之一区域、全帧复杂度的平均值和最大值 |
 | `blockingIssueCount` / `warningIssueCount` | 阻断问题和警告数量 |
 | `score` | 当前 shot 的 0-100 分质量分 |
+| `passed` | 当前 shot 是否通过 |
 | `needsRegeneration` | 是否建议返修后重生成该 shot |
 | `conclusion` | 给审核者看的明确结论 |
 | `recommendations` | 可执行修复建议，例如减少左上叠字、压缩底部字幕、降低背景复杂度 |
@@ -73,13 +75,13 @@ QA 审核门中优先看三件事：
 
 ## 本次验证记录
 
-v0.1.2 已用系统完整生成一条 30 秒、16:9 的开源上线宣传视频：
+v0.1.3 已用系统完整生成一条 30 秒、16:9 的“视频 Agent”开源上线宣传视频：
 
-- project: `vp-bcc0d196`
-- run: `agent_run_fb85f93f-e27e-40d9-8cf7-e6ae1ed1e876`
-- task: `20260703192757-98989898`
+- project: `vp-f894df0c`
+- run: `agent_run_d3bcf6fb-46d7-46d6-bd0d-7e1821fc61d7`
+- task: `20260703200752-f8f8f8f8`
 - output: `final.mp4`
 - duration: `30.000000` 秒
-- QA: `passed=true`，`score=100`，`frameCount=8`
+- QA: `passed=true`，`score=100`，`shotCount=6`，`frameCount=8`，`repairPlan.nextAction=approve`
 
 这条链路覆盖了脚本审核、提示词审核、预览审核、渲染前审核、成片抽帧 QA 审核和发布文案审核。
