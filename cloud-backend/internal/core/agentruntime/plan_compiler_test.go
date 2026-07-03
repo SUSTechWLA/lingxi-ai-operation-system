@@ -764,7 +764,7 @@ func TestPlanCompiler_PreparePlanInsertsVideoFrameQAAfterRender(t *testing.T) {
 	if got := visualQA.Arguments["shotList"]; got != "{{visual_alignment.output.shotList}}" {
 		t.Fatalf("visual_qa shotList = %#v, want visual alignment shot list", got)
 	}
-	for _, output := range []string{"shotSummaries", "repairPlan", "needsRegeneration"} {
+	for _, output := range []string{"shotReports", "shotSpecLints", "shotSummaries", "repairPlan", "needsRegeneration"} {
 		if !containsString(visualQA.ExpectedOutput, output) {
 			t.Fatalf("visual_qa should declare %s output, got %#v", output, visualQA.ExpectedOutput)
 		}
@@ -815,7 +815,7 @@ func TestPlanCompiler_CompiledVideoFrameQABlocksPublishThroughReview(t *testing.
 	if got, _ := review.Input["requiresApprovedArtifacts"].(bool); !got {
 		t.Fatalf("visual QA review should require approved artifacts: %#v", review.Input)
 	}
-	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"} {
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET", "SHOT_QA_REPORT", "SHOT_REPAIR_PLAN"} {
 		if !containsString(stringSlice(review.Input["reviewArtifactKinds"]), kind) {
 			t.Fatalf("visual QA review artifact kinds missing %s: %#v", kind, review.Input)
 		}

@@ -70,6 +70,23 @@ curl -X POST http://127.0.0.1:18080/api/local/jimeng/setup/register-mcp \
 
 本地 Agent 会自动生成 `python3 <repo>/mcp/jimeng/server.py` 的 provider 配置，并写入 `toolPrefix: "jimeng."`。
 
+## Video QA Python MCP
+
+仓库内置了成片 QA stdio MCP server：
+
+```bash
+python3 -m pip install -r mcp/video_qa/requirements.txt
+python3 mcp/video_qa/server.py
+```
+
+工具：
+
+| 逻辑工具名 | Python MCP 工具名 | 说明 |
+|---|---|---|
+| `video_qa.analyze_video` | `analyze_video` | 抽帧、生成 contact sheet、输出 `SHOT_QA_REPORT` 和 `SHOT_REPAIR_PLAN`。 |
+
+`VIDEO_FRAME_QA` 本地命令会默认启动这个 stdio MCP server。Go executor 只做路径校验和 MCP 调用，具体 QA 算法放在 `mcp/video_qa/` 内，后续 OCR、ASR、PyIQA、VLM judge 都应该继续以 MCP 工具方式扩展。
+
 ## 新 MCP 的扩展方式
 
 新增 provider 不需要改云端编排，也不需要改本地 runner。只要完成三件事：

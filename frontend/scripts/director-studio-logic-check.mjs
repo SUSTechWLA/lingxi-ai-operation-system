@@ -1584,6 +1584,18 @@ try {
   const deliveryItems = buildExportDeliveryItems([
     finalVideoCandidates[2],
     {
+      id: 'shot-qa-report',
+      name: 'shot_qa_reports.json',
+      kind: 'SHOT_QA_REPORT',
+      status: 'valid',
+      owner: '视觉质量审核',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'local://projects/vp-1/reports/video_frame_qa/shot_qa_reports.json',
+      metadata: { nextAction: 'RERENDER_HTML' },
+    },
+    {
       id: 'probe-report',
       name: 'ffmpeg_probe.json',
       kind: 'FFMPEG_PROBE_REPORT',
@@ -1617,6 +1629,11 @@ try {
     deliveryItems.find((item) => item.id === 'project-package')?.status,
     'missing',
     'export delivery checklist should turn missing package into a friendly state instead of artifact not found',
+  )
+  assert.equal(
+    deliveryItems.find((item) => item.id === 'quality-report')?.storageRef,
+    'local://projects/vp-1/reports/video_frame_qa/shot_qa_reports.json',
+    'export delivery checklist should prefer shot-level QA over low-level probe reports',
   )
   assert.equal(
     normalizeDirectorErrorMessage(new Error('artifact not found')),

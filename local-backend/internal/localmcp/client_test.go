@@ -200,6 +200,37 @@ func TestClientListsToolsFromPythonMCPServer(t *testing.T) {
 	t.Fatalf("tools = %#v, want jimeng.generate_video", tools)
 }
 
+func TestClientListsToolsFromVideoQAPythonMCPServer(t *testing.T) {
+	if os.Getenv("RUN_PYTHON_MCP_INTEGRATION") != "1" {
+		t.Skip("set RUN_PYTHON_MCP_INTEGRATION=1 to run the Python MCP integration test")
+	}
+	scriptPath := filepath.Clean(filepath.Join("..", "..", "..", "mcp", "video_qa", "server.py"))
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("video qa python mcp server not found: %v", err)
+	}
+	pythonCommand := pythonCommandForIntegrationTest(t)
+	client := NewClient(ProviderConfig{
+		ID:         "video_qa",
+		Transport:  "stdio",
+		Command:    pythonCommand,
+		Args:       []string{scriptPath},
+		ToolPrefix: "video_qa.",
+		Enabled:    true,
+	}, nil)
+	defer client.Close()
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+	for _, tool := range tools {
+		if tool.Name == "video_qa.analyze_video" {
+			return
+		}
+	}
+	t.Fatalf("tools = %#v, want video_qa.analyze_video", tools)
+}
+
 func pythonCommandForIntegrationTest(t *testing.T) string {
 	t.Helper()
 	if command := strings.TrimSpace(os.Getenv("PYTHON")); command != "" {

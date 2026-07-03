@@ -774,11 +774,11 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.RiskLevel = tool.RiskLow
 		manifest.SideEffect = true
 		manifest.Idempotent = true
-		manifest.Capabilities = []string{"video_creation", "visual_quality", "frame_sampling", "text_safety"}
+		manifest.Capabilities = []string{"video_creation", "visual_quality", "frame_sampling", "text_safety", "shot_quality_gate", "shot_repair_planning"}
 		manifest.Tags = []string{"qa", "ffmpeg", "visual", "local"}
 		manifest.ArtifactPolicy = tool.ArtifactPolicy{
 			ProduceArtifact:       true,
-			ArtifactKinds:         []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"},
+			ArtifactKinds:         []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET", "SHOT_QA_REPORT", "SHOT_REPAIR_PLAN"},
 			DefaultReviewRequired: false,
 			Storage:               tool.ArtifactLocationLocal,
 		}
@@ -787,7 +787,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			Mode:                tool.ApprovalAfterArtifact,
 			BlocksDownstream:    true,
 			Reason:              "Final video frames must be reviewed for text overlap, clutter, and readability before delivery.",
-			ReviewArtifactKinds: []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"},
+			ReviewArtifactKinds: []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET", "SHOT_QA_REPORT", "SHOT_REPAIR_PLAN"},
 		}
 		manifest.HumanReview = &tool.HumanReview{Required: true, Gate: tool.ApprovalAfterArtifact, Title: "审核视觉抽帧报告"}
 		manifest.Parameters = map[string]tool.ParamDef{
@@ -799,6 +799,8 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Output = map[string]tool.ParamDef{
 			"passed":             {Type: "boolean", Description: "Whether no blocking visual issue was detected"},
 			"score":              {Type: "number", Description: "Visual QA score from 0 to 100"},
+			"shotReports":        {Type: "array", Description: "Structured ShotQAReport objects with decision, fatal gates, metrics, issues, and tool-level repair plans"},
+			"shotSpecLints":      {Type: "array", Description: "Pre-generation shot spec lint results for duration, exact text, continuity references, and render strategy hints"},
 			"shotSummaries":      {Type: "array", Description: "Per-shot QA metrics, conclusions, and repair guidance"},
 			"repairPlan":         {Type: "object", Description: "Shot-level regeneration or review plan derived from QA metrics"},
 			"needsRegeneration":  {Type: "boolean", Description: "Whether any shot has blocking issues and should be regenerated"},

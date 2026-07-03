@@ -46,12 +46,13 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
-v0.1.3 对应能力：
+v0.1.4 对应能力：
 
 - 动态视频计划在 render 后自动插入 `visual_qa`。
-- 本地 `VIDEO_FRAME_QA` 输出 JSON 报告、抽帧图片、contact sheet 和 shot 级质量摘要。
+- 本地 `VIDEO_FRAME_QA` 通过标准 stdio MCP 调用 `mcp/video_qa/server.py`，Go runner 只做路径解析和 MCP 桥接。
+- Python MCP 工具 `video_qa.analyze_video` 输出 JSON 报告、抽帧图片、contact sheet、shot 级质量摘要和返修计划。
 - 每个 shot 都输出 `metricSummary`、`score`、`passed`、`needsRegeneration`、`conclusion` 和 `recommendations`。
 - 顶层 `repairPlan` 输出 `approve`、`manual_review` 或 `regenerate_shots`，并列出需要返修的 shot。
 - QA 审核门阻断 publish，人工确认后才继续发布文案。
 - 本地 artifact 的 `localPath` 可被下游本地工具解析为真实视频路径。
-- 30 秒 16:9 “视频 Agent”宣传视频完整链路已跑通，QA 得分 100，run 状态 `SUCCESS`。
+- `SHOT_QA_REPORT` 和 `SHOT_REPAIR_PLAN` 作为稳定 artifact 输出，前端审核面板优先展示 shot 级结论。

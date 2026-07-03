@@ -964,7 +964,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 				step.Arguments["shotList"] = stepOutputRef(shotAnchor, shotField)
 				step.Arguments["sampleIntervalSec"] = 4
 				step.DependsOn = dependencyListUnique(renderAnchor, shotAnchor)
-				ensureStepExpectedOutputs(step, "VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score", "shotSummaries", "repairPlan", "needsRegeneration")
+				ensureStepExpectedOutputs(step, "VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score", "shotReports", "shotSpecLints", "shotSummaries", "repairPlan", "needsRegeneration")
 				step.ProduceArtifact = true
 				applyProjectContextToStep(step, projectID)
 			}
@@ -980,7 +980,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 					"sampleIntervalSec": 4,
 				},
 				DependsOn:       dependencyListUnique(renderAnchor, shotAnchor),
-				ExpectedOutput:  []string{"VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score", "shotSummaries", "repairPlan", "needsRegeneration"},
+				ExpectedOutput:  []string{"VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score", "shotReports", "shotSpecLints", "shotSummaries", "repairPlan", "needsRegeneration"},
 				ProduceArtifact: true,
 			})
 			applyProjectContextToStep(planStepByID(plan, visualQAAnchor), projectID)

@@ -469,7 +469,10 @@ export function buildExportDeliveryItems(artifacts: DirectorArtifactRecord[]): E
   const finalVideo = findFinalVideoArtifact(artifacts)
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
   const publishArtifact = findPublishCopyArtifact(artifacts)
-  const qualityArtifact = artifacts.find((artifact) => artifact.kind === 'FINAL_REVIEW') ||
+  const qualityArtifact = artifacts.find((artifact) => artifact.kind === 'SHOT_QA_REPORT') ||
+    artifacts.find((artifact) => artifact.kind === 'VIDEO_VISUAL_QA_REPORT') ||
+    artifacts.find((artifact) => artifact.kind === 'SHOT_REPAIR_PLAN') ||
+    artifacts.find((artifact) => artifact.kind === 'FINAL_REVIEW') ||
     artifacts.find((artifact) => artifact.kind === 'FFMPEG_PROBE_REPORT')
 
   return [
@@ -502,9 +505,9 @@ export function buildExportDeliveryItems(artifacts: DirectorArtifactRecord[]): E
     },
     {
       id: 'quality-report',
-      label: '质量报告',
+      label: qualityArtifact?.kind === 'SHOT_QA_REPORT' ? 'Shot QA 报告' : '质量报告',
       status: qualityArtifact?.status || 'missing',
-      description: qualityArtifact?.storageRef ? '视频探测或最终审核报告已生成。' : '等待质量审核产物生成。',
+      description: qualityArtifact?.storageRef ? 'shot 级 QA、视频探测或最终审核报告已生成。' : '等待质量审核产物生成。',
       artifact: qualityArtifact,
       storageRef: qualityArtifact?.storageRef,
       actionLabel: qualityArtifact?.storageRef ? '查看报告' : '等待检测',
@@ -2717,6 +2720,8 @@ export function displayNameForArtifact(kind: string) {
     RENDER_REPORT: '渲染报告',
     VIDEO_VISUAL_QA_REPORT: '抽帧质检报告',
     VIDEO_VISUAL_QA_CONTACT_SHEET: '抽帧联系表',
+    SHOT_QA_REPORT: 'Shot QA报告',
+    SHOT_REPAIR_PLAN: 'Shot返修计划',
     FFMPEG_PROBE_REPORT: '视频检测报告',
     FINAL_REVIEW: '最终审核报告',
     SHOT_REVIEW_PACKET: 'Shot审核包',

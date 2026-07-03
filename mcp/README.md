@@ -12,3 +12,4 @@ Rules:
 Current services:
 
 - `jimeng/`: Python stdio MCP server wrapping the user-managed Dreamina CLI.
+- `video_qa/`: Python stdio MCP server for rendered-video frame sampling, shot-level QA reports, and repair plans.

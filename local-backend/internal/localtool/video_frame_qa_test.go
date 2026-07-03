@@ -1,44 +1,12 @@
 package localtool
 
 import (
-	"image"
-	"image/color"
-	"image/png"
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
-
-func TestAnalyzeFrameVisualQualityFlagsCrowdedTextSafetyZone(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "crowded.png")
-	writeVisualQATestFrame(t, path, true)
-
-	result, err := analyzeFrameVisualQuality(path, visualQAThresholds{})
-	if err != nil {
-		t.Fatalf("analyze frame: %v", err)
-	}
-	if result.Passed {
-		t.Fatalf("crowded frame passed; metrics=%#v issues=%#v", result.Metrics, result.Issues)
-	}
-	if !hasVisualQAIssue(result.Issues, "top_left_text_zone_crowded") {
-		t.Fatalf("issues = %#v, want top_left_text_zone_crowded", result.Issues)
-	}
-}
-
-func TestAnalyzeFrameVisualQualityPassesSparseFrame(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sparse.png")
-	writeVisualQATestFrame(t, path, false)
-
-	result, err := analyzeFrameVisualQuality(path, visualQAThresholds{})
-	if err != nil {
-		t.Fatalf("analyze frame: %v", err)
-	}
-	if !result.Passed {
-		t.Fatalf("sparse frame failed; metrics=%#v issues=%#v", result.Metrics, result.Issues)
-	}
-}
 
 func TestVideoFrameQAExecutorRejectsUnsafeProjectID(t *testing.T) {
 	_, err := NewVideoFrameQAExecutor(t.TempDir()).Execute(t.Context(), Job{
@@ -52,127 +20,117 @@ func TestVideoFrameQAExecutorRejectsUnsafeProjectID(t *testing.T) {
 	}
 }
 
-func TestBuildVisualQAShotSummariesAggregatesMetricsAndRepairGuidance(t *testing.T) {
-	frames := []visualQAFrameResult{
-		{
-			ShotID:  "SHOT_01",
-			TimeSec: 0,
-			Passed:  true,
-			Metrics: map[string]float64{
-				"topLeftTextZoneEdgeDensity": 0.02,
-				"lowerThirdEdgeDensity":      0.01,
-				"fullFrameEdgeDensity":       0.03,
+func TestVideoFrameQAExecutorDelegatesAnalysisToStandardMCPTool(t *testing.T) {
+	dataDir := t.TempDir()
+	projectID := "vp_mcp"
+	videoPath := filepath.Join(dataDir, "projects", projectID, "renders", "final.mp4")
+	if err := os.MkdirAll(filepath.Dir(videoPath), 0o755); err != nil {
+		t.Fatalf("mkdir video dir: %v", err)
+	}
+	if err := os.WriteFile(videoPath, []byte("not a real video; fake mcp does not inspect it"), 0o644); err != nil {
+		t.Fatalf("write video: %v", err)
+	}
+	fake := &fakeVideoQAMCPClient{output: map[string]interface{}{
+		"success":           true,
+		"passed":            true,
+		"score":             91,
+		"reportRef":         "local://projects/vp_mcp/reports/video_frame_qa/video_frame_qa.json",
+		"shotReports":       []interface{}{map[string]interface{}{"shotId": "SHOT_01", "decision": "PASS"}},
+		"shotSpecLints":     []interface{}{},
+		"shotSummaries":     []interface{}{map[string]interface{}{"shotId": "SHOT_01", "decision": "PASS"}},
+		"repairPlan":        map[string]interface{}{"nextAction": "approve"},
+		"needsRegeneration": false,
+		"artifacts":         []interface{}{},
+	}}
+	executor := NewVideoFrameQAExecutorWithMCPClient(dataDir, fake)
+
+	result, err := executor.Execute(t.Context(), Job{
+		ProjectID: projectID,
+		Payload: map[string]interface{}{
+			"input":             "local://projects/vp_mcp/renders/final.mp4",
+			"sampleIntervalSec": 3.0,
+			"shotList": []interface{}{
+				map[string]interface{}{"id": "SHOT_01", "durationSec": 6.0},
 			},
 		},
-		{
-			ShotID:  "SHOT_02",
-			TimeSec: 4,
-			Passed:  false,
-			Metrics: map[string]float64{
-				"topLeftTextZoneEdgeDensity": 0.12,
-				"lowerThirdEdgeDensity":      0.02,
-				"fullFrameEdgeDensity":       0.04,
-			},
-			Issues: []visualQAIssue{{
-				Code:       "top_left_text_zone_crowded",
-				Severity:   "blocking",
-				Zone:       "top_left",
-				Suggestion: "减少左上角叠字。",
-			}},
-		},
-		{
-			ShotID:  "SHOT_02",
-			TimeSec: 8,
-			Passed:  true,
-			Metrics: map[string]float64{
-				"topLeftTextZoneEdgeDensity": 0.04,
-				"lowerThirdEdgeDensity":      0.01,
-				"fullFrameEdgeDensity":       0.02,
-			},
-		},
-	}
-
-	summaries := buildVisualQAShotSummaries(frames)
-	if len(summaries) != 2 {
-		t.Fatalf("len(summaries) = %d, want 2", len(summaries))
-	}
-	if summaries[0].ShotID != "SHOT_01" || !summaries[0].Passed || summaries[0].NeedsRegeneration {
-		t.Fatalf("unexpected SHOT_01 summary: %#v", summaries[0])
-	}
-	failing := summaries[1]
-	if failing.ShotID != "SHOT_02" {
-		t.Fatalf("second shot id = %q, want SHOT_02", failing.ShotID)
-	}
-	if failing.Passed || !failing.NeedsRegeneration {
-		t.Fatalf("SHOT_02 should require regeneration: %#v", failing)
-	}
-	if failing.Score != 82 {
-		t.Fatalf("SHOT_02 score = %d, want 82", failing.Score)
-	}
-	if failing.MetricSummary["maxTopLeftTextZoneEdgeDensity"] != 0.12 {
-		t.Fatalf("max top-left density = %#v, want 0.12", failing.MetricSummary)
-	}
-	if len(failing.Recommendations) == 0 || failing.Conclusion == "" {
-		t.Fatalf("expected repair guidance, got conclusion=%q recommendations=%#v", failing.Conclusion, failing.Recommendations)
-	}
-}
-
-func TestVisualQAContactSheetTileMinimizesEmptyCells(t *testing.T) {
-	cases := map[int]string{
-		1:  "1x1",
-		3:  "3x1",
-		5:  "3x2",
-		8:  "4x2",
-		16: "4x4",
-		20: "4x4",
-	}
-	for frameCount, want := range cases {
-		if got := visualQAContactSheetTile(frameCount); got != want {
-			t.Fatalf("visualQAContactSheetTile(%d) = %q, want %q", frameCount, got, want)
-		}
-	}
-}
-
-func hasVisualQAIssue(issues []visualQAIssue, code string) bool {
-	for _, issue := range issues {
-		if issue.Code == code {
-			return true
-		}
-	}
-	return false
-}
-
-func writeVisualQATestFrame(t *testing.T, path string, crowded bool) {
-	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
-	for y := 0; y < 1080; y++ {
-		for x := 0; x < 1920; x++ {
-			img.SetRGBA(x, y, color.RGBA{R: 18, G: 28, B: 38, A: 255})
-		}
-	}
-	line := color.RGBA{R: 242, G: 242, B: 235, A: 255}
-	rows := []int{86, 122}
-	if crowded {
-		rows = []int{72, 96, 120, 144, 168, 192, 216, 240, 264}
-	}
-	for _, y := range rows {
-		for x := 80; x < 760; x++ {
-			for h := 0; h < 5; h++ {
-				img.SetRGBA(x, y+h, line)
-			}
-		}
-		for x := 80; x < 760; x += 42 {
-			for h := 0; h < 22; h++ {
-				img.SetRGBA(x, y+h, line)
-			}
-		}
-	}
-	f, err := os.Create(path)
+	})
 	if err != nil {
-		t.Fatalf("create frame: %v", err)
+		t.Fatalf("Execute returned error: %v", err)
 	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		t.Fatalf("encode frame: %v", err)
+	if fake.toolName != "video_qa.analyze_video" {
+		t.Fatalf("toolName = %q, want video_qa.analyze_video", fake.toolName)
+	}
+	if got := fake.args["projectId"]; got != projectID {
+		t.Fatalf("projectId arg = %#v, want %q", got, projectID)
+	}
+	if got := fake.args["videoPath"]; got != videoPath {
+		t.Fatalf("videoPath arg = %#v, want %q", got, videoPath)
+	}
+	if got := fake.args["videoRef"]; got != "local://projects/vp_mcp/renders/final.mp4" {
+		t.Fatalf("videoRef arg = %#v", got)
+	}
+	if got := fake.args["sampleIntervalSec"]; got != 3.0 {
+		t.Fatalf("sampleIntervalSec arg = %#v, want 3", got)
+	}
+	if got := result.Output["score"]; got != 91 {
+		t.Fatalf("result score = %#v, want 91", got)
 	}
 }
+
+func TestVideoFrameQAExecutorRunsDefaultVideoQAMCPServer(t *testing.T) {
+	if os.Getenv("RUN_VIDEO_QA_MCP_E2E") != "1" {
+		t.Skip("set RUN_VIDEO_QA_MCP_E2E=1 to run the video QA MCP E2E test")
+	}
+	dataDir := t.TempDir()
+	projectID := "vp_mcp_e2e"
+	videoPath := filepath.Join(dataDir, "projects", projectID, "renders", "final.mp4")
+	if err := os.MkdirAll(filepath.Dir(videoPath), 0o755); err != nil {
+		t.Fatalf("mkdir video dir: %v", err)
+	}
+	if output, err := exec.Command(
+		"ffmpeg", "-y", "-v", "error",
+		"-f", "lavfi", "-i", "color=c=black:s=320x180:d=1:r=1",
+		"-pix_fmt", "yuv420p",
+		videoPath,
+	).CombinedOutput(); err != nil {
+		t.Fatalf("create test video: %v: %s", err, string(output))
+	}
+
+	result, err := NewVideoFrameQAExecutor(dataDir).Execute(t.Context(), Job{
+		ProjectID:  projectID,
+		TimeoutSec: 30,
+		Payload: map[string]interface{}{
+			"input":             "local://projects/vp_mcp_e2e/renders/final.mp4",
+			"sampleIntervalSec": 1.0,
+			"shotList": []interface{}{
+				map[string]interface{}{"id": "SHOT_01", "durationSec": 1.0},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Output["success"] != true {
+		t.Fatalf("success = %#v, output=%#v", result.Output["success"], result.Output)
+	}
+	if result.Output["shotReports"] == nil {
+		t.Fatalf("shotReports missing from output: %#v", result.Output)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "projects", projectID, "reports", "video_frame_qa", "shot_qa_reports.json")); err != nil {
+		t.Fatalf("shot qa report not written: %v", err)
+	}
+}
+
+type fakeVideoQAMCPClient struct {
+	toolName string
+	args     map[string]interface{}
+	output   map[string]interface{}
+}
+
+func (f *fakeVideoQAMCPClient) CallTool(ctx context.Context, name string, args map[string]interface{}) (map[string]interface{}, error) {
+	f.toolName = name
+	f.args = args
+	return f.output, nil
+}
+
+func (f *fakeVideoQAMCPClient) Close() error { return nil }

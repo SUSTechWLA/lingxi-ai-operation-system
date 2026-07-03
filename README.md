@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.3-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.4-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,13 @@
 ---
 
 ## Release 更新
+
+### v0.1.4 - 2026-07-03
+
+- 将视频抽帧 QA 拆成标准 Python MCP 服务：`mcp/video_qa/server.py` 暴露 `video_qa.analyze_video`，后续 OCR、ASR、PyIQA、VLM judge 都可以继续按 MCP 扩展。
+- 本地 `VIDEO_FRAME_QA` 只保留路径校验、`local://` 解析和 MCP 调用，不再把重媒体 QA 算法写死在 Go runner 中。
+- 成片 QA 输出稳定升级为 `SHOT_QA_REPORT` 和 `SHOT_REPAIR_PLAN`，前端审核面板优先展示 shot 级结论、量化指标和返修建议。
+- 新增 Python MCP server 自测、Go stdio MCP 集成测试和 `VIDEO_FRAME_QA` MCP E2E 测试，确保 QA 能力能作为独立 MCP 服务被系统调用。
 
 ### v0.1.3 - 2026-07-03
 

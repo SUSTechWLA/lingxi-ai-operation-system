@@ -325,7 +325,7 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoFrameQAManifest(t *testi
 	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact || !manifest.ApprovalPolicy.BlocksDownstream {
 		t.Fatalf("video_frame_qa approval policy = %#v, want blocking after_artifact", manifest.ApprovalPolicy)
 	}
-	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"} {
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET", "SHOT_QA_REPORT", "SHOT_REPAIR_PLAN"} {
 		if !containsString(manifest.ApprovalPolicy.ReviewArtifactKinds, kind) {
 			t.Fatalf("video_frame_qa review artifact kinds missing %s: %#v", kind, manifest.ApprovalPolicy.ReviewArtifactKinds)
 		}
@@ -333,9 +333,17 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoFrameQAManifest(t *testi
 	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
 		t.Fatalf("video_frame_qa human review missing: %#v", manifest.HumanReview)
 	}
-	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET"} {
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET", "SHOT_QA_REPORT", "SHOT_REPAIR_PLAN"} {
 		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
 			t.Fatalf("video_frame_qa artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+	if !containsString(manifest.Capabilities, "shot_quality_gate") {
+		t.Fatalf("video_frame_qa capabilities missing shot_quality_gate: %#v", manifest.Capabilities)
+	}
+	for _, output := range []string{"shotReports", "shotSpecLints", "repairPlan", "needsRegeneration"} {
+		if _, ok := manifest.Output[output]; !ok {
+			t.Fatalf("video_frame_qa output missing %s: %#v", output, manifest.Output)
 		}
 	}
 }
