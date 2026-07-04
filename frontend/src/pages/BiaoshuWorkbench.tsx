@@ -1039,6 +1039,13 @@ function BiaoshuArtifactViewer({
       }
       const result = await reviseBiaoshuArtifact(revisePayload)
 
+      // Check for JSON wrapper format
+      if (looksLikeWrappedRevisionJSON(result.revisedContent)) {
+        setAiError('AI 返回了异常 JSON 外壳，未生成可应用的 Markdown 正文。请重新生成或缩小修改范围。')
+        setAiLoading(false)
+        return
+      }
+
       // 3. Save assistant response locally
       const assistantMsg: BiaoshuConversationMessage = {
         id: `msg-${Date.now()}-assistant`,
@@ -1071,6 +1078,13 @@ function BiaoshuArtifactViewer({
 
   const handleApplyChanges = async () => {
     if (!revisedContent || !artifactPath) return
+
+    // Safety: block JSON wrapper from being written back
+    if (looksLikeWrappedRevisionJSON(revisedContent)) {
+      setAiError('当前预览内容不是有效 Markdown，已阻止写回文件。')
+      return
+    }
+
     setApplying(true)
     setAiError(null)
     try {
@@ -1093,6 +1107,11 @@ function BiaoshuArtifactViewer({
   const handleDiscardPreview = () => {
     setRevisedContent(null)
     setReviseSummary(null)
+  }
+
+  const looksLikeWrappedRevisionJSON = (value: string): boolean => {
+    const trimmed = value.trim()
+    return trimmed.startsWith('{') && trimmed.includes('"revisedContent"')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1232,11 +1251,8 @@ function BiaoshuArtifactViewer({
                   {reviseSummary && (
                     <p className="mb-2 text-xs text-primary/70">{reviseSummary}</p>
                   )}
-                  <div className="max-h-60 overflow-y-auto rounded-lg bg-white p-3 text-xs leading-relaxed whitespace-pre-wrap border border-line">
-                    {revisedContent.slice(0, 3000)}
-                    {revisedContent.length > 3000 && (
-                      <p className="mt-2 text-ink-muted">... 内容已截断，应用修改可查看完整内容</p>
-                    )}
+                  <div className="max-h-[52vh] overflow-y-auto rounded-lg bg-white p-4 text-xs leading-relaxed border border-line">
+                    <ReactMarkdown>{revisedContent}</ReactMarkdown>
                   </div>
                 </div>
               )}

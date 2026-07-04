@@ -65,7 +65,10 @@ func TestParseReviseModelResponseExtractsMarkdownFromLooseJSON(t *testing.T) {
   "summary": "删除原文部分"
 }`
 
-	parsed := parseReviseModelResponse(modelOutput, "deepseek-v4-pro")
+	parsed, err := parseReviseModelResponse(modelOutput, "deepseek-v4-pro")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if strings.HasPrefix(strings.TrimSpace(parsed.RevisedContent), "{") {
 		t.Fatalf("revisedContent should be markdown, got JSON wrapper: %q", parsed.RevisedContent)
@@ -87,6 +90,49 @@ func TestParseReviseModelResponseExtractsMarkdownFromLooseJSON(t *testing.T) {
 	}
 }
 
+func TestParseReviseModelResponseAcceptsMarkdownBody(t *testing.T) {
+	input := "# 招标文件解析报告\n\n## 1. 项目基本信息\n\n正文内容"
+	parsed, err := parseReviseModelResponse(input, "test-model")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parsed.RevisedContent != input {
+		t.Fatalf("expected markdown body, got %q", parsed.RevisedContent)
+	}
+	if parsed.Model != "test-model" {
+		t.Fatalf("unexpected model: %q", parsed.Model)
+	}
+	if parsed.Summary != "AI 修订完成" {
+		t.Fatalf("unexpected summary: %q", parsed.Summary)
+	}
+}
+
+func TestParseReviseModelResponseRejectsTruncatedJSONWrapper(t *testing.T) {
+	input := `{"revisedContent":"# 招标文件解析报告\n\n| 评分项 | 分值 |\n|`
+
+	_, err := parseReviseModelResponse(input, "test-model")
+	if err == nil {
+		t.Fatal("expected truncated JSON wrapper to be rejected")
+	}
+	if !strings.Contains(err.Error(), "截断") {
+		t.Fatalf("expected truncation error, got: %v", err)
+	}
+}
+
+func TestParseReviseModelResponseExtractsJSONWrappedMarkdown(t *testing.T) {
+	input := `{"revisedContent":"# 招标文件解析报告\n\n## 项目基本信息\n\n正文","summary":"已修改"}`
+	parsed, err := parseReviseModelResponse(input, "test-model")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(parsed.RevisedContent), "{") {
+		t.Fatalf("should extract markdown body, got %q", parsed.RevisedContent)
+	}
+	if !strings.HasPrefix(parsed.RevisedContent, "# 招标文件解析报告") {
+		t.Fatalf("expected markdown heading, got %q", parsed.RevisedContent)
+	}
+}
+
 func TestBuildReviseSystemPrompt(t *testing.T) {
 	prompt := buildReviseSystemPrompt("BID_CHAPTERS", "施工组织方案")
 	if !strings.Contains(prompt, "施工组织方案") {
@@ -95,11 +141,11 @@ func TestBuildReviseSystemPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "章节初稿") {
 		t.Error("system prompt should contain kind description")
 	}
-	if !strings.Contains(prompt, "revisedContent") {
-		t.Error("system prompt should request revisedContent field")
+	if !strings.Contains(prompt, "Markdown 正文") {
+		t.Error("system prompt should request raw Markdown output")
 	}
-	if !strings.Contains(prompt, "summary") {
-		t.Error("system prompt should request summary field")
+	if strings.Contains(prompt, "revisedContent") {
+		t.Error("system prompt should NOT request JSON revisedContent field (now outputs raw Markdown)")
 	}
 }
 

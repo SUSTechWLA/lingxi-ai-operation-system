@@ -46,7 +46,7 @@ type ReviseResponse struct {
 }
 
 const maxContextMessages = 10
-const maxContentLength = 200 * 1024 // 200KB
+const maxContentLength = 500 * 1024 // 500KB
 
 // RegisterRoutes registers the biaoshu revise endpoint.
 func (h *ReviseHandler) RegisterRoutes(r *gin.Engine) {
@@ -67,7 +67,7 @@ func (h *ReviseHandler) Revise(c *gin.Context) {
 		return
 	}
 	if len(req.ArtifactContent) > maxContentLength {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "artifactContent exceeds 200KB limit", "data": nil})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "artifactContent exceeds 500KB limit", "data": nil})
 		return
 	}
 	if strings.TrimSpace(req.UserInstruction) == "" {
@@ -85,6 +85,10 @@ func (h *ReviseHandler) Revise(c *gin.Context) {
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
+		Parameters: map[string]any{
+			"temperature": 0.3,
+			"max_tokens":  50000.0,
+		},
 	})
 	if err != nil {
 		zap.L().Error("biaoshu revise LLM call failed", zap.Error(err))
@@ -92,26 +96,48 @@ func (h *ReviseHandler) Revise(c *gin.Context) {
 		return
 	}
 
-	parsed := parseReviseModelResponse(result.Content, result.Usage.Model)
+	parsed, err := parseReviseModelResponse(result.Content, result.Usage.Model)
+	if err != nil {
+		zap.L().Error("biaoshu revise parse failed", zap.Error(err), zap.String("model", result.Usage.Model))
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": err.Error(), "data": nil})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "ok", "data": parsed})
 }
 
-func parseReviseModelResponse(content, model string) ReviseResponse {
+func parseReviseModelResponse(content, model string) (ReviseResponse, error) {
 	normalized := stripMarkdownCodeFence(strings.TrimSpace(content))
+
+	// Path 1: If model still returned valid JSON, extract revisedContent from it.
 	var parsed ReviseResponse
 	if err := json.Unmarshal([]byte(normalized), &parsed); err == nil && strings.TrimSpace(parsed.RevisedContent) != "" {
-		return finalizeReviseResponse(parsed, model)
+		return finalizeReviseResponse(parsed, model), nil
 	}
 
+	// Path 2: Loose JSON extraction.
 	if loose, ok := parseLooseReviseJSON(normalized); ok {
-		return finalizeReviseResponse(loose, model)
+		return finalizeReviseResponse(loose, model), nil
 	}
 
+	// Path 3: Model returned raw Markdown (the expected path).
+	if looksLikeMarkdown(normalized) {
+		return finalizeReviseResponse(ReviseResponse{
+			RevisedContent: normalized,
+			Summary:        "AI 修订完成",
+		}, model), nil
+	}
+
+	// Path 4: Looks like a truncated/invalid JSON wrapper — reject.
+	if looksLikeWrappedRevisionJSON(normalized) {
+		return ReviseResponse{}, fmt.Errorf("AI 修订输出格式异常或内容被截断，请缩小修改范围或重新生成")
+	}
+
+	// Path 5: Treat as raw content.
 	return finalizeReviseResponse(ReviseResponse{
 		RevisedContent: content,
-		Summary:        "AI revision completed",
-	}, model)
+		Summary:        "AI 修订完成",
+	}, model), nil
 }
 
 func finalizeReviseResponse(resp ReviseResponse, model string) ReviseResponse {
@@ -227,6 +253,20 @@ func isLooseJSONStringTerminator(rest string) bool {
 	return strings.HasPrefix(trimmed, ",") || strings.HasPrefix(trimmed, "}")
 }
 
+// looksLikeMarkdown returns true if content looks like a Markdown document.
+func looksLikeMarkdown(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	return strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "| ")
+}
+
+// looksLikeWrappedRevisionJSON returns true if content appears to be a JSON object wrapping revisedContent.
+func looksLikeWrappedRevisionJSON(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	return strings.HasPrefix(trimmed, "{") &&
+		strings.Contains(trimmed, `"revisedContent"`) &&
+		!strings.HasSuffix(trimmed, "}")
+}
+
 // buildReviseSystemPrompt constructs the system prompt based on artifact kind.
 func buildReviseSystemPrompt(artifactKind, artifactName string) string {
 	name := artifactName
@@ -243,9 +283,9 @@ func buildReviseSystemPrompt(artifactKind, artifactName string) string {
 1. 保持原有的 Markdown 格式和章节结构。
 2. 只修改用户指定的部分，其余内容保持不变。
 3. 使用正式、规范的技术标语言风格。
-4. 输出必须是合法的 JSON 对象，包含两个字段：
-   - "revisedContent": 修改后的完整内容（Markdown格式）
-   - "summary": 简短的中文摘要，说明做了哪些修改（1-2句话）`, name, kindDesc)
+4. 直接输出修改后的完整 Markdown 正文，不要用 JSON 包裹。
+5. 不要输出 `+"```markdown"+` 代码块围栏。
+6. 不要解释修改过程，只输出正文。`, name, kindDesc)
 }
 
 // buildReviseUserPrompt assembles the user prompt with artifact content, instruction, and context.
@@ -274,7 +314,7 @@ func buildReviseUserPrompt(artifactContent, userInstruction string, contextMessa
 		}
 	}
 
-	sb.WriteString("\n请根据以上信息，输出修改后的完整产物内容和修改摘要。")
+	sb.WriteString("\n请根据以上信息，直接输出修改后的完整产物正文。")
 
 	return sb.String()
 }
