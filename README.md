@@ -33,10 +33,11 @@
 
 ## 当前版本
 
-**v0.1.10 - Closed beta hardening**
+**v0.1.10 - Initial closed beta launch**
 
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
 - 无真实 AIGC provider 时可以跑通 fallback preview、shot QA report 和 machine-readable repairPlan。
+- 当前 release 分支可作为初版受控内测上线基线，用于技术型用户安装、诊断、反馈和小范围创作者试用。
 - 邀请真实创作者前，必须在完整本地环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
 
 详细版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前可用性和内测门槛见 [docs/RELEASE_STATUS.md](docs/RELEASE_STATUS.md)。
@@ -108,7 +109,7 @@ flowchart LR
 
 ## 快速开始
 
-> 当前版本适合作为内测版、工程演示版和私有部署原型。真实商用前建议先用自己的模型账号、即梦账号和本地 runner 跑完整链路。
+> 当前 release 分支适合作为初版受控内测上线基线、工程演示版和私有部署原型。真实商用前建议先用自己的模型账号、即梦账号和本地 runner 跑完整链路。
 
 ```bash
 # 本地 Agent

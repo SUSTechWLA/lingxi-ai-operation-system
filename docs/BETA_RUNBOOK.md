@@ -1,6 +1,6 @@
 # Closed Beta Runbook
 
-This runbook is for controlled technical beta users. It is not a public SaaS deployment guide.
+This runbook is for the initial closed beta launch with controlled technical users. It is not a public SaaS deployment guide.
 
 Current beta readiness and launch criteria are tracked in [Release Status](RELEASE_STATUS.md). Historical release notes live in [Changelog](../CHANGELOG.md).
 

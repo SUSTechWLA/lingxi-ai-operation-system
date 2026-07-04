@@ -2,11 +2,13 @@
 
 Current release: `v0.1.10`
 
-Status: **closed beta engineering-ready; real creator trials require readiness `GO`.**
+Status: **initial closed beta launch-ready for controlled technical users; real creator trials require readiness `GO`.**
 
 ## Current Position
 
-The system can run the fallback smoke path without real AIGC provider accounts. It can produce local preview artifacts, structured shot QA reports, machine-readable repair plans, provenance labels, and diagnostics packages.
+The `release` branch is the initial closed beta launch baseline for controlled technical users. The system can run the fallback smoke path without real AIGC provider accounts, and it can produce local preview artifacts, structured shot QA reports, machine-readable repair plans, provenance labels, and diagnostics packages.
+
+For creator-facing real AIGC trials, run the readiness gate in the target environment and require `GO` before inviting users.
 
 Do not describe the environment as "one sentence creates high-quality real AIGC video" unless the readiness gate confirms all live dependencies.
 
