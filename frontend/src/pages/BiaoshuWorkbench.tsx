@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
-import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, type BiaoshuReviseRequest } from '../services/api'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, type BiaoshuReviseRequest } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
   fetchBiaoshuProjects, 
@@ -17,6 +17,8 @@ import {
   biaoshuArtifactToCopyText,
   buildBiaoshuArtifacts,
   createManualReportArtifact,
+  createManualProjectContextArtifact,
+  createManualOutlineArtifact,
   displayNameForBiaoshuArtifact,
   mergeManualReportArtifact,
   type BiaoshuArtifactRecord,
@@ -95,9 +97,21 @@ export default function BiaoshuWorkbench() {
     setRunLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   }, [])
 
-  const handleReportGenerated = useCallback((artifact: Record<string, unknown> | undefined, reportPath: string, sourceFile: string) => {
-    setManualReportArtifact(createManualReportArtifact(artifact, reportPath, sourceFile))
-    addLog(`解析报告已生成: ${reportPath}`)
+  const stringValue = (value: unknown): string =>
+    typeof value === 'string' && value.trim() ? value : ''
+
+  const handleReportGenerated = useCallback((artifact: Record<string, unknown> | undefined, filePath: string, sourceFile: string) => {
+    const kind = stringValue(artifact?.kind) || ''
+    if (kind === 'BID_PROJECT_CONTEXT') {
+      setManualReportArtifact(createManualProjectContextArtifact(artifact, filePath, sourceFile))
+      addLog(`项目背景确认表已生成: ${filePath}`)
+    } else if (kind === 'BID_OUTLINE') {
+      setManualReportArtifact(createManualOutlineArtifact(artifact, filePath, sourceFile))
+      addLog(`技术标大纲已生成: ${filePath}`)
+    } else {
+      setManualReportArtifact(createManualReportArtifact(artifact, filePath, sourceFile))
+      addLog(`解析报告已生成: ${filePath}`)
+    }
   }, [addLog])
 
   const refreshRunData = useCallback(async (runId: string) => {
@@ -699,9 +713,28 @@ function BiaoshuArtifactsPage({
 
   const rawTextArtifact = artifacts.find((a) => a.kind === 'BID_RAW_TEXT' && a.status === 'valid')
   const analysisArtifact = artifacts.find((a) => a.kind === 'BID_ANALYSIS')
+  const contextArtifact = artifacts.find((a) => a.kind === 'BID_PROJECT_CONTEXT')
+  const outlineArtifact = artifacts.find((a) => a.kind === 'BID_OUTLINE')
+
+  const [contextQuestions, setContextQuestions] = useState<string[]>([])
+  const [contextAnswers, setContextAnswers] = useState('')
+  const [generatingQuestions, setGeneratingQuestions] = useState(false)
+  const [generatingContextReport, setGeneratingContextReport] = useState(false)
+  const [generatingOutline, setGeneratingOutline] = useState(false)
+  const [contextError, setContextError] = useState<string | null>(null)
 
   const deriveReportPath = (rawTextPath: string): string => {
     return rawTextPath.replace(/原文解析/g, '解析报告')
+  }
+
+  const deriveProjectContextPath = (analysisReportPath: string): string => {
+    const dir = analysisReportPath.replace(/[^\\/]+$/, '')
+    return (dir || analysisReportPath.replace(/[^\\/]+$/, '') || '.') + '01_项目背景信息确认表.md'
+  }
+
+  const deriveOutlinePath = (analysisReportPath: string): string => {
+    const dir = analysisReportPath.replace(/[^\\/]+$/, '')
+    return (dir || analysisReportPath.replace(/[^\\/]+$/, '') || '.') + '03_技术标四级大纲.md'
   }
 
   const handleGenerateReport = async () => {
@@ -731,6 +764,92 @@ function BiaoshuArtifactsPage({
       setGenerateError(e instanceof Error ? e.message : '生成解析报告失败')
     } finally {
       setGeneratingReport(false)
+    }
+  }
+
+  const handleGenerateQuestions = async () => {
+    if (!analysisArtifact?.storageRef) return
+    setGeneratingQuestions(true)
+    setContextError(null)
+    try {
+      const sourceFile = typeof analysisArtifact.metadata?.sourceFile === 'string'
+        ? analysisArtifact.metadata.sourceFile
+        : ''
+      const result = await generateProjectContextQuestions({
+        analysisReportPath: analysisArtifact.storageRef,
+        sourceFile,
+      })
+      if (!result.success) {
+        setContextError(result.error || '生成问题失败')
+        return
+      }
+      if (result.data?.questions) {
+        setContextQuestions(result.data.questions)
+      }
+    } catch (e: unknown) {
+      setContextError(e instanceof Error ? e.message : '生成问题清单失败')
+    } finally {
+      setGeneratingQuestions(false)
+    }
+  }
+
+  const handleGenerateContextReport = async () => {
+    if (!analysisArtifact?.storageRef || !contextAnswers.trim()) return
+    setGeneratingContextReport(true)
+    setContextError(null)
+    try {
+      const sourceFile = typeof analysisArtifact.metadata?.sourceFile === 'string'
+        ? analysisArtifact.metadata.sourceFile
+        : ''
+      const reportPath = deriveProjectContextPath(analysisArtifact.storageRef)
+      const result = await generateProjectContextReport({
+        analysisReportPath: analysisArtifact.storageRef,
+        contextAnswers: contextAnswers.trim(),
+        contextReportPath: reportPath,
+        sourceFile,
+      })
+      if (!result.success) {
+        setContextError(result.error || '生成失败')
+        return
+      }
+      if (result.data) {
+        onReportGenerated(result.data.artifact, result.data.contextReportPath, sourceFile)
+        setContextQuestions([])
+        setContextAnswers('')
+      }
+    } catch (e: unknown) {
+      setContextError(e instanceof Error ? e.message : '生成背景确认表失败')
+    } finally {
+      setGeneratingContextReport(false)
+    }
+  }
+
+  const handleGenerateOutline = async () => {
+    if (!analysisArtifact?.storageRef || !contextArtifact?.storageRef) return
+    setGeneratingOutline(true)
+    setContextError(null)
+    try {
+      const sourceFile = typeof analysisArtifact.metadata?.sourceFile === 'string'
+        ? analysisArtifact.metadata.sourceFile
+        : ''
+      const outlinePath = deriveOutlinePath(analysisArtifact.storageRef)
+      const result = await generateOutline({
+        analysisReportPath: analysisArtifact.storageRef,
+        contextReportPath: contextArtifact.storageRef,
+        outlinePath,
+        sourceFile,
+      })
+      if (!result.success) {
+        setContextError(result.error || '生成大纲失败')
+        return
+      }
+      if (result.data) {
+        onReportGenerated(result.data.artifact, result.data.outlinePath, sourceFile)
+      }
+    } catch (e: unknown) {
+      setContextError(e instanceof Error ? e.message : '生成大纲失败')
+    } finally {
+      setGeneratingOutline(false)
     }
   }
 
@@ -796,6 +915,13 @@ function BiaoshuArtifactsPage({
         </div>
       )}
 
+      {contextError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-start gap-2">
+          <FiAlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>{contextError}</span>
+        </div>
+      )}
+
       {rawTextArtifact && (
         <div className="rounded-lg bg-amber-50 p-4 ring-1 ring-amber-200">
           <div className="flex items-center justify-between">
@@ -821,6 +947,105 @@ function BiaoshuArtifactsPage({
               )}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Project context flow */}
+      {analysisArtifact?.status === 'valid' && contextArtifact?.status !== 'valid' && (
+        <div className="rounded-lg bg-blue-50 p-4 ring-1 ring-blue-200">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-bold text-blue-800">
+                {contextQuestions.length > 0 ? '请回答项目背景信息问题' : '解析报告已完成，请补充项目背景信息'}
+              </p>
+              <p className="mt-1 text-xs text-blue-600">
+                {contextQuestions.length > 0
+                  ? '回答完毕后点击"生成背景确认表"，确认后即可生成技术标大纲。'
+                  : '按照标书撰写流程，下一步需要补充项目背景信息，确认后才能生成技术标大纲。'}
+              </p>
+            </div>
+            {contextQuestions.length === 0 && (
+              <button
+                onClick={handleGenerateQuestions}
+                disabled={generatingQuestions}
+                className="shrink-0 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {generatingQuestions ? <><FiRefreshCw className="animate-spin" /> 生成中...</> : <><FiSend /> 开始补充项目信息</>}
+              </button>
+            )}
+          </div>
+
+          {contextQuestions.length > 0 && (
+            <div className="mt-4 space-y-4">
+              <div className="rounded-lg bg-white p-4 ring-1 ring-blue-100 max-h-64 overflow-y-auto">
+                <ol className="list-decimal list-inside space-y-2 text-sm text-ink">
+                  {contextQuestions.map((q, i) => (
+                    <li key={i} className="font-medium">{q}</li>
+                  ))}
+                </ol>
+              </div>
+              <textarea
+                className="w-full rounded-lg border border-line bg-white p-3 text-sm min-h-[120px] focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none"
+                placeholder="请逐项回答问题，也可以一次性粘贴完整说明。"
+                value={contextAnswers}
+                onChange={(e) => setContextAnswers(e.target.value)}
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleGenerateContextReport}
+                  disabled={generatingContextReport || !contextAnswers.trim()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {generatingContextReport ? <><FiRefreshCw className="animate-spin" /> 生成中...</> : <><FiZap /> 生成项目背景信息确认表</>}
+                </button>
+                <button
+                  onClick={() => {
+                    const saved = contextAnswers
+                    setContextAnswers(saved + (saved ? '\n\n(已保存)\n' : ''))
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-bold text-blue-700 ring-1 ring-blue-200 hover:bg-blue-50 transition-colors"
+                >
+                  保存回答
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Outline generation */}
+      {analysisArtifact?.status === 'valid' && contextArtifact?.status === 'valid' && (
+        <div className="rounded-lg bg-green-50 p-4 ring-1 ring-green-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-green-800">
+                {outlineArtifact?.status === 'valid' ? '大纲已生成，可重新生成' : '项目背景信息已确认，可生成技术标大纲'}
+              </p>
+              <p className="mt-1 text-xs text-green-600">
+                基于解析报告和项目背景确认表，生成四层级技术标大纲
+              </p>
+            </div>
+            <button
+              onClick={handleGenerateOutline}
+              disabled={generatingOutline}
+              className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {generatingOutline ? (
+                <><FiRefreshCw className="animate-spin" /> 生成中...</>
+              ) : outlineArtifact?.status === 'valid' ? (
+                <><FiRefreshCw /> 重新生成大纲</>
+              ) : (
+                <><FiZap /> 生成技术标大纲</>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* If no context report but analysis exists, show gate notice for outline */}
+      {analysisArtifact?.status === 'valid' && contextArtifact?.status !== 'valid' && (
+        <div className="rounded-lg border border-dashed border-ink-muted bg-white p-3 text-xs text-ink-muted">
+          请先完成项目背景信息确认表，再生成技术标大纲。
         </div>
       )}
 

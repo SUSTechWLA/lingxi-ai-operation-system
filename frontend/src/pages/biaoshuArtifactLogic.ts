@@ -42,6 +42,7 @@ interface TraceNodeLike {
 const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
   { key: 'raw-parse', label: '招标文件原文解析', tool: 'parse_bid_files', kind: 'BID_RAW_TEXT', owner: '文件解析' },
   { key: 'parse', label: '招标文件解析报告', tool: 'bid_analysis_report', kind: 'BID_ANALYSIS', owner: 'AI分析' },
+  { key: 'context', label: '项目背景信息确认表', tool: 'project_context_report', kind: 'BID_PROJECT_CONTEXT', owner: '信息确认' },
   { key: 'outline', label: '技术标大纲', tool: 'outline_generator', kind: 'BID_OUTLINE', owner: '大纲规划' },
   { key: 'chapters', label: '章节初稿', tool: 'chapter_writer', kind: 'BID_CHAPTERS', owner: '章节编写' },
   { key: 'wordcheck', label: '字数检查报告', tool: 'chapter_word_checker', kind: 'WORD_COUNT_REPORT', owner: '质量检查' },
@@ -97,6 +98,7 @@ export function displayNameForBiaoshuArtifact(kind: string): string {
   const labels: Record<string, string> = {
     BID_RAW_TEXT: '原文解析',
     BID_ANALYSIS: '招标解析',
+    BID_PROJECT_CONTEXT: '项目背景',
     BID_OUTLINE: '标书大纲',
     BID_CHAPTERS: '章节稿件',
     WORD_COUNT_REPORT: '字数检查',
@@ -128,19 +130,23 @@ export function mergeManualReportArtifact(
   if (!manualReportArtifact) return artifacts
 
   let replaced = false
+  const kind = manualReportArtifact.kind
   const merged = artifacts.map((artifact) => {
-    if (artifact.kind !== 'BID_ANALYSIS') return artifact
+    if (artifact.kind !== kind) return artifact
     replaced = true
     return manualReportArtifact
   })
   if (replaced) return merged
 
-  const rawIndex = merged.findIndex((artifact) => artifact.kind === 'BID_RAW_TEXT')
-  if (rawIndex >= 0) {
+  // Insert after the appropriate preceding stage
+  const prevStageKind = kind === 'BID_PROJECT_CONTEXT' ? 'BID_ANALYSIS' :
+    kind === 'BID_OUTLINE' ? 'BID_PROJECT_CONTEXT' : 'BID_RAW_TEXT'
+  const prevIndex = merged.findIndex((artifact) => artifact.kind === prevStageKind)
+  if (prevIndex >= 0) {
     return [
-      ...merged.slice(0, rawIndex + 1),
+      ...merged.slice(0, prevIndex + 1),
       manualReportArtifact,
-      ...merged.slice(rawIndex + 1),
+      ...merged.slice(prevIndex + 1),
     ]
   }
   return [...merged, manualReportArtifact]
@@ -166,6 +172,54 @@ export function createManualReportArtifact(
     storageRef: String(artifact?.storageRef || artifact?.storage_ref || reportPath),
     summary: String(artifact?.summary || '手动生成的招标文件解析报告'),
     sourceTool: 'bid_analysis_report',
+    metadata,
+  }
+}
+
+export function createManualProjectContextArtifact(
+  artifact: Record<string, unknown> | undefined,
+  reportPath: string,
+  sourceFile: string,
+): BiaoshuArtifactRecord {
+  const metadata = objectRecord(artifact?.metadata)
+  if (sourceFile) metadata.sourceFile = sourceFile
+  metadata.manualGenerated = true
+
+  return {
+    id: String(artifact?.id || artifact?.artifactId || 'manual-project-context'),
+    name: String(artifact?.name || '项目背景信息确认表'),
+    kind: 'BID_PROJECT_CONTEXT',
+    version: '-',
+    status: 'valid',
+    owner: '信息确认',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    storageRef: String(artifact?.storageRef || artifact?.storage_ref || reportPath),
+    summary: String(artifact?.summary || '手动生成的项目背景信息确认表'),
+    sourceTool: 'project_context_report',
+    metadata,
+  }
+}
+
+export function createManualOutlineArtifact(
+  artifact: Record<string, unknown> | undefined,
+  outlinePath: string,
+  sourceFile: string,
+): BiaoshuArtifactRecord {
+  const metadata = objectRecord(artifact?.metadata)
+  if (sourceFile) metadata.sourceFile = sourceFile
+  metadata.manualGenerated = true
+
+  return {
+    id: String(artifact?.id || artifact?.artifactId || 'manual-outline'),
+    name: String(artifact?.name || '技术标四级大纲'),
+    kind: 'BID_OUTLINE',
+    version: '-',
+    status: 'valid',
+    owner: '大纲规划',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    storageRef: String(artifact?.storageRef || artifact?.storage_ref || outlinePath),
+    summary: String(artifact?.summary || '手动生成的技术标四级大纲'),
+    sourceTool: 'outline_generator',
     metadata,
   }
 }

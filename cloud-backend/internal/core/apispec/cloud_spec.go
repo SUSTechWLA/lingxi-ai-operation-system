@@ -468,6 +468,54 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("200", "Report generated", "BidAnalysisReportResponse").
 		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
 
+	b.Route("POST", "/api/biaoshu/project-context/questions", "Generate project context questions from analysis report").
+		Tags("Biaoshu").
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"analysisReportPath": {Schema: StringSchema()},
+				"sourceFile":         {Schema: StringSchema()},
+			},
+			Required: []string{"analysisReportPath"},
+		}, "Project context questions request", true).
+		ResponseJSON("200", "Questions generated", "BaseResponse").
+		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
+
+	b.Route("POST", "/api/biaoshu/project-context/report/generate", "Generate project context confirmation report").
+		Tags("Biaoshu").
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"analysisReportPath": {Schema: StringSchema()},
+				"contextAnswers":     {Schema: StringSchema()},
+				"contextReportPath":  {Schema: StringSchema()},
+				"sourceFile":         {Schema: StringSchema()},
+				"projectId":          {Schema: StringSchema()},
+				"runId":              {Schema: StringSchema()},
+			},
+			Required: []string{"analysisReportPath", "contextAnswers", "contextReportPath"},
+		}, "Project context report request", true).
+		ResponseJSON("200", "Report generated", "BaseResponse").
+		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
+
+	b.Route("POST", "/api/biaoshu/outline/generate", "Generate technical bid outline from analysis report and project context").
+		Tags("Biaoshu").
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"analysisReportPath": {Schema: StringSchema()},
+				"contextReportPath":  {Schema: StringSchema()},
+				"scoringReportPath":  {Schema: StringSchema()},
+				"outlinePath":        {Schema: StringSchema()},
+				"sourceFile":         {Schema: StringSchema()},
+				"projectId":          {Schema: StringSchema()},
+				"runId":              {Schema: StringSchema()},
+			},
+			Required: []string{"analysisReportPath", "contextReportPath", "outlinePath"},
+		}, "Outline generation request", true).
+		ResponseJSON("200", "Outline generated", "BaseResponse").
+		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
+
 	// ── Register automatic schemas (derived from real Go types) ──
 	registerCloudSchemas(b)
 

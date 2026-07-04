@@ -376,6 +376,12 @@ func main() {
 		reviseHandler.RegisterRoutes(r)
 		reportHandler := biaoshu_handler.NewBidAnalysisReportHandler(gw)
 		reportHandler.RegisterRoutes(r)
+		questionsHandler := biaoshu_handler.NewProjectContextQuestionHandler(gw)
+		questionsHandler.RegisterRoutes(r)
+		contextReportHandler := biaoshu_handler.NewProjectContextReportHandler(gw)
+		contextReportHandler.RegisterRoutes(r)
+		outlineHandler := biaoshu_handler.NewOutlineGenerationHandler(gw)
+		outlineHandler.RegisterRoutes(r)
 	}
 	zap.L().Info("Biaoshu services registered")
 

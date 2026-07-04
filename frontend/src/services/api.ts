@@ -398,6 +398,88 @@ export const generateBidAnalysisReport = async (
   return response.data
 }
 
+// ── Project Context Questions ──
+
+export interface GenerateProjectContextQuestionsRequest {
+  analysisReportPath: string
+  sourceFile?: string
+}
+
+export interface GenerateProjectContextQuestionsResponse {
+  success: boolean
+  data?: {
+    analysisReportPath: string
+    questions: string[]
+    markdown: string
+  }
+  error?: string
+}
+
+export const generateProjectContextQuestions = async (
+  payload: GenerateProjectContextQuestionsRequest
+): Promise<GenerateProjectContextQuestionsResponse> => {
+  const response = await api.post<GenerateProjectContextQuestionsResponse>('/biaoshu/project-context/questions', payload)
+  return response.data
+}
+
+// ── Project Context Report Generation ──
+
+export interface GenerateProjectContextReportRequest {
+  analysisReportPath: string
+  contextAnswers: string
+  contextReportPath: string
+  sourceFile?: string
+  projectId?: string
+  runId?: string
+}
+
+export interface GenerateProjectContextReportResponse {
+  success: boolean
+  data?: {
+    analysisReportPath: string
+    contextReportPath: string
+    artifact: Record<string, unknown>
+  }
+  error?: string
+}
+
+export const generateProjectContextReport = async (
+  payload: GenerateProjectContextReportRequest
+): Promise<GenerateProjectContextReportResponse> => {
+  const response = await api.post<GenerateProjectContextReportResponse>('/biaoshu/project-context/report/generate', payload)
+  return response.data
+}
+
+// ── Outline Generation ──
+
+export interface GenerateOutlineRequest {
+  analysisReportPath: string
+  contextReportPath: string
+  scoringReportPath?: string
+  outlinePath: string
+  sourceFile?: string
+  projectId?: string
+  runId?: string
+}
+
+export interface GenerateOutlineResponse {
+  success: boolean
+  data?: {
+    analysisReportPath: string
+    contextReportPath: string
+    outlinePath: string
+    artifact: Record<string, unknown>
+  }
+  error?: string
+}
+
+export const generateOutline = async (
+  payload: GenerateOutlineRequest
+): Promise<GenerateOutlineResponse> => {
+  const response = await api.post<GenerateOutlineResponse>('/biaoshu/outline/generate', payload)
+  return response.data
+}
+
 // ── Model Provider Config Sync ──
 
 export interface ModelProviderSyncPayload {
