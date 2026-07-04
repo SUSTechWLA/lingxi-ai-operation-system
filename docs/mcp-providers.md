@@ -99,6 +99,41 @@ curl -X POST http://127.0.0.1:18080/api/local/jimeng/setup/register-mcp \
 
 不要把 `AIGC_VIDEO`、`b-roll`、`ffmpeg`、`SHOT_VIDEO_CLIP`、`素材意图`、`镜头运动`、artifact、storageRef 或拼接说明写进 provider prompt。导演字段、口播意图和 QA 目标应该先被编译成具体可见画面，再交给 MCP provider。
 
+### 调用前 Preflight QA
+
+视频额度很贵，`LOCAL_MCP_TOOL_CALL` 会在真正调用 provider 前对每个 `kind=video` 请求做本地 QA。QA 不通过时，请求状态为 `blocked`，不会调用 Dreamina/JiMeng，不会消耗额度。
+
+硬门检查：
+
+| 检查项 | 阻断条件 |
+|---|---|
+| 提示词长度 | 太短，用户看完无法脑补出画面 |
+| 时间段故事 | 缺少至少两个类似 `0-2秒`、`2-4秒` 的画面变化段 |
+| 视觉锚点 | 缺少具体主体、道具或场景 |
+| 动作变化 | 缺少“出现、打开、亮起、弹出、排队、收束”等可见变化 |
+| 情绪/表达 | 缺少情绪氛围或表达思想 |
+| 内部术语 | 出现 `ffmpeg`、`AIGC_VIDEO`、`b-roll`、`SHOT_VIDEO_CLIP`、`artifact`、`storageRef` 等生产说明 |
+| 参考素材 | 声明了 `referenceAssetIds` 或 `references`，但没有可用的 `local://`、本地路径或 URL 参考文件 |
+
+阻断输出示例：
+
+```json
+{
+  "status": "blocked",
+  "reason": "prompt_qa_failed",
+  "preflightQa": {
+    "passed": false,
+    "score": 40,
+    "timedSegmentCount": 0,
+    "visualAnchorCount": 1,
+    "actionVerbCount": 0,
+    "usableReferenceCount": 0
+  }
+}
+```
+
+如果参考素材不可用，`reason` 为 `reference_qa_failed`。这类请求会保留在 `externalGenerationRequests` 中，等待上游重写 prompt、补充参考图或人工确认后再重试。
+
 Dreamina 图片参数当前按以下规则归一：
 
 | 输入 | MCP 参数 |
@@ -116,7 +151,7 @@ Dreamina 图片参数当前按以下规则归一：
 |---|---|
 | `generationResults` / `externalGenerationResults` | 每个请求的原始状态，包含 `requestId`、`shotId`、`kind`、`providerId`、`toolName`、`status`、`storageRef`、`localPath`、`error`。 |
 | `assetProvenance` | 给前端和审查节点展示的素材来源清单。 |
-| `sourceSummary` | 量化统计：视频/图片请求数、ready 数、failed/deferred/pending 数、是否需要 fallback。 |
+| `sourceSummary` | 量化统计：视频/图片请求数、ready 数、blocked/failed/deferred/pending 数、是否需要 fallback。 |
 | `requirementsSatisfied` | 是否满足本次 MCP 生成的最低 ready 视频素材要求。 |
 
 自动插入的视频 MCP 步骤默认携带：

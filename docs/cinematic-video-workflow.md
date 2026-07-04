@@ -105,6 +105,20 @@ resolution_type: 2k 或 4k
 - “画面需包含主体、场景、动作、镜头运动...” 这种模板化检查句。
 - 纯镜头技术参数。需要保留的导演意图应转写成观看体验和画面变化。
 
+## AIGC 调用前 QA
+
+每个 `kind=video` 请求在调用 Dreamina/JiMeng 前必须通过本地 preflight QA。QA 不通过时状态为 `blocked`，不会调用 provider，也不会消耗视频额度。
+
+最低要求：
+
+- 用户只看 prompt 就能脑补出画面是什么样子。
+- prompt 至少包含两个明确时间段，说明画面如何变化。
+- 有具体主体、道具、场景、动作和情绪，不只写“轻松视觉隐喻”。
+- 不能出现 `ffmpeg`、`AIGC_VIDEO`、`b-roll`、`SHOT_VIDEO_CLIP`、artifact 等内部说明。
+- 如果声明了参考资产，必须有可用的参考图路径或 URL；`manual://` 占位不允许直接进入视频生成。
+
+QA 结果写入 `generationResults[].preflightQa` 和 `assetProvenance[].preflightQa`，用于审核和返修。
+
 Dreamina 视频 MCP 如果返回余额不足、并发限制或超时，系统保留 `externalGenerationRequests`，并可以继续使用 storyboard / HyperFrames fallback 生成可 QA 的成片。但 fallback 必须被明确标记，不能被当成 AIGC 视频素材交付。
 
 v0.1.6 起，`mcp_generation_runner` 会输出：

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ type mcpToolCallExecutor struct {
 	loadProviders MCPProviderLoader
 	dataDir       string
 }
+
+var mcpTimedSegmentPattern = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*[-~—到至]\s*(\d+(?:\.\d+)?)\s*(秒|s)`)
 
 func NewMCPToolCallExecutor(loader MCPProviderLoader) Executor {
 	return &mcpToolCallExecutor{loadProviders: loader}
@@ -93,7 +96,6 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 		request := mcpMapFromInterface(item)
 		requestToolName := mcpToolNameForExternalRequest(providerID, toolName, request)
 		args := mcpArgumentsFromExternalRequest(request)
-		requestTimeout := mcpRequestTimeout(job, request, batchDeadline)
 		result := map[string]interface{}{
 			"requestId":  request["requestId"],
 			"shotId":     request["shotId"],
@@ -101,6 +103,31 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 			"providerId": providerID,
 			"toolName":   requestToolName,
 		}
+		preflight := mcpPreflightForExternalRequest(request)
+		result["preflightQa"] = preflight
+		if !mcpBoolFromInterface(preflight["passed"]) {
+			reason := mcpStringFromMap(preflight, "reason")
+			if reason == "" {
+				reason = "preflight_qa_failed"
+			}
+			message := mcpStringFromMap(preflight, "message")
+			if message == "" {
+				message = "AIGC preflight QA failed; provider call skipped"
+			}
+			result["status"] = "blocked"
+			result["reason"] = reason
+			result["error"] = message
+			result["preflightQa"] = preflight
+			blocked := copyMap(request)
+			blocked["status"] = "blocked"
+			blocked["reason"] = reason
+			blocked["error"] = message
+			blocked["preflightQa"] = preflight
+			remaining = append(remaining, blocked)
+			results = append(results, result)
+			continue
+		}
+		requestTimeout := mcpRequestTimeout(job, request, batchDeadline)
 		if requestTimeout <= 0 {
 			result["status"] = "deferred"
 			result["reason"] = "generation_batch_timeout"
@@ -439,6 +466,195 @@ func (e *mcpToolCallExecutor) deferRemainingRequests(items []interface{}, remain
 	}
 }
 
+func mcpPreflightForExternalRequest(request map[string]interface{}) map[string]interface{} {
+	if mcpExternalRequestKind(request) != "video" {
+		return map[string]interface{}{
+			"passed":          true,
+			"score":           100,
+			"promptPassed":    true,
+			"referencePassed": true,
+			"reason":          "",
+			"issues":          []interface{}{},
+		}
+	}
+	promptReport := mcpVideoPromptQAReport(mcpStringFromMap(request, "prompt", "promptText", "videoPrompt"))
+	referenceReport := mcpVideoReferenceQAReport(request)
+	passed := mcpBoolFromInterface(promptReport["passed"]) && mcpBoolFromInterface(referenceReport["passed"])
+	score := minInt(mcpIntFromInterface(promptReport["score"]), mcpIntFromInterface(referenceReport["score"]))
+	reason := ""
+	if !mcpBoolFromInterface(promptReport["passed"]) {
+		reason = "prompt_qa_failed"
+	} else if !mcpBoolFromInterface(referenceReport["passed"]) {
+		reason = "reference_qa_failed"
+	}
+	message := ""
+	if reason == "prompt_qa_failed" {
+		message = "视频提示词不够清晰，已阻止调用 AIGC provider，避免浪费额度。"
+	} else if reason == "reference_qa_failed" {
+		message = "参考素材不可用或未落地，已阻止调用 AIGC provider，避免浪费额度。"
+	}
+	issues := []interface{}{}
+	issues = append(issues, interfaceSlice(promptReport["issues"])...)
+	issues = append(issues, interfaceSlice(referenceReport["issues"])...)
+	return map[string]interface{}{
+		"passed":               passed,
+		"score":                score,
+		"reason":               reason,
+		"message":              message,
+		"promptPassed":         promptReport["passed"],
+		"promptScore":          promptReport["score"],
+		"referencePassed":      referenceReport["passed"],
+		"referenceScore":       referenceReport["score"],
+		"timedSegmentCount":    promptReport["timedSegmentCount"],
+		"visualAnchorCount":    promptReport["visualAnchorCount"],
+		"actionVerbCount":      promptReport["actionVerbCount"],
+		"emotionWordCount":     promptReport["emotionWordCount"],
+		"usableReferenceCount": referenceReport["usableReferenceCount"],
+		"issues":               issues,
+	}
+}
+
+func mcpVideoPromptQAReport(prompt string) map[string]interface{} {
+	prompt = strings.TrimSpace(prompt)
+	issues := []interface{}{}
+	score := 100
+	if len([]rune(prompt)) < 120 {
+		score -= 35
+		issues = append(issues, map[string]interface{}{"code": "prompt_too_short", "message": "提示词太短，用户无法清晰脑补画面。"})
+	}
+	banned := mcpPromptBannedTerms(prompt)
+	if len(banned) > 0 {
+		score -= 45
+		issues = append(issues, map[string]interface{}{"code": "production_jargon_leaked", "terms": banned, "message": "提示词包含内部生产说明或拼接术语。"})
+	}
+	timedSegments := len(mcpTimedSegmentPattern.FindAllString(prompt, -1))
+	if timedSegments < 2 {
+		score -= 25
+		issues = append(issues, map[string]interface{}{"code": "missing_timed_story_beats", "message": "缺少按时间段展开的画面变化。"})
+	}
+	visualAnchors := mcpCountContains(prompt, []string{
+		"桌", "房间", "屏幕", "窗口", "纸", "卡", "便利贴", "贴纸", "星", "机器人", "传送带", "工位", "放大镜", "胶囊", "看板", "灯", "门", "街", "城市", "海", "船", "树", "角色", "人物", "道具", "场景", "胶片", "咖啡", "按钮", "小旗",
+	})
+	if visualAnchors < 2 {
+		score -= 20
+		issues = append(issues, map[string]interface{}{"code": "visual_anchors_weak", "message": "缺少具体主体、道具或场景锚点。"})
+	}
+	actionVerbs := mcpCountContains(prompt, []string{
+		"出现", "打开", "亮起", "弹出", "跳", "跑", "排队", "围住", "变成", "聚拢", "散开", "飘", "落下", "升起", "转", "挥手", "盖章", "收束", "流动", "递进", "合拢", "伸出",
+	})
+	if actionVerbs < 2 {
+		score -= 20
+		issues = append(issues, map[string]interface{}{"code": "motion_change_weak", "message": "缺少明确动作和状态变化。"})
+	}
+	emotionWords := mcpCountContains(prompt, []string{
+		"轻松", "温暖", "治愈", "解压", "幽默", "荒诞", "积极", "明亮", "清爽", "热闹", "安静", "紧张", "松一口气", "会心一笑", "友好",
+	})
+	if emotionWords == 0 && !strings.Contains(prompt, "表达") {
+		score -= 10
+		issues = append(issues, map[string]interface{}{"code": "emotion_or_intent_missing", "message": "缺少情感氛围或表达思想。"})
+	}
+	if score < 0 {
+		score = 0
+	}
+	return map[string]interface{}{
+		"passed":            score >= 85,
+		"score":             score,
+		"timedSegmentCount": timedSegments,
+		"visualAnchorCount": visualAnchors,
+		"actionVerbCount":   actionVerbs,
+		"emotionWordCount":  emotionWords,
+		"issues":            issues,
+	}
+}
+
+func mcpVideoReferenceQAReport(request map[string]interface{}) map[string]interface{} {
+	referenceAssetIDs := stringSliceFromLocalMCPValue(mcpFirstPresent(request, "referenceAssetIds", "referenceIds"))
+	references := append(interfaceSlice(request["references"]), interfaceSlice(request["referenceImages"])...)
+	requiresReferences := len(referenceAssetIDs) > 0 || mcpBoolFromInterface(mcpFirstPresent(request, "requiresReferences", "requireReferences"))
+	usable := 0
+	for _, item := range references {
+		ref := mcpMapFromInterface(item)
+		if mcpReferenceUsable(ref) {
+			usable++
+		}
+	}
+	issues := []interface{}{}
+	score := 100
+	if (requiresReferences || len(references) > 0) && usable == 0 {
+		score = 60
+		issues = append(issues, map[string]interface{}{
+			"code":    "reference_assets_unusable",
+			"message": "请求声明了参考素材，但没有可用的本地/URL/storageRef 参考文件。",
+		})
+	}
+	return map[string]interface{}{
+		"passed":               score >= 85,
+		"score":                score,
+		"requiresReferences":   requiresReferences,
+		"referenceCount":       len(references),
+		"usableReferenceCount": usable,
+		"issues":               issues,
+	}
+}
+
+func mcpPromptBannedTerms(prompt string) []interface{} {
+	lower := strings.ToLower(prompt)
+	terms := []string{"ffmpeg", "shot_video_clip", "aigc_video", "b-roll", "broll", "artifact", "storageref", "simple_cut"}
+	terms = append(terms, "素材意图", "镜头运动", "生成后可直接", "本 shot", "口播/字幕内容", "画面需包含", "转场只覆盖")
+	found := []interface{}{}
+	for _, term := range terms {
+		if strings.Contains(lower, strings.ToLower(term)) {
+			found = append(found, term)
+		}
+	}
+	return found
+}
+
+func mcpCountContains(text string, needles []string) int {
+	count := 0
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			count++
+		}
+	}
+	return count
+}
+
+func mcpReferenceUsable(ref map[string]interface{}) bool {
+	value := mcpStringFromMap(ref, "storageRef", "localPath", "path", "url", "imageUrl", "image_url")
+	if value == "" {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(normalized, "manual://") || strings.Contains(normalized, "{{") || strings.Contains(normalized, "user_asset_redacted") {
+		return false
+	}
+	return true
+}
+
+func stringSliceFromLocalMCPValue(value interface{}) []string {
+	out := []string{}
+	switch typed := value.(type) {
+	case []string:
+		for _, item := range typed {
+			if strings.TrimSpace(item) != "" {
+				out = append(out, strings.TrimSpace(item))
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+	case string:
+		if strings.TrimSpace(typed) != "" {
+			out = append(out, strings.TrimSpace(typed))
+		}
+	}
+	return out
+}
+
 func buildMCPSourceSummary(providerID, toolName string, job Job, results []interface{}) map[string]interface{} {
 	summary := map[string]interface{}{
 		"providerId":          providerID,
@@ -452,6 +668,7 @@ func buildMCPSourceSummary(providerID, toolName string, job Job, results []inter
 		"pendingCount":        0,
 		"deferredCount":       0,
 		"failedCount":         0,
+		"blockedCount":        0,
 		"generatedMediaCount": 0,
 	}
 	for _, item := range results {
@@ -478,6 +695,8 @@ func buildMCPSourceSummary(providerID, toolName string, job Job, results []inter
 			summary["deferredCount"] = summary["deferredCount"].(int) + 1
 		case "failed":
 			summary["failedCount"] = summary["failedCount"].(int) + 1
+		case "blocked":
+			summary["blockedCount"] = summary["blockedCount"].(int) + 1
 		}
 	}
 	requiredReadyVideos := mcpRequiredReadyVideos(job)
@@ -492,7 +711,7 @@ func buildMCPSourceSummary(providerID, toolName string, job Job, results []inter
 	summary["externalVideoRequirementSatisfied"] = videoSatisfied
 	summary["unmetReadyVideoCount"] = maxInt(0, effectiveRequiredReadyVideos-readyVideos)
 	summary["fallbackRequired"] = videoRequests > 0 && readyVideos == 0
-	summary["needsAttention"] = !videoSatisfied || summary["failedCount"].(int) > 0
+	summary["needsAttention"] = !videoSatisfied || summary["failedCount"].(int) > 0 || summary["blockedCount"].(int) > 0
 	return summary
 }
 
@@ -501,16 +720,17 @@ func buildMCPAssetProvenance(results []interface{}) []interface{} {
 	for _, item := range results {
 		result := mcpMapFromInterface(item)
 		entry := map[string]interface{}{
-			"requestId":  result["requestId"],
-			"shotId":     result["shotId"],
-			"kind":       mcpKindFromResult(result),
-			"providerId": result["providerId"],
-			"toolName":   result["toolName"],
-			"status":     result["status"],
-			"reason":     result["reason"],
-			"error":      result["error"],
-			"storageRef": result["storageRef"],
-			"localPath":  result["localPath"],
+			"requestId":   result["requestId"],
+			"shotId":      result["shotId"],
+			"kind":        mcpKindFromResult(result),
+			"providerId":  result["providerId"],
+			"toolName":    result["toolName"],
+			"status":      result["status"],
+			"reason":      result["reason"],
+			"error":       result["error"],
+			"storageRef":  result["storageRef"],
+			"localPath":   result["localPath"],
+			"preflightQa": result["preflightQa"],
 		}
 		provenance = append(provenance, entry)
 	}
@@ -523,10 +743,11 @@ func mcpGenerationSummaryText(summary map[string]interface{}) string {
 	readyImages := mcpIntFromInterface(summary["readyImageCount"])
 	totalImages := mcpIntFromInterface(summary["imageRequestCount"])
 	failed := mcpIntFromInterface(summary["failedCount"])
+	blocked := mcpIntFromInterface(summary["blockedCount"])
 	deferred := mcpIntFromInterface(summary["deferredCount"])
 	pending := mcpIntFromInterface(summary["pendingCount"])
-	text := fmt.Sprintf("MCP 生成结果：视频 ready %d/%d，图片 ready %d/%d，failed %d，deferred %d，pending %d。",
-		readyVideos, totalVideos, readyImages, totalImages, failed, deferred, pending)
+	text := fmt.Sprintf("MCP 生成结果：视频 ready %d/%d，图片 ready %d/%d，blocked %d，failed %d，deferred %d，pending %d。",
+		readyVideos, totalVideos, readyImages, totalImages, blocked, failed, deferred, pending)
 	requiredVideos := mcpIntFromInterface(summary["requiredReadyVideoCount"])
 	if requiredVideos > 0 && !mcpBoolFromInterface(summary["externalVideoRequirementSatisfied"]) {
 		text += fmt.Sprintf(" 未满足至少 %d 个 ready AIGC 视频素材要求，最终渲染只能使用 fallback 或等待重试。", requiredVideos)
@@ -1050,6 +1271,13 @@ func mcpBoolFromInterface(value interface{}) bool {
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

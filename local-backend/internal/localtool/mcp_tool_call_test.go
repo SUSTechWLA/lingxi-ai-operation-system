@@ -101,6 +101,7 @@ func TestMCPToolCallExecutorRequiresProviderID(t *testing.T) {
 
 func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	callCount := 0
+	promptText := validMCPVideoPrompt("开场流程被点亮")
 	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -111,8 +112,8 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 			t.Fatalf("tool = %v, want runway.generate_video", params["name"])
 		}
 		args := params["arguments"].(map[string]interface{})
-		if args["prompt"] != "wide shot" {
-			t.Fatalf("prompt = %#v, want wide shot", args["prompt"])
+		if args["prompt"] != promptText {
+			t.Fatalf("prompt = %#v, want clear prompt", args["prompt"])
 		}
 		if args["duration"].(float64) != 5 {
 			t.Fatalf("duration = %#v, want 5", args["duration"])
@@ -145,7 +146,7 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 					"requestId": "extgen_video_SHOT_01",
 					"shotId":    "SHOT_01",
 					"kind":      "video",
-					"prompt":    "wide shot",
+					"prompt":    promptText,
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -176,6 +177,7 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 
 func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *testing.T) {
 	callCount := 0
+	promptText := validMCPVideoPrompt("第一个片段开始排队")
 	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -186,7 +188,7 @@ func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *te
 			t.Fatalf("tool = %v, want jimeng.generate_video", params["name"])
 		}
 		args := params["arguments"].(map[string]interface{})
-		if args["prompt"] != "fallback prompt text" {
+		if args["prompt"] != promptText {
 			t.Fatalf("prompt = %#v, want promptText fallback", args["prompt"])
 		}
 		callCount++
@@ -218,7 +220,7 @@ func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *te
 					"shotId":     "SHOT_01",
 					"kind":       "video",
 					"prompt":     map[string]interface{}{"redacted": true, "reason": "USER_ASSET_REDACTED"},
-					"promptText": "fallback prompt text",
+					"promptText": promptText,
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -228,7 +230,7 @@ func TestMCPToolCallExecutorDefersRemainingRequestsWhenGenerationIsPending(t *te
 					"requestId":  "extgen_video_SHOT_02",
 					"shotId":     "SHOT_02",
 					"kind":       "video",
-					"promptText": "second prompt",
+					"promptText": validMCPVideoPrompt("第二个片段继续推进"),
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -293,7 +295,7 @@ func TestMCPToolCallExecutorDefersBatchWhenGenerateCallTimesOut(t *testing.T) {
 					"requestId":  "extgen_video_SHOT_01",
 					"shotId":     "SHOT_01",
 					"kind":       "video",
-					"promptText": "positive funny b-roll",
+					"promptText": validMCPVideoPrompt("正能量搞笑片段开始运转"),
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -303,7 +305,7 @@ func TestMCPToolCallExecutorDefersBatchWhenGenerateCallTimesOut(t *testing.T) {
 					"requestId":  "extgen_video_SHOT_02",
 					"shotId":     "SHOT_02",
 					"kind":       "video",
-					"promptText": "more b-roll",
+					"promptText": validMCPVideoPrompt("第二段画面继续运转"),
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -403,7 +405,7 @@ func TestMCPToolCallExecutorDownloadsGeneratedVideoIntoShotFusionPlan(t *testing
 					"requestId": "extgen_video_SHOT_01",
 					"shotId":    "SHOT_01",
 					"kind":      "video",
-					"prompt":    "wide shot",
+					"prompt":    validMCPVideoPrompt("即梦结果进入素材包"),
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -481,9 +483,9 @@ func TestMCPToolCallExecutorDefersAfterDefaultReadyGenerationBudget(t *testing.T
 			"providerId": "jimeng",
 			"mcpTool":    "jimeng.generate_video",
 			"externalGenerationRequests": []interface{}{
-				map[string]interface{}{"requestId": "extgen_video_SHOT_01", "shotId": "SHOT_01", "promptText": "one", "target": map[string]interface{}{"durationSec": 5}},
-				map[string]interface{}{"requestId": "extgen_video_SHOT_02", "shotId": "SHOT_02", "promptText": "two", "target": map[string]interface{}{"durationSec": 5}},
-				map[string]interface{}{"requestId": "extgen_video_SHOT_03", "shotId": "SHOT_03", "promptText": "three", "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_01", "shotId": "SHOT_01", "promptText": validMCPVideoPrompt("第一个 ready 视频"), "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_02", "shotId": "SHOT_02", "promptText": validMCPVideoPrompt("第二个 ready 视频"), "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_03", "shotId": "SHOT_03", "promptText": validMCPVideoPrompt("第三个预算外视频"), "target": map[string]interface{}{"durationSec": 5}},
 			},
 		},
 	})
@@ -558,9 +560,9 @@ func TestMCPToolCallExecutorDefersWhenBatchTimeoutIsReached(t *testing.T) {
 			"mcpBatchTimeoutMs":    100,
 			"maxReadyGenerations":  3,
 			"externalGenerationRequests": []interface{}{
-				map[string]interface{}{"requestId": "extgen_video_SHOT_01", "shotId": "SHOT_01", "promptText": "one", "target": map[string]interface{}{"durationSec": 5}},
-				map[string]interface{}{"requestId": "extgen_video_SHOT_02", "shotId": "SHOT_02", "promptText": "two", "target": map[string]interface{}{"durationSec": 5}},
-				map[string]interface{}{"requestId": "extgen_video_SHOT_03", "shotId": "SHOT_03", "promptText": "three", "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_01", "shotId": "SHOT_01", "promptText": validMCPVideoPrompt("第一个批次视频"), "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_02", "shotId": "SHOT_02", "promptText": validMCPVideoPrompt("第二个批次视频"), "target": map[string]interface{}{"durationSec": 5}},
+				map[string]interface{}{"requestId": "extgen_video_SHOT_03", "shotId": "SHOT_03", "promptText": validMCPVideoPrompt("第三个批次视频"), "target": map[string]interface{}{"durationSec": 5}},
 			},
 		},
 	})
@@ -633,7 +635,7 @@ func TestMCPToolCallExecutorMarksFailedQueryResultWithoutWaiting(t *testing.T) {
 					"requestId": "extgen_video_SHOT_01",
 					"shotId":    "SHOT_01",
 					"kind":      "video",
-					"prompt":    "wide shot",
+					"prompt":    validMCPVideoPrompt("查询失败片段"),
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -686,7 +688,7 @@ func TestMCPToolCallExecutorDefersProviderBusyExternalBatch(t *testing.T) {
 				map[string]interface{}{
 					"requestId": "extgen_video_SHOT_01",
 					"shotId":    "SHOT_01",
-					"prompt":    "wide shot",
+					"prompt":    validMCPVideoPrompt("provider busy 片段"),
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -851,14 +853,14 @@ func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
 					"requestId":  "extgen_video_SHOT_01",
 					"shotId":     "SHOT_01",
 					"kind":       "video",
-					"promptText": "wide cinematic shot",
+					"promptText": validMCPVideoPrompt("第一段额度失败片段"),
 					"target":     map[string]interface{}{"durationSec": 5, "aspectRatio": "16:9"},
 				},
 				map[string]interface{}{
 					"requestId":  "extgen_video_SHOT_02",
 					"shotId":     "SHOT_02",
 					"kind":       "video",
-					"promptText": "second cinematic shot",
+					"promptText": validMCPVideoPrompt("第二段额度失败片段"),
 					"target":     map[string]interface{}{"durationSec": 5, "aspectRatio": "16:9"},
 				},
 			},
@@ -888,4 +890,172 @@ func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
 	if first["requestId"] != "extgen_video_SHOT_01" || first["status"] != "failed" || first["kind"] != "video" {
 		t.Fatalf("unexpected provenance item: %#v", first)
 	}
+}
+
+func TestMCPToolCallExecutorBlocksUnclearVideoPromptBeforeProviderCall(t *testing.T) {
+	callCount := 0
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		t.Fatalf("provider should not be called when prompt QA fails")
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-block-unclear-prompt",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_BAD",
+					"shotId":     "SHOT_BAD",
+					"kind":       "video",
+					"promptText": "wide shot",
+					"target":     map[string]interface{}{"durationSec": 5, "aspectRatio": "16:9"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if callCount != 0 {
+		t.Fatalf("provider callCount = %d, want 0", callCount)
+	}
+	results := result.Output["generationResults"].([]interface{})
+	got := results[0].(map[string]interface{})
+	if got["status"] != "blocked" || got["reason"] != "prompt_qa_failed" {
+		t.Fatalf("unclear prompt should be blocked before provider call: %#v", got)
+	}
+	qa := got["preflightQa"].(map[string]interface{})
+	if qa["passed"] != false || mcpIntFromInterface(qa["score"]) >= 85 {
+		t.Fatalf("preflight QA should fail with low score: %#v", qa)
+	}
+	summary := result.Output["sourceSummary"].(map[string]interface{})
+	if summary["blockedCount"] != 1 || summary["needsAttention"] != true {
+		t.Fatalf("source summary should count blocked request: %#v", summary)
+	}
+}
+
+func TestMCPToolCallExecutorBlocksMissingUsableReferencesBeforeProviderCall(t *testing.T) {
+	callCount := 0
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		t.Fatalf("provider should not be called when reference QA fails")
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-block-bad-reference",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId":         "extgen_video_SHOT_REF",
+					"shotId":            "SHOT_REF",
+					"kind":              "video",
+					"promptText":        validMCPVideoPrompt("创作桌流程变清楚"),
+					"referenceAssetIds": []interface{}{"char_creator"},
+					"references": []interface{}{
+						map[string]interface{}{"id": "char_creator", "storageRef": "manual://references/SHOT_REF/01"},
+					},
+					"target": map[string]interface{}{"durationSec": 6, "aspectRatio": "16:9"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if callCount != 0 {
+		t.Fatalf("provider callCount = %d, want 0", callCount)
+	}
+	got := result.Output["generationResults"].([]interface{})[0].(map[string]interface{})
+	if got["status"] != "blocked" || got["reason"] != "reference_qa_failed" {
+		t.Fatalf("bad references should be blocked before provider call: %#v", got)
+	}
+	qa := got["preflightQa"].(map[string]interface{})
+	if qa["referencePassed"] != false {
+		t.Fatalf("reference QA should fail: %#v", qa)
+	}
+}
+
+func TestMCPToolCallExecutorAllowsClearTimedVideoPrompt(t *testing.T) {
+	callCount := 0
+	promptText := validMCPVideoPrompt("创作桌流程变清楚")
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		params := req["params"].(map[string]interface{})
+		args := params["arguments"].(map[string]interface{})
+		if args["prompt"] != promptText {
+			t.Fatalf("prompt = %#v, want clear prompt", args["prompt"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"submit_id":  "vid-clear",
+					"gen_status": "querying",
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutor(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "jimeng", Label: "JiMeng MCP", Endpoint: mcp.URL, Enabled: true}}, nil
+	})
+	result, err := executor.Execute(context.Background(), Job{
+		ID:      "job-clear-prompt",
+		Command: CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "jimeng",
+			"mcpTool":    "jimeng.generate_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId":  "extgen_video_SHOT_CLEAR",
+					"shotId":     "SHOT_CLEAR",
+					"kind":       "video",
+					"promptText": promptText,
+					"target":     map[string]interface{}{"durationSec": 6, "aspectRatio": "16:9"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("provider callCount = %d, want 1", callCount)
+	}
+	got := result.Output["generationResults"].([]interface{})[0].(map[string]interface{})
+	if got["status"] != "pending" {
+		t.Fatalf("clear prompt should reach provider and become pending, got %#v", got)
+	}
+	qa := got["preflightQa"].(map[string]interface{})
+	if qa["passed"] != true || mcpIntFromInterface(qa["score"]) < 85 {
+		t.Fatalf("preflight QA should pass: %#v", qa)
+	}
+}
+
+func validMCPVideoPrompt(subject string) string {
+	return "非真人风格化动画，16:9 横屏，画面干净明亮，情绪轻松积极。\n" +
+		"这个画面表达：" + subject + "，复杂创作被清楚流程轻松送到成片。\n" +
+		"0-2秒：明亮的创作桌上，一颗写着想法的小星星被脚本纸、分镜卡和抽帧 QA 放大镜围住，便利贴像小弹簧一样乱跳。\n" +
+		"2-4秒：桌面打开成迷你传送带，脚本、分镜、即梦素材、抽帧 QA 四个发光小工位依次亮起，便利贴排队盖章通过。\n" +
+		"4-6秒：传送带尽头弹出视频胶囊和开源星标，小机器人挥手，画面从热闹收束到清爽稳定。"
 }

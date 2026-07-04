@@ -798,11 +798,11 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"shotAssetPackages":          {Type: "array", Description: "Per-shot asset packages with generated MCP results"},
-			"generationResults":          {Type: "array", Description: "Raw MCP generation results"},
+			"generationResults":          {Type: "array", Description: "Raw MCP generation results, including preflightQa for prompt/reference gates before quota-spending provider calls"},
 			"externalGenerationResults":  {Type: "array", Description: "Alias of raw MCP generation results for review and provenance panels"},
 			"externalGenerationRequests": {Type: "array", Description: "Requests that remain manual or failed"},
-			"assetProvenance":            {Type: "array", Description: "Per-request source provenance showing provider, tool, status, storageRef, localPath, and failure reason"},
-			"sourceSummary":              {Type: "object", Description: "Quantitative source summary: ready video/image counts, failed/deferred counts, fallback requirement, and AIGC video satisfaction"},
+			"assetProvenance":            {Type: "array", Description: "Per-request source provenance showing provider, tool, status, storageRef, localPath, preflightQa, and failure reason"},
+			"sourceSummary":              {Type: "object", Description: "Quantitative source summary: ready video/image counts, blocked/failed/deferred counts, fallback requirement, and AIGC video satisfaction"},
 			"requirementsSatisfied":      {Type: "boolean", Description: "Whether the configured minimum ready external video assets were produced"},
 			"summary":                    {Type: "string", Description: "MCP generation summary"},
 		}

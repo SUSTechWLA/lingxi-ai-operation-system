@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.7-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.8-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,13 @@
 ---
 
 ## Release 更新
+
+### v0.1.8 - 2026-07-04
+
+- 在本地 `LOCAL_MCP_TOOL_CALL` 增加 AIGC 视频 preflight QA：每个 `kind=video` 请求在调用 Dreamina/JiMeng 前先检查提示词清晰度和参考素材可用性。
+- 不清晰 prompt 会被标记为 `blocked / prompt_qa_failed`，不会调用 provider，不消耗视频额度。
+- 声明了参考资产但只有 `manual://` 占位或没有可用文件时，会被标记为 `blocked / reference_qa_failed`，不会调用 provider。
+- `generationResults` 和 `assetProvenance` 会带回 `preflightQa`，包含分数、时间段数量、视觉锚点数量、动作变化数量、情绪/表达检查、可用参考素材数量和具体阻断原因。
 
 ### v0.1.7 - 2026-07-04
 

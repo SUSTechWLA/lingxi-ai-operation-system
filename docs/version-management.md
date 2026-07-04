@@ -46,6 +46,20 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
+v0.1.8 对应能力：
+
+- 本地 `LOCAL_MCP_TOOL_CALL` 对每个 `kind=video` 请求增加 preflight QA，调用 Dreamina/JiMeng 前先检查提示词清晰度和参考素材可用性。
+- 不清晰提示词、泄漏内部生产术语、缺少时间段画面变化、缺少可用参考图的请求会进入 `blocked` 状态，不调用 provider，不消耗视频额度。
+- `generationResults` 和 `assetProvenance` 必须带 `preflightQa`，用于解释阻断原因和指导返修。
+
+发布 v0.1.8 tag 前必须确认：
+
+1. README 已追加 v0.1.8 release note。
+2. `docs/mcp-providers.md` 和 `docs/cinematic-video-workflow.md` 已说明 AIGC 调用前 QA。
+3. 本地 MCP 执行器测试覆盖不清晰 prompt 被阻断、不可用参考素材被阻断、清晰 prompt 才允许调用 provider。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.8 <release_commit>` 只在 release 提交后创建。
+
 v0.1.7 对应能力：
 
 - Dreamina/JiMeng 视频投放 prompt 改为 Vibe Creator 画面叙述：按时间段写具体主体、道具、场景、变化和表达思想。
