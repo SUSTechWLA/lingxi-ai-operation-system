@@ -142,18 +142,6 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 ) error {
 	missing := make([]string, 0)
 
-	// 1. VIDEO_COMPOSITION_SPEC must be valid and human-approved (stage: composition)
-	composition, err := c.findArtifact(ctx, req.ProjectID, "composition", "VIDEO_COMPOSITION_SPEC")
-	if err != nil {
-		zap.L().Warn("render guard: cannot check composition artifact", zap.Error(err))
-	}
-	if composition == nil || composition.Status != "valid" {
-		missing = append(missing, "视频结构无效或已过期")
-	}
-	if composition != nil && !composition.HumanApproved {
-		missing = append(missing, "视频结构尚未确认")
-	}
-
 	// 2. HYPERFRAMES_PROJECT must be valid (stage: preview)
 	project, err := c.findArtifact(ctx, req.ProjectID, "preview", "HYPERFRAMES_PROJECT")
 	if err != nil {
@@ -162,6 +150,23 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 	if project == nil || project.Status != "valid" {
 		missing = append(missing, "渲染项目不存在或已过期")
 	}
+	projectApproved := project != nil && project.Status == "valid" && project.HumanApproved
+
+	// 1. VIDEO_COMPOSITION_SPEC must be valid and human-approved (stage: composition).
+	// Some local HyperFrames preview paths produce a reviewed renderable project
+	// directly; in that case the reviewed project is the composition contract.
+	composition, err := c.findArtifact(ctx, req.ProjectID, "composition", "VIDEO_COMPOSITION_SPEC")
+	if err != nil {
+		zap.L().Warn("render guard: cannot check composition artifact", zap.Error(err))
+	}
+	if composition == nil || composition.Status != "valid" {
+		if !projectApproved {
+			missing = append(missing, "视频结构无效或已过期")
+		}
+	}
+	if composition != nil && !composition.HumanApproved {
+		missing = append(missing, "视频结构尚未确认")
+	}
 
 	// 3. PREVIEW_SNAPSHOTS must be valid and human-approved (stage: preview)
 	preview, err := c.findArtifact(ctx, req.ProjectID, "preview", "PREVIEW_SNAPSHOTS")
@@ -169,7 +174,9 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 		zap.L().Warn("render guard: cannot check preview artifact", zap.Error(err))
 	}
 	if preview == nil || preview.Status != "valid" {
-		missing = append(missing, "预览快照不存在或已过期")
+		if !projectApproved {
+			missing = append(missing, "预览快照不存在或已过期")
+		}
 	}
 	if preview != nil && !preview.HumanApproved {
 		missing = append(missing, "预览尚未确认")
@@ -181,7 +188,7 @@ func (c *RepositoryBackedRenderDependencyChecker) checkRenderGuard(
 		if err != nil {
 			zap.L().Warn("render guard: cannot check preview review", zap.Error(err))
 		}
-		if !approved {
+		if !approved && !projectApproved {
 			missing = append(missing, "预览审核未通过")
 		}
 	}

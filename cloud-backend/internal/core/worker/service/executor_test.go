@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,7 +10,9 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 )
 
 func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
@@ -22,6 +25,7 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 		RequiresUserDevice: true,
 		ArtifactLocation:   tool.ArtifactLocationLocal,
 		LocalCommand:       "HYPERFRAMES_RENDER",
+		Timeout:            1800,
 		ArtifactPolicy: tool.ArtifactPolicy{
 			ProduceArtifact: true,
 			ArtifactKinds:   []string{"VIDEO"},
@@ -50,6 +54,7 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 				"projectDir":      "local://projects/project_001/hyperframes",
 				"previewApproved": true,
 				"fps":             float64(30),
+				"timeoutSec":      float64(45),
 			},
 		},
 	})
@@ -63,11 +68,150 @@ func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
 	if dispatcher.req.Payload["projectDir"] != "local://projects/project_001/hyperframes" {
 		t.Fatalf("parameters not preserved in local job payload: %#v", dispatcher.req.Payload)
 	}
+	if dispatcher.req.Payload["timeoutSec"] != float64(45) {
+		t.Fatalf("payload timeoutSec should preserve render service timeout: %#v", dispatcher.req.Payload)
+	}
+	if dispatcher.req.TimeoutSec != 90 {
+		t.Fatalf("timeoutSec = %d, want render job timeout with fallback buffer 90", dispatcher.req.TimeoutSec)
+	}
 	if nodeRepo.updatedStatus != model.NodeWaitingLocal {
 		t.Fatalf("node status = %s, want WAITING_LOCAL", nodeRepo.updatedStatus)
 	}
 	if nodeRepo.updatedOutput["localJobId"] != "local_job_001" || nodeRepo.updatedOutput["executionPlane"] != tool.ExecutionPlaneLocal {
 		t.Fatalf("node output should include local dispatch metadata: %#v", nodeRepo.updatedOutput)
+	}
+}
+
+func TestExecuteNodeExternalBridgeDispatchesDelegatedLocalTool(t *testing.T) {
+	ctx := context.Background()
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name:               "mcp_generation_runner",
+		Type:               "builtin",
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		LocalCommand:       "LOCAL_MCP_TOOL_CALL",
+		Timeout:            1800,
+	})
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID:     "node_mcp_generation",
+		TaskID: "task_001",
+		Type:   model.NodeTypeTool,
+		Status: model.NodeReady,
+		Input: map[string]interface{}{
+			"tool": "external",
+		},
+	})
+	dispatcher := &fakeLocalJobDispatcher{job: &localrunner.LocalJob{ID: "local_job_mcp_001"}}
+
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, nil, nil, nodeRepo)
+	nodeExecutor.SetLocalJobDispatcher(dispatcher)
+	nodeExecutor.ExecuteNode(ctx, eventbus.Event{
+		TaskID: "task_001",
+		NodeID: "node_mcp_generation",
+		Type:   string(model.NodeTypeTool),
+		Payload: map[string]interface{}{
+			"tool": "external",
+			"parameters": map[string]interface{}{
+				"tool":       "mcp_generation_runner",
+				"providerId": "jimeng",
+				"mcpTool":    "jimeng.generate_video",
+			},
+		},
+	})
+
+	if dispatcher.req.NodeID != "node_mcp_generation" {
+		t.Fatalf("local job was not dispatched: %#v", dispatcher.req)
+	}
+	if dispatcher.req.ToolName != "mcp_generation_runner" || dispatcher.req.Command != "LOCAL_MCP_TOOL_CALL" {
+		t.Fatalf("unexpected delegated local dispatch routing: %#v", dispatcher.req)
+	}
+	if dispatcher.req.Payload["providerId"] != "jimeng" || dispatcher.req.Payload["mcpTool"] != "jimeng.generate_video" {
+		t.Fatalf("delegated local payload not preserved: %#v", dispatcher.req.Payload)
+	}
+	if nodeRepo.updatedStatus != model.NodeWaitingLocal {
+		t.Fatalf("node status = %s, want WAITING_LOCAL", nodeRepo.updatedStatus)
+	}
+	if nodeRepo.updatedOutput["localJobId"] != "local_job_mcp_001" || nodeRepo.updatedOutput["toolName"] != "mcp_generation_runner" {
+		t.Fatalf("node output should include delegated local dispatch metadata: %#v", nodeRepo.updatedOutput)
+	}
+}
+
+func TestExecuteNodeExternalBridgeResolvesProjectIDFromTask(t *testing.T) {
+	ctx := context.Background()
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name:           "mcp_generation_runner",
+		Type:           "builtin",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+	})
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID:     "node_mcp_generation",
+		TaskID: "task_001",
+		Type:   model.NodeTypeTool,
+		Status: model.NodeReady,
+		Input:  map[string]interface{}{"tool": "external"},
+	})
+	dispatcher := &fakeLocalJobDispatcher{job: &localrunner.LocalJob{ID: "local_job_mcp_001"}}
+
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, nil, nil, nodeRepo)
+	nodeExecutor.SetLocalJobDispatcher(dispatcher)
+	nodeExecutor.SetProjectIDResolver(fakeProjectIDResolver{projectID: "vp-resolved"})
+	nodeExecutor.ExecuteNode(ctx, eventbus.Event{
+		TaskID: "task_001",
+		NodeID: "node_mcp_generation",
+		Type:   string(model.NodeTypeTool),
+		Payload: map[string]interface{}{
+			"tool": "external",
+			"parameters": map[string]interface{}{
+				"tool":       "mcp_generation_runner",
+				"providerId": "jimeng",
+			},
+		},
+	})
+
+	if dispatcher.req.ProjectID != "vp-resolved" {
+		t.Fatalf("local dispatch should resolve project ID from task context, got %#v", dispatcher.req)
+	}
+}
+
+func TestExecuteNodeLocalToolUsesRetryAttemptInIdempotencyKey(t *testing.T) {
+	ctx := context.Background()
+	registry := tool.NewToolRegistry()
+	registry.RegisterExternal(&tool.ToolManifest{
+		Name:           "hyperframes_renderer",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "HYPERFRAMES_RENDER",
+	})
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID:         "render_exec",
+		TaskID:     "task_001",
+		Type:       model.NodeTypeTool,
+		Status:     model.NodeReady,
+		RetryCount: 1,
+		Input:      map[string]interface{}{"tool": "hyperframes_renderer"},
+	})
+	dispatcher := &fakeLocalJobDispatcher{job: &localrunner.LocalJob{ID: "local_job_retry_002"}}
+
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, nil, nil, nodeRepo)
+	nodeExecutor.SetLocalJobDispatcher(dispatcher)
+	nodeExecutor.ExecuteNode(ctx, eventbus.Event{
+		TaskID: "task_001",
+		NodeID: "render_exec",
+		Type:   string(model.NodeTypeTool),
+		Payload: map[string]interface{}{
+			"tool": "hyperframes_renderer",
+			"parameters": map[string]interface{}{
+				"projectDir":      "local://projects/project_001/hyperframes",
+				"previewApproved": true,
+			},
+		},
+	})
+
+	if dispatcher.req.IdempotencyKey != "task_001-render_exec-attempt-2" {
+		t.Fatalf("retry dispatch should use an attempt-scoped idempotency key, got %#v", dispatcher.req)
 	}
 }
 
@@ -128,6 +272,44 @@ func TestResolveSingleRefPrefersFuzzyExecNodeWithRequestedField(t *testing.T) {
 	}
 }
 
+func TestResolveSingleRefReadsLocalVideoArtifactPath(t *testing.T) {
+	ctx := context.Background()
+	nodeRepo := newFakeNodeRepo(&model.Node{
+		ID:     "task_001-render_exec",
+		TaskID: "task_001",
+		Output: map[string]interface{}{
+			"outputRef": "local://projects/vp-001/artifacts/final-video/hash/final.mp4",
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"kind":       "VIDEO",
+					"storageRef": "local://projects/vp-001/artifacts/final-video/hash/final.mp4",
+					"metadata": map[string]interface{}{
+						"localPath": "/tmp/tangying-final.mp4",
+						"width":     1920,
+						"height":    1080,
+					},
+				},
+			},
+		},
+	})
+
+	resolved, ok := resolveSingleRef(ctx, nodeRepo, "task_001", "{{render.output.outputPath}}")
+	if !ok {
+		t.Fatalf("reference should resolve from local VIDEO artifact")
+	}
+	if resolved != "/tmp/tangying-final.mp4" {
+		t.Fatalf("outputPath should resolve to artifact metadata.localPath, got %#v", resolved)
+	}
+
+	resolved, ok = resolveSingleRef(ctx, nodeRepo, "task_001", "{{render.output.finalVideo}}")
+	if !ok {
+		t.Fatalf("finalVideo reference should resolve from local VIDEO artifact")
+	}
+	if resolved != "/tmp/tangying-final.mp4" {
+		t.Fatalf("finalVideo should resolve to artifact metadata.localPath, got %#v", resolved)
+	}
+}
+
 func TestExecutableToolTimeoutUsesDelegatedExternalManifest(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	registry.RegisterExternal(&tool.ToolManifest{
@@ -145,6 +327,22 @@ func TestExecutableToolTimeoutUsesDelegatedExternalManifest(t *testing.T) {
 	}
 }
 
+func TestExecuteToolRejectsSandboxToolWhenSandboxUnavailable(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	registry.Register(builtin.NewPythonTool())
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, executor.NewDirectExecutor(), nil, nil)
+
+	result, err := nodeExecutor.executeTool(context.Background(), "python", map[string]interface{}{
+		"source": "print('unsafe')",
+	}, tool.ToolContext{}, false, nil)
+	if err != nil {
+		t.Fatalf("executeTool returned error: %v", err)
+	}
+	if !strings.Contains(result.Error, "sandbox is required") {
+		t.Fatalf("expected sandbox required error, got %#v", result)
+	}
+}
+
 type fakeLocalJobDispatcher struct {
 	req localrunner.DispatchLocalJobRequest
 	job *localrunner.LocalJob
@@ -153,6 +351,14 @@ type fakeLocalJobDispatcher struct {
 func (f *fakeLocalJobDispatcher) DispatchLocalJob(_ context.Context, req localrunner.DispatchLocalJobRequest) (*localrunner.LocalJob, error) {
 	f.req = req
 	return f.job, nil
+}
+
+type fakeProjectIDResolver struct {
+	projectID string
+}
+
+func (f fakeProjectIDResolver) ResolveProjectID(_ context.Context, _ string) (string, error) {
+	return f.projectID, nil
 }
 
 type fakeNodeRepo struct {

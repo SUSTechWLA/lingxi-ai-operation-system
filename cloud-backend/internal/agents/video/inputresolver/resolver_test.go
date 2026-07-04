@@ -25,6 +25,13 @@ func TestResolveRequiresClarificationWhenTopicMissing(t *testing.T) {
 	}
 }
 
+func TestResolveAcceptsCinematicStoryVideoType(t *testing.T) {
+	got := Resolve(Request{Topic: "AI workflows as a cinematic short", VideoType: "cinematic_story"})
+	if got.NeedsClarification {
+		t.Fatalf("did not expect clarification for cinematic story: %+v", got)
+	}
+}
+
 func TestResolveRejectsUnsupportedVideoType(t *testing.T) {
 	got := Resolve(Request{Topic: "AI workflows", VideoType: "long_video_qa"})
 	if !got.NeedsClarification {

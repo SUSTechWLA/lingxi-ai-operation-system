@@ -1,6 +1,6 @@
 {
   "name": "tangying-ai-operation-system",
-  "version": "0.1.0",
+  "version": "0.1.10",
   "private": true,
   "scripts": {
     "frontend:dev": "bash scripts/start-frontend.sh",
@@ -10,8 +10,5 @@
     "test:beta-smoke": "cd frontend && npm run test:director && cd ../cloud-backend && go test ./internal/core/localrunner",
     "electron:dev": "cd frontend && npm run electron:dev",
     "electron:build": "bash scripts/build-local-desktop.sh"
-  },
-  "devDependencies": {
-    "electron-builder": "^26.8.1"
   }
 }

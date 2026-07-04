@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
-	coreartifact "github.com/tangying-ai/aios-core/internal/core/artifact"
 )
 
 func TestInferVoiceVisualIntentFromSpokenKnowledgeRequest(t *testing.T) {
@@ -111,9 +110,9 @@ type fakeArtifactSink struct {
 	lastReq *artifact.CreateArtifactRequest
 }
 
-func (s *fakeArtifactSink) CreateArtifact(_ context.Context, req *artifact.CreateArtifactRequest) (*coreartifact.Artifact, error) {
+func (s *fakeArtifactSink) CreateArtifact(_ context.Context, req *artifact.CreateArtifactRequest) (*artifact.Artifact, error) {
 	s.lastReq = req
-	return &coreartifact.Artifact{
+	return &artifact.Artifact{
 		ID:          "artifact-1",
 		ProjectID:   req.ProjectID,
 		StageName:   req.StageName,

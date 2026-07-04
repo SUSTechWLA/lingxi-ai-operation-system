@@ -221,6 +221,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		    plan_json JSONB,
 		    status VARCHAR(32) NOT NULL,
 		    budget_json JSONB DEFAULT '{}',
+		    metadata_json JSONB DEFAULT '{}',
 		    created_at TIMESTAMPTZ DEFAULT NOW(),
 		    updated_at TIMESTAMPTZ DEFAULT NOW()
 		);
@@ -531,6 +532,7 @@ DROP TABLE IF EXISTS bid_templates;
 		`ALTER TABLE ai_task ADD COLUMN IF NOT EXISTS pause_reason TEXT`,
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_module VARCHAR(50)`,
 		`ALTER TABLE ai_context ADD COLUMN IF NOT EXISTS source_topic VARCHAR(100)`,
+		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS metadata_json JSONB DEFAULT '{}'`,
 		`ALTER TABLE ai_node DROP CONSTRAINT IF EXISTS ai_node_status_check`,
 		`ALTER TABLE ai_node ADD CONSTRAINT ai_node_status_check CHECK (status IN ('CREATED','READY','RUNNING','WAITING_LOCAL','LOCAL_CLAIMED','LOCAL_RUNNING','LOCAL_COMPLETED','LOCAL_FAILED','RETRYING','HEARTBEAT_TIMEOUT','SUCCESS','FAILED','SKIPPED','CANCELLED'))`,
 		`ALTER TABLE ai_task DROP CONSTRAINT IF EXISTS ai_task_status_check`,

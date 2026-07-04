@@ -67,6 +67,9 @@ func main() {
 
 	logger.Init(mode)
 	cfg := config.Load()
+	if err := cfg.ValidateForMode(mode); err != nil {
+		zap.L().Fatal("Invalid runtime configuration", zap.Error(err))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -142,7 +145,10 @@ func main() {
 		var err error
 		sandboxExec, err = executor.NewSandboxExecutor(cfg.Sandbox.Address)
 		if err != nil {
-			zap.L().Warn("sandbox client init failed, will fallback", zap.Error(err))
+			if mode == "production" || !cfg.Sandbox.Fallback {
+				zap.L().Fatal("sandbox client init failed and fallback is disabled", zap.Error(err))
+			}
+			zap.L().Warn("sandbox client init failed, development fallback remains enabled", zap.Error(err))
 		}
 	}
 
@@ -308,10 +314,14 @@ func main() {
 
 	// HTTP server
 	r := gin.Default()
+	allowedCORSOrigins := configuredCORSOrigins(cfg.Server.CORSAllowedOrigins)
 
 	// CORS middleware
 	r.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		if origin := allowedCORSOrigin(c.GetHeader("Origin"), allowedCORSOrigins); origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, DeviceID")
 		if c.Request.Method == "OPTIONS" {
@@ -556,9 +566,11 @@ func main() {
 		if artifactReviewStore := newAgentRuntimeArtifactReviewStore(pool); artifactReviewStore != nil {
 			agentRuntimeHandler.WithArtifactReviewStore(artifactReviewStore)
 		}
+		projectIDResolver := &taskProjectIDResolver{runRepo: workflowRunRepo, taskRepo: taskRepo}
 		agentRuntimeHandler.
 			WithArtifactService(artifactSvc).
-			WithProjectIDResolver(&taskProjectIDResolver{runRepo: workflowRunRepo, taskRepo: taskRepo})
+			WithProjectIDResolver(projectIDResolver)
+		nodeExecutor.SetProjectIDResolver(projectIDResolver)
 
 		// Wire repository-backed render dependency checker so HYPERFRAMES_RENDER
 		// validates database facts (artifact status) before dispatching a LocalJob.
@@ -1090,6 +1102,37 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func configuredCORSOrigins(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin != "" {
+			out = append(out, origin)
+		}
+	}
+	return out
+}
+
+func allowedCORSOrigin(requestOrigin string, allowed []string) string {
+	if len(allowed) == 0 {
+		return ""
+	}
+	for _, origin := range allowed {
+		if origin == "*" {
+			return "*"
+		}
+		if strings.EqualFold(strings.TrimSpace(requestOrigin), origin) {
+			return origin
+		}
+	}
+	return ""
 }
 
 // decisionLogAdapter bridges the workflow DecisionLogStore to the

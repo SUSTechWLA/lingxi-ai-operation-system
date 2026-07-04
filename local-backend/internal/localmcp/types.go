@@ -1,10 +1,17 @@
 package localmcp
 
 type ProviderConfig struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Endpoint string `json:"endpoint"`
-	Enabled  bool   `json:"enabled"`
+	ID          string            `json:"id"`
+	Label       string            `json:"label"`
+	Endpoint    string            `json:"endpoint,omitempty"`
+	Transport   string            `json:"transport,omitempty"`
+	Command     string            `json:"command,omitempty"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	WorkingDir  string            `json:"workingDir,omitempty"`
+	ToolPrefix  string            `json:"toolPrefix,omitempty"`
+	ToolNameMap map[string]string `json:"toolNameMap,omitempty"`
+	Enabled     bool              `json:"enabled"`
 }
 
 type Tool struct {

@@ -503,10 +503,10 @@ try {
         displayName: '质量审核',
         stage: 'quality',
         goal: '',
-        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        allowedTools: ['video_frame_qa', 'ffmpeg_probe', 'final_review_generator'],
         forbiddenTools: [],
         requiredInputs: [],
-        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+        requiredOutputs: ['VIDEO_VISUAL_QA_REPORT', 'VIDEO_VISUAL_QA_CONTACT_SHEET', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
       },
     ],
     [
@@ -537,10 +537,10 @@ try {
         displayName: '质量审核',
         stage: 'quality',
         goal: '',
-        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        allowedTools: ['video_frame_qa', 'ffmpeg_probe', 'final_review_generator'],
         forbiddenTools: [],
         requiredInputs: [],
-        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+        requiredOutputs: ['VIDEO_VISUAL_QA_REPORT', 'VIDEO_VISUAL_QA_CONTACT_SHEET', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
       },
     ],
     [
@@ -579,10 +579,10 @@ try {
         displayName: '质量审核',
         stage: 'quality',
         goal: '',
-        allowedTools: ['ffmpeg_probe', 'final_review_generator'],
+        allowedTools: ['video_frame_qa', 'ffmpeg_probe', 'final_review_generator'],
         forbiddenTools: [],
         requiredInputs: [],
-        requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
+        requiredOutputs: ['VIDEO_VISUAL_QA_REPORT', 'VIDEO_VISUAL_QA_CONTACT_SHEET', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'],
       },
     ],
     [
@@ -1125,6 +1125,35 @@ try {
   assert.equal(shotReviewGroups[1].status, 'valid')
   assert.equal(shotReviewGroups[1].generationStrategy?.label, 'HyperFrames')
 
+  const autoMcpShotGroups = buildShotReviewGroups([
+    {
+      id: 'auto-video-request',
+      kind: 'EXTERNAL_GENERATION_REQUEST',
+      name: 'SHOT_01 视频生成请求',
+      status: 'review',
+      owner: '素材依赖点',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'inline://extgen-video',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'external_generation_request', generationKind: 'video', externalGenerationRequestId: 'extgen_video_SHOT_01' },
+    },
+    {
+      id: 'auto-video-clip',
+      kind: 'SHOT_VIDEO_CLIP',
+      name: 'SHOT_01_TW_01_video_clip.mp4',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-1/jimeng-result.mp4',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'shot_video_clip', contentAvailability: 'local-agent' },
+    },
+  ])
+  assert.equal(unresolvedMaterialDependencyCount(autoMcpShotGroups), 0)
+  assert.equal(autoMcpShotGroups[0].slots.find((slot) => slot.kind === 'base-media')?.dependencyRequests.length, 0)
+
   const profileArtifacts = [
     {
       id: 'video-creation-profile-1',
@@ -1490,6 +1519,10 @@ try {
     'voice/knowledge profile should use the guided render preflight',
   )
   assert.ok(
+    videoCreationProfileForId('voice_visual').requiredLocalCommands.includes('VIDEO_FRAME_QA'),
+    'voice/knowledge profile should tell users visual frame QA is required',
+  )
+  assert.ok(
     videoCreationProfileForId('aigc_shot').requiredLocalCommands.includes('LOCAL_FILE_IMPORT'),
     'cinematic profile should tell users local import is required',
   )
@@ -1570,6 +1603,18 @@ try {
   const deliveryItems = buildExportDeliveryItems([
     finalVideoCandidates[2],
     {
+      id: 'shot-qa-report',
+      name: 'shot_qa_reports.json',
+      kind: 'SHOT_QA_REPORT',
+      status: 'valid',
+      owner: '视觉质量审核',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'local://projects/vp-1/reports/video_frame_qa/shot_qa_reports.json',
+      metadata: { nextAction: 'RERENDER_HTML' },
+    },
+    {
       id: 'probe-report',
       name: 'ffmpeg_probe.json',
       kind: 'FFMPEG_PROBE_REPORT',
@@ -1603,6 +1648,11 @@ try {
     deliveryItems.find((item) => item.id === 'project-package')?.status,
     'missing',
     'export delivery checklist should turn missing package into a friendly state instead of artifact not found',
+  )
+  assert.equal(
+    deliveryItems.find((item) => item.id === 'quality-report')?.storageRef,
+    'local://projects/vp-1/reports/video_frame_qa/shot_qa_reports.json',
+    'export delivery checklist should prefer shot-level QA over low-level probe reports',
   )
   assert.equal(
     normalizeDirectorErrorMessage(new Error('artifact not found')),

@@ -77,3 +77,44 @@ func TestDefaultRenderDependencyCheckerRejectsUnapprovedPreview(t *testing.T) {
 		t.Fatalf("expected render dependency missing error, got %v", err)
 	}
 }
+
+func TestRepositoryBackedRenderDependencyCheckerAllowsApprovedHyperFramesProjectPreview(t *testing.T) {
+	ctx := context.Background()
+	artifacts := fakeArtifactStateProvider{
+		"preview/HYPERFRAMES_PROJECT": &ArtifactState{
+			ID:            "art_hf_project",
+			StageName:     "preview",
+			Kind:          "HYPERFRAMES_PROJECT",
+			Status:        "valid",
+			HumanApproved: true,
+		},
+	}
+	checker := NewRepositoryBackedRenderDependencyChecker(
+		artifacts,
+		NewRepositoryReviewApprovalChecker(artifacts),
+		fakeRunnerCapabilityChecker{supported: true},
+	)
+
+	err := checker.CheckRenderDependencies(ctx, RenderDependencyCheckRequest{
+		ProjectID: "project_1",
+		ToolName:  "hyperframes_renderer",
+		Command:   localrunner.CommandHyperFramesRender,
+	})
+	if err != nil {
+		t.Fatalf("approved HyperFrames project should satisfy lightweight preview render guard: %v", err)
+	}
+}
+
+type fakeArtifactStateProvider map[string]*ArtifactState
+
+func (f fakeArtifactStateProvider) FindCurrentByStageAndKind(_ context.Context, projectID, stageName, artifactKind string) (*ArtifactState, error) {
+	return f[stageName+"/"+artifactKind], nil
+}
+
+type fakeRunnerCapabilityChecker struct {
+	supported bool
+}
+
+func (f fakeRunnerCapabilityChecker) SupportsCommand(_ context.Context, _ string) (bool, error) {
+	return f.supported, nil
+}

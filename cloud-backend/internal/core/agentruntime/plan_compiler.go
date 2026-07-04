@@ -1,7 +1,9 @@
 package agentruntime
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,8 +122,9 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 		c.completeVideoBetaPlan(plan)
 	}
 	c.injectKnowledgeContext(plan)
-	c.injectJiMengGenerationRunner(plan)
+	c.injectMCPGenerationRunner(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
+	normalizePreparedPlanDependencies(plan)
 	c.expandPreparedPlanBudget(plan)
 	return plan
 }
@@ -145,6 +148,73 @@ func (c *PlanCompiler) expandPreparedPlanBudget(plan *AgentPlan) {
 			plan.Budget.MaxCostLevel = manifest.CostLevel
 		}
 	}
+}
+
+func normalizePreparedPlanDependencies(plan *AgentPlan) {
+	if plan == nil {
+		return
+	}
+	indexByID := make(map[string]int, len(plan.Steps))
+	for i, step := range plan.Steps {
+		if step.ID != "" {
+			indexByID[step.ID] = i
+		}
+	}
+	for i := range plan.Steps {
+		step := &plan.Steps[i]
+		seen := map[string]bool{}
+		depCandidates := make([]string, 0, len(step.DependsOn)+4)
+		depCandidates = append(depCandidates, step.DependsOn...)
+		depCandidates = append(depCandidates, referencedStepIDs(step.Arguments)...)
+		deps := make([]string, 0, len(depCandidates))
+		for _, dep := range depCandidates {
+			dep = strings.TrimSpace(dep)
+			if dep == "" || dep == step.ID || seen[dep] {
+				continue
+			}
+			depIndex, ok := indexByID[dep]
+			if !ok || depIndex >= i {
+				continue
+			}
+			seen[dep] = true
+			deps = append(deps, dep)
+		}
+		step.DependsOn = deps
+	}
+}
+
+func referencedStepIDs(value interface{}) []string {
+	seen := map[string]bool{}
+	refs := make([]string, 0)
+	var walk func(interface{})
+	walk = func(current interface{}) {
+		switch typed := current.(type) {
+		case string:
+			refStepID, _, ok := outputReference(typed)
+			if ok && refStepID != "" && !seen[refStepID] {
+				seen[refStepID] = true
+				refs = append(refs, refStepID)
+			}
+		case []interface{}:
+			for _, item := range typed {
+				walk(item)
+			}
+		case []string:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]interface{}:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]string:
+			for _, item := range typed {
+				walk(item)
+			}
+		}
+	}
+	walk(value)
+	return refs
 }
 
 func (c *PlanCompiler) manifestsByPlan(plan *AgentPlan) map[string]*tool.ToolManifest {
@@ -228,7 +298,10 @@ func (c *PlanCompiler) completeVideoPlanByProfile(plan *AgentPlan) bool {
 	if c.manifestFor("video_profile_classifier") == nil || c.manifestFor("time_window_planner") == nil {
 		return false
 	}
-	profile := inferVideoCreationProfile(plan.Goal)
+	profile := requestedVideoCreationProfile(plan)
+	if profile == "" {
+		profile = inferVideoCreationProfile(plan.Goal)
+	}
 	switch profile {
 	case "cinematic_story":
 		if !c.canCompleteCinematicProfilePlan() {
@@ -264,6 +337,73 @@ func inferVideoCreationProfile(goal string) string {
 		}
 	}
 	return "talking_head"
+}
+
+func requestedVideoCreationProfile(plan *AgentPlan) string {
+	if plan == nil {
+		return ""
+	}
+	for _, step := range plan.Steps {
+		for _, key := range []string{
+			"profileId",
+			"profile_id",
+			"videoType",
+			"video_type",
+			"creationProfile",
+			"creation_profile",
+			"pipeline",
+			"pipelineId",
+			"pipeline_id",
+		} {
+			raw, ok := step.Arguments[key].(string)
+			if !ok {
+				continue
+			}
+			switch canonicalVideoCreationProfile(raw) {
+			case "cinematic_story":
+				return "cinematic_story"
+			case "talking_head":
+				return "talking_head"
+			}
+		}
+	}
+	return ""
+}
+
+func canonicalVideoCreationProfile(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" || strings.Contains(normalized, "{{") {
+		return ""
+	}
+	for _, term := range []string{
+		"aigc_shot",
+		"aigc-shot",
+		"cinematic_story",
+		"cinematic-story",
+		"cinematic",
+		"story",
+		"wf-aigc-shot-video",
+		"jimeng",
+	} {
+		if strings.Contains(normalized, term) {
+			return "cinematic_story"
+		}
+	}
+	for _, term := range []string{
+		"voice_visual",
+		"voice-visual",
+		"talking_head",
+		"talking-head",
+		"voiceover",
+		"guided_image_text",
+		"guided-image-text",
+		"wf-guided-image-text-video",
+	} {
+		if strings.Contains(normalized, term) {
+			return "talking_head"
+		}
+	}
+	return ""
 }
 
 func (c *PlanCompiler) canCompleteTalkingHeadProfilePlan(plan *AgentPlan) bool {
@@ -335,13 +475,56 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 			Tool:            scriptTool,
 			DependsOn:       scriptDeps,
 			Arguments:       scriptArgs,
-			ExpectedOutput:  []string{"script"},
+			ExpectedOutput:  []string{"script", "scriptSpans"},
 			ProduceArtifact: true,
 		})
 		scriptField = preferredOutputField(c.manifestFor(scriptTool), "script")
+	} else {
+		scriptAnchor = canonicalizePlanStep(plan, scriptAnchor, "script_generation")
+		movePlanStepAfter(plan, scriptAnchor, profileAnchor)
+		scriptStep := planStepByID(plan, scriptAnchor)
+		if scriptStep != nil {
+			if scriptStep.Arguments == nil {
+				scriptStep.Arguments = map[string]interface{}{}
+			}
+			scriptStep.Arguments["stage"] = "script_generation"
+			scriptStep.Arguments["brief"] = plan.Goal
+			scriptStep.Arguments["topic"] = plan.Goal
+			scriptStep.Arguments["creationProfile"] = stepOutputRef(profileAnchor, "creationProfile")
+			scriptStep.DependsOn = dependencyList(profileAnchor)
+			if len(scriptStep.ExpectedOutput) == 0 {
+				scriptStep.ExpectedOutput = []string{"script", "scriptSpans"}
+			} else if field := firstManifestOutput(c.manifestFor(scriptStep.Tool), "scriptSpans"); field != "" && !containsString(scriptStep.ExpectedOutput, field) {
+				scriptStep.ExpectedOutput = append(scriptStep.ExpectedOutput, field)
+			}
+			scriptStep.ProduceArtifact = true
+			scriptField = preferredOutputField(c.manifestFor(scriptStep.Tool), "script")
+		}
+	}
+	scriptSpanField := "scriptSpans"
+	if scriptStep := planStepByID(plan, scriptAnchor); scriptStep != nil {
+		scriptSpanField = preferredOutputField(c.manifestFor(scriptStep.Tool), "scriptSpans", "sections", "script")
 	}
 	scriptRef := stepOutputRef(scriptAnchor, scriptField)
+	scriptSpansRef := stepOutputRef(scriptAnchor, scriptSpanField)
 	profileRef := stepOutputRef(profileAnchor, "creationProfile")
+
+	if splitter := planStepByTool(plan, "shot_splitter"); splitter != nil {
+		splitterID := canonicalizePlanStep(plan, splitter.ID, "shot_split")
+		movePlanStepAfter(plan, splitterID, scriptAnchor)
+		if splitterStep := planStepByID(plan, splitterID); splitterStep != nil {
+			if splitterStep.Arguments == nil {
+				splitterStep.Arguments = map[string]interface{}{}
+			}
+			splitterStep.Arguments["stage"] = "shot_split"
+			splitterStep.Arguments["script"] = scriptRef
+			splitterStep.DependsOn = dependencyList(scriptAnchor)
+			if len(splitterStep.ExpectedOutput) == 0 {
+				splitterStep.ExpectedOutput = []string{"shotList"}
+			}
+			splitterStep.ProduceArtifact = true
+		}
+	}
 
 	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", scriptAnchor, AgentStep{
 		ID:        "time_window",
@@ -351,7 +534,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 		Arguments: map[string]interface{}{
 			"stage":           "time_window",
 			"brief":           plan.Goal,
-			"scriptSpans":     scriptRef,
+			"scriptSpans":     scriptSpansRef,
 			"creationProfile": profileRef,
 		},
 		ExpectedOutput:  []string{"timeWindows"},
@@ -360,7 +543,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 	timeWindowStep := planStepByID(plan, timeWindowAnchor)
 	mergeStepArgsAndDeps(timeWindowStep, map[string]interface{}{
 		"creationProfile": profileRef,
-		"scriptSpans":     scriptRef,
+		"scriptSpans":     scriptSpansRef,
 	}, scriptAnchor, profileAnchor)
 
 	visualAnchor := c.ensureProfileStepAfter(plan, "visual_alignment", timeWindowAnchor, AgentStep{
@@ -371,6 +554,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 		Arguments: map[string]interface{}{
 			"stage":           "visual_alignment",
 			"brief":           plan.Goal,
+			"assetStrategy":   plan.Goal,
 			"script":          scriptRef,
 			"timeWindows":     stepOutputRef(timeWindowAnchor, "timeWindows"),
 			"creationProfile": profileRef,
@@ -380,6 +564,7 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 	})
 	visualStep := planStepByID(plan, visualAnchor)
 	mergeStepArgsAndDeps(visualStep, map[string]interface{}{
+		"assetStrategy":   plan.Goal,
 		"script":          scriptRef,
 		"timeWindows":     stepOutputRef(timeWindowAnchor, "timeWindows"),
 		"creationProfile": profileRef,
@@ -447,16 +632,25 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 			"proposal":        storyRef,
 			"creationProfile": profileRef,
 		},
-		ExpectedOutput:  []string{"script"},
+		ExpectedOutput:  []string{"script", "storyOutline", "detailedScript", "characters", "scenes", "props", "scriptSpans"},
 		ProduceArtifact: true,
 	})
 	scriptStep := planStepByID(plan, scriptAnchor)
 	mergeStepArgsAndDeps(scriptStep, map[string]interface{}{
+		"stage":           "cinematic_script",
+		"brief":           plan.Goal,
 		"topic":           plan.Goal,
 		"proposal":        storyRef,
 		"creationProfile": profileRef,
 	}, storyAnchor, profileAnchor)
+	ensureStepExpectedOutputs(scriptStep, "script", "storyOutline", "detailedScript", "characters", "scenes", "props", "scriptSpans")
 	scriptRef := stepOutputRef(scriptAnchor, "script")
+	storyOutlineRef := stepOutputRef(scriptAnchor, "storyOutline")
+	detailedScriptRef := stepOutputRef(scriptAnchor, "detailedScript")
+	charactersRef := stepOutputRef(scriptAnchor, "characters")
+	scenesRef := stepOutputRef(scriptAnchor, "scenes")
+	propsRef := stepOutputRef(scriptAnchor, "props")
+	scriptSpansRef := stepOutputRef(scriptAnchor, "scriptSpans")
 
 	continuityField := preferredOutputField(c.manifestFor("continuity_checker"), "continuityBible", "continuityReport", "styleProfile", "report")
 	continuityAnchor := c.ensureProfileStepAfter(plan, "continuity_bible", scriptAnchor, AgentStep{
@@ -467,6 +661,11 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		Arguments: map[string]interface{}{
 			"stage":           "continuity_bible",
 			"script":          scriptRef,
+			"storyOutline":    storyOutlineRef,
+			"detailedScript":  detailedScriptRef,
+			"characters":      charactersRef,
+			"scenes":          scenesRef,
+			"props":           propsRef,
 			"creationProfile": profileRef,
 		},
 		ExpectedOutput:  []string{continuityField},
@@ -475,6 +674,11 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 	continuityStep := planStepByID(plan, continuityAnchor)
 	mergeStepArgsAndDeps(continuityStep, map[string]interface{}{
 		"script":          scriptRef,
+		"storyOutline":    storyOutlineRef,
+		"detailedScript":  detailedScriptRef,
+		"characters":      charactersRef,
+		"scenes":          scenesRef,
+		"props":           propsRef,
 		"creationProfile": profileRef,
 	}, scriptAnchor, profileAnchor)
 	if continuityField != "" && !containsString(continuityStep.ExpectedOutput, continuityField) {
@@ -491,62 +695,100 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 			"stage":           "reference_assets",
 			"brief":           plan.Goal,
 			"script":          scriptRef,
+			"storyOutline":    storyOutlineRef,
+			"detailedScript":  detailedScriptRef,
+			"characters":      charactersRef,
+			"scenes":          scenesRef,
+			"props":           propsRef,
 			"continuityBible": continuityRef,
 			"creationProfile": profileRef,
 		},
-		ExpectedOutput:  []string{"referenceAssetPlan"},
+		ExpectedOutput:  []string{"referenceAssetPlan", "referenceAssetIndex", "globalReferenceAssets", "externalGenerationRequests"},
 		ProduceArtifact: true,
 	})
 	referenceStep := planStepByID(plan, referenceAnchor)
 	mergeStepArgsAndDeps(referenceStep, map[string]interface{}{
 		"script":          scriptRef,
+		"storyOutline":    storyOutlineRef,
+		"detailedScript":  detailedScriptRef,
+		"characters":      charactersRef,
+		"scenes":          scenesRef,
+		"props":           propsRef,
 		"continuityBible": continuityRef,
 		"creationProfile": profileRef,
 	}, scriptAnchor, continuityAnchor, profileAnchor)
 	referenceRef := stepOutputRef(referenceAnchor, "referenceAssetPlan")
+	generatedReferenceAnchor := c.ensureCinematicReferenceGenerationStep(plan, referenceAnchor, referenceRef)
+	generatedReferenceRef := ""
+	if generatedReferenceAnchor != "" {
+		generatedReferenceRef = stepOutputRef(generatedReferenceAnchor, "shotAssetPackages")
+	}
 
-	shotDesignAnchor := c.ensureProfileStepAfter(plan, "cinematic_shot_design", referenceAnchor, AgentStep{
+	shotDesignAfter := firstNonEmptyStepID(generatedReferenceAnchor, referenceAnchor)
+	shotDesignAnchor := c.ensureProfileStepAfter(plan, "cinematic_shot_design", shotDesignAfter, AgentStep{
 		ID:        "cinematic_shot_design",
 		Intent:    "设计导演分镜、镜头调度和粗颗粒剧情镜头清单",
 		Tool:      "cinematic_shot_designer",
-		DependsOn: dependencyListUnique(scriptAnchor, continuityAnchor, referenceAnchor, profileAnchor),
+		DependsOn: dependencyListUnique(scriptAnchor, continuityAnchor, referenceAnchor, generatedReferenceAnchor, profileAnchor),
 		Arguments: map[string]interface{}{
-			"stage":              "cinematic_shot_design",
-			"script":             scriptRef,
-			"continuityBible":    continuityRef,
-			"referenceAssetPlan": referenceRef,
-			"creationProfile":    profileRef,
+			"stage":                    "cinematic_shot_design",
+			"script":                   scriptRef,
+			"scriptSpans":              scriptSpansRef,
+			"storyOutline":             storyOutlineRef,
+			"detailedScript":           detailedScriptRef,
+			"characters":               charactersRef,
+			"scenes":                   scenesRef,
+			"props":                    propsRef,
+			"continuityBible":          continuityRef,
+			"referenceAssetPlan":       referenceRef,
+			"generatedReferenceAssets": generatedReferenceRef,
+			"creationProfile":          profileRef,
 		},
 		ExpectedOutput:  []string{"shotList"},
 		ProduceArtifact: true,
 	})
 	shotDesignStep := planStepByID(plan, shotDesignAnchor)
 	mergeStepArgsAndDeps(shotDesignStep, map[string]interface{}{
-		"script":             scriptRef,
-		"continuityBible":    continuityRef,
-		"referenceAssetPlan": referenceRef,
-		"creationProfile":    profileRef,
-	}, scriptAnchor, continuityAnchor, referenceAnchor, profileAnchor)
+		"script":                   scriptRef,
+		"scriptSpans":              scriptSpansRef,
+		"storyOutline":             storyOutlineRef,
+		"detailedScript":           detailedScriptRef,
+		"characters":               charactersRef,
+		"scenes":                   scenesRef,
+		"props":                    propsRef,
+		"continuityBible":          continuityRef,
+		"referenceAssetPlan":       referenceRef,
+		"generatedReferenceAssets": generatedReferenceRef,
+		"creationProfile":          profileRef,
+	}, scriptAnchor, continuityAnchor, referenceAnchor, generatedReferenceAnchor, profileAnchor)
 
 	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", shotDesignAnchor, AgentStep{
 		ID:        "time_window",
 		Intent:    "将影视粗分镜细拆成 3-15 秒 AIGC 生成时间窗",
 		Tool:      "time_window_planner",
-		DependsOn: dependencyListUnique(shotDesignAnchor, profileAnchor),
+		DependsOn: dependencyListUnique(shotDesignAnchor, scriptAnchor, continuityAnchor, referenceAnchor, profileAnchor),
 		Arguments: map[string]interface{}{
-			"stage":           "time_window",
-			"brief":           plan.Goal,
-			"shotList":        stepOutputRef(shotDesignAnchor, "shotList"),
-			"creationProfile": profileRef,
+			"stage":              "time_window",
+			"brief":              plan.Goal,
+			"shotList":           stepOutputRef(shotDesignAnchor, "shotList"),
+			"scriptSpans":        scriptSpansRef,
+			"continuityBible":    continuityRef,
+			"referenceAssetPlan": referenceRef,
+			"creationProfile":    profileRef,
 		},
 		ExpectedOutput:  []string{"timeWindows"},
 		ProduceArtifact: true,
 	})
 	timeWindowStep := planStepByID(plan, timeWindowAnchor)
-	mergeStepArgsAndDeps(timeWindowStep, map[string]interface{}{
-		"shotList":        stepOutputRef(shotDesignAnchor, "shotList"),
-		"creationProfile": profileRef,
-	}, shotDesignAnchor, profileAnchor)
+	replaceStepArgsAndDeps(timeWindowStep, map[string]interface{}{
+		"stage":              "time_window",
+		"brief":              plan.Goal,
+		"shotList":           stepOutputRef(shotDesignAnchor, "shotList"),
+		"scriptSpans":        scriptSpansRef,
+		"continuityBible":    continuityRef,
+		"referenceAssetPlan": referenceRef,
+		"creationProfile":    profileRef,
+	}, shotDesignAnchor, scriptAnchor, continuityAnchor, referenceAnchor, profileAnchor)
 	timeWindowRef := stepOutputRef(timeWindowAnchor, "timeWindows")
 
 	keyframeField := preferredOutputField(c.manifestFor("keyframe_prompt_generator"), "keyframeStoryboards", "keyframePrompts", "summary")
@@ -556,20 +798,27 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		Tool:      "keyframe_prompt_generator",
 		DependsOn: dependencyListUnique(referenceAnchor, timeWindowAnchor),
 		Arguments: map[string]interface{}{
-			"stage":              "keyframes_storyboards",
-			"shotList":           timeWindowRef,
-			"timeWindows":        timeWindowRef,
-			"referenceAssetPlan": referenceRef,
+			"stage":                    "keyframes_storyboards",
+			"shotList":                 timeWindowRef,
+			"timeWindows":              timeWindowRef,
+			"referenceAssetPlan":       referenceRef,
+			"generatedReferenceAssets": generatedReferenceRef,
+			"continuityBible":          continuityRef,
+			"creationProfile":          profileRef,
 		},
 		ExpectedOutput:  []string{keyframeField},
 		ProduceArtifact: true,
 	})
 	keyframeStep := planStepByID(plan, keyframesAnchor)
-	mergeStepArgsAndDeps(keyframeStep, map[string]interface{}{
-		"shotList":           timeWindowRef,
-		"timeWindows":        timeWindowRef,
-		"referenceAssetPlan": referenceRef,
-	}, referenceAnchor, timeWindowAnchor)
+	replaceStepArgsAndDeps(keyframeStep, map[string]interface{}{
+		"stage":                    "keyframes_storyboards",
+		"shotList":                 timeWindowRef,
+		"timeWindows":              timeWindowRef,
+		"referenceAssetPlan":       referenceRef,
+		"generatedReferenceAssets": generatedReferenceRef,
+		"continuityBible":          continuityRef,
+		"creationProfile":          profileRef,
+	}, referenceAnchor, timeWindowAnchor, continuityAnchor, generatedReferenceAnchor, profileAnchor)
 	if keyframeField != "" && !containsString(keyframeStep.ExpectedOutput, keyframeField) {
 		keyframeStep.ExpectedOutput = append(keyframeStep.ExpectedOutput, keyframeField)
 	}
@@ -581,30 +830,47 @@ func (c *PlanCompiler) completeCinematicProfilePlan(plan *AgentPlan, profileAnch
 		Tool:      "shot_generation_planner",
 		DependsOn: dependencyListUnique(timeWindowAnchor, referenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor),
 		Arguments: map[string]interface{}{
-			"stage":              "generation_strategy",
-			"brief":              plan.Goal,
-			"shotList":           timeWindowRef,
-			"timeWindows":        timeWindowRef,
-			"creationProfile":    profileRef,
-			"referenceAssetPlan": referenceRef,
-			"continuityBible":    continuityRef,
-			"keyframePrompts":    keyframeRef,
+			"stage":                    "generation_strategy",
+			"brief":                    plan.Goal,
+			"shotList":                 timeWindowRef,
+			"timeWindows":              timeWindowRef,
+			"creationProfile":          profileRef,
+			"referenceAssetPlan":       referenceRef,
+			"generatedReferenceAssets": generatedReferenceRef,
+			"continuityBible":          continuityRef,
+			"keyframePrompts":          keyframeRef,
 		},
 		ExpectedOutput:  []string{"shotGenerationPlans", "shotAssetPackages", "externalGenerationRequests"},
 		ProduceArtifact: true,
 	})
 	generationStep := planStepByID(plan, generationAnchor)
-	mergeStepArgsAndDeps(generationStep, map[string]interface{}{
-		"shotList":           timeWindowRef,
-		"timeWindows":        timeWindowRef,
-		"creationProfile":    profileRef,
-		"referenceAssetPlan": referenceRef,
-		"continuityBible":    continuityRef,
-		"keyframePrompts":    keyframeRef,
-	}, timeWindowAnchor, referenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor)
+	replaceStepArgsAndDeps(generationStep, map[string]interface{}{
+		"stage":                    "generation_strategy",
+		"brief":                    plan.Goal,
+		"shotList":                 timeWindowRef,
+		"timeWindows":              timeWindowRef,
+		"creationProfile":          profileRef,
+		"referenceAssetPlan":       referenceRef,
+		"generatedReferenceAssets": generatedReferenceRef,
+		"continuityBible":          continuityRef,
+		"keyframePrompts":          keyframeRef,
+	}, timeWindowAnchor, referenceAnchor, generatedReferenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor)
 
 	generationField := preferredOutputField(c.manifestFor("shot_generation_planner"), "shotGenerationPlans")
 	c.completeVideoOutputPlanFromAnchors(plan, scriptAnchor, "script", timeWindowAnchor, "timeWindows", generationAnchor, generationField)
+	c.augmentCinematicOutputSteps(plan, profileRef, continuityRef, referenceRef, generatedReferenceRef, continuityAnchor, referenceAnchor, generatedReferenceAnchor, profileAnchor)
+	removeCinematicLegacyTalkingHeadSteps(plan)
+	replaceStepArgsAndDeps(planStepByID(plan, "shot_generation"), map[string]interface{}{
+		"stage":                    "generation_strategy",
+		"brief":                    plan.Goal,
+		"shotList":                 timeWindowRef,
+		"timeWindows":              timeWindowRef,
+		"creationProfile":          profileRef,
+		"referenceAssetPlan":       referenceRef,
+		"generatedReferenceAssets": generatedReferenceRef,
+		"continuityBible":          continuityRef,
+		"keyframePrompts":          keyframeRef,
+	}, timeWindowAnchor, referenceAnchor, generatedReferenceAnchor, continuityAnchor, keyframesAnchor, profileAnchor)
 }
 
 func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scriptAnchor, scriptField, shotAnchor, shotField, generationAnchor, generationField string) {
@@ -613,6 +879,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 	}
 	scriptRef := stepOutputRef(scriptAnchor, scriptField)
 	generationPackageField := c.outputFieldForStep(plan, generationAnchor, "shotAssetPackages")
+	projectID := requestedProjectID(plan)
 
 	promptAnchor, promptField := c.lastVideoPromptProducer(plan)
 	if promptAnchor == "" {
@@ -640,6 +907,12 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			ProduceArtifact: true,
 		})
 		promptField = preferredOutputField(c.manifestFor("video_prompt_generator"), "videoPrompts", "video_prompt")
+	} else {
+		promptAnchor = canonicalizePlanStep(plan, promptAnchor, "video_prompt")
+		movePlanStepAfter(plan, promptAnchor, firstNonEmptyStepID(generationAnchor, shotAnchor))
+		if promptStep := planStepByID(plan, promptAnchor); promptStep != nil {
+			promptStep.DependsOn = dependencyListUnique(shotAnchor, generationAnchor)
+		}
 	}
 	rewireVideoPromptShotSource(planStepByID(plan, promptAnchor), shotAnchor, shotField)
 	if provider := requestedAIGCProvider(plan); provider != "" {
@@ -650,6 +923,7 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			promptStep.Arguments["aigcProvider"] = provider
 		}
 	}
+	applyProjectContextToStep(planStepByID(plan, promptAnchor), projectID)
 	c.augmentVideoPromptGenerationInputs(plan, promptAnchor, generationAnchor, generationField, generationPackageField)
 
 	projectAnchor, projectField := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
@@ -685,19 +959,45 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			ProduceArtifact: true,
 		})
 		projectField = preferredOutputField(c.manifestFor("hyperframes_project_generator"), "projectDir", "hyperframesPath")
+	} else {
+		projectAnchor = canonicalizePlanStep(plan, projectAnchor, "preview")
+		movePlanStepAfter(plan, projectAnchor, firstNonEmptyStepID(promptAnchor, generationAnchor, shotAnchor))
+		projectStep := planStepByID(plan, projectAnchor)
+		if projectStep != nil {
+			if projectStep.Arguments == nil {
+				projectStep.Arguments = map[string]interface{}{}
+			}
+			projectStep.Arguments["stage"] = "preview"
+			projectStep.Arguments["brief"] = plan.Goal
+			projectStep.Arguments["topic"] = plan.Goal
+			projectStep.Arguments["script"] = scriptRef
+			projectStep.Arguments["shotList"] = stepOutputRef(shotAnchor, shotField)
+			if promptAnchor != "" && (promptField == "videoPrompts" || promptField == "video_prompt") {
+				projectStep.Arguments["videoPrompts"] = stepOutputRef(promptAnchor, promptField)
+			}
+			projectStep.DependsOn = dependencyListUnique(shotAnchor, promptAnchor, generationAnchor, scriptAnchor)
+			ensureStepExpectedOutputs(projectStep, "HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT", "hyperframes_project", "preview")
+			projectStep.ProduceArtifact = true
+		}
 	}
+	applyProjectContextToStep(planStepByID(plan, projectAnchor), projectID)
 	c.augmentPreviewGenerationInputs(plan, projectAnchor, promptAnchor, generationAnchor, generationField, generationPackageField)
 
 	renderAnchor, _ := c.lastProducerStepForFields(plan, []string{"outputPath", "finalVideo", "video"}, []string{"hyperframes_renderer"})
+	renderManifest := c.manifestFor("hyperframes_renderer")
+	projectParam := preferredParamName(renderManifest, "projectDir", "hyperframesPath")
+	renderTimeoutSec := requestedRenderTimeoutSec(plan)
 	if renderAnchor == "" {
-		renderManifest := c.manifestFor("hyperframes_renderer")
-		projectParam := preferredParamName(renderManifest, "projectDir", "hyperframesPath")
 		renderArgs := map[string]interface{}{
 			"stage":           "render",
 			"brief":           plan.Goal,
 			projectParam:      stepOutputRef(projectAnchor, projectField),
 			"previewApproved": true,
 			"outputName":      "final.mp4",
+			"timeoutSec":      renderTimeoutSec,
+		}
+		if projectID != "" {
+			renderArgs["projectId"] = projectID
 		}
 		if firstManifestOutput(renderManifest, "entry") != "" {
 			renderArgs["entry"] = stepOutputRef(projectAnchor, "entry")
@@ -711,14 +1011,82 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			ExpectedOutput:  []string{"VIDEO", "RENDER_REPORT", "final_video"},
 			ProduceArtifact: true,
 		})
+	} else {
+		renderAnchor = canonicalizePlanStep(plan, renderAnchor, "render")
+		movePlanStepAfter(plan, renderAnchor, projectAnchor)
+		renderStep := planStepByID(plan, renderAnchor)
+		if renderStep != nil {
+			if renderStep.Arguments == nil {
+				renderStep.Arguments = map[string]interface{}{}
+			}
+			renderStep.Arguments["stage"] = "render"
+			renderStep.Arguments["brief"] = plan.Goal
+			renderStep.Arguments[projectParam] = stepOutputRef(projectAnchor, projectField)
+			renderStep.Arguments["previewApproved"] = true
+			if _, exists := renderStep.Arguments["outputName"]; !exists {
+				renderStep.Arguments["outputName"] = "final.mp4"
+			}
+			renderStep.Arguments["timeoutSec"] = renderTimeoutSec
+			applyProjectContextToStep(renderStep, projectID)
+			if firstManifestOutput(renderManifest, "entry") != "" {
+				renderStep.Arguments["entry"] = stepOutputRef(projectAnchor, "entry")
+			}
+			renderStep.DependsOn = dependencyList(projectAnchor)
+			ensureStepExpectedOutputs(renderStep, "VIDEO", "RENDER_REPORT", "final_video")
+			renderStep.ProduceArtifact = true
+		}
 	}
 
-	if !planHasToolOrTerm(plan, []string{"publish_copy", "publishcopy", "publish-copy", "publish_copy_generator"}) {
-		appendPlanStep(plan, AgentStep{
+	visualQAAnchor := ""
+	if c.manifestFor("video_frame_qa") != nil {
+		if step := planStepByID(plan, "visual_qa"); step != nil {
+			visualQAAnchor = step.ID
+			movePlanStepAfter(plan, visualQAAnchor, renderAnchor)
+			if step := planStepByID(plan, visualQAAnchor); step != nil {
+				if step.Arguments == nil {
+					step.Arguments = map[string]interface{}{}
+				}
+				step.Tool = "video_frame_qa"
+				step.Arguments["stage"] = "visual_qa"
+				step.Arguments["input"] = stepOutputRef(renderAnchor, preferredOutputField(renderManifest, "finalVideo", "outputPath", "VIDEO"))
+				step.Arguments["shotList"] = stepOutputRef(shotAnchor, shotField)
+				step.Arguments["sampleIntervalSec"] = 4
+				step.DependsOn = dependencyListUnique(renderAnchor, shotAnchor)
+				ensureStepExpectedOutputs(step, "VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score", "shotReports", "shotSpecLints", "shotSummaries", "repairPlan", "needsRegeneration")
+				step.ProduceArtifact = true
+				applyProjectContextToStep(step, projectID)
+			}
+		} else if renderAnchor != "" {
+			visualQAAnchor = insertPlanStepAfter(plan, renderAnchor, AgentStep{
+				ID:     uniqueStepID(plan, "visual_qa"),
+				Intent: "抽帧检查最终视频的文字安全区、遮挡和画面复杂度",
+				Tool:   "video_frame_qa",
+				Arguments: map[string]interface{}{
+					"stage":             "visual_qa",
+					"input":             stepOutputRef(renderAnchor, preferredOutputField(renderManifest, "finalVideo", "outputPath", "VIDEO")),
+					"shotList":          stepOutputRef(shotAnchor, shotField),
+					"sampleIntervalSec": 4,
+				},
+				DependsOn:       dependencyListUnique(renderAnchor, shotAnchor),
+				ExpectedOutput:  []string{"VIDEO_VISUAL_QA_REPORT", "visualQAReport", "passed", "score", "shotReports", "shotSpecLints", "shotSummaries", "repairPlan", "needsRegeneration"},
+				ProduceArtifact: true,
+			})
+			applyProjectContextToStep(planStepByID(plan, visualQAAnchor), projectID)
+		}
+	}
+
+	publishAnchor := ""
+	if step := planStepByID(plan, "publish_copy"); step != nil {
+		publishAnchor = step.ID
+	} else if step := planStepByTool(plan, "publish_copy_generator"); step != nil {
+		publishAnchor = canonicalizePlanStep(plan, step.ID, "publish_copy")
+	}
+	if publishAnchor == "" {
+		publishAnchor = appendPlanStep(plan, AgentStep{
 			ID:        uniqueStepID(plan, "publish_copy"),
 			Intent:    "基于成片和脚本生成多平台发布文案",
 			Tool:      "publish_copy_generator",
-			DependsOn: dependencyListUnique(renderAnchor, scriptAnchor, shotAnchor),
+			DependsOn: dependencyListUnique(firstNonEmptyStepID(visualQAAnchor, renderAnchor), scriptAnchor, shotAnchor),
 			Arguments: map[string]interface{}{
 				"stage":    "publish",
 				"brief":    plan.Goal,
@@ -729,18 +1097,160 @@ func (c *PlanCompiler) completeVideoOutputPlanFromAnchors(plan *AgentPlan, scrip
 			ProduceArtifact: true,
 		})
 	}
+	movePlanStepAfter(plan, publishAnchor, firstNonEmptyStepID(visualQAAnchor, renderAnchor))
+	publishStep := planStepByID(plan, publishAnchor)
+	if publishStep != nil {
+		if publishStep.Arguments == nil {
+			publishStep.Arguments = map[string]interface{}{}
+		}
+		publishStep.Arguments["stage"] = "publish"
+		publishStep.Arguments["brief"] = plan.Goal
+		publishStep.Arguments["script"] = scriptRef
+		publishStep.Arguments["shotList"] = stepOutputRef(shotAnchor, shotField)
+		publishStep.DependsOn = dependencyListUnique(firstNonEmptyStepID(visualQAAnchor, renderAnchor), scriptAnchor, shotAnchor)
+		if len(publishStep.ExpectedOutput) == 0 {
+			publishStep.ExpectedOutput = []string{"publish_copy"}
+		}
+		publishStep.ProduceArtifact = true
+	}
+	applyProjectContextToStep(publishStep, projectID)
 }
 
-func (c *PlanCompiler) injectJiMengGenerationRunner(plan *AgentPlan) {
-	if plan == nil || plan.Domain != "video_creation" || requestedAIGCProvider(plan) != "jimeng_mcp" {
+func (c *PlanCompiler) ensureCinematicReferenceGenerationStep(plan *AgentPlan, referenceAnchor, referenceRef string) string {
+	if plan == nil || referenceAnchor == "" || c.manifestFor("mcp_generation_runner") == nil {
+		return ""
+	}
+	providerID, mcpTool, _ := mcpGenerationProvider(requestedAIGCProvider(plan))
+	if providerID == "" {
+		providerID = "jimeng"
+	}
+	mcpTool = mcpImageGenerationTool(providerID, mcpTool)
+	anchor := c.ensureProfileStepAfter(plan, "reference_asset_generation", referenceAnchor, AgentStep{
+		ID:        "reference_asset_generation",
+		Intent:    "通过标准 MCP 生成主要角色、场景和道具的多视角参考图",
+		Tool:      "mcp_generation_runner",
+		DependsOn: dependencyList(referenceAnchor),
+		Arguments: map[string]interface{}{
+			"stage":                      "reference_asset_generation",
+			"providerId":                 providerID,
+			"mcpTool":                    mcpTool,
+			"externalGenerationRequests": stepOutputRef(referenceAnchor, "externalGenerationRequests"),
+			"referenceAssetPlan":         referenceRef,
+			"maxReadyGenerations":        1,
+			"mcpBatchTimeoutSec":         180,
+			"mcpToolCallTimeoutSec":      120,
+		},
+		ExpectedOutput:  []string{"shotAssetPackages", "generationResults", "externalGenerationRequests"},
+		ProduceArtifact: true,
+	})
+	step := planStepByID(plan, anchor)
+	mergeStepArgsAndDeps(step, map[string]interface{}{
+		"providerId":                 providerID,
+		"mcpTool":                    mcpTool,
+		"externalGenerationRequests": stepOutputRef(referenceAnchor, "externalGenerationRequests"),
+		"referenceAssetPlan":         referenceRef,
+		"maxReadyGenerations":        1,
+		"mcpBatchTimeoutSec":         180,
+		"mcpToolCallTimeoutSec":      120,
+	}, referenceAnchor)
+	ensureStepExpectedOutputs(step, "shotAssetPackages", "generationResults", "externalGenerationRequests")
+	return anchor
+}
+
+func mcpImageGenerationTool(providerID, configuredTool string) string {
+	toolName := strings.TrimSpace(configuredTool)
+	if toolName == "" {
+		if strings.TrimSpace(providerID) == "" {
+			providerID = "jimeng"
+		}
+		return providerID + ".generate_image"
+	}
+	if strings.Contains(toolName, "generate_video") {
+		return strings.Replace(toolName, "generate_video", "generate_image", 1)
+	}
+	if strings.Contains(toolName, ".") {
+		return toolName[:strings.LastIndex(toolName, ".")] + ".generate_image"
+	}
+	return toolName
+}
+
+func (c *PlanCompiler) augmentCinematicOutputSteps(plan *AgentPlan, profileRef, continuityRef, referenceRef, generatedReferenceRef, continuityAnchor, referenceAnchor, generatedReferenceAnchor, profileAnchor string) {
+	if plan == nil {
 		return
 	}
-	if c.manifestFor("jimeng_generation_runner") == nil {
+	extraArgs := map[string]interface{}{
+		"creationProfile":    profileRef,
+		"continuityBible":    continuityRef,
+		"referenceAssetPlan": referenceRef,
+	}
+	if generatedReferenceRef != "" {
+		extraArgs["generatedReferenceAssets"] = generatedReferenceRef
+	}
+	extraDeps := []string{continuityAnchor, referenceAnchor, generatedReferenceAnchor, profileAnchor}
+	for _, stepID := range []string{"video_prompt", "preview", "visual_qa", "publish_copy"} {
+		step := planStepByID(plan, stepID)
+		if step == nil {
+			continue
+		}
+		mergeStepArgsAndDeps(step, extraArgs, extraDeps...)
+	}
+	if step := planStepByID(plan, "visual_qa"); step != nil {
+		if step.Arguments == nil {
+			step.Arguments = map[string]interface{}{}
+		}
+		step.Arguments["videoType"] = "cinematic_story"
+		step.Arguments["profile"] = profileRef
+	}
+}
+
+func removeCinematicLegacyTalkingHeadSteps(plan *AgentPlan) {
+	if plan == nil || len(plan.Steps) == 0 {
 		return
 	}
-	if planHasToolOrTerm(plan, []string{"jimeng_generation_runner", "jimeng_generation"}) {
+	out := plan.Steps[:0]
+	for _, step := range plan.Steps {
+		switch step.Tool {
+		case "visual_alignment_planner", "shot_splitter":
+			continue
+		default:
+			out = append(out, step)
+		}
+	}
+	plan.Steps = out
+	removeArgumentRefsToMissingSteps(plan)
+}
+
+func removeArgumentRefsToMissingSteps(plan *AgentPlan) {
+	if plan == nil {
 		return
 	}
+	known := make(map[string]bool, len(plan.Steps))
+	for _, step := range plan.Steps {
+		if step.ID != "" {
+			known[step.ID] = true
+		}
+	}
+	for i := range plan.Steps {
+		step := &plan.Steps[i]
+		for key, value := range step.Arguments {
+			refStepID, _, ok := outputReference(value)
+			if ok && !known[refStepID] {
+				delete(step.Arguments, key)
+			}
+		}
+	}
+}
+
+func (c *PlanCompiler) injectMCPGenerationRunner(plan *AgentPlan) {
+	if plan == nil || plan.Domain != "video_creation" {
+		return
+	}
+	runnerManifest := c.manifestFor("mcp_generation_runner")
+	if runnerManifest == nil {
+		return
+	}
+	providerID, mcpTool, ok := mcpGenerationProvider(requestedAIGCProvider(plan))
+	existingMCPStep := mcpVideoGenerationStep(plan)
 	promptAnchor, _ := c.lastVideoPromptProducer(plan)
 	if promptAnchor == "" {
 		return
@@ -749,22 +1259,63 @@ func (c *PlanCompiler) injectJiMengGenerationRunner(plan *AgentPlan) {
 	if externalField == "" {
 		externalField = "externalGenerationRequests"
 	}
-	stepID := uniqueStepID(plan, "jimeng_generation")
-	insertPlanStepAfter(plan, promptAnchor, AgentStep{
-		ID:     stepID,
-		Intent: "调用用户本地 JiMeng MCP，将外部 AIGC 请求转换为已生成素材包",
-		Tool:   "jimeng_generation_runner",
-		Arguments: map[string]interface{}{
-			"stage":                      "aigc_generation",
-			"providerId":                 "jimeng",
-			"mcpTool":                    "jimeng.generate_video",
-			"externalGenerationRequests": stepOutputRef(promptAnchor, externalField),
-		},
-		DependsOn:       dependencyList(promptAnchor),
-		ExpectedOutput:  []string{"shotAssetPackages", "generationResults", "externalGenerationResults"},
-		ProduceArtifact: true,
-	})
-	jimengPackageField := preferredOutputField(c.manifestFor("jimeng_generation_runner"), "shotAssetPackages")
+	if !ok && existingMCPStep == nil && !c.planProducesExternalGenerationRequests(plan, promptAnchor, externalField) {
+		return
+	}
+	if providerID == "" {
+		providerID = "jimeng"
+	}
+	if mcpTool == "" {
+		mcpTool = providerID + ".generate_video"
+	}
+	projectID := requestedProjectID(plan)
+	stepID := ""
+	if existingMCPStep != nil {
+		stepID = canonicalizePlanStep(plan, existingMCPStep.ID, "mcp_generation")
+		movePlanStepAfter(plan, stepID, promptAnchor)
+		step := planStepByID(plan, stepID)
+		if step != nil {
+			if step.Arguments == nil {
+				step.Arguments = map[string]interface{}{}
+			}
+			step.Arguments["stage"] = "aigc_generation"
+			step.Arguments["providerId"] = providerID
+			step.Arguments["mcpTool"] = mcpTool
+			step.Arguments["externalGenerationRequests"] = stepOutputRef(promptAnchor, externalField)
+			step.Arguments["maxReadyGenerations"] = defaultMCPMaxReadyGenerations()
+			step.Arguments["minReadyVideoGenerations"] = defaultMCPMinReadyVideoGenerations()
+			step.Arguments["mcpBatchTimeoutSec"] = defaultMCPBatchTimeoutSec()
+			step.Arguments["mcpToolCallTimeoutSec"] = defaultMCPToolCallTimeoutSec()
+			step.DependsOn = dependencyList(promptAnchor)
+			if len(step.ExpectedOutput) == 0 {
+				step.ExpectedOutput = []string{"shotAssetPackages", "generationResults", "externalGenerationResults", "sourceSummary", "assetProvenance"}
+			}
+			step.ProduceArtifact = true
+			applyProjectContextToStep(step, projectID)
+		}
+	} else {
+		stepID = uniqueStepID(plan, "mcp_generation")
+		insertPlanStepAfter(plan, promptAnchor, AgentStep{
+			ID:     stepID,
+			Intent: "调用用户本地 MCP provider，将外部 AIGC 请求转换为已生成素材包",
+			Tool:   "mcp_generation_runner",
+			Arguments: map[string]interface{}{
+				"stage":                      "aigc_generation",
+				"providerId":                 providerID,
+				"mcpTool":                    mcpTool,
+				"externalGenerationRequests": stepOutputRef(promptAnchor, externalField),
+				"maxReadyGenerations":        defaultMCPMaxReadyGenerations(),
+				"minReadyVideoGenerations":   defaultMCPMinReadyVideoGenerations(),
+				"mcpBatchTimeoutSec":         defaultMCPBatchTimeoutSec(),
+				"mcpToolCallTimeoutSec":      defaultMCPToolCallTimeoutSec(),
+			},
+			DependsOn:       dependencyList(promptAnchor),
+			ExpectedOutput:  []string{"shotAssetPackages", "generationResults", "externalGenerationResults", "sourceSummary", "assetProvenance"},
+			ProduceArtifact: true,
+		})
+		applyProjectContextToStep(planStepByID(plan, stepID), projectID)
+	}
+	mcpPackageField := preferredOutputField(runnerManifest, "shotAssetPackages")
 	projectAnchor, _ := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
 	projectStep := planStepByID(plan, projectAnchor)
 	if projectStep == nil || !manifestAcceptsParam(c.manifestFor(projectStep.Tool), "shotAssetPackages") {
@@ -773,8 +1324,76 @@ func (c *PlanCompiler) injectJiMengGenerationRunner(plan *AgentPlan) {
 	if projectStep.Arguments == nil {
 		projectStep.Arguments = map[string]interface{}{}
 	}
-	projectStep.Arguments["shotAssetPackages"] = stepOutputRef(stepID, jimengPackageField)
+	projectStep.Arguments["shotAssetPackages"] = stepOutputRef(stepID, mcpPackageField)
 	appendDependencyIfMissing(projectStep, stepID)
+}
+
+func defaultMCPMaxReadyGenerations() int {
+	return 1
+}
+
+func defaultMCPMinReadyVideoGenerations() int {
+	return 1
+}
+
+func defaultMCPBatchTimeoutSec() int {
+	return 120
+}
+
+func defaultMCPToolCallTimeoutSec() int {
+	return 90
+}
+
+func mcpVideoGenerationStep(plan *AgentPlan) *AgentStep {
+	if step := planStepByID(plan, "mcp_generation"); step != nil && step.Tool == "mcp_generation_runner" {
+		return step
+	}
+	if plan == nil {
+		return nil
+	}
+	for i := range plan.Steps {
+		step := &plan.Steps[i]
+		if step.Tool != "mcp_generation_runner" {
+			continue
+		}
+		stage := stringArg(step.Arguments, "stage")
+		if step.ID == "reference_asset_generation" || stage == "reference_asset_generation" {
+			continue
+		}
+		if stage == "" || stage == "aigc_generation" || stage == "mcp_generation" {
+			return step
+		}
+	}
+	return nil
+}
+
+func mcpGenerationProvider(provider string) (string, string, bool) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "jimeng_mcp", "jimeng":
+		return "jimeng", "jimeng.generate_video", true
+	default:
+		return "", "", false
+	}
+}
+
+func (c *PlanCompiler) planProducesExternalGenerationRequests(plan *AgentPlan, promptAnchor, externalField string) bool {
+	if plan == nil || promptAnchor == "" {
+		return false
+	}
+	promptStep := planStepByID(plan, promptAnchor)
+	if promptStep == nil {
+		return false
+	}
+	if containsString(promptStep.ExpectedOutput, externalField) {
+		return true
+	}
+	manifest := c.manifestFor(promptStep.Tool)
+	if manifest != nil {
+		if _, ok := manifest.Output[externalField]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *PlanCompiler) lastVideoPromptProducer(plan *AgentPlan) (string, string) {
@@ -800,10 +1419,34 @@ func (c *PlanCompiler) ensureProfileSelectionStep(plan *AgentPlan, profile strin
 		step.Arguments["stage"] = "profile_selection"
 		step.Arguments["brief"] = plan.Goal
 		step.Arguments["route"] = profile
+		step.DependsOn = nil
 		if len(step.ExpectedOutput) == 0 {
 			step.ExpectedOutput = []string{"creationProfile", "routingReason"}
 		}
+		movePlanStepToIndex(plan, step.ID, 0)
 		return step.ID
+	}
+	if existing := planStepByTool(plan, "video_profile_classifier"); existing != nil {
+		stepID := canonicalizePlanStep(plan, existing.ID, "profile_selection")
+		movePlanStepToIndex(plan, stepID, 0)
+		step := planStepByID(plan, stepID)
+		if step != nil {
+			if step.Arguments == nil {
+				step.Arguments = map[string]interface{}{}
+			}
+			step.Arguments["stage"] = "profile_selection"
+			step.Arguments["brief"] = plan.Goal
+			step.Arguments["route"] = profile
+			step.DependsOn = nil
+			if step.Intent == "" {
+				step.Intent = "识别视频创作主线并选择编排模板"
+			}
+			if len(step.ExpectedOutput) == 0 {
+				step.ExpectedOutput = []string{"creationProfile", "routingReason"}
+			}
+			step.ProduceArtifact = true
+		}
+		return stepID
 	}
 	step := AgentStep{
 		ID:     "profile_selection",
@@ -823,9 +1466,103 @@ func (c *PlanCompiler) ensureProfileSelectionStep(plan *AgentPlan, profile strin
 
 func (c *PlanCompiler) ensureProfileStepAfter(plan *AgentPlan, id, afterID string, step AgentStep) string {
 	if existing := planStepByID(plan, id); existing != nil {
+		movePlanStepAfter(plan, existing.ID, afterID)
+		existing = planStepByID(plan, existing.ID)
+		if existing != nil {
+			existing.DependsOn = append([]string(nil), step.DependsOn...)
+		}
 		return existing.ID
 	}
+	if canReuseProfileToolStep(step.Tool) {
+		if existing := profileStepByToolForTarget(plan, step); existing != nil {
+			stepID := canonicalizePlanStep(plan, existing.ID, id)
+			movePlanStepAfter(plan, stepID, afterID)
+			existing = planStepByID(plan, stepID)
+			if existing != nil {
+				if existing.Intent == "" {
+					existing.Intent = step.Intent
+				}
+				if len(existing.ExpectedOutput) == 0 {
+					existing.ExpectedOutput = step.ExpectedOutput
+				}
+				existing.DependsOn = append([]string(nil), step.DependsOn...)
+				if step.ProduceArtifact {
+					existing.ProduceArtifact = true
+				}
+			}
+			return stepID
+		}
+	}
 	return insertPlanStepAfter(plan, afterID, step)
+}
+
+func profileStepByToolForTarget(plan *AgentPlan, target AgentStep) *AgentStep {
+	if plan == nil || target.Tool == "" {
+		return nil
+	}
+	targetStage := stringArg(target.Arguments, "stage")
+	for i := range plan.Steps {
+		step := &plan.Steps[i]
+		if step.Tool != target.Tool {
+			continue
+		}
+		if step.ID == target.ID || step.ID == target.Tool {
+			return step
+		}
+		if stage := stringArg(step.Arguments, "stage"); stage != "" && (stage == target.ID || stage == targetStage) {
+			return step
+		}
+		if isSingleInstanceProfileTool(target.Tool) {
+			return step
+		}
+	}
+	return nil
+}
+
+func isSingleInstanceProfileTool(toolName string) bool {
+	switch toolName {
+	case "video_script_generator":
+		return true
+	default:
+		return false
+	}
+}
+
+func stringArg(args map[string]interface{}, key string) string {
+	if args == nil {
+		return ""
+	}
+	value, _ := args[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func canReuseProfileToolStep(toolName string) bool {
+	switch toolName {
+	case "proposal_generator",
+		"video_script_generator",
+		"continuity_checker",
+		"reference_asset_planner",
+		"cinematic_shot_designer",
+		"time_window_planner",
+		"visual_alignment_planner",
+		"keyframe_prompt_generator",
+		"shot_generation_planner":
+		return true
+	default:
+		return false
+	}
+}
+
+func ensureStepExpectedOutputs(step *AgentStep, outputs ...string) {
+	if step == nil {
+		return
+	}
+	for _, output := range outputs {
+		if output == "" || containsString(step.ExpectedOutput, output) {
+			continue
+		}
+		step.ExpectedOutput = append(step.ExpectedOutput, output)
+	}
 }
 
 func rewireVideoPromptShotSource(step *AgentStep, shotAnchor, shotField string) {
@@ -873,6 +1610,109 @@ func insertPlanStepAt(plan *AgentPlan, index int, step AgentStep) string {
 	return step.ID
 }
 
+func canonicalizePlanStep(plan *AgentPlan, oldID, desiredID string) string {
+	if plan == nil || oldID == "" || desiredID == "" || oldID == desiredID {
+		return oldID
+	}
+	if planStepByID(plan, desiredID) != nil {
+		return oldID
+	}
+	renamePlanStepID(plan, oldID, desiredID)
+	return desiredID
+}
+
+func renamePlanStepID(plan *AgentPlan, oldID, newID string) {
+	if plan == nil || oldID == "" || newID == "" || oldID == newID {
+		return
+	}
+	for i := range plan.Steps {
+		if plan.Steps[i].ID == oldID {
+			plan.Steps[i].ID = newID
+		}
+		for depIndex, dep := range plan.Steps[i].DependsOn {
+			if dep == oldID {
+				plan.Steps[i].DependsOn[depIndex] = newID
+			}
+		}
+		for key, value := range plan.Steps[i].Arguments {
+			plan.Steps[i].Arguments[key] = rewriteOutputRefStepID(value, oldID, newID)
+		}
+	}
+}
+
+func rewriteOutputRefStepID(value interface{}, oldID, newID string) interface{} {
+	switch typed := value.(type) {
+	case string:
+		prefix := "{{" + oldID + ".output."
+		if strings.HasPrefix(typed, prefix) {
+			return "{{" + newID + ".output." + strings.TrimPrefix(typed, prefix)
+		}
+		return typed
+	case []interface{}:
+		for i := range typed {
+			typed[i] = rewriteOutputRefStepID(typed[i], oldID, newID)
+		}
+		return typed
+	case map[string]interface{}:
+		for key, item := range typed {
+			typed[key] = rewriteOutputRefStepID(item, oldID, newID)
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
+func movePlanStepToIndex(plan *AgentPlan, stepID string, index int) {
+	if plan == nil || stepID == "" {
+		return
+	}
+	from := planStepIndex(plan, stepID)
+	if from < 0 {
+		return
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(plan.Steps) {
+		index = len(plan.Steps) - 1
+	}
+	if from == index {
+		return
+	}
+	step := plan.Steps[from]
+	plan.Steps = append(plan.Steps[:from], plan.Steps[from+1:]...)
+	if from < index {
+		index--
+	}
+	plan.Steps = append(plan.Steps, AgentStep{})
+	copy(plan.Steps[index+1:], plan.Steps[index:])
+	plan.Steps[index] = step
+}
+
+func movePlanStepAfter(plan *AgentPlan, stepID, afterID string) {
+	if plan == nil || stepID == "" || afterID == "" || stepID == afterID {
+		return
+	}
+	from := planStepIndex(plan, stepID)
+	to := planStepIndex(plan, afterID)
+	if from < 0 || to < 0 {
+		return
+	}
+	if from == to+1 {
+		return
+	}
+	step := plan.Steps[from]
+	plan.Steps = append(plan.Steps[:from], plan.Steps[from+1:]...)
+	if from < to {
+		to--
+	}
+	insertAt := to + 1
+	plan.Steps = append(plan.Steps, AgentStep{})
+	copy(plan.Steps[insertAt+1:], plan.Steps[insertAt:])
+	plan.Steps[insertAt] = step
+}
+
 func mergeStepArgsAndDeps(step *AgentStep, args map[string]interface{}, deps ...string) {
 	if step == nil {
 		return
@@ -886,6 +1726,17 @@ func mergeStepArgsAndDeps(step *AgentStep, args map[string]interface{}, deps ...
 	for _, dep := range deps {
 		appendDependencyIfMissing(step, dep)
 	}
+}
+
+func replaceStepArgsAndDeps(step *AgentStep, args map[string]interface{}, deps ...string) {
+	if step == nil {
+		return
+	}
+	step.Arguments = make(map[string]interface{}, len(args))
+	for key, value := range args {
+		step.Arguments[key] = value
+	}
+	step.DependsOn = dependencyListUnique(deps...)
 }
 
 func appendPlanStep(plan *AgentPlan, step AgentStep) string {
@@ -972,6 +1823,39 @@ func planStepByID(plan *AgentPlan, id string) *AgentStep {
 	return nil
 }
 
+func planStepByTool(plan *AgentPlan, toolName string) *AgentStep {
+	if plan == nil || toolName == "" {
+		return nil
+	}
+	for i := range plan.Steps {
+		if plan.Steps[i].Tool == toolName {
+			return &plan.Steps[i]
+		}
+	}
+	return nil
+}
+
+func planStepIndex(plan *AgentPlan, id string) int {
+	if plan == nil || id == "" {
+		return -1
+	}
+	for i := range plan.Steps {
+		if plan.Steps[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func firstNonEmptyStepID(stepIDs ...string) string {
+	for _, stepID := range stepIDs {
+		if stepID != "" {
+			return stepID
+		}
+	}
+	return ""
+}
+
 func dependencyList(stepID string) []string {
 	if stepID == "" {
 		return nil
@@ -1006,22 +1890,6 @@ func uniqueStepID(plan *AgentPlan, base string) string {
 			return candidate
 		}
 	}
-}
-
-func planHasToolOrTerm(plan *AgentPlan, terms []string) bool {
-	return lastStepMatching(plan, terms) != ""
-}
-
-func lastStepMatching(plan *AgentPlan, terms []string) string {
-	if plan == nil {
-		return ""
-	}
-	for i := len(plan.Steps) - 1; i >= 0; i-- {
-		if stepMentionsAny(plan.Steps[i], terms) {
-			return plan.Steps[i].ID
-		}
-	}
-	return ""
 }
 
 func (c *PlanCompiler) lastProducerStepForFields(plan *AgentPlan, fields []string, fallbackTools []string) (string, string) {
@@ -1098,22 +1966,6 @@ func manifestAcceptsParam(manifest *tool.ToolManifest, name string) bool {
 	return ok
 }
 
-func stepMentionsAny(step AgentStep, terms []string) bool {
-	haystack := strings.ToLower(step.ID + " " + step.Intent + " " + step.Tool)
-	if stage, ok := step.Arguments["stage"].(string); ok {
-		haystack += " " + stage
-	}
-	for _, out := range step.ExpectedOutput {
-		haystack += " " + strings.ToLower(out)
-	}
-	for _, term := range terms {
-		if strings.Contains(haystack, strings.ToLower(term)) {
-			return true
-		}
-	}
-	return false
-}
-
 func requestedAIGCProvider(plan *AgentPlan) string {
 	if plan == nil {
 		return ""
@@ -1127,6 +1979,98 @@ func requestedAIGCProvider(plan *AgentPlan) string {
 		}
 	}
 	return ""
+}
+
+func requestedProjectID(plan *AgentPlan) string {
+	if plan == nil {
+		return ""
+	}
+	for _, step := range plan.Steps {
+		for _, key := range []string{"projectId", "projectID", "project_id", "videoProjectId", "video_project_id"} {
+			raw, ok := step.Arguments[key].(string)
+			if !ok {
+				continue
+			}
+			value := strings.TrimSpace(raw)
+			if value == "" || strings.Contains(value, "{{") {
+				continue
+			}
+			return value
+		}
+	}
+	return ""
+}
+
+func requestedRenderTimeoutSec(plan *AgentPlan) int {
+	if plan == nil {
+		return 90
+	}
+	for _, step := range plan.Steps {
+		if step.Arguments == nil {
+			continue
+		}
+		for _, key := range []string{"renderTimeoutSec", "hyperframesRenderTimeoutSec"} {
+			if value := positiveIntFromPlanValue(step.Arguments[key]); value > 0 {
+				return value
+			}
+		}
+	}
+	for _, step := range plan.Steps {
+		if step.Arguments == nil {
+			continue
+		}
+		if value := positiveIntFromPlanValue(step.Arguments["timeoutSec"]); value > 0 {
+			return value
+		}
+	}
+	return 90
+}
+
+func positiveIntFromPlanValue(raw interface{}) int {
+	switch value := raw.(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case int64:
+		if value > 0 {
+			return int(value)
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case float32:
+		if value > 0 {
+			return int(value)
+		}
+	case json.Number:
+		if n, err := value.Int64(); err == nil && n > 0 {
+			return int(n)
+		}
+	case string:
+		value = strings.TrimSpace(value)
+		if value == "" || strings.Contains(value, "{{") {
+			return 0
+		}
+		if n, err := strconv.Atoi(value); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func applyProjectContextToStep(step *AgentStep, projectID string) {
+	if step == nil || strings.TrimSpace(projectID) == "" {
+		return
+	}
+	if step.Arguments == nil {
+		step.Arguments = map[string]interface{}{}
+	}
+	if existing, ok := step.Arguments["projectId"].(string); ok && strings.TrimSpace(existing) != "" {
+		return
+	}
+	step.Arguments["projectId"] = strings.TrimSpace(projectID)
 }
 
 func stepOutputRef(stepID, field string) string {

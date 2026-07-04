@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 )
@@ -325,6 +326,7 @@ func BuildExternalGenerationResultArtifactRequest(projectID, workflowRunID, task
 	if unitID == "" {
 		unitID = manifest.AssetID
 	}
+	provenance := manualAssetProvenance(manifest)
 	return &artifact.CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,
@@ -341,6 +343,7 @@ func BuildExternalGenerationResultArtifactRequest(projectID, workflowRunID, task
 		PromptHash:    manifest.PromptHash,
 		Provider:      "external-generation-upload",
 		Metadata: map[string]interface{}{
+			"schemaVersion":               1,
 			"artifactType":                "external_generation_result",
 			"assetId":                     manifest.AssetID,
 			"assetType":                   string(manifest.Type),
@@ -351,8 +354,44 @@ func BuildExternalGenerationResultArtifactRequest(projectID, workflowRunID, task
 			"referenceAssetIds":           manifest.ReferenceAssetIDs,
 			"description":                 manifest.Description,
 			"tags":                        manifest.Tags,
+			"sourceType":                  provenance["sourceType"],
+			"providerName":                provenance["providerName"],
+			"providerJobId":               provenance["providerJobId"],
+			"fallbackReason":              provenance["fallbackReason"],
+			"isFallback":                  provenance["isFallback"],
+			"generatedAt":                 provenance["generatedAt"],
+			"inputPromptHash":             provenance["inputPromptHash"],
+			"sourceArtifactIds":           provenance["sourceArtifactIds"],
+			"provenance":                  provenance,
 		},
 	}, nil
+}
+
+func manualAssetProvenance(manifest ManualAssetManifest) map[string]interface{} {
+	providerName := strings.TrimSpace(manifest.ExternalPlatform)
+	if providerName == "" {
+		providerName = strings.TrimSpace(manifest.Source)
+	}
+	if providerName == "" {
+		providerName = "external-generation-upload"
+	}
+	sourceArtifactIDs := make([]interface{}, 0, len(manifest.ReferenceAssetIDs))
+	for _, id := range manifest.ReferenceAssetIDs {
+		if strings.TrimSpace(id) != "" {
+			sourceArtifactIDs = append(sourceArtifactIDs, strings.TrimSpace(id))
+		}
+	}
+	return map[string]interface{}{
+		"schemaVersion":     1,
+		"sourceType":        "uploaded",
+		"providerName":      providerName,
+		"providerJobId":     strings.TrimSpace(manifest.GenerationRequestID),
+		"fallbackReason":    "",
+		"isFallback":        false,
+		"generatedAt":       time.Now().UTC().Format(time.RFC3339),
+		"inputPromptHash":   strings.TrimSpace(manifest.PromptHash),
+		"sourceArtifactIds": sourceArtifactIDs,
+	}
 }
 
 func validAssetType(value AssetType) bool {

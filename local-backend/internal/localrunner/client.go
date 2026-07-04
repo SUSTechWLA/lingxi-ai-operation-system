@@ -96,6 +96,16 @@ type FailJobRequest struct {
 	Diagnostics map[string]interface{} `json:"diagnostics,omitempty"`
 }
 
+type HTTPStatusError struct {
+	Method     string
+	Path       string
+	StatusCode int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("cloud API %s %s returned %d", e.Method, e.Path, e.StatusCode)
+}
+
 func (c *Client) Register(ctx context.Context, req RegisterRunnerRequest) (*RegisterRunnerResponse, error) {
 	var resp RegisterRunnerResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/api/local-runners/register", req, &resp); err != nil {
@@ -177,7 +187,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body interface
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("cloud API %s %s returned %d", method, path, resp.StatusCode)
+		return &HTTPStatusError{Method: method, Path: path, StatusCode: resp.StatusCode}
 	}
 	if out == nil {
 		return nil

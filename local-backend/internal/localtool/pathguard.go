@@ -19,14 +19,6 @@ func NewPathGuard(dataDir string) *PathGuard {
 	return &PathGuard{dataDir: dataDir}
 }
 
-// allowedPrefixes defines the local:// URI prefixes that PathGuard will resolve.
-var allowedPrefixes = map[string]string{
-	"local://projects/":  "projects",
-	"local://artifacts/": "artifacts",
-	"local://cache/":     "cache",
-	"local://logs/":      "logs",
-}
-
 // forbiddenSegments lists path segments that are always rejected.
 var forbiddenSegments = []string{"..", "~"}
 

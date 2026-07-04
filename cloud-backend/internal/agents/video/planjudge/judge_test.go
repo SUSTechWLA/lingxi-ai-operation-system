@@ -95,6 +95,31 @@ func TestJudgeWarnsForRedundantTool(t *testing.T) {
 	}
 }
 
+func TestJudgeAllowsMCPGenerationRunnerForDifferentStages(t *testing.T) {
+	plan := goodVoicePlan()
+	plan.Steps = append(plan.Steps,
+		agentruntime.AgentStep{
+			ID:        "reference_asset_generation",
+			Tool:      "mcp_generation_runner",
+			Arguments: map[string]interface{}{"stage": "reference_asset_generation"},
+		},
+		agentruntime.AgentStep{
+			ID:        "mcp_generation",
+			Tool:      "mcp_generation_runner",
+			Arguments: map[string]interface{}{"stage": "aigc_generation"},
+		},
+	)
+
+	report := New().Evaluate(plan)
+
+	if hasWarning(report, WarningRedundantTool) {
+		t.Fatalf("MCP runner should be reusable across different stages, got %+v", report.Warnings)
+	}
+	if !report.Passed {
+		t.Fatalf("different-stage MCP runner plan should pass, warnings: %+v", report.Warnings)
+	}
+}
+
 func TestJudgeFailsWhenRequiredVideoStagesMissing(t *testing.T) {
 	plan := &agentruntime.AgentPlan{
 		Goal:   "make incomplete video",

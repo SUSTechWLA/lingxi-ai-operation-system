@@ -100,8 +100,11 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		StopPolicy: StopPolicy{StopWhenEnough: true},
 	}
 
-	// Validate the plan before returning, same as LLMPlanner does.
-	if err := NewPlanGuard(toolManifestCatalog(manifests), nil).Validate(plan); err != nil {
+	catalog := toolManifestCatalog(manifests)
+	plan = NewPlanCompiler(catalog).PreparePlan(plan)
+
+	// Validate the prepared plan before returning, same as LLMPlanner does.
+	if err := NewPlanGuard(catalog, nil).Validate(plan); err != nil {
 		return nil, fmt.Errorf("heuristic planner returned invalid plan: %w", err)
 	}
 
@@ -115,15 +118,6 @@ func defaultKnowledgePolicyForTools(message, domain string, manifests []*tool.To
 	}
 	_ = manifests
 	return policy
-}
-
-func manifestListHasTool(manifests []*tool.ToolManifest, name string) bool {
-	for _, manifest := range manifests {
-		if manifest != nil && manifest.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 func (p *HeuristicPlanner) selectTools(domain, message string) []*tool.ToolManifest {

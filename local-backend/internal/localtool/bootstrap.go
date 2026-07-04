@@ -64,9 +64,13 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 		NewFinalReviewExecutor(guard, cfg.DataDir),
 		CommandFinalReview,
 	)
+	reg.Register(
+		NewVideoFrameQAExecutor(cfg.DataDir),
+		CommandVideoFrameQA,
+	)
 	if cfg.MCPProviderLoader != nil {
 		reg.Register(
-			NewMCPToolCallExecutor(cfg.MCPProviderLoader),
+			NewMCPToolCallExecutorWithDataDir(cfg.MCPProviderLoader, cfg.DataDir),
 			CommandLocalMCPToolCall,
 		)
 	}

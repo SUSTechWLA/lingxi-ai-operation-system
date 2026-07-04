@@ -61,6 +61,7 @@ import type { AuthUser } from '../services/auth'
 import {
   buildClientModelProvidersForRun,
   checkJiMengLogin,
+  createLocalDiagnostics,
   fetchJiMengSetupStatus,
   fetchLocalArtifactFile,
   fetchModelProviderSettings,
@@ -71,6 +72,7 @@ import {
   uploadLocalArtifactFile,
   type JiMengSetupStatusResponse,
   type LocalArtifactFileResponse,
+  type LocalMCPProviderConfig,
   type MCPToolCallResult,
   type ModelCapability,
   type ModelProviderSettingsResponse,
@@ -154,7 +156,7 @@ const fallbackRoles: VideoRoleAgent[] = [
   { id: 'continuity_keeper', name: 'Continuity Keeper', displayName: '连续性检查', stage: 'continuity', goal: '维护风格、术语、产物依赖与下游失效规则。', allowedTools: ['continuity_checker', 'stale_tracker'], requiredOutputs: ['CONTINUITY_REPORT'] },
   { id: 'preview_director', name: 'Preview Director', displayName: '预览导演', stage: 'preview', goal: '生成本地预览图，检查可读性和版式。', allowedTools: ['hyperframes_project_generator', 'hyperframes_snapshot', 'preview_quality_checker'], requiredOutputs: ['HYPERFRAMES_PROJECT', 'PREVIEW_SNAPSHOTS'], humanReview: { required: true, reviewFocus: ['画面是否可读', '文字是否溢出', '是否允许进入最终渲染'] } },
   { id: 'render_producer', name: 'Render Producer', displayName: '渲染制片', stage: 'render', goal: '检查渲染依赖，创建本地渲染任务并追踪状态。', allowedTools: ['render_dependency_guard', 'hyperframes_renderer', 'local_job_status_tracker'], requiredOutputs: ['VIDEO', 'RENDER_REPORT'], humanReview: { required: true, reviewFocus: ['预览是否已确认', '渲染依赖是否完整'] } },
-  { id: 'quality_reviewer', name: 'Quality Reviewer', displayName: '质量审核', stage: 'quality', goal: '检查文件、时长、分辨率、视频流和产物完整性。', allowedTools: ['ffmpeg_probe', 'final_review_generator'], requiredOutputs: ['FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'] },
+  { id: 'quality_reviewer', name: 'Quality Reviewer', displayName: '质量审核', stage: 'quality', goal: '检查抽帧清晰度、文字安全区、文件、时长、分辨率、视频流和产物完整性。', allowedTools: ['video_frame_qa', 'ffmpeg_probe', 'final_review_generator'], requiredOutputs: ['VIDEO_VISUAL_QA_REPORT', 'VIDEO_VISUAL_QA_CONTACT_SHEET', 'FFMPEG_PROBE_REPORT', 'FINAL_REVIEW'] },
   { id: 'package_producer', name: 'Package Producer', displayName: '交付制片', stage: 'package', goal: '打包最终视频、结构说明、预览图、决策日志和审核报告。', allowedTools: ['artifact_packager'], requiredOutputs: ['PROJECT_PACKAGE'] },
 ]
 
@@ -309,11 +311,11 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   }, [project?.id, refreshRun, run?.id, run?.status])
 
   const projectStarted = isProjectSessionStarted(loading, project?.status, run?.status)
-  const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted), [roleAgents, reviews, trace, projectStarted])
+  const stages = useMemo(() => buildDirectorStages(roleAgents, reviews, trace, projectStarted, run?.status), [roleAgents, reviews, trace, projectStarted, run?.status])
   const displayStages = useMemo(() => applyOptimisticRunningStage(stages, optimisticRunningStageId), [stages, optimisticRunningStageId])
   const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace, projectArtifacts as unknown as Array<Record<string, unknown>>), [roleAgents, reviews, trace, projectArtifacts])
   const traceNodes = useMemo(() => buildDirectorTraceNodes(trace), [trace])
-  const nextAction = useMemo(() => deriveNextAction(displayStages), [displayStages])
+  const nextAction = useMemo(() => deriveNextAction(displayStages, run?.status), [displayStages, run?.status])
   const pendingReviews = reviews.filter(isActionablePendingReview)
   const activeReview = pendingReviews[0]
   const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
@@ -420,7 +422,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     setJimengSetupLoading(true)
     setJimengSetupError(null)
     try {
-      await registerJiMengMCP(jimengSetupStatus?.mcpProvider?.endpoint || jimengSetupStatus?.defaultMcpEndpoint)
+      await registerJiMengMCP({ transport: 'stdio' })
       await refreshJiMengSetupStatus()
     } catch (err) {
       setJimengSetupError(normalizeDirectorErrorMessage(err))
@@ -581,7 +583,8 @@ function JiMengSetupPanel(props: {
   const mcpRegistered = Boolean(status?.mcpProvider)
   const mcpReachable = providerStatus?.reachable === true
   const canUseForProfile = selectedProfile.projectMode === 'aigc_shot' || selectedProfile.generationMode === 'manual_import'
-  const startCommand = status?.mcpStartCommand || 'jimeng-mcp -addr 127.0.0.1:18180'
+  const startCommand = status?.mcpStartCommand || 'python3 mcp/jimeng/server.py'
+  const providerDetail = status?.mcpProvider ? mcpProviderDetail(status.mcpProvider) : 'stdio provider'
   const installCommand = status?.installCommand || 'curl -fsSL https://jimeng.jianying.com/cli | bash'
   const [loginResult, setLoginResult] = useState<MCPToolCallResult | null>(null)
   const [loginLoading, setLoginLoading] = useState(false)
@@ -636,7 +639,7 @@ function JiMengSetupPanel(props: {
                 <p className="text-sm font-black text-primary-dark">即梦 AIGC 扩展</p>
                 <h3 className="mt-1 text-lg font-black text-ink">{headline}</h3>
                 <p className="mt-2 text-sm leading-6 text-ink-muted">
-                  用户自己的 Dreamina 登录态保留在本机，躺营只调用已注册的本地 MCP endpoint。
+                  用户自己的 Dreamina 登录态保留在本机，躺营只调用已注册的本地 MCP provider。
                 </p>
               </div>
             </div>
@@ -645,7 +648,7 @@ function JiMengSetupPanel(props: {
           {error ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{error}</div> : null}
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <JiMengStep label="Dreamina CLI" detail={status?.dreaminaVersion || installCommand} done={status?.dreaminaAvailable === true} />
-            <JiMengStep label="MCP 注册" detail={status?.mcpProvider?.endpoint || status?.defaultMcpEndpoint || '127.0.0.1:18180'} done={mcpRegistered} />
+            <JiMengStep label="MCP 注册" detail={providerDetail} done={mcpRegistered} />
             <JiMengStep label="MCP 连接" detail={providerStatus?.error || (mcpReachable ? 'tools/list 正常' : '等待服务启动')} done={mcpReachable} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -773,6 +776,13 @@ function JiMengStep({ label, detail, done }: { label: string; detail: string; do
   )
 }
 
+function mcpProviderDetail(provider: LocalMCPProviderConfig): string {
+  if (provider.transport === 'stdio') {
+    return [provider.command, ...(provider.args || [])].filter(Boolean).join(' ') || 'stdio'
+  }
+  return provider.endpoint || provider.transport || 'mcp provider'
+}
+
 function isJiMengReady(status: JiMengSetupStatusResponse | null): boolean {
   if (!status?.dreaminaAvailable) return false
   const provider = status.mcpProviders?.find((item) => item.id === 'jimeng')
@@ -839,7 +849,7 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, on
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
           <div className={clsx('rounded-lg px-3 py-2', localStatusClassName)}>{localStatus.label}</div>
-          <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v1.0 内测</div>
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-primary-dark">v0.1.0 内测</div>
         </div>
       </div>
     </aside>
@@ -856,7 +866,7 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
         <div className="flex items-center gap-2 text-sm font-semibold text-primary-dark">
           <FiZap /> 多角色协作 · 可追踪 · 分阶段确认 · 本地可控渲染
         </div>
-        <h1 className="mt-2 text-3xl font-black text-gradient md:text-4xl">躺营导演台 v1.0</h1>
+        <h1 className="mt-2 text-3xl font-black text-gradient md:text-4xl">躺营导演台 v0.1.0</h1>
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <div className="hidden items-center gap-2 rounded-lg bg-white/75 px-4 py-3 text-sm text-ink-muted ring-1 ring-line xl:flex">
@@ -2100,6 +2110,9 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
   const [publishContent, setPublishContent] = useState<unknown>(null)
   const [publishLoading, setPublishLoading] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
+  const [diagnosticsPath, setDiagnosticsPath] = useState<string | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const videoReady = video?.status === 'valid' && Boolean(video.storageRef)
   const packageReady = packageArtifact?.status === 'valid' && Boolean(packageArtifact.storageRef)
   const videoStorageRef = video?.storageRef || ''
@@ -2186,6 +2199,23 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
     const opened = await openLocalPath(videoLocalPath)
     if (!opened) setVideoPreviewError('当前浏览器环境不能打开本地文件夹，请在桌面端使用该功能。')
   }
+  const exportDiagnostics = async () => {
+    setDiagnosticsLoading(true)
+    setDiagnosticsError(null)
+    try {
+      const result = await createLocalDiagnostics(`closed-beta-export:${projectId || 'no-project'}`)
+      setDiagnosticsPath(result.path)
+    } catch (err) {
+      setDiagnosticsError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }
+  const openDiagnostics = async () => {
+    if (!diagnosticsPath) return
+    const opened = await openLocalPath(diagnosticsPath)
+    if (!opened) setDiagnosticsError('当前浏览器环境不能打开诊断包，请在桌面端使用该功能。')
+  }
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
@@ -2222,6 +2252,16 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> JSON</button>
+          </div>
+        </section>
+        <section className="card p-6">
+          <h3 className="text-lg font-black text-ink">诊断包</h3>
+          <p className="mt-2 text-sm leading-6 text-ink-muted">导出 beta-diagnostics.zip，包含脱敏环境、日志、MCP 状态、artifact manifest 和 QA 报告索引。</p>
+          {diagnosticsError ? <div className="mt-3 rounded-lg bg-red-50 p-3 text-xs font-semibold text-red-700 ring-1 ring-red-200">{diagnosticsError}</div> : null}
+          {diagnosticsPath ? <div className="mt-3 truncate rounded-lg bg-background-card p-3 font-mono text-[11px] text-ink-soft ring-1 ring-line" title={diagnosticsPath}>{diagnosticsPath}</div> : null}
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button disabled={diagnosticsLoading} onClick={() => { void exportDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiArchive /> {diagnosticsLoading ? '导出中...' : '导出诊断包'}</button>
+            <button disabled={!diagnosticsPath} onClick={() => { void openDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开诊断包</button>
           </div>
         </section>
         <section className="card p-6">
@@ -2465,11 +2505,15 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
         <tbody className="divide-y divide-line bg-white/70">
           {artifacts.map((artifact) => {
             const active = selectedId === artifact.id
+            const provenance = artifactProvenanceSummary(artifact)
             return (
               <Fragment key={artifact.id}>
                 <tr>
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
-                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">{artifact.name}</td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <div className="font-semibold text-ink">{artifact.name}</div>
+                    {provenance ? <div className={clsx('mt-1 text-[11px] font-bold', provenance.isFallback ? 'text-amber-700' : 'text-ink-soft')}>{provenance.label}</div> : null}
+                  </td>
                   <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td>
                   <td className="whitespace-nowrap px-4 py-3">
                     <StatusBadge
@@ -2499,6 +2543,11 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
                             <div className="min-w-0">
                               <div className="truncate text-sm font-black text-ink">{artifact.name}</div>
                               <div className="mt-1 truncate font-mono text-[11px] text-ink-soft">{artifact.storageRef || 'storage_ref pending'}</div>
+                              {provenance ? (
+                                <div className={clsx('mt-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1', provenance.isFallback ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-background-card text-ink-muted ring-line')}>
+                                  {provenance.detail}
+                                </div>
+                              ) : null}
                             </div>
                             {content !== null && content !== undefined ? <CopyButton value={artifactContentText(content)} label="复制正文" /> : null}
                           </div>
@@ -2864,6 +2913,36 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+}
+
+function artifactProvenanceSummary(artifact: DirectorArtifactRecord): { label: string; detail: string; isFallback: boolean } | null {
+  const metadata = artifact.metadata || {}
+  const provenance = metadata.provenance && typeof metadata.provenance === 'object'
+    ? metadata.provenance as Record<string, unknown>
+    : {}
+  const sourceType = stringFromUnknown(provenance.sourceType) || stringFromUnknown(metadata.sourceType)
+  const providerName = stringFromUnknown(provenance.providerName) || stringFromUnknown(metadata.providerName) || stringFromUnknown(artifact.metadata?.provider)
+  const providerJobId = stringFromUnknown(provenance.providerJobId) || stringFromUnknown(metadata.providerJobId)
+  const fallbackReason = stringFromUnknown(provenance.fallbackReason) || stringFromUnknown(metadata.fallbackReason)
+  const isFallback = booleanFromUnknown(provenance.isFallback) || booleanFromUnknown(metadata.isFallback) || sourceType.startsWith('fallback_')
+  if (!sourceType && !providerName && !fallbackReason) return null
+  const sourceLabel = sourceType ? sourceType.replace(/_/gu, ' ') : 'unknown source'
+  const label = isFallback ? `fallback: ${sourceLabel}` : sourceLabel
+  const parts = [
+    `来源: ${sourceLabel}`,
+    providerName ? `provider: ${providerName}` : '',
+    providerJobId ? `job: ${providerJobId}` : '',
+    fallbackReason ? `fallback reason: ${fallbackReason}` : '',
+  ].filter(Boolean)
+  return { label, detail: parts.join(' · '), isFallback }
+}
+
+function stringFromUnknown(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function booleanFromUnknown(value: unknown): boolean {
+  return value === true || value === 'true'
 }
 
 function artifactToCopyText(artifact: DirectorArtifactRecord) {

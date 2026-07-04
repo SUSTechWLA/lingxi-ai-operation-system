@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -267,8 +266,4 @@ func (r *memoryRepository) UpsertDevice(_ context.Context, device *Device) error
 	cp := *device
 	r.devicesByID[device.ID] = &cp
 	return nil
-}
-
-func (r *memoryRepository) unused() error {
-	return errors.New("compile guard")
 }

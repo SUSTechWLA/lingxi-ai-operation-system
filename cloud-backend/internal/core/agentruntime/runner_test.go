@@ -191,6 +191,31 @@ func TestRunnerGetSyncsSuccessfulTaskStatusToRun(t *testing.T) {
 	}
 }
 
+func TestRunnerGetRestoresFailedRunWhenTaskRecoveredToSuccess(t *testing.T) {
+	store := newMemoryRunStore()
+	_ = store.SaveRun(context.Background(), &Run{
+		ID:     "run-1",
+		TaskID: "task-1",
+		Status: RunStatusFailed,
+	})
+	runner := NewRunner(&fakeOrchestrator{taskID: "task-1", taskStatus: model.TaskSuccess}, store, nil, nil, nil)
+
+	run, task, err := runner.Get(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if run == nil || run.Status != RunStatusSuccess {
+		t.Fatalf("run status = %#v, want SUCCESS", run)
+	}
+	if task["status"] != string(model.TaskSuccess) {
+		t.Fatalf("task status = %#v, want SUCCESS", task["status"])
+	}
+	stored, _ := store.FindRun(context.Background(), "run-1")
+	if stored == nil || stored.Status != RunStatusSuccess {
+		t.Fatalf("stored run status = %#v, want SUCCESS", stored)
+	}
+}
+
 func TestRunnerStart_InjectsClientTextProviderIntoExecutableNodesOnly(t *testing.T) {
 	store := newMemoryRunStore()
 	orch := &fakeOrchestrator{taskID: "task-1"}
@@ -269,6 +294,50 @@ func TestRunnerStart_InjectsClientTextProviderIntoExecutableNodesOnly(t *testing
 	taskContext, _ := orch.createdInput["context"].(map[string]interface{})
 	if _, exists := taskContext["modelProviders"]; exists {
 		t.Fatalf("task input context should not persist raw model providers: %#v", taskContext)
+	}
+}
+
+func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
+	plan := &AgentPlan{
+		Goal:   "planner supplied stale goal",
+		Domain: "video_creation",
+		Steps: []AgentStep{
+			{ID: "script_generation", Tool: "video_script_generator"},
+			{ID: "render", Tool: "hyperframes_renderer", Arguments: map[string]interface{}{}},
+		},
+	}
+
+	applyRequestPlanDefaults(plan, StartRunRequest{
+		Message: "user supplied cinematic story request",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"renderTimeoutSec":      float64(12),
+			"profileId":             "cinematic_story",
+			"videoType":             "cinematic_story",
+			"projectMode":           "cinematic_story",
+			"aigcProvider":          "jimeng_mcp",
+			"projectId":             "vp-123",
+			"modelProviders":        map[string]interface{}{"text_to_text": map[string]interface{}{"apiKey": "secret"}},
+			"unrelatedContextValue": "ignored",
+		},
+	})
+
+	if plan.Goal != "user supplied cinematic story request" {
+		t.Fatalf("video plan goal should use request message, got %q", plan.Goal)
+	}
+	if got := plan.Steps[0].Arguments["renderTimeoutSec"]; got != float64(12) {
+		t.Fatalf("renderTimeoutSec was not copied to plan defaults: %#v", plan.Steps[0].Arguments)
+	}
+	for _, key := range []string{"profileId", "videoType", "projectMode", "aigcProvider", "projectId"} {
+		if got := plan.Steps[0].Arguments[key]; got == nil {
+			t.Fatalf("%s was not copied to plan defaults: %#v", key, plan.Steps[0].Arguments)
+		}
+	}
+	if _, exists := plan.Steps[0].Arguments["modelProviders"]; exists {
+		t.Fatalf("sensitive model provider context should not be copied: %#v", plan.Steps[0].Arguments)
+	}
+	if _, exists := plan.Steps[0].Arguments["unrelatedContextValue"]; exists {
+		t.Fatalf("unrelated context should not be copied: %#v", plan.Steps[0].Arguments)
 	}
 }
 

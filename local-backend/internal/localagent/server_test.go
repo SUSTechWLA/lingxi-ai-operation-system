@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -170,6 +171,21 @@ func TestLocalArtifactStoreAcceptsMultipartUpload(t *testing.T) {
 	}
 	if stored.Metadata["contentHash"] != stored.ContentHash {
 		t.Fatalf("metadata should include returned hash: %+v", stored.Metadata)
+	}
+	if stored.Metadata["sourceType"] != "uploaded" || stored.Metadata["providerName"] != "local-upload" || stored.Metadata["isFallback"] != false {
+		t.Fatalf("uploaded artifact should get default provenance fields: %+v", stored.Metadata)
+	}
+	provenance, ok := stored.Metadata["provenance"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("uploaded artifact should include nested provenance: %+v", stored.Metadata)
+	}
+	for _, key := range []string{"schemaVersion", "sourceType", "providerName", "providerJobId", "fallbackReason", "isFallback", "generatedAt", "inputPromptHash", "sourceArtifactIds"} {
+		if _, exists := provenance[key]; !exists {
+			t.Fatalf("uploaded provenance missing %s: %+v", key, provenance)
+		}
+	}
+	if provenance["sourceType"] != "uploaded" || provenance["providerName"] != "local-upload" {
+		t.Fatalf("unexpected uploaded provenance: %+v", provenance)
 	}
 }
 
@@ -351,6 +367,114 @@ func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	}
 }
 
+func TestLocalMCPProviderSettingsAcceptsStandardStdioProvider(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+	body := bytes.NewBufferString(`{
+		"providers":[{
+			"id":"echo",
+			"label":"Echo MCP",
+				"transport":"stdio",
+				"command":"python3",
+				"args":["/opt/mcp/echo_server.py"],
+				"env":{"ECHO_MODE":"test"},
+				"toolPrefix":"echo.",
+				"toolNameMap":{"echo.health":"health"},
+				"enabled":true
+			}]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save stdio provider status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var listed LocalMCPProviderSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("invalid mcp provider response: %v", err)
+	}
+	if len(listed.Providers) != 1 {
+		t.Fatalf("providers = %#v, want one", listed.Providers)
+	}
+	provider := listed.Providers[0]
+	if provider.Transport != "stdio" || provider.Command != "python3" || provider.Endpoint != "" {
+		t.Fatalf("stdio provider not normalized as expected: %+v", provider)
+	}
+	if len(provider.Args) != 1 || provider.Args[0] != "/opt/mcp/echo_server.py" {
+		t.Fatalf("stdio args not preserved: %+v", provider.Args)
+	}
+	if provider.Env["ECHO_MODE"] != "test" {
+		t.Fatalf("stdio env not preserved: %+v", provider.Env)
+	}
+	if provider.ToolPrefix != "echo." || provider.ToolNameMap["echo.health"] != "health" {
+		t.Fatalf("stdio tool mapping not preserved: %+v", provider)
+	}
+}
+
+func TestJiMengSetupStatusReadsDreaminaStatusThroughMCP(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeAgentCommandRunner{}
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode mcp request: %v", err)
+		}
+		resp := map[string]interface{}{"jsonrpc": "2.0", "id": req["id"]}
+		switch req["method"] {
+		case "tools/list":
+			resp["result"] = map[string]interface{}{
+				"tools": []map[string]interface{}{
+					{"name": "jimeng.check_status", "description": "check status"},
+					{"name": "jimeng.generate_video", "description": "generate video"},
+				},
+			}
+		case "tools/call":
+			params := req["params"].(map[string]interface{})
+			if params["name"] != "jimeng.check_status" {
+				t.Fatalf("tool = %v, want jimeng.check_status", params["name"])
+			}
+			resp["result"] = map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"available": true,
+					"version":   "dreamina-from-mcp",
+				},
+			}
+		default:
+			t.Fatalf("unexpected mcp method %v", req["method"])
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer mcp.Close()
+
+	server := NewServer(Config{DataDir: root, CommandRunner: runner})
+	body := bytes.NewBufferString(`{"providers":[{"id":"jimeng","label":"JiMeng","endpoint":"` + mcp.URL + `","enabled":true}]}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/local/mcp-providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/jimeng/setup/status", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var status JiMengSetupStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode setup status: %v", err)
+	}
+	if !status.DreaminaAvailable || status.DreaminaVersion != "dreamina-from-mcp" {
+		t.Fatalf("dreamina status = available:%v version:%q, want MCP result", status.DreaminaAvailable, status.DreaminaVersion)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("setup status must not call Dreamina CLI directly: %+v", runner.calls)
+	}
+}
+
 func TestJiMengInstallCLIRequiresExplicitConfirmation(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeAgentCommandRunner{out: CommandOutput{Stdout: "installed"}}
@@ -406,6 +530,45 @@ func TestJiMengRegisterMCPStoresDefaultProvider(t *testing.T) {
 	}
 	if len(listed.Providers) != 1 || listed.Providers[0].ID != "jimeng" || !listed.Providers[0].Enabled {
 		t.Fatalf("providers = %+v", listed.Providers)
+	}
+}
+
+func TestJiMengRegisterMCPStoresDefaultStandardStdioProvider(t *testing.T) {
+	root := t.TempDir()
+	server := NewServer(Config{DataDir: root})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/jimeng/setup/register-mcp", bytes.NewBufferString(`{"transport":"stdio"}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register stdio status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/local/mcp-providers", nil)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get providers status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var listed LocalMCPProviderSettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode providers: %v", err)
+	}
+	if len(listed.Providers) != 1 {
+		t.Fatalf("providers = %+v", listed.Providers)
+	}
+	provider := listed.Providers[0]
+	if provider.ID != "jimeng" || provider.Transport != "stdio" || provider.Command == "" || len(provider.Args) == 0 {
+		t.Fatalf("stdio provider not registered as expected: %+v", provider)
+	}
+	if provider.ToolPrefix != "jimeng." {
+		t.Fatalf("tool prefix = %q, want jimeng.", provider.ToolPrefix)
+	}
+	if provider.Endpoint != "" {
+		t.Fatalf("stdio provider endpoint = %q, want empty", provider.Endpoint)
+	}
+	if !strings.HasSuffix(provider.Args[0], filepath.Join("mcp", "jimeng", "server.py")) {
+		t.Fatalf("stdio script arg = %q, want jimeng server.py", provider.Args[0])
 	}
 }
 
@@ -479,8 +642,10 @@ func TestModelProviderSettingsRejectUnsupportedCapability(t *testing.T) {
 func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})
+	t.Setenv("TANGYING_APP_VERSION", "9.9.9-beta")
+	t.Setenv("TANGYING_GIT_COMMIT", "abc1234-test")
 
-	body := bytes.NewBufferString(`{"source":"desktop","level":"info","message":"render complete","fields":{"project":"demo"}}`)
+	body := bytes.NewBufferString(`{"source":"desktop","level":"info","message":"render complete","fields":{"project":"demo","taskId":"task-beta-123","authorization":"Bearer live-token-should-redact","cookie":"session-cookie-should-redact"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/local/logs", body)
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
@@ -495,6 +660,35 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	}
 	if !bytes.Contains(content, []byte("render complete")) {
 		t.Fatalf("log file missing message: %s", string(content))
+	}
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token"},"enabled":true}]}`), 0o644); err != nil {
+		t.Fatalf("write mcp providers: %v", err)
+	}
+	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("raw-video-bytes-should-not-be-zipped"), 0o644); err != nil {
+		t.Fatalf("write artifact content: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "metadata.json"), []byte(`{"id":"video-1","projectId":"vp-1","kind":"VIDEO","sourceType":"fallback_preview","isFallback":true,"fallbackReason":"no_ready_aigc_video","storageRef":"local://projects/vp-1/artifacts/video-1/hash/final.mp4"}`), 0o644); err != nil {
+		t.Fatalf("write artifact metadata: %v", err)
+	}
+	reportDir := filepath.Join(root, "projects", "vp-1", "reports", "video_frame_qa")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatalf("create report dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reportDir, "shot_qa_reports.json"), []byte(`{"schemaVersion":1,"shotReports":[{"shotId":"SHOT_01","decision":"HUMAN_REVIEW"}]}`), 0o644); err != nil {
+		t.Fatalf("write QA report: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "logs", "failure-stack.txt"), []byte("panic: render failed\nsk-test-secret-should-redact\n"), 0o644); err != nil {
+		t.Fatalf("write failure stack: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "logs", "provider-failure.json"), []byte(`{"authorization":"Bearer json-bearer-should-redact","cookie":"json-cookie-should-redact","message":"provider failed"}`), 0o644); err != nil {
+		t.Fatalf("write json failure stack: %v", err)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/local/diagnostics", bytes.NewBufferString(`{"reason":"support-request"}`))
@@ -511,22 +705,63 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if resp.Path == "" {
 		t.Fatalf("diagnostics path is empty")
 	}
+	if filepath.Base(resp.Path) != "beta-diagnostics.zip" {
+		t.Fatalf("diagnostics filename = %q, want beta-diagnostics.zip", filepath.Base(resp.Path))
+	}
 	zr, err := zip.OpenReader(resp.Path)
 	if err != nil {
 		t.Fatalf("diagnostics zip not readable: %v", err)
 	}
 	defer zr.Close()
-	var hasManifest, hasLog bool
+	entries := map[string]string{}
 	for _, f := range zr.File {
-		if f.Name == "manifest.json" {
-			hasManifest = true
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", f.Name, err)
 		}
-		if f.Name == "logs/local-agent.jsonl" {
-			hasLog = true
+		data, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", f.Name, err)
+		}
+		entries[f.Name] = string(data)
+	}
+	for _, want := range []string{
+		"manifest.json",
+		"environment.json",
+		"env-redacted.json",
+		"mcp/provider-status.json",
+		"artifacts/manifest.json",
+		"qa/shot_qa_reports.json",
+		"failures/failure-stack.txt",
+		"logs/local-agent.jsonl",
+	} {
+		if _, ok := entries[want]; !ok {
+			t.Fatalf("diagnostics zip missing %s; entries=%v", want, entries)
 		}
 	}
-	if !hasManifest || !hasLog {
-		t.Fatalf("diagnostics zip missing files: manifest=%v log=%v", hasManifest, hasLog)
+	if _, ok := entries["artifacts/vp-1/video-1/content"]; ok {
+		t.Fatalf("diagnostics zip must not include raw artifact content")
+	}
+	var manifest map[string]interface{}
+	if err := json.Unmarshal([]byte(entries["manifest.json"]), &manifest); err != nil {
+		t.Fatalf("invalid diagnostics manifest: %v", err)
+	}
+	if manifest["appVersion"] != "9.9.9-beta" || manifest["gitCommit"] != "abc1234-test" {
+		t.Fatalf("diagnostics manifest should include version and git commit: %#v", manifest)
+	}
+	recentTaskIDs, ok := manifest["recentTaskIds"].([]interface{})
+	if !ok || len(recentTaskIDs) != 1 || recentTaskIDs[0] != "task-beta-123" {
+		t.Fatalf("diagnostics manifest should include recent task ids, got %#v", manifest["recentTaskIds"])
+	}
+	allEntries := strings.Join(mapValues(entries), "\n")
+	if strings.Contains(allEntries, "secret-token") ||
+		strings.Contains(allEntries, "sk-test-secret-should-redact") ||
+		strings.Contains(allEntries, "live-token-should-redact") ||
+		strings.Contains(allEntries, "session-cookie-should-redact") ||
+		strings.Contains(allEntries, "json-bearer-should-redact") ||
+		strings.Contains(allEntries, "json-cookie-should-redact") {
+		t.Fatalf("diagnostics zip leaked a secret: %#v", entries)
 	}
 }
 
@@ -550,6 +785,42 @@ func TestHandlerAllowsLocalFrontendCORS(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Range") {
 		t.Fatalf("allow-headers = %q, want Range", got)
+	}
+}
+
+func TestHandlerRejectsUntrustedOriginForArtifactWrite(t *testing.T) {
+	server := NewServer(Config{DataDir: t.TempDir()})
+	body := bytes.NewBufferString(`{
+		"id":"art-evil",
+		"projectId":"vp-evil",
+		"content":"blocked"
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("untrusted origin status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerAllowsLocalOriginForArtifactWrite(t *testing.T) {
+	server := NewServer(Config{DataDir: t.TempDir()})
+	body := bytes.NewBufferString(`{
+		"id":"art-local",
+		"projectId":"vp-local",
+		"content":"allowed"
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local origin status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -720,4 +991,12 @@ func TestLocalProjectDeleteRemovesProjectArtifactsAndCache(t *testing.T) {
 			t.Fatalf("project delete should remove %s, err=%v", dir, err)
 		}
 	}
+}
+
+func mapValues(values map[string]string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }

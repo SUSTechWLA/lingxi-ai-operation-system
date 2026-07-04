@@ -12,10 +12,13 @@ capabilities:
   - video_creation
   - script_generation
   - short_video
+  - cinematic_story
+  - character_scene_prop_dossiers
 tags:
   - video
   - script
   - talking_head
+  - cinematic
 
 parameters:
   topic:
@@ -42,11 +45,45 @@ parameters:
     type: string
     required: false
     description: 发布平台
+  proposal:
+    type: object
+    required: false
+    description: 影视故事基础、选题提案或创意简报
+  creationProfile:
+    type: object
+    required: false
+    description: 视频创作 profile，cinematic_story 时输出影视剧本和角色/场景/道具档案
+  knowledgeContext:
+    type: object
+    required: false
+    description: 事实、来源、证据和上游工具上下文
+  retrievalPolicy:
+    type: string
+    required: false
+    description: none|optional|required|forbidden
 
 output:
   script:
     type: string
     description: 口播稿正文
+  storyOutline:
+    type: object
+    description: 影视故事大纲，包含主题、节拍、冲突和结尾
+  detailedScript:
+    type: string
+    description: 影视详细剧本，包含动作节拍、场景推进和对白/旁白线索
+  characters:
+    type: array
+    description: 主要角色档案，包含不变项、视觉锁定和参考视角要求
+  scenes:
+    type: array
+    description: 主要场景档案，包含空间结构、光源、氛围和参考视角要求
+  props:
+    type: array
+    description: 主要道具档案，包含材质、状态变化和多视角参考要求
+  scriptSpans:
+    type: array
+    description: 可映射到 shot/time window 的剧本或口播时间段
   summary:
     type: string
     description: 内容摘要
@@ -65,6 +102,18 @@ output:
   artifacts:
     type: object
     description: 可审核的口播稿产物索引
+  usedFacts:
+    type: array
+    description: 已使用事实
+  unusedFacts:
+    type: array
+    description: 未使用事实
+  factCheckWarnings:
+    type: array
+    description: 事实核验或素材风险提示
+  knowledgeTrace:
+    type: object
+    description: 知识引用和来源追踪
 
 costLevel: low
 latencyLevel: medium

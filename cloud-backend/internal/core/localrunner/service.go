@@ -171,6 +171,12 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 		   SELECT lj.id
 		   FROM local_jobs lj
 		   WHERE lj.status='PENDING'
+		     AND NOT EXISTS (
+		       SELECT 1
+		       FROM agent_runs ar
+		       WHERE ar.task_id = lj.task_id
+		         AND ar.status IN ('CANCELLED', 'FAILED')
+		     )
 		     AND EXISTS (
 		       SELECT 1
 		       FROM local_runners lr

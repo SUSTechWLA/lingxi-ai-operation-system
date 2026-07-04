@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 )
 
 func TestHeuristicPlanner_SelectsCapabilityToolsForDomain(t *testing.T) {
@@ -99,6 +100,79 @@ func TestHeuristicPlanner_DomainFilterRecomputesLimit(t *testing.T) {
 	}
 }
 
+func TestHeuristicPlanner_DoesNotSelectVideoFrameQAAsStandaloneTool(t *testing.T) {
+	tools := staticToolList{
+		{
+			Name:         "video_script_generator",
+			Capabilities: []string{"video_creation", "script_generation"},
+			Parameters: map[string]tool.ParamDef{
+				"topic": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"script": {Type: "string"},
+			},
+		},
+		{
+			Name:         "shot_splitter",
+			Capabilities: []string{"video_creation", "shot_planning"},
+			Parameters: map[string]tool.ParamDef{
+				"script": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"shotList": {Type: "array"},
+			},
+		},
+		{
+			Name:         "video_frame_qa",
+			Capabilities: []string{"video_creation", "visual_quality", "frame_sampling", "text_safety"},
+			Parameters: map[string]tool.ParamDef{
+				"input": {Type: "string", Required: true},
+			},
+		},
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, 6)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请创作一个带抽帧 QA 的新视频流程测试",
+		Domain:  "video_creation",
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	for _, step := range plan.Steps {
+		if step.Tool == "video_frame_qa" {
+			t.Fatalf("video_frame_qa should be compiler-inserted after render, not heuristic-selected: %#v", plan.Steps)
+		}
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("heuristic fallback plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestHeuristicPlanner_WithBuiltinVideoToolsProducesValidQAFlow(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	builtin.RegisterVideoCreationExternalTools(registry)
+	planner := NewHeuristicPlannerWithMaxTools(registry, 8)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请创作一个带抽帧 QA 的新视频流程测试",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"projectId":         "vp-qa-flow",
+			"targetDurationSec": 12,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if findStep(t, plan, "visual_qa").Tool != "video_frame_qa" {
+		t.Fatalf("prepared heuristic plan should include compiler-managed visual QA: %#v", plan.Steps)
+	}
+	if err := NewPlanGuard(registry, nil).Validate(plan); err != nil {
+		t.Fatalf("prepared heuristic plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T) {
 	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
 		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},
@@ -139,6 +213,147 @@ func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T)
 	}
 }
 
+func TestHeuristicPlanner_PreparesProfilePlanBeforeValidation(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
+	catalog["video_prompt_generator"].Parameters["aigcProvider"] = tool.ParamDef{Type: "string", Required: false}
+	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["mcp_generation_runner"] = &tool.ToolManifest{
+		Name:           "mcp_generation_runner",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+		Parameters: map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Required: true},
+			"providerId":                 {Type: "string", Required: true},
+			"mcpTool":                    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotAssetPackages": {Type: "array"},
+			"generationResults": {Type: "array"},
+		},
+	}
+	tools := staticToolList{
+		cloneManifestForPlanner(catalog["video_script_generator"], "script_generation"),
+		cloneManifestForPlanner(catalog["shot_splitter"], "shot_split"),
+		cloneManifestForPlanner(catalog["time_window_planner"], "time_window_planning"),
+		cloneManifestForPlanner(catalog["visual_alignment_planner"], "visual_alignment"),
+		cloneManifestForPlanner(catalog["shot_generation_planner"], "shot_planning"),
+		cloneManifestForPlanner(catalog["video_prompt_generator"], "video_prompt_generation"),
+		cloneManifestForPlanner(catalog["video_profile_classifier"], "profile_selection"),
+		cloneManifestForPlanner(catalog["hyperframes_project_generator"], "composition_generation"),
+		cloneManifestForPlanner(catalog["hyperframes_renderer"], "video_render"),
+		cloneManifestForPlanner(catalog["publish_copy_generator"], "publish_copy"),
+		cloneManifestForPlanner(catalog["mcp_generation_runner"], "aigc_generation"),
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, len(tools))
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我制作一条宣传躺营 AI OS 的 30 秒视频",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"profileId":         "voice_visual",
+			"targetDurationSec": 30,
+			"videoType":         "voice_visual",
+			"aigcProvider":      "jimeng_mcp",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+
+	if got := plan.Steps[0].ID; got != "profile_selection" {
+		t.Fatalf("profile classifier should be canonicalized first, got %#v", plan.Steps)
+	}
+	timeWindow := findStep(t, plan, "time_window")
+	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
+		t.Fatalf("time_window creationProfile = %#v", got)
+	}
+	if got := timeWindow.Arguments["scriptSpans"]; got != "{{script_generation.output.scriptSpans}}" {
+		t.Fatalf("time_window scriptSpans = %#v", got)
+	}
+	shotSplit := findStep(t, plan, "shot_split")
+	if got := shotSplit.Arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("shot_split script = %#v", got)
+	}
+	mcpStep := findStep(t, plan, "mcp_generation")
+	if got := mcpStep.Arguments["externalGenerationRequests"]; got != "{{video_prompt.output.externalGenerationRequests}}" {
+		t.Fatalf("mcp_generation externalGenerationRequests = %#v", got)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("prepared heuristic plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestHeuristicPlanner_PreparesCinematicProfileWithSelectedKeyframes(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
+	catalog["video_prompt_generator"].Parameters["aigcProvider"] = tool.ParamDef{Type: "string", Required: false}
+	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["mcp_generation_runner"] = &tool.ToolManifest{
+		Name:           "mcp_generation_runner",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+		Parameters: map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Required: true},
+			"providerId":                 {Type: "string", Required: true},
+			"mcpTool":                    {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotAssetPackages": {Type: "array"},
+			"generationResults": {Type: "array"},
+		},
+	}
+	tools := staticToolList{
+		{Name: "knowledge_researcher", Capabilities: []string{"video_creation", "fresh_knowledge"}, Output: map[string]tool.ParamDef{"facts": {Type: "array"}, "sources": {Type: "array"}}},
+		cloneManifestForPlanner(catalog["proposal_generator"], "proposal_generation"),
+		cloneManifestForPlanner(catalog["video_script_generator"], "script_generation"),
+		cloneManifestForPlanner(catalog["continuity_checker"], "continuity"),
+		cloneManifestForPlanner(catalog["reference_asset_planner"], "reference_assets"),
+		cloneManifestForPlanner(catalog["cinematic_shot_designer"], "shot_planning"),
+		cloneManifestForPlanner(catalog["time_window_planner"], "time_window_planning"),
+		cloneManifestForPlanner(catalog["keyframe_prompt_generator"], "keyframe_generation"),
+		cloneManifestForPlanner(catalog["shot_generation_planner"], "shot_planning"),
+		cloneManifestForPlanner(catalog["video_prompt_generator"], "video_prompt_generation"),
+		cloneManifestForPlanner(catalog["video_profile_classifier"], "profile_selection"),
+		cloneManifestForPlanner(catalog["hyperframes_project_generator"], "composition_generation"),
+		cloneManifestForPlanner(catalog["hyperframes_renderer"], "video_render"),
+		cloneManifestForPlanner(catalog["publish_copy_generator"], "publish_copy"),
+		cloneManifestForPlanner(catalog["mcp_generation_runner"], "aigc_generation"),
+	}
+	planner := NewHeuristicPlannerWithMaxTools(tools, len(tools))
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请帮我制作一条开源项目上线宣传片",
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"profileId":         "aigc_shot",
+			"targetDurationSec": 120,
+			"videoType":         "aigc_shot",
+			"aigcProvider":      "jimeng_mcp",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+
+	keyframes := findStep(t, plan, "keyframes_storyboards")
+	if keyframes.Tool != "keyframe_prompt_generator" {
+		t.Fatalf("keyframes step tool = %s", keyframes.Tool)
+	}
+	if got := keyframes.Arguments["shotList"]; got != "{{time_window.output.timeWindows}}" {
+		t.Fatalf("keyframes shotList = %#v, want time window output", got)
+	}
+	if got := keyframes.Arguments["referenceAssetPlan"]; got != "{{reference_assets.output.referenceAssetPlan}}" {
+		t.Fatalf("keyframes reference assets = %#v", got)
+	}
+	if raw := planStepByTool(plan, "keyframe_prompt_generator"); raw != nil && raw.ID != "keyframes_storyboards" {
+		t.Fatalf("unexpected unprepared keyframe step left in plan: %#v", raw)
+	}
+	if err := NewPlanGuard(tools, nil).Validate(plan); err != nil {
+		t.Fatalf("prepared cinematic heuristic plan should pass PlanGuard: %v", err)
+	}
+}
+
 type staticToolList []tool.ToolManifest
 
 func (l staticToolList) ListManifests() []*tool.ToolManifest {
@@ -156,4 +371,10 @@ func (l staticToolList) GetManifest(name string) *tool.ToolManifest {
 		}
 	}
 	return nil
+}
+
+func cloneManifestForPlanner(manifest *tool.ToolManifest, capability string) tool.ToolManifest {
+	clone := *manifest
+	clone.Capabilities = append([]string{"video_creation"}, capability)
+	return clone
 }

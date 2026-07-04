@@ -40,10 +40,24 @@ export interface LocalArtifactFileResponse extends LocalArtifactUploadResponse {
   contentBase64?: string
 }
 
+export interface LocalDiagnosticsResponse {
+  path: string
+  createdAt: string
+}
+
+export type LocalMCPTransport = 'http' | 'stdio'
+
 export interface LocalMCPProviderConfig {
   id: string
   label: string
-  endpoint: string
+  endpoint?: string
+  transport?: LocalMCPTransport
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  workingDir?: string
+  toolPrefix?: string
+  toolNameMap?: Record<string, string>
   enabled: boolean
 }
 
@@ -235,6 +249,18 @@ export async function fetchLocalArtifactFile(params: {
   return response.json() as Promise<LocalArtifactFileResponse>
 }
 
+export async function createLocalDiagnostics(reason: string): Promise<LocalDiagnosticsResponse> {
+  const response = await fetch(localAgentUrl('/api/local/diagnostics'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '导出诊断包失败'))
+  }
+  return response.json() as Promise<LocalDiagnosticsResponse>
+}
+
 export async function fetchJiMengSetupStatus(): Promise<JiMengSetupStatusResponse> {
   const response = await fetch(localAgentUrl('/api/local/jimeng/setup/status'))
   if (!response.ok) {
@@ -255,11 +281,14 @@ export async function installJiMengCLI(): Promise<JiMengInstallCLIResponse> {
   return response.json() as Promise<JiMengInstallCLIResponse>
 }
 
-export async function registerJiMengMCP(endpoint?: string): Promise<{ status: string; provider: LocalMCPProviderConfig; mcpStartCommand: string }> {
+export type RegisterJiMengMCPInput = string | Partial<LocalMCPProviderConfig>
+
+export async function registerJiMengMCP(input?: RegisterJiMengMCPInput): Promise<{ status: string; provider: LocalMCPProviderConfig; mcpStartCommand: string }> {
+  const payload = typeof input === 'string' ? { endpoint: input } : input || {}
   const response = await fetch(localAgentUrl('/api/local/jimeng/setup/register-mcp'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ endpoint }),
+    body: JSON.stringify(payload),
   })
   if (!response.ok) {
     throw new Error(await errorMessage(response, '注册即梦 MCP 失败'))

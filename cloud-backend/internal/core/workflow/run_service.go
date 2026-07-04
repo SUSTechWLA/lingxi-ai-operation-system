@@ -164,7 +164,3 @@ func jsonUnmarshal(data interface{}, v interface{}) error {
 		return fmt.Errorf("unexpected DAG data type: %T", data)
 	}
 }
-
-func unmarshalJSONBytes(data []byte, v interface{}) error {
-	return json.Unmarshal(data, v)
-}

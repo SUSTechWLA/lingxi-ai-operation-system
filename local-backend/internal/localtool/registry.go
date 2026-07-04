@@ -115,6 +115,7 @@ const (
 	CommandLocalMCPToolCall           = "LOCAL_MCP_TOOL_CALL"
 	CommandBundleExtract              = "BUNDLE_EXTRACT"
 	CommandFinalReview                = "FINAL_REVIEW"
+	CommandVideoFrameQA               = "VIDEO_FRAME_QA"
 )
 
 var allowedCommands = map[string]bool{
@@ -135,4 +136,5 @@ var allowedCommands = map[string]bool{
 	CommandLocalMCPToolCall:           true,
 	CommandBundleExtract:              true,
 	CommandFinalReview:                true,
+	CommandVideoFrameQA:               true,
 }

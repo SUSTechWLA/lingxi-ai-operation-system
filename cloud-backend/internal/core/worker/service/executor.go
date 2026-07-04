@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ type NodeExecutor struct {
 	nodeRepo        repository.NodeRepo
 	localDispatcher localJobDispatcher
 	renderChecker   RenderDependencyChecker
+	projectResolver ProjectIDResolver
 }
 
 type executorInterface interface {
@@ -53,6 +55,11 @@ type RenderDependencyCheckRequest struct {
 
 type RenderDependencyChecker interface {
 	CheckRenderDependencies(ctx context.Context, req RenderDependencyCheckRequest) error
+}
+
+// ProjectIDResolver resolves a video project ID from a workflow task ID.
+type ProjectIDResolver interface {
+	ResolveProjectID(ctx context.Context, taskID string) (string, error)
 }
 
 type DefaultRenderDependencyChecker struct{}
@@ -106,6 +113,10 @@ func (ne *NodeExecutor) SetLocalJobDispatcher(dispatcher localJobDispatcher) {
 
 func (ne *NodeExecutor) SetRenderDependencyChecker(checker RenderDependencyChecker) {
 	ne.renderChecker = checker
+}
+
+func (ne *NodeExecutor) SetProjectIDResolver(resolver ProjectIDResolver) {
+	ne.projectResolver = resolver
 }
 
 func (ne *NodeExecutor) selectExecutor(t tool.Tool) executorInterface {
@@ -163,9 +174,12 @@ func (ne *NodeExecutor) ExecuteNode(ctx context.Context, event eventbus.Event) {
 	// Build tool context with checkpoint data for retries.
 	toolCtx := ne.buildToolContext(ctx, nodeID, taskID, isLongRunning)
 
-	// Local execution plane: dispatch to local runner and return.
-	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
-		if err := ne.dispatchLocalNode(ctx, event, manifest, parameters, idempotencyKey); err != nil {
+	// Local execution plane: dispatch to local runner and return. External
+	// bridge nodes keep "external" as the executable tool, so also inspect the
+	// delegated manifest before falling back to the cloud-side bridge.
+	if localManifest := ne.localExecutionManifest(toolName, parameters, manifest); localManifest != nil {
+		idempotencyKey = ne.localDispatchIdempotencyKey(ctx, nodeID, idempotencyKey)
+		if err := ne.dispatchLocalNode(ctx, event, localManifest, parameters, idempotencyKey); err != nil {
 			ne.publishFailure(taskID, nodeID, traceID, err.Error(), idempotencyKey, nil)
 		}
 		return
@@ -371,12 +385,16 @@ func (ne *NodeExecutor) executeTool(
 		}
 	}
 
-	execImpl := ne.selectExecutor(t)
-
 	var result executor.ExecutionResult
 	var execErr error
 
 	if bt, ok := t.(tool.BuildableTool); ok {
+		if manifest != nil && manifest.Sandbox && (ne.sandboxExecutor == nil || !ne.cfg.Sandbox.Enabled) {
+			return executor.ExecutionResult{
+				Error: fmt.Sprintf("sandbox is required for tool %s but SANDBOX_ENABLED is false or sandbox is unavailable", toolName),
+			}, nil
+		}
+		execImpl := ne.selectExecutor(t)
 		execReq, err := bt.BuildExecutionRequest(parameters)
 		if err != nil {
 			result.Error = err.Error()
@@ -438,6 +456,61 @@ func (ne *NodeExecutor) executableToolTimeout(toolName string, parameters map[st
 	return time.Duration(timeoutSec) * time.Second
 }
 
+func timeoutSecFromParameters(parameters map[string]interface{}) int {
+	if parameters == nil {
+		return 0
+	}
+	raw, ok := parameters["timeoutSec"]
+	if !ok {
+		return 0
+	}
+	switch value := raw.(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case int64:
+		if value > 0 {
+			return int(value)
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	case json.Number:
+		if n, err := value.Int64(); err == nil && n > 0 {
+			return int(n)
+		}
+	case string:
+		value = strings.TrimSpace(value)
+		if value == "" || strings.Contains(value, "{{") {
+			return 0
+		}
+		if n, err := strconv.Atoi(value); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func (ne *NodeExecutor) localExecutionManifest(toolName string, parameters map[string]interface{}, manifest *tool.ToolManifest) *tool.ToolManifest {
+	if manifest != nil && manifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+		return manifest
+	}
+	if toolName != "external" || ne.toolRegistry == nil {
+		return nil
+	}
+	delegatedTool := firstString(parameters, nil, "tool", "capabilityTool")
+	if delegatedTool == "" {
+		return nil
+	}
+	delegatedManifest := ne.toolRegistry.GetManifest(delegatedTool)
+	if delegatedManifest != nil && delegatedManifest.ExecutionPlane == tool.ExecutionPlaneLocal {
+		return delegatedManifest
+	}
+	return nil
+}
+
 func normalizedManifestTimeoutSec(timeoutSec int) int {
 	const maxReasonableTimeoutSec = 86400 // 24 hours
 	if timeoutSec > maxReasonableTimeoutSec {
@@ -460,8 +533,11 @@ func (ne *NodeExecutor) dispatchLocalNode(
 	if command == "" {
 		return fmt.Errorf("local execution requested for %s but localCommand is empty", manifest.Name)
 	}
-	timeoutSec := manifest.Timeout
-	timeoutSec = normalizedManifestTimeoutSec(timeoutSec)
+	timeoutSec := timeoutSecFromParameters(parameters)
+	if timeoutSec <= 0 {
+		timeoutSec = manifest.Timeout
+		timeoutSec = normalizedManifestTimeoutSec(timeoutSec)
+	}
 	if timeoutSec <= 0 {
 		timeoutSec = ne.cfg.ToolTimeoutSeconds
 	}
@@ -469,7 +545,7 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		timeoutSec = 1800
 	}
 
-	projectID := firstString(parameters, event.Payload, "projectId", "project_id", "videoProjectId")
+	projectID := ne.resolveLocalProjectID(ctx, event, parameters)
 	if isRenderLocalCommand(manifest.Name, command) {
 		checker := ne.renderChecker
 		if checker == nil {
@@ -487,6 +563,11 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		}
 	}
 
+	jobTimeoutSec := timeoutSec
+	if isRenderLocalCommand(manifest.Name, command) && timeoutSecFromParameters(parameters) > 0 {
+		jobTimeoutSec = timeoutSec + 45
+	}
+
 	job, err := ne.localDispatcher.DispatchLocalJob(ctx, localrunner.DispatchLocalJobRequest{
 		ProjectID:      projectID,
 		TaskID:         event.TaskID,
@@ -494,7 +575,7 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		ToolName:       manifest.Name,
 		Command:        command,
 		Payload:        parameters,
-		TimeoutSec:     timeoutSec,
+		TimeoutSec:     jobTimeoutSec,
 		ArtifactPolicy: localArtifactPolicyForManifest(manifest),
 		IdempotencyKey: idempotencyKey,
 	})
@@ -520,6 +601,48 @@ func (ne *NodeExecutor) dispatchLocalNode(
 		zap.String("command", command),
 	)
 	return nil
+}
+
+func (ne *NodeExecutor) localDispatchIdempotencyKey(ctx context.Context, nodeID, base string) string {
+	if base == "" {
+		return base
+	}
+	if ne.nodeRepo == nil {
+		return base
+	}
+	node, err := ne.nodeRepo.FindByID(ctx, nodeID)
+	if err != nil || node == nil || node.RetryCount <= 0 {
+		return base
+	}
+	return fmt.Sprintf("%s-attempt-%d", base, node.RetryCount+1)
+}
+
+func (ne *NodeExecutor) resolveLocalProjectID(ctx context.Context, event eventbus.Event, parameters map[string]interface{}) string {
+	projectID := firstString(parameters, event.Payload, "projectId", "projectID", "project_id", "videoProjectId", "video_project_id")
+	if projectID != "" {
+		return projectID
+	}
+	if event.Payload != nil {
+		if nested, ok := event.Payload["parameters"].(map[string]interface{}); ok {
+			projectID = firstString(nested, nil, "projectId", "projectID", "project_id", "videoProjectId", "video_project_id")
+			if projectID != "" {
+				return projectID
+			}
+		}
+	}
+	if ne.projectResolver != nil && event.TaskID != "" {
+		resolved, err := ne.projectResolver.ResolveProjectID(ctx, event.TaskID)
+		if err != nil {
+			zap.L().Warn("local dispatch: cannot resolve project ID from task",
+				zap.String("taskId", event.TaskID),
+				zap.String("nodeId", event.NodeID),
+				zap.Error(err),
+			)
+			return ""
+		}
+		return strings.TrimSpace(resolved)
+	}
+	return ""
 }
 
 func isRenderLocalCommand(toolName, command string) bool {
@@ -770,42 +893,6 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 	return val, true
 }
 
-// findNodeOutput looks up a node and returns its output map, trying both the raw reference ID
-// and the taskID-scoped version (taskID-refNodeID) for compatibility with both code paths.
-// When exact match fails, it falls back to fuzzy-matching by taskID + refNodeID substring.
-func findNodeOutput(ctx context.Context, nodeRepo repository.NodeRepo, taskID, refNodeID string) (*model.Node, map[string]interface{}) {
-	// Try raw ID first (used by /api/node direct submission path)
-	for _, candidate := range []string{
-		refNodeID,
-		taskID + "-" + refNodeID,
-	} {
-		node, err := nodeRepo.FindByID(ctx, candidate)
-		if err != nil || node == nil || node.Output == nil {
-			continue
-		}
-		return node, node.Output
-	}
-
-	// Fallback: fuzzy-match within the same task. PlanCompiler references use
-	// plain step IDs (e.g., "knowledge_researcher") but the orchestrator creates
-	// nodes with prefixed IDs (e.g., "td34b45e16e-knowledge_researcher_exec").
-	nodes, err := nodeRepo.FindByTaskID(ctx, taskID)
-	if err != nil {
-		return nil, nil
-	}
-	for _, node := range nodes {
-		if node == nil || node.Output == nil {
-			continue
-		}
-		// Match if the node ID contains the refNodeID as a substring. This handles
-		// both exec nodes (suffix _exec) and review nodes (suffix _review).
-		if strings.Contains(node.ID, refNodeID) {
-			return node, node.Output
-		}
-	}
-	return nil, nil
-}
-
 func findNodeOutputField(ctx context.Context, nodeRepo repository.NodeRepo, taskID, refNodeID, field string) (*model.Node, interface{}, bool) {
 	candidates := findNodeOutputCandidates(ctx, nodeRepo, taskID, refNodeID)
 	for _, node := range candidates {
@@ -927,7 +1014,119 @@ func lookupOutputField(output map[string]interface{}, field string) (interface{}
 			return val, true
 		}
 	}
+	if val, ok := lookupArtifactOutputField(output, field); ok {
+		return val, true
+	}
+	for _, payload := range structuredOutputPayloads(output) {
+		if val, ok := lookupArtifactOutputField(payload, field); ok {
+			return val, true
+		}
+	}
 	return nil, false
+}
+
+func lookupArtifactOutputField(output map[string]interface{}, field string) (interface{}, bool) {
+	field = strings.TrimSpace(field)
+	if output == nil || field == "" {
+		return nil, false
+	}
+	videoPathField := isVideoPathOutputField(field)
+	localPathField := strings.EqualFold(field, "localPath")
+	for _, artifact := range artifactPayloads(output["artifacts"]) {
+		if !localPathField && !artifactMatchesOutputField(artifact, field) {
+			continue
+		}
+		metadata := objectPayload(artifact["metadata"])
+		if metadata != nil {
+			if val, ok := metadata[field]; ok {
+				return val, true
+			}
+			if videoPathField || localPathField {
+				if val, ok := nonEmptyString(metadata["localPath"]); ok {
+					return val, true
+				}
+			}
+		}
+		if videoPathField || strings.EqualFold(field, "storageRef") {
+			if val, ok := nonEmptyString(artifact["storageRef"]); ok {
+				return val, true
+			}
+		}
+	}
+	if videoPathField {
+		if val, ok := nonEmptyString(output["outputRef"]); ok {
+			return val, true
+		}
+	}
+	return nil, false
+}
+
+func artifactPayloads(value interface{}) []map[string]interface{} {
+	switch typed := value.(type) {
+	case []interface{}:
+		result := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if payload := objectPayload(item); payload != nil {
+				result = append(result, payload)
+			}
+		}
+		return result
+	case []map[string]interface{}:
+		return typed
+	default:
+		return nil
+	}
+}
+
+func objectPayload(value interface{}) map[string]interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed
+	case map[string]string:
+		result := make(map[string]interface{}, len(typed))
+		for k, v := range typed {
+			result[k] = v
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func artifactMatchesOutputField(artifact map[string]interface{}, field string) bool {
+	if artifact == nil {
+		return false
+	}
+	kind, _ := nonEmptyString(artifact["kind"])
+	mimeType, _ := nonEmptyString(artifact["mimeType"])
+	unitID, _ := nonEmptyString(artifact["unitId"])
+	if isVideoPathOutputField(field) {
+		return strings.EqualFold(kind, "VIDEO") ||
+			strings.HasPrefix(strings.ToLower(mimeType), "video/") ||
+			strings.EqualFold(unitID, "final-video")
+	}
+	return strings.EqualFold(kind, field)
+}
+
+func isVideoPathOutputField(field string) bool {
+	switch strings.ToLower(strings.TrimSpace(field)) {
+	case "outputpath", "finalvideo", "final_video", "video":
+		return true
+	default:
+		return false
+	}
+}
+
+func nonEmptyString(value interface{}) (string, bool) {
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }
 
 func structuredOutputPayloads(output map[string]interface{}) []map[string]interface{} {

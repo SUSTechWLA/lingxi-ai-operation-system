@@ -351,8 +351,45 @@ func applyRequestPlanDefaults(plan *AgentPlan, req StartRunRequest) {
 	} else if plan.Domain == "" {
 		plan.Domain = req.Domain
 	}
+	if plan.Domain == "video_creation" && strings.TrimSpace(req.Message) != "" {
+		plan.Goal = req.Message
+	}
 	if plan.Mode == "" {
 		plan.Mode = "dynamic_agent"
+	}
+	applyRequestSafeContextDefaults(plan, req.Context)
+}
+
+func applyRequestSafeContextDefaults(plan *AgentPlan, ctx map[string]interface{}) {
+	if plan == nil || len(plan.Steps) == 0 || ctx == nil {
+		return
+	}
+	if plan.Steps[0].Arguments == nil {
+		plan.Steps[0].Arguments = map[string]interface{}{}
+	}
+	for _, key := range []string{
+		"projectId",
+		"videoProjectId",
+		"topic",
+		"durationSec",
+		"targetDurationSec",
+		"videoType",
+		"profileId",
+		"projectMode",
+		"aigcProvider",
+		"generationMode",
+		"preflightPipeline",
+		"aspectRatio",
+		"language",
+		"renderTimeoutSec",
+		"hyperframesRenderTimeoutSec",
+	} {
+		if _, exists := plan.Steps[0].Arguments[key]; exists {
+			continue
+		}
+		if value, ok := ctx[key]; ok {
+			plan.Steps[0].Arguments[key] = value
+		}
 	}
 }
 
@@ -601,7 +638,7 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 		return run, task, err
 	}
 	taskStatus := taskStatusString(task)
-	if taskStatus == string(model.TaskSuccess) && run.Status != RunStatusSuccess && run.Status != RunStatusFailed && run.Status != RunStatusCancelled {
+	if taskStatus == string(model.TaskSuccess) && run.Status != RunStatusSuccess && run.Status != RunStatusCancelled {
 		run.Status = RunStatusSuccess
 		run.UpdatedAt = time.Now()
 		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {

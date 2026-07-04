@@ -118,12 +118,12 @@ func redundantToolWarnings(plan *agentruntime.AgentPlan) []Warning {
 	counts := map[string]int{}
 	out := []Warning{}
 	for _, step := range plan.Steps {
-		tool := strings.TrimSpace(step.Tool)
-		if tool == "" || isQualityTool(tool) {
+		key := redundantToolKey(step)
+		if key == "" {
 			continue
 		}
-		counts[tool]++
-		if counts[tool] > 1 {
+		counts[key]++
+		if counts[key] > 1 {
 			out = append(out, Warning{
 				Code:     WarningRedundantTool,
 				StepID:   step.ID,
@@ -134,6 +134,28 @@ func redundantToolWarnings(plan *agentruntime.AgentPlan) []Warning {
 		}
 	}
 	return out
+}
+
+func redundantToolKey(step agentruntime.AgentStep) string {
+	tool := strings.TrimSpace(step.Tool)
+	if tool == "" || isQualityTool(tool) {
+		return ""
+	}
+	if strings.EqualFold(tool, "mcp_generation_runner") {
+		stage := strings.ToLower(strings.TrimSpace(stringArgument(step.Arguments, "stage")))
+		if stage != "" {
+			return strings.ToLower(tool) + ":" + stage
+		}
+	}
+	return strings.ToLower(tool)
+}
+
+func stringArgument(args map[string]interface{}, key string) string {
+	if args == nil {
+		return ""
+	}
+	value, _ := args[key].(string)
+	return value
 }
 
 func missingStageWarnings(plan *agentruntime.AgentPlan) []Warning {

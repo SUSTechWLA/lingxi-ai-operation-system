@@ -283,13 +283,13 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoForgeDependencies(t *tes
 	}
 }
 
-func TestRegisterVideoCreationExternalToolsInstallsJiMengRunnerManifest(t *testing.T) {
+func TestRegisterVideoCreationExternalToolsInstallsMCPGenerationRunnerManifest(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
 
-	manifest := registry.GetExternalManifest("jimeng_generation_runner")
+	manifest := registry.GetExternalManifest("mcp_generation_runner")
 	if manifest == nil {
-		t.Fatal("expected jimeng_generation_runner to be registered")
+		t.Fatal("expected mcp_generation_runner to be registered")
 	}
 	if manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
 		t.Fatalf("ExecutionPlane = %q, want local", manifest.ExecutionPlane)
@@ -298,7 +298,98 @@ func TestRegisterVideoCreationExternalToolsInstallsJiMengRunnerManifest(t *testi
 		t.Fatalf("LocalCommand = %q, want LOCAL_MCP_TOOL_CALL", manifest.LocalCommand)
 	}
 	if !manifest.RequiresUserDevice {
-		t.Fatal("jimeng_generation_runner should require user device")
+		t.Fatal("mcp_generation_runner should require user device")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalBeforeExecute {
+		t.Fatalf("mcp_generation_runner approval policy = %#v, want before_execute", manifest.ApprovalPolicy)
+	}
+}
+
+func TestRegisterVideoCreationExternalToolsInstallsVideoFrameQAManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("video_frame_qa")
+	if manifest == nil {
+		t.Fatal("expected video_frame_qa to be registered")
+	}
+	if manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
+		t.Fatalf("ExecutionPlane = %q, want local", manifest.ExecutionPlane)
+	}
+	if manifest.LocalCommand != "VIDEO_FRAME_QA" {
+		t.Fatalf("LocalCommand = %q, want VIDEO_FRAME_QA", manifest.LocalCommand)
+	}
+	if !manifest.RequiresUserDevice {
+		t.Fatal("video_frame_qa should require user device")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact || !manifest.ApprovalPolicy.BlocksDownstream {
+		t.Fatalf("video_frame_qa approval policy = %#v, want blocking after_artifact", manifest.ApprovalPolicy)
+	}
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET", "SHOT_QA_REPORT", "SHOT_REPAIR_PLAN"} {
+		if !containsString(manifest.ApprovalPolicy.ReviewArtifactKinds, kind) {
+			t.Fatalf("video_frame_qa review artifact kinds missing %s: %#v", kind, manifest.ApprovalPolicy.ReviewArtifactKinds)
+		}
+	}
+	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
+		t.Fatalf("video_frame_qa human review missing: %#v", manifest.HumanReview)
+	}
+	for _, kind := range []string{"VIDEO_VISUAL_QA_REPORT", "VIDEO_VISUAL_QA_CONTACT_SHEET", "SHOT_QA_REPORT", "SHOT_REPAIR_PLAN"} {
+		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
+			t.Fatalf("video_frame_qa artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+	if !containsString(manifest.Capabilities, "shot_quality_gate") {
+		t.Fatalf("video_frame_qa capabilities missing shot_quality_gate: %#v", manifest.Capabilities)
+	}
+	for _, output := range []string{"shotReports", "shotSpecLints", "repairPlan", "needsRegeneration"} {
+		if _, ok := manifest.Output[output]; !ok {
+			t.Fatalf("video_frame_qa output missing %s: %#v", output, manifest.Output)
+		}
+	}
+}
+
+func TestRegisterVideoCreationExternalToolsInstallsPreviewReviewManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("hyperframes_project_generator")
+	if manifest == nil {
+		t.Fatal("expected hyperframes_project_generator to be registered")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact {
+		t.Fatalf("preview approval policy = %#v, want after_artifact", manifest.ApprovalPolicy)
+	}
+	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
+		t.Fatalf("preview human review missing: %#v", manifest.HumanReview)
+	}
+	for _, kind := range []string{"HYPERFRAMES_PROJECT", "PREVIEW_SNAPSHOTS", "PREVIEW_REPORT"} {
+		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
+			t.Fatalf("preview artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+}
+
+func TestRegisterVideoCreationExternalToolsInstallsRenderReviewManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("hyperframes_renderer")
+	if manifest == nil {
+		t.Fatal("expected hyperframes_renderer to be registered")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalBeforeExecute {
+		t.Fatalf("render approval policy = %#v, want before_execute", manifest.ApprovalPolicy)
+	}
+	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
+		t.Fatalf("render human review missing: %#v", manifest.HumanReview)
+	}
+	for _, kind := range []string{"VIDEO", "RENDER_REPORT"} {
+		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
+			t.Fatalf("render artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+	if !manifest.SideEffect {
+		t.Fatal("hyperframes_renderer should be marked as a side-effecting local tool")
 	}
 }
 
@@ -398,6 +489,36 @@ func TestTimeWindowPlannerRequiresScriptSpansForTalkingHead(t *testing.T) {
 	}
 }
 
+func TestTimeWindowPlannerPrefersScriptTextOverRedactedTextField(t *testing.T) {
+	result := executeLocalVideoCreationTool("time_window_planner", map[string]interface{}{
+		"stage": "time_window",
+		"creationProfile": map[string]interface{}{
+			"profileId": "talking_head",
+		},
+		"scriptSpans": []interface{}{
+			map[string]interface{}{
+				"id":          "SPAN_01",
+				"startSec":    float64(0),
+				"endSec":      float64(6),
+				"scriptText":  "躺营 AI OS 把脚本、分镜和渲染串成一条流水线。",
+				"text":        map[string]interface{}{"field": "text", "reason": "USER_ASSET_REDACTED", "redacted": true},
+				"durationSec": float64(6),
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-time-window", NodeID: "time_window_exec"})
+
+	if !result.Success {
+		t.Fatalf("time_window_planner failed: %s", result.Error)
+	}
+	windows, ok := result.Data["timeWindows"].([]map[string]interface{})
+	if !ok || len(windows) != 1 {
+		t.Fatalf("expected one window, got %#v", result.Data["timeWindows"])
+	}
+	if windows[0]["scriptText"] != "躺营 AI OS 把脚本、分镜和渲染串成一条流水线。" {
+		t.Fatalf("redacted text field should not override scriptText: %#v", windows[0])
+	}
+}
+
 func TestVisualAlignmentPlannerPreservesTimeWindowDuration(t *testing.T) {
 	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
 		"stage": "visual_alignment",
@@ -431,6 +552,43 @@ func TestVisualAlignmentPlannerPreservesTimeWindowDuration(t *testing.T) {
 	}
 	if shot["visual"] != "字幕和B-roll补充" {
 		t.Fatalf("expected visual from sceneSummary, got %#v", shot["visual"])
+	}
+}
+
+func TestVisualAlignmentPlannerDerivesPublicTitleFromNarration(t *testing.T) {
+	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
+		"stage": "visual_alignment",
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":          "TW_01",
+				"shotId":      "SHOT_01",
+				"durationSec": float64(8),
+				"scriptText":  "躺营 AI OS 把选题、脚本、分镜、审核、生成和打包放进一条可追踪流水线，非技术用户也能按步骤推进。",
+				"text":        map[string]interface{}{"field": "text", "reason": "USER_ASSET_REDACTED", "redacted": true},
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-visual-alignment", NodeID: "visual_alignment_exec"})
+
+	if !result.Success {
+		t.Fatalf("visual_alignment_planner failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 1 {
+		t.Fatalf("expected one visual alignment shot, got %#v", result.Data["shotList"])
+	}
+	shot := shotList[0]
+	if shot["visual"] != "选题到成片，一条流水线" {
+		t.Fatalf("expected public visual title, got %#v", shot["visual"])
+	}
+	visual, _ := shot["visual"].(string)
+	if strings.Contains(visual, "围绕该口播时间窗") {
+		t.Fatalf("visual title leaked internal placeholder: %#v", shot["visual"])
+	}
+	if shot["narrationText"] != "躺营 AI OS 把选题、脚本、分镜、审核、生成和打包放进一条可追踪流水线，非技术用户也能按步骤推进。" {
+		t.Fatalf("redacted text field should not override narration: %#v", shot["narrationText"])
+	}
+	if shot["camera"] == "" {
+		t.Fatalf("expected viewer-facing camera/subtitle hint, got %#v", shot)
 	}
 }
 
@@ -487,6 +645,102 @@ func TestCinematicShotDesignerUsesTimeWindowsWithoutGeneratingMedia(t *testing.T
 	}
 	if intFromInterface(shotList[0]["durationSec"], 0) != 2 {
 		t.Fatalf("cinematic designer should preserve 2s duration, got %#v", shotList[0])
+	}
+}
+
+func TestCinematicShotDesignerBuildsFallbackLaunchShotList(t *testing.T) {
+	result := executeLocalVideoCreationTool("cinematic_shot_designer", map[string]interface{}{
+		"stage":       "cinematic_shot_design",
+		"brief":       "制作开源项目上线宣传视频，包含页面录屏、HyperFrames 图形包装和 JiMeng AIGC 素材。",
+		"durationSec": 120,
+		"creationProfile": map[string]interface{}{
+			"profileId": "cinematic_story",
+		},
+	}, tool.ToolContext{TaskID: "task-cinematic-fallback", NodeID: "cinematic_shot_design_exec"})
+
+	if !result.Success {
+		t.Fatalf("cinematic_shot_designer failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) < 6 {
+		t.Fatalf("expected multi-shot fallback plan, got %#v", result.Data["shotList"])
+	}
+	routes := map[string]bool{}
+	for _, shot := range shotList {
+		routes[ensureStringValue(shot["plannedAssetRoute"])] = true
+	}
+	for _, route := range []string{"aigc_video", "screen_recording", "hyperframes"} {
+		if !routes[route] {
+			t.Fatalf("fallback shot list should include route %q, got %+v", route, routes)
+		}
+	}
+	if strings.Contains(ensureStringValue(result.Data["content"]), "待导演设计的故事镜头") {
+		t.Fatalf("fallback should not expose generic placeholder content: %s", result.Data["content"])
+	}
+}
+
+func TestVisualAlignmentPlannerBuildsHumorousAIGCAssetRoutesForVoiceVisual(t *testing.T) {
+	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
+		"stage":         "visual_alignment",
+		"script":        "打工人打开十个 AI 工具，电脑风扇像要起飞。躺营 AIOS 把脚本、分镜、即梦素材、渲染和 QA 串成流水线。非技术用户只看按钮，开发者能看日志。关注项目，看视频工厂自己开工。",
+		"assetStrategy": "短视频爆款，搞笑，无厘头，解压；优先用 Dreamina/JiMeng MCP 生成 AIGC b-roll，HyperFrames 只做字幕和信息层。",
+		"timeWindows": []interface{}{
+			map[string]interface{}{
+				"id":          "TW_01",
+				"shotId":      "SHOT_01",
+				"durationSec": float64(6),
+				"scriptText":  "打工人打开十个 AI 工具，电脑风扇像要起飞。",
+			},
+			map[string]interface{}{
+				"id":          "TW_02",
+				"shotId":      "SHOT_02",
+				"durationSec": float64(7),
+				"scriptText":  "躺营 AIOS 把脚本、分镜、即梦素材、渲染和 QA 串成流水线。",
+			},
+			map[string]interface{}{
+				"id":          "TW_03",
+				"shotId":      "SHOT_03",
+				"durationSec": float64(6),
+				"scriptText":  "非技术用户只看按钮，开发者能看日志。",
+			},
+			map[string]interface{}{
+				"id":          "TW_04",
+				"shotId":      "SHOT_04",
+				"durationSec": float64(5),
+				"scriptText":  "关注项目，看视频工厂自己开工。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-humor-visual-alignment", NodeID: "visual_alignment_exec"})
+
+	if !result.Success {
+		t.Fatalf("visual_alignment_planner failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 4 {
+		t.Fatalf("expected four aligned shots, got %#v", result.Data["shotList"])
+	}
+
+	routeCounts := map[string]int{}
+	for _, shot := range shotList {
+		routeCounts[ensureStringValue(shot["plannedAssetRoute"])]++
+		if strings.TrimSpace(ensureStringValue(shot["narrationText"])) == "" {
+			t.Fatalf("shot should preserve narration text: %#v", shot)
+		}
+		if strings.TrimSpace(ensureStringValue(shot["visual"])) == "" {
+			t.Fatalf("shot should include vivid visual direction: %#v", shot)
+		}
+		if strings.TrimSpace(ensureStringValue(shot["assetIntent"])) == "" {
+			t.Fatalf("shot should explain asset intent for downstream generation: %#v", shot)
+		}
+	}
+	if routeCounts["aigc_video"] < 2 {
+		t.Fatalf("humorous short-video voice_visual should include at least two AIGC b-roll shots, got routes %+v", routeCounts)
+	}
+	if routeCounts["screen_recording"] == 0 {
+		t.Fatalf("project intro should include at least one screen recording shot, got routes %+v", routeCounts)
+	}
+	if routeCounts["hyperframes"] == len(shotList) {
+		t.Fatalf("visual alignment must not degrade the whole video to HyperFrames cards: %+v", routeCounts)
 	}
 }
 
@@ -577,6 +831,7 @@ func TestVideoScriptGeneratorBlocksRequiredRetrievalWithEmptyFacts(t *testing.T)
 		"topic":                 "佛得角世界杯出线",
 		"retrievalPolicy":       "required",
 		"mustUseFreshKnowledge": true,
+		"blockOnEmptyFacts":     true,
 		"knowledgePack":         []interface{}{},
 	}, tool.ToolContext{TaskID: "task-1", NodeID: "script"})
 
@@ -585,7 +840,33 @@ func TestVideoScriptGeneratorBlocksRequiredRetrievalWithEmptyFacts(t *testing.T)
 	}
 }
 
+func TestVideoScriptGeneratorFallsBackWhenRequiredRetrievalDoesNotBlockEmptyFacts(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		localAgentConfigFetcher = previousFetcher
+	})
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic":                 "开源项目上线宣传片",
+		"retrievalPolicy":       "required",
+		"mustUseFreshKnowledge": true,
+		"knowledgePack":         []interface{}{},
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "script"})
+
+	if !result.Success {
+		t.Fatalf("expected script generator to fall back when empty facts do not block: %s", result.Error)
+	}
+	if result.Data["script"] == "" {
+		t.Fatalf("fallback should return a usable script: %#v", result.Data)
+	}
+}
+
 func TestVideoScriptGeneratorConsumesKnowledgeContextWithoutModelFallback(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
 	SetVideoCreationConfig(config.OpenAIConfig{}, "")
 	previousFetcher := localAgentConfigFetcher
 	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
@@ -629,6 +910,50 @@ func TestVideoScriptGeneratorConsumesKnowledgeContextWithoutModelFallback(t *tes
 	trace, ok := result.Data["knowledgeTrace"].(map[string]interface{})
 	if !ok || trace["hasKnowledgeContext"] != true || trace["knowledgeItemCount"] != 1 {
 		t.Fatalf("expected knowledgeTrace to describe consumed context: %#v", result.Data["knowledgeTrace"])
+	}
+}
+
+func TestVideoScriptGeneratorNoKeyFallbackExposesScriptField(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	ClearRuntimeModelProviderConfig()
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		ClearRuntimeModelProviderConfig()
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic": "30秒躺营 AI OS 开源宣传",
+	}, tool.ToolContext{TaskID: "task-script-fallback", NodeID: "script_generation"})
+
+	if !result.Success {
+		t.Fatalf("expected script generator fallback to succeed: %s", result.Error)
+	}
+	script, _ := result.Data["script"].(string)
+	if !strings.Contains(script, "躺营 AI OS") {
+		t.Fatalf("fallback should expose script output for downstream nodes, got %#v", result.Data["script"])
+	}
+	if result.Data["estimatedDurationSec"] != 30 {
+		t.Fatalf("fallback should infer 30 second duration from topic, got %#v", result.Data["estimatedDurationSec"])
+	}
+	pkg, ok := result.Data["package"].(map[string]interface{})
+	if !ok || pkg["script"] != script {
+		t.Fatalf("fallback package should preserve script for artifact review: %#v", result.Data["package"])
+	}
+	spans, ok := result.Data["scriptSpans"].([]map[string]interface{})
+	if !ok || len(spans) == 0 {
+		t.Fatalf("fallback should expose scriptSpans for time-window planning: %#v", result.Data["scriptSpans"])
+	}
+	if spans[0]["startSec"] != 0 {
+		t.Fatalf("first span should start at zero: %#v", spans[0])
+	}
+	if spans[len(spans)-1]["endSec"] != 30 {
+		t.Fatalf("last span should end at inferred target duration: %#v", spans[len(spans)-1])
 	}
 }
 
@@ -792,6 +1117,223 @@ func TestExecuteDynamicAgentPromptToolExposesShotAssetPackages(t *testing.T) {
 	}
 }
 
+func TestVideoPromptGeneratorOnlySubmitsAIGCShotsToExternalGeneration(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", strings.Repeat("开源项目宣传 ", 300), "", map[string]interface{}{
+		"topic": strings.Repeat("开源项目宣传 ", 300),
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_01",
+				"durationSec":       6,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "AIGC_VIDEO | 非真人电影感，云端编排和本地执行器连接。",
+				"narrationText":     "真正可控的视频生产线来了。",
+			},
+			map[string]interface{}{
+				"shotId":            "SHOT_02",
+				"durationSec":       8,
+				"plannedAssetRoute": "screen_recording",
+				"visual":            "SCREEN_RECORDING | 真实页面录屏：登录、输入项目、审核门通过。",
+				"narrationText":     "真实页面演示系统完整流程。",
+			},
+			map[string]interface{}{
+				"shotId":            "SHOT_03",
+				"durationSec":       8,
+				"plannedAssetRoute": "hyperframes",
+				"visual":            "HYPERFRAMES | 流程图和数据卡片展示 README、Wiki、release tag。",
+				"narrationText":     "版本管理会写进开源文档。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-routes", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected only the AIGC shot to create an external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, ok := requests[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request should be a map, got %#v", requests[0])
+	}
+	if req["shotId"] != "SHOT_01" {
+		t.Fatalf("unexpected request shot: %#v", req)
+	}
+	if got := len([]rune(ensureStringValue(req["prompt"]))); got > 2000 {
+		t.Fatalf("request prompt should be capped at 2000 runes, got %d", got)
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]interface{})
+	if !ok || len(packages) != 3 {
+		t.Fatalf("all shots should still have packages, got %#v", result.Data["shotAssetPackages"])
+	}
+}
+
+func TestVideoPromptGeneratorUsesTimeWindowSceneSummaryForAIGCRouting(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "躺营 AI OS 开源宣传", "", map[string]interface{}{
+		"topic": "躺营 AI OS 开源宣传\n\n创作要求：包含录屏、HyperFrames 和即梦 AIGC。",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":          "SHOT_01_TW_01",
+				"durationSec":     6,
+				"recommendedMode": "aigc_video",
+				"sceneSummary":    "AIGC_VIDEO | 非真人风格化：云端编排和本地执行器连接。",
+				"mainAction":      "突出 MCP 可扩展。",
+			},
+			map[string]interface{}{
+				"shotId":          "SHOT_02_TW_01",
+				"durationSec":     8,
+				"recommendedMode": "aigc_video",
+				"sceneSummary":    "SCREEN_RECORDING | 真实页面录屏：输入项目、审核门通过。",
+				"mainAction":      "展示真实页面流程。",
+			},
+			map[string]interface{}{
+				"shotId":          "SHOT_03_TW_01",
+				"durationSec":     7,
+				"recommendedMode": "aigc_video",
+				"sceneSummary":    "HYPERFRAMES | 数据卡片：README、Wiki、release tag。",
+				"mainAction":      "展示版本管理。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-time-window-routes", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected only sceneSummary AIGC window to create request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, _ := requests[0].(map[string]interface{})
+	if req["shotId"] != "SHOT_01_TW_01" {
+		t.Fatalf("unexpected request: %#v", req)
+	}
+	prompt := ensureStringValue(req["promptText"])
+	if strings.Contains(prompt, "创作要求：") {
+		t.Fatalf("prompt should use compact topic, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "云端编排和本地执行器连接") {
+		t.Fatalf("prompt should preserve sceneSummary, got %s", prompt)
+	}
+}
+
+func TestVideoPromptGeneratorIncludesCreativeDirectorFieldsInAIGCRequests(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "躺营 AIOS 无厘头开源宣传", "", map[string]interface{}{
+		"topic": "躺营 AIOS 无厘头开源宣传",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_FUN",
+				"durationSec":       6,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "AIGC_VIDEO | 非真人风格化：打工人的桌面突然变成迷你视频工厂。",
+				"narrationText":     "工具别再互相打架，让流水线自己开工。",
+				"assetIntent":       "用 Dreamina/JiMeng MCP 生成动态情绪素材，承担开头钩子和解压感。",
+				"humorBeat":         "十个 AI 工具变成小便利贴排队上工，电脑风扇假装要起飞。",
+				"timeRelationship":  "0-6s b-roll 承接口播情绪；末尾 0.5s 稳定画面给字幕/转场。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-creative-fields", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one AIGC external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, ok := requests[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request should be a map, got %#v", requests[0])
+	}
+	prompt := ensureStringValue(req["prompt"])
+	for _, want := range []string{"小便利贴排队上工", "开头钩子和解压感", "末尾 0.5s 稳定画面"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt should include creative director field %q, got %s", want, prompt)
+		}
+	}
+}
+
+func TestVideoPromptGeneratorBuildsVibeScenePromptForDreamina(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "测试带抽帧 QA 的短视频创作流程", "", map[string]interface{}{
+		"topic": "测试带抽帧 QA 的短视频创作流程",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_01",
+				"durationSec":       6,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "AIGC_VIDEO | 非真人风格化搞笑 b-roll：围绕“AI 内容流程，一次跑到底”设计一个轻松、有反差但清楚的视觉隐喻，主体有明确动作，场景持续变化，镜头在 16:9 横屏中轻快推进，使用清晰符号和可读画面。",
+				"mainAction":        "用一个可视化反差动作承接口播：",
+				"assetIntent":       "用 Dreamina/JiMeng MCP 生成口播对应的动态情绪素材，承担开头钩子、反差和解压感。",
+				"humorBeat":         "用夸张视觉隐喻先逗笑，再落到项目能力。",
+				"timeRelationship":  "0-6.0s 动态 b-roll 承接口播情绪；末尾 0.5s 稳定画面给字幕/转场。",
+				"tone":              "正能量、搞笑、无厘头、解压，但信息表达清楚；不焦虑、不嘲讽用户",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-vibe-scene", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one AIGC external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, ok := requests[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request should be a map, got %#v", requests[0])
+	}
+	prompt := ensureStringValue(req["prompt"])
+	for _, banned := range []string{
+		"独立生成", "AIGC_VIDEO", "b-roll", "镜头运动", "ffmpeg", "素材意图", "本 shot", "SHOT_VIDEO_CLIP",
+		"生成后可直接", "口播/字幕内容", "画面需包含", "转场只覆盖", "主题：",
+	} {
+		if strings.Contains(prompt, banned) {
+			t.Fatalf("Dreamina prompt should not contain production jargon %q:\n%s", banned, prompt)
+		}
+	}
+	for _, want := range []string{"0-2秒", "2-4秒", "4-6秒", "创作桌", "传送带", "抽帧 QA"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("Dreamina prompt should contain concrete timed story detail %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestVideoPromptGeneratorKeepsHumorousAIGCRequestsPositive(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "躺营 AIOS 正能量开源宣传", "", map[string]interface{}{
+		"topic": "躺营 AIOS 正能量开源宣传",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_POSITIVE",
+				"durationSec":       6,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "AIGC_VIDEO | 非真人风格化：一堆 AI 工具从互相抢话变成排队协作。",
+				"narrationText":     "不是工具把人压垮，而是流程帮人把创作扛起来。",
+				"assetIntent":       "用轻松反差表达创作者减负和开源共建。",
+				"humorBeat":         "工具们排队上工，最后一起举起开源小旗。",
+				"timeRelationship":  "0-6s 从混乱到协作；末尾 0.5s 稳定在积极 CTA。",
+				"tone":              "正能量、轻松、幽默、不焦虑、不嘲讽用户。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-positive", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected one AIGC external request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req, ok := requests[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request should be a map, got %#v", requests[0])
+	}
+	prompt := ensureStringValue(req["prompt"])
+	for _, want := range []string{"正能量", "创作者减负", "开源共建", "不焦虑"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt should keep humorous AIGC request positive with %q, got %s", want, prompt)
+		}
+	}
+}
+
 func TestExecuteDynamicAgentPromptToolSplitsShotsLocally(t *testing.T) {
 	llmCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -893,6 +1435,34 @@ func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
 		if !strings.Contains(data, required) {
 			t.Fatalf("hyperframes data json should contain %q, got:\n%s", required, data)
 		}
+	}
+}
+
+func TestHyperFramesDataJSONSanitizesInternalPlaceholders(t *testing.T) {
+	videoPrompts := `[{"shotId":"SHOT_01","narrationText":"开场口播","prompt":{"field":"prompt","reason":"USER_ASSET_REDACTED","redacted":true}}]`
+	data := buildHyperFramesDataJSON("宣传片", "完整口播", `[{"shotId":"SHOT_01"}]`, videoPrompts, `{{mcp_generation.output.shotAssetPackages}}`, "16:9", "{}")
+	if strings.Contains(data, "USER_ASSET_REDACTED") || strings.Contains(data, "{{") {
+		t.Fatalf("hyperframes data json should not leak internal placeholders, got:\n%s", data)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+		t.Fatalf("hyperframes data json should remain valid JSON: %v\n%s", err, data)
+	}
+	prompts, ok := decoded["videoPrompts"].([]interface{})
+	if !ok || len(prompts) != 1 {
+		t.Fatalf("expected one video prompt, got %#v", decoded["videoPrompts"])
+	}
+	prompt, ok := prompts[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected prompt map, got %#v", prompts[0])
+	}
+	if _, exists := prompt["prompt"]; exists {
+		t.Fatalf("redacted prompt field should be removed, got %#v", prompt)
+	}
+	packages, ok := decoded["shotAssetPackages"].([]interface{})
+	if !ok || len(packages) != 0 {
+		t.Fatalf("unresolved shot asset packages template should fall back to empty array, got %#v", decoded["shotAssetPackages"])
 	}
 }
 
@@ -1606,6 +2176,227 @@ func TestBuildSkillStageArtifactsUsesShotSemanticKinds(t *testing.T) {
 	}
 }
 
+func TestReferenceAssetPlannerFallbackBuildsImageMCPRequests(t *testing.T) {
+	result := executeLocalVideoCreationTool("reference_asset_planner", map[string]interface{}{
+		"stage": "reference_assets",
+		"brief": "创作一个正能量搞笑影视短片",
+		"characters": []interface{}{
+			map[string]interface{}{"id": "char_creator", "name": "创作者", "description": "非真人动画角色", "referenceViews": []interface{}{"front", "side", "back"}},
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{"id": "scene_console", "name": "导演台", "description": "流程节点空间", "referenceViews": []interface{}{"front_view", "side_view"}},
+		},
+		"props": []interface{}{
+			map[string]interface{}{"id": "prop_mcp", "name": "MCP 插槽", "description": "可插拔标准协议道具"},
+		},
+	}, tool.ToolContext{TaskID: "task-ref-assets", NodeID: "reference_assets_exec"})
+
+	if !result.Success {
+		t.Fatalf("reference_asset_planner failed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) < 3 {
+		t.Fatalf("expected image external requests, got %#v", result.Data["externalGenerationRequests"])
+	}
+	first, ok := requests[0].(map[string]interface{})
+	if !ok || first["kind"] != "image" {
+		t.Fatalf("reference request should be image kind, got %#v", requests[0])
+	}
+	prompt := ensureStringValue(first["prompt"])
+	if !strings.Contains(prompt, "非真人") || !strings.Contains(prompt, "多视角") {
+		t.Fatalf("reference prompt should enforce non-real multi-view boards, got %s", prompt)
+	}
+}
+
+func TestReferenceAssetPlannerCinematicUsesDeterministicDataWithModelProvider(t *testing.T) {
+	llmCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCalled = true
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"content": `{"summary":"unexpected llm response"}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	result := executeDynamicAgentPromptTool("reference_asset_planner", "reference_assets", "video", "开源项目正能量搞笑短片", "", map[string]interface{}{
+		"topic":           "开源项目正能量搞笑短片",
+		"creationProfile": map[string]interface{}{"id": "cinematic_story"},
+		"modelProvider":   map[string]interface{}{"apiKey": "test-key", "baseUrl": server.URL + "/v1", "model": "fake"},
+		"characters": []interface{}{
+			map[string]interface{}{"id": "char_creator", "name": "创作者", "description": "非真人动画角色"},
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{"id": "scene_console", "name": "导演台", "description": "流程节点空间"},
+		},
+		"props": []interface{}{
+			map[string]interface{}{"id": "prop_mcp", "name": "MCP 插槽", "description": "可插拔标准协议道具"},
+		},
+	}, tool.ToolContext{TaskID: "task-ref-assets-deterministic", NodeID: "reference_assets_exec"})
+
+	if !result.Success {
+		t.Fatalf("reference_asset_planner failed: %s", result.Error)
+	}
+	if llmCalled {
+		t.Fatal("reference_asset_planner should keep cinematic reference requests deterministic")
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) < 3 {
+		t.Fatalf("expected deterministic image requests, got %#v", result.Data["externalGenerationRequests"])
+	}
+}
+
+func TestKeyframePromptGeneratorCinematicUsesDeterministicDataWithModelProvider(t *testing.T) {
+	llmCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCalled = true
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"content": `{"summary":"unexpected llm response"}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	result := executeDynamicAgentPromptTool("keyframe_prompt_generator", "keyframes_storyboards", "video", "开源项目正能量搞笑短片", "", map[string]interface{}{
+		"topic":           "开源项目正能量搞笑短片",
+		"creationProfile": map[string]interface{}{"id": "cinematic_story"},
+		"modelProvider":   map[string]interface{}{"apiKey": "test-key", "baseUrl": server.URL + "/v1", "model": "fake"},
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_01",
+				"visual":            "任务卡在导演台上排队",
+				"camera":            "快速推近后稳定横移",
+				"lighting":          "暖台灯和蓝绿边缘光",
+				"whyThisShot":       "用无厘头动作解释系统把混乱变成流程。",
+				"referenceAssetIds": []interface{}{"char_creator", "scene_console", "prop_mcp"},
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-keyframes-deterministic", NodeID: "keyframes_storyboards_exec"})
+
+	if !result.Success {
+		t.Fatalf("keyframe_prompt_generator failed: %s", result.Error)
+	}
+	if llmCalled {
+		t.Fatal("keyframe_prompt_generator should keep cinematic keyframe requests deterministic")
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected deterministic keyframe request, got %#v", result.Data["externalGenerationRequests"])
+	}
+}
+
+func TestVideoScriptGeneratorCinematicBackfillsInvalidModelOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"content": `{"content":"generic response","passed":true,"score":90,"summary":"not a script"}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	result := executeDynamicAgentPromptTool("video_script_generator", "cinematic_script", "video", "开源项目正能量搞笑短片", "", map[string]interface{}{
+		"topic":             "开源项目正能量搞笑短片",
+		"creationProfile":   map[string]interface{}{"id": "cinematic_story"},
+		"targetDurationSec": 30,
+		"modelProvider":     map[string]interface{}{"apiKey": "test-key", "baseUrl": server.URL + "/v1", "model": "fake"},
+	}, tool.ToolContext{TaskID: "task-cine-script-backfill", NodeID: "cinematic_script_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_script_generator failed: %s", result.Error)
+	}
+	for _, key := range []string{"storyOutline", "detailedScript", "characters", "scenes", "props", "scriptSpans"} {
+		if _, ok := result.Data[key]; !ok {
+			t.Fatalf("cinematic script should backfill %s, got %#v", key, result.Data)
+		}
+	}
+}
+
+func TestCinematicShotDesignerBuildsDirectorFieldsFromScriptSpans(t *testing.T) {
+	result := executeLocalVideoCreationTool("cinematic_shot_designer", map[string]interface{}{
+		"stage": "cinematic_shot_design",
+		"brief": "躺营 AI OS 搞笑开源短片",
+		"scriptSpans": []interface{}{
+			map[string]interface{}{"id": "SCENE_01", "durationSec": 6, "text": "任务卡从桌上跳起来，创作者意识到流程需要被管起来。"},
+		},
+		"referenceAssetPlan": map[string]interface{}{
+			"globalReferenceAssets": []interface{}{
+				map[string]interface{}{"id": "char_creator", "role": "character", "label": "创作者"},
+				map[string]interface{}{"id": "scene_console", "role": "scene", "label": "导演台"},
+				map[string]interface{}{"id": "prop_mcp", "role": "prop", "label": "MCP 插槽"},
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-cine-shot", NodeID: "cinematic_shot_design_exec"})
+
+	if !result.Success {
+		t.Fatalf("cinematic_shot_designer failed: %s", result.Error)
+	}
+	shots, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shots) != 1 {
+		t.Fatalf("expected one cinematic shot, got %#v", result.Data["shotList"])
+	}
+	shot := shots[0]
+	for _, key := range []string{"camera", "lighting", "whyThisShot", "actionBeats", "referenceAssetIds", "referenceImages"} {
+		if _, ok := shot[key]; !ok {
+			t.Fatalf("cinematic shot missing %s: %#v", key, shot)
+		}
+	}
+	if duration := intFromInterface(shot["durationSec"], 0); duration < 3 || duration > 15 {
+		t.Fatalf("cinematic shot duration should stay 3-15s, got %#v", shot)
+	}
+}
+
+func TestVideoPromptGeneratorIncludesCinematicDirectorFields(t *testing.T) {
+	result := executeLocalVideoCreationTool("video_prompt_generator", map[string]interface{}{
+		"stage": "video_prompt",
+		"brief": "躺营 AI OS 搞笑影视短片",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_01",
+				"durationSec":       6,
+				"visual":            "任务卡在导演台上排队",
+				"narrationText":     "混乱需求终于排队了。",
+				"camera":            "快速推近后稳定横移",
+				"lighting":          "暖台灯和蓝绿边缘光",
+				"whyThisShot":       "用无厘头动作解释系统把混乱变成流程。",
+				"actionBeats":       []interface{}{"0-2s 建立混乱", "2-5s 任务卡排队", "5-6s 稳定收束"},
+				"referenceAssetIds": []interface{}{"char_creator", "scene_console", "prop_mcp"},
+				"plannedAssetRoute": "aigc_video",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_prompt_generator failed: %s", result.Error)
+	}
+	prompts, ok := result.Data["videoPrompts"].([]interface{})
+	if !ok || len(prompts) != 1 {
+		t.Fatalf("expected one video prompt, got %#v", result.Data["videoPrompts"])
+	}
+	prompt := prompts[0].(map[string]interface{})
+	promptText := ensureStringValue(prompt["prompt"])
+	for _, want := range []string{"0-2秒", "2-4秒", "4-6秒", "任务卡", "导演台", "混乱"} {
+		if !strings.Contains(promptText, want) {
+			t.Fatalf("prompt should translate cinematic director fields into visible timed story detail %q, got %s", want, promptText)
+		}
+	}
+	for _, banned := range []string{"画面意义：", "动作时间线：", "全局参考资产：", "ffmpeg", "SHOT_VIDEO_CLIP"} {
+		if strings.Contains(promptText, banned) {
+			t.Fatalf("prompt should not expose internal director labels %q, got %s", banned, promptText)
+		}
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("expected external video request, got %#v", result.Data["externalGenerationRequests"])
+	}
+	req := requests[0].(map[string]interface{})
+	if ensureStringValue(req["whyThisShot"]) == "" {
+		t.Fatalf("external request should carry whyThisShot: %#v", req)
+	}
+}
+
 func TestSkillStageContinuationDetectsLengthFinishReason(t *testing.T) {
 	if !needsSkillStageContinuation("hyperframes_reference", "## BEAT 03\n证据", "length") {
 		t.Fatal("length finish reason should request continuation")
@@ -1670,4 +2461,13 @@ func writeTestFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

@@ -255,7 +255,7 @@ func contentType(body *RequestBody) string {
 }
 
 func hasBody(resp *Response) bool {
-	return resp.Content != nil && len(resp.Content) > 0
+	return len(resp.Content) > 0
 }
 
 func exampleJSON(body *RequestBody) string {
@@ -308,7 +308,7 @@ func schemaToExample(s *Schema, depth int) string {
 		if s.Ref != "" {
 			return fmt.Sprintf("{ \"$ref\": \"%s\" }", s.Ref)
 		}
-		if s.Properties == nil || len(s.Properties) == 0 {
+		if len(s.Properties) == 0 {
 			return "{}"
 		}
 		var b strings.Builder

@@ -1,7 +1,6 @@
 package jsonx
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -252,14 +251,4 @@ func TestExtractJSON_UnescapedTabs(t *testing.T) {
 	if result["text"] != "hello\tworld" {
 		t.Errorf("expected tab preserved, got %q", result["text"])
 	}
-}
-
-// roundTripJSON is a helper to produce compact JSON strings in tests
-func roundTripJSON(t *testing.T, v interface{}) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("failed to marshal: %v", err)
-	}
-	return string(b)
 }

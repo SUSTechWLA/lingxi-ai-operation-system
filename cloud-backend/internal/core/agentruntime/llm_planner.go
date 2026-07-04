@@ -109,7 +109,9 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	fillRequestRequiredInputs(plan.Steps, manifestsByName, req)
 	wireRequiredStepInputs(plan.Steps, manifestsByName)
 	repairInvalidOutputReferences(plan.Steps, manifestsByName)
-	if err := NewPlanGuard(toolManifestCatalog(manifestsByName), nil).Validate(&plan); err != nil {
+	catalog := toolManifestCatalog(manifestsByName)
+	NewPlanCompiler(catalog).PreparePlan(&plan)
+	if err := NewPlanGuard(catalog, nil).Validate(&plan); err != nil {
 		return nil, fmt.Errorf("llm planner returned invalid plan: %w", err)
 	}
 	if len(plan.Steps) == 0 {

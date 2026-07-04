@@ -849,7 +849,7 @@ func TestBuildArtifactsShotAssetPackageMaterializesIndividualPackage(t *testing.
 	}
 }
 
-func TestBuildArtifactsExternalGenerationRequestRejectsPromptOverLimit(t *testing.T) {
+func TestBuildArtifactsExternalGenerationRequestTruncatesPromptOverLimit(t *testing.T) {
 	node := externalGenerationRequestNode("extgen_too_long", map[string]interface{}{
 		"requestId":           "extgen_too_long",
 		"kind":                "image",
@@ -858,9 +858,22 @@ func TestBuildArtifactsExternalGenerationRequestRejectsPromptOverLimit(t *testin
 		"referenceImageLimit": 6,
 	})
 
-	_, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
-	if err == nil || !IsArtifactManifestInvalid(err) {
-		t.Fatalf("expected manifest validation error for prompt limit, got %v", err)
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("expected prompt to be truncated for display artifact, got %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one artifact request, got %d", len(requests))
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(requests[0].Data, &decoded); err != nil {
+		t.Fatalf("artifact data should be JSON: %v", err)
+	}
+	if got := len([]rune(decoded["prompt"].(string))); got != 2000 {
+		t.Fatalf("prompt length = %d, want 2000", got)
+	}
+	if decoded["promptTruncated"] != true || decoded["promptOriginalCharCount"] != float64(2001) {
+		t.Fatalf("prompt truncation metadata missing: %+v", decoded)
 	}
 }
 

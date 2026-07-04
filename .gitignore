@@ -9,6 +9,7 @@
 # Build output
 /build/
 target/
+scripts/tmp/
 
 # Environment files with secrets - NEVER commit these!
 .env
@@ -27,6 +28,10 @@ target/
 *.test
 *.out
 vendor/
+
+# Python
+__pycache__/
+*.py[cod]
 
 # OS
 .DS_Store

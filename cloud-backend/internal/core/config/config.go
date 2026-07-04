@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -61,7 +62,8 @@ type HyperFramesConfig struct {
 }
 
 type ServerConfig struct {
-	Port int `mapstructure:"SERVER_PORT"`
+	Port               int    `mapstructure:"SERVER_PORT"`
+	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
 }
 
 type PostgresConfig struct {
@@ -161,8 +163,74 @@ func Load() *Config {
 	return cfg
 }
 
+func (cfg *Config) ValidateForMode(mode string) error {
+	if !isProductionMode(mode) {
+		return nil
+	}
+
+	var problems []string
+	if isWeakSecret(cfg.Auth.TokenSecret, "development-only-change-me", "replace-with-a-long-random-secret") {
+		problems = append(problems, "AUTH_TOKEN_SECRET must be set to a long random value in production")
+	}
+	if isWeakSecret(cfg.Postgres.Password, "changeme", "your-postgres-password") {
+		problems = append(problems, "POSTGRES_PASSWORD must be set to a non-default value in production")
+	}
+	if isWeakSecret(cfg.MinIO.SecretKey, "changeme") {
+		problems = append(problems, "MINIO_SECRET_KEY must be set to a non-default value in production")
+	}
+	if isWeakCredential(cfg.MinIO.AccessKey, 16, "minioadmin", "your-minio-access-key") {
+		problems = append(problems, "MINIO_ACCESS_KEY must be set to a non-default value in production")
+	}
+	if !cfg.Sandbox.Enabled {
+		problems = append(problems, "SANDBOX_ENABLED must be true in production because code execution tools are registered")
+	}
+	if strings.TrimSpace(cfg.Sandbox.Address) == "" {
+		problems = append(problems, "SANDBOX_ADDRESS must be set in production")
+	}
+	if cfg.Sandbox.Fallback {
+		problems = append(problems, "SANDBOX_FALLBACK must be false in production")
+	}
+	if strings.TrimSpace(cfg.BashTool.AllowedCommands) == "*" {
+		problems = append(problems, "BASH_TOOL_ALLOWED_COMMANDS must be an explicit allowlist in production")
+	}
+	if cors := strings.TrimSpace(cfg.Server.CORSAllowedOrigins); cors == "" || cors == "*" || strings.Contains(cors, "*") {
+		problems = append(problems, "CORS_ALLOWED_ORIGINS must list explicit origins in production")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid production config: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func isProductionMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "production", "prod", "release":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWeakSecret(value string, weakValues ...string) bool {
+	return isWeakCredential(value, 32, weakValues...)
+}
+
+func isWeakCredential(value string, minLength int, weakValues ...string) bool {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < minLength {
+		return true
+	}
+	for _, weak := range weakValues {
+		if trimmed == weak {
+			return true
+		}
+	}
+	return false
+}
+
 func setDefaults() {
 	viper.SetDefault("SERVER_PORT", 8080)
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "*")
 	viper.SetDefault("POSTGRES_HOST", "localhost")
 	viper.SetDefault("POSTGRES_PORT", 5432)
 	viper.SetDefault("POSTGRES_USER", "postgres")
@@ -186,7 +254,7 @@ func setDefaults() {
 	viper.SetDefault("WORKER_THREAD_POOL_MAX", 50)
 	viper.SetDefault("WORKER_HEARTBEAT_INTERVAL", 30)
 	viper.SetDefault("WORKER_HEARTBEAT_TIMEOUT", 300)
-	viper.SetDefault("BASH_TOOL_ALLOWED_COMMANDS", "*")
+	viper.SetDefault("BASH_TOOL_ALLOWED_COMMANDS", "ls,cat,echo,curl,python,python3,node,head,tail,wc,grep,find,which,whoami,date,pwd,uname,df,ps")
 	viper.SetDefault("BASH_TOOL_TIMEOUT", 60)
 	viper.SetDefault("ORCHESTRATOR_URL", "http://localhost:8080")
 	viper.SetDefault("CONTEXT_SERVICE_URL", "http://localhost:8082")

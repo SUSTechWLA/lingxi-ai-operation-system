@@ -119,7 +119,7 @@ export interface DirectorTraceNode {
 
 export interface DirectorNextAction {
   stageId: string
-  kind: 'review' | 'running' | 'blocked' | 'start'
+  kind: 'review' | 'running' | 'blocked' | 'done' | 'start'
   label: string
   description: string
 }
@@ -280,6 +280,7 @@ const videoCreationProfileList: VideoCreationProfile[] = [
       'HYPERFRAMES_PROJECT_GENERATE',
       'HYPERFRAMES_SNAPSHOT',
       'HYPERFRAMES_RENDER',
+      'VIDEO_FRAME_QA',
       'FFMPEG_PROBE',
       'ARTIFACT_PACKAGE',
     ],
@@ -481,7 +482,10 @@ export function buildExportDeliveryItems(artifacts: DirectorArtifactRecord[]): E
   const finalVideo = findFinalVideoArtifact(artifacts)
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
   const publishArtifact = findPublishCopyArtifact(artifacts)
-  const qualityArtifact = artifacts.find((artifact) => artifact.kind === 'FINAL_REVIEW') ||
+  const qualityArtifact = artifacts.find((artifact) => artifact.kind === 'SHOT_QA_REPORT') ||
+    artifacts.find((artifact) => artifact.kind === 'VIDEO_VISUAL_QA_REPORT') ||
+    artifacts.find((artifact) => artifact.kind === 'SHOT_REPAIR_PLAN') ||
+    artifacts.find((artifact) => artifact.kind === 'FINAL_REVIEW') ||
     artifacts.find((artifact) => artifact.kind === 'FFMPEG_PROBE_REPORT')
 
   return [
@@ -514,9 +518,9 @@ export function buildExportDeliveryItems(artifacts: DirectorArtifactRecord[]): E
     },
     {
       id: 'quality-report',
-      label: '质量报告',
+      label: qualityArtifact?.kind === 'SHOT_QA_REPORT' ? 'Shot QA 报告' : '质量报告',
       status: qualityArtifact?.status || 'missing',
-      description: qualityArtifact?.storageRef ? '视频探测或最终审核报告已生成。' : '等待质量审核产物生成。',
+      description: qualityArtifact?.storageRef ? 'shot 级 QA、视频探测或最终审核报告已生成。' : '等待质量审核产物生成。',
       artifact: qualityArtifact,
       storageRef: qualityArtifact?.storageRef,
       actionLabel: qualityArtifact?.storageRef ? '查看报告' : '等待检测',
@@ -550,6 +554,7 @@ function localToolLabel(command: string): string {
     HYPERFRAMES_PROJECT_GENERATE: '生成视频项目',
     HYPERFRAMES_SNAPSHOT: '生成预览快照',
     HYPERFRAMES_RENDER: '本地渲染',
+    VIDEO_FRAME_QA: '抽帧质检',
     LOCAL_FILE_IMPORT: '上传导入',
     FFMPEG_PROBE: '视频检测',
     ARTIFACT_PACKAGE: '交付打包',
@@ -639,6 +644,7 @@ export function buildDirectorStages(
   reviews: AgentReviewItem[] = [],
   trace: unknown = undefined,
   projectStarted = false,
+  runStatus?: DirectorRunLifecycleStatus,
 ): DirectorStage[] {
   const traceNodes = extractTraceNodes(trace)
 
@@ -663,6 +669,10 @@ export function buildDirectorStages(
       reviewId: review?.id,
     }
   })
+
+  if (runStatus === 'SUCCESS') {
+    return stages.map((stage) => ({ ...stage, status: 'done', progress: progressForStatus('done') }))
+  }
 
   if (stages.some((stage) => !['pending', 'active'].includes(stage.status))) {
     return stages.map((stage) => stage.status === 'active' ? { ...stage, status: 'pending', progress: progressForStatus('pending') } : stage)
@@ -1178,8 +1188,11 @@ function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotA
 
   return slotSpecs.map((slot) => {
     const slotArtifacts = artifacts.filter((artifact) => slot.kind === 'prompt' ? isShotPromptArtifact(artifact) : shotAssetSlotForArtifact(artifact) === slot.kind)
+    const slotHasMaterializedArtifact = slot.kind !== 'prompt' && slotArtifacts.some(isMaterializedShotSlotArtifact)
     const dependencyRequests = slotArtifacts.filter((artifact) => {
+      if (slot.kind === 'prompt') return false
       if (!isExternalGenerationRequestArtifact(artifact)) return false
+      if (slotHasMaterializedArtifact) return false
       const requestId = externalGenerationRequestIdForArtifact(artifact)
       return !requestId || !fulfilledRequestIds.has(requestId)
     })
@@ -1490,6 +1503,13 @@ function isExternalGenerationResultArtifact(artifact: DirectorArtifactRecord): b
   return artifactType === 'external_generation_result'
 }
 
+function isMaterializedShotSlotArtifact(artifact: DirectorArtifactRecord): boolean {
+  if (isExternalGenerationRequestArtifact(artifact)) return false
+  if (artifact.status !== 'valid') return false
+  if (isExternalGenerationResultArtifact(artifact)) return true
+  return isShotMediaArtifact(artifact) || isShotReferenceArtifact(artifact)
+}
+
 function externalGenerationRequestIdForArtifact(artifact: DirectorArtifactRecord): string {
   const metadata = artifact.metadata || {}
   const direct = firstString(metadata, ['externalGenerationRequestId', 'generationRequestId', 'requestId'])
@@ -1700,11 +1720,11 @@ export function isProjectInProgress(
 }
 
 export function overviewProjectStatus(stages: DirectorStage[], projectStatus?: DirectorProjectLifecycleStatus, runStatus?: DirectorRunLifecycleStatus): DirectorStageStatus {
-  if (runStatus === 'FAILED' || stages.some((stage) => stage.status === 'failed' || stage.status === 'blocked')) {
-    return 'failed'
-  }
   if (runStatus === 'SUCCESS' || projectStatus === 'COMPLETED' || (stages.length > 0 && stages.every((stage) => stage.status === 'done'))) {
     return 'done'
+  }
+  if (runStatus === 'FAILED' || stages.some((stage) => stage.status === 'failed' || stage.status === 'blocked')) {
+    return 'failed'
   }
   if (projectStatus === 'PAUSED' || projectStatus === 'ARCHIVED') {
     return 'pending'
@@ -1732,7 +1752,16 @@ export function projectPrimaryAction(input: {
   }
 }
 
-export function deriveNextAction(stages: DirectorStage[]): DirectorNextAction | undefined {
+export function deriveNextAction(stages: DirectorStage[], runStatus?: DirectorRunLifecycleStatus): DirectorNextAction | undefined {
+  if (runStatus === 'SUCCESS' || (stages.length > 0 && stages.every((stage) => stage.status === 'done'))) {
+    return {
+      stageId: 'complete',
+      kind: 'done',
+      label: '项目已完成',
+      description: '完整流程已经跑通，最终视频和发布文案已生成。',
+    }
+  }
+
   const reviewStage = stages.find((stage) => stage.status === 'review')
   if (reviewStage) {
     return {
@@ -2702,6 +2731,10 @@ export function displayNameForArtifact(kind: string) {
     PREVIEW_REPORT: '预览报告',
     VIDEO: '最终视频',
     RENDER_REPORT: '渲染报告',
+    VIDEO_VISUAL_QA_REPORT: '抽帧质检报告',
+    VIDEO_VISUAL_QA_CONTACT_SHEET: '抽帧联系表',
+    SHOT_QA_REPORT: 'Shot QA报告',
+    SHOT_REPAIR_PLAN: 'Shot返修计划',
     FFMPEG_PROBE_REPORT: '视频检测报告',
     FINAL_REVIEW: '最终审核报告',
     SHOT_REVIEW_PACKET: 'Shot审核包',
@@ -2774,6 +2807,8 @@ function requiresMaterializedArtifact(kind: string) {
     'HYPERFRAMES_PROJECT',
     'PREVIEW_SNAPSHOTS',
     'VIDEO',
+    'VIDEO_VISUAL_QA_REPORT',
+    'VIDEO_VISUAL_QA_CONTACT_SHEET',
     'FFMPEG_PROBE_REPORT',
     'FINAL_REVIEW',
     'SHOT_REVIEW_PACKET',

@@ -50,10 +50,6 @@ type ToolCandidate struct {
 
 type HybridToolRetriever struct {
 	allTools []*tool.ToolManifest
-
-	vectorStore interface {
-		Search(ctx context.Context, query string, topK int) ([]string, error)
-	}
 }
 
 func NewHybridToolRetriever(manifests []*tool.ToolManifest) *HybridToolRetriever {
@@ -170,7 +166,7 @@ func plannerDisallowsToolForDomain(toolName, domain string) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "bash", "python", "llm_api", "external":
+	case "bash", "python", "llm_api", "external", "video_frame_qa":
 		return true
 	default:
 		return false

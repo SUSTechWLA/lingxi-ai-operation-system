@@ -11,6 +11,7 @@ import (
 )
 
 const ArtifactManifestInvalidCode = "ARTIFACT_MANIFEST_INVALID"
+const externalGenerationPromptCharLimit = 2000
 
 type ArtifactManifestInvalidError struct {
 	Message string
@@ -525,7 +526,25 @@ func normalizeExternalGenerationRequestPayload(request map[string]interface{}) m
 			}
 		}
 	}
+	if prompt := stringValue(normalized, "prompt"); prompt != "" {
+		normalized["prompt"] = truncateExternalGenerationPrompt(prompt, normalized)
+	}
 	return normalized
+}
+
+func truncateExternalGenerationPrompt(prompt string, normalized map[string]interface{}) string {
+	runes := []rune(prompt)
+	if len(runes) <= externalGenerationPromptCharLimit {
+		return prompt
+	}
+	if normalized != nil {
+		normalized["promptTruncated"] = true
+		normalized["promptOriginalCharCount"] = len(runes)
+		if _, ok := normalized["promptCharLimit"]; !ok {
+			normalized["promptCharLimit"] = externalGenerationPromptCharLimit
+		}
+	}
+	return string(runes[:externalGenerationPromptCharLimit])
 }
 
 func shotAssetPackagePayload(payload map[string]interface{}, unitID string) (map[string]interface{}, bool) {
@@ -581,8 +600,8 @@ func validateExternalGenerationRequestData(data []byte) error {
 	if prompt == "" {
 		return fmt.Errorf("external generation request prompt is required")
 	}
-	if len([]rune(prompt)) > 2000 {
-		return fmt.Errorf("external generation request prompt exceeds 2000 characters")
+	if len([]rune(prompt)) > externalGenerationPromptCharLimit {
+		return fmt.Errorf("external generation request prompt exceeds %d characters", externalGenerationPromptCharLimit)
 	}
 	refs, ok := request["references"].([]interface{})
 	if !ok {

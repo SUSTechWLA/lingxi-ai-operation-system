@@ -145,6 +145,88 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 	}
 }
 
+func TestHyperFramesProjectExecutorKeepsFullShotTimelineWhenOnlySomeMediaReady(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts", "project_001", "shot-video-03")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("fake video bytes"), 0o644); err != nil {
+		t.Fatalf("write artifact content: %v", err)
+	}
+
+	executor := NewHyperFramesProjectExecutor(root)
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "躺营 AIOS 正能量开源介绍",
+			"script": "让创作者少一点焦虑，多一点稳定产出。",
+			"shotList": []interface{}{
+				map[string]interface{}{
+					"shotId":        "SHOT_01",
+					"durationSec":   float64(6),
+					"sceneSummary":  "开头钩子",
+					"mainAction":    "AI 工具排队上工",
+					"narrationText": "AI 工具别再吵架了。",
+				},
+				map[string]interface{}{
+					"shotId":        "SHOT_02",
+					"durationSec":   float64(6),
+					"sceneSummary":  "流程拆解",
+					"mainAction":    "脚本、分镜、素材进入流水线",
+					"narrationText": "系统把想法拆成可审核步骤。",
+				},
+				map[string]interface{}{
+					"shotId":        "SHOT_03",
+					"durationSec":   float64(6),
+					"sceneSummary":  "Dreamina b-roll",
+					"mainAction":    "AIGC 素材作为情绪画面",
+					"narrationText": "即梦 MCP 生成有趣素材。",
+				},
+			},
+			"shotAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "SHOT_03",
+					"durationSec": float64(6),
+					"generationPlan": map[string]interface{}{
+						"mode": "aigc_video",
+						"fusionPlan": map[string]interface{}{
+							"baseLayer": map[string]interface{}{
+								"kind":       "video",
+								"storageRef": "local://projects/project_001/artifacts/shot-video-03/hash/clip.mp4",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(raw)
+	for _, expected := range []string{
+		`data-duration="18.0"`,
+		`开头钩子`,
+		`流程拆解`,
+		`Dreamina b-roll`,
+		`03 / 03`,
+		`data-shot-id="SHOT_03" data-start="12.0" data-duration="6.0"`,
+		`media-safety-mask`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("index.html missing %q:\n%s", expected, html)
+		}
+	}
+}
+
 func TestLocalAgentRawArtifactURLUsesConfiguredBase(t *testing.T) {
 	t.Setenv("TANGYING_LOCAL_AGENT_BASE_URL", "http://127.0.0.1:19090/")
 
@@ -257,6 +339,72 @@ func TestHyperFramesProjectExecutorShowsMissingMediaPlaceholder(t *testing.T) {
 	}
 	if html := string(raw); !strings.Contains(html, `Missing media for SHOT_01`) {
 		t.Fatalf("index.html missing media placeholder:\n%s", html)
+	}
+}
+
+func TestHyperFramesProjectExecutorBuildsShotListCompositionWithoutMediaPackages(t *testing.T) {
+	root := t.TempDir()
+	executor := NewHyperFramesProjectExecutor(root)
+
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-1",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "躺营 AIOS 开源发布",
+			"script": "真正可控的视频生产线来了。",
+			"shotList": []interface{}{
+				map[string]interface{}{
+					"shotId":            "SHOT_01",
+					"durationSec":       float64(6),
+					"plannedAssetRoute": "aigc_video",
+					"sceneSummary":      "开头三秒强反差",
+					"mainAction":        "黑箱等待切到可控导演台",
+					"narrationText":     "别再把一句话丢给 AI 然后盲等结果。",
+				},
+				map[string]interface{}{
+					"shotId":            "SHOT_02",
+					"durationSec":       float64(8),
+					"startSec":          float64(0),
+					"endSec":            float64(8),
+					"plannedAssetRoute": "screen_recording",
+					"sceneSummary":      "页面输入启动项目",
+					"mainAction":        "展示登录、输入框、审核门",
+					"narrationText":     "非技术人员也能把需求拆成可审核步骤。",
+				},
+				map[string]interface{}{
+					"shotId":            "SHOT_03",
+					"durationSec":       float64(7),
+					"startSec":          float64(0),
+					"endSec":            float64(7),
+					"plannedAssetRoute": "hyperframes",
+					"sceneSummary":      "开源发布 CTA",
+					"mainAction":        "README、Wiki、release tag 快速扫过",
+					"narrationText":     "关注这个开源项目，一起把 AI 内容生产线跑起来。",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(raw)
+	for _, expected := range []string{
+		`data-duration="21.0"`,
+		`开头三秒强反差`,
+		`页面输入启动项目`,
+		`开源发布 CTA`,
+		`别再把一句话丢给 AI 然后盲等结果。`,
+		`03 / 03`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("index.html missing %q:\n%s", expected, html)
+		}
 	}
 }
 

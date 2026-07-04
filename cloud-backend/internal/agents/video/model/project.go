@@ -9,8 +9,9 @@ import (
 type VideoMode string
 
 const (
-	ModeAIGCShot    VideoMode = "aigc_shot"
-	ModeVoiceVisual VideoMode = "voice_visual"
+	ModeAIGCShot       VideoMode = "aigc_shot"
+	ModeVoiceVisual    VideoMode = "voice_visual"
+	ModeCinematicStory VideoMode = "cinematic_story"
 )
 
 // ProjectStatus represents the lifecycle status.
@@ -89,7 +90,7 @@ type UpdateProjectRequest struct {
 
 // IsValidMode checks if a mode string is a valid video production mode.
 func IsValidMode(mode VideoMode) bool {
-	return mode == ModeAIGCShot || mode == ModeVoiceVisual
+	return mode == ModeAIGCShot || mode == ModeVoiceVisual || mode == ModeCinematicStory
 }
 
 // IsValidGenerationMode checks if a generation mode is valid.

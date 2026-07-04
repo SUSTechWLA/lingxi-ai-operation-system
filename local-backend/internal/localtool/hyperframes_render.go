@@ -124,12 +124,26 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		height = int(value)
 	}
 
-	// Call HyperFrames Render Service
-	timeoutSec := job.TimeoutSec
-	if timeoutSec <= 0 {
-		timeoutSec = int(e.timeout.Seconds())
+	fastAttempted := false
+	if fastStoryboardRenderEnabled() {
+		fastAttempted = true
+		if fallback, handled, fallbackErr := e.tryFastStoryboardRender(ctx, projectID, projectDir, outputPath, fps, width, height); handled {
+			if fallbackErr != nil {
+				return nil, fallbackErr
+			}
+			return fallback, nil
+		}
 	}
-	renderCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+
+	// Call HyperFrames Render Service
+	renderServiceTimeout := time.Duration(job.TimeoutSec) * time.Second
+	if payloadTimeout := mcpSecondsFromPayload(job.Payload, "timeoutSec", "renderTimeoutSec", "hyperframesRenderTimeoutSec"); payloadTimeout > 0 {
+		renderServiceTimeout = payloadTimeout
+	}
+	if renderServiceTimeout <= 0 {
+		renderServiceTimeout = e.timeout
+	}
+	renderCtx, cancel := context.WithTimeout(ctx, renderServiceTimeout)
 	defer cancel()
 
 	renderReq := hyperFramesRenderRequest{
@@ -143,6 +157,14 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 
 	result, err := e.callRenderService(renderCtx, renderReq)
 	if err != nil {
+		if !fastAttempted && storyboardRenderFallbackEnabled() && ctx.Err() == nil {
+			if fallback, handled, fallbackErr := e.tryFastStoryboardRender(ctx, projectID, projectDir, outputPath, fps, width, height); handled {
+				if fallbackErr == nil {
+					return fallback, nil
+				}
+				return nil, fmt.Errorf("hyperframes render failed: %w; storyboard fallback failed: %v", err, fallbackErr)
+			}
+		}
 		return nil, fmt.Errorf("hyperframes render failed: %w", err)
 	}
 
@@ -155,7 +177,36 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		return nil, fmt.Errorf("render output is empty: %s", outputPath)
 	}
 
-	localRef, err := e.mirrorFinalVideoArtifact(projectID, outputPath, info.Size(), fps, width, height, result.DurationMs)
+	return e.renderResult(projectID, outputPath, info.Size(), fps, width, height, result)
+}
+
+func (e *HyperFramesRenderExecutor) tryFastStoryboardRender(ctx context.Context, projectID, projectDir, outputPath string, fps, width, height int) (*Result, bool, error) {
+	started := time.Now()
+	fallbackResult, handled, fallbackErr := e.renderFastStoryboard(ctx, projectID, projectDir, outputPath, fps, width, height)
+	if !handled {
+		return nil, false, nil
+	}
+	if fallbackErr != nil {
+		return nil, true, fallbackErr
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return nil, true, fmt.Errorf("render output not found at %s: %w", outputPath, err)
+	}
+	if info.Size() == 0 {
+		return nil, true, fmt.Errorf("render output is empty: %s", outputPath)
+	}
+	fallbackResult.DurationMs = time.Since(started).Milliseconds()
+	result, err := e.renderResult(projectID, outputPath, info.Size(), fps, width, height, fallbackResult)
+	if err != nil {
+		return nil, true, err
+	}
+	return result, true, nil
+}
+
+func (e *HyperFramesRenderExecutor) renderResult(projectID, outputPath string, sizeBytes int64, fps, width, height int, result *hyperFramesRenderResponse) (*Result, error) {
+	provenance := hyperframesRenderProvenance(result)
+	localRef, err := e.mirrorFinalVideoArtifact(projectID, outputPath, sizeBytes, fps, width, height, result.DurationMs, provenance)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +222,7 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 				"storageType":    "local",
 				"storageRef":     localRef,
 				"mimeType":       "video/mp4",
-				"sizeBytes":      info.Size(),
+				"sizeBytes":      sizeBytes,
 				"status":         "valid",
 				"humanApproved":  false,
 				"dependsOn":      []string{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},
@@ -183,6 +234,10 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 					"width":        width,
 					"height":       height,
 					"localPath":    outputPath,
+					"provenance":   provenance,
+					"sourceType":   provenance["sourceType"],
+					"providerName": provenance["providerName"],
+					"isFallback":   provenance["isFallback"],
 				},
 			},
 		},
@@ -194,6 +249,34 @@ func (e *HyperFramesRenderExecutor) Execute(ctx context.Context, job Job) (*Resu
 		},
 		"renderJobId": result.JobID,
 	}}, nil
+}
+
+func hyperframesRenderProvenance(result *hyperFramesRenderResponse) map[string]interface{} {
+	jobID := ""
+	if result != nil {
+		jobID = result.JobID
+	}
+	sourceType := "hyperframes"
+	providerName := "hyperframes-render-service"
+	isFallback := false
+	fallbackReason := ""
+	if jobID == "storyboard_fast_render" {
+		sourceType = "fallback_storyboard"
+		providerName = "local-storyboard-renderer"
+		isFallback = true
+		fallbackReason = "storyboard_fast_render"
+	}
+	return map[string]interface{}{
+		"schemaVersion":     1,
+		"sourceType":        sourceType,
+		"providerName":      providerName,
+		"providerJobId":     jobID,
+		"fallbackReason":    fallbackReason,
+		"isFallback":        isFallback,
+		"generatedAt":       time.Now().UTC().Format(time.RFC3339),
+		"inputPromptHash":   "",
+		"sourceArtifactIds": []interface{}{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},
+	}
 }
 
 func (e *HyperFramesRenderExecutor) callRenderService(ctx context.Context, reqBody hyperFramesRenderRequest) (*hyperFramesRenderResponse, error) {
@@ -230,7 +313,7 @@ func (e *HyperFramesRenderExecutor) callRenderService(ctx context.Context, reqBo
 	return &result, nil
 }
 
-func (e *HyperFramesRenderExecutor) mirrorFinalVideoArtifact(projectID, outputPath string, sizeBytes int64, fps, width, height int, renderTimeMs int64) (string, error) {
+func (e *HyperFramesRenderExecutor) mirrorFinalVideoArtifact(projectID, outputPath string, sizeBytes int64, fps, width, height int, renderTimeMs int64, provenance map[string]interface{}) (string, error) {
 	artifactID := "final-video"
 	if err := validateLocalSegment(projectID); err != nil {
 		return "", fmt.Errorf("invalid project id: %w", err)
@@ -274,18 +357,28 @@ func (e *HyperFramesRenderExecutor) mirrorFinalVideoArtifact(projectID, outputPa
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	storageRef := "local://projects/" + projectID + "/artifacts/" + artifactID + "/" + hash + "/final.mp4"
 	metadata := map[string]interface{}{
-		"id":           artifactID,
-		"projectId":    projectID,
-		"storageRef":   storageRef,
-		"mimeType":     "video/mp4",
-		"contentHash":  "sha256:" + hash,
-		"sizeBytes":    sizeBytes,
-		"sourcePath":   outputPath,
-		"renderTimeMs": renderTimeMs,
-		"fps":          fps,
-		"width":        width,
-		"height":       height,
-		"updatedAt":    time.Now().UTC().Format(time.RFC3339Nano),
+		"id":                artifactID,
+		"projectId":         projectID,
+		"storageRef":        storageRef,
+		"mimeType":          "video/mp4",
+		"contentHash":       "sha256:" + hash,
+		"sizeBytes":         sizeBytes,
+		"sourcePath":        outputPath,
+		"renderTimeMs":      renderTimeMs,
+		"fps":               fps,
+		"width":             width,
+		"height":            height,
+		"schemaVersion":     1,
+		"sourceType":        provenance["sourceType"],
+		"providerName":      provenance["providerName"],
+		"providerJobId":     provenance["providerJobId"],
+		"fallbackReason":    provenance["fallbackReason"],
+		"isFallback":        provenance["isFallback"],
+		"generatedAt":       provenance["generatedAt"],
+		"inputPromptHash":   provenance["inputPromptHash"],
+		"sourceArtifactIds": provenance["sourceArtifactIds"],
+		"provenance":        provenance,
+		"updatedAt":         time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err := writeLocalToolJSON(metadataPath, metadata); err != nil {
 		return "", fmt.Errorf("write artifact metadata: %w", err)

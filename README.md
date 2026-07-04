@@ -13,18 +13,33 @@
   ·
   <a href="https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English">English Wiki</a>
   ·
+  <a href="docs/RELEASE_STATUS.md">Release Status</a>
+  ·
+  <a href="CHANGELOG.md">Changelog</a>
+  ·
   <a href="#快速开始">快速开始</a>
   ·
   <a href="#适合谁">适合谁</a>
 </p>
 
 <p align="center">
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.10-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
 </p>
 
 ---
+
+## 当前版本
+
+**v0.1.10 - Closed beta hardening**
+
+- Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
+- 无真实 AIGC provider 时可以跑通 fallback preview、shot QA report 和 machine-readable repairPlan。
+- 邀请真实创作者前，必须在完整本地环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
+
+详细版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前可用性和内测门槛见 [docs/RELEASE_STATUS.md](docs/RELEASE_STATUS.md)。
 
 ## 一句话理解
 
@@ -51,11 +66,12 @@
 
 | 能力 | 体验结果 |
 |---|---|
-| 影视化 / AIGC shot 视频 | 规划角色、场景、连续性、关键帧、外部生成请求和本地预览渲染 |
-| 口播 / 知识类视频 | 生成脚本、时间窗、画面段落、提示词、预览项目和最终视频 |
+| 影视化 / AIGC shot 视频 | 从故事大纲、详细剧本、角色/场景/道具档案、多视角参考图到 shot 级生成提示词和 QA |
+| 口播 / 知识类视频 | 先生成口播稿，再按口播设计 HyperFrames、录屏、AIGC 图片/视频素材和最终成片 |
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
+| Shot 级抽帧 QA | 渲染后按 shot 聚合剧本匹配、参考覆盖、动作节拍、文字安全区和画面复杂度指标，输出返修决策 |
 | 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
 
 ## 创作流程
@@ -68,7 +84,8 @@ flowchart LR
   D --> E["AIGC 素材或手动上传"]
   E --> F["本地预览项目"]
   F --> G["确认后渲染成片"]
-  G --> H["导出交付包"]
+  G --> H["抽帧 QA / Contact Sheet"]
+  H --> I["发布文案与交付包"]
 ```
 
 ## 产品架构
@@ -106,17 +123,35 @@ bash scripts/start-cloud-backend.sh
 
 打开桌面端后，进入“躺营导演台”，输入视频主题，选择“口播知识视频”或“影视/AIGC shot 视频”入口即可开始。
 
-## 即梦 JiMeng MCP 扩展
+Closed beta 安装、诊断和 smoke 验证见 [Closed Beta Runbook](docs/BETA_RUNBOOK.md)。快速自检可运行：
 
-用户端提供显式授权的一键安装向导：
+```bash
+bash scripts/beta-smoke-check.sh
+```
+
+邀请真实创作者前，先启动 cloud/local/frontend/HyperFrames 和 AIGC MCP provider，再运行：
+
+```bash
+BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh
+```
+
+只有 readiness 返回 `GO` 时，才把当前环境描述为“一句话生成高质量真实 AIGC 视频”的内测版本；`CONDITIONAL` 只代表 fallback 预览和工程链路可验证。
+
+## MCP 扩展
+
+本地 Agent 支持标准 MCP provider 注册。provider 可以用 Python、Node、Go 或其他语言实现，只要暴露标准 `tools/list` 与 `tools/call` 能力即可；系统只保存 provider 配置，不绑定具体实现语言。
+
+即梦 JiMeng 扩展内置了 Python stdio MCP server，用来封装用户本机 Dreamina CLI。用户端提供显式授权的一键安装向导：
 
 1. 安装或更新 Dreamina CLI。
-2. 注册本地 JiMeng MCP endpoint。
-3. 启动 `jimeng-mcp` 服务。
+2. 注册本地 JiMeng MCP provider。
+3. 启动 `python3 mcp/jimeng/server.py` 标准 MCP 服务。
 4. 获取即梦登录码，在即梦页面完成授权。
 5. 开启“自动调用即梦生成素材”。
 
 Dreamina OAuth、积分、任务记录和日志仍保留在用户自己的机器和即梦 CLI 目录中，云端不保存即梦凭据。
+
+更多 provider 配置见 [MCP Provider 接入](docs/mcp-providers.md)。
 
 <details>
 <summary><strong>开发者验证命令</strong></summary>
@@ -136,11 +171,28 @@ Local agent:   http://localhost:18080/api/local/docs
 
 </details>
 
+## 开发与版本管理
+
+- `develop_go` 是 Go/核心系统开发者分支，口头简称 `developgo`；常规功能开发先从该分支拉出 `feature/*`。
+- `release` 是发布分支，只接收来自 `develop_go` 或 `hotfix/*` 的合入。
+- 每次合入 `release` 都必须更新 `CHANGELOG.md`，并在本 README 只保留当前版本摘要。
+- 对外发布必须创建语义化 tag，例如 `v0.1.2`；tag 指向对应 release 提交，不复用旧 tag。
+- 临时素材、渲染缓存和本地测试输出不进入发布提交。
+
+完整规范见 [版本管理 Wiki](docs/version-management.md)。
+
 ## 项目文档
 
 - [项目介绍（中文）](docs/PROJECT_INTRODUCTION.md)
 - [Project Introduction (English)](docs/PROJECT_INTRODUCTION_EN.md)
 - [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
 - [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
+- [MCP Provider 接入](docs/mcp-providers.md)
+- [Closed Beta Runbook](docs/BETA_RUNBOOK.md)
+- [Release Status](docs/RELEASE_STATUS.md)
+- [Changelog](CHANGELOG.md)
+- [版本管理 Wiki](docs/version-management.md)
+- [视频抽帧 QA Wiki](docs/video-frame-qa.md)
+- [影视类视频创作流程](docs/cinematic-video-workflow.md)
 
 Wiki 中包含产品介绍、系统边界、核心流程、即梦 MCP 使用方式和后续路线图。

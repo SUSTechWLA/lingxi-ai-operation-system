@@ -30,7 +30,7 @@ func NewProjectService(repo ProjectStore) *ProjectService {
 // CreateProject creates a new video project with validated mode and version locking.
 func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *model.CreateProjectRequest) (*model.VideoProject, error) {
 	if !model.IsValidMode(req.Mode) {
-		return nil, fmt.Errorf("invalid mode: %s (must be aigc_shot or voice_visual)", req.Mode)
+		return nil, fmt.Errorf("invalid mode: %s (must be aigc_shot, voice_visual or cinematic_story)", req.Mode)
 	}
 	if userID == "" {
 		return nil, fmt.Errorf("user_id is required")
@@ -47,9 +47,12 @@ func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *
 	}
 	skillName := req.SkillName
 	if skillName == "" {
-		if req.Mode == model.ModeAIGCShot {
+		switch req.Mode {
+		case model.ModeAIGCShot:
 			skillName = "aigc-shot-video"
-		} else {
+		case model.ModeCinematicStory:
+			skillName = "video-creator"
+		default:
 			skillName = "voice-visual-video"
 		}
 	}

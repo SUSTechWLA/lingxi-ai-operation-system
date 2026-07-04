@@ -12,11 +12,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 )
+
+const defaultAppVersion = "0.1.10"
 
 type Config struct {
 	DataDir       string
@@ -312,7 +316,9 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	metadata["mimeType"] = req.MimeType
 	metadata["contentHash"] = contentHash
 	metadata["sizeBytes"] = sizeBytes
-	metadata["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	metadata["updatedAt"] = updatedAt
+	ensureLocalArtifactProvenance(metadata, updatedAt)
 	if err := writeIndentedJSON(metadataPath, metadata); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -402,7 +408,9 @@ func (s *Server) handleArtifactUpload(w http.ResponseWriter, r *http.Request) {
 	if header != nil && strings.TrimSpace(header.Filename) != "" {
 		metadata["originalFilename"] = header.Filename
 	}
-	metadata["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	metadata["updatedAt"] = updatedAt
+	ensureLocalArtifactProvenance(metadata, updatedAt)
 	if err := writeIndentedJSON(metadataPath, metadata); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -592,7 +600,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	createdAt := time.Now().UTC()
-	path := filepath.Join(s.paths.DiagnosticsDir, fmt.Sprintf("diagnostics-%s.zip", createdAt.Format("20060102-150405")))
+	path := filepath.Join(s.paths.DiagnosticsDir, "beta-diagnostics.zip")
 	if err := s.createDiagnosticsZip(path, req.Reason, createdAt); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -611,15 +619,37 @@ func (s *Server) createDiagnosticsZip(path, reason string, createdAt time.Time) 
 	defer zw.Close()
 
 	manifest := map[string]interface{}{
-		"createdAt":    createdAt.Format(time.RFC3339Nano),
-		"reason":       reason,
-		"service":      "tangying-local-agent",
-		"dataDir":      s.paths.DataDir,
-		"cloudApiBase": s.cfg.CloudAPIBase,
-		"os":           runtime.GOOS,
-		"arch":         runtime.GOARCH,
+		"schemaVersion": 1,
+		"createdAt":     createdAt.Format(time.RFC3339Nano),
+		"reason":        reason,
+		"service":       "tangying-local-agent",
+		"appVersion":    diagnosticAppVersion(),
+		"gitCommit":     diagnosticGitCommit(),
+		"recentTaskIds": s.diagnosticRecentTaskIDs(),
+		"dataDir":       s.paths.DataDir,
+		"cloudApiBase":  s.cfg.CloudAPIBase,
+		"os":            runtime.GOOS,
+		"arch":          runtime.GOARCH,
 	}
 	if err := addJSONToZip(zw, "manifest.json", manifest); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "environment.json", s.diagnosticEnvironment(createdAt)); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "env-redacted.json", diagnosticEnvRedacted()); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "mcp/provider-status.json", s.diagnosticMCPProviders()); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "artifacts/manifest.json", s.diagnosticArtifactManifest()); err != nil {
+		return err
+	}
+	if err := s.addDiagnosticQAReports(zw); err != nil {
+		return err
+	}
+	if err := s.addDiagnosticFailureStacks(zw); err != nil {
 		return err
 	}
 	return filepath.WalkDir(s.paths.LogDir, func(logPath string, d os.DirEntry, walkErr error) error {
@@ -633,7 +663,221 @@ func (s *Server) createDiagnosticsZip(path, reason string, createdAt time.Time) 
 		if err != nil {
 			return err
 		}
-		return addFileToZip(zw, filepath.ToSlash(rel), logPath)
+		return addRedactedFileToZip(zw, filepath.ToSlash(rel), logPath)
+	})
+}
+
+func (s *Server) diagnosticEnvironment(createdAt time.Time) map[string]interface{} {
+	return map[string]interface{}{
+		"schemaVersion": 1,
+		"createdAt":     createdAt.Format(time.RFC3339Nano),
+		"service":       "tangying-local-agent",
+		"appVersion":    diagnosticAppVersion(),
+		"gitCommit":     diagnosticGitCommit(),
+		"goVersion":     runtime.Version(),
+		"os":            runtime.GOOS,
+		"arch":          runtime.GOARCH,
+		"paths": map[string]string{
+			"dataDir":        s.paths.DataDir,
+			"cacheDir":       s.paths.CacheDir,
+			"configDir":      s.paths.ConfigDir,
+			"projectDir":     s.paths.ProjectDir,
+			"artifactDir":    s.paths.ArtifactDir,
+			"logDir":         s.paths.LogDir,
+			"diagnosticsDir": s.paths.DiagnosticsDir,
+		},
+	}
+}
+
+func diagnosticAppVersion() string {
+	if version := strings.TrimSpace(os.Getenv("TANGYING_APP_VERSION")); version != "" {
+		return version
+	}
+	return defaultAppVersion
+}
+
+func diagnosticGitCommit() string {
+	for _, key := range []string{"TANGYING_GIT_COMMIT", "GIT_COMMIT"} {
+		if commit := strings.TrimSpace(os.Getenv(key)); commit != "" {
+			return commit
+		}
+	}
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return "unknown"
+	}
+	commit := strings.TrimSpace(string(out))
+	if commit == "" {
+		return "unknown"
+	}
+	return commit
+}
+
+func (s *Server) diagnosticRecentTaskIDs() []string {
+	ids := []string{}
+	add := func(value interface{}) {
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text == "" || text == "<nil>" {
+			return
+		}
+		for _, existing := range ids {
+			if existing == text {
+				return
+			}
+		}
+		ids = append(ids, text)
+	}
+	_ = filepath.WalkDir(s.paths.LogDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var entry map[string]interface{}
+			if json.Unmarshal([]byte(line), &entry) != nil {
+				continue
+			}
+			collectTaskID(entry, add)
+			if fields, ok := entry["fields"].(map[string]interface{}); ok {
+				collectTaskID(fields, add)
+			}
+		}
+		return nil
+	})
+	_ = filepath.WalkDir(s.paths.ArtifactDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "metadata.json" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		var metadata map[string]interface{}
+		if json.Unmarshal(data, &metadata) == nil {
+			collectTaskID(metadata, add)
+		}
+		return nil
+	})
+	if len(ids) > 10 {
+		return ids[len(ids)-10:]
+	}
+	return ids
+}
+
+func collectTaskID(input map[string]interface{}, add func(interface{})) {
+	for _, key := range []string{"taskId", "taskID", "task_id", "jobId", "jobID", "job_id", "runId", "runID", "workflowRunId"} {
+		if value, ok := input[key]; ok {
+			add(value)
+		}
+	}
+}
+
+func diagnosticEnvRedacted() map[string]interface{} {
+	keys := []string{
+		"TANGYING_CLOUD_API_BASE",
+		"TANGYING_LOCAL_AGENT_ADDR",
+		"TANGYING_LOCAL_DATA_DIR",
+		"TANGYING_DEVICE_ID",
+		"TANGYING_USER_TOKEN",
+		"TANGYING_HYPERFRAMES_SERVICE_URL",
+		"OPENAI_API_KEY",
+		"JIMENG_COOKIE",
+		"DREAMINA_TOKEN",
+	}
+	out := map[string]interface{}{"schemaVersion": 1, "variables": map[string]interface{}{}}
+	variables := out["variables"].(map[string]interface{})
+	for _, key := range keys {
+		value := os.Getenv(key)
+		entry := map[string]interface{}{"configured": strings.TrimSpace(value) != ""}
+		if entry["configured"].(bool) {
+			if isSensitiveKey(key) {
+				entry["value"] = "[REDACTED]"
+			} else {
+				entry["value"] = value
+			}
+		}
+		variables[key] = entry
+	}
+	return out
+}
+
+func (s *Server) diagnosticMCPProviders() map[string]interface{} {
+	providers, err := s.readMCPProviders()
+	if err != nil {
+		return map[string]interface{}{"schemaVersion": 1, "error": err.Error(), "providers": []interface{}{}}
+	}
+	items := make([]interface{}, 0, len(providers))
+	for _, provider := range providers {
+		data, _ := json.Marshal(provider)
+		var entry map[string]interface{}
+		_ = json.Unmarshal(data, &entry)
+		if env, ok := entry["env"].(map[string]interface{}); ok {
+			entry["env"] = redactMap(env)
+		}
+		entry["reachable"] = false
+		entry["diagnosticNote"] = "provider config snapshot only; live tools/list is checked by /api/local/mcp-providers/status"
+		items = append(items, entry)
+	}
+	return map[string]interface{}{"schemaVersion": 1, "providers": items}
+}
+
+func (s *Server) diagnosticArtifactManifest() map[string]interface{} {
+	items := []interface{}{}
+	_ = filepath.WalkDir(s.paths.ArtifactDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "metadata.json" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var metadata map[string]interface{}
+		if err := json.Unmarshal(data, &metadata); err != nil {
+			return nil
+		}
+		if rel, err := filepath.Rel(s.paths.DataDir, path); err == nil {
+			metadata["metadataPath"] = filepath.ToSlash(rel)
+		}
+		items = append(items, redactMap(metadata))
+		return nil
+	})
+	return map[string]interface{}{"schemaVersion": 1, "artifacts": items}
+}
+
+func (s *Server) addDiagnosticQAReports(zw *zip.Writer) error {
+	added := false
+	return filepath.WalkDir(s.paths.ProjectDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "shot_qa_reports.json" {
+			return nil
+		}
+		name := "qa/shot_qa_reports.json"
+		if added {
+			if rel, relErr := filepath.Rel(s.paths.ProjectDir, path); relErr == nil {
+				name = "qa/" + filepath.ToSlash(rel)
+			}
+		}
+		added = true
+		return addRedactedFileToZip(zw, name, path)
+	})
+}
+
+func (s *Server) addDiagnosticFailureStacks(zw *zip.Writer) error {
+	return filepath.WalkDir(s.paths.LogDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		lower := strings.ToLower(d.Name())
+		if !strings.Contains(lower, "failure") && !strings.Contains(lower, "stack") && !strings.Contains(lower, "panic") {
+			return nil
+		}
+		return addRedactedFileToZip(zw, "failures/"+d.Name(), path)
 	})
 }
 
@@ -692,6 +936,123 @@ func parseLocalArtifactMetadataField(raw string) (map[string]interface{}, error)
 		metadata = map[string]interface{}{}
 	}
 	return metadata, nil
+}
+
+func ensureLocalArtifactProvenance(metadata map[string]interface{}, generatedAt string) {
+	if metadata == nil {
+		return
+	}
+	provenance := map[string]interface{}{}
+	if existing, ok := metadata["provenance"].(map[string]interface{}); ok {
+		for key, value := range existing {
+			provenance[key] = value
+		}
+	}
+	sourceType := firstMetadataString(provenance, metadata, "sourceType")
+	if sourceType == "" {
+		sourceType = "uploaded"
+	}
+	providerName := firstMetadataString(provenance, metadata, "providerName")
+	if providerName == "" {
+		providerName = "local-upload"
+	}
+	providerJobID := firstMetadataString(provenance, metadata, "providerJobId")
+	fallbackReason := firstMetadataString(provenance, metadata, "fallbackReason")
+	inputPromptHash := firstMetadataString(provenance, metadata, "inputPromptHash")
+	if generatedAt == "" {
+		generatedAt = firstMetadataString(provenance, metadata, "generatedAt")
+	}
+	if generatedAt == "" {
+		generatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	isFallback := metadataBool(provenance, "isFallback", metadataBool(metadata, "isFallback", strings.HasPrefix(sourceType, "fallback_")))
+	sourceArtifactIDs := metadataStringList(firstMetadataValue(provenance, metadata, "sourceArtifactIds"))
+	if len(sourceArtifactIDs) == 0 {
+		sourceArtifactIDs = metadataStringList(firstMetadataValue(provenance, metadata, "referenceAssetIds"))
+	}
+
+	provenance["schemaVersion"] = 1
+	provenance["sourceType"] = sourceType
+	provenance["providerName"] = providerName
+	provenance["providerJobId"] = providerJobID
+	provenance["fallbackReason"] = fallbackReason
+	provenance["isFallback"] = isFallback
+	provenance["generatedAt"] = generatedAt
+	provenance["inputPromptHash"] = inputPromptHash
+	provenance["sourceArtifactIds"] = sourceArtifactIDs
+
+	metadata["schemaVersion"] = 1
+	metadata["sourceType"] = sourceType
+	metadata["providerName"] = providerName
+	metadata["providerJobId"] = providerJobID
+	metadata["fallbackReason"] = fallbackReason
+	metadata["isFallback"] = isFallback
+	metadata["generatedAt"] = generatedAt
+	metadata["inputPromptHash"] = inputPromptHash
+	metadata["sourceArtifactIds"] = sourceArtifactIDs
+	metadata["provenance"] = provenance
+}
+
+func firstMetadataString(primary, secondary map[string]interface{}, key string) string {
+	if value := strings.TrimSpace(fmt.Sprint(primary[key])); value != "" && value != "<nil>" {
+		return value
+	}
+	if value := strings.TrimSpace(fmt.Sprint(secondary[key])); value != "" && value != "<nil>" {
+		return value
+	}
+	return ""
+}
+
+func firstMetadataValue(primary, secondary map[string]interface{}, key string) interface{} {
+	if value, ok := primary[key]; ok {
+		return value
+	}
+	return secondary[key]
+}
+
+func metadataBool(input map[string]interface{}, key string, fallback bool) bool {
+	value, ok := input[key]
+	if !ok {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes":
+			return true
+		case "false", "0", "no":
+			return false
+		}
+	}
+	return fallback
+}
+
+func metadataStringList(value interface{}) []interface{} {
+	switch typed := value.(type) {
+	case []interface{}:
+		out := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" && text != "<nil>" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case []string:
+		out := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if strings.TrimSpace(item) != "" {
+				out = append(out, strings.TrimSpace(item))
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(typed) != "" {
+			return []interface{}{strings.TrimSpace(typed)}
+		}
+	}
+	return []interface{}{}
 }
 
 func localUploadedArtifactRef(projectID, artifactID, contentHash, filename string) string {
@@ -861,20 +1222,86 @@ func addFileToZip(zw *zip.Writer, name, path string) error {
 	return err
 }
 
+func addRedactedFileToZip(zw *zip.Writer, name, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	writer, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write([]byte(redactSensitiveText(string(data))))
+	return err
+}
+
+var sensitiveTextPattern = regexp.MustCompile(`(?i)(\bsk-[A-Za-z0-9_-]+\b|secret-token|bearer\s+[A-Za-z0-9._~+/=-]+|"?authorization"?\s*[:=]\s*"?[^"\s,}]+(?:\s+[A-Za-z0-9._~+/=-]+)?|"?token"?\s*[:=]\s*"?[^"\s,}]+|"?password"?\s*[:=]\s*"?[^"\s,}]+|"?api[_-]?key"?\s*[:=]\s*"?[^"\s,}]+|"?cookie"?\s*[:=]\s*"?[^"\s,}]+|"?secret"?\s*[:=]\s*"?[^"\s,}]+)`)
+
+func redactSensitiveText(text string) string {
+	return sensitiveTextPattern.ReplaceAllString(text, "[REDACTED]")
+}
+
+func isSensitiveKey(key string) bool {
+	lower := strings.ToLower(key)
+	return strings.Contains(lower, "token") ||
+		strings.Contains(lower, "key") ||
+		strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "password") ||
+		strings.Contains(lower, "cookie") ||
+		strings.Contains(lower, "authorization") ||
+		lower == "auth" ||
+		strings.Contains(lower, "credential")
+}
+
+func redactMap(input map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		if isSensitiveKey(key) {
+			if strings.TrimSpace(fmt.Sprint(value)) == "" {
+				out[key] = ""
+			} else {
+				out[key] = "[REDACTED]"
+			}
+			continue
+		}
+		switch typed := value.(type) {
+		case map[string]interface{}:
+			out[key] = redactMap(typed)
+		case map[string]string:
+			nested := make(map[string]interface{}, len(typed))
+			for nestedKey, nestedValue := range typed {
+				nested[nestedKey] = nestedValue
+			}
+			out[key] = redactMap(nested)
+		case []interface{}:
+			items := make([]interface{}, 0, len(typed))
+			for _, item := range typed {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					items = append(items, redactMap(itemMap))
+				} else if text, ok := item.(string); ok {
+					items = append(items, redactSensitiveText(text))
+				} else {
+					items = append(items, item)
+				}
+			}
+			out[key] = items
+		case string:
+			out[key] = redactSensitiveText(typed)
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
+
 func redactFields(fields map[string]interface{}) map[string]interface{} {
 	if fields == nil {
 		return map[string]interface{}{}
 	}
-	redacted := make(map[string]interface{}, len(fields))
-	for key, value := range fields {
-		lower := strings.ToLower(key)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "key") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") {
-			redacted[key] = "[REDACTED]"
-			continue
-		}
-		redacted[key] = value
-	}
-	return redacted
+	return redactMap(fields)
 }
 
 func validateLocalArtifactScope(projectID, artifactID string) error {
@@ -920,8 +1347,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if origin := allowedLocalOrigin(r.Header.Get("Origin")); origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
+		origin := r.Header.Get("Origin")
+		allowedOrigin := allowedLocalOrigin(origin)
+		if allowedOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			w.Header().Add("Vary", "Origin")
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
@@ -931,8 +1360,21 @@ func withCORS(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if isMutatingMethod(r.Method) && strings.TrimSpace(origin) != "" && allowedOrigin == "" {
+			writeError(w, http.StatusForbidden, "origin is not allowed for local agent write requests")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isMutatingMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func allowedLocalOrigin(origin string) string {
