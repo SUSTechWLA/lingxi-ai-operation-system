@@ -135,6 +135,38 @@ func TestValidateForModeRejectsProductionWildcardCORSAndSandboxFallback(t *testi
 	}
 }
 
+func TestValidateForModeRejectsProductionDefaultMinIOAccessKey(t *testing.T) {
+	cfg := &Config{
+		Server: ServerConfig{CORSAllowedOrigins: "http://localhost:3000"},
+		Postgres: PostgresConfig{
+			Password: "long-non-default-postgres-password",
+		},
+		Auth: AuthConfig{
+			TokenSecret: "0123456789abcdef0123456789abcdef",
+		},
+		MinIO: MinIOConfig{
+			AccessKey: "minioadmin",
+			SecretKey: "long-non-default-minio-secret-value",
+		},
+		BashTool: BashToolConfig{
+			AllowedCommands: "ls,cat,pwd",
+		},
+		Sandbox: SandboxConfig{
+			Enabled:  true,
+			Address:  "127.0.0.1:50051",
+			Fallback: false,
+		},
+	}
+
+	err := cfg.ValidateForMode("production")
+	if err == nil {
+		t.Fatal("expected production validation to reject default MinIO access key")
+	}
+	if !strings.Contains(err.Error(), "MINIO_ACCESS_KEY") {
+		t.Fatalf("production validation error should mention MINIO_ACCESS_KEY, got %v", err)
+	}
+}
+
 func TestConfigZeroValueBehavior(t *testing.T) {
 	// When VideoCreationEnabled is false, old routes should behave normally.
 	// This test validates the zero-value behavior of the feature flag.

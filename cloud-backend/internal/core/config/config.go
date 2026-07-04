@@ -178,6 +178,9 @@ func (cfg *Config) ValidateForMode(mode string) error {
 	if isWeakSecret(cfg.MinIO.SecretKey, "changeme") {
 		problems = append(problems, "MINIO_SECRET_KEY must be set to a non-default value in production")
 	}
+	if isWeakCredential(cfg.MinIO.AccessKey, 16, "minioadmin", "your-minio-access-key") {
+		problems = append(problems, "MINIO_ACCESS_KEY must be set to a non-default value in production")
+	}
 	if !cfg.Sandbox.Enabled {
 		problems = append(problems, "SANDBOX_ENABLED must be true in production because code execution tools are registered")
 	}
@@ -209,8 +212,12 @@ func isProductionMode(mode string) bool {
 }
 
 func isWeakSecret(value string, weakValues ...string) bool {
+	return isWeakCredential(value, 32, weakValues...)
+}
+
+func isWeakCredential(value string, minLength int, weakValues ...string) bool {
 	trimmed := strings.TrimSpace(value)
-	if len(trimmed) < 32 {
+	if len(trimmed) < minLength {
 		return true
 	}
 	for _, weak := range weakValues {

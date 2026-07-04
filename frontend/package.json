@@ -1,7 +1,7 @@
 {
   "name": "tangying-frontend",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "躺营 AIOS — AI 自媒体内容运营系统桌面客户端",
   "author": "躺营 AI Team",
   "type": "module",

@@ -175,6 +175,21 @@ func TestBuildExternalGenerationResultArtifactRequestKeepsMediaLocal(t *testing.
 	if req.Metadata["description"] != "SHOT_01 视频" {
 		t.Fatalf("missing description metadata: %+v", req.Metadata)
 	}
+	if req.Metadata["sourceType"] != "uploaded" || req.Metadata["providerName"] != "seedance-web" || req.Metadata["isFallback"] != false {
+		t.Fatalf("external uploaded result should expose provenance metadata: %+v", req.Metadata)
+	}
+	provenance, ok := req.Metadata["provenance"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("external uploaded result should include nested provenance: %+v", req.Metadata)
+	}
+	for _, key := range []string{"schemaVersion", "sourceType", "providerName", "providerJobId", "fallbackReason", "isFallback", "generatedAt", "inputPromptHash", "sourceArtifactIds"} {
+		if _, exists := provenance[key]; !exists {
+			t.Fatalf("uploaded provenance missing %s: %+v", key, provenance)
+		}
+	}
+	if provenance["sourceType"] != "uploaded" || provenance["providerName"] != "seedance-web" || provenance["inputPromptHash"] != "prompt-sha" {
+		t.Fatalf("unexpected uploaded provenance: %+v", provenance)
+	}
 	tags, ok := req.Metadata["tags"].([]string)
 	if !ok || len(tags) != 2 || tags[1] != "shot_video" {
 		t.Fatalf("missing tags metadata: %+v", req.Metadata)

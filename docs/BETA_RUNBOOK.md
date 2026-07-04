@@ -247,7 +247,7 @@ curl -X POST http://127.0.0.1:18080/api/local/diagnostics \
   -d '{"reason":"closed-beta-support"}'
 ```
 
-The zip contains redacted environment status, local logs, MCP provider config/status summary, recent artifact metadata, shot QA reports, and failure stacks. It does not include raw uploaded source media or artifact `content` files by default.
+The zip contains app version, git commit, recent task IDs, redacted environment status, local logs, MCP provider config/status summary, recent artifact metadata, shot QA reports, and failure stacks. It does not include raw uploaded source media or artifact `content` files by default.
 
 ## Real AIGC vs Fallback
 

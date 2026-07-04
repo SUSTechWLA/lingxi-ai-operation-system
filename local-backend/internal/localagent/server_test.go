@@ -172,6 +172,21 @@ func TestLocalArtifactStoreAcceptsMultipartUpload(t *testing.T) {
 	if stored.Metadata["contentHash"] != stored.ContentHash {
 		t.Fatalf("metadata should include returned hash: %+v", stored.Metadata)
 	}
+	if stored.Metadata["sourceType"] != "uploaded" || stored.Metadata["providerName"] != "local-upload" || stored.Metadata["isFallback"] != false {
+		t.Fatalf("uploaded artifact should get default provenance fields: %+v", stored.Metadata)
+	}
+	provenance, ok := stored.Metadata["provenance"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("uploaded artifact should include nested provenance: %+v", stored.Metadata)
+	}
+	for _, key := range []string{"schemaVersion", "sourceType", "providerName", "providerJobId", "fallbackReason", "isFallback", "generatedAt", "inputPromptHash", "sourceArtifactIds"} {
+		if _, exists := provenance[key]; !exists {
+			t.Fatalf("uploaded provenance missing %s: %+v", key, provenance)
+		}
+	}
+	if provenance["sourceType"] != "uploaded" || provenance["providerName"] != "local-upload" {
+		t.Fatalf("unexpected uploaded provenance: %+v", provenance)
+	}
 }
 
 func TestModelProviderSettingsSaveListAndPreserveSecrets(t *testing.T) {
@@ -627,8 +642,10 @@ func TestModelProviderSettingsRejectUnsupportedCapability(t *testing.T) {
 func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})
+	t.Setenv("TANGYING_APP_VERSION", "9.9.9-beta")
+	t.Setenv("TANGYING_GIT_COMMIT", "abc1234-test")
 
-	body := bytes.NewBufferString(`{"source":"desktop","level":"info","message":"render complete","fields":{"project":"demo"}}`)
+	body := bytes.NewBufferString(`{"source":"desktop","level":"info","message":"render complete","fields":{"project":"demo","taskId":"task-beta-123","authorization":"Bearer live-token-should-redact","cookie":"session-cookie-should-redact"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/local/logs", body)
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
@@ -669,6 +686,9 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(root, "logs", "failure-stack.txt"), []byte("panic: render failed\nsk-test-secret-should-redact\n"), 0o644); err != nil {
 		t.Fatalf("write failure stack: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "logs", "provider-failure.json"), []byte(`{"authorization":"Bearer json-bearer-should-redact","cookie":"json-cookie-should-redact","message":"provider failed"}`), 0o644); err != nil {
+		t.Fatalf("write json failure stack: %v", err)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/local/diagnostics", bytes.NewBufferString(`{"reason":"support-request"}`))
@@ -723,7 +743,24 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if _, ok := entries["artifacts/vp-1/video-1/content"]; ok {
 		t.Fatalf("diagnostics zip must not include raw artifact content")
 	}
-	if strings.Contains(strings.Join(mapValues(entries), "\n"), "secret-token") || strings.Contains(strings.Join(mapValues(entries), "\n"), "sk-test-secret-should-redact") {
+	var manifest map[string]interface{}
+	if err := json.Unmarshal([]byte(entries["manifest.json"]), &manifest); err != nil {
+		t.Fatalf("invalid diagnostics manifest: %v", err)
+	}
+	if manifest["appVersion"] != "9.9.9-beta" || manifest["gitCommit"] != "abc1234-test" {
+		t.Fatalf("diagnostics manifest should include version and git commit: %#v", manifest)
+	}
+	recentTaskIDs, ok := manifest["recentTaskIds"].([]interface{})
+	if !ok || len(recentTaskIDs) != 1 || recentTaskIDs[0] != "task-beta-123" {
+		t.Fatalf("diagnostics manifest should include recent task ids, got %#v", manifest["recentTaskIds"])
+	}
+	allEntries := strings.Join(mapValues(entries), "\n")
+	if strings.Contains(allEntries, "secret-token") ||
+		strings.Contains(allEntries, "sk-test-secret-should-redact") ||
+		strings.Contains(allEntries, "live-token-should-redact") ||
+		strings.Contains(allEntries, "session-cookie-should-redact") ||
+		strings.Contains(allEntries, "json-bearer-should-redact") ||
+		strings.Contains(allEntries, "json-cookie-should-redact") {
 		t.Fatalf("diagnostics zip leaked a secret: %#v", entries)
 	}
 }
