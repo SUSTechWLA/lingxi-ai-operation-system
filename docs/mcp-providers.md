@@ -154,6 +154,24 @@ Dreamina 图片参数当前按以下规则归一：
 | `sourceSummary` | 量化统计：视频/图片请求数、ready 数、blocked/failed/deferred/pending 数、是否需要 fallback。 |
 | `requirementsSatisfied` | 是否满足本次 MCP 生成的最低 ready 视频素材要求。 |
 
+`assetProvenance[]` 在 closed beta 中统一包含：
+
+```json
+{
+  "schemaVersion": 1,
+  "sourceType": "aigc_video",
+  "providerName": "jimeng",
+  "providerJobId": "provider-job-id",
+  "fallbackReason": "",
+  "isFallback": false,
+  "generatedAt": "2026-07-04T00:00:00Z",
+  "inputPromptHash": "sha256:...",
+  "sourceArtifactIds": ["script-1", "reference-1"]
+}
+```
+
+`sourceType=fallback_storyboard`、`fallback_preview` 或 `isFallback=true` 时，前端必须明确提示这是 fallback，不得标成真实 AIGC 视频素材。
+
 自动插入的视频 MCP 步骤默认携带：
 
 ```json

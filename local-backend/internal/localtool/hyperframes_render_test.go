@@ -196,6 +196,17 @@ func TestHyperFramesRenderExecutorReturnsClientFetchableLocalArtifactRef(t *test
 	if artifacts[0]["storageRef"] != outputRef {
 		t.Fatalf("artifact storageRef should match outputRef: %#v", artifacts[0])
 	}
+	metadataBytes, err := os.ReadFile(filepath.Join(root, "artifacts", "project_001", "final-video", "metadata.json"))
+	if err != nil {
+		t.Fatalf("read final metadata: %v", err)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+		t.Fatalf("decode final metadata: %v", err)
+	}
+	if metadata["sourceType"] != "hyperframes" || metadata["isFallback"] != false {
+		t.Fatalf("final metadata should expose hyperframes provenance, got %#v", metadata)
+	}
 }
 
 func TestHyperFramesRenderExecutorFastStoryboardRender(t *testing.T) {
@@ -268,6 +279,17 @@ func TestHyperFramesRenderExecutorFastStoryboardRender(t *testing.T) {
 	}
 	if result.Output["renderJobId"] != "storyboard_fast_render" {
 		t.Fatalf("renderJobId = %#v, want storyboard_fast_render", result.Output["renderJobId"])
+	}
+	metadataBytes, err := os.ReadFile(filepath.Join(root, "artifacts", "project_001", "final-video", "metadata.json"))
+	if err != nil {
+		t.Fatalf("read fallback metadata: %v", err)
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+		t.Fatalf("decode fallback metadata: %v", err)
+	}
+	if metadata["sourceType"] != "fallback_storyboard" || metadata["isFallback"] != true {
+		t.Fatalf("fallback metadata should expose storyboard fallback provenance, got %#v", metadata)
 	}
 }
 

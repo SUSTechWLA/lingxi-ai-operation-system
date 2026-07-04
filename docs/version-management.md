@@ -46,6 +46,26 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
+v0.1.10 对应能力：
+
+- Closed beta runbook 已补齐：支持平台、依赖安装、cloud/local/frontend/HyperFrames 启动、FFmpeg、MCP provider、JiMeng/Dreamina、OpenAI-compatible model provider、环境变量、日志、诊断包、fallback 判断和已知限制。
+- 新增 beta smoke 和 fallback fixture：无真实 AIGC provider 时可验证 2-shot fallback 预览、artifact provenance、shot QA report 和 machine-readable repairPlan。
+- 新增 beta readiness gate：`BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 返回 `GO` 才能邀请真实创作者试用“一句话生成高质量真实 AIGC 视频”；`CONDITIONAL` 只代表 fallback 预览和工程链路可验证。
+- Artifact provenance 增加 `schemaVersion`、`sourceType`、`providerName`、`providerJobId`、`fallbackReason`、`isFallback`、`generatedAt`、`inputPromptHash` 和 `sourceArtifactIds`，前端明确标出 fallback storyboard/preview。
+- Video QA MCP 输出结构化 shot report、决策枚举和 `repairPlan`，可反向指导 AIGC 重生成、带参考重生成、HTML 重渲染、FFmpeg recomposite、prompt 修订或人工审核。
+- Local agent 新增 `beta-diagnostics.zip`，包含脱敏环境、日志、MCP provider 状态、artifact manifest、QA 报告和失败栈索引，默认不打包用户原始素材。
+- Release/production 启动增加安全 fail-fast：拒绝弱密钥、默认数据库/MinIO/admin token、通配 CORS、禁用 sandbox 或启用 sandbox fallback。
+
+发布 v0.1.10 tag 前必须确认：
+
+1. README 已追加 v0.1.10 release note，release badge 已更新。
+2. `docs/BETA_RUNBOOK.md`、`docs/mcp-providers.md`、`docs/video-frame-qa.md` 和本文已同步 closed beta 状态。
+3. `bash scripts/beta-smoke-check.sh` 通过，允许本地开发环境出现 production env validation skipped warning。
+4. `python3 -m unittest scripts/test_beta_readiness.py` 和 `python3 -m unittest discover -s mcp/video_qa -p 'test*.py'` 通过。
+5. 邀请真实创作者前，必须在已启动 local agent、HyperFrames、MCP provider 和模型 provider 的环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
+6. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+7. `git tag v0.1.10 <release_commit>` 只在 release 提交后创建。
+
 v0.1.9 对应能力：
 
 - 发布链路加固：CI 覆盖 Go test/vet、前端 lint/build、Electron runtime 测试、HyperFrames Render Service build 和生产依赖审计。

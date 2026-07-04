@@ -14,6 +14,7 @@ import os
 import pathlib
 import subprocess
 import sys
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 try:
@@ -99,6 +100,10 @@ def _profile_id(value: Any) -> str:
 
 def _round(value: float) -> float:
     return round(value + 0.0, 4)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -194,6 +199,7 @@ def build_shot_spec_lints(shot_list: list[dict[str, Any]]) -> list[dict[str, Any
         screen_text_chars = _text_char_count(_first_present(shot.get("screenText"), shot.get("text"), shot.get("title")))
         script_text = _string(_first_present(shot.get("scriptText"), shot.get("narrationText"), shot.get("voiceoverText"), shot.get("subtitleText")))
         visual_text = _string(_first_present(shot.get("visual"), shot.get("sceneSummary"), shot.get("description"), shot.get("mainAction")))
+        prompt_text = _string(_first_present(shot.get("prompt"), shot.get("promptText"), shot.get("videoPrompt"), visual_text))
         director_reason = bool(
             _string(_first_present(shot.get("whyThisShot"), shot.get("dramaticPurpose"), shot.get("directorReason"), shot.get("directorNote")))
         )
@@ -254,6 +260,18 @@ def build_shot_spec_lints(shot_list: list[dict[str, Any]]) -> list[dict[str, Any
             lint.setdefault("recommendedAction", "REVISE_SHOT_SPEC")
             lint.setdefault("recommendedFix", "补齐该 shot 的口播/剧情文本、画面主体、拍摄理由和参考资产，再进入视频生成。")
             lint["generationWarnings"].append("script_visual_alignment_seed_weak")
+        banned_prompt_terms = [
+            term
+            for term in ("ffmpeg", "aigc_video", "shot_video_clip", "b-roll", "artifact", "storageref", "simple_cut")
+            if term in prompt_text.lower()
+        ]
+        if banned_prompt_terms:
+            lint["riskLevel"] = _risk_max(lint["riskLevel"], "high")
+            lint["recommendedAction"] = "REVISE_SHOT_SPEC"
+            lint["repairActionHint"] = "PROMPT_PATCH_REGEN"
+            lint["recommendedFix"] = "投放给 AIGC provider 的 prompt 泄漏内部生产术语，应先改写成纯画面叙述后再生成。"
+            lint["generationWarnings"].append("provider_prompt_contains_internal_jargon")
+            lint["promptRiskTerms"] = banned_prompt_terms
         if cinematic_like and not director_reason:
             lint["riskLevel"] = _risk_max(lint["riskLevel"], "medium")
             lint.setdefault("recommendedAction", "REVISE_SHOT_SPEC")
@@ -262,7 +280,10 @@ def build_shot_spec_lints(shot_list: list[dict[str, Any]]) -> list[dict[str, Any
         if cinematic_like and reference_count <= 0:
             lint["riskLevel"] = _risk_max(lint["riskLevel"], "medium")
             lint["requiredAssets"].append({"kind": "reference_image", "role": "character_scene_prop_reference", "required": True})
-            lint.setdefault("recommendedAction", "REVISE_SHOT_SPEC")
+            if director_reason and len(script_text) > 0 and len(visual_text) > 0:
+                lint["recommendedAction"] = "REGEN_AIGC_WITH_REFERENCE"
+            else:
+                lint.setdefault("recommendedAction", "REVISE_SHOT_SPEC")
             lint.setdefault("recommendedFix", "影视类 shot 应绑定主要角色、场景或道具参考资产，避免全局一致性漂移。")
             lint["generationWarnings"].append("reference_assets_missing")
         if cinematic_like and action_beat_count <= 0:
@@ -288,9 +309,46 @@ def _issue_codes(summary: dict[str, Any]) -> set[str]:
     return {str(issue.get("code", "")) for issue in summary.get("representativeIssues", []) if isinstance(issue, dict)}
 
 
+def _mode_for_profile(video_type: str) -> str:
+    normalized = (video_type or "").strip().lower()
+    if any(token in normalized for token in ("hybrid", "voice_visual", "mixed")):
+        return "hybrid"
+    if any(token in normalized for token in ("cinematic", "aigc", "shot", "film")):
+        return "cinematic"
+    return "talking_head"
+
+
+def _summary_is_fallback(summary: dict[str, Any]) -> bool:
+    if bool(summary.get("isFallback")):
+        return True
+    source_type = str(summary.get("sourceType", "")).lower()
+    if source_type in {"fallback_storyboard", "fallback_preview"}:
+        return True
+    for ref in summary.get("artifactRefs", []):
+        if isinstance(ref, dict) and (bool(ref.get("isFallback")) or str(ref.get("sourceType", "")).lower().startswith("fallback_")):
+            return True
+    return False
+
+
+def _has_render_failure(summary: dict[str, Any]) -> bool:
+    if _string(summary.get("renderError")):
+        return True
+    return bool(_issue_codes(summary) & {"render_output_missing", "render_failed", "ffmpeg_failed", "video_file_unreadable"})
+
+
 def _decision_for_summary(summary: dict[str, Any], lint: dict[str, Any] | None = None) -> str:
+    if _has_render_failure(summary) and (
+        int(summary.get("blockingIssueCount", 0) or 0) >= 3 or int(summary.get("score", 100) or 100) < 30
+    ):
+        return "HUMAN_REVIEW"
     if lint and lint.get("fatalGateTriggered") and lint.get("recommendedAction") not in (None, "", "PASS"):
         return str(lint["recommendedAction"])
+    if lint and lint.get("recommendedAction") == "REGEN_AIGC_WITH_REFERENCE":
+        return "REGEN_AIGC_WITH_REFERENCE"
+    if lint and lint.get("repairActionHint") == "PROMPT_PATCH_REGEN":
+        return "REVISE_SHOT_SPEC"
+    if _summary_is_fallback(summary):
+        return "REGEN_AIGC" if not lint or lint.get("recommendedAction") == "PASS" else str(lint.get("recommendedAction"))
     codes = _issue_codes(summary)
     if {"top_left_text_zone_crowded", "lower_third_text_zone_crowded"} & codes:
         return "RERENDER_HTML"
@@ -305,6 +363,7 @@ def _decision_for_summary(summary: dict[str, Any], lint: dict[str, Any] | None =
 
 def _repair_plan(decision: str, summary: dict[str, Any], lint: dict[str, Any] | None = None) -> dict[str, Any]:
     plan: dict[str, Any] = {
+        "schemaVersion": 1,
         "action": decision,
         "priority": 0 if decision == "PASS" else 2 if decision in {"PASS_WITH_FIX", "HUMAN_REVIEW"} else 1,
         "toolOverrides": {},
@@ -313,6 +372,8 @@ def _repair_plan(decision: str, summary: dict[str, Any], lint: dict[str, Any] | 
         "promptPatch": {},
         "recommendedNextStage": "quality_gate",
     }
+    if lint and lint.get("repairActionHint"):
+        plan["action"] = str(lint["repairActionHint"])
     if decision == "PASS":
         plan["reason"] = "shot 级 QA 通过，无需工具返工。"
     elif decision in {"RERENDER_HTML", "PASS_WITH_FIX"}:
@@ -339,18 +400,33 @@ def _repair_plan(decision: str, summary: dict[str, Any], lint: dict[str, Any] | 
         plan["promptPatch"] = {
             "negativeAdditions": ["no embedded text", "no watermark", "no subtitles inside generated video"]
         }
+    elif decision in {"REGEN_AIGC", "REGEN_AIGC_WITH_REFERENCE"}:
+        plan["reason"] = "当前素材是 fallback 或缺少可用参考，应重新调用 AIGC 生成真实 shot 素材。"
+        plan["toolOverrides"] = {
+            "primaryTool": "mcp_generation_runner",
+            "requiredSourceType": "aigc_video",
+            "requiresReferenceAssets": decision == "REGEN_AIGC_WITH_REFERENCE",
+            "minReadyVideoGenerations": 1,
+        }
+        plan["renderStrategyPatch"] = {"mode": "aigc_video", "fallbackAllowed": False}
+        plan["promptPatch"] = {
+            "requiredAdditions": ["clear timed story beats", "visible subject/action/setting"],
+            "negativeAdditions": ["fallback storyboard", "placeholder preview"],
+        }
     elif decision == "REVISE_SHOT_SPEC":
-        plan["reason"] = "shot 规格本身风险过高，应先修改时长、动作或画面文字后再生成。"
+        plan["reason"] = "shot 规格或投放 prompt 风险过高，应先修改时长、动作、参考或提示词后再生成。"
         plan["toolOverrides"] = {"splitShot": True, "minDurationSec": 3, "maxDurationSec": 15}
         plan["renderStrategyPatch"] = {"mode": "hybrid"}
         plan["promptPatch"] = {"negativeAdditions": ["overly complex action", "multiple scene changes in one shot"]}
     elif decision == "RECOMPOSITE":
         plan["reason"] = "画面复杂度或叠层风险需要重新合成。"
         plan["toolOverrides"] = {"primaryTool": "ffmpeg", "secondaryTools": ["hyperframes"], "needsCompositing": True}
+        plan["toolAction"] = "FFMPEG_RECOMPOSITE"
         plan["renderStrategyPatch"] = {"mode": "hybrid", "needsCompositing": True}
         plan["promptPatch"] = {"negativeAdditions": ["visual clutter", "busy background", "unreadable UI"]}
     else:
         plan["reason"] = "当前指标不足以自动决定返修方式，需要人工审核。"
+        plan["toolOverrides"] = {"requiresHumanReview": True}
 
     if lint and lint.get("requiredAssets"):
         plan["requiredAssets"] = lint["requiredAssets"]
@@ -467,10 +543,16 @@ def build_shot_reports(
         shot_id = str(summary.get("shotId", ""))
         lint = lint_by_shot.get(shot_id)
         decision = _decision_for_summary(summary, lint)
+        generated_at = _string(summary.get("generatedAt")) or _string(summary.get("timestamp")) or _now_iso()
+        sampled_times = summary.get("sampledTimesSec") if isinstance(summary.get("sampledTimesSec"), list) else []
+        repair = _repair_plan(decision, summary, lint)
+        repair["targetShotId"] = shot_id
+        repair["candidateId"] = candidate_id
         report = {
             "schemaVersion": 1,
             "projectId": project_id,
             "shotId": shot_id,
+            "mode": _mode_for_profile(video_type),
             "videoType": video_type,
             "candidateId": candidate_id,
             "overallScore": int(summary.get("score", 0) or 0),
@@ -480,7 +562,9 @@ def build_shot_reports(
             "hardMetrics": _hard_metrics(summary, lint),
             "scriptAlignment": _script_alignment(lint),
             "issues": _shot_issues(summary),
-            "repairPlan": _repair_plan(decision, summary, lint),
+            "repairPlan": repair,
+            "artifactRefs": summary.get("artifactRefs") if isinstance(summary.get("artifactRefs"), list) else [],
+            "timestamps": {"sampledTimesSec": sampled_times, "generatedAt": generated_at},
             "sourceSummary": summary,
         }
         if lint:
@@ -504,11 +588,16 @@ def build_shot_reports(
             "recommendations": [lint.get("recommendedFix", "")] if lint.get("recommendedFix") else [],
         }
         decision = _decision_for_summary(summary, lint)
+        repair = _repair_plan(decision, summary, lint)
+        repair["targetShotId"] = shot_id
+        repair["candidateId"] = candidate_id
+        generated_at = _now_iso()
         reports.append(
             {
                 "schemaVersion": 1,
                 "projectId": project_id,
                 "shotId": shot_id,
+                "mode": _mode_for_profile(video_type),
                 "videoType": video_type,
                 "candidateId": candidate_id,
                 "overallScore": score,
@@ -518,7 +607,9 @@ def build_shot_reports(
                 "hardMetrics": _hard_metrics(summary, lint),
                 "scriptAlignment": _script_alignment(lint),
                 "issues": [],
-                "repairPlan": _repair_plan(decision, summary, lint),
+                "repairPlan": repair,
+                "artifactRefs": [],
+                "timestamps": {"sampledTimesSec": [], "generatedAt": generated_at},
                 "shotSpecLint": lint,
                 "sourceSummary": summary,
             }
@@ -745,8 +836,25 @@ def _summaries(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _repair_plan_from_summaries(summaries: list[dict[str, Any]]) -> dict[str, Any]:
-    regenerate = [s["shotId"] for s in summaries if s.get("needsRegeneration")]
-    review = [s["shotId"] for s in summaries if not s.get("needsRegeneration") and s.get("warningIssueCount")]
+    regenerate_actions = {
+        "REGEN_AIGC",
+        "REGEN_AIGC_WITH_REFERENCE",
+        "RERENDER_HTML",
+        "RECOMPOSITE",
+        "REGENERATE_TTS",
+        "RERENDER_SUBTITLE",
+        "REVISE_SHOT_SPEC",
+    }
+    regenerate = [
+        s["shotId"]
+        for s in summaries
+        if s.get("needsRegeneration") or str(s.get("decision", "")) in regenerate_actions
+    ]
+    review = [
+        s["shotId"]
+        for s in summaries
+        if s["shotId"] not in regenerate and (s.get("warningIssueCount") or str(s.get("decision", "")) == "HUMAN_REVIEW")
+    ]
     decision_by_shot = {s["shotId"]: s.get("decision", "") for s in summaries}
     repair_by_shot = {s["shotId"]: s.get("repairAction", "") for s in summaries}
     action_counts: dict[str, int] = {}

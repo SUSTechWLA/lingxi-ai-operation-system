@@ -54,6 +54,29 @@ jobs:
             git diff-tree --check --root -r HEAD
           fi
 
+      - name: Check closed beta docs links
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f docs/BETA_RUNBOOK.md
+          test -x scripts/beta-smoke-check.sh
+          test -x scripts/beta-fallback-fixture.sh
+          test -x scripts/beta-readiness-check.sh
+          grep -q "docs/BETA_RUNBOOK.md" README.md
+          grep -q "scripts/beta-smoke-check.sh" docs/BETA_RUNBOOK.md
+          grep -q "scripts/beta-fallback-fixture.sh" docs/BETA_RUNBOOK.md
+          grep -q "scripts/beta-readiness-check.sh" docs/BETA_RUNBOOK.md
+
+      - name: Shellcheck scripts when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck scripts/beta-smoke-check.sh scripts/beta-fallback-fixture.sh scripts/beta-readiness-check.sh
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
   build:
     name: build
     runs-on: ubuntu-latest
@@ -143,3 +166,50 @@ jobs:
 
       - name: Test video QA MCP service
         run: python3 -m unittest discover -s mcp/video_qa -p 'test*.py'
+
+      - name: Test beta readiness evaluator
+        run: python3 -m unittest scripts/test_beta_readiness.py
+
+  beta-smoke:
+    name: beta-smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            hyperframes-render-service/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+          cache-dependency-path: |
+            cloud-backend/go.sum
+            local-backend/go.sum
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install HyperFrames render service dependencies
+        working-directory: hyperframes-render-service
+        run: npm ci
+
+      - name: Run closed beta smoke check
+        run: bash scripts/beta-smoke-check.sh

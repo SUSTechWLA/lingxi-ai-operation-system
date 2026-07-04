@@ -65,11 +65,15 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 | 字段 | 说明 |
 |---|---|
 | `schemaVersion` | 当前为 `1` |
+| `mode` | `talking_head`、`cinematic` 或 `hybrid` |
 | `overallScore` | 当前 shot 的综合分 |
+| `decision` | `PASS`、`PASS_WITH_FIX`、`REGEN_AIGC`、`REGEN_AIGC_WITH_REFERENCE`、`RERENDER_HTML`、`RECOMPOSITE`、`REGENERATE_TTS`、`RERENDER_SUBTITLE`、`REVISE_SHOT_SPEC`、`HUMAN_REVIEW` 等 |
 | `scores` | `mediaSpec`、`textLayout`、`imageQuality`、`temporalStability`、`promptAlignment`、`continuity` 等分项分数 |
 | `hardMetrics` | 从抽帧和 spec lint 得到的硬指标，例如文字安全区密度、底部区域密度、时长、画面文字长度 |
 | `issues` | 带证据和修复建议的问题列表 |
-| `repairPlan` | 工具级修复计划，包含 `action`、`toolOverrides`、`renderStrategyPatch`、`visualPlanPatch`、`promptPatch` |
+| `repairPlan` | 工具级修复计划，包含 `schemaVersion`、`action`、`targetShotId`、`candidateId`、`toolOverrides`、`renderStrategyPatch`、`visualPlanPatch`、`promptPatch` |
+| `artifactRefs` | 当前 shot 相关素材引用，含 fallback / AIGC provenance 时用于反向指导重生成 |
+| `timestamps` | QA 采样时间点和报告生成时间 |
 | `shotSpecLint` | 生成前规格检查结果，用来发现过长 shot、精确文字、长画面文本和 continuity reference 需求 |
 | `scriptAlignment` | 剧本、画面描述、拍摄理由和参考资产覆盖是否完整 |
 
@@ -101,6 +105,17 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 - `regenerate_shots`：存在阻断问题，应先重生成指定 shot。
 
 同时 `repairPlan` 会输出 `decisionByShot`、`repairActionByShot` 和 `repairActionCounts`，供后续 agent 做更细的自动返工，而不是只按整片总分判断。
+
+Closed beta 当前确定性映射：
+
+| 触发 | `decision` | `repairPlan.action` |
+|---|---|---|
+| 文字安全区、字幕或 UI 叠字 | `RERENDER_HTML` | `RERENDER_HTML` |
+| fallback storyboard / preview 不能满足真实 AIGC 素材要求 | `REGEN_AIGC` | `REGEN_AIGC` |
+| AIGC shot 缺少参考资产 | `REGEN_AIGC_WITH_REFERENCE` | `REGEN_AIGC_WITH_REFERENCE` |
+| provider prompt 泄漏 `ffmpeg`、`AIGC_VIDEO`、`artifact` 等内部术语 | `REVISE_SHOT_SPEC` | `PROMPT_PATCH_REGEN` |
+| 画面复杂度、叠层或合成风险 | `RECOMPOSITE` | `RECOMPOSITE`，并带 `toolAction=FFMPEG_RECOMPOSITE` |
+| 严重渲染失败或指标不足以自动判断 | `HUMAN_REVIEW` | `HUMAN_REVIEW` |
 
 ## 检查维度
 

@@ -62,7 +62,8 @@ type HyperFramesConfig struct {
 }
 
 type ServerConfig struct {
-	Port int `mapstructure:"SERVER_PORT"`
+	Port               int    `mapstructure:"SERVER_PORT"`
+	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
 }
 
 type PostgresConfig struct {
@@ -183,8 +184,14 @@ func (cfg *Config) ValidateForMode(mode string) error {
 	if strings.TrimSpace(cfg.Sandbox.Address) == "" {
 		problems = append(problems, "SANDBOX_ADDRESS must be set in production")
 	}
+	if cfg.Sandbox.Fallback {
+		problems = append(problems, "SANDBOX_FALLBACK must be false in production")
+	}
 	if strings.TrimSpace(cfg.BashTool.AllowedCommands) == "*" {
 		problems = append(problems, "BASH_TOOL_ALLOWED_COMMANDS must be an explicit allowlist in production")
+	}
+	if cors := strings.TrimSpace(cfg.Server.CORSAllowedOrigins); cors == "" || cors == "*" || strings.Contains(cors, "*") {
+		problems = append(problems, "CORS_ALLOWED_ORIGINS must list explicit origins in production")
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid production config: %s", strings.Join(problems, "; "))
@@ -216,6 +223,7 @@ func isWeakSecret(value string, weakValues ...string) bool {
 
 func setDefaults() {
 	viper.SetDefault("SERVER_PORT", 8080)
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "*")
 	viper.SetDefault("POSTGRES_HOST", "localhost")
 	viper.SetDefault("POSTGRES_PORT", 5432)
 	viper.SetDefault("POSTGRES_USER", "postgres")

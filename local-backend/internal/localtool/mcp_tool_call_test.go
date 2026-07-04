@@ -143,10 +143,11 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 			"mcpTool":    "runway.generate_video",
 			"externalGenerationRequests": []interface{}{
 				map[string]interface{}{
-					"requestId": "extgen_video_SHOT_01",
-					"shotId":    "SHOT_01",
-					"kind":      "video",
-					"prompt":    promptText,
+					"requestId":         "extgen_video_SHOT_01",
+					"shotId":            "SHOT_01",
+					"kind":              "video",
+					"prompt":            promptText,
+					"sourceArtifactIds": []interface{}{"script-1", "reference-1"},
 					"target": map[string]interface{}{
 						"durationSec": 5,
 						"aspectRatio": "16:9",
@@ -172,6 +173,31 @@ func TestMCPToolCallExecutorGeneratesExternalRequestBatch(t *testing.T) {
 	}
 	if result.Output["generationResults"].([]interface{})[0].(map[string]interface{})["requestId"] != "extgen_video_SHOT_01" {
 		t.Fatalf("generationResults should preserve request id: %#v", result.Output["generationResults"])
+	}
+	provenance := result.Output["assetProvenance"].([]interface{})
+	entry := provenance[0].(map[string]interface{})
+	if entry["schemaVersion"] != float64(1) && entry["schemaVersion"] != 1 {
+		t.Fatalf("assetProvenance schemaVersion = %#v, want 1", entry["schemaVersion"])
+	}
+	for key, want := range map[string]interface{}{
+		"sourceType":    "aigc_video",
+		"providerName":  "runway",
+		"providerJobId": "vid-1",
+		"isFallback":    false,
+	} {
+		if entry[key] != want {
+			t.Fatalf("assetProvenance[%s] = %#v, want %#v in %#v", key, entry[key], want, entry)
+		}
+	}
+	if entry["generatedAt"] == "" {
+		t.Fatalf("assetProvenance generatedAt should be set: %#v", entry)
+	}
+	if hash, ok := entry["inputPromptHash"].(string); !ok || !strings.HasPrefix(hash, "sha256:") {
+		t.Fatalf("assetProvenance inputPromptHash = %#v, want sha256 hash", entry["inputPromptHash"])
+	}
+	ids, ok := entry["sourceArtifactIds"].([]interface{})
+	if !ok || len(ids) != 2 || ids[0] != "script-1" || ids[1] != "reference-1" {
+		t.Fatalf("assetProvenance sourceArtifactIds = %#v", entry["sourceArtifactIds"])
 	}
 }
 

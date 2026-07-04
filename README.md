@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.9-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.10-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,16 @@
 ---
 
 ## Release 更新
+
+### v0.1.10 - 2026-07-04
+
+- 新增 closed beta runbook，覆盖 cloud backend、local agent、frontend/Electron、HyperFrames Render Service、FFmpeg、MCP provider、JiMeng/Dreamina、OpenAI-compatible model provider、日志和诊断包导出。
+- 新增 `scripts/beta-smoke-check.sh` 和 fallback fixture：无真实 AIGC provider 时也能跑通 2-shot fallback 预览、artifact provenance、shot QA report 和 machine-readable repairPlan。
+- 新增 beta readiness gate：`BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 必须返回 `GO`，才可把环境描述为“一句话生成高质量真实 AIGC 视频”的内测版本。
+- 强化 artifact provenance 和前端展示：真实 AIGC、HyperFrames、FFmpeg composite、uploaded、fallback storyboard/preview 都有 `sourceType`、provider、fallback reason 和 `isFallback` 标记，避免把 fallback 误当成真实即梦/Dreamina 成片。
+- 强化 Video QA MCP：每个 shot 输出结构化 QA report、决策枚举和 `repairPlan`，可反向指导 `REGEN_AIGC`、`REGEN_AIGC_WITH_REFERENCE`、`RERENDER_HTML`、`RECOMPOSITE`、`REVISE_SHOT_SPEC` 或 `HUMAN_REVIEW`。
+- 本地 Agent 新增 `beta-diagnostics.zip` 导出，包含脱敏环境、日志、MCP 状态、artifact manifest、QA 报告和失败栈索引，默认不打包用户原始素材。
+- release/production 模式增加安全 fail-fast：拒绝弱 auth secret、默认数据库/MinIO/admin token、通配 CORS、禁用 sandbox 或启用 sandbox fallback。
 
 ### v0.1.9 - 2026-07-04
 
@@ -190,6 +200,20 @@ bash scripts/start-cloud-backend.sh
 
 打开桌面端后，进入“躺营导演台”，输入视频主题，选择“口播知识视频”或“影视/AIGC shot 视频”入口即可开始。
 
+Closed beta 安装、诊断和 smoke 验证见 [Closed Beta Runbook](docs/BETA_RUNBOOK.md)。快速自检可运行：
+
+```bash
+bash scripts/beta-smoke-check.sh
+```
+
+邀请真实创作者前，先启动 cloud/local/frontend/HyperFrames 和 AIGC MCP provider，再运行：
+
+```bash
+BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh
+```
+
+只有 readiness 返回 `GO` 时，才把当前环境描述为“一句话生成高质量真实 AIGC 视频”的内测版本；`CONDITIONAL` 只代表 fallback 预览和工程链路可验证。
+
 ## MCP 扩展
 
 本地 Agent 支持标准 MCP provider 注册。provider 可以用 Python、Node、Go 或其他语言实现，只要暴露标准 `tools/list` 与 `tools/call` 能力即可；系统只保存 provider 配置，不绑定具体实现语言。
@@ -239,6 +263,7 @@ Local agent:   http://localhost:18080/api/local/docs
 - [中文 Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki)
 - [English Wiki](https://github.com/SUSTechWLA/tangying-ai-operation-system/wiki/English)
 - [MCP Provider 接入](docs/mcp-providers.md)
+- [Closed Beta Runbook](docs/BETA_RUNBOOK.md)
 - [版本管理 Wiki](docs/version-management.md)
 - [视频抽帧 QA Wiki](docs/video-frame-qa.md)
 - [影视类视频创作流程](docs/cinematic-video-workflow.md)

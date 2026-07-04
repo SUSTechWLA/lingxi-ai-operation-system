@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -592,7 +593,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	createdAt := time.Now().UTC()
-	path := filepath.Join(s.paths.DiagnosticsDir, fmt.Sprintf("diagnostics-%s.zip", createdAt.Format("20060102-150405")))
+	path := filepath.Join(s.paths.DiagnosticsDir, "beta-diagnostics.zip")
 	if err := s.createDiagnosticsZip(path, req.Reason, createdAt); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -611,15 +612,34 @@ func (s *Server) createDiagnosticsZip(path, reason string, createdAt time.Time) 
 	defer zw.Close()
 
 	manifest := map[string]interface{}{
-		"createdAt":    createdAt.Format(time.RFC3339Nano),
-		"reason":       reason,
-		"service":      "tangying-local-agent",
-		"dataDir":      s.paths.DataDir,
-		"cloudApiBase": s.cfg.CloudAPIBase,
-		"os":           runtime.GOOS,
-		"arch":         runtime.GOARCH,
+		"schemaVersion": 1,
+		"createdAt":     createdAt.Format(time.RFC3339Nano),
+		"reason":        reason,
+		"service":       "tangying-local-agent",
+		"dataDir":       s.paths.DataDir,
+		"cloudApiBase":  s.cfg.CloudAPIBase,
+		"os":            runtime.GOOS,
+		"arch":          runtime.GOARCH,
 	}
 	if err := addJSONToZip(zw, "manifest.json", manifest); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "environment.json", s.diagnosticEnvironment(createdAt)); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "env-redacted.json", diagnosticEnvRedacted()); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "mcp/provider-status.json", s.diagnosticMCPProviders()); err != nil {
+		return err
+	}
+	if err := addJSONToZip(zw, "artifacts/manifest.json", s.diagnosticArtifactManifest()); err != nil {
+		return err
+	}
+	if err := s.addDiagnosticQAReports(zw); err != nil {
+		return err
+	}
+	if err := s.addDiagnosticFailureStacks(zw); err != nil {
 		return err
 	}
 	return filepath.WalkDir(s.paths.LogDir, func(logPath string, d os.DirEntry, walkErr error) error {
@@ -633,7 +653,129 @@ func (s *Server) createDiagnosticsZip(path, reason string, createdAt time.Time) 
 		if err != nil {
 			return err
 		}
-		return addFileToZip(zw, filepath.ToSlash(rel), logPath)
+		return addRedactedFileToZip(zw, filepath.ToSlash(rel), logPath)
+	})
+}
+
+func (s *Server) diagnosticEnvironment(createdAt time.Time) map[string]interface{} {
+	return map[string]interface{}{
+		"schemaVersion": 1,
+		"createdAt":     createdAt.Format(time.RFC3339Nano),
+		"service":       "tangying-local-agent",
+		"goVersion":     runtime.Version(),
+		"os":            runtime.GOOS,
+		"arch":          runtime.GOARCH,
+		"paths": map[string]string{
+			"dataDir":        s.paths.DataDir,
+			"cacheDir":       s.paths.CacheDir,
+			"configDir":      s.paths.ConfigDir,
+			"projectDir":     s.paths.ProjectDir,
+			"artifactDir":    s.paths.ArtifactDir,
+			"logDir":         s.paths.LogDir,
+			"diagnosticsDir": s.paths.DiagnosticsDir,
+		},
+	}
+}
+
+func diagnosticEnvRedacted() map[string]interface{} {
+	keys := []string{
+		"TANGYING_CLOUD_API_BASE",
+		"TANGYING_LOCAL_AGENT_ADDR",
+		"TANGYING_LOCAL_DATA_DIR",
+		"TANGYING_DEVICE_ID",
+		"TANGYING_USER_TOKEN",
+		"TANGYING_HYPERFRAMES_SERVICE_URL",
+		"OPENAI_API_KEY",
+		"JIMENG_COOKIE",
+		"DREAMINA_TOKEN",
+	}
+	out := map[string]interface{}{"schemaVersion": 1, "variables": map[string]interface{}{}}
+	variables := out["variables"].(map[string]interface{})
+	for _, key := range keys {
+		value := os.Getenv(key)
+		entry := map[string]interface{}{"configured": strings.TrimSpace(value) != ""}
+		if entry["configured"].(bool) {
+			if isSensitiveKey(key) {
+				entry["value"] = "[REDACTED]"
+			} else {
+				entry["value"] = value
+			}
+		}
+		variables[key] = entry
+	}
+	return out
+}
+
+func (s *Server) diagnosticMCPProviders() map[string]interface{} {
+	providers, err := s.readMCPProviders()
+	if err != nil {
+		return map[string]interface{}{"schemaVersion": 1, "error": err.Error(), "providers": []interface{}{}}
+	}
+	items := make([]interface{}, 0, len(providers))
+	for _, provider := range providers {
+		data, _ := json.Marshal(provider)
+		var entry map[string]interface{}
+		_ = json.Unmarshal(data, &entry)
+		if env, ok := entry["env"].(map[string]interface{}); ok {
+			entry["env"] = redactMap(env)
+		}
+		entry["reachable"] = false
+		entry["diagnosticNote"] = "provider config snapshot only; live tools/list is checked by /api/local/mcp-providers/status"
+		items = append(items, entry)
+	}
+	return map[string]interface{}{"schemaVersion": 1, "providers": items}
+}
+
+func (s *Server) diagnosticArtifactManifest() map[string]interface{} {
+	items := []interface{}{}
+	_ = filepath.WalkDir(s.paths.ArtifactDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "metadata.json" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var metadata map[string]interface{}
+		if err := json.Unmarshal(data, &metadata); err != nil {
+			return nil
+		}
+		if rel, err := filepath.Rel(s.paths.DataDir, path); err == nil {
+			metadata["metadataPath"] = filepath.ToSlash(rel)
+		}
+		items = append(items, redactMap(metadata))
+		return nil
+	})
+	return map[string]interface{}{"schemaVersion": 1, "artifacts": items}
+}
+
+func (s *Server) addDiagnosticQAReports(zw *zip.Writer) error {
+	added := false
+	return filepath.WalkDir(s.paths.ProjectDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "shot_qa_reports.json" {
+			return nil
+		}
+		name := "qa/shot_qa_reports.json"
+		if added {
+			if rel, relErr := filepath.Rel(s.paths.ProjectDir, path); relErr == nil {
+				name = "qa/" + filepath.ToSlash(rel)
+			}
+		}
+		added = true
+		return addRedactedFileToZip(zw, name, path)
+	})
+}
+
+func (s *Server) addDiagnosticFailureStacks(zw *zip.Writer) error {
+	return filepath.WalkDir(s.paths.LogDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		lower := strings.ToLower(d.Name())
+		if !strings.Contains(lower, "failure") && !strings.Contains(lower, "stack") && !strings.Contains(lower, "panic") {
+			return nil
+		}
+		return addRedactedFileToZip(zw, "failures/"+d.Name(), path)
 	})
 }
 
@@ -859,6 +1001,79 @@ func addFileToZip(zw *zip.Writer, name, path string) error {
 	}
 	_, err = io.Copy(dst, src)
 	return err
+}
+
+func addRedactedFileToZip(zw *zip.Writer, name, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	writer, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write([]byte(redactSensitiveText(string(data))))
+	return err
+}
+
+var sensitiveTextPattern = regexp.MustCompile(`(?i)(sk-[A-Za-z0-9_-]+|secret-token|token[=:][^\s",}]+|password[=:][^\s",}]+|api[_-]?key[=:][^\s",}]+|cookie[=:][^\s",}]+)`)
+
+func redactSensitiveText(text string) string {
+	return sensitiveTextPattern.ReplaceAllString(text, "[REDACTED]")
+}
+
+func isSensitiveKey(key string) bool {
+	lower := strings.ToLower(key)
+	return strings.Contains(lower, "token") ||
+		strings.Contains(lower, "key") ||
+		strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "password") ||
+		strings.Contains(lower, "cookie") ||
+		strings.Contains(lower, "credential")
+}
+
+func redactMap(input map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		if isSensitiveKey(key) {
+			if strings.TrimSpace(fmt.Sprint(value)) == "" {
+				out[key] = ""
+			} else {
+				out[key] = "[REDACTED]"
+			}
+			continue
+		}
+		switch typed := value.(type) {
+		case map[string]interface{}:
+			out[key] = redactMap(typed)
+		case map[string]string:
+			nested := make(map[string]interface{}, len(typed))
+			for nestedKey, nestedValue := range typed {
+				nested[nestedKey] = nestedValue
+			}
+			out[key] = redactMap(nested)
+		case []interface{}:
+			items := make([]interface{}, 0, len(typed))
+			for _, item := range typed {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					items = append(items, redactMap(itemMap))
+				} else if text, ok := item.(string); ok {
+					items = append(items, redactSensitiveText(text))
+				} else {
+					items = append(items, item)
+				}
+			}
+			out[key] = items
+		case string:
+			out[key] = redactSensitiveText(typed)
+		default:
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func redactFields(fields map[string]interface{}) map[string]interface{} {

@@ -102,6 +102,39 @@ func TestValidateForModeAllowsDevelopmentDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateForModeRejectsProductionWildcardCORSAndSandboxFallback(t *testing.T) {
+	cfg := &Config{
+		Server: ServerConfig{CORSAllowedOrigins: "*"},
+		Postgres: PostgresConfig{
+			Password: "long-non-default-postgres-password",
+		},
+		Auth: AuthConfig{
+			TokenSecret: "0123456789abcdef0123456789abcdef",
+		},
+		MinIO: MinIOConfig{
+			SecretKey: "long-non-default-minio-secret",
+		},
+		BashTool: BashToolConfig{
+			AllowedCommands: "ls,cat,pwd",
+		},
+		Sandbox: SandboxConfig{
+			Enabled:  true,
+			Address:  "127.0.0.1:50051",
+			Fallback: true,
+		},
+	}
+
+	err := cfg.ValidateForMode("release")
+	if err == nil {
+		t.Fatal("expected production validation to reject wildcard CORS and sandbox fallback")
+	}
+	for _, want := range []string{"CORS_ALLOWED_ORIGINS", "SANDBOX_FALLBACK"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("production validation error should mention %s, got %v", want, err)
+		}
+	}
+}
+
 func TestConfigZeroValueBehavior(t *testing.T) {
 	// When VideoCreationEnabled is false, old routes should behave normally.
 	// This test validates the zero-value behavior of the feature flag.

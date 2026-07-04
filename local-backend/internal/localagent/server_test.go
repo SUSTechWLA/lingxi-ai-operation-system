@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -643,6 +644,32 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if !bytes.Contains(content, []byte("render complete")) {
 		t.Fatalf("log file missing message: %s", string(content))
 	}
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "mcp-providers.json"), []byte(`{"providers":[{"id":"jimeng","label":"JiMeng MCP","transport":"stdio","command":"python3","args":["mcp/jimeng/server.py"],"env":{"DREAMINA_TOKEN":"secret-token"},"enabled":true}]}`), 0o644); err != nil {
+		t.Fatalf("write mcp providers: %v", err)
+	}
+	artifactDir := filepath.Join(root, "artifacts", "vp-1", "video-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("raw-video-bytes-should-not-be-zipped"), 0o644); err != nil {
+		t.Fatalf("write artifact content: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "metadata.json"), []byte(`{"id":"video-1","projectId":"vp-1","kind":"VIDEO","sourceType":"fallback_preview","isFallback":true,"fallbackReason":"no_ready_aigc_video","storageRef":"local://projects/vp-1/artifacts/video-1/hash/final.mp4"}`), 0o644); err != nil {
+		t.Fatalf("write artifact metadata: %v", err)
+	}
+	reportDir := filepath.Join(root, "projects", "vp-1", "reports", "video_frame_qa")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatalf("create report dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reportDir, "shot_qa_reports.json"), []byte(`{"schemaVersion":1,"shotReports":[{"shotId":"SHOT_01","decision":"HUMAN_REVIEW"}]}`), 0o644); err != nil {
+		t.Fatalf("write QA report: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "logs", "failure-stack.txt"), []byte("panic: render failed\nsk-test-secret-should-redact\n"), 0o644); err != nil {
+		t.Fatalf("write failure stack: %v", err)
+	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/local/diagnostics", bytes.NewBufferString(`{"reason":"support-request"}`))
 	rec = httptest.NewRecorder()
@@ -658,22 +685,46 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if resp.Path == "" {
 		t.Fatalf("diagnostics path is empty")
 	}
+	if filepath.Base(resp.Path) != "beta-diagnostics.zip" {
+		t.Fatalf("diagnostics filename = %q, want beta-diagnostics.zip", filepath.Base(resp.Path))
+	}
 	zr, err := zip.OpenReader(resp.Path)
 	if err != nil {
 		t.Fatalf("diagnostics zip not readable: %v", err)
 	}
 	defer zr.Close()
-	var hasManifest, hasLog bool
+	entries := map[string]string{}
 	for _, f := range zr.File {
-		if f.Name == "manifest.json" {
-			hasManifest = true
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", f.Name, err)
 		}
-		if f.Name == "logs/local-agent.jsonl" {
-			hasLog = true
+		data, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", f.Name, err)
+		}
+		entries[f.Name] = string(data)
+	}
+	for _, want := range []string{
+		"manifest.json",
+		"environment.json",
+		"env-redacted.json",
+		"mcp/provider-status.json",
+		"artifacts/manifest.json",
+		"qa/shot_qa_reports.json",
+		"failures/failure-stack.txt",
+		"logs/local-agent.jsonl",
+	} {
+		if _, ok := entries[want]; !ok {
+			t.Fatalf("diagnostics zip missing %s; entries=%v", want, entries)
 		}
 	}
-	if !hasManifest || !hasLog {
-		t.Fatalf("diagnostics zip missing files: manifest=%v log=%v", hasManifest, hasLog)
+	if _, ok := entries["artifacts/vp-1/video-1/content"]; ok {
+		t.Fatalf("diagnostics zip must not include raw artifact content")
+	}
+	if strings.Contains(strings.Join(mapValues(entries), "\n"), "secret-token") || strings.Contains(strings.Join(mapValues(entries), "\n"), "sk-test-secret-should-redact") {
+		t.Fatalf("diagnostics zip leaked a secret: %#v", entries)
 	}
 }
 
@@ -903,4 +954,12 @@ func TestLocalProjectDeleteRemovesProjectArtifactsAndCache(t *testing.T) {
 			t.Fatalf("project delete should remove %s, err=%v", dir, err)
 		}
 	}
+}
+
+func mapValues(values map[string]string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }

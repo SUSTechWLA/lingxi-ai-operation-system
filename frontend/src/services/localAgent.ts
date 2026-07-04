@@ -40,6 +40,11 @@ export interface LocalArtifactFileResponse extends LocalArtifactUploadResponse {
   contentBase64?: string
 }
 
+export interface LocalDiagnosticsResponse {
+  path: string
+  createdAt: string
+}
+
 export type LocalMCPTransport = 'http' | 'stdio'
 
 export interface LocalMCPProviderConfig {
@@ -242,6 +247,18 @@ export async function fetchLocalArtifactFile(params: {
     throw new Error(await errorMessage(response, '读取本地产物失败'))
   }
   return response.json() as Promise<LocalArtifactFileResponse>
+}
+
+export async function createLocalDiagnostics(reason: string): Promise<LocalDiagnosticsResponse> {
+  const response = await fetch(localAgentUrl('/api/local/diagnostics'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '导出诊断包失败'))
+  }
+  return response.json() as Promise<LocalDiagnosticsResponse>
 }
 
 export async function fetchJiMengSetupStatus(): Promise<JiMengSetupStatusResponse> {

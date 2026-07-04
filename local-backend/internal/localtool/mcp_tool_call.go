@@ -96,12 +96,17 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 		request := mcpMapFromInterface(item)
 		requestToolName := mcpToolNameForExternalRequest(providerID, toolName, request)
 		args := mcpArgumentsFromExternalRequest(request)
+		generatedAt := time.Now().UTC().Format(time.RFC3339)
 		result := map[string]interface{}{
-			"requestId":  request["requestId"],
-			"shotId":     request["shotId"],
-			"kind":       mcpExternalRequestKind(request),
-			"providerId": providerID,
-			"toolName":   requestToolName,
+			"schemaVersion":     1,
+			"requestId":         request["requestId"],
+			"shotId":            request["shotId"],
+			"kind":              mcpExternalRequestKind(request),
+			"providerId":        providerID,
+			"toolName":          requestToolName,
+			"generatedAt":       generatedAt,
+			"inputPromptHash":   mcpInputPromptHash(request),
+			"sourceArtifactIds": mcpSourceArtifactIDs(request),
 		}
 		preflight := mcpPreflightForExternalRequest(request)
 		result["preflightQa"] = preflight
@@ -181,6 +186,10 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 		result["content"] = callResult.Content
 		result["structuredContent"] = callResult.StructuredContent
 		result["isError"] = callResult.IsError
+		if submitID := mcpStringFromMap(callResult.StructuredContent, "submit_id", "submitId", "job_id", "jobId", "task_id", "taskId"); submitID != "" {
+			result["submitId"] = submitID
+			result["providerJobId"] = submitID
+		}
 		if callResult.IsError {
 			errorText := mcpErrorText(callResult)
 			if mcpIsProviderBusyError(errorText) {
@@ -455,13 +464,17 @@ func (e *mcpToolCallExecutor) deferRemainingRequests(items []interface{}, remain
 		deferred["reason"] = reason
 		*remaining = append(*remaining, deferred)
 		*results = append(*results, map[string]interface{}{
-			"requestId":  future["requestId"],
-			"shotId":     future["shotId"],
-			"kind":       mcpExternalRequestKind(future),
-			"providerId": providerID,
-			"toolName":   futureToolName,
-			"status":     "deferred",
-			"reason":     reason,
+			"schemaVersion":     1,
+			"requestId":         future["requestId"],
+			"shotId":            future["shotId"],
+			"kind":              mcpExternalRequestKind(future),
+			"providerId":        providerID,
+			"toolName":          futureToolName,
+			"status":            "deferred",
+			"reason":            reason,
+			"generatedAt":       time.Now().UTC().Format(time.RFC3339),
+			"inputPromptHash":   mcpInputPromptHash(future),
+			"sourceArtifactIds": mcpSourceArtifactIDs(future),
 		})
 	}
 }
@@ -719,22 +732,70 @@ func buildMCPAssetProvenance(results []interface{}) []interface{} {
 	provenance := make([]interface{}, 0, len(results))
 	for _, item := range results {
 		result := mcpMapFromInterface(item)
+		kind := mcpKindFromResult(result)
+		providerID := mcpStringFromMap(result, "providerId", "providerName")
+		providerJobID := mcpStringFromMap(result, "providerJobId", "submitId", "jobId", "taskId")
+		if providerJobID == "" {
+			providerJobID = mcpStringFromMap(mcpMapFromInterface(result["structuredContent"]), "submit_id", "submitId", "job_id", "jobId", "task_id", "taskId")
+		}
 		entry := map[string]interface{}{
-			"requestId":   result["requestId"],
-			"shotId":      result["shotId"],
-			"kind":        mcpKindFromResult(result),
-			"providerId":  result["providerId"],
-			"toolName":    result["toolName"],
-			"status":      result["status"],
-			"reason":      result["reason"],
-			"error":       result["error"],
-			"storageRef":  result["storageRef"],
-			"localPath":   result["localPath"],
-			"preflightQa": result["preflightQa"],
+			"schemaVersion":     1,
+			"requestId":         result["requestId"],
+			"shotId":            result["shotId"],
+			"kind":              kind,
+			"sourceType":        mcpSourceTypeForKind(kind),
+			"providerId":        providerID,
+			"providerName":      providerID,
+			"providerJobId":     providerJobID,
+			"toolName":          result["toolName"],
+			"status":            result["status"],
+			"reason":            result["reason"],
+			"error":             result["error"],
+			"storageRef":        result["storageRef"],
+			"localPath":         result["localPath"],
+			"fallbackReason":    "",
+			"isFallback":        false,
+			"generatedAt":       result["generatedAt"],
+			"inputPromptHash":   result["inputPromptHash"],
+			"sourceArtifactIds": result["sourceArtifactIds"],
+			"preflightQa":       result["preflightQa"],
 		}
 		provenance = append(provenance, entry)
 	}
 	return provenance
+}
+
+func mcpSourceTypeForKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "image", "reference_image", "keyframe":
+		return "aigc_image"
+	case "video":
+		return "aigc_video"
+	default:
+		return "unknown"
+	}
+}
+
+func mcpInputPromptHash(request map[string]interface{}) string {
+	prompt := mcpStringFromMap(request, "prompt", "promptText", "videoPrompt")
+	if strings.TrimSpace(prompt) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(prompt))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func mcpSourceArtifactIDs(request map[string]interface{}) []interface{} {
+	for _, key := range []string{"sourceArtifactIds", "sourceArtifactIDs", "dependsOnArtifactIds", "referenceAssetIds"} {
+		if values := stringSliceFromLocalMCPValue(request[key]); len(values) > 0 {
+			out := make([]interface{}, 0, len(values))
+			for _, value := range values {
+				out = append(out, value)
+			}
+			return out
+		}
+	}
+	return []interface{}{}
 }
 
 func mcpGenerationSummaryText(summary map[string]interface{}) string {
@@ -1112,23 +1173,44 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 		mode = "aigc_image"
 		baseKind = "image"
 	}
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
+	provenance := map[string]interface{}{
+		"schemaVersion":     1,
+		"sourceType":        mode,
+		"providerName":      providerID,
+		"providerJobId":     mcpStringFromMap(structured, "submit_id", "submitId", "job_id", "jobId", "task_id", "taskId"),
+		"fallbackReason":    "",
+		"isFallback":        false,
+		"generatedAt":       generatedAt,
+		"inputPromptHash":   mcpInputPromptHash(request),
+		"sourceArtifactIds": mcpSourceArtifactIDs(request),
+	}
 	packageItem := map[string]interface{}{
 		"shotId":          request["shotId"],
 		"durationSec":     duration,
 		"requestId":       request["requestId"],
 		"assetId":         mcpFirstPresent(request, "assetId", "referenceAssetId"),
 		"kind":            kind,
+		"schemaVersion":   1,
+		"sourceType":      mode,
+		"providerName":    providerID,
+		"providerJobId":   provenance["providerJobId"],
+		"fallbackReason":  "",
+		"isFallback":      false,
+		"generatedAt":     generatedAt,
+		"provenance":      provenance,
 		"referenceImages": request["references"],
 		"prompts": map[string]interface{}{
 			"videoPrompt":    mcpStringFromMap(request, "prompt", "promptText", "videoPrompt"),
 			"negativePrompt": mcpStringFromMap(request, "negativePrompt"),
 		},
 		"aigcVideo": map[string]interface{}{
-			"requestId": request["requestId"],
-			"submitId":  mcpFirstPresent(structured, "submit_id", "submitId"),
-			"genStatus": mcpFirstPresent(structured, "gen_status", "genStatus"),
-			"provider":  providerID,
-			"raw":       structured,
+			"requestId":  request["requestId"],
+			"submitId":   mcpFirstPresent(structured, "submit_id", "submitId"),
+			"genStatus":  mcpFirstPresent(structured, "gen_status", "genStatus"),
+			"provider":   providerID,
+			"provenance": provenance,
+			"raw":        structured,
 		},
 	}
 	if media.StorageRef != "" {
@@ -1155,6 +1237,7 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 				"requestId":  request["requestId"],
 				"storageRef": media.StorageRef,
 				"provider":   providerID,
+				"provenance": provenance,
 				"raw":        structured,
 			}
 			if media.LocalPath != "" {

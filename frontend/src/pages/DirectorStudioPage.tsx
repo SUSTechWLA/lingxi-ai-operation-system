@@ -60,6 +60,7 @@ import type { AuthUser } from '../services/auth'
 import {
   buildClientModelProvidersForRun,
   checkJiMengLogin,
+  createLocalDiagnostics,
   fetchJiMengSetupStatus,
   fetchLocalArtifactFile,
   fetchModelProviderSettings,
@@ -2065,6 +2066,9 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
   const [publishContent, setPublishContent] = useState<unknown>(null)
   const [publishLoading, setPublishLoading] = useState(false)
   const [publishError, setPublishError] = useState<string | null>(null)
+  const [diagnosticsPath, setDiagnosticsPath] = useState<string | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const videoReady = video?.status === 'valid' && Boolean(video.storageRef)
   const packageReady = packageArtifact?.status === 'valid' && Boolean(packageArtifact.storageRef)
   const videoStorageRef = video?.storageRef || ''
@@ -2151,6 +2155,23 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
     const opened = await openLocalPath(videoLocalPath)
     if (!opened) setVideoPreviewError('当前浏览器环境不能打开本地文件夹，请在桌面端使用该功能。')
   }
+  const exportDiagnostics = async () => {
+    setDiagnosticsLoading(true)
+    setDiagnosticsError(null)
+    try {
+      const result = await createLocalDiagnostics(`closed-beta-export:${projectId || 'no-project'}`)
+      setDiagnosticsPath(result.path)
+    } catch (err) {
+      setDiagnosticsError(normalizeDirectorErrorMessage(err))
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }
+  const openDiagnostics = async () => {
+    if (!diagnosticsPath) return
+    const opened = await openLocalPath(diagnosticsPath)
+    if (!opened) setDiagnosticsError('当前浏览器环境不能打开诊断包，请在桌面端使用该功能。')
+  }
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
@@ -2187,6 +2208,16 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.json', json, 'application/json')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> JSON</button>
+          </div>
+        </section>
+        <section className="card p-6">
+          <h3 className="text-lg font-black text-ink">诊断包</h3>
+          <p className="mt-2 text-sm leading-6 text-ink-muted">导出 beta-diagnostics.zip，包含脱敏环境、日志、MCP 状态、artifact manifest 和 QA 报告索引。</p>
+          {diagnosticsError ? <div className="mt-3 rounded-lg bg-red-50 p-3 text-xs font-semibold text-red-700 ring-1 ring-red-200">{diagnosticsError}</div> : null}
+          {diagnosticsPath ? <div className="mt-3 truncate rounded-lg bg-background-card p-3 font-mono text-[11px] text-ink-soft ring-1 ring-line" title={diagnosticsPath}>{diagnosticsPath}</div> : null}
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button disabled={diagnosticsLoading} onClick={() => { void exportDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiArchive /> {diagnosticsLoading ? '导出中...' : '导出诊断包'}</button>
+            <button disabled={!diagnosticsPath} onClick={() => { void openDiagnostics() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开诊断包</button>
           </div>
         </section>
         <section className="card p-6">
@@ -2430,11 +2461,15 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
         <tbody className="divide-y divide-line bg-white/70">
           {artifacts.map((artifact) => {
             const active = selectedId === artifact.id
+            const provenance = artifactProvenanceSummary(artifact)
             return (
               <Fragment key={artifact.id}>
                 <tr>
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
-                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">{artifact.name}</td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <div className="font-semibold text-ink">{artifact.name}</div>
+                    {provenance ? <div className={clsx('mt-1 text-[11px] font-bold', provenance.isFallback ? 'text-amber-700' : 'text-ink-soft')}>{provenance.label}</div> : null}
+                  </td>
                   <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForArtifact(artifact.kind)}</td>
                   <td className="whitespace-nowrap px-4 py-3">
                     <StatusBadge
@@ -2464,6 +2499,11 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
                             <div className="min-w-0">
                               <div className="truncate text-sm font-black text-ink">{artifact.name}</div>
                               <div className="mt-1 truncate font-mono text-[11px] text-ink-soft">{artifact.storageRef || 'storage_ref pending'}</div>
+                              {provenance ? (
+                                <div className={clsx('mt-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1', provenance.isFallback ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-background-card text-ink-muted ring-line')}>
+                                  {provenance.detail}
+                                </div>
+                              ) : null}
                             </div>
                             {content !== null && content !== undefined ? <CopyButton value={artifactContentText(content)} label="复制正文" /> : null}
                           </div>
@@ -2813,6 +2853,36 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+}
+
+function artifactProvenanceSummary(artifact: DirectorArtifactRecord): { label: string; detail: string; isFallback: boolean } | null {
+  const metadata = artifact.metadata || {}
+  const provenance = metadata.provenance && typeof metadata.provenance === 'object'
+    ? metadata.provenance as Record<string, unknown>
+    : {}
+  const sourceType = stringFromUnknown(provenance.sourceType) || stringFromUnknown(metadata.sourceType)
+  const providerName = stringFromUnknown(provenance.providerName) || stringFromUnknown(metadata.providerName) || stringFromUnknown(artifact.metadata?.provider)
+  const providerJobId = stringFromUnknown(provenance.providerJobId) || stringFromUnknown(metadata.providerJobId)
+  const fallbackReason = stringFromUnknown(provenance.fallbackReason) || stringFromUnknown(metadata.fallbackReason)
+  const isFallback = booleanFromUnknown(provenance.isFallback) || booleanFromUnknown(metadata.isFallback) || sourceType.startsWith('fallback_')
+  if (!sourceType && !providerName && !fallbackReason) return null
+  const sourceLabel = sourceType ? sourceType.replace(/_/gu, ' ') : 'unknown source'
+  const label = isFallback ? `fallback: ${sourceLabel}` : sourceLabel
+  const parts = [
+    `来源: ${sourceLabel}`,
+    providerName ? `provider: ${providerName}` : '',
+    providerJobId ? `job: ${providerJobId}` : '',
+    fallbackReason ? `fallback reason: ${fallbackReason}` : '',
+  ].filter(Boolean)
+  return { label, detail: parts.join(' · '), isFallback }
+}
+
+function stringFromUnknown(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function booleanFromUnknown(value: unknown): boolean {
+  return value === true || value === 'true'
 }
 
 function artifactToCopyText(artifact: DirectorArtifactRecord) {
