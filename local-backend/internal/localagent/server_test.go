@@ -684,6 +684,24 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(reportDir, "shot_qa_reports.json"), []byte(`{"schemaVersion":1,"shotReports":[{"shotId":"SHOT_01","decision":"HUMAN_REVIEW"}]}`), 0o644); err != nil {
 		t.Fatalf("write QA report: %v", err)
 	}
+	pipelineReports := map[string]string{
+		"shot_list.json":                `{"shots":[{"shotId":"SHOT_01"}]}`,
+		"shot_split_report.json":        `{"policy":{"minShotDurationSec":3,"maxShotDurationSec":15}}`,
+		"shot_duration_validation.json": `{"valid":true}`,
+		"shot_candidates.json":          `{"candidates":[{"candidateId":"cand-1"}]}`,
+		"repair_plans.json":             `{"repairPlans":[{"action":"RERENDER_HTML"}]}`,
+		"accepted_shots.json":           `{"acceptedShots":[{"shotId":"SHOT_01","candidateId":"cand-2"}]}`,
+		"assembly_plan.json":            `{"steps":["FFMPEG_CONCAT","GLOBAL_SUBTITLE_RENDER"]}`,
+		"subtitle_timeline.json":        `{"scope":"global","cues":[]}`,
+		"audio_mix_plan.json":           `{"scope":"global","bgmDucking":true}`,
+		"final_qa_report.json":          `{"passed":true}`,
+		"provenance_summary.json":       `{"fallbackCount":1}`,
+	}
+	for name, body := range pipelineReports {
+		if err := os.WriteFile(filepath.Join(reportDir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write pipeline report %s: %v", name, err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(root, "logs", "failure-stack.txt"), []byte("panic: render failed\nsk-test-secret-should-redact\n"), 0o644); err != nil {
 		t.Fatalf("write failure stack: %v", err)
 	}
@@ -733,6 +751,17 @@ func TestWriteLogAndCreateDiagnostics(t *testing.T) {
 		"mcp/provider-status.json",
 		"artifacts/manifest.json",
 		"qa/shot_qa_reports.json",
+		"pipeline/vp-1/reports/video_frame_qa/shot_list.json",
+		"pipeline/vp-1/reports/video_frame_qa/shot_split_report.json",
+		"pipeline/vp-1/reports/video_frame_qa/shot_duration_validation.json",
+		"pipeline/vp-1/reports/video_frame_qa/shot_candidates.json",
+		"pipeline/vp-1/reports/video_frame_qa/repair_plans.json",
+		"pipeline/vp-1/reports/video_frame_qa/accepted_shots.json",
+		"pipeline/vp-1/reports/video_frame_qa/assembly_plan.json",
+		"pipeline/vp-1/reports/video_frame_qa/subtitle_timeline.json",
+		"pipeline/vp-1/reports/video_frame_qa/audio_mix_plan.json",
+		"pipeline/vp-1/reports/video_frame_qa/final_qa_report.json",
+		"pipeline/vp-1/reports/video_frame_qa/provenance_summary.json",
 		"failures/failure-stack.txt",
 		"logs/local-agent.jsonl",
 	} {

@@ -16,12 +16,15 @@ func TestBuildTimeWindowPlanSplitsCinematicLongShot(t *testing.T) {
 		},
 	})
 
-	if len(plan.Windows) != 4 {
-		t.Fatalf("window count = %d, want 4: %#v", len(plan.Windows), plan.Windows)
+	if len(plan.Windows) != 6 {
+		t.Fatalf("window count = %d, want 6 preferred 6-8s windows: %#v", len(plan.Windows), plan.Windows)
 	}
 	for _, window := range plan.Windows {
 		if window.DurationSec < 3 || window.DurationSec > 15 {
 			t.Fatalf("window duration outside 3-15s: %#v", window)
+		}
+		if window.DurationSec < 6 || window.DurationSec > 8 {
+			t.Fatalf("cinematic split should prefer 6-8s windows: %#v", window)
 		}
 		if window.ParentShotID != "SHOT_01" {
 			t.Fatalf("parent shot mismatch: %#v", window)
@@ -244,8 +247,8 @@ func TestBuildTimeWindowPlanTalkingHeadEligibilityBoundaries(t *testing.T) {
 		},
 	})
 
-	if len(plan.Windows) != 3 {
-		t.Fatalf("window count = %d, want 3: %#v", len(plan.Windows), plan.Windows)
+	if len(plan.Windows) != 5 {
+		t.Fatalf("window count = %d, want 5 after splitting >15s span: %#v", len(plan.Windows), plan.Windows)
 	}
 	if plan.Windows[0].DurationSec != 2 || plan.Windows[0].AIGCEligible {
 		t.Fatalf("short talking-head span should preserve duration and be ineligible: %#v", plan.Windows[0])
@@ -253,8 +256,10 @@ func TestBuildTimeWindowPlanTalkingHeadEligibilityBoundaries(t *testing.T) {
 	if !plan.Windows[1].AIGCEligible {
 		t.Fatalf("15s talking-head span should be eligible: %#v", plan.Windows[1])
 	}
-	if plan.Windows[2].AIGCEligible {
-		t.Fatalf(">15s talking-head span should be ineligible: %#v", plan.Windows[2])
+	for _, window := range plan.Windows[2:] {
+		if window.DurationSec < 3 || window.DurationSec > 15 || !window.AIGCEligible {
+			t.Fatalf(">15s talking-head span should split into eligible windows: %#v", window)
+		}
 	}
 	for _, window := range plan.Windows {
 		if window.RecommendedMode != model.GenerationModeHTMLOnly {

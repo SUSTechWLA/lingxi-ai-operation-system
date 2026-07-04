@@ -455,8 +455,8 @@ func TestTimeWindowPlannerSplitsCinematicShot(t *testing.T) {
 		t.Fatalf("time_window_planner failed: %s", result.Error)
 	}
 	windows, ok := result.Data["timeWindows"].([]map[string]interface{})
-	if !ok || len(windows) != 4 {
-		t.Fatalf("expected four time windows, got %#v", result.Data["timeWindows"])
+	if !ok || len(windows) != 6 {
+		t.Fatalf("expected six preferred-duration time windows, got %#v", result.Data["timeWindows"])
 	}
 	for _, window := range windows {
 		duration := intFromInterface(window["durationSec"], 0)

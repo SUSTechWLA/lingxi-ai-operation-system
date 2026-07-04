@@ -86,6 +86,7 @@ import {
   buildDirectorStages,
   buildDirectorTraceNodes,
   buildExternalGenerationTaskPackage,
+  buildProjectAssemblySummary,
   buildPublishCopies,
   buildShotReviewGroups,
   deriveNextAction,
@@ -956,6 +957,8 @@ function OverviewPage(props: {
   const { topic, durationSec, primaryAction, overviewStatus, stages, artifacts, preflight, selectedProfile, profileOptions, environmentChecklist, jimengSetupStatus, jimengSetupLoading, jimengSetupError, useJiMengMCP, jimengReady, nextAction, onTopicChange, onDurationChange, onProfileChange, onToggleJiMengMCP, onRefreshJiMeng, onInstallJiMengCLI, onRegisterJiMengMCP, onStart, onStop, onOpenSettings, onGoReview } = props
   const staleNames = artifacts.filter((artifact) => artifact.status === 'stale').map((artifact) => artifact.name)
   const isStopAction = primaryAction.kind === 'stop'
+  const shotGroups = useMemo(() => buildShotReviewGroups(artifacts), [artifacts])
+  const assemblySummary = useMemo(() => buildProjectAssemblySummary(shotGroups, artifacts), [artifacts, shotGroups])
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-12 gap-5">
@@ -1045,6 +1048,26 @@ function OverviewPage(props: {
       />
       <EnvironmentChecklistPanel items={environmentChecklist} onOpenSettings={onOpenSettings} />
       <StageFlow stages={stages} />
+      {shotGroups.length > 0 && (
+        <section className="card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold text-primary-dark">Final assembly</p>
+              <h3 className="mt-1 text-lg font-black text-ink">Accepted shots / final QA / provenance</h3>
+            </div>
+            <StatusBadge status={assemblySummary.allShotsAccepted ? 'valid' : 'review'} label={assemblySummary.allShotsAccepted ? 'all shots accepted' : 'waiting shots'} />
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <AssemblyMetric label="Shots" value={`${assemblySummary.acceptedShotCount}/${assemblySummary.totalShotCount}`} />
+            <AssemblyMetric label="Assembly" value={assemblySummary.finalAssemblyStatus} />
+            <AssemblyMetric label="Final QA" value={assemblySummary.finalQAStatus} />
+            <AssemblyMetric label="Provenance" value={`${assemblySummary.finalVideoSourceType || 'pending'}${assemblySummary.finalVideoIsFallback ? ' fallback' : ''}`} />
+          </div>
+          <p className="mt-3 text-xs font-semibold text-ink-muted">
+            AIGC video {assemblySummary.realAIGCVideoCount} · fallback {assemblySummary.fallbackCount}
+          </p>
+        </section>
+      )}
       {staleNames.length > 0 && (
         <div className="card border-red-200 bg-red-50/80 p-5">
           <h3 className="text-base font-black text-red-800">下游产物已过期，需要重新生成</h3>
@@ -1124,6 +1147,15 @@ function environmentStatusLabel(status: EnvironmentChecklistItem['status']) {
   if (status === 'blocked') return '待处理'
   if (status === 'warning') return '注意'
   return '检测中'
+}
+
+function AssemblyMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-background-card p-3 ring-1 ring-line">
+      <div className="text-[11px] font-black text-primary-dark">{label}</div>
+      <div className="mt-1 truncate text-sm font-black text-ink" title={value}>{value}</div>
+    </div>
+  )
 }
 
 function StageFlow({ stages }: { stages: DirectorStage[] }) {
@@ -1708,6 +1740,11 @@ function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { arti
               <StatusBadge status={group.status} />
             </div>
             {group.narrationText ? <p className="mt-3 line-clamp-2 text-sm leading-6 text-ink-muted">{group.narrationText}</p> : null}
+            <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] font-black">
+              {group.production.qaStatus ? <span className="rounded bg-white px-2 py-1 text-primary-dark ring-1 ring-line">{group.production.qaStatus}</span> : null}
+              <span className="rounded bg-white px-2 py-1 text-ink-muted ring-1 ring-line">{group.production.attemptCount} attempts</span>
+              {group.production.isFallback ? <span className="rounded bg-amber-50 px-2 py-1 text-amber-800 ring-1 ring-amber-100">fallback</span> : null}
+            </div>
             <div className="mt-3 grid grid-cols-2 gap-1 text-center text-[10px] font-black text-ink-muted sm:grid-cols-3">
               {group.slots.map((slot) => (
                 <span key={slot.kind} className={clsx('rounded px-2 py-1 ring-1', slot.status === 'valid' ? 'bg-green-50 text-green-700 ring-green-100' : slot.status === 'review' ? 'bg-amber-50 text-primary-dark ring-amber-100' : 'bg-background-card ring-line')}>
@@ -1726,10 +1763,24 @@ function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { arti
               <h4 className="mt-1 text-lg font-black text-ink [overflow-wrap:anywhere]">{openGroup.title}</h4>
               <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-bold text-ink-muted">
                 {openGroup.durationSec ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">{openGroup.durationSec}s</span> : null}
+                {openGroup.production.qaStatus ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">QA {openGroup.production.qaStatus}</span> : null}
+                <span className="rounded bg-white px-2 py-1 ring-1 ring-line">尝试 {openGroup.production.attemptCount}</span>
+                {openGroup.production.latestCandidateId ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">latest {openGroup.production.latestCandidateId}</span> : null}
+                {openGroup.production.acceptedCandidateId ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">accepted {openGroup.production.acceptedCandidateId}</span> : null}
+                {openGroup.production.repairPlanAction ? <span className="rounded bg-white px-2 py-1 ring-1 ring-line">repair {openGroup.production.repairPlanAction}</span> : null}
+                {openGroup.production.sourceType ? <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.isFallback ? 'bg-amber-50 text-amber-800 ring-amber-100' : 'bg-white ring-line')}>{openGroup.production.sourceType}</span> : null}
+                <span className={clsx('rounded px-2 py-1 ring-1', openGroup.production.canEnterAssembly ? 'bg-green-50 text-green-700 ring-green-100' : 'bg-background-card ring-line')}>{openGroup.production.canEnterAssembly ? '可拼接' : '待通过'}</span>
                 <span className="rounded bg-white px-2 py-1 ring-1 ring-line">产物 {openGroup.artifactCounts.total}</span>
                 <span className="rounded bg-white px-2 py-1 ring-1 ring-line">参考 {openGroup.artifactCounts.references}</span>
                 <span className="rounded bg-white px-2 py-1 ring-1 ring-line">媒体 {openGroup.artifactCounts.media}</span>
               </div>
+              {openGroup.production.lockedDimensions.length ? (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-bold text-ink-muted">
+                  {openGroup.production.lockedDimensions.map((dimension) => (
+                    <span key={dimension} className="rounded bg-green-50 px-2 py-1 text-green-700 ring-1 ring-green-100">lock {dimension}</span>
+                  ))}
+                </div>
+              ) : null}
               {openGroup.generationStrategy && (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-primary-soft px-3 py-1 text-xs font-black text-primary-dark">

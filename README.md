@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.10-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.11-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -33,10 +33,11 @@
 
 ## 当前版本
 
-**v0.1.10 - Initial closed beta launch**
+**v0.1.11 - Closed beta shot pipeline hardening**
 
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
-- 无真实 AIGC provider 时可以跑通 fallback preview、shot QA report 和 machine-readable repairPlan。
+- 视频流水线已对齐 shot 级生产闭环：语义/画面变化切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。
+- 无真实 AIGC provider 时可以跑通 fallback preview、shot QA report、machine-readable repairPlan、accepted shot provenance 和 final assembly diagnostics。
 - 当前 release 分支可作为初版受控内测上线基线，用于技术型用户安装、诊断、反馈和小范围创作者试用。
 - 邀请真实创作者前，必须在完整本地环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
 
@@ -67,12 +68,12 @@
 
 | 能力 | 体验结果 |
 |---|---|
-| 影视化 / AIGC shot 视频 | 从故事大纲、详细剧本、角色/场景/道具档案、多视角参考图到 shot 级生成提示词和 QA |
+| 影视化 / AIGC shot 视频 | 从故事大纲、详细剧本、角色/场景/道具档案、多视角参考图到语义 shot 切分、candidate 生成、shot 级 QA 和返修 |
 | 口播 / 知识类视频 | 先生成口播稿，再按口播设计 HyperFrames、录屏、AIGC 图片/视频素材和最终成片 |
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
-| Shot 级抽帧 QA | 渲染后按 shot 聚合剧本匹配、参考覆盖、动作节拍、文字安全区和画面复杂度指标，输出返修决策 |
+| Shot 级抽帧 QA | 每个 shot candidate 独立 QA，失败后生成保守 repairPlan，只有通过或人工批准的 candidate 才能进入 final assembly |
 | 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
 
 ## 创作流程
@@ -81,13 +82,17 @@
 flowchart LR
   A["一句话视频需求"] --> B["云端 Agent 编排"]
   B --> C["方案 / 脚本 / 分镜"]
-  C --> D["人工审核"]
-  D --> E["AIGC 素材或手动上传"]
-  E --> F["本地预览项目"]
-  F --> G["确认后渲染成片"]
-  G --> H["抽帧 QA / Contact Sheet"]
-  H --> I["发布文案与交付包"]
+  C --> D["语义 Shot 切分 3-15 秒"]
+  D --> E["Shot candidate 生成"]
+  E --> F["Shot QA / Repair loop"]
+  F --> G["Accepted shots gate"]
+  G --> H["FFmpeg 拼接 + 全局音频字幕"]
+  H --> I["Final QA / 交付包"]
 ```
+
+Shot split policy 固定为 `minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。切分优先参考剧情节点、场景、主体、动作、景别、视角、焦段、情绪节奏和旁白/对白语义段落；超过 15 秒必须继续拆分，短于 3 秒只在连续且合并后不超过 15 秒时合并。
+
+成片阶段只消费 accepted shot candidate。最终 voiceover、BGM、ducking、字幕时间轴、响度、转码和 final QA 在 final assembly 阶段统一处理，不在每个 shot 内烧录最终字幕或混最终 BGM。
 
 ## 产品架构
 

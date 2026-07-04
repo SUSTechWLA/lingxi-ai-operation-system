@@ -1,18 +1,24 @@
 # 视频抽帧 QA Wiki
 
-本文说明 v0.1.10 的成片视觉 QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤、画面复杂度、剧本匹配、素材 provenance 和 shot 规格风险提前暴露出来，并把每个 shot 的问题量化成可用于返修的机器可读结论。
+本文说明 v0.1.11 的 shot 级视频 QA 和 final assembly QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤、画面复杂度、剧本匹配、素材 provenance 和 shot 规格风险提前暴露出来，并把每个 shot candidate 的问题量化成可用于保守返修的机器可读结论。
 
 ## 流程位置
 
-视频创作 DAG 中，QA 位于本地渲染之后、发布文案之前：
+视频创作 DAG 中，QA 分为 shot candidate QA 和 final video QA：
 
 ```mermaid
-flowchart LR
-  A["脚本 / 分镜 / 提示词"] --> B["预览审核"]
-  B --> C["本地渲染 final.mp4"]
-  C --> D["VIDEO_FRAME_QA 抽帧"]
-  D --> E["视觉 QA 人工审核门"]
-  E --> F["发布文案 / 交付包"]
+flowchart TD
+  A["脚本 / 分镜 / 提示词"] --> B["SEMANTIC_SHOT_SPLIT"]
+  B --> C["SHOT_RENDER_CANDIDATE"]
+  C --> D["VIDEO_FRAME_QA shot 抽帧"]
+  D -->|"failed"| E["repairPlan"]
+  E --> F["下一候选 candidate"]
+  F --> D
+  D -->|"passed / human approved"| G["ACCEPTED_FOR_ASSEMBLY"]
+  G --> H["FFmpeg normalize + concat"]
+  H --> I["全局 voiceover / BGM / subtitle"]
+  I --> J["FINAL_VIDEO_QA"]
+  J --> K["发布文案 / 交付包"]
 ```
 
 `visual_qa` 是系统自动补入的节点。用户不需要在提示词里要求 QA，只要走动态视频创作链路，render 成功后就会进入抽帧检查。
@@ -27,6 +33,20 @@ local runner VIDEO_FRAME_QA
 
 Go executor 只负责路径校验、`local://` 解析和 MCP 调用。抽帧、contact sheet、shot-level QA、`ShotQAReport` 和 `SHOT_REPAIR_PLAN` 都由 Python MCP server 生成。后续 OCR、ASR、PyIQA、VLM judge 等重媒体能力应继续加在 `mcp/video_qa/`，不要回到 Go 本地工具里直接堆实现。
 
+## Shot Split Policy
+
+系统的 shot split policy 是 closed beta 的硬约束：
+
+| 字段 | 值 |
+|---|---|
+| `minShotDurationSec` | `3` |
+| `maxShotDurationSec` | `15` |
+| `preferredShotDurationSec` | `6-8` |
+| `splitByScriptSemantics` | `true` |
+| `splitByVisualChange` | `true` |
+
+一个 shot 应尽量对应一个相对完整画面单元：同一场景、同一主体、同一动作、同一镜头意图、同一或相近景别、同一情绪节奏、同一段旁白/对白含义。切分优先参考剧情节点、场景变化、人物切换、动作目标变化、景别变化、视角/焦段变化、时间跳转、情绪明显变化、信息点切换和画面内容大幅变化。超过 15 秒必须继续拆分；短于 3 秒只在剧情和画面连续且合并后不超过 15 秒时合并。
+
 ## 产物
 
 本地工具 `VIDEO_FRAME_QA` 会写入：
@@ -36,6 +56,16 @@ Go executor 只负责路径校验、`local://` 解析和 MCP 调用。抽帧、c
 | JSON 报告 | `local://projects/<projectId>/reports/video_frame_qa/video_frame_qa.json` | 结构化分数、问题、抽帧指标 |
 | Shot QA 报告 | `local://projects/<projectId>/reports/video_frame_qa/shot_qa_reports.json` | 每个 shot 的 `ShotQAReport`、fatal gate、分项分数和工具级修复计划 |
 | Shot 返修计划 | `local://projects/<projectId>/reports/video_frame_qa/shot_repair_plan.json` | 聚合后的 shot 决策和 repair action 映射 |
+| Shot 列表 | `local://projects/<projectId>/reports/video_frame_qa/shot_list.json` | 当前项目 shot 单元，含 duration、narration、scene、subject、action、camera 等 |
+| Shot 切分报告 | `local://projects/<projectId>/reports/video_frame_qa/shot_split_report.json` | 切分 policy、语义/画面切分原因、forced split/merge 记录 |
+| Shot 时长校验 | `local://projects/<projectId>/reports/video_frame_qa/shot_duration_validation.json` | 每个 shot 的 3-15 秒校验结果 |
+| Shot candidates | `local://projects/<projectId>/reports/video_frame_qa/shot_candidates.json` | 每个 candidate 的 `attemptIndex`、状态、artifact refs 和独立 QA report |
+| Accepted shots | `local://projects/<projectId>/reports/video_frame_qa/accepted_shots.json` | final assembly 可以消费的 accepted candidate 列表 |
+| Assembly plan | `local://projects/<projectId>/reports/video_frame_qa/assembly_plan.json` | normalize、concat、global audio/subtitle、final QA/export 计划 |
+| Subtitle timeline | `local://projects/<projectId>/reports/video_frame_qa/subtitle_timeline.json` | 使用最终全局时间轴的字幕 cue |
+| Audio mix plan | `local://projects/<projectId>/reports/video_frame_qa/audio_mix_plan.json` | 全局 voiceover 对齐、BGM ducking、响度目标 |
+| Final QA report | `local://projects/<projectId>/reports/video_frame_qa/final_qa_report.json` | final video 的 QA 结果，失败时阻断 export/publish |
+| Provenance summary | `local://projects/<projectId>/reports/video_frame_qa/provenance_summary.json` | raw/repaired/accepted/normalized/concat/final artifact 统计和 source type |
 | Contact sheet | `local://projects/<projectId>/reports/video_frame_qa/contact_sheet.jpg` | 人工快速浏览所有采样帧 |
 | 单帧图片 | `local://projects/<projectId>/reports/video_frame_qa/frames/frame_*.png` | 定位具体问题帧 |
 
@@ -71,7 +101,7 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 | `scores` | `mediaSpec`、`textLayout`、`imageQuality`、`temporalStability`、`promptAlignment`、`continuity` 等分项分数 |
 | `hardMetrics` | 从抽帧和 spec lint 得到的硬指标，例如文字安全区密度、底部区域密度、时长、画面文字长度 |
 | `issues` | 带证据和修复建议的问题列表 |
-| `repairPlan` | 工具级修复计划，包含 `schemaVersion`、`action`、`targetShotId`、`candidateId`、`toolOverrides`、`renderStrategyPatch`、`visualPlanPatch`、`promptPatch` |
+| `repairPlan` | 工具级修复计划，包含 `schemaVersion`、`action`、`reason`、`severity`、`targetShotId`、`sourceCandidateId`、`attemptIndex`、`preserve`、`lockedDimensions`、`repairTargets`、`promptPatch`、`renderStrategyPatch`、`nextToolCall` |
 | `artifactRefs` | 当前 shot 相关素材引用，含 fallback / AIGC provenance 时用于反向指导重生成 |
 | `timestamps` | QA 采样时间点和报告生成时间 |
 | `shotSpecLint` | 生成前规格检查结果，用来发现过长 shot、精确文字、长画面文本和 continuity reference 需求 |
@@ -98,6 +128,40 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 | `referenceCoverageCount` | 绑定的角色、场景、道具参考资产数量 |
 | `actionBeatCount` | shot 内动作节拍数量 |
 
+## Candidate QA 和 Repair Loop
+
+Shot candidate 不会被覆盖。每次修复或重生都会生成新的 candidate，并记录独立 `attemptIndex` 与 QA report：
+
+```text
+PLANNED
+  -> GENERATING
+  -> CANDIDATE_RENDERED
+  -> SHOT_QA_RUNNING
+  -> SHOT_QA_PASSED / SHOT_QA_FAILED / HUMAN_REVIEW_REQUIRED
+  -> ACCEPTED_FOR_ASSEMBLY
+```
+
+失败时进入有限循环：
+
+```text
+SHOT_QA_FAILED
+  -> CREATE_REPAIR_PLAN
+  -> APPLY_REPAIR_PLAN
+  -> RENDER_NEXT_CANDIDATE
+  -> SHOT_QA_AGAIN
+```
+
+默认策略：
+
+| 字段 | 值 |
+|---|---|
+| `maxRepairAttemptsPerShot` | `3` |
+| `maxAigcRegenerationAttemptsPerShot` | `2` |
+| `preferLocalRepairBeforeAigcRegen` | `true` |
+| `preservePassedDimensions` | `true` |
+
+如果 `prompt_alignment`、`character_identity`、`scene`、`action`、`text_intent`、`duration` 或 `style` 已通过，repair plan 会把这些维度写入 `lockedDimensions`，只修复失败项。字幕、文字安全区和排版问题优先 `RERENDER_HTML` / `RECOMPOSITE`；final subtitle、BGM、voiceover、音量和响度问题延期到 final assembly；轻微画面问题只做小幅 `promptPatch`；严重人物崩坏、主体错误、动作失败或时序跳变才使用 `REGEN_AIGC` / `REGEN_AIGC_WITH_REFERENCE`；reference 缺失、provider 不可用、额度不足或多次失败进入 `HUMAN_REVIEW`。
+
 顶层 `repairPlan` 会把所有 shot 聚合成下一步动作：
 
 - `approve`：所有 shot 通过，可以继续发布。
@@ -116,6 +180,46 @@ Closed beta 当前确定性映射：
 | provider prompt 泄漏 `ffmpeg`、`AIGC_VIDEO`、`artifact` 等内部术语 | `REVISE_SHOT_SPEC` | `PROMPT_PATCH_REGEN` |
 | 画面复杂度、叠层或合成风险 | `RECOMPOSITE` | `RECOMPOSITE`，并带 `toolAction=FFMPEG_RECOMPOSITE` |
 | 严重渲染失败或指标不足以自动判断 | `HUMAN_REVIEW` | `HUMAN_REVIEW` |
+
+## Final Assembly QA
+
+Final assembly 只能消费 accepted shot candidate。进入拼接前，每个 accepted shot 必须满足：
+
+- `durationSec` 在 3-15 秒内。
+- `acceptedCandidateId` 指向存在的 candidate。
+- candidate QA 为 passed，或已人工批准。
+- candidate 不是失败 candidate。
+
+Final assembly 的标准步骤是：
+
+```text
+ALL_SHOTS_ACCEPTED_GATE
+  -> NORMALIZE_ACCEPTED_SHOTS
+  -> FFMPEG_CONCAT
+  -> GLOBAL_VOICEOVER_ALIGN
+  -> GLOBAL_BGM_MIX_AND_DUCKING
+  -> GLOBAL_SUBTITLE_RENDER
+  -> FINAL_VIDEO_QA
+  -> EXPORT / PUBLISH
+```
+
+FFmpeg concat 前先统一 resolution、fps、pixel format 和 codec。Voiceover、BGM、ducking、响度、最终字幕和最终转码在全局时间轴统一处理，不在每个 shot 内分别混最终 BGM 或烧录最终字幕。final QA failed 时，系统不能 export/publish。
+
+## Artifact Provenance
+
+诊断和前端都必须能区分 artifact 来源：
+
+| Source type | 说明 |
+|---|---|
+| `aigc_video` | 真实 AIGC 视频输出 |
+| `aigc_image` | 真实 AIGC 图片输出 |
+| `hyperframes` | HyperFrames 预览或合成 |
+| `ffmpeg_composite` | FFmpeg 合成/拼接/转码产物 |
+| `uploaded` | 用户上传素材 |
+| `fallback_preview` | 本地 fallback 预览，不是真实 AIGC |
+| `fallback_storyboard` | 本地 fallback storyboard，不是真实 AIGC |
+
+artifact manifest 会追踪 raw shot candidate、repaired shot candidate、accepted shot、normalized shot clip、concat video、final audio mix、final subtitle track 和 final video。`fallback_preview` 与 `fallback_storyboard` 不能计入真实 AIGC 成果。
 
 ## 检查维度
 

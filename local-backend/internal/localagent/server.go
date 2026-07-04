@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-const defaultAppVersion = "0.1.10"
+const defaultAppVersion = "0.1.11"
 
 type Config struct {
 	DataDir       string
@@ -649,6 +649,9 @@ func (s *Server) createDiagnosticsZip(path, reason string, createdAt time.Time) 
 	if err := s.addDiagnosticQAReports(zw); err != nil {
 		return err
 	}
+	if err := s.addDiagnosticPipelineReports(zw); err != nil {
+		return err
+	}
 	if err := s.addDiagnosticFailureStacks(zw); err != nil {
 		return err
 	}
@@ -865,6 +868,35 @@ func (s *Server) addDiagnosticQAReports(zw *zip.Writer) error {
 		}
 		added = true
 		return addRedactedFileToZip(zw, name, path)
+	})
+}
+
+func (s *Server) addDiagnosticPipelineReports(zw *zip.Writer) error {
+	known := map[string]bool{
+		"shot_list.json":                true,
+		"shot_split_report.json":        true,
+		"shot_duration_validation.json": true,
+		"shot_candidates.json":          true,
+		"shot_qa_reports.json":          true,
+		"repair_plans.json":             true,
+		"shot_repair_plan.json":         true,
+		"accepted_shots.json":           true,
+		"assembly_plan.json":            true,
+		"subtitle_timeline.json":        true,
+		"audio_mix_plan.json":           true,
+		"final_qa_report.json":          true,
+		"artifact_manifest.json":        true,
+		"provenance_summary.json":       true,
+	}
+	return filepath.WalkDir(s.paths.ProjectDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !known[d.Name()] {
+			return nil
+		}
+		rel, relErr := filepath.Rel(s.paths.ProjectDir, path)
+		if relErr != nil {
+			return relErr
+		}
+		return addRedactedFileToZip(zw, "pipeline/"+filepath.ToSlash(rel), path)
 	})
 }
 

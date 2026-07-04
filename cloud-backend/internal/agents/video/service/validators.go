@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -15,11 +16,15 @@ type ValidationIssue struct {
 }
 
 func CheckShotDuration(shot model.ShotUnit) []ValidationIssue {
-	if shot.DurationSec < 3 || shot.DurationSec > 15 {
+	return CheckShotDurationSec(shot.ID, float64(shot.DurationSec))
+}
+
+func CheckShotDurationSec(shotID string, durationSec float64) []ValidationIssue {
+	if durationSec < 3 || durationSec > 15 || math.IsNaN(durationSec) || math.IsInf(durationSec, 0) {
 		return []ValidationIssue{{
 			Code:     "shot_duration_out_of_range",
 			Field:    "durationSec",
-			Message:  fmt.Sprintf("shot duration must be between 3 and 15 seconds, got %d", shot.DurationSec),
+			Message:  fmt.Sprintf("shot duration must be between 3 and 15 seconds, got %.2f for %s", durationSec, shotID),
 			Severity: "error",
 		}}
 	}
@@ -142,37 +147,6 @@ func CheckAIGCPromptNoText(strategy model.RenderStrategy, prompt string) []Valid
 	return nil
 }
 
-func CheckFinalAssembly(shots []model.ShotUnit) []ValidationIssue {
-	issues := make([]ValidationIssue, 0)
-	for _, shot := range shots {
-		if shot.ReviewStatus != model.ReviewStatusApproved {
-			issues = append(issues, ValidationIssue{
-				Code:     "final_assembly_requires_approved_shot",
-				Field:    "reviewStatus",
-				Message:  "final assembly can only use approved shots: " + shot.ID,
-				Severity: "error",
-			})
-		}
-		if shot.Stale {
-			issues = append(issues, ValidationIssue{
-				Code:     "final_assembly_rejects_stale_shot",
-				Field:    "stale",
-				Message:  "final assembly cannot use stale shots: " + shot.ID,
-				Severity: "error",
-			})
-		}
-		if !hasUsableShotVideo(shot.ArtifactRefs) {
-			issues = append(issues, ValidationIssue{
-				Code:     "final_assembly_requires_shot_video",
-				Field:    "artifactRefs",
-				Message:  "final assembly requires a shot video artifact: " + shot.ID,
-				Severity: "error",
-			})
-		}
-	}
-	return issues
-}
-
 func hasExactText(plan model.VisualPlan) bool {
 	if len(plan.UILayers) > 0 || len(plan.DataVisuals) > 0 {
 		return true
@@ -192,13 +166,6 @@ func textLayerContains(layers []model.TextLayerSpec, text string) bool {
 		}
 	}
 	return false
-}
-
-func hasUsableShotVideo(refs model.ShotArtifactRefs) bool {
-	return refs.CompositedShotVideoArtifactID != "" ||
-		refs.AIGCBackgroundVideoArtifactID != "" ||
-		refs.VideoClipArtifactID != "" ||
-		refs.HTMLPreviewVideoArtifactID != ""
 }
 
 func containsAny(value string, needles ...string) bool {

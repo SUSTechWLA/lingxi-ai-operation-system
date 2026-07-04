@@ -362,18 +362,27 @@ def _decision_for_summary(summary: dict[str, Any], lint: dict[str, Any] | None =
 
 
 def _repair_plan(decision: str, summary: dict[str, Any], lint: dict[str, Any] | None = None) -> dict[str, Any]:
+    failed_dimensions = _failed_dimensions(summary, lint)
+    locked_dimensions = _locked_dimensions(summary, lint, failed_dimensions)
     plan: dict[str, Any] = {
         "schemaVersion": 1,
         "action": decision,
         "priority": 0 if decision == "PASS" else 2 if decision in {"PASS_WITH_FIX", "HUMAN_REVIEW"} else 1,
+        "severity": "none" if decision == "PASS" else "medium" if decision in {"PASS_WITH_FIX", "RERENDER_HTML", "RECOMPOSITE"} else "high",
+        "attemptIndex": int(_number(summary.get("attemptIndex"), 0)) + 1,
+        "preserve": True,
+        "lockedDimensions": locked_dimensions,
+        "repairTargets": failed_dimensions,
         "toolOverrides": {},
         "renderStrategyPatch": {},
         "visualPlanPatch": {},
         "promptPatch": {},
+        "nextToolCall": _next_tool_call(decision),
         "recommendedNextStage": "quality_gate",
     }
     if lint and lint.get("repairActionHint"):
         plan["action"] = str(lint["repairActionHint"])
+        plan["nextToolCall"] = _next_tool_call(plan["action"])
     if decision == "PASS":
         plan["reason"] = "shot 级 QA 通过，无需工具返工。"
     elif decision in {"RERENDER_HTML", "PASS_WITH_FIX"}:
@@ -431,6 +440,65 @@ def _repair_plan(decision: str, summary: dict[str, Any], lint: dict[str, Any] | 
     if lint and lint.get("requiredAssets"):
         plan["requiredAssets"] = lint["requiredAssets"]
     return plan
+
+
+def _failed_dimensions(summary: dict[str, Any], lint: dict[str, Any] | None = None) -> list[str]:
+    explicit = summary.get("failedDimensions")
+    if isinstance(explicit, list):
+        return _unique([str(item) for item in explicit])
+    dims: list[str] = []
+    codes = _issue_codes(summary)
+    if {"top_left_text_zone_crowded", "lower_third_text_zone_crowded", "top_left_text_zone_busy", "lower_third_text_zone_busy"} & codes:
+        dims.append("text_intent")
+    if {"render_output_missing", "render_failed", "ffmpeg_failed", "video_file_unreadable"} & codes:
+        dims.append("render_output")
+    if lint:
+        warnings = set(lint.get("generationWarnings", []))
+        if "duration_outside_3_15s" in warnings:
+            dims.append("duration")
+        if "provider_prompt_contains_internal_jargon" in warnings or lint.get("repairActionHint") == "PROMPT_PATCH_REGEN":
+            dims.append("prompt_alignment")
+        if "reference_assets_missing" in warnings:
+            dims.extend(["character_identity", "scene"])
+        if "action_beats_missing" in warnings:
+            dims.append("action")
+    if int(summary.get("blockingIssueCount", 0) or 0) > 0 and not dims:
+        dims.append("composite")
+    return _unique(dims)
+
+
+def _locked_dimensions(summary: dict[str, Any], lint: dict[str, Any] | None, failed_dimensions: list[str]) -> list[str]:
+    explicit = summary.get("passedDimensions")
+    if isinstance(explicit, list):
+        return _unique([str(item) for item in explicit if str(item) not in failed_dimensions])
+    failed = set(failed_dimensions)
+    scores = _scores(summary, lint)
+    candidates: list[str] = []
+    if scores.get("promptAlignment", 0) >= 80:
+        candidates.append("prompt_alignment")
+    if scores.get("continuity", 0) >= 80:
+        candidates.extend(["character_identity", "scene", "action"])
+    if scores.get("textLayout", 0) >= 85:
+        candidates.append("text_intent")
+    if scores.get("mediaSpec", 0) >= 85:
+        candidates.append("duration")
+    if scores.get("imageQuality", 0) >= 85:
+        candidates.append("style")
+    return _unique([item for item in candidates if item not in failed])
+
+
+def _next_tool_call(action: str) -> str:
+    return {
+        "PASS": "QUALITY_GATE",
+        "PASS_WITH_FIX": "RERENDER_HTML",
+        "RERENDER_HTML": "RERENDER_HTML",
+        "RECOMPOSITE": "FFMPEG_RECOMPOSITE",
+        "REVISE_SHOT_SPEC": "REVISE_SHOT_SPEC",
+        "PROMPT_PATCH_REGEN": "PROMPT_PATCH_REGEN",
+        "REGEN_AIGC": "REGEN_AIGC",
+        "REGEN_AIGC_WITH_REFERENCE": "REGEN_AIGC_WITH_REFERENCE",
+        "HUMAN_REVIEW": "HUMAN_REVIEW",
+    }.get(str(action), "HUMAN_REVIEW")
 
 
 def _scores(summary: dict[str, Any], lint: dict[str, Any] | None = None) -> dict[str, int]:
@@ -548,6 +616,7 @@ def build_shot_reports(
         repair = _repair_plan(decision, summary, lint)
         repair["targetShotId"] = shot_id
         repair["candidateId"] = candidate_id
+        repair["sourceCandidateId"] = candidate_id
         report = {
             "schemaVersion": 1,
             "projectId": project_id,
@@ -591,6 +660,7 @@ def build_shot_reports(
         repair = _repair_plan(decision, summary, lint)
         repair["targetShotId"] = shot_id
         repair["candidateId"] = candidate_id
+        repair["sourceCandidateId"] = candidate_id
         generated_at = _now_iso()
         reports.append(
             {

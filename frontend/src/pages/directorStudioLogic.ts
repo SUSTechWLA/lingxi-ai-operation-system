@@ -162,8 +162,33 @@ export interface DirectorShotReviewGroup {
     media: number
     reviewPackets: number
   }
+  production: DirectorShotProductionSummary
   artifacts: DirectorArtifactRecord[]
   slots: DirectorShotAssetSlot[]
+}
+
+export interface DirectorShotProductionSummary {
+  qaStatus: string
+  attemptCount: number
+  latestCandidateId: string
+  repairPlanAction: string
+  lockedDimensions: string[]
+  acceptedCandidateId: string
+  sourceType: string
+  isFallback: boolean
+  canEnterAssembly: boolean
+}
+
+export interface DirectorAssemblySummary {
+  allShotsAccepted: boolean
+  acceptedShotCount: number
+  totalShotCount: number
+  finalAssemblyStatus: string
+  finalQAStatus: string
+  finalVideoSourceType: string
+  finalVideoIsFallback: boolean
+  realAIGCVideoCount: number
+  fallbackCount: number
 }
 
 export type DirectorShotAssetSlotKind = 'prompt' | 'reference' | 'storyboard' | 'video' | 'base-media' | 'overlay'
@@ -1136,10 +1161,46 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
           media: media.length,
           reviewPackets: shotArtifacts.filter(isShotReviewPacket).length,
         },
+        production: shotProductionSummary(shotArtifacts),
         artifacts: shotArtifacts,
         slots: buildShotAssetSlots(shotArtifacts),
       }
     })
+}
+
+export function buildProjectAssemblySummary(groups: DirectorShotReviewGroup[], artifacts: DirectorArtifactRecord[]): DirectorAssemblySummary {
+  const finalVideo = findFinalVideoArtifact(artifacts)
+  const finalVideoMetadata = finalVideo?.metadata || {}
+  const finalVideoProvenance = objectValue(finalVideoMetadata.provenance) || finalVideoMetadata
+  const finalVideoSourceType = firstString(finalVideoProvenance, ['sourceType']) || firstString(finalVideoMetadata, ['sourceType'])
+  const finalVideoIsFallback = booleanValue(finalVideoProvenance.isFallback) === true ||
+    booleanValue(finalVideoMetadata.isFallback) === true ||
+    finalVideoSourceType.startsWith('fallback_')
+  const finalQAArtifact = artifacts.find((artifact) => {
+    const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
+    return artifact.kind === 'FINAL_REVIEW' ||
+      artifact.kind === 'VIDEO_VISUAL_QA_REPORT' ||
+      artifactType === 'final_qa_report' ||
+      artifactType === 'final_review'
+  })
+  const finalQAStatus = finalQAArtifact
+    ? firstString(finalQAArtifact.metadata || {}, ['finalQaStatus', 'qaStatus', 'status']) || (finalQAArtifact.status === 'valid' ? 'passed' : finalQAArtifact.status)
+    : 'pending'
+  const acceptedShotCount = groups.filter((group) => group.production.canEnterAssembly).length
+  const fallbackCount = groups.filter((group) => group.production.isFallback).length + (finalVideoIsFallback ? 1 : 0)
+  const realAIGCVideoCount = groups.filter((group) => group.production.sourceType === 'aigc_video' && !group.production.isFallback).length
+  const allShotsAccepted = groups.length > 0 && acceptedShotCount === groups.length
+  return {
+    allShotsAccepted,
+    acceptedShotCount,
+    totalShotCount: groups.length,
+    finalAssemblyStatus: allShotsAccepted ? 'ready' : groups.length ? 'blocked' : 'pending',
+    finalQAStatus,
+    finalVideoSourceType,
+    finalVideoIsFallback,
+    realAIGCVideoCount,
+    fallbackCount,
+  }
 }
 
 function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotAssetSlot[] {
@@ -1207,6 +1268,100 @@ function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotA
 
 export function unresolvedMaterialDependencyCount(groups: DirectorShotReviewGroup[]): number {
   return groups.reduce((total, group) => total + group.slots.reduce((slotTotal, slot) => slotTotal + slot.dependencyRequests.length, 0), 0)
+}
+
+function shotProductionSummary(artifacts: DirectorArtifactRecord[]): DirectorShotProductionSummary {
+  const candidates = artifacts.flatMap(candidateRecordsForArtifact)
+  const latestCandidate = candidates
+    .map((candidate, index) => ({ candidate, index, attempt: numberValue(candidate.attemptIndex) ?? numberValue(candidate.attempt) ?? index }))
+    .sort((a, b) => b.attempt - a.attempt || b.index - a.index)[0]?.candidate
+  const metadataRecords = artifacts.map((artifact) => artifact.metadata || {})
+  const acceptedCandidateId = firstNonEmpty([
+    ...metadataRecords.map((metadata) => firstString(metadata, ['acceptedCandidateId', 'accepted_candidate_id'])),
+    latestCandidate ? firstString(latestCandidate, ['acceptedCandidateId', 'candidateId', 'id']) : '',
+  ])
+  const qaStatus = firstNonEmpty([
+    ...metadataRecords.map((metadata) => firstString(metadata, ['qaStatus', 'shotQaStatus', 'status'])),
+    latestCandidate ? firstString(latestCandidate, ['status', 'qaStatus']) : '',
+  ])
+  const repairPlan = firstObject([
+    ...metadataRecords.map((metadata) => objectValue(metadata.repairPlan) || objectValue(metadata.latestRepairPlan)),
+    latestCandidate ? objectValue(latestCandidate.repairPlan) : undefined,
+  ])
+  const source = shotSourceSummary(artifacts, latestCandidate)
+  const explicitAttemptCount = metadataRecords.map((metadata) => numberValue(metadata.attemptCount)).find((value) => typeof value === 'number')
+  const attemptCount = explicitAttemptCount ?? (candidates.length ? candidates.length : latestCandidate ? 1 : 0)
+  const latestCandidateId = latestCandidate ? firstString(latestCandidate, ['candidateId', 'id']) : firstNonEmpty(metadataRecords.map((metadata) => firstString(metadata, ['candidateId', 'latestCandidateId'])))
+  const lockedDimensions = uniqueStrings(normalizeStringList(repairPlan?.lockedDimensions || repairPlan?.locked_dimensions))
+  const repairPlanAction = firstString(repairPlan || {}, ['action', 'repairAction', 'nextAction'])
+  const latestCandidateStatus = latestCandidate ? firstString(latestCandidate, ['status', 'qaStatus']) : ''
+  const acceptedStatus = qaStatus === 'ACCEPTED_FOR_ASSEMBLY' ||
+    qaStatus === 'SHOT_QA_PASSED' ||
+    latestCandidateStatus === 'ACCEPTED_FOR_ASSEMBLY' ||
+    latestCandidateStatus === 'SHOT_QA_PASSED'
+  const failedStatus = qaStatus === 'SHOT_QA_FAILED' || (latestCandidate ? firstString(latestCandidate, ['status']) === 'SHOT_QA_FAILED' : false)
+  return {
+    qaStatus,
+    attemptCount,
+    latestCandidateId,
+    repairPlanAction,
+    lockedDimensions,
+    acceptedCandidateId,
+    sourceType: source.sourceType,
+    isFallback: source.isFallback,
+    canEnterAssembly: Boolean(acceptedCandidateId && acceptedStatus && !failedStatus),
+  }
+}
+
+function candidateRecordsForArtifact(artifact: DirectorArtifactRecord): Array<Record<string, unknown>> {
+  const metadata = artifact.metadata || {}
+  const candidates: Array<Record<string, unknown>> = []
+  for (const key of ['candidates', 'shotCandidates', 'candidateHistory']) {
+    const records = arrayOfObjects(metadata[key])
+    if (records.length) candidates.push(...records)
+  }
+  const directCandidateId = firstString(metadata, ['candidateId', 'latestCandidateId'])
+  if (directCandidateId) {
+    candidates.push({
+      candidateId: directCandidateId,
+      attemptIndex: numberValue(metadata.attemptIndex) ?? numberValue(metadata.attemptCount),
+      status: firstString(metadata, ['candidateStatus', 'qaStatus', 'status']),
+      sourceType: firstString(metadata, ['sourceType']),
+      isFallback: booleanValue(metadata.isFallback),
+      repairPlan: objectValue(metadata.repairPlan),
+    })
+  }
+  return candidates
+}
+
+function shotSourceSummary(artifacts: DirectorArtifactRecord[], latestCandidate: Record<string, unknown> | undefined): { sourceType: string; isFallback: boolean } {
+  const entries = artifacts.map((artifact) => {
+    const metadata = artifact.metadata || {}
+    const provenance = objectValue(metadata.provenance) || metadata
+    const sourceType = firstString(provenance, ['sourceType']) || firstString(metadata, ['sourceType'])
+    const isFallback = booleanValue(provenance.isFallback) === true ||
+      booleanValue(metadata.isFallback) === true ||
+      sourceType.startsWith('fallback_')
+    return { sourceType, isFallback }
+  }).filter((entry) => entry.sourceType)
+  const fallback = entries.find((entry) => entry.isFallback)
+  if (fallback) return fallback
+  const latestSourceType = latestCandidate ? firstString(latestCandidate, ['sourceType']) : ''
+  if (latestSourceType) {
+    return {
+      sourceType: latestSourceType,
+      isFallback: booleanValue(latestCandidate?.isFallback) === true || latestSourceType.startsWith('fallback_'),
+    }
+  }
+  return entries[0] || { sourceType: '', isFallback: false }
+}
+
+function firstObject(values: Array<Record<string, unknown> | undefined>): Record<string, unknown> | undefined {
+  return values.find((value): value is Record<string, unknown> => Boolean(value))
+}
+
+function firstNonEmpty(values: string[]): string {
+  return values.find((value) => Boolean(value)) || ''
 }
 
 function shotGenerationStrategy(artifacts: DirectorArtifactRecord[]): DirectorShotReviewGroup['generationStrategy'] {

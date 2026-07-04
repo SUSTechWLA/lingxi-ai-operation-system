@@ -189,7 +189,75 @@ To run only the no-provider fallback fixture:
 bash scripts/beta-fallback-fixture.sh
 ```
 
-It writes a 2-shot fallback preview, `artifact_manifest.json`, `video_frame_qa.json`, `shot_qa_reports.json`, and `shot_repair_plan.json` under `scripts/tmp/beta-fallback-fixture/`.
+It writes a 2-shot fallback preview plus the same machine-readable pipeline reports expected from beta diagnostics under `scripts/tmp/beta-fallback-fixture/`: `artifact_manifest.json`, `video_frame_qa.json`, `shot_qa_reports.json`, `shot_repair_plan.json`, `shot_list.json`, `shot_split_report.json`, `shot_duration_validation.json`, `shot_candidates.json`, `repair_plans.json`, `accepted_shots.json`, `assembly_plan.json`, `subtitle_timeline.json`, `audio_mix_plan.json`, `final_qa_report.json`, and `provenance_summary.json`.
+
+## Shot Production Pipeline
+
+Closed beta video projects must follow this production contract:
+
+```mermaid
+flowchart TD
+  A["PROJECT_CREATE"] --> B["SCRIPT / OUTLINE"]
+  B --> C["SEMANTIC_SHOT_SPLIT"]
+  C --> D["SHOT_RENDER_CANDIDATE"]
+  D --> E["SHOT_QA"]
+  E -->|"failed"| F["REPAIR_PLAN"]
+  F --> G["APPLY_REPAIR_PLAN"]
+  G --> H["RENDER_NEXT_CANDIDATE"]
+  H --> E
+  E -->|"passed / human approved"| I["SHOT_ACCEPTED_FOR_ASSEMBLY"]
+  I --> J["ALL_SHOTS_ACCEPTED_GATE"]
+  J --> K["FFMPEG_NORMALIZE_AND_CONCAT"]
+  K --> L["GLOBAL_AUDIO_MIX"]
+  L --> M["GLOBAL_SUBTITLE_RENDER"]
+  M --> N["FINAL_VIDEO_QA"]
+  N --> O["EXPORT / PUBLISH"]
+```
+
+Shot split policy:
+
+| Field | Value |
+|---|---|
+| `minShotDurationSec` | `3` |
+| `maxShotDurationSec` | `15` |
+| `preferredShotDurationSec` | `6-8` |
+| `splitByScriptSemantics` | `true` |
+| `splitByVisualChange` | `true` |
+
+Shot splitting must prefer story and visual boundaries over fixed time buckets: scene changes, subject changes, action goal changes, shot size changes, focal length or perspective changes, time jumps, emotion shifts, information-point changes, and narration/dialogue paragraph boundaries. A shot longer than 15 seconds must be split again; a shot shorter than 3 seconds may only merge with a compatible neighbor when the merged unit remains at most 15 seconds.
+
+Shot QA state flow:
+
+```text
+PLANNED
+  -> GENERATING
+  -> CANDIDATE_RENDERED
+  -> SHOT_QA_RUNNING
+  -> SHOT_QA_PASSED / SHOT_QA_FAILED / HUMAN_REVIEW_REQUIRED
+  -> ACCEPTED_FOR_ASSEMBLY
+```
+
+If QA fails, the system creates a new candidate instead of overwriting the failed one:
+
+```text
+SHOT_QA_FAILED
+  -> CREATE_REPAIR_PLAN
+  -> APPLY_REPAIR_PLAN
+  -> RENDER_NEXT_CANDIDATE
+  -> SHOT_QA_AGAIN
+```
+
+Default repair policy is `maxRepairAttemptsPerShot=3`, `maxAigcRegenerationAttemptsPerShot=2`, `preferLocalRepairBeforeAigcRegen=true`, and `preservePassedDimensions=true`. Repair plans must lock passed dimensions such as `prompt_alignment`, `character_identity`, `scene`, `action`, `text_intent`, `duration`, and `style`, then patch only failed dimensions.
+
+Final assembly rules:
+
+- Final assembly only consumes accepted candidate artifacts.
+- Failed candidates must not enter FFmpeg concat.
+- Every accepted shot must be 3-15 seconds and QA passed or human approved.
+- FFmpeg normalization aligns resolution, fps, pixel format, and codec before concat.
+- Voiceover alignment, BGM mixing/ducking, loudness, final subtitles, final transcode, and final QA run on the global timeline after concat.
+- Final subtitles use global timestamps; shot-level subtitles are preview-only unless explicitly marked as non-final.
+- Final QA failure blocks export/publish.
 
 ## Beta Readiness Gate
 
@@ -221,6 +289,7 @@ Minimum entry criteria for creator trials:
 - At least one JiMeng/Dreamina MCP video generation has produced a real `aigc_video` artifact with `isFallback=false`.
 - A diagnostics zip can be exported after a failed or successful run.
 - Every shot has a structured QA report and machine-readable `repairPlan`.
+- Every final assembly consumes only accepted shot candidates and writes `assembly_plan.json`, `subtitle_timeline.json`, `audio_mix_plan.json`, `final_qa_report.json`, and `provenance_summary.json`.
 - Testers understand this is closed beta and provider credits/rate limits can still interrupt generation.
 
 ## Logs
@@ -247,7 +316,7 @@ curl -X POST http://127.0.0.1:18080/api/local/diagnostics \
   -d '{"reason":"closed-beta-support"}'
 ```
 
-The zip contains app version, git commit, recent task IDs, redacted environment status, local logs, MCP provider config/status summary, recent artifact metadata, shot QA reports, and failure stacks. It does not include raw uploaded source media or artifact `content` files by default.
+The zip contains app version, git commit, recent task IDs, redacted environment status, local logs, MCP provider config/status summary, recent artifact metadata, shot QA reports, shot split reports, shot duration validation, shot candidates, repair plans, accepted shots, assembly plan, subtitle timeline, audio mix plan, final QA report, artifact manifest/provenance summary, and failure stacks. It does not include raw uploaded source media or artifact `content` files by default.
 
 ## Real AIGC vs Fallback
 

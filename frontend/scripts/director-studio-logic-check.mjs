@@ -56,6 +56,7 @@ try {
     buildEnvironmentChecklist,
     buildExportDeliveryItems,
     buildExternalGenerationTaskPackage,
+    buildProjectAssemblySummary,
     creationProfileSummary,
     deriveNextAction,
     externalGenerationGuideSteps,
@@ -1153,6 +1154,101 @@ try {
   ])
   assert.equal(unresolvedMaterialDependencyCount(autoMcpShotGroups), 0)
   assert.equal(autoMcpShotGroups[0].slots.find((slot) => slot.kind === 'base-media')?.dependencyRequests.length, 0)
+
+  const betaShotGroups = buildShotReviewGroups([
+    {
+      id: 'shot-qa-99',
+      kind: 'SHOT_QA_REPORT',
+      name: 'SHOT_99 QA',
+      status: 'valid',
+      owner: '视觉质量审核',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'local://shot-99/qa.json',
+      metadata: {
+        relatedShotId: 'SHOT_99',
+        durationSec: 6,
+        qaStatus: 'ACCEPTED_FOR_ASSEMBLY',
+        acceptedCandidateId: 'cand-02',
+        candidates: [
+          {
+            candidateId: 'cand-01',
+            attemptIndex: 0,
+            status: 'SHOT_QA_FAILED',
+            sourceType: 'aigc_video',
+            isFallback: false,
+            qaReport: { passed: false },
+            repairPlan: { action: 'RERENDER_HTML', lockedDimensions: ['scene', 'action'] },
+          },
+          {
+            candidateId: 'cand-02',
+            attemptIndex: 1,
+            status: 'ACCEPTED_FOR_ASSEMBLY',
+            sourceType: 'ffmpeg_composite',
+            isFallback: false,
+            qaReport: { passed: true },
+          },
+        ],
+        repairPlan: { action: 'RERENDER_HTML', lockedDimensions: ['scene', 'action'] },
+      },
+    },
+    {
+      id: 'fallback-shot-clip',
+      kind: 'SHOT_VIDEO_CLIP',
+      name: 'SHOT_99 fallback storyboard',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://shot-99/fallback.mp4',
+      metadata: { relatedShotId: 'SHOT_99', sourceType: 'fallback_storyboard', isFallback: true, artifactType: 'shot_video_clip' },
+    },
+  ])
+  assert.equal(betaShotGroups[0].production.qaStatus, 'ACCEPTED_FOR_ASSEMBLY')
+  assert.equal(betaShotGroups[0].production.attemptCount, 2)
+  assert.equal(betaShotGroups[0].production.latestCandidateId, 'cand-02')
+  assert.equal(betaShotGroups[0].production.repairPlanAction, 'RERENDER_HTML')
+  assert.deepEqual(betaShotGroups[0].production.lockedDimensions, ['scene', 'action'])
+  assert.equal(betaShotGroups[0].production.acceptedCandidateId, 'cand-02')
+  assert.equal(betaShotGroups[0].production.sourceType, 'fallback_storyboard')
+  assert.equal(betaShotGroups[0].production.isFallback, true)
+  assert.equal(betaShotGroups[0].production.canEnterAssembly, true)
+
+  const assemblySummary = buildProjectAssemblySummary(betaShotGroups, [
+    {
+      id: 'final-qa',
+      kind: 'FINAL_REVIEW',
+      name: 'Final QA',
+      status: 'valid',
+      owner: '质量审核',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'local://final-qa.json',
+      metadata: { finalQaStatus: 'passed', passed: true },
+    },
+    {
+      id: 'final-video',
+      kind: 'VIDEO',
+      name: 'final_video.mp4',
+      stageName: 'render',
+      unitId: 'final-video',
+      status: 'valid',
+      owner: '渲染制片',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://final.mp4',
+      metadata: { sourceType: 'ffmpeg_composite', isFallback: false, tags: ['final_video'] },
+    },
+  ])
+  assert.equal(assemblySummary.allShotsAccepted, true)
+  assert.equal(assemblySummary.finalAssemblyStatus, 'ready')
+  assert.equal(assemblySummary.finalQAStatus, 'passed')
+  assert.equal(assemblySummary.fallbackCount, 1)
+  assert.equal(assemblySummary.finalVideoSourceType, 'ffmpeg_composite')
 
   const profileArtifacts = [
     {

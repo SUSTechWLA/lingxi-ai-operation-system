@@ -2,6 +2,27 @@
 
 All notable release changes are tracked here. README only carries the current version summary; detailed historical notes live in this file.
 
+## v0.1.11 - 2026-07-04
+
+### Added
+
+- Added an explicit closed beta shot split policy: 3-15 second shots, preferred 6-8 second units, semantic script splitting, visual-change splitting, forced splitting for overlong script spans, and compatible merging for short continuous spans.
+- Added shot candidate, candidate QA report, repair plan, accepted shot, final assembly plan, global subtitle timeline, global audio mix plan, final QA report, artifact provenance, and video diagnostics data structures.
+- Added final assembly gating so FFmpeg concat consumes only accepted shot candidates and rejects failed, stale, unapproved, or out-of-range shots.
+- Added diagnostics coverage for shot list, shot split report, duration validation, candidates, shot QA reports, repair plans, accepted shots, assembly plan, subtitle timeline, audio mix plan, final QA report, artifact manifest, and provenance summary.
+
+### Changed
+
+- Shot QA repair plans now preserve passed dimensions and patch only failed dimensions, with final subtitle, BGM, voiceover, ducking, loudness, and final transcode deferred to global final assembly.
+- Video QA MCP repair plans now include severity, source candidate, attempt index, preserve flag, locked dimensions, repair targets, prompt patch, render strategy patch, and next tool call.
+- Fallback beta fixture now writes the full closed beta shot-to-final diagnostic chain while preserving fallback provenance instead of marking fallback output as real AIGC.
+- Director Studio now shows shot duration, QA status, attempt count, latest candidate, repair action, locked dimensions, accepted candidate, source/fallback status, assembly eligibility, final assembly status, final QA status, and provenance summary.
+
+### Fixed
+
+- Updated legacy cinematic time-window expectations to match the new 6-8 second preferred split policy instead of coarse fixed windows.
+- Tightened final export behavior so failed final QA blocks export/publish.
+
 ## v0.1.10 - 2026-07-04
 
 ### Added

@@ -77,6 +77,107 @@ qa = module.analyze_video(
     candidateId="fallback-smoke",
 )
 
+shot_candidates = [
+    {
+        "shotId": shot["shotId"],
+        "candidateId": f"{shot['shotId']}-fallback-candidate",
+        "attemptIndex": 0,
+        "status": "ACCEPTED_FOR_ASSEMBLY",
+        "durationSec": shot["durationSec"],
+        "sourceType": "fallback_preview",
+        "isFallback": True,
+        "artifactRefs": [{"artifactId": "final-preview", "sourceType": "fallback_preview", "isFallback": True}],
+        "qaReport": next((report for report in qa.get("shotReports", []) if report.get("shotId") == shot["shotId"]), {}),
+    }
+    for shot in shot_list
+]
+accepted_shots = [
+    {
+        "shotId": item["shotId"],
+        "candidateId": item["candidateId"],
+        "durationSec": item["durationSec"],
+        "sourceType": item["sourceType"],
+        "isFallback": item["isFallback"],
+        "artifactId": "final-preview",
+    }
+    for item in shot_candidates
+]
+assembly_plan = {
+    "status": "fallback_preview_ready",
+    "resolution": "640x360",
+    "fps": 24,
+    "pixelFormat": "yuv420p",
+    "codec": "h264",
+    "steps": [
+        "ALL_SHOTS_ACCEPTED_GATE",
+        "NORMALIZE_ACCEPTED_SHOTS",
+        "FFMPEG_CONCAT",
+        "GLOBAL_VOICEOVER_ALIGN",
+        "GLOBAL_BGM_MIX_AND_DUCKING",
+        "GLOBAL_SUBTITLE_RENDER",
+        "FINAL_VIDEO_QA",
+        "EXPORT_PUBLISH",
+    ],
+    "acceptedShots": accepted_shots,
+}
+subtitle_timeline = {
+    "scope": "global",
+    "cues": [
+        {"shotId": "SHOT_01", "startSec": 0, "endSec": 3, "text": "Closed beta fallback preview starts."},
+        {"shotId": "SHOT_02", "startSec": 3, "endSec": 6, "text": "Closed beta fallback preview ends."},
+    ],
+}
+audio_mix_plan = {
+    "scope": "global",
+    "voiceoverAlign": True,
+    "bgmDucking": True,
+    "targetLufs": -16,
+    "note": "Fallback fixture has no baked per-shot BGM; final audio is handled at assembly scope.",
+}
+final_qa_report = {
+    "status": "passed" if qa.get("passed") else "failed",
+    "passed": bool(qa.get("passed")),
+    "reportRef": f"local://projects/{project_id}/reports/video_frame_qa/video_frame_qa.json",
+    "summary": qa.get("summary", ""),
+}
+provenance_summary = {
+    "rawShotCandidateCount": len(shot_candidates),
+    "repairedShotCandidateCount": 0,
+    "acceptedShotCount": len(accepted_shots),
+    "normalizedShotClipCount": len(accepted_shots),
+    "concatVideoCount": 1,
+    "finalAudioMixCount": 1,
+    "finalSubtitleTrackCount": 1,
+    "finalVideoCount": 1 if qa.get("passed") else 0,
+    "realAigcVideoCount": 0,
+    "fallbackCount": len(shot_candidates) + 1,
+}
+pipeline_reports = {
+    "shot_list.json": {"schemaVersion": 1, "shots": shot_list},
+    "shot_split_report.json": {
+        "schemaVersion": 1,
+        "policy": {
+            "minShotDurationSec": 3,
+            "maxShotDurationSec": 15,
+            "preferredShotDurationSec": "6-8",
+            "splitByScriptSemantics": True,
+            "splitByVisualChange": True,
+        },
+        "reason": "fixture uses two semantic fallback shots with global assembly.",
+    },
+    "shot_duration_validation.json": {"schemaVersion": 1, "valid": True, "durations": [{"shotId": shot["shotId"], "durationSec": shot["durationSec"]} for shot in shot_list]},
+    "shot_candidates.json": {"schemaVersion": 1, "shotCandidates": shot_candidates},
+    "repair_plans.json": {"schemaVersion": 1, "repairPlans": [report.get("repairPlan", {}) for report in qa.get("shotReports", [])]},
+    "accepted_shots.json": {"schemaVersion": 1, "acceptedShots": accepted_shots},
+    "assembly_plan.json": {"schemaVersion": 1, "assemblyPlan": assembly_plan},
+    "subtitle_timeline.json": {"schemaVersion": 1, "subtitleTimeline": subtitle_timeline},
+    "audio_mix_plan.json": {"schemaVersion": 1, "audioMixPlan": audio_mix_plan},
+    "final_qa_report.json": {"schemaVersion": 1, "finalQaReport": final_qa_report},
+    "provenance_summary.json": {"schemaVersion": 1, "provenanceSummary": provenance_summary},
+}
+for filename, payload in pipeline_reports.items():
+    (report_dir / filename).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
 manifest = {
     "schemaVersion": 1,
     "projectId": project_id,
@@ -102,6 +203,13 @@ manifest = {
         "shotReportsPath": str(report_dir / "shot_qa_reports.json"),
         "videoFrameQAPath": str(report_dir / "video_frame_qa.json"),
     },
+    "shotCandidates": shot_candidates,
+    "acceptedShots": accepted_shots,
+    "assemblyPlan": assembly_plan,
+    "subtitleTimeline": subtitle_timeline,
+    "audioMixPlan": audio_mix_plan,
+    "finalQaReport": final_qa_report,
+    "provenanceSummary": provenance_summary,
 }
 (out_dir / "artifact_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(json.dumps({"ok": True, "outDir": str(out_dir), "manifest": str(out_dir / "artifact_manifest.json")}, ensure_ascii=False))
