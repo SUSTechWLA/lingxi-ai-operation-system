@@ -102,8 +102,7 @@ func shouldRedactString(value string) bool {
 	return strings.HasPrefix(lower, "data:") ||
 		strings.HasPrefix(lower, "blob:") ||
 		strings.HasPrefix(lower, "http://") ||
-		strings.HasPrefix(lower, "https://") ||
-		len(trimmed) > 50000
+		strings.HasPrefix(lower, "https://")
 }
 
 func redactedUserAsset(key string, value interface{}) map[string]interface{} {

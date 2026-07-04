@@ -37,6 +37,7 @@ Register-BiaoshuTool @{
     }
     output = @{
         stdout = @{ type = "string"; description = "Full parsing report" }
+        raw_text_path = @{ type = "string"; description = "Parsed raw text markdown file path" }
         report_path = @{ type = "string"; description = "Generated markdown report path" }
     }
 }

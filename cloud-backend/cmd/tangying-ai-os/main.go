@@ -113,6 +113,7 @@ func main() {
 	toolRegistry := tool.NewToolRegistry()
 	toolRegistry.Register(builtin.NewBashTool(cfg.BashTool))
 	toolRegistry.Register(builtin.NewLlmApiTool(cfg.OpenAI))
+	toolRegistry.Register(builtin.NewBidAnalysisReportTool())
 	toolRegistry.Register(builtin.NewPythonTool())
 	toolRegistry.Register(builtin.NewPolisherTool(cfg.OpenAI))
 	toolRegistry.Register(builtin.NewMediaAnalyzerTool(cfg.OpenAI))

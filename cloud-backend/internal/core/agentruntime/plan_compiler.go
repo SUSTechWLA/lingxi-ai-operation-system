@@ -115,6 +115,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	if plan == nil {
 		return nil
 	}
+	c.injectBidAnalysisReport(plan)
 	c.injectKnowledgeContext(plan)
 	if plan.Budget.MaxSteps > 0 && len(plan.Steps) > plan.Budget.MaxSteps {
 		plan.Budget.MaxSteps = len(plan.Steps)
@@ -123,6 +124,112 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 		plan.Budget.MaxToolCalls = len(plan.Steps)
 	}
 	return plan
+}
+
+func (c *PlanCompiler) injectBidAnalysisReport(plan *AgentPlan) {
+	if plan == nil || c.manifestFor("bid_analysis_report") == nil {
+		return
+	}
+	for _, step := range plan.Steps {
+		if step.Tool == "bid_analysis_report" {
+			return
+		}
+	}
+
+	out := make([]AgentStep, 0, len(plan.Steps)+1)
+	parseToAnalysis := map[string]string{}
+	for _, step := range plan.Steps {
+		out = append(out, step)
+		if step.Tool != "parse_bid_files" {
+			continue
+		}
+
+		analysisID := uniqueBidAnalysisStepID(out, plan.Steps)
+		args := map[string]interface{}{
+			"raw_text_path": fmt.Sprintf("{{%s.output.raw_text_path}}", step.ID),
+			"report_path":   fmt.Sprintf("{{%s.output.report_path}}", step.ID),
+			"stage":         "parse",
+		}
+		if sourceFile, ok := step.Arguments["file_path"]; ok {
+			args["source_file"] = sourceFile
+		}
+		if outputDir, ok := step.Arguments["output_dir"]; ok {
+			args["output_dir"] = outputDir
+		}
+
+		out = append(out, AgentStep{
+			ID:              analysisID,
+			Intent:          "Generate the final tender parsing report in the cloud backend",
+			Tool:            "bid_analysis_report",
+			DependsOn:       []string{step.ID},
+			Arguments:       args,
+			ExpectedOutput:  []string{"content", "report_path", "artifacts"},
+			ProduceArtifact: true,
+		})
+		parseToAnalysis[step.ID] = analysisID
+	}
+	if len(parseToAnalysis) == 0 {
+		return
+	}
+
+	for i := range out {
+		if out[i].Tool == "bid_analysis_report" {
+			continue
+		}
+		for j, dep := range out[i].DependsOn {
+			if analysisID, ok := parseToAnalysis[dep]; ok {
+				out[i].DependsOn[j] = analysisID
+			}
+		}
+		if out[i].Arguments != nil {
+			out[i].Arguments = rewriteBidAnalysisReportRefs(out[i].Arguments, parseToAnalysis).(map[string]interface{})
+		}
+	}
+	plan.Steps = out
+}
+
+func uniqueBidAnalysisStepID(out []AgentStep, original []AgentStep) string {
+	used := map[string]bool{}
+	for _, step := range out {
+		used[step.ID] = true
+	}
+	for _, step := range original {
+		used[step.ID] = true
+	}
+	if !used["bid_analysis_report"] {
+		return "bid_analysis_report"
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("bid_analysis_report_%d", i)
+		if !used[candidate] {
+			return candidate
+		}
+	}
+}
+
+func rewriteBidAnalysisReportRefs(value interface{}, parseToAnalysis map[string]string) interface{} {
+	switch v := value.(type) {
+	case string:
+		out := v
+		for parseID, analysisID := range parseToAnalysis {
+			out = strings.ReplaceAll(out, fmt.Sprintf("{{%s.output.report_path}}", parseID), fmt.Sprintf("{{%s.output.report_path}}", analysisID))
+		}
+		return out
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for key, item := range v {
+			out[key] = rewriteBidAnalysisReportRefs(item, parseToAnalysis)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, item := range v {
+			out[i] = rewriteBidAnalysisReportRefs(item, parseToAnalysis)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func (c *PlanCompiler) injectKnowledgeContext(plan *AgentPlan) {
@@ -319,7 +426,7 @@ func (c *PlanCompiler) injectQualityGates(steps []AgentStep) []AgentStep {
 			for _, prev := range out {
 				if prev.Tool == "__quality_gate__" {
 					prod, _ := prev.Arguments["productionStep"].(string)
-						checker, _ := prev.Arguments["checkerStep"].(string)
+					checker, _ := prev.Arguments["checkerStep"].(string)
 					if prod != "" && dep == prod && s.ID != checker && s.Tool != checker {
 						s.DependsOn[j] = prev.ID
 					}

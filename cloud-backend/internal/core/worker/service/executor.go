@@ -770,6 +770,19 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 			}
 		}
 	}
+	// When output[field] is a JSON string (common for HTTP-type tools whose
+	// .Data is json.Marshal'd into stdout), try to unwrap and extract the
+	// nested field of the same name (e.g. stdout → parsed["stdout"]).
+	if ok {
+		if strVal, isStr := val.(string); isStr {
+			var parsed map[string]interface{}
+			if json.Unmarshal([]byte(strVal), &parsed) == nil {
+				if innerVal, innerOk := parsed[field]; innerOk {
+					val = innerVal
+				}
+			}
+		}
+	}
 	if !ok {
 		zap.L().Warn("Cannot resolve node reference: field not found in output",
 			zap.String("taskId", taskID),

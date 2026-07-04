@@ -33,7 +33,7 @@ const API_BASE = configuredCloudBase || electronCloudBase || '/api'
 
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 30000,
+  timeout: 120000,
 })
 
 const apiErrorMessage = (error: unknown): string | null => {

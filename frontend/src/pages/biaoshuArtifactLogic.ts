@@ -40,7 +40,7 @@ interface TraceNodeLike {
 }
 
 const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
-  { key: 'parse', label: '招标文件解析', tool: 'parse_bid_files', kind: 'BID_ANALYSIS', owner: '文件解析' },
+  { key: 'parse', label: '招标文件解析', tool: 'bid_analysis_report', kind: 'BID_ANALYSIS', owner: '文件解析' },
   { key: 'outline', label: '技术标大纲', tool: 'outline_generator', kind: 'BID_OUTLINE', owner: '大纲规划' },
   { key: 'chapters', label: '章节初稿', tool: 'chapter_writer', kind: 'BID_CHAPTERS', owner: '章节编写' },
   { key: 'wordcheck', label: '字数检查报告', tool: 'chapter_word_checker', kind: 'WORD_COUNT_REPORT', owner: '质量检查' },

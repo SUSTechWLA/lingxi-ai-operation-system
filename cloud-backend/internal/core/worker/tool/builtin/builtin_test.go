@@ -6,9 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/config"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway"
+	"github.com/tangying-ai/aios-core/internal/core/modelgateway/providers/fake"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
 
@@ -329,6 +333,52 @@ func TestBuildChatMessagesIncludesSystemPrompt(t *testing.T) {
 	user, ok := messages[1].(map[string]interface{})
 	if !ok || user["role"] != "user" {
 		t.Fatalf("unexpected user message: %#v", messages[1])
+	}
+}
+
+func TestBidAnalysisReportToolWritesCloudGeneratedReport(t *testing.T) {
+	// Save/restore global modelGateway around test.
+	oldGW := modelGateway
+	defer func() { modelGateway = oldGW }()
+
+	gw := modelgateway.NewGateway("fake")
+	fakeProvider := fake.NewProvider()
+	gw.RegisterProvider(fakeProvider, modelgateway.CapTextToText)
+	modelGateway = gw
+
+	reportPath := filepath.Join(t.TempDir(), "00_招标文件解析报告.md")
+	rawTextPath := filepath.Join(t.TempDir(), "00_招标文件原文解析.md")
+	if err := os.WriteFile(rawTextPath, []byte("招标文件正文"), 0o644); err != nil {
+		t.Fatalf("failed to write raw text file: %v", err)
+	}
+	bt := NewBidAnalysisReportTool()
+
+	result := bt.Execute(context.Background(), map[string]interface{}{
+		"raw_text_path": rawTextPath,
+		"source_file":   "E:/bid/test.docx",
+		"report_path":   reportPath,
+	}, tool.ToolContext{TaskID: "task-1"})
+
+	if !result.Success {
+		t.Fatalf("expected success, got %s", result.Error)
+	}
+	content, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("expected report file: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "E:/bid/test.docx") || !strings.Contains(text, "招标文件正文") {
+		t.Fatalf("report content missing expected sections: %s", text)
+	}
+	if result.Data["report_path"] != reportPath {
+		t.Fatalf("report_path output = %#v", result.Data["report_path"])
+	}
+	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("expected one artifact manifest, got %#v", result.Data["artifacts"])
+	}
+	if artifacts[0]["kind"] != "BID_ANALYSIS" || artifacts[0]["storageRef"] != reportPath {
+		t.Fatalf("unexpected artifact manifest: %#v", artifacts[0])
 	}
 }
 

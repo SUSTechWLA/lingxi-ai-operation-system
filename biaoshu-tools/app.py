@@ -3,6 +3,8 @@ biaoshu-writer 工具 HTTP 服务
 将 Python 脚本包装为 HTTP 端点，供 cloud-backend 外部工具调用。
 
 启动: python app.py --port 9001
+
+注意：所有大模型调用已移至 cloud-backend 处理，本服务仅负责文件操作。
 """
 
 from __future__ import annotations
@@ -14,8 +16,6 @@ import subprocess
 import sys
 import tempfile
 import traceback
-import urllib.request
-import urllib.error
 from pathlib import Path
 
 from flask import Flask, request, jsonify
@@ -108,78 +108,6 @@ def health():
 
 # ─── 工具端点 ─────────────────────────────────────────
 
-BID_ANALYSIS_PROMPT = """你是一个专业的招标文件分析师。请分析以下招标文件内容，提取关键信息并生成结构化报告。
-
-报告必须包含以下章节：
-
-## 一、项目基本信息
-- 项目名称、编号、招标单位
-- 项目概况（工程范围、规模、标准）
-
-## 二、评分标准拆解
-用表格列出所有评分项，包含：
-| 评分项 | 分值 | 评审要点 |
-
-## 三、技术规格要求
-列出所有关键技术指标
-
-## 四、工期与关键节点
-计划工期及里程碑
-
-## 五、采购需求清单
-用表格列出主要材料/设备需求：
-| 材料/设备 | 规格型号 | 预估数量 |
-
-## 六、投标人资格要求
-列出资质、业绩、人员等门槛条件
-
-## 七、投标策略建议
-根据评分标准，给出3-5条提高得分的策略建议
-
-## 八、注意事项提示
-列出标书需要注意的事项，如文本图表、字体要求等，尤其注意可能会导致废标的事项
-
---- 以下是招标文件原文 ---
-
-"""
-
-
-def analyze_bid_content(raw_text: str) -> str:
-    """调用 LLM 分析招标文件内容"""
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com")
-    model = os.environ.get("OPENAI_MODEL", "deepseek-v4-pro")
-
-    if not api_key:
-        return "> ⚠️ 未配置 OPENAI_API_KEY，跳过 AI 分析。请在环境变量中设置 API 密钥。"
-
-    body = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": BID_ANALYSIS_PROMPT},
-            {"role": "user", "content": raw_text[:30000]},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 4000,
-    }, ensure_ascii=False).encode("utf-8")
-
-    url = base_url.rstrip("/") + "/v1/chat/completions"
-    req = urllib.request.Request(url, data=body, headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    })
-
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        return f"> ⚠️ AI 分析请求失败 (HTTP {e.code}): {err_body[:200]}"
-    except Exception as e:
-        return f"> ⚠️ AI 分析请求异常: {str(e)[:200]}"
-
-
 @app.route("/tools/parse_bid_files", methods=["POST"])
 def tool_parse_bid_files():
     """解析招标文件（txt/pdf/docx/xlsx），输出产物到项目目录"""
@@ -205,26 +133,24 @@ def tool_parse_bid_files():
     if result.get("success") and (stdout.startswith("[错误]") or stdout.startswith("[Error]")):
         return jsonify({"success": False, "error": stdout}), 400
 
-    # 保存阶段产物：00_招标文件解析报告.md
+    # 保存阶段产物：00_招标文件原文解析.md
     if result.get("success"):
-        # 优先用传入的 output_dir，否则从文件名推导
         project_dir_name = str(params.get("output_dir", "")).strip()
         if not project_dir_name:
             base = os.path.splitext(os.path.basename(file_path))[0]
             project_dir_name = base if base else "bid_output"
         project_dir = os.path.join(OUTPUT_DIR, project_dir_name)
         os.makedirs(project_dir, exist_ok=True)
+        raw_text_path = os.path.join(project_dir, "00_招标文件原文解析.md")
         report_path = os.path.join(project_dir, "00_招标文件解析报告.md")
         content = result.get("data", {}).get("stdout", "")
-        # AI 分析
-        analysis = analyze_bid_content(content)
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(f"# 招标文件解析报告\n\n")
+        with open(raw_text_path, "w", encoding="utf-8") as f:
+            f.write(f"# 招标文件原文解析\n\n")
             f.write(f"**源文件**: {file_path}\n\n")
             f.write(f"---\n\n")
-            f.write(analysis)
-            f.write(f"\n\n---\n\n## 附录：招标文件原文\n\n")
             f.write(content)
+        result["data"]["source_file"] = file_path
+        result["data"]["raw_text_path"] = raw_text_path
         result["data"]["report_path"] = report_path
 
     return jsonify(result)
@@ -235,9 +161,7 @@ def tool_check_chapter_words():
     """章节字数检查"""
     params = extract_payload()
 
-    # 支持两种模式：传入 markdown 内容或章节目录路径
     if "content" in params:
-        # 写入临时文件
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", encoding="utf-8", delete=False
         ) as f:
@@ -264,7 +188,7 @@ def tool_check_all_chapters_words():
         return err
 
     chapter_dir = params["chapter_dir"]
-    score_map = params.get("score_map", {})  # {"第一章": 5, "第二章": 4, ...}
+    score_map = params.get("score_map", {})
     total_pages = params.get("total_pages", 300)
     total_score = params.get("total_score", 100)
 
@@ -290,7 +214,6 @@ def tool_check_all_chapters_words():
             content = f.read()
         word_count = count_chinese_chars(content)
 
-        # 计算目标字数
         chapter_name = Path(fname).stem
         score = score_map.get(chapter_name, 5) if score_map else 5
         target = int(score * (total_pages / total_score) * 780)
@@ -323,7 +246,6 @@ def tool_convert_to_word():
     """Markdown → Word"""
     params = extract_payload()
 
-    # 支持 content 字符串模式
     if "content" in params:
         md_content = params["content"]
         tmp_path = None
