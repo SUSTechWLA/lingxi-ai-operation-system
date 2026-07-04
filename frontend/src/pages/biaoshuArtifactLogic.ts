@@ -40,7 +40,8 @@ interface TraceNodeLike {
 }
 
 const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
-  { key: 'parse', label: '招标文件解析', tool: 'bid_analysis_report', kind: 'BID_ANALYSIS', owner: '文件解析' },
+  { key: 'raw-parse', label: '招标文件原文解析', tool: 'parse_bid_files', kind: 'BID_RAW_TEXT', owner: '文件解析' },
+  { key: 'parse', label: '招标文件解析报告', tool: 'bid_analysis_report', kind: 'BID_ANALYSIS', owner: 'AI分析' },
   { key: 'outline', label: '技术标大纲', tool: 'outline_generator', kind: 'BID_OUTLINE', owner: '大纲规划' },
   { key: 'chapters', label: '章节初稿', tool: 'chapter_writer', kind: 'BID_CHAPTERS', owner: '章节编写' },
   { key: 'wordcheck', label: '字数检查报告', tool: 'chapter_word_checker', kind: 'WORD_COUNT_REPORT', owner: '质量检查' },
@@ -65,7 +66,7 @@ export function buildBiaoshuArtifacts(
     const node = traceNodes.find((item) => nodeMatchesStage(item, stage))
     const artifact = findOutputArtifact(node?.output, stage.kind)
     const review = reviews.find((item) => itemMatchesStage(item, stage))
-    const storageRef = storageRefFor(node?.output, artifact)
+    const storageRef = storageRefFor(node?.output, artifact, stage.kind)
     const status = statusFor(step, node, review, storageRef)
     const updatedAt = formatTime(
       stringValue(artifact?.updatedAt) ||
@@ -94,6 +95,7 @@ export function buildBiaoshuArtifacts(
 
 export function displayNameForBiaoshuArtifact(kind: string): string {
   const labels: Record<string, string> = {
+    BID_RAW_TEXT: '原文解析',
     BID_ANALYSIS: '招标解析',
     BID_OUTLINE: '标书大纲',
     BID_CHAPTERS: '章节稿件',
@@ -117,6 +119,55 @@ export function biaoshuArtifactToCopyText(artifact: BiaoshuArtifactRecord): stri
     summary: artifact.summary,
     sourceTool: artifact.sourceTool,
   }, null, 2)
+}
+
+export function mergeManualReportArtifact(
+  artifacts: BiaoshuArtifactRecord[],
+  manualReportArtifact: BiaoshuArtifactRecord | null,
+): BiaoshuArtifactRecord[] {
+  if (!manualReportArtifact) return artifacts
+
+  let replaced = false
+  const merged = artifacts.map((artifact) => {
+    if (artifact.kind !== 'BID_ANALYSIS') return artifact
+    replaced = true
+    return manualReportArtifact
+  })
+  if (replaced) return merged
+
+  const rawIndex = merged.findIndex((artifact) => artifact.kind === 'BID_RAW_TEXT')
+  if (rawIndex >= 0) {
+    return [
+      ...merged.slice(0, rawIndex + 1),
+      manualReportArtifact,
+      ...merged.slice(rawIndex + 1),
+    ]
+  }
+  return [...merged, manualReportArtifact]
+}
+
+export function createManualReportArtifact(
+  artifact: Record<string, unknown> | undefined,
+  reportPath: string,
+  sourceFile: string,
+): BiaoshuArtifactRecord {
+  const metadata = objectRecord(artifact?.metadata)
+  if (sourceFile) metadata.sourceFile = sourceFile
+  metadata.manualGenerated = true
+
+  return {
+    id: String(artifact?.id || artifact?.artifactId || 'manual-bid-analysis'),
+    name: String(artifact?.name || '招标文件解析报告'),
+    kind: 'BID_ANALYSIS',
+    version: '-',
+    status: 'valid',
+    owner: 'AI分析',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    storageRef: String(artifact?.storageRef || artifact?.storage_ref || reportPath),
+    summary: String(artifact?.summary || '手动生成的招标文件解析报告'),
+    sourceTool: 'bid_analysis_report',
+    metadata,
+  }
 }
 
 function stepMatchesStage(step: AgentStep, stage: BiaoshuStageDefinition): boolean {
@@ -184,6 +235,7 @@ function findOutputArtifact(output: Record<string, unknown> | undefined, kind: s
 function storageRefFor(
   output: Record<string, unknown> | undefined,
   artifact: Record<string, unknown> | undefined,
+  kind: string,
 ): string {
   const fromArtifact = artifact && (
     stringValue(artifact.storageRef) ||
@@ -211,6 +263,8 @@ function storageRefFor(
     try {
       const parsed = JSON.parse(stdout) as Record<string, unknown>
       const data = objectValue(parsed.data)
+      const preferred = preferredPathForKind(kind, parsed, data)
+      if (preferred) return preferred
       return stringValue(parsed.output_path) ||
         stringValue(parsed.report_path) ||
         stringValue(parsed.file) ||
@@ -227,6 +281,32 @@ function storageRefFor(
     }
   }
 
+  return ''
+}
+
+function preferredPathForKind(
+  kind: string,
+  parsed: Record<string, unknown>,
+  data: Record<string, unknown> | undefined,
+): string {
+  if (kind === 'BID_RAW_TEXT') {
+    return stringValue(parsed.raw_text_path) ||
+      stringValue(parsed.rawTextPath) ||
+      (data && (
+        stringValue(data.raw_text_path) ||
+        stringValue(data.rawTextPath)
+      )) ||
+      ''
+  }
+  if (kind === 'BID_ANALYSIS') {
+    return stringValue(parsed.report_path) ||
+      stringValue(parsed.reportPath) ||
+      (data && (
+        stringValue(data.report_path) ||
+        stringValue(data.reportPath)
+      )) ||
+      ''
+  }
   return ''
 }
 
@@ -280,6 +360,12 @@ function formatTime(value?: string) {
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {}
 }
 
 function arrayValue(value: unknown): unknown[] | undefined {

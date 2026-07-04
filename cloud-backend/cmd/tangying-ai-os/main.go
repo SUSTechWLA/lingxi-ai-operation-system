@@ -370,12 +370,14 @@ func main() {
 	workflow.EnsureSchema(ctx, pool)
 	zap.L().Info("Workflow service registered")
 
-	// ── Biaoshu artifact revision ──
+	// ── Biaoshu artifact revision & analysis report ──
 	if gw != nil {
-		biaoshuHandler := biaoshu_handler.NewReviseHandler(gw)
-		biaoshuHandler.RegisterRoutes(r)
+		reviseHandler := biaoshu_handler.NewReviseHandler(gw)
+		reviseHandler.RegisterRoutes(r)
+		reportHandler := biaoshu_handler.NewBidAnalysisReportHandler(gw)
+		reportHandler.RegisterRoutes(r)
 	}
-	zap.L().Info("Biaoshu service registered")
+	zap.L().Info("Biaoshu services registered")
 
 	// ── Runtime model-provider config (decoupled from VideoCreationEnabled) ──
 	{

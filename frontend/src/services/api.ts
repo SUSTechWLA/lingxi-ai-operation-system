@@ -371,6 +371,33 @@ export const reviseBiaoshuArtifact = async (
   return response.data.data
 }
 
+// ── Bid Analysis Report Generation ──
+
+export interface GenerateBidAnalysisReportRequest {
+  rawTextPath: string
+  reportPath: string
+  sourceFile?: string
+  projectId?: string
+  runId?: string
+}
+
+export interface GenerateBidAnalysisReportResponse {
+  success: boolean
+  data?: {
+    rawTextPath: string
+    reportPath: string
+    artifact: Record<string, unknown>
+  }
+  error?: string
+}
+
+export const generateBidAnalysisReport = async (
+  payload: GenerateBidAnalysisReportRequest
+): Promise<GenerateBidAnalysisReportResponse> => {
+  const response = await api.post<GenerateBidAnalysisReportResponse>('/biaoshu/bid-analysis-report/generate', payload)
+  return response.data
+}
+
 // ── Model Provider Config Sync ──
 
 export interface ModelProviderSyncPayload {

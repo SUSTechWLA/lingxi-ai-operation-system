@@ -563,6 +563,23 @@ func registerCloudSchemas(b *Builder) {
 		},
 	})
 
+	// ── Biaoshu ──
+	b.Schema("BidAnalysisReportResponse", &Schema{
+		Type: "object",
+		Properties: map[string]*SchemaRef{
+			"success": {Schema: &Schema{Type: "boolean"}},
+			"data": {Schema: &Schema{
+				Type: "object",
+				Properties: map[string]*SchemaRef{
+					"rawTextPath": {Schema: StringSchema()},
+					"reportPath":  {Schema: StringSchema()},
+					"artifact":    {Schema: ObjectSchema()},
+				},
+			}},
+			"error": {Schema: StringSchema()},
+		},
+	})
+
 	// ── Real Go model types (used by multiple responses) ──
 	b.Schema("Artifact", Reflect(artifacts.Artifact{}))
 	b.Schema("WorkflowTemplate", Reflect(workflow.Template{}))

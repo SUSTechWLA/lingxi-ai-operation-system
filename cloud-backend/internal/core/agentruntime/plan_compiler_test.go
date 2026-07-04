@@ -132,25 +132,12 @@ func TestPlanCompiler_InsertsCloudBidAnalysisAfterParseBidFiles(t *testing.T) {
 		},
 	})
 
-	if len(plan.Steps) != 3 {
-		t.Fatalf("expected parse, analysis, convert steps, got %#v", plan.Steps)
+	if len(plan.Steps) != 2 {
+		t.Fatalf("expected parse and convert steps only (no auto-injected analysis), got %#v", plan.Steps)
 	}
-	analysis := plan.Steps[1]
-	if analysis.ID != "bid_analysis_report" || analysis.Tool != "bid_analysis_report" {
-		t.Fatalf("analysis step not inserted after parse: %#v", plan.Steps)
-	}
-	if got := analysis.Arguments["raw_text_path"]; got != "{{parse_bid_files.output.raw_text_path}}" {
-		t.Fatalf("analysis should consume parse raw_text_path, got %#v", analysis.Arguments)
-	}
-	if got := analysis.Arguments["report_path"]; got != "{{parse_bid_files.output.report_path}}" {
-		t.Fatalf("analysis should write parse report_path, got %#v", analysis.Arguments)
-	}
-	convert := plan.Steps[2]
-	if len(convert.DependsOn) != 1 || convert.DependsOn[0] != "bid_analysis_report" {
-		t.Fatalf("convert should depend on cloud analysis step, got %#v", convert.DependsOn)
-	}
-	if got := convert.Arguments["input_file"]; got != "{{bid_analysis_report.output.report_path}}" {
-		t.Fatalf("convert should consume cloud-generated report, got %#v", convert.Arguments)
+	convert := plan.Steps[1]
+	if len(convert.DependsOn) != 1 || convert.DependsOn[0] != "parse_bid_files" {
+		t.Fatalf("convert should depend on parse step, got %#v", convert.DependsOn)
 	}
 	if err := NewPlanGuard(staticToolCatalog{
 		"parse_bid_files":     compiler.manifestFor("parse_bid_files"),
@@ -158,6 +145,70 @@ func TestPlanCompiler_InsertsCloudBidAnalysisAfterParseBidFiles(t *testing.T) {
 		"convert_to_word":     compiler.manifestFor("convert_to_word"),
 	}, nil).Validate(plan); err != nil {
 		t.Fatalf("prepared bid plan should pass guard: %v", err)
+	}
+}
+
+func TestPlanCompiler_RewiresExistingBidAnalysisAfterParseBidFiles(t *testing.T) {
+	compiler := NewPlanCompiler(staticToolCatalog{
+		"parse_bid_files": &tool.ToolManifest{
+			Name: "parse_bid_files",
+			Type: "http",
+			Output: map[string]tool.ParamDef{
+				"raw_text_path": {Type: "string"},
+				"report_path":   {Type: "string"},
+			},
+		},
+		"bid_analysis_report": &tool.ToolManifest{
+			Name: "bid_analysis_report",
+			Type: "builtin",
+			Parameters: map[string]tool.ParamDef{
+				"raw_text_path": {Type: "string", Required: true},
+				"report_path":   {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"report_path": {Type: "string"},
+			},
+		},
+		"convert_to_word": &tool.ToolManifest{
+			Name: "convert_to_word",
+			Type: "http",
+			Parameters: map[string]tool.ParamDef{
+				"input_file": {Type: "string"},
+			},
+		},
+	})
+
+	plan := compiler.PreparePlan(&AgentPlan{
+		Goal:   "parse tender and export word",
+		Domain: "bid_writing",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{ID: "parse_bid_files", Tool: "parse_bid_files", Arguments: map[string]interface{}{"file_path": "E:/bid/test.docx"}},
+			{ID: "bid_analysis_report", Tool: "bid_analysis_report", Arguments: map[string]interface{}{"raw_text_path": "", "report_path": ""}},
+			{
+				ID:        "convert_to_word",
+				Tool:      "convert_to_word",
+				DependsOn: []string{"parse_bid_files"},
+				Arguments: map[string]interface{}{"input_file": "{{parse_bid_files.output.report_path}}"},
+			},
+		},
+	})
+
+	if len(plan.Steps) != 3 {
+		t.Fatalf("expected existing analysis step to remain, got %#v", plan.Steps)
+	}
+	analysis := plan.Steps[1]
+	if analysis.ID != "bid_analysis_report" || analysis.Tool != "bid_analysis_report" {
+		t.Fatalf("analysis step should remain in original position, got %#v", plan.Steps)
+	}
+	if got := analysis.Arguments["raw_text_path"]; got != "" {
+		t.Fatalf("analysis raw_text_path should remain unchanged: %#v", analysis.Arguments)
+	}
+	if got := analysis.Arguments["report_path"]; got != "" {
+		t.Fatalf("analysis report_path should remain unchanged: %#v", analysis.Arguments)
+	}
+	if got := plan.Steps[2].DependsOn; len(got) != 1 || got[0] != "parse_bid_files" {
+		t.Fatalf("convert should depend on parse step, got %#v", plan.Steps[2].DependsOn)
 	}
 }
 

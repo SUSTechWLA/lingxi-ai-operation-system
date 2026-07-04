@@ -73,7 +73,7 @@ func (t *BidAnalysisReportTool) Execute(ctx context.Context, params map[string]i
 		},
 		Parameters: map[string]interface{}{
 			"temperature": 0.3,
-			"max_tokens":  4000.0,
+			"max_tokens":  32000.0,
 		},
 	}
 

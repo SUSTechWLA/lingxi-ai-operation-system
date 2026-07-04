@@ -452,6 +452,21 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("200", "AI-revised content", "BiaoshuReviseResponse").
 		ResponseJSON("400", "Validation error", "ErrorResponse").
 		ResponseJSON("500", "AI revision failed", "ErrorResponse")
+	b.Route("POST", "/api/biaoshu/bid-analysis-report/generate", "Generate a bid analysis report from parsed raw text").
+		Tags("Biaoshu").
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"rawTextPath": {Schema: StringSchema()},
+				"reportPath":  {Schema: StringSchema()},
+				"sourceFile":  {Schema: StringSchema()},
+				"projectId":   {Schema: StringSchema()},
+				"runId":       {Schema: StringSchema()},
+			},
+			Required: []string{"rawTextPath", "reportPath"},
+		}, "Bid analysis report generation request", true).
+		ResponseJSON("200", "Report generated", "BidAnalysisReportResponse").
+		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
 
 	// ── Register automatic schemas (derived from real Go types) ──
 	registerCloudSchemas(b)

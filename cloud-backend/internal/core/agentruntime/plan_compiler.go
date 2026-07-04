@@ -115,7 +115,6 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	if plan == nil {
 		return nil
 	}
-	c.injectBidAnalysisReport(plan)
 	c.injectKnowledgeContext(plan)
 	if plan.Budget.MaxSteps > 0 && len(plan.Steps) > plan.Budget.MaxSteps {
 		plan.Budget.MaxSteps = len(plan.Steps)
@@ -130,43 +129,46 @@ func (c *PlanCompiler) injectBidAnalysisReport(plan *AgentPlan) {
 	if plan == nil || c.manifestFor("bid_analysis_report") == nil {
 		return
 	}
-	for _, step := range plan.Steps {
-		if step.Tool == "bid_analysis_report" {
-			return
+	var existingAnalysis *AgentStep
+	for i := range plan.Steps {
+		if plan.Steps[i].Tool == "bid_analysis_report" {
+			step := plan.Steps[i]
+			existingAnalysis = &step
+			break
 		}
 	}
 
 	out := make([]AgentStep, 0, len(plan.Steps)+1)
 	parseToAnalysis := map[string]string{}
+	analysisInserted := false
 	for _, step := range plan.Steps {
+		if step.Tool == "bid_analysis_report" {
+			continue
+		}
 		out = append(out, step)
 		if step.Tool != "parse_bid_files" {
 			continue
 		}
-
-		analysisID := uniqueBidAnalysisStepID(out, plan.Steps)
-		args := map[string]interface{}{
-			"raw_text_path": fmt.Sprintf("{{%s.output.raw_text_path}}", step.ID),
-			"report_path":   fmt.Sprintf("{{%s.output.report_path}}", step.ID),
-			"stage":         "parse",
-		}
-		if sourceFile, ok := step.Arguments["file_path"]; ok {
-			args["source_file"] = sourceFile
-		}
-		if outputDir, ok := step.Arguments["output_dir"]; ok {
-			args["output_dir"] = outputDir
+		if analysisInserted {
+			continue
 		}
 
-		out = append(out, AgentStep{
-			ID:              analysisID,
-			Intent:          "Generate the final tender parsing report in the cloud backend",
-			Tool:            "bid_analysis_report",
-			DependsOn:       []string{step.ID},
-			Arguments:       args,
-			ExpectedOutput:  []string{"content", "report_path", "artifacts"},
-			ProduceArtifact: true,
-		})
-		parseToAnalysis[step.ID] = analysisID
+		var analysis AgentStep
+		if existingAnalysis != nil {
+			analysis = *existingAnalysis
+		} else {
+			analysis = AgentStep{
+				ID:              uniqueBidAnalysisStepID(out, plan.Steps),
+				Intent:          "Generate the final tender parsing report in the cloud backend",
+				Tool:            "bid_analysis_report",
+				ExpectedOutput:  []string{"content", "report_path", "artifacts"},
+				ProduceArtifact: true,
+			}
+		}
+		normalizeBidAnalysisStep(&analysis, step)
+		out = append(out, analysis)
+		parseToAnalysis[step.ID] = analysis.ID
+		analysisInserted = true
 	}
 	if len(parseToAnalysis) == 0 {
 		return
@@ -186,6 +188,33 @@ func (c *PlanCompiler) injectBidAnalysisReport(plan *AgentPlan) {
 		}
 	}
 	plan.Steps = out
+}
+
+func normalizeBidAnalysisStep(analysis *AgentStep, parseStep AgentStep) {
+	if analysis.ID == "" {
+		analysis.ID = "bid_analysis_report"
+	}
+	analysis.Tool = "bid_analysis_report"
+	if analysis.Intent == "" {
+		analysis.Intent = "Generate the final tender parsing report in the cloud backend"
+	}
+	if len(analysis.ExpectedOutput) == 0 {
+		analysis.ExpectedOutput = []string{"content", "report_path", "artifacts"}
+	}
+	analysis.ProduceArtifact = true
+	analysis.DependsOn = []string{parseStep.ID}
+	if analysis.Arguments == nil {
+		analysis.Arguments = map[string]interface{}{}
+	}
+	analysis.Arguments["raw_text_path"] = fmt.Sprintf("{{%s.output.raw_text_path}}", parseStep.ID)
+	analysis.Arguments["report_path"] = fmt.Sprintf("{{%s.output.report_path}}", parseStep.ID)
+	analysis.Arguments["stage"] = "parse"
+	if sourceFile, ok := parseStep.Arguments["file_path"]; ok {
+		analysis.Arguments["source_file"] = sourceFile
+	}
+	if outputDir, ok := parseStep.Arguments["output_dir"]; ok {
+		analysis.Arguments["output_dir"] = outputDir
+	}
 }
 
 func uniqueBidAnalysisStepID(out []AgentStep, original []AgentStep) string {

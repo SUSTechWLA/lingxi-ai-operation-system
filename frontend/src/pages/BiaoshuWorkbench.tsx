@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend } from 'react-icons/fi'
+import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
-import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, type BiaoshuReviseRequest } from '../services/api'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, type BiaoshuReviseRequest } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
   fetchBiaoshuProjects, 
@@ -16,7 +16,9 @@ import type { AgentPlan, AgentReviewItem, AgentRun, AgentStep } from '../utils/t
 import {
   biaoshuArtifactToCopyText,
   buildBiaoshuArtifacts,
+  createManualReportArtifact,
   displayNameForBiaoshuArtifact,
+  mergeManualReportArtifact,
   type BiaoshuArtifactRecord,
   type BiaoshuArtifactStatus,
 } from './biaoshuArtifactLogic'
@@ -73,6 +75,7 @@ export default function BiaoshuWorkbench() {
   const [run, setRun] = useState<AgentRun | null>(null)
   const [trace, setTrace] = useState<unknown>(null)
   const [reviews, setReviews] = useState<AgentReviewItem[]>([])
+  const [manualReportArtifact, setManualReportArtifact] = useState<BiaoshuArtifactRecord | null>(null)
   const [activeView, setActiveView] = useState<BiaoshuView>('workbench')
   const [projectHistory, setProjectHistory] = useState<BiaoshuProjectHistoryItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -82,11 +85,20 @@ export default function BiaoshuWorkbench() {
   const plan = run?.plan as AgentPlan | undefined
   const steps = plan?.steps || []
   const isTerminalStatus = run?.status === 'SUCCESS' || run?.status === 'FAILED'
-  const artifacts = useMemo(() => buildBiaoshuArtifacts(run, trace, reviews), [run, trace, reviews])
+  const baseArtifacts = useMemo(() => buildBiaoshuArtifacts(run, trace, reviews), [run, trace, reviews])
+  const artifacts = useMemo(
+    () => mergeManualReportArtifact(baseArtifacts, manualReportArtifact),
+    [baseArtifacts, manualReportArtifact],
+  )
 
   const addLog = useCallback((msg: string) => {
     setRunLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   }, [])
+
+  const handleReportGenerated = useCallback((artifact: Record<string, unknown> | undefined, reportPath: string, sourceFile: string) => {
+    setManualReportArtifact(createManualReportArtifact(artifact, reportPath, sourceFile))
+    addLog(`解析报告已生成: ${reportPath}`)
+  }, [addLog])
 
   const refreshRunData = useCallback(async (runId: string) => {
     const [nextRun, nextTrace, nextReviews] = await Promise.all([
@@ -170,6 +182,7 @@ export default function BiaoshuWorkbench() {
     setRunLog([])
     setTrace(null)
     setReviews([])
+    setManualReportArtifact(null)
 
     const message = customMessage.trim()
       || `请解析招标文件并生成技术标文档。文件路径：${bidFilePath}，项目名称：${projectName || '未命名项目'}`
@@ -227,6 +240,7 @@ export default function BiaoshuWorkbench() {
     try {
       setProjectName(item.projectName)
       setBidFilePath(item.bidFilePath)
+      setManualReportArtifact(null)
       const snapshot = await refreshRunData(item.runId)
       await saveHistoryFromRun(snapshot.run, {
         projectName: item.projectName,
@@ -283,7 +297,12 @@ export default function BiaoshuWorkbench() {
         </div>
 
         {activeView === 'artifacts' ? (
-          <BiaoshuArtifactsPage artifacts={artifacts} run={run} onGoWorkbench={() => setActiveView('workbench')} />
+          <BiaoshuArtifactsPage
+            artifacts={artifacts}
+            run={run}
+            onGoWorkbench={() => setActiveView('workbench')}
+            onReportGenerated={handleReportGenerated}
+          />
         ) : activeView === 'history' ? (
           <BiaoshuProjectHistoryPage
             currentRunId={run?.id}
@@ -653,7 +672,17 @@ function formatHistoryDate(value?: string) {
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
-function BiaoshuArtifactsPage({ artifacts, run, onGoWorkbench }: { artifacts: BiaoshuArtifactRecord[]; run: AgentRun | null; onGoWorkbench: () => void }) {
+function BiaoshuArtifactsPage({
+  artifacts,
+  run,
+  onGoWorkbench,
+  onReportGenerated,
+}: {
+  artifacts: BiaoshuArtifactRecord[]
+  run: AgentRun | null
+  onGoWorkbench: () => void
+  onReportGenerated: (artifact: Record<string, unknown> | undefined, reportPath: string, sourceFile: string) => void
+}) {
   const validCount = artifacts.filter((artifact) => artifact.status === 'valid').length
   const activeCount = artifacts.filter((artifact) => artifact.status === 'running' || artifact.status === 'review').length
   const blockedCount = artifacts.filter((artifact) => artifact.status === 'failed' || artifact.status === 'missing').length
@@ -663,6 +692,47 @@ function BiaoshuArtifactsPage({ artifacts, run, onGoWorkbench }: { artifacts: Bi
   const [viewFormat, setViewFormat] = useState<string>('')
   const [viewLoading, setViewLoading] = useState(false)
   const [viewError, setViewError] = useState<string | null>(null)
+
+  // Bid analysis report generation state
+  const [generatingReport, setGeneratingReport] = useState(false)
+  const [generateError, setGenerateError] = useState<string | null>(null)
+
+  const rawTextArtifact = artifacts.find((a) => a.kind === 'BID_RAW_TEXT' && a.status === 'valid')
+  const analysisArtifact = artifacts.find((a) => a.kind === 'BID_ANALYSIS')
+
+  const deriveReportPath = (rawTextPath: string): string => {
+    return rawTextPath.replace(/原文解析/g, '解析报告')
+  }
+
+  const handleGenerateReport = async () => {
+    if (!rawTextArtifact?.storageRef) return
+    setGeneratingReport(true)
+    setGenerateError(null)
+    try {
+      const sourceFile = typeof rawTextArtifact.metadata?.sourceFile === 'string'
+        ? rawTextArtifact.metadata.sourceFile
+        : ''
+      const reportPath = deriveReportPath(rawTextArtifact.storageRef)
+      const result = await generateBidAnalysisReport({
+        rawTextPath: rawTextArtifact.storageRef,
+        reportPath,
+        sourceFile,
+        projectId: run?.id,
+        runId: run?.id,
+      })
+      if (!result.success) {
+        setGenerateError(result.error || '生成失败')
+        return
+      }
+      if (result.data) {
+        onReportGenerated(result.data.artifact, result.data.reportPath, sourceFile)
+      }
+    } catch (e: unknown) {
+      setGenerateError(e instanceof Error ? e.message : '生成解析报告失败')
+    } finally {
+      setGeneratingReport(false)
+    }
+  }
 
   const handleView = async (artifact: BiaoshuArtifactRecord) => {
     if (!artifact.storageRef) return
@@ -716,6 +786,41 @@ function BiaoshuArtifactsPage({ artifacts, run, onGoWorkbench }: { artifacts: Bi
       {!run && (
         <div className="rounded-lg bg-amber-50 p-4 text-sm font-semibold text-primary-dark ring-1 ring-amber-200">
           尚未启动标书任务。启动后这里会自动展示本次运行的产物状态。
+        </div>
+      )}
+
+      {generateError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-start gap-2">
+          <FiAlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>{generateError}</span>
+        </div>
+      )}
+
+      {rawTextArtifact && (
+        <div className="rounded-lg bg-amber-50 p-4 ring-1 ring-amber-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-primary-dark">
+                {analysisArtifact?.status === 'valid' ? '已有解析报告，可重新生成' : '原文解析已完成，可生成解析报告'}
+              </p>
+              <p className="mt-1 text-xs text-ink-muted">
+                基于原文解析调用大模型，生成结构化招标文件解析报告
+              </p>
+            </div>
+            <button
+              onClick={handleGenerateReport}
+              disabled={generatingReport}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-white hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {generatingReport ? (
+                <><FiRefreshCw className="animate-spin" /> 生成中...</>
+              ) : analysisArtifact?.status === 'valid' ? (
+                <><FiZap /> 重新生成解析报告</>
+              ) : (
+                <><FiZap /> 生成解析报告</>
+              )}
+            </button>
+          </div>
         </div>
       )}
 

@@ -374,11 +374,18 @@ func TestBidAnalysisReportToolWritesCloudGeneratedReport(t *testing.T) {
 		t.Fatalf("report_path output = %#v", result.Data["report_path"])
 	}
 	artifacts, ok := result.Data["artifacts"].([]map[string]interface{})
-	if !ok || len(artifacts) != 1 {
-		t.Fatalf("expected one artifact manifest, got %#v", result.Data["artifacts"])
+	if !ok || len(artifacts) == 0 {
+		t.Fatalf("expected artifact manifests, got %#v", result.Data["artifacts"])
 	}
-	if artifacts[0]["kind"] != "BID_ANALYSIS" || artifacts[0]["storageRef"] != reportPath {
-		t.Fatalf("unexpected artifact manifest: %#v", artifacts[0])
+	var foundReport bool
+	for _, artifact := range artifacts {
+		if artifact["kind"] == "BID_ANALYSIS" && artifact["storageRef"] == reportPath {
+			foundReport = true
+			break
+		}
+	}
+	if !foundReport {
+		t.Fatalf("expected BID_ANALYSIS artifact for report path, got %#v", artifacts)
 	}
 }
 
