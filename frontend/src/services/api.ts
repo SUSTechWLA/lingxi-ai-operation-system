@@ -400,6 +400,30 @@ export const generateBidAnalysisReport = async (
 
 // ── Project Context Questions ──
 
+export type ProjectContextInputType =
+  | 'text'
+  | 'textarea'
+  | 'single_choice'
+  | 'multi_choice'
+  | 'boolean'
+
+export interface ProjectContextOption {
+  value: string
+  label: string
+  description?: string
+}
+
+export interface ProjectContextQuestion {
+  id: string
+  category: string
+  title: string
+  prompt: string
+  helpText?: string
+  inputType: ProjectContextInputType
+  required: boolean
+  options?: ProjectContextOption[]
+}
+
 export interface GenerateProjectContextQuestionsRequest {
   analysisReportPath: string
   sourceFile?: string
@@ -409,7 +433,7 @@ export interface GenerateProjectContextQuestionsResponse {
   success: boolean
   data?: {
     analysisReportPath: string
-    questions: string[]
+    questions: ProjectContextQuestion[]
     markdown: string
   }
   error?: string

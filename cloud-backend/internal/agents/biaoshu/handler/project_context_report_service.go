@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,7 +80,10 @@ func GenerateProjectContextReport(
 		return nil, fmt.Errorf("cannot read analysis report: %w", err)
 	}
 
-	userPrompt := fmt.Sprintf("## 招标文件解析报告\n\n%s\n\n## 用户回答\n\n%s", string(reportBytes), contextAnswers)
+	// Parse contextAnswers — may be plain text or structured JSON
+	answersText := buildContextAnswersText(contextAnswers)
+
+	userPrompt := fmt.Sprintf("## 招标文件解析报告\n\n%s\n\n## 用户回答\n\n%s", string(reportBytes), answersText)
 
 	result, err := gw.Execute(ctx, &modelgateway.ModelRequest{
 		Capability: modelgateway.CapTextToText,
@@ -126,4 +130,90 @@ func GenerateProjectContextReport(
 		Content:            content,
 		Artifact:           artifact,
 	}, nil
+}
+
+// questionnaireAnswer is the minimal struct for parsing a question's answer from JSON.
+type questionnaireAnswer struct {
+	Selected    []string `json:"selected"`
+	Text        string   `json:"text"`
+	ExtraText   string   `json:"extraText"`
+	NeedsReview bool     `json:"needsReview"`
+}
+
+type questionnaireQuestion struct {
+	ID     string              `json:"id"`
+	Prompt string              `json:"prompt"`
+	Answer questionnaireAnswer `json:"answer"`
+}
+
+type questionnaire struct {
+	Questions []questionnaireQuestion `json:"questions"`
+}
+
+// buildContextAnswersText tries to parse contextAnswers as JSON questionnaire.
+// If successful, it formats a structured Markdown for the LLM.
+// Otherwise, it returns the raw text unchanged.
+func buildContextAnswersText(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "{") {
+		return raw
+	}
+
+	var q questionnaire
+	if err := json.Unmarshal([]byte(trimmed), &q); err != nil {
+		return raw
+	}
+
+	if len(q.Questions) == 0 {
+		return raw
+	}
+
+	var b strings.Builder
+	b.WriteString("以下是用户对每个问题的结构化回答：\n\n")
+
+	for i, question := range q.Questions {
+		prompt := question.Prompt
+		if prompt == "" {
+			prompt = "(问题文本缺失)"
+		}
+		b.WriteString(fmt.Sprintf("### %d. %s\n\n", i+1, prompt))
+
+		ans := question.Answer
+
+		// Selected options
+		if len(ans.Selected) > 0 {
+			b.WriteString("- 用户选择：")
+			for j, sel := range ans.Selected {
+				if j > 0 {
+					b.WriteString("、")
+				}
+				b.WriteString(sel)
+			}
+			b.WriteString("\n")
+		}
+
+		// Text answer
+		if strings.TrimSpace(ans.Text) != "" {
+			b.WriteString(fmt.Sprintf("- 用户回答：%s\n", ans.Text))
+		}
+
+		// Extra text
+		if strings.TrimSpace(ans.ExtraText) != "" {
+			b.WriteString(fmt.Sprintf("- 补充说明：%s\n", ans.ExtraText))
+		}
+
+		// Needs review flag
+		if ans.NeedsReview {
+			b.WriteString("- **此内容待用户确认，请勿作为已确认事实。**\n")
+		}
+
+		// No answer at all
+		if len(ans.Selected) == 0 && strings.TrimSpace(ans.Text) == "" && strings.TrimSpace(ans.ExtraText) == "" {
+			b.WriteString("- 用户未回答此问题。\n")
+		}
+
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }
