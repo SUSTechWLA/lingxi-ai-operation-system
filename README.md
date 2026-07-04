@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.8-111827?style=for-the-badge" />
+  <img alt="Release" src="https://img.shields.io/badge/Release-v0.1.9-111827?style=for-the-badge" />
   <img alt="Video Workflow" src="https://img.shields.io/badge/Video%20Workflow-Cloud%20Orchestration%20%2B%20Local%20Runner-5B6CFF?style=for-the-badge" />
   <img alt="Desktop Client" src="https://img.shields.io/badge/Desktop-React%20%2B%20Electron-16A085?style=for-the-badge" />
   <img alt="Backend" src="https://img.shields.io/badge/Backend-Go-2F80ED?style=for-the-badge" />
@@ -28,6 +28,14 @@
 ---
 
 ## Release 更新
+
+### v0.1.9 - 2026-07-04
+
+- 加固 release 构建链路：CI 覆盖 Go test/vet、前端 lint/build、Electron runtime 测试、HyperFrames Render Service build 和安全审计。
+- 云端生产配置不再允许默认弱密钥，Docker 镜像不再内置 `.env`；启动时会校验 `AUTH_TOKEN_SECRET`、数据库和 OpenAI 配置，减少误把开发配置带到发布环境的风险。
+- 本地 runner 和 Electron 文件读取增加 fail-closed 边界：需要 sandbox 的 tool 在 sandbox 不可用时直接阻断，桌面端只允许读取用户明确授权的文件或目录。
+- 清理无用代码和依赖：移除未调用 helper、孤立前端工具文件、根目录冗余 `electron-builder`、渲染服务未使用的直接 `@hyperframes/core` 依赖，并补齐前端脚本直接使用的 `esbuild`。
+- 已重新生成 macOS arm64 桌面安装包，并保留一条 smoke 测试视频用于验证发布包、渲染链路和 QA 报告。
 
 ### v0.1.8 - 2026-07-04
 

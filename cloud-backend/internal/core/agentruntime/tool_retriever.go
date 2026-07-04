@@ -50,10 +50,6 @@ type ToolCandidate struct {
 
 type HybridToolRetriever struct {
 	allTools []*tool.ToolManifest
-
-	vectorStore interface {
-		Search(ctx context.Context, query string, topK int) ([]string, error)
-	}
 }
 
 func NewHybridToolRetriever(manifests []*tool.ToolManifest) *HybridToolRetriever {

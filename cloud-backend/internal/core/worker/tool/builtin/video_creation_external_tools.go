@@ -101,7 +101,6 @@ var videoCreationExternalTools = []string{
 
 var (
 	videoCreationOpenAICfg config.OpenAIConfig
-	videoCreationSkillRoot string
 	modelGateway           *modelgateway.Gateway
 	durationHintPattern    = regexp.MustCompile(`(?i)(\d{1,3})\s*(秒|s|sec|secs|second|seconds)`)
 )
@@ -115,7 +114,6 @@ func SetModelGateway(gw *modelgateway.Gateway) {
 // tools so skill_stage_agent can call the LLM API.
 func SetVideoCreationConfig(cfg config.OpenAIConfig, skillRoot string) {
 	videoCreationOpenAICfg = cfg
-	videoCreationSkillRoot = skillRoot
 }
 
 // GetEnvOpenAIConfig returns the env-based OpenAI config (for display purposes).
@@ -279,12 +277,6 @@ func detectHyperFramesCLI() (command string, found bool) {
 	return "", false
 }
 
-// hyperFramesAvailable reports whether CLI is detected for build/render stages.
-func hyperFramesAvailable() bool {
-	_, found := detectHyperFramesCLI()
-	return found
-}
-
 // --- HyperFrames Render Service (replaces CLI) ---
 
 var (
@@ -391,12 +383,6 @@ func ClearRuntimeModelProviderConfig() {
 	}
 }
 
-func loadRuntimeConfig() {
-	runtimeConfigMu.Lock()
-	defer runtimeConfigMu.Unlock()
-	loadRuntimeConfigLocked()
-}
-
 func loadRuntimeConfigLocked() {
 	runtimeConfigLoaded = true
 	if runtimeConfigPersistPath == "" {
@@ -422,12 +408,6 @@ func loadRuntimeConfigLocked() {
 			Model:   disk.Model,
 		}
 	}
-}
-
-func persistRuntimeConfig() {
-	runtimeConfigMu.Lock()
-	defer runtimeConfigMu.Unlock()
-	persistRuntimeConfigLocked()
 }
 
 func persistRuntimeConfigLocked() {
@@ -5906,14 +5886,6 @@ func firstGeneratedMediaURL(value interface{}) string {
 	return ""
 }
 
-func extractGeneratedVideoURL(content string) string {
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &parsed); err != nil {
-		return ""
-	}
-	return firstNonEmptyString(parsed, "url", "videoUrl", "storageRef", "outputUrl")
-}
-
 func localContentHash(content string) string {
 	sum := stdsha256.Sum256([]byte(content))
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -6321,7 +6293,7 @@ Output (just the search query, nothing else):`, raw)
 		}
 	}
 	clean = strings.TrimLeft(clean, "，,。.：:、 ")
-	clean = strings.TrimRight(clean, "，,。.：:、。")
+	clean = strings.TrimRight(clean, "，,。.：:、")
 	// Remove duration patterns like "一个30秒" "30秒的"
 	for _, d := range []string{"一个30秒", "一个45秒", "一个60秒", "一个90秒", "30秒的", "45秒的", "60秒的", "30秒", "45秒", "60秒", "90秒", "120秒"} {
 		clean = strings.ReplaceAll(clean, d, "")
@@ -6562,22 +6534,6 @@ func buildHyperFramesBuildArgs(cliCmd, referenceRef, assetsRef, taskID string) [
 	}
 }
 
-func buildHyperFramesRenderArgs(cliCmd, projectRef, taskID string) []string {
-	outputPath := fmt.Sprintf("output/%s.mp4", taskID)
-	if cliCmd == "npx" {
-		return []string{"hyperframes", "render",
-			"--project", projectRef,
-			"--output", outputPath,
-			"--format", "mp4",
-		}
-	}
-	return []string{"render",
-		"--project", projectRef,
-		"--output", outputPath,
-		"--format", "mp4",
-	}
-}
-
 func runHyperFramesCommand(cliCmd string, args []string, taskID string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -6610,16 +6566,16 @@ func buildProjectContent(stage, skillName, status string, cliFound bool, project
 	b.WriteString(fmt.Sprintf("CLI Available: %v\n\n", cliFound))
 
 	if status == "built" {
-		b.WriteString(fmt.Sprintf("Project built successfully.\n"))
+		b.WriteString("Project built successfully.\n")
 		b.WriteString(fmt.Sprintf("- Project: `%s`\n", projectRef))
 		b.WriteString(fmt.Sprintf("- Preview: %s\n", previewURL))
 	} else {
 		b.WriteString("## Build Guidance\n\n")
 		b.WriteString("HyperFrames CLI not available. To build this project manually:\n\n")
 		b.WriteString("```bash\n")
-		b.WriteString(fmt.Sprintf("# 1. Create project directory\n"))
+		b.WriteString("# 1. Create project directory\n")
 		b.WriteString(fmt.Sprintf("mkdir -p %s\n\n", projectRef))
-		b.WriteString(fmt.Sprintf("# 2. Copy the HyperFrames reference as the build instruction\n"))
+		b.WriteString("# 2. Copy the HyperFrames reference as the build instruction\n")
 		b.WriteString(fmt.Sprintf("# 3. Run: npx hyperframes build --ref <ref> --output %s\n", projectRef))
 		b.WriteString("```\n\n")
 		b.WriteString("### Reference Content:\n\n")
@@ -6697,7 +6653,7 @@ func buildRenderContent(stage, skillName, status string, cliFound bool, renderPa
 	b.WriteString(fmt.Sprintf("CLI Available: %v\n\n", cliFound))
 
 	if status == "rendered" {
-		b.WriteString(fmt.Sprintf("Render completed.\n"))
+		b.WriteString("Render completed.\n")
 		b.WriteString(fmt.Sprintf("- Output: `%s`\n", renderPath))
 	} else if status == "manual_upload_required" {
 		b.WriteString("## Manual Video Result\n\n")
@@ -6708,9 +6664,9 @@ func buildRenderContent(stage, skillName, status string, cliFound bool, renderPa
 		b.WriteString("HyperFrames CLI not available. To render this project manually:\n\n")
 		b.WriteString("```bash\n")
 		if cliFound {
-			b.WriteString(fmt.Sprintf("hyperframes render --project <project> --output output/video.mp4 --format mp4\n"))
+			b.WriteString("hyperframes render --project <project> --output output/video.mp4 --format mp4\n")
 		} else {
-			b.WriteString(fmt.Sprintf("npx hyperframes render --project <project> --output output/video.mp4 --format mp4\n"))
+			b.WriteString("npx hyperframes render --project <project> --output output/video.mp4 --format mp4\n")
 		}
 		b.WriteString("```\n\n")
 		b.WriteString("Expected output: MP4, h264 codec, matching the aspect ratio from the reference document.\n")
@@ -6765,63 +6721,6 @@ func buildRenderArtifacts(stage, skillName, status, renderPath string) []map[str
 		})
 	}
 	return artifacts
-}
-
-func buildRenderGuidance(cliCmd, projectRef, taskID string) string {
-	if cliCmd == "" {
-		cliCmd = "npx hyperframes"
-	}
-	outputPath := fmt.Sprintf("output/%s.mp4", taskID)
-	return fmt.Sprintf(`# HyperFrames 渲染指引
-
-## CLI 命令
-%s render --project %s --output %s --format mp4
-
-## 渲染参数建议
-- 分辨率：与参考文档画幅一致（默认 1920x1080 或 1080x1920）
-- 编码器：h264
-- 比特率：建议 8-15 Mbps（根据时长和画质需求）
-- 帧率：30fps
-- 音频：包含 TTS 预览音轨或真人录音
-`, cliCmd, projectRef, outputPath)
-}
-
-// --- Output extraction helpers ---
-
-func extractDurationFromOutput(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, "duration") || strings.Contains(line, "Duration") {
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	return ""
-}
-
-func extractResolutionFromOutput(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, "resolution") || strings.Contains(line, "Resolution") {
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	return ""
-}
-
-func extractFileSizeFromOutput(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, "size") || strings.Contains(line, "Size") {
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	return ""
 }
 
 func countByStatus(requests []map[string]interface{}, status string) int {
@@ -7394,7 +7293,7 @@ func hasMeaningfulStructuredValue(value interface{}) bool {
 
 func fallbackCinematicScriptSections(subject string, targetDurationSec int) []map[string]interface{} {
 	texts := []string{
-		fmt.Sprintf("夜晚的创作桌像刚经历过一场需求暴雨，主角盯着屏幕说：我只是想做条视频，为什么像在解谜。桌上的任务卡突然立起来，把自己排成歪歪扭扭的队。"),
+		"夜晚的创作桌像刚经历过一场需求暴雨，主角盯着屏幕说：我只是想做条视频，为什么像在解谜。桌上的任务卡突然立起来，把自己排成歪歪扭扭的队。",
 		fmt.Sprintf("主角把一句话需求放进%s，导演台亮起，故事大纲、角色、场景、道具和 shot 队列像舞台灯一样依次打开。任务卡从乱跳变成排队走路。", subject),
 		"即梦 MCP 插槽弹出，参考图和 AIGC shot 被打包进每个镜头。QA 放大镜从画面边缘扫过，把拥挤字幕、混乱背景和不匹配镜头逐个标红，再给出返修建议。",
 		fmt.Sprintf("最后，创作桌恢复清爽，主角端起咖啡对镜头说：这不是让 AI 乱发挥，是把创作变成可审核流水线。%s 开源上线，关注后续真实迭代。", subject),

@@ -700,6 +700,42 @@ func TestHandlerAllowsLocalFrontendCORS(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsUntrustedOriginForArtifactWrite(t *testing.T) {
+	server := NewServer(Config{DataDir: t.TempDir()})
+	body := bytes.NewBufferString(`{
+		"id":"art-evil",
+		"projectId":"vp-evil",
+		"content":"blocked"
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("untrusted origin status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerAllowsLocalOriginForArtifactWrite(t *testing.T) {
+	server := NewServer(Config{DataDir: t.TempDir()})
+	body := bytes.NewBufferString(`{
+		"id":"art-local",
+		"projectId":"vp-local",
+		"content":"allowed"
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/local/artifacts", body)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local origin status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestLocalArtifactStoreWritesAndReadsUserPayload(t *testing.T) {
 	root := t.TempDir()
 	server := NewServer(Config{DataDir: root})

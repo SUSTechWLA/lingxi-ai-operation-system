@@ -17,7 +17,6 @@ RUN apk --no-cache add ca-certificates bash curl
 WORKDIR /app
 
 COPY --from=builder /tangying-ai-os .
-COPY .env.example .env
 COPY --from=builder /app/skills ./skills
 COPY --from=builder /app/skill-capabilities ./skill-capabilities
 

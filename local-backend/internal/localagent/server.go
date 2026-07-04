@@ -920,8 +920,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if origin := allowedLocalOrigin(r.Header.Get("Origin")); origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
+		origin := r.Header.Get("Origin")
+		allowedOrigin := allowedLocalOrigin(origin)
+		if allowedOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			w.Header().Add("Vary", "Origin")
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
@@ -931,8 +933,21 @@ func withCORS(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if isMutatingMethod(r.Method) && strings.TrimSpace(origin) != "" && allowedOrigin == "" {
+			writeError(w, http.StatusForbidden, "origin is not allowed for local agent write requests")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isMutatingMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func allowedLocalOrigin(origin string) string {

@@ -67,6 +67,9 @@ func main() {
 
 	logger.Init(mode)
 	cfg := config.Load()
+	if err := cfg.ValidateForMode(mode); err != nil {
+		zap.L().Fatal("Invalid runtime configuration", zap.Error(err))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

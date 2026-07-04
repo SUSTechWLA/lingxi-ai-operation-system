@@ -120,15 +120,6 @@ func defaultKnowledgePolicyForTools(message, domain string, manifests []*tool.To
 	return policy
 }
 
-func manifestListHasTool(manifests []*tool.ToolManifest, name string) bool {
-	for _, manifest := range manifests {
-		if manifest != nil && manifest.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *HeuristicPlanner) selectTools(domain, message string) []*tool.ToolManifest {
 	type scored struct {
 		manifest *tool.ToolManifest

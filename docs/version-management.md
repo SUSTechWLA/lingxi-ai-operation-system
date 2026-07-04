@@ -46,6 +46,21 @@ README 的 release note 要写给用户看，不写内部流水账。每条说�
 
 ## 当前发布检查清单
 
+v0.1.9 对应能力：
+
+- 发布链路加固：CI 覆盖 Go test/vet、前端 lint/build、Electron runtime 测试、HyperFrames Render Service build 和生产依赖审计。
+- 生产配置 fail-fast：云端启动校验 `AUTH_TOKEN_SECRET`、数据库和 OpenAI 配置；Docker 镜像不再复制 `.env`。
+- 本地执行边界 fail-closed：需要 sandbox 的工具在 sandbox 不可用时阻断；Electron 文件读取只允许用户明确授权路径。
+- 清理无用代码和依赖：移除未调用 helper、孤立前端工具文件和冗余 package 依赖，补齐直接使用的 `esbuild`。
+
+发布 v0.1.9 tag 前必须确认：
+
+1. README 已追加 v0.1.9 release note。
+2. GitHub Wiki 首页、英文首页和版本管理页已同步 v0.1.9 状态。
+3. Go、前端、渲染服务、root smoke 和 Electron build 验证通过。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.9 <release_commit>` 只在 release 提交后创建。
+
 v0.1.8 对应能力：
 
 - 本地 `LOCAL_MCP_TOOL_CALL` 对每个 `kind=video` 请求增加 preflight QA，调用 Dreamina/JiMeng 前先检查提示词清晰度和参考素材可用性。

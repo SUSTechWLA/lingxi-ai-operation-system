@@ -385,12 +385,16 @@ func (ne *NodeExecutor) executeTool(
 		}
 	}
 
-	execImpl := ne.selectExecutor(t)
-
 	var result executor.ExecutionResult
 	var execErr error
 
 	if bt, ok := t.(tool.BuildableTool); ok {
+		if manifest != nil && manifest.Sandbox && (ne.sandboxExecutor == nil || !ne.cfg.Sandbox.Enabled) {
+			return executor.ExecutionResult{
+				Error: fmt.Sprintf("sandbox is required for tool %s but SANDBOX_ENABLED is false or sandbox is unavailable", toolName),
+			}, nil
+		}
+		execImpl := ne.selectExecutor(t)
 		execReq, err := bt.BuildExecutionRequest(parameters)
 		if err != nil {
 			result.Error = err.Error()
@@ -887,42 +891,6 @@ func resolveSingleRef(ctx context.Context, nodeRepo repository.NodeRepo, taskID 
 			zap.String("field", field))
 	}
 	return val, true
-}
-
-// findNodeOutput looks up a node and returns its output map, trying both the raw reference ID
-// and the taskID-scoped version (taskID-refNodeID) for compatibility with both code paths.
-// When exact match fails, it falls back to fuzzy-matching by taskID + refNodeID substring.
-func findNodeOutput(ctx context.Context, nodeRepo repository.NodeRepo, taskID, refNodeID string) (*model.Node, map[string]interface{}) {
-	// Try raw ID first (used by /api/node direct submission path)
-	for _, candidate := range []string{
-		refNodeID,
-		taskID + "-" + refNodeID,
-	} {
-		node, err := nodeRepo.FindByID(ctx, candidate)
-		if err != nil || node == nil || node.Output == nil {
-			continue
-		}
-		return node, node.Output
-	}
-
-	// Fallback: fuzzy-match within the same task. PlanCompiler references use
-	// plain step IDs (e.g., "knowledge_researcher") but the orchestrator creates
-	// nodes with prefixed IDs (e.g., "td34b45e16e-knowledge_researcher_exec").
-	nodes, err := nodeRepo.FindByTaskID(ctx, taskID)
-	if err != nil {
-		return nil, nil
-	}
-	for _, node := range nodes {
-		if node == nil || node.Output == nil {
-			continue
-		}
-		// Match if the node ID contains the refNodeID as a substring. This handles
-		// both exec nodes (suffix _exec) and review nodes (suffix _review).
-		if strings.Contains(node.ID, refNodeID) {
-			return node, node.Output
-		}
-	}
-	return nil, nil
 }
 
 func findNodeOutputField(ctx context.Context, nodeRepo repository.NodeRepo, taskID, refNodeID, field string) (*model.Node, interface{}, bool) {

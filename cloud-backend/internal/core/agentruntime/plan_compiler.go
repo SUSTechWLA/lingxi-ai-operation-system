@@ -1892,22 +1892,6 @@ func uniqueStepID(plan *AgentPlan, base string) string {
 	}
 }
 
-func planHasToolOrTerm(plan *AgentPlan, terms []string) bool {
-	return lastStepMatching(plan, terms) != ""
-}
-
-func lastStepMatching(plan *AgentPlan, terms []string) string {
-	if plan == nil {
-		return ""
-	}
-	for i := len(plan.Steps) - 1; i >= 0; i-- {
-		if stepMentionsAny(plan.Steps[i], terms) {
-			return plan.Steps[i].ID
-		}
-	}
-	return ""
-}
-
 func (c *PlanCompiler) lastProducerStepForFields(plan *AgentPlan, fields []string, fallbackTools []string) (string, string) {
 	if plan == nil {
 		return "", ""
@@ -1980,22 +1964,6 @@ func manifestAcceptsParam(manifest *tool.ToolManifest, name string) bool {
 	}
 	_, ok := manifest.Parameters[name]
 	return ok
-}
-
-func stepMentionsAny(step AgentStep, terms []string) bool {
-	haystack := strings.ToLower(step.ID + " " + step.Intent + " " + step.Tool)
-	if stage, ok := step.Arguments["stage"].(string); ok {
-		haystack += " " + stage
-	}
-	for _, out := range step.ExpectedOutput {
-		haystack += " " + strings.ToLower(out)
-	}
-	for _, term := range terms {
-		if strings.Contains(haystack, strings.ToLower(term)) {
-			return true
-		}
-	}
-	return false
 }
 
 func requestedAIGCProvider(plan *AgentPlan) string {

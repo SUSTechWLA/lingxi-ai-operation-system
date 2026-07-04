@@ -79,7 +79,7 @@ func (e *FinalReviewExecutor) Execute(ctx context.Context, job Job) (*Result, er
 						if dur, ok := media["durationSec"].(float64); ok && dur >= 45 && dur <= 90 {
 							checks["durationValid"] = true
 						} else {
-							warnings = append(warnings, fmt.Sprintf("视频时长不符合45-90秒要求"))
+							warnings = append(warnings, "视频时长不符合45-90秒要求")
 						}
 						if w, ok := media["width"].(float64); ok && w == 1920 {
 							if h, ok2 := media["height"].(float64); ok2 && h == 1080 {

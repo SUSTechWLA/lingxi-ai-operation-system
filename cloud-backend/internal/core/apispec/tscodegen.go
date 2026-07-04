@@ -143,7 +143,7 @@ func schemaToTSType(s *Schema) string {
 		if s.AdditionalProperties != nil && s.AdditionalProperties.Schema != nil {
 			return "Record<string, " + schemaToTSType(s.AdditionalProperties.Schema) + ">"
 		}
-		if s.Properties != nil && len(s.Properties) > 0 {
+		if len(s.Properties) > 0 {
 			var b strings.Builder
 			b.WriteString("{ ")
 			propNames := make([]string, 0, len(s.Properties))

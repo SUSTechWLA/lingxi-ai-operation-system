@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -62,6 +63,42 @@ func TestSetDefaultsEnablesCloudVideoCreation(t *testing.T) {
 	}
 	if got := viper.GetInt("AGENT_PLANNER_MAX_TOOLS"); got != 8 {
 		t.Fatalf("AGENT_PLANNER_MAX_TOOLS default = %d, want 8", got)
+	}
+}
+
+func TestValidateForModeRejectsProductionWeakDefaults(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	setDefaults()
+
+	cfg := &Config{}
+	if err := viper.Unmarshal(cfg); err != nil {
+		t.Fatalf("unmarshal defaults: %v", err)
+	}
+
+	err := cfg.ValidateForMode("production")
+	if err == nil {
+		t.Fatal("expected production validation to reject weak defaults")
+	}
+	for _, want := range []string{"AUTH_TOKEN_SECRET", "POSTGRES_PASSWORD", "MINIO_SECRET_KEY", "SANDBOX_ENABLED"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("production validation error should mention %s, got %v", want, err)
+		}
+	}
+}
+
+func TestValidateForModeAllowsDevelopmentDefaults(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	setDefaults()
+
+	cfg := &Config{}
+	if err := viper.Unmarshal(cfg); err != nil {
+		t.Fatalf("unmarshal defaults: %v", err)
+	}
+
+	if err := cfg.ValidateForMode("development"); err != nil {
+		t.Fatalf("development defaults should remain usable: %v", err)
 	}
 }
 

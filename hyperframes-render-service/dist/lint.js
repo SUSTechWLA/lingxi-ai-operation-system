@@ -1,5 +1,5 @@
 /**
- * Lint a HyperFrames project directory using @hyperframes/core.
+ * Lint a HyperFrames project directory.
  * Validates the composition HTML, checks for non-deterministic patterns
  * (Date.now, Math.random), and reports issues.
  *

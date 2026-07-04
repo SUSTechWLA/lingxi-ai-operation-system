@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,7 +10,9 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/eventbus"
 	"github.com/tangying-ai/aios-core/internal/core/localrunner"
 	"github.com/tangying-ai/aios-core/internal/core/model"
+	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
+	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 )
 
 func TestExecuteNodeLocalToolCreatesLocalJobAndWaits(t *testing.T) {
@@ -321,6 +324,22 @@ func TestExecutableToolTimeoutUsesDelegatedExternalManifest(t *testing.T) {
 
 	if timeout != 1800*time.Second {
 		t.Fatalf("expected delegated hyperframes_renderer timeout, got %s", timeout)
+	}
+}
+
+func TestExecuteToolRejectsSandboxToolWhenSandboxUnavailable(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	registry.Register(builtin.NewPythonTool())
+	nodeExecutor := NewNodeExecutor(registry, nil, config.WorkerConfig{}, executor.NewDirectExecutor(), nil, nil)
+
+	result, err := nodeExecutor.executeTool(context.Background(), "python", map[string]interface{}{
+		"source": "print('unsafe')",
+	}, tool.ToolContext{}, false, nil)
+	if err != nil {
+		t.Fatalf("executeTool returned error: %v", err)
+	}
+	if !strings.Contains(result.Error, "sandbox is required") {
+		t.Fatalf("expected sandbox required error, got %#v", result)
 	}
 }
 

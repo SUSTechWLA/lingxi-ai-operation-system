@@ -9,6 +9,7 @@
 # Build output
 /build/
 target/
+scripts/tmp/
 
 # Environment files with secrets - NEVER commit these!
 .env

@@ -8,6 +8,7 @@ const {
   normalizeRunnerSession,
   readOrCreateDeviceID,
 } = require('./local-agent-runtime.cjs')
+const { createFileAccessController } = require('./file-access-runtime.cjs')
 
 const isDev = !app.isPackaged
 const LOCAL_AGENT_URL = process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080'
@@ -16,6 +17,7 @@ const APP_ICON_FILE = '躺营ai自媒体运营助手.png'
 
 let mainWindow = null
 let localAgentProcess = null
+const fileAccess = createFileAccessController()
 let localRunnerSession = normalizeRunnerSession({
   userToken: process.env.TANGYING_USER_TOKEN,
   deviceID: process.env.TANGYING_DEVICE_ID,
@@ -145,6 +147,9 @@ function createWindow() {
 // Read file from disk and return base64-encoded data with metadata.
 // Used by the renderer to create proper File objects for upload.
 ipcMain.handle('read-file', async (_, filePath) => {
+  if (!fileAccess.canRead(filePath)) {
+    throw new Error('file path has not been granted by the file picker')
+  }
   const data = fs.readFileSync(filePath)
   const ext = path.extname(filePath).toLowerCase()
   const mimeTypes = {
@@ -174,7 +179,9 @@ ipcMain.handle('open-file-dialog', async (_, options = {}) => {
     ],
     ...options,
   })
-  return result.canceled ? [] : result.filePaths
+  if (result.canceled) return []
+  fileAccess.grantFiles(result.filePaths)
+  return result.filePaths
 })
 
 // Open directory dialog
@@ -182,7 +189,9 @@ ipcMain.handle('open-directory-dialog', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
   })
-  return result.canceled ? [] : result.filePaths
+  if (result.canceled) return []
+  fileAccess.grantDirectories(result.filePaths)
+  return result.filePaths
 })
 
 // Save file dialog

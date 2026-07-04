@@ -1337,8 +1337,8 @@ func buildHyperFramesIndexWithMediaSpec(topic, script string, mediaPackages []sh
 		}
 	}
 	cards, captions := mediaPackageCards(topic, script, mediaPackages), mediaPackageCaptions(mediaPackages)
-	if specFromShots := spec; specFromShots != nil && len(specFromShots.Tracks) > 0 {
-		if shotCards, shotCaptions := extractCardsAndCaptions(specFromShots); len(shotCards) > 0 {
+	if len(spec.Tracks) > 0 {
+		if shotCards, shotCaptions := extractCardsAndCaptions(spec); len(shotCards) > 0 {
 			cards = shotCards
 			captions = shotCaptions
 		}

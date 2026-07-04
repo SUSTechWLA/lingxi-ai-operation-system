@@ -28,7 +28,9 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            hyperframes-render-service/package-lock.json
 
       - name: Install dependencies
         working-directory: frontend
@@ -56,10 +58,6 @@ jobs:
     name: build
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: frontend
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -69,13 +67,29 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            hyperframes-render-service/package-lock.json
 
       - name: Install dependencies
+        working-directory: frontend
         run: npm ci
 
       - name: Build frontend
+        working-directory: frontend
         run: npm run build
+
+      - name: Install HyperFrames render service dependencies
+        working-directory: hyperframes-render-service
+        run: npm ci
+
+      - name: Build HyperFrames render service
+        working-directory: hyperframes-render-service
+        run: npm run build
+
+      - name: Audit HyperFrames render service runtime dependencies
+        working-directory: hyperframes-render-service
+        run: npm audit --omit=dev --registry=https://registry.npmjs.org
 
   test:
     name: test
@@ -100,6 +114,16 @@ jobs:
         working-directory: frontend
         run: npm run test:director
 
+      - name: Run Electron runtime tests
+        working-directory: frontend
+        run: |
+          node electron/local-agent-runtime.test.cjs
+          node electron/file-access-runtime.test.cjs
+
+      - name: Audit frontend runtime dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev --registry=https://registry.npmjs.org
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -116,3 +140,6 @@ jobs:
       - name: Test local backend
         working-directory: local-backend
         run: go test ./...
+
+      - name: Test video QA MCP service
+        run: python3 -m unittest discover -s mcp/video_qa -p 'test*.py'
