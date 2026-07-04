@@ -2,6 +2,8 @@
 
 This runbook is for controlled technical beta users. It is not a public SaaS deployment guide.
 
+Current beta readiness and launch criteria are tracked in [Release Status](RELEASE_STATUS.md). Historical release notes live in [Changelog](../CHANGELOG.md).
+
 ## Supported Platforms
 
 - macOS 14+ on Apple Silicon is the primary closed beta target.

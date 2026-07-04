@@ -18,10 +18,12 @@
 合入 `release` 前必须完成：
 
 1. 核心链路验证通过，至少包含相关 Go 单测、前端逻辑测试和构建。
-2. README 的「Release 更新」追加本次版本的用户可读更新内容。
-3. Wiki 源文档同步更新。涉及架构、流程、版本规则、MCP 或 QA 的改动都要写入 `docs/`。
-4. 只 stage 本次发布需要的源码和文档，不 stage `tmp/`、`promo/`、本地渲染产物或用户私有配置。
-5. 合并到 `release` 后创建语义化 tag。
+2. `CHANGELOG.md` 追加本次版本的用户可读更新内容。
+3. `docs/RELEASE_STATUS.md` 更新当前版本可用性、内测门槛和已知限制。
+4. README 只保留当前版本摘要和核心文档入口，不追加完整历史流水账。
+5. Wiki 源文档同步更新。涉及架构、流程、版本规则、MCP 或 QA 的改动都要写入 `docs/`。
+6. 只 stage 本次发布需要的源码和文档，不 stage `tmp/`、`promo/`、本地渲染产物或用户私有配置。
+7. 合并到 `release` 后创建语义化 tag。
 
 ## Tag 规则
 
@@ -37,12 +39,22 @@ tag 必须指向 `release` 上的发布提交。不要移动已发布 tag；如�
 
 ## 发布记录规范
 
-README 的 release note 要写给用户看，不写内部流水账。每条说明应回答：
+发布记录采用三个固定入口：
+
+| 文件 | 职责 |
+|---|---|
+| `README.md` | 入口页，只保留当前版本摘要、快速开始和文档链接。 |
+| `CHANGELOG.md` | 完整版本历史，按版本追加 `Added`、`Changed`、`Fixed`、`Security` 等分组。 |
+| `docs/RELEASE_STATUS.md` | 当前版本能否内测、readiness gate、真实 AIGC 与 fallback 判断、已知限制。 |
+
+`CHANGELOG.md` 的每条说明应回答：
 
 - 用户现在能做什么。
 - 哪些阻断问题被修复。
 - 是否影响使用方式、配置方式或兼容性。
 - 是否需要重新启动 cloud backend、local agent 或 frontend。
+
+Wiki 首页不维护完整 release 流水账，只展示当前状态并链接到 release status 和 changelog。
 
 ## 当前发布检查清单
 
@@ -58,13 +70,15 @@ v0.1.10 对应能力：
 
 发布 v0.1.10 tag 前必须确认：
 
-1. README 已追加 v0.1.10 release note，release badge 已更新。
-2. `docs/BETA_RUNBOOK.md`、`docs/mcp-providers.md`、`docs/video-frame-qa.md` 和本文已同步 closed beta 状态。
-3. `bash scripts/beta-smoke-check.sh` 通过，允许本地开发环境出现 production env validation skipped warning。
-4. `python3 -m unittest scripts/test_beta_readiness.py` 和 `python3 -m unittest discover -s mcp/video_qa -p 'test*.py'` 通过。
-5. 邀请真实创作者前，必须在已启动 local agent、HyperFrames、MCP provider 和模型 provider 的环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
-6. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
-7. `git tag v0.1.10 <release_commit>` 只在 release 提交后创建。
+1. README 只保留 v0.1.10 当前版本摘要，release badge 已更新。
+2. `CHANGELOG.md` 已追加 v0.1.10 历史记录。
+3. `docs/RELEASE_STATUS.md` 已更新当前可用性判断。
+4. `docs/BETA_RUNBOOK.md`、`docs/mcp-providers.md`、`docs/video-frame-qa.md` 和本文已同步 closed beta 状态。
+5. `bash scripts/beta-smoke-check.sh` 通过，允许本地开发环境出现 production env validation skipped warning。
+6. `python3 -m unittest scripts/test_beta_readiness.py` 和 `python3 -m unittest discover -s mcp/video_qa -p 'test*.py'` 通过。
+7. 邀请真实创作者前，必须在已启动 local agent、HyperFrames、MCP provider 和模型 provider 的环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
+8. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+9. `git tag v0.1.10 <release_commit>` 只在 release 提交后创建。
 
 v0.1.9 对应能力：
 
