@@ -1147,9 +1147,12 @@ function BiaoshuArtifactViewer({
         </div>
 
         {/* Two-column body */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line" style={{ height: 'calc(90vh - 77px)' }}>
+        <div
+          className="grid min-h-0 grid-cols-1 divide-y divide-line lg:grid-cols-2 lg:divide-x lg:divide-y-0"
+          style={{ height: 'calc(90vh - 77px)' }}
+        >
           {/* Left: Artifact content */}
-          <div className="overflow-y-auto px-6 py-5">
+          <div className="min-h-0 overflow-y-auto px-6 py-5">
             {loading && (
               <div className="flex items-center justify-center py-20 text-ink-muted">
                 <FiRefreshCw className="mr-2 animate-spin" /> 加载中...
@@ -1176,9 +1179,9 @@ function BiaoshuArtifactViewer({
           </div>
 
           {/* Right: AI Chat panel */}
-          <div className="flex flex-col">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden">
             {/* Chat messages */}
-            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-3">
               {!isTextFormat && (
                 <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-700 ring-1 ring-amber-200">
                   此格式暂不支持 AI 修改
@@ -1229,7 +1232,7 @@ function BiaoshuArtifactViewer({
 
               {/* Preview panel */}
               {revisedContent && (
-                <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+                <div className="min-w-0 rounded-xl border border-primary/30 bg-primary/5 p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="text-sm font-bold text-primary">AI 修订预览</h4>
                     <div className="flex gap-2">
@@ -1251,7 +1254,7 @@ function BiaoshuArtifactViewer({
                   {reviseSummary && (
                     <p className="mb-2 text-xs text-primary/70">{reviseSummary}</p>
                   )}
-                  <div className="max-h-[52vh] overflow-y-auto rounded-lg bg-white p-4 text-xs leading-relaxed border border-line">
+                  <div className="max-h-[42vh] overflow-y-auto overscroll-contain rounded-lg border border-line bg-white p-4 text-xs leading-relaxed">
                     <ReactMarkdown>{revisedContent}</ReactMarkdown>
                   </div>
                 </div>
@@ -1260,7 +1263,7 @@ function BiaoshuArtifactViewer({
 
             {/* Chat input */}
             {isTextFormat && (
-              <div className="border-t border-line px-4 py-3">
+              <div className="shrink-0 border-t border-line bg-white px-4 py-3">
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
