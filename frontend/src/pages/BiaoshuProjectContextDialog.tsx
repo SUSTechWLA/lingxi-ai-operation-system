@@ -7,6 +7,10 @@ interface BiaoshuProjectContextDialogProps {
   open: boolean
   questionnaire: ProjectContextQuestionnaire
   currentIndex: number
+  saving: boolean
+  savedRecently: boolean
+  submitting: boolean
+  error: string | null
   onIndexChange: (index: number) => void
   onAnswerChange: (questionId: string, answer: ProjectContextQuestionWithAnswer['answer']) => void
   onSaveDraft: () => void
@@ -51,6 +55,14 @@ export function BiaoshuProjectContextDialog(props: BiaoshuProjectContextDialogPr
           )}
         </div>
 
+        {/* Error banner */}
+        {props.error && (
+          <div className="mx-6 mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 flex items-start gap-2 shrink-0">
+            <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <span>{props.error}</span>
+          </div>
+        )}
+
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
           <QuestionInput
@@ -70,9 +82,14 @@ export function BiaoshuProjectContextDialog(props: BiaoshuProjectContextDialogPr
             </button>
             <button
               onClick={props.onSaveDraft}
-              className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-blue-700 ring-1 ring-blue-200 hover:bg-blue-50 transition-colors"
+              disabled={props.saving || props.savedRecently}
+              className={`rounded-lg px-4 py-2 text-sm font-bold ring-1 transition-colors ${
+                props.savedRecently
+                  ? 'bg-green-50 text-green-700 ring-green-300'
+                  : 'bg-white text-blue-700 ring-blue-200 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed'
+              }`}
             >
-              保存草稿
+              {props.saving ? '保存中...' : props.savedRecently ? '已保存 ✓' : '保存草稿'}
             </button>
           </div>
           <div className="flex gap-2">
@@ -93,9 +110,14 @@ export function BiaoshuProjectContextDialog(props: BiaoshuProjectContextDialogPr
             ) : (
               <button
                 onClick={props.onSubmit}
-                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 transition-colors"
+                disabled={props.submitting}
+                className={`rounded-lg px-4 py-2 text-sm font-bold text-white transition-colors ${
+                  props.submitting
+                    ? 'bg-green-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700'
+                }`}
               >
-                生成确认表
+                {props.submitting ? '生成中...' : '生成确认表'}
               </button>
             )}
           </div>

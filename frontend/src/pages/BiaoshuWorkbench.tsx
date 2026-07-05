@@ -8,6 +8,7 @@ import {
   saveBiaoshuProject, 
   sendBiaoshuConversationMessage, 
   writeLocalBiaoshuArtifact,
+  readLocalBiaoshuArtifact,
   type BiaoshuConversationMessage,
   type BiaoshuProjectStatus, 
   type LocalBiaoshuProject,
@@ -729,6 +730,8 @@ function BiaoshuArtifactsPage({
   const [generatingQuestions, setGeneratingQuestions] = useState(false)
   const [generatingContextReport, setGeneratingContextReport] = useState(false)
   const [generatingOutline, setGeneratingOutline] = useState(false)
+  const [savingDraft, setSavingDraft] = useState(false)
+  const [savedRecently, setSavedRecently] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
 
   const deriveReportPath = (rawTextPath: string): string => {
@@ -744,6 +747,61 @@ function BiaoshuArtifactsPage({
     const dir = analysisReportPath.replace(/[^\\/]+$/, '')
     return (dir || analysisReportPath.replace(/[^\\/]+$/, '') || '.') + '01_项目背景信息问答记录.json'
   }
+
+  // ── Questionnaire draft persistence (localStorage primary, file backup) ──
+
+  const questionnaireStorageKey = useMemo(() => {
+    const runId = run?.id || analysisArtifact?.storageRef || 'unknown'
+    return `biaoshu:project-context:${runId}`
+  }, [run?.id, analysisArtifact?.storageRef])
+
+  const loadQuestionnaireDraft = useCallback(async (): Promise<ProjectContextQuestionnaire | null> => {
+    // 1. Try localStorage first (instant, no path issues)
+    try {
+      const stored = localStorage.getItem(questionnaireStorageKey)
+      if (stored) {
+        const parsed = JSON.parse(stored) as ProjectContextQuestionnaire
+        if (parsed.schemaVersion === 'biaoshu.project_context_answers.v1' && parsed.questions?.length > 0) {
+          return parsed
+        }
+      }
+    } catch { /* ignore corrupted localStorage */ }
+
+    // 2. Try file (for cross-session persistence)
+    if (analysisArtifact?.storageRef) {
+      try {
+        const filePath = deriveProjectContextQuestionnairePath(analysisArtifact.storageRef)
+        const result = await readLocalBiaoshuArtifact(filePath)
+        if (result?.content) {
+          const parsed = JSON.parse(result.content) as ProjectContextQuestionnaire
+          if (parsed.schemaVersion === 'biaoshu.project_context_answers.v1' && parsed.questions?.length > 0) {
+            // Sync to localStorage
+            localStorage.setItem(questionnaireStorageKey, JSON.stringify(parsed))
+            return parsed
+          }
+        }
+      } catch { /* file not found or path error */ }
+    }
+    return null
+  }, [questionnaireStorageKey, analysisArtifact?.storageRef])
+
+  const saveQuestionnaireDraft = useCallback(async (questionnaire: ProjectContextQuestionnaire) => {
+    // 1. Always save to localStorage (instant, reliable)
+    const json = JSON.stringify(questionnaire, null, 2)
+    try {
+      localStorage.setItem(questionnaireStorageKey, json)
+    } catch { /* storage full — ignore */ }
+
+    // 2. Try file backup (best effort)
+    try {
+      await writeLocalBiaoshuArtifact({
+        filePath: questionnaire.questionnairePath,
+        content: json,
+      })
+    } catch { /* file write failed — localStorage already saved */ }
+  }, [questionnaireStorageKey])
+
+  // ── End persistence helpers ──
 
   const deriveOutlinePath = (analysisReportPath: string): string => {
     const dir = analysisReportPath.replace(/[^\\/]+$/, '')
@@ -785,6 +843,16 @@ function BiaoshuArtifactsPage({
     setGeneratingQuestions(true)
     setContextError(null)
     try {
+      // 1. Try to load existing draft
+      const existing = await loadQuestionnaireDraft()
+      if (existing) {
+        setContextQuestionnaire(existing)
+        setContextQuestionIndex(0)
+        setContextDialogOpen(true)
+        return
+      }
+
+      // 2. No draft — generate new questions
       const sourceFile = typeof analysisArtifact.metadata?.sourceFile === 'string'
         ? analysisArtifact.metadata.sourceFile
         : ''
@@ -832,11 +900,8 @@ function BiaoshuArtifactsPage({
     setGeneratingContextReport(true)
     setContextError(null)
     try {
-      // Save draft first
-      await writeLocalBiaoshuArtifact({
-        filePath: contextQuestionnaire.questionnairePath,
-        content: JSON.stringify(contextQuestionnaire, null, 2),
-      })
+      // Save final draft
+      await saveQuestionnaireDraft(contextQuestionnaire)
 
       const sourceFile = typeof analysisArtifact.metadata?.sourceFile === 'string'
         ? analysisArtifact.metadata.sourceFile
@@ -853,8 +918,11 @@ function BiaoshuArtifactsPage({
       }
       if (result.data) {
         onReportGenerated(result.data.artifact, result.data.contextReportPath, sourceFile)
-        setContextDialogOpen(false)
-        setContextQuestionnaire(null)
+        // Close dialog after 1 second so user sees feedback
+        setTimeout(() => {
+          setContextDialogOpen(false)
+          setContextQuestionnaire(null)
+        }, 1000)
       }
     } catch (e: unknown) {
       setContextError(e instanceof Error ? e.message : '生成背景确认表失败')
@@ -896,7 +964,7 @@ function BiaoshuArtifactsPage({
     setContextQuestionnaire((prev) => {
       if (!prev) return prev
       const now = new Date().toISOString()
-      return {
+      const updated: ProjectContextQuestionnaire = {
         ...prev,
         updatedAt: now,
         questions: prev.questions.map((question) =>
@@ -904,15 +972,23 @@ function BiaoshuArtifactsPage({
         ),
         audit: [...prev.audit, { type: 'answer_changed', questionId, at: now }],
       }
+      // Auto-save to localStorage on every answer change
+      try {
+        localStorage.setItem(questionnaireStorageKey, JSON.stringify(updated))
+      } catch { /* ignore */ }
+      return updated
     })
   }
 
   const handleSaveQuestionnaireDraft = async () => {
     if (!contextQuestionnaire) return
-    await writeLocalBiaoshuArtifact({
-      filePath: contextQuestionnaire.questionnairePath,
-      content: JSON.stringify(contextQuestionnaire, null, 2),
-    })
+    setSavingDraft(true)
+    setContextError(null)
+    await saveQuestionnaireDraft(contextQuestionnaire)
+    setSavingDraft(false)
+    // Show "已保存 ✓" for 2 seconds
+    setSavedRecently(true)
+    setTimeout(() => setSavedRecently(false), 2000)
   }
 
   const handleView = async (artifact: BiaoshuArtifactRecord) => {
@@ -1106,7 +1182,11 @@ function BiaoshuArtifactsPage({
           open={contextDialogOpen}
           questionnaire={contextQuestionnaire}
           currentIndex={contextQuestionIndex}
-          onIndexChange={setContextQuestionIndex}
+          saving={savingDraft}
+          savedRecently={savedRecently}
+          submitting={generatingContextReport}
+          error={contextError}
+          onIndexChange={(index) => { setContextQuestionIndex(index); setContextError(null) }}
           onAnswerChange={handleQuestionAnswerChange}
           onSaveDraft={handleSaveQuestionnaireDraft}
           onSubmit={handleGenerateContextReport}
