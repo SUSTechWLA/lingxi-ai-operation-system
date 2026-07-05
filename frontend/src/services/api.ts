@@ -31,9 +31,12 @@ const configuredCloudBase = import.meta.env.VITE_CLOUD_API_BASE || import.meta.e
 const electronCloudBase = typeof window !== 'undefined' ? window.electronAPI?.runtimeConfig?.cloudApiBase : ''
 const API_BASE = configuredCloudBase || electronCloudBase || '/api'
 
+const DEFAULT_API_TIMEOUT_MS = 120000
+const BIAOSHU_OUTLINE_TIMEOUT_MS = 180000
+
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 120000,
+  timeout: DEFAULT_API_TIMEOUT_MS,
 })
 
 const apiErrorMessage = (error: unknown): string | null => {
@@ -49,6 +52,12 @@ const apiErrorMessage = (error: unknown): string | null => {
     if (typeof nested.error === 'string' && nested.error.trim()) return nested.error
   }
   return null
+}
+
+const outlineTimeoutMessage = (error: unknown): string | null => {
+  if (!axios.isAxiosError(error)) return null
+  if (error.code !== 'ECONNABORTED') return null
+  return '生成大纲耗时过长，模型服务未在 180 秒内返回。请稍后重试，或先精简招标文件解析报告后再生成。'
 }
 
 api.interceptors.request.use((config) => {
@@ -500,8 +509,18 @@ export interface GenerateOutlineResponse {
 export const generateOutline = async (
   payload: GenerateOutlineRequest
 ): Promise<GenerateOutlineResponse> => {
-  const response = await api.post<GenerateOutlineResponse>('/biaoshu/outline/generate', payload)
-  return response.data
+  try {
+    const response = await api.post<GenerateOutlineResponse>('/biaoshu/outline/generate', payload, {
+      timeout: BIAOSHU_OUTLINE_TIMEOUT_MS,
+    })
+    return response.data
+  } catch (error) {
+    const message = outlineTimeoutMessage(error)
+    if (message && error instanceof Error) {
+      error.message = message
+    }
+    throw error
+  }
 }
 
 // ── Model Provider Config Sync ──

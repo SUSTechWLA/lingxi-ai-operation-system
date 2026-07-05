@@ -43,6 +43,84 @@ export interface LocalBiaoshuArtifactContent {
   size: number
 }
 
+export type BiaoshuProjectStage =
+  | 'created'
+  | 'raw_parsed'
+  | 'analysis_ready'
+  | 'context_ready'
+  | 'outline_ready'
+  | 'chapters_ready'
+  | 'wordcheck_ready'
+  | 'draft_merged'
+  | 'word_exported'
+  | 'failed'
+
+export interface BiaoshuManagedArtifact {
+  id: string
+  kind: string
+  name: string
+  status: string
+  storageRef: string
+  mimeType: string
+  sourceFileId?: string
+  dependsOn: string[]
+  createdAt: string
+  updatedAt: string
+  metadata: Record<string, unknown>
+}
+
+export interface BiaoshuProjectManifest {
+  schemaVersion: 'biaoshu.project.v1'
+  projectId: string
+  projectName: string
+  status: BiaoshuProjectStatus
+  currentStage: BiaoshuProjectStage
+  createdAt: string
+  updatedAt: string
+  sourceFiles: Array<{
+    id: string
+    path: string
+    originalName: string
+    sha256?: string
+    addedAt: string
+  }>
+  outputDir: string
+  runs: Array<{
+    runId: string
+    cloudTaskId?: string
+    status: string
+    startedAt: string
+    endedAt?: string
+    cloudAvailable?: boolean
+  }>
+  artifacts: BiaoshuManagedArtifact[]
+  stageEvents: Array<{
+    id: string
+    type: string
+    at: string
+    message: string
+    artifactId?: string
+    runId?: string
+  }>
+}
+
+export interface CreateBiaoshuManagedProjectRequest {
+  projectName: string
+  bidFilePath: string
+  outputDir?: string
+}
+
+export interface RegisterBiaoshuManagedArtifactRequest {
+  id?: string
+  kind: string
+  name: string
+  status?: string
+  storageRef: string
+  mimeType?: string
+  dependsOn?: string[]
+  metadata?: Record<string, unknown>
+}
+
 export const DEFAULT_LOCAL_AGENT_URL = 'http://127.0.0.1:18080'
 const configuredLocalAgentUrl = import.meta.env.VITE_LOCAL_AGENT_URL || import.meta.env.VITE_LOCAL_BACKEND_URL
 
@@ -133,6 +211,53 @@ export async function readLocalBiaoshuArtifact(filePath: string): Promise<LocalB
     throw new Error(await errorMessage(response, '读取本地产物失败'))
   }
   return response.json() as Promise<LocalBiaoshuArtifactContent>
+}
+
+export async function fetchBiaoshuManagedProjects(): Promise<{ projects: BiaoshuProjectManifest[] }> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu/projects'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取标书项目失败'))
+  }
+  return response.json() as Promise<{ projects: BiaoshuProjectManifest[] }>
+}
+
+export async function createBiaoshuManagedProject(
+  payload: CreateBiaoshuManagedProjectRequest
+): Promise<{ project: BiaoshuProjectManifest }> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu/projects'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '创建标书项目失败'))
+  }
+  return response.json() as Promise<{ project: BiaoshuProjectManifest }>
+}
+
+export async function fetchBiaoshuManagedProject(
+  projectId: string
+): Promise<{ project: BiaoshuProjectManifest }> {
+  const response = await fetch(localAgentUrl(`/api/local/biaoshu/projects/${encodeURIComponent(projectId)}`))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取标书项目失败'))
+  }
+  return response.json() as Promise<{ project: BiaoshuProjectManifest }>
+}
+
+export async function registerBiaoshuManagedArtifact(
+  projectId: string,
+  payload: RegisterBiaoshuManagedArtifactRequest
+): Promise<{ project: BiaoshuProjectManifest }> {
+  const response = await fetch(localAgentUrl(`/api/local/biaoshu/projects/${encodeURIComponent(projectId)}/artifacts`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '登记标书产物失败'))
+  }
+  return response.json() as Promise<{ project: BiaoshuProjectManifest }>
 }
 
 function localAgentUrl(path: string): string {

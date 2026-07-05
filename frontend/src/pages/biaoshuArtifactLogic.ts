@@ -39,6 +39,74 @@ interface TraceNodeLike {
   tool?: string
 }
 
+export interface BiaoshuFallbackRunInput {
+  runId: string
+  projectName: string
+  bidFilePath: string
+  status?: 'CREATED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'UNKNOWN'
+  createdAt?: string
+  updatedAt?: string
+}
+
+export function createBiaoshuFallbackRun(input: BiaoshuFallbackRunInput): AgentRun {
+  const now = new Date().toISOString()
+  const status =
+    input.status === 'CREATED' ||
+    input.status === 'RUNNING' ||
+    input.status === 'SUCCESS' ||
+    input.status === 'FAILED'
+      ? input.status
+      : 'SUCCESS'
+
+  return {
+    id: input.runId,
+    domain: 'bid_writing',
+    message: `本地恢复标书项目：${input.projectName || '未命名项目'}`,
+    status,
+    createdAt: input.createdAt || now,
+    updatedAt: input.updatedAt || now,
+    metadata: {
+      projectName: input.projectName,
+      project_name: input.projectName,
+      filePath: input.bidFilePath,
+      file_path: input.bidFilePath,
+      bidFilePath: input.bidFilePath,
+      localHistoryFallback: true,
+    },
+    plan: {
+      goal: 'Open local Biaoshu historical artifacts',
+      domain: 'bid_writing',
+      mode: 'local_history_fallback',
+      steps: [
+        {
+          id: 'parse-local-history',
+          tool: 'parse_bid_files',
+          arguments: { filePath: input.bidFilePath },
+          expectedOutput: ['BID_RAW_TEXT'],
+        },
+        {
+          id: 'analysis-local-history',
+          tool: 'bid_analysis_report',
+          arguments: { filePath: input.bidFilePath },
+          expectedOutput: ['BID_ANALYSIS'],
+        },
+        {
+          id: 'context-local-history',
+          tool: 'project_context_report',
+          arguments: { filePath: input.bidFilePath },
+          expectedOutput: ['BID_PROJECT_CONTEXT'],
+        },
+        {
+          id: 'outline-local-history',
+          tool: 'outline_generator',
+          arguments: { filePath: input.bidFilePath },
+          expectedOutput: ['BID_OUTLINE'],
+        },
+      ],
+    },
+  }
+}
+
 const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
   { key: 'raw-parse', label: '招标文件原文解析', tool: 'parse_bid_files', kind: 'BID_RAW_TEXT', owner: '文件解析' },
   { key: 'parse', label: '招标文件解析报告', tool: 'bid_analysis_report', kind: 'BID_ANALYSIS', owner: 'AI分析' },
@@ -49,6 +117,30 @@ const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
   { key: 'merge', label: '整合成稿', tool: 'merge_chapters', kind: 'MERGED_DRAFT', owner: '成稿整合' },
   { key: 'word', label: '技术标 Word 文档', tool: 'convert_to_word', kind: 'TECHNICAL_BID_DOCX', owner: 'Word 导出' },
 ]
+
+export function deriveBiaoshuAnalysisReportPath(rawTextPath: string): string {
+  return rawTextPath.replace(/原文解析/g, '解析报告')
+}
+
+export function deriveBiaoshuProjectContextPath(analysisReportPath: string): string {
+  return joinBiaoshuSiblingPath(analysisReportPath, '01_项目背景信息确认表.md')
+}
+
+export function deriveBiaoshuProjectContextQuestionnairePath(analysisReportPath: string): string {
+  return joinBiaoshuSiblingPath(analysisReportPath, '01_项目背景信息问答记录.json')
+}
+
+export function deriveBiaoshuOutlinePath(analysisReportPath: string): string {
+  return joinBiaoshuSiblingPath(analysisReportPath, '03_技术标四级大纲.md')
+}
+
+function joinBiaoshuSiblingPath(basePath: string, fileName: string): string {
+  const trimmed = basePath.trim()
+  if (!trimmed) return fileName
+  const slashIndex = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  if (slashIndex < 0) return fileName
+  return `${trimmed.slice(0, slashIndex + 1)}${fileName}`
+}
 
 export function buildBiaoshuArtifacts(
   run: AgentRun | null | undefined,
@@ -123,33 +215,59 @@ export function biaoshuArtifactToCopyText(artifact: BiaoshuArtifactRecord): stri
   }, null, 2)
 }
 
+export function mergeManualBiaoshuArtifacts(
+  artifacts: BiaoshuArtifactRecord[],
+  manualArtifacts: BiaoshuArtifactRecord[],
+): BiaoshuArtifactRecord[] {
+  if (manualArtifacts.length === 0) return artifacts
+
+  return manualArtifacts.reduce((current, manualArtifact) => {
+    return mergeOneManualArtifact(current, manualArtifact)
+  }, artifacts)
+}
+
 export function mergeManualReportArtifact(
   artifacts: BiaoshuArtifactRecord[],
   manualReportArtifact: BiaoshuArtifactRecord | null,
 ): BiaoshuArtifactRecord[] {
-  if (!manualReportArtifact) return artifacts
+  return mergeManualBiaoshuArtifacts(
+    artifacts,
+    manualReportArtifact ? [manualReportArtifact] : [],
+  )
+}
 
+function mergeOneManualArtifact(
+  artifacts: BiaoshuArtifactRecord[],
+  manualArtifact: BiaoshuArtifactRecord,
+): BiaoshuArtifactRecord[] {
   let replaced = false
-  const kind = manualReportArtifact.kind
   const merged = artifacts.map((artifact) => {
-    if (artifact.kind !== kind) return artifact
+    if (artifact.kind !== manualArtifact.kind) return artifact
     replaced = true
-    return manualReportArtifact
+    return manualArtifact
   })
   if (replaced) return merged
 
-  // Insert after the appropriate preceding stage
-  const prevStageKind = kind === 'BID_PROJECT_CONTEXT' ? 'BID_ANALYSIS' :
-    kind === 'BID_OUTLINE' ? 'BID_PROJECT_CONTEXT' : 'BID_RAW_TEXT'
-  const prevIndex = merged.findIndex((artifact) => artifact.kind === prevStageKind)
-  if (prevIndex >= 0) {
+  const previousKind = previousBiaoshuStageKind(manualArtifact.kind)
+  const previousIndex = merged.findIndex((artifact) => artifact.kind === previousKind)
+  if (previousIndex >= 0) {
     return [
-      ...merged.slice(0, prevIndex + 1),
-      manualReportArtifact,
-      ...merged.slice(prevIndex + 1),
+      ...merged.slice(0, previousIndex + 1),
+      manualArtifact,
+      ...merged.slice(previousIndex + 1),
     ]
   }
-  return [...merged, manualReportArtifact]
+  return [...merged, manualArtifact]
+}
+
+function previousBiaoshuStageKind(kind: string): string {
+  if (kind === 'BID_PROJECT_CONTEXT') return 'BID_ANALYSIS'
+  if (kind === 'BID_OUTLINE') return 'BID_PROJECT_CONTEXT'
+  if (kind === 'BID_CHAPTERS') return 'BID_OUTLINE'
+  if (kind === 'WORD_COUNT_REPORT') return 'BID_CHAPTERS'
+  if (kind === 'MERGED_DRAFT') return 'WORD_COUNT_REPORT'
+  if (kind === 'TECHNICAL_BID_DOCX') return 'MERGED_DRAFT'
+  return 'BID_RAW_TEXT'
 }
 
 export function createManualReportArtifact(

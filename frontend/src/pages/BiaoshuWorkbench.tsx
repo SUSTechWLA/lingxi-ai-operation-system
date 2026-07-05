@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
+import axios from 'axios'
 import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, type BiaoshuReviseRequest } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
@@ -9,7 +10,11 @@ import {
   sendBiaoshuConversationMessage, 
   writeLocalBiaoshuArtifact,
   readLocalBiaoshuArtifact,
+  createBiaoshuManagedProject,
+  fetchBiaoshuManagedProjects,
+  registerBiaoshuManagedArtifact,
   type BiaoshuConversationMessage,
+  type BiaoshuProjectManifest,
   type BiaoshuProjectStatus, 
   type LocalBiaoshuProject,
 } from '../services/localAgent'
@@ -17,11 +22,16 @@ import type { AgentPlan, AgentReviewItem, AgentRun, AgentStep } from '../utils/t
 import {
   biaoshuArtifactToCopyText,
   buildBiaoshuArtifacts,
+  createBiaoshuFallbackRun,
   createManualReportArtifact,
   createManualProjectContextArtifact,
   createManualOutlineArtifact,
+  deriveBiaoshuAnalysisReportPath,
+  deriveBiaoshuProjectContextPath,
+  deriveBiaoshuProjectContextQuestionnairePath,
+  deriveBiaoshuOutlinePath,
   displayNameForBiaoshuArtifact,
-  mergeManualReportArtifact,
+  mergeManualBiaoshuArtifacts,
   type BiaoshuArtifactRecord,
   type BiaoshuArtifactStatus,
 } from './biaoshuArtifactLogic'
@@ -32,6 +42,7 @@ import {
   type ProjectContextQuestionnaire,
   type ProjectContextQuestionWithAnswer,
 } from './biaoshuProjectContextQuestionnaire'
+import { biaoshuProjectToArtifacts } from './biaoshuProjectSystem'
 
 const BID_WORKFLOW_STAGES = [
   { key: 'parse', label: '解析招标文件', icon: '📄', tool: 'parse_bid_files' },
@@ -85,7 +96,8 @@ export default function BiaoshuWorkbench() {
   const [run, setRun] = useState<AgentRun | null>(null)
   const [trace, setTrace] = useState<unknown>(null)
   const [reviews, setReviews] = useState<AgentReviewItem[]>([])
-  const [manualReportArtifact, setManualReportArtifact] = useState<BiaoshuArtifactRecord | null>(null)
+  const [manualArtifacts, setManualArtifacts] = useState<BiaoshuArtifactRecord[]>([])
+  const [activeProject, setActiveProject] = useState<BiaoshuProjectManifest | null>(null)
   const [activeView, setActiveView] = useState<BiaoshuView>('workbench')
   const [projectHistory, setProjectHistory] = useState<BiaoshuProjectHistoryItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -96,9 +108,15 @@ export default function BiaoshuWorkbench() {
   const steps = plan?.steps || []
   const isTerminalStatus = run?.status === 'SUCCESS' || run?.status === 'FAILED'
   const baseArtifacts = useMemo(() => buildBiaoshuArtifacts(run, trace, reviews), [run, trace, reviews])
+  const manifestArtifacts = useMemo(
+    () => activeProject ? biaoshuProjectToArtifacts(activeProject) : [],
+    [activeProject],
+  )
   const artifacts = useMemo(
-    () => mergeManualReportArtifact(baseArtifacts, manualReportArtifact),
-    [baseArtifacts, manualReportArtifact],
+    () => activeProject
+      ? mergeManualBiaoshuArtifacts(manifestArtifacts, manualArtifacts)
+      : mergeManualBiaoshuArtifacts(baseArtifacts, manualArtifacts),
+    [activeProject, baseArtifacts, manifestArtifacts, manualArtifacts],
   )
 
   const addLog = useCallback((msg: string) => {
@@ -108,19 +126,44 @@ export default function BiaoshuWorkbench() {
   const stringValue = (value: unknown): string =>
     typeof value === 'string' && value.trim() ? value : ''
 
+  const upsertManualArtifact = useCallback((artifact: BiaoshuArtifactRecord) => {
+    setManualArtifacts((prev) => {
+      const next = prev.filter((item) => item.kind !== artifact.kind)
+      return [...next, artifact]
+    })
+  }, [])
+
   const handleReportGenerated = useCallback((artifact: Record<string, unknown> | undefined, filePath: string, sourceFile: string) => {
     const kind = stringValue(artifact?.kind) || ''
     if (kind === 'BID_PROJECT_CONTEXT') {
-      setManualReportArtifact(createManualProjectContextArtifact(artifact, filePath, sourceFile))
+      upsertManualArtifact(createManualProjectContextArtifact(artifact, filePath, sourceFile))
       addLog(`项目背景确认表已生成: ${filePath}`)
     } else if (kind === 'BID_OUTLINE') {
-      setManualReportArtifact(createManualOutlineArtifact(artifact, filePath, sourceFile))
+      upsertManualArtifact(createManualOutlineArtifact(artifact, filePath, sourceFile))
       addLog(`技术标大纲已生成: ${filePath}`)
     } else {
-      setManualReportArtifact(createManualReportArtifact(artifact, filePath, sourceFile))
+      upsertManualArtifact(createManualReportArtifact(artifact, filePath, sourceFile))
       addLog(`解析报告已生成: ${filePath}`)
     }
-  }, [addLog])
+    if (activeProject?.projectId && filePath) {
+      registerBiaoshuManagedArtifact(activeProject.projectId, {
+        kind: kind || 'BID_ANALYSIS',
+        name: String(artifact?.name || filePath.split(/[\\/]/).pop() || kind || '标书产物'),
+        storageRef: filePath,
+        mimeType: 'text/markdown',
+        status: 'valid',
+        metadata: {
+          ...(typeof artifact?.metadata === 'object' && artifact.metadata ? artifact.metadata : {}),
+          sourceFile,
+        },
+      }).then((response) => {
+        setActiveProject(response.project)
+        addLog(`产物已登记: ${filePath}`)
+      }).catch((err: unknown) => {
+        addLog(`产物登记失败: ${err instanceof Error ? err.message : String(err)}`)
+      })
+    }
+  }, [addLog, activeProject, upsertManualArtifact])
 
   const refreshRunData = useCallback(async (runId: string) => {
     const [nextRun, nextTrace, nextReviews] = await Promise.all([
@@ -153,27 +196,38 @@ export default function BiaoshuWorkbench() {
 
   // 页面加载时从本地后端恢复历史项目
   useEffect(() => {
-    fetchBiaoshuProjects().then(async (response) => {
-      setProjectHistory(response.projects)
+    fetchBiaoshuManagedProjects().then((response) => {
       const latest = response.projects[0]
       if (!latest) return
+      setActiveProject(latest)
       setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
-      setBidFilePath(latest.bidFilePath || DEFAULT_BID_FILE_PATH)
-      addLog(`恢复最近标书项目: ${latest.projectName}`)
-      try {
-        const snapshot = await refreshRunData(latest.runId)
-        await saveHistoryFromRun(snapshot.run, {
-          projectName: latest.projectName,
-          bidFilePath: latest.bidFilePath,
-          trace: snapshot.trace,
-          reviews: snapshot.reviews,
-        })
-        if (snapshot.run.status === 'SUCCESS' || snapshot.run.status === 'FAILED') setActiveView('artifacts')
-      } catch {
-        addLog('最近标书项目的云端任务暂不可读取，可从历史项目列表稍后重试')
-      }
-    }).catch((err: unknown) => {
-      addLog(`本地标书项目库读取失败: ${err instanceof Error ? err.message : String(err)}`)
+      setBidFilePath(latest.sourceFiles[0]?.path || DEFAULT_BID_FILE_PATH)
+      setActiveView('artifacts')
+      addLog(`从清单恢复标书项目: ${latest.projectName}`)
+    }).catch(() => {
+      // Keep legacy history fallback
+      fetchBiaoshuProjects().then(async (response) => {
+        setProjectHistory(response.projects)
+        const latest = response.projects[0]
+        if (!latest) return
+        setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
+        setBidFilePath(latest.bidFilePath || DEFAULT_BID_FILE_PATH)
+        addLog(`恢复最近标书项目: ${latest.projectName}`)
+        try {
+          const snapshot = await refreshRunData(latest.runId)
+          await saveHistoryFromRun(snapshot.run, {
+            projectName: latest.projectName,
+            bidFilePath: latest.bidFilePath,
+            trace: snapshot.trace,
+            reviews: snapshot.reviews,
+          })
+          if (snapshot.run.status === 'SUCCESS' || snapshot.run.status === 'FAILED') setActiveView('artifacts')
+        } catch {
+          addLog('最近标书项目的云端任务暂不可读取，可从历史项目列表稍后重试')
+        }
+      }).catch((err: unknown) => {
+        addLog(`本地标书项目库读取失败: ${err instanceof Error ? err.message : String(err)}`)
+      })
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -204,7 +258,7 @@ export default function BiaoshuWorkbench() {
     setRunLog([])
     setTrace(null)
     setReviews([])
-    setManualReportArtifact(null)
+    setManualArtifacts([])
 
     const message = customMessage.trim()
       || `请解析招标文件并生成技术标文档。文件路径：${bidFilePath}，项目名称：${projectName || '未命名项目'}`
@@ -212,6 +266,13 @@ export default function BiaoshuWorkbench() {
     addLog(`启动任务: ${message}`)
 
     try {
+      const managed = await createBiaoshuManagedProject({
+        projectName: projectName || '未命名项目',
+        bidFilePath,
+      })
+      setActiveProject(managed.project)
+      addLog(`本地项目已创建: ${managed.project.projectId}`)
+
       const result = await startAgentRun({
         message,
         domain: 'bid_writing',
@@ -256,13 +317,42 @@ export default function BiaoshuWorkbench() {
     return BID_WORKFLOW_STAGES.find(s => step.tool.includes(s.key) || s.tool.includes(step.tool))
   }
 
+  const isAgentRunNotFound = (err: unknown): boolean => {
+    if (!axios.isAxiosError(err)) return false
+    const status = err.response?.status
+    const message =
+      typeof err.response?.data === 'object' && err.response?.data
+        ? String((err.response.data as { message?: unknown }).message || '')
+        : ''
+    return status === 404 && message.toLowerCase().includes('agent run not found')
+  }
+
+  const openHistoryItemFromLocalRecord = useCallback((item: BiaoshuProjectHistoryItem) => {
+    const fallbackRun = createBiaoshuFallbackRun({
+      runId: item.runId,
+      projectName: item.projectName,
+      bidFilePath: item.bidFilePath,
+      status: item.status,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    })
+    setProjectName(item.projectName)
+    setBidFilePath(item.bidFilePath)
+    setManualArtifacts([])
+    setRun(fallbackRun)
+    setTrace(null)
+    setReviews([])
+    addLog(`云端任务不存在，已从本地历史恢复项目: ${item.projectName}`)
+    setActiveView('artifacts')
+  }, [addLog])
+
   const handleOpenHistoryItem = async (item: BiaoshuProjectHistoryItem) => {
     setLoading(true)
     setError(null)
     try {
       setProjectName(item.projectName)
       setBidFilePath(item.bidFilePath)
-      setManualReportArtifact(null)
+      setManualArtifacts([])
       const snapshot = await refreshRunData(item.runId)
       await saveHistoryFromRun(snapshot.run, {
         projectName: item.projectName,
@@ -273,9 +363,13 @@ export default function BiaoshuWorkbench() {
       addLog(`打开历史项目: ${item.projectName}`)
       setActiveView('artifacts')
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      setError(msg)
-      addLog(`历史项目读取失败: ${msg}`)
+      if (isAgentRunNotFound(err)) {
+        openHistoryItemFromLocalRecord(item)
+      } else {
+        const msg = err instanceof Error ? err.message : String(err)
+        setError(msg)
+        addLog(`历史项目读取失败: ${msg}`)
+      }
     } finally {
       setLoading(false)
     }
@@ -322,6 +416,8 @@ export default function BiaoshuWorkbench() {
           <BiaoshuArtifactsPage
             artifacts={artifacts}
             run={run}
+            bidFilePath={bidFilePath}
+            projectName={projectName}
             onGoWorkbench={() => setActiveView('workbench')}
             onReportGenerated={handleReportGenerated}
           />
@@ -697,11 +793,15 @@ function formatHistoryDate(value?: string) {
 function BiaoshuArtifactsPage({
   artifacts,
   run,
+  bidFilePath,
+  projectName,
   onGoWorkbench,
   onReportGenerated,
 }: {
   artifacts: BiaoshuArtifactRecord[]
   run: AgentRun | null
+  bidFilePath: string
+  projectName: string
   onGoWorkbench: () => void
   onReportGenerated: (artifact: Record<string, unknown> | undefined, reportPath: string, sourceFile: string) => void
 }) {
@@ -733,20 +833,145 @@ function BiaoshuArtifactsPage({
   const [savingDraft, setSavingDraft] = useState(false)
   const [savedRecently, setSavedRecently] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
+  const [scannedAnalysisPath, setScannedAnalysisPath] = useState('')
 
-  const deriveReportPath = (rawTextPath: string): string => {
-    return rawTextPath.replace(/原文解析/g, '解析报告')
-  }
+  const deriveReportPath = deriveBiaoshuAnalysisReportPath
+  const deriveProjectContextPath = deriveBiaoshuProjectContextPath
+  const deriveProjectContextQuestionnairePath = deriveBiaoshuProjectContextQuestionnairePath
+  const deriveOutlinePath = deriveBiaoshuOutlinePath
 
-  const deriveProjectContextPath = (analysisReportPath: string): string => {
-    const dir = analysisReportPath.replace(/[^\\/]+$/, '')
-    return (dir || analysisReportPath.replace(/[^\\/]+$/, '') || '.') + '01_项目背景信息确认表.md'
-  }
+  // ── Recovery scan: check for already-generated local files ──
+  const resolveCandidatePath = (probePath: string, alreadyScanned: string): boolean =>
+    !!probePath && probePath !== alreadyScanned
 
-  const deriveProjectContextQuestionnairePath = (analysisReportPath: string): string => {
-    const dir = analysisReportPath.replace(/[^\\/]+$/, '')
-    return (dir || analysisReportPath.replace(/[^\\/]+$/, '') || '.') + '01_项目背景信息问答记录.json'
-  }
+  useEffect(() => {
+    if (!bidFilePath) return
+
+    // biaoshu-tools OUTPUT_DIR is a fixed path under the workspace root, not
+    // derived from bidFilePath (bid file may reside on a different drive).
+    // We anchor to the root that holds the known-good tools directory.
+    const toolsRoot = DEFAULT_BID_FILE_PATH.replace(/\\/g, '/').replace(/\/[^/]+$/, '')
+
+    // Try multiple candidate project dirs (bid basename, project name, etc.)
+    // because the recovery scan doesn't know which subdirectory holds the files.
+    const candidateDirNames: string[] = []
+    const bidBase = bidFilePath.replace(/\\/g, '/').split('/').pop() || ''
+    const bidDirName = bidBase.replace(/\.[^.]+$/, '')
+    if (bidDirName && !candidateDirNames.includes(bidDirName)) candidateDirNames.push(bidDirName)
+    const projectDirFromName = (projectName || DEFAULT_PROJECT_NAME).replace(/[<>:"/\\|?*]/g, '_').trim()
+    if (projectDirFromName && !candidateDirNames.includes(projectDirFromName)) candidateDirNames.push(projectDirFromName)
+
+    // Known file names in the output directory
+    const analysisFileName = '00_招标文件解析报告.md'
+    const contextFileName = '01_项目背景信息确认表.md'
+    const outlineFileName = '03_技术标四级大纲.md'
+
+    // Determine which project directory to scan by trying each candidate
+    // in sequence until we find the analysis report file.
+    let cancelled = false
+    const scan = async () => {
+      let analysisDir = ''
+      let analysisFilePath = ''
+
+      // Try each candidate dir to locate the analysis report
+      for (const dirName of candidateDirNames) {
+        if (cancelled) return
+        const probePath = `${toolsRoot}/output/${dirName}/${analysisFileName}`
+        try {
+          const result = await readLocalBiaoshuArtifact(probePath)
+          if (!cancelled && result.content.trim()) {
+            analysisDir = `${toolsRoot}/output/${dirName}`
+            analysisFilePath = result.filePath || probePath
+            break
+          }
+        } catch { /* try next candidate */ }
+      }
+
+      if (cancelled || !analysisDir) return
+
+      // Prevent re-scanning the same analysis path
+      if (!resolveCandidatePath(analysisFilePath, scannedAnalysisPath)) return
+      setScannedAnalysisPath(analysisFilePath)
+
+      const sourceFile = bidFilePath
+
+      // Recover analysis report
+      const analysisAlreadyValid = artifacts.some(
+        (a) => a.kind === 'BID_ANALYSIS' && a.status === 'valid' && a.storageRef,
+      )
+      if (!analysisAlreadyValid) {
+        onReportGenerated(
+          createManualReportArtifact(
+            { id: 'recovered-analysis', kind: 'BID_ANALYSIS', name: '招标文件解析报告', storageRef: analysisFilePath, summary: '从本地文件恢复的解析报告', metadata: { recovered: true, sourceFile } },
+            analysisFilePath,
+            sourceFile,
+          ) as unknown as Record<string, unknown>,
+          analysisFilePath,
+          sourceFile,
+        )
+      }
+
+      if (cancelled) return
+
+      // Scan context & outline using the resolved analysis path
+      const candidates = [
+        {
+          kind: 'BID_PROJECT_CONTEXT',
+          path: `${analysisDir}/${contextFileName}`,
+          createArtifact: (filePath: string) => createManualProjectContextArtifact({
+            id: 'recovered-project-context',
+            kind: 'BID_PROJECT_CONTEXT',
+            name: '项目背景信息确认表',
+            storageRef: filePath,
+            summary: '从本地已生成文件恢复的项目背景信息确认表',
+            metadata: { recovered: true, sourceFile },
+          }, filePath, sourceFile),
+        },
+        {
+          kind: 'BID_OUTLINE',
+          path: `${analysisDir}/${outlineFileName}`,
+          createArtifact: (filePath: string) => createManualOutlineArtifact({
+            id: 'recovered-outline',
+            kind: 'BID_OUTLINE',
+            name: '技术标四级大纲',
+            storageRef: filePath,
+            summary: '从本地已生成文件恢复的技术标四级大纲',
+            metadata: { recovered: true, sourceFile },
+          }, filePath, sourceFile),
+        },
+      ]
+
+      for (const candidate of candidates) {
+        if (cancelled) return
+        const alreadyValid = artifacts.some(
+          (artifact) =>
+            artifact.kind === candidate.kind &&
+            artifact.status === 'valid' &&
+            artifact.storageRef,
+        )
+        if (alreadyValid) continue
+
+        try {
+          const result = await readLocalBiaoshuArtifact(candidate.path)
+          if (cancelled || !result.content.trim()) continue
+          onReportGenerated(candidate.createArtifact(result.filePath) as unknown as Record<string, unknown>, result.filePath, sourceFile)
+        } catch {
+          // Missing files are expected when the user has not reached this step yet.
+        }
+      }
+    }
+
+    scan()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    artifacts,
+    bidFilePath,
+    onReportGenerated,
+    projectName,
+    scannedAnalysisPath,
+  ])
 
   // ── Questionnaire draft persistence (localStorage primary, file backup) ──
 
@@ -802,11 +1027,6 @@ function BiaoshuArtifactsPage({
   }, [questionnaireStorageKey])
 
   // ── End persistence helpers ──
-
-  const deriveOutlinePath = (analysisReportPath: string): string => {
-    const dir = analysisReportPath.replace(/[^\\/]+$/, '')
-    return (dir || analysisReportPath.replace(/[^\\/]+$/, '') || '.') + '03_技术标四级大纲.md'
-  }
 
   const handleGenerateReport = async () => {
     if (!rawTextArtifact?.storageRef) return
@@ -1032,6 +1252,11 @@ function BiaoshuArtifactsPage({
             返回工作台
           </button>
         </div>
+        {run?.metadata?.localHistoryFallback === true && (
+          <div className="mt-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">
+            云端任务记录已不可用，当前页面基于本地历史和本地产物文件恢复。
+          </div>
+        )}
         <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-4">
           <BiaoshuMetric label="任务状态" value={run ? run.status : '未启动'} />
           <BiaoshuMetric label="已生成" value={`${validCount}/${artifacts.length}`} />
@@ -1210,43 +1435,56 @@ function BiaoshuArtifactTable({ artifacts, onView }: { artifacts: BiaoshuArtifac
   const headers = ['ID', '名称', '类型', '状态', '负责人', '路径', '操作']
   return (
     <section className="card overflow-hidden p-0">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-background-mist text-xs text-ink-soft">
-          <tr>
-            {headers.map((header) => (
-              <th className="whitespace-nowrap px-4 py-3" key={header}>{header}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-line bg-white/70">
-          {artifacts.map((artifact) => (
-            <tr key={artifact.id}>
-              <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
-              <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">
-                <div>{artifact.name}</div>
-                <div className="mt-1 max-w-xs truncate text-xs font-normal text-ink-soft" title={artifact.summary}>{artifact.summary}</div>
-              </td>
-              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForBiaoshuArtifact(artifact.kind)}</td>
-              <td className="whitespace-nowrap px-4 py-3"><BiaoshuStatusBadge status={artifact.status} /></td>
-              <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{artifact.owner}</td>
-              <td className="max-w-sm truncate px-4 py-3 font-mono text-xs text-ink-muted" title={artifact.storageRef}>{artifact.storageRef || '-'}</td>
-              <td className="whitespace-nowrap px-4 py-3">
-                <div className="flex items-center gap-1.5">
-                  <BiaoshuCopyButton value={biaoshuArtifactToCopyText(artifact)} label="复制" />
-                  {artifact.status === 'valid' && artifact.storageRef && (
-                    <button
-                      onClick={() => onView(artifact)}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-primary-200 hover:bg-primary-100"
-                    >
-                      <FiEye /> 查看
-                    </button>
-                  )}
-                </div>
-              </td>
+      <div className="overflow-x-auto">
+        <table className="min-w-[1120px] w-full table-fixed text-left text-sm">
+          <colgroup>
+            <col className="w-[19%]" />
+            <col className="w-[19%]" />
+            <col className="w-[8%]" />
+            <col className="w-[8%]" />
+            <col className="w-[8%]" />
+            <col className="w-[27%]" />
+            <col className="w-[160px]" />
+          </colgroup>
+          <thead className="bg-background-mist text-xs text-ink-soft">
+            <tr>
+              {headers.map((header) => (
+                <th className={`whitespace-nowrap px-4 py-3 ${header === '操作' ? 'sticky right-0 z-20 bg-background-mist' : ''}`} key={header}>{header}</th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-line bg-white/70">
+            {artifacts.map((artifact) => (
+              <tr key={artifact.id}>
+                <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
+                <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">
+                  <div>{artifact.name}</div>
+                  <div className="mt-1 max-w-xs truncate text-xs font-normal text-ink-soft" title={artifact.summary}>{artifact.summary}</div>
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{displayNameForBiaoshuArtifact(artifact.kind)}</td>
+                <td className="whitespace-nowrap px-4 py-3"><BiaoshuStatusBadge status={artifact.status} /></td>
+                <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{artifact.owner}</td>
+                <td className="px-4 py-3 font-mono text-xs text-ink-muted" title={artifact.storageRef}>
+                  <div className="truncate">{artifact.storageRef || '-'}</div>
+                </td>
+                <td className="sticky right-0 z-10 w-[160px] whitespace-nowrap bg-white/95 px-4 py-3 shadow-[-10px_0_18px_-18px_rgba(0,0,0,0.35)]">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    <BiaoshuCopyButton value={biaoshuArtifactToCopyText(artifact)} label="复制" />
+                    {artifact.status === 'valid' && artifact.storageRef && (
+                      <button
+                        onClick={() => onView(artifact)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-primary-200 hover:bg-primary-100"
+                      >
+                        <FiEye /> 查看/修改
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   )
 }
