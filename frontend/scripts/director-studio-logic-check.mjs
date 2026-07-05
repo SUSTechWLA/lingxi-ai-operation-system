@@ -1781,6 +1781,30 @@ try {
   assert.ok(pageSource.includes('复制生成包'), 'external generation card should expose a complete copy package action')
   assert.ok(pageSource.includes('复制负面提示'), 'external generation card should expose negative prompt copying')
   assert.ok(pageSource.includes('复制参考信息'), 'external generation card should expose reference copying')
+  assert.ok(
+    !pageSource.includes('installJiMengCLI') &&
+      !pageSource.includes('registerJiMengMCP') &&
+      !pageSource.includes('loginJiMengHeadless') &&
+      !pageSource.includes('checkJiMengLogin'),
+    'project page should not own JiMeng CLI setup actions; it should link to settings',
+  )
+  assert.ok(
+    pageSource.includes('配置即梦 CLI') && pageSource.includes('onOpenSettings'),
+    'project page should keep only a simple JiMeng settings explainer and settings jump',
+  )
+
+  const desktopSource = await readFile(new URL('../src/pages/DesktopPage.tsx', import.meta.url), 'utf8')
+  assert.ok(
+    desktopSource.includes('installJiMengCLI') &&
+      desktopSource.includes('registerJiMengMCP') &&
+      desktopSource.includes('loginJiMengHeadless') &&
+      desktopSource.includes('checkJiMengLogin'),
+    'settings page should own JiMeng CLI install, MCP registration, and login actions',
+  )
+  assert.ok(
+    desktopSource.includes('即梦 CLI') && desktopSource.includes('文生图片') && desktopSource.includes('文生视频'),
+    'settings page should present JiMeng CLI alongside image and video generation providers',
+  )
 
   const apiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const agentRunTimeout = Number(apiSource.match(/const AGENT_RUN_REQUEST_TIMEOUT_MS = (\d+)/)?.[1] || 0)

@@ -1,11 +1,19 @@
 import React, { useState, useEffect } from 'react'
-import { FiCheckCircle, FiCpu, FiFilm, FiImage, FiKey, FiMessageSquare, FiRefreshCw, FiSave } from 'react-icons/fi'
+import { FiCheck, FiCheckCircle, FiCopy, FiCpu, FiDownload, FiFilm, FiImage, FiKey, FiMessageSquare, FiRefreshCw, FiSave, FiUserCheck, FiX } from 'react-icons/fi'
 import {
+  checkJiMengLogin,
   fetchLocalAgentHealth,
+  fetchJiMengSetupStatus,
   fetchModelProviderSettings,
   getLocalAgentBaseUrl,
+  installJiMengCLI,
+  loginJiMengHeadless,
   mergeModelProviderSettings,
+  registerJiMengMCP,
   saveModelProviderSettings,
+  type JiMengSetupStatusResponse,
+  type LocalMCPProviderConfig,
+  type MCPToolCallResult,
   type ModelCapability,
   type ModelProviderConfig,
 } from '../services/localAgent'
@@ -46,6 +54,9 @@ const DesktopPage: React.FC = () => {
   const [providerSaving, setProviderSaving] = useState(false)
   const [providerMessage, setProviderMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
   const [activeTab, setActiveTab] = useState<ModelCapability>('text_to_text')
+  const [jimengSetupStatus, setJimengSetupStatus] = useState<JiMengSetupStatusResponse | null>(null)
+  const [jimengSetupLoading, setJimengSetupLoading] = useState(false)
+  const [jimengSetupError, setJimengSetupError] = useState<string | null>(null)
   const api = getElectronAPI()
 
   useEffect(() => {
@@ -68,6 +79,7 @@ const DesktopPage: React.FC = () => {
 
   useEffect(() => {
     loadModelProviderSettings()
+    loadJiMengSetupStatus()
   }, [])
 
   const loadModelProviderSettings = async () => {
@@ -108,6 +120,46 @@ const DesktopPage: React.FC = () => {
       setProviderMessage({ type: 'error', text: error instanceof Error ? error.message : '保存模型设置失败' })
     } finally {
       setProviderSaving(false)
+    }
+  }
+
+  const loadJiMengSetupStatus = async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      const status = await fetchJiMengSetupStatus()
+      setJimengSetupStatus(status)
+    } catch (error) {
+      setJimengSetupStatus(null)
+      setJimengSetupError(settingsErrorMessage(error, '读取即梦设置失败'))
+    } finally {
+      setJimengSetupLoading(false)
+    }
+  }
+
+  const handleInstallJiMengCLI = async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      await installJiMengCLI()
+      await loadJiMengSetupStatus()
+    } catch (error) {
+      setJimengSetupError(settingsErrorMessage(error, '安装即梦 CLI 失败'))
+    } finally {
+      setJimengSetupLoading(false)
+    }
+  }
+
+  const handleRegisterJiMengMCP = async () => {
+    setJimengSetupLoading(true)
+    setJimengSetupError(null)
+    try {
+      await registerJiMengMCP({ transport: 'stdio' })
+      await loadJiMengSetupStatus()
+    } catch (error) {
+      setJimengSetupError(settingsErrorMessage(error, '注册即梦 MCP 失败'))
+    } finally {
+      setJimengSetupLoading(false)
     }
   }
 
@@ -333,11 +385,280 @@ const DesktopPage: React.FC = () => {
                 </div>
               )}
             </div>
+
+            <JiMengSettingsPanel
+              status={jimengSetupStatus}
+              loading={jimengSetupLoading}
+              error={jimengSetupError}
+              onRefresh={loadJiMengSetupStatus}
+              onInstallCLI={handleInstallJiMengCLI}
+              onRegisterMCP={handleRegisterJiMengMCP}
+            />
           </div>
         </div>
       </div>
     </div>
   )
+}
+
+function JiMengSettingsPanel(props: {
+  status: JiMengSetupStatusResponse | null
+  loading: boolean
+  error: string | null
+  onRefresh: () => void
+  onInstallCLI: () => void
+  onRegisterMCP: () => void
+}) {
+  const { status, loading, error, onRefresh, onInstallCLI, onRegisterMCP } = props
+  const providerStatus = status?.mcpProviders?.find((item) => item.id === 'jimeng')
+  const mcpRegistered = Boolean(status?.mcpProvider)
+  const mcpReachable = providerStatus?.reachable === true
+  const ready = isJiMengReady(status)
+  const startCommand = status?.mcpStartCommand || 'python3 mcp/jimeng/server.py'
+  const providerDetail = status?.mcpProvider ? mcpProviderDetail(status.mcpProvider) : 'stdio provider'
+  const installCommand = status?.installCommand || 'curl -fsSL https://jimeng.jianying.com/cli | bash'
+  const headline = ready
+    ? '即梦 CLI 已可用于图片 / 视频生成'
+    : status?.dreaminaAvailable
+      ? '即梦 CLI 已安装，等待 MCP 连接'
+      : '即梦 CLI 未检测到'
+  const [loginResult, setLoginResult] = useState<MCPToolCallResult | null>(null)
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const loginData = loginResult?.structuredContent || {}
+  const verificationUri = stringRecordValue(loginData, 'verification_uri') || stringRecordValue(loginData, 'verificationUri')
+  const userCode = stringRecordValue(loginData, 'user_code') || stringRecordValue(loginData, 'userCode')
+  const deviceCode = stringRecordValue(loginData, 'device_code') || stringRecordValue(loginData, 'deviceCode')
+
+  const handleLoginHeadless = async () => {
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const result = await loginJiMengHeadless()
+      setLoginResult(result)
+      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录启动失败')
+    } catch (error) {
+      setLoginError(settingsErrorMessage(error, '即梦登录启动失败'))
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
+  const handleCheckLogin = async () => {
+    if (!deviceCode) return
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const result = await checkJiMengLogin(deviceCode, 30)
+      setLoginResult(result)
+      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录未完成')
+    } catch (error) {
+      setLoginError(settingsErrorMessage(error, '即梦登录检查失败'))
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-background-card rounded-2xl border border-line p-5 shadow-card">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-ink flex items-center gap-2">
+            <FiFilm className="w-4 h-4 text-ink-soft" />
+            即梦 CLI / 图片与视频生成
+          </h3>
+          <p className="mt-1 text-xs text-ink-soft">
+            安装 Dreamina CLI、注册本地 MCP provider，并完成即梦登录。该配置和文生图片、文生视频能力一起用于 AIGC 素材生成。
+          </p>
+        </div>
+        <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${
+          ready
+            ? 'bg-green-50 text-green-700 ring-green-200'
+            : mcpRegistered || status?.dreaminaAvailable
+              ? 'bg-amber-50 text-primary-dark ring-amber-200'
+              : 'bg-stone-50 text-stone-600 ring-stone-200'
+        }`}>
+          {ready ? '可用于生成' : '需配置'}
+        </span>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-line bg-background/70 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-black text-ink">{headline}</div>
+            <p className="mt-1 text-xs leading-5 text-ink-muted">
+              用户自己的 Dreamina 登录态保留在本机；云端只通过本地 runner 调用已注册的 JiMeng MCP。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <span className="rounded bg-white px-2 py-1 text-[10px] font-bold text-primary-dark ring-1 ring-line">文生图片</span>
+            <span className="rounded bg-white px-2 py-1 text-[10px] font-bold text-primary-dark ring-1 ring-line">文生视频</span>
+          </div>
+        </div>
+
+        {error ? <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{error}</div> : null}
+
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <JiMengStep label="Dreamina CLI" detail={status?.dreaminaVersion || installCommand} done={status?.dreaminaAvailable === true} />
+          <JiMengStep label="MCP 注册" detail={providerDetail} done={mcpRegistered} />
+          <JiMengStep label="MCP 连接" detail={providerStatus?.error || (mcpReachable ? 'tools/list 正常' : '等待服务启动')} done={mcpReachable} />
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onInstallCLI}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FiDownload /> 安装/更新 CLI
+          </button>
+          <button
+            type="button"
+            onClick={onRegisterMCP}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FiCheck /> 注册 MCP
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FiRefreshCw className={loading ? 'animate-spin' : ''} /> 刷新状态
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-black text-primary-dark">MCP 启动命令</span>
+            <SettingsCopyButton value={startCommand} label="复制命令" />
+          </div>
+          <code className="mt-2 block break-all rounded bg-ink px-3 py-2 font-mono text-[11px] leading-5 text-white">{startCommand}</code>
+        </div>
+
+        <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-black text-primary-dark">首次登录授权</span>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleLoginHeadless}
+                disabled={!mcpReachable || loginLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiUserCheck /> 获取登录码
+              </button>
+              <button
+                type="button"
+                onClick={handleCheckLogin}
+                disabled={!deviceCode || loginLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiRefreshCw className={loginLoading ? 'animate-spin' : ''} /> 检查登录
+              </button>
+            </div>
+          </div>
+          {loginError ? <div className="mt-2 text-xs font-semibold text-red-700">{loginError}</div> : null}
+          {verificationUri || userCode ? (
+            <div className="mt-3 space-y-2">
+              {verificationUri ? <LoginCopyRow label="授权页面" value={verificationUri} /> : null}
+              {userCode ? <LoginCopyRow label="用户码" value={userCode} /> : null}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs leading-5 text-ink-muted">MCP 连接后可生成登录码，按即梦页面提示完成授权。</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LoginCopyRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-background-card px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-black text-ink-soft">{label}</span>
+        <SettingsCopyButton value={value} label="复制" />
+      </div>
+      <div className="mt-1 break-all font-mono text-[11px] leading-4 text-ink">{value}</div>
+    </div>
+  )
+}
+
+function JiMengStep({ label, detail, done }: { label: string; detail: string; done: boolean }) {
+  return (
+    <div className={`rounded-lg border p-3 ${done ? 'border-green-100 bg-green-50/70' : 'border-line bg-white'}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-black text-ink">{label}</span>
+        <span className={`grid h-5 w-5 place-items-center rounded-full text-[11px] ${done ? 'bg-green-600 text-white' : 'bg-stone-100 text-ink-soft'}`}>
+          {done ? <FiCheck /> : <FiX />}
+        </span>
+      </div>
+      <p className="mt-2 line-clamp-2 break-all text-[11px] leading-4 text-ink-muted">{detail}</p>
+    </div>
+  )
+}
+
+function SettingsCopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    await copyToClipboard(value)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+    >
+      <FiCopy /> {copied ? '已复制' : label}
+    </button>
+  )
+}
+
+async function copyToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+function mcpProviderDetail(provider: LocalMCPProviderConfig): string {
+  if (provider.transport === 'stdio') {
+    return [provider.command, ...(provider.args || [])].filter(Boolean).join(' ') || 'stdio'
+  }
+  return provider.endpoint || provider.transport || 'mcp provider'
+}
+
+function isJiMengReady(status: JiMengSetupStatusResponse | null): boolean {
+  if (!status?.dreaminaAvailable) return false
+  const provider = status.mcpProviders?.find((item) => item.id === 'jimeng')
+  if (!provider?.reachable) return false
+  return Boolean(provider.tools?.some((tool) => tool.name === 'jimeng.generate_video'))
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  return typeof value === 'string' ? value : ''
+}
+
+function settingsErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback
 }
 
 export default DesktopPage

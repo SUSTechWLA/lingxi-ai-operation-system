@@ -2,6 +2,18 @@
 
 All notable release changes are tracked here. README only carries the current version summary; detailed historical notes live in this file.
 
+## v0.1.13 - 2026-07-05
+
+### Changed
+
+- Moved JiMeng CLI, MCP registration, and login-code setup from the project page into the Settings page.
+- Settings now presents JiMeng CLI as part of image/video generation configuration, alongside OpenAI-compatible text/image/video providers.
+- Project pages now show only a short JiMeng CLI explanation and a button that jumps to Settings, keeping the project workflow focused.
+
+### Fixed
+
+- Added a frontend regression check so the project page no longer owns JiMeng CLI setup actions.
+
 ## v0.1.12 - 2026-07-05
 
 ### Fixed

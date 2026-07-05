@@ -1,6 +1,6 @@
 {
   "name": "tangying-ai-operation-system",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "scripts": {
     "frontend:dev": "bash scripts/start-frontend.sh",
