@@ -109,6 +109,7 @@ import {
   stageActionLabel,
   traceNodeHasError,
   unresolvedMaterialDependencyCount,
+  visibleEnvironmentIssues,
   visibleReviewHistory,
   videoCreationProfileForId,
   videoCreationProfiles,
@@ -279,13 +280,13 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     if (activeNav === 'overview') {
       refreshModelProviderStatus().catch(() => {})
     }
-  }, [activeNav, refreshModelProviderStatus])
+  }, [activeNav, refreshModelProviderStatus, selectedProfile.id])
 
   useEffect(() => {
     if (activeNav === 'overview') {
       refreshJiMengSetupStatus().catch(() => {})
     }
-  }, [activeNav, refreshJiMengSetupStatus])
+  }, [activeNav, refreshJiMengSetupStatus, selectedProfile.id])
 
   useEffect(() => {
     if (!run?.id || run.status === 'SUCCESS' || run.status === 'FAILED' || run.status === 'CANCELLED') return undefined
@@ -467,9 +468,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
             )}
           </div>
         )}
-        {activeNav !== 'system' && (
-          <ModelProviderNotice status={modelProviderStatus} selectedProfile={selectedProfile} onOpenSettings={() => setActiveNav('system')} />
-        )}
+        {activeNav !== 'system' && <ModelProviderNotice status={modelProviderStatus} onOpenSettings={() => setActiveNav('system')} />}
         <div className="mt-6">
           {activeNav === 'overview' && (
             <OverviewPage
@@ -651,13 +650,11 @@ function TopBar({ preflight, serviceStatus, run }: { preflight: PreflightRespons
   )
 }
 
-function ModelProviderNotice({ status, selectedProfile, onOpenSettings }: { status: ModelProviderStatus; selectedProfile: VideoCreationProfile; onOpenSettings: () => void }) {
+function ModelProviderNotice({ status, onOpenSettings }: { status: ModelProviderStatus; onOpenSettings: () => void }) {
   if (status.state === 'checking' || status.state === 'configured') return null
-  const blockingMissing = selectedProfile.generationMode === 'manual_import'
-    ? status.missing.filter((capability) => capability === 'text_to_text')
-    : status.missing
-  if (status.state === 'missing' && blockingMissing.length === 0) return null
-  const missingText = blockingMissing.map((capability) => modelProviderCapabilityLabels[capability]).join('、')
+  const missing = status.missing
+  if (status.state === 'missing' && missing.length === 0) return null
+  const missingText = missing.map((capability) => modelProviderCapabilityLabels[capability]).join('、')
   const title = status.state === 'unavailable' ? '本地模型配置未读取' : '基础模型 API 未配置完整'
   const message = status.state === 'unavailable'
     ? '请先确认本地服务已启动，然后在设置中配置 OpenAI-compatible 接口。'
@@ -755,10 +752,13 @@ function OverviewPage(props: {
                     </div>
                     <StatusBadge status={active ? 'valid' : 'pending'} label={active ? '当前入口' : '可选择'} />
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {profile.requiredLocalCommands.map((command) => (
-                      <span key={command} className="rounded bg-white px-2 py-1 font-mono text-[10px] font-bold text-primary-dark ring-1 ring-line">{command}</span>
-                    ))}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-primary-dark ring-1 ring-line">
+                      {profile.projectMode === 'aigc_shot' ? '逐 shot 生成' : '脚本到成片'}
+                    </span>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-ink-muted ring-1 ring-line">
+                      {profile.generationMode === 'manual_import' ? '可手动上传结果' : '自动走本地渲染'}
+                    </span>
                   </div>
                 </button>
               )
@@ -784,7 +784,11 @@ function OverviewPage(props: {
             >
               {isStopAction ? <FiSquare /> : <FiPlay />} {primaryAction.label}
             </button>
-            {preflight?.blockers?.length ? <span className="text-xs font-semibold text-red-700">{preflight.blockers[0].message}</span> : !preflight ? <span className="text-xs font-semibold text-primary-dark">正在体检当前视频入口...</span> : null}
+            {preflight?.blockers?.length ? (
+              <span className="text-xs font-semibold text-red-700">当前入口还有配置未完成，请查看下方体检问题或打开设置处理。</span>
+            ) : !preflight ? (
+              <span className="text-xs font-semibold text-primary-dark">正在体检当前视频入口...</span>
+            ) : null}
           </div>
         </section>
         <section className="card col-span-12 p-6 xl:col-span-4">
@@ -838,22 +842,27 @@ function OverviewPage(props: {
 }
 
 function EnvironmentChecklistPanel({ items, onOpenSettings }: { items: EnvironmentChecklistItem[]; onOpenSettings: () => void }) {
-  const blockedCount = items.filter((item) => item.status === 'blocked').length
-  const warningCount = items.filter((item) => item.status === 'warning').length
+  const issueItems = visibleEnvironmentIssues(items)
+  if (!issueItems.length) return null
+
+  const blockedCount = issueItems.filter((item) => item.status === 'blocked').length
+  const warningCount = issueItems.filter((item) => item.status === 'warning').length
+  const checkingCount = issueItems.filter((item) => item.status === 'unknown').length
   return (
     <section className="card p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-bold text-primary-dark">启动体检</p>
-          <h3 className="mt-1 text-lg font-black text-ink">云端编排、本地工具和模型配置</h3>
+          <h3 className="mt-1 text-lg font-black text-ink">开始前需要处理的问题</h3>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">系统会自动检查当前入口，只展示会影响启动或生成质量的事项。</p>
         </div>
         <StatusBadge
-          status={blockedCount ? 'blocked' : warningCount ? 'review' : 'valid'}
-          label={blockedCount ? `${blockedCount} 项待处理` : warningCount ? '可启动但需留意' : '体检通过'}
+          status={blockedCount ? 'blocked' : warningCount ? 'review' : 'pending'}
+          label={blockedCount ? `${blockedCount} 项待处理` : warningCount ? `${warningCount} 项需留意` : checkingCount ? '检测中' : '待处理'}
         />
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {items.map((item) => (
+        {issueItems.map((item) => (
           <div key={item.id} className={clsx('rounded-lg border p-4', environmentItemTone(item.status))}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">

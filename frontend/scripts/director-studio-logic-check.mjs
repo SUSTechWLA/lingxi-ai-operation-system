@@ -68,6 +68,7 @@ try {
     unresolvedMaterialDependencyCount,
     visibleReviewHistory,
     isActionablePendingReview,
+    visibleEnvironmentIssues,
   } = await import(pathToFileURL(outfile))
   const { unwrapApiData } = await import(pathToFileURL(apiResponseOutfile))
   const roleAgents = [
@@ -1616,11 +1617,11 @@ try {
   )
   assert.ok(
     videoCreationProfileForId('voice_visual').requiredLocalCommands.includes('VIDEO_FRAME_QA'),
-    'voice/knowledge profile should tell users visual frame QA is required',
+    'voice/knowledge profile should internally track visual frame QA as a requirement',
   )
   assert.ok(
     videoCreationProfileForId('aigc_shot').requiredLocalCommands.includes('LOCAL_FILE_IMPORT'),
-    'cinematic profile should tell users local import is required',
+    'cinematic profile should internally track local import as a requirement',
   )
 
   const healthItems = buildEnvironmentChecklist({
@@ -1656,6 +1657,49 @@ try {
   assert.ok(
     healthItems.some((item) => item.id === 'local-tool-FFMPEG_PROBE' && item.status === 'blocked'),
     'environment checklist should show exact missing local tool blockers',
+  )
+  const visibleHealthIssues = visibleEnvironmentIssues(healthItems)
+  assert.ok(
+    visibleHealthIssues.some((item) => item.id === 'local-capabilities' && item.status === 'blocked'),
+    'overview should aggregate local tool blockers into a user-facing local capability issue',
+  )
+  assert.ok(
+    visibleHealthIssues.every((item) => !item.id.startsWith('local-tool-') && !item.detail.includes('FFMPEG_PROBE')),
+    'overview-visible environment issues should not expose concrete local command names',
+  )
+  const aigcProviderIssueItems = buildEnvironmentChecklist({
+    serviceStatus: 'ok',
+    selectedProfile: videoCreationProfileForId('aigc_shot'),
+    preflight: {
+      pipeline: 'wf-aigc-shot-video',
+      status: 'passed',
+      canStart: true,
+      capabilityMenu: {
+        localRunner: { available: true },
+        localTools: [
+          { command: 'LOCAL_FILE_IMPORT', available: true },
+          { command: 'FFMPEG_PROBE', available: true },
+          { command: 'ARTIFACT_PACKAGE', available: true },
+        ],
+      },
+      blockers: [],
+    },
+    modelProviderState: 'missing',
+    missingModelCapabilities: ['text_to_image', 'text_to_video'],
+  })
+  const aigcProviderIssue = aigcProviderIssueItems.find((item) => item.id === 'model-provider')
+  assert.equal(aigcProviderIssue?.status, 'warning')
+  assert.ok(
+    aigcProviderIssue?.detail.includes('基础模型 API 未配置完整') &&
+      aigcProviderIssue.detail.includes('文生图片、文生视频 Provider') &&
+      aigcProviderIssue.detail.includes('设置'),
+    'AIGC entry should surface missing image/video providers as a focused settings warning',
+  )
+  const visibleIssues = visibleEnvironmentIssues(aigcProviderIssueItems)
+  assert.deepEqual(
+    visibleIssues.map((item) => item.id),
+    ['model-provider'],
+    'project overview should show only actionable environment issues and hide passing/tool-detail rows',
   )
 
   const externalTaskPackage = buildExternalGenerationTaskPackage({
@@ -1791,6 +1835,18 @@ try {
   assert.ok(
     pageSource.includes('配置即梦 CLI') && pageSource.includes('onOpenSettings'),
     'project page should keep only a simple JiMeng settings explainer and settings jump',
+  )
+  assert.ok(
+    !pageSource.includes('profile.requiredLocalCommands.map'),
+    'project profile cards should not expose concrete local command names to users',
+  )
+  assert.ok(
+    pageSource.includes('visibleEnvironmentIssues(items)'),
+    'project environment panel should filter to visible issues instead of rendering the full technical checklist',
+  )
+  assert.ok(
+    !pageSource.includes('preflight.blockers[0].message'),
+    'project overview should not print raw preflight blocker messages with tool names',
   )
 
   const desktopSource = await readFile(new URL('../src/pages/DesktopPage.tsx', import.meta.url), 'utf8')

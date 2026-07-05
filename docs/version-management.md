@@ -70,6 +70,7 @@ v0.1.13 对应能力：
 - Director Studio shot card 和项目总览已展示 duration、QA、attempts、latest candidate、repair action、locked dimensions、accepted candidate、source/fallback、assembly eligibility、final assembly、final QA 和 provenance summary。
 - 桌面端 local runner 登录态注入时会先停止无登录态 local agent，再启动带用户会话的 runner；local agent 收到 `SIGTERM` 后会关闭 HTTP listener 并释放 `18080`。
 - 即梦 CLI / MCP 登录配置归入设置页，与文生图片、文生视频 Provider 同类管理；项目页只保留说明和跳转到设置的按钮。
+- 项目页启动体检默认自动运行，只展示未就绪或需留意的问题；本地工具命令级细节保留在设置页、追踪页和 diagnostics 中。
 
 发布 v0.1.13 tag 前必须确认：
 

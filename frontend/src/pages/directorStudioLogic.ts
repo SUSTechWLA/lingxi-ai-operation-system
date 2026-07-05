@@ -386,7 +386,6 @@ export function buildEnvironmentChecklist(input: EnvironmentChecklistInput): Env
     : missingModelCapabilities
   const optionalExternalModelCapabilities = missingModelCapabilities.filter((capability) => !blockingModelCapabilities.includes(capability))
   const missingModelLabels = missingModelCapabilities.map(modelCapabilityLabel).join('、')
-  const optionalModelLabels = optionalExternalModelCapabilities.map(modelCapabilityLabel).join('、')
   const modelState = input.modelProviderState || 'checking'
   const effectiveModelStatus: EnvironmentChecklistStatus = modelState === 'configured'
     ? 'passed'
@@ -405,9 +404,7 @@ export function buildEnvironmentChecklist(input: EnvironmentChecklistInput): Env
         ? '正在读取本机模型 Provider 配置。'
         : modelState === 'unavailable'
           ? '本地服务未返回模型配置，请先确认本地服务可用。'
-          : effectiveModelStatus === 'warning'
-            ? `${optionalModelLabels || missingModelLabels} 未配置，将按当前视频入口走外部网站手动生成和上传回填。`
-            : `缺少 ${missingModelLabels || '基础模型'} Provider，外部模型接力前需要补齐。`,
+          : `基础模型 API 未配置完整，缺少 ${missingModelLabels || '基础模型'} Provider。请在设置中填写接口地址、模型名和 Token。`,
     actionLabel: modelState === 'configured' || modelState === 'checking' ? undefined : '打开设置',
   }
 
@@ -436,8 +433,27 @@ export function buildEnvironmentChecklist(input: EnvironmentChecklistInput): Env
       blockerCode: blocker?.code,
     } satisfies EnvironmentChecklistItem
   })
+  const blockedToolItems = toolItems.filter((item) => item.status === 'blocked')
+  const localCapabilities: EnvironmentChecklistItem | undefined = blockedToolItems.length > 0
+    ? {
+        id: 'local-capabilities',
+        label: '本地生成能力',
+        status: 'blocked',
+        detail: '当前入口需要的本地生成能力还未就绪。请打开设置完成本地环境检查；技术同学可在追踪页查看详细日志。',
+        actionLabel: '打开设置',
+      }
+    : undefined
 
-  return [localRunner, modelProvider, profile, ...toolItems]
+  return [localRunner, modelProvider, profile, ...(localCapabilities ? [localCapabilities] : []), ...toolItems]
+}
+
+export function visibleEnvironmentIssues(items: EnvironmentChecklistItem[]): EnvironmentChecklistItem[] {
+  return items.filter((item) => {
+    if (item.status === 'passed') return false
+    if (item.id === 'video-profile') return false
+    if (item.id.startsWith('local-tool-')) return false
+    return item.status === 'blocked' || item.status === 'warning' || item.status === 'unknown'
+  })
 }
 
 export function buildExternalGenerationTaskPackage(request: ExternalGenerationTaskRequest): ExternalGenerationTaskPackage {
