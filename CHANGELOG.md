@@ -2,6 +2,17 @@
 
 All notable release changes are tracked here. README only carries the current version summary; detailed historical notes live in this file.
 
+## v0.1.12 - 2026-07-05
+
+### Fixed
+
+- Fixed the packaged desktop local runner restart path after login. The app now cleanly stops the unauthenticated local agent before starting the session-enabled runner, preventing `18080` bind conflicts and project-page "local executor not started" errors.
+- Local agent now shuts down its HTTP listener on `SIGTERM`, so Electron restarts and manual operator restarts release the local runner port reliably.
+
+### Changed
+
+- Added beta runbook troubleshooting for stale or manually started local agents blocking the installed desktop app's bundled runner.
+
 ## v0.1.11 - 2026-07-04
 
 ### Added

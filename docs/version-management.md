@@ -58,7 +58,7 @@ Wiki 首页不维护完整 release 流水账，只展示当前状态并链接到
 
 ## 当前发布检查清单
 
-v0.1.11 对应能力：
+v0.1.12 对应能力：
 
 - Closed beta shot split policy 已固定：`minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。
 - Time window planner 会按脚本语义、场景、主体、动作、camera/shot size、framing、情绪和画面变化切分；超过 15 秒强制继续拆分，短于 3 秒只在连续且合并后不超过 15 秒时合并。
@@ -68,11 +68,12 @@ v0.1.11 对应能力：
 - Final assembly gate 只消费 accepted shot candidate，FFmpeg concat 前统一 resolution、fps、pixel format 和 codec；voiceover、BGM ducking、最终字幕、响度、转码和 final QA 都在全局时间轴处理。
 - Diagnostics zip 和 fallback fixture 已覆盖 shot list、shot split report、duration validation、candidates、QA reports、repair plans、accepted shots、assembly plan、subtitle timeline、audio mix plan、final QA report、artifact manifest 和 provenance summary。
 - Director Studio shot card 和项目总览已展示 duration、QA、attempts、latest candidate、repair action、locked dimensions、accepted candidate、source/fallback、assembly eligibility、final assembly、final QA 和 provenance summary。
+- 桌面端 local runner 登录态注入时会先停止无登录态 local agent，再启动带用户会话的 runner；local agent 收到 `SIGTERM` 后会关闭 HTTP listener 并释放 `18080`。
 
-发布 v0.1.11 tag 前必须确认：
+发布 v0.1.12 tag 前必须确认：
 
-1. README 只保留 v0.1.11 当前版本摘要，release badge 已更新。
-2. `CHANGELOG.md` 已追加 v0.1.11 历史记录。
+1. README 只保留 v0.1.12 当前版本摘要，release badge 已更新。
+2. `CHANGELOG.md` 已追加 v0.1.12 历史记录。
 3. `docs/RELEASE_STATUS.md` 已更新当前可用性判断。
 4. `docs/BETA_RUNBOOK.md`、`docs/video-frame-qa.md` 和本文已同步 closed beta shot pipeline 状态。
 5. `cd cloud-backend && go test ./...`、`cd local-backend && go test ./...`、`cd frontend && npm run test:director && npm run build` 通过。
@@ -80,7 +81,7 @@ v0.1.11 对应能力：
 7. `bash scripts/beta-fallback-fixture.sh` 生成完整 fallback diagnostics；`bash scripts/beta-readiness-check.sh` 在无真实 AIGC provider 环境允许返回 `CONDITIONAL`。
 8. 邀请真实创作者前，必须在已启动 local agent、HyperFrames、MCP provider 和模型 provider 的环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
 9. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
-10. `git tag v0.1.11 <release_commit>` 只在 release 提交后创建。
+10. `git tag v0.1.12 <release_commit>` 只在 release 提交后创建。
 
 v0.1.10 对应能力：
 

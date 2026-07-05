@@ -100,14 +100,27 @@ function stopLocalAgent() {
     localAgentProcess = null
     return new Promise((resolve) => {
       let resolved = false
+      let forceKillTimer = null
+      let giveUpTimer = null
       const finish = () => {
         if (resolved) return
         resolved = true
+        if (forceKillTimer) clearTimeout(forceKillTimer)
+        if (giveUpTimer) clearTimeout(giveUpTimer)
         resolve()
       }
       proc.once('exit', finish)
-      proc.kill()
-      setTimeout(finish, 3000).unref?.()
+      proc.kill('SIGTERM')
+      forceKillTimer = setTimeout(() => {
+        try {
+          proc.kill('SIGKILL')
+        } catch {
+          // Process already exited.
+        }
+      }, 3000)
+      giveUpTimer = setTimeout(finish, 5000)
+      forceKillTimer.unref?.()
+      giveUpTimer.unref?.()
     })
   }
   return Promise.resolve()

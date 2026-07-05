@@ -1,12 +1,14 @@
 # Release Status
 
-Current release: `v0.1.11`
+Current release: `v0.1.12`
 
 Status: **initial closed beta launch-ready for controlled technical users; real creator trials require readiness `GO`.**
 
 ## Current Position
 
 The `release` branch is the initial closed beta launch baseline for controlled technical users. The system can run the fallback smoke path without real AIGC provider accounts, and it can produce local preview artifacts, semantic shot split metadata, structured shot QA reports, machine-readable repair plans, accepted-shot assembly plans, provenance labels, and diagnostics packages.
+
+`v0.1.12` also fixes the packaged desktop local runner restart path: the app can start its bundled local agent, inject the logged-in user session, terminate the unauthenticated process cleanly, and restart the runner without leaving port `18080` occupied.
 
 For creator-facing real AIGC trials, run the readiness gate in the target environment and require `GO` before inviting users.
 

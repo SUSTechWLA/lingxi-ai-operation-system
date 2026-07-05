@@ -1,6 +1,6 @@
 {
   "name": "hyperframes-render-service",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "HyperFrames Render Service — programmatic video rendering without CLI dependency, called by AIOS Go backend via HTTP",
   "type": "module",
   "scripts": {

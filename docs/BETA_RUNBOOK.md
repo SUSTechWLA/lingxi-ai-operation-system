@@ -343,6 +343,7 @@ Fallback output is useful for QA and review, but must not be described as a real
 |---|---|---|
 | Cloud exits in release mode | Weak secret, wildcard CORS, sandbox disabled, or sandbox fallback enabled | Fix `.env` and restart. |
 | Local runner does not pick jobs | Missing `TANGYING_CLOUD_API_BASE`, `TANGYING_USER_TOKEN`, or `TANGYING_DEVICE_ID` | Start local agent with all three variables. |
+| Desktop project page says local executor is not started | Port `18080` is owned by a stale or manually started local agent, or the desktop app has not injected the login session into its bundled runner | Stop the manual `scripts/start-local-backend.sh` process, restart the installed desktop app, then log in again if the project page still reports runner unavailable. |
 | HyperFrames render fails | Render service down, path outside allowed roots, or FFmpeg missing | Check `/health`, root env vars, and FFmpeg. |
 | JiMeng request is blocked | Prompt/reference preflight failed | Rewrite prompt as visual timed story beats or attach usable references. |
 | No real AIGC video ready | Provider failed, credits insufficient, timeout, or request deferred | Check `assetProvenance`, `sourceSummary`, and provider logs; fallback preview is expected. |

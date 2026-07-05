@@ -78,7 +78,17 @@ func main() {
 	}
 
 	log.Printf("Tangying local agent listening on http://%s", listener.Addr().String())
-	if err := http.Serve(listener, server.Handler()); err != nil {
+	httpServer := &http.Server{Handler: server.Handler()}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("local agent shutdown failed: %v", err)
+			_ = listener.Close()
+		}
+	}()
+	if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve local agent: %v", err)
 	}
 }
