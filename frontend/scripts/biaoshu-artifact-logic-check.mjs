@@ -48,6 +48,9 @@ try {
   const {
     biaoshuProjectToArtifacts,
     biaoshuProjectSummary,
+    biaoshuManagedProjectToHistoryItem,
+    biaoshuManagedProjectsToHistory,
+    selectBestBiaoshuManagedProject,
   } = await import(pathToFileURL(systemOutfile))
 
   const run = {
@@ -242,6 +245,42 @@ try {
   })
   assert.equal(projectArtifacts[0].kind, 'BID_PROJECT_CONTEXT')
   assert.equal(projectArtifacts[0].storageRef, 'E:/out/c.md')
+
+  // Task 1: managed project → history item
+  const managedProject = {
+    projectId: 'bp_1',
+    projectName: '养护',
+    status: 'SUCCESS',
+    currentStage: 'context_ready',
+    runs: [{ runId: 'run-1' }],
+    sourceFiles: [{ path: 'E:/bid/source.pdf' }],
+    createdAt: '2026-07-05T00:00:00Z',
+    updatedAt: '2026-07-05T00:00:00Z',
+    artifacts: [
+      { id: 'a2', kind: 'BID_PROJECT_CONTEXT', name: '背景确认表', status: 'valid', storageRef: 'E:/out/c.md', mimeType: 'text/markdown', dependsOn: [], createdAt: '2026-07-05T00:00:00Z', updatedAt: '2026-07-05T00:00:00Z', metadata: {} },
+    ],
+  }
+  const historyFromManaged = biaoshuManagedProjectToHistoryItem(managedProject)
+  assert.equal(historyFromManaged.projectId, 'bp_1')
+  assert.equal(historyFromManaged.managedProject, true)
+
+  const historyList = biaoshuManagedProjectsToHistory([managedProject])
+  assert.equal(historyList.length, 1)
+  assert.equal(historyList[0].projectName, '养护')
+
+  const best = selectBestBiaoshuManagedProject([managedProject])
+  assert.notEqual(best, null)
+  assert.equal(best.projectId, 'bp_1')
+
+  const emptyBest = selectBestBiaoshuManagedProject([])
+  assert.equal(emptyBest, null)
+
+  const scoredTestProjects = [
+    { ...managedProject, projectId: 'bp_low', currentStage: 'created', artifacts: [], updatedAt: '2026-01-01T00:00:00Z' },
+    { ...managedProject, projectId: 'bp_high', currentStage: 'context_ready', updatedAt: '2026-07-05T00:00:00Z' },
+  ]
+  const bestOfTwo = selectBestBiaoshuManagedProject(scoredTestProjects)
+  assert.equal(bestOfTwo.projectId, 'bp_high')
 
   console.log('biaoshuArtifactLogic tests passed')
 } finally {

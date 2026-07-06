@@ -915,10 +915,24 @@ func defaultDataDir() string {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "TangyingAIOS")
 	case "windows":
-		return filepath.Join(os.TempDir(), "TangyingAIOS")
+		if localAppData := os.Getenv("LOCALAPPDATA"); strings.TrimSpace(localAppData) != "" {
+			return filepath.Join(localAppData, "TangyingAIOS")
+		}
+		return filepath.Join(home, "AppData", "Local", "TangyingAIOS")
 	default:
 		return filepath.Join(home, ".tangying-aios")
 	}
+}
+
+func (s *Server) legacyManagedBiaoshuProjectRoots() []string {
+	roots := []string{}
+	if runtime.GOOS == "windows" {
+		tempRoot := filepath.Join(os.TempDir(), "TangyingAIOS")
+		if filepath.Clean(tempRoot) != filepath.Clean(s.paths.DataDir) {
+			roots = append(roots, tempRoot)
+		}
+	}
+	return roots
 }
 
 func defaultBiaoshuProjectsHistoryDir(dataDir string) string {

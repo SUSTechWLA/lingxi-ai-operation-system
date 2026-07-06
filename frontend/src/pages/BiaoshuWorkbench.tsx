@@ -15,8 +15,7 @@ import {
   registerBiaoshuManagedArtifact,
   type BiaoshuConversationMessage,
   type BiaoshuProjectManifest,
-  type BiaoshuProjectStatus, 
-  type LocalBiaoshuProject,
+  type BiaoshuProjectStatus,
 } from '../services/localAgent'
 import type { AgentPlan, AgentReviewItem, AgentRun, AgentStep } from '../utils/types'
 import {
@@ -44,7 +43,13 @@ import {
   type ProjectContextQuestionnaire,
   type ProjectContextQuestionWithAnswer,
 } from './biaoshuProjectContextQuestionnaire'
-import { biaoshuProjectToArtifacts } from './biaoshuProjectSystem'
+import {
+  type BiaoshuProjectHistoryItem,
+  biaoshuManagedProjectsToHistory,
+  biaoshuProjectToArtifacts,
+  legacyProjectsToHistory,
+  selectBestBiaoshuManagedProject,
+} from './biaoshuProjectSystem'
 
 const BID_WORKFLOW_STAGES = [
   { key: 'parse', label: '解析招标文件', icon: '📄', tool: 'parse_bid_files' },
@@ -60,7 +65,6 @@ const DEFAULT_PROJECT_NAME = '广惠高速改扩建'
 const DEFAULT_BID_FILE_PATH = 'e:\\lingxi\\tangying-ai-operation-system\\biaoshu-tools\\test_bid.txt'
 
 type BiaoshuView = 'workbench' | 'artifacts' | 'history'
-type BiaoshuProjectHistoryItem = LocalBiaoshuProject
 
 const fileExtension = (path: string) => {
   const normalized = path.trim().toLowerCase()
@@ -100,6 +104,7 @@ export default function BiaoshuWorkbench() {
   const [reviews, setReviews] = useState<AgentReviewItem[]>([])
   const [manualArtifacts, setManualArtifacts] = useState<BiaoshuArtifactRecord[]>([])
   const [activeProject, setActiveProject] = useState<BiaoshuProjectManifest | null>(null)
+  const [managedProjects, setManagedProjects] = useState<BiaoshuProjectManifest[]>([])
   const [activeView, setActiveView] = useState<BiaoshuView>('workbench')
   const [projectHistory, setProjectHistory] = useState<BiaoshuProjectHistoryItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -163,6 +168,17 @@ export default function BiaoshuWorkbench() {
         },
       }).then((response) => {
         setActiveProject(response.project)
+        setManagedProjects((prev) => {
+          const next = prev.filter((project) => project.projectId !== response.project.projectId)
+          return [response.project, ...next]
+        })
+        setProjectHistory((prev) => {
+          const managedHistoryItem = biaoshuManagedProjectsToHistory([response.project])[0]
+          return [
+            managedHistoryItem,
+            ...prev.filter((item) => item.projectId !== response.project.projectId),
+          ]
+        })
         addLog(`产物已登记: ${filePath}`)
       }).catch((err: unknown) => {
         addLog(`产物登记失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -185,34 +201,37 @@ export default function BiaoshuWorkbench() {
 
   const saveHistoryFromRun = useCallback(async (nextRun: AgentRun, options?: { projectName?: string; bidFilePath?: string; trace?: unknown; reviews?: AgentReviewItem[] }) => {
     const nextArtifacts = buildBiaoshuArtifacts(nextRun, options?.trace ?? trace, options?.reviews ?? reviews)
-    const historyItem: BiaoshuProjectHistoryItem = {
+    const status = (nextRun.status || 'UNKNOWN') as BiaoshuProjectStatus
+    const response = await saveBiaoshuProject({
       runId: nextRun.id,
       projectName: options?.projectName || extractProjectNameFromRun(nextRun, projectName || '未命名项目'),
       bidFilePath: options?.bidFilePath || extractBidFilePathFromRun(nextRun, bidFilePath),
-      status: (nextRun.status || 'UNKNOWN') as BiaoshuProjectStatus,
+      status,
       createdAt: nextRun.createdAt || new Date().toISOString(),
       updatedAt: nextRun.updatedAt || new Date().toISOString(),
       artifactCount: nextArtifacts.length,
       validArtifactCount: nextArtifacts.filter((artifact) => artifact.status === 'valid').length,
-    }
-    const response = await saveBiaoshuProject(historyItem)
-    setProjectHistory(response.projects)
+    })
+    setProjectHistory(response.projects.map((p) => ({
+      runId: p.runId,
+      projectId: '',
+      projectName: p.projectName,
+      bidFilePath: p.bidFilePath,
+      status: p.status,
+      currentStage: '',
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      artifactCount: p.artifactCount ?? 0,
+      validArtifactCount: p.validArtifactCount ?? 0,
+      managedProject: false,
+    })))
   }, [bidFilePath, projectName, reviews, trace])
 
   // 页面加载时从本地后端恢复历史项目
   useEffect(() => {
-    fetchBiaoshuManagedProjects().then((response) => {
-      const latest = response.projects[0]
-      if (!latest) return
-      setActiveProject(latest)
-      setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
-      setBidFilePath(latest.sourceFiles[0]?.path || DEFAULT_BID_FILE_PATH)
-      setActiveView('artifacts')
-      addLog(`从清单恢复标书项目: ${latest.projectName}`)
-    }).catch(() => {
-      // Keep legacy history fallback
+    const loadLegacyFallback = () => {
       fetchBiaoshuProjects().then(async (response) => {
-        setProjectHistory(response.projects)
+        setProjectHistory(legacyProjectsToHistory(response))
         const latest = response.projects[0]
         if (!latest) return
         setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
@@ -233,6 +252,25 @@ export default function BiaoshuWorkbench() {
       }).catch((err: unknown) => {
         addLog(`本地标书项目库读取失败: ${err instanceof Error ? err.message : String(err)}`)
       })
+    }
+
+    fetchBiaoshuManagedProjects().then((response) => {
+      if (response.projects.length === 0) {
+        loadLegacyFallback()
+        return
+      }
+      setManagedProjects(response.projects)
+      setProjectHistory(biaoshuManagedProjectsToHistory(response.projects))
+
+      const latest = selectBestBiaoshuManagedProject(response.projects)
+      if (!latest) return
+      setActiveProject(latest)
+      setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
+      setBidFilePath(latest.sourceFiles[0]?.path || DEFAULT_BID_FILE_PATH)
+      setActiveView('artifacts')
+      addLog(`从清单恢复标书项目: ${latest.projectName}`)
+    }).catch(() => {
+      loadLegacyFallback()
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -351,10 +389,30 @@ export default function BiaoshuWorkbench() {
     setActiveView('artifacts')
   }, [addLog])
 
+  const findManagedProjectForHistoryItem = useCallback((item: BiaoshuProjectHistoryItem): BiaoshuProjectManifest | null => {
+    if (!item.projectId) return null
+    return managedProjects.find((project) => project.projectId === item.projectId) || null
+  }, [managedProjects])
+
   const handleOpenHistoryItem = async (item: BiaoshuProjectHistoryItem) => {
     setLoading(true)
     setError(null)
     try {
+      const managedProject = findManagedProjectForHistoryItem(item)
+      if (managedProject) {
+        setProjectName(managedProject.projectName || item.projectName)
+        setBidFilePath(managedProject.sourceFiles[0]?.path || item.bidFilePath)
+        setManualArtifacts([])
+        setActiveProject(managedProject)
+        setRun(null)
+        setTrace(null)
+        setReviews([])
+        addLog(`打开本地托管标书项目: ${managedProject.projectName}`)
+        setActiveView('artifacts')
+        setLoading(false)
+        return
+      }
+
       setProjectName(item.projectName)
       setBidFilePath(item.bidFilePath)
       setManualArtifacts([])
@@ -869,8 +927,10 @@ function BiaoshuArtifactsPage({
     if (projectDirFromName && !candidateDirNames.includes(projectDirFromName)) candidateDirNames.push(projectDirFromName)
 
     // Known file names in the output directory
+    const rawTextFileName = '00_招标文件原文解析.md'
     const analysisFileName = '00_招标文件解析报告.md'
     const contextFileName = '01_项目背景信息确认表.md'
+    const scoringFileName = '02_评分标准拆解表.md'
     const outlineFileName = '03_技术标四级大纲.md'
 
     // Determine which project directory to scan by trying each candidate
@@ -898,30 +958,40 @@ function BiaoshuArtifactsPage({
 
       // Prevent re-scanning the same analysis path
       if (!resolveCandidatePath(analysisFilePath, scannedAnalysisPath)) return
-      setScannedAnalysisPath(analysisFilePath)
 
       const sourceFile = bidFilePath
 
-      // Recover analysis report
-      const analysisAlreadyValid = artifacts.some(
-        (a) => a.kind === 'BID_ANALYSIS' && a.status === 'valid' && a.storageRef,
-      )
-      if (!analysisAlreadyValid) {
-        onReportGenerated(
-          createManualReportArtifact(
-            { id: 'recovered-analysis', kind: 'BID_ANALYSIS', name: '招标文件解析报告', storageRef: analysisFilePath, summary: '从本地文件恢复的解析报告', metadata: { recovered: true, sourceFile } },
-            analysisFilePath,
-            sourceFile,
-          ) as unknown as Record<string, unknown>,
-          analysisFilePath,
-          sourceFile,
-        )
-      }
-
-      if (cancelled) return
-
-      // Scan context & outline using the resolved analysis path
+      // Recover all known output artifacts in one batch
       const candidates = [
+        {
+          kind: 'BID_RAW_TEXT',
+          path: `${analysisDir}/${rawTextFileName}`,
+          createArtifact: (filePath: string) => ({
+            id: 'recovered-raw-text',
+            name: '招标文件原文解析',
+            kind: 'BID_RAW_TEXT',
+            version: '-',
+            status: 'valid' as const,
+            owner: '文件解析',
+            updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+            storageRef: filePath,
+            summary: '从本地已生成文件恢复的招标文件原文解析',
+            sourceTool: 'parse_bid_files',
+            metadata: { recovered: true, sourceFile },
+          }),
+        },
+        {
+          kind: 'BID_ANALYSIS',
+          path: analysisFilePath,
+          createArtifact: (filePath: string) => createManualReportArtifact({
+            id: 'recovered-analysis',
+            kind: 'BID_ANALYSIS',
+            name: '招标文件解析报告',
+            storageRef: filePath,
+            summary: '从本地文件恢复的解析报告',
+            metadata: { recovered: true, sourceFile },
+          }, filePath, sourceFile),
+        },
         {
           kind: 'BID_PROJECT_CONTEXT',
           path: `${analysisDir}/${contextFileName}`,
@@ -931,6 +1001,18 @@ function BiaoshuArtifactsPage({
             name: '项目背景信息确认表',
             storageRef: filePath,
             summary: '从本地已生成文件恢复的项目背景信息确认表',
+            metadata: { recovered: true, sourceFile },
+          }, filePath, sourceFile),
+        },
+        {
+          kind: 'BID_SCORING_BREAKDOWN',
+          path: `${analysisDir}/${scoringFileName}`,
+          createArtifact: (filePath: string) => createManualScoringBreakdownArtifact({
+            id: 'recovered-scoring-breakdown',
+            kind: 'BID_SCORING_BREAKDOWN',
+            name: '评分标准拆解表',
+            storageRef: filePath,
+            summary: '从本地已生成文件恢复的评分标准拆解表',
             metadata: { recovered: true, sourceFile },
           }, filePath, sourceFile),
         },
@@ -966,6 +1048,8 @@ function BiaoshuArtifactsPage({
           // Missing files are expected when the user has not reached this step yet.
         }
       }
+
+      if (!cancelled) setScannedAnalysisPath(analysisFilePath)
     }
 
     scan()

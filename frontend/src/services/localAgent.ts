@@ -48,6 +48,7 @@ export type BiaoshuProjectStage =
   | 'raw_parsed'
   | 'analysis_ready'
   | 'context_ready'
+  | 'scoring_ready'
   | 'outline_ready'
   | 'chapters_ready'
   | 'wordcheck_ready'

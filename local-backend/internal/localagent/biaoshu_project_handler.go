@@ -9,6 +9,7 @@ import (
 func (s *Server) handleBiaoshuProjectCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		_, _ = s.importManagedBiaoshuProjectsFromRoots(s.legacyManagedBiaoshuProjectRoots())
 		_, _ = s.migrateLegacyBiaoshuProjects()
 		projects, err := s.listBiaoshuProjectManifests()
 		if err != nil {

@@ -15,6 +15,7 @@ const (
 	StageRawParsed      BiaoshuProjectStage = "raw_parsed"
 	StageAnalysisReady  BiaoshuProjectStage = "analysis_ready"
 	StageContextReady   BiaoshuProjectStage = "context_ready"
+	StageScoringReady   BiaoshuProjectStage = "scoring_ready"
 	StageOutlineReady   BiaoshuProjectStage = "outline_ready"
 	StageChaptersReady  BiaoshuProjectStage = "chapters_ready"
 	StageWordcheckReady BiaoshuProjectStage = "wordcheck_ready"
@@ -26,14 +27,15 @@ const (
 type BiaoshuArtifactKind string
 
 const (
-	ArtifactKindRawText        BiaoshuArtifactKind = "BID_RAW_TEXT"
-	ArtifactKindBidAnalysis    BiaoshuArtifactKind = "BID_ANALYSIS"
-	ArtifactKindProjectContext BiaoshuArtifactKind = "BID_PROJECT_CONTEXT"
-	ArtifactKindOutline        BiaoshuArtifactKind = "BID_OUTLINE"
-	ArtifactKindChapters       BiaoshuArtifactKind = "BID_CHAPTERS"
-	ArtifactKindWordCount      BiaoshuArtifactKind = "WORD_COUNT_REPORT"
-	ArtifactKindMergedDraft    BiaoshuArtifactKind = "MERGED_DRAFT"
-	ArtifactKindDocx           BiaoshuArtifactKind = "TECHNICAL_BID_DOCX"
+	ArtifactKindRawText          BiaoshuArtifactKind = "BID_RAW_TEXT"
+	ArtifactKindBidAnalysis      BiaoshuArtifactKind = "BID_ANALYSIS"
+	ArtifactKindProjectContext   BiaoshuArtifactKind = "BID_PROJECT_CONTEXT"
+	ArtifactKindScoringBreakdown BiaoshuArtifactKind = "BID_SCORING_BREAKDOWN"
+	ArtifactKindOutline          BiaoshuArtifactKind = "BID_OUTLINE"
+	ArtifactKindChapters         BiaoshuArtifactKind = "BID_CHAPTERS"
+	ArtifactKindWordCount        BiaoshuArtifactKind = "WORD_COUNT_REPORT"
+	ArtifactKindMergedDraft      BiaoshuArtifactKind = "MERGED_DRAFT"
+	ArtifactKindDocx             BiaoshuArtifactKind = "TECHNICAL_BID_DOCX"
 )
 
 type BiaoshuProjectManifest struct {
@@ -128,6 +130,8 @@ func biaoshuStageFromArtifacts(artifacts []BiaoshuProjectArtifact, status string
 		return StageChaptersReady
 	case valid[ArtifactKindOutline]:
 		return StageOutlineReady
+	case valid[ArtifactKindScoringBreakdown]:
+		return StageScoringReady
 	case valid[ArtifactKindProjectContext]:
 		return StageContextReady
 	case valid[ArtifactKindBidAnalysis]:

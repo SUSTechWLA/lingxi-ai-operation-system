@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -614,5 +615,19 @@ func TestLocalProjectDeleteRemovesProjectArtifactsAndCache(t *testing.T) {
 		if _, err := os.Stat(dir); !os.IsNotExist(err) {
 			t.Fatalf("project delete should remove %s, err=%v", dir, err)
 		}
+	}
+}
+
+func TestDefaultDataDirUsesLocalAppDataOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows-only default data dir behavior")
+	}
+	t.Setenv("TANGYING_LOCAL_DATA_DIR", "")
+	t.Setenv("LOCALAPPDATA", `C:\Users\test\AppData\Local`)
+
+	got := defaultDataDir()
+	want := filepath.Join(`C:\Users\test\AppData\Local`, "TangyingAIOS")
+	if got != want {
+		t.Fatalf("defaultDataDir() = %q, want %q", got, want)
 	}
 }

@@ -220,6 +220,88 @@ func (s *Server) listBiaoshuProjectManifests() ([]BiaoshuProjectManifest, error)
 	return manifests, nil
 }
 
+func biaoshuManagedProjectScore(manifest BiaoshuProjectManifest) int {
+	stageWeight := map[BiaoshuProjectStage]int{
+		StageWordExported:   90,
+		StageDraftMerged:    80,
+		StageWordcheckReady: 70,
+		StageChaptersReady:  60,
+		StageOutlineReady:   50,
+		StageScoringReady:   45,
+		StageContextReady:   40,
+		StageAnalysisReady:  30,
+		StageRawParsed:      20,
+		StageCreated:        10,
+		StageFailed:         0,
+	}
+	score := stageWeight[manifest.CurrentStage]
+	for _, artifact := range manifest.Artifacts {
+		if artifact.Status == "valid" && strings.TrimSpace(artifact.StorageRef) != "" {
+			score++
+		}
+	}
+	return score
+}
+
+func shouldReplaceBiaoshuManagedProject(existing, incoming BiaoshuProjectManifest) bool {
+	existingScore := biaoshuManagedProjectScore(existing)
+	incomingScore := biaoshuManagedProjectScore(incoming)
+	if incomingScore != existingScore {
+		return incomingScore > existingScore
+	}
+	existingTime, existingErr := time.Parse(time.RFC3339Nano, existing.UpdatedAt)
+	incomingTime, incomingErr := time.Parse(time.RFC3339Nano, incoming.UpdatedAt)
+	if existingErr != nil || incomingErr != nil {
+		return false
+	}
+	return incomingTime.After(existingTime)
+}
+
+func (s *Server) importManagedBiaoshuProjectsFromRoots(roots []string) (int, error) {
+	imported := 0
+	for _, root := range roots {
+		projectRoot := filepath.Join(root, "projects", biaoshuProjectDirName)
+		entries, err := os.ReadDir(projectRoot)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return imported, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || !isSafePathSegment(entry.Name()) {
+				continue
+			}
+			legacyPath := filepath.Join(projectRoot, entry.Name(), biaoshuProjectManifestFilename)
+			data, err := os.ReadFile(legacyPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return imported, err
+			}
+			var legacy BiaoshuProjectManifest
+			if err := json.Unmarshal(data, &legacy); err != nil {
+				continue
+			}
+			if err := validateBiaoshuProjectManifest(legacy); err != nil {
+				continue
+			}
+
+			current, err := s.readBiaoshuProjectManifest(legacy.ProjectID)
+			if err == nil && !shouldReplaceBiaoshuManagedProject(current, legacy) {
+				continue
+			}
+
+			if err := s.writeBiaoshuProjectManifest(legacy); err != nil {
+				return imported, err
+			}
+			imported++
+		}
+	}
+	return imported, nil
+}
+
 func newBiaoshuProjectID() string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -248,6 +330,28 @@ func (s *Server) migrateLegacyBiaoshuProjects() (int, error) {
 		if seenRuns[item.RunID] {
 			continue
 		}
+		merged := false
+		for _, project := range existing {
+			if sameBiaoshuProjectSource(project, item) {
+				if !biaoshuProjectHasRun(project, item.RunID) {
+					project.Runs = append(project.Runs, BiaoshuProjectRun{
+						RunID:          item.RunID,
+						Status:         item.Status,
+						StartedAt:      item.CreatedAt,
+						EndedAt:        item.UpdatedAt,
+						CloudAvailable: false,
+					})
+					if err := s.writeBiaoshuProjectManifest(project); err != nil {
+						return created, err
+					}
+				}
+				merged = true
+				break
+			}
+		}
+		if merged {
+			continue
+		}
 		manifest, err := s.createBiaoshuProject(BiaoshuProjectCreateRequest{
 			ProjectName: item.ProjectName,
 			BidFilePath: item.BidFilePath,
@@ -271,4 +375,23 @@ func (s *Server) migrateLegacyBiaoshuProjects() (int, error) {
 		created++
 	}
 	return created, nil
+}
+
+func sameBiaoshuProjectSource(manifest BiaoshuProjectManifest, legacy BiaoshuProjectRecord) bool {
+	if strings.TrimSpace(manifest.ProjectName) != strings.TrimSpace(legacy.ProjectName) {
+		return false
+	}
+	if len(manifest.SourceFiles) == 0 {
+		return false
+	}
+	return filepath.Clean(manifest.SourceFiles[0].Path) == filepath.Clean(legacy.BidFilePath)
+}
+
+func biaoshuProjectHasRun(manifest BiaoshuProjectManifest, runID string) bool {
+	for _, run := range manifest.Runs {
+		if run.RunID == runID {
+			return true
+		}
+	}
+	return false
 }
