@@ -483,6 +483,33 @@ export const generateProjectContextReport = async (
   return response.data
 }
 
+// ── Scoring Breakdown Generation ──
+
+export interface GenerateScoringBreakdownRequest {
+  analysisReportPath: string
+  scoringReportPath: string
+  sourceFile?: string
+  projectId?: string
+  runId?: string
+}
+
+export interface GenerateScoringBreakdownResponse {
+  success: boolean
+  data?: {
+    analysisReportPath: string
+    scoringReportPath: string
+    artifact: Record<string, unknown>
+  }
+  error?: string
+}
+
+export const generateScoringBreakdown = async (
+  payload: GenerateScoringBreakdownRequest
+): Promise<GenerateScoringBreakdownResponse> => {
+  const response = await api.post<GenerateScoringBreakdownResponse>('/biaoshu/scoring-breakdown/generate', payload)
+  return response.data
+}
+
 // ── Outline Generation ──
 
 export interface GenerateOutlineRequest {

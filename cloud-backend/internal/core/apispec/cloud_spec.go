@@ -498,6 +498,22 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("200", "Report generated", "BaseResponse").
 		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
 
+	b.Route("POST", "/api/biaoshu/scoring-breakdown/generate", "Generate scoring breakdown table from bid analysis report").
+		Tags("Biaoshu").
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"analysisReportPath": {Schema: StringSchema()},
+				"scoringReportPath":  {Schema: StringSchema()},
+				"sourceFile":         {Schema: StringSchema()},
+				"projectId":          {Schema: StringSchema()},
+				"runId":              {Schema: StringSchema()},
+			},
+			Required: []string{"analysisReportPath", "scoringReportPath"},
+		}, "Scoring breakdown request", true).
+		ResponseJSON("200", "Scoring breakdown generated", "BaseResponse").
+		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
+
 	b.Route("POST", "/api/biaoshu/outline/generate", "Generate technical bid outline from analysis report and project context").
 		Tags("Biaoshu").
 		BodyInlineJSON(&Schema{

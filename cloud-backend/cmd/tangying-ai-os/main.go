@@ -380,6 +380,8 @@ func main() {
 		questionsHandler.RegisterRoutes(r)
 		contextReportHandler := biaoshu_handler.NewProjectContextReportHandler(gw)
 		contextReportHandler.RegisterRoutes(r)
+		scoringHandler := biaoshu_handler.NewScoringBreakdownHandler(gw)
+		scoringHandler.RegisterRoutes(r)
 		outlineHandler := biaoshu_handler.NewOutlineGenerationHandler(gw)
 		outlineHandler.RegisterRoutes(r)
 	}

@@ -111,6 +111,7 @@ const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
   { key: 'raw-parse', label: '招标文件原文解析', tool: 'parse_bid_files', kind: 'BID_RAW_TEXT', owner: '文件解析' },
   { key: 'parse', label: '招标文件解析报告', tool: 'bid_analysis_report', kind: 'BID_ANALYSIS', owner: 'AI分析' },
   { key: 'context', label: '项目背景信息确认表', tool: 'project_context_report', kind: 'BID_PROJECT_CONTEXT', owner: '信息确认' },
+  { key: 'scoring', label: '评分标准拆解表', tool: 'scoring_breakdown_generator', kind: 'BID_SCORING_BREAKDOWN', owner: '评分拆解' },
   { key: 'outline', label: '技术标大纲', tool: 'outline_generator', kind: 'BID_OUTLINE', owner: '大纲规划' },
   { key: 'chapters', label: '章节初稿', tool: 'chapter_writer', kind: 'BID_CHAPTERS', owner: '章节编写' },
   { key: 'wordcheck', label: '字数检查报告', tool: 'chapter_word_checker', kind: 'WORD_COUNT_REPORT', owner: '质量检查' },
@@ -132,6 +133,10 @@ export function deriveBiaoshuProjectContextQuestionnairePath(analysisReportPath:
 
 export function deriveBiaoshuOutlinePath(analysisReportPath: string): string {
   return joinBiaoshuSiblingPath(analysisReportPath, '03_技术标四级大纲.md')
+}
+
+export function deriveBiaoshuScoringBreakdownPath(analysisReportPath: string): string {
+  return joinBiaoshuSiblingPath(analysisReportPath, '02_评分标准拆解表.md')
 }
 
 function joinBiaoshuSiblingPath(basePath: string, fileName: string): string {
@@ -191,6 +196,7 @@ export function displayNameForBiaoshuArtifact(kind: string): string {
     BID_RAW_TEXT: '原文解析',
     BID_ANALYSIS: '招标解析',
     BID_PROJECT_CONTEXT: '项目背景',
+    BID_SCORING_BREAKDOWN: '评分拆解',
     BID_OUTLINE: '标书大纲',
     BID_CHAPTERS: '章节稿件',
     WORD_COUNT_REPORT: '字数检查',
@@ -262,7 +268,8 @@ function mergeOneManualArtifact(
 
 function previousBiaoshuStageKind(kind: string): string {
   if (kind === 'BID_PROJECT_CONTEXT') return 'BID_ANALYSIS'
-  if (kind === 'BID_OUTLINE') return 'BID_PROJECT_CONTEXT'
+  if (kind === 'BID_SCORING_BREAKDOWN') return 'BID_PROJECT_CONTEXT'
+  if (kind === 'BID_OUTLINE') return 'BID_SCORING_BREAKDOWN'
   if (kind === 'BID_CHAPTERS') return 'BID_OUTLINE'
   if (kind === 'WORD_COUNT_REPORT') return 'BID_CHAPTERS'
   if (kind === 'MERGED_DRAFT') return 'WORD_COUNT_REPORT'
@@ -314,6 +321,30 @@ export function createManualProjectContextArtifact(
     storageRef: String(artifact?.storageRef || artifact?.storage_ref || reportPath),
     summary: String(artifact?.summary || '手动生成的项目背景信息确认表'),
     sourceTool: 'project_context_report',
+    metadata,
+  }
+}
+
+export function createManualScoringBreakdownArtifact(
+  artifact: Record<string, unknown> | undefined,
+  reportPath: string,
+  sourceFile: string,
+): BiaoshuArtifactRecord {
+  const metadata = objectRecord(artifact?.metadata)
+  if (sourceFile) metadata.sourceFile = sourceFile
+  metadata.manualGenerated = true
+
+  return {
+    id: String(artifact?.id || artifact?.artifactId || 'manual-scoring-breakdown'),
+    name: String(artifact?.name || '评分标准拆解表'),
+    kind: 'BID_SCORING_BREAKDOWN',
+    version: '-',
+    status: 'valid',
+    owner: '评分拆解',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    storageRef: String(artifact?.storageRef || artifact?.storage_ref || reportPath),
+    summary: String(artifact?.summary || '手动生成的评分标准拆解表'),
+    sourceTool: 'scoring_breakdown_generator',
     metadata,
   }
 }

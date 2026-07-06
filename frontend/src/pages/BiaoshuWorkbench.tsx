@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
-import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, type BiaoshuReviseRequest } from '../services/api'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, type BiaoshuReviseRequest } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
   fetchBiaoshuProjects, 
@@ -25,11 +25,13 @@ import {
   createBiaoshuFallbackRun,
   createManualReportArtifact,
   createManualProjectContextArtifact,
+  createManualScoringBreakdownArtifact,
   createManualOutlineArtifact,
   deriveBiaoshuAnalysisReportPath,
   deriveBiaoshuProjectContextPath,
   deriveBiaoshuProjectContextQuestionnairePath,
   deriveBiaoshuOutlinePath,
+  deriveBiaoshuScoringBreakdownPath,
   displayNameForBiaoshuArtifact,
   mergeManualBiaoshuArtifacts,
   type BiaoshuArtifactRecord,
@@ -138,6 +140,9 @@ export default function BiaoshuWorkbench() {
     if (kind === 'BID_PROJECT_CONTEXT') {
       upsertManualArtifact(createManualProjectContextArtifact(artifact, filePath, sourceFile))
       addLog(`项目背景确认表已生成: ${filePath}`)
+    } else if (kind === 'BID_SCORING_BREAKDOWN') {
+      upsertManualArtifact(createManualScoringBreakdownArtifact(artifact, filePath, sourceFile))
+      addLog(`评分标准拆解表已生成: ${filePath}`)
     } else if (kind === 'BID_OUTLINE') {
       upsertManualArtifact(createManualOutlineArtifact(artifact, filePath, sourceFile))
       addLog(`技术标大纲已生成: ${filePath}`)
@@ -822,6 +827,7 @@ function BiaoshuArtifactsPage({
   const rawTextArtifact = artifacts.find((a) => a.kind === 'BID_RAW_TEXT' && a.status === 'valid')
   const analysisArtifact = artifacts.find((a) => a.kind === 'BID_ANALYSIS')
   const contextArtifact = artifacts.find((a) => a.kind === 'BID_PROJECT_CONTEXT')
+  const scoringArtifact = artifacts.find((a) => a.kind === 'BID_SCORING_BREAKDOWN')
   const outlineArtifact = artifacts.find((a) => a.kind === 'BID_OUTLINE')
 
   const [contextQuestionnaire, setContextQuestionnaire] = useState<ProjectContextQuestionnaire | null>(null)
@@ -839,6 +845,7 @@ function BiaoshuArtifactsPage({
   const deriveProjectContextPath = deriveBiaoshuProjectContextPath
   const deriveProjectContextQuestionnairePath = deriveBiaoshuProjectContextQuestionnairePath
   const deriveOutlinePath = deriveBiaoshuOutlinePath
+  const deriveScoringBreakdownPath = deriveBiaoshuScoringBreakdownPath
 
   // ── Recovery scan: check for already-generated local files ──
   const resolveCandidatePath = (probePath: string, alreadyScanned: string): boolean =>
@@ -1151,6 +1158,36 @@ function BiaoshuArtifactsPage({
     }
   }
 
+  const handleGenerateScoringBreakdown = async () => {
+    if (!analysisArtifact?.storageRef) return
+    setGeneratingOutline(true)
+    setContextError(null)
+    try {
+      const sourceFile = typeof analysisArtifact.metadata?.sourceFile === 'string'
+        ? analysisArtifact.metadata.sourceFile
+        : ''
+      const scoringReportPath = deriveScoringBreakdownPath(analysisArtifact.storageRef)
+      const result = await generateScoringBreakdown({
+        analysisReportPath: analysisArtifact.storageRef,
+        scoringReportPath,
+        sourceFile,
+        projectId: run?.id,
+        runId: run?.id,
+      })
+      if (!result.success) {
+        setContextError(result.error || '生成评分标准拆解表失败')
+        return
+      }
+      if (result.data) {
+        onReportGenerated(result.data.artifact, result.data.scoringReportPath, sourceFile)
+      }
+    } catch (e: unknown) {
+      setContextError(e instanceof Error ? e.message : '生成评分标准拆解表失败')
+    } finally {
+      setGeneratingOutline(false)
+    }
+  }
+
   const handleGenerateOutline = async () => {
     if (!analysisArtifact?.storageRef || !contextArtifact?.storageRef) return
     setGeneratingOutline(true)
@@ -1163,6 +1200,7 @@ function BiaoshuArtifactsPage({
       const result = await generateOutline({
         analysisReportPath: analysisArtifact.storageRef,
         contextReportPath: contextArtifact.storageRef,
+        scoringReportPath: scoringArtifact?.storageRef || deriveScoringBreakdownPath(analysisArtifact.storageRef),
         outlinePath,
         sourceFile,
       })
@@ -1343,6 +1381,34 @@ function BiaoshuArtifactsPage({
                 继续逐项回答
               </button>
             )}
+          </div>
+        </div>
+      )}
+      {/* Scoring breakdown generation */}
+      {analysisArtifact?.status === 'valid' && contextArtifact?.status === 'valid' && (
+        <div className="rounded-lg bg-amber-50 p-4 ring-1 ring-amber-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-amber-800">
+                {scoringArtifact?.status === 'valid' ? '评分拆解表已生成，可重新生成' : '请生成评分标准拆解表'}
+              </p>
+              <p className="mt-1 text-xs text-amber-600">
+                基于解析报告提取评分办法，生成评分标准拆解表，为大纲生成提供准确的得分点依据
+              </p>
+            </div>
+            <button
+              onClick={handleGenerateScoringBreakdown}
+              disabled={generatingOutline}
+              className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-black text-white shadow-sm hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {generatingOutline ? (
+                <><FiRefreshCw className="animate-spin" /> 生成中...</>
+              ) : scoringArtifact?.status === 'valid' ? (
+                <><FiRefreshCw /> 重新生成评分拆解表</>
+              ) : (
+                <><FiZap /> 生成评分拆解表</>
+              )}
+            </button>
           </div>
         </div>
       )}

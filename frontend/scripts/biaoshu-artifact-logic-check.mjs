@@ -24,11 +24,13 @@ try {
     createManualReportArtifact,
     createManualProjectContextArtifact,
     createManualOutlineArtifact,
+    createManualScoringBreakdownArtifact,
     displayNameForBiaoshuArtifact,
     biaoshuArtifactToCopyText,
     deriveBiaoshuProjectContextPath,
     deriveBiaoshuProjectContextQuestionnairePath,
     deriveBiaoshuOutlinePath,
+    deriveBiaoshuScoringBreakdownPath,
     mergeManualBiaoshuArtifacts,
     mergeManualReportArtifact,
   } = await import(pathToFileURL(outfile))
@@ -125,6 +127,10 @@ try {
     deriveBiaoshuOutlinePath('E:/bid/out/00_analysis_report.md'),
     'E:/bid/out/03_技术标四级大纲.md',
   )
+  assert.equal(
+    deriveBiaoshuScoringBreakdownPath('E:/bid/out/00_analysis_report.md'),
+    'E:/bid/out/02_评分标准拆解表.md',
+  )
 
   const regeneratedReport = createManualReportArtifact(
     {
@@ -155,6 +161,17 @@ try {
     'E:/bid/out/01_项目背景信息确认表.md',
     'E:/bid/source.pdf',
   )
+  const regeneratedScoring = createManualScoringBreakdownArtifact(
+    {
+      id: 'manual-scoring-1',
+      name: 'Scoring breakdown',
+      storageRef: 'E:/bid/out/02_评分标准拆解表.md',
+      summary: 'Recovered scoring breakdown',
+      metadata: { recovered: true },
+    },
+    'E:/bid/out/02_评分标准拆解表.md',
+    'E:/bid/source.pdf',
+  )
   const regeneratedOutline = createManualOutlineArtifact(
     {
       id: 'manual-outline-1',
@@ -176,6 +193,9 @@ try {
   assert.equal(mergedManualArtifacts[2].storageRef, 'E:/bid/out/01_项目背景信息确认表.md')
   assert.equal(mergedManualArtifacts[3].kind, 'BID_OUTLINE')
   assert.equal(mergedManualArtifacts[3].storageRef, 'E:/bid/out/03_技术标四级大纲.md')
+
+  assert.equal(regeneratedScoring.kind, 'BID_SCORING_BREAKDOWN')
+  assert.equal(regeneratedScoring.owner, '评分拆解')
 
   const fallbackRun = createBiaoshuFallbackRun({
     runId: 'agent_run_missing',
