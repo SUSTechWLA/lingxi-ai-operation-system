@@ -1,0 +1,28 @@
+name: check_chapter_words
+description: Count words and characters in a single bid chapter markdown file.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/check_chapter_words
+timeout: 60
+capabilities:
+  - bid_quality_check
+  - word_count
+tags:
+  - bid_writing
+  - biaoshu
+  - word_count
+parameters:
+  file_path:
+    type: string
+    description: Absolute path to the chapter markdown file.
+    required: true
+output:
+  word_count:
+    type: integer
+    description: Total word count.
+  char_count:
+    type: integer
+    description: Total character count.
+  status:
+    type: string
+    description: Pass or warn.

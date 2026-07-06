@@ -249,6 +249,38 @@ func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T)
 	}
 }
 
+func TestHeuristicPlanner_BidAnalysisReportMatchesBidWritingDomain(t *testing.T) {
+	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
+		{
+			Name:         "bid_analysis_report",
+			Capabilities: []string{"bid_writing", "bid_analysis", "bid_parsing", "report_generation", "document_parsing"},
+			Parameters: map[string]tool.ParamDef{
+				"raw_text_path": {Type: "string", Required: true},
+				"report_path":   {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"content":     {Type: "string"},
+				"report_path": {Type: "string"},
+			},
+		},
+	}, 2)
+
+	plan, err := planner.GeneratePlan(context.Background(), StartRunRequest{
+		Message: "请根据招标文件解析报告生成标书分析",
+		Domain:  "bid_writing",
+		Context: map[string]interface{}{
+			"raw_text_path": "E:\\bid\\raw.md",
+			"report_path":   "E:\\bid\\analysis.md",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePlan returned error: %v", err)
+	}
+	if len(plan.Steps) != 1 || plan.Steps[0].Tool != "bid_analysis_report" {
+		t.Fatalf("expected bid_analysis_report step, got %#v", plan.Steps)
+	}
+}
+
 type staticToolList []tool.ToolManifest
 
 func (l staticToolList) ListManifests() []*tool.ToolManifest {

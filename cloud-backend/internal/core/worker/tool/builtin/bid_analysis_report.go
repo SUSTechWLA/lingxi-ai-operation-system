@@ -133,7 +133,7 @@ func (t *BidAnalysisReportTool) Manifest() tool.ToolManifest {
 		Description:    t.Description(),
 		Type:           "builtin",
 		Sandbox:        false,
-		Capabilities:   []string{"bid_analysis", "report_generation"},
+		Capabilities:   []string{"bid_writing", "bid_analysis", "bid_parsing", "report_generation", "document_parsing"},
 		Tags:           []string{"biaoshu", "tender", "cloud_llm"},
 		CostLevel:      tool.CostMedium,
 		LatencyLevel:   tool.LatencyMedium,

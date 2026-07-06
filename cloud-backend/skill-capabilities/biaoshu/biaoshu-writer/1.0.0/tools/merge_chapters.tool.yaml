@@ -1,0 +1,29 @@
+name: merge_chapters
+description: Merge multiple chapter markdown files into a single full bid document.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/merge_chapters
+timeout: 60
+capabilities:
+  - document_assembly
+  - document_merge
+tags:
+  - bid_writing
+  - biaoshu
+  - merge
+parameters:
+  dir_path:
+    type: string
+    description: Absolute path to the directory containing chapter markdown files.
+    required: true
+  output_path:
+    type: string
+    description: Absolute path for the merged output markdown file.
+    required: false
+output:
+  output_path:
+    type: string
+    description: Path to the merged document.
+  chapter_count:
+    type: integer
+    description: Number of chapters merged.

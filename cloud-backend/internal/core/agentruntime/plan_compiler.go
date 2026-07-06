@@ -115,6 +115,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	if plan == nil {
 		return nil
 	}
+	c.injectBidAnalysisReport(plan)
 	c.injectKnowledgeContext(plan)
 	if plan.Budget.MaxSteps > 0 && len(plan.Steps) > plan.Budget.MaxSteps {
 		plan.Budget.MaxSteps = len(plan.Steps)

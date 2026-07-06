@@ -1,0 +1,34 @@
+name: parse_bid_files
+description: Parse tender/bid files (txt/pdf/docx/xlsx) and extract scoring criteria, procurement requirements, and technical requirements.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/parse_bid_files
+timeout: 300
+capabilities:
+  - bid_writing
+  - bid_parsing
+  - document_parsing
+tags:
+  - bid_writing
+  - bid
+  - tender
+  - biaoshu
+parameters:
+  file_path:
+    type: string
+    description: Absolute path of the tender file.
+    required: true
+  output_dir:
+    type: string
+    description: Optional output subdirectory name.
+    required: false
+output:
+  stdout:
+    type: string
+    description: Full parsing report.
+  raw_text_path:
+    type: string
+    description: Parsed raw text markdown file path.
+  report_path:
+    type: string
+    description: Generated markdown report path.

@@ -1,0 +1,28 @@
+name: convert_to_word
+description: Convert a markdown bid document to Word (.docx) format.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/convert_to_word
+timeout: 120
+capabilities:
+  - document_export
+  - word_export
+  - format_conversion
+tags:
+  - bid_writing
+  - biaoshu
+  - word
+  - docx
+parameters:
+  file_path:
+    type: string
+    description: Absolute path to the markdown file to convert.
+    required: true
+  output_path:
+    type: string
+    description: Absolute path for the output .docx file.
+    required: false
+output:
+  output_path:
+    type: string
+    description: Path to the generated .docx file.

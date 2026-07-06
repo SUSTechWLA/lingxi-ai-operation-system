@@ -1,0 +1,29 @@
+name: check_all_chapters_words
+description: Count words and characters across all chapter markdown files in a directory.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/check_all_chapters_words
+timeout: 120
+capabilities:
+  - bid_quality_check
+  - word_count
+  - batch_processing
+tags:
+  - bid_writing
+  - biaoshu
+  - word_count
+parameters:
+  dir_path:
+    type: string
+    description: Absolute path to the directory containing chapter markdown files.
+    required: true
+output:
+  chapters:
+    type: array
+    description: List of chapter word/char counts.
+  total_words:
+    type: integer
+    description: Sum of all chapter word counts.
+  status:
+    type: string
+    description: Pass or warn.

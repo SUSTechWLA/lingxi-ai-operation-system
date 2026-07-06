@@ -38,6 +38,7 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/orchestrator/service"
 	"github.com/tangying-ai/aios-core/internal/core/outbox"
 	redisClient "github.com/tangying-ai/aios-core/internal/core/redis"
+	"github.com/tangying-ai/aios-core/internal/core/skillcapability"
 	translatorHandler "github.com/tangying-ai/aios-core/internal/core/translator/handler"
 	translatorSvc "github.com/tangying-ai/aios-core/internal/core/translator/service"
 	"github.com/tangying-ai/aios-core/internal/core/worker/executor"
@@ -141,6 +142,24 @@ func main() {
 	if err := toolManifestSvc.SyncBuiltinTools(ctx); err != nil {
 		zap.L().Warn("Failed to sync builtin tools to DB", zap.Error(err))
 	}
+
+	// Load bundled skill capability tool manifests and register them.
+	skillCapabilityEntries, skillCapErrs := skillcapability.LoadCapabilities(cfg.Video.SkillCapabilityRoot)
+	for _, err := range skillCapErrs {
+		zap.L().Warn("Skill capability load error", zap.Error(err))
+	}
+	capabilityToolManifests := skillcapability.ToolManifests(skillCapabilityEntries)
+	for _, manifest := range capabilityToolManifests {
+		toolRegistry.RegisterExternal(manifest)
+		if err := toolManifestSvc.RegisterManifest(ctx, manifest); err != nil {
+			zap.L().Warn("Failed to register skill capability tool",
+				zap.String("name", manifest.Name),
+				zap.Error(err))
+		}
+	}
+	zap.L().Info("Skill capability registry initialized",
+		zap.Int("capability_entries", len(skillCapabilityEntries)),
+		zap.Int("tool_manifests", len(capabilityToolManifests)))
 
 	if err := toolManifestSvc.RestorePersistedManifests(ctx); err != nil {
 		zap.L().Warn("Failed to restore persisted tool manifests", zap.Error(err))

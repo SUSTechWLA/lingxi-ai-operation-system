@@ -1,0 +1,34 @@
+id: biaoshu-writer
+name: Biaoshu Writer
+description: AI-powered bid/tender document writing toolkit — parse, analyze, compose, assemble, and export
+domain: bid_writing
+version: 1.0.0
+tags:
+  - bid_writing
+  - bid
+  - biaoshu
+  - document
+  - word
+  - docx
+  - RAG
+
+tools:
+  - id: parse_bid_files
+    manifest: tools/parse_bid_files.tool.yaml
+  - id: check_chapter_words
+    manifest: tools/check_chapter_words.tool.yaml
+  - id: check_all_chapters_words
+    manifest: tools/check_all_chapters_words.tool.yaml
+  - id: convert_to_word
+    manifest: tools/convert_to_word.tool.yaml
+  - id: merge_chapters
+    manifest: tools/merge_chapters.tool.yaml
+  - id: rag_retrieve
+    manifest: tools/rag_retrieve.tool.yaml
+  - id: chapter_chunker
+    manifest: tools/chapter_chunker.tool.yaml
+  - id: embed_chunks
+    manifest: tools/embed_chunks.tool.yaml
+
+recipe:
+  mode: advisory

@@ -1,0 +1,28 @@
+name: rag_retrieve
+description: Retrieve relevant reference documents from the bid knowledge base using RAG.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/rag_retrieve
+timeout: 30
+capabilities:
+  - bid_reference_retrieval
+  - knowledge_retrieval
+  - rag
+tags:
+  - bid_writing
+  - biaoshu
+  - rag
+  - retrieval
+parameters:
+  query:
+    type: string
+    description: Natural-language search query.
+    required: true
+  top_k:
+    type: integer
+    description: Number of results to return.
+    required: false
+output:
+  results:
+    type: array
+    description: List of retrieved document chunks with relevance scores.

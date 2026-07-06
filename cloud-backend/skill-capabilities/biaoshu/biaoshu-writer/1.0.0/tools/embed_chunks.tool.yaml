@@ -1,0 +1,24 @@
+name: embed_chunks
+description: Generate vector embeddings for chapter chunks and index them into the knowledge base.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/embed_chunks
+timeout: 120
+capabilities:
+  - bid_reference_indexing
+  - vector_embedding
+  - knowledge_indexing
+tags:
+  - bid_writing
+  - biaoshu
+  - rag
+  - embedding
+parameters:
+  chunks:
+    type: array
+    description: List of chapter chunk objects with text fields.
+    required: true
+output:
+  indexed_count:
+    type: integer
+    description: Number of chunks successfully indexed.

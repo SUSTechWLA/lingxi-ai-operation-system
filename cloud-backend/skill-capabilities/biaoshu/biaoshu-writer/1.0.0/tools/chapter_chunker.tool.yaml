@@ -1,0 +1,24 @@
+name: chapter_chunker
+description: Split an existing bid document into chapter-level text chunks for RAG indexing.
+version: 1.0.0
+type: http
+endpoint: http://127.0.0.1:9001/tools/chapter_chunker
+timeout: 60
+capabilities:
+  - bid_reference_indexing
+  - text_chunking
+  - rag_preparation
+tags:
+  - bid_writing
+  - biaoshu
+  - rag
+  - indexing
+parameters:
+  file_path:
+    type: string
+    description: Absolute path to the bid document to chunk.
+    required: true
+output:
+  chunks:
+    type: array
+    description: List of chapter-level text chunks with titles.

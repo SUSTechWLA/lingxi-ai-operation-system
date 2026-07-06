@@ -132,12 +132,25 @@ func TestPlanCompiler_InsertsCloudBidAnalysisAfterParseBidFiles(t *testing.T) {
 		},
 	})
 
-	if len(plan.Steps) != 2 {
-		t.Fatalf("expected parse and convert steps only (no auto-injected analysis), got %#v", plan.Steps)
+	if len(plan.Steps) != 3 {
+		t.Fatalf("expected parse, analysis, and convert steps, got %#v", plan.Steps)
 	}
-	convert := plan.Steps[1]
-	if len(convert.DependsOn) != 1 || convert.DependsOn[0] != "parse_bid_files" {
-		t.Fatalf("convert should depend on parse step, got %#v", convert.DependsOn)
+	analysis := plan.Steps[1]
+	if analysis.ID != "bid_analysis_report" || analysis.Tool != "bid_analysis_report" {
+		t.Fatalf("analysis step should be inserted after parse, got %#v", plan.Steps)
+	}
+	if got := analysis.Arguments["raw_text_path"]; got != "{{parse_bid_files.output.raw_text_path}}" {
+		t.Fatalf("analysis raw_text_path should reference parse output, got %#v", analysis.Arguments)
+	}
+	if got := analysis.Arguments["report_path"]; got != "{{parse_bid_files.output.report_path}}" {
+		t.Fatalf("analysis report_path should reference parse output, got %#v", analysis.Arguments)
+	}
+	convert := plan.Steps[2]
+	if len(convert.DependsOn) != 1 || convert.DependsOn[0] != "bid_analysis_report" {
+		t.Fatalf("convert should depend on analysis step, got %#v", convert.DependsOn)
+	}
+	if got := convert.Arguments["input_file"]; got != "{{bid_analysis_report.output.report_path}}" {
+		t.Fatalf("convert should consume analysis report_path, got %#v", convert.Arguments)
 	}
 	if err := NewPlanGuard(staticToolCatalog{
 		"parse_bid_files":     compiler.manifestFor("parse_bid_files"),
@@ -201,14 +214,17 @@ func TestPlanCompiler_RewiresExistingBidAnalysisAfterParseBidFiles(t *testing.T)
 	if analysis.ID != "bid_analysis_report" || analysis.Tool != "bid_analysis_report" {
 		t.Fatalf("analysis step should remain in original position, got %#v", plan.Steps)
 	}
-	if got := analysis.Arguments["raw_text_path"]; got != "" {
-		t.Fatalf("analysis raw_text_path should remain unchanged: %#v", analysis.Arguments)
+	if got := analysis.Arguments["raw_text_path"]; got != "{{parse_bid_files.output.raw_text_path}}" {
+		t.Fatalf("analysis raw_text_path should reference parse output: %#v", analysis.Arguments)
 	}
-	if got := analysis.Arguments["report_path"]; got != "" {
-		t.Fatalf("analysis report_path should remain unchanged: %#v", analysis.Arguments)
+	if got := analysis.Arguments["report_path"]; got != "{{parse_bid_files.output.report_path}}" {
+		t.Fatalf("analysis report_path should reference parse output: %#v", analysis.Arguments)
 	}
-	if got := plan.Steps[2].DependsOn; len(got) != 1 || got[0] != "parse_bid_files" {
-		t.Fatalf("convert should depend on parse step, got %#v", plan.Steps[2].DependsOn)
+	if got := plan.Steps[2].DependsOn; len(got) != 1 || got[0] != "bid_analysis_report" {
+		t.Fatalf("convert should depend on analysis step, got %#v", plan.Steps[2].DependsOn)
+	}
+	if got := plan.Steps[2].Arguments["input_file"]; got != "{{bid_analysis_report.output.report_path}}" {
+		t.Fatalf("convert should consume analysis report_path, got %#v", plan.Steps[2].Arguments)
 	}
 }
 
