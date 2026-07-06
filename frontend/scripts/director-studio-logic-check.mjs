@@ -48,7 +48,12 @@ try {
     projectPrimaryAction,
     publishCopiesToJSON,
     publishCopiesToMarkdown,
+    preferredActiveReview,
+    qualityGateTargetLabel,
+    qualityGateTargetLines,
     reviewDisplayTitle,
+    reviewOutputPanelHint,
+    reviewOutputPanelTitle,
     reviewQualityReportLines,
     reviewStatusLabel,
     reviewOutputText,
@@ -59,10 +64,13 @@ try {
     buildProjectAssemblySummary,
     creationProfileSummary,
     deriveNextAction,
+    displayNameForArtifact,
     externalGenerationGuideSteps,
     externalGenerationReferenceCopyText,
+    externalGenerationReferencesFromArtifacts,
     videoCreationProfileForId,
     videoCreationProfiles,
+    mergeExternalGenerationTaskReferences,
     timeWindowPlanSummary,
     traceNodeHasError,
     unresolvedMaterialDependencyCount,
@@ -424,6 +432,30 @@ try {
   )
   assert.equal(duplicateScriptReviewsFlow[0].status, 'review')
   assert.equal(duplicateScriptReviewsFlow[0].reviewId, 'script-pending')
+  assert.equal(reviewDisplayTitle({
+    id: 'knowledge-approved',
+    status: 'APPROVED',
+    tool: 'knowledge_researcher',
+    reviewContent: '已通过的知识调研',
+  }), '脚本依据 / 创作依据')
+  assert.equal(reviewOutputPanelTitle({ tool: 'knowledge_researcher' }), '脚本依据')
+  assert.match(reviewOutputPanelHint({ tool: 'knowledge_researcher' }), /口播脚本/)
+  assert.equal(preferredActiveReview([
+    {
+      id: 'knowledge-pending',
+      nodeId: 'knowledge_researcher_review',
+      status: 'PENDING',
+      tool: 'knowledge_researcher',
+      reviewContent: '产品事实材料',
+    },
+    {
+      id: 'script-pending',
+      nodeId: 'video_script_generator_review',
+      status: 'PENDING',
+      tool: 'video_script_generator',
+      reviewContent: '当前待审核口播脚本',
+    },
+  ])?.id, 'script-pending')
 
   const knowledgeReviewFlow = buildDirectorStages(
     [
@@ -1113,6 +1145,9 @@ try {
   assert.deepEqual(shotReviewGroups[0].referenceRoles, ['character'])
   assert.deepEqual(shotReviewGroups[0].artifactCounts, { total: 7, references: 1, media: 2, reviewPackets: 1 })
   assert.deepEqual(shotReviewGroups[0].slots.map((slot) => slot.kind), ['prompt', 'reference', 'storyboard', 'base-media', 'overlay', 'video'])
+  assert.match(shotReviewGroups[0].slots.find((slot) => slot.kind === 'base-media')?.description || '', /AIGC 参考视频、参考图/)
+  assert.match(shotReviewGroups[0].slots.find((slot) => slot.kind === 'overlay')?.description || '', /HyperFrames 本地生成/)
+  assert.match(shotReviewGroups[0].slots.find((slot) => slot.kind === 'video')?.description || '', /合并后的完整 shot/)
   assert.deepEqual(shotReviewGroups[0].generationStrategy, {
     mode: 'hybrid_aigc_bg_html_overlay',
     label: 'Hybrid',
@@ -1123,9 +1158,65 @@ try {
   assert.equal(shotReviewGroups[0].slots.find((slot) => slot.kind === 'base-media')?.dependencyRequests.some((artifact) => artifact.id === 'shot-video-request-1'), false)
   assert.equal(unresolvedMaterialDependencyCount(shotReviewGroups), 0)
   assert.ok(shotReviewGroups[0].slots.find((slot) => slot.kind === 'storyboard')?.artifacts.some((artifact) => artifact.id === 'shot-storyboard-result-1'))
+  const resolvedShotReferences = externalGenerationReferencesFromArtifacts(shotReviewGroups[0].slots.flatMap((slot) => slot.artifacts))
+  assert.equal(resolvedShotReferences[0]?.label, '人物三视角参考图')
+  assert.equal(resolvedShotReferences[0]?.storageRef, 'local://shot-1/character-views.png')
+  assert.equal(resolvedShotReferences[0]?.role, 'character')
+  const mergedShotTask = mergeExternalGenerationTaskReferences({
+    requestId: 'extgen_video_SHOT_01',
+    kind: 'video',
+    shotId: 'SHOT_01',
+    prompt: '生成一段主角走进镜头的 5 秒视频。',
+    references: [],
+    referenceImageLimit: 6,
+  }, resolvedShotReferences)
+  assert.equal(mergedShotTask.references.length, 2)
+  assert.equal(mergedShotTask.references[0].label, '人物三视角参考图')
+  assert.equal(mergedShotTask.references[1].role, 'storyboard')
   assert.equal(shotReviewGroups[1].shotId, 'SHOT_02')
   assert.equal(shotReviewGroups[1].status, 'valid')
   assert.equal(shotReviewGroups[1].generationStrategy?.label, 'HyperFrames')
+
+  const requestOnlyShotGroups = buildShotReviewGroups([
+    {
+      id: 'external-generation-request-SHOT_01',
+      kind: 'EXTERNAL_GENERATION_REQUEST',
+      name: 'external_generation_request.json',
+      status: 'review',
+      owner: '素材依赖点',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: false,
+      storageRef: 'local://projects/vp-1/artifacts/video_prompt/extgen-video-SHOT_01.json',
+      metadata: { artifactType: 'external_generation_request', generationKind: 'video' },
+      inlineJson: JSON.stringify({
+        requestId: 'extgen_video_SHOT_01',
+        kind: 'video',
+        shotId: 'SHOT_01',
+        narrationText: '本系统已经开源，后续内容都会由它创作。',
+        visual: '系统界面打开，开源仓库和视频流水线同时亮起。',
+        target: { durationSec: 6, aspectRatio: '16:9', resolution: '1920x1080' },
+        prompt: '非真人风格化动画，躺营视频创作助手界面打开，开源仓库 Star 动效弹出。',
+      }),
+    },
+    {
+      id: 'generated-video-SHOT_01',
+      kind: 'SHOT_VIDEO_CLIP',
+      name: 'SHOT_01_video_clip.mp4',
+      status: 'valid',
+      owner: '项目产物',
+      version: '第1版',
+      updatedAt: '-',
+      humanApproved: true,
+      storageRef: 'local://projects/vp-1/artifacts/video_prompt/shot-video.mp4',
+      metadata: { relatedShotId: 'SHOT_01', artifactType: 'shot_video_clip' },
+    },
+  ])
+  assert.equal(requestOnlyShotGroups.length, 1)
+  assert.equal(requestOnlyShotGroups[0].title, 'SHOT_01')
+  assert.equal(requestOnlyShotGroups[0].narrationText, '本系统已经开源，后续内容都会由它创作。')
+  assert.equal(requestOnlyShotGroups[0].visualText, '系统界面打开，开源仓库和视频流水线同时亮起。')
+  assert.equal(requestOnlyShotGroups[0].durationSec, 6)
 
   const autoMcpShotGroups = buildShotReviewGroups([
     {
@@ -1415,6 +1506,7 @@ try {
   }
   assert.equal(reviewDisplayTitle(proposalReview), '审核创作方案')
   assert.equal(reviewOutputText(proposalReview), '# Proposal Packet\n\n推荐方案：option_a')
+  assert.equal(displayNameForArtifact('COMPOSITED_SHOT_VIDEO'), '完整Shot片段')
 
   const qualityGateReview = {
     id: 'video_script_generator_quality_gate',
@@ -1423,12 +1515,18 @@ try {
     tool: 'video_script_generator',
     reviewPhase: 'quality_gate',
     reviewReason: '质量门禁：script_quality_checker 评分需 >=85',
+    requiredOutputs: ['VIDEO_SCRIPT'],
     reviewContent: '佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。',
     reviewOutput: { qualityReport: { score: 82, issues: ['事实来源需要更明确'] } },
   }
-  assert.equal(reviewDisplayTitle(qualityGateReview), '审核口播脚本')
+  assert.equal(qualityGateTargetLabel(qualityGateReview), '视频脚本')
+  assert.deepEqual(qualityGateTargetLines(qualityGateReview), ['目标产物：视频脚本'])
+  assert.equal(reviewDisplayTitle(qualityGateReview), '质量门禁：口播脚本（目标产物：视频脚本）')
+  assert.equal(reviewOutputPanelTitle(qualityGateReview), '质量门禁报告：视频脚本')
+  assert.match(reviewOutputPanelHint(qualityGateReview), /本门禁只检查目标产物：视频脚本/)
   assert.equal(reviewOutputText(qualityGateReview), '佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。')
   assert.deepEqual(reviewQualityReportLines(qualityGateReview), [
+    '目标产物：视频脚本',
     '质量评分 82/100，门禁阈值 85',
     '事实来源需要更明确',
   ])
@@ -1448,6 +1546,7 @@ try {
     },
   }
   assert.deepEqual(reviewQualityReportLines(explainableQualityGateReview), [
+    '目标产物：视频脚本',
     '质量评分 95/100，门禁阈值 85',
     '门禁结果：已通过',
     '分析：脚本结构完整，开头钩子明确，时长与事实引用都满足本轮要求。',
@@ -1500,6 +1599,77 @@ try {
   assert.match(shotReviewText, /佛得角是西非岛国/)
   assert.ok(!shotReviewText.includes('shotAssetPackages'), shotReviewText)
 
+  const videoPromptQualityGateReview = {
+    id: 'video_prompt_generator_quality_gate',
+    nodeId: 'video_prompt_generator_quality_gate',
+    status: 'PENDING',
+    tool: 'video_prompt_generator',
+    reviewPhase: 'quality_gate',
+    reviewReason: '质量门禁：video_prompt_quality_checker 评分需 >=85',
+    requiredOutputs: ['VIDEO_PROMPTS', 'SHOT_ASSET_PACKAGE'],
+    reviewContent: JSON.stringify({
+      summary: 'Shot 视频生成资料已准备好：每个 shot 都来自口播稿，并明确 HyperFrames / AIGC 分工。',
+      videoPrompts: [
+        {
+          shotId: 'SHOT_01',
+          durationSec: 6,
+          narrationText: '本系统已经开源。',
+          visual: '代码仓库星标弹出，系统界面变成流程图。',
+          prompt: '非真人风格化动画，开源项目看板亮起。',
+          negativePrompt: '避免水印。',
+        },
+      ],
+      shotAssetPackages: [
+        {
+          shotId: 'SHOT_01',
+          durationSec: 6,
+          assetRoute: 'hybrid_aigc_bg_html_overlay',
+          whyThisShot: '开头先建立系统身份。',
+          actionBeats: ['系统界面亮起', 'Star 贴纸弹出'],
+          referenceImages: [{ id: 'ref-ui', label: '系统界面参考图', role: 'reference', storageRef: 'local://projects/p/ref-ui.png' }],
+          prompts: { videoPrompt: '非真人风格化动画，开源项目看板亮起。', negativePrompt: '避免水印。' },
+          aigcVideo: { requestId: 'extgen_video_SHOT_01' },
+        },
+      ],
+      externalGenerationRequests: [
+        {
+          requestId: 'extgen_video_SHOT_01',
+          kind: 'video',
+          shotId: 'SHOT_01',
+          prompt: '非真人风格化动画，开源项目看板亮起。',
+          references: [{ id: 'ref-ui', label: '系统界面参考图', role: 'reference', storageRef: 'local://projects/p/ref-ui.png' }],
+        },
+      ],
+    }),
+  }
+  assert.equal(qualityGateTargetLabel(videoPromptQualityGateReview), '视频提示词、Shot独立素材包')
+  assert.equal(reviewDisplayTitle(videoPromptQualityGateReview), '质量门禁：Shot 视频生成资料（目标产物：视频提示词、Shot独立素材包）')
+  assert.equal(reviewOutputPanelTitle(videoPromptQualityGateReview), 'Shot 制作说明')
+  assert.match(reviewOutputPanelHint(videoPromptQualityGateReview), /口播稿拆出的每个 shot/)
+  const videoPromptReviewText = reviewOutputText(videoPromptQualityGateReview)
+  assert.match(videoPromptReviewText, /Shot 视频生成资料/)
+  assert.match(videoPromptReviewText, /质量门禁：Shot 视频生成资料/)
+  assert.match(videoPromptReviewText, /来自口播：本系统已经开源/)
+  assert.match(videoPromptReviewText, /画面变化：代码仓库星标弹出/)
+  assert.match(videoPromptReviewText, /制作方式：AIGC 视频 \+ HyperFrames 合成/)
+  assert.match(videoPromptReviewText, /AIGC 参考视频：需要用户在产物页复制提示词生成并上传/)
+  assert.match(videoPromptReviewText, /参考图：系统界面参考图/)
+  assert.match(videoPromptReviewText, /HyperFrames：本地生成精确文字、UI、字幕或图形包装/)
+  assert.match(videoPromptReviewText, /去产物页查看提示词和上传入口/)
+  assert.ok(!videoPromptReviewText.includes('shotAssetPackages'), videoPromptReviewText)
+  const legacyVideoPromptReviewText = reviewOutputText({
+    id: 'video_prompt_generator_quality_gate_legacy',
+    nodeId: 'video_prompt_generator_quality_gate_legacy',
+    status: 'PENDING',
+    tool: 'video_prompt_generator',
+    reviewPhase: 'quality_gate',
+    reviewContent: '已基于 shotList 本地生成可复制到浏览器外部平台的独立 shot 视频提示词；当前不依赖图片或视频生成 API。',
+  })
+  assert.match(legacyVideoPromptReviewText, /Shot 视频生成资料/)
+  assert.match(legacyVideoPromptReviewText, /质量门禁：Shot 视频生成资料/)
+  assert.match(legacyVideoPromptReviewText, /去产物页查看提示词和上传入口/)
+  assert.notEqual(legacyVideoPromptReviewText, '已基于 shotList 本地生成可复制到浏览器外部平台的独立 shot 视频提示词；当前不依赖图片或视频生成 API。')
+
   const legacyQualityGateReview = {
     id: 'legacy_quality_gate',
     nodeId: 'legacy_quality_gate',
@@ -1507,16 +1677,19 @@ try {
     tool: '__quality_gate__',
     reviewPhase: 'quality_gate',
   }
-  assert.equal(reviewDisplayTitle(legacyQualityGateReview), '审核创作产物')
+  assert.equal(reviewDisplayTitle(legacyQualityGateReview), '质量门禁（目标产物：待识别产物）')
+  assert.deepEqual(qualityGateTargetLines(legacyQualityGateReview), ['目标产物：待识别产物'])
 
   const visibleReviews = visibleReviewHistory([
     { id: 'future-storyboard', nodeId: 'future-storyboard', status: 'CREATED', tool: 'card_plan_generator' },
     { id: 'proposal-review', nodeId: 'proposal-review', status: 'APPROVED', tool: 'proposal_generator' },
+    { id: 'script-quality-passed', nodeId: 'script-quality-passed', status: 'APPROVED', tool: 'video_script_generator', reviewPhase: 'quality_gate' },
     { id: 'script-review', nodeId: 'script-review', status: 'PENDING', tool: 'video_script_generator' },
     { id: 'ready-script-review', nodeId: 'ready-script-review', status: 'PENDING', tool: 'video_script_generator', reviewContent: '可审核脚本正文' },
     { id: 'rejected-review', nodeId: 'rejected-review', status: 'REJECTED', tool: 'card_plan_generator' },
   ])
   assert.deepEqual(visibleReviews.map((review) => review.id), ['proposal-review', 'ready-script-review', 'rejected-review'])
+  assert.equal(nextSelectedReviewId('script-quality-passed', 'ready-script-review', visibleReviews, 'script-quality-passed'), 'ready-script-review')
   assert.equal(reviewStatusLabel(visibleReviews[0]), '已通过')
   assert.equal(reviewStatusLabel(visibleReviews[1]), '待审核')
   assert.equal(reviewStatusLabel(visibleReviews[2]), '已驳回')
@@ -1599,7 +1772,7 @@ try {
     referenceImageLimit: 6,
   })
   assert.ok(videoGuideSteps[0].includes('没有可用的图片或视频 API 配置'))
-  assert.ok(videoGuideSteps.some((step) => step.includes('复制 Prompt') && step.includes('浏览器')))
+  assert.ok(videoGuideSteps.some((step) => step.includes('复制文字提示词') && step.includes('浏览器')))
   assert.ok(videoGuideSteps.some((step) => step.includes('每个 shot 单独生成') && step.includes('转场放在本 shot 结尾')))
   assert.ok(videoGuideSteps.some((step) => step.includes('上传结果') && step.includes('素材库')))
 
@@ -1689,17 +1862,46 @@ try {
   })
   const aigcProviderIssue = aigcProviderIssueItems.find((item) => item.id === 'model-provider')
   assert.equal(aigcProviderIssue?.status, 'warning')
+  assert.equal(aigcProviderIssue?.blockerCode, 'MODEL_PROVIDER_MEDIA_OPTIONAL')
   assert.ok(
-    aigcProviderIssue?.detail.includes('基础模型 API 未配置完整') &&
-      aigcProviderIssue.detail.includes('文生图片、文生视频 Provider') &&
-      aigcProviderIssue.detail.includes('设置'),
-    'AIGC entry should surface missing image/video providers as a focused settings warning',
+    aigcProviderIssue?.detail.includes('文生图片、文生视频') &&
+      aigcProviderIssue.detail.includes('Dreamina CLI / MCP') &&
+      aigcProviderIssue.detail.includes('上传回填'),
+    'AIGC entry should treat missing image/video providers as an optional external-generation reminder',
   )
   const visibleIssues = visibleEnvironmentIssues(aigcProviderIssueItems)
   assert.deepEqual(
     visibleIssues.map((item) => item.id),
+    [],
+    'project overview should hide optional image/video provider reminders from startup health',
+  )
+  const missingTextProviderItems = buildEnvironmentChecklist({
+    serviceStatus: 'ok',
+    selectedProfile: videoCreationProfileForId('aigc_shot'),
+    preflight: {
+      pipeline: 'wf-aigc-shot-video',
+      status: 'passed',
+      canStart: true,
+      capabilityMenu: {
+        localRunner: { available: true },
+        localTools: [
+          { command: 'LOCAL_FILE_IMPORT', available: true },
+          { command: 'FFMPEG_PROBE', available: true },
+          { command: 'ARTIFACT_PACKAGE', available: true },
+        ],
+      },
+      blockers: [],
+    },
+    modelProviderState: 'missing',
+    missingModelCapabilities: ['text_to_text', 'text_to_image'],
+  })
+  const missingTextProviderIssue = missingTextProviderItems.find((item) => item.id === 'model-provider')
+  assert.equal(missingTextProviderIssue?.status, 'blocked')
+  assert.equal(missingTextProviderIssue?.blockerCode, 'MODEL_PROVIDER_TEXT_MISSING')
+  assert.deepEqual(
+    visibleEnvironmentIssues(missingTextProviderItems).map((item) => item.id),
     ['model-provider'],
-    'project overview should show only actionable environment issues and hide passing/tool-detail rows',
+    'project overview should still show text model provider issues because script and planning generation need them',
   )
 
   const externalTaskPackage = buildExternalGenerationTaskPackage({
@@ -1716,7 +1918,9 @@ try {
     promptCharLimit: 2000,
     referenceImageLimit: 6,
   })
-  assert.ok(externalTaskPackage.fullText.includes('完整任务包'), 'external package should be copyable as a full task package')
+  assert.ok(externalTaskPackage.fullText.includes('完整 AI 生成参考资料'), 'external package should be copyable as complete non-technical AI generation material')
+  assert.ok(externalTaskPackage.fullText.includes('文字提示词'), 'external package should label the prompt in user-facing Chinese')
+  assert.ok(externalTaskPackage.fullText.includes('图片参考资料'), 'external package should label image references as user-facing materials')
   assert.ok(externalTaskPackage.fullText.includes('Positive Prompt'), 'external package should include a positive prompt section')
   assert.ok(externalTaskPackage.fullText.includes('Negative Prompt'), 'external package should include a negative prompt section')
   assert.ok(externalTaskPackage.referenceManifest.includes('参考图 1'), 'external package should include ordered reference image manifest')
@@ -1810,6 +2014,89 @@ try {
     'review history scroller needs padding so item borders are not clipped',
   )
   assert.ok(
+    pageSource.includes('reviewOutputPanelTitle(selectedReview)') &&
+      pageSource.includes('reviewOutputPanelHint(selectedReview)') &&
+      !pageSource.includes('审核阶段产物'),
+    'review page should name supporting knowledge as script evidence instead of a generic peer artifact',
+  )
+  assert.ok(
+    pageSource.includes('查看产物页提示词和上传入口') &&
+      pageSource.includes('onGoAssets') &&
+      pageSource.includes('isShotProductionReview(selectedReview)'),
+    'shot production quality gate should provide a visible jump to the assets page for prompts, reference images, and uploads',
+  )
+  assert.ok(
+    pageSource.includes('ShotProductionGuideCard') &&
+      pageSource.includes('externalGenerationRequestArtifactsForSlot') &&
+      pageSource.includes('shotRequestPreviewEntries(openGroup, promptPreviews)'),
+    'shot asset workbench should surface readable shot scripts and generation prompts even after a clip has been generated',
+  )
+  assert.ok(
+    pageSource.includes('shotActionSummary(group, requestEntries)') &&
+      !pageSource.includes("{group.visualText || group.narrationText || '当前 shot 暂无画面摘要。'}") &&
+      !pageSource.includes('ShotTextBlock title="画面说明" value={openGroup.visualText'),
+    'shot asset workbench should not repeat the exact visual description as both summary and detail',
+  )
+  assert.ok(
+    pageSource.includes('ShotRequestSummaryCard') &&
+      pageSource.includes('生成步骤') &&
+      pageSource.includes('依赖关系') &&
+      pageSource.includes('可编辑提示词') &&
+      pageSource.includes('safePromptText(request.prompt)') &&
+      pageSource.includes('通过并锁定') &&
+      pageSource.includes('已通过，内容已锁定') &&
+      pageSource.includes('按要求重新生成提示词') &&
+      pageSource.includes('编辑参考图') &&
+      pageSource.includes('新增参考图'),
+    'shot asset workbench should let users edit/regenerate prompts and references, then approve-lock them',
+  )
+  assert.ok(
+    pageSource.includes('disabled={approved}') &&
+      pageSource.includes('setApproved(true)') &&
+      pageSource.includes('regeneratePromptDraft(') &&
+      pageSource.includes('setReferenceDrafts'),
+    'shot prompt and reference editing must become read-only after user approval',
+  )
+  assert.ok(
+    pageSource.includes('AIGC 视频层') &&
+      pageSource.includes('HyperFrames 文字 / 图形层') &&
+      pageSource.includes('FFmpeg 融合') &&
+      pageSource.includes('request.aigcPlan') &&
+      pageSource.includes('request.hyperframesPlan') &&
+      pageSource.includes('request.ffmpegFusionPlan') &&
+      pageSource.includes('避免乱码'),
+    'shot material cards should split AIGC background/partial video, HyperFrames text/keyframes, and FFmpeg fusion plans',
+  )
+  assert.ok(
+    pageSource.includes('ShotArtifactPreview') &&
+      pageSource.includes('<video') &&
+      pageSource.includes('controls'),
+    'shot asset workbench should support inline image and video previews for uploaded or generated assets',
+  )
+  assert.ok(
+    !pageSource.includes('完整 AI 生成参考资料'),
+    'shot generation cards should not expose technical package wording as the primary user-facing title',
+  )
+  assert.ok(
+    !pageSource.includes('复制参数') &&
+      !pageSource.includes('下载包') &&
+      !pageSource.includes('复制参考图'),
+    'shot generation cards should keep visible actions focused on copying/editing prompts and viewing references',
+  )
+  assert.ok(
+    pageSource.includes('门禁目标产物') &&
+      pageSource.includes('qualityGateTargetLines(selectedReview)'),
+    'review page should show which artifact a quality gate is checking when multiple artifacts are produced in parallel',
+  )
+  assert.ok(
+    pageSource.includes("onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate', targetReview?: AgentReviewItem) => void") &&
+      pageSource.includes("onAction('approve', selectedReview)") &&
+      pageSource.includes("onAction('reject', selectedReview)") &&
+      pageSource.includes("onAction('edit', selectedReview)") &&
+      pageSource.includes("onAction('regenerate', selectedReview)"),
+    'review decision buttons must act on the selected review card, not the default active review',
+  )
+  assert.ok(
     pageSource.includes('createVideoProject'),
     'director studio should create a video project before starting a dynamic agent run',
   )
@@ -1821,10 +2108,22 @@ try {
     pageSource.includes('projectId: nextProject.id'),
     'dynamic agent run context must include the bound project id',
   )
-  assert.ok(pageSource.includes('外部生成交付单'), 'external generation card should label the copyable handoff panel')
-  assert.ok(pageSource.includes('复制生成包'), 'external generation card should expose a complete copy package action')
-  assert.ok(pageSource.includes('复制负面提示'), 'external generation card should expose negative prompt copying')
+  assert.ok(pageSource.includes('ShotRequestSummaryCard'), 'external generation card should use progressive shot request summaries')
+  assert.ok(pageSource.includes('复制提示词'), 'external generation card should keep the primary visible action focused on prompt copying')
+  assert.ok(pageSource.includes('可选负面提示词'), 'external generation card should keep negative prompts available without adding another primary button')
   assert.ok(pageSource.includes('复制参考信息'), 'external generation card should expose reference copying')
+  assert.ok(
+    pageSource.includes('生成步骤') &&
+      pageSource.includes('依赖关系') &&
+      pageSource.includes('可编辑提示词') &&
+      pageSource.includes('编辑参考图') &&
+      pageSource.includes('通过并锁定') &&
+      pageSource.includes('文字提示词') &&
+      pageSource.includes('图片参考资料') &&
+      pageSource.includes('正在读取参考图') &&
+      pageSource.includes('mergeExternalGenerationTaskReferences'),
+    'assets page should show non-technical prompt and reference materials directly in the client',
+  )
   assert.ok(
     !pageSource.includes('installJiMengCLI') &&
       !pageSource.includes('registerJiMengMCP') &&
@@ -1850,6 +2149,24 @@ try {
   )
 
   const desktopSource = await readFile(new URL('../src/pages/DesktopPage.tsx', import.meta.url), 'utf8')
+  const brandSource = await readFile(new URL('../src/utils/brand.ts', import.meta.url), 'utf8')
+  const packageSource = await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8')
+  const electronSource = await readFile(new URL('../electron/main.cjs', import.meta.url), 'utf8')
+  assert.ok(
+    brandSource.includes("APP_NAME = '躺营AI视频创作助手'") &&
+      indexSource.includes('<title>躺营AI视频创作助手</title>') &&
+      packageSource.includes('"productName": "躺营AI视频创作助手"') &&
+      electronSource.includes("title: '躺营AI视频创作助手'"),
+    'user-facing desktop product name should be Tangying AI Video Creation Assistant',
+  )
+  assert.ok(
+    !brandSource.includes('自媒体运营助手') &&
+      !packageSource.includes('自媒体内容运营系统') &&
+      !indexSource.includes('自媒体运营助手') &&
+      !electronSource.includes('自媒体运营助手'),
+    'desktop app user-facing branding should not claim social media operation assistant capability',
+  )
   assert.ok(
     desktopSource.includes('installJiMengCLI') &&
       desktopSource.includes('registerJiMengMCP') &&
@@ -1860,6 +2177,34 @@ try {
   assert.ok(
     desktopSource.includes('即梦 CLI') && desktopSource.includes('文生图片') && desktopSource.includes('文生视频'),
     'settings page should present JiMeng CLI alongside image and video generation providers',
+  )
+  assert.ok(
+    desktopSource.includes('正在安装/更新 Dreamina CLI') &&
+      desktopSource.includes('Dreamina CLI 安装/更新完成') &&
+      desktopSource.includes("type: 'error'"),
+    'JiMeng CLI install/update must surface running, success, and failure feedback to users',
+  )
+  assert.ok(
+    desktopSource.includes('正在注册即梦 MCP') &&
+      desktopSource.includes('即梦 MCP 已注册') &&
+      desktopSource.includes('正在刷新即梦配置状态'),
+    'JiMeng settings actions must show visible progress and result feedback',
+  )
+  assert.ok(
+    desktopSource.includes('message={jimengSetupMessage}') &&
+      desktopSource.includes('message={loginMessage}') &&
+      desktopSource.includes("providerMessage.type === 'info'"),
+    'settings panels should render action feedback for provider, JiMeng setup, and login interactions',
+  )
+  assert.ok(
+    desktopSource.includes('setDirectoryMessage') &&
+      desktopSource.includes('已选择本地目录') &&
+      desktopSource.includes('未选择新目录'),
+    'local directory selection should give feedback for selected, cancelled, and failed outcomes',
+  )
+  assert.ok(
+    desktopSource.includes('复制失败'),
+    'copy actions should expose failure feedback instead of silently swallowing clipboard errors',
   )
 
   const apiSource = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8')

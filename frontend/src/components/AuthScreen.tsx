@@ -41,7 +41,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
                 <img src={APP_ICON_PATH} alt="躺营 AI" className="h-9 w-9 rounded-lg" />
                 <div>
                   <div className="text-base font-semibold">躺营 AI</div>
-                  <div className="text-xs text-white/55">AI Operation System</div>
+                  <div className="text-xs text-white/55">AI 视频创作助手</div>
                 </div>
               </div>
               <div className="mt-12 border-l border-primary-light pl-5">
@@ -59,7 +59,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
               <img src={APP_ICON_PATH} alt="躺营 AI" className="h-9 w-9 rounded-lg" />
               <div>
                 <div className="text-base font-semibold">躺营 AI</div>
-                <div className="text-xs text-ink-soft">AI Operation System</div>
+                <div className="text-xs text-ink-soft">AI 视频创作助手</div>
               </div>
             </div>
 

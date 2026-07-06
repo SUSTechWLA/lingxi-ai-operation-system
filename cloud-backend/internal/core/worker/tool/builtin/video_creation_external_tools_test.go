@@ -840,6 +840,179 @@ func TestVideoScriptGeneratorBlocksRequiredRetrievalWithEmptyFacts(t *testing.T)
 	}
 }
 
+func TestVideoScriptGeneratorUsesProductFactsForTangyingSelfPromotion(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic":                 "帮我介绍一下本系统，强调我将系统开源了，对躺营AI视频创作助手进行宣传，符合短视频节奏，提升完播率，后续我将一直发布由本系统创作的视频内容。",
+		"retrievalPolicy":       "required",
+		"mustUseFreshKnowledge": true,
+		"blockOnEmptyFacts":     true,
+		"knowledgePack":         []interface{}{},
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "script"})
+
+	if !result.Success {
+		t.Fatalf("Tangying self-promotion should use built-in product facts instead of blocking on empty retrieval: %s", result.Error)
+	}
+	script, _ := result.Data["script"].(string)
+	if !strings.Contains(script, "躺营") {
+		t.Fatalf("self-promotion script should introduce Tangying, got:\n%s", script)
+	}
+	usedFacts, ok := result.Data["usedFacts"].([]map[string]interface{})
+	if !ok || len(usedFacts) == 0 {
+		t.Fatalf("expected built-in product facts to be attached, got %#v", result.Data["usedFacts"])
+	}
+	if !strings.Contains(ensureStringValue(usedFacts), "开源") {
+		t.Fatalf("built-in product facts should include open-source positioning, got %#v", usedFacts)
+	}
+	if !strings.Contains(ensureStringValue(usedFacts), "视频创作助手") || strings.Contains(ensureStringValue(usedFacts), "自媒体运营助手") {
+		t.Fatalf("built-in product facts should use video creation assistant positioning, got %#v", usedFacts)
+	}
+}
+
+func TestVideoScriptGeneratorNormalizesLongScriptSpansFromModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"content": `{
+				  "script": "躺营视频创作助手已经开源。它专为短视频节奏设计，口播知识类、影视AIGC类都能一键切入。内置镜头分割、时长校验、自动质检和修复循环，最后用FFmpeg合成，确保每条视频节奏紧凑，完播率自然就上去了。",
+				  "summary": "躺营视频创作助手开源宣传。",
+				  "estimatedDurationSec": 48,
+				  "sections": [
+				    {"name":"开场","startSec":0,"endSec":20,"text":"躺营视频创作助手已经开源。它把一句话需求变成可审核的视频生产流程。"},
+				    {"name":"核心讲述","startSec":20,"endSec":48,"text":"它专为短视频节奏设计，口播知识类、影视AIGC类都能一键切入。内置镜头分割、时长校验、自动质检和修复循环，最后用FFmpeg合成，确保每条视频节奏紧凑，完播率自然就上去了。"}
+				  ]
+				}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	result := executeDynamicAgentPromptTool("video_script_generator", "script", "video", "躺营视频创作助手开源宣传", "", map[string]interface{}{
+		"topic":             "帮我介绍一下本躺营视频创作助手系统，强调我将系统开源了，对本系统进行宣传，符合短视频节奏，提升完播率，后续我将一直发布由本系统创作的视频内容。",
+		"targetDurationSec": 48,
+		"modelProvider":     map[string]interface{}{"apiKey": "test-key", "baseUrl": server.URL + "/v1", "model": "fake"},
+	}, tool.ToolContext{TaskID: "task-script-long-span", NodeID: "script_exec"})
+
+	if !result.Success {
+		t.Fatalf("video_script_generator failed: %s", result.Error)
+	}
+	spans := interfaceItems(result.Data["scriptSpans"])
+	if len(spans) < 4 {
+		t.Fatalf("expected long model spans to be split into multiple safe spans, got %#v", result.Data["scriptSpans"])
+	}
+	for _, item := range spans {
+		span, ok := mapValue(item)
+		if !ok {
+			t.Fatalf("span should be a map, got %#v", item)
+		}
+		duration := floatFromInterface(firstExistingValue(span, "durationSec"), 0)
+		if duration < 3 || duration > 15 {
+			t.Fatalf("script span duration must stay within 3-15s, got %#v", span)
+		}
+		if end := floatFromInterface(firstExistingValue(span, "endSec"), 0); end > 48 {
+			t.Fatalf("normalized spans should not exceed model timeline end, got %#v", span)
+		}
+	}
+	if !strings.Contains(ensureStringValue(result.Data["content"]), "核心讲述") {
+		t.Fatalf("normalized content should preserve source section names, got %s", ensureStringValue(result.Data["content"]))
+	}
+}
+
+func TestCaptionSplitterUsesLocalDeterministicOutput(t *testing.T) {
+	llmCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCalled = true
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"content": `{"captionPlan":{"artifactKind":"CAPTION_PLAN","segments":[]}}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	result := executeDynamicAgentPromptTool("caption_splitter", "captions", "video", "躺营视频创作助手开源宣传", "", map[string]interface{}{
+		"topic":             "躺营视频创作助手开源宣传",
+		"script":            "躺营视频创作助手已经开源。它能把一句话需求拆成清晰 shot。每个素材都有提示词和上传入口，普通用户也能看懂。",
+		"targetDurationSec": 18,
+		"modelProvider":     map[string]interface{}{"apiKey": "test-key", "baseUrl": server.URL + "/v1", "model": "fake"},
+	}, tool.ToolContext{TaskID: "task-caption-local", NodeID: "caption_splitter_exec"})
+
+	if !result.Success {
+		t.Fatalf("caption_splitter failed: %s", result.Error)
+	}
+	if llmCalled {
+		t.Fatalf("caption_splitter should use local deterministic output instead of waiting for LLM")
+	}
+	captionPlan, ok := result.Data["captionPlan"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("caption_splitter should return captionPlan, got %#v", result.Data)
+	}
+	segments := interfaceItems(captionPlan["segments"])
+	if len(segments) < 2 {
+		t.Fatalf("expected multiple caption segments, got %#v", captionPlan["segments"])
+	}
+	for _, item := range segments {
+		segment, ok := mapValue(item)
+		if !ok {
+			t.Fatalf("caption segment should be a map, got %#v", item)
+		}
+		if text := strings.TrimSpace(ensureStringValue(segment["text"])); text == "" {
+			t.Fatalf("caption segment should include text, got %#v", segment)
+		}
+		if start := floatFromInterface(segment["startSec"], -1); start < 0 {
+			t.Fatalf("caption segment should include startSec, got %#v", segment)
+		}
+		if end := floatFromInterface(segment["endSec"], 0); end <= 0 {
+			t.Fatalf("caption segment should include endSec, got %#v", segment)
+		}
+	}
+}
+
+func TestKnowledgeResearcherUsesProductFactsForTangyingSelfPromotion(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	previousFetcher := localAgentConfigFetcher
+	localAgentConfigFetcher = func() (RuntimeModelProviderConfig, bool) {
+		return RuntimeModelProviderConfig{}, false
+	}
+	t.Cleanup(func() {
+		localAgentConfigFetcher = previousFetcher
+	})
+
+	result := executeLocalVideoCreationTool("knowledge_researcher", map[string]interface{}{
+		"topic":           "帮我介绍一下本系统，强调我将系统开源了，对本系统进行宣传，符合短视频节奏，提升完播率，后续我讲一直发布由本系统创作的视频内容。",
+		"retrievalPolicy": "required",
+		"knowledgePack":   []interface{}{},
+	}, tool.ToolContext{TaskID: "task-1", NodeID: "knowledge"})
+
+	if !result.Success {
+		t.Fatalf("Tangying self-promotion knowledge stage should use built-in product facts: %s", result.Error)
+	}
+	factsText := ensureStringValue(result.Data["facts"])
+	if !strings.Contains(factsText, "视频创作助手") || !strings.Contains(factsText, "开源") {
+		t.Fatalf("knowledge stage should expose product facts for review, got %#v", result.Data["facts"])
+	}
+	if summary := ensureStringValue(result.Data["summary"]); !strings.Contains(summary, "视频创作助手") {
+		t.Fatalf("knowledge stage summary should not be empty and should use new positioning, got %#v", result.Data["summary"])
+	}
+	if angles := ensureStringValue(result.Data["storyAngles"]); !strings.Contains(angles, "完播率") {
+		t.Fatalf("knowledge stage should include story angles for short-video pacing, got %#v", result.Data["storyAngles"])
+	}
+	content := ensureStringValue(result.Data["content"])
+	if !strings.Contains(content, "视频创作助手") || strings.Contains(content, `"summary":""`) {
+		t.Fatalf("reviewable knowledge content should be populated, got %s", content)
+	}
+}
+
 func TestVideoScriptGeneratorFallsBackWhenRequiredRetrievalDoesNotBlockEmptyFacts(t *testing.T) {
 	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
 	SetVideoCreationConfig(config.OpenAIConfig{}, "")
@@ -1114,6 +1287,122 @@ func TestExecuteDynamicAgentPromptToolExposesShotAssetPackages(t *testing.T) {
 	}
 	if !strings.Contains(ensureStringValue(requests[0]), "佛得角是西非岛国") {
 		t.Fatalf("external generation request should include shot narration, got %#v", requests[0])
+	}
+	if strings.Contains(ensureStringValue(result.Data["summary"]), "当前不依赖图片或视频生成 API") {
+		t.Fatalf("summary should not expose low-level API dependency wording to end users: %s", result.Data["summary"])
+	}
+	guide, ok := result.Data["productionGuide"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected productionGuide for user-facing shot production review, got %#v", result.Data["productionGuide"])
+	}
+	for _, required := range []string{
+		"Shot 视频生成资料质量门禁",
+		"每个 shot 都来自口播稿",
+		"HyperFrames / AIGC 分工",
+		"产物页",
+	} {
+		if !strings.Contains(ensureStringValue(guide), required) {
+			t.Fatalf("productionGuide should explain %q, got %#v", required, guide)
+		}
+	}
+	shotGuides, ok := guide["shotGuides"].([]interface{})
+	if !ok || len(shotGuides) != 1 {
+		t.Fatalf("productionGuide should include one per-shot guide, got %#v", guide["shotGuides"])
+	}
+	if !strings.Contains(ensureStringValue(shotGuides[0]), "来自口播") ||
+		!strings.Contains(ensureStringValue(shotGuides[0]), "制作方式") ||
+		!strings.Contains(ensureStringValue(shotGuides[0]), "AIGC") ||
+		!strings.Contains(ensureStringValue(shotGuides[0]), "HyperFrames") {
+		t.Fatalf("shot guide should explain narration, route, AIGC, and HyperFrames work, got %#v", shotGuides[0])
+	}
+	if pkg, ok := result.Data["package"].(map[string]interface{}); !ok || pkg["productionGuide"] == nil {
+		t.Fatalf("content package should also carry productionGuide, got %#v", result.Data["package"])
+	}
+	artifactText := ensureStringValue(result.Data["artifacts"])
+	for _, required := range []string{"HYPERFRAMES_SHOT", "COMPOSITED_SHOT_VIDEO"} {
+		if !strings.Contains(artifactText, required) {
+			t.Fatalf("shot production artifacts should expose %s for visualized intermediate products, got %s", required, artifactText)
+		}
+	}
+}
+
+func TestVideoPromptGeneratorSplitsAIGCHyperframesAndFusionPlans(t *testing.T) {
+	result := executeDynamicAgentPromptTool("video_prompt_generator", "video_prompt", "video", "躺营视频创作助手开源宣传", "", map[string]interface{}{
+		"topic": "躺营视频创作助手开源宣传",
+		"shotList": []interface{}{
+			map[string]interface{}{
+				"shotId":            "SHOT_01",
+				"durationSec":       6,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "开场画面：开源仓库界面、产品 Logo、三行大字卖点从左侧进入，右侧需要保留文字安全区。",
+				"narrationText":     "我把躺营视频创作助手开源了。",
+				"actionBeats":       []interface{}{"仓库星标上升", "界面模块连成创作流水线"},
+				"composition":       "左侧产品界面动效，右侧留出标题文字和字幕区域。",
+			},
+			map[string]interface{}{
+				"shotId":            "SHOT_02",
+				"durationSec":       7,
+				"plannedAssetRoute": "aigc_video",
+				"visual":            "中段画面：脚本被拆成多个 shot，AIGC 背景素材和 HyperFrames 文字卡片在时间线上融合。",
+				"narrationText":     "系统会把脚本拆成分镜，再逐个生成、质检和合成。",
+				"actionBeats":       []interface{}{"shot 卡片依次亮起", "视频素材落入剪辑时间线"},
+				"composition":       "上方展示动态素材，下方留白给流程标签和字幕。",
+			},
+		},
+	}, tool.ToolContext{TaskID: "task-video-prompt-layers", NodeID: "video_prompt_exec"})
+
+	if !result.Success {
+		t.Fatalf("expected video prompt generation to succeed: %s", result.Error)
+	}
+	requests, ok := result.Data["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 2 {
+		t.Fatalf("expected two external video requests, got %#v", result.Data["externalGenerationRequests"])
+	}
+	firstReq, ok := requests[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("first request should be a map, got %#v", requests[0])
+	}
+	secondReq, ok := requests[1].(map[string]interface{})
+	if !ok {
+		t.Fatalf("second request should be a map, got %#v", requests[1])
+	}
+	firstPrompt := ensureStringValue(firstReq["prompt"])
+	secondPrompt := ensureStringValue(secondReq["prompt"])
+	if firstPrompt == secondPrompt {
+		t.Fatalf("different shots should not reuse the same AIGC video prompt: %q", firstPrompt)
+	}
+	for _, req := range []map[string]interface{}{firstReq, secondReq} {
+		reqText := ensureStringValue(req)
+		for _, required := range []string{"AIGC 视频层", "留白", "不要生成文字", "避免乱码", "HyperFrames", "FFmpeg"} {
+			if !strings.Contains(reqText, required) {
+				t.Fatalf("external request should explain layered AIGC/HyperFrames/FFmpeg production and text-safe generation, missing %q in %#v", required, req)
+			}
+		}
+		if _, ok := req["aigcPlan"].(map[string]interface{}); !ok {
+			t.Fatalf("external request should expose aigcPlan, got %#v", req)
+		}
+		if _, ok := req["hyperframesPlan"].(map[string]interface{}); !ok {
+			t.Fatalf("external request should expose hyperframesPlan, got %#v", req)
+		}
+		if _, ok := req["ffmpegFusionPlan"].(map[string]interface{}); !ok {
+			t.Fatalf("external request should expose ffmpegFusionPlan, got %#v", req)
+		}
+	}
+	packages, ok := result.Data["shotAssetPackages"].([]interface{})
+	if !ok || len(packages) != 2 {
+		t.Fatalf("expected two shot asset packages, got %#v", result.Data["shotAssetPackages"])
+	}
+	for _, pkg := range packages {
+		pkgMap, ok := pkg.(map[string]interface{})
+		if !ok {
+			t.Fatalf("shot asset package should be a map, got %#v", pkg)
+		}
+		pkgText := ensureStringValue(pkgMap)
+		for _, required := range []string{"aigcPlan", "hyperframesPlan", "ffmpegFusionPlan", "文字安全区", "不要生成文字"} {
+			if !strings.Contains(pkgText, required) {
+				t.Fatalf("shot asset package should carry non-duplicated layer plans, missing %q in %#v", required, pkgMap)
+			}
+		}
 	}
 }
 

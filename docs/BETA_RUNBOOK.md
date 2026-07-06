@@ -226,6 +226,14 @@ Shot split policy:
 
 Shot splitting must prefer story and visual boundaries over fixed time buckets: scene changes, subject changes, action goal changes, shot size changes, focal length or perspective changes, time jumps, emotion shifts, information-point changes, and narration/dialogue paragraph boundaries. A shot longer than 15 seconds must be split again; a shot shorter than 3 seconds may only merge with a compatible neighbor when the merged unit remains at most 15 seconds.
 
+Shot material packages must be readable by non-technical users and must avoid repeating the same visual description as every asset prompt. For every video shot that needs external generation, the package exposes:
+
+- `aigcPlan`: the copyable AIGC video prompt for background or partial motion only. It must include text-safe blank areas and must tell the provider not to generate readable Chinese text, subtitles, logos, watermarks, or UI copy.
+- `hyperframesPlan`: the local HyperFrames plan for exact Chinese text, subtitles, keyframes, UI cards, charts, and visual emphasis.
+- `ffmpegFusionPlan`: the compositing plan that crops, overlays, normalizes, and merges the AIGC material and HyperFrames layer into the complete shot.
+
+If a shot contains important text, the AIGC layer should leave that region blank or lightly textured. The exact text must be rendered by HyperFrames or final subtitle rendering, not by the AIGC provider.
+
 Shot QA state flow:
 
 ```text

@@ -2,7 +2,7 @@
   "name": "tangying-frontend",
   "private": true,
   "version": "0.1.13",
-  "description": "躺营 AIOS — AI 自媒体内容运营系统桌面客户端",
+  "description": "躺营 AI 视频创作助手桌面客户端",
   "author": "躺营 AI Team",
   "type": "module",
   "main": "electron/main.cjs",
@@ -47,7 +47,7 @@
   },
   "build": {
     "appId": "com.tangying.ai-os",
-    "productName": "躺营AI自媒体运营助手",
+    "productName": "躺营AI视频创作助手",
     "icon": "build/icon.png",
     "directories": {
       "output": "release"

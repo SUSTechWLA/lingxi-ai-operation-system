@@ -13,7 +13,7 @@ const { createFileAccessController } = require('./file-access-runtime.cjs')
 const isDev = !app.isPackaged
 const LOCAL_AGENT_URL = process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080'
 const CLOUD_API_BASE = process.env.TANGYING_CLOUD_API_BASE || process.env.VITE_CLOUD_API_BASE || 'http://localhost:8080/api'
-const APP_ICON_FILE = '躺营ai自媒体运营助手.png'
+const APP_ICON_FILE = '躺营ai视频创作助手.png'
 
 let mainWindow = null
 let localAgentProcess = null
@@ -137,7 +137,7 @@ function createWindow() {
     height: 960,
     minWidth: 1024,
     minHeight: 700,
-    title: '躺营AI自媒体运营助手',
+    title: '躺营AI视频创作助手',
     icon: appIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

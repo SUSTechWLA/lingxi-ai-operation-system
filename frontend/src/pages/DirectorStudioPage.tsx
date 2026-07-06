@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import clsx from 'clsx'
 import ReactMarkdown from 'react-markdown'
 import { APP_ICON_PATH } from '../utils/brand'
@@ -79,7 +79,6 @@ import {
   buildDirectorArtifacts,
   buildDirectorStages,
   buildDirectorTraceNodes,
-  buildExternalGenerationTaskPackage,
   buildProjectAssemblySummary,
   buildPublishCopies,
   buildShotReviewGroups,
@@ -89,20 +88,26 @@ import {
   extractDirectorErrorDetail,
   externalGenerationGuideSteps,
   externalGenerationReferenceCopyText,
+  externalGenerationReferencesFromArtifacts,
   getArtifactViewerSelection,
   getStageStateDisplay,
-  isActionablePendingReview,
+  isShotProductionReview,
   isProjectSessionStarted,
   localArtifactIdFromStorageRef,
   localServiceStatusDisplay,
+  mergeExternalGenerationTaskReferences,
   normalizeDirectorErrorMessage,
   nextStageIdAfterReview,
   nextSelectedReviewId,
   overviewProjectStatus,
+  preferredActiveReview,
   projectPrimaryAction,
+  qualityGateTargetLines,
   publishCopiesToJSON,
   publishCopiesToMarkdown,
   reviewDisplayTitle,
+  reviewOutputPanelHint,
+  reviewOutputPanelTitle,
   reviewQualityReportLines,
   reviewOutputText,
   reviewStatusLabel,
@@ -117,6 +122,7 @@ import {
   type DirectorArtifactStatus,
   type DirectorErrorDetail,
   type DirectorNavKey,
+  type DirectorShotReviewGroup,
   type DirectorShotAssetSlot,
   type DirectorStage,
   type DirectorStageStatus,
@@ -302,8 +308,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const artifacts = useMemo(() => buildDirectorArtifacts(roleAgents, reviews, trace, projectArtifacts as unknown as Array<Record<string, unknown>>), [roleAgents, reviews, trace, projectArtifacts])
   const traceNodes = useMemo(() => buildDirectorTraceNodes(trace), [trace])
   const nextAction = useMemo(() => deriveNextAction(displayStages, run?.status), [displayStages, run?.status])
-  const pendingReviews = reviews.filter(isActionablePendingReview)
-  const activeReview = pendingReviews[0]
+  const activeReview = preferredActiveReview(reviews)
   const activeReviewStage = activeReview ? displayStages.find((stage) => stage.reviewId === activeReview.id || stage.id === activeReview.roleAgentId || stage.stage === activeReview.stage) : undefined
   const activeRunId = run?.id || project?.currentRunId
   const basePrimaryProjectAction = projectPrimaryAction({
@@ -411,18 +416,19 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
     }
   }
 
-  const actOnReview = async (action: 'approve' | 'reject' | 'edit' | 'regenerate') => {
-    if (!run?.id || !activeReview) return
+  const actOnReview = async (action: 'approve' | 'reject' | 'edit' | 'regenerate', targetReview?: AgentReviewItem) => {
+    const reviewToActOn = targetReview || activeReview
+    if (!run?.id || !reviewToActOn) return
     setLoading(true)
     setError(null)
     setErrorDetail(undefined)
-    const nextOptimisticStageId = action === 'approve' ? nextStageIdAfterReview(stages, activeReview) : undefined
+    const nextOptimisticStageId = action === 'approve' ? nextStageIdAfterReview(stages, reviewToActOn) : undefined
     if (nextOptimisticStageId) setOptimisticRunningStageId(nextOptimisticStageId)
     try {
-      if (action === 'approve') await approveAgentReview(run.id, activeReview.id, feedback || undefined)
-      if (action === 'reject') await rejectAgentReview(run.id, activeReview.id, feedback || '请根据审核意见重新生成。')
-      if (action === 'edit') await submitEditedArtifact(run.id, activeReview.id, { editedContent: feedback || topic }, feedback || undefined)
-      if (action === 'regenerate') await regenerateAgentStage(run.id, activeReview.id, feedback || undefined)
+      if (action === 'approve') await approveAgentReview(run.id, reviewToActOn.id, feedback || undefined)
+      if (action === 'reject') await rejectAgentReview(run.id, reviewToActOn.id, feedback || '请根据审核意见重新生成。')
+      if (action === 'edit') await submitEditedArtifact(run.id, reviewToActOn.id, { editedContent: feedback || topic }, feedback || undefined)
+      if (action === 'regenerate') await regenerateAgentStage(run.id, reviewToActOn.id, feedback || undefined)
       setFeedback('')
       await refreshRun(run.id, project?.id)
     } catch (err) {
@@ -502,6 +508,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
               loading={loading}
               onFeedbackChange={setFeedback}
               onAction={actOnReview}
+              onGoAssets={() => setActiveNav('assets')}
               allReviews={reviews || []}
               stages={displayStages}
             />
@@ -1104,7 +1111,7 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
   )
 }
 
-function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction, allReviews, stages }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate') => void; allReviews: AgentReviewItem[]; stages: DirectorStage[] }) {
+function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onAction, onGoAssets, allReviews, stages }: { review?: AgentReviewItem; stage?: DirectorStage; feedback: string; loading: boolean; onFeedbackChange: (value: string) => void; onAction: (action: 'approve' | 'reject' | 'edit' | 'regenerate', targetReview?: AgentReviewItem) => void; onGoAssets: () => void; allReviews: AgentReviewItem[]; stages: DirectorStage[] }) {
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>(review?.id)
   const [activeAction, setActiveAction] = useState<string | null>(null)
   const lastAutoSelectedActiveReviewIdRef = useRef<string | undefined>(review?.id)
@@ -1123,6 +1130,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
   const staleAfterChange = primaryOutput ? downstreamStaleArtifacts(primaryOutput) : []
   const outputText = reviewOutputText(selectedReview)
   const qualityLines = reviewQualityReportLines(selectedReview)
+  const qualityTargetLines = qualityGateTargetLines(selectedReview)
 
   const isPending = selectedReview?.status === 'PENDING'
 
@@ -1175,10 +1183,21 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                 <div className="rounded-lg border border-line bg-white p-5 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <span className="text-sm font-black text-ink">审核阶段产物</span>
-                      <p className="mt-1 text-xs text-ink-soft">选择任一记录即可回看对应产物。</p>
+                      <span className="text-sm font-black text-ink">{reviewOutputPanelTitle(selectedReview)}</span>
+                      <p className="mt-1 text-xs text-ink-soft">{reviewOutputPanelHint(selectedReview)}</p>
                     </div>
-                    {outputText ? <CopyButton value={outputText} label="复制" /> : null}
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {isShotProductionReview(selectedReview) ? (
+                        <button
+                          type="button"
+                          onClick={onGoAssets}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white shadow-sm hover:bg-primary-dark"
+                        >
+                          <FiArchive /> 查看产物页提示词和上传入口
+                        </button>
+                      ) : null}
+                      {outputText ? <CopyButton value={outputText} label="复制" /> : null}
+                    </div>
                   </div>
                   {reviewHistory.length > 1 && (
                     <div className="mt-4 flex gap-2 overflow-x-auto px-1 py-1">
@@ -1219,10 +1238,10 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                       <h3 className="text-base font-black text-ink">决策操作</h3>
                     </div>
                     <div className="mt-4 grid grid-cols-2 gap-2">
-                      <ActionButton color="green" icon={<FiCheck />} label="通过" loadingLabel="通过中…" loading={loading && activeAction === 'approve'} disabled={loading} onClick={() => { setActiveAction('approve'); onAction('approve'); }} />
-                      <ActionButton color="red" icon={<FiX />} label="驳回" loadingLabel="驳回中…" loading={loading && activeAction === 'reject'} disabled={loading} onClick={() => { setActiveAction('reject'); onAction('reject'); }} />
-                      <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" loadingLabel="提交中…" loading={loading && activeAction === 'edit'} disabled={loading} onClick={() => { setActiveAction('edit'); onAction('edit'); }} />
-                      <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" loadingLabel="重新生成中…" loading={loading && activeAction === 'regenerate'} disabled={loading} onClick={() => { setActiveAction('regenerate'); onAction('regenerate'); }} />
+                      <ActionButton color="green" icon={<FiCheck />} label="通过" loadingLabel="通过中…" loading={loading && activeAction === 'approve'} disabled={loading} onClick={() => { setActiveAction('approve'); onAction('approve', selectedReview); }} />
+                      <ActionButton color="red" icon={<FiX />} label="驳回" loadingLabel="驳回中…" loading={loading && activeAction === 'reject'} disabled={loading} onClick={() => { setActiveAction('reject'); onAction('reject', selectedReview); }} />
+                      <ActionButton color="amber" icon={<FiEdit3 />} label="修改提交" loadingLabel="提交中…" loading={loading && activeAction === 'edit'} disabled={loading} onClick={() => { setActiveAction('edit'); onAction('edit', selectedReview); }} />
+                      <ActionButton color="violet" icon={<FiRefreshCw />} label="重新生成" loadingLabel="重新生成中…" loading={loading && activeAction === 'regenerate'} disabled={loading} onClick={() => { setActiveAction('regenerate'); onAction('regenerate', selectedReview); }} />
                     </div>
                     <label className="mt-4 block text-sm font-black text-ink">反馈意见</label>
                     <textarea
@@ -1234,6 +1253,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                   </section>
                 )}
                 <Panel title="审核原因" items={[selectedReview.reviewReason || '等待人工确认后放行下游阶段。']} />
+                {qualityTargetLines.length > 0 && <Panel title="门禁目标产物" items={qualityTargetLines} />}
                 {qualityLines.length > 0 && <Panel title="质量门禁" items={qualityLines} />}
                 <Panel title="审核重点" items={selectedStage?.reviewFocus?.length ? selectedStage.reviewFocus : ['产物是否符合创作目标', '是否允许进入下游阶段']} />
                 <Panel title="输入产物" items={selectedReview.requiredInputs || selectedStage?.requiredInputs || []} />
@@ -1367,7 +1387,7 @@ function AssetsPage({ artifacts, projectId, onArtifactsChanged }: { artifacts: D
             <div>
               <p className="text-sm font-black text-primary-dark">待回填素材</p>
               <p className="mt-1 text-sm leading-6 text-ink-muted">
-                {materialDependencyCount} 个外部生成请求已按 shot 放入下方槽位。复制 Prompt 到网页端生成后，直接在对应 shot 的参考图、故事板或基础画面槽上传回填。
+                {materialDependencyCount} 个外部生成请求已按 shot 放入下方槽位。复制文字提示词和图片参考资料到网页端生成后，直接在对应 shot 的参考图、故事板或基础画面槽上传回填。
               </p>
             </div>
             <StatusBadge status="review" label="待用户回填" />
@@ -1410,10 +1430,11 @@ function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { arti
   }, [groups, openShotId])
 
   const openGroup = groups.find((group) => group.shotId === openShotId) || groups[0]
+  const openRequestEntries = openGroup ? shotRequestPreviewEntries(openGroup, promptPreviews) : []
 
   useEffect(() => {
     if (!openGroup) return
-    const requests = openGroup.slots.flatMap((slot) => slot.dependencyRequests)
+    const requests = openGroup.slots.flatMap((slot) => externalGenerationRequestArtifactsForSlot(slot))
     for (const artifact of requests) {
       if (promptPreviews[artifact.id]) continue
       setPromptPreviews((current) => ({
@@ -1554,16 +1575,15 @@ function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { arti
             </div>
             <StatusBadge status={openGroup.status} />
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {openGroup.narrationText ? <ShotTextBlock title="口播脚本" value={openGroup.narrationText} /> : null}
-            {openGroup.visualText ? <ShotTextBlock title="画面说明" value={openGroup.visualText} /> : null}
-          </div>
+          <ShotProductionGuideCard group={openGroup} requestEntries={openRequestEntries} projectId={projectId} />
           <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
             {openGroup.slots.map((slot) => (
               <ShotAssetSlotCard
                 key={slot.kind}
                 shotId={openGroup.shotId}
                 slot={slot}
+                projectId={projectId}
+                shotReferences={externalGenerationReferencesFromArtifacts(openGroup.slots.flatMap((item) => item.artifacts))}
                 promptPreviews={promptPreviews}
                 projectReady={Boolean(projectId)}
                 uploadingKey={uploadingKey}
@@ -1579,6 +1599,120 @@ function ShotAssetWorkbench({ artifacts, projectId, onArtifactsChanged }: { arti
   )
 }
 
+interface ShotRequestPreviewEntry {
+  slot: DirectorShotAssetSlot
+  artifact: DirectorArtifactRecord
+  preview?: ShotPromptPreview
+  request?: ExternalGenerationRequestContent
+}
+
+function externalGenerationRequestArtifactsForSlot(slot: DirectorShotAssetSlot): DirectorArtifactRecord[] {
+  const byId = new Map<string, DirectorArtifactRecord>()
+  for (const artifact of [...slot.dependencyRequests, ...slot.artifacts]) {
+    if (!isMaterialDependencyRequest(artifact)) continue
+    byId.set(artifact.id, artifact)
+  }
+  return Array.from(byId.values())
+}
+
+function shotRequestPreviewEntries(
+  group: DirectorShotReviewGroup,
+  promptPreviews: Record<string, ShotPromptPreview>,
+): ShotRequestPreviewEntry[] {
+  const shotReferences = externalGenerationReferencesFromArtifacts(group.slots.flatMap((slot) => slot.artifacts))
+  return group.slots.flatMap((slot) => externalGenerationRequestArtifactsForSlot(slot).map((artifact) => {
+    const preview = promptPreviews[artifact.id]
+    const request = preview?.request
+      ? mergeExternalGenerationTaskReferences(preview.request, shotReferences) as ExternalGenerationRequestContent
+      : undefined
+    return {
+      slot,
+      artifact,
+      preview,
+      request,
+    }
+  }))
+}
+
+function ShotProductionGuideCard({
+  group,
+  requestEntries,
+  projectId,
+}: {
+  group: DirectorShotReviewGroup
+  requestEntries: ShotRequestPreviewEntry[]
+  projectId?: string
+}) {
+  return (
+    <div className="mt-4 rounded-lg border border-primary/20 bg-white p-4 ring-1 ring-primary/10">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-black text-primary-dark">主题</div>
+          <h5 className="mt-1 text-base font-black text-ink [overflow-wrap:anywhere]">{group.title || group.shotId}</h5>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">
+            {group.shotId}{group.durationSec ? ` · ${group.durationSec}s` : ''} · 先看概要，展开后逐步检查脚本、依赖、提示词和上传入口。
+          </p>
+        </div>
+        <StatusBadge status={group.status} />
+      </div>
+      <p className="mt-3 rounded-lg bg-background-card p-3 text-sm leading-6 text-ink">
+        {shotActionSummary(group, requestEntries)}
+      </p>
+      <details className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
+        <summary className="cursor-pointer text-xs font-black text-primary-dark">展开查看口播和画面说明</summary>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <ShotTextBlock title="口播脚本" value={group.narrationText || '当前 shot 尚未登记口播脚本。'} />
+          <ShotTextBlock title="画面说明" value={group.visualText || '当前 shot 尚未登记画面说明。'} />
+        </div>
+      </details>
+      <details className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
+        <summary className="cursor-pointer text-xs font-black text-primary-dark">展开查看生成步骤和依赖关系</summary>
+        {requestEntries.length ? (
+          <div className="mt-3 space-y-3">
+            {requestEntries.map((entry, index) => {
+              const request = entry.request
+              if (!request) {
+                return (
+                  <div key={entry.artifact.id} className="rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
+                    {entry.preview?.loading ? '正在读取生成提示词...' : entry.preview?.error || `生成请求 ${entry.artifact.name} 暂不可读。`}
+                  </div>
+                )
+              }
+              return (
+                <ShotRequestSummaryCard
+                  key={`${entry.artifact.id}-${request.requestId}`}
+                  shotId={group.shotId}
+                  slot={entry.slot}
+                  request={request}
+                  sequence={index + 1}
+                  projectId={projectId}
+                  projectReady={Boolean(projectId)}
+                  allowUpload={false}
+                />
+              )
+            })}
+          </div>
+        ) : (
+          <p className="mt-2 rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
+            当前 shot 暂无需要手动生成的 AIGC 图片或视频素材；可继续查看 HyperFrames 或完整 shot 产物。
+          </p>
+        )}
+      </details>
+    </div>
+  )
+}
+
+function shotActionSummary(group: DirectorShotReviewGroup, requestEntries: ShotRequestPreviewEntry[]): string {
+  const loadedRequests = requestEntries.filter((entry) => entry.request).length
+  if (loadedRequests > 0) {
+    return `本 shot 有 ${loadedRequests} 个可处理的图片 / 视频生成任务。先展开“口播和画面说明”确认创作意图，再按生成步骤检查依赖、编辑提示词和上传结果。`
+  }
+  if (group.slots.some((slot) => slot.kind === 'overlay' && slot.artifacts.length > 0)) {
+    return '本 shot 当前主要由 HyperFrames 本地内容组成。展开下方槽位查看预览，确认后继续处理完整 shot 或最终拼接。'
+  }
+  return '本 shot 暂无需要手动生成的 AIGC 素材。展开下方信息确认脚本和画面意图，再查看已有产物或继续下一步。'
+}
+
 function ShotTextBlock({ title, value }: { title: string; value: string }) {
   return (
     <div className="rounded-lg bg-white p-4 ring-1 ring-line">
@@ -1591,9 +1725,466 @@ function ShotTextBlock({ title, value }: { title: string; value: string }) {
   )
 }
 
+function ShotRequestSummaryCard({
+  shotId,
+  slot,
+  request,
+  sequence,
+  projectId,
+  projectReady,
+  allowUpload,
+  uploading,
+  onUpload,
+}: {
+  shotId: string
+  slot: DirectorShotAssetSlot
+  request: ExternalGenerationRequestContent
+  sequence: number
+  projectId?: string
+  projectReady: boolean
+  allowUpload: boolean
+  uploading?: boolean
+  onUpload?: (event: ChangeEvent<HTMLInputElement>, shotId: string, slot: DirectorShotAssetSlot, request?: ExternalGenerationRequestContent) => void
+}) {
+  const [promptDraft, setPromptDraft] = useState(() => safePromptText(request.prompt))
+  const [promptInstruction, setPromptInstruction] = useState('')
+  const [referenceDrafts, setReferenceDrafts] = useState<ExternalGenerationReference[]>(() => cloneReferenceDrafts(request.references))
+  const [approved, setApproved] = useState(false)
+
+  useEffect(() => {
+    setPromptDraft(safePromptText(request.prompt))
+    setPromptInstruction('')
+    setReferenceDrafts(cloneReferenceDrafts(request.references))
+    setApproved(false)
+  }, [request.references, request.requestId, request.prompt])
+
+  const accept = request.kind === 'video' ? 'video/*' : 'image/*'
+  const usableReferences = referenceDrafts.filter((ref) => ref.storageRef.trim())
+  const editableRequest: ExternalGenerationRequestContent = { ...request, references: usableReferences }
+  const targetText = [
+    request.target?.aspectRatio,
+    request.target?.resolution,
+    request.target?.durationSec ? `${request.target.durationSec}s` : '',
+  ].filter(Boolean).join(' / ')
+  const dependencyRows = requestDependencyRows(editableRequest)
+  const dependencySummary = requestDependencySummary(editableRequest, slot)
+  const guideSteps = generationStepLabels(editableRequest, slot)
+
+  return (
+    <details className="rounded-lg border border-line bg-white p-3 shadow-sm">
+      <summary className="cursor-pointer list-none">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-black text-ink">
+              {request.kind === 'image' ? '图片素材' : '视频素材'} {sequence}
+            </div>
+            <div className="mt-1 text-xs leading-5 text-ink-muted">
+              对应：{slot.label}{targetText ? ` · ${targetText}` : ''} · {dependencySummary}
+            </div>
+          </div>
+          <span className={clsx(
+            'rounded-full px-3 py-1 text-[11px] font-black',
+            approved ? 'bg-green-50 text-green-700 ring-1 ring-green-100' : 'bg-primary-soft text-primary-dark',
+          )}>{approved ? '已通过，内容已锁定' : '展开处理'}</span>
+        </div>
+      </summary>
+
+      <div className="mt-3 rounded-lg bg-primary-soft/50 p-3 ring-1 ring-primary/10">
+        <div className="text-xs font-black text-primary-dark">生成步骤</div>
+        <ol className="mt-2 grid gap-2 text-xs leading-5 text-primary-dark sm:grid-cols-2">
+          {guideSteps.map((step, index) => (
+            <li key={step} className="rounded-lg bg-white p-2 ring-1 ring-line">
+              {index + 1}. {step}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
+        <div className="text-xs font-black text-ink-soft">依赖关系</div>
+        <div className="mt-2 space-y-2">
+          {dependencyRows.map((row) => (
+            <div key={row} className="rounded bg-white px-3 py-2 text-xs leading-5 text-ink-muted ring-1 ring-line">{row}</div>
+          ))}
+        </div>
+      </div>
+
+      {request.kind === 'video' ? <ShotLayerPlanPanel request={editableRequest} /> : null}
+
+      <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-black text-ink-soft">可编辑提示词</div>
+            <div className="mt-1 text-[11px] text-ink-muted">{promptDraft.length}/{EXTERNAL_PROMPT_MAX_CHARS} 字，可按外部平台效果自行微调。</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <CopyButton value={promptDraft} label="复制提示词" />
+            <button
+              type="button"
+              onClick={() => setApproved(true)}
+              disabled={approved}
+              className={clsx(
+                'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
+                approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+              )}
+            >
+              <FiCheck /> {approved ? '已通过，内容已锁定' : '通过并锁定'}
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+          <div className="text-xs font-black text-ink-soft">给提示词生成要求</div>
+          <textarea
+            value={promptInstruction}
+            disabled={approved}
+            onChange={(event) => setPromptInstruction(event.target.value)}
+            placeholder="例如：更强调开源、界面要更现代、不要真人、增加代码仓库画面。"
+            className="mt-2 min-h-20 w-full resize-y rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+            aria-label={`${request.requestId} 提示词生成要求`}
+          />
+          <button
+            type="button"
+            disabled={approved}
+            onClick={() => setPromptDraft(regeneratePromptDraft(request, referenceDrafts, promptInstruction, promptDraft))}
+            className={clsx(
+              'mt-2 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
+              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+            )}
+          >
+            <FiRefreshCw /> 按要求重新生成提示词
+          </button>
+        </div>
+        <textarea
+          value={promptDraft}
+          maxLength={EXTERNAL_PROMPT_MAX_CHARS}
+          disabled={approved}
+          onChange={(event) => setPromptDraft(safePromptText(event.target.value))}
+          className="mt-3 min-h-36 w-full resize-y rounded-lg border border-line bg-white p-3 text-xs leading-5 text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+          aria-label={`${request.requestId} 可编辑提示词`}
+        />
+        {request.negativePrompt ? (
+          <details className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
+            <summary className="cursor-pointer text-xs font-black text-ink-soft">可选负面提示词</summary>
+            <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-ink-muted">{safePromptText(request.negativePrompt)}</p>
+          </details>
+        ) : null}
+      </div>
+
+      <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-black text-ink-soft">编辑参考图</div>
+            <div className="mt-1 text-[11px] text-ink-muted">可以修改参考图名称、类型和路径；通过后这些内容会锁定。</div>
+          </div>
+          <button
+            type="button"
+            disabled={approved}
+            onClick={() => setReferenceDrafts((current) => [...current, newReferenceDraft(current.length + 1)])}
+            className={clsx(
+              'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black ring-1',
+              approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+            )}
+          >
+            <FiUpload /> 新增参考图
+          </button>
+        </div>
+        {referenceDrafts.length ? (
+          <div className="mt-3 space-y-3">
+            {referenceDrafts.map((ref, index) => (
+              <div key={ref.id || `${request.requestId}-ref-${index}`} className="rounded-lg bg-white p-3 ring-1 ring-line">
+                <div className="grid gap-2 md:grid-cols-[1fr_0.8fr_1.4fr_auto]">
+                  <input
+                    value={ref.label || ''}
+                    disabled={approved}
+                    onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { label: event.target.value })}
+                    placeholder="参考图名称"
+                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                    aria-label={`参考图 ${index + 1} 名称`}
+                  />
+                  <input
+                    value={ref.role || ''}
+                    disabled={approved}
+                    onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { role: event.target.value })}
+                    placeholder="类型，如 storyboard"
+                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                    aria-label={`参考图 ${index + 1} 类型`}
+                  />
+                  <input
+                    value={ref.storageRef}
+                    disabled={approved}
+                    onChange={(event) => updateReferenceDraft(setReferenceDrafts, index, { storageRef: event.target.value })}
+                    placeholder="图片路径或 URL"
+                    className="rounded-lg border border-line bg-background-card px-3 py-2 text-xs text-ink outline-none focus:border-primary disabled:cursor-not-allowed disabled:bg-green-50"
+                    aria-label={`参考图 ${index + 1} 路径`}
+                  />
+                  <button
+                    type="button"
+                    disabled={approved}
+                    onClick={() => setReferenceDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    className={clsx(
+                      'rounded-lg px-3 py-2 text-xs font-black ring-1',
+                      approved ? 'cursor-not-allowed bg-green-50 text-green-700 ring-green-100' : 'bg-white text-primary-dark ring-line hover:bg-primary-soft',
+                    )}
+                  >
+                    移除
+                  </button>
+                </div>
+                {ref.storageRef.trim() ? (
+                  <div className="mt-3">
+                    <ExternalReferenceCard reference={ref} index={index + 1} projectId={projectId} />
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 rounded-lg bg-white p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">本素材没有图片依赖，可以只用上方提示词生成，也可以新增参考图。</p>
+        )}
+      </div>
+
+      {allowUpload && onUpload ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className={clsx(
+            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
+            (!projectReady || uploading) && 'cursor-not-allowed opacity-50',
+          )}>
+            <FiUpload /> {uploading ? '上传中...' : request.kind === 'image' ? '上传图片结果' : '上传视频结果'}
+            <input
+              type="file"
+              accept={accept}
+              data-smoke-id="external-generation-upload"
+              disabled={!projectReady || uploading}
+              className="sr-only"
+              onChange={(event) => onUpload(event, shotId, slot, request)}
+            />
+          </label>
+          <span className="text-xs leading-5 text-ink-muted">生成完成后上传到这里，系统会把它关联到当前 shot。</span>
+        </div>
+      ) : null}
+    </details>
+  )
+}
+
+function ShotLayerPlanPanel({ request }: { request: ExternalGenerationRequestContent }) {
+  const textSafeLayout = request.textSafeLayout || request.aigcPlan?.textSafeLayout || 'AIGC 视频层需要给 HyperFrames 标题、字幕和流程标签留出干净区域。'
+  const aigcDetail = [
+    request.aigcPlan?.prompt || request.prompt,
+    request.aigcPlan?.avoidGeneratedText ? '必须不要生成文字、字幕、Logo、水印或可读汉字，避免乱码。' : '',
+    request.aigcPlan?.requiresBlankArea ? textSafeLayout : '',
+  ].filter(Boolean).join('\n\n')
+  const hyperframesDetail = [
+    request.hyperframesPlan?.prompt || 'HyperFrames 负责本 shot 的精确文字、关键帧、字幕、UI 卡片和图形包装。',
+    request.hyperframesPlan?.locks?.length ? `锁定内容：${request.hyperframesPlan.locks.join('、')}` : '',
+  ].filter(Boolean).join('\n\n')
+  const ffmpegDetail = [
+    request.ffmpegFusionPlan?.plan || 'FFmpeg 会把 AIGC 背景或局部素材与 HyperFrames 文字层合成为完整 shot。',
+    request.ffmpegFusionPlan?.mode ? `融合模式：${request.ffmpegFusionPlan.mode}` : '',
+    request.ffmpegFusionPlan?.outputArtifactKind ? `输出产物：${request.ffmpegFusionPlan.outputArtifactKind}` : '',
+  ].filter(Boolean).join('\n\n')
+
+  return (
+    <div className="mt-3 rounded-lg bg-background-card p-3 ring-1 ring-line">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-black text-ink-soft">分层创作计划</div>
+          <p className="mt-1 text-xs leading-5 text-ink-muted">
+            AIGC 只做背景或局部动态，文字和关键帧交给 HyperFrames 精确渲染，最后由 FFmpeg 融合，避免乱码和画面单一。
+          </p>
+        </div>
+        <span className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-black text-primary-dark">文字留白</span>
+      </div>
+      <div className="mt-3 rounded-lg bg-white p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">
+        {textSafeLayout}
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+        <LayerPlanDetails
+          icon={<FiVideo />}
+          title="AIGC 视频层"
+          summary="生成无文字背景或局部视频，给标题、字幕和 UI 文案留白。"
+          detail={aigcDetail}
+        />
+        <LayerPlanDetails
+          icon={<FiLayers />}
+          title="HyperFrames 文字 / 图形层"
+          summary="本地渲染中文文字、关键帧、流程标签和字幕，像可控演示层。"
+          detail={hyperframesDetail}
+        />
+        <LayerPlanDetails
+          icon={<FiCpu />}
+          title="FFmpeg 融合"
+          summary="把 AIGC 素材与 HyperFrames 叠加、裁剪、统一规格后输出完整 shot。"
+          detail={ffmpegDetail}
+        />
+      </div>
+    </div>
+  )
+}
+
+function LayerPlanDetails({
+  icon,
+  title,
+  summary,
+  detail,
+}: {
+  icon: ReactNode
+  title: string
+  summary: string
+  detail: string
+}) {
+  return (
+    <details className="rounded-lg bg-white p-3 ring-1 ring-line">
+      <summary className="cursor-pointer list-none">
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 text-primary">{icon}</span>
+          <div>
+            <div className="text-xs font-black text-ink">{title}</div>
+            <p className="mt-1 text-xs leading-5 text-ink-muted">{summary}</p>
+          </div>
+        </div>
+      </summary>
+      <pre className="mt-3 max-h-48 whitespace-pre-wrap break-words rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">{detail}</pre>
+    </details>
+  )
+}
+
+function safePromptText(prompt: string | undefined): string {
+  return (prompt || '').slice(0, EXTERNAL_PROMPT_MAX_CHARS)
+}
+
+function cloneReferenceDrafts(references: ExternalGenerationReference[]): ExternalGenerationReference[] {
+  return references.slice(0, 6).map((ref, index) => ({
+    id: ref.id || `ref-${index + 1}`,
+    label: ref.label || '',
+    role: ref.role || '',
+    storageRef: ref.storageRef || '',
+    artifactId: ref.artifactId,
+    locks: ref.locks,
+  }))
+}
+
+function newReferenceDraft(index: number): ExternalGenerationReference {
+  return {
+    id: `manual-ref-${Date.now()}-${index}`,
+    label: `新增参考图 ${index}`,
+    role: 'reference',
+    storageRef: '',
+  }
+}
+
+function updateReferenceDraft(
+  setReferenceDrafts: Dispatch<SetStateAction<ExternalGenerationReference[]>>,
+  index: number,
+  patch: Partial<ExternalGenerationReference>,
+) {
+  setReferenceDrafts((current) => current.map((ref, itemIndex) => itemIndex === index ? { ...ref, ...patch } : ref))
+}
+
+function regeneratePromptDraft(
+  request: ExternalGenerationRequestContent,
+  references: ExternalGenerationReference[],
+  instruction: string,
+  currentPrompt: string,
+): string {
+  const referenceText = references
+    .filter((ref) => ref.storageRef.trim())
+    .map((ref, index) => `${index + 1}. ${referenceDependencyLabel(ref)}：${ref.label || ref.id || '参考图'}（${ref.storageRef}）`)
+    .join('\n')
+  const layerText = request.kind === 'video'
+    ? [
+      request.aigcPlan?.prompt ? `AIGC 视频层：${request.aigcPlan.prompt}` : 'AIGC 视频层：只生成无文字背景或局部动态素材。',
+      request.textSafeLayout || request.aigcPlan?.textSafeLayout ? `文字留白：${request.textSafeLayout || request.aigcPlan?.textSafeLayout}` : '文字留白：为 HyperFrames 标题、字幕和流程标签预留干净区域。',
+      request.hyperframesPlan?.prompt ? `HyperFrames 文字 / 图形层：${request.hyperframesPlan.prompt}` : 'HyperFrames 文字 / 图形层：中文文字、字幕、UI 文案和关键帧由本地渲染。',
+      request.ffmpegFusionPlan?.plan ? `FFmpeg 融合：${request.ffmpegFusionPlan.plan}` : 'FFmpeg 融合：上传素材后叠加 HyperFrames 层，输出完整 shot。',
+    ].join('\n')
+    : ''
+  const parts = [
+    `生成类型：${request.kind === 'image' ? '图片' : '视频'}`,
+    request.target?.durationSec ? `目标时长：${request.target.durationSec}s` : '',
+    request.target?.aspectRatio ? `画幅：${request.target.aspectRatio}` : '',
+    referenceText ? `必须参考：\n${referenceText}` : '参考图：无，可仅使用文字提示词。',
+    layerText ? `分层创作约束：\n${layerText}` : '',
+    instruction.trim() ? `用户修改要求：${instruction.trim()}` : '',
+    `基于当前提示词优化：${currentPrompt || request.prompt}`,
+    request.kind === 'video'
+      ? '保持主体、场景、动作和文字意图一致；AIGC 层不要生成文字，必须留白给 HyperFrames，避免乱码、错误文字、主体漂移和过度重写。'
+      : '保持主体、场景、动作和文字意图一致，只优化用户指出的问题；避免水印、错误文字、主体漂移和过度重写。',
+  ].filter(Boolean)
+  return safePromptText(parts.join('\n\n'))
+}
+
+function requestDependencySummary(request: ExternalGenerationRequestContent, slot: DirectorShotAssetSlot): string {
+  if (!request.references.length) return request.kind === 'video' ? '无参考图，可先生成故事板或直接用提示词' : '无参考图，可直接用提示词'
+  const labels = request.references
+    .map((ref) => referenceDependencyLabel(ref))
+    .filter(Boolean)
+  const uniqueLabels = [...new Set(labels)]
+  return `依赖 ${uniqueLabels.slice(0, 3).join('、') || slot.label} ${request.references.length} 个`
+}
+
+function requestDependencyRows(request: ExternalGenerationRequestContent): string[] {
+  const videoLayerRows = request.kind === 'video'
+    ? [
+      `AIGC 视频层：先生成背景或局部动态素材，文字区域必须留白，避免乱码。`,
+      `HyperFrames 文字 / 图形层：负责中文标题、字幕、流程标签和关键帧，不依赖 AIGC 生成文字。`,
+      `FFmpeg 融合：上传 AIGC 素材后，把 HyperFrames 层叠加或裁剪进完整 shot。`,
+    ]
+    : []
+  if (!request.references.length) {
+    return [
+      request.kind === 'video'
+        ? '当前视频素材没有已登记参考图。可以先按提示词生成，或先上传故事板 / 首帧后再生成视频。'
+        : '当前图片素材没有上游参考图。可以直接使用提示词生成。',
+      ...videoLayerRows,
+    ]
+  }
+  return [
+    ...request.references.map((ref, index) => {
+    const label = ref.label || ref.id || `参考 ${index + 1}`
+    const role = referenceDependencyLabel(ref)
+    return `${index + 1}. ${role}：${label}。生成 ${request.kind === 'video' ? '视频' : '图片'} 前先确认这张参考图方向正确。`
+    }),
+    ...videoLayerRows,
+  ]
+}
+
+function referenceDependencyLabel(reference: ExternalGenerationReference): string {
+  const raw = `${reference.role || ''} ${reference.label || ''} ${reference.id || ''}`.toLowerCase()
+  if (raw.includes('storyboard') || raw.includes('keyframe') || raw.includes('首帧') || raw.includes('故事板') || raw.includes('关键帧')) return '故事板 / 首帧'
+  if (raw.includes('character') || raw.includes('人物') || raw.includes('角色')) return '角色参考图'
+  if (raw.includes('scene') || raw.includes('场景')) return '场景参考图'
+  if (raw.includes('prop') || raw.includes('道具')) return '道具参考图'
+  if (raw.includes('style') || raw.includes('风格')) return '风格参考图'
+  return '参考图'
+}
+
+function generationStepLabels(request: ExternalGenerationRequestContent, slot: DirectorShotAssetSlot): string[] {
+  const dependencyStep = request.references.length
+    ? `先查看 ${request.references.length} 个依赖参考图，确认角色、场景或故事板一致。`
+    : request.kind === 'video'
+      ? '先确认是否需要补故事板或首帧；不需要时可直接用提示词。'
+      : '当前无上游参考图，可直接进入提示词生成。'
+  if (request.kind === 'video') {
+    return [
+      dependencyStep,
+      '确认文字安全区：AIGC 视频层只生成背景或局部动态，不生成文字，避免乱码。',
+      '按需要优化下方 AIGC 视频层提示词，最多 2000 字。',
+      '在外部工具生成视频素材后上传；HyperFrames 会负责中文文字、关键帧和图形层。',
+      `系统用 FFmpeg 融合后回到“${slot.label}”进入完整 shot 处理。`,
+    ]
+  }
+  return [
+    dependencyStep,
+    '按需要优化下方提示词，最多 2000 字。',
+    `在外部工具生成${request.kind === 'image' ? '图片' : '视频'}结果。`,
+    `回到“${slot.label}”上传生成结果。`,
+  ]
+}
+
 function ShotAssetSlotCard({
   shotId,
   slot,
+  projectId,
+  shotReferences,
   promptPreviews,
   projectReady,
   uploadingKey,
@@ -1601,17 +2192,20 @@ function ShotAssetSlotCard({
 }: {
   shotId: string
   slot: DirectorShotAssetSlot
+  projectId?: string
+  shotReferences: ExternalGenerationReference[]
   promptPreviews: Record<string, ShotPromptPreview>
   projectReady: boolean
   uploadingKey: string | null
   onUpload: (event: ChangeEvent<HTMLInputElement>, shotId: string, slot: DirectorShotAssetSlot, request?: ExternalGenerationRequestContent) => void
 }) {
-  const requests = slot.dependencyRequests
+  const requestArtifacts = externalGenerationRequestArtifactsForSlot(slot)
+  const requestArtifactIds = new Set(requestArtifacts.map((artifact) => artifact.id))
+  const requests = requestArtifacts
     .map((artifact) => promptPreviews[artifact.id]?.request)
     .filter((request): request is ExternalGenerationRequestContent => Boolean(request))
-  const copyValue = requests.length
-    ? requests.map((request) => buildExternalGenerationTaskPackage(request).fullText).join('\n\n---\n\n')
-    : slot.artifacts.map(artifactToCopyText).join('\n\n')
+    .map((request) => mergeExternalGenerationTaskReferences(request, shotReferences) as ExternalGenerationRequestContent)
+  const copyValue = requests.length ? '' : slot.artifacts.map(artifactToCopyText).join('\n\n')
   const canUpload = Boolean(slot.uploadKind)
   const accept = slot.uploadKind === 'video' ? 'video/*' : 'image/*'
   const manualUploadKey = `${shotId}-${slot.kind}-manual`
@@ -1631,7 +2225,7 @@ function ShotAssetSlotCard({
         <StatusBadge status={slot.status} label={slot.kind === 'prompt' ? '可复制' : slot.status === 'review' && canUpload ? '可回填' : undefined} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        {copyValue ? <CopyButton value={copyValue} label={requests.length ? '复制生成包' : slot.kind === 'prompt' ? '复制任务包' : '复制信息'} /> : null}
+        {copyValue ? <CopyButton value={copyValue} label={slot.kind === 'prompt' ? '复制任务包' : '复制信息'} /> : null}
         {canUpload ? (
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
@@ -1653,19 +2247,26 @@ function ShotAssetSlotCard({
         {slot.kind === 'prompt' && !requests.length && slot.artifacts.length === 0 ? (
           <p className="rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">当前 shot 的提示词还未生成；生成后会在这里展示，可直接复制到外部网站。</p>
         ) : null}
-        {requests.map((request) => (
-          <ShotExternalRequestCard
+        {slot.kind === 'prompt' && requests.length > 0 ? (
+          <p className="rounded-lg bg-green-50 p-3 text-xs leading-5 text-green-700 ring-1 ring-green-100">
+            已整理该 shot 的生成任务。展开下方素材卡，按依赖关系查看参考图，必要时编辑提示词后再复制使用。
+          </p>
+        ) : null}
+        {requests.map((request, index) => (
+          <ShotRequestSummaryCard
             key={request.requestId}
             shotId={shotId}
             slot={slot}
             request={request}
+            sequence={index + 1}
+            projectId={projectId}
             projectReady={projectReady}
             allowUpload={slot.kind !== 'prompt'}
             uploading={uploadingKey === `${shotId}-${slot.kind}-${request.requestId}`}
             onUpload={onUpload}
           />
         ))}
-        {slot.dependencyRequests.map((artifact) => {
+        {requestArtifacts.map((artifact) => {
           const preview = promptPreviews[artifact.id]
           if (!preview || preview.request) return null
           return (
@@ -1674,14 +2275,8 @@ function ShotAssetSlotCard({
             </div>
           )
         })}
-        {slot.artifacts.filter((artifact) => !slot.dependencyRequests.some((request) => request.id === artifact.id)).map((artifact) => (
-          <div key={artifact.id} className="min-w-0 rounded-lg bg-background-card p-3 ring-1 ring-line">
-            <div className="flex items-center justify-between gap-2">
-              <div className="truncate text-xs font-black text-ink" title={artifact.name}>{artifact.name}</div>
-              <StatusBadge status={artifact.status} />
-            </div>
-            <div className="mt-1 truncate font-mono text-[11px] text-ink-soft" title={artifact.storageRef}>{artifact.storageRef || artifact.id}</div>
-          </div>
+        {slot.artifacts.filter((artifact) => !requestArtifactIds.has(artifact.id)).map((artifact) => (
+          <ShotArtifactPreview key={artifact.id} artifact={artifact} projectId={projectId} />
         ))}
         {slot.kind !== 'prompt' && !slot.artifacts.length ? (
           <p className="rounded-lg bg-background-card p-3 text-xs leading-5 text-ink-muted ring-1 ring-line">暂无已登记素材。可以先在本地或外部网页生成，再用上方按钮上传到这个 shot。</p>
@@ -1691,103 +2286,51 @@ function ShotAssetSlotCard({
   )
 }
 
-function ShotExternalRequestCard({
-  shotId,
-  slot,
-  request,
-  projectReady,
-  allowUpload,
-  uploading,
-  onUpload,
-}: {
-  shotId: string
-  slot: DirectorShotAssetSlot
-  request: ExternalGenerationRequestContent
-  projectReady: boolean
-  allowUpload: boolean
-  uploading: boolean
-  onUpload: (event: ChangeEvent<HTMLInputElement>, shotId: string, slot: DirectorShotAssetSlot, request?: ExternalGenerationRequestContent) => void
-}) {
-  const targetText = [
-    request.target?.aspectRatio,
-    request.target?.resolution,
-    request.target?.durationSec ? `${request.target.durationSec}s` : '',
-  ].filter(Boolean).join(' / ')
-  const accept = request.kind === 'video' ? 'video/*' : 'image/*'
-  const guideSteps = externalGenerationGuideSteps(request)
-  const taskPackage = buildExternalGenerationTaskPackage(request)
+function ExternalReferenceCard({ reference, index, projectId }: { reference: ExternalGenerationReference; index: number; projectId?: string }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
 
-  return (
-    <div className="rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-[11px] font-black text-primary-dark">外部生成交付单</div>
-          <div className="truncate font-mono text-[11px] font-black text-primary-dark">{request.requestId}</div>
-          <div className="mt-0.5 text-xs text-ink-muted">{request.kind === 'image' ? '图片生成请求' : '视频生成请求'}{targetText ? ` · ${targetText}` : ''}</div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <CopyButton value={taskPackage.fullText} label="复制生成包" />
-          <CopyButton value={taskPackage.positivePrompt} label="复制 Prompt" />
-          {request.negativePrompt ? <CopyButton value={taskPackage.negativePrompt} label="复制负面提示" /> : null}
-          <CopyButton value={taskPackage.parameterText} label="复制参数" />
-          <CopyButton value={taskPackage.referenceManifest} label="复制参考图" />
-          <button
-            type="button"
-            onClick={() => downloadTextFile(`${request.requestId || shotId}-reference-package.md`, taskPackage.fullText, 'text/markdown')}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
-          >
-            <FiDownload /> 下载包
-          </button>
-          {allowUpload ? (
-            <label className={clsx(
-              'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
-              (!projectReady || uploading) && 'cursor-not-allowed opacity-50',
-            )}>
-              <FiUpload /> {uploading ? '上传中...' : '上传结果'}
-              <input
-                type="file"
-                accept={accept}
-                data-smoke-id="external-generation-upload"
-                disabled={!projectReady || uploading}
-                className="sr-only"
-                onChange={(event) => onUpload(event, shotId, slot, request)}
-              />
-            </label>
-          ) : null}
-        </div>
-      </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px] font-black text-primary-dark">
-        <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">1 复制生成包</span>
-        <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">2 外部生成</span>
-        <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">3 上传结果</span>
-      </div>
-      <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-xs leading-5 text-ink ring-1 ring-line">{request.prompt}</pre>
-      {request.negativePrompt ? (
-        <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-line">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-xs font-black text-ink-soft">Negative Prompt</div>
-            <CopyButton value={taskPackage.negativePrompt} label="复制负面提示" />
-          </div>
-          <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.negativePrompt}</pre>
-        </div>
-      ) : null}
-      {request.references.length ? (
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {request.references.map((ref, index) => <ExternalReferenceCard key={`${ref.id}-${ref.storageRef}`} reference={ref} index={index + 1} />)}
-        </div>
-      ) : null}
-      <details className="mt-3">
-        <summary className="cursor-pointer text-xs font-black text-primary-dark">网页端生成步骤</summary>
-        <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs leading-5 text-primary-dark">
-          {guideSteps.map((step) => <li key={step}>{step}</li>)}
-        </ol>
-      </details>
-    </div>
-  )
-}
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl: string | null = null
+    setPreviewError(null)
+    setPreviewLoading(false)
 
-function ExternalReferenceCard({ reference, index }: { reference: ExternalGenerationReference; index: number }) {
+    const directHref = directMediaPreviewUrl(reference.storageRef)
+    if (directHref) {
+      setPreviewUrl(directHref)
+      return undefined
+    }
+
+    setPreviewUrl(null)
+    const localArtifactId = localArtifactIdFromStorageRef(reference.storageRef)
+    if (!projectId || !localArtifactId) return undefined
+
+    setPreviewLoading(true)
+    fetchLocalArtifactFile({ projectId, id: localArtifactId })
+      .then((localArtifact) => {
+        if (cancelled) return
+        const blob = localArtifactFileToBlob(localArtifact)
+        objectUrl = URL.createObjectURL(blob)
+        setPreviewUrl(objectUrl)
+      })
+      .catch((err) => {
+        if (!cancelled) setPreviewError(normalizeDirectorErrorMessage(err))
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [projectId, reference.storageRef])
+
   const directHref = directMediaPreviewUrl(reference.storageRef)
+  const openHref = previewUrl || directHref
+  const locks = stringListField(reference.locks) || []
   return (
     <div className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-line">
       <div className="flex items-start justify-between gap-2">
@@ -1797,15 +2340,32 @@ function ExternalReferenceCard({ reference, index }: { reference: ExternalGenera
         </div>
         <CopyButton value={externalGenerationReferenceCopyText(reference, index)} label="复制参考信息" />
       </div>
-      {reference.locks?.length ? (
-        <div className="mt-2 line-clamp-2 text-[11px] text-ink-muted">锁定：{reference.locks.join('、')}</div>
+      <div className="mt-3 overflow-hidden rounded-lg bg-background-card ring-1 ring-line">
+        {previewUrl ? (
+          <img
+            src={previewUrl}
+            alt={reference.label || reference.id || `参考图 ${index}`}
+            className="h-36 w-full object-contain"
+            onError={() => {
+              setPreviewError('参考图已登记，但当前无法直接预览。')
+              setPreviewUrl(null)
+            }}
+          />
+        ) : (
+          <div className="flex h-28 items-center justify-center px-3 text-center text-xs leading-5 text-ink-muted">
+            {previewLoading ? '正在读取参考图...' : previewError || '参考图已登记，可复制路径或参考信息使用。'}
+          </div>
+        )}
+      </div>
+      {locks.length ? (
+        <div className="mt-2 line-clamp-2 text-[11px] text-ink-muted">锁定：{locks.join('、')}</div>
       ) : null}
       <div className="mt-2 truncate font-mono text-[11px] text-ink-soft" title={reference.storageRef}>{reference.storageRef}</div>
       <div className="mt-2 flex flex-wrap gap-2">
         <CopyButton value={reference.storageRef} label="复制路径" />
-        {directHref ? (
+        {openHref ? (
           <a
-            href={directHref}
+            href={openHref}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
@@ -1816,6 +2376,96 @@ function ExternalReferenceCard({ reference, index }: { reference: ExternalGenera
       </div>
     </div>
   )
+}
+
+function ShotArtifactPreview({ artifact, projectId }: { artifact: DirectorArtifactRecord; projectId?: string }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const mediaKind = artifactPreviewKind(artifact)
+
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl: string | null = null
+    setPreviewError(null)
+    setPreviewLoading(false)
+
+    if (!mediaKind) {
+      setPreviewUrl(null)
+      return undefined
+    }
+
+    const directHref = directMediaPreviewUrl(artifact.storageRef || '')
+    if (directHref) {
+      setPreviewUrl(directHref)
+      return undefined
+    }
+
+    setPreviewUrl(null)
+    const localArtifactId = localArtifactIdFromStorageRef(artifact.storageRef)
+    if (!projectId || !localArtifactId) return undefined
+
+    setPreviewLoading(true)
+    fetchLocalArtifactFile({ projectId, id: localArtifactId })
+      .then((localArtifact) => {
+        if (cancelled) return
+        const blob = localArtifactFileToBlob(localArtifact, artifact.metadata)
+        objectUrl = URL.createObjectURL(blob)
+        setPreviewUrl(objectUrl)
+      })
+      .catch((err) => {
+        if (!cancelled) setPreviewError(normalizeDirectorErrorMessage(err))
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [artifact.id, artifact.metadata, artifact.storageRef, mediaKind, projectId])
+
+  return (
+    <div className="min-w-0 rounded-lg bg-background-card p-3 ring-1 ring-line">
+      <div className="flex items-center justify-between gap-2">
+        <div className="truncate text-xs font-black text-ink" title={artifact.name}>{artifact.name}</div>
+        <StatusBadge status={artifact.status} />
+      </div>
+      {mediaKind ? (
+        <div className="mt-3 overflow-hidden rounded-lg bg-white ring-1 ring-line">
+          {previewUrl && mediaKind === 'image' ? (
+            <img src={previewUrl} alt={artifact.name} className="h-40 w-full object-contain" />
+          ) : previewUrl && mediaKind === 'video' ? (
+            <video src={previewUrl} controls className="h-44 w-full bg-black object-contain" />
+          ) : (
+            <div className="flex h-32 items-center justify-center px-3 text-center text-xs leading-5 text-ink-muted">
+              {previewLoading ? '正在读取预览...' : previewError || '素材已登记，当前无法直接预览。'}
+            </div>
+          )}
+        </div>
+      ) : null}
+      <div className="mt-2 truncate font-mono text-[11px] text-ink-soft" title={artifact.storageRef}>{artifact.storageRef || artifact.id}</div>
+    </div>
+  )
+}
+
+function artifactPreviewKind(artifact: DirectorArtifactRecord): 'image' | 'video' | '' {
+  const metadata = artifact.metadata || {}
+  const mimeType = stringField(metadata.mimeType) || stringField(metadata.mime_type)
+  const searchable = [
+    artifact.kind,
+    artifact.name,
+    artifact.storageRef,
+    stringField(metadata.artifactType),
+    stringField(metadata.artifact_kind),
+    stringField(metadata.generationKind),
+    stringField(metadata.assetType),
+    mimeType,
+  ].join(' ').toLowerCase()
+  if (mimeType.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/u.test(searchable) || searchable.includes(' image') || searchable.includes('shot_keyframe')) return 'image'
+  if (mimeType.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/u.test(searchable) || searchable.includes(' video') || searchable.includes('shot_video')) return 'video'
+  return ''
 }
 
 function slotIcon(kind: DirectorShotAssetSlot['kind']) {
@@ -2376,6 +3026,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, onArtifactsChang
                           {externalRequest ? (
                             <ExternalGenerationRequestPanel
                               request={externalRequest}
+                              projectId={projectId}
                               disabled={!projectId || externalUploading}
                               uploading={externalUploading}
                               message={externalUploadMessage}
@@ -2434,7 +3085,22 @@ interface ExternalGenerationReference {
   role?: string
   storageRef: string
   artifactId?: string
+  locks?: unknown
+}
+
+interface ExternalGenerationLayerPlan {
+  role?: string
+  prompt?: string
+  plan?: string
+  textSafeLayout?: string
+  mode?: string
+  keyframeStrategy?: string
+  textRenderer?: string
   locks?: string[]
+  inputArtifacts?: string[]
+  outputArtifactKind?: string
+  avoidGeneratedText?: boolean
+  requiresBlankArea?: boolean
 }
 
 interface ExternalGenerationRequestContent {
@@ -2442,8 +3108,13 @@ interface ExternalGenerationRequestContent {
   kind: 'image' | 'video'
   shotId?: string
   prompt: string
+  overallShotPrompt?: string
   negativePrompt?: string
   references: ExternalGenerationReference[]
+  aigcPlan?: ExternalGenerationLayerPlan
+  hyperframesPlan?: ExternalGenerationLayerPlan
+  ffmpegFusionPlan?: ExternalGenerationLayerPlan
+  textSafeLayout?: string
   target?: {
     aspectRatio?: string
     durationSec?: number
@@ -2453,14 +3124,18 @@ interface ExternalGenerationRequestContent {
   referenceImageLimit?: number
 }
 
+const EXTERNAL_PROMPT_MAX_CHARS = 2000
+
 function ExternalGenerationRequestPanel({
   request,
+  projectId,
   disabled,
   uploading,
   message,
   onUpload,
 }: {
   request: ExternalGenerationRequestContent
+  projectId?: string
   disabled: boolean
   uploading: boolean
   message: string | null
@@ -2473,7 +3148,7 @@ function ExternalGenerationRequestPanel({
     request.target?.durationSec ? `${request.target.durationSec}s` : '',
   ].filter(Boolean).join(' / ')
   const guideSteps = externalGenerationGuideSteps(request)
-  const taskPackage = buildExternalGenerationTaskPackage(request)
+  const safePrompt = safePromptText(request.prompt)
 
   return (
     <div className="mt-4 rounded-lg border border-primary/25 bg-white p-4 shadow-sm">
@@ -2487,18 +3162,7 @@ function ExternalGenerationRequestPanel({
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge status="review" label="待用户回填" />
-          <CopyButton value={taskPackage.fullText} label="复制生成包" />
-          <CopyButton value={taskPackage.positivePrompt} label="复制 Prompt" />
-          {request.negativePrompt ? <CopyButton value={taskPackage.negativePrompt} label="复制负面提示" /> : null}
-          <CopyButton value={taskPackage.parameterText} label="复制参数" />
-          <CopyButton value={taskPackage.referenceManifest} label="复制参考图" />
-          <button
-            type="button"
-            onClick={() => downloadTextFile(`${request.requestId}-external-task.md`, taskPackage.fullText, 'text/markdown')}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
-          >
-            <FiDownload /> 下载包
-          </button>
+          <CopyButton value={safePrompt} label="复制提示词" />
           <label className={clsx(
             'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
             disabled && 'cursor-not-allowed opacity-50'
@@ -2516,19 +3180,23 @@ function ExternalGenerationRequestPanel({
         </div>
       </div>
       <p className="mt-3 text-xs leading-5 text-ink-muted">
-        流程在这里等待用户提供素材。你可以把 Prompt 和参考图复制到任意图片或视频生成网站，生成后上传文件回填；系统只登记本地引用和依赖关系。
+        流程在这里等待用户提供素材。先查看参考图，再复制提示词到图片或视频生成工具；生成后上传文件回填，系统只登记本地引用和依赖关系。
       </p>
+      {request.kind === 'video' ? <ShotLayerPlanPanel request={request} /> : null}
       <div className="mt-3 rounded-lg border border-primary/20 bg-primary-soft/40 p-3">
-        <div className="text-xs font-black text-primary-dark">外部生成交付单</div>
+        <div className="text-xs font-black text-primary-dark">生成步骤</div>
         <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px] font-black text-primary-dark">
-          <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">1 复制生成包</span>
+          <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">1 查看依赖</span>
           <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">2 外部生成</span>
           <span className="rounded-lg bg-white px-2 py-2 ring-1 ring-line">3 上传回填</span>
         </div>
       </div>
       <div className="mt-3 rounded-lg border border-line bg-background-card p-3">
-        <div className="text-xs font-black text-ink-soft">Prompt</div>
-        <pre className="mt-2 max-h-48 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.prompt}</pre>
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs font-black text-ink-soft">文字提示词</div>
+          <CopyButton value={safePrompt} label="复制提示词" />
+        </div>
+        <pre className="mt-2 max-h-48 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{safePrompt}</pre>
       </div>
       <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
         <div className="text-xs font-black text-primary-dark">浏览器手动生成步骤</div>
@@ -2540,15 +3208,20 @@ function ExternalGenerationRequestPanel({
       </div>
       {request.negativePrompt ? (
         <div className="mt-3 rounded-lg border border-line bg-background-card p-3">
-          <div className="text-xs font-black text-ink-soft">Negative Prompt</div>
+          <div className="text-xs font-black text-ink-soft">负面提示词</div>
           <pre className="mt-2 max-h-32 whitespace-pre-wrap break-words text-xs leading-5 text-ink">{request.negativePrompt}</pre>
         </div>
       ) : null}
       {request.references.length ? (
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {request.references.slice(0, 6).map((ref, index) => <ExternalReferenceCard key={`${ref.id}-${ref.storageRef}`} reference={ref} index={index + 1} />)}
+        <div className="mt-3">
+          <div className="mb-2 text-xs font-black text-ink-soft">图片参考资料</div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {request.references.slice(0, 6).map((ref, index) => <ExternalReferenceCard key={`${ref.id}-${ref.storageRef}`} reference={ref} index={index + 1} projectId={projectId} />)}
+          </div>
         </div>
-      ) : null}
+      ) : (
+        <p className="mt-3 rounded-lg border border-line bg-background-card p-3 text-xs leading-5 text-ink-muted">本次生成不需要图片参考，直接复制文字提示词即可。</p>
+      )}
       {message ? <p className="mt-3 text-xs font-semibold text-green-700">{message}</p> : null}
     </div>
   )
@@ -2583,8 +3256,13 @@ function externalGenerationRequestFromContent(content: unknown): ExternalGenerat
     kind,
     shotId: stringField(data.shotId) || undefined,
     prompt,
+    overallShotPrompt: stringField(data.overallShotPrompt) || undefined,
     negativePrompt: stringField(data.negativePrompt) || undefined,
     references,
+    aigcPlan: layerPlanFromUnknown(data.aigcPlan),
+    hyperframesPlan: layerPlanFromUnknown(data.hyperframesPlan),
+    ffmpegFusionPlan: layerPlanFromUnknown(data.ffmpegFusionPlan),
+    textSafeLayout: stringField(data.textSafeLayout) || undefined,
     target: target ? {
       aspectRatio: stringField(target.aspectRatio) || undefined,
       durationSec: numberField(target.durationSec),
@@ -2593,6 +3271,26 @@ function externalGenerationRequestFromContent(content: unknown): ExternalGenerat
     promptCharLimit: numberField(data.promptCharLimit),
     referenceImageLimit: numberField(data.referenceImageLimit),
   }
+}
+
+function layerPlanFromUnknown(value: unknown): ExternalGenerationLayerPlan | undefined {
+  const item = objectField(value)
+  if (!item) return undefined
+  const plan: ExternalGenerationLayerPlan = {
+    role: stringField(item.role) || undefined,
+    prompt: stringField(item.prompt) || undefined,
+    plan: stringField(item.plan) || undefined,
+    textSafeLayout: stringField(item.textSafeLayout) || undefined,
+    mode: stringField(item.mode) || undefined,
+    keyframeStrategy: stringField(item.keyframeStrategy) || undefined,
+    textRenderer: stringField(item.textRenderer) || undefined,
+    locks: stringListField(item.locks),
+    inputArtifacts: stringListField(item.inputArtifacts),
+    outputArtifactKind: stringField(item.outputArtifactKind) || undefined,
+    avoidGeneratedText: typeof item.avoidGeneratedText === 'boolean' ? item.avoidGeneratedText : undefined,
+    requiresBlankArea: typeof item.requiresBlankArea === 'boolean' ? item.requiresBlankArea : undefined,
+  }
+  return Object.values(plan).some((field) => field !== undefined && field !== '') ? plan : undefined
 }
 
 function referenceFromUnknown(value: unknown): ExternalGenerationReference | null {

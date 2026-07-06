@@ -368,7 +368,7 @@ def draw_release_cards(draw):
         draw.text((x + 740, y + 30), "OK", font=FONT_BODY, fill=(120, 220, 160))
 
 def draw_common_text(draw, idx, total, route, title, action, duration):
-    draw_badge(draw, (92, 78), "躺营 AI Operation System")
+    draw_badge(draw, (92, 78), "躺营 AI 视频创作助手")
     draw.text((92, 150), f"{idx+1:02d} / {total:02d}", font=FONT_MONO, fill=(240, 194, 139))
     draw.text((92, 194), route, font=FONT_BODY, fill=(240, 194, 139))
     for n, line in enumerate(wrap_text(draw, title, FONT_TITLE, 720, 5)):

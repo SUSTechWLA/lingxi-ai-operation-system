@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="frontend/src/assets/aios-icon.png" width="112" alt="Tangying AI Operation System" />
+  <img src="frontend/src/assets/aios-icon.png" width="112" alt="Tangying AI Video Creation Assistant" />
 </p>
 
-<h1 align="center">躺营 AI 自媒体运营系统</h1>
+<h1 align="center">躺营 AI 视频创作助手</h1>
 
 <p align="center">
   从一个想法开始，把选题、脚本、分镜、素材生成、审核、渲染和交付串成一条可追踪的视频创作流水线。
@@ -37,6 +37,7 @@
 
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
 - 视频流水线已对齐 shot 级生产闭环：语义/画面变化切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。
+- Shot 素材包已拆成可读的三层制作计划：AIGC 负责无文字背景或局部动态并预留文字安全区，HyperFrames 负责中文标题、字幕、关键帧和 UI 图形层，FFmpeg 负责裁剪、叠加和合成完整 shot。
 - 桌面端已修复 local runner 登录态注入时的重启问题；已安装客户端可以先启动本地 agent，再平滑切换为带用户会话的 runner。
 - 即梦 CLI / MCP 登录配置已归入设置页，和文生图片、文生视频 Provider 一起管理；项目页只保留说明和跳转按钮。
 - 项目页启动体检会自动运行，只展示未就绪或需留意的问题；具体本地工具命令和排障细节保留在设置页、追踪页和诊断包中。
@@ -94,6 +95,8 @@ flowchart LR
 ```
 
 Shot split policy 固定为 `minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。切分优先参考剧情节点、场景、主体、动作、景别、视角、焦段、情绪节奏和旁白/对白语义段落；超过 15 秒必须继续拆分，短于 3 秒只在连续且合并后不超过 15 秒时合并。
+
+每个需要外部生成的视频 shot 会输出独立的 `aigcPlan`、`hyperframesPlan` 和 `ffmpegFusionPlan`。AIGC 提示词来自该 shot 的画面说明和动作节奏，但只要求生成背景或局部动态素材；中文文字、标题、字幕、流程标签和 UI 文案由 HyperFrames 本地精确渲染，避免 AIGC 生成乱码或错字。上传回填后，FFmpeg 再把 AIGC 素材与 HyperFrames 层融合成完整 shot。
 
 成片阶段只消费 accepted shot candidate。最终 voiceover、BGM、ducking、字幕时间轴、响度、转码和 final QA 在 final assembly 阶段统一处理，不在每个 shot 内烧录最终字幕或混最终 BGM。
 

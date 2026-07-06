@@ -1,4 +1,4 @@
-# Tangying AI Operation System
+# Tangying AI Video Creation Assistant
 
 > An AI video production workspace for creators and small teams. Start with one idea, then move through script, storyboard, asset generation, human review, local rendering, and delivery.
 
@@ -30,6 +30,7 @@ The current version is best suited for private beta testing, engineering demos, 
 ### 2. Cinematic / AIGC Shot Videos
 
 - Supports character, scene, continuity, keyframe, per-shot task packages, and external generation result import.
+- Each video shot package is split into `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan`: AIGC generates text-free background or partial motion with blank safe areas, HyperFrames renders exact titles, subtitles, keyframes, and UI graphics locally, and FFmpeg merges the layers into the complete shot.
 - When no external generation API is configured, the UI presents copyable prompts, negative prompts, reference paths, lock constraints, and the exact upload slot.
 - `LOCAL_FILE_IMPORT` lets users upload externally generated images or videos back into the correct shot.
 

@@ -427,6 +427,9 @@ func TestListReviewsQualityGateShowsProductionOutputWithQualityReport(t *testing
 			TaskID: "task-1",
 			Type:   model.NodeTypeTool,
 			Status: model.NodeSuccess,
+			Input: map[string]interface{}{
+				"expectedOutput": []interface{}{"VIDEO_SCRIPT", "script"},
+			},
 			Output: map[string]interface{}{
 				"script":  "佛得角第一次站上世界杯舞台，这不是冷门，是一代人的坚持。",
 				"summary": "佛得角世界杯奇迹口播",
@@ -488,6 +491,9 @@ func TestListReviewsQualityGateShowsProductionOutputWithQualityReport(t *testing
 	review := resp.Data.Reviews[0]
 	if review.SourceNodeID != "video_script_generator_exec" {
 		t.Fatalf("quality gate should expose production source node id, got %#v", review)
+	}
+	if len(review.RequiredOutputs) == 0 || review.RequiredOutputs[0] != "VIDEO_SCRIPT" {
+		t.Fatalf("quality gate should inherit target artifact outputs from production node, got %#v", review.RequiredOutputs)
 	}
 	if review.Tool != "video_script_generator" {
 		t.Fatalf("quality gate should be presented as production tool review, got %#v", review.Tool)

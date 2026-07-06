@@ -45,18 +45,27 @@ const providerRows: Array<{
   },
 ]
 
+type SettingsActionMessage = {
+  type: 'info' | 'success' | 'error'
+  text: string
+}
+
+type JiMengSetupAction = 'refresh' | 'install' | 'register' | null
+
 const DesktopPage: React.FC = () => {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
   const [serviceInfo, setServiceInfo] = useState({ host: getLocalAgentBaseUrl(), pid: '' })
   const [localDirectory, setLocalDirectory] = useState('未选择')
+  const [directoryMessage, setDirectoryMessage] = useState<SettingsActionMessage | null>(null)
   const [providerSettings, setProviderSettings] = useState(() => mergeModelProviderSettings())
   const [providerLoading, setProviderLoading] = useState(true)
   const [providerSaving, setProviderSaving] = useState(false)
-  const [providerMessage, setProviderMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [providerMessage, setProviderMessage] = useState<SettingsActionMessage | null>(null)
   const [activeTab, setActiveTab] = useState<ModelCapability>('text_to_text')
   const [jimengSetupStatus, setJimengSetupStatus] = useState<JiMengSetupStatusResponse | null>(null)
   const [jimengSetupLoading, setJimengSetupLoading] = useState(false)
-  const [jimengSetupError, setJimengSetupError] = useState<string | null>(null)
+  const [jimengSetupAction, setJimengSetupAction] = useState<JiMengSetupAction>(null)
+  const [jimengSetupMessage, setJimengSetupMessage] = useState<SettingsActionMessage | null>(null)
   const api = getElectronAPI()
 
   useEffect(() => {
@@ -82,13 +91,16 @@ const DesktopPage: React.FC = () => {
     loadJiMengSetupStatus()
   }, [])
 
-  const loadModelProviderSettings = async () => {
+  const loadModelProviderSettings = async (showFeedback = false) => {
     setProviderLoading(true)
-    setProviderMessage(null)
+    setProviderMessage(showFeedback ? { type: 'info', text: '正在刷新模型 API 设置...' } : null)
     try {
       const response = await fetchModelProviderSettings()
       const merged = mergeModelProviderSettings(response.providers)
       setProviderSettings(merged)
+      if (showFeedback) {
+        setProviderMessage({ type: 'success', text: '模型 API 设置已刷新' })
+      }
     } catch (error) {
       setProviderMessage({ type: 'error', text: error instanceof Error ? error.message : '读取模型设置失败' })
     } finally {
@@ -108,7 +120,7 @@ const DesktopPage: React.FC = () => {
 
   const handleSaveProviders = async () => {
     setProviderSaving(true)
-    setProviderMessage(null)
+    setProviderMessage({ type: 'info', text: '正在保存模型 API 设置...' })
     try {
       const response = await saveModelProviderSettings(providerSettings)
       setProviderSettings(mergeModelProviderSettings(response.providers))
@@ -123,52 +135,79 @@ const DesktopPage: React.FC = () => {
     }
   }
 
-  const loadJiMengSetupStatus = async () => {
+  const loadJiMengSetupStatus = async (showFeedback = false) => {
     setJimengSetupLoading(true)
-    setJimengSetupError(null)
+    setJimengSetupAction(showFeedback ? 'refresh' : null)
+    setJimengSetupMessage(showFeedback ? { type: 'info', text: '正在刷新即梦配置状态...' } : null)
     try {
       const status = await fetchJiMengSetupStatus()
       setJimengSetupStatus(status)
+      if (showFeedback) {
+        setJimengSetupMessage({ type: 'success', text: '即梦配置状态已刷新' })
+      }
     } catch (error) {
       setJimengSetupStatus(null)
-      setJimengSetupError(settingsErrorMessage(error, '读取即梦设置失败'))
+      setJimengSetupMessage({ type: 'error', text: settingsErrorMessage(error, '读取即梦设置失败') })
     } finally {
       setJimengSetupLoading(false)
+      setJimengSetupAction(null)
     }
   }
 
   const handleInstallJiMengCLI = async () => {
     setJimengSetupLoading(true)
-    setJimengSetupError(null)
+    setJimengSetupAction('install')
+    setJimengSetupMessage({ type: 'info', text: '正在安装/更新 Dreamina CLI，这可能需要几分钟，请不要关闭本地服务。' })
     try {
-      await installJiMengCLI()
-      await loadJiMengSetupStatus()
+      const result = await installJiMengCLI()
+      if (result.status === 'failed') {
+        throw new Error(result.error || result.stderr || '安装即梦 CLI 失败')
+      }
+      const status = await fetchJiMengSetupStatus()
+      setJimengSetupStatus(status)
+      setJimengSetupMessage({ type: 'success', text: 'Dreamina CLI 安装/更新完成，已刷新即梦配置状态。' })
     } catch (error) {
-      setJimengSetupError(settingsErrorMessage(error, '安装即梦 CLI 失败'))
+      setJimengSetupMessage({ type: 'error', text: settingsErrorMessage(error, '安装即梦 CLI 失败') })
     } finally {
       setJimengSetupLoading(false)
+      setJimengSetupAction(null)
     }
   }
 
   const handleRegisterJiMengMCP = async () => {
     setJimengSetupLoading(true)
-    setJimengSetupError(null)
+    setJimengSetupAction('register')
+    setJimengSetupMessage({ type: 'info', text: '正在注册即梦 MCP provider...' })
     try {
       await registerJiMengMCP({ transport: 'stdio' })
-      await loadJiMengSetupStatus()
+      const status = await fetchJiMengSetupStatus()
+      setJimengSetupStatus(status)
+      setJimengSetupMessage({ type: 'success', text: '即梦 MCP 已注册，已刷新连接状态。' })
     } catch (error) {
-      setJimengSetupError(settingsErrorMessage(error, '注册即梦 MCP 失败'))
+      setJimengSetupMessage({ type: 'error', text: settingsErrorMessage(error, '注册即梦 MCP 失败') })
     } finally {
       setJimengSetupLoading(false)
+      setJimengSetupAction(null)
     }
   }
 
   const handlePickSaveDir = async () => {
-    if (!api) return
+    if (!api) {
+      setDirectoryMessage({ type: 'error', text: '当前环境不支持选择本地目录。' })
+      return
+    }
+    setDirectoryMessage({ type: 'info', text: '正在打开目录选择窗口...' })
     try {
       const paths = await api.openDirectoryDialog()
-      if (paths?.length) setLocalDirectory(paths[0])
-    } catch { /* cancelled */ }
+      if (paths?.length) {
+        setLocalDirectory(paths[0])
+        setDirectoryMessage({ type: 'success', text: '已选择本地目录。' })
+      } else {
+        setDirectoryMessage({ type: 'info', text: '未选择新目录。' })
+      }
+    } catch (error) {
+      setDirectoryMessage({ type: 'error', text: settingsErrorMessage(error, '选择本地目录失败') })
+    }
   }
 
   return (
@@ -255,6 +294,7 @@ const DesktopPage: React.FC = () => {
                   <span className="font-mono text-ink-soft truncate w-32 text-right">{localDirectory}</span>
                 </div>
               </div>
+              <SettingsActionNotice message={directoryMessage} compact className="mt-3" />
             </div>
           </div>
 
@@ -272,7 +312,7 @@ const DesktopPage: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={loadModelProviderSettings}
+                    onClick={() => loadModelProviderSettings(true)}
                     disabled={providerLoading || providerSaving}
                     className="h-8 w-8 rounded-lg border border-line text-ink-soft hover:bg-background disabled:opacity-50 flex items-center justify-center"
                     title="重新读取"
@@ -286,7 +326,7 @@ const DesktopPage: React.FC = () => {
                     className="h-8 px-3 rounded-lg bg-primary-dark text-white text-xs font-medium hover:bg-[#1A0B02] disabled:opacity-50 flex items-center gap-1.5"
                   >
                     {providerSaving ? <FiRefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FiSave className="w-3.5 h-3.5" />}
-                    保存
+                    {providerSaving ? '保存中' : '保存'}
                   </button>
                 </div>
               </div>
@@ -378,9 +418,11 @@ const DesktopPage: React.FC = () => {
                 <div className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
                   providerMessage.type === 'success'
                     ? 'bg-green-50 text-green-700'
+                    : providerMessage.type === 'info'
+                      ? 'bg-primary-soft text-primary-dark'
                     : 'bg-red-50 text-red-700'
                 }`}>
-                  {providerMessage.type === 'success' ? <FiCheckCircle className="w-4 h-4" /> : <FiKey className="w-4 h-4" />}
+                  {providerMessage.type === 'success' ? <FiCheckCircle className="w-4 h-4" /> : providerMessage.type === 'info' ? <FiRefreshCw className="w-4 h-4 animate-spin" /> : <FiKey className="w-4 h-4" />}
                   <span>{providerMessage.text}</span>
                 </div>
               )}
@@ -389,8 +431,9 @@ const DesktopPage: React.FC = () => {
             <JiMengSettingsPanel
               status={jimengSetupStatus}
               loading={jimengSetupLoading}
-              error={jimengSetupError}
-              onRefresh={loadJiMengSetupStatus}
+              action={jimengSetupAction}
+              message={jimengSetupMessage}
+              onRefresh={() => loadJiMengSetupStatus(true)}
               onInstallCLI={handleInstallJiMengCLI}
               onRegisterMCP={handleRegisterJiMengMCP}
             />
@@ -404,12 +447,13 @@ const DesktopPage: React.FC = () => {
 function JiMengSettingsPanel(props: {
   status: JiMengSetupStatusResponse | null
   loading: boolean
-  error: string | null
+  action: JiMengSetupAction
+  message: SettingsActionMessage | null
   onRefresh: () => void
   onInstallCLI: () => void
   onRegisterMCP: () => void
 }) {
-  const { status, loading, error, onRefresh, onInstallCLI, onRegisterMCP } = props
+  const { status, loading, action, message, onRefresh, onInstallCLI, onRegisterMCP } = props
   const providerStatus = status?.mcpProviders?.find((item) => item.id === 'jimeng')
   const mcpRegistered = Boolean(status?.mcpProvider)
   const mcpReachable = providerStatus?.reachable === true
@@ -424,7 +468,7 @@ function JiMengSettingsPanel(props: {
       : '即梦 CLI 未检测到'
   const [loginResult, setLoginResult] = useState<MCPToolCallResult | null>(null)
   const [loginLoading, setLoginLoading] = useState(false)
-  const [loginError, setLoginError] = useState<string | null>(null)
+  const [loginMessage, setLoginMessage] = useState<SettingsActionMessage | null>(null)
   const loginData = loginResult?.structuredContent || {}
   const verificationUri = stringRecordValue(loginData, 'verification_uri') || stringRecordValue(loginData, 'verificationUri')
   const userCode = stringRecordValue(loginData, 'user_code') || stringRecordValue(loginData, 'userCode')
@@ -432,13 +476,17 @@ function JiMengSettingsPanel(props: {
 
   const handleLoginHeadless = async () => {
     setLoginLoading(true)
-    setLoginError(null)
+    setLoginMessage({ type: 'info', text: '正在获取即梦登录码...' })
     try {
       const result = await loginJiMengHeadless()
       setLoginResult(result)
-      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录启动失败')
+      if (result.isError) {
+        setLoginMessage({ type: 'error', text: result.content?.[0]?.text || '即梦登录启动失败' })
+      } else {
+        setLoginMessage({ type: 'success', text: '登录码已生成，请在即梦页面完成授权。' })
+      }
     } catch (error) {
-      setLoginError(settingsErrorMessage(error, '即梦登录启动失败'))
+      setLoginMessage({ type: 'error', text: settingsErrorMessage(error, '即梦登录启动失败') })
     } finally {
       setLoginLoading(false)
     }
@@ -447,13 +495,17 @@ function JiMengSettingsPanel(props: {
   const handleCheckLogin = async () => {
     if (!deviceCode) return
     setLoginLoading(true)
-    setLoginError(null)
+    setLoginMessage({ type: 'info', text: '正在检查即梦登录状态...' })
     try {
       const result = await checkJiMengLogin(deviceCode, 30)
       setLoginResult(result)
-      if (result.isError) setLoginError(result.content?.[0]?.text || '即梦登录未完成')
+      if (result.isError) {
+        setLoginMessage({ type: 'error', text: result.content?.[0]?.text || '即梦登录未完成' })
+      } else {
+        setLoginMessage({ type: 'success', text: '即梦登录已确认。' })
+      }
     } catch (error) {
-      setLoginError(settingsErrorMessage(error, '即梦登录检查失败'))
+      setLoginMessage({ type: 'error', text: settingsErrorMessage(error, '即梦登录检查失败') })
     } finally {
       setLoginLoading(false)
     }
@@ -496,7 +548,7 @@ function JiMengSettingsPanel(props: {
           </div>
         </div>
 
-        {error ? <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{error}</div> : null}
+        <SettingsActionNotice message={message} className="mt-3" />
 
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <JiMengStep label="Dreamina CLI" detail={status?.dreaminaVersion || installCommand} done={status?.dreaminaAvailable === true} />
@@ -511,7 +563,7 @@ function JiMengSettingsPanel(props: {
             disabled={loading}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <FiDownload /> 安装/更新 CLI
+            {action === 'install' ? <FiRefreshCw className="animate-spin" /> : <FiDownload />} {action === 'install' ? '正在安装/更新' : '安装/更新 CLI'}
           </button>
           <button
             type="button"
@@ -519,7 +571,7 @@ function JiMengSettingsPanel(props: {
             disabled={loading}
             className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <FiCheck /> 注册 MCP
+            {action === 'register' ? <FiRefreshCw className="animate-spin" /> : <FiCheck />} {action === 'register' ? '正在注册' : '注册 MCP'}
           </button>
           <button
             type="button"
@@ -527,7 +579,7 @@ function JiMengSettingsPanel(props: {
             disabled={loading}
             className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-black text-ink-muted ring-1 ring-line hover:bg-background-card disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <FiRefreshCw className={loading ? 'animate-spin' : ''} /> 刷新状态
+            <FiRefreshCw className={action === 'refresh' ? 'animate-spin' : ''} /> {action === 'refresh' ? '正在刷新' : '刷新状态'}
           </button>
         </div>
       </div>
@@ -563,7 +615,7 @@ function JiMengSettingsPanel(props: {
               </button>
             </div>
           </div>
-          {loginError ? <div className="mt-2 text-xs font-semibold text-red-700">{loginError}</div> : null}
+          <SettingsActionNotice message={loginMessage} compact className="mt-2" />
           {verificationUri || userCode ? (
             <div className="mt-3 space-y-2">
               {verificationUri ? <LoginCopyRow label="授权页面" value={verificationUri} /> : null}
@@ -590,6 +642,27 @@ function LoginCopyRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+function SettingsActionNotice({ message, compact = false, className = '' }: { message: SettingsActionMessage | null; compact?: boolean; className?: string }) {
+  if (!message) return null
+  const toneClass = message.type === 'success'
+    ? 'border-green-200 bg-green-50 text-green-700'
+    : message.type === 'info'
+      ? 'border-primary/15 bg-primary-soft text-primary-dark'
+      : 'border-red-200 bg-red-50 text-red-700'
+  return (
+    <div className={`${className} flex items-center gap-2 rounded-lg border px-3 ${compact ? 'py-1.5' : 'py-2'} text-xs font-semibold ${toneClass}`}>
+      {message.type === 'success' ? (
+        <FiCheckCircle className="h-4 w-4 shrink-0" />
+      ) : message.type === 'info' ? (
+        <FiRefreshCw className="h-4 w-4 shrink-0 animate-spin" />
+      ) : (
+        <FiKey className="h-4 w-4 shrink-0" />
+      )}
+      <span className="min-w-0">{message.text}</span>
+    </div>
+  )
+}
+
 function JiMengStep({ label, detail, done }: { label: string; detail: string; done: boolean }) {
   return (
     <div className={`rounded-lg border p-3 ${done ? 'border-green-100 bg-green-50/70' : 'border-line bg-white'}`}>
@@ -605,19 +678,23 @@ function JiMengStep({ label, detail, done }: { label: string; detail: string; do
 }
 
 function SettingsCopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const handleCopy = async () => {
-    await copyToClipboard(value)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1200)
+    try {
+      await copyToClipboard(value)
+      setCopyState('copied')
+    } catch {
+      setCopyState('failed')
+    }
+    window.setTimeout(() => setCopyState('idle'), 1400)
   }
   return (
     <button
       type="button"
       onClick={handleCopy}
-      className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"
+      className={`inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black ring-1 ring-line hover:bg-primary-soft ${copyState === 'failed' ? 'text-red-700' : 'text-primary-dark'}`}
     >
-      <FiCopy /> {copied ? '已复制' : label}
+      <FiCopy /> {copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : label}
     </button>
   )
 }

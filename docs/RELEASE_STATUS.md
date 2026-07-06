@@ -43,6 +43,7 @@ decision: GO
 - Shot split policy is present and enforces `minShotDurationSec=3`, `maxShotDurationSec=15`, `preferredShotDurationSec=6-8`, `splitByScriptSemantics=true`, and `splitByVisualChange=true`.
 - Shot candidates are versioned by `attemptIndex`; failed candidates are retained for diagnostics and must not overwrite accepted candidates.
 - Final assembly consumes only accepted candidate artifacts, normalizes clips with FFmpeg, then handles global voiceover, BGM ducking, subtitle timeline, loudness, final transcode, and final QA.
+- Shot material packages expose `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so users can generate text-free AIGC backgrounds or partial videos, keep exact Chinese text in HyperFrames, and merge layers with FFmpeg.
 - At least one AIGC video MCP provider is healthy when real creator trials are planned.
 - OpenAI-compatible model provider routes are configured for the selected workflow.
 - Artifact provenance distinguishes real AIGC from fallback storyboard/preview.

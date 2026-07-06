@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -3724,6 +3725,8 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 	requests := make([]interface{}, 0, len(shots))
 	packages := make([]interface{}, 0, len(shots))
 	artifacts := make([]interface{}, 0, len(shots)*5)
+	shotGuides := make([]interface{}, 0, len(shots))
+	routeCounts := map[string]int{}
 
 	for i, shot := range shots {
 		shotID := firstStringInMap(shot, "shotId", "id", "cardId")
@@ -3775,15 +3778,73 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			ReferenceAssetIDs: referenceAssetIDs,
 			MaterialHints:     materialHints,
 		})
-		negativePrompt := "避免真人写实、跨 shot 依赖、尾帧对齐要求、水印、不可读文字、画面崩坏。"
+		layerPlan := buildShotLayerPlan(shotID, duration, visual, narration, camera, lighting, composition, shotSize, assetIntent, humorBeat, timeRelationship, tone, actionBeats, videoPrompt)
+		aigcPlan := map[string]interface{}{
+			"role":                "background_or_partial_video",
+			"prompt":              layerPlan.AIGCPrompt,
+			"textSafeLayout":      layerPlan.TextSafeLayout,
+			"avoidGeneratedText":  true,
+			"requiresBlankArea":   true,
+			"canBeFullBackground": true,
+			"canBePartialInsert":  true,
+		}
+		hyperframesPlan := map[string]interface{}{
+			"role":             "exact_text_keyframes_overlay",
+			"prompt":           layerPlan.HyperframesPrompt,
+			"textRenderer":     "local_hyperframes",
+			"keyframeStrategy": "local_precise_layout",
+			"locks":            []string{"中文文字", "字幕", "标题", "流程标签", "UI 卡片"},
+		}
+		ffmpegFusionPlan := map[string]interface{}{
+			"mode":               "aigc_background_or_insert_plus_hyperframes_overlay",
+			"plan":               layerPlan.FFmpegFusionPlan,
+			"inputArtifacts":     []string{"SHOT_VIDEO_CLIP", "HYPERFRAMES_SHOT"},
+			"outputArtifactKind": "COMPOSITED_SHOT_VIDEO",
+			"textSafeRequired":   true,
+		}
+		negativePrompt := "避免真人写实、跨 shot 依赖、尾帧对齐要求、水印、不可读文字、字幕、Logo、错误汉字、乱码、画面崩坏。"
 		requestID := "extgen_video_" + unitShotID
 		submitExternalRequest := shouldSubmitExternalVideoRequest(shot, visual, materialHints)
+		assetRoute := firstStringInMap(shot, "plannedAssetRoute", "assetRoute", "route", "recommendedMode")
+		routeLabel := userFacingShotRouteLabel(assetRoute, submitExternalRequest)
+		routeCounts[routeLabel]++
+		shotGuide := map[string]interface{}{
+			"shotId":               shotID,
+			"durationSec":          duration,
+			"narration":            narration,
+			"visualChange":         fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
+			"productionRoute":      routeLabel,
+			"productionRouteLabel": "制作方式：" + routeLabel,
+			"whyThisShot":          fallbackText(whyThisShot, "承接当前口播语义，形成一个相对完整的画面单元。"),
+			"actionBeats":          actionBeats,
+			"referenceImages":      references,
+			"aigcAction":           userFacingAIGCAction(submitExternalRequest, requestID),
+			"hyperframesAction":    "HyperFrames 在本地生成精确文字、UI、字幕或图形包装；如果本 shot 需要 AIGC 素材，会在用户上传确认后合成完整 shot。",
+			"mergedShotPreview":    "AIGC 素材、HyperFrames 文字层和字幕会在后续预览/渲染阶段合并成该 shot 的完整画面。",
+			"aigcLayer":            layerPlan.AIGCPrompt,
+			"hyperframesLayer":     layerPlan.HyperframesPrompt,
+			"ffmpegFusion":         layerPlan.FFmpegFusionPlan,
+			"textSafeLayout":       layerPlan.TextSafeLayout,
+			"assetsPageAction":     "去产物页查看提示词和上传入口",
+			"externalRequestId":    requestID,
+			"requiresUserAIGC":     submitExternalRequest,
+			"sourceScriptSegment":  narration,
+			"sourceScriptLabel":    "来自口播：" + narration,
+		}
+		shotGuides = append(shotGuides, shotGuide)
 
 		videoPrompts = append(videoPrompts, map[string]interface{}{
 			"shotId":               shotID,
 			"durationSec":          duration,
 			"narrationText":        narration,
 			"prompt":               videoPrompt,
+			"overallShotPrompt":    videoPrompt,
+			"aigcPrompt":           layerPlan.AIGCPrompt,
+			"hyperframesPrompt":    layerPlan.HyperframesPrompt,
+			"textSafeLayout":       layerPlan.TextSafeLayout,
+			"aigcPlan":             aigcPlan,
+			"hyperframesPlan":      hyperframesPlan,
+			"ffmpegFusionPlan":     ffmpegFusionPlan,
 			"negativePrompt":       negativePrompt,
 			"continuity":           "仅共享主要角色、主要道具、主场景和全片风格；不得依赖其他 shot 的画面。",
 			"materialLibraryHints": materialHints,
@@ -3811,8 +3872,13 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"requestId":           requestID,
 				"kind":                "video",
 				"shotId":              shotID,
-				"prompt":              videoPrompt,
-				"promptText":          videoPrompt,
+				"prompt":              layerPlan.AIGCPrompt,
+				"promptText":          layerPlan.AIGCPrompt,
+				"overallShotPrompt":   videoPrompt,
+				"aigcPlan":            aigcPlan,
+				"hyperframesPlan":     hyperframesPlan,
+				"ffmpegFusionPlan":    ffmpegFusionPlan,
+				"textSafeLayout":      layerPlan.TextSafeLayout,
 				"negativePrompt":      negativePrompt,
 				"references":          references,
 				"target":              map[string]interface{}{"aspectRatio": "16:9", "durationSec": duration, "resolution": "1920x1080"},
@@ -3831,7 +3897,9 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"shotId":            shotID,
 			"durationSec":       duration,
 			"referenceImages":   references,
-			"assetRoute":        firstStringInMap(shot, "plannedAssetRoute", "assetRoute", "route", "recommendedMode"),
+			"assetRoute":        assetRoute,
+			"productionRoute":   routeLabel,
+			"userFacingGuide":   shotGuide,
 			"assetIntent":       assetIntent,
 			"humorBeat":         humorBeat,
 			"tone":              tone,
@@ -3845,9 +3913,16 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"lighting":          lighting,
 			"composition":       composition,
 			"shotSize":          shotSize,
+			"aigcPlan":          aigcPlan,
+			"hyperframesPlan":   hyperframesPlan,
+			"ffmpegFusionPlan":  ffmpegFusionPlan,
+			"textSafeLayout":    layerPlan.TextSafeLayout,
 			"prompts": map[string]interface{}{
-				"videoPrompt":    videoPrompt,
-				"negativePrompt": negativePrompt,
+				"videoPrompt":       videoPrompt,
+				"aigcVideoPrompt":   layerPlan.AIGCPrompt,
+				"hyperframesPrompt": layerPlan.HyperframesPrompt,
+				"ffmpegFusionPlan":  layerPlan.FFmpegFusionPlan,
+				"negativePrompt":    negativePrompt,
 			},
 			"voiceover": map[string]interface{}{
 				"text":         narration,
@@ -3866,10 +3941,20 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"artifactKind": "SHOT_SUBTITLE",
 				"fileName":     fmt.Sprintf("%s_subtitle.srt", shotID),
 			},
+			"hyperframes": map[string]interface{}{
+				"artifactKind": "HYPERFRAMES_SHOT",
+				"fileName":     fmt.Sprintf("%s_hyperframes_overlay.mp4", shotID),
+				"role":         "本地精确文字、UI、字幕或图形包装",
+				"prompt":       layerPlan.HyperframesPrompt,
+			},
 			"concatPlan": map[string]interface{}{
 				"ffmpegReady":                true,
 				"mode":                       "simple_cut",
+				"fusionMode":                 "AIGC 背景/局部视频 + HyperFrames 精确文字层",
+				"fusionPlan":                 layerPlan.FFmpegFusionPlan,
 				"transitionCoveredInShotEnd": true,
+				"compositedArtifactKind":     "COMPOSITED_SHOT_VIDEO",
+				"compositedFileName":         fmt.Sprintf("%s_complete_shot.mp4", shotID),
 			},
 			"independence": map[string]interface{}{
 				"crossShotDependencyForbidden": true,
@@ -3881,19 +3966,23 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			artifacts = append(artifacts, externalGenerationArtifact(requestID, shotID, "video"))
 		}
 		artifacts = append(artifacts,
+			shotPlaceholderArtifact("shot_hyperframes_"+unitShotID, "HYPERFRAMES_SHOT", fmt.Sprintf("%s_hyperframes_overlay.mp4", shotID), "video/mp4", "hyperframes_shot", shotID),
 			shotPlaceholderArtifact("shot_video_"+unitShotID, "SHOT_VIDEO_CLIP", fmt.Sprintf("%s_video_clip.mp4", shotID), "video/mp4", "shot_video_clip", shotID),
+			shotPlaceholderArtifact("shot_complete_"+unitShotID, "COMPOSITED_SHOT_VIDEO", fmt.Sprintf("%s_complete_shot.mp4", shotID), "video/mp4", "composited_shot_video", shotID),
 			shotPlaceholderArtifact("shot_audio_"+unitShotID, "SHOT_AUDIO", fmt.Sprintf("%s_voiceover.wav", shotID), "audio/wav", "shot_audio", shotID),
 			shotPlaceholderArtifact("shot_subtitle_"+unitShotID, "SHOT_SUBTITLE", fmt.Sprintf("%s_subtitle.srt", shotID), "text/plain", "shot_subtitle", shotID),
 			shotPlaceholderArtifact("shot_asset_package_"+unitShotID, "SHOT_ASSET_PACKAGE", fmt.Sprintf("%s_asset_package.json", shotID), "application/json", "shot_asset_package", shotID),
 		)
 	}
 
+	productionGuide := buildShotProductionGuide(shotGuides, routeCounts, len(requests))
 	contentPkg := map[string]interface{}{
 		"videoPrompts":               videoPrompts,
 		"externalGenerationRequests": requests,
 		"shotAssetPackages":          packages,
+		"productionGuide":            productionGuide,
 		"artifacts":                  artifacts,
-		"summary":                    "已基于 shotList 本地生成可复制到浏览器外部平台的独立 shot 视频提示词；当前不依赖图片或视频生成 API。",
+		"summary":                    "Shot 视频生成资料已准备好：每个 shot 都来自口播稿，并明确画面变化、HyperFrames / AIGC 分工、需要用户去产物页处理的素材和后续合成方式。",
 	}
 	contentBytes, _ := json.Marshal(contentPkg)
 	topArtifacts := buildSkillStageArtifacts(toolName, skillName, false, true)
@@ -3909,8 +3998,151 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 		"videoPrompts":               videoPrompts,
 		"externalGenerationRequests": requests,
 		"shotAssetPackages":          packages,
+		"productionGuide":            productionGuide,
 		"summary":                    contentPkg["summary"],
 	}, true
+}
+
+func buildShotProductionGuide(shotGuides []interface{}, routeCounts map[string]int, externalRequestCount int) map[string]interface{} {
+	return map[string]interface{}{
+		"title":                 "Shot 视频生成资料质量门禁",
+		"stage":                 "Shot 视频生成资料",
+		"summary":               "这个阶段不是最终渲染，而是在检查每个 shot 都来自口播稿，并且已经把画面变化、HyperFrames / AIGC 分工、参考图和上传回填要求说清楚。",
+		"qualityGateExplainer":  "质量门禁会确认这些资料能否进入后续制作：HyperFrames 本地生成精确文字、UI、字幕或图形包装；AIGC 部分由系统调用 provider，或由用户在产物页复制提示词到外部平台生成后上传。",
+		"assetsPageActionLabel": "去产物页查看提示词和上传入口",
+		"shotCount":             len(shotGuides),
+		"externalRequestCount":  externalRequestCount,
+		"routeBreakdown":        routeCounts,
+		"shotGuides":            shotGuides,
+	}
+}
+
+func userFacingShotRouteLabel(route string, hasExternalRequest bool) string {
+	normalized := strings.ToLower(strings.TrimSpace(route))
+	switch {
+	case containsAny(normalized, "hybrid", "aigc_bg", "overlay"):
+		return "AIGC 视频 + HyperFrames 合成"
+	case containsAny(normalized, "image", "keyframe"):
+		return "AIGC 参考图 + HyperFrames 合成"
+	case containsAny(normalized, "screen", "record", "录屏"):
+		return "录屏 / 用户素材 + HyperFrames 包装"
+	case containsAny(normalized, "hyperframes", "html"):
+		return "HyperFrames 本地生成"
+	case containsAny(normalized, "aigc", "jimeng", "即梦", "video"):
+		if hasExternalRequest {
+			return "AIGC 视频 + HyperFrames 合成"
+		}
+		return "AIGC 视频"
+	case hasExternalRequest:
+		return "AIGC 视频 + HyperFrames 合成"
+	default:
+		return "HyperFrames 本地生成"
+	}
+}
+
+func userFacingAIGCAction(required bool, requestID string) string {
+	if required {
+		return fmt.Sprintf("AIGC 参考视频：需要用户在产物页复制提示词生成并上传，上传后系统按 requestId=%s 关联到当前 shot。", requestID)
+	}
+	return "AIGC 素材：当前 shot 不需要用户手动生成；如后续返修需要素材，系统会在产物页补充提示词和上传入口。"
+}
+
+type shotLayerPlan struct {
+	AIGCPrompt        string
+	HyperframesPrompt string
+	FFmpegFusionPlan  string
+	TextSafeLayout    string
+}
+
+func buildShotLayerPlan(shotID string, duration int, visual, narration, camera, lighting, composition, shotSize, assetIntent, humorBeat, timeRelationship, tone string, actionBeats []string, overallPrompt string) shotLayerPlan {
+	if duration <= 0 {
+		duration = 6
+	}
+	visualIntent := trimSentencePunctuation(cleanDreaminaVibeText(visual))
+	if visualIntent == "" {
+		visualIntent = trimSentencePunctuation(cleanDreaminaVibeText(narration))
+	}
+	if visualIntent == "" {
+		visualIntent = "根据口播内容设计本 shot 的主体画面变化"
+	}
+	narrationIntent := trimSentencePunctuation(cleanDreaminaVibeText(narration))
+	if narrationIntent == "" {
+		narrationIntent = "保留当前 shot 的口播语义"
+	}
+	actionText := strings.Join(compactStrings(actionBeats), "；")
+	if actionText == "" {
+		actionText = "用 2-3 个清晰动作表达画面推进，不做跨 shot 依赖"
+	}
+	textSafeLayout := buildTextSafeLayoutGuide(composition, shotSize)
+	cameraHint := trimSentencePunctuation(strings.Join(compactStrings([]string{camera, lighting, shotSize}), "，"))
+	if cameraHint == "" {
+		cameraHint = "镜头稳定，运动克制，画面信息清楚"
+	}
+	directorGoal := trimSentencePunctuation(cleanDreaminaVibeText(assetIntent))
+	humorMoment := trimSentencePunctuation(cleanDreaminaVibeText(humorBeat))
+	timeCue := trimSentencePunctuation(cleanDreaminaVibeText(timeRelationship))
+	toneCue := trimSentencePunctuation(cleanDreaminaVibeText(tone))
+
+	aigcLines := []string{
+		fmt.Sprintf("AIGC 视频层：为 %s 生成 %d 秒 16:9 背景或局部动态视频素材。", shotID, duration),
+		"画面来源：" + visualIntent + "。",
+		"动作节奏：" + actionText + "。",
+		"镜头和氛围：" + cameraHint + "。",
+		"构图留白：" + textSafeLayout + "。",
+		"生成边界：AIGC 只负责背景、人物/道具运动、氛围和镜头变化；不要生成文字、字幕、Logo、水印、UI 文案或可读汉字，避免乱码和错字。",
+		"交付形态：可以是完整背景视频，也可以是局部视频素材；文字区保持纯色、弱纹理或干净空间，方便后续叠加 HyperFrames 文字层。",
+	}
+	if directorGoal != "" {
+		aigcLines = append(aigcLines, "导演目标："+directorGoal+"。")
+	}
+	if humorMoment != "" {
+		aigcLines = append(aigcLines, "反差动作："+humorMoment+"。")
+	}
+	if timeCue != "" {
+		aigcLines = append(aigcLines, "时间节奏："+timeCue+"。")
+	}
+	if toneCue != "" {
+		aigcLines = append(aigcLines, "情绪边界："+toneCue+"。")
+	}
+	if overall := trimSentencePunctuation(cleanDreaminaVibeText(overallPrompt)); overall != "" {
+		aigcLines = append(aigcLines, "整体风格参考："+limitPromptRunes(overall, 900)+"。")
+	}
+
+	hyperframesLines := []string{
+		fmt.Sprintf("HyperFrames 文字 / 图形层：为 %s 本地生成精确文字、关键帧、UI 卡片、流程标签和字幕。", shotID),
+		"文字内容来自口播：" + narrationIntent + "。",
+		"画面承接：" + visualIntent + "。",
+		"关键帧设计：" + actionText + "。",
+		"排版要求：" + textSafeLayout + "；所有中文、标题、字幕、按钮、流程词都由本地字体渲染，不交给 AIGC 生成，避免乱码。",
+		"视觉定位：HyperFrames 像可控的演示/PPT 信息层，负责高可读文字、图形强调、节奏点和安全区覆盖，不重复生成 AIGC 背景。",
+	}
+
+	fusionLines := []string{
+		fmt.Sprintf("FFmpeg 融合：把 %s 的 AIGC 视频层与 HyperFrames 文字 / 图形层合成为一个完整 shot。", shotID),
+		"先统一 AIGC 视频和 HyperFrames 输出的分辨率、fps、像素格式、时长和首尾安全帧。",
+		"按文字安全区 overlay HyperFrames 层；如果 AIGC 只是局部素材，则裁剪进指定窗口或卡片区域。",
+		"文字、字幕、标题和流程标签以 HyperFrames 输出为准，AIGC 层中的疑似文字区域应被遮盖或裁掉。",
+		"融合后产物进入单 shot QA；未通过 QA 的素材不得进入最终拼接。",
+	}
+
+	return shotLayerPlan{
+		AIGCPrompt:        limitPromptRunes(strings.Join(compactStrings(aigcLines), "\n"), 2000),
+		HyperframesPrompt: limitPromptRunes(strings.Join(compactStrings(hyperframesLines), "\n"), 2000),
+		FFmpegFusionPlan:  limitPromptRunes(strings.Join(compactStrings(fusionLines), "\n"), 2000),
+		TextSafeLayout:    textSafeLayout,
+	}
+}
+
+func buildTextSafeLayoutGuide(composition, shotSize string) string {
+	compositionText := trimSentencePunctuation(cleanDreaminaVibeText(composition))
+	shotSizeText := trimSentencePunctuation(cleanDreaminaVibeText(shotSize))
+	if compositionText != "" {
+		return "保留文字安全区：" + compositionText + "；不要在该区域生成复杂纹理或可读文字"
+	}
+	if shotSizeText != "" {
+		return "基于" + shotSizeText + "保留右侧或下方 25%-35% 干净区域作为文字安全区"
+	}
+	return "保留右侧或下方 25%-35% 干净区域作为文字安全区，主体不要压住字幕和标题"
 }
 
 type dreaminaVibePromptInput struct {
@@ -4244,6 +4476,157 @@ func buildDeterministicShotSplitterData(toolName, skillName, topic, script strin
 		"totalDurationSec":  contentPkg["totalDurationSec"],
 		"summary":           contentPkg["summary"],
 	}, true
+}
+
+func buildDeterministicCaptionSplitterData(toolName, skillName, topic, script string, targetDurationSec int) (map[string]interface{}, bool) {
+	scriptText := extractPlainScriptText(script)
+	if strings.TrimSpace(scriptText) == "" {
+		return nil, false
+	}
+	if targetDurationSec <= 0 {
+		targetDurationSec = estimateCaptionDurationSec(scriptText)
+	}
+	if targetDurationSec < 3 {
+		targetDurationSec = 3
+	}
+	captions := splitScriptIntoCaptionTexts(scriptText)
+	if len(captions) == 0 {
+		return nil, false
+	}
+	totalRunes := 0
+	for _, caption := range captions {
+		totalRunes += len([]rune(caption))
+	}
+	if totalRunes <= 0 {
+		return nil, false
+	}
+
+	segments := make([]interface{}, 0, len(captions))
+	cursor := 0.0
+	totalDuration := float64(targetDurationSec)
+	for i, caption := range captions {
+		duration := totalDuration * float64(len([]rune(caption))) / float64(totalRunes)
+		if duration < 1.2 {
+			duration = 1.2
+		}
+		if duration > 4.5 {
+			duration = 4.5
+		}
+		end := cursor + duration
+		if i == len(captions)-1 {
+			end = totalDuration
+			if end <= cursor {
+				end = cursor + duration
+			}
+		}
+		segments = append(segments, map[string]interface{}{
+			"id":        fmt.Sprintf("cap_%03d", i+1),
+			"startSec":  secondValue(cursor),
+			"endSec":    secondValue(end),
+			"text":      caption,
+			"source":    "local_deterministic_caption_splitter",
+			"readStyle": "短句字幕，保留语义完整，不强行逐字切分。",
+		})
+		cursor = end
+	}
+
+	captionPlan := map[string]interface{}{
+		"artifactKind":      "CAPTION_PLAN",
+		"segments":          segments,
+		"totalDurationSec":  secondValue(cursor),
+		"splitPolicy":       "local_semantic_punctuation",
+		"maxSegmentHintSec": 4.5,
+		"summary":           "已本地按脚本语义和标点拆成可读字幕段，避免字幕拆分阶段等待模型超时。",
+	}
+	contentPkg := map[string]interface{}{
+		"captionPlan":      captionPlan,
+		"subtitleTimeline": segments,
+		"summary":          captionPlan["summary"],
+		"topic":            topic,
+	}
+	contentBytes, _ := json.Marshal(contentPkg)
+	content := string(contentBytes)
+	return map[string]interface{}{
+		"content":          content,
+		"package":          contentPkg,
+		"captionPlan":      captionPlan,
+		"subtitleTimeline": segments,
+		"summary":          captionPlan["summary"],
+		"artifacts":        buildSkillStageArtifacts(toolName, skillName, false, true),
+	}, true
+}
+
+func splitScriptIntoCaptionTexts(script string) []string {
+	cleaned := strings.Join(strings.Fields(script), " ")
+	if cleaned == "" {
+		return nil
+	}
+	parts := []string{}
+	var current strings.Builder
+	flush := func() {
+		text := strings.TrimSpace(current.String())
+		if text != "" {
+			parts = append(parts, splitLongCaptionText(text, 28)...)
+		}
+		current.Reset()
+	}
+	for _, r := range cleaned {
+		current.WriteRune(r)
+		switch r {
+		case '。', '！', '？', '.', '!', '?', ';', '；':
+			flush()
+		case '，', ',', '、':
+			if len([]rune(current.String())) >= 18 {
+				flush()
+			}
+		}
+	}
+	flush()
+	return parts
+}
+
+func splitLongCaptionText(text string, maxRunes int) []string {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= maxRunes || maxRunes <= 0 {
+		if len(runes) == 0 {
+			return nil
+		}
+		return []string{string(runes)}
+	}
+	parts := []string{}
+	for len(runes) > 0 {
+		end := maxRunes
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if end < len(runes) {
+			for i := end; i > maxRunes/2; i-- {
+				switch runes[i-1] {
+				case '，', ',', '、', ' ':
+					end = i
+					i = 0
+				}
+			}
+		}
+		part := strings.TrimSpace(string(runes[:end]))
+		if part != "" {
+			parts = append(parts, part)
+		}
+		runes = runes[end:]
+	}
+	return parts
+}
+
+func estimateCaptionDurationSec(script string) int {
+	runeCount := len([]rune(strings.Join(strings.Fields(script), "")))
+	if runeCount == 0 {
+		return 15
+	}
+	estimated := int(math.Ceil(float64(runeCount) / 5.5))
+	if estimated < 15 {
+		return 15
+	}
+	return estimated
 }
 
 func firstShotID(shotList []interface{}) string {
@@ -6780,6 +7163,13 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 			facts = formatKnowledgePackForPrompt(params["knowledgePack"], params["knowledgeSources"])
 			usedFacts = usedFactsFromKnowledgePack(params["knowledgePack"])
 		}
+		if facts == "" && toolName == "video_script_generator" {
+			productFacts := tangyingProductFactsForTopic(topic)
+			if len(productFacts) > 0 {
+				usedFacts = productFacts
+				facts = formatKnowledgePackForPrompt(productFacts, nil)
+			}
+		}
 		if toolName == "video_script_generator" && shouldBlockOnEmptyFreshFacts(params) && requiresFreshKnowledge(params) && !hasKnowledgeFacts(params["knowledgePack"], facts) && !hasKnowledgeContextFacts(params["knowledgeContext"]) {
 			return tool.FailureResult("video_script_generator: retrievalPolicy=required but knowledgeContext is empty")
 		}
@@ -6800,6 +7190,11 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 			return tool.SuccessResult(data)
 		}
 	}
+	if toolName == "caption_splitter" {
+		if data, ok := buildDeterministicCaptionSplitterData(toolName, skillName, topic, script, targetDurationSec); ok {
+			return tool.SuccessResult(data)
+		}
+	}
 	if toolName == "video_prompt_generator" {
 		if data, ok := buildDeterministicVideoPromptData(toolName, skillName, topic, params); ok {
 			return tool.SuccessResult(data)
@@ -6813,6 +7208,11 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	if toolName == "keyframe_prompt_generator" && videoParamsLookCinematic(topic, params) {
 		if data, ok := buildFallbackKeyframePromptData(toolName, skillName, topic, params); ok {
 			return tool.SuccessResult(data)
+		}
+	}
+	if toolName == "knowledge_researcher" {
+		if productFacts := tangyingProductFactsForTopic(topic); len(productFacts) > 0 {
+			return tool.SuccessResult(buildTangyingProductKnowledgeResearchData(toolName, skillName, productFacts))
 		}
 	}
 
@@ -6940,6 +7340,11 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 			if canonical, err := json.Marshal(contentPkg); err == nil {
 				displayContent = string(canonical)
 			}
+		}
+	}
+	if toolName == "video_script_generator" && normalizeVideoScriptTimingFields(contentPkg, targetDurationSec) {
+		if canonical, err := json.Marshal(contentPkg); err == nil {
+			displayContent = string(canonical)
 		}
 	}
 
@@ -7871,6 +8276,103 @@ func shouldBlockOnEmptyFreshFacts(params map[string]interface{}) bool {
 	return boolParam(params, "blockOnEmptyFacts", false)
 }
 
+func tangyingProductFactsForTopic(topic string) []map[string]interface{} {
+	normalized := strings.ToLower(strings.TrimSpace(topic))
+	if normalized == "" {
+		return nil
+	}
+	explicitProduct := containsAny(normalized,
+		"躺营", "tangying", "aios", "ai os", "ai operation system", "视频创作助手", "自媒体运营助手",
+		"导演台", "本系统", "这个系统", "本产品", "这个产品",
+	)
+	selfPromoIntent := containsAny(normalized,
+		"开源", "open source", "opensource", "宣传", "介绍", "发布", "上线", "完播率", "短视频节奏",
+	)
+	if !explicitProduct || !selfPromoIntent {
+		return nil
+	}
+	return []map[string]interface{}{
+		{
+			"claim":  "用户本次明确要求介绍躺营 AI 视频创作助手，并强调系统开源、用于短视频宣传、提升完播率，以及后续持续发布由本系统创作的视频内容。",
+			"source": "user_brief",
+		},
+		{
+			"claim":  "躺营 AI 视频创作助手是一套从想法开始，把选题、脚本、分镜、素材生成、审核、渲染和交付串成可追踪视频创作流水线的系统。",
+			"source": "README",
+		},
+		{
+			"claim":  "系统采用云端 Agent 编排加桌面端本地 runner 的结构，本地端负责文件、工具执行、模型配置和用户机器上的敏感凭据。",
+			"source": "README",
+		},
+		{
+			"claim":  "系统支持口播/知识类视频和影视化/AIGC shot 视频两类创作入口。",
+			"source": "README",
+		},
+		{
+			"claim":  "closed beta 视频流水线包含语义 shot 切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。",
+			"source": "README",
+		},
+		{
+			"claim":  "即梦 CLI/MCP 登录配置和文生图片、文生视频 Provider 在设置页统一管理；模型 Key 与即梦登录态保留在用户本机。",
+			"source": "README",
+		},
+	}
+}
+
+func buildTangyingProductKnowledgeResearchData(toolName, skillName string, productFacts []map[string]interface{}) map[string]interface{} {
+	facts := make([]string, 0, len(productFacts))
+	sourceSet := map[string]bool{}
+	sourceNotes := make([]string, 0)
+	for _, fact := range productFacts {
+		claim := strings.TrimSpace(ensureStringValue(fact["claim"]))
+		if claim != "" {
+			facts = append(facts, claim)
+		}
+		source := strings.TrimSpace(ensureStringValue(fact["source"]))
+		if source != "" && !sourceSet[source] {
+			sourceSet[source] = true
+			sourceNotes = append(sourceNotes, source)
+		}
+	}
+	if len(sourceNotes) == 0 {
+		sourceNotes = []string{"README", "user_brief"}
+	}
+	pkg := map[string]interface{}{
+		"facts": facts,
+		"timeline": []map[string]interface{}{
+			{"date": "当前版本", "event": "躺营 AI 视频创作助手已具备从想法到脚本、分镜、素材、审核、渲染和交付的可追踪视频创作流水线。"},
+			{"date": "closed beta", "event": "系统聚焦口播/知识类视频和影视化 AIGC shot 视频，并强化 shot QA、repair loop 与 final assembly。"},
+		},
+		"storyAngles": []string{
+			"开源不是口号，而是把 AI 视频创作流程摊开给创作者和开发者看。",
+			"用可审核阶段和本地执行器降低黑盒生成的不确定性，提升短视频节奏和完播率。",
+			"后续持续发布由本系统创作的视频内容，用真实作品验证视频创作助手能力。",
+		},
+		"risks": []string{
+			"避免宣称已具备完整自媒体运营能力，应聚焦视频创作助手定位。",
+			"涉及真实 AIGC provider、即梦积分和模型 Key 时，应说明由用户本机配置和管理。",
+		},
+		"sourceNotes": sourceNotes,
+		"summary":     "本轮事实材料确认：躺营 AI 视频创作助手是面向创作者的视频创作流水线工具，适合围绕开源、短视频节奏、可审核生产流程和持续发布真实作品进行宣传。",
+	}
+	content := ""
+	if encoded, err := json.Marshal(pkg); err == nil {
+		content = string(encoded)
+	}
+	return map[string]interface{}{
+		"content":     content,
+		"package":     pkg,
+		"facts":       pkg["facts"],
+		"timeline":    pkg["timeline"],
+		"storyAngles": pkg["storyAngles"],
+		"risks":       pkg["risks"],
+		"sourceNotes": pkg["sourceNotes"],
+		"summary":     pkg["summary"],
+		"usedFacts":   productFacts,
+		"artifacts":   buildSkillStageArtifacts(toolName, skillName, false, true),
+	}
+}
+
 func hasKnowledgeFacts(value interface{}, fallbackFacts string) bool {
 	if strings.TrimSpace(fallbackFacts) != "" {
 		return true
@@ -8350,6 +8852,290 @@ func normalizeStructuredToolContent(toolName, rawContent string) (string, map[st
 		}
 	}
 	return rawContent, contentPkg, true
+}
+
+func normalizeVideoScriptTimingFields(contentPkg map[string]interface{}, targetDurationSec int) bool {
+	if contentPkg == nil {
+		return false
+	}
+	spans := toolMapsFromValue(contentPkg["scriptSpans"], "scriptSpans", "spans", "sections")
+	if len(spans) == 0 {
+		spans = toolMapsFromValue(contentPkg["sections"], "sections", "scriptSpans", "spans")
+	}
+	if len(spans) == 0 {
+		return false
+	}
+	normalized := normalizeScriptSpanMapsForAIGC(spans, targetDurationSec)
+	if len(normalized) == 0 {
+		return false
+	}
+	contentPkg["sections"] = normalized
+	contentPkg["scriptSpans"] = normalized
+	contentPkg["shotSplitPolicy"] = map[string]interface{}{
+		"minShotDurationSec":       3,
+		"maxShotDurationSec":       15,
+		"preferredShotDurationSec": "6-8",
+		"splitByScriptSemantics":   true,
+		"splitByVisualChange":      true,
+		"normalizedBy":             "video_script_generator_timing_guard",
+	}
+	if end := scriptSpanEndSec(normalized[len(normalized)-1]); end > 0 {
+		contentPkg["estimatedDurationSec"] = secondValue(end)
+	}
+	return true
+}
+
+func normalizeScriptSpanMapsForAIGC(spans []map[string]interface{}, targetDurationSec int) []map[string]interface{} {
+	if len(spans) == 0 {
+		return nil
+	}
+	defaultDurations := distributeFallbackScriptDurations(targetDurationSec, len(spans))
+	out := make([]map[string]interface{}, 0, len(spans))
+	cursor := 0.0
+	for i, span := range spans {
+		start := floatFromInterface(firstExistingValue(span, "startSec", "start", "startTime"), cursor)
+		end := floatFromInterface(firstExistingValue(span, "endSec", "end", "endTime"), 0)
+		duration := floatFromInterface(firstExistingValue(span, "durationSec", "duration", "seconds"), 0)
+		if end <= start {
+			if duration <= 0 {
+				if i < len(defaultDurations) {
+					duration = float64(defaultDurations[i])
+				} else {
+					duration = 6
+				}
+			}
+			end = start + duration
+		}
+		duration = end - start
+		if duration <= 0 {
+			duration = 6
+			end = start + duration
+		}
+		pieces := splitScriptSpanMapForAIGCDuration(span, i, start, duration)
+		out = append(out, pieces...)
+		if len(pieces) > 0 {
+			cursor = scriptSpanEndSec(pieces[len(pieces)-1])
+		} else {
+			cursor = end
+		}
+	}
+	return mergeShortScriptSpanMaps(out)
+}
+
+func splitScriptSpanMapForAIGCDuration(span map[string]interface{}, index int, startSec, durationSec float64) []map[string]interface{} {
+	if durationSec <= 15 {
+		item := copyStringMap(span)
+		applyScriptSpanTiming(item, startSec, startSec+durationSec)
+		return []map[string]interface{}{item}
+	}
+	chunkCount := int(math.Ceil(durationSec / 15.0))
+	if chunkCount < 1 {
+		chunkCount = 1
+	}
+	text := firstReadableStringInMap(span, "scriptText", "narrationText", "content", "text")
+	textParts := splitTextIntoNParts(text, chunkCount)
+	durations := distributeDurationChunks(durationSec, chunkCount)
+	baseID := firstStringInMap(span, "id", "spanId", "scriptSpanId")
+	if baseID == "" {
+		baseID = fmt.Sprintf("SPAN_%02d", index+1)
+	}
+	baseName := firstStringInMap(span, "name", "title")
+	out := make([]map[string]interface{}, 0, chunkCount)
+	cursor := startSec
+	for i := 0; i < chunkCount; i++ {
+		nextEnd := cursor + durations[i]
+		if i == chunkCount-1 {
+			nextEnd = startSec + durationSec
+		}
+		item := copyStringMap(span)
+		childID := fmt.Sprintf("%s_%02d", baseID, i+1)
+		item["id"] = childID
+		item["spanId"] = childID
+		item["sourceSpanId"] = baseID
+		if baseName != "" {
+			item["name"] = fmt.Sprintf("%s %d/%d", baseName, i+1, chunkCount)
+		}
+		partText := ""
+		if i < len(textParts) {
+			partText = strings.TrimSpace(textParts[i])
+		}
+		if partText == "" {
+			partText = text
+		}
+		if partText != "" {
+			item["text"] = partText
+			item["scriptText"] = partText
+			item["narrationText"] = partText
+		}
+		item["visualChangeReason"] = "long_script_span_split_3_15s"
+		applyScriptSpanTiming(item, cursor, nextEnd)
+		out = append(out, item)
+		cursor = nextEnd
+	}
+	return out
+}
+
+func mergeShortScriptSpanMaps(spans []map[string]interface{}) []map[string]interface{} {
+	if len(spans) <= 1 {
+		return spans
+	}
+	out := make([]map[string]interface{}, 0, len(spans))
+	for _, span := range spans {
+		duration := scriptSpanDurationSec(span)
+		if len(out) > 0 {
+			prev := out[len(out)-1]
+			prevDuration := scriptSpanDurationSec(prev)
+			if (duration < 3 || prevDuration < 3) && duration+prevDuration <= 15 {
+				out[len(out)-1] = mergeScriptSpanMap(prev, span)
+				continue
+			}
+		}
+		out = append(out, span)
+	}
+	for _, span := range out {
+		duration := scriptSpanDurationSec(span)
+		if duration > 0 && duration < 3 {
+			start := scriptSpanStartSec(span)
+			applyScriptSpanTiming(span, start, start+3)
+			span["visualChangeReason"] = appendReason(firstStringInMap(span, "visualChangeReason"), "short_script_span_extended_to_min_3s")
+		}
+	}
+	return out
+}
+
+func mergeScriptSpanMap(left, right map[string]interface{}) map[string]interface{} {
+	merged := copyStringMap(left)
+	leftText := firstReadableStringInMap(left, "scriptText", "narrationText", "content", "text")
+	rightText := firstReadableStringInMap(right, "scriptText", "narrationText", "content", "text")
+	text := strings.TrimSpace(strings.Join(compactStrings([]string{leftText, rightText}), " "))
+	if text != "" {
+		merged["text"] = text
+		merged["scriptText"] = text
+		merged["narrationText"] = text
+	}
+	leftName := firstStringInMap(left, "name", "title")
+	rightName := firstStringInMap(right, "name", "title")
+	if leftName != "" && rightName != "" && leftName != rightName {
+		merged["name"] = leftName + " / " + rightName
+	}
+	start := scriptSpanStartSec(left)
+	duration := scriptSpanDurationSec(left) + scriptSpanDurationSec(right)
+	applyScriptSpanTiming(merged, start, start+duration)
+	merged["visualChangeReason"] = appendReason(firstStringInMap(left, "visualChangeReason"), "short_script_span_merged_to_neighbor")
+	return merged
+}
+
+func applyScriptSpanTiming(span map[string]interface{}, startSec, endSec float64) {
+	if endSec < startSec {
+		endSec = startSec
+	}
+	duration := endSec - startSec
+	span["startSec"] = secondValue(startSec)
+	span["endSec"] = secondValue(endSec)
+	span["durationSec"] = secondValue(duration)
+}
+
+func splitTextIntoNParts(text string, count int) []string {
+	text = strings.TrimSpace(text)
+	if count <= 1 {
+		return []string{text}
+	}
+	parts := splitTextByPunctuation(text)
+	if len(parts) == 0 && text != "" {
+		parts = []string{text}
+	}
+	for len(parts) < count {
+		longest := 0
+		for i := range parts {
+			if len([]rune(parts[i])) > len([]rune(parts[longest])) {
+				longest = i
+			}
+		}
+		left, right := splitSegmentInHalf(parts[longest])
+		if strings.TrimSpace(right) == "" {
+			break
+		}
+		next := append([]string{}, parts[:longest]...)
+		next = append(next, left, right)
+		next = append(next, parts[longest+1:]...)
+		parts = next
+	}
+	if len(parts) <= count {
+		for len(parts) < count {
+			parts = append(parts, "")
+		}
+		return parts
+	}
+	out := make([]string, count)
+	for i, part := range parts {
+		slot := i * count / len(parts)
+		out[slot] = strings.TrimSpace(strings.Join(compactStrings([]string{out[slot], part}), " "))
+	}
+	return out
+}
+
+func distributeDurationChunks(total float64, count int) []float64 {
+	if count <= 0 {
+		return nil
+	}
+	chunks := make([]float64, count)
+	remaining := total
+	for i := 0; i < count; i++ {
+		left := float64(count - i)
+		duration := remaining / left
+		if duration < 3 && remaining >= 3 {
+			duration = 3
+		}
+		if duration > 15 {
+			duration = 15
+		}
+		chunks[i] = duration
+		remaining -= duration
+	}
+	if math.Abs(remaining) > 0.001 {
+		chunks[count-1] += remaining
+	}
+	return chunks
+}
+
+func scriptSpanStartSec(span map[string]interface{}) float64 {
+	return floatFromInterface(firstExistingValue(span, "startSec", "start", "startTime"), 0)
+}
+
+func scriptSpanEndSec(span map[string]interface{}) float64 {
+	return floatFromInterface(firstExistingValue(span, "endSec", "end", "endTime"), 0)
+}
+
+func scriptSpanDurationSec(span map[string]interface{}) float64 {
+	duration := floatFromInterface(firstExistingValue(span, "durationSec", "duration", "seconds"), 0)
+	if duration > 0 {
+		return duration
+	}
+	start := scriptSpanStartSec(span)
+	end := scriptSpanEndSec(span)
+	if end > start {
+		return end - start
+	}
+	return 0
+}
+
+func secondValue(value float64) interface{} {
+	rounded := math.Round(value*100) / 100
+	if math.Abs(rounded-math.Round(rounded)) < 0.001 {
+		return int(math.Round(rounded))
+	}
+	return rounded
+}
+
+func appendReason(existing, reason string) string {
+	existing = strings.TrimSpace(existing)
+	if existing == "" {
+		return reason
+	}
+	if strings.Contains(existing, reason) {
+		return existing
+	}
+	return existing + "," + reason
 }
 
 func buildDynamicAgentSystemPrompt(toolName, topic, style, platform string) string {

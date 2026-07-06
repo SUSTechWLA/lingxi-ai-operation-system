@@ -7,7 +7,7 @@
 1. 先有故事大纲，再有详细剧本。
 2. 先有角色、场景、道具档案，再生成全局参考图。
 3. 每个 shot 必须能解释“为什么这样拍”，不能只有画面描述。
-4. AIGC 负责情绪、动作和视觉隐喻；HyperFrames 负责精确文字、UI、字幕和安全包装。
+4. AIGC 负责无文字背景、局部动态、情绪、动作和视觉隐喻；HyperFrames 负责精确文字、UI、字幕、关键帧和安全包装；FFmpeg 负责把两层融合成完整 shot。
 5. 每个 shot 都要 QA，QA 结论必须能指导返修或重生成。
 
 ## 标准链路
@@ -86,9 +86,19 @@ resolution_type: 2k 或 4k
 | 角色、场景、道具设定图 | Dreamina `generate_image` MCP | 生成全局参考图 |
 | 情绪化动作、无厘头视觉隐喻 | Dreamina `generate_video` MCP | 生成 3-15 秒独立 shot |
 
+每个需要外部视频生成的 shot 会产出三层用户可读计划：
+
+| 字段 | 说明 |
+|---|---|
+| `aigcPlan` | 给 Dreamina/JiMeng 或其他外部平台的 AIGC 视频层提示词。它来自 shot 画面说明和动作节奏，但只要求生成无文字背景或局部动态素材，并明确预留文字安全区。 |
+| `hyperframesPlan` | 本地 HyperFrames 文字 / 图形层计划。中文标题、字幕、关键帧、流程标签、UI 卡片和精确排版都在这里处理。 |
+| `ffmpegFusionPlan` | 合成计划。上传 AIGC 素材后，系统用 FFmpeg 统一规格、裁剪、叠加、遮盖疑似文字区域，并输出完整 shot。 |
+
+如果画面包含重要文字，优先让 AIGC 参考图或视频在文字区域留白，文字由 HyperFrames 或 final subtitle 渲染，避免乱码和错误汉字。AIGC 可以生成完整背景，也可以只生成画面中的局部视频窗口；最终完整 shot 由 HyperFrames 层和 AIGC 层合成。
+
 ## Dreamina 投放 Prompt
 
-投放给 Dreamina/JiMeng `generate_video` 的 prompt 是最终画面叙述，不是内部拍摄单、工具说明或拼接说明。
+投放给 Dreamina/JiMeng `generate_video` 的 prompt 是 AIGC 视频层叙述，不是完整成片说明。用户端会同时展示 HyperFrames 和 FFmpeg 分工，但复制到外部 AIGC 平台时应聚焦背景或局部动态素材。
 
 必须写清：
 
@@ -97,6 +107,8 @@ resolution_type: 2k 或 4k
 - 每个时间段发生什么变化，例如 `0-2秒`、`2-4秒`、`4-6秒`。
 - 最后半秒画面如何稳定收束，让观众看清结果。
 - 非真人风格化、积极、干净、明亮的整体气质。
+- 文字安全区在哪里，哪些区域要保持干净、纯色或弱纹理。
+- 不要生成文字、字幕、Logo、水印、UI 文案或可读汉字，避免乱码。
 
 禁止混入：
 

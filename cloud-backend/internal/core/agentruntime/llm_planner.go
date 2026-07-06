@@ -395,7 +395,8 @@ func plannerSystemPrompt() string {
 10. hyperframes_renderer 只能在 preview 或 composition 已确认后执行。
 11. 必须输出 knowledgePolicy。
 12. 检索策略：
-    - 用户请求包含最新、最近、今天、昨天、刚刚、实时、现在、出线、夺冠、晋级、比赛结果、世界杯、奥运会、发布、上线、政策、法规、价格、票房、榜单、2026、今年、本届、现任等强时效内容时，freshnessLevel 必须为 high，retrievalPolicy 必须为 required。
+    - 用户请求包含最新、最近、今天、昨天、刚刚、实时、现在、出线、夺冠、晋级、比赛结果、世界杯、奥运会、政策、法规、价格、票房、榜单、2026、今年、本届、现任等强时效内容时，freshnessLevel 必须为 high，retrievalPolicy 必须为 required。
+    - “发布/上线/开源”只有在需要核验外部当前事实、新闻事件、版本发布时间、榜单或市场数据时才算强时效；如果用户是在宣传自己的产品、开源项目或“本系统”，且事实主要来自用户 brief 或稳定产品资料，retrievalPolicy 应为 none 或 optional。
     - 强时效检索必须从 candidateTools 中选择具备 fresh_knowledge / news_search / web_search / current_event_retrieval / fact_retrieval 等 capability 的工具，不得按固定工具名臆造。
     - 纯观点、创意故事、情感表达、稳定知识口播时，retrievalPolicy 应为 none 或 optional；没有明确理由时不要选择 fresh knowledge/search 类工具。
     - fresh knowledge/search 类工具只用于需要外部事实、新闻、实时结果或当前事件确认的任务。

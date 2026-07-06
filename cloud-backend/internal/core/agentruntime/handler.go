@@ -630,6 +630,12 @@ func enrichReviewFromSourceNode(review *Review, reviewNode *model.Node, nodesByI
 		return
 	}
 	review.SourceNodeID = source.ID
+	if len(review.RequiredOutputs) == 0 && source.Input != nil {
+		review.RequiredOutputs = stringSlice(source.Input["requiredOutputs"])
+		if len(review.RequiredOutputs) == 0 {
+			review.RequiredOutputs = stringSlice(source.Input["expectedOutput"])
+		}
+	}
 	payload := parseReviewOutputPayload(source.Output)
 	if len(payload) == 0 {
 		return

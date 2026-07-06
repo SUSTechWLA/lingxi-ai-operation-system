@@ -381,19 +381,28 @@ export function buildEnvironmentChecklist(input: EnvironmentChecklistInput): Env
   }
 
   const missingModelCapabilities = input.missingModelCapabilities || []
-  const blockingModelCapabilities = input.selectedProfile.generationMode === 'manual_import'
-    ? missingModelCapabilities.filter((capability) => capability === 'text_to_text')
-    : missingModelCapabilities
-  const optionalExternalModelCapabilities = missingModelCapabilities.filter((capability) => !blockingModelCapabilities.includes(capability))
+  const blockingModelCapabilities = missingModelCapabilities.filter((capability) => capability === 'text_to_text')
+  const optionalExternalModelCapabilities = missingModelCapabilities.filter((capability) => capability !== 'text_to_text')
+  const onlyOptionalExternalModelMissing = missingModelCapabilities.length > 0 && blockingModelCapabilities.length === 0
   const missingModelLabels = missingModelCapabilities.map(modelCapabilityLabel).join('、')
+  const optionalExternalModelLabels = optionalExternalModelCapabilities.map(modelCapabilityLabel).join('、')
   const modelState = input.modelProviderState || 'checking'
   const effectiveModelStatus: EnvironmentChecklistStatus = modelState === 'configured'
     ? 'passed'
     : modelState === 'checking'
       ? 'unknown'
-      : modelState === 'missing' && blockingModelCapabilities.length === 0 && optionalExternalModelCapabilities.length > 0
+      : modelState === 'missing' && onlyOptionalExternalModelMissing
         ? 'warning'
         : 'blocked'
+  const modelBlockerCode = modelState === 'unavailable'
+    ? 'MODEL_PROVIDER_UNAVAILABLE'
+    : modelState === 'missing' && blockingModelCapabilities.length > 0
+      ? 'MODEL_PROVIDER_TEXT_MISSING'
+      : modelState === 'missing' && onlyOptionalExternalModelMissing
+        ? 'MODEL_PROVIDER_MEDIA_OPTIONAL'
+        : modelState === 'missing'
+          ? 'MODEL_PROVIDER_MISSING'
+          : undefined
   const modelProvider: EnvironmentChecklistItem = {
     id: 'model-provider',
     label: '基础模型 API',
@@ -404,8 +413,11 @@ export function buildEnvironmentChecklist(input: EnvironmentChecklistInput): Env
         ? '正在读取本机模型 Provider 配置。'
         : modelState === 'unavailable'
           ? '本地服务未返回模型配置，请先确认本地服务可用。'
-          : `基础模型 API 未配置完整，缺少 ${missingModelLabels || '基础模型'} Provider。请在设置中填写接口地址、模型名和 Token。`,
+          : onlyOptionalExternalModelMissing
+            ? `${optionalExternalModelLabels || '文生图片、文生视频'} API 未配置；可使用 Dreamina CLI / MCP、外部平台生成或上传回填素材，不影响项目启动。`
+            : `基础模型 API 未配置完整，缺少 ${missingModelLabels || '基础模型'} Provider。请在设置中填写接口地址、模型名和 Token。`,
     actionLabel: modelState === 'configured' || modelState === 'checking' ? undefined : '打开设置',
+    blockerCode: modelBlockerCode,
   }
 
   const profile: EnvironmentChecklistItem = {
@@ -450,6 +462,7 @@ export function buildEnvironmentChecklist(input: EnvironmentChecklistInput): Env
 export function visibleEnvironmentIssues(items: EnvironmentChecklistItem[]): EnvironmentChecklistItem[] {
   return items.filter((item) => {
     if (item.status === 'passed') return false
+    if (item.id === 'model-provider' && item.blockerCode === 'MODEL_PROVIDER_MEDIA_OPTIONAL') return false
     if (item.id === 'video-profile') return false
     if (item.id.startsWith('local-tool-')) return false
     return item.status === 'blocked' || item.status === 'warning' || item.status === 'unknown'
@@ -462,7 +475,7 @@ export function buildExternalGenerationTaskPackage(request: ExternalGenerationTa
     request.target?.aspectRatio ? `画幅：${request.target.aspectRatio}` : '',
     request.target?.resolution ? `分辨率：${request.target.resolution}` : '',
     request.target?.durationSec ? `时长：${request.target.durationSec}s` : '',
-    request.promptCharLimit ? `Prompt 字数上限：${request.promptCharLimit}` : '',
+    request.promptCharLimit ? `提示词字数上限：${request.promptCharLimit}` : '',
     `参考图上限：${request.referenceImageLimit || 6}`,
   ].filter(Boolean)
   const parameterText = parameters.length ? parameters.join('\n') : '按外部平台默认参数生成。'
@@ -474,25 +487,25 @@ export function buildExternalGenerationTaskPackage(request: ExternalGenerationTa
       normalizeStringList(ref.locks).length ? `锁定：${normalizeStringList(ref.locks).join('、')}` : '',
       `地址：${ref.storageRef}`,
     ].filter(Boolean).join('\n')).join('\n\n')
-    : '无参考图；直接使用 Prompt 生成。'
+    : '无参考图；直接使用文字提示词生成。'
   const negativePrompt = request.negativePrompt?.trim() || '无'
   const fullText = [
-    '# 完整任务包',
+    '# 完整 AI 生成参考资料',
     '',
     `Request ID：${request.requestId}`,
     request.shotId ? `Shot：${request.shotId}` : '',
     `类型：${request.kind === 'image' ? '图片 / 关键帧' : '视频片段'}`,
     '',
-    '## Positive Prompt',
+    '## 文字提示词 / Positive Prompt',
     request.prompt.trim(),
     '',
-    '## Negative Prompt',
+    '## 负面提示词 / Negative Prompt',
     negativePrompt,
     '',
-    '## 参数',
+    '## 生成参数',
     parameterText,
     '',
-    '## 参考图',
+    '## 图片参考资料 / 参考图',
     referenceManifest,
     '',
     '## 上传回填',
@@ -506,6 +519,60 @@ export function buildExternalGenerationTaskPackage(request: ExternalGenerationTa
     parameterText,
     referenceManifest,
   }
+}
+
+export function externalGenerationReferencesFromArtifacts(artifacts: DirectorArtifactRecord[], limit = 6): ExternalGenerationTaskReference[] {
+  const references: ExternalGenerationTaskReference[] = []
+  const seen = new Set<string>()
+  for (const artifact of artifacts) {
+    if (references.length >= limit) break
+    if (!artifact.storageRef || isExternalGenerationRequestArtifact(artifact)) continue
+    const slot = shotAssetSlotForArtifact(artifact)
+    if (slot !== 'reference' && slot !== 'storyboard') continue
+    const metadata = artifact.metadata || {}
+    const role = firstNonEmpty([
+      stringValue(metadata.referenceRole) || '',
+      stringValue(metadata.role) || '',
+      slot === 'storyboard' ? 'storyboard' : 'reference',
+    ])
+    const key = artifact.storageRef || artifact.id
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    references.push({
+      id: firstNonEmpty([stringValue(metadata.referenceAssetId) || '', stringValue(metadata.assetId) || '', artifact.unitId || '', artifact.id || '']),
+      label: artifact.name || artifact.id,
+      role,
+      storageRef: artifact.storageRef,
+      artifactId: artifact.id,
+      locks: firstReferenceLocks(metadata),
+    })
+  }
+  return references
+}
+
+export function mergeExternalGenerationTaskReferences(
+  request: ExternalGenerationTaskRequest,
+  artifactReferences: ExternalGenerationTaskReference[] = [],
+): ExternalGenerationTaskRequest {
+  const limit = request.referenceImageLimit || 6
+  const merged: ExternalGenerationTaskReference[] = []
+  const seen = new Set<string>()
+  for (const ref of [...(request.references || []), ...artifactReferences]) {
+    const key = ref.storageRef || ref.id || ref.artifactId
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    merged.push(ref)
+    if (merged.length >= limit) break
+  }
+  return { ...request, references: merged }
+}
+
+function firstReferenceLocks(metadata: Record<string, unknown>): string[] | undefined {
+  for (const key of ['locks', 'lockedDimensions', 'invariants', 'mustPreserve', 'preserve']) {
+    const locks = normalizeStringList(metadata[key])
+    if (locks.length > 0) return locks
+  }
+  return undefined
 }
 
 export function externalGenerationReferenceCopyText(reference: ExternalGenerationTaskReference, index?: number): string {
@@ -616,11 +683,11 @@ export function externalGenerationGuideSteps(request: ExternalGenerationGuideReq
   const targetText = targetParts.length ? `，参数按 ${targetParts.join('、')} 设置` : ''
 
   return [
-    '当前没有可用的图片或视频 API 配置，系统不会自动生成素材；请用下面的 Prompt 在浏览器中的外部生成平台完成。',
-    `点击“复制 Prompt”，在浏览器打开你常用的${platformLabel}，把 Prompt 粘贴进去${targetText}。`,
+    '当前没有可用的图片或视频 API 配置，系统不会自动生成素材；请用下面的文字提示词在浏览器中的外部生成平台完成。',
+    `点击“复制文字提示词”，在浏览器打开你常用的${platformLabel}，把文字提示词粘贴进去${targetText}。`,
     referenceCount > 0
       ? `如平台支持参考图，按顺序添加本卡片列出的参考图，最多使用 ${referenceLimit} 张。`
-      : '如果没有参考图，直接使用 Prompt 生成，不需要等待系统补图。',
+      : '如果没有参考图，直接使用文字提示词生成，不需要等待系统补图。',
     `每个 shot 单独生成，尽量不要引用其他 shot 的未确认画面；如果需要转场，把转场放在本 shot 结尾。`,
     `生成完成后导出${kindLabel}文件，回到本页点击“上传结果”，系统会登记到素材库并关联当前 shot。`,
   ]
@@ -1160,15 +1227,14 @@ export function buildShotReviewGroups(artifacts: DirectorArtifactRecord[]): Dire
       const reviewPacket = shotArtifacts.find(isShotReviewPacket)
       const references = shotArtifacts.filter(isShotReferenceArtifact)
       const media = shotArtifacts.filter(isShotMediaArtifact)
-      const sourceArtifact = reviewPacket || shotArtifacts[0]
       const strategyArtifacts = globalStrategyArtifacts.length > 0 ? [...shotArtifacts, ...globalStrategyArtifacts] : shotArtifacts
       return {
         shotId,
         status: aggregateShotStatus(shotArtifacts),
-        title: shotTitle(shotId, sourceArtifact),
-        narrationText: shotNarrationText(sourceArtifact),
-        visualText: shotVisualText(sourceArtifact),
-        durationSec: shotDurationSec(sourceArtifact),
+        title: shotTitleFromArtifacts(shotId, shotArtifacts, reviewPacket),
+        narrationText: shotNarrationTextFromArtifacts(shotArtifacts, reviewPacket),
+        visualText: shotVisualTextFromArtifacts(shotArtifacts, reviewPacket),
+        durationSec: shotDurationSecFromArtifacts(shotArtifacts, reviewPacket),
         generationStrategy: shotGenerationStrategy(strategyArtifacts),
         referenceRoles: uniqueStrings(references.map((artifact) => stringValue(artifact.metadata?.referenceRole) || stringValue(artifact.metadata?.role) || displayNameForArtifact(artifact.kind))),
         artifactCounts: {
@@ -1246,19 +1312,19 @@ function buildShotAssetSlots(artifacts: DirectorArtifactRecord[]): DirectorShotA
     },
     {
       kind: 'base-media',
-      label: '基础画面',
-      description: 'AIGC 背景视频、首帧图片或用户上传素材。',
+      label: 'AIGC 素材',
+      description: 'AIGC 参考视频、参考图或用户上传素材；可根据本 shot 的参考图和文字提示词生成。',
       uploadKind: 'video',
     },
     {
       kind: 'overlay',
-      label: '文字叠层',
-      description: 'HyperFrames 字幕、卡片、UI、图表和精确文字层。',
+      label: 'HyperFrames',
+      description: 'HyperFrames 本地生成的字幕、卡片、UI、图表和精确文字层。',
     },
     {
       kind: 'video',
-      label: '视频',
-      description: '外部视频平台生成后的本 shot 视频片段。',
+      label: '完整 shot',
+      description: '合并后的完整 shot 片段；通过 QA 后才能进入最终拼接。',
       uploadKind: 'video',
     },
   ]
@@ -1647,6 +1713,10 @@ function shotIdForArtifact(artifact: DirectorArtifactRecord): string {
   const metadata = artifact.metadata || {}
   const direct = firstString(metadata, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id'])
   if (direct) return direct
+  const inlineDirect = shotContentRecordsForArtifact(artifact)
+    .map((record) => firstString(record, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id']))
+    .find(Boolean)
+  if (inlineDirect) return inlineDirect
   const generationPlan = objectValue(metadata.generationPlan) || objectValue(metadata.renderStrategy) || objectValue(metadata.shotGenerationPlan)
   const generationPlanShotId = generationPlan ? shotIdFromStrategyRecord(generationPlan) : ''
   if (generationPlanShotId) return generationPlanShotId
@@ -1697,10 +1767,10 @@ function isShotReferenceArtifact(artifact: DirectorArtifactRecord): boolean {
 }
 
 function isShotMediaArtifact(artifact: DirectorArtifactRecord): boolean {
-  const mediaKinds = ['SHOT_ASSET_PACKAGE', 'SHOT_AUDIO', 'SHOT_KEYFRAME', 'SHOT_VIDEO_CLIP', 'SHOT_SUBTITLE', 'HYPERFRAMES_SHOT']
+  const mediaKinds = ['SHOT_ASSET_PACKAGE', 'SHOT_AUDIO', 'SHOT_KEYFRAME', 'SHOT_VIDEO_CLIP', 'SHOT_SUBTITLE', 'HYPERFRAMES_SHOT', 'COMPOSITED_SHOT_VIDEO']
   if (mediaKinds.includes(artifact.kind)) return true
   const artifactType = stringValue(artifact.metadata?.artifactType) || stringValue(artifact.metadata?.artifact_kind)
-  return ['shot_asset_package', 'shot_audio', 'shot_keyframe', 'shot_video_clip', 'shot_subtitle', 'hyperframes_shot'].includes(artifactType || '')
+  return ['shot_asset_package', 'shot_audio', 'shot_keyframe', 'shot_video_clip', 'shot_subtitle', 'hyperframes_shot', 'composited_shot_video'].includes(artifactType || '')
 }
 
 function aggregateShotStatus(artifacts: DirectorArtifactRecord[]): DirectorArtifactStatus {
@@ -1711,31 +1781,101 @@ function aggregateShotStatus(artifacts: DirectorArtifactRecord[]): DirectorArtif
   return 'pending'
 }
 
-function shotTitle(shotId: string, artifact: DirectorArtifactRecord | undefined): string {
-  if (!artifact) return shotId
-  return firstString(artifact.metadata || {}, ['title', 'visual', 'name']) || artifact.name || shotId
+function shotTitleFromArtifacts(shotId: string, artifacts: DirectorArtifactRecord[], preferred?: DirectorArtifactRecord): string {
+  const ordered = preferred ? [preferred, ...artifacts.filter((artifact) => artifact.id !== preferred.id)] : artifacts
+  const title = firstStringFromShotArtifacts(ordered, ['title', 'displayTitle', 'shotTitle', 'name'])
+  if (title && !looksLikeTechnicalArtifactName(title)) return title
+  const visualTitle = firstStringFromShotArtifacts(ordered, ['visualTitle', 'visualGoal'])
+  if (visualTitle) return truncateReviewLine(visualTitle, 48)
+  return shotId
 }
 
-function shotNarrationText(artifact: DirectorArtifactRecord | undefined): string {
-  if (!artifact) return ''
-  return firstString(artifact.metadata || {}, ['narrationText', 'scriptText', 'voiceoverText', 'subtitleText'])
+function shotNarrationTextFromArtifacts(artifacts: DirectorArtifactRecord[], preferred?: DirectorArtifactRecord): string {
+  const ordered = preferred ? [preferred, ...artifacts.filter((artifact) => artifact.id !== preferred.id)] : artifacts
+  return firstStringFromShotArtifacts(ordered, ['narrationText', 'scriptText', 'voiceoverText', 'subtitleText', 'narration', 'sourceScriptSegment', 'text'])
 }
 
-function shotVisualText(artifact: DirectorArtifactRecord | undefined): string {
-  if (!artifact) return ''
-  return firstString(artifact.metadata || {}, ['visual', 'visualText', 'visualGoal', 'description'])
+function shotVisualTextFromArtifacts(artifacts: DirectorArtifactRecord[], preferred?: DirectorArtifactRecord): string {
+  const ordered = preferred ? [preferred, ...artifacts.filter((artifact) => artifact.id !== preferred.id)] : artifacts
+  return firstStringFromShotArtifacts(ordered, ['visual', 'visualText', 'visualGoal', 'visualChange', 'description', 'scene', 'prompt'])
 }
 
-function shotDurationSec(artifact: DirectorArtifactRecord | undefined): number | undefined {
-  if (!artifact) return undefined
-  const metadata = artifact.metadata || {}
-  const value = metadata.durationSec
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string') {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) return parsed
+function shotDurationSecFromArtifacts(artifacts: DirectorArtifactRecord[], preferred?: DirectorArtifactRecord): number | undefined {
+  const ordered = preferred ? [preferred, ...artifacts.filter((artifact) => artifact.id !== preferred.id)] : artifacts
+  for (const artifact of ordered) {
+    for (const record of shotContentRecordsForArtifact(artifact)) {
+      const direct = firstNumber(record, ['durationSec', 'duration', 'targetDurationSec'])
+      if (direct !== undefined) return direct
+      const target = objectValue(record.target)
+      const targetDuration = target ? firstNumber(target, ['durationSec', 'duration']) : undefined
+      if (targetDuration !== undefined) return targetDuration
+    }
   }
   return undefined
+}
+
+function firstStringFromShotArtifacts(artifacts: DirectorArtifactRecord[], keys: string[]): string {
+  for (const artifact of artifacts) {
+    for (const record of shotContentRecordsForArtifact(artifact)) {
+      const value = firstString(record, keys)
+      if (value) return value
+      const userGuide = objectValue(record.userFacingGuide)
+      if (userGuide) {
+        const userGuideValue = firstString(userGuide, keys)
+        if (userGuideValue) return userGuideValue
+      }
+      const prompts = objectValue(record.prompts)
+      if (prompts) {
+        const promptValue = firstString(prompts, keys)
+        if (promptValue) return promptValue
+      }
+    }
+  }
+  return ''
+}
+
+function firstNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = numberValue(record[key])
+    if (value !== undefined) return value
+  }
+  return undefined
+}
+
+function shotContentRecordsForArtifact(artifact: DirectorArtifactRecord): Array<Record<string, unknown>> {
+  const records: Array<Record<string, unknown>> = []
+  const pushRecord = (value: unknown) => {
+    const record = parseShotContentRecord(value)
+    if (!record) return
+    records.push(record)
+    for (const key of ['package', 'payload', 'data', 'content', 'request', 'shot', 'userFacingGuide', 'aigcVideo']) {
+      const nested = parseShotContentRecord(record[key])
+      if (nested) records.push(nested)
+    }
+  }
+  pushRecord(artifact.metadata || {})
+  pushRecord(artifact.inlineJson)
+  pushRecord(artifact.metadata?.inlineContent)
+  pushRecord(artifact.metadata?.content)
+  pushRecord(artifact.metadata?.package)
+  return records
+}
+
+function parseShotContentRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === 'string') {
+    const parsed = parseEmbeddedJSON(value.trim())
+    return objectValue(parsed)
+  }
+  return objectValue(value)
+}
+
+function looksLikeTechnicalArtifactName(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  return normalized.endsWith('.json') ||
+    normalized.endsWith('.mp4') ||
+    normalized.endsWith('.png') ||
+    normalized.includes('external_generation_request') ||
+    normalized.includes('asset_package')
 }
 
 function semanticKindForStage(stageName: string | undefined): string | undefined {
@@ -2600,10 +2740,24 @@ function toolRoleFromName(raw: string): string {
 
 export function reviewDisplayTitle(review: AgentReviewItem | undefined): string {
   if (!review) return '暂无待审核'
+  if (review.reviewPhase === 'quality_gate') {
+    const qualityLabels: Record<string, string> = {
+      video_script_generator: '质量门禁：口播脚本',
+      shot_splitter: '质量门禁：分镜计划',
+      card_plan_generator: '质量门禁：卡片计划',
+      video_prompt_generator: '质量门禁：Shot 视频生成资料',
+      render_strategy_planner: '质量门禁：渲染策略',
+      hyperframes_renderer: '质量门禁：最终渲染',
+    }
+    const base = review.tool && qualityLabels[review.tool] ? qualityLabels[review.tool] : '质量门禁'
+    return `${base}（目标产物：${qualityGateTargetLabel(review)}）`
+  }
   const title = stringValue(review.humanReview?.title)
   if (title) return title
   const labels: Record<string, string> = {
     proposal_generator: '审核创作方案',
+    knowledge_researcher: '脚本依据 / 创作依据',
+    fact_checker: '事实核查结果',
     video_script_generator: '审核口播脚本',
     shot_splitter: '审核分镜计划',
     card_plan_generator: '审核卡片计划',
@@ -2611,15 +2765,124 @@ export function reviewDisplayTitle(review: AgentReviewItem | undefined): string 
     hyperframes_renderer: '审核最终渲染',
   }
   if (review.tool && labels[review.tool]) return labels[review.tool]
-  if (review.reviewPhase === 'quality_gate') return '审核创作产物'
-  return '审核阶段产物'
+  return '审核产物'
+}
+
+export function reviewOutputPanelTitle(review: AgentReviewItem | undefined): string {
+  if (isScriptEvidenceReview(review)) return '脚本依据'
+  if (isShotProductionReview(review)) return 'Shot 制作说明'
+  if (review?.reviewPhase === 'quality_gate') return `质量门禁报告：${qualityGateTargetLabel(review)}`
+  if (review?.tool === 'video_script_generator') return '口播脚本'
+  return '审核产物'
+}
+
+export function reviewOutputPanelHint(review: AgentReviewItem | undefined): string {
+  if (isScriptEvidenceReview(review)) return '这是口播脚本使用的事实、角度和风险提示，作为辅助材料回看。'
+  if (isShotProductionReview(review)) return `本门禁只检查目标产物：${qualityGateTargetLabel(review)}。这是口播稿拆出的每个 shot 的画面变化、HyperFrames / AIGC 分工、参考图和上传回填说明。`
+  if (review?.reviewPhase === 'quality_gate') return `本门禁只检查目标产物：${qualityGateTargetLabel(review)}。这是自动质检结果，用来解释系统为什么放行或要求返修。`
+  if (review?.tool === 'video_script_generator') return '请重点审核这版口播脚本，确认后才会继续进入下游创作。'
+  return '选择任一记录即可回看对应产物。'
+}
+
+export function qualityGateTargetLines(review: AgentReviewItem | undefined): string[] {
+  if (!review || review.reviewPhase !== 'quality_gate') return []
+  return [`目标产物：${qualityGateTargetLabel(review)}`]
+}
+
+export function qualityGateTargetLabel(review: AgentReviewItem | undefined): string {
+  if (!review || review.reviewPhase !== 'quality_gate') return ''
+  const explicitTargets = [
+    ...(review.requiredOutputs || []),
+    ...(review.reviewArtifactKinds || []),
+    review.artifactId || '',
+  ]
+  const labels = uniqueStrings(explicitTargets.map(qualityGateOutputLabel).filter(Boolean))
+  if (labels.length > 0) return labels.slice(0, 4).join('、')
+  const toolTargets: Record<string, string> = {
+    proposal_generator: '创意方案',
+    knowledge_researcher: '脚本依据',
+    fact_checker: '事实核查结果',
+    video_script_generator: '视频脚本',
+    shot_splitter: 'Shot清单',
+    card_plan_generator: '卡片分镜',
+    video_prompt_generator: '视频提示词、Shot独立素材包',
+    render_strategy_planner: '渲染策略',
+    hyperframes_project_generator: '视频结构、预览快照',
+    hyperframes_renderer: '最终视频、渲染报告',
+    video_frame_qa: '抽帧质检报告',
+    publish_copy_generator: '发布文案',
+    artifact_packager: '交付包',
+  }
+  if (review.tool && toolTargets[review.tool]) return toolTargets[review.tool]
+  const source = [review.sourceNodeId, review.stepId, review.nodeId, review.reviewReason].filter(Boolean).join(' ').toLowerCase()
+  if (source.includes('script')) return '视频脚本'
+  if (source.includes('shot') || source.includes('split')) return 'Shot清单'
+  if (source.includes('prompt')) return '视频提示词、Shot独立素材包'
+  if (source.includes('render')) return '最终视频、渲染报告'
+  return '待识别产物'
+}
+
+function qualityGateOutputLabel(value: string): string {
+  const normalized = value.trim()
+  if (!normalized) return ''
+  const byField: Record<string, string> = {
+    proposal: '创意方案',
+    proposalPacket: '创意方案',
+    script: '视频脚本',
+    voiceover_script: '视频脚本',
+    videoScript: '视频脚本',
+    scriptSpans: '脚本分段',
+    shotList: 'Shot清单',
+    shotQueue: 'Shot清单',
+    shotGenerationPlans: 'Shot生成计划',
+    cardPlan: '卡片分镜',
+    compositionSpec: '视频结构',
+    videoPrompts: '视频提示词',
+    video_prompt: '视频提示词',
+    keyframePrompts: '关键帧提示词',
+    shotAssetPackages: 'Shot独立素材包',
+    externalGenerationRequests: '素材依赖请求',
+    referenceAssetPlan: '素材策略',
+    continuityReport: '一致性报告',
+    styleProfile: '风格配置',
+    hyperframesProject: '视频结构',
+    previewSnapshots: '预览快照',
+    previewReport: '预览报告',
+    video: '最终视频',
+    final_video: '最终视频',
+    renderReport: '渲染报告',
+    visualQAReport: '抽帧质检报告',
+    publish_copy: '发布文案',
+    packageMarkdown: '交付包',
+    packageManifest: '交付包',
+  }
+  if (byField[normalized]) return byField[normalized]
+  const upper = normalized.toUpperCase()
+  const display = displayNameForArtifact(upper)
+  return display !== upper ? display : normalized
+}
+
+export function isShotProductionReview(review: AgentReviewItem | undefined): boolean {
+  return review?.tool === 'video_prompt_generator' ||
+    review?.nodeId?.includes('video_prompt_generator') === true ||
+    review?.stepId?.includes('video_prompt_generator') === true
+}
+
+export function preferredActiveReview(reviews: AgentReviewItem[] = []): AgentReviewItem | undefined {
+  const actionable = reviews.filter(isActionablePendingReview)
+  return actionable.find((review) => !isScriptEvidenceReview(review)) || actionable[0]
 }
 
 export function visibleReviewHistory(reviews: AgentReviewItem[] = []): AgentReviewItem[] {
   return reviews.filter((review) => {
+    if (review.reviewPhase === 'quality_gate' && review.status === 'APPROVED') return false
     if (review.status === 'PENDING') return isActionablePendingReview(review)
     return ['APPROVED', 'REJECTED'].includes(String(review.status))
   })
+}
+
+function isScriptEvidenceReview(review: AgentReviewItem | undefined): boolean {
+  return review?.tool === 'knowledge_researcher' || review?.tool === 'fact_checker'
 }
 
 export function nextSelectedReviewId(
@@ -2698,7 +2961,7 @@ export function reviewQualityReportLines(review: AgentReviewItem | undefined): s
   const report = output ? objectValue(output.qualityReport) : undefined
   if (!report) return []
 
-  const lines: string[] = []
+  const lines: string[] = [...qualityGateTargetLines(review)]
   const score = typeof report.score === 'number' ? report.score : Number(report.score)
   if (Number.isFinite(score)) {
     const threshold = review.reviewReason?.match(/(\d+)/)?.[1]
@@ -2765,12 +3028,16 @@ export function reviewOutputText(review: AgentReviewItem | undefined): string {
   if (content) return normalizeReviewContentText(content)
   const output = objectValue(review.reviewOutput)
   if (!output) return ''
+  const outputShotProductionText = formatShotProductionReviewText(output)
+  if (outputShotProductionText) return outputShotProductionText
   const outputShotQueueText = formatShotQueueReviewText(output)
   if (outputShotQueueText) return outputShotQueueText
   const summary = stringValue(output.summary)
-  if (summary) return summary
+  if (summary) return formatLegacyShotProductionReviewText(summary) || summary
   const packageValue = objectValue(output.package)
   if (packageValue) {
+    const packageShotProductionText = formatShotProductionReviewText(packageValue)
+    if (packageShotProductionText) return packageShotProductionText
     const packageShotQueueText = formatShotQueueReviewText(packageValue)
     if (packageShotQueueText) return packageShotQueueText
     return JSON.stringify(packageValue, null, 2)
@@ -2781,13 +3048,33 @@ export function reviewOutputText(review: AgentReviewItem | undefined): string {
 function normalizeReviewContentText(content: string): string {
   const trimmed = content.trim()
   if (!trimmed) return ''
+  const legacyShotProductionText = formatLegacyShotProductionReviewText(trimmed)
+  if (legacyShotProductionText) return legacyShotProductionText
   const parsed = parseEmbeddedJSON(trimmed)
   if (parsed !== undefined) {
+    const shotProductionText = formatShotProductionReviewText(parsed)
+    if (shotProductionText) return shotProductionText
     const shotQueueText = formatShotQueueReviewText(parsed)
     if (shotQueueText) return shotQueueText
     return JSON.stringify(parsed, null, 2)
   }
   return content
+}
+
+function formatLegacyShotProductionReviewText(content: string): string {
+  if (!content.includes('已基于 shotList 本地生成可复制到浏览器外部平台的独立 shot 视频提示词')) return ''
+  return [
+    '# Shot 视频生成资料',
+    '',
+    '这是质量门禁：Shot 视频生成资料。系统已经把 shotList 转成逐 shot 的图片 / 视频生成资料；这里不是最终视频，也不是最终渲染结果。',
+    '',
+    '- 去产物页查看每个 shot 的口播脚本、画面说明、图片提示词、视频提示词和参考图。',
+    '- 需要 AIGC 的素材会显示对应的提示词和上传入口；有参考图就一起使用，没有参考图也可以只用提示词生成。',
+    '- 在外部平台、Dreamina CLI 或后续 API 生成素材后，回到产物页上传到对应 shot 的对应素材槽。',
+    '- 上传完成后，系统再把 HyperFrames 内容、AIGC 素材、口播和字幕合成完整 shot。',
+    '',
+    '**下一步：去产物页查看提示词和上传入口。**',
+  ].join('\n')
 }
 
 function formatShotQueueReviewText(value: unknown): string {
@@ -2818,6 +3105,78 @@ function formatShotQueueReviewText(value: unknown): string {
     if (hints.length > 0) lines.push(`- 参考方向：${hints.join('、')}`)
   }
   return lines.join('\n').trim()
+}
+
+function formatShotProductionReviewText(value: unknown): string {
+  const record = objectValue(value)
+  if (!record) return ''
+  const prompts = arrayOfObjects(record.videoPrompts)
+  const packages = arrayOfObjects(record.shotAssetPackages)
+  const requests = arrayOfObjects(record.externalGenerationRequests)
+  const guide = objectValue(record.productionGuide)
+  if (prompts.length === 0 && requests.length === 0 && !guide) return ''
+
+  const packagesByShot = new Map(packages.map((item) => [firstString(item, ['shotId', 'id']), item]))
+  const requestsByShot = new Map(requests.map((item) => [firstString(item, ['shotId', 'id']), item]))
+  const shotIds = uniqueStrings([
+    ...prompts.map((item) => firstString(item, ['shotId', 'id'])),
+    ...packages.map((item) => firstString(item, ['shotId', 'id'])),
+    ...requests.map((item) => firstString(item, ['shotId', 'id'])),
+  ])
+  if (shotIds.length === 0) return ''
+
+  const summary = stringValue(record.summary) || stringValue(guide?.summary)
+  const lines: string[] = [
+    '# Shot 视频生成资料',
+    '',
+    '这是质量门禁：Shot 视频生成资料。系统在这里检查每个 shot 是否已经从口播稿拆出完整画面单元，并说明画面变化、HyperFrames / AIGC 分工、参考图和上传回填要求。',
+    '',
+    `共 ${shotIds.length} 个 shot，${requests.length} 个需要用户在产物页处理 AIGC 素材。`,
+  ]
+  if (summary) lines.push('', summary)
+
+  for (const [index, shotId] of shotIds.entries()) {
+    const prompt = prompts.find((item) => firstString(item, ['shotId', 'id']) === shotId) || {}
+    const pkg = packagesByShot.get(shotId) || {}
+    const request = requestsByShot.get(shotId)
+    const duration = numberValue(prompt.durationSec) ?? numberValue(pkg.durationSec)
+    const narration = firstString(prompt, ['narrationText', 'scriptText', 'text']) || firstString(pkg, ['narration', 'sourceScriptSegment'])
+    const visual = firstString(prompt, ['visual', 'visualChange', 'visualGoal', 'description']) || firstString(pkg, ['visual', 'visualChange', 'visualGoal'])
+    const userGuide = objectValue(pkg.userFacingGuide)
+    const route = firstString(pkg, ['productionRoute', 'assetRoute', 'renderStrategy', 'mode']) || firstString(userGuide || {}, ['productionRoute'])
+    const references = arrayOfObjects(pkg.referenceImages).length ? arrayOfObjects(pkg.referenceImages) : arrayOfObjects(request?.references)
+    const actionBeats = normalizeStringList(pkg.actionBeats).length ? normalizeStringList(pkg.actionBeats) : normalizeStringList(userGuide?.actionBeats)
+    const requestId = firstString(request || {}, ['requestId', 'id']) || firstString(objectValue(pkg.aigcVideo) || {}, ['requestId'])
+
+    lines.push('', `## ${shotId || `SHOT_${String(index + 1).padStart(2, '0')}`}${duration ? ` · ${duration}s` : ''}`, '')
+    if (narration) lines.push(`- 来自口播：${truncateReviewLine(narration, 140)}`)
+    if (visual) lines.push(`- 画面变化：${truncateReviewLine(visual, 140)}`)
+    lines.push(`- 制作方式：${shotProductionRouteLabel(route, Boolean(request))}`)
+    if (actionBeats.length > 0) lines.push(`- 动作节奏：${actionBeats.slice(0, 4).join(' / ')}`)
+    if (request) {
+      lines.push(`- AIGC 参考视频：需要用户在产物页复制提示词生成并上传${requestId ? `（${requestId}）` : ''}。`)
+    } else {
+      lines.push('- AIGC 素材：当前 shot 暂不需要用户手动生成；如果后续返修需要，产物页会出现提示词和上传入口。')
+    }
+    if (references.length > 0) {
+      lines.push(`- 参考图：${references.map((ref) => firstString(ref, ['label', 'id', 'role'])).filter(Boolean).slice(0, 4).join('、')}`)
+    }
+    lines.push('- HyperFrames：本地生成精确文字、UI、字幕或图形包装；如果有 AIGC 素材，会在上传确认后合成完整 shot。')
+    lines.push('- 合并预览：后续预览 / 渲染阶段会把 HyperFrames 内容、AIGC 素材、口播和字幕合成完整 shot。')
+  }
+
+  lines.push('', '**下一步：去产物页查看提示词和上传入口。**')
+  return lines.join('\n').trim()
+}
+
+function shotProductionRouteLabel(route: string, hasRequest: boolean): string {
+  const normalized = route.trim().toLowerCase()
+  if (normalized.includes('aigc 视频 + hyperframes') || normalized.includes('hybrid') || normalized.includes('overlay')) return 'AIGC 视频 + HyperFrames 合成'
+  if (normalized.includes('aigc 参考图') || normalized.includes('image') || normalized.includes('keyframe')) return 'AIGC 参考图 + HyperFrames 合成'
+  if (normalized.includes('screen') || normalized.includes('录屏')) return '录屏 / 用户素材 + HyperFrames 包装'
+  if (normalized.includes('hyperframes') || normalized.includes('html')) return 'HyperFrames 本地生成'
+  if (normalized.includes('aigc') || normalized.includes('video') || hasRequest) return 'AIGC 视频 + HyperFrames 合成'
+  return 'HyperFrames 本地生成'
 }
 
 function arrayOfObjects(value: unknown): Array<Record<string, unknown>> {
@@ -2915,6 +3274,7 @@ export function displayNameForArtifact(kind: string) {
     SHOT_VIDEO_CLIP: 'Shot视频片段',
     SHOT_SUBTITLE: 'Shot字幕',
     HYPERFRAMES_SHOT: 'HyperFrames片段',
+    COMPOSITED_SHOT_VIDEO: '完整Shot片段',
     EXTERNAL_GENERATION_REQUEST: '素材依赖请求',
     PUBLISH_COPY: '发布文案',
     PROJECT_PACKAGE: '交付包',

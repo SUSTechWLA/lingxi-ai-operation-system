@@ -2,6 +2,17 @@
 
 All notable release changes are tracked here. README only carries the current version summary; detailed historical notes live in this file.
 
+## Unreleased
+
+### Added
+
+- Added layered shot material packages with `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so AIGC generates text-free background or partial motion, HyperFrames renders exact Chinese text and keyframes, and FFmpeg fuses the layers into complete shots.
+- Added Director Studio checks and UI coverage for progressive shot material review, editable prompts/references, prompt approval locks, and AIGC/HyperFrames/FFmpeg layer explanations.
+
+### Changed
+
+- Updated beta, QA, cinematic workflow, and project-introduction documentation to keep code, user-facing docs, and Wiki-style workflow notes aligned.
+
 ## v0.1.13 - 2026-07-05
 
 ### Changed
