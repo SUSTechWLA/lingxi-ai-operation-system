@@ -249,6 +249,15 @@ export async function fetchLocalArtifactFile(params: {
   return response.json() as Promise<LocalArtifactFileResponse>
 }
 
+export function localArtifactRawUrl(params: {
+  projectId: string
+  id: string
+}): string {
+  const path = `/api/local/artifacts/${encodeURIComponent(params.id)}?projectId=${encodeURIComponent(params.projectId)}&raw=1`
+  if (shouldUseSameOriginLocalAgentProxy()) return path
+  return localAgentUrl(path)
+}
+
 export async function createLocalDiagnostics(reason: string): Promise<LocalDiagnosticsResponse> {
   const response = await fetch(localAgentUrl('/api/local/diagnostics'), {
     method: 'POST',
@@ -320,6 +329,15 @@ export async function checkJiMengLogin(deviceCode: string, poll = 30): Promise<M
 
 function localAgentUrl(path: string): string {
   return `${getLocalAgentBaseUrl().replace(/\/$/, '')}${path}`
+}
+
+function shouldUseSameOriginLocalAgentProxy(): boolean {
+  if (typeof window === 'undefined') return false
+  const { protocol, hostname, port } = window.location
+  return (protocol === 'http:' || protocol === 'https:') &&
+    (hostname === '127.0.0.1' || hostname === 'localhost') &&
+    port === '3000' &&
+    !configuredLocalAgentUrl
 }
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {
