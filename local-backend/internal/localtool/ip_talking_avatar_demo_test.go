@@ -23,6 +23,9 @@ func TestLocalIpTalkingAvatarProjectPromoDemo(t *testing.T) {
 	if outputDir == "" {
 		outputDir = filepath.Join(repoRoot, "tmp", "ip_talking_avatar_project_promo")
 	}
+	if !filepath.IsAbs(outputDir) {
+		outputDir = filepath.Join(repoRoot, outputDir)
+	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
