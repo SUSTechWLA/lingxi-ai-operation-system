@@ -113,6 +113,7 @@ const (
 	CommandLocalFileImport            = "LOCAL_FILE_IMPORT"
 	CommandLocalMediaIndex            = "LOCAL_MEDIA_INDEX"
 	CommandLocalMCPToolCall           = "LOCAL_MCP_TOOL_CALL"
+	CommandLocalIpTalkingAvatarRender = "LOCAL_IP_TALKING_AVATAR_RENDER"
 	CommandBundleExtract              = "BUNDLE_EXTRACT"
 	CommandFinalReview                = "FINAL_REVIEW"
 	CommandVideoFrameQA               = "VIDEO_FRAME_QA"
@@ -134,6 +135,7 @@ var allowedCommands = map[string]bool{
 	CommandLocalFileImport:            true,
 	CommandLocalMediaIndex:            true,
 	CommandLocalMCPToolCall:           true,
+	CommandLocalIpTalkingAvatarRender: true,
 	CommandBundleExtract:              true,
 	CommandFinalReview:                true,
 	CommandVideoFrameQA:               true,

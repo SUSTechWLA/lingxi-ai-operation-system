@@ -39,6 +39,7 @@ func Probe(ctx context.Context, workspaceRoot string) ProbeResult {
 		probeCommand("artifact_packager", "ARTIFACT_PACKAGE", "node"),
 		probeCommand("local_file_importer", "LOCAL_FILE_IMPORT", "node"),
 	)
+	result.Capabilities = append(result.Capabilities, probeLocalIpTalkingAvatarRender())
 	renderAvailable, renderVersion := probeHTTP(ctx, "http://127.0.0.1:8787/health")
 	result.Capabilities = append(result.Capabilities, Capability{
 		ToolName:  "hyperframes_renderer",
@@ -60,6 +61,25 @@ func probeCommand(toolName, semanticCommand, binary string) Capability {
 		return Capability{ToolName: toolName, Command: semanticCommand, Available: false}
 	}
 	return Capability{ToolName: toolName, Command: semanticCommand, Available: true, Version: path}
+}
+
+func probeLocalIpTalkingAvatarRender() Capability {
+	ffmpeg, ffmpegErr := exec.LookPath("ffmpeg")
+	ffprobe, ffprobeErr := exec.LookPath("ffprobe")
+	if ffmpegErr != nil || ffprobeErr != nil {
+		return Capability{
+			ToolName:  "local_ip_talking_avatar_render",
+			Command:   "LOCAL_IP_TALKING_AVATAR_RENDER",
+			Available: false,
+			Version:   "requires ffmpeg and ffprobe",
+		}
+	}
+	return Capability{
+		ToolName:  "local_ip_talking_avatar_render",
+		Command:   "LOCAL_IP_TALKING_AVATAR_RENDER",
+		Available: true,
+		Version:   fmt.Sprintf("ffmpeg=%s; ffprobe=%s", ffmpeg, ffprobe),
+	}
 }
 
 func probeHTTP(ctx context.Context, url string) (bool, string) {

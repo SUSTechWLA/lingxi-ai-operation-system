@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "hypergen-ip-puppet/v1",
+  "characterId": "aster",
+  "displayName": "阿斯特",
+  "sourceReferences": [
+    "ip形象/阿斯特/reference.png",
+    "ip形象/阿斯特/front.png",
+    "ip形象/阿斯特/front-3q-left.png",
+    "ip形象/阿斯特/left-side.png",
+    "ip形象/阿斯特/right-side.png"
+  ],
+  "styleNotes": "黑白金蓝的星象学者，白色三角头盔，黑色面部屏幕，蓝色发光眼和单片星盘镜片，胸前星图核心，头顶悬浮知识晶体。动作沉稳、克制、逻辑清晰。",
+  "parts": [
+    {"id": "root", "type": "group", "pivot": {"x": 960, "y": 950}, "description": "整角色位移和缩放"},
+    {"id": "robe", "type": "body", "pivot": {"x": 960, "y": 720}, "description": "白色长袍和深色斗篷"},
+    {"id": "head", "type": "helmet", "pivot": {"x": 960, "y": 430}, "description": "白色三角头盔"},
+    {"id": "faceScreen", "type": "screen", "pivot": {"x": 960, "y": 450}, "description": "黑色面屏"},
+    {"id": "eyeLeft", "type": "eye", "pivot": {"x": 930, "y": 450}, "description": "蓝色发光眼"},
+    {"id": "monocle", "type": "prop", "pivot": {"x": 1030, "y": 450}, "description": "金色星盘单片镜"},
+    {"id": "mouth", "type": "mouth", "pivot": {"x": 960, "y": 515}, "description": "克制的口型开合"},
+    {"id": "leftArm", "type": "limb", "pivot": {"x": 830, "y": 650}, "description": "左手持平板或资料"},
+    {"id": "rightArm", "type": "limb", "pivot": {"x": 1090, "y": 650}, "description": "右手做指示和结论强调"},
+    {"id": "knowledgeOrb", "type": "prop", "pivot": {"x": 960, "y": 220}, "description": "悬浮知识晶体"},
+    {"id": "chestCore", "type": "prop", "pivot": {"x": 960, "y": 650}, "description": "胸前星图核心"}
+  ],
+  "mouthShapes": ["mouth_closed", "mouth_e", "mouth_i", "mouth_a", "mouth_o", "mouth_u"],
+  "motionChannels": {
+    "bodyFloat": {"range": [-8, 8], "unit": "px", "default": 0},
+    "headTilt": {"range": [-5, 5], "unit": "deg", "default": 0},
+    "mouthOpen": {"range": [0, 1], "unit": "ratio", "default": 0},
+    "blink": {"range": [0, 1], "unit": "ratio", "default": 0},
+    "rightArmPoint": {"range": [0, 1], "unit": "ratio", "default": 0},
+    "orbPulse": {"range": [0, 1], "unit": "ratio", "default": 0.5},
+    "lensGlint": {"range": [0, 1], "unit": "ratio", "default": 0}
+  },
+  "motions": [
+    {"name": "idle_breath", "channels": ["bodyFloat", "orbPulse"]},
+    {"name": "blink", "channels": ["blink"]},
+    {"name": "head_nod", "channels": ["bodyFloat", "headTilt"]},
+    {"name": "gesture_point", "channels": ["rightArmPoint", "lensGlint"]},
+    {"name": "gesture_present", "channels": ["rightArmPoint", "orbPulse"]},
+    {"name": "glow_pulse", "channels": ["orbPulse", "lensGlint"]}
+  ],
+  "live2dPreparation": {
+    "recommended": true,
+    "requirements": ["Cubism model3.json", "texture atlas", "ParamMouthOpenY", "ParamEyeLOpen", "ParamAngleX", "motion3.json"],
+    "bridge": "future renderer mode live2d"
+  },
+  "hypergenUsage": {
+    "recommendedLayer": "hypergen",
+    "bindLipSync": "mouthOpen <- lip_sync_timeline.open; mouth shape <- lip_sync_timeline.mouth",
+    "bindMotion": "motion_timeline.motion drives named motions above",
+    "safeTextZones": ["left_side", "lower_third"]
+  }
+}

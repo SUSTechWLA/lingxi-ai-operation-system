@@ -305,6 +305,88 @@ func TestRegisterVideoCreationExternalToolsInstallsMCPGenerationRunnerManifest(t
 	}
 }
 
+func TestRegisterVideoCreationExternalToolsInstallsIPArollDirectorManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("ip_aroll_director")
+	if manifest == nil {
+		t.Fatal("expected ip_aroll_director to be registered")
+	}
+	if manifest.Type != "builtin_prompt_tool" {
+		t.Fatalf("Type = %q, want builtin_prompt_tool", manifest.Type)
+	}
+	if manifest.Parameters["assetRoot"].Type != "string" {
+		t.Fatalf("assetRoot parameter missing or wrong type: %#v", manifest.Parameters["assetRoot"])
+	}
+	if manifest.Parameters["narration"].Required {
+		t.Fatalf("narration should stay planner-optional; tool execution validates it: %#v", manifest.Parameters["narration"])
+	}
+	if manifest.Output["ipArollPlan"].Type != "object" {
+		t.Fatalf("ipArollPlan output missing or wrong type: %#v", manifest.Output["ipArollPlan"])
+	}
+	if !containsString(manifest.Capabilities, "ip_character_aroll") {
+		t.Fatalf("ip_aroll_director capabilities should include ip_character_aroll, got %#v", manifest.Capabilities)
+	}
+	if !containsString(manifest.Capabilities, "video_creation") {
+		t.Fatalf("ip_aroll_director capabilities should include video_creation, got %#v", manifest.Capabilities)
+	}
+}
+
+func TestRegisterVideoCreationExternalToolsInstallsLocalIPTalkingAvatarRenderManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("local_ip_talking_avatar_render")
+	if manifest == nil {
+		t.Fatal("expected local_ip_talking_avatar_render to be registered")
+	}
+	if manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
+		t.Fatalf("ExecutionPlane = %q, want local", manifest.ExecutionPlane)
+	}
+	if manifest.LocalCommand != "LOCAL_IP_TALKING_AVATAR_RENDER" {
+		t.Fatalf("LocalCommand = %q, want LOCAL_IP_TALKING_AVATAR_RENDER", manifest.LocalCommand)
+	}
+	if !manifest.RequiresUserDevice {
+		t.Fatal("local_ip_talking_avatar_render should require user device")
+	}
+	if !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact || !manifest.ApprovalPolicy.BlocksDownstream {
+		t.Fatalf("approval policy = %#v, want blocking after_artifact", manifest.ApprovalPolicy)
+	}
+	if manifest.HumanReview == nil || !manifest.HumanReview.Required {
+		t.Fatalf("human review missing: %#v", manifest.HumanReview)
+	}
+	for _, capability := range []string{"cartoon_ip_talking_video", "audio_driven_lip_sync", "sprite_2d_avatar_render", "svg_2d_puppet_render", "hypergen_controllable_ip_parts", "character_voice_profile", "local_video_render", "subtitle_composition", "ffmpeg_video_composition"} {
+		if !containsString(manifest.Capabilities, capability) {
+			t.Fatalf("capabilities missing %s: %#v", capability, manifest.Capabilities)
+		}
+	}
+	if manifest.Parameters["characterId"].Type != "string" || !manifest.Parameters["characterId"].Required {
+		t.Fatalf("characterId parameter missing or not required: %#v", manifest.Parameters["characterId"])
+	}
+	if manifest.Parameters["audioPath"].Type != "string" || manifest.Parameters["audioPath"].Required {
+		t.Fatalf("audioPath parameter should be optional when script preview narration is available: %#v", manifest.Parameters["audioPath"])
+	}
+	if manifest.Parameters["renderMode"].Type != "string" || !containsString(manifest.Parameters["renderMode"].Enum, "svg2d") || !containsString(manifest.Parameters["renderMode"].Enum, "live2d") {
+		t.Fatalf("renderMode parameter should include svg2d/live2d: %#v", manifest.Parameters["renderMode"])
+	}
+	if manifest.Output["videoPath"].Type != "string" || manifest.Output["qa"].Type != "object" || manifest.Output["scenePath"].Type != "string" || manifest.Output["voiceProfilePath"].Type != "string" {
+		t.Fatalf("outputs missing videoPath/scenePath/voiceProfilePath/qa: %#v", manifest.Output)
+	}
+	for _, kind := range []string{"VIDEO", "AVATAR_LAYER_VIDEO", "IP_TALKING_AVATAR_TIMELINE", "IP_TALKING_AVATAR_SCENE", "IP_TALKING_AVATAR_VOICE_PROFILE", "RENDER_REPORT"} {
+		if !containsString(manifest.ArtifactPolicy.ArtifactKinds, kind) {
+			t.Fatalf("artifact kinds missing %s: %#v", kind, manifest.ArtifactPolicy.ArtifactKinds)
+		}
+	}
+	if manifest.ProviderCapabilities["overall"] == nil {
+		t.Fatalf("overall provider capability missing: %#v", manifest.ProviderCapabilities)
+	}
+	notFor, _ := manifest.ProviderCapabilities["notFor"].([]string)
+	if !containsString(notFor, "aigc_video_generation") || !containsString(notFor, "realistic_human_face_generation") {
+		t.Fatalf("notFor should exclude AIGC and realistic human generation, got %#v", manifest.ProviderCapabilities["notFor"])
+	}
+}
+
 func TestRegisterVideoCreationExternalToolsInstallsVideoFrameQAManifest(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
@@ -1736,8 +1818,92 @@ func TestHyperFramesShotFirstFallbackUsesShotSectionsAndNarration(t *testing.T) 
 	}
 }
 
+func TestExecuteIPArollDirectorBuildsControllableCharacterPlan(t *testing.T) {
+	assetRoot := t.TempDir()
+	createTestIPCharacterAssets(t, assetRoot, "波波")
+	createTestIPCharacterAssets(t, assetRoot, "阿斯特")
+
+	result := executeLocalVideoCreationTool("ip_aroll_director", map[string]interface{}{
+		"assetRoot":   assetRoot,
+		"characters":  []interface{}{"波波", "阿斯特"},
+		"shotId":      "SHOT_01",
+		"narration":   "今天我们用两个小人讲清楚视频创作流程。先让波波提出问题，再让阿斯特给出解释。",
+		"durationSec": 8,
+		"layout":      "two_host",
+	}, tool.ToolContext{TaskID: "task-ip-aroll", NodeID: "ip_aroll_exec"})
+
+	if !result.Success {
+		t.Fatalf("ip_aroll_director should succeed, got error: %s", result.Error)
+	}
+	plan, ok := result.Data["ipArollPlan"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected ipArollPlan map, got %#v", result.Data["ipArollPlan"])
+	}
+	characters, ok := plan["characters"].([]map[string]interface{})
+	if !ok || len(characters) != 2 {
+		t.Fatalf("expected two character plans, got %#v", plan["characters"])
+	}
+	for _, character := range characters {
+		assets, ok := character["assets"].(map[string]interface{})
+		if !ok || assets["front"] == "" || assets["reference"] == "" {
+			t.Fatalf("character assets should include front/reference views, got %#v", character)
+		}
+		rig, ok := character["rig"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("character should include editable puppet rig, got %#v", character)
+		}
+		controls, ok := rig["controls"].(map[string]interface{})
+		if !ok || controls["mouthOpen"] == nil || controls["blink"] == nil || controls["bodyBounce"] == nil {
+			t.Fatalf("character rig should expose mouth/blink/body controls, got %#v", rig)
+		}
+	}
+	rigs, ok := plan["rigs"].(map[string]interface{})
+	if !ok || rigs["bobo"] == nil || rigs["aster"] == nil {
+		t.Fatalf("ipArollPlan should expose root rig map for characters, got %#v", plan["rigs"])
+	}
+	timeline, ok := plan["timeline"].([]map[string]interface{})
+	if !ok || len(timeline) < 2 {
+		t.Fatalf("expected narration timeline with multiple beats, got %#v", plan["timeline"])
+	}
+	seenSpeak := false
+	seenGesture := false
+	for _, beat := range timeline {
+		if beat["mouthCue"] == "talking" {
+			seenSpeak = true
+		}
+		if beat["gesture"] != "" && beat["gesture"] != "idle" {
+			seenGesture = true
+		}
+		lipSync, ok := beat["lipSync"].([]map[string]interface{})
+		if !ok || len(lipSync) < 2 {
+			t.Fatalf("timeline beat should include editable lip sync samples, got %#v", beat)
+		}
+		if lipSync[0]["viseme"] == "" || lipSync[0]["mouthOpen"] == nil {
+			t.Fatalf("lip sync samples should include viseme and mouthOpen, got %#v", lipSync)
+		}
+		motion, ok := beat["motion"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("timeline beat should include motion track, got %#v", beat)
+		}
+		keyframes, ok := motion["keyframes"].([]map[string]interface{})
+		if !ok || len(keyframes) < 3 {
+			t.Fatalf("motion track should include deterministic keyframes, got %#v", motion)
+		}
+		if beat["expressionCue"] == "" {
+			t.Fatalf("timeline beat should expose expressionCue for UI editing, got %#v", beat)
+		}
+	}
+	if !seenSpeak || !seenGesture {
+		t.Fatalf("timeline should include talking mouth cues and visible gestures, got %#v", timeline)
+	}
+	hyperframesPlan, ok := plan["hyperframes"].(map[string]interface{})
+	if !ok || hyperframesPlan["layerRole"] != "oral_aroll_character_layer" {
+		t.Fatalf("expected HyperFrames character layer instructions, got %#v", plan["hyperframes"])
+	}
+}
+
 func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
-	data := buildHyperFramesDataJSON("佛得角奇迹", "完整口播", `[{"shotId":"SHOT_01","scriptText":"..."}]`, `[]`, `[]`, "16:9", "{}")
+	data := buildHyperFramesDataJSON("佛得角奇迹", "完整口播", `[{"shotId":"SHOT_01","scriptText":"..."}]`, `[]`, `[]`, "16:9", "{}", "")
 	for _, required := range []string{
 		`"productionMode": "shot_first"`,
 		`"reviewUnit": "shot"`,
@@ -1753,7 +1919,7 @@ func TestHyperFramesDataJSONDeclaresShotFirstMode(t *testing.T) {
 
 func TestHyperFramesDataJSONSanitizesInternalPlaceholders(t *testing.T) {
 	videoPrompts := `[{"shotId":"SHOT_01","narrationText":"开场口播","prompt":{"field":"prompt","reason":"USER_ASSET_REDACTED","redacted":true}}]`
-	data := buildHyperFramesDataJSON("宣传片", "完整口播", `[{"shotId":"SHOT_01"}]`, videoPrompts, `{{mcp_generation.output.shotAssetPackages}}`, "16:9", "{}")
+	data := buildHyperFramesDataJSON("宣传片", "完整口播", `[{"shotId":"SHOT_01"}]`, videoPrompts, `{{mcp_generation.output.shotAssetPackages}}`, "16:9", "{}", "{{ip_aroll.output.ipArollPlan}}")
 	if strings.Contains(data, "USER_ASSET_REDACTED") || strings.Contains(data, "{{") {
 		t.Fatalf("hyperframes data json should not leak internal placeholders, got:\n%s", data)
 	}
@@ -1776,6 +1942,103 @@ func TestHyperFramesDataJSONSanitizesInternalPlaceholders(t *testing.T) {
 	packages, ok := decoded["shotAssetPackages"].([]interface{})
 	if !ok || len(packages) != 0 {
 		t.Fatalf("unresolved shot asset packages template should fall back to empty array, got %#v", decoded["shotAssetPackages"])
+	}
+	plan, ok := decoded["ipArollPlan"].(map[string]interface{})
+	if !ok || len(plan) != 0 {
+		t.Fatalf("unresolved ip aroll template should fall back to empty object, got %#v", decoded["ipArollPlan"])
+	}
+}
+
+func TestHyperFramesDataJSONIncludesIPArollPlan(t *testing.T) {
+	ipPlan := `{"shotId":"SHOT_01","characters":[{"id":"bobo","name":"波波"}],"timeline":[{"startSec":0,"endSec":2,"characterId":"bobo","mouthCue":"talking"}]}`
+	data := buildHyperFramesDataJSON("IP口播", "完整口播", `[{"shotId":"SHOT_01"}]`, `[]`, `[]`, "16:9", "{}", ipPlan)
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+		t.Fatalf("hyperframes data json should remain valid JSON: %v\n%s", err, data)
+	}
+	plan, ok := decoded["ipArollPlan"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected ipArollPlan object, got %#v", decoded["ipArollPlan"])
+	}
+	if plan["shotId"] != "SHOT_01" {
+		t.Fatalf("ipArollPlan should preserve shot id, got %#v", plan)
+	}
+}
+
+func TestHyperFramesFallbackRendersIPArollCharacterLayer(t *testing.T) {
+	ipPlan := `{
+		"characters":[{"id":"bobo","name":"波波","assets":{"front":"/tmp/ip/波波/front.png"}}],
+		"timeline":[{"startSec":0,"endSec":2,"characterId":"bobo","characterName":"波波","view":"front","action":"speak","gesture":"small_hand_wave","mouthCue":"talking","position":{"x":0.32,"y":0.67,"scale":0.7}}]
+	}`
+	html := buildMinimalHyperFramesHTML("IP口播", "完整口播", `[{"shotId":"SHOT_01","durationSec":2,"scriptText":"开场"}]`, "16:9", ipPlan)
+
+	for _, required := range []string{
+		`class="ip-character-layer`,
+		`data-character-id="bobo"`,
+		`/tmp/ip/波波/front.png`,
+		`mouth-flap`,
+		`small_hand_wave`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("ip aroll fallback html should contain %q, got:\n%s", required, html)
+		}
+	}
+}
+
+func TestHyperFramesFallbackRendersIPPuppetRigLayer(t *testing.T) {
+	ipPlan := `{
+		"characters":[{
+			"id":"bobo",
+			"name":"波波",
+			"assets":{"front":"/tmp/ip/波波/front.png"},
+			"rig":{
+				"rigType":"face_overlay_2_5d",
+				"faceOverlay":{"x":0.50,"y":0.30,"width":0.40,"height":0.18},
+				"controls":{"mouthOpen":{"type":"number"},"blink":{"type":"boolean"},"bodyBounce":{"type":"number"}}
+			}
+		}],
+		"timeline":[{
+			"startSec":0,
+			"endSec":2,
+			"characterId":"bobo",
+			"characterName":"波波",
+			"view":"front",
+			"action":"speak",
+			"gesture":"small_hand_wave",
+			"mouthCue":"talking",
+			"expressionCue":"friendly_speaking",
+			"position":{"x":0.32,"y":0.67,"scale":0.7},
+			"lipSync":[{"timeSec":0,"viseme":"a","mouthOpen":0.75},{"timeSec":0.18,"viseme":"closed","mouthOpen":0}],
+			"motion":{"keyframes":[{"timeSec":0,"translateY":0},{"timeSec":1,"translateY":-10},{"timeSec":2,"translateY":0}]}
+		}]
+	}`
+	html := buildMinimalHyperFramesHTML("IP口播", "完整口播", `[{"shotId":"SHOT_01","durationSec":2,"scriptText":"开场"}]`, "16:9", ipPlan)
+
+	for _, required := range []string{
+		`class="ip-face-rig`,
+		`class="ip-eyes`,
+		`class="ip-mouth`,
+		`data-lipsync=`,
+		`--mouth-open`,
+		`viseme-a`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("ip puppet fallback html should contain %q, got:\n%s", required, html)
+		}
+	}
+}
+
+func createTestIPCharacterAssets(t *testing.T, root, name string) {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("create character dir: %v", err)
+	}
+	for _, file := range []string{"reference.png", "front.png", "front-3q-left.png", "left-side.png", "right-side.png", "back.png", "back-3q-right.png"} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte("fake-png"), 0644); err != nil {
+			t.Fatalf("write test asset %s: %v", file, err)
+		}
 	}
 }
 

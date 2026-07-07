@@ -25,6 +25,7 @@
 - 支持观点、知识、教程和图文卡片视频。
 - 云端生成脚本、时间窗、画面结构、Prompt 和审核节点。
 - 本地 runner 生成 HyperFrames 项目、预览快照、最终渲染文件和交付包。
+- 本地 IP 数字人口播渲染工具可以使用波波 / 阿斯特角色资产生成 A-roll：参考图高保真 puppet 负责角色层，音频分析负责口型，动作时间轴负责眨眼、呼吸、点头、手势和发光，FFmpeg 负责合成最终视频。
 - 用户可在方案、脚本、预览、成片等节点审核、修改或重生成。
 
 ### 2. 影视化 / AIGC Shot 视频
@@ -62,6 +63,7 @@ flowchart LR
 | `frontend` | React + Electron 用户端，负责项目启动、状态追踪、审核、素材回填、即梦安装向导和本地设置。 |
 | `cloud-backend` | Go 云端服务，负责登录、项目、Agent plan、DAG、审核门、工具 manifest、视频工作流和 API。 |
 | `local-backend` | Go 本地 agent，负责本地文件、runner 注册、本地工具、MCP provider、JiMeng CLI 适配和 artifact 上传读取。 |
+| `assets/characters` | 本地 IP 角色资产协议，当前包含 `bobo` 和 `aster` 的 `svg2d` puppet、rig、参考图 cutout 和声音画像。 |
 | `skill-capabilities` / `cloud-backend/skills` | 视频创作角色、工具和工作流能力定义。 |
 | `.github/workflows/ci.yml` | 基础 CI：前端 lint/build、Go 测试和仓库 whitespace 检查。 |
 
@@ -70,6 +72,7 @@ flowchart LR
 - 基础模型 API Key 由用户在本地填写，只保存到用户机器，不上传云端。
 - 即梦 CLI 安装需要用户显式点击确认，系统不会静默安装外部工具。
 - 影视化素材生成可以自动走 JiMeng MCP，也可以手动复制生成包到任意外部模型网站。
+- 本地 IP 数字人口播不调用 AIGC 视频生成；生产级声音建议上传匹配 IP 的自然口播音频，本地 `say` 只作为预览。
 - 本地文件以 `local://projects/...` 形式登记，云端保存引用和依赖关系，不强制上传大文件。
 
 ## 内测上线建议

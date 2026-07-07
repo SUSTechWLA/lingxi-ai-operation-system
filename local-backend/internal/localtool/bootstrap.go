@@ -68,6 +68,10 @@ func RegisterDefaultExecutors(reg *Registry, cfg ExecutorConfig) error {
 		NewVideoFrameQAExecutor(cfg.DataDir),
 		CommandVideoFrameQA,
 	)
+	reg.Register(
+		NewLocalIpTalkingAvatarRenderExecutor(cfg.DataDir),
+		CommandLocalIpTalkingAvatarRender,
+	)
 	if cfg.MCPProviderLoader != nil {
 		reg.Register(
 			NewMCPToolCallExecutorWithDataDir(cfg.MCPProviderLoader, cfg.DataDir),

@@ -11,6 +11,7 @@ All notable release changes are tracked here. README only carries the current ve
 - Added a creator-facing shot workspace that auto-selects the voice / knowledge workflow or cinematic / AIGC shot workflow, then presents each shot as a linear 1-6 review flow instead of a two-column technical artifact index.
 - Added image and video enlargement dialogs in the shot artifact preview, including large video playback for AIGC clips, HyperFrames overlays, and final complete shot artifacts.
 - Added image regeneration instructions for selected reference/storyboard frames so users can request local AI edits while preserving locked role, scene, prop, and continuity constraints.
+- Added `LocalIpTalkingAvatarRenderTool`, a deterministic local IP talking-avatar renderer for oral-video A-roll. It supports `bobo` / `aster` character assets, `svg2d` high-fidelity reference-image puppets, audio-driven lip-sync, motion timelines, HyperGen control metadata, voice profiles, FFmpeg composition, QA reports, and local demo generation.
 
 ### Changed
 

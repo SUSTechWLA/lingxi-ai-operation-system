@@ -1,0 +1,47 @@
+{
+  "characterId": "bobo",
+  "displayName": "波波",
+  "type": "cartoon_ip",
+  "renderer": "svg2d",
+  "defaultExpression": "bright",
+  "defaultPose": "front_talking_float",
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "anchor": {
+    "x": 960,
+    "y": 950,
+    "scale": 1.0
+  },
+  "assets": {
+    "referenceSvg": "renderer/bobo_puppet.svg",
+    "rig": "renderer/rig.json",
+    "frontTexture": "renderer/front_cutout.png"
+  },
+  "voiceProfile": {
+    "persona": "bobo",
+    "displayName": "波波",
+    "voiceName": "Sandy (中文（中国大陆）)",
+    "locale": "zh_CN",
+    "speakingRate": 205,
+    "tone": "young_lively_playful",
+    "stylePrompt": "波波声音年轻、生动、活泼，像热情的内容创作搭子，语速偏快但吐字清楚。",
+    "provider": "local_preview",
+    "previewOnly": true,
+    "fallbackPolicy": "正式成片建议上传更自然的波波人设口播音频；本地 say 仅用于动作和口型预览。"
+  },
+  "capabilities": {
+    "lipSync": true,
+    "blink": true,
+    "headNod": true,
+    "headShake": true,
+    "simpleGesture": true,
+    "expressionSwitch": true,
+    "svgPuppet": true,
+    "hypergenControl": true,
+    "floatBounce": true,
+    "glowPulse": true
+  }
+}
