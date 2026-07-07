@@ -33,13 +33,17 @@
 
 ## 当前版本
 
-**v0.1.13 - JiMeng CLI settings consolidation**
+**v0.1.13 - JiMeng CLI settings consolidation + shot workspace refresh**
 
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
 - 视频流水线已对齐 shot 级生产闭环：语义/画面变化切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。
 - Shot 素材包已拆成可读的三层制作计划：AIGC 负责无文字背景或局部动态并预留文字安全区，HyperFrames 负责中文标题、字幕、关键帧和 UI 图形层，FFmpeg 负责裁剪、叠加和合成完整 shot。
 - 桌面端已修复 local runner 登录态注入时的重启问题；已安装客户端可以先启动本地 agent，再平滑切换为带用户会话的 runner。
 - 即梦 CLI / MCP 登录配置已归入设置页，和文生图片、文生视频 Provider 一起管理；项目页只保留说明和跳转按钮。
+- Shot 产物页已升级为面向创作者的线性 1-6 步工作台：LLM 先区分口播 / 知识类和影视 / AIGC shot 视频，进入 shot 后自动切到对应流程。
+- 口播类 shot 聚焦口播稿、HyperFrames 时间线、AIGC 插入素材和最终合成；影视类 shot 聚焦剧本、角色 / 场景 / 道具参考、故事板、AIGC 主画面提示词、跨 shot 一致性和完整 shot 预览。
+- 图片和视频产物现在直接可预览，图片支持点击放大和对话式重新生成提示，视频支持大弹窗播放；页面隐藏 `local://...`、`已登记`、`预览已就绪` 等非创作信息。
+- JiMeng/Dreamina 视频调用会优先投放 AIGC 层提示词，而不是 HyperFrames 字幕/文字层或完整工程说明，避免把错误层级发给视频模型。
 - 项目页启动体检会自动运行，只展示未就绪或需留意的问题；具体本地工具命令和排障细节保留在设置页、追踪页和诊断包中。
 - 无真实 AIGC provider 时可以跑通 fallback preview、shot QA report、machine-readable repairPlan、accepted shot provenance 和 final assembly diagnostics。
 - 当前 release 分支可作为初版受控内测上线基线，用于技术型用户安装、诊断、反馈和小范围创作者试用。
@@ -79,6 +83,7 @@
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
 | Shot 级抽帧 QA | 每个 shot candidate 独立 QA，失败后生成保守 repairPlan，只有通过或人工批准的 candidate 才能进入 final assembly |
 | 手动外部生成兜底 | 没有可用模型或未启用即梦时，系统仍会展示可复制提示词和参考图信息 |
+| Shot 产物工作台 | 按 1-6 步线性展示剧本/口播、参考图、AIGC 层、HyperFrames 层、字幕时间轴、上传回填和完整 shot 预览 |
 
 ## 创作流程
 
@@ -97,6 +102,8 @@ flowchart LR
 Shot split policy 固定为 `minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。切分优先参考剧情节点、场景、主体、动作、景别、视角、焦段、情绪节奏和旁白/对白语义段落；超过 15 秒必须继续拆分，短于 3 秒只在连续且合并后不超过 15 秒时合并。
 
 每个需要外部生成的视频 shot 会输出独立的 `aigcPlan`、`hyperframesPlan` 和 `ffmpegFusionPlan`。AIGC 提示词来自该 shot 的画面说明和动作节奏，但只要求生成背景或局部动态素材；中文文字、标题、字幕、流程标签和 UI 文案由 HyperFrames 本地精确渲染，避免 AIGC 生成乱码或错字。上传回填后，FFmpeg 再把 AIGC 素材与 HyperFrames 层融合成完整 shot。
+
+产物页按创作流程展示 shot，而不是按底层文件路径展示。口播视频进入后优先看口播稿、HyperFrames 时间线和 AIGC 插入素材；影视/AIGC shot 视频进入后优先看剧本片段、跨 shot 一致性、角色/场景/道具参考图、故事板、AIGC 主画面提示词和完整 shot。图片可点击放大并基于选中内容生成返工提示词；视频可在弹窗中大尺寸播放；字幕文件会解析成时间轴，方便用户直接校对。
 
 成片阶段只消费 accepted shot candidate。最终 voiceover、BGM、ducking、字幕时间轴、响度、转码和 final QA 在 final assembly 阶段统一处理，不在每个 shot 内烧录最终字幕或混最终 BGM。
 
