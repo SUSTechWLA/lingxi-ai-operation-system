@@ -22,11 +22,21 @@ func main() {
 	cloudAPIBase := flag.String("cloud-api-base", os.Getenv("TANGYING_CLOUD_API_BASE"), "cloud API base URL")
 	userToken := flag.String("user-token", os.Getenv("TANGYING_USER_TOKEN"), "cloud user access token for local runner")
 	deviceID := flag.String("device-id", os.Getenv("TANGYING_DEVICE_ID"), "stable local device identifier")
+	workspaceRoot := flag.String("workspace-root", os.Getenv("TANGYING_WORKSPACE_ROOT"), "workspace repository root")
+	biaoshuOutputDir := flag.String("biaoshu-output-dir", os.Getenv("BIAOSHU_OUTPUT_DIR"), "biaoshu output directory")
 	flag.Parse()
 
-	server := localagent.NewServer(localagent.Config{DataDir: *dataDir, CloudAPIBase: *cloudAPIBase})
+	server := localagent.NewServer(localagent.Config{
+		DataDir:          *dataDir,
+		CloudAPIBase:     *cloudAPIBase,
+		WorkspaceRoot:    *workspaceRoot,
+		BiaoshuOutputDir: *biaoshuOutputDir,
+	})
 	if err := server.EnsureDirs(); err != nil {
 		log.Fatalf("init local directories: %v", err)
+	}
+	if err := server.ValidateWritablePaths(); err != nil {
+		log.Fatalf("validate local writable directories: %v", err)
 	}
 
 	listener, err := net.Listen("tcp", *addr)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
@@ -18,7 +18,7 @@ import {
   type BiaoshuProjectManifest,
   type BiaoshuProjectStatus,
 } from '../services/localAgent'
-import type { AgentPlan, AgentReviewItem, AgentRun, AgentStep } from '../utils/types'
+import type { AgentPlan, AgentReviewItem, AgentRun, AgentStep, TraceData, TraceNode } from '../utils/types'
 import {
   biaoshuArtifactToCopyText,
   buildBiaoshuArtifacts,
@@ -111,10 +111,13 @@ export default function BiaoshuWorkbench() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [runLog, setRunLog] = useState<string[]>([])
+  const registeredKinds = useRef(new Set<string>())
+  const pollCount = useRef(0)
+  const shownErrors = useRef(new Set<string>())
 
   const plan = run?.plan as AgentPlan | undefined
   const steps = plan?.steps || []
-  const isTerminalStatus = run?.status === 'SUCCESS' || run?.status === 'FAILED'
+  const isTerminalStatus = run?.status === 'SUCCESS' || run?.status === 'FAILED' || run?.status === 'CANCELLED' || run?.status === 'ERROR' || run?.status === 'TIMEOUT'
   const baseArtifacts = useMemo(() => buildBiaoshuArtifacts(run, trace, reviews), [run, trace, reviews])
   const manifestArtifacts = useMemo(
     () => activeProject ? biaoshuProjectToArtifacts(activeProject) : [],
@@ -261,16 +264,84 @@ export default function BiaoshuWorkbench() {
 
   useEffect(() => {
     if (!run?.id || isTerminalStatus) return
+    const MAX_POLLS = 150 // 150 times × 2s = 5 minutes max
+    pollCount.current = 0
     const timer = setInterval(async () => {
       try {
+        pollCount.current++
+        if (pollCount.current > MAX_POLLS) {
+          clearInterval(timer)
+          addLog(`轮询超时（已轮询 ${MAX_POLLS} 次，约 5 分钟），请检查服务状态后重试`)
+          setError(`轮询超时，任务可能卡住。请检查 biaoshu-tools (:9001)、cloud-backend (:8080) 是否正常运行`)
+          return
+        }
         const snapshot = await refreshRunData(run.id)
         await saveHistoryFromRun(snapshot.run, { trace: snapshot.trace, reviews: snapshot.reviews })
+
+        // Extract error details from failed trace nodes
+        const traceData = snapshot.trace as TraceData | null
+        const failedNodes = traceData?.task?.nodes?.filter(
+          (n: TraceNode) => n.status === 'FAILED' && !!n.errorMessage && !shownErrors.current.has(n.id),
+        ) || []
+        for (const node of failedNodes) {
+          shownErrors.current.add(node.id)
+          const msg = node.errorMessage!
+          const shortMsg = msg.length > 200 ? msg.slice(0, 200) + '…' : msg
+          addLog(`[${node.name}] 节点失败: ${shortMsg}`)
+          if (node.retryCount > 0) {
+            addLog(`[${node.name}] 已重试 ${node.retryCount} 次`)
+          }
+        }
+
         if (snapshot.run.status === 'SUCCESS') addLog('运行完成')
-        if (snapshot.run.status === 'FAILED') addLog('运行失败')
+        if (snapshot.run.status === 'FAILED') {
+          const errors = traceData?.task?.nodes
+            ?.filter((n: TraceNode) => n.status === 'FAILED' && n.errorMessage)
+            ?.map((n: TraceNode) => `${n.name}: ${n.errorMessage}`)
+          const detail = errors?.join('; ') || '未知错误'
+          addLog(`运行失败 — ${detail}`)
+          setError(`任务失败: ${detail.length > 300 ? detail.slice(0, 300) + '…' : detail}`)
+        }
       } catch { /* polling */ }
     }, 2000)
-    return () => clearInterval(timer)
+    return () => { clearInterval(timer); pollCount.current = 0 }
   }, [run?.id, isTerminalStatus, addLog, refreshRunData])
+
+  // Sync baseArtifacts (from cloud trace) into managed project manifest
+  useEffect(() => {
+    if (!activeProject?.projectId || baseArtifacts.length === 0) return
+    const newArtifacts = baseArtifacts.filter(
+      (a) => a.status === 'valid' && a.storageRef && !registeredKinds.current.has(a.kind),
+    )
+    if (newArtifacts.length === 0) return
+    ;(async () => {
+      for (const artifact of newArtifacts) {
+        try {
+          const response = await registerBiaoshuManagedArtifact(activeProject.projectId, {
+            kind: artifact.kind,
+            name: artifact.name,
+            storageRef: artifact.storageRef,
+            mimeType: 'text/markdown',
+            status: 'valid',
+            metadata: { sourceTool: artifact.sourceTool },
+          })
+          registeredKinds.current.add(artifact.kind)
+          setActiveProject(response.project)
+          setManagedProjects((prev) => {
+            const next = prev.filter((p) => p.projectId !== response.project.projectId)
+            return [response.project, ...next]
+          })
+          setProjectHistory((prev) => {
+            const managed = biaoshuManagedProjectsToHistory([response.project])[0]
+            return [managed, ...prev.filter((item) => item.projectId !== response.project.projectId)]
+          })
+          addLog(`产物已登记: ${artifact.name}`)
+        } catch (err: unknown) {
+          addLog(`产物登记失败: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    })()
+  }, [baseArtifacts, activeProject?.projectId, addLog])
 
   const handleStart = async () => {
     if (!bidFilePath.trim()) return
@@ -287,6 +358,9 @@ export default function BiaoshuWorkbench() {
     setTrace(null)
     setReviews([])
     setManualArtifacts([])
+    registeredKinds.current.clear()
+    pollCount.current = 0
+    shownErrors.current.clear()
 
     const message = customMessage.trim()
       || `请解析招标文件并生成技术标文档。文件路径：${bidFilePath}，项目名称：${projectName || '未命名项目'}`

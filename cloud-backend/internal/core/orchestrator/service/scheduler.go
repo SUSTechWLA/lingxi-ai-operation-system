@@ -52,6 +52,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.recoverStaleCreatedNodes(schedCtx)
+				s.recoverStaleReadyNodes(schedCtx)
 				s.detectHeartbeatTimeout(schedCtx)
 			}
 		}
@@ -81,6 +82,46 @@ func (s *Scheduler) detectHeartbeatTimeout(ctx context.Context) {
 
 		if err := s.stateMachine.OnHeartbeatTimeout(ctx, node.ID); err != nil {
 			zap.L().Error("Scheduler: failed to handle heartbeat timeout",
+				zap.String("nodeId", node.ID),
+				zap.Error(err),
+			)
+		}
+	}
+}
+
+// recoverStaleReadyNodes republishes READY node events that were lost
+// due to Kafka consumer group issues (e.g. consumer not fully connected when
+// the initial event was published). Without this, a node stuck in READY
+// status would never be picked up by a worker.
+func (s *Scheduler) recoverStaleReadyNodes(ctx context.Context) {
+	nodes, err := s.nodeRepo.FindByStatus(ctx, model.NodeReady)
+	if err != nil {
+		zap.L().Error("Scheduler: failed to find READY nodes", zap.Error(err))
+		return
+	}
+
+	now := time.Now()
+	for _, node := range nodes {
+		if now.Sub(node.CreatedAt) < 1*time.Minute {
+			continue
+		}
+
+		zap.L().Warn("Scheduler: recovering stale READY node (stuck >1m, event may have been lost)",
+			zap.String("nodeId", node.ID),
+			zap.String("taskId", node.TaskID),
+		)
+
+		// Republish the ready event so a worker can pick it up
+		payload := buildEventPayload(node.Input, node.Name)
+		if err := s.producer.Publish(eventbus.TopicNodeReady, node.IdempotencyKey, eventbus.Event{
+			TaskID:         node.TaskID,
+			NodeID:         node.ID,
+			Type:           string(node.Type),
+			Payload:        payload,
+			TraceID:        node.TaskID + "-" + node.ID,
+			IdempotencyKey: node.IdempotencyKey,
+		}); err != nil {
+			zap.L().Error("Scheduler: failed to republish READY event",
 				zap.String("nodeId", node.ID),
 				zap.Error(err),
 			)

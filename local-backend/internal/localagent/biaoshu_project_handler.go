@@ -7,10 +7,15 @@ import (
 )
 
 func (s *Server) handleBiaoshuProjectCollection(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/local/biaoshu/projects")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 1 && parts[0] == "_migrate" {
+		s.handleBiaoshuMigration(w, r)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		_, _ = s.importManagedBiaoshuProjectsFromRoots(s.legacyManagedBiaoshuProjectRoots())
-		_, _ = s.migrateLegacyBiaoshuProjects()
 		projects, err := s.listBiaoshuProjectManifests()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -111,4 +116,17 @@ func (s *Server) handleBiaoshuProjectArtifacts(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"project": project})
+}
+
+func (s *Server) handleBiaoshuMigration(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	legacyCount, _ := s.migrateLegacyBiaoshuProjects()
+	managedCount, _ := s.importManagedBiaoshuProjectsFromRoots(s.legacyManagedBiaoshuProjectRoots())
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"migratedLegacy":  legacyCount,
+		"importedManaged": managedCount,
+	})
 }

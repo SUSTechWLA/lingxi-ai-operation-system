@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-LOCAL_DIR="$ROOT_DIR/local-backend"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-if [[ "${1:-}" == "--check" ]]; then
-  cd "$LOCAL_DIR"
-  go test ./...
-  exit 0
-fi
+export TANGYING_WORKSPACE_ROOT="${TANGYING_WORKSPACE_ROOT:-${REPO_ROOT}}"
+export TANGYING_LOCAL_DATA_DIR="${TANGYING_LOCAL_DATA_DIR:-${REPO_ROOT}/local-backend/data}"
+export BIAOSHU_OUTPUT_DIR="${BIAOSHU_OUTPUT_DIR:-${REPO_ROOT}/biaoshu-tools/output}"
 
-cd "$LOCAL_DIR"
+mkdir -p "${TANGYING_LOCAL_DATA_DIR}" "${BIAOSHU_OUTPUT_DIR}"
+
+cd "${REPO_ROOT}/local-backend"
 exec go run ./cmd/local-agent \
   -addr "${TANGYING_LOCAL_AGENT_ADDR:-127.0.0.1:18080}" \
+  -workspace-root "${TANGYING_WORKSPACE_ROOT}" \
+  -data-dir "${TANGYING_LOCAL_DATA_DIR}" \
+  -biaoshu-output-dir "${BIAOSHU_OUTPUT_DIR}" \
   -cloud-api-base "${TANGYING_CLOUD_API_BASE:-${VITE_CLOUD_API_BASE:-}}"

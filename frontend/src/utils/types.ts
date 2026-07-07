@@ -324,7 +324,7 @@ export interface AgentRun {
   domain?: string
   message: string
   plan?: AgentPlan
-  status: 'CREATED' | 'RUNNING' | 'SUCCESS' | 'FAILED'
+  status: 'CREATED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'ERROR' | 'TIMEOUT'
   budget?: AgentBudget
   createdAt: string
   updatedAt: string

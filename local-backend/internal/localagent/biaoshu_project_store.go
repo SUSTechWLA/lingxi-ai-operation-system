@@ -47,11 +47,7 @@ func (s *Server) biaoshuProjectManifestPath(projectID string) string {
 }
 
 func (s *Server) biaoshuOutputRoot() string {
-	if dir := os.Getenv("BIAOSHU_OUTPUT_DIR"); strings.TrimSpace(dir) != "" {
-		return strings.TrimSpace(dir)
-	}
-	cwd, _ := os.Getwd()
-	return filepath.Join(cwd, "..", "biaoshu-tools", "output")
+	return s.cfg.BiaoshuOutputDir
 }
 
 func normalizeBiaoshuProjectName(raw string) (string, error) {
@@ -103,7 +99,9 @@ func (s *Server) createBiaoshuProject(req BiaoshuProjectCreateRequest) (BiaoshuP
 		proposedOutput = filepath.Join(s.biaoshuOutputRoot(), projectName)
 	}
 	if _, err := os.Stat(proposedOutput); err == nil {
-		return BiaoshuProjectManifest{}, fmt.Errorf("conflict: output directory already exists: %s", proposedOutput)
+		if _, statErr := os.Stat(filepath.Join(proposedOutput, biaoshuProjectMirrorFilename)); statErr == nil {
+			return BiaoshuProjectManifest{}, fmt.Errorf("conflict: output directory already exists: %s", proposedOutput)
+		}
 	}
 	projectID := newBiaoshuProjectID()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -161,13 +159,17 @@ func (s *Server) writeBiaoshuProjectManifest(manifest BiaoshuProjectManifest) er
 		return err
 	}
 	path := s.biaoshuProjectManifestPath(manifest.ProjectID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	manifestDir := filepath.Dir(path)
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		return fmt.Errorf("biaoshu project manifest dir is not creatable (%s): %w", manifestDir, err)
 	}
 	if err := writeIndentedJSON(path, manifest); err != nil {
-		return err
+		return fmt.Errorf("write biaoshu project manifest %s: %w", path, err)
 	}
-	return s.writeBiaoshuProjectManifestMirror(manifest)
+	if err := s.writeBiaoshuProjectManifestMirror(manifest); err != nil {
+		return fmt.Errorf("write biaoshu output manifest mirror: %w", err)
+	}
+	return nil
 }
 
 func (s *Server) writeBiaoshuProjectManifestMirror(manifest BiaoshuProjectManifest) error {
@@ -175,7 +177,7 @@ func (s *Server) writeBiaoshuProjectManifestMirror(manifest BiaoshuProjectManife
 		return nil
 	}
 	if err := os.MkdirAll(manifest.OutputDir, 0o755); err != nil {
-		return err
+		return fmt.Errorf("biaoshu output dir is not creatable (%s): %w", manifest.OutputDir, err)
 	}
 	return writeIndentedJSON(filepath.Join(manifest.OutputDir, biaoshuProjectMirrorFilename), manifest)
 }
@@ -468,9 +470,13 @@ func (s *Server) deleteBiaoshuProject(projectID string) (map[string]interface{},
 	// 1. Delete internal manifest directory
 	manifestDir := s.biaoshuProjectDir(projectID)
 	if strings.HasPrefix(filepath.Clean(manifestDir), filepath.Clean(s.biaoshuProjectRoot())) {
-		if err := os.RemoveAll(manifestDir); err != nil {
-			return nil, fmt.Errorf("failed to remove manifest dir: %w", err)
+		manifestFile := s.biaoshuProjectManifestPath(projectID)
+		// Remove the manifest file explicitly first (Windows may keep the dir)
+		if err := os.Remove(manifestFile); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to remove manifest file: %w", err)
 		}
+		// Best-effort remove the directory
+		os.RemoveAll(manifestDir)
 		deletedPaths = append(deletedPaths, manifestDir)
 	}
 
@@ -480,10 +486,13 @@ func (s *Server) deleteBiaoshuProject(projectID string) (map[string]interface{},
 	if !strings.HasPrefix(outputDir, trustedRoot+string(filepath.Separator)) && outputDir != trustedRoot {
 		return nil, fmt.Errorf("outputDir %s is not within trusted output root %s", outputDir, trustedRoot)
 	}
-	if _, err := os.Stat(outputDir); err == nil {
-		if err := os.RemoveAll(outputDir); err != nil {
-			return nil, fmt.Errorf("failed to remove output dir: %w", err)
-		}
+	// Remove mirror file explicitly, then best-effort remove the directory
+	mirrorPath := filepath.Join(outputDir, biaoshuProjectMirrorFilename)
+	if err := os.Remove(mirrorPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to remove output mirror: %w", err)
+	}
+	os.RemoveAll(outputDir)
+	if _, statErr := os.Stat(mirrorPath); os.IsNotExist(statErr) {
 		deletedPaths = append(deletedPaths, outputDir)
 	}
 

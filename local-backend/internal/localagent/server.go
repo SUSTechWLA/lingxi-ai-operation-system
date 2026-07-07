@@ -21,6 +21,8 @@ type Config struct {
 	DataDir           string
 	CloudAPIBase      string
 	BiaoshuHistoryDir string
+	WorkspaceRoot     string
+	BiaoshuOutputDir  string
 }
 
 type Server struct {
@@ -172,11 +174,17 @@ func NewServer(cfg Config) *Server {
 	if strings.TrimSpace(cfg.DataDir) == "" {
 		cfg.DataDir = defaultDataDir()
 	}
-	biaoshuHistoryDir := strings.TrimSpace(cfg.BiaoshuHistoryDir)
-	if biaoshuHistoryDir == "" {
-		biaoshuHistoryDir = defaultBiaoshuProjectsHistoryDir(cfg.DataDir)
+	if strings.TrimSpace(cfg.WorkspaceRoot) == "" {
+		cfg.WorkspaceRoot = defaultWorkspaceRoot()
 	}
-	s := &Server{cfg: cfg, biaoshuHistoryDir: biaoshuHistoryDir}
+	if strings.TrimSpace(cfg.BiaoshuOutputDir) == "" {
+		cfg.BiaoshuOutputDir = defaultBiaoshuOutputDir(cfg.WorkspaceRoot)
+	}
+	bzz := strings.TrimSpace(cfg.BiaoshuHistoryDir)
+	if bzz == "" {
+		bzz = defaultBiaoshuProjectsHistoryDir(cfg.DataDir)
+	}
+	s := &Server{cfg: cfg, biaoshuHistoryDir: bzz}
 	s.paths = Paths{
 		DataDir:        cfg.DataDir,
 		CacheDir:       filepath.Join(cfg.DataDir, "cache"),
@@ -206,6 +214,39 @@ func (s *Server) EnsureDirs() error {
 		}
 	}
 	return nil
+}
+
+func (s *Server) ValidateWritablePaths() error {
+	checks := []struct {
+		role string
+		dir  string
+	}{
+		{role: "data dir", dir: s.paths.DataDir},
+		{role: "project dir", dir: s.paths.ProjectDir},
+		{role: "artifact dir", dir: s.paths.ArtifactDir},
+		{role: "cache dir", dir: s.paths.CacheDir},
+		{role: "log dir", dir: s.paths.LogDir},
+		{role: "diagnostics dir", dir: s.paths.DiagnosticsDir},
+		{role: "biaoshu output dir", dir: s.cfg.BiaoshuOutputDir},
+	}
+	for _, check := range checks {
+		if err := os.MkdirAll(check.dir, 0o755); err != nil {
+			return fmt.Errorf("%s is not creatable (%s): %w", check.role, check.dir, err)
+		}
+		if err := writeProbeFile(check.dir); err != nil {
+			return fmt.Errorf("%s is not writable (%s): %w", check.role, check.dir, err)
+		}
+	}
+	return nil
+}
+
+func writeProbeFile(dir string) error {
+	name := fmt.Sprintf(".tangying-write-probe-%d.tmp", time.Now().UTC().UnixNano())
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("ok"), 0o600); err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 func (s *Server) routes() {
@@ -944,6 +985,55 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
+func defaultWorkspaceRoot() string {
+	if root := strings.TrimSpace(os.Getenv("TANGYING_WORKSPACE_ROOT")); root != "" {
+		return root
+	}
+	cwd, err := os.Getwd()
+	if err == nil {
+		if root, ok := findWorkspaceRoot(cwd); ok {
+			return root
+		}
+	}
+	return cwd
+}
+
+func defaultBiaoshuOutputDir(workspaceRoot string) string {
+	if dir := strings.TrimSpace(os.Getenv("BIAOSHU_OUTPUT_DIR")); dir != "" {
+		return dir
+	}
+	return filepath.Join(workspaceRoot, "biaoshu-tools", "output")
+}
+
+func findWorkspaceRoot(start string) (string, bool) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", false
+	}
+	for {
+		if fileExists(filepath.Join(dir, "go.work")) ||
+			fileExists(filepath.Join(dir, "AGENTS.md")) ||
+			(dirExists(filepath.Join(dir, "local-backend")) && dirExists(filepath.Join(dir, "biaoshu-tools"))) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
 func defaultDataDir() string {
 	if dir := os.Getenv("TANGYING_LOCAL_DATA_DIR"); dir != "" {
 		return dir
@@ -1179,6 +1269,7 @@ func (s *Server) writeBiaoshuProjectsSnapshot(value BiaoshuProjectListResponse) 
 			lastErr = err
 			continue
 		}
+		var writtenPath string
 		for attempt := 0; attempt < 5; attempt++ {
 			name := fmt.Sprintf("%020d-%d.json", time.Now().UTC().UnixNano(), attempt)
 			path := filepath.Join(dir, name)
@@ -1189,8 +1280,30 @@ func (s *Server) writeBiaoshuProjectsSnapshot(value BiaoshuProjectListResponse) 
 				lastErr = err
 				break
 			}
+			writtenPath = path
+			break
+		}
+		if writtenPath == "" {
+			continue
+		}
+		// Keep only the latest 5 snapshots, delete older ones.
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
 			return nil
 		}
+		if len(entries) <= 5 {
+			return nil
+		}
+		// Sort descending by name (timestamp prefix ensures chronological order).
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() > entries[j].Name()
+		})
+		for _, entry := range entries[5:] {
+			if strings.HasSuffix(entry.Name(), ".json") {
+				os.Remove(filepath.Join(dir, entry.Name()))
+			}
+		}
+		return nil
 	}
 	if lastErr != nil {
 		return lastErr
