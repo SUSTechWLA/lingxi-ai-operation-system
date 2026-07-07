@@ -10,6 +10,8 @@ The `release` branch is the initial closed beta launch baseline for controlled t
 
 `v0.1.13` keeps the packaged desktop local runner restart fix and consolidates JiMeng CLI/MCP setup into Settings, alongside text-to-image and text-to-video provider configuration. Project pages now keep JiMeng guidance minimal and link to Settings instead of owning setup actions.
 
+The release branch now also includes the shot workspace refresh: each shot opens as a linear 1-6 creator review flow, automatically switching between voice/knowledge video and cinematic/AIGC shot video. The workspace shows readable scripts, reference images, AIGC layer prompts, HyperFrames layer prompts, subtitle timelines, upload slots, and playable final media instead of exposing raw `local://` storage references or success-only artifact status messages.
+
 For creator-facing real AIGC trials, run the readiness gate in the target environment and require `GO` before inviting users.
 
 Do not describe the environment as "one sentence creates high-quality real AIGC video" unless the readiness gate confirms all live dependencies.
@@ -44,6 +46,8 @@ decision: GO
 - Shot candidates are versioned by `attemptIndex`; failed candidates are retained for diagnostics and must not overwrite accepted candidates.
 - Final assembly consumes only accepted candidate artifacts, normalizes clips with FFmpeg, then handles global voiceover, BGM ducking, subtitle timeline, loudness, final transcode, and final QA.
 - Shot material packages expose `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so users can generate text-free AIGC backgrounds or partial videos, keep exact Chinese text in HyperFrames, and merge layers with FFmpeg.
+- Shot pages let users inspect the actual generated media: reference/storyboard images can be enlarged, video artifacts can be played in a large modal, subtitles are displayed as a readable timeline, and only actionable status messages are shown.
+- External AIGC video calls use the AIGC layer prompt (`aigcPrompt`, `aigcVideoPrompt`, or `aigcPlan.prompt`) before falling back to legacy prompt fields, so JiMeng/Dreamina is not sent HyperFrames text-layer copy.
 - At least one AIGC video MCP provider is healthy when real creator trials are planned.
 - OpenAI-compatible model provider routes are configured for the selected workflow.
 - Artifact provenance distinguishes real AIGC from fallback storyboard/preview.

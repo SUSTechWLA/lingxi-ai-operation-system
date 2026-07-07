@@ -54,10 +54,10 @@ func (r *ProjectRepository) Create(ctx context.Context, p *model.VideoProject) e
 func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*model.VideoProject, error) {
 	var p model.VideoProject
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, name, description, mode, status,
+		`SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 		        skill_name, skill_version, workflow_name, workflow_version,
-		        generation_mode, aspect_ratio, target_duration_sec, language,
-		        config, current_run_id, local_path_hint, deleted_at, created_at, updated_at
+		        generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
+		        COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
 		 FROM video_projects
 		 WHERE id=$1 AND deleted_at IS NULL`, id,
 	).Scan(
@@ -75,10 +75,10 @@ func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*model.Vid
 func (r *ProjectRepository) FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error) {
 	var p model.VideoProject
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, name, description, mode, status,
+		`SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 		        skill_name, skill_version, workflow_name, workflow_version,
-		        generation_mode, aspect_ratio, target_duration_sec, language,
-		        config, current_run_id, local_path_hint, deleted_at, created_at, updated_at
+		        generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
+		        COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
 		 FROM video_projects
 		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, id, userID,
 	).Scan(
@@ -96,10 +96,10 @@ func (r *ProjectRepository) FindByIDForUser(ctx context.Context, userID string, 
 // FindAll returns projects with optional filters and pagination.
 func (r *ProjectRepository) FindAll(ctx context.Context, modeFilter string, statusFilter string, offset, limit int) ([]*model.VideoProject, int, error) {
 	// Build dynamic query
-	query := `SELECT id, user_id, name, description, mode, status,
+	query := `SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 	           skill_name, skill_version, workflow_name, workflow_version,
-	           generation_mode, aspect_ratio, target_duration_sec, language,
-	           config, current_run_id, local_path_hint, deleted_at, created_at, updated_at
+	           generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
+	           COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
 	 FROM video_projects WHERE deleted_at IS NULL`
 	countQuery := `SELECT COUNT(*) FROM video_projects WHERE deleted_at IS NULL`
 
@@ -152,10 +152,10 @@ func (r *ProjectRepository) FindAll(ctx context.Context, modeFilter string, stat
 }
 
 func (r *ProjectRepository) FindAllForUser(ctx context.Context, userID string, modeFilter string, statusFilter string, offset, limit int) ([]*model.VideoProject, int, error) {
-	query := `SELECT id, user_id, name, description, mode, status,
+	query := `SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 	           skill_name, skill_version, workflow_name, workflow_version,
-	           generation_mode, aspect_ratio, target_duration_sec, language,
-	           config, current_run_id, local_path_hint, deleted_at, created_at, updated_at
+	           generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
+	           COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
 	 FROM video_projects WHERE deleted_at IS NULL AND user_id=$1`
 	countQuery := `SELECT COUNT(*) FROM video_projects WHERE deleted_at IS NULL AND user_id=$1`
 

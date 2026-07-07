@@ -3837,6 +3837,7 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 			"shotId":               shotID,
 			"durationSec":          duration,
 			"narrationText":        narration,
+			"visualText":           fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 			"prompt":               videoPrompt,
 			"overallShotPrompt":    videoPrompt,
 			"aigcPrompt":           layerPlan.AIGCPrompt,
@@ -3872,8 +3873,12 @@ func buildDeterministicVideoPromptData(toolName, skillName, topic string, params
 				"requestId":           requestID,
 				"kind":                "video",
 				"shotId":              shotID,
+				"narrationText":       narration,
+				"visualText":          fallbackText(visual, "根据口播内容设计本 shot 的画面变化。"),
 				"prompt":              layerPlan.AIGCPrompt,
 				"promptText":          layerPlan.AIGCPrompt,
+				"aigcPrompt":          layerPlan.AIGCPrompt,
+				"aigcVideoPrompt":     layerPlan.AIGCPrompt,
 				"overallShotPrompt":   videoPrompt,
 				"aigcPlan":            aigcPlan,
 				"hyperframesPlan":     hyperframesPlan,
@@ -4085,7 +4090,7 @@ func buildShotLayerPlan(shotID string, duration int, visual, narration, camera, 
 
 	aigcLines := []string{
 		fmt.Sprintf("AIGC 视频层：为 %s 生成 %d 秒 16:9 背景或局部动态视频素材。", shotID, duration),
-		"画面来源：" + visualIntent + "。",
+		"动态内容：" + buildAIGCVisualDirective(visualIntent, actionText) + "。",
 		"动作节奏：" + actionText + "。",
 		"镜头和氛围：" + cameraHint + "。",
 		"构图留白：" + textSafeLayout + "。",
@@ -4111,10 +4116,9 @@ func buildShotLayerPlan(shotID string, duration int, visual, narration, camera, 
 	hyperframesLines := []string{
 		fmt.Sprintf("HyperFrames 文字 / 图形层：为 %s 本地生成精确文字、关键帧、UI 卡片、流程标签和字幕。", shotID),
 		"文字内容来自口播：" + narrationIntent + "。",
-		"画面承接：" + visualIntent + "。",
-		"关键帧设计：" + actionText + "。",
+		"关键帧内容：" + buildHyperframesKeyframeDirective(narrationIntent, visualIntent, actionText) + "。",
 		"排版要求：" + textSafeLayout + "；所有中文、标题、字幕、按钮、流程词都由本地字体渲染，不交给 AIGC 生成，避免乱码。",
-		"视觉定位：HyperFrames 像可控的演示/PPT 信息层，负责高可读文字、图形强调、节奏点和安全区覆盖，不重复生成 AIGC 背景。",
+		"文字层定位：HyperFrames 像可控的演示/PPT 信息层，负责高可读文字、图形强调、节奏点和安全区覆盖，不重复生成 AIGC 背景。",
 	}
 
 	fusionLines := []string{
@@ -4131,6 +4135,34 @@ func buildShotLayerPlan(shotID string, duration int, visual, narration, camera, 
 		FFmpegFusionPlan:  limitPromptRunes(strings.Join(compactStrings(fusionLines), "\n"), 2000),
 		TextSafeLayout:    textSafeLayout,
 	}
+}
+
+func buildAIGCVisualDirective(visualIntent, actionText string) string {
+	visualIntent = trimSentencePunctuation(visualIntent)
+	actionText = trimSentencePunctuation(actionText)
+	if visualIntent == "" {
+		visualIntent = "当前 shot 的主体画面变化"
+	}
+	if actionText == "" {
+		actionText = "主体和环境发生清晰连续变化"
+	}
+	return fmt.Sprintf("参考“%s”转写为可剪辑素材：保留主体运动、环境反馈和镜头氛围，让%s；画面中的标题、字幕、Logo、按钮和 UI 文字全部留白或移除", visualIntent, actionText)
+}
+
+func buildHyperframesKeyframeDirective(narrationIntent, visualIntent, actionText string) string {
+	narrationIntent = trimSentencePunctuation(narrationIntent)
+	visualIntent = trimSentencePunctuation(visualIntent)
+	actionText = trimSentencePunctuation(actionText)
+	if narrationIntent == "" {
+		narrationIntent = "当前 shot 的口播含义"
+	}
+	if visualIntent == "" {
+		visualIntent = "AIGC 背景素材"
+	}
+	if actionText == "" {
+		actionText = "关键节点逐步出现"
+	}
+	return fmt.Sprintf("根据口播“%s”设计 2-3 个可叠加关键帧：标题、字幕、流程标签和图形卡片跟随“%s”逐步出现，并与 AIGC 层的“%s”对齐", narrationIntent, actionText, visualIntent)
 }
 
 func buildTextSafeLayoutGuide(composition, shotSize string) string {
