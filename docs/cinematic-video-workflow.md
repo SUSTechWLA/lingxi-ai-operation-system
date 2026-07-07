@@ -96,6 +96,26 @@ resolution_type: 2k 或 4k
 
 如果画面包含重要文字，优先让 AIGC 参考图或视频在文字区域留白，文字由 HyperFrames 或 final subtitle 渲染，避免乱码和错误汉字。AIGC 可以生成完整背景，也可以只生成画面中的局部视频窗口；最终完整 shot 由 HyperFrames 层和 AIGC 层合成。
 
+## Shot 产物工作台
+
+产物页不是底层 artifact 列表，而是创作者逐步校验单个 shot 的工作台。LLM 会在项目开始时判断视频类型，进入 shot 后自动切换展示重点：
+
+| 视频类型 | 用户首先看到 | AIGC 角色 | HyperFrames 角色 | 一致性要求 |
+|---|---|---|---|---|
+| 口播 / 知识类 | 口播稿、HyperFrames 时间线、AIGC 插入位置 | 为口播提供 b-roll、背景、局部动态和情绪素材，不承担跨 shot 主连续性 | 承担标题、字幕、图表、UI 卡片、关键帧和可控文字层 | 以口播信息稳定为主，素材服务表达，不追求复杂角色连续性 |
+| 影视 / AIGC shot | 剧本片段、角色 / 场景 / 道具参考、故事板、AIGC 主画面提示词 | 承担主画面、人物动作、场景氛围、运镜和文学化情绪表达 | 只承担字幕、小号说明、安全区压边和少量可控图形 | 必须保持跨 shot 的角色、场景、道具和物理状态连续 |
+
+每个 shot 按 1-6 线性步骤展开。上传、回填、提示词复制、参考图查看、字幕校对和最终视频预览都放在对应步骤内，不另设“高级回填”入口。用户可以从上往下逐步理解创作过程，也可以折叠已经确认的步骤。
+
+用户可见产物应直接展示内容：
+
+- 图片参考图、故事板和首帧以缩略图展示，支持点击放大，并可基于选中内容生成局部返工提示词。
+- 视频素材、HyperFrames overlay 和完整 shot 以可播放视频展示，支持大弹窗播放。
+- 字幕文件解析成时间轴，便于直接校对时间和文字。
+- 正常成功态不反复显示 `已登记`、`预览已就绪`、`local://...` 或后端枚举；页面只保留用户需要操作或判断的业务状态。
+
+Dreamina/JiMeng 视频调用必须使用 AIGC 层提示词。系统会优先读取 `aigcPrompt`、`aigcVideoPrompt` 或 `aigcPlan.prompt`，只有旧产物缺失这些字段时才回退到 legacy `prompt` / `promptText` / `videoPrompt`。HyperFrames 提示词只用于本地文字、字幕、UI 和关键帧层，不能作为 AIGC 视频模型 prompt。
+
 ## Dreamina 投放 Prompt
 
 投放给 Dreamina/JiMeng `generate_video` 的 prompt 是 AIGC 视频层叙述，不是完整成片说明。用户端会同时展示 HyperFrames 和 FFmpeg 分工，但复制到外部 AIGC 平台时应聚焦背景或局部动态素材。

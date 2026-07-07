@@ -68,6 +68,7 @@ try {
     externalGenerationGuideSteps,
     externalGenerationReferenceCopyText,
     externalGenerationReferencesFromArtifacts,
+    buildImageRegenerationInstruction,
     videoCreationProfileForId,
     videoCreationProfiles,
     mergeExternalGenerationTaskReferences,
@@ -79,6 +80,12 @@ try {
     visibleEnvironmentIssues,
   } = await import(pathToFileURL(outfile))
   const { unwrapApiData } = await import(pathToFileURL(apiResponseOutfile))
+  const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
+  assert.match(directorPageSource, /放大播放/)
+  assert.doesNotMatch(directorPageSource, /图片预览已就绪|照片预览已就绪|视频预览已就绪|参考图已登记|产物已登记/)
+  assert.doesNotMatch(directorPageSource, /QA \{openGroup\.production\.qaStatus\}|\{openGroup\.production\.sourceType\}/)
+  assert.match(directorPageSource, /artifact\.status === 'valid'\s*\?\s*null\s*:\s*<StatusBadge status=\{artifact\.status\}/)
+  assert.match(directorPageSource, /slot\.status === 'valid' && !slotStatusLabel\s*\?\s*null\s*:\s*<StatusBadge status=\{slot\.status\}/)
   const roleAgents = [
     {
       id: 'render_producer',
@@ -179,6 +186,26 @@ try {
   assert.equal(unwrapApiData(rawPreflight), rawPreflight)
   assert.deepEqual(localServiceStatusDisplay('unknown', true), { label: '本地在线', tone: 'ok' })
   assert.deepEqual(localServiceStatusDisplay('unhealthy', false), { label: '本地离线', tone: 'error' })
+  const cinematicImageInstruction = buildImageRegenerationInstruction({
+    mode: 'aigc_shot',
+    title: '范进参考图',
+    sourceLabel: '角色参考图',
+    userInstruction: '让人物更瘦弱，眼神更怯懦',
+    locks: ['灰色破旧长袍', '瘦弱佝偻体态'],
+  })
+  assert.match(cinematicImageInstruction, /跨 shot 一致性/)
+  assert.match(cinematicImageInstruction, /灰色破旧长袍/)
+  assert.match(cinematicImageInstruction, /让人物更瘦弱/)
+  assert.doesNotMatch(cinematicImageInstruction, /local:\/\//)
+  const voiceImageInstruction = buildImageRegenerationInstruction({
+    mode: 'voice_visual',
+    title: '流程 b-roll 参考图',
+    sourceLabel: 'AIGC 插入素材',
+    userInstruction: '右侧留给字幕，画面更轻松',
+  })
+  assert.match(voiceImageInstruction, /服务口播/)
+  assert.match(voiceImageInstruction, /HyperGen/)
+  assert.match(voiceImageInstruction, /右侧留给字幕/)
   assert.deepEqual(projectPrimaryAction({
     preflightCanStart: true,
     loading: false,
@@ -968,6 +995,14 @@ try {
   assert.equal(
     localArtifactIdFromStorageRef('local://projects/vp-1/artifacts/final-video/final-video/hash/final.mp4'),
     'final-video',
+  )
+  assert.equal(
+    localArtifactIdFromStorageRef('local://projects/vp-1/artifacts/video_prompt/shot_complete_SHOT_01/e837383b0f0802d0d8b4bb67ca8b261c4adacb182da94ec3393980b972563f67/SHOT_01_complete_shot.mp4'),
+    'shot_complete_SHOT_01',
+  )
+  assert.equal(
+    localArtifactIdFromStorageRef('local://projects/vp-1/artifacts/shot_complete_SHOT_01/e62dffeea00dbbc1308db2515899e68faecb4195d4305cc8583a6c9b222df936/SHOT_01_complete_shot.mp4'),
+    'shot_complete_SHOT_01',
   )
   assert.equal(
     localArtifactIdFromStorageRef('local://projects/20260701090839-40404040/manual-final.mp4'),
@@ -2032,6 +2067,13 @@ try {
     'shot asset workbench should surface readable shot scripts and generation prompts even after a clip has been generated',
   )
   assert.ok(
+    pageSource.includes('shotNarrationForDisplay(group, requestEntries)') &&
+      pageSource.includes('shotVisualForDisplay(group, requestEntries, narrationText)') &&
+      pageSource.includes('normalizeReadableText') &&
+      !pageSource.includes('当前 shot 尚未登记口播脚本。'),
+    'shot asset workbench should fall back to request-level narration and avoid repeating narration as visual copy',
+  )
+  assert.ok(
     pageSource.includes('shotActionSummary(group, requestEntries)') &&
       !pageSource.includes("{group.visualText || group.narrationText || '当前 shot 暂无画面摘要。'}") &&
       !pageSource.includes('ShotTextBlock title="画面说明" value={openGroup.visualText'),
@@ -2039,16 +2081,20 @@ try {
   )
   assert.ok(
     pageSource.includes('ShotRequestSummaryCard') &&
-      pageSource.includes('生成步骤') &&
-      pageSource.includes('依赖关系') &&
-      pageSource.includes('可编辑提示词') &&
+      pageSource.includes('素材操作') &&
+      pageSource.includes('AIGC 素材提示词') &&
+      pageSource.includes('CompactLayerPlanRow') &&
       pageSource.includes('safePromptText(request.prompt)') &&
       pageSource.includes('通过并锁定') &&
       pageSource.includes('已通过，内容已锁定') &&
       pageSource.includes('按要求重新生成提示词') &&
-      pageSource.includes('编辑参考图') &&
-      pageSource.includes('新增参考图'),
-    'shot asset workbench should let users edit/regenerate prompts and references, then approve-lock them',
+      pageSource.includes('参考图') &&
+      pageSource.includes('新增参考图') &&
+      !pageSource.includes('浏览器手动生成步骤') &&
+      !pageSource.includes('requestDependencyRows') &&
+      !pageSource.includes('generationStepLabels') &&
+      !pageSource.includes('const guideSteps = externalGenerationGuideSteps(request)'),
+    'shot asset workbench should keep material cards focused while still allowing prompt/reference edits and approval locks',
   )
   assert.ok(
     pageSource.includes('disabled={approved}') &&
@@ -2064,8 +2110,14 @@ try {
       pageSource.includes('request.aigcPlan') &&
       pageSource.includes('request.hyperframesPlan') &&
       pageSource.includes('request.ffmpegFusionPlan') &&
-      pageSource.includes('避免乱码'),
-    'shot material cards should split AIGC background/partial video, HyperFrames text/keyframes, and FFmpeg fusion plans',
+      pageSource.includes('避免乱码') &&
+      pageSource.includes('素材操作') &&
+      pageSource.includes('AIGC 素材提示词') &&
+      pageSource.includes('CompactLayerPlanRow') &&
+      !pageSource.includes('给提示词生成要求') &&
+      !pageSource.includes('const guideSteps = generationStepLabels(editableRequest)') &&
+      !pageSource.includes('const dependencyRows = requestDependencyRows(editableRequest)'),
+    'shot material cards should provide a compact, non-repetitive AIGC/HyperFrames/FFmpeg workflow instead of noisy repeated sections',
   )
   assert.ok(
     pageSource.includes('ShotArtifactPreview') &&
@@ -2113,16 +2165,17 @@ try {
   assert.ok(pageSource.includes('可选负面提示词'), 'external generation card should keep negative prompts available without adding another primary button')
   assert.ok(pageSource.includes('复制参考信息'), 'external generation card should expose reference copying')
   assert.ok(
-    pageSource.includes('生成步骤') &&
-      pageSource.includes('依赖关系') &&
-      pageSource.includes('可编辑提示词') &&
-      pageSource.includes('编辑参考图') &&
+    pageSource.includes('展开处理素材任务') &&
+      pageSource.includes('素材操作') &&
+      pageSource.includes('AIGC 素材提示词') &&
+      pageSource.includes('参考图') &&
       pageSource.includes('通过并锁定') &&
-      pageSource.includes('文字提示词') &&
-      pageSource.includes('图片参考资料') &&
+      pageSource.includes('按要求重新生成提示词') &&
+      pageSource.includes('新增参考图') &&
       pageSource.includes('正在读取参考图') &&
-      pageSource.includes('mergeExternalGenerationTaskReferences'),
-    'assets page should show non-technical prompt and reference materials directly in the client',
+      pageSource.includes('mergeExternalGenerationTaskReferences') &&
+      !pageSource.includes('浏览器手动生成步骤'),
+    'assets page should show focused editable prompt and reference materials directly in the client',
   )
   assert.ok(
     !pageSource.includes('installJiMengCLI') &&
