@@ -1,6 +1,7 @@
 package localagent
 
 import (
+	"os"
 	"testing"
 )
 
@@ -161,6 +162,9 @@ func TestBuildBiaoshuHistoryMergesManagedAndLegacyRuns(t *testing.T) {
 
 func TestBuildBiaoshuHistoryDedupSameProjectAcrossSources(t *testing.T) {
 	root := t.TempDir()
+	outputDir := t.TempDir()
+	os.Setenv("BIAOSHU_OUTPUT_DIR", outputDir)
+	t.Cleanup(func() { os.Unsetenv("BIAOSHU_OUTPUT_DIR") })
 	s := NewServer(Config{DataDir: root})
 	if err := s.EnsureDirs(); err != nil {
 		t.Fatal(err)

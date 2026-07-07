@@ -86,6 +86,7 @@ export interface BiaoshuProjectManifest {
     addedAt: string
   }>
   outputDir: string
+  outputDirName: string
   runs: Array<{
     runId: string
     cloudTaskId?: string
@@ -278,6 +279,23 @@ export async function fetchBiaoshuManagedProject(
     throw new Error(await errorMessage(response, '读取标书项目失败'))
   }
   return response.json() as Promise<{ project: BiaoshuProjectManifest }>
+}
+
+export interface DeleteBiaoshuProjectResponse {
+  status: string
+  projectId: string
+  projectName: string
+  deletedPaths: string[]
+}
+
+export async function deleteBiaoshuManagedProject(projectId: string): Promise<DeleteBiaoshuProjectResponse> {
+  const response = await fetch(localAgentUrl(`/api/local/biaoshu/projects/${encodeURIComponent(projectId)}`), {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '删除标书项目失败'))
+  }
+  return response.json() as Promise<DeleteBiaoshuProjectResponse>
 }
 
 export async function registerBiaoshuManagedArtifact(

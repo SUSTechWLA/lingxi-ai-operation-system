@@ -25,7 +25,11 @@ func (s *Server) handleBiaoshuProjectCollection(w http.ResponseWriter, r *http.R
 		}
 		project, err := s.createBiaoshuProject(req)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			code := http.StatusBadRequest
+			if strings.Contains(err.Error(), "conflict:") {
+				code = http.StatusConflict
+			}
+			writeError(w, code, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]interface{}{"project": project})
@@ -43,23 +47,52 @@ func (s *Server) handleBiaoshuProjectResource(w http.ResponseWriter, r *http.Req
 	}
 	projectID := parts[0]
 	if len(parts) == 1 {
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			project, err := s.readBiaoshuProjectManifest(projectID)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "biaoshu project not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"project": project})
+		case http.MethodDelete:
+			summary, err := s.deleteBiaoshuProject(projectID)
+			if err != nil {
+				code := http.StatusBadRequest
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
+					code = http.StatusNotFound
+				}
+				writeError(w, code, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
 		}
-		project, err := s.readBiaoshuProjectManifest(projectID)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "biaoshu project not found")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"project": project})
 		return
 	}
 	if len(parts) == 2 && parts[1] == "artifacts" {
 		s.handleBiaoshuProjectArtifacts(w, r, projectID)
 		return
 	}
+	if len(parts) == 3 && parts[1] == "artifacts" {
+		s.handleBiaoshuProjectArtifactContent(w, r, projectID, parts[2])
+		return
+	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) handleBiaoshuProjectArtifactContent(w http.ResponseWriter, r *http.Request, projectID, artifactID string) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	content, err := s.readBiaoshuProjectArtifactContent(projectID, artifactID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, content)
 }
 
 func (s *Server) handleBiaoshuProjectArtifacts(w http.ResponseWriter, r *http.Request, projectID string) {

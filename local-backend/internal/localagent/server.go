@@ -77,6 +77,8 @@ type BiaoshuArtifactWriteRequest struct {
 	FilePath                string `json:"filePath"`
 	Content                 string `json:"content"`
 	ExpectedPreviousContent string `json:"expectedPreviousContent"`
+	ProjectID               string `json:"projectId"`
+	ArtifactID              string `json:"artifactId"`
 }
 
 type LocalArtifactResponse struct {
@@ -135,6 +137,8 @@ type localArtifactRequest struct {
 type biaoshuArtifactReadRequest struct {
 	FilePath    string `json:"filePath"`
 	FilePathAlt string `json:"file_path"`
+	ProjectID   string `json:"projectId"`
+	ArtifactID  string `json:"artifactId"`
 }
 
 type BiaoshuArtifactReadResponse struct {
@@ -378,9 +382,26 @@ func (s *Server) handleReadBiaoshuArtifact(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid biaoshu artifact read payload")
 		return
 	}
+	if strings.TrimSpace(req.ProjectID) != "" && strings.TrimSpace(req.ArtifactID) != "" {
+		content, err := s.readBiaoshuProjectArtifactContent(req.ProjectID, req.ArtifactID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, content)
+		return
+	}
 	filePath := strings.TrimSpace(req.FilePath)
 	if filePath == "" {
 		filePath = strings.TrimSpace(req.FilePathAlt)
+	}
+	if filePath == "" {
+		writeError(w, http.StatusBadRequest, "filePath or projectId+artifactId is required")
+		return
+	}
+	if !s.isFilePathWithinManagedProject(filePath) {
+		writeError(w, http.StatusForbidden, "filePath does not belong to any managed biaoshu project outputDir")
+		return
 	}
 	resp, err := s.readBiaoshuArtifactFile(filePath)
 	if err != nil {
@@ -388,6 +409,25 @@ func (s *Server) handleReadBiaoshuArtifact(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) isFilePathWithinManagedProject(filePath string) bool {
+	projects, err := s.listBiaoshuProjectManifests()
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+	cleanPath := filepath.Clean(absPath)
+	for _, p := range projects {
+		outDir := filepath.Clean(p.OutputDir)
+		if strings.HasPrefix(cleanPath, outDir+string(filepath.Separator)) || cleanPath == outDir {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -1207,6 +1247,9 @@ func (s *Server) biaoshuArtifactReadRoots() []string {
 	if workspaceRoot, ok := detectWorkspaceRoot(); ok {
 		roots = append(roots, workspaceRoot)
 	}
+	if br := s.biaoshuOutputRoot(); br != "" {
+		roots = append(roots, br)
+	}
 	return roots
 }
 
@@ -1431,6 +1474,15 @@ func (s *Server) handleWriteBiaoshuArtifact(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
+	if strings.TrimSpace(req.ProjectID) != "" && strings.TrimSpace(req.ArtifactID) != "" {
+		resp, err := s.writeBiaoshuProjectArtifactContent(req.ProjectID, req.ArtifactID, req.Content, req.ExpectedPreviousContent)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	filePath := strings.TrimSpace(req.FilePath)
 	if filePath == "" {
 		writeError(w, http.StatusBadRequest, "filePath is required")
@@ -1447,6 +1499,10 @@ func (s *Server) handleWriteBiaoshuArtifact(w http.ResponseWriter, r *http.Reque
 	}
 	if !pathWithinAnyRoot(absPath, s.biaoshuArtifactReadRoots()) {
 		writeError(w, http.StatusForbidden, "filePath is outside trusted local artifact roots")
+		return
+	}
+	if !s.isFilePathWithinManagedProject(absPath) {
+		writeError(w, http.StatusForbidden, "filePath does not belong to any managed biaoshu project outputDir")
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(absPath))

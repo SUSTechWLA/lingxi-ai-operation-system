@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
 func TestBiaoshuProjectRoutesCreateGetAndRegisterArtifact(t *testing.T) {
+	outputDir := t.TempDir()
+	os.Setenv("BIAOSHU_OUTPUT_DIR", outputDir)
+	t.Cleanup(func() { os.Unsetenv("BIAOSHU_OUTPUT_DIR") })
 	s := NewServer(Config{DataDir: t.TempDir()})
 	if err := s.EnsureDirs(); err != nil {
 		t.Fatal(err)

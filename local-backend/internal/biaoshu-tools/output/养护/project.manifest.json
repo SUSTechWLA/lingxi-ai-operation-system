@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "biaoshu.project.v1",
+  "projectId": "bp_d85cd313fc2638d8",
+  "projectName": "养护",
+  "status": "SUCCESS",
+  "currentStage": "analysis_ready",
+  "createdAt": "2026-07-07T01:45:12.3371928Z",
+  "updatedAt": "2026-07-07T01:45:12.3398332Z",
+  "sourceFiles": [
+    {
+      "id": "source_1",
+      "path": "E:/yhbs/招标文件/招标文件_converted.docx",
+      "originalName": "招标文件_converted.docx",
+      "addedAt": "2026-07-07T01:45:12.3371928Z"
+    }
+  ],
+  "outputDir": "E:\\lingxi\\tangying-ai-operation-system\\local-backend\\internal\\biaoshu-tools\\output\\养护",
+  "outputDirName": "养护",
+  "runs": [],
+  "artifacts": [
+    {
+      "id": "artifact_bid_analysis",
+      "kind": "BID_ANALYSIS",
+      "name": "招标文件解析报告",
+      "status": "valid",
+      "storageRef": "E:/out/00_招标文件解析报告.md",
+      "mimeType": "text/markdown",
+      "dependsOn": null,
+      "createdAt": "2026-07-07T01:45:12.3398332Z",
+      "updatedAt": "2026-07-07T01:45:12.3398332Z",
+      "metadata": {}
+    }
+  ],
+  "stageEvents": [
+    {
+      "id": "event_bp_d85cd313fc2638d8",
+      "type": "project_created",
+      "at": "2026-07-07T01:45:12.3371928Z",
+      "message": "项目已创建"
+    },
+    {
+      "id": "event_1783388712339833200",
+      "type": "artifact_registered",
+      "at": "2026-07-07T01:45:12.3398332Z",
+      "message": "产物已登记: 招标文件解析报告",
+      "artifactId": "artifact_bid_analysis"
+    }
+  ]
+}

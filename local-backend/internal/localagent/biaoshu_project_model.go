@@ -48,6 +48,7 @@ type BiaoshuProjectManifest struct {
 	UpdatedAt     string                     `json:"updatedAt"`
 	SourceFiles   []BiaoshuProjectSourceFile `json:"sourceFiles"`
 	OutputDir     string                     `json:"outputDir"`
+	OutputDirName string                     `json:"outputDirName"`
 	Runs          []BiaoshuProjectRun        `json:"runs"`
 	Artifacts     []BiaoshuProjectArtifact   `json:"artifacts"`
 	StageEvents   []BiaoshuProjectStageEvent `json:"stageEvents"`

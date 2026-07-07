@@ -11,6 +11,7 @@ import {
   readLocalBiaoshuArtifact,
   createBiaoshuManagedProject,
   fetchBiaoshuManagedProjects,
+  deleteBiaoshuManagedProject,
   fetchBiaoshuHistory,
   registerBiaoshuManagedArtifact,
   type BiaoshuConversationMessage,
@@ -309,7 +310,7 @@ export default function BiaoshuWorkbench() {
           file_path: bidFilePath,
           projectName: projectName || '未命名项目',
           project_name: projectName || '未命名项目',
-          output_dir: projectName || '未命名项目',
+          output_dir: managed.project.outputDirName || projectName || '未命名项目',
         },
       })
       addLog(`任务已创建: ${result.runId}`)
@@ -475,6 +476,23 @@ export default function BiaoshuWorkbench() {
             loading={loading}
             onOpenProject={handleOpenHistoryItem}
             onGoWorkbench={() => setActiveView('workbench')}
+            onDeleteProject={async (item: BiaoshuProjectHistoryItem) => {
+              if (item.managedProject && item.projectId) {
+                if (!window.confirm(`确认删除项目"${item.projectName}"及其所有本地产物？`)) return
+                try {
+                  const result = await deleteBiaoshuManagedProject(item.projectId)
+                  addLog(`项目已删除: ${result.projectName} (${result.deletedPaths.length} 个路径)`)
+                  setProjectHistory((prev) => prev.filter((p) => p.projectId !== item.projectId))
+                  if (activeProject?.projectId === item.projectId) {
+                    setActiveProject(null)
+                    setManualArtifacts([])
+                  }
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : String(err)
+                  addLog(`删除失败: ${msg}`)
+                }
+              }
+            }}
           />
         ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -703,12 +721,14 @@ function BiaoshuProjectHistoryPage({
   loading,
   onOpenProject,
   onGoWorkbench,
+  onDeleteProject,
 }: {
   currentRunId?: string
   history: BiaoshuProjectHistoryItem[]
   loading: boolean
   onOpenProject: (item: BiaoshuProjectHistoryItem) => void
   onGoWorkbench: () => void
+  onDeleteProject?: (item: BiaoshuProjectHistoryItem) => void
 }) {
   const [keyword, setKeyword] = useState('')
   const normalizedKeyword = keyword.trim().toLowerCase()
@@ -800,14 +820,25 @@ function BiaoshuProjectHistoryPage({
                   <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{formatHistoryDate(item.updatedAt)}</td>
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-ink-muted">{item.runId.slice(0, 12)}</td>
                   <td className="whitespace-nowrap px-4 py-3">
-                    <button
-                      onClick={() => onOpenProject(item)}
-                      disabled={loading}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-primary-200 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {loading ? <FiRefreshCw className="animate-spin" /> : <FiEye />}
-                      查看产物
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onOpenProject(item)}
+                        disabled={loading}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-primary-200 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {loading ? <FiRefreshCw className="animate-spin" /> : <FiEye />}
+                        查看产物
+                      </button>
+                      {item.managedProject && onDeleteProject && (
+                        <button
+                          onClick={() => onDeleteProject(item)}
+                          disabled={loading}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-black text-red-700 ring-1 ring-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -40,6 +40,9 @@ func TestValidateBiaoshuProjectManifestRejectsMissingIdentity(t *testing.T) {
 
 func TestBiaoshuProjectStoreCreateAndRegisterArtifact(t *testing.T) {
 	dataDir := t.TempDir()
+	outputDir := t.TempDir()
+	os.Setenv("BIAOSHU_OUTPUT_DIR", outputDir)
+	t.Cleanup(func() { os.Unsetenv("BIAOSHU_OUTPUT_DIR") })
 	s := NewServer(Config{DataDir: dataDir})
 	if err := s.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -78,7 +81,11 @@ func TestBiaoshuProjectStoreCreateAndRegisterArtifact(t *testing.T) {
 }
 
 func TestMigrateLegacyBiaoshuProjectsCreatesManifests(t *testing.T) {
-	s := NewServer(Config{DataDir: t.TempDir()})
+	dataDir := t.TempDir()
+	outputDir := t.TempDir()
+	os.Setenv("BIAOSHU_OUTPUT_DIR", outputDir)
+	t.Cleanup(func() { os.Unsetenv("BIAOSHU_OUTPUT_DIR") })
+	s := NewServer(Config{DataDir: dataDir})
 	if err := s.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +145,9 @@ func TestBiaoshuProjectStageFromScoringBreakdownArtifact(t *testing.T) {
 
 func TestMigrateLegacyBiaoshuProjectsMergesSameSourceProject(t *testing.T) {
 	root := t.TempDir()
+	outputDir := t.TempDir()
+	os.Setenv("BIAOSHU_OUTPUT_DIR", outputDir)
+	t.Cleanup(func() { os.Unsetenv("BIAOSHU_OUTPUT_DIR") })
 	s := NewServer(Config{DataDir: root})
 	if err := s.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -271,6 +281,9 @@ func TestImportLegacyManagedBiaoshuProjectsCopiesTempManifests(t *testing.T) {
 		}},
 	}
 	writeLegacyManagedProjectForTest(t, legacyRoot, legacyManifest)
+	if err := os.MkdirAll(legacyManifest.OutputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	imported, err := server.importManagedBiaoshuProjectsFromRoots([]string{legacyRoot})
 	if err != nil {
@@ -301,6 +314,9 @@ func TestImportLegacyManagedBiaoshuProjectsCopiesTempManifests(t *testing.T) {
 func TestImportLegacyManagedBiaoshuProjectsDoesNotDowngradeCurrentProject(t *testing.T) {
 	currentRoot := t.TempDir()
 	legacyRoot := t.TempDir()
+	outputDir := t.TempDir()
+	os.Setenv("BIAOSHU_OUTPUT_DIR", outputDir)
+	t.Cleanup(func() { os.Unsetenv("BIAOSHU_OUTPUT_DIR") })
 	server := NewServer(Config{DataDir: currentRoot})
 	if err := server.EnsureDirs(); err != nil {
 		t.Fatal(err)

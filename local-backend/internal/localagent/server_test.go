@@ -377,12 +377,22 @@ func readOnlyBiaoshuProjectSnapshot(root string) ([]byte, error) {
 
 func TestReadBiaoshuArtifactReadsTrustedTextFileAndRejectsOutsidePath(t *testing.T) {
 	root := t.TempDir()
+	outputDir := t.TempDir()
+	os.Setenv("BIAOSHU_OUTPUT_DIR", outputDir)
+	t.Cleanup(func() { os.Unsetenv("BIAOSHU_OUTPUT_DIR") })
 	server := NewServer(Config{DataDir: root})
+	_ = server.EnsureDirs()
 
-	artifactPath := filepath.Join(root, "biaoshu-output", "analysis.md")
-	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
-		t.Fatalf("create artifact dir: %v", err)
+	// Create a managed project so the artifact path passes project-binding check.
+	proj, err := server.createBiaoshuProject(BiaoshuProjectCreateRequest{
+		ProjectName: "读产物测试",
+		BidFilePath: "E:/test/test.docx",
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
 	}
+
+	artifactPath := filepath.Join(proj.OutputDir, "analysis.md")
 	if err := os.WriteFile(artifactPath, []byte("# 招标文件解析\n\n正文"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
@@ -415,8 +425,8 @@ func TestReadBiaoshuArtifactReadsTrustedTextFileAndRejectsOutsidePath(t *testing
 	req = httptest.NewRequest(http.MethodPost, "/api/local/biaoshu-artifacts/read", body)
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("outside path should return 400, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("outside path should return 403, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

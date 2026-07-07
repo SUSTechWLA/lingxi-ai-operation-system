@@ -46,21 +46,67 @@ func (s *Server) biaoshuProjectManifestPath(projectID string) string {
 	return filepath.Join(s.biaoshuProjectDir(projectID), biaoshuProjectManifestFilename)
 }
 
-func (s *Server) createBiaoshuProject(req BiaoshuProjectCreateRequest) (BiaoshuProjectManifest, error) {
-	projectName := strings.TrimSpace(req.ProjectName)
-	bidFilePath := strings.TrimSpace(req.BidFilePath)
-	if projectName == "" {
-		return BiaoshuProjectManifest{}, errors.New("projectName is required")
+func (s *Server) biaoshuOutputRoot() string {
+	if dir := os.Getenv("BIAOSHU_OUTPUT_DIR"); strings.TrimSpace(dir) != "" {
+		return strings.TrimSpace(dir)
 	}
+	cwd, _ := os.Getwd()
+	return filepath.Join(cwd, "..", "biaoshu-tools", "output")
+}
+
+func normalizeBiaoshuProjectName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", errors.New("projectName is required and must not be blank")
+	}
+	fields := strings.Fields(name)
+	if len(fields) == 0 {
+		return "", errors.New("projectName is required and must not be blank")
+	}
+	name = strings.Join(fields, " ")
+	for _, r := range name {
+		if strings.ContainsRune(`<>:"/\|?*`, r) {
+			return "", fmt.Errorf("projectName contains invalid character: %q", r)
+		}
+	}
+	return name, nil
+}
+
+func (s *Server) findBiaoshuProjectByName(name string) (BiaoshuProjectManifest, bool) {
+	manifests, err := s.listBiaoshuProjectManifests()
+	if err != nil {
+		return BiaoshuProjectManifest{}, false
+	}
+	lower := strings.ToLower(name)
+	for _, m := range manifests {
+		if strings.ToLower(m.ProjectName) == lower {
+			return m, true
+		}
+	}
+	return BiaoshuProjectManifest{}, false
+}
+
+func (s *Server) createBiaoshuProject(req BiaoshuProjectCreateRequest) (BiaoshuProjectManifest, error) {
+	projectName, err := normalizeBiaoshuProjectName(req.ProjectName)
+	if err != nil {
+		return BiaoshuProjectManifest{}, err
+	}
+	bidFilePath := strings.TrimSpace(req.BidFilePath)
 	if bidFilePath == "" {
 		return BiaoshuProjectManifest{}, errors.New("bidFilePath is required")
 	}
+	if existing, ok := s.findBiaoshuProjectByName(projectName); ok {
+		return BiaoshuProjectManifest{}, fmt.Errorf("conflict: project %q already exists (projectId=%s)", projectName, existing.ProjectID)
+	}
+	proposedOutput := strings.TrimSpace(req.OutputDir)
+	if proposedOutput == "" {
+		proposedOutput = filepath.Join(s.biaoshuOutputRoot(), projectName)
+	}
+	if _, err := os.Stat(proposedOutput); err == nil {
+		return BiaoshuProjectManifest{}, fmt.Errorf("conflict: output directory already exists: %s", proposedOutput)
+	}
 	projectID := newBiaoshuProjectID()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	outputDir := strings.TrimSpace(req.OutputDir)
-	if outputDir == "" {
-		outputDir = filepath.Join(s.paths.ArtifactDir, "biaoshu", projectID)
-	}
 	manifest := BiaoshuProjectManifest{
 		SchemaVersion: BiaoshuProjectSchemaVersion,
 		ProjectID:     projectID,
@@ -69,7 +115,8 @@ func (s *Server) createBiaoshuProject(req BiaoshuProjectCreateRequest) (BiaoshuP
 		CurrentStage:  StageCreated,
 		CreatedAt:     now,
 		UpdatedAt:     now,
-		OutputDir:     outputDir,
+		OutputDir:     proposedOutput,
+		OutputDirName: projectName,
 		SourceFiles: []BiaoshuProjectSourceFile{{
 			ID:           "source_1",
 			Path:         bidFilePath,
@@ -210,9 +257,16 @@ func (s *Server) listBiaoshuProjectManifests() ([]BiaoshuProjectManifest, error)
 			continue
 		}
 		manifest, err := s.readBiaoshuProjectManifest(entry.Name())
-		if err == nil {
-			manifests = append(manifests, manifest)
+		if err != nil {
+			continue
 		}
+		// Only include projects whose output directory still exists.
+		if manifest.OutputDir != "" {
+			if _, statErr := os.Stat(manifest.OutputDir); os.IsNotExist(statErr) {
+				continue
+			}
+		}
+		manifests = append(manifests, manifest)
 	}
 	sort.SliceStable(manifests, func(i, j int) bool {
 		return manifests[i].UpdatedAt > manifests[j].UpdatedAt
@@ -286,6 +340,13 @@ func (s *Server) importManagedBiaoshuProjectsFromRoots(roots []string) (int, err
 			}
 			if err := validateBiaoshuProjectManifest(legacy); err != nil {
 				continue
+			}
+
+			// Skip manifests whose output directory no longer exists.
+			if legacy.OutputDir != "" {
+				if _, statErr := os.Stat(legacy.OutputDir); os.IsNotExist(statErr) {
+					continue
+				}
 			}
 
 			current, err := s.readBiaoshuProjectManifest(legacy.ProjectID)
@@ -394,4 +455,204 @@ func biaoshuProjectHasRun(manifest BiaoshuProjectManifest, runID string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) deleteBiaoshuProject(projectID string) (map[string]interface{}, error) {
+	manifest, err := s.readBiaoshuProjectManifest(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	outputRoot := s.biaoshuOutputRoot()
+	deletedPaths := []string{}
+
+	// 1. Delete internal manifest directory
+	manifestDir := s.biaoshuProjectDir(projectID)
+	if strings.HasPrefix(filepath.Clean(manifestDir), filepath.Clean(s.biaoshuProjectRoot())) {
+		if err := os.RemoveAll(manifestDir); err != nil {
+			return nil, fmt.Errorf("failed to remove manifest dir: %w", err)
+		}
+		deletedPaths = append(deletedPaths, manifestDir)
+	}
+
+	// 2. Delete output directory (must be under trusted output root)
+	outputDir := filepath.Clean(manifest.OutputDir)
+	trustedRoot := filepath.Clean(outputRoot)
+	if !strings.HasPrefix(outputDir, trustedRoot+string(filepath.Separator)) && outputDir != trustedRoot {
+		return nil, fmt.Errorf("outputDir %s is not within trusted output root %s", outputDir, trustedRoot)
+	}
+	if _, err := os.Stat(outputDir); err == nil {
+		if err := os.RemoveAll(outputDir); err != nil {
+			return nil, fmt.Errorf("failed to remove output dir: %w", err)
+		}
+		deletedPaths = append(deletedPaths, outputDir)
+	}
+
+	// 3. Delete local artifacts directory
+	artifactDir := filepath.Join(s.paths.ArtifactDir, projectID)
+	if _, err := os.Stat(artifactDir); err == nil {
+		if err := os.RemoveAll(artifactDir); err != nil {
+			return nil, fmt.Errorf("failed to remove artifact dir: %w", err)
+		}
+		deletedPaths = append(deletedPaths, artifactDir)
+	}
+
+	// 4. Delete local cache directory
+	cacheDir := filepath.Join(s.paths.CacheDir, projectID)
+	if _, err := os.Stat(cacheDir); err == nil {
+		if err := os.RemoveAll(cacheDir); err != nil {
+			return nil, fmt.Errorf("failed to remove cache dir: %w", err)
+		}
+		deletedPaths = append(deletedPaths, cacheDir)
+	}
+
+	// 5. Delete conversations for runs under this project
+	for _, run := range manifest.Runs {
+		convPath := filepath.Join(s.paths.ConfigDir, "biaoshu-conversations", run.RunID+".json")
+		if _, err := os.Stat(convPath); err == nil {
+			if err := os.Remove(convPath); err == nil {
+				deletedPaths = append(deletedPaths, convPath)
+			}
+		}
+	}
+
+	// 6. Remove from legacy run index
+	if err := s.removeBiaoshuProjectFromLegacyIndex(manifest); err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"status":       "deleted",
+		"projectId":    projectID,
+		"projectName":  manifest.ProjectName,
+		"deletedPaths": deletedPaths,
+	}, nil
+}
+
+func (s *Server) removeBiaoshuProjectFromLegacyIndex(manifest BiaoshuProjectManifest) error {
+	legacyList, err := s.readBiaoshuProjects()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	filtered := make([]BiaoshuProjectRecord, 0, len(legacyList))
+	for i := range legacyList {
+		keep := true
+		for _, run := range manifest.Runs {
+			if legacyList[i].RunID == run.RunID {
+				keep = false
+				break
+			}
+		}
+		if sameBiaoshuProjectSource(manifest, legacyList[i]) {
+			keep = false
+		}
+		if keep {
+			filtered = append(filtered, legacyList[i])
+		}
+	}
+	return s.writeBiaoshuProjects(filtered)
+}
+
+func (s *Server) readBiaoshuProjectArtifactContent(projectID, artifactID string) (map[string]interface{}, error) {
+	manifest, err := s.readBiaoshuProjectManifest(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	outputDir := filepath.Clean(manifest.OutputDir)
+	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("project output directory does not exist: %s", outputDir)
+	}
+	var artifact *BiaoshuProjectArtifact
+	for i := range manifest.Artifacts {
+		if manifest.Artifacts[i].ID == artifactID {
+			artifact = &manifest.Artifacts[i]
+			break
+		}
+	}
+	if artifact == nil {
+		return nil, fmt.Errorf("artifact %q not found in project %s", artifactID, projectID)
+	}
+	filePath := artifact.StorageRef
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(outputDir, filePath)
+	}
+	filePath = filepath.Clean(filePath)
+	if !strings.HasPrefix(filePath, outputDir+string(filepath.Separator)) && filePath != outputDir {
+		return nil, fmt.Errorf("artifact storageRef is outside project outputDir")
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("artifact file not found: %s", filePath)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("artifact path is a directory: %s", filePath)
+	}
+	const maxPreview = 2 * 1024 * 1024
+	if info.Size() > maxPreview {
+		return nil, fmt.Errorf("artifact file too large for preview: %d bytes (max %d)", info.Size(), maxPreview)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read artifact file: %w", err)
+	}
+	return map[string]interface{}{
+		"filePath": filePath,
+		"format":   artifact.MimeType,
+		"content":  string(data),
+		"size":     info.Size(),
+	}, nil
+}
+
+func (s *Server) writeBiaoshuProjectArtifactContent(projectID, artifactID, content, expectedPrevious string) (map[string]interface{}, error) {
+	manifest, err := s.readBiaoshuProjectManifest(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+	outputDir := filepath.Clean(manifest.OutputDir)
+	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("project output directory does not exist: %s", outputDir)
+	}
+	var artifact *BiaoshuProjectArtifact
+	for i := range manifest.Artifacts {
+		if manifest.Artifacts[i].ID == artifactID {
+			artifact = &manifest.Artifacts[i]
+			break
+		}
+	}
+	if artifact == nil {
+		return nil, fmt.Errorf("artifact %q not found in project %s", artifactID, projectID)
+	}
+	filePath := artifact.StorageRef
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(outputDir, filePath)
+	}
+	filePath = filepath.Clean(filePath)
+	if !strings.HasPrefix(filePath, outputDir+string(filepath.Separator)) && filePath != outputDir {
+		return nil, fmt.Errorf("artifact storageRef is outside project outputDir")
+	}
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext != ".md" && ext != ".txt" && ext != ".json" {
+		return nil, fmt.Errorf("only .md, .txt, and .json files can be written")
+	}
+	if expectedPrevious != "" {
+		current, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				return nil, fmt.Errorf("artifact file not found: %s", filePath)
+			}
+			return nil, fmt.Errorf("failed to read current file: %w", readErr)
+		}
+		if string(current) != expectedPrevious {
+			return nil, fmt.Errorf("file has been modified since last read; please re-open and try again")
+		}
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+	return map[string]interface{}{
+		"filePath": filePath,
+		"written":  true,
+	}, nil
 }

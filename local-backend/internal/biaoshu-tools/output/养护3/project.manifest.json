@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "biaoshu.project.v1",
+  "projectId": "bp_faaeef62543d2d5e",
+  "projectName": "养护3",
+  "status": "SUCCESS",
+  "currentStage": "scoring_ready",
+  "createdAt": "2026-07-07T01:45:12.3077767Z",
+  "updatedAt": "2026-07-07T01:45:12.3286017Z",
+  "sourceFiles": [
+    {
+      "id": "source_1",
+      "path": "E:\\yhbs\\招标文件\\招标文件_converted.docx",
+      "originalName": "招标文件_converted.docx",
+      "addedAt": "2026-07-07T01:45:12.3077767Z"
+    }
+  ],
+  "outputDir": "E:\\lingxi\\tangying-ai-operation-system\\local-backend\\internal\\biaoshu-tools\\output\\养护3",
+  "outputDirName": "养护3",
+  "runs": [],
+  "artifacts": [
+    {
+      "id": "artifact_bid_analysis",
+      "kind": "BID_ANALYSIS",
+      "name": "招标文件解析报告",
+      "status": "valid",
+      "storageRef": "E:\\out\\养护3\\00_招标文件解析报告.md",
+      "mimeType": "text/markdown",
+      "dependsOn": null,
+      "createdAt": "2026-07-07T01:45:12.3259575Z",
+      "updatedAt": "2026-07-07T01:45:12.3259575Z",
+      "metadata": {}
+    },
+    {
+      "id": "artifact_bid_project_context",
+      "kind": "BID_PROJECT_CONTEXT",
+      "name": "项目背景信息确认表",
+      "status": "valid",
+      "storageRef": "E:\\out\\养护3\\01_项目背景信息确认表.md",
+      "mimeType": "text/markdown",
+      "dependsOn": null,
+      "createdAt": "2026-07-07T01:45:12.327056Z",
+      "updatedAt": "2026-07-07T01:45:12.327056Z",
+      "metadata": {}
+    },
+    {
+      "id": "artifact_bid_scoring_breakdown",
+      "kind": "BID_SCORING_BREAKDOWN",
+      "name": "评分标准拆解表",
+      "status": "valid",
+      "storageRef": "E:\\out\\养护3\\02_评分标准拆解表.md",
+      "mimeType": "text/markdown",
+      "dependsOn": null,
+      "createdAt": "2026-07-07T01:45:12.3286017Z",
+      "updatedAt": "2026-07-07T01:45:12.3286017Z",
+      "metadata": {}
+    }
+  ],
+  "stageEvents": [
+    {
+      "id": "event_bp_faaeef62543d2d5e",
+      "type": "project_created",
+      "at": "2026-07-07T01:45:12.3077767Z",
+      "message": "项目已创建"
+    },
+    {
+      "id": "event_1783388712325957500",
+      "type": "artifact_registered",
+      "at": "2026-07-07T01:45:12.3259575Z",
+      "message": "产物已登记: 招标文件解析报告",
+      "artifactId": "artifact_bid_analysis"
+    },
+    {
+      "id": "event_1783388712327056000",
+      "type": "artifact_registered",
+      "at": "2026-07-07T01:45:12.327056Z",
+      "message": "产物已登记: 项目背景信息确认表",
+      "artifactId": "artifact_bid_project_context"
+    },
+    {
+      "id": "event_1783388712328601700",
+      "type": "artifact_registered",
+      "at": "2026-07-07T01:45:12.3286017Z",
+      "message": "产物已登记: 评分标准拆解表",
+      "artifactId": "artifact_bid_scoring_breakdown"
+    }
+  ]
+}
