@@ -490,7 +490,7 @@ func mcpPreflightForExternalRequest(request map[string]interface{}) map[string]i
 			"issues":          []interface{}{},
 		}
 	}
-	promptReport := mcpVideoPromptQAReport(mcpPromptFromExternalRequest(request))
+	promptReport := mcpVideoPromptQAReport(mcpStringFromMap(request, "prompt", "promptText", "videoPrompt"))
 	referenceReport := mcpVideoReferenceQAReport(request)
 	passed := mcpBoolFromInterface(promptReport["passed"]) && mcpBoolFromInterface(referenceReport["passed"])
 	score := minInt(mcpIntFromInterface(promptReport["score"]), mcpIntFromInterface(referenceReport["score"]))
@@ -777,7 +777,7 @@ func mcpSourceTypeForKind(kind string) string {
 }
 
 func mcpInputPromptHash(request map[string]interface{}) string {
-	prompt := mcpPromptFromExternalRequest(request)
+	prompt := mcpStringFromMap(request, "prompt", "promptText", "videoPrompt")
 	if strings.TrimSpace(prompt) == "" {
 		return ""
 	}
@@ -1059,7 +1059,7 @@ func mcpArgumentsFromExternalRequest(request map[string]interface{}) map[string]
 	target := mcpMapFromInterface(request["target"])
 	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
 	args := map[string]interface{}{
-		"prompt": mcpPromptFromExternalRequest(request),
+		"prompt": mcpStringFromMap(request, "prompt", "promptText", "videoPrompt"),
 	}
 	if mode := mcpStringFromMap(request, "mode"); mode != "" {
 		args["mode"] = mode
@@ -1201,7 +1201,7 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 		"provenance":      provenance,
 		"referenceImages": request["references"],
 		"prompts": map[string]interface{}{
-			"videoPrompt":    mcpPromptFromExternalRequest(request),
+			"videoPrompt":    mcpStringFromMap(request, "prompt", "promptText", "videoPrompt"),
 			"negativePrompt": mcpStringFromMap(request, "negativePrompt"),
 		},
 		"aigcVideo": map[string]interface{}{
@@ -1305,18 +1305,6 @@ func copyMap(input map[string]interface{}) map[string]interface{} {
 		out[key] = value
 	}
 	return out
-}
-
-func mcpPromptFromExternalRequest(request map[string]interface{}) string {
-	if prompt := mcpStringFromMap(request, "aigcPrompt", "aigcVideoPrompt", "positivePrompt"); prompt != "" {
-		return prompt
-	}
-	if aigcPlan := mcpMapFromInterface(request["aigcPlan"]); len(aigcPlan) > 0 {
-		if prompt := mcpStringFromMap(aigcPlan, "prompt", "videoPrompt", "positivePrompt"); prompt != "" {
-			return prompt
-		}
-	}
-	return mcpStringFromMap(request, "prompt", "promptText", "videoPrompt")
 }
 
 func mcpStringFromMap(input map[string]interface{}, keys ...string) string {

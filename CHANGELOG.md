@@ -8,17 +8,10 @@ All notable release changes are tracked here. README only carries the current ve
 
 - Added layered shot material packages with `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so AIGC generates text-free background or partial motion, HyperFrames renders exact Chinese text and keyframes, and FFmpeg fuses the layers into complete shots.
 - Added Director Studio checks and UI coverage for progressive shot material review, editable prompts/references, prompt approval locks, and AIGC/HyperFrames/FFmpeg layer explanations.
-- Added a creator-facing shot workspace that auto-selects the voice / knowledge workflow or cinematic / AIGC shot workflow, then presents each shot as a linear 1-6 review flow instead of a two-column technical artifact index.
-- Added image and video enlargement dialogs in the shot artifact preview, including large video playback for AIGC clips, HyperFrames overlays, and final complete shot artifacts.
-- Added image regeneration instructions for selected reference/storyboard frames so users can request local AI edits while preserving locked role, scene, prop, and continuity constraints.
 
 ### Changed
 
 - Updated beta, QA, cinematic workflow, and project-introduction documentation to keep code, user-facing docs, and Wiki-style workflow notes aligned.
-- Changed shot artifact cards to show playable/readable media, subtitle timelines, prompt text, and upload slots directly, while hiding success-only storage messages such as "preview ready", "artifact registered", and normal `valid` badges.
-- Changed external video generation calls so JiMeng/Dreamina receives the AIGC layer prompt first (`aigcPrompt` / `aigcVideoPrompt` / `aigcPlan.prompt`) instead of HyperFrames text-layer or full-shot engineering descriptions.
-- Changed local artifact preview loading so web dev uses the same-origin `/api/local` proxy, avoiding `Failed to fetch` for local media previews when the desktop/web app is served from `127.0.0.1:3000`.
-- Changed backend project and artifact reads to coalesce nullable legacy fields, reducing scan failures for older project/artifact rows during shot workspace loading.
 
 ## v0.1.13 - 2026-07-05
 

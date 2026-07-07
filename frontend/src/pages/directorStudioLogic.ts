@@ -586,43 +586,6 @@ export function externalGenerationReferenceCopyText(reference: ExternalGeneratio
   return lines.join('\n')
 }
 
-export interface ImageRegenerationInstructionInput {
-  mode: VideoCreationProfileId | string
-  title: string
-  sourceLabel?: string
-  userInstruction: string
-  locks?: string[]
-}
-
-export function buildImageRegenerationInstruction(input: ImageRegenerationInstructionInput): string {
-  const title = input.title.trim() || '当前图片'
-  const sourceLabel = input.sourceLabel?.trim() || '图片产物'
-  const userInstruction = input.userInstruction.trim() || '请在保持原意的基础上优化画面。'
-  const lockLines = uniqueStrings(input.locks || [])
-    .slice(0, 8)
-    .map((item) => `- ${item}`)
-  const modeContract = input.mode === 'aigc_shot'
-    ? [
-      '这是影视 / AIGC shot 创作图片返工。',
-      '优先保持跨 shot 一致性：主要角色的脸、年龄、服装、体态、情绪基调，场景空间关系，道具位置和物理状态都不能漂移。',
-      '画面可以更有电影感和情绪细节，但不要引入现代元素、乱码文字、Logo、水印或与剧本冲突的新信息。',
-    ]
-    : [
-      '这是口播 / 知识类视频的图片或插入素材返工。',
-      '所有改动都必须服务口播内容和 HyperGen 可控层，保留标题、字幕、UI 元素或图表的安全留白。',
-      'AIGC 只负责背景、道具、情绪和动态素材参考，不生成可读中文、Logo、水印或抢走口播重点的主体。',
-    ]
-  return [
-    `请基于「${title}」重新生成或修正图片。`,
-    `图片位置：${sourceLabel}`,
-    ...modeContract,
-    lockLines.length ? '必须锁定：' : '',
-    ...lockLines,
-    `用户修改要求：${userInstruction}`,
-    '输出给图片 / 视频生成模型使用的新版提示词，描述要具体、可执行；未被要求修改的角色、场景、构图和叙事事实保持不变。',
-  ].filter(Boolean).join('\n')
-}
-
 export function buildExportDeliveryItems(artifacts: DirectorArtifactRecord[]): ExportDeliveryItem[] {
   const finalVideo = findFinalVideoArtifact(artifacts)
   const packageArtifact = artifacts.find((artifact) => artifact.kind === 'PROJECT_PACKAGE')
@@ -674,7 +637,7 @@ export function buildExportDeliveryItems(artifacts: DirectorArtifactRecord[]): E
       id: 'folder-entry',
       label: '文件夹入口',
       status: finalVideo?.storageRef || packageArtifact?.storageRef ? 'valid' : 'missing',
-      description: finalVideo?.storageRef || packageArtifact?.storageRef ? '交付文件已生成，可在桌面端打开所在文件夹。' : '等待本地文件生成。',
+      description: finalVideo?.storageRef || packageArtifact?.storageRef ? '可从本地 storageRef 定位交付文件。' : '有本地文件后会显示可定位的路径信息。',
       storageRef: finalVideo?.storageRef || packageArtifact?.storageRef,
       actionLabel: finalVideo?.storageRef || packageArtifact?.storageRef ? '打开文件夹' : '等待文件',
     },
@@ -1165,34 +1128,8 @@ export function findFinalVideoArtifact(artifacts: DirectorArtifactRecord[]): Dir
 
 export function localArtifactIdFromStorageRef(storageRef: string | undefined): string | undefined {
   const ref = stringValue(storageRef) || ''
-  const match = /^local:\/\/projects\/[^/]+\/artifacts\/(.+)$/u.exec(ref)
-  if (!match?.[1]) return undefined
-  const segments = match[1].split('/').filter(Boolean).map((segment) => decodeURIComponent(segment))
-  if (!segments.length) return undefined
-  const first = segments[0].toLowerCase()
-  if (segments.length >= 2 && LOCAL_ARTIFACT_STAGE_PREFIXES.has(first)) return segments[1]
-  if (segments.length >= 4 && !isLikelyContentHash(segments[1])) return segments[1]
-  return segments[0]
-}
-
-const LOCAL_ARTIFACT_STAGE_PREFIXES = new Set([
-  'proposal',
-  'script',
-  'storyboard',
-  'composition',
-  'video_prompt',
-  'asset',
-  'assets',
-  'preview',
-  'render',
-  'quality',
-  'package',
-  'publish',
-  'external_generation_result',
-])
-
-function isLikelyContentHash(value: string): boolean {
-  return /^[a-f0-9]{32,128}$/iu.test(value)
+  const match = /^local:\/\/projects\/[^/]+\/artifacts\/([^/]+)(?:\/|$)/u.exec(ref)
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined
 }
 
 function finalVideoArtifactScore(artifact: DirectorArtifactRecord): number {
@@ -1736,9 +1673,7 @@ function shouldExposeUnprojectedArtifact(artifact: Record<string, unknown>, proj
   const artifactType = stringValue(metadata?.artifactType) || stringValue(metadata?.artifact_kind)
   const shotId = firstString(metadata || {}, ['relatedShotId', 'shotId', 'shotID', 'related_shot_id'])
   return kind === 'PUBLISH_COPY' ||
-    kind === 'VIDEO_CREATION_PROFILE' ||
     artifactType === 'publish_copy' ||
-    artifactType === 'video_creation_profile' ||
     artifactType === 'external_generation_request' ||
     artifactType === 'external_generation_result' ||
     Boolean(shotId) ||
@@ -3386,7 +3321,6 @@ function displayStorageRef(value: unknown): string {
   if (ref.startsWith('cloud://')) return '本地项目目录（仅同步索引）'
   return ref
 }
-
 
 function requiresMaterializedArtifact(kind: string) {
   return [

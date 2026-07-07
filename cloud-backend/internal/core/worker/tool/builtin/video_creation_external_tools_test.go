@@ -1378,38 +1378,14 @@ func TestVideoPromptGeneratorSplitsAIGCHyperframesAndFusionPlans(t *testing.T) {
 				t.Fatalf("external request should explain layered AIGC/HyperFrames/FFmpeg production and text-safe generation, missing %q in %#v", required, req)
 			}
 		}
-		if strings.TrimSpace(ensureStringValue(req["narrationText"])) == "" {
-			t.Fatalf("external request should expose shot narration text separately from prompts: %#v", req)
-		}
-		if strings.TrimSpace(ensureStringValue(req["visualText"])) == "" {
-			t.Fatalf("external request should expose shot visual reference separately from prompts: %#v", req)
-		}
-		aigcPlan, ok := req["aigcPlan"].(map[string]interface{})
-		if !ok {
+		if _, ok := req["aigcPlan"].(map[string]interface{}); !ok {
 			t.Fatalf("external request should expose aigcPlan, got %#v", req)
 		}
-		hyperframesPlan, ok := req["hyperframesPlan"].(map[string]interface{})
-		if !ok {
+		if _, ok := req["hyperframesPlan"].(map[string]interface{}); !ok {
 			t.Fatalf("external request should expose hyperframesPlan, got %#v", req)
 		}
 		if _, ok := req["ffmpegFusionPlan"].(map[string]interface{}); !ok {
 			t.Fatalf("external request should expose ffmpegFusionPlan, got %#v", req)
-		}
-		aigcPrompt := ensureStringValue(aigcPlan["prompt"])
-		hyperframesPrompt := ensureStringValue(hyperframesPlan["prompt"])
-		for _, key := range []string{"prompt", "promptText", "aigcPrompt", "aigcVideoPrompt"} {
-			if got := ensureStringValue(req[key]); strings.TrimSpace(got) != strings.TrimSpace(aigcPrompt) {
-				t.Fatalf("external request %s should carry the AIGC prompt for MCP generation, got %q want %q", key, got, aigcPrompt)
-			}
-		}
-		if strings.TrimSpace(aigcPrompt) == strings.TrimSpace(hyperframesPrompt) {
-			t.Fatalf("AIGC prompt and HyperFrames keyframe prompt should not be identical: %q", aigcPrompt)
-		}
-		if strings.Contains(aigcPrompt, "画面来源：") {
-			t.Fatalf("AIGC prompt should be transformed from visual intent instead of showing the raw visual description label, got %s", aigcPrompt)
-		}
-		if !strings.Contains(hyperframesPrompt, "关键帧") || !strings.Contains(hyperframesPrompt, "文字层") {
-			t.Fatalf("HyperFrames prompt should describe keyframes and text layer work, got %s", hyperframesPrompt)
 		}
 	}
 	packages, ok := result.Data["shotAssetPackages"].([]interface{})

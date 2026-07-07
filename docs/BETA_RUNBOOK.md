@@ -234,15 +234,6 @@ Shot material packages must be readable by non-technical users and must avoid re
 
 If a shot contains important text, the AIGC layer should leave that region blank or lightly textured. The exact text must be rendered by HyperFrames or final subtitle rendering, not by the AIGC provider.
 
-Creator-facing shot workspace checks:
-
-- Entering the `产物` page should auto-select the shot workflow from the creation profile: voice / knowledge shots prioritize narration, HyperFrames timeline, and AIGC insert slots; cinematic / AIGC shots prioritize script intent, continuity references, storyboard/keyframe, AIGC main-layer prompt, and full-shot preview.
-- The shot page should read top-to-bottom as steps 1-6. Upload and backfill actions must live inside the relevant step instead of a separate advanced section.
-- Image artifacts should be visible thumbnails with click-to-enlarge and regeneration guidance. Video artifacts should have inline controls plus a large playback dialog.
-- Subtitle artifacts should be parsed into a time-coded text timeline when available, not shown only as "generated".
-- Normal success states such as `valid`, `registered`, `preview ready`, or raw `local://projects/...` paths should not be the primary user-facing message. Show actionable warnings and failures, but keep successful media focused on what the creator can read or watch.
-- AIGC video provider calls must use the AIGC layer prompt (`aigcPrompt`, `aigcVideoPrompt`, or `aigcPlan.prompt`). HyperFrames text-layer prompts are for local overlay/keyframe generation and must not be sent as the Dreamina/JiMeng video prompt.
-
 Shot QA state flow:
 
 ```text

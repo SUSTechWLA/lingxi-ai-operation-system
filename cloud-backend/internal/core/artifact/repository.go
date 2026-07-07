@@ -24,11 +24,11 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 }
 
 // fullSelectColumns is the canonical column list for all artifact SELECT queries.
-const fullSelectColumns = `id, project_id, COALESCE(workflow_run_id, ''), COALESCE(task_id, ''), stage_name, COALESCE(role_agent_id, ''),
-		COALESCE(unit_id, ''), kind, name, version, COALESCE(parent_id, ''), storage_type, COALESCE(storage_ref, ''), COALESCE(inline_json, ''),
-		COALESCE(mime_type, ''), COALESCE(size_bytes, 0), COALESCE(content_hash, ''), COALESCE(prompt_hash, ''), COALESCE(provider, ''), COALESCE(model, ''),
-		is_current, COALESCE(status, 'valid'), human_approved, COALESCE(depends_on, '[]'::jsonb), COALESCE(produced_by_node, ''),
-		COALESCE(produced_by_tool, ''), COALESCE(produced_by_role, ''), COALESCE(metadata, '{}'::jsonb), created_at, updated_at`
+const fullSelectColumns = `id, project_id, workflow_run_id, task_id, stage_name, role_agent_id,
+		unit_id, kind, name, version, parent_id, storage_type, storage_ref, inline_json,
+		mime_type, size_bytes, content_hash, prompt_hash, provider, model,
+		is_current, status, human_approved, depends_on, produced_by_node,
+		produced_by_tool, produced_by_role, metadata, created_at, updated_at`
 
 // scanArtifact scans the full column set into an Artifact struct.
 func scanArtifact(scanner interface {
