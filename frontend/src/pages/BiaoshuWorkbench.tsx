@@ -5,13 +5,13 @@ import axios from 'axios'
 import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, type BiaoshuReviseRequest } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
-  fetchBiaoshuProjects, 
   saveBiaoshuProject, 
   sendBiaoshuConversationMessage, 
   writeLocalBiaoshuArtifact,
   readLocalBiaoshuArtifact,
   createBiaoshuManagedProject,
   fetchBiaoshuManagedProjects,
+  fetchBiaoshuHistory,
   registerBiaoshuManagedArtifact,
   type BiaoshuConversationMessage,
   type BiaoshuProjectManifest,
@@ -45,10 +45,10 @@ import {
 } from './biaoshuProjectContextQuestionnaire'
 import {
   type BiaoshuProjectHistoryItem,
+  biaoshuHistoryProjectToViewItem,
   biaoshuManagedProjectsToHistory,
   biaoshuProjectToArtifacts,
-  legacyProjectsToHistory,
-  selectBestBiaoshuManagedProject,
+  selectBestBiaoshuHistoryProject,
 } from './biaoshuProjectSystem'
 
 const BID_WORKFLOW_STAGES = [
@@ -227,50 +227,34 @@ export default function BiaoshuWorkbench() {
     })))
   }, [bidFilePath, projectName, reviews, trace])
 
-  // 页面加载时从本地后端恢复历史项目
+  // 页面加载时从后端统一历史接口恢复所有项目
   useEffect(() => {
-    const loadLegacyFallback = () => {
-      fetchBiaoshuProjects().then(async (response) => {
-        setProjectHistory(legacyProjectsToHistory(response))
-        const latest = response.projects[0]
-        if (!latest) return
-        setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
-        setBidFilePath(latest.bidFilePath || DEFAULT_BID_FILE_PATH)
-        addLog(`恢复最近标书项目: ${latest.projectName}`)
-        try {
-          const snapshot = await refreshRunData(latest.runId)
-          await saveHistoryFromRun(snapshot.run, {
-            projectName: latest.projectName,
-            bidFilePath: latest.bidFilePath,
-            trace: snapshot.trace,
-            reviews: snapshot.reviews,
-          })
-          if (snapshot.run.status === 'SUCCESS' || snapshot.run.status === 'FAILED') setActiveView('artifacts')
-        } catch {
-          addLog('最近标书项目的云端任务暂不可读取，可从历史项目列表稍后重试')
-        }
-      }).catch((err: unknown) => {
-        addLog(`本地标书项目库读取失败: ${err instanceof Error ? err.message : String(err)}`)
-      })
-    }
-
-    fetchBiaoshuManagedProjects().then((response) => {
-      if (response.projects.length === 0) {
-        loadLegacyFallback()
-        return
+    fetchBiaoshuHistory().then((response) => {
+      if (response.warnings?.length) {
+        response.warnings.forEach((w) => addLog(`[历史诊断] ${w}`))
       }
-      setManagedProjects(response.projects)
-      setProjectHistory(biaoshuManagedProjectsToHistory(response.projects))
+      addLog(`历史项目来源: 当前清单 ${response.sources.currentManaged}, 旧临时清单 ${response.sources.legacyTempManaged}, 旧运行记录 ${response.sources.legacyRuns}`)
 
-      const latest = selectBestBiaoshuManagedProject(response.projects)
-      if (!latest) return
-      setActiveProject(latest)
-      setProjectName(latest.projectName || DEFAULT_PROJECT_NAME)
-      setBidFilePath(latest.sourceFiles[0]?.path || DEFAULT_BID_FILE_PATH)
+      const viewItems = response.projects.map(biaoshuHistoryProjectToViewItem)
+      setProjectHistory(viewItems)
+
+      const best = selectBestBiaoshuHistoryProject(response.projects)
+      if (!best) return
+      if (best.hasManagedManifest && best.projectId) {
+        fetchBiaoshuManagedProjects().then((mp) => {
+          const match = mp.projects.find((p) => p.projectId === best.projectId)
+          if (match) {
+            setActiveProject(match)
+            setManagedProjects(mp.projects)
+          }
+        }).catch(() => {})
+      }
+      setProjectName(best.projectName || DEFAULT_PROJECT_NAME)
+      setBidFilePath(best.bidFilePath || DEFAULT_BID_FILE_PATH)
       setActiveView('artifacts')
-      addLog(`从清单恢复标书项目: ${latest.projectName}`)
-    }).catch(() => {
-      loadLegacyFallback()
+      addLog(`恢复标书项目: ${best.projectName}`)
+    }).catch((err: unknown) => {
+      addLog(`标书历史接口读取失败: ${err instanceof Error ? err.message : String(err)}`)
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 

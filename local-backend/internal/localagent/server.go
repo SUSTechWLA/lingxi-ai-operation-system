@@ -213,6 +213,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/biaoshu-projects/", s.handleBiaoshuProjectByRunID)
 	s.mux.HandleFunc("/api/local/biaoshu/projects", s.handleBiaoshuProjectCollection)
 	s.mux.HandleFunc("/api/local/biaoshu/projects/", s.handleBiaoshuProjectResource)
+	s.mux.HandleFunc("/api/local/biaoshu/history", s.handleBiaoshuHistory)
 	s.mux.HandleFunc("/api/local/biaoshu-artifacts/read", s.handleReadBiaoshuArtifact)
 	s.mux.HandleFunc("/api/local/biaoshu-artifacts/write", s.handleWriteBiaoshuArtifact)
 	s.mux.HandleFunc("/api/local/biaoshu-conversations", s.handleBiaoshuConversation)

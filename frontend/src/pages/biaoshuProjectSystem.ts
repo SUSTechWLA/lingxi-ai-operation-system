@@ -1,4 +1,4 @@
-import type { BiaoshuProjectManifest, BiaoshuProjectStatus, BiaoshuProjectListResponse } from '../services/localAgent'
+import type { BiaoshuProjectManifest, BiaoshuProjectStatus, BiaoshuProjectListResponse, BiaoshuHistoryProject } from '../services/localAgent'
 import type { BiaoshuArtifactRecord, BiaoshuArtifactStatus } from './biaoshuArtifactLogic'
 
 export interface BiaoshuProjectHistoryItem {
@@ -192,4 +192,39 @@ export function legacyProjectsToHistory(response: BiaoshuProjectListResponse): B
     validArtifactCount: p.validArtifactCount ?? 0,
     managedProject: false,
   }))
+}
+
+export function biaoshuHistoryProjectToViewItem(project: BiaoshuHistoryProject): BiaoshuProjectHistoryItem {
+  return {
+    runId: project.runId ?? '',
+    projectId: project.projectId ?? '',
+    projectName: project.projectName,
+    bidFilePath: project.bidFilePath ?? project.outputDir ?? '',
+    status: normalizeProjectStatus(project.status),
+    currentStage: project.currentStage ?? '',
+    createdAt: project.updatedAt,
+    updatedAt: project.updatedAt,
+    artifactCount: project.totalCount,
+    validArtifactCount: project.generatedCount,
+    managedProject: project.hasManagedManifest,
+  }
+}
+
+export function selectBestBiaoshuHistoryProject(projects: BiaoshuHistoryProject[]): BiaoshuHistoryProject | undefined {
+  if (projects.length === 0) return undefined
+  const ranked = projects
+    .filter((p) => p.hasManagedManifest || p.projectId)
+    .sort((a, b) => {
+      const stageRank: Record<string, number> = {
+        word_exported: 100, draft_merged: 90, wordcheck_ready: 80,
+        chapters_ready: 70, outline_ready: 60, scoring_ready: 50,
+        context_ready: 40, analysis_ready: 30, raw_parsed: 20, created: 10, failed: 0,
+      }
+      const aRank = (stageRank[a.currentStage ?? ''] || 0) + a.generatedCount
+      const bRank = (stageRank[b.currentStage ?? ''] || 0) + b.generatedCount
+      if (aRank !== bRank) return bRank - aRank
+      return b.updatedAt.localeCompare(a.updatedAt)
+    })
+  if (ranked.length > 0) return ranked[0]
+  return projects.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
 }

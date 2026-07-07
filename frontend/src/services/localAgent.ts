@@ -188,6 +188,40 @@ export async function fetchBiaoshuProjects(): Promise<BiaoshuProjectListResponse
   return response.json() as Promise<BiaoshuProjectListResponse>
 }
 
+export interface BiaoshuHistoryResponse {
+  projects: BiaoshuHistoryProject[]
+  sources: {
+    currentManaged: number
+    legacyTempManaged: number
+    legacyRuns: number
+  }
+  warnings?: string[]
+}
+
+export interface BiaoshuHistoryProject {
+  projectId?: string
+  runId?: string
+  projectName: string
+  bidFilePath?: string
+  outputDir?: string
+  status: string
+  currentStage?: string
+  generatedCount: number
+  totalCount: number
+  updatedAt: string
+  source: string
+  hasManagedManifest: boolean
+  hasLegacyRun: boolean
+}
+
+export async function fetchBiaoshuHistory(): Promise<BiaoshuHistoryResponse> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu/history'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '读取标书项目历史失败'))
+  }
+  return response.json() as Promise<BiaoshuHistoryResponse>
+}
+
 export async function saveBiaoshuProject(
   project: LocalBiaoshuProject
 ): Promise<BiaoshuProjectUpsertResponse> {
