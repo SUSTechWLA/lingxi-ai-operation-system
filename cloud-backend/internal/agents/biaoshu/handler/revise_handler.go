@@ -24,17 +24,25 @@ func NewReviseHandler(gw *modelgateway.Gateway) *ReviseHandler {
 
 // ReviseRequest is the JSON body for POST /api/biaoshu/artifacts/revise.
 type ReviseRequest struct {
-	RunID           string                 `json:"runId"`
-	ArtifactKind    string                 `json:"artifactKind"`
-	ArtifactName    string                 `json:"artifactName"`
-	ArtifactContent string                 `json:"artifactContent"`
-	UserInstruction string                 `json:"userInstruction"`
-	ContextMessages []ReviseContextMessage `json:"contextMessages"`
+	RunID              string                 `json:"runId"`
+	ArtifactKind       string                 `json:"artifactKind"`
+	ArtifactName       string                 `json:"artifactName"`
+	ArtifactContent    string                 `json:"artifactContent"`
+	UserInstruction    string                 `json:"userInstruction"`
+	ContextMessages    []ReviseContextMessage `json:"contextMessages"`
+	ReferenceArtifacts []ReferenceArtifact    `json:"referenceArtifacts"`
 }
 
 // ReviseContextMessage is a single chat message from the conversation history.
 type ReviseContextMessage struct {
 	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// ReferenceArtifact holds a peer artifact's content for context.
+type ReferenceArtifact struct {
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
 	Content string `json:"content"`
 }
 
@@ -75,9 +83,19 @@ func (h *ReviseHandler) Revise(c *gin.Context) {
 		return
 	}
 
+	// Validate combined size: artifactContent + referenceArtifacts ≤ 500KB.
+	var totalRefContent int
+	for _, ref := range req.ReferenceArtifacts {
+		totalRefContent += len(ref.Content)
+	}
+	if len(req.ArtifactContent)+totalRefContent > maxContentLength {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "artifactContent + referenceArtifacts exceeds 500KB limit", "data": nil})
+		return
+	}
+
 	// Build system prompt and user prompt.
 	systemPrompt := buildReviseSystemPrompt(req.ArtifactKind, req.ArtifactName)
-	userPrompt := buildReviseUserPrompt(req.ArtifactContent, req.UserInstruction, req.ContextMessages)
+	userPrompt := buildReviseUserPrompt(req.ArtifactContent, req.UserInstruction, req.ContextMessages, req.ReferenceArtifacts)
 
 	result, err := h.gw.Execute(c.Request.Context(), &modelgateway.ModelRequest{
 		Capability: modelgateway.CapTextToText,
@@ -289,8 +307,25 @@ func buildReviseSystemPrompt(artifactKind, artifactName string) string {
 }
 
 // buildReviseUserPrompt assembles the user prompt with artifact content, instruction, and context.
-func buildReviseUserPrompt(artifactContent, userInstruction string, contextMessages []ReviseContextMessage) string {
+func buildReviseUserPrompt(artifactContent, userInstruction string, contextMessages []ReviseContextMessage, references []ReferenceArtifact) string {
 	var sb strings.Builder
+
+	// Reference artifacts (peer artifacts from the same project).
+	if len(references) > 0 {
+		sb.WriteString("## 参考产物（作为修改的参考依据）\n\n")
+		sb.WriteString("以下是与当前产物同项目的其他产物，供你修改时参考：\n\n")
+		for _, ref := range references {
+			name := ref.Name
+			if name == "" {
+				name = ref.Kind
+			}
+			sb.WriteString(fmt.Sprintf("### %s\n\n", name))
+			sb.WriteString(ref.Content)
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString("---\n\n")
+	}
+
 	sb.WriteString("## 当前产物内容\n\n")
 	sb.WriteString(artifactContent)
 	sb.WriteString("\n\n## 用户修改指令\n\n")

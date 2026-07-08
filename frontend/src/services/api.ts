@@ -358,6 +358,12 @@ export const reviseArtifact = async (
 
 // ── Biaoshu Artifact AI Revision ──
 
+export interface ReferenceArtifact {
+  kind: string
+  name: string
+  content: string
+}
+
 export interface BiaoshuReviseRequest {
   runId?: string
   artifactKind?: string
@@ -365,6 +371,7 @@ export interface BiaoshuReviseRequest {
   artifactContent: string
   userInstruction: string
   contextMessages?: { role: string; content: string }[]
+  referenceArtifacts?: ReferenceArtifact[]
 }
 
 export interface BiaoshuReviseResponse {

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FiArchive, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
+import { FiArchive, FiChevronDown, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
-import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, type BiaoshuReviseRequest } from '../services/api'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, type BiaoshuReviseRequest, type ReferenceArtifact } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
   saveBiaoshuProject, 
@@ -1639,6 +1639,7 @@ function BiaoshuArtifactsPage({
             // Refresh the viewed content after write-back
             setViewContent(newContent)
           }}
+          peerArtifacts={artifacts.filter(a => a.id !== viewingArtifact.id && a.status === 'valid')}
         />
       )}
 
@@ -1782,6 +1783,7 @@ async function copyText(value: string) {
 
 function BiaoshuArtifactViewer({
   artifact, content, format, loading, error, run, onClose, onContentUpdate,
+  peerArtifacts = [],
 }: {
   artifact: BiaoshuArtifactRecord
   content: string
@@ -1791,6 +1793,7 @@ function BiaoshuArtifactViewer({
   run: AgentRun | null
   onClose: () => void
   onContentUpdate?: (newContent: string) => void
+  peerArtifacts?: BiaoshuArtifactRecord[]
 }) {
   // AI chat state
   const [chatMessages, setChatMessages] = useState<BiaoshuConversationMessage[]>([])
@@ -1803,6 +1806,9 @@ function BiaoshuArtifactViewer({
   const [applying, setApplying] = useState(false)
   // Track whether we've loaded conversation history
   const [historyLoaded, setHistoryLoaded] = useState(false)
+  // Reference artifact selections: kind → checked
+  const [referenceSelections, setReferenceSelections] = useState<Record<string, boolean>>({})
+  const [referencePanelOpen, setReferencePanelOpen] = useState(false)
 
   const artifactPath = artifact.storageRef || ''
   const runId = run?.id || ''
@@ -1826,6 +1832,20 @@ function BiaoshuArtifactViewer({
     load()
     return () => { cancelled = true }
   }, [runId, artifactPath, historyLoaded])
+
+  // Initialize reference selections: all valid peer artifacts default checked
+  useEffect(() => {
+    if (peerArtifacts.length > 0 && Object.keys(referenceSelections).length === 0) {
+      const initial: Record<string, boolean> = {}
+      for (const a of peerArtifacts) {
+        if (a.status === 'valid' && a.storageRef && a.kind !== artifact.kind) {
+          initial[a.kind] = true
+        }
+      }
+      setReferenceSelections(initial)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peerArtifacts, artifact.kind])
 
   const handleSend = async () => {
     const instruction = inputValue.trim()
@@ -1855,7 +1875,25 @@ function BiaoshuArtifactViewer({
       }
       setChatMessages(prev => [...prev, userMsg])
 
-      // 2. Call cloud revise endpoint
+      // 2. Load checked reference artifacts
+      const loadedRefs: ReferenceArtifact[] = []
+      const selectedKinds = Object.entries(referenceSelections)
+        .filter(([, v]) => v)
+        .map(([k]) => k)
+      if (selectedKinds.length > 0) {
+        for (const peer of peerArtifacts) {
+          if (selectedKinds.includes(peer.kind) && peer.storageRef) {
+            try {
+              const data = await readBiaoshuArtifact(peer.storageRef)
+              loadedRefs.push({ kind: peer.kind, name: peer.name, content: data.content })
+            } catch {
+              // Silently skip a reference artifact if reading fails
+            }
+          }
+        }
+      }
+
+      // 3. Call cloud revise endpoint
       const contextMessages = chatMessages.slice(-10).map(m => ({
         role: m.role,
         content: m.content,
@@ -1867,6 +1905,7 @@ function BiaoshuArtifactViewer({
         artifactContent: content,
         userInstruction: instruction,
         contextMessages,
+        referenceArtifacts: loadedRefs.length > 0 ? loadedRefs : undefined,
       }
       const result = await reviseBiaoshuArtifact(revisePayload)
 
@@ -2011,6 +2050,45 @@ function BiaoshuArtifactViewer({
 
           {/* Right: AI Chat panel */}
           <div className="flex h-full min-h-0 flex-col overflow-hidden">
+            {/* Reference artifact selector */}
+            {isTextFormat && peerArtifacts.length > 0 && (
+              <div className="border-b border-line px-4 py-2">
+                <button
+                  onClick={() => setReferencePanelOpen(v => !v)}
+                  className="flex w-full items-center justify-between text-xs font-bold text-ink-soft hover:text-ink"
+                >
+                  <span>参考产物</span>
+                  <span className="flex items-center gap-1">
+                    <span className="text-ink-muted">
+                      {Object.values(referenceSelections).filter(Boolean).length}/{peerArtifacts.length}
+                    </span>
+                    <FiChevronDown className={`transform transition-transform ${referencePanelOpen ? 'rotate-180' : ''}`} size={14} />
+                  </span>
+                </button>
+                {referencePanelOpen && (
+                  <div className="mt-2 max-h-[30vh] space-y-1 overflow-y-auto overscroll-contain">
+                    {peerArtifacts.map((peer) => (
+                      <label
+                        key={peer.kind}
+                        className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-white/60 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={referenceSelections[peer.kind] || false}
+                          onChange={() =>
+                            setReferenceSelections(prev => ({ ...prev, [peer.kind]: !prev[peer.kind] }))
+                          }
+                          className="h-3.5 w-3.5 rounded accent-primary"
+                        />
+                        <span className="text-ink">{peer.name}</span>
+                        <span className="text-ink-muted font-mono text-[10px]">({peer.kind})</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Chat messages */}
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-3">
               {!isTextFormat && (

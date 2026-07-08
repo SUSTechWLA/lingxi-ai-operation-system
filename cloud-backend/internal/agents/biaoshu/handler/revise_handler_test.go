@@ -152,7 +152,7 @@ func TestBuildReviseSystemPrompt(t *testing.T) {
 func TestBuildReviseUserPrompt(t *testing.T) {
 	content := "# 第一章\n\n原有内容"
 	instruction := "把第一章标题改成'项目概述'"
-	prompt := buildReviseUserPrompt(content, instruction, nil)
+	prompt := buildReviseUserPrompt(content, instruction, nil, nil)
 
 	if !strings.Contains(prompt, content) {
 		t.Error("user prompt should contain artifact content")
@@ -169,8 +169,7 @@ func TestBuildReviseUserPromptWithContext(t *testing.T) {
 		{Role: "user", Content: "上次你改了标题"},
 		{Role: "assistant", Content: "好的，已将标题修改为..."},
 	}
-	prompt := buildReviseUserPrompt(content, instruction, context)
-
+	prompt := buildReviseUserPrompt(content, instruction, context, nil)
 	if !strings.Contains(prompt, "对话上下文") {
 		t.Error("user prompt should contain context header when contextMessages are provided")
 	}
@@ -189,7 +188,7 @@ func TestBuildReviseUserPromptContextTruncation(t *testing.T) {
 			Content: fmt.Sprintf("message-%d", i),
 		}
 	}
-	prompt := buildReviseUserPrompt(content, instruction, context)
+	prompt := buildReviseUserPrompt(content, instruction, context, nil)
 
 	// Oldest messages should be truncated.
 	if strings.Contains(prompt, "message-0") {
@@ -198,6 +197,42 @@ func TestBuildReviseUserPromptContextTruncation(t *testing.T) {
 	// Most recent messages should be present.
 	if !strings.Contains(prompt, fmt.Sprintf("message-%d", maxContextMessages+4)) {
 		t.Error("most recent messages should be present after truncation")
+	}
+}
+
+func TestBuildReviseUserPromptWithReferences(t *testing.T) {
+	content := "# 第三章大纲"
+	instruction := "根据评分标准补充四级标题"
+	refs := []ReferenceArtifact{
+		{Kind: "BID_ANALYSIS", Name: "招标文件解析报告", Content: "评分项：施工组织方案(30分)"},
+		{Kind: "BID_RAW_TEXT", Name: "原文解析", Content: "第三章 投标人须知"},
+	}
+	prompt := buildReviseUserPrompt(content, instruction, nil, refs)
+
+	if !strings.Contains(prompt, "参考产物") {
+		t.Error("prompt should contain reference section header")
+	}
+	if !strings.Contains(prompt, "施工组织方案(30分)") {
+		t.Error("prompt should contain reference artifact content")
+	}
+	if !strings.Contains(prompt, "招标文件解析报告") {
+		t.Error("prompt should contain reference artifact name")
+	}
+	if !strings.Contains(prompt, content) {
+		t.Error("prompt should still contain current artifact content")
+	}
+}
+
+func TestBuildReviseUserPromptWithoutReferences(t *testing.T) {
+	content := "# 第一章"
+	instruction := "优化"
+	prompt := buildReviseUserPrompt(content, instruction, nil, nil)
+
+	if strings.Contains(prompt, "参考产物") {
+		t.Error("prompt should NOT contain reference section when references is nil")
+	}
+	if !strings.Contains(prompt, content) {
+		t.Error("prompt should contain artifact content")
 	}
 }
 
