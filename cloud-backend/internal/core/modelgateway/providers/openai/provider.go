@@ -66,7 +66,7 @@ func NewProviderWithConfigResolver(resolver ConfigResolver) *Provider {
 		apiKey:         cfg.APIKey,
 		baseURL:        cfg.BaseURL,
 		configResolver: resolver,
-		client:         &http.Client{Timeout: 120 * time.Second},
+		client:         &http.Client{Timeout: 300 * time.Second},
 	}
 }
 

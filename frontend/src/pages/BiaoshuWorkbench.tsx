@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FiArchive, FiChevronDown, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
-import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, type BiaoshuReviseRequest, type ReferenceArtifact } from '../services/api'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, generateChapterTaskBook, type BiaoshuReviseRequest, type ReferenceArtifact } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
   saveBiaoshuProject, 
@@ -27,8 +27,10 @@ import {
   createManualProjectContextArtifact,
   createManualScoringBreakdownArtifact,
   createManualOutlineArtifact,
+  createManualChapterTaskBookArtifact,
   deriveBiaoshuAnalysisReportPath,
   deriveBiaoshuProjectContextPath,
+  deriveBiaoshuChapterTaskBookPath,
   deriveBiaoshuProjectContextQuestionnairePath,
   deriveBiaoshuOutlinePath,
   deriveBiaoshuScoringBreakdownPath,
@@ -157,6 +159,9 @@ export default function BiaoshuWorkbench() {
     } else if (kind === 'BID_OUTLINE') {
       upsertManualArtifact(createManualOutlineArtifact(artifact, filePath, sourceFile))
       addLog(`技术标大纲已生成: ${filePath}`)
+    } else if (kind === 'BID_CHAPTER_TASK_BOOK') {
+      upsertManualArtifact(createManualChapterTaskBookArtifact(artifact, filePath, sourceFile))
+      addLog(`章节写作任务书已生成: ${filePath}`)
     } else {
       upsertManualArtifact(createManualReportArtifact(artifact, filePath, sourceFile))
       addLog(`解析报告已生成: ${filePath}`)
@@ -985,6 +990,7 @@ function BiaoshuArtifactsPage({
   const [generatingQuestions, setGeneratingQuestions] = useState(false)
   const [generatingContextReport, setGeneratingContextReport] = useState(false)
   const [generatingOutline, setGeneratingOutline] = useState(false)
+  const [generatingTaskBook, setGeneratingTaskBook] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [savedRecently, setSavedRecently] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
@@ -995,6 +1001,7 @@ function BiaoshuArtifactsPage({
   const deriveProjectContextQuestionnairePath = deriveBiaoshuProjectContextQuestionnairePath
   const deriveOutlinePath = deriveBiaoshuOutlinePath
   const deriveScoringBreakdownPath = deriveBiaoshuScoringBreakdownPath
+  const deriveChapterTaskBookPath = deriveBiaoshuChapterTaskBookPath
 
   // ── Recovery scan: check for already-generated local files ──
   const resolveCandidatePath = (probePath: string, alreadyScanned: string): boolean =>
@@ -1393,6 +1400,34 @@ function BiaoshuArtifactsPage({
     }
   }
 
+  const handleGenerateChapterTaskBook = async () => {
+    if (!outlineArtifact?.storageRef) return
+    const existing = artifacts.find(a => a.kind === 'BID_CHAPTER_TASK_BOOK')
+    if (existing && !window.confirm('当前已存在章节写作任务书，重新生成将覆盖原产物。是否继续？')) {
+      return
+    }
+    setGeneratingTaskBook(true)
+    setContextError(null)
+    try {
+      const taskBookPath = deriveChapterTaskBookPath(outlineArtifact.storageRef)
+      const result = await generateChapterTaskBook({
+        outlinePath: outlineArtifact.storageRef,
+        scoringReportPath: scoringArtifact?.storageRef || deriveScoringBreakdownPath(analysisArtifact?.storageRef || ''),
+        analysisReportPath: analysisArtifact?.storageRef || '',
+        contextReportPath: contextArtifact?.storageRef,
+        taskBookPath,
+        mode: 'strict',
+      })
+      if (result.artifact) {
+        onReportGenerated(result.artifact, result.taskBookPath, '')
+      }
+    } catch (e: unknown) {
+      setContextError(e instanceof Error ? e.message : '生成章节写作任务书失败')
+    } finally {
+      setGeneratingTaskBook(false)
+    }
+  }
+
   const handleQuestionAnswerChange = (questionId: string, answer: ProjectContextQuestionWithAnswer['answer']) => {
     setContextQuestionnaire((prev) => {
       if (!prev) return prev
@@ -1624,7 +1659,7 @@ function BiaoshuArtifactsPage({
         </div>
       )}
 
-      <BiaoshuArtifactTable artifacts={artifacts} onView={handleView} />
+      <BiaoshuArtifactTable artifacts={artifacts} onView={handleView} onGenerateTaskBook={handleGenerateChapterTaskBook} generatingTaskBook={generatingTaskBook} />
 
       {viewingArtifact && (
         <BiaoshuArtifactViewer
@@ -1673,7 +1708,7 @@ function BiaoshuMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
-function BiaoshuArtifactTable({ artifacts, onView }: { artifacts: BiaoshuArtifactRecord[]; onView: (a: BiaoshuArtifactRecord) => void }) {
+function BiaoshuArtifactTable({ artifacts, onView, onGenerateTaskBook, generatingTaskBook }: { artifacts: BiaoshuArtifactRecord[]; onView: (a: BiaoshuArtifactRecord) => void; onGenerateTaskBook?: () => void; generatingTaskBook?: boolean }) {
   const headers = ['ID', '名称', '类型', '状态', '负责人', '路径', '操作']
   return (
     <section className="card overflow-hidden p-0">
@@ -1718,6 +1753,15 @@ function BiaoshuArtifactTable({ artifacts, onView }: { artifacts: BiaoshuArtifac
                         className="inline-flex items-center gap-1.5 rounded-lg bg-primary-soft px-2.5 py-1.5 text-xs font-black text-primary-dark ring-1 ring-primary-200 hover:bg-primary-100"
                       >
                         <FiEye /> 查看/修改
+                      </button>
+                    )}
+                    {artifact.kind === 'BID_OUTLINE' && artifact.status === 'valid' && onGenerateTaskBook && (
+                      <button
+                        onClick={onGenerateTaskBook}
+                        disabled={generatingTaskBook}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-black text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {generatingTaskBook ? '生成中...' : '生成任务书'}
                       </button>
                     )}
                   </div>

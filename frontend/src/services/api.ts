@@ -557,6 +557,35 @@ export const generateOutline = async (
   }
 }
 
+// ── Chapter Task Book ──
+
+export interface GenerateChapterTaskBookRequest {
+  outlinePath: string
+  scoringReportPath?: string
+  analysisReportPath?: string
+  contextReportPath?: string
+  taskBookPath: string
+  projectId?: string
+  runId?: string
+  mode?: 'strict' | 'draft'
+}
+
+export interface GenerateChapterTaskBookResponse {
+  taskBookPath: string
+  content: string
+  artifact: Record<string, unknown>
+  warnings?: string[]
+}
+
+export const generateChapterTaskBook = async (
+  payload: GenerateChapterTaskBookRequest
+): Promise<GenerateChapterTaskBookResponse> => {
+  const response = await api.post<ApiResponse<GenerateChapterTaskBookResponse>>('/biaoshu/chapter-task-book/generate', payload, {
+    timeout: 300000, // 300s — LLM call may take 90-120s for 16000 max_tokens
+  })
+  return response.data.data
+}
+
 // ── Model Provider Config Sync ──
 
 export interface ModelProviderSyncPayload {

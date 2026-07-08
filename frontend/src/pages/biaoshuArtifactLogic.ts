@@ -147,6 +147,10 @@ function joinBiaoshuSiblingPath(basePath: string, fileName: string): string {
   return `${trimmed.slice(0, slashIndex + 1)}${fileName}`
 }
 
+export function deriveBiaoshuChapterTaskBookPath(outlinePath: string): string {
+  return joinBiaoshuSiblingPath(outlinePath, '04_章节写作任务书.md')
+}
+
 export function buildBiaoshuArtifacts(
   run: AgentRun | null | undefined,
   trace: unknown = undefined,
@@ -198,6 +202,7 @@ export function displayNameForBiaoshuArtifact(kind: string): string {
     BID_PROJECT_CONTEXT: '项目背景',
     BID_SCORING_BREAKDOWN: '评分拆解',
     BID_OUTLINE: '标书大纲',
+    BID_CHAPTER_TASK_BOOK: '写作任务书',
     BID_CHAPTERS: '章节稿件',
     WORD_COUNT_REPORT: '字数检查',
     MERGED_DRAFT: '整合成稿',
@@ -369,6 +374,30 @@ export function createManualOutlineArtifact(
     storageRef: String(artifact?.storageRef || artifact?.storage_ref || outlinePath),
     summary: String(artifact?.summary || '手动生成的技术标四级大纲'),
     sourceTool: 'outline_generator',
+    metadata,
+  }
+}
+
+export function createManualChapterTaskBookArtifact(
+  artifact: Record<string, unknown> | undefined,
+  taskBookPath: string,
+  sourceFile: string,
+): BiaoshuArtifactRecord {
+  const metadata = objectRecord(artifact?.metadata)
+  if (sourceFile) metadata.sourceFile = sourceFile
+  metadata.manualGenerated = true
+
+  return {
+    id: String(artifact?.id || artifact?.artifactId || 'manual-chapter-task-book'),
+    name: String(artifact?.name || '04_章节写作任务书.md'),
+    kind: 'BID_CHAPTER_TASK_BOOK',
+    version: '-',
+    status: 'valid',
+    owner: '任务规划',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    storageRef: String(artifact?.storageRef || artifact?.storage_ref || taskBookPath),
+    summary: String(artifact?.summary || '章节写作任务书'),
+    sourceTool: 'chapter_task_book_generator',
     metadata,
   }
 }
