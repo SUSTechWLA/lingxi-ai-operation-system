@@ -42,6 +42,13 @@
     "svgPuppet": true,
     "hypergenControl": true,
     "floatBounce": true,
-    "glowPulse": true
+    "glowPulse": true,
+    "humanizedProsodyPreview": true,
+    "segmentedLocalTTS": true,
+    "independentLimbMotion": true,
+    "leftArmGesture": true,
+    "rightArmGesture": true,
+    "footBounce": true,
+    "bodyWeightShift": true
   }
 }

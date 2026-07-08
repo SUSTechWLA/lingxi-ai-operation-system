@@ -50,7 +50,7 @@ decision: GO
 - Shot material packages expose `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so users can generate text-free AIGC backgrounds or partial videos, keep exact Chinese text in HyperFrames, and merge layers with FFmpeg.
 - Shot pages let users inspect the actual generated media: reference/storyboard images can be enlarged, video artifacts can be played in a large modal, subtitles are displayed as a readable timeline, and only actionable status messages are shown.
 - External AIGC video calls use the AIGC layer prompt (`aigcPrompt`, `aigcVideoPrompt`, or `aigcPlan.prompt`) before falling back to legacy prompt fields, so JiMeng/Dreamina is not sent HyperFrames text-layer copy.
-- Local IP talking-avatar render can generate `final.mp4`, `avatar_layer.webm`, `avatar_scene.json`, `voice_profile.json`, lip-sync and motion timelines, and `render_report.json` for `bobo` / `aster` without AIGC video calls.
+- Local IP talking-avatar render can generate `final.mp4`, `avatar_layer.webm`, `avatar_scene.json`, `voice_profile.json`, `narration_prosody_plan.json`, lip-sync and richer limb motion timelines, and `render_report.json` for `bobo` / `aster` without AIGC video calls.
 - At least one AIGC video MCP provider is healthy when real creator trials are planned.
 - OpenAI-compatible model provider routes are configured for the selected workflow.
 - Artifact provenance distinguishes real AIGC from fallback storyboard/preview.
@@ -74,7 +74,7 @@ Treat an artifact as fallback when:
 ## Current Known Limits
 
 - Real AIGC generation depends on local provider login, credits, rate limits, and provider CLI/UI stability.
-- Local IP avatar preview narration can fall back to macOS `say`, which is useful for timing and lip-sync preview but is not production-quality voice acting.
+- Local IP avatar preview narration can fall back to segmented macOS `say` with varied rate, pauses, and emphasis. It is better for timing and lip-sync preview but is still not production-quality voice acting.
 - The current local IP animation mode is `svg2d` high-fidelity puppet. Full 1:1 body articulation requires a future Live2D Cubism model package and renderer bridge.
 - Video QA is deterministic frame metrics plus shot spec lint. OCR, ASR, PyIQA, and VLM judging are schema-ready but not bundled, so subtle story/identity failures may still need human review.
 - The automated repair loop is policy-complete for closed beta, but actual provider-side regeneration quality still depends on JiMeng/Dreamina behavior and reference asset quality.

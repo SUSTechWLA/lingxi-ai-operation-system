@@ -847,6 +847,10 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"svg_2d_puppet_render",
 			"hypergen_controllable_ip_parts",
 			"character_voice_profile",
+			"segmented_prosody_preview_voice",
+			"independent_limb_motion",
+			"left_right_arm_gestures",
+			"body_weight_shift",
 			"local_video_render",
 			"subtitle_composition",
 			"ffmpeg_video_composition",
@@ -863,8 +867,9 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 				"image_to_video_generation",
 				"face_detail_restoration",
 			},
-			"retrievalHints": []string{"IP口播", "卡通数字人", "虚拟人口播", "品牌角色讲解", "本地数字人"},
+			"retrievalHints": []string{"IP口播", "卡通数字人", "虚拟人口播", "品牌角色讲解", "本地数字人", "真人感口播", "角色动作", "四肢动作"},
 			"live2dStatus":   "Live2D is supported at the asset protocol level when a Cubism model3.json package exists; the current local renderer runs sprite2d/svg2d puppet assets.",
+			"voiceBoundary":  "Local macOS say preview is segmented with prosody planning for rhythm and pauses, but production human-like voice quality should use uploaded character narration audio or a dedicated TTS provider.",
 		}
 		manifest.LocalRequirements = tool.LocalRequirements{
 			Commands:        []string{"ffmpeg", "ffprobe"},

@@ -126,13 +126,16 @@ func TestLocalIpTalkingAvatarRenderGeneratesSVG2DPuppetScene(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute svg2d local avatar render: %v", err)
 	}
-	if !output.Success || output.ScenePath == "" || output.VoiceProfilePath == "" {
+	if !output.Success || output.ScenePath == "" || output.VoiceProfilePath == "" || output.ProsodyPlanPath == "" {
 		t.Fatalf("expected scene and voice profile output, got %#v", output)
 	}
 	if !output.QA.ControlRigLoaded || !output.QA.ReferenceSVGLoaded || !output.QA.SceneGenerated {
 		t.Fatalf("svg2d qa should confirm rig/svg/scene, got %#v", output.QA)
 	}
-	for _, path := range []string{output.VideoPath, output.AvatarVideoPath, output.ScenePath, output.VoiceProfilePath} {
+	if !output.QA.ProsodyPlanGenerated {
+		t.Fatalf("svg2d qa should confirm prosody plan generation, got %#v", output.QA)
+	}
+	for _, path := range []string{output.VideoPath, output.AvatarVideoPath, output.ScenePath, output.VoiceProfilePath, output.ProsodyPlanPath} {
 		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
 			t.Fatalf("expected generated svg2d file %s, stat=%v size=%d", path, err, fileSize(info))
 		}
@@ -147,6 +150,70 @@ func TestLocalIpTalkingAvatarRenderGeneratesSVG2DPuppetScene(t *testing.T) {
 	}
 	if scene.HyperGenControl == nil || scene.VoiceProfile.Tone == "" {
 		t.Fatalf("scene should expose hypergen control and voice profile, got %#v", scene)
+	}
+	if !scene.VoiceProfile.Prosody.Enabled || scene.VoiceProfile.Prosody.PauseLongMs <= scene.VoiceProfile.Prosody.PauseShortMs {
+		t.Fatalf("voice profile should expose expressive prosody controls, got %#v", scene.VoiceProfile.Prosody)
+	}
+	channels, _ := scene.HyperGenControl["motionChannels"].([]interface{})
+	if !containsInterfaceString(channels, "leftArmReach") || !containsInterfaceString(channels, "rightArmReach") || !containsInterfaceString(channels, "footBounce") {
+		t.Fatalf("hypergen control should expose richer limb channels, got %#v", scene.HyperGenControl["motionChannels"])
+	}
+}
+
+func TestVoiceProsodyPlanSegmentsScriptWithPausesAndRateVariation(t *testing.T) {
+	profile := applyCharacterVoiceDefaults(VoiceProfile{Persona: "bobo", DisplayName: "波波"})
+	plan := BuildVoiceProsodyPlan("第一，先把想法说清楚。但是，不要让画面太呆板！所以我们让波波动起来。", profile)
+	if !plan.Prosody.Enabled {
+		t.Fatalf("prosody plan should be enabled, got %#v", plan)
+	}
+	if len(plan.Segments) < 3 {
+		t.Fatalf("expected multiple speech segments, got %#v", plan.Segments)
+	}
+	rates := map[int]bool{}
+	hasPause := false
+	hasEmphasis := false
+	for _, segment := range plan.Segments {
+		rates[segment.Rate] = true
+		if segment.PauseAfterMs >= plan.Prosody.PauseMediumMs {
+			hasPause = true
+		}
+		if segment.Emphasis {
+			hasEmphasis = true
+		}
+	}
+	if len(rates) < 2 || !hasPause || !hasEmphasis {
+		t.Fatalf("prosody should vary rate, pause and emphasis, got %#v", plan.Segments)
+	}
+}
+
+func TestMotionTimelineAddsIndependentLimbAndWeightShiftEvents(t *testing.T) {
+	events := NewMotionTimelineBuilder().Build(
+		"第一，先介绍项目。注意这里是重点。但是不要让角色僵硬。所以结论是四肢要动起来。",
+		8,
+		defaultMotionPolicy(),
+	)
+	required := map[string]bool{
+		"idle_hands":           false,
+		"body_weight_shift":    false,
+		"gesture_right_point":  false,
+		"gesture_left_present": false,
+		"gesture_both_present": false,
+		"foot_bounce":          false,
+	}
+	for _, event := range events {
+		if _, ok := required[event.Motion]; ok {
+			required[event.Motion] = true
+		}
+	}
+	for motion, seen := range required {
+		if !seen {
+			t.Fatalf("expected motion %s in timeline, got %#v", motion, events)
+		}
+	}
+
+	state := motionAt(events, 2.0)
+	if state.leftArmDy == 0 || state.rightArmDy == 0 || state.bodyTilt == 0 {
+		t.Fatalf("motion state should drive left arm, right arm and body tilt, got %#v", state)
 	}
 }
 
@@ -242,6 +309,15 @@ func fileSize(info os.FileInfo) int64 {
 		return 0
 	}
 	return info.Size()
+}
+
+func containsInterfaceString(values []interface{}, want string) bool {
+	for _, value := range values {
+		if s, ok := value.(string); ok && s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeDemoCharacter(t *testing.T, root string) {

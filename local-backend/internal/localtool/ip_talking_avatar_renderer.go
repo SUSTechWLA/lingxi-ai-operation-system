@@ -36,10 +36,16 @@ type spriteLayers struct {
 
 type renderMotionState struct {
 	bodyDy       float64
+	bodyDx       float64
+	bodyTilt     float64
 	headDy       float64
 	scalePulse   float64
+	leftArmDx    float64
+	leftArmDy    float64
 	rightArmDx   float64
 	rightArmDy   float64
+	leftFootDy   float64
+	rightFootDy  float64
 	blinkPhase   float64
 	nodStrength  float64
 	gesturePhase float64
@@ -159,26 +165,26 @@ func renderSpriteFrame(dst *image.RGBA, input LocalIpTalkingAvatarRenderInput, a
 	bodyDy := motion.bodyDy
 	headDy := motion.headDy
 
-	drawLayer(dst, layers.body, x, y+bodyDy, scale)
+	drawLayer(dst, layers.body, x+motion.bodyDx, y+bodyDy, scale)
 	if layers.leftArm != nil {
-		drawLayer(dst, layers.leftArm, x, y+bodyDy, scale)
+		drawLayer(dst, layers.leftArm, x+motion.bodyDx+motion.leftArmDx, y+bodyDy+motion.leftArmDy, scale)
 	}
 	if layers.rightArm != nil {
-		drawLayer(dst, layers.rightArm, x+motion.rightArmDx, y+bodyDy+motion.rightArmDy, scale)
+		drawLayer(dst, layers.rightArm, x+motion.bodyDx+motion.rightArmDx, y+bodyDy+motion.rightArmDy, scale)
 	}
-	drawLayer(dst, layers.head, x, y+bodyDy+headDy, scale)
+	drawLayer(dst, layers.head, x+motion.bodyDx, y+bodyDy+headDy, scale)
 	if layers.hair != nil {
-		drawLayer(dst, layers.hair, x, y+bodyDy+headDy, scale)
+		drawLayer(dst, layers.hair, x+motion.bodyDx, y+bodyDy+headDy, scale)
 	}
 	switch {
 	case motion.blinkPhase > 0.68:
-		drawLayer(dst, layers.eyeClose, x, y+bodyDy+headDy, scale)
+		drawLayer(dst, layers.eyeClose, x+motion.bodyDx, y+bodyDy+headDy, scale)
 	case motion.blinkPhase > 0.24:
-		drawLayer(dst, layers.eyeHalf, x, y+bodyDy+headDy, scale)
+		drawLayer(dst, layers.eyeHalf, x+motion.bodyDx, y+bodyDy+headDy, scale)
 	default:
-		drawLayer(dst, layers.eyeOpen, x, y+bodyDy+headDy, scale)
+		drawLayer(dst, layers.eyeOpen, x+motion.bodyDx, y+bodyDy+headDy, scale)
 	}
-	drawLayer(dst, mouthLayerFor(layers, lip.Mouth), x, y+bodyDy+headDy, scale)
+	drawLayer(dst, mouthLayerFor(layers, lip.Mouth), x+motion.bodyDx, y+bodyDy+headDy, scale)
 	_ = t
 }
 
@@ -315,24 +321,50 @@ func motionAt(events []MotionEvent, t float64) renderMotionState {
 		case "idle_breath":
 			state.bodyDy += math.Sin(t*math.Pi*0.9) * 2.5 * strength
 			state.scalePulse += math.Sin(t*math.Pi*0.9) * 0.008 * strength
+		case "idle_hands":
+			state.leftArmDx += math.Sin(t*math.Pi*0.72+0.6) * 2.2 * strength
+			state.leftArmDy += math.Sin(t*math.Pi*0.82+1.1) * 2.5 * strength
+			state.rightArmDx += math.Sin(t*math.Pi*0.74+2.2) * 2.4 * strength
+			state.rightArmDy += math.Sin(t*math.Pi*0.86+1.7) * 2.3 * strength
+		case "body_weight_shift":
+			state.bodyDx += math.Sin(t*math.Pi*0.52) * 2.4 * strength
+			state.bodyTilt += math.Sin(t*math.Pi*0.52) * 1.8 * strength
 		case "blink":
 			state.blinkPhase = math.Max(state.blinkPhase, eased)
 		case "head_nod":
 			state.headDy += eased * 7 * strength
 			state.nodStrength = math.Max(state.nodStrength, strength)
-		case "gesture_point":
+		case "gesture_point", "gesture_right_point":
 			state.rightArmDx += eased * 10 * strength
 			state.rightArmDy -= eased * 12 * strength
+			state.bodyTilt -= eased * 1.2 * strength
 			state.gesturePhase = math.Max(state.gesturePhase, eased)
-		case "gesture_present":
+		case "gesture_present", "gesture_left_present":
+			state.leftArmDx -= eased * 16 * strength
+			state.leftArmDy -= eased * 9 * strength
+			state.bodyTilt += eased * 1.1 * strength
+			state.scalePulse += eased * 0.004 * strength
+			state.gesturePhase = math.Max(state.gesturePhase, eased*0.76)
+		case "gesture_both_present":
+			state.leftArmDx -= eased * 14 * strength
+			state.leftArmDy -= eased * 11 * strength
 			state.rightArmDx += eased * 18 * strength
-			state.rightArmDy -= eased * 7 * strength
+			state.rightArmDy -= eased * 11 * strength
+			state.bodyDy -= eased * 2.5 * strength
 			state.scalePulse += eased * 0.006 * strength
 			state.gesturePhase = math.Max(state.gesturePhase, eased*0.82)
 		case "gesture_wave":
 			state.rightArmDx += math.Sin(progress*math.Pi*4) * 12 * strength
 			state.rightArmDy -= eased * 14 * strength
+			state.leftArmDy += math.Sin(progress*math.Pi*2) * 2.5 * strength
 			state.gesturePhase = math.Max(state.gesturePhase, eased)
+		case "foot_bounce":
+			state.leftFootDy -= eased * 5 * strength
+			state.rightFootDy -= math.Sin(progress*math.Pi*1.4) * 3.2 * strength
+			state.bodyDy -= eased * 1.6 * strength
+		case "body_emphasis":
+			state.bodyDy -= eased * 2.2 * strength
+			state.bodyTilt += math.Sin(progress*math.Pi*2) * 2.4 * strength
 		case "head_tilt":
 			state.headDy += math.Sin(progress*math.Pi*2) * 4 * strength
 			state.gesturePhase = math.Max(state.gesturePhase, eased*0.35)

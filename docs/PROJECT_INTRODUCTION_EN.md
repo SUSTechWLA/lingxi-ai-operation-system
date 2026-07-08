@@ -63,7 +63,7 @@ flowchart LR
 | `frontend` | React + Electron desktop client for project launch, tracking, review, material import, JiMeng setup, and local settings. |
 | `cloud-backend` | Go cloud service for auth, projects, agent plans, DAGs, review gates, tool manifests, video workflows, and APIs. |
 | `local-backend` | Go local agent for files, runner registration, local tools, MCP providers, JiMeng CLI adapter, and artifact read/write. |
-| `assets/characters` | Local IP character asset protocol, currently including `bobo` and `aster` `svg2d` puppets, rigs, reference-image cutouts, and voice profiles. |
+| `assets/characters` | Local IP character asset protocol, currently including `bobo` and `aster` `svg2d` puppets, rigs, reference-image cutouts, voice profiles, segmented prosody defaults, and richer limb motion channels. |
 | `skill-capabilities` / `cloud-backend/skills` | Video creation roles, tools, and workflow capability definitions. |
 | `.github/workflows/ci.yml` | Basic CI for frontend lint/build, Go tests, and repository whitespace checks. |
 
@@ -72,7 +72,7 @@ flowchart LR
 - Model API keys are configured locally by the user and are not uploaded to the cloud.
 - Dreamina CLI installation requires explicit user confirmation. The app does not silently install external tools.
 - Cinematic asset generation can use JiMeng MCP automatically or fall back to manual external generation.
-- Local IP talking-avatar rendering does not call AIGC video generation. Production voice should use uploaded natural narration that matches the character; the local `say` fallback is for preview only.
+- Local IP talking-avatar rendering does not call AIGC video generation. Production voice should use uploaded natural narration that matches the character; the segmented local `say` fallback is only for timing, lip-sync, and rhythm preview.
 - Local files are registered as `local://projects/...` references. The cloud stores references and dependency metadata instead of forcing large media uploads.
 
 ## Beta Readiness Notes

@@ -25,6 +25,7 @@ func (q *RenderQualityChecker) Check(ctx context.Context, input LocalIpTalkingAv
 		SubtitleExists:          input.SubtitlePath != "" && fileExists(input.SubtitlePath),
 		MouthTimelineGenerated:  fileExists(lipPath),
 		MotionTimelineGenerated: fileExists(motionPath),
+		ProsodyPlanGenerated:    output.ProsodyPlanPath != "" && fileExists(output.ProsodyPlanPath),
 		SceneGenerated:          fileExists(output.ScenePath),
 		FinalVideoGenerated:     fileExists(output.VideoPath),
 	}
@@ -48,6 +49,7 @@ func (q *RenderQualityChecker) Check(ctx context.Context, input LocalIpTalkingAv
 		"timelinePath":     output.TimelinePath,
 		"scenePath":        output.ScenePath,
 		"voiceProfilePath": output.VoiceProfilePath,
+		"prosodyPlanPath":  output.ProsodyPlanPath,
 		"audioPath":        input.AudioPath,
 		"subtitlePath":     input.SubtitlePath,
 		"expectedDuration": expectedDuration,

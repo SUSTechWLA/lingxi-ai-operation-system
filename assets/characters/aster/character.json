@@ -42,7 +42,14 @@
     "svgPuppet": true,
     "hypergenControl": true,
     "knowledgeOrb": true,
-    "lensGlint": true
+    "lensGlint": true,
+    "humanizedProsodyPreview": true,
+    "segmentedLocalTTS": true,
+    "independentLimbMotion": true,
+    "leftArmGesture": true,
+    "rightArmGesture": true,
+    "footBounce": true,
+    "bodyWeightShift": true
   },
   "live2d": {
     "reserved": true,

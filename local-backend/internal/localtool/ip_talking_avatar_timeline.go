@@ -74,6 +74,9 @@ func (b *MotionTimelineBuilder) Build(script string, durationSec float64, policy
 	var events []MotionEvent
 	if policy.AutoBreath {
 		events = append(events, MotionEvent{TimeSec: 0, Motion: "idle_breath", Duration: roundFloat(durationSec, 3), Strength: 0.35})
+		events = append(events, MotionEvent{TimeSec: 0, Motion: "idle_hands", Duration: roundFloat(durationSec, 3), Strength: 0.42})
+		events = append(events, MotionEvent{TimeSec: 0, Motion: "body_weight_shift", Duration: roundFloat(durationSec, 3), Strength: 0.32})
+		events = append(events, MotionEvent{TimeSec: 0, Motion: "foot_bounce", Duration: roundFloat(durationSec, 3), Strength: 0.2})
 	}
 	if policy.AutoBlink {
 		t := 1.1
@@ -90,12 +93,15 @@ func (b *MotionTimelineBuilder) Build(script string, durationSec float64, policy
 			t := scriptPositionToTime(pos, script, durationSec)
 			if t > 0.2 && t < durationSec-0.1 {
 				events = append(events, MotionEvent{TimeSec: roundFloat(t, 3), Motion: "head_nod", Duration: 0.42, Strength: 0.55})
+				events = append(events, MotionEvent{TimeSec: roundFloat(t, 3), Motion: "body_emphasis", Duration: 0.46, Strength: 0.42})
 			}
 		}
 	}
 	if policy.KeywordGesture {
 		keywords := []string{"重点", "注意", "第一", "第二", "但是", "所以", "结论", "记住", "开源", "项目", "流程", "工具", "视频", "创作"}
 		seen := map[string]bool{}
+		gestureMotions := []string{"gesture_right_point", "gesture_left_present", "gesture_both_present", "gesture_wave"}
+		gestureIndex := 0
 		for order, keyword := range keywords {
 			idx := strings.Index(script, keyword)
 			if idx < 0 || seen[keyword] {
@@ -109,11 +115,12 @@ func (b *MotionTimelineBuilder) Build(script string, durationSec float64, policy
 			if t > durationSec-0.3 {
 				t = durationSec - 0.3
 			}
-			motion := "gesture_point"
-			if order%2 == 1 {
-				motion = "gesture_present"
-			}
+			motion := gestureMotions[gestureIndex%len(gestureMotions)]
+			gestureIndex++
 			events = append(events, MotionEvent{TimeSec: roundFloat(t, 3), Motion: motion, Duration: 0.82, Strength: 0.72})
+			if order%3 == 0 {
+				events = append(events, MotionEvent{TimeSec: roundFloat(t+0.08, 3), Motion: "foot_bounce", Duration: 0.48, Strength: 0.5})
+			}
 		}
 	}
 	sort.SliceStable(events, func(i, j int) bool {

@@ -143,7 +143,7 @@ func renderTexturedPuppetFrame(dst *image.RGBA, input LocalIpTalkingAvatarRender
 	scalePulse := 1 + motion.scalePulse*0.65
 	targetH := float64(input.Resolution.Height) * heightRatio * styleScale * asset.Anchor.Scale * scalePulse
 	targetW := targetH * float64(texture.w) / float64(texture.h)
-	cx := float64(input.Resolution.Width) * 0.5
+	cx := float64(input.Resolution.Width)*0.5 + motion.bodyDx*targetH/1536
 	marginX := float64(input.Resolution.Width) * 0.06
 	switch input.Style.Position {
 	case "left_bottom":
@@ -181,6 +181,7 @@ func drawBoboTextureOverlays(dst *image.RGBA, placement placedTexture, lip LipSy
 	rEyeX, rEyeY := placement.point(612, 618)
 	mouthX, mouthY := placement.point(512, 670)
 	unit := placement.h / 1536
+	drawBoboTextureLimbMotion(dst, placement, motion, t, glow)
 	if motion.blinkPhase > 0.52 {
 		drawFilledEllipseRGBA(dst, lEyeX, lEyeY, 32*unit, 31*unit, color.NRGBA{R: 8, G: 10, B: 12, A: 220})
 		drawFilledEllipseRGBA(dst, rEyeX, rEyeY, 32*unit, 31*unit, color.NRGBA{R: 8, G: 10, B: 12, A: 220})
@@ -214,6 +215,7 @@ func drawBoboTextureOverlays(dst *image.RGBA, placement placedTexture, lip LipSy
 func drawAsterTextureOverlays(dst *image.RGBA, placement placedTexture, lip LipSyncFrame, motion renderMotionState, t float64) {
 	unit := placement.h / 1536
 	pulse := 0.5 + 0.5*math.Sin(t*math.Pi*0.95)
+	drawAsterTextureLimbMotion(dst, placement, motion, t, pulse)
 	eyeX, eyeY := placement.point(404, 595)
 	mouthX, mouthY := placement.point(510, 685)
 	if motion.blinkPhase > 0.54 {
@@ -234,6 +236,65 @@ func drawAsterTextureOverlays(dst *image.RGBA, placement placedTexture, lip LipS
 	drawStrokeEllipse(dst, orbX, orbY, 104*unit*(1+0.05*pulse), 62*unit*(1+0.04*pulse), 3*unit, color.NRGBA{R: 134, G: 192, B: 255, A: uint8(45 + 70*pulse)})
 	chestX, chestY := placement.point(512, 1040)
 	drawFilledEllipseRGBA(dst, chestX, chestY, 118*unit*(1+0.03*pulse), 118*unit*(1+0.03*pulse), color.NRGBA{R: 66, G: 178, B: 255, A: uint8(18 + 34*pulse)})
+}
+
+func drawBoboTextureLimbMotion(dst *image.RGBA, placement placedTexture, motion renderMotionState, t, glow float64) {
+	unit := placement.h / 1536
+	idle := 0.35 + 0.25*math.Sin(t*math.Pi*0.72)
+	leftShoulderX, leftShoulderY := placement.point(270, 995)
+	rightShoulderX, rightShoulderY := placement.point(748, 990)
+	leftHandX, leftHandY := placement.point(205, 1108)
+	rightHandX, rightHandY := placement.point(806, 1018)
+	leftHandX += (motion.leftArmDx*8 - idle*11) * unit
+	leftHandY += (motion.leftArmDy*8 + math.Sin(t*math.Pi*0.82)*7) * unit
+	rightHandX += (motion.rightArmDx*8 + motion.gesturePhase*28) * unit
+	rightHandY += (motion.rightArmDy*8 - motion.gesturePhase*44 + math.Sin(t*math.Pi*0.86)*5) * unit
+	arm := color.NRGBA{R: 255, G: 255, B: 248, A: 212}
+	hand := color.NRGBA{R: 255, G: 217, B: 72, A: 225}
+	drawCapsule(dst, leftShoulderX, leftShoulderY, leftHandX, leftHandY, 18*unit, arm)
+	drawFilledEllipseRGBA(dst, leftHandX, leftHandY, 28*unit, 25*unit, hand)
+	drawCapsule(dst, rightShoulderX, rightShoulderY, rightHandX, rightHandY, 18*unit, arm)
+	drawFilledEllipseRGBA(dst, rightHandX, rightHandY, 28*unit, 25*unit, hand)
+	if motion.gesturePhase > 0.18 {
+		drawCapsule(dst, rightHandX+10*unit, rightHandY-3*unit, rightHandX+52*unit, rightHandY-30*unit, 5*unit, hand)
+		drawBoboSpark(dst, rightHandX+62*unit, rightHandY-42*unit, 12*unit*(0.8+motion.gesturePhase), color.NRGBA{R: 255, G: 226, B: 74, A: uint8(120 + 95*motion.gesturePhase)})
+	}
+	leftFootX, leftFootY := placement.point(365, 1448)
+	rightFootX, rightFootY := placement.point(660, 1448)
+	leftFootY += motion.leftFootDy * 7 * unit
+	rightFootY += motion.rightFootDy * 7 * unit
+	footA := uint8(76 + 80*glow)
+	drawFilledEllipseRGBA(dst, leftFootX, leftFootY, 46*unit, 20*unit, color.NRGBA{R: 87, G: 173, B: 255, A: footA})
+	drawFilledEllipseRGBA(dst, rightFootX, rightFootY, 46*unit, 20*unit, color.NRGBA{R: 255, G: 207, B: 74, A: footA})
+}
+
+func drawAsterTextureLimbMotion(dst *image.RGBA, placement placedTexture, motion renderMotionState, t, pulse float64) {
+	unit := placement.h / 1536
+	leftShoulderX, leftShoulderY := placement.point(315, 910)
+	rightShoulderX, rightShoulderY := placement.point(716, 910)
+	leftHandX, leftHandY := placement.point(260, 1112)
+	rightHandX, rightHandY := placement.point(760, 1048)
+	leftHandX += (motion.leftArmDx*7 - math.Sin(t*math.Pi*0.62)*5) * unit
+	leftHandY += (motion.leftArmDy*7 + math.Sin(t*math.Pi*0.7)*4) * unit
+	rightHandX += (motion.rightArmDx*8 + motion.gesturePhase*30) * unit
+	rightHandY += (motion.rightArmDy*8 - motion.gesturePhase*38) * unit
+	sleeve := color.NRGBA{R: 239, G: 244, B: 244, A: 210}
+	gold := color.NRGBA{R: 224, G: 181, B: 82, A: 190}
+	drawCapsule(dst, leftShoulderX, leftShoulderY, leftHandX, leftHandY, 15*unit, sleeve)
+	drawFilledRoundedRect(dst, leftHandX-42*unit, leftHandY-24*unit, leftHandX+26*unit, leftHandY+22*unit, 8*unit, color.NRGBA{R: 42, G: 78, B: 112, A: 136})
+	drawStrokeRoundedRect(dst, leftHandX-42*unit, leftHandY-24*unit, leftHandX+26*unit, leftHandY+22*unit, 8*unit, 3*unit, color.NRGBA{R: 118, G: 202, B: 255, A: 170})
+	drawCapsule(dst, rightShoulderX, rightShoulderY, rightHandX, rightHandY, 15*unit, sleeve)
+	drawFilledEllipseRGBA(dst, rightHandX, rightHandY, 24*unit, 23*unit, color.NRGBA{R: 246, G: 250, B: 248, A: 230})
+	if motion.gesturePhase > 0.14 {
+		drawCapsule(dst, rightHandX+9*unit, rightHandY-6*unit, rightHandX+54*unit, rightHandY-34*unit, 4.5*unit, color.NRGBA{R: 246, G: 250, B: 248, A: 235})
+		drawStrokeEllipse(dst, rightHandX+64*unit, rightHandY-40*unit, 30*unit*(1+0.08*pulse), 18*unit*(1+0.06*pulse), 2.5*unit, gold)
+	}
+	leftFootX, leftFootY := placement.point(395, 1452)
+	rightFootX, rightFootY := placement.point(628, 1452)
+	leftFootY += motion.leftFootDy * 5 * unit
+	rightFootY += motion.rightFootDy * 5 * unit
+	drawFilledEllipseRGBA(dst, leftFootX, leftFootY, 54*unit, 17*unit, color.NRGBA{R: 80, G: 177, B: 255, A: uint8(42 + 60*pulse)})
+	drawFilledEllipseRGBA(dst, rightFootX, rightFootY, 54*unit, 17*unit, color.NRGBA{R: 231, G: 185, B: 77, A: uint8(34 + 48*pulse)})
 }
 
 func (p placedTexture) point(srcX, srcY float64) (float64, float64) {
@@ -304,6 +365,7 @@ func bilinearNRGBA(src image.Image, bounds image.Rectangle, sx0, sy0 int, wx, wy
 
 func renderBoboFrame(dst *image.RGBA, input LocalIpTalkingAvatarRenderInput, asset *CharacterAsset, lip LipSyncFrame, motion renderMotionState, t float64) {
 	cx, baseY, u := puppetPose(input, asset, 0.72)
+	cx += motion.bodyDx * u
 	bodyFloat := math.Sin(t*math.Pi*1.18)*10*u + motion.bodyDy*u*0.9
 	expressive := input.InteractionLevel != "subtle"
 	if expressive {
@@ -322,9 +384,9 @@ func renderBoboFrame(dst *image.RGBA, input LocalIpTalkingAvatarRenderInput, ass
 	drawFilledEllipseRGBA(dst, cx, bodyY+104*u, 118*u*bodyScale, 28*u, color.NRGBA{R: 255, G: 199, B: 72, A: uint8(28 + 36*glow)})
 
 	// Arms sit behind the head and cloud shell so gesture motion feels attached.
-	leftArmX := cx - 126*u - wave*16*u
-	leftArmY := bodyY - 34*u + math.Sin(t*math.Pi*1.4)*4*u
-	rightArmX := cx + 126*u + wave*30*u
+	leftArmX := cx - 126*u - wave*16*u + motion.leftArmDx*u
+	leftArmY := bodyY - 34*u + math.Sin(t*math.Pi*1.4)*4*u + motion.leftArmDy*u
+	rightArmX := cx + 126*u + wave*30*u + motion.rightArmDx*u
 	rightArmY := bodyY - 36*u - wave*44*u + motion.rightArmDy*u
 	drawCapsule(dst, leftArmX, leftArmY, cx-74*u, bodyY-18*u, 17*u, color.NRGBA{R: 255, G: 255, B: 249, A: 245})
 	drawFilledEllipseRGBA(dst, leftArmX-8*u, leftArmY+3*u, 18*u, 18*u, color.NRGBA{R: 255, G: 210, B: 70, A: 235})
@@ -349,7 +411,7 @@ func renderBoboFrame(dst *image.RGBA, input LocalIpTalkingAvatarRenderInput, ass
 	drawFilledEllipseRGBA(dst, cx+69*u, headY-169*u, 23*u, 23*u, color.NRGBA{R: 39, G: 176, B: 126, A: 38})
 
 	drawBoboFace(dst, cx, headY, u, lip, motion, glow)
-	drawBoboFeet(dst, cx, baseY+bodyFloat, u, glow)
+	drawBoboFeet(dst, cx, baseY+bodyFloat, u, glow, motion)
 }
 
 func drawBoboCloudShell(dst *image.RGBA, cx, cy, u, bodyScale float64) {
@@ -395,12 +457,12 @@ func drawBoboFace(dst *image.RGBA, cx, cy, u float64, lip LipSyncFrame, motion r
 	}
 }
 
-func drawBoboFeet(dst *image.RGBA, cx, baseY, u, glow float64) {
+func drawBoboFeet(dst *image.RGBA, cx, baseY, u, glow float64, motion renderMotionState) {
 	footA := uint8(130 + 75*glow)
 	drawFilledEllipseRGBA(dst, cx-54*u, baseY-10*u, 35*u, 15*u, color.NRGBA{R: 95, G: 173, B: 255, A: 52})
 	drawFilledEllipseRGBA(dst, cx+54*u, baseY-10*u, 35*u, 15*u, color.NRGBA{R: 255, G: 202, B: 82, A: 52})
-	drawFilledEllipseRGBA(dst, cx-52*u, baseY-22*u, 28*u, 18*u, color.NRGBA{R: 96, G: 164, B: 246, A: footA})
-	drawFilledEllipseRGBA(dst, cx+52*u, baseY-22*u, 28*u, 18*u, color.NRGBA{R: 255, G: 205, B: 76, A: footA})
+	drawFilledEllipseRGBA(dst, cx-52*u, baseY-22*u+motion.leftFootDy*u, 28*u, 18*u, color.NRGBA{R: 96, G: 164, B: 246, A: footA})
+	drawFilledEllipseRGBA(dst, cx+52*u, baseY-22*u+motion.rightFootDy*u, 28*u, 18*u, color.NRGBA{R: 255, G: 205, B: 76, A: footA})
 }
 
 func drawBoboHeart(dst *image.RGBA, cx, cy, r float64) {
@@ -425,6 +487,7 @@ func drawBoboSpark(dst *image.RGBA, cx, cy, r float64, c color.NRGBA) {
 
 func renderAsterFrame(dst *image.RGBA, input LocalIpTalkingAvatarRenderInput, asset *CharacterAsset, lip LipSyncFrame, motion renderMotionState, t float64) {
 	cx, baseY, u := puppetPose(input, asset, 0.78)
+	cx += motion.bodyDx * u
 	bodyFloat := math.Sin(t*math.Pi*0.72)*3.8*u + motion.bodyDy*u*0.45
 	headNod := motion.headDy * u * 0.7
 	gesture := motion.gesturePhase
@@ -437,7 +500,7 @@ func renderAsterFrame(dst *image.RGBA, input LocalIpTalkingAvatarRenderInput, as
 
 	drawFilledEllipseRGBA(dst, cx, baseY-28*u, 156*u, 31*u, color.NRGBA{R: 34, G: 49, B: 92, A: 48})
 	drawAsterCapeAndRobe(dst, cx, bodyY, u, pulse)
-	drawAsterArms(dst, cx, bodyY, u, gesture)
+	drawAsterArms(dst, cx, bodyY, u, gesture, motion)
 	drawAsterHead(dst, cx, headY, u, lip, motion, pulse)
 	drawAsterOrb(dst, cx, headY-166*u+math.Sin(t*math.Pi*0.9)*8*u, u, t, pulse)
 }
@@ -463,11 +526,11 @@ func drawAsterCapeAndRobe(dst *image.RGBA, cx, cy, u, pulse float64) {
 	drawCapsule(dst, cx, cy+2*u, cx, cy+36*u, 3*u, color.NRGBA{R: 242, G: 204, B: 105, A: 220})
 }
 
-func drawAsterArms(dst *image.RGBA, cx, cy, u, gesture float64) {
-	leftHandX := cx - 134*u
-	leftHandY := cy + 30*u
-	rightHandX := cx + 126*u + gesture*34*u
-	rightHandY := cy + 28*u - gesture*52*u
+func drawAsterArms(dst *image.RGBA, cx, cy, u, gesture float64, motion renderMotionState) {
+	leftHandX := cx - 134*u + motion.leftArmDx*u
+	leftHandY := cy + 30*u + motion.leftArmDy*u
+	rightHandX := cx + 126*u + gesture*34*u + motion.rightArmDx*u
+	rightHandY := cy + 28*u - gesture*52*u + motion.rightArmDy*u
 	drawCapsule(dst, cx-70*u, cy-48*u, leftHandX, leftHandY, 16*u, color.NRGBA{R: 238, G: 243, B: 245, A: 245})
 	drawFilledRoundedRect(dst, leftHandX-46*u, leftHandY-32*u, leftHandX+28*u, leftHandY+24*u, 8*u, color.NRGBA{R: 52, G: 89, B: 122, A: 145})
 	drawStrokeRoundedRect(dst, leftHandX-46*u, leftHandY-32*u, leftHandX+28*u, leftHandY+24*u, 8*u, 3*u, color.NRGBA{R: 117, G: 198, B: 255, A: 170})

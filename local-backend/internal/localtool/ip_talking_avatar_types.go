@@ -40,16 +40,54 @@ type MotionPolicy struct {
 }
 
 type VoiceProfile struct {
-	Persona        string `json:"persona,omitempty"`
-	DisplayName    string `json:"displayName,omitempty"`
-	VoiceName      string `json:"voiceName,omitempty"`
-	Locale         string `json:"locale,omitempty"`
-	SpeakingRate   int    `json:"speakingRate,omitempty"`
-	Tone           string `json:"tone,omitempty"`
-	StylePrompt    string `json:"stylePrompt,omitempty"`
-	Provider       string `json:"provider,omitempty"`
-	PreviewOnly    bool   `json:"previewOnly,omitempty"`
-	FallbackPolicy string `json:"fallbackPolicy,omitempty"`
+	Persona        string       `json:"persona,omitempty"`
+	DisplayName    string       `json:"displayName,omitempty"`
+	VoiceName      string       `json:"voiceName,omitempty"`
+	Locale         string       `json:"locale,omitempty"`
+	SpeakingRate   int          `json:"speakingRate,omitempty"`
+	Tone           string       `json:"tone,omitempty"`
+	StylePrompt    string       `json:"stylePrompt,omitempty"`
+	Provider       string       `json:"provider,omitempty"`
+	PreviewOnly    bool         `json:"previewOnly,omitempty"`
+	FallbackPolicy string       `json:"fallbackPolicy,omitempty"`
+	Prosody        VoiceProsody `json:"prosody,omitempty"`
+}
+
+type VoiceProsody struct {
+	Enabled       bool     `json:"enabled"`
+	Style         string   `json:"style,omitempty"`
+	BaseRate      int      `json:"baseRate,omitempty"`
+	MinRate       int      `json:"minRate,omitempty"`
+	MaxRate       int      `json:"maxRate,omitempty"`
+	PauseShortMs  int      `json:"pauseShortMs,omitempty"`
+	PauseMediumMs int      `json:"pauseMediumMs,omitempty"`
+	PauseLongMs   int      `json:"pauseLongMs,omitempty"`
+	Variability   float64  `json:"variability,omitempty"`
+	SegmentedTTS  bool     `json:"segmentedTts"`
+	Notes         []string `json:"notes,omitempty"`
+}
+
+type VoiceProsodyPlan struct {
+	SchemaVersion string                 `json:"schemaVersion"`
+	Persona       string                 `json:"persona,omitempty"`
+	DisplayName   string                 `json:"displayName,omitempty"`
+	VoiceName     string                 `json:"voiceName,omitempty"`
+	Provider      string                 `json:"provider,omitempty"`
+	PreviewOnly   bool                   `json:"previewOnly"`
+	Prosody       VoiceProsody           `json:"prosody"`
+	Segments      []VoiceProsodySegment  `json:"segments"`
+	GeneratedAt   string                 `json:"generatedAt"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type VoiceProsodySegment struct {
+	Index        int     `json:"index"`
+	Text         string  `json:"text"`
+	Rate         int     `json:"rate"`
+	Volume       float64 `json:"volume"`
+	PauseAfterMs int     `json:"pauseAfterMs"`
+	Emphasis     bool    `json:"emphasis"`
+	Delivery     string  `json:"delivery,omitempty"`
 }
 
 type LocalIpTalkingAvatarRenderOutput struct {
@@ -61,6 +99,7 @@ type LocalIpTalkingAvatarRenderOutput struct {
 	ScenePath        string         `json:"scenePath,omitempty"`
 	SubtitlePath     string         `json:"subtitlePath,omitempty"`
 	VoiceProfilePath string         `json:"voiceProfilePath,omitempty"`
+	ProsodyPlanPath  string         `json:"prosodyPlanPath,omitempty"`
 	DurationSec      float64        `json:"durationSec"`
 	QA               RenderQAResult `json:"qa"`
 	ErrorMessage     string         `json:"errorMessage,omitempty"`
@@ -73,6 +112,7 @@ type RenderQAResult struct {
 	SubtitleExists          bool `json:"subtitleExists"`
 	MouthTimelineGenerated  bool `json:"mouthTimelineGenerated"`
 	MotionTimelineGenerated bool `json:"motionTimelineGenerated"`
+	ProsodyPlanGenerated    bool `json:"prosodyPlanGenerated"`
 	SceneGenerated          bool `json:"sceneGenerated"`
 	ControlRigLoaded        bool `json:"controlRigLoaded"`
 	ReferenceSVGLoaded      bool `json:"referenceSvgLoaded"`

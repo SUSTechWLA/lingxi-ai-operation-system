@@ -44,6 +44,7 @@ func (t *LocalIpTalkingAvatarRenderTool) Execute(ctx context.Context, input Loca
 	}
 
 	voiceProfilePath := ""
+	prosodyPlanPath := ""
 	if strings.TrimSpace(normalized.AudioPath) == "" {
 		audioPath, profilePath, err := NewLocalNarrationAudioBuilder().Build(ctx, normalized, asset)
 		if err != nil {
@@ -51,8 +52,19 @@ func (t *LocalIpTalkingAvatarRenderTool) Execute(ctx context.Context, input Loca
 		}
 		normalized.AudioPath = audioPath
 		voiceProfilePath = profilePath
+		if path := filepath.Join(normalized.OutputDir, "narration_prosody_plan.json"); fileExists(path) {
+			prosodyPlanPath = path
+		}
 	} else {
-		if profilePath, err := WriteVoiceProfile(normalized.OutputDir, effectiveVoiceProfile(normalized, asset)); err == nil {
+		profile := effectiveVoiceProfile(normalized, asset)
+		if strings.TrimSpace(normalized.Script) != "" {
+			plan := BuildVoiceProsodyPlan(normalized.Script, profile)
+			profile.Prosody = plan.Prosody
+			if path, err := WriteVoiceProsodyPlan(normalized.OutputDir, plan); err == nil {
+				prosodyPlanPath = path
+			}
+		}
+		if profilePath, err := WriteVoiceProfile(normalized.OutputDir, profile); err == nil {
 			voiceProfilePath = profilePath
 		}
 	}
@@ -115,6 +127,7 @@ func (t *LocalIpTalkingAvatarRenderTool) Execute(ctx context.Context, input Loca
 		ScenePath:        scenePath,
 		SubtitlePath:     normalized.SubtitlePath,
 		VoiceProfilePath: voiceProfilePath,
+		ProsodyPlanPath:  prosodyPlanPath,
 		DurationSec:      audioAnalysis.DurationSec,
 	}
 	qa, err := NewRenderQualityChecker().Check(ctx, normalized, output, audioAnalysis.DurationSec, lipPath, motionPath, asset)
@@ -431,6 +444,30 @@ func (e *localIpTalkingAvatarRenderExecutor) localArtifactsForOutput(projectID s
 			"producedByTool": "local_ip_talking_avatar_render",
 			"producedByRole": "本地 IP 数字人口播渲染",
 			"metadata":       voice.Metadata,
+		})
+	}
+	if output.ProsodyPlanPath != "" {
+		prosody, err := mirrorLocalToolArtifact(e.tool.dataDir, projectID, "local-ip-talking-avatar-prosody", output.ProsodyPlanPath, "narration_prosody_plan.json", "application/json", map[string]interface{}{
+			"characterId": output.CharacterID,
+			"durationSec": output.DurationSec,
+			"purpose":     "segmented_preview_voice_prosody",
+		})
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, map[string]interface{}{
+			"unitId":         "local-ip-talking-avatar-prosody",
+			"kind":           "IP_TALKING_AVATAR_PROSODY_PLAN",
+			"name":           "narration_prosody_plan.json",
+			"storageType":    "local",
+			"storageRef":     prosody.StorageRef,
+			"mimeType":       "application/json",
+			"sizeBytes":      prosody.SizeBytes,
+			"status":         "valid",
+			"humanApproved":  false,
+			"producedByTool": "local_ip_talking_avatar_render",
+			"producedByRole": "本地 IP 数字人口播渲染",
+			"metadata":       prosody.Metadata,
 		})
 	}
 	reportPath := filepath.Join(filepath.Dir(output.VideoPath), "render_report.json")

@@ -9,9 +9,9 @@
 当前推荐模式是 `svg2d`：
 
 - 主视觉使用 `ip形象/` 参考图生成的高保真透明纹理。
-- 局部动画由时间轴控制，包括口型、眨眼、呼吸、点头、轻微漂浮、手势反馈和发光。
+- 局部动画由时间轴控制，包括口型、眨眼、呼吸、点头、轻微漂浮、左右手、双手展示、脚步弹跳、重心变化、手势反馈和发光。
 - `avatar_scene.json` 输出 HyperGen 可读的角色部件、运动通道和绑定建议。
-- `voice_profile.json` 输出角色声音画像，区分波波和阿斯特的人设语气。
+- `voice_profile.json` 输出角色声音画像，`narration_prosody_plan.json` 输出分段语速、停顿、轻重音和预览 TTS 计划。
 
 ## 适用场景
 
@@ -79,7 +79,7 @@ renderer/front_cutout.png
 }
 ```
 
-如果没有 `audioPath` 但有 `script`，本地会用 macOS `say` 生成预览口播音频。该音频只用于口型和动作预览，`voice_profile.json` 会标记 `previewOnly=true`。正式成片应上传更自然的人设口播音频。
+如果没有 `audioPath` 但有 `script`，本地会用 macOS `say` 按分段 prosody 计划生成预览口播音频：每段有不同语速、音量和停顿，能减少机械匀速朗读感。该音频只用于口型和动作预览，`voice_profile.json` 会标记 `previewOnly=true`。正式成片仍建议上传更自然、匹配 IP 人设的口播音频。
 
 ## 输出
 
@@ -92,6 +92,7 @@ motion_timeline.json
 avatar_timeline.json
 avatar_scene.json
 voice_profile.json
+narration_prosody_plan.json
 avatar_layer.webm
 final.mp4
 render_report.json
@@ -105,6 +106,7 @@ render_report.json
 | `avatar_layer.webm` | 透明角色层，可用于后续合成。 |
 | `avatar_scene.json` | HyperGen 控制 schema，包含角色资产、运动通道、口型和动作绑定建议。 |
 | `voice_profile.json` | 声音画像。波波偏年轻活泼，阿斯特偏沉稳严谨。 |
+| `narration_prosody_plan.json` | 本地预览声音的分段朗读计划，包含每段文字、语速、音量、停顿和强调方式。 |
 | `render_report.json` | QA 结果，检查音频、视频、时间轴、rig、参考 SVG 和最终视频是否生成。 |
 
 ## Live2D 路线
@@ -148,6 +150,6 @@ go test -C local-backend -count=1 ./internal/localtool -run TestLocalIpTalkingAv
 ## 常见问题
 
 - 角色看起来像贴图：确认使用的是 `frontTexture` 和 `renderMode=svg2d`，不要回退到早期几何 fallback。
-- 声音不够自然：本地 `say` 只是预览，正式口播需要上传匹配 IP 的高质量音频。
+- 声音不够自然：本地 `say` 已做分段 prosody 预览，但仍不是生产级真人配音；正式口播需要上传匹配 IP 的高质量音频，或后续接入专用 TTS provider。
 - 字幕没有烧录：本机 FFmpeg 可能缺少 `subtitles/libass` 滤镜；工具会生成无烧录字幕的视频，并保留 SRT 给前端预览。
-- 想要 1:1 动作还原：需要 Live2D Cubism 或其他分层骨骼资产。当前 `svg2d` 先保证视觉还原和基础口播动作可控。
+- 想要 1:1 动作还原：需要 Live2D Cubism 或其他分层骨骼资产。当前 `svg2d` 已提供左右手、双手展示、脚步弹跳和重心变化的可控覆盖层，但不是逐像素骨骼绑定。

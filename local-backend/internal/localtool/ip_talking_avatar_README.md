@@ -13,6 +13,8 @@ Supported first-version behavior:
 - idle breathing
 - sentence-end nods
 - keyword gesture triggers
+- segmented local prosody preview audio when `script` is provided without `audioPath`
+- independent left/right arm gestures, both-hands presentation, foot bounce, and body weight shift in `svg2d`
 - optional subtitle composition when the local FFmpeg build supports the `subtitles` filter
 - background image/video composition
 - final H.264 MP4 output
@@ -127,7 +129,7 @@ Both define `referenceSvg`, `rig.json`, and `voiceProfile`. HyperGen should bind
 
 `audioPath` can be WAV or another FFmpeg-readable audio file. MP3 input is converted to temporary PCM before RMS analysis.
 
-If `audioPath` is omitted and `script` is present, the tool can create a deterministic local preview narration with macOS `say`. That preview is marked `previewOnly` in `voice_profile.json`; production output should use uploaded or provider-generated narration audio that matches the IP personality.
+If `audioPath` is omitted and `script` is present, the tool can create a deterministic local preview narration with macOS `say`. It now splits the script into prosody segments with varied rate, volume, and pauses, and writes `narration_prosody_plan.json`. That preview is marked `previewOnly` in `voice_profile.json`; production output should still use uploaded or provider-generated narration audio that matches the IP personality.
 
 Default voice personas:
 
@@ -145,6 +147,7 @@ motion_timeline.json
 avatar_timeline.json
 avatar_scene.json
 voice_profile.json
+narration_prosody_plan.json
 frames/frame_000001.png
 avatar_layer.webm
 final.mp4
@@ -203,7 +206,7 @@ The tool uses FFmpeg for:
 1. Create `assets/characters/{characterId}/character.json`.
 2. Choose `sprite2d`, `svg2d`, or future `live2d`.
 3. For `svg2d`, provide `renderer/{character}_puppet.svg` and `renderer/rig.json` with stable part IDs.
-4. Add `voiceProfile` so narration selection and downstream TTS prompts match the IP persona.
+4. Add `voiceProfile` so narration selection, prosody defaults, and downstream TTS prompts match the IP persona.
 5. Keep all paths relative to the character folder.
 6. Run the localtool integration test with `characterId`.
 7. Preview `final.mp4` before approving the asset.
