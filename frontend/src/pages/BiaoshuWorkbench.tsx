@@ -67,6 +67,8 @@ const DEFAULT_BID_FILE_PATH = 'e:\\lingxi\\tangying-ai-operation-system\\biaoshu
 
 type BiaoshuView = 'workbench' | 'artifacts' | 'history'
 
+const getDirName = (path?: string) => (path ? path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() : undefined)
+
 const fileExtension = (path: string) => {
   const normalized = path.trim().toLowerCase()
   const dot = normalized.lastIndexOf('.')
@@ -384,7 +386,7 @@ export default function BiaoshuWorkbench() {
           file_path: bidFilePath,
           projectName: projectName || '未命名项目',
           project_name: projectName || '未命名项目',
-          output_dir: managed.project.outputDirName || projectName || '未命名项目',
+          output_dir: getDirName(managed.project.outputDir) || managed.project.outputDirName || projectName || '未命名项目',
         },
       })
       addLog(`任务已创建: ${result.runId}`)
