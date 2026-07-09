@@ -405,6 +405,8 @@ func main() {
 		outlineHandler.RegisterRoutes(r)
 		chapterTaskBookHandler := biaoshu_handler.NewChapterTaskBookHandler(gw)
 		chapterTaskBookHandler.RegisterRoutes(r)
+		chapterGenerationHandler := biaoshu_handler.NewChapterGenerationHandler(gw)
+		chapterGenerationHandler.RegisterRoutes(r)
 	}
 	zap.L().Info("Biaoshu services registered")
 

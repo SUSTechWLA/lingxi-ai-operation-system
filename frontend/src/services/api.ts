@@ -586,6 +586,48 @@ export const generateChapterTaskBook = async (
   return response.data.data
 }
 
+// ── Chapter Generation ──
+
+export interface GenerateChaptersRequest {
+  taskBookPath: string
+  outlinePath: string
+  scoringReportPath: string
+  analysisReportPath: string
+  contextReportPath?: string
+  outputDir: string
+}
+
+export interface ChapterResult {
+  chapterNumber: number
+  chapterTitle: string
+  filePath: string
+  content?: string
+  artifact: Record<string, unknown>
+  error?: string
+  wordCount: number
+  scoreWeight: number
+}
+
+export interface GenerateChaptersResponse {
+  chapters: ChapterResult[]
+  success: number
+  failed: number
+  warnings: string[]
+  totalWordCount: number
+  totalScore: number
+}
+
+export const generateChapters = async (
+  payload: GenerateChaptersRequest
+): Promise<GenerateChaptersResponse> => {
+  const response = await api.post<ApiResponse<GenerateChaptersResponse>>(
+    '/biaoshu/chapters/generate',
+    payload,
+    { timeout: 600000 } // 10 分钟 — 多章并发 LLM 调用耗时长
+  )
+  return response.data.data
+}
+
 // ── Model Provider Config Sync ──
 
 export interface ModelProviderSyncPayload {

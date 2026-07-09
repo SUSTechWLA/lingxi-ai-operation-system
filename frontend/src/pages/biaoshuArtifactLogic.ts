@@ -151,6 +151,45 @@ export function deriveBiaoshuChapterTaskBookPath(outlinePath: string): string {
   return joinBiaoshuSiblingPath(outlinePath, '04_章节写作任务书.md')
 }
 
+export function deriveChapterOutputDir(outlinePath: string): string {
+  // Derive 章节/ directory as sibling to the outline file
+  const dir = outlinePath.replace(/[\\/][^\\/]+$/, '') // remove file name
+  return `${dir}/章节`
+}
+
+// ── Chapter artifact creation ──
+
+export function createManualChapterArtifact(
+  artifact: Record<string, unknown> | undefined,
+  filePath: string,
+): BiaoshuArtifactRecord {
+  const metadata = objectRecord(artifact?.metadata)
+  const chapterNumber = Number(artifact?.chapterNumber || metadata?.chapterNumber || 0)
+  const chapterTitle = String(artifact?.chapterTitle || artifact?.name || '')
+  return {
+    id: String(artifact?.id || artifact?.unitId || `chapter-${chapterNumber}`),
+    name: chapterTitle || `第${toChineseNumber(chapterNumber)}章`,
+    kind: 'BID_CHAPTERS',
+    version: '-',
+    status: 'valid',
+    owner: 'AI写作',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    storageRef: String(artifact?.storageRef || filePath),
+    summary: `第${toChineseNumber(chapterNumber)}章初稿，${metadata?.targetWords ? `目标${metadata.targetWords}字` : ''}`,
+    sourceTool: 'chapter_generation',
+    metadata,
+  }
+}
+
+function toChineseNumber(n: number): string {
+  if (n <= 0) return '零'
+  const digits = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+  const tens = ['', '', '二十', '三十', '四十', '五十', '六十', '七十', '八十', '九十']
+  if (n <= 10) return ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][n]
+  const t = Math.floor(n / 10), d = n % 10
+  return tens[t] + (d ? digits[d] : '')
+}
+
 export function buildBiaoshuArtifacts(
   run: AgentRun | null | undefined,
   trace: unknown = undefined,
