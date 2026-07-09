@@ -15,10 +15,11 @@ type ToolRetriever interface {
 }
 
 type ToolRetrieveRequest struct {
-	UserInput     string
-	Domain        string
-	Stage         string
-	MaxCandidates int
+	UserInput       string
+	Domain          string
+	Stage           string
+	MaxCandidates   int
+	KnowledgePolicy *KnowledgePolicy
 
 	// Compatibility fields used by existing planner call sites.
 	Query               string
@@ -45,6 +46,7 @@ type ToolCandidate struct {
 	CostLevel    string                   `json:"costLevel,omitempty"`
 	RiskLevel    string                   `json:"riskLevel,omitempty"`
 	Type         string                   `json:"type,omitempty"`
+	Trace        ToolCandidateTrace       `json:"trace,omitempty"`
 	Manifest     *tool.ToolManifest       `json:"-"`
 }
 
@@ -74,15 +76,22 @@ func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequ
 		coarseK = max(30, maxCandidates)
 	}
 
-	freshRequired := RequiresFreshKnowledge(query)
+	policy := req.KnowledgePolicy
+	if policy == nil {
+		policy = DefaultKnowledgePolicy(query, req.Domain)
+	}
 	prevSet := toSet(req.PreviousTools)
 	candidates := make([]ToolCandidate, 0, len(r.allTools))
-	for _, manifest := range r.hardFilter(req, query, freshRequired) {
-		score, reasonParts := r.score(manifest, query, req.Domain, freshRequired, prevSet)
-		score -= costPenalty(manifest.CostLevel)
-		score -= riskPenalty(manifest.RiskLevel)
+	for _, manifest := range r.hardFilter(req, query, policy) {
+		score, reasonParts, trace := r.score(manifest, query, req.Domain, policy, prevSet)
+		costPenaltyValue := costPenalty(manifest.CostLevel)
+		riskPenaltyValue := riskPenalty(manifest.RiskLevel)
+		score -= costPenaltyValue
+		score -= riskPenaltyValue
+		trace.CostRiskPenalty = costPenaltyValue + riskPenaltyValue
 		if manifest.SideEffect {
 			score -= 0.4
+			trace.CostRiskPenalty += 0.4
 			reasonParts = append(reasonParts, "sideEffect=true penalty")
 		} else {
 			score += 0.05
@@ -102,6 +111,7 @@ func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequ
 			CostLevel:    manifest.CostLevel,
 			RiskLevel:    manifest.RiskLevel,
 			Type:         manifest.Type,
+			Trace:        trace,
 			Manifest:     manifest,
 		})
 	}
@@ -121,8 +131,10 @@ func (r *HybridToolRetriever) Retrieve(ctx context.Context, req ToolRetrieveRequ
 	return candidates, nil
 }
 
-func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, freshRequired bool) []*tool.ToolManifest {
+func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, policy *KnowledgePolicy) []*tool.ToolManifest {
 	filtered := make([]*tool.ToolManifest, 0, len(r.allTools))
+	freshAllowed := knowledgePolicyAllowsFreshTools(policy)
+	freshRequired := policy != nil && policy.RetrievalPolicy == RetrievalRequired
 	for _, manifest := range r.allTools {
 		if manifest == nil || manifest.Name == "" || manifest.Name == "__quality_gate__" {
 			continue
@@ -137,6 +149,15 @@ func (r *HybridToolRetriever) hardFilter(req ToolRetrieveRequest, query string, 
 			continue
 		}
 		if capabilityOverlaps(manifest, req.ExcludeCapabilities) {
+			continue
+		}
+		if toolForbiddenByKnowledgePolicy(manifest, policy) {
+			continue
+		}
+		if hasFreshKnowledgeCapability(manifest) && !freshAllowed {
+			continue
+		}
+		if len(matchUsageHints(query, manifest.WhenNotToUse)) > 0 {
 			continue
 		}
 		if req.Domain != "" && req.Domain != "general" && len(manifest.Capabilities) == 0 {
@@ -173,19 +194,29 @@ func plannerDisallowsToolForDomain(toolName, domain string) bool {
 	}
 }
 
-func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, freshRequired bool, prevSet map[string]bool) (float64, []string) {
+func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, policy *KnowledgePolicy, prevSet map[string]bool) (float64, []string, ToolCandidateTrace) {
 	var score float64
 	reasons := make([]string, 0, 5)
+	trace := ToolCandidateTrace{Name: m.Name}
+	freshRequired := policy != nil && policy.RetrievalPolicy == RetrievalRequired
 
 	if domain != "" && hasCapability(m, domain) {
 		score += 0.8
+		trace.MatchedCapabilities = append(trace.MatchedCapabilities, domain)
 		reasons = append(reasons, "matched domain "+domain)
 	}
 	if freshRequired && hasFreshKnowledgeCapability(m) {
 		score += 1.4
-		reasons = append(reasons, "matched fresh_knowledge and current-event keywords")
+		trace.KnowledgePolicyReason = policy.Reason
+		trace.MatchedCapabilities = append(trace.MatchedCapabilities, intersectCapabilities(m.Capabilities, FreshKnowledgeCapabilities())...)
+		reasons = append(reasons, "matched fresh_knowledge by knowledge policy: "+policy.Reason)
 	}
-	if !freshRequired && hasFreshKnowledgeCapability(m) {
+	if policy != nil && policy.RetrievalPolicy == RetrievalOptional && hasFreshKnowledgeCapability(m) {
+		score += 0.45
+		trace.KnowledgePolicyReason = policy.Reason
+		reasons = append(reasons, "fresh knowledge optional by knowledge policy: "+policy.Reason)
+	}
+	if policy == nil && !freshRequired && hasFreshKnowledgeCapability(m) {
 		score -= 0.8
 		reasons = append(reasons, "fresh knowledge not required")
 	}
@@ -199,7 +230,13 @@ func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, 
 	}
 	if ts := tagScore(m, query); ts > 0 {
 		score += ts
+		trace.MatchedTags = matchedTags(m.Tags, query)
 		reasons = append(reasons, fmt.Sprintf("matched tags %.2f", ts))
+	}
+	if hints := matchUsageHints(query, m.WhenToUse); len(hints) > 0 {
+		score += 0.35 * float64(len(hints))
+		trace.MatchedWhenToUse = hints
+		reasons = append(reasons, "matched whenToUse "+strings.Join(hints, ","))
 	}
 	if ns := nextToolScore(m, prevSet); ns > 0 {
 		score += ns
@@ -208,7 +245,9 @@ func (r *HybridToolRetriever) score(m *tool.ToolManifest, query, domain string, 
 	if len(reasons) == 0 {
 		reasons = append(reasons, "low-confidence manifest match")
 	}
-	return score, reasons
+	trace.Score = score
+	trace.Reason = strings.Join(reasons, "; ")
+	return score, reasons, trace
 }
 
 func toolCanAcceptRequest(manifest *tool.ToolManifest, query string, freshRequired bool) bool {
@@ -249,11 +288,11 @@ func candidateManifests(candidates []ToolCandidate) []*tool.ToolManifest {
 func candidateTrace(candidates []ToolCandidate) []ToolCandidateTrace {
 	trace := make([]ToolCandidateTrace, 0, len(candidates))
 	for _, candidate := range candidates {
-		trace = append(trace, ToolCandidateTrace{
-			Name:   candidate.Name,
-			Score:  candidate.Score,
-			Reason: candidate.Reason,
-		})
+		item := candidate.Trace
+		item.Name = candidate.Name
+		item.Score = candidate.Score
+		item.Reason = candidate.Reason
+		trace = append(trace, item)
 	}
 	return trace
 }
@@ -273,6 +312,88 @@ func capabilityOverlaps(manifest *tool.ToolManifest, capabilities []string) bool
 		}
 	}
 	return false
+}
+
+func knowledgePolicyAllowsFreshTools(policy *KnowledgePolicy) bool {
+	if policy == nil {
+		return false
+	}
+	return policy.RetrievalPolicy == RetrievalRequired || policy.RetrievalPolicy == RetrievalOptional
+}
+
+func toolForbiddenByKnowledgePolicy(manifest *tool.ToolManifest, policy *KnowledgePolicy) bool {
+	if manifest == nil || policy == nil {
+		return false
+	}
+	if capabilityOverlaps(manifest, policy.ForbiddenCapabilities) {
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(manifest.Name))
+	for _, forbidden := range policy.ForbiddenTools {
+		forbidden = strings.ToLower(strings.TrimSpace(forbidden))
+		if forbidden == "" {
+			continue
+		}
+		if name == forbidden || strings.Contains(name, forbidden) {
+			return true
+		}
+	}
+	return false
+}
+
+func intersectCapabilities(have, want []string) []string {
+	wantSet := toSetLower(want)
+	out := make([]string, 0)
+	seen := map[string]bool{}
+	for _, capability := range have {
+		key := strings.ToLower(strings.TrimSpace(capability))
+		if key == "" || !wantSet[key] || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, capability)
+	}
+	return out
+}
+
+func matchedTags(tags []string, query string) []string {
+	queryLower := strings.ToLower(query)
+	out := make([]string, 0)
+	for _, tag := range tags {
+		if tag = strings.TrimSpace(tag); tag != "" && strings.Contains(queryLower, strings.ToLower(tag)) {
+			out = append(out, tag)
+		}
+	}
+	return out
+}
+
+func matchUsageHints(query string, hints []string) []string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" || len(hints) == 0 {
+		return nil
+	}
+	matches := make([]string, 0)
+	for _, hint := range hints {
+		hint = strings.TrimSpace(hint)
+		if hint == "" {
+			continue
+		}
+		parts := strings.Fields(strings.ToLower(hint))
+		if len(parts) == 0 {
+			continue
+		}
+		allMatched := true
+		for _, part := range parts {
+			if !strings.Contains(query, part) {
+				allMatched = false
+				break
+			}
+		}
+		if allMatched {
+			matches = append(matches, hint)
+		}
+	}
+	return matches
 }
 
 func toSetLower(items []string) map[string]bool {

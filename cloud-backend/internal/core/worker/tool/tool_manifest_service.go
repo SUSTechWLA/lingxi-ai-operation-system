@@ -178,8 +178,11 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 	transport, _ := json.Marshal(m.Transport)
 	capabilities, _ := json.Marshal(m.Capabilities)
 	tags, _ := json.Marshal(m.Tags)
+	whenToUse, _ := json.Marshal(m.WhenToUse)
+	whenNotToUse, _ := json.Marshal(m.WhenNotToUse)
 	approvalPolicy, _ := json.Marshal(m.ApprovalPolicy)
 	localRequirements, _ := json.Marshal(m.LocalRequirements)
+	providerBinding, _ := json.Marshal(m.ProviderBinding)
 	providerCapabilities, _ := json.Marshal(m.ProviderCapabilities)
 	nextRecommendedTools, _ := json.Marshal(m.NextRecommendedTools)
 	failureModes, _ := json.Marshal(m.FailureModes)
@@ -218,6 +221,7 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		Name:                 m.Name,
 		Description:          m.Description,
 		Type:                 m.Type,
+		Boundary:             m.Boundary,
 		Version:              m.Version,
 		Endpoint:             m.Endpoint,
 		Transport:            transport,
@@ -228,6 +232,8 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		Sandbox:              m.Sandbox,
 		Capabilities:         capabilities,
 		Tags:                 tags,
+		WhenToUse:            whenToUse,
+		WhenNotToUse:         whenNotToUse,
 		CostLevel:            costLevel,
 		LatencyLevel:         latencyLevel,
 		RiskLevel:            riskLevel,
@@ -241,6 +247,7 @@ func manifestToRecord(m *ToolManifest) *model.ToolManifestRecord {
 		LocalCommand:         m.LocalCommand,
 		LocalRequirements:    localRequirements,
 		Provider:             m.Provider,
+		ProviderBinding:      providerBinding,
 		ProviderCapabilities: providerCapabilities,
 		NextRecommendedTools: nextRecommendedTools,
 		FailureModes:         failureModes,

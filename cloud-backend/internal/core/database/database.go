@@ -191,6 +191,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		);
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS capabilities JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS boundary VARCHAR(32);
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS when_to_use JSONB DEFAULT '[]';
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS when_not_to_use JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS transport JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS cost_level VARCHAR(16) DEFAULT 'low';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS latency_level VARCHAR(16) DEFAULT 'medium';
@@ -205,6 +208,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS local_command VARCHAR(64);
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS local_requirements JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS provider VARCHAR(128);
+		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS provider_binding JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS provider_capabilities JSONB DEFAULT '{}';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS next_recommended_tools JSONB DEFAULT '[]';
 		ALTER TABLE tool_manifests ADD COLUMN IF NOT EXISTS failure_modes JSONB DEFAULT '[]';

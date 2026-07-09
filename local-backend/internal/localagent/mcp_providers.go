@@ -78,14 +78,18 @@ type installCLIRequest struct {
 }
 
 type registerMCPRequest struct {
-	Endpoint    string            `json:"endpoint"`
-	Transport   string            `json:"transport"`
-	Command     string            `json:"command"`
-	Args        []string          `json:"args"`
-	Env         map[string]string `json:"env"`
-	WorkingDir  string            `json:"workingDir"`
-	ToolPrefix  string            `json:"toolPrefix"`
-	ToolNameMap map[string]string `json:"toolNameMap"`
+	Endpoint      string            `json:"endpoint"`
+	Transport     string            `json:"transport"`
+	Command       string            `json:"command"`
+	Args          []string          `json:"args"`
+	Env           map[string]string `json:"env"`
+	WorkingDir    string            `json:"workingDir"`
+	ToolPrefix    string            `json:"toolPrefix"`
+	ToolNameMap   map[string]string `json:"toolNameMap"`
+	EnabledTools  []string          `json:"enabledTools"`
+	DisabledTools []string          `json:"disabledTools"`
+	TimeoutSec    int               `json:"timeout"`
+	ApprovalMode  string            `json:"approvalMode"`
 }
 
 type checkLoginRequest struct {
@@ -249,17 +253,21 @@ func (s *Server) handleJiMengRegisterMCP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	provider := localmcp.ProviderConfig{
-		ID:          jimengProviderID,
-		Label:       "JiMeng MCP",
-		Endpoint:    endpoint,
-		Transport:   transport,
-		Command:     command,
-		Args:        args,
-		Env:         req.Env,
-		WorkingDir:  req.WorkingDir,
-		ToolPrefix:  toolPrefix,
-		ToolNameMap: req.ToolNameMap,
-		Enabled:     true,
+		ID:            jimengProviderID,
+		Label:         "JiMeng MCP",
+		Endpoint:      endpoint,
+		Transport:     transport,
+		Command:       command,
+		Args:          args,
+		Env:           req.Env,
+		WorkingDir:    req.WorkingDir,
+		ToolPrefix:    toolPrefix,
+		ToolNameMap:   req.ToolNameMap,
+		EnabledTools:  req.EnabledTools,
+		DisabledTools: req.DisabledTools,
+		TimeoutSec:    req.TimeoutSec,
+		ApprovalMode:  req.ApprovalMode,
+		Enabled:       true,
 	}
 	normalized, err := normalizeMCPProviders([]localmcp.ProviderConfig{provider})
 	if err != nil {
@@ -415,9 +423,12 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 		provider.Command = strings.TrimSpace(provider.Command)
 		provider.WorkingDir = strings.TrimSpace(provider.WorkingDir)
 		provider.ToolPrefix = strings.TrimSpace(provider.ToolPrefix)
+		provider.ApprovalMode = strings.TrimSpace(provider.ApprovalMode)
 		provider.Args = compactArgs(provider.Args)
 		provider.Env = compactEnv(provider.Env)
 		provider.ToolNameMap = compactToolNameMap(provider.ToolNameMap)
+		provider.EnabledTools = compactStringList(provider.EnabledTools)
+		provider.DisabledTools = compactStringList(provider.DisabledTools)
 		if provider.ID == "" {
 			return nil, errors.New("provider id is required")
 		}
@@ -457,13 +468,17 @@ func normalizeMCPProviders(providers []localmcp.ProviderConfig) ([]localmcp.Prov
 }
 
 func compactArgs(args []string) []string {
-	out := make([]string, 0, len(args))
-	for _, arg := range args {
-		arg = strings.TrimSpace(arg)
-		if arg == "" {
+	return compactStringList(args)
+}
+
+func compactStringList(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
 			continue
 		}
-		out = append(out, arg)
+		out = append(out, item)
 	}
 	return out
 }

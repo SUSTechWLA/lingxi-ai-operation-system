@@ -49,14 +49,16 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 	// Use HybridToolRetriever for multi-signal scoring instead of brute-force
 	// heuristic selection. This selects tools by capability, keyword, tag, cost,
 	// and risk relevance rather than a single-domain filter.
+	knowledgePolicy := DefaultKnowledgePolicy(req.Message, domain)
 	retriever := NewHybridToolRetriever(p.tools.ListManifests())
 	candidates, err := retriever.Retrieve(ctx, RetrieveRequest{
-		UserInput:    req.Message,
-		Domain:       domain,
-		MaxCostLevel: req.MaxCostLevel,
-		MaxRiskLevel: req.MaxRiskLevel,
-		CoarseTopK:   30,
-		PlannerTopK:  p.maxTools,
+		UserInput:       req.Message,
+		Domain:          domain,
+		KnowledgePolicy: knowledgePolicy,
+		MaxCostLevel:    req.MaxCostLevel,
+		MaxRiskLevel:    req.MaxRiskLevel,
+		CoarseTopK:      30,
+		PlannerTopK:     p.maxTools,
 		IncludeCapabilities: []string{
 			"video_planning",
 			"script_generation",
@@ -102,6 +104,9 @@ func (p *LLMPlanner) GeneratePlan(ctx context.Context, req StartRunRequest) (*Ag
 		plan.ToolTrace = &ToolTrace{}
 	}
 	plan.ToolTrace.CandidateTools = candidateTrace(candidates)
+	if plan.KnowledgePolicy == nil {
+		plan.KnowledgePolicy = knowledgePolicy
+	}
 	if err := validatePlanUsesCandidateTools(&plan, candidates); err != nil {
 		return nil, err
 	}
@@ -466,6 +471,11 @@ func compactToolCandidates(candidates []ToolCandidate) []map[string]interface{} 
 			"reason":       candidate.Reason,
 		}
 		if candidate.Manifest != nil {
+			entry["boundary"] = candidate.Manifest.Boundary
+			entry["whenToUse"] = candidate.Manifest.WhenToUse
+			entry["whenNotToUse"] = candidate.Manifest.WhenNotToUse
+			entry["provider"] = candidate.Manifest.Provider
+			entry["providerBinding"] = candidate.Manifest.ProviderBinding
 			entry["executionPlane"] = candidate.Manifest.ExecutionPlane
 			entry["requiresUserDevice"] = candidate.Manifest.RequiresUserDevice
 			entry["artifactLocation"] = candidate.Manifest.ArtifactLocation
@@ -498,6 +508,7 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"name":                 manifest.Name,
 			"description":          manifest.Description,
 			"type":                 manifest.Type,
+			"boundary":             manifest.Boundary,
 			"executionPlane":       manifest.ExecutionPlane,
 			"requiresUserDevice":   manifest.RequiresUserDevice,
 			"artifactLocation":     manifest.ArtifactLocation,
@@ -505,6 +516,8 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"output":               manifest.Output,
 			"capabilities":         manifest.Capabilities,
 			"tags":                 manifest.Tags,
+			"whenToUse":            manifest.WhenToUse,
+			"whenNotToUse":         manifest.WhenNotToUse,
 			"costLevel":            manifest.CostLevel,
 			"riskLevel":            manifest.RiskLevel,
 			"sideEffect":           manifest.SideEffect,
@@ -513,6 +526,8 @@ func compactToolManifests(manifests []*tool.ToolManifest) []map[string]interface
 			"qualityPolicy":        manifest.QualityPolicy,
 			"nextRecommendedTools": manifest.NextRecommendedTools,
 			"skillPackageId":       manifest.SkillPackageID,
+			"provider":             manifest.Provider,
+			"providerBinding":      manifest.ProviderBinding,
 		}
 		// Include local-tool fields when applicable.
 		if manifest.ExecutionPlane == tool.ExecutionPlaneLocal {

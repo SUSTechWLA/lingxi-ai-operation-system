@@ -100,6 +100,9 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 		if err := validateParameterTypes(step, manifest); err != nil {
 			return err
 		}
+		if err := validateToolPolicy(step, manifest, plan); err != nil {
+			return err
+		}
 		if manifest.SideEffect && !manifest.ApprovalPolicy.Required {
 			return fmt.Errorf("agent step %s uses side-effect tool %s without approval policy", step.ID, step.Tool)
 		}
@@ -237,8 +240,8 @@ func (g *PlanGuard) validateKnowledgePolicy(plan *AgentPlan, stepManifests map[s
 	if policy.RetrievalPolicy == RetrievalNone || policy.RetrievalPolicy == RetrievalForbidden {
 		for _, step := range plan.Steps {
 			manifest := stepManifests[step.ID]
-			if hasFreshKnowledgeCapability(manifest) && strings.TrimSpace(step.Reason) == "" {
-				return fmt.Errorf("knowledge policy forbids fresh knowledge tool %s when retrievalPolicy=%s without explicit reason", step.Tool, policy.RetrievalPolicy)
+			if hasFreshKnowledgeCapability(manifest) {
+				return fmt.Errorf("knowledge policy forbids fresh knowledge tool %s when retrievalPolicy=%s: %s", step.Tool, policy.RetrievalPolicy, policy.Reason)
 			}
 		}
 	}
@@ -267,6 +270,203 @@ func (g *PlanGuard) validateKnowledgePolicy(plan *AgentPlan, stepManifests map[s
 		return fmt.Errorf("required retrieval requires a registered tool with fresh knowledge capability")
 	}
 	return nil
+}
+
+func validateToolPolicy(step AgentStep, manifest *tool.ToolManifest, plan *AgentPlan) error {
+	if manifest == nil {
+		return nil
+	}
+	if plan != nil && plan.KnowledgePolicy != nil && toolForbiddenByKnowledgePolicy(manifest, plan.KnowledgePolicy) {
+		return fmt.Errorf("knowledge policy forbids tool %s by forbidden capability/tool: %s", step.Tool, plan.KnowledgePolicy.Reason)
+	}
+	if requiresApprovalByNameOrCapability(manifest) && !manifest.ApprovalPolicy.Required {
+		return fmt.Errorf("agent step %s uses %s without required approval policy", step.ID, step.Tool)
+	}
+	if isHighCostAIGCTool(manifest) && !manifest.ApprovalPolicy.Required {
+		return fmt.Errorf("agent step %s uses high-cost AIGC tool %s without approval or budget gate", step.ID, step.Tool)
+	}
+	if isFileWriteTool(manifest) && !hasFileWriteArtifactPolicy(manifest) {
+		return fmt.Errorf("agent step %s uses file_write tool %s without pathguard-backed artifact policy", step.ID, step.Tool)
+	}
+	if isMCPProviderTool(manifest) {
+		if err := validateMCPProviderPolicy(step, manifest); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(manifest.LocalCommand) != "" && isArbitraryShellCommand(manifest.LocalCommand) {
+		return fmt.Errorf("agent step %s uses forbidden local command %s; CLI providers must be registered MCP tools", step.ID, manifest.LocalCommand)
+	}
+	return nil
+}
+
+func requiresApprovalByNameOrCapability(manifest *tool.ToolManifest) bool {
+	name := strings.ToLower(strings.TrimSpace(manifest.Name))
+	if strings.HasPrefix(name, "publish.") || strings.HasPrefix(name, "delete.") {
+		return true
+	}
+	for _, capability := range manifest.Capabilities {
+		capability = strings.ToLower(strings.TrimSpace(capability))
+		if capability == "platform_publish" || capability == "artifact_delete" || capability == "delete" {
+			return true
+		}
+	}
+	return false
+}
+
+func isHighCostAIGCTool(manifest *tool.ToolManifest) bool {
+	if manifest == nil || manifest.CostLevel != tool.CostHigh {
+		return false
+	}
+	return manifestHasAnyCapability(manifest, []string{
+		"aigc_generation",
+		"video_generation",
+		"image_generation",
+		"text_to_video",
+		"text_to_image",
+	})
+}
+
+func isFileWriteTool(manifest *tool.ToolManifest) bool {
+	return manifestHasAnyCapability(manifest, []string{"file_write", "artifact_write", "local_file_write"})
+}
+
+func hasFileWriteArtifactPolicy(manifest *tool.ToolManifest) bool {
+	if manifest == nil {
+		return false
+	}
+	if manifest.ArtifactPolicy.ProduceArtifact {
+		return true
+	}
+	if strings.TrimSpace(manifest.ArtifactPolicy.Storage) != "" {
+		return true
+	}
+	return strings.TrimSpace(manifest.ArtifactLocation) != ""
+}
+
+func isMCPProviderTool(manifest *tool.ToolManifest) bool {
+	if manifest == nil {
+		return false
+	}
+	return manifest.Boundary == tool.BoundaryMCPProvider || manifest.ProviderBinding != nil || strings.EqualFold(manifest.Type, "mcp")
+}
+
+func validateMCPProviderPolicy(step AgentStep, manifest *tool.ToolManifest) error {
+	if manifest.ExecutionPlane != "" && manifest.ExecutionPlane != tool.ExecutionPlaneLocal && manifest.ExecutionPlane != tool.ExecutionPlaneHybrid {
+		return fmt.Errorf("agent step %s uses MCP provider tool %s on invalid execution plane %s", step.ID, step.Tool, manifest.ExecutionPlane)
+	}
+	if manifest.LocalCommand != "" && manifest.LocalCommand != "LOCAL_MCP_TOOL_CALL" {
+		return fmt.Errorf("agent step %s uses MCP provider tool %s with non-standard local command %s", step.ID, step.Tool, manifest.LocalCommand)
+	}
+	if enabled, ok := providerBoolCapability(manifest, "enabled"); ok && !enabled {
+		return fmt.Errorf("agent step %s uses disabled MCP provider %s for tool %s", step.ID, providerIDForManifest(manifest), step.Tool)
+	}
+	if enabledTools := providerStringListCapability(manifest, "enabledTools"); len(enabledTools) > 0 &&
+		!toolNameInProviderList(manifest, enabledTools) {
+		return fmt.Errorf("agent step %s uses MCP tool %s not present in provider enabledTools", step.ID, step.Tool)
+	}
+	if disabledTools := providerStringListCapability(manifest, "disabledTools"); len(disabledTools) > 0 &&
+		toolNameInProviderList(manifest, disabledTools) {
+		return fmt.Errorf("agent step %s uses disabled MCP tool %s", step.ID, step.Tool)
+	}
+	return nil
+}
+
+func providerIDForManifest(manifest *tool.ToolManifest) string {
+	if manifest == nil {
+		return ""
+	}
+	if manifest.ProviderBinding != nil && manifest.ProviderBinding.ProviderID != "" {
+		return manifest.ProviderBinding.ProviderID
+	}
+	return manifest.Provider
+}
+
+func toolNameInProviderList(manifest *tool.ToolManifest, names []string) bool {
+	if manifest == nil {
+		return false
+	}
+	candidates := []string{manifest.Name}
+	if manifest.ProviderBinding != nil {
+		candidates = append(candidates, manifest.ProviderBinding.LogicalToolName, manifest.ProviderBinding.RemoteToolName)
+	}
+	for _, candidate := range candidates {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == "" {
+			continue
+		}
+		for _, name := range names {
+			if candidate == strings.ToLower(strings.TrimSpace(name)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func providerBoolCapability(manifest *tool.ToolManifest, key string) (bool, bool) {
+	if manifest == nil || manifest.ProviderCapabilities == nil {
+		return false, false
+	}
+	value, ok := manifest.ProviderCapabilities[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "on":
+			return true, true
+		case "false", "0", "no", "off":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func providerStringListCapability(manifest *tool.ToolManifest, key string) []string {
+	if manifest == nil || manifest.ProviderCapabilities == nil {
+		return nil
+	}
+	value := manifest.ProviderCapabilities[key]
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []interface{}:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" && text != "<nil>" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func manifestHasAnyCapability(manifest *tool.ToolManifest, capabilities []string) bool {
+	if manifest == nil {
+		return false
+	}
+	allowed := toSetLower(capabilities)
+	for _, capability := range manifest.Capabilities {
+		if allowed[strings.ToLower(strings.TrimSpace(capability))] {
+			return true
+		}
+	}
+	return false
+}
+
+func isArbitraryShellCommand(command string) bool {
+	switch strings.ToLower(strings.TrimSpace(command)) {
+	case "bash", "sh", "zsh", "cmd", "powershell", "python", "python3", "node", "curl":
+		return true
+	default:
+		return false
+	}
 }
 
 func planHasFreshKnowledgeTool(plan *AgentPlan, stepManifests map[string]*tool.ToolManifest) bool {

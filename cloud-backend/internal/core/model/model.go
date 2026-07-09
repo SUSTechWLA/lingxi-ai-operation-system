@@ -209,6 +209,7 @@ type ToolManifestRecord struct {
 	Name                 string          `json:"name"`
 	Description          string          `json:"description"`
 	Type                 string          `json:"type"`
+	Boundary             string          `json:"boundary,omitempty"`
 	Version              string          `json:"version,omitempty"`
 	Endpoint             string          `json:"endpoint,omitempty"`
 	Transport            json.RawMessage `json:"transport,omitempty"`
@@ -219,6 +220,8 @@ type ToolManifestRecord struct {
 	Sandbox              bool            `json:"sandbox"`
 	Capabilities         json.RawMessage `json:"capabilities,omitempty"`
 	Tags                 json.RawMessage `json:"tags,omitempty"`
+	WhenToUse            json.RawMessage `json:"when_to_use,omitempty"`
+	WhenNotToUse         json.RawMessage `json:"when_not_to_use,omitempty"`
 	CostLevel            string          `json:"cost_level,omitempty"`
 	LatencyLevel         string          `json:"latency_level,omitempty"`
 	RiskLevel            string          `json:"risk_level,omitempty"`
@@ -232,6 +235,7 @@ type ToolManifestRecord struct {
 	LocalCommand         string          `json:"local_command,omitempty"`
 	LocalRequirements    json.RawMessage `json:"local_requirements,omitempty"`
 	Provider             string          `json:"provider,omitempty"`
+	ProviderBinding      json.RawMessage `json:"provider_binding,omitempty"`
 	ProviderCapabilities json.RawMessage `json:"provider_capabilities,omitempty"`
 	NextRecommendedTools json.RawMessage `json:"next_recommended_tools,omitempty"`
 	FailureModes         json.RawMessage `json:"failure_modes,omitempty"`

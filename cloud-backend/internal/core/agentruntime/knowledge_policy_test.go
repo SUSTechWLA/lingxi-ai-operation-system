@@ -40,6 +40,90 @@ func TestDefaultKnowledgePolicyDoesNotSearchOpinionVideo(t *testing.T) {
 	}
 }
 
+func TestDefaultKnowledgePolicyFreshKnowledgeSignals(t *testing.T) {
+	tests := []struct {
+		name                  string
+		message               string
+		wantRetrieval         RetrievalPolicy
+		wantFreshForbidden    bool
+		wantExternalForbidden bool
+		wantMustUseFacts      bool
+		wantMustCiteFacts     bool
+	}{
+		{
+			name:               "fiction short forbids fresh knowledge",
+			message:            "帮我写一个赛博朋克虚构短片",
+			wantRetrieval:      RetrievalNone,
+			wantFreshForbidden: true,
+		},
+		{
+			name:                  "no web forbids external api",
+			message:               "不要联网，帮我写一个产品宣传视频脚本",
+			wantRetrieval:         RetrievalNone,
+			wantFreshForbidden:    true,
+			wantExternalForbidden: true,
+		},
+		{
+			name:              "today AI news requires fresh knowledge",
+			message:           "帮我做今天 AI 新闻短视频",
+			wantRetrieval:     RetrievalRequired,
+			wantMustUseFacts:  true,
+			wantMustCiteFacts: true,
+		},
+		{
+			name:              "recent company event requires fresh knowledge",
+			message:           "最近某公司发生了什么，做成短视频",
+			wantRetrieval:     RetrievalRequired,
+			wantMustUseFacts:  true,
+			wantMustCiteFacts: true,
+		},
+		{
+			name:               "stable science does not require fresh knowledge",
+			message:            "写一个关于牛顿三定律的科普视频",
+			wantRetrieval:      RetrievalNone,
+			wantFreshForbidden: true,
+		},
+		{
+			name:              "latest model comparison requires fresh knowledge",
+			message:           "写一个 2026 年最新 AI 视频模型对比",
+			wantRetrieval:     RetrievalRequired,
+			wantMustUseFacts:  true,
+			wantMustCiteFacts: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := DefaultKnowledgePolicy(tt.message, "video_creation")
+			if policy == nil {
+				t.Fatal("expected a knowledge policy")
+			}
+			if policy.RetrievalPolicy != tt.wantRetrieval {
+				t.Fatalf("retrieval policy = %q, want %q: %#v", policy.RetrievalPolicy, tt.wantRetrieval, policy)
+			}
+			if tt.wantFreshForbidden {
+				for _, capability := range FreshKnowledgeCapabilities() {
+					if !containsString(policy.ForbiddenCapabilities, capability) {
+						t.Fatalf("policy should forbid fresh capability %q: %#v", capability, policy)
+					}
+				}
+			}
+			if tt.wantExternalForbidden && !containsString(policy.ForbiddenCapabilities, "external_api") {
+				t.Fatalf("no-web policy should forbid external_api: %#v", policy)
+			}
+			if policy.MustUseFacts != tt.wantMustUseFacts {
+				t.Fatalf("mustUseFacts = %v, want %v: %#v", policy.MustUseFacts, tt.wantMustUseFacts, policy)
+			}
+			if policy.MustCiteFacts != tt.wantMustCiteFacts {
+				t.Fatalf("mustCiteFacts = %v, want %v: %#v", policy.MustCiteFacts, tt.wantMustCiteFacts, policy)
+			}
+			if strings.TrimSpace(policy.Reason) == "" {
+				t.Fatalf("policy should include a traceable reason: %#v", policy)
+			}
+		})
+	}
+}
+
 func TestPlanGuardRejectsRequiredRetrievalWithoutFreshKnowledgeTool(t *testing.T) {
 	guard := NewPlanGuard(knowledgeToolCatalog(), nil)
 	plan := &AgentPlan{
@@ -140,6 +224,39 @@ func TestPlanGuardRejectsFreshKnowledgeToolWhenRetrievalNoneWithoutReason(t *tes
 
 	if err := guard.Validate(plan); err == nil {
 		t.Fatal("expected guard to reject fresh knowledge tool for retrieval none without reason")
+	}
+}
+
+func TestPlanGuardRejectsFreshKnowledgeToolWhenPolicyForbidsEvenWithReason(t *testing.T) {
+	guard := NewPlanGuard(knowledgeToolCatalog(), nil)
+	plan := &AgentPlan{
+		Goal:   "creative fiction video",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		KnowledgePolicy: &KnowledgePolicy{
+			ContentType:           "fiction",
+			FreshnessLevel:        FreshnessNone,
+			RetrievalPolicy:       RetrievalNone,
+			ForbiddenCapabilities: FreshKnowledgeCapabilities(),
+			Reason:                "creative fiction does not need current facts",
+		},
+		Steps: []AgentStep{
+			{
+				ID:        "knowledge_search",
+				Tool:      "custom_news_search",
+				Reason:    "planner thought search might help",
+				Arguments: map[string]interface{}{"query": "cyberpunk story"},
+			},
+			{ID: "script", Tool: "video_script_generator", DependsOn: []string{"knowledge_search"}, Arguments: map[string]interface{}{"topic": "cyberpunk story"}},
+		},
+	}
+
+	err := guard.Validate(plan)
+	if err == nil {
+		t.Fatal("expected guard to reject forbidden fresh knowledge tool even when step has reason")
+	}
+	if !strings.Contains(err.Error(), "knowledge policy forbids") {
+		t.Fatalf("error should mention knowledge policy, got %v", err)
 	}
 }
 

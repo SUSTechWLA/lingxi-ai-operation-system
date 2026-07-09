@@ -38,6 +38,29 @@ curl -X PUT http://127.0.0.1:18080/api/local/mcp-providers \
 | `toolPrefix` | 逻辑工具名前缀。例：系统调用 `jimeng.generate_video`，远端实际收到 `generate_video`。 |
 | `toolNameMap` | 显式工具名映射。例：`{"jimeng.generate_video":"video_create"}`。优先级高于 `toolPrefix`。 |
 | `enabled` | 是否启用。 |
+| `enabledTools` | 允许暴露的逻辑工具名或远端工具名白名单。不填表示 provider 内工具默认可用。 |
+| `disabledTools` | 禁用的逻辑工具名或远端工具名黑名单，优先级高于 `enabledTools`。 |
+| `timeout` | provider `tools/list` / `tools/call` 默认超时时间，单位秒。 |
+| `approvalMode` | provider 级审批模式，用于 Guard / UI 判定，常见值：`none`、`before_execute`、`always`。 |
+
+## tools/list 到 ToolManifest
+
+本地 Agent 对 enabled provider 执行 MCP `initialize` 后调用 `tools/list`。每个 MCP tool 会被归一化为系统唯一逻辑工具模型 `ToolManifest`：
+
+| ToolManifest 字段 | 来源 |
+|---|---|
+| `name` | `toolNameMap` 反向映射优先，否则 `toolPrefix + remoteToolName`。 |
+| `boundary` | 固定为 `mcp_provider`。 |
+| `type` | `mcp`。 |
+| `executionPlane` | `local`。 |
+| `requiresUserDevice` | `true`。 |
+| `localCommand` | 固定为 `LOCAL_MCP_TOOL_CALL`。 |
+| `provider` / `providerBinding.providerId` | provider `id`。 |
+| `providerBinding.remoteToolName` | MCP `tools/list[].name`。 |
+| `parameters` / `output` | 从 MCP `inputSchema` / `outputSchema` 的 JSON Schema properties 转成 `ParamDef`；原始 schema 保留在 `providerCapabilities`。 |
+| `capabilities` | 根据 provider id、工具名和描述做保守推断。不要在 provider 侧伪装业务决策能力。 |
+
+Planner 只能看到逻辑工具和能力；PlanCompiler 对 `mcp_provider` 工具统一编译为本地 `LOCAL_MCP_TOOL_CALL` payload。不要新增 `RUN_X_PROVIDER_CLI`、`LOCAL_JIMENG_*`、`LOCAL_VIDEOQA_*` 这类 provider-specific local runner command。
 
 ## 即梦 Python MCP
 

@@ -916,6 +916,9 @@ func TestMCPToolCallExecutorReportsMissingReadyVideoAssets(t *testing.T) {
 	if first["requestId"] != "extgen_video_SHOT_01" || first["status"] != "failed" || first["kind"] != "video" {
 		t.Fatalf("unexpected provenance item: %#v", first)
 	}
+	if first["isFallback"] != false || first["fallbackReason"] != "" {
+		t.Fatalf("failed provider output must not be disguised as fallback AIGC: %#v", first)
+	}
 }
 
 func TestMCPToolCallExecutorBlocksUnclearVideoPromptBeforeProviderCall(t *testing.T) {

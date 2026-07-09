@@ -39,24 +39,27 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		domain = inferDomain(req.Message)
 	}
 
+	knowledgePolicy := defaultKnowledgePolicyForTools(req.Message, domain, p.tools.ListManifests())
 	selected := p.selectTools(domain, req.Message)
 	var traceCandidates []ToolCandidateTrace
-	if RequiresFreshKnowledge(req.Message) {
-		candidates, err := NewHybridToolRetriever(p.tools.ListManifests()).Retrieve(context.Background(), ToolRetrieveRequest{
-			UserInput:     req.Message,
-			Domain:        domain,
-			MaxCandidates: p.maxTools,
-			MaxCostLevel:  req.MaxCostLevel,
-			MaxRiskLevel:  req.MaxRiskLevel,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if len(candidates) > 0 {
-			selected = candidateManifests(candidates)
-			traceCandidates = candidateTrace(candidates)
-		}
+	candidates, err := NewHybridToolRetriever(p.tools.ListManifests()).Retrieve(context.Background(), ToolRetrieveRequest{
+		UserInput:       req.Message,
+		Domain:          domain,
+		KnowledgePolicy: knowledgePolicy,
+		MaxCandidates:   p.maxTools,
+		MaxCostLevel:    req.MaxCostLevel,
+		MaxRiskLevel:    req.MaxRiskLevel,
+	})
+	if err != nil {
+		return nil, err
 	}
+	if knowledgePolicyAllowsFreshTools(knowledgePolicy) && len(candidates) > 0 {
+		selected = candidateManifests(candidates)
+	}
+	if len(candidates) > 0 {
+		traceCandidates = candidateTrace(candidates)
+	}
+	selected = filterManifestsByKnowledgePolicy(selected, knowledgePolicy)
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("no tools matched domain %q", domain)
 	}
@@ -88,7 +91,7 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 		Goal:            req.Message,
 		Domain:          domain,
 		Mode:            "dynamic_agent",
-		KnowledgePolicy: defaultKnowledgePolicyForTools(req.Message, domain, p.tools.ListManifests()),
+		KnowledgePolicy: knowledgePolicy,
 		ToolTrace:       &ToolTrace{CandidateTools: traceCandidates},
 		Steps:           steps,
 		Budget: AgentBudget{
@@ -109,6 +112,23 @@ func (p *HeuristicPlanner) GeneratePlan(_ context.Context, req StartRunRequest) 
 	}
 
 	return plan, nil
+}
+
+func filterManifestsByKnowledgePolicy(manifests []*tool.ToolManifest, policy *KnowledgePolicy) []*tool.ToolManifest {
+	if policy == nil {
+		return manifests
+	}
+	out := manifests[:0]
+	for _, manifest := range manifests {
+		if toolForbiddenByKnowledgePolicy(manifest, policy) {
+			continue
+		}
+		if hasFreshKnowledgeCapability(manifest) && !knowledgePolicyAllowsFreshTools(policy) {
+			continue
+		}
+		out = append(out, manifest)
+	}
+	return out
 }
 
 func defaultKnowledgePolicyForTools(message, domain string, manifests []*tool.ToolManifest) *KnowledgePolicy {
