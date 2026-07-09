@@ -109,7 +109,7 @@ type GenerateChaptersResponse struct {
 // ── Regex patterns ──
 
 var (
-	chapterTitleRe = regexp.MustCompile(`^##\s*[一二三四五六七八九十]+[、\s.．·]`)
+	chapterTitleRe = regexp.MustCompile(`^##\s*[一二三四五六七八九十]+`)
 	totalScoreRe   = regexp.MustCompile(`(?:总分|合计|满分)[：:]\s*(\d+)\s*分?`)
 	itemScoreRe    = regexp.MustCompile(`\((\d+)\s*分\)`)
 	totalWordsRe   = regexp.MustCompile(`总字数预估[：:]\s*([\d,]+)`)
@@ -120,6 +120,24 @@ var (
 // extractChaptersFromOutline 从大纲 markdown 提取一级章节列表
 func extractChaptersFromOutline(outlineText string) ([]ChapterInfo, error) {
 	lines := strings.Split(outlineText, "\n")
+	zap.L().Info("extractChaptersFromOutline",
+		zap.Int("totalLines", len(lines)),
+	)
+	// Debug: log first 5 lines that start with #
+	debugCount := 0
+	for _, l := range lines {
+		if debugCount >= 5 {
+			break
+		}
+		if strings.HasPrefix(strings.TrimSpace(l), "##") {
+			debugCount++
+			zap.L().Info("outline line",
+				zap.Int("n", debugCount),
+				zap.String("line", l[:min(len(l), 80)]),
+				zap.Bool("regexMatch", chapterTitleRe.MatchString(l)),
+			)
+		}
+	}
 	var chapters []ChapterInfo
 	var current *ChapterInfo
 	var currentLines []string

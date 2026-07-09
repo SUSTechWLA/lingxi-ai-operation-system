@@ -461,9 +461,9 @@ func (s *Server) isFilePathWithinManagedProject(filePath string) bool {
 	if err != nil {
 		return false
 	}
-	cleanPath := filepath.Clean(absPath)
+	cleanPath := strings.ToLower(filepath.Clean(absPath))
 	for _, p := range projects {
-		outDir := filepath.Clean(p.OutputDir)
+		outDir := strings.ToLower(filepath.Clean(p.OutputDir))
 		if strings.HasPrefix(cleanPath, outDir+string(filepath.Separator)) || cleanPath == outDir {
 			return true
 		}
