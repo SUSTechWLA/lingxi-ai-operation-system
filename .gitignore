@@ -108,3 +108,8 @@ local-backend/data/config/biaoshu-project-history/01783428998917517200-0.json
 local-backend/data/config/biaoshu-project-history/01783432489543221000-0.json
 local-backend/data/config/biaoshu-project-history/01783495420131838100-0.json
 local-backend/data/config/biaoshu-project-history/01783495425245827300-0.json
+.agents/skills/grill-me/SKILL.md
+.agents/skills/grilling/SKILL.md
+.claude/skills/grill-me/SKILL.md
+.claude/skills/grilling/SKILL.md
+skills-lock.json

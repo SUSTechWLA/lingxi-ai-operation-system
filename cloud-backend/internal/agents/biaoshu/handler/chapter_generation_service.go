@@ -109,10 +109,12 @@ type GenerateChaptersResponse struct {
 // ── Regex patterns ──
 
 var (
-	chapterTitleRe = regexp.MustCompile(`^##\s*[一二三四五六七八九十]+`)
-	totalScoreRe   = regexp.MustCompile(`(?:总分|合计|满分)[：:]\s*(\d+)\s*分?`)
-	itemScoreRe    = regexp.MustCompile(`\((\d+)\s*分\)`)
-	totalWordsRe   = regexp.MustCompile(`总字数预估[：:]\s*([\d,]+)`)
+	chapterTitleRe         = regexp.MustCompile(`^##\s*第?[一二三四五六七八九十]+`)
+	totalScoreRe           = regexp.MustCompile(`(?:总分|合计|满分)[：:]\s*(\d+)\s*分?`)
+	itemScoreRe            = regexp.MustCompile(`\((\d+)\s*分\)`)
+	totalWordsRe           = regexp.MustCompile(`总字数预估[：:]\s*([\d,]+)`)
+	estimatedWordCountRe   = regexp.MustCompile(`\*\*estimatedWordCount\*\*[：:]\s*` + "`" + `([\d,]+)` + "`")
+	taskBookChapterTitleRe = regexp.MustCompile(`^###\s*第?([一二三四五六七八九十]+)章`)
 )
 
 // ── Chapter extraction from outline ──
@@ -256,6 +258,42 @@ func extractChapterScores(taskBookContent string, chapterCount int) map[int]int 
 	return scores
 }
 
+// chineseToInt 中文数字 → 阿拉伯数字
+var chineseToInt = map[string]int{
+	"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+	"六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+	"十一": 11, "十二": 12,
+}
+
+// extractChapterWordCountsFromTaskBook 从任务书各章 estimatedWordCount 提取目标字数
+func extractChapterWordCountsFromTaskBook(taskBookContent string, chapterCount int) map[int]int {
+	wordCounts := make(map[int]int)
+	lines := strings.Split(taskBookContent, "\n")
+	currentChapter := 0
+	for _, l := range lines {
+		// 检测章节标题 ### 第一章：xxx
+		m := taskBookChapterTitleRe.FindStringSubmatch(l)
+		if m != nil {
+			if n, ok := chineseToInt[m[1]]; ok {
+				currentChapter = n
+			}
+			continue
+		}
+		// 在章节内检测 estimatedWordCount
+		if currentChapter > 0 {
+			wc := estimatedWordCountRe.FindStringSubmatch(l)
+			if wc != nil {
+				s := strings.ReplaceAll(wc[1], ",", "")
+				if n, err := strconv.Atoi(s); err == nil && n > 0 {
+					wordCounts[currentChapter] = n
+				}
+				currentChapter = 0 // 重置，只取每章第一次匹配
+			}
+		}
+	}
+	return wordCounts
+}
+
 // calculateChapterWordCounts 计算每章目标字数
 func calculateChapterWordCounts(
 	scoringContent string,
@@ -265,7 +303,19 @@ func calculateChapterWordCounts(
 	wordCounts := make(map[int]int)
 	var warnings []string
 
-	// 1. 总目标字数
+	// 1. 优先从任务书各章 estimatedWordCount 提取
+	perChapterWordCounts := extractChapterWordCountsFromTaskBook(taskBookContent, chapterCount)
+	if len(perChapterWordCounts) == chapterCount {
+		totalWordCount := 0
+		for i := 1; i <= chapterCount; i++ {
+			totalWordCount += perChapterWordCounts[i]
+			wordCounts[i] = perChapterWordCounts[i]
+		}
+		totalScore, _ := extractTotalScore(scoringContent)
+		return wordCounts, totalWordCount, totalScore, warnings
+	}
+
+	// 2. 总目标字数（降级）
 	totalWordCount, found := extractTotalWordCount(taskBookContent)
 	if !found {
 		totalWordCount = defaultTotalWordCount

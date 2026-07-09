@@ -218,7 +218,7 @@ func (s *Server) registerBiaoshuProjectArtifact(projectID string, req BiaoshuArt
 	}
 	replaced := false
 	for i, existing := range manifest.Artifacts {
-		if existing.Kind == artifact.Kind {
+		if existing.ID == artifact.ID {
 			artifact.CreatedAt = existing.CreatedAt
 			manifest.Artifacts[i] = artifact
 			replaced = true

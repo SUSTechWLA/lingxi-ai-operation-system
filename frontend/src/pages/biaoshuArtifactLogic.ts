@@ -292,7 +292,7 @@ function mergeOneManualArtifact(
 ): BiaoshuArtifactRecord[] {
   let replaced = false
   const merged = artifacts.map((artifact) => {
-    if (artifact.kind !== manualArtifact.kind) return artifact
+    if (artifact.id !== manualArtifact.id) return artifact
     replaced = true
     return manualArtifact
   })

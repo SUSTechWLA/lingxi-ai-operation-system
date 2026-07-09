@@ -145,7 +145,7 @@ export default function BiaoshuWorkbench() {
 
   const upsertManualArtifact = useCallback((artifact: BiaoshuArtifactRecord) => {
     setManualArtifacts((prev) => {
-      const next = prev.filter((item) => item.kind !== artifact.kind)
+      const next = prev.filter((item) => item.id !== artifact.id)
       return [...next, artifact]
     })
   }, [])
