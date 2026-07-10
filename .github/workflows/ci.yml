@@ -155,7 +155,11 @@ jobs:
 
       - name: Run Electron browser smoke
         working-directory: frontend
-        run: xvfb-run --auto-servernum npm exec electron -- electron/runtime-smoke.cjs
+        run: |
+          node node_modules/electron/install.js
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          xvfb-run --auto-servernum npm exec electron -- electron/runtime-smoke.cjs
 
       - name: Audit frontend runtime dependencies
         working-directory: frontend
