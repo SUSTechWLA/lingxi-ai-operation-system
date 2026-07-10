@@ -98,9 +98,19 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Audit frontend build and desktop dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+
+      - name: Package Electron application
+        working-directory: frontend
+        run: |
+          mkdir -p resources/bin
+          npm run electron:package:ci
 
       - name: Install HyperFrames render service dependencies
         working-directory: hyperframes-render-service
@@ -142,6 +152,10 @@ jobs:
         run: |
           node electron/local-agent-runtime.test.cjs
           node electron/file-access-runtime.test.cjs
+
+      - name: Run Electron browser smoke
+        working-directory: frontend
+        run: xvfb-run --auto-servernum npm exec electron -- electron/runtime-smoke.cjs
 
       - name: Audit frontend runtime dependencies
         working-directory: frontend

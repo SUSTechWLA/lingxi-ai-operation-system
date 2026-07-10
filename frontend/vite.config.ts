@@ -4,6 +4,17 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: './',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-icons'],
+          'markdown-vendor': ['react-markdown'],
+          'http-vendor': ['axios'],
+        },
+      },
+    },
+  },
   server: {
     port: 3000,
     proxy: {
