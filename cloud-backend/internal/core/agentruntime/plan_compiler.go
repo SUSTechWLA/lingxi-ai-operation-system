@@ -2581,6 +2581,9 @@ func buildToolNode(nodeID string, step AgentStep, manifest *tool.ToolManifest) m
 	if step.ProduceArtifact {
 		params["produceArtifact"] = true
 	}
+	if isMCPProviderTool(manifest) {
+		applyMCPProviderToolPayload(params, args, step, manifest)
+	}
 
 	nodeName := step.Tool
 	inputTool := step.Tool
@@ -2608,11 +2611,57 @@ func requiresExternalBridge(manifest *tool.ToolManifest) bool {
 	if manifest == nil {
 		return false
 	}
+	if isMCPProviderTool(manifest) {
+		return true
+	}
 	if manifest.Endpoint != "" || manifest.SkillPackageID != "" {
 		return true
 	}
 	toolType := strings.ToLower(manifest.Type)
 	return toolType == "external" || strings.Contains(toolType, "prompt_tool") || toolType == "http" || toolType == "grpc"
+}
+
+func applyMCPProviderToolPayload(params, args map[string]interface{}, step AgentStep, manifest *tool.ToolManifest) {
+	if params == nil || manifest == nil {
+		return
+	}
+	providerID := manifest.Provider
+	logicalToolName := step.Tool
+	remoteToolName := step.Tool
+	toolPrefix := ""
+	if manifest.ProviderBinding != nil {
+		if manifest.ProviderBinding.ProviderID != "" {
+			providerID = manifest.ProviderBinding.ProviderID
+		}
+		if manifest.ProviderBinding.LogicalToolName != "" {
+			logicalToolName = manifest.ProviderBinding.LogicalToolName
+		}
+		if manifest.ProviderBinding.RemoteToolName != "" {
+			remoteToolName = manifest.ProviderBinding.RemoteToolName
+		}
+		toolPrefix = manifest.ProviderBinding.ToolPrefix
+	}
+	if remoteToolName == step.Tool && toolPrefix != "" && strings.HasPrefix(step.Tool, toolPrefix) {
+		remoteToolName = strings.TrimPrefix(step.Tool, toolPrefix)
+	}
+	params["localCommand"] = "LOCAL_MCP_TOOL_CALL"
+	params["providerId"] = providerID
+	params["toolName"] = remoteToolName
+	params["logicalToolName"] = logicalToolName
+	params["input"] = copyMap(args)
+	params["arguments"] = copyMap(args)
+	if manifest.Timeout > 0 {
+		params["timeout"] = manifest.Timeout
+		params["timeoutSec"] = manifest.Timeout
+	}
+	params["artifactPolicy"] = map[string]interface{}{
+		"produceArtifact":       manifest.ArtifactPolicy.ProduceArtifact,
+		"artifactKinds":         append([]string(nil), manifest.ArtifactPolicy.ArtifactKinds...),
+		"defaultReviewRequired": manifest.ArtifactPolicy.DefaultReviewRequired,
+		"storage":               manifest.ArtifactPolicy.Storage,
+		"syncMetadataToCloud":   manifest.ArtifactPolicy.SyncMetadataToCloud,
+		"syncFileToCloud":       manifest.ArtifactPolicy.SyncFileToCloud,
+	}
 }
 
 func buildReviewNode(nodeID string, step AgentStep, manifest *tool.ToolManifest, policy tool.ApprovalPolicy, phase string) model.NodeRequest {

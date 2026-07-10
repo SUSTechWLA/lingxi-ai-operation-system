@@ -31,9 +31,15 @@ type ToolTrace struct {
 }
 
 type ToolCandidateTrace struct {
-	Name   string  `json:"name"`
-	Score  float64 `json:"score"`
-	Reason string  `json:"reason"`
+	Name                  string   `json:"name"`
+	Score                 float64  `json:"score"`
+	Reason                string   `json:"reason"`
+	MatchedCapabilities   []string `json:"matchedCapabilities,omitempty"`
+	MatchedTags           []string `json:"matchedTags,omitempty"`
+	MatchedWhenToUse      []string `json:"matchedWhenToUse,omitempty"`
+	HitWhenNotToUse       []string `json:"hitWhenNotToUse,omitempty"`
+	KnowledgePolicyReason string   `json:"knowledgePolicyReason,omitempty"`
+	CostRiskPenalty       float64  `json:"costRiskPenalty,omitempty"`
 }
 
 type GuardDecisionTrace struct {

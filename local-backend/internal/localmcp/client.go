@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Client struct {
@@ -34,18 +35,27 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	var out struct {
 		Tools []Tool `json:"tools"`
 	}
-	if err := c.call(ctx, "tools/list", nil, &out); err != nil {
+	callCtx, cancel := c.withProviderTimeout(ctx)
+	defer cancel()
+	if err := c.call(callCtx, "tools/list", nil, &out); err != nil {
 		return nil, err
 	}
+	filtered := out.Tools[:0]
 	for idx := range out.Tools {
 		out.Tools[idx].Name = c.logicalToolName(out.Tools[idx].Name)
+		if c.toolAllowed(out.Tools[idx].Name) {
+			filtered = append(filtered, out.Tools[idx])
+		}
 	}
-	return out.Tools, nil
+	return filtered, nil
 }
 
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]interface{}) (*ToolCallResult, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("tool name is required")
+	}
+	if !c.toolAllowed(name) {
+		return nil, fmt.Errorf("mcp provider %q tool %q is disabled or not enabled", c.cfg.ID, name)
 	}
 	var out ToolCallResult
 	params := map[string]interface{}{
@@ -55,13 +65,25 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 	if params["arguments"] == nil {
 		params["arguments"] = map[string]interface{}{}
 	}
-	if err := c.call(ctx, "tools/call", params, &out); err != nil {
+	callCtx, cancel := c.withProviderTimeout(ctx)
+	defer cancel()
+	if err := c.call(callCtx, "tools/call", params, &out); err != nil {
 		return nil, err
 	}
 	if out.StructuredContent == nil {
 		out.StructuredContent = map[string]interface{}{}
 	}
 	return &out, nil
+}
+
+func (c *Client) withProviderTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.cfg.TimeoutSec <= 0 {
+		return ctx, func() {}
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Duration(c.cfg.TimeoutSec)*time.Second)
 }
 
 func (c *Client) remoteToolName(name string) string {
@@ -88,6 +110,46 @@ func (c *Client) logicalToolName(name string) string {
 		return prefix + name
 	}
 	return name
+}
+
+func (c *Client) toolAllowed(logicalName string) bool {
+	logicalName = strings.TrimSpace(logicalName)
+	if logicalName == "" {
+		return false
+	}
+	if len(c.cfg.EnabledTools) > 0 && !c.toolNameInList(logicalName, c.cfg.EnabledTools) {
+		return false
+	}
+	if c.toolNameInList(logicalName, c.cfg.DisabledTools) {
+		return false
+	}
+	return true
+}
+
+func (c *Client) toolNameInList(logicalName string, list []string) bool {
+	if len(list) == 0 {
+		return false
+	}
+	remoteName := c.remoteToolName(logicalName)
+	for _, configured := range list {
+		configured = strings.TrimSpace(configured)
+		if configured == "" {
+			continue
+		}
+		configuredLogical := c.logicalToolName(configured)
+		configuredRemote := c.remoteToolName(configured)
+		if sameToolName(logicalName, configured) ||
+			sameToolName(logicalName, configuredLogical) ||
+			sameToolName(remoteName, configured) ||
+			sameToolName(remoteName, configuredRemote) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameToolName(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
 func (c *Client) Close() error {

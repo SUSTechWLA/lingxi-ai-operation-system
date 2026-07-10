@@ -847,6 +847,81 @@ func TestPlanCompiler_PreparePlanInsertsMCPGenerationRunnerWhenRequested(t *test
 	}
 }
 
+func TestPlanCompilerCompilesMCPProviderToolToLocalMCPToolCall(t *testing.T) {
+	compiler := NewPlanCompiler(staticToolCatalog{
+		"jimeng.generate_video": {
+			Name:               "jimeng.generate_video",
+			Type:               "mcp",
+			Boundary:           tool.BoundaryMCPProvider,
+			Description:        "Generate a video through JiMeng MCP.",
+			ExecutionPlane:     tool.ExecutionPlaneLocal,
+			RequiresUserDevice: true,
+			LocalCommand:       "LOCAL_MCP_TOOL_CALL",
+			Provider:           "jimeng",
+			ProviderBinding: &tool.ProviderBinding{
+				ProviderID:      "jimeng",
+				RemoteToolName:  "generate_video",
+				LogicalToolName: "jimeng.generate_video",
+				ToolPrefix:      "jimeng.",
+			},
+			Timeout: 120,
+			Parameters: map[string]tool.ParamDef{
+				"prompt": {Type: "string", Required: true},
+			},
+			Output: map[string]tool.ParamDef{
+				"externalGenerationResults": {Type: "array"},
+			},
+			Capabilities: []string{"aigc_generation", "video_generation"},
+			ArtifactPolicy: tool.ArtifactPolicy{
+				ProduceArtifact: true,
+				ArtifactKinds:   []string{"aigc_video"},
+				Storage:         tool.ArtifactLocationLocal,
+			},
+		},
+	})
+	plan := &AgentPlan{
+		Goal:   "generate b-roll",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:   "generate",
+				Tool: "jimeng.generate_video",
+				Arguments: map[string]interface{}{
+					"prompt":  "0-2秒：灯光亮起。2-4秒：镜头推进到产品。",
+					"traceId": "trace-123",
+				},
+				ProduceArtifact: true,
+			},
+		},
+	}
+
+	dag, err := compiler.Compile(plan)
+	if err != nil {
+		t.Fatalf("Compile returned error: %v", err)
+	}
+	node := requireNode(t, dag, "generate", string(model.NodeTypeTool), "external")
+	params := node.Input["parameters"].(map[string]interface{})
+	if params["localCommand"] != "LOCAL_MCP_TOOL_CALL" {
+		t.Fatalf("localCommand = %#v, want LOCAL_MCP_TOOL_CALL; params=%#v", params["localCommand"], params)
+	}
+	if params["providerId"] != "jimeng" {
+		t.Fatalf("providerId = %#v, want jimeng; params=%#v", params["providerId"], params)
+	}
+	if params["logicalToolName"] != "jimeng.generate_video" {
+		t.Fatalf("logicalToolName = %#v, want jimeng.generate_video; params=%#v", params["logicalToolName"], params)
+	}
+	if params["toolName"] != "generate_video" {
+		t.Fatalf("toolName = %#v, want remote generate_video; params=%#v", params["toolName"], params)
+	}
+	if params["timeout"] != 120 {
+		t.Fatalf("timeout = %#v, want 120; params=%#v", params["timeout"], params)
+	}
+	if _, ok := params["artifactPolicy"].(map[string]interface{}); !ok {
+		t.Fatalf("artifactPolicy should be compiled into local MCP payload: %#v", params["artifactPolicy"])
+	}
+}
+
 func TestPlanCompiler_PreparePlanDefaultsExternalGenerationToMCPRunner(t *testing.T) {
 	catalog := videoProfileTemplateCatalog()
 	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}

@@ -52,6 +52,72 @@ func TestClientListsToolsViaJSONRPC(t *testing.T) {
 	}
 }
 
+func TestClientListToolsAppliesEnabledAndDisabledToolFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpcRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(rpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: map[string]interface{}{
+				"tools": []interface{}{
+					map[string]interface{}{"name": "generate_video", "description": "generate video", "inputSchema": map[string]interface{}{"type": "object"}, "outputSchema": map[string]interface{}{"type": "object"}},
+					map[string]interface{}{"name": "list_task", "description": "list tasks", "inputSchema": map[string]interface{}{"type": "object"}},
+					map[string]interface{}{"name": "check_status", "description": "check status", "inputSchema": map[string]interface{}{"type": "object"}},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderConfig{
+		ID:            "jimeng",
+		Endpoint:      server.URL,
+		ToolPrefix:    "jimeng.",
+		EnabledTools:  []string{"jimeng.generate_video", "jimeng.list_task"},
+		DisabledTools: []string{"jimeng.list_task"},
+		Enabled:       true,
+	}, server.Client())
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want only one enabled non-disabled tool", tools)
+	}
+	if tools[0].Name != "jimeng.generate_video" {
+		t.Fatalf("tool name = %q, want jimeng.generate_video", tools[0].Name)
+	}
+	if tools[0].OutputSchema["type"] != "object" {
+		t.Fatalf("outputSchema should be preserved, got %#v", tools[0].OutputSchema)
+	}
+}
+
+func TestClientCallToolRejectsDisabledToolBeforeProviderCall(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_ = json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: "1", Result: map[string]interface{}{}})
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderConfig{
+		ID:            "jimeng",
+		Endpoint:      server.URL,
+		ToolPrefix:    "jimeng.",
+		DisabledTools: []string{"jimeng.generate_video"},
+		Enabled:       true,
+	}, server.Client())
+	if _, err := client.CallTool(context.Background(), "jimeng.generate_video", nil); err == nil {
+		t.Fatal("CallTool error = nil, want disabled tool error")
+	}
+	if called {
+		t.Fatal("disabled tool should be rejected before provider call")
+	}
+}
+
 func TestClientCallsToolViaJSONRPC(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest

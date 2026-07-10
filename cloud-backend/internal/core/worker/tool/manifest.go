@@ -10,6 +10,7 @@ type ToolManifest struct {
 	Version              string                 `json:"version,omitempty"`
 	Author               string                 `json:"author,omitempty"`
 	Type                 string                 `json:"type"`               // "builtin", "http", "grpc", "executable"
+	Boundary             string                 `json:"boundary,omitempty"` // cloud_builtin | local_native | mcp_provider | remote_http | queue | legacy
 	Endpoint             string                 `json:"endpoint,omitempty"` // URL for external tools
 	Transport            *ToolTransport         `json:"transport,omitempty"`
 	Timeout              int                    `json:"timeout,omitempty"`
@@ -19,6 +20,8 @@ type ToolManifest struct {
 	Examples             []ToolExample          `json:"examples,omitempty"`
 	Capabilities         []string               `json:"capabilities,omitempty"`
 	Tags                 []string               `json:"tags,omitempty"`
+	WhenToUse            []string               `json:"whenToUse,omitempty"`
+	WhenNotToUse         []string               `json:"whenNotToUse,omitempty"`
 	CostLevel            string                 `json:"costLevel,omitempty"`
 	LatencyLevel         string                 `json:"latencyLevel,omitempty"`
 	RiskLevel            string                 `json:"riskLevel,omitempty"`
@@ -34,6 +37,7 @@ type ToolManifest struct {
 	LocalCommand         string                 `json:"localCommand,omitempty"`
 	LocalRequirements    LocalRequirements      `json:"localRequirements,omitempty"`
 	Provider             string                 `json:"provider,omitempty"`
+	ProviderBinding      *ProviderBinding       `json:"providerBinding,omitempty"`
 	ProviderCapabilities map[string]interface{} `json:"providerCapabilities,omitempty"`
 	NextRecommendedTools []string               `json:"nextRecommendedTools,omitempty"`
 	FailureModes         []string               `json:"failureModes,omitempty"`
@@ -49,7 +53,25 @@ type ToolTransport struct {
 	Headers  map[string]string `json:"headers,omitempty"`
 }
 
+// ProviderBinding maps a logical ToolManifest entry to one remote MCP provider
+// tool. Planner and retriever use LogicalToolName; local execution routes the
+// call through ProviderID and RemoteToolName via LOCAL_MCP_TOOL_CALL.
+type ProviderBinding struct {
+	ProviderID      string            `json:"providerId,omitempty"`
+	RemoteToolName  string            `json:"remoteToolName,omitempty"`
+	LogicalToolName string            `json:"logicalToolName,omitempty"`
+	ToolPrefix      string            `json:"toolPrefix,omitempty"`
+	ToolNameMap     map[string]string `json:"toolNameMap,omitempty"`
+}
+
 const (
+	BoundaryCloudBuiltin = "cloud_builtin"
+	BoundaryLocalNative  = "local_native"
+	BoundaryMCPProvider  = "mcp_provider"
+	BoundaryRemoteHTTP   = "remote_http"
+	BoundaryQueue        = "queue"
+	BoundaryLegacy       = "legacy"
+
 	CostLow    = "low"
 	CostMedium = "medium"
 	CostHigh   = "high"

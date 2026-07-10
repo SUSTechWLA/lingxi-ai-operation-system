@@ -100,3 +100,148 @@ func TestToolRetrieverDoesNotPromoteFreshKnowledgeForOpinionTask(t *testing.T) {
 		t.Fatalf("fresh knowledge tool should not be top candidate for opinion task: %#v", candidates)
 	}
 }
+
+func TestToolRetrieverFiltersFreshKnowledgeWhenPolicyForbidsIt(t *testing.T) {
+	retriever := NewHybridToolRetriever(retrieverPolicyTestTools())
+
+	candidates, err := retriever.Retrieve(context.Background(), ToolRetrieveRequest{
+		UserInput: "帮我写一个赛博朋克虚构短片",
+		Domain:    "video_creation",
+		KnowledgePolicy: &KnowledgePolicy{
+			ContentType:           "fiction",
+			FreshnessLevel:        FreshnessNone,
+			RetrievalPolicy:       RetrievalNone,
+			ForbiddenCapabilities: FreshKnowledgeCapabilities(),
+			Reason:                "fiction and creative writing do not need current facts",
+		},
+		MaxCandidates: 10,
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	for _, candidate := range candidates {
+		if candidate.Name == "custom_news_search" {
+			t.Fatalf("fresh knowledge tool should be filtered when policy forbids it: %#v", candidates)
+		}
+	}
+	if len(candidates) == 0 || candidates[0].Name != "video_script_generator" {
+		t.Fatalf("expected script generator candidate, got %#v", candidates)
+	}
+}
+
+func TestToolRetrieverSelectsFreshKnowledgeWhenPolicyRequiresIt(t *testing.T) {
+	retriever := NewHybridToolRetriever(retrieverPolicyTestTools())
+
+	candidates, err := retriever.Retrieve(context.Background(), ToolRetrieveRequest{
+		UserInput: "帮我做今天 AI 新闻短视频",
+		Domain:    "video_creation",
+		KnowledgePolicy: &KnowledgePolicy{
+			ContentType:          "news_video",
+			FreshnessLevel:       FreshnessHigh,
+			RetrievalPolicy:      RetrievalRequired,
+			RequiredCapabilities: FreshKnowledgeCapabilities(),
+			Reason:               "user asked for today AI news",
+		},
+		MaxCandidates: 10,
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if len(candidates) == 0 || candidates[0].Name != "custom_news_search" {
+		t.Fatalf("expected fresh knowledge candidate first, got %#v", candidates)
+	}
+	if !strings.Contains(candidates[0].Reason, "knowledge policy") {
+		t.Fatalf("candidate reason should include knowledge policy reason, got %q", candidates[0].Reason)
+	}
+}
+
+func TestToolRetrieverFiltersExternalAPIWhenUserDisallowsWeb(t *testing.T) {
+	retriever := NewHybridToolRetriever(retrieverPolicyTestTools())
+
+	candidates, err := retriever.Retrieve(context.Background(), ToolRetrieveRequest{
+		UserInput: "不要联网，帮我写一个产品宣传视频脚本",
+		Domain:    "video_creation",
+		KnowledgePolicy: &KnowledgePolicy{
+			ContentType:           "marketing_script",
+			FreshnessLevel:        FreshnessNone,
+			RetrievalPolicy:       RetrievalNone,
+			ForbiddenCapabilities: append(FreshKnowledgeCapabilities(), "external_api"),
+			Reason:                "user explicitly disabled web access",
+		},
+		MaxCandidates: 10,
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	for _, candidate := range candidates {
+		if candidate.Name == "external_research_api" || candidate.Name == "custom_news_search" {
+			t.Fatalf("external/fresh tool should be filtered by no-web policy: %#v", candidates)
+		}
+	}
+}
+
+func TestToolRetrieverStronglyDownranksWhenNotToUseMatch(t *testing.T) {
+	retriever := NewHybridToolRetriever(retrieverPolicyTestTools())
+
+	candidates, err := retriever.Retrieve(context.Background(), ToolRetrieveRequest{
+		UserInput: "帮我改写和润色这段已有文案，不要查资料",
+		Domain:    "video_creation",
+		KnowledgePolicy: &KnowledgePolicy{
+			ContentType:           "rewrite",
+			FreshnessLevel:        FreshnessNone,
+			RetrievalPolicy:       RetrievalNone,
+			ForbiddenCapabilities: FreshKnowledgeCapabilities(),
+			Reason:                "rewrite task with no-web instruction",
+		},
+		MaxCandidates: 10,
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	for _, candidate := range candidates {
+		if candidate.Name == "custom_news_search" {
+			t.Fatalf("whenNotToUse/no-web match should filter news search: %#v", candidates)
+		}
+	}
+}
+
+func retrieverPolicyTestTools() []*tool.ToolManifest {
+	return []*tool.ToolManifest{
+		{
+			Name:         "custom_news_search",
+			Description:  "Search latest news and current event facts.",
+			Type:         "http",
+			Boundary:     tool.BoundaryRemoteHTTP,
+			Capabilities: []string{"fresh_knowledge", "news_search", "web_search", "current_event_retrieval"},
+			Tags:         []string{"news", "search", "fact"},
+			WhenToUse:    []string{"latest news", "今天 新闻", "最近 发生"},
+			WhenNotToUse: []string{"虚构", "改写", "润色", "不要查资料", "不要联网"},
+			CostLevel:    tool.CostLow,
+			RiskLevel:    tool.RiskLow,
+			Parameters: map[string]tool.ParamDef{
+				"query": {Type: "string", Required: true},
+			},
+		},
+		{
+			Name:         "external_research_api",
+			Description:  "Call external APIs for factual research.",
+			Type:         "http",
+			Boundary:     tool.BoundaryRemoteHTTP,
+			Capabilities: []string{"external_api", "fact_retrieval"},
+			Tags:         []string{"external", "api"},
+			CostLevel:    tool.CostLow,
+			RiskLevel:    tool.RiskMedium,
+		},
+		{
+			Name:         "video_script_generator",
+			Description:  "Generate video scripts and rewrite creative briefs.",
+			Type:         "builtin_prompt_tool",
+			Boundary:     tool.BoundaryCloudBuiltin,
+			Capabilities: []string{"video_creation", "script_generation", "creative_writing"},
+			Tags:         []string{"script", "video", "rewrite"},
+			WhenToUse:    []string{"虚构", "改写", "润色", "产品宣传"},
+			CostLevel:    tool.CostLow,
+			RiskLevel:    tool.RiskLow,
+		},
+	}
+}

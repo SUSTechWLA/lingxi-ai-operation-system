@@ -158,6 +158,7 @@ type toolManifestFile struct {
 	Version              string                   `yaml:"version"`
 	Author               string                   `yaml:"author"`
 	Type                 string                   `yaml:"type"`
+	Boundary             string                   `yaml:"boundary"`
 	Endpoint             string                   `yaml:"endpoint"`
 	Timeout              int                      `yaml:"timeout"`
 	Parameters           map[string]tool.ParamDef `yaml:"parameters"`
@@ -166,6 +167,8 @@ type toolManifestFile struct {
 	Examples             []tool.ToolExample       `yaml:"examples"`
 	Capabilities         []string                 `yaml:"capabilities"`
 	Tags                 []string                 `yaml:"tags"`
+	WhenToUse            []string                 `yaml:"whenToUse"`
+	WhenNotToUse         []string                 `yaml:"whenNotToUse"`
 	CostLevel            string                   `yaml:"costLevel"`
 	LatencyLevel         string                   `yaml:"latencyLevel"`
 	RiskLevel            string                   `yaml:"riskLevel"`
@@ -181,6 +184,7 @@ type toolManifestFile struct {
 	LocalCommand         string                   `yaml:"localCommand"`
 	LocalRequirements    localRequirementsFile    `yaml:"localRequirements"`
 	Provider             string                   `yaml:"provider"`
+	ProviderBinding      *tool.ProviderBinding    `yaml:"providerBinding"`
 	ProviderCapabilities map[string]interface{}   `yaml:"providerCapabilities"`
 	NextRecommendedTools []string                 `yaml:"nextRecommendedTools"`
 	FailureModes         []string                 `yaml:"failureModes"`
@@ -200,6 +204,7 @@ func (f toolManifestFile) toManifest() *tool.ToolManifest {
 		Version:              f.Version,
 		Author:               f.Author,
 		Type:                 f.Type,
+		Boundary:             f.Boundary,
 		Endpoint:             f.Endpoint,
 		Timeout:              f.Timeout,
 		Parameters:           f.Parameters,
@@ -208,6 +213,8 @@ func (f toolManifestFile) toManifest() *tool.ToolManifest {
 		Examples:             f.Examples,
 		Capabilities:         f.Capabilities,
 		Tags:                 f.Tags,
+		WhenToUse:            f.WhenToUse,
+		WhenNotToUse:         f.WhenNotToUse,
 		CostLevel:            f.CostLevel,
 		LatencyLevel:         f.LatencyLevel,
 		RiskLevel:            f.RiskLevel,
@@ -223,6 +230,7 @@ func (f toolManifestFile) toManifest() *tool.ToolManifest {
 		LocalCommand:         f.LocalCommand,
 		LocalRequirements:    f.LocalRequirements.toRequirements(),
 		Provider:             f.Provider,
+		ProviderBinding:      f.ProviderBinding,
 		ProviderCapabilities: f.ProviderCapabilities,
 		NextRecommendedTools: f.NextRecommendedTools,
 		FailureModes:         f.FailureModes,
