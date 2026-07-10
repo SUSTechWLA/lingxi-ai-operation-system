@@ -22,20 +22,61 @@ type TimeWindowRequest struct {
 	Profile     model.VideoCreationProfile
 	Shots       []model.ShotUnit
 	ScriptSpans []model.ScriptSpan
+	AudioMaster *model.AudioMasterTimeline
 }
 
 func BuildTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
-	if req.Profile.ProfileID == model.VideoProfileCinematicStory {
-		return buildCinematicTimeWindowPlan(req)
+	if req.AudioMaster != nil {
+		req.ScriptSpans = scriptSpansFromAudioMaster(*req.AudioMaster)
 	}
-	return buildTalkingHeadTimeWindowPlan(req)
+	var plan model.TimeWindowPlan
+	if req.Profile.ProfileID == model.VideoProfileCinematicStory {
+		plan = buildCinematicTimeWindowPlan(req)
+	} else {
+		plan = buildTalkingHeadTimeWindowPlan(req)
+	}
+	plan.SchemaVersion = model.TalkingHeadSchemaVersion
+	if req.AudioMaster != nil {
+		plan.TimelineRevision = req.AudioMaster.Revision
+	}
+	for index := range plan.Windows {
+		window := &plan.Windows[index]
+		window.StartMs = MillisecondsFromSeconds(window.StartSec)
+		window.EndMs = MillisecondsFromSeconds(window.EndSec)
+		if window.EndMs > window.StartMs {
+			window.DurationMs = window.EndMs - window.StartMs
+		} else {
+			window.DurationMs = MillisecondsFromSeconds(window.DurationSec)
+			window.EndMs = window.StartMs + window.DurationMs
+		}
+		window.StartSec = SecondsFromMilliseconds(window.StartMs)
+		window.EndSec = SecondsFromMilliseconds(window.EndMs)
+		window.DurationSec = SecondsFromMilliseconds(window.DurationMs)
+		window.TimelineRevision = plan.TimelineRevision
+	}
+	return plan
+}
+
+func scriptSpansFromAudioMaster(master model.AudioMasterTimeline) []model.ScriptSpan {
+	spans := make([]model.ScriptSpan, 0, len(master.Sentences))
+	for _, cue := range master.Sentences {
+		spans = append(spans, model.ScriptSpan{
+			ID:       cue.ID,
+			StartSec: SecondsFromMilliseconds(cue.StartMs),
+			EndSec:   SecondsFromMilliseconds(cue.EndMs),
+			Text:     cue.Text,
+			Emotion:  cue.Emotion,
+		})
+	}
+	return spans
 }
 
 func buildTalkingHeadTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 	plan := model.TimeWindowPlan{
-		ProfileID:   model.VideoProfileTalkingHead,
-		Windows:     make([]model.TimeWindowUnit, 0, len(req.ScriptSpans)),
-		SplitReport: defaultShotSplitReport(),
+		SchemaVersion: model.TalkingHeadSchemaVersion,
+		ProfileID:     model.VideoProfileTalkingHead,
+		Windows:       make([]model.TimeWindowUnit, 0, len(req.ScriptSpans)),
+		SplitReport:   defaultShotSplitReport(),
 	}
 
 	drafts, forcedSplits := scriptSpanWindowDrafts(req.ScriptSpans)
@@ -78,9 +119,10 @@ func buildTalkingHeadTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan 
 
 func buildCinematicTimeWindowPlan(req TimeWindowRequest) model.TimeWindowPlan {
 	plan := model.TimeWindowPlan{
-		ProfileID:   req.Profile.ProfileID,
-		Windows:     make([]model.TimeWindowUnit, 0, len(req.Shots)),
-		SplitReport: defaultShotSplitReport(),
+		SchemaVersion: model.TalkingHeadSchemaVersion,
+		ProfileID:     req.Profile.ProfileID,
+		Windows:       make([]model.TimeWindowUnit, 0, len(req.Shots)),
+		SplitReport:   defaultShotSplitReport(),
 	}
 
 	var sequenceIndex int

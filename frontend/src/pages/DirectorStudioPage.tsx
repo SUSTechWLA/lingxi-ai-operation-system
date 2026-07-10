@@ -35,6 +35,7 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import DesktopPage from './DesktopPage'
+import { TalkingHeadLayerInspector } from '../features/director-studio/talking-head/components/TalkingHeadLayerInspector'
 import {
   approveAgentReview,
   cancelAgentRun,
@@ -96,6 +97,7 @@ import {
   localArtifactIdFromStorageRef,
   localServiceStatusDisplay,
   mergeExternalGenerationTaskReferences,
+  normalizeVideoCreationProfileId,
   normalizeDirectorErrorMessage,
   nextStageIdAfterReview,
   nextSelectedReviewId,
@@ -189,7 +191,7 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
   const [topic, setTopic] = useState('')
   const [durationSec, setDurationSec] = useState(45)
   const [roleAgents, setRoleAgents] = useState<VideoRoleAgent[]>(fallbackRoles)
-  const [selectedProfileId, setSelectedProfileId] = useState<VideoCreationProfileId>('voice_visual')
+  const [selectedProfileId, setSelectedProfileId] = useState<VideoCreationProfileId>('talking_head')
   const [project, setProject] = useState<VideoProject | null>(null)
   const [projectArtifacts, setProjectArtifacts] = useState<Artifact[]>([])
   const [run, setRun] = useState<AgentRun | null>(null)
@@ -255,9 +257,10 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       })[0]
       if (!latestProject) return
       setProject(latestProject)
-      if (latestProject.mode === 'aigc_shot' || latestProject.mode === 'voice_visual') {
-        setSelectedProfileId(latestProject.mode)
-      }
+      const configuredProfile = typeof latestProject.config?.canonicalProfileId === 'string'
+        ? latestProject.config.canonicalProfileId
+        : undefined
+      setSelectedProfileId(normalizeVideoCreationProfileId(latestProject.canonicalProfileId || configuredProfile || latestProject.mode))
       const restoredTopic = typeof latestProject.config?.topic === 'string' ? latestProject.config.topic : latestProject.name
       if (restoredTopic) setTopic(restoredTopic)
       if (typeof latestProject.targetDurationSec === 'number' && latestProject.targetDurationSec > 0) {
@@ -357,9 +360,9 @@ export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Pr
       const contentTypeRouting = {
         enabled: true,
         decisionArtifactKind: 'VIDEO_CREATION_PROFILE',
-        instruction: '在创作开始先判断视频属于口播/知识类视频还是影视化/AIGC shot 创作视频，并把判定写入 VIDEO_CREATION_PROFILE。口播/知识类使用 profileId=talking_head 或 voice_visual；影视化/AIGC shot 使用 profileId=cinematic_story 或 aigc_shot。后续 shot 产物页会根据这个判定自动进入对应工作台。',
+        instruction: '在创作开始先判断视频属于口播/知识类视频还是影视化/AIGC shot 创作视频，并把 canonical 判定写入 VIDEO_CREATION_PROFILE。口播/知识类使用 profileId=talking_head；影视化/AIGC shot 使用 profileId=cinematic_story。后续 shot 产物页会根据这个判定自动进入对应工作台。',
         options: [
-          { profileId: 'talking_head', projectMode: 'voice_visual', label: '口播/知识类视频', focus: '口播稿、HyperGen 可控层、AIGC 插入素材' },
+          { profileId: 'talking_head', projectMode: 'voice_visual', label: '口播/知识类视频', focus: '口播稿、HyperFrames 确定性文字层、AIGC 插入素材' },
           { profileId: 'cinematic_story', projectMode: 'aigc_shot', label: '影视化/AIGC shot 视频', focus: '剧本、跨 shot 一致性、角色/场景/道具参考图、AIGC 主画面' },
         ],
       }
@@ -1477,18 +1480,18 @@ function shotWorkspaceCopy(mode: ShotWorkspaceMode) {
     return {
       eyebrow: '影视分镜 shot 工作台',
       title: '剧本、连续性参考图与 AIGC 镜头提示词',
-      description: '每个 shot 先锁定剧本片段、角色 / 场景 / 道具参考图和故事板，再检查 AIGC 主画面层的文学化提示词、运镜、景别和跨 shot 一致性；Hypergen 层主要承担字幕和少量说明。',
+      description: '每个 shot 先锁定剧本片段、角色 / 场景 / 道具参考图和故事板，再检查 AIGC 主画面层的文学化提示词、运镜、景别和跨 shot 一致性；HyperFrames 层主要承担字幕和少量说明。',
       primary: 'AIGC 主画面层',
       secondary: '全局一致性参考',
-      tertiary: 'Hypergen 字幕层',
+      tertiary: 'HyperFrames 字幕层',
     }
   }
   return {
     eyebrow: '口播知识 shot 工作台',
-    title: '口播稿、Hypergen 时间线与 AIGC 插入点',
-    description: '每个 shot 先围绕口播稿校验内容节奏，再检查 Hypergen 可控层的素材、字幕、图形和时间线变化；AIGC 只作为插入素材服务口播，不要求跨 shot 连续性。',
+    title: '口播稿、HyperFrames 时间线与 AIGC 插入点',
+    description: '每个 shot 先围绕口播稿校验内容节奏，再检查 HyperFrames 可控层的素材、字幕、图形和时间线变化；AIGC 只作为插入素材服务口播，不要求跨 shot 连续性。',
     primary: '口播稿主线',
-    secondary: 'Hypergen 可控层',
+    secondary: 'HyperFrames 可控层',
     tertiary: 'AIGC 插入素材',
   }
 }
@@ -1692,8 +1695,8 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                   <div className="flex items-center gap-2 text-sm font-black text-primary-dark"><FiUserCheck /> 全局参考包同步</div>
                   <p className="mt-2 text-sm leading-6 text-ink-muted">
                     {mode === 'aigc_shot'
-                      ? '当前 shot 以 AIGC 主画面为核心。先确认角色、场景、道具和故事板参考，保持跨 shot 连续性；Hypergen 只承担字幕和少量说明。'
-                      : '当前 shot 以口播稿为核心。先确认口播内容和 Hypergen 可控层时间线，再在合适位置补 AIGC b-roll 素材。'}
+                      ? '当前 shot 以 AIGC 主画面为核心。先确认角色、场景、道具和故事板参考，保持跨 shot 连续性；HyperFrames 只承担字幕和少量说明。'
+                      : '当前 shot 以口播稿为核心。先确认口播内容和 HyperFrames 可控层时间线，再在合适位置补 AIGC b-roll 素材。'}
                   </p>
                 </div>
                 <span className={clsx(
@@ -2049,11 +2052,11 @@ function CinematicShotGuide({
         />
       </ShotPrototypePanel>
 
-      <ShotPrototypePanel index="6" title="HyperGen 辅助层与产物预览" subtitle="字幕、说明和可控图形交给前端层；最终产物只展示可看的图片和视频。">
+      <ShotPrototypePanel index="6" title="HyperFrames 辅助层与产物预览" subtitle="字幕、说明和可控图形交给确定性渲染层；最终产物只展示可看的图片和视频。">
         <ShotLayerTimeline mode="aigc_shot" group={group} requestEntries={requestEntries} narrationOverride={narrationText} />
         <LayerPromptBlock
-          title="HyperGen 辅助层提示词"
-          value={hypergenPromptForDisplay(requestEntries) || 'HyperGen 辅助层只负责字幕、说明和少量可控图形，不抢 AIGC 主画面。'}
+          title="HyperFrames 辅助层提示词"
+          value={hyperFramesPromptForDisplay(requestEntries) || 'HyperFrames 辅助层只负责字幕、说明和少量可控图形，不抢 AIGC 主画面。'}
           mode="aigc_shot"
         />
         <HyperFramesOutputPreview artifacts={hyperFramesArtifacts} mode="aigc_shot" projectId={projectId} durationSec={group.durationSec} narrationText={narrationText} />
@@ -2118,6 +2121,8 @@ function VoiceShotGuide({
         <ShotReferenceStrategyPanel mode="voice_visual" group={group} requestEntries={requestEntries} narrationOverride={narrationText} />
       </div>
 
+      <TalkingHeadLayerInspector artifacts={group.artifacts} />
+
       <ShotPrototypePanel index="1" title="口播稿" subtitle="口播是主线。划词后只局部修改，不重写整个 shot。">
         <ShotTextBlock
           title="口播稿"
@@ -2126,11 +2131,11 @@ function VoiceShotGuide({
         />
       </ShotPrototypePanel>
 
-      <ShotPrototypePanel index="2" title="HyperGen 层时间线" subtitle="中文文字、字幕、卡片、流程标签和浏览器组件由可控前端层完成。">
-        <VoiceHypergenTimeline group={group} requestEntries={requestEntries} narrationText={narrationText} />
+      <ShotPrototypePanel index="2" title="HyperFrames 层时间线" subtitle="中文文字、字幕、卡片、流程标签和浏览器组件由确定性渲染层完成。">
+        <VoiceHyperFramesTimeline group={group} requestEntries={requestEntries} narrationText={narrationText} />
         <LayerPromptBlock
-          title="HyperGen 层提示词"
-          value={hypergenPromptForDisplay(requestEntries) || 'HyperGen 层负责字幕、标题、UI 卡片、流程标签和安全文字。请在这里补充组件、素材和时间线变化。'}
+          title="HyperFrames 层提示词"
+          value={hyperFramesPromptForDisplay(requestEntries) || 'HyperFrames 层负责字幕、标题、UI 卡片、流程标签和安全文字。请在这里补充组件、素材和时间线变化。'}
           mode="voice_visual"
         />
         <HyperFramesOutputPreview artifacts={hyperFramesArtifacts} mode="voice_visual" projectId={projectId} durationSec={group.durationSec} narrationText={narrationText} />
@@ -2172,7 +2177,7 @@ function VoiceShotGuide({
         </div>
       </ShotPrototypePanel>
 
-      <ShotPrototypePanel index="5" title="字幕层" subtitle="字幕由 HyperGen / HyperFrames 负责，不交给 AIGC 生成。">
+      <ShotPrototypePanel index="5" title="字幕层" subtitle="字幕由 HyperFrames 负责，不交给 AIGC 生成。">
         <SubtitleLayerPreview
           narrationText={narrationText}
           durationSec={group.durationSec}
@@ -2383,7 +2388,7 @@ function ContinuityChecklist({ group, requestEntries }: { group: DirectorShotRev
   )
 }
 
-function VoiceHypergenTimeline({
+function VoiceHyperFramesTimeline({
   group,
   requestEntries,
   narrationText,
@@ -2394,11 +2399,11 @@ function VoiceHypergenTimeline({
 }) {
   const duration = group.durationSec || firstRequestDuration(requestEntries) || 8
   const half = Math.max(1, Math.round(duration / 2))
-  const hypergenLine = firstHypergenLine(requestEntries)
+  const hyperFramesLine = firstHyperFramesLine(requestEntries)
   const segments = [
     { time: '0s', title: '口播进入', detail: firstPromptSentence(narrationText) || '承接口播内容，字幕保持稳定可读。' },
-    { time: `${Math.max(1, half - 1)}s`, title: '可控素材变化', detail: hypergenLine || '标题、数据卡片、流程标签或浏览器组件按口播节奏出现。' },
-    { time: `${half}s`, title: '强调信息点', detail: '用 HyperGen 层处理中文、数字、箭头和重点词，不让 AIGC 生成文字。' },
+    { time: `${Math.max(1, half - 1)}s`, title: '可控素材变化', detail: hyperFramesLine || '标题、数据卡片、流程标签或浏览器组件按口播节奏出现。' },
+    { time: `${half}s`, title: '强调信息点', detail: '用 HyperFrames 层处理中文、数字、箭头和重点词，不让 AIGC 生成文字。' },
     { time: `${duration}s`, title: '收束到下个 shot', detail: firstFfmpegLine(requestEntries) || '保留字幕安全区，等待 FFmpeg 合成完整 shot。' },
   ]
   return (
@@ -2501,7 +2506,7 @@ function VoiceReferencePanel({
 }) {
   const rows = [
     { label: '口播稿', value: narrationText ? '已读取' : '待确认' },
-    { label: 'HyperGen 策略', value: hypergenTimelineSummary(requestEntries) },
+    { label: 'HyperFrames 策略', value: hyperFramesTimelineSummary(requestEntries) },
     { label: 'AIGC 插入', value: `${requestEntries.filter((entry) => entry.request).length} 个素材任务` },
   ]
   return (
@@ -2755,7 +2760,7 @@ function cinematicPromptText(requestEntries: ShotRequestPreviewEntry[], visualTe
   const parts = [
     narrationText ? `剧本意图：${narrationText}` : '',
     visualText ? `画面描述：${visualText}` : '',
-    '提示词需要明确主要角色、场景、道具、景别、镜头移动、光线情绪和时间线变化；保持跨 shot 的人物、空间和物理状态一致；字幕和可读文字交给 Hypergen 层。',
+    '提示词需要明确主要角色、场景、道具、景别、镜头移动、光线情绪和时间线变化；保持跨 shot 的人物、空间和物理状态一致；字幕和可读文字交给 HyperFrames 层。',
   ].filter(Boolean)
   return parts.join('\n\n')
 }
@@ -2906,12 +2911,12 @@ function shotReferenceCount(requestEntries: ShotRequestPreviewEntry[]): number {
   return ids.size
 }
 
-function hypergenTimelineSummary(requestEntries: ShotRequestPreviewEntry[]): string {
-  const withHypergen = requestEntries.filter((entry) => {
+function hyperFramesTimelineSummary(requestEntries: ShotRequestPreviewEntry[]): string {
+  const withHyperFrames = requestEntries.filter((entry) => {
     const request = entry.request
     return Boolean(request?.hyperframesPlan?.prompt || request?.hyperframesPlan?.plan || request?.textSafeLayout)
   }).length
-  return withHypergen ? `${withHypergen} 段 Hypergen 约束` : '字幕 / 图形待确认'
+  return withHyperFrames ? `${withHyperFrames} 段 HyperFrames 约束` : '字幕 / 图形待确认'
 }
 
 function ShotLayerTimeline({
@@ -2947,9 +2952,9 @@ function ShotLayerTimeline({
         tone: 'bg-green-50',
       },
       {
-        label: 'Hypergen 字幕',
+        label: 'HyperFrames 字幕',
         time: 'overlay',
-        detail: firstHypergenLine(requestEntries) || '只做字幕、说明和少量可控图形，不抢 AIGC 主画面',
+        detail: firstHyperFramesLine(requestEntries) || '只做字幕、说明和少量可控图形，不抢 AIGC 主画面',
         tone: 'bg-background-card',
       },
     ]
@@ -2961,9 +2966,9 @@ function ShotLayerTimeline({
         tone: 'bg-white',
       },
       {
-        label: 'Hypergen 可控层',
+        label: 'HyperFrames 可控层',
         time: '0-100%',
-        detail: firstHypergenLine(requestEntries) || '字幕、标题、卡片、UI 素材和可控浏览器组件按时间线变化',
+        detail: firstHyperFramesLine(requestEntries) || '字幕、标题、卡片、UI 素材和可控浏览器组件按时间线变化',
         tone: 'bg-primary-soft/65',
       },
       {
@@ -2975,7 +2980,7 @@ function ShotLayerTimeline({
       {
         label: 'FFmpeg 合成',
         time: 'final',
-        detail: firstFfmpegLine(requestEntries) || '把 AIGC 素材、Hypergen 层和字幕层融合成完整 shot',
+        detail: firstFfmpegLine(requestEntries) || '把 AIGC 素材、HyperFrames 层和字幕层融合成完整 shot',
         tone: 'bg-background-card',
       },
     ]
@@ -2986,7 +2991,7 @@ function ShotLayerTimeline({
         <div>
           <div className="text-xs font-black text-primary-dark">{mode === 'aigc_shot' ? '镜头连续性时间线' : '口播服务型时间线'}</div>
           <p className="mt-1 text-[11px] leading-5 text-ink-muted">
-            {mode === 'aigc_shot' ? '重点是 AIGC 画面、参考图和跨 shot 物理一致性。' : '重点是口播内容、Hypergen 组件变化和 AIGC 插入位置。'}
+            {mode === 'aigc_shot' ? '重点是 AIGC 画面、参考图和跨 shot 物理一致性。' : '重点是口播内容、HyperFrames 组件变化和 AIGC 插入位置。'}
           </p>
         </div>
         <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-primary-dark ring-1 ring-line">{group.durationSec ? `${group.durationSec}s` : 'shot'}</span>
@@ -3027,9 +3032,9 @@ function ShotReferenceStrategyPanel({
     ]
     : [
       { label: '口播优先', value: narrationText ? '已读取' : '待确认', hint: '画面只服务口播，不制造新的信息负担。' },
-      { label: 'Hypergen 素材', value: hypergenTimelineSummary(requestEntries), hint: '标题、字幕、图形、流程标签和浏览器组件保持可控。' },
+      { label: 'HyperFrames 素材', value: hyperFramesTimelineSummary(requestEntries), hint: '标题、字幕、图形、流程标签和浏览器组件保持可控。' },
       { label: 'AIGC 插入', value: `${requestEntries.filter((entry) => entry.request).length} 个任务`, hint: '只补充 b-roll 或背景动态，不要求跨 shot 角色一致性。' },
-      { label: '文字安全', value: 'Hypergen 负责', hint: '中文文字、字幕、按钮和标签不交给 AIGC 生成。' },
+      { label: '文字安全', value: 'HyperFrames 负责', hint: '中文文字、字幕、按钮和标签不交给 AIGC 生成。' },
     ]
 
   return (
@@ -3067,7 +3072,7 @@ function firstRequestLine(requestEntries: ShotRequestPreviewEntry[], keys: Array
   return firstReadableRequestText(requestEntries, keys).slice(0, 180)
 }
 
-function firstHypergenLine(requestEntries: ShotRequestPreviewEntry[]): string {
+function firstHyperFramesLine(requestEntries: ShotRequestPreviewEntry[]): string {
   for (const entry of requestEntries) {
     const request = entry.request
     const text = normalizeReadableText(request?.hyperframesPlan?.prompt) ||
@@ -3120,7 +3125,7 @@ function neighborNarrationForShot(groups: DirectorShotReviewGroup[], currentInde
   return ''
 }
 
-function hypergenPromptForDisplay(requestEntries: ShotRequestPreviewEntry[]): string {
+function hyperFramesPromptForDisplay(requestEntries: ShotRequestPreviewEntry[]): string {
   const parts: string[] = []
   for (const entry of requestEntries) {
     const request = entry.request
@@ -3128,7 +3133,7 @@ function hypergenPromptForDisplay(requestEntries: ShotRequestPreviewEntry[]): st
     const plan = request.hyperframesPlan
     const title = request.requestId ? `任务 ${request.requestId}` : ''
     const text = [
-      plan?.prompt ? `HyperGen 提示词：${plan.prompt}` : '',
+      plan?.prompt ? `HyperFrames 提示词：${plan.prompt}` : '',
       plan?.plan ? `组件计划：${plan.plan}` : '',
       plan?.textSafeLayout || request.textSafeLayout ? `文字安全区：${plan?.textSafeLayout || request.textSafeLayout}` : '',
       plan?.locks?.length ? `锁定内容：${plan.locks.join('、')}` : '',
@@ -3322,7 +3327,7 @@ function buildSelectionRewriteText(selectedText: string, instruction: string, mo
   }
   return [
     selectedText,
-    `局部修改要求：${cleanInstruction}。让该段更服务口播稿，明确 Hypergen 可控素材的时间线变化和 AIGC 插入位置；AIGC 不生成文字，不承担跨 shot 一致性。`,
+    `局部修改要求：${cleanInstruction}。让该段更服务口播稿，明确 HyperFrames 可控素材的时间线变化和 AIGC 插入位置；AIGC 不生成文字，不承担跨 shot 一致性。`,
   ].join('\n')
 }
 
@@ -3716,7 +3721,7 @@ function ShotLayerPlanPanel({ request, mode }: { request: ExternalGenerationRequ
         <div>
           <div className="text-xs font-black text-ink-soft">分层创作计划</div>
           <p className="mt-1 text-xs leading-5 text-ink-muted">
-            {mode === 'aigc_shot' ? 'AIGC 负责主画面和镜头表达，Hypergen 只做字幕 / 简单说明，最后 FFmpeg 融合。' : 'Hypergen 负责可控文字、字幕和素材时间线，AIGC 只做插入素材，最后 FFmpeg 融合。'}
+            {mode === 'aigc_shot' ? 'AIGC 负责主画面和镜头表达，HyperFrames 只做字幕 / 简单说明，最后 FFmpeg 融合。' : 'HyperFrames 负责可控文字、字幕和素材时间线，AIGC 只做插入素材，最后 FFmpeg 融合。'}
           </p>
         </div>
         <span className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-black text-primary-dark">{mode === 'aigc_shot' ? '连续性优先' : '文字留白'}</span>
@@ -3733,7 +3738,7 @@ function ShotLayerPlanPanel({ request, mode }: { request: ExternalGenerationRequ
         />
         <CompactLayerPlanRow
           icon={<FiLayers />}
-          title={mode === 'aigc_shot' ? 'Hypergen / HyperFrames 文字 / 图形层' : 'Hypergen / HyperFrames 文字 / 图形层'}
+          title="HyperFrames 文字 / 图形层"
           summary={mode === 'aigc_shot' ? '字幕、少量说明和安全文字。' : '中文标题、字幕、关键帧和 UI 图形。'}
           detail={hyperframesDetail}
         />
@@ -3821,8 +3826,8 @@ function regeneratePromptDraft(
   const layerText = request.kind === 'video'
     ? [
       request.aigcPlan?.prompt ? `AIGC 层：${request.aigcPlan.prompt}` : mode === 'aigc_shot' ? 'AIGC 主画面层：生成完整镜头画面，强调角色、场景、运镜、景别、道具和情绪。' : 'AIGC 插入层：只生成无文字背景或局部动态素材。',
-      request.textSafeLayout || request.aigcPlan?.textSafeLayout ? `文字留白：${request.textSafeLayout || request.aigcPlan?.textSafeLayout}` : mode === 'aigc_shot' ? '文字策略：AIGC 不负责字幕和中文文字，字幕交给 Hypergen 层。' : '文字留白：为 Hypergen 标题、字幕和流程标签预留干净区域。',
-      request.hyperframesPlan?.prompt ? `Hypergen 层：${request.hyperframesPlan.prompt}` : mode === 'aigc_shot' ? 'Hypergen 层：只做字幕、少量说明和可控文字，不干扰 AIGC 主画面。' : 'Hypergen 层：中文文字、字幕、UI 文案和关键帧由本地渲染。',
+      request.textSafeLayout || request.aigcPlan?.textSafeLayout ? `文字留白：${request.textSafeLayout || request.aigcPlan?.textSafeLayout}` : mode === 'aigc_shot' ? '文字策略：AIGC 不负责字幕和中文文字，字幕交给 HyperFrames 层。' : '文字留白：为 HyperFrames 标题、字幕和流程标签预留干净区域。',
+      request.hyperframesPlan?.prompt ? `HyperFrames 层：${request.hyperframesPlan.prompt}` : mode === 'aigc_shot' ? 'HyperFrames 层：只做字幕、少量说明和可控文字，不干扰 AIGC 主画面。' : 'HyperFrames 层：中文文字、字幕、UI 文案和关键帧由本地渲染。',
       request.ffmpegFusionPlan?.plan ? `FFmpeg 融合：${request.ffmpegFusionPlan.plan}` : 'FFmpeg 融合：上传素材后叠加 HyperFrames 层，输出完整 shot。',
     ].join('\n')
     : ''
@@ -3844,8 +3849,8 @@ function regeneratePromptDraft(
 function buildPartialRevisionInstruction(selectedText: string, instruction: string, mode: ShotWorkspaceMode, sourceLabel: string): string {
   const cleanInstruction = instruction.trim() || '请提升这段内容的可执行性，但保持原意。'
   const modeContract = mode === 'aigc_shot'
-    ? '这是影视 / AIGC shot 视频：只改选中片段，重点补强 AIGC 主画面描述、角色/场景/道具一致性、景别、镜头移动、情绪和物理连续性。Hypergen 只负责字幕和少量说明。'
-    : '这是口播 / 知识类视频：只改选中片段，重点服务口播稿，明确 Hypergen 可控层的时间线变化、AIGC 插入位置和文字安全区。AIGC 不需要跨 shot 一致性。'
+    ? '这是影视 / AIGC shot 视频：只改选中片段，重点补强 AIGC 主画面描述、角色/场景/道具一致性、景别、镜头移动、情绪和物理连续性。HyperFrames 只负责字幕和少量说明。'
+    : '这是口播 / 知识类视频：只改选中片段，重点服务口播稿，明确 HyperFrames 可控层的时间线变化、AIGC 插入位置和文字安全区。AIGC 不需要跨 shot 一致性。'
   return [
     `请只局部返工「${sourceLabel}」中的选中片段，不要重写整个产物。`,
     modeContract,
@@ -6160,8 +6165,8 @@ function shotSourceTypeLabel(sourceType: string, isFallback: boolean): string {
   const labelMap: Record<string, string> = {
     aigc_video: 'AIGC 视频',
     aigc_main_layer_preview: 'AIGC 主画面预览',
-    hyperframes_overlay: 'HyperGen 辅助层',
-    hyperframes: 'HyperGen 辅助层',
+    hyperframes_overlay: 'HyperFrames 辅助层',
+    hyperframes: 'HyperFrames 辅助层',
     manual_upload: '用户上传视频',
     uploaded_video: '用户上传视频',
     complete_shot: '完整 Shot',

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -24,6 +25,23 @@ func TestIsValidMode(t *testing.T) {
 				t.Errorf("IsValidMode(%q) = %v, want %v", tt.mode, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestMergeProjectConfigPreservesPinnedIPAssetPackAndCanonicalRuntime(t *testing.T) {
+	existing := json.RawMessage(`{"topic":"old","ipAssetPack":{"id":"ip-tangying","version":"2.1.0","contentHash":"sha256:pack"},"runtimePipelineId":"legacy"}`)
+	update := json.RawMessage(`{"topic":"new"}`)
+	merged := mergeProjectConfig(existing, update, model.VideoProfileTalkingHead)
+	var config map[string]interface{}
+	if err := json.Unmarshal(merged, &config); err != nil {
+		t.Fatal(err)
+	}
+	pack, ok := config["ipAssetPack"].(map[string]interface{})
+	if !ok || pack["version"] != "2.1.0" || pack["contentHash"] != "sha256:pack" {
+		t.Fatalf("pinned IP asset pack should survive unrelated config edit: %+v", config)
+	}
+	if config["canonicalProfileId"] != model.VideoProfileTalkingHead || config["runtimePipelineId"] != model.VideoRuntimePipelineID {
+		t.Fatalf("canonical runtime metadata should be authoritative: %+v", config)
 	}
 }
 

@@ -28,6 +28,9 @@ func TestBuildVideoCreationProfileTalkingHead(t *testing.T) {
 	if profile.FallbackProfile != "" {
 		t.Fatalf("normal talking-head fallback profile = %s, want empty", profile.FallbackProfile)
 	}
+	if profile.SchemaVersion < 2 || profile.RuntimePipelineID != model.VideoRuntimePipelineID || profile.RuntimePipelineSource != model.VideoRuntimePipelineSource {
+		t.Fatalf("talking-head runtime identity is not canonical: %+v", profile)
+	}
 }
 
 func TestBuildVideoCreationProfileCinematic(t *testing.T) {

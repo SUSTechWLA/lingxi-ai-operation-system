@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	"github.com/tangying-ai/aios-core/internal/core/config"
 	"github.com/tangying-ai/aios-core/internal/core/hyperframes"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
@@ -281,6 +282,37 @@ func TestRegisterVideoCreationExternalToolsInstallsVideoForgeDependencies(t *tes
 	if manifest.Output["shotGenerationPlans"].Type != "array" {
 		t.Fatalf("shot_generation_planner should output shotGenerationPlans array, got %#v", manifest.Output["shotGenerationPlans"])
 	}
+}
+
+func TestTalkingHeadCanonicalStagesKeepReviewAndArtifactContractsInParity(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+	wantKinds := map[string][]string{
+		"audio_master_planner":     {videomodel.ArtifactKindAudioMasterTimeline},
+		"time_window_planner":      {videomodel.ArtifactKindTimeWindowPlan},
+		"visual_alignment_planner": {"VISUAL_ALIGNMENT_PLAN", videomodel.ArtifactKindBrollManifest},
+	}
+	for toolName, artifactKinds := range wantKinds {
+		manifest := registry.GetExternalManifest(toolName)
+		if manifest == nil || !manifest.ApprovalPolicy.Required || manifest.ApprovalPolicy.Mode != tool.ApprovalAfterArtifact {
+			t.Fatalf("%s must compile an after-artifact review gate: %+v", toolName, manifest)
+		}
+		if !equalStringSlices(manifest.ApprovalPolicy.ReviewArtifactKinds, artifactKinds) || !equalStringSlices(manifest.ArtifactPolicy.ArtifactKinds, artifactKinds) {
+			t.Fatalf("%s review/artifact drift: review=%v artifact=%v want=%v", toolName, manifest.ApprovalPolicy.ReviewArtifactKinds, manifest.ArtifactPolicy.ArtifactKinds, artifactKinds)
+		}
+	}
+}
+
+func equalStringSlices(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRegisterVideoCreationExternalToolsInstallsMCPGenerationRunnerManifest(t *testing.T) {
@@ -814,6 +846,13 @@ func TestVisualAlignmentPlannerBuildsHumorousAIGCAssetRoutesForVoiceVisual(t *te
 		if strings.TrimSpace(ensureStringValue(shot["assetIntent"])) == "" {
 			t.Fatalf("shot should explain asset intent for downstream generation: %#v", shot)
 		}
+		if strings.TrimSpace(ensureStringValue(shot["visualMode"])) == "" || strings.TrimSpace(ensureStringValue(shot["visualModeReason"])) == "" {
+			t.Fatalf("shot should carry deterministic visual-mode policy output: %#v", shot)
+		}
+		layers, ok := shot["talkingHeadLayers"].(map[string]interface{})
+		if !ok || layers["audio"] == nil || layers["ip"] == nil || layers["text"] == nil || layers["broll"] == nil || layers["composition"] == nil {
+			t.Fatalf("shot should expose inspectable layer plans on the existing shot payload: %#v", shot)
+		}
 	}
 	if routeCounts["aigc_video"] < 2 {
 		t.Fatalf("humorous short-video voice_visual should include at least two AIGC b-roll shots, got routes %+v", routeCounts)
@@ -823,6 +862,13 @@ func TestVisualAlignmentPlannerBuildsHumorousAIGCAssetRoutesForVoiceVisual(t *te
 	}
 	if routeCounts["hyperframes"] == len(shotList) {
 		t.Fatalf("visual alignment must not degrade the whole video to HyperFrames cards: %+v", routeCounts)
+	}
+	manifest, ok := result.Data["brollManifest"].(map[string]interface{})
+	if !ok || strings.TrimSpace(ensureStringValue(manifest["revision"])) == "" {
+		t.Fatalf("visual alignment should emit a reviewable b-roll manifest: %#v", result.Data["brollManifest"])
+	}
+	if entries := interfaceSliceFromAny(manifest["entries"]); len(entries) == 0 {
+		t.Fatalf("b-roll manifest should track planned non-text media: %#v", manifest)
 	}
 }
 

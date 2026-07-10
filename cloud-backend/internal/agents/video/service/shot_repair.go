@@ -40,8 +40,53 @@ func RecordShotCandidateQA(shot model.ShotUnit, candidate model.ShotCandidate, r
 		report.CandidateID = candidate.CandidateID
 	}
 	candidate.QAReport = &report
+	candidate = model.NormalizeShotCandidateExecution(candidate)
+	if shot.TimelineRevision != "" && candidate.TimelineRevision != shot.TimelineRevision {
+		candidate.Status = model.CandidateHumanReviewRequired
+		repair := model.RepairPlan{
+			Action:            model.RepairActionRealignTimeline,
+			Reason:            fmt.Sprintf("candidate timeline revision %q does not match shot audio master %q", candidate.TimelineRevision, shot.TimelineRevision),
+			Severity:          "hard_fail",
+			TargetShotID:      shot.ID,
+			SourceCandidateID: candidate.CandidateID,
+			AttemptIndex:      candidate.AttemptIndex,
+			Preserve:          true,
+			RepairTargets:     []string{"timeline_revision", "subtitle_timing", "lip_sync", "broll_timing"},
+			NextToolCall:      model.RepairActionRealignTimeline,
+		}
+		candidate.RepairPlan = &repair
+		shot.Candidates = append(shot.Candidates, candidate)
+		shot.RepairPlans = append(shot.RepairPlans, repair)
+		shot.QAStatus = model.ShotHumanReviewRequired
+		shot.ReviewStatus = model.ReviewStatusPending
+		shot.AcceptedCandidateID = ""
+		shot.Stale = true
+		shot.LastRejectReason = repair.Reason
+		return shot
+	}
 
 	if report.Passed || report.HumanApproved || report.Status == model.ShotQAPassed {
+		if model.IsStrictProductionMode(policy.ProductionMode) && !candidate.ProductionEligible {
+			candidate.Status = model.CandidateHumanReviewRequired
+			repair := model.RepairPlan{
+				Action:            model.RepairActionHumanReview,
+				Reason:            "candidate execution mode is not eligible for strict production acceptance",
+				Severity:          "hard_fail",
+				TargetShotID:      shot.ID,
+				SourceCandidateID: candidate.CandidateID,
+				AttemptIndex:      candidate.AttemptIndex,
+				Preserve:          true,
+				RepairTargets:     []string{"production_eligibility", "provenance"},
+				NextToolCall:      model.RepairActionHumanReview,
+			}
+			candidate.RepairPlan = &repair
+			shot.Candidates = append(shot.Candidates, candidate)
+			shot.RepairPlans = append(shot.RepairPlans, repair)
+			shot.QAStatus = model.ShotHumanReviewRequired
+			shot.ReviewStatus = model.ReviewStatusPending
+			shot.AcceptedCandidateID = ""
+			return shot
+		}
 		candidate.Status = model.CandidateAcceptedForAssembly
 		shot.Candidates = append(shot.Candidates, candidate)
 		shot.QAStatus = model.ShotAcceptedForAssembly
@@ -105,10 +150,31 @@ func repairActionForFailedDimensions(report model.ShotQAReport) string {
 			return model.RepairActionDeferToFinalAssembly
 		}
 	}
-	if failed["text_intent"] || failed["text_layout"] || failed["safe_area"] || failed["screen_text"] {
-		return model.RepairActionRerenderHTML
+	if failed["voice_generation"] || failed["voice_profile"] || failed["clipping"] || failed["abnormal_silence"] {
+		return model.RepairActionRegenerateVoice
 	}
-	if failed["character_identity"] || failed["scene"] || failed["action"] || failed["temporal_stability"] {
+	if failed["timeline_revision"] || failed["cue_timing"] || failed["audio_alignment"] {
+		return model.RepairActionRealignTimeline
+	}
+	if failed["text_intent"] || failed["text_layout"] || failed["safe_area"] || failed["screen_text"] {
+		return model.RepairActionRerenderText
+	}
+	if failed["lip_sync"] || failed["viseme"] {
+		return model.RepairActionRelipsyncIP
+	}
+	if failed["ip_asset_pack"] || failed["character_identity"] || failed["gesture"] || failed["expression"] {
+		return model.RepairActionRegenerateIP
+	}
+	if failed["broll_source"] || failed["broll_license"] || failed["broll_relevance"] || failed["broll_crop"] {
+		return model.RepairActionReplaceBroll
+	}
+	if failed["broll_generation"] || failed["broll_quality"] {
+		return model.RepairActionRegenerateBroll
+	}
+	if failed["encode"] || failed["codec"] || failed["pixel_format"] {
+		return model.RepairActionReencode
+	}
+	if failed["scene"] || failed["action"] || failed["temporal_stability"] {
 		if strings.EqualFold(report.Severity, "severe") {
 			return model.RepairActionRegenAIGCWithReference
 		}
@@ -159,7 +225,7 @@ func repairReason(action string, report model.ShotQAReport) string {
 		return report.Summary
 	}
 	switch action {
-	case model.RepairActionRerenderHTML:
+	case model.RepairActionRerenderText:
 		return "text, subtitle, or safe-area issue can be repaired locally without changing passed visual intent"
 	case model.RepairActionDeferToFinalAssembly:
 		return "global audio/subtitle issue should be fixed during final assembly"
@@ -172,7 +238,7 @@ func repairReason(action string, report model.ShotQAReport) string {
 
 func promptPatchForRepair(action string) map[string]interface{} {
 	switch action {
-	case model.RepairActionRerenderHTML, model.RepairActionRecomposite:
+	case model.RepairActionRerenderText, model.RepairActionRecomposite:
 		return map[string]interface{}{"negativeAdditions": []string{"no embedded text", "no watermark", "no subtitles inside generated video"}}
 	case model.RepairActionRegenAIGC, model.RepairActionRegenAIGCWithReference:
 		return map[string]interface{}{"requiredAdditions": []string{"preserve approved character, scene, action, and style dimensions"}}
@@ -185,7 +251,7 @@ func promptPatchForRepair(action string) map[string]interface{} {
 
 func renderStrategyPatchForRepair(action string) map[string]interface{} {
 	switch action {
-	case model.RepairActionRerenderHTML:
+	case model.RepairActionRerenderText:
 		return map[string]interface{}{"mode": "hybrid", "htmlRequired": true, "textOverlayNeeded": true, "needsCompositing": true}
 	case model.RepairActionRecomposite:
 		return map[string]interface{}{"needsCompositing": true}
@@ -200,8 +266,15 @@ func renderStrategyPatchForRepair(action string) map[string]interface{} {
 
 func nextToolCallForRepair(action string) string {
 	switch action {
-	case model.RepairActionRerenderHTML:
-		return "RERENDER_HTML"
+	case model.RepairActionRerenderText,
+		model.RepairActionRegenerateVoice,
+		model.RepairActionRealignTimeline,
+		model.RepairActionRegenerateIP,
+		model.RepairActionRelipsyncIP,
+		model.RepairActionReplaceBroll,
+		model.RepairActionRegenerateBroll,
+		model.RepairActionReencode:
+		return action
 	case model.RepairActionRecomposite:
 		return "FFMPEG_RECOMPOSITE"
 	case model.RepairActionRegenAIGC:

@@ -206,14 +206,21 @@ func (e *HyperFramesRenderExecutor) tryFastStoryboardRender(ctx context.Context,
 
 func (e *HyperFramesRenderExecutor) renderResult(projectID, outputPath string, sizeBytes int64, fps, width, height int, result *hyperFramesRenderResponse) (*Result, error) {
 	provenance := hyperframesRenderProvenance(result)
+	productionEligible, _ := provenance["productionEligible"].(bool)
+	artifactStatus := "pending"
+	if productionEligible {
+		artifactStatus = "valid"
+	}
 	localRef, err := e.mirrorFinalVideoArtifact(projectID, outputPath, sizeBytes, fps, width, height, result.DurationMs, provenance)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{Output: map[string]interface{}{
-		"success":   true,
-		"summary":   "HyperFrames 渲染完成",
-		"outputRef": localRef,
+		"success":            true,
+		"productionEligible": productionEligible,
+		"executionMode":      provenance["executionMode"],
+		"summary":            "HyperFrames 渲染完成",
+		"outputRef":          localRef,
 		"artifacts": []map[string]interface{}{
 			{
 				"unitId":         "final-video",
@@ -223,21 +230,24 @@ func (e *HyperFramesRenderExecutor) renderResult(projectID, outputPath string, s
 				"storageRef":     localRef,
 				"mimeType":       "video/mp4",
 				"sizeBytes":      sizeBytes,
-				"status":         "valid",
+				"status":         artifactStatus,
 				"humanApproved":  false,
 				"dependsOn":      []string{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},
 				"producedByTool": "hyperframes_renderer",
 				"producedByRole": "渲染制片",
 				"metadata": map[string]interface{}{
-					"renderTimeMs": result.DurationMs,
-					"fps":          fps,
-					"width":        width,
-					"height":       height,
-					"localPath":    outputPath,
-					"provenance":   provenance,
-					"sourceType":   provenance["sourceType"],
-					"providerName": provenance["providerName"],
-					"isFallback":   provenance["isFallback"],
+					"renderTimeMs":       result.DurationMs,
+					"fps":                fps,
+					"width":              width,
+					"height":             height,
+					"localPath":          outputPath,
+					"provenance":         provenance,
+					"sourceType":         provenance["sourceType"],
+					"providerName":       provenance["providerName"],
+					"isFallback":         provenance["isFallback"],
+					"executionMode":      provenance["executionMode"],
+					"productionEligible": productionEligible,
+					"fallbackReason":     provenance["fallbackReason"],
 				},
 			},
 		},
@@ -260,22 +270,28 @@ func hyperframesRenderProvenance(result *hyperFramesRenderResponse) map[string]i
 	providerName := "hyperframes-render-service"
 	isFallback := false
 	fallbackReason := ""
+	executionMode := "real"
+	productionEligible := true
 	if jobID == "storyboard_fast_render" {
 		sourceType = "fallback_storyboard"
 		providerName = "local-storyboard-renderer"
 		isFallback = true
 		fallbackReason = "storyboard_fast_render"
+		executionMode = "fallback"
+		productionEligible = false
 	}
 	return map[string]interface{}{
-		"schemaVersion":     1,
-		"sourceType":        sourceType,
-		"providerName":      providerName,
-		"providerJobId":     jobID,
-		"fallbackReason":    fallbackReason,
-		"isFallback":        isFallback,
-		"generatedAt":       time.Now().UTC().Format(time.RFC3339),
-		"inputPromptHash":   "",
-		"sourceArtifactIds": []interface{}{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},
+		"schemaVersion":      2,
+		"sourceType":         sourceType,
+		"providerName":       providerName,
+		"providerJobId":      jobID,
+		"fallbackReason":     fallbackReason,
+		"isFallback":         isFallback,
+		"executionMode":      executionMode,
+		"productionEligible": productionEligible,
+		"generatedAt":        time.Now().UTC().Format(time.RFC3339),
+		"inputPromptHash":    "",
+		"sourceArtifactIds":  []interface{}{"PREVIEW_SNAPSHOTS", "HYPERFRAMES_PROJECT"},
 	}
 }
 
@@ -357,28 +373,30 @@ func (e *HyperFramesRenderExecutor) mirrorFinalVideoArtifact(projectID, outputPa
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	storageRef := "local://projects/" + projectID + "/artifacts/" + artifactID + "/" + hash + "/final.mp4"
 	metadata := map[string]interface{}{
-		"id":                artifactID,
-		"projectId":         projectID,
-		"storageRef":        storageRef,
-		"mimeType":          "video/mp4",
-		"contentHash":       "sha256:" + hash,
-		"sizeBytes":         sizeBytes,
-		"sourcePath":        outputPath,
-		"renderTimeMs":      renderTimeMs,
-		"fps":               fps,
-		"width":             width,
-		"height":            height,
-		"schemaVersion":     1,
-		"sourceType":        provenance["sourceType"],
-		"providerName":      provenance["providerName"],
-		"providerJobId":     provenance["providerJobId"],
-		"fallbackReason":    provenance["fallbackReason"],
-		"isFallback":        provenance["isFallback"],
-		"generatedAt":       provenance["generatedAt"],
-		"inputPromptHash":   provenance["inputPromptHash"],
-		"sourceArtifactIds": provenance["sourceArtifactIds"],
-		"provenance":        provenance,
-		"updatedAt":         time.Now().UTC().Format(time.RFC3339Nano),
+		"id":                 artifactID,
+		"projectId":          projectID,
+		"storageRef":         storageRef,
+		"mimeType":           "video/mp4",
+		"contentHash":        "sha256:" + hash,
+		"sizeBytes":          sizeBytes,
+		"sourcePath":         outputPath,
+		"renderTimeMs":       renderTimeMs,
+		"fps":                fps,
+		"width":              width,
+		"height":             height,
+		"schemaVersion":      1,
+		"sourceType":         provenance["sourceType"],
+		"providerName":       provenance["providerName"],
+		"providerJobId":      provenance["providerJobId"],
+		"fallbackReason":     provenance["fallbackReason"],
+		"isFallback":         provenance["isFallback"],
+		"executionMode":      provenance["executionMode"],
+		"productionEligible": provenance["productionEligible"],
+		"generatedAt":        provenance["generatedAt"],
+		"inputPromptHash":    provenance["inputPromptHash"],
+		"sourceArtifactIds":  provenance["sourceArtifactIds"],
+		"provenance":         provenance,
+		"updatedAt":          time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err := writeLocalToolJSON(metadataPath, metadata); err != nil {
 		return "", fmt.Errorf("write artifact metadata: %w", err)

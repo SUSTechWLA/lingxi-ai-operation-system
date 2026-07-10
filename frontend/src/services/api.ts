@@ -361,6 +361,10 @@ export const recoverRun = async (
 
 export interface PreflightResponse {
   pipeline: string
+  canonicalProfileId: 'talking_head' | 'cinematic_story'
+  runtimePipelineId: string
+  runtimePipelineVersion: string
+  runtimePipelineSource: string
   status: 'passed' | 'blocked'
   canStart: boolean
   capabilityMenu: {
@@ -372,7 +376,7 @@ export interface PreflightResponse {
   blockers?: { code: string; message: string }[]
 }
 
-export const fetchVideoPreflight = async (pipeline: string = 'wf-guided-image-text-video'): Promise<PreflightResponse> => {
+export const fetchVideoPreflight = async (pipeline: string = 'talking_head'): Promise<PreflightResponse> => {
   const response = await api.get<ApiResponse<PreflightResponse>>('/video/preflight', { params: { pipeline } })
   const preflight = unwrapApiData<PreflightResponse>(response.data)
   if (!preflight) throw new Error('invalid video preflight response')

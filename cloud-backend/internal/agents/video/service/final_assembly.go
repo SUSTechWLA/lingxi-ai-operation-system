@@ -7,6 +7,10 @@ import (
 )
 
 func BuildFinalAssemblyPlan(shots []model.ShotUnit) (model.FinalAssemblyPlan, []ValidationIssue) {
+	return BuildFinalAssemblyPlanWithPolicy(shots, model.AssemblyPolicy{ProductionMode: model.ProductionModeStrict})
+}
+
+func BuildFinalAssemblyPlanWithPolicy(shots []model.ShotUnit, policy model.AssemblyPolicy) (model.FinalAssemblyPlan, []ValidationIssue) {
 	plan := model.FinalAssemblyPlan{
 		Status:      "planned",
 		Resolution:  "1920x1080",
@@ -48,6 +52,43 @@ func BuildFinalAssemblyPlan(shots []model.ShotUnit) (model.FinalAssemblyPlan, []
 			})
 			continue
 		}
+		if shot.Stale || candidate.Stale {
+			issues = append(issues, ValidationIssue{
+				Code:     "final_assembly_rejects_stale_candidate",
+				Field:    "stale",
+				Message:  "final assembly cannot use a stale accepted candidate: " + candidate.CandidateID,
+				Severity: "error",
+			})
+			continue
+		}
+		if shot.TimelineRevision != "" && candidate.TimelineRevision != shot.TimelineRevision {
+			issues = append(issues, ValidationIssue{
+				Code:     "final_assembly_rejects_timeline_revision_mismatch",
+				Field:    "timelineRevision",
+				Message:  "accepted candidate does not match the shot audio-master revision: " + candidate.CandidateID,
+				Severity: "error",
+			})
+			continue
+		}
+		if staleLayer := firstStaleTalkingHeadLayer(shot.TalkingHeadLayers); staleLayer != "" {
+			issues = append(issues, ValidationIssue{
+				Code:     "final_assembly_rejects_stale_layer",
+				Field:    "talkingHeadLayers",
+				Message:  "accepted candidate depends on stale layer " + staleLayer + ": " + candidate.CandidateID,
+				Severity: "error",
+			})
+			continue
+		}
+		candidate = model.NormalizeShotCandidateExecution(candidate)
+		if model.IsStrictProductionMode(policy.ProductionMode) && !candidate.ProductionEligible {
+			issues = append(issues, ValidationIssue{
+				Code:     "final_assembly_rejects_production_ineligible_candidate",
+				Field:    "productionEligible",
+				Message:  "strict final assembly cannot use fixture, fallback, or placeholder candidate: " + candidate.CandidateID,
+				Severity: "error",
+			})
+			continue
+		}
 		if candidate.Status == model.CandidateShotQAFailed || candidate.QAReport == nil || (!candidate.QAReport.Passed && !candidate.QAReport.HumanApproved) {
 			issues = append(issues, ValidationIssue{
 				Code:     "final_assembly_rejects_failed_candidate",
@@ -72,12 +113,14 @@ func BuildFinalAssemblyPlan(shots []model.ShotUnit) (model.FinalAssemblyPlan, []
 			duration = float64(shot.DurationSec)
 		}
 		plan.AcceptedShots = append(plan.AcceptedShots, model.AcceptedShotRef{
-			ShotID:      shot.ID,
-			CandidateID: candidate.CandidateID,
-			DurationSec: duration,
-			SourceType:  candidate.SourceType,
-			IsFallback:  candidate.IsFallback,
-			ArtifactID:  artifactID,
+			ShotID:             shot.ID,
+			CandidateID:        candidate.CandidateID,
+			DurationSec:        duration,
+			SourceType:         candidate.SourceType,
+			IsFallback:         candidate.IsFallback,
+			ExecutionMode:      candidate.ExecutionMode,
+			ProductionEligible: candidate.ProductionEligible,
+			ArtifactID:         artifactID,
 		})
 		plan.SubtitleTimeline.Cues = append(plan.SubtitleTimeline.Cues, model.SubtitleCue{
 			ShotID:   shot.ID,
@@ -99,6 +142,20 @@ func BuildFinalAssemblyPlan(shots []model.ShotUnit) (model.FinalAssemblyPlan, []
 		plan.Status = "blocked"
 	}
 	return plan, issues
+}
+
+func firstStaleTalkingHeadLayer(layers *model.TalkingHeadShotLayers) string {
+	if layers == nil {
+		return ""
+	}
+	for _, state := range []model.LayerArtifactState{
+		layers.Audio.State, layers.IP.State, layers.Text.State, layers.Broll.State, layers.Composition.State,
+	} {
+		if state.Status == model.LayerStatusStale {
+			return string(state.Layer)
+		}
+	}
+	return ""
 }
 
 func CheckFinalAssembly(shots []model.ShotUnit) []ValidationIssue {
