@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool"
 )
@@ -375,39 +376,22 @@ func canonicalVideoCreationProfile(value string) string {
 	if normalized == "" || strings.Contains(normalized, "{{") {
 		return ""
 	}
-	for _, term := range []string{
-		"aigc_shot",
-		"aigc-shot",
-		"cinematic_story",
-		"cinematic-story",
-		"cinematic",
-		"story",
-		"wf-aigc-shot-video",
-		"jimeng",
-	} {
-		if strings.Contains(normalized, term) {
-			return "cinematic_story"
-		}
+	if profileID, ok := videomodel.NormalizeVideoProfileID(normalized); ok {
+		return profileID
 	}
-	for _, term := range []string{
-		"voice_visual",
-		"voice-visual",
-		"talking_head",
-		"talking-head",
-		"voiceover",
-		"guided_image_text",
-		"guided-image-text",
-		"wf-guided-image-text-video",
-	} {
-		if strings.Contains(normalized, term) {
-			return "talking_head"
-		}
+	// Preserve fuzzy compatibility for historical free-form planner values.
+	if strings.Contains(normalized, "cinematic") || strings.Contains(normalized, "jimeng") {
+		return videomodel.VideoProfileCinematicStory
+	}
+	if strings.Contains(normalized, "talking head") || strings.Contains(normalized, "voiceover") {
+		return videomodel.VideoProfileTalkingHead
 	}
 	return ""
 }
 
 func (c *PlanCompiler) canCompleteTalkingHeadProfilePlan(plan *AgentPlan) bool {
-	if c.manifestFor("visual_alignment_planner") == nil ||
+	if c.manifestFor("audio_master_planner") == nil ||
+		c.manifestFor("visual_alignment_planner") == nil ||
 		c.manifestFor("shot_generation_planner") == nil ||
 		!c.hasVideoOutputCompletionTools() {
 		return false
@@ -526,15 +510,35 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 		}
 	}
 
-	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", scriptAnchor, AgentStep{
+	audioMasterAnchor := c.ensureProfileStepAfter(plan, "audio_master", scriptAnchor, AgentStep{
+		ID:        "audio_master",
+		Intent:    "建立口播音频主时钟并绑定脚本与声音 revision",
+		Tool:      "audio_master_planner",
+		DependsOn: dependencyList(scriptAnchor),
+		Arguments: map[string]interface{}{
+			"stage":       "audio_master",
+			"script":      scriptRef,
+			"scriptSpans": scriptSpansRef,
+		},
+		ExpectedOutput:  []string{"audioMaster"},
+		ProduceArtifact: true,
+	})
+	audioMasterStep := planStepByID(plan, audioMasterAnchor)
+	mergeStepArgsAndDeps(audioMasterStep, map[string]interface{}{
+		"script":      scriptRef,
+		"scriptSpans": scriptSpansRef,
+	}, scriptAnchor)
+
+	timeWindowAnchor := c.ensureProfileStepAfter(plan, "time_window", audioMasterAnchor, AgentStep{
 		ID:        "time_window",
 		Intent:    "按口播稿时间轴规划可执行的画面时间窗",
 		Tool:      "time_window_planner",
-		DependsOn: dependencyListUnique(scriptAnchor, profileAnchor),
+		DependsOn: dependencyListUnique(audioMasterAnchor, profileAnchor),
 		Arguments: map[string]interface{}{
 			"stage":           "time_window",
 			"brief":           plan.Goal,
 			"scriptSpans":     scriptSpansRef,
+			"audioMaster":     stepOutputRef(audioMasterAnchor, "audioMaster"),
 			"creationProfile": profileRef,
 		},
 		ExpectedOutput:  []string{"timeWindows"},
@@ -544,7 +548,8 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 	mergeStepArgsAndDeps(timeWindowStep, map[string]interface{}{
 		"creationProfile": profileRef,
 		"scriptSpans":     scriptSpansRef,
-	}, scriptAnchor, profileAnchor)
+		"audioMaster":     stepOutputRef(audioMasterAnchor, "audioMaster"),
+	}, audioMasterAnchor, profileAnchor)
 
 	visualAnchor := c.ensureProfileStepAfter(plan, "visual_alignment", timeWindowAnchor, AgentStep{
 		ID:        "visual_alignment",

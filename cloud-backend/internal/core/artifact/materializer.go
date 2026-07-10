@@ -302,6 +302,18 @@ func buildLocalManifestRequest(projectID, workflowRunID, stage, unitID string, k
 		storageType = StorageInline
 		provider = "time-window-plan"
 	}
+	if isAudioMasterTimelineKind(kind) && len(data) > 0 {
+		storageType = StorageInline
+		provider = "audio-master-timeline"
+	}
+	if isBrollManifestKind(kind) && len(data) > 0 {
+		storageType = StorageInline
+		provider = "broll-manifest"
+	}
+	if isVisualAlignmentPlanKind(kind) && len(data) > 0 {
+		storageType = StorageInline
+		provider = "visual-alignment-plan"
+	}
 	return &CreateArtifactRequest{
 		ProjectID:     projectID,
 		WorkflowRunID: workflowRunID,
@@ -328,7 +340,16 @@ func betaArtifactMetadata(metadata map[string]interface{}, node *model.Node) map
 		metadata = map[string]interface{}{}
 	}
 	if _, ok := metadata["status"]; !ok {
-		metadata["status"] = "valid"
+		executionMode := strings.ToLower(strings.TrimSpace(stringValue(metadata, "executionMode")))
+		if executionMode == "fixture" || executionMode == "fallback" || executionMode == "placeholder" {
+			metadata["status"] = "pending"
+			metadata["productionEligible"] = false
+			if executionMode == "fallback" {
+				metadata["isFallback"] = true
+			}
+		} else {
+			metadata["status"] = "valid"
+		}
 	}
 	if _, ok := metadata["humanApproved"]; !ok {
 		metadata["humanApproved"] = false
@@ -403,6 +424,24 @@ func extractArtifactContent(payload map[string]interface{}, unitID string, kind 
 	}
 	if isTimeWindowPlanKind(kind) {
 		if plan, ok := timeWindowPlanPayload(payload); ok {
+			return marshalValue(plan)
+		}
+		return nil
+	}
+	if isAudioMasterTimelineKind(kind) {
+		if master, ok := audioMasterTimelinePayload(payload); ok {
+			return marshalValue(master)
+		}
+		return nil
+	}
+	if isBrollManifestKind(kind) {
+		if manifest, ok := brollManifestPayload(payload); ok {
+			return marshalValue(manifest)
+		}
+		return nil
+	}
+	if isVisualAlignmentPlanKind(kind) {
+		if plan, ok := visualAlignmentPlanPayload(payload); ok {
 			return marshalValue(plan)
 		}
 		return nil
@@ -485,6 +524,33 @@ func timeWindowPlanPayload(payload map[string]interface{}) (map[string]interface
 		return nil, false
 	}
 	if _, ok := plan["windows"].([]interface{}); !ok {
+		return nil, false
+	}
+	return plan, true
+}
+
+func audioMasterTimelinePayload(payload map[string]interface{}) (map[string]interface{}, bool) {
+	master, ok := payload["audioMaster"].(map[string]interface{})
+	if !ok || stringValue(master, "revision") == "" || int64Value(master["durationMs"]) <= 0 {
+		return nil, false
+	}
+	return master, true
+}
+
+func brollManifestPayload(payload map[string]interface{}) (map[string]interface{}, bool) {
+	manifest, ok := payload["brollManifest"].(map[string]interface{})
+	if !ok || stringValue(manifest, "revision") == "" {
+		return nil, false
+	}
+	if _, ok := manifest["entries"].([]interface{}); !ok {
+		return nil, false
+	}
+	return manifest, true
+}
+
+func visualAlignmentPlanPayload(payload map[string]interface{}) (map[string]interface{}, bool) {
+	plan, ok := payload["visualAlignmentPlan"].(map[string]interface{})
+	if !ok || int64Value(plan["shotCount"]) < 0 {
 		return nil, false
 	}
 	return plan, true
@@ -633,6 +699,10 @@ func isStructuredJSONArtifactKind(kind ArtifactKind) bool {
 		"SHOT_LIST",
 		"VIDEO_PROMPTS",
 		"VIDEO_CREATION_PROFILE",
+		"AUDIO_MASTER_TIMELINE",
+		"TIME_WINDOW_PLAN",
+		"BROLL_MANIFEST",
+		"VISUAL_ALIGNMENT_PLAN",
 		"VIDEO_COMPOSITION_SPEC",
 		"REFERENCE_ASSET_PLAN",
 		"STYLE_PROFILE",
@@ -654,6 +724,18 @@ func isVideoCreationProfileKind(kind ArtifactKind) bool {
 
 func isTimeWindowPlanKind(kind ArtifactKind) bool {
 	return strings.ToUpper(string(kind)) == "TIME_WINDOW_PLAN"
+}
+
+func isAudioMasterTimelineKind(kind ArtifactKind) bool {
+	return strings.ToUpper(string(kind)) == "AUDIO_MASTER_TIMELINE"
+}
+
+func isBrollManifestKind(kind ArtifactKind) bool {
+	return strings.ToUpper(string(kind)) == "BROLL_MANIFEST"
+}
+
+func isVisualAlignmentPlanKind(kind ArtifactKind) bool {
+	return strings.ToUpper(string(kind)) == "VISUAL_ALIGNMENT_PLAN"
 }
 
 // normalizePublishCopy ensures publish-copy content has the keys the frontend

@@ -291,6 +291,19 @@ func TestHyperFramesRenderExecutorFastStoryboardRender(t *testing.T) {
 	if metadata["sourceType"] != "fallback_storyboard" || metadata["isFallback"] != true {
 		t.Fatalf("fallback metadata should expose storyboard fallback provenance, got %#v", metadata)
 	}
+	if metadata["executionMode"] != "fallback" || metadata["productionEligible"] != false {
+		t.Fatalf("fallback metadata must be production-ineligible, got %#v", metadata)
+	}
+}
+
+func TestHyperFramesFallbackProvenanceIsProductionIneligible(t *testing.T) {
+	provenance := hyperframesRenderProvenance(&hyperFramesRenderResponse{JobID: "storyboard_fast_render"})
+	if provenance["executionMode"] != "fallback" || provenance["productionEligible"] != false {
+		t.Fatalf("fallback provenance must be production-ineligible: %#v", provenance)
+	}
+	if provenance["fallbackReason"] != "storyboard_fast_render" {
+		t.Fatalf("fallback reason missing: %#v", provenance)
+	}
 }
 
 func TestHyperFramesRenderExecutorFallsBackToStoryboardWhenServiceFails(t *testing.T) {

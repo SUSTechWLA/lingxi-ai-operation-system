@@ -52,6 +52,9 @@ func TestHandleVideoPreflightGuidedProfileRequiresRenderTools(t *testing.T) {
 	if body.Pipeline != "wf-guided-image-text-video" {
 		t.Fatalf("expected guided pipeline, got %q", body.Pipeline)
 	}
+	if body.CanonicalProfileID != "talking_head" || body.RuntimePipelineID != "dynamic-agent-video-creation" || body.RuntimePipelineSource != "agentruntime.PlanCompiler" {
+		t.Fatalf("preflight must disclose canonical runtime identity: %+v", body)
+	}
 	if !body.CanStart || body.Status != "passed" {
 		t.Fatalf("expected passed preflight, got status=%s canStart=%v blockers=%v", body.Status, body.CanStart, body.Blockers)
 	}
@@ -60,6 +63,17 @@ func TestHandleVideoPreflightGuidedProfileRequiresRenderTools(t *testing.T) {
 	}
 	if !hasTool(body.CapabilityMenu.LocalTools, "VIDEO_FRAME_QA") {
 		t.Fatalf("expected VIDEO_FRAME_QA in capability menu: %+v", body.CapabilityMenu.LocalTools)
+	}
+}
+
+func TestPreflightAcceptsCanonicalProfileIDAndKeepsLegacyAlias(t *testing.T) {
+	profile := preflightProfileForPipeline("talking_head")
+	if profile.canonicalProfileID != "talking_head" || profile.id != "wf-guided-image-text-video" {
+		t.Fatalf("canonical talking-head preflight profile = %+v", profile)
+	}
+	legacy := preflightProfileForPipeline("voice_visual")
+	if legacy.canonicalProfileID != profile.canonicalProfileID || legacy.id != profile.id {
+		t.Fatalf("legacy alias did not normalize: canonical=%+v legacy=%+v", profile, legacy)
 	}
 }
 

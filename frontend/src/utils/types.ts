@@ -126,6 +126,7 @@ export interface VideoProject {
   name: string
   description?: string
   mode: VideoProjectMode
+  canonicalProfileId?: 'talking_head' | 'cinematic_story'
   status: 'DRAFT' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED'
   skillName: string
   skillVersion: string

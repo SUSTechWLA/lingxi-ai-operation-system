@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -39,6 +40,8 @@ func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *
 		return nil, fmt.Errorf("invalid generation_mode: %s (must be provider_api or manual_import)", req.GenerationMode)
 	}
 
+	canonicalProfileID := model.CanonicalProfileForMode(req.Mode)
+	persistedMode, _ := model.PersistedModeForProfile(canonicalProfileID)
 	// Set defaults
 	status := model.StatusDraft
 	genMode := req.GenerationMode
@@ -74,21 +77,22 @@ func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *
 	}
 
 	project := &model.VideoProject{
-		UserID:          userID,
-		Name:            req.Name,
-		Description:     req.Description,
-		Mode:            req.Mode,
-		Status:          status,
-		SkillName:       skillName,
-		SkillVersion:    skillVersion,
-		WorkflowName:    workflowName,
-		WorkflowVersion: workflowVersion,
-		GenerationMode:  genMode,
-		AspectRatio:     req.AspectRatio,
-		TargetDuration:  req.TargetDuration,
-		Language:        language,
-		Config:          req.Config,
-		LocalPathHint:   req.LocalPathHint,
+		UserID:             userID,
+		Name:               req.Name,
+		Description:        req.Description,
+		Mode:               persistedMode,
+		CanonicalProfileID: canonicalProfileID,
+		Status:             status,
+		SkillName:          skillName,
+		SkillVersion:       skillVersion,
+		WorkflowName:       workflowName,
+		WorkflowVersion:    workflowVersion,
+		GenerationMode:     genMode,
+		AspectRatio:        req.AspectRatio,
+		TargetDuration:     req.TargetDuration,
+		Language:           language,
+		Config:             canonicalProjectConfig(req.Config, canonicalProfileID),
+		LocalPathHint:      req.LocalPathHint,
 	}
 
 	if err := s.repo.Create(ctx, project); err != nil {
@@ -105,7 +109,11 @@ func (s *ProjectService) CreateProject(ctx context.Context, userID string, req *
 
 // GetProject returns a project by ID.
 func (s *ProjectService) GetProject(ctx context.Context, userID string, id string) (*model.VideoProject, error) {
-	return s.repo.FindByIDForUser(ctx, userID, id)
+	project, err := s.repo.FindByIDForUser(ctx, userID, id)
+	if project != nil {
+		project.CanonicalProfileID = model.CanonicalProfileForMode(project.Mode)
+	}
+	return project, err
 }
 
 // ListProjects returns projects with optional filters and pagination.
@@ -116,7 +124,50 @@ func (s *ProjectService) ListProjects(ctx context.Context, userID string, modeFi
 	if limit > 100 {
 		limit = 100
 	}
-	return s.repo.FindAllForUser(ctx, userID, modeFilter, statusFilter, offset, limit)
+	projects, total, err := s.repo.FindAllForUser(ctx, userID, modeFilter, statusFilter, offset, limit)
+	for _, project := range projects {
+		if project != nil {
+			project.CanonicalProfileID = model.CanonicalProfileForMode(project.Mode)
+		}
+	}
+	return projects, total, err
+}
+
+func canonicalProjectConfig(raw json.RawMessage, canonicalProfileID string) json.RawMessage {
+	config := map[string]interface{}{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &config)
+	}
+	config["canonicalProfileId"] = canonicalProfileID
+	config["profileSchemaVersion"] = model.VideoProfileSchemaVersion
+	config["runtimePipelineId"] = model.VideoRuntimePipelineID
+	config["runtimePipelineVersion"] = model.VideoRuntimePipelineVersion
+	config["runtimePipelineSource"] = model.VideoRuntimePipelineSource
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+func mergeProjectConfig(existing, update json.RawMessage, canonicalProfileID string) json.RawMessage {
+	config := map[string]interface{}{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &config)
+	}
+	if len(update) > 0 {
+		incoming := map[string]interface{}{}
+		if json.Unmarshal(update, &incoming) == nil {
+			for key, value := range incoming {
+				config[key] = value
+			}
+		}
+	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return canonicalProjectConfig(existing, canonicalProfileID)
+	}
+	return canonicalProjectConfig(encoded, canonicalProfileID)
 }
 
 // MarkAgentRunStarted links an agent run to a project and marks it running.
@@ -186,7 +237,7 @@ func (s *ProjectService) UpdateProject(ctx context.Context, userID string, id st
 		project.Language = req.Language
 	}
 	if req.Config != nil {
-		project.Config = req.Config
+		project.Config = mergeProjectConfig(project.Config, req.Config, model.CanonicalProfileForMode(project.Mode))
 	}
 	if req.LocalPathHint != "" {
 		project.LocalPathHint = req.LocalPathHint
