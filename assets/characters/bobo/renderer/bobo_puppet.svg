@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Bobo controllable SVG puppet reference">
+  <defs>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="shell" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef9fb"/>
+    </linearGradient>
+  </defs>
+  <g id="root" data-part="root" data-pivot="512 880">
+    <ellipse id="feetGlow" data-part="feetGlow" cx="512" cy="884" rx="170" ry="38" fill="#58a8ff" opacity="0.18"/>
+    <g id="leftArm" data-part="leftArm" data-pivot="360 620">
+      <path d="M354 594 C300 600 274 636 265 676" fill="none" stroke="#fffdf3" stroke-width="42" stroke-linecap="round"/>
+      <circle cx="258" cy="690" r="28" fill="#ffd34d"/>
+    </g>
+    <g id="rightArm" data-part="rightArm" data-pivot="664 620">
+      <path d="M668 594 C726 598 760 626 780 665" fill="none" stroke="#fffdf3" stroke-width="42" stroke-linecap="round"/>
+      <circle cx="790" cy="676" r="28" fill="#ffd34d"/>
+    </g>
+    <g id="body" data-part="body" data-pivot="512 650">
+      <ellipse cx="422" cy="550" rx="118" ry="130" fill="#dbe7eb"/>
+      <ellipse cx="602" cy="548" rx="128" ry="132" fill="#dbe7eb"/>
+      <ellipse cx="512" cy="640" rx="166" ry="158" fill="#dbe7eb"/>
+      <ellipse cx="422" cy="532" rx="114" ry="126" fill="url(#shell)"/>
+      <ellipse cx="600" cy="532" rx="124" ry="130" fill="url(#shell)"/>
+      <ellipse cx="512" cy="620" rx="168" ry="152" fill="url(#shell)"/>
+    </g>
+    <g id="antenna" data-part="antenna" data-pivot="585 350">
+      <path d="M560 386 C582 360 584 336 572 310" fill="none" stroke="#239b7c" stroke-width="10" stroke-linecap="round"/>
+      <circle cx="570" cy="296" r="17" fill="#25b27e" filter="url(#softGlow)"/>
+    </g>
+    <g id="head" data-part="head" data-pivot="512 500">
+      <rect id="faceScreen" data-part="faceScreen" x="364" y="394" width="296" height="178" rx="72" fill="#1c252b"/>
+      <rect x="382" y="412" width="260" height="142" rx="58" fill="#10181d"/>
+      <g id="eyes" data-part="eyes">
+        <ellipse id="eyeLeft" data-part="eyeLeft" cx="466" cy="468" rx="20" ry="27" fill="#ffd64d"/>
+        <ellipse id="eyeRight" data-part="eyeRight" cx="558" cy="468" rx="20" ry="27" fill="#ffd64d"/>
+      </g>
+      <g id="mouth" data-part="mouth" data-pivot="512 525">
+        <path id="mouthClosed" d="M472 526 Q512 545 552 526" fill="none" stroke="#ffdc55" stroke-width="10" stroke-linecap="round"/>
+        <ellipse id="mouthOpen" cx="512" cy="530" rx="34" ry="20" fill="#ffdc55" opacity="0"/>
+      </g>
+    </g>
+    <g id="heartCore" data-part="heartCore" data-pivot="512 702" filter="url(#softGlow)">
+      <path d="M512 724 L470 684 C448 660 482 620 512 652 C542 620 576 660 554 684 Z" fill="#ffad40"/>
+    </g>
+    <g id="feet" data-part="feet">
+      <ellipse cx="442" cy="850" rx="42" ry="25" fill="#60aaff"/>
+      <ellipse cx="582" cy="850" rx="42" ry="25" fill="#ffd04d"/>
+    </g>
+  </g>
+</svg>

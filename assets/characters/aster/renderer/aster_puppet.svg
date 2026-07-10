@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Aster controllable SVG puppet reference">
+  <defs>
+    <filter id="blueGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g id="root" data-part="root" data-pivot="512 900">
+    <ellipse cx="512" cy="894" rx="180" ry="38" fill="#4ca9ff" opacity="0.14"/>
+    <g id="robe" data-part="robe" data-pivot="512 700">
+      <path d="M390 500 L634 500 L700 850 L324 850 Z" fill="#17203a"/>
+      <path d="M430 470 L594 470 L640 842 L384 842 Z" fill="#f6faf8"/>
+      <path d="M412 520 L344 840" stroke="#e8b34f" stroke-width="18" stroke-linecap="round"/>
+      <path d="M612 520 L680 840" stroke="#e8b34f" stroke-width="18" stroke-linecap="round"/>
+      <circle id="chestCore" data-part="chestCore" cx="512" cy="640" r="45" fill="#243956"/>
+      <circle cx="512" cy="640" r="24" fill="#4fb8ff" filter="url(#blueGlow)"/>
+    </g>
+    <g id="leftArm" data-part="leftArm" data-pivot="382 620">
+      <path d="M430 540 C370 585 342 620 328 670" fill="none" stroke="#f2f7f8" stroke-width="40" stroke-linecap="round"/>
+      <rect x="270" y="626" width="112" height="72" rx="12" fill="#345a7a" opacity="0.62"/>
+      <rect x="270" y="626" width="112" height="72" rx="12" fill="none" stroke="#7acaff" stroke-width="5"/>
+    </g>
+    <g id="rightArm" data-part="rightArm" data-pivot="642 620">
+      <path d="M594 540 C654 575 690 616 704 662" fill="none" stroke="#f2f7f8" stroke-width="40" stroke-linecap="round"/>
+      <path d="M706 654 L760 604" stroke="#f2f7f8" stroke-width="12" stroke-linecap="round"/>
+    </g>
+    <g id="head" data-part="head" data-pivot="512 430">
+      <path d="M392 382 L512 260 L632 382 L610 548 L414 548 Z" fill="#eff4f4" stroke="#deb55c" stroke-width="10" stroke-linejoin="round"/>
+      <rect id="faceScreen" data-part="faceScreen" x="438" y="392" width="148" height="132" rx="30" fill="#101b28"/>
+      <ellipse id="eyeLeft" data-part="eyeLeft" cx="500" cy="450" rx="22" ry="30" fill="#51ccff" filter="url(#blueGlow)"/>
+      <g id="monocle" data-part="monocle" data-pivot="565 450">
+        <circle cx="566" cy="450" r="34" fill="none" stroke="#e6ba58" stroke-width="8"/>
+        <path d="M590 476 L624 510" stroke="#e6ba58" stroke-width="8" stroke-linecap="round"/>
+      </g>
+      <g id="mouth" data-part="mouth" data-pivot="512 512">
+        <path id="mouthClosed" d="M480 512 L544 512" stroke="#5bd1ff" stroke-width="7" stroke-linecap="round"/>
+        <rect id="mouthOpen" x="484" y="508" width="56" height="18" rx="9" fill="#5bd1ff" opacity="0"/>
+      </g>
+    </g>
+    <g id="knowledgeOrb" data-part="knowledgeOrb" data-pivot="512 190" filter="url(#blueGlow)">
+      <path d="M512 132 L576 190 L512 248 L448 190 Z" fill="#4395ff" opacity="0.68" stroke="#a1e0ff" stroke-width="6"/>
+      <path d="M462 190 L562 190 M512 146 L512 234" stroke="#e6f8ff" stroke-width="4" opacity="0.72"/>
+    </g>
+  </g>
+</svg>
