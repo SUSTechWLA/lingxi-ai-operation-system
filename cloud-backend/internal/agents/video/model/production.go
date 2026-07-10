@@ -5,6 +5,7 @@ import "strings"
 type ExecutionMode string
 
 const (
+	ExecutionModeUnknown     ExecutionMode = "unknown"
 	ExecutionModeReal        ExecutionMode = "real"
 	ExecutionModeFixture     ExecutionMode = "fixture"
 	ExecutionModeFallback    ExecutionMode = "fallback"
@@ -31,11 +32,15 @@ func NormalizeShotCandidateExecution(candidate ShotCandidate) ShotCandidate {
 			candidate.ExecutionMode = ExecutionModeFixture
 		case strings.Contains(source, "placeholder"):
 			candidate.ExecutionMode = ExecutionModePlaceholder
-		default:
+		case isKnownRealArtifactSource(source):
 			candidate.ExecutionMode = ExecutionModeReal
 			// Legacy candidates predate an explicit eligibility flag. Known real
 			// outputs remain readable and eligible after normalization.
 			candidate.ProductionEligible = true
+		default:
+			// Missing or unrecognized provenance must never be promoted to a real
+			// production artifact merely because no fallback marker was present.
+			candidate.ExecutionMode = ExecutionModeUnknown
 		}
 	}
 	if candidate.ExecutionMode != ExecutionModeReal {
@@ -48,5 +53,19 @@ func NormalizeShotCandidateExecution(candidate ShotCandidate) ShotCandidate {
 }
 
 func IsStrictProductionMode(mode string) bool {
-	return strings.TrimSpace(strings.ToLower(mode)) == "" || strings.EqualFold(mode, ProductionModeStrict)
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	return normalized == "" || normalized == ProductionModeStrict
+}
+
+func isKnownRealArtifactSource(source string) bool {
+	switch source {
+	case ArtifactSourceAIGCVideo,
+		ArtifactSourceAIGCImage,
+		ArtifactSourceHyperFrames,
+		ArtifactSourceFFmpegComposite,
+		ArtifactSourceUploaded:
+		return true
+	default:
+		return false
+	}
 }

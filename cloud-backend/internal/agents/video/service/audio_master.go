@@ -37,28 +37,26 @@ func SecondsFromMilliseconds(milliseconds int64) float64 {
 }
 
 // NormalizeShotTiming migrates legacy second-based JSON at the domain boundary.
-// Once any canonical millisecond value is present, milliseconds win.
+// A canonical millisecond field wins for that field, while missing fields are
+// recovered independently from legacy seconds before duration is derived.
 func NormalizeShotTiming(shot *model.ShotUnit) {
 	if shot == nil {
 		return
 	}
-	canonical := shot.StartMs != 0 || shot.EndMs != 0 || shot.DurationMs != 0
-	if !canonical {
+	if shot.StartMs == 0 && shot.StartSec != 0 {
 		shot.StartMs = MillisecondsFromSeconds(shot.StartSec)
+	}
+	if shot.EndMs == 0 && shot.EndSec != 0 {
 		shot.EndMs = MillisecondsFromSeconds(shot.EndSec)
-		if shot.EndMs > shot.StartMs {
-			shot.DurationMs = shot.EndMs - shot.StartMs
-		} else {
-			shot.DurationMs = int64(shot.DurationSec) * 1000
-			shot.EndMs = shot.StartMs + shot.DurationMs
-		}
-	} else {
-		if shot.DurationMs <= 0 && shot.EndMs > shot.StartMs {
-			shot.DurationMs = shot.EndMs - shot.StartMs
-		}
-		if shot.EndMs <= shot.StartMs && shot.DurationMs > 0 {
-			shot.EndMs = shot.StartMs + shot.DurationMs
-		}
+	}
+	if shot.DurationMs <= 0 && shot.EndMs > shot.StartMs {
+		shot.DurationMs = shot.EndMs - shot.StartMs
+	}
+	if shot.DurationMs <= 0 && shot.DurationSec > 0 {
+		shot.DurationMs = MillisecondsFromSeconds(float64(shot.DurationSec))
+	}
+	if shot.EndMs <= shot.StartMs && shot.DurationMs > 0 {
+		shot.EndMs = shot.StartMs + shot.DurationMs
 	}
 	shot.SchemaVersion = model.TalkingHeadSchemaVersion
 	shot.StartSec = SecondsFromMilliseconds(shot.StartMs)
