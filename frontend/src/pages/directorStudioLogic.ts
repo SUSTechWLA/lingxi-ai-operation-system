@@ -20,7 +20,7 @@ export interface LocalServiceStatusDisplay {
   tone: LocalServiceStatusTone
 }
 
-export type VideoCreationProfileId = 'voice_visual' | 'aigc_shot'
+export type VideoCreationProfileId = 'talking_head' | 'cinematic_story'
 
 export interface VideoCreationProfile {
   id: VideoCreationProfileId
@@ -293,13 +293,13 @@ interface TraceNodeLike {
 
 const videoCreationProfileList: VideoCreationProfile[] = [
   {
-    id: 'voice_visual',
+    id: 'talking_head',
     label: '口播 / 知识类视频',
     shortLabel: '口播知识',
     description: '适合观点、知识、教程和图文卡片视频，由系统生成脚本、画面结构、预览和本地成片。',
     projectMode: 'voice_visual',
     generationMode: 'provider_api',
-    preflightPipeline: 'wf-guided-image-text-video',
+    preflightPipeline: 'talking_head',
     startMessagePrefix: '请帮我创作一个',
     requiredLocalCommands: [
       'HYPERFRAMES_PROJECT_GENERATE',
@@ -312,13 +312,13 @@ const videoCreationProfileList: VideoCreationProfile[] = [
     nextStep: '先配置基础模型 API，启动后按审核门确认脚本、画面和预览，最后由本地 runner 渲染成片。',
   },
   {
-    id: 'aigc_shot',
+    id: 'cinematic_story',
     label: '影视化 / AIGC shot 视频',
     shortLabel: '影视分镜',
     description: '适合分镜化、角色一致性和外部图生视频平台接力，系统输出逐 shot 任务包并等待用户上传结果。',
     projectMode: 'aigc_shot',
     generationMode: 'manual_import',
-    preflightPipeline: 'wf-aigc-shot-video',
+    preflightPipeline: 'cinematic_story',
     startMessagePrefix: '请帮我创作一个影视化 AIGC shot 视频：',
     requiredLocalCommands: [
       'LOCAL_FILE_IMPORT',
@@ -334,8 +334,20 @@ export function videoCreationProfiles(): VideoCreationProfile[] {
 }
 
 export function videoCreationProfileForId(id: string | undefined): VideoCreationProfile {
-  const profile = videoCreationProfileList.find((item) => item.id === id)
+	const canonicalId = normalizeVideoCreationProfileId(id)
+	const profile = videoCreationProfileList.find((item) => item.id === canonicalId)
   return copyVideoCreationProfile(profile || videoCreationProfileList[0])
+}
+
+export function normalizeVideoCreationProfileId(id: string | undefined): VideoCreationProfileId {
+  const normalized = String(id || '').trim().toLowerCase()
+  if ([
+    'cinematic_story',
+    'aigc_shot',
+    'wf-aigc-shot-video',
+    'cinematic',
+  ].includes(normalized)) return 'cinematic_story'
+  return 'talking_head'
 }
 
 export function creationProfileSummary(artifacts: DirectorArtifactRecord[]): DirectorCreationProfileSummary {
@@ -609,7 +621,7 @@ export function buildImageRegenerationInstruction(input: ImageRegenerationInstru
     ]
     : [
       '这是口播 / 知识类视频的图片或插入素材返工。',
-      '所有改动都必须服务口播内容和 HyperGen 可控层，保留标题、字幕、UI 元素或图表的安全留白。',
+      '所有改动都必须服务口播内容和 HyperFrames 可控层，保留标题、字幕、UI 元素或图表的安全留白。',
       'AIGC 只负责背景、道具、情绪和动态素材参考，不生成可读中文、Logo、水印或抢走口播重点的主体。',
     ]
   return [

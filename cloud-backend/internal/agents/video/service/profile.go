@@ -37,6 +37,7 @@ func talkingHeadProfile(req ProfileRequest) model.VideoCreationProfile {
 
 func talkingHeadProfileWithMetadata(req ProfileRequest, confidence float64, reason string, needsUserReview bool, fallbackProfile string) model.VideoCreationProfile {
 	return model.VideoCreationProfile{
+		SchemaVersion:   model.VideoProfileSchemaVersion,
 		ProfileID:       model.VideoProfileTalkingHead,
 		SourceRoute:     strings.TrimSpace(req.Route),
 		PrimaryArtifact: "VIDEO_SCRIPT",
@@ -57,15 +58,19 @@ func talkingHeadProfileWithMetadata(req ProfileRequest, confidence float64, reas
 			"primaryRenderer": "hyperframes",
 			"aigcUse":         "optional_broll_or_concept_visual",
 		},
-		FallbackProfile: fallbackProfile,
-		Confidence:      confidence,
-		Reason:          reason,
-		NeedsUserReview: needsUserReview,
+		FallbackProfile:        fallbackProfile,
+		Confidence:             confidence,
+		Reason:                 reason,
+		NeedsUserReview:        needsUserReview,
+		RuntimePipelineID:      model.VideoRuntimePipelineID,
+		RuntimePipelineVersion: model.VideoRuntimePipelineVersion,
+		RuntimePipelineSource:  model.VideoRuntimePipelineSource,
 	}
 }
 
 func cinematicStoryProfile(req ProfileRequest) model.VideoCreationProfile {
 	return model.VideoCreationProfile{
+		SchemaVersion:   model.VideoProfileSchemaVersion,
 		ProfileID:       model.VideoProfileCinematicStory,
 		SourceRoute:     strings.TrimSpace(req.Route),
 		PrimaryArtifact: "CONTINUITY_BIBLE",
@@ -89,8 +94,11 @@ func cinematicStoryProfile(req ProfileRequest) model.VideoCreationProfile {
 			"primaryRenderer": "aigc_then_assembly",
 			"hyperframesUse":  "deterministic_text_overlay",
 		},
-		Confidence: 0.82,
-		Reason:     "brief requires cinematic continuity",
+		Confidence:             0.82,
+		Reason:                 "brief requires cinematic continuity",
+		RuntimePipelineID:      model.VideoRuntimePipelineID,
+		RuntimePipelineVersion: model.VideoRuntimePipelineVersion,
+		RuntimePipelineSource:  model.VideoRuntimePipelineSource,
 	}
 }
 
@@ -112,18 +120,13 @@ func isPublishPackScriptLedOverride(req ProfileRequest) bool {
 }
 
 func isTalkingHeadRoute(route string) bool {
-	route = normalizeProfileText(route)
-	return route == "talking_head" || route == "talking-head"
+	profileID, ok := model.NormalizeVideoProfileID(route)
+	return ok && profileID == model.VideoProfileTalkingHead
 }
 
 func isCinematicRoute(route string) bool {
-	route = normalizeProfileText(route)
-	switch route {
-	case "cinematic_short", "cinematic-story", "cinematic_story", "director_pipeline", "director-pipeline":
-		return true
-	default:
-		return false
-	}
+	profileID, ok := model.NormalizeVideoProfileID(route)
+	return ok && profileID == model.VideoProfileCinematicStory
 }
 
 func isTalkingHeadBrief(brief string) bool {

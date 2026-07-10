@@ -189,6 +189,38 @@ func TestArtifactMaterializerRejectsArtifactWithoutKind(t *testing.T) {
 	}
 }
 
+func TestArtifactMaterializerDoesNotMarkPlaceholderAsValidProduction(t *testing.T) {
+	node := &model.Node{
+		ID:     "shot_generation_exec",
+		Status: model.NodeSuccess,
+		Input:  map[string]interface{}{"stage": "shot_generation"},
+		Output: map[string]interface{}{
+			"artifacts": []interface{}{map[string]interface{}{
+				"unitId":   "shot_video_SHOT_01",
+				"kind":     "SHOT_VIDEO_CLIP",
+				"name":     "SHOT_01_video.mp4",
+				"mimeType": "video/mp4",
+				"metadata": map[string]interface{}{
+					"executionMode":      "placeholder",
+					"productionEligible": false,
+					"relatedShotId":      "SHOT_01",
+				},
+			}},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil || len(requests) != 1 {
+		t.Fatalf("materialize placeholder: requests=%+v err=%v", requests, err)
+	}
+	if got := requests[0].Metadata["status"]; got != "pending" {
+		t.Fatalf("placeholder status = %#v, want pending", got)
+	}
+	if got := requests[0].Metadata["productionEligible"]; got != false {
+		t.Fatalf("placeholder production eligibility = %#v", got)
+	}
+}
+
 func TestBuildArtifactsFromNodeOutputHandlesMapManifestWithValidFields(t *testing.T) {
 	// Verify that a single-map artifacts manifest WITH valid unitId/kind
 	// is correctly materialized into an artifact request.
@@ -504,6 +536,108 @@ func TestBuildArtifactsFromTimeWindowPlanMaterializesReviewableInlineArtifact(t 
 	}
 	if _, ok := decoded["artifacts"]; ok {
 		t.Fatalf("time window plan data should not include output envelope artifacts: %+v", decoded)
+	}
+}
+
+func TestBuildArtifactsFromAudioMasterMaterializesReviewableInlineArtifact(t *testing.T) {
+	node := &model.Node{
+		ID:     "audio_master_exec",
+		Status: model.NodeSuccess,
+		Input: map[string]interface{}{
+			"stage": "audio_master",
+			"tool":  "audio_master_planner",
+		},
+		Output: map[string]interface{}{
+			"audioMaster": map[string]interface{}{
+				"schemaVersion":  float64(2),
+				"revision":       "audio-master-r1",
+				"fingerprint":    "sha256:test",
+				"timelineSource": "estimated",
+				"durationMs":     float64(12000),
+				"sentences": []interface{}{
+					map[string]interface{}{"id": "s1", "startMs": float64(0), "endMs": float64(12000), "timelineRevision": "audio-master-r1"},
+				},
+			},
+			"artifacts": []interface{}{
+				map[string]interface{}{
+					"unitId": "audio_master", "kind": "AUDIO_MASTER_TIMELINE", "name": "audio_master_timeline.json", "mimeType": "application/json",
+					"metadata": map[string]interface{}{"requiresReview": true},
+				},
+			},
+		},
+	}
+
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil {
+		t.Fatalf("audio master artifact should materialize: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected one audio master request, got %+v", requests)
+	}
+	req := requests[0]
+	if req.StorageType != StorageInline || req.Provider != "audio-master-timeline" || len(req.Data) == 0 {
+		t.Fatalf("audio master must be an inline reviewable artifact: %+v", req)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil || decoded["revision"] != "audio-master-r1" {
+		t.Fatalf("audio master data = %s, err=%v", string(req.Data), err)
+	}
+}
+
+func TestBuildArtifactsFromBrollManifestStoresOnlyStructuredManifest(t *testing.T) {
+	node := &model.Node{
+		ID: "visual_alignment_exec", Status: model.NodeSuccess,
+		Input: map[string]interface{}{"stage": "visual_alignment", "tool": "visual_alignment_planner"},
+		Output: map[string]interface{}{
+			"brollManifest": map[string]interface{}{
+				"schemaVersion": float64(2), "revision": "broll-r1",
+				"entries": []interface{}{map[string]interface{}{"id": "b1", "shotId": "SHOT_03", "startMs": float64(10000), "endMs": float64(16000)}},
+			},
+			"shotList": []interface{}{map[string]interface{}{"shotId": "SHOT_03"}},
+			"artifacts": []interface{}{map[string]interface{}{
+				"unitId": "broll_manifest", "kind": "BROLL_MANIFEST", "name": "broll_manifest.json", "mimeType": "application/json",
+				"metadata": map[string]interface{}{"requiresReview": true},
+			}},
+		},
+	}
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil || len(requests) != 1 {
+		t.Fatalf("b-roll manifest materialization = %+v, err=%v", requests, err)
+	}
+	req := requests[0]
+	if req.StorageType != StorageInline || req.Provider != "broll-manifest" || len(req.Data) == 0 {
+		t.Fatalf("b-roll manifest should be inline and reviewable: %+v", req)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(req.Data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["revision"] != "broll-r1" || decoded["shotList"] != nil || decoded["artifacts"] != nil {
+		t.Fatalf("stored data must be the manifest, not the tool envelope: %+v", decoded)
+	}
+}
+
+func TestBuildArtifactsFromVisualAlignmentStoresOnlyPlan(t *testing.T) {
+	node := &model.Node{ID: "visual_alignment_exec", Status: model.NodeSuccess,
+		Input: map[string]interface{}{"stage": "visual_alignment", "tool": "visual_alignment_planner"},
+		Output: map[string]interface{}{
+			"visualAlignmentPlan": map[string]interface{}{"shotCount": float64(2), "source": "time_window_planner"},
+			"shotList":            []interface{}{map[string]interface{}{"shotId": "SHOT_01"}},
+			"artifacts": []interface{}{map[string]interface{}{
+				"unitId": "visual_alignment", "kind": "VISUAL_ALIGNMENT_PLAN", "name": "visual_alignment_plan.json", "mimeType": "application/json",
+			}},
+		},
+	}
+	requests, err := BuildArtifactRequestsFromNodeChecked("vp-1", "run-1", node)
+	if err != nil || len(requests) != 1 {
+		t.Fatalf("visual plan materialization = %+v, err=%v", requests, err)
+	}
+	if requests[0].StorageType != StorageInline || requests[0].Provider != "visual-alignment-plan" {
+		t.Fatalf("visual plan should be inline: %+v", requests[0])
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(requests[0].Data, &decoded); err != nil || decoded["shotCount"] != float64(2) || decoded["shotList"] != nil {
+		t.Fatalf("visual plan data = %s, err=%v", string(requests[0].Data), err)
 	}
 }
 

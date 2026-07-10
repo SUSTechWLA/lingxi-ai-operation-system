@@ -191,6 +191,60 @@ func TestShotRepairLoopStopsAtMaxAttemptsWithHumanReview(t *testing.T) {
 	}
 }
 
+func TestStrictShotAcceptanceRejectsFallbackCandidate(t *testing.T) {
+	policy := model.DefaultShotRepairPolicy()
+	shot := model.ShotUnit{ID: "SHOT_STRICT", DurationSec: 6}
+	candidate := model.ShotCandidate{
+		CandidateID:        "fallback-candidate",
+		ShotID:             shot.ID,
+		DurationSec:        6,
+		SourceType:         model.ArtifactSourceFallbackPreview,
+		IsFallback:         true,
+		ExecutionMode:      model.ExecutionModeFallback,
+		ProductionEligible: false,
+		FallbackReason:     "provider unavailable",
+		ArtifactRefs:       model.ShotArtifactRefs{VideoClipArtifactID: "fallback-preview"},
+	}
+
+	shot = RecordShotCandidateQA(shot, candidate, model.ShotQAReport{Passed: true, Status: model.ShotQAPassed}, policy)
+
+	if shot.AcceptedCandidateID != "" || shot.QAStatus != model.ShotHumanReviewRequired {
+		t.Fatalf("strict mode must not accept fallback candidate: %+v", shot)
+	}
+	if len(shot.RepairPlans) != 1 || shot.RepairPlans[0].Action != model.RepairActionHumanReview {
+		t.Fatalf("fallback candidate should route to human review: %+v", shot.RepairPlans)
+	}
+}
+
+func TestFinalAssemblyStrictRejectsFallbackButDraftCanInspectIt(t *testing.T) {
+	shot := model.ShotUnit{
+		ID:                  "SHOT_FALLBACK",
+		DurationSec:         6,
+		ReviewStatus:        model.ReviewStatusApproved,
+		AcceptedCandidateID: "fallback-candidate",
+		Candidates: []model.ShotCandidate{{
+			CandidateID:        "fallback-candidate",
+			ShotID:             "SHOT_FALLBACK",
+			Status:             model.CandidateAcceptedForAssembly,
+			DurationSec:        6,
+			SourceType:         model.ArtifactSourceFallbackPreview,
+			IsFallback:         true,
+			ExecutionMode:      model.ExecutionModeFallback,
+			ProductionEligible: false,
+			ArtifactRefs:       model.ShotArtifactRefs{VideoClipArtifactID: "fallback-preview"},
+			QAReport:           &model.ShotQAReport{Passed: true, Status: model.ShotQAPassed},
+		}},
+	}
+
+	if _, issues := BuildFinalAssemblyPlanWithPolicy([]model.ShotUnit{shot}, model.AssemblyPolicy{ProductionMode: model.ProductionModeStrict}); !hasIssueCode(issues, "final_assembly_rejects_production_ineligible_candidate") {
+		t.Fatalf("strict assembly must reject fallback candidate, got %+v", issues)
+	}
+	plan, issues := BuildFinalAssemblyPlanWithPolicy([]model.ShotUnit{shot}, model.AssemblyPolicy{ProductionMode: model.ProductionModeDraft})
+	if len(issues) != 0 || len(plan.AcceptedShots) != 1 {
+		t.Fatalf("draft assembly should keep fallback inspectable: plan=%+v issues=%+v", plan, issues)
+	}
+}
+
 func TestFinalAssemblyUsesOnlyAcceptedCandidatesAndGlobalTimeline(t *testing.T) {
 	accepted := model.ShotUnit{
 		ID:                  "SHOT_OK",
@@ -270,7 +324,7 @@ func TestDiagnosticsSnapshotIncludesClosedBetaChainAndFallbackProvenance(t *test
 			QAReport:     &model.ShotQAReport{Passed: true, Status: model.ShotQAPassed},
 		}},
 	}
-	assembly, issues := BuildFinalAssemblyPlan([]model.ShotUnit{shot})
+	assembly, issues := BuildFinalAssemblyPlanWithPolicy([]model.ShotUnit{shot}, model.AssemblyPolicy{ProductionMode: model.ProductionModeDraft})
 	if len(issues) != 0 {
 		t.Fatalf("assembly issues = %+v", issues)
 	}

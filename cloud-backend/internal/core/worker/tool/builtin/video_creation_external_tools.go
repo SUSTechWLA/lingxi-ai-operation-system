@@ -60,6 +60,7 @@ var videoCreationExternalTools = []string{
 	"visual_feasibility_analyzer",
 	"render_strategy_planner",
 	"video_profile_classifier",
+	"audio_master_planner",
 	"time_window_planner",
 	"visual_alignment_planner",
 	"cinematic_shot_designer",
@@ -601,6 +602,33 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"content":         {Type: "string", Description: "Reviewable markdown content"},
 			"artifacts":       {Type: "object", Description: "Reviewable artifact manifest"},
 		}
+	case "audio_master_planner":
+		manifest.Description = "Build the canonical millisecond audio-master clock before shot planning."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "audio_timeline", "timing"}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"script":               {Type: "string", Description: "Approved narration script", Required: false},
+			"scriptSpans":          {Type: "array", Description: "Estimated or aligned sentence spans", Required: true},
+			"scriptRevision":       {Type: "string", Description: "Immutable script revision", Required: false},
+			"voiceRevision":        {Type: "string", Description: "Voice synthesis or import revision", Required: false},
+			"voiceoverArtifactRef": {Type: "string", Description: "Real voiceover artifact reference when available", Required: false},
+			"voiceProfileId":       {Type: "string", Description: "Pinned voice profile", Required: false},
+			"voiceProfileVersion":  {Type: "string", Description: "Pinned voice profile version", Required: false},
+			"language":             {Type: "string", Description: "Narration language", Required: false},
+			"sampleRate":           {Type: "integer", Description: "Audio sample rate", Required: false},
+			"timelineSource":       {Type: "string", Description: "estimated, aligned, or imported", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"audioMaster": {Type: "object", Description: "Canonical audio-master timeline"},
+			"summary":     {Type: "string", Description: "Human-readable timeline summary"},
+			"content":     {Type: "string", Description: "Reviewable markdown content"},
+			"artifacts":   {Type: "object", Description: "Reviewable artifact manifest"},
+		}
+		applyReviewableArtifactContract(manifest, videomodel.ArtifactKindAudioMasterTimeline)
 	case "time_window_planner":
 		manifest.Description = "Plan script-timed or cinematic 3-15 second AIGC-safe time windows."
 		manifest.Type = "builtin_prompt_tool"
@@ -613,6 +641,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"creationProfile": {Type: "object", Description: "Video creation profile", Required: true},
 			"shotList":        {Type: "array", Description: "Coarse shots", Required: false},
 			"scriptSpans":     {Type: "array", Description: "Timed script spans", Required: false},
+			"audioMaster":     {Type: "object", Description: "Canonical audio-master timeline", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"timeWindowPlan": {Type: "object", Description: "Full time-window plan"},
@@ -621,6 +650,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"content":        {Type: "string", Description: "Reviewable markdown content"},
 			"artifacts":      {Type: "object", Description: "Reviewable artifact manifest"},
 		}
+		applyReviewableArtifactContract(manifest, videomodel.ArtifactKindTimeWindowPlan)
 	case "visual_alignment_planner":
 		manifest.Description = "Align talking-head visuals, materials, captions, and AIGC needs to script time windows."
 		manifest.Type = "builtin_prompt_tool"
@@ -637,9 +667,11 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		manifest.Output = map[string]tool.ParamDef{
 			"visualAlignmentPlan": {Type: "object", Description: "Visual-to-script alignment plan"},
 			"shotList":            {Type: "array", Description: "Visual shot list for downstream generation"},
+			"brollManifest":       {Type: "object", Description: "Reviewable b-roll source and usage manifest"},
 			"content":             {Type: "string", Description: "Reviewable markdown content"},
 			"artifacts":           {Type: "object", Description: "Reviewable artifact manifest"},
 		}
+		applyReviewableArtifactContract(manifest, "VISUAL_ALIGNMENT_PLAN", videomodel.ArtifactKindBrollManifest)
 	case "cinematic_shot_designer":
 		manifest.Description = "Design cinematic shot intent and review notes without generating media."
 		manifest.Type = "builtin_prompt_tool"
@@ -1038,6 +1070,22 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 	}
 }
 
+func applyReviewableArtifactContract(manifest *tool.ToolManifest, artifactKinds ...string) {
+	manifest.ApprovalPolicy = tool.ApprovalPolicy{
+		Required:            true,
+		Mode:                tool.ApprovalAfterArtifact,
+		BlocksDownstream:    true,
+		Reason:              "inspect and approve the structured production intermediate before downstream generation",
+		ReviewArtifactKinds: append([]string(nil), artifactKinds...),
+	}
+	manifest.ArtifactPolicy = tool.ArtifactPolicy{
+		ProduceArtifact:       true,
+		ArtifactKinds:         append([]string(nil), artifactKinds...),
+		DefaultReviewRequired: true,
+		Storage:               tool.ArtifactLocationCloud,
+	}
+}
+
 // localToolManifests configures tools that execute on the user's local device.
 var localToolManifests = map[string]struct {
 	ExecutionPlane     string
@@ -1141,6 +1189,8 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeRenderStrategyPlanner(stage, skillName, params)
 	case "video_profile_classifier":
 		return executeVideoProfileClassifier(stage, skillName, brief, params)
+	case "audio_master_planner":
+		return executeAudioMasterPlanner(stage, skillName, params)
 	case "time_window_planner":
 		return executeTimeWindowPlanner(stage, skillName, params)
 	case "visual_alignment_planner":
@@ -2318,18 +2368,72 @@ func executeVideoProfileClassifier(stage, skillName, brief string, params map[st
 	})
 }
 
+func executeAudioMasterPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
+	spans := scriptSpansFromToolValue(params["scriptSpans"])
+	if len(spans) == 0 {
+		return tool.FailureResult("audio_master_planner requires non-empty scriptSpans")
+	}
+	scriptRevision := strings.TrimSpace(stringParam(params, "scriptRevision", ""))
+	if scriptRevision == "" {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"script": firstNonEmptyString(params, "script"),
+			"spans":  spans,
+		})
+		sum := stdsha256.Sum256(payload)
+		scriptRevision = "script-" + hex.EncodeToString(sum[:6])
+	}
+	voiceRevision := strings.TrimSpace(stringParam(params, "voiceRevision", ""))
+	if voiceRevision == "" {
+		if stringParam(params, "voiceoverArtifactRef", "") == "" {
+			voiceRevision = "voice-estimated-v1"
+		} else {
+			voiceRevision = "voice-imported-v1"
+		}
+	}
+	master, issues := videoservice.BuildAudioMasterTimeline(videoservice.AudioMasterRequest{
+		ScriptRevision:       scriptRevision,
+		VoiceRevision:        voiceRevision,
+		Language:             stringParam(params, "language", "zh-CN"),
+		TimelineSource:       videomodel.TimelineSource(stringParam(params, "timelineSource", "")),
+		VoiceoverArtifactRef: stringParam(params, "voiceoverArtifactRef", ""),
+		VoiceProfileID:       stringParam(params, "voiceProfileId", ""),
+		VoiceProfileVersion:  stringParam(params, "voiceProfileVersion", ""),
+		SampleRate:           intFromInterface(params["sampleRate"], 48000),
+		ToolVersion:          "audio-master-planner/v1",
+		ScriptSpans:          spans,
+	})
+	if len(issues) > 0 {
+		return tool.FailureResult(fmt.Sprintf("audio master validation failed: %v", issues))
+	}
+	sourceLabel := string(master.TimelineSource)
+	return tool.SuccessResult(map[string]interface{}{
+		"audioMaster": structToMap(master),
+		"summary":     fmt.Sprintf("已建立 %d ms 的%s音频主时间轴（revision %s）。", master.DurationMs, sourceLabel, master.Revision),
+		"content":     fmt.Sprintf("# Audio Master Timeline\n\n- Revision: `%s`\n- Source: `%s`\n- Duration: `%d ms`\n- Sentence cues: `%d`\n", master.Revision, sourceLabel, master.DurationMs, len(master.Sentences)),
+		"artifacts": []map[string]interface{}{
+			typedJSONArtifact(stage, "audio_master_timeline.json", skillName, videomodel.ArtifactKindAudioMasterTimeline, true),
+		},
+	})
+}
+
 func executeTimeWindowPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
 	profile := creationProfileFromToolValue(params["creationProfile"])
 	sourceShotMaps := toolMapsFromValue(params["shotList"], "shotList", "shots")
 	shots := shotUnitsFromToolValue(params["shotList"])
 	spans := scriptSpansFromToolValue(params["scriptSpans"])
-	if profile.ProfileID != videomodel.VideoProfileCinematicStory && len(spans) == 0 {
+	audioMaster, hasAudioMaster := audioMasterFromToolValue(params["audioMaster"])
+	if profile.ProfileID != videomodel.VideoProfileCinematicStory && len(spans) == 0 && !hasAudioMaster {
 		return tool.FailureResult("time_window_planner requires scriptSpans for talking_head profile")
+	}
+	var audioMasterRef *videomodel.AudioMasterTimeline
+	if hasAudioMaster {
+		audioMasterRef = &audioMaster
 	}
 	plan := videoservice.BuildTimeWindowPlan(videoservice.TimeWindowRequest{
 		Profile:     profile,
 		Shots:       shots,
 		ScriptSpans: spans,
+		AudioMaster: audioMasterRef,
 	})
 	planMap := structToMap(plan)
 	windowMaps := make([]map[string]interface{}, 0, len(plan.Windows))
@@ -2353,10 +2457,13 @@ func executeTimeWindowPlanner(stage, skillName string, params map[string]interfa
 func executeVisualAlignmentPlanner(stage, skillName string, params map[string]interface{}) tool.ToolResult {
 	windows := timeWindowMapsFromParams(params)
 	shotList := make([]map[string]interface{}, 0, len(windows))
+	brollEntries := make([]map[string]interface{}, 0)
 	script := firstNonEmptyString(params, "script")
 	assetStrategy := firstNonEmptyString(params, "assetStrategy", "style", "brief", "topic")
 	creativeMode := voiceVisualNeedsRichAIGC(script, assetStrategy)
 	routeCounts := map[string]int{}
+	var nextStartMs int64
+	visualModePolicy := videoservice.DefaultTalkingHeadVisualModePolicy()
 	for i, window := range windows {
 		shotID := firstNonEmptyString(window, "shotId", "id")
 		if shotID == "" {
@@ -2373,17 +2480,43 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 			visual = voiceVisualDirectionForRoute(route, narration, visual, i, creativeMode)
 		}
 		routeCounts[route]++
+		position := videoservice.NarrativePositionBody
+		if i == 0 {
+			position = videoservice.NarrativePositionHook
+		} else if i == len(windows)-1 {
+			position = videoservice.NarrativePositionClosing
+		} else if containsAnyFold(narration, "核心", "关键", "本质") {
+			position = videoservice.NarrativePositionCore
+		}
+		isBrollRoute := route == "aigc_video" || route == "aigc_image" || route == "image" || route == "video"
+		decision := videoservice.DecideTalkingHeadVisualMode(visualModePolicy, videoservice.VisualModeDecisionRequest{
+			Position:           position,
+			HasExactText:       route == "hyperframes",
+			HasScreenRecording: route == "screen_recording",
+			HasBroll:           isBrollRoute,
+			HasCaseOrEvidence:  containsAnyFold(narration+" "+visual, "案例", "证据", "数据", "对比", "展示"),
+			HasComplexConcept:  containsAnyFold(narration, "流程", "原理", "架构", "步骤"),
+			NeedsDataGraphic:   route == "hyperframes" && containsAnyFold(narration, "%", "数据", "年份", "流程"),
+			NeedsAIGCScene:     route == "aigc_video" || route == "aigc_image",
+			EvidenceStrength:   0.86,
+		})
 		shot := map[string]interface{}{
-			"shotId":            shotID,
-			"durationSec":       authoredDurationSec(window),
-			"narrationText":     narration,
-			"visual":            visual,
-			"mainAction":        firstNonEmptyString(window, "mainAction", "action"),
-			"camera":            visualSubtitleFromNarration(narration, i),
-			"timeWindowId":      firstNonEmptyString(window, "id"),
-			"plannedAssetRoute": route,
-			"assetIntent":       voiceVisualAssetIntentForRoute(route, narration),
-			"timeRelationship":  voiceVisualTimeRelationship(route, authoredDurationSec(window)),
+			"shotId":                shotID,
+			"durationSec":           authoredDurationSec(window),
+			"narrationText":         narration,
+			"visual":                visual,
+			"mainAction":            firstNonEmptyString(window, "mainAction", "action"),
+			"camera":                visualSubtitleFromNarration(narration, i),
+			"timeWindowId":          firstNonEmptyString(window, "id"),
+			"plannedAssetRoute":     route,
+			"assetIntent":           voiceVisualAssetIntentForRoute(route, narration),
+			"timeRelationship":      voiceVisualTimeRelationship(route, authoredDurationSec(window)),
+			"visualMode":            string(decision.Mode),
+			"visualModeReason":      decision.Reason,
+			"visualModeConfidence":  decision.Confidence,
+			"visualModeNeedsReview": decision.NeedsHumanReview,
+			"timelineRevision":      firstNonEmptyString(window, "timelineRevision"),
+			"talkingHeadLayers":     plannedTalkingHeadLayersMap(window, decision, route),
 		}
 		if creativeMode {
 			shot["mainAction"] = voiceVisualMainActionForRoute(route, narration, i)
@@ -2394,8 +2527,46 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 		if route == "hyperframes" {
 			shot["screenText"] = []string{visualTitleFromNarration(narration, i)}
 		}
+		startMs := int64FromAny(firstExistingValue(window, "startMs"), 0)
+		if startMs == 0 && i > 0 {
+			startMs = nextStartMs
+		}
+		durationMs := int64(authoredDurationSec(window)) * 1000
+		endMs := int64FromAny(firstExistingValue(window, "endMs"), 0)
+		if endMs <= startMs {
+			endMs = startMs + durationMs
+		}
+		nextStartMs = endMs
+		if isBrollRoute || route == "screen_recording" {
+			sourceType := "generated"
+			licenseStatus := "generated"
+			provider := "mcp-generation"
+			assetType := "video"
+			if route == "screen_recording" {
+				sourceType, licenseStatus, provider, assetType = "user", "owned", "manual-import", "screen-recording"
+			} else if strings.Contains(route, "image") {
+				assetType = "image"
+			}
+			brollEntries = append(brollEntries, map[string]interface{}{
+				"id": fmt.Sprintf("BROLL_%02d", len(brollEntries)+1), "shotId": shotID,
+				"narrationText": narration, "semanticPurpose": voiceVisualAssetIntentForRoute(route, narration),
+				"assetType": assetType, "sourceType": sourceType, "artifactRef": "planned://" + shotID + "/broll",
+				"licenseStatus": licenseStatus, "usageStatus": "planned", "generated": sourceType == "generated",
+				"provider": provider, "startMs": startMs, "endMs": endMs, "fit": "cover",
+				"placement": string(decision.Mode), "relevanceScore": 0.86, "reviewStatus": "planned",
+			})
+		}
 		shotList = append(shotList, shot)
 	}
+	brollPayload, _ := json.Marshal(brollEntries)
+	brollHash := stdsha256.Sum256(brollPayload)
+	brollManifest := map[string]interface{}{
+		"schemaVersion": videomodel.TalkingHeadSchemaVersion,
+		"revision":      "broll-manifest-" + hex.EncodeToString(brollHash[:6]),
+		"entries":       brollEntries,
+	}
+	brollArtifact := typedJSONArtifact(stage, "broll_manifest.json", skillName, videomodel.ArtifactKindBrollManifest, true)
+	brollArtifact["unitId"] = "broll_manifest"
 	return tool.SuccessResult(map[string]interface{}{
 		"visualAlignmentPlan": map[string]interface{}{
 			"shotCount":    len(shotList),
@@ -2404,10 +2575,12 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 			"routeCounts":  routeCounts,
 			"policy":       "AIGC b-roll carries emotion and absurdity; HyperFrames stays for exact text, UI, captions, and CTA overlays.",
 		},
-		"shotList": shotList,
-		"content":  buildShotListMarkdown("Visual Alignment", shotList),
+		"shotList":      shotList,
+		"brollManifest": brollManifest,
+		"content":       buildShotListMarkdown("Visual Alignment", shotList),
 		"artifacts": []map[string]interface{}{
-			jsonArtifact(stage, "visual_alignment_plan.json", skillName, "VISUAL_ALIGNMENT_PLAN", true),
+			typedJSONArtifact(stage, "visual_alignment_plan.json", skillName, "VISUAL_ALIGNMENT_PLAN", true),
+			brollArtifact,
 		},
 	})
 }
@@ -2893,6 +3066,57 @@ func creationProfileFromToolValue(value interface{}) videomodel.VideoCreationPro
 	return profile
 }
 
+func audioMasterFromToolValue(value interface{}) (videomodel.AudioMasterTimeline, bool) {
+	master := videomodel.AudioMasterTimeline{}
+	values, ok := mapValue(value)
+	if !ok {
+		return master, false
+	}
+	data, err := json.Marshal(values)
+	if err != nil || json.Unmarshal(data, &master) != nil {
+		return videomodel.AudioMasterTimeline{}, false
+	}
+	return master, master.Revision != "" && master.DurationMs > 0
+}
+
+func plannedTalkingHeadLayersMap(window map[string]interface{}, decision videoservice.VisualModeDecision, route string) map[string]interface{} {
+	timelineRevision := firstNonEmptyString(window, "timelineRevision")
+	plannedState := func(layer videomodel.ShotLayerKind) videomodel.LayerArtifactState {
+		return videomodel.LayerArtifactState{
+			SchemaVersion: videomodel.TalkingHeadSchemaVersion,
+			Layer:         layer,
+			Status:        videomodel.LayerStatusPlanned,
+		}
+	}
+	layers := videomodel.TalkingHeadShotLayers{
+		SchemaVersion:        videomodel.TalkingHeadSchemaVersion,
+		TimelineRevision:     timelineRevision,
+		VisualMode:           decision.Mode,
+		VisualModeReason:     decision.Reason,
+		VisualModeConfidence: decision.Confidence,
+		NeedsHumanReview:     decision.NeedsHumanReview,
+		Audio: videomodel.AudioLayerPlan{
+			State: plannedState(videomodel.ShotLayerAudio), AudioMasterRevision: timelineRevision,
+		},
+		IP: videomodel.IPLayerPlan{
+			State: plannedState(videomodel.ShotLayerIP), DisplayMode: string(decision.Mode), BackgroundMode: "baked",
+		},
+		Text: videomodel.TextGraphicsLayerPlan{
+			State: plannedState(videomodel.ShotLayerText), TimelineRevision: timelineRevision, Renderer: "hyperframes",
+		},
+		Broll: videomodel.BrollLayerPlan{
+			State: plannedState(videomodel.ShotLayerBroll), ManifestRef: "artifact://broll_manifest",
+		},
+		Composition: videomodel.CompositionLayerPlan{
+			State: plannedState(videomodel.ShotLayerComposition), Assembler: "hyperframes+ffmpeg",
+		},
+	}
+	if route == "hyperframes" {
+		layers.Text.ProjectRef = "pending://hyperframes/project"
+	}
+	return structToMap(layers)
+}
+
 func plannerOutputDurationSec(values map[string]interface{}, preserveAuthored bool) int {
 	if preserveAuthored {
 		return authoredDurationSec(values)
@@ -3070,6 +3294,37 @@ func floatFromInterface(value interface{}, fallback float64) float64 {
 		}
 	}
 	return fallback
+}
+
+func int64FromAny(value interface{}, fallback int64) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			return parsed
+		}
+	case string:
+		var parsed int64
+		if _, err := fmt.Sscanf(strings.TrimSpace(typed), "%d", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func containsAnyFold(value string, needles ...string) bool {
+	value = strings.ToLower(value)
+	for _, needle := range needles {
+		if strings.Contains(value, strings.ToLower(needle)) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTimeWindowReviewContent(windows []map[string]interface{}) string {

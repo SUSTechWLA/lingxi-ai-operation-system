@@ -8,6 +8,19 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/worker/tool/builtin"
 )
 
+func TestCanonicalVideoCreationProfileUsesSharedLegacyAliases(t *testing.T) {
+	for input, want := range map[string]string{
+		"voice_visual":               "talking_head",
+		"knowledge-video":            "talking_head",
+		"wf-guided-image-text-video": "talking_head",
+		"aigc_shot":                  "cinematic_story",
+	} {
+		if got := canonicalVideoCreationProfile(input); got != want {
+			t.Fatalf("canonicalVideoCreationProfile(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestPlanCompiler_InsertsAfterArtifactReviewFromToolManifest(t *testing.T) {
 	compiler := NewPlanCompiler(staticToolCatalog{
 		"video_script_generator": &tool.ToolManifest{
@@ -367,6 +380,7 @@ func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
 	assertStepOrder(t, prepared, []string{
 		"profile_selection",
 		"script_generation",
+		"audio_master",
 		"time_window",
 		"visual_alignment",
 		"shot_generation",
@@ -374,12 +388,19 @@ func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
 		"preview",
 		"render",
 	})
+	audioMaster := findStep(t, prepared, "audio_master")
+	if audioMaster.Tool != "audio_master_planner" || audioMaster.Arguments["scriptSpans"] != "{{script_generation.output.scriptSpans}}" {
+		t.Fatalf("audio_master step must derive the authoritative timeline from approved script spans: %+v", audioMaster)
+	}
 	timeWindow := findStep(t, prepared, "time_window")
 	if got := timeWindow.Arguments["creationProfile"]; got != "{{profile_selection.output.creationProfile}}" {
 		t.Fatalf("time_window creationProfile = %#v, want profile selection output", got)
 	}
 	if got := timeWindow.Arguments["scriptSpans"]; got != "{{script_generation.output.scriptSpans}}" {
 		t.Fatalf("time_window scriptSpans = %#v, want script span output", got)
+	}
+	if got := timeWindow.Arguments["audioMaster"]; got != "{{audio_master.output.audioMaster}}" {
+		t.Fatalf("time_window audioMaster = %#v, want audio master output", got)
 	}
 	alignment := findStep(t, prepared, "visual_alignment")
 	if got := alignment.Arguments["timeWindows"]; got != "{{time_window.output.timeWindows}}" {
@@ -397,6 +418,46 @@ func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
 	}
 	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
 		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_ReusesHeuristicAudioMasterStep(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请创作一个口播知识视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID: "script_generation", Tool: "video_script_generator",
+				Arguments:      map[string]interface{}{"topic": "口播知识"},
+				ExpectedOutput: []string{"script", "scriptSpans"}, ProduceArtifact: true,
+			},
+			{
+				ID: "audio_master_planner", Tool: "audio_master_planner",
+				Arguments:      map[string]interface{}{"brief": "请创作一个口播知识视频"},
+				ExpectedOutput: []string{"audioMaster"}, ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+	count := 0
+	for _, step := range prepared.Steps {
+		if step.Tool == "audio_master_planner" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("audio master planner count = %d, want one canonical step: %#v", count, prepared.Steps)
+	}
+	audioMaster := findStep(t, prepared, "audio_master")
+	if got := audioMaster.Arguments["scriptSpans"]; got != "{{script_generation.output.scriptSpans}}" {
+		t.Fatalf("audio master scriptSpans = %#v, want script output reference", got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass guard: %v", err)
 	}
 }
 
@@ -2096,12 +2157,24 @@ func videoProfileTemplateCatalog() staticToolCatalog {
 			"routingReason":   {Type: "string"},
 		},
 	}
+	catalog["audio_master_planner"] = &tool.ToolManifest{
+		Name: "audio_master_planner",
+		Parameters: map[string]tool.ParamDef{
+			"scriptSpans":    {Type: "array", Required: true},
+			"scriptRevision": {Type: "string", Required: false},
+			"voiceRevision":  {Type: "string", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"audioMaster": {Type: "object"},
+		},
+	}
 	catalog["time_window_planner"] = &tool.ToolManifest{
 		Name: "time_window_planner",
 		Parameters: map[string]tool.ParamDef{
 			"brief":           {Type: "string", Required: true},
 			"creationProfile": {Type: "string", Required: true},
 			"scriptSpans":     {Type: "string", Required: false},
+			"audioMaster":     {Type: "object", Required: false},
 			"shotList":        {Type: "array", Required: false},
 		},
 		Output: map[string]tool.ParamDef{

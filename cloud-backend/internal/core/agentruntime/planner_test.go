@@ -235,6 +235,7 @@ func TestHeuristicPlanner_PreparesProfilePlanBeforeValidation(t *testing.T) {
 	tools := staticToolList{
 		cloneManifestForPlanner(catalog["video_script_generator"], "script_generation"),
 		cloneManifestForPlanner(catalog["shot_splitter"], "shot_split"),
+		cloneManifestForPlanner(catalog["audio_master_planner"], "audio_master"),
 		cloneManifestForPlanner(catalog["time_window_planner"], "time_window_planning"),
 		cloneManifestForPlanner(catalog["visual_alignment_planner"], "visual_alignment"),
 		cloneManifestForPlanner(catalog["shot_generation_planner"], "shot_planning"),

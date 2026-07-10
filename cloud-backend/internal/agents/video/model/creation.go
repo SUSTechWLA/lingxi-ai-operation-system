@@ -56,14 +56,24 @@ const (
 	CandidateHumanReviewRequired = "HUMAN_REVIEW_REQUIRED"
 	CandidateAcceptedForAssembly = "ACCEPTED_FOR_ASSEMBLY"
 
-	RepairActionPass                   = "PASS"
-	RepairActionRerenderHTML           = "RERENDER_HTML"
+	RepairActionPass = "PASS"
+	// RepairActionRerenderHTML is retained as a source-compatible alias; new
+	// persisted plans use the canonical layer-scoped RERENDER_TEXT value.
+	RepairActionRerenderHTML           = "RERENDER_TEXT"
 	RepairActionRecomposite            = "RECOMPOSITE"
 	RepairActionPromptPatchRegen       = "PROMPT_PATCH_REGEN"
 	RepairActionRegenAIGC              = "REGEN_AIGC"
 	RepairActionRegenAIGCWithReference = "REGEN_AIGC_WITH_REFERENCE"
 	RepairActionDeferToFinalAssembly   = "DEFER_TO_FINAL_ASSEMBLY"
 	RepairActionHumanReview            = "HUMAN_REVIEW"
+	RepairActionRegenerateVoice        = "REGENERATE_VOICE"
+	RepairActionRealignTimeline        = "REALIGN_TIMELINE"
+	RepairActionRegenerateIP           = "REGENERATE_IP"
+	RepairActionRelipsyncIP            = "RELIPSYNC_IP"
+	RepairActionRerenderText           = RepairActionRerenderHTML
+	RepairActionReplaceBroll           = "REPLACE_BROLL"
+	RepairActionRegenerateBroll        = "REGENERATE_BROLL"
+	RepairActionReencode               = "REENCODE"
 
 	AssemblyStepAllShotsAcceptedGate   = "ALL_SHOTS_ACCEPTED_GATE"
 	AssemblyStepNormalizeAcceptedShots = "NORMALIZE_ACCEPTED_SHOTS"
@@ -100,17 +110,21 @@ const (
 )
 
 type VideoCreationProfile struct {
-	ProfileID        string            `json:"profileId"`
-	SourceRoute      string            `json:"sourceRoute,omitempty"`
-	PrimaryArtifact  string            `json:"primaryArtifact"`
-	QualityContract  []string          `json:"qualityContract,omitempty"`
-	DAGTemplateID    string            `json:"dagTemplateId"`
-	ReviewGatePolicy []string          `json:"reviewGatePolicy,omitempty"`
-	ToolBias         map[string]string `json:"toolBias,omitempty"`
-	FallbackProfile  string            `json:"fallbackProfile,omitempty"`
-	Confidence       float64           `json:"confidence,omitempty"`
-	Reason           string            `json:"reason,omitempty"`
-	NeedsUserReview  bool              `json:"needsUserReview,omitempty"`
+	SchemaVersion          int               `json:"schemaVersion"`
+	ProfileID              string            `json:"profileId"`
+	SourceRoute            string            `json:"sourceRoute,omitempty"`
+	PrimaryArtifact        string            `json:"primaryArtifact"`
+	QualityContract        []string          `json:"qualityContract,omitempty"`
+	DAGTemplateID          string            `json:"dagTemplateId"`
+	ReviewGatePolicy       []string          `json:"reviewGatePolicy,omitempty"`
+	ToolBias               map[string]string `json:"toolBias,omitempty"`
+	FallbackProfile        string            `json:"fallbackProfile,omitempty"`
+	Confidence             float64           `json:"confidence,omitempty"`
+	Reason                 string            `json:"reason,omitempty"`
+	NeedsUserReview        bool              `json:"needsUserReview,omitempty"`
+	RuntimePipelineID      string            `json:"runtimePipelineId"`
+	RuntimePipelineVersion string            `json:"runtimePipelineVersion"`
+	RuntimePipelineSource  string            `json:"runtimePipelineSource"`
 }
 
 type ShotPolicy struct {
@@ -204,48 +218,54 @@ func DefaultRenderPreference() RenderPreference {
 }
 
 type ShotUnit struct {
-	ID                  string            `json:"id"`
-	ProjectID           string            `json:"projectId"`
-	SequenceIndex       int               `json:"sequenceIndex"`
-	Title               string            `json:"title"`
-	VideoType           string            `json:"videoType,omitempty"`
-	DurationSec         int               `json:"durationSec"`
-	StartSec            float64           `json:"startSec,omitempty"`
-	EndSec              float64           `json:"endSec,omitempty"`
-	ScriptSegmentID     string            `json:"scriptSegmentId,omitempty"`
-	SceneID             string            `json:"sceneId,omitempty"`
-	Scene               string            `json:"scene,omitempty"`
-	SceneSummary        string            `json:"sceneSummary,omitempty"`
-	Subject             string            `json:"subject,omitempty"`
-	SingleScene         bool              `json:"singleScene"`
-	VisualChangeLevel   string            `json:"visualChangeLevel"`
-	VisualChangeReason  string            `json:"visualChangeReason,omitempty"`
-	Narration           string            `json:"narration,omitempty"`
-	ScreenText          []string          `json:"screenText,omitempty"`
-	MainAction          string            `json:"mainAction,omitempty"`
-	Action              string            `json:"action,omitempty"`
-	Camera              string            `json:"camera,omitempty"`
-	ShotSize            string            `json:"shotSize,omitempty"`
-	Framing             string            `json:"framing,omitempty"`
-	FocalLengthHint     string            `json:"focalLengthHint,omitempty"`
-	TransitionIn        string            `json:"transitionIn,omitempty"`
-	TransitionOut       string            `json:"transitionOut,omitempty"`
-	Continuity          ShotContinuity    `json:"continuity"`
-	PromptConstraints   PromptConstraints `json:"promptConstraints"`
-	VisualPlan          VisualPlan        `json:"visualPlan,omitempty"`
-	RenderStrategy      RenderStrategy    `json:"renderStrategy,omitempty"`
-	ArtifactRefs        ShotArtifactRefs  `json:"artifactRefs,omitempty"`
-	QAStatus            string            `json:"qaStatus,omitempty"`
-	AcceptedCandidateID string            `json:"acceptedCandidateId,omitempty"`
-	Candidates          []ShotCandidate   `json:"candidates,omitempty"`
-	RepairPlans         []RepairPlan      `json:"repairPlans,omitempty"`
-	ReviewStatus        string            `json:"reviewStatus"`
-	Locked              bool              `json:"locked"`
-	Stale               bool              `json:"stale"`
-	Version             int               `json:"version"`
-	LastRejectReason    string            `json:"lastRejectReason,omitempty"`
-	CreatedAt           time.Time         `json:"createdAt"`
-	UpdatedAt           time.Time         `json:"updatedAt"`
+	SchemaVersion       int                    `json:"schemaVersion,omitempty"`
+	ID                  string                 `json:"id"`
+	ProjectID           string                 `json:"projectId"`
+	SequenceIndex       int                    `json:"sequenceIndex"`
+	Title               string                 `json:"title"`
+	VideoType           string                 `json:"videoType,omitempty"`
+	DurationSec         int                    `json:"durationSec"`
+	StartSec            float64                `json:"startSec,omitempty"`
+	EndSec              float64                `json:"endSec,omitempty"`
+	StartMs             int64                  `json:"startMs,omitempty"`
+	EndMs               int64                  `json:"endMs,omitempty"`
+	DurationMs          int64                  `json:"durationMs,omitempty"`
+	TimelineRevision    string                 `json:"timelineRevision,omitempty"`
+	TalkingHeadLayers   *TalkingHeadShotLayers `json:"talkingHeadLayers,omitempty"`
+	ScriptSegmentID     string                 `json:"scriptSegmentId,omitempty"`
+	SceneID             string                 `json:"sceneId,omitempty"`
+	Scene               string                 `json:"scene,omitempty"`
+	SceneSummary        string                 `json:"sceneSummary,omitempty"`
+	Subject             string                 `json:"subject,omitempty"`
+	SingleScene         bool                   `json:"singleScene"`
+	VisualChangeLevel   string                 `json:"visualChangeLevel"`
+	VisualChangeReason  string                 `json:"visualChangeReason,omitempty"`
+	Narration           string                 `json:"narration,omitempty"`
+	ScreenText          []string               `json:"screenText,omitempty"`
+	MainAction          string                 `json:"mainAction,omitempty"`
+	Action              string                 `json:"action,omitempty"`
+	Camera              string                 `json:"camera,omitempty"`
+	ShotSize            string                 `json:"shotSize,omitempty"`
+	Framing             string                 `json:"framing,omitempty"`
+	FocalLengthHint     string                 `json:"focalLengthHint,omitempty"`
+	TransitionIn        string                 `json:"transitionIn,omitempty"`
+	TransitionOut       string                 `json:"transitionOut,omitempty"`
+	Continuity          ShotContinuity         `json:"continuity"`
+	PromptConstraints   PromptConstraints      `json:"promptConstraints"`
+	VisualPlan          VisualPlan             `json:"visualPlan,omitempty"`
+	RenderStrategy      RenderStrategy         `json:"renderStrategy,omitempty"`
+	ArtifactRefs        ShotArtifactRefs       `json:"artifactRefs,omitempty"`
+	QAStatus            string                 `json:"qaStatus,omitempty"`
+	AcceptedCandidateID string                 `json:"acceptedCandidateId,omitempty"`
+	Candidates          []ShotCandidate        `json:"candidates,omitempty"`
+	RepairPlans         []RepairPlan           `json:"repairPlans,omitempty"`
+	ReviewStatus        string                 `json:"reviewStatus"`
+	Locked              bool                   `json:"locked"`
+	Stale               bool                   `json:"stale"`
+	Version             int                    `json:"version"`
+	LastRejectReason    string                 `json:"lastRejectReason,omitempty"`
+	CreatedAt           time.Time              `json:"createdAt"`
+	UpdatedAt           time.Time              `json:"updatedAt"`
 }
 
 type ShotContinuity struct {
@@ -279,17 +299,28 @@ type ShotArtifactRefs struct {
 }
 
 type ShotCandidate struct {
-	CandidateID  string           `json:"candidateId"`
-	ShotID       string           `json:"shotId"`
-	AttemptIndex int              `json:"attemptIndex"`
-	Status       string           `json:"status"`
-	DurationSec  float64          `json:"durationSec"`
-	SourceType   string           `json:"sourceType,omitempty"`
-	IsFallback   bool             `json:"isFallback,omitempty"`
-	ArtifactRefs ShotArtifactRefs `json:"artifactRefs,omitempty"`
-	QAReport     *ShotQAReport    `json:"qaReport,omitempty"`
-	RepairPlan   *RepairPlan      `json:"repairPlan,omitempty"`
-	CreatedAt    time.Time        `json:"createdAt,omitempty"`
+	SchemaVersion          int               `json:"schemaVersion,omitempty"`
+	CandidateID            string            `json:"candidateId"`
+	ShotID                 string            `json:"shotId"`
+	AttemptIndex           int               `json:"attemptIndex"`
+	Status                 string            `json:"status"`
+	DurationSec            float64           `json:"durationSec"`
+	SourceType             string            `json:"sourceType,omitempty"`
+	IsFallback             bool              `json:"isFallback,omitempty"`
+	ExecutionMode          ExecutionMode     `json:"executionMode,omitempty"`
+	ProductionEligible     bool              `json:"productionEligible"`
+	FallbackReason         string            `json:"fallbackReason,omitempty"`
+	TimelineRevision       string            `json:"timelineRevision,omitempty"`
+	LayerRevisions         map[string]string `json:"layerRevisions,omitempty"`
+	GenerationPlanRevision string            `json:"generationPlanRevision,omitempty"`
+	InputFingerprint       string            `json:"inputFingerprint,omitempty"`
+	OutputFingerprint      string            `json:"outputFingerprint,omitempty"`
+	Stale                  bool              `json:"stale,omitempty"`
+	StaleReason            string            `json:"staleReason,omitempty"`
+	ArtifactRefs           ShotArtifactRefs  `json:"artifactRefs,omitempty"`
+	QAReport               *ShotQAReport     `json:"qaReport,omitempty"`
+	RepairPlan             *RepairPlan       `json:"repairPlan,omitempty"`
+	CreatedAt              time.Time         `json:"createdAt,omitempty"`
 }
 
 type ShotQAReport struct {
@@ -323,10 +354,11 @@ type RepairPlan struct {
 }
 
 type ShotRepairPolicy struct {
-	MaxRepairAttemptsPerShot           int  `json:"maxRepairAttemptsPerShot"`
-	MaxAIGCRegenerationAttemptsPerShot int  `json:"maxAigcRegenerationAttemptsPerShot"`
-	PreferLocalRepairBeforeAIGCRegen   bool `json:"preferLocalRepairBeforeAigcRegen"`
-	PreservePassedDimensions           bool `json:"preservePassedDimensions"`
+	MaxRepairAttemptsPerShot           int    `json:"maxRepairAttemptsPerShot"`
+	MaxAIGCRegenerationAttemptsPerShot int    `json:"maxAigcRegenerationAttemptsPerShot"`
+	PreferLocalRepairBeforeAIGCRegen   bool   `json:"preferLocalRepairBeforeAigcRegen"`
+	PreservePassedDimensions           bool   `json:"preservePassedDimensions"`
+	ProductionMode                     string `json:"productionMode"`
 }
 
 func DefaultShotRepairPolicy() ShotRepairPolicy {
@@ -335,6 +367,7 @@ func DefaultShotRepairPolicy() ShotRepairPolicy {
 		MaxAIGCRegenerationAttemptsPerShot: 2,
 		PreferLocalRepairBeforeAIGCRegen:   true,
 		PreservePassedDimensions:           true,
+		ProductionMode:                     ProductionModeStrict,
 	}
 }
 
@@ -536,10 +569,12 @@ type ScriptSpan struct {
 }
 
 type TimeWindowPlan struct {
-	ProfileID   string           `json:"profileId"`
-	Windows     []TimeWindowUnit `json:"windows"`
-	Warnings    []string         `json:"warnings,omitempty"`
-	SplitReport ShotSplitReport  `json:"splitReport,omitempty"`
+	SchemaVersion    int              `json:"schemaVersion,omitempty"`
+	ProfileID        string           `json:"profileId"`
+	TimelineRevision string           `json:"timelineRevision,omitempty"`
+	Windows          []TimeWindowUnit `json:"windows"`
+	Warnings         []string         `json:"warnings,omitempty"`
+	SplitReport      ShotSplitReport  `json:"splitReport,omitempty"`
 }
 
 type TimeWindowUnit struct {
@@ -550,6 +585,10 @@ type TimeWindowUnit struct {
 	StartSec           float64 `json:"startSec"`
 	EndSec             float64 `json:"endSec"`
 	DurationSec        float64 `json:"durationSec"`
+	StartMs            int64   `json:"startMs,omitempty"`
+	EndMs              int64   `json:"endMs,omitempty"`
+	DurationMs         int64   `json:"durationMs,omitempty"`
+	TimelineRevision   string  `json:"timelineRevision,omitempty"`
 	ScriptSpanID       string  `json:"scriptSpanId,omitempty"`
 	ScriptText         string  `json:"scriptText,omitempty"`
 	Subject            string  `json:"subject,omitempty"`
@@ -576,12 +615,14 @@ type ShotSplitReport struct {
 }
 
 type AcceptedShotRef struct {
-	ShotID      string  `json:"shotId"`
-	CandidateID string  `json:"candidateId"`
-	DurationSec float64 `json:"durationSec"`
-	SourceType  string  `json:"sourceType,omitempty"`
-	IsFallback  bool    `json:"isFallback,omitempty"`
-	ArtifactID  string  `json:"artifactId,omitempty"`
+	ShotID             string        `json:"shotId"`
+	CandidateID        string        `json:"candidateId"`
+	DurationSec        float64       `json:"durationSec"`
+	SourceType         string        `json:"sourceType,omitempty"`
+	IsFallback         bool          `json:"isFallback,omitempty"`
+	ExecutionMode      ExecutionMode `json:"executionMode,omitempty"`
+	ProductionEligible bool          `json:"productionEligible"`
+	ArtifactID         string        `json:"artifactId,omitempty"`
 }
 
 type SubtitleCue struct {

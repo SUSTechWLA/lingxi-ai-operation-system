@@ -6,15 +6,20 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	videomodel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 )
 
 // PreflightResponse is the capability check result for starting a video pipeline.
 type PreflightResponse struct {
-	Pipeline       string             `json:"pipeline"`
-	Status         string             `json:"status"` // "passed" | "blocked"
-	CanStart       bool               `json:"canStart"`
-	CapabilityMenu CapabilityMenu     `json:"capabilityMenu"`
-	Blockers       []PreflightBlocker `json:"blockers,omitempty"`
+	Pipeline               string             `json:"pipeline"`
+	CanonicalProfileID     string             `json:"canonicalProfileId"`
+	RuntimePipelineID      string             `json:"runtimePipelineId"`
+	RuntimePipelineVersion string             `json:"runtimePipelineVersion"`
+	RuntimePipelineSource  string             `json:"runtimePipelineSource"`
+	Status                 string             `json:"status"` // "passed" | "blocked"
+	CanStart               bool               `json:"canStart"`
+	CapabilityMenu         CapabilityMenu     `json:"capabilityMenu"`
+	Blockers               []PreflightBlocker `json:"blockers,omitempty"`
 }
 
 type CapabilityMenu struct {
@@ -50,9 +55,10 @@ type PreflightBlocker struct {
 }
 
 type preflightPipelineProfile struct {
-	id               string
-	requiredCommands []string
-	optionalCommands []string
+	id                 string
+	canonicalProfileID string
+	requiredCommands   []string
+	optionalCommands   []string
 }
 
 // PreflightService provides capability checks for video pipeline startup.
@@ -69,9 +75,13 @@ func HandleVideoPreflight(svc PreflightService) gin.HandlerFunc {
 
 		profile := preflightProfileForPipeline(c.Query("pipeline"))
 		resp := PreflightResponse{
-			Pipeline: profile.id,
-			Status:   "passed",
-			CanStart: true,
+			Pipeline:               profile.id,
+			CanonicalProfileID:     profile.canonicalProfileID,
+			RuntimePipelineID:      videomodel.VideoRuntimePipelineID,
+			RuntimePipelineVersion: videomodel.VideoRuntimePipelineVersion,
+			RuntimePipelineSource:  videomodel.VideoRuntimePipelineSource,
+			Status:                 "passed",
+			CanStart:               true,
 		}
 
 		var blockers []PreflightBlocker
@@ -130,10 +140,11 @@ func HandleVideoPreflight(svc PreflightService) gin.HandlerFunc {
 }
 
 func preflightProfileForPipeline(raw string) preflightPipelineProfile {
-	switch strings.TrimSpace(raw) {
-	case "wf-aigc-shot-video", "aigc-shot-video", "cinematic-aigc-shot-video":
+	profileID, ok := videomodel.NormalizeVideoProfileID(strings.TrimSpace(raw))
+	if ok && profileID == videomodel.VideoProfileCinematicStory {
 		return preflightPipelineProfile{
-			id: "wf-aigc-shot-video",
+			id:                 "wf-aigc-shot-video",
+			canonicalProfileID: videomodel.VideoProfileCinematicStory,
 			requiredCommands: []string{
 				"LOCAL_FILE_IMPORT",
 				"FFMPEG_PROBE",
@@ -141,17 +152,17 @@ func preflightProfileForPipeline(raw string) preflightPipelineProfile {
 			},
 			optionalCommands: []string{"LOCAL_MCP_TOOL_CALL"},
 		}
-	default:
-		return preflightPipelineProfile{
-			id: "wf-guided-image-text-video",
-			requiredCommands: []string{
-				"HYPERFRAMES_PROJECT_GENERATE",
-				"HYPERFRAMES_SNAPSHOT",
-				"HYPERFRAMES_RENDER",
-				"VIDEO_FRAME_QA",
-				"FFMPEG_PROBE",
-				"ARTIFACT_PACKAGE",
-			},
-		}
+	}
+	return preflightPipelineProfile{
+		id:                 "wf-guided-image-text-video",
+		canonicalProfileID: videomodel.VideoProfileTalkingHead,
+		requiredCommands: []string{
+			"HYPERFRAMES_PROJECT_GENERATE",
+			"HYPERFRAMES_SNAPSHOT",
+			"HYPERFRAMES_RENDER",
+			"VIDEO_FRAME_QA",
+			"FFMPEG_PROBE",
+			"ARTIFACT_PACKAGE",
+		},
 	}
 }

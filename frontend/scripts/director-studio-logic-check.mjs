@@ -8,11 +8,20 @@ import { build } from 'esbuild'
 const tempDir = await mkdtemp(join(tmpdir(), 'director-studio-logic-'))
 const outfile = join(tempDir, 'directorStudioLogic.mjs')
 const apiResponseOutfile = join(tempDir, 'apiResponse.mjs')
+const layerSelectorsOutfile = join(tempDir, 'talkingHeadLayerSelectors.mjs')
 
 try {
   await build({
     entryPoints: [new URL('../src/pages/directorStudioLogic.ts', import.meta.url).pathname],
     outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/features/director-studio/talking-head/selectors.ts', import.meta.url).pathname],
+    outfile: layerSelectorsOutfile,
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -71,6 +80,7 @@ try {
     buildImageRegenerationInstruction,
     videoCreationProfileForId,
     videoCreationProfiles,
+    normalizeVideoCreationProfileId,
     mergeExternalGenerationTaskReferences,
     timeWindowPlanSummary,
     traceNodeHasError,
@@ -80,6 +90,7 @@ try {
     visibleEnvironmentIssues,
   } = await import(pathToFileURL(outfile))
   const { unwrapApiData } = await import(pathToFileURL(apiResponseOutfile))
+  const { buildTalkingHeadLayerDisplays } = await import(pathToFileURL(layerSelectorsOutfile))
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
   assert.match(directorPageSource, /放大播放/)
   assert.doesNotMatch(directorPageSource, /图片预览已就绪|照片预览已就绪|视频预览已就绪|参考图已登记|产物已登记/)
@@ -204,7 +215,7 @@ try {
     userInstruction: '右侧留给字幕，画面更轻松',
   })
   assert.match(voiceImageInstruction, /服务口播/)
-  assert.match(voiceImageInstruction, /HyperGen/)
+  assert.match(voiceImageInstruction, /HyperFrames/)
   assert.match(voiceImageInstruction, /右侧留给字幕/)
   assert.deepEqual(projectPrimaryAction({
     preflightCanStart: true,
@@ -1813,14 +1824,18 @@ try {
 
   const profiles = videoCreationProfiles()
   assert.equal(profiles.length, 2, 'director studio should expose two stable video profiles')
+  assert.deepEqual(profiles.map((profile) => profile.id), ['talking_head', 'cinematic_story'])
+  assert.equal(normalizeVideoCreationProfileId('voice_visual'), 'talking_head')
+  assert.equal(normalizeVideoCreationProfileId('wf-guided-image-text-video'), 'talking_head')
+  assert.equal(normalizeVideoCreationProfileId('aigc_shot'), 'cinematic_story')
   assert.equal(
-    videoCreationProfileForId('aigc_shot').preflightPipeline,
-    'wf-aigc-shot-video',
+    videoCreationProfileForId('cinematic_story').preflightPipeline,
+    'cinematic_story',
     'cinematic profile should use the AIGC shot preflight',
   )
   assert.equal(
-    videoCreationProfileForId('voice_visual').preflightPipeline,
-    'wf-guided-image-text-video',
+    videoCreationProfileForId('talking_head').preflightPipeline,
+    'talking_head',
     'voice/knowledge profile should use the guided render preflight',
   )
   assert.ok(
@@ -1831,6 +1846,15 @@ try {
     videoCreationProfileForId('aigc_shot').requiredLocalCommands.includes('LOCAL_FILE_IMPORT'),
     'cinematic profile should internally track local import as a requirement',
   )
+  const layerDisplays = buildTalkingHeadLayerDisplays([
+    { id: 'audio-r2', kind: 'AUDIO_MASTER_TIMELINE', status: 'valid', metadata: { revision: 'audio-r2', executionMode: 'real', productionEligible: true } },
+    { id: 'text-r3', kind: 'TEXT_LAYER', status: 'stale', metadata: { staleReason: 'subtitle theme changed', revision: 'text-r3' } },
+    { id: 'broll-fixture', kind: 'BROLL_MANIFEST', status: 'pending', metadata: { executionMode: 'fixture', productionEligible: false } },
+  ])
+  assert.equal(layerDisplays.find((layer) => layer.key === 'audio').status, 'current')
+  assert.equal(layerDisplays.find((layer) => layer.key === 'text').staleReason, 'subtitle theme changed')
+  assert.equal(layerDisplays.find((layer) => layer.key === 'broll').executionMode, 'fixture')
+  assert.equal(layerDisplays.find((layer) => layer.key === 'composition').status, 'pending')
 
   const healthItems = buildEnvironmentChecklist({
     serviceStatus: 'unknown',
