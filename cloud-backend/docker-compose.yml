@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: ${POSTGRES_DB:-tangying_db}
     ports:
-      - "5432:5432"
+      - "5530:5432"
 
   redis:
     image: redis:7-alpine

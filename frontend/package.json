@@ -14,7 +14,8 @@
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "vite build && electron-builder",
     "electron:prod": "vite build && electron .",
-    "test:director": "node scripts/director-studio-logic-check.mjs"
+    "test:director": "node scripts/director-studio-logic-check.mjs",
+    "test:biaoshu-chapters": "node scripts/biaoshuChapterWorkspace.test.ts"
   },
   "dependencies": {
     "axios": "^1.7.2",

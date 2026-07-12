@@ -115,6 +115,8 @@ const BIAOSHU_STAGES: BiaoshuStageDefinition[] = [
   { key: 'outline', label: '技术标大纲', tool: 'outline_generator', kind: 'BID_OUTLINE', owner: '大纲规划' },
   { key: 'chapters', label: '章节初稿', tool: 'chapter_writer', kind: 'BID_CHAPTERS', owner: '章节编写' },
   { key: 'wordcheck', label: '字数检查报告', tool: 'chapter_word_checker', kind: 'WORD_COUNT_REPORT', owner: '质量检查' },
+  { key: 'expansion-task-book', label: '章节扩写任务书', tool: 'expansion_task_book', kind: 'BID_CHAPTER_EXPANSION_TASK_BOOK', owner: '扩写规划' },
+  { key: 'expansion-qa', label: '扩写质量检查', tool: 'expansion_qa', kind: 'BID_EXPANSION_QA_REPORT', owner: '质量检查' },
   { key: 'merge', label: '整合成稿', tool: 'merge_chapters', kind: 'MERGED_DRAFT', owner: '成稿整合' },
   { key: 'word', label: '技术标 Word 文档', tool: 'convert_to_word', kind: 'TECHNICAL_BID_DOCX', owner: 'Word 导出' },
 ]
@@ -163,11 +165,15 @@ export function createManualChapterArtifact(
   artifact: Record<string, unknown> | undefined,
   filePath: string,
 ): BiaoshuArtifactRecord {
-  const metadata = objectRecord(artifact?.metadata)
+  const metadata = { ...objectRecord(artifact?.metadata) }
   const chapterNumber = Number(artifact?.chapterNumber || metadata?.chapterNumber || 0)
   const chapterTitle = String(artifact?.chapterTitle || artifact?.name || '')
+  if (chapterNumber > 0) metadata.chapterNumber = chapterNumber
+  if (chapterTitle) metadata.chapterTitle = chapterTitle
   return {
-    id: String(artifact?.id || artifact?.unitId || `chapter-${chapterNumber}`),
+    id: chapterNumber > 0
+      ? `chapter-${chapterNumber}`
+      : String(artifact?.id || artifact?.unitId || 'chapter-unclassified'),
     name: chapterTitle || `第${toChineseNumber(chapterNumber)}章`,
     kind: 'BID_CHAPTERS',
     version: '-',
@@ -177,6 +183,39 @@ export function createManualChapterArtifact(
     storageRef: String(artifact?.storageRef || filePath),
     summary: `第${toChineseNumber(chapterNumber)}章初稿，${metadata?.targetWords ? `目标${metadata.targetWords}字` : ''}`,
     sourceTool: 'chapter_generation',
+    metadata,
+  }
+}
+
+export function createExpandedChapterArtifact(
+  artifact: Record<string, unknown> | undefined,
+  input: {
+    chapterNumber: number
+    chapterTitle: string
+    expandedPath: string
+    wordCountBefore: number
+    wordCountAfter: number
+    targetWordCount: number
+  },
+): BiaoshuArtifactRecord {
+  const metadata = {
+    ...objectRecord(artifact?.metadata),
+    chapterNumber: input.chapterNumber,
+    chapterTitle: input.chapterTitle,
+    wordCount: input.wordCountAfter,
+    targetWords: input.targetWordCount,
+  }
+  return {
+    id: `chapter-${input.chapterNumber}-expanded`,
+    name: String(artifact?.name || `${input.chapterTitle}（扩写稿）`),
+    kind: 'BID_CHAPTERS',
+    version: '-',
+    status: 'valid',
+    owner: 'AI扩写',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    storageRef: String(artifact?.storageRef || input.expandedPath),
+    summary: `${input.wordCountBefore}字→${input.wordCountAfter}字（目标${input.targetWordCount}字）`,
+    sourceTool: 'chapter_expansion',
     metadata,
   }
 }
@@ -243,6 +282,8 @@ export function displayNameForBiaoshuArtifact(kind: string): string {
     BID_OUTLINE: '标书大纲',
     BID_CHAPTER_TASK_BOOK: '写作任务书',
     BID_CHAPTERS: '章节稿件',
+    BID_CHAPTER_EXPANSION_TASK_BOOK: '扩写任务书',
+    BID_EXPANSION_QA_REPORT: '扩写质检',
     WORD_COUNT_REPORT: '字数检查',
     MERGED_DRAFT: '整合成稿',
     TECHNICAL_BID_DOCX: 'Word 文档',
@@ -316,7 +357,9 @@ function previousBiaoshuStageKind(kind: string): string {
   if (kind === 'BID_OUTLINE') return 'BID_SCORING_BREAKDOWN'
   if (kind === 'BID_CHAPTERS') return 'BID_OUTLINE'
   if (kind === 'WORD_COUNT_REPORT') return 'BID_CHAPTERS'
-  if (kind === 'MERGED_DRAFT') return 'WORD_COUNT_REPORT'
+  if (kind === 'BID_CHAPTER_EXPANSION_TASK_BOOK') return 'WORD_COUNT_REPORT'
+  if (kind === 'BID_EXPANSION_QA_REPORT') return 'BID_CHAPTER_EXPANSION_TASK_BOOK'
+  if (kind === 'MERGED_DRAFT') return 'BID_EXPANSION_QA_REPORT'
   if (kind === 'TECHNICAL_BID_DOCX') return 'MERGED_DRAFT'
   return 'BID_RAW_TEXT'
 }

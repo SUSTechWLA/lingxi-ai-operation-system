@@ -3,6 +3,7 @@ const path = require('path')
 const { exec, spawn } = require('child_process')
 const fs = require('fs')
 const http = require('http')
+const { resolveLocalAgentDataDir } = require('./local-agent-data-dir.cjs')
 
 const isDev = !app.isPackaged
 const LOCAL_AGENT_URL = process.env.TANGYING_LOCAL_AGENT_URL || 'http://127.0.0.1:18080'
@@ -36,6 +37,15 @@ function biaoshuToolsDir() {
   return path.join(__dirname, '..', '..', 'biaoshu-tools')
 }
 
+function localAgentDataDir() {
+  return resolveLocalAgentDataDir({
+    appIsPackaged: app.isPackaged,
+    workspaceRoot: path.resolve(__dirname, '..', '..'),
+    userDataDir: app.getPath('userData'),
+    environment: process.env,
+  })
+}
+
 function startLocalAgent() {
   if (process.env.TANGYING_SKIP_LOCAL_AGENT === 'true') return
   const binary = localAgentBinaryPath()
@@ -49,7 +59,7 @@ function startLocalAgent() {
     stdio: ['ignore', 'ignore', 'pipe'],
     env: {
       ...process.env,
-      TANGYING_LOCAL_DATA_DIR: path.join(app.getPath('userData'), 'local-agent'),
+      TANGYING_LOCAL_DATA_DIR: localAgentDataDir(),
     },
   })
   localAgentProcess.stderr.on('data', (data) => {

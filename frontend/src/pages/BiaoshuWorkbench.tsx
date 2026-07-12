@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FiArchive, FiChevronDown, FiCopy, FiEye, FiFileText, FiPlay, FiRefreshCw, FiCheck, FiX, FiAlertTriangle, FiClock, FiList, FiTool, FiFolder, FiSearch, FiSend, FiZap } from 'react-icons/fi'
 import ReactMarkdown from 'react-markdown'
 import axios from 'axios'
-import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, generateChapterTaskBook, generateChapters, type BiaoshuReviseRequest, type ReferenceArtifact } from '../services/api'
+import { getAgentRun, getAgentRunReviews, getAgentRunTrace, readBiaoshuArtifact, reviseBiaoshuArtifact, startAgentRun, generateBidAnalysisReport, generateProjectContextQuestions, generateProjectContextReport, generateOutline, generateScoringBreakdown, generateChapterTaskBook, generateChapters, checkWordCount, generateExpansionTaskBook, expandChapters, runExpansionQA, type BiaoshuReviseRequest, type ReferenceArtifact, type CheckWordCountResponse, type ExpandChaptersResponse, type ExpansionQAResponse } from '../services/api'
 import { 
   fetchBiaoshuConversation, 
   saveBiaoshuProject, 
@@ -10,9 +10,8 @@ import {
   writeLocalBiaoshuArtifact,
   readLocalBiaoshuArtifact,
   createBiaoshuManagedProject,
-  fetchBiaoshuManagedProjects,
   deleteBiaoshuManagedProject,
-  fetchBiaoshuHistory,
+  fetchBiaoshuBootstrap,
   registerBiaoshuManagedArtifact,
   type BiaoshuConversationMessage,
   type BiaoshuProjectManifest,
@@ -29,6 +28,7 @@ import {
   createManualOutlineArtifact,
   createManualChapterTaskBookArtifact,
   createManualChapterArtifact,
+  createExpandedChapterArtifact,
   deriveBiaoshuAnalysisReportPath,
   deriveBiaoshuProjectContextPath,
   deriveBiaoshuChapterTaskBookPath,
@@ -42,6 +42,7 @@ import {
   type BiaoshuArtifactStatus,
 } from './biaoshuArtifactLogic'
 import { BiaoshuProjectContextDialog } from './BiaoshuProjectContextDialog'
+import { BiaoshuChapterWorkspace } from './BiaoshuChapterWorkspace'
 import {
   createQuestionnaire,
   validateQuestionnaire,
@@ -68,8 +69,9 @@ const BID_WORKFLOW_STAGES = [
 const SUPPORTED_BID_EXTENSIONS = ['.txt', '.docx', '.pdf', '.xlsx', '.xls']
 const DEFAULT_PROJECT_NAME = '广惠高速改扩建'
 const DEFAULT_BID_FILE_PATH = 'e:\\lingxi\\tangying-ai-operation-system\\biaoshu-tools\\test_bid.txt'
+const BIAOSHU_LAST_ACTIVE_PROJECT_KEY = 'biaoshu:last-active-project-id'
 
-type BiaoshuView = 'workbench' | 'artifacts' | 'history'
+type BiaoshuView = 'workbench' | 'artifacts' | 'chapters' | 'history'
 
 const getDirName = (path?: string) => (path ? path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() : undefined)
 
@@ -165,13 +167,42 @@ export default function BiaoshuWorkbench() {
       upsertManualArtifact(createManualChapterTaskBookArtifact(artifact, filePath, sourceFile))
       addLog(`章节写作任务书已生成: ${filePath}`)
     } else if (kind === 'BID_CHAPTERS') {
-      upsertManualArtifact(createManualChapterArtifact(artifact, filePath))
+      const chapterArtifact = createManualChapterArtifact(artifact, filePath)
+      upsertManualArtifact(chapterArtifact)
       addLog(`章节初稿已生成: ${filePath}`)
+      if (activeProject?.projectId && filePath) {
+        registerBiaoshuManagedArtifact(activeProject.projectId, {
+          id: chapterArtifact.id,
+          kind: kind,
+          name: chapterArtifact.name,
+          storageRef: filePath,
+          mimeType: 'text/markdown',
+          status: 'valid',
+          metadata: {
+            ...(typeof artifact?.metadata === 'object' && artifact.metadata ? artifact.metadata : {}),
+          },
+        }).then((response) => {
+          setActiveProject(response.project)
+          setManagedProjects((prev) => {
+            const next = prev.filter((project) => project.projectId !== response.project.projectId)
+            return [response.project, ...next]
+          })
+          setProjectHistory((prev) => {
+            const managedHistoryItem = biaoshuManagedProjectsToHistory([response.project])[0]
+            return [
+              managedHistoryItem,
+              ...prev.filter((item) => item.projectId !== response.project.projectId),
+            ]
+          })
+        }).catch((err) => {
+          addLog(`产物注册失败: ${err instanceof Error ? err.message : String(err)}`)
+        })
+      }
     } else {
       upsertManualArtifact(createManualReportArtifact(artifact, filePath, sourceFile))
       addLog(`解析报告已生成: ${filePath}`)
     }
-    if (activeProject?.projectId && filePath) {
+    if (kind !== 'BID_CHAPTERS' && activeProject?.projectId && filePath) {
       registerBiaoshuManagedArtifact(activeProject.projectId, {
         kind: kind || 'BID_ANALYSIS',
         name: String(artifact?.name || filePath.split(/[\\/]/).pop() || kind || '标书产物'),
@@ -243,34 +274,38 @@ export default function BiaoshuWorkbench() {
     })))
   }, [bidFilePath, projectName, reviews, trace])
 
-  // 页面加载时从后端统一历史接口恢复所有项目
+  // 启动时由本地 bootstrap 同时恢复 manifest、历史索引和推荐恢复项目。
   useEffect(() => {
-    fetchBiaoshuHistory().then((response) => {
-      if (response.warnings?.length) {
-        response.warnings.forEach((w) => addLog(`[历史诊断] ${w}`))
-      }
-      addLog(`历史项目来源: 当前清单 ${response.sources.currentManaged}, 旧临时清单 ${response.sources.legacyTempManaged}, 旧运行记录 ${response.sources.legacyRuns}`)
+    fetchBiaoshuBootstrap().then((response) => {
+      response.diagnostics.warnings?.forEach((warning) => addLog(`[历史诊断] ${warning}`))
+      addLog(`本地项目恢复完成: ${response.diagnostics.managedProjectCount} 个受管项目，数据目录 ${response.dataDir}`)
 
-      const viewItems = response.projects.map(biaoshuHistoryProjectToViewItem)
+      const viewItems = response.history.map(biaoshuHistoryProjectToViewItem)
       setProjectHistory(viewItems)
+      setManagedProjects(response.projects)
 
-      const best = selectBestBiaoshuHistoryProject(response.projects)
-      if (!best) return
-      if (best.hasManagedManifest && best.projectId) {
-        fetchBiaoshuManagedProjects().then((mp) => {
-          const match = mp.projects.find((p) => p.projectId === best.projectId)
-          if (match) {
-            setActiveProject(match)
-            setManagedProjects(mp.projects)
-          }
-        }).catch(() => {})
+      const rememberedProjectID = window.localStorage.getItem(BIAOSHU_LAST_ACTIVE_PROJECT_KEY)
+      const project = response.projects.find((item) => item.projectId === rememberedProjectID)
+        || response.projects.find((item) => item.projectId === response.resumeProjectId)
+      if (project) {
+        setActiveProject(project)
+        setProjectName(project.projectName || DEFAULT_PROJECT_NAME)
+        setBidFilePath(project.sourceFiles[0]?.path || DEFAULT_BID_FILE_PATH)
+        window.localStorage.setItem(BIAOSHU_LAST_ACTIVE_PROJECT_KEY, project.projectId)
+        setActiveView(project.artifacts.some((artifact) => artifact.kind === 'BID_CHAPTERS') ? 'chapters' : 'artifacts')
+        addLog(`恢复本地标书项目: ${project.projectName}`)
+        return
       }
-      setProjectName(best.projectName || DEFAULT_PROJECT_NAME)
-      setBidFilePath(best.bidFilePath || DEFAULT_BID_FILE_PATH)
-      setActiveView('artifacts')
-      addLog(`恢复标书项目: ${best.projectName}`)
+
+      const best = selectBestBiaoshuHistoryProject(response.history)
+      if (best) {
+        setProjectName(best.projectName || DEFAULT_PROJECT_NAME)
+        setBidFilePath(best.bidFilePath || DEFAULT_BID_FILE_PATH)
+        setActiveView('artifacts')
+      }
     }).catch((err: unknown) => {
-      addLog(`标书历史接口读取失败: ${err instanceof Error ? err.message : String(err)}`)
+      setError(`本地项目恢复失败：${err instanceof Error ? err.message : String(err)}`)
+      addLog(`标书项目恢复失败: ${err instanceof Error ? err.message : String(err)}`)
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -475,6 +510,7 @@ export default function BiaoshuWorkbench() {
         setBidFilePath(managedProject.sourceFiles[0]?.path || item.bidFilePath)
         setManualArtifacts([])
         setActiveProject(managedProject)
+        window.localStorage.setItem(BIAOSHU_LAST_ACTIVE_PROJECT_KEY, managedProject.projectId)
         setRun(null)
         setTrace(null)
         setReviews([])
@@ -539,6 +575,12 @@ export default function BiaoshuWorkbench() {
             <FiArchive /> 产物
           </button>
           <button
+            onClick={() => setActiveView('chapters')}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${activeView === 'chapters' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-500 hover:bg-amber-50 hover:text-amber-700'}`}
+          >
+            <FiList /> 章节撰写
+          </button>
+          <button
             onClick={() => setActiveView('history')}
             className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${activeView === 'history' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-500 hover:bg-amber-50 hover:text-amber-700'}`}
           >
@@ -546,14 +588,18 @@ export default function BiaoshuWorkbench() {
           </button>
         </div>
 
-        {activeView === 'artifacts' ? (
+        {activeView === 'artifacts' || activeView === 'chapters' ? (
           <BiaoshuArtifactsPage
+            section={activeView}
             artifacts={artifacts}
             run={run}
             bidFilePath={bidFilePath}
             projectName={projectName}
             onGoWorkbench={() => setActiveView('workbench')}
+            onOpenChapters={() => setActiveView('chapters')}
             onReportGenerated={handleReportGenerated}
+            onAddLog={addLog}
+            onUpsertArtifact={upsertManualArtifact}
           />
         ) : activeView === 'history' ? (
           <BiaoshuProjectHistoryPage
@@ -955,19 +1001,27 @@ function formatHistoryDate(value?: string) {
 }
 
 function BiaoshuArtifactsPage({
+  section,
   artifacts,
   run,
   bidFilePath,
   projectName,
   onGoWorkbench,
+  onOpenChapters,
   onReportGenerated,
+  onAddLog,
+  onUpsertArtifact,
 }: {
+  section: Extract<BiaoshuView, 'artifacts' | 'chapters'>
   artifacts: BiaoshuArtifactRecord[]
   run: AgentRun | null
   bidFilePath: string
   projectName: string
   onGoWorkbench: () => void
+  onOpenChapters: () => void
   onReportGenerated: (artifact: Record<string, unknown> | undefined, reportPath: string, sourceFile: string) => void
+  onAddLog?: (msg: string) => void
+  onUpsertArtifact?: (artifact: BiaoshuArtifactRecord) => void
 }) {
   const validCount = artifacts.filter((artifact) => artifact.status === 'valid').length
   const activeCount = artifacts.filter((artifact) => artifact.status === 'running' || artifact.status === 'review').length
@@ -1001,6 +1055,16 @@ function BiaoshuArtifactsPage({
   const [savedRecently, setSavedRecently] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
   const [scannedAnalysisPath, setScannedAnalysisPath] = useState('')
+
+  // ── Expansion states ──
+  const [checkingWordCount, setCheckingWordCount] = useState(false)
+  const [generatingExpansionTaskBook, setGeneratingExpansionTaskBook] = useState(false)
+  const [expandingChapters, setExpandingChapters] = useState(false)
+  const [runningQA, setRunningQA] = useState(false)
+  const [wordCountResult, setWordCountResult] = useState<CheckWordCountResponse | null>(null)
+  const [expansionResult, setExpansionResult] = useState<ExpandChaptersResponse | null>(null)
+  const [qaResult, setQaResult] = useState<ExpansionQAResponse | null>(null)
+  const [expansionError, setExpansionError] = useState<string | null>(null)
 
   const deriveReportPath = deriveBiaoshuAnalysisReportPath
   const deriveProjectContextPath = deriveBiaoshuProjectContextPath
@@ -1473,6 +1537,154 @@ function BiaoshuArtifactsPage({
     }
   }
 
+  // ── Expansion handlers ──
+
+  const handleCheckWordCount = async () => {
+    const taskBookArtifact = artifacts.find(a => a.kind === 'BID_CHAPTER_TASK_BOOK')
+    const outlineArtifact = artifacts.find(a => a.kind === 'BID_OUTLINE')
+    if (!taskBookArtifact?.storageRef || !outlineArtifact?.storageRef) return
+    setCheckingWordCount(true)
+    setExpansionError(null)
+    setWordCountResult(null)
+    try {
+      const chapterDir = deriveChapterOutputDir(outlineArtifact.storageRef)
+      const result = await checkWordCount({
+        taskBookPath: taskBookArtifact.storageRef,
+        chapterDir,
+        analysisReportPath: analysisArtifact?.storageRef,
+      })
+      setWordCountResult(result)
+      onAddLog?.(`字数检查完成：${result.shortCount} 章不达标，总缺 ${result.totalGap} 字`)
+    } catch (e: unknown) {
+      setExpansionError(e instanceof Error ? e.message : '字数检查失败')
+    } finally {
+      setCheckingWordCount(false)
+    }
+  }
+
+  const handleGenerateExpansionTaskBook = async () => {
+    if (!wordCountResult || wordCountResult.shortCount === 0) return
+    const outlineArtifact = artifacts.find(a => a.kind === 'BID_OUTLINE')
+    const taskBookArtifact = artifacts.find(a => a.kind === 'BID_CHAPTER_TASK_BOOK')
+    setGeneratingExpansionTaskBook(true)
+    setExpansionError(null)
+    try {
+      const outputDir = outlineArtifact?.storageRef
+        ? deriveChapterOutputDir(outlineArtifact.storageRef).replace(/[\\/]章节$/, '')
+        : ''
+      const result = await generateExpansionTaskBook({
+        outputDir,
+        taskBookPath: taskBookArtifact?.storageRef,
+        items: wordCountResult.items,
+      })
+      if (result.artifact) {
+        const expansionTaskBookRecord: BiaoshuArtifactRecord = {
+          id: 'expansion-task-book',
+          name: '章节扩写任务书',
+          kind: 'BID_CHAPTER_EXPANSION_TASK_BOOK',
+          version: '-',
+          status: 'valid',
+          owner: '扩写规划',
+          updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+          storageRef: result.taskBookPath,
+          summary: `${result.shortCount} 章需扩写，总缺 ${result.totalGap} 字`,
+          sourceTool: 'expansion_task_book',
+        }
+        onUpsertArtifact?.(expansionTaskBookRecord)
+        onAddLog?.(`扩写任务书已生成: ${result.taskBookPath}`)
+      }
+    } catch (e: unknown) {
+      setExpansionError(e instanceof Error ? e.message : '生成扩写任务书失败')
+    } finally {
+      setGeneratingExpansionTaskBook(false)
+    }
+  }
+
+  const handleExpandChapters = async () => {
+    if (!wordCountResult || wordCountResult.shortCount === 0) return
+    const shortItems = wordCountResult.items.filter(i => i.status === 'too_short')
+    if (shortItems.length === 0) return
+
+    const outlineArtifact = artifacts.find(a => a.kind === 'BID_OUTLINE')
+    const expansionTaskBook = artifacts.find(a => a.kind === 'BID_CHAPTER_EXPANSION_TASK_BOOK')
+    const taskBookArtifact = artifacts.find(a => a.kind === 'BID_CHAPTER_TASK_BOOK')
+
+    setExpandingChapters(true)
+    setExpansionError(null)
+    setExpansionResult(null)
+    setQaResult(null)
+    try {
+      const outputDir = outlineArtifact?.storageRef
+        ? deriveChapterOutputDir(outlineArtifact.storageRef).replace(/[\\/]章节$/, '')
+        : ''
+      const result = await expandChapters({
+        items: shortItems,
+        taskBookPath: expansionTaskBook?.storageRef || taskBookArtifact?.storageRef,
+        outlinePath: outlineArtifact?.storageRef,
+        scoringReportPath: scoringArtifact?.storageRef,
+        analysisReportPath: analysisArtifact?.storageRef,
+        contextReportPath: contextArtifact?.storageRef,
+        outputDir,
+      })
+      setExpansionResult(result)
+
+      // Register expanded chapter artifacts
+      for (const item of result.results) {
+        if (item.artifact && !item.error) {
+          const expandedRecord = createExpandedChapterArtifact(item.artifact, {
+            chapterNumber: item.chapterNumber,
+            chapterTitle: item.chapterTitle,
+            expandedPath: item.expandedPath,
+            wordCountBefore: item.wordCountBefore,
+            wordCountAfter: item.wordCountAfter,
+            targetWordCount: item.targetWordCount,
+          })
+          onUpsertArtifact?.(expandedRecord)
+        }
+      }
+      onAddLog?.(`扩写完成：${result.success} 章成功，${result.failed} 章失败`)
+    } catch (e: unknown) {
+      setExpansionError(e instanceof Error ? e.message : '扩写章节失败')
+    } finally {
+      setExpandingChapters(false)
+    }
+  }
+
+  const handleRunExpansionQA = async () => {
+    if (!expansionResult || expansionResult.results.length === 0) return
+    const outlineArtifact = artifacts.find(a => a.kind === 'BID_OUTLINE')
+    const outputDir = outlineArtifact?.storageRef
+      ? deriveChapterOutputDir(outlineArtifact.storageRef).replace(/[\\/]章节$/, '')
+      : ''
+
+    setRunningQA(true)
+    setExpansionError(null)
+    try {
+      const result = await runExpansionQA(outputDir, expansionResult.results.filter(r => !r.error))
+      setQaResult(result)
+
+      // Register QA report artifact
+      const qaRecord: BiaoshuArtifactRecord = {
+        id: 'expansion-qa-report',
+        name: '扩写质量检查报告',
+        kind: 'BID_EXPANSION_QA_REPORT',
+        version: '-',
+        status: 'valid',
+        owner: '质量检查',
+        updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+        storageRef: result.reportPath,
+        summary: `通过${result.passCount}章，警告${result.warnCount}章，未通过${result.failCount}章`,
+        sourceTool: 'expansion_qa',
+      }
+      onUpsertArtifact?.(qaRecord)
+      onAddLog?.(`扩写质检完成：通过${result.passCount}, 警告${result.warnCount}, 未通过${result.failCount}`)
+    } catch (e: unknown) {
+      setExpansionError(e instanceof Error ? e.message : '扩写质检失败')
+    } finally {
+      setRunningQA(false)
+    }
+  }
+
   const handleQuestionAnswerChange = (questionId: string, answer: ProjectContextQuestionWithAnswer['answer']) => {
     setContextQuestionnaire((prev) => {
       if (!prev) return prev
@@ -1532,10 +1744,12 @@ function BiaoshuArtifactsPage({
       <section className="card p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-bold text-primary-dark">标书产物库</p>
-            <h2 className="mt-2 text-3xl font-black text-ink">技术标产物索引</h2>
-            <p className="mt-2 text-sm leading-6 text-ink-muted">
-              汇总招标解析、大纲、章节、字数检查、整合成稿和 Word 文档，便于追踪每个阶段的状态与本地输出路径。
+              <p className="text-sm font-bold text-primary-dark">{section === 'chapters' ? '章节撰写' : '标书产物库'}</p>
+              <h2 className="mt-2 text-3xl font-black text-ink">{section === 'chapters' ? '章节初稿工作区' : '技术标产物索引'}</h2>
+              <p className="mt-2 text-sm leading-6 text-ink-muted">
+              {section === 'chapters'
+                ? '集中管理每一章的初稿、扩写稿、字数达标状态和版本，不与通用项目产物混排。'
+                : '汇总招标解析、大纲、任务书、质量检查、整合成稿和 Word 文档；章节初稿在独立工作区管理。'}
             </p>
           </div>
           <button
@@ -1704,7 +1918,165 @@ function BiaoshuArtifactsPage({
         </div>
       )}
 
-      <BiaoshuArtifactTable artifacts={artifacts} onView={handleView} onGenerateTaskBook={handleGenerateChapterTaskBook} generatingTaskBook={generatingTaskBook} onGenerateChapters={handleGenerateChapters} generatingChapters={generatingChapters} />
+      {/* ── Chapter Expansion Flow ── */}
+      {expansionError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-start gap-2">
+          <FiAlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>{expansionError}</span>
+        </div>
+      )}
+
+      {/* Word count check button — shown when BID_CHAPTER_TASK_BOOK is valid and chapters exist */}
+      {artifacts.some(a => a.kind === 'BID_CHAPTERS' && a.status === 'valid') &&
+        artifacts.some(a => a.kind === 'BID_CHAPTER_TASK_BOOK' && a.status === 'valid') &&
+        !wordCountResult && (
+        <div className="rounded-lg bg-violet-50 p-4 ring-1 ring-violet-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-violet-800">章节初稿已完成，可检查字数达标情况</p>
+              <p className="mt-1 text-xs text-violet-600">对比写作任务书中的目标字数，标记不达标章节</p>
+            </div>
+            <button
+              onClick={handleCheckWordCount}
+              disabled={checkingWordCount}
+              className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {checkingWordCount ? <><FiRefreshCw className="animate-spin" /> 检查中...</> : <><FiSearch /> 检查字数</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Word count result panel */}
+      {wordCountResult && (
+        <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+          <h4 className="text-sm font-bold text-ink mb-3">字数检查报告</h4>
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            <div className="rounded bg-stone-50 p-2 text-center">
+              <div className="text-xs text-ink-muted">总目标</div>
+              <div className="text-lg font-black text-ink">{wordCountResult.totalTarget.toLocaleString()}字</div>
+            </div>
+            <div className="rounded bg-red-50 p-2 text-center">
+              <div className="text-xs text-red-600">不达标</div>
+              <div className="text-lg font-black text-red-700">{wordCountResult.shortCount}章 / {wordCountResult.totalGap.toLocaleString()}字</div>
+            </div>
+            <div className="rounded bg-green-50 p-2 text-center">
+              <div className="text-xs text-green-600">达标</div>
+              <div className="text-lg font-black text-green-700">{wordCountResult.sufficientCount}章</div>
+            </div>
+          </div>
+          {/* Short chapter list */}
+          {wordCountResult.shortCount > 0 && (
+            <div className="max-h-48 overflow-y-auto space-y-1 mb-3">
+              {wordCountResult.items.filter(i => i.status === 'too_short').map(item => (
+                <div key={item.chapterNumber} className="flex items-center justify-between rounded bg-red-50 px-3 py-1.5 text-xs">
+                  <span className="font-semibold text-red-800">{item.chapterTitle}</span>
+                  <span className="text-red-600">{item.currentWords} / {item.targetWords} 字（缺{item.gapWords}）</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Generate expansion task book button */}
+          {wordCountResult.shortCount > 0 && !artifacts.some(a => a.kind === 'BID_CHAPTER_EXPANSION_TASK_BOOK') && (
+            <button
+              onClick={handleGenerateExpansionTaskBook}
+              disabled={generatingExpansionTaskBook}
+              className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {generatingExpansionTaskBook ? <><FiRefreshCw className="animate-spin" /> 生成中...</> : <><FiZap /> 生成扩写任务书</>}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Expand button — shown when expansion task book exists */}
+      {artifacts.some(a => a.kind === 'BID_CHAPTER_EXPANSION_TASK_BOOK' && a.status === 'valid') && !expansionResult && (
+        <div className="rounded-lg bg-amber-50 p-4 ring-1 ring-amber-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-amber-800">扩写任务书已生成，可开始扩写</p>
+              <p className="mt-1 text-xs text-amber-600">将调用 AI 对不达标章节进行字数扩充，预计耗时较长</p>
+            </div>
+            <button
+              onClick={handleExpandChapters}
+              disabled={expandingChapters}
+              className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {expandingChapters ? <><FiRefreshCw className="animate-spin" /> 扩写中...</> : <><FiZap /> 开始扩写</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Expansion result panel */}
+      {expansionResult && (
+        <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+          <h4 className="text-sm font-bold text-ink mb-3">扩写结果</h4>
+          <div className="mb-3 text-xs text-ink-muted">
+            成功 {expansionResult.success} 章，失败 {expansionResult.failed} 章
+          </div>
+          <div className="max-h-48 overflow-y-auto space-y-1">
+            {expansionResult.results.map(item => (
+              <div key={item.chapterNumber} className={`flex items-center justify-between rounded px-3 py-1.5 text-xs ${item.error ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                <span className="font-semibold">{item.chapterTitle}</span>
+                <span>{item.error ? `失败: ${item.error}` : `${item.wordCountBefore}→${item.wordCountAfter} 字`}</span>
+              </div>
+            ))}
+          </div>
+          {/* QA button */}
+          {!qaResult && expansionResult.results.some(r => !r.error) && (
+            <button
+              onClick={handleRunExpansionQA}
+              disabled={runningQA}
+              className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {runningQA ? <><FiRefreshCw className="animate-spin" /> 检查中...</> : <><FiCheck /> 运行质量检查</>}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* QA result panel */}
+      {qaResult && (
+        <div className="rounded-lg bg-white p-4 ring-1 ring-line">
+          <h4 className="text-sm font-bold text-ink mb-3">扩写质量检查报告</h4>
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            <div className="rounded bg-green-50 p-2 text-center">
+              <div className="text-xs text-green-600">通过</div>
+              <div className="text-lg font-black text-green-700">{qaResult.passCount}</div>
+            </div>
+            <div className="rounded bg-amber-50 p-2 text-center">
+              <div className="text-xs text-amber-600">警告</div>
+              <div className="text-lg font-black text-amber-700">{qaResult.warnCount}</div>
+            </div>
+            <div className="rounded bg-red-50 p-2 text-center">
+              <div className="text-xs text-red-600">未通过</div>
+              <div className="text-lg font-black text-red-700">{qaResult.failCount}</div>
+            </div>
+          </div>
+          <div className="max-h-48 overflow-y-auto space-y-1">
+            {qaResult.results.map(r => (
+              <div key={r.chapterNumber} className={`rounded px-3 py-1.5 text-xs ${r.status === 'fail' ? 'bg-red-50 text-red-700' : r.status === 'warn' ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold">{r.chapterTitle}</span>
+                  <span>{r.wordCount} / {r.targetWords} 字</span>
+                </div>
+                {r.issues.length > 0 && (
+                  <ul className="mt-1 list-disc list-inside text-[11px] opacity-80">
+                    {r.issues.map((issue, i) => <li key={i}>{issue}</li>)}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {section === 'chapters' ? (
+        <BiaoshuChapterWorkspace artifacts={artifacts} onView={handleView} />
+      ) : (
+        <BiaoshuArtifactTable artifacts={artifacts} onView={handleView} onOpenChapters={onOpenChapters} onGenerateTaskBook={handleGenerateChapterTaskBook} generatingTaskBook={generatingTaskBook} onGenerateChapters={handleGenerateChapters} generatingChapters={generatingChapters} />
+      )}
 
       {viewingArtifact && (
         <BiaoshuArtifactViewer
@@ -1753,10 +2125,21 @@ function BiaoshuMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
-function BiaoshuArtifactTable({ artifacts, onView, onGenerateTaskBook, generatingTaskBook, onGenerateChapters, generatingChapters }: { artifacts: BiaoshuArtifactRecord[]; onView: (a: BiaoshuArtifactRecord) => void; onGenerateTaskBook?: () => void; generatingTaskBook?: boolean; onGenerateChapters?: () => void; generatingChapters?: boolean }) {
+function BiaoshuArtifactTable({ artifacts, onView, onOpenChapters, onGenerateTaskBook, generatingTaskBook, onGenerateChapters, generatingChapters }: { artifacts: BiaoshuArtifactRecord[]; onView: (a: BiaoshuArtifactRecord) => void; onOpenChapters?: () => void; onGenerateTaskBook?: () => void; generatingTaskBook?: boolean; onGenerateChapters?: () => void; generatingChapters?: boolean }) {
   const headers = ['ID', '名称', '类型', '状态', '负责人', '路径', '操作']
+  const chapterCount = artifacts.filter((artifact) => artifact.kind === 'BID_CHAPTERS').length
+  const visibleArtifacts = artifacts.filter((artifact) => artifact.kind !== 'BID_CHAPTERS')
   return (
     <section className="card overflow-hidden p-0">
+      {chapterCount > 0 && onOpenChapters && (
+        <div className="flex items-center justify-between gap-4 border-b border-violet-100 bg-violet-50 px-5 py-3">
+          <div>
+            <p className="text-sm font-black text-violet-900">章节初稿已移至独立工作区</p>
+            <p className="mt-0.5 text-xs text-violet-700">当前项目共有 {chapterCount} 条章节稿件记录，可按章节、字数和版本集中管理。</p>
+          </div>
+          <button onClick={onOpenChapters} className="shrink-0 rounded-lg bg-violet-600 px-3 py-2 text-xs font-black text-white hover:bg-violet-700">查看章节</button>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="min-w-[1120px] w-full table-fixed text-left text-sm">
           <colgroup>
@@ -1776,7 +2159,7 @@ function BiaoshuArtifactTable({ artifacts, onView, onGenerateTaskBook, generatin
             </tr>
           </thead>
           <tbody className="divide-y divide-line bg-white/70">
-            {artifacts.map((artifact) => (
+            {visibleArtifacts.map((artifact) => (
               <tr key={artifact.id}>
                 <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-bold">{artifact.id}</td>
                 <td className="whitespace-nowrap px-4 py-3 font-semibold text-ink">

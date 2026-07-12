@@ -628,6 +628,149 @@ export const generateChapters = async (
   return response.data.data
 }
 
+// ── Chapter Word Count Check ──
+
+export interface WordCountItem {
+  chapterNumber: number
+  chapterTitle: string
+  filePath: string
+  currentWords: number
+  targetWords: number
+  qualifiedMin: number
+  qualifiedMax: number
+  gapWords: number
+  status: 'too_short' | 'sufficient' | 'over'
+}
+
+export interface CheckWordCountRequest {
+  taskBookPath: string
+  chapterDir: string
+  analysisReportPath?: string
+  chapterCount?: number
+}
+
+export interface CheckWordCountResponse {
+  reportPath: string
+  items: WordCountItem[]
+  totalCurrent: number
+  totalTarget: number
+  totalGap: number
+  shortCount: number
+  sufficientCount: number
+}
+
+export const checkWordCount = async (
+  payload: CheckWordCountRequest
+): Promise<CheckWordCountResponse> => {
+  const response = await api.post<ApiResponse<CheckWordCountResponse>>(
+    '/biaoshu/chapters/word-count/check',
+    payload,
+    { timeout: 30000 }
+  )
+  return response.data.data
+}
+
+// ── Chapter Expansion Task Book ──
+
+export interface GenerateExpansionTaskBookRequest {
+  outputDir: string
+  taskBookPath?: string
+  items: WordCountItem[]
+}
+
+export interface GenerateExpansionTaskBookResponse {
+  taskBookPath: string
+  totalGap: number
+  shortCount: number
+  items: WordCountItem[]
+  artifact: Record<string, unknown>
+}
+
+export const generateExpansionTaskBook = async (
+  payload: GenerateExpansionTaskBookRequest
+): Promise<GenerateExpansionTaskBookResponse> => {
+  const response = await api.post<ApiResponse<GenerateExpansionTaskBookResponse>>(
+    '/biaoshu/chapters/expansion-task-book/generate',
+    payload,
+    { timeout: 10000 }
+  )
+  return response.data.data
+}
+
+// ── Chapter Expansion ──
+
+export interface ExpandChapterItem {
+  chapterNumber: number
+  chapterTitle: string
+  sourcePath: string
+  expandedPath: string
+  wordCountBefore: number
+  wordCountAfter: number
+  targetWordCount: number
+  artifact?: Record<string, unknown>
+  error?: string
+}
+
+export interface ExpandChaptersRequest {
+  items: WordCountItem[]
+  taskBookPath?: string
+  outlinePath?: string
+  scoringReportPath?: string
+  analysisReportPath?: string
+  contextReportPath?: string
+  outputDir: string
+}
+
+export interface ExpandChaptersResponse {
+  results: ExpandChapterItem[]
+  success: number
+  failed: number
+}
+
+export const expandChapters = async (
+  payload: ExpandChaptersRequest
+): Promise<ExpandChaptersResponse> => {
+  const response = await api.post<ApiResponse<ExpandChaptersResponse>>(
+    '/biaoshu/chapters/expand',
+    payload,
+    { timeout: 600000 } // 10 分钟 — 多章并发 LLM 扩写
+  )
+  return response.data.data
+}
+
+// ── Chapter Expansion QA ──
+
+export interface ExpansionQAResult {
+  chapterNumber: number
+  chapterTitle: string
+  expandedPath: string
+  status: 'pass' | 'warn' | 'fail'
+  issues: string[]
+  wordCount: number
+  targetWords: number
+  qualifiedMin: number
+}
+
+export interface ExpansionQAResponse {
+  reportPath: string
+  results: ExpansionQAResult[]
+  passCount: number
+  warnCount: number
+  failCount: number
+}
+
+export const runExpansionQA = async (
+  outputDir: string,
+  expandedItems: ExpandChapterItem[]
+): Promise<ExpansionQAResponse> => {
+  const response = await api.post<ApiResponse<ExpansionQAResponse>>(
+    '/biaoshu/chapters/expansion-qa',
+    { outputDir, expandedItems },
+    { timeout: 10000 }
+  )
+  return response.data.data
+}
+
 // ── Model Provider Config Sync ──
 
 export interface ModelProviderSyncPayload {

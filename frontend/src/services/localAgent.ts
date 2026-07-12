@@ -215,6 +215,29 @@ export interface BiaoshuHistoryProject {
   hasLegacyRun: boolean
 }
 
+export interface BiaoshuBootstrapResponse {
+  status: 'READY'
+  dataDir: string
+  projects: BiaoshuProjectManifest[]
+  history: BiaoshuHistoryProject[]
+  resumeProjectId?: string
+  diagnostics: {
+    managedProjectCount: number
+    legacyProjectCount: number
+    migratedLegacy: number
+    importedManaged: number
+    warnings?: string[]
+  }
+}
+
+export async function fetchBiaoshuBootstrap(): Promise<BiaoshuBootstrapResponse> {
+  const response = await fetch(localAgentUrl('/api/local/biaoshu/bootstrap'))
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, '恢复本地标书项目失败'))
+  }
+  return response.json() as Promise<BiaoshuBootstrapResponse>
+}
+
 export async function fetchBiaoshuHistory(): Promise<BiaoshuHistoryResponse> {
   const response = await fetch(localAgentUrl('/api/local/biaoshu/history'))
   if (!response.ok) {

@@ -407,6 +407,10 @@ func main() {
 		chapterTaskBookHandler.RegisterRoutes(r)
 		chapterGenerationHandler := biaoshu_handler.NewChapterGenerationHandler(gw)
 		chapterGenerationHandler.RegisterRoutes(r)
+		wordCountHandler := biaoshu_handler.NewWordCountHandler()
+		wordCountHandler.RegisterRoutes(r)
+		expansionHandler := biaoshu_handler.NewExpansionHandler(gw)
+		expansionHandler.RegisterRoutes(r)
 	}
 	zap.L().Info("Biaoshu services registered")
 

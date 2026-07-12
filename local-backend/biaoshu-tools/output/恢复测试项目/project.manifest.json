@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "biaoshu.project.v1",
+  "projectId": "bp_9ab537cdc66d2902",
+  "projectName": "恢复测试项目",
+  "status": "CREATED",
+  "currentStage": "created",
+  "createdAt": "2026-07-10T08:42:45.670255Z",
+  "updatedAt": "2026-07-10T08:42:45.670255Z",
+  "sourceFiles": [
+    {
+      "id": "source_1",
+      "path": "E:\\bids\\resume.docx",
+      "originalName": "resume.docx",
+      "addedAt": "2026-07-10T08:42:45.670255Z"
+    }
+  ],
+  "outputDir": "E:\\lingxi\\tangying-ai-operation-system\\local-backend\\biaoshu-tools\\output\\恢复测试项目",
+  "outputDirName": "恢复测试项目",
+  "runs": [],
+  "artifacts": [],
+  "stageEvents": [
+    {
+      "id": "event_bp_9ab537cdc66d2902",
+      "type": "project_created",
+      "at": "2026-07-10T08:42:45.670255Z",
+      "message": "项目已创建"
+    }
+  ]
+}

@@ -532,6 +532,46 @@ func BuildCloudSpec() *Spec {
 		ResponseJSON("200", "Outline generated", "BaseResponse").
 		ResponseJSON("400", "Validation or generation error", "ErrorResponse")
 
+	// ── Biaoshu Chapter Word Count ──
+	b.Route("POST", "/api/biaoshu/chapters/word-count/check", "Check chapter word counts against task book targets").
+		Tags("Biaoshu").
+		BodyInlineJSON(&Schema{
+			Type: "object",
+			Properties: map[string]*SchemaRef{
+				"taskBookPath":       {Schema: StringSchema()},
+				"chapterDir":         {Schema: StringSchema()},
+				"analysisReportPath": {Schema: StringSchema()},
+				"chapterCount":       {Schema: &Schema{Type: "integer"}},
+			},
+			Required: []string{"taskBookPath", "chapterDir"},
+		}, "Word count check request", true).
+		ResponseJSON("200", "Word count report", "BaseResponse").
+		ResponseJSON("400", "Validation error", "ErrorResponse")
+
+	// ── Biaoshu Chapter Expansion Task Book ──
+	b.Route("POST", "/api/biaoshu/chapters/expansion-task-book/generate", "Generate chapter expansion task book from word count results").
+		Tags("Biaoshu").
+		BodyInlineJSON(ObjectSchema(), "Expansion task book request", true).
+		ResponseJSON("200", "Task book generated", "BaseResponse").
+		ResponseJSON("400", "Validation error", "ErrorResponse").
+		ResponseJSON("500", "Generation failed", "ErrorResponse")
+
+	// ── Biaoshu Chapter Expansion ──
+	b.Route("POST", "/api/biaoshu/chapters/expand", "Batch expand short chapters using LLM").
+		Tags("Biaoshu").
+		BodyInlineJSON(ObjectSchema(), "Chapter expansion request", true).
+		ResponseJSON("200", "Expansion completed", "BaseResponse").
+		ResponseJSON("400", "Validation error", "ErrorResponse").
+		ResponseJSON("500", "Expansion failed", "ErrorResponse")
+
+	// ── Biaoshu Chapter Expansion QA ──
+	b.Route("POST", "/api/biaoshu/chapters/expansion-qa", "Run quality assurance checks on expanded chapters").
+		Tags("Biaoshu").
+		BodyInlineJSON(ObjectSchema(), "QA request", true).
+		ResponseJSON("200", "QA report", "BaseResponse").
+		ResponseJSON("400", "Validation error", "ErrorResponse").
+		ResponseJSON("500", "QA failed", "ErrorResponse")
+
 	// ── Register automatic schemas (derived from real Go types) ──
 	registerCloudSchemas(b)
 

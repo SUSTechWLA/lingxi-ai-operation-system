@@ -241,12 +241,12 @@ func (s *Server) ValidateWritablePaths() error {
 }
 
 func writeProbeFile(dir string) error {
-	name := fmt.Sprintf(".tangying-write-probe-%d.tmp", time.Now().UTC().UnixNano())
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("ok"), 0o600); err != nil {
+	f, err := os.CreateTemp(dir, ".tangying-write-probe-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Remove(path)
+	f.Close()
+	return os.Remove(f.Name())
 }
 
 func (s *Server) routes() {
@@ -259,6 +259,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/biaoshu/projects", s.handleBiaoshuProjectCollection)
 	s.mux.HandleFunc("/api/local/biaoshu/projects/", s.handleBiaoshuProjectResource)
 	s.mux.HandleFunc("/api/local/biaoshu/history", s.handleBiaoshuHistory)
+	s.mux.HandleFunc("/api/local/biaoshu/bootstrap", s.handleBiaoshuBootstrap)
 	s.mux.HandleFunc("/api/local/biaoshu-artifacts/read", s.handleReadBiaoshuArtifact)
 	s.mux.HandleFunc("/api/local/biaoshu-artifacts/write", s.handleWriteBiaoshuArtifact)
 	s.mux.HandleFunc("/api/local/biaoshu-conversations", s.handleBiaoshuConversation)
