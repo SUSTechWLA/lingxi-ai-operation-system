@@ -4479,6 +4479,7 @@ def create_action_library(
     mark_hand_pose("Gesture_Point_Left", mid, "l", "point")
     mark_hand_pose("Gesture_Point_Right", mid, "r", "point")
     mark_hand_pose("Gesture_FingerWave", 1, "r", "open_hand")
+    mark_hand_pose("Gesture_FingerWave", end, "r", "open_hand")
     for frame, pose_name in (
         (max(2, mid // 2), "finger_roll_1"),
         (mid, "finger_roll_2"),

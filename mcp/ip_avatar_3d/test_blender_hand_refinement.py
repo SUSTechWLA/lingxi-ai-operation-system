@@ -503,12 +503,47 @@ def test_three_segment_digit_poses_key_independent_semantic_curls() -> None:
         assert distal.z > 0.28, (selected, tuple(distal))
 
 
+def test_finger_wave_ends_at_its_shared_open_hand_pose() -> None:
+    _, _, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    blender_renderer.create_action_library(armature, {}, bone_map, fps=30)
+    armature.animation_data.action = bpy.data.actions["Gesture_FingerWave"]
+
+    bpy.context.scene.frame_set(1)
+    start_rotations = {
+        digit: tuple(
+            armature.pose.bones[bone_map[role]].rotation_euler.copy()
+            for role in digit_roles("r", digit)
+        )
+        for digit in (1, 2, 3)
+    }
+    start_tips = {
+        digit: hand_relative_tip(armature, bone_map, "r", digit).copy()
+        for digit in (1, 2, 3)
+    }
+
+    bpy.context.scene.frame_set(60)
+    for digit in (1, 2, 3):
+        end_rotations = tuple(
+            armature.pose.bones[bone_map[role]].rotation_euler.copy()
+            for role in digit_roles("r", digit)
+        )
+        for start, end in zip(start_rotations[digit], end_rotations):
+            assert max(abs(end[index] - start[index]) for index in range(3)) < 1e-6, (
+                digit,
+                tuple(start),
+                tuple(end),
+            )
+        drift = (hand_relative_tip(armature, bone_map, "r", digit) - start_tips[digit]).length
+        assert drift < 1e-6, (digit, drift)
+
+
 if __name__ == "__main__":
     tests = [
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
         test_validated_three_segment_reuse_requires_contract_marker,
         test_each_digit_moves_independently_and_fist_closes,
         test_three_segment_digit_poses_key_independent_semantic_curls,
+        test_finger_wave_ends_at_its_shared_open_hand_pose,
     ]
     failures: list[tuple[str, AssertionError]] = []
     for test in tests:

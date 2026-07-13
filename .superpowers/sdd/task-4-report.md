@@ -66,10 +66,28 @@ chain length against the unchanged 6% maximum. `finger_roll_pose()` now lets
 the procedural timeline retain the shared `relaxed_hand` pose for unselected
 digits while action-library rolls keep their explicit open-hand baseline.
 
+## Final-Frame Follow-Up
+
+The focused endpoint contract was added before the final marker fix and
+captured the unmarked three-segment fallback at frame 60:
+
+```text
+digit 1 start: (0.14000000059604645, 0.0, 0.014999999664723873)
+digit 1 end:   (0.10000000149011612, 0.0, 0.05000000074505806)
+```
+
+`Gesture_FingerWave` now marks both frame 1 and frame 60 with the shared
+right-hand `open_hand` pose. The focused regression verifies every digit's
+proximal, middle, and distal rotation, plus hand-relative tips, match the
+start endpoint within `1e-6`; resulting final-frame drift is zero. Roll frames
+15, 30, and 45 retain their independent shared roll poses, and the legacy
+two-segment fallback remains restricted to unmarked legacy chains.
+
 ## Verification
 
 ```text
-PASS focused test_blender_hand_refinement.py (4 checks)
+PASS focused test_blender_hand_refinement.py (5 checks), including the
+     final-frame `Gesture_FingerWave` endpoint regression
 PASS test_blender_character_rig.py, including enhanced-rig `animate()` fist,
      finger-roll isolation, and `point_right` coverage
 PASS test_server.py (28 tests)
