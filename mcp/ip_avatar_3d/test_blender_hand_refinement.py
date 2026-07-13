@@ -28,6 +28,24 @@ MINIMUM_SUPPORT_BAND_EDGES = 3
 MINIMUM_RING_VERTICES = 4
 MINIMUM_RING_SPAN_RATIO = 0.015
 MINIMUM_RING_AREA_RATIO = 0.000025
+AROLL_ACTIONS = {
+    "Aroll_Idle_Listening",
+    "Aroll_Greeting_Wave",
+    "Aroll_OpenPalm_Explain",
+    "Aroll_Explain_Left",
+    "Aroll_Explain_Right",
+    "Aroll_Count_One",
+    "Aroll_Count_Two",
+    "Aroll_Count_Three",
+    "Aroll_Point_Left",
+    "Aroll_Point_Right",
+    "Aroll_Pinch_Detail",
+    "Aroll_Emphasis_SoftFist",
+    "Aroll_Think",
+    "Aroll_Agree_Nod",
+    "Aroll_Disagree_Shake",
+    "Aroll_Transition_Reset",
+}
 
 
 def digit_roles(side: str, digit: int) -> tuple[str, str, str]:
@@ -114,6 +132,20 @@ def sampled_digit_rotations(armature, bone_map, action_name: str, side: str, dig
         armature.pose.bones[bone_map[role]].rotation_euler.copy()
         for role in digit_roles(side, digit)
     )
+
+
+def sampled_role_rotations(armature, bone_map, action_name: str, frame: int):
+    armature.animation_data.action = bpy.data.actions[action_name]
+    bpy.context.scene.frame_set(frame)
+    return {
+        role: tuple(armature.pose.bones[name].rotation_euler.copy())
+        for role, name in bone_map.items()
+        if name in armature.pose.bones
+    }
+
+
+def pose_bone_world_head(armature, bone_map, role: str):
+    return armature.matrix_world @ armature.pose.bones[bone_map[role]].head
 
 
 def _deform_assignments(obj, vertex, armature, group_names=None):
@@ -537,8 +569,84 @@ def test_finger_wave_ends_at_its_shared_open_hand_pose() -> None:
         assert drift < 1e-6, (digit, drift)
 
 
+def test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage() -> None:
+    _, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+
+    report = blender_renderer.create_action_library(armature, {}, bone_map, fps=30)
+
+    missing = sorted(AROLL_ACTIONS - set(report["actions"]))
+    assert not missing, f"missing A-roll actions: {missing}"
+    face_center = pose_bone_world_head(armature, bone_map, "head")
+    face_half_width = float(dimensions["width"]) * 0.16
+    face_half_height = float(dimensions["height"]) * 0.16
+    safe_stage_actions = {
+        "Aroll_OpenPalm_Explain": ("r", "l"),
+        "Aroll_Count_One": ("r",),
+        "Aroll_Count_Two": ("r",),
+        "Aroll_Count_Three": ("r",),
+        "Aroll_Point_Left": ("l",),
+        "Aroll_Point_Right": ("r",),
+        "Aroll_Pinch_Detail": ("r",),
+    }
+    leg_roles = {"leg_l", "shin_l", "foot_l", "leg_r", "shin_r", "foot_r"}
+
+    for action_name in sorted(AROLL_ACTIONS):
+        action = bpy.data.actions[action_name]
+        frames = sorted(
+            {
+                int(round(float(point.co.x)))
+                for curve in blender_renderer.iter_action_fcurves(action)
+                for point in curve.keyframe_points
+            }
+        )
+        assert frames[0] == 1, (action_name, frames)
+        assert frames[-1] >= 60, (action_name, frames)
+        assert len(frames) >= 4, (action_name, frames)
+
+        for curve in blender_renderer.iter_action_fcurves(action):
+            for point in curve.keyframe_points:
+                assert point.interpolation == "BEZIER", (action_name, curve.data_path)
+                assert point.handle_left_type == "AUTO_CLAMPED", (action_name, curve.data_path)
+                assert point.handle_right_type == "AUTO_CLAMPED", (action_name, curve.data_path)
+
+        start = sampled_role_rotations(armature, bone_map, action_name, frames[0])
+        end = sampled_role_rotations(armature, bone_map, action_name, frames[-1])
+        for role, start_rotation in start.items():
+            end_rotation = end[role]
+            assert max(abs(end_rotation[index] - start_rotation[index]) for index in range(3)) < 1e-6, (
+                action_name,
+                role,
+                start_rotation,
+                end_rotation,
+            )
+
+        hold_frame = min(frames[-2], max(frames[1], 30))
+        sampled_role_rotations(armature, bone_map, action_name, hold_frame)
+        for role in leg_roles:
+            if role not in bone_map:
+                continue
+            rotation = armature.pose.bones[bone_map[role]].rotation_euler
+            assert max(abs(value) for value in rotation) < 1e-6, (action_name, role, tuple(rotation))
+
+        for side in safe_stage_actions.get(action_name, ()):
+            hand = pose_bone_world_head(armature, bone_map, f"hand_{side}")
+            offset = hand - face_center
+            inside_face_box = (
+                abs(offset.x) < face_half_width
+                and abs(offset.y) < face_half_width
+                and abs(offset.z) < face_half_height
+            )
+            assert not inside_face_box, (action_name, side, tuple(offset))
+            assert -float(dimensions["height"]) * 0.62 < offset.z < float(dimensions["height"]) * 0.08, (
+                action_name,
+                side,
+                tuple(offset),
+            )
+
+
 if __name__ == "__main__":
     tests = [
+        test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
         test_validated_three_segment_reuse_requires_contract_marker,
         test_each_digit_moves_independently_and_fist_closes,

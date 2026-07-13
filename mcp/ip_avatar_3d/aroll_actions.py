@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,25 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(0.36, 0.45, 0.31, splay=-0.08),
     ),
 }
+
+AROLL_ACTIONS: tuple[str, ...] = (
+    "Aroll_Idle_Listening",
+    "Aroll_Greeting_Wave",
+    "Aroll_OpenPalm_Explain",
+    "Aroll_Explain_Left",
+    "Aroll_Explain_Right",
+    "Aroll_Count_One",
+    "Aroll_Count_Two",
+    "Aroll_Count_Three",
+    "Aroll_Point_Left",
+    "Aroll_Point_Right",
+    "Aroll_Pinch_Detail",
+    "Aroll_Emphasis_SoftFist",
+    "Aroll_Think",
+    "Aroll_Agree_Nod",
+    "Aroll_Disagree_Shake",
+    "Aroll_Transition_Reset",
+)
 
 
 def hand_pose(name: str) -> Mapping[int, DigitPose]:
@@ -170,3 +189,261 @@ def hand_pose_eulers(
         for segment, euler in chain_eulers(side, poses[digit]).items():
             rotations[roles[segment]] = euler
     return rotations
+
+
+ActionPose = dict[str, Any]
+ActionSpec = list[tuple[int, ActionPose]]
+
+
+def _action_frames(fps: int) -> tuple[int, int, int, int, int]:
+    fps = max(8, int(fps or 30))
+    anticipation = max(2, int(round(fps * 0.40)))
+    hold_in = max(anticipation + 1, int(round(fps * 0.80)))
+    hold_out = max(hold_in + 1, int(round(fps * 1.55)))
+    end = max(hold_out + 1, int(round(fps * 2.00)))
+    return 1, anticipation, hold_in, hold_out, end
+
+
+def _pose(*parts: Mapping[str, Any], left_hand: str = "", right_hand: str = "") -> ActionPose:
+    merged: ActionPose = {}
+    for part in parts:
+        merged.update(part)
+    if left_hand:
+        merged["__digit_pose_l"] = left_hand
+    if right_hand:
+        merged["__digit_pose_r"] = right_hand
+    return merged
+
+
+def _five_phase(
+    frames: tuple[int, int, int, int, int],
+    anticipation_pose: Mapping[str, Any],
+    hold_pose: Mapping[str, Any],
+    *,
+    release_pose: Mapping[str, Any] | None = None,
+) -> ActionSpec:
+    start, anticipation, hold_in, hold_out, end = frames
+    return [
+        (start, {}),
+        (anticipation, dict(anticipation_pose)),
+        (hold_in, dict(hold_pose)),
+        (hold_out, dict(hold_pose if release_pose is None else release_pose)),
+        (end, {}),
+    ]
+
+
+def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
+    """Build close-shot A-roll action specs from shared semantic hand poses."""
+    frames = _action_frames(fps)
+    _, anticipation, hold_in, hold_out, end = frames
+
+    if source_rig:
+        right_anticipation = {
+            "upper_arm_r": (-0.04, -0.02, -0.96),
+            "forearm_r": (-0.36, -0.04, 0.44),
+            "hand_r": (0.04, -0.12, 0.08),
+        }
+        right_chest = {
+            "upper_arm_r": (-0.06, -0.02, -0.72),
+            "forearm_r": (-0.72, -0.06, 0.82),
+            "hand_r": (0.10, -0.28, 0.18),
+        }
+        left_anticipation = {
+            "upper_arm_l": (-0.04, 0.02, 0.96),
+            "forearm_l": (-0.36, 0.04, -0.44),
+            "hand_l": (0.04, 0.12, -0.08),
+        }
+        left_chest = {
+            "upper_arm_l": (-0.06, 0.02, 0.72),
+            "forearm_l": (-0.72, 0.06, -0.82),
+            "hand_l": (0.10, 0.28, -0.18),
+        }
+        right_point = {
+            "upper_arm_r": (-0.05, -0.02, -0.58),
+            "forearm_r": (-0.48, -0.08, 0.60),
+            "hand_r": (0.04, -0.20, 0.12),
+        }
+        left_point = {
+            "upper_arm_l": (-0.05, 0.02, 0.58),
+            "forearm_l": (-0.48, 0.08, -0.60),
+            "hand_l": (0.04, 0.20, -0.12),
+        }
+        open_explain = {
+            **left_chest,
+            **right_chest,
+            "hand_l": (0.08, 0.24, -0.12),
+            "hand_r": (0.08, -0.24, 0.12),
+        }
+        open_explain_anticipation = {**left_anticipation, **right_anticipation}
+        wave_raise = {
+            "upper_arm_r": (-0.08, 0.03, -0.34),
+            "forearm_r": (-0.25, 0.02, 1.04),
+            "hand_r": (0.035, -1.10, 0.055),
+        }
+        wave_return = {
+            "upper_arm_r": (-0.08, 0.03, -0.34),
+            "forearm_r": (-0.25, 0.02, 1.04),
+            "hand_r": (-0.035, -1.10, -0.055),
+        }
+        think_pose = {
+            "upper_arm_r": (-0.09, -0.03, -0.74),
+            "forearm_r": (-0.56, -0.08, 0.90),
+            "hand_r": (0.13, -0.18, 0.12),
+            "head": (-0.08, 0.10, 0.02),
+        }
+        nod_anticipation = {"head": (0.0, 0.0, -0.03)}
+        nod_pose = {"head": (0.0, 0.0, 0.14)}
+        shake_left = {"head": (0.0, -0.15, 0.0)}
+        shake_right = {"head": (0.0, 0.15, 0.0)}
+        idle_anticipation = {"body": (0.0, 0.0, -0.012), "head": (0.0, -0.012, -0.006)}
+        idle_pose = {"body": (0.0, 0.0, 0.014), "head": (0.0, 0.010, 0.010)}
+    else:
+        right_anticipation = {
+            "upper_arm_r": (-0.42, -0.08, 0.08),
+            "forearm_r": (0.40, -0.14, 0.04),
+            "hand_r": (0.04, -0.12, 0.06),
+        }
+        right_chest = {
+            "upper_arm_r": (-0.24, -0.10, 0.14),
+            "forearm_r": (0.72, -0.22, 0.08),
+            "hand_r": (0.08, -0.16, 0.10),
+        }
+        left_anticipation = {
+            "upper_arm_l": (-0.42, 0.08, -0.08),
+            "forearm_l": (0.40, 0.14, -0.04),
+            "hand_l": (0.04, 0.12, -0.06),
+        }
+        left_chest = {
+            "upper_arm_l": (-0.24, 0.10, -0.14),
+            "forearm_l": (0.72, 0.22, -0.08),
+            "hand_l": (0.08, 0.16, -0.10),
+        }
+        right_point = {
+            "upper_arm_r": (-0.20, -0.12, 0.16),
+            "forearm_r": (0.46, -0.18, 0.06),
+            "hand_r": (0.04, -0.16, 0.08),
+        }
+        left_point = {
+            "upper_arm_l": (-0.20, 0.12, -0.16),
+            "forearm_l": (0.46, 0.18, -0.06),
+            "hand_l": (0.04, 0.16, -0.08),
+        }
+        open_explain = {
+            **left_chest,
+            **right_chest,
+            "hand_l": (0.06, 0.22, -0.10),
+            "hand_r": (0.06, -0.22, 0.10),
+        }
+        open_explain_anticipation = {**left_anticipation, **right_anticipation}
+        wave_raise = {
+            "shoulder_r": (0.04, -0.06, 0.10),
+            "upper_arm_r": (0.02, 0.20, 0.32),
+            "forearm_r": (0.82, 0.04, 0.02),
+            "hand_r": (0.035, -1.10, 0.055),
+        }
+        wave_return = {
+            "shoulder_r": (0.04, -0.06, 0.10),
+            "upper_arm_r": (0.02, 0.20, 0.32),
+            "forearm_r": (0.82, 0.04, 0.02),
+            "hand_r": (-0.035, -1.10, -0.055),
+        }
+        think_pose = {
+            "upper_arm_r": (-0.18, -0.14, 0.13),
+            "forearm_r": (0.84, -0.22, 0.08),
+            "hand_r": (0.13, -0.16, 0.10),
+            "head": (0.02, 0.10, -0.08),
+        }
+        nod_anticipation = {"head": (-0.02, 0.0, 0.0)}
+        nod_pose = {"head": (0.16, 0.0, 0.0)}
+        shake_left = {"head": (0.0, -0.16, 0.0)}
+        shake_right = {"head": (0.0, 0.16, 0.0)}
+        idle_anticipation = {"body": (0.0, 0.0, -0.012), "head": (-0.008, 0.0, 0.010)}
+        idle_pose = {"body": (0.0, 0.0, 0.014), "head": (0.014, 0.0, -0.010)}
+
+    specs: dict[str, ActionSpec] = {
+        "Aroll_Idle_Listening": _five_phase(frames, idle_anticipation, idle_pose),
+        "Aroll_Greeting_Wave": [
+            (1, {}),
+            (anticipation, _pose(wave_raise, right_hand="open_hand")),
+            (hold_in, _pose(wave_return, right_hand="open_hand")),
+            (hold_out, _pose(wave_raise, right_hand="open_hand")),
+            (end, {}),
+        ],
+        "Aroll_OpenPalm_Explain": _five_phase(
+            frames,
+            _pose(open_explain_anticipation, left_hand="relaxed_hand", right_hand="relaxed_hand"),
+            _pose(open_explain, left_hand="open_hand", right_hand="open_hand"),
+        ),
+        "Aroll_Explain_Left": _five_phase(
+            frames,
+            _pose(left_anticipation, left_hand="relaxed_hand"),
+            _pose(left_chest, left_hand="open_hand"),
+        ),
+        "Aroll_Explain_Right": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            _pose(right_chest, right_hand="open_hand"),
+        ),
+        "Aroll_Count_One": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            _pose(right_chest, right_hand="count_one"),
+        ),
+        "Aroll_Count_Two": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            _pose(right_chest, right_hand="count_two"),
+        ),
+        "Aroll_Count_Three": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            _pose(right_chest, right_hand="count_three"),
+        ),
+        "Aroll_Point_Left": _five_phase(
+            frames,
+            _pose(left_anticipation, left_hand="relaxed_hand"),
+            _pose(left_point, left_hand="point"),
+        ),
+        "Aroll_Point_Right": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            _pose(right_point, right_hand="point"),
+        ),
+        "Aroll_Pinch_Detail": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            _pose(right_chest, right_hand="pinch"),
+        ),
+        "Aroll_Emphasis_SoftFist": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="soft_curl"),
+            _pose({**right_chest, "body": (0.0, 0.0, 0.026)}, right_hand="soft_curl"),
+        ),
+        "Aroll_Think": _five_phase(
+            frames,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            _pose(think_pose, right_hand="soft_curl"),
+        ),
+        "Aroll_Agree_Nod": [
+            (1, {}),
+            (anticipation, nod_anticipation),
+            (hold_in, nod_pose),
+            (hold_out, nod_anticipation),
+            (end, {}),
+        ],
+        "Aroll_Disagree_Shake": [
+            (1, {}),
+            (anticipation, shake_left),
+            (hold_in, shake_right),
+            (hold_out, shake_left),
+            (end, {}),
+        ],
+        "Aroll_Transition_Reset": [
+            (1, {}),
+            (anticipation, {}),
+            (hold_in, {}),
+            (hold_out, {}),
+            (end, {}),
+        ],
+    }
+    return {name: specs[name] for name in AROLL_ACTIONS}

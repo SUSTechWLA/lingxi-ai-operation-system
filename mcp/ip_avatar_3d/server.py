@@ -285,66 +285,234 @@ def _sentence_boundary_times(script: str, duration_sec: float) -> list[float]:
 
 def _keyword_events(script: str, duration_sec: float) -> list[dict[str, Any]]:
     table = [
-        ("挥手", "wave", 1.0),
-        ("张开手", "open_hand", 0.78),
-        ("摊开手", "open_hand", 0.78),
-        ("握拳", "fist", 0.72),
-        ("转动手腕", "wrist_twist", 0.82),
-        ("手腕", "wrist_twist", 0.68),
-        ("动动手指", "finger_wave", 0.82),
-        ("手指", "finger_wave", 0.68),
-        ("抬手", "present", 0.8),
-        ("腿", "leg_step", 0.75),
-        ("点头", "nod", 0.9),
-        ("摇头", "head_shake", 0.9),
-        ("第一", "point_left", 0.9),
-        ("第二", "point_right", 0.9),
-        ("第三", "point_left", 0.85),
-        ("左边", "point_left", 0.9),
-        ("右边", "point_right", 0.9),
-        ("大家", "open_arms", 0.72),
-        ("全面", "open_arms", 0.72),
-        ("欢迎", "open_arms", 0.75),
-        ("分析", "think", 0.78),
-        ("思考", "think", 0.9),
-        ("判断", "think", 0.78),
-        ("考虑", "think", 0.82),
-        ("也许", "shrug", 0.78),
-        ("可能", "shrug", 0.72),
-        ("不确定", "shrug", 0.86),
-        ("重点", "emphasis", 1.0),
-        ("注意", "emphasis", 1.0),
-        ("但是", "head_shake", 0.8),
-        ("所以", "nod", 0.8),
-        ("结论", "emphasis", 1.0),
-        ("记住", "point", 0.9),
-        ("开源", "present", 0.8),
-        ("流程", "present", 0.7),
-        ("视频", "wave", 0.7),
-        ("创作", "happy_bounce", 0.8),
+        {
+            "pattern": r"大家好|你好|您好|欢迎|\bhello\b|\bhi\b|\bwelcome\b|\bgreetings\b",
+            "motion": "wave",
+            "strength": 1.0,
+            "action": "Aroll_Greeting_Wave",
+            "semantic": "greeting",
+            "gestureGroup": "right_hand",
+            "duration": 0.9,
+        },
+        {
+            "pattern": r"第一|首先|第一个|\bfirst\b|\bfirstly\b",
+            "motion": "point_left",
+            "strength": 0.9,
+            "action": "Aroll_Count_One",
+            "semantic": "enumeration",
+            "gestureGroup": "right_hand",
+        },
+        {
+            "pattern": r"第二|其次|第二个|\bsecond\b|\bsecondly\b",
+            "motion": "point_right",
+            "strength": 0.9,
+            "action": "Aroll_Count_Two",
+            "semantic": "enumeration",
+            "gestureGroup": "right_hand",
+        },
+        {
+            "pattern": r"第三|第三个|\bthird\b|\bthirdly\b",
+            "motion": "point_left",
+            "strength": 0.85,
+            "action": "Aroll_Count_Three",
+            "semantic": "enumeration",
+            "gestureGroup": "right_hand",
+        },
+        {
+            "pattern": r"不同意|不赞成|反对|不对|摇头|但是|不过|\bdisagree\b|\bdo not agree\b|\bdon't agree\b|\bhowever\b|\bbut\b",
+            "motion": "head_shake",
+            "strength": 0.9,
+            "action": "Aroll_Disagree_Shake",
+            "semantic": "disagreement",
+            "gestureGroup": "head",
+        },
+        {
+            "pattern": r"(?<!不)同意|赞成|没错|是的|点头|当然|\bagree\b|\byes\b|\bcorrect\b|\bexactly\b",
+            "motion": "nod",
+            "strength": 0.9,
+            "action": "Aroll_Agree_Nod",
+            "semantic": "agreement",
+            "gestureGroup": "head",
+        },
+        {
+            "pattern": r"解释|说明|介绍|讲解|展开|\bexplain\b|\bexplanation\b|\bdescribe\b|\bintroduce\b|\bwalk through\b",
+            "motion": "present",
+            "strength": 0.82,
+            "action": "Aroll_OpenPalm_Explain",
+            "semantic": "explanation",
+            "gestureGroup": "right_hand",
+            "gestureGroups": ["right_hand", "left_hand"],
+            "duration": 0.85,
+        },
+        {
+            "pattern": r"细节|具体|详细|微小|小处|\bdetail\b|\bdetails\b|\bspecific\b|\bprecise\b|\bsmall detail\b",
+            "motion": "finger_wave",
+            "strength": 0.82,
+            "action": "Aroll_Pinch_Detail",
+            "semantic": "detail",
+            "gestureGroup": "right_hand",
+            "duration": 0.78,
+        },
+        {
+            "pattern": r"重点|注意|结论|总之|最后|记住|关键|\bemphasize\b|\bemphasis\b|\bin conclusion\b|\bconclusion\b|\bkey point\b|\bremember\b",
+            "motion": "emphasis",
+            "strength": 1.0,
+            "action": "Aroll_Emphasis_SoftFist",
+            "semantic": "emphasis",
+            "gestureGroup": "right_hand",
+            "duration": 0.72,
+        },
+        {
+            "pattern": r"分析|思考|判断|考虑|\bthink\b|\banalyze\b|\bconsider\b",
+            "motion": "think",
+            "strength": 0.82,
+            "action": "Aroll_Think",
+            "semantic": "thinking",
+            "gestureGroup": "right_hand",
+        },
+        {
+            "pattern": r"左边|\bleft\b",
+            "motion": "point_left",
+            "strength": 0.9,
+            "action": "Aroll_Point_Left",
+            "semantic": "pointing",
+            "gestureGroup": "left_hand",
+        },
+        {
+            "pattern": r"右边|\bright\b",
+            "motion": "point_right",
+            "strength": 0.9,
+            "action": "Aroll_Point_Right",
+            "semantic": "pointing",
+            "gestureGroup": "right_hand",
+        },
+        {"pattern": r"挥手", "motion": "wave", "strength": 1.0, "gestureGroup": "right_hand"},
+        {"pattern": r"张开手|摊开手", "motion": "open_hand", "strength": 0.78, "gestureGroup": "right_hand"},
+        {"pattern": r"握拳", "motion": "fist", "strength": 0.72, "gestureGroup": "right_hand"},
+        {"pattern": r"转动手腕|手腕", "motion": "wrist_twist", "strength": 0.68, "gestureGroup": "right_hand"},
+        {"pattern": r"动动手指|手指", "motion": "finger_wave", "strength": 0.68, "gestureGroup": "right_hand"},
+        {"pattern": r"抬手", "motion": "present", "strength": 0.8, "gestureGroup": "body"},
+        {"pattern": r"腿", "motion": "leg_step", "strength": 0.75, "gestureGroup": "body"},
+        {"pattern": r"大家|全面", "motion": "open_arms", "strength": 0.72, "gestureGroup": "body"},
+        {"pattern": r"也许|可能|不确定", "motion": "shrug", "strength": 0.78, "gestureGroup": "body"},
+        {"pattern": r"所以", "motion": "nod", "strength": 0.8, "gestureGroup": "head"},
+        {"pattern": r"开源|流程", "motion": "present", "strength": 0.75, "gestureGroup": "body"},
+        {"pattern": r"视频", "motion": "wave", "strength": 0.7, "gestureGroup": "right_hand"},
+        {"pattern": r"创作", "motion": "happy_bounce", "strength": 0.8, "gestureGroup": "body"},
     ]
     events: list[dict[str, Any]] = []
     text_len = max(1, len(script or ""))
-    for keyword, motion, strength in table:
-        start = 0
-        while True:
-            index = (script or "").find(keyword, start)
-            if index < 0:
-                break
-            t = min(duration_sec - 0.2, max(0.2, duration_sec * index / text_len))
-            events.append({"timeSec": round(t, 3), "motion": motion, "duration": 0.75, "strength": strength})
-            start = index + len(keyword)
+    claimed_spans: list[tuple[int, int]] = []
+    for rule in table:
+        for match in re.finditer(str(rule["pattern"]), script or "", flags=re.IGNORECASE):
+            span = match.span()
+            if any(span[0] < end and start < span[1] for start, end in claimed_spans):
+                continue
+            claimed_spans.append(span)
+            index = span[0]
+            t = min(max(0.0, duration_sec - 0.2), max(0.2, duration_sec * index / text_len))
+            event = {
+                "timeSec": round(t, 3),
+                "motion": str(rule["motion"]),
+                "duration": float(rule.get("duration", 0.75)),
+                "strength": float(rule["strength"]),
+                "gestureGroup": str(rule.get("gestureGroup") or _gesture_group_for_motion(str(rule["motion"]))),
+            }
+            if rule.get("action"):
+                semantic = str(rule.get("semantic") or "")
+                event.update(
+                    {
+                        "action": str(rule["action"]),
+                        "semantic": semantic,
+                        "eventName": f"aroll.{semantic}" if semantic else str(rule["action"]),
+                    }
+                )
+                if rule.get("gestureGroups"):
+                    event["gestureGroups"] = list(rule["gestureGroups"])
+            events.append(event)
     coalesced: list[dict[str, Any]] = []
     latest_by_motion: dict[str, dict[str, Any]] = {}
-    for event in sorted(events, key=lambda item: float(item["timeSec"])):
-        previous = latest_by_motion.get(str(event["motion"]))
+    for event in sorted(events, key=_motion_event_sort_key):
+        previous = latest_by_motion.get(str(event.get("action") or event["motion"]))
         if previous and float(event["timeSec"]) - float(previous["timeSec"]) < 0.85:
             previous["strength"] = min(1.0, max(float(previous["strength"]), float(event["strength"])))
             previous["duration"] = max(float(previous["duration"]), float(event["duration"]))
             continue
         coalesced.append(event)
-        latest_by_motion[str(event["motion"])] = event
+        latest_by_motion[str(event.get("action") or event["motion"])] = event
     return coalesced
+
+
+MOTION_GESTURE_GROUPS = {
+    "idle_breath": "body",
+    "weight_shift": "body",
+    "happy_bounce": "body",
+    "leg_step": "body",
+    "open_arms": "body",
+    "present": "body",
+    "shrug": "body",
+    "wave": "right_hand",
+    "point": "left_hand",
+    "point_left": "left_hand",
+    "point_right": "right_hand",
+    "open_hand": "right_hand",
+    "fist": "right_hand",
+    "wrist_twist": "right_hand",
+    "finger_wave": "right_hand",
+    "think": "right_hand",
+    "emphasis": "right_hand",
+    "blink": "head",
+    "micro_gaze": "head",
+    "antenna_wiggle": "head",
+    "nod": "head",
+    "head_shake": "head",
+    "brow_beat": "head",
+}
+
+
+def _gesture_group_for_motion(motion: str) -> str:
+    return MOTION_GESTURE_GROUPS.get(str(motion), "body")
+
+
+def _motion_event_sort_key(event: dict[str, Any]) -> tuple[float, str, str, str]:
+    return (
+        float(event.get("timeSec") or 0.0),
+        str(event.get("gestureGroup") or _gesture_group_for_motion(str(event.get("motion") or ""))),
+        str(event.get("action") or ""),
+        str(event.get("motion") or ""),
+    )
+
+
+def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for event in events:
+        item = dict(event)
+        item.setdefault("gestureGroup", _gesture_group_for_motion(str(item.get("motion") or "")))
+        normalized.append(item)
+
+    latest_action_end_by_group: dict[str, float] = {}
+    resolved: list[dict[str, Any]] = []
+    for event in sorted(normalized, key=_motion_event_sort_key):
+        item = dict(event)
+        if item.get("action"):
+            groups = [
+                str(group)
+                for group in item.get("gestureGroups", [item["gestureGroup"]])
+                if str(group) in {"right_hand", "left_hand", "head", "body"}
+            ] or [str(item["gestureGroup"])]
+            duration = max(0.1, float(item.get("duration") or 0.75))
+            start = max(0.0, float(item.get("timeSec") or 0.0))
+            previous_end = max((latest_action_end_by_group.get(group, -1.0) for group in groups), default=-1.0)
+            if start < previous_end:
+                start = previous_end
+            if start + duration > duration_sec:
+                duration = max(0.1, duration_sec - start)
+            item["timeSec"] = round(start, 3)
+            item["duration"] = round(duration, 3)
+            for group in groups:
+                latest_action_end_by_group[group] = start + duration
+        resolved.append(item)
+    return sorted(resolved, key=_motion_event_sort_key)
 
 
 MANDARIN_VISEME_CHARS = {
@@ -450,7 +618,7 @@ def build_motion_plan(script: str, duration_sec: float, fps: int = DEFAULT_FPS, 
                 "direction": 1,
             }
         )
-    events.sort(key=lambda item: float(item["timeSec"]))
+    events = _finalize_motion_events(events, duration_sec)
 
     chars = list(script or "")
     if not chars:

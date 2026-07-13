@@ -4490,6 +4490,8 @@ def create_action_library(
         if frame not in {1, end}:
             mark_hand_pose("Gesture_Wave", frame, "r", "open_hand")
 
+    action_specs.update(aroll_actions.build_aroll_action_specs(source_rig, fps))
+
     actions = [build_action(name, keyframes) for name, keyframes in action_specs.items()]
 
     mouth_actions: list[str] = []

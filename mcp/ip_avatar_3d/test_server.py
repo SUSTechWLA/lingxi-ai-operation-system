@@ -135,6 +135,73 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         self.assertLessEqual(len(think_events), 2)
         self.assertTrue(all(event["strength"] <= 1.0 for event in think_events))
 
+    def test_motion_plan_maps_aroll_semantics_without_same_group_conflicts(self) -> None:
+        server = load_server()
+        script = (
+            "大家好，第一，我们先解释这个流程；第二，具体看这个细节；第三，总结风险。"
+            "我同意这个判断，但是不同意夸张说法。总之，重点是记住。"
+            "Hello, first explain the idea, second show detail. I agree, but I disagree. "
+            "In conclusion, emphasize this point."
+        )
+
+        plan = server.build_motion_plan(script, 12, 30)
+        repeat = server.build_motion_plan(script, 12, 30)
+
+        self.assertEqual(plan["motionEvents"], repeat["motionEvents"])
+        aroll_events = [
+            event
+            for event in plan["motionEvents"]
+            if str(event.get("action", "")).startswith("Aroll_")
+        ]
+        actions = {event.get("action") for event in aroll_events}
+        self.assertTrue(
+            {
+                "Aroll_Greeting_Wave",
+                "Aroll_Count_One",
+                "Aroll_Count_Two",
+                "Aroll_Count_Three",
+                "Aroll_OpenPalm_Explain",
+                "Aroll_Pinch_Detail",
+                "Aroll_Agree_Nod",
+                "Aroll_Disagree_Shake",
+                "Aroll_Emphasis_SoftFist",
+            }.issubset(actions),
+            actions,
+        )
+        semantics = {event.get("semantic") for event in aroll_events}
+        self.assertTrue(
+            {
+                "greeting",
+                "enumeration",
+                "explanation",
+                "detail",
+                "agreement",
+                "disagreement",
+                "emphasis",
+            }.issubset(semantics),
+            semantics,
+        )
+        self.assertTrue(
+            all(event.get("gestureGroup") in {"right_hand", "left_hand", "head", "body"} for event in aroll_events),
+            aroll_events,
+        )
+
+        conflicts = []
+        by_group: dict[str, list[dict]] = {}
+        for event in aroll_events:
+            by_group.setdefault(str(event["gestureGroup"]), []).append(event)
+        for group, events in by_group.items():
+            previous_end = -1.0
+            previous_action = ""
+            for event in sorted(events, key=lambda item: (float(item["timeSec"]), str(item.get("action")))):
+                start = float(event["timeSec"])
+                end = start + float(event["duration"])
+                if start < previous_end - 1e-6:
+                    conflicts.append((group, previous_action, event.get("action"), start, previous_end))
+                previous_end = max(previous_end, end)
+                previous_action = str(event.get("action"))
+        self.assertEqual([], conflicts)
+
     def test_subtitle_builder_splits_script_over_duration(self) -> None:
         server = load_server()
 
