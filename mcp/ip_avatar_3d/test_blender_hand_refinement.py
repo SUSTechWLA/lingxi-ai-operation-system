@@ -61,7 +61,12 @@ def digit_chain_length(armature, bone_map, side: str, digit: int) -> float:
     missing = [role for role in roles if role not in bone_map]
     if missing:
         raise ValueError(f"{side} digit {digit} is missing required chain roles: {', '.join(missing)}")
-    return sum(armature.data.bones[bone_map[role]].length for role in roles)
+    proximal = armature.data.bones[bone_map[roles[0]]]
+    distal = armature.data.bones[bone_map[roles[-1]]]
+    return (
+        (armature.matrix_world @ distal.tail_local)
+        - (armature.matrix_world @ proximal.head_local)
+    ).length
 
 
 def sample_action_tips(armature, bone_map, action_name: str, frame: int = 30):
@@ -97,6 +102,16 @@ def sample_single_digit_curl(armature, bone_map, side: str, selected: int):
         for digit in (1, 2, 3)
     }
     return before, after
+
+
+def sampled_digit_rotations(armature, bone_map, action_name: str, side: str, digit: int, frame: int = 30):
+    blender_renderer.create_action_library(armature, {}, bone_map, fps=30)
+    armature.animation_data.action = bpy.data.actions[action_name]
+    bpy.context.scene.frame_set(frame)
+    return tuple(
+        armature.pose.bones[bone_map[role]].rotation_euler.copy()
+        for role in digit_roles(side, digit)
+    )
 
 
 def _deform_assignments(obj, vertex, armature, group_names=None):
@@ -455,11 +470,43 @@ def test_each_digit_moves_independently_and_fist_closes() -> None:
     assert not violations, "\n".join(violations)
 
 
+def test_three_segment_digit_poses_key_independent_semantic_curls() -> None:
+    _, _, armature, _, bone_map, _ = load_enhanced_fbx_character()
+
+    for digit in (1, 2, 3):
+        proximal, middle, distal = sampled_digit_rotations(
+            armature, bone_map, "Gesture_Fist", "r", digit
+        )
+        assert proximal.z > 0.34, (digit, tuple(proximal))
+        assert middle.z > 0.42, (digit, tuple(middle))
+        assert distal.z > 0.28, (digit, tuple(distal))
+
+    open_digits = [
+        sampled_digit_rotations(armature, bone_map, "Gesture_OpenHand", "r", digit)
+        for digit in (1, 2, 3)
+    ]
+    assert all(abs(rotation.z) < 0.04 for chain in open_digits for rotation in chain)
+    assert open_digits[0][0].x > 0.10, tuple(open_digits[0][0])
+    assert open_digits[2][0].x < -0.10, tuple(open_digits[2][0])
+
+    pinch_lower = sampled_digit_rotations(armature, bone_map, "Gesture_Pinch", "r", 3)
+    assert abs(pinch_lower[0].y) > 0.04, tuple(pinch_lower[0])
+
+    for selected, frame in ((1, 15), (2, 30), (3, 45)):
+        proximal, middle, distal = sampled_digit_rotations(
+            armature, bone_map, "Gesture_FingerWave", "r", selected, frame
+        )
+        assert proximal.z > 0.34, (selected, tuple(proximal))
+        assert middle.z > 0.42, (selected, tuple(middle))
+        assert distal.z > 0.28, (selected, tuple(distal))
+
+
 if __name__ == "__main__":
     tests = [
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
         test_validated_three_segment_reuse_requires_contract_marker,
         test_each_digit_moves_independently_and_fist_closes,
+        test_three_segment_digit_poses_key_independent_semantic_curls,
     ]
     failures: list[tuple[str, AssertionError]] = []
     for test in tests:

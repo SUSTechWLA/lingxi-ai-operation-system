@@ -22,6 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from hand_refinement import enhance_three_segment_hands
+import aroll_actions
 
 
 CAMERA_NAMES = {
@@ -3576,6 +3577,50 @@ def semantic_pose_rotation(role: str, rotation: tuple[float, float, float]) -> t
     return finger_euler(side, curl, splay, twist)
 
 
+def apply_digit_pose(
+    pose_bones,
+    bone_map: dict[str, str],
+    side: str,
+    digit: int,
+    digit_pose: aroll_actions.DigitPose,
+) -> None:
+    """Apply a shared semantic digit pose, preserving exact legacy two-bone support."""
+    roles = aroll_actions.chain_roles(side, digit)
+    if aroll_actions.has_three_segment_chain(bone_map, side, digit):
+        for role, rotation in aroll_actions.hand_pose_eulers(
+            side, {digit: digit_pose}, bone_map
+        ).items():
+            if role in bone_map and bone_map[role] in pose_bones:
+                pose_bones[bone_map[role]].rotation_euler = rotation
+        return
+    proximal_name = bone_map.get(roles["proximal"])
+    distal_name = bone_map.get(roles["distal"])
+    if proximal_name and proximal_name in pose_bones:
+        pose_bones[proximal_name].rotation_euler = semantic_pose_rotation(
+            roles["proximal"],
+            (digit_pose.proximal, digit_pose.splay, digit_pose.opposition),
+        )
+    if (
+        aroll_actions.has_legacy_two_segment_chain(bone_map, side, digit)
+        and distal_name
+        and distal_name in pose_bones
+    ):
+        pose_bones[distal_name].rotation_euler = semantic_pose_rotation(
+            roles["distal"],
+            (digit_pose.distal, digit_pose.splay * 0.08, 0.0),
+        )
+
+
+def apply_hand_pose(
+    pose_bones,
+    bone_map: dict[str, str],
+    side: str,
+    digit_poses,
+) -> None:
+    for digit in (1, 2, 3):
+        apply_digit_pose(pose_bones, bone_map, side, digit, digit_poses[digit])
+
+
 def lip_at(plan: dict, t: float) -> dict:
     lips = plan.get("lipSync") or []
     if not lips:
@@ -3658,10 +3703,8 @@ def animate(
             fore_right = [-0.10 - fore_drift, -0.03, 0.012]
         hand_left = [0.0, 0.04, -0.025]
         hand_right = [0.0, -0.04, 0.025]
-        fingers_left = [0.06, 0.04, 0.08]
-        fingers_right = [0.06, 0.04, 0.08]
-        finger_splay_left = [0.035, 0.0, -0.035]
-        finger_splay_right = [0.035, 0.0, -0.035]
+        digit_poses_left = dict(aroll_actions.hand_pose("relaxed_hand"))
+        digit_poses_right = dict(aroll_actions.hand_pose("relaxed_hand"))
         leg_left = math.sin(t * math.pi * 2 * 0.24) * 0.035
         leg_right = -leg_left
         right_hand_stage = 0.0
@@ -3736,12 +3779,9 @@ def animate(
                 hand_right[0] += amount * wave * 0.035
                 hand_right[1] += pose_amount * (WAVE_PALM_FACING_ROTATION_Y + 0.04)
                 hand_right[2] += amount * wave * 0.07
-                fingers_right = [value * (1.0 - pose_amount) for value in fingers_right]
-                target_splay = [WAVE_OPEN_FINGER_SPLAY, 0.0, -WAVE_OPEN_FINGER_SPLAY]
-                finger_splay_right = [
-                    current * (1.0 - pose_amount) + target * pose_amount
-                    for current, target in zip(finger_splay_right, target_splay)
-                ]
+                digit_poses_right = aroll_actions.blend_hand_pose(
+                    digit_poses_right, aroll_actions.hand_pose("open_hand"), pose_amount
+                )
             elif motion in {"point", "point_left"}:
                 if source_rig:
                     upper_left[0] -= amount * 0.04
@@ -3754,9 +3794,9 @@ def animate(
                 fore_left[0] += amount * 0.16
                 fore_left[1] += amount * 0.12
                 hand_left[1] += amount * 0.08
-                fingers_left[0] += amount * 0.26
-                fingers_left[1] *= max(0.0, 1.0 - amount)
-                fingers_left[2] += amount * 0.30
+                digit_poses_left = aroll_actions.blend_hand_pose(
+                    digit_poses_left, aroll_actions.hand_pose("point"), amount
+                )
             elif motion == "point_right":
                 if source_rig:
                     upper_right[0] -= amount * 0.04
@@ -3769,9 +3809,9 @@ def animate(
                 fore_right[0] += amount * 0.16
                 fore_right[1] -= amount * 0.12
                 hand_right[1] -= amount * 0.08
-                fingers_right[0] += amount * 0.26
-                fingers_right[1] *= max(0.0, 1.0 - amount)
-                fingers_right[2] += amount * 0.30
+                digit_poses_right = aroll_actions.blend_hand_pose(
+                    digit_poses_right, aroll_actions.hand_pose("point"), amount
+                )
             elif motion == "present":
                 if source_rig:
                     upper_left[2] -= amount * 0.48
@@ -3811,10 +3851,12 @@ def animate(
                 fore_right[1] -= amount * 0.18
                 hand_left[1] += amount * 0.42
                 hand_right[1] -= amount * 0.42
-                finger_splay_left[0] += amount * 0.10
-                finger_splay_left[2] -= amount * 0.10
-                finger_splay_right[0] += amount * 0.10
-                finger_splay_right[2] -= amount * 0.10
+                digit_poses_left = aroll_actions.blend_hand_pose(
+                    digit_poses_left, aroll_actions.hand_pose("open_hand"), amount
+                )
+                digit_poses_right = aroll_actions.blend_hand_pose(
+                    digit_poses_right, aroll_actions.hand_pose("open_hand"), amount
+                )
             elif motion == "think":
                 if source_rig:
                     upper_right[0] -= amount * 0.12
@@ -3833,9 +3875,9 @@ def animate(
                 hand_right[0] += amount * 0.14
                 hand_right[1] -= amount * 0.18
                 hand_right[2] += amount * 0.10
-                fingers_right[0] += amount * 0.18
-                fingers_right[1] += amount * 0.14
-                fingers_right[2] += amount * 0.20
+                digit_poses_right = aroll_actions.blend_hand_pose(
+                    digit_poses_right, aroll_actions.hand_pose("soft_curl"), amount
+                )
                 head_turn += amount * 0.12
                 head_tilt -= amount * 0.09
             elif motion == "shrug":
@@ -3871,13 +3913,16 @@ def animate(
                 hand_right[0] += amount * 0.08
                 hand_right[1] -= amount * 0.22
                 hand_right[2] += amount * 0.08
-                fingers_right = [value + amount * 0.26 for value in fingers_right]
+                digit_poses_right = aroll_actions.blend_hand_pose(
+                    digit_poses_right, aroll_actions.hand_pose("fist"), amount
+                )
             elif motion == "open_hand":
                 stage_right_hand(amount, 0.90)
                 hand_right[1] -= amount * 0.28
                 hand_right[2] += amount * 0.10
-                fingers_right = [value * (1.0 - amount) for value in fingers_right]
-                finger_splay_right = [0.12 * amount, 0.0, -0.12 * amount]
+                digit_poses_right = aroll_actions.blend_hand_pose(
+                    digit_poses_right, aroll_actions.hand_pose("open_hand"), amount
+                )
             elif motion == "wrist_twist":
                 stage_right_hand(amount, 0.94)
                 twist = math.sin(t * 10.0) * amount * 0.62
@@ -3885,14 +3930,13 @@ def animate(
             elif motion == "finger_wave":
                 stage_right_hand(amount, 0.92)
                 hand_right[1] -= amount * 0.20
-                finger_splay_right[0] += amount * 0.06
-                finger_splay_right[2] -= amount * 0.06
                 start = float(event.get("timeSec") or 0.0)
                 duration = max(0.001, float(event.get("duration") or 0.8))
                 phase = max(0.0, min(1.0, (t - start) / duration))
-                for index in range(3):
-                    curl = max(0.0, math.sin((phase * 3.0 - index * 0.42) * math.pi)) * amount * 0.24
-                    fingers_right[index] += curl
+                selected = min(3, int(phase * 3.0) + 1)
+                digit_poses_right = aroll_actions.blend_hand_pose(
+                    digit_poses_right, aroll_actions.finger_roll_pose(selected), amount
+                )
             elif motion == "antenna_wiggle":
                 head_tilt += math.sin(t * 19.0) * amount * 0.018
             elif motion == "micro_gaze":
@@ -3905,8 +3949,6 @@ def animate(
         apply_right_hand_stage()
         lip = lip_at(plan, t)
         mouth_open = float(lip.get("open") or 0)
-        fingers_left = [max(0.0, min(SAFE_FINGER_CURL_MAX, value)) for value in fingers_left]
-        fingers_right = [max(0.0, min(SAFE_FINGER_CURL_MAX, value)) for value in fingers_right]
         bpy.context.scene.frame_set(frame)
         set_bone("root", location=(root_side, 0, root_lift))
         set_bone("body", rotation=(0, 0, body_sway))
@@ -3927,22 +3969,12 @@ def animate(
         set_bone("upper_arm_l", rotation=upper_left)
         set_bone("forearm_l", rotation=fore_left)
         set_bone("hand_l", rotation=hand_left)
-        set_bone("finger_1_l", rotation=finger_euler("l", fingers_left[0], finger_splay_left[0]))
-        set_bone("finger_2_l", rotation=finger_euler("l", fingers_left[1], finger_splay_left[1]))
-        set_bone("finger_3_l", rotation=finger_euler("l", fingers_left[2], finger_splay_left[2]))
-        set_bone("finger_1_tip_l", rotation=finger_euler("l", fingers_left[0] * DISTAL_FINGER_CURL_SCALE, finger_splay_left[0] * 0.24))
-        set_bone("finger_2_tip_l", rotation=finger_euler("l", fingers_left[1] * DISTAL_FINGER_CURL_SCALE, finger_splay_left[1] * 0.24))
-        set_bone("finger_3_tip_l", rotation=finger_euler("l", fingers_left[2] * DISTAL_FINGER_CURL_SCALE, finger_splay_left[2] * 0.24))
+        apply_hand_pose(pose, bone_map, "l", digit_poses_left)
         set_bone("shoulder_r", rotation=shoulder_right)
         set_bone("upper_arm_r", rotation=upper_right)
         set_bone("forearm_r", rotation=fore_right)
         set_bone("hand_r", rotation=hand_right)
-        set_bone("finger_1_r", rotation=finger_euler("r", fingers_right[0], finger_splay_right[0]))
-        set_bone("finger_2_r", rotation=finger_euler("r", fingers_right[1], finger_splay_right[1]))
-        set_bone("finger_3_r", rotation=finger_euler("r", fingers_right[2], finger_splay_right[2]))
-        set_bone("finger_1_tip_r", rotation=finger_euler("r", fingers_right[0] * DISTAL_FINGER_CURL_SCALE, finger_splay_right[0] * 0.24))
-        set_bone("finger_2_tip_r", rotation=finger_euler("r", fingers_right[1] * DISTAL_FINGER_CURL_SCALE, finger_splay_right[1] * 0.24))
-        set_bone("finger_3_tip_r", rotation=finger_euler("r", fingers_right[2] * DISTAL_FINGER_CURL_SCALE, finger_splay_right[2] * 0.24))
+        apply_hand_pose(pose, bone_map, "r", digit_poses_right)
         if source_rig:
             set_bone("leg_l", rotation=(0, 0, leg_left))
             set_bone("shin_l", rotation=(0, 0, -leg_left * 0.34))
@@ -4125,8 +4157,15 @@ def create_action_library(
                 base_rotations.get(role, (0.0, 0.0, 0.0)),
             )
             bone.scale = (1.0, 1.0, 1.0)
+        for side in ("l", "r"):
+            apply_hand_pose(pose_bones, bone_map, side, aroll_actions.hand_pose("relaxed_hand"))
 
-    def build_action(name: str, keyframes: list[tuple[int, dict[str, tuple[float, float, float]]]]) -> str:
+    def named_hand_pose(name: str):
+        if name.startswith("finger_roll_"):
+            return aroll_actions.finger_roll_pose(int(name.rsplit("_", 1)[1]))
+        return aroll_actions.hand_pose(name)
+
+    def build_action(name: str, keyframes: list[tuple[int, dict[str, Any]]]) -> str:
         existing = bpy.data.actions.get(name)
         if existing:
             existing.use_fake_user = True
@@ -4136,26 +4175,47 @@ def create_action_library(
             bpy.context.scene.frame_set(max(1, int(frame)))
             reset_pose()
             for role, rotation in rotations.items():
+                if role.startswith("__digit_pose_"):
+                    continue
                 bone_name = bone_map.get(role)
                 if bone_name and bone_name in pose_bones:
                     pose_bones[bone_name].rotation_euler = semantic_pose_rotation(role, rotation)
+            marked_sides: set[str] = set()
+            for role, pose_name in rotations.items():
+                if not role.startswith("__digit_pose_"):
+                    continue
+                side = role.rsplit("_", 1)[1]
+                marked_sides.add(side)
+                apply_hand_pose(pose_bones, bone_map, side, named_hand_pose(str(pose_name)))
             for side in ("l", "r"):
                 for digit in (1, 2, 3):
                     proximal_role = f"finger_{digit}_{side}"
                     distal_role = f"finger_{digit}_tip_{side}"
-                    if proximal_role not in rotations or distal_role in rotations:
+                    if side in marked_sides or proximal_role not in rotations:
                         continue
-                    distal_name = bone_map.get(distal_role)
-                    if distal_name and distal_name in pose_bones:
-                        proximal_rotation = rotations[proximal_role]
-                        pose_bones[distal_name].rotation_euler = semantic_pose_rotation(
-                            distal_role,
-                            (
-                                proximal_rotation[0] * DISTAL_FINGER_CURL_SCALE,
-                                proximal_rotation[1] * 0.24,
-                                proximal_rotation[2] * 0.65,
-                            ),
+                    proximal_rotation = rotations[proximal_role]
+                    if aroll_actions.has_three_segment_chain(bone_map, side, digit):
+                        apply_digit_pose(
+                            pose_bones,
+                            bone_map,
+                            side,
+                            digit,
+                            aroll_actions.articulated_pose(*proximal_rotation),
                         )
+                    elif (
+                        aroll_actions.has_legacy_two_segment_chain(bone_map, side, digit)
+                        and distal_role not in rotations
+                    ):
+                        distal_name = bone_map.get(distal_role)
+                        if distal_name and distal_name in pose_bones:
+                            pose_bones[distal_name].rotation_euler = semantic_pose_rotation(
+                                distal_role,
+                                (
+                                    proximal_rotation[0] * DISTAL_FINGER_CURL_SCALE,
+                                    proximal_rotation[1] * 0.24,
+                                    proximal_rotation[2] * 0.65,
+                                ),
+                            )
             for role in roles:
                 bone = pose_bones[bone_map[role]]
                 bone.keyframe_insert(data_path="location", frame=frame)
@@ -4395,6 +4455,38 @@ def create_action_library(
             (mid, {"upper_arm_r": (-0.06, -0.02, -0.82), "forearm_r": (-0.64, -0.06, 0.72), "hand_r": (0.12, -0.26, 0.16), "finger_1_r": (0.18, 0.08, -0.04), "finger_2_r": (0.08, 0.0, 0.0), "finger_3_r": (0.22, -0.08, 0.04)}),
             (end, {}),
         ]
+
+    action_specs["Gesture_Count_Three"] = [
+        (1, {}),
+        (mid, {"upper_arm_r": (-0.06, -0.02, -0.72), "forearm_r": (-0.72, -0.06, 0.82), "hand_r": (0.10, -0.28, 0.18)}),
+        (end, {}),
+    ]
+
+    def mark_hand_pose(action_name: str, frame: int, side: str, pose_name: str) -> None:
+        for keyframe, rotations in action_specs[action_name]:
+            if keyframe == frame:
+                rotations[f"__digit_pose_{side}"] = pose_name
+
+    for side in ("l", "r"):
+        mark_hand_pose("Gesture_OpenHand", mid, side, "open_hand")
+        mark_hand_pose("Gesture_Fist", mid, side, "fist")
+    mark_hand_pose("Gesture_Pinch", mid, "r", "pinch")
+    mark_hand_pose("Gesture_Count_One", mid, "r", "count_one")
+    mark_hand_pose("Gesture_Count_Two", mid, "r", "count_two")
+    mark_hand_pose("Gesture_Count_Three", mid, "r", "count_three")
+    mark_hand_pose("Gesture_Point_Left", mid, "l", "point")
+    mark_hand_pose("Gesture_Point_Right", mid, "r", "point")
+    mark_hand_pose("Gesture_FingerWave", 1, "r", "open_hand")
+    for frame, pose_name in (
+        (max(2, mid // 2), "finger_roll_1"),
+        (mid, "finger_roll_2"),
+        (mid + max(2, mid // 2), "finger_roll_3"),
+    ):
+        mark_hand_pose("Gesture_FingerWave", frame, "r", pose_name)
+    for frame, _ in action_specs["Gesture_Wave"]:
+        if frame not in {1, end}:
+            mark_hand_pose("Gesture_Wave", frame, "r", "open_hand")
+
     actions = [build_action(name, keyframes) for name, keyframes in action_specs.items()]
 
     mouth_actions: list[str] = []
