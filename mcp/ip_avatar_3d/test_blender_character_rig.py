@@ -61,6 +61,27 @@ def load_enhanced_fbx_character():
     return character_objects, dimensions, armature, rig_stats, bone_map, removed
 
 
+def hand_relative_tip(armature, bone_map, side: str, digit: int):
+    hand = armature.pose.bones[bone_map[f"hand_{side}"]]
+    distal = armature.pose.bones[bone_map[f"finger_{digit}_tip_{side}"]]
+    armature_space = hand.matrix.inverted() @ distal.tail
+    return armature.matrix_world.to_3x3() @ armature_space
+
+
+def hand_relative_digit_length(armature, bone_map, side: str, digit: int) -> float:
+    world_scale = armature.matrix_world.to_3x3()
+    roles = (
+        f"finger_{digit}_{side}",
+        f"finger_{digit}_mid_{side}",
+        f"finger_{digit}_tip_{side}",
+    )
+    length = 0.0
+    for role in roles:
+        bone = armature.data.bones[bone_map[role]]
+        length += (world_scale @ (bone.tail_local - bone.head_local)).length
+    return length
+
+
 def test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers() -> None:
     character_objects, _, armature, rig_stats, _, _ = load_enhanced_fbx_character()
 
@@ -836,6 +857,66 @@ def test_source_hand_events_raise_wrist_and_drive_individual_digits() -> None:
     )
 
 
+def test_enhanced_timeline_keys_three_segment_fist_and_isolates_finger_roll() -> None:
+    _, _, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    fist_plan = {
+        "durationSec": 1.0,
+        "motionEvents": [{"timeSec": 0.0, "motion": "fist", "duration": 1.0, "strength": 1.0}],
+        "lipSync": [],
+    }
+    blender_renderer.animate(armature, {}, fist_plan, fps=30, bone_map=bone_map)
+    bpy.context.scene.frame_set(15)
+    for digit in (1, 2, 3):
+        proximal = armature.pose.bones[bone_map[f"finger_{digit}_r"]].rotation_euler
+        middle = armature.pose.bones[bone_map[f"finger_{digit}_mid_r"]].rotation_euler
+        distal = armature.pose.bones[bone_map[f"finger_{digit}_tip_r"]].rotation_euler
+        assert proximal.z > 0.34, (digit, tuple(proximal))
+        assert middle.z > 0.42, (digit, tuple(middle))
+        assert distal.z > 0.28, (digit, tuple(distal))
+
+    roll_plan = {
+        "durationSec": 1.0,
+        "motionEvents": [{"timeSec": 0.0, "motion": "finger_wave", "duration": 1.0, "strength": 1.0}],
+        "lipSync": [],
+    }
+    blender_renderer.animate(armature, {}, roll_plan, fps=30, bone_map=bone_map)
+    bpy.context.scene.frame_set(1)
+    before = {digit: hand_relative_tip(armature, bone_map, "r", digit).copy() for digit in (1, 2, 3)}
+    bpy.context.scene.frame_set(15)
+    selected = 2
+    after = {digit: hand_relative_tip(armature, bone_map, "r", digit).copy() for digit in (1, 2, 3)}
+    proximal = armature.pose.bones[bone_map[f"finger_{selected}_r"]].rotation_euler
+    middle = armature.pose.bones[bone_map[f"finger_{selected}_mid_r"]].rotation_euler
+    distal = armature.pose.bones[bone_map[f"finger_{selected}_tip_r"]].rotation_euler
+    assert proximal.z > 0.34, tuple(proximal)
+    assert middle.z > 0.42, tuple(middle)
+    assert distal.z > 0.28, tuple(distal)
+    for digit in (1, 3):
+        displacement = (after[digit] - before[digit]).length
+        maximum = hand_relative_digit_length(armature, bone_map, "r", digit) * 0.06
+        assert displacement <= maximum, (digit, displacement, maximum)
+
+    point_plan = {
+        "durationSec": 1.0,
+        "motionEvents": [{"timeSec": 0.0, "motion": "point_right", "duration": 1.0, "strength": 1.0}],
+        "lipSync": [],
+    }
+    blender_renderer.animate(armature, {}, point_plan, fps=30, bone_map=bone_map)
+    bpy.context.scene.frame_set(15)
+    pointed = [
+        armature.pose.bones[bone_map[role]].rotation_euler
+        for role in ("finger_1_r", "finger_1_mid_r", "finger_1_tip_r")
+    ]
+    assert all(abs(rotation.z) < 0.04 for rotation in pointed)
+    curled = [
+        armature.pose.bones[bone_map[role]].rotation_euler
+        for role in ("finger_2_r", "finger_2_mid_r", "finger_2_tip_r")
+    ]
+    assert curled[0].z > 0.30, tuple(curled[0])
+    assert curled[1].z > 0.38, tuple(curled[1])
+    assert curled[2].z > 0.25, tuple(curled[2])
+
+
 def test_overlapping_hand_events_share_one_arm_stage_pose() -> None:
     _, _, armature, _, bone_map, _ = load_enhanced_fbx_character()
     plan = {
@@ -865,6 +946,7 @@ if __name__ == "__main__":
         test_talking_timeline_animates_multiaxis_hands_fingers_jaw_and_source_mouth,
         test_think_motion_event_drives_head_hand_and_finger_pose,
         test_source_hand_events_raise_wrist_and_drive_individual_digits,
+        test_enhanced_timeline_keys_three_segment_fist_and_isolates_finger_roll,
         test_overlapping_hand_events_share_one_arm_stage_pose,
         test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers,
         test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights,

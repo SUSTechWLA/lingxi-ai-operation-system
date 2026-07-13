@@ -51,9 +51,11 @@ def is_finger_deform_bone_name(name: str) -> bool:
     return re.fullmatch(r"finger\d+(?:proximal|middle|distal)[lr]", normalized) is not None
 
 
-def world_tip(armature, bone_map, side: str, digit: int):
+def hand_relative_tip(armature, bone_map, side: str, digit: int):
+    hand = armature.pose.bones[bone_map[f"hand_{side}"]]
     distal = armature.pose.bones[bone_map[f"finger_{digit}_tip_{side}"]]
-    return armature.matrix_world @ distal.tail
+    armature_space = hand.matrix.inverted() @ distal.tail
+    return armature.matrix_world.to_3x3() @ armature_space
 
 
 def digit_chain_length(armature, bone_map, side: str, digit: int) -> float:
@@ -61,12 +63,12 @@ def digit_chain_length(armature, bone_map, side: str, digit: int) -> float:
     missing = [role for role in roles if role not in bone_map]
     if missing:
         raise ValueError(f"{side} digit {digit} is missing required chain roles: {', '.join(missing)}")
-    proximal = armature.data.bones[bone_map[roles[0]]]
-    distal = armature.data.bones[bone_map[roles[-1]]]
-    return (
-        (armature.matrix_world @ distal.tail_local)
-        - (armature.matrix_world @ proximal.head_local)
-    ).length
+    world_scale = armature.matrix_world.to_3x3()
+    length = 0.0
+    for role in roles:
+        bone = armature.data.bones[bone_map[role]]
+        length += (world_scale @ (bone.tail_local - bone.head_local)).length
+    return length
 
 
 def sample_action_tips(armature, bone_map, action_name: str, frame: int = 30):
@@ -74,7 +76,7 @@ def sample_action_tips(armature, bone_map, action_name: str, frame: int = 30):
     armature.animation_data.action = bpy.data.actions[action_name]
     bpy.context.scene.frame_set(frame)
     return {
-        (side, digit): world_tip(armature, bone_map, side, digit).copy()
+        (side, digit): hand_relative_tip(armature, bone_map, side, digit).copy()
         for side in ("l", "r")
         for digit in (1, 2, 3)
     }
@@ -93,12 +95,12 @@ def sample_single_digit_curl(armature, bone_map, side: str, selected: int):
     armature.animation_data.action = bpy.data.actions["Gesture_FingerWave"]
     bpy.context.scene.frame_set(1)
     before = {
-        digit: world_tip(armature, bone_map, side, digit).copy()
+        digit: hand_relative_tip(armature, bone_map, side, digit).copy()
         for digit in (1, 2, 3)
     }
     bpy.context.scene.frame_set({1: 15, 2: 30, 3: 45}[selected])
     after = {
-        digit: world_tip(armature, bone_map, side, digit).copy()
+        digit: hand_relative_tip(armature, bone_map, side, digit).copy()
         for digit in (1, 2, 3)
     }
     return before, after

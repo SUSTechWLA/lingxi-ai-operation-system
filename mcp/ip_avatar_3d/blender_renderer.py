@@ -3935,7 +3935,9 @@ def animate(
                 phase = max(0.0, min(1.0, (t - start) / duration))
                 selected = min(3, int(phase * 3.0) + 1)
                 digit_poses_right = aroll_actions.blend_hand_pose(
-                    digit_poses_right, aroll_actions.finger_roll_pose(selected), amount
+                    digit_poses_right,
+                    aroll_actions.finger_roll_pose(selected, unselected_pose="relaxed_hand"),
+                    amount,
                 )
             elif motion == "antenna_wiggle":
                 head_tilt += math.sin(t * 19.0) * amount * 0.018

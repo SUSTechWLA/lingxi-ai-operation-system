@@ -30,24 +30,48 @@ fist closure, isolated-roll drift, open curls/splay, and pinch opposition.
 
 ## Motion Sampling
 
-World-space chain-length ratios from `Gesture_Fist` and `Gesture_FingerWave`:
+Palm-relative, world-scale-normalized ratios from `Gesture_Fist` and
+`Gesture_FingerWave`:
 
-| Digit | Fist tip displacement | Roll selected | Roll unselected maximum |
+| Side | Digit 1 fist | Digit 2 fist | Digit 3 fist |
 | --- | ---: | ---: | ---: |
-| 1 | 0.567 | 0.649 | 0.000 |
-| 2 | 0.592 | 0.650 | 0.000 |
-| 3 | 0.577 | 0.649 | 0.000 |
+| Left | 0.697 | 0.684 | 0.678 |
+| Right | 0.697 | 0.684 | 0.699 |
+
+| Roll path | Selected ratio | Unselected maximum |
+| --- | ---: | ---: |
+| Right-hand action digit 1 | 0.649 | 0.000 |
+| Right-hand action digit 2 | 0.650 | 0.000 |
+| Right-hand action digit 3 | 0.649 | 0.000 |
+| Procedural `animate()` digit 2 | 0.497 | 0.000 |
 
 The contract ratios remain 25% for fist closure, 18% for the selected roll,
-and 6% maximum for unselected drift. Their length normalization now uses the
-same world space as the sampled tips; the FBX armature has a non-unit object
-scale, so comparing those tips against raw local bone lengths was invalid.
+and 6% maximum for unselected drift. Each sampled distal tail is transformed
+through its evaluated Hand pose-bone inverse before applying armature world
+scale. The denominator is the sum of all three segment vectors at that same
+world scale, not the chain chord. This removes wrist, palm, and upstream arm
+motion without changing any threshold.
+
+## Review Follow-Up TDD Evidence
+
+The enhanced procedural test was added before the timeline fix and initially
+failed as expected:
+
+```text
+AssertionError: (1, 0.03929193305929791, 0.011831490942318093)
+```
+
+That was an unselected finger-roll digit moving 20.0% of its hand-relative
+chain length against the unchanged 6% maximum. `finger_roll_pose()` now lets
+the procedural timeline retain the shared `relaxed_hand` pose for unselected
+digits while action-library rolls keep their explicit open-hand baseline.
 
 ## Verification
 
 ```text
 PASS focused test_blender_hand_refinement.py (4 checks)
-PASS test_blender_character_rig.py (15 checks)
+PASS test_blender_character_rig.py, including enhanced-rig `animate()` fist,
+     finger-roll isolation, and `point_right` coverage
 PASS test_server.py (28 tests)
 PASS action integrity: 396 curves, 0 duplicate-key curves, 0 unclamped points,
      repeated create_action_library call reused Gesture_Fist
@@ -60,6 +84,8 @@ PASS action integrity: 396 curves, 0 duplicate-key curves, 0 unclamped points,
   chains; generated single-segment fingers still receive their proximal pose.
 - `create_action_library` resets every keyed frame and procedural `animate`
   clears the active action before rebuilding its timeline.
+- The enhanced procedural regression checks all three segments on fist and
+  the selected roll digit, hand-relative unselected drift, and `point_right`.
 - All shared poses use source-rig semantic Z curl axes. The imported FBX axis
   sample confirmed Z is a bending axis; no palm or wrist compensation was
   added for closure, and no topology or skin weights changed.

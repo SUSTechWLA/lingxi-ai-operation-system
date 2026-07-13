@@ -84,13 +84,15 @@ def hand_pose(name: str) -> Mapping[int, DigitPose]:
     return HAND_POSES[name]
 
 
-def finger_roll_pose(selected: int) -> dict[int, DigitPose]:
+def finger_roll_pose(
+    selected: int, *, unselected_pose: str = "open_hand"
+) -> dict[int, DigitPose]:
     if selected not in (1, 2, 3):
         raise ValueError(f"finger-roll digit must be 1, 2, or 3; got {selected!r}")
-    open_pose = HAND_POSES["open_hand"]
+    rest_pose = HAND_POSES[unselected_pose]
     roll_pose = HAND_POSES["finger_roll"]
     return {
-        digit: roll_pose[digit] if digit == selected else open_pose[digit]
+        digit: roll_pose[digit] if digit == selected else rest_pose[digit]
         for digit in (1, 2, 3)
     }
 
