@@ -78,26 +78,28 @@ def test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers(
     )
 
 
-def test_rigged_fbx_gains_two_segment_three_digit_hands_with_valid_weights() -> None:
+def test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights() -> None:
     character_objects, _, armature, rig_stats, bone_map, _ = load_enhanced_fbx_character()
     bones = {bone.name for bone in armature.data.bones}
     expected = {
         f"Finger_{digit:02d}_{segment}.{side}"
         for side in ("L", "R")
         for digit in (1, 2, 3)
-        for segment in ("Proximal", "Distal")
+        for segment in ("Proximal", "Middle", "Distal")
     }
 
     assert expected.issubset(bones)
     assert rig_stats["fingerRigEnhanced"] is True
-    assert rig_stats["fingerBoneCount"] == 12
+    assert rig_stats["fingerBoneCount"] == 18
     assert rig_stats["handDetailAddedVertices"] > 0
     assert rig_stats["handDetailVertexCountAfter"] > rig_stats["handDetailVertexCountBefore"]
     assert rig_stats["fingerWeightingMode"] == "soft_digit_blend"
     assert rig_stats["fingerBlendVertexCount"] > 0
     assert rig_stats["preserveVolumeSkinning"] is True
     assert bone_map["finger_1_l"] == "Finger_01_Proximal.L"
+    assert bone_map["finger_1_mid_l"] == "Finger_01_Middle.L"
     assert bone_map["finger_1_tip_l"] == "Finger_01_Distal.L"
+    assert bone_map["finger_3_mid_r"] == "Finger_03_Middle.R"
     assert bone_map["finger_3_tip_r"] == "Finger_03_Distal.R"
     for name in expected:
         assert rig_stats["weightedVertexCounts"].get(name, 0) > 0, name
@@ -865,7 +867,7 @@ if __name__ == "__main__":
         test_source_hand_events_raise_wrist_and_drive_individual_digits,
         test_overlapping_hand_events_share_one_arm_stage_pose,
         test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers,
-        test_rigged_fbx_gains_two_segment_three_digit_hands_with_valid_weights,
+        test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights,
         test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays,
         test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face,
         test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_blink,
