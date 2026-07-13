@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
-import sys
-import unittest
+import json
 import re
+import sys
+import tempfile
+import unittest
 from pathlib import Path
 
 try:
@@ -19,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import blender_renderer
 import hand_refinement
+import render_aroll_master_qa
 from test_blender_character_rig import load_enhanced_fbx_character
 
 
@@ -46,6 +49,321 @@ AROLL_ACTIONS = {
     "Aroll_Disagree_Shake",
     "Aroll_Transition_Reset",
 }
+
+
+def test_aroll_qa_sample_contract_is_complete_and_squint_only() -> None:
+    samples = render_aroll_master_qa.QA_SAMPLES
+    action_samples = [sample for sample in samples if sample.kind == "action"]
+    hand_samples = [sample for sample in samples if sample.kind == "hand"]
+    digit_samples = [sample for sample in samples if sample.kind == "digit"]
+    face_samples = [sample for sample in samples if sample.kind == "face"]
+
+    assert {(sample.action, sample.camera) for sample in action_samples} == {
+        (action, camera)
+        for action in AROLL_ACTIONS
+        for camera in render_aroll_master_qa.ACTION_CAMERAS
+    }
+    assert {sample.path for sample in hand_samples} == {
+        "hand/open.png",
+        "hand/fist.png",
+        "hand/pinch.png",
+        "hand/count_1.png",
+        "hand/count_2.png",
+        "hand/count_3.png",
+    }
+    assert {(sample.side, sample.digit) for sample in digit_samples} == {
+        (side, digit) for side in ("l", "r") for digit in (1, 2, 3)
+    }
+    assert {sample.path for sample in face_samples} == {
+        "face/neutral.png",
+        "face/happy.png",
+        "face/serious.png",
+        "face/squint.png",
+        "face/A.png",
+        "face/E.png",
+        "face/O.png",
+        "face/MBP.png",
+    }
+    assert not any("blink" in sample.path.lower() for sample in samples)
+    assert render_aroll_master_qa.FACE_CAPABILITY == "squint_only"
+    assert len(samples) == 52
+
+
+def _fixture_look_at(obj, target) -> None:
+    obj.rotation_euler = (target - obj.location).to_track_quat("-Z", "Y").to_euler()
+
+
+def _fixture_weight_object(obj, armature, bone_name: str) -> None:
+    group = obj.vertex_groups.new(name=bone_name)
+    group.add([vertex.index for vertex in obj.data.vertices], 1.0, "REPLACE")
+    modifier = obj.modifiers.new("QA_Armature", "ARMATURE")
+    modifier.object = armature
+
+
+def _fixture_add_box(name, location, scale, armature, bone_name, material):
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=location)
+    obj = bpy.context.object
+    obj.name = name
+    obj.scale = scale
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    obj.data.materials.append(material)
+    _fixture_weight_object(obj, armature, bone_name)
+    return obj
+
+
+def _fixture_add_bone_segment(name, armature, material, radius: float = 0.035):
+    bone = armature.data.bones[name]
+    direction = bone.tail_local - bone.head_local
+    midpoint = (bone.head_local + bone.tail_local) * 0.5
+    bpy.ops.mesh.primitive_cylinder_add(
+        vertices=8,
+        radius=radius,
+        depth=direction.length,
+        location=midpoint,
+    )
+    obj = bpy.context.object
+    obj.name = f"QA_Mesh_{name}"
+    obj.rotation_euler = direction.to_track_quat("Z", "Y").to_euler()
+    obj.data.materials.append(material)
+    _fixture_weight_object(obj, armature, name)
+    return obj
+
+
+def _fixture_add_face_shape_keys(face) -> None:
+    face.shape_key_add(name="Basis", from_mix=False)
+    shape_names = (
+        "Mouth_Rest",
+        "Mouth_A",
+        "Mouth_E",
+        "Mouth_O",
+        "Mouth_MBP",
+        "Mouth_Smile",
+        "Mouth_Frown",
+        "Eye_Squint.L",
+        "Eye_Squint.R",
+    )
+    for shape_name in shape_names:
+        key = face.shape_key_add(name=shape_name, from_mix=False)
+        for vertex in key.data:
+            x, _, z = vertex.co
+            if shape_name == "Mouth_A" and z < 0.0:
+                vertex.co.z -= 0.13
+            elif shape_name == "Mouth_E":
+                vertex.co.x = x * 1.24
+            elif shape_name == "Mouth_O":
+                vertex.co.x = x * 0.72
+                vertex.co.z = z * 1.12
+            elif shape_name == "Mouth_MBP":
+                vertex.co.z += 0.055
+            elif shape_name == "Mouth_Smile":
+                vertex.co.x = x * 1.14
+                vertex.co.z += 0.045
+            elif shape_name == "Mouth_Frown":
+                vertex.co.x = x * 0.90
+                vertex.co.z -= 0.065
+            elif shape_name == "Eye_Squint.L" and x < 0.0 and z > 0.0:
+                vertex.co.z -= 0.11
+            elif shape_name == "Eye_Squint.R" and x > 0.0 and z > 0.0:
+                vertex.co.z -= 0.11
+    face["blink_capability"] = "squint_only"
+
+
+def _build_aroll_qa_fixture():
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    scene = bpy.context.scene
+    scene.render.engine = "BLENDER_EEVEE"
+    scene.world = bpy.data.worlds.new("QA_Aroll_World")
+    scene.world.color = (0.025, 0.025, 0.025)
+
+    armature_data = bpy.data.armatures.new("QA_Aroll_Rig_Data")
+    armature = bpy.data.objects.new("QA_Aroll_Rig", armature_data)
+    scene.collection.objects.link(armature)
+    bpy.context.view_layer.objects.active = armature
+    armature.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    def add_bone(name, head, tail, parent=None, connected=False):
+        bone = armature_data.edit_bones.new(name)
+        bone.head = head
+        bone.tail = tail
+        if parent:
+            bone.parent = armature_data.edit_bones[parent]
+            bone.use_connect = connected
+        return bone
+
+    add_bone("Root", (0.0, 0.0, 0.0), (0.0, 0.0, 0.2))
+    add_bone("Body", (0.0, 0.0, 0.2), (0.0, 0.0, 1.45), "Root", True)
+    add_bone("Head", (0.0, 0.0, 1.45), (0.0, 0.0, 2.0), "Body", True)
+
+    bone_map = {"root": "Root", "body": "Body", "head": "Head"}
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        suffix = side.upper()
+        hand_name = f"Hand.{suffix}"
+        hand_head = (sign * 0.42, 0.0, 1.14)
+        hand_tail = (sign * 0.60, 0.0, 1.14)
+        add_bone(hand_name, hand_head, hand_tail, "Body")
+        bone_map[f"hand_{side}"] = hand_name
+        for digit in (1, 2, 3):
+            z = 1.14 + (2 - digit) * 0.13
+            base = sign * 0.60
+            points = [base + sign * 0.12 * index for index in range(4)]
+            names = (
+                f"Finger_{digit:02d}_Proximal.{suffix}",
+                f"Finger_{digit:02d}_Middle.{suffix}",
+                f"Finger_{digit:02d}_Distal.{suffix}",
+            )
+            add_bone(names[0], (points[0], 0.0, z), (points[1], 0.0, z), hand_name)
+            add_bone(names[1], (points[1], 0.0, z), (points[2], 0.0, z), names[0], True)
+            add_bone(names[2], (points[2], 0.0, z), (points[3], 0.0, z), names[1], True)
+            roles = (f"finger_{digit}_{side}", f"finger_{digit}_mid_{side}", f"finger_{digit}_tip_{side}")
+            bone_map.update(dict(zip(roles, names)))
+    bpy.ops.object.mode_set(mode="OBJECT")
+    armature["ip_avatar_bone_map"] = json.dumps(bone_map, sort_keys=True)
+    armature["ip_avatar_generated_humanoid"] = True
+
+    material = bpy.data.materials.new("QA_Aroll_Material")
+    material.diffuse_color = (0.36, 0.74, 0.52, 1.0)
+    _fixture_add_box("QA_Body", (0.0, 0.0, 0.82), (0.38, 0.18, 0.61), armature, "Body", material)
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        _fixture_add_box(
+            f"QA_Palm_{side.upper()}",
+            (sign * 0.51, 0.0, 1.14),
+            (0.12, 0.075, 0.18),
+            armature,
+            bone_map[f"hand_{side}"],
+            material,
+        )
+        for digit in (1, 2, 3):
+            for role in (f"finger_{digit}_{side}", f"finger_{digit}_mid_{side}", f"finger_{digit}_tip_{side}"):
+                _fixture_add_bone_segment(bone_map[role], armature, material)
+
+    face = _fixture_add_box(
+        "QA_Face",
+        (0.0, -0.01, 1.72),
+        (0.30, 0.20, 0.27),
+        armature,
+        "Head",
+        material,
+    )
+    _fixture_add_face_shape_keys(face)
+
+    for name, location, lens in (
+        ("Camera_Medium", (0.0, -4.3, 1.25), 58.0),
+        ("Camera_Wide", (0.0, -6.8, 1.10), 50.0),
+    ):
+        camera_data = bpy.data.cameras.new(f"{name}_Data")
+        camera = bpy.data.objects.new(name, camera_data)
+        scene.collection.objects.link(camera)
+        camera.location = location
+        camera.data.lens = lens
+        _fixture_look_at(camera, render_aroll_master_qa.Vector((0.0, 0.0, 1.05)))
+    scene.camera = bpy.data.objects["Camera_Medium"]
+
+    light_data = bpy.data.lights.new("QA_Key_Data", "AREA")
+    light_data.energy = 900.0
+    light_data.shape = "DISK"
+    light_data.size = 4.0
+    light = bpy.data.objects.new("QA_Key", light_data)
+    scene.collection.objects.link(light)
+    light.location = (-2.5, -3.0, 4.2)
+    _fixture_look_at(light, render_aroll_master_qa.Vector((0.0, 0.0, 1.0)))
+
+    blender_renderer.create_action_library(armature, {"mouth": face}, bone_map, fps=30)
+    return scene, armature, face, bone_map
+
+
+def _assert_runtime_error(fragment: str, operation) -> None:
+    try:
+        operation()
+    except RuntimeError as exc:
+        assert fragment in str(exc), str(exc)
+    else:
+        raise AssertionError(f"expected RuntimeError containing {fragment!r}")
+
+
+def test_aroll_qa_fixture_fails_closed_for_missing_master_contract() -> None:
+    _, _, face, _ = _build_aroll_qa_fixture()
+    render_aroll_master_qa.validate_scene_contract()
+
+    action = bpy.data.actions["Aroll_Idle_Listening"]
+    action.name = "QA_Missing_Action"
+    _assert_runtime_error(
+        "missing required Actions: Aroll_Idle_Listening",
+        render_aroll_master_qa.validate_scene_contract,
+    )
+    action.name = "Aroll_Idle_Listening"
+
+    camera = bpy.data.objects["Camera_Medium"]
+    camera.name = "QA_Missing_Camera"
+    _assert_runtime_error("missing required cameras: Camera_Medium", render_aroll_master_qa.validate_scene_contract)
+    camera.name = "Camera_Medium"
+
+    shape = face.data.shape_keys.key_blocks["Eye_Squint.L"]
+    shape.name = "QA_Missing_Squint"
+    _assert_runtime_error("missing required Shape Keys: Eye_Squint.L", render_aroll_master_qa.validate_scene_contract)
+    shape.name = "Eye_Squint.L"
+
+
+def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
+    _build_aroll_qa_fixture()
+    with tempfile.TemporaryDirectory() as tmp:
+        output_dir = Path(tmp) / "aroll-master-qa"
+        report = render_aroll_master_qa.run_qa(output_dir, resolution=128)
+
+        assert report["status"] == "ready"
+        assert report["faceCapability"] == {
+            "blinkCapability": "squint_only",
+            "qaSample": "face/squint.png",
+            "fullBlinkClaimed": False,
+        }
+        assert len(report["samples"]) == 52
+        assert all(
+            {"action", "camera", "path", "boneRotations", "fingertipDisplacementRatios"}
+            <= set(sample)
+            for sample in report["samples"]
+        )
+        right_close = [
+            sample["framing"]
+            for sample in report["samples"]
+            if sample["camera"] == render_aroll_master_qa.HAND_CLOSE_CAMERA_RIGHT
+        ]
+        left_close = [
+            sample["framing"]
+            for sample in report["samples"]
+            if sample["camera"] == render_aroll_master_qa.HAND_CLOSE_CAMERA_LEFT
+        ]
+        assert len({json.dumps(framing, sort_keys=True) for framing in right_close}) == 1
+        assert len({json.dumps(framing, sort_keys=True) for framing in left_close}) == 1
+        assert report["comparisons"]["openFistPixelDifference"] >= (
+            render_aroll_master_qa.MIN_OPEN_FIST_PIXEL_DIFFERENCE
+        )
+        assert all(
+            difference >= render_aroll_master_qa.MIN_FINGER_ROLL_PIXEL_DIFFERENCE
+            for difference in report["comparisons"]["fingerRollPixelDifferences"].values()
+        )
+        assert all(
+            left != right
+            for hashes in report["framemd5"].values()
+            for left, right in zip(hashes, hashes[1:])
+        )
+        render_aroll_master_qa.require_files(
+            output_dir,
+            (*render_aroll_master_qa.required_relative_paths(), render_aroll_master_qa.REPORT_NAME),
+        )
+        _assert_runtime_error(
+            "duplicate adjacent fixture frames",
+            lambda: render_aroll_master_qa.assert_adjacent_frames_unique(
+                [output_dir / "hand/open.png", output_dir / "hand/open.png"],
+                "fixture",
+            ),
+        )
+        (output_dir / "hand/open.png").unlink()
+        _assert_runtime_error(
+            "required files are missing: hand/open.png",
+            lambda: render_aroll_master_qa.require_files(
+                output_dir, render_aroll_master_qa.required_relative_paths()
+            ),
+        )
 
 
 def digit_roles(side: str, digit: int) -> tuple[str, str, str]:
@@ -644,6 +962,9 @@ def test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage() -> No
 
 if __name__ == "__main__":
     tests = [
+        test_aroll_qa_sample_contract_is_complete_and_squint_only,
+        test_aroll_qa_fixture_fails_closed_for_missing_master_contract,
+        test_aroll_qa_renders_programmatic_fixture_and_checks_pixels,
         test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
         test_validated_three_segment_reuse_requires_contract_marker,
