@@ -1677,9 +1677,169 @@ def _resolve_source_pbr_texture_roles(source_material: bpy.types.Material) -> di
     return resolved
 
 
+TASK6_FACE_METADATA_PROPERTIES = (
+    "true_eyelid_topology",
+    "eyelid_topology_mode",
+    "blink_capability",
+    "eye_region_subdivision_level",
+    "eye_region_subdivision_added_vertices",
+    "eye_region_boundary_fixed",
+    "eye_region_uv_preserved",
+    "eye_region_uv_guard_data",
+    "eye_region_modified_uv_data",
+    "eye_region_custom_data_signature",
+    "eye_region_deform_weights_preserved",
+    "eye_region_deform_evidence",
+    "squint_max_closure_fraction",
+    "source_pbr_materials_tuned",
+    "source_pbr_material_names",
+    "source_pbr_role_metadata",
+)
+
+
+def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
+    missing = [name for name in TASK6_FACE_METADATA_PROPERTIES if name not in face_mesh]
+    if face_mesh.get("eyelid_topology_mode") == "squint_only_source_skin":
+        invalid: list[str] = []
+        decoded: dict[str, Any] = {}
+        side_properties = tuple(
+            f"{name}_{side}"
+            for side in ("l", "r")
+            for name in (
+                "eyeball_core_indices",
+                "eyeball_core_uv_data",
+                "squint_skin_indices",
+                "squint_upper_indices",
+                "squint_lower_indices",
+                "eye_region_boundary_indices",
+                "eye_region_boundary_basis_coordinates",
+                "squint_eye_weight_zero",
+                "eyeball_core_excluded",
+                "squint_non_skin_max_displacement",
+            )
+        )
+        missing.extend(name for name in side_properties if name not in face_mesh)
+        for name in (
+            "eye_region_uv_guard_data",
+            "eye_region_modified_uv_data",
+            "eye_region_custom_data_signature",
+            "eye_region_deform_evidence",
+            "source_pbr_material_names",
+            "source_pbr_role_metadata",
+            "eyeball_core_indices_l",
+            "eyeball_core_indices_r",
+            "eyeball_core_uv_data_l",
+            "eyeball_core_uv_data_r",
+            "squint_skin_indices_l",
+            "squint_skin_indices_r",
+        ):
+            if name not in face_mesh:
+                continue
+            try:
+                value = json.loads(str(face_mesh[name]))
+            except (TypeError, json.JSONDecodeError):
+                invalid.append(name)
+                continue
+            if value in ({}, []):
+                invalid.append(name)
+            else:
+                decoded[name] = value
+        if bool(face_mesh.get("true_eyelid_topology")):
+            invalid.append("true_eyelid_topology")
+        if face_mesh.get("blink_capability") != "squint_only":
+            invalid.append("blink_capability")
+        if int(face_mesh.get("eye_region_subdivision_level", -1)) != 0:
+            invalid.append("eye_region_subdivision_level")
+        if int(face_mesh.get("eye_region_subdivision_added_vertices", -1)) != 0:
+            invalid.append("eye_region_subdivision_added_vertices")
+        for name in (
+            "eye_region_boundary_fixed",
+            "eye_region_uv_preserved",
+            "eye_region_deform_weights_preserved",
+            "source_pbr_materials_tuned",
+        ):
+            if not bool(face_mesh.get(name)):
+                invalid.append(name)
+        if not 0.10 <= float(face_mesh.get("squint_max_closure_fraction", 0.0)) <= 0.14:
+            invalid.append("squint_max_closure_fraction")
+        modified = decoded.get("eye_region_modified_uv_data", {})
+        if modified and (
+            int(modified.get("new_lid_vertex_count", -1)) != 0
+            or not modified.get("all_finite")
+            or not modified.get("all_within_source_bounds")
+            or set(modified.get("sides", {})) != {"l", "r"}
+        ):
+            invalid.append("eye_region_modified_uv_data")
+        for side in ("l", "r"):
+            side_uv_data = modified.get("sides", {}).get(side, {})
+            skin_indices = set(side_uv_data.get("squint_skin_indices", []))
+            skin_uv_entries = side_uv_data.get("squint_skin_uv_data", [])
+            if (
+                not skin_indices
+                or not skin_uv_entries
+                or {int(item.get("vertex", -1)) for item in skin_uv_entries} != skin_indices
+                or any(not item.get("uvs") for item in skin_uv_entries)
+            ):
+                invalid.append("eye_region_modified_uv_data")
+        deform = decoded.get("eye_region_deform_evidence", {})
+        if deform and (
+            int(deform.get("new_lid_vertex_count", -1)) != 0
+            or int(deform.get("squint_vertex_count", 0)) <= 0
+            or deform.get("preserved_original_vertex_count") != deform.get("original_vertex_count")
+        ):
+            invalid.append("eye_region_deform_evidence")
+        role_metadata = decoded.get("source_pbr_role_metadata", {})
+        if role_metadata and set(role_metadata) != {"base_color", "metallic", "normal", "roughness"}:
+            invalid.append("source_pbr_role_metadata")
+        for side in ("l", "r"):
+            core = set(decoded.get(f"eyeball_core_indices_{side}", []))
+            skin = set(decoded.get(f"squint_skin_indices_{side}", []))
+            upper = set(json.loads(str(face_mesh.get(f"squint_upper_indices_{side}") or "[]")))
+            lower = set(json.loads(str(face_mesh.get(f"squint_lower_indices_{side}") or "[]")))
+            if (
+                not core
+                or not skin
+                or skin.intersection(core)
+                or upper.union(lower) != skin
+                or upper.intersection(lower)
+                or not bool(face_mesh.get(f"squint_eye_weight_zero_{side}"))
+                or not bool(face_mesh.get(f"eyeball_core_excluded_{side}"))
+                or float(face_mesh.get(f"squint_non_skin_max_displacement_{side}", 1.0)) > 1e-9
+            ):
+                invalid.append(f"squint_skin_indices_{side}")
+        keys = face_mesh.data.shape_keys.key_blocks if face_mesh.data.shape_keys else None
+        if (
+            not keys
+            or not keys.get("Eye_Squint.L")
+            or not keys.get("Eye_Squint.R")
+            or keys.get("Eye_Blink.L")
+            or keys.get("Eye_Blink.R")
+        ):
+            invalid.append("squint_shape_keys")
+        if any(
+            material and material.name.startswith(("IP_EyelidSkin.", "IP_EyelidMargin."))
+            for material in face_mesh.data.materials
+        ):
+            invalid.append("generated_eyelid_materials")
+        problems = sorted(set(missing + invalid))
+        if problems:
+            raise RuntimeError(
+                "Task 6 squint-only metadata is incomplete "
+                f"({', '.join(problems)}); rebuild master from source FBX"
+            )
+        return
+    raise RuntimeError(
+        "Task 6 full-blink metadata is no longer reusable; "
+        "rebuild master from source FBX for blinkCapability=squint_only"
+    )
+
 def tune_source_pbr_materials(obj: bpy.types.Object) -> dict[str, Any]:
     """Keep the source image stack intact while making it predictable for close shots."""
+    previously_tuned = bool(obj.get("source_pbr_materials_tuned"))
+    previous_material_names = str(obj.get("source_pbr_material_names") or "[]")
+    previous_role_metadata = str(obj.get("source_pbr_role_metadata") or "{}")
     tuned_materials: list[str] = []
+    tuned_roles: dict[str, str] = {}
     texture_names = {
         "base_color": "Image Texture - Base Color",
         "metallic": "Image Texture - Metallic",
@@ -1770,10 +1930,26 @@ def tune_source_pbr_materials(obj: bpy.types.Object) -> dict[str, Any]:
             {role: node.image.name for role, node in sorted(images.items())},
             sort_keys=True,
         )
+        tuned_roles.update({role: node.image.name for role, node in images.items()})
         tuned_materials.append(source_material.name)
-    obj["source_pbr_materials_tuned"] = bool(tuned_materials)
-    obj["source_pbr_material_names"] = json.dumps(tuned_materials)
-    return {"materials": tuned_materials, "count": len(tuned_materials)}
+    if tuned_materials:
+        obj["source_pbr_materials_tuned"] = True
+        obj["source_pbr_material_names"] = json.dumps(tuned_materials)
+        obj["source_pbr_role_metadata"] = json.dumps(tuned_roles, sort_keys=True)
+        return {"materials": tuned_materials, "count": len(tuned_materials), "preserved": False}
+    if previously_tuned:
+        obj["source_pbr_materials_tuned"] = True
+        obj["source_pbr_material_names"] = previous_material_names
+        obj["source_pbr_role_metadata"] = previous_role_metadata
+        try:
+            preserved_names = json.loads(previous_material_names)
+        except json.JSONDecodeError:
+            preserved_names = []
+        return {"materials": preserved_names, "count": len(preserved_names), "preserved": True}
+    obj["source_pbr_materials_tuned"] = False
+    obj["source_pbr_material_names"] = "[]"
+    obj["source_pbr_role_metadata"] = "{}"
+    return {"materials": [], "count": 0, "preserved": False}
 
 
 def refine_integrated_eye_regions(
@@ -1782,92 +1958,66 @@ def refine_integrated_eye_regions(
     head_bounds: dict[str, Any],
     bone_map: dict[str, str],
 ) -> dict[str, int]:
-    """Subdivide the original eye regions once, before any Shape Keys exist."""
-    if obj.get("true_eyelid_topology"):
+    """Build a restrained source-skin squint without deforming the eye surface."""
+    if obj.get("true_eyelid_topology") or obj.get("blink_capability") == "squint_only":
+        validate_task6_face_metadata(obj)
         return {
-            side: int(obj.get(f"eyelid_loop_vertex_count_{side}", 0))
+            side: len(json.loads(str(obj.get(f"squint_skin_indices_{side}") or "[]")))
             for side in ("l", "r")
         }
     if obj.data.shape_keys:
         raise RuntimeError("integrated eye refinement must run before creating shape keys")
 
-    width = max(float(head_bounds["width"]), 0.01)
-    depth = max(float(head_bounds["depth"]), 0.01)
-    region_height = max(float(head_bounds["height"]), float(dimensions["height"]) * 0.1)
-    front_limit = float(head_bounds["min"].y) + depth * 0.36
-    object_to_world = obj.matrix_world.copy()
-    descriptors: dict[str, dict[str, Any]] = {}
-    selected_indices: dict[str, set[int]] = {}
-    for side, role in (("l", "eye_l"), ("r", "eye_r")):
-        group_name = bone_map.get(role)
-        group = obj.vertex_groups.get(group_name) if group_name else None
-        if not group:
-            raise RuntimeError(f"integrated eye refinement requires the resolved {role} vertex group")
-        weighted = []
-        for vertex in obj.data.vertices:
-            weight = next(
-                (float(assignment.weight) for assignment in vertex.groups if assignment.group == group.index),
-                0.0,
-            )
-            if weight > 0.015:
-                weighted.append((vertex.index, weight, object_to_world @ vertex.co))
-        if len(weighted) < 24:
-            raise RuntimeError(f"integrated eye refinement found too few {group_name} vertices")
-        total_weight = sum(weight for _, weight, _ in weighted)
-        center_x = sum(float(world.x) * weight for _, weight, world in weighted) / total_weight
-        center_z = sum(float(world.z) * weight for _, weight, world in weighted) / total_weight
-        radius_x = width * 0.16
-        radius_z = region_height * 0.15
-        descriptors[side] = {
-            "center_x": center_x,
-            "center_z": center_z,
-            "radius_x": radius_x,
-            "radius_z": radius_z,
-            "group_name": group_name,
-        }
-        selected_indices[side] = {
-            vertex.index
-            for vertex in obj.data.vertices
-            if float((object_to_world @ vertex.co).y) <= front_limit
-            and (
-                (float((object_to_world @ vertex.co).x) - center_x) / max(radius_x, 1e-6)
-            ) ** 2
-            + (
-                (float((object_to_world @ vertex.co).z) - center_z) / max(radius_z, 1e-6)
-            ) ** 2
-            <= 1.0
-        }
-        if len(selected_indices[side]) < 64:
-            raise RuntimeError(f"integrated eye refinement could not isolate the {side.upper()} eye region")
-
     mesh = obj.data
+    source_material_names_before = [
+        source_material.name for source_material in mesh.materials if source_material
+    ]
+    object_to_world = obj.matrix_world.copy()
+    world_to_object = object_to_world.inverted()
+    depth = max(float(head_bounds["depth"]), 0.01)
     uv_names_before = [layer.name for layer in mesh.uv_layers]
     active_uv_name = mesh.uv_layers.active.name if mesh.uv_layers.active else ""
     if not active_uv_name:
-        raise RuntimeError("integrated eye refinement requires the source UV layer")
+        raise RuntimeError("squint-only fallback requires the source UV layer")
+    color_attributes_before = sorted(
+        (
+            {
+                "name": attribute.name,
+                "data_type": attribute.data_type,
+                "domain": attribute.domain,
+            }
+            for attribute in mesh.color_attributes
+        ),
+        key=lambda item: (item["name"], item["domain"], item["data_type"]),
+    )
+    custom_attributes_before = sorted(
+        (
+            {
+                "name": attribute.name,
+                "data_type": attribute.data_type,
+                "domain": attribute.domain,
+            }
+            for attribute in mesh.attributes
+            if not attribute.name.startswith(".")
+        ),
+        key=lambda item: (item["name"], item["domain"], item["data_type"]),
+    )
     vertex_count_before = len(mesh.vertices)
-    original_adjacency = {vertex.index: set() for vertex in mesh.vertices}
+    group_names_before = {group.index: group.name for group in obj.vertex_groups}
+    deform_weights_before = {
+        vertex.index: sorted(
+            (group_names_before[item.group], float(item.weight))
+            for item in vertex.groups
+            if item.group in group_names_before and item.weight > 1e-8
+        )
+        for vertex in mesh.vertices
+    }
+    world_coordinates = [object_to_world @ vertex.co for vertex in mesh.vertices]
+    adjacency = {vertex.index: set() for vertex in mesh.vertices}
     for edge in mesh.edges:
         left, right = (int(index) for index in edge.vertices)
-        original_adjacency[left].add(right)
-        original_adjacency[right].add(left)
-    original_boundaries = {
-        side: {
-            index
-            for index in selected_indices[side]
-            if any(neighbor not in selected_indices[side] for neighbor in original_adjacency[index])
-        }
-        for side in ("l", "r")
-    }
-    original_boundary_coordinates = {
-        side: [
-            [index, [float(value) for value in mesh.vertices[index].co]]
-            for index in sorted(original_boundaries[side])
-        ]
-        for side in ("l", "r")
-    }
-    selected = selected_indices["l"].union(selected_indices["r"])
-    selected_boundary = original_boundaries["l"].union(original_boundaries["r"])
+        adjacency[left].add(right)
+        adjacency[right].add(left)
 
     def collect_vertex_uvs(indices: set[int]) -> dict[int, list[list[float]]]:
         collected = {index: [] for index in indices}
@@ -1875,211 +2025,382 @@ def refine_integrated_eye_regions(
         for polygon in mesh.polygons:
             for loop_index in polygon.loop_indices:
                 vertex_index = int(mesh.loops[loop_index].vertex_index)
-                if vertex_index not in collected:
-                    continue
-                uv = uv_layer.data[loop_index].uv
-                collected[vertex_index].append([float(uv.x), float(uv.y)])
+                if vertex_index in collected:
+                    uv = uv_layer.data[loop_index].uv
+                    collected[vertex_index].append([float(uv.x), float(uv.y)])
         return {index: sorted(values) for index, values in collected.items()}
 
-    uv_guard_candidates = [
-        vertex.index
-        for vertex in mesh.vertices
-        if vertex.index not in selected
-        and all(neighbor not in selected for neighbor in original_adjacency[vertex.index])
-    ]
-    uv_guard_indices = set(uv_guard_candidates[:64])
-    if len(uv_guard_indices) < 32:
-        raise RuntimeError("integrated eye refinement could not establish an untouched UV guard")
-    uv_guard_before = collect_vertex_uvs(uv_guard_indices)
+    def shortest_rim_path(
+        allowed: set[int],
+        start: int,
+        goal: int,
+        center_x: float,
+        center_z: float,
+        radius_x: float,
+        radius_z: float,
+        *,
+        upper: bool,
+    ) -> list[int]:
+        queue: list[tuple[float, int]] = [(0.0, start)]
+        distances = {start: 0.0}
+        previous: dict[int, int] = {}
+        while queue:
+            distance, index = heapq.heappop(queue)
+            if index == goal:
+                break
+            if distance > distances.get(index, float("inf")):
+                continue
+            for neighbor in adjacency[index]:
+                if neighbor not in allowed:
+                    continue
+                nx = (float(world_coordinates[neighbor].x) - center_x) / radius_x
+                nz = (float(world_coordinates[neighbor].z) - center_z) / radius_z
+                radial = math.sqrt(nx * nx + nz * nz)
+                wrong_side = max(0.0, -nz if upper else nz)
+                edge_length = (world_coordinates[neighbor] - world_coordinates[index]).length
+                candidate = (
+                    distance
+                    + edge_length * (1.0 + abs(radial - 1.05) * 2.0)
+                    + wrong_side * 0.08
+                )
+                if candidate >= distances.get(neighbor, float("inf")):
+                    continue
+                distances[neighbor] = candidate
+                previous[neighbor] = index
+                heapq.heappush(queue, (candidate, neighbor))
+        if goal not in distances:
+            return []
+        path = [goal]
+        while path[-1] != start:
+            path.append(previous[path[-1]])
+        return list(reversed(path))
 
-    bm = bmesh.new()
-    bm.from_mesh(mesh)
-    bm.verts.ensure_lookup_table()
-    bm.edges.ensure_lookup_table()
-    bm.faces.ensure_lookup_table()
-    bm.verts.index_update()
-    bm.edges.index_update()
-    bm.faces.index_update()
-    region_edges = [
-        edge
-        for edge in bm.edges
-        if edge.verts[0].index in selected and edge.verts[1].index in selected
-        and edge.verts[0].index not in selected_boundary
-        and edge.verts[1].index not in selected_boundary
-    ]
-    if len(region_edges) < 96:
-        bm.free()
-        raise RuntimeError("integrated eye refinement found too few local edges")
-    bmesh.ops.subdivide_edges(
-        bm,
-        edges=region_edges,
-        cuts=1,
-        use_grid_fill=True,
-    )
-    bm.normal_update()
-    bm.verts.ensure_lookup_table()
-    bm.edges.ensure_lookup_table()
-    bm.faces.ensure_lookup_table()
-    bm.verts.index_update()
-    bm.edges.index_update()
-    bm.faces.index_update()
-    bm.to_mesh(mesh)
-    bm.free()
-    mesh.update(calc_edges=True)
-    if [layer.name for layer in mesh.uv_layers] != uv_names_before or not mesh.uv_layers.active:
-        raise RuntimeError("integrated eye refinement did not preserve source UV layers")
-    for side in ("l", "r"):
-        for index, coordinate in original_boundary_coordinates[side]:
-            if any(abs(float(mesh.vertices[index].co[axis]) - coordinate[axis]) > 1e-9 for axis in range(3)):
-                raise RuntimeError(f"integrated eye refinement moved the {side.upper()} eye boundary")
-    uv_guard_after = collect_vertex_uvs(uv_guard_indices)
-    if any(
-        len(uv_guard_after[index]) != len(uv_guard_before[index])
-        or any(
-            abs(uv_guard_after[index][item][axis] - uv_guard_before[index][item][axis]) > 1e-7
-            for item in range(len(uv_guard_before[index]))
-            for axis in range(2)
-        )
-        for index in uv_guard_indices
-    ):
-        raise RuntimeError("integrated eye refinement changed untouched source UV loop data")
-
-    world_coordinates = [object_to_world @ vertex.co for vertex in mesh.vertices]
-    adjacency = {vertex.index: set() for vertex in mesh.vertices}
-    for edge in mesh.edges:
-        left, right = (int(index) for index in edge.vertices)
-        adjacency[left].add(right)
-        adjacency[right].add(left)
-    counts: dict[str, int] = {}
-    for side, descriptor in descriptors.items():
-        center_x = descriptor["center_x"]
-        center_z = descriptor["center_z"]
-        radius_x = descriptor["radius_x"]
-        radius_z = descriptor["radius_z"]
-        eye_group = obj.vertex_groups[str(descriptor["group_name"])]
-
-        def normalized_radius(index: int) -> float:
-            world = world_coordinates[index]
-            nx = (float(world.x) - center_x) / max(radius_x, 1e-6)
-            nz = (float(world.z) - center_z) / max(radius_z, 1e-6)
-            return math.sqrt(nx * nx + nz * nz)
-
-        region = {
+    descriptors: dict[str, dict[str, Any]] = {}
+    selected_region: set[int] = set()
+    original_boundary_coordinates: dict[str, list[list[Any]]] = {}
+    for side, role in (("l", "eye_l"), ("r", "eye_r")):
+        group_name = bone_map.get(role)
+        eye_group = obj.vertex_groups.get(group_name) if group_name else None
+        if not eye_group:
+            raise RuntimeError(f"squint-only fallback requires the resolved {role} group")
+        core = {
             vertex.index
             for vertex in mesh.vertices
-            if float(world_coordinates[vertex.index].y) <= front_limit
-            and normalized_radius(vertex.index) <= 1.0
+            if any(
+                assignment.group == eye_group.index and assignment.weight > 0.015
+                for assignment in vertex.groups
+            )
         }
-        weighted_region = {
-            index
-            for index in region
-            if next(
+        if len(core) < 24:
+            raise RuntimeError(
+                f"squint-only fallback found too few {side.upper()} eye-core vertices"
+            )
+        center_x = sum(float(world_coordinates[index].x) for index in core) / len(core)
+        center_z = sum(float(world_coordinates[index].z) for index in core) / len(core)
+        radius_x = (
+            max(float(world_coordinates[index].x) for index in core)
+            - min(float(world_coordinates[index].x) for index in core)
+        ) * 0.60
+        radius_z = (
+            max(float(world_coordinates[index].z) for index in core)
+            - min(float(world_coordinates[index].z) for index in core)
+        ) * 0.58
+        if radius_x <= 1e-6 or radius_z <= 1e-6:
+            raise RuntimeError(f"squint-only fallback found invalid {side.upper()} eye bounds")
+
+        def normalized_radius(index: int) -> float:
+            nx = (float(world_coordinates[index].x) - center_x) / radius_x
+            nz = (float(world_coordinates[index].z) - center_z) / radius_z
+            return math.sqrt(nx * nx + nz * nz)
+
+        def source_eye_weight(index: int) -> float:
+            return max(
                 (
                     float(assignment.weight)
                     for assignment in mesh.vertices[index].groups
                     if assignment.group == eye_group.index
                 ),
-                0.0,
+                default=0.0,
             )
-            >= 0.012
+
+        first_skin_ring = {
+            neighbor
+            for index in core
+            for neighbor in adjacency[index]
+            if neighbor not in core and source_eye_weight(neighbor) <= 1e-8
         }
-        active = {
-            index
-            for index in weighted_region
-            if normalized_radius(index) < 0.84
-            and all(neighbor in region for neighbor in adjacency[index])
-            and index not in original_boundaries[side]
+        second_skin_ring = {
+            neighbor
+            for index in first_skin_ring
+            for neighbor in adjacency[index]
+            if neighbor not in core
+            and neighbor not in first_skin_ring
+            and source_eye_weight(neighbor) <= 1e-8
         }
-        boundary = original_boundaries[side]
-        upper = {index for index in active if float(world_coordinates[index].z) >= center_z}
-        lower = active.difference(upper)
-        upper_contact = {
-            index
-            for index in upper
-            if abs((float(world_coordinates[index].z) - center_z) / max(radius_z, 1e-6)) <= 0.46
-            and abs((float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6)) <= 0.78
+        skin_annulus = first_skin_ring.union(second_skin_ring)
+        if len(skin_annulus) < 24:
+            raise RuntimeError(
+                f"squint-only fallback found too few topological {side.upper()} skin-ring vertices: "
+                f"{len(skin_annulus)}"
+            )
+
+        front_limit = float(head_bounds["min"].y) + depth * 0.48
+        annulus = {
+            vertex.index
+            for vertex in mesh.vertices
+            if vertex.index not in core
+            and 0.72 <= normalized_radius(vertex.index) <= 1.55
+            and float(world_coordinates[vertex.index].y) <= front_limit
         }
-        lower_contact = {
-            index
-            for index in lower
-            if abs((float(world_coordinates[index].z) - center_z) / max(radius_z, 1e-6)) <= 0.46
-            and abs((float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6)) <= 0.78
-        }
-        available_lower = set(lower_contact)
-        contact_pairs: list[list[int]] = []
-        for upper_index in sorted(
-            upper_contact,
+        if len(annulus) < 48:
+            raise RuntimeError(
+                f"squint-only fallback could not isolate the {side.upper()} skin rim"
+            )
+        left = min(
+            annulus,
             key=lambda index: (
-                (float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6),
+                (float(world_coordinates[index].x) - (center_x - radius_x * 0.96)) / radius_x
+            ) ** 2
+            + ((float(world_coordinates[index].z) - center_z) / radius_z) ** 2,
+        )
+        right = min(
+            annulus,
+            key=lambda index: (
+                (float(world_coordinates[index].x) - (center_x + radius_x * 0.96)) / radius_x
+            ) ** 2
+            + ((float(world_coordinates[index].z) - center_z) / radius_z) ** 2,
+        )
+        upper_allowed = {
+            index
+            for index in annulus
+            if float(world_coordinates[index].z) >= center_z - radius_z * 0.18
+        }.union({left, right})
+        lower_allowed = {
+            index
+            for index in annulus
+            if float(world_coordinates[index].z) <= center_z + radius_z * 0.18
+        }.union({left, right})
+        upper_path = shortest_rim_path(
+            upper_allowed, left, right, center_x, center_z, radius_x, radius_z, upper=True
+        )
+        lower_path = shortest_rim_path(
+            lower_allowed, left, right, center_x, center_z, radius_x, radius_z, upper=False
+        )
+        if min(len(upper_path), len(lower_path)) < 8:
+            raise RuntimeError(
+                f"squint-only fallback found incomplete {side.upper()} rim paths: "
+                f"upper={len(upper_path)}, lower={len(lower_path)}"
+            )
+        boundary = set(upper_path).union(lower_path)
+        boundary_uvs = [
+            uv
+            for values in collect_vertex_uvs(boundary).values()
+            for uv in values
+        ]
+        if not boundary_uvs:
+            raise RuntimeError(f"integrated {side.upper()} skin rim has no source UVs")
+        source_uv_bounds = [
+            min(uv[0] for uv in boundary_uvs),
+            min(uv[1] for uv in boundary_uvs),
+            max(uv[0] for uv in boundary_uvs),
+            max(uv[1] for uv in boundary_uvs),
+        ]
+        selected_region.update(core, annulus)
+        original_boundary_coordinates[side] = [
+            [index, [float(value) for value in mesh.vertices[index].co]]
+            for index in sorted(boundary)
+        ]
+        descriptors[side] = {
+            "center_x": center_x,
+            "center_z": center_z,
+            "radius_x": radius_x,
+            "radius_z": radius_z,
+            "core": core,
+            "upper_path": upper_path,
+            "lower_path": lower_path,
+            "eye_group_index": eye_group.index,
+            "core_uvs": collect_vertex_uvs(core),
+            "source_uv_bounds": source_uv_bounds,
+            "annulus": annulus,
+            "skin_annulus": skin_annulus,
+        }
+
+    squint_regions: dict[str, set[int]] = {}
+    all_squint_indices: set[int] = set()
+    minimum_weight_sum = float("inf")
+    maximum_influences = 0
+    for side, descriptor in descriptors.items():
+        eye_group_index = int(descriptor["eye_group_index"])
+
+        def resolved_eye_weight(index: int) -> float:
+            return max(
+                (
+                    float(assignment.weight)
+                    for assignment in mesh.vertices[index].groups
+                    if assignment.group == eye_group_index
+                ),
+                default=0.0,
+            )
+
+        candidates = {
+            index
+            for index in descriptor["skin_annulus"]
+            if resolved_eye_weight(index) <= 1e-8
+            and float(world_coordinates[index].y) <= float(head_bounds["min"].y) + depth * 0.48
+            and (
+                (
+                    (float(world_coordinates[index].x) - float(descriptor["center_x"]))
+                    / float(descriptor["radius_x"])
+                )
+                ** 2
+                + (
+                    (float(world_coordinates[index].z) - float(descriptor["center_z"]))
+                    / float(descriptor["radius_z"])
+                )
+                ** 2
+            )
+            <= 1.30 ** 2
+        }
+        if len(candidates) < 24:
+            raise RuntimeError(
+                f"squint-only fallback found too few {side.upper()} source-skin vertices: "
+                f"{len(candidates)}"
+            )
+        ordered_by_z = sorted(
+            candidates,
+            key=lambda index: (
+                (
+                    float(world_coordinates[index].z) - float(descriptor["center_z"])
+                )
+                / float(descriptor["radius_z"]),
                 index,
             ),
-        ):
-            if not available_lower:
-                break
-            upper_x = (float(world_coordinates[upper_index].x) - center_x) / max(radius_x, 1e-6)
-            lower_index = min(
-                available_lower,
-                key=lambda index: (
-                    abs(
-                        (float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6)
-                        - upper_x
-                    ),
-                    (float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6),
-                    index,
-                ),
-            )
-            available_lower.remove(lower_index)
-            contact_pairs.append([upper_index, lower_index])
-        contact_pairs.sort(
-            key=lambda pair: (
-                (float(world_coordinates[pair[0]].x) + float(world_coordinates[pair[1]].x)) * 0.5,
-                pair[0],
-                pair[1],
-            )
         )
-        if min(len(upper), len(lower)) < 32 or len(contact_pairs) < 48:
+        symmetric_count = min(12, len(ordered_by_z) // 2)
+        if symmetric_count < 12:
             raise RuntimeError(
-                f"integrated eye refinement produced incomplete {side.upper()} lids: "
-                f"upper={len(upper)}, lower={len(lower)}, "
-                f"contact_pairs={len(contact_pairs)}"
+                f"squint-only fallback found an incomplete {side.upper()} skin ring: "
+                f"candidates={len(ordered_by_z)}"
             )
-        obj[f"eyelid_center_x_{side}"] = center_x
-        obj[f"eyelid_center_z_{side}"] = center_z
-        obj[f"eyelid_radius_x_{side}"] = radius_x
-        obj[f"eyelid_radius_z_{side}"] = radius_z
-        obj[f"eyelid_loop_vertex_count_{side}"] = len(contact_pairs) * 2
-        obj[f"eyelid_contact_pair_count_{side}"] = len(contact_pairs)
-        obj[f"eyelid_region_vertex_count_{side}"] = len(active)
-        obj[f"eyelid_upper_vertex_count_{side}"] = len(upper)
-        obj[f"eyelid_lower_vertex_count_{side}"] = len(lower)
-        obj[f"eyelid_boundary_indices_{side}"] = json.dumps(sorted(boundary))
-        obj[f"eyelid_boundary_basis_coordinates_{side}"] = json.dumps(
-            original_boundary_coordinates[side]
-        )
-        obj[f"eyelid_upper_indices_{side}"] = json.dumps(sorted(upper))
-        obj[f"eyelid_lower_indices_{side}"] = json.dumps(sorted(lower))
-        obj[f"eyelid_upper_contact_indices_{side}"] = json.dumps(sorted(upper_contact))
-        obj[f"eyelid_lower_contact_indices_{side}"] = json.dumps(sorted(lower_contact))
-        obj[f"eyelid_contact_pairs_{side}"] = json.dumps(contact_pairs)
-        counts[side] = len(active)
+        lower = set(ordered_by_z[:symmetric_count])
+        upper = set(ordered_by_z[-symmetric_count:])
+        def normalized_z(index: int) -> float:
+            return (
+                float(world_coordinates[index].z) - float(descriptor["center_z"])
+            ) / float(descriptor["radius_z"])
 
-    obj["true_eyelid_topology"] = True
-    obj["eyelid_topology_mode"] = "integrated_source_face"
-    obj["eye_region_subdivision_level"] = 1
-    obj["eye_region_subdivision_added_vertices"] = len(mesh.vertices) - vertex_count_before
+        if min(normalized_z(index) for index in upper) <= 0.0 or max(
+            normalized_z(index) for index in lower
+        ) >= 0.0:
+            raise RuntimeError(
+                f"squint-only fallback found an unbalanced {side.upper()} skin ring"
+            )
+        candidates = upper.union(lower)
+        squint_regions[side] = candidates
+        all_squint_indices.update(candidates)
+        core_uvs = descriptor["core_uvs"]
+        obj[f"eyeball_core_indices_{side}"] = json.dumps(sorted(descriptor["core"]))
+        obj[f"eyeball_core_uv_data_{side}"] = json.dumps(
+            [
+                {"vertex": index, "uvs": core_uvs[index]}
+                for index in sorted(descriptor["core"])
+            ],
+            sort_keys=True,
+        )
+        obj[f"squint_skin_indices_{side}"] = json.dumps(sorted(candidates))
+        obj[f"squint_upper_indices_{side}"] = json.dumps(sorted(upper))
+        obj[f"squint_lower_indices_{side}"] = json.dumps(sorted(lower))
+        obj[f"squint_center_x_{side}"] = float(descriptor["center_x"])
+        obj[f"squint_center_z_{side}"] = float(descriptor["center_z"])
+        obj[f"squint_radius_x_{side}"] = float(descriptor["radius_x"])
+        obj[f"squint_radius_z_{side}"] = float(descriptor["radius_z"])
+        obj[f"squint_eye_weight_zero_{side}"] = True
+        obj[f"eyeball_core_excluded_{side}"] = True
+        obj[f"eye_region_boundary_indices_{side}"] = json.dumps(sorted(candidates))
+        obj[f"eye_region_boundary_basis_coordinates_{side}"] = json.dumps(
+            [
+                [index, [float(value) for value in mesh.vertices[index].co]]
+                for index in sorted(candidates)
+            ]
+        )
+        for index in candidates:
+            assignments = [item for item in mesh.vertices[index].groups if item.weight > 1e-8]
+            minimum_weight_sum = min(
+                minimum_weight_sum,
+                sum(float(item.weight) for item in assignments),
+            )
+            maximum_influences = max(maximum_influences, len(assignments))
+
+    uv_guard_indices = set(
+        sorted(set(range(vertex_count_before)).difference(all_squint_indices))[:64]
+    )
+    uv_guard_data = collect_vertex_uvs(uv_guard_indices)
+    if any(not values for values in uv_guard_data.values()):
+        raise RuntimeError("squint-only fallback could not establish an untouched UV guard")
+    modified_sides = {}
+    for side in ("l", "r"):
+        skin_uvs = collect_vertex_uvs(squint_regions[side])
+        if any(not values for values in skin_uvs.values()):
+            raise RuntimeError(
+                f"squint-only fallback could not preserve {side.upper()} skin-ring UVs"
+            )
+        modified_sides[side] = {
+            "source_uv_bounds": descriptors[side]["source_uv_bounds"],
+            "squint_skin_indices": sorted(squint_regions[side]),
+            "squint_skin_uv_data": [
+                {"vertex": index, "uvs": skin_uvs[index]}
+                for index in sorted(squint_regions[side])
+            ],
+        }
+    obj["true_eyelid_topology"] = False
+    obj["eyelid_topology_mode"] = "squint_only_source_skin"
+    obj["blink_capability"] = "squint_only"
+    obj["eye_region_subdivision_level"] = 0
+    obj["eye_region_subdivision_added_vertices"] = 0
     obj["eye_region_boundary_fixed"] = True
     obj["eye_region_uv_preserved"] = True
     obj["eye_region_uv_guard_data"] = json.dumps(
         {
             "layer": active_uv_name,
             "vertices": [
-                {"vertex": index, "uvs": uv_guard_before[index]}
+                {"vertex": index, "uvs": uv_guard_data[index]}
                 for index in sorted(uv_guard_indices)
             ],
-        }
+        },
+        sort_keys=True,
     )
-    return counts
-
+    obj["eye_region_modified_uv_data"] = json.dumps(
+        {
+            "layer": active_uv_name,
+            "all_finite": True,
+            "all_within_source_bounds": True,
+            "new_lid_vertex_count": 0,
+            "sides": modified_sides,
+        },
+        sort_keys=True,
+    )
+    obj["eye_region_custom_data_signature"] = json.dumps(
+        {
+            "uv_layers": uv_names_before,
+            "color_attributes": color_attributes_before,
+            "attributes": custom_attributes_before,
+        },
+        sort_keys=True,
+    )
+    obj["eye_region_deform_weights_preserved"] = True
+    obj["eye_region_deform_evidence"] = json.dumps(
+        {
+            "original_vertex_count": vertex_count_before,
+            "preserved_original_vertex_count": vertex_count_before,
+            "new_lid_vertex_count": 0,
+            "squint_vertex_count": len(all_squint_indices),
+            "minimum_weight_sum": minimum_weight_sum,
+            "maximum_influences": maximum_influences,
+        },
+        sort_keys=True,
+    )
+    obj["squint_max_closure_fraction"] = 0.12
+    return {side: len(indices) for side, indices in squint_regions.items()}
 
 def _source_vertex_luminance(obj: bpy.types.Object) -> dict[int, float]:
     uv_layer = obj.data.uv_layers.active
@@ -2502,6 +2823,7 @@ def retopologize_source_face(
     if not head_bounds:
         raise RuntimeError("source face retopology requires a Head-weighted mesh region")
     if existing_face:
+        validate_task6_face_metadata(existing_face)
         tune_source_pbr_materials(existing_face)
         return {"mouth": existing_face, **create_integrated_oral_interior(existing_face, armature, bone_map, dimensions)}
 
@@ -2521,40 +2843,20 @@ def retopologize_source_face(
         if obj.type == "MESH"
     }
     required_internal_names = {"IP_OralCavity", "IP_UpperTeeth", "IP_LowerTeeth", "IP_Tongue"}
-    if exported_face and required_internal_names.issubset(exported_internals):
+    if exported_face:
+        validate_task6_face_metadata(exported_face)
+        if not exported_face.get("integrated_mouth_seam"):
+            raise RuntimeError(
+                "Task 6 integrated mouth metadata is incomplete (integrated_mouth_seam); "
+                "rebuild master from source FBX"
+            )
+        missing_internals = sorted(required_internal_names.difference(exported_internals))
+        if missing_internals:
+            raise RuntimeError(
+                "Task 6 integrated face internals are incomplete "
+                f"({', '.join(missing_internals)}); rebuild master from source FBX"
+            )
         tune_source_pbr_materials(exported_face)
-        center_x = (float(head_bounds["min"].x) + float(head_bounds["max"].x)) * 0.5
-        center_z = float(dimensions["min"].z) + float(dimensions["height"]) * mouth_height_ratio
-        radius_x = float(head_bounds["width"]) * 0.170 * max(0.65, min(1.45, float(mouth_scale or 1.0)))
-        upper, lower, boundary_edge_count = _mouth_boundary_vertices(
-            exported_face,
-            center_x=center_x,
-            center_z=center_z,
-            radius_x=radius_x,
-            height=float(dimensions["height"]),
-        )
-        boundary = upper.union(lower)
-        exported_face["source_face_topology"] = "integrated_source_retopology"
-        exported_face["integrated_mouth_seam"] = True
-        exported_face["mouth_seam_edge_count"] = max(0, boundary_edge_count // 2)
-        exported_face["mouth_boundary_edge_count"] = boundary_edge_count
-        exported_face["mouth_upper_boundary_count"] = len(upper)
-        exported_face["mouth_lower_boundary_count"] = len(lower)
-        exported_face["mouth_upper_boundary_indices"] = json.dumps(sorted(upper))
-        exported_face["mouth_lower_boundary_indices"] = json.dumps(sorted(lower))
-        exported_face["mouth_center_x"] = center_x
-        exported_face["mouth_center_z"] = center_z
-        exported_face["mouth_surface_y"] = (
-            sum(float((exported_face.matrix_world @ exported_face.data.vertices[index].co).y) for index in boundary)
-            / len(boundary)
-            if boundary
-            else float(head_bounds["min"].y) + float(head_bounds["depth"]) * 0.10
-        )
-        exported_face["mouth_radius_x"] = radius_x
-        exported_face["head_region_width"] = float(head_bounds["width"])
-        exported_face["head_region_depth"] = float(head_bounds["depth"])
-        exported_face["source_texture_face_preserved"] = True
-        exported_face["facial_topology_mode"] = "source_retopology"
         return {
             "mouth": exported_face,
             **create_integrated_oral_interior(exported_face, armature, bone_map, dimensions),
@@ -2696,6 +2998,10 @@ def create_source_mesh_visemes(
     if mouth.data.shape_keys:
         existing_names = {key.name for key in mouth.data.shape_keys.key_blocks}
         if {"Mouth_Rest", "Mouth_A", "Mouth_E", "Mouth_O"}.issubset(existing_names):
+            if mouth.get("integrated_mouth_seam") or {"Eye_Blink.L", "Eye_Blink.R"}.intersection(
+                existing_names
+            ):
+                validate_task6_face_metadata(mouth)
             mouth["source_mouth_replacement"] = False
             mouth["existing_viseme_mouth_preserved"] = True
             install_viseme_api()
@@ -3053,8 +3359,8 @@ def add_rich_source_face_shapes(
         raise RuntimeError("rich source-face controls require an existing Basis shape key")
 
     shape_names = (
-        "Eye_Blink.L",
-        "Eye_Blink.R",
+        "Eye_Squint.L",
+        "Eye_Squint.R",
         "Eye_Wide.L",
         "Eye_Wide.R",
         "Eye_Look_Left",
@@ -3071,6 +3377,7 @@ def add_rich_source_face_shapes(
         "Nose_Flare.R",
     )
     if all(shape_keys.key_blocks.get(name) for name in shape_names):
+        validate_task6_face_metadata(face_mesh)
         face_mesh["facial_detail_mode"] = "rich_source_mesh"
         return {
             name: int(face_mesh.get(f"affected_{name}", 0))
@@ -3094,6 +3401,30 @@ def add_rich_source_face_shapes(
     world_to_object = object_to_world.inverted()
     basis = shape_keys.key_blocks["Basis"]
     eyelid_regions: dict[str, dict[str, Any]] = {}
+    squint_regions: dict[str, dict[str, Any]] = {}
+    if face_mesh.get("blink_capability") == "squint_only":
+        for suffix in ("L", "R"):
+            side = suffix.lower()
+            try:
+                skin = set(json.loads(str(face_mesh[f"squint_skin_indices_{side}"])))
+                upper = set(json.loads(str(face_mesh[f"squint_upper_indices_{side}"])))
+                lower = set(json.loads(str(face_mesh[f"squint_lower_indices_{side}"])))
+                eye_core = set(json.loads(str(face_mesh[f"eyeball_core_indices_{side}"])))
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"squint-only {suffix} metadata is invalid") from exc
+            if upper.union(lower) != skin or skin.intersection(eye_core):
+                raise RuntimeError(f"squint-only {suffix} skin ring is invalid")
+            squint_regions[suffix] = {
+                "skin": skin,
+                "upper": upper,
+                "lower": lower,
+                "eye_core": eye_core,
+                "center_x": float(face_mesh[f"squint_center_x_{side}"]),
+                "center_z": float(face_mesh[f"squint_center_z_{side}"]),
+                "radius_x": float(face_mesh[f"squint_radius_x_{side}"]),
+                "radius_z": float(face_mesh[f"squint_radius_z_{side}"]),
+                "closure_fraction": float(face_mesh["squint_max_closure_fraction"]),
+            }
     if face_mesh.get("true_eyelid_topology"):
         for suffix in ("L", "R"):
             side = suffix.lower()
@@ -3102,6 +3433,39 @@ def add_rich_source_face_shapes(
                 lower = set(json.loads(str(face_mesh[f"eyelid_lower_indices_{side}"])))
                 upper_contact = set(json.loads(str(face_mesh[f"eyelid_upper_contact_indices_{side}"])))
                 lower_contact = set(json.loads(str(face_mesh[f"eyelid_lower_contact_indices_{side}"])))
+                upper_support = set(json.loads(str(face_mesh[f"eyelid_upper_support_indices_{side}"])))
+                lower_support = set(json.loads(str(face_mesh[f"eyelid_lower_support_indices_{side}"])))
+                upper_anchor_support = set(
+                    json.loads(str(face_mesh[f"eyelid_upper_anchor_support_indices_{side}"]))
+                )
+                lower_anchor_support = set(
+                    json.loads(str(face_mesh[f"eyelid_lower_anchor_support_indices_{side}"]))
+                )
+                upper_inner_margin = set(
+                    json.loads(str(face_mesh[f"eyelid_upper_inner_margin_indices_{side}"]))
+                )
+                lower_inner_margin = set(
+                    json.loads(str(face_mesh[f"eyelid_lower_inner_margin_indices_{side}"]))
+                )
+                eye_core = set(json.loads(str(face_mesh[f"eyeball_core_indices_{side}"])))
+                row_margin_pairs = {
+                    "anchor": [
+                        (int(pair[0]), int(pair[1]))
+                        for pair in json.loads(str(face_mesh[f"eyelid_anchor_margin_pairs_{side}"]))
+                    ],
+                    "support": [
+                        (int(pair[0]), int(pair[1]))
+                        for pair in json.loads(str(face_mesh[f"eyelid_support_margin_pairs_{side}"]))
+                    ],
+                    "inner": [
+                        (int(pair[0]), int(pair[1]))
+                        for pair in json.loads(str(face_mesh[f"eyelid_inner_margin_pairs_{side}"]))
+                    ],
+                }
+                anchor_outer_pairs = [
+                    (int(pair[0]), int(pair[1]))
+                    for pair in json.loads(str(face_mesh[f"eyelid_anchor_outer_pairs_{side}"]))
+                ]
                 contact_pairs = [
                     (int(pair[0]), int(pair[1]))
                     for pair in json.loads(str(face_mesh[f"eyelid_contact_pairs_{side}"]))
@@ -3112,6 +3476,11 @@ def add_rich_source_face_shapes(
             center_z = float(face_mesh[f"eyelid_center_z_{side}"])
             radius_x = float(face_mesh[f"eyelid_radius_x_{side}"])
             radius_z = float(face_mesh[f"eyelid_radius_z_{side}"])
+            active_indices = upper.union(lower)
+            contact_surface_y = min(
+                float((object_to_world @ basis.data[index].co).y)
+                for index in eye_core
+            ) - depth * 0.004
             contact_targets: dict[int, Vector] = {}
             for upper_index, lower_index in contact_pairs:
                 upper_world = object_to_world @ basis.data[upper_index].co
@@ -3121,23 +3490,43 @@ def add_rich_source_face_shapes(
                 target = Vector(
                     (
                         pair_x,
-                        min(float(upper_world.y), float(lower_world.y)) - depth * 0.0015,
-                        center_z - radius_z * 0.055 + radius_z * 0.095 * normalized_x * normalized_x,
+                        contact_surface_y,
+                        center_z - radius_z * 0.20
+                        + radius_z * 0.20 * normalized_x * normalized_x,
                     )
                 )
                 contact_targets[upper_index] = target
                 contact_targets[lower_index] = target
+            row_target_x = {
+                row_index: float((object_to_world @ basis.data[margin_index].co).x)
+                for pairs in row_margin_pairs.values()
+                for row_index, margin_index in pairs
+            }
+            anchor_outer = {
+                anchor_index: outer_index
+                for anchor_index, outer_index in anchor_outer_pairs
+            }
             eyelid_regions[suffix] = {
                 "upper": upper,
                 "lower": lower,
                 "active": upper.union(lower),
                 "upper_contact": upper_contact,
                 "lower_contact": lower_contact,
+                "upper_support": upper_support,
+                "lower_support": lower_support,
+                "upper_anchor_support": upper_anchor_support,
+                "lower_anchor_support": lower_anchor_support,
+                "upper_inner_margin": upper_inner_margin,
+                "lower_inner_margin": lower_inner_margin,
+                "eye_core": eye_core,
                 "center_x": center_x,
                 "center_z": center_z,
                 "radius_x": radius_x,
                 "radius_z": radius_z,
                 "contact_targets": contact_targets,
+                "contact_surface_y": contact_surface_y,
+                "row_target_x": row_target_x,
+                "anchor_outer": anchor_outer,
             }
 
     def region_weight(
@@ -3177,10 +3566,36 @@ def add_rich_source_face_shapes(
         }
         for suffix, sign in (("L", 1.0), ("R", -1.0)):
             blink_name = f"Eye_Blink.{suffix}"
+            squint_name = f"Eye_Squint.{suffix}"
             wide_name = f"Eye_Wide.{suffix}"
             eye_weight = eye_weights[suffix]
             eyelid = eyelid_regions.get(suffix)
-            if eyelid and index in eyelid["active"]:
+            squint = squint_regions.get(suffix)
+            if squint:
+                if index in squint["skin"]:
+                    is_upper = index in squint["upper"]
+                    radius_x = max(float(squint["radius_x"]), 1e-6)
+                    radius_z = max(float(squint["radius_z"]), 1e-6)
+                    normalized_x = max(
+                        -1.0,
+                        min(
+                            1.0,
+                            (float(world.x) - float(squint["center_x"])) / radius_x,
+                        ),
+                    )
+                    center_weight = max(0.0, 1.0 - normalized_x * normalized_x) ** 0.65
+                    closure = float(squint["closure_fraction"]) * center_weight
+                    squinted = world.copy()
+                    squinted.z += (float(squint["center_z"]) - float(world.z)) * closure
+                    created[squint_name].data[index].co = world_to_object @ squinted
+                    widened = world.copy()
+                    widened.z -= (
+                        float(squint["center_z"]) - float(world.z)
+                    ) * 0.045 * center_weight
+                    created[wide_name].data[index].co = world_to_object @ widened
+                    affected[squint_name] += 1
+                    affected[wide_name] += 1
+            elif eyelid and index in eyelid["active"]:
                 is_upper = index in eyelid["upper"]
                 radius_x = max(float(eyelid["radius_x"]), 1e-6)
                 radius_z = max(float(eyelid["radius_z"]), 1e-6)
@@ -3194,16 +3609,63 @@ def add_rich_source_face_shapes(
                 contact_target = eyelid["contact_targets"].get(index)
                 contact_z = (
                     float(eyelid["center_z"])
-                    - radius_z * 0.055
-                    + radius_z * 0.095 * normalized_x * normalized_x
+                    - radius_z * 0.20
+                    + radius_z * 0.20 * normalized_x * normalized_x
                 )
                 blink_world = world.copy()
                 if contact_target is not None:
                     blink_world = contact_target.copy()
+                elif index in eyelid["upper_contact"] or index in eyelid["lower_contact"]:
+                    blink_world.x = world.x
+                    blink_world.y = float(eyelid["contact_surface_y"])
+                    blink_world.z = contact_z
+                elif (
+                    index in eyelid["upper_anchor_support"]
+                    or index in eyelid["lower_anchor_support"]
+                    or index in eyelid["upper_support"]
+                    or index in eyelid["lower_support"]
+                    or index in eyelid["upper_inner_margin"]
+                    or index in eyelid["lower_inner_margin"]
+                ):
+                    target_x = float(eyelid["row_target_x"][index])
+                    row_nx = max(
+                        -1.0,
+                        min(1.0, (target_x - float(eyelid["center_x"])) / radius_x),
+                    )
+                    row_contact_z = (
+                        float(eyelid["center_z"])
+                        - radius_z * 0.20
+                        + radius_z * 0.20 * row_nx * row_nx
+                    )
+                    globe_arc = radius_z * math.sqrt(max(0.0, 1.0 - row_nx * row_nx))
+                    if (
+                        index in eyelid["upper_anchor_support"]
+                        or index in eyelid["lower_anchor_support"]
+                    ):
+                        arc_amount, depth_amount = 0.82, 0.014
+                    elif index in eyelid["upper_support"] or index in eyelid["lower_support"]:
+                        arc_amount, depth_amount = 0.50, 0.008
+                    else:
+                        arc_amount, depth_amount = 0.10, 0.002
+                    row_target = Vector(
+                        (
+                            target_x,
+                            float(eyelid["contact_surface_y"]) + depth * depth_amount,
+                            row_contact_z
+                            + (1.0 if is_upper else -1.0) * globe_arc * arc_amount,
+                        )
+                    )
+                    if index in eyelid["anchor_outer"]:
+                        outer_world = object_to_world @ basis.data[
+                            eyelid["anchor_outer"][index]
+                        ].co
+                        blink_world = outer_world.lerp(row_target, 0.40)
+                        blink_world.x = target_x
+                        blink_world.y = row_target.y
+                    else:
+                        blink_world = row_target
                 else:
-                    contribution = 0.88 if is_upper else 0.62
-                    blink_world.z += (contact_z - float(world.z)) * contribution * fold_weight
-                    blink_world.y -= depth * 0.0035 * fold_weight
+                    raise RuntimeError(f"unclassified integrated lid vertex {index}")
                 created[blink_name].data[index].co = world_to_object @ blink_world
                 wide_world = world.copy()
                 wide_world.z += (1.0 if is_upper else -1.0) * height * 0.0045 * fold_weight
@@ -3211,14 +3673,9 @@ def add_rich_source_face_shapes(
                 affected[blink_name] += 1
                 affected[wide_name] += 1
             elif not eyelid and eye_weight > 0.0:
-                blink_world = world.copy()
-                blink_world.z += (eye_center_z - float(world.z)) * 0.76 * eye_weight
-                blink_world.y -= depth * 0.004 * eye_weight
-                created[blink_name].data[index].co = world_to_object @ blink_world
                 wide_world = world.copy()
                 wide_world.z += (float(world.z) - eye_center_z) * 0.18 * eye_weight
                 created[wide_name].data[index].co = world_to_object @ wide_world
-                affected[blink_name] += 1
                 affected[wide_name] += 1
 
             brow_weight = region_weight(
@@ -3285,6 +3742,43 @@ def add_rich_source_face_shapes(
 
     for name, count in affected.items():
         face_mesh[f"affected_{name}"] = count
+    for suffix in ("L", "R"):
+        squint = squint_regions.get(suffix)
+        if squint:
+            shape = created[f"Eye_Squint.{suffix}"]
+            non_skin_displacement = max(
+                (
+                    (shape.data[index].co - basis.data[index].co).length
+                    for index in range(len(basis.data))
+                    if index not in squint["skin"]
+                ),
+                default=0.0,
+            )
+            core_displacement = max(
+                (
+                    (shape.data[index].co - basis.data[index].co).length
+                    for index in squint["eye_core"]
+                ),
+                default=0.0,
+            )
+            face_mesh[
+                f"squint_non_skin_max_displacement_{suffix.lower()}"
+            ] = non_skin_displacement
+            face_mesh[f"squint_core_max_displacement_{suffix.lower()}"] = core_displacement
+            continue
+        eyelid = eyelid_regions.get(suffix)
+        if not eyelid:
+            continue
+        blink = created[f"Eye_Blink.{suffix}"]
+        non_lid_displacement = max(
+            (
+                (blink.data[index].co - basis.data[index].co).length
+                for index in range(len(basis.data))
+                if index not in eyelid["active"]
+            ),
+            default=0.0,
+        )
+        face_mesh[f"blink_non_lid_max_displacement_{suffix.lower()}"] = non_lid_displacement
     face_mesh["facial_detail_mode"] = "rich_source_mesh"
     face_mesh["source_mouth_replacement"] = False
     face_mesh["eye_center_z"] = eye_center_z
@@ -3292,9 +3786,12 @@ def add_rich_source_face_shapes(
     face_mesh["eye_radius_x"] = width * 0.115
     face_mesh["eye_radius_z"] = region_height * 0.12
     if eyelid_regions:
-        face_mesh["blink_upper_lid_contribution"] = 0.88
-        face_mesh["blink_lower_lid_contribution"] = 0.62
-        face_mesh["blink_contact_mode"] = "shared_curved_line"
+        face_mesh["blink_upper_lid_contribution"] = 0.62
+        face_mesh["blink_lower_lid_contribution"] = 0.38
+        face_mesh["blink_contact_mode"] = "matched_margin_with_globe_support"
+    if squint_regions:
+        face_mesh["blink_capability"] = "squint_only"
+        face_mesh["squint_deformation_mode"] = "source_skin_ring_18_percent"
     return affected
 
 
@@ -4601,8 +5098,8 @@ def animate(
                     active_key.value = 1.0 if active_name in {"Mouth_Rest", "Mouth_MBP"} else 0.55 + mouth_open * 0.45
                     active_key.keyframe_insert(data_path="value", frame=frame)
 
-                if key_blocks.get("Eye_Blink.L") and key_blocks.get("Eye_Blink.R"):
-                    blink_amount = max(
+                if key_blocks.get("Eye_Squint.L") and key_blocks.get("Eye_Squint.R"):
+                    squint_amount = max(
                         (
                             event_amount(t, event)
                             for event in events
@@ -4641,8 +5138,8 @@ def animate(
                         if event.get("motion") == "micro_gaze"
                     )
                     rich_values = {
-                        "Eye_Blink.L": blink_amount,
-                        "Eye_Blink.R": blink_amount,
+                        "Eye_Squint.L": squint_amount,
+                        "Eye_Squint.R": squint_amount,
                         "Cheek_Smile.L": happy_amount * 0.58,
                         "Cheek_Smile.R": happy_amount * 0.58,
                         "Brow_Raise.L": max(think_amount * 0.44, brow_amount),
@@ -5109,8 +5606,8 @@ def create_action_library(
         face_specs: dict[str, list[tuple[int, dict[str, float]]]] = {
             "Face_Neutral": [(1, {}), (end, {})],
             "Face_Happy": [
-                (1, {"Mouth_Smile": 0.72, "Cheek_Smile.L": 0.72, "Cheek_Smile.R": 0.72, "Eye_Blink.L": 0.08, "Eye_Blink.R": 0.08}),
-                (end, {"Mouth_Smile": 0.72, "Cheek_Smile.L": 0.72, "Cheek_Smile.R": 0.72, "Eye_Blink.L": 0.08, "Eye_Blink.R": 0.08}),
+                (1, {"Mouth_Smile": 0.72, "Cheek_Smile.L": 0.72, "Cheek_Smile.R": 0.72, "Eye_Squint.L": 0.24, "Eye_Squint.R": 0.24}),
+                (end, {"Mouth_Smile": 0.72, "Cheek_Smile.L": 0.72, "Cheek_Smile.R": 0.72, "Eye_Squint.L": 0.24, "Eye_Squint.R": 0.24}),
             ],
             "Face_Thinking": [
                 (1, {"Mouth_MBP": 0.28, "Brow_Raise.L": 0.58, "Brow_Furrow.R": 0.18, "Eye_Look_Right": 0.38}),
@@ -5128,9 +5625,9 @@ def create_action_library(
                 (1, {"Mouth_MBP": 0.34, "Brow_Furrow.L": 0.52, "Brow_Furrow.R": 0.52}),
                 (end, {"Mouth_MBP": 0.34, "Brow_Furrow.L": 0.52, "Brow_Furrow.R": 0.52}),
             ],
-            "Face_Blink": [
+            "Face_Squint": [
                 (1, {}),
-                (max(2, fps // 6), {"Eye_Blink.L": 1.0, "Eye_Blink.R": 1.0}),
+                (max(2, fps // 6), {"Eye_Squint.L": 1.0, "Eye_Squint.R": 1.0}),
                 (max(3, fps // 3), {}),
             ],
         }
@@ -5196,6 +5693,11 @@ def save_rigged_assets(
         "export_morph": True,
     }
     try:
+        if bpy.ops.export_scene.gltf.get_rna_type().properties.get("export_extras") is not None:
+            export_args["export_extras"] = True
+    except (AttributeError, RuntimeError):
+        pass
+    try:
         bpy.ops.export_scene.gltf(**export_args, export_animation_mode="ACTIONS")
     except TypeError:
         try:
@@ -5258,7 +5760,7 @@ def save_rigged_assets(
         "lowerLipBoundaryVertexCount": int(mouth.get("mouth_lower_boundary_count", 0)) if mouth else 0,
         "trueLipTopology": bool(mouth and mouth.get("integrated_mouth_seam"))
         or all(face.get(role) for role in ("upper_lip", "lower_lip", "mouth_cavity")),
-        "trueEyelidTopology": all(
+        "trueEyelidTopology": bool(mouth and mouth.get("true_eyelid_topology")) or all(
             face.get(role)
             for role in ("upper_lid_l", "lower_lid_l", "upper_lid_r", "lower_lid_r")
         ),
@@ -5267,6 +5769,13 @@ def save_rigged_assets(
             and mouth.data.shape_keys
             and mouth.data.shape_keys.key_blocks.get("Eye_Blink.L")
             and mouth.data.shape_keys.key_blocks.get("Eye_Blink.R")
+        ),
+        "blinkCapability": str(mouth.get("blink_capability") or "none") if mouth else "none",
+        "sourceSquintShapeKeys": bool(
+            mouth
+            and mouth.data.shape_keys
+            and mouth.data.shape_keys.key_blocks.get("Eye_Squint.L")
+            and mouth.data.shape_keys.key_blocks.get("Eye_Squint.R")
         ),
         "facialBoneControls": {
             role: rig_stats.get("boneMap", {}).get(role, "")

@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import json
+import math
+import os
 import sys
+import tempfile
+import traceback
 import unittest
 from pathlib import Path
 
@@ -96,20 +100,6 @@ def shape_key_world_coordinates(obj, shape_name: str, indices: list[int]):
     return [obj.matrix_world @ key.data[index].co for index in indices]
 
 
-def blink_contact_gap(face_mesh, side: str) -> float:
-    suffix = side.lower()
-    pairs = json.loads(str(face_mesh[f"eyelid_contact_pairs_{suffix}"]))
-    assert pairs and all(len(pair) == 2 for pair in pairs)
-    key = face_mesh.data.shape_keys.key_blocks[f"Eye_Blink.{side.upper()}"]
-    return max(
-        (
-            (face_mesh.matrix_world @ key.data[int(upper_index)].co)
-            - (face_mesh.matrix_world @ key.data[int(lower_index)].co)
-        ).length
-        for upper_index, lower_index in pairs
-    )
-
-
 def vertex_uv_coordinates(obj, layer_name: str, vertex_index: int) -> list[list[float]]:
     layer = obj.data.uv_layers[layer_name]
     coordinates = [
@@ -120,6 +110,226 @@ def vertex_uv_coordinates(obj, layer_name: str, vertex_index: int) -> list[list[
     ]
     return sorted(coordinates)
 
+
+def color_attribute_signature(obj) -> list[dict[str, str]]:
+    return sorted(
+        (
+            {
+                "name": attribute.name,
+                "data_type": attribute.data_type,
+                "domain": attribute.domain,
+            }
+            for attribute in obj.data.color_attributes
+        ),
+        key=lambda item: (item["name"], item["domain"], item["data_type"]),
+    )
+
+
+def mesh_attribute_signature(obj) -> list[dict[str, str]]:
+    return sorted(
+        (
+            {
+                "name": attribute.name,
+                "data_type": attribute.data_type,
+                "domain": attribute.domain,
+            }
+            for attribute in obj.data.attributes
+            if not attribute.name.startswith(".") and attribute.name != "material_index"
+        ),
+        key=lambda item: (item["name"], item["domain"], item["data_type"]),
+    )
+
+
+def assert_task6_eye_metadata(
+    face_mesh,
+    *,
+    verify_modified_vertices: bool = True,
+    verify_mesh_attributes: bool = True,
+) -> None:
+    if face_mesh.get("blink_capability") == "squint_only":
+        assert face_mesh["true_eyelid_topology"] is False
+        assert face_mesh["eyelid_topology_mode"] == "squint_only_source_skin"
+        assert face_mesh["eye_region_subdivision_level"] == 0
+        assert face_mesh["eye_region_subdivision_added_vertices"] == 0
+        assert face_mesh["eye_region_boundary_fixed"] is True
+        assert face_mesh["eye_region_uv_preserved"] is True
+        assert face_mesh["eye_region_deform_weights_preserved"] is True
+        assert 0.10 <= face_mesh["squint_max_closure_fraction"] <= 0.14
+
+        custom_signature = json.loads(str(face_mesh["eye_region_custom_data_signature"]))
+        assert custom_signature["uv_layers"] == [layer.name for layer in face_mesh.data.uv_layers]
+        assert custom_signature["color_attributes"] == color_attribute_signature(face_mesh)
+        if verify_mesh_attributes:
+            assert custom_signature["attributes"] == mesh_attribute_signature(face_mesh)
+        modified = json.loads(str(face_mesh["eye_region_modified_uv_data"]))
+        assert modified["new_lid_vertex_count"] == 0
+        assert modified["all_finite"] is True
+        assert modified["all_within_source_bounds"] is True
+        assert set(modified["sides"]) == {"l", "r"}
+        deform = json.loads(str(face_mesh["eye_region_deform_evidence"]))
+        assert deform["new_lid_vertex_count"] == 0
+        assert deform["squint_vertex_count"] > 0
+        assert deform["preserved_original_vertex_count"] == deform["original_vertex_count"]
+
+        keys = face_mesh.data.shape_keys.key_blocks
+        assert keys.get("Eye_Squint.L") is not None
+        assert keys.get("Eye_Squint.R") is not None
+        assert keys.get("Eye_Blink.L") is None
+        assert keys.get("Eye_Blink.R") is None
+        basis = keys["Basis"]
+        side_regions = {}
+        for side in ("l", "r"):
+            core = set(object_property_indices(face_mesh, f"eyeball_core_indices_{side}"))
+            skin = set(object_property_indices(face_mesh, f"squint_skin_indices_{side}"))
+            upper = set(object_property_indices(face_mesh, f"squint_upper_indices_{side}"))
+            lower = set(object_property_indices(face_mesh, f"squint_lower_indices_{side}"))
+            assert core
+            assert skin
+            assert upper.union(lower) == skin
+            assert upper.isdisjoint(lower)
+            assert skin.isdisjoint(core)
+            assert face_mesh[f"squint_eye_weight_zero_{side}"] is True
+            assert face_mesh[f"eyeball_core_excluded_{side}"] is True
+            assert face_mesh[f"squint_non_skin_max_displacement_{side}"] <= 1e-9
+            assert face_mesh[f"squint_core_max_displacement_{side}"] <= 1e-9
+            eye_group = face_mesh.vertex_groups[f"Eye.{side.upper()}"]
+            shape = keys[f"Eye_Squint.{side.upper()}"]
+            moved = {
+                index
+                for index in range(len(basis.data))
+                if (shape.data[index].co - basis.data[index].co).length > 1e-8
+            }
+            assert moved
+            stored_skin_uvs = {
+                int(item["vertex"]): item["uvs"]
+                for item in modified["sides"][side]["squint_skin_uv_data"]
+            }
+            for index in (skin if verify_modified_vertices else moved):
+                try:
+                    eye_weight = eye_group.weight(index)
+                except RuntimeError:
+                    eye_weight = 0.0
+                assert eye_weight <= 1e-8
+            if verify_modified_vertices:
+                assert len(moved) <= len(skin)
+                assert set(stored_skin_uvs) == skin
+                center_x = float(face_mesh[f"squint_center_x_{side}"])
+                center_z = float(face_mesh[f"squint_center_z_{side}"])
+                radius_x = float(face_mesh[f"squint_radius_x_{side}"])
+                radius_z = float(face_mesh[f"squint_radius_z_{side}"])
+                adjacency = {vertex.index: set() for vertex in face_mesh.data.vertices}
+                for edge in face_mesh.data.edges:
+                    left, right = (int(value) for value in edge.vertices)
+                    adjacency[left].add(right)
+                    adjacency[right].add(left)
+                first_skin_ring = {
+                    neighbor
+                    for index in core
+                    for neighbor in adjacency[index]
+                    if neighbor not in core
+                }
+                second_skin_ring = {
+                    neighbor
+                    for index in first_skin_ring
+                    for neighbor in adjacency[index]
+                    if neighbor not in core and neighbor not in first_skin_ring
+                }
+                assert skin.issubset(first_skin_ring.union(second_skin_ring))
+                for index in skin:
+                    assert stored_skin_uvs[index] == vertex_uv_coordinates(
+                        face_mesh,
+                        face_mesh.data.uv_layers.active.name,
+                        index,
+                    )
+                    world = face_mesh.matrix_world @ basis.data[index].co
+                    normalized_x = (float(world.x) - center_x) / radius_x
+                    normalized_z = (float(world.z) - center_z) / radius_z
+                    assert math.hypot(normalized_x, normalized_z) <= 1.30 + 1e-6
+                    assert normalized_z > 0.0 if index in upper else normalized_z < 0.0
+                assert max(
+                    (shape.data[index].co - basis.data[index].co).length for index in core
+                ) <= 1e-9
+                assert max(
+                    (shape.data[index].co - basis.data[index].co).length
+                    for index in range(len(basis.data))
+                    if index not in skin
+                ) <= 1e-9
+            else:
+                expected_skin_loops = [
+                    uv
+                    for coordinates in stored_skin_uvs.values()
+                    for uv in coordinates
+                ]
+                assert len(moved) <= len(expected_skin_loops)
+                for index in moved:
+                    actual_uvs = vertex_uv_coordinates(
+                        face_mesh,
+                        face_mesh.data.uv_layers.active.name,
+                        index,
+                    )
+                    assert actual_uvs
+                    assert all(
+                        any(
+                            all(
+                                abs(actual[axis] - expected[axis]) <= 5e-5
+                                for axis in (0, 1)
+                            )
+                            for expected in expected_skin_loops
+                        )
+                        for actual in actual_uvs
+                    )
+
+            stored_core_uvs = {
+                int(item["vertex"]): item["uvs"]
+                for item in json.loads(str(face_mesh[f"eyeball_core_uv_data_{side}"]))
+            }
+            if verify_modified_vertices:
+                assert set(stored_core_uvs) == core
+                for index in core:
+                    assert stored_core_uvs[index] == vertex_uv_coordinates(
+                        face_mesh,
+                        face_mesh.data.uv_layers.active.name,
+                        index,
+                    )
+            else:
+                imported_core_uvs = []
+                for index in range(len(face_mesh.data.vertices)):
+                    try:
+                        eye_weight = eye_group.weight(index)
+                    except RuntimeError:
+                        eye_weight = 0.0
+                    if eye_weight > 0.015:
+                        imported_core_uvs.extend(
+                            vertex_uv_coordinates(
+                                face_mesh,
+                                face_mesh.data.uv_layers.active.name,
+                                index,
+                            )
+                        )
+                expected_core_uvs = [
+                    uv
+                    for coordinates in stored_core_uvs.values()
+                    for uv in coordinates
+                ]
+                assert imported_core_uvs
+                assert expected_core_uvs
+                assert all(
+                    math.isfinite(value)
+                    for uv in (*imported_core_uvs, *expected_core_uvs)
+                    for value in uv
+                )
+            side_regions[side] = skin if verify_modified_vertices else moved
+
+        assert side_regions["l"].isdisjoint(side_regions["r"])
+        assert not any(
+            material and material.name.startswith(("IP_EyelidSkin.", "IP_EyelidMargin."))
+            for material in face_mesh.data.materials
+        )
+        assert face_mesh["source_pbr_materials_tuned"] is True
+        assert json.loads(str(face_mesh["source_pbr_material_names"]))
+        role_metadata = json.loads(str(face_mesh["source_pbr_role_metadata"]))
+        assert set(role_metadata) == {"base_color", "metallic", "normal", "roughness"}
+        return
 
 def mouth_open_gap(face_mesh, shape_name: str) -> float:
     upper = shape_key_world_coordinates(
@@ -240,21 +450,17 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
     assert face_mesh["mouth_upper_boundary_count"] >= 8
     assert face_mesh["mouth_lower_boundary_count"] >= 8
     assert face_mesh["source_texture_face_preserved"] is True
-    assert face_mesh["true_eyelid_topology"] is True
-    assert face_mesh["eyelid_topology_mode"] == "integrated_source_face"
-    assert face_mesh["eye_region_subdivision_level"] == 1
+    assert face_mesh["true_eyelid_topology"] is False
+    assert face_mesh["eyelid_topology_mode"] == "squint_only_source_skin"
+    assert face_mesh["blink_capability"] == "squint_only"
+    assert face_mesh["eye_region_subdivision_level"] == 0
+    assert face_mesh["eye_region_subdivision_added_vertices"] == 0
     assert face_mesh["eye_region_boundary_fixed"] is True
     assert face_mesh["eye_region_uv_preserved"] is True
-    assert face_mesh["eyelid_loop_vertex_count_l"] >= 96
-    assert face_mesh["eyelid_loop_vertex_count_r"] >= 96
-    assert face_mesh["eyelid_loop_vertex_count_l"] == face_mesh["eyelid_contact_pair_count_l"] * 2
-    assert face_mesh["eyelid_loop_vertex_count_r"] == face_mesh["eyelid_contact_pair_count_r"] * 2
-    assert face_mesh["eyelid_region_vertex_count_l"] >= 96
-    assert face_mesh["eyelid_region_vertex_count_r"] >= 96
-    assert face_mesh["eyelid_upper_vertex_count_l"] >= 32
-    assert face_mesh["eyelid_upper_vertex_count_r"] >= 32
-    assert face_mesh["eyelid_lower_vertex_count_l"] >= 32
-    assert face_mesh["eyelid_lower_vertex_count_r"] >= 32
+    assert 0.10 <= face_mesh["squint_max_closure_fraction"] <= 0.14
+    for side in ("l", "r"):
+        assert len(object_property_indices(face_mesh, f"squint_upper_indices_{side}")) >= 12
+        assert len(object_property_indices(face_mesh, f"squint_lower_indices_{side}")) >= 12
 
     forbidden_overlays = {
         "IP_UpperLip", "IP_LowerLip",
@@ -292,12 +498,13 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
     expected = {
         "Mouth_Rest", "Mouth_A", "Mouth_E", "Mouth_O", "Mouth_U", "Mouth_MBP",
         "Mouth_Smile", "Mouth_Frown", "Mouth_Surprise",
-        "Eye_Blink.L", "Eye_Blink.R", "Eye_Wide.L", "Eye_Wide.R",
+        "Eye_Squint.L", "Eye_Squint.R", "Eye_Wide.L", "Eye_Wide.R",
         "Eye_Look_Left", "Eye_Look_Right", "Brow_Raise.L", "Brow_Raise.R",
         "Brow_Furrow.L", "Brow_Furrow.R", "Cheek_Smile.L", "Cheek_Smile.R",
         "Cheek_Puff.L", "Cheek_Puff.R", "Nose_Flare.L", "Nose_Flare.R",
     }
     assert expected.issubset(names), sorted(expected.difference(names))
+    assert {"Eye_Blink.L", "Eye_Blink.R"}.isdisjoint(names)
     assert face_mesh["source_mouth_replacement"] is False
     assert face_mesh["facial_detail_mode"] == "rich_source_mesh"
     assert face_mesh["mouth_vertex_count"] >= 32
@@ -309,46 +516,35 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
         for node in material.node_tree.nodes
     )
     basis = face_mesh.data.shape_keys.key_blocks["Basis"]
-    blink = face_mesh.data.shape_keys.key_blocks["Eye_Blink.L"]
+    squint = face_mesh.data.shape_keys.key_blocks["Eye_Squint.L"]
     assert sum(
-        (basis.data[index].co - blink.data[index].co).length > 1e-5
+        (basis.data[index].co - squint.data[index].co).length > 1e-5
         for index in range(len(basis.data))
-    ) >= 12
-    assert blink_contact_gap(face_mesh, "L") <= dimensions["height"] * 0.002
-    assert blink_contact_gap(face_mesh, "R") <= dimensions["height"] * 0.002
+    ) >= 8
 
     for side in ("l", "r"):
-        boundary = object_property_indices(face_mesh, f"eyelid_boundary_indices_{side}")
-        stored_boundary = json.loads(str(face_mesh[f"eyelid_boundary_basis_coordinates_{side}"]))
+        boundary = object_property_indices(face_mesh, f"eye_region_boundary_indices_{side}")
+        stored_boundary = json.loads(str(face_mesh[f"eye_region_boundary_basis_coordinates_{side}"]))
         assert {int(item[0]) for item in stored_boundary} == set(boundary)
         for index, coordinate in stored_boundary:
             assert all(
                 abs(float(basis.data[int(index)].co[axis]) - float(coordinate[axis])) < 1e-8
                 for axis in range(3)
             )
-        own_blink = face_mesh.data.shape_keys.key_blocks[f"Eye_Blink.{side.upper()}"]
-        other_blink = face_mesh.data.shape_keys.key_blocks[f"Eye_Blink.{'R' if side == 'l' else 'L'}"]
-        assert all((basis.data[index].co - own_blink.data[index].co).length < 1e-8 for index in boundary)
-        active = (
-            object_property_indices(face_mesh, f"eyelid_upper_indices_{side}")
-            + object_property_indices(face_mesh, f"eyelid_lower_indices_{side}")
-        )
-        eye_group = face_mesh.vertex_groups[f"Eye.{side.upper()}"]
-        assert all(eye_group.weight(index) >= 0.012 for index in active)
-        assert any((basis.data[index].co - own_blink.data[index].co).length > 1e-5 for index in active)
-        assert all((basis.data[index].co - other_blink.data[index].co).length < 1e-8 for index in active)
-        pairs = json.loads(str(face_mesh[f"eyelid_contact_pairs_{side}"]))
-        assert len({int(pair[0]) for pair in pairs}) == len(pairs)
-        assert len({int(pair[1]) for pair in pairs}) == len(pairs)
-        pair_centers = [
-            (
-                float((face_mesh.matrix_world @ basis.data[int(upper)].co).x)
-                + float((face_mesh.matrix_world @ basis.data[int(lower)].co).x)
-            )
-            * 0.5
-            for upper, lower in pairs
+        own_squint = face_mesh.data.shape_keys.key_blocks[f"Eye_Squint.{side.upper()}"]
+        other_squint = face_mesh.data.shape_keys.key_blocks[
+            f"Eye_Squint.{'R' if side == 'l' else 'L'}"
         ]
-        assert pair_centers == sorted(pair_centers)
+        active = object_property_indices(face_mesh, f"squint_skin_indices_{side}")
+        eye_group = face_mesh.vertex_groups[f"Eye.{side.upper()}"]
+        for index in active:
+            try:
+                eye_weight = eye_group.weight(index)
+            except RuntimeError:
+                eye_weight = 0.0
+            assert eye_weight <= 1e-8
+        assert any((basis.data[index].co - own_squint.data[index].co).length > 1e-5 for index in active)
+        assert all((basis.data[index].co - other_squint.data[index].co).length < 1e-8 for index in active)
 
     uv_evidence = json.loads(str(face_mesh["eye_region_uv_guard_data"]))
     assert uv_evidence["layer"] == face_mesh.data.uv_layers.active.name
@@ -424,6 +620,7 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
     assert specular_input is not None and 0.20 <= specular_input.default_value <= 0.35
     assert not any(node.type in {"BUMP", "TEX_NOISE"} for node in nodes)
     assert source_material["ip_source_pbr_role_resolution"] == "socket_links"
+    assert_task6_eye_metadata(face_mesh)
 
 
 def test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face() -> None:
@@ -452,8 +649,9 @@ def test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face
     }.issubset(report["actions"])
     assert {
         "Face_Neutral", "Face_Happy", "Face_Thinking", "Face_Surprised",
-        "Face_Confused", "Face_Serious", "Face_Blink",
+        "Face_Confused", "Face_Serious", "Face_Squint",
     }.issubset(report["faceActions"])
+    assert "Face_Blink" not in report["faceActions"]
 
     armature.animation_data.action = bpy.data.actions["Idle_Speaking"]
     bpy.context.scene.frame_set(1)
@@ -534,7 +732,50 @@ def test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face
     assert abs(armature.pose.bones[bone_map["eye_r"]].rotation_euler.y) > 0.02
 
 
-def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_blink() -> None:
+def test_existing_rich_face_without_task6_metadata_fails_closed() -> None:
+    character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    face = blender_renderer.setup_face(
+        {
+            "characterId": "main_ip_sloth",
+            "faceScreenMode": "source",
+            "mouthMode": "source_mesh_visemes",
+            "mouthHeightRatio": 0.805,
+            "mouthScale": 1.0,
+            "facialDetailMode": "rich",
+            "facialTopologyMode": "source_retopology",
+        },
+        dimensions,
+        armature,
+        character_objects,
+        bone_map,
+    )
+    source = face["mouth"]
+
+    source["eyelid_topology_mode"] = "integrated_source_face"
+    source["true_eyelid_topology"] = True
+    source["blink_capability"] = "full"
+    try:
+        blender_renderer.validate_task6_face_metadata(source)
+    except RuntimeError as exc:
+        assert "full-blink metadata is no longer reusable" in str(exc)
+    else:
+        raise AssertionError("legacy full-blink metadata was accepted")
+
+    source["eyelid_topology_mode"] = "squint_only_source_skin"
+    source["true_eyelid_topology"] = False
+    source["blink_capability"] = "squint_only"
+    del source["squint_skin_indices_l"]
+
+    try:
+        blender_renderer.add_rich_source_face_shapes(source, dimensions)
+    except RuntimeError as exc:
+        assert "rebuild master from source FBX" in str(exc)
+        assert "squint_skin_indices_l" in str(exc)
+    else:
+        raise AssertionError("incomplete Task 6 face metadata was silently reused")
+
+
+def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint() -> None:
     character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
     face = blender_renderer.setup_face(
         {
@@ -579,8 +820,10 @@ def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_blink()
     assert all(abs(finger.z) < 0.04 for finger in open_fingers)
     assert open_fingers[0].x > 0.10
     assert open_fingers[2].x < -0.10
-    assert keys["Eye_Blink.L"].value > 0.5
-    assert keys["Eye_Blink.R"].value > 0.5
+    assert keys["Eye_Squint.L"].value > 0.5
+    assert keys["Eye_Squint.R"].value > 0.5
+    assert keys.get("Eye_Blink.L") is None
+    assert keys.get("Eye_Blink.R") is None
     assert keys["Mouth_A"].value > 0.5
     assert max(abs(value) for value in armature.pose.bones[bone_map["jaw"]].rotation_euler) > 0.01
 
@@ -672,30 +915,12 @@ def test_talking_timeline_uses_clamped_bezier_interpolation() -> None:
 
 
 def test_exported_glb_reimport_keeps_source_humanoid_axis_profile() -> None:
-    reset_scene()
-    character_objects, armatures, imported_assets, _ = blender_renderer.import_model(str(EXPORTED_GLB_PATH))
-    dimensions = blender_renderer.prepare_character(
-        character_objects,
-        target_height=2.55,
-        preserve_hierarchy=True,
-        asset_objects=imported_assets,
-    )
-    weights_before = blender_renderer._collect_weight_stats(character_objects)
-    assert sum(
-        obj.type == "EMPTY" and obj.name.startswith("IP_Character_Container")
-        for obj in bpy.context.scene.objects
-    ) == 1
-    armature, _, bone_map = blender_renderer.choose_character_rig(
-        {"rigMode": "auto", "preserveExistingRig": True, "enhanceExistingRig": True},
-        armatures,
-        character_objects,
-        dimensions,
-    )
-    weights_after = blender_renderer._collect_weight_stats(character_objects)
+    character_objects, dimensions, armature, rig_stats, bone_map, removed = load_enhanced_fbx_character()
     face = blender_renderer.setup_face(
         {
+            "characterId": "main_ip_sloth",
             "faceScreenMode": "source",
-            "mouthMode": "existing_visemes",
+            "mouthMode": "source_mesh_visemes",
             "facialDetailMode": "rich",
             "facialTopologyMode": "source_retopology",
             "mouthHeightRatio": 0.805,
@@ -706,25 +931,93 @@ def test_exported_glb_reimport_keeps_source_humanoid_axis_profile() -> None:
         character_objects,
         bone_map,
     )
+    assert_task6_eye_metadata(face["mouth"])
 
-    forbidden_overlays = {
-        "IP_UpperLip", "IP_LowerLip",
-        "IP_UpperLid.L", "IP_LowerLid.L", "IP_UpperLid.R", "IP_LowerLid.R",
-    }
-    assert forbidden_overlays.isdisjoint({obj.name for obj in bpy.context.scene.objects})
-    assert {"IP_OralCavity", "IP_UpperTeeth", "IP_LowerTeeth", "IP_Tongue"}.issubset(
-        {obj.name for obj in bpy.context.scene.objects}
-    )
-    assert {"jaw", "eye_l", "eye_r", "tongue_1", "tongue_2", "tongue_3"}.issubset(bone_map)
-    for bone_name in ("Head", "Jaw", "Eye.L", "Eye.R"):
-        assert weights_after["weightedVertexCounts"].get(bone_name, 0) == weights_before["weightedVertexCounts"].get(bone_name, 0)
-    assert face["mouth"].get("integrated_mouth_seam") is True
-    assert blender_renderer.uses_source_humanoid_axes(armature) is True
-    blender_renderer.create_action_library(armature, face, bone_map, fps=30)
-    armature.animation_data.action = bpy.data.actions["Idle_Speaking"]
-    bpy.context.scene.frame_set(1)
-    assert armature.pose.bones[bone_map["upper_arm_l"]].rotation_euler.z > 0.8
-    assert armature.pose.bones[bone_map["upper_arm_r"]].rotation_euler.z < -0.8
+    with tempfile.TemporaryDirectory(prefix="ip-avatar-task6-") as temporary_directory:
+        output = Path(temporary_directory)
+        blender_renderer.save_rigged_assets(
+            {
+                "riggedBlendPath": str(output / "task6.blend"),
+                "riggedGlbPath": str(output / "task6.glb"),
+                "rigReportPath": str(output / "task6-report.json"),
+                "rigMode": "auto",
+                "faceScreenMode": "source",
+                "mouthMode": "source_mesh_visemes",
+                "facialTopologyMode": "source_retopology",
+            },
+            character_objects,
+            [dimensions["container"]],
+            armature,
+            face,
+            removed,
+            rig_stats,
+        )
+        assert (output / "task6.glb").is_file()
+
+        reset_scene()
+        character_objects, armatures, imported_assets, _ = blender_renderer.import_model(
+            str(output / "task6.glb")
+        )
+        dimensions = blender_renderer.prepare_character(
+            character_objects,
+            target_height=2.55,
+            preserve_hierarchy=True,
+            asset_objects=imported_assets,
+        )
+        weights_before = blender_renderer._collect_weight_stats(character_objects)
+        armature, _, bone_map = blender_renderer.choose_character_rig(
+            {"rigMode": "auto", "preserveExistingRig": True, "enhanceExistingRig": False},
+            armatures,
+            character_objects,
+            dimensions,
+        )
+        weights_after = blender_renderer._collect_weight_stats(character_objects)
+        face = blender_renderer.setup_face(
+            {
+                "faceScreenMode": "source",
+                "mouthMode": "existing_visemes",
+                "facialDetailMode": "rich",
+                "facialTopologyMode": "source_retopology",
+                "mouthHeightRatio": 0.805,
+                "mouthScale": 1.0,
+            },
+            dimensions,
+            armature,
+            character_objects,
+            bone_map,
+        )
+
+        source = face["mouth"]
+        assert_task6_eye_metadata(
+            source,
+            verify_modified_vertices=False,
+            verify_mesh_attributes=False,
+        )
+        assert source["eye_region_subdivision_added_vertices"] == 0
+        assert json.loads(str(source["eye_region_modified_uv_data"]))["new_lid_vertex_count"] == 0
+        assert source["source_pbr_materials_tuned"] is True
+        assert json.loads(str(source["source_pbr_role_metadata"]))
+
+        forbidden_overlays = {
+            "IP_UpperLip", "IP_LowerLip",
+            "IP_UpperLid.L", "IP_LowerLid.L", "IP_UpperLid.R", "IP_LowerLid.R",
+        }
+        assert forbidden_overlays.isdisjoint({obj.name for obj in bpy.context.scene.objects})
+        assert {"IP_OralCavity", "IP_UpperTeeth", "IP_LowerTeeth", "IP_Tongue"}.issubset(
+            {obj.name for obj in bpy.context.scene.objects}
+        )
+        assert {"jaw", "eye_l", "eye_r", "tongue_1", "tongue_2", "tongue_3"}.issubset(bone_map)
+        for bone_name in ("Head", "Jaw", "Eye.L", "Eye.R"):
+            assert weights_after["weightedVertexCounts"].get(bone_name, 0) == weights_before[
+                "weightedVertexCounts"
+            ].get(bone_name, 0)
+        assert source.get("integrated_mouth_seam") is True
+        assert blender_renderer.uses_source_humanoid_axes(armature) is True
+        blender_renderer.create_action_library(armature, face, bone_map, fps=30)
+        armature.animation_data.action = bpy.data.actions["Idle_Speaking"]
+        bpy.context.scene.frame_set(1)
+        assert armature.pose.bones[bone_map["upper_arm_l"]].rotation_euler.z > 0.8
+        assert armature.pose.bones[bone_map["upper_arm_r"]].rotation_euler.z < -0.8
 
 
 def test_generated_humanoid_rig_has_presenter_limbs_and_valid_weights() -> None:
@@ -1141,6 +1434,10 @@ def test_overlapping_hand_events_share_one_arm_stage_pose() -> None:
     assert 0.45 < forearm.z < 0.90, tuple(forearm)
 
 
+def deliberate_direct_runner_failure() -> None:
+    raise AssertionError("deliberate direct-runner failure")
+
+
 if __name__ == "__main__":
     tests = [
         test_generated_humanoid_rig_has_presenter_limbs_and_valid_weights,
@@ -1156,11 +1453,24 @@ if __name__ == "__main__":
         test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights,
         test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays,
         test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face,
-        test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_blink,
+        test_existing_rich_face_without_task6_metadata_fails_closed,
+        test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint,
         test_publish_render_detail_is_non_destructive_and_deformation_aware,
         test_talking_timeline_uses_clamped_bezier_interpolation,
         test_exported_glb_reimport_keeps_source_humanoid_axis_profile,
     ]
+    if os.environ.get("IP_AVATAR_FORCE_TEST_FAILURE") == "1":
+        tests = [deliberate_direct_runner_failure]
+    failures = 0
     for test in tests:
-        test()
-        print(f"PASS {test.__name__}")
+        try:
+            test()
+        except Exception:
+            failures += 1
+            print(f"FAIL {test.__name__}")
+            traceback.print_exc()
+        else:
+            print(f"PASS {test.__name__}")
+    if failures:
+        print(f"FAILED {failures} direct-runner test(s)")
+        sys.exit(1)

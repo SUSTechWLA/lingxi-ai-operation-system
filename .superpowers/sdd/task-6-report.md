@@ -1,127 +1,171 @@
 # Task 6 Report: Close-Shot Face and Source PBR Refinement
 
-## Summary
+## Outcome
 
-Refined the original integrated source face from
-`ip形象/main_ip/turnaround/带骨骼3d模型.fbx` without adding visible eyelid/lip
-overlays or replacing the source texture. The fresh-FBX path now subdivides the
-resolved eye regions before Basis creation, creates independent paired L/R blink
-contact, restrains mouth-corner travel, and tunes the existing linked 4K PBR maps.
+Task 6 finishes with a production-safe, fail-closed squint capability rather
+than a full blink. The original integrated source face from
+`ip形象/main_ip/turnaround/带骨骼3d模型.fbx` remains the visible face and is
+checked against `ip形象/main_ip/turnaround/front.png`. No visible eye/lip
+overlay, image card, face-texture replacement, generated eyelid material, or
+generated eyelid geometry is present.
 
-Owned files changed:
-- `mcp/ip_avatar_3d/blender_renderer.py`
-- `mcp/ip_avatar_3d/test_blender_character_rig.py`
-- `.superpowers/sdd/task-6-report.md`
+The source does not contain independent lid strips. Two generated full-lid
+implementations passed structural checks but failed original-size visual QA
+with ocular-texture streaking, collapsed triangles, white lid blocks, open
+corners, and torn perimeters. Those implementations are not used. The final
+asset reports:
 
-## TDD Evidence
+- `trueEyelidTopology=false`
+- `blinkCapability='squint_only'`
+- `Eye_Squint.L` and `Eye_Squint.R` only
+- no `Eye_Blink.L/R` and no `Face_Blink`
 
-Initial RED:
+Legacy full-blink metadata is rejected with a clear `rebuild master from source
+FBX for blinkCapability=squint_only` error.
+
+## RED/GREEN Evidence
+
+Initial Task 6 RED:
+
 `/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
 
-Result:
-- The direct runner reached the new source-retopology test and failed at
-  `face_mesh["true_eyelid_topology"]` with the expected `KeyError`.
-- The renderer had no integrated eyelid refinement metadata or contact topology.
-- Blender returned process exit `0` despite the script traceback; the traceback,
-  not the process code alone, was used as RED evidence.
+- The first source-retopology contract failed because true eyelid topology,
+  contact, UV, and PBR evidence did not exist.
+- Strengthened tests subsequently exposed full-XYZ contact, fixed-boundary,
+  source-link material-role, modified-region UV/custom-data, GLB extras/reuse,
+  and runner-exit gaps.
 
-Visual-audit RED:
-- The first broad geometric eye classifier passed structural assertions but a
-  close render dragged unweighted muzzle/forehead vertices into the blink.
-- A new assertion requiring every active lid vertex to retain at least `0.012`
-  weight in its resolved `Eye.L`/`Eye.R` group failed with
-  `RuntimeError: Vertex not in group`.
+Visual RED and fail-closed decision:
 
-Correctness-review RED:
-- Strengthened tests changed blink contact from projected XZ proximity to stored
-  full-XYZ pairs and added boundary-coordinate, UV-loop, and link-priority PBR
-  checks.
-- The direct runner failed with the expected
-  `AttributeError: _resolve_source_pbr_texture_roles` before renderer support was
-  added.
+- Generated-lid reviews failed twice at original `1024x1024` size. The first
+  collapse had `752/1110` faces below 1% area, `112` zero-area faces, `777`
+  aspect ratios above 100, `134` edges above 2x stretch, and `169` bridge
+  streaks. Later strips preserved the ocular core but remained visibly white,
+  striped, jagged, and torn.
+- The full-lid branch was abandoned as required; failed `full_blink.png`
+  evidence was removed and is not a deliverable.
 
-Final GREEN:
+Squint fallback RED/GREEN:
+
+- RED: `RuntimeError: squint-only fallback found an incomplete L skin ring:
+  upper=6, lower=59` exposed the asymmetric `center_z` split.
+- GREEN: candidates are now sorted by normalized Z and use balanced top/bottom
+  samples.
+- RED: the first balanced geometric annulus rendered lower-face/mouth-corner
+  pulls. A structural test then rejected selected vertices outside two mesh
+  edges of the ocular core.
+- GREEN: each side now uses exactly 12 upper and 12 lower zero-eye-weight
+  vertices from the first two topological skin rings, bounded to normalized
+  radius `1.30`, with maximum closure reduced to `0.12`.
+- RED: GLB reimport produced 35 moved vertices from 32 stored source indices
+  because glTF split vertices at loop/UV boundaries. Source-index cardinality
+  was therefore not a valid serialization assertion.
+- GREEN: fresh FBX builds retain exact per-index UV checks. GLB displacements
+  must map to stored skin-loop UVs within `5e-5`, remain finite, and retain zero
+  Eye weight; ocular metadata remains preserved and imported ocular UVs remain
+  finite without requiring unstable vertex/loop multiplicity.
+
+Direct-runner RED reliability:
+
+`env IP_AVATAR_FORCE_TEST_FAILURE=1 /Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
+
+- Blender `5.1.2`, exit `1`.
+- Output: `FAIL deliberate_direct_runner_failure` and
+  `FAILED 1 direct-runner test(s)`.
+
+Final character GREEN:
+
 `/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
 
-Result:
-- Exit `0` under Blender `5.1.2`.
-- PASS all 17 direct-runner character tests.
-- Includes fresh FBX refinement, no-visible-overlay checks, independent blink
-  pairs, fixed boundary coordinates, UV guards, mouth limits, linked PBR roles,
-  animation, publish detail, and exported packed-metallic/roughness GLB
-  compatibility.
+- Blender `5.1.2`, exit `0`.
+- PASS all `18` direct-runner tests, including fresh source build, independent
+  L/R squint, no-visible-overlay checks, mouth bounds, linked source PBR roles,
+  fail-closed reuse, GLB extras, and live GLB export/reimport.
 
-Final GREEN:
+Final scene GREEN:
+
 `/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_scene_contract.py`
 
-Result:
-- Exit `0` under Blender `5.1.2`.
-- PASS all 5 scene-contract tests.
+- Blender `5.1.2`, exit `0`.
+- PASS all `5` scene-contract tests.
 
 ## Structural Evidence
 
-Integrated eye topology:
-- Final source-face vertices: `6926`.
-- Local eye subdivision added vertices: `510`.
-- Per side: `257` weighted region vertices, `95` upper vertices, `162` lower
-  vertices, and `36` fixed original boundary vertices.
-- Per side: `75` deterministic upper/lower contact pairs, or `150` real contact
-  samples for `eyelid_loop_vertex_count_*`.
-- Maximum full 3D world-space contact-pair distance at blink: `0.0` for L and R;
-  allowed bound: `2.55 * 0.002 = 0.0051`.
-- L/R Shape Keys remain isolated.
-- Subdivision excludes edges touching the precomputed eye-region boundary.
-- Stored pre-subdivision boundary coordinates match the final Basis coordinates.
-- `64` untouched original vertices guard the active UV layer; their per-vertex UV
-  loop multisets match before and after subdivision.
-- Topology mode is explicitly `integrated_source_face`, not detached eyelid
-  geometry.
+Squint and ocular isolation:
+
+- Source face vertex count: `6416`; eye subdivision/new lid vertices: `0`.
+- Original ocular core: `63` vertices per side, all unchanged by both squint
+  Shape Keys (`max displacement = 0.0`).
+- Active source-skin ring: `12` upper + `12` lower vertices per side.
+- Active skin vertices have zero `Eye.L/R` weight and lie within two topology
+  edges of the ocular core. Maximum non-skin displacement is `0.0`.
+- L/R active sets are disjoint and the opposite-side Shape Key displacement is
+  zero. Eye bones continue to provide gaze control.
+- No new lid faces exist, so the failed full-lid triangle-collapse class is
+  absent rather than hidden by a weaker bound.
+
+UV, custom data, reuse, and export:
+
+- Original UV layer names and relevant color/custom-attribute signatures are
+  stored and checked. A 64-vertex untouched UV guard remains exact on the fresh
+  build.
+- Exact ocular and squint-skin per-loop UV evidence is stored before Shape Keys.
+  No UV values are authored or modified by the fallback; source and imported
+  evidence is checked for finite values.
+- Original deform assignments are preserved; no generated lid vertices or
+  weights exist.
+- Supported glTF exporters receive `export_extras=True`. Reimport must retain
+  squint capability, per-side core/skin metadata, boundary/UV/deform evidence,
+  and tuned PBR role metadata.
+- Existing rich/source-retopology assets are reusable only when every current
+  Task 6 squint property validates. Missing metadata and legacy full-blink mode
+  both fail closed.
 
 Mouth restraint:
-- Head-width lateral bound: `0.0022401830`.
-- `Mouth_Smile` maximum corner shift: `0.0011520907`.
-- `Mouth_E` maximum corner shift: `0.0017921478`.
-- `Mouth_MBP` maximum corner shift: `0.0007554740`.
-- `Mouth_A` vertical gap: `0.0738434792`; `Mouth_MBP` gap: `0.0420825481`, so
-  speech opening and oral interior visibility remain available.
-- No image-card mouth, replacement texture, visible lip overlay, or material
-  mouth-mask driver was added to the integrated path.
+
+- Head-width lateral limit: `0.0022401830`.
+- Maximum corner shifts: `Mouth_Smile 0.0011520907`, `Mouth_E 0.0017921478`,
+  and `Mouth_MBP 0.0007554740`.
+- `Mouth_A` vertical gap: `0.0738434792`; `Mouth_MBP` gap: `0.0420825481`.
+- The close-shot smile remains restrained and closed while jaw opening and oral
+  cavity visibility remain available.
 
 Source PBR:
-- Actual FBX material inspection found localized source node names and four linked
-  4096x4096 images: base color, metallic, normal, and roughness.
-- Roles are resolved from existing Principled/Normal Map socket links first.
-  Filename fallback ignores unknown or ambiguous packed textures and cannot
-  overwrite duplicate role candidates.
-- Resolved nodes are temporarily renamed before canonical exact names are
-  assigned, avoiding Blender `.001` collision suffixes.
-- Color spaces: base color `sRGB`; metallic, normal, and roughness `Non-Color`.
-- Normal strength: `0.34`; Principled specular IOR level: `0.28`.
-- Roughness map range: `0.38..0.76`.
-- No source-material `BUMP` or `TEX_NOISE` node was added.
-- Existing exported GLB packed metallic/roughness material remains supported and
-  is not destructively rewritten as four distinct maps.
 
-## Visual Audit
+- The original linked 4096x4096 maps remain wired as
+  `Image Texture - Base Color`, `Image Texture - Metallic`,
+  `Image Texture - Normal`, and `Image Texture - Roughness`.
+- Roles resolve from Principled/Normal Map links first. Filename fallback only
+  confirms unambiguous missing roles and rejects duplicates.
+- Base color is `sRGB`; metallic, normal, and roughness are `Non-Color`.
+- Tangent normal strength is `0.34`, specular IOR level is `0.28`, and source
+  roughness is remapped to `0.38..0.76`.
+- No global `BUMP` or `TEX_NOISE` node is added. Packed GLB material graphs keep
+  already-valid tuned metadata instead of resetting it to false/empty.
 
-Compared `outputs/main_ip_hand_interaction_2k/frames/frame_0045.png` with
-`ip形象/main_ip/turnaround/front.png`, then rendered close neutral, smile, and
-blink checks from the fresh FBX.
+## Visual Evidence
 
-- Exposure stayed at `-0.35`; no exposure increase was used as a material fix.
-- Neutral and smile keep a closed, restrained seam without the prior visible
-  tooth row.
-- Smile corner travel is visibly reduced and remains close to the reference's
-  narrow smile.
-- The corrected blink no longer drags broad muzzle slabs or creates detached lid
-  objects. Paired integrated source vertices meet exactly in 3D.
-- Existing mapped normal/roughness detail produces a softer face/fur response
-  while retaining the original eye, face, and fabric textures.
+Fresh-FBX close-shot renders, regenerated after the final topological-ring fix:
 
-## Residual Notes
+- Neutral: `/Users/wanglian/Projects/tangying-ai-operation-system/outputs/task6_face_review/neutral.png`
+- Restrained smile: `/Users/wanglian/Projects/tangying-ai-operation-system/outputs/task6_face_review/smile.png`
+- Full-strength squint: `/Users/wanglian/Projects/tangying-ai-operation-system/outputs/task6_face_review/squint.png`
 
-- A narrow source-texture crease remains visible at full blink because closure is
-  built from the integrated textured source face; it is not hidden with an
-  overlay or replacement texture. Structural contact is exact.
-- Blender `5.1.2` emits deprecation warnings that `Material.use_nodes` is expected
-  to be removed in Blender 6.0. They do not affect the two required suites.
+All were inspected at their original `1024x1024` size. Exposure remains `-0.35`
+and was not used as a fix. The neutral and smile preserve the source texture,
+soft mapped surface response, open eyes, and narrow closed smile without a
+toothy/dark open-mouth seam. The final squint keeps both eyes visible and has no
+triangular smear, eye-texture streak, white block, torn perimeter, corner hole,
+or lower-face pull. Its deliberately restrained deformation is measurable
+against neutral (`SSIM 0.994454`, `PSNR 34.794216 dB`).
+
+## Residual Issue
+
+This source asset does not provide production-safe automated full-blink
+topology. Full blink is intentionally unavailable, not simulated or mislabeled;
+the delivered capability is an open-eye, source-skin squint. A future true blink
+requires authored integrated lid topology or a source model with separable lid
+rings.
+
+Blender `5.1.2` also emits expected `Material.use_nodes` deprecation warnings
+for Blender 6.0; they do not fail either required suite.
