@@ -17,6 +17,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,12 @@ QUALITY_PRESETS = {
     "production_2k": {"eeveeSamples": 64, "cyclesSamples": 96, "videoCrf": 16, "videoPreset": "slow"},
     "master": {"eeveeSamples": 256, "cyclesSamples": 192, "videoCrf": 12, "videoPreset": "slow"},
 }
+VOICE_AUDITION_PROVIDER = "heygen"
+VOICE_AUDITION_LABELS = ("A", "B", "C")
+VOICE_AUDITION_LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=7"
+VOICE_AUDITION_TARGET_I = -16.0
+VOICE_AUDITION_TARGET_TP = -1.5
+VOICE_AUDITION_I_TOLERANCE = 0.5
 
 
 def _repo_root() -> Path:
@@ -920,6 +927,91 @@ def ensure_audio(
     }
 
 
+def _voice_audition_preflight() -> list[str]:
+    blocked_reasons: list[str] = []
+    if not find_audio_engine():
+        blocked_reasons.append("HyperFrames audio engine is unavailable")
+    if not shutil.which("node"):
+        blocked_reasons.append("Node.js is unavailable")
+    if not find_ffmpeg():
+        blocked_reasons.append("ffmpeg is unavailable")
+    return blocked_reasons
+
+
+def _normalize_voice_audition(source_path: Path, output_path: Path) -> None:
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is unavailable")
+    _run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source_path),
+            "-af",
+            VOICE_AUDITION_LOUDNORM_FILTER,
+            "-ar",
+            "48000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s24le",
+            str(output_path),
+        ],
+        timeout=180,
+    )
+
+
+def _parse_loudnorm_measurement(output: str) -> dict[str, float]:
+    for raw in reversed(re.findall(r"\{[^{}]*\}", output or "", flags=re.DOTALL)):
+        try:
+            data = json.loads(raw)
+            integrated = float(data["input_i"])
+            true_peak = float(data["input_tp"])
+            loudness_range = float(data["input_lra"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not all(math.isfinite(value) for value in (integrated, true_peak, loudness_range)):
+            continue
+        return {
+            "integratedLufs": integrated,
+            "truePeakDbtp": true_peak,
+            "loudnessRangeLu": loudness_range,
+        }
+    raise RuntimeError("ffmpeg did not return valid loudnorm measurement data")
+
+
+def _measure_voice_audition_loudness(path: Path) -> dict[str, float]:
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is unavailable")
+    completed = _run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-nostats",
+            "-i",
+            str(path),
+            "-af",
+            f"{VOICE_AUDITION_LOUDNORM_FILTER}:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ],
+        timeout=180,
+    )
+    return _parse_loudnorm_measurement(f"{completed.stdout}\n{completed.stderr}")
+
+
+def _voice_audition_loudness_is_valid(measurement: dict[str, float]) -> bool:
+    integrated = float(measurement["integratedLufs"])
+    true_peak = float(measurement["truePeakDbtp"])
+    return (
+        abs(integrated - VOICE_AUDITION_TARGET_I) <= VOICE_AUDITION_I_TOLERANCE
+        and true_peak <= VOICE_AUDITION_TARGET_TP
+    )
+
+
 def _build_compose_video_args(
     *,
     frames_dir: Path,
@@ -1137,6 +1229,215 @@ def check_status() -> dict[str, Any]:
             "ffprobe": ffprobe,
         },
         "toolsMissing": [name for name, value in {"blender": blender, "ffmpeg": ffmpeg, "ffprobe": ffprobe}.items() if not value],
+    }
+
+
+@mcp.tool()
+def generate_voice_auditions(
+    script: str,
+    characterProfilePath: str,
+    outputDir: str,
+    dryRun: bool = False,
+) -> dict[str, Any]:
+    """Generate three normalized, label-only HeyGen auditions for blind review."""
+    audition_script = str(script or "").strip()
+    if not audition_script:
+        raise ValueError("script is required")
+    profile_path, profile = _load_character_profile(characterProfilePath)
+    voice_config = profile.get("voice") or {}
+    if not isinstance(voice_config, dict):
+        raise ValueError("character profile voice configuration must be an object")
+    if str(voice_config.get("provider") or "").strip().lower() != VOICE_AUDITION_PROVIDER:
+        raise ValueError("character profile voice.provider must be heygen")
+    if str(voice_config.get("fallbackPolicy") or "").strip().lower() != "error":
+        raise ValueError('character profile voice.fallbackPolicy must be "error"')
+
+    raw_candidates = voice_config.get("productionVoiceCandidates")
+    candidates = (
+        [str(candidate).strip() for candidate in raw_candidates]
+        if isinstance(raw_candidates, list)
+        else []
+    )
+    if (
+        len(candidates) != len(VOICE_AUDITION_LABELS)
+        or any(not candidate for candidate in candidates)
+        or len(set(candidates)) != len(candidates)
+    ):
+        raise ValueError("voice.productionVoiceCandidates must contain exactly 3 unique nonempty IDs")
+
+    output_root = _readable_path(outputDir)
+    public_candidates = [
+        {"label": label, "path": str(output_root / f"audition_{label}.wav")}
+        for label in VOICE_AUDITION_LABELS
+    ]
+    blocked_reasons = _voice_audition_preflight()
+    if dryRun:
+        blocked = bool(blocked_reasons)
+        result: dict[str, Any] = {
+            "status": "blocked" if blocked else "planned",
+            "success": not blocked,
+            "dryRun": True,
+            "audioGenerated": False,
+            "candidates": public_candidates,
+            "publicCandidates": list(public_candidates),
+            "requiresUserSelection": True,
+        }
+        if blocked:
+            result["blockedReason"] = "; ".join(blocked_reasons)
+        return result
+    if blocked_reasons:
+        raise ProductionVoiceUnavailable(
+            f"HeyGen production provider is unavailable: {'; '.join(blocked_reasons)}"
+        )
+
+    language = str(voice_config.get("language") or "zh-CN").strip()
+    speed = max(0.7, min(float(voice_config.get("speed") or 1.0), 1.3))
+    speaking_rate = max(120, min(int(voice_config.get("speakingRate") or 190), 260))
+    duration_sec = estimate_duration(audition_script)
+    manifest_path = output_root / "manifest.json"
+    published_paths = [Path(item["path"]) for item in public_candidates]
+    output_root.mkdir(parents=True, exist_ok=True)
+    for stale_path in [*published_paths, manifest_path]:
+        if stale_path.is_file() or stale_path.is_symlink():
+            stale_path.unlink()
+
+    manifest_candidates: list[dict[str, Any]] = []
+    staged_outputs: list[tuple[Path, Path]] = []
+    try:
+        with tempfile.TemporaryDirectory(prefix=".voice-auditions-", dir=output_root) as raw_staging:
+            staging_root = Path(raw_staging)
+            for label, candidate_id, public_candidate in zip(
+                VOICE_AUDITION_LABELS,
+                candidates,
+                public_candidates,
+            ):
+                synthesis_dir = staging_root / "synthesis" / label
+                try:
+                    synthesized_path, synthesis_source, metadata = ensure_audio(
+                        audition_script,
+                        synthesis_dir,
+                        duration_sec,
+                        speaking_rate=speaking_rate,
+                        voice_provider=VOICE_AUDITION_PROVIDER,
+                        voice_id=candidate_id,
+                        voice_language=language,
+                        voice_speed=speed,
+                    )
+                except Exception as exc:
+                    raise ProductionVoiceUnavailable(
+                        f"HeyGen production synthesis failed for candidate {label}: {exc}"
+                    ) from exc
+
+                provenance = metadata if isinstance(metadata, dict) else {}
+                actual_provider = str(provenance.get("tts_provider") or "").strip().lower()
+                actual_voice_id = str(provenance.get("voice_id") or "").strip()
+                if not actual_provider or not actual_voice_id:
+                    raise ProductionVoiceUnavailable(
+                        f"candidate {label} is missing synthesis provenance"
+                    )
+                if actual_provider != VOICE_AUDITION_PROVIDER or actual_voice_id != candidate_id:
+                    raise ProductionVoiceUnavailable(
+                        f"candidate {label} synthesis provenance mismatch"
+                    )
+
+                source_path = Path(str(synthesized_path or "")).expanduser()
+                if not source_path.is_absolute():
+                    source_path = synthesis_dir / source_path
+                source_path = source_path.resolve()
+                if not source_path.is_file() or source_path.stat().st_size <= 0:
+                    raise ProductionVoiceUnavailable(
+                        f"candidate {label} synthesis output is missing"
+                    )
+
+                staged_output = staging_root / f"audition_{label}.wav"
+                try:
+                    _normalize_voice_audition(source_path, staged_output)
+                except Exception as exc:
+                    raise ProductionVoiceUnavailable(
+                        f"normalization failed for candidate {label}: {exc}"
+                    ) from exc
+                if not staged_output.is_file() or staged_output.stat().st_size <= 0:
+                    raise ProductionVoiceUnavailable(
+                        f"normalization failed for candidate {label}: ffmpeg output is missing"
+                    )
+
+                try:
+                    measurement = _measure_voice_audition_loudness(staged_output)
+                except Exception as exc:
+                    raise ProductionVoiceUnavailable(
+                        f"loudness verification failed for candidate {label}: {exc}"
+                    ) from exc
+                if not _voice_audition_loudness_is_valid(measurement):
+                    raise ProductionVoiceUnavailable(
+                        f"candidate {label} is outside loudness target"
+                    )
+
+                public_path = Path(public_candidate["path"])
+                staged_outputs.append((staged_output, public_path))
+                manifest_candidates.append(
+                    {
+                        "label": label,
+                        "path": str(public_path),
+                        "providerVoiceId": candidate_id,
+                        "synthesisProvenance": {
+                            "ttsProvider": actual_provider,
+                            "voiceId": actual_voice_id,
+                            "source": str(synthesis_source),
+                        },
+                        "loudnessMeasurement": measurement,
+                    }
+                )
+
+            staged_manifest = staging_root / "manifest.json"
+            _write_json(
+                staged_manifest,
+                {
+                    "schemaVersion": "ip-avatar-voice-auditions/v1",
+                    "characterId": str(profile.get("characterId") or ""),
+                    "characterProfilePath": str(profile_path),
+                    "script": audition_script,
+                    "scriptSha256": hashlib.sha256(audition_script.encode("utf-8")).hexdigest(),
+                    "provider": VOICE_AUDITION_PROVIDER,
+                    "settings": {
+                        "language": language,
+                        "speed": speed,
+                        "speakingRate": speaking_rate,
+                    },
+                    "normalization": {
+                        "filter": VOICE_AUDITION_LOUDNORM_FILTER,
+                        "integratedLoudnessLufs": VOICE_AUDITION_TARGET_I,
+                        "truePeakDbtp": VOICE_AUDITION_TARGET_TP,
+                        "loudnessRangeLu": 7.0,
+                    },
+                    "requiresUserSelection": True,
+                    "candidates": manifest_candidates,
+                },
+            )
+            for staged_output, public_path in staged_outputs:
+                staged_output.replace(public_path)
+            staged_manifest.replace(manifest_path)
+            manifest_path.chmod(0o600)
+    except Exception:
+        for published_path in published_paths:
+            if published_path.is_file() or published_path.is_symlink():
+                published_path.unlink()
+        if manifest_path.is_file() or manifest_path.is_symlink():
+            manifest_path.unlink()
+        raise
+
+    return {
+        "status": "ready",
+        "success": True,
+        "dryRun": False,
+        "audioGenerated": True,
+        "candidates": public_candidates,
+        "publicCandidates": list(public_candidates),
+        "requiresUserSelection": True,
+        "normalization": {
+            "integratedLoudnessLufs": VOICE_AUDITION_TARGET_I,
+            "truePeakDbtp": VOICE_AUDITION_TARGET_TP,
+            "loudnessRangeLu": 7.0,
+        },
     }
 
 

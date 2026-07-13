@@ -48,6 +48,35 @@ def load_blender_renderer():
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def write_voice_audition_profile(
+        self,
+        root: pathlib.Path,
+        candidates: list[str] | None = None,
+    ) -> pathlib.Path:
+        profile = root / "character-profile.json"
+        profile.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": "tangying-ip-character/v1",
+                    "characterId": "test_character",
+                    "voice": {
+                        "renderMode": "production",
+                        "provider": "heygen",
+                        "voiceId": "",
+                        "fallbackPolicy": "error",
+                        "productionVoiceCandidates": candidates
+                        if candidates is not None
+                        else ["heygen_voice_1", "heygen_voice_2", "heygen_voice_3"],
+                        "language": "zh-CN",
+                        "speed": 0.94,
+                        "speakingRate": 185,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return profile
+
     def assert_no_grouped_motion_overlaps(self, events: list[dict]) -> None:
         conflicts = []
         by_group: dict[str, list[dict]] = {}
@@ -1238,6 +1267,363 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         self.assertIn("loudnorm=I=-16:TP=-1.5:LRA=7", joined)
         self.assertIn("-b:a 128k", joined)
         self.assertIn("-ar 48000", joined)
+
+    def test_generate_voice_auditions_returns_blind_candidates_and_private_manifest(self) -> None:
+        server = load_server()
+        script = "今天我们不追热点，只讲清楚一个真正重要的变化。"
+        candidate_ids = ["heygen_voice_1", "heygen_voice_2", "heygen_voice_3"]
+        synthesis_calls = []
+        ffmpeg_commands = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root, candidate_ids)
+            output_dir = root / "auditions"
+
+            def fake_ensure_audio(
+                requested_script,
+                candidate_dir,
+                duration_sec,
+                audio_path="",
+                voice_name="",
+                speaking_rate=190,
+                **kwargs,
+            ):
+                synthesis_calls.append(
+                    {
+                        "script": requested_script,
+                        "durationSec": duration_sec,
+                        "speakingRate": speaking_rate,
+                        **kwargs,
+                    }
+                )
+                audio = pathlib.Path(candidate_dir) / "narration.wav"
+                audio.parent.mkdir(parents=True, exist_ok=True)
+                audio.write_bytes(b"RIFF synthesized audio")
+                return str(audio), "hyperframes_heygen", {
+                    "tts_provider": "heygen",
+                    "voice_id": kwargs["voice_id"],
+                    "language": kwargs["voice_language"],
+                    "speed": kwargs["voice_speed"],
+                    "productionReady": True,
+                }
+
+            def fake_run(args, timeout=600):
+                ffmpeg_commands.append(args)
+                if args[-1] == "-":
+                    return mock.Mock(
+                        returncode=0,
+                        stdout="",
+                        stderr=(
+                            '[Parsed_loudnorm_0] {\n'
+                            '  "input_i" : "-16.0",\n'
+                            '  "input_tp" : "-1.6",\n'
+                            '  "input_lra" : "2.1"\n'
+                            "}"
+                        ),
+                    )
+                pathlib.Path(args[-1]).write_bytes(b"RIFF normalized audio")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(
+                server.shutil, "which", side_effect=lambda name: "/usr/bin/node" if name == "node" else None
+            ), mock.patch.object(server, "ensure_audio", side_effect=fake_ensure_audio), mock.patch.object(
+                server, "_run", side_effect=fake_run
+            ):
+                result = server.generate_voice_auditions(
+                    script=script,
+                    characterProfilePath=str(profile),
+                    outputDir=str(output_dir),
+                )
+
+            expected_public = [
+                {"label": "A", "path": str(output_dir.resolve() / "audition_A.wav")},
+                {"label": "B", "path": str(output_dir.resolve() / "audition_B.wav")},
+                {"label": "C", "path": str(output_dir.resolve() / "audition_C.wav")},
+            ]
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["candidates"], expected_public)
+            self.assertEqual(result["publicCandidates"], expected_public)
+            self.assertTrue(result["requiresUserSelection"])
+            self.assertNotIn("voiceId", json.dumps(result))
+            for candidate_id in candidate_ids:
+                self.assertNotIn(candidate_id, json.dumps(result))
+            self.assertTrue(all(pathlib.Path(item["path"]).is_file() for item in expected_public))
+
+            self.assertEqual(
+                [call["voice_id"] for call in synthesis_calls],
+                candidate_ids,
+            )
+            self.assertEqual({call["script"] for call in synthesis_calls}, {script})
+            self.assertEqual({call["voice_provider"] for call in synthesis_calls}, {"heygen"})
+            self.assertEqual({call["voice_language"] for call in synthesis_calls}, {"zh-CN"})
+            self.assertEqual({call["voice_speed"] for call in synthesis_calls}, {0.94})
+            self.assertEqual({call["speakingRate"] for call in synthesis_calls}, {185})
+            mastering_commands = [args for args in ffmpeg_commands if args[-1] != "-"]
+            self.assertEqual(len(mastering_commands), 3)
+            self.assertTrue(
+                all("loudnorm=I=-16:TP=-1.5:LRA=7" in " ".join(args) for args in mastering_commands)
+            )
+
+            manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schemaVersion"], "ip-avatar-voice-auditions/v1")
+            self.assertEqual(manifest["script"], script)
+            self.assertEqual(manifest["provider"], "heygen")
+            self.assertEqual(manifest["settings"]["language"], "zh-CN")
+            self.assertEqual(manifest["settings"]["speed"], 0.94)
+            self.assertEqual(manifest["settings"]["speakingRate"], 185)
+            self.assertEqual(
+                [item["providerVoiceId"] for item in manifest["candidates"]],
+                candidate_ids,
+            )
+            self.assertEqual(
+                [item["synthesisProvenance"]["voiceId"] for item in manifest["candidates"]],
+                candidate_ids,
+            )
+            self.assertTrue(
+                all(item["synthesisProvenance"]["ttsProvider"] == "heygen" for item in manifest["candidates"])
+            )
+
+    def test_generate_voice_auditions_dry_run_reports_blocked_without_audio(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+            output_dir = root / "auditions"
+
+            with mock.patch.object(server, "find_audio_engine", return_value=""), mock.patch.object(
+                server, "ensure_audio"
+            ) as ensure_audio_mock:
+                result = server.generate_voice_auditions(
+                    script="固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(output_dir),
+                    dryRun=True,
+                )
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertFalse(result["success"])
+            self.assertTrue(result["dryRun"])
+            self.assertTrue(result["requiresUserSelection"])
+            self.assertEqual([item["label"] for item in result["candidates"]], ["A", "B", "C"])
+            self.assertFalse(output_dir.exists())
+            ensure_audio_mock.assert_not_called()
+
+    def test_generate_voice_auditions_rejects_invalid_candidate_count(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root, ["heygen_voice_1", "heygen_voice_2"])
+
+            with self.assertRaisesRegex(ValueError, "exactly 3 unique nonempty"):
+                server.generate_voice_auditions(
+                    script="固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "auditions"),
+                )
+
+    def test_generate_voice_auditions_fails_when_production_provider_is_unavailable(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+
+            with mock.patch.object(server, "find_audio_engine", return_value=""), mock.patch.object(
+                server, "ensure_audio"
+            ) as ensure_audio_mock, self.assertRaisesRegex(
+                server.ProductionVoiceUnavailable, "HeyGen production provider is unavailable"
+            ):
+                server.generate_voice_auditions(
+                    script="固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "auditions"),
+                )
+
+            ensure_audio_mock.assert_not_called()
+
+    def test_generate_voice_auditions_fails_when_synthesis_provenance_is_missing(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+
+            def fake_ensure_audio(_script, candidate_dir, _duration, **_kwargs):
+                audio = pathlib.Path(candidate_dir) / "narration.wav"
+                audio.parent.mkdir(parents=True, exist_ok=True)
+                audio.write_bytes(b"RIFF audio")
+                return str(audio), "hyperframes_unknown", {"tts_provider": "", "voice_id": ""}
+
+            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                server, "ensure_audio", side_effect=fake_ensure_audio
+            ), self.assertRaisesRegex(server.ProductionVoiceUnavailable, "missing synthesis provenance"):
+                server.generate_voice_auditions(
+                    script="固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "auditions"),
+                )
+
+    def test_generate_voice_auditions_fails_when_synthesis_provenance_mismatches(self) -> None:
+        server = load_server()
+        mismatches = [
+            {"tts_provider": "elevenlabs", "voice_id": "heygen_voice_1"},
+            {"tts_provider": "heygen", "voice_id": "different_voice"},
+        ]
+        for provenance in mismatches:
+            with self.subTest(provenance=provenance), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                profile = self.write_voice_audition_profile(root)
+
+                def fake_ensure_audio(_script, candidate_dir, _duration, **_kwargs):
+                    audio = pathlib.Path(candidate_dir) / "narration.wav"
+                    audio.parent.mkdir(parents=True, exist_ok=True)
+                    audio.write_bytes(b"RIFF audio")
+                    return str(audio), "hyperframes_mismatch", provenance
+
+                with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                    server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+                ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                    server, "ensure_audio", side_effect=fake_ensure_audio
+                ), self.assertRaisesRegex(server.ProductionVoiceUnavailable, "synthesis provenance mismatch"):
+                    server.generate_voice_auditions(
+                        script="固定试音文案。",
+                        characterProfilePath=str(profile),
+                        outputDir=str(root / "auditions"),
+                    )
+
+    def test_generate_voice_auditions_fails_when_synthesis_output_is_missing(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+
+            def fake_ensure_audio(_script, candidate_dir, _duration, **kwargs):
+                return str(pathlib.Path(candidate_dir) / "missing.wav"), "hyperframes_heygen", {
+                    "tts_provider": "heygen",
+                    "voice_id": kwargs["voice_id"],
+                }
+
+            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                server, "ensure_audio", side_effect=fake_ensure_audio
+            ), self.assertRaisesRegex(server.ProductionVoiceUnavailable, "synthesis output is missing"):
+                server.generate_voice_auditions(
+                    script="固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "auditions"),
+                )
+
+    def test_generate_voice_auditions_fails_closed_when_normalization_fails(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+            output_dir = root / "auditions"
+
+            def fake_ensure_audio(_script, candidate_dir, _duration, **kwargs):
+                audio = pathlib.Path(candidate_dir) / "narration.wav"
+                audio.parent.mkdir(parents=True, exist_ok=True)
+                audio.write_bytes(b"RIFF audio")
+                return str(audio), "hyperframes_heygen", {
+                    "tts_provider": "heygen",
+                    "voice_id": kwargs["voice_id"],
+                }
+
+            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                server, "ensure_audio", side_effect=fake_ensure_audio
+            ), mock.patch.object(server, "_run", side_effect=RuntimeError("ffmpeg failed")), self.assertRaisesRegex(
+                server.ProductionVoiceUnavailable, "normalization failed for candidate A"
+            ):
+                server.generate_voice_auditions(
+                    script="固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(output_dir),
+                )
+
+            self.assertFalse((output_dir / "manifest.json").exists())
+            self.assertEqual(list(output_dir.glob("audition_*.wav")), [])
+
+    def test_generate_voice_auditions_fails_when_loudness_analysis_fails(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+
+            def fake_ensure_audio(_script, candidate_dir, _duration, **kwargs):
+                audio = pathlib.Path(candidate_dir) / "narration.wav"
+                audio.parent.mkdir(parents=True, exist_ok=True)
+                audio.write_bytes(b"RIFF audio")
+                return str(audio), "hyperframes_heygen", {
+                    "tts_provider": "heygen",
+                    "voice_id": kwargs["voice_id"],
+                }
+
+            run_count = 0
+
+            def fake_run(args, timeout=600):
+                nonlocal run_count
+                run_count += 1
+                if run_count == 1:
+                    pathlib.Path(args[-1]).write_bytes(b"RIFF normalized")
+                    return mock.Mock(returncode=0, stdout="", stderr="")
+                raise RuntimeError("loudness analysis failed")
+
+            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                server, "ensure_audio", side_effect=fake_ensure_audio
+            ), mock.patch.object(server, "_run", side_effect=fake_run), self.assertRaisesRegex(
+                server.ProductionVoiceUnavailable, "loudness verification failed for candidate A"
+            ):
+                server.generate_voice_auditions(
+                    script="固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "auditions"),
+                )
+
+    def test_generate_voice_auditions_fails_when_measured_loudness_is_outside_target(self) -> None:
+        server = load_server()
+        measurements = [
+            {"input_i": "-14.9", "input_tp": "-1.6", "input_lra": "2.1"},
+            {"input_i": "-16.0", "input_tp": "-1.4", "input_lra": "2.1"},
+        ]
+        for measurement in measurements:
+            with self.subTest(measurement=measurement), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                profile = self.write_voice_audition_profile(root)
+
+                def fake_ensure_audio(_script, candidate_dir, _duration, **kwargs):
+                    audio = pathlib.Path(candidate_dir) / "narration.wav"
+                    audio.parent.mkdir(parents=True, exist_ok=True)
+                    audio.write_bytes(b"RIFF audio")
+                    return str(audio), "hyperframes_heygen", {
+                        "tts_provider": "heygen",
+                        "voice_id": kwargs["voice_id"],
+                    }
+
+                def fake_run(args, timeout=600):
+                    if args[-1] == "-":
+                        return mock.Mock(returncode=0, stdout="", stderr=json.dumps(measurement))
+                    pathlib.Path(args[-1]).write_bytes(b"RIFF normalized")
+                    return mock.Mock(returncode=0, stdout="", stderr="")
+
+                with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                    server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+                ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                    server, "ensure_audio", side_effect=fake_ensure_audio
+                ), mock.patch.object(server, "_run", side_effect=fake_run), self.assertRaisesRegex(
+                    server.ProductionVoiceUnavailable, "outside loudness target"
+                ):
+                    server.generate_voice_auditions(
+                        script="固定试音文案。",
+                        characterProfilePath=str(profile),
+                        outputDir=str(root / "auditions"),
+                    )
 
     def test_audio_engine_uses_pinned_character_voice(self) -> None:
         server = load_server()
