@@ -119,6 +119,10 @@ Final scene GREEN:
 - Blender `5.1.2`, exit `0`.
 - PASS all `5` scene-contract tests.
 
+Fresh status-check rerun on `2026-07-13` confirmed the same results: character
+`24/24` at exit `0`, scene contract `5/5` at exit `0`, and the deliberate
+direct-runner failure at exit `1` with `FAILED 1 direct-runner test(s)`.
+
 ## Structural Evidence
 
 Squint and ocular isolation:
