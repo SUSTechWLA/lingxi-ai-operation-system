@@ -26,6 +26,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from rig_semantics import has_presenter_controls, resolve_bone_roles
+from master_asset import MASTER_COLLECTION, MASTER_VERSION
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -1218,6 +1219,147 @@ def validate_character_asset(modelPath: str = "", characterProfilePath: str = ""
     }
 
 
+def _master_output_paths(profile_path: Path, model_config: dict[str, Any], output_dir: str) -> dict[str, Path]:
+    configured = _profile_asset(profile_path, model_config.get("masterBlendPath"))
+    if not configured:
+        raise ValueError(f"character profile model.masterBlendPath is required: {profile_path}")
+    configured_path = Path(configured)
+    if configured_path.suffix.lower() != ".blend":
+        raise ValueError("model.masterBlendPath must point to a Blender .blend file")
+    root = _readable_path(output_dir) if output_dir else configured_path.parent
+    stem = configured_path.stem
+    base = stem[: -len("-master")] if stem.endswith("-master") else stem
+    return {
+        "master": root / configured_path.name,
+        "glb": root / f"{base}-rigged.glb",
+        "report": root / f"{base}-rig-report.json",
+        "qa": root / f"{base}-qa-input.json",
+    }
+
+
+@mcp.tool()
+def prepare_character_master(
+    sourceModel: str,
+    characterProfilePath: str,
+    outputDir: str = "",
+    qualityTier: str = "aroll_close",
+    dryRun: bool = False,
+) -> dict[str, Any]:
+    """Prepare one stable, versioned character master through Blender's asset-only path."""
+    profile_path, profile = _load_character_profile(characterProfilePath)
+    model_config = profile.get("model") or {}
+    facial_config = profile.get("facial") or {}
+    render_config = profile.get("render") or {}
+    requested_tier = str(qualityTier or "aroll_close").strip().lower()
+    if requested_tier != "aroll_close":
+        raise ValueError("qualityTier must be arroll_close")
+    configured_tier = str(model_config.get("qualityTier") or requested_tier).strip().lower()
+    if configured_tier != requested_tier:
+        raise ValueError(
+            f"qualityTier={requested_tier} does not match character profile qualityTier={configured_tier}"
+        )
+
+    if sourceModel:
+        source_path = _readable_path(sourceModel)
+    else:
+        source_path = Path(
+            _profile_asset(profile_path, model_config.get("sourcePath") or model_config.get("path"))
+        )
+    if not source_path.is_file():
+        raise FileNotFoundError(f"sourceModel does not exist: {source_path}")
+    if source_path.suffix.lower() not in {".fbx", ".glb", ".gltf"}:
+        raise ValueError("sourceModel must point to an FBX, GLB, or GLTF file")
+
+    paths = _master_output_paths(profile_path, model_config, outputDir)
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    fps = max(8, min(int(render_config.get("fps") or DEFAULT_FPS), 60))
+    resolution = render_config.get("resolution") or {}
+    width = max(320, min(int(resolution.get("width") or DEFAULT_WIDTH), 3840))
+    height = max(180, min(int(resolution.get("height") or DEFAULT_HEIGHT), 2160))
+    motion_plan = build_motion_plan("", 1.0, fps, str(render_config.get("motionStyle") or "expressive"))
+    qa_input = {
+        "schemaVersion": "ip-avatar-3d-master-prepare/v1",
+        "characterId": str(profile.get("characterId") or ""),
+        "characterProfilePath": str(profile_path),
+        "sourceModel": str(source_path),
+        "modelPath": str(source_path),
+        "qualityTier": requested_tier,
+        "masterCollection": MASTER_COLLECTION,
+        "masterVersion": MASTER_VERSION,
+        "masterBlendPath": str(paths["master"]),
+        "useMasterAsset": False,
+        "prepareMaster": True,
+        "assetOnly": True,
+        "riggedBlendPath": str(paths["master"]),
+        "riggedGlbPath": str(paths["glb"]),
+        "rigReportPath": str(paths["report"]),
+        "sceneBlendPath": "",
+        "backgroundPath": "",
+        "backgroundMode": "asset_only",
+        "durationSec": 1.0,
+        "fps": fps,
+        "resolution": {"width": width, "height": height},
+        "transparent": False,
+        "renderEngine": str(render_config.get("renderEngine") or DEFAULT_RENDER_ENGINE),
+        "qualityPreset": "master",
+        "renderDetailMode": "publish",
+        "eeveeSamples": QUALITY_PRESETS["master"]["eeveeSamples"],
+        "cyclesSamples": QUALITY_PRESETS["master"]["cyclesSamples"],
+        "targetCharacterHeight": float(render_config.get("targetCharacterHeight") or 2.55),
+        "faceScreenMode": str(render_config.get("faceScreenMode") or "source"),
+        "rigMode": str(model_config.get("rigMode") or "auto"),
+        "preserveExistingRig": bool(model_config.get("preserveExistingRig", True)),
+        "enhanceExistingRig": bool(model_config.get("enhanceExistingRig", True)),
+        "elbowRig": True,
+        "mouthMode": str(facial_config.get("mouthMode") or "auto"),
+        "mouthHeightRatio": float(facial_config.get("mouthHeightRatio") or 0.56),
+        "mouthScale": float(facial_config.get("mouthScale") or 1.0),
+        "mouthStyle": str(facial_config.get("mouthStyle") or "auto"),
+        "facialDetailMode": str(facial_config.get("facialDetailMode") or "rich"),
+        "facialTopologyMode": str(facial_config.get("topologyMode") or "source_retopology"),
+        "blinkCapability": str(facial_config.get("blinkCapability") or "squint_only"),
+        "motionPlan": motion_plan,
+    }
+    _write_json(paths["qa"], qa_input)
+
+    result = {
+        "status": "planned" if dryRun else "ready",
+        "success": True,
+        "dryRun": bool(dryRun),
+        "characterId": str(profile.get("characterId") or ""),
+        "characterProfilePath": str(profile_path),
+        "sourceModel": str(source_path),
+        "qualityTier": requested_tier,
+        "masterBlendPath": str(paths["master"]),
+        "exportGlbPath": str(paths["glb"]),
+        "rigReportPath": str(paths["report"]),
+        "qaInputPath": str(paths["qa"]),
+    }
+    if dryRun:
+        return result
+
+    blender = find_blender()
+    if not blender:
+        raise RuntimeError("Blender is required. Set TANGYING_BLENDER_BIN or install Blender.")
+    blender_script = Path(__file__).with_name("blender_renderer.py")
+    _run(
+        [blender, "--background", "--python", str(blender_script), "--", str(paths["qa"])],
+        timeout=max(1200, int(render_config.get("blenderTimeoutSec") or 0)),
+    )
+    missing = [
+        path.name
+        for path in (paths["master"], paths["glb"], paths["report"])
+        if not path.is_file()
+    ]
+    if missing:
+        raise RuntimeError(f"Blender did not produce character master outputs: {missing}")
+    result["masterExists"] = True
+    result["exportGlbExists"] = True
+    result["rigReportExists"] = True
+    return result
+
+
 @mcp.tool()
 def plan_motion(script: str, durationSec: float = 0, fps: int = DEFAULT_FPS, motionStyle: str = "expressive") -> dict[str, Any]:
     """Analyze narration text into deterministic lip-sync and body-motion timelines."""
@@ -1272,12 +1414,19 @@ def render_talking_video(
 ) -> dict[str, Any]:
     """Render a talking IP video layer from narration text and a local GLB/GLTF/FBX model."""
     profile_path: Path | None = None
+    master_blend_path = ""
+    master_configured = False
+    quality_tier = ""
     if characterProfilePath:
         profile_path, profile = _load_character_profile(characterProfilePath)
         model_config = profile.get("model") or {}
         facial_config = profile.get("facial") or {}
         render_config = profile.get("render") or {}
         voice_config = profile.get("voice") or {}
+        quality_tier = str(model_config.get("qualityTier") or "")
+        if model_config.get("masterBlendPath"):
+            master_configured = True
+            master_blend_path = _profile_asset(profile_path, model_config.get("masterBlendPath"))
         if not modelPath:
             modelPath = _profile_asset(profile_path, model_config.get("path"))
         if not backgroundPath:
@@ -1340,14 +1489,28 @@ def render_talking_video(
         if speakingRate == 190:
             speakingRate = int(voice_config.get("speakingRate") or speakingRate)
 
-    if not modelPath:
+    use_master_asset = False
+    if master_configured:
+        configured_master = Path(master_blend_path)
+        if configured_master.suffix.lower() != ".blend":
+            raise ValueError("masterBlendPath must point to a Blender .blend file")
+        if configured_master.is_file():
+            use_master_asset = True
+            enhanceExistingRig = False
+            facialTopologyMode = "source_only"
+        elif not dryRun:
+            raise FileNotFoundError(
+                f"masterBlendPath does not exist: {configured_master}; run prepare_character_master first"
+            )
+
+    if not modelPath and not use_master_asset:
         if profile_path:
             raise ValueError(f"character profile model.path is not configured yet: {profile_path}")
         raise ValueError("modelPath is required when characterProfilePath is not provided")
-    model_path = _readable_path(modelPath)
-    if not model_path.exists():
+    model_path = _readable_path(modelPath) if modelPath else None
+    if model_path and not model_path.exists() and not use_master_asset:
         raise FileNotFoundError(f"modelPath does not exist: {model_path}")
-    if model_path.suffix.lower() not in {".glb", ".gltf", ".fbx"}:
+    if model_path and model_path.suffix.lower() not in {".glb", ".gltf", ".fbx"} and not use_master_asset:
         raise ValueError("modelPath must point to a GLB, GLTF, or rigged FBX file")
 
     output_dir = _readable_path(outputDir) if outputDir else (_repo_root() / "tmp" / "ip_avatar_3d" / _now_id()).resolve()
@@ -1467,7 +1630,13 @@ def render_talking_video(
         "characterId": characterId,
         "characterProfilePath": str(profile_path) if profile_path else "",
         "shotId": shotId,
-        "modelPath": str(model_path),
+        "modelPath": str(model_path) if model_path else "",
+        "masterBlendPath": master_blend_path,
+        "masterConfigured": master_configured,
+        "masterExists": bool(master_blend_path and Path(master_blend_path).is_file()),
+        "useMasterAsset": use_master_asset,
+        "preparationRequired": bool(master_configured and not use_master_asset),
+        "qualityTier": quality_tier,
         "sceneBlendPath": resolved_scene,
         "backgroundPath": resolved_background,
         "backgroundMode": background_mode,
@@ -1520,7 +1689,9 @@ def render_talking_video(
         report = {
             "success": True,
             "dryRun": True,
-            "modelExists": model_path.exists(),
+            "modelExists": bool(model_path and model_path.exists()),
+            "masterExists": bool(master_blend_path and Path(master_blend_path).is_file()),
+            "preparationRequired": bool(master_configured and not use_master_asset),
             "motionPlanGenerated": plan_path.exists(),
             "subtitleGenerated": subtitle_out.exists(),
             "blenderRequired": True,
@@ -1535,7 +1706,8 @@ def render_talking_video(
             "characterId": characterId,
             "shotId": shotId,
             "durationSec": duration,
-            "modelPath": str(model_path),
+            "modelPath": str(model_path) if model_path else "",
+            "masterBlendPath": master_blend_path,
             "sceneBlendPath": resolved_scene,
             "characterProfilePath": str(profile_path) if profile_path else "",
             "motionPlanPath": str(plan_path),
@@ -1586,7 +1758,8 @@ def render_talking_video(
     qa = _probe_video(video_path)
     qa.update(
         {
-            "modelExists": model_path.exists(),
+            "modelExists": bool(model_path and model_path.exists()),
+            "masterExists": bool(master_blend_path and Path(master_blend_path).is_file()),
             "motionPlanGenerated": plan_path.exists(),
             "subtitleGenerated": subtitle_out.exists(),
             "audioGenerated": bool(audio_out and Path(audio_out).exists()),
@@ -1611,7 +1784,8 @@ def render_talking_video(
         "mediaPath": str(video_path),
         "avatarLayerPath": avatar_layer_path,
         "previewImagePath": str(preview_path) if preview_path.exists() else "",
-        "modelPath": str(model_path),
+        "modelPath": str(model_path) if model_path else "",
+        "masterBlendPath": master_blend_path,
         "sceneBlendPath": resolved_scene,
         "characterProfilePath": str(profile_path) if profile_path else "",
         "audioPath": audio_out,
@@ -1630,8 +1804,11 @@ def render_talking_video(
         "metadata": {
             "layer": "ip_aroll",
             "renderEngine": "blender",
-            "modelFormat": model_path.suffix.lower().lstrip("."),
+            "modelFormat": "blend_master" if use_master_asset else (model_path.suffix.lower().lstrip(".") if model_path else ""),
             "characterProfilePath": str(profile_path) if profile_path else "",
+            "masterBlendPath": master_blend_path,
+            "useMasterAsset": use_master_asset,
+            "qualityTier": quality_tier,
             "faceScreenMode": faceScreenMode,
             "rigMode": rigMode,
             "preserveExistingRig": bool(preserveExistingRig),

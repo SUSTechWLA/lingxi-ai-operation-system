@@ -6,6 +6,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -22,6 +23,15 @@ def load_server():
 def load_rig_semantics():
     path = pathlib.Path(__file__).with_name("rig_semantics.py")
     spec = importlib.util.spec_from_file_location("ip_avatar_3d_rig_semantics", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_master_asset():
+    path = pathlib.Path(__file__).with_name("master_asset.py")
+    spec = importlib.util.spec_from_file_location("ip_avatar_3d_master_asset", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -493,6 +503,182 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(render_input["voice"]["language"], "zh")
             self.assertEqual(render_input["voice"]["speed"], 0.94)
 
+    def test_main_ip_profile_declares_stable_aroll_master_contract(self) -> None:
+        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip形象" / "main_ip" / "character-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        model = profile["model"]
+
+        self.assertEqual(model["masterBlendPath"], "models/main-ip-aroll-master.blend")
+        self.assertEqual(model["qualityTier"], "aroll_close")
+        self.assertEqual(model["fingerTopology"], "three_digits_three_segments")
+        expected_middle_roles = {
+            f"finger_{digit}_mid_{side}"
+            for side in ("l", "r")
+            for digit in (1, 2, 3)
+        }
+        self.assertTrue(expected_middle_roles.issubset(model["requiredBoneRoles"]))
+        self.assertEqual(profile["facial"]["blinkCapability"], "squint_only")
+        self.assertFalse(
+            any("Blink" in name for name in profile["facial"]["requiredShapeKeys"]),
+            profile["facial"]["requiredShapeKeys"],
+        )
+
+    def test_render_profile_uses_existing_master_without_source_refinement(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "models" / "source.fbx"
+            master = root / "models" / "approved-master.blend"
+            profile = root / "character-profile.json"
+            model.parent.mkdir(parents=True)
+            model.write_bytes(b"Kaydara FBX Binary placeholder")
+            master.write_bytes(b"BLENDER placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "main_ip_sloth",
+                        "model": {
+                            "path": "models/source.fbx",
+                            "masterBlendPath": "models/approved-master.blend",
+                            "enhanceExistingRig": True,
+                        },
+                        "facial": {
+                            "mouthMode": "source_mesh_visemes",
+                            "facialDetailMode": "rich",
+                            "topologyMode": "source_retopology",
+                            "blinkCapability": "squint_only",
+                        },
+                        "render": {},
+                        "voice": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = server.render_talking_video(
+                script="稳定主角色干跑计划。",
+                characterProfilePath=str(profile),
+                outputDir=str(root / "out"),
+                durationSec=2,
+                dryRun=True,
+            )
+
+            render_input = json.loads(pathlib.Path(result["renderInputPath"]).read_text(encoding="utf-8"))
+            self.assertEqual(render_input["masterBlendPath"], str(master.resolve()))
+            self.assertTrue(render_input["useMasterAsset"])
+            self.assertFalse(render_input["enhanceExistingRig"])
+            self.assertEqual(render_input["facialTopologyMode"], "source_only")
+            self.assertEqual(result["masterBlendPath"], str(master.resolve()))
+
+    def test_render_rejects_configured_non_blend_master(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "source.fbx"
+            invalid_master = root / "master.glb"
+            profile = root / "character-profile.json"
+            model.write_bytes(b"Kaydara FBX Binary placeholder")
+            invalid_master.write_bytes(b"glTF placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "model": {"path": "source.fbx", "masterBlendPath": "master.glb"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "masterBlendPath must point to a Blender .blend file"):
+                server.render_talking_video(
+                    script="invalid master",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "out"),
+                    dryRun=True,
+                )
+
+    def test_render_requires_preparation_when_configured_master_is_missing(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / "source.fbx"
+            profile = root / "character-profile.json"
+            source.write_bytes(b"Kaydara FBX Binary placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "model": {
+                            "path": "source.fbx",
+                            "masterBlendPath": "missing-master.blend",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "prepare_character_master"):
+                server.render_talking_video(
+                    script="must not fall back",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "out"),
+                    dryRun=False,
+                )
+
+    def test_prepare_character_master_dry_run_writes_deterministic_qa_input(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / "source.fbx"
+            profile = root / "character-profile.json"
+            output = root / "models"
+            source.write_bytes(b"Kaydara FBX Binary placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "main_ip_sloth",
+                        "model": {
+                            "sourcePath": "source.fbx",
+                            "masterBlendPath": "models/main-ip-aroll-master.blend",
+                            "qualityTier": "aroll_close",
+                            "rigMode": "auto",
+                            "preserveExistingRig": True,
+                            "enhanceExistingRig": True,
+                        },
+                        "facial": {
+                            "mouthMode": "source_mesh_visemes",
+                            "facialDetailMode": "rich",
+                            "topologyMode": "source_retopology",
+                            "blinkCapability": "squint_only",
+                        },
+                        "render": {"targetCharacterHeight": 2.55},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = server.prepare_character_master(
+                sourceModel="",
+                characterProfilePath=str(profile),
+                outputDir=str(output),
+                qualityTier="aroll_close",
+                dryRun=True,
+            )
+
+            self.assertEqual(result["status"], "planned")
+            self.assertEqual(pathlib.Path(result["masterBlendPath"]), output.resolve() / "main-ip-aroll-master.blend")
+            self.assertEqual(pathlib.Path(result["exportGlbPath"]), output.resolve() / "main-ip-aroll-rigged.glb")
+            self.assertEqual(pathlib.Path(result["rigReportPath"]), output.resolve() / "main-ip-aroll-rig-report.json")
+            self.assertEqual(pathlib.Path(result["qaInputPath"]), output.resolve() / "main-ip-aroll-qa-input.json")
+            qa_input = json.loads(pathlib.Path(result["qaInputPath"]).read_text(encoding="utf-8"))
+            self.assertEqual(qa_input["sourceModel"], str(source.resolve()))
+            self.assertEqual(qa_input["qualityTier"], "aroll_close")
+            self.assertTrue(qa_input["assetOnly"])
+            self.assertTrue(qa_input["prepareMaster"])
+            self.assertEqual(qa_input["masterCollection"], "IP_Character_Master")
+
     def test_default_render_resolution_is_qhd_2k(self) -> None:
         server = load_server()
 
@@ -829,5 +1015,164 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(result["missingShapeKeys"], [])
 
 
+class MasterAssetHelperTests(unittest.TestCase):
+    @staticmethod
+    def collection(*objects, version=1):
+        collection = {"ip_aroll_master_version": version}
+        collection = types.SimpleNamespace(
+            name="IP_Character_Master",
+            all_objects=list(objects),
+            get=collection.get,
+        )
+        return collection
+
+    def test_master_validation_rejects_missing_version(self) -> None:
+        master = load_master_asset()
+        armature = types.SimpleNamespace(name="Rig", type="ARMATURE")
+        collection = types.SimpleNamespace(
+            name=master.MASTER_COLLECTION,
+            all_objects=[armature],
+            get=lambda _key, default=None: default,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing ip_aroll_master_version"):
+            master.validate_master_collection(collection, pathlib.Path("missing-version.blend"))
+
+    def test_master_validation_rejects_missing_or_duplicate_armature(self) -> None:
+        master = load_master_asset()
+        mesh = types.SimpleNamespace(name="Body", type="MESH")
+        first = types.SimpleNamespace(name="RigA", type="ARMATURE")
+        second = types.SimpleNamespace(name="RigB", type="ARMATURE")
+
+        with self.assertRaisesRegex(RuntimeError, "exactly one Armature"):
+            master.validate_master_collection(self.collection(mesh), pathlib.Path("missing-rig.blend"))
+        with self.assertRaisesRegex(RuntimeError, "duplicate Armatures"):
+            master.save_master_collection(
+                character_objects=[mesh, first, second],
+                armature=first,
+                output_path=pathlib.Path("duplicate-rig.blend"),
+            )
+
+    def test_append_master_collection_loads_actions_and_links_valid_collection(self) -> None:
+        master = load_master_asset()
+        armature = types.SimpleNamespace(name="Rig", type="ARMATURE")
+        body = types.SimpleNamespace(name="Body", type="MESH")
+        loaded_collection = self.collection(body, armature)
+        target = types.SimpleNamespace(collections=[], actions=[])
+        requested = {}
+
+        class LibraryContext:
+            def __enter__(self):
+                source = types.SimpleNamespace(
+                    collections=[master.MASTER_COLLECTION],
+                    actions=["Aroll_Idle", "Aroll_Greeting_Wave"],
+                )
+                return source, target
+
+            def __exit__(self, exc_type, exc, traceback):
+                requested["collections"] = list(target.collections)
+                requested["actions"] = list(target.actions)
+                target.collections = [loaded_collection]
+                return False
+
+        class Children:
+            def __init__(self):
+                self.linked = []
+
+            def link(self, collection):
+                self.linked.append(collection)
+
+        fake_bpy = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collections={},
+                libraries=types.SimpleNamespace(load=lambda *_args, **_kwargs: LibraryContext()),
+            )
+        )
+        scene_collection = types.SimpleNamespace(children=Children())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            master_path = pathlib.Path(tmp) / "approved.blend"
+            master_path.write_bytes(b"BLENDER placeholder")
+            with mock.patch.object(master, "bpy", fake_bpy):
+                objects = master.append_master_collection(master_path, scene_collection)
+
+        self.assertEqual(requested["collections"], [master.MASTER_COLLECTION])
+        self.assertEqual(requested["actions"], ["Aroll_Idle", "Aroll_Greeting_Wave"])
+        self.assertEqual(objects, [body, armature])
+        self.assertEqual(scene_collection.children.linked, [loaded_collection])
+
+    def test_append_master_collection_rejects_missing_named_collection(self) -> None:
+        master = load_master_asset()
+        target = types.SimpleNamespace(collections=[], actions=[])
+
+        class LibraryContext:
+            def __enter__(self):
+                return types.SimpleNamespace(collections=["Other"], actions=[]), target
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        fake_bpy = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collections={},
+                libraries=types.SimpleNamespace(load=lambda *_args, **_kwargs: LibraryContext()),
+            )
+        )
+        scene_collection = types.SimpleNamespace(children=types.SimpleNamespace(link=lambda _collection: None))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            master_path = pathlib.Path(tmp) / "invalid.blend"
+            master_path.write_bytes(b"BLENDER placeholder")
+            with mock.patch.object(master, "bpy", fake_bpy), self.assertRaisesRegex(
+                RuntimeError, "missing IP_Character_Master"
+            ):
+                master.append_master_collection(master_path, scene_collection)
+
+
+class BlenderMasterAssetIntegrationTests(unittest.TestCase):
+    def test_blender_saves_and_appends_versioned_master_with_actions(self) -> None:
+        try:
+            import bpy
+        except ImportError:
+            self.skipTest("requires Blender bpy")
+
+        master = load_master_asset()
+        with tempfile.TemporaryDirectory() as tmp:
+            master_path = pathlib.Path(tmp) / "integration-master.blend"
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            bpy.ops.mesh.primitive_cube_add()
+            body = bpy.context.object
+            body.name = "IP_Test_Body"
+            armature_data = bpy.data.armatures.new("IP_Test_Rig_Data")
+            armature = bpy.data.objects.new("IP_Test_Rig", armature_data)
+            bpy.context.scene.collection.objects.link(armature)
+            action = bpy.data.actions.new("Aroll_Test_Action")
+            action.use_fake_user = True
+
+            saved = master.save_master_collection(
+                character_objects=[body],
+                armature=armature,
+                output_path=master_path,
+            )
+
+            self.assertTrue(master_path.is_file())
+            self.assertEqual(saved["collection"], master.MASTER_COLLECTION)
+            self.assertEqual(saved["version"], master.MASTER_VERSION)
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+
+            objects = master.append_master_collection(master_path, bpy.context.scene.collection)
+
+            self.assertEqual([obj.name for obj in objects if obj.type == "ARMATURE"], ["IP_Test_Rig"])
+            self.assertIn("IP_Test_Body", {obj.name for obj in objects})
+            self.assertIsNotNone(bpy.data.actions.get("Aroll_Test_Action"))
+            collection = bpy.data.collections.get(master.MASTER_COLLECTION)
+            self.assertEqual(collection[master.MASTER_VERSION_PROPERTY], master.MASTER_VERSION)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest_args = [sys.argv[0]]
+    if "--" in sys.argv:
+        unittest_args.extend(sys.argv[sys.argv.index("--") + 1 :])
+    else:
+        unittest_args.extend(sys.argv[1:])
+    unittest.main(argv=unittest_args)

@@ -22,6 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from hand_refinement import enhance_three_segment_hands
+from master_asset import append_master_collection, save_master_collection
 import aroll_actions
 
 
@@ -4678,6 +4679,17 @@ def setup_face(
     mouth_mode = str(data.get("mouthMode") or "independent_visemes").lower()
     topology_mode = str(data.get("facialTopologyMode") or "source_only").lower()
     character_id = str(data.get("characterId") or "").lower()
+    if bool(data.get("useMasterAsset")):
+        existing_mouth = find_existing_viseme_mouth(character_objects)
+        if not existing_mouth:
+            raise RuntimeError("configured character master is missing preserved Mouth_* Shape Keys")
+        face: dict[str, bpy.types.Object] = {"mouth": existing_mouth}
+        for obj in character_objects:
+            role = str(obj.get("ip_face_topology_role") or "")
+            if role:
+                face[role] = obj
+        existing_mouth["existing_viseme_mouth_preserved"] = True
+        return face
     if (
         character_id == "main_ip_sloth"
         and topology_mode in {"volumetric", "true_geometry", "lips_eyelids"}
@@ -6003,12 +6015,24 @@ def save_rigged_assets(
 def main() -> None:
     data = read_input()
     scene_mode = bool(data.get("sceneBlendPath"))
+    use_master = bool(data.get("useMasterAsset"))
     if scene_mode:
         load_scene_template(str(data["sceneBlendPath"]))
     else:
         clear_scene()
     target_height = scene_target_height(data)
-    character_objects, imported_armatures, imported_assets, removed_helpers = import_model(data["modelPath"])
+    if use_master:
+        imported_assets = append_master_collection(
+            Path(str(data["masterBlendPath"])),
+            bpy.context.scene.collection,
+        )
+        character_objects = [obj for obj in imported_assets if obj.type == "MESH"]
+        imported_armatures = [obj for obj in imported_assets if obj.type == "ARMATURE"]
+        removed_helpers: list[str] = []
+        if not character_objects:
+            raise RuntimeError(f"configured character master has no Mesh objects: {data['masterBlendPath']}")
+    else:
+        character_objects, imported_armatures, imported_assets, removed_helpers = import_model(data["modelPath"])
     preserve_hierarchy = bool(imported_armatures and data.get("preserveExistingRig", True))
     dimensions = prepare_character(
         character_objects,
@@ -6019,15 +6043,37 @@ def main() -> None:
     scene_stats: dict[str, Any] = {}
     if scene_mode:
         scene_stats = setup_authored_scene(data, dimensions)
-    else:
+    elif not bool(data.get("assetOnly")):
         setup_scene(data, dimensions)
     armature, rig_stats, bone_map = choose_character_rig(data, imported_armatures, character_objects, dimensions)
     face = setup_face(data, dimensions, armature, character_objects, bone_map)
-    rig_stats["renderDetail"] = configure_character_render_detail(character_objects, data)
+    if use_master:
+        rig_stats["renderDetail"] = {
+            "mode": "master_preserved",
+            "detailedObjects": [],
+            "skippedObjects": [obj.name for obj in character_objects],
+        }
+    else:
+        rig_stats["renderDetail"] = configure_character_render_detail(character_objects, data)
     rig_stats.update(_collect_weight_stats(character_objects))
     rig_stats["boneMap"] = bone_map
     animate(armature, face, data["motionPlan"], int(data["fps"]), bone_map)
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
+    if bool(data.get("prepareMaster")):
+        container = dimensions.get("container")
+        master_objects = list(
+            dict.fromkeys(
+                character_objects
+                + imported_assets
+                + list(face.values())
+                + ([container] if container else [])
+            )
+        )
+        rig_stats["masterAsset"] = save_master_collection(
+            character_objects=master_objects,
+            armature=armature,
+            output_path=Path(data["riggedBlendPath"]),
+        )
     if scene_mode:
         scene_stats["placement"] = place_character_in_authored_scene(
             character_objects,
