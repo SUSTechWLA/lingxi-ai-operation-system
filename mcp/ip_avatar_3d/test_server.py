@@ -1227,58 +1227,98 @@ class BlenderMasterAssetIntegrationTests(unittest.TestCase):
 
         master = load_master_asset()
         renderer = load_blender_renderer()
-        repo_root = pathlib.Path(__file__).resolve().parents[2]
-        prepared_fixture = repo_root / "ip形象" / "main_ip" / "models" / "main-ip-talking-head.blend"
-        studio_path = repo_root / "ip形象" / "main_ip" / "scenes" / "editorial-news-studio.blend"
 
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             master_path = root / "full-path-master.blend"
-            bpy.ops.wm.open_mainfile(filepath=str(prepared_fixture), load_ui=False)
-            armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
-            self.assertEqual(len(armatures), 1)
-            armature = armatures[0]
+            studio_path = root / "authored-studio.blend"
 
-            def belongs_to_character(obj):
-                if obj.type != "MESH":
-                    return False
-                if obj.data.shape_keys or obj.get("ip_face_topology_role"):
-                    return True
-                if any(modifier.type == "ARMATURE" and modifier.object == armature for modifier in obj.modifiers):
-                    return True
-                parent = obj.parent
-                while parent:
-                    if parent == armature:
-                        return True
-                    parent = parent.parent
-                return False
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            bpy.ops.mesh.primitive_cube_add(size=2.0)
+            mouth = bpy.context.object
+            mouth.name = "IP_Test_Character"
+            material = bpy.data.materials.new("IP_Test_Character_Material")
+            material.use_nodes = True
+            mouth.data.materials.append(material)
+            for shape_name in (
+                "Basis",
+                "Mouth_Rest",
+                "Mouth_A",
+                "Mouth_E",
+                "Mouth_O",
+                "Mouth_U",
+                "Mouth_MBP",
+                "Mouth_Smile",
+                "Mouth_Frown",
+                "Mouth_Surprise",
+                "Eye_Squint.L",
+                "Eye_Squint.R",
+            ):
+                mouth.shape_key_add(name=shape_name)
 
-            character_objects = [obj for obj in bpy.data.objects if belongs_to_character(obj)]
-            mouth = renderer.find_existing_viseme_mouth(character_objects)
-            self.assertIsNotNone(mouth)
+            armature_data = bpy.data.armatures.new("IP_Test_Master_Rig_Data")
+            armature = bpy.data.objects.new("IP_Test_Master_Rig", armature_data)
+            bpy.context.scene.collection.objects.link(armature)
+            bpy.ops.object.select_all(action="DESELECT")
+            armature.select_set(True)
+            bpy.context.view_layer.objects.active = armature
+            bpy.ops.object.mode_set(mode="EDIT")
+            root_bone = armature.data.edit_bones.new("Root")
+            root_bone.head = (0.0, 0.0, -1.0)
+            root_bone.tail = (0.0, 0.0, 1.0)
+            bpy.ops.object.mode_set(mode="OBJECT")
+            armature_modifier = mouth.modifiers.new("IP_Test_Armature", "ARMATURE")
+            armature_modifier.object = armature
+            root_group = mouth.vertex_groups.new(name="Root")
+            root_group.add(range(len(mouth.data.vertices)), 1.0, "REPLACE")
+
+            armature.animation_data_create()
+            talk_action = bpy.data.actions.new("Talk_Loop")
+            talk_action.use_fake_user = True
+            armature.animation_data.action = talk_action
+            armature.pose.bones["Root"].rotation_mode = "XYZ"
+            armature.pose.bones["Root"].rotation_euler.z = 0.1
+            armature.pose.bones["Root"].keyframe_insert(data_path="rotation_euler", frame=1)
+
+            mouth.data.shape_keys.animation_data_create()
+            mouth_action = bpy.data.actions.new("Mouth_Viseme_Timeline")
+            mouth_action.use_fake_user = True
+            mouth.data.shape_keys.animation_data.action = mouth_action
+            mouth.data.shape_keys.key_blocks["Mouth_A"].value = 0.5
+            mouth.data.shape_keys.key_blocks["Mouth_A"].keyframe_insert(data_path="value", frame=1)
+
+            for action_name in ("Aroll_Greeting_Wave", "Gesture_Wave", "Expression_Happy"):
+                action = bpy.data.actions.new(action_name)
+                action.use_fake_user = True
+
+            character_objects = [mouth]
             shape_key_names = {key.name for key in mouth.data.shape_keys.key_blocks}
-            material_names = {
-                material.name
-                for obj in character_objects
-                for material in obj.data.materials
-                if material
-            }
+            material_names = {material.name}
             canonical_actions = {action.name for action in bpy.data.actions}
-            self.assertIn("Talk_Loop", canonical_actions)
-            self.assertIn("Mouth_Viseme_Timeline", canonical_actions)
-
-            asset_objects = set(character_objects)
-            asset_objects.add(armature)
-            for obj in list(asset_objects):
-                parent = obj.parent
-                while parent:
-                    asset_objects.add(parent)
-                    parent = parent.parent
             master.save_master_collection(
-                character_objects=list(asset_objects),
+                character_objects=character_objects,
                 armature=armature,
                 output_path=master_path,
             )
+
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            camera_data = bpy.data.cameras.new("Camera_Medium_Data")
+            camera = bpy.data.objects.new("Camera_Medium", camera_data)
+            bpy.context.scene.collection.objects.link(camera)
+            camera.location = (0.0, -6.0, 1.5)
+            bpy.context.scene.camera = camera
+            light_data = bpy.data.lights.new("Key_Light_Data", type="AREA")
+            light_data.energy = 500.0
+            key_light = bpy.data.objects.new("Key_Light", light_data)
+            key_light["ip_light_role"] = "key"
+            key_light["ip_base_energy"] = 500.0
+            bpy.context.scene.collection.objects.link(key_light)
+            spawn = bpy.data.objects.new("IP_Character_Spawn", None)
+            spawn["target_height"] = 2.55
+            bpy.context.scene.collection.objects.link(spawn)
+            focus = bpy.data.objects.new("IP_Focus_Head", None)
+            bpy.context.scene.collection.objects.link(focus)
+            bpy.ops.wm.save_as_mainfile(filepath=str(studio_path))
 
             render_input = {
                 "assetOnly": True,

@@ -112,19 +112,24 @@ No `Eye_Blink.*`, `Face_Blink`, or full-blink capability is claimed.
   Blender-only integration tests skipped under system Python.
 - Blender-focused master integration: 2 tests passed. The helper-level test
   saved and appended a real versioned Blend with a fake-user A-roll Action. The
-  full-path test saved a real main-IP master fixture, opened the authored
-  editorial studio, ran `blender_renderer.main`, animated the appended master,
-  rebuilt runtime timelines, and verified no canonical `.NNN` Action names.
-  It also verified exactly one Armature, the complete canonical action library,
-  unchanged Shape Key names and material names, and the authored studio spawn
-  marker.
+  full-path test programmatically built temporary master and authored-studio
+  Blend fixtures using `bpy`, then ran `blender_renderer.main`, animated the
+  appended master, rebuilt runtime timelines, and verified no canonical `.NNN`
+  Action names. The generated master contains one weighted Armature, a material,
+  representative mouth/squint Shape Keys, reusable Actions, and the versioned
+  `IP_Character_Master` collection. The generated studio contains its authored
+  camera, key light, spawn marker, and focus marker. The test also verifies
+  exactly one Armature, the complete canonical action library, unchanged Shape
+  Key names and material names, and the authored studio spawn marker. It does
+  not read any profile model or studio binary and is reproducible from a
+  source-only checkout.
 - `test_blender_scene_contract.py`: 5 tests passed on Blender 5.1.2.
 - `test_blender_character_rig.py`: all direct-runner tests passed on Blender
   5.1.2, including Task 6 squint-only and source-PBR fail-closed coverage.
 - Python compilation passed for `master_asset.py`, `server.py`, and
   `test_server.py`.
-- A non-dry-run preparation against the real main-IP FBX completed in a
-  temporary directory and verified all four deterministic output files.
+- The full-path integration creates and removes all Blend fixtures inside its
+  temporary directory; no prebuilt main-IP binary is required for this test.
 
 ## Residual
 
