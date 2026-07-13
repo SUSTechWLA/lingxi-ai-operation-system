@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import re
 from pathlib import Path
 
 try:
@@ -23,6 +24,9 @@ from test_blender_character_rig import load_enhanced_fbx_character
 SUPPORT_OFFSET = 0.045
 SUPPORT_BAND_TOLERANCE_RATIO = 0.02
 MINIMUM_SUPPORT_BAND_EDGES = 3
+MINIMUM_RING_VERTICES = 4
+MINIMUM_RING_SPAN_RATIO = 0.015
+MINIMUM_RING_AREA_RATIO = 0.000025
 
 
 def digit_roles(side: str, digit: int) -> tuple[str, str, str]:
@@ -39,6 +43,11 @@ def expected_digit_bone_names(side: str, digit: int) -> tuple[str, str, str]:
         f"Finger_{digit:02d}_{segment}.{suffix}"
         for segment in ("Proximal", "Middle", "Distal")
     )
+
+
+def is_finger_deform_bone_name(name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "", name.lower())
+    return re.fullmatch(r"finger\d+(?:proximal|middle|distal)[lr]", normalized) is not None
 
 
 def world_tip(armature, bone_map, side: str, digit: int):
@@ -137,13 +146,22 @@ def _weight_violations(objects, armature) -> list[str]:
     return violations
 
 
-def _support_band_component_edges(objects, armature, chain_names, plane_point, axis, tolerance: float) -> int:
-    largest_component = 0
+def _support_band_ring_edges(
+    objects,
+    armature,
+    chain_names,
+    plane_point,
+    axis,
+    tolerance: float,
+    chain_length: float,
+) -> int:
+    largest_ring = 0
     for obj in objects:
         if obj.type != "MESH":
             continue
         group_names = {group.index: group.name for group in obj.vertex_groups}
         near_plane = set()
+        world_coordinates = {}
         for vertex in obj.data.vertices:
             digit_weight = sum(
                 weight
@@ -153,6 +171,7 @@ def _support_band_component_edges(objects, armature, chain_names, plane_point, a
             world = obj.matrix_world @ vertex.co
             if digit_weight > 1e-5 and abs((world - plane_point).dot(axis)) <= tolerance:
                 near_plane.add(vertex.index)
+                world_coordinates[vertex.index] = world
         adjacency: dict[int, set[int]] = {}
         for edge in obj.data.edges:
             first, second = edge.vertices
@@ -174,10 +193,35 @@ def _support_band_component_edges(objects, armature, chain_names, plane_point, a
                 visited.add(current)
                 stack.extend(adjacency[current] - component_vertices)
             component_edges = sum(len(adjacency[vertex]) for vertex in component_vertices) // 2
-            # A support cut must form a ring, not merely leave a few nearby edges.
-            if component_edges >= len(component_vertices):
-                largest_component = max(largest_component, component_edges)
-    return largest_component
+            if len(component_vertices) < MINIMUM_RING_VERTICES:
+                continue
+            if component_edges != len(component_vertices):
+                continue
+            if any(len(adjacency[vertex]) != 2 for vertex in component_vertices):
+                continue
+
+            radial = [
+                world_coordinates[vertex]
+                - plane_point
+                - axis * (world_coordinates[vertex] - plane_point).dot(axis)
+                for vertex in component_vertices
+            ]
+            max_span = max(
+                (left - right).length
+                for index, left in enumerate(radial)
+                for right in radial[index + 1 :]
+            )
+            max_area = max(
+                abs(axis.dot(left.cross(right)))
+                for index, left in enumerate(radial)
+                for right in radial[index + 1 :]
+            )
+            if max_span < chain_length * MINIMUM_RING_SPAN_RATIO:
+                continue
+            if max_area < chain_length * chain_length * MINIMUM_RING_AREA_RATIO:
+                continue
+            largest_ring = max(largest_ring, component_edges)
+    return largest_ring
 
 
 def _mesh_support_band_evidence(objects, armature, bone_map) -> tuple[int, list[str]]:
@@ -206,21 +250,22 @@ def _mesh_support_band_evidence(objects, armature, bone_map) -> tuple[int, list[
             for joint_index, joint in enumerate(joints, start=1):
                 for offset in (-SUPPORT_OFFSET, SUPPORT_OFFSET):
                     plane_point = joint + axis * chain_length * offset
-                    edge_count = _support_band_component_edges(
+                    ring_edges = _support_band_ring_edges(
                         objects,
                         armature,
                         chain_names,
                         plane_point,
                         axis,
                         tolerance,
+                        chain_length,
                     )
-                    if edge_count >= MINIMUM_SUPPORT_BAND_EDGES:
+                    if ring_edges >= MINIMUM_SUPPORT_BAND_EDGES:
                         support_bands += 1
                     else:
                         violations.append(
                             f"{side} digit {digit} joint {joint_index} support offset {offset:+.3f} "
-                            f"has {edge_count} connected mesh edges, expected at least "
-                            f"{MINIMUM_SUPPORT_BAND_EDGES}"
+                            f"has no closed weighted mesh ring with at least "
+                            f"{MINIMUM_SUPPORT_BAND_EDGES} edges"
                         )
     return support_bands, violations
 
@@ -235,16 +280,21 @@ def test_main_ip_has_three_segments_per_digit_and_clean_weights() -> None:
         for digit in (1, 2, 3)
         for bone_name in expected_digit_bone_names(side, digit)
     }
-    deform_bones = {
+    actual_finger_deform_bones = {
         bone.name
         for bone in armature.data.bones
-        if bone.name in expected_bone_names and bone.use_deform
+        if bone.use_deform and is_finger_deform_bone_name(bone.name)
     }
-    if len(deform_bones) != 18:
-        violations.append(f"armature has {len(deform_bones)} three-segment finger deform bones, expected 18")
-    missing_deform_bones = sorted(expected_bone_names - deform_bones)
+    if actual_finger_deform_bones != expected_bone_names:
+        violations.append(
+            f"armature finger deform set has {len(actual_finger_deform_bones)} bones, expected exactly 18"
+        )
+    missing_deform_bones = sorted(expected_bone_names - actual_finger_deform_bones)
     if missing_deform_bones:
         violations.append(f"missing finger deform bones: {', '.join(missing_deform_bones)}")
+    unexpected_deform_bones = sorted(actual_finger_deform_bones - expected_bone_names)
+    if unexpected_deform_bones:
+        violations.append(f"unexpected finger deform bones: {', '.join(unexpected_deform_bones)}")
     if stats.get("fingerBoneCount") != 18:
         violations.append(f"reported fingerBoneCount={stats.get('fingerBoneCount')!r}, expected 18")
     if stats.get("fingerSegmentCount") != 3:
