@@ -15,6 +15,10 @@ except ImportError:  # pragma: no cover - pure validation tests run without Blen
 MASTER_COLLECTION = "IP_Character_Master"
 MASTER_VERSION_PROPERTY = "ip_aroll_master_version"
 MASTER_VERSION = 1
+MASTER_QA_CAMERAS = {
+    "Camera_Medium": {"lens": 58.0, "distance_scale": 2.1, "target_height": 0.64},
+    "Camera_Wide": {"lens": 50.0, "distance_scale": 3.2, "target_height": 0.52},
+}
 
 
 def _require_bpy() -> Any:
@@ -94,6 +98,53 @@ def ensure_master_collection(character_objects: Iterable[Any], armature: Any) ->
     return collection
 
 
+def ensure_master_qa_cameras(armature: Any) -> dict[str, Any]:
+    """Create deterministic standalone cameras without adding them to the master collection."""
+    blender = _require_bpy()
+    from mathutils import Vector
+
+    rig_points = [
+        armature.matrix_world @ point
+        for bone in armature.data.bones
+        for point in (bone.head_local, bone.tail_local)
+    ]
+    if not rig_points:
+        raise RuntimeError("character master Armature has no bones for QA camera framing")
+
+    minimum = Vector(tuple(min(point[index] for point in rig_points) for index in range(3)))
+    maximum = Vector(tuple(max(point[index] for point in rig_points) for index in range(3)))
+    height = maximum.z - minimum.z
+    if height <= 1e-6:
+        raise RuntimeError("character master Armature has zero height for QA camera framing")
+
+    center_x = (minimum.x + maximum.x) * 0.5
+    center_y = (minimum.y + maximum.y) * 0.5
+    cameras: dict[str, Any] = {}
+    for name, spec in MASTER_QA_CAMERAS.items():
+        camera = blender.data.objects.get(name)
+        if camera is not None and camera.type != "CAMERA":
+            raise RuntimeError(f"cannot create {name}: name belongs to a non-camera object")
+        if camera is None:
+            camera_data = blender.data.cameras.new(f"{name}_Data")
+            camera = blender.data.objects.new(name, camera_data)
+        if blender.context.scene.objects.get(camera.name) is None:
+            blender.context.scene.collection.objects.link(camera)
+
+        target = Vector(
+            (center_x, center_y, minimum.z + height * float(spec["target_height"]))
+        )
+        distance = max(0.5, height * float(spec["distance_scale"]))
+        camera.location = target + Vector((0.0, -distance, height * 0.025))
+        camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+        camera.data.lens = float(spec["lens"])
+        camera.data.clip_start = 0.01
+        camera.data.clip_end = max(100.0, distance * 10.0)
+        cameras[name] = camera
+
+    blender.context.scene.camera = cameras["Camera_Medium"]
+    return cameras
+
+
 def save_master_collection(
     *,
     character_objects: Iterable[Any],
@@ -109,6 +160,7 @@ def save_master_collection(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     collection = ensure_master_collection(objects, armature)
     collection[MASTER_VERSION_PROPERTY] = MASTER_VERSION
+    ensure_master_qa_cameras(armature)
     _require_bpy().ops.wm.save_as_mainfile(filepath=str(output_path))
     return {
         "collection": collection.name,

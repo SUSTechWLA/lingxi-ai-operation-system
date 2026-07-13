@@ -21,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import blender_renderer
 import hand_refinement
+import master_asset
 import render_aroll_master_qa
 from test_blender_character_rig import load_enhanced_fbx_character
 
@@ -302,6 +303,31 @@ def test_aroll_qa_fixture_fails_closed_for_missing_master_contract() -> None:
     shape.name = "QA_Missing_Squint"
     _assert_runtime_error("missing required Shape Keys: Eye_Squint.L", render_aroll_master_qa.validate_scene_contract)
     shape.name = "Eye_Squint.L"
+
+
+def test_saved_master_adds_standalone_qa_cameras_without_collection_conflicts() -> None:
+    scene, armature, _, _ = _build_aroll_qa_fixture()
+    for name in render_aroll_master_qa.ACTION_CAMERAS:
+        bpy.data.objects.remove(bpy.data.objects[name], do_unlink=True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        master_path = Path(tmp) / "fixture-master.blend"
+        character_objects = [obj for obj in scene.objects if obj.type == "MESH"]
+        master_asset.save_master_collection(
+            character_objects=character_objects,
+            armature=armature,
+            output_path=master_path,
+        )
+
+        assert master_path.is_file()
+        collection = bpy.data.collections[master_asset.MASTER_COLLECTION]
+        assert [obj.name for obj in collection.all_objects if obj.type == "ARMATURE"] == [
+            armature.name
+        ]
+        assert not any(obj.type == "CAMERA" for obj in collection.all_objects)
+        for name in render_aroll_master_qa.ACTION_CAMERAS:
+            camera = scene.objects.get(name)
+            assert camera is not None and camera.type == "CAMERA", name
 
 
 def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
@@ -964,6 +990,7 @@ if __name__ == "__main__":
     tests = [
         test_aroll_qa_sample_contract_is_complete_and_squint_only,
         test_aroll_qa_fixture_fails_closed_for_missing_master_contract,
+        test_saved_master_adds_standalone_qa_cameras_without_collection_conflicts,
         test_aroll_qa_renders_programmatic_fixture_and_checks_pixels,
         test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
