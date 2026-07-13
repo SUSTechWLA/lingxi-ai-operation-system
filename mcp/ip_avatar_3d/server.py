@@ -27,6 +27,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from master_asset import MASTER_COLLECTION, MASTER_VERSION
+from voice_policy import ProductionVoiceUnavailable, ResolvedVoice, resolve_voice
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -772,8 +773,7 @@ def ensure_audio(
             "speed": speed,
             "speakingRate": effective_rate,
             "humanVoiceProvider": False,
-            "naturalVoiceProvider": True,
-            "productionReady": True,
+            "productionReady": False,
             "masteringPreset": "warm_knowledge_host_v1",
         }
     audio_engine = find_audio_engine()
@@ -1367,6 +1367,33 @@ def plan_motion(script: str, durationSec: float = 0, fps: int = DEFAULT_FPS, mot
     return build_motion_plan(script, duration, fps, motionStyle)
 
 
+def _voice_policy_metadata(
+    *,
+    render_mode: str,
+    provider: str,
+    voice_id: str,
+    language: str,
+    speed: float,
+    fallback_policy: str,
+    resolved: ResolvedVoice | None,
+    error: str = "",
+) -> dict[str, Any]:
+    state = {
+        "renderMode": render_mode,
+        "provider": resolved.provider if resolved else provider,
+        "voiceId": resolved.voice_id if resolved else voice_id,
+        "language": resolved.language if resolved else language,
+        "speed": resolved.speed if resolved else speed,
+        "fallbackPolicy": fallback_policy,
+        "productionReady": bool(resolved and resolved.production_ready),
+        "allowPreviewFallback": bool(resolved and resolved.allow_preview_fallback),
+        "policyStatus": "ready" if resolved else "blocked",
+    }
+    if error:
+        state["policyError"] = error
+    return state
+
+
 @mcp.tool()
 def render_talking_video(
     script: str,
@@ -1411,12 +1438,15 @@ def render_talking_video(
     voiceSpeed: float = 1.0,
     blenderTimeoutSec: int = 0,
     dryRun: bool = False,
+    renderMode: str = "",
+    fallbackPolicy: str = "",
 ) -> dict[str, Any]:
     """Render a talking IP video layer from narration text and a local GLB/GLTF/FBX model."""
     profile_path: Path | None = None
     master_blend_path = ""
     master_configured = False
     quality_tier = ""
+    voice_config: dict[str, Any] = {}
     if characterProfilePath:
         profile_path, profile = _load_character_profile(characterProfilePath)
         model_config = profile.get("model") or {}
@@ -1478,16 +1508,31 @@ def render_talking_video(
             transparent = bool(render_config.get("transparent", transparent))
         if blenderTimeoutSec <= 0:
             blenderTimeoutSec = int(render_config.get("blenderTimeoutSec") or 0)
+        if not renderMode:
+            renderMode = str(voice_config.get("renderMode") or renderMode)
+        profile_render_mode = str(renderMode or "preview").strip().lower()
+        preview_voice_config = voice_config.get("preview") or {}
+        selected_voice_config = (
+            preview_voice_config
+            if profile_render_mode == "preview" and isinstance(preview_voice_config, dict) and preview_voice_config
+            else voice_config
+        )
         if voiceProvider == "auto":
-            voiceProvider = str(voice_config.get("provider") or voiceProvider)
+            voiceProvider = str(selected_voice_config.get("provider") or voice_config.get("provider") or voiceProvider)
         if not voiceId:
-            voiceId = str(voice_config.get("voiceId") or voiceId)
+            voiceId = str(selected_voice_config.get("voiceId") or voice_config.get("voiceId") or voiceId)
         if voiceLanguage == "zh":
-            voiceLanguage = str(voice_config.get("language") or voiceLanguage)
+            voiceLanguage = str(selected_voice_config.get("language") or voice_config.get("language") or voiceLanguage)
         if voiceSpeed == 1.0:
-            voiceSpeed = float(voice_config.get("speed") or voiceSpeed)
+            voiceSpeed = float(selected_voice_config.get("speed") or voice_config.get("speed") or voiceSpeed)
         if speakingRate == 190:
-            speakingRate = int(voice_config.get("speakingRate") or speakingRate)
+            speakingRate = int(
+                selected_voice_config.get("speakingRate") or voice_config.get("speakingRate") or speakingRate
+            )
+        if not fallbackPolicy:
+            fallbackPolicy = str(
+                selected_voice_config.get("fallbackPolicy") or voice_config.get("fallbackPolicy") or fallbackPolicy
+            )
 
     use_master_asset = False
     if master_configured:
@@ -1557,6 +1602,38 @@ def render_talking_video(
     voice_provider = str(voiceProvider or "auto").strip().lower()
     voice_language = str(voiceLanguage or "zh").strip().lower()
     voice_speed = max(0.7, min(float(voiceSpeed or 1.0), 1.3))
+    render_mode = str(renderMode or "preview").strip().lower()
+    fallback_policy = str(
+        fallbackPolicy or ("error" if render_mode == "production" else "preview")
+    ).strip().lower()
+    policy_voice_id = str(
+        voiceId or (voiceName if render_mode == "preview" else "")
+    ).strip()
+    resolved_voice: ResolvedVoice | None = None
+    voice_policy_error = ""
+    try:
+        resolved_voice = resolve_voice(
+            mode=render_mode,
+            provider=voice_provider,
+            voice_id=policy_voice_id,
+            fallback_policy=fallback_policy,
+            language=voice_language,
+            speed=voice_speed,
+        )
+    except ProductionVoiceUnavailable as exc:
+        if not dryRun:
+            raise
+        voice_policy_error = str(exc)
+    voice_policy = _voice_policy_metadata(
+        render_mode=render_mode,
+        provider=voice_provider,
+        voice_id=policy_voice_id,
+        language=voice_language,
+        speed=voice_speed,
+        fallback_policy=fallback_policy,
+        resolved=resolved_voice,
+        error=voice_policy_error,
+    )
 
     resolved_background = str(_readable_path(backgroundPath)) if backgroundPath else ""
     if resolved_background and not Path(resolved_background).is_file():
@@ -1591,14 +1668,20 @@ def render_talking_video(
     audio_out = ""
     audioSource = "none"
     audio_metadata: dict[str, Any] = {
-        "provider": voice_provider,
-        "voiceId": str(voiceId or voiceName or ""),
-        "language": voice_language,
-        "speed": voice_speed,
+        "provider": voice_policy["provider"],
+        "voiceId": voice_policy["voiceId"],
+        "language": voice_policy["language"],
+        "speed": voice_policy["speed"],
         "humanVoiceProvider": False,
-        "productionReady": False,
+        "renderMode": render_mode,
+        "fallbackPolicy": fallback_policy,
+        "productionReady": voice_policy["productionReady"],
+        "allowPreviewFallback": voice_policy["allowPreviewFallback"],
+        "policyStatus": voice_policy["policyStatus"],
     }
     if not dryRun:
+        if resolved_voice is None:
+            raise ProductionVoiceUnavailable(voice_policy_error or "production voice policy is blocked")
         audio_out, audioSource, audio_metadata = ensure_audio(
             script,
             output_dir,
@@ -1606,10 +1689,26 @@ def render_talking_video(
             audioPath,
             voiceName,
             speakingRate,
-            voice_provider=voice_provider,
-            voice_id=voiceId,
-            voice_language=voice_language,
-            voice_speed=voice_speed,
+            voice_provider=resolved_voice.provider,
+            voice_id=resolved_voice.voice_id,
+            voice_language=resolved_voice.language,
+            voice_speed=resolved_voice.speed,
+        )
+        if render_mode == "production":
+            actual_provider = str(audio_metadata.get("provider") or "").strip().lower()
+            actual_voice_id = str(audio_metadata.get("voiceId") or "").strip()
+            if actual_provider != resolved_voice.provider or actual_voice_id != resolved_voice.voice_id:
+                raise ProductionVoiceUnavailable(
+                    "production synthesis did not return the pinned provider and voice ID"
+                )
+        audio_metadata.update(
+            {
+                "renderMode": render_mode,
+                "fallbackPolicy": fallback_policy,
+                "productionReady": resolved_voice.production_ready,
+                "allowPreviewFallback": resolved_voice.allow_preview_fallback,
+                "policyStatus": "ready",
+            }
         )
 
     plan_path = output_dir / "motion_plan.json"
@@ -1676,12 +1775,7 @@ def render_talking_video(
         "rigReportPath": str(rig_report_path),
         "motionPlanPath": str(plan_path),
         "motionPlan": motion_plan,
-        "voice": {
-            "provider": voice_provider,
-            "voiceId": str(voiceId or voiceName or ""),
-            "language": voice_language,
-            "speed": voice_speed,
-        },
+        "voice": voice_policy,
     }
     _write_json(render_input_path, render_input)
 
@@ -1695,6 +1789,7 @@ def render_talking_video(
             "motionPlanGenerated": plan_path.exists(),
             "subtitleGenerated": subtitle_out.exists(),
             "blenderRequired": True,
+            "voicePolicy": voice_policy,
         }
         _write_json(report_path, report)
         return {
@@ -1717,6 +1812,7 @@ def render_talking_video(
             "riggedBlendPath": str(rigged_blend_path),
             "riggedGlbPath": str(rigged_glb_path),
             "rigReportPath": str(rig_report_path),
+            "voicePolicy": voice_policy,
         }
 
     blender = find_blender()
@@ -1767,7 +1863,12 @@ def render_talking_video(
             "finalVideoGenerated": video_path.exists(),
         }
     )
-    report = {"success": video_path.exists(), "qa": qa, "renderInputPath": str(render_input_path)}
+    report = {
+        "success": video_path.exists(),
+        "qa": qa,
+        "renderInputPath": str(render_input_path),
+        "voicePolicy": voice_policy,
+    }
     _write_json(report_path, report)
     digest = hashlib.sha256(video_path.read_bytes()).hexdigest() if video_path.exists() else ""
     return {
@@ -1791,6 +1892,7 @@ def render_talking_video(
         "audioPath": audio_out,
         "audioSource": audioSource,
         "voice": audio_metadata,
+        "voicePolicy": voice_policy,
         "voicePreviewOnly": not bool(audio_metadata.get("productionReady")),
         "subtitlePath": str(subtitle_out),
         "motionPlanPath": str(plan_path),

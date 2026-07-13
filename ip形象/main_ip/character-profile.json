@@ -125,18 +125,22 @@
     "transparent": false
   },
   "voice": {
-    "provider": "apple",
-    "voiceId": "Eddy (中文（中国大陆）)",
-    "language": "zh-CN",
-    "speed": 0.94,
-    "speakingRate": 185,
-    "masteringPreset": "warm_knowledge_host_v1",
-    "productionUpgradeProvider": "heygen",
-    "productionUpgradeVoiceCandidates": [
+    "renderMode": "production",
+    "provider": "heygen",
+    "voiceId": "",
+    "fallbackPolicy": "error",
+    "preview": {
+      "provider": "apple",
+      "voiceId": "Eddy (中文（中国大陆）)"
+    },
+    "productionVoiceCandidates": [
       "dMkR1XwIkarpNqWUJLnX",
       "046dacc3502347eea0c796f97399632e",
       "5c1ade5e514c4c6c900b0ded224970fd"
     ],
+    "language": "zh-CN",
+    "speed": 0.94,
+    "speakingRate": 185,
     "persona": {
       "name": "树懒小唐",
       "ageImpression": "25-32",

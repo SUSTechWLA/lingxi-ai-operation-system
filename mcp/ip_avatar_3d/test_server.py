@@ -306,6 +306,169 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertTrue(pathlib.Path(result["renderInputPath"]).exists())
             self.assertTrue(pathlib.Path(result["renderReportPath"]).exists())
 
+    def test_omitted_render_mode_is_safely_treated_as_preview(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            result = server.render_talking_video(
+                script="预览模式口播。",
+                modelPath=str(model),
+                outputDir=str(root / "out"),
+                voiceProvider="apple",
+                voiceId="Eddy (中文（中国大陆）)",
+                dryRun=True,
+            )
+
+            self.assertEqual(result["voicePolicy"]["renderMode"], "preview")
+            self.assertEqual(result["voicePolicy"]["policyStatus"], "ready")
+            self.assertFalse(result["voicePolicy"]["productionReady"])
+
+    def test_explicit_production_rejects_preview_voice_before_audio(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            with mock.patch.object(server, "ensure_audio") as ensure_audio:
+                with self.assertRaises(server.ProductionVoiceUnavailable):
+                    server.render_talking_video(
+                        script="生产模式不能使用预览声音。",
+                        modelPath=str(model),
+                        outputDir=str(root / "out"),
+                        renderMode="production",
+                        voiceProvider="apple",
+                        voiceId="Eddy (中文（中国大陆）)",
+                        fallbackPolicy="error",
+                        dryRun=False,
+                    )
+
+            ensure_audio.assert_not_called()
+
+    def test_production_does_not_treat_legacy_voice_name_as_pinned_id(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            with mock.patch.object(server, "ensure_audio") as ensure_audio:
+                with self.assertRaisesRegex(server.ProductionVoiceUnavailable, "voice ID"):
+                    server.render_talking_video(
+                        script="生产模式必须显式固定音色 ID。",
+                        modelPath=str(model),
+                        outputDir=str(root / "out"),
+                        renderMode="production",
+                        voiceProvider="heygen",
+                        voiceName="legacy-name",
+                        fallbackPolicy="error",
+                        dryRun=False,
+                    )
+
+            ensure_audio.assert_not_called()
+
+    def test_production_rejects_synthesis_that_changes_pinned_voice(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+            mismatched_audio = (
+                str(root / "narration.wav"),
+                "hyperframes_apple",
+                {
+                    "provider": "apple",
+                    "voiceId": "Eddy (中文（中国大陆）)",
+                    "language": "zh",
+                    "speed": 1.0,
+                    "productionReady": False,
+                },
+            )
+
+            with mock.patch.object(server, "ensure_audio", return_value=mismatched_audio):
+                with self.assertRaisesRegex(
+                    server.ProductionVoiceUnavailable,
+                    "pinned provider and voice ID",
+                ):
+                    server.render_talking_video(
+                        script="后端不能替换已固定的生产音色。",
+                        modelPath=str(model),
+                        outputDir=str(root / "out"),
+                        renderMode="production",
+                        voiceProvider="heygen",
+                        voiceId="dMkR1XwIkarpNqWUJLnX",
+                        fallbackPolicy="error",
+                        dryRun=False,
+                    )
+
+    def test_production_dry_run_surfaces_ready_policy_without_synthesis(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            with mock.patch.object(server, "ensure_audio") as ensure_audio:
+                result = server.render_talking_video(
+                    script="生产音色干跑。",
+                    modelPath=str(model),
+                    outputDir=str(root / "out"),
+                    renderMode="production",
+                    voiceProvider="heygen",
+                    voiceId="dMkR1XwIkarpNqWUJLnX",
+                    fallbackPolicy="error",
+                    dryRun=True,
+                )
+
+            ensure_audio.assert_not_called()
+            self.assertEqual(
+                result["voicePolicy"],
+                {
+                    "renderMode": "production",
+                    "provider": "heygen",
+                    "voiceId": "dMkR1XwIkarpNqWUJLnX",
+                    "language": "zh",
+                    "speed": 1.0,
+                    "fallbackPolicy": "error",
+                    "productionReady": True,
+                    "allowPreviewFallback": False,
+                    "policyStatus": "ready",
+                },
+            )
+
+    def test_production_dry_run_surfaces_blocked_policy_without_downgrade(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            with mock.patch.object(server, "ensure_audio") as ensure_audio:
+                result = server.render_talking_video(
+                    script="待定生产音色干跑。",
+                    modelPath=str(model),
+                    outputDir=str(root / "out"),
+                    renderMode="production",
+                    voiceProvider="heygen",
+                    voiceId="",
+                    fallbackPolicy="error",
+                    dryRun=True,
+                )
+
+            ensure_audio.assert_not_called()
+            policy = result["voicePolicy"]
+            self.assertEqual(policy["renderMode"], "production")
+            self.assertEqual(policy["provider"], "heygen")
+            self.assertEqual(policy["voiceId"], "")
+            self.assertEqual(policy["fallbackPolicy"], "error")
+            self.assertEqual(policy["policyStatus"], "blocked")
+            self.assertFalse(policy["productionReady"])
+            self.assertFalse(policy["allowPreviewFallback"])
+            self.assertIn("voice ID", policy["policyError"])
+
     def test_render_rejects_non_glb_model(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:
@@ -531,6 +694,73 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             any("Blink" in name for name in profile["facial"]["requiredShapeKeys"]),
             profile["facial"]["requiredShapeKeys"],
         )
+
+    def test_main_ip_profile_blocks_production_until_voice_audition(self) -> None:
+        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip形象" / "main_ip" / "character-profile.json"
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        voice = profile["voice"]
+
+        self.assertEqual(voice["renderMode"], "production")
+        self.assertEqual(voice["provider"], "heygen")
+        self.assertEqual(voice["voiceId"], "")
+        self.assertEqual(voice["fallbackPolicy"], "error")
+        self.assertEqual(
+            voice["preview"],
+            {
+                "provider": "apple",
+                "voiceId": "Eddy (中文（中国大陆）)",
+            },
+        )
+        self.assertEqual(
+            voice["productionVoiceCandidates"],
+            [
+                "dMkR1XwIkarpNqWUJLnX",
+                "046dacc3502347eea0c796f97399632e",
+                "5c1ade5e514c4c6c900b0ded224970fd",
+            ],
+        )
+
+    def test_profile_preview_mode_uses_nested_preview_voice(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "main.glb"
+            profile = root / "character-profile.json"
+            model.write_bytes(b"glTF placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "model": {"path": "main.glb"},
+                        "render": {},
+                        "voice": {
+                            "renderMode": "production",
+                            "provider": "heygen",
+                            "voiceId": "",
+                            "fallbackPolicy": "error",
+                            "preview": {
+                                "provider": "apple",
+                                "voiceId": "Eddy (中文（中国大陆）)",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = server.render_talking_video(
+                script="显式预览。",
+                characterProfilePath=str(profile),
+                outputDir=str(root / "out"),
+                renderMode="preview",
+                dryRun=True,
+            )
+
+            policy = result["voicePolicy"]
+            self.assertEqual(policy["renderMode"], "preview")
+            self.assertEqual(policy["provider"], "apple")
+            self.assertEqual(policy["voiceId"], "Eddy (中文（中国大陆）)")
+            self.assertFalse(policy["productionReady"])
 
     def test_render_profile_uses_existing_master_without_source_refinement(self) -> None:
         server = load_server()
@@ -823,7 +1053,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(metadata["voiceId"], "zf_xiaobei")
             self.assertFalse(metadata["humanVoiceProvider"])
 
-    def test_apple_character_voice_is_pinned_and_mastered_for_production(self) -> None:
+    def test_apple_character_voice_remains_preview_only_after_mastering(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
@@ -853,7 +1083,9 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
             self.assertEqual(source, "apple_neural_voice")
             self.assertEqual(metadata["voiceId"], "Eddy (中文（中国大陆）)")
-            self.assertTrue(metadata["productionReady"])
+            self.assertFalse(metadata["humanVoiceProvider"])
+            self.assertFalse(metadata["productionReady"])
+            self.assertNotIn("naturalVoiceProvider", metadata)
             self.assertEqual(pathlib.Path(audio_path), root / "narration_master.m4a")
             self.assertIn("-v", commands[0])
             self.assertIn("Eddy (中文（中国大陆）)", commands[0])
