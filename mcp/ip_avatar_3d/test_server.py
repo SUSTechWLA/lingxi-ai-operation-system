@@ -77,6 +77,100 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         )
         return profile
 
+    def successful_voice_audition_fakes(self):
+        synthesis_calls = []
+        ffmpeg_commands = []
+
+        def fake_ensure_audio(
+            requested_script,
+            candidate_dir,
+            duration_sec,
+            audio_path="",
+            voice_name="",
+            speaking_rate=190,
+            **kwargs,
+        ):
+            synthesis_calls.append(
+                {
+                    "script": requested_script,
+                    "durationSec": duration_sec,
+                    "speakingRate": speaking_rate,
+                    **kwargs,
+                }
+            )
+            audio = pathlib.Path(candidate_dir) / "narration.wav"
+            audio.parent.mkdir(parents=True, exist_ok=True)
+            audio.write_bytes(b"RIFF synthesized audio")
+            return str(audio), "hyperframes_heygen", {
+                "tts_provider": "heygen",
+                "voice_id": kwargs["voice_id"],
+                "language": kwargs["voice_language"],
+                "speed": kwargs["voice_speed"],
+                "productionReady": True,
+            }
+
+        def fake_run(args, timeout=600):
+            ffmpeg_commands.append(args)
+            if args[-1] == "-":
+                return mock.Mock(
+                    returncode=0,
+                    stdout="",
+                    stderr=(
+                        '[Parsed_loudnorm_0] {\n'
+                        '  "input_i" : "-16.0",\n'
+                        '  "input_tp" : "-1.6",\n'
+                        '  "input_lra" : "2.1"\n'
+                        "}"
+                    ),
+                )
+            pathlib.Path(args[-1]).write_bytes(b"RIFF normalized audio")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        return synthesis_calls, ffmpeg_commands, fake_ensure_audio, fake_run
+
+    def run_successful_voice_auditions(
+        self,
+        server,
+        *,
+        script: str,
+        profile: pathlib.Path,
+        output_dir: pathlib.Path,
+    ):
+        synthesis_calls, ffmpeg_commands, fake_ensure_audio, fake_run = (
+            self.successful_voice_audition_fakes()
+        )
+        with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+            server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+        ), mock.patch.object(
+            server.shutil, "which", side_effect=lambda name: "/usr/bin/node" if name == "node" else None
+        ), mock.patch.object(server, "ensure_audio", side_effect=fake_ensure_audio), mock.patch.object(
+            server, "_run", side_effect=fake_run
+        ):
+            result = server.generate_voice_auditions(
+                script=script,
+                characterProfilePath=str(profile),
+                outputDir=str(output_dir),
+            )
+        return result, synthesis_calls, ffmpeg_commands
+
+    def plan_voice_auditions(
+        self,
+        server,
+        *,
+        script: str,
+        profile: pathlib.Path,
+        output_dir: pathlib.Path,
+    ):
+        with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+            server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+        ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"):
+            return server.generate_voice_auditions(
+                script=script,
+                characterProfilePath=str(profile),
+                outputDir=str(output_dir),
+                dryRun=True,
+            )
+
     def assert_no_grouped_motion_overlaps(self, events: list[dict]) -> None:
         conflicts = []
         by_group: dict[str, list[dict]] = {}
@@ -1272,77 +1366,29 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         server = load_server()
         script = "今天我们不追热点，只讲清楚一个真正重要的变化。"
         candidate_ids = ["heygen_voice_1", "heygen_voice_2", "heygen_voice_3"]
-        synthesis_calls = []
-        ffmpeg_commands = []
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             profile = self.write_voice_audition_profile(root, candidate_ids)
             output_dir = root / "auditions"
 
-            def fake_ensure_audio(
-                requested_script,
-                candidate_dir,
-                duration_sec,
-                audio_path="",
-                voice_name="",
-                speaking_rate=190,
-                **kwargs,
-            ):
-                synthesis_calls.append(
-                    {
-                        "script": requested_script,
-                        "durationSec": duration_sec,
-                        "speakingRate": speaking_rate,
-                        **kwargs,
-                    }
-                )
-                audio = pathlib.Path(candidate_dir) / "narration.wav"
-                audio.parent.mkdir(parents=True, exist_ok=True)
-                audio.write_bytes(b"RIFF synthesized audio")
-                return str(audio), "hyperframes_heygen", {
-                    "tts_provider": "heygen",
-                    "voice_id": kwargs["voice_id"],
-                    "language": kwargs["voice_language"],
-                    "speed": kwargs["voice_speed"],
-                    "productionReady": True,
-                }
+            result, synthesis_calls, ffmpeg_commands = self.run_successful_voice_auditions(
+                server,
+                script=script,
+                profile=profile,
+                output_dir=output_dir,
+            )
 
-            def fake_run(args, timeout=600):
-                ffmpeg_commands.append(args)
-                if args[-1] == "-":
-                    return mock.Mock(
-                        returncode=0,
-                        stdout="",
-                        stderr=(
-                            '[Parsed_loudnorm_0] {\n'
-                            '  "input_i" : "-16.0",\n'
-                            '  "input_tp" : "-1.6",\n'
-                            '  "input_lra" : "2.1"\n'
-                            "}"
-                        ),
-                    )
-                pathlib.Path(args[-1]).write_bytes(b"RIFF normalized audio")
-                return mock.Mock(returncode=0, stdout="", stderr="")
-
-            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
-                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
-            ), mock.patch.object(
-                server.shutil, "which", side_effect=lambda name: "/usr/bin/node" if name == "node" else None
-            ), mock.patch.object(server, "ensure_audio", side_effect=fake_ensure_audio), mock.patch.object(
-                server, "_run", side_effect=fake_run
-            ):
-                result = server.generate_voice_auditions(
-                    script=script,
-                    characterProfilePath=str(profile),
-                    outputDir=str(output_dir),
-                )
-
+            set_id = result["setId"]
+            self.assertEqual(len(set_id), 64)
+            self.assertTrue(all(char in "0123456789abcdef" for char in set_id))
+            set_dir = output_dir.resolve() / set_id
             expected_public = [
-                {"label": "A", "path": str(output_dir.resolve() / "audition_A.wav")},
-                {"label": "B", "path": str(output_dir.resolve() / "audition_B.wav")},
-                {"label": "C", "path": str(output_dir.resolve() / "audition_C.wav")},
+                {"label": "A", "path": str(set_dir / "audition_A.wav")},
+                {"label": "B", "path": str(set_dir / "audition_B.wav")},
+                {"label": "C", "path": str(set_dir / "audition_C.wav")},
             ]
             self.assertEqual(result["status"], "ready")
+            self.assertFalse(result["reusedExisting"])
             self.assertEqual(result["candidates"], expected_public)
             self.assertEqual(result["publicCandidates"], expected_public)
             self.assertTrue(result["requiresUserSelection"])
@@ -1366,8 +1412,11 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                 all("loudnorm=I=-16:TP=-1.5:LRA=7" in " ".join(args) for args in mastering_commands)
             )
 
-            manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+            manifest_path = set_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(manifest["schemaVersion"], "ip-avatar-voice-auditions/v1")
+            self.assertEqual(manifest["setId"], set_id)
             self.assertEqual(manifest["script"], script)
             self.assertEqual(manifest["provider"], "heygen")
             self.assertEqual(manifest["settings"]["language"], "zh-CN")
@@ -1384,6 +1433,8 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertTrue(
                 all(item["synthesisProvenance"]["ttsProvider"] == "heygen" for item in manifest["candidates"])
             )
+            self.assertTrue(all(item["contentSha256"] for item in manifest["candidates"]))
+            self.assertEqual(sorted(path.resolve() for path in output_dir.iterdir()), [set_dir])
 
     def test_generate_voice_auditions_dry_run_reports_blocked_without_audio(self) -> None:
         server = load_server()
@@ -1409,6 +1460,146 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual([item["label"] for item in result["candidates"]], ["A", "B", "C"])
             self.assertFalse(output_dir.exists())
             ensure_audio_mock.assert_not_called()
+
+    def test_generate_voice_auditions_reuses_valid_existing_set_without_synthesis(self) -> None:
+        server = load_server()
+        script = "固定试音文案。"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+            output_dir = root / "auditions"
+            first, _calls, _commands = self.run_successful_voice_auditions(
+                server,
+                script=script,
+                profile=profile,
+                output_dir=output_dir,
+            )
+            manifest_path = output_dir.resolve() / first["setId"] / "manifest.json"
+            manifest_before = manifest_path.read_bytes()
+
+            with mock.patch.object(server, "find_audio_engine", return_value=""), mock.patch.object(
+                server, "ensure_audio"
+            ) as ensure_audio_mock:
+                second = server.generate_voice_auditions(
+                    script=script,
+                    characterProfilePath=str(profile),
+                    outputDir=str(output_dir),
+                )
+
+            self.assertTrue(second["reusedExisting"])
+            self.assertEqual(second["setId"], first["setId"])
+            self.assertEqual(second["candidates"], first["candidates"])
+            self.assertEqual(manifest_path.read_bytes(), manifest_before)
+            ensure_audio_mock.assert_not_called()
+
+    def test_generate_voice_auditions_rejects_invalid_existing_target_without_overwrite(self) -> None:
+        server = load_server()
+        script = "固定试音文案。"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+            output_dir = root / "auditions"
+            plan = self.plan_voice_auditions(
+                server,
+                script=script,
+                profile=profile,
+                output_dir=output_dir,
+            )
+            target_dir = output_dir.resolve() / plan["setId"]
+            target_dir.mkdir(parents=True)
+            manifest_path = target_dir / "manifest.json"
+            manifest_path.write_bytes(b"existing invalid manifest")
+
+            with mock.patch.object(server, "ensure_audio") as ensure_audio_mock, self.assertRaisesRegex(
+                server.ProductionVoiceUnavailable, "collision"
+            ):
+                server.generate_voice_auditions(
+                    script=script,
+                    characterProfilePath=str(profile),
+                    outputDir=str(output_dir),
+                )
+
+            self.assertEqual(manifest_path.read_bytes(), b"existing invalid manifest")
+            ensure_audio_mock.assert_not_called()
+
+    def test_generate_voice_auditions_rejects_concurrent_set_lock(self) -> None:
+        server = load_server()
+        script = "固定试音文案。"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+            output_dir = root / "auditions"
+            plan = self.plan_voice_auditions(
+                server,
+                script=script,
+                profile=profile,
+                output_dir=output_dir,
+            )
+            output_dir.mkdir(parents=True)
+            lock_path = output_dir.resolve() / f".voice-auditions-{plan['setId']}.lock"
+            lock_path.write_text("other-call", encoding="utf-8")
+
+            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                server, "ensure_audio"
+            ) as ensure_audio_mock, self.assertRaisesRegex(
+                server.ProductionVoiceUnavailable, "locked by another call"
+            ):
+                server.generate_voice_auditions(
+                    script=script,
+                    characterProfilePath=str(profile),
+                    outputDir=str(output_dir),
+                )
+
+            self.assertEqual(lock_path.read_text(encoding="utf-8"), "other-call")
+            self.assertFalse((output_dir / plan["setId"]).exists())
+            ensure_audio_mock.assert_not_called()
+
+    def test_failed_rerun_preserves_existing_valid_voice_audition_set(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = self.write_voice_audition_profile(root)
+            output_dir = root / "auditions"
+            first, _calls, _commands = self.run_successful_voice_auditions(
+                server,
+                script="第一版固定试音文案。",
+                profile=profile,
+                output_dir=output_dir,
+            )
+            first_dir = output_dir.resolve() / first["setId"]
+            first_snapshot = {
+                path.name: path.read_bytes()
+                for path in first_dir.iterdir()
+            }
+            failed_plan = self.plan_voice_auditions(
+                server,
+                script="第二版固定试音文案。",
+                profile=profile,
+                output_dir=output_dir,
+            )
+
+            with mock.patch.object(server, "find_audio_engine", return_value="/tmp/audio.mjs"), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server.shutil, "which", return_value="/usr/bin/node"), mock.patch.object(
+                server, "ensure_audio", side_effect=RuntimeError("provider unavailable")
+            ), self.assertRaisesRegex(server.ProductionVoiceUnavailable, "production synthesis failed"):
+                server.generate_voice_auditions(
+                    script="第二版固定试音文案。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(output_dir),
+                )
+
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in first_dir.iterdir()},
+                first_snapshot,
+            )
+            self.assertFalse((output_dir.resolve() / failed_plan["setId"]).exists())
+            self.assertFalse(
+                (output_dir.resolve() / f".voice-auditions-{failed_plan['setId']}.lock").exists()
+            )
+            self.assertEqual(list(output_dir.glob(f".{failed_plan['setId']}.staging-*")), [])
 
     def test_generate_voice_auditions_rejects_invalid_candidate_count(self) -> None:
         server = load_server()
@@ -1522,6 +1713,12 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             root = pathlib.Path(tmp)
             profile = self.write_voice_audition_profile(root)
             output_dir = root / "auditions"
+            plan = self.plan_voice_auditions(
+                server,
+                script="固定试音文案。",
+                profile=profile,
+                output_dir=output_dir,
+            )
 
             def fake_ensure_audio(_script, candidate_dir, _duration, **kwargs):
                 audio = pathlib.Path(candidate_dir) / "narration.wav"
@@ -1545,8 +1742,11 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                     outputDir=str(output_dir),
                 )
 
-            self.assertFalse((output_dir / "manifest.json").exists())
-            self.assertEqual(list(output_dir.glob("audition_*.wav")), [])
+            self.assertFalse((output_dir.resolve() / plan["setId"]).exists())
+            self.assertFalse(
+                (output_dir.resolve() / f".voice-auditions-{plan['setId']}.lock").exists()
+            )
+            self.assertEqual(list(output_dir.glob(f".{plan['setId']}.staging-*")), [])
 
     def test_generate_voice_auditions_fails_when_loudness_analysis_fails(self) -> None:
         server = load_server()
