@@ -13,7 +13,10 @@ from voice_policy import (
 
 class VoicePolicyTests(unittest.TestCase):
     def test_provider_sets_are_explicit(self) -> None:
-        self.assertEqual(PRODUCTION_PROVIDERS, frozenset({"heygen", "elevenlabs"}))
+        self.assertEqual(
+            PRODUCTION_PROVIDERS,
+            frozenset({"heygen", "elevenlabs", "gpt_sovits_local"}),
+        )
         self.assertEqual(PREVIEW_PROVIDERS, frozenset({"apple", "kokoro"}))
 
     def test_production_rejects_preview_voice(self) -> None:
@@ -55,6 +58,34 @@ class VoicePolicyTests(unittest.TestCase):
         self.assertEqual(resolved.voice_id, "dMkR1XwIkarpNqWUJLnX")
         self.assertTrue(resolved.production_ready)
         self.assertFalse(resolved.allow_preview_fallback)
+
+    def test_production_accepts_pinned_local_gpt_sovits_bundle(self) -> None:
+        resolved = resolve_voice(
+            mode="production",
+            provider="gpt_sovits_local",
+            voice_id="main-ip-gpt-sovits-v1",
+            fallback_policy="error",
+            language="zh-CN",
+            speed=0.94,
+        )
+
+        self.assertEqual(resolved.provider, "gpt_sovits_local")
+        self.assertEqual(resolved.voice_id, "main-ip-gpt-sovits-v1")
+        self.assertTrue(resolved.production_ready)
+        self.assertFalse(resolved.allow_preview_fallback)
+
+    def test_local_gpt_sovits_production_rejects_unpinned_or_fallback_requests(self) -> None:
+        invalid = [
+            {"voice_id": "", "fallback_policy": "error"},
+            {"voice_id": "main-ip-gpt-sovits-v1", "fallback_policy": "preview"},
+        ]
+        for request in invalid:
+            with self.subTest(request=request), self.assertRaises(ProductionVoiceUnavailable):
+                resolve_voice(
+                    mode="production",
+                    provider="gpt_sovits_local",
+                    **request,
+                )
 
     def test_preview_providers_are_never_production_ready(self) -> None:
         for provider in PREVIEW_PROVIDERS:

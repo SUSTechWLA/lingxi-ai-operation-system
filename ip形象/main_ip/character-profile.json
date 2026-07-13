@@ -126,18 +126,40 @@
   },
   "voice": {
     "renderMode": "production",
-    "provider": "heygen",
-    "voiceId": "",
+    "provider": "gpt_sovits_local",
+    "voiceId": "main_ip_warm_knowledge_host_v1",
     "fallbackPolicy": "error",
     "preview": {
       "provider": "apple",
       "voiceId": "Eddy (中文（中国大陆）)"
     },
-    "productionVoiceCandidates": [
-      "dMkR1XwIkarpNqWUJLnX",
-      "046dacc3502347eea0c796f97399632e",
-      "5c1ade5e514c4c6c900b0ded224970fd"
-    ],
+    "gptSovitsLocal": {
+      "endpoint": "http://127.0.0.1:9880",
+      "allowRemoteEndpoint": false,
+      "referenceSource": {
+        "path": "../ip音频.wav",
+        "sha256": "0304b63d381c065e90b34ad373c6438f8b71123ffa74781f66fe191043570dd9",
+        "clipStartSec": 1.248396,
+        "clipDurationSec": 8.542,
+        "sampleRateHz": 48000,
+        "channels": 1,
+        "sampleFormat": "pcm_s16le"
+      },
+      "referenceAudioPath": "voice/reference/main_ip_voice_ref_v1.wav",
+      "expectedReferenceAudioSha256": "0119b8a407ed1be5731db699d6166b7e4c86de540435c69bf4fb5229415382d8",
+      "promptText": "唐影是一款面向创作者的AI视频生产系统，将选题、脚本、分镜、素材、审核与成片串成可追踪、可修改的自动化工作流。",
+      "promptTextVerified": true,
+      "promptLanguage": "zh",
+      "textLanguage": "zh",
+      "gptWeightsPath": "~/.local/share/tangying-aios/GPT-SoVITS/GPT_SoVITS/pretrained_models/s1v3.ckpt",
+      "expectedGptWeightsSha256": "87133414860ea14ff6620c483a3db5ed07b44be42e2c3fcdad65523a729a745a",
+      "sovitsWeightsPath": "~/.local/share/tangying-aios/GPT-SoVITS/GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth",
+      "expectedSovitsWeightsSha256": "d42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b",
+      "modelVersion": "v2ProPlus",
+      "seed": 20260714,
+      "timeoutSec": 120,
+      "settings": {}
+    },
     "language": "zh-CN",
     "speed": 0.94,
     "speakingRate": 185,

@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import io
 import json
+import os
 import pathlib
 import sys
 import tempfile
 import types
 import unittest
+import wave
 from unittest import mock
 
 
@@ -45,6 +49,16 @@ def load_blender_renderer():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def test_wav_bytes(*, sample_rate: int = 48000, channels: int = 1) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * channels * 480)
+    return buffer.getvalue()
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
@@ -1059,14 +1073,14 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             profile["facial"]["requiredShapeKeys"],
         )
 
-    def test_main_ip_profile_blocks_production_until_voice_audition(self) -> None:
+    def test_main_ip_profile_pins_verified_local_production_voice(self) -> None:
         profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip形象" / "main_ip" / "character-profile.json"
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         voice = profile["voice"]
 
         self.assertEqual(voice["renderMode"], "production")
-        self.assertEqual(voice["provider"], "heygen")
-        self.assertEqual(voice["voiceId"], "")
+        self.assertEqual(voice["provider"], "gpt_sovits_local")
+        self.assertEqual(voice["voiceId"], "main_ip_warm_knowledge_host_v1")
         self.assertEqual(voice["fallbackPolicy"], "error")
         self.assertEqual(
             voice["preview"],
@@ -1076,13 +1090,137 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            voice["productionVoiceCandidates"],
-            [
-                "dMkR1XwIkarpNqWUJLnX",
-                "046dacc3502347eea0c796f97399632e",
-                "5c1ade5e514c4c6c900b0ded224970fd",
-            ],
+            voice["gptSovitsLocal"],
+            {
+                "endpoint": "http://127.0.0.1:9880",
+                "allowRemoteEndpoint": False,
+                "referenceSource": {
+                    "path": "../ip音频.wav",
+                    "sha256": "0304b63d381c065e90b34ad373c6438f8b71123ffa74781f66fe191043570dd9",
+                    "clipStartSec": 1.248396,
+                    "clipDurationSec": 8.542,
+                    "sampleRateHz": 48000,
+                    "channels": 1,
+                    "sampleFormat": "pcm_s16le",
+                },
+                "referenceAudioPath": "voice/reference/main_ip_voice_ref_v1.wav",
+                "expectedReferenceAudioSha256": "0119b8a407ed1be5731db699d6166b7e4c86de540435c69bf4fb5229415382d8",
+                "promptText": "唐影是一款面向创作者的AI视频生产系统，将选题、脚本、分镜、素材、审核与成片串成可追踪、可修改的自动化工作流。",
+                "promptTextVerified": True,
+                "promptLanguage": "zh",
+                "textLanguage": "zh",
+                "gptWeightsPath": "~/.local/share/tangying-aios/GPT-SoVITS/GPT_SoVITS/pretrained_models/s1v3.ckpt",
+                "expectedGptWeightsSha256": "87133414860ea14ff6620c483a3db5ed07b44be42e2c3fcdad65523a729a745a",
+                "sovitsWeightsPath": "~/.local/share/tangying-aios/GPT-SoVITS/GPT_SoVITS/pretrained_models/v2Pro/s2Gv2ProPlus.pth",
+                "expectedSovitsWeightsSha256": "d42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b",
+                "modelVersion": "v2ProPlus",
+                "seed": 20260714,
+                "timeoutSec": 120,
+                "settings": {},
+            },
         )
+        self.assertNotIn("productionVoiceCandidates", voice)
+
+    def test_main_ip_local_voice_health_resolves_pinned_bundle_without_synthesis(self) -> None:
+        server = load_server()
+        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip形象" / "main_ip" / "character-profile.json"
+        provenance = {
+            "provider": "gpt_sovits_local",
+            "voiceId": "main_ip_warm_knowledge_host_v1",
+            "bundleReady": True,
+            "productionReady": False,
+        }
+
+        with mock.patch.object(server, "GPTSoVITSClient", create=True) as client_class:
+            client_class.return_value.preflight.return_value = provenance
+            result = server.check_gpt_sovits_voice(characterProfilePath=str(profile_path))
+
+        self.assertEqual(result["status"], "ready")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["provider"], "gpt_sovits_local")
+        self.assertEqual(result["voice"], provenance)
+        preflight = client_class.return_value.preflight.call_args.kwargs
+        self.assertEqual(preflight["voice_id"], "main_ip_warm_knowledge_host_v1")
+        self.assertEqual(preflight["seed"], 20260714)
+        self.assertEqual(preflight["model_version"], "v2ProPlus")
+        self.assertEqual(
+            preflight["ref_audio_path"],
+            str((profile_path.parent / "voice/reference/main_ip_voice_ref_v1.wav").resolve()),
+        )
+        self.assertEqual(
+            preflight["gpt_weights_path"],
+            str(
+                pathlib.Path(
+                    "~/.local/share/tangying-aios/GPT-SoVITS/GPT_SoVITS/pretrained_models/s1v3.ckpt"
+                ).expanduser().resolve()
+            ),
+        )
+        self.assertNotIn("promptText", result)
+
+    def test_local_voice_health_reports_verified_bundle_without_synthesis(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            reference = root / "reference.wav"
+            gpt_weights = root / "voice.ckpt"
+            sovits_weights = root / "voice.pth"
+            profile = root / "character-profile.json"
+            for path, content in (
+                (reference, b"RIFF reference"),
+                (gpt_weights, b"gpt"),
+                (sovits_weights, b"sovits"),
+            ):
+                path.write_bytes(content)
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "voice": {
+                            "provider": "gpt_sovits_local",
+                            "voiceId": "main-ip-gpt-sovits-v1",
+                            "fallbackPolicy": "error",
+                            "gptSovitsLocal": {
+                                "endpoint": "http://127.0.0.1:9880",
+                                "referenceAudioPath": "reference.wav",
+                                "promptText": "人工核对的参考原文。",
+                                "promptTextVerified": True,
+                                "promptLanguage": "zh",
+                                "gptWeightsPath": "voice.ckpt",
+                                "sovitsWeightsPath": "voice.pth",
+                                "modelVersion": "gpt-sovits-v2-main-ip-2026-07",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            provenance = {
+                "provider": "gpt_sovits_local",
+                "voiceId": "main-ip-gpt-sovits-v1",
+                "referenceAudioSha256": "1" * 64,
+                "gptWeightsSha256": "2" * 64,
+                "sovitsWeightsSha256": "3" * 64,
+                "endpoint": "http://127.0.0.1:9880",
+                "modelIdentifier": "GPT-SoVITS/api_v2",
+                "modelVersion": "gpt-sovits-v2-main-ip-2026-07",
+                "seed": 24680,
+                "settings": {},
+                "bundleReady": True,
+                "productionReady": False,
+            }
+
+            with mock.patch.object(server, "GPTSoVITSClient", create=True) as client_class:
+                client_class.return_value.preflight.return_value = provenance
+                result = server.check_gpt_sovits_voice(characterProfilePath=str(profile))
+
+            self.assertEqual(result["status"], "ready")
+            self.assertTrue(result["success"])
+            self.assertEqual(result["voice"], provenance)
+            preflight = client_class.return_value.preflight.call_args.kwargs
+            self.assertEqual(preflight["ref_audio_path"], str(reference.resolve()))
+            self.assertEqual(preflight["gpt_weights_path"], str(gpt_weights.resolve()))
+            self.assertEqual(preflight["sovits_weights_path"], str(sovits_weights.resolve()))
+            self.assertNotIn("promptText", result)
 
     def test_profile_preview_mode_uses_nested_preview_voice(self) -> None:
         server = load_server()
@@ -1125,6 +1263,74 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(policy["requestedProvider"], "apple")
             self.assertEqual(policy["requestedVoiceId"], "Eddy (中文（中国大陆）)")
             self.assertFalse(policy["productionReady"])
+
+    def test_render_resolves_profile_local_voice_paths_before_ensure_audio(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "main.glb"
+            reference = root / "reference.wav"
+            gpt_weights = root / "voice.ckpt"
+            sovits_weights = root / "voice.pth"
+            profile = root / "character-profile.json"
+            model.write_bytes(b"glTF placeholder")
+            reference.write_bytes(b"RIFF reference")
+            gpt_weights.write_bytes(b"gpt")
+            sovits_weights.write_bytes(b"sovits")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "model": {"path": "main.glb"},
+                        "render": {},
+                        "voice": {
+                            "renderMode": "production",
+                            "provider": "gpt_sovits_local",
+                            "voiceId": "main-ip-gpt-sovits-v1",
+                            "fallbackPolicy": "error",
+                            "language": "zh-CN",
+                            "speed": 0.94,
+                            "gptSovitsLocal": {
+                                "endpoint": "http://127.0.0.1:9880",
+                                "referenceAudioPath": "reference.wav",
+                                "expectedReferenceAudioSha256": "1" * 64,
+                                "promptText": "人工核对的参考原文。",
+                                "promptTextVerified": True,
+                                "promptLanguage": "zh",
+                                "gptWeightsPath": "$GPT_SOVITS_HOME/voice.ckpt",
+                                "expectedGptWeightsSha256": "2" * 64,
+                                "sovitsWeightsPath": "$GPT_SOVITS_HOME/voice.pth",
+                                "expectedSovitsWeightsSha256": "3" * 64,
+                                "modelVersion": "gpt-sovits-v2-main-ip-2026-07",
+                                "seed": 24680,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"GPT_SOVITS_HOME": str(root)}), mock.patch.object(
+                server,
+                "ensure_audio",
+                side_effect=RuntimeError("stop after config capture"),
+            ) as ensure_audio_mock, self.assertRaisesRegex(
+                server.ProductionVoiceUnavailable, "production voice synthesis failed"
+            ):
+                server.render_talking_video(
+                    script="验证本地配置解析。",
+                    characterProfilePath=str(profile),
+                    outputDir=str(root / "out"),
+                    durationSec=2,
+                    dryRun=False,
+                )
+
+            config = ensure_audio_mock.call_args.kwargs["voice_config"]
+            self.assertEqual(config["referenceAudioPath"], str(reference.resolve()))
+            self.assertEqual(config["gptWeightsPath"], str(gpt_weights.resolve()))
+            self.assertEqual(config["sovitsWeightsPath"], str(sovits_weights.resolve()))
+            self.assertEqual(config["promptText"], "人工核对的参考原文。")
+            self.assertTrue(config["promptTextVerified"])
 
     def test_render_profile_uses_existing_master_without_source_refinement(self) -> None:
         server = load_server()
@@ -1823,6 +2029,279 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                         script="固定试音文案。",
                         characterProfilePath=str(profile),
                         outputDir=str(root / "auditions"),
+                    )
+
+    def test_local_gpt_sovits_ensure_audio_routes_directly_with_provenance(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            reference = root / "reference.wav"
+            gpt_weights = root / "voice.ckpt"
+            sovits_weights = root / "voice.pth"
+            generated = root / "narration_gpt_sovits.wav"
+            reference.write_bytes(b"RIFF reference")
+            gpt_weights.write_bytes(b"gpt")
+            sovits_weights.write_bytes(b"sovits")
+            generated.write_bytes(test_wav_bytes())
+            raw_generated_hash = hashlib.sha256(generated.read_bytes()).hexdigest()
+            client_result = {
+                "audioPath": str(generated),
+                "provider": "gpt_sovits_local",
+                "voiceId": "main-ip-gpt-sovits-v1",
+                "tts_provider": "gpt_sovits_local",
+                "voice_id": "main-ip-gpt-sovits-v1",
+                "referenceAudioSha256": "1" * 64,
+                "gptWeightsSha256": "2" * 64,
+                "sovitsWeightsSha256": "3" * 64,
+                "generatedFileSha256": raw_generated_hash,
+                "endpoint": "http://127.0.0.1:9880",
+                "modelIdentifier": "GPT-SoVITS/api_v2",
+                "modelVersion": "gpt-sovits-v2-main-ip-2026-07",
+                "seed": 24680,
+                "settings": {"seed": 24680},
+                "productionReady": True,
+            }
+            config = {
+                "endpoint": "http://127.0.0.1:9880",
+                "allowRemoteEndpoint": False,
+                "referenceAudioPath": str(reference),
+                "expectedReferenceAudioSha256": "1" * 64,
+                "promptText": "人工核对的参考原文。",
+                "promptTextVerified": True,
+                "promptLanguage": "zh",
+                "gptWeightsPath": str(gpt_weights),
+                "expectedGptWeightsSha256": "2" * 64,
+                "sovitsWeightsPath": str(sovits_weights),
+                "expectedSovitsWeightsSha256": "3" * 64,
+                "modelVersion": "gpt-sovits-v2-main-ip-2026-07",
+                "seed": 24680,
+                "timeoutSec": 120,
+                "settings": {"top_k": 12},
+            }
+
+            commands = []
+
+            def fake_run(args, timeout=600):
+                commands.append(args)
+                if args[-1] == "-":
+                    return mock.Mock(
+                        returncode=0,
+                        stdout="",
+                        stderr=(
+                            '[Parsed_loudnorm_0] {\n'
+                            '  "input_i" : "-16.1",\n'
+                            '  "input_tp" : "-1.7",\n'
+                            '  "input_lra" : "3.2"\n'
+                            "}"
+                        ),
+                    )
+                pathlib.Path(args[-1]).write_bytes(test_wav_bytes())
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(server, "GPTSoVITSClient", create=True) as client_class, mock.patch.object(
+                server, "find_audio_engine"
+            ) as shared_engine, mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server, "_run", side_effect=fake_run):
+                client_class.return_value.synthesize.return_value = client_result
+                audio_path, source, metadata = server.ensure_audio(
+                    "今天分享一个本地声音测试。",
+                    root,
+                    2.0,
+                    speaking_rate=185,
+                    voice_provider="gpt_sovits_local",
+                    voice_id="main-ip-gpt-sovits-v1",
+                    voice_language="zh-CN",
+                    voice_speed=0.94,
+                    voice_config=config,
+                )
+
+            client_class.assert_called_once_with(
+                endpoint="http://127.0.0.1:9880",
+                timeout_sec=120.0,
+                allow_remote=False,
+            )
+            synthesize_kwargs = client_class.return_value.synthesize.call_args.kwargs
+            self.assertEqual(synthesize_kwargs["text_lang"], "zh")
+            self.assertEqual(synthesize_kwargs["ref_audio_path"], str(reference))
+            self.assertEqual(synthesize_kwargs["prompt_text"], "人工核对的参考原文。")
+            self.assertTrue(synthesize_kwargs["prompt_text_verified"])
+            self.assertEqual(synthesize_kwargs["gpt_weights_path"], str(gpt_weights))
+            self.assertEqual(synthesize_kwargs["sovits_weights_path"], str(sovits_weights))
+            self.assertEqual(synthesize_kwargs["voice_id"], "main-ip-gpt-sovits-v1")
+            self.assertEqual(synthesize_kwargs["seed"], 24680)
+            self.assertEqual(synthesize_kwargs["settings"], {"top_k": 12, "speed_factor": 0.94})
+            mastered = (root / "narration_gpt_sovits_master.wav").resolve()
+            self.assertEqual(pathlib.Path(audio_path), mastered)
+            self.assertEqual(source, "gpt_sovits_local")
+            self.assertEqual(metadata["referenceAudioSha256"], "1" * 64)
+            self.assertEqual(metadata["generatedFileSha256"], raw_generated_hash)
+            self.assertEqual(metadata["rawGeneratedFileSha256"], raw_generated_hash)
+            self.assertEqual(
+                metadata["masteredFileSha256"],
+                hashlib.sha256(mastered.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                metadata["loudnessMeasurement"],
+                {
+                    "integratedLufs": -16.1,
+                    "truePeakDbtp": -1.7,
+                    "loudnessRangeLu": 3.2,
+                },
+            )
+            mastering = commands[0]
+            mastering_filter = mastering[mastering.index("-af") + 1]
+            self.assertIn("highpass=f=55", mastering_filter)
+            self.assertIn("lowpass=f=18000", mastering_filter)
+            self.assertIn("acompressor", mastering_filter)
+            self.assertIn("ratio=1.5", mastering_filter)
+            self.assertIn("loudnorm=I=-16:TP=-1.5:LRA=7", mastering_filter)
+            self.assertEqual(mastering[mastering.index("-ar") + 1], "48000")
+            self.assertEqual(mastering[mastering.index("-ac") + 1], "1")
+            self.assertEqual(mastering[mastering.index("-c:a") + 1], "pcm_s16le")
+            self.assertTrue(metadata["humanVoiceProvider"])
+            self.assertTrue(metadata["productionReady"])
+            shared_engine.assert_not_called()
+
+    def test_local_gpt_sovits_mastering_fails_closed_outside_loudness_target(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            generated = root / "narration_gpt_sovits.wav"
+            generated.write_bytes(test_wav_bytes())
+            raw_generated_hash = hashlib.sha256(generated.read_bytes()).hexdigest()
+            client_result = {
+                "audioPath": str(generated),
+                "tts_provider": "gpt_sovits_local",
+                "voice_id": "main-ip-gpt-sovits-v1",
+                "referenceAudioSha256": "1" * 64,
+                "gptWeightsSha256": "2" * 64,
+                "sovitsWeightsSha256": "3" * 64,
+                "generatedFileSha256": raw_generated_hash,
+                "endpoint": "http://127.0.0.1:9880",
+                "modelIdentifier": "GPT-SoVITS/api_v2",
+                "modelVersion": "v2ProPlus",
+                "seed": 20260714,
+                "settings": {"seed": 20260714},
+                "productionReady": True,
+            }
+
+            def fake_run(args, timeout=600):
+                if args[-1] == "-":
+                    return mock.Mock(
+                        returncode=0,
+                        stdout="",
+                        stderr=(
+                            '[Parsed_loudnorm_0] {\n'
+                            '  "input_i" : "-15.2",\n'
+                            '  "input_tp" : "-1.4",\n'
+                            '  "input_lra" : "3.2"\n'
+                            "}"
+                        ),
+                    )
+                pathlib.Path(args[-1]).write_bytes(test_wav_bytes())
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(server, "GPTSoVITSClient", create=True) as client_class, mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(server, "_run", side_effect=fake_run), self.assertRaisesRegex(
+                server.ProductionVoiceUnavailable, "outside loudness target"
+            ):
+                client_class.return_value.synthesize.return_value = client_result
+                server.ensure_audio(
+                    "验证母带响度门槛。",
+                    root,
+                    2.0,
+                    voice_provider="gpt_sovits_local",
+                    voice_id="main-ip-gpt-sovits-v1",
+                    voice_config={
+                        "promptText": "人工核对的参考原文。",
+                        "promptTextVerified": True,
+                    },
+                )
+
+            self.assertFalse((root / "narration_gpt_sovits_master.wav").exists())
+
+    def test_explicit_local_gpt_sovits_failure_never_uses_shared_or_preview_fallback(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            config = {
+                "endpoint": "http://127.0.0.1:9880",
+                "referenceAudioPath": str(root / "reference.wav"),
+                "promptText": "人工核对的参考原文。",
+                "promptTextVerified": True,
+                "promptLanguage": "zh",
+                "gptWeightsPath": str(root / "voice.ckpt"),
+                "sovitsWeightsPath": str(root / "voice.pth"),
+                "modelVersion": "gpt-sovits-v2-main-ip-2026-07",
+            }
+
+            with mock.patch.object(server, "GPTSoVITSClient", create=True) as client_class, mock.patch.object(
+                server, "find_audio_engine"
+            ) as shared_engine, mock.patch.object(server, "find_ffmpeg") as ffmpeg, mock.patch.object(
+                server.shutil, "which"
+            ) as which, self.assertRaisesRegex(RuntimeError, "local backend unavailable"):
+                client_class.return_value.synthesize.side_effect = RuntimeError("local backend unavailable")
+                server.ensure_audio(
+                    "本地后端失败必须封闭。",
+                    root,
+                    2.0,
+                    voice_provider="gpt_sovits_local",
+                    voice_id="main-ip-gpt-sovits-v1",
+                    voice_config=config,
+                )
+
+            shared_engine.assert_not_called()
+            ffmpeg.assert_not_called()
+            which.assert_not_called()
+
+    def test_local_gpt_sovits_rejects_unready_or_incomplete_adapter_provenance(self) -> None:
+        server = load_server()
+        invalid_results = [
+            {
+                "audioPath": "/tmp/generated.wav",
+                "tts_provider": "gpt_sovits_local",
+                "voice_id": "main-ip-gpt-sovits-v1",
+                "productionReady": False,
+            },
+            {
+                "audioPath": "/tmp/generated.wav",
+                "tts_provider": "gpt_sovits_local",
+                "voice_id": "different-bundle",
+                "referenceAudioSha256": "1" * 64,
+                "gptWeightsSha256": "2" * 64,
+                "sovitsWeightsSha256": "3" * 64,
+                "generatedFileSha256": "4" * 64,
+                "endpoint": "http://127.0.0.1:9880",
+                "modelIdentifier": "GPT-SoVITS/api_v2",
+                "modelVersion": "v2",
+                "seed": 24680,
+                "settings": {},
+                "productionReady": True,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            config = {
+                "endpoint": "http://127.0.0.1:9880",
+                "promptText": "人工核对的参考原文。",
+                "promptTextVerified": True,
+            }
+            for result in invalid_results:
+                with self.subTest(result=result), mock.patch.object(
+                    server, "GPTSoVITSClient", create=True
+                ) as client_class, self.assertRaisesRegex(
+                    server.ProductionVoiceUnavailable, "provenance is incomplete or mismatched"
+                ):
+                    client_class.return_value.synthesize.return_value = result
+                    server.ensure_audio(
+                        "验证本地来源。",
+                        root,
+                        2.0,
+                        voice_provider="gpt_sovits_local",
+                        voice_id="main-ip-gpt-sovits-v1",
+                        voice_config=config,
                     )
 
     def test_audio_engine_uses_pinned_character_voice(self) -> None:

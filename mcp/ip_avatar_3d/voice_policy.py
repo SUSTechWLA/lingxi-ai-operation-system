@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-PRODUCTION_PROVIDERS = frozenset({"heygen", "elevenlabs"})
+PRODUCTION_PROVIDERS = frozenset({"heygen", "elevenlabs", "gpt_sovits_local"})
 PREVIEW_PROVIDERS = frozenset({"apple", "kokoro"})
 _SUPPORTED_PROVIDERS = PRODUCTION_PROVIDERS | PREVIEW_PROVIDERS | {"auto"}
 
@@ -47,7 +47,7 @@ def resolve_voice(
     if normalized_mode == "production":
         if normalized_provider not in PRODUCTION_PROVIDERS:
             raise ProductionVoiceUnavailable(
-                "production voice provider must be one of: elevenlabs, heygen"
+                "production voice provider must be one of: elevenlabs, gpt_sovits_local, heygen"
             )
         if not normalized_voice_id:
             raise ProductionVoiceUnavailable("production voice ID must be pinned and nonempty")
@@ -64,7 +64,7 @@ def resolve_voice(
 
     if normalized_provider not in _SUPPORTED_PROVIDERS:
         raise ValueError(
-            "preview voice provider must be one of: auto, apple, elevenlabs, heygen, kokoro"
+            "preview voice provider must be one of: auto, apple, elevenlabs, gpt_sovits_local, heygen, kokoro"
         )
     return ResolvedVoice(
         provider=normalized_provider,

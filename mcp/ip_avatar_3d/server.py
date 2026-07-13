@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from master_asset import MASTER_COLLECTION, MASTER_VERSION
+from gpt_sovits_client import GPTSoVITSClient
 from voice_policy import (
     PRODUCTION_PROVIDERS,
     ProductionVoiceUnavailable,
@@ -85,6 +87,14 @@ VOICE_AUDITION_I_TOLERANCE = 0.5
 VOICE_AUDITION_SAMPLE_RATE = 48000
 VOICE_AUDITION_CHANNELS = 1
 VOICE_AUDITION_CODEC = "pcm_s24le"
+GPT_SOVITS_MASTER_FILTER = (
+    "highpass=f=55,lowpass=f=18000,"
+    "acompressor=threshold=-18dB:ratio=1.5:attack=15:release=180:knee=2.5:makeup=1,"
+    "loudnorm=I=-16:TP=-1.5:LRA=7"
+)
+GPT_SOVITS_MASTER_SAMPLE_RATE = 48000
+GPT_SOVITS_MASTER_CHANNELS = 1
+GPT_SOVITS_MASTER_CODEC = "pcm_s16le"
 
 
 def _repo_root() -> Path:
@@ -129,10 +139,157 @@ def _load_character_profile(raw: str) -> tuple[Path, dict[str, Any]]:
 def _profile_asset(profile_path: Path, raw: Any) -> str:
     if not raw:
         return ""
-    candidate = Path(str(raw)).expanduser()
+    candidate = Path(os.path.expandvars(str(raw))).expanduser()
     if not candidate.is_absolute():
         candidate = profile_path.parent / candidate
     return str(candidate.resolve())
+
+
+def _resolve_gpt_sovits_config(
+    profile_path: Path,
+    voice_config: dict[str, Any],
+) -> dict[str, Any]:
+    raw_config = voice_config.get("gptSovitsLocal") or {}
+    if not isinstance(raw_config, dict):
+        raise ValueError("voice.gptSovitsLocal must be an object")
+    resolved = dict(raw_config)
+    for key in ("referenceAudioPath", "gptWeightsPath", "sovitsWeightsPath"):
+        if resolved.get(key):
+            resolved[key] = _profile_asset(profile_path, resolved[key])
+    return resolved
+
+
+def _gpt_sovits_language(raw_language: str) -> str:
+    normalized = str(raw_language or "").strip().lower().replace("_", "-")
+    if normalized.startswith("zh"):
+        return "zh"
+    if normalized.startswith("en"):
+        return "en"
+    if normalized.startswith("ja") or normalized.startswith("jp"):
+        return "ja"
+    if normalized.startswith("ko"):
+        return "ko"
+    return normalized
+
+
+def _gpt_sovits_client(config: dict[str, Any]) -> GPTSoVITSClient:
+    return GPTSoVITSClient(
+        endpoint=str(config.get("endpoint") or "http://127.0.0.1:9880"),
+        timeout_sec=float(config.get("timeoutSec") or 120),
+        allow_remote=bool(config.get("allowRemoteEndpoint", False)),
+    )
+
+
+def _gpt_sovits_bundle_kwargs(
+    config: dict[str, Any],
+    *,
+    voice_id: str,
+    speed: float,
+) -> dict[str, Any]:
+    settings = dict(config.get("settings") or {})
+    settings["speed_factor"] = speed
+    return {
+        "ref_audio_path": str(config.get("referenceAudioPath") or ""),
+        "prompt_text": str(config.get("promptText") or ""),
+        "prompt_lang": _gpt_sovits_language(str(config.get("promptLanguage") or "zh")),
+        "prompt_text_verified": bool(config.get("promptTextVerified", False)),
+        "gpt_weights_path": str(config.get("gptWeightsPath") or ""),
+        "sovits_weights_path": str(config.get("sovitsWeightsPath") or ""),
+        "voice_id": str(voice_id or "").strip(),
+        "model_version": str(config.get("modelVersion") or ""),
+        "seed": int(config.get("seed") if config.get("seed") is not None else 24680),
+        "settings": settings,
+        "expected_reference_audio_sha256": str(
+            config.get("expectedReferenceAudioSha256") or ""
+        ),
+        "expected_gpt_weights_sha256": str(config.get("expectedGptWeightsSha256") or ""),
+        "expected_sovits_weights_sha256": str(
+            config.get("expectedSovitsWeightsSha256") or ""
+        ),
+    }
+
+
+def _validate_gpt_sovits_master_wav(path: Path) -> None:
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            valid = (
+                wav_file.getframerate() == GPT_SOVITS_MASTER_SAMPLE_RATE
+                and wav_file.getnchannels() == GPT_SOVITS_MASTER_CHANNELS
+                and wav_file.getsampwidth() == 2
+                and wav_file.getnframes() > 0
+                and wav_file.getcomptype() == "NONE"
+            )
+    except (EOFError, OSError, wave.Error) as exc:
+        raise ProductionVoiceUnavailable(
+            "local GPT-SoVITS master must be a valid 48 kHz mono PCM16 WAV"
+        ) from exc
+    if not valid:
+        raise ProductionVoiceUnavailable(
+            "local GPT-SoVITS master must be a valid 48 kHz mono PCM16 WAV"
+        )
+
+
+def _master_gpt_sovits_audio(
+    raw_path: Path,
+    output_path: Path,
+) -> tuple[dict[str, float], str]:
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise ProductionVoiceUnavailable("ffmpeg is required for local GPT-SoVITS mastering")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{output_path.name}.",
+        suffix=".wav",
+        dir=str(output_path.parent),
+    )
+    os.close(descriptor)
+    staging_path = Path(temp_name)
+    staging_path.unlink()
+    try:
+        _run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(raw_path),
+                "-af",
+                GPT_SOVITS_MASTER_FILTER,
+                "-ar",
+                str(GPT_SOVITS_MASTER_SAMPLE_RATE),
+                "-ac",
+                str(GPT_SOVITS_MASTER_CHANNELS),
+                "-c:a",
+                GPT_SOVITS_MASTER_CODEC,
+                str(staging_path),
+            ],
+            timeout=180,
+        )
+        if not staging_path.is_file() or staging_path.stat().st_size <= 0:
+            raise ProductionVoiceUnavailable(
+                "local GPT-SoVITS mastering did not produce an output file"
+            )
+        _validate_gpt_sovits_master_wav(staging_path)
+        try:
+            loudness = _measure_voice_audition_loudness(staging_path)
+        except Exception as exc:
+            raise ProductionVoiceUnavailable(
+                f"local GPT-SoVITS loudness verification failed: {exc}"
+            ) from exc
+        if not _voice_audition_loudness_is_valid(loudness):
+            raise ProductionVoiceUnavailable(
+                "local GPT-SoVITS master is outside loudness target "
+                "(-16 +/-0.5 LUFS, true peak <= -1.5 dBTP)"
+            )
+        mastered_hash = _sha256_file(staging_path)
+        os.replace(staging_path, output_path)
+        return loudness, mastered_hash
+    except ProductionVoiceUnavailable:
+        raise
+    except Exception as exc:
+        raise ProductionVoiceUnavailable(f"local GPT-SoVITS mastering failed: {exc}") from exc
+    finally:
+        if staging_path.exists():
+            staging_path.unlink()
 
 
 def _read_gltf_document(path: Path) -> dict[str, Any]:
@@ -713,6 +870,7 @@ def ensure_audio(
     voice_id: str = "",
     voice_language: str = "zh",
     voice_speed: float = 1.0,
+    voice_config: dict[str, Any] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     if audio_path:
         resolved = _readable_path(audio_path)
@@ -731,11 +889,79 @@ def ensure_audio(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     provider = str(voice_provider or "auto").strip().lower()
-    if provider not in {"auto", "heygen", "elevenlabs", "kokoro", "apple"}:
-        raise ValueError("voiceProvider must be one of: auto, heygen, elevenlabs, kokoro, apple")
+    if provider not in {"auto", "heygen", "elevenlabs", "gpt_sovits_local", "kokoro", "apple"}:
+        raise ValueError(
+            "voiceProvider must be one of: auto, heygen, elevenlabs, gpt_sovits_local, kokoro, apple"
+        )
     language = str(voice_language or "zh").strip().lower()
     speed = max(0.7, min(float(voice_speed or 1.0), 1.3))
     pinned_voice = str(voice_id or voice_name or "").strip()
+    if provider == "gpt_sovits_local":
+        local_config = dict(voice_config or {})
+        client = _gpt_sovits_client(local_config)
+        raw_output = (output_dir / "narration_gpt_sovits.wav").resolve()
+        result = client.synthesize(
+            text=script,
+            text_lang=_gpt_sovits_language(
+                str(local_config.get("textLanguage") or language)
+            ),
+            output_path=str(raw_output),
+            **_gpt_sovits_bundle_kwargs(
+                local_config,
+                voice_id=pinned_voice,
+                speed=speed,
+            ),
+        )
+        actual_path = Path(str(result.get("audioPath") or "")).expanduser().resolve()
+        required_provenance = (
+            "referenceAudioSha256",
+            "gptWeightsSha256",
+            "sovitsWeightsSha256",
+            "generatedFileSha256",
+            "endpoint",
+            "modelIdentifier",
+            "modelVersion",
+            "settings",
+        )
+        provenance_ready = (
+            str(result.get("tts_provider") or "").strip().lower() == provider
+            and str(result.get("voice_id") or "").strip() == pinned_voice
+            and all(result.get(key) is not None and result.get(key) != "" for key in required_provenance)
+            and result.get("seed") is not None
+            and bool(result.get("productionReady"))
+            and actual_path == raw_output
+            and actual_path.is_file()
+            and actual_path.stat().st_size > 0
+        )
+        if not provenance_ready:
+            raise ProductionVoiceUnavailable(
+                "local GPT-SoVITS synthesis provenance is incomplete or mismatched"
+            )
+        mastered_path = (output_dir / "narration_gpt_sovits_master.wav").resolve()
+        loudness, mastered_hash = _master_gpt_sovits_audio(actual_path, mastered_path)
+        metadata = dict(result)
+        metadata.update(
+            {
+                "audioPath": str(mastered_path),
+                "language": language,
+                "speed": speed,
+                "humanVoiceProvider": True,
+                "rawGeneratedFileSha256": str(result["generatedFileSha256"]),
+                "masteredFileSha256": mastered_hash,
+                "loudnessMeasurement": loudness,
+                "mastering": {
+                    "filter": GPT_SOVITS_MASTER_FILTER,
+                    "sampleRateHz": GPT_SOVITS_MASTER_SAMPLE_RATE,
+                    "channels": GPT_SOVITS_MASTER_CHANNELS,
+                    "codec": GPT_SOVITS_MASTER_CODEC,
+                    "targetIntegratedLufs": VOICE_AUDITION_TARGET_I,
+                    "targetTruePeakDbtp": VOICE_AUDITION_TARGET_TP,
+                    "targetLoudnessRangeLu": 7.0,
+                },
+                "productionReady": True,
+            }
+        )
+        return str(mastered_path), "gpt_sovits_local", metadata
     if provider == "apple":
         ffmpeg = find_ffmpeg()
         say = shutil.which("say")
@@ -1474,6 +1700,56 @@ def check_status() -> dict[str, Any]:
 
 
 @mcp.tool()
+def check_gpt_sovits_voice(characterProfilePath: str) -> dict[str, Any]:
+    """Validate one pinned local GPT-SoVITS bundle without synthesis or network I/O."""
+    profile_path, profile = _load_character_profile(characterProfilePath)
+    voice_config = profile.get("voice") or {}
+    if not isinstance(voice_config, dict):
+        raise ValueError("character profile voice configuration must be an object")
+    provider = str(voice_config.get("provider") or "").strip().lower()
+    if provider != "gpt_sovits_local":
+        return {
+            "status": "blocked",
+            "success": False,
+            "provider": provider,
+            "reason": "character profile voice.provider must be gpt_sovits_local",
+        }
+    voice_id = str(voice_config.get("voiceId") or "").strip()
+    language = str(voice_config.get("language") or "zh").strip().lower()
+    speed = max(0.7, min(float(voice_config.get("speed") or 1.0), 1.3))
+    try:
+        resolve_voice(
+            mode="production",
+            provider=provider,
+            voice_id=voice_id,
+            fallback_policy=str(voice_config.get("fallbackPolicy") or ""),
+            language=language,
+            speed=speed,
+        )
+        local_config = _resolve_gpt_sovits_config(profile_path, voice_config)
+        provenance = _gpt_sovits_client(local_config).preflight(
+            **_gpt_sovits_bundle_kwargs(
+                local_config,
+                voice_id=voice_id,
+                speed=speed,
+            )
+        )
+    except Exception as exc:
+        return {
+            "status": "blocked",
+            "success": False,
+            "provider": provider,
+            "reason": str(exc),
+        }
+    return {
+        "status": "ready",
+        "success": True,
+        "provider": provider,
+        "voice": provenance,
+    }
+
+
+@mcp.tool()
 def generate_voice_auditions(
     script: str,
     characterProfilePath: str,
@@ -2047,6 +2323,7 @@ def render_talking_video(
     master_configured = False
     quality_tier = ""
     voice_config: dict[str, Any] = {}
+    local_voice_config: dict[str, Any] = {}
     if characterProfilePath:
         profile_path, profile = _load_character_profile(characterProfilePath)
         model_config = profile.get("model") or {}
@@ -2117,6 +2394,8 @@ def render_talking_video(
             if profile_render_mode == "preview" and isinstance(preview_voice_config, dict) and preview_voice_config
             else voice_config
         )
+        if str(voice_config.get("provider") or "").strip().lower() == "gpt_sovits_local":
+            local_voice_config = _resolve_gpt_sovits_config(profile_path, voice_config)
         if voiceProvider == "auto":
             voiceProvider = str(selected_voice_config.get("provider") or voice_config.get("provider") or voiceProvider)
         if not voiceId:
@@ -2306,6 +2585,7 @@ def render_talking_video(
                 voice_id=resolved_voice.voice_id,
                 voice_language=resolved_voice.language,
                 voice_speed=resolved_voice.speed,
+                voice_config=local_voice_config if resolved_voice.provider == "gpt_sovits_local" else None,
             )
         except Exception as exc:
             if render_mode == "production":

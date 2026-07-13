@@ -14,6 +14,8 @@ Tangying core should not know the implementation details. It calls this provider
 | Logical tool | MCP tool | Purpose |
 |---|---|---|
 | `ip_avatar_3d.check_status` | `check_status` | Check Blender / FFmpeg / FFprobe availability. |
+| `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | Validate a pinned local GPT-SoVITS voice bundle and hashes without synthesis or network I/O. |
+| `ip_avatar_3d.generate_voice_auditions` | `generate_voice_auditions` | Generate atomic, content-addressed HeyGen A/B/C auditions for blind selection. |
 | `ip_avatar_3d.validate_character_asset` | `validate_character_asset` | Validate GLB skin, semantic bones, visemes, and profile assets before rendering. |
 | `ip_avatar_3d.plan_motion` | `plan_motion` | Convert narration into lip-sync and motion timelines. |
 | `ip_avatar_3d.render_talking_video` | `render_talking_video` | Render a GLB/GLTF/FBX avatar to `ip_layer.mp4`. |
@@ -79,11 +81,75 @@ export TANGYING_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
 
 Returned fields include `videoPath`, `localPath`, `previewImagePath`, `motionPlanPath`, `subtitlePath`, `riggedBlendPath`, `riggedGlbPath`, `rigReportPath`, and `renderReportPath`.
 
+## Local GPT-SoVITS Production Voice
+
+`gpt_sovits_local` uses the official GPT-SoVITS `api_v2.py` contract. It calls
+`GET /set_gpt_weights`, `GET /set_sovits_weights`, then `POST /tts` while
+holding one process lock per endpoint so concurrent model switches cannot
+interleave. The default endpoint is `http://127.0.0.1:9880`; non-loopback
+endpoints are rejected unless `allowRemoteEndpoint` is explicitly enabled.
+
+A publishable profile requires a stable nonempty `voiceId`,
+`fallbackPolicy="error"`, an explicitly verified reference transcript, readable
+reference/GPT/SoVITS files, a model version, and deterministic inference
+settings. Expected SHA-256 values are optional, but any supplied value must
+match before HTTP. The adapter validates a nonempty WAV response and reports
+the actual reference, checkpoint, and generated-file hashes in production
+metadata.
+
+`$VARNAME` and `~` are expanded in local reference and checkpoint paths before
+resolution. The default loopback restriction still prevents those private
+resolved paths from being sent remotely unless `allowRemoteEndpoint` is
+deliberately enabled.
+
+```json
+{
+  "renderMode": "production",
+  "provider": "gpt_sovits_local",
+  "voiceId": "main_ip_warm_knowledge_host_v1",
+  "fallbackPolicy": "error",
+  "gptSovitsLocal": {
+    "endpoint": "http://127.0.0.1:9880",
+    "allowRemoteEndpoint": false,
+    "referenceAudioPath": "voice/reference/main_ip_voice_ref_v1.wav",
+    "expectedReferenceAudioSha256": "<sha256>",
+    "promptText": "<human-verified exact transcript>",
+    "promptTextVerified": true,
+    "promptLanguage": "zh",
+    "textLanguage": "zh",
+    "gptWeightsPath": "$GPT_SOVITS_HOME/pretrained_models/model.ckpt",
+    "expectedGptWeightsSha256": "<sha256>",
+    "sovitsWeightsPath": "~/.local/share/tangying-aios/GPT-SoVITS/model.pth",
+    "expectedSovitsWeightsSha256": "<sha256>",
+    "modelVersion": "<trained-bundle-version>",
+    "seed": 20260714,
+    "timeoutSec": 120,
+    "settings": {}
+  }
+}
+```
+
+The canonical main-IP profile pins `main_ip_warm_knowledge_host_v1`, its
+human-verified prompt, the stable reference-clip hash, both checkpoint hashes,
+`v2ProPlus`, and seed `20260714`. The source and stable reference WAVs remain
+untracked local assets. `check_gpt_sovits_voice` reports `bundleReady=true`
+when those local files match; preflight metadata keeps `productionReady=false`
+because no generated output WAV exists yet.
+
+For A-roll, explicit local synthesis is mastered to a separate 48 kHz mono
+PCM16 WAV with restrained 55 Hz high-pass and 18 kHz low-pass filters, gentle
+1.5:1 compression, and `loudnorm=I=-16:TP=-1.5:LRA=7`. The raw generated hash
+is retained. The mastered hash and measured integrated loudness, true peak,
+and loudness range are added to provenance. The mastered path is returned only
+when it parses as the required WAV format, measures within `-16 +/-0.5 LUFS`,
+and has true peak at or below `-1.5 dBTP`; otherwise production fails without
+fallback.
+
 ## Notes
 
 - First version uses Blender background rendering, not AIGC video generation.
 - The default production render is QHD 2K (`2560x1440`) with 128-sample Eevee rendering and H.264 CRF 16 encoding. Use `qualityPreset=preview` only for fast layout checks.
-- If `audioPath` is omitted, the provider uses the voice pinned by the character profile. Supported providers are HeyGen, ElevenLabs, Kokoro, and macOS Apple voices. The main sloth profile pins `Eddy (中文（中国大陆）)` and applies warm knowledge-host mastering so repeated videos keep the same voice, pace, EQ, compression, and loudness.
+- If `audioPath` is omitted, the provider uses the voice pinned by the character profile. Production providers are local GPT-SoVITS, HeyGen, and ElevenLabs; Kokoro and macOS Apple voices remain preview-only. The main sloth profile pins its verified local GPT-SoVITS bundle and keeps Apple Eddy only as an explicit preview voice.
 - `facialTopologyMode=source_retopology` traces and splits the original mouth groove, keeps lips and eyelids on the textured source mesh, and adds only hidden oral-cavity, teeth, and tongue geometry. It also augments preserved humanoid rigs with jaw, eye, and three-segment tongue bones.
 - A profile that explicitly pins a provider fails when that provider cannot synthesize; it does not silently downgrade to macOS `say`. The `auto` provider retains `say` only as a last-resort preview fallback.
 - The default `rigMode=auto` preserves an input Armature, skin weights, materials, and existing actions. Common Generic/Mixamo-style bone names are mapped to presenter controls. `enhanceExistingRig=true` can add two-segment three-digit hand articulation when a rigged FBX/GLB only contains wrist bones. A generated cartoon rig is only used when the model has no Armature.
