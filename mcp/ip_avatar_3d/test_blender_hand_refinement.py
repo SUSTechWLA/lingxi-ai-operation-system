@@ -358,6 +358,31 @@ def test_validated_three_segment_reuse_requires_contract_marker() -> None:
     assert reused_map == bone_map
     assert sum(len(obj.data.vertices) for obj in objects if obj.type == "MESH") == before
 
+    target = next(
+        (
+            (obj, vertex, assignment)
+            for obj in objects if obj.type == "MESH"
+            for vertex in obj.data.vertices
+            for assignment in vertex.groups
+            if armature.data.bones.get(obj.vertex_groups[assignment.group].name)
+            and armature.data.bones[obj.vertex_groups[assignment.group].name].use_deform
+            and assignment.weight > 0.1
+        ),
+        None,
+    )
+    assert target is not None
+    obj, vertex, assignment = target
+    group = obj.vertex_groups[assignment.group]
+    original_weight = float(assignment.weight)
+    group.add([vertex.index], original_weight * 0.5, "REPLACE")
+    try:
+        blender_renderer.enhance_existing_presenter_rig(armature, objects, dimensions, {}, bone_map)
+    except RuntimeError as exc:
+        assert "deform weights sum" in str(exc)
+    else:
+        raise AssertionError("unnormalized marked three-segment rigs must fail closed")
+    group.add([vertex.index], original_weight, "REPLACE")
+
     del armature[hand_refinement.HAND_CONTRACT_KEY]
     try:
         blender_renderer.enhance_existing_presenter_rig(armature, objects, dimensions, {}, bone_map)

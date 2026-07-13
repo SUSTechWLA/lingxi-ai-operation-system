@@ -465,6 +465,26 @@ def _validate_reusable_three_segment_hand_rig(
         violations.append(f"max vertex influences is {weight_stats['maxVertexInfluences']}, expected at most 4")
     if weight_stats["unweightedVertexCount"] != 0:
         violations.append(f"unweighted vertex count is {weight_stats['unweightedVertexCount']}")
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        group_names = {group.index: group.name for group in obj.vertex_groups}
+        for vertex in obj.data.vertices:
+            deform_assignments = [
+                (group_names.get(assignment.group, ""), float(assignment.weight))
+                for assignment in vertex.groups
+                if (bone := armature.data.bones.get(group_names.get(assignment.group, ""))) and bone.use_deform
+            ]
+            if not deform_assignments:
+                violations.append(f"{obj.name} vertex {vertex.index} has no deform-bone assignment")
+                continue
+            if any(weight <= 0.0 for _, weight in deform_assignments):
+                violations.append(f"{obj.name} vertex {vertex.index} has a non-positive deform assignment")
+            if len(deform_assignments) > 4:
+                violations.append(f"{obj.name} vertex {vertex.index} has {len(deform_assignments)} deform influences")
+            total = sum(weight for _, weight in deform_assignments)
+            if abs(total - 1.0) > 1e-4:
+                violations.append(f"{obj.name} vertex {vertex.index} deform weights sum to {total:.6f}")
     modifiers = [
         modifier for obj in objects if obj.type == "MESH"
         for modifier in obj.modifiers
