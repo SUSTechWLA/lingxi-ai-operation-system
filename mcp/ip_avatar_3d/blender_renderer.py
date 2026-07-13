@@ -1596,6 +1596,491 @@ def weighted_region_bounds(
     }
 
 
+def _upstream_nodes(input_socket) -> set[bpy.types.Node]:
+    pending = [link.from_node for link in input_socket.links]
+    found: set[bpy.types.Node] = set()
+    while pending:
+        node = pending.pop()
+        if node in found:
+            continue
+        found.add(node)
+        pending.extend(link.from_node for socket in node.inputs for link in socket.links)
+    return found
+
+
+def _filename_texture_role(node: bpy.types.Node) -> str | None:
+    image = getattr(node, "image", None)
+    if not image:
+        return None
+    name = Path(image.filepath or image.name).name.lower()
+    matches = [role for role in ("metallic", "normal", "roughness") if role in name]
+    if len(matches) > 1:
+        return None
+    if matches:
+        return matches[0]
+    base_tokens = ("basecolor", "base_color", "albedo", "diffuse")
+    return "base_color" if any(token in name for token in base_tokens) else None
+
+
+def _resolve_source_pbr_texture_roles(source_material: bpy.types.Material) -> dict[str, bpy.types.Node]:
+    """Resolve image roles from shader sockets, using filenames only for missing roles."""
+    if not source_material.use_nodes:
+        return {}
+    nodes = source_material.node_tree.nodes
+    principled = next((node for node in nodes if node.type == "BSDF_PRINCIPLED"), None)
+    if not principled:
+        return {}
+
+    linked_inputs = {
+        "base_color": principled.inputs.get("Base Color"),
+        "metallic": principled.inputs.get("Metallic"),
+        "roughness": principled.inputs.get("Roughness"),
+        "normal": principled.inputs.get("Normal"),
+    }
+    resolved: dict[str, bpy.types.Node] = {}
+    used_nodes: set[bpy.types.Node] = set()
+    for role, input_socket in linked_inputs.items():
+        if input_socket is None:
+            continue
+        candidates = [node for node in _upstream_nodes(input_socket) if node.type == "TEX_IMAGE" and node.image]
+        if len(candidates) > 1:
+            names = ", ".join(sorted(node.image.name for node in candidates))
+            raise RuntimeError(f"multiple linked images resolve the {role} PBR role: {names}")
+        if not candidates:
+            continue
+        node = candidates[0]
+        filename_role = _filename_texture_role(node)
+        if filename_role and filename_role != role:
+            raise RuntimeError(
+                f"PBR socket role {role} conflicts with filename role {filename_role}: {node.image.name}"
+            )
+        resolved[role] = node
+        used_nodes.add(node)
+
+    for role in ("base_color", "metallic", "normal", "roughness"):
+        if role in resolved:
+            continue
+        candidates = [
+            node
+            for node in nodes
+            if node.type == "TEX_IMAGE"
+            and node.image
+            and node not in used_nodes
+            and _filename_texture_role(node) == role
+        ]
+        if len(candidates) > 1:
+            names = ", ".join(sorted(node.image.name for node in candidates))
+            raise RuntimeError(f"duplicate filename candidates for the {role} PBR role: {names}")
+        if candidates:
+            resolved[role] = candidates[0]
+            used_nodes.add(candidates[0])
+    return resolved
+
+
+def tune_source_pbr_materials(obj: bpy.types.Object) -> dict[str, Any]:
+    """Keep the source image stack intact while making it predictable for close shots."""
+    tuned_materials: list[str] = []
+    texture_names = {
+        "base_color": "Image Texture - Base Color",
+        "metallic": "Image Texture - Metallic",
+        "normal": "Image Texture - Normal",
+        "roughness": "Image Texture - Roughness",
+    }
+    for source_material in obj.data.materials:
+        if not source_material or not source_material.use_nodes:
+            continue
+        nodes = source_material.node_tree.nodes
+        links = source_material.node_tree.links
+        images = _resolve_source_pbr_texture_roles(source_material)
+        if not set(texture_names).issubset(images) or len(set(images.values())) != len(texture_names):
+            continue
+
+        principled = next((node for node in nodes if node.type == "BSDF_PRINCIPLED"), None)
+        if not principled:
+            continue
+        linked_role_resolution = all(
+            images[role] in _upstream_nodes(principled.inputs[socket_name])
+            for role, socket_name in (
+                ("base_color", "Base Color"),
+                ("metallic", "Metallic"),
+                ("normal", "Normal"),
+                ("roughness", "Roughness"),
+            )
+        )
+        normal_candidates = [node for node in _upstream_nodes(principled.inputs["Normal"]) if node.type == "NORMAL_MAP"]
+        normal_map = normal_candidates[0] if len(normal_candidates) == 1 else None
+        if not normal_map:
+            continue
+        roughness_range = next(
+            (node for node in _upstream_nodes(principled.inputs["Roughness"]) if node.type == "MAP_RANGE"),
+            None,
+        ) or nodes.new("ShaderNodeMapRange")
+
+        resolved_names = {
+            principled: "Principled BSDF",
+            normal_map: "Normal Map",
+            roughness_range: "Roughness Range",
+            **{node: texture_names[role] for role, node in images.items()},
+        }
+        for index, node in enumerate(resolved_names):
+            node.name = f"__IP_PBR_RESOLVED_{index:02d}"
+        for node, target_name in resolved_names.items():
+            collision = nodes.get(target_name)
+            if collision and collision != node:
+                collision.name = f"Unresolved {target_name}"
+            node.name = target_name
+
+        principled.label = "Source PBR - restrained close shot"
+        normal_map.label = "Source tangent normal"
+        normal_map.space = "TANGENT"
+        normal_map.inputs["Strength"].default_value = 0.34
+        for role, node in images.items():
+            node.label = texture_names[role]
+            node.image.colorspace_settings.name = "sRGB" if role == "base_color" else "Non-Color"
+
+        roughness_range.label = "Soft fur and fabric response"
+        if hasattr(roughness_range, "clamp"):
+            roughness_range.clamp = True
+        roughness_range.inputs["From Min"].default_value = 0.0
+        roughness_range.inputs["From Max"].default_value = 1.0
+        roughness_range.inputs["To Min"].default_value = 0.38
+        roughness_range.inputs["To Max"].default_value = 0.76
+
+        def replace_input_link(input_socket, output_socket) -> None:
+            for link in list(input_socket.links):
+                links.remove(link)
+            links.new(output_socket, input_socket)
+
+        replace_input_link(principled.inputs["Base Color"], images["base_color"].outputs["Color"])
+        replace_input_link(principled.inputs["Metallic"], images["metallic"].outputs["Color"])
+        replace_input_link(normal_map.inputs["Color"], images["normal"].outputs["Color"])
+        replace_input_link(principled.inputs["Normal"], normal_map.outputs["Normal"])
+        replace_input_link(roughness_range.inputs["Value"], images["roughness"].outputs["Color"])
+        replace_input_link(principled.inputs["Roughness"], roughness_range.outputs["Result"])
+
+        specular = principled.inputs.get("Specular IOR Level") or principled.inputs.get("Specular")
+        if specular is not None:
+            specular.default_value = 0.28
+        source_material["ip_source_pbr_tuned"] = True
+        source_material["ip_source_pbr_texture_resolution"] = 4096
+        source_material["ip_source_pbr_role_resolution"] = (
+            "socket_links" if linked_role_resolution else "socket_links_with_filename_fallback"
+        )
+        source_material["ip_source_pbr_roles"] = json.dumps(
+            {role: node.image.name for role, node in sorted(images.items())},
+            sort_keys=True,
+        )
+        tuned_materials.append(source_material.name)
+    obj["source_pbr_materials_tuned"] = bool(tuned_materials)
+    obj["source_pbr_material_names"] = json.dumps(tuned_materials)
+    return {"materials": tuned_materials, "count": len(tuned_materials)}
+
+
+def refine_integrated_eye_regions(
+    obj: bpy.types.Object,
+    dimensions: dict[str, Any],
+    head_bounds: dict[str, Any],
+    bone_map: dict[str, str],
+) -> dict[str, int]:
+    """Subdivide the original eye regions once, before any Shape Keys exist."""
+    if obj.get("true_eyelid_topology"):
+        return {
+            side: int(obj.get(f"eyelid_loop_vertex_count_{side}", 0))
+            for side in ("l", "r")
+        }
+    if obj.data.shape_keys:
+        raise RuntimeError("integrated eye refinement must run before creating shape keys")
+
+    width = max(float(head_bounds["width"]), 0.01)
+    depth = max(float(head_bounds["depth"]), 0.01)
+    region_height = max(float(head_bounds["height"]), float(dimensions["height"]) * 0.1)
+    front_limit = float(head_bounds["min"].y) + depth * 0.36
+    object_to_world = obj.matrix_world.copy()
+    descriptors: dict[str, dict[str, Any]] = {}
+    selected_indices: dict[str, set[int]] = {}
+    for side, role in (("l", "eye_l"), ("r", "eye_r")):
+        group_name = bone_map.get(role)
+        group = obj.vertex_groups.get(group_name) if group_name else None
+        if not group:
+            raise RuntimeError(f"integrated eye refinement requires the resolved {role} vertex group")
+        weighted = []
+        for vertex in obj.data.vertices:
+            weight = next(
+                (float(assignment.weight) for assignment in vertex.groups if assignment.group == group.index),
+                0.0,
+            )
+            if weight > 0.015:
+                weighted.append((vertex.index, weight, object_to_world @ vertex.co))
+        if len(weighted) < 24:
+            raise RuntimeError(f"integrated eye refinement found too few {group_name} vertices")
+        total_weight = sum(weight for _, weight, _ in weighted)
+        center_x = sum(float(world.x) * weight for _, weight, world in weighted) / total_weight
+        center_z = sum(float(world.z) * weight for _, weight, world in weighted) / total_weight
+        radius_x = width * 0.16
+        radius_z = region_height * 0.15
+        descriptors[side] = {
+            "center_x": center_x,
+            "center_z": center_z,
+            "radius_x": radius_x,
+            "radius_z": radius_z,
+            "group_name": group_name,
+        }
+        selected_indices[side] = {
+            vertex.index
+            for vertex in obj.data.vertices
+            if float((object_to_world @ vertex.co).y) <= front_limit
+            and (
+                (float((object_to_world @ vertex.co).x) - center_x) / max(radius_x, 1e-6)
+            ) ** 2
+            + (
+                (float((object_to_world @ vertex.co).z) - center_z) / max(radius_z, 1e-6)
+            ) ** 2
+            <= 1.0
+        }
+        if len(selected_indices[side]) < 64:
+            raise RuntimeError(f"integrated eye refinement could not isolate the {side.upper()} eye region")
+
+    mesh = obj.data
+    uv_names_before = [layer.name for layer in mesh.uv_layers]
+    active_uv_name = mesh.uv_layers.active.name if mesh.uv_layers.active else ""
+    if not active_uv_name:
+        raise RuntimeError("integrated eye refinement requires the source UV layer")
+    vertex_count_before = len(mesh.vertices)
+    original_adjacency = {vertex.index: set() for vertex in mesh.vertices}
+    for edge in mesh.edges:
+        left, right = (int(index) for index in edge.vertices)
+        original_adjacency[left].add(right)
+        original_adjacency[right].add(left)
+    original_boundaries = {
+        side: {
+            index
+            for index in selected_indices[side]
+            if any(neighbor not in selected_indices[side] for neighbor in original_adjacency[index])
+        }
+        for side in ("l", "r")
+    }
+    original_boundary_coordinates = {
+        side: [
+            [index, [float(value) for value in mesh.vertices[index].co]]
+            for index in sorted(original_boundaries[side])
+        ]
+        for side in ("l", "r")
+    }
+    selected = selected_indices["l"].union(selected_indices["r"])
+    selected_boundary = original_boundaries["l"].union(original_boundaries["r"])
+
+    def collect_vertex_uvs(indices: set[int]) -> dict[int, list[list[float]]]:
+        collected = {index: [] for index in indices}
+        uv_layer = mesh.uv_layers[active_uv_name]
+        for polygon in mesh.polygons:
+            for loop_index in polygon.loop_indices:
+                vertex_index = int(mesh.loops[loop_index].vertex_index)
+                if vertex_index not in collected:
+                    continue
+                uv = uv_layer.data[loop_index].uv
+                collected[vertex_index].append([float(uv.x), float(uv.y)])
+        return {index: sorted(values) for index, values in collected.items()}
+
+    uv_guard_candidates = [
+        vertex.index
+        for vertex in mesh.vertices
+        if vertex.index not in selected
+        and all(neighbor not in selected for neighbor in original_adjacency[vertex.index])
+    ]
+    uv_guard_indices = set(uv_guard_candidates[:64])
+    if len(uv_guard_indices) < 32:
+        raise RuntimeError("integrated eye refinement could not establish an untouched UV guard")
+    uv_guard_before = collect_vertex_uvs(uv_guard_indices)
+
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    bm.verts.index_update()
+    bm.edges.index_update()
+    bm.faces.index_update()
+    region_edges = [
+        edge
+        for edge in bm.edges
+        if edge.verts[0].index in selected and edge.verts[1].index in selected
+        and edge.verts[0].index not in selected_boundary
+        and edge.verts[1].index not in selected_boundary
+    ]
+    if len(region_edges) < 96:
+        bm.free()
+        raise RuntimeError("integrated eye refinement found too few local edges")
+    bmesh.ops.subdivide_edges(
+        bm,
+        edges=region_edges,
+        cuts=1,
+        use_grid_fill=True,
+    )
+    bm.normal_update()
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    bm.verts.index_update()
+    bm.edges.index_update()
+    bm.faces.index_update()
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update(calc_edges=True)
+    if [layer.name for layer in mesh.uv_layers] != uv_names_before or not mesh.uv_layers.active:
+        raise RuntimeError("integrated eye refinement did not preserve source UV layers")
+    for side in ("l", "r"):
+        for index, coordinate in original_boundary_coordinates[side]:
+            if any(abs(float(mesh.vertices[index].co[axis]) - coordinate[axis]) > 1e-9 for axis in range(3)):
+                raise RuntimeError(f"integrated eye refinement moved the {side.upper()} eye boundary")
+    uv_guard_after = collect_vertex_uvs(uv_guard_indices)
+    if any(
+        len(uv_guard_after[index]) != len(uv_guard_before[index])
+        or any(
+            abs(uv_guard_after[index][item][axis] - uv_guard_before[index][item][axis]) > 1e-7
+            for item in range(len(uv_guard_before[index]))
+            for axis in range(2)
+        )
+        for index in uv_guard_indices
+    ):
+        raise RuntimeError("integrated eye refinement changed untouched source UV loop data")
+
+    world_coordinates = [object_to_world @ vertex.co for vertex in mesh.vertices]
+    adjacency = {vertex.index: set() for vertex in mesh.vertices}
+    for edge in mesh.edges:
+        left, right = (int(index) for index in edge.vertices)
+        adjacency[left].add(right)
+        adjacency[right].add(left)
+    counts: dict[str, int] = {}
+    for side, descriptor in descriptors.items():
+        center_x = descriptor["center_x"]
+        center_z = descriptor["center_z"]
+        radius_x = descriptor["radius_x"]
+        radius_z = descriptor["radius_z"]
+        eye_group = obj.vertex_groups[str(descriptor["group_name"])]
+
+        def normalized_radius(index: int) -> float:
+            world = world_coordinates[index]
+            nx = (float(world.x) - center_x) / max(radius_x, 1e-6)
+            nz = (float(world.z) - center_z) / max(radius_z, 1e-6)
+            return math.sqrt(nx * nx + nz * nz)
+
+        region = {
+            vertex.index
+            for vertex in mesh.vertices
+            if float(world_coordinates[vertex.index].y) <= front_limit
+            and normalized_radius(vertex.index) <= 1.0
+        }
+        weighted_region = {
+            index
+            for index in region
+            if next(
+                (
+                    float(assignment.weight)
+                    for assignment in mesh.vertices[index].groups
+                    if assignment.group == eye_group.index
+                ),
+                0.0,
+            )
+            >= 0.012
+        }
+        active = {
+            index
+            for index in weighted_region
+            if normalized_radius(index) < 0.84
+            and all(neighbor in region for neighbor in adjacency[index])
+            and index not in original_boundaries[side]
+        }
+        boundary = original_boundaries[side]
+        upper = {index for index in active if float(world_coordinates[index].z) >= center_z}
+        lower = active.difference(upper)
+        upper_contact = {
+            index
+            for index in upper
+            if abs((float(world_coordinates[index].z) - center_z) / max(radius_z, 1e-6)) <= 0.46
+            and abs((float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6)) <= 0.78
+        }
+        lower_contact = {
+            index
+            for index in lower
+            if abs((float(world_coordinates[index].z) - center_z) / max(radius_z, 1e-6)) <= 0.46
+            and abs((float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6)) <= 0.78
+        }
+        available_lower = set(lower_contact)
+        contact_pairs: list[list[int]] = []
+        for upper_index in sorted(
+            upper_contact,
+            key=lambda index: (
+                (float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6),
+                index,
+            ),
+        ):
+            if not available_lower:
+                break
+            upper_x = (float(world_coordinates[upper_index].x) - center_x) / max(radius_x, 1e-6)
+            lower_index = min(
+                available_lower,
+                key=lambda index: (
+                    abs(
+                        (float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6)
+                        - upper_x
+                    ),
+                    (float(world_coordinates[index].x) - center_x) / max(radius_x, 1e-6),
+                    index,
+                ),
+            )
+            available_lower.remove(lower_index)
+            contact_pairs.append([upper_index, lower_index])
+        contact_pairs.sort(
+            key=lambda pair: (
+                (float(world_coordinates[pair[0]].x) + float(world_coordinates[pair[1]].x)) * 0.5,
+                pair[0],
+                pair[1],
+            )
+        )
+        if min(len(upper), len(lower)) < 32 or len(contact_pairs) < 48:
+            raise RuntimeError(
+                f"integrated eye refinement produced incomplete {side.upper()} lids: "
+                f"upper={len(upper)}, lower={len(lower)}, "
+                f"contact_pairs={len(contact_pairs)}"
+            )
+        obj[f"eyelid_center_x_{side}"] = center_x
+        obj[f"eyelid_center_z_{side}"] = center_z
+        obj[f"eyelid_radius_x_{side}"] = radius_x
+        obj[f"eyelid_radius_z_{side}"] = radius_z
+        obj[f"eyelid_loop_vertex_count_{side}"] = len(contact_pairs) * 2
+        obj[f"eyelid_contact_pair_count_{side}"] = len(contact_pairs)
+        obj[f"eyelid_region_vertex_count_{side}"] = len(active)
+        obj[f"eyelid_upper_vertex_count_{side}"] = len(upper)
+        obj[f"eyelid_lower_vertex_count_{side}"] = len(lower)
+        obj[f"eyelid_boundary_indices_{side}"] = json.dumps(sorted(boundary))
+        obj[f"eyelid_boundary_basis_coordinates_{side}"] = json.dumps(
+            original_boundary_coordinates[side]
+        )
+        obj[f"eyelid_upper_indices_{side}"] = json.dumps(sorted(upper))
+        obj[f"eyelid_lower_indices_{side}"] = json.dumps(sorted(lower))
+        obj[f"eyelid_upper_contact_indices_{side}"] = json.dumps(sorted(upper_contact))
+        obj[f"eyelid_lower_contact_indices_{side}"] = json.dumps(sorted(lower_contact))
+        obj[f"eyelid_contact_pairs_{side}"] = json.dumps(contact_pairs)
+        counts[side] = len(active)
+
+    obj["true_eyelid_topology"] = True
+    obj["eyelid_topology_mode"] = "integrated_source_face"
+    obj["eye_region_subdivision_level"] = 1
+    obj["eye_region_subdivision_added_vertices"] = len(mesh.vertices) - vertex_count_before
+    obj["eye_region_boundary_fixed"] = True
+    obj["eye_region_uv_preserved"] = True
+    obj["eye_region_uv_guard_data"] = json.dumps(
+        {
+            "layer": active_uv_name,
+            "vertices": [
+                {"vertex": index, "uvs": uv_guard_before[index]}
+                for index in sorted(uv_guard_indices)
+            ],
+        }
+    )
+    return counts
+
+
 def _source_vertex_luminance(obj: bpy.types.Object) -> dict[int, float]:
     uv_layer = obj.data.uv_layers.active
     if not uv_layer:
@@ -2017,6 +2502,7 @@ def retopologize_source_face(
     if not head_bounds:
         raise RuntimeError("source face retopology requires a Head-weighted mesh region")
     if existing_face:
+        tune_source_pbr_materials(existing_face)
         return {"mouth": existing_face, **create_integrated_oral_interior(existing_face, armature, bone_map, dimensions)}
 
     exported_face = next(
@@ -2036,6 +2522,7 @@ def retopologize_source_face(
     }
     required_internal_names = {"IP_OralCavity", "IP_UpperTeeth", "IP_LowerTeeth", "IP_Tongue"}
     if exported_face and required_internal_names.issubset(exported_internals):
+        tune_source_pbr_materials(exported_face)
         center_x = (float(head_bounds["min"].x) + float(head_bounds["max"].x)) * 0.5
         center_z = float(dimensions["min"].z) + float(dimensions["height"]) * mouth_height_ratio
         radius_x = float(head_bounds["width"]) * 0.170 * max(0.65, min(1.45, float(mouth_scale or 1.0)))
@@ -2081,6 +2568,7 @@ def retopologize_source_face(
     if not candidates:
         raise RuntimeError("source face retopology could not identify the original head mesh")
     source_face = max(candidates, key=lambda obj: len(eligible.get(obj.name, set())))
+    tune_source_pbr_materials(source_face)
     if source_face.data.shape_keys:
         raise RuntimeError("source face topology must be integrated before creating shape keys")
 
@@ -2122,6 +2610,7 @@ def retopologize_source_face(
     bm.to_mesh(mesh)
     bm.free()
     mesh.update(calc_edges=True)
+    refine_integrated_eye_regions(source_face, dimensions, head_bounds, bone_map)
 
     upper, lower, boundary_edge_count = _mouth_boundary_vertices(
         source_face,
@@ -2388,7 +2877,10 @@ def create_source_mesh_visemes(
                 co.z -= height * 0.0125 * lower_weight * center_weight
                 co.y += depth * 0.0040 * max(upper_weight, lower_weight) * center_weight
             elif shape_name == "Mouth_E":
-                co.x += math.copysign(width * 0.0055 * weight * (0.35 + corner_weight * 0.65), relative_x or 1.0)
+                co.x += math.copysign(
+                    width * 0.0028 * weight * (0.28 + corner_weight * 0.72),
+                    relative_x or 1.0,
+                )
                 co.z += height * 0.0010 * upper_weight * center_weight
                 co.z -= height * 0.0034 * lower_weight * center_weight
             elif shape_name == "Mouth_O":
@@ -2402,10 +2894,11 @@ def create_source_mesh_visemes(
                 co.z -= height * 0.0072 * lower_weight * center_weight
                 co.y += depth * 0.0035 * max(upper_weight, lower_weight) * center_weight
             elif shape_name == "Mouth_MBP":
-                co.x -= relative_x * 0.012 * weight
+                co.x -= relative_x * 0.008 * weight
+                co.z += (center_z - float(co.z)) * 0.08 * max(upper_weight, lower_weight) * center_weight
             elif shape_name == "Mouth_Smile":
-                co.x += math.copysign(width * 0.0032 * weight * corner_weight, relative_x or 1.0)
-                co.z += height * 0.0036 * weight * (corner_weight - 0.10)
+                co.x += math.copysign(width * 0.0018 * weight * corner_weight, relative_x or 1.0)
+                co.z += height * 0.0022 * max(upper_weight, lower_weight) * corner_weight
             elif shape_name == "Mouth_Frown":
                 co.z -= height * 0.0038 * weight * (corner_weight - 0.08)
             elif shape_name == "Mouth_Surprise":
@@ -2542,6 +3035,10 @@ def create_source_mesh_visemes(
     mouth["mouth_radius_x"] = radius_x
     mouth["head_region_width"] = width
     mouth["head_region_depth"] = depth
+    if integrated_topology:
+        mouth["mouth_corner_lateral_limit"] = width * 0.0035
+        mouth["mouth_corner_falloff_rings"] = 2
+        mouth["mouth_closed_smile_mode"] = "restrained_source_seam"
     install_viseme_api()
     return {"mouth": mouth}
 
@@ -2596,6 +3093,52 @@ def add_rich_source_face_shapes(
     object_to_world = face_mesh.matrix_world.copy()
     world_to_object = object_to_world.inverted()
     basis = shape_keys.key_blocks["Basis"]
+    eyelid_regions: dict[str, dict[str, Any]] = {}
+    if face_mesh.get("true_eyelid_topology"):
+        for suffix in ("L", "R"):
+            side = suffix.lower()
+            try:
+                upper = set(json.loads(str(face_mesh[f"eyelid_upper_indices_{side}"])))
+                lower = set(json.loads(str(face_mesh[f"eyelid_lower_indices_{side}"])))
+                upper_contact = set(json.loads(str(face_mesh[f"eyelid_upper_contact_indices_{side}"])))
+                lower_contact = set(json.loads(str(face_mesh[f"eyelid_lower_contact_indices_{side}"])))
+                contact_pairs = [
+                    (int(pair[0]), int(pair[1]))
+                    for pair in json.loads(str(face_mesh[f"eyelid_contact_pairs_{side}"]))
+                ]
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"integrated {suffix} eyelid topology metadata is invalid") from exc
+            center_x = float(face_mesh[f"eyelid_center_x_{side}"])
+            center_z = float(face_mesh[f"eyelid_center_z_{side}"])
+            radius_x = float(face_mesh[f"eyelid_radius_x_{side}"])
+            radius_z = float(face_mesh[f"eyelid_radius_z_{side}"])
+            contact_targets: dict[int, Vector] = {}
+            for upper_index, lower_index in contact_pairs:
+                upper_world = object_to_world @ basis.data[upper_index].co
+                lower_world = object_to_world @ basis.data[lower_index].co
+                pair_x = (float(upper_world.x) + float(lower_world.x)) * 0.5
+                normalized_x = max(-1.0, min(1.0, (pair_x - center_x) / max(radius_x, 1e-6)))
+                target = Vector(
+                    (
+                        pair_x,
+                        min(float(upper_world.y), float(lower_world.y)) - depth * 0.0015,
+                        center_z - radius_z * 0.055 + radius_z * 0.095 * normalized_x * normalized_x,
+                    )
+                )
+                contact_targets[upper_index] = target
+                contact_targets[lower_index] = target
+            eyelid_regions[suffix] = {
+                "upper": upper,
+                "lower": lower,
+                "active": upper.union(lower),
+                "upper_contact": upper_contact,
+                "lower_contact": lower_contact,
+                "center_x": center_x,
+                "center_z": center_z,
+                "radius_x": radius_x,
+                "radius_z": radius_z,
+                "contact_targets": contact_targets,
+            }
 
     def region_weight(
         world: Vector,
@@ -2636,7 +3179,38 @@ def add_rich_source_face_shapes(
             blink_name = f"Eye_Blink.{suffix}"
             wide_name = f"Eye_Wide.{suffix}"
             eye_weight = eye_weights[suffix]
-            if eye_weight > 0.0:
+            eyelid = eyelid_regions.get(suffix)
+            if eyelid and index in eyelid["active"]:
+                is_upper = index in eyelid["upper"]
+                radius_x = max(float(eyelid["radius_x"]), 1e-6)
+                radius_z = max(float(eyelid["radius_z"]), 1e-6)
+                normalized_x = max(
+                    -1.0,
+                    min(1.0, (float(world.x) - float(eyelid["center_x"])) / radius_x),
+                )
+                normalized_z = (float(world.z) - float(eyelid["center_z"])) / radius_z
+                radial = min(1.0, math.sqrt(normalized_x * normalized_x + normalized_z * normalized_z))
+                fold_weight = max(0.0, 1.0 - (radial / 0.84) ** 3)
+                contact_target = eyelid["contact_targets"].get(index)
+                contact_z = (
+                    float(eyelid["center_z"])
+                    - radius_z * 0.055
+                    + radius_z * 0.095 * normalized_x * normalized_x
+                )
+                blink_world = world.copy()
+                if contact_target is not None:
+                    blink_world = contact_target.copy()
+                else:
+                    contribution = 0.88 if is_upper else 0.62
+                    blink_world.z += (contact_z - float(world.z)) * contribution * fold_weight
+                    blink_world.y -= depth * 0.0035 * fold_weight
+                created[blink_name].data[index].co = world_to_object @ blink_world
+                wide_world = world.copy()
+                wide_world.z += (1.0 if is_upper else -1.0) * height * 0.0045 * fold_weight
+                created[wide_name].data[index].co = world_to_object @ wide_world
+                affected[blink_name] += 1
+                affected[wide_name] += 1
+            elif not eyelid and eye_weight > 0.0:
                 blink_world = world.copy()
                 blink_world.z += (eye_center_z - float(world.z)) * 0.76 * eye_weight
                 blink_world.y -= depth * 0.004 * eye_weight
@@ -2717,6 +3291,10 @@ def add_rich_source_face_shapes(
     face_mesh["eye_offset_x"] = eye_offset_x
     face_mesh["eye_radius_x"] = width * 0.115
     face_mesh["eye_radius_z"] = region_height * 0.12
+    if eyelid_regions:
+        face_mesh["blink_upper_lid_contribution"] = 0.88
+        face_mesh["blink_lower_lid_contribution"] = 0.62
+        face_mesh["blink_contact_mode"] = "shared_curved_line"
     return affected
 
 

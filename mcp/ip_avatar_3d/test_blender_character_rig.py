@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -82,6 +83,58 @@ def hand_relative_digit_length(armature, bone_map, side: str, digit: int) -> flo
     return length
 
 
+def object_property_indices(obj, name: str) -> list[int]:
+    value = obj.get(name)
+    assert isinstance(value, str) and value, name
+    indices = json.loads(value)
+    assert isinstance(indices, list) and indices, name
+    return [int(index) for index in indices]
+
+
+def shape_key_world_coordinates(obj, shape_name: str, indices: list[int]):
+    key = obj.data.shape_keys.key_blocks[shape_name]
+    return [obj.matrix_world @ key.data[index].co for index in indices]
+
+
+def blink_contact_gap(face_mesh, side: str) -> float:
+    suffix = side.lower()
+    pairs = json.loads(str(face_mesh[f"eyelid_contact_pairs_{suffix}"]))
+    assert pairs and all(len(pair) == 2 for pair in pairs)
+    key = face_mesh.data.shape_keys.key_blocks[f"Eye_Blink.{side.upper()}"]
+    return max(
+        (
+            (face_mesh.matrix_world @ key.data[int(upper_index)].co)
+            - (face_mesh.matrix_world @ key.data[int(lower_index)].co)
+        ).length
+        for upper_index, lower_index in pairs
+    )
+
+
+def vertex_uv_coordinates(obj, layer_name: str, vertex_index: int) -> list[list[float]]:
+    layer = obj.data.uv_layers[layer_name]
+    coordinates = [
+        [float(layer.data[loop_index].uv.x), float(layer.data[loop_index].uv.y)]
+        for polygon in obj.data.polygons
+        for loop_index in polygon.loop_indices
+        if int(obj.data.loops[loop_index].vertex_index) == vertex_index
+    ]
+    return sorted(coordinates)
+
+
+def mouth_open_gap(face_mesh, shape_name: str) -> float:
+    upper = shape_key_world_coordinates(
+        face_mesh,
+        shape_name,
+        object_property_indices(face_mesh, "mouth_upper_boundary_indices"),
+    )
+    lower = shape_key_world_coordinates(
+        face_mesh,
+        shape_name,
+        object_property_indices(face_mesh, "mouth_lower_boundary_indices"),
+    )
+    return max(float(point.z) for point in upper) - min(float(point.z) for point in lower)
+
+
 def test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers() -> None:
     character_objects, _, armature, rig_stats, _, _ = load_enhanced_fbx_character()
 
@@ -97,6 +150,32 @@ def test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers(
         if material and material.use_nodes
         for node in material.node_tree.nodes
     )
+    source_material = next(
+        material
+        for obj in character_objects
+        for material in obj.data.materials
+        if material
+        and material.use_nodes
+        and {
+            "texture_pbr_20250901.png",
+            "texture_pbr_20250901_metallic.png",
+            "texture_pbr_20250901_normal.png",
+            "texture_pbr_20250901_roughness.png",
+        }.issubset(
+            {
+                node.image.name
+                for node in material.node_tree.nodes
+                if node.type == "TEX_IMAGE" and node.image
+            }
+        )
+    )
+    roles = blender_renderer._resolve_source_pbr_texture_roles(source_material)
+    assert {role: node.image.name for role, node in roles.items()} == {
+        "base_color": "texture_pbr_20250901.png",
+        "metallic": "texture_pbr_20250901_metallic.png",
+        "normal": "texture_pbr_20250901_normal.png",
+        "roughness": "texture_pbr_20250901_roughness.png",
+    }
 
 
 def test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights() -> None:
@@ -161,6 +240,21 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
     assert face_mesh["mouth_upper_boundary_count"] >= 8
     assert face_mesh["mouth_lower_boundary_count"] >= 8
     assert face_mesh["source_texture_face_preserved"] is True
+    assert face_mesh["true_eyelid_topology"] is True
+    assert face_mesh["eyelid_topology_mode"] == "integrated_source_face"
+    assert face_mesh["eye_region_subdivision_level"] == 1
+    assert face_mesh["eye_region_boundary_fixed"] is True
+    assert face_mesh["eye_region_uv_preserved"] is True
+    assert face_mesh["eyelid_loop_vertex_count_l"] >= 96
+    assert face_mesh["eyelid_loop_vertex_count_r"] >= 96
+    assert face_mesh["eyelid_loop_vertex_count_l"] == face_mesh["eyelid_contact_pair_count_l"] * 2
+    assert face_mesh["eyelid_loop_vertex_count_r"] == face_mesh["eyelid_contact_pair_count_r"] * 2
+    assert face_mesh["eyelid_region_vertex_count_l"] >= 96
+    assert face_mesh["eyelid_region_vertex_count_r"] >= 96
+    assert face_mesh["eyelid_upper_vertex_count_l"] >= 32
+    assert face_mesh["eyelid_upper_vertex_count_r"] >= 32
+    assert face_mesh["eyelid_lower_vertex_count_l"] >= 32
+    assert face_mesh["eyelid_lower_vertex_count_r"] >= 32
 
     forbidden_overlays = {
         "IP_UpperLip", "IP_LowerLip",
@@ -220,6 +314,116 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
         (basis.data[index].co - blink.data[index].co).length > 1e-5
         for index in range(len(basis.data))
     ) >= 12
+    assert blink_contact_gap(face_mesh, "L") <= dimensions["height"] * 0.002
+    assert blink_contact_gap(face_mesh, "R") <= dimensions["height"] * 0.002
+
+    for side in ("l", "r"):
+        boundary = object_property_indices(face_mesh, f"eyelid_boundary_indices_{side}")
+        stored_boundary = json.loads(str(face_mesh[f"eyelid_boundary_basis_coordinates_{side}"]))
+        assert {int(item[0]) for item in stored_boundary} == set(boundary)
+        for index, coordinate in stored_boundary:
+            assert all(
+                abs(float(basis.data[int(index)].co[axis]) - float(coordinate[axis])) < 1e-8
+                for axis in range(3)
+            )
+        own_blink = face_mesh.data.shape_keys.key_blocks[f"Eye_Blink.{side.upper()}"]
+        other_blink = face_mesh.data.shape_keys.key_blocks[f"Eye_Blink.{'R' if side == 'l' else 'L'}"]
+        assert all((basis.data[index].co - own_blink.data[index].co).length < 1e-8 for index in boundary)
+        active = (
+            object_property_indices(face_mesh, f"eyelid_upper_indices_{side}")
+            + object_property_indices(face_mesh, f"eyelid_lower_indices_{side}")
+        )
+        eye_group = face_mesh.vertex_groups[f"Eye.{side.upper()}"]
+        assert all(eye_group.weight(index) >= 0.012 for index in active)
+        assert any((basis.data[index].co - own_blink.data[index].co).length > 1e-5 for index in active)
+        assert all((basis.data[index].co - other_blink.data[index].co).length < 1e-8 for index in active)
+        pairs = json.loads(str(face_mesh[f"eyelid_contact_pairs_{side}"]))
+        assert len({int(pair[0]) for pair in pairs}) == len(pairs)
+        assert len({int(pair[1]) for pair in pairs}) == len(pairs)
+        pair_centers = [
+            (
+                float((face_mesh.matrix_world @ basis.data[int(upper)].co).x)
+                + float((face_mesh.matrix_world @ basis.data[int(lower)].co).x)
+            )
+            * 0.5
+            for upper, lower in pairs
+        ]
+        assert pair_centers == sorted(pair_centers)
+
+    uv_evidence = json.loads(str(face_mesh["eye_region_uv_guard_data"]))
+    assert uv_evidence["layer"] == face_mesh.data.uv_layers.active.name
+    assert len(uv_evidence["vertices"]) >= 32
+    for record in uv_evidence["vertices"]:
+        actual = vertex_uv_coordinates(face_mesh, uv_evidence["layer"], int(record["vertex"]))
+        expected_uvs = sorted(record["uvs"])
+        assert len(actual) == len(expected_uvs)
+        assert all(
+            abs(actual[index][axis] - float(expected_uvs[index][axis])) < 1e-7
+            for index in range(len(actual))
+            for axis in range(2)
+        )
+
+    corner_indices = [
+        index
+        for index in (
+            object_property_indices(face_mesh, "mouth_upper_boundary_indices")
+            + object_property_indices(face_mesh, "mouth_lower_boundary_indices")
+        )
+        if abs(
+            float((face_mesh.matrix_world @ basis.data[index].co).x)
+            - float(face_mesh["mouth_center_x"])
+        ) >= float(face_mesh["mouth_radius_x"]) * 0.70
+    ]
+    assert corner_indices
+    maximum_corner_shift = float(face_mesh["head_region_width"]) * 0.0035
+    for shape_name in ("Mouth_Smile", "Mouth_E", "Mouth_MBP"):
+        shape = face_mesh.data.shape_keys.key_blocks[shape_name]
+        lateral_shift = max(
+            abs(
+                float((face_mesh.matrix_world @ shape.data[index].co).x)
+                - float((face_mesh.matrix_world @ basis.data[index].co).x)
+            )
+            for index in corner_indices
+        )
+        assert lateral_shift <= maximum_corner_shift, (shape_name, lateral_shift, maximum_corner_shift)
+    assert mouth_open_gap(face_mesh, "Mouth_A") > mouth_open_gap(face_mesh, "Mouth_MBP") + dimensions["height"] * 0.003
+
+    source_material = next(
+        material
+        for material in face_mesh.data.materials
+        if material
+        and material.use_nodes
+        and material.node_tree.nodes.get("Image Texture - Base Color")
+    )
+    nodes = source_material.node_tree.nodes
+    base_color = nodes.get("Image Texture - Base Color")
+    metallic = nodes.get("Image Texture - Metallic")
+    normal_image = nodes.get("Image Texture - Normal")
+    roughness = nodes.get("Image Texture - Roughness")
+    normal_map = nodes.get("Normal Map")
+    principled = nodes.get("Principled BSDF")
+    assert all((base_color, metallic, normal_image, roughness, normal_map, principled))
+    assert base_color.image.name == "texture_pbr_20250901.png"
+    assert metallic.image.name == "texture_pbr_20250901_metallic.png"
+    assert normal_image.image.name == "texture_pbr_20250901_normal.png"
+    assert roughness.image.name == "texture_pbr_20250901_roughness.png"
+    assert all(node.image.size[0] == 4096 and node.image.size[1] == 4096 for node in (base_color, metallic, normal_image, roughness))
+    assert base_color.image.colorspace_settings.name == "sRGB"
+    assert metallic.image.colorspace_settings.name == "Non-Color"
+    assert normal_image.image.colorspace_settings.name == "Non-Color"
+    assert roughness.image.colorspace_settings.name == "Non-Color"
+    assert normal_image.outputs["Color"].is_linked
+    assert normal_map.outputs["Normal"].is_linked
+    assert metallic.outputs["Color"].is_linked
+    assert roughness.outputs["Color"].is_linked
+    assert principled.inputs["Metallic"].is_linked
+    assert principled.inputs["Roughness"].is_linked
+    assert principled.inputs["Normal"].is_linked
+    assert 0.20 <= normal_map.inputs["Strength"].default_value <= 0.50
+    specular_input = principled.inputs.get("Specular IOR Level") or principled.inputs.get("Specular")
+    assert specular_input is not None and 0.20 <= specular_input.default_value <= 0.35
+    assert not any(node.type in {"BUMP", "TEX_NOISE"} for node in nodes)
+    assert source_material["ip_source_pbr_role_resolution"] == "socket_links"
 
 
 def test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face() -> None:
