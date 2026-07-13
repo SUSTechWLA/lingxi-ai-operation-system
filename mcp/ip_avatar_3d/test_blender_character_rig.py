@@ -80,7 +80,7 @@ def test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers(
 
 def test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights() -> None:
     character_objects, _, armature, rig_stats, bone_map, _ = load_enhanced_fbx_character()
-    bones = {bone.name for bone in armature.data.bones}
+    deform_bones = {bone.name for bone in armature.data.bones if bone.use_deform}
     expected = {
         f"Finger_{digit:02d}_{segment}.{side}"
         for side in ("L", "R")
@@ -88,7 +88,7 @@ def test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights() -
         for segment in ("Proximal", "Middle", "Distal")
     }
 
-    assert expected.issubset(bones)
+    assert expected.issubset(deform_bones)
     assert rig_stats["fingerRigEnhanced"] is True
     assert rig_stats["fingerBoneCount"] == 18
     assert rig_stats["handDetailAddedVertices"] > 0

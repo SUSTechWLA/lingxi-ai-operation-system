@@ -20,11 +20,24 @@ import blender_renderer
 from test_blender_character_rig import load_enhanced_fbx_character
 
 
+SUPPORT_OFFSET = 0.045
+SUPPORT_BAND_TOLERANCE_RATIO = 0.02
+MINIMUM_SUPPORT_BAND_EDGES = 3
+
+
 def digit_roles(side: str, digit: int) -> tuple[str, str, str]:
     return (
         f"finger_{digit}_{side}",
         f"finger_{digit}_mid_{side}",
         f"finger_{digit}_tip_{side}",
+    )
+
+
+def expected_digit_bone_names(side: str, digit: int) -> tuple[str, str, str]:
+    suffix = side.upper()
+    return tuple(
+        f"Finger_{digit:02d}_{segment}.{suffix}"
+        for segment in ("Proximal", "Middle", "Distal")
     )
 
 
@@ -34,11 +47,11 @@ def world_tip(armature, bone_map, side: str, digit: int):
 
 
 def digit_chain_length(armature, bone_map, side: str, digit: int) -> float:
-    return sum(
-        armature.data.bones[bone_map[role]].length
-        for role in digit_roles(side, digit)
-        if role in bone_map
-    )
+    roles = digit_roles(side, digit)
+    missing = [role for role in roles if role not in bone_map]
+    if missing:
+        raise ValueError(f"{side} digit {digit} is missing required chain roles: {', '.join(missing)}")
+    return sum(armature.data.bones[bone_map[role]].length for role in roles)
 
 
 def sample_action_tips(armature, bone_map, action_name: str, frame: int = 30):
@@ -76,33 +89,164 @@ def sample_single_digit_curl(armature, bone_map, side: str, selected: int):
     return before, after
 
 
-def _weight_violations(objects) -> list[str]:
+def _deform_assignments(obj, vertex, armature, group_names=None):
+    group_names = group_names or {group.index: group.name for group in obj.vertex_groups}
+    for assignment in vertex.groups:
+        group_name = group_names.get(assignment.group)
+        bone = armature.data.bones.get(group_name) if group_name else None
+        if bone and bone.use_deform:
+            yield group_name, float(assignment.weight)
+
+
+def _weight_violations(objects, armature) -> list[str]:
     violations: list[str] = []
     for obj in objects:
         if obj.type != "MESH":
             continue
+        group_names = {group.index: group.name for group in obj.vertex_groups}
+        non_positive_by_bone: dict[str, int] = {}
+        non_positive_vertices: set[int] = set()
         for vertex in obj.data.vertices:
-            positive = [assignment for assignment in vertex.groups if assignment.weight > 1e-5]
-            total = sum(assignment.weight for assignment in positive)
+            assignments = list(_deform_assignments(obj, vertex, armature, group_names))
+            positive = [(name, weight) for name, weight in assignments if weight > 0.0]
+            non_positive = [name for name, weight in assignments if weight <= 0.0]
             if not positive:
-                violations.append(f"{obj.name} vertex {vertex.index} has no deform weights")
-            elif len(positive) > 4:
+                violations.append(f"{obj.name} vertex {vertex.index} has no positive deform-bone assignment")
+            if non_positive:
+                non_positive_vertices.add(vertex.index)
+                for name in non_positive:
+                    non_positive_by_bone[name] = non_positive_by_bone.get(name, 0) + 1
+            if len(assignments) > 4:
                 violations.append(
-                    f"{obj.name} vertex {vertex.index} has {len(positive)} influences, expected at most 4"
+                    f"{obj.name} vertex {vertex.index} has {len(assignments)} deform influences, "
+                    "expected at most 4"
                 )
-            elif abs(total - 1.0) > 1e-4:
+            total = sum(weight for _, weight in assignments)
+            if abs(total - 1.0) > 1e-4:
                 violations.append(
                     f"{obj.name} vertex {vertex.index} weights sum to {total:.6f}, expected 1.0"
                 )
+        if non_positive_by_bone:
+            counts = ", ".join(
+                f"{name}={count}" for name, count in sorted(non_positive_by_bone.items())
+            )
+            violations.append(
+                f"{obj.name} has {sum(non_positive_by_bone.values())} non-positive deform assignments "
+                f"across {len(non_positive_vertices)} vertices: {counts}"
+            )
     return violations
+
+
+def _support_band_component_edges(objects, armature, chain_names, plane_point, axis, tolerance: float) -> int:
+    largest_component = 0
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        group_names = {group.index: group.name for group in obj.vertex_groups}
+        near_plane = set()
+        for vertex in obj.data.vertices:
+            digit_weight = sum(
+                weight
+                for bone_name, weight in _deform_assignments(obj, vertex, armature, group_names)
+                if bone_name in chain_names
+            )
+            world = obj.matrix_world @ vertex.co
+            if digit_weight > 1e-5 and abs((world - plane_point).dot(axis)) <= tolerance:
+                near_plane.add(vertex.index)
+        adjacency: dict[int, set[int]] = {}
+        for edge in obj.data.edges:
+            first, second = edge.vertices
+            if first not in near_plane or second not in near_plane:
+                continue
+            adjacency.setdefault(first, set()).add(second)
+            adjacency.setdefault(second, set()).add(first)
+        visited: set[int] = set()
+        for start in adjacency:
+            if start in visited:
+                continue
+            stack = [start]
+            component_vertices: set[int] = set()
+            while stack:
+                current = stack.pop()
+                if current in component_vertices:
+                    continue
+                component_vertices.add(current)
+                visited.add(current)
+                stack.extend(adjacency[current] - component_vertices)
+            component_edges = sum(len(adjacency[vertex]) for vertex in component_vertices) // 2
+            # A support cut must form a ring, not merely leave a few nearby edges.
+            if component_edges >= len(component_vertices):
+                largest_component = max(largest_component, component_edges)
+    return largest_component
+
+
+def _mesh_support_band_evidence(objects, armature, bone_map) -> tuple[int, list[str]]:
+    support_bands = 0
+    violations: list[str] = []
+    for side in ("l", "r"):
+        for digit in (1, 2, 3):
+            roles = digit_roles(side, digit)
+            missing = [role for role in roles if role not in bone_map]
+            if missing:
+                violations.append(
+                    f"{side} digit {digit} has no measurable joint support bands; missing {', '.join(missing)}"
+                )
+                continue
+            proximal, middle, distal = (armature.data.bones[bone_map[role]] for role in roles)
+            base = armature.matrix_world @ proximal.head_local
+            tip = armature.matrix_world @ distal.tail_local
+            chain_length = (tip - base).length
+            if chain_length <= 1e-5:
+                violations.append(f"{side} digit {digit} has a zero-length chain")
+                continue
+            axis = (tip - base).normalized()
+            chain_names = {bone.name for bone in (proximal, middle, distal)}
+            tolerance = chain_length * SUPPORT_BAND_TOLERANCE_RATIO
+            joints = (armature.matrix_world @ proximal.tail_local, armature.matrix_world @ middle.tail_local)
+            for joint_index, joint in enumerate(joints, start=1):
+                for offset in (-SUPPORT_OFFSET, SUPPORT_OFFSET):
+                    plane_point = joint + axis * chain_length * offset
+                    edge_count = _support_band_component_edges(
+                        objects,
+                        armature,
+                        chain_names,
+                        plane_point,
+                        axis,
+                        tolerance,
+                    )
+                    if edge_count >= MINIMUM_SUPPORT_BAND_EDGES:
+                        support_bands += 1
+                    else:
+                        violations.append(
+                            f"{side} digit {digit} joint {joint_index} support offset {offset:+.3f} "
+                            f"has {edge_count} connected mesh edges, expected at least "
+                            f"{MINIMUM_SUPPORT_BAND_EDGES}"
+                        )
+    return support_bands, violations
 
 
 def test_main_ip_has_three_segments_per_digit_and_clean_weights() -> None:
     objects, _, armature, stats, bone_map, _ = load_enhanced_fbx_character()
     violations: list[str] = []
 
+    expected_bone_names = {
+        bone_name
+        for side in ("l", "r")
+        for digit in (1, 2, 3)
+        for bone_name in expected_digit_bone_names(side, digit)
+    }
+    deform_bones = {
+        bone.name
+        for bone in armature.data.bones
+        if bone.name in expected_bone_names and bone.use_deform
+    }
+    if len(deform_bones) != 18:
+        violations.append(f"armature has {len(deform_bones)} three-segment finger deform bones, expected 18")
+    missing_deform_bones = sorted(expected_bone_names - deform_bones)
+    if missing_deform_bones:
+        violations.append(f"missing finger deform bones: {', '.join(missing_deform_bones)}")
     if stats.get("fingerBoneCount") != 18:
-        violations.append(f"fingerBoneCount={stats.get('fingerBoneCount')!r}, expected 18")
+        violations.append(f"reported fingerBoneCount={stats.get('fingerBoneCount')!r}, expected 18")
     if stats.get("fingerSegmentCount") != 3:
         violations.append(f"fingerSegmentCount={stats.get('fingerSegmentCount')!r}, expected 3")
     if stats.get("handJointSupportLoopCount", 0) < 24:
@@ -124,6 +268,14 @@ def test_main_ip_has_three_segments_per_digit_and_clean_weights() -> None:
                 violations.append(f"{side} digit {digit} is missing roles: {', '.join(missing)}")
                 continue
             proximal, middle, distal = (bones[bone_map[role]] for role in roles)
+            expected_names = expected_digit_bone_names(side, digit)
+            if tuple(bone.name for bone in (proximal, middle, distal)) != expected_names:
+                violations.append(
+                    f"{side} digit {digit} resolves to "
+                    f"{tuple(bone.name for bone in (proximal, middle, distal))}, expected {expected_names}"
+                )
+            if not all(bone.use_deform for bone in (proximal, middle, distal)):
+                violations.append(f"{side} digit {digit} chain bones must all use deform")
             if middle.parent != proximal or distal.parent != middle:
                 violations.append(f"{side} digit {digit} is not a proximal-middle-distal parent chain")
             if not middle.use_connect or not distal.use_connect:
@@ -133,7 +285,13 @@ def test_main_ip_has_three_segments_per_digit_and_clean_weights() -> None:
             if (distal.head_local - middle.tail_local).length > 1e-5:
                 violations.append(f"{side} digit {digit} has a gap at the middle-distal joint")
 
-    violations.extend(_weight_violations(objects))
+    support_band_count, support_band_violations = _mesh_support_band_evidence(objects, armature, bone_map)
+    if support_band_count < 24:
+        violations.append(
+            f"actual mesh has {support_band_count} digit-joint support bands, expected at least 24"
+        )
+    violations.extend(support_band_violations)
+    violations.extend(_weight_violations(objects, armature))
     assert not violations, "\n".join(violations)
 
 
@@ -144,7 +302,18 @@ def test_each_digit_moves_independently_and_fist_closes() -> None:
     fist_tips = sample_fist_tips(armature, bone_map)
     for side in ("l", "r"):
         for digit in (1, 2, 3):
-            rest_length = digit_chain_length(armature, bone_map, side, digit)
+            try:
+                rest_length = digit_chain_length(armature, bone_map, side, digit)
+            except ValueError as exc:
+                violations.append(str(exc))
+                proximal_name = bone_map.get(f"finger_{digit}_{side}")
+                distal_name = bone_map.get(f"finger_{digit}_tip_{side}")
+                if not proximal_name or not distal_name:
+                    continue
+                # This explicit legacy baseline preserves the motion RED evidence until the required chain exists.
+                rest_length = (
+                    armature.data.bones[proximal_name].length + armature.data.bones[distal_name].length
+                )
             displacement = (fist_tips[side, digit] - open_tips[side, digit]).length
             minimum = rest_length * 0.25
             if displacement < minimum:
@@ -154,7 +323,14 @@ def test_each_digit_moves_independently_and_fist_closes() -> None:
 
     for selected in (1, 2, 3):
         before, after = sample_single_digit_curl(armature, bone_map, "r", selected)
-        selected_length = digit_chain_length(armature, bone_map, "r", selected)
+        try:
+            selected_length = digit_chain_length(armature, bone_map, "r", selected)
+        except ValueError as exc:
+            violations.append(str(exc))
+            selected_length = (
+                armature.data.bones[bone_map[f"finger_{selected}_r"]].length
+                + armature.data.bones[bone_map[f"finger_{selected}_tip_r"]].length
+            )
         selected_displacement = (after[selected] - before[selected]).length
         selected_minimum = selected_length * 0.18
         if selected_displacement < selected_minimum:
@@ -163,7 +339,14 @@ def test_each_digit_moves_independently_and_fist_closes() -> None:
                 f"is below {selected_minimum:.4f}"
             )
         for other in {1, 2, 3} - {selected}:
-            other_length = digit_chain_length(armature, bone_map, "r", other)
+            try:
+                other_length = digit_chain_length(armature, bone_map, "r", other)
+            except ValueError as exc:
+                violations.append(str(exc))
+                other_length = (
+                    armature.data.bones[bone_map[f"finger_{other}_r"]].length
+                    + armature.data.bones[bone_map[f"finger_{other}_tip_r"]].length
+                )
             other_displacement = (after[other] - before[other]).length
             other_maximum = other_length * 0.06
             if other_displacement > other_maximum:
