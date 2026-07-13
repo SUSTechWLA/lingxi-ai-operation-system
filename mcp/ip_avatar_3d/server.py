@@ -27,7 +27,12 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from master_asset import MASTER_COLLECTION, MASTER_VERSION
-from voice_policy import ProductionVoiceUnavailable, ResolvedVoice, resolve_voice
+from voice_policy import (
+    PRODUCTION_PROVIDERS,
+    ProductionVoiceUnavailable,
+    ResolvedVoice,
+    resolve_voice,
+)
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -705,10 +710,12 @@ def ensure_audio(
         return str(resolved), "uploaded_audio", {
             "provider": "uploaded",
             "voiceId": "",
+            "tts_provider": "",
+            "voice_id": "",
             "language": voice_language,
             "speed": voice_speed,
-            "humanVoiceProvider": True,
-            "productionReady": True,
+            "humanVoiceProvider": False,
+            "productionReady": False,
         }
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -818,15 +825,19 @@ def ensure_audio(
             generated = generated.resolve()
             if not generated.is_file():
                 raise RuntimeError(f"HyperFrames narration file is missing: {generated}")
-            actual_provider = str(meta.get("tts_provider") or provider)
-            actual_voice = str(meta.get("voice_id") or pinned_voice)
-            return str(generated), f"hyperframes_{actual_provider}", {
+            actual_provider = str(meta.get("tts_provider") or "").strip().lower()
+            actual_voice = str(meta.get("voice_id") or "").strip()
+            return str(generated), f"hyperframes_{actual_provider or 'unknown'}", {
                 "provider": actual_provider,
                 "voiceId": actual_voice,
+                "tts_provider": actual_provider,
+                "voice_id": actual_voice,
                 "language": language,
                 "speed": speed,
                 "humanVoiceProvider": actual_provider in {"heygen", "elevenlabs"},
-                "productionReady": actual_provider in {"heygen", "elevenlabs"},
+                "productionReady": bool(
+                    actual_provider in {"heygen", "elevenlabs"} and actual_voice
+                ),
                 "audioMetaPath": str(meta_path),
             }
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
@@ -871,7 +882,9 @@ def ensure_audio(
             )
             return str(audio_out), "local_say_preview", {
                 "provider": "macos_say",
-                "voiceId": voice_name.strip(),
+                "voiceId": "",
+                "tts_provider": "macos_say",
+                "voice_id": "",
                 "language": language,
                 "speed": speed,
                 "humanVoiceProvider": False,
@@ -1370,8 +1383,8 @@ def plan_motion(script: str, durationSec: float = 0, fps: int = DEFAULT_FPS, mot
 def _voice_policy_metadata(
     *,
     render_mode: str,
-    provider: str,
-    voice_id: str,
+    requested_provider: str,
+    requested_voice_id: str,
     language: str,
     speed: float,
     fallback_policy: str,
@@ -1380,12 +1393,12 @@ def _voice_policy_metadata(
 ) -> dict[str, Any]:
     state = {
         "renderMode": render_mode,
-        "provider": resolved.provider if resolved else provider,
-        "voiceId": resolved.voice_id if resolved else voice_id,
+        "requestedProvider": resolved.provider if resolved else requested_provider,
+        "requestedVoiceId": resolved.voice_id if resolved else requested_voice_id,
         "language": resolved.language if resolved else language,
         "speed": resolved.speed if resolved else speed,
         "fallbackPolicy": fallback_policy,
-        "productionReady": bool(resolved and resolved.production_ready),
+        "productionReady": False,
         "allowPreviewFallback": bool(resolved and resolved.allow_preview_fallback),
         "policyStatus": "ready" if resolved else "blocked",
     }
@@ -1624,10 +1637,18 @@ def render_talking_video(
         if not dryRun:
             raise
         voice_policy_error = str(exc)
+    if resolved_voice and render_mode == "production" and audioPath:
+        upload_error = ProductionVoiceUnavailable(
+            "production audioPath is rejected because uploaded audio provenance is unverified"
+        )
+        if not dryRun:
+            raise upload_error
+        resolved_voice = None
+        voice_policy_error = str(upload_error)
     voice_policy = _voice_policy_metadata(
         render_mode=render_mode,
-        provider=voice_provider,
-        voice_id=policy_voice_id,
+        requested_provider=voice_provider,
+        requested_voice_id=policy_voice_id,
         language=voice_language,
         speed=voice_speed,
         fallback_policy=fallback_policy,
@@ -1668,8 +1689,12 @@ def render_talking_video(
     audio_out = ""
     audioSource = "none"
     audio_metadata: dict[str, Any] = {
-        "provider": voice_policy["provider"],
-        "voiceId": voice_policy["voiceId"],
+        "provider": "",
+        "voiceId": "",
+        "tts_provider": "",
+        "voice_id": "",
+        "requestedProvider": voice_policy["requestedProvider"],
+        "requestedVoiceId": voice_policy["requestedVoiceId"],
         "language": voice_policy["language"],
         "speed": voice_policy["speed"],
         "humanVoiceProvider": False,
@@ -1682,30 +1707,52 @@ def render_talking_video(
     if not dryRun:
         if resolved_voice is None:
             raise ProductionVoiceUnavailable(voice_policy_error or "production voice policy is blocked")
-        audio_out, audioSource, audio_metadata = ensure_audio(
-            script,
-            output_dir,
-            duration,
-            audioPath,
-            voiceName,
-            speakingRate,
-            voice_provider=resolved_voice.provider,
-            voice_id=resolved_voice.voice_id,
-            voice_language=resolved_voice.language,
-            voice_speed=resolved_voice.speed,
-        )
+        try:
+            audio_out, audioSource, audio_metadata = ensure_audio(
+                script,
+                output_dir,
+                duration,
+                audioPath,
+                voiceName,
+                speakingRate,
+                voice_provider=resolved_voice.provider,
+                voice_id=resolved_voice.voice_id,
+                voice_language=resolved_voice.language,
+                voice_speed=resolved_voice.speed,
+            )
+        except Exception as exc:
+            if render_mode == "production":
+                raise ProductionVoiceUnavailable(
+                    f"production voice synthesis failed: {exc}"
+                ) from exc
+            raise
         if render_mode == "production":
-            actual_provider = str(audio_metadata.get("provider") or "").strip().lower()
-            actual_voice_id = str(audio_metadata.get("voiceId") or "").strip()
+            actual_audio = Path(str(audio_out or "")).expanduser()
+            if not audio_out or not actual_audio.is_file():
+                raise ProductionVoiceUnavailable(
+                    "production synthesis did not return a successful audio path"
+                )
+            actual_provider = str(audio_metadata.get("tts_provider") or "").strip().lower()
+            actual_voice_id = str(audio_metadata.get("voice_id") or "").strip()
+            if not actual_provider or not actual_voice_id:
+                raise ProductionVoiceUnavailable(
+                    "production synthesis requires explicit tts_provider and voice_id provenance"
+                )
             if actual_provider != resolved_voice.provider or actual_voice_id != resolved_voice.voice_id:
                 raise ProductionVoiceUnavailable(
                     "production synthesis did not return the pinned provider and voice ID"
                 )
+            audio_metadata["provider"] = actual_provider
+            audio_metadata["voiceId"] = actual_voice_id
+            audio_metadata["humanVoiceProvider"] = actual_provider in PRODUCTION_PROVIDERS
+            voice_policy["productionReady"] = True
         audio_metadata.update(
             {
+                "requestedProvider": resolved_voice.provider,
+                "requestedVoiceId": resolved_voice.voice_id,
                 "renderMode": render_mode,
                 "fallbackPolicy": fallback_policy,
-                "productionReady": resolved_voice.production_ready,
+                "productionReady": render_mode == "production",
                 "allowPreviewFallback": resolved_voice.allow_preview_fallback,
                 "policyStatus": "ready",
             }

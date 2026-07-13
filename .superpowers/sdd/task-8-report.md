@@ -34,6 +34,22 @@ object with `ready` or `blocked` status. The same object is written to render
 input and report artifacts. After production synthesis, the server also checks
 that the returned provider and voice ID still match the pinned request.
 
+The review follow-up separates request intent from backend provenance.
+`voicePolicy` and render input use `requestedProvider` and
+`requestedVoiceId`. Shared audio-engine metadata keeps actual `provider` and
+`voiceId` values derived only from backend `tts_provider` and `voice_id`;
+request values are never substituted when backend metadata is absent.
+Production succeeds only when both provenance fields are nonempty and exactly
+match the resolved request, and the returned audio path is a real file.
+Missing provenance, mismatch, missing audio, and explicit provider failures all
+raise `ProductionVoiceUnavailable`.
+
+Uploaded audio is unverified for this task. Production rejects `audioPath`
+before probing or synthesis. Preview accepts it with `provider="uploaded"`, an
+unknown actual voice ID, `humanVoiceProvider=false`, and
+`productionReady=false`. Generic macOS preview fallback likewise leaves actual
+voice provenance unknown instead of copying the requested voice name.
+
 Apple keeps its existing synthesis and audio-processing path, but its metadata
 now sets `humanVoiceProvider=false` and `productionReady=false` and no longer
 claims a natural voice provider.
@@ -65,13 +81,21 @@ backend cannot replace the pinned production provider or voice. After
 integration, the server suite runs 51 tests with the two existing Blender-only
 tests skipped.
 
+The review RED run expanded the server suite to 59 tests and failed on all
+reported provenance gaps: request-to-actual substitution, missing backend
+provenance acceptance, generic backend errors, production upload acceptance,
+missing audio-path acceptance, and conflated metadata fields. A final focused
+RED/GREEN cycle covered the generic macOS preview fallback's requested voice
+substitution. The completed suite runs 60 tests with the two existing
+Blender-only tests skipped.
+
 ## Verification
 
 - `python3 mcp/ip_avatar_3d/test_voice_policy.py`: 8 tests passed.
-- `python3 mcp/ip_avatar_3d/test_server.py`: 51 tests run, 2 skipped.
+- `python3 mcp/ip_avatar_3d/test_server.py`: 60 tests run, 2 skipped.
 - `python3 -m py_compile` passed for both policy/server modules and tests.
 - `python3 -m json.tool ip形象/main_ip/character-profile.json` passed.
-- `git diff --cached --check` passed for the exact six-file owned scope.
+- `git diff --cached --check` passed for the owned follow-up scope.
 
 ## Residual
 

@@ -324,6 +324,8 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
             self.assertEqual(result["voicePolicy"]["renderMode"], "preview")
             self.assertEqual(result["voicePolicy"]["policyStatus"], "ready")
+            self.assertEqual(result["voicePolicy"]["requestedProvider"], "apple")
+            self.assertNotIn("provider", result["voicePolicy"])
             self.assertFalse(result["voicePolicy"]["productionReady"])
 
     def test_explicit_production_rejects_preview_voice_before_audio(self) -> None:
@@ -376,12 +378,16 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             root = pathlib.Path(tmp)
             model = root / "bobo.glb"
             model.write_bytes(b"glTF placeholder")
+            audio = root / "narration.wav"
+            audio.write_bytes(b"RIFF verified audio")
             mismatched_audio = (
-                str(root / "narration.wav"),
+                str(audio),
                 "hyperframes_apple",
                 {
                     "provider": "apple",
                     "voiceId": "Eddy (中文（中国大陆）)",
+                    "tts_provider": "apple",
+                    "voice_id": "Eddy (中文（中国大陆）)",
                     "language": "zh",
                     "speed": 1.0,
                     "productionReady": False,
@@ -403,6 +409,241 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                         fallbackPolicy="error",
                         dryRun=False,
                     )
+
+    def test_production_rejects_backend_missing_voice_provenance(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            audio = root / "narration.wav"
+            model.write_bytes(b"glTF placeholder")
+            audio.write_bytes(b"RIFF verified audio")
+            missing_provenance = (
+                str(audio),
+                "hyperframes_unknown",
+                {
+                    "provider": "",
+                    "voiceId": "",
+                    "language": "zh",
+                    "speed": 1.0,
+                    "productionReady": False,
+                },
+            )
+
+            with mock.patch.object(server, "ensure_audio", return_value=missing_provenance):
+                with self.assertRaisesRegex(
+                    server.ProductionVoiceUnavailable,
+                    "explicit tts_provider and voice_id provenance",
+                ):
+                    server.render_talking_video(
+                        script="生产后端必须返回来源。",
+                        modelPath=str(model),
+                        outputDir=str(root / "out"),
+                        renderMode="production",
+                        voiceProvider="heygen",
+                        voiceId="dMkR1XwIkarpNqWUJLnX",
+                        fallbackPolicy="error",
+                        dryRun=False,
+                    )
+
+    def test_production_wraps_explicit_provider_backend_failure(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            with mock.patch.object(
+                server,
+                "ensure_audio",
+                side_effect=RuntimeError("heygen backend unavailable"),
+            ):
+                with self.assertRaisesRegex(
+                    server.ProductionVoiceUnavailable,
+                    "production voice synthesis failed",
+                ) as raised:
+                    server.render_talking_video(
+                        script="生产后端失败必须封闭。",
+                        modelPath=str(model),
+                        outputDir=str(root / "out"),
+                        renderMode="production",
+                        voiceProvider="heygen",
+                        voiceId="dMkR1XwIkarpNqWUJLnX",
+                        fallbackPolicy="error",
+                        dryRun=False,
+                    )
+
+            self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
+    def test_production_rejects_unverified_uploaded_audio_before_synthesis(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            uploaded = root / "uploaded.wav"
+            model.write_bytes(b"glTF placeholder")
+            uploaded.write_bytes(b"RIFF uploaded audio")
+
+            with mock.patch.object(server, "ensure_audio") as ensure_audio:
+                with self.assertRaisesRegex(
+                    server.ProductionVoiceUnavailable,
+                    "uploaded audio provenance is unverified",
+                ):
+                    server.render_talking_video(
+                        script="生产上传音频缺少可信来源。",
+                        modelPath=str(model),
+                        audioPath=str(uploaded),
+                        outputDir=str(root / "out"),
+                        renderMode="production",
+                        voiceProvider="heygen",
+                        voiceId="dMkR1XwIkarpNqWUJLnX",
+                        fallbackPolicy="error",
+                        dryRun=False,
+                    )
+
+            ensure_audio.assert_not_called()
+
+    def test_production_rejects_missing_synthesized_audio_path(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            model.write_bytes(b"glTF placeholder")
+            missing_audio = (
+                str(root / "missing.wav"),
+                "hyperframes_heygen",
+                {
+                    "provider": "heygen",
+                    "voiceId": "dMkR1XwIkarpNqWUJLnX",
+                    "tts_provider": "heygen",
+                    "voice_id": "dMkR1XwIkarpNqWUJLnX",
+                },
+            )
+
+            with mock.patch.object(server, "ensure_audio", return_value=missing_audio):
+                with self.assertRaisesRegex(
+                    server.ProductionVoiceUnavailable,
+                    "audio path",
+                ):
+                    server.render_talking_video(
+                        script="生产音频文件必须存在。",
+                        modelPath=str(model),
+                        outputDir=str(root / "out"),
+                        renderMode="production",
+                        voiceProvider="heygen",
+                        voiceId="dMkR1XwIkarpNqWUJLnX",
+                        fallbackPolicy="error",
+                        dryRun=False,
+                    )
+
+    def test_production_accepts_exact_backend_provenance_and_audio_path(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            audio = root / "narration.wav"
+            model.write_bytes(b"glTF placeholder")
+            audio.write_bytes(b"RIFF verified audio")
+            voice_id = "dMkR1XwIkarpNqWUJLnX"
+
+            def fake_blender_run(args, timeout=600):
+                render_input = json.loads(pathlib.Path(args[-1]).read_text(encoding="utf-8"))
+                for key in ("riggedBlendPath", "riggedGlbPath", "rigReportPath"):
+                    path = pathlib.Path(render_input[key])
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"render output")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            def fake_compose(_frames, _audio, output_path, *_args, **_kwargs):
+                pathlib.Path(output_path).write_bytes(b"video")
+
+            def fake_preview(_video_path, preview_path):
+                pathlib.Path(preview_path).write_bytes(b"preview")
+
+            exact_audio = (
+                str(audio),
+                "hyperframes_heygen",
+                {
+                    "provider": "heygen",
+                    "voiceId": voice_id,
+                    "tts_provider": "heygen",
+                    "voice_id": voice_id,
+                    "language": "zh",
+                    "speed": 1.0,
+                    "humanVoiceProvider": True,
+                    "productionReady": False,
+                },
+            )
+            with mock.patch.object(server, "ensure_audio", return_value=exact_audio), mock.patch.object(
+                server, "find_blender", return_value="/usr/bin/blender"
+            ), mock.patch.object(server, "_run", side_effect=fake_blender_run), mock.patch.object(
+                server, "_compose_video", side_effect=fake_compose
+            ), mock.patch.object(server, "_extract_preview", side_effect=fake_preview), mock.patch.object(
+                server, "_probe_video", return_value={"durationSec": 2.0}
+            ):
+                result = server.render_talking_video(
+                    script="验证生产音色成功路径。",
+                    modelPath=str(model),
+                    outputDir=str(root / "out"),
+                    durationSec=2,
+                    renderMode="production",
+                    voiceProvider="heygen",
+                    voiceId=voice_id,
+                    fallbackPolicy="error",
+                    dryRun=False,
+                )
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["voice"]["provider"], "heygen")
+            self.assertEqual(result["voice"]["voiceId"], voice_id)
+            self.assertEqual(result["voice"]["requestedProvider"], "heygen")
+            self.assertEqual(result["voice"]["requestedVoiceId"], voice_id)
+            self.assertTrue(result["voice"]["productionReady"])
+
+    def test_preview_uploaded_audio_succeeds_with_unverified_provenance(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            uploaded = root / "uploaded.wav"
+            model.write_bytes(b"glTF placeholder")
+            uploaded.write_bytes(b"RIFF uploaded audio")
+
+            def fake_blender_run(args, timeout=600):
+                render_input = json.loads(pathlib.Path(args[-1]).read_text(encoding="utf-8"))
+                for key in ("riggedBlendPath", "riggedGlbPath", "rigReportPath"):
+                    path = pathlib.Path(render_input[key])
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"render output")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            def fake_compose(_frames, _audio, output_path, *_args, **_kwargs):
+                pathlib.Path(output_path).write_bytes(b"video")
+
+            with mock.patch.object(server, "audio_duration_sec", return_value=2.0), mock.patch.object(
+                server, "find_blender", return_value="/usr/bin/blender"
+            ), mock.patch.object(server, "_run", side_effect=fake_blender_run), mock.patch.object(
+                server, "_compose_video", side_effect=fake_compose
+            ), mock.patch.object(server, "_extract_preview"), mock.patch.object(
+                server, "_probe_video", return_value={"durationSec": 2.0}
+            ):
+                result = server.render_talking_video(
+                    script="预览上传音频。",
+                    modelPath=str(model),
+                    audioPath=str(uploaded),
+                    outputDir=str(root / "out"),
+                    renderMode="preview",
+                    dryRun=False,
+                )
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["audioSource"], "uploaded_audio")
+            self.assertEqual(result["voice"]["provider"], "uploaded")
+            self.assertEqual(result["voice"]["voiceId"], "")
+            self.assertEqual(result["voice"]["requestedProvider"], "auto")
+            self.assertEqual(result["voice"]["requestedVoiceId"], "")
+            self.assertFalse(result["voice"]["humanVoiceProvider"])
+            self.assertFalse(result["voice"]["productionReady"])
 
     def test_production_dry_run_surfaces_ready_policy_without_synthesis(self) -> None:
         server = load_server()
@@ -428,12 +669,12 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                 result["voicePolicy"],
                 {
                     "renderMode": "production",
-                    "provider": "heygen",
-                    "voiceId": "dMkR1XwIkarpNqWUJLnX",
+                    "requestedProvider": "heygen",
+                    "requestedVoiceId": "dMkR1XwIkarpNqWUJLnX",
                     "language": "zh",
                     "speed": 1.0,
                     "fallbackPolicy": "error",
-                    "productionReady": True,
+                    "productionReady": False,
                     "allowPreviewFallback": False,
                     "policyStatus": "ready",
                 },
@@ -461,8 +702,8 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             ensure_audio.assert_not_called()
             policy = result["voicePolicy"]
             self.assertEqual(policy["renderMode"], "production")
-            self.assertEqual(policy["provider"], "heygen")
-            self.assertEqual(policy["voiceId"], "")
+            self.assertEqual(policy["requestedProvider"], "heygen")
+            self.assertEqual(policy["requestedVoiceId"], "")
             self.assertEqual(policy["fallbackPolicy"], "error")
             self.assertEqual(policy["policyStatus"], "blocked")
             self.assertFalse(policy["productionReady"])
@@ -670,8 +911,8 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(render_input["qualityPreset"], "production_2k")
             self.assertEqual(render_input["renderDetailMode"], "publish")
             self.assertEqual(render_input["eeveeSamples"], 64)
-            self.assertEqual(render_input["voice"]["provider"], "kokoro")
-            self.assertEqual(render_input["voice"]["voiceId"], "zf_xiaobei")
+            self.assertEqual(render_input["voice"]["requestedProvider"], "kokoro")
+            self.assertEqual(render_input["voice"]["requestedVoiceId"], "zf_xiaobei")
             self.assertEqual(render_input["voice"]["language"], "zh")
             self.assertEqual(render_input["voice"]["speed"], 0.94)
 
@@ -758,8 +999,8 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
             policy = result["voicePolicy"]
             self.assertEqual(policy["renderMode"], "preview")
-            self.assertEqual(policy["provider"], "apple")
-            self.assertEqual(policy["voiceId"], "Eddy (中文（中国大陆）)")
+            self.assertEqual(policy["requestedProvider"], "apple")
+            self.assertEqual(policy["requestedVoiceId"], "Eddy (中文（中国大陆）)")
             self.assertFalse(policy["productionReady"])
 
     def test_render_profile_uses_existing_master_without_source_refinement(self) -> None:
@@ -1051,7 +1292,107 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(pathlib.Path(audio_path), (root / "assets" / "voice" / "narration.wav").resolve())
             self.assertEqual(source, "hyperframes_kokoro")
             self.assertEqual(metadata["voiceId"], "zf_xiaobei")
+            self.assertEqual(metadata["tts_provider"], "kokoro")
+            self.assertEqual(metadata["voice_id"], "zf_xiaobei")
             self.assertFalse(metadata["humanVoiceProvider"])
+
+    def test_audio_engine_does_not_substitute_requested_voice_for_missing_provenance(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            engine = root / "audio.mjs"
+            engine.write_text("// fake audio engine", encoding="utf-8")
+
+            def fake_run(args, timeout=600):
+                meta_path = pathlib.Path(args[args.index("--out") + 1])
+                audio = root / "assets" / "voice" / "narration.wav"
+                audio.parent.mkdir(parents=True, exist_ok=True)
+                audio.write_bytes(b"RIFF fake wav")
+                meta_path.write_text(
+                    json.dumps(
+                        {
+                            "voices": [
+                                {
+                                    "id": "narration",
+                                    "path": "assets/voice/narration.wav",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(server, "find_audio_engine", return_value=str(engine)), mock.patch.object(
+                server, "_run", side_effect=fake_run
+            ):
+                _audio_path, source, metadata = server.ensure_audio(
+                    "生产来源不能靠请求填充。",
+                    root,
+                    2.0,
+                    voice_provider="heygen",
+                    voice_id="dMkR1XwIkarpNqWUJLnX",
+                )
+
+            self.assertEqual(source, "hyperframes_unknown")
+            self.assertEqual(metadata["provider"], "")
+            self.assertEqual(metadata["voiceId"], "")
+            self.assertEqual(metadata["tts_provider"], "")
+            self.assertEqual(metadata["voice_id"], "")
+            self.assertFalse(metadata["humanVoiceProvider"])
+            self.assertFalse(metadata["productionReady"])
+
+    def test_uploaded_audio_metadata_is_unverified(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            uploaded = root / "uploaded.wav"
+            uploaded.write_bytes(b"RIFF uploaded audio")
+
+            audio_path, source, metadata = server.ensure_audio(
+                "",
+                root,
+                2.0,
+                audio_path=str(uploaded),
+            )
+
+            self.assertEqual(pathlib.Path(audio_path), uploaded.resolve())
+            self.assertEqual(source, "uploaded_audio")
+            self.assertEqual(metadata["provider"], "uploaded")
+            self.assertEqual(metadata["voiceId"], "")
+            self.assertFalse(metadata["humanVoiceProvider"])
+            self.assertFalse(metadata["productionReady"])
+
+    def test_local_preview_does_not_report_requested_voice_as_actual_provenance(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+
+            def fake_run(args, timeout=600):
+                output = pathlib.Path(args[args.index("-o") + 1]) if args[0].endswith("say") else pathlib.Path(args[-1])
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"audio")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(server, "find_audio_engine", return_value=""), mock.patch.object(
+                server, "find_ffmpeg", return_value="/usr/local/bin/ffmpeg"
+            ), mock.patch.object(
+                server.shutil,
+                "which",
+                side_effect=lambda name: "/usr/bin/say" if name == "say" else None,
+            ), mock.patch.object(server, "_run", side_effect=fake_run):
+                _audio_path, source, metadata = server.ensure_audio(
+                    "预览本地音色。",
+                    root,
+                    2.0,
+                    voice_name="Eddy (中文（中国大陆）)",
+                    voice_provider="auto",
+                )
+
+            self.assertEqual(source, "local_say_preview")
+            self.assertEqual(metadata["provider"], "macos_say")
+            self.assertEqual(metadata["voiceId"], "")
+            self.assertFalse(metadata["productionReady"])
 
     def test_apple_character_voice_remains_preview_only_after_mastering(self) -> None:
         server = load_server()
