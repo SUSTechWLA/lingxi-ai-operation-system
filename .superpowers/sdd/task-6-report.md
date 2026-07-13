@@ -22,9 +22,11 @@ asset reports:
 
 Legacy full-blink metadata is rejected with a clear `rebuild master from source
 FBX for blinkCapability=squint_only` error.
-`facialTopologyMode=volumetric`, `true_geometry`, and `lips_eyelids` are also
-rejected before face setup; the production source asset supports
-`source_retopology` with `blinkCapability=squint_only` only.
+For `characterId=main_ip_sloth`, `facialTopologyMode=volumetric`,
+`true_geometry`, and `lips_eyelids` are rejected before face setup; this
+production source profile supports `source_retopology` with
+`blinkCapability=squint_only` only. Generic character profiles retain the
+legacy generated volumetric API mode.
 
 ## RED/GREEN Evidence
 
@@ -79,6 +81,18 @@ Squint fallback RED/GREEN:
 - GREEN: generated-lid modes fail at `setup_face` entry, before any lid object or
   material can be created; the abandoned integrated `Eye_Blink` branch was
   removed from `add_rich_source_face_shapes`.
+- RED: same-count master reuse accepted a `+0.25` active-skin X displacement, an
+  active UV changed to `(99, 99)`, and live Normal Map strength changed to `10`.
+- GREEN: same-count masters compare each active vertex's current per-loop UV
+  multiset to exact stored evidence within `1e-7`; GLB split vertices retain the
+  tolerant `5e-5` UV remap. Live squint displacement must stay on world Z toward
+  the stored center, with measured float32 X/Y tolerance `5e-8` for masters and
+  `5e-6` after GLB remap. Every nonzero closure ratio is positive and no greater
+  than stored closure `<=0.12`.
+- GREEN: live PBR validation now enforces Normal Map strength `0.20..0.50`,
+  Principled specular `0.20..0.35`, source roughness remap `0.38..0.76`, canonical
+  links, and role color spaces. Generic-profile volumetric generation is covered
+  separately and remains available.
 
 Direct-runner RED reliability:
 
@@ -93,10 +107,10 @@ Final character GREEN:
 `/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
 
 - Blender `5.1.2`, exit `0`.
-- PASS all `20` direct-runner tests, including fresh source build, independent
+- PASS all `24` direct-runner tests, including fresh source build, independent
   L/R squint, no-visible-overlay checks, mouth bounds, linked source PBR roles,
-  live-data fail-closed reuse, generated-lid mode rejection, GLB extras, and live
-  GLB export/reimport.
+  live UV/vector/PBR fail-closed reuse, source-profile generated-lid rejection,
+  generic volumetric compatibility, GLB extras, and live GLB export/reimport.
 
 Final scene GREEN:
 
@@ -126,8 +140,9 @@ UV, custom data, reuse, and export:
   stored and checked. A 64-vertex untouched UV guard remains exact on the fresh
   build.
 - Exact ocular and squint-skin per-loop UV evidence is stored before Shape Keys.
-  No UV values are authored or modified by the fallback; source and imported
-  evidence is checked for finite values.
+  No UV values are authored or modified by the fallback. Same-count source
+  topology requires exact per-vertex loop multisets within tolerance; imported
+  split topology uses UV remapping. Both reject non-finite and out-of-range UVs.
 - Original deform assignments are preserved; no generated lid vertices or
   weights exist.
 - Supported glTF exporters receive `export_extras=True`. Reimport must retain

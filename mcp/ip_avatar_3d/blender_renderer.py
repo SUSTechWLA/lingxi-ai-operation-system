@@ -1735,7 +1735,11 @@ def _task6_pbr_material_graph(
         or base_color.image.colorspace_settings.name != "sRGB"
         or normal_image.image.colorspace_settings.name != "Non-Color"
         or normal_map.space != "TANGENT"
+        or not 0.20 <= float(normal_map.inputs["Strength"].default_value) <= 0.50
     ):
+        return None
+    specular = principled.inputs.get("Specular IOR Level") or principled.inputs.get("Specular")
+    if specular is None or not 0.20 <= float(specular.default_value) <= 0.35:
         return None
 
     metallic_link = list(principled.inputs["Metallic"].links)
@@ -2023,20 +2027,50 @@ def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
                 stored_skin_entries = modified.get("sides", {}).get(side, {}).get(
                     "squint_skin_uv_data", []
                 )
+                try:
+                    stored_skin_uv_by_vertex = {
+                        int(item["vertex"]): sorted(
+                            (float(uv[0]), float(uv[1]))
+                            for uv in item.get("uvs", [])
+                            if len(uv) == 2
+                        )
+                        for item in stored_skin_entries
+                    }
+                except (KeyError, TypeError, ValueError):
+                    stored_skin_uv_by_vertex = {}
                 stored_skin_uvs = [
-                    (float(uv[0]), float(uv[1]))
-                    for item in stored_skin_entries
-                    for uv in item.get("uvs", [])
-                    if len(uv) == 2
+                    uv
+                    for coordinates in stored_skin_uv_by_vertex.values()
+                    for uv in coordinates
                 ]
                 if (
                     not stored_skin_uvs
+                    or set(stored_skin_uv_by_vertex) != skin
                     or not all(math.isfinite(value) for uv in stored_skin_uvs for value in uv)
+                    or not all(0.0 <= value <= 1.0 for uv in stored_skin_uvs for value in uv)
                 ):
                     invalid.append(f"squint_skin_uv_data_{side}")
 
                 if original_vertex_count == vertex_count:
                     allowed_skin = {index for index in skin if 0 <= index < vertex_count}
+                    for index in allowed_skin:
+                        actual_uvs = sorted(uv_by_vertex.get(index, []))
+                        expected_uvs = stored_skin_uv_by_vertex.get(index, [])
+                        if (
+                            len(actual_uvs) != len(expected_uvs)
+                            or not all(
+                                abs(actual[axis] - expected[axis]) <= 1e-7
+                                for actual, expected in zip(actual_uvs, expected_uvs)
+                                for axis in (0, 1)
+                            )
+                            or not all(
+                                math.isfinite(value) and 0.0 <= value <= 1.0
+                                for uv in actual_uvs
+                                for value in uv
+                            )
+                        ):
+                            invalid.append(f"squint_skin_uv_data_{side}")
+                            break
                 else:
                     allowed_skin = {
                         index
@@ -2089,17 +2123,30 @@ def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
                     invalid.append(f"squint_eye_weight_zero_{side}")
                 if any(
                     not uv_by_vertex.get(index)
-                    or not all(math.isfinite(value) for uv in uv_by_vertex[index] for value in uv)
+                    or not all(
+                        math.isfinite(value) and 0.0 <= value <= 1.0
+                        for uv in uv_by_vertex[index]
+                        for value in uv
+                    )
                     for index in moved
                 ):
                     invalid.append(f"squint_skin_uv_data_{side}")
+                if original_vertex_count != vertex_count and not moved.issubset(allowed_skin):
+                    invalid.append(f"squint_skin_uv_data_{side}")
 
                 closure_ratios: list[float] = []
+                axis_tolerance = 5e-8 if original_vertex_count == vertex_count else 5e-6
                 for index in moved:
                     basis_world = face_mesh.matrix_world @ basis.data[index].co
                     shape_world = face_mesh.matrix_world @ shape.data[index].co
+                    displacement_world = shape_world - basis_world
+                    if (
+                        abs(float(displacement_world.x)) > axis_tolerance
+                        or abs(float(displacement_world.y)) > axis_tolerance
+                    ):
+                        invalid.append(f"squint_displacement_axis_{side}")
                     target = center_z - float(basis_world.z)
-                    delta = float(shape_world.z - basis_world.z)
+                    delta = float(displacement_world.z)
                     if abs(delta) <= 1e-9:
                         continue
                     if abs(target) <= 1e-9:
@@ -4630,7 +4677,11 @@ def setup_face(
     mode = str(data.get("faceScreenMode") or "source").lower()
     mouth_mode = str(data.get("mouthMode") or "independent_visemes").lower()
     topology_mode = str(data.get("facialTopologyMode") or "source_only").lower()
-    if topology_mode in {"volumetric", "true_geometry", "lips_eyelids"}:
+    character_id = str(data.get("characterId") or "").lower()
+    if (
+        character_id == "main_ip_sloth"
+        and topology_mode in {"volumetric", "true_geometry", "lips_eyelids"}
+    ):
         raise RuntimeError(
             f"facialTopologyMode={topology_mode} is not supported for this source asset; "
             "use facialTopologyMode=source_retopology with blinkCapability=squint_only"
@@ -4650,6 +4701,31 @@ def setup_face(
                     dimensions,
                     armature,
                     bone_map,
+                    mouth_height_ratio=float(data.get("mouthHeightRatio") or 0.56),
+                    mouth_scale=float(data.get("mouthScale") or 1.0),
+                )
+            )
+        existing_topology = {
+            str(obj.get("ip_face_topology_role"))
+            for obj in character_objects
+            if obj.type == "MESH" and obj.get("ip_face_topology_role")
+        }
+        wants_topology = topology_mode in {"volumetric", "true_geometry", "lips_eyelids"}
+        has_topology = set(VOLUMETRIC_FACE_ROLES).issubset(existing_topology)
+        if wants_topology or has_topology:
+            head_bone_name = bone_map.get("head") or bone_map.get("body") or bone_map.get("root")
+            if not head_bone_name:
+                head_bone_name = next(
+                    (bone.name for bone in armature.data.bones if bone.use_deform),
+                    armature.data.bones[0].name,
+                )
+            face.update(
+                create_volumetric_face_topology(
+                    source_face,
+                    character_objects,
+                    dimensions,
+                    armature,
+                    head_bone_name,
                     mouth_height_ratio=float(data.get("mouthHeightRatio") or 0.56),
                     mouth_scale=float(data.get("mouthScale") or 1.0),
                 )
@@ -4684,7 +4760,6 @@ def setup_face(
             face.update({role: obj for role, obj in topology.items() if role != "mouth"})
             return enrich_source_face(face)
         if mouth_mode in {"auto", "independent_visemes", "visemes", "independent"}:
-            character_id = str(data.get("characterId") or "").lower()
             is_bobo = "bobo" in character_id or "波波" in character_id
             texture_cleanup = (
                 cleanup_bobo_source_mouth_texture(character_objects)

@@ -845,6 +845,71 @@ def test_task6_reuse_recomputes_squint_and_pbr_evidence() -> None:
     assert_rebuild_failure("source_pbr_graph")
 
 
+def task6_source_face_fixture():
+    character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    face = blender_renderer.setup_face(
+        {
+            "characterId": "main_ip_sloth",
+            "faceScreenMode": "source",
+            "mouthMode": "source_mesh_visemes",
+            "mouthHeightRatio": 0.805,
+            "mouthScale": 1.0,
+            "facialDetailMode": "rich",
+            "facialTopologyMode": "source_retopology",
+        },
+        dimensions,
+        armature,
+        character_objects,
+        bone_map,
+    )
+    return face["mouth"]
+
+
+def assert_task6_rebuild_failure(source, expected_problem: str) -> None:
+    try:
+        blender_renderer.validate_task6_face_metadata(source)
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "rebuild master from source FBX" in message
+        assert expected_problem in message, message
+    else:
+        raise AssertionError(f"Task 6 reuse accepted invalid {expected_problem}")
+
+
+def test_task6_reuse_rejects_lateral_active_skin_displacement() -> None:
+    source = task6_source_face_fixture()
+    skin_index = object_property_indices(source, "squint_skin_indices_l")[0]
+    shape = source.data.shape_keys.key_blocks["Eye_Squint.L"]
+    shape.data[skin_index].co.x += 0.25
+
+    assert_task6_rebuild_failure(source, "squint_displacement_axis_l")
+
+
+def test_task6_reuse_rejects_mutated_active_skin_uvs() -> None:
+    source = task6_source_face_fixture()
+    skin_index = object_property_indices(source, "squint_skin_indices_l")[0]
+    loop_index = next(
+        index
+        for index, loop in enumerate(source.data.loops)
+        if int(loop.vertex_index) == skin_index
+    )
+    source.data.uv_layers.active.data[loop_index].uv = (99.0, 99.0)
+
+    assert_task6_rebuild_failure(source, "squint_skin_uv_data_l")
+
+
+def test_task6_reuse_rejects_unrestrained_live_pbr_parameters() -> None:
+    source = task6_source_face_fixture()
+    source_material = next(
+        material
+        for material in source.data.materials
+        if material and material.use_nodes and material.node_tree.nodes.get("Normal Map")
+    )
+    source_material.node_tree.nodes["Normal Map"].inputs["Strength"].default_value = 10.0
+
+    assert_task6_rebuild_failure(source, "source_pbr_graph")
+
+
 def test_source_asset_rejects_generated_full_lid_topology_before_creation() -> None:
     character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
     object_names_before = set(bpy.data.objects)
@@ -883,6 +948,41 @@ def test_source_asset_rejects_generated_full_lid_topology_before_creation() -> N
         for obj in generated_objects
     )
     assert not any("Eyelid" in material.name for material in generated_materials)
+
+
+def test_generic_character_retains_legacy_volumetric_topology_mode() -> None:
+    character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    blender_renderer.setup_face(
+        {
+            "characterId": "main_ip_sloth",
+            "faceScreenMode": "source",
+            "mouthMode": "source_mesh_visemes",
+            "facialDetailMode": "rich",
+            "facialTopologyMode": "source_retopology",
+            "mouthHeightRatio": 0.805,
+        },
+        dimensions,
+        armature,
+        character_objects,
+        bone_map,
+    )
+
+    face = blender_renderer.setup_face(
+        {
+            "characterId": "generic_fixture",
+            "faceScreenMode": "source",
+            "mouthMode": "existing_visemes",
+            "facialDetailMode": "basic",
+            "facialTopologyMode": "volumetric",
+        },
+        dimensions,
+        armature,
+        character_objects,
+        bone_map,
+    )
+
+    assert set(blender_renderer.VOLUMETRIC_FACE_ROLES).issubset(face)
+    assert face["mouth"]["facial_topology_mode"] == "volumetric"
 
 
 def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint() -> None:
@@ -1565,7 +1665,11 @@ if __name__ == "__main__":
         test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face,
         test_existing_rich_face_without_task6_metadata_fails_closed,
         test_task6_reuse_recomputes_squint_and_pbr_evidence,
+        test_task6_reuse_rejects_lateral_active_skin_displacement,
+        test_task6_reuse_rejects_mutated_active_skin_uvs,
+        test_task6_reuse_rejects_unrestrained_live_pbr_parameters,
         test_source_asset_rejects_generated_full_lid_topology_before_creation,
+        test_generic_character_retains_legacy_volumetric_topology_mode,
         test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint,
         test_publish_render_detail_is_non_destructive_and_deformation_aware,
         test_talking_timeline_uses_clamped_bezier_interpolation,
