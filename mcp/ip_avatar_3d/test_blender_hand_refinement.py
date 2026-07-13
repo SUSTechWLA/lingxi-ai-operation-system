@@ -18,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import blender_renderer
+import hand_refinement
 from test_blender_character_rig import load_enhanced_fbx_character
 
 
@@ -345,6 +346,27 @@ def test_main_ip_has_three_segments_per_digit_and_clean_weights() -> None:
     assert not violations, "\n".join(violations)
 
 
+def test_validated_three_segment_reuse_requires_contract_marker() -> None:
+    objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    before = sum(len(obj.data.vertices) for obj in objects if obj.type == "MESH")
+    reused_stats, reused_map = blender_renderer.enhance_existing_presenter_rig(
+        armature, objects, dimensions, {}, bone_map
+    )
+    assert reused_stats["fingerRigReused"] is True
+    assert reused_stats["fingerBoneCount"] == 18
+    assert reused_stats["fingerSegmentCount"] == 3
+    assert reused_map == bone_map
+    assert sum(len(obj.data.vertices) for obj in objects if obj.type == "MESH") == before
+
+    del armature[hand_refinement.HAND_CONTRACT_KEY]
+    try:
+        blender_renderer.enhance_existing_presenter_rig(armature, objects, dimensions, {}, bone_map)
+    except RuntimeError as exc:
+        assert "unvalidated three-segment hand rig" in str(exc)
+    else:
+        raise AssertionError("unmarked three-segment rigs must fail closed")
+
+
 def test_each_digit_moves_independently_and_fist_closes() -> None:
     _, _, armature, _, bone_map, _ = load_enhanced_fbx_character()
     violations: list[str] = []
@@ -411,6 +433,7 @@ def test_each_digit_moves_independently_and_fist_closes() -> None:
 if __name__ == "__main__":
     tests = [
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
+        test_validated_three_segment_reuse_requires_contract_marker,
         test_each_digit_moves_independently_and_fist_closes,
     ]
     failures: list[tuple[str, AssertionError]] = []

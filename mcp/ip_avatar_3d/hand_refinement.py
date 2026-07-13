@@ -21,6 +21,13 @@ from hand_topology import (
 )
 
 
+HAND_CONTRACT_KEY = "ip_avatar_hand_contract"
+HAND_CONTRACT_VERSION_KEY = "ip_avatar_hand_contract_version"
+HAND_SUPPORT_RING_COUNT_KEY = "ip_avatar_hand_support_ring_count"
+HAND_CONTRACT_VERSION = 1
+HAND_CONTRACT_NAME = "three_segment_annular_strips"
+
+
 @dataclass
 class DigitRegion:
     side: str
@@ -416,6 +423,76 @@ def _ring_diagnostics(
     }
 
 
+def _validate_reusable_three_segment_hand_rig(
+    armature: bpy.types.Object,
+    objects: list[bpy.types.Object],
+    expected_names: set[str],
+) -> dict[str, Any]:
+    """Fail closed unless an already-refined master still satisfies its hand contract."""
+    violations: list[str] = []
+    if armature.get(HAND_CONTRACT_KEY) != HAND_CONTRACT_NAME or int(armature.get(HAND_CONTRACT_VERSION_KEY, 0)) != HAND_CONTRACT_VERSION:
+        violations.append("armature is missing the validated three-segment hand contract marker")
+    marked_meshes = [
+        obj for obj in objects
+        if obj.type == "MESH"
+        and obj.get(HAND_CONTRACT_KEY) == HAND_CONTRACT_NAME
+        and int(obj.get(HAND_CONTRACT_VERSION_KEY, 0)) == HAND_CONTRACT_VERSION
+    ]
+    ring_count = sum(int(obj.get(HAND_SUPPORT_RING_COUNT_KEY, 0)) for obj in marked_meshes)
+    if not marked_meshes or ring_count < 24:
+        violations.append(f"hand topology mesh markers validate only {ring_count}/24 support rings")
+
+    bones = armature.data.bones
+    for side in ("L", "R"):
+        for digit in (1, 2, 3):
+            names = tuple(f"Finger_{digit:02d}_{segment}.{side}" for segment in ("Proximal", "Middle", "Distal"))
+            if any(name not in bones for name in names):
+                violations.append(f"missing validated chain {'/'.join(names)}")
+                continue
+            proximal, middle, distal = (bones[name] for name in names)
+            if not all(bone.use_deform for bone in (proximal, middle, distal)):
+                violations.append(f"non-deform validated chain {'/'.join(names)}")
+            if middle.parent != proximal or distal.parent != middle or not middle.use_connect or not distal.use_connect:
+                violations.append(f"invalid parent/connect chain {'/'.join(names)}")
+            if (middle.head_local - proximal.tail_local).length > 1e-5 or (distal.head_local - middle.tail_local).length > 1e-5:
+                violations.append(f"gapped validated chain {'/'.join(names)}")
+
+    weight_stats = _collect_weight_stats(objects)
+    missing_weights = [name for name in sorted(expected_names) if weight_stats["weightedVertexCounts"].get(name, 0) <= 0]
+    if missing_weights:
+        violations.append("expected segment groups have no positive weights: " + ", ".join(missing_weights))
+    if weight_stats["maxVertexInfluences"] > 4:
+        violations.append(f"max vertex influences is {weight_stats['maxVertexInfluences']}, expected at most 4")
+    if weight_stats["unweightedVertexCount"] != 0:
+        violations.append(f"unweighted vertex count is {weight_stats['unweightedVertexCount']}")
+    modifiers = [
+        modifier for obj in objects if obj.type == "MESH"
+        for modifier in obj.modifiers
+        if modifier.type == "ARMATURE" and modifier.object == armature
+    ]
+    if not modifiers or any(not modifier.use_deform_preserve_volume for modifier in modifiers):
+        violations.append("validated hand rig is missing preserve-volume Armature modifiers")
+    if violations:
+        raise RuntimeError("unvalidated three-segment hand rig: " + "; ".join(violations))
+    return weight_stats
+
+
+def _mark_validated_three_segment_hand_rig(
+    armature: bpy.types.Object,
+    objects: list[bpy.types.Object],
+    topology: HandTopologyResult,
+) -> None:
+    armature[HAND_CONTRACT_KEY] = HAND_CONTRACT_NAME
+    armature[HAND_CONTRACT_VERSION_KEY] = HAND_CONTRACT_VERSION
+    armature[HAND_SUPPORT_RING_COUNT_KEY] = topology.stats["handJointSupportLoopCount"]
+    by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
+    for object_name, rings in topology.ring_vertices.items():
+        obj = by_name[object_name]
+        obj[HAND_CONTRACT_KEY] = HAND_CONTRACT_NAME
+        obj[HAND_CONTRACT_VERSION_KEY] = HAND_CONTRACT_VERSION
+        obj[HAND_SUPPORT_RING_COUNT_KEY] = len(rings)
+
+
 def enhance_three_segment_hands(
     *, armature: bpy.types.Object, objects: list[bpy.types.Object], dimensions: dict[str, Any], stats: dict[str, Any],
     resolve_roles: Callable[[list[str]], dict[str, str]], maximum_influences: int = 4,
@@ -445,7 +522,7 @@ def enhance_three_segment_hands(
     }
     existing_names = {bone.name for bone in armature.data.bones}
     if expected_names.issubset(existing_names):
-        stats.update(_collect_weight_stats(objects))
+        stats.update(_validate_reusable_three_segment_hand_rig(armature, objects, expected_names))
         stats.update({"boneMap": bone_map, "fingerRig": True, "fingerRigEnhanced": False, "fingerRigReused": True,
                       "fingerBoneCount": 18, "fingerSegmentCount": 3, "preserveVolumeSkinning": True})
         return stats, bone_map
@@ -482,6 +559,7 @@ def enhance_three_segment_hands(
                   "fingerTopologyMode": "deterministic_annular_strips", "fingerBlendVertexCount": blended_vertices,
                   "preserveVolumeSkinning": True, "handRingDiagnostics": ring_diagnostics,
                   "externalSupportIsolationCount": support_isolation_count})
+    _mark_validated_three_segment_hand_rig(armature, objects, topology)
     armature["ip_avatar_bone_map"] = json.dumps(bone_map)
     armature["ip_avatar_finger_rig_enhanced"] = True
     return stats, bone_map
