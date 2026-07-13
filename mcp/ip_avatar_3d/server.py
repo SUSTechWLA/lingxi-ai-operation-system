@@ -1252,7 +1252,7 @@ def prepare_character_master(
     render_config = profile.get("render") or {}
     requested_tier = str(qualityTier or "aroll_close").strip().lower()
     if requested_tier != "aroll_close":
-        raise ValueError("qualityTier must be arroll_close")
+        raise ValueError("qualityTier must be aroll_close")
     configured_tier = str(model_config.get("qualityTier") or requested_tier).strip().lower()
     if configured_tier != requested_tier:
         raise ValueError(

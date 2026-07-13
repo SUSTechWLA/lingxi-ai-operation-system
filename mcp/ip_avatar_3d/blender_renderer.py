@@ -4926,19 +4926,72 @@ def uses_source_humanoid_axes(armature: bpy.types.Object) -> bool:
     return all(any(name.endswith(suffix) for name in normalized) for suffix in source_limb_suffixes)
 
 
+def _clear_action_channels(action: bpy.types.Action) -> None:
+    """Clear keyframe data while preserving one canonical Action datablock."""
+    fcurves = getattr(action, "fcurves", None)
+    if fcurves is not None:
+        for fcurve in list(fcurves):
+            fcurves.remove(fcurve)
+        return
+    for layer in list(action.layers):
+        action.layers.remove(layer)
+    for slot in list(action.slots):
+        action.slots.remove(slot)
+
+
+def _reuse_runtime_action(animated_id: Any, canonical_name: str) -> dict[str, Any]:
+    animated_id.animation_data_create()
+    animation_data = animated_id.animation_data
+    animation_data.action = None
+    canonical = bpy.data.actions.get(canonical_name)
+    if canonical is None:
+        canonical = bpy.data.actions.new(canonical_name)
+
+    removed_duplicates: list[str] = []
+    prefix = f"{canonical_name}."
+    for action in list(bpy.data.actions):
+        suffix = action.name[len(prefix) :] if action.name.startswith(prefix) else ""
+        if action == canonical or len(suffix) != 3 or not suffix.isdigit():
+            continue
+        removed_duplicates.append(action.name)
+        action.user_remap(canonical)
+        bpy.data.actions.remove(action)
+
+    _clear_action_channels(canonical)
+    canonical.use_fake_user = True
+    animation_data.action = canonical
+    return {"action": canonical.name, "removedDuplicates": removed_duplicates}
+
+
+def reconcile_runtime_timeline_actions(
+    armature: bpy.types.Object,
+    face: dict[str, bpy.types.Object],
+) -> dict[str, Any]:
+    """Reuse the canonical per-render Actions without touching the master library."""
+    resolved = {"body": _reuse_runtime_action(armature, "Talk_Loop")}
+    mouth = face.get("mouth")
+    shape_keys = mouth.data.shape_keys if mouth and mouth.type == "MESH" else None
+    if shape_keys:
+        resolved["mouth"] = _reuse_runtime_action(shape_keys, "Mouth_Viseme_Timeline")
+    return resolved
+
+
 def animate(
     armature: bpy.types.Object,
     face: dict[str, bpy.types.Object],
     plan: dict,
     fps: int,
     bone_map: dict[str, str],
+    *,
+    runtime_actions_prepared: bool = False,
 ) -> None:
     events = plan.get("motionEvents") or []
     frame_end = max(1, int(float(plan.get("durationSec") or 1) * fps))
     pose = armature.pose.bones
     source_rig = uses_source_humanoid_axes(armature)
+    if not runtime_actions_prepared:
+        reconcile_runtime_timeline_actions(armature, face)
     if armature.animation_data:
-        armature.animation_data.action = None
         for track in armature.animation_data.nla_tracks:
             track.mute = True
     animated_bones = tuple(dict.fromkeys(name for name in bone_map.values() if name in pose))
@@ -4949,8 +5002,6 @@ def animate(
         pose[bone_name].scale = (1, 1, 1)
 
     mouth = face.get("mouth")
-    if mouth and mouth.data.shape_keys and mouth.data.shape_keys.animation_data:
-        mouth.data.shape_keys.animation_data.action = None
 
     def set_bone(role: str, *, location=None, rotation=None) -> None:
         bone_name = bone_map.get(role)
@@ -6057,7 +6108,15 @@ def main() -> None:
         rig_stats["renderDetail"] = configure_character_render_detail(character_objects, data)
     rig_stats.update(_collect_weight_stats(character_objects))
     rig_stats["boneMap"] = bone_map
-    animate(armature, face, data["motionPlan"], int(data["fps"]), bone_map)
+    rig_stats["runtimeActions"] = reconcile_runtime_timeline_actions(armature, face)
+    animate(
+        armature,
+        face,
+        data["motionPlan"],
+        int(data["fps"]),
+        bone_map,
+        runtime_actions_prepared=True,
+    )
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
     if bool(data.get("prepareMaster")):
         container = dimensions.get("container")

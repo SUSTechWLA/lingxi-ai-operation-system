@@ -13,6 +13,12 @@ audio or Blender and points the caller to `prepare_character_master`. If a
 configured file exists but lacks the named collection, version metadata, or
 exactly one Armature, Blender raises a specific validation error.
 
+The review follow-up also reconciles the two per-render timeline Actions before
+animation. `Talk_Loop` and `Mouth_Viseme_Timeline` reuse their canonical
+datablocks, clear only their runtime channels, and remove only numbered
+duplicates of those known transient timelines. The remaining reusable master
+action library is left intact.
+
 ## TDD Evidence
 
 The first Task 7 server run executed 38 tests and failed on the intentionally
@@ -29,6 +35,11 @@ configured missing master reached Blender and failed later because no rig
 outputs were produced. The implementation now raises `FileNotFoundError` with
 `prepare_character_master` before audio generation or Blender execution.
 
+The review RED run exercised the complete master plus authored-studio path
+through `blender_renderer.main`. It produced exactly
+`Talk_Loop.001` and `Mouth_Viseme_Timeline.001`. The GREEN run uses the existing
+canonical Actions and produces no canonical numbered duplicate.
+
 ## Implementation
 
 ### Master collection
@@ -37,6 +48,8 @@ outputs were produced. The implementation now raises `FileNotFoundError` with
 
 - `MASTER_COLLECTION = "IP_Character_Master"`;
 - `ip_aroll_master_version = 1` metadata;
+- strict version typing: only an actual Python/Blender integer equal to `1` is
+  accepted; booleans, floats, and numeric strings are rejected;
 - save-time duplicate Armature and duplicate collection rejection;
 - append-time file, collection, version, duplicate collection, and exactly-one
   Armature validation;
@@ -76,6 +89,11 @@ retopology, and render-detail mutation. It reuses the existing Armature,
 Mouth Shape Keys, face topology objects, materials, and Actions before applying
 the current motion plan and authored-scene placement.
 
+Before applying that plan, the renderer reuses and clears the canonical
+`Talk_Loop` and `Mouth_Viseme_Timeline` datablocks. This prevents Blender from
+allocating `.001` Actions while retaining all reusable gesture and expression
+Actions from the master.
+
 ## Profile Contract
 
 `ip形象/main_ip/character-profile.json` now contains:
@@ -90,11 +108,16 @@ No `Eye_Blink.*`, `Face_Blink`, or full-blink capability is claimed.
 
 ## Verification
 
-- `python3 mcp/ip_avatar_3d/test_server.py`: 40 tests passed, with the
-  Blender-only integration test skipped under system Python.
-- Blender-focused master integration: 1 test passed. It saved a real versioned
-  Blend, reset Blender, appended the collection, retained exactly one Armature,
-  and loaded a fake-user A-roll Action.
+- `python3 mcp/ip_avatar_3d/test_server.py`: 43 tests passed, with the two
+  Blender-only integration tests skipped under system Python.
+- Blender-focused master integration: 2 tests passed. The helper-level test
+  saved and appended a real versioned Blend with a fake-user A-roll Action. The
+  full-path test saved a real main-IP master fixture, opened the authored
+  editorial studio, ran `blender_renderer.main`, animated the appended master,
+  rebuilt runtime timelines, and verified no canonical `.NNN` Action names.
+  It also verified exactly one Armature, the complete canonical action library,
+  unchanged Shape Key names and material names, and the authored studio spawn
+  marker.
 - `test_blender_scene_contract.py`: 5 tests passed on Blender 5.1.2.
 - `test_blender_character_rig.py`: all direct-runner tests passed on Blender
   5.1.2, including Task 6 squint-only and source-PBR fail-closed coverage.

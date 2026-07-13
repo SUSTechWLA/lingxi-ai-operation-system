@@ -52,10 +52,11 @@ def validate_master_collection(collection: Any, master_path: Path | str) -> dict
     version = collection.get(MASTER_VERSION_PROPERTY)
     if version is None:
         raise RuntimeError(f"missing {MASTER_VERSION_PROPERTY} in {master_path}")
-    try:
-        resolved_version = int(version)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"invalid {MASTER_VERSION_PROPERTY}={version!r} in {master_path}") from exc
+    if type(version) is not int:
+        raise RuntimeError(
+            f"invalid {MASTER_VERSION_PROPERTY}={version!r} in {master_path}; expected an integer"
+        )
+    resolved_version = version
     if resolved_version != MASTER_VERSION:
         raise RuntimeError(
             f"unsupported {MASTER_VERSION_PROPERTY}={resolved_version} in {master_path}; expected {MASTER_VERSION}"

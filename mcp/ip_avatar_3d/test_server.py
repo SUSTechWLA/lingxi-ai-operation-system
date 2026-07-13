@@ -38,6 +38,15 @@ def load_master_asset():
     return module
 
 
+def load_blender_renderer():
+    path = pathlib.Path(__file__).with_name("blender_renderer.py")
+    spec = importlib.util.spec_from_file_location("ip_avatar_3d_blender_renderer", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 class IPAvatar3DMCPTests(unittest.TestCase):
     def assert_no_grouped_motion_overlaps(self, events: list[dict]) -> None:
         conflicts = []
@@ -679,6 +688,35 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertTrue(qa_input["prepareMaster"])
             self.assertEqual(qa_input["masterCollection"], "IP_Character_Master")
 
+    def test_prepare_character_master_reports_canonical_quality_tier_spelling(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / "source.fbx"
+            profile = root / "character-profile.json"
+            source.write_bytes(b"Kaydara FBX Binary placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "model": {
+                            "sourcePath": "source.fbx",
+                            "masterBlendPath": "master.blend",
+                            "qualityTier": "aroll_close",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "qualityTier must be aroll_close"):
+                server.prepare_character_master(
+                    sourceModel="",
+                    characterProfilePath=str(profile),
+                    qualityTier="preview",
+                    dryRun=True,
+                )
+
     def test_default_render_resolution_is_qhd_2k(self) -> None:
         server = load_server()
 
@@ -1038,6 +1076,19 @@ class MasterAssetHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "missing ip_aroll_master_version"):
             master.validate_master_collection(collection, pathlib.Path("missing-version.blend"))
 
+    def test_master_validation_rejects_non_integer_versions(self) -> None:
+        master = load_master_asset()
+        armature = types.SimpleNamespace(name="Rig", type="ARMATURE")
+
+        for invalid_version in (1.5, True, "1"):
+            with self.subTest(version=invalid_version), self.assertRaisesRegex(
+                RuntimeError, "invalid ip_aroll_master_version"
+            ):
+                master.validate_master_collection(
+                    self.collection(armature, version=invalid_version),
+                    pathlib.Path("invalid-version.blend"),
+                )
+
     def test_master_validation_rejects_missing_or_duplicate_armature(self) -> None:
         master = load_master_asset()
         mesh = types.SimpleNamespace(name="Body", type="MESH")
@@ -1167,6 +1218,141 @@ class BlenderMasterAssetIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(bpy.data.actions.get("Aroll_Test_Action"))
             collection = bpy.data.collections.get(master.MASTER_COLLECTION)
             self.assertEqual(collection[master.MASTER_VERSION_PROPERTY], master.MASTER_VERSION)
+
+    def test_full_master_authored_studio_path_preserves_canonical_assets(self) -> None:
+        try:
+            import bpy
+        except ImportError:
+            self.skipTest("requires Blender bpy")
+
+        master = load_master_asset()
+        renderer = load_blender_renderer()
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        prepared_fixture = repo_root / "ip形象" / "main_ip" / "models" / "main-ip-talking-head.blend"
+        studio_path = repo_root / "ip形象" / "main_ip" / "scenes" / "editorial-news-studio.blend"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            master_path = root / "full-path-master.blend"
+            bpy.ops.wm.open_mainfile(filepath=str(prepared_fixture), load_ui=False)
+            armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
+            self.assertEqual(len(armatures), 1)
+            armature = armatures[0]
+
+            def belongs_to_character(obj):
+                if obj.type != "MESH":
+                    return False
+                if obj.data.shape_keys or obj.get("ip_face_topology_role"):
+                    return True
+                if any(modifier.type == "ARMATURE" and modifier.object == armature for modifier in obj.modifiers):
+                    return True
+                parent = obj.parent
+                while parent:
+                    if parent == armature:
+                        return True
+                    parent = parent.parent
+                return False
+
+            character_objects = [obj for obj in bpy.data.objects if belongs_to_character(obj)]
+            mouth = renderer.find_existing_viseme_mouth(character_objects)
+            self.assertIsNotNone(mouth)
+            shape_key_names = {key.name for key in mouth.data.shape_keys.key_blocks}
+            material_names = {
+                material.name
+                for obj in character_objects
+                for material in obj.data.materials
+                if material
+            }
+            canonical_actions = {action.name for action in bpy.data.actions}
+            self.assertIn("Talk_Loop", canonical_actions)
+            self.assertIn("Mouth_Viseme_Timeline", canonical_actions)
+
+            asset_objects = set(character_objects)
+            asset_objects.add(armature)
+            for obj in list(asset_objects):
+                parent = obj.parent
+                while parent:
+                    asset_objects.add(parent)
+                    parent = parent.parent
+            master.save_master_collection(
+                character_objects=list(asset_objects),
+                armature=armature,
+                output_path=master_path,
+            )
+
+            render_input = {
+                "assetOnly": True,
+                "useMasterAsset": True,
+                "masterBlendPath": str(master_path),
+                "modelPath": "",
+                "sceneBlendPath": str(studio_path),
+                "backgroundPath": "",
+                "backgroundMode": "blender_scene",
+                "durationSec": 1.0,
+                "fps": 30,
+                "resolution": {"width": 640, "height": 360},
+                "transparent": False,
+                "cameraPreset": "medium",
+                "cameraPlan": [{"frame": 1, "camera": "Camera_Medium"}],
+                "lightingPreset": "editorial_soft",
+                "renderEngine": "BLENDER_EEVEE_NEXT",
+                "eeveeSamples": 16,
+                "cyclesSamples": 16,
+                "targetCharacterHeight": 2.55,
+                "faceScreenMode": "source",
+                "rigMode": "auto",
+                "preserveExistingRig": True,
+                "enhanceExistingRig": False,
+                "mouthMode": "source_mesh_visemes",
+                "facialDetailMode": "rich",
+                "facialTopologyMode": "source_only",
+                "characterId": "main_ip_sloth",
+                "motionPlan": {
+                    "durationSec": 1.0,
+                    "motionEvents": [],
+                    "lipSync": [{"timeSec": 0.0, "viseme": "a", "open": 0.5}],
+                },
+                "riggedBlendPath": str(root / "runtime.blend"),
+                "riggedGlbPath": str(root / "runtime.glb"),
+                "rigReportPath": str(root / "runtime-report.json"),
+            }
+            captured = {}
+
+            def capture_assets(_data, objects, _assets, runtime_armature, face, *_args, **_kwargs):
+                captured["objects"] = list(objects)
+                captured["armature"] = runtime_armature
+                captured["face"] = dict(face)
+
+            with mock.patch.object(renderer, "read_input", return_value=render_input), mock.patch.object(
+                renderer, "save_rigged_assets", side_effect=capture_assets
+            ):
+                renderer.main()
+
+            action_names = {action.name for action in bpy.data.actions}
+            duplicate_actions = sorted(
+                name
+                for name in action_names
+                for canonical in canonical_actions
+                if name.startswith(f"{canonical}.") and name[len(canonical) + 1 :].isdigit()
+            )
+            self.assertEqual(duplicate_actions, [])
+            self.assertTrue(canonical_actions.issubset(action_names))
+            self.assertEqual(
+                [obj.name for obj in bpy.context.scene.objects if obj.type == "ARMATURE"],
+                [captured["armature"].name],
+            )
+            runtime_mouth = captured["face"]["mouth"]
+            self.assertEqual({key.name for key in runtime_mouth.data.shape_keys.key_blocks}, shape_key_names)
+            self.assertEqual(
+                {
+                    material.name
+                    for obj in captured["objects"]
+                    for material in obj.data.materials
+                    if material
+                },
+                material_names,
+            )
+            self.assertIsNotNone(bpy.data.objects.get("IP_Character_Spawn"))
 
 
 if __name__ == "__main__":
