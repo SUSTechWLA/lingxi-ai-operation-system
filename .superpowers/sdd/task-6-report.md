@@ -22,6 +22,9 @@ asset reports:
 
 Legacy full-blink metadata is rejected with a clear `rebuild master from source
 FBX for blinkCapability=squint_only` error.
+`facialTopologyMode=volumetric`, `true_geometry`, and `lips_eyelids` are also
+rejected before face setup; the production source asset supports
+`source_retopology` with `blinkCapability=squint_only` only.
 
 ## RED/GREEN Evidence
 
@@ -64,6 +67,18 @@ Squint fallback RED/GREEN:
   must map to stored skin-loop UVs within `5e-5`, remain finite, and retain zero
   Eye weight; ocular metadata remains preserved and imported ocular UVs remain
   finite without requiring unstable vertex/loop multiplicity.
+- RED: reuse accepted deleted center metadata, ocular-core Shape Key edits while
+  stored displacement remained zero, injected `Eye.L` skin weight, and a stale
+  PBR claim after its linked base-color node was removed.
+- GREEN: reuse now recomputes core and non-skin displacement from `Basis` and
+  `Eye_Squint.L/R`, verifies opposite-side isolation, live `Eye.L/R` weights,
+  finite active-skin UVs, signed nonzero closure bounded by stored closure
+  `<=0.12`, and canonical source or packed PBR links/color spaces.
+- RED: `facialTopologyMode=volumetric` generated upper/lower lid objects and an
+  eyelid material for the source asset.
+- GREEN: generated-lid modes fail at `setup_face` entry, before any lid object or
+  material can be created; the abandoned integrated `Eye_Blink` branch was
+  removed from `add_rich_source_face_shapes`.
 
 Direct-runner RED reliability:
 
@@ -78,9 +93,10 @@ Final character GREEN:
 `/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
 
 - Blender `5.1.2`, exit `0`.
-- PASS all `18` direct-runner tests, including fresh source build, independent
+- PASS all `20` direct-runner tests, including fresh source build, independent
   L/R squint, no-visible-overlay checks, mouth bounds, linked source PBR roles,
-  fail-closed reuse, GLB extras, and live GLB export/reimport.
+  live-data fail-closed reuse, generated-lid mode rejection, GLB extras, and live
+  GLB export/reimport.
 
 Final scene GREEN:
 
@@ -118,8 +134,9 @@ UV, custom data, reuse, and export:
   squint capability, per-side core/skin metadata, boundary/UV/deform evidence,
   and tuned PBR role metadata.
 - Existing rich/source-retopology assets are reusable only when every current
-  Task 6 squint property validates. Missing metadata and legacy full-blink mode
-  both fail closed.
+  Task 6 squint property validates and the live shapes, weights, and UVs agree.
+  Missing metadata, mutated ocular/skin data, and legacy full-blink mode all fail
+  closed with a source-FBX rebuild error.
 
 Mouth restraint:
 
@@ -141,7 +158,9 @@ Source PBR:
 - Tangent normal strength is `0.34`, specular IOR level is `0.28`, and source
   roughness is remapped to `0.38..0.76`.
 - No global `BUMP` or `TEX_NOISE` node is added. Packed GLB material graphs keep
-  already-valid tuned metadata instead of resetting it to false/empty.
+  tuned metadata only when the live base-color, packed metallic/roughness, and
+  tangent-normal graph has canonical links and color spaces. Disconnected or
+  stale PBR claims fail closed.
 
 ## Visual Evidence
 

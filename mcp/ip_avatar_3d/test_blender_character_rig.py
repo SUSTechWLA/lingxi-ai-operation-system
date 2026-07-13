@@ -775,6 +775,116 @@ def test_existing_rich_face_without_task6_metadata_fails_closed() -> None:
         raise AssertionError("incomplete Task 6 face metadata was silently reused")
 
 
+def test_task6_reuse_recomputes_squint_and_pbr_evidence() -> None:
+    character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    face = blender_renderer.setup_face(
+        {
+            "characterId": "main_ip_sloth",
+            "faceScreenMode": "source",
+            "mouthMode": "source_mesh_visemes",
+            "mouthHeightRatio": 0.805,
+            "mouthScale": 1.0,
+            "facialDetailMode": "rich",
+            "facialTopologyMode": "source_retopology",
+        },
+        dimensions,
+        armature,
+        character_objects,
+        bone_map,
+    )
+    source = face["mouth"]
+
+    def assert_rebuild_failure(expected_problem: str) -> None:
+        try:
+            blender_renderer.validate_task6_face_metadata(source)
+        except RuntimeError as exc:
+            message = str(exc)
+            assert "rebuild master from source FBX" in message
+            assert expected_problem in message, message
+        else:
+            raise AssertionError(f"Task 6 reuse accepted invalid {expected_problem}")
+
+    center_x = float(source["squint_center_x_l"])
+    del source["squint_center_x_l"]
+    assert_rebuild_failure("squint_center_x_l")
+    source["squint_center_x_l"] = center_x
+
+    keys = source.data.shape_keys.key_blocks
+    core_index = object_property_indices(source, "eyeball_core_indices_l")[0]
+    original_coordinate = keys["Eye_Squint.L"].data[core_index].co.copy()
+    keys["Eye_Squint.L"].data[core_index].co.x += 0.01
+    assert source["squint_core_max_displacement_l"] <= 1e-9
+    assert_rebuild_failure("squint_core_max_displacement_l")
+    keys["Eye_Squint.L"].data[core_index].co = original_coordinate
+
+    skin_index = object_property_indices(source, "squint_skin_indices_l")[0]
+    eye_group = source.vertex_groups["Eye.L"]
+    try:
+        original_weight = eye_group.weight(skin_index)
+    except RuntimeError:
+        original_weight = None
+    eye_group.add([skin_index], 0.25, "REPLACE")
+    assert source["squint_eye_weight_zero_l"] is True
+    assert_rebuild_failure("squint_eye_weight_zero_l")
+    if original_weight is None:
+        eye_group.remove([skin_index])
+    else:
+        eye_group.add([skin_index], original_weight, "REPLACE")
+
+    source_material = next(
+        material
+        for material in source.data.materials
+        if material
+        and material.use_nodes
+        and material.node_tree.nodes.get("Image Texture - Base Color")
+    )
+    source_material.node_tree.nodes.remove(
+        source_material.node_tree.nodes["Image Texture - Base Color"]
+    )
+    assert source["source_pbr_materials_tuned"] is True
+    assert_rebuild_failure("source_pbr_graph")
+
+
+def test_source_asset_rejects_generated_full_lid_topology_before_creation() -> None:
+    character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    object_names_before = set(bpy.data.objects)
+    material_names_before = set(bpy.data.materials)
+
+    try:
+        blender_renderer.setup_face(
+            {
+                "characterId": "main_ip_sloth",
+                "faceScreenMode": "source",
+                "mouthMode": "source_mesh_visemes",
+                "mouthHeightRatio": 0.805,
+                "mouthScale": 1.0,
+                "facialDetailMode": "rich",
+                "facialTopologyMode": "volumetric",
+            },
+            dimensions,
+            armature,
+            character_objects,
+            bone_map,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "source_retopology" in message
+        assert "squint_only" in message
+    else:
+        raise AssertionError("source asset accepted generated full-lid topology")
+
+    generated_objects = set(bpy.data.objects).difference(object_names_before)
+    generated_materials = set(bpy.data.materials).difference(material_names_before)
+    assert not any(
+        obj.name.startswith(("IP_UpperLid.", "IP_LowerLid."))
+        or obj.get("ip_face_topology_role") in {
+            "upper_lid_l", "lower_lid_l", "upper_lid_r", "lower_lid_r",
+        }
+        for obj in generated_objects
+    )
+    assert not any("Eyelid" in material.name for material in generated_materials)
+
+
 def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint() -> None:
     character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
     face = blender_renderer.setup_face(
@@ -1454,6 +1564,8 @@ if __name__ == "__main__":
         test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays,
         test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face,
         test_existing_rich_face_without_task6_metadata_fails_closed,
+        test_task6_reuse_recomputes_squint_and_pbr_evidence,
+        test_source_asset_rejects_generated_full_lid_topology_before_creation,
         test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint,
         test_publish_render_detail_is_non_destructive_and_deformation_aware,
         test_talking_timeline_uses_clamped_bezier_interpolation,

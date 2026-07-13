@@ -1697,6 +1697,138 @@ TASK6_FACE_METADATA_PROPERTIES = (
 )
 
 
+def _task6_link_source(input_socket, node_type: str, output_name: str):
+    links = list(input_socket.links) if input_socket else []
+    if len(links) != 1:
+        return None
+    link = links[0]
+    if link.from_node.type != node_type or link.from_socket.name != output_name:
+        return None
+    return link.from_node
+
+
+def _task6_pbr_material_graph(
+    source_material: bpy.types.Material,
+) -> dict[str, bpy.types.Node] | None:
+    """Resolve only the canonical tuned source graph or Blender's packed glTF graph."""
+    if not source_material.use_nodes:
+        return None
+    nodes = source_material.node_tree.nodes
+    if any(node.type in {"BUMP", "TEX_NOISE"} for node in nodes):
+        return None
+    principled_nodes = [node for node in nodes if node.type == "BSDF_PRINCIPLED"]
+    if len(principled_nodes) != 1:
+        return None
+    principled = principled_nodes[0]
+    base_color = _task6_link_source(principled.inputs.get("Base Color"), "TEX_IMAGE", "Color")
+    normal_map = _task6_link_source(principled.inputs.get("Normal"), "NORMAL_MAP", "Normal")
+    normal_image = (
+        _task6_link_source(normal_map.inputs.get("Color"), "TEX_IMAGE", "Color")
+        if normal_map
+        else None
+    )
+    if not base_color or not normal_map or not normal_image:
+        return None
+    if (
+        not base_color.image
+        or not normal_image.image
+        or base_color.image.colorspace_settings.name != "sRGB"
+        or normal_image.image.colorspace_settings.name != "Non-Color"
+        or normal_map.space != "TANGENT"
+    ):
+        return None
+
+    metallic_link = list(principled.inputs["Metallic"].links)
+    roughness_link = list(principled.inputs["Roughness"].links)
+    if len(metallic_link) != 1 or len(roughness_link) != 1:
+        return None
+    metallic_source = metallic_link[0]
+    roughness_source = roughness_link[0]
+    if metallic_source.from_node.type == "TEX_IMAGE":
+        metallic_image = (
+            metallic_source.from_node
+            if metallic_source.from_socket.name == "Color"
+            else None
+        )
+        roughness_range = (
+            roughness_source.from_node
+            if roughness_source.from_node.type == "MAP_RANGE"
+            and roughness_source.from_socket.name == "Result"
+            else None
+        )
+        roughness_image = (
+            _task6_link_source(roughness_range.inputs.get("Value"), "TEX_IMAGE", "Color")
+            if roughness_range
+            else None
+        )
+        if (
+            not metallic_image
+            or not roughness_image
+            or not metallic_image.image
+            or not roughness_image.image
+            or metallic_image.image.colorspace_settings.name != "Non-Color"
+            or roughness_image.image.colorspace_settings.name != "Non-Color"
+            or abs(float(roughness_range.inputs["To Min"].default_value) - 0.38) > 1e-6
+            or abs(float(roughness_range.inputs["To Max"].default_value) - 0.76) > 1e-6
+        ):
+            return None
+    else:
+        separate = metallic_source.from_node
+        if (
+            separate.type != "SEPARATE_COLOR"
+            or roughness_source.from_node != separate
+            or metallic_source.from_socket.name != "Blue"
+            or roughness_source.from_socket.name != "Green"
+        ):
+            return None
+        packed_image = _task6_link_source(separate.inputs.get("Color"), "TEX_IMAGE", "Color")
+        if (
+            not packed_image
+            or not packed_image.image
+            or packed_image.image.colorspace_settings.name != "Non-Color"
+        ):
+            return None
+        metallic_image = packed_image
+        roughness_image = packed_image
+
+    return {
+        "base_color": base_color,
+        "metallic": metallic_image,
+        "normal": normal_image,
+        "roughness": roughness_image,
+    }
+
+
+def _task6_pbr_metadata_is_verifiable(obj: bpy.types.Object) -> bool:
+    try:
+        material_names = json.loads(str(obj.get("source_pbr_material_names") or "[]"))
+        role_metadata = json.loads(str(obj.get("source_pbr_role_metadata") or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if (
+        not isinstance(material_names, list)
+        or not material_names
+        or any(not isinstance(name, str) or not name for name in material_names)
+        or not isinstance(role_metadata, dict)
+        or set(role_metadata) != {"base_color", "metallic", "normal", "roughness"}
+        or any(not isinstance(name, str) or not name for name in role_metadata.values())
+    ):
+        return False
+
+    materials = {material.name: material for material in obj.data.materials if material}
+    for material_name in material_names:
+        source_material = materials.get(material_name)
+        graph = _task6_pbr_material_graph(source_material) if source_material else None
+        if not graph:
+            return False
+        for role, node in graph.items():
+            actual_name = Path(node.image.name).stem.lower()
+            claimed_name = Path(role_metadata[role]).stem.lower()
+            if claimed_name not in actual_name and actual_name not in claimed_name:
+                return False
+    return True
+
+
 def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
     missing = [name for name in TASK6_FACE_METADATA_PROPERTIES if name not in face_mesh]
     if face_mesh.get("eyelid_topology_mode") == "squint_only_source_skin":
@@ -1716,6 +1848,11 @@ def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
                 "squint_eye_weight_zero",
                 "eyeball_core_excluded",
                 "squint_non_skin_max_displacement",
+                "squint_core_max_displacement",
+                "squint_center_x",
+                "squint_center_z",
+                "squint_radius_x",
+                "squint_radius_z",
             )
         )
         missing.extend(name for name in side_properties if name not in face_mesh)
@@ -1760,7 +1897,11 @@ def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
         ):
             if not bool(face_mesh.get(name)):
                 invalid.append(name)
-        if not 0.10 <= float(face_mesh.get("squint_max_closure_fraction", 0.0)) <= 0.14:
+        try:
+            stored_closure = float(face_mesh.get("squint_max_closure_fraction", 0.0))
+        except (TypeError, ValueError):
+            stored_closure = 0.0
+        if not math.isfinite(stored_closure) or not 0.0 < stored_closure <= 0.12:
             invalid.append("squint_max_closure_fraction")
         modified = decoded.get("eye_region_modified_uv_data", {})
         if modified and (
@@ -1791,6 +1932,8 @@ def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
         role_metadata = decoded.get("source_pbr_role_metadata", {})
         if role_metadata and set(role_metadata) != {"base_color", "metallic", "normal", "roughness"}:
             invalid.append("source_pbr_role_metadata")
+        if bool(face_mesh.get("source_pbr_materials_tuned")) and not _task6_pbr_metadata_is_verifiable(face_mesh):
+            invalid.append("source_pbr_graph")
         for side in ("l", "r"):
             core = set(decoded.get(f"eyeball_core_indices_{side}", []))
             skin = set(decoded.get(f"squint_skin_indices_{side}", []))
@@ -1816,6 +1959,190 @@ def validate_task6_face_metadata(face_mesh: bpy.types.Object) -> None:
             or keys.get("Eye_Blink.R")
         ):
             invalid.append("squint_shape_keys")
+        else:
+            basis = keys["Basis"]
+            vertex_count = len(basis.data)
+            uv_by_vertex: dict[int, list[tuple[float, float]]] = {
+                index: [] for index in range(vertex_count)
+            }
+            active_uv = face_mesh.data.uv_layers.active
+            if active_uv:
+                for loop_index, loop in enumerate(face_mesh.data.loops):
+                    uv = active_uv.data[loop_index].uv
+                    uv_by_vertex[int(loop.vertex_index)].append((float(uv.x), float(uv.y)))
+            else:
+                invalid.append("squint_skin_uv_data")
+
+            def group_weight(group, index: int) -> float:
+                if not group:
+                    return 0.0
+                try:
+                    return float(group.weight(index))
+                except RuntimeError:
+                    return 0.0
+
+            original_vertex_count = int(deform.get("original_vertex_count", vertex_count))
+            runtime: dict[str, dict[str, Any]] = {}
+            for side in ("l", "r"):
+                suffix = side.upper()
+                try:
+                    core = {int(value) for value in decoded[f"eyeball_core_indices_{side}"]}
+                    skin = {int(value) for value in decoded[f"squint_skin_indices_{side}"]}
+                    upper = {
+                        int(value)
+                        for value in json.loads(str(face_mesh[f"squint_upper_indices_{side}"]))
+                    }
+                    lower = {
+                        int(value)
+                        for value in json.loads(str(face_mesh[f"squint_lower_indices_{side}"]))
+                    }
+                    center_x = float(face_mesh[f"squint_center_x_{side}"])
+                    center_z = float(face_mesh[f"squint_center_z_{side}"])
+                    radius_x = float(face_mesh[f"squint_radius_x_{side}"])
+                    radius_z = float(face_mesh[f"squint_radius_z_{side}"])
+                    stored_non_skin = float(face_mesh[f"squint_non_skin_max_displacement_{side}"])
+                    stored_core = float(face_mesh[f"squint_core_max_displacement_{side}"])
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    invalid.append(f"squint_skin_indices_{side}")
+                    continue
+                if (
+                    not all(math.isfinite(value) for value in (center_x, center_z, radius_x, radius_z))
+                    or radius_x <= 0.0
+                    or radius_z <= 0.0
+                ):
+                    invalid.append(f"squint_radius_x_{side}")
+                    continue
+                if (
+                    not math.isfinite(stored_non_skin)
+                    or stored_non_skin > 1e-9
+                    or not math.isfinite(stored_core)
+                    or stored_core > 1e-9
+                ):
+                    invalid.append(f"squint_core_max_displacement_{side}")
+
+                stored_skin_entries = modified.get("sides", {}).get(side, {}).get(
+                    "squint_skin_uv_data", []
+                )
+                stored_skin_uvs = [
+                    (float(uv[0]), float(uv[1]))
+                    for item in stored_skin_entries
+                    for uv in item.get("uvs", [])
+                    if len(uv) == 2
+                ]
+                if (
+                    not stored_skin_uvs
+                    or not all(math.isfinite(value) for uv in stored_skin_uvs for value in uv)
+                ):
+                    invalid.append(f"squint_skin_uv_data_{side}")
+
+                if original_vertex_count == vertex_count:
+                    allowed_skin = {index for index in skin if 0 <= index < vertex_count}
+                else:
+                    allowed_skin = {
+                        index
+                        for index, actual_uvs in uv_by_vertex.items()
+                        if actual_uvs
+                        and all(
+                            any(
+                                abs(actual[0] - expected[0]) <= 5e-5
+                                and abs(actual[1] - expected[1]) <= 5e-5
+                                for expected in stored_skin_uvs
+                            )
+                            for actual in actual_uvs
+                        )
+                    }
+                shape = keys[f"Eye_Squint.{suffix}"]
+                displacements = [
+                    float((shape.data[index].co - basis.data[index].co).length)
+                    for index in range(vertex_count)
+                ]
+                if not all(math.isfinite(value) for value in displacements):
+                    invalid.append(f"squint_shape_data_{side}")
+                    continue
+                moved = {index for index, value in enumerate(displacements) if value > 1e-9}
+                eye_groups = (
+                    face_mesh.vertex_groups.get("Eye.L"),
+                    face_mesh.vertex_groups.get("Eye.R"),
+                )
+                own_eye_group = eye_groups[0 if side == "l" else 1]
+                actual_core = {
+                    index
+                    for index in range(vertex_count)
+                    if group_weight(own_eye_group, index) > 0.015
+                }
+                actual_core_max = max((displacements[index] for index in actual_core), default=1.0)
+                actual_non_skin_max = max(
+                    (value for index, value in enumerate(displacements) if index not in allowed_skin),
+                    default=0.0,
+                )
+                if actual_core_max > 1e-9:
+                    invalid.append(f"squint_core_max_displacement_{side}")
+                if actual_non_skin_max > 1e-9:
+                    invalid.append(f"squint_non_skin_max_displacement_{side}")
+                if not moved:
+                    invalid.append(f"squint_closure_{side}")
+                if any(
+                    group_weight(group, index) > 1e-8
+                    for index in moved
+                    for group in eye_groups
+                ):
+                    invalid.append(f"squint_eye_weight_zero_{side}")
+                if any(
+                    not uv_by_vertex.get(index)
+                    or not all(math.isfinite(value) for uv in uv_by_vertex[index] for value in uv)
+                    for index in moved
+                ):
+                    invalid.append(f"squint_skin_uv_data_{side}")
+
+                closure_ratios: list[float] = []
+                for index in moved:
+                    basis_world = face_mesh.matrix_world @ basis.data[index].co
+                    shape_world = face_mesh.matrix_world @ shape.data[index].co
+                    target = center_z - float(basis_world.z)
+                    delta = float(shape_world.z - basis_world.z)
+                    if abs(delta) <= 1e-9:
+                        continue
+                    if abs(target) <= 1e-9:
+                        invalid.append(f"squint_closure_{side}")
+                        continue
+                    ratio = delta / target
+                    closure_ratios.append(ratio)
+                    if original_vertex_count == vertex_count:
+                        normalized_x = (float(basis_world.x) - center_x) / radius_x
+                        normalized_z = (float(basis_world.z) - center_z) / radius_z
+                        if math.hypot(normalized_x, normalized_z) > 1.30 + 1e-5:
+                            invalid.append(f"squint_skin_indices_{side}")
+                        if index in upper and normalized_z <= 0.0:
+                            invalid.append(f"squint_upper_indices_{side}")
+                        if index in lower and normalized_z >= 0.0:
+                            invalid.append(f"squint_lower_indices_{side}")
+                if (
+                    not closure_ratios
+                    or min(closure_ratios) <= 0.0
+                    or max(closure_ratios) > min(stored_closure, 0.12) + 1e-6
+                ):
+                    invalid.append(f"squint_closure_{side}")
+                runtime[side] = {
+                    "allowed_skin": allowed_skin,
+                    "moved": moved,
+                    "displacements": displacements,
+                    "skin": skin,
+                }
+
+            if set(runtime) == {"l", "r"}:
+                for side, opposite in (("l", "r"), ("r", "l")):
+                    if (
+                        runtime[side]["skin"].intersection(runtime[opposite]["skin"])
+                        or runtime[side]["moved"].intersection(runtime[opposite]["moved"])
+                        or max(
+                            (
+                                runtime[side]["displacements"][index]
+                                for index in runtime[opposite]["allowed_skin"]
+                            ),
+                            default=0.0,
+                        ) > 1e-9
+                    ):
+                        invalid.append(f"squint_opposite_side_isolation_{side}")
         if any(
             material and material.name.startswith(("IP_EyelidSkin.", "IP_EyelidMargin."))
             for material in face_mesh.data.materials
@@ -1933,19 +2260,32 @@ def tune_source_pbr_materials(obj: bpy.types.Object) -> dict[str, Any]:
         tuned_roles.update({role: node.image.name for role, node in images.items()})
         tuned_materials.append(source_material.name)
     if tuned_materials:
+        material_lookup = {material.name: material for material in obj.data.materials if material}
+        if any(
+            not _task6_pbr_material_graph(material_lookup[name])
+            for name in tuned_materials
+        ):
+            raise RuntimeError(
+                "Task 6 source PBR graph is not canonical; rebuild master from source FBX"
+            )
         obj["source_pbr_materials_tuned"] = True
         obj["source_pbr_material_names"] = json.dumps(tuned_materials)
         obj["source_pbr_role_metadata"] = json.dumps(tuned_roles, sort_keys=True)
         return {"materials": tuned_materials, "count": len(tuned_materials), "preserved": False}
     if previously_tuned:
-        obj["source_pbr_materials_tuned"] = True
-        obj["source_pbr_material_names"] = previous_material_names
-        obj["source_pbr_role_metadata"] = previous_role_metadata
-        try:
-            preserved_names = json.loads(previous_material_names)
-        except json.JSONDecodeError:
-            preserved_names = []
-        return {"materials": preserved_names, "count": len(preserved_names), "preserved": True}
+        if _task6_pbr_metadata_is_verifiable(obj):
+            try:
+                preserved_names = json.loads(previous_material_names)
+            except json.JSONDecodeError:
+                preserved_names = []
+            return {"materials": preserved_names, "count": len(preserved_names), "preserved": True}
+        obj["source_pbr_materials_tuned"] = False
+        obj["source_pbr_material_names"] = "[]"
+        obj["source_pbr_role_metadata"] = "{}"
+        raise RuntimeError(
+            "Task 6 source PBR graph cannot verify stored material claims; "
+            "rebuild master from source FBX"
+        )
     obj["source_pbr_materials_tuned"] = False
     obj["source_pbr_material_names"] = "[]"
     obj["source_pbr_role_metadata"] = "{}"
@@ -3357,6 +3697,11 @@ def add_rich_source_face_shapes(
     shape_keys = face_mesh.data.shape_keys
     if not shape_keys or not shape_keys.key_blocks.get("Basis"):
         raise RuntimeError("rich source-face controls require an existing Basis shape key")
+    if face_mesh.get("true_eyelid_topology"):
+        raise RuntimeError(
+            "generated full-blink topology is no longer supported; "
+            "rebuild master from source FBX for blinkCapability=squint_only"
+        )
 
     shape_names = (
         "Eye_Squint.L",
@@ -3400,7 +3745,6 @@ def add_rich_source_face_shapes(
     object_to_world = face_mesh.matrix_world.copy()
     world_to_object = object_to_world.inverted()
     basis = shape_keys.key_blocks["Basis"]
-    eyelid_regions: dict[str, dict[str, Any]] = {}
     squint_regions: dict[str, dict[str, Any]] = {}
     if face_mesh.get("blink_capability") == "squint_only":
         for suffix in ("L", "R"):
@@ -3425,110 +3769,6 @@ def add_rich_source_face_shapes(
                 "radius_z": float(face_mesh[f"squint_radius_z_{side}"]),
                 "closure_fraction": float(face_mesh["squint_max_closure_fraction"]),
             }
-    if face_mesh.get("true_eyelid_topology"):
-        for suffix in ("L", "R"):
-            side = suffix.lower()
-            try:
-                upper = set(json.loads(str(face_mesh[f"eyelid_upper_indices_{side}"])))
-                lower = set(json.loads(str(face_mesh[f"eyelid_lower_indices_{side}"])))
-                upper_contact = set(json.loads(str(face_mesh[f"eyelid_upper_contact_indices_{side}"])))
-                lower_contact = set(json.loads(str(face_mesh[f"eyelid_lower_contact_indices_{side}"])))
-                upper_support = set(json.loads(str(face_mesh[f"eyelid_upper_support_indices_{side}"])))
-                lower_support = set(json.loads(str(face_mesh[f"eyelid_lower_support_indices_{side}"])))
-                upper_anchor_support = set(
-                    json.loads(str(face_mesh[f"eyelid_upper_anchor_support_indices_{side}"]))
-                )
-                lower_anchor_support = set(
-                    json.loads(str(face_mesh[f"eyelid_lower_anchor_support_indices_{side}"]))
-                )
-                upper_inner_margin = set(
-                    json.loads(str(face_mesh[f"eyelid_upper_inner_margin_indices_{side}"]))
-                )
-                lower_inner_margin = set(
-                    json.loads(str(face_mesh[f"eyelid_lower_inner_margin_indices_{side}"]))
-                )
-                eye_core = set(json.loads(str(face_mesh[f"eyeball_core_indices_{side}"])))
-                row_margin_pairs = {
-                    "anchor": [
-                        (int(pair[0]), int(pair[1]))
-                        for pair in json.loads(str(face_mesh[f"eyelid_anchor_margin_pairs_{side}"]))
-                    ],
-                    "support": [
-                        (int(pair[0]), int(pair[1]))
-                        for pair in json.loads(str(face_mesh[f"eyelid_support_margin_pairs_{side}"]))
-                    ],
-                    "inner": [
-                        (int(pair[0]), int(pair[1]))
-                        for pair in json.loads(str(face_mesh[f"eyelid_inner_margin_pairs_{side}"]))
-                    ],
-                }
-                anchor_outer_pairs = [
-                    (int(pair[0]), int(pair[1]))
-                    for pair in json.loads(str(face_mesh[f"eyelid_anchor_outer_pairs_{side}"]))
-                ]
-                contact_pairs = [
-                    (int(pair[0]), int(pair[1]))
-                    for pair in json.loads(str(face_mesh[f"eyelid_contact_pairs_{side}"]))
-                ]
-            except (KeyError, TypeError, json.JSONDecodeError) as exc:
-                raise RuntimeError(f"integrated {suffix} eyelid topology metadata is invalid") from exc
-            center_x = float(face_mesh[f"eyelid_center_x_{side}"])
-            center_z = float(face_mesh[f"eyelid_center_z_{side}"])
-            radius_x = float(face_mesh[f"eyelid_radius_x_{side}"])
-            radius_z = float(face_mesh[f"eyelid_radius_z_{side}"])
-            active_indices = upper.union(lower)
-            contact_surface_y = min(
-                float((object_to_world @ basis.data[index].co).y)
-                for index in eye_core
-            ) - depth * 0.004
-            contact_targets: dict[int, Vector] = {}
-            for upper_index, lower_index in contact_pairs:
-                upper_world = object_to_world @ basis.data[upper_index].co
-                lower_world = object_to_world @ basis.data[lower_index].co
-                pair_x = (float(upper_world.x) + float(lower_world.x)) * 0.5
-                normalized_x = max(-1.0, min(1.0, (pair_x - center_x) / max(radius_x, 1e-6)))
-                target = Vector(
-                    (
-                        pair_x,
-                        contact_surface_y,
-                        center_z - radius_z * 0.20
-                        + radius_z * 0.20 * normalized_x * normalized_x,
-                    )
-                )
-                contact_targets[upper_index] = target
-                contact_targets[lower_index] = target
-            row_target_x = {
-                row_index: float((object_to_world @ basis.data[margin_index].co).x)
-                for pairs in row_margin_pairs.values()
-                for row_index, margin_index in pairs
-            }
-            anchor_outer = {
-                anchor_index: outer_index
-                for anchor_index, outer_index in anchor_outer_pairs
-            }
-            eyelid_regions[suffix] = {
-                "upper": upper,
-                "lower": lower,
-                "active": upper.union(lower),
-                "upper_contact": upper_contact,
-                "lower_contact": lower_contact,
-                "upper_support": upper_support,
-                "lower_support": lower_support,
-                "upper_anchor_support": upper_anchor_support,
-                "lower_anchor_support": lower_anchor_support,
-                "upper_inner_margin": upper_inner_margin,
-                "lower_inner_margin": lower_inner_margin,
-                "eye_core": eye_core,
-                "center_x": center_x,
-                "center_z": center_z,
-                "radius_x": radius_x,
-                "radius_z": radius_z,
-                "contact_targets": contact_targets,
-                "contact_surface_y": contact_surface_y,
-                "row_target_x": row_target_x,
-                "anchor_outer": anchor_outer,
-            }
-
     def region_weight(
         world: Vector,
         center: Vector,
@@ -3565,11 +3805,9 @@ def add_rich_source_face_shapes(
             ),
         }
         for suffix, sign in (("L", 1.0), ("R", -1.0)):
-            blink_name = f"Eye_Blink.{suffix}"
             squint_name = f"Eye_Squint.{suffix}"
             wide_name = f"Eye_Wide.{suffix}"
             eye_weight = eye_weights[suffix]
-            eyelid = eyelid_regions.get(suffix)
             squint = squint_regions.get(suffix)
             if squint:
                 if index in squint["skin"]:
@@ -3595,84 +3833,7 @@ def add_rich_source_face_shapes(
                     created[wide_name].data[index].co = world_to_object @ widened
                     affected[squint_name] += 1
                     affected[wide_name] += 1
-            elif eyelid and index in eyelid["active"]:
-                is_upper = index in eyelid["upper"]
-                radius_x = max(float(eyelid["radius_x"]), 1e-6)
-                radius_z = max(float(eyelid["radius_z"]), 1e-6)
-                normalized_x = max(
-                    -1.0,
-                    min(1.0, (float(world.x) - float(eyelid["center_x"])) / radius_x),
-                )
-                normalized_z = (float(world.z) - float(eyelid["center_z"])) / radius_z
-                radial = min(1.0, math.sqrt(normalized_x * normalized_x + normalized_z * normalized_z))
-                fold_weight = max(0.0, 1.0 - (radial / 0.84) ** 3)
-                contact_target = eyelid["contact_targets"].get(index)
-                contact_z = (
-                    float(eyelid["center_z"])
-                    - radius_z * 0.20
-                    + radius_z * 0.20 * normalized_x * normalized_x
-                )
-                blink_world = world.copy()
-                if contact_target is not None:
-                    blink_world = contact_target.copy()
-                elif index in eyelid["upper_contact"] or index in eyelid["lower_contact"]:
-                    blink_world.x = world.x
-                    blink_world.y = float(eyelid["contact_surface_y"])
-                    blink_world.z = contact_z
-                elif (
-                    index in eyelid["upper_anchor_support"]
-                    or index in eyelid["lower_anchor_support"]
-                    or index in eyelid["upper_support"]
-                    or index in eyelid["lower_support"]
-                    or index in eyelid["upper_inner_margin"]
-                    or index in eyelid["lower_inner_margin"]
-                ):
-                    target_x = float(eyelid["row_target_x"][index])
-                    row_nx = max(
-                        -1.0,
-                        min(1.0, (target_x - float(eyelid["center_x"])) / radius_x),
-                    )
-                    row_contact_z = (
-                        float(eyelid["center_z"])
-                        - radius_z * 0.20
-                        + radius_z * 0.20 * row_nx * row_nx
-                    )
-                    globe_arc = radius_z * math.sqrt(max(0.0, 1.0 - row_nx * row_nx))
-                    if (
-                        index in eyelid["upper_anchor_support"]
-                        or index in eyelid["lower_anchor_support"]
-                    ):
-                        arc_amount, depth_amount = 0.82, 0.014
-                    elif index in eyelid["upper_support"] or index in eyelid["lower_support"]:
-                        arc_amount, depth_amount = 0.50, 0.008
-                    else:
-                        arc_amount, depth_amount = 0.10, 0.002
-                    row_target = Vector(
-                        (
-                            target_x,
-                            float(eyelid["contact_surface_y"]) + depth * depth_amount,
-                            row_contact_z
-                            + (1.0 if is_upper else -1.0) * globe_arc * arc_amount,
-                        )
-                    )
-                    if index in eyelid["anchor_outer"]:
-                        outer_world = object_to_world @ basis.data[
-                            eyelid["anchor_outer"][index]
-                        ].co
-                        blink_world = outer_world.lerp(row_target, 0.40)
-                        blink_world.x = target_x
-                        blink_world.y = row_target.y
-                    else:
-                        blink_world = row_target
-                else:
-                    raise RuntimeError(f"unclassified integrated lid vertex {index}")
-                created[blink_name].data[index].co = world_to_object @ blink_world
-                wide_world = world.copy()
-                wide_world.z += (1.0 if is_upper else -1.0) * height * 0.0045 * fold_weight
-                created[wide_name].data[index].co = world_to_object @ wide_world
-                affected[blink_name] += 1
-                affected[wide_name] += 1
-            elif not eyelid and eye_weight > 0.0:
+            elif eye_weight > 0.0:
                 wide_world = world.copy()
                 wide_world.z += (float(world.z) - eye_center_z) * 0.18 * eye_weight
                 created[wide_name].data[index].co = world_to_object @ wide_world
@@ -3765,30 +3926,12 @@ def add_rich_source_face_shapes(
                 f"squint_non_skin_max_displacement_{suffix.lower()}"
             ] = non_skin_displacement
             face_mesh[f"squint_core_max_displacement_{suffix.lower()}"] = core_displacement
-            continue
-        eyelid = eyelid_regions.get(suffix)
-        if not eyelid:
-            continue
-        blink = created[f"Eye_Blink.{suffix}"]
-        non_lid_displacement = max(
-            (
-                (blink.data[index].co - basis.data[index].co).length
-                for index in range(len(basis.data))
-                if index not in eyelid["active"]
-            ),
-            default=0.0,
-        )
-        face_mesh[f"blink_non_lid_max_displacement_{suffix.lower()}"] = non_lid_displacement
     face_mesh["facial_detail_mode"] = "rich_source_mesh"
     face_mesh["source_mouth_replacement"] = False
     face_mesh["eye_center_z"] = eye_center_z
     face_mesh["eye_offset_x"] = eye_offset_x
     face_mesh["eye_radius_x"] = width * 0.115
     face_mesh["eye_radius_z"] = region_height * 0.12
-    if eyelid_regions:
-        face_mesh["blink_upper_lid_contribution"] = 0.62
-        face_mesh["blink_lower_lid_contribution"] = 0.38
-        face_mesh["blink_contact_mode"] = "matched_margin_with_globe_support"
     if squint_regions:
         face_mesh["blink_capability"] = "squint_only"
         face_mesh["squint_deformation_mode"] = "source_skin_ring_18_percent"
@@ -4487,6 +4630,11 @@ def setup_face(
     mode = str(data.get("faceScreenMode") or "source").lower()
     mouth_mode = str(data.get("mouthMode") or "independent_visemes").lower()
     topology_mode = str(data.get("facialTopologyMode") or "source_only").lower()
+    if topology_mode in {"volumetric", "true_geometry", "lips_eyelids"}:
+        raise RuntimeError(
+            f"facialTopologyMode={topology_mode} is not supported for this source asset; "
+            "use facialTopologyMode=source_retopology with blinkCapability=squint_only"
+        )
 
     def enrich_source_face(face: dict[str, bpy.types.Object]) -> dict[str, bpy.types.Object]:
         source_face = face.get("mouth")
@@ -4502,31 +4650,6 @@ def setup_face(
                     dimensions,
                     armature,
                     bone_map,
-                    mouth_height_ratio=float(data.get("mouthHeightRatio") or 0.56),
-                    mouth_scale=float(data.get("mouthScale") or 1.0),
-                )
-            )
-        existing_topology = {
-            str(obj.get("ip_face_topology_role"))
-            for obj in character_objects
-            if obj.type == "MESH" and obj.get("ip_face_topology_role")
-        }
-        wants_topology = topology_mode in {"volumetric", "true_geometry", "lips_eyelids"}
-        has_topology = set(VOLUMETRIC_FACE_ROLES).issubset(existing_topology)
-        if wants_topology or has_topology:
-            head_bone_name = bone_map.get("head") or bone_map.get("body") or bone_map.get("root")
-            if not head_bone_name:
-                head_bone_name = next(
-                    (bone.name for bone in armature.data.bones if bone.use_deform),
-                    armature.data.bones[0].name,
-                )
-            face.update(
-                create_volumetric_face_topology(
-                    source_face,
-                    character_objects,
-                    dimensions,
-                    armature,
-                    head_bone_name,
                     mouth_height_ratio=float(data.get("mouthHeightRatio") or 0.56),
                     mouth_scale=float(data.get("mouthScale") or 1.0),
                 )
