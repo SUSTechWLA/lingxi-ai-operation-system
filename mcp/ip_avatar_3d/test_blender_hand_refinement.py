@@ -599,9 +599,7 @@ def test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage() -> No
                 for point in curve.keyframe_points
             }
         )
-        assert frames[0] == 1, (action_name, frames)
-        assert frames[-1] >= 60, (action_name, frames)
-        assert len(frames) >= 4, (action_name, frames)
+        assert frames == [1, 12, 24, 46, 60], (action_name, frames)
 
         for curve in blender_renderer.iter_action_fcurves(action):
             for point in curve.keyframe_points:

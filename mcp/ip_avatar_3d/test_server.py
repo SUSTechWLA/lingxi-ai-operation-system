@@ -29,6 +29,35 @@ def load_rig_semantics():
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def assert_no_grouped_motion_overlaps(self, events: list[dict]) -> None:
+        conflicts = []
+        by_group: dict[str, list[dict]] = {}
+        for event in events:
+            groups = event.get("gestureGroups")
+            if not groups and event.get("gestureGroup"):
+                groups = [event["gestureGroup"]]
+            for group in groups or []:
+                by_group.setdefault(str(group), []).append(event)
+        for group, grouped_events in by_group.items():
+            previous_end = -1.0
+            previous_label = ""
+            for event in sorted(
+                grouped_events,
+                key=lambda item: (
+                    float(item["timeSec"]),
+                    str(item.get("action") or ""),
+                    str(item.get("motion") or ""),
+                ),
+            ):
+                start = float(event["timeSec"])
+                end = start + float(event["duration"])
+                label = str(event.get("action") or event.get("motion"))
+                if start < previous_end - 1e-6:
+                    conflicts.append((group, previous_label, label, round(start, 3), round(previous_end, 3)))
+                previous_end = max(previous_end, end)
+                previous_label = label
+        self.assertEqual([], conflicts)
+
     def test_subprocess_runner_tolerates_mixed_encoding_tool_logs(self) -> None:
         server = load_server()
 
@@ -135,6 +164,35 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         self.assertLessEqual(len(think_events), 2)
         self.assertTrue(all(event["strength"] <= 1.0 for event in think_events))
 
+    def test_finalize_motion_events_reserves_legacy_and_multi_group_events(self) -> None:
+        server = load_server()
+
+        resolved = server._finalize_motion_events(
+            [
+                {"timeSec": 0.0, "motion": "finger_wave", "duration": 0.8, "strength": 0.8, "gestureGroup": "right_hand"},
+                {
+                    "timeSec": 0.2,
+                    "motion": "present",
+                    "duration": 0.8,
+                    "strength": 0.9,
+                    "action": "Aroll_OpenPalm_Explain",
+                    "semantic": "explanation",
+                    "gestureGroup": "right_hand",
+                    "gestureGroups": ["right_hand", "left_hand"],
+                },
+                {"timeSec": 0.3, "motion": "point_left", "duration": 0.5, "strength": 0.7, "gestureGroup": "left_hand"},
+                {"timeSec": 0.3, "motion": "nod", "duration": 0.4, "strength": 0.7, "gestureGroup": "head"},
+            ],
+            4.0,
+        )
+
+        self.assert_no_grouped_motion_overlaps(resolved)
+        by_label = {str(event.get("action") or event.get("motion")): event for event in resolved}
+        self.assertEqual(0.0, by_label["finger_wave"]["timeSec"])
+        self.assertEqual(0.8, by_label["Aroll_OpenPalm_Explain"]["timeSec"])
+        self.assertEqual(1.6, by_label["point_left"]["timeSec"])
+        self.assertEqual(0.3, by_label["nod"]["timeSec"])
+
     def test_motion_plan_maps_aroll_semantics_without_same_group_conflicts(self) -> None:
         server = load_server()
         script = (
@@ -186,21 +244,13 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             aroll_events,
         )
 
-        conflicts = []
-        by_group: dict[str, list[dict]] = {}
-        for event in aroll_events:
-            by_group.setdefault(str(event["gestureGroup"]), []).append(event)
-        for group, events in by_group.items():
-            previous_end = -1.0
-            previous_action = ""
-            for event in sorted(events, key=lambda item: (float(item["timeSec"]), str(item.get("action")))):
-                start = float(event["timeSec"])
-                end = start + float(event["duration"])
-                if start < previous_end - 1e-6:
-                    conflicts.append((group, previous_action, event.get("action"), start, previous_end))
-                previous_end = max(previous_end, end)
-                previous_action = str(event.get("action"))
-        self.assertEqual([], conflicts)
+        legacy_grouped_events = [
+            event
+            for event in plan["motionEvents"]
+            if event.get("gestureGroup") and not str(event.get("action", "")).startswith("Aroll_")
+        ]
+        self.assertTrue(legacy_grouped_events)
+        self.assert_no_grouped_motion_overlaps(plan["motionEvents"])
 
     def test_subtitle_builder_splits_script_over_duration(self) -> None:
         server = load_server()

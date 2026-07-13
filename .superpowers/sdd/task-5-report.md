@@ -104,8 +104,10 @@ Leg exaggeration:
 Final mixed Mandarin/English planner sample:
 - Total motion events: 49.
 - A-roll semantic events: 19.
-- Group participation: `right_hand=15`, `left_hand=2`, `head=4`.
-- Same-group conflicts across primary and multi-group events: `0`.
+- Legacy grouped non-A-roll events: 10.
+- Group participation after expanding multi-group events: `right_hand=15`, `left_hand=2`, `head=12`, `body=2`.
+- Same-group conflicts across all grouped events: `0`.
+- Ambient ungrouped motions: `antenna_wiggle`, `blink`, `brow_beat`, `idle_breath`, `micro_gaze`.
 - Repeated planner call returned identical `motionEvents`.
 
 Representative semantic mappings:
@@ -129,9 +131,9 @@ Deterministic ordering:
 - The new server test verifies repeatability by comparing two complete `motionEvents` outputs for the same script.
 
 No conflicting hand gestures:
-- Action-bearing events are shifted by occupied `gestureGroup`.
+- Every conflict-participating grouped event is shifted by occupied `gestureGroup`, including legacy non-action events.
 - Multi-hand explanation events additionally reserve both `right_hand` and `left_hand` via `gestureGroups`.
-- The server test checks there are no overlapping A-roll same-group events.
+- The server test checks there are no overlapping same-group events across all grouped motion events.
 
 Legacy rig compatibility:
 - A-roll specs reuse the existing action builder and shared digit-pose marker path.
@@ -143,3 +145,40 @@ Repeatability:
 
 Concerns:
 - None currently known.
+
+## Review Fix Update
+
+Fixed review feedback after Task 5 approval:
+- Important: `_finalize_motion_events` now reserves and shifts all conflict-participating grouped events, not only events with `action`.
+- Important: multi-group events reserve every listed group through `gestureGroups`.
+- Important: ambient events that intentionally layer with motion, such as idle, blink, gaze, antenna, and brow beats, no longer receive automatic conflict groups.
+- Minor: focused Blender action-pack test now enforces exact A-roll key phase frames `[1, 12, 24, 46, 60]`, including exact frame 1 and frame 60 endpoints.
+
+Review-fix RED:
+`python3 mcp/ip_avatar_3d/test_server.py`
+
+Result:
+- Ran 30 tests.
+- Failed 2 tests.
+- `test_finalize_motion_events_reserves_legacy_and_multi_group_events` reported right-hand overlap between `finger_wave` and `Aroll_OpenPalm_Explain`, plus left-hand overlap between `Aroll_OpenPalm_Explain` and `point_left`.
+- `test_motion_plan_maps_aroll_semantics_without_same_group_conflicts` reported grouped plan overlaps before ambient grouping was narrowed.
+
+Review-fix GREEN:
+`python3 mcp/ip_avatar_3d/test_server.py`
+
+Result:
+- Ran 30 tests.
+- OK.
+
+Review-fix GREEN:
+`/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_hand_refinement.py`
+
+Result:
+- PASS `test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage`.
+- PASS all 5 existing focused hand-refinement tests.
+
+Review-fix GREEN:
+`/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
+
+Result:
+- PASS all full character-rig direct-runner tests.

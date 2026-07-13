@@ -416,8 +416,10 @@ def _keyword_events(script: str, duration_sec: float) -> list[dict[str, Any]]:
                 "motion": str(rule["motion"]),
                 "duration": float(rule.get("duration", 0.75)),
                 "strength": float(rule["strength"]),
-                "gestureGroup": str(rule.get("gestureGroup") or _gesture_group_for_motion(str(rule["motion"]))),
             }
+            gesture_group = rule.get("gestureGroup") or _gesture_group_for_motion(str(rule["motion"]))
+            if gesture_group:
+                event["gestureGroup"] = str(gesture_group)
             if rule.get("action"):
                 semantic = str(rule.get("semantic") or "")
                 event.update(
@@ -443,8 +445,7 @@ def _keyword_events(script: str, duration_sec: float) -> list[dict[str, Any]]:
     return coalesced
 
 
-MOTION_GESTURE_GROUPS = {
-    "idle_breath": "body",
+MOTION_GESTURE_GROUPS: dict[str, str] = {
     "weight_shift": "body",
     "happy_bounce": "body",
     "leg_step": "body",
@@ -461,23 +462,19 @@ MOTION_GESTURE_GROUPS = {
     "finger_wave": "right_hand",
     "think": "right_hand",
     "emphasis": "right_hand",
-    "blink": "head",
-    "micro_gaze": "head",
-    "antenna_wiggle": "head",
     "nod": "head",
     "head_shake": "head",
-    "brow_beat": "head",
 }
 
 
-def _gesture_group_for_motion(motion: str) -> str:
-    return MOTION_GESTURE_GROUPS.get(str(motion), "body")
+def _gesture_group_for_motion(motion: str) -> str | None:
+    return MOTION_GESTURE_GROUPS.get(str(motion))
 
 
 def _motion_event_sort_key(event: dict[str, Any]) -> tuple[float, str, str, str]:
     return (
         float(event.get("timeSec") or 0.0),
-        str(event.get("gestureGroup") or _gesture_group_for_motion(str(event.get("motion") or ""))),
+        str(event.get("gestureGroup") or _gesture_group_for_motion(str(event.get("motion") or "")) or ""),
         str(event.get("action") or ""),
         str(event.get("motion") or ""),
     )
@@ -487,14 +484,17 @@ def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -
     normalized: list[dict[str, Any]] = []
     for event in events:
         item = dict(event)
-        item.setdefault("gestureGroup", _gesture_group_for_motion(str(item.get("motion") or "")))
+        if not item.get("gestureGroup"):
+            gesture_group = _gesture_group_for_motion(str(item.get("motion") or ""))
+            if gesture_group:
+                item["gestureGroup"] = gesture_group
         normalized.append(item)
 
-    latest_action_end_by_group: dict[str, float] = {}
+    latest_end_by_group: dict[str, float] = {}
     resolved: list[dict[str, Any]] = []
     for event in sorted(normalized, key=_motion_event_sort_key):
         item = dict(event)
-        if item.get("action"):
+        if item.get("gestureGroup"):
             groups = [
                 str(group)
                 for group in item.get("gestureGroups", [item["gestureGroup"]])
@@ -502,7 +502,7 @@ def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -
             ] or [str(item["gestureGroup"])]
             duration = max(0.1, float(item.get("duration") or 0.75))
             start = max(0.0, float(item.get("timeSec") or 0.0))
-            previous_end = max((latest_action_end_by_group.get(group, -1.0) for group in groups), default=-1.0)
+            previous_end = max((latest_end_by_group.get(group, -1.0) for group in groups), default=-1.0)
             if start < previous_end:
                 start = previous_end
             if start + duration > duration_sec:
@@ -510,7 +510,7 @@ def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -
             item["timeSec"] = round(start, 3)
             item["duration"] = round(duration, 3)
             for group in groups:
-                latest_action_end_by_group[group] = start + duration
+                latest_end_by_group[group] = start + duration
         resolved.append(item)
     return sorted(resolved, key=_motion_event_sort_key)
 
