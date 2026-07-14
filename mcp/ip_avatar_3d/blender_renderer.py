@@ -42,6 +42,8 @@ LIGHTING_MULTIPLIERS = {
 SOLE_BAND_HEIGHT_M = 0.005
 TARGET_SOLE_CLEARANCE_M = 0.0015
 MIN_MEDIUM_FRAME_POINTS = 128
+MEDIUM_FRAME_SAFE_MARGIN = 0.04
+TARGET_MEDIUM_VERTICAL_SPAN = 0.84
 
 
 def read_input() -> dict:
@@ -1882,26 +1884,77 @@ def sample_character_semantic_regions(
     return points
 
 
-def _medium_frame_counts(
+def _medium_frame_metrics(
     camera: bpy.types.Object,
     frame_points: dict[int, dict[str, list[Vector]]],
-) -> dict[int, dict[str, int]]:
+) -> dict[int, dict[str, dict[str, Any]]]:
     scene = bpy.context.scene
-    return {
-        frame: {
-            role: sum(
+    metrics: dict[int, dict[str, dict[str, Any]]] = {}
+    for frame, regions in frame_points.items():
+        metrics[frame] = {}
+        for role, points in regions.items():
+            projected = [world_to_camera_view(scene, camera, point) for point in points]
+            inside_count = sum(
                 1
-                for point in points
-                if (
-                    (projected := world_to_camera_view(scene, camera, point)).z > 0
-                    and 0 <= projected.x <= 1
-                    and 0 <= projected.y <= 1
-                )
+                for point in projected
+                if point.z > 0 and 0 <= point.x <= 1 and 0 <= point.y <= 1
             )
-            for role, points in regions.items()
-        }
-        for frame, regions in frame_points.items()
-    }
+            metrics[frame][role] = {
+                "insideCount": inside_count,
+                "frameBounds": {
+                    "min": [
+                        min(float(point.x) for point in projected),
+                        min(float(point.y) for point in projected),
+                    ],
+                    "max": [
+                        max(float(point.x) for point in projected),
+                        max(float(point.y) for point in projected),
+                    ],
+                },
+            }
+    return metrics
+
+
+def _medium_frame_candidate_is_safe(
+    metrics: dict[int, dict[str, dict[str, Any]]],
+) -> bool:
+    for regions in metrics.values():
+        for region in regions.values():
+            if int(region["insideCount"]) < MIN_MEDIUM_FRAME_POINTS:
+                return False
+            bounds = region["frameBounds"]
+            if any(float(value) < MEDIUM_FRAME_SAFE_MARGIN for value in bounds["min"]):
+                return False
+            if any(float(value) > 1.0 - MEDIUM_FRAME_SAFE_MARGIN for value in bounds["max"]):
+                return False
+    return True
+
+
+def _medium_frame_composition_score(
+    metrics: dict[int, dict[str, dict[str, Any]]],
+    lens: float,
+    shift_delta: float,
+    authored_lens: float,
+) -> tuple[float, float, float, float]:
+    bounds = [
+        region["frameBounds"]
+        for regions in metrics.values()
+        for region in regions.values()
+    ]
+    minimum_x = min(float(item["min"][0]) for item in bounds)
+    minimum_y = min(float(item["min"][1]) for item in bounds)
+    maximum_x = max(float(item["max"][0]) for item in bounds)
+    maximum_y = max(float(item["max"][1]) for item in bounds)
+    vertical_span = maximum_y - minimum_y
+    center_error = abs((minimum_x + maximum_x) / 2.0 - 0.5) + abs(
+        (minimum_y + maximum_y) / 2.0 - 0.5
+    )
+    return (
+        abs(vertical_span - TARGET_MEDIUM_VERTICAL_SPAN),
+        center_error,
+        abs(authored_lens - lens),
+        abs(shift_delta),
+    )
 
 
 def calibrate_mode_medium_camera(
@@ -1926,34 +1979,52 @@ def calibrate_mode_medium_camera(
         )
 
     lens_candidates = [
-        authored_lens - 2.0 * index
-        for index in range(int(max(0.0, authored_lens - 32.0) // 2.0) + 1)
+        authored_lens - float(index)
+        for index in range(int(max(0.0, authored_lens - 24.0)) + 1)
     ]
     shift_deltas = [0.0]
     for step in range(1, 31):
         shift_deltas.extend((-0.01 * step, 0.01 * step))
-    selected_counts: dict[int, dict[str, int]] | None = None
+    safe_candidates: list[
+        tuple[
+            tuple[float, float, float, float],
+            float,
+            float,
+            dict[int, dict[str, dict[str, Any]]],
+        ]
+    ] = []
     for lens in lens_candidates:
-        camera.data.lens = max(32.0, lens)
+        camera.data.lens = max(24.0, lens)
         for delta in shift_deltas:
             camera.data.shift_y = authored_shift_y + delta
-            counts = _medium_frame_counts(camera, frame_points)
-            if all(
-                count >= MIN_MEDIUM_FRAME_POINTS
-                for frame in counts.values()
-                for count in frame.values()
-            ):
-                selected_counts = counts
-                break
-        if selected_counts is not None:
-            break
-    if selected_counts is None:
+            metrics = _medium_frame_metrics(camera, frame_points)
+            if _medium_frame_candidate_is_safe(metrics):
+                safe_candidates.append(
+                    (
+                        _medium_frame_composition_score(
+                            metrics,
+                            float(camera.data.lens),
+                            delta,
+                            authored_lens,
+                        ),
+                        float(camera.data.lens),
+                        float(camera.data.shift_y),
+                        metrics,
+                    )
+                )
+    if not safe_candidates:
         camera.data.lens = authored_lens
         camera.data.shift_y = authored_shift_y
         raise RuntimeError(
-            f"{camera.name} cannot frame head and both hands with "
-            f"{MIN_MEDIUM_FRAME_POINTS} points per sampled frame"
+            f"{camera.name} cannot keep complete head and both hands inside "
+            f"the {MEDIUM_FRAME_SAFE_MARGIN:.0%} safe frame"
         )
+    _, selected_lens, selected_shift_y, selected_metrics = min(
+        safe_candidates,
+        key=lambda candidate: candidate[0],
+    )
+    camera.data.lens = selected_lens
+    camera.data.shift_y = selected_shift_y
     bpy.context.scene.frame_set(frames[0])
     bpy.context.view_layer.update()
     return {
@@ -1963,9 +2034,10 @@ def calibrate_mode_medium_camera(
         "lens": float(camera.data.lens),
         "shiftY": float(camera.data.shift_y),
         "minimumPointsPerRegion": MIN_MEDIUM_FRAME_POINTS,
+        "safeMargin": MEDIUM_FRAME_SAFE_MARGIN,
         "frames": [
-            {"frame": frame, **counts}
-            for frame, counts in sorted(selected_counts.items())
+            {"frame": frame, **metrics}
+            for frame, metrics in sorted(selected_metrics.items())
         ],
     }
 

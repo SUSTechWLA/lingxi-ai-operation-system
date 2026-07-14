@@ -29,6 +29,7 @@ SOLE_BAND_HEIGHT_M = 0.005
 DEFORMATION_SPIKE_RATIO = 3.0
 DEFORMATION_SPIKE_DELTA_M = 0.02
 MIN_MEDIUM_FRAME_POINTS = 128
+MEDIUM_FRAME_SAFE_MARGIN = 0.04
 MAX_FOOT_CLEARANCE_M = 0.0035
 
 
@@ -249,12 +250,27 @@ def finalize_mode_report(report: dict[str, Any]) -> dict[str, Any]:
     for frame in frames:
         visibility = frame["cameraVisibility"]
         for role in ("head", "leftHand", "rightHand"):
-            count = int(visibility[role]["insideCount"])
+            region = visibility[role]
+            count = int(region["insideCount"])
             if count < MIN_MEDIUM_FRAME_POINTS:
                 reasons.append(
                     f"frame {frame['frame']} {role} has {count} geometry points "
                     f"inside medium frame; requires {MIN_MEDIUM_FRAME_POINTS}"
                 )
+            bounds = region["frameBounds"]
+            for axis, index in (("X", 0), ("Y", 1)):
+                minimum = float(bounds["min"][index])
+                maximum = float(bounds["max"][index])
+                if minimum < MEDIUM_FRAME_SAFE_MARGIN:
+                    reasons.append(
+                        f"frame {frame['frame']} {role} min{axis}={minimum:.6f} "
+                        f"is below {MEDIUM_FRAME_SAFE_MARGIN:.6f}"
+                    )
+                if maximum > 1.0 - MEDIUM_FRAME_SAFE_MARGIN:
+                    reasons.append(
+                        f"frame {frame['frame']} {role} max{axis}={maximum:.6f} "
+                        f"exceeds {1.0 - MEDIUM_FRAME_SAFE_MARGIN:.6f}"
+                    )
     report["failureReasons"] = reasons
     report["success"] = not reasons
     return report

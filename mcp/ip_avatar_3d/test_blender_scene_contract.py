@@ -433,7 +433,13 @@ def test_validation_success_fails_each_required_geometry_gate() -> None:
             {
                 "frame": frame,
                 "cameraVisibility": {
-                    role: {"insideCount": 128}
+                    role: {
+                        "insideCount": 128,
+                        "frameBounds": {
+                            "min": [0.04, 0.04],
+                            "max": [0.96, 0.96],
+                        },
+                    }
                     for role in ("head", "leftHand", "rightHand")
                 },
             }
@@ -475,9 +481,11 @@ def test_validation_success_fails_each_required_geometry_gate() -> None:
             {
                 "frame": 15,
                 "cameraVisibility": {
-                    "head": {"insideCount": 128},
-                    "leftHand": {"insideCount": 127},
-                    "rightHand": {"insideCount": 128},
+                    role: {
+                        **metrics,
+                        "insideCount": 127 if role == "leftHand" else 128,
+                    }
+                    for role, metrics in passing["frames"][1]["cameraVisibility"].items()
                 },
             },
             *passing["frames"][2:],
@@ -486,6 +494,44 @@ def test_validation_success_fails_each_required_geometry_gate() -> None:
     failed = warm_character_validator.finalize_mode_report(per_frame)
     assert failed["success"] is False
     assert any("frame 15 leftHand" in reason for reason in failed["failureReasons"])
+
+    unsafe_bounds = {
+        **passing,
+        "frames": [
+            *passing["frames"][:1],
+            {
+                "frame": 15,
+                "cameraVisibility": {
+                    "head": {
+                        "insideCount": 128,
+                        "frameBounds": {
+                            "min": [0.04, 0.04],
+                            "max": [0.96, 0.961],
+                        },
+                    },
+                    "leftHand": {
+                        "insideCount": 128,
+                        "frameBounds": {
+                            "min": [0.04, 0.039],
+                            "max": [0.96, 0.96],
+                        },
+                    },
+                    "rightHand": {
+                        "insideCount": 128,
+                        "frameBounds": {
+                            "min": [0.04, 0.04],
+                            "max": [0.96, 0.96],
+                        },
+                    },
+                },
+            },
+            *passing["frames"][2:],
+        ],
+    }
+    failed = warm_character_validator.finalize_mode_report(unsafe_bounds)
+    assert failed["success"] is False
+    assert any("frame 15 head" in reason and "maxY" in reason for reason in failed["failureReasons"])
+    assert any("frame 15 leftHand" in reason and "minY" in reason for reason in failed["failureReasons"])
 
 
 def test_scene_marker_controls_character_height() -> None:
@@ -588,7 +634,11 @@ def test_real_warm_studio_character_validation_passes_both_modes() -> None:
             ), report
         for frame in report["frames"]:
             for role in ("head", "leftHand", "rightHand"):
-                assert frame["cameraVisibility"][role]["insideCount"] >= 128, frame
+                visibility = frame["cameraVisibility"][role]
+                assert visibility["insideCount"] >= 128, frame
+                bounds = visibility["frameBounds"]
+                assert all(value >= 0.04 for value in bounds["min"]), frame
+                assert all(value <= 0.96 for value in bounds["max"]), frame
         assert report["success"] is True, report
 
 
