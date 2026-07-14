@@ -131,3 +131,143 @@ studio blend, canonical master, and Task 4 files were not changed or reverted.
   not affect the test or validator exit status.
 - Canonical model/turnaround assets remain untracked and were not included in
   the implementation commit.
+
+## Review Follow-Up: P1/P2 Closure (2026-07-14)
+
+This section supersedes the earlier floor, visibility, and frustum-filtered
+collision conclusions. Review-fix implementation commit: `0a0c9c76`.
+
+### Changes
+
+- Warm authored scenes now resolve mode-dedicated spawn, focus, foot, and camera
+  markers before placement. Missing dedicated markers fail immediately. Shared
+  aliases remain available only to legacy non-warm calls without
+  `presentationMode`.
+- `IP_Standing_Foot_Target.*` and `IP_Seated_Foot_Target.*` now drive lateral
+  placement and the target floor plane. Per-sampled-frame placement Z and Y-axis
+  tilt are solved from evaluated left/right sole geometry to a `1.5 mm` target,
+  including standing `weight_shift` and root descent.
+- Shoe sampling requires the tested Armature modifier to target the active rig
+  and have `show_render=true`; the recorded Minor has a failing regression.
+- Desk/chair QA now intersects all render-evaluated character triangles against
+  full obstacle BVHs. It has no camera-frustum prefilter. Hand QA builds a BVH
+  from Armature-deformed, hand/finger-weighted faces; it no longer uses point
+  containment.
+- Medium framing is selected from deterministic lens/vertical-shift candidates.
+  Every sampled frame independently requires at least 128 evaluated geometry
+  points for head, left hand, and right hand.
+
+### Blender Commands
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background \
+  ip形象/main_ip/scenes/warm-sloth-studio-v1.blend \
+  --python-exit-code 1 \
+  --python mcp/ip_avatar_3d/validate_warm_studio_character.py -- \
+  --master ip形象/main_ip/models/main-ip-aroll-master.blend \
+  --output /tmp/task-5-review-validation.json \
+  --frames 1,15,29 \
+  --evidence-dir .superpowers/sdd/task-5-evidence
+
+/Applications/Blender.app/Contents/MacOS/Blender --background \
+  ip形象/main_ip/scenes/warm-sloth-studio-v1.blend \
+  --python-exit-code 1 \
+  --python mcp/ip_avatar_3d/test_blender_scene_contract.py
+
+/Applications/Blender.app/Contents/MacOS/Blender --background \
+  --factory-startup --python-exit-code 1 \
+  --python mcp/ip_avatar_3d/test_blender_character_rig.py
+
+/Applications/Blender.app/Contents/MacOS/Blender --background \
+  --factory-startup --python-exit-code 1 \
+  --python mcp/ip_avatar_3d/test_blender_hand_refinement.py
+
+python3 mcp/ip_avatar_3d/test_server.py
+python3 -m py_compile mcp/ip_avatar_3d/blender_renderer.py \
+  mcp/ip_avatar_3d/test_blender_scene_contract.py \
+  mcp/ip_avatar_3d/validate_warm_studio_character.py
+git diff --check
+```
+
+### Foot And Collision Results
+
+Clearance is measured from Armature-deformed, downward-facing, foot-dominant
+sole geometry to the dedicated mode target floor plane. Values below are
+millimetres for frames `1 / 15 / 29`.
+
+| Mode | Dedicated targets | Left clearance mm | Right clearance mm |
+| --- | --- | --- | --- |
+| standing | `IP_Standing_Foot_Target.L/R` | `1.5000 / 1.5007 / 1.4974` | `1.5000 / 1.5006 / 1.4949` |
+| seated | `IP_Seated_Foot_Target.L/R` | `1.5058 / 1.5058 / 1.5058` | `1.4923 / 1.4923 / 1.4923` |
+
+All six standing and six seated samples are positive and below the `3.5 mm`
+blocking ceiling. The previous standing `-8.43 / -12.44 mm` penetrations are no
+longer present.
+
+| Mode | Frame | Desk triangle pairs | Chair triangle pairs | Hand triangle pairs | Hand-weighted faces |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| standing | 1 | 0 | 0 | 0 | 1407 |
+| standing | 15 | 0 | 0 | 0 | 1407 |
+| standing | 29 | 0 | 0 | 0 | 1407 |
+| seated | 1 | 0 | 0 | 0 | 1407 |
+| seated | 15 | 0 | 0 | 0 | 1407 |
+| seated | 29 | 0 | 0 | 0 | 1407 |
+
+Cross-frame tests prove that a character triangle intersecting an obstacle is
+detected even when none of its vertices are inside the camera frame, and that a
+hand-weighted face intersecting an obstacle is detected when no hand vertex is
+inside that obstacle.
+
+### Per-Frame Medium Visibility
+
+Counts are evaluated surface points inside the selected medium camera. The gate
+is 128 points per region per frame; counts are not accumulated across frames.
+
+| Mode | Frame | Head | Left hand | Right hand |
+| --- | ---: | ---: | ---: | ---: |
+| standing | 1 | 2084 | 132 | 134 |
+| standing | 15 | 2098 | 203 | 243 |
+| standing | 29 | 2079 | 138 | 151 |
+| seated | 1 | 2374 | 141 | 210 |
+| seated | 15 | 2415 | 198 | 348 |
+| seated | 29 | 2384 | 144 | 229 |
+
+Standing retained the authored `50 mm` lens and selected `shift_y=-0.08`;
+seated retained `50 mm` and selected `shift_y=-0.02`.
+
+### Render Evidence
+
+- `.superpowers/sdd/task-5-evidence/standing-medium-frame-0029.png`
+- `.superpowers/sdd/task-5-evidence/seated-medium-frame-0029.png`
+
+Both are actual `960x540` frame-29 renders from the selected medium camera in
+the actual warm studio with the canonical master. They show the corrected
+placement and provide visual evidence alongside the measured positive sole
+clearances that the earlier approximately `12 mm` penetration is gone.
+
+### Verification
+
+```text
+Both-mode real validator: success=true, exit 0
+Blender scene contract: 17 PASS, exit 0
+Server tests: 90 run, OK, 2 skipped
+Character rig Blender regression: 27 PASS, exit 0
+Hand refinement Blender regression: 11 PASS, exit 0
+py_compile: exit 0
+git diff --check and staged diff check: exit 0
+```
+
+### Self-Review And Concerns
+
+- No remaining P1/P2 finding was identified in the owned Task 5 surface.
+- Full evaluated desk/chair collision clearance required a nearest valid
+  world-Y offset of `+0.65 m` standing and `+0.70 m` seated. Dedicated foot
+  targets still define lateral alignment and the floor/contact correction; the
+  depth offset is geometry-selected so the character does not intersect the
+  authored furniture. The final medium renders were visually inspected and
+  remain centered and coherent.
+- Maximum evaluated edge ratios remain diagnostic only; sampled deformation
+  spike counts are zero in both modes.
+- Character profile, voice, studio blend, canonical master, and other task files
+  were not modified. Existing untracked model/turnaround directories were
+  preserved and excluded from both commits.
