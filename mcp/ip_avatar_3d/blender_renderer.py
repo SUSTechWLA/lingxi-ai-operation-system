@@ -60,7 +60,9 @@ def read_input() -> dict:
 def write_runtime_progress(data: dict[str, Any], stage: str, **details: Any) -> None:
     """Persist coarse Blender phase timing where the parent can inspect it."""
 
-    report_path = Path(str(data.get("renderReportPath") or ""))
+    report_path = Path(
+        str(data.get("rigReportPath") or data.get("renderReportPath") or "")
+    )
     if not report_path.name:
         return
     progress_path = report_path.with_name("blender_progress.json")
