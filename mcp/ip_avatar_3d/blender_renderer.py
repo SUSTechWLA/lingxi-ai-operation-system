@@ -7,6 +7,7 @@ import json
 import heapq
 import math
 import sys
+import time
 from array import array
 from collections import deque
 from pathlib import Path
@@ -54,6 +55,28 @@ def read_input() -> dict:
         raise RuntimeError("missing render input json")
     with open(args[0], "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def write_runtime_progress(data: dict[str, Any], stage: str, **details: Any) -> None:
+    """Persist coarse Blender phase timing where the parent can inspect it."""
+
+    report_path = Path(str(data.get("renderReportPath") or ""))
+    if not report_path.name:
+        return
+    progress_path = report_path.with_name("blender_progress.json")
+    payload: dict[str, Any] = {"stages": []}
+    if progress_path.is_file():
+        try:
+            payload = json.loads(progress_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {"stages": []}
+    payload.setdefault("stages", []).append(
+        {"stage": stage, "timestamp": time.time(), **details}
+    )
+    progress_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def clear_scene() -> None:
@@ -6777,6 +6800,7 @@ def save_rigged_assets(
 
 def main() -> None:
     data = read_input()
+    write_runtime_progress(data, "start")
     scene_mode = bool(data.get("sceneBlendPath"))
     use_master = bool(data.get("useMasterAsset"))
     presentation_mode = str(data.get("presentationMode") or "standing").strip().lower()
@@ -6786,6 +6810,7 @@ def main() -> None:
         mode_objects = resolve_authored_scene_mode_objects(data)
     else:
         clear_scene()
+    write_runtime_progress(data, "scene_ready")
     target_height = scene_target_height(data)
     if use_master:
         imported_assets = append_master_collection(
@@ -6799,6 +6824,7 @@ def main() -> None:
             raise RuntimeError(f"configured character master has no Mesh objects: {data['masterBlendPath']}")
     else:
         character_objects, imported_armatures, imported_assets, removed_helpers = import_model(data["modelPath"])
+    write_runtime_progress(data, "character_loaded")
     preserve_hierarchy = bool(imported_armatures and data.get("preserveExistingRig", True))
     dimensions = prepare_character(
         character_objects,
@@ -6806,13 +6832,17 @@ def main() -> None:
         preserve_hierarchy=preserve_hierarchy,
         asset_objects=imported_assets,
     )
+    write_runtime_progress(data, "character_prepared")
     scene_stats: dict[str, Any] = {}
     if scene_mode:
         scene_stats = setup_authored_scene(data, dimensions, mode_objects)
     elif not bool(data.get("assetOnly")):
         setup_scene(data, dimensions)
+    write_runtime_progress(data, "scene_setup")
     armature, rig_stats, bone_map = choose_character_rig(data, imported_armatures, character_objects, dimensions)
+    write_runtime_progress(data, "rig_ready")
     face = setup_face(data, dimensions, armature, character_objects, bone_map)
+    write_runtime_progress(data, "face_ready")
     if use_master:
         rig_stats["renderDetail"] = {
             "mode": "master_preserved",
@@ -6833,6 +6863,7 @@ def main() -> None:
         runtime_actions_prepared=True,
         presentation_mode=presentation_mode,
     )
+    write_runtime_progress(data, "timeline_animated")
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
     active_body_action = (
         armature.animation_data.action
@@ -6843,6 +6874,11 @@ def main() -> None:
         bpy.context.scene,
         int(data["fps"]),
         actions=(active_body_action,) if active_body_action else (),
+    )
+    write_runtime_progress(
+        data,
+        "action_library_ready",
+        calibrationFrameCount=len(calibration_frames),
     )
     if bool(data.get("prepareMaster")):
         container = dimensions.get("container")
@@ -6868,13 +6904,17 @@ def main() -> None:
             dimensions,
             mode_objects,
         )
+        write_runtime_progress(data, "character_placed")
         if mode_objects:
             placement = bpy.data.objects[scene_stats["placement"]["placementRoot"]]
+            write_runtime_progress(data, "collision_calibration_start")
             scene_stats["collisionPlacement"] = calibrate_mode_collision_clearance(
                 character_objects,
                 placement,
                 sample_frames=calibration_frames,
             )
+            write_runtime_progress(data, "collision_calibration_done")
+            write_runtime_progress(data, "foot_calibration_start")
             scene_stats["footContact"] = calibrate_mode_foot_contact(
                 character_objects,
                 armature,
@@ -6883,15 +6923,19 @@ def main() -> None:
                 mode_objects,
                 sample_frames=calibration_frames,
             )
+            write_runtime_progress(data, "foot_calibration_done")
+            write_runtime_progress(data, "camera_calibration_start")
             scene_stats["mediumFraming"] = calibrate_mode_medium_camera(
                 character_objects,
                 bone_map,
                 mode_objects,
                 sample_frames=calibration_frames,
             )
+            write_runtime_progress(data, "camera_calibration_done")
             scene_stats["calibrationFrames"] = list(calibration_frames)
     container = dimensions.get("container")
     export_assets = imported_assets + ([container] if container else [])
+    write_runtime_progress(data, "asset_save_start")
     save_rigged_assets(
         data,
         character_objects,
@@ -6902,6 +6946,7 @@ def main() -> None:
         rig_stats,
         scene_stats,
     )
+    write_runtime_progress(data, "asset_save_done")
 
     if bool(data.get("assetOnly")):
         return
@@ -6913,7 +6958,9 @@ def main() -> None:
     bpy.context.scene.render.image_settings.color_depth = "8"
     bpy.context.scene.render.filepath = str(frames_dir / "frame_")
     bpy.context.scene.frame_set(1)
+    write_runtime_progress(data, "render_start")
     bpy.ops.render.render(animation=True)
+    write_runtime_progress(data, "render_done")
 
 
 if __name__ == "__main__":
