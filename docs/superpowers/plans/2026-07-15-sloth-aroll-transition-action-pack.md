@@ -14,6 +14,7 @@
 - Preserve the canonical source humanoid rig, original mouth/brow/eyelid/eye geometry, source materials, wrists, and independent three-segment fingers.
 - Do not add a mouth card, replacement face texture, dynamic background, locomotion, running, jumping, or stunt animation.
 - Production animation remains 1920x1080, 30 fps CFR, Eevee Next, H.264 plus AAC 48 kHz mono.
+- Render exactly one canonical Blender validation demo, 15-30 seconds long with a target near 24 seconds; derive review aliases or trims with FFmpeg instead of rendering multiple full performances.
 - Production demos use `gpt_sovits_local` with `main_ip_warm_knowledge_host_v1`; no TTS fallback is allowed.
 - Standing and seated remain valid initial presentation modes; state-changing actions may transition between them inside one shot.
 - Generated `.blend`, `.glb`, images, reports, audio, and videos remain untracked output artifacts unless an existing tracked studio asset must be rebuilt.
@@ -1377,7 +1378,7 @@ git commit -m "test: gate a-roll transitions and visemes"
 
 ---
 
-### Task 8: Publish Corrected Seated, Transition, Dual-Mode, And Action-Pack Demos
+### Task 8: Publish One Short Canonical Demo And Derived Review Clips
 
 **Files:**
 - Modify: `mcp/ip_avatar_3d/render_warm_studio_demo.py`
@@ -1393,33 +1394,33 @@ git commit -m "test: gate a-roll transitions and visemes"
 
 **Interfaces:**
 - Consumes: `server.render_talking_video`, the production character profile, verified warm-studio lighting evidence, the permanent IP voice, and performance QA reports.
-- Produces: atomic publication of all corrected videos and review evidence.
+- Produces: one 15-30 second canonical Blender render plus inexpensive FFmpeg aliases/trims and review evidence.
 
 - [ ] **Step 1: Write failing demo-runner tests**
 
-Mock the renderer and assert four production calls:
+Mock the renderer and assert exactly one production call:
 
 ```python
+self.assertEqual(len(calls), 1)
+self.assertEqual(calls[0]["kind"], "standSitActionPack")
+self.assertEqual(calls[0]["presentationMode"], "standing")
 self.assertEqual(
-    [call["kind"] for call in calls],
-    ["standing", "seated", "standSit", "actionPack"],
-)
-self.assertEqual(calls[2]["presentationMode"], "standing")
-self.assertEqual(
-    calls[2]["actionSequence"],
+    calls[0]["actionSequence"],
     [
         "Aroll_Welcome_OpenArms",
+        "Aroll_KeyPoint_OneFinger",
         "Aroll_Transition_StandToSit",
         "Aroll_Seated_Explain",
+        "Aroll_Question_PalmUp",
         "Aroll_Seated_LeanIn",
         "Aroll_Transition_SitToStand",
         "Aroll_Conclusion_HandsTogether",
     ],
 )
-self.assertEqual(calls[2]["cameraPreset"], "transition")
+self.assertEqual(calls[0]["cameraPreset"], "transition")
 ```
 
-Assert `FINAL_FILENAMES` contains all seven deliverables, staging rollback removes partial files, and the final report includes `stateTimeline`, `actionCatalogVersion`, `transitionQa`, `visemeQa`, hashes, 1920x1080, 30 fps CFR, audio loudness, and voice provenance.
+Assert `FINAL_FILENAMES` contains all seven deliverables, staging rollback removes partial files, the canonical render duration is between 15 and 30 seconds, and the final report includes `stateTimeline`, `actionCatalogVersion`, `transitionQa`, `visemeQa`, hashes, 1920x1080, 30 fps CFR, audio loudness, and voice provenance.
 
 - [ ] **Step 2: Run RED**
 
@@ -1427,46 +1428,42 @@ Assert `FINAL_FILENAMES` contains all seven deliverables, staging rollback remov
 python3 mcp/ip_avatar_3d/test_warm_studio_demo.py -v
 ```
 
-Expected: current runner renders only standing and seated and concatenates them with a hard cut.
+Expected: current runner renders standing and seated separately and concatenates them with a hard cut.
 
-- [ ] **Step 3: Define the production scripts and action sequences**
+- [ ] **Step 3: Define the single production script and action sequence**
 
 ```python
-DEMO_JOBS = (
-    {
-        "kind": "standing",
-        "presentationMode": "standing",
-        "cameraPreset": "medium",
-        "script": STANDING_SCRIPT,
-        "actionSequence": ["Aroll_Welcome_OpenArms", "Aroll_KeyPoint_OneFinger", "Aroll_Conclusion_HandsTogether"],
-    },
-    {
-        "kind": "seated",
-        "presentationMode": "seated",
-        "cameraPreset": "three_quarter",
-        "script": SEATED_SCRIPT,
-        "actionSequence": ["Aroll_Seated_OpenPalm", "Aroll_Question_PalmUp", "Aroll_Seated_LeanIn", "Aroll_Seated_Explain"],
-    },
-    {
-        "kind": "standSit",
-        "presentationMode": "standing",
-        "cameraPreset": "transition",
-        "script": "大家好，我是小唐。先站着说一个结论：AI创作真正重要的是可控。接下来坐下来拆开讲，选题、脚本、画面和审核都应该能被理解和修改。最后站起来总结，稳定的流程，才会带来稳定的内容。",
-        "actionSequence": ["Aroll_Welcome_OpenArms", "Aroll_Transition_StandToSit", "Aroll_Seated_Explain", "Aroll_Seated_LeanIn", "Aroll_Transition_SitToStand", "Aroll_Conclusion_HandsTogether"],
-    },
-    {
-        "kind": "actionPack",
-        "presentationMode": "standing",
-        "cameraPreset": "transition",
-        "script": "欢迎你。为什么这件事值得关注？我们从两方面对比。第一是关键判断，第二是执行方法，第三是结果检查。注意风险，最后给出结论。",
-        "actionSequence": ["Aroll_Welcome_OpenArms", "Aroll_Question_PalmUp", "Aroll_Compare_TwoSides", "Aroll_KeyPoint_OneFinger", "Aroll_List_Three", "Aroll_Caution_Stop", "Aroll_Quote_Frame", "Aroll_Conclusion_HandsTogether"],
-    },
-)
+DEMO_JOB = {
+    "kind": "standSitActionPack",
+    "presentationMode": "standing",
+    "cameraPreset": "transition",
+    "script": "大家好，我是小唐。先说结论：AI创作真正重要的是可控。我们坐下来拆开看，选题、脚本、画面和审核都要能修改和复用。最后总结，稳定流程才能带来稳定内容。",
+    "actionSequence": [
+        "Aroll_Welcome_OpenArms",
+        "Aroll_KeyPoint_OneFinger",
+        "Aroll_Transition_StandToSit",
+        "Aroll_Seated_Explain",
+        "Aroll_Question_PalmUp",
+        "Aroll_Seated_LeanIn",
+        "Aroll_Transition_SitToStand",
+        "Aroll_Conclusion_HandsTogether",
+    ],
+    "minimumDurationSec": 15.0,
+    "maximumDurationSec": 30.0,
+}
 ```
 
 - [ ] **Step 4: Replace the hard-cut reel with the continuous performance**
 
-Copy the validated `standSit` render into the staged `Sloth_WarmStudio_DualMode_Reel_1080p.mp4`; do not concatenate the independent standing and seated files. Build a separate transition contact sheet from 18 frames spanning `0.4 s` before the sit action through `0.4 s` after the character stands again.
+Render `DEMO_JOB` exactly once. Copy that validated canonical render to the staged
+`Sloth_WarmStudio_StandSit_Demo_1080p.mp4`,
+`Sloth_WarmStudio_DualMode_Reel_1080p.mp4`, and
+`Sloth_WarmStudio_ActionPack_1080p.mp4` paths without re-encoding. Derive the
+seated review clip with FFmpeg from the canonical timeline, keeping a 15-second
+window that begins before the sit transition and includes the settled seated
+performance. Do not launch another Blender render. Build a separate transition
+contact sheet from 18 frames spanning `0.4 s` before the sit action through
+`0.4 s` after the character stands again.
 
 Create the viseme comparison with labeled stills captured at maximum `Mouth_Rest`, `Mouth_MBP`, `Mouth_A`, `Mouth_E`, `Mouth_O`, `Mouth_U`, and `Mouth_Surprise` activation from the production camera. Labels are review evidence outside the rendered character image and are not face overlays.
 
@@ -1483,6 +1480,8 @@ for key in ("seated", "standSit", "reel", "actionPack"):
         raise DemoQAError(f"{key} must be 30 fps")
     if probe.get("constantFrameRate") is False:
         raise DemoQAError(f"{key} must be CFR")
+    if not 15.0 <= float(probe.get("durationSec") or 0.0) <= 30.0:
+        raise DemoQAError(f"{key} must be between 15 and 30 seconds")
 ```
 
 Require each production result to report `gpt_sovits_local`, voice ID `main_ip_warm_knowledge_host_v1`, `productionReady=True`, `-16.0 +/- 0.5 LUFS`, and true peak no higher than `-1.5 dBTP`.
