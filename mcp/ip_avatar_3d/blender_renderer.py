@@ -210,6 +210,36 @@ def configure_camera_plan(
         "Camera_Transition": "transition",
         "Camera_Close": "three_quarter",
     }
+    motion_plan = data.get("motionPlan") or data
+    fps = max(
+        1,
+        int(data.get("fps") or motion_plan.get("fps") or scene.render.fps or 30),
+    )
+    transition_windows = sorted(
+        (
+            float(event.get("timeSec") or 0.0),
+            float(event.get("timeSec") or 0.0)
+            + max(0.0, float(event.get("duration") or 0.0)),
+            str(event.get("action") or ""),
+        )
+        for event in (motion_plan.get("motionEvents") or [])
+        if event.get("motion") == "avatar_action"
+        and str(event.get("action") or "").startswith("Aroll_Transition_")
+    )
+
+    def defer_transition_cut(frame: int) -> int:
+        deferred = frame
+        while True:
+            frame_time = (deferred - 1) / float(fps)
+            containing = [
+                window for window in transition_windows
+                if window[0] <= frame_time <= window[1]
+            ]
+            if not containing:
+                return deferred
+            latest_end = max(window[1] for window in containing)
+            deferred = math.floor(latest_end * fps + 1e-9) + 2
+
     missing: list[str] = []
     cuts: list[dict[str, Any]] = []
     for item in requested:
@@ -218,7 +248,7 @@ def configure_camera_plan(
         if not camera:
             missing.append(requested_name)
             camera = fallback
-        frame = max(1, int(item.get("frame") or 1))
+        frame = defer_transition_cut(max(1, int(item.get("frame") or 1)))
         marker = scene.timeline_markers.new(f"IP_Cut_{frame:04d}_{camera.name}", frame=frame)
         marker.camera = camera
         cuts.append({"frame": frame, "camera": camera.name})
@@ -5791,6 +5821,48 @@ def source_root_location_from_world(
     return tuple(float(value) for value in local_offset)
 
 
+def _state_contact_objects(
+    mode_objects: dict[str, Any],
+    target_state: str,
+) -> dict[str, Any]:
+    resolved = dict(mode_objects)
+    state = str(target_state or mode_objects.get("mode") or "standing").lower()
+    if state not in {"standing", "seated"}:
+        return resolved
+    prefix = state.title()
+    state_targets = {
+        "foot_l": bpy.data.objects.get(f"IP_{prefix}_Foot_Target.L"),
+        "foot_r": bpy.data.objects.get(f"IP_{prefix}_Foot_Target.R"),
+    }
+    if all(state_targets.values()):
+        resolved.update(state_targets)
+    resolved["_resolved_contact_state"] = state
+    return resolved
+
+
+def _deterministic_foot_target_pairing(
+    foot_points: dict[str, Vector],
+    target_points: dict[str, Vector],
+) -> dict[str, str]:
+    pairings = (
+        {"foot_l": "foot_l", "foot_r": "foot_r"},
+        {"foot_l": "foot_r", "foot_r": "foot_l"},
+    )
+
+    def planar_distance(role: str, target_key: str) -> float:
+        delta = target_points[target_key] - foot_points[role]
+        delta.z = 0.0
+        return float(delta.length)
+
+    return min(
+        pairings,
+        key=lambda pairing: (
+            sum(planar_distance(role, pairing[role]) for role in ("foot_l", "foot_r")),
+            tuple(pairing[role] for role in ("foot_l", "foot_r")),
+        ),
+    )
+
+
 def apply_transition_contact_correction(
     armature: bpy.types.Object,
     pose,
@@ -5798,9 +5870,15 @@ def apply_transition_contact_correction(
     mode_objects: dict[str, Any] | None,
     phase: float,
     target_state: str,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     if not mode_objects:
-        return {"footDriftL": 0.0, "footDriftR": 0.0, "seatClearance": 0.0}
+        return {
+            "footDriftL": 0.0,
+            "footDriftR": 0.0,
+            "seatClearance": 0.0,
+            "resolvedFootTargets": {},
+        }
+    contact_objects = _state_contact_objects(mode_objects, target_state)
     root = pose[bone_map["root"]]
     source_rig = uses_source_humanoid_axes(armature)
     foot_points: dict[str, Vector] = {}
@@ -5810,20 +5888,10 @@ def apply_transition_contact_correction(
             foot.tail if source_rig else foot.matrix.translation
         )
     available_targets = {
-        key: mode_objects[key].matrix_world.translation.copy()
+        key: contact_objects[key].matrix_world.translation.copy()
         for key in ("foot_l", "foot_r")
     }
-    target_keys: dict[str, str] = {}
-    remaining = set(available_targets)
-    for role in sorted(foot_points, key=lambda item: float(foot_points[item].x)):
-        target_key = min(
-            remaining,
-            key=lambda item: abs(
-                float(available_targets[item].x) - float(foot_points[role].x)
-            ),
-        )
-        target_keys[role] = target_key
-        remaining.remove(target_key)
+    target_keys = _deterministic_foot_target_pairing(foot_points, available_targets)
     foot_deltas = []
     for role in ("foot_l", "foot_r"):
         delta = available_targets[target_keys[role]] - foot_points[role]
@@ -5855,7 +5923,32 @@ def apply_transition_contact_correction(
     )
     bpy.context.view_layer.update()
 
-    seat_object = mode_objects["seat"]
+    if lock_weight > 0.0:
+        for role in ("foot_l", "foot_r"):
+            foot = pose[bone_map[role]]
+            corrected_point = armature.matrix_world @ (
+                foot.tail if source_rig else foot.matrix.translation
+            )
+            residual = available_targets[target_keys[role]] - corrected_point
+            residual.z = 0.0
+            leg_role = "leg_l" if role == "foot_l" else "leg_r"
+            leg = pose[bone_map[leg_role]]
+            local_residual = source_root_location_from_world(
+                armature,
+                leg,
+                (
+                    float(residual.x) * lock_weight,
+                    float(residual.y) * lock_weight,
+                    0.0,
+                ),
+            )
+            leg.location = tuple(
+                float(leg.location[index]) + local_residual[index]
+                for index in range(3)
+            )
+        bpy.context.view_layer.update()
+
+    seat_object = contact_objects["seat"]
     seat = seat_object.matrix_world.translation
     if source_rig:
         pelvis_world = sum(
@@ -5896,10 +5989,11 @@ def apply_transition_contact_correction(
         corrected_points[role] = armature.matrix_world @ (
             foot.tail if source_rig else foot.matrix.translation
         )
-    corrected_center = sum(corrected_points.values(), Vector((0.0, 0.0, 0.0))) / 2.0
-    target_center = sum(available_targets.values(), Vector((0.0, 0.0, 0.0))) / 2.0
-    center_delta = target_center - corrected_center
-    center_delta.z = 0.0
+    corrected_drift: dict[str, float] = {}
+    for role in ("foot_l", "foot_r"):
+        delta = available_targets[target_keys[role]] - corrected_points[role]
+        delta.z = 0.0
+        corrected_drift[role] = float(delta.length)
     if source_rig:
         pelvis_world = sum(
             (
@@ -5911,9 +6005,13 @@ def apply_transition_contact_correction(
     else:
         pelvis_world = armature.matrix_world @ pose[bone_map[pelvis_role]].matrix.translation
     return {
-        "footDriftL": float(center_delta.length),
-        "footDriftR": float(center_delta.length),
+        "footDriftL": corrected_drift["foot_l"],
+        "footDriftR": corrected_drift["foot_r"],
         "seatClearance": float(pelvis_world.z - seat_contact_offset - seat.z),
+        "resolvedFootTargets": {
+            role: contact_objects[target_keys[role]].name
+            for role in ("foot_l", "foot_r")
+        },
     }
 
 
@@ -6026,7 +6124,10 @@ def animate(
             )["state"]
         )
 
-    for frame in range(1, frame_end + 1, 2):
+    animation_frames = list(range(1, frame_end + 1, 2))
+    if animation_frames[-1] != frame_end:
+        animation_frames.append(frame_end)
+    for frame in animation_frames:
         t = (frame - 1) / fps
         pose_state = pose_state_at(t)
         base_pose = aroll_actions.presentation_pose(pose_state, source_rig)
@@ -6385,6 +6486,7 @@ def animate(
             base_rotation = base_pose.get(role, {}).get("rotation", (0.0, 0.0, 0.0))
             set_bone(
                 role,
+                location=(0.0, 0.0, 0.0),
                 rotation=tuple(base_rotation[index] + motion_rotation[index] for index in range(3)),
             )
 
@@ -6452,12 +6554,13 @@ def animate(
             transition_samples.append({
                 "frame": frame,
                 "action": str(event.get("action") or ""),
+                "contactPhase": "transition",
                 "phase": phase,
                 "targetState": str(event.get("endState") or pose_state),
                 **contact,
             })
         if not transition_actions and contact_mode_objects and has_transition_sequence:
-            apply_transition_contact_correction(
+            contact = apply_transition_contact_correction(
                 armature,
                 pose,
                 bone_map,
@@ -6465,6 +6568,14 @@ def animate(
                 1.0 if seated else 0.0,
                 pose_state,
             )
+            transition_samples.append({
+                "frame": frame,
+                "action": "",
+                "contactPhase": "stable",
+                "phase": 1.0,
+                "targetState": pose_state,
+                **contact,
+            })
         for bone_name in animated_bones:
             bone = pose[bone_name]
             bone.keyframe_insert(data_path="location", frame=frame)
@@ -6576,7 +6687,11 @@ def animate(
     seated_contact_samples = [
         item
         for item in transition_samples
-        if item["targetState"] == "seated" and float(item["phase"]) >= 0.80
+        if item["targetState"] == "seated"
+        and (
+            item["contactPhase"] == "stable"
+            or float(item["phase"]) >= 0.80
+        )
     ]
     return {
         "poseStateTimeline": state_timeline,

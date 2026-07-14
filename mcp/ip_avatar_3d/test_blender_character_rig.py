@@ -120,6 +120,33 @@ def lower_body_world_metrics(armature, bone_map) -> dict[str, object]:
     }
 
 
+def deterministic_planar_foot_pairing(foot_points, mode_objects):
+    target_points = {
+        role: mode_objects[role].matrix_world.translation.copy()
+        for role in ("foot_l", "foot_r")
+    }
+    pairings = (
+        {"l": "foot_l", "r": "foot_r"},
+        {"l": "foot_r", "r": "foot_l"},
+    )
+
+    def planar_distance(side, target_role):
+        delta = target_points[target_role] - foot_points[side]
+        delta.z = 0.0
+        return float(delta.length)
+
+    pairing = min(
+        pairings,
+        key=lambda candidate: (
+            sum(planar_distance(side, candidate[side]) for side in ("l", "r")),
+            tuple(candidate[side] for side in ("l", "r")),
+        ),
+    )
+    return pairing, {
+        side: planar_distance(side, pairing[side]) for side in ("l", "r")
+    }
+
+
 def lower_body_central_forward_spike(
     character_objects,
     armature,
@@ -2158,8 +2185,13 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         bone_map,
     )
     mode_objects = blender_renderer.resolve_scene_mode_objects("seated")
+    state_mode_objects = {
+        "standing": blender_renderer.resolve_scene_mode_objects("standing"),
+        "seated": mode_objects,
+    }
     plan = {
         "durationSec": 7.0,
+        "fps": 30,
         "initialPoseState": "standing",
         "resolvedActionSequence": [
             "Aroll_Transition_StandToSit",
@@ -2191,6 +2223,31 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
     )
     assert sampled_pose["root"]["location"][2] < -0.25
 
+    camera_report = blender_renderer.configure_camera_plan(
+        {
+            "fps": 30,
+            "motionPlan": plan,
+            "cameraPlan": [
+                {"frame": 36, "camera": "Camera_Transition"},
+                {"frame": 168, "camera": "Camera_Medium"},
+            ],
+        },
+        mode_objects,
+    )
+    assert [cut["frame"] for cut in camera_report["cuts"]] == [77, 197], camera_report
+    transition_windows = [
+        (
+            float(event["timeSec"]),
+            float(event["timeSec"]) + float(event["duration"]),
+        )
+        for event in plan["motionEvents"]
+        if str(event.get("action") or "").startswith("Aroll_Transition_")
+    ]
+    assert all(
+        not any(start <= (marker.frame - 1) / 30.0 <= end for start, end in transition_windows)
+        for marker in bpy.context.scene.timeline_markers
+    ), [(marker.name, marker.frame) for marker in bpy.context.scene.timeline_markers]
+
     transition_report = blender_renderer.animate(
         armature,
         face,
@@ -2200,7 +2257,6 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         presentation_mode="standing",
         mode_objects=mode_objects,
     )
-    target_by_side = {"l": mode_objects["foot_l"], "r": mode_objects["foot_r"]}
     sampled = {}
     foot_drift = {"l": [], "r": []}
     knee_separation = []
@@ -2227,15 +2283,25 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
             )
             for side in ("l", "r")
         ]
-        foot_center = (foot_points[0] + foot_points[1]) * 0.5
-        targets = list(target_by_side.values())
-        target_center = (
-            targets[0].matrix_world.translation + targets[1].matrix_world.translation
-        ) * 0.5
-        center_drift = target_center - foot_center
-        center_drift.z = 0.0
-        foot_drift["l"].append(center_drift.length)
-        foot_drift["r"].append(center_drift.length)
+        t = (frame - 1) / 30.0
+        target_state = next(
+            (
+                str(event["endState"])
+                for event in plan["motionEvents"]
+                if str(event.get("action") or "").startswith("Aroll_Transition_")
+                and float(event["timeSec"]) <= t <= float(event["timeSec"]) + float(event["duration"])
+            ),
+            max(
+                (item for item in timeline if float(item["timeSec"]) <= t),
+                key=lambda item: float(item["timeSec"]),
+            )["state"],
+        )
+        _, role_drift = deterministic_planar_foot_pairing(
+            {side: foot_points[index] for index, side in enumerate(("l", "r"))},
+            state_mode_objects[target_state],
+        )
+        foot_drift["l"].append(role_drift["l"])
+        foot_drift["r"].append(role_drift["r"])
         silhouette_spikes.append(
             lower_body_central_forward_spike(character_objects, armature, bone_map)
         )
@@ -2270,6 +2336,78 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         },
         "animateReport": transition_report,
     }
+
+    phase_samples = {
+        35: ("Aroll_Transition_StandToSit", 0.6),
+        57: ("Aroll_Transition_StandToSit", 0.6),
+        167: ("Aroll_Transition_SitToStand", 4.7),
+        195: ("Aroll_Transition_SitToStand", 4.7),
+    }
+    for frame, (action_name, start_time) in phase_samples.items():
+        bpy.context.scene.frame_set(frame)
+        expected = blender_renderer.sample_aroll_action_pose(
+            action_name,
+            (frame - 1) / 30.0 - start_time,
+            1.9 if action_name.endswith("StandToSit") else 1.8,
+            source_rig=True,
+            fps=30,
+        )
+        for role in ("body", "leg_l", "shin_l", "leg_r", "shin_r"):
+            actual_rotation = armature.pose.bones[bone_map[role]].rotation_euler
+            assert all(
+                abs(float(actual_rotation[index]) - float(expected[role]["rotation"][index]))
+                < 1e-4
+                for index in range(3)
+            ), (frame, role, tuple(actual_rotation), expected[role]["rotation"])
+        root = armature.pose.bones[bone_map["root"]]
+        root_world_offset = (
+            armature.matrix_world.to_3x3()
+            @ root.bone.matrix_local.to_3x3()
+            @ root.location
+        )
+        assert abs(float(root_world_offset.z) - float(expected["root"]["location"][2])) < 1e-4, (
+            frame,
+            tuple(root_world_offset),
+            expected["root"]["location"],
+        )
+
+    contact_samples = transition_report["samples"]
+    stable_seated = [
+        item
+        for item in contact_samples
+        if item["contactPhase"] == "stable"
+        and item["targetState"] == "seated"
+        and 75 <= item["frame"] <= 141
+    ]
+    assert stable_seated, transition_report
+    final_contact = max(contact_samples, key=lambda item: item["frame"])
+    assert final_contact["frame"] == 210, final_contact
+    assert final_contact["contactPhase"] == "stable", final_contact
+    assert final_contact["targetState"] == "standing", final_contact
+    bpy.context.scene.frame_set(final_contact["frame"])
+    bpy.context.view_layer.update()
+    final_foot_points = {
+        side: bone_world_point(
+            armature,
+            armature.pose.bones[bone_map[f"foot_{side}"]],
+            "tail",
+        )
+        for side in ("l", "r")
+    }
+    final_pairing, _ = deterministic_planar_foot_pairing(
+        final_foot_points,
+        state_mode_objects["standing"],
+    )
+    assert final_contact["resolvedFootTargets"] == {
+        f"foot_{side}": state_mode_objects["standing"][target_role].name
+        for side, target_role in final_pairing.items()
+    }, final_contact
+    contact_drift_max = {
+        side: max(float(item[f"footDrift{side.upper()}"]) for item in contact_samples)
+        for side in ("l", "r")
+    }
+    assert contact_drift_max["l"] < 0.025, (contact_drift_max, contact_samples)
+    assert contact_drift_max["r"] < 0.025, (contact_drift_max, contact_samples)
     printable_metrics = dict(metrics_report)
     printable_metrics["animateReport"] = {
         key: value
