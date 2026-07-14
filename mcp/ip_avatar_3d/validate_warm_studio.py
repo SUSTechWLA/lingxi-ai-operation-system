@@ -843,6 +843,28 @@ def _validate_cameras(report: dict[str, Any]) -> None:
                 report["errors"].append(
                     f"{name} focus marker must be {focus_name!r}"
                 )
+            focus = _scene_object(focus_name)
+            if not camera.data.dof.use_dof:
+                report["errors"].append(f"{name} must have depth of field enabled")
+            if focus is None or camera.data.dof.focus_object is not focus:
+                found = getattr(camera.data.dof.focus_object, "name", None)
+                report["errors"].append(
+                    f"{name} DOF focus object must be {focus_name!r}, found {found!r}"
+                )
+            if not math.isclose(
+                camera.data.dof.aperture_fstop,
+                builder.MODE_CAMERA_F_STOP,
+                abs_tol=1e-5,
+            ):
+                report["errors"].append(
+                    f"{name} aperture_fstop must be {builder.MODE_CAMERA_F_STOP:g}, "
+                    f"found {camera.data.dof.aperture_fstop:g}"
+                )
+            if camera.data.dof.aperture_blades != 9:
+                report["errors"].append(
+                    f"{name} aperture_blades must be 9, "
+                    f"found {camera.data.dof.aperture_blades}"
+                )
             if camera.get("ip_camera_role") != role:
                 report["errors"].append(f"{name} camera role must be {role!r}")
             if camera.get("ip_framing_contract") != "contract.MODE_CAMERA_SPECS":

@@ -3318,6 +3318,7 @@ CAMERA_F_STOPS = {
     "Camera_Desk_Detail": 6.3,
     "Camera_Shelf_Detail": 4.0,
 }
+MODE_CAMERA_F_STOP = 5.0
 
 CAMERA_RESULT_KEYS = {
     "Camera_Wide": "wide",
@@ -3394,6 +3395,10 @@ def _add_mode_camera(
     data.sensor_width = 36.0
     data.clip_start = 0.03
     data.clip_end = 100.0
+    data.dof.use_dof = True
+    data.dof.focus_object = focus
+    data.dof.aperture_fstop = MODE_CAMERA_F_STOP
+    data.dof.aperture_blades = 9
     camera = bpy.data.objects.new(name, data)
     ctx.collections["STUDIO_CAMERAS"].objects.link(camera)
     camera.location = location

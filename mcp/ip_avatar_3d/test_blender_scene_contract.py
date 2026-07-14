@@ -81,6 +81,16 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
             assert camera.type == "CAMERA"
             assert_location_matches(tuple(camera.location), location)
             assert camera.data.lens == lens
+            expected_focus_name = (
+                "IP_Transition_Focus"
+                if role == "transition"
+                else f"IP_{mode.title()}_Focus_Head"
+            )
+            assert camera["ip_focus_marker"] == expected_focus_name
+            assert camera.data.dof.use_dof is True
+            assert camera.data.dof.focus_object is bpy.data.objects[expected_focus_name]
+            assert camera.data.dof.aperture_fstop == 5.0
+            assert camera.data.dof.aperture_blades == 9
 
     for name in ("IP_Seat_Target", "IP_Foot_Target.L", "IP_Foot_Target.R"):
         assert bpy.data.objects.get(name) is not None, name
@@ -153,6 +163,21 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert scene.view_settings.use_white_balance is True
     assert scene.view_settings.white_balance_temperature == 4500.0
     assert scene.view_settings.white_balance_tint == 10.0
+
+
+def test_production_validator_rejects_mode_camera_broken_dof_focus_object() -> None:
+    camera = bpy.data.objects["Camera_Standing_Wide"]
+    original_focus = camera.data.dof.focus_object
+    camera.data.dof.focus_object = bpy.data.objects["IP_Transition_Focus"]
+    try:
+        validation = warm_studio_validator.validate_scene()
+        assert any(
+            "Camera_Standing_Wide DOF focus object must be "
+            "'IP_Standing_Focus_Head'" in error
+            for error in validation["errors"]
+        ), validation["errors"]
+    finally:
+        camera.data.dof.focus_object = original_focus
 
 
 def test_luminance_masks_follow_rendered_subject_and_projected_head() -> None:
@@ -1159,6 +1184,7 @@ if __name__ == "__main__":
         )
     tests = [
         test_warm_studio_saved_scene_has_dual_mode_contract,
+        test_production_validator_rejects_mode_camera_broken_dof_focus_object,
         test_luminance_masks_follow_rendered_subject_and_projected_head,
         test_background_mask_excludes_character_practicals_and_clipped_highlights,
         test_qa_render_isolates_and_restores_timeline_camera_markers,
