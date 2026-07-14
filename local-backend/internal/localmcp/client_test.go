@@ -328,6 +328,57 @@ func TestClientListsToolsFromIPAvatar3DMCPServer(t *testing.T) {
 	t.Fatalf("tools = %#v, want ip_avatar_3d.render_talking_video", tools)
 }
 
+func TestClientDiscoversAndCallsArollActionsFromIPAvatar3DMCPServer(t *testing.T) {
+	if os.Getenv("RUN_PYTHON_MCP_INTEGRATION") != "1" {
+		t.Skip("set RUN_PYTHON_MCP_INTEGRATION=1 to run the Python MCP integration test")
+	}
+	scriptPath := filepath.Clean(filepath.Join("..", "..", "..", "mcp", "ip_avatar_3d", "server.py"))
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("ip avatar 3d python mcp server not found: %v", err)
+	}
+	pythonCommand := pythonCommandForIntegrationTest(t)
+	client := NewClient(ProviderConfig{
+		ID:         "ip_avatar_3d",
+		Transport:  "stdio",
+		Command:    pythonCommand,
+		Args:       []string{scriptPath},
+		ToolPrefix: "ip_avatar_3d.",
+		Enabled:    true,
+	}, nil)
+	defer client.Close()
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+	found := false
+	for _, tool := range tools {
+		if tool.Name == "ip_avatar_3d.list_aroll_actions" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("tools = %#v, want ip_avatar_3d.list_aroll_actions", tools)
+	}
+
+	result, err := client.CallTool(context.Background(), "ip_avatar_3d.list_aroll_actions", nil)
+	if err != nil {
+		t.Fatalf("CallTool returned error: %v", err)
+	}
+	actions, ok := result.StructuredContent["actions"].([]interface{})
+	if !ok {
+		t.Fatalf("actions = %#v, want JSON action array", result.StructuredContent["actions"])
+	}
+	for _, raw := range actions {
+		action, ok := raw.(map[string]interface{})
+		if ok && action["name"] == "Aroll_Transition_StandToSit" {
+			return
+		}
+	}
+	t.Fatalf("actions = %#v, want Aroll_Transition_StandToSit", actions)
+}
+
 func pythonCommandForIntegrationTest(t *testing.T) string {
 	t.Helper()
 	if command := strings.TrimSpace(os.Getenv("PYTHON")); command != "" {

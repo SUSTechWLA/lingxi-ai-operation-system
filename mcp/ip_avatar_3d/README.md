@@ -17,6 +17,7 @@ Tangying core should not know the implementation details. It calls this provider
 | `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | Validate a pinned local GPT-SoVITS voice bundle and hashes without synthesis or network I/O. |
 | `ip_avatar_3d.generate_voice_auditions` | `generate_voice_auditions` | Generate atomic, content-addressed HeyGen A/B/C auditions for blind selection. |
 | `ip_avatar_3d.validate_character_asset` | `validate_character_asset` | Validate GLB skin, semantic bones, visemes, and profile assets before rendering. |
+| `ip_avatar_3d.list_aroll_actions` | `list_aroll_actions` | List reusable standing, seated, and transition actions with pose-state metadata. |
 | `ip_avatar_3d.plan_motion` | `plan_motion` | Convert narration into lip-sync and motion timelines. |
 | `ip_avatar_3d.render_talking_video` | `render_talking_video` | Render a GLB/GLTF/FBX avatar to `ip_layer.mp4`. |
 
@@ -98,6 +99,23 @@ The same approved profile drives both common A-roll layouts. These direct
   "script": "今天分享一个值得关注的观点。",
   "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
   "presentationMode": "seated"
+}
+```
+
+For a stateful A-roll sequence, request the reusable actions by name. The
+planner inserts any required stand/sit transitions and persists the resolved
+sequence with the render input and report:
+
+```json
+{
+  "script": "先站着开场，然后坐下解释，最后站起来总结。",
+  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "presentationMode": "standing",
+  "actionSequence": [
+    "Aroll_Welcome_OpenArms",
+    "Aroll_Seated_Explain",
+    "Aroll_Conclusion_HandsTogether"
+  ]
 }
 ```
 

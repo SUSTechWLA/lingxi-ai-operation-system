@@ -33,6 +33,8 @@ CAMERA_NAMES = {
     "wide": "Camera_Wide",
     "medium": "Camera_Medium",
     "close": "Camera_Close",
+    "three_quarter": "Camera_ThreeQuarter",
+    "transition": "Camera_Transition",
 }
 LIGHTING_MULTIPLIERS = {
     "scene_default": {"default": 1.0},
@@ -199,9 +201,11 @@ def configure_camera_plan(
         "wide": "wide",
         "medium": "medium",
         "three_quarter": "three_quarter",
+        "transition": "transition",
         "Camera_Wide": "wide",
         "Camera_Medium": "medium",
         "Camera_ThreeQuarter": "three_quarter",
+        "Camera_Transition": "transition",
         "Camera_Close": "three_quarter",
     }
     missing: list[str] = []

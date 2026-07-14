@@ -290,12 +290,111 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
         self.assertEqual(plan, [{"frame": 1, "camera": "Camera_Medium"}])
 
+    def test_render_dry_run_accepts_transition_camera_preset(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "avatar.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            result = server.render_talking_video(
+                script="转场镜头测试。",
+                modelPath=str(model),
+                outputDir=str(root / "out"),
+                cameraPreset="transition",
+                dryRun=True,
+            )
+
+            render_input = json.loads(
+                pathlib.Path(result["renderInputPath"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(render_input["cameraPlan"], [{"frame": 1, "camera": "Camera_Transition"}])
+
+    def test_list_aroll_actions_exposes_stateful_catalog(self) -> None:
+        server = load_server()
+
+        payload = server.list_aroll_actions()
+
+        names = {item["name"] for item in payload["actions"]}
+        self.assertIn("Aroll_Transition_StandToSit", names)
+        self.assertIn("Aroll_Transition_SitToStand", names)
+        self.assertEqual(
+            next(
+                item
+                for item in payload["actions"]
+                if item["name"] == "Aroll_Seated_Explain"
+            )["startState"],
+            "seated",
+        )
+
+    def test_motion_plan_inserts_transitions_for_requested_actions(self) -> None:
+        server = load_server()
+
+        plan = server.build_motion_plan(
+            "先打招呼，然后坐下来解释，最后站起来总结。",
+            14.0,
+            30,
+            "expressive",
+            presentation_mode="standing",
+            action_sequence=[
+                "Aroll_Welcome_OpenArms",
+                "Aroll_Seated_Explain",
+                "Aroll_Conclusion_HandsTogether",
+            ],
+        )
+
+        self.assertEqual(
+            plan["resolvedActionSequence"],
+            [
+                "Aroll_Welcome_OpenArms",
+                "Aroll_Transition_StandToSit",
+                "Aroll_Seated_Explain",
+                "Aroll_Transition_SitToStand",
+                "Aroll_Conclusion_HandsTogether",
+            ],
+        )
+        self.assertEqual(plan["initialPoseState"], "standing")
+        transitions = [
+            event
+            for event in plan["motionEvents"]
+            if event.get("action", "").startswith("Aroll_Transition_")
+        ]
+        self.assertEqual([event["endState"] for event in transitions], ["seated", "standing"])
+
+    def test_render_dry_run_persists_requested_action_sequence(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "avatar.glb"
+            model.write_bytes(b"glTF placeholder")
+            result = server.render_talking_video(
+                script="坐下来解释，然后站起来总结。",
+                modelPath=str(model),
+                outputDir=str(root / "out"),
+                presentationMode="standing",
+                actionSequence=["Aroll_Seated_Explain", "Aroll_Conclusion_HandsTogether"],
+                dryRun=True,
+            )
+            render_input = json.loads(
+                pathlib.Path(result["renderInputPath"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(render_input["motionPlan"]["initialPoseState"], "standing")
+            self.assertEqual(
+                render_input["motionPlan"]["resolvedActionSequence"],
+                [
+                    "Aroll_Transition_StandToSit",
+                    "Aroll_Seated_Explain",
+                    "Aroll_Transition_SitToStand",
+                    "Aroll_Conclusion_HandsTogether",
+                ],
+            )
+
     def test_motion_plan_contains_lip_sync_and_keyword_actions(self) -> None:
         server = load_server()
 
         plan = server.build_motion_plan("第一，重点介绍我们的开源 AI 视频创作流程。所以要让波波挥手，再动一下腿。", 8, 24)
 
-        self.assertEqual(plan["schemaVersion"], "ip-avatar-3d-motion-plan/v1")
+        self.assertEqual(plan["schemaVersion"], "ip-avatar-3d-motion-plan/v2")
         self.assertGreater(len(plan["lipSync"]), 40)
         motions = {event["motion"] for event in plan["motionEvents"]}
         self.assertIn("idle_breath", motions)

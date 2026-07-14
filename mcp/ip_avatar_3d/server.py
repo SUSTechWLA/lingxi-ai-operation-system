@@ -30,6 +30,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from master_asset import MASTER_COLLECTION, MASTER_VERSION
 from gpt_sovits_client import GPTSoVITSClient
+import aroll_actions
 from voice_policy import (
     PRODUCTION_PROVIDERS,
     ProductionVoiceUnavailable,
@@ -69,7 +70,7 @@ DEFAULT_CAMERA_PRESET = "medium"
 DEFAULT_LIGHTING_PRESET = "editorial_soft"
 DEFAULT_RENDER_ENGINE = "BLENDER_EEVEE_NEXT"
 DEFAULT_QUALITY_PRESET = "production_2k"
-CAMERA_PRESETS = {"auto", "wide", "medium", "close"}
+CAMERA_PRESETS = {"auto", "wide", "medium", "close", "three_quarter", "transition"}
 LIGHTING_PRESETS = {"editorial_soft", "editorial_crisp", "night_analysis", "scene_default"}
 RENDER_ENGINES = {"BLENDER_EEVEE_NEXT", "CYCLES"}
 QUALITY_PRESETS = {
@@ -703,6 +704,25 @@ def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -
     resolved: list[dict[str, Any]] = []
     for event in sorted(normalized, key=_motion_event_sort_key):
         item = dict(event)
+        if item.get("motion") == "avatar_action":
+            groups = [
+                group
+                for group in item.get("gestureGroups", [])
+                if group in {
+                    "root", "body", "legs", "arms", "hands", "head",
+                    "arm_l", "arm_r", "hand_l", "hand_r",
+                }
+            ]
+            start = max(0.0, float(item.get("timeSec") or 0.0))
+            duration = max(0.1, float(item.get("duration") or 0.1))
+            if start + duration > duration_sec:
+                raise ValueError(f"A-roll action {item.get('action')} exceeds durationSec")
+            item["timeSec"] = round(start, 3)
+            item["duration"] = round(duration, 3)
+            for group in groups:
+                latest_end_by_group[group] = start + duration
+            resolved.append(item)
+            continue
         if item.get("gestureGroup"):
             groups = [
                 str(group)
@@ -750,9 +770,19 @@ def _viseme_for_char(char: str) -> tuple[str, float]:
     return "a", 0.52
 
 
-def build_motion_plan(script: str, duration_sec: float, fps: int = DEFAULT_FPS, motion_style: str = "expressive") -> dict[str, Any]:
+def build_motion_plan(
+    script: str,
+    duration_sec: float,
+    fps: int = DEFAULT_FPS,
+    motion_style: str = "expressive",
+    *,
+    presentation_mode: str = "standing",
+    action_sequence: list[str] | None = None,
+) -> dict[str, Any]:
     duration_sec = float(duration_sec or estimate_duration(script))
     fps = max(8, min(int(fps or DEFAULT_FPS), 60))
+    initial_state = resolve_presentation_mode(presentation_mode)
+    requested = [str(name) for name in (action_sequence or []) if str(name).strip()]
     strength_scale = 1.0 if motion_style != "subtle" else 0.55
     events: list[dict[str, Any]] = [
         {"timeSec": 0.0, "motion": "idle_breath", "duration": round(duration_sec, 3), "strength": 0.45 * strength_scale}
@@ -827,6 +857,22 @@ def build_motion_plan(script: str, duration_sec: float, fps: int = DEFAULT_FPS, 
                 "direction": 1,
             }
         )
+    action_events = aroll_actions.build_action_events(
+        requested,
+        initial_state,
+        start_time_sec=0.35,
+        spacing_sec=0.12,
+    )
+    resolved_names = [str(event["action"]) for event in action_events]
+    required_duration = max(
+        (float(event["timeSec"]) + float(event["duration"]) + 0.35 for event in action_events),
+        default=0.0,
+    )
+    if required_duration > duration_sec + 1e-6:
+        raise ValueError(
+            f"actionSequence requires {required_duration:.2f}s but durationSec is {duration_sec:.2f}s"
+        )
+    events.extend(action_events)
     events = _finalize_motion_events(events, duration_sec)
 
     chars = list(script or "")
@@ -844,15 +890,16 @@ def build_motion_plan(script: str, duration_sec: float, fps: int = DEFAULT_FPS, 
         t += sample_step
 
     return {
-        "schemaVersion": "ip-avatar-3d-motion-plan/v1",
+        "schemaVersion": "ip-avatar-3d-motion-plan/v2",
         "durationSec": round(duration_sec, 3),
         "fps": fps,
         "motionStyle": motion_style,
+        "initialPoseState": initial_state,
+        "resolvedActionSequence": resolved_names,
         "motionEvents": events,
         "lipSync": lip_sync,
         "notes": [
-            "This plan is deterministic and local.",
-            "Production-quality rigging, face-screen placement, and voice can be replaced inside the MCP provider without changing Tangying core.",
+            "Stateful A-roll actions are deterministic and locally rendered.",
         ],
     }
 
@@ -872,6 +919,8 @@ def build_camera_plan(
         "wide": "Camera_Wide",
         "medium": "Camera_Medium",
         "close": "Camera_Close",
+        "three_quarter": "Camera_ThreeQuarter",
+        "transition": "Camera_Transition",
     }
     if preset != "auto":
         return [{"frame": 1, "camera": camera_name.get(preset, "Camera_Medium")}]
@@ -2311,10 +2360,31 @@ def prepare_character_master(
 
 
 @mcp.tool()
-def plan_motion(script: str, durationSec: float = 0, fps: int = DEFAULT_FPS, motionStyle: str = "expressive") -> dict[str, Any]:
+def list_aroll_actions() -> dict[str, Any]:
+    """Return reusable standing, seated, and transition actions with pose-state metadata."""
+    return aroll_actions.action_catalog_payload()
+
+
+@mcp.tool()
+def plan_motion(
+    script: str,
+    durationSec: float = 0,
+    fps: int = DEFAULT_FPS,
+    motionStyle: str = "expressive",
+    presentationMode: str = "standing",
+    actionSequence: list[str] | None = None,
+) -> dict[str, Any]:
     """Analyze narration text into deterministic lip-sync and body-motion timelines."""
     duration = float(durationSec or estimate_duration(script))
-    return build_motion_plan(script, duration, fps, motionStyle)
+    presentation_mode = resolve_presentation_mode(presentationMode)
+    return build_motion_plan(
+        script,
+        duration,
+        fps,
+        motionStyle,
+        presentation_mode=presentation_mode,
+        action_sequence=actionSequence,
+    )
 
 
 def _voice_policy_metadata(
@@ -2398,6 +2468,7 @@ def render_talking_video(
     renderMode: str = "",
     fallbackPolicy: str = "",
     presentationMode: str = "auto",
+    actionSequence: list[str] | None = None,
 ) -> dict[str, Any]:
     """Render a talking IP video layer from narration text and a local GLB/GLTF/FBX model."""
     profile_path: Path | None = None
@@ -2626,7 +2697,31 @@ def render_talking_video(
         resolved_audio = str(_readable_path(audioPath))
         initial_duration = audio_duration_sec(resolved_audio) or initial_duration
     duration = initial_duration or estimate_duration(script)
-    motion_plan = build_motion_plan(script, duration, fps, motionStyle)
+    if not initial_duration and not audioPath and actionSequence:
+        action_events = aroll_actions.build_action_events(
+            [str(name) for name in actionSequence if str(name).strip()],
+            presentation_mode,
+            start_time_sec=0.35,
+            spacing_sec=0.12,
+        )
+        duration = max(
+            duration,
+            max(
+                (
+                    float(event["timeSec"]) + float(event["duration"]) + 0.35
+                    for event in action_events
+                ),
+                default=0.0,
+            ),
+        )
+    motion_plan = build_motion_plan(
+        script,
+        duration,
+        fps,
+        motionStyle,
+        presentation_mode=presentation_mode,
+        action_sequence=actionSequence,
+    )
     duration = float(motion_plan["durationSec"])
     camera_plan = build_camera_plan(duration, fps, camera_preset)
     background_mode = "blender_scene" if resolved_scene else ("static_plate" if resolved_background else "transparent_or_world")
@@ -2715,7 +2810,14 @@ def render_talking_video(
         generated_audio_duration = audio_duration_sec(audio_out)
         if generated_audio_duration > 0:
             duration = float(generated_audio_duration)
-            motion_plan = build_motion_plan(script, duration, fps, motionStyle)
+            motion_plan = build_motion_plan(
+                script,
+                duration,
+                fps,
+                motionStyle,
+                presentation_mode=presentation_mode,
+                action_sequence=actionSequence,
+            )
             duration = float(motion_plan["durationSec"])
             camera_plan = build_camera_plan(duration, fps, camera_preset)
             if not subtitlePath:
@@ -2762,6 +2864,8 @@ def render_talking_video(
         "resolution": {"width": width, "height": height},
         "transparent": effective_transparent,
         "presentationMode": presentation_mode,
+        "initialPoseState": motion_plan["initialPoseState"],
+        "resolvedActionSequence": motion_plan["resolvedActionSequence"],
         "cameraPreset": camera_preset,
         "cameraPlan": camera_plan,
         "lightingPreset": lighting_preset,
@@ -2806,6 +2910,8 @@ def render_talking_video(
             "subtitleGenerated": subtitle_out.exists(),
             "blenderRequired": True,
             "presentationMode": presentation_mode,
+            "initialPoseState": motion_plan["initialPoseState"],
+            "resolvedActionSequence": motion_plan["resolvedActionSequence"],
             "voicePolicy": voice_policy,
         }
         _write_json(report_path, report)
@@ -2819,6 +2925,8 @@ def render_talking_video(
             "shotId": shotId,
             "durationSec": duration,
             "presentationMode": presentation_mode,
+            "initialPoseState": motion_plan["initialPoseState"],
+            "resolvedActionSequence": motion_plan["resolvedActionSequence"],
             "modelPath": str(model_path) if model_path else "",
             "masterBlendPath": master_blend_path,
             "sceneBlendPath": resolved_scene,
@@ -2895,6 +3003,8 @@ def render_talking_video(
         "qa": qa,
         "renderInputPath": str(render_input_path),
         "presentationMode": presentation_mode,
+        "initialPoseState": motion_plan["initialPoseState"],
+        "resolvedActionSequence": motion_plan["resolvedActionSequence"],
         "voicePolicy": voice_policy,
         "voice": audio_metadata,
         "audioSource": audioSource,
@@ -2911,6 +3021,8 @@ def render_talking_video(
         "shotId": shotId,
         "durationSec": duration,
         "presentationMode": presentation_mode,
+        "initialPoseState": motion_plan["initialPoseState"],
+        "resolvedActionSequence": motion_plan["resolvedActionSequence"],
         "videoPath": str(video_path),
         "localPath": str(video_path),
         "mediaPath": str(video_path),
@@ -2959,6 +3071,8 @@ def render_talking_video(
             "sceneBlendPath": resolved_scene,
             "cameraPreset": camera_preset,
             "cameraPlan": camera_plan,
+            "initialPoseState": motion_plan["initialPoseState"],
+            "resolvedActionSequence": motion_plan["resolvedActionSequence"],
             "lightingPreset": lighting_preset,
             "renderEngine": render_engine,
             "qualityPreset": quality_preset,

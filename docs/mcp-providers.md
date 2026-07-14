@@ -263,6 +263,7 @@ python3 mcp/ip_avatar_3d/server.py
 | `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | 校验固定 GPT-SoVITS 音色的参考音频、模型和哈希。 |
 | `ip_avatar_3d.prepare_character_master` | `prepare_character_master` | 从带骨骼 FBX/GLB 一次性生成并校验 A-roll 主资产。 |
 | `ip_avatar_3d.validate_character_asset` | `validate_character_asset` | 校验骨架语义、蒙皮、口型和主资产配置。 |
+| `ip_avatar_3d.list_aroll_actions` | `list_aroll_actions` | 列出带起止姿态状态的站立、坐姿和转场动作。 |
 | `ip_avatar_3d.plan_motion` | `plan_motion` | 把口播文本转成口型和动作时间线。 |
 | `ip_avatar_3d.render_talking_video` | `render_talking_video` | 用已批准主资产、固定场景和固定声音渲染 `ip_layer.mp4`。 |
 
