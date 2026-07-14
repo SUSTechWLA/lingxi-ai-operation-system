@@ -271,3 +271,87 @@ git diff --check and staged diff check: exit 0
 - Character profile, voice, studio blend, canonical master, and other task files
   were not modified. Existing untracked model/turnaround directories were
   preserved and excluded from both commits.
+
+## P1 Composition Closure (2026-07-14)
+
+Implementation commit: `1853dd03`.
+
+### Hard Gate And Calibration
+
+- The validator now checks `frameBounds` independently for head, left hand, and
+  right hand on every sampled frame. `minX/minY` must be at least `0.04` and
+  `maxX/maxY` must be at most `0.96`; the existing 128-point minimum remains an
+  additional gate.
+- Medium-camera calibration projects the complete head/hair-weighted and
+  hand/finger-weighted regions for frames `1/15/29`. Unsafe candidates are
+  discarded before composition scoring. Safe candidates are compared by medium
+  vertical occupancy, centering, authored-lens proximity, and authored-shift
+  proximity, in that order.
+- Standing selected `32 mm`, `shift_y=-0.04`; seated selected `35 mm`,
+  `shift_y=-0.04`. Both retain a readable studio background and medium subject
+  scale.
+
+### TDD Evidence
+
+The new test supplied exactly 128 in-frame points for all three regions while
+setting head `maxY=0.961` and left-hand `minY=0.039`. Before implementation the
+finalizer incorrectly returned success and the Blender test failed at:
+
+```text
+assert failed["success"] is False
+AssertionError
+```
+
+After adding the hard bounds gate, the same test passes. A fixture with exactly
+128 points and all bounds at the inclusive `[0.04, 0.96]` limits also passes.
+
+### Per-Frame Bounds
+
+Each cell is `(minX, minY) -> (maxX, maxY)`. All 2502 sampled head points and all
+355 sampled points per hand are inside the frame on every row.
+
+| Mode | Frame | Head / hair | Left hand | Right hand |
+| --- | ---: | --- | --- | --- |
+| standing | 1 | `(0.41016, 0.54364) -> (0.58978, 0.88745)` | `(0.59672, 0.04507) -> (0.66146, 0.24879)` | `(0.33413, 0.04781) -> (0.40057, 0.24635)` |
+| standing | 15 | `(0.41653, 0.54437) -> (0.59784, 0.88454)` | `(0.63447, 0.08998) -> (0.71729, 0.29435)` | `(0.28886, 0.10929) -> (0.37326, 0.30333)` |
+| standing | 29 | `(0.41652, 0.54497) -> (0.59686, 0.88950)` | `(0.61174, 0.05008) -> (0.68301, 0.25550)` | `(0.31932, 0.06081) -> (0.39454, 0.26195)` |
+| seated | 1 | `(0.44052, 0.58063) -> (0.61899, 0.92807)` | `(0.60359, 0.08881) -> (0.65995, 0.28455)` | `(0.34371, 0.13222) -> (0.41312, 0.32058)` |
+| seated | 15 | `(0.44135, 0.58072) -> (0.62040, 0.92088)` | `(0.63784, 0.12806) -> (0.71244, 0.32487)` | `(0.30242, 0.19217) -> (0.38541, 0.37312)` |
+| seated | 29 | `(0.44105, 0.58075) -> (0.61938, 0.92672)` | `(0.61464, 0.09312) -> (0.67723, 0.28944)` | `(0.32776, 0.14242) -> (0.40421, 0.33233)` |
+
+No reported bound is below `0`, above `1`, or outside the stricter
+`[0.04, 0.96]` safe frame. The smallest margin is standing frame 1 left-hand
+`minY=0.04507`.
+
+### Render Evidence And Visual Review
+
+- `.superpowers/sdd/task-5-evidence/standing-medium-frame-0029.png`
+- `.superpowers/sdd/task-5-evidence/seated-medium-frame-0029.png`
+
+Both `960x540` frame-29 images were regenerated from the selected medium camera
+using the canonical master in the actual warm studio. Visual inspection confirms
+complete hair and both hands, medium subject scale, and readable background
+furniture/signage. The known lighting overexposure was intentionally left
+unchanged because it is outside this review scope.
+
+### Verification
+
+```text
+Both-mode real validator: success=true, exit 0
+Blender scene contract: 17 PASS, exit 0
+Server tests: 90 run, OK, 2 skipped
+Character rig Blender regression: 27 PASS, exit 0
+Hand refinement Blender regression: 11 PASS, exit 0
+py_compile: exit 0
+git diff --check and staged diff check: exit 0
+```
+
+### Self-Review And Concerns
+
+- No remaining Task 5 P1 composition finding was identified.
+- Standing frame 1 left-hand `minY=0.04507` has a smaller margin than the other
+  regions but passes the explicit 4% hard gate. Any action-library or pose change
+  must rerun the sampled-frame validator rather than reuse this result.
+- Character profile, voice, scene/master assets, lighting, and other task files
+  were not modified. Existing untracked model/turnaround directories remain
+  preserved and excluded.
