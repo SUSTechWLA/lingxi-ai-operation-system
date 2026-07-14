@@ -15,6 +15,47 @@ DOOR_OPENING = (1.0, 2.4)
 TARGET_CHARACTER_HEIGHT = 2.55
 DEFAULT_RENDER_RESOLUTION = (1920, 1080)
 
+PRESENTATION_MODES = ("standing", "seated")
+
+MODE_MARKER_SPECS = MappingProxyType({
+    "standing": MappingProxyType({
+        "spawn": (0.0, 0.30, 0.0),
+        "focus": (0.0, 0.30, 1.93),
+        "seat": (0.0, 0.58, 0.62),
+        "foot_l": (-0.22, 0.03, 0.0),
+        "foot_r": (0.22, 0.03, 0.0),
+    }),
+    "seated": MappingProxyType({
+        "spawn": (0.0, 0.47, 0.0),
+        "focus": (0.0, 0.47, 1.58),
+        "seat": (0.0, 0.58, 0.62),
+        "foot_l": (-0.22, 0.02, 0.0),
+        "foot_r": (0.22, 0.02, 0.0),
+    }),
+})
+
+MODE_CAMERA_SPECS = MappingProxyType({
+    "standing": MappingProxyType({
+        "wide": ("Camera_Standing_Wide", (0.0, -2.74, 1.67), 24.0),
+        "medium": ("Camera_Standing_Medium", (0.0, -2.15, 1.78), 50.0),
+        "three_quarter": ("Camera_Standing_ThreeQuarter", (-2.25, -1.65, 1.82), 50.0),
+    }),
+    "seated": MappingProxyType({
+        "wide": ("Camera_Seated_Wide", (0.0, -2.74, 1.55), 24.0),
+        "medium": ("Camera_Seated_Medium", (0.0, -2.15, 1.60), 50.0),
+        "three_quarter": ("Camera_Seated_ThreeQuarter", (-2.20, -1.60, 1.62), 50.0),
+    }),
+})
+
+SUBJECT_LIGHT_PROFILE = MappingProxyType({
+    "name": "warm_subject_first_v1",
+    "worldStrength": 0.12,
+    "keyTemperatureK": 4500,
+    "rimTemperatureK": 3200,
+    "practicalTemperatureK": 2700,
+    "backgroundStopsBelowFace": 1.25,
+})
+
 REQUIRED_COLLECTIONS = (
     "STUDIO_ARCHITECTURE",
     "STUDIO_FURNITURE",

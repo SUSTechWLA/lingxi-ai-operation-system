@@ -18,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import blender_renderer
 import editorial_studio_builder
+import warm_studio_contract as contract
 
 
 def reset_scene() -> None:
@@ -31,6 +32,52 @@ def add_camera(name: str) -> bpy.types.Object:
     obj = bpy.data.objects.new(name, data)
     bpy.context.collection.objects.link(obj)
     return obj
+
+
+def assert_location_matches(
+    actual: tuple[float, float, float],
+    expected: tuple[float, float, float],
+) -> None:
+    assert all(abs(left - right) <= 1e-6 for left, right in zip(actual, expected))
+
+
+def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
+    scene = bpy.context.scene
+    assert scene.render.resolution_x == 1920
+    assert scene.render.resolution_y == 1080
+    assert scene["ip_presentation_modes"] == '["standing", "seated"]'
+    assert scene["ip_subject_light_profile"] == "warm_subject_first_v1"
+    assert scene["ip_background_stops_below_face"] == 1.25
+
+    for mode in contract.PRESENTATION_MODES:
+        marker_specs = contract.MODE_MARKER_SPECS[mode]
+        marker_names = {
+            "spawn": f"IP_{mode.title()}_Spawn",
+            "focus": f"IP_{mode.title()}_Focus_Head",
+        }
+        for role, name in marker_names.items():
+            marker = bpy.data.objects.get(name)
+            assert marker is not None, name
+            assert_location_matches(tuple(marker.location), marker_specs[role])
+
+        for role, (name, location, lens) in contract.MODE_CAMERA_SPECS[mode].items():
+            camera = bpy.data.objects.get(name)
+            assert camera is not None, name
+            assert camera.type == "CAMERA"
+            assert_location_matches(tuple(camera.location), location)
+            assert camera.data.lens == lens
+
+    for name in ("IP_Seat_Target", "IP_Foot_Target.L", "IP_Foot_Target.R"):
+        assert bpy.data.objects.get(name) is not None, name
+
+    assert_location_matches(
+        tuple(bpy.data.objects["IP_Character_Spawn"].location),
+        contract.MODE_MARKER_SPECS["standing"]["spawn"],
+    )
+    assert_location_matches(
+        tuple(bpy.data.objects["IP_Focus_Head"].location),
+        contract.MODE_MARKER_SPECS["standing"]["focus"],
+    )
 
 
 def test_camera_plan_binds_authored_cameras() -> None:
@@ -134,6 +181,7 @@ def test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_em
 
 if __name__ == "__main__":
     tests = [
+        test_warm_studio_saved_scene_has_dual_mode_contract,
         test_camera_plan_binds_authored_cameras,
         test_scene_marker_controls_character_height,
         test_lighting_preset_uses_authored_base_energy,

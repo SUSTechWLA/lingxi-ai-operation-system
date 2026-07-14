@@ -3244,9 +3244,7 @@ def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
     return root
 
 
-MARKER_SPECS = {
-    "IP_Character_Spawn": ((0.0, 0.30, 0.0), "character_spawn"),
-    "IP_Focus_Head": ((0.0, 0.30, 1.93), "focus_head"),
+STATIC_MARKER_SPECS = {
     "IP_Focus_Desk": ((0.80, -0.50, 1.005), "focus_desk"),
     "IP_Focus_Shelf": ((1.45, 2.50, 1.95), "focus_shelf"),
 }
@@ -3319,15 +3317,89 @@ def _add_studio_camera(
     return camera
 
 
-def build_markers_and_cameras(ctx: StudioContext) -> dict[str, bpy.types.Object]:
-    """Build the four character/focus markers and all seven contract cameras."""
+def _add_mode_camera(
+    ctx: StudioContext,
+    *,
+    name: str,
+    location: tuple[float, float, float],
+    lens: float,
+    focus_name: str,
+    role: str,
+) -> bpy.types.Object:
+    """Create one mode-specific camera from the dual-mode contract."""
 
-    for name, (location, marker_contract) in MARKER_SPECS.items():
+    focus = bpy.data.objects[focus_name]
+    data = bpy.data.cameras.new(f"{name}_Data")
+    data.lens = lens
+    data.sensor_width = 36.0
+    data.clip_start = 0.03
+    data.clip_end = 100.0
+    camera = bpy.data.objects.new(name, data)
+    ctx.collections["STUDIO_CAMERAS"].objects.link(camera)
+    camera.location = location
+    look_at(camera, tuple(focus.location))
+    camera["ip_focus_marker"] = focus_name
+    camera["ip_camera_role"] = role
+    camera["ip_framing_contract"] = "contract.MODE_CAMERA_SPECS"
+    parent_to_master(camera, ctx.master)
+    return camera
+
+
+def build_markers_and_cameras(ctx: StudioContext) -> dict[str, bpy.types.Object]:
+    """Build legacy and dual-mode markers with their authored cameras."""
+
+    standing_markers = contract.MODE_MARKER_SPECS["standing"]
+    for mode in contract.PRESENTATION_MODES:
+        marker_specs = contract.MODE_MARKER_SPECS[mode]
+        mode_title = mode.title()
+        _add_studio_marker(
+            ctx,
+            f"IP_{mode_title}_Spawn",
+            marker_specs["spawn"],
+            f"{mode}_spawn",
+        )
+        _add_studio_marker(
+            ctx,
+            f"IP_{mode_title}_Focus_Head",
+            marker_specs["focus"],
+            f"{mode}_focus_head",
+        )
+
+    for name, role in (
+        ("IP_Seat_Target", "seat"),
+        ("IP_Foot_Target.L", "foot_l"),
+        ("IP_Foot_Target.R", "foot_r"),
+    ):
+        _add_studio_marker(ctx, name, standing_markers[role], role)
+
+    for name, location, marker_contract in (
+        ("IP_Character_Spawn", standing_markers["spawn"], "character_spawn"),
+        ("IP_Focus_Head", standing_markers["focus"], "focus_head"),
+    ):
+        _add_studio_marker(ctx, name, location, marker_contract)
+
+    for name, (location, marker_contract) in STATIC_MARKER_SPECS.items():
         _add_studio_marker(ctx, name, location, marker_contract)
 
     result: dict[str, bpy.types.Object] = {}
     for name, spec in contract.CAMERA_SPECS.items():
         result[CAMERA_RESULT_KEYS[name]] = _add_studio_camera(ctx, name, spec)
+    for mode in contract.PRESENTATION_MODES:
+        focus_name = f"IP_{mode.title()}_Focus_Head"
+        for role, (name, location, lens) in contract.MODE_CAMERA_SPECS[mode].items():
+            _add_mode_camera(
+                ctx,
+                name=name,
+                location=location,
+                lens=lens,
+                focus_name=focus_name,
+                role=role,
+            )
+    ctx.scene["ip_presentation_modes"] = json.dumps(list(contract.PRESENTATION_MODES))
+    ctx.scene["ip_subject_light_profile"] = contract.SUBJECT_LIGHT_PROFILE["name"]
+    ctx.scene["ip_background_stops_below_face"] = contract.SUBJECT_LIGHT_PROFILE[
+        "backgroundStopsBelowFace"
+    ]
     ctx.scene.camera = result["wide"]
     return result
 

@@ -20,6 +20,29 @@ class WarmStudioContractTests(unittest.TestCase):
     def test_production_render_resolution_is_1080p(self) -> None:
         self.assertEqual(contract.DEFAULT_RENDER_RESOLUTION, (1920, 1080))
 
+    def test_dual_mode_contract_is_explicit(self) -> None:
+        self.assertEqual(contract.PRESENTATION_MODES, ("standing", "seated"))
+        self.assertEqual(set(contract.MODE_MARKER_SPECS), {"standing", "seated"})
+        self.assertEqual(set(contract.MODE_CAMERA_SPECS), {"standing", "seated"})
+        for mode in contract.PRESENTATION_MODES:
+            self.assertEqual(
+                set(contract.MODE_MARKER_SPECS[mode]),
+                {"spawn", "focus", "seat", "foot_l", "foot_r"},
+            )
+            self.assertEqual(
+                set(contract.MODE_CAMERA_SPECS[mode]),
+                {"wide", "medium", "three_quarter"},
+            )
+
+    def test_subject_first_light_profile_is_bounded(self) -> None:
+        profile = contract.SUBJECT_LIGHT_PROFILE
+        self.assertEqual(profile["name"], "warm_subject_first_v1")
+        self.assertLess(profile["worldStrength"], 0.20)
+        self.assertEqual(profile["keyTemperatureK"], 4500)
+        self.assertEqual(profile["rimTemperatureK"], 3200)
+        self.assertGreaterEqual(profile["backgroundStopsBelowFace"], 1.0)
+        self.assertLessEqual(profile["backgroundStopsBelowFace"], 1.5)
+
     def test_required_collections_are_complete_and_immutable(self) -> None:
         self.assertIsInstance(contract.REQUIRED_COLLECTIONS, tuple)
         self.assertEqual(
