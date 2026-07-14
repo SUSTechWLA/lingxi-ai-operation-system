@@ -169,17 +169,19 @@ Color management uses AgX with a moderately contrasty look. Exposure is set from
 
 The scene contains:
 
-- `Camera_Wide`: 32 mm hero room view.
+- `Camera_Wide`: 18 mm hero room view at `(0.0, -2.74, 1.67)`, aimed at `(0.0, 0.45, 0.85)`.
 - `Camera_Medium`: 50 mm talking-head view.
 - `Camera_Close`: 70 mm close talking-head view.
 - `Camera_ThreeQuarter_Left`: 50 mm.
 - `Camera_ThreeQuarter_Right`: 50 mm.
-- `Camera_Desk_Detail`: 85 mm tabletop close-up.
+- `Camera_Desk_Detail`: 85 mm, f/6.3 tabletop close-up from `(1.95, -2.07, 1.68)`, with `IP_Focus_Desk` on the mug at `(0.80, -0.50, 1.005)`.
 - `Camera_Shelf_Detail`: 85 mm shelf and lamp close-up.
 
 Character-facing cameras focus on `IP_Focus_Head`. Detail cameras use separate desk and shelf focus markers. Depth of field remains restrained so the environment is recognizable and compositing is stable.
 
 The hero camera matches the reference before secondary cameras are tuned. No saved camera may intersect walls, furniture, or foliage.
+
+The 18 mm wide framing and revised desk-detail focus are evidence-driven production revisions made after inspecting the rendered camera set. They supersede the initial 32 mm planning assumption while preserving the approved layout and camera roles.
 
 ## Blender Scene Structure
 
@@ -215,6 +217,7 @@ All production objects use clear semantic names. Mirrored plants and repeated bo
 - Blender version: 5.1.2.
 - Default interactive engine: Eevee Next.
 - Final engine: Cycles when selected by the caller.
+- Cycles final exposure profile: `ip_cycles_final_exposure=-0.8`, applied by the QA renderer while the saved Eevee exposure remains `0.0`.
 - Default resolution: 2560x1440.
 - Frame rate metadata: 30 fps.
 - Color management: AgX.
