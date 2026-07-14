@@ -1123,6 +1123,8 @@ def render_subject_lighting_evidence(
                 {
                     "mode": mode,
                     "engine": "eevee",
+                    "cameraRoleA": "medium",
+                    "cameraRoleB": camera_role,
                     "cameraA": medium_metadata["requestedCamera"],
                     "cameraB": comparison_metadata["requestedCamera"],
                     "activeCameraA": medium_metadata["activeCamera"],
@@ -1135,6 +1137,8 @@ def render_subject_lighting_evidence(
                     ),
                     "imageA": str(medium_display),
                     "imageB": str(comparison_display),
+                    "imageASha256": _sha256(medium_display),
+                    "imageBSha256": _sha256(comparison_display),
                 }
             )
 

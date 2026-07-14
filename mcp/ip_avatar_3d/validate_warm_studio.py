@@ -123,6 +123,29 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _image_rgb_mae(image_a: Path, image_b: Path) -> float:
+    import OpenImageIO as oiio
+    import numpy as np
+
+    arrays = []
+    for path in (image_a, image_b):
+        image = oiio.ImageInput.open(str(path))
+        if image is None:
+            raise ValueError(f"could not open camera comparison image: {path}")
+        try:
+            pixels = np.asarray(image.read_image("float"), dtype=np.float32)
+        finally:
+            image.close()
+        if pixels.ndim != 3 or pixels.shape[2] < 3:
+            raise ValueError(f"camera comparison image is not RGB: {path}")
+        arrays.append(pixels[..., :3])
+    if arrays[0].shape != arrays[1].shape:
+        raise ValueError(
+            f"camera comparison image dimensions differ: {arrays[0].shape} != {arrays[1].shape}"
+        )
+    return float(np.mean(np.abs(arrays[0] - arrays[1])))
+
+
 def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
     """Return fail-closed errors for canonical subject-lighting measurements."""
 
@@ -150,8 +173,14 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
             "backgroundMaskSource must exclude character geometry, practical-highlight IDs, and clipped display highlights"
         )
 
+    digest_cache: dict[Path, str] = {}
     comparisons = payload.get("cameraComparisons")
-    compared_modes: set[str] = set()
+    expected_comparisons = {
+        (mode, "medium", camera_role)
+        for mode in contract.PRESENTATION_MODES
+        for camera_role in ("three_quarter", "wide")
+    }
+    actual_comparisons: set[tuple[str, str, str]] = set()
     if not isinstance(comparisons, list):
         errors.append("cameraComparisons must be a list")
     else:
@@ -161,7 +190,10 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
                 continue
             mode = str(comparison.get("mode"))
             label = f"camera comparison {index}/{mode}"
-            compared_modes.add(mode)
+            camera_role_a = str(comparison.get("cameraRoleA", ""))
+            camera_role_b = str(comparison.get("cameraRoleB", ""))
+            comparison_key = (mode, camera_role_a, camera_role_b)
+            actual_comparisons.add(comparison_key)
             camera_a = str(comparison.get("cameraA", ""))
             camera_b = str(comparison.get("cameraB", ""))
             active_a = str(comparison.get("activeCameraA", ""))
@@ -175,6 +207,15 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
                 continue
             if comparison.get("engine") != "eevee":
                 errors.append(f"{label} must compare Eevee QA renders")
+            if comparison_key not in expected_comparisons:
+                errors.append(f"{label} has an unexpected camera-role pair {comparison_key}")
+            elif mode in contract.PRESENTATION_MODES:
+                expected_a = contract.MODE_CAMERA_SPECS[mode][camera_role_a][0]
+                expected_b = contract.MODE_CAMERA_SPECS[mode][camera_role_b][0]
+                if camera_a != expected_a or camera_b != expected_b:
+                    errors.append(
+                        f"{label} requested cameras must match {expected_a!r} and {expected_b!r}"
+                    )
             if not camera_a or not camera_b or camera_a == camera_b:
                 errors.append(f"{label} must name two different requested cameras")
             if active_a != camera_a or active_b != camera_b:
@@ -189,11 +230,53 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
                 errors.append(f"{label} must contain two different 4x4 camera matrices")
             if not math.isfinite(pixel_mae) or pixel_mae <= 1e-3:
                 errors.append(f"{label} pixel MAE must be greater than 0.001")
-        missing_comparison_modes = sorted(set(contract.PRESENTATION_MODES) - compared_modes)
-        if missing_comparison_modes:
+            image_paths: dict[str, Path] = {}
+            for image_key in ("imageA", "imageB"):
+                raw_path = comparison.get(image_key)
+                if not isinstance(raw_path, str) or not raw_path:
+                    errors.append(f"{label} camera comparison {image_key} is missing")
+                    continue
+                image_path = Path(raw_path).expanduser().resolve()
+                image_paths[image_key] = image_path
+                if not image_path.is_file():
+                    errors.append(
+                        f"{label} camera comparison {image_key} is not a regular file: {image_path}"
+                    )
+                    continue
+                digest_key = f"{image_key}Sha256"
+                expected_digest = comparison.get(digest_key)
+                if not isinstance(expected_digest, str) or len(expected_digest) != 64:
+                    errors.append(f"{label} {digest_key} is missing")
+                    continue
+                actual_digest = digest_cache.get(image_path)
+                if actual_digest is None:
+                    actual_digest = _file_sha256(image_path)
+                    digest_cache[image_path] = actual_digest
+                if actual_digest != expected_digest:
+                    errors.append(f"{label} {digest_key} does not match the artifact")
+            if set(image_paths) == {"imageA", "imageB"} and all(
+                path.is_file() for path in image_paths.values()
+            ):
+                try:
+                    actual_mae = _image_rgb_mae(image_paths["imageA"], image_paths["imageB"])
+                except ValueError as exc:
+                    errors.append(f"{label} {exc}")
+                else:
+                    if not math.isclose(
+                        pixel_mae,
+                        actual_mae,
+                        rel_tol=1e-6,
+                        abs_tol=1e-6,
+                    ):
+                        errors.append(f"{label} pixel MAE does not match the image artifacts")
+        missing_comparisons = sorted(expected_comparisons - actual_comparisons)
+        extra_comparisons = sorted(actual_comparisons - expected_comparisons)
+        if missing_comparisons:
             errors.append(
-                f"missing materially different camera comparisons: {missing_comparison_modes}"
+                f"missing materially different camera comparisons: {missing_comparisons}"
             )
+        if extra_comparisons:
+            errors.append(f"unexpected camera comparisons: {extra_comparisons}")
 
     measurements = payload.get("measurements")
     if not isinstance(measurements, list):
@@ -204,7 +287,6 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
         for engine in ("eevee", "cycles")
     }
     actual: set[tuple[str, str, str]] = set()
-    digest_cache: dict[Path, str] = {}
     for index, measurement in enumerate(measurements):
         if not isinstance(measurement, dict):
             errors.append(f"measurement {index} must be an object")

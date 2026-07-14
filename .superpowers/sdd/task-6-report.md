@@ -375,7 +375,7 @@ superseded by the production rebuild and final-resolution evidence below.
 
 ### Final 960x540 Evidence
 
-Evidence root: `/tmp/task6-final-evidence-v3`
+Evidence root: `/tmp/task6-final-evidence-v5`
 
 | Mode / engine | Face Y | Background Y | Stops below face | Non-catchlight clip |
 | --- | ---: | ---: | ---: | ---: |
@@ -386,8 +386,8 @@ Evidence root: `/tmp/task6-final-evidence-v3`
 
 All four records pass the `1.0..1.5` stop and `<0.5%` clipping gates. Requested
 and active camera names match with zero timeline camera markers during render.
-Standing medium/three-quarter and medium/wide MAE are `0.325546` and `0.217506`;
-seated values are `0.315771` and `0.238362`, all above the `0.001` threshold.
+Standing medium/three-quarter and medium/wide MAE are `0.334685` and `0.225489`;
+seated values are `0.325331` and `0.246940`, all above the `0.001` threshold.
 
 ### Visual Review
 
@@ -411,6 +411,9 @@ seated values are `0.315771` and `0.238362`, all above the `0.001` threshold.
   payload. Validation rejects missing or changed artifacts, non-positive masks,
   contradictory median RGB ratios, and stop values inconsistent with the
   reported scene-linear luminance.
+- Camera evidence requires exactly medium-to-three-quarter and medium-to-wide
+  pairs for each presentation mode. Both source images are hashed, opened,
+  dimension-checked, and their RGB MAE is recomputed by the validator.
 - The Blender test entrypoint opens the canonical production scene when invoked
   from `--factory-startup` and explicitly exits nonzero on any test exception.
 

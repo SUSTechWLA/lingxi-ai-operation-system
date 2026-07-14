@@ -370,6 +370,19 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
     artifact = artifact_root / "artifact.bin"
     artifact.write_bytes(b"verified evidence artifact")
     artifact_sha256 = render_warm_studio_qa._sha256(artifact)
+    image_a = artifact_root / "camera-a.png"
+    image_b = artifact_root / "camera-b.png"
+    for path, color in (
+        (image_a, (0.20, 0.40, 0.60, 1.0)),
+        (image_b, (0.40, 0.50, 0.70, 1.0)),
+    ):
+        image = bpy.data.images.new(path.stem, width=2, height=1, alpha=True)
+        image.pixels = [*color, *color]
+        image.filepath_raw = str(path)
+        image.file_format = "PNG"
+        image.save()
+        bpy.data.images.remove(image)
+    camera_pixel_mae = warm_studio_validator._image_rgb_mae(image_a, image_b)
     artifact_paths = {
         key: str(artifact)
         for key in (
@@ -395,15 +408,30 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
             {
                 "mode": mode,
                 "engine": "eevee",
+                "cameraRoleA": "medium",
+                "cameraRoleB": camera_role,
                 "cameraA": f"Camera_{mode.title()}_Medium",
-                "cameraB": f"Camera_{mode.title()}_ThreeQuarter",
+                "cameraB": (
+                    f"Camera_{mode.title()}_ThreeQuarter"
+                    if camera_role == "three_quarter"
+                    else f"Camera_{mode.title()}_Wide"
+                ),
                 "activeCameraA": f"Camera_{mode.title()}_Medium",
-                "activeCameraB": f"Camera_{mode.title()}_ThreeQuarter",
+                "activeCameraB": (
+                    f"Camera_{mode.title()}_ThreeQuarter"
+                    if camera_role == "three_quarter"
+                    else f"Camera_{mode.title()}_Wide"
+                ),
                 "matrixWorldA": [1.0] * 16,
                 "matrixWorldB": [2.0] * 16,
-                "pixelMae": 0.08,
+                "pixelMae": camera_pixel_mae,
+                "imageA": str(image_a),
+                "imageB": str(image_b),
+                "imageASha256": render_warm_studio_qa._sha256(image_a),
+                "imageBSha256": render_warm_studio_qa._sha256(image_b),
             }
             for mode in ("standing", "seated")
+            for camera_role in ("three_quarter", "wide")
         ],
         "measurements": [
             {
@@ -441,6 +469,9 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
     payload["measurements"][3]["subjectMaskPath"] = str(
         artifact_root / "missing-subject-mask.png"
     )
+    payload["cameraComparisons"][1]["imageB"] = str(
+        artifact_root / "missing-camera.png"
+    )
     payload["cameraComparisons"][0]["pixelMae"] = 0.0
     errors = warm_studio_validator.validate_lighting_evidence_payload(payload)
     assert any("geometry ID matte" in error for error in errors)
@@ -450,6 +481,7 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
     assert any("inconsistent with linear luminance" in error for error in errors)
     assert any("subjectMaskPath is not a regular file" in error for error in errors)
     assert any("pixel MAE" in error for error in errors)
+    assert any("camera comparison imageB is not a regular file" in error for error in errors)
 
 
 def test_mode_resolver_uses_only_mode_specific_markers_and_cameras() -> None:
