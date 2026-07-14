@@ -312,6 +312,23 @@ def measure_lighting_evidence(
     ]
     micro_pixels = sum(len(component) for component in micro_components)
     clipped_pixels = sum(len(component) for component in components) - micro_pixels
+    display_subject = []
+    for index, selected in enumerate(subject_mask):
+        if not selected:
+            continue
+        rgb = tuple(float(value) for value in display_rgba[index * 4 : index * 4 + 3])
+        display_subject.append((_linear_luminance(rgb), rgb))
+    display_subject.sort(key=lambda item: item[0])
+    bright_threshold = display_subject[
+        int(0.70 * max(0, len(display_subject) - 1))
+    ][0]
+    bright_pixels = [rgb for luminance, rgb in display_subject if luminance >= bright_threshold]
+    bright_median = tuple(
+        float(median(pixel[channel] for pixel in bright_pixels))
+        for channel in range(3)
+    )
+    red_blue_ratio = bright_median[0] / max(bright_median[2], 1e-8)
+    red_green_ratio = bright_median[0] / max(bright_median[1], 1e-8)
     return {
         "linearFaceLuminance": face_luminance,
         "linearBackgroundLuminance": background_luminance,
@@ -323,6 +340,10 @@ def measure_lighting_evidence(
         "microCatchlightComponentCount": len(micro_components),
         "microCatchlightPixelCount": micro_pixels,
         "nonCatchlightClippedPixelCount": clipped_pixels,
+        "brightNeutralPixelCount": len(bright_pixels),
+        "brightNeutralMedianRgb": list(bright_median),
+        "brightNeutralRedBlueRatio": red_blue_ratio,
+        "brightNeutralRedGreenRatio": red_green_ratio,
     }
 
 
@@ -1196,22 +1217,28 @@ def render_subject_lighting_evidence(
                 width=resolution[0],
                 height=resolution[1],
             )
+            artifact_paths = {
+                "beautyPath": str(beauty_png),
+                "linearBeautyPath": str(beauty_exr),
+                "emptyRoomPath": str(empty_png),
+                "linearEmptyRoomPath": str(empty_exr),
+                "subjectMaskPath": str(subject_mask_path),
+                "faceMaskPath": str(face_mask_path),
+                "backgroundMaskPath": str(background_mask_path),
+                "practicalHighlightMaskPath": str(practical_mask_path),
+                "subjectMattePath": str(matte_path),
+            }
             measurements.append(
                 {
                     "mode": mode,
                     "engine": engine,
                     "cameraRole": "medium",
                     **evidence,
-                    "beautyPath": str(beauty_png),
-                    "linearBeautyPath": str(beauty_exr),
-                    "emptyRoomPath": str(empty_png),
-                    "linearEmptyRoomPath": str(empty_exr),
-                    "subjectMaskPath": str(subject_mask_path),
-                    "faceMaskPath": str(face_mask_path),
-                    "backgroundMaskPath": str(background_mask_path),
-                    "practicalHighlightMaskPath": str(practical_mask_path),
+                    **artifact_paths,
+                    "artifactSha256": {
+                        key: _sha256(Path(path)) for key, path in artifact_paths.items()
+                    },
                     "practicalHighlightPixelCount": sum(practical_highlight_mask),
-                    "subjectMattePath": str(matte_path),
                     "subjectMatteRenderSeconds": matte_seconds,
                     "subjectMatteCamera": matte_camera_metadata,
                     "projectedHeadBounds": projected_bounds,

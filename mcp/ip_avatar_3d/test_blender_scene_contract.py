@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -125,6 +126,9 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert abs(scene.view_settings.exposure - (-2.769925)) <= 1e-6
     assert abs(scene["ip_authored_exposure"] - (-2.769925)) <= 1e-6
     assert scene["ip_cycles_final_exposure"] == -4.0
+    assert scene.view_settings.use_white_balance is True
+    assert scene.view_settings.white_balance_temperature == 4500.0
+    assert scene.view_settings.white_balance_tint == 10.0
 
 
 def test_luminance_masks_follow_rendered_subject_and_projected_head() -> None:
@@ -294,6 +298,9 @@ def test_lighting_evidence_uses_linear_luminance_and_rejects_large_clipping() ->
     assert evidence["nonCatchlightClippedPixelCount"] == 2
     assert abs(evidence["highlightClipRatio"] - (2 / sum(subject_mask))) <= 1e-6
     assert evidence["backgroundPixelCount"] == sum(background_mask)
+    assert evidence["brightNeutralPixelCount"] > 0
+    assert 0.95 <= evidence["brightNeutralRedBlueRatio"] <= 1.22
+    assert 0.95 <= evidence["brightNeutralRedGreenRatio"] <= 1.14
 
 
 def test_lighting_evidence_fails_closed_for_empty_masks() -> None:
@@ -359,6 +366,24 @@ def test_subject_lighting_render_plan_covers_both_modes_and_engines() -> None:
 
 
 def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gates() -> None:
+    artifact_root = Path(tempfile.mkdtemp(prefix="warm-studio-evidence-contract-"))
+    artifact = artifact_root / "artifact.bin"
+    artifact.write_bytes(b"verified evidence artifact")
+    artifact_sha256 = render_warm_studio_qa._sha256(artifact)
+    artifact_paths = {
+        key: str(artifact)
+        for key in (
+            "beautyPath",
+            "linearBeautyPath",
+            "emptyRoomPath",
+            "linearEmptyRoomPath",
+            "subjectMaskPath",
+            "faceMaskPath",
+            "backgroundMaskPath",
+            "practicalHighlightMaskPath",
+            "subjectMattePath",
+        )
+    }
     payload = {
         "schemaVersion": render_warm_studio_qa.LIGHTING_EVIDENCE_SCHEMA,
         "luminanceColorSpace": "scene_linear_rec709",
@@ -389,14 +414,18 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
                 "linearBackgroundLuminance": 0.18,
                 "backgroundStopsBelowFace": 1.152003,
                 "highlightClipRatio": 0.0049,
+                "brightNeutralPixelCount": 3600,
+                "brightNeutralMedianRgb": [0.88, 0.84, 0.80],
+                "brightNeutralRedBlueRatio": 1.10,
+                "brightNeutralRedGreenRatio": 1.047619,
                 "subjectPixelCount": 12000,
                 "facePixelCount": 3200,
                 "backgroundPixelCount": 180000,
                 "practicalHighlightPixelCount": 400,
-                "subjectMaskPath": f"masks/{mode}-subject-mask.png",
-                "faceMaskPath": f"masks/{mode}-face-mask.png",
-                "backgroundMaskPath": f"masks/{mode}-background-mask.png",
-                "practicalHighlightMaskPath": f"masks/{mode}-practical-highlight-mask.png",
+                **artifact_paths,
+                "artifactSha256": {
+                    key: artifact_sha256 for key in artifact_paths
+                },
             }
             for mode in ("standing", "seated")
             for engine in ("eevee", "cycles")
@@ -407,11 +436,19 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
     payload["subjectMaskSource"] = "fixed rectangle"
     payload["measurements"][0]["backgroundStopsBelowFace"] = 0.99
     payload["measurements"][1]["highlightClipRatio"] = 0.005
+    payload["measurements"][2]["brightNeutralRedBlueRatio"] = 1.30
+    payload["measurements"][3]["linearBackgroundLuminance"] = 0.40
+    payload["measurements"][3]["subjectMaskPath"] = str(
+        artifact_root / "missing-subject-mask.png"
+    )
     payload["cameraComparisons"][0]["pixelMae"] = 0.0
     errors = warm_studio_validator.validate_lighting_evidence_payload(payload)
     assert any("geometry ID matte" in error for error in errors)
     assert any("1.0..1.5" in error for error in errors)
     assert any("below 0.5 percent" in error for error in errors)
+    assert any("bright-neutral red/blue ratio" in error for error in errors)
+    assert any("inconsistent with linear luminance" in error for error in errors)
+    assert any("subjectMaskPath is not a regular file" in error for error in errors)
     assert any("pixel MAE" in error for error in errors)
 
 
@@ -945,6 +982,12 @@ def test_real_warm_studio_character_validation_passes_both_modes() -> None:
 
 
 if __name__ == "__main__":
+    if bpy.context.scene.get("ip_scene_contract") != "tangying-warm-sloth-studio/v1":
+        bpy.ops.wm.open_mainfile(
+            filepath=str(
+                REPO_ROOT / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
+            )
+        )
     tests = [
         test_warm_studio_saved_scene_has_dual_mode_contract,
         test_luminance_masks_follow_rendered_subject_and_projected_head,
@@ -972,6 +1015,12 @@ if __name__ == "__main__":
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
         test_real_warm_studio_character_validation_passes_both_modes,
     ]
-    for test in tests:
-        test()
-        print(f"PASS {test.__name__}")
+    try:
+        for test in tests:
+            test()
+            print(f"PASS {test.__name__}")
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        raise SystemExit(1)

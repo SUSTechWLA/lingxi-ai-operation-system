@@ -64,6 +64,10 @@ SUBJECT_LIGHT_PROFILE = MappingProxyType({
     "backgroundStopsBelowFace": 1.25,
     "authoredExposure": -2.769925,
     "cyclesFinalExposure": -4.0,
+    "whiteBalanceTemperatureK": 4500.0,
+    "whiteBalanceTint": 10.0,
+    "brightNeutralRedBlueRatio": (0.95, 1.22),
+    "brightNeutralRedGreenRatio": (0.95, 1.14),
 })
 
 REQUIRED_COLLECTIONS = (

@@ -3760,6 +3760,19 @@ def configure_render_settings(ctx: StudioContext) -> None:
         scene.view_settings.look = "Medium High Contrast"
     scene.view_settings.exposure = AUTHORED_EXPOSURE
     scene["ip_authored_exposure"] = AUTHORED_EXPOSURE
+    scene.view_settings.use_white_balance = True
+    scene.view_settings.white_balance_temperature = contract.SUBJECT_LIGHT_PROFILE[
+        "whiteBalanceTemperatureK"
+    ]
+    scene.view_settings.white_balance_tint = contract.SUBJECT_LIGHT_PROFILE[
+        "whiteBalanceTint"
+    ]
+    scene["ip_white_balance_temperature"] = contract.SUBJECT_LIGHT_PROFILE[
+        "whiteBalanceTemperatureK"
+    ]
+    scene["ip_white_balance_tint"] = contract.SUBJECT_LIGHT_PROFILE[
+        "whiteBalanceTint"
+    ]
 
     world = bpy.data.worlds.get("World_WarmStudio_Neutral") or bpy.data.worlds.new(
         "World_WarmStudio_Neutral"

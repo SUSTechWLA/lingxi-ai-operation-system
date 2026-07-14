@@ -115,6 +115,14 @@ LIGHT_SPECS = _authored_light_specs()
 LIGHTING_EVIDENCE_SCHEMA = "tangying-warm-studio-lighting-evidence/v1"
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
     """Return fail-closed errors for canonical subject-lighting measurements."""
 
@@ -196,6 +204,7 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
         for engine in ("eevee", "cycles")
     }
     actual: set[tuple[str, str, str]] = set()
+    digest_cache: dict[Path, str] = {}
     for index, measurement in enumerate(measurements):
         if not isinstance(measurement, dict):
             errors.append(f"measurement {index} must be an object")
@@ -216,6 +225,10 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
             face_pixels = int(measurement["facePixelCount"])
             background_pixels = int(measurement["backgroundPixelCount"])
             practical_pixels = int(measurement["practicalHighlightPixelCount"])
+            bright_pixels = int(measurement["brightNeutralPixelCount"])
+            bright_rgb = tuple(float(value) for value in measurement["brightNeutralMedianRgb"])
+            red_blue_ratio = float(measurement["brightNeutralRedBlueRatio"])
+            red_green_ratio = float(measurement["brightNeutralRedGreenRatio"])
         except (KeyError, TypeError, ValueError):
             errors.append(f"{label} has incomplete numeric lighting evidence")
             continue
@@ -223,6 +236,15 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
             errors.append(f"{label} lighting evidence must be finite")
         if face <= 0.0 or background <= 0.0:
             errors.append(f"{label} linear luminance samples must be positive")
+        elif not math.isclose(
+            stops,
+            math.log2(face / background),
+            rel_tol=1e-6,
+            abs_tol=1e-6,
+        ):
+            errors.append(
+                f"{label} backgroundStopsBelowFace is inconsistent with linear luminance"
+            )
         if not 1.0 <= stops <= 1.5:
             errors.append(f"{label} backgroundStopsBelowFace must be within 1.0..1.5")
         if not 0.0 <= clip_ratio < 0.005:
@@ -235,14 +257,67 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
             or practical_pixels <= 0
         ):
             errors.append(f"{label} subject/face/background/practical masks must be non-empty")
+        if len(bright_rgb) != 3 or bright_pixels <= 0 or not all(
+            math.isfinite(value) and value > 0.0 for value in bright_rgb
+        ):
+            errors.append(f"{label} bright-neutral subject sample must be non-empty and finite")
+        else:
+            if not math.isclose(
+                red_blue_ratio,
+                bright_rgb[0] / bright_rgb[2],
+                rel_tol=1e-6,
+                abs_tol=1e-6,
+            ) or not math.isclose(
+                red_green_ratio,
+                bright_rgb[0] / bright_rgb[1],
+                rel_tol=1e-6,
+                abs_tol=1e-6,
+            ):
+                errors.append(f"{label} bright-neutral ratios are inconsistent with median RGB")
+        red_blue_bounds = contract.SUBJECT_LIGHT_PROFILE["brightNeutralRedBlueRatio"]
+        red_green_bounds = contract.SUBJECT_LIGHT_PROFILE["brightNeutralRedGreenRatio"]
+        if not red_blue_bounds[0] <= red_blue_ratio <= red_blue_bounds[1]:
+            errors.append(
+                f"{label} bright-neutral red/blue ratio must be within "
+                f"{red_blue_bounds[0]}..{red_blue_bounds[1]}"
+            )
+        if not red_green_bounds[0] <= red_green_ratio <= red_green_bounds[1]:
+            errors.append(
+                f"{label} bright-neutral red/green ratio must be within "
+                f"{red_green_bounds[0]}..{red_green_bounds[1]}"
+            )
+        artifact_hashes = measurement.get("artifactSha256")
+        if not isinstance(artifact_hashes, dict):
+            errors.append(f"{label} artifactSha256 must be an object")
+            artifact_hashes = {}
         for path_key in (
+            "beautyPath",
+            "linearBeautyPath",
+            "emptyRoomPath",
+            "linearEmptyRoomPath",
             "subjectMaskPath",
             "faceMaskPath",
             "backgroundMaskPath",
             "practicalHighlightMaskPath",
+            "subjectMattePath",
         ):
             if not isinstance(measurement.get(path_key), str) or not measurement[path_key]:
                 errors.append(f"{label} {path_key} is missing")
+                continue
+            artifact_path = Path(measurement[path_key]).expanduser().resolve()
+            if not artifact_path.is_file():
+                errors.append(f"{label} {path_key} is not a regular file: {artifact_path}")
+                continue
+            expected_digest = artifact_hashes.get(path_key)
+            if not isinstance(expected_digest, str) or len(expected_digest) != 64:
+                errors.append(f"{label} {path_key} SHA-256 is missing")
+                continue
+            actual_digest = digest_cache.get(artifact_path)
+            if actual_digest is None:
+                actual_digest = _file_sha256(artifact_path)
+                digest_cache[artifact_path] = actual_digest
+            if actual_digest != expected_digest:
+                errors.append(f"{label} {path_key} SHA-256 does not match the artifact")
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)
     if missing:
@@ -1091,6 +1166,18 @@ def _validate_render_settings(report: dict[str, Any]) -> None:
         report["errors"].append(
             f"AgX look must be Medium High Contrast, found {scene.view_settings.look!r}"
         )
+    if not scene.view_settings.use_white_balance:
+        report["errors"].append("camera white balance must be enabled")
+    elif not math.isclose(
+        scene.view_settings.white_balance_temperature,
+        contract.SUBJECT_LIGHT_PROFILE["whiteBalanceTemperatureK"],
+        abs_tol=1e-6,
+    ) or not math.isclose(
+        scene.view_settings.white_balance_tint,
+        contract.SUBJECT_LIGHT_PROFILE["whiteBalanceTint"],
+        abs_tol=1e-6,
+    ):
+        report["errors"].append("camera white balance must match the subject light profile")
     if not math.isclose(
         scene.view_settings.exposure,
         builder.AUTHORED_EXPOSURE,

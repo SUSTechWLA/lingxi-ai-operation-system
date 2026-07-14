@@ -375,14 +375,14 @@ superseded by the production rebuild and final-resolution evidence below.
 
 ### Final 960x540 Evidence
 
-Evidence root: `/tmp/task6-final-evidence-v2`
+Evidence root: `/tmp/task6-final-evidence-v3`
 
 | Mode / engine | Face Y | Background Y | Stops below face | Non-catchlight clip |
 | --- | ---: | ---: | ---: | ---: |
-| standing / Eevee | `1.861773` | `0.746137` | `1.319165` | `0.000000%` |
-| standing / Cycles | `4.197365` | `1.588841` | `1.401509` | `0.000000%` |
-| seated / Eevee | `1.772201` | `0.827090` | `1.099427` | `0.000000%` |
-| seated / Cycles | `3.536607` | `1.632171` | `1.115574` | `0.000000%` |
+| standing / Eevee | `1.861773` | `0.746176` | `1.319089` | `0.000000%` |
+| standing / Cycles | `4.197344` | `1.589049` | `1.401313` | `0.000000%` |
+| seated / Eevee | `1.772527` | `0.827033` | `1.099791` | `0.000000%` |
+| seated / Cycles | `3.536725` | `1.632413` | `1.115408` | `0.000000%` |
 
 All four records pass the `1.0..1.5` stop and `<0.5%` clipping gates. Requested
 and active camera names match with zero timeline camera markers during render.
@@ -398,6 +398,21 @@ seated values are `0.315771` and `0.238362`, all above the `0.001` threshold.
   warm wood/plaster background without flattening the room.
 - Eevee and Cycles differ in surface smoothness as expected, but preserve the
   same lighting direction, color hierarchy, and composition.
+
+### Review Fixes
+
+- Enabled a `4500 K` camera white balance instead of cooling every authored
+  source. The brightest 30 percent of subject pixels now pass explicit warm-
+  neutral chroma gates in every mode/engine: red/blue `1.1068..1.1932` and
+  red/green `1.0755..1.1291`. White cardigan and facial fur no longer inherit
+  the previous room-wide orange cast, while `2700 K` practicals stay warm.
+- Every beauty PNG, linear EXR, empty-room control, subject/face/background/
+  practical mask, and ID matte now carries a verified SHA-256 in the evidence
+  payload. Validation rejects missing or changed artifacts, non-positive masks,
+  contradictory median RGB ratios, and stop values inconsistent with the
+  reported scene-linear luminance.
+- The Blender test entrypoint opens the canonical production scene when invoked
+  from `--factory-startup` and explicitly exits nonzero on any test exception.
 
 ### Verification
 
