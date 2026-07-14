@@ -252,9 +252,9 @@ def configure_camera_plan(
             + max(0.0, float(event.get("duration") or 0.0)),
             str(event.get("action") or ""),
         )
-        for event in (motion_plan.get("motionEvents") or [])
-        if event.get("motion") == "avatar_action"
-        and str(event.get("action") or "").startswith("Aroll_Transition_")
+        for event in aroll_performance_qa.physical_transition_events(
+            motion_plan.get("motionEvents") or []
+        )
     )
 
     def defer_transition_cut(frame: int) -> int:
@@ -6229,13 +6229,11 @@ def animate(
     timeline_plan = dict(plan)
     timeline_plan.setdefault("initialPoseState", presentation_mode)
     state_timeline = build_pose_state_timeline(timeline_plan)
+    physical_transition_events = aroll_performance_qa.physical_transition_events(events)
+    physical_transition_event_ids = {id(event) for event in physical_transition_events}
     transition_samples: list[dict[str, Any]] = []
     previous_transition_root_world: Vector | None = None
-    has_transition_sequence = any(
-        event.get("motion") == "avatar_action"
-        and str(event.get("action") or "").startswith("Aroll_Transition_")
-        for event in events
-    )
+    has_transition_sequence = bool(physical_transition_events)
     contact_mode_objects = dict(mode_objects) if mode_objects else None
     if contact_mode_objects is not None and has_transition_sequence:
         contact_mode_objects["_continuous_foot_lock"] = True
@@ -6290,7 +6288,7 @@ def animate(
         transition_actions = [
             item
             for item in active_actions
-            if str(item[0].get("action") or "").startswith("Aroll_Transition_")
+            if id(item[0]) in physical_transition_event_ids
         ]
         transition_active = bool(transition_actions)
         idle_body_sway = math.sin(t * math.pi * 2 * 0.35) * 0.018
@@ -7118,11 +7116,54 @@ def _shape_key_world_points(
 def _collect_viseme_qa(
     mouth: bpy.types.Object | None,
     dimensions: dict[str, Any],
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+    motion_plan: dict[str, Any],
+    *,
+    frame_start: int,
+    frame_end: int,
+    fps: int,
 ) -> dict[str, object]:
     metrics: dict[str, float] = {}
     evidence_errors: list[str] = []
     upper: list[int] = []
     lower: list[int] = []
+    jaw_samples: list[dict[str, Any]] = []
+    jaw_summary: dict[str, object] = {
+        "success": False,
+        "errors": ["evaluated jaw timeline is unavailable"],
+        "maxJawRadians": None,
+        "mbpJawRadians": None,
+        "sampleCount": 0,
+        "mbpSampleCount": 0,
+        "sampledFrames": [],
+    }
+    jaw_name = bone_map.get("jaw")
+    if not jaw_name or jaw_name not in armature.pose.bones:
+        evidence_errors.append("evaluated jaw bone evidence is unavailable")
+    else:
+        scene = bpy.context.scene
+        restore_frame = int(scene.frame_current)
+        try:
+            for frame in range(frame_start, frame_end + 1):
+                scene.frame_set(frame)
+                bpy.context.view_layer.update()
+                time_sec = (frame - frame_start) / float(fps)
+                lip = lip_at(motion_plan, time_sec)
+                jaw_samples.append({
+                    "frame": frame,
+                    "timeSec": round(time_sec, 6),
+                    "viseme": str(lip.get("viseme") or "closed"),
+                    "jawRadians": abs(
+                        float(armature.pose.bones[jaw_name].rotation_euler.x)
+                    ),
+                })
+        finally:
+            scene.frame_set(restore_frame)
+            bpy.context.view_layer.update()
+        jaw_summary = aroll_performance_qa.summarize_jaw_samples(jaw_samples)
+        if jaw_summary.get("success") is not True:
+            evidence_errors.extend(str(error) for error in jaw_summary.get("errors") or [])
     if mouth is None or mouth.type != "MESH" or not mouth.data.shape_keys:
         evidence_errors.append("source mouth Shape Key evidence is unavailable")
     else:
@@ -7159,11 +7200,8 @@ def _collect_viseme_qa(
                 "oWidth": width("Mouth_O"),
                 "uGap": gap("Mouth_U"),
                 "surpriseGap": gap("Mouth_Surprise"),
-                "maxJawRadians": min(
-                    MAX_JAW_ROTATION_RAD,
-                    max(float(item["jawGain"]) for item in VISEME_RESPONSE.values()),
-                ),
-                "mbpJawRadians": float(VISEME_RESPONSE["Mouth_MBP"]["jawGain"]),
+                "maxJawRadians": jaw_summary.get("maxJawRadians"),
+                "mbpJawRadians": jaw_summary.get("mbpJawRadians"),
             }
             metrics = {
                 name: float(value)
@@ -7188,7 +7226,11 @@ def _collect_viseme_qa(
             if mouth and mouth.data.shape_keys
             else []
         ),
-        "jawResponse": {
+        "evaluatedJawTimeline": {
+            **jaw_summary,
+            "samples": jaw_samples,
+        },
+        "configuredJawResponse": {
             name: float(response["jawGain"])
             for name, response in VISEME_RESPONSE.items()
         },
@@ -7214,12 +7256,10 @@ def build_aroll_performance_qa(
     frame_end = int(scene.frame_end)
     sampled_frame_numbers = list(range(frame_start, frame_end + 1, 2))
     state_timeline = list(transition_contact.get("poseStateTimeline") or [])
-    events = (data.get("motionPlan") or {}).get("motionEvents") or []
-    has_transition = any(
-        event.get("motion") == "avatar_action"
-        and str(event.get("action") or "").startswith("Aroll_Transition_")
-        for event in events
-    )
+    motion_plan = data.get("motionPlan") or {}
+    events = motion_plan.get("motionEvents") or []
+    physical_events = aroll_performance_qa.physical_transition_events(events)
+    has_transition = bool(physical_events)
     contact_samples = transition_contact.get("samples") or []
     contact_by_frame = {
         int(item["frame"]): item
@@ -7365,6 +7405,17 @@ def build_aroll_performance_qa(
                     )
         sampled_frames.append(sample)
 
+    sample_cadence = {
+        "fps": fps,
+        "frameStart": frame_start,
+        "frameEnd": frame_end,
+        "animationFrameCount": frame_end - frame_start + 1,
+        "performanceSampleIntervalFrames": 2,
+        "performanceSampleCount": len(sampled_frames),
+        "contactSampleIntervalFrames": 1,
+        "contactSampleCount": len(contact_samples),
+    }
+
     if not has_transition:
         transition_report = aroll_performance_qa.not_applicable_transition_report()
     else:
@@ -7410,10 +7461,7 @@ def build_aroll_performance_qa(
                 list(transition_report["errors"]) + transition_errors
             )
         transition_report["evidence"] = {
-            "contactSampleIntervalFrames": 1,
-            "contactSampleCount": len(contact_samples),
-            "performanceSampleIntervalFrames": 2,
-            "performanceSampleCount": len(sampled_frames),
+            **sample_cadence,
             "seatMaskFrameCount": seat_mask_frame_count,
             "seatMaskWidth": 96,
             "seatMaskHeight": 54,
@@ -7421,14 +7469,30 @@ def build_aroll_performance_qa(
             "characterPlusSeatForegroundPixelCount": seat_foreground_pixels,
         }
 
+    transition_report["evidence"].update(sample_cadence)
+    transition_report["evidence"]["physicalTransitionActions"] = [
+        str(event.get("action") or "") for event in physical_events
+    ]
+
     scene.frame_set(frame_start)
     bpy.context.view_layer.update()
     return {
         "schemaVersion": aroll_performance_qa.SCHEMA_VERSION,
         "transition": transition_report,
-        "visemes": _collect_viseme_qa(face.get("mouth"), dimensions),
+        "visemes": _collect_viseme_qa(
+            face.get("mouth"),
+            dimensions,
+            armature,
+            bone_map,
+            motion_plan,
+            frame_start=frame_start,
+            frame_end=frame_end,
+            fps=fps,
+        ),
         "sampledFrames": sampled_frames,
         "stateTimeline": state_timeline,
+        "sampleCadence": sample_cadence,
+        "motionEvents": [dict(event) for event in events if isinstance(event, dict)],
     }
 
 

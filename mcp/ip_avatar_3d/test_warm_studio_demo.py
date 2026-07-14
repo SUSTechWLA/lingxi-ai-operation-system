@@ -15,6 +15,30 @@ import render_warm_studio_demo as demo
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_PATH = REPO_ROOT / "ip形象/main_ip/character-profile.json"
 
+VALID_TRANSITION_METRICS = {
+    "maxFootDriftL": 0.012,
+    "maxFootDriftR": 0.014,
+    "minKneeSeparation": 0.18,
+    "minSeatClearance": -0.010,
+    "maxSettledSeatClearance": 0.022,
+    "maxRootFrameDelta": 0.052,
+    "maxCentralSilhouetteSpike": 0.016,
+    "seatVisibleFraction": 0.14,
+}
+
+VALID_VISEME_METRICS = {
+    "mbpGap": 0.002,
+    "restGap": 0.004,
+    "aGap": 0.028,
+    "eWidth": 0.110,
+    "oGap": 0.022,
+    "oWidth": 0.074,
+    "uGap": 0.016,
+    "surpriseGap": 0.034,
+    "maxJawRadians": 0.20484000444412231,
+    "mbpJawRadians": 0.0,
+}
+
 
 def write_lighting_evidence(root: Path) -> Path:
     path = root / "lighting-evidence.json"
@@ -55,6 +79,61 @@ def write_rig_report(
     transition_success: bool | None = None,
     viseme_success: bool = True,
 ) -> None:
+    physical = transition_status == "passed"
+    motion_events = (
+        [
+            {
+                "timeSec": 0.0,
+                "motion": "avatar_action",
+                "action": "Aroll_Transition_StandToSit",
+                "duration": 1.0,
+                "startState": "standing",
+                "endState": "seated",
+            }
+        ]
+        if physical
+        else [
+            {
+                "timeSec": 0.0,
+                "motion": "avatar_action",
+                "action": "Aroll_Transition_Reset",
+                "duration": 1.0,
+                "startState": "standing",
+                "endState": "standing",
+            }
+        ]
+    )
+    state_timeline = (
+        [
+            {"timeSec": 0.0, "state": "standing"},
+            {"timeSec": 1.0, "state": "seated"},
+        ]
+        if physical
+        else [
+            {"timeSec": 0.0, "state": "standing"},
+            {"timeSec": 1.0, "state": "standing"},
+        ]
+    )
+    sampled_frames = [
+        {"frame": 1, "timeSec": 0.0, "state": "standing"},
+        {"frame": 3, "timeSec": 1.0, "state": "seated" if physical else "standing"},
+    ]
+    sample_cadence = {
+        "fps": 2,
+        "frameStart": 1,
+        "frameEnd": 4,
+        "animationFrameCount": 4,
+        "performanceSampleIntervalFrames": 2,
+        "performanceSampleCount": 2,
+        "contactSampleIntervalFrames": 1,
+        "contactSampleCount": 4 if physical else 0,
+    }
+    jaw_samples = [
+        {"frame": 1, "viseme": "mbp", "jawRadians": 0.0},
+        {"frame": 2, "viseme": "a", "jawRadians": 0.20484000444412231},
+        {"frame": 3, "viseme": "a", "jawRadians": 0.20484000444412231},
+        {"frame": 4, "viseme": "closed", "jawRadians": 0.0},
+    ]
     path.write_text(
         json.dumps(
             {
@@ -66,16 +145,38 @@ def write_rig_report(
                         "status": transition_status,
                         "success": transition_success,
                         "errors": [],
-                        "metrics": {},
+                        "metrics": dict(VALID_TRANSITION_METRICS) if physical else {},
+                        "evidence": {
+                            **sample_cadence,
+                            "physicalTransitionActions": (
+                                ["Aroll_Transition_StandToSit"] if physical else []
+                            ),
+                        },
                     },
                     "visemes": {
                         "status": "passed" if viseme_success else "failed",
                         "success": viseme_success,
                         "errors": [] if viseme_success else ["injected viseme failure"],
-                        "metrics": {},
+                        "metrics": dict(VALID_VISEME_METRICS),
+                        "characterDimensions": {"height": 2.55, "width": 1.42},
+                        "evidence": {
+                            "configuredJawResponse": {"Mouth_A": 0.36},
+                            "evaluatedJawTimeline": {
+                                "success": True,
+                                "errors": [],
+                                "maxJawRadians": 0.20484000444412231,
+                                "mbpJawRadians": 0.0,
+                                "sampleCount": 4,
+                                "mbpSampleCount": 1,
+                                "sampledFrames": [1, 2, 3, 4],
+                                "samples": jaw_samples,
+                            },
+                        },
                     },
-                    "sampledFrames": [{"frame": 1, "timeSec": 0.0, "state": "standing"}],
-                    "stateTimeline": [{"timeSec": 0.0, "state": "standing"}],
+                    "sampledFrames": sampled_frames,
+                    "stateTimeline": state_timeline,
+                    "sampleCadence": sample_cadence,
+                    "motionEvents": motion_events,
                 },
             }
         )
@@ -368,6 +469,39 @@ class WarmStudioDemoTests(unittest.TestCase):
                         status,
                     )
 
+    def test_embedded_report_accepts_reset_mixed_with_a_physical_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = Path(temp_dir) / "rig_report.json"
+            write_rig_report(
+                report,
+                transition_status="passed",
+                transition_success=True,
+            )
+            payload = json.loads(report.read_text())
+            performance = payload["arollPerformanceQa"]
+            performance["motionEvents"].append(
+                {
+                    "timeSec": 1.1,
+                    "motion": "avatar_action",
+                    "action": "Aroll_Transition_Reset",
+                    "duration": 0.1,
+                    "startState": "seated",
+                    "endState": "seated",
+                }
+            )
+            performance["stateTimeline"].append(
+                {"timeSec": 1.1 + 0.1, "state": "seated"}
+            )
+            report.write_text(json.dumps(payload))
+            embedded = demo._embedded_collision_report(
+                "standing",
+                {"rigReportPath": str(report)},
+            )
+            self.assertEqual(
+                embedded["report"]["arollPerformanceQa"]["transition"]["status"],
+                "passed",
+            )
+
     def test_embedded_report_rejects_failed_or_malformed_viseme_qa(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report = Path(temp_dir) / "rig_report.json"
@@ -387,6 +521,109 @@ class WarmStudioDemoTests(unittest.TestCase):
                     {"rigReportPath": str(report)},
                 )
 
+    def test_embedded_report_recomputes_transition_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = Path(temp_dir) / "rig_report.json"
+            write_rig_report(
+                report,
+                transition_status="passed",
+                transition_success=True,
+            )
+            payload = json.loads(report.read_text())
+            payload["arollPerformanceQa"]["transition"]["metrics"][
+                "maxCentralSilhouetteSpike"
+            ] = 9.0
+            report.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(demo.DemoQAError, "transition geometry QA"):
+                demo._embedded_collision_report(
+                    "standing",
+                    {"rigReportPath": str(report)},
+                )
+
+    def test_embedded_report_recomputes_visemes_and_requires_passed_status(self) -> None:
+        mutations = (
+            lambda visemes: visemes.update({"status": "failed", "success": True, "errors": []}),
+            lambda visemes: visemes.update({"status": "passed", "success": True, "metrics": {}}),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    report = Path(temp_dir) / "rig_report.json"
+                    write_rig_report(report)
+                    payload = json.loads(report.read_text())
+                    mutate(payload["arollPerformanceQa"]["visemes"])
+                    report.write_text(json.dumps(payload))
+                    with self.assertRaisesRegex(demo.DemoQAError, "viseme QA"):
+                        demo._embedded_collision_report(
+                            "standing",
+                            {"rigReportPath": str(report)},
+                        )
+
+    def test_embedded_report_rejects_configured_gain_without_animated_jaw(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = Path(temp_dir) / "rig_report.json"
+            write_rig_report(report)
+            payload = json.loads(report.read_text())
+            timeline = payload["arollPerformanceQa"]["visemes"]["evidence"][
+                "evaluatedJawTimeline"
+            ]
+            for sample in timeline["samples"]:
+                sample["jawRadians"] = 0.0
+            report.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(demo.DemoQAError, "viseme QA"):
+                demo._embedded_collision_report(
+                    "standing",
+                    {"rigReportPath": str(report)},
+                )
+
+    def test_embedded_report_rejects_empty_transition_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = Path(temp_dir) / "rig_report.json"
+            write_rig_report(
+                report,
+                transition_status="passed",
+                transition_success=True,
+            )
+            payload = json.loads(report.read_text())
+            payload["arollPerformanceQa"]["transition"]["metrics"] = {}
+            report.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(demo.DemoQAError, "transition geometry QA"):
+                demo._embedded_collision_report(
+                    "standing",
+                    {"rigReportPath": str(report)},
+                )
+
+    def test_embedded_report_rejects_malformed_sample_cadence(self) -> None:
+        mutations = (
+            lambda performance: performance["sampleCadence"].update(
+                {"performanceSampleIntervalFrames": 3}
+            ),
+            lambda performance: performance["sampleCadence"].update(
+                {"performanceSampleCount": 99}
+            ),
+            lambda performance: performance["sampledFrames"][1].update({"frame": 4}),
+            lambda performance: performance["transition"]["evidence"].update(
+                {"contactSampleCount": 3}
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    report = Path(temp_dir) / "rig_report.json"
+                    write_rig_report(
+                        report,
+                        transition_status="passed",
+                        transition_success=True,
+                    )
+                    payload = json.loads(report.read_text())
+                    mutate(payload["arollPerformanceQa"])
+                    report.write_text(json.dumps(payload))
+                    with self.assertRaisesRegex(demo.DemoQAError, "transition geometry QA"):
+                        demo._embedded_collision_report(
+                            "standing",
+                            {"rigReportPath": str(report)},
+                        )
+
     def test_embedded_report_rejects_inconsistent_success_and_empty_timeline(self) -> None:
         mutations = (
             lambda payload: payload["arollPerformanceQa"]["transition"].update(
@@ -401,6 +638,13 @@ class WarmStudioDemoTests(unittest.TestCase):
             lambda payload: payload["arollPerformanceQa"].update(
                 {"stateTimeline": []}
             ),
+            lambda payload: payload["arollPerformanceQa"].update(
+                {"schemaVersion": "fabricated/v9"}
+            ),
+            lambda payload: payload["arollPerformanceQa"]["sampledFrames"][0].update(
+                {"state": "seated"}
+            ),
+            lambda payload: payload["arollPerformanceQa"].pop("sampleCadence"),
         )
         for mutate in mutations:
             with self.subTest(mutation=mutate):

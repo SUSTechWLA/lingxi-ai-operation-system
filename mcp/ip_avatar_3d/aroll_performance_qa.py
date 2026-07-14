@@ -54,20 +54,20 @@ VISEME_METRIC_NAMES = (
     "uGap",
     "surpriseGap",
     "maxJawRadians",
+    "mbpJawRadians",
 )
 
-COMPARISON_EPSILON = 1e-12
+PHYSICAL_TRANSITION_STATES = {
+    "Aroll_Transition_StandToSit": ("standing", "seated"),
+    "Aroll_Transition_SitToStand": ("seated", "standing"),
+}
 
 
 def _finite_float(value: Any, label: str, errors: list[str]) -> float | None:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         errors.append(f"{label} must be a finite number")
         return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        errors.append(f"{label} must be a finite number")
-        return None
+    parsed = float(value)
     if not math.isfinite(parsed):
         errors.append(f"{label} must be a finite number")
         return None
@@ -97,23 +97,23 @@ def validate_transition_metrics(metrics: Mapping[str, Any] | Any) -> dict[str, o
 
     parsed, errors = _required_metrics(metrics, TRANSITION_METRIC_NAMES)
     if not errors:
-        if max(parsed["maxFootDriftL"], parsed["maxFootDriftR"]) > TRANSITION_LIMITS["maxFootDrift"] + COMPARISON_EPSILON:
+        if max(parsed["maxFootDriftL"], parsed["maxFootDriftR"]) > TRANSITION_LIMITS["maxFootDrift"]:
             errors.append("foot lock drift exceeds 0.025 m")
-        if parsed["minKneeSeparation"] < TRANSITION_LIMITS["minKneeSeparation"] - COMPARISON_EPSILON:
+        if parsed["minKneeSeparation"] < TRANSITION_LIMITS["minKneeSeparation"]:
             errors.append("knee separation is below 0.075 m")
-        if parsed["minSeatClearance"] < TRANSITION_LIMITS["minSeatClearance"] - COMPARISON_EPSILON:
+        if parsed["minSeatClearance"] < TRANSITION_LIMITS["minSeatClearance"]:
             errors.append("pelvis penetrates the seat")
-        if parsed["maxSettledSeatClearance"] > TRANSITION_LIMITS["maxSettledSeatClearance"] + COMPARISON_EPSILON:
+        if parsed["maxSettledSeatClearance"] > TRANSITION_LIMITS["maxSettledSeatClearance"]:
             errors.append("pelvis does not settle onto the seat")
-        if parsed["maxRootFrameDelta"] > TRANSITION_LIMITS["maxRootFrameDelta"] + COMPARISON_EPSILON:
+        if parsed["maxRootFrameDelta"] > TRANSITION_LIMITS["maxRootFrameDelta"]:
             errors.append("root motion has a visible frame discontinuity")
-        if parsed["maxCentralSilhouetteSpike"] > TRANSITION_LIMITS["maxCentralSilhouetteSpike"] + COMPARISON_EPSILON:
+        if parsed["maxCentralSilhouetteSpike"] > TRANSITION_LIMITS["maxCentralSilhouetteSpike"]:
             errors.append("central silhouette spike exceeds 0.045 m")
         visible = parsed["seatVisibleFraction"]
         if not (
-            TRANSITION_LIMITS["minSeatVisibleFraction"] - COMPARISON_EPSILON
+            TRANSITION_LIMITS["minSeatVisibleFraction"]
             <= visible
-            <= TRANSITION_LIMITS["maxSeatVisibleFraction"] + COMPARISON_EPSILON
+            <= TRANSITION_LIMITS["maxSeatVisibleFraction"]
         ):
             errors.append("seat visibility is outside the approved range")
     success = not errors
@@ -142,11 +142,6 @@ def validate_viseme_metrics(
     if width is not None and width <= 0.0:
         errors.append("character_width must be greater than zero")
 
-    if isinstance(metrics, Mapping) and "mbpJawRadians" in metrics:
-        mbp_jaw = _finite_float(metrics.get("mbpJawRadians"), "mbpJawRadians", errors)
-        if mbp_jaw is not None:
-            parsed["mbpJawRadians"] = mbp_jaw
-
     for name in ("mbpGap", "restGap", "aGap", "eWidth", "oGap", "oWidth", "uGap", "surpriseGap"):
         if name in parsed and parsed[name] < 0.0:
             errors.append(f"{name} must not be negative")
@@ -160,25 +155,25 @@ def validate_viseme_metrics(
     )
     if required_values_ready:
         assert height is not None and width is not None
-        if parsed["mbpGap"] > parsed["restGap"] + height * VISEME_LIMITS["maxMbpAboveRestHeightFraction"] + COMPARISON_EPSILON:
+        if parsed["mbpGap"] > parsed["restGap"] + height * VISEME_LIMITS["maxMbpAboveRestHeightFraction"]:
             errors.append("MBP gap is not closed relative to rest")
-        if parsed["aGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minAAboveMbpHeightFraction"] - COMPARISON_EPSILON:
+        if parsed["aGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minAAboveMbpHeightFraction"]:
             errors.append("A gap separation is below the Task 6 bound")
-        if parsed["oGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minOAboveMbpHeightFraction"] - COMPARISON_EPSILON:
+        if parsed["oGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minOAboveMbpHeightFraction"]:
             errors.append("O gap separation is below the Task 6 bound")
-        if parsed["uGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minUAboveMbpHeightFraction"] - COMPARISON_EPSILON:
+        if parsed["uGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minUAboveMbpHeightFraction"]:
             errors.append("U gap separation is below the Task 6 bound")
-        if parsed["surpriseGap"] < parsed["aGap"] + height * VISEME_LIMITS["minSurpriseAboveAHeightFraction"] - COMPARISON_EPSILON:
+        if parsed["surpriseGap"] < parsed["aGap"] + height * VISEME_LIMITS["minSurpriseAboveAHeightFraction"]:
             errors.append("surprise gap separation is below the Task 6 bound")
-        if abs(parsed["eWidth"] - parsed["oWidth"]) < width * VISEME_LIMITS["minEOWidthSeparationWidthFraction"] - COMPARISON_EPSILON:
+        if abs(parsed["eWidth"] - parsed["oWidth"]) < width * VISEME_LIMITS["minEOWidthSeparationWidthFraction"]:
             errors.append("E/O width separation is below the Task 6 bound")
         if not (
-            VISEME_LIMITS["minJawRadians"] - COMPARISON_EPSILON
+            VISEME_LIMITS["minJawRadians"]
             <= parsed["maxJawRadians"]
-            <= VISEME_LIMITS["maxJawRadians"] + COMPARISON_EPSILON
+            <= VISEME_LIMITS["maxJawRadians"]
         ):
             errors.append("maximum jaw rotation is outside 0.20..0.25 rad")
-        if parsed.get("mbpJawRadians", 0.0) > VISEME_LIMITS["maxMbpJawRadians"] + COMPARISON_EPSILON:
+        if parsed["mbpJawRadians"] > VISEME_LIMITS["maxMbpJawRadians"]:
             errors.append("MBP jaw rotation exceeds 0.03 rad")
 
     success = not errors
@@ -205,6 +200,77 @@ def not_applicable_transition_report() -> dict[str, object]:
         "metrics": {},
         "limits": dict(TRANSITION_LIMITS),
         "evidence": {"reason": "render has no A-roll transition actions"},
+    }
+
+
+def physical_transition_events(events: Iterable[Any] | Any) -> list[Mapping[str, Any]]:
+    """Return only correctly state-changing stand/sit transition events."""
+
+    try:
+        items = list(events)
+    except TypeError:
+        return []
+    physical: list[Mapping[str, Any]] = []
+    for event in items:
+        if not isinstance(event, Mapping) or event.get("motion") != "avatar_action":
+            continue
+        if str(event.get("action") or "") not in PHYSICAL_TRANSITION_STATES:
+            continue
+        start_state = str(event.get("startState") or "")
+        end_state = str(event.get("endState") or "")
+        if start_state in {"standing", "seated"} and end_state in {
+            "standing",
+            "seated",
+        } and start_state != end_state:
+            physical.append(event)
+    return physical
+
+
+def summarize_jaw_samples(samples: Iterable[Mapping[str, Any]] | Any) -> dict[str, object]:
+    """Summarize evaluated jaw rotations without consulting response constants."""
+
+    errors: list[str] = []
+    try:
+        items = list(samples)
+    except TypeError:
+        items = []
+        errors.append("jaw samples must be iterable")
+    jaw_values: list[float] = []
+    mbp_values: list[float] = []
+    sampled_frames: list[int] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            errors.append(f"jaw sample {index} must be an object")
+            continue
+        frame = item.get("frame")
+        if isinstance(frame, bool) or not isinstance(frame, int):
+            errors.append(f"jaw sample {index} frame must be an integer")
+        else:
+            sampled_frames.append(frame)
+        viseme = item.get("viseme")
+        if not isinstance(viseme, str) or not viseme:
+            errors.append(f"jaw sample {index} viseme must be a non-empty string")
+        jaw = _finite_float(item.get("jawRadians"), f"jaw sample {index} jawRadians", errors)
+        if jaw is None:
+            continue
+        if jaw < 0.0:
+            errors.append(f"jaw sample {index} jawRadians must not be negative")
+            continue
+        jaw_values.append(jaw)
+        if viseme == "mbp":
+            mbp_values.append(jaw)
+    if not jaw_values:
+        errors.append("evaluated jaw timeline is empty")
+    if not mbp_values:
+        errors.append("evaluated jaw timeline has no MBP samples")
+    return {
+        "success": not errors,
+        "errors": errors,
+        "maxJawRadians": max(jaw_values) if jaw_values else None,
+        "mbpJawRadians": max(mbp_values) if mbp_values else None,
+        "sampleCount": len(jaw_values),
+        "mbpSampleCount": len(mbp_values),
+        "sampledFrames": sampled_frames,
     }
 
 
@@ -300,6 +366,11 @@ def _parse_triangle(
                 return None
             values.append(parsed_value)
         parsed.append(tuple(values))
+        if values[2] <= 0.0:
+            errors.append(
+                f"{label} triangle {index} vertex {vertex_index} depth must be greater than zero"
+            )
+            return None
     return tuple(parsed)
 
 
@@ -329,6 +400,7 @@ def rasterize_seat_visibility(
             "foregroundPixelCount": 0,
             "seatVisiblePixelCount": 0,
             "seatVisibleFraction": None,
+            "minimumVisibleDepthMeters": None,
         }
 
     triangle_sets: list[tuple[str, list[tuple[tuple[float, float, float], ...]]]] = []
@@ -356,6 +428,7 @@ def rasterize_seat_visibility(
             "foregroundPixelCount": 0,
             "seatVisiblePixelCount": 0,
             "seatVisibleFraction": None,
+            "minimumVisibleDepthMeters": None,
         }
 
     depths = [math.inf] * (width * height)
@@ -363,8 +436,6 @@ def rasterize_seat_visibility(
     epsilon = 1e-12
     for label, triangles in triangle_sets:
         for triangle in triangles:
-            if any(vertex[2] <= 0.0 for vertex in triangle):
-                continue
             (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = triangle
             denominator = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
             if abs(denominator) <= epsilon:
@@ -390,9 +461,13 @@ def rasterize_seat_visibility(
                     c = 1.0 - a - b
                     if min(a, b, c) < -1e-10:
                         continue
-                    depth = a * z0 + b * z1 + c * z2
+                    reciprocal_depth = a / z0 + b / z1 + c / z2
+                    if not math.isfinite(reciprocal_depth) or reciprocal_depth <= 0.0:
+                        errors.append("perspective depth interpolation is invalid")
+                        continue
+                    depth = 1.0 / reciprocal_depth
                     offset = pixel_y * width + pixel_x
-                    if depth < depths[offset] - epsilon:
+                    if depth < depths[offset]:
                         depths[offset] = depth
                         labels[offset] = label
 
@@ -401,6 +476,7 @@ def rasterize_seat_visibility(
     if foreground <= 0:
         errors.append("character-plus-chair foreground mask is empty")
     fraction = visible_seat / foreground if foreground else None
+    finite_depths = [depth for depth in depths if math.isfinite(depth)]
     return {
         "success": not errors,
         "errors": errors,
@@ -409,4 +485,5 @@ def rasterize_seat_visibility(
         "foregroundPixelCount": foreground,
         "seatVisiblePixelCount": visible_seat,
         "seatVisibleFraction": fraction,
+        "minimumVisibleDepthMeters": min(finite_depths) if finite_depths else None,
     }

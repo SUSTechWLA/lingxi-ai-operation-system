@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import server
+import aroll_performance_qa
 
 
 STANDING_SCRIPT = (
@@ -326,6 +327,143 @@ def _lighting_evidence(path: Path | None) -> dict[str, Any]:
     }
 
 
+def _strict_report_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    parsed = float(value)
+    return parsed if math.isfinite(parsed) else None
+
+
+def _strict_report_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _validate_performance_structure(
+    mode: str,
+    performance: dict[str, Any],
+    transition: dict[str, Any],
+) -> list[dict[str, Any]]:
+    cadence = performance.get("sampleCadence")
+    sampled_frames = performance.get("sampledFrames")
+    state_timeline = performance.get("stateTimeline")
+    motion_events = performance.get("motionEvents")
+    evidence = transition.get("evidence")
+    if not all(
+        isinstance(item, dict)
+        for item in (cadence, transition, evidence)
+    ) or not all(
+        isinstance(item, list)
+        for item in (sampled_frames, state_timeline, motion_events)
+    ):
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    assert isinstance(cadence, dict)
+    assert isinstance(evidence, dict)
+    assert isinstance(sampled_frames, list)
+    assert isinstance(state_timeline, list)
+    assert isinstance(motion_events, list)
+
+    integer_fields = (
+        "fps",
+        "frameStart",
+        "frameEnd",
+        "animationFrameCount",
+        "performanceSampleIntervalFrames",
+        "performanceSampleCount",
+        "contactSampleIntervalFrames",
+        "contactSampleCount",
+    )
+    values = {name: _strict_report_int(cadence.get(name)) for name in integer_fields}
+    if any(value is None for value in values.values()):
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    fps = values["fps"]
+    frame_start = values["frameStart"]
+    frame_end = values["frameEnd"]
+    frame_count = values["animationFrameCount"]
+    assert fps is not None and frame_start is not None and frame_end is not None
+    assert frame_count is not None
+    expected_frames = list(range(frame_start, frame_end + 1, 2))
+    if (
+        fps <= 0
+        or frame_start <= 0
+        or frame_end < frame_start
+        or frame_count != frame_end - frame_start + 1
+        or values["performanceSampleIntervalFrames"] != 2
+        or values["performanceSampleCount"] != len(expected_frames)
+        or values["performanceSampleCount"] != len(sampled_frames)
+        or values["contactSampleIntervalFrames"] != 1
+    ):
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    for name in integer_fields:
+        if evidence.get(name) != cadence.get(name):
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+
+    timeline: list[tuple[float, str]] = []
+    for item in state_timeline:
+        if not isinstance(item, dict):
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+        time_sec = _strict_report_number(item.get("timeSec"))
+        state = item.get("state")
+        if time_sec is None or state not in {"standing", "seated"}:
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+        timeline.append((time_sec, str(state)))
+    if (
+        not timeline
+        or timeline[0][0] != 0.0
+        or any(after[0] < before[0] for before, after in zip(timeline, timeline[1:]))
+    ):
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+
+    ordered_events: list[tuple[float, float, dict[str, Any]]] = []
+    for event in motion_events:
+        if not isinstance(event, dict):
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+        if event.get("motion") != "avatar_action":
+            continue
+        time_sec = _strict_report_number(event.get("timeSec"))
+        duration = _strict_report_number(event.get("duration"))
+        if time_sec is None or duration is None or duration < 0.0:
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+        ordered_events.append((time_sec, duration, event))
+    ordered_events.sort(key=lambda item: item[0])
+    expected_timeline = [(0.0, timeline[0][1])]
+    state = timeline[0][1]
+    for time_sec, duration, event in ordered_events:
+        start_state = event.get("startState")
+        end_state = event.get("endState")
+        if start_state != state or end_state not in {"standing", "seated"}:
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+        state = str(end_state)
+        expected_timeline.append((time_sec + duration, state))
+    if timeline != expected_timeline:
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+
+    for expected_frame, sample in zip(expected_frames, sampled_frames):
+        if not isinstance(sample, dict):
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+        frame = _strict_report_int(sample.get("frame"))
+        time_sec = _strict_report_number(sample.get("timeSec"))
+        expected_time = round((expected_frame - frame_start) / float(fps), 6)
+        if frame != expected_frame or time_sec != expected_time:
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+        expected_state = max(
+            (item for item in timeline if item[0] <= expected_time),
+            key=lambda item: item[0],
+        )[1]
+        if sample.get("state") != expected_state:
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+
+    physical_events = [dict(event) for event in aroll_performance_qa.physical_transition_events(motion_events)]
+    physical_actions = [str(event.get("action") or "") for event in physical_events]
+    if evidence.get("physicalTransitionActions") != physical_actions:
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    expected_contact_count = frame_count if physical_events else 0
+    if values["contactSampleCount"] != expected_contact_count:
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    return physical_events
+
+
 def _embedded_collision_report(mode: str, result: dict[str, Any]) -> dict[str, Any]:
     source = Path(str(result.get("rigReportPath") or "")).expanduser().resolve()
     if not source.is_file():
@@ -341,30 +479,83 @@ def _embedded_collision_report(mode: str, result: dict[str, Any]) -> dict[str, A
     if (
         not isinstance(performance, dict)
         or performance.get("schemaVersion") != "tangying-aroll-performance-qa/v1"
-        or not isinstance(performance.get("sampledFrames"), list)
-        or not performance.get("sampledFrames")
-        or not isinstance(performance.get("stateTimeline"), list)
-        or not performance.get("stateTimeline")
     ):
         raise DemoQAError(f"{mode} transition geometry QA did not pass")
     transition = performance.get("transition")
-    if not isinstance(transition, dict) or transition.get("errors") != []:
+    if not isinstance(transition, dict):
         raise DemoQAError(f"{mode} transition geometry QA did not pass")
-    transition_status = str(transition.get("status") or "")
-    if transition_status not in {"passed", "not_applicable"}:
-        raise DemoQAError(f"{mode} transition geometry QA did not pass")
-    if transition_status == "passed" and transition.get("success") is not True:
-        raise DemoQAError(f"{mode} transition geometry QA did not pass")
-    if transition_status == "not_applicable" and (
-        transition.get("success") is not None
+    physical_events = _validate_performance_structure(mode, performance, transition)
+    if physical_events:
+        recomputed_transition = aroll_performance_qa.validate_transition_metrics(
+            transition.get("metrics")
+        )
+        if (
+            recomputed_transition.get("success") is not True
+            or transition.get("status") != recomputed_transition.get("status")
+            or transition.get("success") is not recomputed_transition.get("success")
+            or transition.get("errors") != recomputed_transition.get("errors")
+            or transition.get("metrics") != recomputed_transition.get("metrics")
+        ):
+            raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    elif (
+        transition.get("status") != "not_applicable"
+        or transition.get("success") is not None
+        or transition.get("errors") != []
         or transition.get("metrics") != {}
+        or len({item.get("state") for item in performance["stateTimeline"]}) != 1
     ):
         raise DemoQAError(f"{mode} transition geometry QA did not pass")
     visemes = performance.get("visemes")
+    if not isinstance(visemes, dict):
+        raise DemoQAError(f"{mode} viseme QA did not pass")
+    dimensions = visemes.get("characterDimensions")
+    if not isinstance(dimensions, dict):
+        raise DemoQAError(f"{mode} viseme QA did not pass")
+    recomputed_visemes = aroll_performance_qa.validate_viseme_metrics(
+        visemes.get("metrics"),
+        character_height=dimensions.get("height"),
+        character_width=dimensions.get("width"),
+    )
+    viseme_evidence = visemes.get("evidence")
+    jaw_timeline = (
+        viseme_evidence.get("evaluatedJawTimeline")
+        if isinstance(viseme_evidence, dict)
+        else None
+    )
+    jaw_samples = jaw_timeline.get("samples") if isinstance(jaw_timeline, dict) else None
+    recomputed_jaw = aroll_performance_qa.summarize_jaw_samples(jaw_samples)
+    cadence = performance["sampleCadence"]
+    expected_jaw_frames = list(
+        range(int(cadence["frameStart"]), int(cadence["frameEnd"]) + 1)
+    )
+    jaw_summary_fields = (
+        "success",
+        "errors",
+        "maxJawRadians",
+        "mbpJawRadians",
+        "sampleCount",
+        "mbpSampleCount",
+        "sampledFrames",
+    )
     if (
-        not isinstance(visemes, dict)
-        or visemes.get("success") is not True
-        or visemes.get("errors") != []
+        recomputed_visemes.get("success") is not True
+        or visemes.get("status") != recomputed_visemes.get("status")
+        or visemes.get("success") is not recomputed_visemes.get("success")
+        or visemes.get("errors") != recomputed_visemes.get("errors")
+        or visemes.get("metrics") != recomputed_visemes.get("metrics")
+        or dimensions != recomputed_visemes.get("characterDimensions")
+        or not isinstance(jaw_timeline, dict)
+        or recomputed_jaw.get("success") is not True
+        or any(
+            jaw_timeline.get(name) != recomputed_jaw.get(name)
+            for name in jaw_summary_fields
+        )
+        or recomputed_jaw.get("sampledFrames") != expected_jaw_frames
+        or recomputed_jaw.get("sampleCount") != cadence["animationFrameCount"]
+        or recomputed_jaw.get("maxJawRadians")
+        != recomputed_visemes["metrics"].get("maxJawRadians")
+        or recomputed_jaw.get("mbpJawRadians")
+        != recomputed_visemes["metrics"].get("mbpJawRadians")
     ):
         raise DemoQAError(f"{mode} viseme QA did not pass")
     return {
