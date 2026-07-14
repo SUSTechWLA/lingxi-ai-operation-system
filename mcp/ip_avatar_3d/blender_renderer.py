@@ -1725,7 +1725,7 @@ def production_calibration_frames(
     actions: Iterable[bpy.types.Action] = (),
     bone_names: Iterable[str] = (),
 ) -> tuple[int, ...]:
-    """Sample every half second plus all authored action keys and timeline bounds."""
+    """Sample the timeline baseline plus authored limb motion extrema."""
 
     start = int(scene.frame_start)
     end = int(scene.frame_end)
@@ -1740,7 +1740,26 @@ def production_calibration_frames(
                 for bone_name in selected_bones
             ):
                 continue
-            for keyframe in fcurve.keyframe_points:
+            keyframes = sorted(fcurve.keyframe_points, key=lambda point: float(point.co.x))
+            if not keyframes:
+                continue
+            selected_keyframes = {0, len(keyframes) - 1}
+            values = [float(point.co.y) for point in keyframes]
+            value_range = max(values) - min(values)
+            epsilon = max(1e-7, value_range * 1e-4)
+            trend = 0
+            for index in range(1, len(keyframes)):
+                delta = values[index] - values[index - 1]
+                next_trend = 1 if delta > epsilon else -1 if delta < -epsilon else 0
+                if next_trend == 0:
+                    continue
+                if trend and next_trend != trend:
+                    selected_keyframes.add(index - 1)
+                trend = next_trend
+            selected_keyframes.add(values.index(min(values)))
+            selected_keyframes.add(values.index(max(values)))
+            for index in selected_keyframes:
+                keyframe = keyframes[index]
                 frame = int(round(float(keyframe.co.x)))
                 if start <= frame <= end:
                     frames.add(frame)
@@ -1939,18 +1958,25 @@ def sample_character_semantic_regions(
 
 def _medium_frame_metrics(
     camera: bpy.types.Object,
-    frame_points: dict[int, dict[str, list[Vector]]],
+    frame_points: dict[int, dict[str, dict[str, Any]]],
 ) -> dict[int, dict[str, dict[str, Any]]]:
     scene = bpy.context.scene
     metrics: dict[int, dict[str, dict[str, Any]]] = {}
     for frame, regions in frame_points.items():
         metrics[frame] = {}
-        for role, points in regions.items():
-            projected = [world_to_camera_view(scene, camera, point) for point in points]
-            inside_count = sum(
-                1
+        for role, region in regions.items():
+            projected = [
+                world_to_camera_view(scene, camera, point)
+                for point in region["boundaryPoints"]
+            ]
+            boundary_inside = all(
+                point.z > 0 and 0 <= point.x <= 1 and 0 <= point.y <= 1
                 for point in projected
-                if point.z > 0 and 0 <= point.x <= 1 and 0 <= point.y <= 1
+            )
+            inside_count = (
+                int(region["sampleCount"])
+                if bool(region["allInFront"]) and boundary_inside
+                else 0
             )
             metrics[frame][role] = {
                 "insideCount": inside_count,
@@ -1966,6 +1992,36 @@ def _medium_frame_metrics(
                 },
             }
     return metrics
+
+
+def _medium_frame_boundary_regions(
+    camera: bpy.types.Object,
+    regions: dict[str, list[Vector]],
+) -> dict[str, dict[str, Any]]:
+    """Keep only points that can define perspective frame bounds.
+
+    With a fixed camera transform, lens and shift apply an affine scale/offset to
+    normalized image coordinates. Therefore the same extrema define every
+    candidate's bounds while interior vertices can be discarded.
+    """
+
+    scene = bpy.context.scene
+    reduced: dict[str, dict[str, Any]] = {}
+    for role, points in regions.items():
+        projected = [world_to_camera_view(scene, camera, point) for point in points]
+        indices = {
+            min(range(len(points)), key=lambda index: float(projected[index].x)),
+            max(range(len(points)), key=lambda index: float(projected[index].x)),
+            min(range(len(points)), key=lambda index: float(projected[index].y)),
+            max(range(len(points)), key=lambda index: float(projected[index].y)),
+            min(range(len(points)), key=lambda index: float(projected[index].z)),
+        }
+        reduced[role] = {
+            "boundaryPoints": [points[index] for index in sorted(indices)],
+            "sampleCount": len(points),
+            "allInFront": all(point.z > 0 for point in projected),
+        }
+    return reduced
 
 
 def _medium_frame_candidate_is_safe(
@@ -2022,13 +2078,13 @@ def calibrate_mode_medium_camera(
     camera = mode_objects["cameras"]["medium"]
     authored_lens = float(camera.data.lens)
     authored_shift_y = float(camera.data.get("ip_authored_shift_y", camera.data.shift_y))
-    frame_points: dict[int, dict[str, list[Vector]]] = {}
+    frame_points: dict[int, dict[str, dict[str, Any]]] = {}
     for frame in frames:
         bpy.context.scene.frame_set(int(frame))
         bpy.context.view_layer.update()
-        frame_points[int(frame)] = sample_character_semantic_regions(
-            character_objects,
-            bone_map,
+        frame_points[int(frame)] = _medium_frame_boundary_regions(
+            camera,
+            sample_character_semantic_regions(character_objects, bone_map),
         )
 
     lens_candidates = [

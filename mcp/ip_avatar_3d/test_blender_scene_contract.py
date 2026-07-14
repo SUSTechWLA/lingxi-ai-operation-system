@@ -25,6 +25,8 @@ import render_warm_studio_qa
 import validate_warm_studio as warm_studio_validator
 import validate_warm_studio_character as warm_character_validator
 import warm_studio_contract as contract
+from bpy_extras.object_utils import world_to_camera_view
+from mathutils import Vector
 
 
 def reset_scene() -> None:
@@ -954,7 +956,7 @@ def test_lighting_preset_uses_authored_base_energy() -> None:
     assert report["preset"] == "editorial_crisp"
 
 
-def test_production_calibration_frames_include_interval_bounds_and_action_keys() -> None:
+def test_production_calibration_frames_include_interval_bounds_and_limb_extrema() -> None:
     scene = bpy.context.scene
     original_range = (scene.frame_start, scene.frame_end)
     bpy.ops.object.armature_add()
@@ -966,10 +968,19 @@ def test_production_calibration_frames_include_interval_bounds_and_action_keys()
         scene.frame_start = 1
         scene.frame_end = 61
         limb.rotation_mode = "XYZ"
-        limb.rotation_euler.x = 0.25
-        limb.keyframe_insert(data_path="rotation_euler", frame=23, index=0)
+        for frame, value in (
+            (20, 0.0),
+            (21, 0.1),
+            (22, 0.2),
+            (23, 0.3),
+            (24, 0.2),
+            (25, 0.1),
+            (26, 0.0),
+        ):
+            limb.rotation_euler.x = value
+            limb.keyframe_insert(data_path="rotation_euler", frame=frame, index=0)
         marker.location.x = 0.0
-        marker.keyframe_insert(data_path="location", frame=24, index=0)
+        marker.keyframe_insert(data_path="location", frame=27, index=0)
 
         frames = blender_renderer.production_calibration_frames(
             scene,
@@ -978,12 +989,49 @@ def test_production_calibration_frames_include_interval_bounds_and_action_keys()
             bone_names=(limb.name,),
         )
 
-        assert {1, 16, 23, 31, 46, 61}.issubset(frames)
+        assert {1, 16, 20, 23, 26, 31, 46, 61}.issubset(frames)
+        assert 21 not in frames
+        assert 22 not in frames
         assert 24 not in frames
+        assert 25 not in frames
+        assert 27 not in frames
         assert len(frames) < 61
     finally:
         bpy.data.objects.remove(marker, do_unlink=True)
         scene.frame_start, scene.frame_end = original_range
+
+
+def test_medium_frame_boundary_reduction_preserves_candidate_bounds() -> None:
+    reset_scene()
+    camera = add_camera("Boundary_Reduction_Camera")
+    camera.location = (0.0, -5.0, 0.0)
+    blender_renderer.look_at(camera, (0.0, 0.0, 0.0))
+    bpy.context.view_layer.update()
+    points = [
+        Vector((-0.4 + 0.8 * (index / 129.0), 0.0, 0.3 * math.sin(index)))
+        for index in range(130)
+    ]
+    reduced = blender_renderer._medium_frame_boundary_regions(
+        camera,
+        {"head": points},
+    )
+
+    assert reduced["head"]["sampleCount"] == 130
+    assert len(reduced["head"]["boundaryPoints"]) <= 5
+    for lens in (50.0, 35.0):
+        camera.data.lens = lens
+        expected = [
+            world_to_camera_view(bpy.context.scene, camera, point) for point in points
+        ]
+        metrics = blender_renderer._medium_frame_metrics(
+            camera,
+            {1: reduced},
+        )[1]["head"]
+        assert metrics["insideCount"] == 130, (metrics, reduced["head"])
+        assert abs(metrics["frameBounds"]["min"][0] - min(point.x for point in expected)) < 1e-6
+        assert abs(metrics["frameBounds"]["min"][1] - min(point.y for point in expected)) < 1e-6
+        assert abs(metrics["frameBounds"]["max"][0] - max(point.x for point in expected)) < 1e-6
+        assert abs(metrics["frameBounds"]["max"][1] - max(point.y for point in expected)) < 1e-6
 
 
 def test_render_settings_are_compatible_with_blender_51_agx_and_eevee() -> None:
@@ -1087,7 +1135,8 @@ if __name__ == "__main__":
         test_validation_success_fails_each_required_geometry_gate,
         test_scene_marker_controls_character_height,
         test_lighting_preset_uses_authored_base_energy,
-        test_production_calibration_frames_include_interval_bounds_and_action_keys,
+        test_production_calibration_frames_include_interval_bounds_and_limb_extrema,
+        test_medium_frame_boundary_reduction_preserves_candidate_bounds,
         test_render_settings_are_compatible_with_blender_51_agx_and_eevee,
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
         test_real_warm_studio_character_validation_passes_both_modes,
