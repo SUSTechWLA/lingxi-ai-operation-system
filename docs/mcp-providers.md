@@ -284,6 +284,24 @@ python3 mcp/ip_avatar_3d/server.py
 
 主 IP 的生产配置固定使用 `production_1080p`、1920x1080、30 fps 和本地 `gpt_sovits_local` 音色 `main_ip_warm_knowledge_host_v1`。没有显式 `audioPath` 时，口播稿由该固定音色合成并经 48 kHz、`-16 LUFS`、`-1.5 dBTP` 门限处理；固定音色不可用时直接失败，不回退到系统 TTS。
 
+站姿和坐姿共用已批准的暖色演播室、角色主资产和声音配置，直接调用参数仅切换 `presentationMode`：
+
+```json
+{
+  "script": "今天分享一个值得关注的观点。",
+  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "presentationMode": "standing"
+}
+```
+
+```json
+{
+  "script": "今天分享一个值得关注的观点。",
+  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "presentationMode": "seated"
+}
+```
+
 角色渲染优先加载 `model.masterBlendPath`，避免每条视频重复重拓扑。当前树懒主资产保留源手部表面，并为左右各三根手指添加三段独立骨骼，且验证每根手指两个关节过渡区都有实际权重顶点；五官使用原始面部几何与源网格口型。眼部当前只承诺独立眯眼，不宣称真眼皮拓扑或完整眨眼。正式场景使用暗色知识分享演播室，人物与背景在同一 Blender 场景内接受灯光并产生阴影。
 
 ## 新 MCP 的扩展方式

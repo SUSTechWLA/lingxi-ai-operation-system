@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,25 @@ import warm_studio_contract as contract
 
 
 class WarmStudioContractTests(unittest.TestCase):
+    def test_main_profile_uses_warm_studio_without_regression(self) -> None:
+        profile = json.loads(
+            (
+                contract.repo_root()
+                / "ip形象/main_ip/character-profile.json"
+            ).read_text()
+        )
+        render = profile["render"]
+        voice = profile["voice"]
+
+        self.assertEqual(render["sceneBlendPath"], "scenes/warm-sloth-studio-v1.blend")
+        self.assertEqual(render["presentationMode"], "standing")
+        self.assertEqual(render["qualityPreset"], "production_1080p")
+        self.assertEqual(render["resolution"], {"width": 1920, "height": 1080})
+        self.assertEqual(render["fps"], 30)
+        self.assertEqual(voice["provider"], "gpt_sovits_local")
+        self.assertEqual(voice["voiceId"], "main_ip_warm_knowledge_host_v1")
+        self.assertEqual(voice["fallbackPolicy"], "error")
+
     def test_room_and_opening_dimensions_are_fixed(self) -> None:
         self.assertEqual(contract.ROOM_SIZE, (6.2, 5.8, 3.4))
         self.assertEqual(contract.DESK_SIZE, (2.7, 0.95, 0.92))

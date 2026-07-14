@@ -56,7 +56,7 @@ export TANGYING_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
   "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
   "modelPath": "/absolute/path/to/main-ip-rigged.glb",
   "audioPath": "",
-  "sceneBlendPath": "/absolute/path/to/editorial-news-studio.blend",
+  "sceneBlendPath": "/absolute/path/to/warm-sloth-studio-v1.blend",
   "outputDir": "tmp/ip_avatar_3d_main_ip_demo",
   "durationSec": 8,
   "fps": 30,
@@ -71,6 +71,7 @@ export TANGYING_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
   "facialDetailMode": "rich",
   "facialTopologyMode": "source_retopology",
   "cameraPreset": "medium",
+  "presentationMode": "standing",
   "lightingPreset": "editorial_soft",
   "renderEngine": "BLENDER_EEVEE_NEXT",
   "motionStyle": "expressive"
@@ -80,6 +81,25 @@ export TANGYING_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
 `modelPath` may be omitted after `model.path` is filled in the character profile.
 
 Returned fields include `videoPath`, `localPath`, `previewImagePath`, `motionPlanPath`, `subtitlePath`, `riggedBlendPath`, `riggedGlbPath`, `rigReportPath`, and `renderReportPath`.
+
+The same approved profile drives both common A-roll layouts. These direct
+`render_talking_video` arguments differ only by `presentationMode`:
+
+```json
+{
+  "script": "今天分享一个值得关注的观点。",
+  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "presentationMode": "standing"
+}
+```
+
+```json
+{
+  "script": "今天分享一个值得关注的观点。",
+  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "presentationMode": "seated"
+}
+```
 
 ## Local GPT-SoVITS Production Voice
 
@@ -161,4 +181,4 @@ fallback.
 - `renderEngine` supports `BLENDER_EEVEE_NEXT` (mapped to the installed Eevee enum) and `CYCLES`. Eevee is recommended for full talking videos; Cycles is intended for short high-quality shots.
 - When `backgroundPath` is supplied, Blender renders an RGBA avatar pass and FFmpeg composites that pass over one static A-roll plate.
 - A `.blend` scene takes precedence when both scene and plate are configured. `backgroundBrightness` only affects the static-plate fallback.
-- The bundled `ip形象/main_ip/scenes/editorial-news-studio.blend` is the dark editorial/news-analysis A-roll default for knowledge sharing, opinion commentary, and current affairs.
+- The canonical main-IP profile uses `ip形象/main_ip/scenes/warm-sloth-studio-v1.blend` for standing and seated knowledge-sharing A-roll. The subject-first lighting keeps the character neutral and readable while the room remains darker and warm.
