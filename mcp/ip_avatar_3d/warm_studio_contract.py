@@ -48,12 +48,22 @@ MODE_CAMERA_SPECS = MappingProxyType({
 })
 
 SUBJECT_LIGHT_PROFILE = MappingProxyType({
-    "name": "warm_subject_first_v1",
-    "worldStrength": 0.12,
+    "name": "warm_subject_first_v2",
+    "worldStrength": 0.054,
     "keyTemperatureK": 4500,
+    "keyEnergy": 825.0,
+    "keySpreadDegrees": 145.0,
+    "fillEnergy": 115.0,
+    "rimEnergy": 260.0,
+    "windowEnergy": 63.0,
+    "practicalWallEnergy": 18.9,
+    "practicalShelfEnergy": 21.6,
+    "downlightEnergy": 16.2,
     "rimTemperatureK": 3200,
     "practicalTemperatureK": 2700,
     "backgroundStopsBelowFace": 1.25,
+    "authoredExposure": -2.769925,
+    "cyclesFinalExposure": -4.0,
 })
 
 REQUIRED_COLLECTIONS = (

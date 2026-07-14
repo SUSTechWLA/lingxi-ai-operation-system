@@ -64,8 +64,8 @@ def _authored_light_specs() -> dict[str, dict[str, Any]]:
                 "name": "Practical_Wall",
                 "type": "POINT",
                 "location": (-1.70, 2.360, 2.8555),
-                "energy": 42.0,
-                "color": (1.0, 0.49, 0.20),
+                "energy": contract.SUBJECT_LIGHT_PROFILE["practicalWallEnergy"],
+                "color": (1.0, 1.0, 1.0),
                 "temperature": 2700,
                 "role": "practical",
                 "target": None,
@@ -79,8 +79,8 @@ def _authored_light_specs() -> dict[str, dict[str, Any]]:
                 "name": "Practical_Shelf",
                 "type": "POINT",
                 "location": (1.86, 2.48, 1.5622),
-                "energy": 48.0,
-                "color": (1.0, 0.49, 0.20),
+                "energy": contract.SUBJECT_LIGHT_PROFILE["practicalShelfEnergy"],
+                "color": (1.0, 1.0, 1.0),
                 "temperature": 2700,
                 "role": "practical",
                 "target": None,
@@ -97,8 +97,8 @@ def _authored_light_specs() -> dict[str, dict[str, Any]]:
             "name": name,
             "type": "AREA",
             "location": location,
-            "energy": 105.0,
-            "color": (1.0, 0.67, 0.39),
+            "energy": contract.SUBJECT_LIGHT_PROFILE["downlightEnergy"],
+            "color": (1.0, 1.0, 1.0),
             "temperature": 3000,
             "role": "downlight",
             "target": (location[0], location[1], 0.72),
@@ -112,6 +112,144 @@ def _authored_light_specs() -> dict[str, dict[str, Any]]:
 
 
 LIGHT_SPECS = _authored_light_specs()
+LIGHTING_EVIDENCE_SCHEMA = "tangying-warm-studio-lighting-evidence/v1"
+
+
+def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
+    """Return fail-closed errors for canonical subject-lighting measurements."""
+
+    errors: list[str] = []
+    if payload.get("schemaVersion") != LIGHTING_EVIDENCE_SCHEMA:
+        errors.append(f"schemaVersion must be {LIGHTING_EVIDENCE_SCHEMA!r}")
+    if payload.get("luminanceColorSpace") != "scene_linear_rec709":
+        errors.append("luminanceColorSpace must be scene_linear_rec709")
+    if payload.get("displayColorSpace") != "AgX Medium High Contrast PNG":
+        errors.append("displayColorSpace must be AgX Medium High Contrast PNG")
+    if payload.get("subjectMaskSource") != (
+        "Rendered character ID matte from actual scene geometry"
+    ):
+        errors.append("subjectMaskSource must use a rendered actual-geometry ID matte")
+    if payload.get("faceMaskSource") != (
+        "Rendered character ID matte intersected with projected semantic head geometry"
+    ):
+        errors.append(
+            "faceMaskSource must intersect the geometry ID matte with projected semantic head geometry"
+        )
+    if payload.get("backgroundMaskSource") != (
+        "Rendered non-character geometry excluding practical-highlight IDs and clipped display highlights"
+    ):
+        errors.append(
+            "backgroundMaskSource must exclude character geometry, practical-highlight IDs, and clipped display highlights"
+        )
+
+    comparisons = payload.get("cameraComparisons")
+    compared_modes: set[str] = set()
+    if not isinstance(comparisons, list):
+        errors.append("cameraComparisons must be a list")
+    else:
+        for index, comparison in enumerate(comparisons):
+            if not isinstance(comparison, dict):
+                errors.append(f"camera comparison {index} must be an object")
+                continue
+            mode = str(comparison.get("mode"))
+            label = f"camera comparison {index}/{mode}"
+            compared_modes.add(mode)
+            camera_a = str(comparison.get("cameraA", ""))
+            camera_b = str(comparison.get("cameraB", ""))
+            active_a = str(comparison.get("activeCameraA", ""))
+            active_b = str(comparison.get("activeCameraB", ""))
+            matrix_a = comparison.get("matrixWorldA")
+            matrix_b = comparison.get("matrixWorldB")
+            try:
+                pixel_mae = float(comparison["pixelMae"])
+            except (KeyError, TypeError, ValueError):
+                errors.append(f"{label} pixel MAE is missing")
+                continue
+            if comparison.get("engine") != "eevee":
+                errors.append(f"{label} must compare Eevee QA renders")
+            if not camera_a or not camera_b or camera_a == camera_b:
+                errors.append(f"{label} must name two different requested cameras")
+            if active_a != camera_a or active_b != camera_b:
+                errors.append(f"{label} active cameras must match the requested cameras")
+            if (
+                not isinstance(matrix_a, list)
+                or not isinstance(matrix_b, list)
+                or len(matrix_a) != 16
+                or len(matrix_b) != 16
+                or matrix_a == matrix_b
+            ):
+                errors.append(f"{label} must contain two different 4x4 camera matrices")
+            if not math.isfinite(pixel_mae) or pixel_mae <= 1e-3:
+                errors.append(f"{label} pixel MAE must be greater than 0.001")
+        missing_comparison_modes = sorted(set(contract.PRESENTATION_MODES) - compared_modes)
+        if missing_comparison_modes:
+            errors.append(
+                f"missing materially different camera comparisons: {missing_comparison_modes}"
+            )
+
+    measurements = payload.get("measurements")
+    if not isinstance(measurements, list):
+        return [*errors, "measurements must be a list"]
+    expected = {
+        (mode, engine, "medium")
+        for mode in contract.PRESENTATION_MODES
+        for engine in ("eevee", "cycles")
+    }
+    actual: set[tuple[str, str, str]] = set()
+    for index, measurement in enumerate(measurements):
+        if not isinstance(measurement, dict):
+            errors.append(f"measurement {index} must be an object")
+            continue
+        key = (
+            str(measurement.get("mode")),
+            str(measurement.get("engine")),
+            str(measurement.get("cameraRole")),
+        )
+        actual.add(key)
+        label = "/".join(key)
+        try:
+            face = float(measurement["linearFaceLuminance"])
+            background = float(measurement["linearBackgroundLuminance"])
+            stops = float(measurement["backgroundStopsBelowFace"])
+            clip_ratio = float(measurement["highlightClipRatio"])
+            subject_pixels = int(measurement["subjectPixelCount"])
+            face_pixels = int(measurement["facePixelCount"])
+            background_pixels = int(measurement["backgroundPixelCount"])
+            practical_pixels = int(measurement["practicalHighlightPixelCount"])
+        except (KeyError, TypeError, ValueError):
+            errors.append(f"{label} has incomplete numeric lighting evidence")
+            continue
+        if not all(math.isfinite(value) for value in (face, background, stops, clip_ratio)):
+            errors.append(f"{label} lighting evidence must be finite")
+        if face <= 0.0 or background <= 0.0:
+            errors.append(f"{label} linear luminance samples must be positive")
+        if not 1.0 <= stops <= 1.5:
+            errors.append(f"{label} backgroundStopsBelowFace must be within 1.0..1.5")
+        if not 0.0 <= clip_ratio < 0.005:
+            errors.append(f"{label} highlightClipRatio must be below 0.5 percent")
+        if (
+            subject_pixels <= 0
+            or face_pixels <= 0
+            or face_pixels > subject_pixels
+            or background_pixels <= 0
+            or practical_pixels <= 0
+        ):
+            errors.append(f"{label} subject/face/background/practical masks must be non-empty")
+        for path_key in (
+            "subjectMaskPath",
+            "faceMaskPath",
+            "backgroundMaskPath",
+            "practicalHighlightMaskPath",
+        ):
+            if not isinstance(measurement.get(path_key), str) or not measurement[path_key]:
+                errors.append(f"{label} {path_key} is missing")
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    if missing:
+        errors.append(f"missing medium lighting measurements: {missing}")
+    if extra:
+        errors.append(f"unexpected lighting measurements: {extra}")
+    return errors
 BRAND_IMAGE_NAME = "warm-sloth-brand-icon.png"
 BRAND_IMAGE_SIZE = (2048, 2048)
 FLOOR_CONTACT_ROOTS = (
@@ -953,9 +1091,14 @@ def _validate_render_settings(report: dict[str, Any]) -> None:
         report["errors"].append(
             f"AgX look must be Medium High Contrast, found {scene.view_settings.look!r}"
         )
-    if not math.isclose(scene.view_settings.exposure, 0.0, abs_tol=1e-6):
+    if not math.isclose(
+        scene.view_settings.exposure,
+        builder.AUTHORED_EXPOSURE,
+        abs_tol=1e-6,
+    ):
         report["errors"].append(
-            f"exposure must be 0.0, found {scene.view_settings.exposure:g}"
+            f"exposure must be {builder.AUTHORED_EXPOSURE:g}, "
+            f"found {scene.view_settings.exposure:g}"
         )
     if scene.render.image_settings.file_format != "PNG":
         report["errors"].append("Render output format must be PNG")
@@ -992,9 +1135,9 @@ def _validate_render_settings(report: dict[str, Any]) -> None:
     metadata_contract = {
         "ip_preview_engine": "BLENDER_EEVEE_NEXT",
         "ip_final_engine": "CYCLES",
-        "ip_eevee_render_samples": 64,
+        "ip_eevee_render_samples": 128,
         "ip_cycles_final_samples": 128,
-        "ip_authored_exposure": 0.0,
+        "ip_authored_exposure": builder.AUTHORED_EXPOSURE,
         "ip_cycles_final_exposure": builder.CYCLES_FINAL_EXPOSURE,
     }
     for key, expected in metadata_contract.items():
@@ -1012,9 +1155,9 @@ def _validate_render_settings(report: dict[str, Any]) -> None:
             report["errors"].append("Cycles production denoising must be enabled")
     eevee = getattr(scene, "eevee", None)
     if eevee is not None and hasattr(eevee, "taa_render_samples"):
-        if eevee.taa_render_samples != 64:
+        if eevee.taa_render_samples != 128:
             report["errors"].append(
-                f"Eevee production samples must be 64, found {eevee.taa_render_samples}"
+                f"Eevee production samples must be 128, found {eevee.taa_render_samples}"
             )
 
 

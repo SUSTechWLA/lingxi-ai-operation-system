@@ -25,7 +25,8 @@ WALL_THICKNESS = 0.16
 WINDOW_CENTER_Y = 0.0
 WINDOW_SILL_HEIGHT = 0.35
 DOOR_CENTER_Y = -1.45
-CYCLES_FINAL_EXPOSURE = -0.8
+AUTHORED_EXPOSURE = contract.SUBJECT_LIGHT_PROFILE["authoredExposure"]
+CYCLES_FINAL_EXPOSURE = contract.SUBJECT_LIGHT_PROFILE["cyclesFinalExposure"]
 
 
 @dataclass(frozen=True)
@@ -1088,7 +1089,7 @@ def build_material_library() -> dict[str, bpy.types.Material]:
     )
     _set_principled_input(lamp_shader, "Emission Color", (1.0, 0.38, 0.08, 1.0))
     _set_principled_input(lamp_shader, "Emission", (1.0, 0.38, 0.08, 1.0))
-    _set_principled_input(lamp_shader, "Emission Strength", 2.4)
+    _set_principled_input(lamp_shader, "Emission Strength", 1.08)
     shade_shader = next(
         node
         for node in materials["Lamp_Shade_Warm"].node_tree.nodes
@@ -1098,7 +1099,7 @@ def build_material_library() -> dict[str, bpy.types.Material]:
     _set_principled_input(shade_shader, "Transmission", 0.18)
     _set_principled_input(shade_shader, "Emission Color", (0.72, 0.28, 0.07, 1.0))
     _set_principled_input(shade_shader, "Emission", (0.72, 0.28, 0.07, 1.0))
-    _set_principled_input(shade_shader, "Emission Strength", 0.16)
+    _set_principled_input(shade_shader, "Emission Strength", 0.072)
     return materials
 
 
@@ -1112,7 +1113,7 @@ def create_scene_context() -> StudioContext:
     scene.unit_settings.length_unit = "METERS"
     scene.unit_settings.scale_length = 1.0
     scene["ip_scene_contract"] = "tangying-warm-sloth-studio/v1"
-    scene["ip_authored_exposure"] = 0.0
+    scene["ip_authored_exposure"] = AUTHORED_EXPOSURE
 
     collections = {
         name: ensure_collection(scene, name) for name in contract.REQUIRED_COLLECTIONS
@@ -3423,8 +3424,8 @@ LIGHT_SPECS = (
         "name": "Window_Softbox",
         "type": "AREA",
         "location": (-3.00, -0.10, 2.35),
-        "energy": 720.0,
-        "color": (1.0, 0.84, 0.66),
+        "energy": contract.SUBJECT_LIGHT_PROFILE["windowEnergy"],
+        "color": (1.0, 1.0, 1.0),
         "temperature": 4800,
         "role": "window",
         "target": (0.0, 0.35, 1.35),
@@ -3432,38 +3433,39 @@ LIGHT_SPECS = (
         "shadows": True,
     },
     {
-        "name": "Studio_Key",
+        "name": "IP_Subject_Key",
         "type": "AREA",
-        "location": (-2.35, -2.10, 2.85),
-        "energy": 520.0,
-        "color": (1.0, 0.88, 0.73),
+        "location": (-1.10, -0.55, 2.55),
+        "energy": contract.SUBJECT_LIGHT_PROFILE["keyEnergy"],
+        "color": (1.0, 1.0, 1.0),
         "temperature": contract.SUBJECT_LIGHT_PROFILE["keyTemperatureK"],
         "role": "key",
-        "target": (0.0, 0.30, 1.65),
-        "size": (1.90, 1.90),
+        "target": contract.MODE_MARKER_SPECS["standing"]["focus"],
+        "size": (1.60, 1.60),
+        "spread_degrees": contract.SUBJECT_LIGHT_PROFILE["keySpreadDegrees"],
         "shadows": True,
     },
     {
-        "name": "Studio_Fill",
+        "name": "IP_Subject_Fill",
         "type": "AREA",
         "location": (2.55, -1.60, 2.35),
-        "energy": 145.0,
-        "color": (0.80, 0.88, 1.0),
-        "temperature": 6500,
+        "energy": contract.SUBJECT_LIGHT_PROFILE["fillEnergy"],
+        "color": (1.0, 1.0, 1.0),
+        "temperature": 5200,
         "role": "fill",
-        "target": (0.0, 0.30, 1.55),
-        "size": (1.80, 1.80),
+        "target": contract.MODE_MARKER_SPECS["standing"]["focus"],
+        "size": (2.20, 2.20),
         "shadows": False,
     },
     {
-        "name": "Studio_Rim",
+        "name": "IP_Subject_Rim",
         "type": "AREA",
         "location": (2.20, 1.85, 2.65),
-        "energy": 260.0,
-        "color": (1.0, 0.64, 0.38),
+        "energy": contract.SUBJECT_LIGHT_PROFILE["rimEnergy"],
+        "color": (1.0, 1.0, 1.0),
         "temperature": contract.SUBJECT_LIGHT_PROFILE["rimTemperatureK"],
         "role": "rim",
-        "target": (0.0, 0.30, 1.55),
+        "target": contract.MODE_MARKER_SPECS["standing"]["focus"],
         "size": (1.40, 1.40),
         "shadows": True,
     },
@@ -3489,6 +3491,7 @@ def _add_authored_light(
     shadows: bool,
     target: tuple[float, float, float] | None = None,
     size: tuple[float, float] = (0.25, 0.25),
+    spread_degrees: float | None = None,
     fixture: str | None = None,
 ) -> bpy.types.Object:
     """Create one tagged production light with reproducible authored energy."""
@@ -3505,6 +3508,8 @@ def _add_authored_light(
         data.shape = "RECTANGLE"
         data.size = size[0]
         data.size_y = size[1]
+        if spread_degrees is not None:
+            data.spread = math.radians(spread_degrees)
     elif light_type == "POINT":
         data.shadow_soft_size = size[0]
 
@@ -3518,6 +3523,8 @@ def _add_authored_light(
     light["ip_light_role"] = role
     light["ip_authored_color"] = color
     light["ip_color_temperature"] = int(temperature)
+    if spread_degrees is not None:
+        light["ip_spread_degrees"] = float(spread_degrees)
     light["ip_casts_shadow"] = bool(shadows)
     light["ip_shadow_mode"] = "full" if shadows else "restrained"
     if fixture is not None:
@@ -3637,6 +3644,11 @@ def build_lighting(ctx: StudioContext) -> list[bpy.types.Object]:
             shadows=bool(spec["shadows"]),
             target=tuple(spec["target"]),
             size=tuple(spec["size"]),
+            spread_degrees=(
+                float(spec["spread_degrees"])
+                if "spread_degrees" in spec
+                else None
+            ),
         )
         for spec in LIGHT_SPECS
     ]
@@ -3647,12 +3659,12 @@ def build_lighting(ctx: StudioContext) -> list[bpy.types.Object]:
         (
             "Practical_Wall",
             wall_sconce_diffuser.name,
-            42.0,
+            contract.SUBJECT_LIGHT_PROFILE["practicalWallEnergy"],
         ),
         (
             "Practical_Shelf",
             "Shelf_TableLamp_Diffuser",
-            48.0,
+            contract.SUBJECT_LIGHT_PROFILE["practicalShelfEnergy"],
         ),
     )
     for name, fixture_name, energy in practical_specs:
@@ -3664,7 +3676,7 @@ def build_lighting(ctx: StudioContext) -> list[bpy.types.Object]:
                 light_type="POINT",
                 location=tuple(fixture.matrix_world.translation),
                 energy=energy,
-                color=(1.0, 0.49, 0.20),
+                color=(1.0, 1.0, 1.0),
                 temperature=contract.SUBJECT_LIGHT_PROFILE["practicalTemperatureK"],
                 role="practical",
                 shadows=False,
@@ -3681,8 +3693,8 @@ def build_lighting(ctx: StudioContext) -> list[bpy.types.Object]:
                 name=name,
                 light_type="AREA",
                 location=location,
-                energy=105.0,
-                color=(1.0, 0.67, 0.39),
+                energy=contract.SUBJECT_LIGHT_PROFILE["downlightEnergy"],
+                color=(1.0, 1.0, 1.0),
                 temperature=3000,
                 role="downlight",
                 shadows=True,
@@ -3719,7 +3731,7 @@ def configure_render_settings(ctx: StudioContext) -> None:
         if hasattr(eevee, "taa_samples"):
             eevee.taa_samples = 16
         if hasattr(eevee, "taa_render_samples"):
-            eevee.taa_render_samples = 64
+            eevee.taa_render_samples = 128
         if hasattr(eevee, "use_raytracing"):
             eevee.use_raytracing = False
         if hasattr(eevee, "use_shadows"):
@@ -3731,7 +3743,7 @@ def configure_render_settings(ctx: StudioContext) -> None:
     scene.cycles.use_denoising = True
     scene["ip_preview_engine"] = "BLENDER_EEVEE_NEXT"
     scene["ip_final_engine"] = "CYCLES"
-    scene["ip_eevee_render_samples"] = 64
+    scene["ip_eevee_render_samples"] = 128
     scene["ip_cycles_final_samples"] = 128
     scene["ip_cycles_final_exposure"] = CYCLES_FINAL_EXPOSURE
 
@@ -3746,8 +3758,8 @@ def configure_render_settings(ctx: StudioContext) -> None:
     except (TypeError, ValueError):
         scene.view_settings.view_transform = "Filmic"
         scene.view_settings.look = "Medium High Contrast"
-    scene.view_settings.exposure = 0.0
-    scene["ip_authored_exposure"] = 0.0
+    scene.view_settings.exposure = AUTHORED_EXPOSURE
+    scene["ip_authored_exposure"] = AUTHORED_EXPOSURE
 
     world = bpy.data.worlds.get("World_WarmStudio_Neutral") or bpy.data.worlds.new(
         "World_WarmStudio_Neutral"

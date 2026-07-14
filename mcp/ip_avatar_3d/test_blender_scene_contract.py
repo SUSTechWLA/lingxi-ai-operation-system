@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -19,6 +20,8 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import blender_renderer
 import editorial_studio_builder
+import render_warm_studio_qa
+import validate_warm_studio as warm_studio_validator
 import validate_warm_studio_character as warm_character_validator
 import warm_studio_contract as contract
 
@@ -48,7 +51,7 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert scene.render.resolution_x == 1920
     assert scene.render.resolution_y == 1080
     assert scene["ip_presentation_modes"] == '["standing", "seated"]'
-    assert scene["ip_subject_light_profile"] == "warm_subject_first_v1"
+    assert scene["ip_subject_light_profile"] == contract.SUBJECT_LIGHT_PROFILE["name"]
     assert scene["ip_background_stops_below_face"] == 1.25
 
     for mode in contract.PRESENTATION_MODES:
@@ -98,19 +101,318 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     )
     assert abs(world_background.inputs["Strength"].default_value - profile["worldStrength"]) <= 1e-6
 
-    key = bpy.data.objects["Studio_Key"]
-    assert key.data.use_temperature is True
-    assert key.data.temperature == profile["keyTemperatureK"]
+    subject_specs = {
+        "IP_Subject_Key": ("key", 825.0, 4500.0),
+        "IP_Subject_Fill": ("fill", 115.0, 5200.0),
+        "IP_Subject_Rim": ("rim", 260.0, 3200.0),
+    }
+    for name, (role, energy, temperature) in subject_specs.items():
+        light = bpy.data.objects.get(name)
+        assert light is not None, name
+        assert light.type == "LIGHT"
+        assert light.get("ip_light_role") == role
+        assert light.data.energy == energy
+        assert light.get("ip_base_energy") == energy
+        assert light.data.use_temperature is True
+        assert light.data.temperature == temperature
+        assert light.get("ip_color_temperature") == int(temperature)
 
-    rims = [
-        obj
-        for obj in scene.objects
-        if obj.type == "LIGHT"
-        and obj.get("ip_light_role") == "rim"
-        and obj.data.use_temperature
-        and obj.data.temperature == profile["rimTemperatureK"]
+    assert scene.view_settings.view_transform == "AgX"
+    assert "Medium High Contrast" in scene.view_settings.look
+    key = bpy.data.objects["IP_Subject_Key"]
+    assert abs(math.degrees(key.data.spread) - 145.0) <= 1e-5
+    assert key.get("ip_spread_degrees") == 145.0
+    assert abs(scene.view_settings.exposure - (-2.769925)) <= 1e-6
+    assert abs(scene["ip_authored_exposure"] - (-2.769925)) <= 1e-6
+    assert scene["ip_cycles_final_exposure"] == -4.0
+
+
+def test_luminance_masks_follow_rendered_subject_and_projected_head() -> None:
+    width = 6
+    height = 4
+    matte_values = [
+        0, 0, 0, 0, 0, 0,
+        0, 7, 7, 7, 7, 0,
+        0, 7, 7, 7, 7, 0,
+        0, 0, 0, 0, 0, 0,
     ]
-    assert len(rims) == 1
+    matte_rgba = [
+        channel
+        for value in matte_values
+        for channel in (float(bool(value)),) * 3 + (1.0,)
+    ]
+    subject = render_warm_studio_qa.subject_mask_from_rendered_id_matte(
+        matte_rgba,
+    )
+    left_face = render_warm_studio_qa.face_mask_from_projected_head_triangles(
+        subject,
+        width=width,
+        height=height,
+        projected_head_triangles=(
+            ((0.18, 0.28), (0.49, 0.28), (0.18, 0.72)),
+            ((0.49, 0.28), (0.49, 0.72), (0.18, 0.72)),
+        ),
+    )
+    right_face = render_warm_studio_qa.face_mask_from_projected_head_triangles(
+        subject,
+        width=width,
+        height=height,
+        projected_head_triangles=(
+            ((0.51, 0.28), (0.82, 0.28), (0.82, 0.72)),
+            ((0.51, 0.28), (0.82, 0.72), (0.51, 0.72)),
+        ),
+    )
+
+    assert sum(subject) == 8
+    assert left_face != right_face
+    assert all(not selected or subject[index] for index, selected in enumerate(left_face))
+    assert all(not selected or subject[index] for index, selected in enumerate(right_face))
+    assert any(left_face)
+    assert any(right_face)
+
+
+def test_background_mask_excludes_character_practicals_and_clipped_highlights() -> None:
+    width = 4
+    height = 3
+    pixel_count = width * height
+    subject_mask = [index in {5, 6} for index in range(pixel_count)]
+    practical_mask = [index == 2 for index in range(pixel_count)]
+    display_rgba = []
+    for index in range(pixel_count):
+        value = 1.0 if index == 9 else 0.5
+        display_rgba.extend((value, value, value, 1.0))
+
+    background_mask = render_warm_studio_qa.background_mask_from_geometry_masks(
+        subject_mask=subject_mask,
+        practical_highlight_mask=practical_mask,
+        display_rgba=display_rgba,
+        width=width,
+        height=height,
+    )
+
+    assert sum(background_mask) == pixel_count - 4
+    assert background_mask[2] is False
+    assert background_mask[5] is False
+    assert background_mask[6] is False
+    assert background_mask[9] is False
+
+
+def test_qa_render_isolates_and_restores_timeline_camera_markers() -> None:
+    original_scene = bpy.context.window.scene
+    isolated_scene = bpy.data.scenes.new("Task6_Camera_Marker_Isolation")
+    bpy.context.window.scene = isolated_scene
+    try:
+        scene = bpy.context.scene
+        medium = bpy.data.objects["Camera_Medium"]
+        wide = bpy.data.objects["Camera_Wide"]
+        three_quarter = bpy.data.objects["Camera_ThreeQuarter_Left"]
+        for camera in (medium, wide, three_quarter):
+            isolated_scene.collection.objects.link(camera)
+        marker = scene.timeline_markers.new("Authored_Medium", frame=1)
+        marker.camera = medium
+        scene.camera = medium
+        scene.frame_set(29)
+        seen: list[tuple[str, int]] = []
+
+        def capture_render(_path: Path) -> None:
+            scene.frame_set(scene.frame_current)
+            seen.append(
+                (
+                    scene.camera.name,
+                    sum(item.camera is not None for item in scene.timeline_markers),
+                )
+            )
+
+        render_warm_studio_qa.render_qa_stills(
+            Path("/tmp/task6-camera-marker-isolation-test"),
+            engine="eevee",
+            camera_names=(wide.name, three_quarter.name),
+            render_callback=capture_render,
+        )
+
+        assert seen == [
+            (wide.name, 0),
+            (three_quarter.name, 0),
+            (wide.name, 0),
+        ]
+        restored = list(scene.timeline_markers)
+        assert [(item.name, item.frame, item.camera.name) for item in restored] == [
+            ("Authored_Medium", 1, medium.name)
+        ]
+        assert scene.camera is medium
+    finally:
+        bpy.context.window.scene = original_scene
+        bpy.data.scenes.remove(isolated_scene)
+
+
+def test_camera_pixel_mae_accepts_render_image_arrays() -> None:
+    import numpy as np
+
+    first = np.zeros((2, 2, 4), dtype=np.float32)
+    second = np.zeros((2, 2, 4), dtype=np.float32)
+    second[:, :, :3] = 0.25
+
+    assert abs(render_warm_studio_qa._mean_absolute_rgb_difference(first.reshape(-1), second.reshape(-1)) - 0.25) <= 1e-6
+
+
+def test_lighting_evidence_uses_linear_luminance_and_rejects_large_clipping() -> None:
+    width = 5
+    height = 5
+    pixel_count = width * height
+    subject_mask = [True] * pixel_count
+    face_mask = [False] * pixel_count
+    background_mask = [False] * pixel_count
+    for index in (6, 7, 8, 11, 12, 13, 16, 17, 18):
+        face_mask[index] = True
+    for index in (0, 1, 2, 3, 4):
+        subject_mask[index] = False
+        background_mask[index] = True
+
+    linear_rgba = []
+    display_rgba = []
+    for index in range(pixel_count):
+        face_value = 0.40 if face_mask[index] else 0.20 if background_mask[index] else 0.18
+        linear_rgba.extend((face_value, face_value, face_value, 1.0))
+        display_value = 1.0 if index in {0, 1, 5, 6, 24} else 0.75
+        display_rgba.extend((display_value, display_value, display_value, 1.0))
+
+    evidence = render_warm_studio_qa.measure_lighting_evidence(
+        linear_rgba=linear_rgba,
+        display_rgba=display_rgba,
+        subject_mask=subject_mask,
+        face_mask=face_mask,
+        background_mask=background_mask,
+        width=width,
+        height=height,
+        micro_catchlight_max_pixels=1,
+    )
+
+    assert abs(evidence["linearFaceLuminance"] - 0.40) <= 1e-6
+    assert abs(evidence["linearBackgroundLuminance"] - 0.20) <= 1e-6
+    assert abs(evidence["backgroundStopsBelowFace"] - 1.0) <= 1e-6
+    assert evidence["microCatchlightPixelCount"] == 1
+    assert evidence["nonCatchlightClippedPixelCount"] == 2
+    assert abs(evidence["highlightClipRatio"] - (2 / sum(subject_mask))) <= 1e-6
+    assert evidence["backgroundPixelCount"] == sum(background_mask)
+
+
+def test_lighting_evidence_fails_closed_for_empty_masks() -> None:
+    width = 2
+    height = 2
+    rgba = [0.25, 0.25, 0.25, 1.0] * (width * height)
+    masks = {
+        "subject_mask": [True, True, False, False],
+        "face_mask": [True, False, False, False],
+        "background_mask": [False, False, True, True],
+    }
+    for empty_name in masks:
+        failing = {name: list(value) for name, value in masks.items()}
+        failing[empty_name] = [False] * (width * height)
+        try:
+            render_warm_studio_qa.measure_lighting_evidence(
+                linear_rgba=rgba,
+                display_rgba=rgba,
+                width=width,
+                height=height,
+                **failing,
+            )
+        except ValueError as exc:
+            assert "empty" in str(exc)
+        else:
+            raise AssertionError(f"{empty_name} must fail closed when empty")
+
+
+def test_subject_lighting_render_plan_covers_both_modes_and_engines() -> None:
+    plan = render_warm_studio_qa.subject_lighting_render_plan()
+    assert [item["mode"] for item in plan if item["engine"] == "eevee"] == [
+        "standing",
+        "standing",
+        "standing",
+        "standing",
+        "seated",
+        "seated",
+        "seated",
+        "seated",
+    ]
+    assert {
+        (item["mode"], item["cameraRole"])
+        for item in plan
+        if item["engine"] == "eevee" and not item["emptyRoom"]
+    } == {
+        ("standing", "medium"),
+        ("standing", "three_quarter"),
+        ("standing", "wide"),
+        ("seated", "medium"),
+        ("seated", "three_quarter"),
+        ("seated", "wide"),
+    }
+    assert {
+        (item["mode"], item["engine"], item["cameraRole"], item["emptyRoom"])
+        for item in plan
+        if item["engine"] == "cycles"
+    } == {
+        ("standing", "cycles", "medium", False),
+        ("standing", "cycles", "medium", True),
+        ("seated", "cycles", "medium", False),
+        ("seated", "cycles", "medium", True),
+    }
+
+
+def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gates() -> None:
+    payload = {
+        "schemaVersion": render_warm_studio_qa.LIGHTING_EVIDENCE_SCHEMA,
+        "luminanceColorSpace": "scene_linear_rec709",
+        "displayColorSpace": "AgX Medium High Contrast PNG",
+        "subjectMaskSource": "Rendered character ID matte from actual scene geometry",
+        "faceMaskSource": "Rendered character ID matte intersected with projected semantic head geometry",
+        "backgroundMaskSource": "Rendered non-character geometry excluding practical-highlight IDs and clipped display highlights",
+        "cameraComparisons": [
+            {
+                "mode": mode,
+                "engine": "eevee",
+                "cameraA": f"Camera_{mode.title()}_Medium",
+                "cameraB": f"Camera_{mode.title()}_ThreeQuarter",
+                "activeCameraA": f"Camera_{mode.title()}_Medium",
+                "activeCameraB": f"Camera_{mode.title()}_ThreeQuarter",
+                "matrixWorldA": [1.0] * 16,
+                "matrixWorldB": [2.0] * 16,
+                "pixelMae": 0.08,
+            }
+            for mode in ("standing", "seated")
+        ],
+        "measurements": [
+            {
+                "mode": mode,
+                "engine": engine,
+                "cameraRole": "medium",
+                "linearFaceLuminance": 0.40,
+                "linearBackgroundLuminance": 0.18,
+                "backgroundStopsBelowFace": 1.152003,
+                "highlightClipRatio": 0.0049,
+                "subjectPixelCount": 12000,
+                "facePixelCount": 3200,
+                "backgroundPixelCount": 180000,
+                "practicalHighlightPixelCount": 400,
+                "subjectMaskPath": f"masks/{mode}-subject-mask.png",
+                "faceMaskPath": f"masks/{mode}-face-mask.png",
+                "backgroundMaskPath": f"masks/{mode}-background-mask.png",
+                "practicalHighlightMaskPath": f"masks/{mode}-practical-highlight-mask.png",
+            }
+            for mode in ("standing", "seated")
+            for engine in ("eevee", "cycles")
+        ],
+    }
+    assert warm_studio_validator.validate_lighting_evidence_payload(payload) == []
+
+    payload["subjectMaskSource"] = "fixed rectangle"
+    payload["measurements"][0]["backgroundStopsBelowFace"] = 0.99
+    payload["measurements"][1]["highlightClipRatio"] = 0.005
+    payload["cameraComparisons"][0]["pixelMae"] = 0.0
+    errors = warm_studio_validator.validate_lighting_evidence_payload(payload)
+    assert any("geometry ID matte" in error for error in errors)
+    assert any("1.0..1.5" in error for error in errors)
+    assert any("below 0.5 percent" in error for error in errors)
+    assert any("pixel MAE" in error for error in errors)
 
 
 def test_mode_resolver_uses_only_mode_specific_markers_and_cameras() -> None:
@@ -645,6 +947,14 @@ def test_real_warm_studio_character_validation_passes_both_modes() -> None:
 if __name__ == "__main__":
     tests = [
         test_warm_studio_saved_scene_has_dual_mode_contract,
+        test_luminance_masks_follow_rendered_subject_and_projected_head,
+        test_background_mask_excludes_character_practicals_and_clipped_highlights,
+        test_qa_render_isolates_and_restores_timeline_camera_markers,
+        test_camera_pixel_mae_accepts_render_image_arrays,
+        test_lighting_evidence_uses_linear_luminance_and_rejects_large_clipping,
+        test_lighting_evidence_fails_closed_for_empty_masks,
+        test_subject_lighting_render_plan_covers_both_modes_and_engines,
+        test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gates,
         test_mode_resolver_uses_only_mode_specific_markers_and_cameras,
         test_scene_target_height_reads_the_selected_mode_spawn,
         test_mode_camera_plan_maps_generic_roles_to_selected_cameras,

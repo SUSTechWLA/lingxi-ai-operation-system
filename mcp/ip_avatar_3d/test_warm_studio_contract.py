@@ -36,9 +36,13 @@ class WarmStudioContractTests(unittest.TestCase):
 
     def test_subject_first_light_profile_is_bounded(self) -> None:
         profile = contract.SUBJECT_LIGHT_PROFILE
-        self.assertEqual(profile["name"], "warm_subject_first_v1")
+        self.assertEqual(profile["name"], "warm_subject_first_v2")
         self.assertLess(profile["worldStrength"], 0.20)
         self.assertEqual(profile["keyTemperatureK"], 4500)
+        self.assertEqual(profile["keyEnergy"], 825.0)
+        self.assertEqual(profile["keySpreadDegrees"], 145.0)
+        self.assertEqual(profile["authoredExposure"], -2.769925)
+        self.assertEqual(profile["cyclesFinalExposure"], -4.0)
         self.assertEqual(profile["rimTemperatureK"], 3200)
         self.assertGreaterEqual(profile["backgroundStopsBelowFace"], 1.0)
         self.assertLessEqual(profile["backgroundStopsBelowFace"], 1.5)

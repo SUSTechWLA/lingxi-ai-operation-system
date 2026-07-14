@@ -1,209 +1,413 @@
-# Task 6 Report: Close-Shot Face and Source PBR Refinement
+# Task 6 Report: Subject-First Lighting And Color Calibration
 
-## Outcome
+## Status
 
-Task 6 finishes with a production-safe, fail-closed squint capability rather
-than a full blink. The original integrated source face from
-`ip形象/main_ip/turnaround/带骨骼3d模型.fbx` remains the visible face and is
-checked against `ip形象/main_ip/turnaround/front.png`. No visible eye/lip
-overlay, image card, face-texture replacement, generated eyelid material, or
-generated eyelid geometry is present.
+Incomplete and intentionally not committed. The current candidate does not yet
+meet the Task 6 evidence contract. Work is preserved in the worktree; no further
+lighting iteration was started after the execution audit request.
 
-The source does not contain independent lid strips. Two generated full-lid
-implementations passed structural checks but failed original-size visual QA
-with ocular-texture streaking, collapsed triangles, white lid blocks, open
-corners, and torn perimeters. Those implementations are not used. The final
-asset reports:
+Baseline: `8294db380a6ffc414f70ae5bf2b92ba4b22b3a33`.
 
-- `trueEyelidTopology=false`
-- `blinkCapability='squint_only'`
-- `Eye_Squint.L` and `Eye_Squint.R` only
-- no `Eye_Blink.L/R` and no `Face_Blink`
+## Current Candidate
 
-Legacy full-blink metadata is rejected with a clear `rebuild master from source
-FBX for blinkCapability=squint_only` error.
-For `characterId=main_ip_sloth`, `facialTopologyMode=volumetric`,
-`true_geometry`, and `lips_eyelids` are rejected before face setup; this
-production source profile supports `source_retopology` with
-`blinkCapability=squint_only` only. Generic character profiles retain the
-legacy generated volumetric API mode.
+| Source | Energy | Temperature | Area | Target |
+| --- | ---: | ---: | --- | --- |
+| `IP_Subject_Key` | `520 W` | `4500 K` | `2.40 x 2.40 m` | standing head focus |
+| `IP_Subject_Fill` | `115 W` | `5200 K` | `2.20 x 2.20 m` | standing head focus |
+| `IP_Subject_Rim` | `260 W` | `3200 K` | `1.40 x 1.40 m` | standing head focus |
+| `Window_Softbox` | `140 W` | `4800 K` | `2.25 x 2.65 m` | room/subject |
+| `Practical_Wall` | `42 W` | `2700 K` | point | wall fixture |
+| `Practical_Shelf` | `48 W` | `2700 K` | point | shelf fixture |
+| `Downlight_01..03` | `36 W` each | `3000 K` | `0.34 x 0.34 m` | room |
 
-## RED/GREEN Evidence
+- World strength: `0.12`.
+- AgX look: `AgX - Medium High Contrast`.
+- Authored Eevee exposure: `-0.6`.
+- Cycles comparison exposure: `-0.6`.
+- Subject/window/downlight colors use neutral RGB with Blender native color
+  temperature. This avoids multiplying an orange RGB tint by a warm Kelvin tint.
+- No character material, action, character profile, or voice file was changed.
 
-Initial Task 6 RED:
+## TDD State
 
-`/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
+RED was observed for:
 
-- The first source-retopology contract failed because true eyelid topology,
-  contact, UV, and PBR evidence did not exist.
-- Strengthened tests subsequently exposed full-XYZ contact, fixed-boundary,
-  source-link material-role, modified-region UV/custom-data, GLB extras/reuse,
-  and runner-exit gaps.
+- missing `IP_Subject_Key` in the saved scene;
+- missing geometry-derived subject/face mask API;
+- missing full evidence render plan;
+- missing fail-closed lighting-evidence validator.
 
-Visual RED and fail-closed decision:
+The following focused checks subsequently passed:
 
-- Generated-lid reviews failed twice at original `1024x1024` size. The first
-  collapse had `752/1110` faces below 1% area, `112` zero-area faces, `777`
-  aspect ratios above 100, `134` edges above 2x stretch, and `169` bridge
-  streaks. Later strips preserved the ocular core but remained visibly white,
-  striped, jagged, and torn.
-- The full-lid branch was abandoned as required; failed `full_blink.png`
-  evidence was removed and is not a deliverable.
+```text
+Blender saved-scene subject-light contract plus mask/measurement unit tests: PASS
+Task 6 pure mask, linear-luminance, clipping, render-matrix, and evidence-gate tests: PASS
+python3 -m py_compile for the four owned Python files: exit 0
+```
 
-Squint fallback RED/GREEN:
+Pre-change baseline checks were:
 
-- RED: `RuntimeError: squint-only fallback found an incomplete L skin ring:
-  upper=6, lower=59` exposed the asymmetric `center_z` split.
-- GREEN: candidates are now sorted by normalized Z and use balanced top/bottom
-  samples.
-- RED: the first balanced geometric annulus rendered lower-face/mouth-corner
-  pulls. A structural test then rejected selected vertices outside two mesh
-  edges of the ocular core.
-- GREEN: each side now uses exactly 12 upper and 12 lower zero-eye-weight
-  vertices from the first two topological skin rings, bounded to normalized
-  radius `1.30`, with maximum closure reduced to `0.12`.
-- RED: GLB reimport produced 35 moved vertices from 32 stored source indices
-  because glTF split vertices at loop/UV boundaries. Source-index cardinality
-  was therefore not a valid serialization assertion.
-- GREEN: fresh FBX builds retain exact per-index UV checks. GLB displacements
-  must map to stored skin-loop UVs within `5e-5`, remain finite, and retain zero
-  Eye weight; ocular metadata remains preserved and imported ocular UVs remain
-  finite without requiring unstable vertex/loop multiplicity.
-- RED: reuse accepted deleted center metadata, ocular-core Shape Key edits while
-  stored displacement remained zero, injected `Eye.L` skin weight, and a stale
-  PBR claim after its linked base-color node was removed.
-- GREEN: reuse now recomputes core and non-skin displacement from `Basis` and
-  `Eye_Squint.L/R`, verifies opposite-side isolation, live `Eye.L/R` weights,
-  finite active-skin UVs, signed nonzero closure bounded by stored closure
-  `<=0.12`, and canonical source or packed PBR links/color spaces.
-- RED: `facialTopologyMode=volumetric` generated upper/lower lid objects and an
-  eyelid material for the source asset.
-- GREEN: generated-lid modes fail at `setup_face` entry, before any lid object or
-  material can be created; the abandoned integrated `Eye_Blink` branch was
-  removed from `add_rich_source_face_shapes`.
-- RED: same-count master reuse accepted a `+0.25` active-skin X displacement, an
-  active UV changed to `(99, 99)`, and live Normal Map strength changed to `10`.
-- GREEN: same-count masters compare each active vertex's current per-loop UV
-  multiset to exact stored evidence within `1e-7`; GLB split vertices retain the
-  tolerant `5e-5` UV remap. Live squint displacement must stay on world Z toward
-  the stored center, with measured float32 X/Y tolerance `5e-8` for masters and
-  `5e-6` after GLB remap. Every nonzero closure ratio is positive and no greater
-  than stored closure `<=0.12`.
-- GREEN: live PBR validation now enforces Normal Map strength `0.20..0.50`,
-  Principled specular `0.20..0.35`, source roughness remap `0.38..0.76`, canonical
-  links, and role color spaces. Generic-profile volumetric generation is covered
-  separately and remains available.
+```text
+Blender scene contract: 17 PASS, exit 0
+python3 mcp/ip_avatar_3d/test_server.py: 90 run, OK, 2 skipped
+```
 
-Direct-runner RED reliability:
+The complete Blender scene contract has not been rerun after the current
+changes, so those baseline results must not be treated as current regression
+evidence.
 
-`env IP_AVATAR_FORCE_TEST_FAILURE=1 /Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
+## Rendered Evidence
 
-- Blender `5.1.2`, exit `1`.
-- Output: `FAIL deliberate_direct_runner_failure` and
-  `FAILED 1 direct-runner test(s)`.
+Completed low-resolution diagnostic images (`480x270`, canonical master,
+standing frame 29):
 
-Final character GREEN:
+- `/tmp/task6-debug-evidence/eevee-standing-medium.png`
+- `/tmp/task6-debug-evidence/eevee-standing-three-quarter.png`
+- `/tmp/task6-debug-evidence/eevee-standing-wide.png`
+- `/tmp/task6-debug-evidence/eevee-standing-medium-empty.png`
+- corresponding scene-linear EXRs under
+  `/tmp/task6-debug-evidence/linear/`
 
-`/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_character_rig.py`
+The tracked studio outputs were rebuilt:
 
-- Blender `5.1.2`, exit `0`.
-- PASS all `24` direct-runner tests, including fresh source build, independent
-  L/R squint, no-visible-overlay checks, mouth bounds, linked source PBR roles,
-  live UV/vector/PBR fail-closed reuse, source-profile generated-lid rejection,
-  generic volumetric compatibility, GLB extras, and live GLB export/reimport.
+- `ip形象/main_ip/scenes/warm-sloth-studio-v1.blend`
+- `ip形象/main_ip/scenes/warm-sloth-studio-v1-preview.png`
 
-Final scene GREEN:
+These diagnostics are not final Task 6 evidence. No seated image, Cycles image,
+subject ID matte, face mask, or `lighting-evidence.json` completed.
 
-`/Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_scene_contract.py`
+## Measurements
 
-- Blender `5.1.2`, exit `0`.
-- PASS all `5` scene-contract tests.
+No compliant per-mode measurement is available. The required mask is produced
+from an actual rendered character geometry ID matte and intersected with live
+semantic-head projection; the run was stopped before that matte was rendered.
+Consequently these values are intentionally reported as unavailable rather than
+estimated from fixed screen coordinates:
 
-Fresh status-check rerun on `2026-07-13` confirmed the same results: character
-`24/24` at exit `0`, scene contract `5/5` at exit `0`, and the deliberate
-direct-runner failure at exit `1` with `FAILED 1 direct-runner test(s)`.
+| Mode / engine | Linear face Y | Linear background Y | Stops below face | Non-catchlight clip |
+| --- | ---: | ---: | ---: | ---: |
+| standing / Eevee | unavailable | unavailable | unavailable | unavailable |
+| seated / Eevee | unavailable | unavailable | unavailable | unavailable |
+| standing / Cycles | unavailable | unavailable | unavailable | unavailable |
+| seated / Cycles | unavailable | unavailable | unavailable | unavailable |
 
-## Structural Evidence
+## Visual Audit
 
-Squint and ocular isolation:
+- Standing medium shows visible cardigan seams, zipper, buttons, and fur detail;
+  no obvious large pure-white area was seen in the diagnostic PNG.
+- The scene still reads orange overall. The pale center wall and face remain
+  visually close in display brightness, so 1.0 to 1.5 stops of separation cannot
+  be claimed without the required linear measurement.
+- The three standing camera files are not valid multi-view evidence. Their PNG
+  hashes differ, but medium versus three-quarter and medium versus wide both have
+  mean absolute pixel difference `3.78237707820972e-08` and maximum difference
+  `0.003921568393707275`. Frame-29 timeline camera markers override direct camera
+  assignments, so all three renders are effectively the medium camera.
 
-- Source face vertex count: `6416`; eye subdivision/new lid vertices: `0`.
-- Original ocular core: `63` vertices per side, all unchanged by both squint
-  Shape Keys (`max displacement = 0.0`).
-- Active source-skin ring: `12` upper + `12` lower vertices per side.
-- Active skin vertices have zero `Eye.L/R` weight and lie within two topology
-  edges of the ocular core. Maximum non-skin displacement is `0.0`.
-- L/R active sets are disjoint and the opposite-side Shape Key displacement is
-  zero. Eye bones continue to provide gaze control.
-- No new lid faces exist, so the failed full-lid triangle-collapse class is
-  absent rather than hidden by a weaker bound.
+## Latest Failed Command
 
-UV, custom data, reuse, and export:
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background \
+  --factory-startup --python-exit-code 1 \
+  --python mcp/ip_avatar_3d/render_warm_studio_qa.py -- \
+  ip形象/main_ip/scenes/warm-sloth-studio-v1.blend \
+  /tmp/task6-debug-evidence eevee \
+  --subject-evidence \
+  --master ip形象/main_ip/models/main-ip-aroll-master.blend \
+  --width 480 --height 270 --frame 29
+```
 
-- Original UV layer names and relevant color/custom-attribute signatures are
-  stored and checked. A 64-vertex untouched UV guard remains exact on the fresh
-  build.
-- Exact ocular and squint-skin per-loop UV evidence is stored before Shape Keys.
-  No UV values are authored or modified by the fallback. Same-count source
-  topology requires exact per-vertex loop multisets within tolerance; imported
-  split topology uses UV remapping. Both reject non-finite and out-of-range UVs.
-- Original deform assignments are preserved; no generated lid vertices or
-  weights exist.
-- Supported glTF exporters receive `export_extras=True`. Reimport must retain
-  squint capability, per-side core/skin metadata, boundary/UV/deform evidence,
-  and tuned PBR role metadata.
-- Existing rich/source-retopology assets are reusable only when every current
-  Task 6 squint property validates and the live shapes, weights, and UVs agree.
-  Missing metadata, mutated ocular/skin data, and legacy full-blink mode all fail
-  closed with a source-FBX rebuild error.
+The audit request stopped this command during standing Cycles medium. It exited
+`1` after the interrupt because neither
+`cycles-standing-medium.png` nor its linear EXR completed. This is an interrupted
+diagnostic, not evidence of a Blender render crash.
 
-Mouth restraint:
+## Remaining Blockers
 
-- Head-width lateral limit: `0.0022401830`.
-- Maximum corner shifts: `Mouth_Smile 0.0011520907`, `Mouth_E 0.0017921478`,
-  and `Mouth_MBP 0.0007554740`.
-- `Mouth_A` vertical gap: `0.0738434792`; `Mouth_MBP` gap: `0.0420825481`.
-- The close-shot smile remains restrained and closed while jaw opening and oral
-  cavity visibility remain available.
+1. Clear or bypass timeline camera markers during each QA still, then prove that
+   medium, three-quarter, and wide are materially different views.
+2. Complete standing and seated Eevee coverage at final evidence resolution.
+3. Complete standing and seated Cycles medium plus same-engine empty controls.
+4. Generate actual-geometry subject mattes and dynamic semantic-head face masks.
+5. Produce per-mode scene-linear luminance and AgX PNG clipping measurements;
+   require `1.0..1.5` stops and clipping strictly below `0.5%`.
+6. Visually inspect every final image for white-clothing texture, fur retention,
+   color neutrality, composition, and cross-engine consistency.
+7. Run the complete Blender scene contract, server tests, validator, py_compile,
+   and diff checks after evidence passes.
 
-Source PBR:
+## Commit And Concerns
 
-- The original linked 4096x4096 maps remain wired as
-  `Image Texture - Base Color`, `Image Texture - Metallic`,
-  `Image Texture - Normal`, and `Image Texture - Roughness`.
-- Roles resolve from Principled/Normal Map links first. Filename fallback only
-  confirms unambiguous missing roles and rejects duplicates.
-- Base color is `sRGB`; metallic, normal, and roughness are `Non-Color`.
-- Tangent normal strength is `0.34`, specular IOR level is `0.28`, and source
-  roughness is remapped to `0.38..0.76`.
-- No global `BUMP` or `TEX_NOISE` node is added. Packed GLB material graphs keep
-  tuned metadata only when the live base-color, packed metallic/roughness, and
-  tangent-normal graph has canonical links and color spaces. Disconnected or
-  stale PBR claims fail closed.
+- Commit: none. The brief is not satisfied, so committing would misrepresent the
+  state.
+- The tracked `.blend` and preview contain the current candidate values and are
+  modified but unstaged.
+- `render_warm_studio_qa.py` contains the unfinished evidence pipeline. It has
+  focused unit coverage but not a completed end-to-end run.
+- A builder-generated untracked
+  `ip形象/main_ip/scenes/warm-sloth-studio-v1.blend1` backup is present and is
+  not staged.
+- Existing untracked canonical model/turnaround assets remain preserved and are
+  not part of the intended Task 6 commit.
 
-## Visual Evidence
+## Task 6A Measurement Foundation Update (2026-07-14)
 
-Fresh-FBX close-shot renders, regenerated after the final topological-ring fix:
+Status: **DONE for 6A only**. No light energy, temperature, world strength,
+exposure, character material, or generated Blend/preview asset was changed by
+this subtask. The earlier camera and mask blockers above are superseded by this
+section; Task 6 lighting calibration remains incomplete.
 
-- Neutral: `/Users/wanglian/Projects/tangying-ai-operation-system/outputs/task6_face_review/neutral.png`
-- Restrained smile: `/Users/wanglian/Projects/tangying-ai-operation-system/outputs/task6_face_review/smile.png`
-- Full-strength squint: `/Users/wanglian/Projects/tangying-ai-operation-system/outputs/task6_face_review/squint.png`
+### Diagnosis And Fix
 
-All were inspected at their original `1024x1024` size. Exposure remains `-0.35`
-and was not used as a fix. The neutral and smile preserve the source texture,
-soft mapped surface response, open eyes, and narrow closed smile without a
-toothy/dark open-mouth seam. The final squint keeps both eyes visible and has no
-triangular smear, eye-texture streak, white block, torn perimeter, corner hole,
-or lower-face pull. Its deliberately restrained deformation is measurable
-against neutral (`SSIM 0.994454`, `PSNR 34.794216 dB`).
+- Root cause confirmed: frame-29 timeline camera markers reapplied the authored
+  medium camera during render after the QA caller assigned another camera.
+- Every QA still now temporarily removes only camera-bearing timeline markers,
+  captures the active camera in a Blender `render_pre` handler, and restores the
+  original markers after the still. The focused test forces another
+  `frame_set()` inside the render callback and verifies both isolation and
+  restoration.
+- Character and practical-highlight IDs are rendered in one Raw RGB geometry
+  matte: character objects are red, emissive/practical fixture geometry is
+  green, all other renderable geometry and the world are black. Original
+  material slots, world values, compositor, camera, render settings, and view
+  transform are restored in `finally`.
+- Face masks are no longer screen rectangles. They rasterize `16,757` evaluated,
+  posed mesh triangles selected from Head/Jaw/Eye/Hair-related vertex weights,
+  then intersect that projected geometry with the visible character ID matte.
+- Background masks are the non-character image region minus rendered practical
+  IDs and clipped display highlights. Empty subject, face, or background masks
+  fail closed in both measurement and payload validation.
+- Scene-linear Rec.709 EXRs provide face/background luminance and stops. AgX
+  Medium High Contrast PNGs provide non-catchlight clipping ratios.
 
-## Residual Issue
+### Camera Evidence
 
-This source asset does not provide production-safe automated full-blink
-topology. Full blink is intentionally unavailable, not simulated or mislabeled;
-the delivered capability is an open-eye, source-skin squint. A future true blink
-requires authored integrated lid topology or a source model with separable lid
-rings.
+All records report frame `29`, `timelineCameraMarkerCountDuringRender: 0`, and
+matching requested/active camera names. Distinct 4x4 camera matrices are stored
+with each comparison.
 
-Blender `5.1.2` also emits expected `Material.use_nodes` deprecation warnings
-for Blender 6.0; they do not fail either required suite.
+| Mode | Comparison | RGB pixel MAE |
+| --- | --- | ---: |
+| standing | medium vs three-quarter | `0.2997740990` |
+| standing | medium vs wide | `0.2084549220` |
+| seated | medium vs three-quarter | `0.2835041262` |
+| seated | medium vs wide | `0.2148200945` |
+
+The validator requires MAE strictly greater than `0.001`; the previous invalid
+same-view evidence was approximately `3.78e-08`.
+
+### Geometry Mask Evidence
+
+| Mode | Subject px | Face px | Practical px | Eevee background px | Cycles background px |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| standing | `10,467` | `2,302` | `21` | `46,967` | `46,026` |
+| seated | `10,149` | `2,230` | `28` | `47,255` | `46,525` |
+
+Evidence root: `/tmp/task6a-evidence`
+
+- Payload: `/tmp/task6a-evidence/lighting-evidence.json`
+- Display stills: `/tmp/task6a-evidence/{eevee,cycles}-{standing,seated}-*.png`
+- Linear EXRs: `/tmp/task6a-evidence/linear/`
+- RGB ID mattes and binary masks: `/tmp/task6a-evidence/masks/`
+
+### Trustworthy Measurements At 320x180
+
+These values are diagnostic inputs for the next lighting pass, not passing Task
+6 values. The low separation and Cycles clipping are now measured failures rather
+than estimates.
+
+| Mode / engine | Linear face Y | Linear background Y | Stops below face | Non-catchlight clip |
+| --- | ---: | ---: | ---: | ---: |
+| standing / Eevee | `0.8715305664` | `0.6048914673` | `0.5268749537` | `0.0000000000` |
+| standing / Cycles | `1.4912704742` | `0.9937092781` | `0.5856462048` | `0.0455717971` |
+| seated / Eevee | `0.8772832520` | `0.5964597534` | `0.5566179324` | `0.0000000000` |
+| seated / Cycles | `1.4502087560` | `0.9692917999` | `0.5812576382` | `0.0351758794` |
+
+Current payload errors are limited to the expected lighting gates: all four
+measurements are below `1.0` stop, and both Cycles measurements exceed `0.5%`
+clipping. Camera, metadata, source, path, and non-empty mask validation pass.
+
+### Verification
+
+```text
+Focused 6A Blender tests: 7 PASS
+Complete Blender scene contract: 25 PASS, exit 0
+python3 -m py_compile for the four Task 6 Python files: exit 0
+git diff --check: exit 0
+```
+
+No commit was created. The next agent can tune lighting against
+`/tmp/task6a-evidence/lighting-evidence.json` and rerun the same evidence command
+at the required final resolution.
+
+## Task 6B Lighting Calibration Stop (2026-07-14)
+
+Status: **STOPPED after two measured tuning rounds**. Neither round modified the
+tracked builder, generated Blend, preview, QA code, or tests. The candidates and
+evidence are temporary diagnostics only. Task 6 remains incomplete and no commit
+was created.
+
+### Tuning Method And Parameters
+
+Round 1 changed one independent variable, `room_light_scale = 0.45`, while
+holding the subject rig and exposure fixed:
+
+| Parameter | Round 1 |
+| --- | ---: |
+| World strength | `0.054` |
+| `Window_Softbox` | `63 W`, `4800 K` |
+| `Practical_Wall` | `18.9 W`, `2700 K` |
+| `Practical_Shelf` | `21.6 W`, `2700 K` |
+| `Downlight_01..03` | `16.2 W` each, `3000 K` |
+| `Lamp_Emissive_Warm` emission strength | `1.08` |
+| `Lamp_Shade_Warm` emission strength | `0.072` |
+| `IP_Subject_Key` | `520 W`, `4500 K` |
+| `IP_Subject_Fill` | `115 W`, `5200 K` |
+| `IP_Subject_Rim` | `260 W`, `3200 K` |
+| Eevee / Cycles exposure | `-0.6 / -0.6` |
+
+Round 1 brought Cycles clipping below the hard limit, but separation improved by
+only `0.020..0.062` stops. The paired baseline/round-1 measurements show that
+removing all remaining room-source contribution would asymptote near `0.64`
+stops; continuing to reduce those sources would not reach the contract.
+
+Round 2 changed the single independent subject-key/room ratio to `8.0`. Key
+energy and exposure compensation were linked so that display brightness and the
+already-passing clipping gate stayed controlled:
+
+| Parameter | Round 2 |
+| --- | ---: |
+| Room parameters | same as Round 1 |
+| `IP_Subject_Key` | `4160 W`, `4500 K` |
+| `IP_Subject_Fill` | `115 W`, `5200 K` |
+| `IP_Subject_Rim` | `260 W`, `3200 K` |
+| Eevee / Cycles exposure | `-2.769925 / -2.769925` |
+
+### Measured Results At 320x180
+
+Round 1 payload: `/tmp/task6b-attempt1/lighting-evidence.json`
+
+| Mode / engine | Linear face Y | Linear background Y | Stops below face | Non-catchlight clip |
+| --- | ---: | ---: | ---: | ---: |
+| standing / Eevee | `0.7049197876` | `0.4726982971` | `0.5765394360` | `0.0000000000` |
+| standing / Cycles | `1.2185477788` | `0.8009145041` | `0.6054426684` | `0.0022929206` |
+| seated / Eevee | `0.7034852722` | `0.4679147644` | `0.5882744686` | `0.0000000000` |
+| seated / Cycles | `1.1652051842` | `0.7586864550` | `0.6190083391` | `0.0027588925` |
+
+Round 2 payload: `/tmp/task6b-attempt2/lighting-evidence.json`
+
+| Mode / engine | Linear face Y | Linear background Y | Stops below face | Non-catchlight clip |
+| --- | ---: | ---: | ---: | ---: |
+| standing / Eevee | `1.6554444336` | `0.7437819702` | `1.1542669047` | `0.0000000000` |
+| standing / Cycles | `3.3347034050` | `2.0374259766` | `0.7108108064` | `0.0000000000` |
+| seated / Eevee | `1.6907611328` | `0.7600437988` | `1.1535183894` | `0.0000000000` |
+| seated / Cycles | `3.0952739196` | `1.9343357730` | `0.6782288402` | `0.0000000000` |
+
+Round 2 passes both Eevee separation gates and all clipping gates. It fails both
+Cycles separation gates by `0.2891891936` stops standing and `0.3217711598`
+stops seated. The fail-closed command exited `2` with only those two errors.
+
+Evidence roots:
+
+- `/tmp/task6b-attempt1/`
+- `/tmp/task6b-attempt2/`
+- candidate scenes: `/tmp/task6b-attempt1-scene.blend` and
+  `/tmp/task6b-attempt2-scene.blend`
+
+Every requested render reports `timelineCameraMarkerCountDuringRender: 0` and a
+matching requested/active camera. Round-2 Eevee camera MAEs are `0.3352406701`
+and `0.2150380022` standing, and `0.3451955778` and `0.2373921478` seated, all
+well above the `0.001` distinct-view threshold.
+
+### Visual Self-Review
+
+- All six requested Eevee views and both Cycles medium views exist under the
+  round-2 evidence root, and none is overridden by a timeline marker.
+- Round 1 retains visible cardigan seams, buttons, zipper, and fur, but both
+  engines still read as an orange-dominant room with weak subject separation.
+- Round 2 makes Eevee subject/background separation visibly stronger and keeps
+  garment/fur structure, but introduces pronounced full-frame high-frequency
+  speckling at the diagnostic resolution.
+- Round 2 Cycles remains pale orange and low-contrast despite zero measured
+  clipping. White clothing edges and seams remain visible, but face, cardigan,
+  wall, and shelving still occupy an overly compressed warm tonal range.
+- The Eevee/Cycles mismatch is too large to approve. No 960x540 final evidence
+  was attempted after the two-round stop condition fired.
+
+### Gate And Concerns
+
+- Lighting evidence gate: **FAIL**, only Cycles standing/seated separation.
+- Current tracked scene validator:
+  `/tmp/task6b-current-validation.json`, exit `1`, `16` errors. The validator
+  still expects orange RGB practical/downlight tints and `105 W` downlights,
+  while the 6A builder and saved scene use neutral RGB and `36 W`; this contract
+  drift predates 6B and was not changed after the stop condition.
+- Full scene contract, server regression, final-resolution evidence, and rebuild
+  were not rerun because 6B made no tracked implementation and the mandatory
+  lighting gate had already failed.
+- The measured Cycles response indicates indirect bounce from the broad key is
+  lifting the back wall along with the face. A next pass needs one explicit
+  transport-control change such as a closer key with inverse-square energy
+  compensation, physical flag/barn-door geometry, or verified cross-engine
+  light linking. Further energy-only tuning is not justified by these results.
+- Commit: none. Existing Task 6/6A tracked modifications and untracked model,
+  turnaround, and `.blend1` files remain preserved and unstaged.
+
+## Final Resolution (2026-07-14)
+
+Status: **PASS**. The earlier diagnostic stop and remaining-blocker sections are
+superseded by the production rebuild and final-resolution evidence below.
+
+### Root-Cause Fix
+
+- The distant 180-degree area key was lighting the character and rear wall
+  together. The production key is now physically closer to the subject at
+  `(-1.10, -0.55, 2.55)`, `825 W`, `4500 K`, `1.6 m` square, with a `145` degree
+  spread. This preserves a soft character key while limiting wall spill in both
+  Eevee and Cycles.
+- Room sources use a `0.45` scale: world `0.054`, window `63 W`, practicals
+  `18.9/21.6 W`, downlights `16.2 W`, and reduced visible lamp emission.
+- Eevee uses `128` production/QA samples. Authored Eevee exposure is
+  `-2.769925`; Cycles uses an independent display exposure of `-4.0` while the
+  linear evidence remains scene-referred.
+- Timeline camera markers are isolated and restored for each QA render. Subject,
+  face, practical, and background masks come from rendered/evaluated geometry.
+
+### Final 960x540 Evidence
+
+Evidence root: `/tmp/task6-final-evidence-v2`
+
+| Mode / engine | Face Y | Background Y | Stops below face | Non-catchlight clip |
+| --- | ---: | ---: | ---: | ---: |
+| standing / Eevee | `1.861773` | `0.746137` | `1.319165` | `0.000000%` |
+| standing / Cycles | `4.197365` | `1.588841` | `1.401509` | `0.000000%` |
+| seated / Eevee | `1.772201` | `0.827090` | `1.099427` | `0.000000%` |
+| seated / Cycles | `3.536607` | `1.632171` | `1.115574` | `0.000000%` |
+
+All four records pass the `1.0..1.5` stop and `<0.5%` clipping gates. Requested
+and active camera names match with zero timeline camera markers during render.
+Standing medium/three-quarter and medium/wide MAE are `0.325546` and `0.217506`;
+seated values are `0.315771` and `0.238362`, all above the `0.001` threshold.
+
+### Visual Review
+
+- Standing/seated medium, three-quarter, and wide frames retain the full hair
+  tuft and safe hand framing appropriate to their shot sizes.
+- White cardigan panels, knit seams, buttons, face fur, eyes, and hair remain
+  legible. The character reads brighter and more neutral than the restrained
+  warm wood/plaster background without flattening the room.
+- Eevee and Cycles differ in surface smoothness as expected, but preserve the
+  same lighting direction, color hierarchy, and composition.
+
+### Verification
+
+```text
+Final lighting evidence: PASS, 960x540, 12 beauty/control renders
+Warm studio validator: 0 errors, 0 warnings
+Blender scene contract: 25 PASS
+Real standing/seated character validation: success=true
+Python MCP server: 90 PASS, 2 skipped
+Python warm studio contract: 11 PASS
+python3 -m py_compile: PASS
+git diff --check: PASS
+```
