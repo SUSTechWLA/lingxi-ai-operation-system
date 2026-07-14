@@ -28,6 +28,9 @@ import blender_renderer
 MODEL_PATH = REPO_ROOT / "ip形象/main_ip/turnaround/3d模型.glb"
 RIGGED_FBX_PATH = REPO_ROOT / "ip形象/main_ip/turnaround/带骨骼3d模型.fbx"
 EXPORTED_GLB_PATH = REPO_ROOT / "ip形象/main_ip/models/main-ip-rigged.glb"
+SOLE_BAND_HEIGHT_M = 0.005
+SOLE_CLEARANCE_MAX_M = 0.003
+BLENDER_FLOAT_EPSILON_M = 0.0005
 
 
 def reset_scene() -> None:
@@ -117,7 +120,9 @@ def lower_body_world_metrics(armature, bone_map) -> dict[str, object]:
     }
 
 
-def shoe_sole_world_metrics(character_objects, bone_map, floor) -> dict[str, object]:
+def shoe_sole_world_metrics(character_objects, armature, bone_map, floor) -> dict[str, object]:
+    unit_scale = float(bpy.context.scene.unit_settings.scale_length)
+    assert abs(unit_scale - 1.0) < 1e-9, unit_scale
     depsgraph = bpy.context.evaluated_depsgraph_get()
     floor_eval = floor.evaluated_get(depsgraph)
     floor_z_values = [
@@ -127,38 +132,56 @@ def shoe_sole_world_metrics(character_objects, bone_map, floor) -> dict[str, obj
     assert max(floor_z_values) - min(floor_z_values) < 1e-6
     floor_z = min(floor_z_values)
     metrics = {}
-    for side, opposite in (("l", "r"), ("r", "l")):
-        side_groups = {
-            bone_map[f"leg_{side}"],
-            bone_map[f"shin_{side}"],
-            bone_map[f"foot_{side}"],
-        }
-        opposite_groups = {
-            bone_map[f"leg_{opposite}"],
-            bone_map[f"shin_{opposite}"],
-            bone_map[f"foot_{opposite}"],
-        }
-        world_points = []
+    for side in ("l", "r"):
+        foot_group_name = bone_map[f"foot_{side}"]
+        sole_points = []
+        rest_minima = []
+        sampled_meshes = []
         for obj in character_objects:
             if obj.type != "MESH":
                 continue
-            group_names = {group.index: group.name for group in obj.vertex_groups}
-            selected_indices = []
-            for vertex in obj.data.vertices:
-                side_weight = sum(
-                    assignment.weight
-                    for assignment in vertex.groups
-                    if group_names.get(assignment.group) in side_groups
-                )
-                opposite_weight = sum(
-                    assignment.weight
-                    for assignment in vertex.groups
-                    if group_names.get(assignment.group) in opposite_groups
-                )
-                if side_weight > 0.0 and side_weight > opposite_weight:
-                    selected_indices.append(vertex.index)
-            if not selected_indices:
+            foot_group = obj.vertex_groups.get(foot_group_name)
+            if not foot_group:
                 continue
+            active_armature_modifiers = 0
+            for modifier in obj.modifiers:
+                if modifier.type == "ARMATURE":
+                    assert modifier.object == armature, (
+                        obj.name,
+                        modifier.name,
+                        modifier.object,
+                    )
+                    assert modifier.show_viewport, (obj.name, modifier.name)
+                    active_armature_modifiers += 1
+                    continue
+                assert not modifier.show_viewport and not modifier.show_render, (
+                    obj.name,
+                    modifier.name,
+                    modifier.type,
+                )
+            assert active_armature_modifiers == 1, (obj.name, active_armature_modifiers)
+            rest_normal_matrix = obj.matrix_world.to_3x3().inverted_safe().transposed()
+            primary_indices = []
+            for vertex in obj.data.vertices:
+                weights = {assignment.group: assignment.weight for assignment in vertex.groups}
+                foot_weight = weights.get(foot_group.index, 0.0)
+                if foot_weight < 0.5 or foot_weight < max(weights.values(), default=0.0):
+                    continue
+                world_normal = (rest_normal_matrix @ vertex.normal).normalized()
+                if world_normal.z <= -0.25:
+                    primary_indices.append(vertex.index)
+            if not primary_indices:
+                continue
+            rest_z = {
+                index: float((obj.matrix_world @ obj.data.vertices[index].co).z)
+                for index in primary_indices
+            }
+            rest_minimum = min(rest_z.values())
+            sole_indices = [
+                index
+                for index in primary_indices
+                if rest_z[index] <= rest_minimum + SOLE_BAND_HEIGHT_M
+            ]
             evaluated = obj.evaluated_get(depsgraph)
             evaluated_mesh = evaluated.to_mesh(
                 preserve_all_data_layers=True,
@@ -166,20 +189,42 @@ def shoe_sole_world_metrics(character_objects, bone_map, floor) -> dict[str, obj
             )
             try:
                 assert len(evaluated_mesh.vertices) == len(obj.data.vertices), obj.name
-                world_points.extend(
+                deformed_normal_matrix = (
+                    evaluated.matrix_world.to_3x3().inverted_safe().transposed()
+                )
+                downward_indices = [
+                    index
+                    for index in sole_indices
+                    if (
+                        deformed_normal_matrix @ evaluated_mesh.vertices[index].normal
+                    ).normalized().z
+                    <= -0.10
+                ]
+                assert downward_indices, (obj.name, side, sole_indices)
+                sole_points.extend(
                     evaluated.matrix_world @ evaluated_mesh.vertices[index].co
-                    for index in selected_indices
+                    for index in downward_indices
                 )
             finally:
                 evaluated.to_mesh_clear()
-        assert world_points, side
-        minimum = min(float(point.z) for point in world_points)
+            rest_minima.append(rest_minimum)
+            sampled_meshes.append(obj.name)
+        assert sole_points, side
+        minimum = min(float(point.z) for point in sole_points)
+        center = tuple(
+            sum(float(point[axis]) for point in sole_points) / len(sole_points)
+            for axis in range(3)
+        )
         metrics[side] = {
+            "footGroup": foot_group_name,
+            "restMinimumZ": min(rest_minima),
             "minimumZ": minimum,
             "clearance": minimum - floor_z,
-            "weightedVertexCount": len(world_points),
+            "soleBandCenter": center,
+            "soleBandVertexCount": len(sole_points),
+            "sampledMeshes": sampled_meshes,
         }
-    return {"floorZ": floor_z, "sides": metrics}
+    return {"floorZ": floor_z, "unitScale": unit_scale, "sides": metrics}
 
 
 def pose_rotation(armature, bone_map, role: str) -> tuple[float, float, float]:
@@ -1593,9 +1638,6 @@ def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_control
             {"timeSec": 0.0, "motion": "nod", "duration": 1.0, "strength": 0.9},
             {"timeSec": 0.0, "motion": "wrist_twist", "duration": 1.0, "strength": 0.9},
             {"timeSec": 0.0, "motion": "finger_wave", "duration": 1.0, "strength": 0.9},
-            {"timeSec": 0.0, "motion": "wave", "duration": 1.0, "strength": 0.9},
-            {"timeSec": 0.0, "motion": "present", "duration": 1.0, "strength": 0.8},
-            {"timeSec": 0.0, "motion": "emphasis", "duration": 1.0, "strength": 0.8},
             {"timeSec": 0.0, "motion": "happy_bounce", "duration": 1.0, "strength": 1.0},
             {"timeSec": 0.0, "motion": "leg_step", "duration": 1.0, "strength": 1.0},
             {"timeSec": 0.0, "motion": "weight_shift", "duration": 1.0, "strength": 1.0},
@@ -1635,24 +1677,25 @@ def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_control
     )
     seated = {}
     seated_lower_rotations = {}
-    seated_upper_rotations = {}
+    seated_digit_rotations = {}
     for frame in sample_frames:
         bpy.context.scene.frame_set(frame)
         bpy.context.view_layer.update()
         metrics = lower_body_world_metrics(armature, bone_map)
-        metrics["soles"] = shoe_sole_world_metrics(character_objects, bone_map, floor)
+        metrics["soles"] = shoe_sole_world_metrics(
+            character_objects,
+            armature,
+            bone_map,
+            floor,
+        )
         seated[frame] = metrics
         seated_lower_rotations[frame] = {
             role: pose_rotation(armature, bone_map, role)
             for role in ("leg_l", "shin_l", "foot_l", "leg_r", "shin_r", "foot_r")
         }
-        seated_upper_rotations[frame] = {
+        seated_digit_rotations[frame] = {
             role: pose_rotation(armature, bone_map, role)
             for role in (
-                "shoulder_r",
-                "upper_arm_r",
-                "forearm_r",
-                "hand_r",
                 "finger_2_r",
                 "finger_2_mid_r",
                 "finger_2_tip_r",
@@ -1666,15 +1709,25 @@ def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_control
         assert max(metrics["kneeAngles"].values()) < 105.0, metrics
         assert metrics["soles"]["floorZ"] == 0.0, metrics
         for sole in metrics["soles"]["sides"].values():
-            assert sole["weightedVertexCount"] > 500, metrics
-            assert -0.003 <= sole["clearance"] <= 0.025, metrics
+            assert sole["soleBandVertexCount"] >= 8, metrics
+            assert sole["clearance"] >= -BLENDER_FLOAT_EPSILON_M, metrics
+            assert sole["clearance"] <= (
+                SOLE_CLEARANCE_MAX_M + BLENDER_FLOAT_EPSILON_M
+            ), metrics
         assert abs(metrics["kneeAngles"]["l"] - metrics["kneeAngles"]["r"]) < 3.0, metrics
-        for points in (metrics["knees"], metrics["feet"]):
-            left_from_center = points["l"][0] - metrics["pelvis"][0]
-            right_from_center = metrics["pelvis"][0] - points["r"][0]
-            assert abs(left_from_center - right_from_center) < 0.015, metrics
-            assert abs(points["l"][1] - points["r"][1]) < 0.02, metrics
-            assert abs(points["l"][2] - points["r"][2]) < 0.015, metrics
+        knees = metrics["knees"]
+        left_from_center = knees["l"][0] - metrics["pelvis"][0]
+        right_from_center = metrics["pelvis"][0] - knees["r"][0]
+        assert abs(left_from_center - right_from_center) < 0.015, metrics
+        assert abs(knees["l"][1] - knees["r"][1]) < 0.02, metrics
+        assert abs(knees["l"][2] - knees["r"][2]) < 0.015, metrics
+        sole_centers = {
+            side: metrics["soles"]["sides"][side]["soleBandCenter"]
+            for side in ("l", "r")
+        }
+        assert sole_centers["l"][0] > metrics["pelvis"][0], metrics
+        assert sole_centers["r"][0] < metrics["pelvis"][0], metrics
+        assert abs(sole_centers["l"][1] - sole_centers["r"][1]) < 0.025, metrics
         assert max(
             metrics["pelvis"][2] - knee[2] for knee in metrics["knees"].values()
         ) < 0.16, metrics
@@ -1683,10 +1736,13 @@ def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_control
         metrics["pelvis"][2] for metrics in seated.values()
     ) < 0.02
     assert max(
-        abs(seated[frame]["feet"][side][2] - seated[1]["feet"][side][2])
+        abs(
+            seated[frame]["soles"]["sides"][side]["clearance"]
+            - seated[1]["soles"]["sides"][side]["clearance"]
+        )
         for frame in sample_frames
         for side in ("l", "r")
-    ) < 0.02
+    ) <= BLENDER_FLOAT_EPSILON_M
     for frame in sample_frames[1:]:
         for role, initial in seated_lower_rotations[1].items():
             assert rotation_delta(initial, seated_lower_rotations[frame][role]) < 1e-6, {
@@ -1711,28 +1767,101 @@ def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_control
     assert max(abs(value) for value in head) > 0.05
     assert abs(wrist.y) > 0.20
     assert rotation_delta(
-        seated_upper_rotations[1]["shoulder_r"], seated_upper_rotations[15]["shoulder_r"]
-    ) > 0.02
-    assert rotation_delta(
-        seated_upper_rotations[1]["upper_arm_r"], seated_upper_rotations[15]["upper_arm_r"]
-    ) > 0.10
-    assert rotation_delta(
-        seated_upper_rotations[1]["forearm_r"], seated_upper_rotations[15]["forearm_r"]
-    ) > 0.10
-    assert rotation_delta(
-        seated_upper_rotations[1]["finger_2_r"], digit_rotations["finger_2_r"]
+        seated_digit_rotations[1]["finger_2_r"], digit_rotations["finger_2_r"]
     ) > 0.05, digit_rotations
     assert rotation_delta(
-        seated_upper_rotations[1]["finger_2_mid_r"], digit_rotations["finger_2_mid_r"]
+        seated_digit_rotations[1]["finger_2_mid_r"], digit_rotations["finger_2_mid_r"]
     ) > 0.05, digit_rotations
     assert rotation_delta(
-        seated_upper_rotations[1]["finger_2_tip_r"], digit_rotations["finger_2_tip_r"]
+        seated_digit_rotations[1]["finger_2_tip_r"], digit_rotations["finger_2_tip_r"]
     ) > 0.03, digit_rotations
     assert len({tuple(round(value, 4) for value in rotation) for rotation in digit_rotations.values()}) == 3
     assert max(abs(value) for value in jaw) > 0.02
     assert mouth.value > 0.5
     assert max(seated_smile) < 1e-6, {"standing": standing_smile, "seated": seated_smile}
     print("SEATED_WORLD_METRICS", json.dumps(seated, sort_keys=True))
+
+
+def test_source_rig_seated_upper_events_move_their_own_channels() -> None:
+    _, _, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    lower_roles = ("leg_l", "shin_l", "foot_l", "leg_r", "shin_r", "foot_r")
+    channel_roles = (
+        "body",
+        "shoulder_l",
+        "shoulder_r",
+        "upper_arm_l",
+        "upper_arm_r",
+        "forearm_l",
+        "forearm_r",
+    )
+
+    def snapshot():
+        bpy.context.scene.frame_set(15)
+        bpy.context.view_layer.update()
+        return {
+            role: pose_rotation(armature, bone_map, role)
+            for role in (*channel_roles, *lower_roles)
+        }
+
+    neutral_plan = {"durationSec": 1.0, "motionEvents": [], "lipSync": []}
+    blender_renderer.animate(
+        armature,
+        {},
+        neutral_plan,
+        fps=30,
+        bone_map=bone_map,
+        presentation_mode="seated",
+    )
+    neutral = snapshot()
+    event_snapshots = {}
+    for motion in ("wave", "present", "emphasis"):
+        plan = {
+            "durationSec": 1.0,
+            "motionEvents": [
+                {"timeSec": 0.0, "motion": motion, "duration": 1.0, "strength": 1.0}
+            ],
+            "lipSync": [],
+        }
+        blender_renderer.animate(
+            armature,
+            {},
+            plan,
+            fps=30,
+            bone_map=bone_map,
+            presentation_mode="seated",
+        )
+        event_snapshots[motion] = snapshot()
+        for role in lower_roles:
+            assert rotation_delta(neutral[role], event_snapshots[motion][role]) < 1e-6, (
+                motion,
+                role,
+                neutral[role],
+                event_snapshots[motion][role],
+            )
+
+    wave = event_snapshots["wave"]
+    assert rotation_delta(neutral["shoulder_r"], wave["shoulder_r"]) > 0.02
+    assert rotation_delta(neutral["upper_arm_r"], wave["upper_arm_r"]) > 0.50
+    assert rotation_delta(neutral["forearm_r"], wave["forearm_r"]) > 0.50
+    assert rotation_delta(neutral["body"], wave["body"]) < 1e-6
+
+    present = event_snapshots["present"]
+    assert rotation_delta(neutral["shoulder_l"], present["shoulder_l"]) < 1e-6
+    assert rotation_delta(neutral["shoulder_r"], present["shoulder_r"]) < 1e-6
+    for role in ("upper_arm_l", "upper_arm_r", "forearm_l", "forearm_r"):
+        assert rotation_delta(neutral[role], present[role]) > 0.30, (role, present[role])
+    assert rotation_delta(neutral["body"], present["body"]) < 1e-6
+
+    emphasis = event_snapshots["emphasis"]
+    assert rotation_delta(neutral["body"], emphasis["body"]) > 0.02
+    assert rotation_delta(neutral["shoulder_l"], emphasis["shoulder_l"]) < 1e-6
+    assert rotation_delta(neutral["shoulder_r"], emphasis["shoulder_r"]) < 1e-6
+    for role in ("upper_arm_l", "upper_arm_r", "forearm_l", "forearm_r"):
+        assert rotation_delta(neutral[role], emphasis[role]) > 0.09, (role, emphasis[role])
+    print(
+        "SEATED_UPPER_EVENT_METRICS",
+        json.dumps({"neutral": neutral, "events": event_snapshots}, sort_keys=True),
+    )
 
 
 def test_source_rig_standing_preserves_bounce_step_and_weight_shift() -> None:
@@ -1977,6 +2106,7 @@ if __name__ == "__main__":
         test_sloth_face_deforms_original_mesh_for_nine_visemes,
         test_action_library_contains_talking_gestures_and_expressions,
         test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_controls,
+        test_source_rig_seated_upper_events_move_their_own_channels,
         test_source_rig_standing_preserves_bounce_step_and_weight_shift,
         test_talking_timeline_animates_multiaxis_hands_fingers_jaw_and_source_mouth,
         test_think_motion_event_drives_head_hand_and_finger_pose,

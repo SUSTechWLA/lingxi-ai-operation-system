@@ -5029,7 +5029,8 @@ def animate(
 
     for frame in range(1, frame_end + 1, 2):
         t = (frame - 1) / fps
-        body_sway = math.sin(t * math.pi * 2 * 0.35) * 0.018
+        idle_body_sway = math.sin(t * math.pi * 2 * 0.35) * 0.018
+        body_sway = idle_body_sway
         head_nod = math.sin(t * math.pi * 2 * 0.42) * 0.014
         head_turn = 0.0
         head_tilt = -body_sway * 0.45
@@ -5322,7 +5323,11 @@ def animate(
         )
         set_bone(
             "body",
-            rotation=(body_base[0], body_base[1], body_base[2] + body_sway),
+            rotation=(
+                body_base[0],
+                body_base[1],
+                body_base[2] + body_sway - (idle_body_sway if seated else 0.0),
+            ),
         )
         set_bone("spine", rotation=(body_sway * 0.22, 0, body_sway * 0.38))
         set_bone("chest", rotation=(-body_sway * 0.18, 0, body_sway * 0.46))

@@ -111,8 +111,8 @@ def presentation_pose(mode: str, source_rig: bool) -> dict[str, dict[str, tuple[
         leg_r = (0.05, 0.197, -1.30)
         shin_l = (0.0, 0.0, -1.55)
         shin_r = (-0.047, -0.0595, 1.52)
-        foot_l = (0.0, 0.0, 0.05)
-        foot_r = (-0.07175, -0.2125, -0.02)
+        foot_l = (0.0, 0.0, -0.229)
+        foot_r = (-0.07175, -0.2125, 0.146)
     else:
         leg_l = leg_r = (1.02, 0.0, 0.0)
         shin_l = shin_r = (-1.16, 0.0, 0.0)
