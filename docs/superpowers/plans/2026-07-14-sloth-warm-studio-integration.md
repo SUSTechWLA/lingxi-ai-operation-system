@@ -756,7 +756,7 @@ python3 mcp/ip_avatar_3d/test_warm_studio_demo.py
 python3 mcp/ip_avatar_3d/test_voice_policy.py
 python3 mcp/ip_avatar_3d/test_gpt_sovits_client.py
 python3 mcp/ip_avatar_3d/test_server.py
-cd local-backend && go test ./...
+(cd local-backend && go test ./...)
 /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
   --python mcp/ip_avatar_3d/run_blender_character_rig_tests.py
 /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
@@ -782,4 +782,3 @@ git commit -m "docs: complete sloth warm studio integration"
 
 Generated videos and copied local character/voice binaries remain untracked.
 Confirm no unexpected tracked modifications before handoff.
-
