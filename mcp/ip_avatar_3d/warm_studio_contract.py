@@ -21,17 +21,27 @@ MODE_MARKER_SPECS = MappingProxyType({
     "standing": MappingProxyType({
         "spawn": (0.0, 0.30, 0.0),
         "focus": (0.0, 0.30, 1.93),
-        "seat": (0.0, 0.58, 0.62),
-        "foot_l": (-0.22, 0.03, 0.0),
-        "foot_r": (0.22, 0.03, 0.0),
+        "seat": (0.0, 0.53, 0.56),
+        "knee_l": (-0.20, 0.04, 0.54),
+        "knee_r": (0.20, 0.04, 0.54),
+        "foot_l": (-0.22, 0.00, 0.0),
+        "foot_r": (0.22, 0.00, 0.0),
     }),
     "seated": MappingProxyType({
-        "spawn": (0.0, 0.47, 0.0),
-        "focus": (0.0, 0.47, 1.58),
-        "seat": (0.0, 0.58, 0.62),
-        "foot_l": (-0.22, 0.02, 0.0),
-        "foot_r": (0.22, 0.02, 0.0),
+        "spawn": (0.0, 0.43, 0.0),
+        "focus": (0.0, 0.43, 1.58),
+        "seat": (0.0, 0.53, 0.56),
+        "knee_l": (-0.20, -0.01, 0.54),
+        "knee_r": (0.20, -0.01, 0.54),
+        "foot_l": (-0.22, -0.03, 0.0),
+        "foot_r": (0.22, -0.03, 0.0),
     }),
+})
+
+SEAT_VISIBILITY_PROFILE = MappingProxyType({
+    "strategy": "partial_profile",
+    "minimumVisibleFraction": 0.08,
+    "maximumVisibleFraction": 0.28,
 })
 
 MODE_CAMERA_SPECS = MappingProxyType({
@@ -39,11 +49,13 @@ MODE_CAMERA_SPECS = MappingProxyType({
         "wide": ("Camera_Standing_Wide", (0.0, -2.74, 1.67), 24.0),
         "medium": ("Camera_Standing_Medium", (0.0, -2.15, 1.78), 50.0),
         "three_quarter": ("Camera_Standing_ThreeQuarter", (-2.25, -1.65, 1.82), 50.0),
+        "transition": ("Camera_Standing_Transition", (-1.58, -2.42, 1.48), 42.0),
     }),
     "seated": MappingProxyType({
         "wide": ("Camera_Seated_Wide", (0.0, -2.74, 1.55), 24.0),
         "medium": ("Camera_Seated_Medium", (0.0, -2.15, 1.60), 50.0),
         "three_quarter": ("Camera_Seated_ThreeQuarter", (-2.20, -1.60, 1.62), 50.0),
+        "transition": ("Camera_Seated_Transition", (-1.58, -2.42, 1.48), 42.0),
     }),
 })
 

@@ -47,12 +47,34 @@ class WarmStudioContractTests(unittest.TestCase):
         for mode in contract.PRESENTATION_MODES:
             self.assertEqual(
                 set(contract.MODE_MARKER_SPECS[mode]),
-                {"spawn", "focus", "seat", "foot_l", "foot_r"},
+                {"spawn", "focus", "seat", "knee_l", "knee_r", "foot_l", "foot_r"},
             )
             self.assertEqual(
                 set(contract.MODE_CAMERA_SPECS[mode]),
-                {"wide", "medium", "three_quarter"},
+                {"wide", "medium", "three_quarter", "transition"},
             )
+
+    def test_seated_contract_has_knees_and_transition_camera(self) -> None:
+        seated = contract.MODE_MARKER_SPECS["seated"]
+        self.assertEqual(
+            set(seated),
+            {"spawn", "focus", "seat", "knee_l", "knee_r", "foot_l", "foot_r"},
+        )
+        self.assertIn("transition", contract.MODE_CAMERA_SPECS["standing"])
+        self.assertIn("transition", contract.MODE_CAMERA_SPECS["seated"])
+        self.assertEqual(
+            contract.MODE_CAMERA_SPECS["standing"]["transition"][0],
+            "Camera_Standing_Transition",
+        )
+
+    def test_stool_visibility_contract_is_not_full_occlusion(self) -> None:
+        self.assertEqual(contract.SEAT_VISIBILITY_PROFILE["strategy"], "partial_profile")
+        self.assertGreaterEqual(
+            contract.SEAT_VISIBILITY_PROFILE["minimumVisibleFraction"], 0.08
+        )
+        self.assertLessEqual(
+            contract.SEAT_VISIBILITY_PROFILE["maximumVisibleFraction"], 0.28
+        )
 
     def test_subject_first_light_profile_is_bounded(self) -> None:
         profile = contract.SUBJECT_LIGHT_PROFILE

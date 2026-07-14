@@ -62,6 +62,8 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
         marker_names = {
             "spawn": f"IP_{mode.title()}_Spawn",
             "focus": f"IP_{mode.title()}_Focus_Head",
+            "knee_l": f"IP_{mode.title()}_Knee_Target.L",
+            "knee_r": f"IP_{mode.title()}_Knee_Target.R",
             "foot_l": f"IP_{mode.title()}_Foot_Target.L",
             "foot_r": f"IP_{mode.title()}_Foot_Target.R",
         }
@@ -79,6 +81,23 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
 
     for name in ("IP_Seat_Target", "IP_Foot_Target.L", "IP_Foot_Target.R"):
         assert bpy.data.objects.get(name) is not None, name
+
+    for name in (
+        "IP_Seated_Knee_Target.L",
+        "IP_Seated_Knee_Target.R",
+        "IP_Transition_Focus",
+        "Camera_Standing_Transition",
+        "Camera_Seated_Transition",
+    ):
+        assert bpy.data.objects.get(name) is not None, name
+    assert bpy.data.objects["Chair_Main"]["hero_visibility_strategy"] == "partial_profile"
+    desk_top = bpy.data.objects["Desk_Top"]
+    chair_back = bpy.data.objects["Chair_Back"]
+    desk_top_z = max((desk_top.matrix_world @ Vector(corner)).z for corner in desk_top.bound_box)
+    chair_back_z = max(
+        (chair_back.matrix_world @ Vector(corner)).z for corner in chair_back.bound_box
+    )
+    assert chair_back_z > desk_top_z
 
     for role, name in (
         ("foot_l", "IP_Foot_Target.L"),
@@ -632,8 +651,8 @@ def test_authored_scene_placement_persists_selected_mode_contract() -> None:
         tuple(bpy.data.objects[placement["placementRoot"]].location),
         tuple(mode_objects["spawn"].location),
     )
-    assert placement["worldBounds"]["min"] == [-0.5, -0.03, 0.0]
-    assert placement["worldBounds"]["max"] == [0.5, 0.97, 1.0]
+    assert placement["worldBounds"]["min"] == [-0.5, -0.07, 0.0]
+    assert placement["worldBounds"]["max"] == [0.5, 0.93, 1.0]
     assert scene_stats["mode"] == "seated"
     assert scene_stats["markers"] == placement["markerNames"]
     assert scene_stats["cameras"]["cameraNames"] == placement["cameraNames"]

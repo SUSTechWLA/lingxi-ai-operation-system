@@ -1661,7 +1661,7 @@ def build_architecture(ctx: StudioContext) -> dict[str, bpy.types.Object]:
 def build_main_desk(
     ctx: StudioContext,
     size: tuple[float, float, float] = contract.DESK_SIZE,
-    location: tuple[float, float, float] = (0.0, -0.45, 0.0),
+    location: tuple[float, float, float] = (0.0, -0.49, 0.0),
 ) -> bpy.types.Object:
     """Build the near-camera solid-oak hero desk at its approved dimensions."""
 
@@ -1780,15 +1780,21 @@ def build_main_desk(
     return top
 
 
-def build_hidden_hero_chair(
+def build_hero_stool_chair(
     ctx: StudioContext,
-    location: tuple[float, float, float] = (0.0, 0.40, 0.0),
+    location: tuple[float, float, float] = (0.0, 0.53, 0.0),
 ) -> bpy.types.Object:
-    """Build a complete domestic chair intended for natural desk occlusion."""
+    """Build a visible seated-mode chair with a restrained hero profile."""
 
     x, y, floor_z = location
     root = add_empty(ctx, "Chair_Main", location, "STUDIO_FURNITURE")
-    root["hero_visibility_strategy"] = "desk_occlusion"
+    root["hero_visibility_strategy"] = contract.SEAT_VISIBILITY_PROFILE["strategy"]
+    root["minimum_visible_fraction"] = contract.SEAT_VISIBILITY_PROFILE[
+        "minimumVisibleFraction"
+    ]
+    root["maximum_visible_fraction"] = contract.SEAT_VISIBILITY_PROFILE[
+        "maximumVisibleFraction"
+    ]
     root.hide_render = False
     fabric = ctx.materials["Chair_Fabric"]
     oak = ctx.materials["Desk_WarmOak"]
@@ -1805,8 +1811,8 @@ def build_hidden_hero_chair(
         add_box(
             ctx,
             "Chair_Back",
-            (x, y + 0.265, floor_z + 0.60),
-            (0.62, 0.10, 0.20),
+            (x, y + 0.265, floor_z + 0.99),
+            (0.62, 0.10, 0.18),
             fabric,
             "STUDIO_FURNITURE",
             bevel=0.035,
@@ -2098,7 +2104,7 @@ def build_furniture(ctx: StudioContext) -> dict[str, object]:
     """Build every Task 3 furniture assembly without cameras, lights, or branding."""
 
     desk = build_main_desk(ctx)
-    chair = build_hidden_hero_chair(ctx)
+    chair = build_hero_stool_chair(ctx)
     cabinet = build_left_six_drawer_cabinet(ctx)
     slat_wall = build_right_slat_wall(ctx)
     shelves = build_three_floating_shelves(ctx)
@@ -3248,6 +3254,7 @@ def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
 STATIC_MARKER_SPECS = {
     "IP_Focus_Desk": ((0.80, -0.50, 1.005), "focus_desk"),
     "IP_Focus_Shelf": ((1.45, 2.50, 1.95), "focus_shelf"),
+    "IP_Transition_Focus": ((0.0, 0.38, 1.66), "transition_focus"),
 }
 
 MARKER_SPECS = {
@@ -3282,6 +3289,14 @@ for _mode in contract.PRESENTATION_MODES:
             f"IP_{_mode_title}_Focus_Head": (
                 _mode_markers["focus"],
                 f"{_mode}_focus_head",
+            ),
+            f"IP_{_mode_title}_Knee_Target.L": (
+                _mode_markers["knee_l"],
+                f"{_mode}_knee_l",
+            ),
+            f"IP_{_mode_title}_Knee_Target.R": (
+                _mode_markers["knee_r"],
+                f"{_mode}_knee_r",
             ),
             f"IP_{_mode_title}_Foot_Target.L": (
                 _mode_markers["foot_l"],
@@ -3400,8 +3415,12 @@ def build_markers_and_cameras(ctx: StudioContext) -> dict[str, bpy.types.Object]
     for name, spec in contract.CAMERA_SPECS.items():
         result[CAMERA_RESULT_KEYS[name]] = _add_studio_camera(ctx, name, spec)
     for mode in contract.PRESENTATION_MODES:
-        focus_name = f"IP_{mode.title()}_Focus_Head"
         for role, (name, location, lens) in contract.MODE_CAMERA_SPECS[mode].items():
+            focus_name = (
+                "IP_Transition_Focus"
+                if role == "transition"
+                else f"IP_{mode.title()}_Focus_Head"
+            )
             _add_mode_camera(
                 ctx,
                 name=name,
