@@ -5813,7 +5813,9 @@ def lip_at(plan: dict, t: float) -> dict:
     if not lips:
         return {"viseme": "closed", "open": 0.0}
     sample_times = [float(item.get("timeSec") or 0.0) for item in lips]
-    index = max(0, bisect_right(sample_times, float(t)) - 1)
+    index = bisect_right(sample_times, float(t)) - 1
+    if index < 0:
+        return {"viseme": "closed", "open": 0.0}
     return lips[index]
 
 

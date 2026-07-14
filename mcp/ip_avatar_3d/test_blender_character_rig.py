@@ -1419,6 +1419,44 @@ def test_lip_at_preserves_planner_timestamp_boundaries() -> None:
     print("VISEME_BOUNDARY_METRICS", json.dumps(boundary_evidence, sort_keys=True))
 
 
+def test_lip_at_holds_closed_before_delayed_first_sample() -> None:
+    plan = {
+        "durationSec": 1.0,
+        "lipSync": [
+            {"timeSec": 0.037, "viseme": "a", "open": 0.52},
+            {"timeSec": 0.211, "viseme": "o", "open": 0.68},
+            {"timeSec": 0.947, "viseme": "closed", "open": 0.0},
+        ],
+    }
+    probes = (
+        (-0.25, "closed", 0.0, None),
+        (0.0, "closed", 0.0, None),
+        (0.037 - 1e-6, "closed", 0.0, None),
+        (0.037, "a", 0.52, 0.037),
+        (0.211 - 1e-6, "a", 0.52, 0.037),
+        (0.211, "o", 0.68, 0.211),
+        (0.947 - 1e-6, "o", 0.68, 0.211),
+        (0.947, "closed", 0.0, 0.947),
+    )
+    boundary_evidence = []
+    for t, expected_viseme, expected_open, expected_time in probes:
+        selected = blender_renderer.lip_at(plan, t)
+        actual_time = selected.get("timeSec")
+        boundary_evidence.append(
+            {
+                "query": t,
+                "viseme": selected["viseme"],
+                "open": float(selected["open"]),
+                "sampleTime": actual_time,
+            }
+        )
+        assert selected["viseme"] == expected_viseme, boundary_evidence
+        assert float(selected["open"]) == expected_open, boundary_evidence
+        assert actual_time == expected_time, boundary_evidence
+    assert plan["lipSync"][0]["timeSec"] == 0.037
+    print("DELAYED_VISEME_BOUNDARY_METRICS", json.dumps(boundary_evidence, sort_keys=True))
+
+
 def test_planner_driven_viseme_timeline_has_strong_bounded_jaw_and_shape_attack() -> None:
     character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
     face = blender_renderer.setup_face(
@@ -2926,6 +2964,7 @@ if __name__ == "__main__":
         test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays,
         test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face,
         test_lip_at_preserves_planner_timestamp_boundaries,
+        test_lip_at_holds_closed_before_delayed_first_sample,
         test_planner_driven_viseme_timeline_has_strong_bounded_jaw_and_shape_attack,
         test_existing_rich_face_without_task6_metadata_fails_closed,
         test_task6_reuse_recomputes_squint_and_pbr_evidence,
