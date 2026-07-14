@@ -415,7 +415,12 @@ class IPAvatar3DMCPTests(unittest.TestCase):
     def test_motion_plan_contains_lip_sync_and_keyword_actions(self) -> None:
         server = load_server()
 
-        plan = server.build_motion_plan("第一，重点介绍我们的开源 AI 视频创作流程。所以要让波波挥手，再动一下腿。", 8, 24)
+        plan = server.build_motion_plan(
+            "第一，重点介绍我们的开源 AI 视频创作流程。所以要让波波挥手，再动一下腿。",
+            8,
+            24,
+            action_sequence=[],
+        )
 
         self.assertEqual(plan["schemaVersion"], "ip-avatar-3d-motion-plan/v2")
         self.assertGreater(len(plan["lipSync"]), 40)
@@ -462,6 +467,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             "大家一起分析：第一看左边，第二看右边。请张开手、转动手腕、动动手指，最后轻轻握拳。也许这个判断还需要思考。",
             8,
             30,
+            action_sequence=[],
         )
 
         motions = {event["motion"] for event in plan["motionEvents"]}
@@ -610,6 +616,78 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         )
         self.assertIn("Aroll_Transition_StandToSit", plan["resolvedActionSequence"])
         self.assertIn("Aroll_Transition_SitToStand", plan["resolvedActionSequence"])
+
+    def test_automatic_rich_action_uses_trigger_sentence_timing_window(self) -> None:
+        server = load_server()
+        script = "这是对自动口播节奏的一段普通开场说明。最后总结结论。"
+        duration_sec = 14.47242105263158
+
+        plan = server.build_motion_plan(script, duration_sec, 30)
+        conclusion_events = [
+            event
+            for event in plan["motionEvents"]
+            if event.get("sourceSentenceIndex") == 1
+            and (
+                event.get("action")
+                in {"Aroll_Conclusion_HandsTogether", "Aroll_Emphasis_SoftFist"}
+                or event.get("semantic") == "emphasis"
+                or event.get("motion") == "emphasis"
+            )
+        ]
+
+        self.assertEqual(
+            ["Aroll_Conclusion_HandsTogether"],
+            [event.get("action") for event in conclusion_events],
+            conclusion_events,
+        )
+        self.assertEqual(1, conclusion_events[0]["sourceSentenceIndex"])
+        self.assertAlmostEqual(10.576, conclusion_events[0]["timeSec"], places=3)
+        self.assertGreaterEqual(conclusion_events[0]["timeSec"], 10.576)
+        self.assertLess(conclusion_events[0]["timeSec"], duration_sec)
+
+    def test_automatic_rich_action_suppresses_legacy_gestures_in_selected_sentence(self) -> None:
+        server = load_server()
+        script = "大家好，欢迎回来。"
+
+        automatic = server.build_motion_plan(script, 6, 30)
+        greeting_events = [
+            event
+            for event in automatic["motionEvents"]
+            if event.get("action")
+            in {"Aroll_Welcome_OpenArms", "Aroll_Greeting_Wave"}
+            or event.get("semantic") == "greeting"
+            or event.get("motion") in {"wave", "open_arms"}
+        ]
+
+        self.assertEqual(
+            ["Aroll_Welcome_OpenArms"],
+            [event.get("action") for event in greeting_events],
+            greeting_events,
+        )
+        self.assertTrue(any(event["motion"] == "blink" for event in automatic["motionEvents"]))
+        self.assertTrue(any(event["motion"] == "micro_gaze" for event in automatic["motionEvents"]))
+
+        explicit = server.build_motion_plan(
+            script,
+            6,
+            30,
+            action_sequence=["Aroll_Welcome_OpenArms"],
+        )
+        explicit_action = next(
+            event
+            for event in explicit["motionEvents"]
+            if event.get("action") == "Aroll_Welcome_OpenArms"
+        )
+        self.assertEqual(0.35, explicit_action["timeSec"])
+        self.assertEqual(["Aroll_Welcome_OpenArms"], explicit["resolvedActionSequence"])
+        self.assertTrue(
+            any(
+                event.get("action") == "Aroll_Greeting_Wave"
+                or event.get("semantic") == "greeting"
+                for event in explicit["motionEvents"]
+            ),
+            explicit["motionEvents"],
+        )
 
     def test_motion_plan_uses_first_intent_only_and_honors_explicit_empty_sequence(self) -> None:
         server = load_server()

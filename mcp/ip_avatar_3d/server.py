@@ -464,9 +464,31 @@ def _srt_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{millis:03d}"
 
 
+def _script_sentence_spans(script: str) -> list[tuple[int, int, str]]:
+    text = script or ""
+    spans = [
+        (match.start(), match.end(), match.group().strip())
+        for match in re.finditer(r"[^。！？；.!?;]+[。！？；.!?;]?", text)
+        if match.group().strip()
+    ]
+    if spans:
+        return spans
+    return [(0, len(text), text.strip())]
+
+
 def split_script(script: str) -> list[str]:
-    items = [item.strip() for item in re.findall(r"[^。！？；.!?;]+[。！？；.!?;]?", script or "") if item.strip()]
-    return items or ([script.strip()] if script.strip() else [""])
+    return [sentence for _, _, sentence in _script_sentence_spans(script)]
+
+
+def _sentence_timing_windows(script: str, duration_sec: float) -> list[tuple[float, float]]:
+    text_len = max(1, len(script or ""))
+    return [
+        (
+            max(0.0, duration_sec * start / text_len),
+            min(duration_sec, duration_sec * end / text_len),
+        )
+        for start, end, _ in _script_sentence_spans(script)
+    ]
 
 
 def build_subtitle_text(script: str, duration_sec: float) -> str:
@@ -517,7 +539,12 @@ def _automatic_aroll_intents(script: str) -> list[tuple[int, str]]:
     return selected
 
 
-def _keyword_events(script: str, duration_sec: float) -> list[dict[str, Any]]:
+def _keyword_events(
+    script: str,
+    duration_sec: float,
+    *,
+    rich_actions_by_sentence: dict[int, str] | None = None,
+) -> list[dict[str, Any]]:
     table = [
         {
             "pattern": r"大家好|你好|您好|欢迎|\bhello\b|\bhi\b|\bwelcome\b|\bgreetings\b",
@@ -636,10 +663,26 @@ def _keyword_events(script: str, duration_sec: float) -> list[dict[str, Any]]:
     ]
     events: list[dict[str, Any]] = []
     text_len = max(1, len(script or ""))
+    sentence_spans = _script_sentence_spans(script)
+    selected_rich_actions = rich_actions_by_sentence or {}
     claimed_spans: list[tuple[int, int]] = []
     for rule in table:
         for match in re.finditer(str(rule["pattern"]), script or "", flags=re.IGNORECASE):
             span = match.span()
+            sentence_index = next(
+                (
+                    index
+                    for index, (start, end, _) in enumerate(sentence_spans)
+                    if start <= span[0] < end
+                ),
+                None,
+            )
+            rich_action = selected_rich_actions.get(sentence_index) if sentence_index is not None else None
+            gesture_group = rule.get("gestureGroup") or _gesture_group_for_motion(str(rule["motion"]))
+            if rich_action and gesture_group:
+                rich_channels = set(aroll_actions.ACTION_CATALOG[rich_action].channels)
+                if _action_reserves_legacy_group(rich_channels, str(gesture_group)):
+                    continue
             if any(span[0] < end and start < span[1] for start, end in claimed_spans):
                 continue
             claimed_spans.append(span)
@@ -651,7 +694,8 @@ def _keyword_events(script: str, duration_sec: float) -> list[dict[str, Any]]:
                 "duration": float(rule.get("duration", 0.75)),
                 "strength": float(rule["strength"]),
             }
-            gesture_group = rule.get("gestureGroup") or _gesture_group_for_motion(str(rule["motion"]))
+            if sentence_index is not None:
+                event["sourceSentenceIndex"] = sentence_index
             if gesture_group:
                 event["gestureGroup"] = str(gesture_group)
             if rule.get("action"):
@@ -799,6 +843,81 @@ def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -
     return sorted(resolved, key=_motion_event_sort_key)
 
 
+def _automatic_action_gesture_group(event: dict[str, Any]) -> str:
+    channels = set(event.get("gestureGroups") or [])
+    if channels & {"arm_r", "hand_r"}:
+        return "right_hand"
+    if channels & {"arm_l", "hand_l"}:
+        return "left_hand"
+    if channels == {"head"}:
+        return "head"
+    return "body"
+
+
+def _build_automatic_action_events(
+    selections: list[tuple[int, str]],
+    initial_state: str,
+    script: str,
+    duration_sec: float,
+) -> tuple[list[dict[str, Any]], list[tuple[int, str]]]:
+    sentence_windows = _sentence_timing_windows(script, duration_sec)
+    events: list[dict[str, Any]] = []
+    accepted: list[tuple[int, str]] = []
+    state = initial_state
+    next_event_start = 0.35
+    action_spacing = 0.70
+
+    for sentence_index, action_name in selections:
+        if sentence_index >= len(sentence_windows):
+            continue
+        relative_events = aroll_actions.build_action_events(
+            [action_name],
+            state,
+            start_time_sec=0.0,
+            spacing_sec=action_spacing,
+        )
+        core_event = next(event for event in relative_events if event["action"] == action_name)
+        window_start, window_end = sentence_windows[sentence_index]
+        first_start = max(
+            next_event_start,
+            window_start - float(core_event["timeSec"]),
+        )
+        candidate_events: list[dict[str, Any]] = []
+        for relative_event in relative_events:
+            event = dict(relative_event)
+            event["timeSec"] = round(first_start + float(relative_event["timeSec"]), 3)
+            event["automatic"] = True
+            event["gestureGroup"] = _automatic_action_gesture_group(event)
+            event["sourceSentenceIndex"] = sentence_index
+            candidate_events.append(event)
+
+        candidate_core = next(event for event in candidate_events if event["action"] == action_name)
+        core_start = float(candidate_core["timeSec"])
+        core_end = core_start + float(candidate_core["duration"])
+        timing_epsilon = 0.000501
+        required_duration = max(
+            float(event["timeSec"]) + float(event["duration"]) + 0.35
+            for event in candidate_events
+        )
+        if (
+            core_start + timing_epsilon < window_start
+            or core_end > window_end + timing_epsilon
+            or required_duration > duration_sec + 1e-6
+        ):
+            continue
+
+        events.extend(candidate_events)
+        accepted.append((sentence_index, action_name))
+        state = str(candidate_events[-1]["endState"])
+        last_event = candidate_events[-1]
+        next_event_start = float(last_event["timeSec"]) + max(
+            2.2,
+            float(last_event["duration"]) + action_spacing,
+        )
+
+    return events, accepted
+
+
 MANDARIN_VISEME_CHARS = {
     "mbp": "不把吧爸八白百本比变别并步部被表面们没每门明名目某旁跑拍片品平",
     "o": "我好说做过国果中重动同手头口后走有都总种从",
@@ -881,14 +1000,49 @@ def build_motion_plan(
                 "strength": 0.38 * strength_scale,
             }
         )
-    keyword_events = _keyword_events(script, duration_sec)
+    if action_sequence is None:
+        action_events, automatic_selections = _build_automatic_action_events(
+            automatic_selections,
+            initial_state,
+            script,
+            duration_sec,
+        )
+        requested = [name for _, name in automatic_selections]
+    else:
+        action_events = aroll_actions.build_action_events(
+            requested,
+            initial_state,
+            start_time_sec=0.35,
+            spacing_sec=0.12,
+        )
+    resolved_names = [str(event["action"]) for event in action_events]
+    required_duration = max(
+        (float(event["timeSec"]) + float(event["duration"]) + 0.35 for event in action_events),
+        default=0.0,
+    )
+    if required_duration > duration_sec + 1e-6:
+        raise ValueError(
+            f"actionSequence requires {required_duration:.2f}s but durationSec is {duration_sec:.2f}s"
+        )
+
+    rich_actions_by_sentence = (
+        dict(automatic_selections) if action_sequence is None else {}
+    )
+    keyword_events = _keyword_events(
+        script,
+        duration_sec,
+        rich_actions_by_sentence=rich_actions_by_sentence,
+    )
     events.extend(keyword_events)
     expressive_motions = {
         "wave", "present", "point", "point_left", "point_right", "open_arms",
         "think", "shrug", "emphasis", "happy_bounce", "leg_step",
         "open_hand", "fist", "wrist_twist", "finger_wave",
     }
-    if duration_sec >= 4.0 and not any(event.get("motion") in expressive_motions for event in keyword_events):
+    if (
+        duration_sec >= 4.0
+        and not any(event.get("motion") in expressive_motions for event in keyword_events)
+    ):
         events.extend(
             [
                 {
@@ -914,64 +1068,6 @@ def build_motion_plan(
                 "strength": 0.28 * strength_scale,
                 "direction": 1,
             }
-        )
-    action_spacing = 0.12
-    if action_sequence is None:
-        action_spacing = 0.70
-        accepted: list[tuple[int, str]] = []
-        for selection in automatic_selections:
-            candidate = [*accepted, selection]
-            candidate_events = aroll_actions.build_action_events(
-                [name for _, name in candidate],
-                initial_state,
-                start_time_sec=0.35,
-                spacing_sec=action_spacing,
-            )
-            candidate_required = max(
-                (
-                    float(event["timeSec"]) + float(event["duration"]) + 0.35
-                    for event in candidate_events
-                ),
-                default=0.0,
-            )
-            if candidate_required > duration_sec + 1e-6:
-                break
-            accepted = candidate
-        automatic_selections = accepted
-        requested = [name for _, name in automatic_selections]
-    action_events = aroll_actions.build_action_events(
-        requested,
-        initial_state,
-        start_time_sec=0.35,
-        spacing_sec=action_spacing,
-    )
-    if action_sequence is None:
-        selection_index = 0
-        for event in action_events:
-            event["automatic"] = True
-            channels = set(event.get("gestureGroups") or [])
-            if channels & {"arm_r", "hand_r"}:
-                event["gestureGroup"] = "right_hand"
-            elif channels & {"arm_l", "hand_l"}:
-                event["gestureGroup"] = "left_hand"
-            elif channels == {"head"}:
-                event["gestureGroup"] = "head"
-            else:
-                event["gestureGroup"] = "body"
-            if selection_index >= len(automatic_selections):
-                break
-            sentence_index, selected_action = automatic_selections[selection_index]
-            event["sourceSentenceIndex"] = sentence_index
-            if event["action"] == selected_action:
-                selection_index += 1
-    resolved_names = [str(event["action"]) for event in action_events]
-    required_duration = max(
-        (float(event["timeSec"]) + float(event["duration"]) + 0.35 for event in action_events),
-        default=0.0,
-    )
-    if required_duration > duration_sec + 1e-6:
-        raise ValueError(
-            f"actionSequence requires {required_duration:.2f}s but durationSec is {duration_sec:.2f}s"
         )
     events.extend(action_events)
     events = _finalize_motion_events(events, duration_sec)
