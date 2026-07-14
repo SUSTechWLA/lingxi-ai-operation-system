@@ -54,6 +54,8 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
         marker_names = {
             "spawn": f"IP_{mode.title()}_Spawn",
             "focus": f"IP_{mode.title()}_Focus_Head",
+            "foot_l": f"IP_{mode.title()}_Foot_Target.L",
+            "foot_r": f"IP_{mode.title()}_Foot_Target.R",
         }
         for role, name in marker_names.items():
             marker = bpy.data.objects.get(name)
@@ -70,6 +72,15 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     for name in ("IP_Seat_Target", "IP_Foot_Target.L", "IP_Foot_Target.R"):
         assert bpy.data.objects.get(name) is not None, name
 
+    for role, name in (
+        ("foot_l", "IP_Foot_Target.L"),
+        ("foot_r", "IP_Foot_Target.R"),
+    ):
+        assert_location_matches(
+            tuple(bpy.data.objects[name].location),
+            contract.MODE_MARKER_SPECS["standing"][role],
+        )
+
     assert_location_matches(
         tuple(bpy.data.objects["IP_Character_Spawn"].location),
         contract.MODE_MARKER_SPECS["standing"]["spawn"],
@@ -78,6 +89,26 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
         tuple(bpy.data.objects["IP_Focus_Head"].location),
         contract.MODE_MARKER_SPECS["standing"]["focus"],
     )
+
+    profile = contract.SUBJECT_LIGHT_PROFILE
+    world_background = next(
+        node for node in scene.world.node_tree.nodes if node.type == "BACKGROUND"
+    )
+    assert abs(world_background.inputs["Strength"].default_value - profile["worldStrength"]) <= 1e-6
+
+    key = bpy.data.objects["Studio_Key"]
+    assert key.data.use_temperature is True
+    assert key.data.temperature == profile["keyTemperatureK"]
+
+    rims = [
+        obj
+        for obj in scene.objects
+        if obj.type == "LIGHT"
+        and obj.get("ip_light_role") == "rim"
+        and obj.data.use_temperature
+        and obj.data.temperature == profile["rimTemperatureK"]
+    ]
+    assert len(rims) == 1
 
 
 def test_camera_plan_binds_authored_cameras() -> None:

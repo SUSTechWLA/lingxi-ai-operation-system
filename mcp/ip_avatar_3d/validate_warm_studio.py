@@ -29,6 +29,11 @@ import warm_studio_contract as contract
 SCHEMA_VERSION = "tangying-warm-studio-qa/v1"
 MARKER_SPECS = builder.MARKER_SPECS
 MARKER_VERSION = "tangying-warm-sloth-studio/v1"
+MODE_CAMERA_NAMES = tuple(
+    name
+    for mode in contract.PRESENTATION_MODES
+    for name, _location, _lens in contract.MODE_CAMERA_SPECS[mode].values()
+)
 
 
 def blend_file_bytes(filepath: str | Path | None) -> int | None:
@@ -505,10 +510,44 @@ def _validate_cameras(report: dict[str, Any]) -> None:
         if camera_collection is not None and camera_collection not in camera.users_collection:
             report["errors"].append(f"Camera '{name}' is not in STUDIO_CAMERAS")
 
+    for mode in contract.PRESENTATION_MODES:
+        focus_name = f"IP_{mode.title()}_Focus_Head"
+        for role, (name, location, lens) in contract.MODE_CAMERA_SPECS[mode].items():
+            camera = _scene_object(name)
+            if camera is None:
+                report["errors"].append(f"Required mode camera '{name}' is missing")
+                continue
+            if camera.type != "CAMERA":
+                report["errors"].append(
+                    f"Mode camera '{name}' has type {camera.type}, expected CAMERA"
+                )
+                continue
+            if not _close_vector(camera.location, location):
+                report["errors"].append(
+                    f"{name} location must be {location}, found {tuple(camera.location)}"
+                )
+            if not math.isclose(camera.data.lens, lens, abs_tol=1e-4):
+                report["errors"].append(
+                    f"{name} lens must be {lens:g}mm, found {camera.data.lens:g}mm"
+                )
+            if camera.get("ip_focus_marker") != focus_name:
+                report["errors"].append(
+                    f"{name} focus marker must be {focus_name!r}"
+                )
+            if camera.get("ip_camera_role") != role:
+                report["errors"].append(f"{name} camera role must be {role!r}")
+            if camera.get("ip_framing_contract") != "contract.MODE_CAMERA_SPECS":
+                report["errors"].append(
+                    f"{name} must use contract.MODE_CAMERA_SPECS"
+                )
+            if camera_collection is not None and camera_collection not in camera.users_collection:
+                report["errors"].append(f"Camera '{name}' is not in STUDIO_CAMERAS")
+
     camera_objects = [obj for obj in bpy.context.scene.objects if obj.type == "CAMERA"]
-    if len(camera_objects) != len(contract.CAMERA_SPECS):
+    expected_camera_count = len(contract.CAMERA_SPECS) + len(MODE_CAMERA_NAMES)
+    if len(camera_objects) != expected_camera_count:
         report["errors"].append(
-            f"Scene must contain exactly {len(contract.CAMERA_SPECS)} cameras; "
+            f"Scene must contain exactly {expected_camera_count} cameras; "
             f"found {len(camera_objects)}"
         )
     wide = _scene_object("Camera_Wide")
@@ -561,6 +600,13 @@ def _validate_lights(report: dict[str, Any]) -> None:
         if light.get("ip_color_temperature") != temperature:
             report["errors"].append(
                 f"{name} ip_color_temperature must be {temperature}K"
+            )
+        if not light.data.use_temperature:
+            report["errors"].append(f"{name} must use native Blender temperature")
+        elif not math.isclose(light.data.temperature, temperature, abs_tol=1e-4):
+            report["errors"].append(
+                f"{name} native temperature must be {temperature}K, "
+                f"found {light.data.temperature:g}K"
             )
         expected_color = tuple(spec["color"])
         if not _close_vector(light.data.color, expected_color, 1e-5):
@@ -920,6 +966,29 @@ def _validate_render_settings(report: dict[str, Any]) -> None:
             f"color_depth must be 8-bit, found {scene.render.image_settings.color_depth!r}"
         )
 
+    profile = contract.SUBJECT_LIGHT_PROFILE
+    if scene.get("ip_subject_light_profile") != profile["name"]:
+        report["errors"].append(
+            f"ip_subject_light_profile must be {profile['name']!r}"
+        )
+    world = scene.world
+    background = (
+        next((node for node in world.node_tree.nodes if node.type == "BACKGROUND"), None)
+        if world is not None and world.use_nodes
+        else None
+    )
+    if background is None:
+        report["errors"].append("World Background node is required")
+    elif not math.isclose(
+        background.inputs["Strength"].default_value,
+        profile["worldStrength"],
+        abs_tol=1e-6,
+    ):
+        report["errors"].append(
+            f"World strength must be {profile['worldStrength']:g}, "
+            f"found {background.inputs['Strength'].default_value:g}"
+        )
+
     metadata_contract = {
         "ip_preview_engine": "BLENDER_EEVEE_NEXT",
         "ip_final_engine": "CYCLES",
@@ -1031,6 +1100,7 @@ def validate_scene(require_packed_brand: bool = True) -> dict[str, Any]:
                 *contract.REQUIRED_OBJECTS,
                 *MARKER_SPECS,
                 *contract.CAMERA_SPECS,
+                *MODE_CAMERA_NAMES,
                 "FloorPlant_Left",
                 "FloorPlant_Right",
                 *CRITICAL_PRODUCTION_OBJECTS,

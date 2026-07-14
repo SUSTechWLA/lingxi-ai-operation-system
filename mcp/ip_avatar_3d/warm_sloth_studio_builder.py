@@ -3249,6 +3249,50 @@ STATIC_MARKER_SPECS = {
     "IP_Focus_Shelf": ((1.45, 2.50, 1.95), "focus_shelf"),
 }
 
+MARKER_SPECS = {
+    "IP_Character_Spawn": (
+        contract.MODE_MARKER_SPECS["standing"]["spawn"],
+        "character_spawn",
+    ),
+    "IP_Focus_Head": (
+        contract.MODE_MARKER_SPECS["standing"]["focus"],
+        "focus_head",
+    ),
+    "IP_Seat_Target": (
+        contract.MODE_MARKER_SPECS["standing"]["seat"],
+        "seat",
+    ),
+    "IP_Foot_Target.L": (
+        contract.MODE_MARKER_SPECS["standing"]["foot_l"],
+        "foot_l",
+    ),
+    "IP_Foot_Target.R": (
+        contract.MODE_MARKER_SPECS["standing"]["foot_r"],
+        "foot_r",
+    ),
+    **STATIC_MARKER_SPECS,
+}
+for _mode in contract.PRESENTATION_MODES:
+    _mode_markers = contract.MODE_MARKER_SPECS[_mode]
+    _mode_title = _mode.title()
+    MARKER_SPECS.update(
+        {
+            f"IP_{_mode_title}_Spawn": (_mode_markers["spawn"], f"{_mode}_spawn"),
+            f"IP_{_mode_title}_Focus_Head": (
+                _mode_markers["focus"],
+                f"{_mode}_focus_head",
+            ),
+            f"IP_{_mode_title}_Foot_Target.L": (
+                _mode_markers["foot_l"],
+                f"{_mode}_foot_l",
+            ),
+            f"IP_{_mode_title}_Foot_Target.R": (
+                _mode_markers["foot_r"],
+                f"{_mode}_foot_r",
+            ),
+        }
+    )
+
 CAMERA_F_STOPS = {
     "Camera_Wide": 5.6,
     "Camera_Medium": 5.0,
@@ -3348,37 +3392,7 @@ def _add_mode_camera(
 def build_markers_and_cameras(ctx: StudioContext) -> dict[str, bpy.types.Object]:
     """Build legacy and dual-mode markers with their authored cameras."""
 
-    standing_markers = contract.MODE_MARKER_SPECS["standing"]
-    for mode in contract.PRESENTATION_MODES:
-        marker_specs = contract.MODE_MARKER_SPECS[mode]
-        mode_title = mode.title()
-        _add_studio_marker(
-            ctx,
-            f"IP_{mode_title}_Spawn",
-            marker_specs["spawn"],
-            f"{mode}_spawn",
-        )
-        _add_studio_marker(
-            ctx,
-            f"IP_{mode_title}_Focus_Head",
-            marker_specs["focus"],
-            f"{mode}_focus_head",
-        )
-
-    for name, role in (
-        ("IP_Seat_Target", "seat"),
-        ("IP_Foot_Target.L", "foot_l"),
-        ("IP_Foot_Target.R", "foot_r"),
-    ):
-        _add_studio_marker(ctx, name, standing_markers[role], role)
-
-    for name, location, marker_contract in (
-        ("IP_Character_Spawn", standing_markers["spawn"], "character_spawn"),
-        ("IP_Focus_Head", standing_markers["focus"], "focus_head"),
-    ):
-        _add_studio_marker(ctx, name, location, marker_contract)
-
-    for name, (location, marker_contract) in STATIC_MARKER_SPECS.items():
+    for name, (location, marker_contract) in MARKER_SPECS.items():
         _add_studio_marker(ctx, name, location, marker_contract)
 
     result: dict[str, bpy.types.Object] = {}
@@ -3423,7 +3437,7 @@ LIGHT_SPECS = (
         "location": (-2.35, -2.10, 2.85),
         "energy": 520.0,
         "color": (1.0, 0.88, 0.73),
-        "temperature": 4300,
+        "temperature": contract.SUBJECT_LIGHT_PROFILE["keyTemperatureK"],
         "role": "key",
         "target": (0.0, 0.30, 1.65),
         "size": (1.90, 1.90),
@@ -3440,6 +3454,18 @@ LIGHT_SPECS = (
         "target": (0.0, 0.30, 1.55),
         "size": (1.80, 1.80),
         "shadows": False,
+    },
+    {
+        "name": "Studio_Rim",
+        "type": "AREA",
+        "location": (2.20, 1.85, 2.65),
+        "energy": 260.0,
+        "color": (1.0, 0.64, 0.38),
+        "temperature": contract.SUBJECT_LIGHT_PROFILE["rimTemperatureK"],
+        "role": "rim",
+        "target": (0.0, 0.30, 1.55),
+        "size": (1.40, 1.40),
+        "shadows": True,
     },
 )
 
@@ -3470,6 +3496,8 @@ def _add_authored_light(
     data = bpy.data.lights.new(f"{name}_Data", light_type)
     data.energy = energy
     data.color = color
+    data.use_temperature = True
+    data.temperature = float(temperature)
     data.use_shadow = shadows
     data.diffuse_factor = 1.0
     data.specular_factor = 0.55 if role in {"window", "key"} else 0.30
@@ -3637,7 +3665,7 @@ def build_lighting(ctx: StudioContext) -> list[bpy.types.Object]:
                 location=tuple(fixture.matrix_world.translation),
                 energy=energy,
                 color=(1.0, 0.49, 0.20),
-                temperature=2700,
+                temperature=contract.SUBJECT_LIGHT_PROFILE["practicalTemperatureK"],
                 role="practical",
                 shadows=False,
                 size=(0.16, 0.16),
@@ -3727,7 +3755,9 @@ def configure_render_settings(ctx: StudioContext) -> None:
     world.use_nodes = True
     background = next(node for node in world.node_tree.nodes if node.type == "BACKGROUND")
     background.inputs["Color"].default_value = (0.075, 0.070, 0.065, 1.0)
-    background.inputs["Strength"].default_value = 0.10
+    background.inputs["Strength"].default_value = contract.SUBJECT_LIGHT_PROFILE[
+        "worldStrength"
+    ]
     world["ip_world_role"] = "neutral_low_strength"
     scene.world = world
 
