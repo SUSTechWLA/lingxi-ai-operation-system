@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import blender_renderer
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 
 MODEL_PATH = REPO_ROOT / "ip形象/main_ip/turnaround/3d模型.glb"
@@ -90,6 +91,78 @@ def hand_relative_digit_length(armature, bone_map, side: str, digit: int) -> flo
         bone = armature.data.bones[bone_map[role]]
         length += (world_scale @ (bone.tail_local - bone.head_local)).length
     return length
+
+
+def weighted_face_bvh(character_objects, armature, group_names, minimum_weight=0.45):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    vertices = []
+    triangles = []
+    sampled_points = []
+    for obj in character_objects:
+        if obj.type != "MESH":
+            continue
+        group_indices = {
+            group.index
+            for name in group_names
+            if (group := obj.vertex_groups.get(name)) is not None
+        }
+        if not group_indices:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        try:
+            assert len(mesh.vertices) == len(obj.data.vertices)
+            obj.data.calc_loop_triangles()
+            offset = len(vertices)
+            world_vertices = [evaluated.matrix_world @ vertex.co for vertex in mesh.vertices]
+            vertices.extend(world_vertices)
+            for triangle in obj.data.loop_triangles:
+                average_weight = sum(
+                    sum(
+                        assignment.weight
+                        for assignment in obj.data.vertices[index].groups
+                        if assignment.group in group_indices
+                    )
+                    for index in triangle.vertices
+                ) / 3.0
+                if average_weight < minimum_weight:
+                    continue
+                triangles.append([offset + int(index) for index in triangle.vertices])
+                sampled_points.extend(world_vertices[int(index)] for index in triangle.vertices)
+        finally:
+            evaluated.to_mesh_clear()
+    assert vertices and triangles and sampled_points, (group_names, len(vertices), len(triangles))
+    return BVHTree.FromPolygons(vertices, triangles, all_triangles=True, epsilon=1e-6), sampled_points
+
+
+def positive_bvh_distance(left_tree, left_points, right_tree, right_points) -> float:
+    assert not left_tree.overlap(right_tree)
+    distances = [right_tree.find_nearest(point)[3] for point in left_points]
+    distances.extend(left_tree.find_nearest(point)[3] for point in right_points)
+    return min(float(distance) for distance in distances)
+
+
+def object_bvh(objects):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    vertices = []
+    triangles = []
+    for obj in objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        try:
+            offset = len(vertices)
+            vertices.extend(evaluated.matrix_world @ vertex.co for vertex in mesh.vertices)
+            mesh.calc_loop_triangles()
+            triangles.extend(
+                [offset + int(index) for index in triangle.vertices]
+                for triangle in mesh.loop_triangles
+            )
+        finally:
+            evaluated.to_mesh_clear()
+    assert vertices and triangles
+    return BVHTree.FromPolygons(vertices, triangles, all_triangles=True, epsilon=1e-6), vertices
 
 
 def bone_world_point(armature, pose_bone, point: str):
@@ -2513,6 +2586,178 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
     assert face["mouth"].data.shape_keys.key_blocks["Mouth_A"].value > 0.5
 
 
+def test_rich_aroll_catalog_actions_are_readable_stable_and_collision_free() -> None:
+    blender_renderer.load_scene_template(str(WARM_STUDIO_PATH))
+    character_objects, armatures, imported_assets, _ = blender_renderer.import_model(
+        str(RIGGED_FBX_PATH)
+    )
+    dimensions = blender_renderer.prepare_character(
+        character_objects,
+        target_height=2.55,
+        preserve_hierarchy=True,
+        asset_objects=imported_assets,
+    )
+    armature, _, bone_map = blender_renderer.choose_character_rig(
+        {"rigMode": "auto", "preserveExistingRig": True, "enhanceExistingRig": True},
+        armatures,
+        character_objects,
+        dimensions,
+    )
+    stale = bpy.data.actions.new("Aroll_Welcome_OpenArms")
+    stale["task5_stale_sentinel"] = True
+
+    report = blender_renderer.create_action_library(armature, {}, bone_map, fps=30)
+    specs = blender_renderer.aroll_actions.build_aroll_action_specs(True, 30)
+    rich_actions = (
+        "Aroll_Welcome_OpenArms",
+        "Aroll_Question_PalmUp",
+        "Aroll_Compare_TwoSides",
+        "Aroll_KeyPoint_OneFinger",
+        "Aroll_List_Three",
+        "Aroll_Caution_Stop",
+        "Aroll_Quote_Frame",
+        "Aroll_Conclusion_HandsTogether",
+        "Aroll_Seated_Explain",
+        "Aroll_Seated_OpenPalm",
+        "Aroll_Seated_LeanIn",
+    )
+    assert set(rich_actions).issubset(report["actions"]), report["actions"]
+    assert bpy.data.actions["Aroll_Welcome_OpenArms"] is not stale
+    assert "task5_stale_sentinel" not in bpy.data.actions["Aroll_Welcome_OpenArms"]
+
+    palm_sides = {
+        "Aroll_Welcome_OpenArms": ("l", "r"),
+        "Aroll_Question_PalmUp": ("r",),
+        "Aroll_Caution_Stop": ("r",),
+        "Aroll_Quote_Frame": ("l", "r"),
+        "Aroll_Seated_Explain": ("l", "r"),
+        "Aroll_Seated_OpenPalm": ("r",),
+    }
+    for action_name, sides in palm_sides.items():
+        armature.animation_data.action = bpy.data.actions[action_name]
+        bpy.context.scene.frame_set(specs[action_name][2][0])
+        bpy.context.view_layer.update()
+        for side in sides:
+            wrist = armature.pose.bones[bone_map[f"hand_{side}"]].rotation_euler
+            assert max(abs(float(value)) for value in wrist) > 0.10, (
+                action_name,
+                side,
+                tuple(wrist),
+            )
+
+    digit_actions = {
+        "open": "Aroll_Question_PalmUp",
+        "point": "Aroll_Point_Right",
+        "count": "Aroll_List_Three",
+        "stop": "Aroll_Caution_Stop",
+    }
+    digit_poses = {}
+    for label, action_name in digit_actions.items():
+        armature.animation_data.action = bpy.data.actions[action_name]
+        bpy.context.scene.frame_set(specs[action_name][2][0])
+        bpy.context.view_layer.update()
+        digit_poses[label] = tuple(
+            float(value)
+            for digit in (1, 2, 3)
+            for segment in ("", "_mid", "_tip")
+            for value in armature.pose.bones[
+                bone_map[f"finger_{digit}{segment}_r"]
+            ].rotation_euler
+        )
+    labels = tuple(digit_poses)
+    for index, left in enumerate(labels):
+        for right in labels[index + 1 :]:
+            delta = max(abs(a - b) for a, b in zip(digit_poses[left], digit_poses[right]))
+            assert delta >= 0.08, (left, right, delta)
+
+    comparison = "Aroll_Compare_TwoSides"
+    armature.animation_data.action = bpy.data.actions[comparison]
+    mirrored = {}
+    for phase_index, side in ((2, "l"), (3, "r")):
+        bpy.context.scene.frame_set(specs[comparison][phase_index][0])
+        bpy.context.view_layer.update()
+        mirrored[side] = {
+            role: tuple(
+                abs(float(value))
+                for value in armature.pose.bones[bone_map[f"{role}_{side}"]].rotation_euler
+            )
+            for role in ("upper_arm", "forearm", "hand")
+        }
+    for role in mirrored["l"]:
+        assert max(
+            abs(left - right)
+            for left, right in zip(mirrored["l"][role], mirrored["r"][role])
+        ) <= 0.14, (role, mirrored)
+
+    seated_actions = (
+        "Aroll_Seated_Explain",
+        "Aroll_Seated_OpenPalm",
+        "Aroll_Seated_LeanIn",
+    )
+    seated_pelvis = []
+    for action_name in seated_actions:
+        armature.animation_data.action = bpy.data.actions[action_name]
+        for frame, _ in specs[action_name]:
+            bpy.context.scene.frame_set(frame)
+            bpy.context.view_layer.update()
+            seated_pelvis.append(lower_body_world_metrics(armature, bone_map)["pelvis"][2])
+    assert max(seated_pelvis) - min(seated_pelvis) < 0.035, seated_pelvis
+
+    desk_root = next(obj for obj in bpy.data.objects if obj.get("assembly_role") == "main_desk")
+    desk_objects = [
+        obj
+        for obj in (desk_root, *desk_root.children_recursive)
+        if obj.type == "MESH" and not obj.hide_render
+    ]
+    desk_tree, desk_points = object_bvh(desk_objects)
+    torso_groups = {
+        bone_map[role]
+        for role in ("body", "spine", "neck", "head")
+        if bone_map.get(role)
+    }
+    collision_metrics = {}
+    for action_name in rich_actions:
+        armature.animation_data.action = bpy.data.actions[action_name]
+        bpy.context.scene.frame_set(specs[action_name][2][0])
+        bpy.context.view_layer.update()
+        active_sides = {
+            side
+            for side in ("l", "r")
+            if f"__digit_pose_{side}" in specs[action_name][2][1]
+        }
+        assert active_sides, action_name
+        hand_groups = {
+            name
+            for role, name in bone_map.items()
+            if any(
+                role == f"hand_{side}"
+                or (role.startswith("finger_") and role.endswith(f"_{side}"))
+                for side in active_sides
+            )
+        }
+        hand_tree, hand_points = weighted_face_bvh(
+            character_objects, armature, hand_groups
+        )
+        torso_tree, torso_points = weighted_face_bvh(
+            character_objects, armature, torso_groups
+        )
+        assert not hand_tree.overlap(torso_tree), (action_name, "hand_torso")
+        assert not hand_tree.overlap(desk_tree), (action_name, "hand_desk")
+        torso_distance = positive_bvh_distance(
+            hand_tree, hand_points, torso_tree, torso_points
+        )
+        desk_distance = positive_bvh_distance(
+            hand_tree, hand_points, desk_tree, desk_points
+        )
+        collision_metrics[action_name] = {
+            "handTorsoDistance": torso_distance,
+            "handDeskDistance": desk_distance,
+        }
+        assert torso_distance > 0.0, (action_name, collision_metrics[action_name])
+        assert desk_distance > 0.0, (action_name, collision_metrics[action_name])
+    print("AROLL_GESTURE_COLLISION_METRICS", json.dumps(collision_metrics, sort_keys=True))
+
+
 def deliberate_direct_runner_failure() -> None:
     raise AssertionError("deliberate direct-runner failure")
 
@@ -2531,6 +2776,7 @@ if __name__ == "__main__":
         test_source_hand_events_raise_wrist_and_drive_individual_digits,
         test_enhanced_timeline_keys_three_segment_fist_and_isolates_finger_roll,
         test_overlapping_hand_events_share_one_arm_stage_pose,
+        test_rich_aroll_catalog_actions_are_readable_stable_and_collision_free,
         test_source_rig_continuously_transitions_between_standing_and_seated,
         test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers,
         test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights,

@@ -493,6 +493,30 @@ def _sentence_boundary_times(script: str, duration_sec: float) -> list[float]:
     return [min(duration_sec - 0.1, max(0.1, duration_sec * boundary / text_len)) for boundary in boundaries]
 
 
+AROLL_INTENT_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("大家好", "欢迎", "你好"), "Aroll_Welcome_OpenArms"),
+    (("为什么", "问题", "想一想"), "Aroll_Question_PalmUp"),
+    (("相比", "对比", "一方面", "另一方面"), "Aroll_Compare_TwoSides"),
+    (("重点", "关键", "第一"), "Aroll_KeyPoint_OneFinger"),
+    (("三点", "第三"), "Aroll_List_Three"),
+    (("注意", "不要", "风险"), "Aroll_Caution_Stop"),
+    (("所谓", "有人说", "引用"), "Aroll_Quote_Frame"),
+    (("坐下来", "坐着", "深入聊", "详细解释"), "Aroll_Seated_Explain"),
+    (("总结", "最后", "结论"), "Aroll_Conclusion_HandsTogether"),
+)
+
+
+def _automatic_aroll_intents(script: str) -> list[tuple[int, str]]:
+    selected: list[tuple[int, str]] = []
+    for sentence_index, sentence in enumerate(split_script(script)):
+        normalized = sentence.casefold()
+        for keywords, action_name in AROLL_INTENT_RULES:
+            if any(keyword.casefold() in normalized for keyword in keywords):
+                selected.append((sentence_index, action_name))
+                break
+    return selected
+
+
 def _keyword_events(script: str, duration_sec: float) -> list[dict[str, Any]]:
     table = [
         {
@@ -813,6 +837,9 @@ def build_motion_plan(
     duration_sec = float(duration_sec or estimate_duration(script))
     fps = max(8, min(int(fps or DEFAULT_FPS), 60))
     initial_state = resolve_presentation_mode(presentation_mode)
+    automatic_selections = (
+        _automatic_aroll_intents(script) if action_sequence is None else []
+    )
     requested = [str(name) for name in (action_sequence or []) if str(name).strip()]
     strength_scale = 1.0 if motion_style != "subtle" else 0.55
     events: list[dict[str, Any]] = [
@@ -888,12 +915,55 @@ def build_motion_plan(
                 "direction": 1,
             }
         )
+    action_spacing = 0.12
+    if action_sequence is None:
+        action_spacing = 0.70
+        accepted: list[tuple[int, str]] = []
+        for selection in automatic_selections:
+            candidate = [*accepted, selection]
+            candidate_events = aroll_actions.build_action_events(
+                [name for _, name in candidate],
+                initial_state,
+                start_time_sec=0.35,
+                spacing_sec=action_spacing,
+            )
+            candidate_required = max(
+                (
+                    float(event["timeSec"]) + float(event["duration"]) + 0.35
+                    for event in candidate_events
+                ),
+                default=0.0,
+            )
+            if candidate_required > duration_sec + 1e-6:
+                break
+            accepted = candidate
+        automatic_selections = accepted
+        requested = [name for _, name in automatic_selections]
     action_events = aroll_actions.build_action_events(
         requested,
         initial_state,
         start_time_sec=0.35,
-        spacing_sec=0.12,
+        spacing_sec=action_spacing,
     )
+    if action_sequence is None:
+        selection_index = 0
+        for event in action_events:
+            event["automatic"] = True
+            channels = set(event.get("gestureGroups") or [])
+            if channels & {"arm_r", "hand_r"}:
+                event["gestureGroup"] = "right_hand"
+            elif channels & {"arm_l", "hand_l"}:
+                event["gestureGroup"] = "left_hand"
+            elif channels == {"head"}:
+                event["gestureGroup"] = "head"
+            else:
+                event["gestureGroup"] = "body"
+            if selection_index >= len(automatic_selections):
+                break
+            sentence_index, selected_action = automatic_selections[selection_index]
+            event["sourceSentenceIndex"] = sentence_index
+            if event["action"] == selected_action:
+                selection_index += 1
     resolved_names = [str(event["action"]) for event in action_events]
     required_duration = max(
         (float(event["timeSec"]) + float(event["duration"]) + 0.35 for event in action_events),

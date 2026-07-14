@@ -6919,6 +6919,11 @@ def create_action_library(
 
     def build_action(name: str, keyframes: list[tuple[int, dict[str, Any]]]) -> str:
         existing = bpy.data.actions.get(name)
+        if existing and name in aroll_actions.ACTION_CATALOG:
+            if armature.animation_data.action == existing:
+                armature.animation_data.action = None
+            bpy.data.actions.remove(existing)
+            existing = None
         if existing:
             existing.use_fake_user = True
             return existing.name

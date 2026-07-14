@@ -64,14 +64,19 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(0.29, 0.34, 0.22),
     ),
     "count_three": _digits(
-        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.12),
-        OPEN,
-        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=-0.12),
+        DigitPose(0.10, 0.10, 0.06, splay=0.12),
+        DigitPose(0.10, 0.10, 0.06),
+        DigitPose(0.10, 0.10, 0.06, splay=-0.12),
     ),
     "point": _digits(
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.10),
         DigitPose(0.28, 0.33, 0.21),
         DigitPose(0.29, 0.34, 0.22),
+    ),
+    "stop": _digits(
+        DigitPose(0.04, 0.03, 0.02, splay=0.11, opposition=0.12),
+        DigitPose(0.05, 0.04, 0.03, opposition=0.12),
+        DigitPose(0.06, 0.05, 0.04, splay=-0.11, opposition=0.12),
     ),
     "finger_roll": _digits(
         DigitPose(0.29, 0.34, 0.22, splay=0.08),
@@ -388,6 +393,66 @@ def _five_phase(
         (hold_in, dict(hold_pose)),
         (hold_out, dict(hold_pose if release_pose is None else release_pose)),
         (end, {}),
+    ]
+
+
+_ARM_POSE_ROLES = {
+    "shoulder_l", "shoulder_r", "upper_arm_l", "upper_arm_r",
+    "forearm_l", "forearm_r", "hand_l", "hand_r",
+}
+
+
+def _seated_action_pose(
+    pose: Mapping[str, Any],
+    source_rig: bool,
+    *,
+    arm_scale: float = 0.82,
+) -> ActionPose:
+    """Layer an upper-body cue over the exact seated contact pose."""
+    seated = presentation_pose("seated", source_rig)
+    merged: ActionPose = {
+        role: dict(transform) for role, transform in seated.items()
+    }
+    for role, value in pose.items():
+        if role in {"__digit_pose_l", "__digit_pose_r"}:
+            merged[role] = value
+            continue
+        if role in _ARM_POSE_ROLES and isinstance(value, (tuple, list)):
+            merged[role] = tuple(float(component) * arm_scale for component in value)
+            continue
+        if role in {"body", "root"}:
+            transform = (
+                {"rotation": tuple(value)}
+                if isinstance(value, (tuple, list))
+                else dict(value)
+            )
+            base = merged.setdefault(role, {})
+            for component, delta in transform.items():
+                origin = tuple(base.get(component, (0.0, 0.0, 0.0)))
+                base[component] = tuple(
+                    float(origin[index]) + float(delta[index]) for index in range(3)
+                )
+            continue
+        merged[role] = dict(value) if isinstance(value, dict) else value
+    return merged
+
+
+def _seated_action_spec(
+    frames: tuple[int, int, int, int, int],
+    source_rig: bool,
+    anticipation_pose: Mapping[str, Any],
+    hold_pose: Mapping[str, Any],
+    *,
+    release_pose: Mapping[str, Any] | None = None,
+) -> ActionSpec:
+    return [
+        (frame, _seated_action_pose(pose, source_rig))
+        for frame, pose in _five_phase(
+            frames,
+            anticipation_pose,
+            hold_pose,
+            release_pose=release_pose,
+        )
     ]
 
 
@@ -767,72 +832,166 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
             (end, {}),
         ],
     }
+    if source_rig:
+        welcome = _pose(
+            {
+                "body": (0.0, 0.0, 0.018),
+                "upper_arm_l": (-0.04, 0.02, 0.42),
+                "forearm_l": (-0.30, 0.08, -0.10),
+                "hand_l": (0.05, 0.30, -0.10),
+                "upper_arm_r": (-0.04, -0.02, -0.42),
+                "forearm_r": (-0.30, -0.08, 0.10),
+                "hand_r": (0.05, -0.30, 0.10),
+            },
+            left_hand="open_hand",
+            right_hand="open_hand",
+        )
+        question = _pose(
+            {
+                "head": (0.0, -0.05, -0.02),
+                "upper_arm_r": (-0.06, -0.02, -0.70),
+                "forearm_r": (-0.66, -0.06, 0.72),
+                "hand_r": (0.12, -0.42, 0.14),
+            },
+            right_hand="open_hand",
+        )
+        caution = _pose(
+            {
+                "body": (0.0, 0.0, -0.012),
+                "upper_arm_r": (-0.02, -0.02, -0.48),
+                "forearm_r": (-0.28, -0.04, 0.70),
+                "hand_r": (0.02, -1.02, 0.02),
+            },
+            right_hand="stop",
+        )
+        quote_frame = _pose(
+            {
+                "upper_arm_l": (-0.05, 0.02, 0.62),
+                "forearm_l": (-0.64, 0.08, -0.50),
+                "hand_l": (0.08, 0.18, -0.18),
+                "upper_arm_r": (-0.05, -0.02, -0.62),
+                "forearm_r": (-0.64, -0.08, 0.50),
+                "hand_r": (0.08, -0.18, 0.18),
+            },
+            left_hand="count_two",
+            right_hand="count_two",
+        )
+        hands_together = _pose(
+            {
+                "body": (0.0, 0.0, 0.015),
+                "upper_arm_l": (-0.05, 0.02, 0.72),
+                "forearm_l": (-0.76, 0.06, -0.70),
+                "hand_l": (0.08, 0.34, -0.12),
+                "upper_arm_r": (-0.05, -0.02, -0.72),
+                "forearm_r": (-0.76, -0.06, 0.70),
+                "hand_r": (0.08, -0.34, 0.12),
+            },
+            left_hand="relaxed_hand",
+            right_hand="relaxed_hand",
+        )
+    else:
+        welcome = _pose(open_explain, left_hand="open_hand", right_hand="open_hand")
+        question = _pose(right_chest, right_hand="open_hand")
+        caution = _pose(
+            {**right_point, "hand_r": (0.02, -1.02, 0.02)},
+            right_hand="stop",
+        )
+        quote_frame = _pose(open_explain, left_hand="count_two", right_hand="count_two")
+        hands_together = _pose(
+            open_explain,
+            left_hand="relaxed_hand",
+            right_hand="relaxed_hand",
+        )
+
+    compare_left = _pose(left_chest, left_hand="open_hand")
+    compare_right = _pose(right_chest, right_hand="open_hand")
+    key_point = _pose(right_chest, right_hand="count_one")
+    list_three = _pose(right_chest, right_hand="count_three")
+    rich_anticipation = _pose(
+        open_explain_anticipation,
+        left_hand="relaxed_hand",
+        right_hand="relaxed_hand",
+    )
+    standing = presentation_pose("standing", source_rig)
+    welcome_spec = _five_phase(frames, rich_anticipation, welcome)
+    welcome_spec[0] = (frames[0], standing)
+    welcome_spec[-1] = (frames[-1], standing)
+    conclusion_spec = _five_phase(frames, rich_anticipation, hands_together)
+    conclusion_spec[0] = (frames[0], standing)
+    conclusion_spec[-1] = (frames[-1], standing)
+    compare_right_frame = max(hold_in + 1, int(round(max(8, fps) * 1.28)))
+    compare_spec = [
+        (frames[0], {}),
+        (anticipation, _pose(left_anticipation, left_hand="relaxed_hand")),
+        (hold_in, compare_left),
+        (compare_right_frame, compare_right),
+        (hold_out, _pose(right_anticipation, right_hand="relaxed_hand")),
+        (end, {}),
+    ]
+    lean_anticipation = _pose(
+        open_explain_anticipation,
+        {"body": (0.025, 0.0, 0.0), "root": {"location": (0.0, 0.012, 0.0)}},
+        left_hand="relaxed_hand",
+        right_hand="relaxed_hand",
+    )
+    lean_hold = _pose(
+        open_explain,
+        {"body": (0.10, 0.0, 0.0), "root": {"location": (0.0, 0.035, 0.0)}},
+        left_hand="relaxed_hand",
+        right_hand="relaxed_hand",
+    )
+    lean_release = _pose(
+        open_explain_anticipation,
+        {"body": (0.045, 0.0, 0.0), "root": {"location": (0.0, 0.015, 0.0)}},
+        left_hand="relaxed_hand",
+        right_hand="relaxed_hand",
+    )
+
     specs.update({
         "Aroll_Standing_Idle": _five_phase(frames, idle_anticipation, idle_pose),
-        "Aroll_Welcome_OpenArms": _five_phase(
-            frames,
-            _pose(open_explain_anticipation, left_hand="relaxed_hand", right_hand="relaxed_hand"),
-            _pose(open_explain, left_hand="open_hand", right_hand="open_hand"),
-        ),
+        "Aroll_Welcome_OpenArms": welcome_spec,
         "Aroll_Question_PalmUp": _five_phase(
             frames,
             _pose(right_anticipation, right_hand="relaxed_hand"),
-            _pose(right_chest, right_hand="open_hand"),
+            question,
         ),
-        "Aroll_Compare_TwoSides": _five_phase(
-            frames,
-            _pose(open_explain_anticipation, left_hand="relaxed_hand", right_hand="relaxed_hand"),
-            _pose(open_explain, left_hand="open_hand", right_hand="open_hand"),
-        ),
+        "Aroll_Compare_TwoSides": compare_spec,
         "Aroll_KeyPoint_OneFinger": _five_phase(
             frames,
             _pose(right_anticipation, right_hand="relaxed_hand"),
-            _pose(right_point, right_hand="count_one"),
+            key_point,
         ),
         "Aroll_List_Three": _five_phase(
             frames,
             _pose(right_anticipation, right_hand="relaxed_hand"),
-            _pose(right_chest, right_hand="count_three"),
+            list_three,
         ),
         "Aroll_Caution_Stop": _five_phase(
             frames,
             _pose(right_anticipation, right_hand="relaxed_hand"),
-            _pose(right_chest, right_hand="open_hand"),
+            caution,
         ),
-        "Aroll_Quote_Frame": _five_phase(
+        "Aroll_Quote_Frame": _five_phase(frames, rich_anticipation, quote_frame),
+        "Aroll_Conclusion_HandsTogether": conclusion_spec,
+        "Aroll_Seated_Explain": _seated_action_spec(
             frames,
-            _pose(open_explain_anticipation, left_hand="relaxed_hand", right_hand="relaxed_hand"),
+            source_rig,
+            rich_anticipation,
             _pose(open_explain, left_hand="open_hand", right_hand="open_hand"),
         ),
-        "Aroll_Conclusion_HandsTogether": _five_phase(
+        "Aroll_Seated_OpenPalm": _seated_action_spec(
             frames,
-            _pose(open_explain_anticipation, left_hand="relaxed_hand", right_hand="relaxed_hand"),
-            _pose(open_explain, left_hand="soft_curl", right_hand="soft_curl"),
+            source_rig,
+            _pose(right_anticipation, right_hand="relaxed_hand"),
+            question,
         ),
-        "Aroll_Seated_Explain": [
-            (frame, {**presentation_pose("seated", source_rig), **pose})
-            for frame, pose in _five_phase(
-                frames,
-                _pose(right_anticipation, right_hand="relaxed_hand"),
-                _pose(right_chest, right_hand="open_hand"),
-            )
-        ],
-        "Aroll_Seated_OpenPalm": [
-            (frame, {**presentation_pose("seated", source_rig), **pose})
-            for frame, pose in _five_phase(
-                frames,
-                _pose(right_anticipation, right_hand="relaxed_hand"),
-                _pose(right_chest, right_hand="open_hand"),
-            )
-        ],
-        "Aroll_Seated_LeanIn": [
-            (frame, {**presentation_pose("seated", source_rig), **pose})
-            for frame, pose in _five_phase(
-                frames,
-                _pose({"body": (0.0, 0.0, 0.02)}, right_hand="relaxed_hand"),
-                _pose({"body": (0.08, 0.0, 0.0)}, right_hand="soft_curl"),
-            )
-        ],
+        "Aroll_Seated_LeanIn": _seated_action_spec(
+            frames,
+            source_rig,
+            lean_anticipation,
+            lean_hold,
+            release_pose=lean_release,
+        ),
     })
     specs.update(build_transition_specs(source_rig, fps))
     return {name: specs[name] for name in AROLL_ACTIONS}

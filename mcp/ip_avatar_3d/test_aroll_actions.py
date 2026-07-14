@@ -4,6 +4,78 @@ import aroll_actions
 
 
 class ArollActionContractTests(unittest.TestCase):
+    def test_catalog_actions_have_complete_pose_specs(self) -> None:
+        specs = aroll_actions.build_aroll_action_specs(source_rig=True, fps=30)
+        for name, metadata in aroll_actions.ACTION_CATALOG.items():
+            with self.subTest(action=name):
+                self.assertIn(name, specs)
+                self.assertGreaterEqual(len(specs[name]), 5)
+                frames = [frame for frame, _ in specs[name]]
+                self.assertEqual(frames, sorted(frames))
+                self.assertEqual(len(frames), len(set(frames)))
+                if metadata.end_state == "seated":
+                    seated = aroll_actions.presentation_pose("seated", True)
+                    for role, transform in seated.items():
+                        self.assertEqual(specs[name][-1][1].get(role), transform)
+
+        expected_holds = {
+            "Aroll_Welcome_OpenArms": {"__digit_pose_l": "open_hand", "__digit_pose_r": "open_hand"},
+            "Aroll_Question_PalmUp": {"__digit_pose_r": "open_hand"},
+            "Aroll_Compare_TwoSides": {"__digit_pose_l": "open_hand"},
+            "Aroll_KeyPoint_OneFinger": {"__digit_pose_r": "count_one"},
+            "Aroll_List_Three": {"__digit_pose_r": "count_three"},
+            "Aroll_Caution_Stop": {"__digit_pose_r": "stop"},
+            "Aroll_Quote_Frame": {"__digit_pose_l": "count_two", "__digit_pose_r": "count_two"},
+            "Aroll_Conclusion_HandsTogether": {"__digit_pose_l": "relaxed_hand", "__digit_pose_r": "relaxed_hand"},
+            "Aroll_Seated_Explain": {"__digit_pose_l": "open_hand", "__digit_pose_r": "open_hand"},
+            "Aroll_Seated_OpenPalm": {"__digit_pose_r": "open_hand"},
+        }
+        for name, expected in expected_holds.items():
+            with self.subTest(action=name):
+                hold = specs[name][2][1]
+                self.assertEqual({key: hold.get(key) for key in expected}, expected)
+
+    def test_rich_source_holds_are_distinct_and_seated_amplitude_is_restrained(self) -> None:
+        specs = aroll_actions.build_aroll_action_specs(source_rig=True, fps=30)
+        comparison = specs["Aroll_Compare_TwoSides"]
+        self.assertIn("upper_arm_l", comparison[2][1])
+        self.assertNotIn("upper_arm_r", comparison[2][1])
+        self.assertIn("upper_arm_r", comparison[3][1])
+        self.assertNotIn("upper_arm_l", comparison[3][1])
+
+        seated_hold = specs["Aroll_Seated_OpenPalm"][2][1]
+        standing_hold = specs["Aroll_Question_PalmUp"][2][1]
+        for role in ("upper_arm_r", "forearm_r", "hand_r"):
+            self.assertEqual(
+                seated_hold[role],
+                tuple(value * 0.82 for value in standing_hold[role]),
+            )
+
+        seated = aroll_actions.presentation_pose("seated", True)
+        lean_spec = specs["Aroll_Seated_LeanIn"]
+        for _, pose in lean_spec:
+            self.assertLessEqual(abs(pose["body"]["rotation"][0] - seated["body"]["rotation"][0]), 0.10)
+            self.assertLessEqual(abs(pose["root"]["location"][1] - seated["root"]["location"][1]), 0.035)
+
+    def test_open_point_count_and_stop_digit_poses_are_semantically_distinct(self) -> None:
+        pose_names = ("open_hand", "point", "count_three", "stop")
+
+        def maximum_delta(left: str, right: str) -> float:
+            deltas = []
+            for digit in (1, 2, 3):
+                first = aroll_actions.hand_pose(left)[digit]
+                second = aroll_actions.hand_pose(right)[digit]
+                deltas.extend(
+                    abs(getattr(first, field) - getattr(second, field))
+                    for field in ("proximal", "middle", "distal", "splay", "opposition")
+                )
+            return max(deltas)
+
+        for index, left in enumerate(pose_names):
+            for right in pose_names[index + 1 :]:
+                with self.subTest(left=left, right=right):
+                    self.assertGreaterEqual(maximum_delta(left, right), 0.08)
+
     def test_catalog_has_unique_stateful_actions(self) -> None:
         payload = aroll_actions.action_catalog_payload()
         names = [item["name"] for item in payload["actions"]]

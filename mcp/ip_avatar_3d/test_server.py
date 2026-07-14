@@ -561,7 +561,6 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             all(event.get("gestureGroup") in {"right_hand", "left_hand", "head", "body"} for event in aroll_events),
             aroll_events,
         )
-
         legacy_grouped_events = [
             event
             for event in plan["motionEvents"]
@@ -569,6 +568,69 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         ]
         self.assertTrue(legacy_grouped_events)
         self.assert_no_grouped_motion_overlaps(plan["motionEvents"])
+
+    def test_motion_plan_selects_one_deterministic_core_action_per_sentence(self) -> None:
+        server = load_server()
+        script = (
+            "大家好，欢迎回来。为什么这个问题值得想一想？"
+            "一方面和另一方面相比，差异很明显。重点是第一步。"
+            "这里有三点。注意不要忽略风险。所谓经验，也有人这样说。"
+            "我们坐下来详细解释。最后总结结论。"
+        )
+
+        plan = server.build_motion_plan(script, 40, 30)
+        repeat = server.build_motion_plan(script, 40, 30)
+        automatic = [
+            event
+            for event in plan["motionEvents"]
+            if event.get("motion") == "avatar_action" and event.get("automatic")
+        ]
+        core = [event for event in automatic if not str(event["action"]).startswith("Aroll_Transition_")]
+
+        self.assertEqual(plan["motionEvents"], repeat["motionEvents"])
+        self.assertEqual(
+            [event["action"] for event in core],
+            [
+                "Aroll_Welcome_OpenArms",
+                "Aroll_Question_PalmUp",
+                "Aroll_Compare_TwoSides",
+                "Aroll_KeyPoint_OneFinger",
+                "Aroll_List_Three",
+                "Aroll_Caution_Stop",
+                "Aroll_Quote_Frame",
+                "Aroll_Seated_Explain",
+                "Aroll_Conclusion_HandsTogether",
+            ],
+        )
+        self.assertEqual(len(core), len({event["sourceSentenceIndex"] for event in core}))
+        starts = [float(event["timeSec"]) for event in automatic]
+        self.assertTrue(
+            all(current - previous >= 2.2 - 1e-9 for previous, current in zip(starts, starts[1:])),
+            starts,
+        )
+        self.assertIn("Aroll_Transition_StandToSit", plan["resolvedActionSequence"])
+        self.assertIn("Aroll_Transition_SitToStand", plan["resolvedActionSequence"])
+
+    def test_motion_plan_uses_first_intent_only_and_honors_explicit_empty_sequence(self) -> None:
+        server = load_server()
+
+        automatic = server.build_motion_plan("大家好，为什么这个问题要注意风险？", 8, 30)
+        core = [
+            event["action"]
+            for event in automatic["motionEvents"]
+            if event.get("motion") == "avatar_action"
+            and event.get("automatic")
+            and not str(event["action"]).startswith("Aroll_Transition_")
+        ]
+        explicit = server.build_motion_plan(
+            "大家好，为什么这个问题要注意风险？",
+            8,
+            30,
+            action_sequence=[],
+        )
+
+        self.assertEqual(core, ["Aroll_Welcome_OpenArms"])
+        self.assertEqual(explicit["resolvedActionSequence"], [])
 
     def test_subtitle_builder_splits_script_over_duration(self) -> None:
         server = load_server()
