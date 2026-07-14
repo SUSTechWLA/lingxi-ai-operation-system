@@ -150,3 +150,123 @@ tests remain green.
   warnings. They do not affect test outcomes.
 - Canonical master, rigged GLB, source FBX, and the copied source GLB used for
   regression remain untracked and are not included in either Task 4 commit.
+
+## Review Follow-up: Four Important Findings
+
+The rejected review findings are addressed by implementation commit `e6939c58`
+(`fix: address seated pose review findings`). The earlier foot-tail values in
+this report are retained as historical RED/GREEN evidence, but they are
+superseded for floor contact by the evaluated shoe-geometry measurements below.
+
+### RED / GREEN
+
+Tests were added before the review fixes. The first focused run failed against
+the real source FBX because the old foot-bone-tail proxy hid shoe penetration:
+
+```text
+AssertionError: ...
+left minimumZ/clearance  = -0.0151163 m
+right minimumZ/clearance = -0.0319805 m
+```
+
+The same test also added downstream assertions that seated `happy_bounce`
+produces zero `Cheek_Smile.L/R`, while the standing control exceeds `0.5`.
+GREEN filters `happy_bounce` from the seated event stream before any body or
+facial derivation, so future derivations cannot accidentally consume it.
+
+GREEN additionally proves that a seated timeline containing `wave`, `present`,
+`emphasis`, `happy_bounce`, `leg_step`, and `weight_shift`:
+
+- moves the right shoulder, upper arm, and forearm relative to frame 1;
+- preserves right-wrist motion;
+- independently moves proximal, middle, and distal segments of right digit 2;
+- preserves head, jaw, `Mouth_A`, and lip-sync motion;
+- keeps all six seated leg/shin/foot local rotations unchanged to `1e-6`;
+- keeps both seated cheek-smile channels below `1e-6`.
+
+The new standing regression was GREEN without changing standing behavior. One
+three-event plan, sampled against the same-frame neutral plan, measured:
+
+| Standing effect | Measured delta | Assertion |
+| --- | ---: | ---: |
+| `happy_bounce` root lift | `0.0700 m` | `> 0.050 m` |
+| `leg_step` max leg rotation | `0.1069 rad` | `> 0.070 rad` |
+| `weight_shift` root side | `0.0750 m` | `> 0.060 m` |
+| `weight_shift` body sway | `0.0550 rad` | `> 0.040 rad` |
+
+### Final Calibration
+
+The source and generated seated root world offset is now
+`(0.0, 0.12, -0.301)`. Source-rig limb rotations remain:
+
+```text
+leg L  (0.0, 0.0, 1.35)       leg R  (0.05, 0.197, -1.30)
+shin L (0.0, 0.0, -1.55)      shin R (-0.047, -0.0595, 1.52)
+foot L (0.0, 0.0, 0.05)       foot R (-0.07175, -0.2125, -0.02)
+```
+
+Seated procedural root idle lift is disabled. Upper-body sway and explicit
+upper-body events remain active; standing idle lift is unchanged.
+
+### Evaluated Shoe Geometry
+
+The test creates an actual Blender plane at world `z=0`. For each side it maps
+semantic `leg`, `shin`, and `foot` roles through `boneMap`, then scans source
+vertex-group weights. A vertex belongs to a side when its summed weight for
+that side's three groups is positive and greater than the opposite side's sum.
+The selected source indices are read from the Armature-evaluated mesh after
+asserting topology/index preservation, transformed by evaluated
+`matrix_world`, and reduced to the minimum world-space Z. No bone head or tail
+is used for clearance.
+
+| Frame | Pelvis Z | Knee L/R | Left sole clearance | Right sole clearance |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | `0.80019 m` | `89.344 / 91.213 deg` | `0.023884 m` | `0.007019 m` |
+| 15 | `0.82015 m` | `89.344 / 91.213 deg` | `0.015102 m` | `0.000580 m` |
+| 29 | `0.80437 m` | `89.344 / 91.213 deg` | `0.013404 m` | `-0.002285 m` |
+
+- Floor plane Z: exactly `0.0 m` at all four evaluated plane vertices.
+- Weighted source/evaluated vertices: left `815`, right `813`.
+- Pelvis sampled range: `0.01996 m` while the overlapping `emphasis` event is
+  active.
+- Maximum left/right knee-angle delta: `1.87 deg`.
+- Signed shoe clearance acceptance: `-0.003 m` through `0.025 m`; the minimum
+  is a `2.29 mm` right-sole skin deformation below the mathematical plane.
+
+### Verification After Review Fixes
+
+```text
+python3 mcp/ip_avatar_3d/test_server.py
+Ran 90 tests in 0.156s
+OK (skipped=2)
+
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python-exit-code 1 --python mcp/ip_avatar_3d/test_blender_character_rig.py
+26 direct-runner tests passed; exit 0
+
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python-exit-code 1 --python mcp/ip_avatar_3d/test_blender_hand_refinement.py
+11 focused tests passed; 54 QA samples rendered; exit 0
+
+python3 -m py_compile <five Task 4 Python files>
+exit 0
+
+git diff --check
+exit 0
+```
+
+### Follow-up Self-Review and Concerns
+
+No blocking finding remains. The implementation change is limited to seated
+event filtering, seated root-idle behavior, and the calibrated root offset;
+the larger diff is regression evidence. Standing behavior is explicitly
+compared with neutral same-frame samples rather than inferred from keyframes.
+
+The real skin's right sole reaches `2.29 mm` below the mathematical floor at
+frame 29, within the explicit `3 mm` contact tolerance. Raising the full root
+farther pushed the opposite shoe beyond the accepted `25 mm` contact band and
+reduced the required seated pelvis drop, so the reported value is the selected
+world-space balance.
+Blender 5.1's existing `Material.use_nodes` deprecation warnings remain
+non-failing. Copied canonical/model assets remain untracked and are not part of
+the implementation or report commits.
