@@ -270,3 +270,126 @@ world-space balance.
 Blender 5.1's existing `Material.use_nodes` deprecation warnings remain
 non-failing. Copied canonical/model assets remain untracked and are not part of
 the implementation or report commits.
+
+## Second Review Follow-up: Strict Contact and Isolated Events
+
+Implementation and regression commit: `153db9b7`
+(`fix: tighten seated contact regressions`). This section supersedes the first
+follow-up's `-3 mm` penetration tolerance, `25 mm` upper band, and combined
+upper-event evidence. Neither circular limit remains in the tests.
+
+### RED / GREEN
+
+The tightened foot-dominant test was written first and failed on the real FBX:
+
+```text
+frame 1 LeftFoot  clearance = 0.0384724 m
+frame 1 RightFoot clearance = 0.0223798 m
+AssertionError: clearance <= 0.0035 m
+```
+
+These values came from the new strict foot region rather than the earlier
+leg/shin/foot aggregate. GREEN changes the source foot rotations and removes
+neutral seated pelvis idle sway while retaining spine/chest motion and explicit
+event body sway.
+
+`wave`, `present`, and `emphasis` now each run in a separate one-event seated
+plan and compare frame 15 against a neutral seated plan at frame 15:
+
+| Plan | Independently measured channels vs neutral |
+| --- | --- |
+| `wave` | shoulder R `0.0400`, upper arm R `1.0400`, forearm R `1.1500` rad |
+| `present` | upper arms L/R `0.4774`, forearms L/R `0.7161` rad |
+| `emphasis` | body `0.0348`, upper arms L/R `0.1591`, forearms L/R `0.1989` rad |
+
+`wave` and `present` assert that body remains equal to neutral; `present` and
+`emphasis` assert that shoulders remain equal to neutral. Every plan separately
+asserts all six leg/shin/foot local rotations equal neutral within `1e-6`, so
+removing any one event makes its own positive channel assertions fail.
+
+### Foot-Dominant Sampling Contract
+
+For each side, the test resolves only `boneMap[foot_l/foot_r]`. A source vertex
+is eligible only when that Foot group has weight at least `0.5` and is the
+vertex's maximum influence. Leg and shin positive weights are not included.
+
+The sole region is then selected as follows:
+
+1. Transform rest normals with the inverse-transpose world matrix and retain
+   downward vertices with world normal Z at most `-0.25`.
+2. Find the rest-space world minimum Z and take the fixed lowest `5 mm` band.
+3. Require the same indices to remain downward after deformation, with
+   evaluated world normal Z at most `-0.10`.
+4. Read those indices from the Armature-evaluated mesh and compute the minimum
+   deformed world Z against the actual `z=0` plane.
+
+The sampled mesh is `part_00000001.001`. It has exactly one enabled modifier:
+`Armature`, bound to the tested armature. The test fails if an ARMATURE modifier
+is disabled or targets another object, or if any non-ARMATURE modifier is
+enabled for viewport or render. It additionally checks evaluated/source vertex
+counts. Therefore topology/index preservation is established by the active
+modifier contract, not inferred from equal counts alone.
+
+Each side yields `16` sole-band vertices. Rest minimum Z is `0.000233568 m` for
+both sides.
+
+### Final Calibration and Clearance
+
+Final source-rig values are:
+
+```text
+root   (0.0, 0.12, -0.301)
+foot L (0.0, 0.0, -0.229)
+foot R (-0.07175, -0.2125, 0.146)
+```
+
+| Frame | Left minimum/clearance | Right minimum/clearance |
+| ---: | ---: | ---: |
+| 1 | `0.001323823 m` | `0.001204500 m` |
+| 15 | `0.001323825 m` | `0.001204513 m` |
+| 29 | `0.001323819 m` | `0.001204511 m` |
+
+All raw values are nonnegative and below `3 mm`; no tolerance is needed for
+these observed results. Maximum three-frame variation is below `1.4e-8 m`.
+
+Blender reports `scene.unit_settings.scale_length == 1.0`, so one Blender unit
+is treated as one meter in this calibrated scene. Blender mesh coordinates and
+evaluated vectors use single-precision components; IEEE-754 float32 epsilon is
+approximately `1.19e-7`, before composed FBX, armature, and matrix operations.
+The fixed `0.5 mm` comparison allowance is a conservative cross-platform
+numeric margin chosen independently of the measured clearances. The target
+contract remains `0-3 mm`, and current raw values sit near its center.
+
+### Final Verification
+
+```text
+python3 mcp/ip_avatar_3d/test_server.py
+Ran 90 tests in 0.149s
+OK (skipped=2)
+
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python-exit-code 1 --python mcp/ip_avatar_3d/test_blender_character_rig.py
+27 direct-runner tests passed; exit 0
+
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python-exit-code 1 --python mcp/ip_avatar_3d/test_blender_hand_refinement.py
+11 focused tests passed; 54 QA samples rendered; exit 0
+
+python3 -m py_compile <five Task 4 Python files>
+exit 0
+
+git diff --check
+exit 0
+```
+
+### Self-Review and Concerns
+
+No blocking concern remains. Standing idle/body behavior is unchanged because
+the pelvis idle-sway subtraction applies only in seated mode; the standing
+bounce/step/weight-shift regression remains green. Explicit seated `emphasis`
+still moves the body channel, while `wave` and `present` preserve it. Head,
+mouth, wrist, and independent three-segment finger regressions remain green.
+
+Blender 5.1's pre-existing `Material.use_nodes` deprecation warnings remain
+non-failing. Copied GLB/FBX/canonical assets remain untracked and were not
+included in commit `153db9b7`.
