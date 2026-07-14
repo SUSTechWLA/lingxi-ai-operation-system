@@ -255,7 +255,15 @@ def build_action_events(
     return events
 ```
 
-Extend `AROLL_ACTIONS` to contain the catalog names plus the existing backward-compatible action names. Update `build_aroll_action_specs()` so every catalog action has a concrete five-phase pose spec and both transition actions end in their target stable pose rather than `{}`.
+The immutable catalog must include every existing name in the current
+`AROLL_ACTIONS` tuple as well as the new names. Use `either -> either` for
+upper-body-only actions, `seated -> seated` for `Aroll_Seated_Idle`, and
+`either -> either` for `Aroll_Transition_Reset`. Preserve the existing
+durations and semantic intent names. After construction, define
+`AROLL_ACTIONS = tuple(ACTION_CATALOG)` so no callable action can exist without
+state metadata. Update `build_aroll_action_specs()` so every catalog action has
+a concrete five-phase pose spec and both transition actions end in their target
+stable pose rather than `{}`.
 
 - [ ] **Step 4: Add explicit mirrored seated and transition key poses**
 
@@ -316,22 +324,25 @@ def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
             (stand_to_sit[0], {}),
             (stand_to_sit[1], prep),
             (stand_to_sit[2], load),
-            (stand_to_sit[3], _blend_pose({}, seated, 0.72)),
-            (stand_to_sit[4], _blend_pose({}, seated, 1.03)),
+            (stand_to_sit[3], blend_action_pose({}, seated, 0.72)),
+            (stand_to_sit[4], blend_action_pose({}, seated, 1.0)),
             (stand_to_sit[5], seated),
         ],
         "Aroll_Transition_SitToStand": [
             (sit_to_stand[0], seated),
-            (sit_to_stand[1], _blend_pose(seated, load, 0.34)),
-            (sit_to_stand[2], _blend_pose(seated, load, 0.72)),
-            (sit_to_stand[3], _blend_pose(seated, {}, 0.68)),
+            (sit_to_stand[1], blend_action_pose(seated, load, 0.34)),
+            (sit_to_stand[2], blend_action_pose(seated, load, 0.72)),
+            (sit_to_stand[3], blend_action_pose(seated, {}, 0.68)),
             (sit_to_stand[4], prep),
             (sit_to_stand[5], {}),
         ],
     }
 ```
 
-Implement `_blend_pose()` as component-wise interpolation over `location` and `rotation`; missing target values resolve to zero. Preserve `__digit_pose_l` and `__digit_pose_r` from the nearest phase.
+Implement public `blend_action_pose()` as component-wise interpolation over
+`location` and `rotation`; missing target values resolve to zero. Preserve
+`__digit_pose_l` and `__digit_pose_r` from the nearest phase. This is the same
+helper consumed by the Blender runtime in Task 4.
 
 - [ ] **Step 5: Run the pure action tests**
 
@@ -358,6 +369,7 @@ git commit -m "feat: define stateful sloth a-roll actions"
 **Files:**
 - Modify: `mcp/ip_avatar_3d/server.py`
 - Modify: `mcp/ip_avatar_3d/test_server.py`
+- Modify: `mcp/ip_avatar_3d/blender_renderer.py`
 - Modify: `local-backend/internal/localmcp/client_test.go`
 - Modify: `mcp/ip_avatar_3d/README.md`
 - Modify: `docs/mcp-providers.md`
@@ -536,6 +548,30 @@ if item.get("motion") == "avatar_action":
 
 Keep legacy body/hand/head event coalescing unchanged.
 
+Also extend the accepted camera roles used by the new demo jobs:
+
+```python
+CAMERA_PRESETS = {"auto", "wide", "medium", "close", "three_quarter", "transition"}
+```
+
+Map `three_quarter` to `Camera_ThreeQuarter` and `transition` to
+`Camera_Transition` in `build_camera_plan()`. In
+`blender_renderer.configure_camera_plan()`, add both aliases and resolve them
+against mode camera roles:
+
+```python
+aliases.update({
+    "three_quarter": "three_quarter",
+    "transition": "transition",
+    "Camera_ThreeQuarter": "three_quarter",
+    "Camera_Transition": "transition",
+})
+```
+
+Add a dry-run server test proving `cameraPreset="transition"` is accepted and
+persists a `Camera_Transition` camera-plan entry. The packed studio objects that
+fulfil this alias are added in Task 3.
+
 - [ ] **Step 5: Cover MCP bridge discovery**
 
 Add a Go test that discovers `ip_avatar_3d.list_aroll_actions`, calls it through `CallTool`, and asserts the JSON result contains `Aroll_Transition_StandToSit`. The transport remains generic `LOCAL_MCP_TOOL_CALL`; do not add a new local command.
@@ -571,6 +607,7 @@ Add `list_aroll_actions` to both tool tables. Add this production example to `mc
 python3 -m unittest mcp.ip_avatar_3d.test_server -v
 go test ./local-backend/internal/localmcp -v
 git add mcp/ip_avatar_3d/server.py mcp/ip_avatar_3d/test_server.py \
+  mcp/ip_avatar_3d/blender_renderer.py \
   local-backend/internal/localmcp/client_test.go \
   mcp/ip_avatar_3d/README.md docs/mcp-providers.md
 git commit -m "feat: expose stateful a-roll actions through mcp"
@@ -1038,6 +1075,7 @@ AROLL_INTENT_RULES = (
     (("三点", "第三"), "Aroll_List_Three"),
     (("注意", "不要", "风险"), "Aroll_Caution_Stop"),
     (("所谓", "有人说", "引用"), "Aroll_Quote_Frame"),
+    (("坐下来", "坐着", "深入聊", "详细解释"), "Aroll_Seated_Explain"),
     (("总结", "最后", "结论"), "Aroll_Conclusion_HandsTogether"),
 )
 ```
@@ -1309,7 +1347,11 @@ In `_embedded_collision_report()`, require:
 
 ```python
 performance = payload.get("arollPerformanceQa") or {}
-if performance.get("transition", {}).get("success") is not True:
+transition = performance.get("transition") or {}
+transition_status = str(transition.get("status") or "")
+if transition_status not in {"passed", "not_applicable"}:
+    raise DemoQAError(f"{mode} transition geometry QA did not pass")
+if transition_status == "passed" and transition.get("success") is not True:
     raise DemoQAError(f"{mode} transition geometry QA did not pass")
 if performance.get("visemes", {}).get("success") is not True:
     raise DemoQAError(f"{mode} viseme QA did not pass")
