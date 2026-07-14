@@ -92,10 +92,11 @@ class ArollActionContractTests(unittest.TestCase):
     def test_transition_specs_end_in_mirrored_seated_pose(self) -> None:
         specs = aroll_actions.build_aroll_action_specs(True, 30)
         seated = aroll_actions.presentation_pose("seated", True)
+        standing = aroll_actions.presentation_pose("standing", True)
         self.assertEqual(specs["Aroll_Transition_StandToSit"][-1][1], seated)
-        self.assertEqual(specs["Aroll_Transition_SitToStand"][-1][1], {})
-        self.assertEqual(seated["leg_l"]["rotation"], (0.02, -0.08, 1.16))
-        self.assertEqual(seated["leg_r"]["rotation"], (0.02, 0.08, -1.16))
+        self.assertEqual(specs["Aroll_Transition_SitToStand"][-1][1], standing)
+        self.assertEqual(seated["leg_l"]["rotation"], (0.0, 0.0, 1.35))
+        self.assertEqual(seated["leg_r"]["rotation"], (0.05, 0.197, -1.30))
 
 
 if __name__ == "__main__":

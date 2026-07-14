@@ -227,23 +227,28 @@ def build_action_events(
 def presentation_pose(mode: str, source_rig: bool) -> dict[str, dict[str, tuple[float, float, float]]]:
     selected = str(mode or "standing").strip().lower()
     if selected == "standing":
-        return {}
+        if not source_rig:
+            return {}
+        return {
+            "foot_l": {"rotation": (0.108573, 0.0047755, 0.0)},
+            "foot_r": {"rotation": (0.1542314, -0.0882571, -0.0093923)},
+        }
     if selected != "seated":
         raise ValueError(f"unsupported presentation mode: {mode}")
     if source_rig:
-        leg_l = (0.02, -0.08, 1.16)
-        leg_r = (0.02, 0.08, -1.16)
-        shin_l = (-0.02, 0.04, -1.38)
-        shin_r = (-0.02, -0.04, 1.38)
-        foot_l = (0.0, 0.06, -0.18)
-        foot_r = (0.0, -0.06, 0.18)
+        leg_l = (0.0, 0.0, 1.35)
+        leg_r = (0.05, 0.197, -1.30)
+        shin_l = (0.0, 0.0, -1.55)
+        shin_r = (-0.047, -0.0595, 1.52)
+        foot_l = (-0.1024819, -0.2659181, -0.3082981)
+        foot_r = (-0.1510481, 0.1414181, 0.2510769)
     else:
-        leg_l = leg_r = (0.98, 0.0, 0.0)
-        shin_l = shin_r = (-1.12, 0.0, 0.0)
-        foot_l = foot_r = (0.16, 0.0, 0.0)
+        leg_l = leg_r = (1.02, 0.0, 0.0)
+        shin_l = shin_r = (-1.16, 0.0, 0.0)
+        foot_l = foot_r = (0.18, 0.0, 0.0)
     return {
-        "root": {"location": (0.0, 0.10, -0.286)},
-        "body": {"rotation": (0.065, 0.0, 0.0)},
+        "root": {"location": (0.0, 0.12, -0.2968)},
+        "body": {"rotation": (0.08, 0.0, 0.0)},
         "leg_l": {"rotation": leg_l},
         "shin_l": {"rotation": shin_l},
         "foot_l": {"rotation": foot_l},
@@ -416,6 +421,7 @@ def blend_action_pose(base: Mapping[str, Any], target: Mapping[str, Any], amount
 
 def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
     seated = presentation_pose("seated", source_rig)
+    standing = presentation_pose("standing", source_rig)
     stand_to_sit = (
         1,
         max(2, round(fps * 0.30)),
@@ -434,6 +440,94 @@ def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
     )
     prep = _pose({"body": {"rotation": (0.10, 0.0, 0.0)}}, left_hand="relaxed_hand", right_hand="relaxed_hand")
     load = _pose({"root": {"location": (0.0, 0.04, -0.05)}, "body": {"rotation": (0.14, 0.0, 0.0)}}, left_hand="relaxed_hand", right_hand="relaxed_hand")
+    if source_rig:
+        lower_roles = ("leg_l", "shin_l", "foot_l", "leg_r", "shin_r", "foot_r")
+        source_contact_data = (
+            (1, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.108573, 0.0047755, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.1542314, -0.0882571, -0.0093923)),
+            (5, (0.0, 0.0, 0.0), (0.0, 0.0805481, 0.0006699), (0.0, 0.0822144, -0.0006699), (0.061607, 0.1318455, 0.0206927), (0.0, 0.0073205, 0.0), (0.0, 0.0, 0.0006699), (0.0783336, -0.0511086, -0.0068054)),
+            (9, (0.0, 0.0, 0.0), (0.0, 0.1562244, 0.0013397), (0.0, 0.1644289, -0.0013397), (0.014641, 0.2583629, 0.0252803), (0.0, 0.014641, 0.0), (0.0, 0.0, 0.0013397), (0.0024359, -0.001841, 0.0006533)),
+            (13, (0.0, 0.0123077, -0.0144142), (0.0013627, 0.1577983, -0.001597), (-0.0013627, 0.1626539, -0.0137075), (-0.0176904, 0.2305333, 0.0942217), (0.0, -0.0124827, 0.0), (-0.0004122, 0.0040927, 0.011596), (0.0076935, 0.0669189, -0.0520457)),
+            (17, (0.0, 0.0246154, -0.0308284), (0.0027255, 0.1618082, -0.0045337), (-0.0027255, 0.160879, -0.0236395), (-0.0500217, 0.1998249, 0.163163), (0.0, -0.0396064, 0.0), (-0.0008244, 0.0081854, 0.0174234), (0.013394, 0.1266049, -0.0958868)),
+            (21, (0.0, 0.0369231, -0.0452426), (0.0040882, 0.1609462, -0.0074703), (-0.0040882, 0.159104, -0.0384432), (-0.0823531, 0.1719953, 0.2321044), (0.0, -0.0667301, 0.0), (-0.0012366, 0.0122781, 0.0296726), (0.0255164, 0.1851527, -0.1441569)),
+            (22, (0.0, 0.04, -0.0487328), (0.0044289, 0.1613397, -0.0082045), (-0.0044289, 0.1586603, -0.0415352), (-0.0904359, 0.16, 0.2493397), (0.0, -0.073511, 0.0), (-0.0013397, 0.0133013, 0.0346726), (0.0274398, 0.2033744, -0.1562244)),
+            (25, (0.0, 0.0477333, -0.0649824), (0.0036908, 0.2386682, 0.1538208), (0.0043618, 0.1617145, -0.1918914), (-0.0064332, 0.1286032, 0.3322142), (0.006, 0.0279358, -0.156), (-0.0067564, 0.0175745, 0.1704837), (-0.0170122, 0.3675613, -0.1466817)),
+            (29, (0.0, 0.0580444, -0.0871258), (0.0027066, -0.158204, 0.4578546), (0.1504287, 0.1214864, -0.4483197), (-0.0948664, 0.1375121, 0.198869), (0.014, 0.079836, -0.364), (-0.0139787, 0.1017614, 0.2360615), (0.0029173, 0.1751439, -0.0705275)),
+            (33, (0.0, 0.0683556, -0.1104156), (0.0017224, -0.106731, 0.5858883), (-0.0232281, 0.2701895, -0.5343673), (0.0572594, 0.0389796, 0.1471804), (0.022, 0.012093, -0.5675711), (-0.0187651, 0.0432161, 0.4425695), (-0.0880821, 0.2454688, -0.0085388)),
+            (37, (0.0, 0.0786667, -0.1379179), (0.0007381, -0.0173189, 0.8019221), (-0.0007381, 0.0308639, -0.806959), (-0.0297136, -0.0022459, -0.0017155), (0.03, 0.1776975, -0.78), (-0.0239944, 0.0361113, 0.7606774), (0.011485, 0.1206225, 0.070552)),
+            (40, (0.0, 0.0864, -0.1578784), (0.0, -0.0426314, 0.9639474), (0.0, 0.1061905, -0.9919877), (0.0, -0.0403388, -0.203227), (0.036, 0.05384, -0.936), (-0.03384, 0.0699429, 0.9639584), (0.008294, 0.0375661, 0.1502429)),
+            (41, (0.0, 0.08976, -0.1734051), (0.0, -0.0383683, 1.0021751), (0.0, 0.0848718, -1.0461632), (-0.0012481, -0.0673545, -0.1967551), (0.037266, 0.06829, -0.9741077), (-0.03529, 0.0708562, 1.0194112), (0.0033794, 0.0640978, 0.1452382)),
+            (45, (0.0, 0.1032, -0.2295986), (0.0, -0.0213157, 1.1550859), (0.0, 0.014851, -1.2628653), (-0.0062407, -0.1754176, -0.2053005), (0.0423301, 0.1260899, -1.1265384), (-0.0410898, 0.1002512, 1.2509661), (-0.0162789, 0.1051478, 0.1210662)),
+            (49, (0.0, 0.11664, -0.2932602), (0.0, -0.0042631, 1.3079967), (0.0, -0.0263307, -1.4775744), (-0.0132264, -0.2834805, -0.2903083), (0.0473943, 0.1838897, -1.2789692), (-0.0468897, 0.1780144, 1.4849568), (-0.0359373, 0.1097123, 0.1496914)),
+            (50, (0.0, 0.12, -0.3116458), (0.0, 0.0, 1.3462244), (0.0, -0.0407846, -1.5337429), (-0.0124815, -0.3104963, -0.3031827), (0.0486603, 0.1983397, -1.3170769), (-0.0483397, 0.1970258, 1.5428455), (-0.0408519, 0.0964276, 0.1563629)),
+            (53, (0.0, 0.12, -0.3091602), (0.0080526, 0.0, 1.3478425), (0.0, -0.016717, -1.5302218), (-0.0615415, -0.3072201, -0.3280686), (0.0492345, 0.1977655, -1.3141871), (-0.0477655, 0.1317321, 1.5399194), (-0.081214, 0.153146, 0.1900898)),
+            (57, (0.0, 0.12, -0.2968), (0.0, 0.0, 1.35), (0.0, 0.0, -1.55), (-0.1024819, -0.2659181, -0.3082981), (0.05, 0.197, -1.3), (-0.047, -0.0595, 1.52), (-0.1510481, 0.1414181, 0.2510769)),
+        )
+
+        def lower_pose(item: tuple[Any, ...]) -> ActionPose:
+            return {
+                "root": {"location": item[1]},
+                **{
+                    role: {"rotation": item[index + 2]}
+                    for index, role in enumerate(lower_roles)
+                },
+            }
+
+        contact_spec = [(item[0], lower_pose(item)) for item in source_contact_data]
+
+        def sample_spec(spec: ActionSpec, source_frame: float) -> ActionPose:
+            before = max((item for item in spec if item[0] <= source_frame), default=spec[0], key=lambda item: item[0])
+            after = min((item for item in spec if item[0] >= source_frame), default=spec[-1], key=lambda item: item[0])
+            if before[0] == after[0]:
+                return dict(before[1])
+            return blend_action_pose(
+                before[1],
+                after[1],
+                (source_frame - before[0]) / (after[0] - before[0]),
+            )
+
+        stand_upper_spec = [
+            (stand_to_sit[0], standing),
+            (stand_to_sit[1], prep),
+            (stand_to_sit[2], load),
+            (stand_to_sit[3], blend_action_pose({}, seated, 0.72)),
+            (stand_to_sit[4], seated),
+            (stand_to_sit[5], seated),
+        ]
+        sit_upper_spec = [
+            (sit_to_stand[0], seated),
+            (sit_to_stand[1], blend_action_pose(seated, load, 0.34)),
+            (sit_to_stand[2], blend_action_pose(seated, load, 0.72)),
+            (sit_to_stand[3], blend_action_pose(seated, {}, 0.68)),
+            (sit_to_stand[4], prep),
+            (sit_to_stand[5], standing),
+        ]
+        sit_frames = sorted(set(range(1, sit_to_stand[-1] + 1, 4)) | set(sit_to_stand))
+        stand_spec = [
+            (frame, _pose(sample_spec(stand_upper_spec, frame), lower))
+            for frame, lower in contact_spec
+        ]
+        sit_spec = [
+            (
+                frame,
+                _pose(
+                    sample_spec(sit_upper_spec, frame),
+                    sample_spec(
+                        contact_spec,
+                        stand_to_sit[-1]
+                        - (frame - 1) / (sit_to_stand[-1] - 1) * (stand_to_sit[-1] - 1),
+                    ),
+                ),
+            )
+            for frame in sit_frames
+        ]
+        stand_spec[0] = (stand_to_sit[0], standing)
+        stand_spec[-1] = (stand_to_sit[-1], seated)
+        sit_spec[0] = (sit_to_stand[0], seated)
+        sit_spec[-1] = (sit_to_stand[-1], standing)
+        return {
+            "Aroll_Transition_StandToSit": stand_spec,
+            "Aroll_Transition_SitToStand": sit_spec,
+        }
     return {
         "Aroll_Transition_StandToSit": [
             (stand_to_sit[0], {}),
@@ -449,7 +543,7 @@ def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
             (sit_to_stand[2], blend_action_pose(seated, load, 0.72)),
             (sit_to_stand[3], blend_action_pose(seated, {}, 0.68)),
             (sit_to_stand[4], prep),
-            (sit_to_stand[5], {}),
+            (sit_to_stand[5], standing),
         ],
     }
 

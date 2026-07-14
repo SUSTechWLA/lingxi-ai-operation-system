@@ -5863,6 +5863,97 @@ def _deterministic_foot_target_pairing(
     )
 
 
+def _foot_contact_anchors_world(
+    armature: bpy.types.Object,
+    pose,
+    bone_map: dict[str, str],
+) -> dict[str, Vector]:
+    source_rig = uses_source_humanoid_axes(armature)
+    if not source_rig:
+        return {
+            role: armature.matrix_world @ pose[bone_map[role]].matrix.translation
+            for role in ("foot_l", "foot_r")
+        }
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    anchors: dict[str, Vector] = {}
+    for role in ("foot_l", "foot_r"):
+        group_name = bone_map[role]
+        sole_points: list[Vector] = []
+        for obj in bpy.context.scene.objects:
+            if obj.type != "MESH":
+                continue
+            if not any(
+                modifier.type == "ARMATURE"
+                and modifier.object == armature
+                and modifier.show_viewport
+                for modifier in obj.modifiers
+            ):
+                continue
+            foot_group = obj.vertex_groups.get(group_name)
+            if not foot_group:
+                continue
+            primary_indices = []
+            for vertex in obj.data.vertices:
+                weights = {assignment.group: assignment.weight for assignment in vertex.groups}
+                foot_weight = weights.get(foot_group.index, 0.0)
+                if foot_weight < 0.5 or foot_weight < max(weights.values(), default=0.0):
+                    continue
+                world_normal = (
+                    obj.matrix_world.to_3x3().inverted_safe().transposed() @ vertex.normal
+                ).normalized()
+                if world_normal.z <= -0.25:
+                    primary_indices.append(vertex.index)
+            if not primary_indices:
+                continue
+            rest_z = {
+                index: float((obj.matrix_world @ obj.data.vertices[index].co).z)
+                for index in primary_indices
+            }
+            rest_minimum = min(rest_z.values())
+            sole_indices = [
+                index
+                for index in primary_indices
+                if rest_z[index] <= rest_minimum + 0.005
+            ]
+            evaluated = obj.evaluated_get(depsgraph)
+            evaluated_mesh = evaluated.to_mesh(
+                preserve_all_data_layers=True,
+                depsgraph=depsgraph,
+            )
+            try:
+                normal_matrix = evaluated.matrix_world.to_3x3().inverted_safe().transposed()
+                sole_points.extend(
+                    evaluated.matrix_world @ evaluated_mesh.vertices[index].co
+                    for index in sole_indices
+                    if (
+                        normal_matrix @ evaluated_mesh.vertices[index].normal
+                    ).normalized().z <= -0.10
+                )
+            finally:
+                evaluated.to_mesh_clear()
+        foot = pose[group_name]
+        toe_reference = armature.matrix_world @ foot.tail
+        if not sole_points:
+            anchors[role] = toe_reference
+            continue
+
+        def planar_distance(point: Vector) -> float:
+            return math.hypot(float(point.x - toe_reference.x), float(point.y - toe_reference.y))
+
+        nearest_distance = min(planar_distance(point) for point in sole_points)
+        contact_points = [
+            point for point in sole_points
+            if planar_distance(point) <= nearest_distance + 0.005
+        ]
+        anchors[role] = Vector((
+            float(toe_reference.x),
+            float(toe_reference.y),
+            sum(float(point.z) for point in contact_points) / len(contact_points),
+        ))
+    return anchors
+
+
 def apply_transition_contact_correction(
     armature: bpy.types.Object,
     pose,
@@ -5875,18 +5966,16 @@ def apply_transition_contact_correction(
         return {
             "footDriftL": 0.0,
             "footDriftR": 0.0,
+            "footResidualL": (0.0, 0.0, 0.0),
+            "footResidualR": (0.0, 0.0, 0.0),
+            "rootContactCorrectionZ": 0.0,
             "seatClearance": 0.0,
             "resolvedFootTargets": {},
         }
     contact_objects = _state_contact_objects(mode_objects, target_state)
     root = pose[bone_map["root"]]
     source_rig = uses_source_humanoid_axes(armature)
-    foot_points: dict[str, Vector] = {}
-    for role in ("foot_l", "foot_r"):
-        foot = pose[bone_map[role]]
-        foot_points[role] = armature.matrix_world @ (
-            foot.tail if source_rig else foot.matrix.translation
-        )
+    foot_points = _foot_contact_anchors_world(armature, pose, bone_map)
     available_targets = {
         key: contact_objects[key].matrix_world.translation.copy()
         for key in ("foot_l", "foot_r")
@@ -5923,31 +6012,6 @@ def apply_transition_contact_correction(
     )
     bpy.context.view_layer.update()
 
-    if lock_weight > 0.0:
-        for role in ("foot_l", "foot_r"):
-            foot = pose[bone_map[role]]
-            corrected_point = armature.matrix_world @ (
-                foot.tail if source_rig else foot.matrix.translation
-            )
-            residual = available_targets[target_keys[role]] - corrected_point
-            residual.z = 0.0
-            leg_role = "leg_l" if role == "foot_l" else "leg_r"
-            leg = pose[bone_map[leg_role]]
-            local_residual = source_root_location_from_world(
-                armature,
-                leg,
-                (
-                    float(residual.x) * lock_weight,
-                    float(residual.y) * lock_weight,
-                    0.0,
-                ),
-            )
-            leg.location = tuple(
-                float(leg.location[index]) + local_residual[index]
-                for index in range(3)
-            )
-        bpy.context.view_layer.update()
-
     seat_object = contact_objects["seat"]
     seat = seat_object.matrix_world.translation
     if source_rig:
@@ -5966,7 +6030,7 @@ def apply_transition_contact_correction(
         seat_contact_offset = 0.0
     seat_clearance = float(pelvis_world.z - seat_contact_offset - seat.z)
     if target_state == "seated" and clamped_phase > 0.70:
-        contact_delta = max(-0.018, min(0.035, seat_clearance - 0.012))
+        contact_delta = max(-0.018, min(0.035, seat_clearance + 0.012))
         contact_weight = (clamped_phase - 0.70) / 0.30
         world_contact = (0.0, 0.0, -contact_delta * contact_weight)
         if source_rig:
@@ -5983,17 +6047,73 @@ def apply_transition_contact_correction(
         )
         bpy.context.view_layer.update()
 
-    corrected_points = {}
-    for role in ("foot_l", "foot_r"):
-        foot = pose[bone_map[role]]
-        corrected_points[role] = armature.matrix_world @ (
-            foot.tail if source_rig else foot.matrix.translation
-        )
+    corrected_points = _foot_contact_anchors_world(armature, pose, bone_map)
+    root_contact_correction_z = 0.0
+    if bool(mode_objects.get("_continuous_foot_lock")):
+        contact_target = 0.0249
+        correction_intervals = []
+        for role in ("foot_l", "foot_r"):
+            residual = available_targets[target_keys[role]] - corrected_points[role]
+            planar_squared = float(residual.x * residual.x + residual.y * residual.y)
+            vertical_squared = contact_target * contact_target - planar_squared
+            if vertical_squared <= 0.0:
+                correction_intervals = []
+                break
+            vertical_limit = math.sqrt(vertical_squared)
+            correction_intervals.append((
+                float(residual.z) - vertical_limit,
+                float(residual.z) + vertical_limit,
+            ))
+        if correction_intervals:
+            correction_min = max(item[0] for item in correction_intervals)
+            correction_max = min(item[1] for item in correction_intervals)
+            if target_state == "seated" and clamped_phase >= 0.80:
+                if source_rig:
+                    current_pelvis = sum(
+                        (
+                            armature.matrix_world @ pose[bone_map[role]].head
+                            for role in ("leg_l", "leg_r")
+                        ),
+                        Vector((0.0, 0.0, 0.0)),
+                    ) / 2.0
+                else:
+                    current_pelvis = (
+                        armature.matrix_world
+                        @ pose[bone_map[pelvis_role]].matrix.translation
+                    )
+                current_clearance = float(
+                    current_pelvis.z - seat_contact_offset - seat.z
+                )
+                correction_min = max(correction_min, -0.0175 - current_clearance)
+                correction_max = min(correction_max, 0.0345 - current_clearance)
+            if correction_min <= correction_max:
+                root_contact_correction_z = max(
+                    correction_min,
+                    min(0.0, correction_max),
+                )
+                if abs(root_contact_correction_z) > 1e-9:
+                    world_contact = (0.0, 0.0, root_contact_correction_z)
+                    local_contact = (
+                        source_root_location_from_world(armature, root, world_contact)
+                        if source_rig
+                        else world_contact
+                    )
+                    root.location = tuple(
+                        float(root.location[index]) + local_contact[index]
+                        for index in range(3)
+                    )
+                    bpy.context.view_layer.update()
+                    corrected_points = _foot_contact_anchors_world(
+                        armature,
+                        pose,
+                        bone_map,
+                    )
     corrected_drift: dict[str, float] = {}
+    corrected_residuals: dict[str, tuple[float, float, float]] = {}
     for role in ("foot_l", "foot_r"):
         delta = available_targets[target_keys[role]] - corrected_points[role]
-        delta.z = 0.0
         corrected_drift[role] = float(delta.length)
+        corrected_residuals[role] = tuple(float(value) for value in delta)
     if source_rig:
         pelvis_world = sum(
             (
@@ -6007,6 +6127,9 @@ def apply_transition_contact_correction(
     return {
         "footDriftL": corrected_drift["foot_l"],
         "footDriftR": corrected_drift["foot_r"],
+        "footResidualL": corrected_residuals["foot_l"],
+        "footResidualR": corrected_residuals["foot_r"],
+        "rootContactCorrectionZ": root_contact_correction_z,
         "seatClearance": float(pelvis_world.z - seat_contact_offset - seat.z),
         "resolvedFootTargets": {
             role: contact_objects[target_keys[role]].name
@@ -6145,7 +6268,11 @@ def animate(
         head_turn = 0.0
         head_tilt = -body_sway * 0.45
         eye_gaze = 0.0
-        root_lift = 0.0 if seated else math.sin(t * math.pi * 2 * 0.7) * 0.008
+        root_lift = (
+            0.0
+            if seated or has_transition_sequence
+            else math.sin(t * math.pi * 2 * 0.7) * 0.008
+        )
         root_side = math.sin(t * math.pi * 2 * 0.23) * 0.004
         shoulder_left = [0.0, 0.0, -0.015]
         shoulder_right = [0.0, 0.0, 0.015]
@@ -6167,7 +6294,11 @@ def animate(
         hand_right = [0.0, -0.04, 0.025]
         digit_poses_left = dict(aroll_actions.hand_pose("relaxed_hand"))
         digit_poses_right = dict(aroll_actions.hand_pose("relaxed_hand"))
-        leg_left = 0.0 if seated else math.sin(t * math.pi * 2 * 0.24) * 0.035
+        leg_left = (
+            0.0
+            if seated or has_transition_sequence
+            else math.sin(t * math.pi * 2 * 0.24) * 0.035
+        )
         leg_right = -leg_left
         right_hand_stage = 0.0
 

@@ -23,6 +23,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import blender_renderer
+from mathutils import Vector
 
 
 MODEL_PATH = REPO_ROOT / "ip形象/main_ip/turnaround/3d模型.glb"
@@ -30,6 +31,7 @@ RIGGED_FBX_PATH = REPO_ROOT / "ip形象/main_ip/turnaround/带骨骼3d模型.fbx
 EXPORTED_GLB_PATH = REPO_ROOT / "ip形象/main_ip/models/main-ip-rigged.glb"
 WARM_STUDIO_PATH = REPO_ROOT / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
 SOLE_BAND_HEIGHT_M = 0.005
+SOLE_CLEARANCE_MAX_M = 0.003
 BLENDER_FLOAT_EPSILON_M = 0.0005
 
 
@@ -120,7 +122,7 @@ def lower_body_world_metrics(armature, bone_map) -> dict[str, object]:
     }
 
 
-def deterministic_planar_foot_pairing(foot_points, mode_objects):
+def deterministic_foot_target_pairing(foot_points, mode_objects):
     target_points = {
         role: mode_objects[role].matrix_world.translation.copy()
         for role in ("foot_l", "foot_r")
@@ -143,7 +145,8 @@ def deterministic_planar_foot_pairing(foot_points, mode_objects):
         ),
     )
     return pairing, {
-        side: planar_distance(side, pairing[side]) for side in ("l", "r")
+        side: float((target_points[pairing[side]] - foot_points[side]).length)
+        for side in ("l", "r")
     }
 
 
@@ -281,12 +284,30 @@ def shoe_sole_world_metrics(character_objects, armature, bone_map, floor) -> dic
             sum(float(point[axis]) for point in sole_points) / len(sole_points)
             for axis in range(3)
         )
+        foot = armature.pose.bones[bone_map[f"foot_{side}"]]
+        toe_reference = bone_world_point(armature, foot, "tail")
+
+        def planar_distance(point):
+            return math.hypot(float(point.x - toe_reference.x), float(point.y - toe_reference.y))
+
+        nearest_distance = min(planar_distance(point) for point in sole_points)
+        contact_points = [
+            point for point in sole_points
+            if planar_distance(point) <= nearest_distance + SOLE_BAND_HEIGHT_M
+        ]
+        contact_anchor = (
+            float(toe_reference.x),
+            float(toe_reference.y),
+            sum(float(point.z) for point in contact_points) / len(contact_points),
+        )
         metrics[side] = {
             "footGroup": foot_group_name,
             "restMinimumZ": min(rest_minima),
             "minimumZ": minimum,
             "clearance": minimum - floor_z,
             "soleBandCenter": center,
+            "contactAnchor": contact_anchor,
+            "contactAnchorVertexCount": len(contact_points),
             "soleBandVertexCount": len(sole_points),
             "sampledMeshes": sampled_meshes,
         }
@@ -1678,7 +1699,7 @@ def test_action_library_contains_talking_gestures_and_expressions() -> None:
     assert fingers[2].x < -0.10
 
 
-def test_source_rig_seated_pose_is_stable_and_preserves_speech_controls() -> None:
+def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_controls() -> None:
     character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
     face = blender_renderer.setup_face(
         {
@@ -1778,9 +1799,17 @@ def test_source_rig_seated_pose_is_stable_and_preserves_speech_controls() -> Non
         assert metrics["soles"]["floorZ"] == 0.0, metrics
         for sole in metrics["soles"]["sides"].values():
             assert sole["soleBandVertexCount"] >= 8, metrics
+            assert sole["clearance"] >= -BLENDER_FLOAT_EPSILON_M, metrics
+            assert sole["clearance"] <= (
+                SOLE_CLEARANCE_MAX_M + BLENDER_FLOAT_EPSILON_M
+            ), metrics
         assert abs(metrics["kneeAngles"]["l"] - metrics["kneeAngles"]["r"]) < 3.0, metrics
         knees = metrics["knees"]
+        left_from_center = knees["l"][0] - metrics["pelvis"][0]
+        right_from_center = metrics["pelvis"][0] - knees["r"][0]
+        assert abs(left_from_center - right_from_center) < 0.015, metrics
         assert abs(knees["l"][1] - knees["r"][1]) < 0.02, metrics
+        assert abs(knees["l"][2] - knees["r"][2]) < 0.015, metrics
         sole_centers = {
             side: metrics["soles"]["sides"][side]["soleBandCenter"]
             for side in ("l", "r")
@@ -1788,6 +1817,9 @@ def test_source_rig_seated_pose_is_stable_and_preserves_speech_controls() -> Non
         assert sole_centers["l"][0] > metrics["pelvis"][0], metrics
         assert sole_centers["r"][0] < metrics["pelvis"][0], metrics
         assert abs(sole_centers["l"][1] - sole_centers["r"][1]) < 0.025, metrics
+        assert max(
+            metrics["pelvis"][2] - knee[2] for knee in metrics["knees"].values()
+        ) < 0.16, metrics
 
     assert max(metrics["pelvis"][2] for metrics in seated.values()) - min(
         metrics["pelvis"][2] for metrics in seated.values()
@@ -2189,6 +2221,9 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         "standing": blender_renderer.resolve_scene_mode_objects("standing"),
         "seated": mode_objects,
     }
+    bpy.ops.mesh.primitive_plane_add(size=8.0, location=(0.0, 0.0, 0.0))
+    contact_floor = bpy.context.object
+    contact_floor.name = "Task4_Transition_Contact_Plane"
     plan = {
         "durationSec": 7.0,
         "fps": 30,
@@ -2259,6 +2294,8 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
     )
     sampled = {}
     foot_drift = {"l": [], "r": []}
+    foot_contact_samples = []
+    leg_location_max = {"l": 0.0, "r": 0.0}
     knee_separation = []
     seat_clearance = []
     silhouette_spikes = []
@@ -2275,14 +2312,16 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
             - float(mode_objects["seat"].get("target_height", 0.0)) * 0.10
             - mode_objects["seat"].matrix_world.translation.z
         )
-        foot_points = [
-            bone_world_point(
-                armature,
-                armature.pose.bones[bone_map[f"foot_{side}"]],
-                "tail",
-            )
+        sole_metrics = shoe_sole_world_metrics(
+            character_objects,
+            armature,
+            bone_map,
+            contact_floor,
+        )
+        foot_points = {
+            side: Vector(sole_metrics["sides"][side]["contactAnchor"])
             for side in ("l", "r")
-        ]
+        }
         t = (frame - 1) / 30.0
         target_state = next(
             (
@@ -2296,12 +2335,29 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
                 key=lambda item: float(item["timeSec"]),
             )["state"],
         )
-        _, role_drift = deterministic_planar_foot_pairing(
-            {side: foot_points[index] for index, side in enumerate(("l", "r"))},
+        pairing, role_drift = deterministic_foot_target_pairing(
+            foot_points,
             state_mode_objects[target_state],
         )
         foot_drift["l"].append(role_drift["l"])
         foot_drift["r"].append(role_drift["r"])
+        foot_contact_samples.append({
+            "frame": frame,
+            "targetState": target_state,
+            "anchors": {
+                side: tuple(float(value) for value in foot_points[side])
+                for side in ("l", "r")
+            },
+            "pairing": pairing,
+            "residuals": role_drift,
+        })
+        for side in ("l", "r"):
+            role = f"leg_{side}"
+            location = armature.pose.bones[bone_map[role]].location
+            leg_location_max[side] = max(
+                leg_location_max[side],
+                max(abs(float(value)) for value in location),
+            )
         silhouette_spikes.append(
             lower_body_central_forward_spike(character_objects, armature, bone_map)
         )
@@ -2322,6 +2378,9 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
     metrics_report = {
         "footDriftL": max(foot_drift["l"]),
         "footDriftR": max(foot_drift["r"]),
+        "legLocationMaxL": leg_location_max["l"],
+        "legLocationMaxR": leg_location_max["r"],
+        "footContactSamples": foot_contact_samples,
         "kneeSeparationMin": min(knee_separation),
         "seatClearanceMin": min(contact_clearance),
         "seatClearanceMax": max(contact_clearance),
@@ -2386,15 +2445,17 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
     assert final_contact["targetState"] == "standing", final_contact
     bpy.context.scene.frame_set(final_contact["frame"])
     bpy.context.view_layer.update()
+    final_sole_metrics = shoe_sole_world_metrics(
+        character_objects,
+        armature,
+        bone_map,
+        contact_floor,
+    )
     final_foot_points = {
-        side: bone_world_point(
-            armature,
-            armature.pose.bones[bone_map[f"foot_{side}"]],
-            "tail",
-        )
+        side: Vector(final_sole_metrics["sides"][side]["contactAnchor"])
         for side in ("l", "r")
     }
-    final_pairing, _ = deterministic_planar_foot_pairing(
+    final_pairing, _ = deterministic_foot_target_pairing(
         final_foot_points,
         state_mode_objects["standing"],
     )
@@ -2415,6 +2476,8 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         if key != "samples"
     }
     print("TRANSITION_WORLD_METRICS", json.dumps(printable_metrics, sort_keys=True))
+    assert leg_location_max["l"] < 1e-8, metrics_report
+    assert leg_location_max["r"] < 1e-8, metrics_report
     assert max(foot_drift["l"]) < 0.025, metrics_report
     assert max(foot_drift["r"]) < 0.025, metrics_report
     assert min(knee_separation) > dimensions["width"] * 0.055, metrics_report
@@ -2453,7 +2516,7 @@ if __name__ == "__main__":
         test_generated_rig_exposes_optional_hand_and_foot_ik_controls,
         test_sloth_face_deforms_original_mesh_for_nine_visemes,
         test_action_library_contains_talking_gestures_and_expressions,
-        test_source_rig_seated_pose_is_stable_and_preserves_speech_controls,
+        test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_controls,
         test_source_rig_seated_upper_events_move_their_own_channels,
         test_source_rig_standing_preserves_bounce_step_and_weight_shift,
         test_talking_timeline_animates_multiaxis_hands_fingers_jaw_and_source_mouth,
