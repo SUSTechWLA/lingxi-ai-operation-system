@@ -1148,7 +1148,6 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             background = root / "fallback.png"
             model.write_bytes(b"glTF placeholder")
             scene.write_bytes(b"BLENDER placeholder")
-            background.write_bytes(b"PNG placeholder")
 
             result = server.render_talking_video(
                 script="今天分析一个值得关注的变化。",
@@ -1166,6 +1165,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
             render_input = json.loads(pathlib.Path(result["renderInputPath"]).read_text(encoding="utf-8"))
             self.assertEqual(render_input["sceneBlendPath"], str(scene.resolve()))
+            self.assertEqual(render_input["backgroundPath"], "")
             self.assertEqual(render_input["backgroundMode"], "blender_scene")
             self.assertEqual(render_input["cameraPreset"], "auto")
             self.assertEqual(render_input["lightingPreset"], "editorial_soft")

@@ -2608,9 +2608,6 @@ def render_talking_video(
         error=voice_policy_error,
     )
 
-    resolved_background = str(_readable_path(backgroundPath)) if backgroundPath else ""
-    if resolved_background and not Path(resolved_background).is_file():
-        raise FileNotFoundError(f"backgroundPath does not exist: {resolved_background}")
     resolved_scene = str(_readable_path(sceneBlendPath)) if sceneBlendPath else ""
     if resolved_scene:
         scene_path = Path(resolved_scene)
@@ -2618,6 +2615,11 @@ def render_talking_video(
             raise ValueError("sceneBlendPath must point to a Blender .blend file")
         if not scene_path.is_file():
             raise FileNotFoundError(f"sceneBlendPath does not exist: {resolved_scene}")
+    resolved_background = ""
+    if not resolved_scene and backgroundPath:
+        resolved_background = str(_readable_path(backgroundPath))
+        if not Path(resolved_background).is_file():
+            raise FileNotFoundError(f"backgroundPath does not exist: {resolved_background}")
 
     initial_duration = float(durationSec or 0)
     if audioPath:
