@@ -1788,9 +1788,7 @@ def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_control
                 "finger_2_tip_r",
             )
         }
-        assert standing[frame]["pelvis"][2] - metrics["pelvis"][2] > (
-            dimensions["height"] * 0.10
-        ), {
+        assert standing[frame]["pelvis"][2] - metrics["pelvis"][2] > 0.30, {
             "frame": frame,
             "standing": standing[frame],
             "seated": metrics,
@@ -2431,6 +2429,11 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         )
 
     contact_samples = transition_report["samples"]
+    assert [item["frame"] for item in contact_samples] == list(range(1, 211)), (
+        len(contact_samples),
+        [item["frame"] for item in contact_samples[:4]],
+        [item["frame"] for item in contact_samples[-4:]],
+    )
     stable_seated = [
         item
         for item in contact_samples
@@ -2467,8 +2470,12 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         side: max(float(item[f"footDrift{side.upper()}"]) for item in contact_samples)
         for side in ("l", "r")
     }
-    assert contact_drift_max["l"] < 0.025, (contact_drift_max, contact_samples)
-    assert contact_drift_max["r"] < 0.025, (contact_drift_max, contact_samples)
+    contact_drift_worst = {
+        side: max(contact_samples, key=lambda item: float(item[f"footDrift{side.upper()}"]))
+        for side in ("l", "r")
+    }
+    assert contact_drift_max["l"] < 0.025, (contact_drift_max, contact_drift_worst)
+    assert contact_drift_max["r"] < 0.025, (contact_drift_max, contact_drift_worst)
     printable_metrics = dict(metrics_report)
     printable_metrics["animateReport"] = {
         key: value
@@ -2488,7 +2495,7 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         seated_metrics["pelvis"][2] + dimensions["height"] * 0.10
     ), metrics_report
     assert max(silhouette_spikes) <= 0.045, metrics_report
-    assert transition_report["sampleCount"] > 0, transition_report
+    assert transition_report["sampleCount"] == 210, transition_report
     assert transition_report["maxFootDriftL"] < 0.025, transition_report
     assert transition_report["maxFootDriftR"] < 0.025, transition_report
     assert transition_report["minSeatClearance"] > -0.018, transition_report

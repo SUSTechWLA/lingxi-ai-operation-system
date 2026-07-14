@@ -6050,7 +6050,9 @@ def apply_transition_contact_correction(
     corrected_points = _foot_contact_anchors_world(armature, pose, bone_map)
     root_contact_correction_z = 0.0
     if bool(mode_objects.get("_continuous_foot_lock")):
-        contact_target = 0.0249
+        # Keep half a millimetre of numerical/export margin below the 25 mm QA
+        # limit; evaluated mesh anchors vary slightly across Blender builds.
+        contact_target = 0.0245
         correction_intervals = []
         for role in ("foot_l", "foot_r"):
             residual = available_targets[target_keys[role]] - corrected_points[role]
@@ -6247,9 +6249,9 @@ def animate(
             )["state"]
         )
 
-    animation_frames = list(range(1, frame_end + 1, 2))
-    if animation_frames[-1] != frame_end:
-        animation_frames.append(frame_end)
+    # Author and verify contact at the delivery frame rate. Sparse keying lets
+    # Bezier interpolation drift outside the foot-lock tolerance between keys.
+    animation_frames = list(range(1, frame_end + 1))
     for frame in animation_frames:
         t = (frame - 1) / fps
         pose_state = pose_state_at(t)
