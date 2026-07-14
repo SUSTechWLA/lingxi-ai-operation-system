@@ -5002,6 +5002,8 @@ def animate(
     source_rig = uses_source_humanoid_axes(armature)
     base_pose = aroll_actions.presentation_pose(presentation_mode, source_rig)
     seated = bool(base_pose)
+    if seated:
+        events = [event for event in events if event.get("motion") != "happy_bounce"]
     if not runtime_actions_prepared:
         reconcile_runtime_timeline_actions(armature, face)
     if armature.animation_data:
@@ -5032,7 +5034,7 @@ def animate(
         head_turn = 0.0
         head_tilt = -body_sway * 0.45
         eye_gaze = 0.0
-        root_lift = math.sin(t * math.pi * 2 * 0.7) * 0.008
+        root_lift = 0.0 if seated else math.sin(t * math.pi * 2 * 0.7) * 0.008
         root_side = math.sin(t * math.pi * 2 * 0.23) * 0.004
         shoulder_left = [0.0, 0.0, -0.015]
         shoulder_right = [0.0, 0.0, 0.015]
@@ -5099,8 +5101,6 @@ def animate(
                 fore_left[1] += amount * 0.10
                 fore_right[1] -= amount * 0.10
             elif motion == "happy_bounce":
-                if seated:
-                    continue
                 root_lift += amount * 0.07
                 leg_left -= amount * 0.035
                 leg_right += amount * 0.035

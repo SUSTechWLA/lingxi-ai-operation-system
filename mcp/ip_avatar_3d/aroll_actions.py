@@ -118,7 +118,7 @@ def presentation_pose(mode: str, source_rig: bool) -> dict[str, dict[str, tuple[
         shin_l = shin_r = (-1.16, 0.0, 0.0)
         foot_l = foot_r = (0.18, 0.0, 0.0)
     return {
-        "root": {"location": (0.0, 0.12, -0.34)},
+        "root": {"location": (0.0, 0.12, -0.301)},
         "body": {"rotation": (0.08, 0.0, 0.0)},
         "leg_l": {"rotation": leg_l},
         "shin_l": {"rotation": shin_l},
