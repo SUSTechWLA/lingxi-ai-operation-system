@@ -461,6 +461,18 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
     }
     assert warm_studio_validator.validate_lighting_evidence_payload(payload) == []
 
+    payload["cameraComparisons"].append(dict(payload["cameraComparisons"][0]))
+    errors = warm_studio_validator.validate_lighting_evidence_payload(payload)
+    assert any("cameraComparisons must contain exactly 4 records" in error for error in errors)
+    assert any("duplicates camera-role pair" in error for error in errors)
+    payload["cameraComparisons"].pop()
+
+    payload["measurements"].append(dict(payload["measurements"][0]))
+    errors = warm_studio_validator.validate_lighting_evidence_payload(payload)
+    assert any("measurements must contain exactly 4 records" in error for error in errors)
+    assert any("duplicates lighting key" in error for error in errors)
+    payload["measurements"].pop()
+
     payload["subjectMaskSource"] = "fixed rectangle"
     payload["measurements"][0]["backgroundStopsBelowFace"] = 0.99
     payload["measurements"][1]["highlightClipRatio"] = 0.005

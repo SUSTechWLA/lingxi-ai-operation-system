@@ -184,6 +184,10 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
     if not isinstance(comparisons, list):
         errors.append("cameraComparisons must be a list")
     else:
+        if len(comparisons) != len(expected_comparisons):
+            errors.append(
+                f"cameraComparisons must contain exactly {len(expected_comparisons)} records"
+            )
         for index, comparison in enumerate(comparisons):
             if not isinstance(comparison, dict):
                 errors.append(f"camera comparison {index} must be an object")
@@ -193,6 +197,8 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
             camera_role_a = str(comparison.get("cameraRoleA", ""))
             camera_role_b = str(comparison.get("cameraRoleB", ""))
             comparison_key = (mode, camera_role_a, camera_role_b)
+            if comparison_key in actual_comparisons:
+                errors.append(f"{label} duplicates camera-role pair {comparison_key}")
             actual_comparisons.add(comparison_key)
             camera_a = str(comparison.get("cameraA", ""))
             camera_b = str(comparison.get("cameraB", ""))
@@ -287,6 +293,8 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
         for engine in ("eevee", "cycles")
     }
     actual: set[tuple[str, str, str]] = set()
+    if len(measurements) != len(expected):
+        errors.append(f"measurements must contain exactly {len(expected)} records")
     for index, measurement in enumerate(measurements):
         if not isinstance(measurement, dict):
             errors.append(f"measurement {index} must be an object")
@@ -296,6 +304,8 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
             str(measurement.get("engine")),
             str(measurement.get("cameraRole")),
         )
+        if key in actual:
+            errors.append(f"measurement {index} duplicates lighting key {key}")
         actual.add(key)
         label = "/".join(key)
         try:
