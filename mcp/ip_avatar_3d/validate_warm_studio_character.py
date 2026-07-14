@@ -28,6 +28,8 @@ DEFAULT_SAMPLE_FRAMES = (1, 15, 29)
 SOLE_BAND_HEIGHT_M = 0.005
 DEFORMATION_SPIKE_RATIO = 3.0
 DEFORMATION_SPIKE_DELTA_M = 0.02
+MIN_MEDIUM_FRAME_POINTS = 128
+MAX_FOOT_CLEARANCE_M = 0.0035
 
 
 def assert_render_armature_modifiers(
@@ -104,13 +106,12 @@ def _render_modifier_state(objects: Iterable[bpy.types.Object]):
         bpy.context.view_layer.update()
 
 
-def count_evaluated_mesh_intersections(
+def count_full_evaluated_mesh_intersections(
     left_objects: Iterable[bpy.types.Object],
     right_objects: Iterable[bpy.types.Object],
     depsgraph: bpy.types.Depsgraph,
-    camera: bpy.types.Object | None = None,
 ) -> dict[str, Any]:
-    """Count overlapping evaluated polygon pairs between render-visible meshes."""
+    """Count all overlapping evaluated polygon pairs without camera filtering."""
     left = [(obj, _evaluated_world_bvh_geometry(obj, depsgraph)) for obj in left_objects]
     right = [(obj, _evaluated_world_bvh(obj, depsgraph)) for obj in right_objects]
     object_pairs: list[list[str]] = []
@@ -118,26 +119,11 @@ def count_evaluated_mesh_intersections(
     for left_obj, left_geometry in left:
         if left_geometry is None:
             continue
-        left_tree, vertices, triangles = left_geometry
-        visible_triangles: set[int] | None = None
-        if camera is not None:
-            visible_triangles = set()
-            for index, triangle in enumerate(triangles):
-                projected = [
-                    world_to_camera_view(bpy.context.scene, camera, vertices[vertex_index])
-                    for vertex_index in triangle
-                ]
-                if any(
-                    point.z > 0 and 0 <= point.x <= 1 and 0 <= point.y <= 1
-                    for point in projected
-                ):
-                    visible_triangles.add(index)
+        left_tree, _, _ = left_geometry
         for right_obj, right_tree in right:
             if right_tree is None:
                 continue
             overlaps = left_tree.overlap(right_tree)
-            if visible_triangles is not None:
-                overlaps = [pair for pair in overlaps if pair[0] in visible_triangles]
             if not overlaps:
                 continue
             object_pairs.append([left_obj.name, right_obj.name])
@@ -148,13 +134,104 @@ def count_evaluated_mesh_intersections(
     }
 
 
+def count_evaluated_mesh_intersections(
+    left_objects: Iterable[bpy.types.Object],
+    right_objects: Iterable[bpy.types.Object],
+    depsgraph: bpy.types.Depsgraph,
+) -> dict[str, Any]:
+    return count_full_evaluated_mesh_intersections(left_objects, right_objects, depsgraph)
+
+
+def count_hand_weighted_face_intersections(
+    character_objects: Iterable[bpy.types.Object],
+    obstacle_objects: Iterable[bpy.types.Object],
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+    depsgraph: bpy.types.Depsgraph,
+) -> dict[str, Any]:
+    """Intersect Armature-deformed hand-weighted faces with full obstacle meshes."""
+    objects = list(character_objects)
+    assert_render_armature_modifiers(objects, armature)
+    hand_bones = {
+        name
+        for role, name in bone_map.items()
+        if role in {"hand_l", "hand_r"} or role.startswith("finger_")
+    }
+    obstacle_trees = [
+        (obj, _evaluated_world_bvh(obj, depsgraph)) for obj in obstacle_objects
+    ]
+    triangle_pair_count = 0
+    sampled_face_count = 0
+    object_pairs: list[list[str]] = []
+    for obj in objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        group_indices = {
+            group.index
+            for name in hand_bones
+            if (group := obj.vertex_groups.get(name)) is not None
+        }
+        if not group_indices:
+            continue
+        evaluated, mesh, states = _armature_only_evaluated_mesh(obj, depsgraph)
+        try:
+            if len(mesh.vertices) != len(obj.data.vertices):
+                raise RuntimeError(f"hand collision topology changed for {obj.name}")
+            obj.data.calc_loop_triangles()
+            triangles = []
+            for triangle in obj.data.loop_triangles:
+                average_weight = sum(
+                    sum(
+                        assignment.weight
+                        for assignment in obj.data.vertices[index].groups
+                        if assignment.group in group_indices
+                    )
+                    for index in triangle.vertices
+                ) / 3.0
+                if average_weight >= 0.25:
+                    triangles.append(list(triangle.vertices))
+            if not triangles:
+                continue
+            vertices = [
+                evaluated.matrix_world @ vertex.co for vertex in mesh.vertices
+            ]
+            hand_tree = BVHTree.FromPolygons(
+                vertices,
+                triangles,
+                all_triangles=True,
+                epsilon=1e-6,
+            )
+            sampled_face_count += len(triangles)
+            for obstacle, obstacle_tree in obstacle_trees:
+                if obstacle_tree is None:
+                    continue
+                overlaps = hand_tree.overlap(obstacle_tree)
+                if not overlaps:
+                    continue
+                triangle_pair_count += len(overlaps)
+                object_pairs.append([obj.name, obstacle.name])
+        finally:
+            _restore_armature_only_mesh(evaluated, states)
+    return {
+        "trianglePairCount": triangle_pair_count,
+        "sampledFaceCount": sampled_face_count,
+        "objectPairs": object_pairs,
+    }
+
+
 def finalize_mode_report(report: dict[str, Any]) -> dict[str, Any]:
     """Apply the blocking Task 5 thresholds and attach deterministic reasons."""
     reasons: list[str] = []
     for side in ("left", "right"):
         clearance = float(report["floorClearance"][side]["minimum"])
-        if clearance < -0.02:
-            reasons.append(f"{side} foot clearance {clearance:.6f} m is below -0.020000 m")
+        maximum = float(report["floorClearance"][side].get("maximum", clearance))
+        if clearance < 0.0:
+            reasons.append(f"{side} foot clearance {clearance:.6f} m penetrates the floor")
+        if maximum > MAX_FOOT_CLEARANCE_M:
+            reasons.append(
+                f"{side} foot clearance {maximum:.6f} m exceeds "
+                f"{MAX_FOOT_CLEARANCE_M:.6f} m"
+            )
     for key in (
         "deskIntersectionCount",
         "chairIntersectionCount",
@@ -166,10 +243,18 @@ def finalize_mode_report(report: dict[str, Any]) -> dict[str, Any]:
     spike_count = int(report["deformationSpikeCount"])
     if spike_count:
         reasons.append(f"deformationSpikeCount={spike_count}")
-    visibility = report["cameraVisibility"]
-    for role in ("head", "leftHand", "rightHand"):
-        if int(visibility[role]["insideCount"]) <= 0:
-            reasons.append(f"{role} has no sampled geometry inside the medium frame")
+    frames = report.get("frames") or []
+    if not frames:
+        reasons.append("camera visibility has no sampled frames")
+    for frame in frames:
+        visibility = frame["cameraVisibility"]
+        for role in ("head", "leftHand", "rightHand"):
+            count = int(visibility[role]["insideCount"])
+            if count < MIN_MEDIUM_FRAME_POINTS:
+                reasons.append(
+                    f"frame {frame['frame']} {role} has {count} geometry points "
+                    f"inside medium frame; requires {MIN_MEDIUM_FRAME_POINTS}"
+                )
     report["failureReasons"] = reasons
     report["success"] = not reasons
     return report
@@ -312,6 +397,10 @@ def sample_shoe_soles(
             "sampledVertexCount": len(sole_points),
             "sampledMeshes": sampled_meshes,
             "footGroup": group_name,
+            "center": [
+                sum(float(point[axis]) for point in sole_points) / len(sole_points)
+                for axis in range(3)
+            ],
         }
     return {
         **sides,
@@ -474,6 +563,7 @@ def _load_mode(
     scene_path: Path,
     master_path: Path,
     mode: str,
+    sample_frames: tuple[int, ...],
 ) -> tuple[list[bpy.types.Object], bpy.types.Object, dict[str, str], dict[str, Any]]:
     blender_renderer.load_scene_template(str(scene_path))
     mode_objects = blender_renderer.resolve_scene_mode_objects(mode)
@@ -535,6 +625,26 @@ def _load_mode(
         dimensions,
         mode_objects,
     )
+    placement = bpy.data.objects[scene_stats["placement"]["placementRoot"]]
+    mode_objects["collisionPlacement"] = blender_renderer.calibrate_mode_collision_clearance(
+        character_objects,
+        placement,
+        sample_frames,
+    )
+    mode_objects["footContact"] = blender_renderer.calibrate_mode_foot_contact(
+        character_objects,
+        armature,
+        bone_map,
+        placement,
+        mode_objects,
+        sample_frames,
+    )
+    mode_objects["mediumFraming"] = blender_renderer.calibrate_mode_medium_camera(
+        character_objects,
+        bone_map,
+        mode_objects,
+        sample_frames,
+    )
     return character_objects, armature, bone_map, mode_objects
 
 
@@ -544,11 +654,13 @@ def validate_mode(
     master_path: Path,
     mode: str,
     sample_frames: tuple[int, ...] = DEFAULT_SAMPLE_FRAMES,
+    evidence_dir: Path | None = None,
 ) -> dict[str, Any]:
     character_objects, armature, bone_map, mode_objects = _load_mode(
         scene_path,
         master_path,
         mode,
+        sample_frames,
     )
     desk_objects, chair_objects = _studio_collision_objects()
     floor_name, floor_z = _floor_height()
@@ -578,24 +690,24 @@ def validate_mode(
             )
             regions = _semantic_region_points(character_objects, bone_map)
             visibility = _camera_visibility(mode_objects["cameras"]["medium"], regions)
-            desk = count_evaluated_mesh_intersections(
+            desk = count_full_evaluated_mesh_intersections(
                 character_objects,
                 desk_objects,
                 depsgraph,
-                mode_objects["cameras"]["medium"],
             )
-            chair = count_evaluated_mesh_intersections(
+            chair = count_full_evaluated_mesh_intersections(
                 character_objects,
                 chair_objects,
                 depsgraph,
-                mode_objects["cameras"]["medium"],
             )
-            hand_points = [*regions["leftHand"], *regions["rightHand"]]
-            hand_count = _points_inside_objects(
-                hand_points,
+            hand = count_hand_weighted_face_intersections(
+                character_objects,
                 [*desk_objects, *chair_objects],
+                armature,
+                bone_map,
                 depsgraph,
             )
+            hand_count = int(hand["trianglePairCount"])
             edges = _render_mesh_edge_snapshot(character_objects, depsgraph)
         if baseline_edges is None:
             baseline_edges = edges
@@ -621,11 +733,16 @@ def validate_mode(
                     side: float(soles[side]["minimum"])
                     for side in ("left", "right")
                 },
+                "soleCenters": {
+                    side: soles[side]["center"] for side in ("left", "right")
+                },
                 "deskIntersectionCount": int(desk["trianglePairCount"]),
                 "deskObjectPairs": desk["objectPairs"],
                 "chairIntersectionCount": int(chair["trianglePairCount"]),
                 "chairObjectPairs": chair["objectPairs"],
                 "handIntersectionCount": hand_count,
+                "handSampledFaceCount": int(hand["sampledFaceCount"]),
+                "handObjectPairs": hand["objectPairs"],
                 "cameraVisibility": visibility,
                 "deformationSpikeCount": spike_count,
                 "maximumEdgeRatio": edge_ratio,
@@ -642,6 +759,9 @@ def validate_mode(
         "cameras": {
             role: camera.name for role, camera in mode_objects["cameras"].items()
         },
+        "footContact": mode_objects["footContact"],
+        "collisionPlacement": mode_objects["collisionPlacement"],
+        "mediumFraming": mode_objects["mediumFraming"],
         "floorObject": floor_name,
         "floorClearance": {
             side: {
@@ -662,6 +782,26 @@ def validate_mode(
         },
         "frames": frame_reports,
     }
+    if evidence_dir is not None:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        evidence_path = evidence_dir / f"{mode}-medium-frame-{sample_frames[-1]:04d}.png"
+        scene = bpy.context.scene
+        scene.camera = mode_objects["cameras"]["medium"]
+        scene.render.resolution_x = 960
+        scene.render.resolution_y = 540
+        scene.render.resolution_percentage = 100
+        scene.render.image_settings.file_format = "PNG"
+        scene.render.image_settings.color_mode = "RGB"
+        scene.render.filepath = str(evidence_path)
+        scene.frame_set(int(sample_frames[-1]))
+        bpy.context.view_layer.update()
+        bpy.ops.render.render(write_still=True)
+        report["renderEvidence"] = {
+            "camera": scene.camera.name,
+            "frame": int(sample_frames[-1]),
+            "path": str(evidence_path),
+            "resolution": [960, 540],
+        }
     return finalize_mode_report(report)
 
 
@@ -671,6 +811,7 @@ def validate_modes(
     master_path: Path,
     modes: tuple[str, ...] = ("standing", "seated"),
     sample_frames: tuple[int, ...] = DEFAULT_SAMPLE_FRAMES,
+    evidence_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     scene_path = Path(scene_path).expanduser().resolve()
     master_path = Path(master_path).expanduser().resolve()
@@ -686,6 +827,7 @@ def validate_modes(
             master_path=master_path,
             mode=mode,
             sample_frames=sample_frames,
+            evidence_dir=evidence_dir,
         )
         for mode in modes
     ]
@@ -699,6 +841,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--modes", default="standing,seated")
     parser.add_argument("--frames", default=",".join(str(frame) for frame in DEFAULT_SAMPLE_FRAMES))
+    parser.add_argument("--evidence-dir", type=Path)
     return parser.parse_args(args)
 
 
@@ -711,6 +854,11 @@ def main() -> None:
         master_path=args.master,
         modes=modes,
         sample_frames=frames,
+        evidence_dir=(
+            Path(args.evidence_dir).expanduser().resolve()
+            if args.evidence_dir is not None
+            else None
+        ),
     )
     result = {
         "scene": str(Path(args.scene).expanduser().resolve()),

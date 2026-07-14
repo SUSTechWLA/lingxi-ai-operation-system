@@ -14,7 +14,9 @@ from typing import Any
 
 import bmesh
 import bpy
+from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -37,6 +39,9 @@ LIGHTING_MULTIPLIERS = {
     "editorial_crisp": {"default": 1.0, "key": 1.15, "fill": 0.90, "rim": 1.10},
     "night_analysis": {"default": 0.82, "key": 0.92, "fill": 0.64, "rim": 1.08, "practical": 1.12},
 }
+SOLE_BAND_HEIGHT_M = 0.005
+TARGET_SOLE_CLEARANCE_M = 0.0015
+MIN_MEDIUM_FRAME_POINTS = 128
 
 
 def read_input() -> dict:
@@ -92,6 +97,14 @@ def resolve_scene_mode_objects(mode: str) -> dict[str, Any]:
         )
     resolved["mode"] = selected
     return resolved
+
+
+def resolve_authored_scene_mode_objects(data: dict[str, Any]) -> dict[str, Any] | None:
+    is_warm_contract = bpy.context.scene.get("ip_presentation_modes") is not None
+    has_explicit_mode = "presentationMode" in data
+    if not is_warm_contract and not has_explicit_mode:
+        return None
+    return resolve_scene_mode_objects(str(data.get("presentationMode") or "standing"))
 
 
 def scene_target_height(data: dict) -> float:
@@ -1485,7 +1498,6 @@ def place_character_in_authored_scene(
     if mode_objects:
         medium_camera = mode_objects["cameras"]["medium"]
         medium_camera.data["ip_authored_shift_y"] = float(medium_camera.data.shift_y)
-        medium_camera.data.shift_y = float(medium_camera.data.shift_y) - 0.01
 
     marker_names = {
         key: mode_objects[key].name
@@ -1505,6 +1517,456 @@ def place_character_in_authored_scene(
             "min": [round(value, 5) for value in min_v],
             "max": [round(value, 5) for value in max_v],
         },
+    }
+
+
+def _vertex_group_weights(vertex: bpy.types.MeshVertex) -> dict[int, float]:
+    return {assignment.group: float(assignment.weight) for assignment in vertex.groups}
+
+
+def _armature_only_evaluated_mesh(
+    obj: bpy.types.Object,
+    depsgraph: bpy.types.Depsgraph,
+) -> tuple[bpy.types.Object, bpy.types.Mesh, list[tuple[bpy.types.Modifier, bool]]]:
+    states: list[tuple[bpy.types.Modifier, bool]] = []
+    for modifier in obj.modifiers:
+        if modifier.type == "ARMATURE":
+            continue
+        states.append((modifier, bool(modifier.show_viewport)))
+        modifier.show_viewport = False
+    bpy.context.view_layer.update()
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+    return evaluated, mesh, states
+
+
+def _restore_armature_only_evaluated_mesh(
+    evaluated: bpy.types.Object,
+    states: list[tuple[bpy.types.Modifier, bool]],
+) -> None:
+    evaluated.to_mesh_clear()
+    for modifier, show_viewport in states:
+        modifier.show_viewport = show_viewport
+    bpy.context.view_layer.update()
+
+
+def sample_character_shoe_soles(
+    character_objects: list[bpy.types.Object],
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+    floor_z: float,
+) -> dict[str, Any]:
+    checked_modifiers: list[str] = []
+    for obj in character_objects:
+        if obj.type != "MESH":
+            continue
+        for modifier in obj.modifiers:
+            if modifier.type != "ARMATURE":
+                continue
+            if modifier.object != armature:
+                raise RuntimeError(
+                    f"{obj.name}/{modifier.name} targets "
+                    f"{getattr(modifier.object, 'name', None)!r}, expected {armature.name!r}"
+                )
+            if not modifier.show_render:
+                raise RuntimeError(
+                    f"shoe sole sampling requires {obj.name}/{modifier.name} "
+                    "Armature modifier show_render=true"
+                )
+            checked_modifiers.append(f"{obj.name}/{modifier.name}")
+    if not checked_modifiers:
+        raise RuntimeError("shoe sole sampling found no Armature modifiers")
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    sides: dict[str, Any] = {}
+    for side, label in (("l", "left"), ("r", "right")):
+        group_name = bone_map[f"foot_{side}"]
+        sole_points: list[Vector] = []
+        sampled_meshes: list[str] = []
+        for obj in character_objects:
+            if obj.type != "MESH":
+                continue
+            group = obj.vertex_groups.get(group_name)
+            if group is None:
+                continue
+            normal_matrix = obj.matrix_world.to_3x3().inverted_safe().transposed()
+            eligible: list[int] = []
+            rest_z: dict[int, float] = {}
+            for vertex in obj.data.vertices:
+                weights = _vertex_group_weights(vertex)
+                weight = weights.get(group.index, 0.0)
+                if weight < 0.5 or weight < max(weights.values(), default=0.0):
+                    continue
+                normal = (normal_matrix @ vertex.normal).normalized()
+                if normal.z > -0.25:
+                    continue
+                eligible.append(vertex.index)
+                rest_z[vertex.index] = float((obj.matrix_world @ vertex.co).z)
+            if not eligible:
+                continue
+            rest_minimum = min(rest_z.values())
+            indices = [
+                index
+                for index in eligible
+                if rest_z[index] <= rest_minimum + SOLE_BAND_HEIGHT_M
+            ]
+            evaluated, mesh, states = _armature_only_evaluated_mesh(obj, depsgraph)
+            try:
+                if len(mesh.vertices) != len(obj.data.vertices):
+                    raise RuntimeError(f"shoe sole topology changed for {obj.name}")
+                evaluated_normal_matrix = (
+                    evaluated.matrix_world.to_3x3().inverted_safe().transposed()
+                )
+                points = [
+                    evaluated.matrix_world @ mesh.vertices[index].co
+                    for index in indices
+                    if (
+                        evaluated_normal_matrix @ mesh.vertices[index].normal
+                    ).normalized().z <= -0.10
+                ]
+                sole_points.extend(points)
+            finally:
+                _restore_armature_only_evaluated_mesh(evaluated, states)
+            if points:
+                sampled_meshes.append(obj.name)
+        if not sole_points:
+            raise RuntimeError(f"no evaluated shoe sole geometry found for {label}")
+        clearances = [float(point.z) - float(floor_z) for point in sole_points]
+        sides[label] = {
+            "minimum": min(clearances),
+            "maximum": max(clearances),
+            "center": [
+                sum(float(point[axis]) for point in sole_points) / len(sole_points)
+                for axis in range(3)
+            ],
+            "sampledVertexCount": len(sole_points),
+            "sampledMeshes": sampled_meshes,
+            "footGroup": group_name,
+        }
+    return {
+        **sides,
+        "floorZ": float(floor_z),
+        "armatureModifiers": checked_modifiers,
+    }
+
+
+def _render_world_bvh(
+    objects: list[bpy.types.Object],
+    depsgraph: bpy.types.Depsgraph,
+) -> BVHTree | None:
+    vertices: list[Vector] = []
+    triangles: list[list[int]] = []
+    for obj in objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        try:
+            offset = len(vertices)
+            vertices.extend(evaluated.matrix_world @ vertex.co for vertex in mesh.vertices)
+            mesh.calc_loop_triangles()
+            triangles.extend(
+                [offset + int(index) for index in triangle.vertices]
+                for triangle in mesh.loop_triangles
+            )
+        finally:
+            evaluated.to_mesh_clear()
+    if not vertices or not triangles:
+        return None
+    return BVHTree.FromPolygons(vertices, triangles, all_triangles=True, epsilon=1e-6)
+
+
+def _mode_collision_obstacles() -> list[bpy.types.Object]:
+    desk_root = next(
+        (obj for obj in bpy.data.objects if obj.get("assembly_role") == "main_desk"),
+        None,
+    )
+    chair_root = bpy.data.objects.get("Chair_Main")
+    if desk_root is None or chair_root is None:
+        raise RuntimeError("warm studio is missing authored desk/chair collision assemblies")
+    return [
+        obj
+        for root in (desk_root, chair_root)
+        for obj in (root, *root.children_recursive)
+        if obj.type == "MESH" and not obj.hide_render
+    ]
+
+
+def calibrate_mode_collision_clearance(
+    character_objects: list[bpy.types.Object],
+    placement: bpy.types.Object,
+    sample_frames: list[int] | tuple[int, ...] | None = None,
+) -> dict[str, Any]:
+    frames = list(sample_frames or range(bpy.context.scene.frame_start, bpy.context.scene.frame_end + 1))
+    if not frames:
+        raise RuntimeError("collision clearance calibration requires sampled frames")
+    obstacles = _mode_collision_obstacles()
+    base_y = float(placement.location.y)
+    offsets = [0.0]
+    for step in range(1, 31):
+        offsets.extend((0.05 * step, -0.05 * step))
+    selected_offset: float | None = None
+    selected_counts: list[dict[str, int]] = []
+    for offset in offsets:
+        placement.location.y = base_y + offset
+        bpy.context.view_layer.update()
+        counts: list[dict[str, int]] = []
+        for frame in frames:
+            bpy.context.scene.frame_set(int(frame))
+            bpy.context.view_layer.update()
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            character_tree = _render_world_bvh(character_objects, depsgraph)
+            obstacle_tree = _render_world_bvh(obstacles, depsgraph)
+            count = 0
+            if character_tree is not None and obstacle_tree is not None:
+                count = len(character_tree.overlap(obstacle_tree))
+            counts.append({"frame": int(frame), "trianglePairCount": count})
+            if count:
+                break
+        if len(counts) == len(frames) and not any(item["trianglePairCount"] for item in counts):
+            selected_offset = offset
+            selected_counts = counts
+            break
+    if selected_offset is None:
+        placement.location.y = base_y
+        bpy.context.view_layer.update()
+        raise RuntimeError("cannot place character without desk/chair triangle intersections")
+    bpy.context.scene.frame_set(frames[0])
+    bpy.context.view_layer.update()
+    return {
+        "worldYOffset": selected_offset,
+        "placementY": float(placement.location.y),
+        "frames": selected_counts,
+    }
+
+
+def calibrate_mode_foot_contact(
+    character_objects: list[bpy.types.Object],
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+    placement: bpy.types.Object,
+    mode_objects: dict[str, Any],
+    sample_frames: list[int] | tuple[int, ...] | None = None,
+) -> dict[str, Any]:
+    frames = list(sample_frames or range(bpy.context.scene.frame_start, bpy.context.scene.frame_end + 1))
+    if not frames:
+        raise RuntimeError("foot contact calibration requires sampled frames")
+    targets = {
+        "left": mode_objects["foot_l"],
+        "right": mode_objects["foot_r"],
+    }
+    floor_z = min(float(target.matrix_world.translation.z) for target in targets.values())
+    first_frame = frames[0]
+    bpy.context.scene.frame_set(first_frame)
+    bpy.context.view_layer.update()
+    initial = sample_character_shoe_soles(character_objects, armature, bone_map, floor_z)
+    source_center = Vector(
+        tuple(
+            sum(float(initial[side]["center"][axis]) for side in ("left", "right")) / 2.0
+            for axis in range(3)
+        )
+    )
+    target_center = sum(
+        (target.matrix_world.translation for target in targets.values()),
+        Vector((0.0, 0.0, 0.0)),
+    ) / 2.0
+    placement.location.x += target_center.x - source_center.x
+    bpy.context.view_layer.update()
+
+    base_location = placement.location.copy()
+    base_rotation = placement.rotation_euler.copy()
+    placement.rotation_mode = "XYZ"
+    frame_reports: list[dict[str, Any]] = []
+    for frame in frames:
+        bpy.context.scene.frame_set(int(frame))
+        placement.location = base_location
+        placement.rotation_euler = base_rotation
+        bpy.context.view_layer.update()
+        for _ in range(3):
+            soles = sample_character_shoe_soles(character_objects, armature, bone_map, floor_z)
+            errors = {
+                side: float(targets[side].matrix_world.translation.z)
+                + TARGET_SOLE_CLEARANCE_M
+                - float(soles[side]["minimum"])
+                for side in ("left", "right")
+            }
+            left_x = float(soles["left"]["center"][0]) - float(placement.matrix_world.translation.x)
+            right_x = float(soles["right"]["center"][0]) - float(placement.matrix_world.translation.x)
+            span = left_x - right_x
+            if abs(span) < 1e-5:
+                placement.location.z += max(errors.values())
+            else:
+                delta_y_rotation = (errors["right"] - errors["left"]) / span
+                delta_z = errors["left"] + delta_y_rotation * left_x
+                placement.rotation_euler.y += delta_y_rotation
+                placement.location.z += delta_z
+            bpy.context.view_layer.update()
+        corrected = sample_character_shoe_soles(character_objects, armature, bone_map, floor_z)
+        placement.keyframe_insert(data_path="location", frame=int(frame))
+        placement.keyframe_insert(data_path="rotation_euler", frame=int(frame))
+        frame_reports.append(
+            {
+                "frame": int(frame),
+                "left": float(corrected["left"]["minimum"]),
+                "right": float(corrected["right"]["minimum"]),
+            }
+        )
+    if placement.animation_data and placement.animation_data.action:
+        for fcurve in iter_action_fcurves(placement.animation_data.action):
+            for keyframe in fcurve.keyframe_points:
+                keyframe.interpolation = "LINEAR"
+    bpy.context.scene.frame_set(first_frame)
+    bpy.context.view_layer.update()
+    return {
+        "targetMarkers": {side: target.name for side, target in targets.items()},
+        "targetClearance": TARGET_SOLE_CLEARANCE_M,
+        "horizontalOffset": [
+            float(base_location.x - mode_objects["spawn"].location.x),
+            float(base_location.y - mode_objects["spawn"].location.y),
+        ],
+        "targetCenterDelta": [
+            float(target_center.x - source_center.x),
+            float(target_center.y - source_center.y),
+        ],
+        "frames": frame_reports,
+    }
+
+
+def sample_character_semantic_regions(
+    character_objects: list[bpy.types.Object],
+    bone_map: dict[str, str],
+) -> dict[str, list[Vector]]:
+    role_groups = {
+        "head": {bone_map["head"]},
+        "leftHand": {
+            name
+            for role, name in bone_map.items()
+            if role == "hand_l" or role.startswith("finger_") and role.endswith("_l")
+        },
+        "rightHand": {
+            name
+            for role, name in bone_map.items()
+            if role == "hand_r" or role.startswith("finger_") and role.endswith("_r")
+        },
+    }
+    points = {role: [] for role in role_groups}
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    for obj in character_objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        group_indices = {
+            role: {
+                group.index
+                for name in names
+                if (group := obj.vertex_groups.get(name)) is not None
+            }
+            for role, names in role_groups.items()
+        }
+        if not any(group_indices.values()):
+            continue
+        evaluated, mesh, states = _armature_only_evaluated_mesh(obj, depsgraph)
+        try:
+            if len(mesh.vertices) != len(obj.data.vertices):
+                raise RuntimeError(f"semantic geometry topology changed for {obj.name}")
+            for vertex in obj.data.vertices:
+                weights = _vertex_group_weights(vertex)
+                for role, indices in group_indices.items():
+                    if sum(weights.get(index, 0.0) for index in indices) < 0.25:
+                        continue
+                    points[role].append(evaluated.matrix_world @ mesh.vertices[vertex.index].co)
+        finally:
+            _restore_armature_only_evaluated_mesh(evaluated, states)
+    for role, samples in points.items():
+        if not samples:
+            raise RuntimeError(f"no evaluated semantic geometry found for {role}")
+    return points
+
+
+def _medium_frame_counts(
+    camera: bpy.types.Object,
+    frame_points: dict[int, dict[str, list[Vector]]],
+) -> dict[int, dict[str, int]]:
+    scene = bpy.context.scene
+    return {
+        frame: {
+            role: sum(
+                1
+                for point in points
+                if (
+                    (projected := world_to_camera_view(scene, camera, point)).z > 0
+                    and 0 <= projected.x <= 1
+                    and 0 <= projected.y <= 1
+                )
+            )
+            for role, points in regions.items()
+        }
+        for frame, regions in frame_points.items()
+    }
+
+
+def calibrate_mode_medium_camera(
+    character_objects: list[bpy.types.Object],
+    bone_map: dict[str, str],
+    mode_objects: dict[str, Any],
+    sample_frames: list[int] | tuple[int, ...] | None = None,
+) -> dict[str, Any]:
+    frames = list(sample_frames or range(bpy.context.scene.frame_start, bpy.context.scene.frame_end + 1))
+    if not frames:
+        raise RuntimeError("medium framing calibration requires sampled frames")
+    camera = mode_objects["cameras"]["medium"]
+    authored_lens = float(camera.data.lens)
+    authored_shift_y = float(camera.data.get("ip_authored_shift_y", camera.data.shift_y))
+    frame_points: dict[int, dict[str, list[Vector]]] = {}
+    for frame in frames:
+        bpy.context.scene.frame_set(int(frame))
+        bpy.context.view_layer.update()
+        frame_points[int(frame)] = sample_character_semantic_regions(
+            character_objects,
+            bone_map,
+        )
+
+    lens_candidates = [
+        authored_lens - 2.0 * index
+        for index in range(int(max(0.0, authored_lens - 32.0) // 2.0) + 1)
+    ]
+    shift_deltas = [0.0]
+    for step in range(1, 31):
+        shift_deltas.extend((-0.01 * step, 0.01 * step))
+    selected_counts: dict[int, dict[str, int]] | None = None
+    for lens in lens_candidates:
+        camera.data.lens = max(32.0, lens)
+        for delta in shift_deltas:
+            camera.data.shift_y = authored_shift_y + delta
+            counts = _medium_frame_counts(camera, frame_points)
+            if all(
+                count >= MIN_MEDIUM_FRAME_POINTS
+                for frame in counts.values()
+                for count in frame.values()
+            ):
+                selected_counts = counts
+                break
+        if selected_counts is not None:
+            break
+    if selected_counts is None:
+        camera.data.lens = authored_lens
+        camera.data.shift_y = authored_shift_y
+        raise RuntimeError(
+            f"{camera.name} cannot frame head and both hands with "
+            f"{MIN_MEDIUM_FRAME_POINTS} points per sampled frame"
+        )
+    bpy.context.scene.frame_set(frames[0])
+    bpy.context.view_layer.update()
+    return {
+        "camera": camera.name,
+        "authoredLens": authored_lens,
+        "authoredShiftY": authored_shift_y,
+        "lens": float(camera.data.lens),
+        "shiftY": float(camera.data.shift_y),
+        "minimumPointsPerRegion": MIN_MEDIUM_FRAME_POINTS,
+        "frames": [
+            {"frame": frame, **counts}
+            for frame, counts in sorted(selected_counts.items())
+        ],
     }
 
 
@@ -6228,8 +6690,7 @@ def main() -> None:
     mode_objects: dict[str, Any] | None = None
     if scene_mode:
         load_scene_template(str(data["sceneBlendPath"]))
-        if presentation_mode != "standing" or bpy.data.objects.get("IP_Standing_Spawn"):
-            mode_objects = resolve_scene_mode_objects(presentation_mode)
+        mode_objects = resolve_authored_scene_mode_objects(data)
     else:
         clear_scene()
     target_height = scene_target_height(data)
@@ -6304,6 +6765,24 @@ def main() -> None:
             dimensions,
             mode_objects,
         )
+        if mode_objects:
+            placement = bpy.data.objects[scene_stats["placement"]["placementRoot"]]
+            scene_stats["collisionPlacement"] = calibrate_mode_collision_clearance(
+                character_objects,
+                placement,
+            )
+            scene_stats["footContact"] = calibrate_mode_foot_contact(
+                character_objects,
+                armature,
+                bone_map,
+                placement,
+                mode_objects,
+            )
+            scene_stats["mediumFraming"] = calibrate_mode_medium_camera(
+                character_objects,
+                bone_map,
+                mode_objects,
+            )
     container = dimensions.get("container")
     export_assets = imported_assets + ([container] if container else [])
     save_rigged_assets(

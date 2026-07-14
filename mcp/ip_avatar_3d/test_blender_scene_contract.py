@@ -322,12 +322,102 @@ def test_collision_counter_uses_evaluated_triangle_geometry() -> None:
     ]
 
 
+def add_crossing_triangle(name: str) -> bpy.types.Object:
+    mesh = bpy.data.meshes.new(f"{name}_Mesh")
+    mesh.from_pydata(
+        [(-2.0, 0.0, -2.0), (2.0, 0.0, -2.0), (0.0, 0.0, 2.0)],
+        [],
+        [(0, 1, 2)],
+    )
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def test_full_collision_detects_crossing_triangle_with_all_vertices_outside_frame() -> None:
+    reset_scene()
+    character = add_crossing_triangle("Task5_CrossFrame_Character")
+    bpy.ops.mesh.primitive_cube_add(size=0.2, location=(0.0, 0.0, 0.0))
+    obstacle = bpy.context.object
+    obstacle.name = "Task5_CrossFrame_Obstacle"
+    camera = add_camera("Task5_CrossFrame_Camera")
+    camera.data.type = "ORTHO"
+    camera.data.ortho_scale = 2.0
+    camera.location = (0.0, -5.0, 0.0)
+    blender_renderer.look_at(camera, (0.0, 0.0, 0.0))
+
+    report = warm_character_validator.count_full_evaluated_mesh_intersections(
+        [character],
+        [obstacle],
+        bpy.context.evaluated_depsgraph_get(),
+    )
+
+    assert report["trianglePairCount"] > 0
+
+
+def test_hand_collision_uses_weighted_faces_not_vertex_inside_checks() -> None:
+    reset_scene()
+    armature_data = bpy.data.armatures.new("Task5_Hand_Armature_Data")
+    armature = bpy.data.objects.new("Task5_Hand_Armature", armature_data)
+    bpy.context.scene.collection.objects.link(armature)
+    hand = add_crossing_triangle("Task5_Weighted_Hand")
+    group = hand.vertex_groups.new(name="LeftHand")
+    group.add([0, 1, 2], 1.0, "REPLACE")
+    modifier = hand.modifiers.new("Armature", "ARMATURE")
+    modifier.object = armature
+    modifier.show_viewport = True
+    modifier.show_render = True
+    bpy.ops.mesh.primitive_cube_add(size=0.2, location=(0.0, 0.0, 0.0))
+    obstacle = bpy.context.object
+    obstacle.name = "Task5_Hand_Obstacle"
+
+    report = warm_character_validator.count_hand_weighted_face_intersections(
+        [hand],
+        [obstacle],
+        armature,
+        {"hand_l": "LeftHand", "hand_r": "RightHand"},
+        bpy.context.evaluated_depsgraph_get(),
+    )
+
+    assert report["trianglePairCount"] > 0
+    assert report["sampledFaceCount"] == 1
+
+
+def test_warm_authored_scene_never_falls_back_to_shared_markers() -> None:
+    reset_scene()
+    bpy.context.scene["ip_presentation_modes"] = '["standing", "seated"]'
+    for name in (
+        "IP_Character_Spawn",
+        "IP_Focus_Head",
+        "IP_Seat_Target",
+        "IP_Foot_Target.L",
+        "IP_Foot_Target.R",
+    ):
+        marker = bpy.data.objects.new(name, None)
+        bpy.context.scene.collection.objects.link(marker)
+    for name in ("Camera_Wide", "Camera_Medium", "Camera_Close"):
+        add_camera(name)
+
+    try:
+        blender_renderer.resolve_authored_scene_mode_objects(
+            {"presentationMode": "seated"}
+        )
+    except RuntimeError as exc:
+        assert "IP_Seated_Spawn" in str(exc)
+        assert "IP_Seated_Foot_Target.L" in str(exc)
+    else:
+        raise AssertionError("warm scene accepted shared standing aliases")
+
+    del bpy.context.scene["ip_presentation_modes"]
+    assert blender_renderer.resolve_authored_scene_mode_objects({}) is None
+
+
 def test_validation_success_fails_each_required_geometry_gate() -> None:
     passing = {
         "mode": "seated",
         "sampleCount": 3,
         "floorClearance": {
-            "left": {"minimum": -0.001},
+            "left": {"minimum": 0.001},
             "right": {"minimum": 0.002},
         },
         "deskIntersectionCount": 0,
@@ -339,25 +429,27 @@ def test_validation_success_fails_each_required_geometry_gate() -> None:
             "leftHand": {"insideCount": 8},
             "rightHand": {"insideCount": 9},
         },
+        "frames": [
+            {
+                "frame": frame,
+                "cameraVisibility": {
+                    role: {"insideCount": 128}
+                    for role in ("head", "leftHand", "rightHand")
+                },
+            }
+            for frame in (1, 15, 29)
+        ],
     }
     report = warm_character_validator.finalize_mode_report(passing)
     assert report["success"] is True
     assert report["failureReasons"] == []
 
     failing_changes = (
-        ("floorClearance", {"left": {"minimum": -0.021}, "right": {"minimum": 0.0}}),
+        ("floorClearance", {"left": {"minimum": -0.000001}, "right": {"minimum": 0.0}}),
         ("deskIntersectionCount", 1),
         ("chairIntersectionCount", 1),
         ("handIntersectionCount", 1),
         ("deformationSpikeCount", 1),
-        (
-            "cameraVisibility",
-            {
-                "head": {"insideCount": 12},
-                "leftHand": {"insideCount": 0},
-                "rightHand": {"insideCount": 9},
-            },
-        ),
     )
     for key, value in failing_changes:
         candidate = {
@@ -375,6 +467,25 @@ def test_validation_success_fails_each_required_geometry_gate() -> None:
         failed = warm_character_validator.finalize_mode_report(candidate)
         assert failed["success"] is False, key
         assert failed["failureReasons"], key
+
+    per_frame = {
+        **passing,
+        "frames": [
+            *passing["frames"][:1],
+            {
+                "frame": 15,
+                "cameraVisibility": {
+                    "head": {"insideCount": 128},
+                    "leftHand": {"insideCount": 127},
+                    "rightHand": {"insideCount": 128},
+                },
+            },
+            *passing["frames"][2:],
+        ],
+    }
+    failed = warm_character_validator.finalize_mode_report(per_frame)
+    assert failed["success"] is False
+    assert any("frame 15 leftHand" in reason for reason in failed["failureReasons"])
 
 
 def test_scene_marker_controls_character_height() -> None:
@@ -470,6 +581,14 @@ def test_real_warm_studio_character_validation_passes_both_modes() -> None:
         assert "handIntersectionCount" in report
         assert "deformationSpikeCount" in report
         assert set(report["cameraVisibility"]) >= {"head", "leftHand", "rightHand"}
+        for side in ("left", "right"):
+            assert all(
+                0.0 <= clearance <= 0.0035
+                for clearance in report["floorClearance"][side]["samples"]
+            ), report
+        for frame in report["frames"]:
+            for role in ("head", "leftHand", "rightHand"):
+                assert frame["cameraVisibility"][role]["insideCount"] >= 128, frame
         assert report["success"] is True, report
 
 
@@ -483,6 +602,9 @@ if __name__ == "__main__":
         test_camera_plan_binds_authored_cameras,
         test_shoe_sampling_rejects_render_disabled_armature_modifier,
         test_collision_counter_uses_evaluated_triangle_geometry,
+        test_full_collision_detects_crossing_triangle_with_all_vertices_outside_frame,
+        test_hand_collision_uses_weighted_faces_not_vertex_inside_checks,
+        test_warm_authored_scene_never_falls_back_to_shared_markers,
         test_validation_success_fails_each_required_geometry_gate,
         test_scene_marker_controls_character_height,
         test_lighting_preset_uses_authored_base_energy,
