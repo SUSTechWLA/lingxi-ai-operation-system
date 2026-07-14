@@ -103,6 +103,7 @@ def resolve_scene_mode_objects(mode: str) -> dict[str, Any]:
     names = {
         "spawn": f"IP_{prefix}_Spawn",
         "focus": f"IP_{prefix}_Focus_Head",
+        "transition_focus": "IP_Transition_Focus",
         "seat": "IP_Seat_Target",
         "foot_l": f"IP_{prefix}_Foot_Target.L",
         "foot_r": f"IP_{prefix}_Foot_Target.R",
@@ -111,6 +112,7 @@ def resolve_scene_mode_objects(mode: str) -> dict[str, Any]:
         "wide": f"Camera_{prefix}_Wide",
         "medium": f"Camera_{prefix}_Medium",
         "three_quarter": f"Camera_{prefix}_ThreeQuarter",
+        "transition": f"Camera_{prefix}_Transition",
     }
     resolved = {key: bpy.data.objects.get(name) for key, name in names.items()}
     resolved["cameras"] = {
@@ -1519,13 +1521,21 @@ def place_character_in_authored_scene(
             )
         )
     focus_cameras = (
-        mode_objects["cameras"].values()
+        mode_objects["cameras"].items()
         if mode_objects
-        else (obj for obj in bpy.context.scene.objects if obj.type == "CAMERA")
+        else (
+            ("default", obj)
+            for obj in bpy.context.scene.objects
+            if obj.type == "CAMERA"
+        )
     )
-    for camera in focus_cameras:
+    for role, camera in focus_cameras:
         camera.data.dof.use_dof = True
-        camera.data.dof.focus_object = focus
+        camera.data.dof.focus_object = (
+            mode_objects["transition_focus"]
+            if mode_objects and role == "transition"
+            else focus
+        )
     if mode_objects:
         medium_camera = mode_objects["cameras"]["medium"]
         medium_camera.data["ip_authored_shift_y"] = float(medium_camera.data.shift_y)

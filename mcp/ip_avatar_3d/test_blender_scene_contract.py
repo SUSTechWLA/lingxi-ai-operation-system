@@ -57,6 +57,9 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert scene["ip_subject_light_profile"] == contract.SUBJECT_LIGHT_PROFILE["name"]
     assert scene["ip_background_stops_below_face"] == 1.25
 
+    validation = warm_studio_validator.validate_scene()
+    assert validation["errors"] == [], validation["errors"]
+
     for mode in contract.PRESENTATION_MODES:
         marker_specs = contract.MODE_MARKER_SPECS[mode]
         marker_names = {
@@ -522,23 +525,27 @@ def test_mode_resolver_uses_only_mode_specific_markers_and_cameras() -> None:
         "standing": {
             "spawn": "IP_Standing_Spawn",
             "focus": "IP_Standing_Focus_Head",
+            "transition_focus": "IP_Transition_Focus",
             "foot_l": "IP_Standing_Foot_Target.L",
             "foot_r": "IP_Standing_Foot_Target.R",
             "cameras": {
                 "wide": "Camera_Standing_Wide",
                 "medium": "Camera_Standing_Medium",
                 "three_quarter": "Camera_Standing_ThreeQuarter",
+                "transition": "Camera_Standing_Transition",
             },
         },
         "seated": {
             "spawn": "IP_Seated_Spawn",
             "focus": "IP_Seated_Focus_Head",
+            "transition_focus": "IP_Transition_Focus",
             "foot_l": "IP_Seated_Foot_Target.L",
             "foot_r": "IP_Seated_Foot_Target.R",
             "cameras": {
                 "wide": "Camera_Seated_Wide",
                 "medium": "Camera_Seated_Medium",
                 "three_quarter": "Camera_Seated_ThreeQuarter",
+                "transition": "Camera_Seated_Transition",
             },
         },
     }
@@ -548,6 +555,7 @@ def test_mode_resolver_uses_only_mode_specific_markers_and_cameras() -> None:
         assert resolved["mode"] == mode
         assert resolved["spawn"].name == names["spawn"]
         assert resolved["focus"].name == names["focus"]
+        assert resolved["transition_focus"].name == names["transition_focus"]
         assert resolved["seat"].name == "IP_Seat_Target"
         assert resolved["foot_l"].name == names["foot_l"]
         assert resolved["foot_r"].name == names["foot_r"]
@@ -583,6 +591,7 @@ def test_mode_camera_plan_maps_generic_roles_to_selected_cameras() -> None:
                 {"frame": 1, "camera": "Camera_Wide"},
                 {"frame": 25, "camera": "Camera_Medium"},
                 {"frame": 50, "camera": "Camera_ThreeQuarter"},
+                {"frame": 75, "camera": "Camera_Transition"},
             ],
         },
         blender_renderer.resolve_scene_mode_objects("seated"),
@@ -592,14 +601,25 @@ def test_mode_camera_plan_maps_generic_roles_to_selected_cameras() -> None:
         "Camera_Seated_Wide",
         "Camera_Seated_Medium",
         "Camera_Seated_ThreeQuarter",
+        "Camera_Seated_Transition",
     ]
     assert report["cameraNames"] == {
         "wide": "Camera_Seated_Wide",
         "medium": "Camera_Seated_Medium",
         "three_quarter": "Camera_Seated_ThreeQuarter",
+        "transition": "Camera_Seated_Transition",
     }
     assert report["missingCameras"] == []
     assert bpy.context.scene.camera.name == "Camera_Seated_Wide"
+
+    preset_report = blender_renderer.configure_camera_plan(
+        {"presentationMode": "seated", "cameraPreset": "transition"},
+        blender_renderer.resolve_scene_mode_objects("seated"),
+    )
+    assert preset_report["cuts"] == [
+        {"frame": 1, "camera": "Camera_Seated_Transition"}
+    ]
+    assert preset_report["missingCameras"] == []
 
 
 def test_authored_scene_placement_persists_selected_mode_contract() -> None:
@@ -645,6 +665,7 @@ def test_authored_scene_placement_persists_selected_mode_contract() -> None:
         "wide": "Camera_Seated_Wide",
         "medium": "Camera_Seated_Medium",
         "three_quarter": "Camera_Seated_ThreeQuarter",
+        "transition": "Camera_Seated_Transition",
     }
     assert placement["placementRoot"] == "IP_Character_Placement"
     assert_location_matches(
@@ -656,9 +677,14 @@ def test_authored_scene_placement_persists_selected_mode_contract() -> None:
     assert scene_stats["mode"] == "seated"
     assert scene_stats["markers"] == placement["markerNames"]
     assert scene_stats["cameras"]["cameraNames"] == placement["cameraNames"]
-    for camera in mode_objects["cameras"].values():
+    for role, camera in mode_objects["cameras"].items():
         assert camera.data.dof.use_dof is True
-        assert camera.data.dof.focus_object == mode_objects["focus"]
+        expected_focus = (
+            bpy.data.objects["IP_Transition_Focus"]
+            if role == "transition"
+            else mode_objects["focus"]
+        )
+        assert camera.data.dof.focus_object == expected_focus
 
 
 def test_camera_plan_binds_authored_cameras() -> None:

@@ -816,8 +816,12 @@ def _validate_cameras(report: dict[str, Any]) -> None:
             report["errors"].append(f"Camera '{name}' is not in STUDIO_CAMERAS")
 
     for mode in contract.PRESENTATION_MODES:
-        focus_name = f"IP_{mode.title()}_Focus_Head"
         for role, (name, location, lens) in contract.MODE_CAMERA_SPECS[mode].items():
+            focus_name = (
+                "IP_Transition_Focus"
+                if role == "transition"
+                else f"IP_{mode.title()}_Focus_Head"
+            )
             camera = _scene_object(name)
             if camera is None:
                 report["errors"].append(f"Required mode camera '{name}' is missing")
