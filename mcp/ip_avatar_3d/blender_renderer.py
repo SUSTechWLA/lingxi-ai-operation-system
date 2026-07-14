@@ -28,6 +28,7 @@ from rig_semantics import has_presenter_controls, resolve_bone_roles
 from hand_refinement import enhance_three_segment_hands
 from master_asset import append_master_collection, save_master_collection
 import aroll_actions
+import aroll_performance_qa
 
 
 CAMERA_NAMES = {
@@ -6229,6 +6230,7 @@ def animate(
     timeline_plan.setdefault("initialPoseState", presentation_mode)
     state_timeline = build_pose_state_timeline(timeline_plan)
     transition_samples: list[dict[str, Any]] = []
+    previous_transition_root_world: Vector | None = None
     has_transition_sequence = any(
         event.get("motion") == "avatar_action"
         and str(event.get("action") or "").startswith("Aroll_Transition_")
@@ -6740,6 +6742,22 @@ def animate(
                 "targetState": pose_state,
                 **contact,
             })
+        if (
+            has_transition_sequence
+            and transition_samples
+            and transition_samples[-1]["frame"] == frame
+        ):
+            root = pose[bone_map["root"]]
+            root_world = armature.matrix_world @ root.matrix.translation
+            transition_samples[-1]["rootWorld"] = tuple(
+                float(value) for value in root_world
+            )
+            transition_samples[-1]["rootFrameDelta"] = (
+                float((root_world - previous_transition_root_world).length)
+                if previous_transition_root_world is not None
+                else 0.0
+            )
+            previous_transition_root_world = root_world.copy()
         for bone_name in animated_bones:
             bone = pose[bone_name]
             bone.keyframe_insert(data_path="location", frame=frame)
@@ -6870,7 +6888,547 @@ def animate(
             (float(item["seatClearance"]) for item in seated_contact_samples),
             default=0.0,
         ),
+        "maxRootFrameDelta": max(
+            (float(item["rootFrameDelta"]) for item in transition_samples),
+            default=0.0,
+        ),
         "samples": transition_samples,
+    }
+
+
+def _matrix_evidence(matrix) -> list[list[float]]:
+    return [
+        [float(matrix[row][column]) for column in range(4)]
+        for row in range(4)
+    ]
+
+
+def _pose_state_at(
+    state_timeline: list[dict[str, Any]],
+    time_sec: float,
+) -> str:
+    return str(
+        max(
+            (
+                item
+                for item in state_timeline
+                if float(item.get("timeSec") or 0.0) <= time_sec
+            ),
+            default={"state": "standing", "timeSec": 0.0},
+            key=lambda item: float(item.get("timeSec") or 0.0),
+        ).get("state")
+        or "standing"
+    )
+
+
+def _lower_body_pose_metrics(
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+) -> dict[str, Any]:
+    pose = armature.pose.bones
+    knees = {
+        side: armature.matrix_world @ pose[bone_map[f"leg_{side}"]].tail
+        for side in ("l", "r")
+    }
+    feet = {
+        side: armature.matrix_world @ pose[bone_map[f"foot_{side}"]].tail
+        for side in ("l", "r")
+    }
+    hips = {
+        side: armature.matrix_world @ pose[bone_map[f"leg_{side}"]].head
+        for side in ("l", "r")
+    }
+    pelvis = (hips["l"] + hips["r"]) * 0.5
+    return {
+        "pelvis": pelvis,
+        "feet": feet,
+        "kneeSeparation": float((knees["l"] - knees["r"]).length),
+    }
+
+
+def _project_lower_body_vertices(
+    character_objects: list[bpy.types.Object],
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+    camera: bpy.types.Object,
+) -> tuple[list[tuple[float, float]], dict[str, float]]:
+    scene = bpy.context.scene
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    pose_metrics = _lower_body_pose_metrics(armature, bone_map)
+    pelvis_z = float(pose_metrics["pelvis"].z)
+    foot_z = min(float(point.z) for point in pose_metrics["feet"].values())
+    camera_inverse = camera.matrix_world.inverted_safe()
+    projected: list[tuple[float, float]] = []
+    raw_x: list[float] = []
+    raw_depth: list[float] = []
+    for obj in character_objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        lower_body_group_indices = {
+            group.index
+            for role in (
+                "leg_l",
+                "leg_r",
+                "shin_l",
+                "shin_r",
+                "foot_l",
+                "foot_r",
+            )
+            if (group := obj.vertex_groups.get(bone_map.get(role, ""))) is not None
+        }
+        if not lower_body_group_indices:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh(
+            preserve_all_data_layers=True,
+            depsgraph=depsgraph,
+        )
+        try:
+            for vertex in mesh.vertices:
+                lower_body_weight = sum(
+                    float(assignment.weight)
+                    for assignment in vertex.groups
+                    if assignment.group in lower_body_group_indices
+                )
+                if lower_body_weight < 0.25:
+                    continue
+                world = evaluated.matrix_world @ vertex.co
+                if not foot_z - 0.03 <= float(world.z) <= pelvis_z + 0.04:
+                    continue
+                camera_view = world_to_camera_view(scene, camera, world)
+                depth = -float((camera_inverse @ world).z)
+                if depth <= 0.0:
+                    continue
+                raw_x.append(float(camera_view.x))
+                raw_depth.append(depth)
+        finally:
+            evaluated.to_mesh_clear()
+    if not raw_x:
+        return [], {"projectedMinX": 0.0, "projectedMaxX": 0.0}
+    minimum_x = min(raw_x)
+    maximum_x = max(raw_x)
+    projected.extend(
+        (x, depth)
+        for x, depth in zip(raw_x, raw_depth)
+    )
+    return projected, {
+        "projectedMinX": minimum_x,
+        "projectedMaxX": maximum_x,
+    }
+
+
+def _project_mesh_triangles(
+    objects: Iterable[bpy.types.Object],
+    camera: bpy.types.Object,
+) -> list[tuple[tuple[float, float, float], ...]]:
+    scene = bpy.context.scene
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    camera_inverse = camera.matrix_world.inverted_safe()
+    triangles: list[tuple[tuple[float, float, float], ...]] = []
+    for obj in objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh(
+            preserve_all_data_layers=True,
+            depsgraph=depsgraph,
+        )
+        try:
+            mesh.calc_loop_triangles()
+            projected_vertices: dict[int, tuple[float, float, float]] = {}
+            for triangle in mesh.loop_triangles:
+                projected_triangle = []
+                for vertex_index in triangle.vertices:
+                    index = int(vertex_index)
+                    projected = projected_vertices.get(index)
+                    if projected is None:
+                        world = evaluated.matrix_world @ mesh.vertices[index].co
+                        camera_view = world_to_camera_view(scene, camera, world)
+                        projected = (
+                            float(camera_view.x),
+                            float(camera_view.y),
+                            -float((camera_inverse @ world).z),
+                        )
+                        projected_vertices[index] = projected
+                    projected_triangle.append(projected)
+                triangles.append(tuple(projected_triangle))
+        finally:
+            evaluated.to_mesh_clear()
+    return triangles
+
+
+def _chair_mesh_objects() -> list[bpy.types.Object]:
+    chair = bpy.data.objects.get("Chair_Main")
+    if chair is None:
+        return []
+
+    def descends_from_chair(obj: bpy.types.Object) -> bool:
+        parent = obj.parent
+        while parent is not None:
+            if parent == chair:
+                return True
+            parent = parent.parent
+        return False
+
+    return [
+        obj
+        for obj in bpy.context.scene.objects
+        if obj.type == "MESH" and descends_from_chair(obj)
+    ]
+
+
+def _shape_index_property(mouth: bpy.types.Object, name: str) -> list[int]:
+    value = mouth.get(name, [])
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, (list, tuple, array)):
+        return []
+    indices: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            index = int(item)
+        except (TypeError, ValueError):
+            continue
+        if index >= 0:
+            indices.append(index)
+    return indices
+
+
+def _shape_key_world_points(
+    mouth: bpy.types.Object,
+    shape_name: str,
+    indices: list[int],
+) -> list[Vector]:
+    keys = mouth.data.shape_keys
+    shape = keys.key_blocks.get(shape_name) if keys else None
+    if shape is None:
+        return []
+    return [
+        mouth.matrix_world @ shape.data[index].co
+        for index in indices
+        if index < len(shape.data)
+    ]
+
+
+def _collect_viseme_qa(
+    mouth: bpy.types.Object | None,
+    dimensions: dict[str, Any],
+) -> dict[str, object]:
+    metrics: dict[str, float] = {}
+    evidence_errors: list[str] = []
+    upper: list[int] = []
+    lower: list[int] = []
+    if mouth is None or mouth.type != "MESH" or not mouth.data.shape_keys:
+        evidence_errors.append("source mouth Shape Key evidence is unavailable")
+    else:
+        upper = _shape_index_property(mouth, "mouth_upper_boundary_indices")
+        lower = _shape_index_property(mouth, "mouth_lower_boundary_indices")
+        if not upper or not lower:
+            evidence_errors.append("source mouth boundary evidence is unavailable")
+        else:
+            def gap(shape_name: str) -> float | None:
+                upper_points = _shape_key_world_points(mouth, shape_name, upper)
+                lower_points = _shape_key_world_points(mouth, shape_name, lower)
+                if not upper_points or not lower_points:
+                    evidence_errors.append(f"{shape_name} gap evidence is unavailable")
+                    return None
+                return max(float(point.z) for point in upper_points) - min(
+                    float(point.z) for point in lower_points
+                )
+
+            def width(shape_name: str) -> float | None:
+                points = _shape_key_world_points(mouth, shape_name, upper + lower)
+                if not points:
+                    evidence_errors.append(f"{shape_name} width evidence is unavailable")
+                    return None
+                return max(float(point.x) for point in points) - min(
+                    float(point.x) for point in points
+                )
+
+            values = {
+                "mbpGap": gap("Mouth_MBP"),
+                "restGap": gap("Mouth_Rest"),
+                "aGap": gap("Mouth_A"),
+                "eWidth": width("Mouth_E"),
+                "oGap": gap("Mouth_O"),
+                "oWidth": width("Mouth_O"),
+                "uGap": gap("Mouth_U"),
+                "surpriseGap": gap("Mouth_Surprise"),
+                "maxJawRadians": min(
+                    MAX_JAW_ROTATION_RAD,
+                    max(float(item["jawGain"]) for item in VISEME_RESPONSE.values()),
+                ),
+                "mbpJawRadians": float(VISEME_RESPONSE["Mouth_MBP"]["jawGain"]),
+            }
+            metrics = {
+                name: float(value)
+                for name, value in values.items()
+                if value is not None
+            }
+    report = aroll_performance_qa.validate_viseme_metrics(
+        metrics,
+        character_height=dimensions.get("height"),
+        character_width=dimensions.get("width"),
+    )
+    if evidence_errors:
+        report["success"] = False
+        report["status"] = "failed"
+        report["errors"] = list(report["errors"]) + evidence_errors
+    report["evidence"] = {
+        "mouthObject": mouth.name if mouth else "",
+        "upperBoundaryVertexCount": len(upper),
+        "lowerBoundaryVertexCount": len(lower),
+        "shapeKeys": (
+            [key.name for key in mouth.data.shape_keys.key_blocks]
+            if mouth and mouth.data.shape_keys
+            else []
+        ),
+        "jawResponse": {
+            name: float(response["jawGain"])
+            for name, response in VISEME_RESPONSE.items()
+        },
+    }
+    return report
+
+
+def build_aroll_performance_qa(
+    data: dict[str, Any],
+    character_objects: list[bpy.types.Object],
+    armature: bpy.types.Object,
+    face: dict[str, bpy.types.Object],
+    bone_map: dict[str, str],
+    dimensions: dict[str, Any],
+    transition_contact: dict[str, Any],
+    mode_objects: dict[str, Any] | None,
+) -> dict[str, object]:
+    """Collect every-two-frame performance evidence without thinning contact QA."""
+
+    scene = bpy.context.scene
+    fps = max(1, int(data.get("fps") or scene.render.fps or 30))
+    frame_start = int(scene.frame_start)
+    frame_end = int(scene.frame_end)
+    sampled_frame_numbers = list(range(frame_start, frame_end + 1, 2))
+    state_timeline = list(transition_contact.get("poseStateTimeline") or [])
+    events = (data.get("motionPlan") or {}).get("motionEvents") or []
+    has_transition = any(
+        event.get("motion") == "avatar_action"
+        and str(event.get("action") or "").startswith("Aroll_Transition_")
+        for event in events
+    )
+    contact_samples = transition_contact.get("samples") or []
+    contact_by_frame = {
+        int(item["frame"]): item
+        for item in contact_samples
+        if isinstance(item, dict) and isinstance(item.get("frame"), int)
+    }
+    sampled_frames: list[dict[str, Any]] = []
+    transition_errors: list[str] = []
+    knee_separations: list[float] = []
+    silhouette_spikes: list[float] = []
+    seat_foreground_pixels = 0
+    seat_visible_pixels = 0
+    seat_mask_frame_count = 0
+    chair_objects = _chair_mesh_objects() if has_transition else []
+    seat_triangle_cache: dict[tuple[str, tuple[float, ...]], list[Any]] = {}
+
+    if has_transition:
+        expected_frames = list(range(frame_start, frame_end + 1))
+        actual_frames = [
+            int(item.get("frame") or 0)
+            for item in contact_samples
+            if isinstance(item, dict)
+        ]
+        if actual_frames != expected_frames:
+            transition_errors.append(
+                "every-frame transition contact evidence is incomplete"
+            )
+        if mode_objects is None:
+            transition_errors.append(
+                "transition geometry QA requires authored studio mode objects"
+            )
+
+    for frame in sampled_frame_numbers:
+        scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        time_sec = (frame - frame_start) / float(fps)
+        camera = scene.camera
+        sample: dict[str, Any] = {
+            "frame": frame,
+            "timeSec": round(time_sec, 6),
+            "state": _pose_state_at(state_timeline, time_sec),
+            "camera": {
+                "name": camera.name if camera else "",
+                "matrixWorld": _matrix_evidence(camera.matrix_world) if camera else [],
+            },
+        }
+        if not has_transition:
+            sampled_frames.append(sample)
+            continue
+        if camera is None:
+            transition_errors.append(f"frame {frame} has no active camera")
+            sample["errors"] = ["active camera is unavailable"]
+            sampled_frames.append(sample)
+            continue
+
+        pose_metrics = _lower_body_pose_metrics(armature, bone_map)
+        knee_separation = float(pose_metrics["kneeSeparation"])
+        knee_separations.append(knee_separation)
+        projected, projection_bounds = _project_lower_body_vertices(
+            character_objects,
+            armature,
+            bone_map,
+            camera,
+        )
+        silhouette = aroll_performance_qa.detect_central_silhouette_spike(projected)
+        if silhouette.get("success") is True:
+            silhouette_spikes.append(float(silhouette["spikeMeters"]))
+        else:
+            transition_errors.extend(
+                f"frame {frame}: {error}"
+                for error in silhouette.get("errors") or []
+            )
+
+        contact = contact_by_frame.get(frame)
+        if not isinstance(contact, dict):
+            transition_errors.append(f"frame {frame} contact evidence is missing")
+            contact = {}
+        frame_metrics: dict[str, Any] = {
+            "footDriftL": contact.get("footDriftL"),
+            "footDriftR": contact.get("footDriftR"),
+            "kneeSeparation": knee_separation,
+            "seatClearance": contact.get("seatClearance"),
+            "rootFrameDelta": contact.get("rootFrameDelta"),
+            "centralSilhouetteSpike": silhouette.get("spikeMeters"),
+        }
+        sample["transition"] = {
+            "action": str(contact.get("action") or ""),
+            "contactPhase": str(contact.get("contactPhase") or ""),
+            "phase": contact.get("phase"),
+            "targetState": str(contact.get("targetState") or sample["state"]),
+            "metrics": frame_metrics,
+            "centralSilhouette": {**projection_bounds, **silhouette},
+        }
+
+        if contact.get("contactPhase") == "transition" and mode_objects is not None:
+            transition_camera = mode_objects.get("cameras", {}).get("transition")
+            if transition_camera is None:
+                transition_errors.append(
+                    f"frame {frame}: transition camera is unavailable"
+                )
+            else:
+                camera_key = (
+                    transition_camera.name,
+                    tuple(float(value) for row in transition_camera.matrix_world for value in row),
+                )
+                seat_triangles = seat_triangle_cache.get(camera_key)
+                if seat_triangles is None:
+                    seat_triangles = _project_mesh_triangles(
+                        chair_objects,
+                        transition_camera,
+                    )
+                    seat_triangle_cache[camera_key] = seat_triangles
+                character_triangles = _project_mesh_triangles(
+                    character_objects,
+                    transition_camera,
+                )
+                seat_visibility = aroll_performance_qa.rasterize_seat_visibility(
+                    character_triangles,
+                    seat_triangles,
+                )
+                sample["transition"]["seatVisibility"] = {
+                    **seat_visibility,
+                    "camera": transition_camera.name,
+                    "cameraMatrixWorld": _matrix_evidence(
+                        transition_camera.matrix_world
+                    ),
+                }
+                if seat_visibility.get("success") is True:
+                    seat_mask_frame_count += 1
+                    seat_foreground_pixels += int(
+                        seat_visibility["foregroundPixelCount"]
+                    )
+                    seat_visible_pixels += int(
+                        seat_visibility["seatVisiblePixelCount"]
+                    )
+                    frame_metrics["seatVisibleFraction"] = seat_visibility[
+                        "seatVisibleFraction"
+                    ]
+                else:
+                    transition_errors.extend(
+                        f"frame {frame}: {error}"
+                        for error in seat_visibility.get("errors") or []
+                    )
+        sampled_frames.append(sample)
+
+    if not has_transition:
+        transition_report = aroll_performance_qa.not_applicable_transition_report()
+    else:
+        seated_contact_samples = [
+            item
+            for item in contact_samples
+            if isinstance(item, dict)
+            and item.get("targetState") == "seated"
+            and (
+                item.get("contactPhase") == "stable"
+                or float(item.get("phase") or 0.0) >= 0.80
+            )
+        ]
+        metrics = {
+            "maxFootDriftL": transition_contact.get("maxFootDriftL"),
+            "maxFootDriftR": transition_contact.get("maxFootDriftR"),
+            "minKneeSeparation": min(knee_separations) if knee_separations else None,
+            "minSeatClearance": (
+                min(float(item["seatClearance"]) for item in seated_contact_samples)
+                if seated_contact_samples
+                else None
+            ),
+            "maxSettledSeatClearance": (
+                max(float(item["seatClearance"]) for item in seated_contact_samples)
+                if seated_contact_samples
+                else None
+            ),
+            "maxRootFrameDelta": transition_contact.get("maxRootFrameDelta"),
+            "maxCentralSilhouetteSpike": (
+                max(silhouette_spikes) if silhouette_spikes else None
+            ),
+            "seatVisibleFraction": (
+                seat_visible_pixels / seat_foreground_pixels
+                if seat_foreground_pixels
+                else None
+            ),
+        }
+        transition_report = aroll_performance_qa.validate_transition_metrics(metrics)
+        if transition_errors:
+            transition_report["success"] = False
+            transition_report["status"] = "failed"
+            transition_report["errors"] = (
+                list(transition_report["errors"]) + transition_errors
+            )
+        transition_report["evidence"] = {
+            "contactSampleIntervalFrames": 1,
+            "contactSampleCount": len(contact_samples),
+            "performanceSampleIntervalFrames": 2,
+            "performanceSampleCount": len(sampled_frames),
+            "seatMaskFrameCount": seat_mask_frame_count,
+            "seatMaskWidth": 96,
+            "seatMaskHeight": 54,
+            "seatVisiblePixelCount": seat_visible_pixels,
+            "characterPlusSeatForegroundPixelCount": seat_foreground_pixels,
+        }
+
+    scene.frame_set(frame_start)
+    bpy.context.view_layer.update()
+    return {
+        "schemaVersion": aroll_performance_qa.SCHEMA_VERSION,
+        "transition": transition_report,
+        "visemes": _collect_viseme_qa(face.get("mouth"), dimensions),
+        "sampledFrames": sampled_frames,
+        "stateTimeline": state_timeline,
     }
 
 
@@ -7504,6 +8062,7 @@ def save_rigged_assets(
         "embeddedVisemeApi": "IP_Viseme_API.py" if bpy.data.texts.get("IP_Viseme_API.py") else "",
         "actions": sorted(action.name for action in bpy.data.actions),
         "transitionContact": rig_stats.get("transitionContact", {}),
+        "arollPerformanceQa": rig_stats.get("arollPerformanceQa", {}),
         "scene": scene_stats or {"sceneMode": str(data.get("backgroundMode") or "transparent_or_world")},
         "legacyFakeFaceObjects": [
             obj.name
@@ -7675,6 +8234,23 @@ def main() -> None:
             )
             write_runtime_progress(data, "camera_calibration_done")
             scene_stats["calibrationFrames"] = list(calibration_frames)
+    write_runtime_progress(data, "aroll_performance_qa_start")
+    rig_stats["arollPerformanceQa"] = build_aroll_performance_qa(
+        data,
+        character_objects,
+        armature,
+        face,
+        bone_map,
+        dimensions,
+        rig_stats["transitionContact"],
+        mode_objects,
+    )
+    write_runtime_progress(
+        data,
+        "aroll_performance_qa_done",
+        transitionStatus=rig_stats["arollPerformanceQa"]["transition"]["status"],
+        visemeSuccess=rig_stats["arollPerformanceQa"]["visemes"]["success"],
+    )
     container = dimensions.get("container")
     export_assets = imported_assets + ([container] if container else [])
     write_runtime_progress(data, "asset_save_start")

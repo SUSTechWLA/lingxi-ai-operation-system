@@ -336,6 +336,37 @@ def _embedded_collision_report(mode: str, result: dict[str, Any]) -> dict[str, A
         raise DemoQAError(f"{mode} rig/collision report is unreadable: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("success") is not True:
         raise DemoQAError(f"{mode} rig/collision report did not pass")
+
+    performance = payload.get("arollPerformanceQa")
+    if (
+        not isinstance(performance, dict)
+        or performance.get("schemaVersion") != "tangying-aroll-performance-qa/v1"
+        or not isinstance(performance.get("sampledFrames"), list)
+        or not performance.get("sampledFrames")
+        or not isinstance(performance.get("stateTimeline"), list)
+        or not performance.get("stateTimeline")
+    ):
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    transition = performance.get("transition")
+    if not isinstance(transition, dict) or transition.get("errors") != []:
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    transition_status = str(transition.get("status") or "")
+    if transition_status not in {"passed", "not_applicable"}:
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    if transition_status == "passed" and transition.get("success") is not True:
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    if transition_status == "not_applicable" and (
+        transition.get("success") is not None
+        or transition.get("metrics") != {}
+    ):
+        raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    visemes = performance.get("visemes")
+    if (
+        not isinstance(visemes, dict)
+        or visemes.get("success") is not True
+        or visemes.get("errors") != []
+    ):
+        raise DemoQAError(f"{mode} viseme QA did not pass")
     return {
         "sourceFileName": source.name,
         "sha256": _sha256(source),

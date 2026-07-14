@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""Pure fail-closed QA helpers for A-roll transitions and visemes."""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
+
+
+SCHEMA_VERSION = "tangying-aroll-performance-qa/v1"
+
+TRANSITION_LIMITS = {
+    "maxFootDrift": 0.025,
+    "minKneeSeparation": 0.075,
+    "minSeatClearance": -0.018,
+    "maxSettledSeatClearance": 0.035,
+    "maxRootFrameDelta": 0.075,
+    "maxCentralSilhouetteSpike": 0.045,
+    "minSeatVisibleFraction": 0.08,
+    "maxSeatVisibleFraction": 0.28,
+}
+
+VISEME_LIMITS = {
+    "maxMbpAboveRestHeightFraction": 0.0015,
+    "minAAboveMbpHeightFraction": 0.0060,
+    "minOAboveMbpHeightFraction": 0.0048,
+    "minUAboveMbpHeightFraction": 0.0036,
+    "minSurpriseAboveAHeightFraction": 0.0010,
+    "minEOWidthSeparationWidthFraction": 0.012,
+    "minJawRadians": 0.20,
+    "maxJawRadians": 0.25,
+    "maxMbpJawRadians": 0.03,
+}
+
+TRANSITION_METRIC_NAMES = (
+    "maxFootDriftL",
+    "maxFootDriftR",
+    "minKneeSeparation",
+    "minSeatClearance",
+    "maxSettledSeatClearance",
+    "maxRootFrameDelta",
+    "maxCentralSilhouetteSpike",
+    "seatVisibleFraction",
+)
+
+VISEME_METRIC_NAMES = (
+    "mbpGap",
+    "restGap",
+    "aGap",
+    "eWidth",
+    "oGap",
+    "oWidth",
+    "uGap",
+    "surpriseGap",
+    "maxJawRadians",
+)
+
+COMPARISON_EPSILON = 1e-12
+
+
+def _finite_float(value: Any, label: str, errors: list[str]) -> float | None:
+    if isinstance(value, bool):
+        errors.append(f"{label} must be a finite number")
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        errors.append(f"{label} must be a finite number")
+        return None
+    if not math.isfinite(parsed):
+        errors.append(f"{label} must be a finite number")
+        return None
+    return parsed
+
+
+def _required_metrics(
+    metrics: Mapping[str, Any] | Any,
+    names: Sequence[str],
+) -> tuple[dict[str, float], list[str]]:
+    if not isinstance(metrics, Mapping):
+        return {}, ["metrics must be an object"]
+    parsed: dict[str, float] = {}
+    errors: list[str] = []
+    for name in names:
+        if name not in metrics:
+            errors.append(f"missing required metric: {name}")
+            continue
+        value = _finite_float(metrics.get(name), name, errors)
+        if value is not None:
+            parsed[name] = value
+    return parsed, errors
+
+
+def validate_transition_metrics(metrics: Mapping[str, Any] | Any) -> dict[str, object]:
+    """Apply every approved transition threshold without raising on bad evidence."""
+
+    parsed, errors = _required_metrics(metrics, TRANSITION_METRIC_NAMES)
+    if not errors:
+        if max(parsed["maxFootDriftL"], parsed["maxFootDriftR"]) > TRANSITION_LIMITS["maxFootDrift"] + COMPARISON_EPSILON:
+            errors.append("foot lock drift exceeds 0.025 m")
+        if parsed["minKneeSeparation"] < TRANSITION_LIMITS["minKneeSeparation"] - COMPARISON_EPSILON:
+            errors.append("knee separation is below 0.075 m")
+        if parsed["minSeatClearance"] < TRANSITION_LIMITS["minSeatClearance"] - COMPARISON_EPSILON:
+            errors.append("pelvis penetrates the seat")
+        if parsed["maxSettledSeatClearance"] > TRANSITION_LIMITS["maxSettledSeatClearance"] + COMPARISON_EPSILON:
+            errors.append("pelvis does not settle onto the seat")
+        if parsed["maxRootFrameDelta"] > TRANSITION_LIMITS["maxRootFrameDelta"] + COMPARISON_EPSILON:
+            errors.append("root motion has a visible frame discontinuity")
+        if parsed["maxCentralSilhouetteSpike"] > TRANSITION_LIMITS["maxCentralSilhouetteSpike"] + COMPARISON_EPSILON:
+            errors.append("central silhouette spike exceeds 0.045 m")
+        visible = parsed["seatVisibleFraction"]
+        if not (
+            TRANSITION_LIMITS["minSeatVisibleFraction"] - COMPARISON_EPSILON
+            <= visible
+            <= TRANSITION_LIMITS["maxSeatVisibleFraction"] + COMPARISON_EPSILON
+        ):
+            errors.append("seat visibility is outside the approved range")
+    success = not errors
+    return {
+        "status": "passed" if success else "failed",
+        "success": success,
+        "errors": errors,
+        "metrics": parsed,
+        "limits": dict(TRANSITION_LIMITS),
+    }
+
+
+def validate_viseme_metrics(
+    metrics: Mapping[str, Any] | Any,
+    *,
+    character_height: Any,
+    character_width: Any,
+) -> dict[str, object]:
+    """Validate the exact source-mouth separation and jaw bounds from Task 6."""
+
+    parsed, errors = _required_metrics(metrics, VISEME_METRIC_NAMES)
+    height = _finite_float(character_height, "character_height", errors)
+    width = _finite_float(character_width, "character_width", errors)
+    if height is not None and height <= 0.0:
+        errors.append("character_height must be greater than zero")
+    if width is not None and width <= 0.0:
+        errors.append("character_width must be greater than zero")
+
+    if isinstance(metrics, Mapping) and "mbpJawRadians" in metrics:
+        mbp_jaw = _finite_float(metrics.get("mbpJawRadians"), "mbpJawRadians", errors)
+        if mbp_jaw is not None:
+            parsed["mbpJawRadians"] = mbp_jaw
+
+    for name in ("mbpGap", "restGap", "aGap", "eWidth", "oGap", "oWidth", "uGap", "surpriseGap"):
+        if name in parsed and parsed[name] < 0.0:
+            errors.append(f"{name} must not be negative")
+
+    required_values_ready = (
+        not any(name not in parsed for name in VISEME_METRIC_NAMES)
+        and height is not None
+        and height > 0.0
+        and width is not None
+        and width > 0.0
+    )
+    if required_values_ready:
+        assert height is not None and width is not None
+        if parsed["mbpGap"] > parsed["restGap"] + height * VISEME_LIMITS["maxMbpAboveRestHeightFraction"] + COMPARISON_EPSILON:
+            errors.append("MBP gap is not closed relative to rest")
+        if parsed["aGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minAAboveMbpHeightFraction"] - COMPARISON_EPSILON:
+            errors.append("A gap separation is below the Task 6 bound")
+        if parsed["oGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minOAboveMbpHeightFraction"] - COMPARISON_EPSILON:
+            errors.append("O gap separation is below the Task 6 bound")
+        if parsed["uGap"] < parsed["mbpGap"] + height * VISEME_LIMITS["minUAboveMbpHeightFraction"] - COMPARISON_EPSILON:
+            errors.append("U gap separation is below the Task 6 bound")
+        if parsed["surpriseGap"] < parsed["aGap"] + height * VISEME_LIMITS["minSurpriseAboveAHeightFraction"] - COMPARISON_EPSILON:
+            errors.append("surprise gap separation is below the Task 6 bound")
+        if abs(parsed["eWidth"] - parsed["oWidth"]) < width * VISEME_LIMITS["minEOWidthSeparationWidthFraction"] - COMPARISON_EPSILON:
+            errors.append("E/O width separation is below the Task 6 bound")
+        if not (
+            VISEME_LIMITS["minJawRadians"] - COMPARISON_EPSILON
+            <= parsed["maxJawRadians"]
+            <= VISEME_LIMITS["maxJawRadians"] + COMPARISON_EPSILON
+        ):
+            errors.append("maximum jaw rotation is outside 0.20..0.25 rad")
+        if parsed.get("mbpJawRadians", 0.0) > VISEME_LIMITS["maxMbpJawRadians"] + COMPARISON_EPSILON:
+            errors.append("MBP jaw rotation exceeds 0.03 rad")
+
+    success = not errors
+    return {
+        "status": "passed" if success else "failed",
+        "success": success,
+        "errors": errors,
+        "metrics": parsed,
+        "characterDimensions": {
+            "height": height,
+            "width": width,
+        },
+        "limits": dict(VISEME_LIMITS),
+    }
+
+
+def not_applicable_transition_report() -> dict[str, object]:
+    """Represent a standalone render without inventing transition measurements."""
+
+    return {
+        "status": "not_applicable",
+        "success": None,
+        "errors": [],
+        "metrics": {},
+        "limits": dict(TRANSITION_LIMITS),
+        "evidence": {"reason": "render has no A-roll transition actions"},
+    }
+
+
+def detect_central_silhouette_spike(
+    projected_vertices: Iterable[Sequence[Any]] | Any,
+    *,
+    column_count: int = 64,
+) -> dict[str, object]:
+    """Measure a narrow center-depth spike from normalized X/depth samples."""
+
+    errors: list[str] = []
+    if isinstance(column_count, bool) or column_count != 64:
+        errors.append("central silhouette evidence must use exactly 64 columns")
+    closest_depth: dict[int, float] = {}
+    sample_count = 0
+    if not errors:
+        try:
+            samples = list(projected_vertices)
+        except TypeError:
+            samples = []
+            errors.append("projected vertices must be iterable")
+        for index, sample in enumerate(samples):
+            if not isinstance(sample, Sequence) or len(sample) < 2:
+                errors.append(f"projected vertex {index} must contain X and depth")
+                continue
+            item_errors: list[str] = []
+            x = _finite_float(sample[0], f"projected vertex {index} X", item_errors)
+            depth = _finite_float(sample[1], f"projected vertex {index} depth", item_errors)
+            errors.extend(item_errors)
+            if x is None or depth is None:
+                continue
+            if not 0.0 <= x <= 1.0 or depth <= 0.0:
+                continue
+            column = min(column_count - 1, int(x * column_count))
+            closest_depth[column] = min(depth, closest_depth.get(column, depth))
+            sample_count += 1
+
+    center_columns = [30, 31, 32, 33]
+    flank_columns = [29, 34]
+    required_columns = center_columns + flank_columns
+    missing = [column for column in required_columns if column not in closest_depth]
+    if missing:
+        errors.append(f"central silhouette evidence is missing columns: {missing}")
+
+    spike = None
+    center_depth = None
+    flank_mean = None
+    if not errors:
+        center_depth = min(closest_depth[column] for column in center_columns)
+        flank_mean = sum(closest_depth[column] for column in flank_columns) / len(flank_columns)
+        spike = max(0.0, flank_mean - center_depth)
+    return {
+        "success": not errors,
+        "errors": errors,
+        "columnCount": column_count,
+        "sampleCount": sample_count,
+        "centerColumns": center_columns,
+        "flankColumns": flank_columns,
+        "centerClosestDepth": center_depth,
+        "flankMeanClosestDepth": flank_mean,
+        "spikeMeters": spike,
+        "closestDepthByColumn": {
+            str(column): closest_depth[column]
+            for column in sorted(closest_depth)
+        },
+    }
+
+
+def _parse_triangle(
+    triangle: Any,
+    label: str,
+    index: int,
+    errors: list[str],
+) -> tuple[tuple[float, float, float], ...] | None:
+    if not isinstance(triangle, Sequence) or len(triangle) != 3:
+        errors.append(f"{label} triangle {index} must have exactly three vertices")
+        return None
+    parsed = []
+    for vertex_index, vertex in enumerate(triangle):
+        if not isinstance(vertex, Sequence) or len(vertex) < 3:
+            errors.append(
+                f"{label} triangle {index} vertex {vertex_index} must contain X, Y, and depth"
+            )
+            return None
+        values: list[float] = []
+        for axis, value in zip(("X", "Y", "depth"), vertex[:3]):
+            parsed_value = _finite_float(
+                value,
+                f"{label} triangle {index} vertex {vertex_index} {axis}",
+                errors,
+            )
+            if parsed_value is None:
+                return None
+            values.append(parsed_value)
+        parsed.append(tuple(values))
+    return tuple(parsed)
+
+
+def rasterize_seat_visibility(
+    character_triangles: Iterable[Sequence[Sequence[Any]]] | Any,
+    seat_triangles: Iterable[Sequence[Sequence[Any]]] | Any,
+    *,
+    width: int = 96,
+    height: int = 54,
+) -> dict[str, object]:
+    """Rasterize a deterministic character/chair depth mask and count visible seat pixels."""
+
+    errors: list[str] = []
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or width <= 0
+        or height <= 0
+    ):
+        return {
+            "success": False,
+            "errors": ["mask width and height must be positive integers"],
+            "maskWidth": width,
+            "maskHeight": height,
+            "foregroundPixelCount": 0,
+            "seatVisiblePixelCount": 0,
+            "seatVisibleFraction": None,
+        }
+
+    triangle_sets: list[tuple[str, list[tuple[tuple[float, float, float], ...]]]] = []
+    for label, source in (("character", character_triangles), ("seat", seat_triangles)):
+        try:
+            raw_triangles = list(source)
+        except TypeError:
+            raw_triangles = []
+            errors.append(f"{label} triangles must be iterable")
+        parsed_triangles = []
+        for index, triangle in enumerate(raw_triangles):
+            parsed = _parse_triangle(triangle, label, index, errors)
+            if parsed is not None:
+                parsed_triangles.append(parsed)
+        if not parsed_triangles:
+            errors.append(f"{label} mask has no triangles")
+        triangle_sets.append((label, parsed_triangles))
+
+    if errors:
+        return {
+            "success": False,
+            "errors": errors,
+            "maskWidth": width,
+            "maskHeight": height,
+            "foregroundPixelCount": 0,
+            "seatVisiblePixelCount": 0,
+            "seatVisibleFraction": None,
+        }
+
+    depths = [math.inf] * (width * height)
+    labels = [""] * (width * height)
+    epsilon = 1e-12
+    for label, triangles in triangle_sets:
+        for triangle in triangles:
+            if any(vertex[2] <= 0.0 for vertex in triangle):
+                continue
+            (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = triangle
+            denominator = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+            if abs(denominator) <= epsilon:
+                continue
+            min_x = max(0, math.floor(min(x0, x1, x2) * width))
+            max_x = min(width - 1, math.ceil(max(x0, x1, x2) * width) - 1)
+            min_y = max(0, math.floor(min(y0, y1, y2) * height))
+            max_y = min(height - 1, math.ceil(max(y0, y1, y2) * height) - 1)
+            if min_x > max_x or min_y > max_y:
+                continue
+            for pixel_y in range(min_y, max_y + 1):
+                sample_y = (pixel_y + 0.5) / height
+                for pixel_x in range(min_x, max_x + 1):
+                    sample_x = (pixel_x + 0.5) / width
+                    a = (
+                        (y1 - y2) * (sample_x - x2)
+                        + (x2 - x1) * (sample_y - y2)
+                    ) / denominator
+                    b = (
+                        (y2 - y0) * (sample_x - x2)
+                        + (x0 - x2) * (sample_y - y2)
+                    ) / denominator
+                    c = 1.0 - a - b
+                    if min(a, b, c) < -1e-10:
+                        continue
+                    depth = a * z0 + b * z1 + c * z2
+                    offset = pixel_y * width + pixel_x
+                    if depth < depths[offset] - epsilon:
+                        depths[offset] = depth
+                        labels[offset] = label
+
+    foreground = sum(bool(label) for label in labels)
+    visible_seat = labels.count("seat")
+    if foreground <= 0:
+        errors.append("character-plus-chair foreground mask is empty")
+    fraction = visible_seat / foreground if foreground else None
+    return {
+        "success": not errors,
+        "errors": errors,
+        "maskWidth": width,
+        "maskHeight": height,
+        "foregroundPixelCount": foreground,
+        "seatVisiblePixelCount": visible_seat,
+        "seatVisibleFraction": fraction,
+    }

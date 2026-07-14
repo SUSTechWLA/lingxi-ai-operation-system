@@ -48,6 +48,40 @@ def write_lighting_evidence(root: Path) -> Path:
     return path
 
 
+def write_rig_report(
+    path: Path,
+    *,
+    transition_status: str = "not_applicable",
+    transition_success: bool | None = None,
+    viseme_success: bool = True,
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "success": True,
+                "scene": {},
+                "arollPerformanceQa": {
+                    "schemaVersion": "tangying-aroll-performance-qa/v1",
+                    "transition": {
+                        "status": transition_status,
+                        "success": transition_success,
+                        "errors": [],
+                        "metrics": {},
+                    },
+                    "visemes": {
+                        "status": "passed" if viseme_success else "failed",
+                        "success": viseme_success,
+                        "errors": [] if viseme_success else ["injected viseme failure"],
+                        "metrics": {},
+                    },
+                    "sampledFrames": [{"frame": 1, "timeSec": 0.0, "state": "standing"}],
+                    "stateTimeline": [{"timeSec": 0.0, "state": "standing"}],
+                },
+            }
+        )
+    )
+
+
 class WarmStudioDemoTests(unittest.TestCase):
     def test_missing_lighting_evidence_fails_before_render(self) -> None:
         calls = 0
@@ -77,7 +111,7 @@ class WarmStudioDemoTests(unittest.TestCase):
             video = mode_dir / "ip_layer.mp4"
             video.write_bytes(f"video-{mode}".encode())
             rig_report = mode_dir / "rig_report.json"
-            rig_report.write_text(json.dumps({"success": True, "scene": {"mode": mode}}))
+            write_rig_report(rig_report)
             return {
                 "success": True,
                 "status": "ready",
@@ -156,7 +190,7 @@ class WarmStudioDemoTests(unittest.TestCase):
             video = mode_dir / "ip_layer.mp4"
             video.write_bytes(b"staged-video")
             rig_report = mode_dir / "rig_report.json"
-            rig_report.write_text(json.dumps({"success": True, "scene": {}}))
+            write_rig_report(rig_report)
             return {
                 "success": True,
                 "status": "ready",
@@ -210,7 +244,7 @@ class WarmStudioDemoTests(unittest.TestCase):
             video = mode_dir / "ip_layer.mp4"
             video.write_bytes(f"video-{mode}".encode())
             rig_report = mode_dir / "rig_report.json"
-            rig_report.write_text(json.dumps({"success": True, "scene": {"mode": mode}}))
+            write_rig_report(rig_report)
             return {
                 "success": True,
                 "status": "ready",
@@ -284,6 +318,103 @@ class WarmStudioDemoTests(unittest.TestCase):
             for filename, payload in previous_outputs.items():
                 self.assertEqual((output_dir / filename).read_bytes(), payload, filename)
 
+    def test_embedded_report_rejects_missing_performance_qa(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = Path(temp_dir) / "rig_report.json"
+            report.write_text(json.dumps({"success": True}))
+            with self.assertRaisesRegex(demo.DemoQAError, "transition geometry QA"):
+                demo._embedded_collision_report(
+                    "standing",
+                    {"rigReportPath": str(report)},
+                )
+
+    def test_embedded_report_rejects_failed_or_inconsistent_transition_qa(self) -> None:
+        cases = (("failed", False), ("passed", False), ("", True))
+        for status, success in cases:
+            with self.subTest(status=status, success=success):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    report = Path(temp_dir) / "rig_report.json"
+                    write_rig_report(
+                        report,
+                        transition_status=status,
+                        transition_success=success,
+                    )
+                    with self.assertRaisesRegex(
+                        demo.DemoQAError,
+                        "transition geometry QA",
+                    ):
+                        demo._embedded_collision_report(
+                            "standing",
+                            {"rigReportPath": str(report)},
+                        )
+
+    def test_embedded_report_accepts_only_passed_true_or_not_applicable(self) -> None:
+        cases = (("passed", True), ("not_applicable", None))
+        for status, success in cases:
+            with self.subTest(status=status, success=success):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    report = Path(temp_dir) / "rig_report.json"
+                    write_rig_report(
+                        report,
+                        transition_status=status,
+                        transition_success=success,
+                    )
+                    embedded = demo._embedded_collision_report(
+                        "standing",
+                        {"rigReportPath": str(report)},
+                    )
+                    self.assertEqual(
+                        embedded["report"]["arollPerformanceQa"]["transition"]["status"],
+                        status,
+                    )
+
+    def test_embedded_report_rejects_failed_or_malformed_viseme_qa(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = Path(temp_dir) / "rig_report.json"
+            write_rig_report(report, viseme_success=False)
+            with self.assertRaisesRegex(demo.DemoQAError, "viseme QA"):
+                demo._embedded_collision_report(
+                    "seated",
+                    {"rigReportPath": str(report)},
+                )
+
+            payload = json.loads(report.read_text())
+            payload["arollPerformanceQa"]["visemes"] = "malformed"
+            report.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(demo.DemoQAError, "viseme QA"):
+                demo._embedded_collision_report(
+                    "seated",
+                    {"rigReportPath": str(report)},
+                )
+
+    def test_embedded_report_rejects_inconsistent_success_and_empty_timeline(self) -> None:
+        mutations = (
+            lambda payload: payload["arollPerformanceQa"]["transition"].update(
+                {"status": "passed", "success": True, "errors": ["inconsistent"]}
+            ),
+            lambda payload: payload["arollPerformanceQa"]["visemes"].update(
+                {"success": True, "errors": ["inconsistent"]}
+            ),
+            lambda payload: payload["arollPerformanceQa"].update(
+                {"sampledFrames": []}
+            ),
+            lambda payload: payload["arollPerformanceQa"].update(
+                {"stateTimeline": []}
+            ),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    report = Path(temp_dir) / "rig_report.json"
+                    write_rig_report(report)
+                    payload = json.loads(report.read_text())
+                    mutate(payload)
+                    report.write_text(json.dumps(payload))
+                    with self.assertRaises(demo.DemoQAError):
+                        demo._embedded_collision_report(
+                            "standing",
+                            {"rigReportPath": str(report)},
+                        )
 
 if __name__ == "__main__":
     unittest.main()
