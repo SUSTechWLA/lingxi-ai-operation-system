@@ -254,14 +254,135 @@ def _asset_record(path: Path) -> dict[str, Any]:
 
 def _lighting_evidence(path: Path | None) -> dict[str, Any]:
     if path is None or not path.is_file():
-        return {"path": str(path) if path else "", "available": False, "measurements": []}
-    payload = json.loads(path.read_text())
+        raise DemoQAError("verified lighting evidence is required before publication")
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DemoQAError(f"lighting evidence is unreadable: {exc}") from exc
+    measurements = payload.get("measurements")
+    comparisons = payload.get("cameraComparisons")
+    expected_measurements = {
+        (mode, engine, "medium")
+        for mode in MODE_SCRIPTS
+        for engine in ("eevee", "cycles")
+    }
+    expected_comparisons = {
+        (mode, "medium", camera_role)
+        for mode in MODE_SCRIPTS
+        for camera_role in ("three_quarter", "wide")
+    }
+    actual_measurements = {
+        (
+            str(measurement.get("mode")),
+            str(measurement.get("engine")),
+            str(measurement.get("cameraRole")),
+        )
+        for measurement in measurements or []
+        if isinstance(measurement, dict)
+    }
+    actual_comparisons = {
+        (
+            str(comparison.get("mode")),
+            str(comparison.get("cameraRoleA")),
+            str(comparison.get("cameraRoleB")),
+        )
+        for comparison in comparisons or []
+        if isinstance(comparison, dict)
+    }
+    if (
+        payload.get("schemaVersion") != "tangying-warm-studio-lighting-evidence/v1"
+        or payload.get("success") is not True
+        or payload.get("errors") != []
+        or not isinstance(measurements, list)
+        or len(measurements) != 4
+        or actual_measurements != expected_measurements
+        or not isinstance(comparisons, list)
+        or len(comparisons) != 4
+        or actual_comparisons != expected_comparisons
+    ):
+        raise DemoQAError("lighting evidence is incomplete or did not pass its canonical gates")
+    for measurement in measurements:
+        try:
+            stops = float(measurement["backgroundStopsBelowFace"])
+            clip_ratio = float(measurement["highlightClipRatio"])
+            red_blue = float(measurement["brightNeutralRedBlueRatio"])
+            red_green = float(measurement["brightNeutralRedGreenRatio"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DemoQAError("lighting evidence has incomplete numeric gates") from exc
+        if not (
+            1.0 <= stops <= 1.5
+            and 0.0 <= clip_ratio < 0.005
+            and 0.95 <= red_blue <= 1.22
+            and 0.95 <= red_green <= 1.14
+        ):
+            raise DemoQAError("lighting evidence contains a failed measurement gate")
     return {
         "path": str(path.resolve()),
         "available": True,
         "sha256": _sha256(path),
-        "measurements": payload.get("measurements") or [],
+        "schemaVersion": payload["schemaVersion"],
+        "measurements": measurements,
+        "cameraComparisons": comparisons,
     }
+
+
+def _embedded_collision_report(mode: str, result: dict[str, Any]) -> dict[str, Any]:
+    source = Path(str(result.get("rigReportPath") or "")).expanduser().resolve()
+    if not source.is_file():
+        raise DemoQAError(f"{mode} rig/collision report is missing")
+    try:
+        payload = json.loads(source.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DemoQAError(f"{mode} rig/collision report is unreadable: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        raise DemoQAError(f"{mode} rig/collision report did not pass")
+    return {
+        "sourceFileName": source.name,
+        "sha256": _sha256(source),
+        "report": payload,
+    }
+
+
+def publish_transaction(
+    staged_paths: dict[str, Path],
+    output_dir: Path,
+    *,
+    replace_file: Callable[[Path, Path], None] = os.replace,
+) -> None:
+    """Publish the complete artifact set and roll back any interrupted replacement."""
+
+    backup_dir = next(iter(staged_paths.values())).parent.parent / "publication-backup"
+    backup_dir.mkdir()
+    destinations = {
+        key: output_dir / FINAL_FILENAMES[key]
+        for key in FINAL_FILENAMES
+    }
+    backed_up: list[str] = []
+    published: list[str] = []
+    try:
+        for key, destination in destinations.items():
+            if destination.exists():
+                os.replace(destination, backup_dir / FINAL_FILENAMES[key])
+                backed_up.append(key)
+        for key in FINAL_FILENAMES:
+            replace_file(staged_paths[key], destinations[key])
+            published.append(key)
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        for key in published:
+            try:
+                destinations[key].unlink(missing_ok=True)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"remove {key}: {rollback_exc}")
+        for key in backed_up:
+            try:
+                os.replace(backup_dir / FINAL_FILENAMES[key], destinations[key])
+            except OSError as rollback_exc:
+                rollback_errors.append(f"restore {key}: {rollback_exc}")
+        suffix = f"; rollback errors: {rollback_errors}" if rollback_errors else ""
+        raise DemoQAError(f"publication transaction failed: {exc}{suffix}") from exc
+    finally:
+        shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def render_warm_studio_demos(
@@ -272,6 +393,7 @@ def render_warm_studio_demos(
     media_probe: Callable[[Path], dict[str, Any]] | None = None,
     artifact_builder: Callable[[list[dict[str, Any]], dict[str, Path]], None] | None = None,
     lighting_evidence_path: Path | None = None,
+    publisher: Callable[[dict[str, Path], Path], None] | None = None,
 ) -> dict[str, Any]:
     profile_path = profile_path.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
@@ -285,10 +407,12 @@ def render_warm_studio_demos(
         or voice.get("fallbackPolicy") != "error"
     ):
         raise DemoQAError("character profile does not pin the approved production voice")
+    lighting_evidence = _lighting_evidence(lighting_evidence_path)
 
     renderer = renderer or server.render_talking_video
     media_probe = media_probe or probe_media
     artifact_builder = artifact_builder or build_derived_artifacts
+    publisher = publisher or publish_transaction
     output_dir.mkdir(parents=True, exist_ok=True)
     staging_root = Path(tempfile.mkdtemp(prefix=".warm-studio-demo-", dir=output_dir))
     publish_stage = staging_root / "publish"
@@ -316,6 +440,7 @@ def render_warm_studio_demos(
             video_path = Path(str(result.get("videoPath") or "")).expanduser().resolve()
             probe = media_probe(video_path)
             _validate_mode_result(mode, result, probe)
+            collision_report = _embedded_collision_report(mode, result)
             shutil.copy2(video_path, staged_paths[mode])
             records.append(
                 {
@@ -323,6 +448,7 @@ def render_warm_studio_demos(
                     "script": script,
                     "result": result,
                     "probe": probe,
+                    "collisionReport": collision_report,
                     "publishedStagePath": str(staged_paths[mode]),
                 }
             )
@@ -338,6 +464,29 @@ def render_warm_studio_demos(
         model_config = profile.get("model") or {}
         scene_path = _asset_path(profile_path, str(render_config.get("sceneBlendPath") or ""))
         master_path = _asset_path(profile_path, str(model_config.get("masterBlendPath") or ""))
+        mode_reports = {
+            str(record["mode"]): {
+                "script": record["script"],
+                "presentationMode": record["mode"],
+                "videoSha256": _sha256(staged_paths[str(record["mode"])]),
+                "qa": record["probe"],
+                "renderQa": record["result"].get("qa") or {},
+                "voice": record["result"].get("voice") or {},
+                "voicePolicy": record["result"].get("voicePolicy") or {},
+                "renderProvenance": {
+                    "sceneBlendPath": record["result"].get("sceneBlendPath") or "",
+                    "masterBlendPath": record["result"].get("masterBlendPath") or "",
+                    "renderReportSha256": (
+                        _sha256(Path(str(record["result"].get("renderReportPath"))).resolve())
+                        if record["result"].get("renderReportPath")
+                        and Path(str(record["result"].get("renderReportPath"))).is_file()
+                        else ""
+                    ),
+                },
+                "collisionReport": record["collisionReport"],
+            }
+            for record in records
+        }
         report: dict[str, Any] = {
             "schemaVersion": "tangying-sloth-warm-studio-integration/v1",
             "success": True,
@@ -350,11 +499,12 @@ def render_warm_studio_demos(
                 "fallbackPolicy": voice.get("fallbackPolicy"),
                 "gptSovitsLocal": voice.get("gptSovitsLocal"),
             },
-            "modes": records,
+            "modes": mode_reports,
             "combinedReelQa": reel_probe,
-            "lightingEvidence": _lighting_evidence(lighting_evidence_path),
-            "collisionReportPaths": [
-                str(record["result"].get("rigReportPath") or "") for record in records
+            "lightingEvidence": lighting_evidence,
+            "collisionReportPointers": [
+                f"{FINAL_FILENAMES['report']}#/modes/{mode}/collisionReport"
+                for mode in MODE_SCRIPTS
             ],
         }
         report["outputs"] = {
@@ -372,11 +522,7 @@ def render_warm_studio_demos(
         if missing:
             raise DemoQAError(f"staged publication is incomplete: {missing}")
 
-        for key in FINAL_FILENAMES:
-            if key == "report":
-                continue
-            os.replace(staged_paths[key], output_dir / FINAL_FILENAMES[key])
-        os.replace(staged_paths["report"], output_dir / FINAL_FILENAMES["report"])
+        publisher(staged_paths, output_dir)
         return report
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
@@ -386,7 +532,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--lighting-evidence", type=Path)
+    parser.add_argument("--lighting-evidence", type=Path, required=True)
     return parser
 
 
