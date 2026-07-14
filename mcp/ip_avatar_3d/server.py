@@ -676,6 +676,13 @@ MOTION_GESTURE_GROUPS: dict[str, str] = {
     "head_shake": "head",
 }
 
+ACTION_CHANNELS_BY_LEGACY_GROUP: dict[str, set[str]] = {
+    "body": {"root", "body", "legs", "arms", "hands", "arm_l", "arm_r", "hand_l", "hand_r"},
+    "right_hand": {"arms", "hands", "arm_r", "hand_r"},
+    "left_hand": {"arms", "hands", "arm_l", "hand_l"},
+    "head": {"head"},
+}
+
 
 def _gesture_group_for_motion(motion: str) -> str | None:
     return MOTION_GESTURE_GROUPS.get(str(motion))
@@ -690,6 +697,10 @@ def _motion_event_sort_key(event: dict[str, Any]) -> tuple[float, str, str, str]
     )
 
 
+def _action_reserves_legacy_group(action_groups: set[str], legacy_group: str) -> bool:
+    return bool(action_groups & ACTION_CHANNELS_BY_LEGACY_GROUP.get(legacy_group, {legacy_group}))
+
+
 def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for event in events:
@@ -700,28 +711,33 @@ def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -
                 item["gestureGroup"] = gesture_group
         normalized.append(item)
 
-    latest_end_by_group: dict[str, float] = {}
     resolved: list[dict[str, Any]] = []
+    action_reservations: list[tuple[float, float, set[str]]] = []
+    for event in sorted(normalized, key=_motion_event_sort_key):
+        item = dict(event)
+        if item.get("motion") != "avatar_action":
+            continue
+        groups = {
+            str(group)
+            for group in item.get("gestureGroups", [])
+            if str(group) in {
+                "root", "body", "legs", "arms", "hands", "head",
+                "arm_l", "arm_r", "hand_l", "hand_r",
+            }
+        }
+        start = max(0.0, float(item.get("timeSec") or 0.0))
+        duration = max(0.1, float(item.get("duration") or 0.1))
+        if start + duration > duration_sec:
+            raise ValueError(f"A-roll action {item.get('action')} exceeds durationSec")
+        item["timeSec"] = round(start, 3)
+        item["duration"] = round(duration, 3)
+        action_reservations.append((start, start + duration, groups))
+        resolved.append(item)
+
+    latest_end_by_group: dict[str, float] = {}
     for event in sorted(normalized, key=_motion_event_sort_key):
         item = dict(event)
         if item.get("motion") == "avatar_action":
-            groups = [
-                group
-                for group in item.get("gestureGroups", [])
-                if group in {
-                    "root", "body", "legs", "arms", "hands", "head",
-                    "arm_l", "arm_r", "hand_l", "hand_r",
-                }
-            ]
-            start = max(0.0, float(item.get("timeSec") or 0.0))
-            duration = max(0.1, float(item.get("duration") or 0.1))
-            if start + duration > duration_sec:
-                raise ValueError(f"A-roll action {item.get('action')} exceeds durationSec")
-            item["timeSec"] = round(start, 3)
-            item["duration"] = round(duration, 3)
-            for group in groups:
-                latest_end_by_group[group] = start + duration
-            resolved.append(item)
             continue
         if item.get("gestureGroup"):
             groups = [
@@ -734,7 +750,22 @@ def _finalize_motion_events(events: list[dict[str, Any]], duration_sec: float) -
             previous_end = max((latest_end_by_group.get(group, -1.0) for group in groups), default=-1.0)
             if start < previous_end:
                 start = previous_end
+            shifted_for_action = False
+            while True:
+                conflicting_action_ends = [
+                    action_end
+                    for action_start, action_end, action_groups in action_reservations
+                    if start < action_end
+                    and action_start < start + duration
+                    and any(_action_reserves_legacy_group(action_groups, group) for group in groups)
+                ]
+                if not conflicting_action_ends:
+                    break
+                start = max(conflicting_action_ends)
+                shifted_for_action = True
             if start + duration > duration_sec:
+                if shifted_for_action:
+                    continue
                 duration = max(0.1, duration_sec - start)
             item["timeSec"] = round(start, 3)
             item["duration"] = round(duration, 3)

@@ -361,6 +361,29 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         ]
         self.assertEqual([event["endState"] for event in transitions], ["seated", "standing"])
 
+    def test_motion_plan_moves_grouped_automatic_motion_outside_fixed_aroll_actions(self) -> None:
+        server = load_server()
+
+        plan = server.build_motion_plan(
+            "大家好，今天分享一个值得关注的观点。",
+            6.0,
+            30,
+            action_sequence=["Aroll_Welcome_OpenArms"],
+        )
+
+        action = next(
+            event
+            for event in plan["motionEvents"]
+            if event.get("motion") == "avatar_action"
+        )
+        self.assertEqual(0.35, action["timeSec"])
+        self.assert_no_grouped_motion_overlaps(plan["motionEvents"])
+        wave = next(event for event in plan["motionEvents"] if event["motion"] == "wave")
+        self.assertGreaterEqual(
+            wave["timeSec"],
+            action["timeSec"] + action["duration"],
+        )
+
     def test_render_dry_run_persists_requested_action_sequence(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:
