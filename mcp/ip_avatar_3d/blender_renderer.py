@@ -1694,6 +1694,23 @@ def _mode_collision_obstacles() -> list[bpy.types.Object]:
     ]
 
 
+def production_calibration_frames(scene: bpy.types.Scene, fps: int) -> tuple[int, ...]:
+    """Sample every half second plus all authored action keys and timeline bounds."""
+
+    start = int(scene.frame_start)
+    end = int(scene.frame_end)
+    interval = max(1, int(round(max(1, fps) * 0.5)))
+    frames = set(range(start, end + 1, interval))
+    frames.update((start, end))
+    for action in bpy.data.actions:
+        for fcurve in iter_action_fcurves(action):
+            for keyframe in fcurve.keyframe_points:
+                frame = int(round(float(keyframe.co.x)))
+                if start <= frame <= end:
+                    frames.add(frame)
+    return tuple(sorted(frames))
+
+
 def calibrate_mode_collision_clearance(
     character_objects: list[bpy.types.Object],
     placement: bpy.types.Object,
@@ -6813,6 +6830,10 @@ def main() -> None:
         presentation_mode=presentation_mode,
     )
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
+    calibration_frames = production_calibration_frames(
+        bpy.context.scene,
+        int(data["fps"]),
+    )
     if bool(data.get("prepareMaster")):
         container = dimensions.get("container")
         master_objects = list(
@@ -6842,6 +6863,7 @@ def main() -> None:
             scene_stats["collisionPlacement"] = calibrate_mode_collision_clearance(
                 character_objects,
                 placement,
+                sample_frames=calibration_frames,
             )
             scene_stats["footContact"] = calibrate_mode_foot_contact(
                 character_objects,
@@ -6849,12 +6871,15 @@ def main() -> None:
                 bone_map,
                 placement,
                 mode_objects,
+                sample_frames=calibration_frames,
             )
             scene_stats["mediumFraming"] = calibrate_mode_medium_camera(
                 character_objects,
                 bone_map,
                 mode_objects,
+                sample_frames=calibration_frames,
             )
+            scene_stats["calibrationFrames"] = list(calibration_frames)
     container = dimensions.get("container")
     export_assets = imported_assets + ([container] if container else [])
     save_rigged_assets(

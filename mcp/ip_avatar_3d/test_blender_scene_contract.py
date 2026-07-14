@@ -954,6 +954,26 @@ def test_lighting_preset_uses_authored_base_energy() -> None:
     assert report["preset"] == "editorial_crisp"
 
 
+def test_production_calibration_frames_include_interval_bounds_and_action_keys() -> None:
+    scene = bpy.context.scene
+    original_range = (scene.frame_start, scene.frame_end)
+    marker = bpy.data.objects.new("Calibration_Frame_Test", None)
+    scene.collection.objects.link(marker)
+    try:
+        scene.frame_start = 1
+        scene.frame_end = 61
+        marker.location.x = 0.0
+        marker.keyframe_insert(data_path="location", frame=23, index=0)
+
+        frames = blender_renderer.production_calibration_frames(scene, 30)
+
+        assert {1, 16, 23, 31, 46, 61}.issubset(frames)
+        assert len(frames) < 61
+    finally:
+        bpy.data.objects.remove(marker, do_unlink=True)
+        scene.frame_start, scene.frame_end = original_range
+
+
 def test_render_settings_are_compatible_with_blender_51_agx_and_eevee() -> None:
     reset_scene()
 
@@ -1055,6 +1075,7 @@ if __name__ == "__main__":
         test_validation_success_fails_each_required_geometry_gate,
         test_scene_marker_controls_character_height,
         test_lighting_preset_uses_authored_base_energy,
+        test_production_calibration_frames_include_interval_bounds_and_action_keys,
         test_render_settings_are_compatible_with_blender_51_agx_and_eevee,
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
         test_real_warm_studio_character_validation_passes_both_modes,
