@@ -61,9 +61,44 @@ def load_scene_template(path: str) -> None:
     bpy.ops.wm.open_mainfile(filepath=str(scene_path), load_ui=False)
 
 
+def resolve_scene_mode_objects(mode: str) -> dict[str, Any]:
+    selected = str(mode or "standing").strip().lower()
+    if selected not in {"standing", "seated"}:
+        raise ValueError(f"unsupported presentation mode: {mode}")
+    prefix = selected.title()
+    names = {
+        "spawn": f"IP_{prefix}_Spawn",
+        "focus": f"IP_{prefix}_Focus_Head",
+        "seat": "IP_Seat_Target",
+        "foot_l": f"IP_{prefix}_Foot_Target.L",
+        "foot_r": f"IP_{prefix}_Foot_Target.R",
+    }
+    camera_names = {
+        "wide": f"Camera_{prefix}_Wide",
+        "medium": f"Camera_{prefix}_Medium",
+        "three_quarter": f"Camera_{prefix}_ThreeQuarter",
+    }
+    resolved = {key: bpy.data.objects.get(name) for key, name in names.items()}
+    resolved["cameras"] = {
+        role: bpy.data.objects.get(name) for role, name in camera_names.items()
+    }
+    missing = [name for key, name in names.items() if resolved[key] is None]
+    missing.extend(
+        name for role, name in camera_names.items() if resolved["cameras"][role] is None
+    )
+    if missing:
+        raise RuntimeError(
+            f"studio presentation mode {selected} is incomplete: {sorted(missing)}"
+        )
+    resolved["mode"] = selected
+    return resolved
+
+
 def scene_target_height(data: dict) -> float:
     configured = max(0.25, float(data.get("targetCharacterHeight") or 2.55))
-    spawn = bpy.data.objects.get("IP_Character_Spawn")
+    mode = str(data.get("presentationMode") or "standing").strip().lower()
+    mode_spawn = bpy.data.objects.get(f"IP_{mode.title()}_Spawn")
+    spawn = mode_spawn or bpy.data.objects.get("IP_Character_Spawn")
     if not spawn:
         return configured
     return max(0.25, float(spawn.get("target_height", configured)))
@@ -99,22 +134,41 @@ def apply_lighting_preset(preset: str) -> dict[str, Any]:
     }
 
 
-def configure_camera_plan(data: dict) -> dict[str, Any]:
+def configure_camera_plan(
+    data: dict,
+    mode_objects: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     scene = bpy.context.scene
     scene.timeline_markers.clear()
     requested = data.get("cameraPlan") or [
         {"frame": 1, "camera": CAMERA_NAMES.get(str(data.get("cameraPreset") or "medium"), "Camera_Medium")}
     ]
-    cameras = {obj.name: obj for obj in scene.objects if obj.type == "CAMERA"}
-    fallback = cameras.get("Camera_Medium") or scene.camera or next(iter(cameras.values()), None)
+    if mode_objects is None:
+        cameras = {obj.name: obj for obj in scene.objects if obj.type == "CAMERA"}
+        role_cameras: dict[str, bpy.types.Object] = {}
+    else:
+        role_cameras = dict(mode_objects["cameras"])
+        cameras = {camera.name: camera for camera in role_cameras.values()}
+    fallback = role_cameras.get("medium") or cameras.get("Camera_Medium") or scene.camera
+    if fallback is None:
+        fallback = next(iter(cameras.values()), None)
     if not fallback:
         raise RuntimeError("studio scene must contain at least one camera")
 
+    aliases = {
+        "wide": "wide",
+        "medium": "medium",
+        "three_quarter": "three_quarter",
+        "Camera_Wide": "wide",
+        "Camera_Medium": "medium",
+        "Camera_ThreeQuarter": "three_quarter",
+        "Camera_Close": "three_quarter",
+    }
     missing: list[str] = []
     cuts: list[dict[str, Any]] = []
     for item in requested:
         requested_name = str(item.get("camera") or "Camera_Medium")
-        camera = cameras.get(requested_name)
+        camera = role_cameras.get(aliases.get(requested_name, "")) or cameras.get(requested_name)
         if not camera:
             missing.append(requested_name)
             camera = fallback
@@ -124,7 +178,14 @@ def configure_camera_plan(data: dict) -> dict[str, Any]:
         cuts.append({"frame": frame, "camera": camera.name})
     cuts.sort(key=lambda item: item["frame"])
     scene.camera = cameras.get(cuts[0]["camera"], fallback) if cuts else fallback
-    return {"cuts": cuts, "missingCameras": sorted(set(missing)), "activeCamera": scene.camera.name}
+    return {
+        "cuts": cuts,
+        "missingCameras": sorted(set(missing)),
+        "activeCamera": scene.camera.name,
+        "cameraNames": {
+            role: camera.name for role, camera in role_cameras.items()
+        },
+    }
 
 
 def configure_render_settings(data: dict, *, authored_scene: bool) -> None:
@@ -1369,8 +1430,9 @@ def place_character_in_authored_scene(
     armature: bpy.types.Object,
     face: dict[str, bpy.types.Object],
     dimensions: dict[str, Any],
+    mode_objects: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    spawn = bpy.data.objects.get("IP_Character_Spawn")
+    spawn = mode_objects["spawn"] if mode_objects else bpy.data.objects.get("IP_Character_Spawn")
     if not spawn:
         spawn = bpy.data.objects.new("IP_Character_Spawn", None)
         bpy.context.scene.collection.objects.link(spawn)
@@ -1399,24 +1461,43 @@ def place_character_in_authored_scene(
     bpy.context.view_layer.update()
 
     min_v, max_v = object_bbox(character_objects)
-    character_height = max(0.01, max_v.z - min_v.z)
-    focus = bpy.data.objects.get("IP_Focus_Head")
+    focus = mode_objects["focus"] if mode_objects else bpy.data.objects.get("IP_Focus_Head")
     if not focus:
         focus = bpy.data.objects.new("IP_Focus_Head", None)
         bpy.context.scene.collection.objects.link(focus)
         focus.empty_display_type = "SPHERE"
-    focus.matrix_world.translation = Vector(
-        (
-            (min_v.x + max_v.x) * 0.5,
-            (min_v.y + max_v.y) * 0.5,
-            min_v.z + character_height * 0.72,
+        character_height = max(0.01, max_v.z - min_v.z)
+        focus.matrix_world.translation = Vector(
+            (
+                (min_v.x + max_v.x) * 0.5,
+                (min_v.y + max_v.y) * 0.5,
+                min_v.z + character_height * 0.72,
+            )
         )
+    focus_cameras = (
+        mode_objects["cameras"].values()
+        if mode_objects
+        else (obj for obj in bpy.context.scene.objects if obj.type == "CAMERA")
     )
-    for camera in (obj for obj in bpy.context.scene.objects if obj.type == "CAMERA"):
+    for camera in focus_cameras:
         camera.data.dof.use_dof = True
         camera.data.dof.focus_object = focus
+    if mode_objects:
+        medium_camera = mode_objects["cameras"]["medium"]
+        medium_camera.data["ip_authored_shift_y"] = float(medium_camera.data.shift_y)
+        medium_camera.data.shift_y = float(medium_camera.data.shift_y) - 0.01
 
+    marker_names = {
+        key: mode_objects[key].name
+        for key in ("spawn", "focus", "seat", "foot_l", "foot_r")
+    } if mode_objects else {"spawn": spawn.name, "focus": focus.name}
+    camera_names = {
+        role: camera.name for role, camera in mode_objects["cameras"].items()
+    } if mode_objects else {}
     return {
+        "mode": mode_objects["mode"] if mode_objects else "standing",
+        "markerNames": marker_names,
+        "cameraNames": camera_names,
         "spawnMarker": spawn.name,
         "placementRoot": placement.name,
         "focusMarker": focus.name,
@@ -1427,14 +1508,27 @@ def place_character_in_authored_scene(
     }
 
 
-def setup_authored_scene(data: dict, dimensions: dict[str, Any]) -> dict[str, Any]:
+def setup_authored_scene(
+    data: dict,
+    dimensions: dict[str, Any],
+    mode_objects: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     configure_render_settings(data, authored_scene=True)
     lighting = apply_lighting_preset(str(data.get("lightingPreset") or "editorial_soft"))
-    cameras = configure_camera_plan(data)
+    cameras = configure_camera_plan(data, mode_objects)
+    markers = {
+        key: mode_objects[key].name
+        for key in ("spawn", "focus", "seat", "foot_l", "foot_r")
+    } if mode_objects else {
+        "spawn": "IP_Character_Spawn",
+        "focus": "IP_Focus_Head",
+    }
     return {
         "sceneMode": "blender_scene",
+        "mode": mode_objects["mode"] if mode_objects else "standing",
         "sourceScene": str(data.get("sceneBlendPath") or ""),
         "targetCharacterHeight": float(dimensions["height"]),
+        "markers": markers,
         "lighting": lighting,
         "cameras": cameras,
     }
@@ -6130,8 +6224,12 @@ def main() -> None:
     data = read_input()
     scene_mode = bool(data.get("sceneBlendPath"))
     use_master = bool(data.get("useMasterAsset"))
+    presentation_mode = str(data.get("presentationMode") or "standing").strip().lower()
+    mode_objects: dict[str, Any] | None = None
     if scene_mode:
         load_scene_template(str(data["sceneBlendPath"]))
+        if presentation_mode != "standing" or bpy.data.objects.get("IP_Standing_Spawn"):
+            mode_objects = resolve_scene_mode_objects(presentation_mode)
     else:
         clear_scene()
     target_height = scene_target_height(data)
@@ -6156,7 +6254,7 @@ def main() -> None:
     )
     scene_stats: dict[str, Any] = {}
     if scene_mode:
-        scene_stats = setup_authored_scene(data, dimensions)
+        scene_stats = setup_authored_scene(data, dimensions, mode_objects)
     elif not bool(data.get("assetOnly")):
         setup_scene(data, dimensions)
     armature, rig_stats, bone_map = choose_character_rig(data, imported_armatures, character_objects, dimensions)
@@ -6179,7 +6277,7 @@ def main() -> None:
         int(data["fps"]),
         bone_map,
         runtime_actions_prepared=True,
-        presentation_mode=str(data.get("presentationMode") or "standing"),
+        presentation_mode=presentation_mode,
     )
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
     if bool(data.get("prepareMaster")):
@@ -6204,6 +6302,7 @@ def main() -> None:
             armature,
             face,
             dimensions,
+            mode_objects,
         )
     container = dimensions.get("container")
     export_assets = imported_assets + ([container] if container else [])

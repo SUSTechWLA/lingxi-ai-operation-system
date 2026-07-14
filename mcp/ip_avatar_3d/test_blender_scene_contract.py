@@ -13,11 +13,13 @@ except ModuleNotFoundError as exc:
     raise unittest.SkipTest("requires Blender's bpy runtime") from exc
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import blender_renderer
 import editorial_studio_builder
+import validate_warm_studio_character as warm_character_validator
 import warm_studio_contract as contract
 
 
@@ -111,6 +113,150 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert len(rims) == 1
 
 
+def test_mode_resolver_uses_only_mode_specific_markers_and_cameras() -> None:
+    expected = {
+        "standing": {
+            "spawn": "IP_Standing_Spawn",
+            "focus": "IP_Standing_Focus_Head",
+            "foot_l": "IP_Standing_Foot_Target.L",
+            "foot_r": "IP_Standing_Foot_Target.R",
+            "cameras": {
+                "wide": "Camera_Standing_Wide",
+                "medium": "Camera_Standing_Medium",
+                "three_quarter": "Camera_Standing_ThreeQuarter",
+            },
+        },
+        "seated": {
+            "spawn": "IP_Seated_Spawn",
+            "focus": "IP_Seated_Focus_Head",
+            "foot_l": "IP_Seated_Foot_Target.L",
+            "foot_r": "IP_Seated_Foot_Target.R",
+            "cameras": {
+                "wide": "Camera_Seated_Wide",
+                "medium": "Camera_Seated_Medium",
+                "three_quarter": "Camera_Seated_ThreeQuarter",
+            },
+        },
+    }
+
+    for mode, names in expected.items():
+        resolved = blender_renderer.resolve_scene_mode_objects(mode)
+        assert resolved["mode"] == mode
+        assert resolved["spawn"].name == names["spawn"]
+        assert resolved["focus"].name == names["focus"]
+        assert resolved["seat"].name == "IP_Seat_Target"
+        assert resolved["foot_l"].name == names["foot_l"]
+        assert resolved["foot_r"].name == names["foot_r"]
+        assert {
+            role: camera.name for role, camera in resolved["cameras"].items()
+        } == names["cameras"]
+
+
+def test_scene_target_height_reads_the_selected_mode_spawn() -> None:
+    standing = bpy.data.objects["IP_Standing_Spawn"]
+    seated = bpy.data.objects["IP_Seated_Spawn"]
+    old_standing = standing["target_height"]
+    old_seated = seated["target_height"]
+    try:
+        standing["target_height"] = 2.45
+        seated["target_height"] = 2.15
+        assert blender_renderer.scene_target_height(
+            {"presentationMode": "standing", "targetCharacterHeight": 2.55}
+        ) == 2.45
+        assert blender_renderer.scene_target_height(
+            {"presentationMode": "seated", "targetCharacterHeight": 2.55}
+        ) == 2.15
+    finally:
+        standing["target_height"] = old_standing
+        seated["target_height"] = old_seated
+
+
+def test_mode_camera_plan_maps_generic_roles_to_selected_cameras() -> None:
+    report = blender_renderer.configure_camera_plan(
+        {
+            "presentationMode": "seated",
+            "cameraPlan": [
+                {"frame": 1, "camera": "Camera_Wide"},
+                {"frame": 25, "camera": "Camera_Medium"},
+                {"frame": 50, "camera": "Camera_ThreeQuarter"},
+            ],
+        },
+        blender_renderer.resolve_scene_mode_objects("seated"),
+    )
+
+    assert [cut["camera"] for cut in report["cuts"]] == [
+        "Camera_Seated_Wide",
+        "Camera_Seated_Medium",
+        "Camera_Seated_ThreeQuarter",
+    ]
+    assert report["cameraNames"] == {
+        "wide": "Camera_Seated_Wide",
+        "medium": "Camera_Seated_Medium",
+        "three_quarter": "Camera_Seated_ThreeQuarter",
+    }
+    assert report["missingCameras"] == []
+    assert bpy.context.scene.camera.name == "Camera_Seated_Wide"
+
+
+def test_authored_scene_placement_persists_selected_mode_contract() -> None:
+    mode_objects = blender_renderer.resolve_scene_mode_objects("seated")
+    data = {
+        "presentationMode": "seated",
+        "sceneBlendPath": "warm-sloth-studio-v1.blend",
+        "durationSec": 2,
+        "fps": 30,
+        "resolution": {"width": 1920, "height": 1080},
+        "cameraPlan": [{"frame": 1, "camera": "Camera_Medium"}],
+    }
+    scene_stats = blender_renderer.setup_authored_scene(
+        data,
+        {"height": 1.0},
+        mode_objects,
+    )
+
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.0, 0.5))
+    character = bpy.context.object
+    character.name = "Task5_Test_Character"
+    rig = bpy.data.objects.new("Task5_Test_Rig", None)
+    bpy.context.scene.collection.objects.link(rig)
+    scene_stats["placement"] = blender_renderer.place_character_in_authored_scene(
+        [character],
+        [],
+        rig,
+        {},
+        {"height": 1.0, "container": None},
+        mode_objects,
+    )
+
+    placement = scene_stats["placement"]
+    assert placement["mode"] == "seated"
+    assert placement["markerNames"] == {
+        "spawn": "IP_Seated_Spawn",
+        "focus": "IP_Seated_Focus_Head",
+        "seat": "IP_Seat_Target",
+        "foot_l": "IP_Seated_Foot_Target.L",
+        "foot_r": "IP_Seated_Foot_Target.R",
+    }
+    assert placement["cameraNames"] == {
+        "wide": "Camera_Seated_Wide",
+        "medium": "Camera_Seated_Medium",
+        "three_quarter": "Camera_Seated_ThreeQuarter",
+    }
+    assert placement["placementRoot"] == "IP_Character_Placement"
+    assert_location_matches(
+        tuple(bpy.data.objects[placement["placementRoot"]].location),
+        tuple(mode_objects["spawn"].location),
+    )
+    assert placement["worldBounds"]["min"] == [-0.5, -0.03, 0.0]
+    assert placement["worldBounds"]["max"] == [0.5, 0.97, 1.0]
+    assert scene_stats["mode"] == "seated"
+    assert scene_stats["markers"] == placement["markerNames"]
+    assert scene_stats["cameras"]["cameraNames"] == placement["cameraNames"]
+    for camera in mode_objects["cameras"].values():
+        assert camera.data.dof.use_dof is True
+        assert camera.data.dof.focus_object == mode_objects["focus"]
+
+
 def test_camera_plan_binds_authored_cameras() -> None:
     reset_scene()
     for name in ("Camera_Wide", "Camera_Medium", "Camera_Close"):
@@ -132,6 +278,103 @@ def test_camera_plan_binds_authored_cameras() -> None:
     assert [marker.camera.name for marker in markers] == ["Camera_Wide", "Camera_Medium", "Camera_Close"]
     assert bpy.context.scene.camera.name == "Camera_Wide"
     assert report["missingCameras"] == []
+
+
+def test_shoe_sampling_rejects_render_disabled_armature_modifier() -> None:
+    reset_scene()
+    armature_data = bpy.data.armatures.new("Task5_Armature_Data")
+    armature = bpy.data.objects.new("Task5_Armature", armature_data)
+    bpy.context.scene.collection.objects.link(armature)
+    bpy.ops.mesh.primitive_cube_add(size=1.0)
+    shoe = bpy.context.object
+    shoe.name = "Task5_Shoe"
+    modifier = shoe.modifiers.new("Armature", "ARMATURE")
+    modifier.object = armature
+    modifier.show_viewport = True
+    modifier.show_render = False
+
+    try:
+        warm_character_validator.assert_render_armature_modifiers([shoe], armature)
+    except RuntimeError as exc:
+        assert "show_render=true" in str(exc)
+    else:
+        raise AssertionError("render-disabled Armature modifier was accepted")
+
+
+def test_collision_counter_uses_evaluated_triangle_geometry() -> None:
+    reset_scene()
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.0, 0.5))
+    character = bpy.context.object
+    character.name = "Task5_Collision_Character"
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.75, 0.0, 0.5))
+    obstacle = bpy.context.object
+    obstacle.name = "Task5_Collision_Obstacle"
+
+    report = warm_character_validator.count_evaluated_mesh_intersections(
+        [character],
+        [obstacle],
+        bpy.context.evaluated_depsgraph_get(),
+    )
+
+    assert report["trianglePairCount"] > 0
+    assert report["objectPairs"] == [
+        ["Task5_Collision_Character", "Task5_Collision_Obstacle"]
+    ]
+
+
+def test_validation_success_fails_each_required_geometry_gate() -> None:
+    passing = {
+        "mode": "seated",
+        "sampleCount": 3,
+        "floorClearance": {
+            "left": {"minimum": -0.001},
+            "right": {"minimum": 0.002},
+        },
+        "deskIntersectionCount": 0,
+        "chairIntersectionCount": 0,
+        "handIntersectionCount": 0,
+        "deformationSpikeCount": 0,
+        "cameraVisibility": {
+            "head": {"insideCount": 12},
+            "leftHand": {"insideCount": 8},
+            "rightHand": {"insideCount": 9},
+        },
+    }
+    report = warm_character_validator.finalize_mode_report(passing)
+    assert report["success"] is True
+    assert report["failureReasons"] == []
+
+    failing_changes = (
+        ("floorClearance", {"left": {"minimum": -0.021}, "right": {"minimum": 0.0}}),
+        ("deskIntersectionCount", 1),
+        ("chairIntersectionCount", 1),
+        ("handIntersectionCount", 1),
+        ("deformationSpikeCount", 1),
+        (
+            "cameraVisibility",
+            {
+                "head": {"insideCount": 12},
+                "leftHand": {"insideCount": 0},
+                "rightHand": {"insideCount": 9},
+            },
+        ),
+    )
+    for key, value in failing_changes:
+        candidate = {
+            **passing,
+            "floorClearance": {
+                side: dict(metrics)
+                for side, metrics in passing["floorClearance"].items()
+            },
+            "cameraVisibility": {
+                role: dict(metrics)
+                for role, metrics in passing["cameraVisibility"].items()
+            },
+            key: value,
+        }
+        failed = warm_character_validator.finalize_mode_report(candidate)
+        assert failed["success"] is False, key
+        assert failed["failureReasons"], key
 
 
 def test_scene_marker_controls_character_height() -> None:
@@ -210,14 +453,42 @@ def test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_em
     assert cyan_bsdf.inputs["Emission Strength"].default_value <= 0.9
 
 
+def test_real_warm_studio_character_validation_passes_both_modes() -> None:
+    reports = warm_character_validator.validate_modes(
+        scene_path=REPO_ROOT / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend",
+        master_path=REPO_ROOT / "ip形象/main_ip/models/main-ip-aroll-master.blend",
+        modes=("standing", "seated"),
+        sample_frames=(1, 15, 29),
+    )
+
+    assert [report["mode"] for report in reports] == ["standing", "seated"]
+    for report in reports:
+        assert report["sampleCount"] == 3
+        assert set(report["floorClearance"]) == {"left", "right"}
+        assert "deskIntersectionCount" in report
+        assert "chairIntersectionCount" in report
+        assert "handIntersectionCount" in report
+        assert "deformationSpikeCount" in report
+        assert set(report["cameraVisibility"]) >= {"head", "leftHand", "rightHand"}
+        assert report["success"] is True, report
+
+
 if __name__ == "__main__":
     tests = [
         test_warm_studio_saved_scene_has_dual_mode_contract,
+        test_mode_resolver_uses_only_mode_specific_markers_and_cameras,
+        test_scene_target_height_reads_the_selected_mode_spawn,
+        test_mode_camera_plan_maps_generic_roles_to_selected_cameras,
+        test_authored_scene_placement_persists_selected_mode_contract,
         test_camera_plan_binds_authored_cameras,
+        test_shoe_sampling_rejects_render_disabled_armature_modifier,
+        test_collision_counter_uses_evaluated_triangle_geometry,
+        test_validation_success_fails_each_required_geometry_gate,
         test_scene_marker_controls_character_height,
         test_lighting_preset_uses_authored_base_energy,
         test_render_settings_are_compatible_with_blender_51_agx_and_eevee,
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
+        test_real_warm_studio_character_validation_passes_both_modes,
     ]
     for test in tests:
         test()
