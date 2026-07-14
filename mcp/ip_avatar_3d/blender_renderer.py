@@ -5570,6 +5570,110 @@ def event_amount(t: float, event: dict) -> float:
     return math.sin(phase * math.pi) * float(event.get("strength") or 1.0)
 
 
+def build_pose_state_timeline(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    state = str(plan.get("initialPoseState") or "standing")
+    timeline = [{"timeSec": 0.0, "state": state}]
+    for event in sorted(
+        plan.get("motionEvents") or [],
+        key=lambda item: float(item.get("timeSec") or 0.0),
+    ):
+        if event.get("motion") != "avatar_action":
+            continue
+        if str(event.get("startState") or state) != state:
+            raise RuntimeError(
+                f"A-roll action {event.get('action')} requires "
+                f"{event.get('startState')} but timeline is {state}"
+            )
+        state = str(event.get("endState") or state)
+        timeline.append({
+            "timeSec": float(event.get("timeSec") or 0.0)
+            + float(event.get("duration") or 0.0),
+            "state": state,
+        })
+    return timeline
+
+
+def _structured_action_pose(pose: dict[str, Any]) -> dict[str, Any]:
+    """Normalize legacy rotation tuples for runtime interpolation."""
+    structured: dict[str, Any] = {}
+    for role, value in pose.items():
+        if role in {"__digit_pose_l", "__digit_pose_r"}:
+            structured[role] = value
+        elif isinstance(value, dict):
+            structured[role] = dict(value)
+        elif isinstance(value, (tuple, list)) and len(value) == 3:
+            structured[role] = {"rotation": tuple(float(item) for item in value)}
+    return structured
+
+
+def sample_aroll_action_pose(
+    action_name: str,
+    elapsed_sec: float,
+    duration_sec: float,
+    *,
+    source_rig: bool,
+    fps: int,
+) -> dict[str, Any]:
+    specs = aroll_actions.build_aroll_action_specs(source_rig, fps)
+    spec = specs[action_name]
+    source_duration = max(frame for frame, _ in spec) / float(fps)
+    source_time = max(
+        0.0,
+        min(
+            source_duration,
+            elapsed_sec / max(duration_sec, 1e-6) * source_duration,
+        ),
+    )
+    source_frame = source_time * fps
+    before = max(
+        (item for item in spec if item[0] <= source_frame),
+        default=spec[0],
+        key=lambda item: item[0],
+    )
+    after = min(
+        (item for item in spec if item[0] >= source_frame),
+        default=spec[-1],
+        key=lambda item: item[0],
+    )
+    before_pose = _structured_action_pose(before[1])
+    after_pose = _structured_action_pose(after[1])
+    if action_name in {
+        "Aroll_Transition_StandToSit",
+        "Aroll_Transition_SitToStand",
+    }:
+        for item in (before_pose, after_pose):
+            item.setdefault("root", {}).setdefault("location", (0.0, 0.0, 0.0))
+            for role in (
+                "body",
+                "leg_l",
+                "shin_l",
+                "foot_l",
+                "leg_r",
+                "shin_r",
+                "foot_r",
+            ):
+                item.setdefault(role, {}).setdefault("rotation", (0.0, 0.0, 0.0))
+    if before[0] == after[0]:
+        return before_pose
+    amount = (source_frame - before[0]) / (after[0] - before[0])
+    return aroll_actions.blend_action_pose(before_pose, after_pose, amount)
+
+
+def active_avatar_actions(
+    events: list[dict[str, Any]],
+    t: float,
+) -> list[tuple[dict[str, Any], float]]:
+    active: list[tuple[dict[str, Any], float]] = []
+    for event in events:
+        if event.get("motion") != "avatar_action":
+            continue
+        start = float(event.get("timeSec") or 0.0)
+        duration = max(0.001, float(event.get("duration") or 0.001))
+        if start <= t <= start + duration:
+            active.append((event, t - start))
+    return active
+
+
 def iter_action_fcurves(action: bpy.types.Action | None):
     if not action:
         return
@@ -5687,6 +5791,132 @@ def source_root_location_from_world(
     return tuple(float(value) for value in local_offset)
 
 
+def apply_transition_contact_correction(
+    armature: bpy.types.Object,
+    pose,
+    bone_map: dict[str, str],
+    mode_objects: dict[str, Any] | None,
+    phase: float,
+    target_state: str,
+) -> dict[str, float]:
+    if not mode_objects:
+        return {"footDriftL": 0.0, "footDriftR": 0.0, "seatClearance": 0.0}
+    root = pose[bone_map["root"]]
+    source_rig = uses_source_humanoid_axes(armature)
+    foot_points: dict[str, Vector] = {}
+    for role in ("foot_l", "foot_r"):
+        foot = pose[bone_map[role]]
+        foot_points[role] = armature.matrix_world @ (
+            foot.tail if source_rig else foot.matrix.translation
+        )
+    available_targets = {
+        key: mode_objects[key].matrix_world.translation.copy()
+        for key in ("foot_l", "foot_r")
+    }
+    target_keys: dict[str, str] = {}
+    remaining = set(available_targets)
+    for role in sorted(foot_points, key=lambda item: float(foot_points[item].x)):
+        target_key = min(
+            remaining,
+            key=lambda item: abs(
+                float(available_targets[item].x) - float(foot_points[role].x)
+            ),
+        )
+        target_keys[role] = target_key
+        remaining.remove(target_key)
+    foot_deltas = []
+    for role in ("foot_l", "foot_r"):
+        delta = available_targets[target_keys[role]] - foot_points[role]
+        delta.z = 0.0
+        foot_deltas.append(delta)
+    correction = (foot_deltas[0] + foot_deltas[1]) * 0.5
+    clamped_phase = max(0.0, min(1.0, phase))
+    lock_weight = (
+        1.0
+        if bool(mode_objects.get("_continuous_foot_lock"))
+        else math.sin(clamped_phase * math.pi) ** 2
+    )
+    world_correction = (
+        float(correction.x) * lock_weight,
+        float(correction.y) * lock_weight,
+        0.0,
+    )
+    if source_rig:
+        local_correction = source_root_location_from_world(
+            armature,
+            root,
+            world_correction,
+        )
+    else:
+        local_correction = world_correction
+    root.location = tuple(
+        float(root.location[index]) + local_correction[index]
+        for index in range(3)
+    )
+    bpy.context.view_layer.update()
+
+    seat_object = mode_objects["seat"]
+    seat = seat_object.matrix_world.translation
+    if source_rig:
+        pelvis_world = sum(
+            (
+                armature.matrix_world @ pose[bone_map[role]].head
+                for role in ("leg_l", "leg_r")
+            ),
+            Vector((0.0, 0.0, 0.0)),
+        ) / 2.0
+        seat_contact_offset = float(seat_object.get("target_height", 0.0)) * 0.10
+    else:
+        cog_name = bone_map.get("cog")
+        pelvis_role = "cog" if cog_name and cog_name in pose else "root"
+        pelvis_world = armature.matrix_world @ pose[bone_map[pelvis_role]].matrix.translation
+        seat_contact_offset = 0.0
+    seat_clearance = float(pelvis_world.z - seat_contact_offset - seat.z)
+    if target_state == "seated" and clamped_phase > 0.70:
+        contact_delta = max(-0.018, min(0.035, seat_clearance - 0.012))
+        contact_weight = (clamped_phase - 0.70) / 0.30
+        world_contact = (0.0, 0.0, -contact_delta * contact_weight)
+        if source_rig:
+            local_contact = source_root_location_from_world(
+                armature,
+                root,
+                world_contact,
+            )
+        else:
+            local_contact = world_contact
+        root.location = tuple(
+            float(root.location[index]) + local_contact[index]
+            for index in range(3)
+        )
+        bpy.context.view_layer.update()
+
+    corrected_points = {}
+    for role in ("foot_l", "foot_r"):
+        foot = pose[bone_map[role]]
+        corrected_points[role] = armature.matrix_world @ (
+            foot.tail if source_rig else foot.matrix.translation
+        )
+    corrected_center = sum(corrected_points.values(), Vector((0.0, 0.0, 0.0))) / 2.0
+    target_center = sum(available_targets.values(), Vector((0.0, 0.0, 0.0))) / 2.0
+    center_delta = target_center - corrected_center
+    center_delta.z = 0.0
+    if source_rig:
+        pelvis_world = sum(
+            (
+                armature.matrix_world @ pose[bone_map[role]].head
+                for role in ("leg_l", "leg_r")
+            ),
+            Vector((0.0, 0.0, 0.0)),
+        ) / 2.0
+    else:
+        pelvis_world = armature.matrix_world @ pose[bone_map[pelvis_role]].matrix.translation
+    return {
+        "footDriftL": float(center_delta.length),
+        "footDriftR": float(center_delta.length),
+        "seatClearance": float(pelvis_world.z - seat_contact_offset - seat.z),
+    }
+
+
 def _clear_action_channels(action: bpy.types.Action) -> None:
     """Clear keyframe data while preserving one canonical Action datablock."""
     fcurves = getattr(action, "fcurves", None)
@@ -5746,15 +5976,24 @@ def animate(
     *,
     runtime_actions_prepared: bool = False,
     presentation_mode: str = "standing",
-) -> None:
+    mode_objects: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     events = plan.get("motionEvents") or []
     frame_end = max(1, int(float(plan.get("durationSec") or 1) * fps))
     pose = armature.pose.bones
     source_rig = uses_source_humanoid_axes(armature)
-    base_pose = aroll_actions.presentation_pose(presentation_mode, source_rig)
-    seated = bool(base_pose)
-    if seated:
-        events = [event for event in events if event.get("motion") != "happy_bounce"]
+    timeline_plan = dict(plan)
+    timeline_plan.setdefault("initialPoseState", presentation_mode)
+    state_timeline = build_pose_state_timeline(timeline_plan)
+    transition_samples: list[dict[str, Any]] = []
+    has_transition_sequence = any(
+        event.get("motion") == "avatar_action"
+        and str(event.get("action") or "").startswith("Aroll_Transition_")
+        for event in events
+    )
+    contact_mode_objects = dict(mode_objects) if mode_objects else None
+    if contact_mode_objects is not None and has_transition_sequence:
+        contact_mode_objects["_continuous_foot_lock"] = True
     if not runtime_actions_prepared:
         reconcile_runtime_timeline_actions(armature, face)
     if armature.animation_data:
@@ -5778,8 +6017,27 @@ def animate(
         if rotation is not None:
             pose[bone_name].rotation_euler = rotation
 
+    def pose_state_at(t: float) -> str:
+        return str(
+            max(
+                (item for item in state_timeline if float(item["timeSec"]) <= t),
+                default=state_timeline[0],
+                key=lambda item: float(item["timeSec"]),
+            )["state"]
+        )
+
     for frame in range(1, frame_end + 1, 2):
         t = (frame - 1) / fps
+        pose_state = pose_state_at(t)
+        base_pose = aroll_actions.presentation_pose(pose_state, source_rig)
+        seated = pose_state == "seated"
+        active_actions = active_avatar_actions(events, t)
+        transition_actions = [
+            item
+            for item in active_actions
+            if str(item[0].get("action") or "").startswith("Aroll_Transition_")
+        ]
+        transition_active = bool(transition_actions)
         idle_body_sway = math.sin(t * math.pi * 2 * 0.35) * 0.018
         body_sway = idle_body_sway
         head_nod = math.sin(t * math.pi * 2 * 0.42) * 0.014
@@ -5853,6 +6111,8 @@ def animate(
                 fore_left[1] += amount * 0.10
                 fore_right[1] -= amount * 0.10
             elif motion == "happy_bounce":
+                if seated or transition_active:
+                    continue
                 root_lift += amount * 0.07
                 leg_left -= amount * 0.035
                 leg_right += amount * 0.035
@@ -6000,14 +6260,14 @@ def animate(
                 hand_right[2] += amount * 0.09
                 head_tilt += amount * 0.08
             elif motion == "leg_step":
-                if seated:
+                if seated or transition_active:
                     continue
                 step = math.sin(t * 17.0) * amount * 0.11
                 leg_left += step
                 leg_right -= step * 0.72
                 root_lift += amount * 0.012
             elif motion == "weight_shift":
-                if seated:
+                if seated or transition_active:
                     continue
                 direction = -1.0 if float(event.get("direction") or 1.0) < 0 else 1.0
                 root_side += direction * amount * 0.075
@@ -6127,6 +6387,84 @@ def animate(
                 role,
                 rotation=tuple(base_rotation[index] + motion_rotation[index] for index in range(3)),
             )
+
+        for event, elapsed_sec in active_actions:
+            action_name = str(event.get("action") or "")
+            duration_sec = max(0.001, float(event.get("duration") or 0.001))
+            action_pose = sample_aroll_action_pose(
+                action_name,
+                elapsed_sec,
+                duration_sec,
+                source_rig=source_rig,
+                fps=fps,
+            )
+            strength = max(0.0, min(1.0, float(event.get("strength") or 1.0)))
+            for role, channels in action_pose.items():
+                if role.startswith("__") or not isinstance(channels, dict):
+                    continue
+                bone_name = bone_map.get(role)
+                if not bone_name or bone_name not in pose:
+                    continue
+                bone = pose[bone_name]
+                if "location" in channels:
+                    target_location = tuple(float(value) for value in channels["location"])
+                    if source_rig and role == "root":
+                        target_location = source_root_location_from_world(
+                            armature,
+                            bone,
+                            target_location,
+                        )
+                    bone.location = tuple(
+                        float(bone.location[index])
+                        + (target_location[index] - float(bone.location[index])) * strength
+                        for index in range(3)
+                    )
+                if "rotation" in channels:
+                    target_rotation = tuple(float(value) for value in channels["rotation"])
+                    bone.rotation_euler = tuple(
+                        float(bone.rotation_euler[index])
+                        + (target_rotation[index] - float(bone.rotation_euler[index])) * strength
+                        for index in range(3)
+                    )
+            for side in ("l", "r"):
+                hand_name = action_pose.get(f"__digit_pose_{side}")
+                if not hand_name:
+                    continue
+                semantic_hand = aroll_actions.blend_hand_pose(
+                    aroll_actions.hand_pose("relaxed_hand"),
+                    aroll_actions.hand_pose(str(hand_name)),
+                    strength,
+                )
+                apply_hand_pose(pose, bone_map, side, semantic_hand)
+
+        bpy.context.view_layer.update()
+        for event, elapsed_sec in transition_actions:
+            duration_sec = max(0.001, float(event.get("duration") or 0.001))
+            phase = max(0.0, min(1.0, elapsed_sec / duration_sec))
+            contact = apply_transition_contact_correction(
+                armature,
+                pose,
+                bone_map,
+                contact_mode_objects,
+                phase,
+                str(event.get("endState") or pose_state),
+            )
+            transition_samples.append({
+                "frame": frame,
+                "action": str(event.get("action") or ""),
+                "phase": phase,
+                "targetState": str(event.get("endState") or pose_state),
+                **contact,
+            })
+        if not transition_actions and contact_mode_objects and has_transition_sequence:
+            apply_transition_contact_correction(
+                armature,
+                pose,
+                bone_map,
+                contact_mode_objects,
+                1.0 if seated else 0.0,
+                pose_state,
+            )
         for bone_name in animated_bones:
             bone = pose[bone_name]
             bone.keyframe_insert(data_path="location", frame=frame)
@@ -6173,6 +6511,8 @@ def animate(
                             event_amount(t, event)
                             for event in events
                             if event.get("motion") == "happy_bounce"
+                            and not seated
+                            and not transition_active
                         ),
                         default=0.0,
                     )
@@ -6233,6 +6573,32 @@ def animate(
     if mouth and mouth.data.shape_keys and mouth.data.shape_keys.animation_data and mouth.data.shape_keys.animation_data.action:
         mouth.data.shape_keys.animation_data.action.name = "Mouth_Viseme_Timeline"
         set_action_interpolation(mouth.data.shape_keys.animation_data.action)
+    seated_contact_samples = [
+        item
+        for item in transition_samples
+        if item["targetState"] == "seated" and float(item["phase"]) >= 0.80
+    ]
+    return {
+        "poseStateTimeline": state_timeline,
+        "sampleCount": len(transition_samples),
+        "maxFootDriftL": max(
+            (float(item["footDriftL"]) for item in transition_samples),
+            default=0.0,
+        ),
+        "maxFootDriftR": max(
+            (float(item["footDriftR"]) for item in transition_samples),
+            default=0.0,
+        ),
+        "minSeatClearance": min(
+            (float(item["seatClearance"]) for item in seated_contact_samples),
+            default=0.0,
+        ),
+        "maxSeatClearanceAfterContact": max(
+            (float(item["seatClearance"]) for item in seated_contact_samples),
+            default=0.0,
+        ),
+        "samples": transition_samples,
+    }
 
 
 def create_action_library(
@@ -6859,6 +7225,7 @@ def save_rigged_assets(
         "oralInteriorReady": all(face.get(role) for role in INTEGRATED_FACE_ROLES),
         "embeddedVisemeApi": "IP_Viseme_API.py" if bpy.data.texts.get("IP_Viseme_API.py") else "",
         "actions": sorted(action.name for action in bpy.data.actions),
+        "transitionContact": rig_stats.get("transitionContact", {}),
         "scene": scene_stats or {"sceneMode": str(data.get("backgroundMode") or "transparent_or_world")},
         "legacyFakeFaceObjects": [
             obj.name
@@ -6933,7 +7300,7 @@ def main() -> None:
     rig_stats.update(_collect_weight_stats(character_objects))
     rig_stats["boneMap"] = bone_map
     rig_stats["runtimeActions"] = reconcile_runtime_timeline_actions(armature, face)
-    animate(
+    rig_stats["transitionContact"] = animate(
         armature,
         face,
         data["motionPlan"],
@@ -6941,6 +7308,7 @@ def main() -> None:
         bone_map,
         runtime_actions_prepared=True,
         presentation_mode=presentation_mode,
+        mode_objects=mode_objects,
     )
     write_runtime_progress(data, "timeline_animated")
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
