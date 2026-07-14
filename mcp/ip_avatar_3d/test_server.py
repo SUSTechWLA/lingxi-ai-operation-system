@@ -42,6 +42,16 @@ def load_master_asset():
     return module
 
 
+def load_aroll_actions():
+    path = pathlib.Path(__file__).with_name("aroll_actions.py")
+    spec = importlib.util.spec_from_file_location("ip_avatar_3d_aroll_actions", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_blender_renderer():
     path = pathlib.Path(__file__).with_name("blender_renderer.py")
     spec = importlib.util.spec_from_file_location("ip_avatar_3d_blender_renderer", path)
@@ -62,6 +72,20 @@ def test_wav_bytes(*, sample_rate: int = 48000, channels: int = 1) -> bytes:
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def test_close_shot_folded_hand_poses_use_restrained_joint_curls(self) -> None:
+        actions = load_aroll_actions()
+
+        for pose_name in ("fist", "pinch", "count_one", "count_two", "finger_roll"):
+            for pose in actions.hand_pose(pose_name).values():
+                self.assertLessEqual(pose.proximal, 0.30, pose_name)
+                self.assertLessEqual(pose.middle, 0.34, pose_name)
+                self.assertLessEqual(pose.distal, 0.22, pose_name)
+        for pose in actions.hand_pose("fist").values():
+            self.assertGreaterEqual(
+                pose.proximal + pose.middle + pose.distal,
+                0.70,
+            )
+
     def write_voice_audition_profile(
         self,
         root: pathlib.Path,
@@ -682,9 +706,11 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             model.write_bytes(b"glTF placeholder")
             audio.write_bytes(b"RIFF verified audio")
             voice_id = "dMkR1XwIkarpNqWUJLnX"
+            captured_render_input = {}
 
             def fake_blender_run(args, timeout=600):
                 render_input = json.loads(pathlib.Path(args[-1]).read_text(encoding="utf-8"))
+                captured_render_input.update(render_input)
                 for key in ("riggedBlendPath", "riggedGlbPath", "rigReportPath"):
                     path = pathlib.Path(render_input[key])
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -712,17 +738,27 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                 },
             )
             with mock.patch.object(server, "ensure_audio", return_value=exact_audio), mock.patch.object(
+                server, "audio_duration_sec", return_value=2.25
+            ), mock.patch.object(
                 server, "find_blender", return_value="/usr/bin/blender"
             ), mock.patch.object(server, "_run", side_effect=fake_blender_run), mock.patch.object(
                 server, "_compose_video", side_effect=fake_compose
             ), mock.patch.object(server, "_extract_preview", side_effect=fake_preview), mock.patch.object(
                 server, "_probe_video", return_value={"durationSec": 2.0}
+            ), mock.patch.object(
+                server,
+                "_measure_voice_audition_loudness",
+                return_value={
+                    "integratedLufs": -16.1,
+                    "truePeakDbtp": -2.0,
+                    "loudnessRangeLu": 2.0,
+                },
             ):
                 result = server.render_talking_video(
                     script="验证生产音色成功路径。",
                     modelPath=str(model),
                     outputDir=str(root / "out"),
-                    durationSec=2,
+                    durationSec=7,
                     renderMode="production",
                     voiceProvider="heygen",
                     voiceId=voice_id,
@@ -736,6 +772,12 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(result["voice"]["requestedProvider"], "heygen")
             self.assertEqual(result["voice"]["requestedVoiceId"], voice_id)
             self.assertTrue(result["voice"]["productionReady"])
+            self.assertEqual(result["durationSec"], 2.25)
+            self.assertEqual(captured_render_input["durationSec"], 2.25)
+            self.assertEqual(captured_render_input["motionPlan"]["durationSec"], 2.25)
+            report = json.loads((root / "out" / "render_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["voice"]["provider"], "heygen")
+            self.assertEqual(report["qa"]["finalAudioLoudness"]["truePeakDbtp"], -2.0)
 
     def test_preview_uploaded_audio_succeeds_with_unverified_provenance(self) -> None:
         server = load_server()
@@ -1568,6 +1610,38 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         self.assertIn("-b:a 128k", joined)
         self.assertIn("-ar 48000", joined)
 
+    def test_compose_command_preserves_headroom_for_mastered_audio(self) -> None:
+        server = load_server()
+        command = server._build_compose_video_args(
+            frames_dir=pathlib.Path("/tmp/avatar_frames"),
+            audio_path="/tmp/narration_master.wav",
+            output_path=pathlib.Path("/tmp/ip_layer.mp4"),
+            duration_sec=3,
+            fps=30,
+            audio_mastered=True,
+        )
+
+        joined = " ".join(command)
+        self.assertIn(
+            "volume=0.2dB,alimiter=limit=0.75:attack=5:release=50:level=false",
+            joined,
+        )
+        self.assertNotIn("loudnorm=", joined)
+
+    def test_final_production_audio_gate_rejects_encoded_peak_overshoot(self) -> None:
+        server = load_server()
+        with mock.patch.object(
+            server,
+            "_measure_voice_audition_loudness",
+            return_value={
+                "integratedLufs": -16.1,
+                "truePeakDbtp": -1.4,
+                "loudnessRangeLu": 2.0,
+            },
+        ):
+            with self.assertRaisesRegex(server.ProductionVoiceUnavailable, "final encoded audio"):
+                server._validate_final_production_audio(pathlib.Path("/tmp/final.mp4"))
+
     def test_generate_voice_auditions_returns_blind_candidates_and_private_manifest(self) -> None:
         server = load_server()
         script = "今天我们不追热点，只讲清楚一个真正重要的变化。"
@@ -2084,6 +2158,26 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             def fake_run(args, timeout=600):
                 commands.append(args)
                 if args[-1] == "-":
+                    null_pass = sum(1 for command in commands if command[-1] == "-")
+                    if null_pass == 1:
+                        return mock.Mock(
+                            returncode=0,
+                            stdout="",
+                            stderr=(
+                                '[Parsed_loudnorm_0] {\n'
+                                '  "input_i" : "-24.8",\n'
+                                '  "input_tp" : "-7.4",\n'
+                                '  "input_lra" : "3.8",\n'
+                                '  "input_thresh" : "-35.0",\n'
+                                '  "output_i" : "-16.2",\n'
+                                '  "output_tp" : "-1.5",\n'
+                                '  "output_lra" : "3.1",\n'
+                                '  "output_thresh" : "-26.5",\n'
+                                '  "normalization_type" : "dynamic",\n'
+                                '  "target_offset" : "0.2"\n'
+                                "}"
+                            ),
+                        )
                     return mock.Mock(
                         returncode=0,
                         stdout="",
@@ -2149,13 +2243,28 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                     "loudnessRangeLu": 3.2,
                 },
             )
-            mastering = commands[0]
+            self.assertEqual(len(commands), 3)
+            analysis = commands[0]
+            analysis_filter = analysis[analysis.index("-af") + 1]
+            self.assertLess(
+                analysis_filter.index("aresample=48000"),
+                analysis_filter.index("lowpass=f=18000"),
+            )
+            self.assertIn("print_format=json", analysis_filter)
+            mastering = commands[1]
             mastering_filter = mastering[mastering.index("-af") + 1]
             self.assertIn("highpass=f=55", mastering_filter)
             self.assertIn("lowpass=f=18000", mastering_filter)
             self.assertIn("acompressor", mastering_filter)
-            self.assertIn("ratio=1.5", mastering_filter)
+            self.assertIn("threshold=-20dB", mastering_filter)
+            self.assertIn("ratio=2.5", mastering_filter)
             self.assertIn("loudnorm=I=-16:TP=-1.5:LRA=7", mastering_filter)
+            self.assertIn("measured_I=-24.8", mastering_filter)
+            self.assertIn("measured_TP=-7.4", mastering_filter)
+            self.assertIn("measured_LRA=3.8", mastering_filter)
+            self.assertIn("measured_thresh=-35.0", mastering_filter)
+            self.assertIn("offset=0.2", mastering_filter)
+            self.assertIn("linear=true", mastering_filter)
             self.assertEqual(mastering[mastering.index("-ar") + 1], "48000")
             self.assertEqual(mastering[mastering.index("-ac") + 1], "1")
             self.assertEqual(mastering[mastering.index("-c:a") + 1], "pcm_s16le")
@@ -2188,6 +2297,21 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
             def fake_run(args, timeout=600):
                 if args[-1] == "-":
+                    analysis_filter = args[args.index("-af") + 1]
+                    if "aresample=48000" in analysis_filter:
+                        return mock.Mock(
+                            returncode=0,
+                            stdout="",
+                            stderr=(
+                                '[Parsed_loudnorm_0] {\n'
+                                '  "input_i" : "-24.8",\n'
+                                '  "input_tp" : "-7.4",\n'
+                                '  "input_lra" : "3.8",\n'
+                                '  "input_thresh" : "-35.0",\n'
+                                '  "target_offset" : "0.2"\n'
+                                "}"
+                            ),
+                        )
                     return mock.Mock(
                         returncode=0,
                         stdout="",

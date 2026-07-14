@@ -25,7 +25,7 @@ The focused command is now green:
 /Applications/Blender.app/Contents/MacOS/Blender -b --python mcp/ip_avatar_3d/test_blender_hand_refinement.py
 ```
 
-All four focused checks pass, including independent three-segment rotations,
+All five focused checks pass, including independent three-segment rotations,
 fist closure, isolated-roll drift, open curls/splay, and pinch opposition.
 
 ## Motion Sampling

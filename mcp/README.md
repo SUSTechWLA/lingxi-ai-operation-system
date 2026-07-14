@@ -12,4 +12,5 @@ Rules:
 Current services:
 
 - `jimeng/`: Python stdio MCP server wrapping the user-managed Dreamina CLI.
+- `ip_avatar_3d/`: Python stdio MCP server for rendering GLB/GLTF/rigged-FBX cartoon IP talking-video layers with Blender and FFmpeg.
 - `video_qa/`: Python stdio MCP server for rendered-video frame sampling, shot-level QA reports, and repair plans.

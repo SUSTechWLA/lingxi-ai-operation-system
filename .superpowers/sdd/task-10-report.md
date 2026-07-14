@@ -89,24 +89,23 @@ weight, independent digit, finger-roll reset, and A-roll Action checks.
 `python3 -m py_compile` passed for the renderer and focused test, and
 `git diff --check` passed for the owned code/test files.
 
-## Deferred Execution
+## Final Production Execution
 
-The real-master low-resolution command was not run because
-`outputs/MainIP_Sloth_Aroll_Master.blend` is not available. The production
-profile currently has `provider=heygen`, an empty production `voiceId`, and
-`fallbackPolicy=error`, so the approved provider voice is also unavailable.
+The approved source-surface master was rendered through the real QA script to
+`tmp/ip_avatar_3d/final-audit-master-qa`. The report is
+`ready` with all 52 samples. Open/fist pixel difference is `0.019739`; adjacent
+right finger-roll differences are `0.007117` and `0.016582`; adjacent left
+differences are `0.006504` and `0.014158`. All exceed their acceptance floors.
 
-```bash
-/Applications/Blender.app/Contents/MacOS/Blender -b outputs/MainIP_Sloth_Aroll_Master.blend --python mcp/ip_avatar_3d/render_aroll_master_qa.py -- tmp/ip_avatar_3d/aroll_master_qa
-```
+The user changed this iteration's delivery target from 2K to 1080p. Final
+Task 10 deliverables are:
 
-Accordingly, these production deliverables remain blocked/deferred:
-
-- `outputs/MainIP_Sloth_Aroll_Action_Reel_2K.mp4`;
-- `outputs/MainIP_Sloth_Aroll_Hand_QA_2K.mp4`;
+- `outputs/MainIP_Sloth_Aroll_Action_Reel_1080p.mp4`;
+- `outputs/MainIP_Sloth_Aroll_Hand_QA_1080p.mp4`;
 - `outputs/MainIP_Sloth_Aroll_Face_QA.png`.
 
-No placeholder master, substitute voice, or fake production reel was created.
-Once the prepared final master and approved Task 9 voice are available, run the
-documented Blender QA command first and require `status=ready` before encoding
-the 2K production artifacts.
+The action reel is the real 28-second MCP release render with the pinned local
+GPT-SoVITS voice. The hand QA is a 1920x1080, 30 fps sequence of all 12 close
+hand samples. The face sheet crops the eight neutral/expression/viseme samples
+for original-size visual review. The face contract remains
+`blinkCapability=squint_only`, `fullBlinkClaimed=false`.

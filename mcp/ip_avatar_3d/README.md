@@ -60,9 +60,9 @@ export TANGYING_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
   "outputDir": "tmp/ip_avatar_3d_main_ip_demo",
   "durationSec": 8,
   "fps": 30,
-  "width": 2560,
-  "height": 1440,
-  "qualityPreset": "production_2k",
+  "width": 1920,
+  "height": 1080,
+  "qualityPreset": "production_1080p",
   "faceScreenMode": "source",
   "rigMode": "auto",
   "preserveExistingRig": true,
@@ -148,13 +148,13 @@ fallback.
 ## Notes
 
 - First version uses Blender background rendering, not AIGC video generation.
-- The default production render is QHD 2K (`2560x1440`) with 128-sample Eevee rendering and H.264 CRF 16 encoding. Use `qualityPreset=preview` only for fast layout checks.
+- The main-IP production test profile renders Full HD (`1920x1080`) at 30 fps with `qualityPreset=production_1080p`. `production_2k` remains available for later final masters, while `preview` is reserved for layout checks.
 - If `audioPath` is omitted, the provider uses the voice pinned by the character profile. Production providers are local GPT-SoVITS, HeyGen, and ElevenLabs; Kokoro and macOS Apple voices remain preview-only. The main sloth profile pins its verified local GPT-SoVITS bundle and keeps Apple Eddy only as an explicit preview voice.
-- `facialTopologyMode=source_retopology` traces and splits the original mouth groove, keeps lips and eyelids on the textured source mesh, and adds only hidden oral-cavity, teeth, and tongue geometry. It also augments preserved humanoid rigs with jaw, eye, and three-segment tongue bones.
+- `facialTopologyMode=source_retopology` traces and splits the original mouth groove, keeps the visible source face and lips, and adds only hidden oral-cavity, teeth, and tongue geometry. It augments preserved humanoid rigs with jaw, eye, and three-segment tongue bones. The current sloth source safely supports independent eye squint only; it does not claim true eyelid topology or a full blink.
 - A profile that explicitly pins a provider fails when that provider cannot synthesize; it does not silently downgrade to macOS `say`. The `auto` provider retains `say` only as a last-resort preview fallback.
-- The default `rigMode=auto` preserves an input Armature, skin weights, materials, and existing actions. Common Generic/Mixamo-style bone names are mapped to presenter controls. `enhanceExistingRig=true` can add two-segment three-digit hand articulation when a rigged FBX/GLB only contains wrist bones. A generated cartoon rig is only used when the model has no Armature.
+- The default `rigMode=auto` preserves an input Armature, skin weights, materials, and existing actions. Common Generic/Mixamo-style bone names are mapped to presenter controls. For the approved main-IP source, `enhanceExistingRig=true` adds three-segment articulation to each of the three source digits while preserving the original hand surface and verifies nonzero weighted-vertex evidence at both joints of every digit. A generated cartoon rig is only used when the model has no Armature.
 - `mouthMode=auto` reuses existing `Mouth_*` shape keys. For organic characters with a modeled mouth groove, combine `source_mesh_visemes` with `source_retopology`: visemes deform the split source lip boundaries and expose the real oral interior without a visible replacement mouth. Independent mouth geometry is only a fallback for compatible screen-face characters.
-- The presenter assets include shoulders, elbows, wrists, two-segment three-digit hands, multi-axis limbs, source-mesh visemes, restrained eye/brow/cheek shapes, and reusable gesture/expression Actions. The exported GLB keeps deform bones, morphs, and actions.
+- The presenter assets include shoulders, elbows, wrists, independently controlled three-segment digits, multi-axis limbs, source-mesh visemes, restrained eye/brow/cheek shapes, and reusable gesture/expression Actions. The exported GLB keeps deform bones, morphs, and actions.
 - When `sceneBlendPath` is supplied, Blender opens the authored `.blend`, imports the character at `IP_Character_Spawn`, focuses cameras on `IP_Focus_Head`, and renders the character and set together. This is the preferred A-roll path because the character receives the set lighting and casts real floor/wall shadows.
 - Authored studios should expose `Camera_Wide`, `Camera_Medium`, and `Camera_Close`. `cameraPreset=auto` creates restrained timeline cuts between those cameras; a fixed `wide`, `medium`, or `close` preset is also supported.
 - `lightingPreset` scales lights that store `ip_base_energy` and `ip_light_role`. Supported values are `editorial_soft`, `editorial_crisp`, `night_analysis`, and `scene_default`.

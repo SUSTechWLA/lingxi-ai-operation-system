@@ -14,8 +14,9 @@ The saved master now contains deterministic standalone `Camera_Medium` and
 `IP_Character_Master`, so appending the reusable character collection does not
 also append or conflict with runtime studio cameras.
 
-No production voice, substitute voice, final 2K reel, or placeholder production
-artifact was generated.
+The later final regression used the pinned local GPT-SoVITS voice and generated
+the user-approved 1080p release and QA artifacts. No substitute voice or
+placeholder production artifact was used.
 
 ## Production Build
 
@@ -48,7 +49,7 @@ The production rig report and direct saved-Blend inspection agree on:
 - all 44 required semantic roles resolved, including all six middle-finger
   roles;
 - 18 required finger bones, all marked deform, with three segments per digit;
-- 24 hand joint support loops;
+- 12 measured hand joint transition zones with nonzero vertex evidence and the source surface unchanged;
 - zero unweighted skinned vertices and at most four deform influences;
 - all 16 canonical `Aroll_*` Actions;
 - all profile-required mouth Shape Keys plus `Eye_Squint.L/R`;
@@ -135,18 +136,18 @@ deprecation warnings.
 
 | Artifact | Bytes | SHA256 |
 | --- | ---: | --- |
-| `outputs/MainIP_Sloth_Aroll_Master.blend` | 25,345,859 | `766471fa955ac71800635025c0d68d7f347cb968d7fff444d76fe15c37611b07` |
-| `outputs/MainIP_Sloth_Aroll_Rigged.glb` | 32,263,768 | `02fb467c879d9ed48afb6861cf0d68c29a59d947ea13f409d211334a62a5f8e3` |
-| `outputs/MainIP_Sloth_Aroll_Rig_Report.json` | 22,247 | `99d8a1a9615544cb74265d48d1fb71e67db5e3155fef24d51aedf4f6af530de8` |
-| `tmp/ip_avatar_3d/aroll_master_qa/qa-report.json` | 238,082 | `c97c2b4626e948d7920aa15fe067270832dfb114de30e182e04a3cd377bd475a` |
+| `outputs/MainIP_Sloth_Aroll_Master.blend` | 25,267,663 | `0b1c1e46c649ab56ee3e3bebe41cd06bc73e3e18d96d34d31742b279eb61d36d` |
+| `outputs/MainIP_Sloth_Aroll_Rigged.glb` | 31,867,388 | `2e5063e2368ded8cb7333243fedb256a84eb133fefb9f9fbcb190492863842fa` |
+| `outputs/MainIP_Sloth_Aroll_Rig_Report.json` | 15,277 | `9e6785d06f094e0b2b49dc4aca09eb1840ae3cd50abe681f966b8146d5b479dd` |
+| `tmp/ip_avatar_3d/final-audit-master-qa/qa-report.json` | 238,298 | `851362c08888ab2d7656af70a07caa7e12319e6dc0fd49aaeed22cb079e6aaaa` |
 
 Generated Blend, GLB, rig-report, and low-resolution QA evidence remain
 untracked and are not part of the code commit.
 
-## Deferred Work
+## Final Integration
 
-Production voice integration is owned by the separate voice task and was not
-read, edited, substituted, or consumed here. Final 2K action, hand, and face
-reels remain intentionally deferred until that provider voice is ready. The
-real low-resolution QA evidence above is the only rendered Task 11 evidence;
-no fake production reel was created.
+The canonical and profile-local Blend, GLB, and rig-report files are byte
+identical. The approved master has 18 finger bones, three segments per digit,
+12 measured joint transition zones, at most four influences per vertex, no unweighted
+vertices, true source-lip topology, and a truthful squint-only eye contract.
+The final MCP regression and media verification are recorded in Task 12.

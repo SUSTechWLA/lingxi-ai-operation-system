@@ -111,7 +111,7 @@
     "cameraPreset": "auto",
     "lightingPreset": "editorial_soft",
     "renderEngine": "BLENDER_EEVEE_NEXT",
-    "qualityPreset": "production_2k",
+    "qualityPreset": "production_1080p",
     "renderDetailMode": "publish",
     "targetCharacterHeight": 2.55,
     "blenderTimeoutSec": 2400,
@@ -119,8 +119,8 @@
     "motionStyle": "expressive",
     "fps": 30,
     "resolution": {
-      "width": 2560,
-      "height": 1440
+      "width": 1920,
+      "height": 1080
     },
     "transparent": false
   },

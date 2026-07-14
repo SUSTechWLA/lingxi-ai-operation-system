@@ -19,7 +19,7 @@ class DigitPose:
 
 OPEN = DigitPose(0.015, 0.010, 0.005)
 RELAXED = DigitPose(0.10, 0.12, 0.06)
-FIST = DigitPose(0.38, 0.48, 0.32)
+FIST = DigitPose(0.28, 0.32, 0.20)
 
 
 def _digits(*poses: DigitPose) -> dict[int, DigitPose]:
@@ -48,19 +48,19 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(FIST.proximal, FIST.middle, FIST.distal, splay=-0.035, opposition=0.11),
     ),
     "pinch": _digits(
-        DigitPose(0.30, 0.40, 0.28, splay=0.06),
-        DigitPose(0.18, 0.24, 0.16),
-        DigitPose(0.34, 0.42, 0.30, splay=-0.08, opposition=0.16),
+        DigitPose(0.24, 0.30, 0.20, splay=0.05),
+        DigitPose(0.14, 0.18, 0.12),
+        DigitPose(0.27, 0.33, 0.21, splay=-0.06, opposition=0.10),
     ),
     "count_one": _digits(
-        OPEN,
-        DigitPose(0.34, 0.43, 0.29),
-        DigitPose(0.36, 0.45, 0.31),
+        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.10),
+        DigitPose(0.28, 0.33, 0.21),
+        DigitPose(0.29, 0.34, 0.22),
     ),
     "count_two": _digits(
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.05),
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=-0.05),
-        DigitPose(0.36, 0.45, 0.31),
+        DigitPose(0.29, 0.34, 0.22),
     ),
     "count_three": _digits(
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.12),
@@ -68,14 +68,14 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=-0.12),
     ),
     "point": _digits(
-        OPEN,
-        DigitPose(0.34, 0.43, 0.29),
-        DigitPose(0.36, 0.45, 0.31),
+        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.10),
+        DigitPose(0.28, 0.33, 0.21),
+        DigitPose(0.29, 0.34, 0.22),
     ),
     "finger_roll": _digits(
-        DigitPose(0.36, 0.45, 0.31, splay=0.08),
-        DigitPose(0.36, 0.45, 0.31),
-        DigitPose(0.36, 0.45, 0.31, splay=-0.08),
+        DigitPose(0.29, 0.34, 0.22, splay=0.08),
+        DigitPose(0.29, 0.34, 0.22),
+        DigitPose(0.29, 0.34, 0.22, splay=-0.08),
     ),
 }
 

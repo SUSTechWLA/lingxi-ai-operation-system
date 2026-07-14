@@ -25,6 +25,7 @@
 - 支持观点、知识、教程和图文卡片视频。
 - 云端生成脚本、时间窗、画面结构、Prompt 和审核节点。
 - 本地 runner 生成 HyperFrames 项目、预览快照、最终渲染文件和交付包。
+- IP 口播 A-roll 可以通过 `ip_avatar_3d` MCP provider 生成：输入口播和本地 GLB 模型，provider 负责动作规划、口型/表情、Blender 拍摄和 FFmpeg 合成，系统只接收可预览的视频层。
 - 用户可在方案、脚本、预览、成片等节点审核、修改或重生成。
 
 ### 2. 影视化 / AIGC Shot 视频

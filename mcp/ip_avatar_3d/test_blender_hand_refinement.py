@@ -12,6 +12,7 @@ from pathlib import Path
 
 try:
     import bpy
+    from mathutils import Vector
 except ModuleNotFoundError as exc:
     raise unittest.SkipTest("requires Blender's bpy runtime") from exc
 
@@ -342,6 +343,8 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
             "qaSample": "face/squint.png",
             "fullBlinkClaimed": False,
         }
+        assert report["lighting"]["preset"] == "qa_editorial_soft"
+        assert report["lighting"]["lightCount"] >= 3
         assert len(report["samples"]) == 52
         assert all(
             {"action", "camera", "path", "boneRotations", "fingertipDisplacementRatios"}
@@ -693,11 +696,23 @@ def test_main_ip_has_three_segments_per_digit_and_clean_weights() -> None:
         violations.append(f"reported fingerBoneCount={stats.get('fingerBoneCount')!r}, expected 18")
     if stats.get("fingerSegmentCount") != 3:
         violations.append(f"fingerSegmentCount={stats.get('fingerSegmentCount')!r}, expected 3")
-    if stats.get("handJointSupportLoopCount", 0) < 24:
+    if stats.get("fingerTopologyMode") != "source_surface_weighted":
         violations.append(
-            "handJointSupportLoopCount="
-            f"{stats.get('handJointSupportLoopCount')!r}, expected at least 24"
+            f"fingerTopologyMode={stats.get('fingerTopologyMode')!r}, expected source_surface_weighted"
         )
+    if stats.get("handDetailAddedVertices") != 0:
+        violations.append(
+            f"handDetailAddedVertices={stats.get('handDetailAddedVertices')!r}, expected 0 to preserve the clean source surface"
+        )
+    if stats.get("handDetailVertexCountAfter") != stats.get("handDetailVertexCountBefore"):
+        violations.append("source-surface hand refinement changed the source vertex count")
+    band_counts = stats.get("handWeightedJointBandVertexCounts") or {}
+    if stats.get("handWeightedJointBandCount") != 12:
+        violations.append(
+            f"handWeightedJointBandCount={stats.get('handWeightedJointBandCount')!r}, expected 12 actual joint zones"
+        )
+    if len(band_counts) != 12 or any(int(count) <= 0 for count in band_counts.values()):
+        violations.append(f"weighted joint-band vertex evidence is incomplete: {band_counts!r}")
     if stats.get("maxVertexInfluences", float("inf")) > 4:
         violations.append(f"maxVertexInfluences={stats.get('maxVertexInfluences')!r}, expected at most 4")
     if stats.get("unweightedVertexCount") != 0:
@@ -729,14 +744,47 @@ def test_main_ip_has_three_segments_per_digit_and_clean_weights() -> None:
             if (distal.head_local - middle.tail_local).length > 1e-5:
                 violations.append(f"{side} digit {digit} has a gap at the middle-distal joint")
 
-    support_band_count, support_band_violations = _mesh_support_band_evidence(objects, armature, bone_map)
-    if support_band_count < 24:
-        violations.append(
-            f"actual mesh has {support_band_count} digit-joint support bands, expected at least 24"
-        )
-    violations.extend(support_band_violations)
     violations.extend(_weight_violations(objects, armature))
+    cross_digit_vertices = []
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        names = {group.index: group.name for group in obj.vertex_groups}
+        for vertex in obj.data.vertices:
+            digits = {
+                re.match(r"Finger_(\d+)_", names.get(assignment.group, "")).group(1)
+                + names[assignment.group].rsplit(".", 1)[-1]
+                for assignment in vertex.groups
+                if assignment.weight >= 0.05
+                and re.match(r"Finger_(\d+)_", names.get(assignment.group, ""))
+            }
+            if len(digits) > 1:
+                cross_digit_vertices.append(f"{obj.name}:{vertex.index}")
+    if cross_digit_vertices:
+        violations.append(
+            f"{len(cross_digit_vertices)} vertices have material cross-digit weights >= 0.05; "
+            f"examples: {', '.join(cross_digit_vertices[:8])}"
+        )
     assert not violations, "\n".join(violations)
+
+
+def test_segment_weighting_is_rigid_away_from_knuckles() -> None:
+    region = hand_refinement.DigitRegion(
+        side="R",
+        index=1,
+        records=[],
+        axis=Vector((1.0, 0.0, 0.0)),
+        base=Vector((0.0, 0.0, 0.0)),
+        joint_1=Vector((0.46, 0.0, 0.0)),
+        joint_2=Vector((0.68, 0.0, 0.0)),
+        tip=Vector((1.0, 0.0, 0.0)),
+        minimum=0.0,
+        maximum=1.0,
+        feature_center=Vector((0.0, 0.0)),
+    )
+    assert hand_refinement._normalized_segment_weights(region, 0.23, 1.0)[0] >= 0.999
+    assert hand_refinement._normalized_segment_weights(region, 0.57, 1.0)[1] >= 0.999
+    assert hand_refinement._normalized_segment_weights(region, 0.84, 1.0)[2] >= 0.999
 
 
 def test_validated_three_segment_reuse_requires_contract_marker() -> None:
@@ -855,9 +903,9 @@ def test_three_segment_digit_poses_key_independent_semantic_curls() -> None:
         proximal, middle, distal = sampled_digit_rotations(
             armature, bone_map, "Gesture_Fist", "r", digit
         )
-        assert proximal.z > 0.34, (digit, tuple(proximal))
-        assert middle.z > 0.42, (digit, tuple(middle))
-        assert distal.z > 0.28, (digit, tuple(distal))
+        assert 0.25 < proximal.z <= 0.30, (digit, tuple(proximal))
+        assert 0.29 < middle.z <= 0.34, (digit, tuple(middle))
+        assert 0.18 < distal.z <= 0.22, (digit, tuple(distal))
 
     open_digits = [
         sampled_digit_rotations(armature, bone_map, "Gesture_OpenHand", "r", digit)
@@ -874,9 +922,9 @@ def test_three_segment_digit_poses_key_independent_semantic_curls() -> None:
         proximal, middle, distal = sampled_digit_rotations(
             armature, bone_map, "Gesture_FingerWave", "r", selected, frame
         )
-        assert proximal.z > 0.34, (selected, tuple(proximal))
-        assert middle.z > 0.42, (selected, tuple(middle))
-        assert distal.z > 0.28, (selected, tuple(distal))
+        assert 0.26 < proximal.z <= 0.31, (selected, tuple(proximal))
+        assert 0.31 < middle.z <= 0.35, (selected, tuple(middle))
+        assert 0.19 < distal.z <= 0.23, (selected, tuple(distal))
 
 
 def test_finger_wave_ends_at_its_shared_open_hand_pose() -> None:
@@ -994,6 +1042,7 @@ if __name__ == "__main__":
         test_aroll_qa_renders_programmatic_fixture_and_checks_pixels,
         test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
+        test_segment_weighting_is_rigid_away_from_knuckles,
         test_validated_three_segment_reuse_requires_contract_marker,
         test_each_digit_moves_independently_and_fist_closes,
         test_three_segment_digit_poses_key_independent_semantic_curls,

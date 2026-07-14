@@ -246,6 +246,46 @@ python3 mcp/video_qa/server.py
 
 `VIDEO_FRAME_QA` 本地命令会默认启动这个 stdio MCP server。Go executor 只做路径校验和 MCP 调用，具体 QA 算法放在 `mcp/video_qa/` 内，后续 OCR、ASR、PyIQA、VLM judge 都应该继续以 MCP 工具方式扩展。
 
+## 3D IP 口播层 MCP
+
+仓库内置了一个 GLB 数字人视频层 stdio MCP server：
+
+```bash
+python3 -m pip install -r mcp/ip_avatar_3d/requirements.txt
+python3 mcp/ip_avatar_3d/server.py
+```
+
+工具：
+
+| 逻辑工具名 | Python MCP 工具名 | 说明 |
+|---|---|---|
+| `ip_avatar_3d.check_status` | `check_status` | 检查 Blender、FFmpeg、FFprobe 是否可用。 |
+| `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | 校验固定 GPT-SoVITS 音色的参考音频、模型和哈希。 |
+| `ip_avatar_3d.prepare_character_master` | `prepare_character_master` | 从带骨骼 FBX/GLB 一次性生成并校验 A-roll 主资产。 |
+| `ip_avatar_3d.validate_character_asset` | `validate_character_asset` | 校验骨架语义、蒙皮、口型和主资产配置。 |
+| `ip_avatar_3d.plan_motion` | `plan_motion` | 把口播文本转成口型和动作时间线。 |
+| `ip_avatar_3d.render_talking_video` | `render_talking_video` | 用已批准主资产、固定场景和固定声音渲染 `ip_layer.mp4`。 |
+
+注册示例：
+
+```json
+{
+  "id": "ip_avatar_3d",
+  "label": "IP Avatar 3D MCP",
+  "transport": "stdio",
+  "command": "python3",
+  "args": ["/absolute/path/to/mcp/ip_avatar_3d/server.py"],
+  "toolPrefix": "ip_avatar_3d.",
+  "enabled": true
+}
+```
+
+系统调用时使用通用 `LOCAL_MCP_TOOL_CALL`，不要新增 `LOCAL_IP_*` 一类本地命令。该 provider 返回 `videoPath` / `localPath` / `motionPlanPath` / `renderReportPath`，主系统只把它作为 IP A-roll 视频层预览和合成。
+
+主 IP 的生产配置固定使用 `production_1080p`、1920x1080、30 fps 和本地 `gpt_sovits_local` 音色 `main_ip_warm_knowledge_host_v1`。没有显式 `audioPath` 时，口播稿由该固定音色合成并经 48 kHz、`-16 LUFS`、`-1.5 dBTP` 门限处理；固定音色不可用时直接失败，不回退到系统 TTS。
+
+角色渲染优先加载 `model.masterBlendPath`，避免每条视频重复重拓扑。当前树懒主资产保留源手部表面，并为左右各三根手指添加三段独立骨骼，且验证每根手指两个关节过渡区都有实际权重顶点；五官使用原始面部几何与源网格口型。眼部当前只承诺独立眯眼，不宣称真眼皮拓扑或完整眨眼。正式场景使用暗色知识分享演播室，人物与背景在同一 Blender 场景内接受灯光并产生阴影。
+
 ## 新 MCP 的扩展方式
 
 新增 provider 不需要改云端编排，也不需要改本地 runner。只要完成三件事：

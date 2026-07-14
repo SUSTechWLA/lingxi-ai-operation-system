@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -14,18 +13,18 @@ from hand_topology import (
     JOINT_PROGRESS,
     SUPPORT_BAND_TOLERANCE_RATIO,
     SUPPORT_OFFSET,
-    DigitTopologyInput,
     HandTopologyResult,
     HandVertexRecord,
-    apply_annular_hand_topology,
 )
 
 
 HAND_CONTRACT_KEY = "ip_avatar_hand_contract"
 HAND_CONTRACT_VERSION_KEY = "ip_avatar_hand_contract_version"
 HAND_SUPPORT_RING_COUNT_KEY = "ip_avatar_hand_support_ring_count"
-HAND_CONTRACT_VERSION = 1
-HAND_CONTRACT_NAME = "three_segment_annular_strips"
+HAND_TOPOLOGY_MODE_KEY = "ip_avatar_hand_topology_mode"
+HAND_CONTRACT_VERSION = 2
+HAND_CONTRACT_NAME = "three_segment_source_surface"
+SOURCE_SURFACE_TOPOLOGY_MODE = "source_surface_weighted"
 
 
 @dataclass
@@ -141,23 +140,66 @@ def analyze_three_digit_hands(
     return regions_by_side
 
 
-def _topology_inputs(regions_by_side: dict[str, list[DigitRegion]], bone_map: dict[str, str]) -> list[DigitTopologyInput]:
-    return [
-        DigitTopologyInput(region.side, region.index, region.records, region.axis, region.base, region.tip, bone_map[f"hand_{region.side.lower()}"])
-        for regions in regions_by_side.values() for region in regions
-    ]
-
-
-def _project_ring_joints(regions_by_side: dict[str, list[DigitRegion]], topology: HandTopologyResult) -> None:
-    for regions in regions_by_side.values():
+def _source_surface_topology(
+    objects: list[bpy.types.Object],
+    regions_by_side: dict[str, list[DigitRegion]],
+) -> HandTopologyResult:
+    """Describe weighted joint bands without cutting the clean source triangle surface."""
+    regions = [region for side_regions in regions_by_side.values() for region in side_regions]
+    ring_centroids = {
+        (region.side, region.index, joint): region.base.lerp(region.tip, progress)
+        for region in regions
+        for joint, progress in enumerate(JOINT_PROGRESS, start=1)
+    }
+    support_vertices: dict[str, dict[tuple[str, int], set[int]]] = {}
+    object_stats: dict[str, dict[str, Any]] = {}
+    for obj in (candidate for candidate in objects if candidate.type == "MESH"):
+        by_region: dict[tuple[str, int], set[int]] = {}
         for region in regions:
-            length = max((region.tip - region.base).length, 1e-8)
-            for joint_index, attribute in ((1, "joint_1"), (2, "joint_2")):
-                centroid = topology.ring_centroids[region.side, region.index, joint_index]
-                progress = _clamp((centroid - region.base).dot(region.axis) / length)
-                setattr(region, attribute, region.base.lerp(region.tip, progress))
-
-
+            indices = {
+                record.vertex_index
+                for record in region.records
+                if record.object_name == obj.name
+            }
+            if indices:
+                by_region[region.side, region.index] = indices
+        if not by_region:
+            continue
+        support_vertices[obj.name] = by_region
+        vertex_count = len(obj.data.vertices)
+        object_stats[obj.name] = {
+            "vertexCountBefore": vertex_count,
+            "vertexCountAfter": vertex_count,
+            "sourceSurfacePreserved": True,
+            "weightedDigitRegionCount": len(by_region),
+        }
+    if not object_stats:
+        raise RuntimeError("source-surface hand weighting has no eligible mesh objects")
+    before_vertices = sum(item["vertexCountBefore"] for item in object_stats.values())
+    after_vertices = sum(item["vertexCountAfter"] for item in object_stats.values())
+    stats = {
+        "fingerTopologyMode": SOURCE_SURFACE_TOPOLOGY_MODE,
+        "handDetailObjectCount": len(object_stats),
+        "handDetailVertexCountBefore": before_vertices,
+        "handDetailVertexCountAfter": after_vertices,
+        "handDetailAddedVertices": 0,
+        "handJointSupportLoopCount": 0,
+        "handWeightedJointTargetCount": len(ring_centroids),
+        "handWeightedJointBandCount": 0,
+        "handWeightedJointBandVertexCounts": {},
+        "handResolvedJointProgress": {
+            f"{region.side}{region.index}": list(JOINT_PROGRESS)
+            for region in regions
+        },
+        "handTopologyAudit": object_stats,
+    }
+    return HandTopologyResult(
+        stats=stats,
+        ring_centroids=ring_centroids,
+        vertex_owners={name: {} for name in object_stats},
+        support_vertices=support_vertices,
+        ring_vertices={name: {} for name in object_stats},
+    )
 def _segment_names(region: DigitRegion) -> tuple[str, str, str]:
     return tuple(f"Finger_{region.index:02d}_{segment}.{region.side}" for segment in ("Proximal", "Middle", "Distal"))
 
@@ -234,11 +276,55 @@ def _collect_weight_stats(objects: list[bpy.types.Object]) -> dict[str, Any]:
 
 def _normalized_segment_weights(region: DigitRegion, progress: float, total: float) -> list[float]:
     joint_1, joint_2 = region.joint_progresses
-    centers = (joint_1 * 0.5, (joint_1 + joint_2) * 0.5, (joint_2 + 1.0) * 0.5)
-    widths = (joint_1, joint_2 - joint_1, 1.0 - joint_2)
-    raw = [max(0.0, 1.0 - abs(progress - center) / max(width, 1e-5)) ** 2 for center, width in zip(centers, widths)]
-    raw_total = sum(raw)
-    return [0.0, 0.0, 0.0] if raw_total <= 1e-8 or total <= 0.0 else [value / raw_total * total for value in raw]
+    if total <= 0.0:
+        return [0.0, 0.0, 0.0]
+    blend_half_width = min(SUPPORT_OFFSET * 1.1, (joint_2 - joint_1) * 0.24)
+    if progress <= joint_1 - blend_half_width:
+        return [total, 0.0, 0.0]
+    if progress < joint_1 + blend_half_width:
+        amount = _smoothstep(
+            joint_1 - blend_half_width,
+            joint_1 + blend_half_width,
+            progress,
+        )
+        return [total * (1.0 - amount), total * amount, 0.0]
+    if progress <= joint_2 - blend_half_width:
+        return [0.0, total, 0.0]
+    if progress < joint_2 + blend_half_width:
+        amount = _smoothstep(
+            joint_2 - blend_half_width,
+            joint_2 + blend_half_width,
+            progress,
+        )
+        return [0.0, total * (1.0 - amount), total * amount]
+    return [0.0, 0.0, total]
+
+
+def _isolated_digit_totals(
+    owners: set[tuple[str, int]],
+    by_key: dict[tuple[str, int], DigitRegion],
+    world: Vector,
+    total: float,
+) -> dict[tuple[str, int], float]:
+    """Keep support-ring ownership measurable without materially cross-driving digits."""
+    if not owners or total <= 0.0:
+        return {}
+    ranked = sorted(
+        owners,
+        key=lambda owner: (
+            (
+                (world - by_key[owner].base)
+                - by_key[owner].axis * (world - by_key[owner].base).dot(by_key[owner].axis)
+            ).length_squared,
+            owner,
+        ),
+    )
+    if len(ranked) == 1:
+        return {ranked[0]: total}
+    trace_weight = min(0.01, total * 0.02)
+    result = {owner: trace_weight for owner in ranked[1:]}
+    result[ranked[0]] = total - trace_weight * (len(ranked) - 1)
+    return result
 
 
 def _assign_segment_weights(
@@ -248,14 +334,16 @@ def _assign_segment_weights(
     bone_map: dict[str, str],
     maximum_influences: int,
     topology: HandTopologyResult,
-) -> tuple[int, int]:
+) -> tuple[int, int, dict[str, int]]:
     blended_vertices = 0
     isolated_support_memberships = 0
+    weighted_joint_band_vertex_counts: dict[str, int] = {}
     all_segment_names = [name for regions in regions_by_side.values() for region in regions for name in _segment_names(region)]
     for obj in objects:
         if obj.type == "MESH":
             for name in all_segment_names:
                 obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name)
+    source_surface = topology.stats.get("fingerTopologyMode") == SOURCE_SURFACE_TOPOLOGY_MODE
     for side, regions in regions_by_side.items():
         hand_name = bone_map[f"hand_{side.lower()}"]
         centers = [region.feature_center for region in regions]
@@ -287,13 +375,13 @@ def _assign_segment_weights(
                     # Do not depend on BMesh-interpolated Hand assignments at a support ring.
                     for group in deform_groups:
                         group.remove([vertex.index])
-                    per_owner = 0.72 / len(owners)
-                    for owner in sorted(owners):
+                    owner_totals = _isolated_digit_totals(owners, by_key, world, 0.72)
+                    for owner, owner_total in owner_totals.items():
                         region = by_key[owner]
                         progress = _clamp((world - region.base).dot(region.axis) / max((region.tip - region.base).length, 1e-8))
-                        weights = _normalized_segment_weights(region, progress, per_owner)
+                        weights = _normalized_segment_weights(region, progress, owner_total)
                         chosen = max(range(3), key=lambda index: weights[index])
-                        groups[_segment_names(region)[chosen]].add([vertex.index], per_owner, "REPLACE")
+                        groups[_segment_names(region)[chosen]].add([vertex.index], owner_total, "REPLACE")
                     hand_group.add([vertex.index], 0.28, "REPLACE")
                     continue
                 if not assignment:
@@ -305,13 +393,10 @@ def _assign_segment_weights(
                 nearest_index = min(range(3), key=lambda index: distances[index])
                 nearest = regions[nearest_index]
                 progress = _clamp((world - nearest.base).dot(nearest.axis) / max((nearest.tip - nearest.base).length, 1e-8))
-                membership_power = 1.6 + progress * 2.8
-                raw = [math.exp(-0.5 * (distance / sigma) ** 2) ** membership_power for distance in distances]
-                memberships = [value / max(sum(raw), 1e-8) for value in raw]
+                memberships = [1.0 if index == nearest_index else 0.0 for index in range(3)]
                 segment_total = hand_weight * _smoothstep(0.08, 0.38, progress)
-                if segment_total > 0.08 and sorted(memberships, reverse=True)[1] > 0.08:
-                    blended_vertices += 1
                 assigned = 0.0
+                segment_blended = False
                 for region, membership in zip(regions, memberships):
                     region_progress = _clamp((world - region.base).dot(region.axis) / max((region.tip - region.base).length, 1e-8))
                     digit_total = segment_total * membership
@@ -323,14 +408,27 @@ def _assign_segment_weights(
                         for support in support_progresses
                     )
                     support_indices = topology.support_vertices.get(obj.name, {}).get((region.side, region.index), set())
-                    if in_support_band and vertex.index not in support_indices:
+                    if not source_surface and in_support_band and vertex.index not in support_indices:
                         if digit_total > 1e-8:
                             isolated_support_memberships += 1
                         digit_total = 0.0
-                    for name, weight in zip(_segment_names(region), _normalized_segment_weights(region, region_progress, digit_total)):
+                    segment_weights = _normalized_segment_weights(region, region_progress, digit_total)
+                    if sum(weight >= 0.05 for weight in segment_weights) > 1:
+                        segment_blended = True
+                    for name, weight in zip(_segment_names(region), segment_weights):
                         if weight > 1e-8:
                             groups[name].add([vertex.index], weight, "REPLACE")
                             assigned += weight
+                if segment_blended:
+                    blended_vertices += 1
+                    joint_index = min(
+                        range(2),
+                        key=lambda index: abs(progress - nearest.joint_progresses[index]),
+                    ) + 1
+                    key = f"{side}{nearest.index}_joint{joint_index}"
+                    weighted_joint_band_vertex_counts[key] = (
+                        weighted_joint_band_vertex_counts.get(key, 0) + 1
+                    )
                 hand_group.add([vertex.index], max(0.0, hand_weight - assigned), "REPLACE")
     for obj in objects:
         if obj.type != "MESH":
@@ -339,7 +437,7 @@ def _assign_segment_weights(
         for modifier in obj.modifiers:
             if modifier.type == "ARMATURE" and modifier.object == armature:
                 modifier.use_deform_preserve_volume = True
-    return blended_vertices, isolated_support_memberships
+    return blended_vertices, isolated_support_memberships, weighted_joint_band_vertex_counts
 
 
 def _ring_diagnostics(
@@ -432,15 +530,20 @@ def _validate_reusable_three_segment_hand_rig(
     violations: list[str] = []
     if armature.get(HAND_CONTRACT_KEY) != HAND_CONTRACT_NAME or int(armature.get(HAND_CONTRACT_VERSION_KEY, 0)) != HAND_CONTRACT_VERSION:
         violations.append("armature is missing the validated three-segment hand contract marker")
+    topology_mode = str(armature.get(HAND_TOPOLOGY_MODE_KEY, ""))
+    if topology_mode != SOURCE_SURFACE_TOPOLOGY_MODE:
+        violations.append(
+            f"armature hand topology mode is {topology_mode!r}, expected {SOURCE_SURFACE_TOPOLOGY_MODE!r}"
+        )
     marked_meshes = [
         obj for obj in objects
         if obj.type == "MESH"
         and obj.get(HAND_CONTRACT_KEY) == HAND_CONTRACT_NAME
         and int(obj.get(HAND_CONTRACT_VERSION_KEY, 0)) == HAND_CONTRACT_VERSION
+        and obj.get(HAND_TOPOLOGY_MODE_KEY) == SOURCE_SURFACE_TOPOLOGY_MODE
     ]
-    ring_count = sum(int(obj.get(HAND_SUPPORT_RING_COUNT_KEY, 0)) for obj in marked_meshes)
-    if not marked_meshes or ring_count < 24:
-        violations.append(f"hand topology mesh markers validate only {ring_count}/24 support rings")
+    if not marked_meshes:
+        violations.append("source-surface hand contract has no marked character mesh")
 
     bones = armature.data.bones
     for side in ("L", "R"):
@@ -504,13 +607,15 @@ def _mark_validated_three_segment_hand_rig(
 ) -> None:
     armature[HAND_CONTRACT_KEY] = HAND_CONTRACT_NAME
     armature[HAND_CONTRACT_VERSION_KEY] = HAND_CONTRACT_VERSION
-    armature[HAND_SUPPORT_RING_COUNT_KEY] = topology.stats["handJointSupportLoopCount"]
+    armature[HAND_SUPPORT_RING_COUNT_KEY] = 0
+    armature[HAND_TOPOLOGY_MODE_KEY] = SOURCE_SURFACE_TOPOLOGY_MODE
     by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
     for object_name, rings in topology.ring_vertices.items():
         obj = by_name[object_name]
         obj[HAND_CONTRACT_KEY] = HAND_CONTRACT_NAME
         obj[HAND_CONTRACT_VERSION_KEY] = HAND_CONTRACT_VERSION
-        obj[HAND_SUPPORT_RING_COUNT_KEY] = len(rings)
+        obj[HAND_SUPPORT_RING_COUNT_KEY] = 0
+        obj[HAND_TOPOLOGY_MODE_KEY] = SOURCE_SURFACE_TOPOLOGY_MODE
 
 
 def enhance_three_segment_hands(
@@ -564,10 +669,9 @@ def enhance_three_segment_hands(
     if conflicting:
         raise RuntimeError("partial three-segment finger rig cannot be refined repeatably: " + ", ".join(conflicting))
     regions_by_side = analyze_three_digit_hands(armature, objects, dimensions, bone_map)
-    topology = apply_annular_hand_topology(objects, _topology_inputs(regions_by_side, bone_map))
-    _project_ring_joints(regions_by_side, topology)
+    topology = _source_surface_topology(objects, regions_by_side)
     added_names = _create_segment_bones(armature, regions_by_side, bone_map)
-    blended_vertices, support_isolation_count = _assign_segment_weights(
+    blended_vertices, support_isolation_count, joint_band_vertex_counts = _assign_segment_weights(
         armature, objects, regions_by_side, bone_map, maximum_influences, topology
     )
     bone_map = resolve_roles([bone.name for bone in armature.data.bones])
@@ -575,8 +679,10 @@ def enhance_three_segment_hands(
     stats.update(topology.stats)
     stats.update(_collect_weight_stats(objects))
     stats.update({"boneMap": bone_map, "fingerRig": True, "fingerRigEnhanced": True, "fingerBoneCount": len(added_names),
-                  "fingerSegmentCount": 3, "addedFingerBones": added_names, "fingerWeightingMode": "soft_digit_blend",
-                  "fingerTopologyMode": "deterministic_annular_strips", "fingerBlendVertexCount": blended_vertices,
+                  "fingerSegmentCount": 3, "addedFingerBones": added_names, "fingerWeightingMode": "isolated_digit_banded",
+                  "fingerTopologyMode": SOURCE_SURFACE_TOPOLOGY_MODE, "fingerBlendVertexCount": blended_vertices,
+                  "handWeightedJointBandCount": len(joint_band_vertex_counts),
+                  "handWeightedJointBandVertexCounts": joint_band_vertex_counts,
                   "preserveVolumeSkinning": True, "handRingDiagnostics": ring_diagnostics,
                   "externalSupportIsolationCount": support_isolation_count})
     _mark_validated_three_segment_hand_rig(armature, objects, topology)

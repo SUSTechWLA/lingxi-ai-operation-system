@@ -401,9 +401,13 @@ def test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights() -
     assert expected.issubset(deform_bones)
     assert rig_stats["fingerRigEnhanced"] is True
     assert rig_stats["fingerBoneCount"] == 18
-    assert rig_stats["handDetailAddedVertices"] > 0
-    assert rig_stats["handDetailVertexCountAfter"] > rig_stats["handDetailVertexCountBefore"]
-    assert rig_stats["fingerWeightingMode"] == "soft_digit_blend"
+    assert rig_stats["fingerTopologyMode"] == "source_surface_weighted"
+    assert rig_stats["handDetailAddedVertices"] == 0
+    assert rig_stats["handDetailVertexCountAfter"] == rig_stats["handDetailVertexCountBefore"]
+    assert rig_stats["handWeightedJointBandCount"] == 12
+    assert len(rig_stats["handWeightedJointBandVertexCounts"]) == 12
+    assert all(count > 0 for count in rig_stats["handWeightedJointBandVertexCounts"].values())
+    assert rig_stats["fingerWeightingMode"] == "isolated_digit_banded"
     assert rig_stats["fingerBlendVertexCount"] > 0
     assert rig_stats["preserveVolumeSkinning"] is True
     assert bone_map["finger_1_l"] == "Finger_01_Proximal.L"
@@ -1577,9 +1581,9 @@ def test_enhanced_timeline_keys_three_segment_fist_and_isolates_finger_roll() ->
         proximal = armature.pose.bones[bone_map[f"finger_{digit}_r"]].rotation_euler
         middle = armature.pose.bones[bone_map[f"finger_{digit}_mid_r"]].rotation_euler
         distal = armature.pose.bones[bone_map[f"finger_{digit}_tip_r"]].rotation_euler
-        assert proximal.z > 0.34, (digit, tuple(proximal))
-        assert middle.z > 0.42, (digit, tuple(middle))
-        assert distal.z > 0.28, (digit, tuple(distal))
+        assert 0.25 < proximal.z <= 0.30, (digit, tuple(proximal))
+        assert 0.29 < middle.z <= 0.34, (digit, tuple(middle))
+        assert 0.18 < distal.z <= 0.22, (digit, tuple(distal))
 
     roll_plan = {
         "durationSec": 1.0,
@@ -1595,9 +1599,9 @@ def test_enhanced_timeline_keys_three_segment_fist_and_isolates_finger_roll() ->
     proximal = armature.pose.bones[bone_map[f"finger_{selected}_r"]].rotation_euler
     middle = armature.pose.bones[bone_map[f"finger_{selected}_mid_r"]].rotation_euler
     distal = armature.pose.bones[bone_map[f"finger_{selected}_tip_r"]].rotation_euler
-    assert proximal.z > 0.34, tuple(proximal)
-    assert middle.z > 0.42, tuple(middle)
-    assert distal.z > 0.28, tuple(distal)
+    assert 0.26 < proximal.z <= 0.31, tuple(proximal)
+    assert 0.31 < middle.z <= 0.35, tuple(middle)
+    assert 0.19 < distal.z <= 0.23, tuple(distal)
     for digit in (1, 3):
         displacement = (after[digit] - before[digit]).length
         maximum = hand_relative_digit_length(armature, bone_map, "r", digit) * 0.06
@@ -1619,9 +1623,9 @@ def test_enhanced_timeline_keys_three_segment_fist_and_isolates_finger_roll() ->
         armature.pose.bones[bone_map[role]].rotation_euler
         for role in ("finger_2_r", "finger_2_mid_r", "finger_2_tip_r")
     ]
-    assert curled[0].z > 0.30, tuple(curled[0])
-    assert curled[1].z > 0.38, tuple(curled[1])
-    assert curled[2].z > 0.25, tuple(curled[2])
+    assert 0.25 < curled[0].z <= 0.30, tuple(curled[0])
+    assert 0.29 < curled[1].z <= 0.34, tuple(curled[1])
+    assert 0.18 < curled[2].z <= 0.22, tuple(curled[2])
 
 
 def test_overlapping_hand_events_share_one_arm_stage_pose() -> None:

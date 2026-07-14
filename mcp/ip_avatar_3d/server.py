@@ -74,6 +74,8 @@ LIGHTING_PRESETS = {"editorial_soft", "editorial_crisp", "night_analysis", "scen
 RENDER_ENGINES = {"BLENDER_EEVEE_NEXT", "CYCLES"}
 QUALITY_PRESETS = {
     "preview": {"eeveeSamples": 32, "cyclesSamples": 32, "videoCrf": 22, "videoPreset": "medium"},
+    "production_1080p": {"eeveeSamples": 8, "cyclesSamples": 64, "videoCrf": 16, "videoPreset": "slow"},
+    "production_2k_fast": {"eeveeSamples": 16, "cyclesSamples": 96, "videoCrf": 16, "videoPreset": "slow"},
     "production_2k": {"eeveeSamples": 64, "cyclesSamples": 96, "videoCrf": 16, "videoPreset": "slow"},
     "master": {"eeveeSamples": 256, "cyclesSamples": 192, "videoCrf": 12, "videoPreset": "slow"},
 }
@@ -87,14 +89,18 @@ VOICE_AUDITION_I_TOLERANCE = 0.5
 VOICE_AUDITION_SAMPLE_RATE = 48000
 VOICE_AUDITION_CHANNELS = 1
 VOICE_AUDITION_CODEC = "pcm_s24le"
-GPT_SOVITS_MASTER_FILTER = (
-    "highpass=f=55,lowpass=f=18000,"
-    "acompressor=threshold=-18dB:ratio=1.5:attack=15:release=180:knee=2.5:makeup=1,"
-    "loudnorm=I=-16:TP=-1.5:LRA=7"
-)
 GPT_SOVITS_MASTER_SAMPLE_RATE = 48000
 GPT_SOVITS_MASTER_CHANNELS = 1
 GPT_SOVITS_MASTER_CODEC = "pcm_s16le"
+GPT_SOVITS_PRE_MASTER_FILTER = (
+    f"aresample={GPT_SOVITS_MASTER_SAMPLE_RATE},"
+    "highpass=f=55,lowpass=f=18000,"
+    "acompressor=threshold=-20dB:ratio=2.5:attack=15:release=180:knee=2.5:makeup=1"
+)
+GPT_SOVITS_MASTER_FILTER = (
+    f"{GPT_SOVITS_PRE_MASTER_FILTER},"
+    "loudnorm=I=-16:TP=-1.5:LRA=7"
+)
 
 
 def _repo_root() -> Path:
@@ -246,6 +252,33 @@ def _master_gpt_sovits_audio(
     staging_path = Path(temp_name)
     staging_path.unlink()
     try:
+        analysis_completed = _run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-nostats",
+                "-i",
+                str(raw_path),
+                "-af",
+                f"{GPT_SOVITS_MASTER_FILTER}:print_format=json",
+                "-f",
+                "null",
+                "-",
+            ],
+            timeout=180,
+        )
+        analysis = _parse_loudnorm_analysis(
+            f"{analysis_completed.stdout}\n{analysis_completed.stderr}"
+        )
+        loudnorm_filter = (
+            "loudnorm=I=-16:TP=-1.5:LRA=7:"
+            f"measured_I={analysis['inputIntegratedLufs']}:"
+            f"measured_TP={analysis['inputTruePeakDbtp']}:"
+            f"measured_LRA={analysis['inputLoudnessRangeLu']}:"
+            f"measured_thresh={analysis['inputThresholdLufs']}:"
+            f"offset={analysis['targetOffsetLufs']}:"
+            "linear=true"
+        )
         _run(
             [
                 ffmpeg,
@@ -253,7 +286,7 @@ def _master_gpt_sovits_audio(
                 "-i",
                 str(raw_path),
                 "-af",
-                GPT_SOVITS_MASTER_FILTER,
+                f"{GPT_SOVITS_PRE_MASTER_FILTER},{loudnorm_filter}",
                 "-ar",
                 str(GPT_SOVITS_MASTER_SAMPLE_RATE),
                 "-ac",
@@ -951,6 +984,7 @@ def ensure_audio(
                 "loudnessMeasurement": loudness,
                 "mastering": {
                     "filter": GPT_SOVITS_MASTER_FILTER,
+                    "loudnessMode": "two_pass",
                     "sampleRateHz": GPT_SOVITS_MASTER_SAMPLE_RATE,
                     "channels": GPT_SOVITS_MASTER_CHANNELS,
                     "codec": GPT_SOVITS_MASTER_CODEC,
@@ -1211,6 +1245,26 @@ def _parse_loudnorm_measurement(output: str) -> dict[str, float]:
     raise RuntimeError("ffmpeg did not return valid loudnorm measurement data")
 
 
+def _parse_loudnorm_analysis(output: str) -> dict[str, float]:
+    fields = {
+        "input_i": "inputIntegratedLufs",
+        "input_tp": "inputTruePeakDbtp",
+        "input_lra": "inputLoudnessRangeLu",
+        "input_thresh": "inputThresholdLufs",
+        "target_offset": "targetOffsetLufs",
+    }
+    for raw in reversed(re.findall(r"\{[^{}]*\}", output or "", flags=re.DOTALL)):
+        try:
+            data = json.loads(raw)
+            parsed = {target: float(data[source]) for source, target in fields.items()}
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not all(math.isfinite(value) for value in parsed.values()):
+            continue
+        return parsed
+    raise RuntimeError("ffmpeg did not return valid two-pass loudnorm analysis data")
+
+
 def _measure_voice_audition_loudness(path: Path) -> dict[str, float]:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -1240,6 +1294,17 @@ def _voice_audition_loudness_is_valid(measurement: dict[str, float]) -> bool:
         abs(integrated - VOICE_AUDITION_TARGET_I) <= VOICE_AUDITION_I_TOLERANCE
         and true_peak <= VOICE_AUDITION_TARGET_TP
     )
+
+
+def _validate_final_production_audio(path: Path) -> dict[str, float]:
+    measurement = _measure_voice_audition_loudness(path)
+    if not _voice_audition_loudness_is_valid(measurement):
+        raise ProductionVoiceUnavailable(
+            "final encoded audio failed loudness gate: "
+            f"integrated={measurement['integratedLufs']:.2f} LUFS, "
+            f"truePeak={measurement['truePeakDbtp']:.2f} dBTP"
+        )
+    return measurement
 
 
 def _voice_audition_set_spec(
@@ -1492,6 +1557,7 @@ def _build_compose_video_args(
     height: int = DEFAULT_HEIGHT,
     video_crf: int = 16,
     video_preset: str = "slow",
+    audio_mastered: bool = False,
 ) -> list[str]:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -1524,12 +1590,17 @@ def _build_compose_video_args(
     else:
         args.extend(["-map", f"{frame_input}:v:0"])
     if audio_path:
+        audio_filter = (
+            "volume=0.2dB,alimiter=limit=0.75:attack=5:release=50:level=false"
+            if audio_mastered
+            else "loudnorm=I=-16:TP=-1.5:LRA=7"
+        )
         args.extend(
             [
                 "-map",
                 f"{audio_input}:a:0",
                 "-filter:a",
-                "loudnorm=I=-16:TP=-1.5:LRA=7",
+                audio_filter,
                 "-c:a",
                 "aac",
                 "-b:a",
@@ -1578,6 +1649,7 @@ def _compose_video(
     height: int = DEFAULT_HEIGHT,
     video_crf: int = 16,
     video_preset: str = "slow",
+    audio_mastered: bool = False,
 ) -> None:
     args = _build_compose_video_args(
         frames_dir=frames_dir,
@@ -1591,6 +1663,7 @@ def _compose_video(
         height=height,
         video_crf=video_crf,
         video_preset=video_preset,
+        audio_mastered=audio_mastered,
     )
     _run(args, timeout=max(120, int(duration_sec * 60)))
 
@@ -2624,6 +2697,19 @@ def render_talking_video(
                 "policyStatus": "ready",
             }
         )
+        generated_audio_duration = audio_duration_sec(audio_out)
+        if generated_audio_duration > 0:
+            duration = float(generated_audio_duration)
+            motion_plan = build_motion_plan(script, duration, fps, motionStyle)
+            duration = float(motion_plan["durationSec"])
+            camera_plan = build_camera_plan(duration, fps, camera_preset)
+            if not subtitlePath:
+                subtitle_out.write_text(
+                    build_subtitle_text(script, duration),
+                    encoding="utf-8",
+                )
+            if int(blenderTimeoutSec or 0) <= 0:
+                blender_timeout = estimate_blender_timeout(duration, fps, width, height)
 
     plan_path = output_dir / "motion_plan.json"
     render_input_path = output_dir / "render_input.json"
@@ -2758,7 +2844,15 @@ def render_talking_video(
         height=height,
         video_crf=int(quality["videoCrf"]),
         video_preset=str(quality["videoPreset"]),
+        audio_mastered=bool(audio_metadata.get("masteredFileSha256")),
     )
+    final_audio_loudness: dict[str, float] = {}
+    if audio_out and bool(audio_metadata.get("productionReady")):
+        try:
+            final_audio_loudness = _validate_final_production_audio(video_path)
+        except Exception:
+            video_path.unlink(missing_ok=True)
+            raise
     _extract_preview(video_path, preview_path)
     avatar_layer_path = ""
     if effective_transparent:
@@ -2774,6 +2868,7 @@ def render_talking_video(
             "subtitleGenerated": subtitle_out.exists(),
             "audioGenerated": bool(audio_out and Path(audio_out).exists()),
             "audioSource": audioSource,
+            "finalAudioLoudness": final_audio_loudness,
             "finalVideoGenerated": video_path.exists(),
         }
     )
@@ -2782,6 +2877,8 @@ def render_talking_video(
         "qa": qa,
         "renderInputPath": str(render_input_path),
         "voicePolicy": voice_policy,
+        "voice": audio_metadata,
+        "audioSource": audioSource,
     }
     _write_json(report_path, report)
     digest = hashlib.sha256(video_path.read_bytes()).hexdigest() if video_path.exists() else ""

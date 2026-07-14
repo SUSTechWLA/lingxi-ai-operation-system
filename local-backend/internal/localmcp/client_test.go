@@ -297,6 +297,37 @@ func TestClientListsToolsFromVideoQAPythonMCPServer(t *testing.T) {
 	t.Fatalf("tools = %#v, want video_qa.analyze_video", tools)
 }
 
+func TestClientListsToolsFromIPAvatar3DMCPServer(t *testing.T) {
+	if os.Getenv("RUN_PYTHON_MCP_INTEGRATION") != "1" {
+		t.Skip("set RUN_PYTHON_MCP_INTEGRATION=1 to run the Python MCP integration test")
+	}
+	scriptPath := filepath.Clean(filepath.Join("..", "..", "..", "mcp", "ip_avatar_3d", "server.py"))
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("ip avatar 3d python mcp server not found: %v", err)
+	}
+	pythonCommand := pythonCommandForIntegrationTest(t)
+	client := NewClient(ProviderConfig{
+		ID:         "ip_avatar_3d",
+		Transport:  "stdio",
+		Command:    pythonCommand,
+		Args:       []string{scriptPath},
+		ToolPrefix: "ip_avatar_3d.",
+		Enabled:    true,
+	}, nil)
+	defer client.Close()
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+	for _, tool := range tools {
+		if tool.Name == "ip_avatar_3d.render_talking_video" {
+			return
+		}
+	}
+	t.Fatalf("tools = %#v, want ip_avatar_3d.render_talking_video", tools)
+}
+
 func pythonCommandForIntegrationTest(t *testing.T) string {
 	t.Helper()
 	if command := strings.TrimSpace(os.Getenv("PYTHON")); command != "" {

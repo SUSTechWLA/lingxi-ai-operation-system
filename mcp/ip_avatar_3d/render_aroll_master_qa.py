@@ -486,6 +486,69 @@ def _configure_render(scene: Any, resolution: int) -> None:
     scene.render.resolution_y = resolution
 
 
+def _configure_qa_lighting(scene: Any, character_meshes: Iterable[Any]) -> dict[str, Any]:
+    points = [
+        obj.matrix_world @ Vector(corner)
+        for obj in character_meshes
+        for corner in obj.bound_box
+    ]
+    if not points:
+        raise RuntimeError("A-roll QA lighting requires character bounds")
+    minimum = Vector((min(point.x for point in points), min(point.y for point in points), min(point.z for point in points)))
+    maximum = Vector((max(point.x for point in points), max(point.y for point in points), max(point.z for point in points)))
+    center = (minimum + maximum) * 0.5
+    height = max(0.25, float(maximum.z - minimum.z))
+    width = max(0.25, float(maximum.x - minimum.x))
+
+    for light in (obj for obj in scene.objects if obj.type == "LIGHT"):
+        light.hide_render = True
+    for name in ("QA_Key_Softbox", "QA_Fill_Softbox", "QA_Rim_Softbox"):
+        existing = bpy.data.objects.get(name)
+        if existing:
+            bpy.data.objects.remove(existing, do_unlink=True)
+
+    specifications = (
+        (
+            "QA_Key_Softbox",
+            center + Vector((-width * 0.85, -height * 1.35, height * 0.72)),
+            340.0,
+            (1.0, 0.86, 0.72),
+            height * 0.72,
+        ),
+        (
+            "QA_Fill_Softbox",
+            center + Vector((width * 0.95, -height * 1.05, height * 0.38)),
+            170.0,
+            (0.72, 0.86, 1.0),
+            height * 0.86,
+        ),
+        (
+            "QA_Rim_Softbox",
+            center + Vector((0.0, height * 0.72, height * 0.78)),
+            220.0,
+            (1.0, 0.72, 0.48),
+            height * 0.62,
+        ),
+    )
+    names: list[str] = []
+    for name, location, energy, color, size in specifications:
+        data = bpy.data.lights.new(name, type="AREA")
+        data.energy = energy
+        data.shape = "DISK"
+        data.size = max(0.35, size)
+        data.color = color
+        light = bpy.data.objects.new(name, data)
+        scene.collection.objects.link(light)
+        light.location = location
+        blender_renderer.look_at(light, center)
+        names.append(name)
+    return {
+        "preset": "qa_editorial_soft",
+        "lightCount": len(names),
+        "lights": names,
+    }
+
+
 def _render_sample(
     scene: Any,
     sample: QASample,
@@ -690,6 +753,7 @@ def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
     for obj in scene.objects:
         if obj.type == "MESH" and obj not in character_meshes:
             obj.hide_render = True
+    lighting = _configure_qa_lighting(scene, character_meshes)
     _configure_close_cameras(scene, armature, bone_map)
 
     _reset_armature_pose(scene, armature)
@@ -725,6 +789,7 @@ def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
             "qaSample": "face/squint.png",
             "fullBlinkClaimed": False,
         },
+        "lighting": lighting,
         "contract": {
             "actions": list(AROLL_ACTIONS),
             "cameras": list(ACTION_CAMERAS),
