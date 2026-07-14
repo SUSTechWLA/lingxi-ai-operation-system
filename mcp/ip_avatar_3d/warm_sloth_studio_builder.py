@@ -3602,8 +3602,9 @@ def configure_render_settings(ctx: StudioContext) -> None:
         scene.render.engine = "BLENDER_EEVEE_NEXT"
     except TypeError:
         scene.render.engine = "BLENDER_EEVEE"
-    scene.render.resolution_x = 2560
-    scene.render.resolution_y = 1440
+    scene.render.resolution_x, scene.render.resolution_y = (
+        contract.DEFAULT_RENDER_RESOLUTION
+    )
     scene.render.resolution_percentage = 100
     scene.render.pixel_aspect_x = 1.0
     scene.render.pixel_aspect_y = 1.0
@@ -3857,8 +3858,9 @@ def main(argv: list[str] | None = None) -> int:
     bpy.ops.file.pack_all()
     _render_wide_preview(scene, args.preview_path)
 
-    scene.render.resolution_x = 2560
-    scene.render.resolution_y = 1440
+    scene.render.resolution_x, scene.render.resolution_y = (
+        contract.DEFAULT_RENDER_RESOLUTION
+    )
     scene.render.resolution_percentage = 100
     scene.render.film_transparent = False
     scene.camera = wide

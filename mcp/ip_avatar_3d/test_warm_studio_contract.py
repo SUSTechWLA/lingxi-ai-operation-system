@@ -17,6 +17,9 @@ class WarmStudioContractTests(unittest.TestCase):
         self.assertEqual(contract.DOOR_OPENING, (1.0, 2.4))
         self.assertEqual(contract.TARGET_CHARACTER_HEIGHT, 2.55)
 
+    def test_production_render_resolution_is_1080p(self) -> None:
+        self.assertEqual(contract.DEFAULT_RENDER_RESOLUTION, (1920, 1080))
+
     def test_required_collections_are_complete_and_immutable(self) -> None:
         self.assertIsInstance(contract.REQUIRED_COLLECTIONS, tuple)
         self.assertEqual(

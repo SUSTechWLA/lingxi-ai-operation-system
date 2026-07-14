@@ -874,9 +874,12 @@ def _validate_render_settings(report: dict[str, Any]) -> None:
         report["errors"].append(
             f"Default render engine must be Eevee, found {scene.render.engine!r}"
         )
-    if (scene.render.resolution_x, scene.render.resolution_y) != (2560, 1440):
+    if (
+        scene.render.resolution_x,
+        scene.render.resolution_y,
+    ) != contract.DEFAULT_RENDER_RESOLUTION:
         report["errors"].append(
-            f"Render resolution must be 2560x1440, found "
+            f"Render resolution must be 1920x1080, found "
             f"{scene.render.resolution_x}x{scene.render.resolution_y}"
         )
     if scene.render.resolution_percentage != 100:

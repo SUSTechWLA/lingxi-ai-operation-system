@@ -10,7 +10,7 @@ The character is being produced independently. This project therefore delivers a
 
 - Reconstruct the layout, composition, colors, furniture, and practical lighting shown in `工作室设计版.png`.
 - Deliver a complete 360-degree room that supports the reference hero angle, side angles, reverse angles, and restrained camera moves without revealing missing geometry.
-- Keep the room detailed enough for 2560x1440 and 4K close shots of the desk, shelves, lamps, books, ceramics, plants, curtains, and branded artwork.
+- Keep the room detailed enough for 1920x1080 production framing and 4K close shots of the desk, shelves, lamps, books, ceramics, plants, curtains, and branded artwork.
 - Preserve Blender 5.1.2 compatibility and support both Eevee preview renders and Cycles final renders.
 - Integrate with the existing A-roll scene contract through `IP_Character_Spawn`, `IP_Focus_Head`, `Camera_Wide`, `Camera_Medium`, and `Camera_Close`.
 - Keep the studio modular, packed, non-destructive, and independent of the character asset and the existing dark editorial studio.
@@ -218,7 +218,7 @@ All production objects use clear semantic names. Mirrored plants and repeated bo
 - Default interactive engine: Eevee Next.
 - Final engine: Cycles when selected by the caller.
 - Cycles final exposure profile: `ip_cycles_final_exposure=-0.8`, applied by the QA renderer while the saved Eevee exposure remains `0.0`.
-- Default resolution: 2560x1440.
+- Default resolution: 1920x1080 (1080p production output).
 - Frame rate metadata: 30 fps.
 - Color management: AgX.
 - Textures and generated brand artwork: packed into the `.blend`.
