@@ -9,6 +9,7 @@ import math
 import sys
 import time
 from array import array
+from bisect import bisect_right
 from collections import deque
 from pathlib import Path
 from typing import Any, Iterable
@@ -58,7 +59,7 @@ SOURCE_VISEME_DISPLACEMENT = {
 VISEME_RESPONSE = {
     "Mouth_Rest": {"shapeFloor": 1.0, "shapeGain": 0.0, "jawGain": 0.00},
     "Mouth_MBP": {"shapeFloor": 1.0, "shapeGain": 0.0, "jawGain": 0.00},
-    "Mouth_A": {"shapeFloor": 0.72, "shapeGain": 0.28, "jawGain": 0.24},
+    "Mouth_A": {"shapeFloor": 0.72, "shapeGain": 0.28, "jawGain": 0.27},
     "Mouth_E": {"shapeFloor": 0.68, "shapeGain": 0.25, "jawGain": 0.16},
     "Mouth_O": {"shapeFloor": 0.75, "shapeGain": 0.25, "jawGain": 0.22},
     "Mouth_U": {"shapeFloor": 0.72, "shapeGain": 0.24, "jawGain": 0.18},
@@ -74,6 +75,7 @@ RUNTIME_VISEME_MAP = {
     "rest": "Mouth_Rest",
 }
 MAX_VISEME_SHAPE_STEP = 0.80
+MAX_JAW_ROTATION_RAD = 0.25
 
 
 def read_input() -> dict:
@@ -5810,7 +5812,8 @@ def lip_at(plan: dict, t: float) -> dict:
     lips = plan.get("lipSync") or []
     if not lips:
         return {"viseme": "closed", "open": 0.0}
-    index = min(len(lips) - 1, max(0, int(t / max(float(plan.get("durationSec") or 1), 0.001) * len(lips))))
+    sample_times = [float(item.get("timeSec") or 0.0) for item in lips]
+    index = max(0, bisect_right(sample_times, float(t)) - 1)
     return lips[index]
 
 
@@ -6605,7 +6608,8 @@ def animate(
             "head",
             rotation=(head_tilt, head_turn, head_nod) if source_rig else (head_nod, head_turn, head_tilt),
         )
-        set_bone("jaw", rotation=(mouth_open * response["jawGain"], 0, 0))
+        jaw_rotation = min(MAX_JAW_ROTATION_RAD, mouth_open * response["jawGain"])
+        set_bone("jaw", rotation=(jaw_rotation, 0, 0))
         set_bone("eye_l", rotation=(0, eye_gaze, 0))
         set_bone("eye_r", rotation=(0, eye_gaze, 0))
         tongue_wave = math.sin(t * math.pi * 2 * 2.7) * mouth_open

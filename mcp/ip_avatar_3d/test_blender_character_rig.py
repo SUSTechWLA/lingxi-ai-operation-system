@@ -23,6 +23,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import blender_renderer
+import server as avatar_server
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
@@ -1399,7 +1400,26 @@ def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint(
     assert middle_in_direction.z > 0.45, tuple(middle_in_direction)
 
 
-def test_rigged_fbx_viseme_timeline_has_strong_jaw_and_bounded_shape_attack() -> None:
+def test_lip_at_preserves_planner_timestamp_boundaries() -> None:
+    plan = avatar_server.build_motion_plan("maou.", 0.41, 30, action_sequence=[])
+    boundary_evidence = []
+    for index, event in enumerate(plan["lipSync"][1:], start=1):
+        boundary = float(event["timeSec"])
+        just_before = blender_renderer.lip_at(plan, boundary - 1e-6)
+        at_boundary = blender_renderer.lip_at(plan, boundary)
+        boundary_evidence.append(
+            {
+                "boundary": boundary,
+                "before": float(just_before["timeSec"]),
+                "at": float(at_boundary["timeSec"]),
+            }
+        )
+        assert just_before is plan["lipSync"][index - 1], boundary_evidence
+        assert at_boundary is event, boundary_evidence
+    print("VISEME_BOUNDARY_METRICS", json.dumps(boundary_evidence, sort_keys=True))
+
+
+def test_planner_driven_viseme_timeline_has_strong_bounded_jaw_and_shape_attack() -> None:
     character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
     face = blender_renderer.setup_face(
         {
@@ -1416,33 +1436,25 @@ def test_rigged_fbx_viseme_timeline_has_strong_jaw_and_bounded_shape_attack() ->
         character_objects,
         bone_map,
     )
-    lip_sync = [
-        {"timeSec": 0.0, "viseme": "mbp", "open": 0.025},
-        {"timeSec": 0.08, "viseme": "a", "open": 0.567},
-        {"timeSec": 0.16, "viseme": "a", "open": 0.95},
-        {"timeSec": 0.24, "viseme": "o", "open": 0.58},
-        {"timeSec": 0.32, "viseme": "o", "open": 0.90},
-        {"timeSec": 0.40, "viseme": "u", "open": 0.58},
-        {"timeSec": 0.48, "viseme": "u", "open": 0.75},
-        {"timeSec": 0.56, "viseme": "rest", "open": 0.08},
-        {"timeSec": 0.64, "viseme": "rest", "open": 0.0},
-    ]
-    plan = {
-        "durationSec": 0.72,
-        "motionEvents": [],
-        "lipSync": lip_sync,
-    }
+    plan = avatar_server.build_motion_plan("啊不。", 0.41, 30, action_sequence=[])
+    maximum_planned_a = max(
+        float(item["open"])
+        for item in plan["lipSync"]
+        if item["viseme"] == "a"
+    )
+    assert maximum_planned_a == 0.78
 
     blender_renderer.animate(armature, face, plan, fps=30, bone_map=bone_map)
 
     keys = face["mouth"].data.shape_keys.key_blocks
-    controlled_names = ("Mouth_Rest", "Mouth_MBP", "Mouth_A", "Mouth_O", "Mouth_U")
+    controlled_names = ("Mouth_Rest", "Mouth_MBP", "Mouth_A")
     previous = {name: 0.0 for name in controlled_names}
     jaw_values = []
     mbp_jaw_values = []
     maximum_shape_jump = 0.0
     prohibited_jumps = []
-    for frame in range(1, 22):
+    frame_end = int(float(plan["durationSec"]) * 30)
+    for frame in range(1, frame_end + 1):
         bpy.context.scene.frame_set(frame)
         lip = blender_renderer.lip_at(plan, (frame - 1) / 30)
         jaw = abs(float(armature.pose.bones[bone_map["jaw"]].rotation_euler.x))
@@ -1459,14 +1471,15 @@ def test_rigged_fbx_viseme_timeline_has_strong_jaw_and_bounded_shape_attack() ->
     maximum_jaw = max(jaw_values)
     maximum_mbp_jaw = max(mbp_jaw_values)
     print(
-        "VISEME_TIMELINE_METRICS",
+        "PLANNER_VISEME_TIMELINE_METRICS",
         json.dumps(
             {
                 "jawMaximumRad": maximum_jaw,
+                "maximumPlannedAOpen": maximum_planned_a,
                 "mbpJawMaximumRad": maximum_mbp_jaw,
                 "maximumShapeAttack": maximum_shape_jump,
                 "prohibitedShapeJumps": prohibited_jumps,
-                "sampledFrames": 21,
+                "sampledFrames": frame_end,
             },
             sort_keys=True,
         ),
@@ -1474,6 +1487,20 @@ def test_rigged_fbx_viseme_timeline_has_strong_jaw_and_bounded_shape_attack() ->
     assert 0.20 <= maximum_jaw <= 0.25, maximum_jaw
     assert maximum_mbp_jaw <= 0.03, maximum_mbp_jaw
     assert not prohibited_jumps, prohibited_jumps
+
+    clamp_plan = {
+        "durationSec": 0.1,
+        "motionEvents": [],
+        "lipSync": [{"timeSec": 0.0, "viseme": "a", "open": 1.0}],
+    }
+    blender_renderer.animate(armature, face, clamp_plan, fps=30, bone_map=bone_map)
+    clamped_jaw_values = []
+    for frame in range(1, 4):
+        bpy.context.scene.frame_set(frame)
+        clamped_jaw_values.append(
+            abs(float(armature.pose.bones[bone_map["jaw"]].rotation_euler.x))
+        )
+    assert max(clamped_jaw_values) <= 0.25, clamped_jaw_values
 
 
 def test_publish_render_detail_is_non_destructive_and_deformation_aware() -> None:
@@ -2898,7 +2925,8 @@ if __name__ == "__main__":
         test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights,
         test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays,
         test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face,
-        test_rigged_fbx_viseme_timeline_has_strong_jaw_and_bounded_shape_attack,
+        test_lip_at_preserves_planner_timestamp_boundaries,
+        test_planner_driven_viseme_timeline_has_strong_bounded_jaw_and_shape_attack,
         test_existing_rich_face_without_task6_metadata_fails_closed,
         test_task6_reuse_recomputes_squint_and_pbr_evidence,
         test_task6_reuse_rejects_lateral_active_skin_displacement,
