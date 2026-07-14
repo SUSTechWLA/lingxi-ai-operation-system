@@ -965,9 +965,14 @@ def test_production_calibration_frames_include_interval_bounds_and_action_keys()
         marker.location.x = 0.0
         marker.keyframe_insert(data_path="location", frame=23, index=0)
 
-        frames = blender_renderer.production_calibration_frames(scene, 30)
+        frames = blender_renderer.production_calibration_frames(
+            scene,
+            30,
+            actions=(marker.animation_data.action,),
+        )
 
         assert {1, 16, 23, 31, 46, 61}.issubset(frames)
+        assert 24 not in frames
         assert len(frames) < 61
     finally:
         bpy.data.objects.remove(marker, do_unlink=True)

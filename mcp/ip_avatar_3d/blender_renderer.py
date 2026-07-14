@@ -10,7 +10,7 @@ import sys
 from array import array
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import bmesh
 import bpy
@@ -1694,7 +1694,11 @@ def _mode_collision_obstacles() -> list[bpy.types.Object]:
     ]
 
 
-def production_calibration_frames(scene: bpy.types.Scene, fps: int) -> tuple[int, ...]:
+def production_calibration_frames(
+    scene: bpy.types.Scene,
+    fps: int,
+    actions: Iterable[bpy.types.Action] = (),
+) -> tuple[int, ...]:
     """Sample every half second plus all authored action keys and timeline bounds."""
 
     start = int(scene.frame_start)
@@ -1702,7 +1706,7 @@ def production_calibration_frames(scene: bpy.types.Scene, fps: int) -> tuple[int
     interval = max(1, int(round(max(1, fps) * 0.5)))
     frames = set(range(start, end + 1, interval))
     frames.update((start, end))
-    for action in bpy.data.actions:
+    for action in actions:
         for fcurve in iter_action_fcurves(action):
             for keyframe in fcurve.keyframe_points:
                 frame = int(round(float(keyframe.co.x)))
@@ -6830,9 +6834,15 @@ def main() -> None:
         presentation_mode=presentation_mode,
     )
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
+    active_body_action = (
+        armature.animation_data.action
+        if armature.animation_data and armature.animation_data.action
+        else None
+    )
     calibration_frames = production_calibration_frames(
         bpy.context.scene,
         int(data["fps"]),
+        actions=(active_body_action,) if active_body_action else (),
     )
     if bool(data.get("prepareMaster")):
         container = dimensions.get("container")
