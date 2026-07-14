@@ -957,18 +957,25 @@ def test_lighting_preset_uses_authored_base_energy() -> None:
 def test_production_calibration_frames_include_interval_bounds_and_action_keys() -> None:
     scene = bpy.context.scene
     original_range = (scene.frame_start, scene.frame_end)
-    marker = bpy.data.objects.new("Calibration_Frame_Test", None)
-    scene.collection.objects.link(marker)
+    bpy.ops.object.armature_add()
+    marker = bpy.context.object
+    marker.name = "Calibration_Frame_Test"
+    limb = marker.pose.bones[0]
+    limb.name = "Calibration_Limb"
     try:
         scene.frame_start = 1
         scene.frame_end = 61
+        limb.rotation_mode = "XYZ"
+        limb.rotation_euler.x = 0.25
+        limb.keyframe_insert(data_path="rotation_euler", frame=23, index=0)
         marker.location.x = 0.0
-        marker.keyframe_insert(data_path="location", frame=23, index=0)
+        marker.keyframe_insert(data_path="location", frame=24, index=0)
 
         frames = blender_renderer.production_calibration_frames(
             scene,
             30,
             actions=(marker.animation_data.action,),
+            bone_names=(limb.name,),
         )
 
         assert {1, 16, 23, 31, 46, 61}.issubset(frames)

@@ -1723,6 +1723,7 @@ def production_calibration_frames(
     scene: bpy.types.Scene,
     fps: int,
     actions: Iterable[bpy.types.Action] = (),
+    bone_names: Iterable[str] = (),
 ) -> tuple[int, ...]:
     """Sample every half second plus all authored action keys and timeline bounds."""
 
@@ -1731,8 +1732,14 @@ def production_calibration_frames(
     interval = max(1, int(round(max(1, fps) * 0.5)))
     frames = set(range(start, end + 1, interval))
     frames.update((start, end))
+    selected_bones = tuple(str(name) for name in bone_names if name)
     for action in actions:
         for fcurve in iter_action_fcurves(action):
+            if selected_bones and not any(
+                f'pose.bones["{bone_name}"]' in fcurve.data_path
+                for bone_name in selected_bones
+            ):
+                continue
             for keyframe in fcurve.keyframe_points:
                 frame = int(round(float(keyframe.co.x)))
                 if start <= frame <= end:
@@ -6872,10 +6879,27 @@ def main() -> None:
         if armature.animation_data and armature.animation_data.action
         else None
     )
+    calibration_bones = {
+        name
+        for role, name in bone_map.items()
+        if role.startswith(
+            (
+                "shoulder_",
+                "upper_arm_",
+                "forearm_",
+                "hand_",
+                "finger_",
+                "thigh_",
+                "shin_",
+                "foot_",
+            )
+        )
+    }
     calibration_frames = production_calibration_frames(
         bpy.context.scene,
         int(data["fps"]),
         actions=(active_body_action,) if active_body_action else (),
+        bone_names=calibration_bones,
     )
     write_runtime_progress(
         data,
