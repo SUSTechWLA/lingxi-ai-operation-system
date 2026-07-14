@@ -47,6 +47,33 @@ TARGET_SOLE_CLEARANCE_M = 0.0015
 MIN_MEDIUM_FRAME_POINTS = 128
 MEDIUM_FRAME_SAFE_MARGIN = 0.04
 TARGET_MEDIUM_VERTICAL_SPAN = 0.84
+SOURCE_VISEME_DISPLACEMENT = {
+    "Mouth_A": {"upper": 0.0052, "lower": -0.0190, "width": 0.96},
+    "Mouth_E": {"upper": 0.0028, "lower": -0.0095, "width": 1.02},
+    "Mouth_O": {"upper": 0.0070, "lower": -0.0152, "width": 0.78},
+    "Mouth_U": {"upper": 0.0048, "lower": -0.0110, "width": 0.68},
+    "Mouth_MBP": {"upper": -0.0008, "lower": 0.0008, "width": 0.98},
+    "Mouth_Surprise": {"upper": 0.0092, "lower": -0.0220, "width": 0.80},
+}
+VISEME_RESPONSE = {
+    "Mouth_Rest": {"shapeFloor": 1.0, "shapeGain": 0.0, "jawGain": 0.00},
+    "Mouth_MBP": {"shapeFloor": 1.0, "shapeGain": 0.0, "jawGain": 0.00},
+    "Mouth_A": {"shapeFloor": 0.72, "shapeGain": 0.28, "jawGain": 0.24},
+    "Mouth_E": {"shapeFloor": 0.68, "shapeGain": 0.25, "jawGain": 0.16},
+    "Mouth_O": {"shapeFloor": 0.75, "shapeGain": 0.25, "jawGain": 0.22},
+    "Mouth_U": {"shapeFloor": 0.72, "shapeGain": 0.24, "jawGain": 0.18},
+}
+RUNTIME_VISEME_MAP = {
+    "a": "Mouth_A",
+    "e": "Mouth_E",
+    "i": "Mouth_E",
+    "o": "Mouth_O",
+    "u": "Mouth_U",
+    "mbp": "Mouth_MBP",
+    "closed": "Mouth_Rest",
+    "rest": "Mouth_Rest",
+}
+MAX_VISEME_SHAPE_STEP = 0.80
 
 
 def read_input() -> dict:
@@ -4340,47 +4367,35 @@ def create_source_mesh_visemes(
         co = object_to_world @ original
         if shape_name == "Mouth_Rest" or weight <= 0.0:
             return original.copy()
+        original_world = co.copy()
         relative_x = float(co.x) - center_x
         normalized_x = max(-1.0, min(1.0, relative_x / max(radius_x, 1e-6)))
         center_weight = max(0.0, 1.0 - abs(normalized_x)) ** 1.45
         corner_weight = abs(normalized_x) ** 1.35
 
         if integrated_topology:
+            displacement = SOURCE_VISEME_DISPLACEMENT.get(shape_name)
+            if displacement:
+                co.x += relative_x * (float(displacement["width"]) - 1.0) * weight
+                co.z += height * float(displacement["upper"]) * upper_weight * center_weight
+                co.z += height * float(displacement["lower"]) * lower_weight * center_weight
             if shape_name == "Mouth_A":
-                co.x -= relative_x * 0.025 * weight
-                co.z += height * 0.0032 * upper_weight * center_weight
-                co.z -= height * 0.0125 * lower_weight * center_weight
                 co.y += depth * 0.0040 * max(upper_weight, lower_weight) * center_weight
-            elif shape_name == "Mouth_E":
-                co.x += math.copysign(
-                    width * 0.0028 * weight * (0.28 + corner_weight * 0.72),
-                    relative_x or 1.0,
-                )
-                co.z += height * 0.0010 * upper_weight * center_weight
-                co.z -= height * 0.0034 * lower_weight * center_weight
             elif shape_name == "Mouth_O":
-                co.x -= relative_x * 0.24 * weight
-                co.z += height * 0.0046 * upper_weight * center_weight
-                co.z -= height * 0.0098 * lower_weight * center_weight
                 co.y += depth * 0.0045 * max(upper_weight, lower_weight) * center_weight
             elif shape_name == "Mouth_U":
-                co.x -= relative_x * 0.34 * weight
-                co.z += height * 0.0034 * upper_weight * center_weight
-                co.z -= height * 0.0072 * lower_weight * center_weight
                 co.y += depth * 0.0035 * max(upper_weight, lower_weight) * center_weight
-            elif shape_name == "Mouth_MBP":
-                co.x -= relative_x * 0.008 * weight
-                co.z += (center_z - float(co.z)) * 0.08 * max(upper_weight, lower_weight) * center_weight
             elif shape_name == "Mouth_Smile":
                 co.x += math.copysign(width * 0.0018 * weight * corner_weight, relative_x or 1.0)
                 co.z += height * 0.0022 * max(upper_weight, lower_weight) * corner_weight
             elif shape_name == "Mouth_Frown":
                 co.z -= height * 0.0038 * weight * (corner_weight - 0.08)
             elif shape_name == "Mouth_Surprise":
-                co.x -= relative_x * 0.36 * weight
-                co.z += height * 0.0060 * upper_weight * center_weight
-                co.z -= height * 0.0140 * lower_weight * center_weight
                 co.y += depth * 0.0050 * max(upper_weight, lower_weight) * center_weight
+            world_displacement = co - original_world
+            maximum_displacement = height * 0.028
+            if world_displacement.length > maximum_displacement:
+                co = original_world + world_displacement.normalized() * maximum_displacement
             return world_to_object @ co
 
         if shape_name == "Mouth_A":
@@ -6230,6 +6245,13 @@ def animate(
         pose[bone_name].scale = (1, 1, 1)
 
     mouth = face.get("mouth")
+    viseme_shape_values = {
+        name: 0.0
+        for name in VISEME_RESPONSE
+        if mouth
+        and mouth.data.shape_keys
+        and mouth.data.shape_keys.key_blocks.get(name)
+    }
 
     def set_bone(role: str, *, location=None, rotation=None) -> None:
         bone_name = bone_map.get(role)
@@ -6551,7 +6573,10 @@ def animate(
                 head_nod += amount * 0.020
         apply_right_hand_stage()
         lip = lip_at(plan, t)
-        mouth_open = float(lip.get("open") or 0)
+        mouth_open = max(0.0, min(1.0, float(lip.get("open") or 0)))
+        viseme = str(lip.get("viseme") or "closed").lower()
+        active_name = RUNTIME_VISEME_MAP.get(viseme, "Mouth_Rest")
+        response = VISEME_RESPONSE[active_name]
         bpy.context.scene.frame_set(frame)
         root_base = base_pose.get("root", {}).get("location", (0.0, 0.0, 0.0))
         body_base = base_pose.get("body", {}).get("rotation", (0.0, 0.0, 0.0))
@@ -6580,7 +6605,7 @@ def animate(
             "head",
             rotation=(head_tilt, head_turn, head_nod) if source_rig else (head_nod, head_turn, head_tilt),
         )
-        set_bone("jaw", rotation=(mouth_open * 0.14, 0, 0))
+        set_bone("jaw", rotation=(mouth_open * response["jawGain"], 0, 0))
         set_bone("eye_l", rotation=(0, eye_gaze, 0))
         set_bone("eye_r", rotation=(0, eye_gaze, 0))
         tongue_wave = math.sin(t * math.pi * 2 * 2.7) * mouth_open
@@ -6717,29 +6742,23 @@ def animate(
 
         if mouth:
             if mouth.data.shape_keys:
-                viseme = str(lip.get("viseme") or "closed").lower()
-                viseme_map = {
-                    "a": "Mouth_A",
-                    "e": "Mouth_E",
-                    "i": "Mouth_E",
-                    "o": "Mouth_O",
-                    "u": "Mouth_U",
-                    "mbp": "Mouth_MBP",
-                    "closed": "Mouth_Rest",
-                    "rest": "Mouth_Rest",
-                }
-                active_name = viseme_map.get(viseme, "Mouth_Rest")
                 key_blocks = mouth.data.shape_keys.key_blocks
-                controlled_names = set(viseme_map.values())
-                for key in key_blocks:
-                    if key.name not in controlled_names:
+                shape_value = min(
+                    1.0,
+                    response["shapeFloor"] + mouth_open * response["shapeGain"],
+                )
+                for shape_name, previous_value in viseme_shape_values.items():
+                    key = key_blocks.get(shape_name)
+                    if not key:
                         continue
-                    key.value = 0.0
+                    target_value = shape_value if shape_name == active_name else 0.0
+                    delta = max(
+                        -MAX_VISEME_SHAPE_STEP,
+                        min(MAX_VISEME_SHAPE_STEP, target_value - previous_value),
+                    )
+                    key.value = max(0.0, min(1.0, previous_value + delta))
+                    viseme_shape_values[shape_name] = key.value
                     key.keyframe_insert(data_path="value", frame=frame)
-                active_key = key_blocks.get(active_name)
-                if active_key:
-                    active_key.value = 1.0 if active_name in {"Mouth_Rest", "Mouth_MBP"} else 0.55 + mouth_open * 0.45
-                    active_key.keyframe_insert(data_path="value", frame=frame)
 
                 if key_blocks.get("Eye_Squint.L") and key_blocks.get("Eye_Squint.R"):
                     squint_amount = max(

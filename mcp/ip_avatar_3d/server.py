@@ -1081,8 +1081,14 @@ def build_motion_plan(
     while t <= duration_sec + 1e-6:
         char = chars[min(len(chars) - 1, int((t / max(duration_sec, 0.001)) * len(chars)))]
         viseme, open_value = _viseme_for_char(char)
-        previous = lip_sync[-1]["open"] if lip_sync else open_value
-        smoothed = previous * 0.35 + open_value * 0.65
+        target = open_value
+        previous = lip_sync[-1]["open"] if lip_sync else target
+        attack = 0.72 if target > previous else 0.58
+        smoothed = previous + (target - previous) * attack
+        if viseme == "mbp":
+            smoothed = min(smoothed, 0.025)
+        elif viseme == "closed":
+            smoothed = min(smoothed, 0.08)
         lip_sync.append({"timeSec": round(t, 3), "viseme": viseme, "open": round(smoothed, 3)})
         t += sample_step
 

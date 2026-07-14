@@ -460,6 +460,35 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         self.assertTrue({"a", "e", "o", "u", "mbp"}.issubset(set(mapped)))
         self.assertLess(mapped.count("a") / len(mapped), 0.65)
 
+    def test_motion_plan_smooths_lip_attack_and_release_over_bounded_samples(self) -> None:
+        server = load_server()
+
+        plan = server.build_motion_plan("maou.", 0.41, 30, action_sequence=[])
+
+        self.assertEqual(
+            [(item["timeSec"], item["viseme"]) for item in plan["lipSync"]],
+            [
+                (0.0, "mbp"),
+                (0.08, "mbp"),
+                (0.16, "a"),
+                (0.24, "o"),
+                (0.32, "u"),
+                (0.4, "closed"),
+            ],
+        )
+        self.assertEqual(
+            [item["open"] for item in plan["lipSync"]],
+            [0.025, 0.025, 0.569, 0.678, 0.528, 0.08],
+        )
+        self.assertLessEqual(plan["lipSync"][0]["open"], 0.025)
+        self.assertTrue(
+            all(
+                item["open"] <= 0.08
+                for item in plan["lipSync"]
+                if item["viseme"] == "closed"
+            )
+        )
+
     def test_motion_plan_uses_extended_presenter_articulation_keywords(self) -> None:
         server = load_server()
 

@@ -653,6 +653,16 @@ def mouth_open_gap(face_mesh, shape_name: str) -> float:
     return max(float(point.z) for point in upper) - min(float(point.z) for point in lower)
 
 
+def mouth_width(face_mesh, shape_name: str) -> float:
+    boundary = shape_key_world_coordinates(
+        face_mesh,
+        shape_name,
+        object_property_indices(face_mesh, "mouth_upper_boundary_indices")
+        + object_property_indices(face_mesh, "mouth_lower_boundary_indices"),
+    )
+    return max(float(point.x) for point in boundary) - min(float(point.x) for point in boundary)
+
+
 def test_rigged_fbx_import_preserves_source_materials_and_removes_scene_helpers() -> None:
     character_objects, _, armature, rig_stats, _, _ = load_enhanced_fbx_character()
 
@@ -894,7 +904,36 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
             for index in corner_indices
         )
         assert lateral_shift <= maximum_corner_shift, (shape_name, lateral_shift, maximum_corner_shift)
-    assert mouth_open_gap(face_mesh, "Mouth_A") > mouth_open_gap(face_mesh, "Mouth_MBP") + dimensions["height"] * 0.003
+    gap_mbp = mouth_open_gap(face_mesh, "Mouth_MBP")
+    gap_rest = mouth_open_gap(face_mesh, "Mouth_Rest")
+    gap_a = mouth_open_gap(face_mesh, "Mouth_A")
+    gap_o = mouth_open_gap(face_mesh, "Mouth_O")
+    gap_u = mouth_open_gap(face_mesh, "Mouth_U")
+    gap_surprise = mouth_open_gap(face_mesh, "Mouth_Surprise")
+    width_e = mouth_width(face_mesh, "Mouth_E")
+    width_o = mouth_width(face_mesh, "Mouth_O")
+    assert gap_mbp <= gap_rest + dimensions["height"] * 0.0015
+    assert gap_a >= gap_mbp + dimensions["height"] * 0.0060
+    assert gap_o >= gap_mbp + dimensions["height"] * 0.0048
+    assert gap_u >= gap_mbp + dimensions["height"] * 0.0036
+    assert gap_surprise >= gap_a + dimensions["height"] * 0.0010
+    assert abs(width_e - width_o) >= dimensions["width"] * 0.012
+    print(
+        "SOURCE_MOUTH_SHAPE_METRICS",
+        json.dumps(
+            {
+                "aGap": gap_a,
+                "eWidth": width_e,
+                "mbpGap": gap_mbp,
+                "oGap": gap_o,
+                "oWidth": width_o,
+                "restGap": gap_rest,
+                "surpriseGap": gap_surprise,
+                "uGap": gap_u,
+            },
+            sort_keys=True,
+        ),
+    )
 
     source_material = next(
         material
@@ -1358,6 +1397,83 @@ def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint(
     assert wrist_out.z * wrist_in.z < 0.0
     assert middle_out_direction.z > 0.45, tuple(middle_out_direction)
     assert middle_in_direction.z > 0.45, tuple(middle_in_direction)
+
+
+def test_rigged_fbx_viseme_timeline_has_strong_jaw_and_bounded_shape_attack() -> None:
+    character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    face = blender_renderer.setup_face(
+        {
+            "characterId": "main_ip_sloth",
+            "faceScreenMode": "source",
+            "mouthMode": "source_mesh_visemes",
+            "mouthHeightRatio": 0.805,
+            "mouthScale": 1.0,
+            "facialDetailMode": "rich",
+            "facialTopologyMode": "source_retopology",
+        },
+        dimensions,
+        armature,
+        character_objects,
+        bone_map,
+    )
+    lip_sync = [
+        {"timeSec": 0.0, "viseme": "mbp", "open": 0.025},
+        {"timeSec": 0.08, "viseme": "a", "open": 0.567},
+        {"timeSec": 0.16, "viseme": "a", "open": 0.95},
+        {"timeSec": 0.24, "viseme": "o", "open": 0.58},
+        {"timeSec": 0.32, "viseme": "o", "open": 0.90},
+        {"timeSec": 0.40, "viseme": "u", "open": 0.58},
+        {"timeSec": 0.48, "viseme": "u", "open": 0.75},
+        {"timeSec": 0.56, "viseme": "rest", "open": 0.08},
+        {"timeSec": 0.64, "viseme": "rest", "open": 0.0},
+    ]
+    plan = {
+        "durationSec": 0.72,
+        "motionEvents": [],
+        "lipSync": lip_sync,
+    }
+
+    blender_renderer.animate(armature, face, plan, fps=30, bone_map=bone_map)
+
+    keys = face["mouth"].data.shape_keys.key_blocks
+    controlled_names = ("Mouth_Rest", "Mouth_MBP", "Mouth_A", "Mouth_O", "Mouth_U")
+    previous = {name: 0.0 for name in controlled_names}
+    jaw_values = []
+    mbp_jaw_values = []
+    maximum_shape_jump = 0.0
+    prohibited_jumps = []
+    for frame in range(1, 22):
+        bpy.context.scene.frame_set(frame)
+        lip = blender_renderer.lip_at(plan, (frame - 1) / 30)
+        jaw = abs(float(armature.pose.bones[bone_map["jaw"]].rotation_euler.x))
+        jaw_values.append(jaw)
+        if lip["viseme"] == "mbp":
+            mbp_jaw_values.append(jaw)
+        for name in controlled_names:
+            current = float(keys[name].value)
+            maximum_shape_jump = max(maximum_shape_jump, current - previous[name])
+            if previous[name] < 0.1 and current > 0.9:
+                prohibited_jumps.append((frame, name, previous[name], current))
+            previous[name] = current
+
+    maximum_jaw = max(jaw_values)
+    maximum_mbp_jaw = max(mbp_jaw_values)
+    print(
+        "VISEME_TIMELINE_METRICS",
+        json.dumps(
+            {
+                "jawMaximumRad": maximum_jaw,
+                "mbpJawMaximumRad": maximum_mbp_jaw,
+                "maximumShapeAttack": maximum_shape_jump,
+                "prohibitedShapeJumps": prohibited_jumps,
+                "sampledFrames": 21,
+            },
+            sort_keys=True,
+        ),
+    )
+    assert 0.20 <= maximum_jaw <= 0.25, maximum_jaw
+    assert maximum_mbp_jaw <= 0.03, maximum_mbp_jaw
+    assert not prohibited_jumps, prohibited_jumps
 
 
 def test_publish_render_detail_is_non_destructive_and_deformation_aware() -> None:
@@ -2782,6 +2898,7 @@ if __name__ == "__main__":
         test_rigged_fbx_gains_three_segment_three_digit_hands_with_valid_weights,
         test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays,
         test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face,
+        test_rigged_fbx_viseme_timeline_has_strong_jaw_and_bounded_shape_attack,
         test_existing_rich_face_without_task6_metadata_fails_closed,
         test_task6_reuse_recomputes_squint_and_pbr_evidence,
         test_task6_reuse_rejects_lateral_active_skin_displacement,
