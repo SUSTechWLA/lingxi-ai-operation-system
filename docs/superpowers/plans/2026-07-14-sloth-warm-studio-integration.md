@@ -40,7 +40,7 @@
 - Consumes: final studio files at codex/warm-sloth-studio.
 - Produces: warm_studio_contract, deterministic builder, validator, QA renderer, and packed empty scene.
 
-- [ ] **Step 1: Verify the source artifacts**
+- [x] **Step 1: Verify the source artifacts**
 
 ~~~bash
 git ls-tree -r --name-only codex/warm-sloth-studio -- mcp/ip_avatar_3d ip形象/main_ip/scenes
@@ -48,7 +48,7 @@ git ls-tree -r --name-only codex/warm-sloth-studio -- mcp/ip_avatar_3d ip形象/
 
 Expected: every file listed above exists on the source branch.
 
-- [ ] **Step 2: Restore only studio-owned files**
+- [x] **Step 2: Restore only studio-owned files**
 
 ~~~bash
 git restore --source=codex/warm-sloth-studio -- \
@@ -63,7 +63,7 @@ git restore --source=codex/warm-sloth-studio -- \
   docs/superpowers/specs/2026-07-13-warm-sloth-studio-design.md
 ~~~
 
-- [ ] **Step 3: Run the imported contract tests**
+- [x] **Step 3: Run the imported contract tests**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/test_warm_studio_contract.py
@@ -71,7 +71,7 @@ python3 mcp/ip_avatar_3d/test_warm_studio_contract.py
 
 Expected: all imported warm studio contract tests pass.
 
-- [ ] **Step 4: Prove current character and voice code is untouched**
+- [x] **Step 4: Prove current character and voice code is untouched**
 
 ~~~bash
 git diff --exit-code HEAD -- ip形象/main_ip/character-profile.json mcp/ip_avatar_3d/server.py mcp/ip_avatar_3d/voice_policy.py
@@ -79,7 +79,7 @@ git diff --exit-code HEAD -- ip形象/main_ip/character-profile.json mcp/ip_avat
 
 Expected: exit code 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add mcp/ip_avatar_3d/warm_* \
@@ -105,7 +105,7 @@ git commit -m "feat: import warm sloth studio assets"
 - Consumes: existing studio collections, cameras, desk, chair, and marker helpers.
 - Produces: PRESENTATION_MODES, MODE_MARKER_SPECS, MODE_CAMERA_SPECS, SUBJECT_LIGHT_PROFILE, and matching Blender objects.
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 ~~~python
 def test_dual_mode_contract_is_explicit(self):
@@ -132,7 +132,7 @@ def test_subject_first_light_profile_is_bounded(self):
     self.assertLessEqual(profile["backgroundStopsBelowFace"], 1.5)
 ~~~
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/test_warm_studio_contract.py
@@ -140,7 +140,7 @@ python3 mcp/ip_avatar_3d/test_warm_studio_contract.py
 
 Expected: missing dual-mode constants.
 
-- [ ] **Step 3: Add the exact pure contract**
+- [x] **Step 3: Add the exact pure contract**
 
 ~~~python
 PRESENTATION_MODES = ("standing", "seated")
@@ -185,7 +185,7 @@ SUBJECT_LIGHT_PROFILE = MappingProxyType({
 })
 ~~~
 
-- [ ] **Step 4: Build all markers and cameras**
+- [x] **Step 4: Build all markers and cameras**
 
 In build_markers_and_cameras, create IP_Standing_Spawn,
 IP_Standing_Focus_Head, IP_Seated_Spawn, IP_Seated_Focus_Head,
@@ -201,7 +201,7 @@ ctx.scene["ip_background_stops_below_face"] = contract.SUBJECT_LIGHT_PROFILE[
 ]
 ~~~
 
-- [ ] **Step 5: Rebuild and validate in Blender**
+- [x] **Step 5: Rebuild and validate in Blender**
 
 ~~~bash
 BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
@@ -217,7 +217,7 @@ BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
 
 Expected: all required objects and cameras exist.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ~~~bash
 git add mcp/ip_avatar_3d/warm_studio_contract.py \
@@ -242,7 +242,7 @@ git commit -m "feat: add standing and seated studio contract"
 - Consumes: presentationMode request and profile render.presentationMode.
 - Produces: normalized mode in render input, dry-run result, render report, and final result.
 
-- [ ] **Step 1: Write failing MCP tests**
+- [x] **Step 1: Write failing MCP tests**
 
 ~~~python
 def test_presentation_mode_is_written_to_render_input(self):
@@ -272,7 +272,7 @@ def test_invalid_presentation_mode_fails(self):
         server.resolve_presentation_mode("crouching")
 ~~~
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ~~~bash
 cd mcp/ip_avatar_3d
@@ -281,7 +281,7 @@ python3 -m unittest test_server.IPAvatar3DMCPTests.test_presentation_mode_is_wri
 
 Expected: missing argument or resolver.
 
-- [ ] **Step 3: Implement normalization**
+- [x] **Step 3: Implement normalization**
 
 ~~~python
 PRESENTATION_MODES = {"auto", "standing", "seated"}
@@ -297,7 +297,7 @@ Add presentationMode: str = "auto" to render_talking_video. Read profile value
 only while the request remains auto. Persist the normalized value in every
 render input/report/result path.
 
-- [ ] **Step 4: Extend bridge serialization coverage**
+- [x] **Step 4: Extend bridge serialization coverage**
 
 Add presentationMode: seated to the local-MCP tool-call fixture, then run:
 
@@ -309,7 +309,7 @@ go test ./internal/localmcp/...
 
 Expected: Python and Go tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add mcp/ip_avatar_3d/server.py mcp/ip_avatar_3d/test_server.py \
@@ -331,7 +331,7 @@ git commit -m "feat: expose A-roll presentation mode"
 - Consumes: normalized presentationMode, semantic bone map, source-rig axis detection.
 - Produces: presentation_pose, Aroll_Seated_Idle, and seated offsets layered below normal speech gestures.
 
-- [ ] **Step 1: Write the failing pure pose test**
+- [x] **Step 1: Write the failing pure pose test**
 
 ~~~python
 def test_seated_pose_moves_only_lower_body_and_root(self):
@@ -347,7 +347,7 @@ def test_seated_pose_moves_only_lower_body_and_root(self):
     self.assertNotIn("hand_r", pose)
 ~~~
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/test_server.py
@@ -355,7 +355,7 @@ python3 mcp/ip_avatar_3d/test_server.py
 
 Expected: presentation_pose is missing.
 
-- [ ] **Step 3: Implement semantic base values**
+- [x] **Step 3: Implement semantic base values**
 
 ~~~python
 def presentation_pose(mode: str, source_rig: bool) -> dict[str, dict[str, tuple[float, float, float]]]:
@@ -387,7 +387,7 @@ Add Aroll_Seated_Idle to the action library. Pass presentation_mode to animate.
 Initialize every frame from the base pose, add speech motion on top, and suppress
 happy_bounce, leg_step, and standing weight_shift while seated.
 
-- [ ] **Step 4: Add Blender pose assertions**
+- [x] **Step 4: Add Blender pose assertions**
 
 Sample standing and seated first/middle/last frames and require pelvis height
 drop greater than 0.20 m, knee angle below 125 degrees, foot-floor clearance
@@ -395,7 +395,7 @@ above -0.02 m, symmetric legs, and preserved upper-body/facial controls. Tune
 the exact constants from Blender evidence and write the accepted values back to
 presentation_pose.
 
-- [ ] **Step 5: Run body and hand regression**
+- [x] **Step 5: Run body and hand regression**
 
 ~~~bash
 BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
@@ -407,7 +407,7 @@ BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
 
 Expected: seated checks and all existing standing/hand checks pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ~~~bash
 git add mcp/ip_avatar_3d/aroll_actions.py mcp/ip_avatar_3d/blender_renderer.py \
@@ -428,13 +428,13 @@ git commit -m "feat: add seated A-roll base action"
 - Consumes: presentationMode, mode markers/cameras, character dimensions, semantic bones.
 - Produces: resolve_scene_mode_objects, mode-aware placement/focus/camera cuts, and clearance JSON.
 
-- [ ] **Step 1: Write failing Blender mode-resolution tests**
+- [x] **Step 1: Write failing Blender mode-resolution tests**
 
 Require standing spawn IP_Standing_Spawn, seated spawn IP_Seated_Spawn,
 seated focus IP_Seated_Focus_Head, and seated medium camera
 Camera_Seated_Medium.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ~~~bash
 /Applications/Blender.app/Contents/MacOS/Blender --background \
@@ -444,7 +444,7 @@ Camera_Seated_Medium.
 
 Expected: mode resolver is missing.
 
-- [ ] **Step 3: Implement mode-aware scene resolution**
+- [x] **Step 3: Implement mode-aware scene resolution**
 
 ~~~python
 def resolve_scene_mode_objects(mode: str) -> dict[str, Any]:
@@ -473,7 +473,7 @@ Use selected spawn in scene_target_height and character placement, selected
 focus for DOF, and selected cameras for timeline cuts. Persist marker names,
 camera names, mode, and world bounds in scene_stats.
 
-- [ ] **Step 4: Implement deterministic clearance validation**
+- [x] **Step 4: Implement deterministic clearance validation**
 
 validate_warm_studio_character.py must sample both modes and write mode,
 sampleCount, left/right floor clearance, desk/chair/hand intersection counts,
@@ -481,11 +481,11 @@ deformationSpikeCount, cameraVisibility, and success. Fail when feet are more
 than 0.02 m below the floor, visible sampled geometry intersects desk/chair,
 deformation spikes occur, or the head and both hands are outside medium frame.
 
-- [ ] **Step 5: Run both-mode validation**
+- [x] **Step 5: Run both-mode validation**
 
 Expected: standing and seated reports both contain success true.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ~~~bash
 git add mcp/ip_avatar_3d/blender_renderer.py \
@@ -510,13 +510,13 @@ git commit -m "feat: place sloth in warm studio by presentation mode"
 - Consumes: SUBJECT_LIGHT_PROFILE and both head-focus markers.
 - Produces: named subject key/fill/rim lights and luminance evidence.
 
-- [ ] **Step 1: Write failing light assertions**
+- [x] **Step 1: Write failing light assertions**
 
 Require IP_Subject_Key role key, IP_Subject_Fill role fill,
 IP_Subject_Rim role rim, scene profile warm_subject_first_v1, and AgX Medium
 High Contrast.
 
-- [ ] **Step 2: Build the subject light rig**
+- [x] **Step 2: Build the subject light rig**
 
 Create a broad 4500 K camera-left key at energy 520, neutral 5200 K fill at
 energy 115, and 3200 K rear rim at energy 260. Aim key/fill at standing focus
@@ -524,20 +524,20 @@ with an area size broad enough for seated focus. Preserve 2700 K practicals,
 set world strength to 0.12, start exposure at -0.6, and reduce room/window
 sources before touching character materials.
 
-- [ ] **Step 3: Add image evidence**
+- [x] **Step 3: Add image evidence**
 
 Render standing medium, seated medium, and empty-room control stills. Measure
 linear face and background luminance, backgroundStopsBelowFace, and
 highlightClipRatio. Accept separation 1.0 to 1.5 stops and clipped non-catchlight
 pixels below 0.5 percent.
 
-- [ ] **Step 4: Rebuild and visually inspect**
+- [x] **Step 4: Rebuild and visually inspect**
 
 Inspect both modes at medium, three-quarter, and wide in Eevee, plus Cycles
 medium comparison. Tune only authored light energy, world strength, exposure,
 and framing until numeric and visual gates pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add mcp/ip_avatar_3d/warm_sloth_studio_builder.py \
@@ -563,7 +563,7 @@ git commit -m "feat: calibrate warm studio for sloth A-roll"
 - Consumes: packed integrated studio and presentationMode.
 - Produces: canonical warm-studio profile while preserving 1080p and GPT-SoVITS.
 
-- [ ] **Step 1: Write a profile regression test**
+- [x] **Step 1: Write a profile regression test**
 
 ~~~python
 def test_main_profile_uses_warm_studio_without_regression(self):
@@ -582,22 +582,22 @@ def test_main_profile_uses_warm_studio_without_regression(self):
     self.assertEqual(voice["fallbackPolicy"], "error")
 ~~~
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Expected: profile still points at editorial-news-studio.blend.
 
-- [ ] **Step 3: Update only intended render fields**
+- [x] **Step 3: Update only intended render fields**
 
 Set sceneBlendPath to scenes/warm-sloth-studio-v1.blend, presentationMode to
 standing, lightingPreset to editorial_soft, renderEngine to
 BLENDER_EEVEE_NEXT, and qualityPreset to production_1080p. Do not change model,
 facial, or voice.gptSovitsLocal fields.
 
-- [ ] **Step 4: Add direct standing/seated MCP examples**
+- [x] **Step 4: Add direct standing/seated MCP examples**
 
 Document identical requests differing only by presentationMode.
 
-- [ ] **Step 5: Run regressions**
+- [x] **Step 5: Run regressions**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/test_warm_studio_contract.py
@@ -608,7 +608,7 @@ python3 mcp/ip_avatar_3d/test_server.py
 
 Expected: all pass with no voice fallback.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ~~~bash
 git add ip形象/main_ip/character-profile.json \
@@ -629,7 +629,7 @@ git commit -m "feat: activate warm studio for main IP A-roll"
 - Consumes: server.render_talking_video, canonical profile, packed studio, permanent voice.
 - Produces: standing demo, seated demo, combined reel, contact sheets, lighting comparison, report.
 
-- [ ] **Step 1: Write failing orchestration tests**
+- [x] **Step 1: Write failing orchestration tests**
 
 Mock render_talking_video and assert exactly two calls with modes standing and
 seated and common values width 1920, height 1080, fps 30, quality preset
@@ -637,7 +637,7 @@ production_1080p, render mode production, provider gpt_sovits_local, voice ID
 main_ip_warm_knowledge_host_v1, and fallback policy error. Assert a failed QA
 never publishes a final file.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/test_warm_studio_demo.py
@@ -645,7 +645,7 @@ python3 mcp/ip_avatar_3d/test_warm_studio_demo.py
 
 Expected: module missing.
 
-- [ ] **Step 3: Implement deterministic demo scripts**
+- [x] **Step 3: Implement deterministic demo scripts**
 
 ~~~python
 STANDING_SCRIPT = (
@@ -663,14 +663,14 @@ Render each mode into staging, run existing media/audio probes, then atomically
 publish its MP4. Build the combined reel with FFmpeg at 1920x1080/30 fps.
 Generate one 4x3 contact sheet per mode and one side-by-side lighting comparison.
 
-- [ ] **Step 4: Persist provenance**
+- [x] **Step 4: Persist provenance**
 
 Write Sloth_WarmStudio_Integration_Report.json with success, character and
 studio paths/hashes, full voice provenance, mode QA, combined-reel QA, lighting
 measurements, and collision report paths. Exit nonzero and leave final outputs
 absent on any failed gate.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/test_warm_studio_demo.py
@@ -679,7 +679,7 @@ python3 mcp/ip_avatar_3d/test_server.py
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ~~~bash
 git add mcp/ip_avatar_3d/render_warm_studio_demo.py \
@@ -706,7 +706,7 @@ git commit -m "feat: render standing and seated warm studio demos"
 - Consumes: complete dual-mode pipeline and local production voice service.
 - Produces: final demos, evidence, and closure report.
 
-- [ ] **Step 1: Copy canonical untracked assets into the isolated worktree**
+- [x] **Step 1: Copy canonical untracked assets into the isolated worktree**
 
 ~~~bash
 mkdir -p ip形象/main_ip/models ip形象/main_ip/voice/reference
@@ -720,12 +720,12 @@ cp -p /Users/wanglian/Projects/tangying-ai-operation-system/ip形象/main_ip/voi
 
 Verify source and copy SHA-256 values match.
 
-- [ ] **Step 2: Run production voice preflight**
+- [x] **Step 2: Run production voice preflight**
 
 Call check_gpt_sovits_voice using the canonical profile. Require bundleReady
 true, matching reference/GPT/SoVITS hashes, and loopback endpoint availability.
 
-- [ ] **Step 3: Render demos**
+- [x] **Step 3: Render demos**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/render_warm_studio_demo.py \
@@ -735,20 +735,20 @@ python3 mcp/ip_avatar_3d/render_warm_studio_demo.py \
 
 Expected: all seven outputs exist and report success is true.
 
-- [ ] **Step 4: Run media QA**
+- [x] **Step 4: Run media QA**
 
 For every MP4 require H.264 1920x1080 at 30/1, AAC 48000 Hz mono, expected
 duration within 0.1 seconds, zero unintended adjacent duplicate frames, decoded
 audio at -16 plus or minus 0.5 LUFS, and true peak no higher than -1.5 dBTP.
 
-- [ ] **Step 5: Perform visual review**
+- [x] **Step 5: Perform visual review**
 
 Inspect greeting, explain, emphasis, neutral, and closing frames in both modes.
 Reject desk/chair/body intersections, floating or buried feet, clipped face or
 cardigan, background brighter than face, unnatural rim color, soft eyes/mouth/
 hands, unbalanced posture, or mechanically mirrored gestures.
 
-- [ ] **Step 6: Run full regression**
+- [x] **Step 6: Run full regression**
 
 ~~~bash
 python3 mcp/ip_avatar_3d/test_warm_studio_contract.py
@@ -765,14 +765,14 @@ python3 mcp/ip_avatar_3d/test_server.py
 
 Expected: all Python, Go, Blender, scene, hand, voice, and demo checks pass.
 
-- [ ] **Step 7: Write closure evidence and check plan items**
+- [x] **Step 7: Write closure evidence and check plan items**
 
 Record exact test counts, asset/output hashes, probes, loudness, collisions,
 lighting measurements, and accepted limitations in
 .superpowers/sdd/sloth-warm-studio-integration-report.md. Change each completed
 checkbox only after evidence exists.
 
-- [ ] **Step 8: Commit tracked closure evidence**
+- [x] **Step 8: Commit tracked closure evidence**
 
 ~~~bash
 git add -u
