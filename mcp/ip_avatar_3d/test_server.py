@@ -467,6 +467,88 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertTrue(pathlib.Path(result["renderInputPath"]).exists())
             self.assertTrue(pathlib.Path(result["renderReportPath"]).exists())
 
+    def test_presentation_mode_is_written_to_render_input_and_dry_run_outputs(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "avatar.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            result = server.render_talking_video(
+                script="坐姿口播测试。",
+                modelPath=str(model),
+                outputDir=str(root / "out"),
+                presentationMode="seated",
+                dryRun=True,
+            )
+
+            render_input = json.loads(pathlib.Path(result["renderInputPath"]).read_text(encoding="utf-8"))
+            report = json.loads(pathlib.Path(result["renderReportPath"]).read_text(encoding="utf-8"))
+            self.assertEqual(render_input["presentationMode"], "seated")
+            self.assertEqual(report["presentationMode"], "seated")
+            self.assertEqual(result["presentationMode"], "seated")
+
+    def test_auto_presentation_mode_defaults_to_standing(self) -> None:
+        server = load_server()
+
+        self.assertEqual(server.resolve_presentation_mode("auto"), "standing")
+
+    def test_profile_presentation_mode_is_used_only_for_auto_request(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "avatar.glb"
+            profile = root / "character-profile.json"
+            model.write_bytes(b"glTF placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "model": {"path": "avatar.glb"},
+                        "render": {"presentationMode": "seated"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            auto_result = server.render_talking_video(
+                script="从 profile 解析坐姿。",
+                characterProfilePath=str(profile),
+                outputDir=str(root / "auto"),
+                dryRun=True,
+            )
+            explicit_result = server.render_talking_video(
+                script="显式请求站姿。",
+                characterProfilePath=str(profile),
+                outputDir=str(root / "explicit"),
+                presentationMode="standing",
+                dryRun=True,
+            )
+
+            self.assertEqual(auto_result["presentationMode"], "seated")
+            self.assertEqual(explicit_result["presentationMode"], "standing")
+
+    def test_invalid_presentation_mode_fails_before_audio(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "avatar.glb"
+            model.write_bytes(b"glTF placeholder")
+
+            with mock.patch.object(server, "ensure_audio") as ensure_audio, self.assertRaisesRegex(
+                ValueError, "presentationMode"
+            ):
+                server.render_talking_video(
+                    script="非法模式不应开始音频合成。",
+                    modelPath=str(model),
+                    outputDir=str(root / "out"),
+                    presentationMode="crouching",
+                    voiceProvider="apple",
+                    voiceId="Eddy (中文（中国大陆）)",
+                )
+
+            ensure_audio.assert_not_called()
+
     def test_omitted_render_mode_is_safely_treated_as_preview(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:
@@ -763,6 +845,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                     voiceProvider="heygen",
                     voiceId=voice_id,
                     fallbackPolicy="error",
+                    presentationMode="seated",
                     dryRun=False,
                 )
 
@@ -775,9 +858,12 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(result["durationSec"], 2.25)
             self.assertEqual(captured_render_input["durationSec"], 2.25)
             self.assertEqual(captured_render_input["motionPlan"]["durationSec"], 2.25)
+            self.assertEqual(captured_render_input["presentationMode"], "seated")
             report = json.loads((root / "out" / "render_report.json").read_text(encoding="utf-8"))
             self.assertEqual(report["voice"]["provider"], "heygen")
             self.assertEqual(report["qa"]["finalAudioLoudness"]["truePeakDbtp"], -2.0)
+            self.assertEqual(report["presentationMode"], "seated")
+            self.assertEqual(result["presentationMode"], "seated")
 
     def test_production_removes_encoded_video_when_final_audio_gate_fails(self) -> None:
         server = load_server()

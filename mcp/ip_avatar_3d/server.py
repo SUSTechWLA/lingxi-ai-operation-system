@@ -79,6 +79,7 @@ QUALITY_PRESETS = {
     "production_2k": {"eeveeSamples": 64, "cyclesSamples": 96, "videoCrf": 16, "videoPreset": "slow"},
     "master": {"eeveeSamples": 256, "cyclesSamples": 192, "videoCrf": 12, "videoPreset": "slow"},
 }
+PRESENTATION_MODES = {"auto", "standing", "seated"}
 VOICE_AUDITION_PROVIDER = "heygen"
 VOICE_AUDITION_LABELS = ("A", "B", "C")
 VOICE_AUDITION_MANIFEST_SCHEMA = "ip-avatar-voice-auditions/v1"
@@ -2343,6 +2344,13 @@ def _voice_policy_metadata(
     return state
 
 
+def resolve_presentation_mode(value: str) -> str:
+    selected = str(value or "auto").strip().lower()
+    if selected not in PRESENTATION_MODES:
+        raise ValueError("presentationMode must be one of: auto, seated, standing")
+    return "standing" if selected == "auto" else selected
+
+
 @mcp.tool()
 def render_talking_video(
     script: str,
@@ -2389,6 +2397,7 @@ def render_talking_video(
     dryRun: bool = False,
     renderMode: str = "",
     fallbackPolicy: str = "",
+    presentationMode: str = "auto",
 ) -> dict[str, Any]:
     """Render a talking IP video layer from narration text and a local GLB/GLTF/FBX model."""
     profile_path: Path | None = None
@@ -2458,6 +2467,8 @@ def render_talking_video(
             transparent = bool(render_config.get("transparent", transparent))
         if blenderTimeoutSec <= 0:
             blenderTimeoutSec = int(render_config.get("blenderTimeoutSec") or 0)
+        if str(presentationMode or "auto").strip().lower() == "auto":
+            presentationMode = str(render_config.get("presentationMode") or presentationMode)
         if not renderMode:
             renderMode = str(voice_config.get("renderMode") or renderMode)
         profile_render_mode = str(renderMode or "preview").strip().lower()
@@ -2485,6 +2496,8 @@ def render_talking_video(
             fallbackPolicy = str(
                 selected_voice_config.get("fallbackPolicy") or voice_config.get("fallbackPolicy") or fallbackPolicy
             )
+
+    presentation_mode = resolve_presentation_mode(presentationMode)
 
     use_master_asset = False
     if master_configured:
@@ -2746,6 +2759,7 @@ def render_talking_video(
         "fps": fps,
         "resolution": {"width": width, "height": height},
         "transparent": effective_transparent,
+        "presentationMode": presentation_mode,
         "cameraPreset": camera_preset,
         "cameraPlan": camera_plan,
         "lightingPreset": lighting_preset,
@@ -2789,6 +2803,7 @@ def render_talking_video(
             "motionPlanGenerated": plan_path.exists(),
             "subtitleGenerated": subtitle_out.exists(),
             "blenderRequired": True,
+            "presentationMode": presentation_mode,
             "voicePolicy": voice_policy,
         }
         _write_json(report_path, report)
@@ -2801,6 +2816,7 @@ def render_talking_video(
             "characterId": characterId,
             "shotId": shotId,
             "durationSec": duration,
+            "presentationMode": presentation_mode,
             "modelPath": str(model_path) if model_path else "",
             "masterBlendPath": master_blend_path,
             "sceneBlendPath": resolved_scene,
@@ -2876,6 +2892,7 @@ def render_talking_video(
         "success": video_path.exists(),
         "qa": qa,
         "renderInputPath": str(render_input_path),
+        "presentationMode": presentation_mode,
         "voicePolicy": voice_policy,
         "voice": audio_metadata,
         "audioSource": audioSource,
@@ -2891,6 +2908,7 @@ def render_talking_video(
         "characterId": characterId,
         "shotId": shotId,
         "durationSec": duration,
+        "presentationMode": presentation_mode,
         "videoPath": str(video_path),
         "localPath": str(video_path),
         "mediaPath": str(video_path),

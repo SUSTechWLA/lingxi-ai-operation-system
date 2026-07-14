@@ -118,7 +118,7 @@ func TestClientCallToolRejectsDisabledToolBeforeProviderCall(t *testing.T) {
 	}
 }
 
-func TestClientCallsToolViaJSONRPC(t *testing.T) {
+func TestClientSerializesPresentationModeViaJSONRPC(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -131,15 +131,15 @@ func TestClientCallsToolViaJSONRPC(t *testing.T) {
 		if !ok {
 			t.Fatalf("params type = %T, want map", req.Params)
 		}
-		if params["name"] != "jimeng.generate_image" {
-			t.Fatalf("tool name = %v, want jimeng.generate_image", params["name"])
+		if params["name"] != "ip_avatar_3d.render_talking_video" {
+			t.Fatalf("tool name = %v, want ip_avatar_3d.render_talking_video", params["name"])
 		}
 		arguments, ok := params["arguments"].(map[string]interface{})
 		if !ok {
 			t.Fatalf("arguments type = %T, want map", params["arguments"])
 		}
-		if arguments["prompt"] != "cinematic cat" {
-			t.Fatalf("prompt = %v, want cinematic cat", arguments["prompt"])
+		if arguments["presentationMode"] != "seated" {
+			t.Fatalf("presentationMode = %v, want seated", arguments["presentationMode"])
 		}
 		_ = json.NewEncoder(w).Encode(rpcResponse{
 			JSONRPC: "2.0",
@@ -157,8 +157,8 @@ func TestClientCallsToolViaJSONRPC(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(ProviderConfig{ID: "jimeng", Endpoint: server.URL, Enabled: true}, server.Client())
-	result, err := client.CallTool(context.Background(), "jimeng.generate_image", map[string]interface{}{"prompt": "cinematic cat"})
+	client := NewClient(ProviderConfig{ID: "ip_avatar_3d", Endpoint: server.URL, Enabled: true}, server.Client())
+	result, err := client.CallTool(context.Background(), "ip_avatar_3d.render_talking_video", map[string]interface{}{"presentationMode": "seated"})
 	if err != nil {
 		t.Fatalf("CallTool returned error: %v", err)
 	}
