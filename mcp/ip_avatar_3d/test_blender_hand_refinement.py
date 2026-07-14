@@ -34,6 +34,7 @@ MINIMUM_RING_VERTICES = 4
 MINIMUM_RING_SPAN_RATIO = 0.015
 MINIMUM_RING_AREA_RATIO = 0.000025
 AROLL_ACTIONS = {
+    "Aroll_Seated_Idle",
     "Aroll_Idle_Listening",
     "Aroll_Greeting_Wave",
     "Aroll_OpenPalm_Explain",
@@ -88,7 +89,7 @@ def test_aroll_qa_sample_contract_is_complete_and_squint_only() -> None:
     }
     assert not any("blink" in sample.path.lower() for sample in samples)
     assert render_aroll_master_qa.FACE_CAPABILITY == "squint_only"
-    assert len(samples) == 52
+    assert len(samples) == 54
 
 
 def _fixture_look_at(obj, target) -> None:
@@ -345,7 +346,7 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
         }
         assert report["lighting"]["preset"] == "qa_editorial_soft"
         assert report["lighting"]["lightCount"] >= 3
-        assert len(report["samples"]) == 52
+        assert len(report["samples"]) == 54
         assert all(
             {"action", "camera", "path", "boneRotations", "fingertipDisplacementRatios"}
             <= set(sample)
@@ -1016,7 +1017,11 @@ def test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage() -> No
             if role not in bone_map:
                 continue
             rotation = armature.pose.bones[bone_map[role]].rotation_euler
-            assert max(abs(value) for value in rotation) < 1e-6, (action_name, role, tuple(rotation))
+            magnitude = max(abs(value) for value in rotation)
+            if action_name == "Aroll_Seated_Idle":
+                assert magnitude > 0.04, (action_name, role, tuple(rotation))
+            else:
+                assert magnitude < 1e-6, (action_name, role, tuple(rotation))
 
         for side in safe_stage_actions.get(action_name, ()):
             hand = pose_bone_world_head(armature, bone_map, f"hand_{side}")

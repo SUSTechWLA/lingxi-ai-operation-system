@@ -80,6 +80,7 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
 }
 
 AROLL_ACTIONS: tuple[str, ...] = (
+    "Aroll_Seated_Idle",
     "Aroll_Idle_Listening",
     "Aroll_Greeting_Wave",
     "Aroll_OpenPalm_Explain",
@@ -97,6 +98,35 @@ AROLL_ACTIONS: tuple[str, ...] = (
     "Aroll_Disagree_Shake",
     "Aroll_Transition_Reset",
 )
+
+
+def presentation_pose(mode: str, source_rig: bool) -> dict[str, dict[str, tuple[float, float, float]]]:
+    selected = str(mode or "standing").strip().lower()
+    if selected == "standing":
+        return {}
+    if selected != "seated":
+        raise ValueError(f"unsupported presentation mode: {mode}")
+    if source_rig:
+        leg_l = (0.0, 0.0, 1.35)
+        leg_r = (0.05, 0.197, -1.30)
+        shin_l = (0.0, 0.0, -1.55)
+        shin_r = (-0.047, -0.0595, 1.52)
+        foot_l = (0.0, 0.0, 0.05)
+        foot_r = (-0.07175, -0.2125, -0.02)
+    else:
+        leg_l = leg_r = (1.02, 0.0, 0.0)
+        shin_l = shin_r = (-1.16, 0.0, 0.0)
+        foot_l = foot_r = (0.18, 0.0, 0.0)
+    return {
+        "root": {"location": (0.0, 0.12, -0.34)},
+        "body": {"rotation": (0.08, 0.0, 0.0)},
+        "leg_l": {"rotation": leg_l},
+        "shin_l": {"rotation": shin_l},
+        "foot_l": {"rotation": foot_l},
+        "leg_r": {"rotation": leg_r},
+        "shin_r": {"rotation": shin_r},
+        "foot_r": {"rotation": foot_r},
+    }
 
 
 def hand_pose(name: str) -> Mapping[int, DigitPose]:
@@ -361,6 +391,9 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         idle_pose = {"body": (0.0, 0.0, 0.014), "head": (0.014, 0.0, -0.010)}
 
     specs: dict[str, ActionSpec] = {
+        "Aroll_Seated_Idle": [
+            (frame, presentation_pose("seated", source_rig)) for frame in frames
+        ],
         "Aroll_Idle_Listening": _five_phase(frames, idle_anticipation, idle_pose),
         "Aroll_Greeting_Wave": [
             (1, {}),

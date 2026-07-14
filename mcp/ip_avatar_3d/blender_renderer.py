@@ -4926,6 +4926,16 @@ def uses_source_humanoid_axes(armature: bpy.types.Object) -> bool:
     return all(any(name.endswith(suffix) for name in normalized) for suffix in source_limb_suffixes)
 
 
+def source_root_location_from_world(
+    armature: bpy.types.Object,
+    root_bone: bpy.types.PoseBone,
+    world_offset: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    mapping = armature.matrix_world.to_3x3() @ root_bone.bone.matrix_local.to_3x3()
+    local_offset = mapping.inverted_safe() @ Vector(world_offset)
+    return tuple(float(value) for value in local_offset)
+
+
 def _clear_action_channels(action: bpy.types.Action) -> None:
     """Clear keyframe data while preserving one canonical Action datablock."""
     fcurves = getattr(action, "fcurves", None)
@@ -4984,11 +4994,14 @@ def animate(
     bone_map: dict[str, str],
     *,
     runtime_actions_prepared: bool = False,
+    presentation_mode: str = "standing",
 ) -> None:
     events = plan.get("motionEvents") or []
     frame_end = max(1, int(float(plan.get("durationSec") or 1) * fps))
     pose = armature.pose.bones
     source_rig = uses_source_humanoid_axes(armature)
+    base_pose = aroll_actions.presentation_pose(presentation_mode, source_rig)
+    seated = bool(base_pose)
     if not runtime_actions_prepared:
         reconcile_runtime_timeline_actions(armature, face)
     if armature.animation_data:
@@ -5041,7 +5054,7 @@ def animate(
         hand_right = [0.0, -0.04, 0.025]
         digit_poses_left = dict(aroll_actions.hand_pose("relaxed_hand"))
         digit_poses_right = dict(aroll_actions.hand_pose("relaxed_hand"))
-        leg_left = math.sin(t * math.pi * 2 * 0.24) * 0.035
+        leg_left = 0.0 if seated else math.sin(t * math.pi * 2 * 0.24) * 0.035
         leg_right = -leg_left
         right_hand_stage = 0.0
 
@@ -5086,6 +5099,8 @@ def animate(
                 fore_left[1] += amount * 0.10
                 fore_right[1] -= amount * 0.10
             elif motion == "happy_bounce":
+                if seated:
+                    continue
                 root_lift += amount * 0.07
                 leg_left -= amount * 0.035
                 leg_right += amount * 0.035
@@ -5233,11 +5248,15 @@ def animate(
                 hand_right[2] += amount * 0.09
                 head_tilt += amount * 0.08
             elif motion == "leg_step":
+                if seated:
+                    continue
                 step = math.sin(t * 17.0) * amount * 0.11
                 leg_left += step
                 leg_right -= step * 0.72
                 root_lift += amount * 0.012
             elif motion == "weight_shift":
+                if seated:
+                    continue
                 direction = -1.0 if float(event.get("direction") or 1.0) < 0 else 1.0
                 root_side += direction * amount * 0.075
                 body_sway += direction * amount * 0.055
@@ -5288,8 +5307,23 @@ def animate(
         lip = lip_at(plan, t)
         mouth_open = float(lip.get("open") or 0)
         bpy.context.scene.frame_set(frame)
-        set_bone("root", location=(root_side, 0, root_lift))
-        set_bone("body", rotation=(0, 0, body_sway))
+        root_base = base_pose.get("root", {}).get("location", (0.0, 0.0, 0.0))
+        body_base = base_pose.get("body", {}).get("rotation", (0.0, 0.0, 0.0))
+        root_world = (root_base[0] + root_side, root_base[1], root_base[2] + root_lift)
+        root_name = bone_map.get("root")
+        root_location = (
+            source_root_location_from_world(armature, pose[root_name], root_world)
+            if source_rig and root_name and root_name in pose
+            else root_world
+        )
+        set_bone(
+            "root",
+            location=root_location,
+        )
+        set_bone(
+            "body",
+            rotation=(body_base[0], body_base[1], body_base[2] + body_sway),
+        )
         set_bone("spine", rotation=(body_sway * 0.22, 0, body_sway * 0.38))
         set_bone("chest", rotation=(-body_sway * 0.18, 0, body_sway * 0.46))
         set_bone(
@@ -5314,19 +5348,29 @@ def animate(
         set_bone("hand_r", rotation=hand_right)
         apply_hand_pose(pose, bone_map, "r", digit_poses_right)
         if source_rig:
-            set_bone("leg_l", rotation=(0, 0, leg_left))
-            set_bone("shin_l", rotation=(0, 0, -leg_left * 0.34))
-            set_bone("foot_l", rotation=(0, 0, leg_left * 0.16))
-            set_bone("leg_r", rotation=(0, 0, -leg_right))
-            set_bone("shin_r", rotation=(0, 0, leg_right * 0.34))
-            set_bone("foot_r", rotation=(0, 0, -leg_right * 0.16))
+            lower_motion = {
+                "leg_l": (0.0, 0.0, leg_left),
+                "shin_l": (0.0, 0.0, -leg_left * 0.34),
+                "foot_l": (0.0, 0.0, leg_left * 0.16),
+                "leg_r": (0.0, 0.0, -leg_right),
+                "shin_r": (0.0, 0.0, leg_right * 0.34),
+                "foot_r": (0.0, 0.0, -leg_right * 0.16),
+            }
         else:
-            set_bone("leg_l", rotation=(leg_left, 0, 0))
-            set_bone("shin_l", rotation=(-leg_left * 0.34, 0, 0))
-            set_bone("foot_l", rotation=(leg_left * 0.16, 0, 0))
-            set_bone("leg_r", rotation=(leg_right, 0, 0))
-            set_bone("shin_r", rotation=(-leg_right * 0.34, 0, 0))
-            set_bone("foot_r", rotation=(leg_right * 0.16, 0, 0))
+            lower_motion = {
+                "leg_l": (leg_left, 0.0, 0.0),
+                "shin_l": (-leg_left * 0.34, 0.0, 0.0),
+                "foot_l": (leg_left * 0.16, 0.0, 0.0),
+                "leg_r": (leg_right, 0.0, 0.0),
+                "shin_r": (-leg_right * 0.34, 0.0, 0.0),
+                "foot_r": (leg_right * 0.16, 0.0, 0.0),
+            }
+        for role, motion_rotation in lower_motion.items():
+            base_rotation = base_pose.get(role, {}).get("rotation", (0.0, 0.0, 0.0))
+            set_bone(
+                role,
+                rotation=tuple(base_rotation[index] + motion_rotation[index] for index in range(3)),
+            )
         for bone_name in animated_bones:
             bone = pose[bone_name]
             bone.keyframe_insert(data_path="location", frame=frame)
@@ -5517,7 +5561,21 @@ def create_action_library(
                     continue
                 bone_name = bone_map.get(role)
                 if bone_name and bone_name in pose_bones:
-                    pose_bones[bone_name].rotation_euler = semantic_pose_rotation(role, rotation)
+                    if isinstance(rotation, dict):
+                        if "location" in rotation:
+                            pose_bones[bone_name].location = (
+                                source_root_location_from_world(
+                                    armature, pose_bones[bone_name], rotation["location"]
+                                )
+                                if source_rig and role == "root"
+                                else rotation["location"]
+                            )
+                        if "rotation" in rotation:
+                            pose_bones[bone_name].rotation_euler = semantic_pose_rotation(
+                                role, rotation["rotation"]
+                            )
+                    else:
+                        pose_bones[bone_name].rotation_euler = semantic_pose_rotation(role, rotation)
             marked_sides: set[str] = set()
             for role, pose_name in rotations.items():
                 if not role.startswith("__digit_pose_"):
@@ -6116,6 +6174,7 @@ def main() -> None:
         int(data["fps"]),
         bone_map,
         runtime_actions_prepared=True,
+        presentation_mode=str(data.get("presentationMode") or "standing"),
     )
     rig_stats["actionLibrary"] = create_action_library(armature, face, bone_map, int(data["fps"]))
     if bool(data.get("prepareMaster")):

@@ -87,6 +87,36 @@ def hand_relative_digit_length(armature, bone_map, side: str, digit: int) -> flo
     return length
 
 
+def bone_world_point(armature, pose_bone, point: str):
+    return armature.matrix_world @ getattr(pose_bone, point)
+
+
+def lower_body_world_metrics(armature, bone_map) -> dict[str, object]:
+    hips = {}
+    knees = {}
+    ankles = {}
+    feet = {}
+    knee_angles = {}
+    for side in ("l", "r"):
+        leg = armature.pose.bones[bone_map[f"leg_{side}"]]
+        shin = armature.pose.bones[bone_map[f"shin_{side}"]]
+        foot = armature.pose.bones[bone_map[f"foot_{side}"]]
+        hips[side] = bone_world_point(armature, leg, "head")
+        knees[side] = bone_world_point(armature, leg, "tail")
+        ankles[side] = bone_world_point(armature, shin, "tail")
+        feet[side] = bone_world_point(armature, foot, "tail")
+        knee_angles[side] = math.degrees(
+            (hips[side] - knees[side]).angle(ankles[side] - knees[side])
+        )
+    pelvis = (hips["l"] + hips["r"]) * 0.5
+    return {
+        "pelvis": tuple(float(value) for value in pelvis),
+        "knees": {side: tuple(float(value) for value in knees[side]) for side in ("l", "r")},
+        "feet": {side: tuple(float(value) for value in feet[side]) for side in ("l", "r")},
+        "kneeAngles": knee_angles,
+    }
+
+
 def object_property_indices(obj, name: str) -> list[int]:
     value = obj.get(name)
     assert isinstance(value, str) and value, name
@@ -1445,6 +1475,7 @@ def test_action_library_contains_talking_gestures_and_expressions() -> None:
         "Expression_Surprised",
         "Expression_Confused",
         "Expression_Serious",
+        "Aroll_Seated_Idle",
     }
     assert expected.issubset(set(report["actions"]))
 
@@ -1461,6 +1492,107 @@ def test_action_library_contains_talking_gestures_and_expressions() -> None:
     assert all(abs(finger.z) < 0.04 for finger in fingers)
     assert fingers[0].x > 0.10
     assert fingers[2].x < -0.10
+
+
+def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_controls() -> None:
+    character_objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    face = blender_renderer.setup_face(
+        {
+            "characterId": "main_ip_sloth",
+            "faceScreenMode": "source",
+            "mouthMode": "source_mesh_visemes",
+            "mouthHeightRatio": 0.805,
+            "mouthScale": 1.0,
+            "facialDetailMode": "rich",
+            "facialTopologyMode": "source_retopology",
+        },
+        dimensions,
+        armature,
+        character_objects,
+        bone_map,
+    )
+    plan = {
+        "durationSec": 1.0,
+        "motionEvents": [
+            {"timeSec": 0.0, "motion": "nod", "duration": 1.0, "strength": 0.9},
+            {"timeSec": 0.0, "motion": "wrist_twist", "duration": 1.0, "strength": 0.9},
+            {"timeSec": 0.0, "motion": "finger_wave", "duration": 1.0, "strength": 0.9},
+            {"timeSec": 0.0, "motion": "happy_bounce", "duration": 1.0, "strength": 1.0},
+            {"timeSec": 0.0, "motion": "leg_step", "duration": 1.0, "strength": 1.0},
+            {"timeSec": 0.0, "motion": "weight_shift", "duration": 1.0, "strength": 1.0},
+        ],
+        "lipSync": [{"timeSec": 0.0, "viseme": "a", "open": 0.9}],
+    }
+    sample_frames = (1, 15, 29)
+
+    blender_renderer.animate(
+        armature,
+        face,
+        plan,
+        fps=30,
+        bone_map=bone_map,
+        presentation_mode="standing",
+    )
+    standing = {}
+    for frame in sample_frames:
+        bpy.context.scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        standing[frame] = lower_body_world_metrics(armature, bone_map)
+
+    blender_renderer.animate(
+        armature,
+        face,
+        plan,
+        fps=30,
+        bone_map=bone_map,
+        presentation_mode="seated",
+    )
+    seated = {}
+    for frame in sample_frames:
+        bpy.context.scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        metrics = lower_body_world_metrics(armature, bone_map)
+        seated[frame] = metrics
+        assert standing[frame]["pelvis"][2] - metrics["pelvis"][2] > 0.30, {
+            "frame": frame,
+            "standing": standing[frame],
+            "seated": metrics,
+        }
+        assert max(metrics["kneeAngles"].values()) < 105.0, metrics
+        assert min(foot[2] for foot in metrics["feet"].values()) > -0.02, metrics
+        assert abs(metrics["kneeAngles"]["l"] - metrics["kneeAngles"]["r"]) < 3.0, metrics
+        for points in (metrics["knees"], metrics["feet"]):
+            left_from_center = points["l"][0] - metrics["pelvis"][0]
+            right_from_center = metrics["pelvis"][0] - points["r"][0]
+            assert abs(left_from_center - right_from_center) < 0.015, metrics
+            assert abs(points["l"][1] - points["r"][1]) < 0.02, metrics
+            assert abs(points["l"][2] - points["r"][2]) < 0.015, metrics
+        assert max(
+            metrics["pelvis"][2] - knee[2] for knee in metrics["knees"].values()
+        ) < 0.16, metrics
+
+    assert max(metrics["pelvis"][2] for metrics in seated.values()) - min(
+        metrics["pelvis"][2] for metrics in seated.values()
+    ) < 0.02
+    assert max(
+        abs(seated[frame]["feet"][side][2] - seated[1]["feet"][side][2])
+        for frame in sample_frames
+        for side in ("l", "r")
+    ) < 0.02
+
+    bpy.context.scene.frame_set(15)
+    bpy.context.view_layer.update()
+    head = armature.pose.bones[bone_map["head"]].rotation_euler
+    wrist = armature.pose.bones[bone_map["hand_r"]].rotation_euler
+    finger = armature.pose.bones[bone_map["finger_2_r"]].rotation_euler
+    jaw = armature.pose.bones[bone_map["jaw"]].rotation_euler
+    mouth = face["mouth"].data.shape_keys.key_blocks["Mouth_A"]
+    assert max(abs(value) for value in head) > 0.05
+    assert abs(wrist.y) > 0.20
+    assert max(abs(value) for value in finger) > 0.10
+    assert max(abs(value) for value in jaw) > 0.02
+    assert mouth.value > 0.5
+    print("SEATED_WORLD_METRICS", json.dumps(seated, sort_keys=True))
 
 
 def test_talking_timeline_animates_multiaxis_hands_fingers_jaw_and_source_mouth() -> None:
@@ -1658,6 +1790,7 @@ if __name__ == "__main__":
         test_generated_rig_exposes_optional_hand_and_foot_ik_controls,
         test_sloth_face_deforms_original_mesh_for_nine_visemes,
         test_action_library_contains_talking_gestures_and_expressions,
+        test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_controls,
         test_talking_timeline_animates_multiaxis_hands_fingers_jaw_and_source_mouth,
         test_think_motion_event_drives_head_hand_and_finger_pose,
         test_source_hand_events_raise_wrist_and_drive_individual_digits,

@@ -72,6 +72,22 @@ def test_wav_bytes(*, sample_rate: int = 48000, channels: int = 1) -> bytes:
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def test_seated_pose_moves_only_lower_body_and_root(self) -> None:
+        actions = load_aroll_actions()
+
+        pose = actions.presentation_pose("seated", source_rig=True)
+
+        self.assertEqual(
+            set(pose),
+            {"root", "body", "leg_l", "shin_l", "foot_l", "leg_r", "shin_r", "foot_r"},
+        )
+        self.assertLess(pose["root"]["location"][2], -0.20)
+        self.assertNotEqual(pose["leg_l"]["rotation"], (0.0, 0.0, 0.0))
+        self.assertNotEqual(pose["leg_r"]["rotation"], (0.0, 0.0, 0.0))
+        self.assertNotIn("head", pose)
+        self.assertNotIn("hand_l", pose)
+        self.assertNotIn("hand_r", pose)
+
     def test_close_shot_folded_hand_poses_use_restrained_joint_curls(self) -> None:
         actions = load_aroll_actions()
 
