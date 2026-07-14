@@ -59,7 +59,7 @@ SOURCE_VISEME_DISPLACEMENT = {
 VISEME_RESPONSE = {
     "Mouth_Rest": {"shapeFloor": 1.0, "shapeGain": 0.0, "jawGain": 0.00},
     "Mouth_MBP": {"shapeFloor": 1.0, "shapeGain": 0.0, "jawGain": 0.00},
-    "Mouth_A": {"shapeFloor": 0.72, "shapeGain": 0.28, "jawGain": 0.27},
+    "Mouth_A": {"shapeFloor": 0.72, "shapeGain": 0.28, "jawGain": 0.36},
     "Mouth_E": {"shapeFloor": 0.68, "shapeGain": 0.25, "jawGain": 0.16},
     "Mouth_O": {"shapeFloor": 0.75, "shapeGain": 0.25, "jawGain": 0.22},
     "Mouth_U": {"shapeFloor": 0.72, "shapeGain": 0.24, "jawGain": 0.18},
