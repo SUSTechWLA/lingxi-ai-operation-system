@@ -49,7 +49,7 @@ longer reports a synthetic support-offset count.
 
 ## Regression
 
-- MCP server: 84 passed, 2 skipped;
+- MCP server: 85 passed, 2 skipped;
 - voice policy: 10 passed;
 - GPT-SoVITS client: 11 passed;
 - focused Blender hand/QA runner: all 11 checks passed;

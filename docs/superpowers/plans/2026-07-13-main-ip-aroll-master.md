@@ -147,7 +147,11 @@ def test_main_ip_has_three_segments_per_digit_and_clean_weights():
     objects, _, armature, stats, bone_map, _ = load_enhanced_fbx_character()
     assert stats["fingerBoneCount"] == 18
     assert stats["fingerSegmentCount"] == 3
-    assert stats["handWeightedJointBandCount"] >= 24
+    assert stats["handWeightedJointBandCount"] == 12
+    assert len(stats["handWeightedJointBandVertexCounts"]) == 12
+    assert all(
+        count > 0 for count in stats["handWeightedJointBandVertexCounts"].values()
+    )
     assert stats["handDetailVertexCountAfter"] == stats["handDetailVertexCountBefore"]
     assert stats["maxVertexInfluences"] <= 4
     assert stats["unweightedVertexCount"] == 0
