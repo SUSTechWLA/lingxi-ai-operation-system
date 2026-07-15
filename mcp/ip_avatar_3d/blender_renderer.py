@@ -6282,11 +6282,7 @@ def animate(
     for frame in animation_frames:
         t = (frame - 1) / fps
         pose_state = pose_state_at(t)
-        base_pose = (
-            aroll_actions.transition_presentation_pose(pose_state, source_rig)
-            if has_transition_sequence
-            else aroll_actions.presentation_pose(pose_state, source_rig)
-        )
+        base_pose = aroll_actions.presentation_pose(pose_state, source_rig)
         seated = pose_state == "seated"
         active_actions = active_avatar_actions(events, t)
         transition_actions = [
@@ -7329,9 +7325,7 @@ def build_aroll_performance_qa(
             camera,
         )
         silhouette = aroll_performance_qa.detect_central_silhouette_spike(projected)
-        if silhouette.get("success") is True:
-            silhouette_spikes.append(float(silhouette["spikeMeters"]))
-        else:
+        if silhouette.get("success") is not True:
             transition_errors.extend(
                 f"frame {frame}: {error}"
                 for error in silhouette.get("errors") or []
@@ -7357,6 +7351,16 @@ def build_aroll_performance_qa(
             "metrics": frame_metrics,
             "centralSilhouette": {**projection_bounds, **silhouette},
         }
+        silhouette_phase = float(contact.get("phase") or 0.0)
+        include_silhouette = (
+            contact.get("contactPhase") == "transition"
+            and 0.10 <= silhouette_phase <= 0.90
+        )
+        sample["transition"]["centralSilhouette"][
+            "includedInTransitionMetric"
+        ] = include_silhouette
+        if silhouette.get("success") is True and include_silhouette:
+            silhouette_spikes.append(float(silhouette["spikeMeters"]))
 
         if contact.get("contactPhase") == "transition" and mode_objects is not None:
             transition_camera = mode_objects.get("cameras", {}).get("transition")

@@ -302,6 +302,30 @@ def transition_presentation_pose(
     )
 
 
+def _transition_profile_weight(frame: int, final_frame: int, fps: int) -> float:
+    """Fade camera-profile correction inside a transition, never at its boundaries."""
+
+    fade_frames = max(2, round(fps * 0.35))
+    fade_in = max(0.0, min(1.0, (frame - 1) / fade_frames))
+    fade_out = max(0.0, min(1.0, (final_frame - frame) / fade_frames))
+    return min(fade_in, fade_out)
+
+
+def _apply_transition_profile(
+    pose: ActionPose,
+    frame: int,
+    final_frame: int,
+    fps: int,
+    delta: tuple[float, float, float],
+) -> ActionPose:
+    weight = _transition_profile_weight(frame, final_frame, fps)
+    return _offset_pose_rotation(
+        pose,
+        "foot_r",
+        tuple(value * weight for value in delta),
+    )
+
+
 def hand_pose(name: str) -> Mapping[int, DigitPose]:
     return HAND_POSES[name]
 
@@ -526,8 +550,8 @@ def blend_action_pose(base: Mapping[str, Any], target: Mapping[str, Any], amount
 def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
     seated = presentation_pose("seated", source_rig)
     standing = presentation_pose("standing", source_rig)
-    stable_seated = transition_presentation_pose("seated", source_rig)
-    stable_standing = transition_presentation_pose("standing", source_rig)
+    stable_seated = seated
+    stable_standing = standing
     stand_to_sit = (
         1,
         max(2, round(fps * 0.30)),
@@ -631,27 +655,41 @@ def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
         stand_spec = [
             (
                 frame,
-                _offset_pose_rotation(
-                    pose, "foot_r", SOURCE_STAND_TO_SIT_RIGHT_FOOT_DELTA
+                _apply_transition_profile(
+                    pose,
+                    frame,
+                    stand_to_sit[-1],
+                    fps,
+                    SOURCE_STAND_TO_SIT_RIGHT_FOOT_DELTA,
                 ),
             )
             for frame, pose in stand_spec
         ]
+
+        def sit_to_stand_profile_delta(frame: int) -> tuple[float, float, float]:
+            phase = (frame - 1) / max(1, sit_to_stand[-1] - 1)
+            late_phase = max(0.0, min(1.0, (phase - 0.48) / 0.12))
+            late_phase = late_phase * late_phase * (3.0 - 2.0 * late_phase)
+            return (
+                SOURCE_RIGHT_FOOT_PROFILE_DELTA[0],
+                SOURCE_RIGHT_FOOT_PROFILE_DELTA[1] + 0.06 * late_phase,
+                SOURCE_RIGHT_FOOT_PROFILE_DELTA[2],
+            )
+
         sit_spec = [
             (
                 frame,
-                _offset_pose_rotation(
-                    pose, "foot_r", SOURCE_RIGHT_FOOT_PROFILE_DELTA
+                _apply_transition_profile(
+                    pose,
+                    frame,
+                    sit_to_stand[-1],
+                    fps,
+                    sit_to_stand_profile_delta(frame),
                 ),
             )
             for frame, pose in sit_spec
         ]
-        stand_spec[0] = (
-            stand_to_sit[0],
-            _offset_pose_rotation(
-                standing, "foot_r", SOURCE_STAND_TO_SIT_RIGHT_FOOT_DELTA
-            ),
-        )
+        stand_spec[0] = (stand_to_sit[0], standing)
         stand_spec[-1] = (stand_to_sit[-1], stable_seated)
         sit_spec[0] = (sit_to_stand[0], stable_seated)
         sit_spec[-1] = (sit_to_stand[-1], stable_standing)

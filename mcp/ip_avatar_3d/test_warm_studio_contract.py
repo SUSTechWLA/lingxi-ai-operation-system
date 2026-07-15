@@ -77,10 +77,10 @@ class WarmStudioContractTests(unittest.TestCase):
         )
 
     def test_hero_chair_has_readable_compact_profile(self) -> None:
-        self.assertEqual(contract.HERO_CHAIR_SEAT_SIZE, (0.96, 0.58, 0.12))
-        self.assertEqual(contract.HERO_CHAIR_BACK_SIZE, (0.93, 0.10, 0.54))
-        self.assertEqual(contract.HERO_CHAIR_ARM_X, 0.51)
-        self.assertEqual(contract.HERO_CHAIR_FOOT_X, 0.375)
+        self.assertEqual(contract.HERO_CHAIR_SEAT_SIZE, (1.06, 0.58, 0.12))
+        self.assertEqual(contract.HERO_CHAIR_BACK_SIZE, (1.03, 0.10, 0.54))
+        self.assertEqual(contract.HERO_CHAIR_ARM_X, 0.56)
+        self.assertEqual(contract.HERO_CHAIR_FOOT_X, 0.415)
 
     def test_subject_first_light_profile_is_bounded(self) -> None:
         profile = contract.SUBJECT_LIGHT_PROFILE

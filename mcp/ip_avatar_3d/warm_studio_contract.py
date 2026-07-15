@@ -44,10 +44,10 @@ SEAT_VISIBILITY_PROFILE = MappingProxyType({
     "maximumVisibleFraction": 0.28,
 })
 
-HERO_CHAIR_SEAT_SIZE = (0.96, 0.58, 0.12)
-HERO_CHAIR_BACK_SIZE = (0.93, 0.10, 0.54)
-HERO_CHAIR_ARM_X = 0.51
-HERO_CHAIR_FOOT_X = 0.375
+HERO_CHAIR_SEAT_SIZE = (1.06, 0.58, 0.12)
+HERO_CHAIR_BACK_SIZE = (1.03, 0.10, 0.54)
+HERO_CHAIR_ARM_X = 0.56
+HERO_CHAIR_FOOT_X = 0.415
 
 MODE_CAMERA_SPECS = MappingProxyType({
     "standing": MappingProxyType({

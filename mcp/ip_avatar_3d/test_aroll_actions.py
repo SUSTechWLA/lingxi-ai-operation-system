@@ -14,11 +14,7 @@ class ArollActionContractTests(unittest.TestCase):
                 self.assertEqual(frames, sorted(frames))
                 self.assertEqual(len(frames), len(set(frames)))
                 if metadata.end_state == "seated":
-                    seated = (
-                        aroll_actions.transition_presentation_pose("seated", True)
-                        if name == "Aroll_Transition_StandToSit"
-                        else aroll_actions.presentation_pose("seated", True)
-                    )
+                    seated = aroll_actions.presentation_pose("seated", True)
                     for role, transform in seated.items():
                         self.assertEqual(specs[name][-1][1].get(role), transform)
 
@@ -165,11 +161,13 @@ class ArollActionContractTests(unittest.TestCase):
         self.assertEqual(blended["__digit_pose_l"], "open_hand")
         self.assertEqual(blended["__digit_pose_r"], "relaxed_hand")
 
-    def test_transition_specs_end_in_mirrored_seated_pose(self) -> None:
+    def test_transition_specs_preserve_canonical_pose_at_state_boundaries(self) -> None:
         specs = aroll_actions.build_aroll_action_specs(True, 30)
-        seated = aroll_actions.transition_presentation_pose("seated", True)
-        standing = aroll_actions.transition_presentation_pose("standing", True)
+        seated = aroll_actions.presentation_pose("seated", True)
+        standing = aroll_actions.presentation_pose("standing", True)
+        self.assertEqual(specs["Aroll_Transition_StandToSit"][0][1], standing)
         self.assertEqual(specs["Aroll_Transition_StandToSit"][-1][1], seated)
+        self.assertEqual(specs["Aroll_Transition_SitToStand"][0][1], seated)
         self.assertEqual(specs["Aroll_Transition_SitToStand"][-1][1], standing)
         self.assertEqual(seated["leg_l"]["rotation"], (0.0, 0.0, 1.35))
         self.assertEqual(seated["leg_r"]["rotation"], (0.05, 0.197, -1.30))
@@ -197,27 +195,15 @@ class ArollActionContractTests(unittest.TestCase):
             seated["foot_r"]["rotation"],
             (-0.1510481, 0.2414181, 0.2748769),
         )
-        self.assertTrue(
-            all(
-                abs(actual - expected) < 1e-12
-                for actual, expected in zip(
-                    specs["Aroll_Transition_StandToSit"][0][1]["foot_r"]["rotation"],
-                    (0.1142314, 0.03174289999999999, 0.0506077),
-                )
-            )
-        )
-        self.assertEqual(
-            specs["Aroll_Transition_StandToSit"][-1][1],
-            seated,
-        )
-        self.assertEqual(
-            specs["Aroll_Transition_SitToStand"][0][1],
-            seated,
-        )
-        self.assertEqual(
-            specs["Aroll_Transition_SitToStand"][-1][1],
-            standing,
-        )
+        self.assertEqual(specs["Aroll_Transition_StandToSit"][0][1], canonical_standing)
+        self.assertEqual(specs["Aroll_Transition_StandToSit"][-1][1], canonical_seated)
+        self.assertEqual(specs["Aroll_Transition_SitToStand"][0][1], canonical_seated)
+        self.assertEqual(specs["Aroll_Transition_SitToStand"][-1][1], canonical_standing)
+        interior_foot = specs["Aroll_Transition_StandToSit"][2][1]["foot_r"][
+            "rotation"
+        ]
+        self.assertGreater(interior_foot[1], 0.08)
+        self.assertGreater(interior_foot[2], 0.04)
 
 
 if __name__ == "__main__":

@@ -2552,6 +2552,62 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         presentation_mode="standing",
         mode_objects=mode_objects,
     )
+
+    def sampled_foot_rotation(frame: int) -> tuple[float, float, float]:
+        bpy.context.scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        rotation = armature.pose.bones[bone_map["foot_r"]].rotation_euler
+        return tuple(float(value) for value in rotation)
+
+    canonical = {
+        "standing": blender_renderer.aroll_actions.presentation_pose("standing", True)["foot_r"]["rotation"],
+        "seated": blender_renderer.aroll_actions.presentation_pose("seated", True)["foot_r"]["rotation"],
+    }
+    for frame, state in ((1, "standing"), (18, "standing"), (77, "seated"), (141, "seated"), (197, "standing"), (210, "standing")):
+        actual = sampled_foot_rotation(frame)
+        assert max(
+            abs(actual[index] - canonical[state][index]) for index in range(3)
+        ) < 1e-4, (frame, state, actual, canonical[state])
+    for before_frame, after_frame in ((18, 19), (76, 77), (141, 142), (195, 196)):
+        before = sampled_foot_rotation(before_frame)
+        after = sampled_foot_rotation(after_frame)
+        delta = math.sqrt(sum((after[index] - before[index]) ** 2 for index in range(3)))
+        assert delta < 0.035, (before_frame, after_frame, before, after, delta)
+
+    bpy.context.scene.frame_start = 1
+    bpy.context.scene.frame_end = 210
+    performance_qa = blender_renderer.build_aroll_performance_qa(
+        {"fps": 30, "motionPlan": plan},
+        character_objects,
+        armature,
+        face,
+        bone_map,
+        dimensions,
+        transition_report,
+        mode_objects,
+    )
+    assert performance_qa["transition"]["success"] is True, performance_qa["transition"]
+    assert performance_qa["transition"]["metrics"]["seatVisibleFraction"] >= 0.09, performance_qa["transition"]
+    assert performance_qa["transition"]["metrics"]["maxCentralSilhouetteSpike"] <= 0.0445, performance_qa["transition"]
+    included_silhouettes = [
+        item["transition"]["centralSilhouette"]
+        for item in performance_qa["sampledFrames"]
+        if item.get("transition", {}).get("centralSilhouette", {}).get(
+            "includedInTransitionMetric"
+        )
+    ]
+    assert included_silhouettes, performance_qa["sampledFrames"]
+    stable_silhouettes = [
+        item["transition"]["centralSilhouette"]
+        for item in performance_qa["sampledFrames"]
+        if item.get("transition", {}).get("contactPhase") == "stable"
+    ]
+    assert stable_silhouettes, performance_qa["sampledFrames"]
+    assert all(
+        silhouette.get("includedInTransitionMetric") is False
+        for silhouette in stable_silhouettes
+    ), performance_qa["sampledFrames"]
+
     sampled = {}
     foot_drift = {"l": [], "r": []}
     foot_contact_samples = []
