@@ -2597,6 +2597,10 @@ def test_source_rig_continuously_transitions_between_standing_and_seated() -> No
         )
     ]
     assert included_silhouettes, performance_qa["sampledFrames"]
+    assert all(
+        silhouette.get("camera") == mode_objects["cameras"]["transition"].name
+        for silhouette in included_silhouettes
+    ), included_silhouettes
     stable_silhouettes = [
         item["transition"]["centralSilhouette"]
         for item in performance_qa["sampledFrames"]

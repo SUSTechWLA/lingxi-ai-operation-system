@@ -55,7 +55,10 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert scene.render.resolution_y == 1080
     assert scene["ip_presentation_modes"] == '["standing", "seated"]'
     assert scene["ip_subject_light_profile"] == contract.SUBJECT_LIGHT_PROFILE["name"]
-    assert scene["ip_background_stops_below_face"] == 1.25
+    assert (
+        scene["ip_background_stops_below_face"]
+        == contract.SUBJECT_LIGHT_PROFILE["backgroundStopsBelowFace"]
+    )
 
     validation = warm_studio_validator.validate_scene()
     assert validation["errors"] == [], validation["errors"]
@@ -107,6 +110,10 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     desk_top = bpy.data.objects["Desk_Top"]
     chair_back = bpy.data.objects["Chair_Back"]
     chair_seat = bpy.data.objects["Chair_Seat"]
+    assert_location_matches(
+        tuple(bpy.data.objects["Chair_Main"].location),
+        contract.HERO_CHAIR_LOCATION,
+    )
     assert_location_matches(tuple(chair_seat.dimensions), contract.HERO_CHAIR_SEAT_SIZE)
     assert_location_matches(tuple(chair_back.dimensions), contract.HERO_CHAIR_BACK_SIZE)
     desk_top_z = max((desk_top.matrix_world @ Vector(corner)).z for corner in desk_top.bound_box)
@@ -140,9 +147,10 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert abs(world_background.inputs["Strength"].default_value - profile["worldStrength"]) <= 1e-6
 
     subject_specs = {
-        "IP_Subject_Key": ("key", 825.0, 4500.0),
-        "IP_Subject_Fill": ("fill", 115.0, 5200.0),
-        "IP_Subject_Rim": ("rim", 260.0, 3200.0),
+        "IP_Subject_Key": ("key", 1100.0, 6500.0),
+        "IP_Subject_Fill": ("fill", 110.0, 5200.0),
+        "IP_Subject_FrontFill": ("front_fill", 180.0, 5600.0),
+        "IP_Subject_Rim": ("rim", 180.0, 3200.0),
     }
     for name, (role, energy, temperature) in subject_specs.items():
         light = bpy.data.objects.get(name)
@@ -158,14 +166,67 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert scene.view_settings.view_transform == "AgX"
     assert "Medium High Contrast" in scene.view_settings.look
     key = bpy.data.objects["IP_Subject_Key"]
-    assert abs(math.degrees(key.data.spread) - 145.0) <= 1e-5
-    assert key.get("ip_spread_degrees") == 145.0
-    assert abs(scene.view_settings.exposure - (-2.769925)) <= 1e-6
-    assert abs(scene["ip_authored_exposure"] - (-2.769925)) <= 1e-6
-    assert scene["ip_cycles_final_exposure"] == -4.0
+    assert key.data.type == "SPOT"
+    assert abs(math.degrees(key.data.spot_size) - 55.0) <= 1e-5
+    assert abs(key.data.spot_blend - 0.65) <= 1e-6
+    assert abs(key.data.shadow_soft_size - 0.55) <= 1e-6
+    assert key.get("ip_spot_size_degrees") == 55.0
+    assert key.get("ip_spot_blend") == 0.65
+    assert abs(scene.view_settings.exposure - (-2.45)) <= 1e-6
+    assert abs(scene["ip_authored_exposure"] - (-2.45)) <= 1e-6
+    assert scene["ip_cycles_final_exposure"] == -3.7
+    rim = bpy.data.objects["IP_Subject_Rim"]
+    assert rim.data.type == "SPOT"
+    assert abs(math.degrees(rim.data.spot_size) - 28.0) <= 1e-5
+    assert abs(rim.data.spot_blend - 0.65) <= 1e-6
+    assert abs(rim.data.shadow_soft_size - 0.5) <= 1e-6
+    front_fill = bpy.data.objects["IP_Subject_FrontFill"]
+    assert front_fill.data.type == "AREA"
+    assert front_fill.data.use_shadow is False
+    assert tuple(front_fill.get("ip_target")) == (0.0, 0.365, 1.2)
+    assert scene["ip_cycles_key_energy_multiplier"] == 3.5
     assert scene.view_settings.use_white_balance is True
     assert scene.view_settings.white_balance_temperature == 4500.0
     assert scene.view_settings.white_balance_tint == 10.0
+
+
+def test_transition_stage_preserves_foreground_desk_for_authored_composition() -> None:
+    desk_objects = [
+        obj for obj in bpy.context.scene.objects if obj.name.startswith("Desk_")
+    ]
+    original = {obj.name: obj.hide_render for obj in desk_objects}
+    try:
+        for obj in desk_objects:
+            obj.hide_render = False
+        report = blender_renderer.configure_transition_stage_visibility(
+            {
+                "motionEvents": [
+                    {
+                        "motion": "avatar_action",
+                        "action": "Aroll_Transition_StandToSit",
+                        "startState": "standing",
+                        "endState": "seated",
+                    }
+                ]
+            }
+        )
+        assert report["fullBodyStage"] is True, report
+        assert report["hiddenDeskObjects"] == []
+        assert report["visibleDeskObjects"] == sorted(obj.name for obj in desk_objects)
+        assert desk_objects and all(not obj.hide_render for obj in desk_objects)
+    finally:
+        for name, hidden in original.items():
+            bpy.data.objects[name].hide_render = hidden
+
+
+def test_transition_collision_calibration_allows_authored_chair_contact() -> None:
+    all_obstacles = blender_renderer._mode_collision_obstacles()
+    desk_obstacles = blender_renderer._mode_collision_obstacles(
+        include_chair=False
+    )
+    assert any(obj.name.startswith("Chair_") for obj in all_obstacles)
+    assert desk_obstacles
+    assert all(not obj.name.startswith("Chair_") for obj in desk_obstacles)
 
 
 def test_production_validator_rejects_mode_camera_broken_dof_focus_object() -> None:
@@ -491,8 +552,8 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
                 "engine": engine,
                 "cameraRole": "medium",
                 "linearFaceLuminance": 0.40,
-                "linearBackgroundLuminance": 0.18,
-                "backgroundStopsBelowFace": 1.152003,
+                "linearBackgroundLuminance": 0.13195079107728943,
+                "backgroundStopsBelowFace": 1.6,
                 "highlightClipRatio": 0.0049,
                 "brightNeutralPixelCount": 3600,
                 "brightNeutralMedianRgb": [0.88, 0.84, 0.80],
@@ -526,7 +587,7 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
     payload["measurements"].pop()
 
     payload["subjectMaskSource"] = "fixed rectangle"
-    payload["measurements"][0]["backgroundStopsBelowFace"] = 0.99
+    payload["measurements"][0]["backgroundStopsBelowFace"] = 1.0
     payload["measurements"][1]["highlightClipRatio"] = 0.005
     payload["measurements"][2]["brightNeutralRedBlueRatio"] = 1.30
     payload["measurements"][3]["linearBackgroundLuminance"] = 0.40
@@ -539,7 +600,7 @@ def test_lighting_evidence_validator_rejects_non_geometric_masks_and_failed_gate
     payload["cameraComparisons"][0]["pixelMae"] = 0.0
     errors = warm_studio_validator.validate_lighting_evidence_payload(payload)
     assert any("geometry ID matte" in error for error in errors)
-    assert any("1.0..1.5" in error for error in errors)
+    assert any("1.2..2.2" in error for error in errors)
     assert any("below 0.5 percent" in error for error in errors)
     assert any("bright-neutral red/blue ratio" in error for error in errors)
     assert any("inconsistent with linear luminance" in error for error in errors)
@@ -1128,6 +1189,22 @@ def test_render_settings_are_compatible_with_blender_51_agx_and_eevee() -> None:
     assert scene.render.film_transparent is True
 
 
+def test_lighting_qa_applies_and_restores_cycles_key_multiplier() -> None:
+    reset_scene()
+    data = bpy.data.lights.new("QA_Key_Data", "SPOT")
+    key = bpy.data.objects.new("QA_Key", data)
+    bpy.context.scene.collection.objects.link(key)
+    key["ip_light_role"] = "key"
+    key["ip_base_energy"] = 600.0
+    bpy.context.scene["ip_cycles_key_energy_multiplier"] = 4.65
+
+    render_warm_studio_qa._set_engine_and_samples(bpy.context.scene, "cycles")
+    assert abs(key.data.energy - 2790.0) <= 1e-6
+
+    render_warm_studio_qa._set_engine_and_samples(bpy.context.scene, "eevee")
+    assert abs(key.data.energy - 600.0) <= 1e-6
+
+
 def test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission() -> None:
     objects = editorial_studio_builder.build_scene()
 
@@ -1187,6 +1264,8 @@ if __name__ == "__main__":
         )
     tests = [
         test_warm_studio_saved_scene_has_dual_mode_contract,
+        test_transition_stage_preserves_foreground_desk_for_authored_composition,
+        test_transition_collision_calibration_allows_authored_chair_contact,
         test_production_validator_rejects_mode_camera_broken_dof_focus_object,
         test_luminance_masks_follow_rendered_subject_and_projected_head,
         test_background_mask_excludes_character_practicals_and_clipped_highlights,
@@ -1212,6 +1291,7 @@ if __name__ == "__main__":
         test_production_calibration_frames_include_interval_bounds_and_limb_extrema,
         test_medium_frame_boundary_reduction_preserves_candidate_bounds,
         test_render_settings_are_compatible_with_blender_51_agx_and_eevee,
+        test_lighting_qa_applies_and_restores_cycles_key_multiplier,
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
         test_real_warm_studio_character_validation_passes_both_modes,
     ]

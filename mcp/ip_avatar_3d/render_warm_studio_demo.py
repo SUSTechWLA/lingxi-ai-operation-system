@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 import server
 import aroll_performance_qa
+import warm_studio_contract as contract
 
 
 DEMO_JOB = {
@@ -29,7 +30,7 @@ DEMO_JOB = {
         "选题、脚本、画面和审核都要能修改和复用。最后总结，稳定流程才能带来稳定内容。"
     ),
     "actionSequence": [
-        "Aroll_Welcome_OpenArms",
+        "Aroll_Greeting_Wave",
         "Aroll_KeyPoint_OneFinger",
         "Aroll_Transition_StandToSit",
         "Aroll_Seated_Explain",
@@ -524,8 +525,9 @@ def _lighting_evidence(path: Path | None) -> dict[str, Any]:
             red_green = float(measurement["brightNeutralRedGreenRatio"])
         except (KeyError, TypeError, ValueError) as exc:
             raise DemoQAError("lighting evidence has incomplete numeric gates") from exc
+        background_stops_range = contract.SUBJECT_LIGHT_PROFILE["backgroundStopsRange"]
         if not (
-            1.0 <= stops <= 1.5
+            background_stops_range[0] <= stops <= background_stops_range[1]
             and 0.0 <= clip_ratio < 0.005
             and 0.95 <= red_blue <= 1.22
             and 0.95 <= red_green <= 1.14

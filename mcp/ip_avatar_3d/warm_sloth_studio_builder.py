@@ -1782,7 +1782,7 @@ def build_main_desk(
 
 def build_hero_stool_chair(
     ctx: StudioContext,
-    location: tuple[float, float, float] = (0.0, 0.53, 0.0),
+    location: tuple[float, float, float] = contract.HERO_CHAIR_LOCATION,
 ) -> bpy.types.Object:
     """Build a visible seated-mode chair with a restrained hero profile."""
 
@@ -3257,7 +3257,7 @@ def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
 STATIC_MARKER_SPECS = {
     "IP_Focus_Desk": ((0.80, -0.50, 1.005), "focus_desk"),
     "IP_Focus_Shelf": ((1.45, 2.50, 1.95), "focus_shelf"),
-    "IP_Transition_Focus": ((0.0, 0.38, 1.66), "transition_focus"),
+    "IP_Transition_Focus": (contract.TRANSITION_FOCUS_LOCATION, "transition_focus"),
 }
 
 MARKER_SPECS = {
@@ -3461,15 +3461,16 @@ LIGHT_SPECS = (
     },
     {
         "name": "IP_Subject_Key",
-        "type": "AREA",
+        "type": "SPOT",
         "location": (-1.10, -0.55, 2.55),
         "energy": contract.SUBJECT_LIGHT_PROFILE["keyEnergy"],
         "color": (1.0, 1.0, 1.0),
         "temperature": contract.SUBJECT_LIGHT_PROFILE["keyTemperatureK"],
         "role": "key",
-        "target": contract.MODE_MARKER_SPECS["standing"]["focus"],
-        "size": (1.60, 1.60),
-        "spread_degrees": contract.SUBJECT_LIGHT_PROFILE["keySpreadDegrees"],
+        "target": contract.SUBJECT_LIGHT_PROFILE["keyTarget"],
+        "size": (contract.SUBJECT_LIGHT_PROFILE["keySoftRadius"],) * 2,
+        "spot_size_degrees": contract.SUBJECT_LIGHT_PROFILE["keySpotSizeDegrees"],
+        "spot_blend": contract.SUBJECT_LIGHT_PROFILE["keySpotBlend"],
         "shadows": True,
     },
     {
@@ -3485,15 +3486,29 @@ LIGHT_SPECS = (
         "shadows": False,
     },
     {
-        "name": "IP_Subject_Rim",
+        "name": "IP_Subject_FrontFill",
         "type": "AREA",
+        "location": (0.0, -1.60, 1.55),
+        "energy": contract.SUBJECT_LIGHT_PROFILE["frontFillEnergy"],
+        "color": (1.0, 1.0, 1.0),
+        "temperature": contract.SUBJECT_LIGHT_PROFILE["frontFillTemperatureK"],
+        "role": "front_fill",
+        "target": contract.SUBJECT_LIGHT_PROFILE["frontFillTarget"],
+        "size": (2.80, 2.00),
+        "shadows": False,
+    },
+    {
+        "name": "IP_Subject_Rim",
+        "type": "SPOT",
         "location": (2.20, 1.85, 2.65),
         "energy": contract.SUBJECT_LIGHT_PROFILE["rimEnergy"],
         "color": (1.0, 1.0, 1.0),
         "temperature": contract.SUBJECT_LIGHT_PROFILE["rimTemperatureK"],
         "role": "rim",
         "target": contract.MODE_MARKER_SPECS["standing"]["focus"],
-        "size": (1.40, 1.40),
+        "size": (contract.SUBJECT_LIGHT_PROFILE["rimSoftRadius"],) * 2,
+        "spot_size_degrees": contract.SUBJECT_LIGHT_PROFILE["rimSpotSizeDegrees"],
+        "spot_blend": contract.SUBJECT_LIGHT_PROFILE["rimSpotBlend"],
         "shadows": True,
     },
 )
@@ -3519,6 +3534,8 @@ def _add_authored_light(
     target: tuple[float, float, float] | None = None,
     size: tuple[float, float] = (0.25, 0.25),
     spread_degrees: float | None = None,
+    spot_size_degrees: float | None = None,
+    spot_blend: float | None = None,
     fixture: str | None = None,
 ) -> bpy.types.Object:
     """Create one tagged production light with reproducible authored energy."""
@@ -3539,6 +3556,12 @@ def _add_authored_light(
             data.spread = math.radians(spread_degrees)
     elif light_type == "POINT":
         data.shadow_soft_size = size[0]
+    elif light_type == "SPOT":
+        data.shadow_soft_size = size[0]
+        if spot_size_degrees is not None:
+            data.spot_size = math.radians(spot_size_degrees)
+        if spot_blend is not None:
+            data.spot_blend = spot_blend
 
     light = bpy.data.objects.new(name, data)
     ctx.collections["STUDIO_LIGHTS"].objects.link(light)
@@ -3552,6 +3575,10 @@ def _add_authored_light(
     light["ip_color_temperature"] = int(temperature)
     if spread_degrees is not None:
         light["ip_spread_degrees"] = float(spread_degrees)
+    if spot_size_degrees is not None:
+        light["ip_spot_size_degrees"] = float(spot_size_degrees)
+    if spot_blend is not None:
+        light["ip_spot_blend"] = float(spot_blend)
     light["ip_casts_shadow"] = bool(shadows)
     light["ip_shadow_mode"] = "full" if shadows else "restrained"
     if fixture is not None:
@@ -3676,10 +3703,19 @@ def build_lighting(ctx: StudioContext) -> list[bpy.types.Object]:
                 if "spread_degrees" in spec
                 else None
             ),
+            spot_size_degrees=(
+                float(spec["spot_size_degrees"])
+                if "spot_size_degrees" in spec
+                else None
+            ),
+            spot_blend=(
+                float(spec["spot_blend"])
+                if "spot_blend" in spec
+                else None
+            ),
         )
         for spec in LIGHT_SPECS
     ]
-
     wall_sconce_diffuser = _build_wall_sconce(ctx)
     bpy.context.view_layer.update()
     practical_specs = (
@@ -3773,6 +3809,9 @@ def configure_render_settings(ctx: StudioContext) -> None:
     scene["ip_eevee_render_samples"] = 128
     scene["ip_cycles_final_samples"] = 128
     scene["ip_cycles_final_exposure"] = CYCLES_FINAL_EXPOSURE
+    scene["ip_cycles_key_energy_multiplier"] = contract.SUBJECT_LIGHT_PROFILE[
+        "cyclesKeyEnergyMultiplier"
+    ]
 
     try:
         scene.view_settings.view_transform = "AgX"

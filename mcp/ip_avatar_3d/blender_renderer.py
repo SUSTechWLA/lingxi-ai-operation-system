@@ -1777,7 +1777,9 @@ def _render_world_bvh(
     return BVHTree.FromPolygons(vertices, triangles, all_triangles=True, epsilon=1e-6)
 
 
-def _mode_collision_obstacles() -> list[bpy.types.Object]:
+def _mode_collision_obstacles(
+    *, include_chair: bool = True
+) -> list[bpy.types.Object]:
     desk_root = next(
         (obj for obj in bpy.data.objects if obj.get("assembly_role") == "main_desk"),
         None,
@@ -1785,12 +1787,36 @@ def _mode_collision_obstacles() -> list[bpy.types.Object]:
     chair_root = bpy.data.objects.get("Chair_Main")
     if desk_root is None or chair_root is None:
         raise RuntimeError("warm studio is missing authored desk/chair collision assemblies")
+    roots = (desk_root, chair_root) if include_chair else (desk_root,)
     return [
         obj
-        for root in (desk_root, chair_root)
+        for root in roots
         for obj in (root, *root.children_recursive)
         if obj.type == "MESH" and not obj.hide_render
     ]
+
+
+def configure_transition_stage_visibility(
+    motion_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep the authored foreground desk visible during physical transitions."""
+
+    events = motion_plan.get("motionEvents") or []
+    full_body_stage = bool(
+        aroll_performance_qa.physical_transition_events(events)
+    )
+    visible: list[str] = []
+    if full_body_stage:
+        for obj in bpy.context.scene.objects:
+            if not obj.name.startswith("Desk_"):
+                continue
+            obj.hide_render = False
+            visible.append(obj.name)
+    return {
+        "fullBodyStage": full_body_stage,
+        "hiddenDeskObjects": [],
+        "visibleDeskObjects": sorted(visible),
+    }
 
 
 def production_calibration_frames(
@@ -1844,11 +1870,13 @@ def calibrate_mode_collision_clearance(
     character_objects: list[bpy.types.Object],
     placement: bpy.types.Object,
     sample_frames: list[int] | tuple[int, ...] | None = None,
+    *,
+    include_chair_obstacle: bool = True,
 ) -> dict[str, Any]:
     frames = list(sample_frames or range(bpy.context.scene.frame_start, bpy.context.scene.frame_end + 1))
     if not frames:
         raise RuntimeError("collision clearance calibration requires sampled frames")
-    obstacles = _mode_collision_obstacles()
+    obstacles = _mode_collision_obstacles(include_chair=include_chair_obstacle)
     base_y = float(placement.location.y)
     offsets = [0.0]
     for step in range(1, 31):
@@ -1884,6 +1912,7 @@ def calibrate_mode_collision_clearance(
     return {
         "worldYOffset": selected_offset,
         "placementY": float(placement.location.y),
+        "chairObstacleIncluded": bool(include_chair_obstacle),
         "frames": selected_counts,
     }
 
@@ -7315,6 +7344,18 @@ def build_aroll_performance_qa(
             sampled_frames.append(sample)
             continue
 
+        contact = contact_by_frame.get(frame)
+        if not isinstance(contact, dict):
+            transition_errors.append(f"frame {frame} contact evidence is missing")
+            contact = {}
+        transition_camera = (
+            mode_objects.get("cameras", {}).get("transition")
+            if mode_objects is not None
+            and contact.get("contactPhase") == "transition"
+            else None
+        )
+        silhouette_camera = transition_camera or camera
+
         pose_metrics = _lower_body_pose_metrics(armature, bone_map)
         knee_separation = float(pose_metrics["kneeSeparation"])
         knee_separations.append(knee_separation)
@@ -7322,19 +7363,13 @@ def build_aroll_performance_qa(
             character_objects,
             armature,
             bone_map,
-            camera,
+            silhouette_camera,
         )
-        silhouette = aroll_performance_qa.detect_central_silhouette_spike(projected)
-        if silhouette.get("success") is not True:
-            transition_errors.extend(
-                f"frame {frame}: {error}"
-                for error in silhouette.get("errors") or []
-            )
+        silhouette = aroll_performance_qa.detect_central_silhouette_spike(
+            projected,
+            normalize_subject_x=True,
+        )
 
-        contact = contact_by_frame.get(frame)
-        if not isinstance(contact, dict):
-            transition_errors.append(f"frame {frame} contact evidence is missing")
-            contact = {}
         frame_metrics: dict[str, Any] = {
             "footDriftL": contact.get("footDriftL"),
             "footDriftR": contact.get("footDriftR"),
@@ -7349,7 +7384,14 @@ def build_aroll_performance_qa(
             "phase": contact.get("phase"),
             "targetState": str(contact.get("targetState") or sample["state"]),
             "metrics": frame_metrics,
-            "centralSilhouette": {**projection_bounds, **silhouette},
+            "centralSilhouette": {
+                **projection_bounds,
+                **silhouette,
+                "camera": silhouette_camera.name,
+                "cameraMatrixWorld": _matrix_evidence(
+                    silhouette_camera.matrix_world
+                ),
+            },
         }
         silhouette_phase = float(contact.get("phase") or 0.0)
         include_silhouette = (
@@ -7359,11 +7401,16 @@ def build_aroll_performance_qa(
         sample["transition"]["centralSilhouette"][
             "includedInTransitionMetric"
         ] = include_silhouette
-        if silhouette.get("success") is True and include_silhouette:
-            silhouette_spikes.append(float(silhouette["spikeMeters"]))
+        if include_silhouette:
+            if silhouette.get("success") is True:
+                silhouette_spikes.append(float(silhouette["spikeMeters"]))
+            else:
+                transition_errors.extend(
+                    f"frame {frame}: {error}"
+                    for error in silhouette.get("errors") or []
+                )
 
         if contact.get("contactPhase") == "transition" and mode_objects is not None:
-            transition_camera = mode_objects.get("cameras", {}).get("transition")
             if transition_camera is None:
                 transition_errors.append(
                     f"frame {frame}: transition camera is unavailable"
@@ -8280,11 +8327,17 @@ def main() -> None:
         write_runtime_progress(data, "character_placed")
         if mode_objects:
             placement = bpy.data.objects[scene_stats["placement"]["placementRoot"]]
+            has_physical_transition = bool(
+                aroll_performance_qa.physical_transition_events(
+                    (data.get("motionPlan") or {}).get("motionEvents") or []
+                )
+            )
             write_runtime_progress(data, "collision_calibration_start")
             scene_stats["collisionPlacement"] = calibrate_mode_collision_clearance(
                 character_objects,
                 placement,
                 sample_frames=calibration_frames,
+                include_chair_obstacle=not has_physical_transition,
             )
             write_runtime_progress(data, "collision_calibration_done")
             write_runtime_progress(data, "foot_calibration_start")
@@ -8298,14 +8351,26 @@ def main() -> None:
             )
             write_runtime_progress(data, "foot_calibration_done")
             write_runtime_progress(data, "camera_calibration_start")
-            scene_stats["mediumFraming"] = calibrate_mode_medium_camera(
-                character_objects,
-                bone_map,
-                mode_objects,
-                sample_frames=calibration_frames,
-            )
+            if has_physical_transition:
+                transition_camera = mode_objects["cameras"]["transition"]
+                scene_stats["mediumFraming"] = {
+                    "status": "not_applicable",
+                    "reason": "physical transitions use the authored full-body camera",
+                    "camera": transition_camera.name,
+                    "lens": float(transition_camera.data.lens),
+                }
+            else:
+                scene_stats["mediumFraming"] = calibrate_mode_medium_camera(
+                    character_objects,
+                    bone_map,
+                    mode_objects,
+                    sample_frames=calibration_frames,
+                )
             write_runtime_progress(data, "camera_calibration_done")
             scene_stats["calibrationFrames"] = list(calibration_frames)
+    scene_stats["transitionStageVisibility"] = configure_transition_stage_visibility(
+        data.get("motionPlan") or {}
+    )
     write_runtime_progress(data, "aroll_performance_qa_start")
     rig_stats["arollPerformanceQa"] = build_aroll_performance_qa(
         data,

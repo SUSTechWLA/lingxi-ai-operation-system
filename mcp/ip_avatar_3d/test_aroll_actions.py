@@ -38,10 +38,11 @@ class ArollActionContractTests(unittest.TestCase):
     def test_rich_source_holds_are_distinct_and_seated_amplitude_is_restrained(self) -> None:
         specs = aroll_actions.build_aroll_action_specs(source_rig=True, fps=30)
         comparison = specs["Aroll_Compare_TwoSides"]
+        relaxed = aroll_actions.relaxed_upper_body_pose(True)
         self.assertIn("upper_arm_l", comparison[2][1])
-        self.assertNotIn("upper_arm_r", comparison[2][1])
+        self.assertEqual(comparison[2][1]["upper_arm_r"], relaxed["upper_arm_r"])
         self.assertIn("upper_arm_r", comparison[3][1])
-        self.assertNotIn("upper_arm_l", comparison[3][1])
+        self.assertEqual(comparison[3][1]["upper_arm_l"], relaxed["upper_arm_l"])
 
         seated_hold = specs["Aroll_Seated_OpenPalm"][2][1]
         standing_hold = specs["Aroll_Question_PalmUp"][2][1]
@@ -171,6 +172,54 @@ class ArollActionContractTests(unittest.TestCase):
         self.assertEqual(specs["Aroll_Transition_SitToStand"][-1][1], standing)
         self.assertEqual(seated["leg_l"]["rotation"], (0.0, 0.0, 1.35))
         self.assertEqual(seated["leg_r"]["rotation"], (0.05, 0.197, -1.30))
+
+    def test_upper_body_actions_never_override_standing_contact_channels(self) -> None:
+        specs = aroll_actions.build_aroll_action_specs(True, 30)
+        contact_roles = {
+            "root",
+            "leg_l",
+            "shin_l",
+            "foot_l",
+            "leg_r",
+            "shin_r",
+            "foot_r",
+        }
+        for action_name in (
+            "Aroll_Welcome_OpenArms",
+            "Aroll_Conclusion_HandsTogether",
+        ):
+            with self.subTest(action=action_name):
+                for _frame, pose in specs[action_name]:
+                    self.assertTrue(contact_roles.isdisjoint(pose), pose)
+
+    def test_non_transition_actions_keep_relaxed_arm_channels_at_every_key(self) -> None:
+        specs = aroll_actions.build_aroll_action_specs(True, 30)
+        relaxed = aroll_actions.relaxed_upper_body_pose(True)
+        required_roles = {
+            "upper_arm_l",
+            "forearm_l",
+            "hand_l",
+            "upper_arm_r",
+            "forearm_r",
+            "hand_r",
+        }
+        for action_name, spec in specs.items():
+            if action_name.startswith("Aroll_Transition_"):
+                continue
+            with self.subTest(action=action_name):
+                for _frame, pose in spec:
+                    self.assertTrue(required_roles.issubset(pose), pose)
+                self.assertEqual(spec[0][1]["upper_arm_l"], relaxed["upper_arm_l"])
+                self.assertEqual(spec[-1][1]["upper_arm_r"], relaxed["upper_arm_r"])
+
+    def test_source_conclusion_gathers_both_hands_in_front_of_the_chest(self) -> None:
+        hold = aroll_actions.build_aroll_action_specs(True, 30)[
+            "Aroll_Conclusion_HandsTogether"
+        ][2][1]
+        self.assertLessEqual(abs(hold["upper_arm_l"][2]), 0.40)
+        self.assertLessEqual(abs(hold["upper_arm_r"][2]), 0.40)
+        self.assertLessEqual(hold["forearm_l"][0], -2.0)
+        self.assertLessEqual(hold["forearm_r"][0], -2.0)
 
     def test_source_transition_uses_camera_safe_right_foot_profiles(self) -> None:
         canonical_standing = aroll_actions.presentation_pose("standing", True)

@@ -77,29 +77,58 @@ class WarmStudioContractTests(unittest.TestCase):
         )
 
     def test_hero_chair_has_readable_compact_profile(self) -> None:
+        self.assertEqual(contract.HERO_CHAIR_LOCATION, (0.0, 1.35, 0.0))
         self.assertEqual(contract.HERO_CHAIR_SEAT_SIZE, (1.06, 0.58, 0.12))
         self.assertEqual(contract.HERO_CHAIR_BACK_SIZE, (1.03, 0.10, 0.54))
         self.assertEqual(contract.HERO_CHAIR_ARM_X, 0.56)
         self.assertEqual(contract.HERO_CHAIR_FOOT_X, 0.415)
 
+    def test_transition_camera_is_wide_enough_for_full_body_contact(self) -> None:
+        self.assertEqual(contract.TRANSITION_FOCUS_LOCATION, (0.0, 0.38, 1.48))
+        for mode in contract.PRESENTATION_MODES:
+            self.assertEqual(contract.MODE_CAMERA_SPECS[mode]["transition"][2], 20.0)
+
     def test_subject_first_light_profile_is_bounded(self) -> None:
         profile = contract.SUBJECT_LIGHT_PROFILE
-        self.assertEqual(profile["name"], "warm_subject_first_v2")
-        self.assertLess(profile["worldStrength"], 0.20)
-        self.assertEqual(profile["keyTemperatureK"], 4500)
-        self.assertEqual(profile["keyEnergy"], 825.0)
-        self.assertEqual(profile["keySpreadDegrees"], 145.0)
-        self.assertEqual(profile["practicalWallEnergy"], 34.02)
-        self.assertEqual(profile["practicalShelfEnergy"], 38.88)
-        self.assertEqual(profile["authoredExposure"], -2.769925)
-        self.assertEqual(profile["cyclesFinalExposure"], -4.0)
+        self.assertEqual(profile["name"], "bright_subject_first_v5")
+        self.assertEqual(profile["worldStrength"], 0.1)
+        self.assertEqual(profile["keyTemperatureK"], 6500)
+        self.assertEqual(profile["keyEnergy"], 1100.0)
+        self.assertEqual(profile["keyTarget"], (0.0, 0.365, 1.9))
+        self.assertEqual(profile["keySpotSizeDegrees"], 55.0)
+        self.assertEqual(profile["keySpotBlend"], 0.65)
+        self.assertEqual(profile["keySoftRadius"], 0.55)
+        self.assertEqual(profile["fillEnergy"], 110.0)
+        self.assertEqual(profile["frontFillEnergy"], 180.0)
+        self.assertEqual(profile["frontFillTemperatureK"], 5600)
+        self.assertEqual(profile["frontFillTarget"], (0.0, 0.365, 1.2))
+        self.assertEqual(profile["rimEnergy"], 180.0)
+        self.assertEqual(profile["rimSpotSizeDegrees"], 28.0)
+        self.assertEqual(profile["rimSpotBlend"], 0.65)
+        self.assertEqual(profile["rimSoftRadius"], 0.5)
+        self.assertEqual(profile["windowEnergy"], 50.0)
+        self.assertEqual(profile["practicalWallEnergy"], 28.0)
+        self.assertEqual(profile["practicalShelfEnergy"], 30.0)
+        self.assertEqual(profile["downlightEnergy"], 5.0)
+        self.assertEqual(profile["authoredExposure"], -2.45)
+        self.assertEqual(profile["cyclesFinalExposure"], -3.7)
+        self.assertEqual(profile["cyclesKeyEnergyMultiplier"], 3.5)
         self.assertEqual(profile["whiteBalanceTemperatureK"], 4500.0)
         self.assertEqual(profile["whiteBalanceTint"], 10.0)
         self.assertEqual(profile["brightNeutralRedBlueRatio"], (0.95, 1.22))
         self.assertEqual(profile["brightNeutralRedGreenRatio"], (0.95, 1.14))
         self.assertEqual(profile["rimTemperatureK"], 3200)
-        self.assertGreaterEqual(profile["backgroundStopsBelowFace"], 1.0)
-        self.assertLessEqual(profile["backgroundStopsBelowFace"], 1.5)
+        self.assertEqual(profile["backgroundStopsBelowFace"], 1.75)
+        self.assertEqual(profile["backgroundStopsRange"], (1.2, 2.2))
+        self.assertGreater(
+            profile["keyEnergy"],
+            4.0
+            * max(
+                profile["fillEnergy"],
+                profile["frontFillEnergy"],
+                profile["rimEnergy"],
+            ),
+        )
 
     def test_required_collections_are_complete_and_immutable(self) -> None:
         self.assertIsInstance(contract.REQUIRED_COLLECTIONS, tuple)

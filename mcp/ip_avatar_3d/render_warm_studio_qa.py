@@ -416,7 +416,20 @@ def _set_engine_and_samples(scene, engine: str) -> None:
         if engine.strip().lower() != "eevee":
             raise
         scene.render.engine = "BLENDER_EEVEE"
-    if engine.strip().lower() == "eevee":
+    normalized_engine = engine.strip().lower()
+    cycles_key_multiplier = float(
+        scene.get("ip_cycles_key_energy_multiplier", 1.0)
+    )
+    for light in (obj for obj in scene.objects if obj.type == "LIGHT"):
+        base_energy = float(light.get("ip_base_energy", light.data.energy))
+        role = str(light.get("ip_light_role") or "default").strip().lower()
+        multiplier = (
+            cycles_key_multiplier
+            if normalized_engine == "cycles" and role == "key"
+            else 1.0
+        )
+        light.data.energy = base_energy * multiplier
+    if normalized_engine == "eevee":
         eevee = getattr(scene, "eevee", None)
         if eevee is not None:
             if hasattr(eevee, "taa_render_samples"):

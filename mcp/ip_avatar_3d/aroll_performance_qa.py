@@ -278,14 +278,18 @@ def detect_central_silhouette_spike(
     projected_vertices: Iterable[Sequence[Any]] | Any,
     *,
     column_count: int = 64,
+    normalize_subject_x: bool = False,
 ) -> dict[str, object]:
-    """Measure a narrow center-depth spike from normalized X/depth samples."""
+    """Measure a continuous center-depth spike from normalized X/depth samples."""
 
     errors: list[str] = []
     if isinstance(column_count, bool) or column_count != 64:
         errors.append("central silhouette evidence must use exactly 64 columns")
     closest_depth: dict[int, float] = {}
     sample_count = 0
+    parsed_samples: list[tuple[float, float]] = []
+    subject_min_x = None
+    subject_max_x = None
     if not errors:
         try:
             samples = list(projected_vertices)
@@ -302,7 +306,27 @@ def detect_central_silhouette_spike(
             errors.extend(item_errors)
             if x is None or depth is None:
                 continue
-            if not 0.0 <= x <= 1.0 or depth <= 0.0:
+            if depth <= 0.0 or (not normalize_subject_x and not 0.0 <= x <= 1.0):
+                continue
+            parsed_samples.append((x, depth))
+
+        if normalize_subject_x and parsed_samples:
+            subject_min_x = min(item[0] for item in parsed_samples)
+            subject_max_x = max(item[0] for item in parsed_samples)
+            subject_span = subject_max_x - subject_min_x
+            if subject_span <= 1e-9:
+                errors.append("central silhouette subject X span must be greater than zero")
+            else:
+                parsed_samples = [
+                    ((x - subject_min_x) / subject_span, depth)
+                    for x, depth in parsed_samples
+                ]
+        elif parsed_samples:
+            subject_min_x = min(item[0] for item in parsed_samples)
+            subject_max_x = max(item[0] for item in parsed_samples)
+
+        for x, depth in parsed_samples:
+            if not 0.0 <= x <= 1.0:
                 continue
             column = min(column_count - 1, int(x * column_count))
             closest_depth[column] = min(depth, closest_depth.get(column, depth))
@@ -317,20 +341,31 @@ def detect_central_silhouette_spike(
 
     spike = None
     center_depth = None
+    center_conservative_depth = None
     flank_mean = None
+    flank_nearest = None
     if not errors:
         center_depth = min(closest_depth[column] for column in center_columns)
+        center_conservative_depth = max(
+            closest_depth[column] for column in center_columns
+        )
         flank_mean = sum(closest_depth[column] for column in flank_columns) / len(flank_columns)
-        spike = max(0.0, flank_mean - center_depth)
+        flank_nearest = min(closest_depth[column] for column in flank_columns)
+        spike = max(0.0, flank_nearest - center_conservative_depth)
     return {
         "success": not errors,
         "errors": errors,
         "columnCount": column_count,
+        "subjectXNormalized": bool(normalize_subject_x),
+        "subjectMinX": subject_min_x,
+        "subjectMaxX": subject_max_x,
         "sampleCount": sample_count,
         "centerColumns": center_columns,
         "flankColumns": flank_columns,
         "centerClosestDepth": center_depth,
+        "centerConservativeDepth": center_conservative_depth,
         "flankMeanClosestDepth": flank_mean,
+        "flankNearestDepth": flank_nearest,
         "spikeMeters": spike,
         "closestDepthByColumn": {
             str(column): closest_depth[column]

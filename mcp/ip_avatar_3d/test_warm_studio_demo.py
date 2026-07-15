@@ -59,7 +59,7 @@ def write_lighting_evidence(root: Path) -> Path:
                         "mode": mode,
                         "engine": engine,
                         "cameraRole": "medium",
-                        "backgroundStopsBelowFace": 1.2,
+                        "backgroundStopsBelowFace": 1.6,
                         "highlightClipRatio": 0.0,
                         "brightNeutralRedBlueRatio": 1.1,
                         "brightNeutralRedGreenRatio": 1.05,

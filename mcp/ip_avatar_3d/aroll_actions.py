@@ -266,6 +266,30 @@ def presentation_pose(mode: str, source_rig: bool) -> dict[str, dict[str, tuple[
     }
 
 
+def relaxed_upper_body_pose(source_rig: bool) -> ActionPose:
+    """Return the authored speaking rest pose, never the FBX zero/T pose."""
+
+    if source_rig:
+        rotations = {
+            "upper_arm_l": (0.0, 0.0, 1.28),
+            "upper_arm_r": (0.0, 0.0, -1.28),
+            "forearm_l": (-0.10, 0.0, 0.0),
+            "forearm_r": (-0.10, 0.0, 0.0),
+            "hand_l": (0.0, 0.04, -0.025),
+            "hand_r": (0.0, -0.04, 0.025),
+        }
+    else:
+        rotations = {
+            "upper_arm_l": (-0.72, 0.04, -0.025),
+            "upper_arm_r": (-0.72, -0.04, 0.025),
+            "forearm_l": (-0.10, 0.03, 0.0),
+            "forearm_r": (-0.10, -0.03, 0.0),
+            "hand_l": (0.0, 0.04, -0.025),
+            "hand_r": (0.0, -0.04, 0.025),
+        }
+    return dict(rotations)
+
+
 def _offset_rotation(
     rotation: tuple[float, float, float],
     delta: tuple[float, float, float],
@@ -981,11 +1005,11 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         hands_together = _pose(
             {
                 "body": (0.0, 0.0, 0.015),
-                "upper_arm_l": (-0.05, 0.02, 0.72),
-                "forearm_l": (-0.76, 0.06, -0.70),
+                "upper_arm_l": (-0.05, 0.02, 0.35),
+                "forearm_l": (-2.20, 0.06, -0.50),
                 "hand_l": (0.08, 0.34, -0.12),
-                "upper_arm_r": (-0.05, -0.02, -0.72),
-                "forearm_r": (-0.76, -0.06, 0.70),
+                "upper_arm_r": (-0.05, -0.02, -0.35),
+                "forearm_r": (-2.20, -0.06, 0.50),
                 "hand_r": (0.08, -0.34, 0.12),
             },
             left_hand="relaxed_hand",
@@ -1014,13 +1038,8 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         left_hand="relaxed_hand",
         right_hand="relaxed_hand",
     )
-    standing = presentation_pose("standing", source_rig)
     welcome_spec = _five_phase(frames, rich_anticipation, welcome)
-    welcome_spec[0] = (frames[0], standing)
-    welcome_spec[-1] = (frames[-1], standing)
     conclusion_spec = _five_phase(frames, rich_anticipation, hands_together)
-    conclusion_spec[0] = (frames[0], standing)
-    conclusion_spec[-1] = (frames[-1], standing)
     compare_right_frame = max(hold_in + 1, int(round(max(8, fps) * 1.28)))
     compare_spec = [
         (frames[0], {}),
@@ -1096,4 +1115,12 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         ),
     })
     specs.update(build_transition_specs(source_rig, fps))
+    relaxed_upper_body = relaxed_upper_body_pose(source_rig)
+    for action_name, spec in tuple(specs.items()):
+        if action_name.startswith("Aroll_Transition_"):
+            continue
+        specs[action_name] = [
+            (frame, _pose(relaxed_upper_body, pose))
+            for frame, pose in spec
+        ]
     return {name: specs[name] for name in AROLL_ACTIONS}

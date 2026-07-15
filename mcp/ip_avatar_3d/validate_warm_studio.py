@@ -337,8 +337,12 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
             errors.append(
                 f"{label} backgroundStopsBelowFace is inconsistent with linear luminance"
             )
-        if not 1.0 <= stops <= 1.5:
-            errors.append(f"{label} backgroundStopsBelowFace must be within 1.0..1.5")
+        background_stops_range = contract.SUBJECT_LIGHT_PROFILE["backgroundStopsRange"]
+        if not background_stops_range[0] <= stops <= background_stops_range[1]:
+            errors.append(
+                f"{label} backgroundStopsBelowFace must be within "
+                f"{background_stops_range[0]}..{background_stops_range[1]}"
+            )
         if not 0.0 <= clip_ratio < 0.005:
             errors.append(f"{label} highlightClipRatio must be below 0.5 percent")
         if (

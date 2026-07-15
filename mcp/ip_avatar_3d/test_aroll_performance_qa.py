@@ -394,6 +394,56 @@ class ArollPerformanceQATests(unittest.TestCase):
         self.assertFalse(evidence["success"])
         self.assertTrue(evidence["errors"])
 
+    def test_central_silhouette_can_normalize_an_off_center_subject(self) -> None:
+        points = []
+        for column in range(64):
+            depth = 1.96 if column in (30, 31, 32, 33) else 2.0
+            normalized_x = (column + 0.5) / 64.0
+            points.append((0.28 + normalized_x * 0.22, depth))
+
+        evidence = qa.detect_central_silhouette_spike(
+            points,
+            normalize_subject_x=True,
+        )
+
+        self.assertTrue(evidence["success"], evidence)
+        self.assertTrue(evidence["subjectXNormalized"])
+        self.assertAlmostEqual(evidence["subjectMinX"], points[0][0])
+        self.assertAlmostEqual(evidence["subjectMaxX"], points[-1][0])
+        self.assertAlmostEqual(evidence["spikeMeters"], 0.04)
+
+    def test_central_silhouette_requires_both_flanks_behind_the_center(self) -> None:
+        points = []
+        for column in range(64):
+            depth = 2.0
+            if column in (30, 31, 32, 33):
+                depth = 1.96
+            elif column == 29:
+                depth = 1.96
+            elif column == 34:
+                depth = 2.50
+            points.append(((column + 0.5) / 64.0, depth))
+
+        evidence = qa.detect_central_silhouette_spike(points)
+
+        self.assertTrue(evidence["success"], evidence)
+        self.assertAlmostEqual(evidence["spikeMeters"], 0.0)
+
+    def test_central_silhouette_requires_a_continuous_center_spike(self) -> None:
+        points = []
+        for column in range(64):
+            depth = 2.0
+            if column == 30:
+                depth = 1.80
+            points.append(((column + 0.5) / 64.0, depth))
+
+        evidence = qa.detect_central_silhouette_spike(points)
+
+        self.assertTrue(evidence["success"], evidence)
+        self.assertAlmostEqual(evidence["centerClosestDepth"], 1.80)
+        self.assertAlmostEqual(evidence["centerConservativeDepth"], 2.0)
+        self.assertAlmostEqual(evidence["spikeMeters"], 0.0)
+
     def test_seat_visibility_raster_respects_character_occlusion(self) -> None:
         seat = [
             ((0.0, 0.0, 2.0), (1.0, 0.0, 2.0), (1.0, 1.0, 2.0)),

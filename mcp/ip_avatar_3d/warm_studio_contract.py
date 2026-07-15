@@ -14,6 +14,7 @@ WINDOW_OPENING = (2.6, 2.75)
 DOOR_OPENING = (1.0, 2.4)
 TARGET_CHARACTER_HEIGHT = 2.55
 DEFAULT_RENDER_RESOLUTION = (1920, 1080)
+TRANSITION_FOCUS_LOCATION = (0.0, 0.38, 1.48)
 
 PRESENTATION_MODES = ("standing", "seated")
 
@@ -21,7 +22,7 @@ MODE_MARKER_SPECS = MappingProxyType({
     "standing": MappingProxyType({
         "spawn": (0.0, 0.30, 0.0),
         "focus": (0.0, 0.30, 1.93),
-        "seat": (0.0, 0.53, 0.56),
+        "seat": (0.0, 1.35, 0.56),
         "knee_l": (-0.20, 0.04, 0.54),
         "knee_r": (0.20, 0.04, 0.54),
         "foot_l": (-0.22, 0.00, 0.0),
@@ -30,7 +31,7 @@ MODE_MARKER_SPECS = MappingProxyType({
     "seated": MappingProxyType({
         "spawn": (0.0, 0.43, 0.0),
         "focus": (0.0, 0.43, 1.58),
-        "seat": (0.0, 0.53, 0.56),
+        "seat": (0.0, 1.35, 0.56),
         "knee_l": (-0.20, -0.01, 0.54),
         "knee_r": (0.20, -0.01, 0.54),
         "foot_l": (-0.22, -0.03, 0.0),
@@ -44,6 +45,7 @@ SEAT_VISIBILITY_PROFILE = MappingProxyType({
     "maximumVisibleFraction": 0.28,
 })
 
+HERO_CHAIR_LOCATION = (0.0, 1.35, 0.0)
 HERO_CHAIR_SEAT_SIZE = (1.06, 0.58, 0.12)
 HERO_CHAIR_BACK_SIZE = (1.03, 0.10, 0.54)
 HERO_CHAIR_ARM_X = 0.56
@@ -54,33 +56,44 @@ MODE_CAMERA_SPECS = MappingProxyType({
         "wide": ("Camera_Standing_Wide", (0.0, -2.74, 1.67), 24.0),
         "medium": ("Camera_Standing_Medium", (0.0, -2.15, 1.78), 50.0),
         "three_quarter": ("Camera_Standing_ThreeQuarter", (-2.25, -1.65, 1.82), 50.0),
-        "transition": ("Camera_Standing_Transition", (-1.58, -2.42, 1.48), 42.0),
+        "transition": ("Camera_Standing_Transition", (-1.58, -2.42, 1.48), 20.0),
     }),
     "seated": MappingProxyType({
         "wide": ("Camera_Seated_Wide", (0.0, -2.74, 1.55), 24.0),
         "medium": ("Camera_Seated_Medium", (0.0, -2.15, 1.60), 50.0),
         "three_quarter": ("Camera_Seated_ThreeQuarter", (-2.20, -1.60, 1.62), 50.0),
-        "transition": ("Camera_Seated_Transition", (-1.58, -2.42, 1.48), 42.0),
+        "transition": ("Camera_Seated_Transition", (-1.58, -2.42, 1.48), 20.0),
     }),
 })
 
 SUBJECT_LIGHT_PROFILE = MappingProxyType({
-    "name": "warm_subject_first_v2",
-    "worldStrength": 0.054,
-    "keyTemperatureK": 4500,
-    "keyEnergy": 825.0,
-    "keySpreadDegrees": 145.0,
-    "fillEnergy": 115.0,
-    "rimEnergy": 260.0,
-    "windowEnergy": 63.0,
-    "practicalWallEnergy": 34.02,
-    "practicalShelfEnergy": 38.88,
-    "downlightEnergy": 16.2,
+    "name": "bright_subject_first_v5",
+    "worldStrength": 0.1,
+    "keyTemperatureK": 6500,
+    "keyEnergy": 1100.0,
+    "keyTarget": (0.0, 0.365, 1.9),
+    "keySpotSizeDegrees": 55.0,
+    "keySpotBlend": 0.65,
+    "keySoftRadius": 0.55,
+    "fillEnergy": 110.0,
+    "frontFillEnergy": 180.0,
+    "frontFillTemperatureK": 5600,
+    "frontFillTarget": (0.0, 0.365, 1.2),
+    "rimEnergy": 180.0,
+    "rimSpotSizeDegrees": 28.0,
+    "rimSpotBlend": 0.65,
+    "rimSoftRadius": 0.5,
+    "windowEnergy": 50.0,
+    "practicalWallEnergy": 28.0,
+    "practicalShelfEnergy": 30.0,
+    "downlightEnergy": 5.0,
     "rimTemperatureK": 3200,
     "practicalTemperatureK": 2700,
-    "backgroundStopsBelowFace": 1.25,
-    "authoredExposure": -2.769925,
-    "cyclesFinalExposure": -4.0,
+    "backgroundStopsBelowFace": 1.75,
+    "backgroundStopsRange": (1.2, 2.2),
+    "authoredExposure": -2.45,
+    "cyclesFinalExposure": -3.7,
+    "cyclesKeyEnergyMultiplier": 3.5,
     "whiteBalanceTemperatureK": 4500.0,
     "whiteBalanceTint": 10.0,
     "brightNeutralRedBlueRatio": (0.95, 1.22),
