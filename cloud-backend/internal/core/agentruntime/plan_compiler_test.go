@@ -908,6 +908,113 @@ func TestPlanCompiler_PreparePlanInsertsMCPGenerationRunnerWhenRequested(t *test
 	}
 }
 
+func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
+	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["hyperframes_project_generator"].Parameters["aRollAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
+	catalog["mcp_generation_runner"] = &tool.ToolManifest{
+		Name:           "mcp_generation_runner",
+		ExecutionPlane: tool.ExecutionPlaneLocal,
+		LocalCommand:   "LOCAL_MCP_TOOL_CALL",
+		Parameters: map[string]tool.ParamDef{
+			"externalGenerationRequests": {Type: "array", Required: true},
+			"providerId":                 {Type: "string", Required: true},
+			"mcpTool":                    {Type: "string", Required: true},
+			"maxReadyGenerations":        {Type: "number", Required: false},
+			"minReadyVideoGenerations":   {Type: "number", Required: false},
+			"mcpBatchTimeoutSec":         {Type: "number", Required: false},
+			"mcpToolCallTimeoutSec":      {Type: "number", Required: false},
+		},
+		Output: map[string]tool.ParamDef{
+			"shotAssetPackages":  {Type: "array"},
+			"aRollAssetPackages": {Type: "array"},
+			"generationResults":  {Type: "array"},
+		},
+	}
+	catalog["ip_avatar_3d.render_talking_video"] = &tool.ToolManifest{
+		Name:               "ip_avatar_3d.render_talking_video",
+		Type:               "mcp",
+		Boundary:           tool.BoundaryMCPProvider,
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		RequiresUserDevice: true,
+		LocalCommand:       "LOCAL_MCP_TOOL_CALL",
+		Provider:           "ip_avatar_3d",
+		ProviderBinding: &tool.ProviderBinding{
+			ProviderID:      "ip_avatar_3d",
+			RemoteToolName:  "render_talking_video",
+			LogicalToolName: "ip_avatar_3d.render_talking_video",
+			ToolPrefix:      "ip_avatar_3d.",
+		},
+		Parameters: map[string]tool.ParamDef{
+			"script":               {Type: "string", Required: true},
+			"characterProfilePath": {Type: "string", Required: false},
+			"presentationMode":     {Type: "string", Required: false},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "用主 IP 创作一条知识分享口播视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{{
+			ID:   "script_generation",
+			Tool: "video_script_generator",
+			Arguments: map[string]interface{}{
+				"topic":                "AI 视频创作工作流",
+				"characterProfilePath": "ip形象/main_ip/character-profile.json",
+				"presentationMode":     "standing",
+			},
+			ExpectedOutput:  []string{"script", "scriptSpans"},
+			ProduceArtifact: true,
+		}},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+
+	aroll := findStep(t, prepared, "ip_aroll_generation")
+	if arrollTool := aroll.Tool; arrollTool != "mcp_generation_runner" {
+		t.Fatalf("ip_aroll_generation tool = %s, want mcp_generation_runner", arrollTool)
+	}
+	if got := aroll.Arguments["providerId"]; got != "ip_avatar_3d" {
+		t.Fatalf("providerId = %#v, want ip_avatar_3d", got)
+	}
+	if got := aroll.Arguments["mcpTool"]; got != "ip_avatar_3d.render_talking_video" {
+		t.Fatalf("mcpTool = %#v", got)
+	}
+	requests, ok := aroll.Arguments["externalGenerationRequests"].([]interface{})
+	if !ok || len(requests) != 1 {
+		t.Fatalf("externalGenerationRequests = %#v, want one request", aroll.Arguments["externalGenerationRequests"])
+	}
+	request, ok := requests[0].(map[string]interface{})
+	if !ok || request["kind"] != "ip_aroll_video" {
+		t.Fatalf("IP A-roll request = %#v", requests[0])
+	}
+	arguments, ok := request["arguments"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("IP A-roll arguments = %#v", request["arguments"])
+	}
+	if got := arguments["script"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("script ref = %#v", got)
+	}
+	if got := arguments["characterProfilePath"]; got != "ip形象/main_ip/character-profile.json" {
+		t.Fatalf("characterProfilePath = %#v", got)
+	}
+	preview := findStep(t, prepared, "preview")
+	if got := preview.Arguments["aRollAssetPackages"]; got != "{{ip_aroll_generation.output.aRollAssetPackages}}" {
+		t.Fatalf("preview aRollAssetPackages = %#v", got)
+	}
+	if !containsString(preview.DependsOn, "ip_aroll_generation") {
+		t.Fatalf("preview dependencies = %#v, want ip_aroll_generation", preview.DependsOn)
+	}
+	if stepIndex(t, prepared, "ip_aroll_generation") >= stepIndex(t, prepared, "preview") {
+		t.Fatalf("ip_aroll_generation must execute before preview")
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
 func TestPlanCompilerCompilesMCPProviderToolToLocalMCPToolCall(t *testing.T) {
 	compiler := NewPlanCompiler(staticToolCatalog{
 		"jimeng.generate_video": {

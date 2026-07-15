@@ -281,7 +281,11 @@ python3 mcp/ip_avatar_3d/server.py
 }
 ```
 
+首次启动且本地尚未创建 `mcp-providers.json` 时，Local Agent 会自动发现并启用仓库内置的 `ip_avatar_3d` stdio provider；已经存在的用户配置不会被覆盖。主角色配置按“请求显式路径 -> `TANGYING_IP_AVATAR_PROFILE` -> 仓库内 `ip形象/main_ip/character-profile.json`”的顺序解析，后续替换 IP 时无需修改编排代码。
+
 系统调用时使用通用 `LOCAL_MCP_TOOL_CALL`，不要新增 `LOCAL_IP_*` 一类本地命令。该 provider 返回 `videoPath` / `localPath` / `motionPlanPath` / `renderReportPath`，主系统只把它作为 IP A-roll 视频层预览和合成。
+
+`talking_head` 计划在该能力可用时自动插入 `ip_aroll_generation`。本地 runner 会把结果封装为独立的 `aRollAssetPackages`；HyperFrames 将其作为全程连续的角色画面和独立音轨，并按 `startSec` / `durationSec` 叠加 HyperKeyframes、即梦或其他 AIGC B-roll。显式传入 `ipArollEnabled=false` 可以关闭自动插入。
 
 主 IP 的生产配置固定使用 `production_1080p`、1920x1080、30 fps 和本地 `gpt_sovits_local` 音色 `main_ip_warm_knowledge_host_v1`。没有显式 `audioPath` 时，口播稿由该固定音色合成并经 48 kHz、`-16 LUFS`、`-1.5 dBTP` 门限处理；固定音色不可用时直接失败，不回退到系统 TTS。
 

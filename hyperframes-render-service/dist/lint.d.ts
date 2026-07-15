@@ -7,5 +7,6 @@
  */
 import { type SecurityConfig } from "./security.js";
 import type { LintRequest, LintResult } from "./types.js";
+export declare function hasHTMLClass(content: string, className: string): boolean;
 export declare function lintProject(req: LintRequest, security: SecurityConfig): Promise<LintResult>;
 //# sourceMappingURL=lint.d.ts.map

@@ -101,7 +101,7 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 			"schemaVersion":     1,
 			"requestId":         request["requestId"],
 			"shotId":            request["shotId"],
-			"kind":              mcpExternalRequestKind(request),
+			"kind":              mcpExternalRequestType(request),
 			"providerId":        providerID,
 			"toolName":          requestToolName,
 			"generatedAt":       generatedAt,
@@ -304,10 +304,17 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 	}
 	sourceSummary := buildMCPSourceSummary(providerID, toolName, job, results)
 	assetProvenance := buildMCPAssetProvenance(results)
+	aRollPackages := make([]interface{}, 0, len(packages))
+	for _, item := range packages {
+		if pkg := mcpMapFromInterface(item); isIPArollKind(mcpStringFromMap(pkg, "kind", "sourceType")) {
+			aRollPackages = append(aRollPackages, item)
+		}
+	}
 	return &Result{Output: map[string]interface{}{
 		"providerId":                 providerID,
 		"toolName":                   toolName,
 		"shotAssetPackages":          packages,
+		"aRollAssetPackages":         aRollPackages,
 		"generationResults":          results,
 		"externalGenerationResults":  results,
 		"externalGenerationRequests": remaining,
@@ -467,7 +474,7 @@ func (e *mcpToolCallExecutor) deferRemainingRequests(items []interface{}, remain
 			"schemaVersion":     1,
 			"requestId":         future["requestId"],
 			"shotId":            future["shotId"],
-			"kind":              mcpExternalRequestKind(future),
+			"kind":              mcpExternalRequestType(future),
 			"providerId":        providerID,
 			"toolName":          futureToolName,
 			"status":            "deferred",
@@ -480,6 +487,17 @@ func (e *mcpToolCallExecutor) deferRemainingRequests(items []interface{}, remain
 }
 
 func mcpPreflightForExternalRequest(request map[string]interface{}) map[string]interface{} {
+	if isIPArollExternalRequest(request) {
+		return map[string]interface{}{
+			"passed":          true,
+			"score":           100,
+			"promptPassed":    true,
+			"referencePassed": true,
+			"applicable":      false,
+			"reason":          "deterministic_local_render",
+			"issues":          []interface{}{},
+		}
+	}
 	if mcpExternalRequestKind(request) != "video" {
 		return map[string]interface{}{
 			"passed":          true,
@@ -732,7 +750,11 @@ func buildMCPAssetProvenance(results []interface{}) []interface{} {
 	provenance := make([]interface{}, 0, len(results))
 	for _, item := range results {
 		result := mcpMapFromInterface(item)
+		rawKind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(result, "kind")))
 		kind := mcpKindFromResult(result)
+		if rawKind == "" {
+			rawKind = kind
+		}
 		providerID := mcpStringFromMap(result, "providerId", "providerName")
 		providerJobID := mcpStringFromMap(result, "providerJobId", "submitId", "jobId", "taskId")
 		if providerJobID == "" {
@@ -742,8 +764,8 @@ func buildMCPAssetProvenance(results []interface{}) []interface{} {
 			"schemaVersion":     1,
 			"requestId":         result["requestId"],
 			"shotId":            result["shotId"],
-			"kind":              kind,
-			"sourceType":        mcpSourceTypeForKind(kind),
+			"kind":              rawKind,
+			"sourceType":        mcpSourceTypeForKind(rawKind),
 			"providerId":        providerID,
 			"providerName":      providerID,
 			"providerJobId":     providerJobID,
@@ -769,6 +791,8 @@ func mcpSourceTypeForKind(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "image", "reference_image", "keyframe":
 		return "aigc_image"
+	case "ip_aroll_video", "ip_a_roll_video":
+		return "ip_aroll_video"
 	case "video":
 		return "aigc_video"
 	default:
@@ -845,11 +869,28 @@ func mcpKindFromResult(result map[string]interface{}) string {
 }
 
 func mcpExternalRequestKind(request map[string]interface{}) string {
-	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
+	kind := mcpExternalRequestType(request)
 	if strings.Contains(kind, "image") || strings.Contains(kind, "keyframe") {
 		return "image"
 	}
 	return "video"
+}
+
+func mcpExternalRequestType(request map[string]interface{}) string {
+	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
+	if kind == "" {
+		return "video"
+	}
+	return kind
+}
+
+func isIPArollExternalRequest(request map[string]interface{}) bool {
+	return isIPArollKind(mcpExternalRequestType(request))
+}
+
+func isIPArollKind(kind string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(kind))
+	return normalized == "ip_aroll_video" || normalized == "ip_a_roll_video"
 }
 
 type mcpGeneratedMedia struct {
@@ -1058,29 +1099,40 @@ func (e *mcpToolCallExecutor) importGeneratedMediaRef(job Job, request map[strin
 func mcpArgumentsFromExternalRequest(request map[string]interface{}) map[string]interface{} {
 	target := mcpMapFromInterface(request["target"])
 	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
-	args := map[string]interface{}{
-		"prompt": mcpPromptFromExternalRequest(request),
+	args := copyMap(mcpMapFromInterface(request["arguments"]))
+	if isIPArollExternalRequest(request) {
+		if strings.TrimSpace(mcpStringFromMap(args, "script")) == "" {
+			if script := mcpPromptFromExternalRequest(request); script != "" {
+				args["script"] = script
+			}
+		}
+		return args
 	}
-	if mode := mcpStringFromMap(request, "mode"); mode != "" {
+	if _, exists := args["prompt"]; !exists {
+		args["prompt"] = mcpPromptFromExternalRequest(request)
+	}
+	if mode := mcpStringFromMap(request, "mode"); mode != "" && args["mode"] == nil {
 		args["mode"] = mode
 	}
-	if duration := mcpIntFromInterface(mcpFirstPresent(target, "durationSec", "duration")); duration > 0 && !strings.Contains(kind, "image") {
+	if duration := mcpIntFromInterface(mcpFirstPresent(target, "durationSec", "duration")); duration > 0 && !strings.Contains(kind, "image") && args["duration"] == nil {
 		args["duration"] = duration
 	}
-	if ratio := mcpStringFromMap(target, "aspectRatio", "ratio"); ratio != "" {
+	if ratio := mcpStringFromMap(target, "aspectRatio", "ratio"); ratio != "" && args["ratio"] == nil {
 		args["ratio"] = ratio
 	}
 	if resolution := mcpStringFromMap(target, "videoResolution", "video_resolution", "resolution"); resolution != "" {
 		if strings.Contains(kind, "image") {
-			args["resolution_type"] = normalizeMCPImageResolution(resolution)
-		} else {
+			if args["resolution_type"] == nil {
+				args["resolution_type"] = normalizeMCPImageResolution(resolution)
+			}
+		} else if args["video_resolution"] == nil {
 			args["video_resolution"] = normalizeMCPVideoResolution(resolution)
 		}
 	}
-	if generateNum := mcpIntFromInterface(mcpFirstPresent(target, "generateNum", "generate_num", "count")); generateNum > 0 && strings.Contains(kind, "image") {
+	if generateNum := mcpIntFromInterface(mcpFirstPresent(target, "generateNum", "generate_num", "count")); generateNum > 0 && strings.Contains(kind, "image") && args["generate_num"] == nil {
 		args["generate_num"] = generateNum
 	}
-	if model := mcpStringFromMap(target, "modelVersion", "model_version"); model != "" {
+	if model := mcpStringFromMap(target, "modelVersion", "model_version"); model != "" && args["model_version"] == nil {
 		args["model_version"] = model
 	}
 	return args
@@ -1157,14 +1209,19 @@ func mcpContentText(content []localmcp.ToolContent) string {
 
 func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, request map[string]interface{}, structured map[string]interface{}, media mcpGeneratedMedia) map[string]interface{} {
 	duration := mcpIntFromInterface(mcpFirstPresent(mcpMapFromInterface(request["target"]), "durationSec", "duration"))
+	if actualDuration := mcpIntFromInterface(mcpFirstPresent(structured, "durationSec", "duration")); actualDuration > 0 {
+		duration = actualDuration
+	}
 	if duration <= 0 {
 		duration = 5
 	}
 	kind := strings.ToLower(strings.TrimSpace(mcpStringFromMap(request, "kind", "generationKind", "assetKind")))
 	isImage := strings.Contains(kind, "image")
+	isIPAroll := isIPArollKind(kind)
 	outputKind := "SHOT_VIDEO_CLIP"
 	mode := "aigc_video"
 	baseKind := "video"
+	baseRole := "base"
 	if isImage {
 		outputKind = mcpStringFromMap(request, "artifactKind", "outputArtifactKind")
 		if outputKind == "" {
@@ -1172,6 +1229,10 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 		}
 		mode = "aigc_image"
 		baseKind = "image"
+	} else if isIPAroll {
+		outputKind = "IP_AROLL_VIDEO"
+		mode = "ip_aroll_video"
+		baseRole = "a_roll"
 	}
 	generatedAt := time.Now().UTC().Format(time.RFC3339)
 	provenance := map[string]interface{}{
@@ -1184,6 +1245,14 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 		"generatedAt":       generatedAt,
 		"inputPromptHash":   mcpInputPromptHash(request),
 		"sourceArtifactIds": mcpSourceArtifactIDs(request),
+	}
+	mediaPayload := map[string]interface{}{
+		"requestId":  request["requestId"],
+		"submitId":   mcpFirstPresent(structured, "submit_id", "submitId"),
+		"genStatus":  mcpFirstPresent(structured, "gen_status", "genStatus", "status"),
+		"provider":   providerID,
+		"provenance": provenance,
+		"raw":        structured,
 	}
 	packageItem := map[string]interface{}{
 		"shotId":          request["shotId"],
@@ -1204,14 +1273,11 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 			"videoPrompt":    mcpPromptFromExternalRequest(request),
 			"negativePrompt": mcpStringFromMap(request, "negativePrompt"),
 		},
-		"aigcVideo": map[string]interface{}{
-			"requestId":  request["requestId"],
-			"submitId":   mcpFirstPresent(structured, "submit_id", "submitId"),
-			"genStatus":  mcpFirstPresent(structured, "gen_status", "genStatus"),
-			"provider":   providerID,
-			"provenance": provenance,
-			"raw":        structured,
-		},
+	}
+	if isIPAroll {
+		packageItem["ipArollVideo"] = mediaPayload
+	} else {
+		packageItem["aigcVideo"] = mediaPayload
 	}
 	if media.StorageRef != "" {
 		packageItem["generationPlan"] = map[string]interface{}{
@@ -1222,7 +1288,7 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 				"baseLayer": map[string]interface{}{
 					"id":          request["requestId"],
 					"kind":        baseKind,
-					"role":        "base",
+					"role":        baseRole,
 					"storageRef":  media.StorageRef,
 					"durationSec": duration,
 				},
@@ -1245,7 +1311,12 @@ func (e *mcpToolCallExecutor) shotAssetPackageFromMCPResult(providerID string, r
 			}
 			return packageItem
 		}
-		if aigcVideo, ok := packageItem["aigcVideo"].(map[string]interface{}); ok {
+		if renderedVideo, ok := packageItem["ipArollVideo"].(map[string]interface{}); ok {
+			renderedVideo["storageRef"] = media.StorageRef
+			if media.LocalPath != "" {
+				renderedVideo["localPath"] = media.LocalPath
+			}
+		} else if aigcVideo, ok := packageItem["aigcVideo"].(map[string]interface{}); ok {
 			aigcVideo["storageRef"] = media.StorageRef
 			if media.LocalPath != "" {
 				aigcVideo["localPath"] = media.LocalPath

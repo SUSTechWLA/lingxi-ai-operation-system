@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tangying-ai/tangying-ai-operation-system/local-backend/internal/localmcp"
 )
 
 func TestHealthAndPathsUseLocalDataDir(t *testing.T) {
@@ -315,6 +317,34 @@ func (r *fakeAgentCommandRunner) Run(_ context.Context, name string, args ...str
 	return r.out, r.err
 }
 
+func TestReadMCPProvidersBootstrapsBundledIPAvatarWhenConfigIsMissing(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "repo", "mcp", "ip_avatar_3d", "server.py")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatalf("mkdir MCP script dir: %v", err)
+	}
+	if err := os.WriteFile(script, []byte("# test MCP server\n"), 0o644); err != nil {
+		t.Fatalf("write MCP script: %v", err)
+	}
+	t.Setenv("TANGYING_IP_AVATAR_MCP_SCRIPT", script)
+
+	server := NewServer(Config{DataDir: filepath.Join(root, "data")})
+	providers, err := server.ReadMCPProviders()
+	if err != nil {
+		t.Fatalf("ReadMCPProviders: %v", err)
+	}
+	if len(providers) != 1 {
+		t.Fatalf("providers = %#v, want bundled IP avatar provider", providers)
+	}
+	provider := providers[0]
+	if provider.ID != "ip_avatar_3d" || provider.Transport != "stdio" || provider.ToolPrefix != "ip_avatar_3d." || !provider.Enabled {
+		t.Fatalf("unexpected IP avatar provider: %+v", provider)
+	}
+	if len(provider.Args) != 1 || provider.Args[0] != script || provider.TimeoutSec != 3600 {
+		t.Fatalf("unexpected IP avatar command contract: %+v", provider)
+	}
+}
+
 func TestLocalMCPProviderSettingsSaveAndStatus(t *testing.T) {
 	root := t.TempDir()
 	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -528,7 +558,8 @@ func TestJiMengRegisterMCPStoresDefaultProvider(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode providers: %v", err)
 	}
-	if len(listed.Providers) != 1 || listed.Providers[0].ID != "jimeng" || !listed.Providers[0].Enabled {
+	provider, ok := localMCPProviderByID(listed.Providers, "jimeng")
+	if !ok || !provider.Enabled {
 		t.Fatalf("providers = %+v", listed.Providers)
 	}
 }
@@ -554,10 +585,10 @@ func TestJiMengRegisterMCPStoresDefaultStandardStdioProvider(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode providers: %v", err)
 	}
-	if len(listed.Providers) != 1 {
+	provider, ok := localMCPProviderByID(listed.Providers, "jimeng")
+	if !ok {
 		t.Fatalf("providers = %+v", listed.Providers)
 	}
-	provider := listed.Providers[0]
 	if provider.ID != "jimeng" || provider.Transport != "stdio" || provider.Command == "" || len(provider.Args) == 0 {
 		t.Fatalf("stdio provider not registered as expected: %+v", provider)
 	}
@@ -570,6 +601,15 @@ func TestJiMengRegisterMCPStoresDefaultStandardStdioProvider(t *testing.T) {
 	if !strings.HasSuffix(provider.Args[0], filepath.Join("mcp", "jimeng", "server.py")) {
 		t.Fatalf("stdio script arg = %q, want jimeng server.py", provider.Args[0])
 	}
+}
+
+func localMCPProviderByID(providers []localmcp.ProviderConfig, id string) (localmcp.ProviderConfig, bool) {
+	for _, provider := range providers {
+		if provider.ID == id {
+			return provider, true
+		}
+	}
+	return localmcp.ProviderConfig{}, false
 }
 
 func TestJiMengLoginHeadlessCallsRegisteredMCPProvider(t *testing.T) {

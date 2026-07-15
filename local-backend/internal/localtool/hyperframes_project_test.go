@@ -145,6 +145,99 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 	}
 }
 
+func TestHyperFramesProjectExecutorBuildsContinuousIPArollWithSeparateAudioAndBroll(t *testing.T) {
+	root := t.TempDir()
+	for _, artifactID := range []string{"ip-aroll-main", "broll-shot-01"} {
+		artifactDir := filepath.Join(root, "artifacts", "project_001", artifactID)
+		if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+			t.Fatalf("mkdir artifact: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("fake video bytes"), 0o644); err != nil {
+			t.Fatalf("write artifact content: %v", err)
+		}
+	}
+
+	executor := NewHyperFramesProjectExecutor(root)
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-ip-aroll",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "AI 视频创作工作流",
+			"script": "先用连续 A-roll 建立信任，再用 B-roll 补充证据。",
+			"aRollAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "AROLL_MAIN",
+					"durationSec": float64(12),
+					"sourceType":  "ip_aroll_video",
+					"generationPlan": map[string]interface{}{
+						"mode": "ip_aroll_video",
+						"fusionPlan": map[string]interface{}{
+							"baseLayer": map[string]interface{}{
+								"kind":       "video",
+								"role":       "a_roll",
+								"storageRef": "local://projects/project_001/artifacts/ip-aroll-main/hash/aroll.mp4",
+							},
+						},
+					},
+				},
+			},
+			"shotAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "SHOT_01",
+					"durationSec": float64(4),
+					"startSec":    float64(3),
+					"visualMode":  "full_screen",
+					"generationPlan": map[string]interface{}{
+						"mode": "aigc_video",
+						"fusionPlan": map[string]interface{}{
+							"baseLayer": map[string]interface{}{
+								"kind":       "video",
+								"role":       "b_roll",
+								"storageRef": "local://projects/project_001/artifacts/broll-shot-01/hash/broll.mp4",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(raw)
+	for _, expected := range []string{
+		`class="aroll-media clip"`,
+		`class="aroll-audio clip"`,
+		`data-track-index="0"`,
+		`data-track-index="10"`,
+		`data-duration="12.0"`,
+		`class="shot-media clip broll-full"`,
+		`data-start="3.0"`,
+		`data-track-index="2"`,
+		`assets/media/ip-aroll-main-hash-aroll.mp4`,
+		`assets/media/broll-shot-01-hash-broll.mp4`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("index.html missing %q:\n%s", expected, html)
+		}
+	}
+	compositionStart := strings.Index(html, `data-composition-id="tangying-main"`)
+	videoStart := strings.Index(html, `class="aroll-media clip"`)
+	sceneStart := strings.Index(html, `<div class="scene-content">`)
+	if compositionStart < 0 || videoStart < compositionStart || sceneStart < videoStart {
+		t.Fatalf("A-roll media must be a direct composition child before scene overlays")
+	}
+	if strings.Contains(html[videoStart:sceneStart], `<div`) {
+		t.Fatalf("A-roll video/audio must not be nested in a decorative media container")
+	}
+}
+
 func TestHyperFramesProjectExecutorKeepsFullShotTimelineWhenOnlySomeMediaReady(t *testing.T) {
 	root := t.TempDir()
 	artifactDir := filepath.Join(root, "artifacts", "project_001", "shot-video-03")

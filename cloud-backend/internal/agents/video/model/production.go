@@ -63,6 +63,7 @@ func isKnownRealArtifactSource(source string) bool {
 		ArtifactSourceAIGCImage,
 		ArtifactSourceHyperFrames,
 		ArtifactSourceFFmpegComposite,
+		ArtifactSourceIPArollVideo,
 		ArtifactSourceUploaded:
 		return true
 	default:

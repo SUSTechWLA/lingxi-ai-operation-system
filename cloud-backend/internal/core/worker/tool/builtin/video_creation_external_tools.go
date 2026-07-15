@@ -810,9 +810,12 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"mcpTool":                    {Type: "string", Description: "Logical MCP tool name, for example jimeng.generate_video", Required: true},
 			"minReadyVideoGenerations":   {Type: "number", Description: "Minimum ready MCP video assets required before the result can satisfy the external AIGC video requirement.", Required: false},
 			"maxReadyGenerations":        {Type: "number", Description: "Maximum ready MCP assets to create in one automatic batch to control quota spend.", Required: false},
+			"mcpBatchTimeoutSec":         {Type: "number", Description: "Maximum duration for the complete MCP batch.", Required: false},
+			"mcpToolCallTimeoutSec":      {Type: "number", Description: "Maximum duration for one MCP tool call.", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"shotAssetPackages":          {Type: "array", Description: "Per-shot asset packages with generated MCP results"},
+			"aRollAssetPackages":         {Type: "array", Description: "Continuous deterministic A-roll packages returned by IP avatar renderers"},
 			"generationResults":          {Type: "array", Description: "Raw MCP generation results, including preflightQa for prompt/reference gates before quota-spending provider calls"},
 			"externalGenerationResults":  {Type: "array", Description: "Alias of raw MCP generation results for review and provenance panels"},
 			"externalGenerationRequests": {Type: "array", Description: "Requests that remain manual or failed"},
@@ -1021,14 +1024,15 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		}
 		manifest.HumanReview = &tool.HumanReview{Required: true, Gate: tool.ApprovalAfterArtifact, Title: "审核画面预览"}
 		manifest.Parameters = map[string]tool.ParamDef{
-			"topic":             {Type: "string", Description: "Video topic", Required: true},
-			"script":            {Type: "string", Description: "Full voiceover script", Required: true},
-			"shotList":          {Type: "array", Description: "Shot list", Required: true},
-			"videoPrompts":      {Type: "array", Description: "Video prompts", Required: false},
-			"shotAssetPackages": {Type: "array", Description: "Independent per-shot asset packages", Required: false},
-			"ipArollPlan":       {Type: "object", Description: "Optional IP character A-roll plan from ip_aroll_director", Required: false},
-			"style":             {Type: "string", Description: "Visual style", Required: false},
-			"publishCopy":       {Type: "object", Description: "Publish copy", Required: false},
+			"topic":              {Type: "string", Description: "Video topic", Required: true},
+			"script":             {Type: "string", Description: "Full voiceover script", Required: true},
+			"shotList":           {Type: "array", Description: "Shot list", Required: true},
+			"videoPrompts":       {Type: "array", Description: "Video prompts", Required: false},
+			"shotAssetPackages":  {Type: "array", Description: "Independent per-shot asset packages", Required: false},
+			"aRollAssetPackages": {Type: "array", Description: "Optional continuous A-roll video packages used as the composition base", Required: false},
+			"ipArollPlan":        {Type: "object", Description: "Optional IP character A-roll plan from ip_aroll_director", Required: false},
+			"style":              {Type: "string", Description: "Visual style", Required: false},
+			"publishCopy":        {Type: "object", Description: "Publish copy", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"projectDir": {Type: "string", Description: "HyperFrames project directory"},
@@ -6529,6 +6533,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	shotListJSON := serializeParamJSON(params["shotList"])
 	videoPromptsJSON := serializeParamJSON(params["videoPrompts"])
 	shotAssetPackagesJSON := serializeParamJSON(params["shotAssetPackages"])
+	aRollAssetPackagesJSON := serializeParamJSON(params["aRollAssetPackages"])
 	publishCopyJSON := serializeParamJSON(params["publishCopy"])
 	ipArollPlanJSON := serializeParamJSON(params["ipArollPlan"])
 
@@ -6538,7 +6543,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	assetsDir := filepath.Join(projectDir, "assets")
 
 	// Build data.json content.
-	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON)
+	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON, aRollAssetPackagesJSON)
 	manifestJSON := buildHyperFramesManifestJSON(topic, toolCtx.TaskID)
 	styleCSS := hyperFramesDefaultStyleCSS()
 
@@ -6679,7 +6684,11 @@ func serializeParamJSON(value interface{}) string {
 }
 
 // buildHyperFramesDataJSON builds the data.json content for a HyperFrames project.
-func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON string) string {
+func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON string, aRollAssetPackagesJSON ...string) string {
+	aRollPackages := ""
+	if len(aRollAssetPackagesJSON) > 0 {
+		aRollPackages = aRollAssetPackagesJSON[0]
+	}
 	data := map[string]interface{}{
 		"topic":                 topic,
 		"script":                script,
@@ -6689,6 +6698,7 @@ func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, sho
 		"shots":                 publicJSONValueOrFallback(shotListJSON, []interface{}{}),
 		"videoPrompts":          publicJSONValueOrFallback(videoPromptsJSON, []interface{}{}),
 		"shotAssetPackages":     publicJSONValueOrFallback(shotAssetPackagesJSON, []interface{}{}),
+		"aRollAssetPackages":    publicJSONValueOrFallback(aRollPackages, []interface{}{}),
 		"ipArollPlan":           publicJSONValueOrFallback(ipArollPlanJSON, map[string]interface{}{}),
 		"style": map[string]interface{}{
 			"aspectRatio": "16:9",

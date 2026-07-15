@@ -1455,6 +1455,44 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(render_input["modelPath"], str(model.resolve()))
             self.assertTrue(render_input["preserveExistingRig"])
 
+    def test_render_uses_configured_default_character_profile(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "character.glb"
+            model.write_bytes(b"glTF placeholder")
+            profile = root / "character-profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "future_main_ip",
+                        "model": {"path": model.name, "rigMode": "auto"},
+                        "render": {
+                            "presentationMode": "standing",
+                            "resolution": {"width": 1920, "height": 1080},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"TANGYING_IP_AVATAR_PROFILE": str(profile)},
+                clear=False,
+            ):
+                result = server.render_talking_video(
+                    script="新 IP 直接使用配置好的主角色档案。",
+                    outputDir=str(root / "out"),
+                    renderMode="preview",
+                    dryRun=True,
+                )
+
+            self.assertEqual(result["characterId"], "future_main_ip")
+            self.assertEqual(result["characterProfilePath"], str(profile.resolve()))
+            self.assertEqual(result["modelPath"], str(model.resolve()))
+
     def test_render_defaults_to_source_face_and_auto_rig_outputs(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:
@@ -2144,6 +2182,9 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         self.assertIn("-profile:v high", joined)
         self.assertIn("-r 30", joined)
         self.assertIn("-fps_mode cfr", joined)
+        self.assertIn("-g 30", joined)
+        self.assertIn("-keyint_min 30", joined)
+        self.assertIn("-sc_threshold 0", joined)
         self.assertIn("loudnorm=I=-16:TP=-1.5:LRA=7", joined)
         self.assertIn("-b:a 128k", joined)
         self.assertIn("-ar 48000", joined)

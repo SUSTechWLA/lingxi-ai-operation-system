@@ -144,6 +144,14 @@ def _load_character_profile(raw: str) -> tuple[Path, dict[str, Any]]:
     return path, profile
 
 
+def _default_character_profile_path() -> str:
+    configured = str(os.environ.get("TANGYING_IP_AVATAR_PROFILE") or "").strip()
+    if configured:
+        return str(_readable_path(configured))
+    bundled = _repo_root() / "ip形象" / "main_ip" / "character-profile.json"
+    return str(bundled.resolve()) if bundled.is_file() else ""
+
+
 def _profile_asset(profile_path: Path, raw: Any) -> str:
     if not raw:
         return ""
@@ -1882,6 +1890,12 @@ def _build_compose_video_args(
             "+faststart",
             "-r",
             str(fps),
+            "-g",
+            str(fps),
+            "-keyint_min",
+            str(fps),
+            "-sc_threshold",
+            "0",
             "-fps_mode",
             "cfr",
         ]
@@ -2675,6 +2689,8 @@ def render_talking_video(
     actionSequence: list[str] | None = None,
 ) -> dict[str, Any]:
     """Render a talking IP video layer from narration text and a local GLB/GLTF/FBX model."""
+    if not str(characterProfilePath or "").strip() and not str(modelPath or "").strip():
+        characterProfilePath = _default_character_profile_path()
     profile_path: Path | None = None
     master_blend_path = ""
     master_configured = False
