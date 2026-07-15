@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import render_warm_studio_demo as demo
 
@@ -78,9 +79,30 @@ def write_rig_report(
     transition_status: str = "not_applicable",
     transition_success: bool | None = None,
     viseme_success: bool = True,
+    dual_transition: bool = False,
 ) -> None:
     physical = transition_status == "passed"
     motion_events = (
+        [
+            {
+                "timeSec": 0.0,
+                "motion": "avatar_action",
+                "action": "Aroll_Transition_StandToSit",
+                "duration": 0.5,
+                "startState": "standing",
+                "endState": "seated",
+            },
+            {
+                "timeSec": 0.5,
+                "motion": "avatar_action",
+                "action": "Aroll_Transition_SitToStand",
+                "duration": 0.5,
+                "startState": "seated",
+                "endState": "standing",
+            },
+        ]
+        if physical and dual_transition
+        else
         [
             {
                 "timeSec": 0.0,
@@ -106,6 +128,13 @@ def write_rig_report(
     state_timeline = (
         [
             {"timeSec": 0.0, "state": "standing"},
+            {"timeSec": 0.5, "state": "seated"},
+            {"timeSec": 1.0, "state": "standing"},
+        ]
+        if physical and dual_transition
+        else
+        [
+            {"timeSec": 0.0, "state": "standing"},
             {"timeSec": 1.0, "state": "seated"},
         ]
         if physical
@@ -116,7 +145,11 @@ def write_rig_report(
     )
     sampled_frames = [
         {"frame": 1, "timeSec": 0.0, "state": "standing"},
-        {"frame": 3, "timeSec": 1.0, "state": "seated" if physical else "standing"},
+        {
+            "frame": 3,
+            "timeSec": 1.0,
+            "state": "standing" if dual_transition else ("seated" if physical else "standing"),
+        },
     ]
     sample_cadence = {
         "fps": 2,
@@ -149,7 +182,12 @@ def write_rig_report(
                         "evidence": {
                             **sample_cadence,
                             "physicalTransitionActions": (
-                                ["Aroll_Transition_StandToSit"] if physical else []
+                                [
+                                    "Aroll_Transition_StandToSit",
+                                    "Aroll_Transition_SitToStand",
+                                ]
+                                if physical and dual_transition
+                                else (["Aroll_Transition_StandToSit"] if physical else [])
                             ),
                         },
                     },
@@ -184,6 +222,50 @@ def write_rig_report(
 
 
 class WarmStudioDemoTests(unittest.TestCase):
+    def test_action_pack_publication_contract_has_exactly_seven_outputs(self) -> None:
+        self.assertEqual(
+            demo.FINAL_FILENAMES,
+            {
+                "seated": "Sloth_WarmStudio_Seated_Demo_1080p.mp4",
+                "standSit": "Sloth_WarmStudio_StandSit_Demo_1080p.mp4",
+                "reel": "Sloth_WarmStudio_DualMode_Reel_1080p.mp4",
+                "actionPack": "Sloth_WarmStudio_ActionPack_1080p.mp4",
+                "transitionContactSheet": "Sloth_WarmStudio_Transition_ContactSheet.png",
+                "visemeComparison": "Sloth_WarmStudio_Viseme_Comparison.png",
+                "report": "Sloth_WarmStudio_ActionPack_Report.json",
+            },
+        )
+
+    def test_viseme_review_sheet_does_not_require_ffmpeg_drawtext(self) -> None:
+        selections = [
+            {"label": label, "timeSec": index * 0.1}
+            for index, label in enumerate(
+                (
+                    "Mouth_Rest",
+                    "Mouth_MBP",
+                    "Mouth_A",
+                    "Mouth_E",
+                    "Mouth_O",
+                    "Mouth_U",
+                    "Mouth_Surprise",
+                )
+            )
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = root / "visemes.png"
+            with mock.patch.object(demo, "_ffmpeg", return_value="ffmpeg"), mock.patch.object(
+                demo, "_run"
+            ) as run:
+                demo._viseme_comparison(root / "canonical.mp4", output, selections)
+
+            command = run.call_args.args[0]
+            filter_graph = command[command.index("-filter_complex") + 1]
+            self.assertNotIn("drawtext", filter_graph)
+            self.assertIn("overlay=0:0", filter_graph)
+            self.assertEqual(command.count("-i"), 2)
+            self.assertFalse((root / ".visemes-labels.png").exists())
+
     def test_missing_lighting_evidence_fails_before_render(self) -> None:
         calls = 0
 
@@ -201,7 +283,7 @@ class WarmStudioDemoTests(unittest.TestCase):
                 )
             self.assertEqual(calls, 0)
 
-    def test_orchestrates_exactly_two_locked_production_renders(self) -> None:
+    def test_orchestrates_exactly_one_locked_continuous_production_render(self) -> None:
         calls: list[dict[str, object]] = []
 
         def fake_renderer(**kwargs: object) -> dict[str, object]:
@@ -212,7 +294,12 @@ class WarmStudioDemoTests(unittest.TestCase):
             video = mode_dir / "ip_layer.mp4"
             video.write_bytes(f"video-{mode}".encode())
             rig_report = mode_dir / "rig_report.json"
-            write_rig_report(rig_report)
+            write_rig_report(
+                rig_report,
+                transition_status="passed",
+                transition_success=True,
+                dual_transition=True,
+            )
             return {
                 "success": True,
                 "status": "ready",
@@ -238,14 +325,20 @@ class WarmStudioDemoTests(unittest.TestCase):
                 "width": 1920,
                 "height": 1080,
                 "fps": 30.0,
-                "durationSec": 8.0,
+                "durationSec": 24.0,
                 "constantFrameRate": True,
             }
 
         def fake_artifact_builder(
             _records: list[dict[str, object]], paths: dict[str, Path]
         ) -> None:
-            for key in ("reel", "standingContactSheet", "seatedContactSheet", "lightingComparison"):
+            for key in (
+                "seated",
+                "reel",
+                "actionPack",
+                "transitionContactSheet",
+                "visemeComparison",
+            ):
                 paths[key].write_bytes(key.encode())
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -260,16 +353,21 @@ class WarmStudioDemoTests(unittest.TestCase):
             )
 
             self.assertTrue(result["success"])
-            self.assertEqual([call["presentationMode"] for call in calls], ["standing", "seated"])
-            for call in calls:
-                self.assertEqual(call["width"], 1920)
-                self.assertEqual(call["height"], 1080)
-                self.assertEqual(call["fps"], 30)
-                self.assertEqual(call["qualityPreset"], "production_1080p")
-                self.assertEqual(call["renderMode"], "production")
-                self.assertEqual(call["voiceProvider"], "gpt_sovits_local")
-                self.assertEqual(call["voiceId"], "main_ip_warm_knowledge_host_v1")
-                self.assertEqual(call["fallbackPolicy"], "error")
+            self.assertEqual(len(calls), 1)
+            call = calls[0]
+            self.assertEqual(call["shotId"], "standSitActionPack")
+            self.assertEqual(call["presentationMode"], "standing")
+            self.assertEqual(call["actionSequence"], demo.DEMO_JOB["actionSequence"])
+            self.assertEqual(call["cameraPreset"], "transition")
+            self.assertEqual(call["script"], demo.DEMO_JOB["script"])
+            self.assertEqual(call["width"], 1920)
+            self.assertEqual(call["height"], 1080)
+            self.assertEqual(call["fps"], 30)
+            self.assertEqual(call["qualityPreset"], "production_1080p")
+            self.assertEqual(call["renderMode"], "production")
+            self.assertEqual(call["voiceProvider"], "gpt_sovits_local")
+            self.assertEqual(call["voiceId"], "main_ip_warm_knowledge_host_v1")
+            self.assertEqual(call["fallbackPolicy"], "error")
             for filename in demo.FINAL_FILENAMES.values():
                 self.assertTrue((Path(temp_dir) / filename).is_file(), filename)
             report_text = (Path(temp_dir) / demo.FINAL_FILENAMES["report"]).read_text()
@@ -277,8 +375,23 @@ class WarmStudioDemoTests(unittest.TestCase):
             self.assertNotIn(".warm-studio-demo-", report_text)
             self.assertTrue(report["lightingEvidence"]["available"])
             self.assertEqual(len(report["lightingEvidence"]["measurements"]), 4)
-            self.assertTrue(report["modes"]["standing"]["collisionReport"]["report"]["success"])
-            self.assertTrue(report["modes"]["seated"]["collisionReport"]["report"]["success"])
+            self.assertEqual(report["kind"], "standSitActionPack")
+            self.assertEqual(
+                report["actionCatalogVersion"],
+                "tangying-ip-aroll-action-catalog/v1",
+            )
+            self.assertTrue(report["collisionReport"]["report"]["success"])
+            performance = report["collisionReport"]["report"]["arollPerformanceQa"]
+            self.assertEqual(report["stateTimeline"], performance["stateTimeline"])
+            self.assertEqual(report["transitionQa"], performance["transition"])
+            self.assertEqual(report["visemeQa"], performance["visemes"])
+            self.assertEqual(report["transitionQa"]["status"], "passed")
+            self.assertEqual(
+                report["transitionQa"]["evidence"]["physicalTransitionActions"],
+                ["Aroll_Transition_StandToSit", "Aroll_Transition_SitToStand"],
+            )
+            self.assertEqual(set(report["videos"]), {"seated", "standSit", "reel", "actionPack"})
+            self.assertTrue(all(item["sha256"] for item in report["videos"].values()))
 
     def test_failed_qa_never_publishes_final_outputs(self) -> None:
         calls = 0
@@ -291,7 +404,12 @@ class WarmStudioDemoTests(unittest.TestCase):
             video = mode_dir / "ip_layer.mp4"
             video.write_bytes(b"staged-video")
             rig_report = mode_dir / "rig_report.json"
-            write_rig_report(rig_report)
+            write_rig_report(
+                rig_report,
+                transition_status="passed",
+                transition_success=True,
+                dual_transition=True,
+            )
             return {
                 "success": True,
                 "status": "ready",
@@ -316,8 +434,8 @@ class WarmStudioDemoTests(unittest.TestCase):
                 "videoExists": True,
                 "width": 1920,
                 "height": 1080,
-                "fps": 24.0,
-                "durationSec": 8.0,
+                "fps": 30.0,
+                "durationSec": 31.0,
                 "constantFrameRate": True,
             }
 
@@ -345,7 +463,12 @@ class WarmStudioDemoTests(unittest.TestCase):
             video = mode_dir / "ip_layer.mp4"
             video.write_bytes(f"video-{mode}".encode())
             rig_report = mode_dir / "rig_report.json"
-            write_rig_report(rig_report)
+            write_rig_report(
+                rig_report,
+                transition_status="passed",
+                transition_success=True,
+                dual_transition=True,
+            )
             return {
                 "success": True,
                 "status": "ready",
@@ -371,14 +494,20 @@ class WarmStudioDemoTests(unittest.TestCase):
                 "width": 1920,
                 "height": 1080,
                 "fps": 30.0,
-                "durationSec": 8.0,
+                "durationSec": 24.0,
                 "constantFrameRate": True,
             }
 
         def fake_artifact_builder(
             _records: list[dict[str, object]], paths: dict[str, Path]
         ) -> None:
-            for key in ("reel", "standingContactSheet", "seatedContactSheet", "lightingComparison"):
+            for key in (
+                "seated",
+                "reel",
+                "actionPack",
+                "transitionContactSheet",
+                "visemeComparison",
+            ):
                 paths[key].write_bytes(key.encode())
 
         replace_calls = 0

@@ -119,6 +119,25 @@ sequence with the render input and report:
 }
 ```
 
+## Canonical Warm-Studio Demo
+
+The demo publisher performs one continuous Blender render, then derives the
+15-second seated review clip, two byte-identical aliases, an 18-frame transition
+contact sheet, and a seven-viseme comparison with FFmpeg. All four videos must
+remain 1920x1080, 30 fps CFR, and 15-30 seconds or publication fails atomically.
+
+```bash
+python3 mcp/ip_avatar_3d/render_warm_studio_demo.py \
+  --profile "$PWD/ip形象/main_ip/character-profile.json" \
+  --output-dir "$PWD/outputs" \
+  --lighting-evidence "$PWD/outputs/Sloth_WarmStudio_Lighting_Evidence.json"
+```
+
+The canonical action timeline opens standing, sits for the explanation, and
+stands for the conclusion. The report records the resolved state timeline,
+transition and viseme QA, voice provenance, hashes, and derived review windows
+in `Sloth_WarmStudio_ActionPack_Report.json`.
+
 ## Local GPT-SoVITS Production Voice
 
 `gpt_sovits_local` uses the official GPT-SoVITS `api_v2.py` contract. It calls

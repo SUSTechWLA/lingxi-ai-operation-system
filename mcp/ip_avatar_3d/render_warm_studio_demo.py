@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render and fail-closed publish the standing/seated warm studio demos."""
+"""Render and fail-closed publish one continuous warm-studio A-roll demo."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ import json
 import math
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,24 +20,38 @@ import server
 import aroll_performance_qa
 
 
-STANDING_SCRIPT = (
-    "大家好，我是小唐。今天想和你分享一个判断：AI视频真正重要的，不只是生成速度，"
-    "而是选题、脚本、画面和审核都能被理解、修改和复用。这样创作才会越来越稳定。"
-)
-SEATED_SCRIPT = (
-    "换一个更安静的视角，我们继续聊。面对快速变化的信息，先确认事实，再形成观点，"
-    "最后用清楚的结构表达出来。慢一点想明白，往往能让内容走得更远。"
-)
-MODE_SCRIPTS = {"standing": STANDING_SCRIPT, "seated": SEATED_SCRIPT}
+DEMO_JOB = {
+    "kind": "standSitActionPack",
+    "presentationMode": "standing",
+    "cameraPreset": "transition",
+    "script": (
+        "大家好，我是小唐。先说结论：AI创作真正重要的是可控。我们坐下来拆开看，"
+        "选题、脚本、画面和审核都要能修改和复用。最后总结，稳定流程才能带来稳定内容。"
+    ),
+    "actionSequence": [
+        "Aroll_Welcome_OpenArms",
+        "Aroll_KeyPoint_OneFinger",
+        "Aroll_Transition_StandToSit",
+        "Aroll_Seated_Explain",
+        "Aroll_Question_PalmUp",
+        "Aroll_Seated_LeanIn",
+        "Aroll_Transition_SitToStand",
+        "Aroll_Conclusion_HandsTogether",
+    ],
+    "minimumDurationSec": 15.0,
+    "maximumDurationSec": 30.0,
+}
+REQUIRED_LIGHTING_MODES = ("standing", "seated")
+ACTION_CATALOG_VERSION = "tangying-ip-aroll-action-catalog/v1"
 
 FINAL_FILENAMES = {
-    "standing": "Sloth_WarmStudio_Standing_Demo_1080p.mp4",
     "seated": "Sloth_WarmStudio_Seated_Demo_1080p.mp4",
+    "standSit": "Sloth_WarmStudio_StandSit_Demo_1080p.mp4",
     "reel": "Sloth_WarmStudio_DualMode_Reel_1080p.mp4",
-    "standingContactSheet": "Sloth_WarmStudio_Standing_ContactSheet.png",
-    "seatedContactSheet": "Sloth_WarmStudio_Seated_ContactSheet.png",
-    "lightingComparison": "Sloth_WarmStudio_Lighting_Comparison.png",
-    "report": "Sloth_WarmStudio_Integration_Report.json",
+    "actionPack": "Sloth_WarmStudio_ActionPack_1080p.mp4",
+    "transitionContactSheet": "Sloth_WarmStudio_Transition_ContactSheet.png",
+    "visemeComparison": "Sloth_WarmStudio_Viseme_Comparison.png",
+    "report": "Sloth_WarmStudio_ActionPack_Report.json",
 }
 
 
@@ -124,8 +140,13 @@ def _validate_mode_result(mode: str, result: dict[str, Any], probe: dict[str, An
         errors.append("staged video must be 30 fps")
     if probe.get("constantFrameRate") is False:
         errors.append("staged video must use a constant frame rate")
-    if float(probe.get("durationSec") or 0) <= 0:
-        errors.append("staged video duration must be positive")
+    duration = float(probe.get("durationSec") or 0)
+    if not (
+        float(DEMO_JOB["minimumDurationSec"])
+        <= duration
+        <= float(DEMO_JOB["maximumDurationSec"])
+    ):
+        errors.append("staged video must be between 15 and 30 seconds")
 
     voice = result.get("voice") or {}
     provider = str(voice.get("tts_provider") or voice.get("provider") or "")
@@ -155,16 +176,60 @@ def _ffmpeg() -> str:
     return executable
 
 
-def _contact_sheet(video: Path, output: Path, duration: float) -> None:
-    sampling_fps = 12.0 / max(duration, 0.1)
+def _transition_bounds(
+    performance: dict[str, Any], canonical_duration: float
+) -> tuple[float, float]:
+    events = performance.get("motionEvents") or []
+    stand_to_sit = next(
+        (
+            event
+            for event in events
+            if isinstance(event, dict)
+            and event.get("action") == "Aroll_Transition_StandToSit"
+        ),
+        None,
+    )
+    sit_to_stand = next(
+        (
+            event
+            for event in events
+            if isinstance(event, dict)
+            and event.get("action") == "Aroll_Transition_SitToStand"
+        ),
+        None,
+    )
+    if not isinstance(stand_to_sit, dict) or not isinstance(sit_to_stand, dict):
+        raise DemoQAError("canonical performance is missing both physical transitions")
+    start = max(0.0, float(stand_to_sit["timeSec"]) - 0.4)
+    end = min(
+        canonical_duration,
+        float(sit_to_stand["timeSec"]) + float(sit_to_stand["duration"]) + 0.4,
+    )
+    if end <= start:
+        raise DemoQAError("canonical transition review window is empty")
+    return start, end
+
+
+def _transition_contact_sheet(
+    video: Path,
+    output: Path,
+    start: float,
+    end: float,
+) -> None:
+    sampling_fps = 18.0 / max(end - start, 0.1)
     _run(
         [
             _ffmpeg(),
             "-y",
+            "-ss",
+            f"{start:.6f}",
+            "-t",
+            f"{end - start:.6f}",
             "-i",
             str(video),
             "-vf",
-            f"fps={sampling_fps:.8f},scale=480:270:flags=lanczos,tile=4x3:nb_frames=12",
+            f"fps={sampling_fps:.8f},scale=320:180:flags=lanczos,"
+            "tile=6x3:nb_frames=18:padding=0:margin=0",
             "-frames:v",
             "1",
             str(output),
@@ -172,33 +237,183 @@ def _contact_sheet(video: Path, output: Path, duration: float) -> None:
     )
 
 
-def build_derived_artifacts(records: list[dict[str, Any]], paths: dict[str, Path]) -> None:
-    by_mode = {str(record["mode"]): record for record in records}
-    standing = Path(by_mode["standing"]["publishedStagePath"])
-    seated = Path(by_mode["seated"]["publishedStagePath"])
-    standing_duration = float(by_mode["standing"]["probe"]["durationSec"])
-    seated_duration = float(by_mode["seated"]["probe"]["durationSec"])
-    _contact_sheet(standing, paths["standingContactSheet"], standing_duration)
-    _contact_sheet(seated, paths["seatedContactSheet"], seated_duration)
+def _viseme_selections(
+    performance: dict[str, Any], fps: int
+) -> list[dict[str, Any]]:
+    visemes = performance.get("visemes") or {}
+    evidence = visemes.get("evidence") or {}
+    timeline = evidence.get("evaluatedJawTimeline") or {}
+    samples = [item for item in timeline.get("samples") or [] if isinstance(item, dict)]
+    if not samples:
+        raise DemoQAError("evaluated viseme timeline is unavailable")
+    aliases = {
+        "Mouth_Rest": {"closed", "rest"},
+        "Mouth_MBP": {"mbp"},
+        "Mouth_A": {"a"},
+        "Mouth_E": {"e"},
+        "Mouth_O": {"o"},
+        "Mouth_U": {"u"},
+        "Mouth_Surprise": {"surprise"},
+    }
+    selections: list[dict[str, Any]] = []
+    for label, accepted in aliases.items():
+        candidates = [
+            item for item in samples if str(item.get("viseme") or "").lower() in accepted
+        ]
+        fallback = not candidates
+        candidates = candidates or samples
+        selector = min if label in {"Mouth_Rest", "Mouth_MBP"} else max
+        selected = selector(candidates, key=lambda item: float(item.get("jawRadians") or 0.0))
+        frame = int(selected.get("frame") or 1)
+        selections.append(
+            {
+                "label": label,
+                "frame": frame,
+                "timeSec": round(max(0, frame - 1) / float(fps), 6),
+                "viseme": str(selected.get("viseme") or ""),
+                "jawRadians": float(selected.get("jawRadians") or 0.0),
+                "fallbackToJawExtreme": fallback,
+            }
+        )
+    return selections
 
+
+def _viseme_comparison(
+    video: Path,
+    output: Path,
+    selections: list[dict[str, Any]],
+) -> None:
+    glyphs = {
+        "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+        "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+        "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+        "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+        "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+        "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+        "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+        "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+        "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+        "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+        "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    }
+
+    def write_label_overlay(path: Path) -> None:
+        width, height = 1920, 540
+        pixels = bytearray(width * height * 4)
+        short_labels = ("REST", "MBP", "A", "E", "O", "U", "SURPRISE")
+        for index, label in enumerate(short_labels):
+            cell_x = (index % 4) * 480
+            cell_y = (index // 4) * 270
+            for y in range(cell_y, cell_y + 42):
+                row = (y * width + cell_x) * 4
+                for x in range(480):
+                    offset = row + x * 4
+                    pixels[offset : offset + 4] = bytes((0, 0, 0, 178))
+            cursor_x = cell_x + 12
+            for character in label:
+                glyph = glyphs[character]
+                for glyph_y, bits in enumerate(glyph):
+                    for glyph_x, enabled in enumerate(bits):
+                        if enabled != "1":
+                            continue
+                        for dy in range(4):
+                            for dx in range(4):
+                                x = cursor_x + glyph_x * 4 + dx
+                                y = cell_y + 7 + glyph_y * 4 + dy
+                                offset = (y * width + x) * 4
+                                pixels[offset : offset + 4] = bytes((255, 255, 255, 255))
+                cursor_x += 24
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(payload))
+                + kind
+                + payload
+                + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+            )
+
+        scanlines = b"".join(
+            b"\x00" + bytes(pixels[y * width * 4 : (y + 1) * width * 4])
+            for y in range(height)
+        )
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(scanlines, 9))
+            + chunk(b"IEND", b"")
+        )
+
+    label_overlay = output.with_name(f".{output.stem}-labels.png")
+    write_label_overlay(label_overlay)
+    split_outputs = "".join(f"[source{index}]" for index in range(len(selections)))
+    filters = [f"[0:v]split={len(selections)}{split_outputs}"]
+    for index, selection in enumerate(selections):
+        start = float(selection["timeSec"])
+        filters.append(
+            f"[source{index}]trim=start={start:.6f}:end={start + 0.05:.6f},"
+            "setpts=PTS-STARTPTS,scale=480:270:flags=lanczos"
+            f"[viseme{index}]"
+        )
+    stack_inputs = "".join(f"[viseme{index}]" for index in range(len(selections)))
+    layout = "0_0|480_0|960_0|1440_0|0_270|480_270|960_270"
+    filters.append(
+        f"{stack_inputs}xstack=inputs={len(selections)}:layout={layout}:fill=black[grid]"
+    )
+    filters.append("[grid][1:v]overlay=0:0[out]")
+    try:
+        _run(
+            [
+                _ffmpeg(),
+                "-y",
+                "-i",
+                str(video),
+                "-i",
+                str(label_overlay),
+                "-filter_complex",
+                ";".join(filters),
+                "-map",
+                "[out]",
+                "-frames:v",
+                "1",
+                str(output),
+            ],
+        )
+    finally:
+        label_overlay.unlink(missing_ok=True)
+
+
+def build_derived_artifacts(records: list[dict[str, Any]], paths: dict[str, Path]) -> None:
+    if len(records) != 1:
+        raise DemoQAError("derived artifacts require exactly one canonical render")
+    record = records[0]
+    canonical = Path(record["publishedStagePath"])
+    canonical_duration = float(record["probe"]["durationSec"])
+    performance = record["collisionReport"]["report"]["arollPerformanceQa"]
+    transition_start, transition_end = _transition_bounds(
+        performance, canonical_duration
+    )
+    seated_start = max(
+        0.0,
+        min(transition_start, canonical_duration - 15.0),
+    )
+    seated_duration = min(15.0, canonical_duration - seated_start)
+    if seated_duration < 15.0 - 1e-6:
+        raise DemoQAError("canonical render is too short for the seated review clip")
+
+    shutil.copy2(canonical, paths["reel"])
+    shutil.copy2(canonical, paths["actionPack"])
     _run(
         [
             _ffmpeg(),
             "-y",
+            "-ss",
+            f"{seated_start:.6f}",
             "-i",
-            str(standing),
-            "-i",
-            str(seated),
-            "-filter_complex",
-            "[0:v]fps=30,scale=1920:1080:flags=lanczos,setsar=1[v0];"
-            "[1:v]fps=30,scale=1920:1080:flags=lanczos,setsar=1[v1];"
-            "[0:a]aresample=48000,aformat=channel_layouts=mono[a0];"
-            "[1:a]aresample=48000,aformat=channel_layouts=mono[a1];"
-            "[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]",
-            "-map",
-            "[v]",
-            "-map",
-            "[a]",
+            str(canonical),
+            "-t",
+            f"{seated_duration:.6f}",
+            "-vf",
+            "fps=30,scale=1920:1080:flags=lanczos,setsar=1",
             "-c:v",
             "libx264",
             "-preset",
@@ -213,32 +428,31 @@ def build_derived_artifacts(records: list[dict[str, Any]], paths: dict[str, Path
             "48000",
             "-ac",
             "1",
-            str(paths["reel"]),
+            str(paths["seated"]),
         ],
         timeout=1800,
     )
-
-    _run(
-        [
-            _ffmpeg(),
-            "-y",
-            "-ss",
-            f"{standing_duration * 0.35:.3f}",
-            "-i",
-            str(standing),
-            "-ss",
-            f"{seated_duration * 0.35:.3f}",
-            "-i",
-            str(seated),
-            "-filter_complex",
-            "[0:v]scale=960:540:flags=lanczos,setsar=1[left];"
-            "[1:v]scale=960:540:flags=lanczos,setsar=1[right];"
-            "[left][right]hstack=inputs=2",
-            "-frames:v",
-            "1",
-            str(paths["lightingComparison"]),
-        ]
+    _transition_contact_sheet(
+        canonical,
+        paths["transitionContactSheet"],
+        transition_start,
+        transition_end,
     )
+    fps = int((performance.get("sampleCadence") or {}).get("fps") or 30)
+    selections = _viseme_selections(performance, fps)
+    _viseme_comparison(canonical, paths["visemeComparison"], selections)
+    record["derivedEvidence"] = {
+        "seatedClip": {
+            "startSec": round(seated_start, 6),
+            "durationSec": round(seated_duration, 6),
+        },
+        "transitionWindow": {
+            "startSec": round(transition_start, 6),
+            "endSec": round(transition_end, 6),
+            "sampleCount": 18,
+        },
+        "visemeSelections": selections,
+    }
 
 
 def _asset_path(profile_path: Path, value: str) -> Path:
@@ -264,12 +478,12 @@ def _lighting_evidence(path: Path | None) -> dict[str, Any]:
     comparisons = payload.get("cameraComparisons")
     expected_measurements = {
         (mode, engine, "medium")
-        for mode in MODE_SCRIPTS
+        for mode in REQUIRED_LIGHTING_MODES
         for engine in ("eevee", "cycles")
     }
     expected_comparisons = {
         (mode, "medium", camera_role)
-        for mode in MODE_SCRIPTS
+        for mode in REQUIRED_LIGHTING_MODES
         for camera_role in ("three_quarter", "wide")
     }
     actual_measurements = {
@@ -607,6 +821,27 @@ def publish_transaction(
         shutil.rmtree(backup_dir, ignore_errors=True)
 
 
+def _validate_published_video(key: str, probe: dict[str, Any]) -> None:
+    errors: list[str] = []
+    if not probe.get("videoExists"):
+        errors.append("video is missing")
+    if (probe.get("width"), probe.get("height")) != (1920, 1080):
+        errors.append("video must be 1920x1080")
+    if not math.isclose(float(probe.get("fps") or 0.0), 30.0, abs_tol=0.01):
+        errors.append("video must be 30 fps")
+    if probe.get("constantFrameRate") is not True:
+        errors.append("video must be CFR")
+    duration = float(probe.get("durationSec") or 0.0)
+    if not (
+        float(DEMO_JOB["minimumDurationSec"])
+        <= duration
+        <= float(DEMO_JOB["maximumDurationSec"])
+    ):
+        errors.append("video must be between 15 and 30 seconds")
+    if errors:
+        raise DemoQAError(f"{key} QA failed: {'; '.join(errors)}")
+
+
 def render_warm_studio_demos(
     profile_path: Path,
     output_dir: Path,
@@ -643,75 +878,79 @@ def render_warm_studio_demos(
     records: list[dict[str, Any]] = []
 
     try:
-        for mode, script in MODE_SCRIPTS.items():
-            mode_dir = staging_root / mode
-            result = renderer(
-                script=script,
-                characterProfilePath=str(profile_path),
-                outputDir=str(mode_dir),
-                presentationMode=mode,
-                width=1920,
-                height=1080,
-                fps=30,
-                qualityPreset="production_1080p",
-                renderMode="production",
-                voiceProvider="gpt_sovits_local",
-                voiceId="main_ip_warm_knowledge_host_v1",
-                fallbackPolicy="error",
+        mode = str(DEMO_JOB["presentationMode"])
+        canonical_dir = staging_root / "canonical"
+        result = renderer(
+            script=str(DEMO_JOB["script"]),
+            characterProfilePath=str(profile_path),
+            outputDir=str(canonical_dir),
+            shotId=str(DEMO_JOB["kind"]),
+            presentationMode=mode,
+            actionSequence=list(DEMO_JOB["actionSequence"]),
+            cameraPreset=str(DEMO_JOB["cameraPreset"]),
+            width=1920,
+            height=1080,
+            fps=30,
+            qualityPreset="production_1080p",
+            renderMode="production",
+            voiceProvider="gpt_sovits_local",
+            voiceId="main_ip_warm_knowledge_host_v1",
+            fallbackPolicy="error",
+        )
+        video_path = Path(str(result.get("videoPath") or "")).expanduser().resolve()
+        probe = media_probe(video_path)
+        _validate_mode_result(mode, result, probe)
+        collision_report = _embedded_collision_report(mode, result)
+        performance = collision_report["report"]["arollPerformanceQa"]
+        expected_physical = [
+            "Aroll_Transition_StandToSit",
+            "Aroll_Transition_SitToStand",
+        ]
+        if (
+            performance["transition"].get("status") != "passed"
+            or performance["transition"].get("success") is not True
+            or performance["transition"].get("evidence", {}).get(
+                "physicalTransitionActions"
             )
-            video_path = Path(str(result.get("videoPath") or "")).expanduser().resolve()
-            probe = media_probe(video_path)
-            _validate_mode_result(mode, result, probe)
-            collision_report = _embedded_collision_report(mode, result)
-            shutil.copy2(video_path, staged_paths[mode])
-            records.append(
-                {
-                    "mode": mode,
-                    "script": script,
-                    "result": result,
-                    "probe": probe,
-                    "collisionReport": collision_report,
-                    "publishedStagePath": str(staged_paths[mode]),
-                }
-            )
+            != expected_physical
+        ):
+            raise DemoQAError("canonical render did not validate both physical transitions")
+        shutil.copy2(video_path, staged_paths["standSit"])
+        records.append(
+            {
+                "mode": mode,
+                "script": DEMO_JOB["script"],
+                "result": result,
+                "probe": probe,
+                "collisionReport": collision_report,
+                "publishedStagePath": str(staged_paths["standSit"]),
+            }
+        )
 
         artifact_builder(records, staged_paths)
-        reel_probe = media_probe(staged_paths["reel"])
-        if (reel_probe.get("width"), reel_probe.get("height")) != (1920, 1080):
-            raise DemoQAError("combined reel must be 1920x1080")
-        if not math.isclose(float(reel_probe.get("fps") or 0), 30.0, abs_tol=0.01):
-            raise DemoQAError("combined reel must be 30 fps")
+        video_probes: dict[str, dict[str, Any]] = {}
+        for key in ("seated", "standSit", "reel", "actionPack"):
+            derived_probe = media_probe(staged_paths[key])
+            _validate_published_video(key, derived_probe)
+            video_probes[key] = derived_probe
 
         render_config = profile.get("render") or {}
         model_config = profile.get("model") or {}
         scene_path = _asset_path(profile_path, str(render_config.get("sceneBlendPath") or ""))
         master_path = _asset_path(profile_path, str(model_config.get("masterBlendPath") or ""))
-        mode_reports = {
-            str(record["mode"]): {
-                "script": record["script"],
-                "presentationMode": record["mode"],
-                "videoSha256": _sha256(staged_paths[str(record["mode"])]),
-                "qa": record["probe"],
-                "renderQa": record["result"].get("qa") or {},
-                "voice": record["result"].get("voice") or {},
-                "voicePolicy": record["result"].get("voicePolicy") or {},
-                "renderProvenance": {
-                    "sceneBlendPath": record["result"].get("sceneBlendPath") or "",
-                    "masterBlendPath": record["result"].get("masterBlendPath") or "",
-                    "renderReportSha256": (
-                        _sha256(Path(str(record["result"].get("renderReportPath"))).resolve())
-                        if record["result"].get("renderReportPath")
-                        and Path(str(record["result"].get("renderReportPath"))).is_file()
-                        else ""
-                    ),
-                },
-                "collisionReport": record["collisionReport"],
-            }
-            for record in records
-        }
+        record = records[0]
+        render_report_path = Path(
+            str(record["result"].get("renderReportPath") or "")
+        ).expanduser()
         report: dict[str, Any] = {
-            "schemaVersion": "tangying-sloth-warm-studio-integration/v1",
+            "schemaVersion": "tangying-sloth-warm-studio-action-pack/v1",
             "success": True,
+            "kind": DEMO_JOB["kind"],
+            "actionCatalogVersion": ACTION_CATALOG_VERSION,
+            "script": DEMO_JOB["script"],
+            "actionSequence": list(DEMO_JOB["actionSequence"]),
+            "presentationMode": DEMO_JOB["presentationMode"],
+            "cameraPreset": DEMO_JOB["cameraPreset"],
             "profile": _asset_record(profile_path),
             "character": _asset_record(master_path),
             "studio": _asset_record(scene_path),
@@ -721,13 +960,32 @@ def render_warm_studio_demos(
                 "fallbackPolicy": voice.get("fallbackPolicy"),
                 "gptSovitsLocal": voice.get("gptSovitsLocal"),
             },
-            "modes": mode_reports,
-            "combinedReelQa": reel_probe,
+            "voice": record["result"].get("voice") or {},
+            "renderQa": record["result"].get("qa") or {},
+            "renderProvenance": {
+                "renderReportSha256": (
+                    _sha256(render_report_path) if render_report_path.is_file() else ""
+                ),
+                "canonicalVideoSha256": _sha256(staged_paths["standSit"]),
+                "singleBlenderRender": True,
+            },
+            "stateTimeline": performance["stateTimeline"],
+            "transitionQa": performance["transition"],
+            "visemeQa": performance["visemes"],
+            "collisionReport": collision_report,
+            "derivedEvidence": record.get("derivedEvidence") or {},
             "lightingEvidence": lighting_evidence,
-            "collisionReportPointers": [
-                f"{FINAL_FILENAMES['report']}#/modes/{mode}/collisionReport"
-                for mode in MODE_SCRIPTS
-            ],
+            "collisionReportPointer": (
+                f"{FINAL_FILENAMES['report']}#/collisionReport"
+            ),
+        }
+        report["videos"] = {
+            key: {
+                "path": str(output_dir / FINAL_FILENAMES[key]),
+                "sha256": _sha256(staged_paths[key]),
+                "qa": video_probes[key],
+            }
+            for key in ("seated", "standSit", "reel", "actionPack")
         }
         report["outputs"] = {
             key: {
