@@ -1848,6 +1848,7 @@ def _build_compose_video_args(
             if audio_mastered
             else "loudnorm=I=-16:TP=-1.5:LRA=7"
         )
+        audio_filter = f"{audio_filter},apad=whole_dur={duration_sec:.3f}"
         args.extend(
             [
                 "-map",
@@ -3013,6 +3014,25 @@ def render_talking_video(
         generated_audio_duration = audio_duration_sec(audio_out)
         if generated_audio_duration > 0:
             duration = float(generated_audio_duration)
+            if actionSequence:
+                action_events = aroll_actions.build_action_events(
+                    [str(name) for name in actionSequence if str(name).strip()],
+                    presentation_mode,
+                    start_time_sec=0.35,
+                    spacing_sec=0.12,
+                )
+                duration = max(
+                    duration,
+                    max(
+                        (
+                            float(event["timeSec"])
+                            + float(event["duration"])
+                            + 0.35
+                            for event in action_events
+                        ),
+                        default=0.0,
+                    ),
+                )
             motion_plan = build_motion_plan(
                 script,
                 duration,

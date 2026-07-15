@@ -1172,6 +1172,81 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(report["presentationMode"], "seated")
             self.assertEqual(result["presentationMode"], "seated")
 
+    def test_production_extends_short_audio_to_explicit_action_timeline(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            model = root / "bobo.glb"
+            audio = root / "narration.wav"
+            model.write_bytes(b"glTF placeholder")
+            audio.write_bytes(b"RIFF verified audio")
+            voice_id = "dMkR1XwIkarpNqWUJLnX"
+            captured_render_input = {}
+            captured_compose_duration = []
+
+            def fake_blender_run(args, timeout=600):
+                render_input = json.loads(pathlib.Path(args[-1]).read_text(encoding="utf-8"))
+                captured_render_input.update(render_input)
+                for key in ("riggedBlendPath", "riggedGlbPath", "rigReportPath"):
+                    path = pathlib.Path(render_input[key])
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"render output")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            def fake_compose(_frames, _audio, output_path, duration_sec, *_args, **_kwargs):
+                captured_compose_duration.append(duration_sec)
+                pathlib.Path(output_path).write_bytes(b"video")
+
+            exact_audio = (
+                str(audio),
+                "hyperframes_heygen",
+                {
+                    "provider": "heygen",
+                    "voiceId": voice_id,
+                    "tts_provider": "heygen",
+                    "voice_id": voice_id,
+                    "language": "zh",
+                    "speed": 1.0,
+                    "humanVoiceProvider": True,
+                    "productionReady": False,
+                },
+            )
+            with mock.patch.object(server, "ensure_audio", return_value=exact_audio), mock.patch.object(
+                server, "audio_duration_sec", return_value=2.25
+            ), mock.patch.object(
+                server, "find_blender", return_value="/usr/bin/blender"
+            ), mock.patch.object(server, "_run", side_effect=fake_blender_run), mock.patch.object(
+                server, "_compose_video", side_effect=fake_compose
+            ), mock.patch.object(server, "_extract_preview"), mock.patch.object(
+                server, "_probe_video", return_value={"durationSec": 2.5}
+            ), mock.patch.object(
+                server,
+                "_measure_voice_audition_loudness",
+                return_value={
+                    "integratedLufs": -16.1,
+                    "truePeakDbtp": -2.0,
+                    "loudnessRangeLu": 2.0,
+                },
+            ):
+                result = server.render_talking_video(
+                    script="大家好。",
+                    modelPath=str(model),
+                    outputDir=str(root / "out"),
+                    durationSec=7,
+                    renderMode="production",
+                    voiceProvider="heygen",
+                    voiceId=voice_id,
+                    fallbackPolicy="error",
+                    presentationMode="standing",
+                    actionSequence=["Aroll_Greeting_Wave"],
+                    dryRun=False,
+                )
+
+            self.assertEqual(result["durationSec"], 2.5)
+            self.assertEqual(captured_render_input["durationSec"], 2.5)
+            self.assertEqual(captured_render_input["motionPlan"]["durationSec"], 2.5)
+            self.assertEqual(captured_compose_duration, [2.5])
+
     def test_production_removes_encoded_video_when_final_audio_gate_fails(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:
@@ -2089,6 +2164,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             "volume=0.2dB,alimiter=limit=0.75:attack=5:release=50:level=false",
             joined,
         )
+        self.assertIn("apad=whole_dur=3.000", joined)
         self.assertNotIn("loudnorm=", joined)
 
     def test_final_production_audio_gate_rejects_encoded_peak_overshoot(self) -> None:
