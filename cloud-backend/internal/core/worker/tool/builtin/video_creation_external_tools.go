@@ -39,6 +39,8 @@ var videoCreationExternalTools = []string{
 	"hyperframes_project_generator",
 	"hyperframes_project_builder",
 	"hyperframes_renderer",
+	"ip_aroll_director",
+	"local_ip_talking_avatar_render",
 	"hypergen_keyframes",
 	"material_library_matcher",
 	"video_keyframe_prompt_builder",
@@ -819,6 +821,148 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"requirementsSatisfied":      {Type: "boolean", Description: "Whether the configured minimum ready external video assets were produced"},
 			"summary":                    {Type: "string", Description: "MCP generation summary"},
 		}
+	case "ip_aroll_director":
+		manifest.Description = "Build a controllable oral-video A-roll plan from the local Bobo/Aster IP character asset folders for HyperFrames rendering."
+		manifest.Type = "builtin_prompt_tool"
+		manifest.CostLevel = tool.CostLow
+		manifest.RiskLevel = tool.RiskLow
+		manifest.SideEffect = false
+		manifest.Idempotent = true
+		manifest.Capabilities = []string{"video_creation", "talking_head", "oral_video", "ip_character_aroll", "hyperframes_character_layer"}
+		manifest.Tags = []string{"ip", "aroll", "talking-head", "hyperframes", "oral-video"}
+		manifest.ArtifactPolicy = tool.ArtifactPolicy{
+			ProduceArtifact:       true,
+			ArtifactKinds:         []string{"IP_AROLL_PLAN", "CHARACTER_ASSET_INDEX"},
+			DefaultReviewRequired: true,
+			Storage:               tool.ArtifactLocationLocal,
+		}
+		manifest.HumanReview = &tool.HumanReview{
+			Required: true,
+			Gate:     tool.ApprovalAfterArtifact,
+			Title:    "审核 IP 口播 A-roll 动作层",
+			ReviewFocus: []string{
+				"角色是否选择正确",
+				"口播文本是否完整覆盖",
+				"动作和表情是否服务口播",
+				"HyperFrames 文字安全区是否保留",
+			},
+			UserActions: []string{"edit_timeline", "switch_character", "regenerate_actions"},
+		}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"assetRoot":   {Type: "string", Description: "IP character asset root, default resolves to ip形象/", Required: false},
+			"characters":  {Type: "array", Description: "Character names to use, default [波波, 阿斯特]", Required: false},
+			"shotId":      {Type: "string", Description: "Target shot id", Required: false},
+			"narration":   {Type: "string", Description: "Voiceover text for this shot; execution requires this even though planner wiring keeps it optional", Required: false},
+			"durationSec": {Type: "number", Description: "Shot duration in seconds", Required: false},
+			"layout":      {Type: "string", Description: "Character layout: single_host, two_host, side_commentary", Required: false},
+			"style":       {Type: "string", Description: "Optional oral-video visual style notes", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"ipArollPlan":     {Type: "object", Description: "HyperFrames-readable IP character A-roll plan"},
+			"characterAssets": {Type: "array", Description: "Discovered local character view assets"},
+			"timeline":        {Type: "array", Description: "Narration-synced character action beats"},
+			"content":         {Type: "string", Description: "Human-reviewable action plan"},
+			"artifacts":       {Type: "object", Description: "IP A-roll plan artifacts"},
+		}
+	case "local_ip_talking_avatar_render":
+		manifest.Description = "Render a local cartoon IP talking-avatar video from existing character assets, narration audio, subtitles, and a background without using AIGC video generation."
+		manifest.Type = "local_video_render"
+		manifest.CostLevel = tool.CostLow
+		manifest.LatencyLevel = tool.LatencyMedium
+		manifest.RiskLevel = tool.RiskMedium
+		manifest.SideEffect = true
+		manifest.Idempotent = false
+		manifest.Capabilities = []string{
+			"cartoon_ip_talking_video",
+			"audio_driven_lip_sync",
+			"sprite_2d_avatar_render",
+			"svg_2d_puppet_render",
+			"hypergen_controllable_ip_parts",
+			"character_voice_profile",
+			"segmented_prosody_preview_voice",
+			"independent_limb_motion",
+			"left_right_arm_gestures",
+			"body_weight_shift",
+			"local_video_render",
+			"subtitle_composition",
+			"ffmpeg_video_composition",
+			"oral_video",
+			"brand_character_explainer",
+		}
+		manifest.Tags = []string{"ip", "avatar", "talking-avatar", "cartoon-digital-human", "local-render", "oral-video", "not-aigc"}
+		manifest.ProviderCapabilities = map[string]interface{}{
+			"overall": "当用户希望使用已有 IP、卡通形象、品牌角色、虚拟人形象创作口播视频，并且不希望依赖 AIGC 视频生成时，使用该工具。该工具根据角色资产、口播音频、字幕和背景，在本地生成卡通数字人口播视频。",
+			"notFor": []string{
+				"realistic_human_face_generation",
+				"aigc_video_generation",
+				"seedance_video_generation",
+				"image_to_video_generation",
+				"face_detail_restoration",
+			},
+			"retrievalHints": []string{"IP口播", "卡通数字人", "虚拟人口播", "品牌角色讲解", "本地数字人", "真人感口播", "角色动作", "四肢动作"},
+			"live2dStatus":   "Live2D is supported at the asset protocol level when a Cubism model3.json package exists; the current local renderer runs sprite2d/svg2d puppet assets.",
+			"voiceBoundary":  "Local macOS say preview is segmented with prosody planning for rhythm and pauses, but production human-like voice quality should use uploaded character narration audio or a dedicated TTS provider.",
+		}
+		manifest.LocalRequirements = tool.LocalRequirements{
+			Commands:        []string{"ffmpeg", "ffprobe"},
+			RequiresNetwork: false,
+			MinDiskMb:       256,
+		}
+		manifest.ArtifactPolicy = tool.ArtifactPolicy{
+			ProduceArtifact:       true,
+			ArtifactKinds:         []string{"VIDEO", "AVATAR_LAYER_VIDEO", "IP_TALKING_AVATAR_TIMELINE", "IP_TALKING_AVATAR_SCENE", "IP_TALKING_AVATAR_VOICE_PROFILE", "RENDER_REPORT"},
+			DefaultReviewRequired: true,
+			Storage:               tool.ArtifactLocationLocal,
+			SyncMetadataToCloud:   true,
+		}
+		manifest.ApprovalPolicy = tool.ApprovalPolicy{
+			Required:            true,
+			Mode:                tool.ApprovalAfterArtifact,
+			BlocksDownstream:    true,
+			Reason:              "IP 资产、口型动作和最终口播视频需要用户确认后再进入后续视频合成。",
+			ReviewArtifactKinds: []string{"VIDEO", "AVATAR_LAYER_VIDEO", "IP_TALKING_AVATAR_TIMELINE", "IP_TALKING_AVATAR_SCENE", "RENDER_REPORT"},
+		}
+		manifest.HumanReview = &tool.HumanReview{
+			Required: true,
+			Gate:     tool.ApprovalAfterArtifact,
+			Title:    "审核本地 IP 数字人口播视频",
+			ReviewFocus: []string{
+				"角色是否为用户选定 IP",
+				"口型开合是否跟随口播节奏",
+				"基础动作是否自然且不抢信息",
+				"字幕、背景和角色层是否合成正确",
+			},
+			UserActions: []string{"preview_video", "replace_audio", "edit_subtitles", "switch_character", "rerender_locally"},
+		}
+		manifest.Parameters = map[string]tool.ParamDef{
+			"characterId":      {Type: "string", Description: "Local IP character id under assets/characters/{characterId}", Required: true},
+			"script":           {Type: "string", Description: "Narration script used for motion triggers and subtitle assistance", Required: false},
+			"audioPath":        {Type: "string", Description: "Local narration audio path or local:// ref. Optional when script is provided; local preview TTS may be generated for action/lip-sync preview.", Required: false},
+			"subtitlePath":     {Type: "string", Description: "Optional SRT subtitle path or local:// ref", Required: false},
+			"backgroundPath":   {Type: "string", Description: "Optional local background image or video path", Required: false},
+			"bgmPath":          {Type: "string", Description: "Optional local BGM path", Required: false},
+			"outputDir":        {Type: "string", Description: "Output directory for render artifacts", Required: false},
+			"renderMode":       {Type: "string", Description: "Renderer mode; supports sprite2d and svg2d, reserves live2d for Cubism model assets", Required: false, Enum: []string{"sprite2d", "svg2d", "live2d"}},
+			"interactionLevel": {Type: "string", Description: "Motion richness: subtle or expressive", Required: false, Enum: []string{"subtle", "expressive"}},
+			"resolution":       {Type: "object", Description: "Output width and height", Required: false},
+			"fps":              {Type: "number", Description: "Output frames per second", Required: false},
+			"style":            {Type: "object", Description: "Position, scale, subtitle/background flags, transparent avatar preference", Required: false},
+			"motionPolicy":     {Type: "object", Description: "Auto blink, breath, sentence nod, and keyword gesture switches", Required: false},
+			"voiceProfile":     {Type: "object", Description: "Optional character voice hints such as voiceName, speakingRate, tone, stylePrompt, and previewOnly", Required: false},
+		}
+		manifest.Output = map[string]tool.ParamDef{
+			"success":          {Type: "boolean", Description: "Whether rendering completed"},
+			"characterId":      {Type: "string", Description: "Rendered character id"},
+			"videoPath":        {Type: "string", Description: "Final MP4 path"},
+			"avatarVideoPath":  {Type: "string", Description: "Avatar layer video path"},
+			"timelinePath":     {Type: "string", Description: "Combined avatar timeline JSON path"},
+			"scenePath":        {Type: "string", Description: "Avatar scene and HyperGen control schema JSON path"},
+			"subtitlePath":     {Type: "string", Description: "Subtitle file path used for composition or preview"},
+			"voiceProfilePath": {Type: "string", Description: "Voice profile JSON path used for narration preview or uploaded audio metadata"},
+			"durationSec":      {Type: "number", Description: "Rendered duration in seconds"},
+			"qa":               {Type: "object", Description: "Render QA flags"},
+			"artifacts":        {Type: "object", Description: "Previewable local artifacts"},
+		}
 	case "video_frame_qa":
 		manifest.Description = "Extract representative frames, score each shot, and detect visual crowding, text-zone overlap, and clutter before delivery."
 		manifest.Type = "local_visual_qa"
@@ -882,6 +1026,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"shotList":          {Type: "array", Description: "Shot list", Required: true},
 			"videoPrompts":      {Type: "array", Description: "Video prompts", Required: false},
 			"shotAssetPackages": {Type: "array", Description: "Independent per-shot asset packages", Required: false},
+			"ipArollPlan":       {Type: "object", Description: "Optional IP character A-roll plan from ip_aroll_director", Required: false},
 			"style":             {Type: "string", Description: "Visual style", Required: false},
 			"publishCopy":       {Type: "object", Description: "Publish copy", Required: false},
 		}
@@ -990,6 +1135,14 @@ var localToolManifests = map[string]struct {
 		Description:        "抽帧检查最终视频文字安全区、遮挡和画面复杂度",
 		Timeout:            180,
 	},
+	"local_ip_talking_avatar_render": {
+		ExecutionPlane:     tool.ExecutionPlaneLocal,
+		LocalCommand:       "LOCAL_IP_TALKING_AVATAR_RENDER",
+		RequiresUserDevice: true,
+		ArtifactLocation:   tool.ArtifactLocationLocal,
+		Description:        "使用本地 IP 角色资产、口播音频、字幕和背景确定性渲染卡通数字人口播视频",
+		Timeout:            1800,
+	},
 	"mcp_generation_runner": {
 		ExecutionPlane:     tool.ExecutionPlaneLocal,
 		LocalCommand:       "LOCAL_MCP_TOOL_CALL",
@@ -1056,6 +1209,8 @@ func executeLocalVideoCreationTool(toolName string, params map[string]interface{
 		return executeLocalJobStatusTracker(stage, skillName, params)
 	case "final_review_generator":
 		return executeFinalReviewGenerator(stage, skillName, params)
+	case "ip_aroll_director":
+		return executeIPArollDirector(stage, skillName, params, toolCtx)
 	case "image_asset_generator":
 		return executeImageAssetGenerator(stage, skillName, brief, instructionRef, params, toolCtx)
 	case "hyperframes_project_generator":
@@ -1197,6 +1352,662 @@ func executeProposalGenerator(stage, skillName, brief string, params map[string]
 			jsonArtifact(stage, "proposal_packet.json", skillName, "videoforge-proposal-generator", true),
 		},
 	})
+}
+
+var ipCharacterViewFiles = []struct {
+	Key  string
+	File string
+}{
+	{Key: "reference", File: "reference.png"},
+	{Key: "front", File: "front.png"},
+	{Key: "front3qLeft", File: "front-3q-left.png"},
+	{Key: "leftSide", File: "left-side.png"},
+	{Key: "rightSide", File: "right-side.png"},
+	{Key: "back", File: "back.png"},
+	{Key: "back3qRight", File: "back-3q-right.png"},
+}
+
+func executeIPArollDirector(stage, skillName string, params map[string]interface{}, toolCtx tool.ToolContext) tool.ToolResult {
+	narration := promptStringParam(params, "narration", "")
+	if narration == "" {
+		return tool.FailureResult("ip_aroll_director requires narration")
+	}
+
+	characterNames := ipCharacterNamesParam(params["characters"])
+	assetRoot := resolveIPCharacterAssetRoot(stringParam(params, "assetRoot", ""))
+	durationSec := intParam(params, "durationSec", 0)
+	if durationSec <= 0 {
+		durationSec = estimateNarrationDurationSec(narration)
+	}
+	shotID := stringParam(params, "shotId", toolCtx.NodeID)
+	if shotID == "" {
+		shotID = "SHOT_01"
+	}
+	layout := stringParam(params, "layout", "two_host")
+	style := stringParam(params, "style", "16:9 横屏口播，两个非真人 IP 小人，干净明亮，角色动作轻量但有反应")
+
+	characters, warnings := buildIPCharacterAssetIndex(assetRoot, characterNames)
+	rigs := buildIPCharacterRigIndex(characters)
+	timeline := buildIPArollTimeline(narration, durationSec, characters, layout)
+
+	plan := map[string]interface{}{
+		"schemaVersion": "ip-aroll-v1",
+		"shotId":        shotID,
+		"assetRoot":     filepath.ToSlash(assetRoot),
+		"durationSec":   durationSec,
+		"layout":        layout,
+		"style":         style,
+		"characters":    characters,
+		"rigs":          rigs,
+		"timeline":      timeline,
+		"hyperframes": map[string]interface{}{
+			"layerRole":     "oral_aroll_character_layer",
+			"renderMode":    "deterministic_2_5d_sprite_rig",
+			"assetPolicy":   "use_local_character_views_without_redrawing_identity",
+			"textOwnership": "HyperFrames owns captions, titles, cards, and exact Chinese text",
+			"safeArea": map[string]interface{}{
+				"caption": "bottom 18%",
+				"title":   "top 18%",
+				"notes":   "characters stay left/right or center-lower; keep subtitle band clear",
+			},
+			"animationPrimitives": []string{
+				"subtle_float",
+				"breathing_scale",
+				"blink",
+				"mouth_flap",
+				"small_hand_wave",
+				"point",
+				"nod",
+				"react_pop",
+			},
+			"callPattern": "Pass ipArollPlan into hyperframes_project_generator; bind character assets by characterId and view.",
+		},
+		"constraints": []string{
+			"不要让 AIGC 重新生成这两个角色的身份外观",
+			"口播层只控制角色、表情、轻动作、字幕和信息卡片",
+			"动作必须服务口播，不做大幅奔跑、复杂肢体或跨镜头连续表演",
+			"字幕和精确中文由 HyperFrames 渲染，避免视频模型乱码",
+		},
+		"warnings": warnings,
+	}
+
+	content := buildIPArollReviewContent(stage, skillName, narration, plan, timeline)
+	artifacts := []map[string]interface{}{
+		typedJSONArtifact(stage, "ip_aroll_plan.json", skillName, "IP_AROLL_PLAN", true),
+		typedJSONArtifact(stage+"-assets", "character_asset_index.json", skillName, "CHARACTER_ASSET_INDEX", true),
+	}
+
+	return tool.SuccessResult(map[string]interface{}{
+		"content":         content,
+		"ipArollPlan":     plan,
+		"characterAssets": characters,
+		"timeline":        timeline,
+		"artifacts":       artifacts,
+		"taskId":          toolCtx.TaskID,
+	})
+}
+
+func ipCharacterNamesParam(value interface{}) []string {
+	names := []string{}
+	switch typed := value.(type) {
+	case []interface{}:
+		for _, item := range typed {
+			if name := strings.TrimSpace(fmt.Sprint(item)); name != "" && name != "<nil>" {
+				names = append(names, name)
+			}
+		}
+	case []string:
+		for _, item := range typed {
+			if name := strings.TrimSpace(item); name != "" {
+				names = append(names, name)
+			}
+		}
+	case string:
+		for _, item := range strings.FieldsFunc(typed, func(r rune) bool {
+			return r == ',' || r == '，' || r == '、' || r == ';' || r == '；'
+		}) {
+			if name := strings.TrimSpace(item); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return []string{"波波", "阿斯特"}
+	}
+	return names
+}
+
+func resolveIPCharacterAssetRoot(preferred string) string {
+	candidates := []string{}
+	if env := strings.TrimSpace(os.Getenv("AIOS_IP_CHARACTER_ROOT")); env != "" {
+		candidates = append(candidates, env)
+	}
+	if strings.TrimSpace(preferred) != "" {
+		candidates = append(candidates, preferred)
+	}
+	candidates = append(candidates, "ip形象", "../ip形象", "../../ip形象")
+
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if filepath.IsAbs(candidate) {
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				return candidate
+			}
+			continue
+		}
+		if abs, err := filepath.Abs(candidate); err == nil {
+			if info, statErr := os.Stat(abs); statErr == nil && info.IsDir() {
+				return abs
+			}
+		}
+	}
+	if strings.TrimSpace(preferred) != "" {
+		if abs, err := filepath.Abs(preferred); err == nil {
+			return abs
+		}
+		return preferred
+	}
+	if abs, err := filepath.Abs("ip形象"); err == nil {
+		return abs
+	}
+	return "ip形象"
+}
+
+func buildIPCharacterAssetIndex(assetRoot string, names []string) ([]map[string]interface{}, []string) {
+	characters := make([]map[string]interface{}, 0, len(names))
+	warnings := []string{}
+	for idx, name := range names {
+		characterID := stableIPCharacterID(name)
+		characterDir := filepath.Join(assetRoot, name)
+		assets := map[string]interface{}{}
+		assetRefs := map[string]interface{}{}
+		availableViews := []string{}
+		for _, view := range ipCharacterViewFiles {
+			path := filepath.Join(characterDir, view.File)
+			if _, err := os.Stat(path); err == nil {
+				normalized := filepath.ToSlash(path)
+				assets[view.Key] = normalized
+				assetRefs[view.Key] = fmt.Sprintf("local://ip-characters/%s/%s", name, view.File)
+				availableViews = append(availableViews, view.Key)
+			} else {
+				warnings = append(warnings, fmt.Sprintf("%s 缺少 %s", name, view.File))
+			}
+		}
+		rig := buildIPCharacterRig(characterID, name)
+		characters = append(characters, map[string]interface{}{
+			"id":             characterID,
+			"name":           name,
+			"role":           ipCharacterRole(name, idx),
+			"assetDir":       filepath.ToSlash(characterDir),
+			"assets":         assets,
+			"assetRefs":      assetRefs,
+			"availableViews": availableViews,
+			"rig":            rig,
+			"controlHints": []string{
+				"front/front3qLeft 用于正面口播和指向动作",
+				"leftSide/rightSide 用于双人对话时的互看",
+				"reference 用于前端预览和角色身份校验",
+			},
+		})
+	}
+	return characters, warnings
+}
+
+func buildIPCharacterRigIndex(characters []map[string]interface{}) map[string]interface{} {
+	rigs := map[string]interface{}{}
+	for _, character := range characters {
+		id := firstStringInMap(character, "id")
+		if id == "" {
+			continue
+		}
+		if rig, ok := mapValue(character["rig"]); ok && len(rig) > 0 {
+			rigs[id] = rig
+			continue
+		}
+		rigs[id] = buildIPCharacterRig(id, firstStringInMap(character, "name"))
+	}
+	return rigs
+}
+
+func buildIPCharacterRig(characterID, name string) map[string]interface{} {
+	face := map[string]interface{}{"x": 0.50, "y": 0.30, "width": 0.40, "height": 0.18}
+	switch characterID {
+	case "bobo":
+		face = map[string]interface{}{"x": 0.50, "y": 0.31, "width": 0.43, "height": 0.19}
+	case "aster":
+		face = map[string]interface{}{"x": 0.50, "y": 0.28, "width": 0.36, "height": 0.17}
+	}
+	return map[string]interface{}{
+		"schemaVersion": "ip-puppet-rig-v1",
+		"characterId":   characterID,
+		"characterName": name,
+		"rigType":       "face_overlay_2_5d",
+		"baseLayer":     "full_body_sprite",
+		"faceOverlay":   face,
+		"renderLayers": []string{
+			"baseSprite",
+			"faceScreen",
+			"eyes",
+			"mouth",
+			"gestureCue",
+			"shadow",
+		},
+		"controls": map[string]interface{}{
+			"mouthOpen": map[string]interface{}{"type": "number", "min": 0, "max": 1, "editable": true},
+			"viseme":    map[string]interface{}{"type": "enum", "values": []string{"closed", "a", "o", "e", "smile"}, "editable": true},
+			"blink":     map[string]interface{}{"type": "boolean", "editable": true},
+			"lookX":     map[string]interface{}{"type": "number", "min": -1, "max": 1, "editable": true},
+			"lookY":     map[string]interface{}{"type": "number", "min": -1, "max": 1, "editable": true},
+			"headTilt":  map[string]interface{}{"type": "number", "min": -12, "max": 12, "unit": "deg", "editable": true},
+			"handLift":  map[string]interface{}{"type": "number", "min": 0, "max": 1, "editable": true},
+			"bodyBounce": map[string]interface{}{
+				"type":     "number",
+				"min":      0,
+				"max":      1,
+				"editable": true,
+			},
+		},
+	}
+}
+
+func stableIPCharacterID(name string) string {
+	switch strings.TrimSpace(name) {
+	case "波波", "Bobo", "BOBO", "bobo":
+		return "bobo"
+	case "阿斯特", "Aster", "ASTER", "aster":
+		return "aster"
+	default:
+		var b strings.Builder
+		for _, r := range strings.ToLower(name) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		if b.Len() == 0 {
+			return fmt.Sprintf("ip_%x", stdsha256.Sum256([]byte(name)))[:10]
+		}
+		return b.String()
+	}
+}
+
+func ipCharacterRole(name string, idx int) string {
+	switch stableIPCharacterID(name) {
+	case "bobo":
+		return "warm_hook_host"
+	case "aster":
+		return "knowledge_explainer"
+	default:
+		if idx == 0 {
+			return "primary_host"
+		}
+		return "support_host"
+	}
+}
+
+func estimateNarrationDurationSec(narration string) int {
+	runes := []rune(strings.TrimSpace(narration))
+	if len(runes) == 0 {
+		return 6
+	}
+	estimated := int(math.Ceil(float64(len(runes)) / 5.0))
+	if estimated < 6 {
+		return 6
+	}
+	if estimated > 15 {
+		return 15
+	}
+	return estimated
+}
+
+func buildIPArollTimeline(narration string, durationSec int, characters []map[string]interface{}, layout string) []map[string]interface{} {
+	segments := splitNarrationForIPAroll(narration)
+	if len(segments) == 0 {
+		segments = []string{narration}
+	}
+	if durationSec <= 0 {
+		durationSec = estimateNarrationDurationSec(narration)
+	}
+	characterCount := len(characters)
+	if characterCount == 0 {
+		characters = []map[string]interface{}{{"id": "bobo", "name": "波波"}}
+		characterCount = 1
+	}
+	actionSeq := []string{"speak", "point", "present", "nod", "react", "listen"}
+	timeline := make([]map[string]interface{}, 0, len(segments))
+	beatDuration := float64(durationSec) / float64(len(segments))
+	for idx, text := range segments {
+		character := characters[idx%characterCount]
+		characterID := fmt.Sprint(character["id"])
+		characterName := fmt.Sprint(character["name"])
+		action := actionSeq[idx%len(actionSeq)]
+		start := roundSeconds(float64(idx) * beatDuration)
+		end := roundSeconds(float64(idx+1) * beatDuration)
+		if idx == len(segments)-1 {
+			end = float64(durationSec)
+		}
+		expression := ipExpressionForAction(action)
+		timeline = append(timeline, map[string]interface{}{
+			"beatId":        fmt.Sprintf("beat_%02d", idx+1),
+			"startSec":      start,
+			"endSec":        end,
+			"characterId":   characterID,
+			"characterName": characterName,
+			"text":          text,
+			"view":          ipViewForAction(action, idx, characterCount),
+			"action":        action,
+			"gesture":       ipGestureForAction(action),
+			"expression":    expression,
+			"expressionCue": expression,
+			"mouthCue":      "talking",
+			"bodyCue":       "subtle_float",
+			"lipSync":       buildLipSyncTrack(text, start, end),
+			"motion":        buildIPMotionTrack(action, start, end),
+			"position":      ipPositionForBeat(layout, idx, characterID, characterCount),
+			"editable":      true,
+		})
+	}
+	return timeline
+}
+
+func splitNarrationForIPAroll(narration string) []string {
+	fields := strings.FieldsFunc(narration, func(r rune) bool {
+		return r == '。' || r == '！' || r == '？' || r == '\n' || r == ';' || r == '；'
+	})
+	segments := []string{}
+	for _, field := range fields {
+		text := strings.TrimSpace(field)
+		text = strings.Trim(text, "，,、 ")
+		if text != "" {
+			segments = append(segments, text)
+		}
+	}
+	if len(segments) == 1 {
+		runes := []rune(segments[0])
+		if len(runes) > 28 {
+			mid := len(runes) / 2
+			segments = []string{strings.TrimSpace(string(runes[:mid])), strings.TrimSpace(string(runes[mid:]))}
+		}
+	}
+	return segments
+}
+
+func buildLipSyncTrack(text string, startSec, endSec float64) []map[string]interface{} {
+	duration := endSec - startSec
+	if duration <= 0 {
+		duration = 1
+	}
+	runes := lipSyncRunes(text)
+	sampleCount := int(math.Ceil(duration*6)) + 1
+	if sampleCount < 3 {
+		sampleCount = 3
+	}
+	if sampleCount > 24 {
+		sampleCount = 24
+	}
+	track := make([]map[string]interface{}, 0, sampleCount)
+	for i := 0; i < sampleCount; i++ {
+		progress := float64(i) / float64(sampleCount-1)
+		timeSec := roundSeconds(startSec + progress*duration)
+		viseme := "closed"
+		if i != 0 && i != sampleCount-1 && len(runes) > 0 {
+			viseme = ipVisemeForRune(runes[(i-1)%len(runes)], i)
+		}
+		mouthOpen := mouthOpenForViseme(viseme)
+		track = append(track, map[string]interface{}{
+			"timeSec":    timeSec,
+			"viseme":     viseme,
+			"mouthOpen":  mouthOpen,
+			"energy":     roundFloat(math.Max(0.28, mouthOpen), 2),
+			"editable":   true,
+			"sourceText": truncateText(text, 28),
+		})
+	}
+	return track
+}
+
+func lipSyncRunes(text string) []rune {
+	out := []rune{}
+	for _, r := range strings.TrimSpace(text) {
+		if strings.ContainsRune(" \t\r\n，,。.!！?？:：;；、（）()[]【】\"'“”‘’", r) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func ipVisemeForRune(r rune, index int) string {
+	switch {
+	case strings.ContainsRune("aeiAEI", r):
+		return "e"
+	case strings.ContainsRune("ouOU", r):
+		return "o"
+	case strings.ContainsRune("bpmfBPMF", r):
+		return "closed"
+	case strings.ContainsRune("rnltdRNLTD", r):
+		return "smile"
+	case r >= 0x4e00 && r <= 0x9fff:
+		switch (int(r) + index) % 4 {
+		case 0:
+			return "a"
+		case 1:
+			return "o"
+		case 2:
+			return "e"
+		default:
+			return "smile"
+		}
+	default:
+		switch index % 4 {
+		case 0:
+			return "a"
+		case 1:
+			return "e"
+		case 2:
+			return "o"
+		default:
+			return "smile"
+		}
+	}
+}
+
+func mouthOpenForViseme(viseme string) float64 {
+	switch viseme {
+	case "a":
+		return 0.76
+	case "o":
+		return 0.64
+	case "e":
+		return 0.48
+	case "smile":
+		return 0.36
+	default:
+		return 0
+	}
+}
+
+func buildIPMotionTrack(action string, startSec, endSec float64) map[string]interface{} {
+	duration := endSec - startSec
+	if duration <= 0 {
+		duration = 1
+	}
+	mid := roundSeconds(startSec + duration*0.52)
+	lift := 0.24
+	tilt := -2.0
+	bounce := -8.0
+	scale := 1.015
+	switch action {
+	case "point":
+		lift = 0.88
+		tilt = -5
+		bounce = -12
+		scale = 1.025
+	case "present":
+		lift = 0.72
+		tilt = 4
+		bounce = -10
+		scale = 1.02
+	case "nod":
+		lift = 0.18
+		tilt = 6
+		bounce = -7
+	case "react":
+		lift = 0.58
+		tilt = -7
+		bounce = -18
+		scale = 1.05
+	case "listen":
+		lift = 0.08
+		tilt = 3
+		bounce = -4
+		scale = 1.005
+	}
+	return map[string]interface{}{
+		"mode":   "deterministic_css_puppet",
+		"action": action,
+		"controls": map[string]interface{}{
+			"handLift":   roundFloat(lift, 2),
+			"headTilt":   roundFloat(tilt, 2),
+			"bodyBounce": roundFloat(math.Abs(bounce)/20, 2),
+		},
+		"keyframes": []map[string]interface{}{
+			{"timeSec": startSec, "translateY": 0, "scale": 1.0, "rotateDeg": 0, "handLift": 0.0},
+			{"timeSec": mid, "translateY": bounce, "scale": scale, "rotateDeg": tilt, "handLift": roundFloat(lift, 2)},
+			{"timeSec": endSec, "translateY": 0, "scale": 1.0, "rotateDeg": 0, "handLift": 0.0},
+		},
+		"editable": true,
+	}
+}
+
+func roundFloat(value float64, places int) float64 {
+	if places < 0 {
+		return value
+	}
+	factor := math.Pow(10, float64(places))
+	return math.Round(value*factor) / factor
+}
+
+func clampFloat(value, minValue, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func ipViewForAction(action string, idx, characterCount int) string {
+	switch action {
+	case "point", "present":
+		return "front3qLeft"
+	case "listen":
+		if characterCount > 1 && idx%2 == 0 {
+			return "rightSide"
+		}
+		return "leftSide"
+	default:
+		return "front"
+	}
+}
+
+func ipGestureForAction(action string) string {
+	switch action {
+	case "point":
+		return "point_to_keyword_card"
+	case "present":
+		return "open_palm_present"
+	case "nod":
+		return "small_nod"
+	case "react":
+		return "react_pop"
+	case "listen":
+		return "idle_listen"
+	default:
+		return "small_hand_wave"
+	}
+}
+
+func ipExpressionForAction(action string) string {
+	switch action {
+	case "react":
+		return "surprised_or_star_eyes"
+	case "listen":
+		return "calm_listening"
+	case "point", "present":
+		return "confident_explain"
+	default:
+		return "friendly_speaking"
+	}
+}
+
+func ipPositionForBeat(layout string, idx int, characterID string, characterCount int) map[string]interface{} {
+	if layout == "single_host" || characterCount == 1 {
+		return map[string]interface{}{"x": 0.50, "y": 0.66, "scale": 0.72, "anchor": "center"}
+	}
+	if layout == "side_commentary" {
+		if idx%2 == 0 {
+			return map[string]interface{}{"x": 0.26, "y": 0.68, "scale": 0.60, "anchor": "left"}
+		}
+		return map[string]interface{}{"x": 0.74, "y": 0.68, "scale": 0.60, "anchor": "right"}
+	}
+	if characterID == "aster" || idx%2 == 1 {
+		return map[string]interface{}{"x": 0.68, "y": 0.66, "scale": 0.66, "anchor": "right"}
+	}
+	return map[string]interface{}{"x": 0.32, "y": 0.67, "scale": 0.70, "anchor": "left"}
+}
+
+func roundSeconds(value float64) float64 {
+	return math.Round(value*100) / 100
+}
+
+func buildIPArollReviewContent(stage, skillName, narration string, plan map[string]interface{}, timeline []map[string]interface{}) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("# %s - IP 口播 A-roll\n\n", stage))
+	b.WriteString(fmt.Sprintf("Skill: %s\n\n", skillName))
+	b.WriteString("## 口播\n\n")
+	b.WriteString(narration)
+	b.WriteString("\n\n## 角色动作时间线\n\n")
+	for _, beat := range timeline {
+		b.WriteString(fmt.Sprintf("- %.2fs-%.2fs · %s · %s · %s：%s\n",
+			floatParamFromAny(beat["startSec"]),
+			floatParamFromAny(beat["endSec"]),
+			beat["characterName"],
+			beat["action"],
+			beat["gesture"],
+			beat["text"],
+		))
+	}
+	b.WriteString("\n## HyperFrames 调用\n\n")
+	b.WriteString("把 `ipArollPlan` 传给 `hyperframes_project_generator`，由 HyperFrames 绑定角色图片、字幕、信息卡片和轻动作。\n\n")
+	if warnings, ok := plan["warnings"].([]string); ok && len(warnings) > 0 {
+		b.WriteString("## 资产提醒\n\n")
+		for _, warning := range warnings {
+			b.WriteString("- " + warning + "\n")
+		}
+	}
+	return b.String()
+}
+
+func floatParamFromAny(value interface{}) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		f, _ := typed.Float64()
+		return f
+	default:
+		return 0
+	}
 }
 
 // callProposalRecommendationLLM uses the LLM to analyze the user's topic and
@@ -5719,6 +6530,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	videoPromptsJSON := serializeParamJSON(params["videoPrompts"])
 	shotAssetPackagesJSON := serializeParamJSON(params["shotAssetPackages"])
 	publishCopyJSON := serializeParamJSON(params["publishCopy"])
+	ipArollPlanJSON := serializeParamJSON(params["ipArollPlan"])
 
 	// Determine project directory.
 	projectRoot := resolveHyperFramesProjectRoot(hyperFramesConfig.ProjectRoot)
@@ -5726,12 +6538,12 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	assetsDir := filepath.Join(projectDir, "assets")
 
 	// Build data.json content.
-	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON)
+	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON)
 	manifestJSON := buildHyperFramesManifestJSON(topic, toolCtx.TaskID)
 	styleCSS := hyperFramesDefaultStyleCSS()
 
 	// Use LLM to generate the index.html.
-	indexHTML := generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style, params, toolCtx)
+	indexHTML := generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style, ipArollPlanJSON, params, toolCtx)
 
 	// Write files to disk.
 	files := []string{}
@@ -5867,7 +6679,7 @@ func serializeParamJSON(value interface{}) string {
 }
 
 // buildHyperFramesDataJSON builds the data.json content for a HyperFrames project.
-func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON string) string {
+func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON string) string {
 	data := map[string]interface{}{
 		"topic":                 topic,
 		"script":                script,
@@ -5877,6 +6689,7 @@ func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, sho
 		"shots":                 publicJSONValueOrFallback(shotListJSON, []interface{}{}),
 		"videoPrompts":          publicJSONValueOrFallback(videoPromptsJSON, []interface{}{}),
 		"shotAssetPackages":     publicJSONValueOrFallback(shotAssetPackagesJSON, []interface{}{}),
+		"ipArollPlan":           publicJSONValueOrFallback(ipArollPlanJSON, map[string]interface{}{}),
 		"style": map[string]interface{}{
 			"aspectRatio": "16:9",
 			"language":    "zh-CN",
@@ -6051,10 +6864,10 @@ html, body {
 
 // generateHyperFramesIndexHTML uses the LLM to generate a complete HyperFrames HTML
 // video page from the topic, script, shot list, and style parameters.
-func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style string, params map[string]interface{}, toolCtx tool.ToolContext) string {
+func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON, style, ipArollPlanJSON string, params map[string]interface{}, toolCtx tool.ToolContext) string {
 	if !shouldUseLLMHyperFramesLayout(params) {
 		zap.L().Info("Generating deterministic HyperFrames HTML without LLM layout")
-		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style, ipArollPlanJSON)
 	}
 
 	effectiveCfg := effectiveVideoCreationOpenAIConfig(params)
@@ -6062,7 +6875,7 @@ func generateHyperFramesIndexHTML(topic, script, shotListJSON, videoPromptsJSON,
 	// If no LLM is configured, generate a minimal static HTML from the data.
 	if effectiveCfg.APIKey == "" {
 		zap.L().Info("No LLM API key configured, generating minimal HyperFrames HTML")
-		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style, ipArollPlanJSON)
 	}
 
 	systemPrompt := `你是 HyperFrames HTML 视频页面开发专家。
@@ -6109,9 +6922,12 @@ HyperFrames 是一个 HTML-to-Video 渲染框架。你生成的 HTML 页面将�
 视频提示词：
 %s
 
+IP A-roll 角色动作计划：
+%s
+
 风格要求：%s
 
-请生成完整的 HyperFrames HTML 视频页面。`, topic, script, shotListJSON, videoPromptsJSON, style)
+请生成完整的 HyperFrames HTML 视频页面。`, topic, script, shotListJSON, videoPromptsJSON, ipArollPlanJSON, style)
 
 	callTool := &LlmApiTool{cfg: effectiveCfg}
 	timeoutSec := intParam(params, "llmLayoutTimeoutSec", 45)
@@ -6128,7 +6944,7 @@ HyperFrames 是一个 HTML-to-Video 渲染框架。你生成的 HTML 页面将�
 	if !result.Success {
 		zap.L().Warn("LLM generation for HyperFrames HTML failed, falling back to minimal HTML",
 			zap.String("error", result.Error))
-		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style, ipArollPlanJSON)
 	}
 
 	rawHTML, _ := result.Data["content"].(string)
@@ -6145,7 +6961,7 @@ HyperFrames 是一个 HTML-to-Video 渲染框架。你生成的 HTML 页面将�
 	if !strings.HasPrefix(rawHTML, "<!DOCTYPE") && !strings.HasPrefix(rawHTML, "<html") {
 		zap.L().Warn("LLM did not return valid HTML, falling back to minimal HTML",
 			zap.String("prefix", safePrefix(rawHTML, 100)))
-		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style)
+		return buildMinimalHyperFramesHTML(topic, script, shotListJSON, style, ipArollPlanJSON)
 	}
 
 	return rawHTML
@@ -6159,7 +6975,7 @@ func shouldUseLLMHyperFramesLayout(params map[string]interface{}) bool {
 
 // buildMinimalHyperFramesHTML generates a basic HyperFrames HTML page from the given
 // data without calling the LLM. Used as fallback when no API key is configured.
-func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) string {
+func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string, ipArollPlanJSON ...string) string {
 	// Parse shot list to extract shot entries.
 	type shotEntry struct {
 		ShotID        string `json:"shotId"`
@@ -6237,6 +7053,11 @@ func buildMinimalHyperFramesHTML(topic, script, shotListJSON, style string) stri
 		}
 	}
 
+	ipCharacterLayers := ""
+	if len(ipArollPlanJSON) > 0 {
+		ipCharacterLayers = buildIPArollHTMLLayers(ipArollPlanJSON[0])
+	}
+
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -6254,14 +7075,43 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; font-family: "Noto
 .scene-subtitle { font-size: 28px; font-weight: 400; opacity: 0.65; margin-top: 20px; text-align: center; padding: 0 15%%; color: #b0b0c0; }
 .scene-body { font-size: 32px; font-weight: 400; line-height: 1.6; text-align: center; padding: 0 12%%; margin-top: 30px; color: #c0c0d0; }
 .caption-bar { position: absolute; bottom: 8%%; left: 50%%; transform: translateX(-50%%); width: 80%%; text-align: center; font-size: 30px; font-weight: 500; background: rgba(0, 0, 0, 0.6); padding: 16px 40px; border-radius: 12px; letter-spacing: 0.03em; color: #ffffff; }
+.ip-character-layer { position: absolute; width: 300px; height: 420px; transform-origin: center bottom; pointer-events: none; display: flex; align-items: flex-end; justify-content: center; filter: drop-shadow(0 18px 32px rgba(0,0,0,0.30)); }
+.ip-character-layer img { max-width: 100%%; max-height: 100%%; object-fit: contain; animation: ipFloat 2.4s ease-in-out infinite; }
+.ip-character-layer.mouth-flap img { animation: ipFloat 2.4s ease-in-out infinite, mouthFlap 0.32s ease-in-out infinite; }
+.ip-character-layer.small_hand_wave img,
+.ip-character-layer.point_to_keyword_card img,
+.ip-character-layer.open_palm_present img { animation: ipFloat 2.4s ease-in-out infinite, ipGesture 1.2s ease-in-out infinite; }
+.ip-character-layer.has-rig { --mouth-open: 0.45; --ip-bounce-y: -8px; --ip-tilt: -2deg; --ip-hand-lift: 0.25; animation: ipBodyRig 1.5s ease-in-out infinite; }
+.ip-character-layer.has-rig img { position: absolute; inset: 0; width: 100%%; height: 100%%; max-width: none; max-height: none; object-fit: contain; }
+.ip-character-layer.has-rig .ip-face-rig { position: absolute; transform: translate(-50%%, -50%%) rotate(var(--ip-tilt)); border-radius: 999px; background: rgba(255,255,255,0.88); box-shadow: inset 0 -8px 18px rgba(17, 24, 39, 0.14), 0 6px 18px rgba(0,0,0,0.18); display: flex; align-items: center; justify-content: center; animation: ipHeadRig 1.4s ease-in-out infinite; }
+.ip-character-layer.has-rig .ip-face-rig::after { content: ""; position: absolute; inset: 12%% 18%% 48%%; border-radius: 999px; background: linear-gradient(180deg, rgba(255,255,255,0.42), rgba(255,255,255,0)); pointer-events: none; }
+.ip-eyes { position: absolute; top: 28%%; left: 50%%; width: 54%%; height: 16%%; transform: translateX(-50%%); animation: ipBlink 3.4s ease-in-out infinite; }
+.ip-eyes::before,
+.ip-eyes::after { content: ""; position: absolute; top: 0; width: 22%%; height: 100%%; border-radius: 999px; background: #111827; box-shadow: 0 1px 0 rgba(255,255,255,0.22); }
+.ip-eyes::before { left: 5%%; }
+.ip-eyes::after { right: 5%%; }
+.ip-mouth { position: absolute; left: 50%%; bottom: 24%%; width: 30%%; height: calc(8%% + var(--mouth-open) * 34%%); transform: translateX(-50%%); border-radius: 999px; background: #111827; box-shadow: inset 0 -4px 0 rgba(255,255,255,0.12); animation: ipMouthRig 0.24s ease-in-out infinite; }
+.ip-mouth.viseme-closed { height: 7%%; width: 26%%; border-radius: 999px; }
+.ip-mouth.viseme-a { width: 28%%; height: calc(12%% + var(--mouth-open) * 38%%); }
+.ip-mouth.viseme-o { width: 24%%; height: calc(12%% + var(--mouth-open) * 30%%); border-radius: 50%%; }
+.ip-mouth.viseme-e,
+.ip-mouth.viseme-smile { width: 36%%; height: calc(7%% + var(--mouth-open) * 18%%); }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes ipFloat { 0%% { transform: translateY(0) scale(1); } 50%% { transform: translateY(-10px) scale(1.015); } 100%% { transform: translateY(0) scale(1); } }
+@keyframes mouthFlap { 0%% { filter: brightness(1); } 50%% { filter: brightness(1.12); } 100%% { filter: brightness(1); } }
+@keyframes ipGesture { 0%% { rotate: 0deg; } 50%% { rotate: -2deg; } 100%% { rotate: 0deg; } }
+@keyframes ipBodyRig { 0%% { translate: 0 0; rotate: 0deg; } 50%% { translate: 0 var(--ip-bounce-y); rotate: var(--ip-tilt); } 100%% { translate: 0 0; rotate: 0deg; } }
+@keyframes ipHeadRig { 0%% { scale: 1; } 50%% { scale: 1.035; } 100%% { scale: 1; } }
+@keyframes ipBlink { 0%%, 88%%, 100%% { transform: translateX(-50%%) scaleY(1); } 92%% { transform: translateX(-50%%) scaleY(0.12); } }
+@keyframes ipMouthRig { 0%% { transform: translateX(-50%%) scaleY(0.72); } 50%% { transform: translateX(-50%%) scaleY(1.16); } 100%% { transform: translateX(-50%%) scaleY(0.78); } }
 .anim-fade-in { animation: fadeIn 0.8s ease-out both; }
 .anim-fade-out { animation: fadeOut 0.6s ease-in both; }
 </style>
 </head>
 <body>
 <div id="app" data-composition-id="main" data-duration="%d">
+%s
 %s
 </div>
 <script>
@@ -6306,7 +7156,251 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; font-family: "Noto
 })();
 </script>
 </body>
-</html>`, templateEscape(topic), totalDurationSec, scenesBuilder.String(), totalDurationSec)
+</html>`, templateEscape(topic), totalDurationSec, scenesBuilder.String(), ipCharacterLayers, totalDurationSec)
+}
+
+func buildIPArollHTMLLayers(ipArollPlanJSON string) string {
+	planValue := publicJSONValueOrFallback(ipArollPlanJSON, map[string]interface{}{})
+	plan, ok := mapValue(planValue)
+	if !ok || len(plan) == 0 {
+		return ""
+	}
+	characterIndex := map[string]map[string]interface{}{}
+	for _, item := range interfaceItems(plan["characters"]) {
+		character, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		id := firstStringInMap(character, "id")
+		if id != "" {
+			characterIndex[id] = character
+		}
+	}
+	rigIndex := map[string]map[string]interface{}{}
+	if rootRigs, ok := mapValue(plan["rigs"]); ok {
+		for id, raw := range rootRigs {
+			if rig, rigOK := mapValue(raw); rigOK && len(rig) > 0 {
+				rigIndex[id] = rig
+			}
+		}
+	}
+
+	var b strings.Builder
+	for idx, item := range interfaceItems(plan["timeline"]) {
+		beat, ok := mapValue(item)
+		if !ok {
+			continue
+		}
+		characterID := firstStringInMap(beat, "characterId")
+		character := characterIndex[characterID]
+		if character == nil {
+			continue
+		}
+		view := firstStringInMap(beat, "view")
+		if view == "" {
+			view = "front"
+		}
+		src := ipCharacterAssetForView(character, view)
+		if src == "" {
+			continue
+		}
+		start := floatParamFromAny(beat["startSec"])
+		end := floatParamFromAny(beat["endSec"])
+		if end <= start {
+			end = start + 1
+		}
+		position := ipHTMLPosition(beat["position"])
+		rig := ipCharacterRigForHTML(character, rigIndex, characterID)
+		hasRig := len(rig) > 0
+		classes := []string{"ip-character-layer", "clip", sanitizeCSSClass(firstStringInMap(beat, "gesture"))}
+		if firstStringInMap(beat, "mouthCue") == "talking" {
+			classes = append(classes, "mouth-flap")
+		}
+		if hasRig {
+			classes = append(classes, "has-rig", sanitizeCSSClass(firstStringInMap(beat, "expressionCue", "expression")))
+		}
+		motion := ipMotionCSSVars(beat["motion"])
+		faceLayer := ""
+		if hasRig {
+			face := ipFaceOverlayFromRig(rig)
+			mouthOpen := ipFirstLipSyncMouthOpen(beat["lipSync"])
+			viseme := ipFirstLipSyncViseme(beat["lipSync"])
+			faceLayer = fmt.Sprintf(`    <div class="ip-face-rig %s" data-lipsync="%s" style="left: %.2f%%; top: %.2f%%; width: %.2f%%; height: %.2f%%; --mouth-open: %.2f;">
+      <div class="ip-eyes %s"></div>
+      <div class="ip-mouth viseme-%s"></div>
+    </div>
+`, sanitizeCSSClass(firstStringInMap(beat, "expressionCue", "expression")),
+				ipLipSyncDataAttribute(beat["lipSync"]),
+				face["x"]*100,
+				face["y"]*100,
+				face["width"]*100,
+				face["height"]*100,
+				mouthOpen,
+				sanitizeCSSClass(firstStringInMap(beat, "expressionCue", "expression")),
+				sanitizeCSSClass(viseme),
+			)
+		}
+		b.WriteString(fmt.Sprintf(`  <div id="ip-aroll-%02d" class="%s" data-start="%.2f" data-duration="%.2f" data-track-index="1" data-character-id="%s" data-action="%s" style="left: %.2f%%; top: %.2f%%; transform: translate(-50%%,-50%%) scale(%.3f); --ip-bounce-y: %.2fpx; --ip-tilt: %.2fdeg; --ip-hand-lift: %.2f;">
+    <img src="%s" alt="%s" draggable="false">
+%s
+  </div>
+`, idx+1,
+			strings.Join(classes, " "),
+			start,
+			end-start,
+			templateEscape(characterID),
+			templateEscape(firstStringInMap(beat, "action")),
+			position["x"].(float64)*100,
+			position["y"].(float64)*100,
+			position["scale"].(float64),
+			motion["bounceY"],
+			motion["tilt"],
+			motion["handLift"],
+			templateEscape(src),
+			templateEscape(firstStringInMap(character, "name")),
+			faceLayer,
+		))
+	}
+	return b.String()
+}
+
+func ipCharacterRigForHTML(character map[string]interface{}, rigIndex map[string]map[string]interface{}, characterID string) map[string]interface{} {
+	if rig, ok := mapValue(character["rig"]); ok && len(rig) > 0 {
+		return rig
+	}
+	if rig := rigIndex[characterID]; len(rig) > 0 {
+		return rig
+	}
+	return nil
+}
+
+func ipFaceOverlayFromRig(rig map[string]interface{}) map[string]float64 {
+	face := map[string]float64{"x": 0.50, "y": 0.30, "width": 0.40, "height": 0.18}
+	rawFace, ok := mapValue(rig["faceOverlay"])
+	if !ok {
+		return face
+	}
+	for _, key := range []string{"x", "y", "width", "height"} {
+		if value := floatParamFromAny(rawFace[key]); value > 0 {
+			face[key] = clampFloat(value, 0.02, 0.95)
+		}
+	}
+	return face
+}
+
+func ipMotionCSSVars(raw interface{}) map[string]float64 {
+	out := map[string]float64{"bounceY": -8, "tilt": -2, "handLift": 0.25}
+	motion, ok := mapValue(raw)
+	if !ok {
+		return out
+	}
+	if controls, ok := mapValue(motion["controls"]); ok {
+		if value := floatParamFromAny(controls["bodyBounce"]); value > 0 {
+			out["bounceY"] = -20 * clampFloat(value, 0, 1)
+		}
+		if value := floatParamFromAny(controls["headTilt"]); value != 0 {
+			out["tilt"] = clampFloat(value, -12, 12)
+		}
+		if value := floatParamFromAny(controls["handLift"]); value > 0 {
+			out["handLift"] = clampFloat(value, 0, 1)
+		}
+	}
+	items := interfaceItems(motion["keyframes"])
+	if len(items) > 1 {
+		if keyframe, ok := mapValue(items[1]); ok {
+			if value := floatParamFromAny(keyframe["translateY"]); value != 0 {
+				out["bounceY"] = clampFloat(value, -30, 30)
+			}
+			if value := floatParamFromAny(keyframe["rotateDeg"]); value != 0 {
+				out["tilt"] = clampFloat(value, -12, 12)
+			}
+			if value := floatParamFromAny(keyframe["handLift"]); value > 0 {
+				out["handLift"] = clampFloat(value, 0, 1)
+			}
+		}
+	}
+	return out
+}
+
+func ipLipSyncDataAttribute(raw interface{}) string {
+	data, err := json.Marshal(raw)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return "[]"
+	}
+	return templateEscape(string(data))
+}
+
+func ipFirstLipSyncMouthOpen(raw interface{}) float64 {
+	sample := ipFirstLipSyncSample(raw)
+	if sample == nil {
+		return 0.45
+	}
+	return clampFloat(floatParamFromAny(sample["mouthOpen"]), 0, 1)
+}
+
+func ipFirstLipSyncViseme(raw interface{}) string {
+	sample := ipFirstLipSyncSample(raw)
+	if sample == nil {
+		return "closed"
+	}
+	if viseme := sanitizeCSSClass(firstStringInMap(sample, "viseme")); viseme != "" {
+		return viseme
+	}
+	return "closed"
+}
+
+func ipFirstLipSyncSample(raw interface{}) map[string]interface{} {
+	for _, item := range interfaceItems(raw) {
+		sample, ok := mapValue(item)
+		if ok {
+			return sample
+		}
+	}
+	return nil
+}
+
+func ipCharacterAssetForView(character map[string]interface{}, view string) string {
+	assets, ok := mapValue(character["assets"])
+	if !ok {
+		return ""
+	}
+	for _, key := range []string{view, "front", "reference"} {
+		if value := strings.TrimSpace(ensureStringValue(assets[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func ipHTMLPosition(raw interface{}) map[string]interface{} {
+	out := map[string]interface{}{"x": 0.5, "y": 0.66, "scale": 0.7}
+	position, ok := mapValue(raw)
+	if !ok {
+		return out
+	}
+	for _, key := range []string{"x", "y", "scale"} {
+		if value := floatParamFromAny(position[key]); value > 0 {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func sanitizeCSSClass(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "idle"
+	}
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "idle"
+	}
+	return b.String()
 }
 
 // templateEscape escapes text for safe embedding in HTML templates.

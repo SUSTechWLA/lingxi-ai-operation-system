@@ -33,6 +33,35 @@ func TestNormalizeShotTimingPrefersCanonicalMilliseconds(t *testing.T) {
 	}
 }
 
+func TestNormalizeShotTimingMergesMixedLegacyAndCanonicalFields(t *testing.T) {
+	tests := []struct {
+		name           string
+		shot           model.ShotUnit
+		wantStartMs    int64
+		wantEndMs      int64
+		wantDurationMs int64
+	}{
+		{
+			name:        "canonical start with legacy end",
+			shot:        model.ShotUnit{StartMs: 500, EndSec: 7.25, DurationSec: 7},
+			wantStartMs: 500, wantEndMs: 7250, wantDurationMs: 6750,
+		},
+		{
+			name:        "legacy start with canonical end",
+			shot:        model.ShotUnit{StartSec: 1.25, EndMs: 7000},
+			wantStartMs: 1250, wantEndMs: 7000, wantDurationMs: 5750,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			NormalizeShotTiming(&tt.shot)
+			if tt.shot.StartMs != tt.wantStartMs || tt.shot.EndMs != tt.wantEndMs || tt.shot.DurationMs != tt.wantDurationMs {
+				t.Fatalf("normalized timing = %d..%d duration=%d, want %d..%d duration=%d", tt.shot.StartMs, tt.shot.EndMs, tt.shot.DurationMs, tt.wantStartMs, tt.wantEndMs, tt.wantDurationMs)
+			}
+		})
+	}
+}
+
 func TestBuildEstimatedAudioMasterUsesOneRevisionForAllCues(t *testing.T) {
 	master, issues := BuildAudioMasterTimeline(AudioMasterRequest{
 		ScriptRevision: "script-r2",

@@ -1545,6 +1545,7 @@ func canReuseProfileToolStep(toolName string) bool {
 	switch toolName {
 	case "proposal_generator",
 		"video_script_generator",
+		"audio_master_planner",
 		"continuity_checker",
 		"reference_asset_planner",
 		"cinematic_shot_designer",

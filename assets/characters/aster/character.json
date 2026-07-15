@@ -1,0 +1,59 @@
+{
+  "characterId": "aster",
+  "displayName": "阿斯特",
+  "type": "cartoon_ip",
+  "renderer": "svg2d",
+  "defaultExpression": "focused",
+  "defaultPose": "front_talking_scholar",
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "anchor": {
+    "x": 960,
+    "y": 950,
+    "scale": 1.0
+  },
+  "assets": {
+    "referenceSvg": "renderer/aster_puppet.svg",
+    "rig": "renderer/rig.json",
+    "frontTexture": "renderer/front_cutout.png"
+  },
+  "voiceProfile": {
+    "persona": "aster",
+    "displayName": "阿斯特",
+    "voiceName": "Reed (中文（中国大陆）)",
+    "locale": "zh_CN",
+    "speakingRate": 168,
+    "tone": "calm_precise_scholarly",
+    "stylePrompt": "阿斯特声音沉稳、严谨、逻辑性强，适合解释流程、结论和复杂概念。",
+    "provider": "local_preview",
+    "previewOnly": true,
+    "fallbackPolicy": "正式成片建议上传更自然的阿斯特人设口播音频；本地 say 仅用于动作和口型预览。"
+  },
+  "capabilities": {
+    "lipSync": true,
+    "blink": true,
+    "headNod": true,
+    "headShake": true,
+    "simpleGesture": true,
+    "expressionSwitch": true,
+    "svgPuppet": true,
+    "hypergenControl": true,
+    "knowledgeOrb": true,
+    "lensGlint": true,
+    "humanizedProsodyPreview": true,
+    "segmentedLocalTTS": true,
+    "independentLimbMotion": true,
+    "leftArmGesture": true,
+    "rightArmGesture": true,
+    "footBounce": true,
+    "bodyWeightShift": true
+  },
+  "live2d": {
+    "reserved": true,
+    "expectedModel": "renderer/live2d/aster.model3.json",
+    "note": "需要 Cubism model3.json、纹理、物理和动作文件后才能启用 live2d 渲染模式。"
+  }
+}

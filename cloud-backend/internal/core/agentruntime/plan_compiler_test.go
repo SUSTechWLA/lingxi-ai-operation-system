@@ -421,6 +421,46 @@ func TestPlanCompiler_PreparePlanUsesTalkingHeadProfileTemplate(t *testing.T) {
 	}
 }
 
+func TestPlanCompiler_ReusesHeuristicAudioMasterStep(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "请创作一个口播知识视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID: "script_generation", Tool: "video_script_generator",
+				Arguments:      map[string]interface{}{"topic": "口播知识"},
+				ExpectedOutput: []string{"script", "scriptSpans"}, ProduceArtifact: true,
+			},
+			{
+				ID: "audio_master_planner", Tool: "audio_master_planner",
+				Arguments:      map[string]interface{}{"brief": "请创作一个口播知识视频"},
+				ExpectedOutput: []string{"audioMaster"}, ProduceArtifact: true,
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+	count := 0
+	for _, step := range prepared.Steps {
+		if step.Tool == "audio_master_planner" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("audio master planner count = %d, want one canonical step: %#v", count, prepared.Steps)
+	}
+	audioMaster := findStep(t, prepared, "audio_master")
+	if got := audioMaster.Arguments["scriptSpans"]; got != "{{script_generation.output.scriptSpans}}" {
+		t.Fatalf("audio master scriptSpans = %#v, want script output reference", got)
+	}
+	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
+		t.Fatalf("prepared plan should pass guard: %v", err)
+	}
+}
+
 func TestPlanCompiler_PreparePlanReusesHeuristicProfileSteps(t *testing.T) {
 	catalog := videoProfileTemplateCatalog()
 	compiler := NewPlanCompiler(catalog)

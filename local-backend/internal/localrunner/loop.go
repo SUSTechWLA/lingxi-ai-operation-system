@@ -180,6 +180,8 @@ func toolNameForCommand(command string) string {
 		return "local_file_importer"
 	case localtool.CommandLocalMediaIndex:
 		return "local_media_indexer"
+	case localtool.CommandLocalIpTalkingAvatarRender:
+		return "local_ip_talking_avatar_render"
 	case localtool.CommandBundleExtract:
 		return "bundle_extractor"
 	default:

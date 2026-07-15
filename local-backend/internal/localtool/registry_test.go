@@ -36,6 +36,9 @@ func TestIsAllowedCommandWithNormalization(t *testing.T) {
 	if !IsAllowedCommand("video_frame_qa") {
 		t.Error("lowercase video_frame_qa should be allowed after normalization")
 	}
+	if !IsAllowedCommand("local_ip_talking_avatar_render") {
+		t.Error("lowercase local_ip_talking_avatar_render should be allowed after normalization")
+	}
 	if IsAllowedCommand("") {
 		t.Error("empty string should not be allowed")
 	}

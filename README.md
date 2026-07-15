@@ -42,6 +42,7 @@
 - 即梦 CLI / MCP 登录配置已归入设置页，和文生图片、文生视频 Provider 一起管理；项目页只保留说明和跳转按钮。
 - Shot 产物页已升级为面向创作者的线性 1-6 步工作台：LLM 先区分口播 / 知识类和影视 / AIGC shot 视频，进入 shot 后自动切到对应流程。
 - 口播类 shot 聚焦口播稿、HyperFrames 时间线、AIGC 插入素材和最终合成；影视类 shot 聚焦剧本、角色 / 场景 / 道具参考、故事板、AIGC 主画面提示词、跨 shot 一致性和完整 shot 预览。
+- 新增本地 IP 数字人口播渲染工具：支持 `bobo` / `aster` 角色资产、音频驱动口型、分段 prosody 预览声音、左右手/双手/脚步/重心动作时间轴、`svg2d` 高保真参考图 puppet、HyperGen 控制 schema、声音画像和 FFmpeg 本地合成。
 - 图片和视频产物现在直接可预览，图片支持点击放大和对话式重新生成提示，视频支持大弹窗播放；页面隐藏 `local://...`、`已登记`、`预览已就绪` 等非创作信息。
 - JiMeng/Dreamina 视频调用会优先投放 AIGC 层提示词，而不是 HyperFrames 字幕/文字层或完整工程说明，避免把错误层级发给视频模型。
 - 项目页启动体检会自动运行，只展示未就绪或需留意的问题；具体本地工具命令和排障细节保留在设置页、追踪页和诊断包中。
@@ -78,7 +79,7 @@
 |---|---|
 | 影视化 / AIGC shot 视频 | 从故事大纲、详细剧本、角色/场景/道具档案、多视角参考图到语义 shot 切分、candidate 生成、shot 级 QA 和返修 |
 | 口播 / 知识类视频 | 先生成口播稿，再按口播设计 HyperFrames、录屏、AIGC 图片/视频素材和最终成片 |
-| 3D IP 口播层 MCP | 输入口播和本地 GLB 模型，通过 MCP 生成波波 / 阿斯特等 IP A-roll 视频层，系统只负责接收、预览和合成 |
+| 3D IP 口播层 MCP | 输入口播和本地角色资产，通过 MCP 生成高保真 IP A-roll 视频层，支持口型、眨眼、点头、四肢动作、分段声音 prosody 计划和 HyperGen 控制 schema，系统负责接收、预览和合成 |
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |
@@ -213,6 +214,7 @@ Local agent:   http://localhost:18080/api/local/docs
 - [Changelog](CHANGELOG.md)
 - [版本管理 Wiki](docs/version-management.md)
 - [视频抽帧 QA Wiki](docs/video-frame-qa.md)
+- [本地 IP 数字人口播渲染 Wiki](docs/local-ip-talking-avatar-render.md)
 - [影视类视频创作流程](docs/cinematic-video-workflow.md)
 
 Wiki 中包含产品介绍、系统边界、核心流程、即梦 MCP 使用方式和后续路线图。
