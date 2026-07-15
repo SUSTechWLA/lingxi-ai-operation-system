@@ -89,6 +89,8 @@ class WarmStudioContractTests(unittest.TestCase):
         self.assertEqual(profile["keyTemperatureK"], 4500)
         self.assertEqual(profile["keyEnergy"], 825.0)
         self.assertEqual(profile["keySpreadDegrees"], 145.0)
+        self.assertEqual(profile["practicalWallEnergy"], 34.02)
+        self.assertEqual(profile["practicalShelfEnergy"], 38.88)
         self.assertEqual(profile["authoredExposure"], -2.769925)
         self.assertEqual(profile["cyclesFinalExposure"], -4.0)
         self.assertEqual(profile["whiteBalanceTemperatureK"], 4500.0)
