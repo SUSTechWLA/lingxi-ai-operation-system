@@ -6282,7 +6282,11 @@ def animate(
     for frame in animation_frames:
         t = (frame - 1) / fps
         pose_state = pose_state_at(t)
-        base_pose = aroll_actions.presentation_pose(pose_state, source_rig)
+        base_pose = (
+            aroll_actions.transition_presentation_pose(pose_state, source_rig)
+            if has_transition_sequence
+            else aroll_actions.presentation_pose(pose_state, source_rig)
+        )
         seated = pose_state == "seated"
         active_actions = active_avatar_actions(events, t)
         transition_actions = [

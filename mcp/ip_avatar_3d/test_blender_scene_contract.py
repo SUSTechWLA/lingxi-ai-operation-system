@@ -106,6 +106,9 @@ def test_warm_studio_saved_scene_has_dual_mode_contract() -> None:
     assert bpy.data.objects["Chair_Main"]["hero_visibility_strategy"] == "partial_profile"
     desk_top = bpy.data.objects["Desk_Top"]
     chair_back = bpy.data.objects["Chair_Back"]
+    chair_seat = bpy.data.objects["Chair_Seat"]
+    assert_location_matches(tuple(chair_seat.dimensions), contract.HERO_CHAIR_SEAT_SIZE)
+    assert_location_matches(tuple(chair_back.dimensions), contract.HERO_CHAIR_BACK_SIZE)
     desk_top_z = max((desk_top.matrix_world @ Vector(corner)).z for corner in desk_top.bound_box)
     chair_back_z = max(
         (chair_back.matrix_world @ Vector(corner)).z for corner in chair_back.bound_box

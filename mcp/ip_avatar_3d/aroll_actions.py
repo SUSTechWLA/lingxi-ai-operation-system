@@ -87,6 +87,9 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
 
 PoseState = Literal["standing", "seated", "either"]
 
+SOURCE_RIGHT_FOOT_PROFILE_DELTA = (0.0, 0.10, 0.04)
+SOURCE_STAND_TO_SIT_RIGHT_FOOT_DELTA = (-0.04, 0.12, 0.06)
+
 
 @dataclass(frozen=True)
 class ActionMetadata:
@@ -261,6 +264,42 @@ def presentation_pose(mode: str, source_rig: bool) -> dict[str, dict[str, tuple[
         "shin_r": {"rotation": shin_r},
         "foot_r": {"rotation": foot_r},
     }
+
+
+def _offset_rotation(
+    rotation: tuple[float, float, float],
+    delta: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    return tuple(rotation[index] + delta[index] for index in range(3))
+
+
+def _offset_pose_rotation(
+    pose: ActionPose,
+    role: str,
+    delta: tuple[float, float, float],
+) -> ActionPose:
+    adjusted: ActionPose = {
+        name: dict(transform) if isinstance(transform, dict) else transform
+        for name, transform in pose.items()
+    }
+    transform = adjusted.get(role)
+    if isinstance(transform, dict) and "rotation" in transform:
+        transform["rotation"] = _offset_rotation(transform["rotation"], delta)
+    return adjusted
+
+
+def transition_presentation_pose(
+    mode: str,
+    source_rig: bool,
+) -> dict[str, dict[str, tuple[float, float, float]]]:
+    pose = presentation_pose(mode, source_rig)
+    if not source_rig:
+        return pose
+    return _offset_pose_rotation(
+        pose,
+        "foot_r",
+        SOURCE_RIGHT_FOOT_PROFILE_DELTA,
+    )
 
 
 def hand_pose(name: str) -> Mapping[int, DigitPose]:
@@ -487,6 +526,8 @@ def blend_action_pose(base: Mapping[str, Any], target: Mapping[str, Any], amount
 def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
     seated = presentation_pose("seated", source_rig)
     standing = presentation_pose("standing", source_rig)
+    stable_seated = transition_presentation_pose("seated", source_rig)
+    stable_standing = transition_presentation_pose("standing", source_rig)
     stand_to_sit = (
         1,
         max(2, round(fps * 0.30)),
@@ -587,10 +628,33 @@ def build_transition_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec]:
             )
             for frame in sit_frames
         ]
-        stand_spec[0] = (stand_to_sit[0], standing)
-        stand_spec[-1] = (stand_to_sit[-1], seated)
-        sit_spec[0] = (sit_to_stand[0], seated)
-        sit_spec[-1] = (sit_to_stand[-1], standing)
+        stand_spec = [
+            (
+                frame,
+                _offset_pose_rotation(
+                    pose, "foot_r", SOURCE_STAND_TO_SIT_RIGHT_FOOT_DELTA
+                ),
+            )
+            for frame, pose in stand_spec
+        ]
+        sit_spec = [
+            (
+                frame,
+                _offset_pose_rotation(
+                    pose, "foot_r", SOURCE_RIGHT_FOOT_PROFILE_DELTA
+                ),
+            )
+            for frame, pose in sit_spec
+        ]
+        stand_spec[0] = (
+            stand_to_sit[0],
+            _offset_pose_rotation(
+                standing, "foot_r", SOURCE_STAND_TO_SIT_RIGHT_FOOT_DELTA
+            ),
+        )
+        stand_spec[-1] = (stand_to_sit[-1], stable_seated)
+        sit_spec[0] = (sit_to_stand[0], stable_seated)
+        sit_spec[-1] = (sit_to_stand[-1], stable_standing)
         return {
             "Aroll_Transition_StandToSit": stand_spec,
             "Aroll_Transition_SitToStand": sit_spec,

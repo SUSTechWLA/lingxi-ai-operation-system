@@ -1803,7 +1803,7 @@ def build_hero_stool_chair(
             ctx,
             "Chair_Seat",
             (x, y, floor_z + 0.50),
-            (0.64, 0.58, 0.12),
+            contract.HERO_CHAIR_SEAT_SIZE,
             fabric,
             "STUDIO_FURNITURE",
             bevel=0.045,
@@ -1812,20 +1812,23 @@ def build_hero_stool_chair(
             ctx,
             "Chair_Back",
             (x, y + 0.265, floor_z + 0.99),
-            (0.62, 0.10, 0.18),
+            contract.HERO_CHAIR_BACK_SIZE,
             fabric,
             "STUDIO_FURNITURE",
             bevel=0.035,
         ),
     ]
-    for side, arm_x in (("Left", x - 0.34), ("Right", x + 0.34)):
+    for side, arm_x in (
+        ("Left", x - contract.HERO_CHAIR_ARM_X),
+        ("Right", x + contract.HERO_CHAIR_ARM_X),
+    ):
         parts.append(
             tag_wood_grain(
                 add_box(
                     ctx,
                     f"Chair_Arm_{side}",
                     (arm_x, y - 0.01, floor_z + 0.615),
-                    (0.075, 0.52, 0.065),
+                    (0.1125, 0.52, 0.065),
                     oak,
                     "STUDIO_FURNITURE",
                     bevel=0.022,
@@ -1839,7 +1842,7 @@ def build_hero_stool_chair(
                     ctx,
                     f"Chair_ArmSupport_{side}",
                     (arm_x, y - 0.18, floor_z + 0.55),
-                    (0.060, 0.060, 0.17),
+                    (0.090, 0.060, 0.17),
                     oak,
                     "STUDIO_FURNITURE",
                     bevel=0.014,
@@ -1849,10 +1852,10 @@ def build_hero_stool_chair(
         )
     for index, (foot_x, foot_y) in enumerate(
         (
-            (x - 0.25, y - 0.20),
-            (x + 0.25, y - 0.20),
-            (x - 0.25, y + 0.20),
-            (x + 0.25, y + 0.20),
+            (x - contract.HERO_CHAIR_FOOT_X, y - 0.20),
+            (x + contract.HERO_CHAIR_FOOT_X, y - 0.20),
+            (x - contract.HERO_CHAIR_FOOT_X, y + 0.20),
+            (x + contract.HERO_CHAIR_FOOT_X, y + 0.20),
         ),
         start=1,
     ):
@@ -1862,7 +1865,7 @@ def build_hero_stool_chair(
                     ctx,
                     f"Chair_Foot_{index:02d}",
                     (foot_x, foot_y, floor_z + 0.22),
-                    (0.065, 0.065, 0.44),
+                    (0.0975, 0.065, 0.44),
                     oak,
                     "STUDIO_FURNITURE",
                     bevel=0.014,
