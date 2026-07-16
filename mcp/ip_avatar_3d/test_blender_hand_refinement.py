@@ -72,25 +72,32 @@ def test_aroll_qa_sample_contract_is_complete_and_squint_only() -> None:
         for camera in render_aroll_master_qa.ACTION_CAMERAS
     }
     assert {sample.path for sample in hand_samples} == {
+        "hand/relaxed.png",
         "hand/open.png",
         "hand/fist.png",
         "hand/pinch.png",
         "hand/count_1.png",
         "hand/count_2.png",
         "hand/count_3.png",
+        "hand/point.png",
+        "hand/camera_facing_wave.png",
     }
+    assert {sample.label for sample in render_aroll_master_qa.FACE_SAMPLES}.issuperset(
+        {"Rest", "MBP", "A", "E", "O", "U", "Smile", "Surprise"}
+    )
     assert {(sample.side, sample.digit) for sample in digit_samples} == {
         (side, digit) for side in ("l", "r") for digit in (1, 2, 3)
     }
     assert {sample.path for sample in face_samples} == {
-        "face/neutral.png",
-        "face/happy.png",
-        "face/serious.png",
-        "face/squint.png",
+        "face/Rest.png",
+        "face/MBP.png",
         "face/A.png",
         "face/E.png",
         "face/O.png",
-        "face/MBP.png",
+        "face/U.png",
+        "face/Smile.png",
+        "face/Surprise.png",
+        "face/Squint.png",
     }
     assert not any("blink" in sample.path.lower() for sample in samples)
     assert render_aroll_master_qa.FACE_CAPABILITY == "squint_only"
@@ -150,9 +157,11 @@ def _fixture_add_face_shape_keys(face) -> None:
         "Mouth_A",
         "Mouth_E",
         "Mouth_O",
+        "Mouth_U",
         "Mouth_MBP",
         "Mouth_Smile",
         "Mouth_Frown",
+        "Mouth_Surprise",
         "Eye_Squint.L",
         "Eye_Squint.R",
     )
@@ -167,6 +176,9 @@ def _fixture_add_face_shape_keys(face) -> None:
             elif shape_name == "Mouth_O":
                 vertex.co.x = x * 0.72
                 vertex.co.z = z * 1.12
+            elif shape_name == "Mouth_U":
+                vertex.co.x = x * 0.62
+                vertex.co.z = z * 1.06
             elif shape_name == "Mouth_MBP":
                 vertex.co.z += 0.055
             elif shape_name == "Mouth_Smile":
@@ -175,6 +187,9 @@ def _fixture_add_face_shape_keys(face) -> None:
             elif shape_name == "Mouth_Frown":
                 vertex.co.x = x * 0.90
                 vertex.co.z -= 0.065
+            elif shape_name == "Mouth_Surprise":
+                vertex.co.x = x * 0.68
+                vertex.co.z = z * 1.28
             elif shape_name == "Eye_Squint.L" and x < 0.0 and z > 0.0:
                 vertex.co.z -= 0.11
             elif shape_name == "Eye_Squint.R" and x > 0.0 and z > 0.0:
@@ -352,7 +367,7 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
         assert report["status"] == "ready"
         assert report["faceCapability"] == {
             "blinkCapability": "squint_only",
-            "qaSample": "face/squint.png",
+            "qaSample": "face/Squint.png",
             "fullBlinkClaimed": False,
         }
         assert report["lighting"]["preset"] == "qa_editorial_soft"
@@ -360,9 +375,25 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
         assert len(report["samples"]) == len(render_aroll_master_qa.QA_SAMPLES)
         assert report["contract"]["sampleCount"] == len(render_aroll_master_qa.QA_SAMPLES)
         assert all(
-            {"action", "camera", "path", "boneRotations", "fingertipDisplacementRatios"}
+            {
+                "action",
+                "camera",
+                "path",
+                "boneRotations",
+                "fingertipDisplacementRatios",
+                "objectVisibility",
+                "dentalExposure",
+                "tongueExposure",
+                "oralComponentCounts",
+                "extremaFrameIntersections",
+            }
             <= set(sample)
             for sample in report["samples"]
+        )
+        assert all(
+            sample["handFrameMargin"] >= 0.04
+            for sample in report["samples"]
+            if sample["kind"] in {"hand", "digit"}
         )
         right_close = [
             sample["framing"]
@@ -388,6 +419,31 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
             for hashes in report["framemd5"].values()
             for left, right in zip(hashes, hashes[1:])
         )
+        qa_sheet = output_dir / "MainIP_Sloth_Oral_Hand_QA.png"
+        comparison_sheet = output_dir / "MainIP_Sloth_Oral_Hand_Comparison.png"
+        sheets = render_aroll_master_qa.create_qa_contact_sheets(
+            output_dir,
+            output_dir,
+            qa_sheet,
+            comparison_sheet,
+        )
+        assert sheets["qa"]["inputCount"] == 17
+        assert sheets["comparison"]["inputCount"] == 12
+        assert qa_sheet.is_file() and qa_sheet.stat().st_size > 0
+        assert comparison_sheet.is_file() and comparison_sheet.stat().st_size > 0
+        baseline_dir = Path(tmp) / "baseline-crops"
+        baseline_report = render_aroll_master_qa.run_fixed_comparison_crops(
+            baseline_dir, resolution=128
+        )
+        assert baseline_report["status"] == "ready"
+        assert {sample["label"] for sample in baseline_report["samples"]} == {
+            "Rest",
+            "A",
+            "Smile",
+            "open",
+            "fist",
+            "camera_facing_wave",
+        }
         render_aroll_master_qa.require_files(
             output_dir,
             (*render_aroll_master_qa.required_relative_paths(), render_aroll_master_qa.REPORT_NAME),

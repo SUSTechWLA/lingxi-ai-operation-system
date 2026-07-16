@@ -23,6 +23,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import aroll_actions
+import master_asset
 
 try:
     import blender_renderer
@@ -35,6 +36,8 @@ ACTION_CAMERAS = ("Camera_Medium", "Camera_Wide")
 AROLL_ACTIONS = tuple(aroll_actions.AROLL_ACTIONS)
 HAND_CLOSE_CAMERA_RIGHT = "QA_Hand_Close.R"
 HAND_CLOSE_CAMERA_LEFT = "QA_Hand_Close.L"
+HAND_RELAXED_CAMERA_RIGHT = "QA_Hand_Relaxed.R"
+HAND_WAVE_CAMERA_RIGHT = "QA_Hand_Wave.R"
 FACE_CLOSE_CAMERA = "QA_Face_Close"
 REPORT_NAME = "qa-report.json"
 MIN_OPEN_FIST_PIXEL_DIFFERENCE = 0.012
@@ -57,12 +60,27 @@ class QASample:
 
 
 HAND_SAMPLES = (
+    QASample(
+        "relaxed",
+        "hand",
+        "Aroll_Idle_Listening",
+        HAND_RELAXED_CAMERA_RIGHT,
+        "hand/relaxed.png",
+    ),
     QASample("open", "hand", "Gesture_OpenHand", HAND_CLOSE_CAMERA_RIGHT, "hand/open.png"),
     QASample("fist", "hand", "Gesture_Fist", HAND_CLOSE_CAMERA_RIGHT, "hand/fist.png"),
     QASample("pinch", "hand", "Gesture_Pinch", HAND_CLOSE_CAMERA_RIGHT, "hand/pinch.png"),
     QASample("count_1", "hand", "Gesture_Count_One", HAND_CLOSE_CAMERA_RIGHT, "hand/count_1.png"),
     QASample("count_2", "hand", "Gesture_Count_Two", HAND_CLOSE_CAMERA_RIGHT, "hand/count_2.png"),
     QASample("count_3", "hand", "Gesture_Count_Three", HAND_CLOSE_CAMERA_RIGHT, "hand/count_3.png"),
+    QASample("point", "hand", "Gesture_Point_Right", HAND_CLOSE_CAMERA_RIGHT, "hand/point.png"),
+    QASample(
+        "camera_facing_wave",
+        "hand",
+        "Gesture_Wave",
+        HAND_WAVE_CAMERA_RIGHT,
+        "hand/camera_facing_wave.png",
+    ),
 )
 
 DIGIT_SAMPLES = tuple(
@@ -81,40 +99,13 @@ DIGIT_SAMPLES = tuple(
 
 FACE_SAMPLES = (
     QASample(
-        "neutral",
+        "Rest",
         "face",
         "Face_Neutral",
         FACE_CLOSE_CAMERA,
-        "face/neutral.png",
+        "face/Rest.png",
         shape_keys=(("Mouth_Rest", 1.0),),
     ),
-    QASample(
-        "happy",
-        "face",
-        "Face_Happy",
-        FACE_CLOSE_CAMERA,
-        "face/happy.png",
-        shape_keys=(("Mouth_Smile", 0.8),),
-    ),
-    QASample(
-        "serious",
-        "face",
-        "Face_Serious",
-        FACE_CLOSE_CAMERA,
-        "face/serious.png",
-        shape_keys=(("Mouth_Frown", 0.7),),
-    ),
-    QASample(
-        "squint",
-        "face",
-        "Face_Squint",
-        FACE_CLOSE_CAMERA,
-        "face/squint.png",
-        shape_keys=(("Eye_Squint.L", 1.0), ("Eye_Squint.R", 1.0)),
-    ),
-    QASample("A", "face", "Mouth_A", FACE_CLOSE_CAMERA, "face/A.png", shape_keys=(("Mouth_A", 1.0),)),
-    QASample("E", "face", "Mouth_E", FACE_CLOSE_CAMERA, "face/E.png", shape_keys=(("Mouth_E", 1.0),)),
-    QASample("O", "face", "Mouth_O", FACE_CLOSE_CAMERA, "face/O.png", shape_keys=(("Mouth_O", 1.0),)),
     QASample(
         "MBP",
         "face",
@@ -122,6 +113,34 @@ FACE_SAMPLES = (
         FACE_CLOSE_CAMERA,
         "face/MBP.png",
         shape_keys=(("Mouth_MBP", 1.0),),
+    ),
+    QASample("A", "face", "Mouth_A", FACE_CLOSE_CAMERA, "face/A.png", shape_keys=(("Mouth_A", 1.0),)),
+    QASample("E", "face", "Mouth_E", FACE_CLOSE_CAMERA, "face/E.png", shape_keys=(("Mouth_E", 1.0),)),
+    QASample("O", "face", "Mouth_O", FACE_CLOSE_CAMERA, "face/O.png", shape_keys=(("Mouth_O", 1.0),)),
+    QASample("U", "face", "Mouth_U", FACE_CLOSE_CAMERA, "face/U.png", shape_keys=(("Mouth_U", 1.0),)),
+    QASample(
+        "Smile",
+        "face",
+        "Face_Happy",
+        FACE_CLOSE_CAMERA,
+        "face/Smile.png",
+        shape_keys=(("Mouth_Smile", 1.0),),
+    ),
+    QASample(
+        "Surprise",
+        "face",
+        "Face_Surprise",
+        FACE_CLOSE_CAMERA,
+        "face/Surprise.png",
+        shape_keys=(("Mouth_Surprise", 1.0),),
+    ),
+    QASample(
+        "Squint",
+        "face",
+        "Face_Squint",
+        FACE_CLOSE_CAMERA,
+        "face/Squint.png",
+        shape_keys=(("Eye_Squint.L", 1.0), ("Eye_Squint.R", 1.0)),
     ),
 )
 
@@ -138,6 +157,9 @@ ACTION_SAMPLES = tuple(
 )
 
 QA_SAMPLES = (*HAND_SAMPLES, *DIGIT_SAMPLES, *FACE_SAMPLES, *ACTION_SAMPLES)
+COMPARISON_CROP_LABELS = frozenset(
+    {"Rest", "A", "Smile", "open", "fist", "camera_facing_wave"}
+)
 REQUIRED_ACTIONS = frozenset(
     {*AROLL_ACTIONS, *(sample.action for sample in HAND_SAMPLES)}
 )
@@ -219,10 +241,23 @@ def _decode_bone_map(armature: Any) -> dict[str, str]:
     return decoded
 
 
-def validate_scene_contract(scene: Any | None = None) -> dict[str, Any]:
+def validate_scene_contract(
+    scene: Any | None = None,
+    *,
+    samples: Iterable[QASample] | None = None,
+) -> dict[str, Any]:
     """Validate all reusable assets before rendering any QA output."""
     _require_blender()
     scene = scene or bpy.context.scene
+    selected_samples = tuple(samples) if samples is not None else QA_SAMPLES
+    required_actions = {
+        sample.action for sample in selected_samples if sample.kind in {"hand", "action"}
+    }
+    required_shape_keys = {
+        shape_name
+        for sample in selected_samples
+        for shape_name, _value in sample.shape_keys
+    }
     violations: list[str] = []
     armatures = [obj for obj in scene.objects if obj.type == "ARMATURE"]
     if len(armatures) != 1:
@@ -231,7 +266,7 @@ def validate_scene_contract(scene: Any | None = None) -> dict[str, Any]:
     else:
         armature = armatures[0]
 
-    missing_actions = sorted(name for name in REQUIRED_ACTIONS if bpy.data.actions.get(name) is None)
+    missing_actions = sorted(name for name in required_actions if bpy.data.actions.get(name) is None)
     if missing_actions:
         violations.append(f"missing required Actions: {', '.join(missing_actions)}")
 
@@ -244,7 +279,7 @@ def validate_scene_contract(scene: Any | None = None) -> dict[str, Any]:
         violations.append(f"missing required cameras: {', '.join(missing_cameras)}")
 
     shape_owners = _shape_key_owners(scene)
-    missing_shapes = sorted(REQUIRED_SHAPE_KEYS - set(shape_owners))
+    missing_shapes = sorted(required_shape_keys - set(shape_owners))
     if missing_shapes:
         violations.append(f"missing required Shape Keys: {', '.join(missing_shapes)}")
     squint_owners = {
@@ -285,6 +320,47 @@ def validate_scene_contract(scene: Any | None = None) -> dict[str, Any]:
         "actions": list(AROLL_ACTIONS),
         "cameras": list(ACTION_CAMERAS),
     }
+
+
+def _render_selected_samples(
+    output_dir: Path,
+    samples: Iterable[QASample],
+    *,
+    resolution: int,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    scene = bpy.context.scene
+    selected_samples = tuple(samples)
+    contract = validate_scene_contract(scene, samples=selected_samples)
+    armature = contract["armature"]
+    bone_map = contract["boneMap"]
+    character_meshes = set(contract["characterMeshes"])
+    for obj in scene.objects:
+        if obj.type == "MESH" and obj not in character_meshes:
+            obj.hide_render = True
+    lighting = _configure_qa_lighting(scene, character_meshes)
+    _configure_close_cameras(scene, armature, bone_map)
+    _reset_armature_pose(scene, armature)
+    _apply_open_pose(armature, bone_map)
+    bpy.context.view_layer.update()
+    baseline = {
+        (side, digit): _hand_relative_tip(armature, bone_map, side, digit).copy()
+        for side in ("l", "r")
+        for digit in (1, 2, 3)
+    }
+    rendered = [
+        _render_sample(scene, sample, output_dir, contract, baseline, resolution)
+        for sample in selected_samples
+    ]
+    for sample in rendered:
+        metrics = silhouette_metrics(output_dir / sample["path"])
+        coverage = float(metrics["coverage"])
+        if not MIN_SILHOUETTE_COVERAGE <= coverage <= MAX_SILHOUETTE_COVERAGE:
+            raise RuntimeError(
+                f"malformed silhouette for {sample['path']}: coverage={coverage:.6f}"
+            )
+        sample["silhouette"] = metrics
+        sample["frameMd5"] = frame_md5(output_dir / sample["path"])
+    return contract, lighting, rendered
 
 
 def _reset_armature_pose(scene: Any, armature: Any) -> None:
@@ -384,13 +460,19 @@ def _get_or_create_camera(name: str) -> Any:
     return camera
 
 
-def _frame_camera(name: str, points: Iterable[Any], *, lens: float = 70.0) -> Any:
+def _frame_camera(
+    name: str,
+    points: Iterable[Any],
+    *,
+    lens: float = 70.0,
+    distance_scale: float = 5.5,
+) -> Any:
     points = list(points)
     if not points:
         raise RuntimeError(f"A-roll QA cannot frame {name}: no target points")
     center = sum(points, Vector((0.0, 0.0, 0.0))) / len(points)
     radius = max((point - center).length for point in points)
-    distance = max(0.45, radius * 5.5)
+    distance = max(0.45, radius * distance_scale)
     camera = _get_or_create_camera(name)
     camera.data.lens = lens
     camera.data.clip_start = 0.01
@@ -405,6 +487,14 @@ def _configure_close_cameras(scene: Any, armature: Any, bone_map: dict[str, str]
     _frame_camera(HAND_CLOSE_CAMERA_RIGHT, _pose_points(armature, bone_map, "r"))
     _set_action_sample(scene, armature, "Aroll_Explain_Left", 30)
     _frame_camera(HAND_CLOSE_CAMERA_LEFT, _pose_points(armature, bone_map, "l"))
+    _set_action_sample(scene, armature, "Aroll_Idle_Listening", 30)
+    _frame_camera(
+        HAND_RELAXED_CAMERA_RIGHT,
+        _pose_points(armature, bone_map, "r"),
+        distance_scale=7.5,
+    )
+    _set_action_sample(scene, armature, "Gesture_Wave", 30)
+    _frame_camera(HAND_WAVE_CAMERA_RIGHT, _pose_points(armature, bone_map, "r"))
 
     _reset_armature_pose(scene, armature)
     bpy.context.view_layer.update()
@@ -473,6 +563,115 @@ def _camera_metrics(camera: Any) -> dict[str, Any]:
         "location": [round(float(value), 6) for value in camera.location],
         "rotationEuler": [round(float(value), 6) for value in camera.rotation_euler],
     }
+
+
+def _projected_vertex_count(scene: Any, camera: Any, obj: Any) -> int:
+    from bpy_extras.object_utils import world_to_camera_view
+
+    if obj.hide_render or obj.hide_viewport:
+        return 0
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    mesh = evaluated.to_mesh(preserve_all_data_layers=True)
+    owns_mesh = mesh is not None
+    if mesh is None:
+        mesh = evaluated.data
+    try:
+        step = max(1, len(mesh.vertices) // 256)
+        return sum(
+            0.0 <= projected.x <= 1.0
+            and 0.0 <= projected.y <= 1.0
+            and projected.z >= 0.0
+            for index in range(0, len(mesh.vertices), step)
+            for vertex in [mesh.vertices[index]]
+            for projected in [world_to_camera_view(scene, camera, evaluated.matrix_world @ vertex.co)]
+        )
+    finally:
+        if owns_mesh:
+            evaluated.to_mesh_clear()
+
+
+def _oral_render_evidence(scene: Any, camera: Any) -> dict[str, Any]:
+    role_objects = {
+        role: [
+            obj
+            for obj in scene.objects
+            if obj.type == "MESH" and str(obj.get("ip_face_topology_role") or "") == role
+        ]
+        for role in master_asset.REQUIRED_ORAL_ROLES
+    }
+    object_visibility: dict[str, Any] = {}
+    component_counts: dict[str, int] = {}
+    projected_counts: dict[str, int] = {}
+    for role, objects in role_objects.items():
+        count = sum(master_asset._mesh_component_count(obj) for obj in objects)
+        projected = sum(_projected_vertex_count(scene, camera, obj) for obj in objects)
+        component_counts[role] = count
+        projected_counts[role] = projected
+        object_visibility[role] = {
+            "objects": [obj.name for obj in objects],
+            "renderEnabled": bool(objects) and all(not obj.hide_render for obj in objects),
+            "projectedVertexSamples": projected,
+            "visibleInCamera": projected > 0,
+        }
+    return {
+        "objectVisibility": object_visibility,
+        "oralComponentCounts": component_counts,
+        "dentalExposure": {
+            "upperProjectedVertexSamples": projected_counts["upper_teeth"],
+            "lowerProjectedVertexSamples": projected_counts["lower_teeth"],
+            "visible": projected_counts["upper_teeth"] + projected_counts["lower_teeth"] > 0,
+        },
+        "tongueExposure": {
+            "projectedVertexSamples": projected_counts["tongue"],
+            "visible": projected_counts["tongue"] > 0,
+        },
+    }
+
+
+def _extrema_frame_intersections(
+    armature: Any, bone_map: Mapping[str, str]
+) -> list[dict[str, Any]]:
+    head = armature.pose.bones[bone_map["head"]]
+    head_center = armature.matrix_world @ ((head.head + head.tail) * 0.5)
+    head_radius = max((armature.matrix_world @ head.tail - armature.matrix_world @ head.head).length, 0.08)
+    findings: list[dict[str, Any]] = []
+    for side in ("l", "r"):
+        points = _pose_points(armature, bone_map, side)
+        minimum_distance = min((point - head_center).length for point in points)
+        if minimum_distance < head_radius * 0.52:
+            findings.append(
+                {
+                    "kind": "hand_face_extrema_intersection",
+                    "side": side,
+                    "minimumDistance": round(float(minimum_distance), 6),
+                    "threshold": round(float(head_radius * 0.52), 6),
+                }
+            )
+    return findings
+
+
+def _hand_frame_margin(
+    scene: Any,
+    camera: Any,
+    armature: Any,
+    bone_map: Mapping[str, str],
+    side: str,
+) -> float:
+    from bpy_extras.object_utils import world_to_camera_view
+
+    coordinates = [
+        world_to_camera_view(scene, camera, point)
+        for point in _pose_points(armature, dict(bone_map), side)
+    ]
+    return round(
+        float(
+            min(
+                min(coordinate.x, 1.0 - coordinate.x, coordinate.y, 1.0 - coordinate.y)
+                for coordinate in coordinates
+            )
+        ),
+        6,
+    )
 
 
 def _configure_render(scene: Any, resolution: int) -> None:
@@ -583,7 +782,8 @@ def _render_sample(
     path.parent.mkdir(parents=True, exist_ok=True)
     scene.render.filepath = str(path)
     bpy.ops.render.render(write_still=True)
-    return {
+    evidence = _oral_render_evidence(scene, camera)
+    result = {
         "label": sample.label,
         "kind": sample.kind,
         "action": sample.action,
@@ -596,7 +796,15 @@ def _render_sample(
         ),
         "shapeKeys": dict(sample.shape_keys),
         "framing": _camera_metrics(camera),
+        **evidence,
+        "extremaFrameIntersections": _extrema_frame_intersections(armature, bone_map),
     }
+    if sample.kind in {"hand", "digit"}:
+        side = sample.side or ("l" if sample.camera == HAND_CLOSE_CAMERA_LEFT else "r")
+        result["handFrameMargin"] = _hand_frame_margin(
+            scene, camera, armature, bone_map, side
+        )
+    return result
 
 
 def _read_alpha_mask(path: Path) -> tuple[int, int, tuple[bool, ...]]:
@@ -700,6 +908,101 @@ def require_files(output_dir: Path, relative_paths: Iterable[str]) -> None:
         raise RuntimeError("A-roll QA required files are missing: " + ", ".join(missing))
 
 
+def create_contact_sheet(
+    paths: Iterable[Path | str],
+    output_path: Path | str,
+    *,
+    columns: int = 4,
+    cell_size: int = 320,
+) -> dict[str, Any]:
+    """Compose fixed QA crops into one deterministic PNG with ffmpeg."""
+    sources = [Path(path).expanduser().resolve() for path in paths]
+    missing = [str(path) for path in sources if not path.is_file()]
+    if missing:
+        raise RuntimeError("contact-sheet inputs are missing: " + ", ".join(missing))
+    if not sources:
+        raise RuntimeError("contact sheet requires at least one input")
+    executable = shutil.which("ffmpeg")
+    if not executable:
+        raise RuntimeError("contact-sheet generation requires ffmpeg on PATH")
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    columns = max(1, int(columns))
+    cell_size = max(64, int(cell_size))
+    filters = []
+    layout = []
+    for index in range(len(sources)):
+        filters.append(
+            f"[{index}:v]scale={cell_size}:{cell_size}:force_original_aspect_ratio=decrease,"
+            f"pad={cell_size}:{cell_size}:(ow-iw)/2:(oh-ih)/2:color=0x20242a[v{index}]"
+        )
+        layout.append(f"{(index % columns) * cell_size}_{(index // columns) * cell_size}")
+    filters.append(
+        "".join(f"[v{index}]" for index in range(len(sources)))
+        + f"xstack=inputs={len(sources)}:layout={'|'.join(layout)}:fill=0x14171c[out]"
+    )
+    command = [executable, "-v", "error", "-y"]
+    for source in sources:
+        command.extend(("-i", str(source)))
+    command.extend(
+        ("-filter_complex", ";".join(filters), "-map", "[out]", "-frames:v", "1", str(output))
+    )
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 0:
+        detail = completed.stderr.strip() or "empty contact-sheet output"
+        raise RuntimeError(f"contact-sheet generation failed: {detail}")
+    return {
+        "path": str(output),
+        "inputCount": len(sources),
+        "columns": columns,
+        "cellSize": cell_size,
+        "inputs": [str(path) for path in sources],
+    }
+
+
+def create_qa_contact_sheets(
+    refined_dir: Path | str,
+    baseline_dir: Path | str,
+    qa_output_path: Path | str,
+    comparison_output_path: Path | str,
+) -> dict[str, Any]:
+    """Create the approved oral/hand QA sheet and fixed before/after comparison."""
+    refined = Path(refined_dir).expanduser().resolve()
+    baseline = Path(baseline_dir).expanduser().resolve()
+    face_crops = [
+        "face/Rest.png",
+        "face/MBP.png",
+        "face/A.png",
+        "face/E.png",
+        "face/O.png",
+        "face/U.png",
+        "face/Smile.png",
+        "face/Surprise.png",
+    ]
+    hand_crops = [sample.path for sample in HAND_SAMPLES]
+    comparison_crops = [
+        "face/Rest.png",
+        "face/A.png",
+        "face/Smile.png",
+        "hand/open.png",
+        "hand/fist.png",
+        "hand/camera_facing_wave.png",
+    ]
+    comparison_paths = [
+        directory / relative_path
+        for relative_path in comparison_crops
+        for directory in (baseline, refined)
+    ]
+    return {
+        "qa": create_contact_sheet(
+            [refined / path for path in (*face_crops, *hand_crops)], qa_output_path
+        ),
+        "comparison": create_contact_sheet(
+            comparison_paths, comparison_output_path
+        ),
+    }
+
+
 def _comparison_metrics(output_dir: Path) -> dict[str, Any]:
     open_fist = alpha_mask_difference(output_dir / "hand/open.png", output_dir / "hand/fist.png")
     if open_fist < MIN_OPEN_FIST_PIXEL_DIFFERENCE:
@@ -738,6 +1041,39 @@ def _duplicate_metrics(output_dir: Path) -> dict[str, list[str]]:
         )
         for label, samples in groups.items()
     }
+
+
+def run_fixed_comparison_crops(
+    output_dir: Path | str,
+    *,
+    resolution: int = 640,
+) -> dict[str, Any]:
+    """Render only legacy-compatible fixed crops for before/after evidence."""
+    _require_blender()
+    output_dir = Path(output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    samples = tuple(sample for sample in QA_SAMPLES if sample.label in COMPARISON_CROP_LABELS)
+    _contract, lighting, rendered = _render_selected_samples(
+        output_dir, samples, resolution=resolution
+    )
+    require_files(output_dir, (sample.path for sample in samples))
+    report = {
+        "status": "ready",
+        "mode": "legacy_compatible_comparison_crops",
+        "lighting": lighting,
+        "contract": {
+            "labels": [sample.label for sample in samples],
+            "sampleCount": len(samples),
+            "requiredFiles": [sample.path for sample in samples],
+        },
+        "samples": rendered,
+    }
+    report_path = output_dir / "comparison-crops-report.json"
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"AROLL_COMPARISON_CROPS_REPORT={report_path}")
+    return report
 
 
 def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
@@ -786,7 +1122,7 @@ def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
         "status": "ready",
         "faceCapability": {
             "blinkCapability": FACE_CAPABILITY,
-            "qaSample": "face/squint.png",
+            "qaSample": "face/Squint.png",
             "fullBlinkClaimed": False,
         },
         "lighting": lighting,
