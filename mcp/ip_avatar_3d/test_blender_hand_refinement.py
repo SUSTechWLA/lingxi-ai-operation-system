@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import blender_renderer
 import hand_refinement
+import hand_topology
 import master_asset
 import render_aroll_master_qa
 from test_blender_character_rig import RIGGED_FBX_PATH, load_enhanced_fbx_character
@@ -873,14 +874,43 @@ def test_refinement_preserves_non_deform_groups_and_unaffected_vertices() -> Non
 def _build_legacy_hand_fixture(legacy_version):
     objects, dimensions, armature, bone_map = _source_hand_fixture()
     regions = hand_refinement.analyze_three_digit_hands(armature, objects, dimensions, bone_map)
+    source_surface = _surface_snapshot(objects)
+    if legacy_version == 1:
+        topology = hand_topology.apply_annular_hand_topology(
+            objects,
+            [
+                hand_topology.DigitTopologyInput(
+                    region.side,
+                    region.index,
+                    region.records,
+                    region.axis,
+                    region.base,
+                    region.tip,
+                    bone_map[f"hand_{region.side.lower()}"],
+                )
+                for side_regions in regions.values()
+                for region in side_regions
+            ],
+        )
+        for side_regions in regions.values():
+            for region in side_regions:
+                length = max((region.tip - region.base).length, 1e-8)
+                for joint_index, attribute in ((1, "joint_1"), (2, "joint_2")):
+                    centroid = topology.ring_centroids[region.side, region.index, joint_index]
+                    progress = max(0.0, min(1.0, (centroid - region.base).dot(region.axis) / length))
+                    setattr(region, attribute, region.base.lerp(region.tip, progress))
+    else:
+        topology = hand_refinement._source_surface_topology(objects, regions)
+    legacy_surface = _surface_snapshot(objects)
     hand_refinement._create_segment_bones(armature, regions, bone_map)
     bone_map = blender_renderer.resolve_bone_roles([bone.name for bone in armature.data.bones])
-    topology = hand_refinement._source_surface_topology(objects, regions)
     hand_refinement._assign_segment_weights(armature, objects, regions, bone_map, 4, topology)
     contract_name = hand_refinement.LEGACY_HAND_CONTRACT_NAMES[legacy_version]
     armature[hand_refinement.HAND_CONTRACT_KEY] = contract_name
     armature[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
-    armature[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY] = 0
+    armature[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY] = (
+        topology.stats["handJointSupportLoopCount"] if legacy_version == 1 else 0
+    )
     if legacy_version == 2:
         armature[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
     by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
@@ -888,15 +918,41 @@ def _build_legacy_hand_fixture(legacy_version):
         obj = by_name[object_name]
         obj[hand_refinement.HAND_CONTRACT_KEY] = contract_name
         obj[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
-        obj[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY] = 0
+        obj[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY] = (
+            len(topology.ring_vertices[object_name]) if legacy_version == 1 else 0
+        )
         if legacy_version == 2:
             obj[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
-    return objects, dimensions, armature, bone_map, regions
+    regions = hand_refinement.analyze_three_digit_hands(armature, objects, dimensions, bone_map)
+    return objects, dimensions, armature, bone_map, regions, {
+        "topology": topology,
+        "sourceSurface": source_surface,
+        "legacySurface": legacy_surface,
+    }
 
 
 def test_refinement_preserves_source_topology_uvs_materials_and_upgrades_v1_v2_once() -> None:
     for legacy_version in (1, 2):
-        objects, dimensions, armature, bone_map, regions = _build_legacy_hand_fixture(legacy_version)
+        objects, dimensions, armature, bone_map, regions, legacy_evidence = _build_legacy_hand_fixture(legacy_version)
+        if legacy_version == 1:
+            topology = legacy_evidence["topology"]
+            assert int(armature[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY]) == 24
+            assert sum(
+                int(obj.get(hand_refinement.HAND_SUPPORT_RING_COUNT_KEY, 0))
+                for obj in objects if obj.type == "MESH"
+            ) == 24
+            assert topology.stats["handJointSupportLoopCount"] == 24
+            assert topology.stats["handDetailAddedVertices"] > 0
+            assert sum(len(rings) for rings in topology.ring_vertices.values()) == 24
+            assert all(ring for rings in topology.ring_vertices.values() for ring in rings.values())
+            assert any(
+                legacy_evidence["legacySurface"][name]["vertexCount"]
+                > legacy_evidence["sourceSurface"][name]["vertexCount"]
+                for name in legacy_evidence["sourceSurface"]
+            )
+        else:
+            assert int(armature[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY]) == 0
+            assert legacy_evidence["topology"].stats["handDetailAddedVertices"] == 0
         hand_record = next(record for side_regions in regions.values() for region in side_regions for record in region.records)
         shape_object = next(obj for obj in objects if obj.name == hand_record.object_name)
         shape_object.shape_key_add(name="Basis", from_mix=False)
@@ -918,6 +974,7 @@ def test_refinement_preserves_source_topology_uvs_materials_and_upgrades_v1_v2_o
         refined = _surface_snapshot(objects)
         assert upgraded["handAestheticUpgradeFromVersion"] == legacy_version
         assert int(armature[hand_refinement.HAND_CONTRACT_VERSION_KEY]) == hand_refinement.HAND_CONTRACT_VERSION
+        assert int(armature[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY]) == 0
         assert set(refined) == set(source)
         for name, before in source.items():
             after = refined[name]
