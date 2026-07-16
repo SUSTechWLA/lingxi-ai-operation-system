@@ -794,7 +794,14 @@ def test_rigged_fbx_face_retopologizes_original_mesh_without_visible_overlays() 
         "upper_lip", "lower_lip", "upper_lid_l", "lower_lid_l", "upper_lid_r", "lower_lid_r",
     }.intersection(face)
 
-    internal_roles = {"oral_cavity", "upper_teeth", "lower_teeth", "tongue"}
+    internal_roles = {
+        "oral_cavity",
+        "upper_teeth",
+        "lower_teeth",
+        "upper_gum",
+        "lower_gum",
+        "tongue",
+    }
     assert internal_roles.issubset(face), sorted(internal_roles.difference(face))
     new_meshes = {
         obj.name
