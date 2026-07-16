@@ -9,7 +9,7 @@ from typing import Any, Callable
 import bpy
 
 
-ORAL_REFINEMENT_VERSION = 1
+ORAL_REFINEMENT_VERSION = 2
 
 
 @dataclass(frozen=True)

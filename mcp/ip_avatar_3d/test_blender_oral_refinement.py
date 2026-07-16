@@ -162,6 +162,24 @@ def test_current_refined_oral_roles_are_reused_without_regeneration():
     }
 
 
+def test_previous_version_oral_roles_are_replaced_after_geometry_contract_bump():
+    previous_version = 1
+    source_face, armature, bone_map, dimensions = build_oral_scene()
+    legacy = blender_renderer.create_integrated_oral_interior(source_face, armature, bone_map, dimensions)
+    for obj in legacy.values():
+        obj["ip_oral_refinement_version"] = previous_version
+        obj["ip_previous_oral_version_fixture"] = True
+
+    regenerated = blender_renderer.create_integrated_oral_interior(source_face, armature, bone_map, dimensions)
+
+    assert oral_refinement.ORAL_REFINEMENT_VERSION > previous_version
+    assert not any(obj.get("ip_previous_oral_version_fixture") for obj in bpy.context.scene.objects)
+    assert all(
+        obj["ip_oral_refinement_version"] == oral_refinement.ORAL_REFINEMENT_VERSION
+        for obj in regenerated.values()
+    )
+
+
 def test_stale_duplicate_oral_roles_are_all_removed_before_regeneration():
     source_face, armature, bone_map, dimensions = build_oral_scene()
     create_stale_oral_object("LegacyUpperTeethA", "upper_teeth")
@@ -187,6 +205,7 @@ if __name__ == "__main__":
         test_tongue_is_connected_tapered_and_weighted_to_three_bones,
         test_dental_arches_and_tongue_use_multi_ring_rounded_end_caps,
         test_current_refined_oral_roles_are_reused_without_regeneration,
+        test_previous_version_oral_roles_are_replaced_after_geometry_contract_bump,
         test_stale_duplicate_oral_roles_are_all_removed_before_regeneration,
     )
     failures = []
