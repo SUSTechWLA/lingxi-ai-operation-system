@@ -1696,7 +1696,10 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         model = profile["model"]
 
-        self.assertEqual(model["masterBlendPath"], "models/main-ip-aroll-master.blend")
+        self.assertEqual(
+            model["masterBlendPath"],
+            "models/main-ip-aroll-master-refined.blend",
+        )
         self.assertEqual(model["qualityTier"], "aroll_close")
         self.assertEqual(model["fingerTopology"], "three_digits_three_segments")
         expected_middle_roles = {
@@ -2222,7 +2225,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
         joined = " ".join(command)
         self.assertIn(
-            "volume=0.2dB,alimiter=limit=0.75:attack=5:release=50:level=false",
+            "volume=0.4dB,alimiter=limit=0.75:attack=5:release=50:level=false",
             joined,
         )
         self.assertIn("apad=whole_dur=3.000", joined)

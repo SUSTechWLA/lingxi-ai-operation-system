@@ -1865,7 +1865,7 @@ def _build_compose_video_args(
         args.extend(["-map", f"{frame_input}:v:0"])
     if audio_path:
         audio_filter = (
-            "volume=0.2dB,alimiter=limit=0.75:attack=5:release=50:level=false"
+            "volume=0.4dB,alimiter=limit=0.75:attack=5:release=50:level=false"
             if audio_mastered
             else "loudnorm=I=-16:TP=-1.5:LRA=7"
         )

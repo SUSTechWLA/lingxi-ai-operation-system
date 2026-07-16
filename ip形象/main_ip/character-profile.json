@@ -27,7 +27,7 @@
     "sourcePath": "turnaround/带骨骼3d模型.fbx",
     "sourceFormat": "fbx",
     "riggedBlendPath": "models/main-ip-talking-head.blend",
-    "masterBlendPath": "models/main-ip-aroll-master.blend",
+    "masterBlendPath": "models/main-ip-aroll-master-refined.blend",
     "rigReportPath": "models/main-ip-rig-report.json",
     "format": "glb",
     "qualityTier": "aroll_close",

@@ -27,7 +27,8 @@ if str(SCRIPT_DIR) not in sys.path:
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from hand_refinement import enhance_three_segment_hands
 import oral_refinement
-from master_asset import append_master_collection, save_master_collection
+import master_asset
+from master_asset import save_master_collection
 import aroll_actions
 import aroll_performance_qa
 
@@ -125,6 +126,57 @@ def load_scene_template(path: str) -> None:
     if scene_path.suffix.lower() != ".blend" or not scene_path.is_file():
         raise RuntimeError(f"invalid Blender scene template: {scene_path}")
     bpy.ops.wm.open_mainfile(filepath=str(scene_path), load_ui=False)
+
+
+def append_runtime_master_collection(
+    master_path: Path,
+    scene_collection: Any,
+) -> list[Any]:
+    """Append and scene-link a master before validating world-space contracts."""
+
+    master_path = Path(master_path).expanduser().resolve()
+    if master_path.suffix.lower() != ".blend" or not master_path.is_file():
+        raise RuntimeError(f"invalid master Blend: {master_path}")
+    if bpy.data.collections.get(master_asset.MASTER_COLLECTION) is not None:
+        raise RuntimeError(
+            f"duplicate {master_asset.MASTER_COLLECTION} collection while appending "
+            f"{master_path}"
+        )
+    existing_ids = {item.as_pointer() for item in bpy.data.user_map()}
+
+    with bpy.data.libraries.load(str(master_path), link=False) as (source, target):
+        matches = [
+            name
+            for name in source.collections
+            if name == master_asset.MASTER_COLLECTION
+        ]
+        if len(matches) != 1:
+            if not matches:
+                raise RuntimeError(
+                    f"missing {master_asset.MASTER_COLLECTION} in {master_path}"
+                )
+            raise RuntimeError(
+                f"duplicate {master_asset.MASTER_COLLECTION} collections in {master_path}"
+            )
+        target.collections = [master_asset.MASTER_COLLECTION]
+        target.actions = list(source.actions)
+
+    collection = target.collections[0] if target.collections else None
+    if collection is None:
+        raise RuntimeError(f"missing {master_asset.MASTER_COLLECTION} in {master_path}")
+    scene_collection.children.link(collection)
+    try:
+        bpy.context.view_layer.update()
+        validated = master_asset.validate_master_collection(collection, master_path)
+    except Exception:
+        appended_ids = [
+            item
+            for item in bpy.data.user_map()
+            if item.as_pointer() not in existing_ids
+        ]
+        bpy.data.batch_remove(appended_ids)
+        raise
+    return list(validated["objects"])
 
 
 def resolve_scene_mode_objects(mode: str) -> dict[str, Any]:
@@ -5466,6 +5518,30 @@ def setup_face(
             role = str(obj.get("ip_face_topology_role") or "")
             if role:
                 face[role] = obj
+        required_oral_roles = {
+            "oral_cavity",
+            "upper_teeth",
+            "lower_teeth",
+            "upper_gum",
+            "lower_gum",
+            "tongue",
+        }
+        oral_objects = {
+            role: face[role]
+            for role in required_oral_roles
+            if role in face
+        }
+        if set(oral_objects) != required_oral_roles:
+            missing = sorted(required_oral_roles.difference(oral_objects))
+            raise RuntimeError(
+                "configured character master is missing refined oral roles: "
+                + ", ".join(missing)
+            )
+        oral_refinement.fit_runtime_oral_containment(
+            existing_mouth,
+            oral_objects,
+            dimensions,
+        )
         existing_mouth["existing_viseme_mouth_preserved"] = True
         return face
     if (
@@ -8165,7 +8241,7 @@ def main() -> None:
     write_runtime_progress(data, "scene_ready")
     target_height = scene_target_height(data)
     if use_master:
-        imported_assets = append_master_collection(
+        imported_assets = append_runtime_master_collection(
             Path(str(data["masterBlendPath"])),
             bpy.context.scene.collection,
         )

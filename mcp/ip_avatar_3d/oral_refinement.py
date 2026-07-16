@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -10,6 +11,7 @@ import bpy
 
 
 ORAL_REFINEMENT_VERSION = 2
+RUNTIME_ORAL_CONTAINMENT_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -297,6 +299,122 @@ def tongue_weights(
         for role, value in zip(roles, raw):
             weights[bone_map[role]][vertex.index] = value / total
     return weights
+
+
+def fit_runtime_oral_containment(
+    source_face: bpy.types.Object,
+    oral_objects: dict[str, bpy.types.Object],
+    dimensions: dict[str, Any],
+) -> dict[str, float]:
+    """Fit an appended oral assembly inside the preserved source lip boundary."""
+    required_roles = {
+        "oral_cavity",
+        "upper_teeth",
+        "lower_teeth",
+        "upper_gum",
+        "lower_gum",
+        "tongue",
+    }
+    if set(oral_objects) != required_roles:
+        missing = sorted(required_roles.difference(oral_objects))
+        extra = sorted(set(oral_objects).difference(required_roles))
+        raise RuntimeError(
+            f"runtime oral containment requires exact roles; missing={missing}, extra={extra}"
+        )
+    if all(
+        int(obj.get("ip_runtime_oral_containment_version", 0))
+        == RUNTIME_ORAL_CONTAINMENT_VERSION
+        for obj in oral_objects.values()
+    ):
+        return {"scaleX": 1.0, "scaleZ": 1.0, "depthShift": 0.0, "reused": 1.0}
+
+    try:
+        upper = json.loads(str(source_face["mouth_upper_boundary_indices"]))
+        lower = json.loads(str(source_face["mouth_lower_boundary_indices"]))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "runtime oral containment requires preserved source mouth-boundary indices"
+        ) from exc
+    boundary_indices = sorted({int(index) for index in upper + lower})
+    shape_keys = source_face.data.shape_keys
+    basis = shape_keys.key_blocks.get("Basis") if shape_keys else None
+    if basis is None or not boundary_indices or max(boundary_indices) >= len(basis.data):
+        raise RuntimeError("runtime oral containment source mouth boundary is invalid")
+
+    boundary = [
+        source_face.matrix_world @ basis.data[index].co
+        for index in boundary_indices
+    ]
+    minimum_x = min(point.x for point in boundary)
+    maximum_x = max(point.x for point in boundary)
+    minimum_z = min(point.z for point in boundary)
+    maximum_z = max(point.z for point in boundary)
+    boundary_width = maximum_x - minimum_x
+    boundary_height = maximum_z - minimum_z
+    if boundary_width <= 1e-6 or boundary_height <= 1e-6:
+        raise RuntimeError("runtime oral containment source mouth boundary is degenerate")
+
+    world_vertices = [
+        obj.matrix_world @ vertex.co
+        for obj in oral_objects.values()
+        for vertex in obj.data.vertices
+    ]
+    oral_minimum_x = min(point.x for point in world_vertices)
+    oral_maximum_x = max(point.x for point in world_vertices)
+    oral_minimum_z = min(point.z for point in world_vertices)
+    oral_maximum_z = max(point.z for point in world_vertices)
+    oral_width = oral_maximum_x - oral_minimum_x
+    oral_height = oral_maximum_z - oral_minimum_z
+    if oral_width <= 1e-6 or oral_height <= 1e-6:
+        raise RuntimeError("runtime oral containment assembly bounds are degenerate")
+
+    horizontal_inset = 0.16
+    vertical_inset = 0.15
+    target_width = boundary_width * (1.0 - horizontal_inset * 2.0)
+    target_height = boundary_height * (1.0 - vertical_inset * 2.0)
+    scale_x = min(1.0, target_width / oral_width)
+    scale_z = min(1.0, target_height / oral_height)
+    source_center_x = (oral_minimum_x + oral_maximum_x) * 0.5
+    source_center_z = (oral_minimum_z + oral_maximum_z) * 0.5
+    target_center_x = (minimum_x + maximum_x) * 0.5
+    target_center_z = (minimum_z + maximum_z) * 0.5
+
+    for obj in oral_objects.values():
+        world_to_object = obj.matrix_world.inverted()
+        for vertex in obj.data.vertices:
+            world = obj.matrix_world @ vertex.co
+            world.x = target_center_x + (world.x - source_center_x) * scale_x
+            world.z = target_center_z + (world.z - source_center_z) * scale_z
+            vertex.co = world_to_object @ world
+        obj.data.update()
+
+    updated_vertices = [
+        obj.matrix_world @ vertex.co
+        for obj in oral_objects.values()
+        for vertex in obj.data.vertices
+    ]
+    boundary_back_y = max(point.y for point in boundary)
+    oral_front_y = min(point.y for point in updated_vertices)
+    depth_clearance = max(float(dimensions["depth"]) * 0.008, 1e-5)
+    depth_shift = max(0.0, boundary_back_y + depth_clearance - oral_front_y)
+    if depth_shift:
+        for obj in oral_objects.values():
+            matrix = obj.matrix_world.copy()
+            matrix.translation.y += depth_shift
+            obj.matrix_world = matrix
+
+    for obj in oral_objects.values():
+        obj["ip_runtime_oral_containment_version"] = RUNTIME_ORAL_CONTAINMENT_VERSION
+        obj["ip_runtime_oral_containment_scale_x"] = scale_x
+        obj["ip_runtime_oral_containment_scale_z"] = scale_z
+        obj["ip_runtime_oral_containment_depth_shift"] = depth_shift
+    bpy.context.view_layer.update()
+    return {
+        "scaleX": scale_x,
+        "scaleZ": scale_z,
+        "depthShift": depth_shift,
+        "reused": 0.0,
+    }
 
 
 def create_refined_oral_interior(

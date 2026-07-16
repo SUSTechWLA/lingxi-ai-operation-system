@@ -3,11 +3,26 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 import subprocess
+import tempfile
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
+
+
+SIGNED_OFF_STAGING_RELATIVE_PATH = Path(
+    "outputs/final/refined-aroll-evidence/production-oral-fixed/ip_layer.mp4"
+)
+FINAL_VIDEO_RELATIVE_PATH = Path(
+    "outputs/final/MainIP_Sloth_Refined_Aroll_Demo_1080p.mp4"
+)
+SIGNED_OFF_VIDEO_SHA256 = (
+    "0ce20701c6df6498ca471d64f6d3dd5d41c385f8c1387e821798a8e82cadd8c1"
+)
 
 
 DEMO_SPEC: dict[str, Any] = {
@@ -141,6 +156,62 @@ def _frame_rate(value: Any) -> float:
         return 0.0
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def publish_signed_off_video(repo_root: str | Path) -> dict[str, Any]:
+    """Atomically publish the exact corrected render approved for Task 4."""
+
+    root = Path(repo_root).expanduser().resolve()
+    staging = root / SIGNED_OFF_STAGING_RELATIVE_PATH
+    final = root / FINAL_VIDEO_RELATIVE_PATH
+    if not staging.is_file():
+        raise RuntimeError(f"signed-off staging video is missing: {staging}")
+
+    staging_sha256 = _sha256_file(staging)
+    if staging_sha256 != SIGNED_OFF_VIDEO_SHA256:
+        raise RuntimeError(
+            "signed-off staging video SHA-256 mismatch: "
+            f"expected {SIGNED_OFF_VIDEO_SHA256}, got {staging_sha256}"
+        )
+
+    final.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{final.name}.",
+            suffix=".tmp",
+            dir=final.parent,
+        )
+        temporary = Path(temporary_name)
+        with os.fdopen(descriptor, "wb") as target, staging.open("rb") as source:
+            shutil.copyfileobj(source, target)
+            os.fchmod(target.fileno(), staging.stat().st_mode & 0o777)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, final)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+    final_sha256 = _sha256_file(final)
+    if final_sha256 != SIGNED_OFF_VIDEO_SHA256:  # pragma: no cover - atomic copy guard
+        raise RuntimeError("published final video SHA-256 does not match signed-off staging")
+    return {
+        "published": True,
+        "stagingPath": str(staging),
+        "finalPath": str(final),
+        "sha256": final_sha256,
+        "sizeBytes": final.stat().st_size,
+    }
+
+
 def validate_media_probe(probe: dict[str, Any]) -> dict[str, Any]:
     """Validate an ffprobe payload against the front-talking delivery contract."""
 
@@ -169,6 +240,8 @@ def validate_media_probe(probe: dict[str, Any]) -> dict[str, Any]:
         errors.append("video must use constant 30 fps")
     if audio.get("codec_name") != "aac":
         errors.append("audio codec must be AAC")
+    if int(audio.get("sample_rate") or 0) != 48000:
+        errors.append("audio sample rate must be 48 kHz")
 
     return {
         "passed": not errors,
