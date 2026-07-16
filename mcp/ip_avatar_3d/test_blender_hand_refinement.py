@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
+import struct
 import sys
 import tempfile
 import unittest
@@ -52,8 +54,8 @@ FIXED_FRAME_AROLL_ACTIONS = {
     "Aroll_Disagree_Shake",
     "Aroll_Transition_Reset",
 }
-HAND_AESTHETIC_VERSION_KEY = "ip_avatar_hand_aesthetic_version"
 HAND_AESTHETIC_REPORT_KEY = "ip_avatar_hand_aesthetic_report"
+HAND_AESTHETIC_SIGNATURE_KEY = "ip_avatar_hand_aesthetic_integrity_sha256"
 
 
 def test_aroll_qa_sample_contract_is_complete_and_squint_only() -> None:
@@ -532,13 +534,14 @@ def _weight_violations(objects, armature) -> list[str]:
                 non_positive_vertices.add(vertex.index)
                 for name in non_positive:
                     non_positive_by_bone[name] = non_positive_by_bone.get(name, 0) + 1
-            if len(assignments) > 4:
+            is_refined_hand_vertex = any(name.startswith("Finger_") for name, _ in assignments)
+            if is_refined_hand_vertex and len(assignments) > 4:
                 violations.append(
                     f"{obj.name} vertex {vertex.index} has {len(assignments)} deform influences, "
                     "expected at most 4"
                 )
             total = sum(weight for _, weight in assignments)
-            if abs(total - 1.0) > 1e-4:
+            if is_refined_hand_vertex and abs(total - 1.0) > 1e-4:
                 violations.append(
                     f"{obj.name} vertex {vertex.index} weights sum to {total:.6f}, expected 1.0"
                 )
@@ -591,15 +594,6 @@ def _surface_snapshot(objects):
     }
 
 
-def _restore_surface_coordinates(objects, snapshot) -> None:
-    for obj in objects:
-        if obj.name not in snapshot:
-            continue
-        for vertex, coordinate in zip(obj.data.vertices, snapshot[obj.name]["vertices"]):
-            vertex.co = coordinate
-        obj.data.update()
-
-
 def _enhance_source_fixture(objects, dimensions, armature):
     return hand_refinement.enhance_three_segment_hands(
         armature=armature,
@@ -610,22 +604,218 @@ def _enhance_source_fixture(objects, dimensions, armature):
     )
 
 
+def _named_weight_snapshot(objects, *, group_prefix=None, excluded_vertices=None):
+    excluded_vertices = excluded_vertices or set()
+    snapshot = {}
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        names = {group.index: group.name for group in obj.vertex_groups}
+        for vertex in obj.data.vertices:
+            key = (obj.name, vertex.index)
+            if key in excluded_vertices:
+                continue
+            assignments = tuple(sorted(
+                (names[item.group], float(item.weight))
+                for item in vertex.groups
+                if item.weight > 1e-8
+                and (group_prefix is None or names[item.group].startswith(group_prefix))
+            ))
+            snapshot[key] = assignments
+    return snapshot
+
+
+def _shape_key_delta_snapshot(obj):
+    basis = obj.data.shape_keys.key_blocks[0]
+    return {
+        key.name: tuple(tuple(float(value) for value in (point.co - basis.data[index].co))
+                        for index, point in enumerate(key.data))
+        for key in obj.data.shape_keys.key_blocks[1:]
+    }
+
+
+def _independent_centerline(points, progress):
+    joint_1, joint_2 = (0.46, 0.68)
+    progress = max(0.0, min(1.0, progress))
+    if progress <= joint_1:
+        return points[0].lerp(points[1], progress / joint_1)
+    if progress <= joint_2:
+        return points[1].lerp(points[2], (progress - joint_1) / (joint_2 - joint_1))
+    return points[2].lerp(points[3], (progress - joint_2) / (1.0 - joint_2))
+
+
+def _independent_percentile_width(samples, start, end):
+    radii = sorted(radius for progress, radius in samples if start <= progress <= end)
+    assert radii, (start, end)
+    return radii[min(len(radii) - 1, int((len(radii) - 1) * 0.90))] * 2.0
+
+
+def _independent_geometry_metrics(objects, armature, bone_map, regions_by_side):
+    by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
+    sides = {}
+    leakage_max = 0.0
+    for side, regions in regions_by_side.items():
+        digits = []
+        for region in regions:
+            roles = (
+                f"finger_{region.index}_{side.lower()}",
+                f"finger_{region.index}_mid_{side.lower()}",
+                f"finger_{region.index}_tip_{side.lower()}",
+            )
+            bones = [armature.data.bones[bone_map[role]] for role in roles]
+            points = (
+                armature.matrix_world @ bones[0].head_local,
+                armature.matrix_world @ bones[0].tail_local,
+                armature.matrix_world @ bones[1].tail_local,
+                armature.matrix_world @ bones[2].tail_local,
+            )
+            axis = (points[-1] - points[0]).normalized()
+            length = max((points[-1] - points[0]).length, 1e-8)
+            samples = []
+            for record in region.records:
+                obj = by_name[record.object_name]
+                vertex = obj.data.vertices[record.vertex_index]
+                world = obj.matrix_world @ vertex.co
+                progress = max(0.0, min(1.0, (world - points[0]).dot(axis) / length))
+                radius = (world - _independent_centerline(points, progress)).length
+                samples.append((progress, radius))
+                if progress >= 0.82:
+                    names = {group.index: group.name for group in obj.vertex_groups}
+                    own_prefix = f"Finger_{region.index:02d}_"
+                    own_suffix = f".{side}"
+                    leakage_max = max(leakage_max, sum(
+                        float(item.weight)
+                        for item in vertex.groups
+                        if names[item.group].startswith("Finger_")
+                        and names[item.group].endswith(own_suffix)
+                        and not names[item.group].startswith(own_prefix)
+                    ))
+            root_width = _independent_percentile_width(samples, 0.16, 0.30)
+            transition_width = _independent_percentile_width(samples, 0.30, 0.40)
+            digits.append({
+                "digit": region.index,
+                "rootWidth": root_width,
+                "tipWidth": _independent_percentile_width(samples, 0.84, 1.0),
+                "rootWidthTransitionRatioProxy": min(root_width, transition_width)
+                / max(root_width, transition_width, 1e-8),
+            })
+        sides[side.lower()] = {"digitCount": len(digits), "digits": digits}
+    return sides, leakage_max
+
+
+def _hand_boundary_snapshot(objects, armature, dimensions, bone_map):
+    result = {}
+    for side in ("l", "r"):
+        hand_name = bone_map[f"hand_{side}"]
+        bone = armature.data.bones[hand_name]
+        head = armature.matrix_world @ bone.head_local
+        tail = armature.matrix_world @ bone.tail_local
+        axis = (tail - head).normalized()
+        hand_length = max((tail - head).length, float(dimensions["width"]) * 0.06)
+        wrist = {}
+        palm = {}
+        for obj in objects:
+            if obj.type != "MESH" or not (group := obj.vertex_groups.get(hand_name)):
+                continue
+            for vertex in obj.data.vertices:
+                if not any(item.group == group.index and item.weight > 0.05 for item in vertex.groups):
+                    continue
+                world = obj.matrix_world @ vertex.co
+                projection = (world - head).dot(axis)
+                if projection <= hand_length * 0.18:
+                    wrist[obj.name, vertex.index] = world.copy()
+                if projection <= hand_length * 0.46:
+                    palm[obj.name, vertex.index] = world.copy()
+        result[side] = {"wrist": wrist, "palm": palm}
+    return result
+
+
+def _aabb_volume_proxy(points):
+    extents = [max(point[axis] for point in points) - min(point[axis] for point in points) for axis in range(3)]
+    return extents[0] * extents[1] * extents[2]
+
+
+def _independent_integrity_signature(objects, report, regions_by_side):
+    digest = hashlib.sha256()
+    digest.update(b"three-digit-hand-aesthetic-v3\0")
+    digest.update(json.dumps(report, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+    by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
+    records = sorted({
+        (region.side, region.index, record.object_name, record.vertex_index)
+        for regions in regions_by_side.values()
+        for region in regions
+        for record in region.records
+    })
+    for side, digit, object_name, vertex_index in records:
+        obj = by_name[object_name]
+        coordinate = obj.data.vertices[vertex_index].co
+        digest.update(f"{side}:{digit}:{object_name}:{vertex_index}\0".encode("utf-8"))
+        digest.update(struct.pack("!ddd", *(float(value) for value in coordinate)))
+        if obj.data.shape_keys:
+            for key in sorted(obj.data.shape_keys.key_blocks, key=lambda item: item.name):
+                digest.update(f"shape:{key.name}\0".encode("utf-8"))
+                digest.update(struct.pack(
+                    "!ddd",
+                    *(float(value) for value in key.data[vertex_index].co),
+                ))
+    return digest.hexdigest()
+
+
 def test_refined_hands_preserve_three_digits_and_taper_each_tip() -> None:
-    objects, dimensions, armature, _, _, _ = load_enhanced_fbx_character()
-    stats = armature.get(HAND_AESTHETIC_REPORT_KEY)
-    assert stats is not None
-    report = json.loads(str(stats))
+    objects, dimensions, armature, bone_map = _source_hand_fixture()
+    regions = hand_refinement.analyze_three_digit_hands(armature, objects, dimensions, bone_map)
+    source = _surface_snapshot(objects)
+    boundaries = _hand_boundary_snapshot(objects, armature, dimensions, bone_map)
+    stats, bone_map = _enhance_source_fixture(objects, dimensions, armature)
+    report = json.loads(str(armature[HAND_AESTHETIC_REPORT_KEY]))
+    measured_sides, measured_leakage = _independent_geometry_metrics(objects, armature, bone_map, regions)
 
     assert report["handAestheticVersion"] == "three_digit_refined_v2"
     for side in ("l", "r"):
+        measured = measured_sides[side]
+        assert measured["digitCount"] == 3
         assert report["sides"][side]["digitCount"] == 3
-        for digit in report["sides"][side]["digits"]:
-            assert digit["tipWidth"] / digit["rootWidth"] <= 0.78, (side, digit)
-            assert digit["rootTransitionContinuity"] >= 0.82, (side, digit)
-            assert digit["wristBoundaryMaxDisplacement"] <= dimensions["width"] * 0.002, (
-                side,
-                digit,
-            )
+        for persisted, actual in zip(report["sides"][side]["digits"], measured["digits"]):
+            assert actual["tipWidth"] / actual["rootWidth"] <= 0.78, (side, actual)
+            assert actual["rootWidthTransitionRatioProxy"] >= 0.70, (side, actual)
+            for key in ("rootWidth", "tipWidth", "rootWidthTransitionRatioProxy"):
+                assert abs(float(persisted[key]) - actual[key]) <= 1e-7, (side, key, persisted, actual)
+        current_boundaries = _hand_boundary_snapshot(objects, armature, dimensions, bone_map)[side]
+        wrist_max = max(
+            ((current_boundaries["wrist"][key] - before).length for key, before in boundaries[side]["wrist"].items()),
+            default=0.0,
+        )
+        before_palm = list(boundaries[side]["palm"].values())
+        after_palm = [current_boundaries["palm"][key] for key in boundaries[side]["palm"]]
+        palm_proxy = _aabb_volume_proxy(after_palm) / _aabb_volume_proxy(before_palm)
+        assert wrist_max <= dimensions["width"] * 0.002
+        assert abs(report["sides"][side]["wristBoundaryMaxDisplacement"] - wrist_max) <= 1e-7
+        assert abs(report["sides"][side]["palmAabbVolumeRatioProxy"] - palm_proxy) <= 1e-7
+
+    ratios = {
+        side: [item["tipWidth"] / item["rootWidth"] for item in measured_sides[side]["digits"]]
+        for side in ("l", "r")
+    }
+    assert max(abs(left - right) for left, right in zip(ratios["l"], ratios["r"])) <= 0.30, ratios
+    affected = {
+        (record.object_name, record.vertex_index)
+        for side_regions in regions.values()
+        for region in side_regions
+        for record in region.records
+    }
+    changed = {
+        (name, index)
+        for name, before in source.items()
+        for index, (old, new) in enumerate(zip(before["vertices"], _surface_snapshot(objects)[name]["vertices"]))
+        if old != new
+    }
+    assert changed and changed <= affected
+    assert {side for side, side_regions in regions.items() if any(
+        (record.object_name, record.vertex_index) in changed
+        for region in side_regions for record in region.records
+    )} == {"L", "R"}
+    assert abs(report["neighborTipLeakageMax"] - measured_leakage) <= 1e-7
+    assert stats["handAestheticReportSchema"] == report["handAestheticReportSchema"]
 
     assert sum(
         bone.use_deform and is_finger_deform_bone_name(bone.name)
@@ -645,80 +835,167 @@ def test_refined_hand_weights_remain_normalized_and_isolated() -> None:
     assert report["neighborTipLeakageMax"] <= 0.08
 
 
-def test_refinement_preserves_source_topology_uvs_materials_and_upgrades_v1_v2_once() -> None:
-    objects, dimensions, armature, _ = _source_hand_fixture()
-    shape_object = max((obj for obj in objects if obj.type == "MESH"), key=lambda obj: len(obj.data.vertices))
-    shape_object.shape_key_add(name="Basis", from_mix=False)
-    shape_object.shape_key_add(name="Face_Fixture", from_mix=False)
-    shape_coordinates = {
-        key.name: tuple(tuple(float(value) for value in point.co) for point in key.data)
-        for key in shape_object.data.shape_keys.key_blocks
+def test_refinement_preserves_non_deform_groups_and_unaffected_vertices() -> None:
+    objects, dimensions, armature, bone_map = _source_hand_fixture()
+    regions = hand_refinement.analyze_three_digit_hands(armature, objects, dimensions, bone_map)
+    affected = {
+        (record.object_name, record.vertex_index)
+        for side_regions in regions.values() for region in side_regions for record in region.records
     }
-    source = _surface_snapshot(objects)
-    report, _ = _enhance_source_fixture(objects, dimensions, armature)
-    refined = _surface_snapshot(objects)
+    hand_key = next(iter(affected))
+    unrelated_key = next(
+        (obj.name, vertex.index)
+        for obj in objects if obj.type == "MESH"
+        for vertex in obj.data.vertices
+        if (obj.name, vertex.index) not in affected
+    )
+    by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
+    for offset, key in enumerate((hand_key, unrelated_key)):
+        obj = by_name[key[0]]
+        for index in range(6):
+            group = obj.vertex_groups.get(f"QA_Metadata_{index}") or obj.vertex_groups.new(name=f"QA_Metadata_{index}")
+            group.add([key[1]], 0.11 + 0.01 * index + 0.001 * offset, "REPLACE")
+    non_deform_before = _named_weight_snapshot(objects, group_prefix="QA_Metadata_")
+    unrelated_weights_before = _named_weight_snapshot(objects, excluded_vertices=affected)
+    surface_before = _surface_snapshot(objects)
 
-    assert set(refined) == set(source)
-    for name, before in source.items():
-        after = refined[name]
-        assert after["object"] == before["object"]
-        assert after["mesh"] == before["mesh"]
-        assert after["vertexCount"] == before["vertexCount"]
-        assert after["edgeCount"] == before["edgeCount"]
-        assert after["polygonCount"] == before["polygonCount"]
-        assert after["materials"] == before["materials"]
-        assert after["uvLayers"] == before["uvLayers"]
-    changed_shape_indices = [
-        index
-        for index, (before, after) in enumerate(
-            zip(source[shape_object.name]["vertices"], refined[shape_object.name]["vertices"])
-        )
-        if before != after
-    ]
-    assert changed_shape_indices
-    for key in shape_object.data.shape_keys.key_blocks:
-        for index in changed_shape_indices:
-            mesh_delta = Vector(refined[shape_object.name]["vertices"][index]) - Vector(
-                source[shape_object.name]["vertices"][index]
-            )
-            expected = Vector(shape_coordinates[key.name][index]) + mesh_delta
-            assert (key.data[index].co - expected).length <= 1e-6, (key.name, index)
-    assert report.get("handAestheticVersion") == "three_digit_refined_v2"
+    _enhance_source_fixture(objects, dimensions, armature)
 
+    assert _named_weight_snapshot(objects, group_prefix="QA_Metadata_") == non_deform_before
+    assert _named_weight_snapshot(objects, excluded_vertices=affected) == unrelated_weights_before
+    surface_after = _surface_snapshot(objects)
+    for name, before in surface_before.items():
+        for index, coordinate in enumerate(before["vertices"]):
+            if (name, index) not in affected:
+                assert surface_after[name]["vertices"][index] == coordinate
+
+
+def _build_legacy_hand_fixture(legacy_version):
+    objects, dimensions, armature, bone_map = _source_hand_fixture()
+    regions = hand_refinement.analyze_three_digit_hands(armature, objects, dimensions, bone_map)
+    hand_refinement._create_segment_bones(armature, regions, bone_map)
+    bone_map = blender_renderer.resolve_bone_roles([bone.name for bone in armature.data.bones])
+    topology = hand_refinement._source_surface_topology(objects, regions)
+    hand_refinement._assign_segment_weights(armature, objects, regions, bone_map, 4, topology)
+    contract_name = hand_refinement.LEGACY_HAND_CONTRACT_NAMES[legacy_version]
+    armature[hand_refinement.HAND_CONTRACT_KEY] = contract_name
+    armature[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
+    armature[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY] = 0
+    if legacy_version == 2:
+        armature[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
+    by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
+    for object_name in topology.support_vertices:
+        obj = by_name[object_name]
+        obj[hand_refinement.HAND_CONTRACT_KEY] = contract_name
+        obj[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
+        obj[hand_refinement.HAND_SUPPORT_RING_COUNT_KEY] = 0
+        if legacy_version == 2:
+            obj[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
+    return objects, dimensions, armature, bone_map, regions
+
+
+def test_refinement_preserves_source_topology_uvs_materials_and_upgrades_v1_v2_once() -> None:
     for legacy_version in (1, 2):
-        _restore_surface_coordinates(objects, source)
-        for key in shape_object.data.shape_keys.key_blocks:
-            for point, coordinate in zip(key.data, shape_coordinates[key.name]):
-                point.co = coordinate
-        contract_name = hand_refinement.LEGACY_HAND_CONTRACT_NAMES[legacy_version]
-        armature[hand_refinement.HAND_CONTRACT_KEY] = contract_name
-        armature[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
-        if legacy_version == 1 and hand_refinement.HAND_TOPOLOGY_MODE_KEY in armature:
-            del armature[hand_refinement.HAND_TOPOLOGY_MODE_KEY]
-        elif legacy_version == 2:
-            armature[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
-        for obj in objects:
-            if obj.type == "MESH" and obj.get(hand_refinement.HAND_CONTRACT_KEY):
-                obj[hand_refinement.HAND_CONTRACT_KEY] = contract_name
-                obj[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
-                if legacy_version == 1 and hand_refinement.HAND_TOPOLOGY_MODE_KEY in obj:
-                    del obj[hand_refinement.HAND_TOPOLOGY_MODE_KEY]
-                elif legacy_version == 2:
-                    obj[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
-        for owner in (armature, *objects):
-            if HAND_AESTHETIC_VERSION_KEY in owner:
-                del owner[HAND_AESTHETIC_VERSION_KEY]
-            if HAND_AESTHETIC_REPORT_KEY in owner:
-                del owner[HAND_AESTHETIC_REPORT_KEY]
+        objects, dimensions, armature, bone_map, regions = _build_legacy_hand_fixture(legacy_version)
+        hand_record = next(record for side_regions in regions.values() for region in side_regions for record in region.records)
+        shape_object = next(obj for obj in objects if obj.name == hand_record.object_name)
+        shape_object.shape_key_add(name="Basis", from_mix=False)
+        face_key = shape_object.shape_key_add(name="Face_Fixture", from_mix=False)
+        face_key.data[hand_record.vertex_index].co.y += 0.003
+        non_deform = shape_object.vertex_groups.new(name=f"QA_Legacy_Metadata_{legacy_version}")
+        non_deform.add([hand_record.vertex_index], 0.371 + legacy_version * 0.01, "REPLACE")
+        source = _surface_snapshot(objects)
+        affected = {
+            (record.object_name, record.vertex_index)
+            for side_regions in regions.values() for region in side_regions for record in region.records
+        }
+        unaffected_weights_before = _named_weight_snapshot(objects, excluded_vertices=affected)
+        non_deform_before = _named_weight_snapshot(objects, group_prefix="QA_Legacy_Metadata_")
+        shape_deltas_before = _shape_key_delta_snapshot(shape_object)
+        assert Vector(shape_deltas_before["Face_Fixture"][hand_record.vertex_index]).length > 0.0
 
-        upgraded, _ = _enhance_source_fixture(objects, dimensions, armature)
+        upgraded, upgraded_map = _enhance_source_fixture(objects, dimensions, armature)
+        refined = _surface_snapshot(objects)
         assert upgraded["handAestheticUpgradeFromVersion"] == legacy_version
         assert int(armature[hand_refinement.HAND_CONTRACT_VERSION_KEY]) == hand_refinement.HAND_CONTRACT_VERSION
-        once = _surface_snapshot(objects)
+        assert set(refined) == set(source)
+        for name, before in source.items():
+            after = refined[name]
+            for key in ("object", "mesh", "vertexCount", "edgeCount", "polygonCount", "materials", "uvLayers"):
+                assert after[key] == before[key], (legacy_version, name, key)
+        assert any(refined[name]["vertices"] != before["vertices"] for name, before in source.items())
+        assert _shape_key_delta_snapshot(shape_object) == shape_deltas_before
+        assert _named_weight_snapshot(objects, group_prefix="QA_Legacy_Metadata_") == non_deform_before
+        assert _named_weight_snapshot(objects, excluded_vertices=affected) == unaffected_weights_before
+        for obj in objects:
+            if obj.type != "MESH":
+                continue
+            names = {group.index: group.name for group in obj.vertex_groups}
+            for vertex in obj.data.vertices:
+                if (obj.name, vertex.index) not in affected:
+                    continue
+                deform = list(_deform_assignments(obj, vertex, armature, names))
+                assert deform and len(deform) <= 4
+                assert abs(sum(weight for _, weight in deform) - 1.0) <= 1e-4
+        persisted = json.loads(str(armature[HAND_AESTHETIC_REPORT_KEY]))
+        assert all(upgraded[key] == value for key, value in persisted.items())
+        current_regions = hand_refinement.analyze_three_digit_hands(armature, objects, dimensions, upgraded_map)
+        signature = _independent_integrity_signature(objects, persisted, current_regions)
+        assert armature[HAND_AESTHETIC_SIGNATURE_KEY] == signature
+        assert all(
+            obj[HAND_AESTHETIC_SIGNATURE_KEY] == signature
+            for obj in objects if obj.type == "MESH" and obj.get(hand_refinement.HAND_CONTRACT_KEY)
+        )
+
+        once_surface = _surface_snapshot(objects)
+        once_weights = _named_weight_snapshot(objects)
+        once_deltas = _shape_key_delta_snapshot(shape_object)
         reused, _ = _enhance_source_fixture(objects, dimensions, armature)
-        twice = _surface_snapshot(objects)
         assert reused["fingerRigReused"] is True
-        assert all(twice[name]["vertices"] == once[name]["vertices"] for name in once)
+        assert _surface_snapshot(objects) == once_surface
+        assert _named_weight_snapshot(objects) == once_weights
+        assert _shape_key_delta_snapshot(shape_object) == once_deltas
+        assert json.loads(str(armature[HAND_AESTHETIC_REPORT_KEY])) == persisted
+
+
+def test_v3_reuse_rejects_geometry_report_and_marker_tampering() -> None:
+    objects, dimensions, armature, _, bone_map, _ = load_enhanced_fbx_character()
+    regions = hand_refinement.analyze_three_digit_hands(armature, objects, dimensions, bone_map)
+    record = next(record for side_regions in regions.values() for region in side_regions for record in region.records)
+    obj = next(candidate for candidate in objects if candidate.name == record.object_name)
+    original = obj.data.vertices[record.vertex_index].co.copy()
+    obj.data.vertices[record.vertex_index].co.x += 0.001
+    try:
+        blender_renderer.enhance_existing_presenter_rig(armature, objects, dimensions, {}, bone_map)
+    except RuntimeError as exc:
+        assert "aesthetic" in str(exc) and ("geometry" in str(exc) or "integrity" in str(exc))
+    else:
+        raise AssertionError("mutated v3 hand geometry must fail closed")
+    obj.data.vertices[record.vertex_index].co = original
+
+    report = json.loads(str(armature[HAND_AESTHETIC_REPORT_KEY]))
+    complete_report = json.loads(json.dumps(report))
+    del report["sides"]["l"]["digits"][0]["rootWidthTransitionRatioProxy"]
+    armature[HAND_AESTHETIC_REPORT_KEY] = json.dumps(report, sort_keys=True)
+    try:
+        blender_renderer.enhance_existing_presenter_rig(armature, objects, dimensions, {}, bone_map)
+    except RuntimeError as exc:
+        assert "incomplete persisted hand aesthetic report" in str(exc)
+    else:
+        raise AssertionError("incomplete v3 aesthetic reports must fail closed")
+
+    armature[HAND_AESTHETIC_REPORT_KEY] = json.dumps(complete_report, sort_keys=True)
+    marked_mesh = next(
+        candidate for candidate in objects
+        if candidate.type == "MESH" and candidate.get(HAND_AESTHETIC_SIGNATURE_KEY)
+    )
+    del marked_mesh[HAND_AESTHETIC_SIGNATURE_KEY]
+    try:
+        blender_renderer.enhance_existing_presenter_rig(armature, objects, dimensions, {}, bone_map)
+    except RuntimeError as exc:
+        assert "aesthetic" in str(exc) and ("signature" in str(exc) or "marker" in str(exc))
+    else:
+        raise AssertionError("incomplete v3 mesh markers must fail closed")
 
 
 def _support_band_ring_edges(
@@ -983,7 +1260,8 @@ def test_validated_three_segment_reuse_requires_contract_marker() -> None:
             for obj in objects if obj.type == "MESH"
             for vertex in obj.data.vertices
             for assignment in vertex.groups
-            if armature.data.bones.get(obj.vertex_groups[assignment.group].name)
+            if obj.vertex_groups[assignment.group].name.startswith("Finger_")
+            and armature.data.bones.get(obj.vertex_groups[assignment.group].name)
             and armature.data.bones[obj.vertex_groups[assignment.group].name].use_deform
             and assignment.weight > 0.1
         ),
@@ -1225,10 +1503,12 @@ if __name__ == "__main__":
         test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
         test_refined_hands_preserve_three_digits_and_taper_each_tip,
         test_refined_hand_weights_remain_normalized_and_isolated,
+        test_refinement_preserves_non_deform_groups_and_unaffected_vertices,
         test_refinement_preserves_source_topology_uvs_materials_and_upgrades_v1_v2_once,
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
         test_segment_weighting_is_rigid_away_from_knuckles,
         test_validated_three_segment_reuse_requires_contract_marker,
+        test_v3_reuse_rejects_geometry_report_and_marker_tampering,
         test_each_digit_moves_independently_and_fist_closes,
         test_three_segment_digit_poses_key_independent_semantic_curls,
         test_finger_wave_ends_at_its_shared_open_hand_pose,
