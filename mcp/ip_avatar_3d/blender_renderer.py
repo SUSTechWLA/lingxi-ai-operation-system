@@ -3949,7 +3949,7 @@ def create_integrated_oral_interior(
         "IP_Tongue": "tongue",
     }
     required_roles = tuple(role_names.values())
-    existing: dict[str, bpy.types.Object] = {}
+    oral_objects: dict[str, list[bpy.types.Object]] = {role: [] for role in required_roles}
     for obj in tuple(bpy.context.scene.objects):
         if obj.type != "MESH":
             continue
@@ -3959,18 +3959,19 @@ def create_integrated_oral_interior(
             role = role_names.get(base_name, "")
         if role in required_roles:
             obj["ip_face_topology_role"] = role
-            existing[role] = obj
+            oral_objects[role].append(obj)
     if all(
-        role in existing
-        and existing[role].get("ip_oral_refinement_version") == oral_refinement.ORAL_REFINEMENT_VERSION
+        len(oral_objects[role]) == 1
+        and oral_objects[role][0].get("ip_oral_refinement_version") == oral_refinement.ORAL_REFINEMENT_VERSION
         for role in required_roles
     ):
-        return {role: existing[role] for role in required_roles}
+        return {role: oral_objects[role][0] for role in required_roles}
 
     # These roles are generated only after the source face has been staged.  Removing
     # them does not alter source facial topology, UV layers, or material assignments.
-    for obj in existing.values():
-        bpy.data.objects.remove(obj, do_unlink=True)
+    for objects in oral_objects.values():
+        for obj in objects:
+            bpy.data.objects.remove(obj, do_unlink=True)
     return oral_refinement.create_refined_oral_interior(
         source_face,
         armature,

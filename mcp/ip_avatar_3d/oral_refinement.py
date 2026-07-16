@@ -75,9 +75,52 @@ def _append_material(
 
 def _tube_from_rings(
     name: str,
-    rings: list[list[tuple[float, float, float]]],
+    body_rings: list[list[tuple[float, float, float]]],
 ) -> bpy.types.Object:
-    sides = len(rings[0])
+    cap_ring_count = 2
+    sides = len(body_rings[0])
+
+    def center(ring: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+        return tuple(sum(point[axis] for point in ring) / sides for axis in range(3))
+
+    def rounded_cap(
+        endpoint: list[tuple[float, float, float]],
+        neighbor: list[tuple[float, float, float]],
+    ) -> tuple[list[list[tuple[float, float, float]]], tuple[float, float, float]]:
+        endpoint_center = center(endpoint)
+        neighbor_center = center(neighbor)
+        direction = tuple(endpoint_center[axis] - neighbor_center[axis] for axis in range(3))
+        length = math.sqrt(sum(value * value for value in direction))
+        if length <= 1e-8:
+            direction = (1.0, 0.0, 0.0)
+            length = 1.0
+        unit_direction = tuple(value / length for value in direction)
+        cap_length = max(length * 0.85, 1e-6)
+        cap_rings = []
+        for index in range(1, cap_ring_count + 1):
+            progress = index / (cap_ring_count + 1)
+            scale = math.cos(progress * math.pi * 0.5)
+            shift = math.sin(progress * math.pi * 0.5) * cap_length
+            cap_center = tuple(
+                endpoint_center[axis] + unit_direction[axis] * shift for axis in range(3)
+            )
+            cap_rings.append(
+                [
+                    tuple(
+                        cap_center[axis] + (point[axis] - endpoint_center[axis]) * scale
+                        for axis in range(3)
+                    )
+                    for point in endpoint
+                ]
+            )
+        pole = tuple(
+            endpoint_center[axis] + unit_direction[axis] * cap_length for axis in range(3)
+        )
+        return cap_rings, pole
+
+    start_caps, start_pole = rounded_cap(body_rings[0], body_rings[1])
+    end_caps, end_pole = rounded_cap(body_rings[-1], body_rings[-2])
+    rings = [*reversed(start_caps), *body_rings, *end_caps]
     vertices = [point for ring in rings for point in ring]
     faces: list[tuple[int, ...]] = []
     for ring_index in range(len(rings) - 1):
@@ -87,10 +130,9 @@ def _tube_from_rings(
             following = (side + 1) % sides
             faces.append((offset + side, offset + following, next_offset + following, next_offset + side))
 
-    for ring_index in (0, len(rings) - 1):
-        center = tuple(sum(point[axis] for point in rings[ring_index]) / sides for axis in range(3))
+    for ring_index, pole in ((0, start_pole), (len(rings) - 1, end_pole)):
         center_index = len(vertices)
-        vertices.append(center)
+        vertices.append(pole)
         offset = ring_index * sides
         for side in range(sides):
             following = (side + 1) % sides
@@ -98,7 +140,11 @@ def _tube_from_rings(
                 faces.append((center_index, offset + following, offset + side))
             else:
                 faces.append((center_index, offset + side, offset + following))
-    return _mesh_object(name, vertices, faces)
+    obj = _mesh_object(name, vertices, faces)
+    obj["ip_oral_rounded_cap_ring_count"] = cap_ring_count
+    obj["ip_oral_body_ring_count"] = len(body_rings)
+    obj["ip_oral_cross_section_count"] = sides
+    return obj
 
 
 def build_rounded_arch(name: str, frame: OralFrame, *, upper: bool) -> bpy.types.Object:

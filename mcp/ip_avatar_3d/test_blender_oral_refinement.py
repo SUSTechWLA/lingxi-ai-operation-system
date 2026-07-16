@@ -37,7 +37,7 @@ def mesh_component_count(obj) -> int:
     return components
 
 
-def build_oral_fixture():
+def build_oral_scene():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
 
@@ -80,17 +80,24 @@ def build_oral_fixture():
     source_face["mouth_radius_x"] = 0.22
     source_face["head_region_depth"] = 0.34
 
+    bone_map = {
+        "head": "Head",
+        "jaw": "Jaw",
+        "tongue_1": "Tongue_01",
+        "tongue_2": "Tongue_02",
+        "tongue_3": "Tongue_03",
+    }
+    dimensions = {"height": 2.5, "width": 1.1, "depth": 0.62}
+    return source_face, armature, bone_map, dimensions
+
+
+def build_oral_fixture():
+    source_face, armature, bone_map, dimensions = build_oral_scene()
     result = oral_refinement.create_refined_oral_interior(
         source_face,
         armature,
-        {
-            "head": "Head",
-            "jaw": "Jaw",
-            "tongue_1": "Tongue_01",
-            "tongue_2": "Tongue_02",
-            "tongue_3": "Tongue_03",
-        },
-        {"height": 2.5, "width": 1.1, "depth": 0.62},
+        bone_map,
+        dimensions,
         material_factory=blender_renderer.material,
         bind_object=blender_renderer._bind_internal_face_object,
     )
@@ -120,10 +127,67 @@ def test_tongue_is_connected_tapered_and_weighted_to_three_bones():
     assert tongue["ip_tongue_center_groove"] is True
 
 
+def quad_face_count(obj) -> int:
+    return sum(len(polygon.vertices) == 4 for polygon in obj.data.polygons)
+
+
+def test_dental_arches_and_tongue_use_multi_ring_rounded_end_caps():
+    result, _ = build_oral_fixture()
+    expected_body_rings = {
+        "upper_teeth": (13, 8),
+        "lower_teeth": (13, 8),
+        "tongue": (11, 12),
+    }
+    for role, (body_rings, cross_sections) in expected_body_rings.items():
+        obj = result[role]
+        assert quad_face_count(obj) >= (body_rings - 1 + 4) * cross_sections
+
+
+def create_stale_oral_object(name: str, role: str):
+    mesh = bpy.data.meshes.new(f"{name}_Mesh")
+    mesh.from_pydata([(0.0, 0.0, 0.0), (0.01, 0.0, 0.0), (0.0, 0.01, 0.0)], [], [(0, 1, 2)])
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    obj["ip_face_topology_role"] = role
+    obj["ip_stale_oral_fixture"] = True
+    return obj
+
+
+def test_current_refined_oral_roles_are_reused_without_regeneration():
+    source_face, armature, bone_map, dimensions = build_oral_scene()
+    initial = blender_renderer.create_integrated_oral_interior(source_face, armature, bone_map, dimensions)
+    reused = blender_renderer.create_integrated_oral_interior(source_face, armature, bone_map, dimensions)
+    assert {role: obj.name for role, obj in reused.items()} == {
+        role: obj.name for role, obj in initial.items()
+    }
+
+
+def test_stale_duplicate_oral_roles_are_all_removed_before_regeneration():
+    source_face, armature, bone_map, dimensions = build_oral_scene()
+    create_stale_oral_object("LegacyUpperTeethA", "upper_teeth")
+    create_stale_oral_object("LegacyUpperTeethB", "upper_teeth")
+    create_stale_oral_object("LegacyTongueA", "tongue")
+    create_stale_oral_object("LegacyTongueB", "tongue")
+
+    result = blender_renderer.create_integrated_oral_interior(source_face, armature, bone_map, dimensions)
+
+    assert not any(obj.get("ip_stale_oral_fixture") for obj in bpy.context.scene.objects)
+    for role, obj in result.items():
+        matching = [
+            candidate
+            for candidate in bpy.context.scene.objects
+            if candidate.get("ip_face_topology_role") == role
+        ]
+        assert matching == [obj]
+
+
 if __name__ == "__main__":
     tests = (
         test_dental_arches_are_connected_and_follow_expected_bones,
         test_tongue_is_connected_tapered_and_weighted_to_three_bones,
+        test_dental_arches_and_tongue_use_multi_ring_rounded_end_caps,
+        test_current_refined_oral_roles_are_reused_without_regeneration,
+        test_stale_duplicate_oral_roles_are_all_removed_before_regeneration,
     )
     failures = []
     for test in tests:
