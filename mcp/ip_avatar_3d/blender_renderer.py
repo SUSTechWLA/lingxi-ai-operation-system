@@ -26,6 +26,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from rig_semantics import has_presenter_controls, resolve_bone_roles
 from hand_refinement import enhance_three_segment_hands
+import oral_refinement
 from master_asset import append_master_collection, save_master_collection
 import aroll_actions
 import aroll_performance_qa
@@ -3938,103 +3939,46 @@ def create_integrated_oral_interior(
     bone_map: dict[str, str],
     dimensions: dict[str, Any],
 ) -> dict[str, bpy.types.Object]:
+    """Reuse a matching oral build or regenerate it in the staged scene copy."""
     role_names = {
         "IP_OralCavity": "oral_cavity",
         "IP_UpperTeeth": "upper_teeth",
         "IP_LowerTeeth": "lower_teeth",
+        "IP_UpperGum": "upper_gum",
+        "IP_LowerGum": "lower_gum",
         "IP_Tongue": "tongue",
     }
+    required_roles = tuple(role_names.values())
     existing: dict[str, bpy.types.Object] = {}
-    for obj in bpy.context.scene.objects:
+    for obj in tuple(bpy.context.scene.objects):
         if obj.type != "MESH":
             continue
         role = str(obj.get("ip_face_topology_role") or "")
         if not role:
             base_name = obj.name.split(".")[0]
             role = role_names.get(base_name, "")
-        if role:
+        if role in required_roles:
             obj["ip_face_topology_role"] = role
             existing[role] = obj
-    roles = ("oral_cavity", "upper_teeth", "lower_teeth", "tongue")
-    if all(role in existing for role in roles):
-        return {role: existing[role] for role in roles}
+    if all(
+        role in existing
+        and existing[role].get("ip_oral_refinement_version") == oral_refinement.ORAL_REFINEMENT_VERSION
+        for role in required_roles
+    ):
+        return {role: existing[role] for role in required_roles}
 
-    center_x = float(source_face["mouth_center_x"])
-    center_z = float(source_face["mouth_center_z"])
-    surface_y = float(source_face["mouth_surface_y"])
-    radius_x = float(source_face["mouth_radius_x"])
-    height = float(dimensions["height"])
-    depth = float(source_face.get("head_region_depth", dimensions["depth"]))
-    origin = (center_x, surface_y + depth * 0.032, center_z + height * 0.002)
-
-    cavity = _oval_disk_mesh("IP_OralCavity", radius_x * 0.96, height * 0.026)
-    cavity.location = origin
-    cavity.data.materials.append(material("IP_OralCavity_Material", (0.030, 0.004, 0.006, 1.0), False))
-    cavity["ip_face_topology_role"] = "oral_cavity"
-    _bind_internal_face_object(
-        cavity,
+    # These roles are generated only after the source face has been staged.  Removing
+    # them does not alter source facial topology, UV layers, or material assignments.
+    for obj in existing.values():
+        bpy.data.objects.remove(obj, do_unlink=True)
+    return oral_refinement.create_refined_oral_interior(
+        source_face,
         armature,
-        {bone_map["head"]: {vertex.index: 1.0 for vertex in cavity.data.vertices}},
+        bone_map,
+        dimensions,
+        material_factory=material,
+        bind_object=_bind_internal_face_object,
     )
-
-    tooth_x = [-0.62, -0.38, -0.13, 0.13, 0.38, 0.62]
-    tooth_scale = (radius_x * 0.105, depth * 0.011, height * 0.0046)
-    upper = _ellipsoid_cluster_mesh(
-        "IP_UpperTeeth",
-        [
-            ((value * radius_x, depth * 0.008, height * (0.0046 + abs(value) * 0.0015)), tooth_scale)
-            for value in tooth_x
-        ],
-    )
-    upper.location = origin
-    upper.data.materials.append(material("IP_Teeth_Material", (0.92, 0.82, 0.66, 1.0), False))
-    upper["ip_face_topology_role"] = "upper_teeth"
-    _bind_internal_face_object(
-        upper,
-        armature,
-        {bone_map["head"]: {vertex.index: 1.0 for vertex in upper.data.vertices}},
-    )
-
-    lower = _ellipsoid_cluster_mesh(
-        "IP_LowerTeeth",
-        [
-            ((value * radius_x, depth * 0.010, -height * (0.0090 + abs(value) * 0.0010)), tooth_scale)
-            for value in tooth_x
-        ],
-    )
-    lower.location = origin
-    lower.data.materials.append(bpy.data.materials["IP_Teeth_Material"])
-    lower["ip_face_topology_role"] = "lower_teeth"
-    _bind_internal_face_object(
-        lower,
-        armature,
-        {bone_map["jaw"]: {vertex.index: 1.0 for vertex in lower.data.vertices}},
-    )
-
-    tongue = _ellipsoid_cluster_mesh(
-        "IP_Tongue",
-        [((0.0, depth * 0.004, -height * 0.0105), (radius_x * 0.52, depth * 0.055, height * 0.0065))],
-    )
-    tongue.location = origin
-    tongue.data.materials.append(material("IP_Tongue_Material", (0.34, 0.055, 0.065, 1.0), False))
-    tongue["ip_face_topology_role"] = "tongue"
-    local_ys = [float(vertex.co.y) for vertex in tongue.data.vertices]
-    minimum_y, maximum_y = min(local_ys), max(local_ys)
-    tongue_weights = {bone_map[role]: {} for role in ("tongue_1", "tongue_2", "tongue_3")}
-    for vertex in tongue.data.vertices:
-        amount = (float(vertex.co.y) - minimum_y) / max(maximum_y - minimum_y, 1e-6)
-        centers = (0.12, 0.50, 0.88)
-        raw = [max(0.0, 1.0 - abs(amount - center) / 0.46) for center in centers]
-        total = sum(raw) or 1.0
-        for role, value in zip(("tongue_1", "tongue_2", "tongue_3"), raw):
-            tongue_weights[bone_map[role]][vertex.index] = value / total
-    _bind_internal_face_object(tongue, armature, tongue_weights)
-    return {
-        "oral_cavity": cavity,
-        "upper_teeth": upper,
-        "lower_teeth": lower,
-        "tongue": tongue,
-    }
 
 
 def retopologize_source_face(
@@ -4830,6 +4774,8 @@ INTEGRATED_FACE_ROLES = (
     "oral_cavity",
     "upper_teeth",
     "lower_teeth",
+    "upper_gum",
+    "lower_gum",
     "tongue",
 )
 
