@@ -317,6 +317,10 @@ func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
 			"projectMode":           "cinematic_story",
 			"aigcProvider":          "jimeng_mcp",
 			"projectId":             "vp-123",
+			"presentationMode":      "standing",
+			"cameraPreset":          "front_talking",
+			"actionSequence":        []interface{}{"Aroll_Greeting_Wave"},
+			"characterProfilePath":  "ip形象/main_ip/character-profile.json",
 			"modelProviders":        map[string]interface{}{"text_to_text": map[string]interface{}{"apiKey": "secret"}},
 			"unrelatedContextValue": "ignored",
 		},
@@ -328,7 +332,17 @@ func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
 	if got := plan.Steps[0].Arguments["renderTimeoutSec"]; got != float64(12) {
 		t.Fatalf("renderTimeoutSec was not copied to plan defaults: %#v", plan.Steps[0].Arguments)
 	}
-	for _, key := range []string{"profileId", "videoType", "projectMode", "aigcProvider", "projectId"} {
+	for _, key := range []string{
+		"profileId",
+		"videoType",
+		"projectMode",
+		"aigcProvider",
+		"projectId",
+		"presentationMode",
+		"cameraPreset",
+		"actionSequence",
+		"characterProfilePath",
+	} {
 		if got := plan.Steps[0].Arguments[key]; got == nil {
 			t.Fatalf("%s was not copied to plan defaults: %#v", key, plan.Steps[0].Arguments)
 		}

@@ -122,8 +122,10 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	if !c.completeVideoPlanByProfile(plan) {
 		c.completeVideoBetaPlan(plan)
 	}
+	removeDisabledAIGCSteps(plan)
 	c.injectKnowledgeContext(plan)
 	c.injectMCPGenerationRunner(plan)
+	c.injectIPArollGenerationRunner(plan)
 	repairInvalidOutputReferences(plan.Steps, c.manifestsByPlan(plan))
 	normalizePreparedPlanDependencies(plan)
 	c.expandPreparedPlanBudget(plan)
@@ -473,7 +475,9 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 			}
 			scriptStep.Arguments["stage"] = "script_generation"
 			scriptStep.Arguments["brief"] = plan.Goal
-			scriptStep.Arguments["topic"] = plan.Goal
+			if topic, ok := scriptStep.Arguments["topic"].(string); !ok || strings.TrimSpace(topic) == "" {
+				scriptStep.Arguments["topic"] = plan.Goal
+			}
 			scriptStep.Arguments["creationProfile"] = stepOutputRef(profileAnchor, "creationProfile")
 			scriptStep.DependsOn = dependencyList(profileAnchor)
 			if len(scriptStep.ExpectedOutput) == 0 {
@@ -1250,6 +1254,9 @@ func (c *PlanCompiler) injectMCPGenerationRunner(plan *AgentPlan) {
 	if plan == nil || plan.Domain != "video_creation" {
 		return
 	}
+	if aigcGenerationDisabled(plan) {
+		return
+	}
 	runnerManifest := c.manifestFor("mcp_generation_runner")
 	if runnerManifest == nil {
 		return
@@ -1330,6 +1337,140 @@ func (c *PlanCompiler) injectMCPGenerationRunner(plan *AgentPlan) {
 		projectStep.Arguments = map[string]interface{}{}
 	}
 	projectStep.Arguments["shotAssetPackages"] = stepOutputRef(stepID, mcpPackageField)
+	appendDependencyIfMissing(projectStep, stepID)
+}
+
+func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
+	if plan == nil || plan.Domain != "video_creation" || !requestedIPArollEnabled(plan) {
+		return
+	}
+	profile := requestedVideoCreationProfile(plan)
+	if profile == "" {
+		profile = inferVideoCreationProfile(plan.Goal)
+	}
+	if profile != videomodel.VideoProfileTalkingHead {
+		return
+	}
+	runnerManifest := c.manifestFor("mcp_generation_runner")
+	if runnerManifest == nil || c.manifestFor("ip_avatar_3d.render_talking_video") == nil {
+		return
+	}
+	scriptAnchor, scriptField := c.lastProducerStepForFields(plan, []string{"script"}, []string{
+		"video_script_generator",
+		"script_generator",
+	})
+	if scriptAnchor == "" || scriptField == "" {
+		return
+	}
+	promptAnchor, _ := c.lastVideoPromptProducer(plan)
+	insertAfter := firstNonEmptyStepID(promptAnchor, scriptAnchor)
+	if insertAfter == "" {
+		return
+	}
+
+	renderArguments := map[string]interface{}{
+		"script":           stepOutputRef(scriptAnchor, scriptField),
+		"presentationMode": requestedPlanString(plan, "presentationMode", "ipPresentationMode", "ip_presentation_mode"),
+		"renderMode":       requestedPlanString(plan, "ipRenderMode", "ip_render_mode"),
+		"width":            1920,
+		"height":           1080,
+		"fps":              30,
+	}
+	if renderArguments["presentationMode"] == "" {
+		renderArguments["presentationMode"] = "auto"
+	}
+	if renderArguments["renderMode"] == "" {
+		renderArguments["renderMode"] = "production"
+	}
+	if cameraPreset := requestedPlanString(
+		plan,
+		"cameraPreset",
+		"ipCameraPreset",
+		"ip_camera_preset",
+	); cameraPreset != "" {
+		renderArguments["cameraPreset"] = cameraPreset
+	}
+	for targetKey, sourceKeys := range map[string][]string{
+		"characterProfilePath": {"characterProfilePath", "ipCharacterProfilePath", "ip_character_profile_path"},
+		"modelPath":            {"ipModelPath", "ip_model_path"},
+		"sceneBlendPath":       {"sceneBlendPath", "ipSceneBlendPath", "ip_scene_blend_path"},
+		"backgroundPath":       {"backgroundPath", "ipBackgroundPath", "ip_background_path"},
+		"audioPath":            {"audioPath", "voiceoverPath", "voiceoverArtifactPath"},
+	} {
+		if value := requestedPlanString(plan, sourceKeys...); value != "" {
+			renderArguments[targetKey] = value
+		}
+	}
+	if sequence := requestedPlanValue(plan, "actionSequence", "ipActionSequence", "ip_action_sequence"); sequence != nil {
+		renderArguments["actionSequence"] = sequence
+	}
+
+	requests := []interface{}{map[string]interface{}{
+		"requestId": "ip_aroll_main",
+		"shotId":    "AROLL_MAIN",
+		"kind":      "ip_aroll_video",
+		"mcpTool":   "ip_avatar_3d.render_talking_video",
+		"arguments": renderArguments,
+		"target": map[string]interface{}{
+			"aspectRatio":     "16:9",
+			"videoResolution": "1080p",
+		},
+	}}
+	stepID := "ip_aroll_generation"
+	step := planStepByID(plan, stepID)
+	if step == nil {
+		stepID = uniqueStepID(plan, stepID)
+		insertPlanStepAfter(plan, insertAfter, AgentStep{
+			ID:     stepID,
+			Intent: "使用本地主 IP、固定声音和演播室场景渲染连续口播 A-roll",
+			Tool:   "mcp_generation_runner",
+			Arguments: map[string]interface{}{
+				"stage":                      "ip_aroll_generation",
+				"providerId":                 "ip_avatar_3d",
+				"mcpTool":                    "ip_avatar_3d.render_talking_video",
+				"externalGenerationRequests": requests,
+				"maxReadyGenerations":        1,
+				"minReadyVideoGenerations":   1,
+				"mcpBatchTimeoutSec":         3600,
+				"mcpToolCallTimeoutSec":      3600,
+			},
+			DependsOn:       dependencyList(scriptAnchor),
+			ExpectedOutput:  []string{"aRollAssetPackages", "generationResults", "sourceSummary", "assetProvenance"},
+			ProduceArtifact: true,
+		})
+		step = planStepByID(plan, stepID)
+	} else {
+		movePlanStepAfter(plan, stepID, insertAfter)
+		step = planStepByID(plan, stepID)
+		step.Tool = "mcp_generation_runner"
+		step.Arguments = map[string]interface{}{
+			"stage":                      "ip_aroll_generation",
+			"providerId":                 "ip_avatar_3d",
+			"mcpTool":                    "ip_avatar_3d.render_talking_video",
+			"externalGenerationRequests": requests,
+			"maxReadyGenerations":        1,
+			"minReadyVideoGenerations":   1,
+			"mcpBatchTimeoutSec":         3600,
+			"mcpToolCallTimeoutSec":      3600,
+		}
+		step.DependsOn = dependencyList(scriptAnchor)
+		step.ExpectedOutput = []string{"aRollAssetPackages", "generationResults", "sourceSummary", "assetProvenance"}
+		step.ProduceArtifact = true
+	}
+	applyProjectContextToStep(step, requestedProjectID(plan))
+
+	projectAnchor, _ := c.lastProducerStepForFields(plan, []string{"projectDir", "hyperframesPath"}, []string{"hyperframes_project_generator"})
+	projectStep := planStepByID(plan, projectAnchor)
+	if projectStep == nil || !manifestAcceptsParam(c.manifestFor(projectStep.Tool), "aRollAssetPackages") {
+		return
+	}
+	if projectStep.Arguments == nil {
+		projectStep.Arguments = map[string]interface{}{}
+	}
+	projectStep.Arguments["aRollAssetPackages"] = stepOutputRef(
+		stepID,
+		preferredOutputField(runnerManifest, "aRollAssetPackages"),
+	)
 	appendDependencyIfMissing(projectStep, stepID)
 }
 
@@ -1972,6 +2113,48 @@ func manifestAcceptsParam(manifest *tool.ToolManifest, name string) bool {
 	return ok
 }
 
+func requestedIPArollEnabled(plan *AgentPlan) bool {
+	if plan == nil {
+		return false
+	}
+	for _, step := range plan.Steps {
+		for _, key := range []string{"ipArollEnabled", "ip_aroll_enabled", "enableIPAroll"} {
+			if value, ok := step.Arguments[key].(bool); ok {
+				return value
+			}
+		}
+	}
+	return true
+}
+
+func requestedPlanString(plan *AgentPlan, keys ...string) string {
+	value, _ := requestedPlanValue(plan, keys...).(string)
+	value = strings.TrimSpace(value)
+	if strings.Contains(value, "{{") {
+		return ""
+	}
+	return value
+}
+
+func requestedPlanValue(plan *AgentPlan, keys ...string) interface{} {
+	if plan == nil {
+		return nil
+	}
+	for _, step := range plan.Steps {
+		for _, key := range keys {
+			value, exists := step.Arguments[key]
+			if !exists || value == nil {
+				continue
+			}
+			if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+				continue
+			}
+			return value
+		}
+	}
+	return nil
+}
+
 func requestedAIGCProvider(plan *AgentPlan) string {
 	if plan == nil {
 		return ""
@@ -1985,6 +2168,33 @@ func requestedAIGCProvider(plan *AgentPlan) string {
 		}
 	}
 	return ""
+}
+
+func aigcGenerationDisabled(plan *AgentPlan) bool {
+	switch requestedAIGCProvider(plan) {
+	case "disabled", "none", "off":
+		return true
+	default:
+		return false
+	}
+}
+
+func removeDisabledAIGCSteps(plan *AgentPlan) {
+	if plan == nil || !aigcGenerationDisabled(plan) {
+		return
+	}
+	out := plan.Steps[:0]
+	for _, step := range plan.Steps {
+		if step.Tool == "keyframe_prompt_generator" {
+			continue
+		}
+		if step.Tool == "mcp_generation_runner" && stringArg(step.Arguments, "stage") != "ip_aroll_generation" {
+			continue
+		}
+		out = append(out, step)
+	}
+	plan.Steps = out
+	removeArgumentRefsToMissingSteps(plan)
 }
 
 func requestedProjectID(plan *AgentPlan) string {

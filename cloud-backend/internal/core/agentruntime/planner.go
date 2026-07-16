@@ -277,7 +277,9 @@ func copyRequestContext(req StartRunRequest) map[string]interface{} {
 		args[k] = v
 	}
 	args["brief"] = req.Message
-	args["topic"] = req.Message
+	if topic, ok := args["topic"].(string); !ok || strings.TrimSpace(topic) == "" {
+		args["topic"] = req.Message
+	}
 	return args
 }
 

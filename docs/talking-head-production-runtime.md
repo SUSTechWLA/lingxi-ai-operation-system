@@ -1,6 +1,6 @@
 # Talking-head production runtime
 
-This document records the production execution path audited on 2026-07-10. It is intentionally about runtime reachability, not similarly named files.
+This document records the production execution path audited on 2026-07-16. It is intentionally about runtime reachability, not similarly named files.
 
 ## Canonical identity
 
@@ -17,12 +17,14 @@ This document records the production execution path audited on 2026-07-10. It is
 1. `DirectorStudioPage.handleStart` creates a video project and starts `/api/agent/runs` in `dynamic_agent` mode.
 2. The agent runtime planner produces an initial plan.
 3. `PlanCompiler.PreparePlan` normalizes the profile and completes the talking-head plan.
-4. The compiler inserts `profile_selection -> script_generation -> audio_master -> time_window -> visual_alignment -> shot_generation -> ... -> render`.
+4. The compiler inserts `profile_selection -> script_generation -> audio_master -> time_window -> visual_alignment -> ip_aroll_generation/shot_generation -> preview -> render`.
 5. The orchestrator runs the compiled DAG and dispatches registered Native/MCP/local commands.
 6. `audio_master_planner` emits `AUDIO_MASTER_TIMELINE`; `time_window_planner` binds every window to that revision.
 7. `visual_alignment_planner` emits the existing Shot payload with Audio/IP/Text/B-roll/Composition layer plans plus a separate `BROLL_MANIFEST`.
 8. Artifact materialization stores the profile, audio master, time-window plan, and B-roll manifest as reviewable structured artifacts.
-9. Review gates approve the structured plans; the current dynamic path then builds/renders the HyperFrames composition and performs whole-video frame QA.
+9. When the bundled `ip_avatar_3d.render_talking_video` capability is available, PlanCompiler inserts one continuous 3D IP A-roll generation step before preview. The local MCP runner imports the rendered media as a real `ip_aroll_video` artifact.
+10. HyperFrames keeps the A-roll video and its audio as separate direct composition tracks. Timed HyperKeyframes/AIGC B-roll can cover or appear beside the character without interrupting narration.
+11. Review gates approve the structured plans; the current dynamic path then builds/renders the HyperFrames composition and performs whole-video frame QA.
 10. Director Studio renders the runtime trace/artifact state and does not construct a separate execution DAG.
 
 `RecordShotCandidateQA`, scoped repair, accepted-shot invalidation, and `BuildFinalAssemblyPlanWithPolicy` now enforce the production contract when called, but the current dynamic worker path does not yet materialize one `ShotCandidate` per rendered layer set or call that Final Assembly service. They are therefore not described as part of the reached runtime chain.
@@ -45,7 +47,7 @@ The static workflow remains readable for existing callers. New talking-head stag
 |---|---|---|---|---|
 | profile routing | DONE | `NormalizeVideoProfileID`, `PlanCompiler.PreparePlan` | yes | legacy aliases remain adapters |
 | audio master timeline | DONE | `audio_master_planner`, `BuildAudioMasterTimeline` | yes | real speech alignment still provider-dependent |
-| IP layer | PARTIAL | `TalkingHeadShotLayers.IP`, visual alignment artifact | yes, planning | no production IP provider E2E or asset-pack registry UI yet |
+| IP layer | DONE | `PlanCompiler`, `mcp_generation_runner`, `ip_avatar_3d.render_talking_video` | yes | asset-pack registry UI remains future work |
 | deterministic text layer | PARTIAL | HyperFrames tools and `TalkingHeadShotLayers.Text` | yes | layout/source-manifest QA is not complete |
 | B-roll layer | PARTIAL | visual alignment + `BROLL_MANIFEST` | yes | replacement endpoint and license UI remain incomplete |
 | Shot QA | PARTIAL | `RecordShotCandidateQA` | model/service path | provider metrics and visual-model checks are incomplete |
@@ -71,4 +73,4 @@ A script, audio master, text style, B-roll replacement, or IP motion edit is rou
 
 `executionMode` is one of `real`, `fixture`, `fallback`, or `placeholder`. Non-real modes are never production eligible. The strict accepted-shot and Final Assembly gates reject them even when the media file is playable or a QA fixture says it passed. Draft mode is limited to inspection and diagnostics.
 
-No real TTS/alignment/IP generation provider was exercised in this audit. Estimated timelines and fixtures are labelled as such; missing provider capability must be satisfied by a configured tool or an explicit manual import.
+The deterministic IP path is covered by MCP packaging integration tests and a real Blender-generated 1080p A-roll through HyperFrames composition/render smoke tests. Production speech still fails closed when the configured GPT-SoVITS voice is unavailable; estimated alignments and fixtures remain labelled as such.

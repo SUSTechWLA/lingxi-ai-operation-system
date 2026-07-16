@@ -79,7 +79,7 @@
 |---|---|
 | 影视化 / AIGC shot 视频 | 从故事大纲、详细剧本、角色/场景/道具档案、多视角参考图到语义 shot 切分、candidate 生成、shot 级 QA 和返修 |
 | 口播 / 知识类视频 | 先生成口播稿，再按口播设计 HyperFrames、录屏、AIGC 图片/视频素材和最终成片 |
-| 本地 IP 数字人口播 | 用波波 / 阿斯特本地角色资产生成口播 A-roll，支持高保真参考图 puppet、口型、眨眼、点头、左右手/双手/脚步动作、分段声音 prosody 计划和 HyperGen 控制 schema |
+| 3D IP 口播层 MCP | 输入口播和本地角色资产，通过 MCP 生成高保真 IP A-roll 视频层，支持口型、眨眼、点头、四肢动作、分段声音 prosody 计划和 HyperGen 控制 schema，系统负责接收、预览和合成 |
 | 分阶段审核 | 方案、脚本、分镜、预览、渲染等节点可确认、拒绝、编辑或重新生成 |
 | 本地执行器 | 用户电脑负责本地文件、HyperFrames 项目、渲染和工具执行 |
 | 即梦 JiMeng MCP 扩展 | 用户显式安装并登录 Dreamina CLI 后，可通过本地 MCP 自动生成 AIGC 素材 |

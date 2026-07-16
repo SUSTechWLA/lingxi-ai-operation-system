@@ -381,6 +381,12 @@ func applyRequestSafeContextDefaults(plan *AgentPlan, ctx map[string]interface{}
 		"preflightPipeline",
 		"aspectRatio",
 		"language",
+		"script",
+		"characterProfilePath",
+		"presentationMode",
+		"cameraPreset",
+		"actionSequence",
+		"brollWindows",
 		"renderTimeoutSec",
 		"hyperframesRenderTimeoutSec",
 	} {

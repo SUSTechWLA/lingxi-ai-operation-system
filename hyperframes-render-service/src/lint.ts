@@ -18,6 +18,15 @@ const NON_DETERMINISTIC_PATTERNS: { rule: string; pattern: RegExp }[] = [
   { rule: "no-xml-http-request", pattern: /new\s+XMLHttpRequest\s*\(/ },
 ];
 
+export function hasHTMLClass(content: string, className: string): boolean {
+  for (const match of content.matchAll(/\bclass\s*=\s*(["'])(.*?)\1/gs)) {
+    if (match[2].split(/\s+/).includes(className)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function lintProject(
   req: LintRequest,
   security: SecurityConfig,
@@ -69,7 +78,7 @@ export async function lintProject(
     }
 
     // Check for clip class requirement.
-    if (!content.includes('class="clip"') && !content.includes("class='clip'")) {
+    if (!hasHTMLClass(content, "clip")) {
       warnings.push({
         rule: "no-clip-class",
         message:

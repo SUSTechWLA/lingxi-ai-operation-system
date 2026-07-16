@@ -118,7 +118,7 @@ func TestClientCallToolRejectsDisabledToolBeforeProviderCall(t *testing.T) {
 	}
 }
 
-func TestClientCallsToolViaJSONRPC(t *testing.T) {
+func TestClientSerializesPresentationModeViaJSONRPC(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -131,15 +131,15 @@ func TestClientCallsToolViaJSONRPC(t *testing.T) {
 		if !ok {
 			t.Fatalf("params type = %T, want map", req.Params)
 		}
-		if params["name"] != "jimeng.generate_image" {
-			t.Fatalf("tool name = %v, want jimeng.generate_image", params["name"])
+		if params["name"] != "ip_avatar_3d.render_talking_video" {
+			t.Fatalf("tool name = %v, want ip_avatar_3d.render_talking_video", params["name"])
 		}
 		arguments, ok := params["arguments"].(map[string]interface{})
 		if !ok {
 			t.Fatalf("arguments type = %T, want map", params["arguments"])
 		}
-		if arguments["prompt"] != "cinematic cat" {
-			t.Fatalf("prompt = %v, want cinematic cat", arguments["prompt"])
+		if arguments["presentationMode"] != "seated" {
+			t.Fatalf("presentationMode = %v, want seated", arguments["presentationMode"])
 		}
 		_ = json.NewEncoder(w).Encode(rpcResponse{
 			JSONRPC: "2.0",
@@ -157,8 +157,8 @@ func TestClientCallsToolViaJSONRPC(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(ProviderConfig{ID: "jimeng", Endpoint: server.URL, Enabled: true}, server.Client())
-	result, err := client.CallTool(context.Background(), "jimeng.generate_image", map[string]interface{}{"prompt": "cinematic cat"})
+	client := NewClient(ProviderConfig{ID: "ip_avatar_3d", Endpoint: server.URL, Enabled: true}, server.Client())
+	result, err := client.CallTool(context.Background(), "ip_avatar_3d.render_talking_video", map[string]interface{}{"presentationMode": "seated"})
 	if err != nil {
 		t.Fatalf("CallTool returned error: %v", err)
 	}
@@ -295,6 +295,88 @@ func TestClientListsToolsFromVideoQAPythonMCPServer(t *testing.T) {
 		}
 	}
 	t.Fatalf("tools = %#v, want video_qa.analyze_video", tools)
+}
+
+func TestClientListsToolsFromIPAvatar3DMCPServer(t *testing.T) {
+	if os.Getenv("RUN_PYTHON_MCP_INTEGRATION") != "1" {
+		t.Skip("set RUN_PYTHON_MCP_INTEGRATION=1 to run the Python MCP integration test")
+	}
+	scriptPath := filepath.Clean(filepath.Join("..", "..", "..", "mcp", "ip_avatar_3d", "server.py"))
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("ip avatar 3d python mcp server not found: %v", err)
+	}
+	pythonCommand := pythonCommandForIntegrationTest(t)
+	client := NewClient(ProviderConfig{
+		ID:         "ip_avatar_3d",
+		Transport:  "stdio",
+		Command:    pythonCommand,
+		Args:       []string{scriptPath},
+		ToolPrefix: "ip_avatar_3d.",
+		Enabled:    true,
+	}, nil)
+	defer client.Close()
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+	for _, tool := range tools {
+		if tool.Name == "ip_avatar_3d.render_talking_video" {
+			return
+		}
+	}
+	t.Fatalf("tools = %#v, want ip_avatar_3d.render_talking_video", tools)
+}
+
+func TestClientDiscoversAndCallsArollActionsFromIPAvatar3DMCPServer(t *testing.T) {
+	if os.Getenv("RUN_PYTHON_MCP_INTEGRATION") != "1" {
+		t.Skip("set RUN_PYTHON_MCP_INTEGRATION=1 to run the Python MCP integration test")
+	}
+	scriptPath := filepath.Clean(filepath.Join("..", "..", "..", "mcp", "ip_avatar_3d", "server.py"))
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("ip avatar 3d python mcp server not found: %v", err)
+	}
+	pythonCommand := pythonCommandForIntegrationTest(t)
+	client := NewClient(ProviderConfig{
+		ID:         "ip_avatar_3d",
+		Transport:  "stdio",
+		Command:    pythonCommand,
+		Args:       []string{scriptPath},
+		ToolPrefix: "ip_avatar_3d.",
+		Enabled:    true,
+	}, nil)
+	defer client.Close()
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+	found := false
+	for _, tool := range tools {
+		if tool.Name == "ip_avatar_3d.list_aroll_actions" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("tools = %#v, want ip_avatar_3d.list_aroll_actions", tools)
+	}
+
+	result, err := client.CallTool(context.Background(), "ip_avatar_3d.list_aroll_actions", nil)
+	if err != nil {
+		t.Fatalf("CallTool returned error: %v", err)
+	}
+	actions, ok := result.StructuredContent["actions"].([]interface{})
+	if !ok {
+		t.Fatalf("actions = %#v, want JSON action array", result.StructuredContent["actions"])
+	}
+	for _, raw := range actions {
+		action, ok := raw.(map[string]interface{})
+		if ok && action["name"] == "Aroll_Transition_StandToSit" {
+			return
+		}
+	}
+	t.Fatalf("actions = %#v, want Aroll_Transition_StandToSit", actions)
 }
 
 func pythonCommandForIntegrationTest(t *testing.T) string {

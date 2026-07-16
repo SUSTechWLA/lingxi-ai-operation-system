@@ -585,11 +585,12 @@ func TestRegenerateStageResetsScopedSourceNode(t *testing.T) {
 			},
 		},
 	}}
+	dispatcher := &recordingRegenerationDispatcher{}
 	handler := NewHandler(
 		NewRunner(nil, runStore, nil, nil, nil),
 		nodeStore,
 		&recordingReviewStateMachine{},
-	)
+	).WithRegenerationDispatcher(dispatcher)
 
 	router := gin.New()
 	handler.RegisterRoutes(router)
@@ -606,6 +607,12 @@ func TestRegenerateStageResetsScopedSourceNode(t *testing.T) {
 	}
 	if nodeStore.nodes[1].Status != model.NodeCreated {
 		t.Fatalf("review gate should be reset to CREATED, got %s", nodeStore.nodes[1].Status)
+	}
+	if dispatcher.resumedTaskID != "task-1" {
+		t.Fatalf("regeneration should resume the paused task, got %q", dispatcher.resumedTaskID)
+	}
+	if dispatcher.retriedNodeID != "t123-script_exec" {
+		t.Fatalf("regeneration should initialize the source node, got %q", dispatcher.retriedNodeID)
 	}
 }
 
@@ -688,6 +695,21 @@ type recordingReviewStateMachine struct {
 	successOutput map[string]interface{}
 	failureNodeID string
 	failureError  string
+}
+
+type recordingRegenerationDispatcher struct {
+	resumedTaskID string
+	retriedNodeID string
+}
+
+func (d *recordingRegenerationDispatcher) ResumeTask(_ context.Context, taskID string) error {
+	d.resumedTaskID = taskID
+	return nil
+}
+
+func (d *recordingRegenerationDispatcher) RetryNode(_ context.Context, nodeID string) error {
+	d.retriedNodeID = nodeID
+	return nil
 }
 
 func (s *recordingReviewStateMachine) OnSuccess(_ context.Context, nodeID string, output map[string]interface{}) error {

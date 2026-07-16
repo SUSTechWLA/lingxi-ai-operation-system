@@ -18,6 +18,13 @@ func TestNormalizeShotCandidateExecutionKeepsKnownLegacyRealSourceEligible(t *te
 	}
 }
 
+func TestNormalizeShotCandidateExecutionKeepsDeterministicIPArollEligible(t *testing.T) {
+	candidate := NormalizeShotCandidateExecution(ShotCandidate{SourceType: ArtifactSourceIPArollVideo})
+	if candidate.ExecutionMode != ExecutionModeReal || !candidate.ProductionEligible {
+		t.Fatalf("deterministic IP A-roll should be production eligible: %+v", candidate)
+	}
+}
+
 func TestIsStrictProductionModeNormalizesWhitespace(t *testing.T) {
 	for _, value := range []string{"", "strict", " STRICT ", "\tstrict\n"} {
 		if !IsStrictProductionMode(value) {

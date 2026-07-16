@@ -476,6 +476,47 @@ func RegisterVideoCreationExternalTools(registry *tool.ToolRegistry) {
 
 		registry.RegisterExternal(manifest)
 	}
+	registerBundledIPAvatarMCPManifest(registry)
+}
+
+func registerBundledIPAvatarMCPManifest(registry *tool.ToolRegistry) {
+	if registry == nil {
+		return
+	}
+	provider := tool.MCPProviderConfig{
+		ID:           "ip_avatar_3d",
+		Label:        "Tangying 3D IP Avatar",
+		Transport:    "stdio",
+		ToolPrefix:   "ip_avatar_3d.",
+		Enabled:      true,
+		Timeout:      3600,
+		ApprovalMode: "before_execute",
+	}
+	inputSchema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"script": map[string]interface{}{
+				"type":        "string",
+				"description": "Narration used for voice, visemes, and body motion.",
+			},
+			"characterProfilePath": map[string]interface{}{"type": "string"},
+			"presentationMode":     map[string]interface{}{"type": "string"},
+			"cameraPreset":         map[string]interface{}{"type": "string"},
+			"actionSequence":       map[string]interface{}{"type": "array"},
+			"width":                map[string]interface{}{"type": "number"},
+			"height":               map[string]interface{}{"type": "number"},
+			"fps":                  map[string]interface{}{"type": "number"},
+			"renderMode":           map[string]interface{}{"type": "string"},
+		},
+		"required": []interface{}{"script"},
+	}
+	for _, manifest := range tool.ManifestsFromMCPTools(provider, []tool.MCPTool{{
+		Name:        "render_talking_video",
+		Description: "Render a continuous controllable 3D IP talking-head A-roll video on the user's local device.",
+		InputSchema: inputSchema,
+	}}) {
+		registry.RegisterExternal(manifest)
+	}
 }
 
 func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifest) {
@@ -810,9 +851,12 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			"mcpTool":                    {Type: "string", Description: "Logical MCP tool name, for example jimeng.generate_video", Required: true},
 			"minReadyVideoGenerations":   {Type: "number", Description: "Minimum ready MCP video assets required before the result can satisfy the external AIGC video requirement.", Required: false},
 			"maxReadyGenerations":        {Type: "number", Description: "Maximum ready MCP assets to create in one automatic batch to control quota spend.", Required: false},
+			"mcpBatchTimeoutSec":         {Type: "number", Description: "Maximum duration for the complete MCP batch.", Required: false},
+			"mcpToolCallTimeoutSec":      {Type: "number", Description: "Maximum duration for one MCP tool call.", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"shotAssetPackages":          {Type: "array", Description: "Per-shot asset packages with generated MCP results"},
+			"aRollAssetPackages":         {Type: "array", Description: "Continuous deterministic A-roll packages returned by IP avatar renderers"},
 			"generationResults":          {Type: "array", Description: "Raw MCP generation results, including preflightQa for prompt/reference gates before quota-spending provider calls"},
 			"externalGenerationResults":  {Type: "array", Description: "Alias of raw MCP generation results for review and provenance panels"},
 			"externalGenerationRequests": {Type: "array", Description: "Requests that remain manual or failed"},
@@ -1021,14 +1065,15 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 		}
 		manifest.HumanReview = &tool.HumanReview{Required: true, Gate: tool.ApprovalAfterArtifact, Title: "审核画面预览"}
 		manifest.Parameters = map[string]tool.ParamDef{
-			"topic":             {Type: "string", Description: "Video topic", Required: true},
-			"script":            {Type: "string", Description: "Full voiceover script", Required: true},
-			"shotList":          {Type: "array", Description: "Shot list", Required: true},
-			"videoPrompts":      {Type: "array", Description: "Video prompts", Required: false},
-			"shotAssetPackages": {Type: "array", Description: "Independent per-shot asset packages", Required: false},
-			"ipArollPlan":       {Type: "object", Description: "Optional IP character A-roll plan from ip_aroll_director", Required: false},
-			"style":             {Type: "string", Description: "Visual style", Required: false},
-			"publishCopy":       {Type: "object", Description: "Publish copy", Required: false},
+			"topic":              {Type: "string", Description: "Video topic", Required: true},
+			"script":             {Type: "string", Description: "Full voiceover script", Required: true},
+			"shotList":           {Type: "array", Description: "Shot list", Required: true},
+			"videoPrompts":       {Type: "array", Description: "Video prompts", Required: false},
+			"shotAssetPackages":  {Type: "array", Description: "Independent per-shot asset packages", Required: false},
+			"aRollAssetPackages": {Type: "array", Description: "Optional continuous A-roll video packages used as the composition base", Required: false},
+			"ipArollPlan":        {Type: "object", Description: "Optional IP character A-roll plan from ip_aroll_director", Required: false},
+			"style":              {Type: "string", Description: "Visual style", Required: false},
+			"publishCopy":        {Type: "object", Description: "Publish copy", Required: false},
 		}
 		manifest.Output = map[string]tool.ParamDef{
 			"projectDir": {Type: "string", Description: "HyperFrames project directory"},
@@ -2460,7 +2505,8 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 	brollEntries := make([]map[string]interface{}, 0)
 	script := firstNonEmptyString(params, "script")
 	assetStrategy := firstNonEmptyString(params, "assetStrategy", "style", "brief", "topic")
-	creativeMode := voiceVisualNeedsRichAIGC(script, assetStrategy)
+	aigcDisabled := isDisabledAIGCProvider(stringParam(params, "aigcProvider", ""))
+	creativeMode := !aigcDisabled && voiceVisualNeedsRichAIGC(script, assetStrategy)
 	routeCounts := map[string]int{}
 	var nextStartMs int64
 	visualModePolicy := videoservice.DefaultTalkingHeadVisualModePolicy()
@@ -2500,6 +2546,12 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 			NeedsAIGCScene:     route == "aigc_video" || route == "aigc_image",
 			EvidenceStrength:   0.86,
 		})
+		if aigcDisabled {
+			decision.Mode = videomodel.VisualModeIPPrimary
+			decision.Reason = "explicit AIGC disable keeps the continuous IP A-roll as the primary image"
+			decision.Confidence = 1
+			decision.NeedsHumanReview = false
+		}
 		shot := map[string]interface{}{
 			"shotId":                shotID,
 			"durationSec":           authoredDurationSec(window),
@@ -2583,6 +2635,15 @@ func executeVisualAlignmentPlanner(stage, skillName string, params map[string]in
 			brollArtifact,
 		},
 	})
+}
+
+func isDisabledAIGCProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "disabled", "none", "off":
+		return true
+	default:
+		return false
+	}
 }
 
 func executeCinematicShotDesigner(stage, skillName, brief string, params map[string]interface{}) tool.ToolResult {
@@ -6529,6 +6590,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	shotListJSON := serializeParamJSON(params["shotList"])
 	videoPromptsJSON := serializeParamJSON(params["videoPrompts"])
 	shotAssetPackagesJSON := serializeParamJSON(params["shotAssetPackages"])
+	aRollAssetPackagesJSON := serializeParamJSON(params["aRollAssetPackages"])
 	publishCopyJSON := serializeParamJSON(params["publishCopy"])
 	ipArollPlanJSON := serializeParamJSON(params["ipArollPlan"])
 
@@ -6538,7 +6600,7 @@ func executeHyperframesProjectGenerator(stage, skillName, brief, instructionRef 
 	assetsDir := filepath.Join(projectDir, "assets")
 
 	// Build data.json content.
-	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON)
+	dataJSON := buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON, aRollAssetPackagesJSON)
 	manifestJSON := buildHyperFramesManifestJSON(topic, toolCtx.TaskID)
 	styleCSS := hyperFramesDefaultStyleCSS()
 
@@ -6679,7 +6741,11 @@ func serializeParamJSON(value interface{}) string {
 }
 
 // buildHyperFramesDataJSON builds the data.json content for a HyperFrames project.
-func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON string) string {
+func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, shotAssetPackagesJSON, style, publishCopyJSON, ipArollPlanJSON string, aRollAssetPackagesJSON ...string) string {
+	aRollPackages := ""
+	if len(aRollAssetPackagesJSON) > 0 {
+		aRollPackages = aRollAssetPackagesJSON[0]
+	}
 	data := map[string]interface{}{
 		"topic":                 topic,
 		"script":                script,
@@ -6689,6 +6755,7 @@ func buildHyperFramesDataJSON(topic, script, shotListJSON, videoPromptsJSON, sho
 		"shots":                 publicJSONValueOrFallback(shotListJSON, []interface{}{}),
 		"videoPrompts":          publicJSONValueOrFallback(videoPromptsJSON, []interface{}{}),
 		"shotAssetPackages":     publicJSONValueOrFallback(shotAssetPackagesJSON, []interface{}{}),
+		"aRollAssetPackages":    publicJSONValueOrFallback(aRollPackages, []interface{}{}),
 		"ipArollPlan":           publicJSONValueOrFallback(ipArollPlanJSON, map[string]interface{}{}),
 		"style": map[string]interface{}{
 			"aspectRatio": "16:9",
@@ -8565,6 +8632,9 @@ func executeDynamicAgentPromptTool(toolName, stage, skillName, brief, instructio
 	publishCopy := promptStringParam(params, "publishCopy", "")
 	targetDurationSec := intParam(params, "targetDurationSec", intParam(params, "durationSec", 60))
 	targetDurationSec = inferTargetDurationSec(topic, targetDurationSec)
+	if toolName == "video_script_generator" && script != "" {
+		return tool.SuccessResult(buildApprovedVideoScriptData(toolName, skillName, topic, script, targetDurationSec, usedFacts, knowledgeTrace))
+	}
 
 	if toolName == "shot_splitter" {
 		if data, ok := buildDeterministicShotSplitterData(toolName, skillName, topic, script, targetDurationSec); ok {
@@ -8896,6 +8966,64 @@ func buildFallbackVideoScriptData(toolName, skillName, topic string, targetDurat
 			"hasHook":           true,
 			"hasStory":          true,
 			"hasKnowledgeValue": true,
+		},
+		"usedFacts":         usedFacts,
+		"unusedFacts":       []interface{}{},
+		"factCheckWarnings": []interface{}{},
+		"knowledgeTrace":    knowledgeTrace,
+	}
+	content := script
+	if encoded, err := json.Marshal(contentPkg); err == nil {
+		content = string(encoded)
+	}
+	return map[string]interface{}{
+		"content":              content,
+		"package":              contentPkg,
+		"script":               script,
+		"summary":              contentPkg["summary"],
+		"estimatedDurationSec": targetDurationSec,
+		"sections":             sections,
+		"scriptSpans":          sections,
+		"qualityHints":         contentPkg["qualityHints"],
+		"usedFacts":            usedFacts,
+		"unusedFacts":          []interface{}{},
+		"factCheckWarnings":    []interface{}{},
+		"knowledgeTrace":       knowledgeTrace,
+		"artifacts":            buildSkillStageArtifacts(toolName, skillName, false, true),
+	}
+}
+
+func buildApprovedVideoScriptData(toolName, skillName, topic, script string, targetDurationSec int, usedFacts []map[string]interface{}, knowledgeTrace map[string]interface{}) map[string]interface{} {
+	if targetDurationSec <= 0 {
+		targetDurationSec = 30
+	}
+	script = strings.TrimSpace(script)
+	sections := []map[string]interface{}{
+		{
+			"id":          "SPAN_01",
+			"spanId":      "SPAN_01",
+			"name":        "审定口播稿",
+			"text":        script,
+			"scriptText":  script,
+			"startSec":    0,
+			"endSec":      targetDurationSec,
+			"durationSec": targetDurationSec,
+		},
+	}
+	if knowledgeTrace == nil {
+		knowledgeTrace = map[string]interface{}{}
+	}
+	knowledgeTrace["providedScript"] = true
+	knowledgeTrace["fallback"] = false
+	knowledgeTrace["usedFactCount"] = len(usedFacts)
+	contentPkg := map[string]interface{}{
+		"script":               script,
+		"summary":              fmt.Sprintf("%s 的 %d 秒审定口播稿。", topic, targetDurationSec),
+		"estimatedDurationSec": targetDurationSec,
+		"sections":             sections,
+		"scriptSpans":          sections,
+		"qualityHints": map[string]interface{}{
+			"providedByUser": true,
 		},
 		"usedFacts":         usedFacts,
 		"unusedFacts":       []interface{}{},

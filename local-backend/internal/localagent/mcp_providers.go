@@ -20,6 +20,8 @@ import (
 const (
 	jimengProviderID         = "jimeng"
 	jimengToolPrefix         = "jimeng."
+	ipAvatarProviderID       = "ip_avatar_3d"
+	ipAvatarToolPrefix       = "ip_avatar_3d."
 	dreaminaInstallCommand   = "curl -fsSL https://jimeng.jianying.com/cli | bash"
 	dreaminaInstallScriptURL = "https://jimeng.jianying.com/cli"
 	dreaminaLogDirectory     = "~/.dreamina_cli/logs"
@@ -375,6 +377,9 @@ func (s *Server) readMCPProviders() ([]localmcp.ProviderConfig, error) {
 	data, err := os.ReadFile(s.mcpProvidersPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if provider, ok := defaultIPAvatarProvider(); ok {
+				return normalizeMCPProviders([]localmcp.ProviderConfig{provider})
+			}
 			return []localmcp.ProviderConfig{}, nil
 		}
 		return nil, err
@@ -563,6 +568,29 @@ func defaultJiMengStdioCommand() (string, []string) {
 	return command, []string{defaultJiMengStdioScriptPath()}
 }
 
+func defaultIPAvatarProvider() (localmcp.ProviderConfig, bool) {
+	script := defaultIPAvatarStdioScriptPath()
+	if strings.TrimSpace(script) == "" {
+		return localmcp.ProviderConfig{}, false
+	}
+	if info, err := os.Stat(script); err != nil || info.IsDir() {
+		return localmcp.ProviderConfig{}, false
+	}
+	workingDir := filepath.Dir(filepath.Dir(filepath.Dir(script)))
+	return localmcp.ProviderConfig{
+		ID:           ipAvatarProviderID,
+		Label:        "Tangying 3D IP Avatar",
+		Transport:    "stdio",
+		Command:      detectPython3ForMCP(),
+		Args:         []string{script},
+		WorkingDir:   workingDir,
+		ToolPrefix:   ipAvatarToolPrefix,
+		TimeoutSec:   3600,
+		ApprovalMode: "before_execute",
+		Enabled:      true,
+	}, true
+}
+
 func detectPython3ForMCP() string {
 	for _, candidate := range pythonCandidatesForMCP() {
 		command := compatiblePythonExecutable(candidate)
@@ -626,6 +654,33 @@ func defaultJiMengStdioScriptPath() string {
 		}
 	}
 	return filepath.Join("mcp", "jimeng", "server.py")
+}
+
+func defaultIPAvatarStdioScriptPath() string {
+	if script := strings.TrimSpace(os.Getenv("TANGYING_IP_AVATAR_MCP_SCRIPT")); script != "" {
+		if absolute, err := filepath.Abs(script); err == nil {
+			return absolute
+		}
+		return script
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for _, candidate := range []string{
+		filepath.Join(cwd, "mcp", "ip_avatar_3d", "server.py"),
+		filepath.Join(cwd, "..", "mcp", "ip_avatar_3d", "server.py"),
+		filepath.Join(cwd, "..", "..", "mcp", "ip_avatar_3d", "server.py"),
+		filepath.Join(cwd, "..", "..", "..", "mcp", "ip_avatar_3d", "server.py"),
+	} {
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			if absolute, absErr := filepath.Abs(candidate); absErr == nil {
+				return absolute
+			}
+			return candidate
+		}
+	}
+	return ""
 }
 
 func upsertMCPProvider(providers []localmcp.ProviderConfig, next localmcp.ProviderConfig) []localmcp.ProviderConfig {

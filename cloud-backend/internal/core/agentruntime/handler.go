@@ -79,6 +79,11 @@ type TaskPauser interface {
 	PauseTask(ctx context.Context, taskID, reason string) error
 }
 
+type RegenerationDispatcher interface {
+	ResumeTask(ctx context.Context, taskID string) error
+	RetryNode(ctx context.Context, nodeID string) error
+}
+
 type Handler struct {
 	runner            *Runner
 	nodes             ReviewNodeStore
@@ -89,6 +94,7 @@ type Handler struct {
 	projectIDResolver ProjectIDResolver
 	projectLifecycle  ProjectLifecycleUpdater
 	taskPauser        TaskPauser
+	regeneration      RegenerationDispatcher
 }
 
 func NewHandler(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *Handler {
@@ -129,6 +135,11 @@ func (h *Handler) WithProjectLifecycleUpdater(updater ProjectLifecycleUpdater) *
 
 func (h *Handler) WithTaskPauser(pauser TaskPauser) *Handler {
 	h.taskPauser = pauser
+	return h
+}
+
+func (h *Handler) WithRegenerationDispatcher(dispatcher RegenerationDispatcher) *Handler {
+	h.regeneration = dispatcher
 	return h
 }
 
@@ -962,7 +973,8 @@ func (h *Handler) RegenerateStage(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	// Reset the exec node that feeds into this review gate.
-	if err := h.regenerateSourceNode(c.Request.Context(), node); err != nil {
+	sourceNodeID, err := h.regenerateSourceNode(c.Request.Context(), node)
+	if err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, "failed to regenerate source: "+err.Error())
 		return
 	}
@@ -971,6 +983,16 @@ func (h *Handler) RegenerateStage(c *gin.Context) {
 	if err := h.nodes.UpdateStatus(c.Request.Context(), node.ID, model.NodeCreated, nil, ""); err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, "failed to reset review gate: "+err.Error())
 		return
+	}
+	if h.regeneration != nil {
+		if err := h.regeneration.ResumeTask(c.Request.Context(), node.TaskID); err != nil {
+			httpx.Fail(c, http.StatusInternalServerError, "failed to resume regenerated task: "+err.Error())
+			return
+		}
+		if err := h.regeneration.RetryNode(c.Request.Context(), sourceNodeID); err != nil {
+			httpx.Fail(c, http.StatusInternalServerError, "failed to dispatch regenerated source: "+err.Error())
+			return
+		}
 	}
 
 	// Write audit trail.
@@ -990,7 +1012,7 @@ func (h *Handler) RegenerateStage(c *gin.Context) {
 
 // regenerateSourceNode finds the upstream execution node that feeds into this
 // review gate and resets it to CREATED so it gets re-dispatched.
-func (h *Handler) regenerateSourceNode(ctx context.Context, gateNode *model.Node) error {
+func (h *Handler) regenerateSourceNode(ctx context.Context, gateNode *model.Node) (string, error) {
 	// The source exec node is typically named <step>_exec and connected to
 	// the review gate via an edge. We look for it in the gate node's input.
 	sourceID := ""
@@ -1006,13 +1028,16 @@ func (h *Handler) regenerateSourceNode(ctx context.Context, gateNode *model.Node
 		}
 	}
 	if sourceID == "" {
-		return fmt.Errorf("source exec node not found for review gate %s", gateNode.ID)
+		return "", fmt.Errorf("source exec node not found for review gate %s", gateNode.ID)
 	}
 	resolvedID, err := h.resolveSourceNodeID(ctx, gateNode, sourceID)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return h.nodes.UpdateStatus(ctx, resolvedID, model.NodeCreated, nil, "")
+	if err := h.nodes.UpdateStatus(ctx, resolvedID, model.NodeCreated, nil, ""); err != nil {
+		return "", err
+	}
+	return resolvedID, nil
 }
 
 func (h *Handler) resolveSourceNodeID(ctx context.Context, gateNode *model.Node, sourceID string) (string, error) {

@@ -337,6 +337,33 @@ func TestRegisterVideoCreationExternalToolsInstallsMCPGenerationRunnerManifest(t
 	}
 }
 
+func TestRegisterVideoCreationExternalToolsInstallsBundledIPAvatarMCPManifest(t *testing.T) {
+	registry := tool.NewToolRegistry()
+	RegisterVideoCreationExternalTools(registry)
+
+	manifest := registry.GetExternalManifest("ip_avatar_3d.render_talking_video")
+	if manifest == nil {
+		t.Fatal("expected bundled ip_avatar_3d.render_talking_video manifest")
+	}
+	if manifest.Boundary != tool.BoundaryMCPProvider || manifest.ExecutionPlane != tool.ExecutionPlaneLocal {
+		t.Fatalf("unexpected MCP boundary: %#v", manifest)
+	}
+	if !manifest.RequiresUserDevice || manifest.LocalCommand != "LOCAL_MCP_TOOL_CALL" {
+		t.Fatalf("bundled IP avatar must execute through the local MCP runner: %#v", manifest)
+	}
+	if manifest.ProviderBinding == nil ||
+		manifest.ProviderBinding.ProviderID != "ip_avatar_3d" ||
+		manifest.ProviderBinding.RemoteToolName != "render_talking_video" ||
+		manifest.ProviderBinding.LogicalToolName != "ip_avatar_3d.render_talking_video" {
+		t.Fatalf("provider binding = %#v", manifest.ProviderBinding)
+	}
+	for _, name := range []string{"script", "cameraPreset", "presentationMode", "actionSequence"} {
+		if _, ok := manifest.Parameters[name]; !ok {
+			t.Fatalf("missing %s parameter: %#v", name, manifest.Parameters)
+		}
+	}
+}
+
 func TestRegisterVideoCreationExternalToolsInstallsIPArollDirectorManifest(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
@@ -872,6 +899,39 @@ func TestVisualAlignmentPlannerBuildsHumorousAIGCAssetRoutesForVoiceVisual(t *te
 	}
 }
 
+func TestVisualAlignmentPlannerKeepsContinuousIPArollWhenAIGCDisabled(t *testing.T) {
+	result := executeLocalVideoCreationTool("visual_alignment_planner", map[string]interface{}{
+		"stage":         "visual_alignment",
+		"script":        "很多 AI 视频看起来很热闹，却让人记不住观点。",
+		"assetStrategy": "短视频爆款，优先使用动态 B-roll。",
+		"aigcProvider":  "disabled",
+		"timeWindows": []interface{}{
+			map[string]interface{}{"id": "TW_01", "shotId": "SHOT_01", "durationSec": float64(10), "scriptText": "A-roll 负责建立信任，所以主角要稳定面对镜头。"},
+			map[string]interface{}{"id": "TW_02", "shotId": "SHOT_02", "durationSec": float64(10), "scriptText": "画面少一点，信息反而更清楚。"},
+		},
+	}, tool.ToolContext{TaskID: "task-ip-only-visual-alignment", NodeID: "visual_alignment_exec"})
+
+	if !result.Success {
+		t.Fatalf("visual_alignment_planner failed: %s", result.Error)
+	}
+	shotList, ok := result.Data["shotList"].([]map[string]interface{})
+	if !ok || len(shotList) != 2 {
+		t.Fatalf("expected two IP-led shots, got %#v", result.Data["shotList"])
+	}
+	for _, shot := range shotList {
+		if got := ensureStringValue(shot["plannedAssetRoute"]); got != "hyperframes" {
+			t.Fatalf("disabled AIGC must not plan generated media, got route %q", got)
+		}
+		if got := ensureStringValue(shot["visualMode"]); got != string(videomodel.VisualModeIPPrimary) {
+			t.Fatalf("disabled AIGC must keep the IP as the primary image, got %q", got)
+		}
+	}
+	manifest, ok := result.Data["brollManifest"].(map[string]interface{})
+	if !ok || len(interfaceSliceFromAny(manifest["entries"])) != 0 {
+		t.Fatalf("disabled AIGC must produce an empty B-roll manifest: %#v", result.Data["brollManifest"])
+	}
+}
+
 func TestSoundDesignPlannerManifestMatchesExecutor(t *testing.T) {
 	registry := tool.NewToolRegistry()
 	RegisterVideoCreationExternalTools(registry)
@@ -1255,6 +1315,37 @@ func TestVideoScriptGeneratorNoKeyFallbackExposesScriptField(t *testing.T) {
 	}
 	if spans[len(spans)-1]["endSec"] != 30 {
 		t.Fatalf("last span should end at inferred target duration: %#v", spans[len(spans)-1])
+	}
+}
+
+func TestVideoScriptGeneratorPreservesExplicitApprovedScript(t *testing.T) {
+	t.Setenv("AIOS_ENABLE_LOCAL_AGENT_MODEL_CONFIG", "")
+	SetVideoCreationConfig(config.OpenAIConfig{}, "")
+	ClearRuntimeModelProviderConfig()
+	t.Cleanup(func() {
+		SetVideoCreationConfig(config.OpenAIConfig{}, "")
+		ClearRuntimeModelProviderConfig()
+	})
+
+	approved := "很多 AI 视频看起来很热闹，却让人记不住观点。问题不是素材不够，而是没有分清 A-roll 和 B-roll。"
+	result := executeLocalVideoCreationTool("video_script_generator", map[string]interface{}{
+		"topic":             "为什么 AI 视频不要每三秒换画面",
+		"script":            approved,
+		"targetDurationSec": 20,
+	}, tool.ToolContext{TaskID: "task-approved-script", NodeID: "script_generation"})
+
+	if !result.Success {
+		t.Fatalf("expected approved script passthrough: %s", result.Error)
+	}
+	if got := result.Data["script"]; got != approved {
+		t.Fatalf("approved script was rewritten: %#v", got)
+	}
+	if result.Data["estimatedDurationSec"] != 20 {
+		t.Fatalf("duration = %#v, want 20", result.Data["estimatedDurationSec"])
+	}
+	spans, ok := result.Data["scriptSpans"].([]map[string]interface{})
+	if !ok || len(spans) == 0 || spans[0]["startSec"] != 0 || spans[len(spans)-1]["endSec"] != 20 {
+		t.Fatalf("approved script spans = %#v", result.Data["scriptSpans"])
 	}
 }
 

@@ -426,7 +426,8 @@ func main() {
 			return pc
 		}(),
 	).WithPlanJudge(videoPlanJudge.NewRuntimeJudge())
-	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine)
+	agentRuntimeHandler := agentruntime.NewHandler(agentRunner, nodeRepo, stateMachine).
+		WithRegenerationDispatcher(taskExecutionCtrl)
 	agentRuntimeHandler.RegisterRoutes(r, requireAuth)
 
 	// Workflow templates — reusable DAG blueprints

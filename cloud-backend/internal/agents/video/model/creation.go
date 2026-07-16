@@ -32,6 +32,7 @@ const (
 	ArtifactSourceHyperFrames        = "hyperframes"
 	ArtifactSourceFFmpegComposite    = "ffmpeg_composite"
 	ArtifactSourceUploaded           = "uploaded"
+	ArtifactSourceIPArollVideo       = "ip_aroll_video"
 	ArtifactSourceFallbackPreview    = "fallback_preview"
 	ArtifactSourceFallbackStoryboard = "fallback_storyboard"
 

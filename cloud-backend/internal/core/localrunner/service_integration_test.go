@@ -24,7 +24,7 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect postgres: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	service := NewService(pool)
 	projectPrefix := "lrtest-" + strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -49,9 +49,12 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	})
 
 	firstJob, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
-		ProjectID: projectPrefix + "-complete",
-		Command:   CommandHyperFramesLint,
-		Payload:   map[string]interface{}{"outputName": "final.mp4"},
+		ProjectID:      projectPrefix + "-complete",
+		TaskID:         projectPrefix + "-task",
+		NodeID:         projectPrefix + "-node",
+		Command:        CommandHyperFramesLint,
+		Payload:        map[string]interface{}{"outputName": "final.mp4"},
+		IdempotencyKey: projectPrefix + "-retryable-node",
 	})
 	if err != nil {
 		t.Fatalf("dispatch first job: %v", err)
@@ -73,6 +76,48 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 	}
 	if completed.Status != JobCompleted || completed.Output["storageRef"] != "local://test/final.mp4" {
 		t.Fatalf("unexpected completed job: %#v", completed)
+	}
+
+	retried, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		ProjectID:      projectPrefix + "-complete",
+		TaskID:         projectPrefix + "-task",
+		NodeID:         projectPrefix + "-node",
+		Command:        CommandHyperFramesLint,
+		Payload:        map[string]interface{}{"outputName": "final-retry.mp4"},
+		IdempotencyKey: projectPrefix + "-retryable-node",
+	})
+	if err != nil {
+		t.Fatalf("redispatch completed job: %v", err)
+	}
+	if retried.ID != firstJob.ID || retried.Status != JobPending || retried.Attempt != firstJob.Attempt+1 {
+		t.Fatalf("completed job should be reset for retry: first=%#v retried=%#v", firstJob, retried)
+	}
+	if retried.RunnerID != "" || len(retried.Output) != 0 {
+		t.Fatalf("retried job must clear prior lease and output: %#v", retried)
+	}
+
+	duplicate, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		ProjectID:      projectPrefix + "-complete",
+		TaskID:         projectPrefix + "-task",
+		NodeID:         projectPrefix + "-node",
+		Command:        CommandHyperFramesLint,
+		Payload:        map[string]interface{}{"outputName": "should-not-replace-pending.mp4"},
+		IdempotencyKey: projectPrefix + "-retryable-node",
+	})
+	if err != nil {
+		t.Fatalf("redispatch pending job: %v", err)
+	}
+	if duplicate.ID != retried.ID || duplicate.Status != JobPending || duplicate.Attempt != retried.Attempt {
+		t.Fatalf("pending job should remain idempotent: retried=%#v duplicate=%#v", retried, duplicate)
+	}
+	if duplicate.Payload["outputName"] != "final-retry.mp4" {
+		t.Fatalf("pending duplicate must not replace active payload: %#v", duplicate.Payload)
+	}
+	if _, err := service.ClaimJob(ctx, runner.RunnerID); err != nil {
+		t.Fatalf("claim retried job: %v", err)
+	}
+	if _, err := service.CompleteJob(ctx, retried.ID, CompleteJobRequest{Output: map[string]interface{}{"retry": true}}); err != nil {
+		t.Fatalf("complete retried job: %v", err)
 	}
 
 	secondJob, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{

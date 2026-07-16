@@ -70,13 +70,14 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 	} else {
 		// Legacy demo fallback.
 		data := map[string]interface{}{
-			"topic":             topic,
-			"script":            script,
-			"shotList":          job.Payload["shotList"],
-			"videoPrompts":      job.Payload["videoPrompts"],
-			"shotAssetPackages": job.Payload["shotAssetPackages"],
-			"style":             job.Payload["style"],
-			"publishCopy":       job.Payload["publishCopy"],
+			"topic":              topic,
+			"script":             script,
+			"shotList":           job.Payload["shotList"],
+			"videoPrompts":       job.Payload["videoPrompts"],
+			"shotAssetPackages":  job.Payload["shotAssetPackages"],
+			"aRollAssetPackages": job.Payload["aRollAssetPackages"],
+			"style":              job.Payload["style"],
+			"publishCopy":        job.Payload["publishCopy"],
 		}
 		dataJSON, _ := json.MarshalIndent(data, "", "  ")
 		if err := os.WriteFile(filepath.Join(assetsDir, "data.json"), dataJSON, 0o644); err != nil {
@@ -86,19 +87,20 @@ func (e *HyperFramesProjectExecutor) Execute(_ context.Context, job Job) (*Resul
 		if err := os.WriteFile(filepath.Join(assetsDir, "style.css"), []byte(buildCompositionStyle()), 0o644); err != nil {
 			return nil, err
 		}
+		aRollPackage := aRollMediaPackageFromPayload(e.dataDir, projectID, projectRoot, job.Payload)
 		mediaPackages := shotMediaPackagesFromPayload(e.dataDir, projectID, projectRoot, job.Payload)
 		fallbackSpec := fallbackCompositionSpec()
 		var index string
-		if len(mediaPackages) > 0 {
+		if aRollPackage != nil || len(mediaPackages) > 0 {
 			if shotSpec := compositionSpecFromShotListPayload(topic, script, job.Payload); shotSpec != nil {
 				fallbackSpec = shotSpec
 				mediaPackages = alignMediaPackagesToComposition(mediaPackages, shotSpec)
-				index = buildHyperFramesIndexWithMediaSpec(topic, script, mediaPackages, shotSpec)
+				index = buildHyperFramesIndexWithArollAndMedia(topic, script, aRollPackage, mediaPackages, shotSpec)
 			} else {
-				if duration := totalMediaDuration(mediaPackages); duration > 0 {
+				if duration := combinedMediaDuration(aRollPackage, mediaPackages); duration > 0 {
 					fallbackSpec.DurationSec = duration
 				}
-				index = buildHyperFramesIndexWithMedia(topic, script, mediaPackages)
+				index = buildHyperFramesIndexWithArollAndMedia(topic, script, aRollPackage, mediaPackages, fallbackSpec)
 			}
 		} else if shotSpec := compositionSpecFromShotListPayload(topic, script, job.Payload); shotSpec != nil {
 			fallbackSpec = shotSpec
@@ -265,6 +267,7 @@ type shotMediaPackage struct {
 	ShotID      string
 	DurationSec float64
 	Mode        string
+	DisplayMode string
 	BaseLayer   mediaLayer
 	Overlays    []mediaOverlay
 	StartSec    float64
@@ -665,17 +668,77 @@ func shotMediaPackagesFromPayload(dataDir, projectID, projectRoot string, payloa
 			overlays = append(overlays, mediaOverlay{ID: "screen-text", Kind: "html_overlay", Role: "screen_text", Text: screenText})
 		}
 
+		startSec := nextStart
+		if _, exists := m["startSec"]; exists {
+			startSec = floatFromMap(m, "startSec", nextStart)
+		}
+		displayMode := firstStringFromMap(m, "visualMode", "displayMode", "presentationMode")
+		if displayMode == "" {
+			displayMode = firstStringFromMap(generationPlan, "visualMode", "displayMode", "presentationMode")
+		}
 		packages = append(packages, shotMediaPackage{
 			ShotID:      shotID,
 			DurationSec: duration,
 			Mode:        strings.TrimSpace(stringFromMap(generationPlan, "mode")),
+			DisplayMode: normalizeMediaDisplayMode(displayMode),
 			BaseLayer:   baseLayer,
 			Overlays:    overlays,
-			StartSec:    nextStart,
+			StartSec:    startSec,
 		})
-		nextStart += duration
+		if end := startSec + duration; end > nextStart {
+			nextStart = end
+		}
 	}
 	return packages
+}
+
+func aRollMediaPackageFromPayload(dataDir, projectID, projectRoot string, payload map[string]interface{}) *shotMediaPackage {
+	if payload == nil {
+		return nil
+	}
+	for _, item := range interfaceSlice(payload["aRollAssetPackages"]) {
+		m := mapFromInterface(item)
+		if m == nil {
+			continue
+		}
+		generationPlan := mapFromMap(m, "generationPlan")
+		fusionPlan := mapFromMap(generationPlan, "fusionPlan")
+		baseLayerMap := mapFromMap(fusionPlan, "baseLayer")
+		if baseLayerMap == nil {
+			continue
+		}
+		baseLayer := mediaLayer{
+			Kind:       firstStringFromMap(baseLayerMap, "kind"),
+			StorageRef: firstStringFromMap(baseLayerMap, "storageRef"),
+		}
+		baseLayer.ResolvedSrc, baseLayer.Missing = resolveMediaStorageRef(
+			dataDir,
+			projectID,
+			projectRoot,
+			baseLayer.StorageRef,
+		)
+		duration := floatFromMap(m, "durationSec", floatFromMap(baseLayerMap, "durationSec", 0))
+		if duration <= 0 {
+			continue
+		}
+		return &shotMediaPackage{
+			ShotID:      firstStringFromMap(m, "shotId"),
+			DurationSec: duration,
+			Mode:        "ip_aroll_video",
+			DisplayMode: "full_screen",
+			BaseLayer:   baseLayer,
+			StartSec:    0,
+		}
+	}
+	return nil
+}
+
+func normalizeMediaDisplayMode(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if strings.Contains(normalized, "pip") || strings.Contains(normalized, "picture_in_picture") || strings.Contains(normalized, "画中画") {
+		return "pip"
+	}
+	return "full_screen"
 }
 
 func resolveMediaStorageRef(dataDir, projectID, projectRoot, storageRef string) (string, bool) {
@@ -952,6 +1015,7 @@ body {
 
 .scene-content {
   position: relative;
+  z-index: 5;
   width: 100%;
   height: 100%;
   padding: 92px 132px;
@@ -973,10 +1037,57 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  z-index: 1;
+  z-index: 2;
   opacity: 0;
   pointer-events: none;
   will-change: opacity;
+}
+.aroll-media {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 1;
+  pointer-events: none;
+}
+.aroll-audio {
+  display: none;
+}
+.broll-pip {
+  inset: 72px 72px auto auto;
+  width: 42%;
+  height: 52%;
+  border: 1px solid rgba(242, 239, 228, 0.22);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.34);
+}
+.has-aroll .bg-field,
+.has-aroll .bg-orbit,
+.has-aroll .bg-word {
+  display: none;
+}
+.arroll-clean .scene-content {
+  display: none;
+}
+.has-aroll .video-card {
+  inset: auto 0 120px auto;
+  width: 560px;
+  min-height: 0;
+  padding: 30px 34px;
+  background: rgba(16, 24, 32, 0.78);
+}
+.has-aroll .card-title {
+  margin-top: 10px;
+  font-size: 42px;
+}
+.has-aroll .card-body {
+  margin-top: 14px;
+  font-size: 25px;
+  line-height: 1.42;
+}
+.has-aroll .caption-layer {
+  margin-top: auto;
 }
 .missing-media {
   display: flex;
@@ -1320,23 +1431,37 @@ func buildHyperFramesIndexWithMediaSpec(topic, script string, mediaPackages []sh
 	if len(mediaPackages) == 0 {
 		return buildHyperFramesIndex(topic, script)
 	}
+	return buildHyperFramesIndexWithArollAndMedia(topic, script, nil, mediaPackages, spec)
+}
+
+func buildHyperFramesIndexWithArollAndMedia(topic, script string, aRollPackage *shotMediaPackage, mediaPackages []shotMediaPackage, spec *compositionSpec) string {
+	if aRollPackage == nil && len(mediaPackages) == 0 {
+		return buildHyperFramesIndex(topic, script)
+	}
 	if topic == "" {
 		topic = "Tangying AIOS Video"
 	}
 	if spec == nil {
 		spec = fallbackCompositionSpec()
-		if duration := totalMediaDuration(mediaPackages); duration > 0 {
+		if duration := combinedMediaDuration(aRollPackage, mediaPackages); duration > 0 {
 			spec.DurationSec = duration
 		}
 	}
+	if duration := combinedMediaDuration(aRollPackage, mediaPackages); duration > spec.DurationSec {
+		spec.DurationSec = duration
+	}
 	if spec.DurationSec <= 0 {
-		if duration := totalMediaDuration(mediaPackages); duration > 0 {
+		if duration := combinedMediaDuration(aRollPackage, mediaPackages); duration > 0 {
 			spec.DurationSec = duration
 		} else {
 			spec.DurationSec = 8
 		}
 	}
 	cards, captions := mediaPackageCards(topic, script, mediaPackages), mediaPackageCaptions(mediaPackages)
+	if len(mediaPackages) == 0 {
+		cards = buildFallbackCards(topic, script)
+		captions = buildFallbackCaptions()
+	}
 	if len(spec.Tracks) > 0 {
 		if shotCards, shotCaptions := extractCardsAndCaptions(spec); len(shotCards) > 0 {
 			cards = shotCards
@@ -1344,7 +1469,7 @@ func buildHyperFramesIndexWithMediaSpec(topic, script string, mediaPackages []sh
 		}
 	}
 	index := buildCompositionIndex(topic, spec, cards, captions, spec.Style)
-	return injectTimedMedia(index, mediaPackages)
+	return injectArollAndTimedMedia(index, aRollPackage, mediaPackages)
 }
 
 func totalMediaDuration(mediaPackages []shotMediaPackage) float64 {
@@ -1359,6 +1484,14 @@ func totalMediaDuration(mediaPackages []shotMediaPackage) float64 {
 		}
 	}
 	return total
+}
+
+func combinedMediaDuration(aRollPackage *shotMediaPackage, mediaPackages []shotMediaPackage) float64 {
+	duration := totalMediaDuration(mediaPackages)
+	if aRollPackage != nil && aRollPackage.DurationSec > duration {
+		duration = aRollPackage.DurationSec
+	}
+	return duration
 }
 
 type shotTiming struct {
@@ -1486,12 +1619,29 @@ func mediaPackageCaptions(mediaPackages []shotMediaPackage) []captionInfo {
 }
 
 func injectTimedMedia(index string, mediaPackages []shotMediaPackage) string {
-	bgMarker := "      <div class=\"bg-layer\" data-layout-ignore>\n"
-	index = strings.Replace(index, bgMarker, bgMarker+timedMediaElements(mediaPackages)+`        <div class="media-safety-mask" data-layout-ignore></div>
+	return injectArollAndTimedMedia(index, nil, mediaPackages)
+}
+
+func injectArollAndTimedMedia(index string, aRollPackage *shotMediaPackage, mediaPackages []shotMediaPackage) string {
+	compositionMarker := `data-composition-id="tangying-main"`
+	if aRollPackage != nil {
+		compositionClass := "has-aroll"
+		if len(mediaPackages) == 0 {
+			compositionClass += " arroll-clean"
+		}
+		index = strings.Replace(index, compositionMarker, `class="`+compositionClass+`" `+compositionMarker, 1)
+	}
+	sceneMarker := "    <div class=\"scene-content\">\n"
+	mediaElements := aRollMediaElements(aRollPackage) + timedMediaElementsWithTrackOffset(mediaPackages, mediaTrackOffset(aRollPackage))
+	index = strings.Replace(index, sceneMarker, mediaElements+sceneMarker, 1)
+	if aRollPackage == nil {
+		bgMarker := "      <div class=\"bg-layer\" data-layout-ignore>\n"
+		index = strings.Replace(index, bgMarker, bgMarker+`        <div class="media-safety-mask" data-layout-ignore></div>
 `, 1)
+	}
 
 	setMarker := "    tl.set(\".video-card, .caption\", { opacity: 0, y: 0, scale: 1 }, 0);\n"
-	index = strings.Replace(index, setMarker, setMarker+"    tl.set(\".shot-media, .missing-media\", { opacity: 0 }, 0);\n", 1)
+	index = strings.Replace(index, setMarker, setMarker+"    tl.set(\".shot-media, .missing-media\", { opacity: 0 }, 0);\n    tl.set(\".aroll-media\", { opacity: 1 }, 0);\n", 1)
 
 	timelineMarker := "    window.__timelines[\"tangying-main\"] = tl;"
 	index = strings.Replace(index, timelineMarker, timedMediaTimeline(mediaPackages)+timelineMarker, 1)
@@ -1499,6 +1649,31 @@ func injectTimedMedia(index string, mediaPackages []shotMediaPackage) string {
 }
 
 func timedMediaElements(mediaPackages []shotMediaPackage) string {
+	return timedMediaElementsWithTrackOffset(mediaPackages, 0)
+}
+
+func mediaTrackOffset(aRollPackage *shotMediaPackage) int {
+	if aRollPackage != nil {
+		return 2
+	}
+	return 0
+}
+
+func aRollMediaElements(aRollPackage *shotMediaPackage) string {
+	if aRollPackage == nil || aRollPackage.BaseLayer.Missing || aRollPackage.BaseLayer.ResolvedSrc == "" {
+		return ""
+	}
+	duration := aRollPackage.DurationSec
+	if duration <= 0 {
+		return ""
+	}
+	src := html.EscapeString(aRollPackage.BaseLayer.ResolvedSrc)
+	return fmt.Sprintf(`    <video id="aroll-main" class="aroll-media clip" data-start="0.0" data-duration="%.1f" data-track-index="0" src="%s" muted playsinline crossorigin="anonymous"></video>
+    <audio id="aroll-audio" class="aroll-audio clip" data-start="0.0" data-duration="%.1f" data-track-index="10" src="%s" preload="auto" crossorigin="anonymous"></audio>
+`, duration, src, duration, src)
+}
+
+func timedMediaElementsWithTrackOffset(mediaPackages []shotMediaPackage, trackOffset int) string {
 	var b strings.Builder
 	for index, pkg := range mediaPackages {
 		duration := pkg.DurationSec
@@ -1508,18 +1683,22 @@ func timedMediaElements(mediaPackages []shotMediaPackage) string {
 		shotID := html.EscapeString(pkg.ShotID)
 		elementID := safeMediaElementID(pkg, index)
 		if pkg.BaseLayer.Missing || pkg.BaseLayer.ResolvedSrc == "" {
-			b.WriteString(fmt.Sprintf(`        <div id="%s" class="missing-media" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d">Missing media for %s</div>
-`, elementID, shotID, pkg.StartSec, duration, index, shotID))
+			b.WriteString(fmt.Sprintf(`    <div id="%s" class="missing-media clip" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d">Missing media for %s</div>
+`, elementID, shotID, pkg.StartSec, duration, trackOffset+index, shotID))
 			continue
 		}
 		src := html.EscapeString(pkg.BaseLayer.ResolvedSrc)
+		displayClass := "broll-full"
+		if pkg.DisplayMode == "pip" {
+			displayClass = "broll-pip"
+		}
 		switch strings.ToLower(pkg.BaseLayer.Kind) {
 		case "image", "img", "still":
-			b.WriteString(fmt.Sprintf(`        <img id="%s" class="shot-media" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d" src="%s" crossorigin="anonymous" alt="" />
-`, elementID, shotID, pkg.StartSec, duration, index, src))
+			b.WriteString(fmt.Sprintf(`    <img id="%s" class="shot-media clip %s" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d" src="%s" crossorigin="anonymous" alt="" />
+`, elementID, displayClass, shotID, pkg.StartSec, duration, trackOffset+index, src))
 		default:
-			b.WriteString(fmt.Sprintf(`        <video id="%s" class="shot-media" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d" src="%s" muted playsinline crossorigin="anonymous"></video>
-`, elementID, shotID, pkg.StartSec, duration, index, src))
+			b.WriteString(fmt.Sprintf(`    <video id="%s" class="shot-media clip %s" data-shot-id="%s" data-start="%.1f" data-duration="%.1f" data-track-index="%d" src="%s" muted playsinline crossorigin="anonymous"></video>
+`, elementID, displayClass, shotID, pkg.StartSec, duration, trackOffset+index, src))
 		}
 	}
 	return b.String()

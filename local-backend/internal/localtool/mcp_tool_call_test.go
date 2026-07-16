@@ -465,6 +465,96 @@ func TestMCPToolCallExecutorDownloadsGeneratedVideoIntoShotFusionPlan(t *testing
 	}
 }
 
+func TestMCPToolCallExecutorPackagesDeterministicIPArollWithoutAIGCPreflight(t *testing.T) {
+	dataDir := t.TempDir()
+	sourceVideo := filepath.Join(t.TempDir(), "sloth-aroll.mp4")
+	if err := os.WriteFile(sourceVideo, []byte("fake ip a-roll mp4"), 0o644); err != nil {
+		t.Fatalf("write source video: %v", err)
+	}
+
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		params := req["params"].(map[string]interface{})
+		if params["name"] != "ip_avatar_3d.render_talking_video" {
+			t.Fatalf("tool = %#v", params["name"])
+		}
+		args := params["arguments"].(map[string]interface{})
+		if args["script"] != "今天聊聊 AI 视频为什么需要连续 A-roll。" {
+			t.Fatalf("script = %#v", args["script"])
+		}
+		if args["characterProfilePath"] != "ip形象/main_ip/character-profile.json" {
+			t.Fatalf("characterProfilePath = %#v", args["characterProfilePath"])
+		}
+		if _, exists := args["prompt"]; exists {
+			t.Fatalf("deterministic IP renderer must not receive an AIGC prompt: %#v", args)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]interface{}{
+				"structuredContent": map[string]interface{}{
+					"status":      "ready",
+					"success":     true,
+					"sourceType":  "ip_aroll_video",
+					"durationSec": 12,
+					"videoPath":   sourceVideo,
+				},
+			},
+		})
+	}))
+	defer mcp.Close()
+
+	executor := NewMCPToolCallExecutorWithDataDir(func() ([]localmcp.ProviderConfig, error) {
+		return []localmcp.ProviderConfig{{ID: "ip_avatar_3d", Endpoint: mcp.URL, Enabled: true}}, nil
+	}, dataDir)
+	result, err := executor.Execute(context.Background(), Job{
+		ID:        "job-ip-aroll",
+		ProjectID: "project_001",
+		Command:   CommandLocalMCPToolCall,
+		Payload: map[string]interface{}{
+			"providerId": "ip_avatar_3d",
+			"mcpTool":    "ip_avatar_3d.render_talking_video",
+			"externalGenerationRequests": []interface{}{
+				map[string]interface{}{
+					"requestId": "ip_aroll_main",
+					"shotId":    "AROLL_MAIN",
+					"kind":      "ip_aroll_video",
+					"arguments": map[string]interface{}{
+						"script":               "今天聊聊 AI 视频为什么需要连续 A-roll。",
+						"characterProfilePath": "ip形象/main_ip/character-profile.json",
+						"presentationMode":     "standing",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	packages, ok := result.Output["aRollAssetPackages"].([]interface{})
+	if !ok || len(packages) != 1 {
+		t.Fatalf("aRollAssetPackages = %#v", result.Output["aRollAssetPackages"])
+	}
+	pkg := packages[0].(map[string]interface{})
+	if pkg["sourceType"] != "ip_aroll_video" || pkg["durationSec"] != 12 {
+		t.Fatalf("IP A-roll package = %#v", pkg)
+	}
+	generationPlan := pkg["generationPlan"].(map[string]interface{})
+	fusionPlan := generationPlan["fusionPlan"].(map[string]interface{})
+	baseLayer := fusionPlan["baseLayer"].(map[string]interface{})
+	if baseLayer["role"] != "a_roll" || fusionPlan["outputArtifactKind"] != "IP_AROLL_VIDEO" {
+		t.Fatalf("IP A-roll fusion plan = %#v", fusionPlan)
+	}
+	preflight := result.Output["generationResults"].([]interface{})[0].(map[string]interface{})["preflightQa"].(map[string]interface{})
+	if preflight["passed"] != true {
+		t.Fatalf("deterministic IP A-roll should bypass AIGC prompt/reference QA: %#v", preflight)
+	}
+}
+
 func TestMCPToolCallExecutorDefersAfterDefaultReadyGenerationBudget(t *testing.T) {
 	dataDir := t.TempDir()
 	sourceDir := t.TempDir()
