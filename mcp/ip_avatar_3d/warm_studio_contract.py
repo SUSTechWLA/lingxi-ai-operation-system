@@ -55,12 +55,14 @@ MODE_CAMERA_SPECS = MappingProxyType({
     "standing": MappingProxyType({
         "wide": ("Camera_Standing_Wide", (0.0, -2.74, 1.67), 24.0),
         "medium": ("Camera_Standing_Medium", (0.0, -2.15, 1.78), 50.0),
+        "close": ("Camera_Standing_Close", (0.0, -1.82, 1.92), 70.0),
         "three_quarter": ("Camera_Standing_ThreeQuarter", (-2.25, -1.65, 1.82), 50.0),
         "transition": ("Camera_Standing_Transition", (-1.58, -2.42, 1.48), 20.0),
     }),
     "seated": MappingProxyType({
         "wide": ("Camera_Seated_Wide", (0.0, -2.74, 1.55), 24.0),
         "medium": ("Camera_Seated_Medium", (0.0, -2.15, 1.60), 50.0),
+        "close": ("Camera_Seated_Close", (0.0, -1.82, 1.66), 70.0),
         "three_quarter": ("Camera_Seated_ThreeQuarter", (-2.20, -1.60, 1.62), 50.0),
         "transition": ("Camera_Seated_Transition", (-1.58, -2.42, 1.48), 20.0),
     }),

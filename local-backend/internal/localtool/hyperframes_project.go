@@ -1067,6 +1067,9 @@ body {
 .has-aroll .bg-word {
   display: none;
 }
+.arroll-clean .scene-content {
+  display: none;
+}
 .has-aroll .video-card {
   inset: auto 0 120px auto;
   width: 560px;
@@ -1622,7 +1625,11 @@ func injectTimedMedia(index string, mediaPackages []shotMediaPackage) string {
 func injectArollAndTimedMedia(index string, aRollPackage *shotMediaPackage, mediaPackages []shotMediaPackage) string {
 	compositionMarker := `data-composition-id="tangying-main"`
 	if aRollPackage != nil {
-		index = strings.Replace(index, compositionMarker, `class="has-aroll" `+compositionMarker, 1)
+		compositionClass := "has-aroll"
+		if len(mediaPackages) == 0 {
+			compositionClass += " arroll-clean"
+		}
+		index = strings.Replace(index, compositionMarker, `class="`+compositionClass+`" `+compositionMarker, 1)
 	}
 	sceneMarker := "    <div class=\"scene-content\">\n"
 	mediaElements := aRollMediaElements(aRollPackage) + timedMediaElementsWithTrackOffset(mediaPackages, mediaTrackOffset(aRollPackage))

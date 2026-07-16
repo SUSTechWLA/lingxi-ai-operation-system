@@ -290,6 +290,26 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
         self.assertEqual(plan, [{"frame": 1, "camera": "Camera_Medium"}])
 
+    def test_front_talking_camera_plan_is_restrained(self) -> None:
+        server = load_server()
+
+        plan = server.build_camera_plan(
+            duration_sec=20,
+            fps=30,
+            camera_preset="front_talking",
+        )
+
+        self.assertEqual(plan[0], {"frame": 1, "camera": "Camera_Wide"})
+        self.assertEqual(plan[-1]["camera"], "Camera_Medium")
+        self.assertEqual(
+            {item["camera"] for item in plan},
+            {"Camera_Wide", "Camera_Medium"},
+        )
+        self.assertEqual(len(plan), 2)
+        self.assertNotIn("Camera_Close", {item["camera"] for item in plan})
+        self.assertNotIn("Camera_ThreeQuarter", {item["camera"] for item in plan})
+        self.assertNotIn("Camera_Transition", {item["camera"] for item in plan})
+
     def test_render_dry_run_accepts_transition_camera_preset(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:

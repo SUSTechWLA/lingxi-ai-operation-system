@@ -70,7 +70,15 @@ DEFAULT_CAMERA_PRESET = "medium"
 DEFAULT_LIGHTING_PRESET = "editorial_soft"
 DEFAULT_RENDER_ENGINE = "BLENDER_EEVEE_NEXT"
 DEFAULT_QUALITY_PRESET = "production_2k"
-CAMERA_PRESETS = {"auto", "wide", "medium", "close", "three_quarter", "transition"}
+CAMERA_PRESETS = {
+    "auto",
+    "front_talking",
+    "wide",
+    "medium",
+    "close",
+    "three_quarter",
+    "transition",
+}
 LIGHTING_PRESETS = {"editorial_soft", "editorial_crisp", "night_analysis", "scene_default"}
 RENDER_ENGINES = {"BLENDER_EEVEE_NEXT", "CYCLES"}
 QUALITY_PRESETS = {
@@ -1133,19 +1141,24 @@ def build_camera_plan(
         "three_quarter": "Camera_ThreeQuarter",
         "transition": "Camera_Transition",
     }
-    if preset != "auto":
+    if preset not in {"auto", "front_talking"}:
         return [{"frame": 1, "camera": camera_name.get(preset, "Camera_Medium")}]
     if duration_sec < 4.0:
         return [{"frame": 1, "camera": "Camera_Medium"}]
 
     final_frame = max(1, int(round(duration_sec * fps)))
     establish_end = min(1.65, max(1.35, duration_sec * 0.22))
-    candidates = [
+    candidates: list[tuple[int, str]] = [
         (1, "Camera_Wide"),
         (min(final_frame, max(2, int(round(establish_end * fps)) + 1)), "Camera_Medium"),
-        (min(final_frame, max(2, int(round(duration_sec * 0.58 * fps)) + 1)), "Camera_Close"),
-        (min(final_frame, max(2, int(round(duration_sec * 0.78 * fps)) + 1)), "Camera_Medium"),
     ]
+    if preset == "auto":
+        candidates.extend(
+            [
+                (min(final_frame, max(2, int(round(duration_sec * 0.58 * fps)) + 1)), "Camera_Close"),
+                (min(final_frame, max(2, int(round(duration_sec * 0.78 * fps)) + 1)), "Camera_Medium"),
+            ]
+        )
     plan_by_frame: dict[int, str] = {}
     for frame, camera in candidates:
         plan_by_frame[frame] = camera

@@ -620,6 +620,7 @@ def test_mode_resolver_uses_only_mode_specific_markers_and_cameras() -> None:
             "cameras": {
                 "wide": "Camera_Standing_Wide",
                 "medium": "Camera_Standing_Medium",
+                "close": "Camera_Standing_Close",
                 "three_quarter": "Camera_Standing_ThreeQuarter",
                 "transition": "Camera_Standing_Transition",
             },
@@ -633,6 +634,7 @@ def test_mode_resolver_uses_only_mode_specific_markers_and_cameras() -> None:
             "cameras": {
                 "wide": "Camera_Seated_Wide",
                 "medium": "Camera_Seated_Medium",
+                "close": "Camera_Seated_Close",
                 "three_quarter": "Camera_Seated_ThreeQuarter",
                 "transition": "Camera_Seated_Transition",
             },
@@ -679,8 +681,9 @@ def test_mode_camera_plan_maps_generic_roles_to_selected_cameras() -> None:
             "cameraPlan": [
                 {"frame": 1, "camera": "Camera_Wide"},
                 {"frame": 25, "camera": "Camera_Medium"},
-                {"frame": 50, "camera": "Camera_ThreeQuarter"},
-                {"frame": 75, "camera": "Camera_Transition"},
+                {"frame": 50, "camera": "Camera_Close"},
+                {"frame": 75, "camera": "Camera_ThreeQuarter"},
+                {"frame": 100, "camera": "Camera_Transition"},
             ],
         },
         blender_renderer.resolve_scene_mode_objects("seated"),
@@ -689,12 +692,14 @@ def test_mode_camera_plan_maps_generic_roles_to_selected_cameras() -> None:
     assert [cut["camera"] for cut in report["cuts"]] == [
         "Camera_Seated_Wide",
         "Camera_Seated_Medium",
+        "Camera_Seated_Close",
         "Camera_Seated_ThreeQuarter",
         "Camera_Seated_Transition",
     ]
     assert report["cameraNames"] == {
         "wide": "Camera_Seated_Wide",
         "medium": "Camera_Seated_Medium",
+        "close": "Camera_Seated_Close",
         "three_quarter": "Camera_Seated_ThreeQuarter",
         "transition": "Camera_Seated_Transition",
     }
@@ -709,6 +714,14 @@ def test_mode_camera_plan_maps_generic_roles_to_selected_cameras() -> None:
         {"frame": 1, "camera": "Camera_Seated_Transition"}
     ]
     assert preset_report["missingCameras"] == []
+
+    close_report = blender_renderer.configure_camera_plan(
+        {"presentationMode": "seated", "cameraPreset": "close"},
+        blender_renderer.resolve_scene_mode_objects("seated"),
+    )
+    assert close_report["cuts"] == [
+        {"frame": 1, "camera": "Camera_Seated_Close"}
+    ]
 
 
 def test_authored_scene_placement_persists_selected_mode_contract() -> None:
@@ -753,6 +766,7 @@ def test_authored_scene_placement_persists_selected_mode_contract() -> None:
     assert placement["cameraNames"] == {
         "wide": "Camera_Seated_Wide",
         "medium": "Camera_Seated_Medium",
+        "close": "Camera_Seated_Close",
         "three_quarter": "Camera_Seated_ThreeQuarter",
         "transition": "Camera_Seated_Transition",
     }

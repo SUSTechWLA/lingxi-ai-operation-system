@@ -230,6 +230,9 @@ func TestBundledVideoCapabilityMarksHyperFramesProjectGeneratorLocal(t *testing.
 		if !manifest.RequiresUserDevice || manifest.ArtifactLocation != tool.ArtifactLocationLocal {
 			t.Fatalf("hyperframes_project_generator local metadata incomplete: %#v", manifest)
 		}
+		if _, ok := manifest.Parameters["aRollAssetPackages"]; !ok {
+			t.Fatalf("hyperframes_project_generator must accept continuous IP A-roll packages: %#v", manifest.Parameters)
+		}
 		return
 	}
 	t.Fatal("hyperframes_project_generator manifest not found")

@@ -238,6 +238,65 @@ func TestHyperFramesProjectExecutorBuildsContinuousIPArollWithSeparateAudioAndBr
 	}
 }
 
+func TestHyperFramesProjectExecutorUsesCleanLayoutForContinuousIPArollWithoutBroll(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts", "project_001", "ip-aroll-main")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "content"), []byte("fake video bytes"), 0o644); err != nil {
+		t.Fatalf("write artifact content: %v", err)
+	}
+
+	executor := NewHyperFramesProjectExecutor(root)
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-ip-aroll-clean",
+		ProjectID: "project_001",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic":  "正面知识口播",
+			"script": "主角持续正面面对镜头。",
+			"aRollAssetPackages": []interface{}{
+				map[string]interface{}{
+					"shotId":      "AROLL_MAIN",
+					"durationSec": float64(20),
+					"sourceType":  "ip_aroll_video",
+					"generationPlan": map[string]interface{}{
+						"mode": "ip_aroll_video",
+						"fusionPlan": map[string]interface{}{
+							"baseLayer": map[string]interface{}{
+								"kind":       "video",
+								"role":       "a_roll",
+								"storageRef": "local://projects/project_001/artifacts/ip-aroll-main/hash/aroll.mp4",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	indexPath := filepath.Join(root, "projects", "project_001", "hyperframes", "index.html")
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(raw)
+	if !strings.Contains(html, `class="has-aroll arroll-clean"`) {
+		t.Fatalf("continuous A-roll without B-roll must use clean layout:\n%s", html)
+	}
+	css, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "assets", "style.css"))
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	if !strings.Contains(string(css), ".arroll-clean .scene-content") {
+		t.Fatalf("clean A-roll CSS must hide generic overlays")
+	}
+}
+
 func TestHyperFramesProjectExecutorKeepsFullShotTimelineWhenOnlySomeMediaReady(t *testing.T) {
 	root := t.TempDir()
 	artifactDir := filepath.Join(root, "artifacts", "project_001", "shot-video-03")

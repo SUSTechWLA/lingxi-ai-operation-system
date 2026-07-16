@@ -122,6 +122,7 @@ func (c *PlanCompiler) PreparePlan(plan *AgentPlan) *AgentPlan {
 	if !c.completeVideoPlanByProfile(plan) {
 		c.completeVideoBetaPlan(plan)
 	}
+	removeDisabledAIGCSteps(plan)
 	c.injectKnowledgeContext(plan)
 	c.injectMCPGenerationRunner(plan)
 	c.injectIPArollGenerationRunner(plan)
@@ -474,7 +475,9 @@ func (c *PlanCompiler) completeTalkingHeadProfilePlan(plan *AgentPlan, profileAn
 			}
 			scriptStep.Arguments["stage"] = "script_generation"
 			scriptStep.Arguments["brief"] = plan.Goal
-			scriptStep.Arguments["topic"] = plan.Goal
+			if topic, ok := scriptStep.Arguments["topic"].(string); !ok || strings.TrimSpace(topic) == "" {
+				scriptStep.Arguments["topic"] = plan.Goal
+			}
 			scriptStep.Arguments["creationProfile"] = stepOutputRef(profileAnchor, "creationProfile")
 			scriptStep.DependsOn = dependencyList(profileAnchor)
 			if len(scriptStep.ExpectedOutput) == 0 {
@@ -1251,6 +1254,9 @@ func (c *PlanCompiler) injectMCPGenerationRunner(plan *AgentPlan) {
 	if plan == nil || plan.Domain != "video_creation" {
 		return
 	}
+	if aigcGenerationDisabled(plan) {
+		return
+	}
 	runnerManifest := c.manifestFor("mcp_generation_runner")
 	if runnerManifest == nil {
 		return
@@ -1375,6 +1381,14 @@ func (c *PlanCompiler) injectIPArollGenerationRunner(plan *AgentPlan) {
 	}
 	if renderArguments["renderMode"] == "" {
 		renderArguments["renderMode"] = "production"
+	}
+	if cameraPreset := requestedPlanString(
+		plan,
+		"cameraPreset",
+		"ipCameraPreset",
+		"ip_camera_preset",
+	); cameraPreset != "" {
+		renderArguments["cameraPreset"] = cameraPreset
 	}
 	for targetKey, sourceKeys := range map[string][]string{
 		"characterProfilePath": {"characterProfilePath", "ipCharacterProfilePath", "ip_character_profile_path"},
@@ -2154,6 +2168,33 @@ func requestedAIGCProvider(plan *AgentPlan) string {
 		}
 	}
 	return ""
+}
+
+func aigcGenerationDisabled(plan *AgentPlan) bool {
+	switch requestedAIGCProvider(plan) {
+	case "disabled", "none", "off":
+		return true
+	default:
+		return false
+	}
+}
+
+func removeDisabledAIGCSteps(plan *AgentPlan) {
+	if plan == nil || !aigcGenerationDisabled(plan) {
+		return
+	}
+	out := plan.Steps[:0]
+	for _, step := range plan.Steps {
+		if step.Tool == "keyframe_prompt_generator" {
+			continue
+		}
+		if step.Tool == "mcp_generation_runner" && stringArg(step.Arguments, "stage") != "ip_aroll_generation" {
+			continue
+		}
+		out = append(out, step)
+	}
+	plan.Steps = out
+	removeArgumentRefsToMissingSteps(plan)
 }
 
 func requestedProjectID(plan *AgentPlan) string {

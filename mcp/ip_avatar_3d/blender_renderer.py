@@ -35,6 +35,7 @@ CAMERA_NAMES = {
     "wide": "Camera_Wide",
     "medium": "Camera_Medium",
     "close": "Camera_Close",
+    "front_talking": "Camera_Medium",
     "three_quarter": "Camera_ThreeQuarter",
     "transition": "Camera_Transition",
 }
@@ -141,6 +142,7 @@ def resolve_scene_mode_objects(mode: str) -> dict[str, Any]:
     camera_names = {
         "wide": f"Camera_{prefix}_Wide",
         "medium": f"Camera_{prefix}_Medium",
+        "close": f"Camera_{prefix}_Close",
         "three_quarter": f"Camera_{prefix}_ThreeQuarter",
         "transition": f"Camera_{prefix}_Transition",
     }
@@ -232,13 +234,14 @@ def configure_camera_plan(
     aliases = {
         "wide": "wide",
         "medium": "medium",
+        "close": "close",
         "three_quarter": "three_quarter",
         "transition": "transition",
         "Camera_Wide": "wide",
         "Camera_Medium": "medium",
         "Camera_ThreeQuarter": "three_quarter",
         "Camera_Transition": "transition",
-        "Camera_Close": "three_quarter",
+        "Camera_Close": "close",
     }
     motion_plan = data.get("motionPlan") or data
     fps = max(

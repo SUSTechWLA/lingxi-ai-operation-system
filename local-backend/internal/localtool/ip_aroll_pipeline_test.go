@@ -89,7 +89,7 @@ func TestIPArollMCPOutputFeedsHyperFramesComposition(t *testing.T) {
 	}
 	index := string(raw)
 	for _, expected := range []string{
-		`class="has-aroll"`,
+		`class="has-aroll arroll-clean"`,
 		`class="aroll-media clip"`,
 		`class="aroll-audio clip"`,
 		`data-duration="15.0"`,

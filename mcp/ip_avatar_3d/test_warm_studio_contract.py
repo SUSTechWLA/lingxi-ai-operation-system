@@ -23,6 +23,7 @@ class WarmStudioContractTests(unittest.TestCase):
 
         self.assertEqual(render["sceneBlendPath"], "scenes/warm-sloth-studio-v1.blend")
         self.assertEqual(render["presentationMode"], "standing")
+        self.assertEqual(render["cameraPreset"], "front_talking")
         self.assertEqual(render["qualityPreset"], "production_1080p")
         self.assertEqual(render["resolution"], {"width": 1920, "height": 1080})
         self.assertEqual(render["fps"], 30)
@@ -51,8 +52,14 @@ class WarmStudioContractTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(contract.MODE_CAMERA_SPECS[mode]),
-                {"wide", "medium", "three_quarter", "transition"},
+                {"wide", "medium", "close", "three_quarter", "transition"},
             )
+
+    def test_front_talking_cameras_are_centered_for_both_modes(self) -> None:
+        for mode in contract.PRESENTATION_MODES:
+            for role in ("wide", "medium", "close"):
+                _name, location, _lens = contract.MODE_CAMERA_SPECS[mode][role]
+                self.assertEqual(location[0], 0.0, f"{mode}.{role} must stay frontal")
 
     def test_seated_contract_has_knees_and_transition_camera(self) -> None:
         seated = contract.MODE_MARKER_SPECS["seated"]

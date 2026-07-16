@@ -108,7 +108,7 @@
     "sceneBlendPath": "scenes/warm-sloth-studio-v1.blend",
     "backgroundPath": "backgrounds/editorial-dark-v1.png",
     "backgroundBrightness": 0.88,
-    "cameraPreset": "auto",
+    "cameraPreset": "front_talking",
     "presentationMode": "standing",
     "lightingPreset": "editorial_soft",
     "renderEngine": "BLENDER_EEVEE_NEXT",

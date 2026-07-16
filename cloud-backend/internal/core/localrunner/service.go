@@ -145,7 +145,23 @@ func (s *Service) DispatchLocalJob(ctx context.Context, req DispatchLocalJobRequ
 		    timeout_sec, artifact_policy, idempotency_key, created_at, updated_at)
 		  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,$9,$10::jsonb,$11,$12,$13)
 		  ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
-		  DO UPDATE SET updated_at=local_jobs.updated_at
+		  DO UPDATE SET
+		   payload=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.payload ELSE local_jobs.payload END,
+		   status=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 'PENDING' ELSE local_jobs.status END,
+		   progress=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN 0 ELSE local_jobs.progress END,
+		   current_step=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE local_jobs.current_step END,
+		   message=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN '' ELSE local_jobs.message END,
+		   output=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.output END,
+		   error_message=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.error_message END,
+		   error_json=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN '{}'::jsonb ELSE local_jobs.error_json END,
+		   diagnostics=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN '{}'::jsonb ELSE local_jobs.diagnostics END,
+		   retryable=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN true ELSE local_jobs.retryable END,
+		   runner_id=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.runner_id END,
+		   claimed_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.claimed_at END,
+		   lease_expires_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.lease_expires_at END,
+		   completed_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN NULL ELSE local_jobs.completed_at END,
+		   attempt=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN local_jobs.attempt+1 ELSE local_jobs.attempt END,
+		   updated_at=CASE WHEN local_jobs.status IN ('COMPLETED','FAILED') THEN EXCLUDED.updated_at ELSE local_jobs.updated_at END
 		  RETURNING *
 		 ) `+localJobSelectPrefix()+` FROM upserted`,
 		jobID, projectID, req.TaskID, req.NodeID, req.ToolName, command, string(payloadJSON),

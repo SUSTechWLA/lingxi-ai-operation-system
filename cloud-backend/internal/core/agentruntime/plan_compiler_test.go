@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/core/model"
@@ -950,6 +951,8 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 			"script":               {Type: "string", Required: true},
 			"characterProfilePath": {Type: "string", Required: false},
 			"presentationMode":     {Type: "string", Required: false},
+			"cameraPreset":         {Type: "string", Required: false},
+			"actionSequence":       {Type: "array", Required: false},
 		},
 	}
 	compiler := NewPlanCompiler(catalog)
@@ -957,17 +960,30 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 		Goal:   "用主 IP 创作一条知识分享口播视频",
 		Domain: "video_creation",
 		Mode:   "dynamic_agent",
-		Steps: []AgentStep{{
-			ID:   "script_generation",
-			Tool: "video_script_generator",
-			Arguments: map[string]interface{}{
-				"topic":                "AI 视频创作工作流",
-				"characterProfilePath": "ip形象/main_ip/character-profile.json",
-				"presentationMode":     "standing",
+		Steps: []AgentStep{
+			{
+				ID:   "script_generation",
+				Tool: "video_script_generator",
+				Arguments: map[string]interface{}{
+					"topic":                "AI 视频创作工作流",
+					"aigcProvider":         "disabled",
+					"characterProfilePath": "ip形象/main_ip/character-profile.json",
+					"presentationMode":     "standing",
+					"cameraPreset":         "front_talking",
+					"actionSequence": []interface{}{
+						"Aroll_Greeting_Wave",
+						"Aroll_OpenPalm_Explain",
+					},
+				},
+				ExpectedOutput:  []string{"script", "scriptSpans"},
+				ProduceArtifact: true,
 			},
-			ExpectedOutput:  []string{"script", "scriptSpans"},
-			ProduceArtifact: true,
-		}},
+			{
+				ID:        "keyframe_prompt_generator",
+				Tool:      "keyframe_prompt_generator",
+				Arguments: map[string]interface{}{"aigcProvider": "disabled"},
+			},
+		},
 	}
 
 	prepared := compiler.PreparePlan(plan)
@@ -997,8 +1013,20 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	if got := arguments["script"]; got != "{{script_generation.output.script}}" {
 		t.Fatalf("script ref = %#v", got)
 	}
+	if got := findStep(t, prepared, "script_generation").Arguments["topic"]; got != "AI 视频创作工作流" {
+		t.Fatalf("explicit topic was overwritten during profile compilation: %#v", got)
+	}
 	if got := arguments["characterProfilePath"]; got != "ip形象/main_ip/character-profile.json" {
 		t.Fatalf("characterProfilePath = %#v", got)
+	}
+	if got := arguments["cameraPreset"]; got != "front_talking" {
+		t.Fatalf("cameraPreset = %#v, want front_talking", got)
+	}
+	if got := arguments["actionSequence"]; !reflect.DeepEqual(got, []interface{}{
+		"Aroll_Greeting_Wave",
+		"Aroll_OpenPalm_Explain",
+	}) {
+		t.Fatalf("actionSequence = %#v", got)
 	}
 	preview := findStep(t, prepared, "preview")
 	if got := preview.Arguments["aRollAssetPackages"]; got != "{{ip_aroll_generation.output.aRollAssetPackages}}" {
@@ -1006,6 +1034,14 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	}
 	if !containsString(preview.DependsOn, "ip_aroll_generation") {
 		t.Fatalf("preview dependencies = %#v, want ip_aroll_generation", preview.DependsOn)
+	}
+	for _, step := range prepared.Steps {
+		if step.ID == "mcp_generation" {
+			t.Fatalf("disabled AIGC provider should not insert generic MCP generation: %#v", step)
+		}
+		if step.Tool == "keyframe_prompt_generator" {
+			t.Fatalf("disabled AIGC provider should remove unneeded keyframe generation: %#v", step)
+		}
 	}
 	if stepIndex(t, prepared, "ip_aroll_generation") >= stepIndex(t, prepared, "preview") {
 		t.Fatalf("ip_aroll_generation must execute before preview")

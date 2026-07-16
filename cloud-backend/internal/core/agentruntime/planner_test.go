@@ -173,6 +173,26 @@ func TestHeuristicPlanner_WithBuiltinVideoToolsProducesValidQAFlow(t *testing.T)
 	}
 }
 
+func TestCopyRequestContextPreservesExplicitTopicAndScript(t *testing.T) {
+	args := copyRequestContext(StartRunRequest{
+		Message: "请先判断创作类型，再创作一个20秒视频：为什么 AI 视频不要每三秒换画面",
+		Context: map[string]interface{}{
+			"topic":  "为什么 AI 视频不要每三秒换画面",
+			"script": "很多 AI 视频看起来很热闹，却让人记不住观点。",
+		},
+	})
+
+	if got := args["topic"]; got != "为什么 AI 视频不要每三秒换画面" {
+		t.Fatalf("explicit topic was overwritten: %#v", got)
+	}
+	if got := args["script"]; got != "很多 AI 视频看起来很热闹，却让人记不住观点。" {
+		t.Fatalf("explicit script was lost: %#v", got)
+	}
+	if got := args["brief"]; got == "" {
+		t.Fatal("brief should retain the original natural-language request")
+	}
+}
+
 func TestHeuristicPlanner_OrdersVideoForgePipelineBeforeGeneration(t *testing.T) {
 	planner := NewHeuristicPlannerWithMaxTools(staticToolList{
 		{Name: "video_script_generator", Capabilities: []string{"video_creation", "script_generation"}},
