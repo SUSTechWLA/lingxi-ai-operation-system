@@ -24,7 +24,7 @@ import blender_renderer
 import hand_refinement
 import master_asset
 import render_aroll_master_qa
-from test_blender_character_rig import load_enhanced_fbx_character
+from test_blender_character_rig import RIGGED_FBX_PATH, load_enhanced_fbx_character
 
 
 SUPPORT_OFFSET = 0.045
@@ -52,6 +52,8 @@ AROLL_ACTIONS = {
     "Aroll_Disagree_Shake",
     "Aroll_Transition_Reset",
 }
+HAND_AESTHETIC_VERSION_KEY = "ip_avatar_hand_aesthetic_version"
+HAND_AESTHETIC_REPORT_KEY = "ip_avatar_hand_aesthetic_report"
 
 
 def test_aroll_qa_sample_contract_is_complete_and_squint_only() -> None:
@@ -542,6 +544,174 @@ def _weight_violations(objects, armature) -> list[str]:
                 f"across {len(non_positive_vertices)} vertices: {counts}"
             )
     return violations
+
+
+def _source_hand_fixture():
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    objects, armatures, imported_assets, _ = blender_renderer.import_model(str(RIGGED_FBX_PATH))
+    assert len(armatures) == 1
+    dimensions = blender_renderer.prepare_character(
+        objects,
+        target_height=2.55,
+        preserve_hierarchy=True,
+        asset_objects=imported_assets,
+    )
+    armature = armatures[0]
+    bone_map = blender_renderer.resolve_bone_roles([bone.name for bone in armature.data.bones])
+    return objects, dimensions, armature, bone_map
+
+
+def _surface_snapshot(objects):
+    return {
+        obj.name: {
+            "object": obj.as_pointer(),
+            "mesh": obj.data.as_pointer(),
+            "vertices": tuple(tuple(float(value) for value in vertex.co) for vertex in obj.data.vertices),
+            "vertexCount": len(obj.data.vertices),
+            "edgeCount": len(obj.data.edges),
+            "polygonCount": len(obj.data.polygons),
+            "materials": tuple(material.as_pointer() if material else 0 for material in obj.data.materials),
+            "uvLayers": tuple(
+                (
+                    layer.name,
+                    tuple(tuple(float(value) for value in item.uv) for item in layer.data),
+                )
+                for layer in obj.data.uv_layers
+            ),
+        }
+        for obj in objects
+        if obj.type == "MESH"
+    }
+
+
+def _restore_surface_coordinates(objects, snapshot) -> None:
+    for obj in objects:
+        if obj.name not in snapshot:
+            continue
+        for vertex, coordinate in zip(obj.data.vertices, snapshot[obj.name]["vertices"]):
+            vertex.co = coordinate
+        obj.data.update()
+
+
+def _enhance_source_fixture(objects, dimensions, armature):
+    return hand_refinement.enhance_three_segment_hands(
+        armature=armature,
+        objects=objects,
+        dimensions=dimensions,
+        stats={},
+        resolve_roles=blender_renderer.resolve_bone_roles,
+    )
+
+
+def test_refined_hands_preserve_three_digits_and_taper_each_tip() -> None:
+    objects, dimensions, armature, _, _, _ = load_enhanced_fbx_character()
+    stats = armature.get(HAND_AESTHETIC_REPORT_KEY)
+    assert stats is not None
+    report = json.loads(str(stats))
+
+    assert report["handAestheticVersion"] == "three_digit_refined_v2"
+    for side in ("l", "r"):
+        assert report["sides"][side]["digitCount"] == 3
+        for digit in report["sides"][side]["digits"]:
+            assert digit["tipWidth"] / digit["rootWidth"] <= 0.78, (side, digit)
+            assert digit["rootTransitionContinuity"] >= 0.82, (side, digit)
+            assert digit["wristBoundaryMaxDisplacement"] <= dimensions["width"] * 0.002, (
+                side,
+                digit,
+            )
+
+    assert sum(
+        bone.use_deform and is_finger_deform_bone_name(bone.name)
+        for bone in armature.data.bones
+    ) == 18
+    assert not any(obj.get("ip_avatar_replacement_hand") for obj in objects)
+
+
+def test_refined_hand_weights_remain_normalized_and_isolated() -> None:
+    _, _, armature, _, _, _ = load_enhanced_fbx_character()
+    assert HAND_AESTHETIC_REPORT_KEY in armature
+    report = json.loads(str(armature[HAND_AESTHETIC_REPORT_KEY]))
+
+    assert report["maxInfluences"] <= 4
+    assert report["unnormalizedVertices"] == 0
+    assert report["unweightedVertices"] == 0
+    assert report["neighborTipLeakageMax"] <= 0.08
+
+
+def test_refinement_preserves_source_topology_uvs_materials_and_upgrades_v1_v2_once() -> None:
+    objects, dimensions, armature, _ = _source_hand_fixture()
+    shape_object = max((obj for obj in objects if obj.type == "MESH"), key=lambda obj: len(obj.data.vertices))
+    shape_object.shape_key_add(name="Basis", from_mix=False)
+    shape_object.shape_key_add(name="Face_Fixture", from_mix=False)
+    shape_coordinates = {
+        key.name: tuple(tuple(float(value) for value in point.co) for point in key.data)
+        for key in shape_object.data.shape_keys.key_blocks
+    }
+    source = _surface_snapshot(objects)
+    report, _ = _enhance_source_fixture(objects, dimensions, armature)
+    refined = _surface_snapshot(objects)
+
+    assert set(refined) == set(source)
+    for name, before in source.items():
+        after = refined[name]
+        assert after["object"] == before["object"]
+        assert after["mesh"] == before["mesh"]
+        assert after["vertexCount"] == before["vertexCount"]
+        assert after["edgeCount"] == before["edgeCount"]
+        assert after["polygonCount"] == before["polygonCount"]
+        assert after["materials"] == before["materials"]
+        assert after["uvLayers"] == before["uvLayers"]
+    changed_shape_indices = [
+        index
+        for index, (before, after) in enumerate(
+            zip(source[shape_object.name]["vertices"], refined[shape_object.name]["vertices"])
+        )
+        if before != after
+    ]
+    assert changed_shape_indices
+    for key in shape_object.data.shape_keys.key_blocks:
+        for index in changed_shape_indices:
+            mesh_delta = Vector(refined[shape_object.name]["vertices"][index]) - Vector(
+                source[shape_object.name]["vertices"][index]
+            )
+            expected = Vector(shape_coordinates[key.name][index]) + mesh_delta
+            assert (key.data[index].co - expected).length <= 1e-6, (key.name, index)
+    assert report.get("handAestheticVersion") == "three_digit_refined_v2"
+
+    for legacy_version in (1, 2):
+        _restore_surface_coordinates(objects, source)
+        for key in shape_object.data.shape_keys.key_blocks:
+            for point, coordinate in zip(key.data, shape_coordinates[key.name]):
+                point.co = coordinate
+        contract_name = hand_refinement.LEGACY_HAND_CONTRACT_NAMES[legacy_version]
+        armature[hand_refinement.HAND_CONTRACT_KEY] = contract_name
+        armature[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
+        if legacy_version == 1 and hand_refinement.HAND_TOPOLOGY_MODE_KEY in armature:
+            del armature[hand_refinement.HAND_TOPOLOGY_MODE_KEY]
+        elif legacy_version == 2:
+            armature[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
+        for obj in objects:
+            if obj.type == "MESH" and obj.get(hand_refinement.HAND_CONTRACT_KEY):
+                obj[hand_refinement.HAND_CONTRACT_KEY] = contract_name
+                obj[hand_refinement.HAND_CONTRACT_VERSION_KEY] = legacy_version
+                if legacy_version == 1 and hand_refinement.HAND_TOPOLOGY_MODE_KEY in obj:
+                    del obj[hand_refinement.HAND_TOPOLOGY_MODE_KEY]
+                elif legacy_version == 2:
+                    obj[hand_refinement.HAND_TOPOLOGY_MODE_KEY] = hand_refinement.SOURCE_SURFACE_TOPOLOGY_MODE
+        for owner in (armature, *objects):
+            if HAND_AESTHETIC_VERSION_KEY in owner:
+                del owner[HAND_AESTHETIC_VERSION_KEY]
+            if HAND_AESTHETIC_REPORT_KEY in owner:
+                del owner[HAND_AESTHETIC_REPORT_KEY]
+
+        upgraded, _ = _enhance_source_fixture(objects, dimensions, armature)
+        assert upgraded["handAestheticUpgradeFromVersion"] == legacy_version
+        assert int(armature[hand_refinement.HAND_CONTRACT_VERSION_KEY]) == hand_refinement.HAND_CONTRACT_VERSION
+        once = _surface_snapshot(objects)
+        reused, _ = _enhance_source_fixture(objects, dimensions, armature)
+        twice = _surface_snapshot(objects)
+        assert reused["fingerRigReused"] is True
+        assert all(twice[name]["vertices"] == once[name]["vertices"] for name in once)
 
 
 def _support_band_ring_edges(
@@ -1046,6 +1216,9 @@ if __name__ == "__main__":
         test_saved_master_adds_standalone_qa_cameras_without_collection_conflicts,
         test_aroll_qa_renders_programmatic_fixture_and_checks_pixels,
         test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
+        test_refined_hands_preserve_three_digits_and_taper_each_tip,
+        test_refined_hand_weights_remain_normalized_and_isolated,
+        test_refinement_preserves_source_topology_uvs_materials_and_upgrades_v1_v2_once,
         test_main_ip_has_three_segments_per_digit_and_clean_weights,
         test_segment_weighting_is_rigid_away_from_knuckles,
         test_validated_three_segment_reuse_requires_contract_marker,

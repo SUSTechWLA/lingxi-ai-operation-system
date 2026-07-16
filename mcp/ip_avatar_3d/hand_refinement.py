@@ -22,9 +22,16 @@ HAND_CONTRACT_KEY = "ip_avatar_hand_contract"
 HAND_CONTRACT_VERSION_KEY = "ip_avatar_hand_contract_version"
 HAND_SUPPORT_RING_COUNT_KEY = "ip_avatar_hand_support_ring_count"
 HAND_TOPOLOGY_MODE_KEY = "ip_avatar_hand_topology_mode"
-HAND_CONTRACT_VERSION = 2
+HAND_AESTHETIC_VERSION_KEY = "ip_avatar_hand_aesthetic_version"
+HAND_AESTHETIC_REPORT_KEY = "ip_avatar_hand_aesthetic_report"
+HAND_CONTRACT_VERSION = 3
 HAND_CONTRACT_NAME = "three_segment_source_surface"
 SOURCE_SURFACE_TOPOLOGY_MODE = "source_surface_weighted"
+HAND_AESTHETIC_VERSION = "three_digit_refined_v2"
+LEGACY_HAND_CONTRACT_NAMES = {
+    1: "three_segment_annular_strips",
+    2: HAND_CONTRACT_NAME,
+}
 
 
 @dataclass
@@ -99,9 +106,26 @@ def analyze_three_digit_hands(
             hand_group = obj.vertex_groups.get(hand_name)
             if not hand_group:
                 continue
+            segment_group_indices = {
+                group.index
+                for digit in (1, 2, 3)
+                for role in (
+                    f"finger_{digit}_{side.lower()}",
+                    f"finger_{digit}_mid_{side.lower()}",
+                    f"finger_{digit}_tip_{side.lower()}",
+                )
+                if (name := bone_map.get(role))
+                if (group := obj.vertex_groups.get(name))
+            }
             for vertex in obj.data.vertices:
                 assignment = next(
-                    (item for item in vertex.groups if item.group == hand_group.index and item.weight > 0.05), None
+                    (
+                        item
+                        for item in vertex.groups
+                        if item.weight > 0.05
+                        and (item.group == hand_group.index or item.group in segment_group_indices)
+                    ),
+                    None,
                 )
                 if assignment:
                     world = obj.matrix_world @ vertex.co
@@ -138,6 +162,225 @@ def analyze_three_digit_hands(
             ))
         regions_by_side[side] = regions
     return regions_by_side
+
+
+def tapered_radial_scale(progress: float) -> float:
+    """Return the approved bounded taper over only the outer 72% of a digit."""
+    amount = _clamp((progress - 0.28) / 0.72)
+    eased = amount * amount * (3.0 - 2.0 * amount)
+    return 1.0 - 0.24 * eased
+
+
+def _centerline_point(points: tuple[Vector, Vector, Vector, Vector], progress: float) -> Vector:
+    joint_1, joint_2 = JOINT_PROGRESS
+    progress = _clamp(progress)
+    if progress <= joint_1:
+        return points[0].lerp(points[1], progress / max(joint_1, 1e-8))
+    if progress <= joint_2:
+        return points[1].lerp(points[2], (progress - joint_1) / max(joint_2 - joint_1, 1e-8))
+    return points[2].lerp(points[3], (progress - joint_2) / max(1.0 - joint_2, 1e-8))
+
+
+def _bone_centerline_points(
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+    region: DigitRegion,
+) -> tuple[Vector, Vector, Vector, Vector]:
+    side = region.side.lower()
+    bones = tuple(
+        armature.data.bones[bone_map[role]]
+        for role in (
+            f"finger_{region.index}_{side}",
+            f"finger_{region.index}_mid_{side}",
+            f"finger_{region.index}_tip_{side}",
+        )
+    )
+    return (
+        armature.matrix_world @ bones[0].head_local,
+        armature.matrix_world @ bones[0].tail_local,
+        armature.matrix_world @ bones[1].tail_local,
+        armature.matrix_world @ bones[2].tail_local,
+    )
+
+
+def _sample_width(samples: list[tuple[float, float]], start: float, end: float) -> float:
+    radii = sorted(radius for progress, radius in samples if start <= progress <= end)
+    if not radii:
+        return 0.0
+    percentile_index = min(len(radii) - 1, int((len(radii) - 1) * 0.90))
+    return radii[percentile_index] * 2.0
+
+
+def _mesh_adjacency(obj: bpy.types.Object, indices: set[int]) -> dict[int, set[int]]:
+    adjacency = {index: set() for index in indices}
+    for edge in obj.data.edges:
+        first, second = edge.vertices
+        if first in indices and second in indices:
+            adjacency[first].add(second)
+            adjacency[second].add(first)
+    return adjacency
+
+
+def _bounding_volume(points: list[Vector]) -> float:
+    if not points:
+        return 0.0
+    extents = [max(point[axis] for point in points) - min(point[axis] for point in points) for axis in range(3)]
+    return max(extents[0] * extents[1] * extents[2], 0.0)
+
+
+def refine_three_digit_surface(
+    armature: bpy.types.Object,
+    objects: list[bpy.types.Object],
+    dimensions: dict[str, Any],
+    bone_map: dict[str, str],
+    regions_by_side: dict[str, list[DigitRegion]],
+) -> dict[str, Any]:
+    """Conservatively taper and smooth the integrated source hand surface in place."""
+    object_by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
+    width = float(dimensions["width"])
+    sides: dict[str, dict[str, Any]] = {}
+    maximum_smoothing_displacement = 0.0
+    maximum_surface_displacement = 0.0
+
+    for side, regions in regions_by_side.items():
+        hand_name = bone_map[f"hand_{side.lower()}"]
+        hand_bone = armature.data.bones[hand_name]
+        hand_head = armature.matrix_world @ hand_bone.head_local
+        hand_tail = armature.matrix_world @ hand_bone.tail_local
+        hand_axis = (hand_tail - hand_head).normalized()
+        hand_length = max((hand_tail - hand_head).length, width * 0.06)
+        wrist_points_before: dict[tuple[str, int], Vector] = {}
+        palm_points_before: dict[tuple[str, int], Vector] = {}
+        for obj in object_by_name.values():
+            hand_group = obj.vertex_groups.get(hand_name)
+            if not hand_group:
+                continue
+            for vertex in obj.data.vertices:
+                assignment = next(
+                    (item for item in vertex.groups if item.group == hand_group.index and item.weight > 0.05),
+                    None,
+                )
+                if not assignment:
+                    continue
+                world = obj.matrix_world @ vertex.co
+                projection = (world - hand_head).dot(hand_axis)
+                if projection <= hand_length * 0.18:
+                    wrist_points_before[obj.name, vertex.index] = world.copy()
+                if projection <= hand_length * 0.46:
+                    palm_points_before[obj.name, vertex.index] = world.copy()
+
+        digit_reports: list[dict[str, Any]] = []
+        for region in regions:
+            centerline = _bone_centerline_points(armature, bone_map, region)
+            chain_axis = (centerline[-1] - centerline[0]).normalized()
+            chain_length = max((centerline[-1] - centerline[0]).length, 1e-8)
+            records_by_object: dict[str, list[HandVertexRecord]] = {}
+            for record in region.records:
+                records_by_object.setdefault(record.object_name, []).append(record)
+
+            before_samples: list[tuple[float, float]] = []
+            after_samples: list[tuple[float, float]] = []
+            root_transition_displacements: list[float] = []
+            digit_smoothing_max = 0.0
+            digit_surface_max = 0.0
+            for object_name, records in records_by_object.items():
+                obj = object_by_name[object_name]
+                indices = {record.vertex_index for record in records}
+                adjacency = _mesh_adjacency(obj, indices)
+                original = {index: (obj.matrix_world @ obj.data.vertices[index].co).copy() for index in indices}
+                tapered: dict[int, Vector] = {}
+                progresses: dict[int, float] = {}
+                for index, world in original.items():
+                    progress = _clamp((world - centerline[0]).dot(chain_axis) / chain_length)
+                    progresses[index] = progress
+                    center = _centerline_point(centerline, progress)
+                    radial = world - center
+                    before_samples.append((progress, radial.length))
+                    tapered[index] = center + radial * tapered_radial_scale(progress)
+
+                shaped: dict[int, Vector] = {}
+                smoothing_limit = width * 0.004
+                for index, point in tapered.items():
+                    progress = progresses[index]
+                    neighbors = adjacency[index]
+                    smoothing = Vector((0.0, 0.0, 0.0))
+                    if progress > 0.28 and neighbors:
+                        average = sum((tapered[neighbor] for neighbor in neighbors), Vector((0.0, 0.0, 0.0))) / len(neighbors)
+                        smoothing = average - point
+                        smoothing -= chain_axis * smoothing.dot(chain_axis)
+                        smoothing *= 0.16 * _smoothstep(0.28, 1.0, progress)
+                        if smoothing.length > smoothing_limit:
+                            smoothing = smoothing.normalized() * smoothing_limit
+                    shaped[index] = point + smoothing
+                    digit_smoothing_max = max(digit_smoothing_max, smoothing.length)
+
+                inverse = obj.matrix_world.inverted()
+                for index, world in shaped.items():
+                    displacement = world - original[index]
+                    digit_surface_max = max(digit_surface_max, displacement.length)
+                    if 0.28 <= progresses[index] <= 0.40:
+                        root_transition_displacements.append(displacement.length)
+                    local_before = obj.data.vertices[index].co.copy()
+                    local_after = inverse @ world
+                    local_displacement = local_after - local_before
+                    if obj.data.shape_keys:
+                        for key in obj.data.shape_keys.key_blocks:
+                            key.data[index].co += local_displacement
+                    obj.data.vertices[index].co = local_after
+                    center = _centerline_point(centerline, progresses[index])
+                    after_samples.append((progresses[index], (world - center).length))
+                obj.data.update()
+
+            root_width_before = _sample_width(before_samples, 0.16, 0.30)
+            root_width = _sample_width(after_samples, 0.16, 0.30)
+            tip_width_before = _sample_width(before_samples, 0.84, 1.0)
+            tip_width = _sample_width(after_samples, 0.84, 1.0)
+            continuity = 1.0 - max(root_transition_displacements, default=0.0) / max(root_width, 1e-8)
+            digit_reports.append({
+                "digit": region.index,
+                "rootWidthBefore": round(root_width_before, 8),
+                "rootWidth": round(root_width, 8),
+                "tipWidthBefore": round(tip_width_before, 8),
+                "tipWidth": round(tip_width, 8),
+                "rootTransitionContinuity": round(_clamp(continuity), 8),
+                "wristBoundaryMaxDisplacement": 0.0,
+                "maximumSurfaceDisplacement": round(digit_surface_max, 8),
+                "maximumSmoothingDisplacement": round(digit_smoothing_max, 8),
+            })
+            maximum_smoothing_displacement = max(maximum_smoothing_displacement, digit_smoothing_max)
+            maximum_surface_displacement = max(maximum_surface_displacement, digit_surface_max)
+
+        wrist_displacements = [
+            ((object_by_name[name].matrix_world @ object_by_name[name].data.vertices[index].co) - before).length
+            for (name, index), before in wrist_points_before.items()
+        ]
+        palm_points_after = [
+            object_by_name[name].matrix_world @ object_by_name[name].data.vertices[index].co
+            for name, index in palm_points_before
+        ]
+        wrist_max = max(wrist_displacements, default=0.0)
+        for digit_report in digit_reports:
+            digit_report["wristBoundaryMaxDisplacement"] = round(wrist_max, 8)
+        before_volume = _bounding_volume(list(palm_points_before.values()))
+        after_volume = _bounding_volume(palm_points_after)
+        sides[side.lower()] = {
+            "digitCount": len(digit_reports),
+            "digits": digit_reports,
+            "wristBoundaryVertexCount": len(wrist_points_before),
+            "wristBoundaryMaxDisplacement": round(wrist_max, 8),
+            "palmVertexCount": len(palm_points_before),
+            "palmVolumeRatio": round(after_volume / max(before_volume, 1e-8), 8) if before_volume else 1.0,
+        }
+
+    return {
+        "handAestheticVersion": HAND_AESTHETIC_VERSION,
+        "sides": sides,
+        "sourceSurfaceShaped": True,
+        "sourceSurfaceObjectCount": len(object_by_name),
+        "replacementHandObjectCount": 0,
+        "maximumSurfaceDisplacement": round(maximum_surface_displacement, 8),
+        "maximumSmoothingDisplacement": round(maximum_smoothing_displacement, 8),
+    }
 
 
 def _source_surface_topology(
@@ -271,6 +514,67 @@ def _collect_weight_stats(objects: list[bpy.types.Object]) -> dict[str, Any]:
         "vertexCount": sum(len(obj.data.vertices) for obj in objects if obj.type == "MESH"),
         "maxVertexInfluences": max(counts, default=0),
         "unweightedVertexCount": sum(count == 0 for count in counts),
+    }
+
+
+def _collect_aesthetic_weight_stats(
+    armature: bpy.types.Object,
+    objects: list[bpy.types.Object],
+    regions_by_side: dict[str, list[DigitRegion]],
+) -> dict[str, Any]:
+    unnormalized = 0
+    unweighted = 0
+    max_influences = 0
+    neighbor_tip_leakage = 0.0
+    region_lookup = {
+        (record.object_name, record.vertex_index): region
+        for regions in regions_by_side.values()
+        for region in regions
+        for record in region.records
+    }
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        group_names = {group.index: group.name for group in obj.vertex_groups}
+        for vertex in obj.data.vertices:
+            assignments = [
+                (group_names.get(item.group, ""), float(item.weight))
+                for item in vertex.groups
+                if item.weight > 1e-8
+                and (bone := armature.data.bones.get(group_names.get(item.group, "")))
+                and bone.use_deform
+            ]
+            max_influences = max(max_influences, len(assignments))
+            total = sum(weight for _, weight in assignments)
+            if not assignments:
+                unweighted += 1
+            elif abs(total - 1.0) > 1e-4:
+                unnormalized += 1
+
+            region = region_lookup.get((obj.name, vertex.index))
+            if not region:
+                continue
+            progress = _clamp(
+                ((obj.matrix_world @ vertex.co) - region.base).dot(region.axis)
+                / max((region.tip - region.base).length, 1e-8)
+            )
+            if progress < 0.82:
+                continue
+            own_prefix = f"Finger_{region.index:02d}_"
+            own_suffix = f".{region.side}"
+            leakage = sum(
+                weight
+                for name, weight in assignments
+                if name.startswith("Finger_")
+                and name.endswith(own_suffix)
+                and not name.startswith(own_prefix)
+            )
+            neighbor_tip_leakage = max(neighbor_tip_leakage, leakage)
+    return {
+        "maxInfluences": max_influences,
+        "unnormalizedVertices": unnormalized,
+        "unweightedVertices": unweighted,
+        "neighborTipLeakageMax": round(neighbor_tip_leakage, 8),
     }
 
 
@@ -525,25 +829,35 @@ def _validate_reusable_three_segment_hand_rig(
     armature: bpy.types.Object,
     objects: list[bpy.types.Object],
     expected_names: set[str],
+    expected_version: int = HAND_CONTRACT_VERSION,
 ) -> dict[str, Any]:
     """Fail closed unless an already-refined master still satisfies its hand contract."""
     violations: list[str] = []
-    if armature.get(HAND_CONTRACT_KEY) != HAND_CONTRACT_NAME or int(armature.get(HAND_CONTRACT_VERSION_KEY, 0)) != HAND_CONTRACT_VERSION:
+    expected_contract_name = LEGACY_HAND_CONTRACT_NAMES.get(expected_version, HAND_CONTRACT_NAME)
+    if (
+        armature.get(HAND_CONTRACT_KEY) != expected_contract_name
+        or int(armature.get(HAND_CONTRACT_VERSION_KEY, 0)) != expected_version
+    ):
         violations.append("armature is missing the validated three-segment hand contract marker")
     topology_mode = str(armature.get(HAND_TOPOLOGY_MODE_KEY, ""))
-    if topology_mode != SOURCE_SURFACE_TOPOLOGY_MODE:
+    if expected_version >= 2 and topology_mode != SOURCE_SURFACE_TOPOLOGY_MODE:
         violations.append(
             f"armature hand topology mode is {topology_mode!r}, expected {SOURCE_SURFACE_TOPOLOGY_MODE!r}"
         )
     marked_meshes = [
         obj for obj in objects
         if obj.type == "MESH"
-        and obj.get(HAND_CONTRACT_KEY) == HAND_CONTRACT_NAME
-        and int(obj.get(HAND_CONTRACT_VERSION_KEY, 0)) == HAND_CONTRACT_VERSION
-        and obj.get(HAND_TOPOLOGY_MODE_KEY) == SOURCE_SURFACE_TOPOLOGY_MODE
+        and obj.get(HAND_CONTRACT_KEY) == expected_contract_name
+        and int(obj.get(HAND_CONTRACT_VERSION_KEY, 0)) == expected_version
+        and (expected_version == 1 or obj.get(HAND_TOPOLOGY_MODE_KEY) == SOURCE_SURFACE_TOPOLOGY_MODE)
     ]
     if not marked_meshes:
         violations.append("source-surface hand contract has no marked character mesh")
+    if expected_version == HAND_CONTRACT_VERSION:
+        if armature.get(HAND_AESTHETIC_VERSION_KEY) != HAND_AESTHETIC_VERSION:
+            violations.append("armature is missing the validated hand aesthetic marker")
+        if not armature.get(HAND_AESTHETIC_REPORT_KEY):
+            violations.append("armature is missing the persisted hand aesthetic report")
 
     bones = armature.data.bones
     for side in ("L", "R"):
@@ -604,11 +918,14 @@ def _mark_validated_three_segment_hand_rig(
     armature: bpy.types.Object,
     objects: list[bpy.types.Object],
     topology: HandTopologyResult,
+    aesthetic_report: dict[str, Any],
 ) -> None:
     armature[HAND_CONTRACT_KEY] = HAND_CONTRACT_NAME
     armature[HAND_CONTRACT_VERSION_KEY] = HAND_CONTRACT_VERSION
     armature[HAND_SUPPORT_RING_COUNT_KEY] = 0
     armature[HAND_TOPOLOGY_MODE_KEY] = SOURCE_SURFACE_TOPOLOGY_MODE
+    armature[HAND_AESTHETIC_VERSION_KEY] = HAND_AESTHETIC_VERSION
+    armature[HAND_AESTHETIC_REPORT_KEY] = json.dumps(aesthetic_report, sort_keys=True)
     by_name = {obj.name: obj for obj in objects if obj.type == "MESH"}
     for object_name, rings in topology.ring_vertices.items():
         obj = by_name[object_name]
@@ -616,6 +933,54 @@ def _mark_validated_three_segment_hand_rig(
         obj[HAND_CONTRACT_VERSION_KEY] = HAND_CONTRACT_VERSION
         obj[HAND_SUPPORT_RING_COUNT_KEY] = 0
         obj[HAND_TOPOLOGY_MODE_KEY] = SOURCE_SURFACE_TOPOLOGY_MODE
+        obj[HAND_AESTHETIC_VERSION_KEY] = HAND_AESTHETIC_VERSION
+
+
+def _stored_aesthetic_report(armature: bpy.types.Object) -> dict[str, Any]:
+    try:
+        report = json.loads(str(armature[HAND_AESTHETIC_REPORT_KEY]))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("unvalidated three-segment hand rig: invalid persisted hand aesthetic report") from exc
+    if report.get("handAestheticVersion") != HAND_AESTHETIC_VERSION:
+        raise RuntimeError("unvalidated three-segment hand rig: stale persisted hand aesthetic report")
+    sides = report.get("sides") or {}
+    if set(sides) != {"l", "r"} or any(side.get("digitCount") != 3 for side in sides.values()):
+        raise RuntimeError("unvalidated three-segment hand rig: incomplete persisted hand aesthetic report")
+    return report
+
+
+def _shape_and_reweight_hands(
+    armature: bpy.types.Object,
+    objects: list[bpy.types.Object],
+    dimensions: dict[str, Any],
+    bone_map: dict[str, str],
+    regions_by_side: dict[str, list[DigitRegion]],
+    maximum_influences: int,
+) -> tuple[HandTopologyResult, dict[str, Any], int, int, dict[str, int]]:
+    topology = _source_surface_topology(objects, regions_by_side)
+    aesthetic_report = refine_three_digit_surface(
+        armature,
+        objects,
+        dimensions,
+        bone_map,
+        regions_by_side,
+    )
+    blended_vertices, support_isolation_count, joint_band_vertex_counts = _assign_segment_weights(
+        armature,
+        objects,
+        regions_by_side,
+        bone_map,
+        maximum_influences,
+        topology,
+    )
+    aesthetic_report.update(_collect_aesthetic_weight_stats(armature, objects, regions_by_side))
+    return (
+        topology,
+        aesthetic_report,
+        blended_vertices,
+        support_isolation_count,
+        joint_band_vertex_counts,
+    )
 
 
 def enhance_three_segment_hands(
@@ -647,9 +1012,81 @@ def enhance_three_segment_hands(
     }
     existing_names = {bone.name for bone in armature.data.bones}
     if expected_names.issubset(existing_names):
-        stats.update(_validate_reusable_three_segment_hand_rig(armature, objects, expected_names))
-        stats.update({"boneMap": bone_map, "fingerRig": True, "fingerRigEnhanced": False, "fingerRigReused": True,
-                      "fingerBoneCount": 18, "fingerSegmentCount": 3, "preserveVolumeSkinning": True})
+        contract_version = int(armature.get(HAND_CONTRACT_VERSION_KEY, 0))
+        if contract_version == HAND_CONTRACT_VERSION:
+            stats.update(
+                _validate_reusable_three_segment_hand_rig(
+                    armature,
+                    objects,
+                    expected_names,
+                    expected_version=HAND_CONTRACT_VERSION,
+                )
+            )
+            stats.update(_stored_aesthetic_report(armature))
+            stats.update({
+                "boneMap": bone_map,
+                "fingerRig": True,
+                "fingerRigEnhanced": False,
+                "fingerRigReused": True,
+                "handAestheticReused": True,
+                "fingerBoneCount": 18,
+                "fingerSegmentCount": 3,
+                "fingerTopologyMode": SOURCE_SURFACE_TOPOLOGY_MODE,
+                "preserveVolumeSkinning": True,
+            })
+            return stats, bone_map
+        if contract_version not in LEGACY_HAND_CONTRACT_NAMES:
+            raise RuntimeError(
+                f"unvalidated three-segment hand rig: unsupported contract version {contract_version}"
+            )
+        stats.update(
+            _validate_reusable_three_segment_hand_rig(
+                armature,
+                objects,
+                expected_names,
+                expected_version=contract_version,
+            )
+        )
+        regions_by_side = analyze_three_digit_hands(armature, objects, dimensions, bone_map)
+        (
+            topology,
+            aesthetic_report,
+            blended_vertices,
+            support_isolation_count,
+            joint_band_vertex_counts,
+        ) = _shape_and_reweight_hands(
+            armature,
+            objects,
+            dimensions,
+            bone_map,
+            regions_by_side,
+            maximum_influences,
+        )
+        aesthetic_report["handAestheticUpgradeFromVersion"] = contract_version
+        ring_diagnostics = _ring_diagnostics(armature, objects, regions_by_side, bone_map, topology)
+        stats.update(topology.stats)
+        stats.update(_collect_weight_stats(objects))
+        stats.update(aesthetic_report)
+        stats.update({
+            "boneMap": bone_map,
+            "fingerRig": True,
+            "fingerRigEnhanced": False,
+            "fingerRigReused": True,
+            "handAestheticEnhanced": True,
+            "handAestheticReused": False,
+            "fingerBoneCount": 18,
+            "fingerSegmentCount": 3,
+            "fingerWeightingMode": "isolated_digit_banded",
+            "fingerTopologyMode": SOURCE_SURFACE_TOPOLOGY_MODE,
+            "fingerBlendVertexCount": blended_vertices,
+            "handWeightedJointBandCount": len(joint_band_vertex_counts),
+            "handWeightedJointBandVertexCounts": joint_band_vertex_counts,
+            "preserveVolumeSkinning": True,
+            "handRingDiagnostics": ring_diagnostics,
+            "externalSupportIsolationCount": support_isolation_count,
+        })
+        _mark_validated_three_segment_hand_rig(armature, objects, topology, aesthetic_report)
+        armature["ip_avatar_bone_map"] = json.dumps(bone_map)
         return stats, bone_map
     conflicting = sorted(existing_names.intersection(expected_names))
     if set(conflicting) == legacy_two_segment_names and not existing_names.intersection(middle_names):
@@ -669,15 +1106,27 @@ def enhance_three_segment_hands(
     if conflicting:
         raise RuntimeError("partial three-segment finger rig cannot be refined repeatably: " + ", ".join(conflicting))
     regions_by_side = analyze_three_digit_hands(armature, objects, dimensions, bone_map)
-    topology = _source_surface_topology(objects, regions_by_side)
     added_names = _create_segment_bones(armature, regions_by_side, bone_map)
-    blended_vertices, support_isolation_count, joint_band_vertex_counts = _assign_segment_weights(
-        armature, objects, regions_by_side, bone_map, maximum_influences, topology
-    )
     bone_map = resolve_roles([bone.name for bone in armature.data.bones])
+    (
+        topology,
+        aesthetic_report,
+        blended_vertices,
+        support_isolation_count,
+        joint_band_vertex_counts,
+    ) = _shape_and_reweight_hands(
+        armature,
+        objects,
+        dimensions,
+        bone_map,
+        regions_by_side,
+        maximum_influences,
+    )
+    aesthetic_report["handAestheticUpgradeFromVersion"] = 0
     ring_diagnostics = _ring_diagnostics(armature, objects, regions_by_side, bone_map, topology)
     stats.update(topology.stats)
     stats.update(_collect_weight_stats(objects))
+    stats.update(aesthetic_report)
     stats.update({"boneMap": bone_map, "fingerRig": True, "fingerRigEnhanced": True, "fingerBoneCount": len(added_names),
                   "fingerSegmentCount": 3, "addedFingerBones": added_names, "fingerWeightingMode": "isolated_digit_banded",
                   "fingerTopologyMode": SOURCE_SURFACE_TOPOLOGY_MODE, "fingerBlendVertexCount": blended_vertices,
@@ -685,7 +1134,7 @@ def enhance_three_segment_hands(
                   "handWeightedJointBandVertexCounts": joint_band_vertex_counts,
                   "preserveVolumeSkinning": True, "handRingDiagnostics": ring_diagnostics,
                   "externalSupportIsolationCount": support_isolation_count})
-    _mark_validated_three_segment_hand_rig(armature, objects, topology)
+    _mark_validated_three_segment_hand_rig(armature, objects, topology, aesthetic_report)
     armature["ip_avatar_bone_map"] = json.dumps(bone_map)
     armature["ip_avatar_finger_rig_enhanced"] = True
     return stats, bone_map
