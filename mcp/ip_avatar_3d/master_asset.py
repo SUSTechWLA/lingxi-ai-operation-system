@@ -30,6 +30,24 @@ MASTER_COLLECTION = "IP_Character_Master"
 MASTER_VERSION_PROPERTY = "ip_aroll_master_version"
 MASTER_VERSION = 1
 REFINED_CAPABILITY_REPORT_PROPERTY = "ip_refined_master_capability_report"
+ORAL_DEPTH_CALIBRATION_PROPERTY = "ip_oral_depth_calibration_version"
+ORAL_DEPTH_CALIBRATION_VERSION = 1
+PUBLICATION_SCHEMA_VERSION = "tangying-refined-master-publication/v1"
+PUBLICATION_REPORT_FIELDS = frozenset(
+    {"schemaVersion", "stagedSha256", "capabilityReport", "publicationGates"}
+)
+PUBLICATION_GATE_NAMES = frozenset(
+    {
+        "masterCapabilities",
+        "sourceSurfacePreservation",
+        "visemePerformanceQa",
+        "renderQa",
+        "poseCollisions",
+        "comparisonEvidence",
+        "handPixelMargins",
+        "visualInspection",
+    }
+)
 ORAL_TOPOLOGY_VERSION = "continuous_arch_v1"
 REQUIRED_ORAL_ROLES = (
     "oral_cavity",
@@ -140,6 +158,30 @@ def _sha256_json(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validated_source_surface_hashes(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "uvSha256",
+        "materialSha256",
+    }:
+        raise RuntimeError("refined master is missing preserved source UV/material hashes")
+    hashes = {name: str(value[name]) for name in ("uvSha256", "materialSha256")}
+    if any(
+        len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        for digest in hashes.values()
+    ):
+        raise RuntimeError("refined master has invalid preserved source UV/material hashes")
+    return hashes
+
+
 def source_surface_hashes(objects: Iterable[Any]) -> dict[str, str]:
     """Hash live source-mesh UVs and material assignments deterministically."""
     meshes = sorted(
@@ -174,18 +216,6 @@ def source_surface_hashes(objects: Iterable[Any]) -> dict[str, str]:
                 "object": obj.name,
                 "slots": [material.name if material else "" for material in obj.data.materials],
                 "polygonMaterialIndices": [int(polygon.material_index) for polygon in obj.data.polygons],
-                "materials": [
-                    {
-                        "name": material.name,
-                        "diffuse": [round(float(value), 9) for value in material.diffuse_color],
-                        "useNodes": bool(material.use_nodes),
-                        "nodes": sorted(node.bl_idname for node in material.node_tree.nodes)
-                        if material.use_nodes and material.node_tree
-                        else [],
-                    }
-                    for material in obj.data.materials
-                    if material is not None
-                ],
             }
         )
     if not meshes:
@@ -226,13 +256,82 @@ def _infer_master_capabilities(objects: list[Any], armature: Any) -> dict[str, A
     }
 
 
-def _has_complete_refined_oral_roles(objects: Iterable[Any]) -> bool:
-    roles = {
-        str(obj.get("ip_face_topology_role") or "")
-        for obj in objects
-        if getattr(obj, "type", "") == "MESH"
+def _oral_role_objects(objects: Iterable[Any]) -> dict[str, list[Any]]:
+    matches: dict[str, list[Any]] = {role: [] for role in REQUIRED_ORAL_ROLES}
+    for obj in objects:
+        if getattr(obj, "type", "") != "MESH":
+            continue
+        role = str(obj.get("ip_face_topology_role") or "")
+        if role in matches:
+            matches[role].append(obj)
+    return matches
+
+
+def _require_exact_oral_roles(objects: Iterable[Any]) -> dict[str, Any]:
+    matches = _oral_role_objects(objects)
+    invalid = [role for role, role_objects in matches.items() if len(role_objects) != 1]
+    if invalid:
+        raise RuntimeError(
+            "refined master oral roles must resolve exactly once: " + ", ".join(invalid)
+        )
+    return {role: role_objects[0] for role, role_objects in matches.items()}
+
+
+def _front_y(obj: Any) -> float:
+    return min(float((obj.matrix_world @ vertex.co).y) for vertex in obj.data.vertices)
+
+
+def _shift_world_y(obj: Any, distance: float) -> None:
+    matrix = obj.matrix_world.copy()
+    matrix.translation.y += float(distance)
+    obj.matrix_world = matrix
+
+
+def _calibrate_oral_depth_order(
+    oral_objects: Mapping[str, Any],
+    dimensions: Mapping[str, Any],
+) -> None:
+    """Keep teeth in front of gums and the cavity while preserving source surfaces."""
+    calibration_versions = {
+        role: obj.get(ORAL_DEPTH_CALIBRATION_PROPERTY) for role, obj in oral_objects.items()
     }
-    return set(REQUIRED_ORAL_ROLES).issubset(roles)
+    if any(version is not None for version in calibration_versions.values()):
+        if not all(
+            type(version) is int and version == ORAL_DEPTH_CALIBRATION_VERSION
+            for version in calibration_versions.values()
+        ):
+            raise RuntimeError("refined master has inconsistent oral depth calibration metadata")
+        return
+
+    depth = float(dimensions.get("depth", 0.0))
+    dental_forward_offset = max(depth * 0.017, 1e-5)
+    for role in ("upper_teeth", "lower_teeth"):
+        _shift_world_y(oral_objects[role], -dental_forward_offset)
+
+    clearance = max(depth * 0.004, 1e-5)
+    dental_front = min(
+        _front_y(oral_objects[role]) for role in ("upper_teeth", "lower_teeth")
+    )
+    for role in ("upper_gum", "lower_gum"):
+        gum = oral_objects[role]
+        required_front = dental_front + clearance
+        current_front = _front_y(gum)
+        if current_front < required_front:
+            _shift_world_y(gum, required_front - current_front)
+
+    cavity = oral_objects["oral_cavity"]
+    foreground_back = max(
+        _front_y(oral_objects[role])
+        for role in ("upper_teeth", "lower_teeth", "upper_gum", "lower_gum")
+    )
+    required_cavity_front = foreground_back + clearance
+    cavity_front = _front_y(cavity)
+    if cavity_front < required_cavity_front:
+        _shift_world_y(cavity, required_cavity_front - cavity_front)
+    for obj in oral_objects.values():
+        obj[ORAL_DEPTH_CALIBRATION_PROPERTY] = ORAL_DEPTH_CALIBRATION_VERSION
+    if bpy is not None:
+        bpy.context.view_layer.update()
 
 
 def seal_master_capabilities(capabilities: MutableMapping[str, Any]) -> str:
@@ -240,6 +339,13 @@ def seal_master_capabilities(capabilities: MutableMapping[str, Any]) -> str:
     if hand_refinement is None:
         raise RuntimeError("refined master sealing requires Blender hand refinement")
     _objects, armature, bone_map, dimensions, hand_objects = _capability_inputs(capabilities)
+    expected_hashes = _validated_source_surface_hashes(
+        capabilities.get("sourceSurfaceHashes")
+    )
+    if source_surface_hashes(hand_objects) != expected_hashes:
+        raise RuntimeError(
+            "refined master preserved source UV/material hashes do not match captured values"
+        )
     hand_report = hand_refinement._stored_aesthetic_report(armature)
     hand_regions = hand_refinement.analyze_three_digit_hands(
         armature, hand_objects, dimensions, bone_map
@@ -265,7 +371,6 @@ def seal_master_capabilities(capabilities: MutableMapping[str, Any]) -> str:
         for obj in marked_objects:
             obj[hand_refinement.HAND_AESTHETIC_SIGNATURE_KEY] = previous
         raise
-    capabilities["sourceSurfaceHashes"] = source_surface_hashes(hand_objects)
     return signature
 
 
@@ -275,19 +380,7 @@ def validate_master_capabilities(capabilities: Mapping[str, Any]) -> dict[str, A
         raise RuntimeError("refined master validation requires Blender refinement modules")
     objects, armature, bone_map, dimensions, hand_objects = _capability_inputs(capabilities)
 
-    role_objects: dict[str, list[Any]] = {role: [] for role in REQUIRED_ORAL_ROLES}
-    for obj in objects:
-        if getattr(obj, "type", "") != "MESH":
-            continue
-        role = str(obj.get("ip_face_topology_role") or "")
-        if role in role_objects:
-            role_objects[role].append(obj)
-    invalid_roles = [role for role, matches in role_objects.items() if len(matches) != 1]
-    if invalid_roles:
-        raise RuntimeError(
-            "refined master oral roles must resolve exactly once: " + ", ".join(invalid_roles)
-        )
-    oral_objects = {role: matches[0] for role, matches in role_objects.items()}
+    oral_objects = _require_exact_oral_roles(objects)
     stale_versions = [
         role
         for role, obj in oral_objects.items()
@@ -333,9 +426,9 @@ def validate_master_capabilities(capabilities: Mapping[str, Any]) -> dict[str, A
     hand_refinement._validate_current_aesthetic_report(
         armature, hand_objects, bone_map, hand_regions, hand_report
     )
-    expected_hashes = dict(capabilities.get("sourceSurfaceHashes") or {})
-    if set(expected_hashes) != {"uvSha256", "materialSha256"}:
-        raise RuntimeError("refined master is missing preserved source UV/material hashes")
+    expected_hashes = _validated_source_surface_hashes(
+        capabilities.get("sourceSurfaceHashes")
+    )
     current_hashes = source_surface_hashes(hand_objects)
     if current_hashes != expected_hashes:
         raise RuntimeError("refined master source UV/material hashes no longer match live meshes")
@@ -383,9 +476,48 @@ def publish_refined_master(
         raise RuntimeError(f"unexpected refined master publish target: {final}")
     if not staged.is_file() or staged.suffix.lower() != ".blend":
         raise RuntimeError(f"staged refined master is missing: {staged}")
+    with staged.open("rb") as source:
+        header = source.read(7)
+        if not (
+            header == b"BLENDER"
+            or header.startswith(b"\x28\xb5\x2f\xfd")
+            or header.startswith(b"\x1f\x8b")
+        ):
+            raise RuntimeError(f"staged refined master has no Blender file header: {staged}")
+    if staged.name != "main-ip-aroll-master-refined.blend" or staged.parent.name != "staging":
+        raise RuntimeError(
+            "refined master must publish from staging/main-ip-aroll-master-refined.blend"
+        )
+    if staged == final:
+        raise RuntimeError("staged and published refined master paths must differ")
+    if not isinstance(report, Mapping) or set(report) != PUBLICATION_REPORT_FIELDS:
+        raise RuntimeError("refined master publication report schema is invalid")
+    if report.get("schemaVersion") != PUBLICATION_SCHEMA_VERSION:
+        raise RuntimeError("refined master publication report schema is invalid")
     gates = report.get("publicationGates")
-    if not isinstance(gates, Mapping) or not gates or not all(value is True for value in gates.values()):
+    if not isinstance(gates, Mapping) or set(gates) != PUBLICATION_GATE_NAMES:
+        raise RuntimeError("refined master publication gate schema is invalid")
+    if not all(gates[name] is True for name in PUBLICATION_GATE_NAMES):
         raise RuntimeError(f"refined master publication gates failed: {gates!r}")
+    staged_sha256 = _sha256_file(staged)
+    if report.get("stagedSha256") != staged_sha256:
+        raise RuntimeError("refined master staged SHA-256 mismatch")
+
+    blender = _require_bpy()
+    try:
+        blender.ops.wm.open_mainfile(
+            filepath=str(staged), load_ui=False, use_scripts=False
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"cannot load staged refined master: {staged}") from exc
+    validated = validate_master_collection(
+        blender.data.collections.get(MASTER_COLLECTION), staged
+    )
+    live_capabilities = validated.get("capabilities")
+    if not isinstance(live_capabilities, Mapping):
+        raise RuntimeError("staged refined master has no live capability report")
+    if report.get("capabilityReport") != live_capabilities:
+        raise RuntimeError("refined master live capability report mismatch")
 
     final.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -398,13 +530,22 @@ def publish_refined_master(
             target.flush()
             os.fsync(target.fileno())
         os.replace(temporary, final)
+        directory_descriptor = os.open(final.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     finally:
         temporary.unlink(missing_ok=True)
+    final_sha256 = _sha256_file(final)
+    if final_sha256 != staged_sha256:  # pragma: no cover - guarded by the atomic copy.
+        raise RuntimeError("published refined master SHA-256 does not match staging")
     return {
         "published": True,
         "stagedPath": str(staged),
         "finalPath": str(final),
-        "sha256": hashlib.sha256(final.read_bytes()).hexdigest(),
+        "sha256": final_sha256,
+        "capabilityReport": dict(live_capabilities),
     }
 
 
@@ -522,6 +663,8 @@ def save_master_collection(
     character_objects: Iterable[Any],
     armature: Any,
     output_path: Path,
+    refined_intent: bool | None = None,
+    expected_source_surface_hashes: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Save a versioned, self-contained character master Blend."""
     objects = _unique_objects([*character_objects, armature])
@@ -529,20 +672,36 @@ def save_master_collection(
     output_path = Path(output_path).expanduser().resolve()
     if output_path.suffix.lower() != ".blend":
         raise RuntimeError(f"master output must be a .blend file: {output_path}")
-    refined = _has_complete_refined_oral_roles(objects)
+    if refined_intent is not None and type(refined_intent) is not bool:
+        raise RuntimeError("refined_intent must be an explicit boolean")
+    canonical_refined_target = (
+        output_path.name == "main-ip-aroll-master-refined.blend"
+        and output_path.parent.name == "staging"
+    )
+    refined = refined_intent is True or (
+        refined_intent is None and canonical_refined_target
+    )
     capabilities_report: dict[str, Any] | None = None
     capabilities: dict[str, Any] | None = None
     if refined:
-        if (
-            output_path.name != "main-ip-aroll-master-refined.blend"
-            or output_path.parent.name != "staging"
-        ):
+        if not canonical_refined_target:
             raise RuntimeError(
                 "refined master must be built to staging/main-ip-aroll-master-refined.blend"
             )
+        oral_objects = _require_exact_oral_roles(objects)
         capabilities = _infer_master_capabilities(objects, armature)
+        _calibrate_oral_depth_order(oral_objects, capabilities["dimensions"])
+        capabilities["sourceSurfaceHashes"] = _validated_source_surface_hashes(
+            expected_source_surface_hashes
+        )
         seal_master_capabilities(capabilities)
         capabilities_report = validate_master_capabilities(capabilities)
+    elif output_path.name == "main-ip-aroll-master-refined.blend":
+        raise RuntimeError(
+            "refined master requires explicit intent and the canonical staging path"
+        )
+    elif expected_source_surface_hashes is not None:
+        raise RuntimeError("source surface hashes are only valid for a refined master build")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     collection = ensure_master_collection(objects, armature)
     collection[MASTER_VERSION_PROPERTY] = MASTER_VERSION

@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -44,6 +45,35 @@ MIN_OPEN_FIST_PIXEL_DIFFERENCE = 0.012
 MIN_FINGER_ROLL_PIXEL_DIFFERENCE = 0.0015
 MIN_SILHOUETTE_COVERAGE = 0.001
 MAX_SILHOUETTE_COVERAGE = 0.96
+MIN_HAND_PIXEL_MARGIN = 0.04
+MASK_COLORS = {
+    "oral_cavity": (0.0, 1.0, 1.0, 1.0),
+    "upper_teeth": (1.0, 0.0, 0.0, 1.0),
+    "lower_teeth": (1.0, 1.0, 0.0, 1.0),
+    "upper_gum": (1.0, 0.0, 1.0, 1.0),
+    "lower_gum": (1.0, 1.0, 1.0, 1.0),
+    "tongue": (0.0, 1.0, 0.0, 1.0),
+    "hand": (0.0, 0.0, 1.0, 1.0),
+}
+CONTACT_SHEET_LABELS = (
+    "Rest",
+    "MBP",
+    "A",
+    "E",
+    "O",
+    "U",
+    "Smile",
+    "Surprise",
+    "relaxed",
+    "open",
+    "fist",
+    "pinch",
+    "count 1",
+    "count 2",
+    "count 3",
+    "point",
+    "camera-facing wave",
+)
 
 
 @dataclass(frozen=True)
@@ -192,14 +222,14 @@ def required_relative_paths() -> tuple[str, ...]:
     return tuple(sample.path for sample in QA_SAMPLES)
 
 
-def _shape_key_owners(scene: Any) -> dict[str, Any]:
-    owners: dict[str, Any] = {}
+def _shape_key_owners(scene: Any) -> dict[str, list[Any]]:
+    owners: dict[str, list[Any]] = {}
     for obj in sorted(scene.objects, key=lambda item: item.name):
         shape_keys = getattr(getattr(obj, "data", None), "shape_keys", None)
         if not shape_keys:
             continue
         for key in shape_keys.key_blocks:
-            owners.setdefault(key.name, obj)
+            owners.setdefault(key.name, []).append(obj)
     return owners
 
 
@@ -283,9 +313,10 @@ def validate_scene_contract(
     if missing_shapes:
         violations.append(f"missing required Shape Keys: {', '.join(missing_shapes)}")
     squint_owners = {
-        shape_owners[name]
+        owner
         for name in ("Eye_Squint.L", "Eye_Squint.R")
         if name in shape_owners
+        for owner in shape_owners[name]
     }
     if squint_owners and not all(
         str(owner.get("blink_capability") or "") == FACE_CAPABILITY for owner in squint_owners
@@ -374,19 +405,20 @@ def _reset_armature_pose(scene: Any, armature: Any) -> None:
 
 def _activate_shape_keys(shape_owners: Mapping[str, Any], values: Mapping[str, float]) -> None:
     seen: set[int] = set()
-    for owner in shape_owners.values():
-        if id(owner) in seen:
-            continue
-        seen.add(id(owner))
-        shape_keys = owner.data.shape_keys
-        if shape_keys.animation_data:
-            shape_keys.animation_data.action = None
-        for key in shape_keys.key_blocks:
-            if key.name != "Basis":
-                key.value = 0.0
+    for owners in shape_owners.values():
+        for owner in owners:
+            if id(owner) in seen:
+                continue
+            seen.add(id(owner))
+            shape_keys = owner.data.shape_keys
+            if shape_keys.animation_data:
+                shape_keys.animation_data.action = None
+            for key in shape_keys.key_blocks:
+                if key.name != "Basis":
+                    key.value = 0.0
     for name, value in values.items():
-        owner = shape_owners[name]
-        owner.data.shape_keys.key_blocks[name].value = float(value)
+        for owner in shape_owners[name]:
+            owner.data.shape_keys.key_blocks[name].value = float(value)
 
 
 def _apply_open_pose(armature: Any, bone_map: dict[str, str]) -> None:
@@ -446,6 +478,38 @@ def _pose_points(armature: Any, bone_map: dict[str, str], side: str) -> list[Any
     return points
 
 
+def _hand_surface_points(
+    scene: Any,
+    armature: Any,
+    bone_map: Mapping[str, str],
+    side: str,
+) -> list[Any]:
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    points: list[Any] = []
+    for obj in _character_meshes(scene, armature):
+        if str(obj.get("ip_face_topology_role") or "") in master_asset.REQUIRED_ORAL_ROLES:
+            continue
+        target_indices = _hand_face_vertex_indices(obj, bone_map, side)
+        if not target_indices:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh(preserve_all_data_layers=True)
+        owns_mesh = mesh is not None
+        if mesh is None:
+            mesh = evaluated.data
+        try:
+            if max(target_indices) >= len(mesh.vertices):
+                continue
+            points.extend(
+                evaluated.matrix_world @ mesh.vertices[index].co
+                for index in target_indices
+            )
+        finally:
+            if owns_mesh:
+                evaluated.to_mesh_clear()
+    return points or _pose_points(armature, dict(bone_map), side)
+
+
 def _get_or_create_camera(name: str) -> Any:
     existing = bpy.data.objects.get(name)
     if existing is not None and existing.type != "CAMERA":
@@ -484,17 +548,26 @@ def _frame_camera(
 
 def _configure_close_cameras(scene: Any, armature: Any, bone_map: dict[str, str]) -> None:
     _set_action_sample(scene, armature, "Gesture_OpenHand", 30)
-    _frame_camera(HAND_CLOSE_CAMERA_RIGHT, _pose_points(armature, bone_map, "r"))
+    _frame_camera(
+        HAND_CLOSE_CAMERA_RIGHT,
+        _hand_surface_points(scene, armature, bone_map, "r"),
+    )
     _set_action_sample(scene, armature, "Aroll_Explain_Left", 30)
-    _frame_camera(HAND_CLOSE_CAMERA_LEFT, _pose_points(armature, bone_map, "l"))
+    _frame_camera(
+        HAND_CLOSE_CAMERA_LEFT,
+        _hand_surface_points(scene, armature, bone_map, "l"),
+    )
     _set_action_sample(scene, armature, "Aroll_Idle_Listening", 30)
     _frame_camera(
         HAND_RELAXED_CAMERA_RIGHT,
-        _pose_points(armature, bone_map, "r"),
+        _hand_surface_points(scene, armature, bone_map, "r"),
         distance_scale=7.5,
     )
     _set_action_sample(scene, armature, "Gesture_Wave", 30)
-    _frame_camera(HAND_WAVE_CAMERA_RIGHT, _pose_points(armature, bone_map, "r"))
+    _frame_camera(
+        HAND_WAVE_CAMERA_RIGHT,
+        _hand_surface_points(scene, armature, bone_map, "r"),
+    )
 
     _reset_armature_pose(scene, armature)
     bpy.context.view_layer.update()
@@ -590,7 +663,222 @@ def _projected_vertex_count(scene: Any, camera: Any, obj: Any) -> int:
             evaluated.to_mesh_clear()
 
 
-def _oral_render_evidence(scene: Any, camera: Any) -> dict[str, Any]:
+def _mask_material(name: str, color: tuple[float, float, float, float]) -> Any:
+    material = bpy.data.materials.new(name)
+    material.diffuse_color = color
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    emission = nodes.new("ShaderNodeEmission")
+    emission.inputs["Color"].default_value = color
+    emission.inputs["Strength"].default_value = 1.0
+    material.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+    return material
+
+
+def _hand_vertex_indices(
+    obj: Any,
+    bone_map: Mapping[str, str],
+    side: str,
+) -> set[int]:
+    roles = {f"hand_{side}"} | {
+        role
+        for digit in (1, 2, 3)
+        for role in aroll_actions.chain_roles(side, digit).values()
+    }
+    bone_names = {bone_map[role] for role in roles if role in bone_map}
+    group_indices = {
+        group.index for group in obj.vertex_groups if group.name in bone_names
+    }
+    if not group_indices:
+        return set()
+    return {
+        vertex.index
+        for vertex in obj.data.vertices
+        if any(
+            membership.group in group_indices and float(membership.weight) > 1e-6
+            for membership in vertex.groups
+        )
+    }
+
+
+def _hand_face_indices(
+    obj: Any,
+    bone_map: Mapping[str, str],
+    side: str,
+) -> set[int]:
+    weighted_vertices = _hand_vertex_indices(obj, bone_map, side)
+    return {
+        polygon.index
+        for polygon in obj.data.polygons
+        if sum(index in weighted_vertices for index in polygon.vertices)
+        >= max(1, (len(polygon.vertices) + 1) // 2)
+    }
+
+
+def _hand_face_vertex_indices(
+    obj: Any,
+    bone_map: Mapping[str, str],
+    side: str,
+) -> set[int]:
+    face_indices = _hand_face_indices(obj, bone_map, side)
+    return {
+        vertex_index
+        for polygon in obj.data.polygons
+        if polygon.index in face_indices
+        for vertex_index in polygon.vertices
+    }
+
+
+def _read_color_mask(path: Path) -> tuple[int, int, list[float]]:
+    image = bpy.data.images.load(str(path), check_existing=False)
+    try:
+        width, height = (int(value) for value in image.size)
+        return width, height, list(image.pixels[:])
+    finally:
+        bpy.data.images.remove(image)
+
+
+def _pixel_frame_metrics(
+    width: int,
+    height: int,
+    indices: Iterable[int],
+) -> dict[str, Any]:
+    active = list(indices)
+    if not active:
+        return {
+            "pixelCount": 0,
+            "bounds": None,
+            "marginPixels": -1,
+            "marginFraction": -1.0,
+            "borderTouching": True,
+        }
+    xs = [index % width for index in active]
+    ys = [index // width for index in active]
+    bounds = [min(xs), min(ys), max(xs), max(ys)]
+    margin_pixels = min(
+        bounds[0],
+        bounds[1],
+        width - 1 - bounds[2],
+        height - 1 - bounds[3],
+    )
+    return {
+        "pixelCount": len(active),
+        "bounds": bounds,
+        "marginPixels": margin_pixels,
+        "marginFraction": round(
+            float(margin_pixels) / max(1, min(width, height) - 1), 6
+        ),
+        "borderTouching": margin_pixels == 0,
+    }
+
+
+def _render_pixel_mask(
+    scene: Any,
+    path: Path,
+    character_meshes: Iterable[Any],
+    bone_map: Mapping[str, str],
+    hand_side: str,
+) -> dict[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    materials = {
+        "occluder": _mask_material("QA_Mask_Occluder", (0.0, 0.0, 0.0, 1.0)),
+        **{
+            role: _mask_material(f"QA_Mask_{role}", color)
+            for role, color in MASK_COLORS.items()
+        },
+    }
+    snapshots: list[tuple[Any, Any, Any]] = []
+    previous_filepath = scene.render.filepath
+    view_settings = scene.view_settings
+    previous_view = (
+        view_settings.view_transform,
+        view_settings.look,
+        float(view_settings.exposure),
+        float(view_settings.gamma),
+    )
+    try:
+        view_settings.view_transform = "Standard"
+        view_settings.look = "None"
+        view_settings.exposure = 0.0
+        view_settings.gamma = 1.0
+        for obj in sorted(character_meshes, key=lambda item: item.name):
+            original_mesh = obj.data
+            mask_mesh = original_mesh.copy()
+            snapshots.append((obj, original_mesh, mask_mesh))
+            obj.data = mask_mesh
+            mask_mesh.materials.clear()
+            role = str(obj.get("ip_face_topology_role") or "")
+            if role in master_asset.REQUIRED_ORAL_ROLES:
+                mask_mesh.materials.append(materials[role])
+                for polygon in mask_mesh.polygons:
+                    polygon.material_index = 0
+                continue
+
+            mask_mesh.materials.append(materials["occluder"])
+            target_faces = (
+                _hand_face_indices(obj, bone_map, hand_side)
+                if hand_side
+                else set()
+            )
+            if not target_faces:
+                for polygon in mask_mesh.polygons:
+                    polygon.material_index = 0
+                continue
+            mask_mesh.materials.append(materials["hand"])
+            for polygon in mask_mesh.polygons:
+                polygon.material_index = int(polygon.index in target_faces)
+
+        scene.render.filepath = str(path)
+        bpy.context.view_layer.update()
+        bpy.ops.render.render(write_still=True)
+    finally:
+        scene.render.filepath = previous_filepath
+        (
+            view_settings.view_transform,
+            view_settings.look,
+            view_settings.exposure,
+            view_settings.gamma,
+        ) = previous_view
+        for obj, original_mesh, mask_mesh in reversed(snapshots):
+            obj.data = original_mesh
+            bpy.data.meshes.remove(mask_mesh)
+        for material in materials.values():
+            bpy.data.materials.remove(material)
+        bpy.context.view_layer.update()
+
+    width, height, pixels = _read_color_mask(path)
+    role_by_bits = {
+        tuple(channel > 0.5 for channel in color[:3]): role
+        for role, color in MASK_COLORS.items()
+    }
+    indices: dict[str, list[int]] = {role: [] for role in MASK_COLORS}
+    for pixel_index, offset in enumerate(range(0, len(pixels), 4)):
+        red, green, blue, alpha = pixels[offset : offset + 4]
+        if alpha < 0.05:
+            continue
+        bits = (red >= 0.08, green >= 0.08, blue >= 0.08)
+        role = role_by_bits.get(bits)
+        if role is not None:
+            indices[role].append(pixel_index)
+    return {
+        "path": str(path),
+        "width": width,
+        "height": height,
+        "rolePixelCounts": {
+            role: len(role_indices) for role, role_indices in indices.items()
+        },
+        "handPixelFrame": _pixel_frame_metrics(width, height, indices["hand"]),
+    }
+
+
+def _oral_render_evidence(
+    scene: Any,
+    camera: Any,
+    rendered_pixel_counts: Mapping[str, int],
+    mask_path: str,
+) -> dict[str, Any]:
     role_objects = {
         role: [
             obj
@@ -611,19 +899,31 @@ def _oral_render_evidence(scene: Any, camera: Any) -> dict[str, Any]:
             "objects": [obj.name for obj in objects],
             "renderEnabled": bool(objects) and all(not obj.hide_render for obj in objects),
             "projectedVertexSamples": projected,
-            "visibleInCamera": projected > 0,
+            "visiblePixelCount": int(rendered_pixel_counts.get(role, 0)),
+            "visibleInCamera": int(rendered_pixel_counts.get(role, 0)) > 0,
         }
+    upper_teeth_pixels = int(rendered_pixel_counts.get("upper_teeth", 0))
+    lower_teeth_pixels = int(rendered_pixel_counts.get("lower_teeth", 0))
+    tongue_pixels = int(rendered_pixel_counts.get("tongue", 0))
     return {
         "objectVisibility": object_visibility,
         "oralComponentCounts": component_counts,
         "dentalExposure": {
             "upperProjectedVertexSamples": projected_counts["upper_teeth"],
             "lowerProjectedVertexSamples": projected_counts["lower_teeth"],
-            "visible": projected_counts["upper_teeth"] + projected_counts["lower_teeth"] > 0,
+            "upperVisiblePixelCount": upper_teeth_pixels,
+            "lowerVisiblePixelCount": lower_teeth_pixels,
+            "visiblePixelCount": upper_teeth_pixels + lower_teeth_pixels,
+            "visible": upper_teeth_pixels + lower_teeth_pixels > 0,
+            "occlusionAware": True,
+            "maskPath": mask_path,
         },
         "tongueExposure": {
             "projectedVertexSamples": projected_counts["tongue"],
-            "visible": projected_counts["tongue"] > 0,
+            "visiblePixelCount": tongue_pixels,
+            "visible": tongue_pixels > 0,
+            "occlusionAware": True,
+            "maskPath": mask_path,
         },
     }
 
@@ -648,30 +948,6 @@ def _extrema_frame_intersections(
                 }
             )
     return findings
-
-
-def _hand_frame_margin(
-    scene: Any,
-    camera: Any,
-    armature: Any,
-    bone_map: Mapping[str, str],
-    side: str,
-) -> float:
-    from bpy_extras.object_utils import world_to_camera_view
-
-    coordinates = [
-        world_to_camera_view(scene, camera, point)
-        for point in _pose_points(armature, dict(bone_map), side)
-    ]
-    return round(
-        float(
-            min(
-                min(coordinate.x, 1.0 - coordinate.x, coordinate.y, 1.0 - coordinate.y)
-                for coordinate in coordinates
-            )
-        ),
-        6,
-    )
 
 
 def _configure_render(scene: Any, resolution: int) -> None:
@@ -782,7 +1058,25 @@ def _render_sample(
     path.parent.mkdir(parents=True, exist_ok=True)
     scene.render.filepath = str(path)
     bpy.ops.render.render(write_still=True)
-    evidence = _oral_render_evidence(scene, camera)
+    hand_side = ""
+    if sample.kind in {"hand", "digit"}:
+        hand_side = sample.side or (
+            "l" if sample.camera == HAND_CLOSE_CAMERA_LEFT else "r"
+        )
+    mask_relative_path = Path("masks") / sample.path
+    mask = _render_pixel_mask(
+        scene,
+        output_dir / mask_relative_path,
+        contract["characterMeshes"],
+        bone_map,
+        hand_side,
+    )
+    evidence = _oral_render_evidence(
+        scene,
+        camera,
+        mask["rolePixelCounts"],
+        mask_relative_path.as_posix(),
+    )
     result = {
         "label": sample.label,
         "kind": sample.kind,
@@ -796,14 +1090,12 @@ def _render_sample(
         ),
         "shapeKeys": dict(sample.shape_keys),
         "framing": _camera_metrics(camera),
+        "pixelMaskPath": mask_relative_path.as_posix(),
         **evidence,
         "extremaFrameIntersections": _extrema_frame_intersections(armature, bone_map),
     }
     if sample.kind in {"hand", "digit"}:
-        side = sample.side or ("l" if sample.camera == HAND_CLOSE_CAMERA_LEFT else "r")
-        result["handFrameMargin"] = _hand_frame_margin(
-            scene, camera, armature, bone_map, side
-        )
+        result["handPixelFrame"] = mask["handPixelFrame"]
     return result
 
 
@@ -849,6 +1141,39 @@ def alpha_mask_difference(first: Path, second: Path) -> float:
         )
     return round(
         sum(left != right for left, right in zip(first_mask, second_mask)) / len(first_mask),
+        6,
+    )
+
+
+def role_mask_difference(first: Path, second: Path, role: str) -> float:
+    if role not in MASK_COLORS:
+        raise RuntimeError(f"unknown rendered mask role: {role}")
+    first_width, first_height, first_pixels = _read_color_mask(first)
+    second_width, second_height, second_pixels = _read_color_mask(second)
+    if (first_width, first_height) != (second_width, second_height):
+        raise RuntimeError(
+            "role-mask comparison requires equal dimensions: "
+            f"{first.name}={first_width}x{first_height}, "
+            f"{second.name}={second_width}x{second_height}"
+        )
+    target_bits = tuple(channel > 0.5 for channel in MASK_COLORS[role][:3])
+
+    def selected(pixels: list[float]) -> tuple[bool, ...]:
+        return tuple(
+            alpha >= 0.05
+            and (red >= 0.08, green >= 0.08, blue >= 0.08) == target_bits
+            for red, green, blue, alpha in (
+                pixels[offset : offset + 4] for offset in range(0, len(pixels), 4)
+            )
+        )
+
+    first_mask = selected(first_pixels)
+    second_mask = selected(second_pixels)
+    union_count = sum(left or right for left, right in zip(first_mask, second_mask))
+    if union_count == 0:
+        raise RuntimeError(f"rendered {role} masks are both empty")
+    return round(
+        sum(left != right for left, right in zip(first_mask, second_mask)) / union_count,
         6,
     )
 
@@ -908,12 +1233,97 @@ def require_files(output_dir: Path, relative_paths: Iterable[str]) -> None:
         raise RuntimeError("A-roll QA required files are missing: " + ", ".join(missing))
 
 
+BITMAP_FONT = {
+    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
+    "G": ("01111", "10000", "10000", "10111", "10001", "10001", "01111"),
+    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+    "J": ("00111", "00010", "00010", "00010", "10010", "10010", "01100"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
+    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
+    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
+    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
+    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
+    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
+    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
+    "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
+    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
+    "5": ("11111", "10000", "10000", "11110", "00001", "00001", "11110"),
+    "6": ("01110", "10000", "10000", "11110", "10001", "10001", "01110"),
+    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
+    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
+    "9": ("01110", "10001", "10001", "01111", "00001", "00001", "01110"),
+    "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
+    " ": ("00000",) * 7,
+}
+
+
+def _write_bitmap_label(path: Path, label: str, width: int, height: int) -> None:
+    _require_blender()
+    text = label.upper()
+    glyph_width = max(1, len(text) * 6 - 1)
+    scale = max(1, min(4, (width - 16) // glyph_width, (height - 8) // 7))
+    text_width = glyph_width * scale
+    text_height = 7 * scale
+    origin_x = max(0, (width - text_width) // 2)
+    origin_y = max(0, (height - text_height) // 2)
+    background = (0.035, 0.045, 0.055, 1.0)
+    foreground = (0.92, 0.95, 0.96, 1.0)
+    accent = (0.10, 0.58, 0.48, 1.0)
+    pixels = list(background) * (width * height)
+    for y in range(min(2, height)):
+        for x in range(width):
+            offset = (y * width + x) * 4
+            pixels[offset : offset + 4] = accent
+    for character_index, character in enumerate(text):
+        glyph = BITMAP_FONT.get(character, BITMAP_FONT[" "])
+        for row, bits in enumerate(glyph):
+            for column, enabled in enumerate(bits):
+                if enabled != "1":
+                    continue
+                for pixel_y in range(scale):
+                    for pixel_x in range(scale):
+                        x = origin_x + (character_index * 6 + column) * scale + pixel_x
+                        y = origin_y + (6 - row) * scale + pixel_y
+                        if 0 <= x < width and 0 <= y < height:
+                            offset = (y * width + x) * 4
+                            pixels[offset : offset + 4] = foreground
+    image = bpy.data.images.new(
+        f"QA_Label_{path.stem}", width=width, height=height, alpha=True
+    )
+    try:
+        image.pixels.foreach_set(pixels)
+        image.filepath_raw = str(path)
+        image.file_format = "PNG"
+        image.save()
+    finally:
+        bpy.data.images.remove(image)
+
+
 def create_contact_sheet(
     paths: Iterable[Path | str],
     output_path: Path | str,
     *,
     columns: int = 4,
     cell_size: int = 320,
+    labels: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Compose fixed QA crops into one deterministic PNG with ffmpeg."""
     sources = [Path(path).expanduser().resolve() for path in paths]
@@ -929,25 +1339,56 @@ def create_contact_sheet(
     output.parent.mkdir(parents=True, exist_ok=True)
     columns = max(1, int(columns))
     cell_size = max(64, int(cell_size))
-    filters = []
-    layout = []
-    for index in range(len(sources)):
-        filters.append(
-            f"[{index}:v]scale={cell_size}:{cell_size}:force_original_aspect_ratio=decrease,"
-            f"pad={cell_size}:{cell_size}:(ow-iw)/2:(oh-ih)/2:color=0x20242a[v{index}]"
+    resolved_labels = list(labels) if labels is not None else []
+    if resolved_labels and len(resolved_labels) != len(sources):
+        raise RuntimeError(
+            f"contact sheet has {len(sources)} inputs but {len(resolved_labels)} labels"
         )
-        layout.append(f"{(index % columns) * cell_size}_{(index // columns) * cell_size}")
-    filters.append(
-        "".join(f"[v{index}]" for index in range(len(sources)))
-        + f"xstack=inputs={len(sources)}:layout={'|'.join(layout)}:fill=0x14171c[out]"
-    )
-    command = [executable, "-v", "error", "-y"]
-    for source in sources:
-        command.extend(("-i", str(source)))
-    command.extend(
-        ("-filter_complex", ";".join(filters), "-map", "[out]", "-frames:v", "1", str(output))
-    )
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    label_band = max(24, min(56, int(round(cell_size * 0.125)))) if resolved_labels else 0
+    content_height = cell_size - label_band
+    with tempfile.TemporaryDirectory(prefix="qa-contact-labels-", dir=output.parent) as tmp:
+        label_paths: list[Path] = []
+        for index, label in enumerate(resolved_labels):
+            label_path = Path(tmp) / f"label-{index:02d}.png"
+            _write_bitmap_label(label_path, label, cell_size, label_band)
+            label_paths.append(label_path)
+
+        filters = []
+        layout = []
+        for index in range(len(sources)):
+            filters.append(
+                f"[{index}:v]scale={cell_size}:{content_height}:force_original_aspect_ratio=decrease,"
+                f"pad={cell_size}:{content_height}:(ow-iw)/2:(oh-ih)/2:color=0x20242a[image{index}]"
+            )
+            if resolved_labels:
+                label_input = len(sources) + index
+                filters.append(
+                    f"[image{index}][{label_input}:v]vstack=inputs=2[v{index}]"
+                )
+            else:
+                filters.append(f"[image{index}]null[v{index}]")
+            layout.append(
+                f"{(index % columns) * cell_size}_{(index // columns) * cell_size}"
+            )
+        filters.append(
+            "".join(f"[v{index}]" for index in range(len(sources)))
+            + f"xstack=inputs={len(sources)}:layout={'|'.join(layout)}:fill=0x14171c[out]"
+        )
+        command = [executable, "-v", "error", "-y"]
+        for source in (*sources, *label_paths):
+            command.extend(("-i", str(source)))
+        command.extend(
+            (
+                "-filter_complex",
+                ";".join(filters),
+                "-map",
+                "[out]",
+                "-frames:v",
+                "1",
+                str(output),
+            )
+        )
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 0:
         detail = completed.stderr.strip() or "empty contact-sheet output"
         raise RuntimeError(f"contact-sheet generation failed: {detail}")
@@ -957,6 +1398,8 @@ def create_contact_sheet(
         "columns": columns,
         "cellSize": cell_size,
         "inputs": [str(path) for path in sources],
+        "labels": resolved_labels,
+        "labelBandPixels": label_band,
     }
 
 
@@ -993,35 +1436,50 @@ def create_qa_contact_sheets(
         for relative_path in comparison_crops
         for directory in (baseline, refined)
     ]
+    comparison_labels = [
+        f"{version} {label}"
+        for label in ("Rest", "A", "Smile", "open", "fist", "camera-facing wave")
+        for version in ("Legacy", "Refined")
+    ]
     return {
         "qa": create_contact_sheet(
-            [refined / path for path in (*face_crops, *hand_crops)], qa_output_path
+            [refined / path for path in (*face_crops, *hand_crops)],
+            qa_output_path,
+            labels=CONTACT_SHEET_LABELS,
         ),
         "comparison": create_contact_sheet(
-            comparison_paths, comparison_output_path
+            comparison_paths,
+            comparison_output_path,
+            labels=comparison_labels,
         ),
     }
 
 
 def _comparison_metrics(output_dir: Path) -> dict[str, Any]:
-    open_fist = alpha_mask_difference(output_dir / "hand/open.png", output_dir / "hand/fist.png")
+    open_fist = role_mask_difference(
+        output_dir / "masks/hand/open.png",
+        output_dir / "masks/hand/fist.png",
+        "hand",
+    )
     if open_fist < MIN_OPEN_FIST_PIXEL_DIFFERENCE:
         raise RuntimeError(
-            f"open/fist alpha-mask difference {open_fist:.6f} is below "
+            f"open/fist rendered hand-mask difference {open_fist:.6f} is below "
             f"{MIN_OPEN_FIST_PIXEL_DIFFERENCE:.6f}"
         )
     finger_roll: dict[str, float] = {}
     for side in ("r", "l"):
         for first, second in ((1, 2), (2, 3)):
             key = f"{side}{first}-{side}{second}"
-            difference = alpha_mask_difference(
-                output_dir / f"hand/finger_roll_{side}_{first}.png",
-                output_dir / f"hand/finger_roll_{side}_{second}.png",
+            difference = role_mask_difference(
+                output_dir / f"masks/hand/finger_roll_{side}_{first}.png",
+                output_dir / f"masks/hand/finger_roll_{side}_{second}.png",
+                "hand",
             )
             finger_roll[key] = difference
             if difference < MIN_FINGER_ROLL_PIXEL_DIFFERENCE:
                 raise RuntimeError(
-                    f"finger-roll phase {key} alpha-mask difference {difference:.6f} is below "
+                    f"finger-roll phase {key} rendered hand-mask difference "
+                    f"{difference:.6f} is below "
                     f"{MIN_FINGER_ROLL_PIXEL_DIFFERENCE:.6f}"
                 )
     return {"openFistPixelDifference": open_fist, "fingerRollPixelDifferences": finger_roll}
@@ -1041,6 +1499,39 @@ def _duplicate_metrics(output_dir: Path) -> dict[str, list[str]]:
         )
         for label, samples in groups.items()
     }
+
+
+def _validate_rendered_pixel_gates(samples: Iterable[Mapping[str, Any]]) -> None:
+    samples = list(samples)
+    for sample in samples:
+        if sample["kind"] not in {"hand", "digit"}:
+            continue
+        frame = sample.get("handPixelFrame") or {}
+        if int(frame.get("pixelCount", 0)) <= 0:
+            raise RuntimeError(f"hand pixel mask is empty for {sample['label']}")
+        if bool(frame.get("borderTouching")):
+            raise RuntimeError(f"hand pixel mask touches the frame border for {sample['label']}")
+        if float(frame.get("marginFraction", -1.0)) < MIN_HAND_PIXEL_MARGIN:
+            raise RuntimeError(
+                f"hand pixel margin {float(frame.get('marginFraction', -1.0)):.6f} "
+                f"is below {MIN_HAND_PIXEL_MARGIN:.6f} for {sample['label']}"
+            )
+
+    faces = {sample["label"]: sample for sample in samples if sample["kind"] == "face"}
+    for label in ("Rest", "MBP"):
+        dental = int(faces[label]["dentalExposure"]["visiblePixelCount"])
+        tongue = int(faces[label]["tongueExposure"]["visiblePixelCount"])
+        if dental or tongue:
+            raise RuntimeError(
+                f"closed oral sample {label} exposes {dental} dental and {tongue} tongue pixels"
+            )
+    for label in ("A", "E", "O", "U", "Surprise"):
+        dental = int(faces[label]["dentalExposure"]["visiblePixelCount"])
+        tongue = int(faces[label]["tongueExposure"]["visiblePixelCount"])
+        if dental <= 0 or tongue <= 0:
+            raise RuntimeError(
+                f"open oral sample {label} requires visible rendered dental and tongue pixels"
+            )
 
 
 def run_fixed_comparison_crops(
@@ -1104,6 +1595,7 @@ def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
         _render_sample(scene, sample, output_dir, contract, baseline, resolution)
         for sample in QA_SAMPLES
     ]
+    _validate_rendered_pixel_gates(samples)
     require_files(output_dir, required_relative_paths())
 
     for sample in samples:
@@ -1143,12 +1635,88 @@ def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
     return report
 
 
+def build_staged_refined_master(input_path: Path | str) -> dict[str, Any]:
+    """Run the existing builder while binding final refinement to pre-refinement hashes."""
+    _require_blender()
+    input_path = Path(input_path).expanduser().resolve()
+    try:
+        data = json.loads(input_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read staged refined build input: {input_path}") from exc
+    if data.get("prepareMaster") is not True or data.get("useMasterAsset") is not False:
+        raise RuntimeError("staged refined build requires prepareMaster=true and useMasterAsset=false")
+    source_path = Path(str(data.get("modelPath") or "")).expanduser().resolve()
+    if not source_path.is_file():
+        raise RuntimeError(f"staged refined build source model is missing: {source_path}")
+    staged_path = Path(str(data.get("riggedBlendPath") or "")).expanduser().resolve()
+    if (
+        staged_path.name != "main-ip-aroll-master-refined.blend"
+        or staged_path.parent.name != "staging"
+    ):
+        raise RuntimeError(
+            "staged refined build target must be staging/main-ip-aroll-master-refined.blend"
+        )
+
+    captured_hashes: dict[str, str] = {}
+    original_prepare = blender_renderer.prepare_character
+    original_save = blender_renderer.save_master_collection
+    original_argv = list(sys.argv)
+
+    def prepare_and_capture(character_objects: Iterable[Any], *args: Any, **kwargs: Any) -> Any:
+        dimensions = original_prepare(character_objects, *args, **kwargs)
+        captured_hashes.update(master_asset.source_surface_hashes(character_objects))
+        return dimensions
+
+    def save_bound_master(**kwargs: Any) -> dict[str, Any]:
+        if not captured_hashes:
+            raise RuntimeError("source UV/material hashes were not captured before refinement")
+        kwargs["refined_intent"] = True
+        kwargs["expected_source_surface_hashes"] = dict(captured_hashes)
+        return master_asset.save_master_collection(**kwargs)
+
+    try:
+        blender_renderer.prepare_character = prepare_and_capture
+        blender_renderer.save_master_collection = save_bound_master
+        separator = original_argv.index("--") if "--" in original_argv else len(original_argv)
+        sys.argv = [*original_argv[:separator], "--", str(input_path)]
+        blender_renderer.main()
+    finally:
+        sys.argv = original_argv
+        blender_renderer.prepare_character = original_prepare
+        blender_renderer.save_master_collection = original_save
+
+    if not staged_path.is_file():
+        raise RuntimeError(f"staged refined builder did not create {staged_path}")
+    validated = master_asset.validate_master_collection(
+        bpy.data.collections.get(master_asset.MASTER_COLLECTION), staged_path
+    )
+    capabilities = validated.get("capabilities")
+    if not isinstance(capabilities, Mapping):
+        raise RuntimeError("staged refined builder produced no live capability report")
+    result = {
+        "status": "passed",
+        "sourcePath": str(source_path),
+        "stagedPath": str(staged_path),
+        "sourceSurfaceHashes": dict(captured_hashes),
+        "capabilityReport": dict(capabilities),
+    }
+    print("AROLL_STAGED_BUILD=" + json.dumps(result, sort_keys=True))
+    return result
+
+
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     if not args:
         raise RuntimeError(
-            "usage: blender master.blend --python render_aroll_master_qa.py -- output_dir"
+            "usage: blender master.blend --python render_aroll_master_qa.py -- output_dir\n"
+            "   or: blender --background --python render_aroll_master_qa.py -- "
+            "--build-staged input.json"
         )
+    if args[0] == "--build-staged":
+        if len(args) != 2:
+            raise RuntimeError("--build-staged requires exactly one input JSON path")
+        build_staged_refined_master(args[1])
+        return
     run_qa(args[0])
 
 

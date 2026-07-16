@@ -197,6 +197,55 @@ def _fixture_add_face_shape_keys(face) -> None:
     face["blink_capability"] = "squint_only"
 
 
+def _fixture_add_mouth_cover(armature, material):
+    cover = _fixture_add_box(
+        "QA_Mouth_Cover",
+        (0.0, -0.285, 1.57),
+        (0.24, 0.012, 0.16),
+        armature,
+        "Head",
+        material,
+    )
+    cover.shape_key_add(name="Basis", from_mix=False)
+    for shape_name in (
+        "Mouth_Rest",
+        "Mouth_MBP",
+        "Mouth_A",
+        "Mouth_E",
+        "Mouth_O",
+        "Mouth_U",
+        "Mouth_Smile",
+        "Mouth_Surprise",
+    ):
+        key = cover.shape_key_add(name=shape_name, from_mix=False)
+        if shape_name not in {"Mouth_Rest", "Mouth_MBP"}:
+            for vertex in key.data:
+                vertex.co.x += 2.0
+    return cover
+
+
+def _fixture_add_oral_roles(armature):
+    specifications = {
+        "oral_cavity": ((0.0, -0.225, 1.57), (0.15, 0.018, 0.075), (0.03, 0.01, 0.015, 1.0)),
+        "upper_teeth": ((0.0, -0.255, 1.605), (0.095, 0.012, 0.022), (0.95, 0.92, 0.82, 1.0)),
+        "lower_teeth": ((0.0, -0.257, 1.535), (0.09, 0.012, 0.018), (0.95, 0.92, 0.82, 1.0)),
+        "upper_gum": ((0.0, -0.24, 1.63), (0.11, 0.012, 0.014), (0.50, 0.10, 0.13, 1.0)),
+        "lower_gum": ((0.0, -0.24, 1.515), (0.105, 0.012, 0.014), (0.50, 0.10, 0.13, 1.0)),
+        "tongue": ((0.0, -0.268, 1.555), (0.075, 0.012, 0.022), (0.72, 0.12, 0.18, 1.0)),
+    }
+    objects = []
+    for role, (location, scale, color) in specifications.items():
+        material = bpy.data.materials.new(f"QA_{role}_Material")
+        material.diffuse_color = color
+        obj = _fixture_add_box(
+            f"QA_{role}", location, scale, armature, "Head", material
+        )
+        obj["ip_face_topology_role"] = role
+        obj["ip_oral_refinement_version"] = 2
+        objects.append(obj)
+    return objects
+
+
 def _build_aroll_qa_fixture():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
@@ -252,6 +301,8 @@ def _build_aroll_qa_fixture():
 
     material = bpy.data.materials.new("QA_Aroll_Material")
     material.diffuse_color = (0.36, 0.74, 0.52, 1.0)
+    hand_material = bpy.data.materials.new("QA_Aroll_Hand_Material")
+    hand_material.diffuse_color = (0.54, 0.34, 0.20, 1.0)
     _fixture_add_box("QA_Body", (0.0, 0.0, 0.82), (0.38, 0.18, 0.61), armature, "Body", material)
     for side, sign in (("l", 1.0), ("r", -1.0)):
         _fixture_add_box(
@@ -260,11 +311,11 @@ def _build_aroll_qa_fixture():
             (0.12, 0.075, 0.18),
             armature,
             bone_map[f"hand_{side}"],
-            material,
+            hand_material,
         )
         for digit in (1, 2, 3):
             for role in (f"finger_{digit}_{side}", f"finger_{digit}_mid_{side}", f"finger_{digit}_tip_{side}"):
-                _fixture_add_bone_segment(bone_map[role], armature, material)
+                _fixture_add_bone_segment(bone_map[role], armature, hand_material)
 
     face = _fixture_add_box(
         "QA_Face",
@@ -275,6 +326,8 @@ def _build_aroll_qa_fixture():
         material,
     )
     _fixture_add_face_shape_keys(face)
+    _fixture_add_mouth_cover(armature, material)
+    _fixture_add_oral_roles(armature)
 
     for name, location, lens in (
         ("Camera_Medium", (0.0, -4.3, 1.25), 58.0),
@@ -390,11 +443,26 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
             <= set(sample)
             for sample in report["samples"]
         )
-        assert all(
-            sample["handFrameMargin"] >= 0.04
+        hand_samples = [
+            sample
             for sample in report["samples"]
             if sample["kind"] in {"hand", "digit"}
+        ]
+        assert all(sample["handPixelFrame"]["pixelCount"] > 0 for sample in hand_samples)
+        assert all(
+            sample["handPixelFrame"]["marginFraction"] >= 0.04
+            for sample in hand_samples
         )
+        assert not any(
+            sample["handPixelFrame"]["borderTouching"] for sample in hand_samples
+        )
+        faces = {sample["label"]: sample for sample in report["samples"] if sample["kind"] == "face"}
+        for label in ("Rest", "MBP"):
+            assert faces[label]["dentalExposure"]["visiblePixelCount"] == 0
+            assert faces[label]["tongueExposure"]["visiblePixelCount"] == 0
+        for label in ("A", "E", "O", "U", "Surprise"):
+            assert faces[label]["dentalExposure"]["visiblePixelCount"] > 0
+            assert faces[label]["tongueExposure"]["visiblePixelCount"] > 0
         right_close = [
             sample["framing"]
             for sample in report["samples"]
@@ -429,6 +497,32 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
         )
         assert sheets["qa"]["inputCount"] == 17
         assert sheets["comparison"]["inputCount"] == 12
+        assert sheets["qa"]["labels"] == [
+            "Rest",
+            "MBP",
+            "A",
+            "E",
+            "O",
+            "U",
+            "Smile",
+            "Surprise",
+            "relaxed",
+            "open",
+            "fist",
+            "pinch",
+            "count 1",
+            "count 2",
+            "count 3",
+            "point",
+            "camera-facing wave",
+        ]
+        assert sheets["comparison"]["labels"] == [
+            label
+            for crop in ("Rest", "A", "Smile", "open", "fist", "camera-facing wave")
+            for label in (f"Legacy {crop}", f"Refined {crop}")
+        ]
+        assert sheets["qa"]["labelBandPixels"] >= 24
+        assert sheets["comparison"]["labelBandPixels"] >= 24
         assert qa_sheet.is_file() and qa_sheet.stat().st_size > 0
         assert comparison_sheet.is_file() and comparison_sheet.stat().st_size > 0
         baseline_dir = Path(tmp) / "baseline-crops"
