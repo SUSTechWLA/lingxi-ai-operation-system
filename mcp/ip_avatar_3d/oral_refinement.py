@@ -11,7 +11,7 @@ import bpy
 
 
 ORAL_REFINEMENT_VERSION = 2
-RUNTIME_ORAL_CONTAINMENT_VERSION = 1
+RUNTIME_ORAL_CONTAINMENT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -306,7 +306,7 @@ def fit_runtime_oral_containment(
     oral_objects: dict[str, bpy.types.Object],
     dimensions: dict[str, Any],
 ) -> dict[str, float]:
-    """Fit an appended oral assembly inside the preserved source lip boundary."""
+    """Place authored oral roles behind the source lips without deforming them."""
     required_roles = {
         "oral_cavity",
         "upper_teeth",
@@ -354,65 +354,48 @@ def fit_runtime_oral_containment(
     if boundary_width <= 1e-6 or boundary_height <= 1e-6:
         raise RuntimeError("runtime oral containment source mouth boundary is degenerate")
 
-    world_vertices = [
-        obj.matrix_world @ vertex.co
-        for obj in oral_objects.values()
-        for vertex in obj.data.vertices
-    ]
-    oral_minimum_x = min(point.x for point in world_vertices)
-    oral_maximum_x = max(point.x for point in world_vertices)
-    oral_minimum_z = min(point.z for point in world_vertices)
-    oral_maximum_z = max(point.z for point in world_vertices)
-    oral_width = oral_maximum_x - oral_minimum_x
-    oral_height = oral_maximum_z - oral_minimum_z
-    if oral_width <= 1e-6 or oral_height <= 1e-6:
-        raise RuntimeError("runtime oral containment assembly bounds are degenerate")
-
-    horizontal_inset = 0.16
-    vertical_inset = 0.15
-    target_width = boundary_width * (1.0 - horizontal_inset * 2.0)
-    target_height = boundary_height * (1.0 - vertical_inset * 2.0)
-    scale_x = min(1.0, target_width / oral_width)
-    scale_z = min(1.0, target_height / oral_height)
-    source_center_x = (oral_minimum_x + oral_maximum_x) * 0.5
-    source_center_z = (oral_minimum_z + oral_maximum_z) * 0.5
     target_center_x = (minimum_x + maximum_x) * 0.5
     target_center_z = (minimum_z + maximum_z) * 0.5
-
-    for obj in oral_objects.values():
-        world_to_object = obj.matrix_world.inverted()
-        for vertex in obj.data.vertices:
-            world = obj.matrix_world @ vertex.co
-            world.x = target_center_x + (world.x - source_center_x) * scale_x
-            world.z = target_center_z + (world.z - source_center_z) * scale_z
-            vertex.co = world_to_object @ world
-        obj.data.update()
-
-    updated_vertices = [
-        obj.matrix_world @ vertex.co
-        for obj in oral_objects.values()
-        for vertex in obj.data.vertices
-    ]
-    boundary_back_y = max(point.y for point in boundary)
-    oral_front_y = min(point.y for point in updated_vertices)
-    depth_clearance = max(float(dimensions["depth"]) * 0.008, 1e-5)
-    depth_shift = max(0.0, boundary_back_y + depth_clearance - oral_front_y)
-    if depth_shift:
-        for obj in oral_objects.values():
-            matrix = obj.matrix_world.copy()
-            matrix.translation.y += depth_shift
-            obj.matrix_world = matrix
+    vertical_targets = {
+        "oral_cavity": 0.00,
+        "upper_gum": 0.16,
+        "upper_teeth": 0.08,
+        "lower_teeth": -0.08,
+        "lower_gum": -0.16,
+        "tongue": -0.10,
+    }
+    depth_offsets = {
+        "oral_cavity": float(dimensions["depth"]) * 0.011,
+        "upper_gum": float(dimensions["depth"]) * 0.009,
+        "upper_teeth": -float(dimensions["depth"]) * 0.001,
+        "lower_teeth": float(dimensions["depth"]) * 0.005,
+        "lower_gum": float(dimensions["depth"]) * 0.009,
+        "tongue": -float(dimensions["depth"]) * 0.017,
+    }
+    for role, obj in oral_objects.items():
+        points = [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
+        center_x = (min(point.x for point in points) + max(point.x for point in points)) * 0.5
+        center_z = (min(point.z for point in points) + max(point.z for point in points)) * 0.5
+        matrix = obj.matrix_world.copy()
+        matrix.translation.x += target_center_x - center_x
+        matrix.translation.y += depth_offsets[role]
+        matrix.translation.z += (
+            target_center_z + boundary_height * vertical_targets[role] - center_z
+        )
+        obj.matrix_world = matrix
 
     for obj in oral_objects.values():
         obj["ip_runtime_oral_containment_version"] = RUNTIME_ORAL_CONTAINMENT_VERSION
-        obj["ip_runtime_oral_containment_scale_x"] = scale_x
-        obj["ip_runtime_oral_containment_scale_z"] = scale_z
-        obj["ip_runtime_oral_containment_depth_shift"] = depth_shift
+        obj["ip_runtime_oral_containment_scale_x"] = 1.0
+        obj["ip_runtime_oral_containment_scale_z"] = 1.0
+        obj["ip_runtime_oral_containment_depth_shift"] = depth_offsets[
+            str(obj["ip_face_topology_role"])
+        ]
     bpy.context.view_layer.update()
     return {
-        "scaleX": scale_x,
-        "scaleZ": scale_z,
-        "depthShift": depth_shift,
+        "scaleX": 1.0,
+        "scaleZ": 1.0,
+        "depthShift": min(depth_offsets.values()),
         "reused": 0.0,
     }
 

@@ -2231,6 +2231,74 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         self.assertIn("apad=whole_dur=3.000", joined)
         self.assertNotIn("loudnorm=", joined)
 
+    def test_mastered_audio_compensation_passes_after_real_aac_encode(self) -> None:
+        server = load_server()
+        ffmpeg = server.find_ffmpeg()
+        if not ffmpeg:
+            self.skipTest("ffmpeg is required for encoded-audio regression coverage")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            frames = root / "frames"
+            frames.mkdir()
+            mastered = root / "mastered.wav"
+            encoded = root / "encoded.mp4"
+
+            server._run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=64x64:r=10:d=6",
+                    "-frames:v",
+                    "60",
+                    str(frames / "frame_%04d.png"),
+                ],
+                timeout=60,
+            )
+            server._run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=48000:duration=6",
+                    "-af",
+                    "loudnorm=I=-16.72:TP=-3:LRA=1",
+                    "-ac",
+                    "1",
+                    "-c:a",
+                    "pcm_s24le",
+                    str(mastered),
+                ],
+                timeout=60,
+            )
+
+            source = server._measure_voice_audition_loudness(mastered)
+            self.assertGreaterEqual(source["integratedLufs"], -16.85)
+            self.assertLessEqual(source["integratedLufs"], -16.60)
+
+            server._compose_video(
+                frames,
+                str(mastered),
+                encoded,
+                6.0,
+                10,
+                width=64,
+                height=64,
+                video_crf=28,
+                video_preset="ultrafast",
+                audio_mastered=True,
+            )
+
+            measurement = server._validate_final_production_audio(encoded)
+            self.assertGreaterEqual(measurement["integratedLufs"], -16.5)
+            self.assertLessEqual(measurement["integratedLufs"], -15.5)
+            self.assertLessEqual(measurement["truePeakDbtp"], -1.5)
+
     def test_final_production_audio_gate_rejects_encoded_peak_overshoot(self) -> None:
         server = load_server()
         with mock.patch.object(

@@ -29,9 +29,9 @@ def _digits(*poses: DigitPose) -> dict[int, DigitPose]:
 
 HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
     "open_hand": _digits(
-        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.14),
+        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.22),
         OPEN,
-        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=-0.14),
+        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=-0.22),
     ),
     "relaxed_hand": _digits(
         DigitPose(RELAXED.proximal, RELAXED.middle, RELAXED.distal, splay=0.035),
@@ -49,9 +49,9 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(FIST.proximal, FIST.middle, FIST.distal, splay=-0.035, opposition=0.11),
     ),
     "pinch": _digits(
-        DigitPose(0.24, 0.30, 0.20, splay=0.05),
-        DigitPose(0.14, 0.18, 0.12),
-        DigitPose(0.27, 0.33, 0.21, splay=-0.06, opposition=0.10),
+        DigitPose(0.30, 0.34, 0.22, splay=0.07),
+        DigitPose(0.18, 0.24, 0.16),
+        DigitPose(0.30, 0.34, 0.22, splay=-0.08, opposition=0.22),
     ),
     "count_one": _digits(
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.10),
@@ -64,9 +64,9 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(0.29, 0.34, 0.22),
     ),
     "count_three": _digits(
-        DigitPose(0.10, 0.10, 0.06, splay=0.12),
-        DigitPose(0.10, 0.10, 0.06),
-        DigitPose(0.10, 0.10, 0.06, splay=-0.12),
+        DigitPose(0.03, 0.025, 0.01, splay=0.32),
+        DigitPose(0.03, 0.025, 0.01),
+        DigitPose(0.03, 0.025, 0.01, splay=-0.32),
     ),
     "point": _digits(
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.10),
@@ -754,7 +754,7 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         }
         right_chest = {
             "upper_arm_r": (-0.06, -0.02, -0.72),
-            "forearm_r": (-0.72, -0.06, 0.82),
+            "forearm_r": (-0.72, -0.06, 1.84),
             "hand_r": (0.10, -0.28, 0.18),
         }
         left_anticipation = {
@@ -764,7 +764,7 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         }
         left_chest = {
             "upper_arm_l": (-0.06, 0.02, 0.72),
-            "forearm_l": (-0.72, 0.06, -0.82),
+            "forearm_l": (-0.72, 0.06, -1.84),
             "hand_l": (0.10, 0.28, -0.18),
         }
         right_point = {
@@ -780,19 +780,21 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         open_explain = {
             **left_chest,
             **right_chest,
-            "hand_l": (0.08, 0.24, -0.12),
-            "hand_r": (0.08, -0.24, 0.12),
+            "forearm_l": (-0.72, 0.06, -1.86),
+            "forearm_r": (-0.72, -0.06, 1.86),
+            "hand_l": (0.30, -0.24, -0.08),
+            "hand_r": (0.30, 0.24, 0.08),
         }
         open_explain_anticipation = {**left_anticipation, **right_anticipation}
         wave_raise = {
             "upper_arm_r": (-0.08, 0.03, -0.34),
-            "forearm_r": (-0.25, 0.02, 1.04),
-            "hand_r": (0.035, -1.10, 0.055),
+            "forearm_r": (-0.25, 0.02, 1.84),
+            "hand_r": (0.035, -0.18, 0.055),
         }
         wave_return = {
             "upper_arm_r": (-0.08, 0.03, -0.34),
-            "forearm_r": (-0.25, 0.02, 1.04),
-            "hand_r": (-0.035, -1.10, -0.055),
+            "forearm_r": (-0.25, 0.02, 1.84),
+            "hand_r": (-0.035, -0.18, -0.055),
         }
         think_pose = {
             "upper_arm_r": (-0.09, -0.03, -0.74),
@@ -840,21 +842,21 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         open_explain = {
             **left_chest,
             **right_chest,
-            "hand_l": (0.06, 0.22, -0.10),
-            "hand_r": (0.06, -0.22, 0.10),
+            "hand_l": (0.06, 0.06, -0.08),
+            "hand_r": (0.06, -0.06, 0.08),
         }
         open_explain_anticipation = {**left_anticipation, **right_anticipation}
         wave_raise = {
             "shoulder_r": (0.04, -0.06, 0.10),
             "upper_arm_r": (0.02, 0.20, 0.32),
             "forearm_r": (0.82, 0.04, 0.02),
-            "hand_r": (0.035, -1.10, 0.055),
+            "hand_r": (0.035, -0.18, 0.055),
         }
         wave_return = {
             "shoulder_r": (0.04, -0.06, 0.10),
             "upper_arm_r": (0.02, 0.20, 0.32),
             "forearm_r": (0.82, 0.04, 0.02),
-            "hand_r": (-0.035, -1.10, -0.055),
+            "hand_r": (-0.035, -0.18, -0.055),
         }
         think_pose = {
             "upper_arm_r": (-0.18, -0.14, 0.13),

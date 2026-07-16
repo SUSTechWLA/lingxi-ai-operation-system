@@ -15,25 +15,24 @@ from typing import Any
 
 
 SIGNED_OFF_STAGING_RELATIVE_PATH = Path(
-    "outputs/final/refined-aroll-evidence/production-oral-fixed/ip_layer.mp4"
+    "outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/ip_layer.mp4"
 )
 FINAL_VIDEO_RELATIVE_PATH = Path(
     "outputs/final/MainIP_Sloth_Refined_Aroll_Demo_1080p.mp4"
 )
 SIGNED_OFF_VIDEO_SHA256 = (
-    "0ce20701c6df6498ca471d64f6d3dd5d41c385f8c1387e821798a8e82cadd8c1"
+    "f32056457a73f3467e580b2ea21cad40da67cf667ce560aa969c3a238d8770eb"
 )
 
 
 DEMO_SPEC: dict[str, Any] = {
     "kind": "frontTalkingKnowledgeDemo",
-    "topic": "为什么 AI 视频不要每三秒换画面",
+    "topic": "正面口播动作与口型验收",
     "script": (
-        "很多 AI 视频看起来很热闹，却让人记不住观点。问题不是素材不够，"
-        "而是没有分清 A-roll 和 B-roll。A-roll 负责建立信任，所以主角要稳定面对镜头；"
-        "B-roll 只在数据、案例或界面证据出现时短暂覆盖。画面少一点，信息反而更清楚。"
+        "大家好，今天用正面口播演示三个重点。第一，动作要看得清；第二，手掌要自然；"
+        "第三，细节要稳定。我们用开放手掌解释，再看一个小细节，最后回到放松姿态。"
     ),
-    "durationSec": 20.0,
+    "durationSec": 15.06,
     "resolution": {"width": 1920, "height": 1080},
     "fps": 30,
     "profileId": "talking_head",
@@ -44,18 +43,12 @@ DEMO_SPEC: dict[str, Any] = {
     "actionSequence": [
         "Aroll_Greeting_Wave",
         "Aroll_OpenPalm_Explain",
-        "Aroll_KeyPoint_OneFinger",
-        "Aroll_Explain_Left",
-        "Aroll_Agree_Nod",
-        "Aroll_Conclusion_HandsTogether",
+        "Aroll_Count_Three",
+        "Aroll_Pinch_Detail",
+        "Aroll_Transition_Reset",
     ],
-    "brollWindows": [
-        {
-            "startSec": 11.2,
-            "endSec": 14.4,
-            "purpose": "A-roll 与 B-roll 分工证据图",
-        }
-    ],
+    "requiredVisemes": ["A", "E", "O", "MBP"],
+    "brollWindows": [],
 }
 
 
@@ -79,8 +72,17 @@ def validate_demo_spec(spec: dict[str, Any]) -> list[str]:
     actions = [str(action) for action in spec.get("actionSequence") or []]
     if not actions:
         errors.append("actionSequence must not be empty")
-    if any("Transition" in action for action in actions):
+    forbidden_transitions = {
+        "Aroll_Transition_StandToSit",
+        "Aroll_Transition_SitToStand",
+    }
+    if any(action in forbidden_transitions for action in actions):
         errors.append("front talking demo cannot contain physical transition actions")
+    required_visemes = [str(item) for item in spec.get("requiredVisemes") or []]
+    if required_visemes != ["A", "E", "O", "MBP"]:
+        errors.append("requiredVisemes must be exactly A, E, O, MBP")
+    if spec.get("brollWindows"):
+        errors.append("front talking verification demo cannot contain B-roll")
     broll_duration = sum(
         max(0.0, float(item.get("endSec") or 0.0) - float(item.get("startSec") or 0.0))
         for item in spec.get("brollWindows") or []
@@ -118,6 +120,7 @@ def build_agent_run_payload(project_id: str) -> dict[str, Any]:
             "presentationMode": DEMO_SPEC["presentationMode"],
             "cameraPreset": DEMO_SPEC["cameraPreset"],
             "actionSequence": list(DEMO_SPEC["actionSequence"]),
+            "requiredVisemes": list(DEMO_SPEC["requiredVisemes"]),
             "brollWindows": list(DEMO_SPEC["brollWindows"]),
         },
     }
@@ -136,7 +139,7 @@ def build_project_payload(local_path_hint: str) -> dict[str, Any]:
         "workflowVersion": "v4.0",
         "generationMode": DEMO_SPEC["generationMode"],
         "aspectRatio": "16:9",
-        "targetDurationSec": int(DEMO_SPEC["durationSec"]),
+        "targetDurationSec": float(DEMO_SPEC["durationSec"]),
         "language": "zh-CN",
         "localPathHint": str(local_path_hint),
         "config": {
