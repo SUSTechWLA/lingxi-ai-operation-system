@@ -33,7 +33,7 @@ MINIMUM_SUPPORT_BAND_EDGES = 3
 MINIMUM_RING_VERTICES = 4
 MINIMUM_RING_SPAN_RATIO = 0.015
 MINIMUM_RING_AREA_RATIO = 0.000025
-AROLL_ACTIONS = {
+FIXED_FRAME_AROLL_ACTIONS = {
     "Aroll_Seated_Idle",
     "Aroll_Idle_Listening",
     "Aroll_Greeting_Wave",
@@ -65,7 +65,7 @@ def test_aroll_qa_sample_contract_is_complete_and_squint_only() -> None:
 
     assert {(sample.action, sample.camera) for sample in action_samples} == {
         (action, camera)
-        for action in AROLL_ACTIONS
+        for action in render_aroll_master_qa.AROLL_ACTIONS
         for camera in render_aroll_master_qa.ACTION_CAMERAS
     }
     assert {sample.path for sample in hand_samples} == {
@@ -91,7 +91,13 @@ def test_aroll_qa_sample_contract_is_complete_and_squint_only() -> None:
     }
     assert not any("blink" in sample.path.lower() for sample in samples)
     assert render_aroll_master_qa.FACE_CAPABILITY == "squint_only"
-    assert len(samples) == 54
+    assert len(samples) == (
+        len(render_aroll_master_qa.HAND_SAMPLES)
+        + len(render_aroll_master_qa.DIGIT_SAMPLES)
+        + len(render_aroll_master_qa.FACE_SAMPLES)
+        + len(render_aroll_master_qa.AROLL_ACTIONS)
+        * len(render_aroll_master_qa.ACTION_CAMERAS)
+    )
 
 
 def _fixture_look_at(obj, target) -> None:
@@ -348,7 +354,8 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
         }
         assert report["lighting"]["preset"] == "qa_editorial_soft"
         assert report["lighting"]["lightCount"] >= 3
-        assert len(report["samples"]) == 54
+        assert len(report["samples"]) == len(render_aroll_master_qa.QA_SAMPLES)
+        assert report["contract"]["sampleCount"] == len(render_aroll_master_qa.QA_SAMPLES)
         assert all(
             {"action", "camera", "path", "boneRotations", "fingertipDisplacementRatios"}
             <= set(sample)
@@ -1137,7 +1144,7 @@ def test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage() -> No
 
     report = blender_renderer.create_action_library(armature, {}, bone_map, fps=30)
 
-    missing = sorted(AROLL_ACTIONS - set(report["actions"]))
+    missing = sorted(FIXED_FRAME_AROLL_ACTIONS - set(report["actions"]))
     assert not missing, f"missing A-roll actions: {missing}"
     face_center = pose_bone_world_head(armature, bone_map, "head")
     face_half_width = float(dimensions["width"]) * 0.16
@@ -1153,7 +1160,7 @@ def test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage() -> No
     }
     leg_roles = {"leg_l", "shin_l", "foot_l", "leg_r", "shin_r", "foot_r"}
 
-    for action_name in sorted(AROLL_ACTIONS):
+    for action_name in sorted(FIXED_FRAME_AROLL_ACTIONS):
         action = bpy.data.actions[action_name]
         frames = sorted(
             {
