@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+cd "$repo_root"
+
+forbidden_paths=(
+  ".codex"
+  ".superpowers"
+  ".workspace-archive"
+  "assets/characters"
+  "docs/content-series"
+  "docs/superpowers"
+  "logs"
+  "outputs"
+  "test"
+  "test全流程"
+  "tmp"
+)
+
+failed="false"
+for path in "${forbidden_paths[@]}"; do
+  tracked="$(git ls-files -- "$path")"
+  if [[ -n "$tracked" ]]; then
+    echo "ERROR: release contains forbidden tracked path: $path" >&2
+    printf '%s\n' "$tracked" >&2
+    failed="true"
+  fi
+done
+
+unexpected_ip_assets="$(
+  git ls-files -- 'ip形象' |
+    grep -Ev '^ip形象/(image\.png|ip音频\.wav|main_ip/)' || true
+)"
+if [[ -n "$unexpected_ip_assets" ]]; then
+  echo "ERROR: release contains non-canonical IP assets:" >&2
+  printf '%s\n' "$unexpected_ip_assets" >&2
+  failed="true"
+fi
+
+generated_files="$(git ls-files | grep -E '(^|/)(\.DS_Store|.*\.blend1)$' || true)"
+if [[ -n "$generated_files" ]]; then
+  echo "ERROR: release contains generated backup files:" >&2
+  printf '%s\n' "$generated_files" >&2
+  failed="true"
+fi
+
+required_files=(
+  ".github/workflows/branch-guard.yml"
+  ".github/workflows/ci.yml"
+  "docs/BETA_RUNBOOK.md"
+  "frontend/package-lock.json"
+  "ip形象/main_ip/character-profile.json"
+  "ip形象/main_ip/models/main-ip-aroll-master-refined.blend"
+  "ip形象/main_ip/models/main-ip-rigged.glb"
+  "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
+  "ip形象/main_ip/voice/reference/main_ip_voice_ref_v1.wav"
+  "scripts/beta-smoke-check.sh"
+)
+for path in "${required_files[@]}"; do
+  if [[ ! -f "$path" ]]; then
+    echo "ERROR: release is missing required file: $path" >&2
+    failed="true"
+  fi
+done
+
+if [[ "$failed" == "true" ]]; then
+  exit 1
+fi
+
+echo "release tree contract passed"

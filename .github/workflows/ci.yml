@@ -67,6 +67,11 @@ jobs:
           grep -q "scripts/beta-fallback-fixture.sh" docs/BETA_RUNBOOK.md
           grep -q "scripts/beta-readiness-check.sh" docs/BETA_RUNBOOK.md
 
+      - name: Check release tree contract
+        if: github.ref_name == 'release' || github.base_ref == 'release'
+        shell: bash
+        run: bash scripts/release-tree-check.sh
+
       - name: Shellcheck scripts when available
         shell: bash
         run: |
