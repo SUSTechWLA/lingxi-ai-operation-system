@@ -1,0 +1,73 @@
+# IDE
+.vscode
+.idea
+
+# Logs
+*.log
+.run/
+
+# Build output
+/build/
+target/
+scripts/tmp/
+
+# Environment files with secrets - NEVER commit these!
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+!.env.*.example
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# OS
+.DS_Store
+Thumbs.db
+trace.json
+frontend/node_modules
+electron/node_modules
+node_modules/
+.codex/
+.lingxi-core-loop/
+.superpowers/
+cloud-backend/build/
+cloud-backend/sandbox/target/
+local-backend/build/
+local-backend/dist/
+frontend/resources/bin/
+*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
+cloud-backend/tangying-ai-os
+cloud-backend/runtime-model-provider.json
+
+# Local production artifacts and recoverable workspace archives
+/.workspace-archive/
+/outputs/
+/tmp/
+/tmp */
+/test/
+/test全流程/
+/logs/
+/.run/
+/.codex/cinematic-shot-preview/
+/.codex/shot-preview/
+/frontend/build/
+/frontend/dist/
+/frontend/release/
+/local-backend/tmp/
+/工作室设计版.png
+*.blend1

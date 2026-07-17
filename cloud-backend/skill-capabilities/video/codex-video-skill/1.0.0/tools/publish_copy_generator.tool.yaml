@@ -1,0 +1,72 @@
+name: publish_copy_generator
+description: 根据视频口播稿和分镜生成发布标题、简介、话题标签和平台适配文案。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/publish_copy_generator
+timeout: 120
+
+capabilities:
+  - video_creation
+  - publish_copy
+  - platform_adaptation
+tags:
+  - video
+  - publish
+  - copywriting
+  - platform
+
+parameters:
+  script:
+    type: string
+    required: true
+    description: 已确认的口播稿
+  shotList:
+    type: array
+    required: false
+    description: 分镜列表
+  platform:
+    type: string
+    required: false
+    description: 目标发布平台（小红书/抖音/B站等）
+
+output:
+  content:
+    type: string
+    description: 发布文案内容（Markdown）
+  title:
+    type: string
+    description: 视频标题
+  description:
+    type: string
+    description: 视频简介
+  keywords:
+    type: array
+    description: 话题标签
+
+costLevel: low
+latencyLevel: medium
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: 发布文案将公开发布到平台，必须确认。
+  reviewArtifactKinds:
+    - MARKDOWN
+    - JSON
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - MARKDOWN
+    - JSON
+  defaultReviewRequired: true
+
+nextRecommendedTools:
+  - video_package_exporter

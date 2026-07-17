@@ -1,0 +1,24 @@
+.git
+.gitignore
+.DS_Store
+
+# Local runtime and build output
+build/
+*.log
+.env
+.env.local
+.env.*.local
+
+# Frontend and desktop clients are built/deployed separately from AIOS Core.
+frontend/
+electron/
+node_modules/
+package.json
+package-lock.json
+
+# Non-runtime design assets and prompts
+prompts/
+resources/
+
+# Rust sandbox is a separate service artifact.
+sandbox/target/

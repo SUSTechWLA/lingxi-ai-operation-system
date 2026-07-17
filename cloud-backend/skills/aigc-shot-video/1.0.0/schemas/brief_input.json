@@ -1,0 +1,1 @@
+{"type": "object", "required": ["idea"], "properties": {"idea": {"type": "string"}, "duration_sec": {"type": "number"}, "aspect_ratio": {"type": "string"}}}

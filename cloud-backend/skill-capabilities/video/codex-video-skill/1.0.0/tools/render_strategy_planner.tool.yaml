@@ -1,0 +1,74 @@
+name: render_strategy_planner
+description: 生成 render_strategy canonical artifact，按镜头选择 HyperFrames、Seedance、Hybrid 或已有素材，并记录 decision_log。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/render_strategy_planner
+timeout: 60
+
+capabilities:
+  - video_creation
+  - render_strategy
+  - dual_engine
+  - videoforge_studio
+tags:
+  - video
+  - render
+  - strategy
+  - hyperframes
+  - seedance
+  - hybrid
+
+parameters:
+  shots:
+    type: array
+    required: false
+    description: 分镜或 visual_plan 中的镜头列表
+  brief:
+    type: string
+    required: false
+    description: 用户的视频创作需求
+  seedanceAvailable:
+    type: boolean
+    required: false
+    description: 是否可使用 Seedance
+
+output:
+  renderStrategy:
+    type: object
+    description: render_strategy canonical artifact
+  decisionLog:
+    type: object
+    description: render_strategy_selection 决策日志
+  content:
+    type: string
+    description: 人类可读的策略摘要
+  artifacts:
+    type: object
+    description: render_strategy.json 产物索引
+
+costLevel: low
+latencyLevel: low
+riskLevel: medium
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: Render Strategy 决定是否调用 Seedance 和高成本生成，必须用户确认后继续。
+  reviewArtifactKinds:
+    - JSON
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - JSON
+  defaultReviewRequired: true
+
+nextRecommendedTools:
+  - image_asset_generator
+  - hyperframes_project_generator

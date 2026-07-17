@@ -1,0 +1,105 @@
+name: video_prompt_generator
+description: 根据已确认的分镜生成视频生成模型提示词。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/video_prompt_generator
+timeout: 120
+
+capabilities:
+  - video_creation
+  - video_prompt_generation
+  - text_to_video
+tags:
+  - video
+  - prompt
+  - generation
+
+parameters:
+  shotList:
+    type: array
+    required: true
+    description: 已确认的分镜列表
+  brief:
+    type: string
+    required: false
+    description: 用户的视频创作需求
+  keyframePrompts:
+    type: array
+    required: false
+    description: 关键帧提示词（可选，增强视频 prompt 质量）
+  style:
+    type: string
+    required: false
+    description: 视觉风格描述
+  modelHint:
+    type: string
+    required: false
+    description: 目标视频生成模型提示
+  aspectRatio:
+    type: string
+    required: false
+    description: 视频画幅
+
+output:
+  videoPrompts:
+    type: array
+    description: 视频提示词列表
+  shotAssetPackages:
+    type: array
+    description: 每个 shot 的独立素材包，包含 referenceImages、prompts、voiceover、aigcVideo、subtitle 和 concatPlan
+  externalGenerationRequests:
+    type: array
+    description: 可复制到外部图片/视频生成平台的请求列表
+  summary:
+    type: string
+    description: 提示词概览
+  content:
+    type: string
+    description: 视频提示词包
+  artifacts:
+    type: object
+    description: 可审核的视频提示词产物索引
+
+costLevel: medium
+latencyLevel: medium
+riskLevel: medium
+sideEffect: false
+idempotent: true
+
+promptRef: prompts/video_prompt_generator.prompt.md
+resourceRefs:
+  - rules/video_prompt_rules.md
+  - references/video_model_prompt_reference.md
+  - examples/example_video_prompt.md
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: 视频提示词将驱动后续高成本生成动作，必须确认。
+  reviewArtifactKinds:
+    - MARKDOWN
+    - JSON
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - MARKDOWN
+    - JSON
+  defaultReviewRequired: true
+
+qualityPolicy:
+  required: true
+  checkerTool: video_prompt_quality_checker
+  minScore: 85
+  autoRepair: true
+  maxRepairAttempts: 1
+
+nextRecommendedTools:
+  - video_prompt_quality_checker
+  - hyperframes_project_generator
+  - publish_copy_generator
+  - video_package_exporter

@@ -1,0 +1,60 @@
+name: visual_feasibility_analyzer
+description: 按镜头和画面元素判断 HyperFrames、Seedance、Hybrid 或素材路径的可行性。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/visual_feasibility_analyzer
+timeout: 60
+
+capabilities:
+  - video_creation
+  - visual_feasibility
+  - render_strategy
+  - videoforge_studio
+tags:
+  - video
+  - visual
+  - feasibility
+  - engine
+
+parameters:
+  shots:
+    type: array
+    required: false
+    description: 分镜或 visual_plan 中的镜头列表
+  brief:
+    type: string
+    required: false
+    description: 用户的视频创作需求
+  seedanceAvailable:
+    type: boolean
+    required: false
+    description: 是否可使用 Seedance
+
+output:
+  feasibility:
+    type: object
+    description: 每个镜头的视觉可行性分析
+  content:
+    type: string
+    description: 人类可读的可行性摘要
+  artifacts:
+    type: object
+    description: visual_feasibility.json 产物索引
+
+costLevel: low
+latencyLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - JSON
+  defaultReviewRequired: false
+
+nextRecommendedTools:
+  - render_strategy_planner

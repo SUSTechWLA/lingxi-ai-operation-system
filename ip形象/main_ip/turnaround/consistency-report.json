@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "tangying-ip-turnaround-qa/v1",
+  "characterId": "main_ip_sloth",
+  "status": "PASS",
+  "generation": {
+    "tool": "built-in imagegen",
+    "reference": "../../image.png",
+    "pose": "strict uppercase T-pose",
+    "purpose": "AI multi-view 3D reconstruction and humanoid skeleton fitting"
+  },
+  "approvedViews": [
+    "front.png",
+    "front-3q-left.png",
+    "left-side.png",
+    "right-side.png",
+    "back-3q-right.png",
+    "back.png"
+  ],
+  "imageSpec": {
+    "width": 1024,
+    "height": 1536,
+    "background": "uniform very light neutral gray",
+    "camera": "orthographic model-sheet camera at fixed eye level"
+  },
+  "checks": {
+    "identity": {
+      "status": "PASS",
+      "notes": "Cream forehead and muzzle, dark eye masks, amber eyes, eyebrows, nose, ears, fur palette and swept hair tuft remain locked across all six views."
+    },
+    "costume": {
+      "status": "PASS",
+      "notes": "Mustard hoodie, cream knit cardigan, brown cuffed trousers and cream sneakers are preserved. The canonical front and three-quarter construction has exactly three cardigan buttons; strict profiles naturally occlude part of that front-edge row."
+    },
+    "proportions": {
+      "status": "PASS",
+      "notes": "Head-to-body ratio, shoulder height, arm span, torso length, leg length and shoe scale remain visually stable across the view set."
+    },
+    "viewCoverage": {
+      "status": "PASS",
+      "notes": "Front, front-left three-quarter, both exact profiles, back-right three-quarter and exact back views are present."
+    },
+    "pose": {
+      "status": "PASS",
+      "notes": "All views use the same strict T-pose: arms at shoulder height, elbows and wrists straight, torso upright, legs separated and feet parallel. In exact profile views the arms correctly overlap along the camera axis."
+    },
+    "framing": {
+      "status": "PASS",
+      "notes": "All source views are 1024x1536 with centered full-body framing, complete fingertips, hair and shoe soles, and sufficient rigging margin."
+    }
+  },
+  "approvedFor": [
+    "multi_view_3d_generation",
+    "automatic_skeleton_fitting",
+    "joint_position_reference",
+    "texture_and_costume_reference",
+    "rigged_character_identity_review"
+  ],
+  "required3DValidation": [
+    "front_and_profile_silhouette_match",
+    "hood_and_cardigan_layering_match",
+    "three_cardigan_buttons",
+    "hair_tuft_direction_match",
+    "existing_humanoid_rig_detected",
+    "required_viseme_shape_keys_detected"
+  ]
+}

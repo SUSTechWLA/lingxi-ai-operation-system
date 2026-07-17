@@ -1,0 +1,193 @@
+# 版本管理 Wiki
+
+本文是仓库内的 Wiki 源文档。GitHub Wiki 更新时应与本文保持一致。
+
+## 分支角色
+
+| 分支 | 定位 | 使用规则 |
+|---|---|---|
+| `develop_go` | 开发者分支，口头简称 `developgo` | Go/核心系统、云端编排、本地 runner、桌面端联调都先进入这里 |
+| `feature/*` | 功能分支 | 从 `develop_go` 拉出，完成后合回 `develop_go` |
+| `hotfix/*` | 发布修复分支 | 从 `release` 或当前 tag 拉出，只修阻断问题 |
+| `release` | 发布分支 | 只接收已验证的核心代码和发布文档 |
+
+`release` 不直接承载日常开发。临时脚本、渲染缓存、E2E 产物、测试账号 token 不进入 `release` 提交。
+
+## 合入 release 的硬性要求
+
+合入 `release` 前必须完成：
+
+1. 核心链路验证通过，至少包含相关 Go 单测、前端逻辑测试和构建。
+2. `CHANGELOG.md` 追加本次版本的用户可读更新内容。
+3. `docs/RELEASE_STATUS.md` 更新当前版本可用性、内测门槛和已知限制。
+4. README 只保留当前版本摘要和核心文档入口，不追加完整历史流水账。
+5. Wiki 源文档同步更新。涉及架构、流程、版本规则、MCP 或 QA 的改动都要写入 `docs/`。
+6. 只 stage 本次发布需要的源码和文档，不 stage `tmp/`、`promo/`、本地渲染产物或用户私有配置。
+7. 合并到 `release` 后创建语义化 tag。
+
+## Tag 规则
+
+使用语义化版本：
+
+| 类型 | 示例 | 场景 |
+|---|---|---|
+| patch | `v0.1.3` | bugfix、小功能、文档和兼容增强 |
+| minor | `v0.2.0` | 新增稳定用户能力或较大工作流能力 |
+| major | `v1.0.0` | 对外 API、数据结构或使用方式出现破坏性变化 |
+
+tag 必须指向 `release` 上的发布提交。不要移动已发布 tag；如果发布内容有误，创建新的 patch 版本。
+
+## 发布记录规范
+
+发布记录采用三个固定入口：
+
+| 文件 | 职责 |
+|---|---|
+| `README.md` | 入口页，只保留当前版本摘要、快速开始和文档链接。 |
+| `CHANGELOG.md` | 完整版本历史，按版本追加 `Added`、`Changed`、`Fixed`、`Security` 等分组。 |
+| `docs/RELEASE_STATUS.md` | 当前版本能否内测、readiness gate、真实 AIGC 与 fallback 判断、已知限制。 |
+
+`CHANGELOG.md` 的每条说明应回答：
+
+- 用户现在能做什么。
+- 哪些阻断问题被修复。
+- 是否影响使用方式、配置方式或兼容性。
+- 是否需要重新启动 cloud backend、local agent 或 frontend。
+
+Wiki 首页不维护完整 release 流水账，只展示当前状态并链接到 release status 和 changelog。
+
+## 当前发布检查清单
+
+v0.1.13 对应能力：
+
+- Closed beta shot split policy 已固定：`minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。
+- Time window planner 会按脚本语义、场景、主体、动作、camera/shot size、framing、情绪和画面变化切分；超过 15 秒强制继续拆分，短于 3 秒只在连续且合并后不超过 15 秒时合并。
+- Shot 数据结构已覆盖 `startSec` / `endSec`、`scriptSegmentId`、narration、screen text、scene、subject、action、camera、shot size、framing、focal length hint、visual change reason、continuity、render strategy、artifact refs、QA status、accepted candidate、candidate QA report 和 repair plans。
+- Shot QA repair loop 已显式建模：candidate 按 `attemptIndex` 追加，失败 candidate 不覆盖旧结果；达到 `maxRepairAttemptsPerShot=3` 后进入 `HUMAN_REVIEW_REQUIRED`。
+- RepairPlan 已支持 `preserve`、`lockedDimensions`、`repairTargets`、`promptPatch`、`renderStrategyPatch` 和 `nextToolCall`，通过维度默认锁定，只修失败项。
+- Final assembly gate 只消费 accepted shot candidate，FFmpeg concat 前统一 resolution、fps、pixel format 和 codec；voiceover、BGM ducking、最终字幕、响度、转码和 final QA 都在全局时间轴处理。
+- Diagnostics zip 和 fallback fixture 已覆盖 shot list、shot split report、duration validation、candidates、QA reports、repair plans、accepted shots、assembly plan、subtitle timeline、audio mix plan、final QA report、artifact manifest 和 provenance summary。
+- Director Studio shot card 和项目总览已展示 duration、QA、attempts、latest candidate、repair action、locked dimensions、accepted candidate、source/fallback、assembly eligibility、final assembly、final QA 和 provenance summary。
+- 桌面端 local runner 登录态注入时会先停止无登录态 local agent，再启动带用户会话的 runner；local agent 收到 `SIGTERM` 后会关闭 HTTP listener 并释放 `18080`。
+- 即梦 CLI / MCP 登录配置归入设置页，与文生图片、文生视频 Provider 同类管理；项目页只保留说明和跳转到设置的按钮。
+- 项目页启动体检默认自动运行，只展示未就绪或需留意的问题；本地工具命令级细节保留在设置页、追踪页和 diagnostics 中。
+
+发布 v0.1.13 tag 前必须确认：
+
+1. README 只保留 v0.1.13 当前版本摘要，release badge 已更新。
+2. `CHANGELOG.md` 已追加 v0.1.13 历史记录。
+3. `docs/RELEASE_STATUS.md` 已更新当前可用性判断。
+4. `docs/BETA_RUNBOOK.md`、`docs/video-frame-qa.md` 和本文已同步 closed beta shot pipeline 状态。
+5. `cd cloud-backend && go test ./...`、`cd local-backend && go test ./...`、`cd frontend && npm run test:director && npm run build` 通过。
+6. `python3 -m unittest scripts/test_beta_readiness.py` 和 `python3 -m unittest discover -s mcp/video_qa -p 'test*.py'` 通过。
+7. `bash scripts/beta-fallback-fixture.sh` 生成完整 fallback diagnostics；`bash scripts/beta-readiness-check.sh` 在无真实 AIGC provider 环境允许返回 `CONDITIONAL`。
+8. 邀请真实创作者前，必须在已启动 local agent、HyperFrames、MCP provider 和模型 provider 的环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
+9. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+10. `git tag v0.1.13 <release_commit>` 只在 release 提交后创建。
+
+v0.1.10 对应能力：
+
+- Closed beta runbook 已补齐：支持平台、依赖安装、cloud/local/frontend/HyperFrames 启动、FFmpeg、MCP provider、JiMeng/Dreamina、OpenAI-compatible model provider、环境变量、日志、诊断包、fallback 判断和已知限制。
+- 新增 beta smoke 和 fallback fixture：无真实 AIGC provider 时可验证 2-shot fallback 预览、artifact provenance、shot QA report 和 machine-readable repairPlan。
+- 新增 beta readiness gate：`BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 返回 `GO` 才能邀请真实创作者试用“一句话生成高质量真实 AIGC 视频”；`CONDITIONAL` 只代表 fallback 预览和工程链路可验证。
+- Artifact provenance 增加 `schemaVersion`、`sourceType`、`providerName`、`providerJobId`、`fallbackReason`、`isFallback`、`generatedAt`、`inputPromptHash` 和 `sourceArtifactIds`，前端明确标出 fallback storyboard/preview。
+- Video QA MCP 输出结构化 shot report、决策枚举和 `repairPlan`，可反向指导 AIGC 重生成、带参考重生成、HTML 重渲染、FFmpeg recomposite、prompt 修订或人工审核。
+- Local agent 新增 `beta-diagnostics.zip`，包含脱敏环境、日志、MCP provider 状态、artifact manifest、QA 报告和失败栈索引，默认不打包用户原始素材。
+- Release/production 启动增加安全 fail-fast：拒绝弱密钥、默认数据库/MinIO/admin token、通配 CORS、禁用 sandbox 或启用 sandbox fallback。
+
+发布 v0.1.10 tag 前必须确认：
+
+1. README 只保留 v0.1.10 当前版本摘要，release badge 已更新。
+2. `CHANGELOG.md` 已追加 v0.1.10 历史记录。
+3. `docs/RELEASE_STATUS.md` 已更新当前可用性判断。
+4. `docs/BETA_RUNBOOK.md`、`docs/mcp-providers.md`、`docs/video-frame-qa.md` 和本文已同步 closed beta 状态。
+5. `bash scripts/beta-smoke-check.sh` 通过，允许本地开发环境出现 production env validation skipped warning。
+6. `python3 -m unittest scripts/test_beta_readiness.py` 和 `python3 -m unittest discover -s mcp/video_qa -p 'test*.py'` 通过。
+7. 邀请真实创作者前，必须在已启动 local agent、HyperFrames、MCP provider 和模型 provider 的环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
+8. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+9. `git tag v0.1.10 <release_commit>` 只在 release 提交后创建。
+
+v0.1.9 对应能力：
+
+- 发布链路加固：CI 覆盖 Go test/vet、前端 lint/build、Electron runtime 测试、HyperFrames Render Service build 和生产依赖审计。
+- 生产配置 fail-fast：云端启动校验 `AUTH_TOKEN_SECRET`、数据库和 OpenAI 配置；Docker 镜像不再复制 `.env`。
+- 本地执行边界 fail-closed：需要 sandbox 的工具在 sandbox 不可用时阻断；Electron 文件读取只允许用户明确授权路径。
+- 清理无用代码和依赖：移除未调用 helper、孤立前端工具文件和冗余 package 依赖，补齐直接使用的 `esbuild`。
+
+发布 v0.1.9 tag 前必须确认：
+
+1. README 已追加 v0.1.9 release note。
+2. GitHub Wiki 首页、英文首页和版本管理页已同步 v0.1.9 状态。
+3. Go、前端、渲染服务、root smoke 和 Electron build 验证通过。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.9 <release_commit>` 只在 release 提交后创建。
+
+v0.1.8 对应能力：
+
+- 本地 `LOCAL_MCP_TOOL_CALL` 对每个 `kind=video` 请求增加 preflight QA，调用 Dreamina/JiMeng 前先检查提示词清晰度和参考素材可用性。
+- 不清晰提示词、泄漏内部生产术语、缺少时间段画面变化、缺少可用参考图的请求会进入 `blocked` 状态，不调用 provider，不消耗视频额度。
+- `generationResults` 和 `assetProvenance` 必须带 `preflightQa`，用于解释阻断原因和指导返修。
+
+发布 v0.1.8 tag 前必须确认：
+
+1. README 已追加 v0.1.8 release note。
+2. `docs/mcp-providers.md` 和 `docs/cinematic-video-workflow.md` 已说明 AIGC 调用前 QA。
+3. 本地 MCP 执行器测试覆盖不清晰 prompt 被阻断、不可用参考素材被阻断、清晰 prompt 才允许调用 provider。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.8 <release_commit>` 只在 release 提交后创建。
+
+v0.1.7 对应能力：
+
+- Dreamina/JiMeng 视频投放 prompt 改为 Vibe Creator 画面叙述：按时间段写具体主体、道具、场景、变化和表达思想。
+- 外部视频模型 prompt 禁止泄漏 `AIGC_VIDEO`、`b-roll`、`ffmpeg`、`SHOT_VIDEO_CLIP`、`素材意图` 等内部生产标签。
+- 导演字段、口播意图、趣味节拍和 QA 目标必须先转写成具体画面，再进入 `externalGenerationRequests[].prompt`。
+
+发布 v0.1.7 tag 前必须确认：
+
+1. README 已追加 v0.1.7 release note。
+2. `docs/cinematic-video-workflow.md` 和 `docs/mcp-providers.md` 已说明 Dreamina 投放 prompt 契约。
+3. 回归测试覆盖“坏 prompt 不再包含内部工程说明，而是包含时间段画面故事”。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.7 <release_commit>` 只在 release 提交后创建。
+
+v0.1.6 对应能力：
+
+- MCP AIGC 生成结果必须输出 `sourceSummary` 和 `assetProvenance`，让用户能直接看到哪些素材真实来自 provider，哪些请求失败、延迟或需要 fallback。
+- 自动插入的 `mcp_generation_runner` 默认携带 `minReadyVideoGenerations=1`，避免 Dreamina/JiMeng 视频全失败时仍把 HyperFrames/storyboard fallback 误认为即梦成片。
+- 即梦素材本地路径规范为 `TangyingAIOS/cache/mcp/<projectId>/<requestId>/` 和 `TangyingAIOS/artifacts/<projectId>/<requestId>/content`。
+- 版本文档、MCP provider 文档和影视流程文档都要说明 ready / failed / deferred / fallback 的区别。
+
+发布 v0.1.6 tag 前必须确认：
+
+1. README 已追加 v0.1.6 release note。
+2. `docs/mcp-providers.md` 和 `docs/cinematic-video-workflow.md` 已说明素材来源、路径和 fallback 规则。
+3. 本地 MCP 执行器测试覆盖“视频请求全失败时 sourceSummary 明确标记未满足 ready 视频要求”。
+4. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+5. `git tag v0.1.6 <release_commit>` 只在 release 提交后创建。
+
+v0.1.5 对应能力：
+
+- `cinematic_story` 影视创作模式已进入 release：故事大纲、详细剧本、角色/场景/道具档案、参考图、shot 设计、MCP 生成、render、QA 和发布文案全链路可跑通。
+- 口播和影视视频都坚持“脚本先行，素材跟随脚本”的生成顺序，避免直接用单调 HyperFrames 堆页面。
+- CLI/AIGC provider 统一通过 `mcp/` 下的标准 MCP 服务接入；云端只使用通用 `mcp_generation_runner`，本地只使用 `LOCAL_MCP_TOOL_CALL`。
+- JiMeng/Dreamina 图片请求走 `jimeng.generate_image`，视频请求走 `jimeng.generate_video`；图片 `resolution_type` 已按 Dreamina MCP 要求归一为 `2k/4k`。
+- Shot-level QA 增加剧本匹配、导演理由、参考资产覆盖、动作节拍等指标，最终输出 `SHOT_QA_REPORT` 和 `SHOT_REPAIR_PLAN`。
+- release 分支验证记录：`vp-b1a3a300`，run `agent_run_5ff5fbfe-7a61-4250-a103-17a5077a3882`，29 个节点全成功，最终视频 1920x1080 / 18 秒，QA `score=100`。
+
+发布 v0.1.5 tag 前必须确认：
+
+1. README 已追加 v0.1.5 release note。
+2. `docs/cinematic-video-workflow.md`、`docs/mcp-providers.md`、`docs/video-frame-qa.md` 已同步更新。
+3. `promo/`、`scripts/tmp/`、本地 token、渲染缓存没有进入 staged changes。
+4. `git tag v0.1.5 <release_commit>` 只在 release 提交后创建。
+
+v0.1.4 对应能力：
+
+- 动态视频计划在 render 后自动插入 `visual_qa`。
+- 本地 `VIDEO_FRAME_QA` 通过标准 stdio MCP 调用 `mcp/video_qa/server.py`，Go runner 只做路径解析和 MCP 桥接。
+- Python MCP 工具 `video_qa.analyze_video` 输出 JSON 报告、抽帧图片、contact sheet、shot 级质量摘要和返修计划。
+- 每个 shot 都输出 `metricSummary`、`score`、`passed`、`needsRegeneration`、`conclusion` 和 `recommendations`。
+- 顶层 `repairPlan` 输出 `approve`、`manual_review` 或 `regenerate_shots`，并列出需要返修的 shot。
+- QA 审核门阻断 publish，人工确认后才继续发布文案。
+- 本地 artifact 的 `localPath` 可被下游本地工具解析为真实视频路径。
+- `SHOT_QA_REPORT` 和 `SHOT_REPAIR_PLAN` 作为稳定 artifact 输出，前端审核面板优先展示 shot 级结论。

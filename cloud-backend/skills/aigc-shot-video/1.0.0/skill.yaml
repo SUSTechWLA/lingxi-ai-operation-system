@@ -1,0 +1,40 @@
+name: aigc-shot-video
+version: "1.0.0"
+description: AIGC 镜头式视频生产 — 剧本生成、角色/场景设计、Shot 拆解、关键帧 Prompt、视频生成
+category: video
+stages:
+  - name: brief
+    instruction: stages/brief.md
+    input_schema: schemas/brief_input.json
+    output_schema: schemas/brief_output.json
+  - name: script
+    instruction: stages/script.md
+    output_schema: schemas/script_output.json
+  - name: visual_design
+    instruction: stages/visual_design.md
+    output_schema: schemas/character.json
+    optional: true
+  - name: shot_plan
+    instruction: stages/shot_plan.md
+    output_schema: schemas/shot.json
+  - name: storyboard
+    instruction: stages/storyboard.md
+    optional: true
+    approval_required: true
+  - name: keyframe
+    instruction: stages/keyframe.md
+    approval_required: true
+  - name: video_prompt
+    instruction: stages/video_prompt.md
+    approval_required: true
+  - name: generate
+    instruction: stages/generate.md
+    approval_required: false
+  - name: review
+    instruction: stages/review.md
+    approval_required: true
+requires:
+  text_to_text: true
+  image_to_text: true
+  text_to_image: true
+  text_image_to_video: true

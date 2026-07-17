@@ -1,0 +1,41 @@
+name: render_dependency_guard
+description: 渲染前检查 preview review 是否已通过，未确认预览时禁止进入最终本地渲染。
+type: builtin_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/render_dependency_guard
+timeout: 30
+
+capabilities:
+  - video_creation
+  - render_dependency_guard
+
+parameters:
+  previewApproved:
+    type: boolean
+    required: false
+    description: 上游 preview review 是否已通过
+  previewReviewId:
+    type: string
+    required: false
+
+output:
+  allowed:
+    type: boolean
+  reason:
+    type: string
+  artifacts:
+    type: object
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - RENDER_GUARD_REPORT
+  defaultReviewRequired: false
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

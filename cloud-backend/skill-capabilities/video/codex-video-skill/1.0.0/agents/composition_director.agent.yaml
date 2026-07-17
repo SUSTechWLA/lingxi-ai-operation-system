@@ -1,0 +1,31 @@
+id: composition_director
+name: CompositionDirectorAgent
+displayName: 图文视频结构导演
+stage: composition
+goal: 把 CARD_PLAN 转成 VideoCompositionSpec、轨道、时间轴和布局。
+requiredInputs:
+  - VIDEO_SCRIPT
+  - CARD_PLAN
+requiredOutputs:
+  - VIDEO_COMPOSITION_SPEC
+allowedTools:
+  - video_composition_builder
+  - composition_quality_checker
+forbiddenTools:
+  - hyperframes_renderer
+  - artifact_packager
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核视频结构
+  reviewFocus:
+    - 卡片顺序是否合理
+    - 时间轴是否完整
+    - 字幕是否覆盖口播
+    - 是否适合 HyperFrames 渲染
+  userActions:
+    - approve
+    - edit
+    - regenerate
+    - reject
+maxToolCalls: 3

@@ -1,0 +1,98 @@
+name: video_composition_builder
+version: "1.0"
+type: builtin_prompt_tool
+description: 根据已确认的口播脚本生成视频合成结构，包括卡片布局、字幕轨道、时间轴。
+endpoint: builtin://video-creation/video_composition_builder
+
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+
+capabilities:
+  - video_composition
+  - image_text_video
+  - composition_spec
+
+parameters:
+  script:
+    type: string
+    required: true
+    description: 已确认的口播脚本全文。
+  sections:
+    type: array
+    required: false
+    description: 脚本分段信息。
+  durationSec:
+    type: number
+    required: false
+    default: 45
+  resolution:
+    type: object
+    required: false
+    default:
+      width: 1920
+      height: 1080
+  fps:
+    type: number
+    required: false
+    default: 30
+  theme:
+    type: string
+    required: false
+    default: clean_card
+
+output:
+  artifactKind:
+    type: string
+  specVersion:
+    type: string
+  durationSec:
+    type: number
+  fps:
+    type: number
+  resolution:
+    type: object
+  tracks:
+    type: array
+  summary:
+    type: string
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: 视频结构决定后续画面和渲染，必须人工确认。
+
+humanReview:
+  required: true
+  gate: after_artifact
+  title: 审核视频结构
+  reviewFocus:
+    - 卡片顺序是否合理
+    - 每页文字是否过长
+    - 每段时长是否合理
+    - 字幕是否覆盖完整内容
+  userActions:
+    - approve
+    - edit
+    - regenerate
+    - reject
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - VIDEO_COMPOSITION_SPEC
+  defaultReviewRequired: true
+
+nextRecommendedTools:
+  - hyperframes_project_generator
+
+tags:
+  - video
+  - composition
+  - image_text_video
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

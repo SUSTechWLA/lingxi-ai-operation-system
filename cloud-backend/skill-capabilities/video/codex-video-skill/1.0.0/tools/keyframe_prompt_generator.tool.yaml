@@ -1,0 +1,59 @@
+name: keyframe_prompt_generator
+description: 根据分镜列表中的关键画面，为每个镜头的代表性画面生成 AI 图像生成提示词，用于关键帧预览或视频生成模型的参考帧。
+type: builtin_prompt_tool
+version: 1.0.0
+endpoint: builtin://video-creation/keyframe_prompt_generator
+timeout: 120
+
+capabilities:
+  - video_creation
+  - keyframe_generation
+  - image_prompt
+tags:
+  - video
+  - keyframe
+  - image
+  - prompt
+
+parameters:
+  shotList:
+    type: array
+    required: true
+    description: 分镜列表
+  brief:
+    type: string
+    required: false
+    description: 用户的视频创作需求
+  style:
+    type: string
+    required: false
+    description: 视觉风格描述
+
+output:
+  keyframePrompts:
+    type: array
+    description: 关键帧提示词列表
+  summary:
+    type: string
+    description: 关键帧概览
+
+costLevel: low
+latencyLevel: medium
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: false
+  mode: none
+  reason: 关键帧提示词为建议步骤，非必须审核节点。
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - JSON
+    - MARKDOWN
+  defaultReviewRequired: false
+
+nextRecommendedTools:
+  - video_prompt_generator

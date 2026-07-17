@@ -1,0 +1,76 @@
+name: video_package_exporter
+description: 将口播稿、分镜、视频提示词和发布文案打包为完整的视频创作包，方便导入 HyperFrames 或其他视频制作工具。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/video_package_exporter
+timeout: 120
+
+capabilities:
+  - video_creation
+  - package_export
+  - project_bundle
+tags:
+  - video
+  - export
+  - package
+  - bundle
+
+parameters:
+  script:
+    type: string
+    required: true
+    description: 口播稿正文
+  shotList:
+    type: array
+    required: true
+    description: 分镜列表
+  videoPrompts:
+    type: array
+    required: true
+    description: 视频生成提示词列表
+  publishCopy:
+    type: object
+    required: false
+    description: 发布文案（标题、简介、标签）
+
+output:
+  content:
+    type: string
+    description: 创作包清单（Markdown）
+  package:
+    type: object
+    description: 结构化创作包数据
+
+costLevel: low
+latencyLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: false
+  reason: 最终创作包是视频制作的交付物，需要用户确认内容完整性。
+  reviewArtifactKinds:
+    - MARKDOWN
+    - JSON
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - BUNDLE
+    - JSON
+  defaultReviewRequired: true
+
+qualityPolicy:
+  required: true
+  checkerTool: package_quality_checker
+  minScore: 85
+  autoRepair: false
+  maxRepairAttempts: 0
+
+nextRecommendedTools: []

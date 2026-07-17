@@ -1,0 +1,1 @@
+# Keyframe Stage - Generate keyframe reference images

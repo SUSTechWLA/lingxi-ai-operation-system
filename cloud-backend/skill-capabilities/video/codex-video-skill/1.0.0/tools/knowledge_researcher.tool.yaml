@@ -1,0 +1,78 @@
+name: knowledge_researcher
+description: 根据视频主题研究整理关键事实、背景知识、常见误区和讲述角度，为口播稿提供可靠的知识基础。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/knowledge_researcher
+timeout: 120
+
+capabilities:
+  - video_creation
+  - knowledge_research
+  - fact_gathering
+tags:
+  - video
+  - research
+  - knowledge
+  - fact
+
+parameters:
+  topic:
+    type: string
+    required: true
+    description: 视频主题（例如"端午节的来历"）
+  outputStyle:
+    type: string
+    required: false
+    description: 输出风格要求（例如"适合大众口播知识分享视频"）
+
+output:
+  facts:
+    type: array
+    description: 结构化事实短句列表，适合后续口播稿生成
+  timeline:
+    type: array
+    description: '关键事件时间线 [{"date": "...", "event": "..."}]'
+  storyAngles:
+    type: array
+    description: 3-5个短视频讲述角度
+  risks:
+    type: array
+    description: 需要注意的事实风险点和不确定内容
+  sourceNotes:
+    type: array
+    description: 资料来源说明
+  summary:
+    type: string
+    description: 资料整理摘要
+  content:
+    type: string
+    description: 知识事实整理内容
+
+costLevel: low
+latencyLevel: medium
+riskLevel: low
+sideEffect: false
+idempotent: true
+
+approvalPolicy:
+  required: true
+  mode: after_artifact
+  blocksDownstream: true
+  reason: 知识类视频的事实基础需要用户确认后再进入脚本生成。
+  reviewArtifactKinds:
+    - JSON
+    - MARKDOWN
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - JSON
+    - MARKDOWN
+  defaultReviewRequired: true
+
+nextRecommendedTools:
+  - fact_checker
+  - video_script_generator

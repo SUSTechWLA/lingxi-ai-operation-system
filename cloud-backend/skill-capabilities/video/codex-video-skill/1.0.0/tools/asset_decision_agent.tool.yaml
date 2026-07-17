@@ -1,0 +1,47 @@
+name: asset_decision_agent
+description: 按审核卡片、分镜计划和视频结构判断每个 shot 的素材来源，不绑定具体媒体供应商。
+type: builtin
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/asset_decision_agent
+timeout: 60
+
+capabilities:
+  - video_creation
+  - reference_asset_plan
+  - asset_source_decision
+tags:
+  - video
+  - reference
+  - assets
+  - model_gateway
+
+parameters:
+  cardPlan:
+    type: object
+    required: false
+  shotList:
+    type: array
+    required: false
+  compositionSpec:
+    type: object
+    required: false
+
+output:
+  referenceAssetPlan:
+    type: object
+  artifacts:
+    type: object
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - REFERENCE_ASSET_PLAN
+  defaultReviewRequired: true
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

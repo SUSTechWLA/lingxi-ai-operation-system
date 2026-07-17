@@ -1,0 +1,1 @@
+# Component DSL Stage - Generate component DSL for each visual beat

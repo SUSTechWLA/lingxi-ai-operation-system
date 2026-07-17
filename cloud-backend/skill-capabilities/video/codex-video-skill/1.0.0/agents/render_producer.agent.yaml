@@ -1,0 +1,32 @@
+id: render_producer
+name: RenderProducerAgent
+displayName: 渲染制片
+stage: render
+goal: 确认预览已通过后创建并跟踪本地 HyperFrames 渲染任务。
+requiredInputs:
+  - PREVIEW_SNAPSHOTS
+requiredOutputs:
+  - VIDEO
+  - RENDER_REPORT
+allowedTools:
+  - render_dependency_guard
+  - hyperframes_renderer
+  - local_job_status_tracker
+forbiddenTools:
+  - video_script_generator
+  - video_composition_builder
+  - hyperframes_project_generator
+  - artifact_packager
+humanReview:
+  required: true
+  gate: before_execute
+  title: 确认最终渲染
+  reviewFocus:
+    - 预览画面是否已确认
+    - 视频结构是否正确
+    - 是否允许开始本地渲染
+  userActions:
+    - approve
+    - reject
+    - back_to_preview
+maxToolCalls: 3

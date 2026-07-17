@@ -1,0 +1,35 @@
+name: asset_policy_generator
+description: 生成素材使用策略，包括背景、图标、字体和本地/云端素材边界。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/asset_policy_generator
+timeout: 60
+
+capabilities:
+  - video_creation
+  - asset_policy
+
+parameters:
+  style:
+    type: string
+    required: false
+
+output:
+  assetPolicy:
+    type: object
+  artifacts:
+    type: object
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - REFERENCE_ASSET_PLAN
+  defaultReviewRequired: false
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

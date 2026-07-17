@@ -1,0 +1,262 @@
+# Guided Image-Text Video Pipeline
+# 引导式图文视频创作流水线
+#
+# 一句话启动 → 确认方案 → 确认脚本 → 确认结构 → 确认预览 → 渲染MP4 → 打包导出
+# 每个创作阶段 (proposal/script/composition/preview) 必须经过人工确认。
+
+id: wf-guided-image-text-video
+name: 引导式图文视频
+description: >-
+  一句话启动项目 → 确认方案 → 确认脚本 → 确认结构 → 确认预览 → 渲染MP4 → 打包导出。
+  每个创作阶段需人工确认。
+category: video
+version: "1.0"
+metadata:
+  requireReviewGates: true
+  allowFullAuto: false
+  defaultCheckpointPolicy: guided
+  pipelineVersion: "1.0"
+  humanApprovalStages:
+    - proposal
+    - script
+    - composition
+    - preview
+    - visual_qa
+
+stages:
+  - name: proposal
+    director: proposal-director
+    skill: video/proposal-director
+    reviewRequired: true
+    reviewFocus:
+      - 主题是否准确
+      - 目标时长是否合理
+      - 视频结构是否清楚
+      - 是否适合图文视频
+
+  - name: script
+    director: script-director
+    skill: video/script-director
+    reviewRequired: true
+    reviewFocus:
+      - 开头是否有吸引力
+      - 口播是否自然
+      - 内容是否准确
+      - 时长是否匹配
+
+  - name: composition
+    director: composition-director
+    skill: video/composition-director
+    reviewRequired: true
+    reviewFocus:
+      - 卡片顺序是否合理
+      - 每页文字是否过长
+      - 时间轴是否覆盖全片
+      - 是否适合 HyperFrames 图文渲染
+
+  - name: preview
+    director: preview-director
+    skill: video/preview-director
+    reviewRequired: true
+    reviewFocus:
+      - 画面是否可读
+      - 文字是否溢出
+      - 卡片顺序是否正确
+      - 是否允许进入最终渲染
+
+  - name: render
+    director: render-director
+    skill: video/render-director
+    reviewRequired: false
+
+  - name: visual_qa
+    director: quality-director
+    skill: video/quality-director
+    reviewRequired: true
+    reviewFocus:
+      - 每个 shot 抽帧是否清晰
+      - 是否有文字覆盖或字幕互相遮挡
+      - 画面复杂度是否影响理解
+      - 是否需要返工单个 shot 或调整字幕安全区
+
+  - name: package
+    director: package-director
+    skill: video/package-director
+    reviewRequired: true
+    reviewFocus:
+      - 最终包是否包含 video/manifest/spec/review
+      - 用户是否确认导出
+
+dag:
+  nodes:
+    - id: proposal_exec
+      type: TOOL
+      name: external
+      input:
+        tool: video_script_generator
+        topic: "{{topic}}"
+        durationSec: "{{durationSec}}"
+        language: zh-CN
+        style: 中文平台图文口播
+        format: image_text_video
+        stage: proposal
+        outputMode: proposal_only
+    - id: proposal_review_gate
+      type: REVIEW_GATE
+      name: 审核-创作方案
+      input:
+        phase: after_artifact
+        reviewFocus:
+          - 主题是否准确
+          - 目标时长是否合理
+          - 视频结构是否清楚
+          - 是否适合图文视频
+        stage: proposal
+    - id: script_exec
+      type: TOOL
+      name: external
+      input:
+        tool: video_script_generator
+        topic: "{{topic}}"
+        durationSec: "{{durationSec}}"
+        language: zh-CN
+        style: 中文平台图文口播
+        format: image_text_video
+        stage: script
+        proposalRef: "{{proposal_exec.output}}"
+    - id: script_review_gate
+      type: REVIEW_GATE
+      name: 审核-口播脚本
+      input:
+        phase: after_artifact
+        reviewFocus:
+          - 开头是否有吸引力
+          - 口播是否自然
+          - 内容是否准确
+          - 时长是否匹配
+        stage: script
+    - id: composition_exec
+      type: TOOL
+      name: external
+      input:
+        tool: video_composition_builder
+        script: "{{script_exec.output.script}}"
+        sections: "{{script_exec.output.sections}}"
+        durationSec: "{{durationSec}}"
+        resolution:
+          width: 1920
+          height: 1080
+        fps: 30
+        theme: clean_card
+        stage: composition
+    - id: composition_review_gate
+      type: REVIEW_GATE
+      name: 审核-视频结构
+      input:
+        phase: after_artifact
+        reviewFocus:
+          - 卡片顺序是否合理
+          - 每页文字是否过长
+          - 时间轴是否覆盖全片
+          - 是否适合 HyperFrames 图文渲染
+        stage: composition
+    - id: preview_exec
+      type: TOOL
+      name: external
+      input:
+        tool: hyperframes_project_generator
+        projectId: "{{task.id}}"
+        topic: "{{topic}}"
+        compositionSpec: "{{composition_exec.output}}"
+        outputDir: "local://projects/{{task.id}}/hyperframes"
+        stage: preview
+    - id: preview_review_gate
+      type: REVIEW_GATE
+      name: 审核-画面预览
+      input:
+        phase: after_artifact
+        reviewFocus:
+          - 画面是否可读
+          - 文字是否溢出
+          - 卡片顺序是否正确
+          - 是否允许进入最终渲染
+        stage: preview
+    - id: render_exec
+      type: TOOL
+      name: external
+      input:
+        tool: hyperframes_renderer
+        projectId: "{{task.id}}"
+        projectDir: "local://projects/{{task.id}}/hyperframes"
+        entry: index.html
+        outputPath: "local://projects/{{task.id}}/renders/final.mp4"
+        fps: 30
+        quality: standard
+        timeoutSec: 1800
+        stage: render
+    - id: visual_qa_exec
+      type: TOOL
+      name: external
+      input:
+        tool: video_frame_qa
+        projectId: "{{task.id}}"
+        input: "local://projects/{{task.id}}/renders/final.mp4"
+        shotList: "{{composition_exec.output.shotList}}"
+        sampleIntervalSec: 4
+        stage: visual_qa
+    - id: visual_qa_review_gate
+      type: REVIEW_GATE
+      name: 审核-视觉抽帧报告
+      input:
+        phase: after_artifact
+        reviewFocus:
+          - 每个 shot 抽帧是否清晰
+          - 是否有文字覆盖或字幕互相遮挡
+          - 画面复杂度是否影响理解
+          - 是否需要返工单个 shot 或调整字幕安全区
+        stage: visual_qa
+    - id: package_exec
+      type: TOOL
+      name: external
+      input:
+        tool: artifact_packager
+        projectId: "{{task.id}}"
+        include:
+          - "local://projects/{{task.id}}/renders/final.mp4"
+          - "local://projects/{{task.id}}/hyperframes/manifest.json"
+          - "local://projects/{{task.id}}/hyperframes/assets/data.json"
+        output: "local://projects/{{task.id}}/packages/project_package.zip"
+        stage: package
+    - id: final_review_exec
+      type: TOOL
+      name: external
+      input:
+        tool: ffmpeg_probe
+        input: "local://projects/{{task.id}}/renders/final.mp4"
+        stage: final_review
+
+  edges:
+    - from: proposal_exec
+      to: proposal_review_gate
+    - from: proposal_review_gate
+      to: script_exec
+    - from: script_exec
+      to: script_review_gate
+    - from: script_review_gate
+      to: composition_exec
+    - from: composition_exec
+      to: composition_review_gate
+    - from: composition_review_gate
+      to: preview_exec
+    - from: preview_exec
+      to: preview_review_gate
+    - from: preview_review_gate
+      to: render_exec
+    - from: render_exec
+      to: visual_qa_exec
+    - from: visual_qa_exec
+      to: visual_qa_review_gate
+    - from: visual_qa_review_gate
+      to: package_exec
+    - from: package_exec
+      to: final_review_exec

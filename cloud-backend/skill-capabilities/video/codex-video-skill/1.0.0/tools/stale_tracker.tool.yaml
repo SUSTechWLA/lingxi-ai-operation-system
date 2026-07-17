@@ -1,0 +1,38 @@
+name: stale_tracker
+description: 当上游产物被编辑后，标记依赖它的下游产物 stale，并输出失效报告。
+type: builtin_prompt_tool
+executionPlane: cloud
+requiresUserDevice: false
+artifactLocation: cloud
+version: 1.0.0
+endpoint: builtin://video-creation/stale_tracker
+timeout: 30
+
+capabilities:
+  - video_creation
+  - stale_tracking
+
+parameters:
+  changedArtifact:
+    type: object
+    required: false
+  artifactIndex:
+    type: object
+    required: false
+
+output:
+  staleArtifactReport:
+    type: object
+  artifacts:
+    type: object
+
+artifactPolicy:
+  produceArtifact: true
+  artifactKinds:
+    - STALE_ARTIFACT_REPORT
+  defaultReviewRequired: false
+
+costLevel: low
+riskLevel: low
+sideEffect: false
+idempotent: true

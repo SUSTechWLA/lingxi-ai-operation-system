@@ -1,0 +1,264 @@
+package apispec
+
+import "fmt"
+
+// Builder provides a fluent API for constructing an OpenAPI Spec.
+type Builder struct {
+	spec *Spec
+}
+
+// New creates a Builder for an OpenAPI 3.0 spec.
+func New(title, version string) *Builder {
+	return &Builder{
+		spec: &Spec{
+			OpenAPI: "3.0.3",
+			Info:    Info{Title: title, Version: version},
+			Paths:   map[string]*PathItem{},
+		},
+	}
+}
+
+// Server adds a server entry.
+func (b *Builder) Server(url, description string) *Builder {
+	b.spec.Servers = append(b.spec.Servers, Server{URL: url, Description: description})
+	return b
+}
+
+// Tag adds a tag definition.
+func (b *Builder) Tag(name, description string) *Builder {
+	b.spec.Tags = append(b.spec.Tags, Tag{Name: name, Description: description})
+	return b
+}
+
+// Schema registers a named schema in components/schemas.
+func (b *Builder) Schema(name string, schema *Schema) *Builder {
+	if b.spec.Components == nil {
+		b.spec.Components = &Components{}
+	}
+	if b.spec.Components.Schemas == nil {
+		b.spec.Components.Schemas = map[string]*Schema{}
+	}
+	b.spec.Components.Schemas[name] = schema
+	return b
+}
+
+// RouteOp is a fluent builder for a single operation.
+type RouteOp struct {
+	Operation *Operation
+}
+
+// Summary sets the operation summary.
+func (op *RouteOp) Summary(s string) *RouteOp {
+	op.Operation.Summary = s
+	return op
+}
+
+// Description sets the operation description.
+func (op *RouteOp) Description(s string) *RouteOp {
+	op.Operation.Description = s
+	return op
+}
+
+// Tags sets the operation tags.
+func (op *RouteOp) Tags(tags ...string) *RouteOp {
+	op.Operation.Tags = tags
+	return op
+}
+
+// OperationID sets the explicit operationId.
+func (op *RouteOp) OperationID(id string) *RouteOp {
+	op.Operation.OperationID = id
+	return op
+}
+
+// QueryParam adds a query parameter.
+func (op *RouteOp) QueryParam(name, description string, schema *Schema, required bool) *RouteOp {
+	op.Operation.Parameters = append(op.Operation.Parameters, Parameter{
+		Name:        name,
+		In:          "query",
+		Description: description,
+		Required:    required,
+		Schema:      &SchemaRef{Schema: schema},
+	})
+	return op
+}
+
+// PathParam adds a path parameter (required by default).
+func (op *RouteOp) PathParam(name, description string, schema *Schema) *RouteOp {
+	op.Operation.Parameters = append(op.Operation.Parameters, Parameter{
+		Name:        name,
+		In:          "path",
+		Description: description,
+		Required:    true,
+		Schema:      &SchemaRef{Schema: schema},
+	})
+	return op
+}
+
+// BodyJSON sets a JSON request body referencing a component schema by name.
+func (op *RouteOp) BodyJSON(schemaName, description string, required bool) *RouteOp {
+	op.Operation.RequestBody = &RequestBody{
+		Description: description,
+		Required:    required,
+		Content: map[string]*MediaType{
+			"application/json": {
+				Schema: &SchemaRef{Ref: "#/components/schemas/" + schemaName},
+			},
+		},
+	}
+	return op
+}
+
+// BodyInlineJSON sets a JSON request body with an inline schema.
+func (op *RouteOp) BodyInlineJSON(schema *Schema, description string, required bool) *RouteOp {
+	op.Operation.RequestBody = &RequestBody{
+		Description: description,
+		Required:    required,
+		Content: map[string]*MediaType{
+			"application/json": {
+				Schema: &SchemaRef{Schema: schema},
+			},
+		},
+	}
+	return op
+}
+
+// BodyMultipart sets a multipart/form-data request body.
+func (op *RouteOp) BodyMultipart(fields map[string]*Schema, required bool) *RouteOp {
+	props := map[string]*SchemaRef{}
+	for name, s := range fields {
+		props[name] = &SchemaRef{Schema: s}
+	}
+	op.Operation.RequestBody = &RequestBody{
+		Required: required,
+		Content: map[string]*MediaType{
+			"multipart/form-data": {
+				Schema: &SchemaRef{
+					Schema: &Schema{
+						Type:       "object",
+						Properties: props,
+					},
+				},
+			},
+		},
+	}
+	return op
+}
+
+// ResponseJSON adds a response with a JSON body referencing a component schema.
+// status should be "200", "201", "400", "500", etc.
+func (op *RouteOp) ResponseJSON(status, description, schemaName string) *RouteOp {
+	if op.Operation.Responses == nil {
+		op.Operation.Responses = map[string]*Response{}
+	}
+	op.Operation.Responses[status] = &Response{
+		Description: description,
+		Content: map[string]*MediaType{
+			"application/json": {
+				Schema: &SchemaRef{Ref: "#/components/schemas/" + schemaName},
+			},
+		},
+	}
+	return op
+}
+
+// Response adds a response with no body (status only).
+func (op *RouteOp) Response(status, description string) *RouteOp {
+	if op.Operation.Responses == nil {
+		op.Operation.Responses = map[string]*Response{}
+	}
+	op.Operation.Responses[status] = &Response{Description: description}
+	return op
+}
+
+// ResponseInlineJSON adds a response with an inline JSON schema.
+func (op *RouteOp) ResponseInlineJSON(status, description string, schema *Schema) *RouteOp {
+	if op.Operation.Responses == nil {
+		op.Operation.Responses = map[string]*Response{}
+	}
+	op.Operation.Responses[status] = &Response{
+		Description: description,
+		Content: map[string]*MediaType{
+			"application/json": {
+				Schema: &SchemaRef{Schema: schema},
+			},
+		},
+	}
+	return op
+}
+
+// Route adds an operation to the spec. Returns a RouteOp for fluent chaining.
+func (b *Builder) Route(method, path, summary string) *RouteOp {
+	item := b.spec.Paths[path]
+	if item == nil {
+		item = &PathItem{}
+		b.spec.Paths[path] = item
+	}
+
+	operationID := fmt.Sprintf("%s%s", method, normalizePath(path))
+
+	var op *Operation
+	switch method {
+	case "GET":
+		op = item.Get
+	case "POST":
+		op = item.Post
+	case "PUT":
+		op = item.Put
+	case "DELETE":
+		op = item.Delete
+	case "PATCH":
+		op = item.Patch
+	case "OPTIONS":
+		op = item.Options
+	default:
+		op = item.Post // fallback
+	}
+	if op == nil {
+		op = &Operation{Responses: map[string]*Response{}}
+	}
+	op.Summary = summary
+	op.OperationID = operationID
+
+	switch method {
+	case "GET":
+		item.Get = op
+	case "POST":
+		item.Post = op
+	case "PUT":
+		item.Put = op
+	case "DELETE":
+		item.Delete = op
+	case "PATCH":
+		item.Patch = op
+	case "OPTIONS":
+		item.Options = op
+	}
+
+	return &RouteOp{Operation: op}
+}
+
+// Build returns the constructed Spec.
+func (b *Builder) Build() *Spec {
+	return b.spec
+}
+
+// normalizePath converts path params like :id to OpenAPI format {id}.
+func normalizePath(path string) string {
+	result := make([]byte, 0, len(path))
+	for i := 0; i < len(path); i++ {
+		if path[i] == ':' {
+			// skip : and convert next segment
+			result = append(result, '_')
+			j := i + 1
+			for j < len(path) && path[j] != '/' && path[j] != ':' {
+				result = append(result, path[j])
+				j++
+			}
+			i = j - 1
+		} else {
+			result = append(result, path[i])
+		}
+	}
+	return string(result)
+}
