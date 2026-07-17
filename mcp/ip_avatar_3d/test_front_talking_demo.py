@@ -462,7 +462,11 @@ class FrontTalkingDemoTests(unittest.TestCase):
             )
             self.assertGreaterEqual(
                 metrics["Aroll_Greeting_Wave"]["tipSeparation"],
-                0.02,
+                0.014,
+            )
+            self.assertLessEqual(
+                metrics["Aroll_Greeting_Wave"]["tipSeparation"],
+                0.025,
             )
             self.assertGreaterEqual(
                 metrics["Aroll_OpenPalm_Explain"]["palmFacing"],
@@ -470,11 +474,27 @@ class FrontTalkingDemoTests(unittest.TestCase):
             )
             self.assertGreaterEqual(
                 metrics["Aroll_OpenPalm_Explain"]["tipSeparation"],
-                0.035,
+                0.022,
+            )
+            self.assertLessEqual(
+                metrics["Aroll_OpenPalm_Explain"]["tipSeparation"],
+                0.032,
             )
             self.assertGreaterEqual(
                 metrics["Aroll_Count_Three"]["tipSeparation"],
-                0.05,
+                0.024,
+            )
+            self.assertLessEqual(
+                metrics["Aroll_Count_Three"]["tipSeparation"],
+                0.035,
+            )
+            self.assertGreater(
+                metrics["Aroll_OpenPalm_Explain"]["tipSeparation"],
+                metrics["Aroll_Greeting_Wave"]["tipSeparation"],
+            )
+            self.assertGreater(
+                metrics["Aroll_Count_Three"]["tipSeparation"],
+                metrics["Aroll_OpenPalm_Explain"]["tipSeparation"],
             )
             for action_name in gestures:
                 self.assertGreater(metrics[action_name]["pixels"], 1000)

@@ -37,6 +37,14 @@ SOLE_CLEARANCE_MAX_M = 0.003
 BLENDER_FLOAT_EPSILON_M = 0.0005
 
 
+def assert_sloth_open_hand(fingers) -> None:
+    """Require a low-splay three-digit fan with lightly hooked proximal joints."""
+    assert all(abs(finger.z) < 0.04 for finger in fingers)
+    assert 0.04 < fingers[0].x <= 0.10, tuple(fingers[0])
+    assert abs(fingers[1].x) < 0.02, tuple(fingers[1])
+    assert -0.10 <= fingers[2].x < -0.04, tuple(fingers[2])
+
+
 def reset_scene() -> None:
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
@@ -1036,11 +1044,9 @@ def test_rigged_fbx_action_library_uses_source_axes_distal_fingers_and_rich_face
     assert wrist_in.y < -0.90, tuple(wrist_in)
     assert abs(wrist_out.y - wrist_in.y) < 0.10
     assert wrist_out.z * wrist_in.z < 0.0
-    assert all(abs(finger.z) < 0.04 for finger in open_fingers)
-    assert open_fingers[0].x > 0.10
-    assert open_fingers[2].x < -0.10
-    assert middle_out_direction.z > 0.45, tuple(middle_out_direction)
-    assert middle_in_direction.z > 0.45, tuple(middle_in_direction)
+    assert_sloth_open_hand(open_fingers)
+    assert middle_out_direction.z > 0.40, tuple(middle_out_direction)
+    assert middle_in_direction.z > 0.40, tuple(middle_in_direction)
 
     armature.animation_data.action = bpy.data.actions["Gesture_Fist"]
     bpy.context.scene.frame_set(30)
@@ -1386,9 +1392,7 @@ def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint(
     assert left_arm.z > 0.8
     assert right_arm.z > -0.8
     assert wrist_out.y < -0.90, tuple(wrist_out)
-    assert all(abs(finger.z) < 0.04 for finger in open_fingers)
-    assert open_fingers[0].x > 0.10
-    assert open_fingers[2].x < -0.10
+    assert_sloth_open_hand(open_fingers)
     assert keys["Eye_Squint.L"].value > 0.5
     assert keys["Eye_Squint.R"].value > 0.5
     assert keys.get("Eye_Blink.L") is None
@@ -1403,8 +1407,8 @@ def test_rigged_fbx_talking_timeline_uses_source_axes_distal_fingers_and_squint(
     assert wrist_in.y < -0.90, tuple(wrist_in)
     assert abs(wrist_out.y - wrist_in.y) < 0.12
     assert wrist_out.z * wrist_in.z < 0.0
-    assert middle_out_direction.z > 0.45, tuple(middle_out_direction)
-    assert middle_in_direction.z > 0.45, tuple(middle_in_direction)
+    assert middle_out_direction.z > 0.40, tuple(middle_out_direction)
+    assert middle_in_direction.z > 0.40, tuple(middle_in_direction)
 
 
 def test_lip_at_preserves_planner_timestamp_boundaries() -> None:
@@ -1963,9 +1967,7 @@ def test_action_library_contains_talking_gestures_and_expressions() -> None:
     ]
     assert max(abs(value) for value in forearm) > 0.50
     assert hand.y < -0.90
-    assert all(abs(finger.z) < 0.04 for finger in fingers)
-    assert fingers[0].x > 0.10
-    assert fingers[2].x < -0.10
+    assert_sloth_open_hand(fingers)
 
 
 def test_source_rig_seated_pose_is_stable_symmetric_and_preserves_speech_controls() -> None:
@@ -2303,9 +2305,7 @@ def test_talking_timeline_animates_multiaxis_hands_fingers_jaw_and_source_mouth(
     jaw = armature.pose.bones[bone_map["jaw"]].rotation_euler
     assert abs(forearm.y) > 0.05 or abs(forearm.z) > 0.05
     assert abs(hand.y) > 0.05 or abs(hand.z) > 0.05
-    assert all(abs(finger.z) < 0.04 for finger in fingers)
-    assert fingers[0].x > 0.10
-    assert fingers[2].x < -0.10
+    assert_sloth_open_hand(fingers)
     assert max(abs(value) for value in jaw) > 0.02
     assert face["mouth"].data.shape_keys.key_blocks["Mouth_A"].value > 0.5
 
