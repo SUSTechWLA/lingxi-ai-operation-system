@@ -55,6 +55,12 @@ TARGET_MEDIUM_VERTICAL_SPAN = 0.84
 MIN_MEDIUM_CAMERA_LENS_MM = 48.0
 MAX_MEDIUM_CAMERA_DOLLY_M = 3.5
 MEDIUM_CAMERA_DOLLY_STEP_M = 0.05
+REMOVABLE_FOURTH_WALL_NAMES = (
+    "Wall_Front_Left",
+    "Wall_Front_Right",
+    "Crown_Front",
+    "Baseboard_Front",
+)
 SOURCE_VISEME_DISPLACEMENT = {
     "Mouth_A": {"upper": 0.0052, "lower": -0.0190, "width": 0.96},
     "Mouth_E": {"upper": 0.0028, "lower": -0.0095, "width": 1.02},
@@ -2245,6 +2251,30 @@ def _medium_camera_lens_candidates(authored_lens: float) -> list[float]:
     if candidates[-1] > MIN_MEDIUM_CAMERA_LENS_MM:
         candidates.append(MIN_MEDIUM_CAMERA_LENS_MM)
     return candidates
+
+
+def configure_removable_fourth_wall(dolly_distance: float) -> dict[str, Any]:
+    """Open the non-photographed studio wall when a camera dollies outside it."""
+
+    distance = max(0.0, float(dolly_distance))
+    if distance <= 0.0:
+        return {"status": "closed", "dollyDistance": distance, "objects": []}
+    opened: list[str] = []
+    for name in REMOVABLE_FOURTH_WALL_NAMES:
+        obj = bpy.data.objects.get(name)
+        if obj is None:
+            continue
+        obj["ip_removable_fourth_wall"] = True
+        obj.hide_render = True
+        opened.append(obj.name)
+    return {
+        "status": "open" if opened else "not_configured",
+        "dollyDistance": distance,
+        "objects": opened,
+        "missingObjects": [
+            name for name in REMOVABLE_FOURTH_WALL_NAMES if name not in opened
+        ],
+    }
 
 
 def calibrate_mode_medium_camera(
@@ -8648,6 +8678,9 @@ def main() -> None:
                     bone_map,
                     mode_objects,
                     sample_frames=calibration_frames,
+                )
+                scene_stats["fourthWall"] = configure_removable_fourth_wall(
+                    float(scene_stats["mediumFraming"].get("dollyDistance") or 0.0)
                 )
             write_runtime_progress(data, "camera_calibration_done")
             scene_stats["calibrationFrames"] = list(calibration_frames)

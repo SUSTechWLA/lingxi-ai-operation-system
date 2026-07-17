@@ -1231,6 +1231,23 @@ def test_medium_camera_calibration_preserves_long_lens_and_dollies_back() -> Non
     assert blender_renderer._medium_frame_candidate_is_safe(metrics), report
 
 
+def test_dollied_camera_opens_the_named_studio_fourth_wall() -> None:
+    reset_scene()
+    for name in blender_renderer.REMOVABLE_FOURTH_WALL_NAMES:
+        bpy.ops.mesh.primitive_cube_add(size=1.0)
+        bpy.context.object.name = name
+
+    report = blender_renderer.configure_removable_fourth_wall(1.95)
+
+    assert report["status"] == "open"
+    assert set(report["objects"]) == set(blender_renderer.REMOVABLE_FOURTH_WALL_NAMES)
+    assert all(bpy.data.objects[name].hide_render for name in report["objects"])
+    assert all(
+        bpy.data.objects[name].get("ip_removable_fourth_wall") is True
+        for name in report["objects"]
+    )
+
+
 def test_render_settings_are_compatible_with_blender_51_agx_and_eevee() -> None:
     reset_scene()
 
@@ -1354,6 +1371,7 @@ if __name__ == "__main__":
         test_production_calibration_frames_include_interval_bounds_and_limb_extrema,
         test_medium_frame_boundary_reduction_preserves_candidate_bounds,
         test_medium_camera_calibration_preserves_long_lens_and_dollies_back,
+        test_dollied_camera_opens_the_named_studio_fourth_wall,
         test_render_settings_are_compatible_with_blender_51_agx_and_eevee,
         test_lighting_qa_applies_and_restores_cycles_key_multiplier,
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
