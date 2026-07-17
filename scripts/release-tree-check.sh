@@ -30,7 +30,7 @@ for path in "${forbidden_paths[@]}"; do
 done
 
 unexpected_ip_assets="$(
-  git ls-files -- 'ip形象' |
+  git -c core.quotepath=false ls-files -- 'ip形象' |
     grep -Ev '^ip形象/(image\.png|ip音频\.wav|main_ip/)' || true
 )"
 if [[ -n "$unexpected_ip_assets" ]]; then
