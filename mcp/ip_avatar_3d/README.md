@@ -16,6 +16,10 @@ Tangying core should not know the implementation details. It calls this provider
 | `ip_avatar_3d.check_status` | `check_status` | Check Blender / FFmpeg / FFprobe availability. |
 | `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | Validate a pinned local GPT-SoVITS voice bundle and hashes without synthesis or network I/O. |
 | `ip_avatar_3d.generate_voice_auditions` | `generate_voice_auditions` | Generate atomic, content-addressed HeyGen A/B/C auditions for blind selection. |
+| `ip_avatar_3d.prepare_character_master` | `prepare_character_master` | Build a versioned character master; refined profiles stop at a QA-rendered staging asset. |
+| `ip_avatar_3d.record_character_master_visual_inspection` | `record_character_master_visual_inspection` | Record an explicit reviewer decision bound to the staged SHA and generated QA sheets. |
+| `ip_avatar_3d.create_character_master_publication_report` | `create_character_master_publication_report` | Build the machine-verifiable v2 evidence package through Blender. |
+| `ip_avatar_3d.publish_character_master` | `publish_character_master` | Atomically publish a refined staged master after SHA-bound machine and visual evidence passes. |
 | `ip_avatar_3d.validate_character_asset` | `validate_character_asset` | Validate GLB skin, semantic bones, visemes, and profile assets before rendering. |
 | `ip_avatar_3d.list_aroll_actions` | `list_aroll_actions` | List reusable standing, seated, and transition actions with pose-state metadata. |
 | `ip_avatar_3d.plan_motion` | `plan_motion` | Convert narration into lip-sync and motion timelines. |
@@ -137,6 +141,44 @@ The canonical action timeline opens standing, sits for the explanation, and
 stands for the conclusion. The report records the resolved state timeline,
 transition and viseme QA, voice provenance, hashes, and derived review windows
 in `Sloth_WarmStudio_ActionPack_Report.json`.
+
+## Refined Master Publication
+
+For a profile whose target is `main-ip-aroll-master-refined.blend`,
+`prepare_character_master` never overwrites the approved asset. It builds
+`staging/main-ip-aroll-master-refined.blend`, validates the live collection,
+and renders the fixed oral, hand, action, framing, and collision QA set. The
+result has `status="staged"`, `publicationRequired=true`, and a deterministic
+`qaReportPath`.
+
+The public MCP workflow is:
+
+1. Call `prepare_character_master`; inspect `qaSheetPath` and
+   `comparisonSheetPath` from its staged result.
+2. Call `record_character_master_visual_inspection` with the reviewer identity
+   after examining both images at full resolution.
+3. Call `create_character_master_publication_report`; it writes publication
+   schema `tangying-refined-master-publication/v2` without private JSON work.
+4. Call `publish_character_master`; `publicationReportPath` may be omitted when
+   using the deterministic path returned by step 3.
+
+The fixed QA contract contains 86 samples. It binds the staged SHA, live
+capability report, sample manifest, rendered frames, role masks, and both
+review sheets. Publication reloads a frozen staged snapshot, recomputes live
+capabilities, source-surface hashes, oral visibility, hand margins, and hand
+comparison metrics from pixels, then atomically installs those exact frozen
+bytes. A missing, stale, edited, fabricated, or unreviewed artifact fails
+closed and leaves the approved master untouched.
+
+The low-level recovery command uses the same publisher:
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+  --python mcp/ip_avatar_3d/render_aroll_master_qa.py -- \
+  --publish-staged /absolute/path/staging/main-ip-aroll-master-refined.blend \
+  /absolute/path/main-ip-aroll-master-refined.blend \
+  /absolute/path/publication-report.json
+```
 
 ## Local GPT-SoVITS Production Voice
 

@@ -261,7 +261,10 @@ python3 mcp/ip_avatar_3d/server.py
 |---|---|---|
 | `ip_avatar_3d.check_status` | `check_status` | 检查 Blender、FFmpeg、FFprobe 是否可用。 |
 | `ip_avatar_3d.check_gpt_sovits_voice` | `check_gpt_sovits_voice` | 校验固定 GPT-SoVITS 音色的参考音频、模型和哈希。 |
-| `ip_avatar_3d.prepare_character_master` | `prepare_character_master` | 从带骨骼 FBX/GLB 一次性生成并校验 A-roll 主资产。 |
+| `ip_avatar_3d.prepare_character_master` | `prepare_character_master` | 从带骨骼 FBX/GLB 生成并校验 A-roll 主资产；精修资产只写入 staging。 |
+| `ip_avatar_3d.record_character_master_visual_inspection` | `record_character_master_visual_inspection` | 将审查人结论与 staged SHA、QA 图和对比图绑定。 |
+| `ip_avatar_3d.create_character_master_publication_report` | `create_character_master_publication_report` | 通过 Blender 生成可验证的 v2 发布证据包。 |
+| `ip_avatar_3d.publish_character_master` | `publish_character_master` | 校验绑定 staged SHA 的机器 QA 与人工视觉证据后，原子发布精修主资产。 |
 | `ip_avatar_3d.validate_character_asset` | `validate_character_asset` | 校验骨架语义、蒙皮、口型和主资产配置。 |
 | `ip_avatar_3d.list_aroll_actions` | `list_aroll_actions` | 列出带起止姿态状态的站立、坐姿和转场动作。 |
 | `ip_avatar_3d.plan_motion` | `plan_motion` | 把口播文本转成口型和动作时间线。 |

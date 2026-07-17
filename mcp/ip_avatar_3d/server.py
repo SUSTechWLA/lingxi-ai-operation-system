@@ -20,6 +20,7 @@ import sys
 import tempfile
 import uuid
 import wave
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -2459,11 +2460,20 @@ def _master_output_paths(profile_path: Path, model_config: dict[str, Any], outpu
     root = _readable_path(output_dir) if output_dir else configured_path.parent
     stem = configured_path.stem
     base = stem[: -len("-master")] if stem.endswith("-master") else stem
+    master = root / configured_path.name
+    refined = configured_path.name == "main-ip-aroll-master-refined.blend"
     return {
-        "master": root / configured_path.name,
+        "master": master,
+        "stagedMaster": root / "staging" / configured_path.name
+        if refined
+        else master,
         "glb": root / f"{base}-rigged.glb",
         "report": root / f"{base}-rig-report.json",
         "qa": root / f"{base}-qa-input.json",
+        "qaEvidence": root / "qa" / stem,
+        "visualInspection": root / "publication" / "visual-inspection.json",
+        "publicationEvidence": root / "publication" / "evidence",
+        "publicationReport": root / "publication" / "evidence" / "publication-report.json",
     }
 
 
@@ -2508,6 +2518,7 @@ def prepare_character_master(
     width = max(320, min(int(resolution.get("width") or DEFAULT_WIDTH), 3840))
     height = max(180, min(int(resolution.get("height") or DEFAULT_HEIGHT), 2160))
     motion_plan = build_motion_plan("", 1.0, fps, str(render_config.get("motionStyle") or "expressive"))
+    refined_build = paths["master"].name == "main-ip-aroll-master-refined.blend"
     qa_input = {
         "schemaVersion": "ip-avatar-3d-master-prepare/v1",
         "characterId": str(profile.get("characterId") or ""),
@@ -2518,10 +2529,12 @@ def prepare_character_master(
         "masterCollection": MASTER_COLLECTION,
         "masterVersion": MASTER_VERSION,
         "masterBlendPath": str(paths["master"]),
+        "stagedMasterBlendPath": str(paths["stagedMaster"]),
+        "refinedMasterBuild": refined_build,
         "useMasterAsset": False,
         "prepareMaster": True,
         "assetOnly": True,
-        "riggedBlendPath": str(paths["master"]),
+        "riggedBlendPath": str(paths["stagedMaster"]),
         "riggedGlbPath": str(paths["glb"]),
         "rigReportPath": str(paths["report"]),
         "sceneBlendPath": "",
@@ -2562,9 +2575,28 @@ def prepare_character_master(
         "sourceModel": str(source_path),
         "qualityTier": requested_tier,
         "masterBlendPath": str(paths["master"]),
+        "stagedMasterBlendPath": str(paths["stagedMaster"]),
+        "publicationRequired": refined_build,
         "exportGlbPath": str(paths["glb"]),
         "rigReportPath": str(paths["report"]),
         "qaInputPath": str(paths["qa"]),
+        "qaReportPath": str(paths["qaEvidence"] / "qa-report.json")
+        if refined_build
+        else "",
+        "qaSheetPath": str(paths["qaEvidence"] / "MainIP_Sloth_Oral_Hand_QA.png")
+        if refined_build
+        else "",
+        "comparisonSheetPath": str(
+            paths["qaEvidence"] / "MainIP_Sloth_Oral_Hand_Comparison.png"
+        )
+        if refined_build
+        else "",
+        "visualInspectionReportPath": str(paths["visualInspection"])
+        if refined_build
+        else "",
+        "publicationReportPath": str(paths["publicationReport"])
+        if refined_build
+        else "",
     }
     if dryRun:
         return result
@@ -2573,21 +2605,238 @@ def prepare_character_master(
     if not blender:
         raise RuntimeError("Blender is required. Set TANGYING_BLENDER_BIN or install Blender.")
     blender_script = Path(__file__).with_name("blender_renderer.py")
-    _run(
-        [blender, "--background", "--python", str(blender_script), "--", str(paths["qa"])],
-        timeout=max(1200, int(render_config.get("blenderTimeoutSec") or 0)),
-    )
+    if refined_build:
+        blender_script = Path(__file__).with_name("render_aroll_master_qa.py")
+        _run(
+            [
+                blender,
+                "--background",
+                "--factory-startup",
+                "--python",
+                str(blender_script),
+                "--",
+                "--build-staged",
+                str(paths["qa"]),
+            ],
+            timeout=max(1200, int(render_config.get("blenderTimeoutSec") or 0)),
+        )
+        paths["qaEvidence"].mkdir(parents=True, exist_ok=True)
+        _run(
+            [
+                blender,
+                "--background",
+                str(paths["stagedMaster"]),
+                "--python",
+                str(blender_script),
+                "--",
+                str(paths["qaEvidence"]),
+            ],
+            timeout=max(1200, int(render_config.get("blenderTimeoutSec") or 0)),
+        )
+    else:
+        _run(
+            [
+                blender,
+                "--background",
+                "--python",
+                str(blender_script),
+                "--",
+                str(paths["qa"]),
+            ],
+            timeout=max(1200, int(render_config.get("blenderTimeoutSec") or 0)),
+        )
     missing = [
         path.name
-        for path in (paths["master"], paths["glb"], paths["report"])
+        for path in (paths["stagedMaster"], paths["glb"], paths["report"])
         if not path.is_file()
     ]
+    if refined_build and not (paths["qaEvidence"] / "qa-report.json").is_file():
+        missing.append("qa-report.json")
     if missing:
         raise RuntimeError(f"Blender did not produce character master outputs: {missing}")
-    result["masterExists"] = True
+    result["status"] = "staged" if refined_build else "ready"
+    result["masterExists"] = paths["master"].is_file()
+    result["stagedMasterExists"] = paths["stagedMaster"].is_file()
     result["exportGlbExists"] = True
     result["rigReportExists"] = True
+    if refined_build:
+        qa_report = json.loads(
+            (paths["qaEvidence"] / "qa-report.json").read_text(encoding="utf-8")
+        )
+        result["stagedSha256"] = str(qa_report.get("stagedSha256") or "")
+        result["capabilityReport"] = qa_report.get("capabilityReport") or {}
+        result["qaSheetExists"] = paths["qaEvidence"].joinpath(
+            "MainIP_Sloth_Oral_Hand_QA.png"
+        ).is_file()
+        result["comparisonSheetExists"] = paths["qaEvidence"].joinpath(
+            "MainIP_Sloth_Oral_Hand_Comparison.png"
+        ).is_file()
     return result
+
+
+@mcp.tool()
+def record_character_master_visual_inspection(
+    characterProfilePath: str,
+    reviewer: str,
+    reviewedAt: str = "",
+    notes: str = "",
+    outputDir: str = "",
+) -> dict[str, Any]:
+    """Record approval of the generated QA sheets, bound to the staged master."""
+    profile_path, profile = _load_character_profile(characterProfilePath)
+    paths = _master_output_paths(profile_path, profile.get("model") or {}, outputDir)
+    if paths["master"].name != "main-ip-aroll-master-refined.blend":
+        raise ValueError("visual inspection requires a refined master profile")
+    reviewed_at = str(reviewedAt or "").strip() or datetime.now().astimezone().isoformat()
+    blender = find_blender()
+    if not blender:
+        raise RuntimeError("Blender is required. Set TANGYING_BLENDER_BIN or install Blender.")
+    script = Path(__file__).with_name("render_aroll_master_qa.py")
+    _run(
+        [
+            blender,
+            "--background",
+            "--factory-startup",
+            "--python",
+            str(script),
+            "--",
+            "--record-inspection",
+            str(paths["stagedMaster"]),
+            str(paths["qaEvidence"] / "qa-report.json"),
+            str(paths["visualInspection"]),
+            reviewer,
+            reviewed_at,
+            notes,
+        ],
+        timeout=300,
+    )
+    payload = json.loads(paths["visualInspection"].read_text(encoding="utf-8"))
+    return {
+        "status": "passed",
+        "success": True,
+        "characterId": str(profile.get("characterId") or ""),
+        "visualInspectionReportPath": str(paths["visualInspection"]),
+        "stagedSha256": payload["stagedSha256"],
+        "reviewer": payload["reviewer"],
+        "reviewedAt": payload["reviewedAt"],
+        "publicationReportRequired": True,
+    }
+
+
+@mcp.tool()
+def create_character_master_publication_report(
+    characterProfilePath: str,
+    visualInspectionReportPath: str = "",
+    outputDir: str = "",
+) -> dict[str, Any]:
+    """Create the SHA-bound v2 publication package through the public MCP."""
+    profile_path, profile = _load_character_profile(characterProfilePath)
+    paths = _master_output_paths(profile_path, profile.get("model") or {}, outputDir)
+    if paths["master"].name != "main-ip-aroll-master-refined.blend":
+        raise ValueError("publication packaging requires a refined master profile")
+    inspection = (
+        _readable_path(visualInspectionReportPath, base_dir=str(profile_path.parent))
+        if visualInspectionReportPath
+        else paths["visualInspection"]
+    )
+    blender = find_blender()
+    if not blender:
+        raise RuntimeError("Blender is required. Set TANGYING_BLENDER_BIN or install Blender.")
+    script = Path(__file__).with_name("render_aroll_master_qa.py")
+    _run(
+        [
+            blender,
+            "--background",
+            "--factory-startup",
+            "--python",
+            str(script),
+            "--",
+            "--build-publication",
+            str(paths["stagedMaster"]),
+            str(paths["qaEvidence"] / "qa-report.json"),
+            str(inspection),
+            str(paths["publicationEvidence"]),
+        ],
+        timeout=300,
+    )
+    report_path = paths["publicationReport"]
+    if not report_path.is_file():
+        raise RuntimeError(f"publication report was not created: {report_path}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    return {
+        "status": "ready",
+        "success": True,
+        "characterId": str(profile.get("characterId") or ""),
+        "stagedMasterBlendPath": str(paths["stagedMaster"]),
+        "visualInspectionReportPath": str(inspection),
+        "publicationReportPath": str(report_path),
+        "stagedSha256": report["stagedSha256"],
+        "publicationRequired": True,
+    }
+
+
+@mcp.tool()
+def publish_character_master(
+    characterProfilePath: str,
+    publicationReportPath: str = "",
+    outputDir: str = "",
+) -> dict[str, Any]:
+    """Publish a refined staged master only from SHA-bound QA and visual evidence."""
+    profile_path, profile = _load_character_profile(characterProfilePath)
+    model_config = profile.get("model") or {}
+    paths = _master_output_paths(profile_path, model_config, outputDir)
+    if paths["master"].name != "main-ip-aroll-master-refined.blend":
+        raise ValueError("publish_character_master requires a refined master profile")
+    staged = paths["stagedMaster"]
+    final = paths["master"]
+    report = (
+        _readable_path(publicationReportPath, base_dir=str(profile_path.parent))
+        if publicationReportPath
+        else paths["publicationReport"]
+    )
+    if not staged.is_file():
+        raise FileNotFoundError(f"staged refined master does not exist: {staged}")
+    if not report.is_file() or report.suffix.lower() != ".json":
+        raise FileNotFoundError(f"publication report does not exist: {report}")
+    publication_report = json.loads(report.read_text(encoding="utf-8"))
+    expected_sha256 = str(publication_report.get("stagedSha256") or "")
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise RuntimeError("publication report has no valid staged SHA-256")
+    blender = find_blender()
+    if not blender:
+        raise RuntimeError("Blender is required. Set TANGYING_BLENDER_BIN or install Blender.")
+    publisher = Path(__file__).with_name("render_aroll_master_qa.py")
+    _run(
+        [
+            blender,
+            "--background",
+            "--factory-startup",
+            "--python",
+            str(publisher),
+            "--",
+            "--publish-staged",
+            str(staged),
+            str(final),
+            str(report),
+        ],
+        timeout=1200,
+    )
+    if not final.is_file():
+        raise RuntimeError(f"Blender did not publish refined character master: {final}")
+    final_sha256 = _sha256_file(final)
+    if expected_sha256 != final_sha256:
+        raise RuntimeError("published refined character master SHA-256 mismatch")
+    return {
+        "status": "ready",
+        "success": True,
+        "published": True,
+        "characterId": str(profile.get("characterId") or ""),
+        "characterProfilePath": str(profile_path),
+        "stagedMasterBlendPath": str(staged),
+        "masterBlendPath": str(final),
+        "publicationReportPath": str(report),
+        "sha256": final_sha256,
+    }
 
 
 @mcp.tool()

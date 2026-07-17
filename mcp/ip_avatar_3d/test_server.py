@@ -24,6 +24,16 @@ def load_server():
     return module
 
 
+def load_render_qa():
+    path = pathlib.Path(__file__).with_name("render_aroll_master_qa.py")
+    spec = importlib.util.spec_from_file_location("ip_avatar_3d_render_qa", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_rig_semantics():
     path = pathlib.Path(__file__).with_name("rig_semantics.py")
     spec = importlib.util.spec_from_file_location("ip_avatar_3d_rig_semantics", path)
@@ -72,6 +82,19 @@ def test_wav_bytes(*, sample_rate: int = 48000, channels: int = 1) -> bytes:
 
 
 class IPAvatar3DMCPTests(unittest.TestCase):
+    def test_refined_qa_honors_configured_ffmpeg_binary(self) -> None:
+        qa = load_render_qa()
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = pathlib.Path(tmp) / "ffmpeg-custom"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with mock.patch.dict(
+                os.environ,
+                {"TANGYING_FFMPEG_BIN": str(executable), "FFMPEG_BIN": ""},
+                clear=False,
+            ):
+                self.assertEqual(qa.find_ffmpeg(), str(executable.resolve()))
+
     def test_seated_pose_moves_only_lower_body_and_root(self) -> None:
         actions = load_aroll_actions()
 
@@ -2128,6 +2151,281 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertTrue(qa_input["assetOnly"])
             self.assertTrue(qa_input["prepareMaster"])
             self.assertEqual(qa_input["masterCollection"], "IP_Character_Master")
+
+    def test_prepare_refined_master_plans_staging_build_before_publication(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / "source.fbx"
+            profile = root / "character-profile.json"
+            output = root / "models"
+            source.write_bytes(b"Kaydara FBX Binary placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "main_ip_sloth",
+                        "model": {
+                            "sourcePath": "source.fbx",
+                            "masterBlendPath": "models/main-ip-aroll-master-refined.blend",
+                            "qualityTier": "aroll_close",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = server.prepare_character_master(
+                sourceModel="",
+                characterProfilePath=str(profile),
+                outputDir=str(output),
+                dryRun=True,
+            )
+
+            final = output.resolve() / "main-ip-aroll-master-refined.blend"
+            staged = output.resolve() / "staging" / final.name
+            self.assertEqual(pathlib.Path(result["masterBlendPath"]), final)
+            self.assertEqual(pathlib.Path(result["stagedMasterBlendPath"]), staged)
+            self.assertTrue(result["publicationRequired"])
+            qa_input = json.loads(
+                pathlib.Path(result["qaInputPath"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(pathlib.Path(qa_input["masterBlendPath"]), final)
+            self.assertEqual(pathlib.Path(qa_input["riggedBlendPath"]), staged)
+            self.assertTrue(qa_input["refinedMasterBuild"])
+
+    def test_prepare_refined_master_non_dry_run_uses_bound_staging_builder(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / "source.fbx"
+            profile = root / "character-profile.json"
+            output = root / "models"
+            source.write_bytes(b"Kaydara FBX Binary placeholder")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "main_ip_sloth",
+                        "model": {
+                            "sourcePath": "source.fbx",
+                            "masterBlendPath": "models/main-ip-aroll-master-refined.blend",
+                            "qualityTier": "aroll_close",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            commands = []
+
+            def fake_run(args, timeout=600):
+                commands.append(list(args))
+                qa_input_path = pathlib.Path(args[-1])
+                if "--build-staged" in args:
+                    qa_input = json.loads(qa_input_path.read_text(encoding="utf-8"))
+                    pathlib.Path(qa_input["riggedBlendPath"]).write_bytes(b"BLENDER")
+                    pathlib.Path(qa_input["riggedGlbPath"]).write_bytes(b"glTF")
+                    pathlib.Path(qa_input["rigReportPath"]).write_text(
+                        json.dumps({"success": True}), encoding="utf-8"
+                    )
+                else:
+                    qa_input_path.mkdir(parents=True, exist_ok=True)
+                    (qa_input_path / "qa-report.json").write_text(
+                        json.dumps({"status": "ready"}), encoding="utf-8"
+                    )
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(
+                server, "find_blender", return_value="/usr/bin/blender"
+            ), mock.patch.object(server, "_run", side_effect=fake_run):
+                result = server.prepare_character_master(
+                    sourceModel="",
+                    characterProfilePath=str(profile),
+                    outputDir=str(output),
+                    dryRun=False,
+                )
+
+            self.assertEqual(result["status"], "staged")
+            self.assertTrue(result["stagedMasterExists"])
+            self.assertFalse(result["masterExists"])
+            self.assertTrue(result["publicationRequired"])
+            self.assertIn("--build-staged", commands[0])
+            self.assertTrue(
+                commands[0][commands[0].index("--python") + 1].endswith(
+                    "render_aroll_master_qa.py"
+                )
+            )
+            self.assertEqual(len(commands), 2)
+            self.assertTrue(pathlib.Path(result["qaReportPath"]).is_file())
+
+    def test_publish_character_master_uses_evidence_bound_blender_publisher(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = root / "character-profile.json"
+            models = root / "models"
+            staging = models / "staging" / "main-ip-aroll-master-refined.blend"
+            final = models / "main-ip-aroll-master-refined.blend"
+            report = models / "publication-report.json"
+            staging.parent.mkdir(parents=True)
+            approved_bytes = b"BLENDER staged"
+            staging.write_bytes(approved_bytes)
+            approved_sha256 = hashlib.sha256(approved_bytes).hexdigest()
+            report.write_text(
+                json.dumps({"stagedSha256": approved_sha256}), encoding="utf-8"
+            )
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "main_ip_sloth",
+                        "model": {
+                            "masterBlendPath": "models/main-ip-aroll-master-refined.blend",
+                            "qualityTier": "aroll_close",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            commands = []
+
+            def fake_run(args, timeout=600):
+                commands.append(list(args))
+                final.write_bytes(approved_bytes)
+                staging.write_bytes(b"BLENDER concurrent replacement")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(
+                server, "find_blender", return_value="/usr/bin/blender"
+            ), mock.patch.object(server, "_run", side_effect=fake_run):
+                result = server.publish_character_master(
+                    characterProfilePath=str(profile),
+                    publicationReportPath=str(report),
+                )
+
+            self.assertTrue(result["published"])
+            self.assertEqual(pathlib.Path(result["masterBlendPath"]), final.resolve())
+            self.assertEqual(result["sha256"], approved_sha256)
+            self.assertIn("--publish-staged", commands[0])
+
+    def test_record_character_master_visual_inspection_binds_staging_and_qa(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = root / "character-profile.json"
+            models = root / "models"
+            staged = models / "staging" / "main-ip-aroll-master-refined.blend"
+            qa_report = models / "qa" / "main-ip-aroll-master-refined" / "qa-report.json"
+            staged.parent.mkdir(parents=True)
+            qa_report.parent.mkdir(parents=True)
+            staged.write_bytes(b"BLENDER staged")
+            qa_report.write_text("{}", encoding="utf-8")
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "main_ip_sloth",
+                        "model": {
+                            "masterBlendPath": "models/main-ip-aroll-master-refined.blend",
+                            "qualityTier": "aroll_close",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            commands = []
+
+            def fake_record(args, timeout=600):
+                commands.append(list(args))
+                output_path = pathlib.Path(
+                    args[args.index("--record-inspection") + 3]
+                )
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(
+                    json.dumps(
+                        {
+                    "status": "passed",
+                    "stagedSha256": "a" * 64,
+                    "reviewer": "AIOS visual QA",
+                    "reviewedAt": "2026-07-16T11:30:00+08:00",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(
+                server, "find_blender", return_value="/usr/bin/blender"
+            ), mock.patch.object(server, "_run", side_effect=fake_record):
+                result = server.record_character_master_visual_inspection(
+                    characterProfilePath=str(profile),
+                    reviewer="AIOS visual QA",
+                    reviewedAt="2026-07-16T11:30:00+08:00",
+                )
+            self.assertEqual(result["status"], "passed")
+            self.assertTrue(result["publicationReportRequired"])
+            self.assertIn("--record-inspection", commands[0])
+            self.assertIn(str(staged.resolve()), commands[0])
+            self.assertIn(str(qa_report.resolve()), commands[0])
+
+    def test_create_character_master_publication_report_has_public_mcp_path(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            profile = root / "character-profile.json"
+            models = root / "models"
+            staged = models / "staging" / "main-ip-aroll-master-refined.blend"
+            qa_report = models / "qa" / "main-ip-aroll-master-refined" / "qa-report.json"
+            inspection = models / "publication" / "visual-inspection.json"
+            for path, contents in (
+                (staged, b"BLENDER staged"),
+                (qa_report, b"{}"),
+                (inspection, b"{}"),
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(contents)
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "tangying-ip-character/v1",
+                        "characterId": "main_ip_sloth",
+                        "model": {
+                            "masterBlendPath": "models/main-ip-aroll-master-refined.blend",
+                            "qualityTier": "aroll_close",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            commands = []
+
+            def fake_package(args, timeout=600):
+                commands.append(list(args))
+                output_path = pathlib.Path(args[-1])
+                report_path = output_path / "publication-report.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": "tangying-refined-master-publication/v2",
+                            "stagedSha256": "a" * 64,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(
+                server, "find_blender", return_value="/usr/bin/blender"
+            ), mock.patch.object(server, "_run", side_effect=fake_package):
+                result = server.create_character_master_publication_report(
+                    characterProfilePath=str(profile),
+                    visualInspectionReportPath=str(inspection),
+                )
+            self.assertEqual(result["status"], "ready")
+            self.assertTrue(pathlib.Path(result["publicationReportPath"]).is_file())
+            self.assertIn("--build-publication", commands[0])
 
     def test_prepare_character_master_reports_canonical_quality_tier_spelling(self) -> None:
         server = load_server()

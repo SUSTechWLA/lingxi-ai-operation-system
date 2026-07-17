@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping
 
@@ -32,9 +33,43 @@ MASTER_VERSION = 1
 REFINED_CAPABILITY_REPORT_PROPERTY = "ip_refined_master_capability_report"
 ORAL_DEPTH_CALIBRATION_PROPERTY = "ip_oral_depth_calibration_version"
 ORAL_DEPTH_CALIBRATION_VERSION = 1
-PUBLICATION_SCHEMA_VERSION = "tangying-refined-master-publication/v1"
+PUBLICATION_SCHEMA_VERSION = "tangying-refined-master-publication/v2"
+PUBLICATION_EVIDENCE_SCHEMA_VERSION = "tangying-refined-master-gate-evidence/v1"
+VISUAL_INSPECTION_SCHEMA_VERSION = "tangying-refined-master-visual-inspection/v1"
+QA_REPORT_SCHEMA_VERSION = "tangying-aroll-master-qa/v1"
+QA_MANIFEST_SHA256 = "f17f59c33735785bc5db40883dfd52b39feba8b224302dc9fe9be1a8a50cada4"
+QA_SAMPLE_COUNT = 86
+MIN_OPEN_FIST_PIXEL_DIFFERENCE = 0.012
+MIN_FINGER_ROLL_PIXEL_DIFFERENCE = 0.012
+QA_MASK_ROLE_BITS = {
+    "oral_cavity": (False, True, True),
+    "upper_teeth": (True, False, False),
+    "lower_teeth": (True, True, False),
+    "upper_gum": (True, False, True),
+    "lower_gum": (True, True, True),
+    "tongue": (False, True, False),
+    "hand": (False, False, True),
+}
+QA_REPORT_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "status",
+        "stagedSha256",
+        "capabilityReport",
+        "capabilityReportSha256",
+        "manifest",
+        "manifestSha256",
+        "faceCapability",
+        "lighting",
+        "contract",
+        "samples",
+        "comparisons",
+        "framemd5",
+        "sheets",
+    }
+)
 PUBLICATION_REPORT_FIELDS = frozenset(
-    {"schemaVersion", "stagedSha256", "capabilityReport", "publicationGates"}
+    {"schemaVersion", "stagedSha256", "capabilityReport", "publicationEvidence"}
 )
 PUBLICATION_GATE_NAMES = frozenset(
     {
@@ -46,6 +81,17 @@ PUBLICATION_GATE_NAMES = frozenset(
         "comparisonEvidence",
         "handPixelMargins",
         "visualInspection",
+    }
+)
+PUBLICATION_EVIDENCE_REFERENCE_FIELDS = frozenset({"path", "sha256"})
+PUBLICATION_EVIDENCE_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "gate",
+        "status",
+        "stagedSha256",
+        "capabilityReportSha256",
+        "details",
     }
 )
 ORAL_TOPOLOGY_VERSION = "continuous_arch_v1"
@@ -164,6 +210,623 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_json_sha256(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _is_sha256(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _load_bound_json(path_value: Any, sha256_value: Any, label: str) -> tuple[Path, dict[str, Any]]:
+    path = Path(str(path_value or "")).expanduser()
+    if not path.is_absolute():
+        raise RuntimeError(f"{label} path must be absolute")
+    path = path.resolve()
+    if not path.is_file() or path.suffix.lower() != ".json":
+        raise RuntimeError(f"{label} JSON is missing: {path}")
+    if not _is_sha256(sha256_value) or _sha256_file(path) != sha256_value:
+        raise RuntimeError(f"{label} SHA-256 mismatch")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{label} JSON is invalid: {path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{label} JSON must contain an object")
+    return path, payload
+
+
+def _require_bound_png(path_value: Any, sha256_value: Any, label: str) -> Path:
+    path = Path(str(path_value or "")).expanduser()
+    if not path.is_absolute():
+        raise RuntimeError(f"{label} path must be absolute")
+    path = path.resolve()
+    if (
+        not path.is_file()
+        or path.suffix.lower() != ".png"
+        or path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n"
+        or not _is_sha256(sha256_value)
+        or _sha256_file(path) != sha256_value
+    ):
+        raise RuntimeError(f"{label} PNG SHA-256 mismatch")
+    blender = _require_bpy()
+    image = None
+    try:
+        image = blender.data.images.load(str(path), check_existing=False)
+        width, height = (int(value) for value in image.size)
+        if width <= 0 or height <= 0 or len(image.pixels) != width * height * 4:
+            raise RuntimeError("invalid decoded dimensions")
+    except Exception as exc:
+        raise RuntimeError(f"{label} PNG cannot be decoded") from exc
+    finally:
+        if image is not None:
+            blender.data.images.remove(image)
+    return path
+
+
+def _read_role_mask(path: Path) -> dict[str, Any]:
+    blender = _require_bpy()
+    image = blender.data.images.load(str(path), check_existing=False)
+    try:
+        width, height = (int(value) for value in image.size)
+        pixels = image.pixels[:]
+    finally:
+        blender.data.images.remove(image)
+    indices: dict[str, set[int]] = {role: set() for role in QA_MASK_ROLE_BITS}
+    roles_by_bits = {bits: role for role, bits in QA_MASK_ROLE_BITS.items()}
+    for pixel_index, offset in enumerate(range(0, len(pixels), 4)):
+        red, green, blue, alpha = pixels[offset : offset + 4]
+        if alpha < 0.05:
+            continue
+        role = roles_by_bits.get(
+            (red >= 0.08, green >= 0.08, blue >= 0.08)
+        )
+        if role is not None:
+            indices[role].add(pixel_index)
+    hand = indices["hand"]
+    if hand:
+        xs = [index % width for index in hand]
+        ys = [index // width for index in hand]
+        bounds = [min(xs), min(ys), max(xs), max(ys)]
+        margin_pixels = min(
+            bounds[0], bounds[1], width - 1 - bounds[2], height - 1 - bounds[3]
+        )
+        hand_frame = {
+            "pixelCount": len(hand),
+            "bounds": bounds,
+            "marginPixels": margin_pixels,
+            "marginFraction": round(
+                float(margin_pixels) / max(1, min(width, height) - 1), 6
+            ),
+            "borderTouching": margin_pixels == 0,
+        }
+    else:
+        hand_frame = {
+            "pixelCount": 0,
+            "bounds": None,
+            "marginPixels": -1,
+            "marginFraction": -1.0,
+            "borderTouching": True,
+        }
+    return {
+        "width": width,
+        "height": height,
+        "indices": indices,
+        "handPixelFrame": hand_frame,
+    }
+
+
+def _role_mask_difference(first: Mapping[str, Any], second: Mapping[str, Any], role: str) -> float:
+    if (first["width"], first["height"]) != (second["width"], second["height"]):
+        raise RuntimeError("QA role-mask dimensions do not match")
+    first_indices = first["indices"][role]
+    second_indices = second["indices"][role]
+    union = first_indices | second_indices
+    if not union:
+        raise RuntimeError(f"QA rendered {role} masks are both empty")
+    return round(len(first_indices ^ second_indices) / len(union), 6)
+
+
+def _validate_qa_report(
+    report_path: Path,
+    report: Mapping[str, Any],
+    staged_sha256: str,
+    capability_report: Mapping[str, Any],
+    gate: str,
+) -> None:
+    capability_sha256 = _canonical_json_sha256(capability_report)
+    if (
+        set(report) != QA_REPORT_FIELDS
+        or report.get("schemaVersion") != QA_REPORT_SCHEMA_VERSION
+        or report.get("status") != "ready"
+        or report.get("stagedSha256") != staged_sha256
+        or report.get("capabilityReport") != capability_report
+        or report.get("capabilityReportSha256") != capability_sha256
+        or report.get("manifestSha256") != QA_MANIFEST_SHA256
+    ):
+        raise RuntimeError(f"{gate} QA report is not bound to the staged master")
+    manifest = report.get("manifest")
+    contract = report.get("contract")
+    samples = report.get("samples")
+    if (
+        not isinstance(manifest, list)
+        or len(manifest) != QA_SAMPLE_COUNT
+        or _canonical_json_sha256(manifest) != QA_MANIFEST_SHA256
+        or not isinstance(contract, Mapping)
+        or contract.get("manifestSha256") != QA_MANIFEST_SHA256
+        or int(contract.get("sampleCount") or 0) != QA_SAMPLE_COUNT
+        or not isinstance(samples, list)
+        or len(samples) != QA_SAMPLE_COUNT
+    ):
+        raise RuntimeError(f"{gate} QA report fixed manifest is invalid")
+    manifest_paths = [str(item.get("path") or "") for item in manifest]
+    required_files = contract.get("requiredFiles")
+    if required_files != manifest_paths or len(set(manifest_paths)) != QA_SAMPLE_COUNT:
+        raise RuntimeError(f"{gate} QA report required files are invalid")
+    sample_by_path = {
+        str(sample.get("path") or ""): sample
+        for sample in samples
+        if isinstance(sample, Mapping)
+    }
+    if set(sample_by_path) != set(manifest_paths):
+        raise RuntimeError(f"{gate} QA report samples do not match the fixed manifest")
+    report_root = report_path.parent.resolve()
+    masks_by_label: dict[str, dict[str, Any]] = {}
+    for item in manifest:
+        relative = str(item.get("path") or "")
+        sample = sample_by_path[relative]
+        if any(sample.get(field) != item.get(field) for field in (
+            "label", "kind", "action", "camera", "frame", "path"
+        )):
+            raise RuntimeError(f"{gate} QA sample metadata does not match the fixed manifest")
+        candidate = (report_root / relative).resolve()
+        if report_root not in candidate.parents:
+            raise RuntimeError(f"{gate} QA report contains an unsafe sample path")
+        _require_bound_png(candidate, sample.get("sha256"), f"{gate} QA sample")
+        mask_path = (report_root / str(sample.get("pixelMaskPath") or "")).resolve()
+        if report_root not in mask_path.parents:
+            raise RuntimeError(f"{gate} QA report contains an unsafe mask path")
+        _require_bound_png(
+            mask_path, sample.get("pixelMaskSha256"), f"{gate} QA role mask"
+        )
+        mask = _read_role_mask(mask_path)
+        masks_by_label[str(sample.get("label") or "")] = mask
+        role_indices = mask["indices"]
+        dental_pixels = len(role_indices["upper_teeth"]) + len(
+            role_indices["lower_teeth"]
+        )
+        tongue_pixels = len(role_indices["tongue"])
+        if (
+            int((sample.get("dentalExposure") or {}).get("visiblePixelCount", -1))
+            != dental_pixels
+            or int((sample.get("tongueExposure") or {}).get("visiblePixelCount", -1))
+            != tongue_pixels
+        ):
+            raise RuntimeError(f"{gate} QA oral metrics do not match rendered pixels")
+        if sample.get("kind") in {"hand", "digit"} and sample.get(
+            "handPixelFrame"
+        ) != mask["handPixelFrame"]:
+            raise RuntimeError(f"{gate} QA hand metrics do not match rendered pixels")
+    comparisons = report.get("comparisons")
+    finger_differences = (
+        comparisons.get("fingerRollPixelDifferences")
+        if isinstance(comparisons, Mapping)
+        else None
+    )
+    recomputed_open_fist = _role_mask_difference(
+        masks_by_label["open"], masks_by_label["fist"], "hand"
+    )
+    if (
+        not isinstance(finger_differences, Mapping)
+        or float(comparisons.get("openFistPixelDifference") or -1.0)
+        != recomputed_open_fist
+    ):
+        raise RuntimeError(f"{gate} QA comparison metrics do not match rendered pixels")
+    for side in ("r", "l"):
+        for first, second in ((1, 2), (2, 3)):
+            key = f"{side}{first}-{side}{second}"
+            recomputed = _role_mask_difference(
+                masks_by_label[f"finger_roll_{side}_{first}"],
+                masks_by_label[f"finger_roll_{side}_{second}"],
+                "hand",
+            )
+            if float(finger_differences.get(key) or -1.0) != recomputed:
+                raise RuntimeError(
+                    f"{gate} QA comparison metrics do not match rendered pixels"
+                )
+    sheets = report.get("sheets")
+    if not isinstance(sheets, Mapping) or set(sheets) != {"qa", "comparison"}:
+        raise RuntimeError(f"{gate} QA report sheets are invalid")
+    for name in ("qa", "comparison"):
+        reference = sheets.get(name)
+        if not isinstance(reference, Mapping) or set(reference) != {"path", "sha256"}:
+            raise RuntimeError(f"{gate} QA report sheets are invalid")
+        _require_bound_png(
+            reference.get("path"), reference.get("sha256"), f"{gate} {name} sheet"
+        )
+
+
+def _qa_report_from_details(
+    details: Mapping[str, Any],
+    gate: str,
+    staged_sha256: str,
+    capability_report: Mapping[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    report_path, report = _load_bound_json(
+        details.get("qaReportPath"),
+        details.get("qaReportSha256"),
+        f"{gate} QA report",
+    )
+    _validate_qa_report(
+        report_path, report, staged_sha256, capability_report, gate
+    )
+    return report_path, report
+
+
+def _validate_publication_evidence(
+    evidence: Mapping[str, Any],
+    staged_sha256: str,
+    capability_report: Mapping[str, Any],
+    live_capabilities: Mapping[str, Any],
+) -> None:
+    if set(evidence) != PUBLICATION_GATE_NAMES:
+        raise RuntimeError("refined master publication evidence schema is invalid")
+    capability_sha256 = _canonical_json_sha256(capability_report)
+    payloads: dict[str, dict[str, Any]] = {}
+    for gate in PUBLICATION_GATE_NAMES:
+        reference = evidence.get(gate)
+        if not isinstance(reference, Mapping) or set(reference) != PUBLICATION_EVIDENCE_REFERENCE_FIELDS:
+            raise RuntimeError("refined master publication evidence schema is invalid")
+        _path, payload = _load_bound_json(
+            reference.get("path"),
+            reference.get("sha256"),
+            f"{gate} evidence",
+        )
+        if set(payload) != PUBLICATION_EVIDENCE_FIELDS:
+            raise RuntimeError(f"{gate} evidence schema is invalid")
+        if (
+            payload.get("schemaVersion") != PUBLICATION_EVIDENCE_SCHEMA_VERSION
+            or payload.get("gate") != gate
+            or payload.get("status") != "passed"
+            or payload.get("stagedSha256") != staged_sha256
+            or payload.get("capabilityReportSha256") != capability_sha256
+            or not isinstance(payload.get("details"), Mapping)
+        ):
+            raise RuntimeError(f"{gate} evidence is not bound to the staged master")
+        payloads[gate] = payload
+
+    if live_capabilities.get("capabilityGatesPassed") is not True:
+        raise RuntimeError("master capability evidence failed live validation")
+    if payloads["masterCapabilities"]["details"] != {
+        "capabilityGatesPassed": True
+    }:
+        raise RuntimeError("master capability evidence is invalid")
+    if payloads["sourceSurfacePreservation"]["details"] != {
+        "sourceSurfaceHashes": live_capabilities.get("sourceSurfaceHashes")
+    }:
+        raise RuntimeError("source surface preservation evidence is invalid")
+
+    _qa_path, viseme_report = _qa_report_from_details(
+        payloads["visemePerformanceQa"]["details"],
+        "viseme performance",
+        staged_sha256,
+        capability_report,
+    )
+    qa_reference = {
+        "qaReportPath": str(_qa_path),
+        "qaReportSha256": _sha256_file(_qa_path),
+    }
+
+    def require_same_qa(details: Mapping[str, Any], gate: str) -> None:
+        if any(details.get(key) != value for key, value in qa_reference.items()):
+            raise RuntimeError(f"{gate} evidence references a different QA report")
+
+    face_samples = {
+        str(sample.get("label")): sample
+        for sample in viseme_report["samples"]
+        if sample.get("kind") == "face"
+    }
+    if not set(("Rest", "MBP", "A", "E", "O", "U")).issubset(face_samples):
+        raise RuntimeError("viseme performance QA is missing required face samples")
+    for label in ("Rest", "MBP"):
+        sample = face_samples[label]
+        if (
+            int((sample.get("dentalExposure") or {}).get("visiblePixelCount", -1))
+            != 0
+            or int((sample.get("tongueExposure") or {}).get("visiblePixelCount", -1))
+            != 0
+        ):
+            raise RuntimeError("viseme performance QA closed-mouth exposure failed")
+    for label in ("A", "E", "O", "U"):
+        sample = face_samples[label]
+        if (
+            int((sample.get("dentalExposure") or {}).get("visiblePixelCount", 0))
+            <= 0
+            or int((sample.get("tongueExposure") or {}).get("visiblePixelCount", 0))
+            <= 0
+        ):
+            raise RuntimeError("viseme performance QA open-mouth exposure failed")
+
+    require_same_qa(payloads["renderQa"]["details"], "render")
+    require_same_qa(payloads["poseCollisions"]["details"], "pose collision")
+    collision_report = viseme_report
+    if any(
+        sample.get("extremaFrameIntersections") != []
+        for sample in collision_report["samples"]
+    ):
+        raise RuntimeError("pose collision QA contains extrema intersections")
+
+    require_same_qa(payloads["comparisonEvidence"]["details"], "comparison")
+    comparison_report = viseme_report
+    comparison_details = payloads["comparisonEvidence"]["details"]
+    comparisons = comparison_report.get("comparisons")
+    if not isinstance(comparisons, Mapping):
+        raise RuntimeError("comparison evidence metrics are missing")
+    finger_differences = comparisons.get("fingerRollPixelDifferences")
+    if (
+        float(comparisons.get("openFistPixelDifference") or 0.0)
+        < MIN_OPEN_FIST_PIXEL_DIFFERENCE
+        or not isinstance(finger_differences, Mapping)
+        or len(finger_differences) < 4
+        or min(float(value) for value in finger_differences.values())
+        < MIN_FINGER_ROLL_PIXEL_DIFFERENCE
+        or int(comparison_details.get("comparisonPairCount") or 0) < 6
+    ):
+        raise RuntimeError("comparison evidence metrics failed")
+    comparison_path = Path(str(comparison_details.get("comparisonSheetPath") or "")).expanduser()
+    if (
+        not comparison_path.is_absolute()
+        or not comparison_path.is_file()
+        or not _is_sha256(comparison_details.get("comparisonSheetSha256"))
+        or _sha256_file(comparison_path) != comparison_details.get("comparisonSheetSha256")
+    ):
+        raise RuntimeError("comparison sheet evidence SHA-256 mismatch")
+
+    require_same_qa(payloads["handPixelMargins"]["details"], "hand pixel margin")
+    hand_report = viseme_report
+    hand_samples = [
+        sample
+        for sample in hand_report["samples"]
+        if sample.get("kind") in {"hand", "digit"}
+    ]
+    if not hand_samples:
+        raise RuntimeError("hand pixel margin evidence has no hand samples")
+    for sample in hand_samples:
+        frame = sample.get("handPixelFrame")
+        if (
+            not isinstance(frame, Mapping)
+            or int(frame.get("pixelCount") or 0) <= 0
+            or frame.get("borderTouching") is not False
+            or float(frame.get("marginFraction") or 0.0) < 0.04
+        ):
+            raise RuntimeError("hand pixel margin evidence failed")
+
+    visual_details = payloads["visualInspection"]["details"]
+    _inspection_path, inspection = _load_bound_json(
+        visual_details.get("inspectionReportPath"),
+        visual_details.get("inspectionReportSha256"),
+        "visual inspection evidence",
+    )
+    if (
+        inspection.get("schemaVersion") != VISUAL_INSPECTION_SCHEMA_VERSION
+        or inspection.get("status") != "passed"
+        or inspection.get("stagedSha256") != staged_sha256
+        or not str(inspection.get("reviewer") or "").strip()
+    ):
+        raise RuntimeError("visual inspection evidence is invalid")
+    try:
+        reviewed_at = datetime.fromisoformat(str(inspection.get("reviewedAt") or ""))
+    except ValueError as exc:
+        raise RuntimeError("visual inspection evidence reviewedAt is invalid") from exc
+    if reviewed_at.tzinfo is None:
+        raise RuntimeError("visual inspection evidence reviewedAt must include a timezone")
+    artifacts = inspection.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        raise RuntimeError("visual inspection evidence artifacts are invalid")
+    for prefix, artifact_key in (
+        ("qaSheet", "qaSheetSha256"),
+        ("comparisonSheet", "comparisonSheetSha256"),
+    ):
+        artifact_path = Path(str(visual_details.get(f"{prefix}Path") or "")).expanduser()
+        artifact_sha256 = visual_details.get(f"{prefix}Sha256")
+        if (
+            not artifact_path.is_absolute()
+            or not artifact_path.is_file()
+            or not _is_sha256(artifact_sha256)
+            or _sha256_file(artifact_path) != artifact_sha256
+            or artifacts.get(artifact_key) != artifact_sha256
+        ):
+            raise RuntimeError("visual inspection evidence artifact SHA-256 mismatch")
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.stem}.", suffix=".tmp", dir=str(path.parent)
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def record_visual_inspection(
+    staged_path: Path | str,
+    qa_report_path: Path | str,
+    reviewer: str,
+    reviewed_at: str,
+    output_path: Path | str,
+    notes: str = "",
+) -> dict[str, Any]:
+    """Record an explicit visual approval bound to the staged master and sheets."""
+    staged = Path(staged_path).expanduser().resolve()
+    qa_path = Path(qa_report_path).expanduser().resolve()
+    output = Path(output_path).expanduser().resolve()
+    reviewer = str(reviewer or "").strip()
+    if not reviewer:
+        raise RuntimeError("visual inspection reviewer is required")
+    try:
+        reviewed = datetime.fromisoformat(str(reviewed_at or ""))
+    except ValueError as exc:
+        raise RuntimeError("visual inspection reviewedAt is invalid") from exc
+    if reviewed.tzinfo is None:
+        raise RuntimeError("visual inspection reviewedAt must include a timezone")
+    if not staged.is_file() or not qa_path.is_file():
+        raise RuntimeError("visual inspection requires staged Blend and QA report")
+    staged_sha256 = _sha256_file(staged)
+    qa_report = json.loads(qa_path.read_text(encoding="utf-8"))
+    if not isinstance(qa_report, Mapping):
+        raise RuntimeError("visual inspection QA report is invalid")
+    capability_report = qa_report.get("capabilityReport")
+    if not isinstance(capability_report, Mapping):
+        raise RuntimeError("visual inspection QA report is invalid")
+    _validate_qa_report(
+        qa_path,
+        qa_report,
+        staged_sha256,
+        capability_report,
+        "visual inspection",
+    )
+    sheets = qa_report["sheets"]
+    payload = {
+        "schemaVersion": VISUAL_INSPECTION_SCHEMA_VERSION,
+        "status": "passed",
+        "stagedSha256": staged_sha256,
+        "reviewer": reviewer,
+        "reviewedAt": reviewed.isoformat(),
+        "artifacts": {
+            "qaSheetSha256": sheets["qa"]["sha256"],
+            "comparisonSheetSha256": sheets["comparison"]["sha256"],
+        },
+    }
+    if str(notes or "").strip():
+        payload["notes"] = str(notes).strip()
+    _write_json_atomic(output, payload)
+    return payload
+
+
+def create_publication_report(
+    staged_path: Path | str,
+    qa_report_path: Path | str,
+    inspection_report_path: Path | str,
+    output_dir: Path | str,
+) -> dict[str, Any]:
+    """Build the only accepted v2 publication package from bound QA artifacts."""
+    staged = Path(staged_path).expanduser().resolve()
+    qa_path = Path(qa_report_path).expanduser().resolve()
+    inspection_path = Path(inspection_report_path).expanduser().resolve()
+    destination = Path(output_dir).expanduser().resolve()
+    if not staged.is_file():
+        raise RuntimeError(f"staged refined master is missing: {staged}")
+    staged_sha256 = _sha256_file(staged)
+    qa_path, qa_report = _load_bound_json(
+        qa_path, _sha256_file(qa_path), "publication QA report"
+    )
+    capability_report = qa_report.get("capabilityReport")
+    if not isinstance(capability_report, Mapping):
+        raise RuntimeError("publication QA report has no capability report")
+    _validate_qa_report(
+        qa_path,
+        qa_report,
+        staged_sha256,
+        capability_report,
+        "publication",
+    )
+    inspection_path, inspection = _load_bound_json(
+        inspection_path,
+        _sha256_file(inspection_path),
+        "visual inspection",
+    )
+    sheets = qa_report["sheets"]
+    qa_sheet = sheets["qa"]
+    comparison_sheet = sheets["comparison"]
+    if (
+        inspection.get("schemaVersion") != VISUAL_INSPECTION_SCHEMA_VERSION
+        or inspection.get("status") != "passed"
+        or inspection.get("stagedSha256") != staged_sha256
+        or not str(inspection.get("reviewer") or "").strip()
+        or inspection.get("artifacts")
+        != {
+            "qaSheetSha256": qa_sheet["sha256"],
+            "comparisonSheetSha256": comparison_sheet["sha256"],
+        }
+    ):
+        raise RuntimeError("visual inspection report is not bound to QA sheets")
+    try:
+        reviewed_at = datetime.fromisoformat(str(inspection.get("reviewedAt") or ""))
+    except ValueError as exc:
+        raise RuntimeError("visual inspection report reviewedAt is invalid") from exc
+    if reviewed_at.tzinfo is None:
+        raise RuntimeError("visual inspection report reviewedAt must include a timezone")
+
+    destination.mkdir(parents=True, exist_ok=True)
+    qa_reference = {
+        "qaReportPath": str(qa_path),
+        "qaReportSha256": _sha256_file(qa_path),
+    }
+    details = {
+        "masterCapabilities": {"capabilityGatesPassed": True},
+        "sourceSurfacePreservation": {
+            "sourceSurfaceHashes": capability_report.get("sourceSurfaceHashes"),
+        },
+        "visemePerformanceQa": dict(qa_reference),
+        "renderQa": dict(qa_reference),
+        "poseCollisions": dict(qa_reference),
+        "comparisonEvidence": {
+            **qa_reference,
+            "comparisonPairCount": 6,
+            "comparisonSheetPath": comparison_sheet["path"],
+            "comparisonSheetSha256": comparison_sheet["sha256"],
+        },
+        "handPixelMargins": dict(qa_reference),
+        "visualInspection": {
+            "inspectionReportPath": str(inspection_path),
+            "inspectionReportSha256": _sha256_file(inspection_path),
+            "qaSheetPath": qa_sheet["path"],
+            "qaSheetSha256": qa_sheet["sha256"],
+            "comparisonSheetPath": comparison_sheet["path"],
+            "comparisonSheetSha256": comparison_sheet["sha256"],
+        },
+    }
+    capability_sha256 = _canonical_json_sha256(capability_report)
+    evidence: dict[str, dict[str, str]] = {}
+    for gate in sorted(PUBLICATION_GATE_NAMES):
+        payload = {
+            "schemaVersion": PUBLICATION_EVIDENCE_SCHEMA_VERSION,
+            "gate": gate,
+            "status": "passed",
+            "stagedSha256": staged_sha256,
+            "capabilityReportSha256": capability_sha256,
+            "details": details[gate],
+        }
+        path = destination / f"{gate}.json"
+        _write_json_atomic(path, payload)
+        evidence[gate] = {"path": str(path), "sha256": _sha256_file(path)}
+    report = {
+        "schemaVersion": PUBLICATION_SCHEMA_VERSION,
+        "stagedSha256": staged_sha256,
+        "capabilityReport": dict(capability_report),
+        "publicationEvidence": evidence,
+    }
+    _write_json_atomic(destination / "publication-report.json", report)
+    return report
 
 
 def _validated_source_surface_hashes(value: Any) -> dict[str, str]:
@@ -462,12 +1125,14 @@ def validate_master_capabilities(capabilities: Mapping[str, Any]) -> dict[str, A
     }
 
 
-def publish_refined_master(
+def _publish_frozen_refined_master(
+    frozen_path: Path | str,
     staged_path: Path | str,
     final_path: Path | str,
     report: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Atomically publish a gated refined master without touching the approved legacy master."""
+    """Validate and publish an immutable staged snapshot."""
+    frozen = Path(frozen_path).expanduser().resolve()
     staged = Path(staged_path).expanduser().resolve()
     final = Path(final_path).expanduser().resolve()
     if final.name == "main-ip-aroll-master.blend":
@@ -476,7 +1141,7 @@ def publish_refined_master(
         raise RuntimeError(f"unexpected refined master publish target: {final}")
     if not staged.is_file() or staged.suffix.lower() != ".blend":
         raise RuntimeError(f"staged refined master is missing: {staged}")
-    with staged.open("rb") as source:
+    with frozen.open("rb") as source:
         header = source.read(7)
         if not (
             header == b"BLENDER"
@@ -494,19 +1159,20 @@ def publish_refined_master(
         raise RuntimeError("refined master publication report schema is invalid")
     if report.get("schemaVersion") != PUBLICATION_SCHEMA_VERSION:
         raise RuntimeError("refined master publication report schema is invalid")
-    gates = report.get("publicationGates")
-    if not isinstance(gates, Mapping) or set(gates) != PUBLICATION_GATE_NAMES:
-        raise RuntimeError("refined master publication gate schema is invalid")
-    if not all(gates[name] is True for name in PUBLICATION_GATE_NAMES):
-        raise RuntimeError(f"refined master publication gates failed: {gates!r}")
-    staged_sha256 = _sha256_file(staged)
+    evidence = report.get("publicationEvidence")
+    if not isinstance(evidence, Mapping) or set(evidence) != PUBLICATION_GATE_NAMES:
+        raise RuntimeError("refined master publication evidence schema is invalid")
+    staged_sha256 = _sha256_file(frozen)
     if report.get("stagedSha256") != staged_sha256:
         raise RuntimeError("refined master staged SHA-256 mismatch")
+    capability_report = report.get("capabilityReport")
+    if not isinstance(capability_report, Mapping):
+        raise RuntimeError("refined master publication capability report is invalid")
 
     blender = _require_bpy()
     try:
         blender.ops.wm.open_mainfile(
-            filepath=str(staged), load_ui=False, use_scripts=False
+            filepath=str(frozen), load_ui=False, use_scripts=False
         )
     except RuntimeError as exc:
         raise RuntimeError(f"cannot load staged refined master: {staged}") from exc
@@ -516,8 +1182,14 @@ def publish_refined_master(
     live_capabilities = validated.get("capabilities")
     if not isinstance(live_capabilities, Mapping):
         raise RuntimeError("staged refined master has no live capability report")
-    if report.get("capabilityReport") != live_capabilities:
+    if capability_report != live_capabilities:
         raise RuntimeError("refined master live capability report mismatch")
+    _validate_publication_evidence(
+        evidence,
+        staged_sha256,
+        capability_report,
+        live_capabilities,
+    )
 
     final.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -525,7 +1197,7 @@ def publish_refined_master(
     )
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as target, staged.open("rb") as source:
+        with os.fdopen(descriptor, "wb") as target, frozen.open("rb") as source:
             shutil.copyfileobj(source, target)
             target.flush()
             os.fsync(target.fileno())
@@ -547,6 +1219,34 @@ def publish_refined_master(
         "sha256": final_sha256,
         "capabilityReport": dict(live_capabilities),
     }
+
+
+def publish_refined_master(
+    staged_path: Path | str,
+    final_path: Path | str,
+    report: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Freeze, validate, and atomically publish one refined master."""
+    staged = Path(staged_path).expanduser().resolve()
+    if not staged.is_file():
+        raise RuntimeError(f"staged refined master is missing: {staged}")
+    descriptor, frozen_name = tempfile.mkstemp(
+        prefix=f".{staged.stem}.frozen.", suffix=".blend", dir=str(staged.parent)
+    )
+    frozen = Path(frozen_name)
+    try:
+        with os.fdopen(descriptor, "wb") as target, staged.open("rb") as source:
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        return _publish_frozen_refined_master(
+            frozen,
+            staged,
+            final_path,
+            report,
+        )
+    finally:
+        frozen.unlink(missing_ok=True)
 
 
 def validate_master_collection(collection: Any, master_path: Path | str) -> dict[str, Any]:
@@ -574,6 +1274,11 @@ def validate_master_collection(collection: Any, master_path: Path | str) -> dict
         "objects": objects,
     }
     persisted_report = collection.get(REFINED_CAPABILITY_REPORT_PROPERTY)
+    refined_contract_required = (
+        Path(str(master_path)).name == "main-ip-aroll-master-refined.blend"
+    )
+    if refined_contract_required and not persisted_report:
+        raise RuntimeError(f"missing refined capability report in {master_path}")
     if persisted_report:
         try:
             expected = json.loads(str(persisted_report))

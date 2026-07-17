@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -41,8 +43,9 @@ HAND_RELAXED_CAMERA_RIGHT = "QA_Hand_Relaxed.R"
 HAND_WAVE_CAMERA_RIGHT = "QA_Hand_Wave.R"
 FACE_CLOSE_CAMERA = "QA_Face_Close"
 REPORT_NAME = "qa-report.json"
-MIN_OPEN_FIST_PIXEL_DIFFERENCE = 0.012
-MIN_FINGER_ROLL_PIXEL_DIFFERENCE = 0.0015
+QA_REPORT_SCHEMA_VERSION = "tangying-aroll-master-qa/v1"
+MIN_OPEN_FIST_PIXEL_DIFFERENCE = master_asset.MIN_OPEN_FIST_PIXEL_DIFFERENCE
+MIN_FINGER_ROLL_PIXEL_DIFFERENCE = master_asset.MIN_FINGER_ROLL_PIXEL_DIFFERENCE
 MIN_SILHOUETTE_COVERAGE = 0.001
 MAX_SILHOUETTE_COVERAGE = 0.96
 MIN_HAND_PIXEL_MARGIN = 0.04
@@ -211,6 +214,42 @@ REQUIRED_BONE_ROLES = frozenset(
         ),
     }
 )
+
+
+def qa_manifest_payload() -> list[dict[str, Any]]:
+    """Return the frozen publication sample manifest."""
+    return [
+        {
+            "label": sample.label,
+            "kind": sample.kind,
+            "action": sample.action,
+            "camera": sample.camera,
+            "frame": sample.frame,
+            "path": sample.path,
+            "side": sample.side,
+            "digit": sample.digit,
+            "shapeKeys": [list(item) for item in sample.shape_keys],
+        }
+        for sample in QA_SAMPLES
+    ]
+
+
+def qa_manifest_sha256() -> str:
+    encoded = json.dumps(
+        qa_manifest_payload(), sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def find_ffmpeg() -> str | None:
+    for variable in ("TANGYING_FFMPEG_BIN", "FFMPEG_BIN"):
+        configured = os.environ.get(variable, "").strip()
+        if not configured:
+            continue
+        candidate = Path(configured).expanduser().resolve()
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("ffmpeg")
 
 
 def _require_blender() -> None:
@@ -391,6 +430,9 @@ def _render_selected_samples(
             )
         sample["silhouette"] = metrics
         sample["frameMd5"] = frame_md5(output_dir / sample["path"])
+        sample["sha256"] = hashlib.sha256(
+            (output_dir / sample["path"]).read_bytes()
+        ).hexdigest()
     return contract, lighting, rendered
 
 
@@ -1091,6 +1133,9 @@ def _render_sample(
         "shapeKeys": dict(sample.shape_keys),
         "framing": _camera_metrics(camera),
         "pixelMaskPath": mask_relative_path.as_posix(),
+        "pixelMaskSha256": hashlib.sha256(
+            (output_dir / mask_relative_path).read_bytes()
+        ).hexdigest(),
         **evidence,
         "extremaFrameIntersections": _extrema_frame_intersections(armature, bone_map),
     }
@@ -1179,7 +1224,7 @@ def role_mask_difference(first: Path, second: Path, role: str) -> float:
 
 
 def frame_md5(path: Path, ffmpeg: str | None = None) -> str:
-    executable = ffmpeg or shutil.which("ffmpeg")
+    executable = ffmpeg or find_ffmpeg()
     if not executable:
         raise RuntimeError("A-roll QA duplicate-frame checks require ffmpeg on PATH")
     completed = subprocess.run(
@@ -1332,7 +1377,7 @@ def create_contact_sheet(
         raise RuntimeError("contact-sheet inputs are missing: " + ", ".join(missing))
     if not sources:
         raise RuntimeError("contact sheet requires at least one input")
-    executable = shutil.which("ffmpeg")
+    executable = find_ffmpeg()
     if not executable:
         raise RuntimeError("contact-sheet generation requires ffmpeg on PATH")
     output = Path(output_path).expanduser().resolve()
@@ -1451,6 +1496,65 @@ def create_qa_contact_sheets(
             comparison_paths,
             comparison_output_path,
             labels=comparison_labels,
+        ),
+    }
+
+
+def create_publication_contact_sheets(
+    qa_dir: Path | str,
+    qa_output_path: Path | str,
+    comparison_output_path: Path | str,
+) -> dict[str, Any]:
+    """Create review sheets that compare meaningful states of one staged master."""
+    source = Path(qa_dir).expanduser().resolve()
+    qa_paths = [
+        "face/Rest.png",
+        "face/MBP.png",
+        "face/A.png",
+        "face/E.png",
+        "face/O.png",
+        "face/U.png",
+        "face/Smile.png",
+        "face/Surprise.png",
+        *(sample.path for sample in HAND_SAMPLES),
+    ]
+    comparison_paths = [
+        "face/Rest.png",
+        "face/A.png",
+        "face/MBP.png",
+        "face/O.png",
+        "hand/open.png",
+        "hand/fist.png",
+        "hand/finger_roll_r_1.png",
+        "hand/finger_roll_r_2.png",
+        "hand/finger_roll_r_3.png",
+        "hand/camera_facing_wave.png",
+        "hand/count_3.png",
+        "hand/point.png",
+    ]
+    return {
+        "qa": create_contact_sheet(
+            [source / path for path in qa_paths],
+            qa_output_path,
+            labels=CONTACT_SHEET_LABELS,
+        ),
+        "comparison": create_contact_sheet(
+            [source / path for path in comparison_paths],
+            comparison_output_path,
+            labels=(
+                "Rest",
+                "A open",
+                "MBP closed",
+                "O round",
+                "Open hand",
+                "Fist",
+                "Finger roll 1",
+                "Finger roll 2",
+                "Finger roll 3",
+                "Camera-facing wave",
+                "Count three",
+                "Point",
+            ),
         ),
     }
 
@@ -1607,11 +1711,48 @@ def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
             )
         sample["silhouette"] = metrics
         sample["frameMd5"] = frame_md5(output_dir / sample["path"])
+        sample["sha256"] = hashlib.sha256(
+            (output_dir / sample["path"]).read_bytes()
+        ).hexdigest()
 
     comparisons = _comparison_metrics(output_dir)
     duplicates = _duplicate_metrics(output_dir)
+    qa_sheet = output_dir / "MainIP_Sloth_Oral_Hand_QA.png"
+    comparison_sheet = output_dir / "MainIP_Sloth_Oral_Hand_Comparison.png"
+    create_publication_contact_sheets(
+        output_dir,
+        qa_sheet,
+        comparison_sheet,
+    )
+    current_blend = Path(str(bpy.data.filepath or "")).expanduser()
+    staged_sha256 = ""
+    capability_report: dict[str, Any] = {}
+    if current_blend.is_file():
+        current_blend = current_blend.resolve()
+        staged_sha256 = master_asset._sha256_file(current_blend)
+        collection = bpy.data.collections.get(master_asset.MASTER_COLLECTION)
+        if collection is not None:
+            validated = master_asset.validate_master_collection(
+                collection, current_blend
+            )
+            capabilities = validated.get("capabilities")
+            if isinstance(capabilities, Mapping):
+                capability_report = dict(capabilities)
+    capability_sha256 = (
+        master_asset._canonical_json_sha256(capability_report)
+        if capability_report
+        else ""
+    )
+    manifest = qa_manifest_payload()
+    manifest_sha256 = qa_manifest_sha256()
     report = {
+        "schemaVersion": QA_REPORT_SCHEMA_VERSION,
         "status": "ready",
+        "stagedSha256": staged_sha256,
+        "capabilityReport": capability_report,
+        "capabilityReportSha256": capability_sha256,
+        "manifest": manifest,
+        "manifestSha256": manifest_sha256,
         "faceCapability": {
             "blinkCapability": FACE_CAPABILITY,
             "qaSample": "face/Squint.png",
@@ -1624,10 +1765,23 @@ def run_qa(output_dir: Path | str, *, resolution: int = 640) -> dict[str, Any]:
             "handCloseCameras": [HAND_CLOSE_CAMERA_LEFT, HAND_CLOSE_CAMERA_RIGHT],
             "sampleCount": len(QA_SAMPLES),
             "requiredFiles": list(required_relative_paths()),
+            "manifestSha256": manifest_sha256,
         },
         "samples": samples,
         "comparisons": comparisons,
         "framemd5": duplicates,
+        "sheets": {
+            "qa": {
+                "path": str(qa_sheet),
+                "sha256": hashlib.sha256(qa_sheet.read_bytes()).hexdigest(),
+            },
+            "comparison": {
+                "path": str(comparison_sheet),
+                "sha256": hashlib.sha256(
+                    comparison_sheet.read_bytes()
+                ).hexdigest(),
+            },
+        },
     }
     report_path = output_dir / REPORT_NAME
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1704,18 +1858,107 @@ def build_staged_refined_master(input_path: Path | str) -> dict[str, Any]:
     return result
 
 
+def publish_staged_refined_master(
+    staged_path: Path | str,
+    final_path: Path | str,
+    publication_report_path: Path | str,
+) -> dict[str, Any]:
+    """Publish one staged refined master from SHA-bound QA evidence."""
+    report_path = Path(publication_report_path).expanduser().resolve()
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"cannot read refined publication report: {report_path}"
+        ) from exc
+    if not isinstance(report, Mapping):
+        raise RuntimeError("refined publication report must contain an object")
+    result = master_asset.publish_refined_master(
+        staged_path,
+        final_path,
+        report,
+    )
+    print("AROLL_REFINED_PUBLICATION=" + json.dumps(result, sort_keys=True))
+    return result
+
+
+def record_staged_visual_inspection(
+    staged_path: Path | str,
+    qa_report_path: Path | str,
+    output_path: Path | str,
+    reviewer: str,
+    reviewed_at: str,
+    notes: str = "",
+) -> dict[str, Any]:
+    result = master_asset.record_visual_inspection(
+        staged_path,
+        qa_report_path,
+        reviewer,
+        reviewed_at,
+        output_path,
+        notes,
+    )
+    print("AROLL_VISUAL_INSPECTION=" + json.dumps(result, sort_keys=True))
+    return result
+
+
+def build_staged_publication_package(
+    staged_path: Path | str,
+    qa_report_path: Path | str,
+    inspection_report_path: Path | str,
+    output_dir: Path | str,
+) -> dict[str, Any]:
+    result = master_asset.create_publication_report(
+        staged_path,
+        qa_report_path,
+        inspection_report_path,
+        output_dir,
+    )
+    print("AROLL_PUBLICATION_PACKAGE=" + json.dumps(result, sort_keys=True))
+    return result
+
+
 def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     if not args:
         raise RuntimeError(
             "usage: blender master.blend --python render_aroll_master_qa.py -- output_dir\n"
             "   or: blender --background --python render_aroll_master_qa.py -- "
-            "--build-staged input.json"
+            "--build-staged input.json\n"
+            "   or: blender --background --python render_aroll_master_qa.py -- "
+            "--publish-staged staged.blend final.blend publication-report.json\n"
+            "   or: blender --background --python render_aroll_master_qa.py -- "
+            "--record-inspection staged.blend qa-report.json output.json reviewer reviewed-at notes\n"
+            "   or: blender --background --python render_aroll_master_qa.py -- "
+            "--build-publication staged.blend qa-report.json inspection.json output-dir"
         )
     if args[0] == "--build-staged":
         if len(args) != 2:
             raise RuntimeError("--build-staged requires exactly one input JSON path")
         build_staged_refined_master(args[1])
+        return
+    if args[0] == "--publish-staged":
+        if len(args) != 4:
+            raise RuntimeError(
+                "--publish-staged requires staged, final, and publication report paths"
+            )
+        publish_staged_refined_master(args[1], args[2], args[3])
+        return
+    if args[0] == "--record-inspection":
+        if len(args) != 7:
+            raise RuntimeError(
+                "--record-inspection requires staged, QA report, output, reviewer, reviewed-at, and notes"
+            )
+        record_staged_visual_inspection(
+            args[1], args[2], args[3], args[4], args[5], args[6]
+        )
+        return
+    if args[0] == "--build-publication":
+        if len(args) != 5:
+            raise RuntimeError(
+                "--build-publication requires staged, QA report, inspection, and output directory"
+            )
+        build_staged_publication_package(args[1], args[2], args[3], args[4])
         return
     run_qa(args[0])
 

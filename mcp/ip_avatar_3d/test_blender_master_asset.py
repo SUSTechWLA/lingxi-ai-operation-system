@@ -6,9 +6,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import struct
 import sys
 import tempfile
 import traceback
+import zlib
 from pathlib import Path
 
 try:
@@ -23,6 +25,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import blender_renderer
 import hand_refinement
 import master_asset
+import render_aroll_master_qa
 from test_blender_character_rig import load_enhanced_fbx_character
 
 
@@ -164,22 +167,190 @@ def test_refined_master_fails_closed_for_live_topology_signature_and_action_dama
     )
 
 
+def _canonical_json_sha256(payload: dict) -> str:
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _rgba_png(width: int, height: int, pixels: list[tuple[int, int, int, int]]) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    rows = b"".join(
+        b"\x00" + bytes(channel for pixel in pixels[y * width : (y + 1) * width] for channel in pixel)
+        for y in range(height)
+    )
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows, 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+PNG_BYTES = _rgba_png(8, 8, [(255, 255, 255, 255)] * 64)
+
+
+def _qa_mask_fixture(label: str, kind: str) -> tuple[bytes, dict, int, int, set[int]]:
+    width = height = 64
+    pixels = [(0, 0, 0, 0)] * (width * height)
+    hand_indices: set[int] = set()
+
+    def fill(x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int, int]) -> set[int]:
+        indices = {
+            y * width + x for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)
+        }
+        for index in indices:
+            pixels[index] = color
+        return indices
+
+    dental_pixels = tongue_pixels = 0
+    if label in {"A", "E", "O", "U", "Smile", "Surprise"}:
+        dental_pixels = len(fill(24, 20, 31, 23, (255, 0, 0, 255)))
+        dental_pixels += len(fill(32, 20, 39, 23, (255, 255, 0, 255)))
+        tongue_pixels = len(fill(28, 29, 35, 32, (0, 255, 0, 255)))
+    if kind in {"hand", "digit"}:
+        rectangles = {
+            "open": (8, 8, 55, 55),
+            "fist": (20, 20, 43, 43),
+            "finger_roll_r_1": (10, 10, 49, 53),
+            "finger_roll_r_2": (12, 10, 51, 53),
+            "finger_roll_r_3": (14, 10, 53, 53),
+            "finger_roll_l_1": (14, 10, 53, 53),
+            "finger_roll_l_2": (12, 10, 51, 53),
+            "finger_roll_l_3": (10, 10, 49, 53),
+        }
+        hand_indices = fill(*rectangles.get(label, (12, 12, 51, 51)), (0, 0, 255, 255))
+    if hand_indices:
+        xs = [index % width for index in hand_indices]
+        ys = [index // width for index in hand_indices]
+        bounds = [min(xs), min(ys), max(xs), max(ys)]
+        margin = min(bounds[0], bounds[1], width - 1 - bounds[2], height - 1 - bounds[3])
+        hand_frame = {
+            "pixelCount": len(hand_indices),
+            "bounds": bounds,
+            "marginPixels": margin,
+            "marginFraction": round(margin / 63.0, 6),
+            "borderTouching": margin == 0,
+        }
+    else:
+        hand_frame = {}
+    return _rgba_png(width, height, pixels), hand_frame, dental_pixels, tongue_pixels, hand_indices
+
+
 def _publication_report(staged: Path, capabilities: dict) -> dict:
-    return {
-        "schemaVersion": "tangying-refined-master-publication/v1",
-        "stagedSha256": hashlib.sha256(staged.read_bytes()).hexdigest(),
+    staged_sha256 = hashlib.sha256(staged.read_bytes()).hexdigest()
+    capability_sha256 = _canonical_json_sha256(capabilities)
+    evidence_root = staged.parent / "publication-evidence"
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    qa_sheet = evidence_root / "qa-sheet.png"
+    comparison_sheet = evidence_root / "comparison-sheet.png"
+    qa_sheet.write_bytes(PNG_BYTES)
+    comparison_sheet.write_bytes(PNG_BYTES)
+    qa_sheet_sha256 = hashlib.sha256(qa_sheet.read_bytes()).hexdigest()
+    comparison_sha256 = hashlib.sha256(comparison_sheet.read_bytes()).hexdigest()
+    samples = []
+    hand_masks: dict[str, set[int]] = {}
+    for contract_sample in render_aroll_master_qa.QA_SAMPLES:
+        label = contract_sample.label
+        mask_bytes, hand_frame, dental_pixels, tongue_pixels, hand_indices = (
+            _qa_mask_fixture(label, contract_sample.kind)
+        )
+        sample = {
+            "label": label,
+            "kind": contract_sample.kind,
+            "action": contract_sample.action,
+            "camera": contract_sample.camera,
+            "frame": contract_sample.frame,
+            "path": contract_sample.path,
+            "pixelMaskPath": f"masks/{contract_sample.path}",
+            "dentalExposure": {"visiblePixelCount": dental_pixels},
+            "tongueExposure": {"visiblePixelCount": tongue_pixels},
+            "extremaFrameIntersections": [],
+        }
+        if contract_sample.kind in {"hand", "digit"}:
+            sample["handPixelFrame"] = hand_frame
+            hand_masks[label] = hand_indices
+        sample_path = evidence_root / contract_sample.path
+        sample_path.parent.mkdir(parents=True, exist_ok=True)
+        sample_path.write_bytes(PNG_BYTES)
+        sample["sha256"] = hashlib.sha256(sample_path.read_bytes()).hexdigest()
+        mask_path = evidence_root / sample["pixelMaskPath"]
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        mask_path.write_bytes(mask_bytes)
+        sample["pixelMaskSha256"] = hashlib.sha256(mask_bytes).hexdigest()
+        samples.append(sample)
+
+    def difference(first: str, second: str) -> float:
+        left = hand_masks[first]
+        right = hand_masks[second]
+        return round(len(left ^ right) / len(left | right), 6)
+
+    qa_report = {
+        "schemaVersion": "tangying-aroll-master-qa/v1",
+        "status": "ready",
+        "stagedSha256": staged_sha256,
         "capabilityReport": capabilities,
-        "publicationGates": {
-            "masterCapabilities": True,
-            "sourceSurfacePreservation": True,
-            "visemePerformanceQa": True,
-            "renderQa": True,
-            "poseCollisions": True,
-            "comparisonEvidence": True,
-            "handPixelMargins": True,
-            "visualInspection": True,
+        "capabilityReportSha256": capability_sha256,
+        "manifest": render_aroll_master_qa.qa_manifest_payload(),
+        "manifestSha256": render_aroll_master_qa.qa_manifest_sha256(),
+        "faceCapability": {"blinkCapability": "squint_only"},
+        "lighting": {"preset": "qa_editorial_soft"},
+        "contract": {
+            "sampleCount": len(samples),
+            "requiredFiles": [sample["path"] for sample in samples],
+            "manifestSha256": render_aroll_master_qa.qa_manifest_sha256(),
+        },
+        "samples": samples,
+        "comparisons": {
+            "openFistPixelDifference": difference("open", "fist"),
+            "fingerRollPixelDifferences": {
+                "r1-r2": difference("finger_roll_r_1", "finger_roll_r_2"),
+                "r2-r3": difference("finger_roll_r_2", "finger_roll_r_3"),
+                "l1-l2": difference("finger_roll_l_1", "finger_roll_l_2"),
+                "l2-l3": difference("finger_roll_l_2", "finger_roll_l_3"),
+            },
+        },
+        "framemd5": {
+            "hand": ["1", "2", "3"],
+            "face": ["4", "5", "6"],
+        },
+        "sheets": {
+            "qa": {"path": str(qa_sheet), "sha256": qa_sheet_sha256},
+            "comparison": {
+                "path": str(comparison_sheet),
+                "sha256": comparison_sha256,
+            },
         },
     }
+    qa_report_path = evidence_root / "qa-report.json"
+    qa_report_path.write_text(
+        json.dumps(qa_report, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    inspection_path = evidence_root / "visual-inspection.json"
+    master_asset.record_visual_inspection(
+        staged,
+        qa_report_path,
+        "codex-visual-review",
+        "2026-07-16T09:00:00+08:00",
+        inspection_path,
+    )
+    report = master_asset.create_publication_report(
+        staged,
+        qa_report_path,
+        inspection_path,
+        evidence_root,
+    )
+    assert (evidence_root / "publication-report.json").is_file()
+    return report
 
 
 def test_atomic_publish_requires_exact_bound_report_and_real_blend() -> None:
@@ -198,31 +369,93 @@ def test_atomic_publish_requires_exact_bound_report_and_real_blend() -> None:
         )
         approved.write_bytes(b"approved-master")
         report = _publication_report(staging, saved["capabilities"])
+        qa_report_path = staging.parent / "publication-evidence" / "qa-report.json"
+        qa_report_payload = json.loads(qa_report_path.read_text(encoding="utf-8"))
+        qa_report_payload["manifestSha256"] = "0" * 64
+        qa_report_path.write_text(
+            json.dumps(qa_report_payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        _expect_runtime_error(
+            "QA report is not bound",
+            lambda: master_asset.create_publication_report(
+                staging,
+                qa_report_path,
+                staging.parent / "publication-evidence" / "visual-inspection.json",
+                staging.parent / "forged-evidence",
+            ),
+        )
+        report = _publication_report(staging, saved["capabilities"])
+        qa_report_payload = json.loads(qa_report_path.read_text(encoding="utf-8"))
+        malformed_sheet = Path(qa_report_payload["sheets"]["qa"]["path"])
+        malformed_sheet.write_bytes(b"\x89PNG\r\n\x1a\nnot-an-image")
+        qa_report_payload["sheets"]["qa"]["sha256"] = hashlib.sha256(
+            malformed_sheet.read_bytes()
+        ).hexdigest()
+        qa_report_path.write_text(
+            json.dumps(qa_report_payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        _expect_runtime_error(
+            "PNG cannot be decoded",
+            lambda: master_asset.record_visual_inspection(
+                staging,
+                qa_report_path,
+                "codex-visual-review",
+                "2026-07-16T09:00:00+08:00",
+                staging.parent / "malformed-inspection.json",
+            ),
+        )
+        report = _publication_report(staging, saved["capabilities"])
         published = master_asset.publish_refined_master(staging, final, report)
         assert published["published"] is True
         assert final.read_bytes() == staging.read_bytes()
         assert approved.read_bytes() == b"approved-master"
+
+        original_staged_bytes = staging.read_bytes()
+        race_report = _publication_report(staging, saved["capabilities"])
+        original_validator = master_asset._validate_publication_evidence
+
+        def validate_then_replace_staging(*args, **kwargs):
+            original_validator(*args, **kwargs)
+            staging.write_bytes(b"BLENDER concurrent replacement")
+
+        master_asset._validate_publication_evidence = validate_then_replace_staging
+        try:
+            raced = master_asset.publish_refined_master(staging, final, race_report)
+        finally:
+            master_asset._validate_publication_evidence = original_validator
+        assert raced["sha256"] == hashlib.sha256(original_staged_bytes).hexdigest()
+        assert final.read_bytes() == original_staged_bytes
+        assert staging.read_bytes() != original_staged_bytes
+        staging.write_bytes(original_staged_bytes)
+        report = _publication_report(staging, saved["capabilities"])
         _expect_runtime_error(
             "legacy approved master",
             lambda: master_asset.publish_refined_master(staging, approved, report),
         )
         invented = copy.deepcopy(report)
-        invented["publicationGates"]["inventedGate"] = True
+        invented["publicationEvidence"]["inventedGate"] = {
+            "path": "invented.json",
+            "sha256": "0" * 64,
+        }
         _expect_runtime_error(
-            "publication gate schema",
+            "publication evidence schema",
             lambda: master_asset.publish_refined_master(staging, final, invented),
         )
         missing = copy.deepcopy(report)
-        missing["publicationGates"].pop("renderQa")
+        missing["publicationEvidence"].pop("renderQa")
         _expect_runtime_error(
-            "publication gate schema",
+            "publication evidence schema",
             lambda: master_asset.publish_refined_master(staging, final, missing),
         )
-        failed = copy.deepcopy(report)
-        failed["publicationGates"]["renderQa"] = False
+        tampered_hash = copy.deepcopy(report)
+        tampered_hash["publicationEvidence"]["renderQa"]["sha256"] = "0" * 64
         _expect_runtime_error(
-            "publication gates failed",
-            lambda: master_asset.publish_refined_master(staging, final, failed),
+            "evidence SHA-256 mismatch",
+            lambda: master_asset.publish_refined_master(
+                staging, final, tampered_hash
+            ),
         )
         bad_sha = copy.deepcopy(report)
         bad_sha["stagedSha256"] = "0" * 64
@@ -236,6 +469,50 @@ def test_atomic_publish_requires_exact_bound_report_and_real_blend() -> None:
             "live capability report mismatch",
             lambda: master_asset.publish_refined_master(
                 staging, final, bad_capabilities
+            ),
+        )
+        invalid_visual = copy.deepcopy(report)
+        visual_path = Path(
+            invalid_visual["publicationEvidence"]["visualInspection"]["path"]
+        )
+        visual_payload = json.loads(visual_path.read_text(encoding="utf-8"))
+        inspection_path = Path(
+            visual_payload["details"]["inspectionReportPath"]
+        )
+        inspection_payload = json.loads(inspection_path.read_text(encoding="utf-8"))
+        inspection_payload["reviewer"] = ""
+        inspection_path.write_text(
+            json.dumps(inspection_payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        visual_payload["details"]["inspectionReportSha256"] = hashlib.sha256(
+            inspection_path.read_bytes()
+        ).hexdigest()
+        visual_path.write_text(
+            json.dumps(visual_payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        invalid_visual["publicationEvidence"]["visualInspection"]["sha256"] = (
+            hashlib.sha256(visual_path.read_bytes()).hexdigest()
+        )
+        _expect_runtime_error(
+            "visual inspection evidence",
+            lambda: master_asset.publish_refined_master(
+                staging, final, invalid_visual
+            ),
+        )
+
+        tampered_sample_report = _publication_report(
+            staging, saved["capabilities"]
+        )
+        tampered_sample = (
+            staging.parent / "publication-evidence" / "face" / "A.png"
+        )
+        tampered_sample.write_bytes(b"tampered-render")
+        _expect_runtime_error(
+            "QA sample PNG SHA-256 mismatch",
+            lambda: master_asset.publish_refined_master(
+                staging, final, tampered_sample_report
             ),
         )
 
@@ -267,6 +544,12 @@ def test_refined_save_is_staging_only_and_persists_live_capability_report() -> N
         assert json.loads(persisted)["sourceSurfaceHashes"] == saved["capabilities"][
             "sourceSurfaceHashes"
         ]
+        del collection[master_asset.REFINED_CAPABILITY_REPORT_PROPERTY]
+        _expect_runtime_error(
+            "missing refined capability report",
+            lambda: master_asset.validate_master_collection(collection, staged),
+        )
+        collection[master_asset.REFINED_CAPABILITY_REPORT_PROPERTY] = persisted
         oral = {
             role: next(
                 obj

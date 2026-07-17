@@ -427,6 +427,11 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
         assert report["lighting"]["lightCount"] >= 3
         assert len(report["samples"]) == len(render_aroll_master_qa.QA_SAMPLES)
         assert report["contract"]["sampleCount"] == len(render_aroll_master_qa.QA_SAMPLES)
+        assert report["schemaVersion"] == "tangying-aroll-master-qa/v1"
+        assert report["manifestSha256"] == render_aroll_master_qa.qa_manifest_sha256()
+        assert all(
+            len(sample.get("sha256", "")) == 64 for sample in report["samples"]
+        )
         assert all(
             {
                 "action",
