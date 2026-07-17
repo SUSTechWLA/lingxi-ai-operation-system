@@ -19,6 +19,7 @@ class DigitPose:
 
 
 OPEN = DigitPose(0.015, 0.010, 0.005)
+SLOTH_OPEN = DigitPose(0.035, 0.075, 0.115)
 RELAXED = DigitPose(0.10, 0.12, 0.06)
 FIST = DigitPose(0.28, 0.32, 0.20)
 
@@ -29,9 +30,9 @@ def _digits(*poses: DigitPose) -> dict[int, DigitPose]:
 
 HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
     "open_hand": _digits(
-        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.22),
-        OPEN,
-        DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=-0.22),
+        DigitPose(SLOTH_OPEN.proximal, SLOTH_OPEN.middle, SLOTH_OPEN.distal, splay=0.08),
+        SLOTH_OPEN,
+        DigitPose(SLOTH_OPEN.proximal, SLOTH_OPEN.middle, SLOTH_OPEN.distal, splay=-0.08),
     ),
     "relaxed_hand": _digits(
         DigitPose(RELAXED.proximal, RELAXED.middle, RELAXED.distal, splay=0.035),
@@ -64,9 +65,9 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(0.29, 0.34, 0.22),
     ),
     "count_three": _digits(
-        DigitPose(0.03, 0.025, 0.01, splay=0.32),
-        DigitPose(0.03, 0.025, 0.01),
-        DigitPose(0.03, 0.025, 0.01, splay=-0.32),
+        DigitPose(0.125, 0.15, 0.19, splay=0.10),
+        DigitPose(0.125, 0.15, 0.19),
+        DigitPose(0.125, 0.15, 0.19, splay=-0.10),
     ),
     "point": _digits(
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.10),

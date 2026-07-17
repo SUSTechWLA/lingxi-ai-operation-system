@@ -77,6 +77,17 @@ class ArollActionContractTests(unittest.TestCase):
                 with self.subTest(left=left, right=right):
                     self.assertGreaterEqual(maximum_delta(left, right), 0.08)
 
+    def test_sloth_open_and_count_three_keep_low_splay_and_hooked_tips(self) -> None:
+        open_pose = aroll_actions.hand_pose("open_hand")
+        count_pose = aroll_actions.hand_pose("count_three")
+
+        self.assertLessEqual(abs(open_pose[1].splay), 0.08)
+        self.assertLessEqual(abs(open_pose[3].splay), 0.08)
+        for digit in (1, 2, 3):
+            self.assertGreater(open_pose[digit].distal, open_pose[digit].proximal)
+        self.assertLessEqual(abs(count_pose[1].splay), 0.12)
+        self.assertLessEqual(abs(count_pose[3].splay), 0.12)
+
     def test_catalog_has_unique_stateful_actions(self) -> None:
         payload = aroll_actions.action_catalog_payload()
         names = [item["name"] for item in payload["actions"]]
