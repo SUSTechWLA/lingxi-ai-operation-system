@@ -15,13 +15,13 @@ from typing import Any
 
 
 SIGNED_OFF_STAGING_RELATIVE_PATH = Path(
-    "outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/ip_layer.mp4"
+    "outputs/final/refined-aroll-evidence/production-third-review-v3/ip_layer.mp4"
 )
 FINAL_VIDEO_RELATIVE_PATH = Path(
     "outputs/final/MainIP_Sloth_Refined_Aroll_Demo_1080p.mp4"
 )
 SIGNED_OFF_VIDEO_SHA256 = (
-    "f32056457a73f3467e580b2ea21cad40da67cf667ce560aa969c3a238d8770eb"
+    "73faca148d127e0e0f1e990846b9d6933c3f1dcebcdcfea52948dc2b8c7e4448"
 )
 
 

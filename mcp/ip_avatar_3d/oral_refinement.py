@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import bpy
+from mathutils import Vector
 
 
 ORAL_REFINEMENT_VERSION = 2
-RUNTIME_ORAL_CONTAINMENT_VERSION = 2
+RUNTIME_ORAL_CONTAINMENT_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,56 @@ def tongue_weights(
     return weights
 
 
+def ensure_runtime_open_viseme_lift(
+    source_face: bpy.types.Object,
+    target_object: bpy.types.Object,
+    character_height: float,
+    lift_factor: float | dict[str, float],
+) -> None:
+    """Drive a closed-safe role lift from the source open-viseme keys."""
+    source_keys = source_face.data.shape_keys
+    if source_keys is None:
+        raise RuntimeError("runtime oral visemes require source Mouth_* Shape Keys")
+    if target_object.data.shape_keys is None:
+        target_object.shape_key_add(name="Basis", from_mix=False)
+    target_keys = target_object.data.shape_keys
+    basis = target_keys.key_blocks.get("Basis")
+    if basis is None:
+        raise RuntimeError("runtime oral visemes require a Basis Shape Key")
+
+    for shape_name in ("Mouth_A", "Mouth_E", "Mouth_O", "Mouth_U"):
+        if source_keys.key_blocks.get(shape_name) is None:
+            raise RuntimeError(f"runtime oral visemes require source {shape_name}")
+        key = target_keys.key_blocks.get(shape_name)
+        if key is None:
+            key = target_object.shape_key_add(name=shape_name, from_mix=False)
+        factor = (
+            float(lift_factor[shape_name])
+            if isinstance(lift_factor, dict)
+            else float(lift_factor)
+        )
+        local_lift = (
+            target_object.matrix_world.inverted().to_3x3()
+            @ Vector((0.0, 0.0, character_height * factor))
+        )
+        for index, basis_point in enumerate(basis.data):
+            key.data[index].co = basis_point.co + local_lift
+        try:
+            key.driver_remove("value")
+        except TypeError:
+            pass
+        driver = key.driver_add("value").driver
+        driver.type = "SCRIPTED"
+        variable = driver.variables.new()
+        variable.name = "viseme"
+        variable.type = "SINGLE_PROP"
+        target = variable.targets[0]
+        target.id_type = "KEY"
+        target.id = source_keys
+        target.data_path = f'key_blocks["{shape_name}"].value'
+        driver.expression = "viseme"
+
+
 def fit_runtime_oral_containment(
     source_face: bpy.types.Object,
     oral_objects: dict[str, bpy.types.Object],
@@ -365,13 +416,16 @@ def fit_runtime_oral_containment(
         "tongue": -0.10,
     }
     depth_offsets = {
-        "oral_cavity": float(dimensions["depth"]) * 0.011,
+        "oral_cavity": float(dimensions["depth"]) * 0.040,
         "upper_gum": float(dimensions["depth"]) * 0.009,
         "upper_teeth": -float(dimensions["depth"]) * 0.001,
         "lower_teeth": float(dimensions["depth"]) * 0.005,
         "lower_gum": float(dimensions["depth"]) * 0.009,
         "tongue": -float(dimensions["depth"]) * 0.017,
     }
+    vertical_offsets = {role: 0.0 for role in required_roles}
+    vertical_offsets["lower_teeth"] = -float(dimensions["height"]) * 0.010
+    vertical_offsets["oral_cavity"] = float(dimensions["height"]) * 0.015
     for role, obj in oral_objects.items():
         points = [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
         center_x = (min(point.x for point in points) + max(point.x for point in points)) * 0.5
@@ -380,9 +434,30 @@ def fit_runtime_oral_containment(
         matrix.translation.x += target_center_x - center_x
         matrix.translation.y += depth_offsets[role]
         matrix.translation.z += (
-            target_center_z + boundary_height * vertical_targets[role] - center_z
+            target_center_z
+            + boundary_height * vertical_targets[role]
+            + vertical_offsets[role]
+            - center_z
         )
         obj.matrix_world = matrix
+
+    ensure_runtime_open_viseme_lift(
+        source_face,
+        oral_objects["tongue"],
+        float(dimensions["height"]),
+        0.004,
+    )
+    ensure_runtime_open_viseme_lift(
+        source_face,
+        oral_objects["oral_cavity"],
+        float(dimensions["height"]),
+        {
+            "Mouth_A": 0.002,
+            "Mouth_E": 0.006,
+            "Mouth_O": 0.003,
+            "Mouth_U": 0.003,
+        },
+    )
 
     for obj in oral_objects.values():
         obj["ip_runtime_oral_containment_version"] = RUNTIME_ORAL_CONTAINMENT_VERSION

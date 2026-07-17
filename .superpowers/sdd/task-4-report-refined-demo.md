@@ -1,33 +1,32 @@
-# Task 4 Independent-Review Fix Final Report
+# Task 4 Third-Review Fix Final Report
 
 Status: **DONE**
 
-The full rerender passed user visual sign-off and automated Blender, media, oral-mask,
-gesture, and encoded-audio checks. The publisher is bound to the exact signed v2 artifact,
+The full rerender passed visual sign-off and automated Blender, media, oral-mask,
+gesture, and encoded-audio checks. The publisher is bound to the exact signed v3 artifact,
 which was atomically published over the final path. Generated binaries and evidence remain
 untracked.
 
 ## Signed Artifact
 
-- Signed staging: `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/ip_layer.mp4`
+- Signed staging: `outputs/final/refined-aroll-evidence/production-third-review-v3/ip_layer.mp4`
 - Published final: `outputs/final/MainIP_Sloth_Refined_Aroll_Demo_1080p.mp4`
-- SHA-256: `f32056457a73f3467e580b2ea21cad40da67cf667ce560aa969c3a238d8770eb`
-- Size: 9,382,211 bytes
+- SHA-256: `73faca148d127e0e0f1e990846b9d6933c3f1dcebcdcfea52948dc2b8c7e4448`
+- Size: 9,388,433 bytes
 - Permissions: `0644`
-- Action extrema: `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/candidate-action-extrema.png`
-- Oral mask sheet: `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/oral-mask-contact-sheet.png`
-- Complete final evidence: `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/final-published-v2-media-evidence.json`
+- Action extrema: `outputs/final/refined-aroll-evidence/third-review-extrema-v3/gesture-extrema-contact-sheet.png`
+- Hand close-ups: `outputs/final/refined-aroll-evidence/third-review-extrema-v3/hand-closeups.png`
+- Oral extrema: `outputs/final/refined-aroll-evidence/third-review-extrema-v3/oral-extrema-contact-sheet.png`
+- Final media evidence: `outputs/final/refined-aroll-evidence/production-third-review-v3/evidence/`
 
 The action contact-sheet cell order is:
 
-1. frame 1, opening / A
-2. frame 37, `Aroll_Greeting_Wave`
-3. frame 95, `Aroll_OpenPalm_Explain`
-4. frame 150, `Aroll_Count_Three`
-5. frame 200, `Aroll_Pinch_Detail`
-6. frame 241, `Aroll_Transition_Reset`
-7. frame 361, E viseme / semantic count
-8. frame 451, final reset
+1. wave phase 1
+2. wave phase 2
+3. wave phase 3
+4. open palm
+5. count three
+6. pinch
 
 ## Reproducible Recipe
 
@@ -52,61 +51,52 @@ Required action sequence:
 
 ## P1 Oral Assembly Fix
 
-Root cause: runtime containment version 1 uniformly compressed the entire oral assembly to
-approximately 21% of its native vertical thickness. That kept geometry behind the lips but
-made the cavity, dental arches, gums, and tongue visually unreadable.
-
-Runtime containment version 2 removes whole-assembly X/Z scaling. It preserves scale 1.0 and
-uses role-specific local placement for the cavity, upper/lower gums, upper/lower teeth, and
-tongue. Source lips and approved master geometry remain unchanged.
+The second independent review found evaluated intersections that static rest-pose checks
+missed: the tongue intersected the lower dental arch and cavity in A/E/O/U. Runtime
+containment version 4 keeps every approved oral role at scale 1.0, moves the cavity deeper,
+lowers the lower dental arch, and adds driven A/E/O/U lifts to the tongue and cavity.
+Those lifts copy the source face viseme values through Blender drivers, so Rest and MBP are
+unchanged while open visemes stay readable and collision-free.
 
 Real Blender regression gates now require:
 
 - At least 95% of native oral-role width and vertical thickness.
-- No evaluated BVH overlap for tongue/upper teeth, tongue/upper gum, or upper/lower teeth.
+- No evaluated BVH overlap for tongue/upper teeth, tongue/lower teeth, tongue/upper gum,
+  tongue/oral cavity, or upper/lower teeth in every A/E/O/U extreme.
 - A/E/O/U each expose distinct cavity, dental, and tongue regions.
 - Rest and MBP expose no oral-role pixels.
+- Rendered 768x432 masks contain no detached oral specks or displaced cavity fragments.
+- The tongue and cavity expose driven Mouth_A/E/O/U Shape Keys with source-viseme drivers.
 
-Rendered mask results at 384x216:
-
-| Viseme | Cavity pixels | Dental pixels | Tongue pixels | Result |
-| --- | ---: | ---: | ---: | --- |
-| A | 301 | 18 | 7 | pass |
-| E | 198 | 20 | 14 | pass |
-| O | 234 | 23 | 10 | pass |
-| U | 170 | 14 | 12 | pass |
-| Rest | 0 | 0 | 0 | pass, fully occluded |
-| MBP | 0 | 0 | 0 | pass, fully occluded |
-
-Thresholds are 150 cavity pixels, 10 dental pixels, and 6 tongue pixels for every open
-viseme, with exactly 0 total oral pixels for Rest/MBP. The machine-readable report is:
-
-`outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/oral-mask-metrics.json`
+The six-view visual gate is:
+`outputs/final/refined-aroll-evidence/third-review-extrema-v3/oral-extrema-contact-sheet.png`.
 
 ## P2 Gesture Readability Fix
 
-Source-rig action calibration now gives the wave and open-palm explanation camera-facing
-palms, keeps three digits separated, and makes count-three and pinch use clearly different
-silhouettes. Wrist rotation and restrained curl limits remain compatible with close A-roll
-framing.
+Source-rig action calibration now gives the wave a larger alternating wrist rotation while
+holding the elbow and forearm stable. The pinch opposes the two outer three-digit tips,
+instead of reading as an open claw. Open-palm and count-three remain distinct.
 
 The real Blender rendered regression requires:
 
-- Wave palm-facing score at least 0.75 and minimum fingertip separation at least 0.02.
+- Every wave phase keeps the same camera-facing palm orientation with score at least 0.75.
+- Consecutive wave phases differ by at least 0.20 radians and 0.008 normalized screen width,
+  while upper-arm and forearm drift remains below 0.03 radians.
 - Open-palm score at least 0.90 and minimum fingertip separation at least 0.035.
 - Count-three minimum fingertip separation at least 0.05.
+- Pinch outer-tip distance is at most 58% of open/count-three distance, remains above 0.08
+  normalized chain length, and no digit pair collapses below 0.05.
 - Every required hand mask above 1,000 pixels and all fingertips inside frame.
 - Count-three/pinch rendered-mask difference at least 0.0025.
 
 The test passed for `Aroll_Greeting_Wave`, `Aroll_OpenPalm_Explain`,
-`Aroll_Count_Three`, and `Aroll_Pinch_Detail`. The user also passed the ten-image
-pre-rerender visual gate before the final 451-frame render was composed.
+`Aroll_Count_Three`, and `Aroll_Pinch_Detail`. The six-image extrema gate was reviewed
+before the final 451-frame render was composed.
 
-Final visual sign-off covered frames 1, 15, 20, 39, 40, 51, 88, 95, 125, 150, 190,
-200, 225, 260, 270, 300, 317, 339, 361, 362, 385, 409, 434, and 450. The reviewer
-confirmed clean Rest/MBP, readable cavity/dental/tongue layers in open visemes, no escaped
-oral geometry, camera-facing wave and explanation palms, distinct count-three/pinch, and
-no clipping, inversion, or black limbs.
+Final visual sign-off covered opening, three wave phases, open-palm explanation, count
+three, pinch, semantic repeats, and final reset. It confirmed clean Rest/MBP, readable
+cavity/dental/tongue layers, camera-facing palms, real wrist oscillation, converged pinch,
+and no clipping, inversion, black limbs, or end-frame pixel corruption.
 
 ## P3 Encoded Audio Fix
 
@@ -140,10 +130,10 @@ true-peak gate are unchanged. Final published audio measures:
 
 Evidence:
 
-- `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/final-published-v2-ffprobe.json`
-- `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/final-published-v2.framemd5`
-- `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/final-published-v2.sha256`
-- `outputs/final/refined-aroll-evidence/production-review-fix-candidate-v2/evidence/final-published-v2-media-evidence.json`
+- `outputs/final/refined-aroll-evidence/production-third-review-v3/evidence/final-v3-ffprobe.json`
+- `outputs/final/refined-aroll-evidence/production-third-review-v3/evidence/final-v3.framemd5`
+- `outputs/final/refined-aroll-evidence/production-third-review-v3/evidence/final-v3.sha256`
+- `outputs/final/refined-aroll-evidence/production-third-review-v3/evidence/final-v3-media-evidence.json`
 
 ## Verification Matrix
 
@@ -166,7 +156,8 @@ Blender 5.1.2:
 ```
 
 Result: 13 tests, 0 failures/errors. This includes real warm-studio runtime append,
-evaluated oral geometry, rendered oral masks, rendered hand silhouettes, and rollback.
+A/E/O/U evaluated oral BVH collision checks, rendered oral masks, multi-phase wave and
+pinch semantics, rendered hand silhouettes, and rollback.
 
 Go integration packages:
 
@@ -179,10 +170,10 @@ Result: all six package targets passed.
 
 ## Atomic Publication
 
-The tracked publisher now binds:
+The tracked publisher binds:
 
-- `SIGNED_OFF_STAGING_RELATIVE_PATH` to the v2 staging video.
-- `SIGNED_OFF_VIDEO_SHA256` to `f32056457a73f3467e580b2ea21cad40da67cf667ce560aa969c3a238d8770eb`.
+- `SIGNED_OFF_STAGING_RELATIVE_PATH` to the v3 staging video.
+- `SIGNED_OFF_VIDEO_SHA256` to `73faca148d127e0e0f1e990846b9d6933c3f1dcebcdcfea52948dc2b8c7e4448`.
 - `FINAL_VIDEO_RELATIVE_PATH` to `outputs/final/MainIP_Sloth_Refined_Aroll_Demo_1080p.mp4`.
 
 Publication validated the staging hash before copying, wrote and `fsync`ed a same-directory

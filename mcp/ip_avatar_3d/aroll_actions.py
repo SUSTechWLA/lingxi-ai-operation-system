@@ -49,9 +49,9 @@ HAND_POSES: Mapping[str, Mapping[int, DigitPose]] = {
         DigitPose(FIST.proximal, FIST.middle, FIST.distal, splay=-0.035, opposition=0.11),
     ),
     "pinch": _digits(
-        DigitPose(0.30, 0.34, 0.22, splay=0.07),
-        DigitPose(0.18, 0.24, 0.16),
-        DigitPose(0.30, 0.34, 0.22, splay=-0.08, opposition=0.22),
+        DigitPose(0.30, 0.34, 0.22, splay=-0.08),
+        DigitPose(0.24, 0.30, 0.20),
+        DigitPose(0.30, 0.34, 0.22, splay=0.08, opposition=0.30),
     ),
     "count_one": _digits(
         DigitPose(OPEN.proximal, OPEN.middle, OPEN.distal, splay=0.10),
@@ -789,12 +789,12 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
         wave_raise = {
             "upper_arm_r": (-0.08, 0.03, -0.34),
             "forearm_r": (-0.25, 0.02, 1.84),
-            "hand_r": (0.035, -0.18, 0.055),
+            "hand_r": (0.075, -0.18, 0.090),
         }
         wave_return = {
             "upper_arm_r": (-0.08, 0.03, -0.34),
             "forearm_r": (-0.25, 0.02, 1.84),
-            "hand_r": (-0.035, -0.18, -0.055),
+            "hand_r": (-0.075, -0.18, -0.090),
         }
         think_pose = {
             "upper_arm_r": (-0.09, -0.03, -0.74),
@@ -850,13 +850,13 @@ def build_aroll_action_specs(source_rig: bool, fps: int) -> dict[str, ActionSpec
             "shoulder_r": (0.04, -0.06, 0.10),
             "upper_arm_r": (0.02, 0.20, 0.32),
             "forearm_r": (0.82, 0.04, 0.02),
-            "hand_r": (0.035, -0.18, 0.055),
+            "hand_r": (0.075, -0.18, 0.090),
         }
         wave_return = {
             "shoulder_r": (0.04, -0.06, 0.10),
             "upper_arm_r": (0.02, 0.20, 0.32),
             "forearm_r": (0.82, 0.04, 0.02),
-            "hand_r": (-0.035, -0.18, -0.055),
+            "hand_r": (-0.075, -0.18, -0.090),
         }
         think_pose = {
             "upper_arm_r": (-0.18, -0.14, 0.13),
