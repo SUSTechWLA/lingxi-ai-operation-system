@@ -33,8 +33,50 @@ VALID_VISEME_METRICS = {
     "mbpJawRadians": 0.0,
 }
 
+VALID_HAND_PERSPECTIVE_METRICS = {
+    "cameraLensMm": 50.0,
+    "maxLocalScaleError": 0.0002,
+    "maxMatrixScaleError": 0.0003,
+    "leftAreaGrowth": 0.30,
+    "rightAreaGrowth": 0.35,
+    "minimumFrameMargin": 0.06,
+}
+
 
 class ArollPerformanceQATests(unittest.TestCase):
+    def test_hand_perspective_metrics_enforce_long_lens_unit_scale_and_growth(self) -> None:
+        report = qa.validate_hand_perspective_metrics(
+            VALID_HAND_PERSPECTIVE_METRICS
+        )
+        self.assertTrue(report["success"], report)
+
+        failures = {
+            "cameraLensMm": 47.999,
+            "maxLocalScaleError": 0.0011,
+            "maxMatrixScaleError": 0.0011,
+            "leftAreaGrowth": 0.351,
+            "rightAreaGrowth": 0.351,
+            "minimumFrameMargin": 0.039,
+        }
+        for key, value in failures.items():
+            with self.subTest(key=key):
+                report = qa.validate_hand_perspective_metrics(
+                    dict(VALID_HAND_PERSPECTIVE_METRICS, **{key: value})
+                )
+                self.assertFalse(report["success"], report)
+
+    def test_hand_perspective_metrics_fail_closed_on_missing_or_invalid_values(self) -> None:
+        for metrics in (
+            {},
+            dict(VALID_HAND_PERSPECTIVE_METRICS, cameraLensMm="50"),
+            dict(VALID_HAND_PERSPECTIVE_METRICS, leftAreaGrowth=math.nan),
+            dict(VALID_HAND_PERSPECTIVE_METRICS, maxLocalScaleError=True),
+        ):
+            with self.subTest(metrics=metrics):
+                report = qa.validate_hand_perspective_metrics(metrics)
+                self.assertFalse(report["success"], report)
+                self.assertTrue(report["errors"])
+
     def test_valid_transition_metrics_pass(self) -> None:
         report = qa.validate_transition_metrics(VALID_TRANSITION_METRICS)
         self.assertTrue(report["success"])

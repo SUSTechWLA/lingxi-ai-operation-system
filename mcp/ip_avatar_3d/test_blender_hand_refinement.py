@@ -543,6 +543,8 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
             "fist",
             "camera_facing_wave",
         }
+
+
         render_aroll_master_qa.require_files(
             output_dir,
             (*render_aroll_master_qa.required_relative_paths(), render_aroll_master_qa.REPORT_NAME),
@@ -561,6 +563,31 @@ def test_aroll_qa_renders_programmatic_fixture_and_checks_pixels() -> None:
                 output_dir, render_aroll_master_qa.required_relative_paths()
             ),
         )
+
+
+def test_open_palm_timeline_reports_real_hand_perspective_and_unit_scale() -> None:
+    scene, armature, _, bone_map = _build_aroll_qa_fixture()
+    character_objects = [obj for obj in scene.objects if obj.type == "MESH"]
+    armature.animation_data.action = bpy.data.actions["Aroll_OpenPalm_Explain"]
+    scene.frame_start = 1
+    scene.frame_end = 60
+
+    report = blender_renderer._collect_hand_perspective_qa(
+        character_objects,
+        armature,
+        bone_map,
+        scene.objects["Camera_Medium"],
+        relaxed_frame=1,
+        hold_frame=30,
+        sample_frames=(1, 12, 24, 30, 46, 60),
+    )
+
+    assert report["success"] is True, report
+    assert report["metrics"]["cameraLensMm"] >= 48.0, report
+    assert report["metrics"]["maxLocalScaleError"] <= 0.001, report
+    assert report["metrics"]["maxMatrixScaleError"] <= 0.001, report
+    assert report["evidence"]["relaxedFrame"] == 1, report
+    assert report["evidence"]["holdFrame"] == 30, report
 
 
 def digit_roles(side: str, digit: int) -> tuple[str, str, str]:
@@ -1579,9 +1606,13 @@ def test_three_segment_digit_poses_key_independent_semantic_curls() -> None:
         sampled_digit_rotations(armature, bone_map, "Gesture_OpenHand", "r", digit)
         for digit in (1, 2, 3)
     ]
-    assert all(abs(rotation.z) < 0.04 for chain in open_digits for rotation in chain)
-    assert open_digits[0][0].x > 0.10, tuple(open_digits[0][0])
-    assert open_digits[2][0].x < -0.10, tuple(open_digits[2][0])
+    for proximal, middle, distal in open_digits:
+        assert 0.03 <= proximal.z <= 0.04, tuple(proximal)
+        assert 0.07 <= middle.z <= 0.08, tuple(middle)
+        assert 0.11 <= distal.z <= 0.12, tuple(distal)
+        assert distal.z > middle.z > proximal.z
+    assert 0.07 <= open_digits[0][0].x <= 0.08, tuple(open_digits[0][0])
+    assert -0.08 <= open_digits[2][0].x <= -0.07, tuple(open_digits[2][0])
 
     pinch_lower = sampled_digit_rotations(armature, bone_map, "Gesture_Pinch", "r", 3)
     assert abs(pinch_lower[0].y) > 0.04, tuple(pinch_lower[0])
@@ -1712,6 +1743,7 @@ if __name__ == "__main__":
         test_aroll_qa_fixture_fails_closed_for_missing_master_contract,
         test_saved_master_adds_standalone_qa_cameras_without_collection_conflicts,
         test_aroll_qa_renders_programmatic_fixture_and_checks_pixels,
+        test_open_palm_timeline_reports_real_hand_perspective_and_unit_scale,
         test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
         test_refined_hands_preserve_three_digits_and_taper_each_tip,
         test_refined_hand_weights_remain_normalized_and_isolated,

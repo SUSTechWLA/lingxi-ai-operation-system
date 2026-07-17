@@ -721,6 +721,42 @@ def _embedded_collision_report(mode: str, result: dict[str, Any]) -> dict[str, A
         or len({item.get("state") for item in performance["stateTimeline"]}) != 1
     ):
         raise DemoQAError(f"{mode} transition geometry QA did not pass")
+    hand_perspective = performance.get("handPerspective")
+    if not isinstance(hand_perspective, dict):
+        raise DemoQAError(f"{mode} hand perspective QA did not pass")
+    if hand_perspective.get("status") == "not_applicable":
+        evidence = hand_perspective.get("evidence")
+        if (
+            hand_perspective.get("success") is not None
+            or hand_perspective.get("errors") != []
+            or hand_perspective.get("metrics") != {}
+            or not isinstance(evidence, dict)
+            or not str(evidence.get("reason") or "").strip()
+        ):
+            raise DemoQAError(f"{mode} hand perspective QA did not pass")
+    else:
+        recomputed_hand_perspective = (
+            aroll_performance_qa.validate_hand_perspective_metrics(
+                hand_perspective.get("metrics")
+            )
+        )
+        evidence = hand_perspective.get("evidence")
+        if (
+            recomputed_hand_perspective.get("success") is not True
+            or hand_perspective.get("status")
+            != recomputed_hand_perspective.get("status")
+            or hand_perspective.get("success")
+            is not recomputed_hand_perspective.get("success")
+            or hand_perspective.get("errors")
+            != recomputed_hand_perspective.get("errors")
+            or hand_perspective.get("metrics")
+            != recomputed_hand_perspective.get("metrics")
+            or not isinstance(evidence, dict)
+            or not isinstance(evidence.get("relaxedFrame"), int)
+            or not isinstance(evidence.get("holdFrame"), int)
+            or not isinstance(evidence.get("frames"), dict)
+        ):
+            raise DemoQAError(f"{mode} hand perspective QA did not pass")
     visemes = performance.get("visemes")
     if not isinstance(visemes, dict):
         raise DemoQAError(f"{mode} viseme QA did not pass")

@@ -33,6 +33,13 @@ VISEME_LIMITS = {
     "maxMbpJawRadians": 0.03,
 }
 
+HAND_PERSPECTIVE_LIMITS = {
+    "minCameraLensMm": 48.0,
+    "maxScaleError": 0.001,
+    "maxAreaGrowth": 0.35,
+    "minFrameMargin": 0.04,
+}
+
 TRANSITION_METRIC_NAMES = (
     "maxFootDriftL",
     "maxFootDriftR",
@@ -55,6 +62,15 @@ VISEME_METRIC_NAMES = (
     "surpriseGap",
     "maxJawRadians",
     "mbpJawRadians",
+)
+
+HAND_PERSPECTIVE_METRIC_NAMES = (
+    "cameraLensMm",
+    "maxLocalScaleError",
+    "maxMatrixScaleError",
+    "leftAreaGrowth",
+    "rightAreaGrowth",
+    "minimumFrameMargin",
 )
 
 PHYSICAL_TRANSITION_STATES = {
@@ -123,6 +139,35 @@ def validate_transition_metrics(metrics: Mapping[str, Any] | Any) -> dict[str, o
         "errors": errors,
         "metrics": parsed,
         "limits": dict(TRANSITION_LIMITS),
+    }
+
+
+def validate_hand_perspective_metrics(
+    metrics: Mapping[str, Any] | Any,
+) -> dict[str, object]:
+    """Reject wide-angle, scaled, oversized, or frame-clipped hand evidence."""
+
+    parsed, errors = _required_metrics(metrics, HAND_PERSPECTIVE_METRIC_NAMES)
+    if not errors:
+        if parsed["cameraLensMm"] < HAND_PERSPECTIVE_LIMITS["minCameraLensMm"]:
+            errors.append("medium camera lens is below 48 mm")
+        for name in ("maxLocalScaleError", "maxMatrixScaleError"):
+            if parsed[name] < 0.0:
+                errors.append(f"{name} must not be negative")
+            elif parsed[name] > HAND_PERSPECTIVE_LIMITS["maxScaleError"]:
+                errors.append(f"{name} exceeds 0.001")
+        for name in ("leftAreaGrowth", "rightAreaGrowth"):
+            if parsed[name] > HAND_PERSPECTIVE_LIMITS["maxAreaGrowth"]:
+                errors.append(f"{name} exceeds 35 percent")
+        if parsed["minimumFrameMargin"] < HAND_PERSPECTIVE_LIMITS["minFrameMargin"]:
+            errors.append("hand frame margin is below 4 percent")
+    success = not errors
+    return {
+        "status": "passed" if success else "failed",
+        "success": success,
+        "errors": errors,
+        "metrics": parsed,
+        "limits": dict(HAND_PERSPECTIVE_LIMITS),
     }
 
 

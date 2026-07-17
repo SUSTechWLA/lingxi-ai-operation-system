@@ -7342,6 +7342,155 @@ def _collect_viseme_qa(
     return report
 
 
+def _projected_region_evidence(
+    camera: bpy.types.Object,
+    points: Iterable[Vector],
+) -> dict[str, Any]:
+    projected = [
+        world_to_camera_view(bpy.context.scene, camera, point) for point in points
+    ]
+    if not projected or any(float(point.z) <= 0.0 for point in projected):
+        raise RuntimeError("hand projection contains no complete camera-facing geometry")
+    minimum_x = min(float(point.x) for point in projected)
+    minimum_y = min(float(point.y) for point in projected)
+    maximum_x = max(float(point.x) for point in projected)
+    maximum_y = max(float(point.y) for point in projected)
+    return {
+        "sampleCount": len(projected),
+        "frameBounds": {
+            "min": [minimum_x, minimum_y],
+            "max": [maximum_x, maximum_y],
+        },
+        "area": max(0.0, maximum_x - minimum_x)
+        * max(0.0, maximum_y - minimum_y),
+        "minimumFrameMargin": min(
+            minimum_x,
+            minimum_y,
+            1.0 - maximum_x,
+            1.0 - maximum_y,
+        ),
+    }
+
+
+def _collect_hand_perspective_qa(
+    character_objects: list[bpy.types.Object],
+    armature: bpy.types.Object,
+    bone_map: dict[str, str],
+    camera: bpy.types.Object,
+    *,
+    relaxed_frame: int,
+    hold_frame: int,
+    sample_frames: Iterable[int],
+) -> dict[str, object]:
+    """Measure hand projection and scale from evaluated Blender geometry."""
+
+    scene = bpy.context.scene
+    restore_frame = int(scene.frame_current)
+    evidence_frames: dict[str, dict[str, Any]] = {}
+    max_local_scale_error = 0.0
+    max_matrix_scale_error = 0.0
+    hand_bone_names = sorted({
+        name
+        for role, name in bone_map.items()
+        if (role.startswith("hand_") or role.startswith("finger_"))
+        and name in armature.pose.bones
+    })
+    try:
+        for label, frame in (("relaxed", relaxed_frame), ("hold", hold_frame)):
+            scene.frame_set(int(frame))
+            bpy.context.view_layer.update()
+            regions = sample_character_semantic_regions(character_objects, bone_map)
+            evidence_frames[label] = {
+                "frame": int(frame),
+                "leftHand": _projected_region_evidence(camera, regions["leftHand"]),
+                "rightHand": _projected_region_evidence(camera, regions["rightHand"]),
+            }
+        for frame in sorted({int(value) for value in sample_frames}):
+            scene.frame_set(frame)
+            bpy.context.view_layer.update()
+            for bone_name in hand_bone_names:
+                bone = armature.pose.bones[bone_name]
+                max_local_scale_error = max(
+                    max_local_scale_error,
+                    *(abs(float(value) - 1.0) for value in bone.scale),
+                )
+                max_matrix_scale_error = max(
+                    max_matrix_scale_error,
+                    *(
+                        abs(float(value) - 1.0)
+                        for value in bone.matrix.to_scale()
+                    ),
+                )
+    finally:
+        scene.frame_set(restore_frame)
+        bpy.context.view_layer.update()
+
+    relaxed = evidence_frames["relaxed"]
+    hold = evidence_frames["hold"]
+
+    def area_growth(side: str) -> float:
+        relaxed_area = float(relaxed[side]["area"])
+        if relaxed_area <= 0.0:
+            raise RuntimeError(f"{side} relaxed projection area is empty")
+        return float(hold[side]["area"]) / relaxed_area - 1.0
+
+    metrics = {
+        "cameraLensMm": float(camera.data.lens),
+        "maxLocalScaleError": max_local_scale_error,
+        "maxMatrixScaleError": max_matrix_scale_error,
+        "leftAreaGrowth": area_growth("leftHand"),
+        "rightAreaGrowth": area_growth("rightHand"),
+        "minimumFrameMargin": min(
+            float(sample[side]["minimumFrameMargin"])
+            for sample in evidence_frames.values()
+            for side in ("leftHand", "rightHand")
+        ),
+    }
+    report = aroll_performance_qa.validate_hand_perspective_metrics(metrics)
+    report["evidence"] = {
+        "camera": camera.name,
+        "cameraMatrixWorld": _matrix_evidence(camera.matrix_world),
+        "relaxedFrame": int(relaxed_frame),
+        "holdFrame": int(hold_frame),
+        "scaleSampleFrames": sorted({int(value) for value in sample_frames}),
+        "boneNames": hand_bone_names,
+        "frames": evidence_frames,
+    }
+    return report
+
+
+def _open_palm_perspective_frames(
+    events: Iterable[Any],
+    *,
+    frame_start: int,
+    frame_end: int,
+    fps: int,
+) -> tuple[int, int] | None:
+    for event in events:
+        if not isinstance(event, dict) or event.get("action") != "Aroll_OpenPalm_Explain":
+            continue
+        start = frame_start + int(round(float(event.get("timeSec") or 0.0) * fps))
+        duration = max(0.0, float(event.get("duration") or 0.0))
+        relaxed = max(frame_start, min(frame_end, start - 1))
+        hold = max(
+            frame_start,
+            min(frame_end, start + int(round(duration * fps * 0.55))),
+        )
+        return relaxed, hold
+    return None
+
+
+def _not_applicable_hand_perspective_report(reason: str) -> dict[str, object]:
+    return {
+        "status": "not_applicable",
+        "success": None,
+        "errors": [],
+        "metrics": {},
+        "limits": dict(aroll_performance_qa.HAND_PERSPECTIVE_LIMITS),
+        "evidence": {"reason": reason},
+    }
+
+
 def build_aroll_performance_qa(
     data: dict[str, Any],
     character_objects: list[bpy.types.Object],
@@ -7351,6 +7500,7 @@ def build_aroll_performance_qa(
     dimensions: dict[str, Any],
     transition_contact: dict[str, Any],
     mode_objects: dict[str, Any] | None,
+    medium_framing: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Collect every-two-frame performance evidence without thinning contact QA."""
 
@@ -7604,11 +7754,46 @@ def build_aroll_performance_qa(
         str(event.get("action") or "") for event in physical_events
     ]
 
+    perspective_frames = _open_palm_perspective_frames(
+        events,
+        frame_start=frame_start,
+        frame_end=frame_end,
+        fps=fps,
+    )
+    medium_camera = (
+        mode_objects.get("cameras", {}).get("medium")
+        if mode_objects is not None
+        else None
+    )
+    if perspective_frames is None:
+        hand_perspective = _not_applicable_hand_perspective_report(
+            "timeline has no Aroll_OpenPalm_Explain action"
+        )
+    elif medium_camera is None or not isinstance(medium_framing, dict):
+        hand_perspective = _not_applicable_hand_perspective_report(
+            "authored medium camera calibration evidence is unavailable"
+        )
+    elif medium_framing.get("status") == "not_applicable":
+        hand_perspective = _not_applicable_hand_perspective_report(
+            str(medium_framing.get("reason") or "medium camera is not active")
+        )
+    else:
+        hand_perspective = _collect_hand_perspective_qa(
+            character_objects,
+            armature,
+            bone_map,
+            medium_camera,
+            relaxed_frame=perspective_frames[0],
+            hold_frame=perspective_frames[1],
+            sample_frames=sampled_frame_numbers,
+        )
+
     scene.frame_set(frame_start)
     bpy.context.view_layer.update()
     return {
         "schemaVersion": aroll_performance_qa.SCHEMA_VERSION,
         "transition": transition_report,
+        "handPerspective": hand_perspective,
         "visemes": _collect_viseme_qa(
             face.get("mouth"),
             dimensions,
@@ -8456,11 +8641,13 @@ def main() -> None:
         dimensions,
         rig_stats["transitionContact"],
         mode_objects,
+        scene_stats.get("mediumFraming"),
     )
     write_runtime_progress(
         data,
         "aroll_performance_qa_done",
         transitionStatus=rig_stats["arollPerformanceQa"]["transition"]["status"],
+        handPerspectiveStatus=rig_stats["arollPerformanceQa"]["handPerspective"]["status"],
         visemeSuccess=rig_stats["arollPerformanceQa"]["visemes"]["success"],
     )
     container = dimensions.get("container")

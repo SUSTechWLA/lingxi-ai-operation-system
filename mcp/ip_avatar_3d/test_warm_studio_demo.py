@@ -191,6 +191,15 @@ def write_rig_report(
                             ),
                         },
                     },
+                    "handPerspective": {
+                        "status": "not_applicable",
+                        "success": None,
+                        "errors": [],
+                        "metrics": {},
+                        "evidence": {
+                            "reason": "fixture timeline has no open-palm action"
+                        },
+                    },
                     "visemes": {
                         "status": "passed" if viseme_success else "failed",
                         "success": viseme_success,
@@ -647,6 +656,20 @@ class WarmStudioDemoTests(unittest.TestCase):
             with self.assertRaisesRegex(demo.DemoQAError, "viseme QA"):
                 demo._embedded_collision_report(
                     "seated",
+                    {"rigReportPath": str(report)},
+                )
+
+    def test_embedded_report_requires_fail_closed_hand_perspective_qa(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = Path(temp_dir) / "rig_report.json"
+            write_rig_report(report)
+            payload = json.loads(report.read_text())
+            payload["arollPerformanceQa"].pop("handPerspective")
+            report.write_text(json.dumps(payload))
+
+            with self.assertRaisesRegex(demo.DemoQAError, "hand perspective QA"):
+                demo._embedded_collision_report(
+                    "standing",
                     {"rigReportPath": str(report)},
                 )
 
