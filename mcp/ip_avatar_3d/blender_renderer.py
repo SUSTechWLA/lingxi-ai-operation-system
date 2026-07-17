@@ -52,6 +52,9 @@ TARGET_SOLE_CLEARANCE_M = 0.0015
 MIN_MEDIUM_FRAME_POINTS = 128
 MEDIUM_FRAME_SAFE_MARGIN = 0.04
 TARGET_MEDIUM_VERTICAL_SPAN = 0.84
+MIN_MEDIUM_CAMERA_LENS_MM = 48.0
+MAX_MEDIUM_CAMERA_DOLLY_M = 3.5
+MEDIUM_CAMERA_DOLLY_STEP_M = 0.05
 SOURCE_VISEME_DISPLACEMENT = {
     "Mouth_A": {"upper": 0.0052, "lower": -0.0190, "width": 0.96},
     "Mouth_E": {"upper": 0.0028, "lower": -0.0095, "width": 1.02},
@@ -2201,9 +2204,10 @@ def _medium_frame_candidate_is_safe(
 def _medium_frame_composition_score(
     metrics: dict[int, dict[str, dict[str, Any]]],
     lens: float,
+    dolly_distance: float,
     shift_delta: float,
     authored_lens: float,
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float, float, float, float]:
     bounds = [
         region["frameBounds"]
         for regions in metrics.values()
@@ -2218,11 +2222,29 @@ def _medium_frame_composition_score(
         (minimum_y + maximum_y) / 2.0 - 0.5
     )
     return (
+        abs(authored_lens - lens),
+        abs(dolly_distance),
         abs(vertical_span - TARGET_MEDIUM_VERTICAL_SPAN),
         center_error,
-        abs(authored_lens - lens),
         abs(shift_delta),
     )
+
+
+def _camera_backward_axis(camera: bpy.types.Object) -> Vector:
+    return (
+        camera.matrix_world.to_quaternion() @ Vector((0.0, 0.0, 1.0))
+    ).normalized()
+
+
+def _medium_camera_lens_candidates(authored_lens: float) -> list[float]:
+    current = max(float(authored_lens), MIN_MEDIUM_CAMERA_LENS_MM)
+    candidates = [current]
+    while current - 1.0 > MIN_MEDIUM_CAMERA_LENS_MM:
+        current -= 1.0
+        candidates.append(current)
+    if candidates[-1] > MIN_MEDIUM_CAMERA_LENS_MM:
+        candidates.append(MIN_MEDIUM_CAMERA_LENS_MM)
+    return candidates
 
 
 def calibrate_mode_medium_camera(
@@ -2237,6 +2259,9 @@ def calibrate_mode_medium_camera(
     camera = mode_objects["cameras"]["medium"]
     authored_lens = float(camera.data.lens)
     authored_shift_y = float(camera.data.get("ip_authored_shift_y", camera.data.shift_y))
+    bpy.context.view_layer.update()
+    authored_location = camera.location.copy()
+    backward_axis = _camera_backward_axis(camera)
     frame_points: dict[int, dict[str, dict[str, Any]]] = {}
     for frame in frames:
         bpy.context.scene.frame_set(int(frame))
@@ -2246,61 +2271,85 @@ def calibrate_mode_medium_camera(
             sample_character_semantic_regions(character_objects, bone_map),
         )
 
-    lens_candidates = [
-        authored_lens - float(index)
-        for index in range(int(max(0.0, authored_lens - 24.0)) + 1)
+    lens_candidates = _medium_camera_lens_candidates(authored_lens)
+    dolly_candidates = [
+        index * MEDIUM_CAMERA_DOLLY_STEP_M
+        for index in range(
+            int(MAX_MEDIUM_CAMERA_DOLLY_M / MEDIUM_CAMERA_DOLLY_STEP_M) + 1
+        )
     ]
     shift_deltas = [0.0]
     for step in range(1, 31):
         shift_deltas.extend((-0.01 * step, 0.01 * step))
     safe_candidates: list[
         tuple[
-            tuple[float, float, float, float],
+            tuple[float, float, float, float, float],
             float,
             float,
+            float,
+            Vector,
             dict[int, dict[str, dict[str, Any]]],
         ]
     ] = []
     for lens in lens_candidates:
-        camera.data.lens = max(24.0, lens)
-        for delta in shift_deltas:
-            camera.data.shift_y = authored_shift_y + delta
-            metrics = _medium_frame_metrics(camera, frame_points)
-            if _medium_frame_candidate_is_safe(metrics):
-                safe_candidates.append(
-                    (
-                        _medium_frame_composition_score(
-                            metrics,
+        camera.data.lens = max(MIN_MEDIUM_CAMERA_LENS_MM, lens)
+        for dolly_distance in dolly_candidates:
+            candidate_location = authored_location + backward_axis * dolly_distance
+            camera.location = candidate_location
+            bpy.context.view_layer.update()
+            for delta in shift_deltas:
+                camera.data.shift_y = authored_shift_y + delta
+                metrics = _medium_frame_metrics(camera, frame_points)
+                if _medium_frame_candidate_is_safe(metrics):
+                    safe_candidates.append(
+                        (
+                            _medium_frame_composition_score(
+                                metrics,
+                                float(camera.data.lens),
+                                dolly_distance,
+                                delta,
+                                authored_lens,
+                            ),
                             float(camera.data.lens),
-                            delta,
-                            authored_lens,
-                        ),
-                        float(camera.data.lens),
-                        float(camera.data.shift_y),
-                        metrics,
+                            float(camera.data.shift_y),
+                            float(dolly_distance),
+                            candidate_location.copy(),
+                            metrics,
+                        )
                     )
-                )
     if not safe_candidates:
         camera.data.lens = authored_lens
         camera.data.shift_y = authored_shift_y
+        camera.location = authored_location
         raise RuntimeError(
             f"{camera.name} cannot keep complete head and both hands inside "
             f"the {MEDIUM_FRAME_SAFE_MARGIN:.0%} safe frame"
         )
-    _, selected_lens, selected_shift_y, selected_metrics = min(
+    (
+        _,
+        selected_lens,
+        selected_shift_y,
+        selected_dolly_distance,
+        selected_location,
+        selected_metrics,
+    ) = min(
         safe_candidates,
         key=lambda candidate: candidate[0],
     )
     camera.data.lens = selected_lens
     camera.data.shift_y = selected_shift_y
+    camera.location = selected_location
     bpy.context.scene.frame_set(frames[0])
     bpy.context.view_layer.update()
     return {
         "camera": camera.name,
         "authoredLens": authored_lens,
         "authoredShiftY": authored_shift_y,
+        "authoredLocation": [float(value) for value in authored_location],
         "lens": float(camera.data.lens),
         "shiftY": float(camera.data.shift_y),
+        "location": [float(value) for value in camera.location],
+        "dollyDistance": float(selected_dolly_distance),
         "minimumPointsPerRegion": MIN_MEDIUM_FRAME_POINTS,
         "safeMargin": MEDIUM_FRAME_SAFE_MARGIN,
         "frames": [

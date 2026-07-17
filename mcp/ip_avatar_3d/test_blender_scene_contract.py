@@ -1182,6 +1182,55 @@ def test_medium_frame_boundary_reduction_preserves_candidate_bounds() -> None:
         assert abs(metrics["frameBounds"]["max"][1] - max(point.y for point in expected)) < 1e-6
 
 
+def test_medium_camera_calibration_preserves_long_lens_and_dollies_back() -> None:
+    reset_scene()
+    camera = add_camera("Dolly_Calibration_Camera")
+    camera.location = (0.0, -2.2, 1.35)
+    camera.data.lens = 50.0
+    camera.data["ip_authored_shift_y"] = 0.0
+    blender_renderer.look_at(camera, (0.0, 0.0, 1.35))
+    authored_location = tuple(camera.location)
+
+    def region(center_x: float, center_z: float, radius: float) -> list[Vector]:
+        return [
+            Vector(
+                (
+                    center_x + radius * math.cos(index * math.tau / 130.0),
+                    0.0,
+                    center_z + radius * math.sin(index * math.tau / 130.0),
+                )
+            )
+            for index in range(130)
+        ]
+
+    regions = {
+        "head": region(0.0, 1.82, 0.30),
+        "leftHand": region(-1.02, 1.34, 0.16),
+        "rightHand": region(1.02, 1.34, 0.16),
+    }
+    original_sampler = blender_renderer.sample_character_semantic_regions
+    blender_renderer.sample_character_semantic_regions = lambda *_args, **_kwargs: regions
+    try:
+        report = blender_renderer.calibrate_mode_medium_camera(
+            [],
+            {},
+            {"cameras": {"medium": camera}},
+            sample_frames=(1, 30),
+        )
+    finally:
+        blender_renderer.sample_character_semantic_regions = original_sampler
+
+    assert report["lens"] >= 48.0, report
+    assert report["dollyDistance"] > 0.0, report
+    assert tuple(report["authoredLocation"]) == authored_location, report
+    assert tuple(report["location"]) != authored_location, report
+    metrics = {
+        item["frame"]: {key: value for key, value in item.items() if key != "frame"}
+        for item in report["frames"]
+    }
+    assert blender_renderer._medium_frame_candidate_is_safe(metrics), report
+
+
 def test_render_settings_are_compatible_with_blender_51_agx_and_eevee() -> None:
     reset_scene()
 
@@ -1304,6 +1353,7 @@ if __name__ == "__main__":
         test_lighting_preset_uses_authored_base_energy,
         test_production_calibration_frames_include_interval_bounds_and_limb_extrema,
         test_medium_frame_boundary_reduction_preserves_candidate_bounds,
+        test_medium_camera_calibration_preserves_long_lens_and_dollies_back,
         test_render_settings_are_compatible_with_blender_51_agx_and_eevee,
         test_lighting_qa_applies_and_restores_cycles_key_multiplier,
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
