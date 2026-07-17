@@ -163,11 +163,11 @@ func (r *NodeRepository) Save(ctx context.Context, node *model.Node) error {
 		 started_at, completed_at, long_running, progress, current_step, heartbeat_timeout_sec, heartbeat_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		 ON CONFLICT (id) DO UPDATE SET
-		 	task_id=$2, status=$5, output=$7, error_message=$8, condition=$9, retry_count=$10,
-		 	max_retry=$11, priority=$12, worker_group=$13, version=ai_node.version+1,
-		 	idempotency_key=$15, started_at=COALESCE($17, ai_node.started_at),
-		 	completed_at=COALESCE($18, ai_node.completed_at),
-		 	progress=$20, current_step=$21, heartbeat_at=COALESCE($23, ai_node.heartbeat_at)`,
+		  task_id=$2, status=$5, output=$7, error_message=$8, condition=$9, retry_count=$10,
+		  max_retry=$11, priority=$12, worker_group=$13, version=ai_node.version+1,
+		  idempotency_key=$15, started_at=COALESCE($17, ai_node.started_at),
+		  completed_at=COALESCE($18, ai_node.completed_at),
+		  progress=$20, current_step=$21, heartbeat_at=COALESCE($23, ai_node.heartbeat_at)`,
 		node.ID, node.TaskID, string(node.Type), node.Name, string(node.Status),
 		input, output, node.ErrorMessage, node.Condition,
 		node.RetryCount, node.MaxRetry, node.Priority, node.WorkerGroup,

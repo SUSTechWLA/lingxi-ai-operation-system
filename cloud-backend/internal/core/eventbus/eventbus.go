@@ -11,14 +11,14 @@ import (
 )
 
 const (
-	TopicNodeReady    = "ai.node.ready"
-	TopicNodeResult   = "ai.node.result"
-	TopicNodeExecuted = "ai.node.executed"
-	TopicNodeFailed   = "ai.node.failed"
-	TopicTaskCreated  = "ai.task.created"
+	TopicNodeReady     = "ai.node.ready"
+	TopicNodeResult    = "ai.node.result"
+	TopicNodeExecuted  = "ai.node.executed"
+	TopicNodeFailed    = "ai.node.failed"
+	TopicTaskCreated   = "ai.task.created"
 	TopicTaskCompleted = "ai.task.completed"
-	TopicTaskFailed   = "ai.task.failed"
-	TopicProgress     = "ai.node.progress"
+	TopicTaskFailed    = "ai.task.failed"
+	TopicProgress      = "ai.node.progress"
 )
 
 type Event struct {
@@ -77,7 +77,6 @@ func (p *Producer) Publish(topic, key string, event Event) error {
 	zap.L().Info("Event published", zap.String("topic", topic), zap.String("key", key))
 	return nil
 }
-
 func (p *Producer) Close() error {
 	return p.producer.Close()
 }
@@ -158,7 +157,6 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 		}
 		event.Topic = msg.Topic
 
-
 		if err := h.handlerFn(event); err != nil {
 			zap.L().Error("Failed to handle event",
 				zap.String("topic", msg.Topic),
@@ -170,4 +168,3 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 	}
 	return nil
 }
-

@@ -3,16 +3,16 @@ package llmutil
 import (
 	"bytes"
 	"image"
-	_ "image/gif"  // register GIF decoder
+	_ "image/gif" // register GIF decoder
 	"image/jpeg"
-	_ "image/png"  // register PNG decoder
+	_ "image/png" // register PNG decoder
 
 	"go.uber.org/zap"
 )
 
 const (
-	maxImageDim  = 720
-	jpegQuality  = 75
+	maxImageDim   = 720
+	jpegQuality   = 75
 	maxImageBytes = 512 * 1024 // 512KB target max after compression
 )
 
@@ -90,4 +90,3 @@ func resizeNearest(src image.Image, newW, newH int) image.Image {
 	}
 	return dst
 }
-

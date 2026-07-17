@@ -920,4 +920,3 @@ export interface WorkflowTemplateResponse {
   data?: { template?: Record<string, unknown> };
   message?: string;
 }
-
