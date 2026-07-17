@@ -590,6 +590,24 @@ def test_open_palm_timeline_reports_real_hand_perspective_and_unit_scale() -> No
     assert report["evidence"]["holdFrame"] == 30, report
 
 
+def test_rigged_asset_visibility_is_normalized_before_blend_save() -> None:
+    scene, armature, face, _ = _build_aroll_qa_fixture()
+    character_objects = [obj for obj in scene.objects if obj.type == "MESH"]
+    character_objects[0].hide_viewport = True
+    character_objects[0].hide_render = True
+
+    asset_objects = blender_renderer._prepare_rigged_asset_visibility(
+        character_objects,
+        [],
+        {"mouth": face},
+        armature,
+    )
+
+    assert character_objects[0] in asset_objects
+    assert character_objects[0].hide_viewport is False
+    assert character_objects[0].hide_render is False
+
+
 def digit_roles(side: str, digit: int) -> tuple[str, str, str]:
     return (
         f"finger_{digit}_{side}",
@@ -1744,6 +1762,7 @@ if __name__ == "__main__":
         test_saved_master_adds_standalone_qa_cameras_without_collection_conflicts,
         test_aroll_qa_renders_programmatic_fixture_and_checks_pixels,
         test_open_palm_timeline_reports_real_hand_perspective_and_unit_scale,
+        test_rigged_asset_visibility_is_normalized_before_blend_save,
         test_aroll_action_pack_names_reset_interpolation_and_safe_hand_stage,
         test_refined_hands_preserve_three_digits_and_taper_each_tip,
         test_refined_hand_weights_remain_normalized_and_isolated,

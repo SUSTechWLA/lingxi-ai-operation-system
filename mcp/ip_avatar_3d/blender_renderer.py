@@ -8314,6 +8314,27 @@ def create_action_library(
     return {"actions": actions, "mouthActions": mouth_actions, "faceActions": face_actions}
 
 
+def _prepare_rigged_asset_visibility(
+    character_objects: list[bpy.types.Object],
+    imported_asset_objects: list[bpy.types.Object],
+    face: dict[str, bpy.types.Object],
+    armature: bpy.types.Object,
+) -> list[bpy.types.Object]:
+    face_objects = list(dict.fromkeys(face.values()))
+    asset_objects = list(
+        dict.fromkeys(
+            character_objects
+            + imported_asset_objects
+            + face_objects
+            + [armature]
+        )
+    )
+    for obj in asset_objects:
+        obj.hide_viewport = False
+        obj.hide_render = False
+    return asset_objects
+
+
 def save_rigged_assets(
     data: dict,
     character_objects: list[bpy.types.Object],
@@ -8331,13 +8352,15 @@ def save_rigged_assets(
         path.parent.mkdir(parents=True, exist_ok=True)
 
     bpy.context.scene.frame_set(1)
+    asset_objects = _prepare_rigged_asset_visibility(
+        character_objects,
+        imported_asset_objects,
+        face,
+        armature,
+    )
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
     bpy.ops.object.select_all(action="DESELECT")
-    face_objects = list(dict.fromkeys(face.values()))
-    asset_objects = list(dict.fromkeys(character_objects + imported_asset_objects + face_objects + [armature]))
     for obj in asset_objects:
-        obj.hide_viewport = False
-        obj.hide_render = False
         obj.select_set(True)
     bpy.context.view_layer.objects.active = armature
     export_args = {
