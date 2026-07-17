@@ -25,7 +25,7 @@ The current version is best suited for private beta testing, engineering demos, 
 - Works for opinion, knowledge, tutorial, and visual-card videos.
 - The cloud backend generates scripts, time windows, visual structure, prompts, and review gates.
 - The local runner creates HyperFrames projects, preview snapshots, final renders, and delivery packages.
-- The local IP talking-avatar renderer can create A-roll with Bobo or Aster assets: a high-fidelity reference-image puppet carries the character layer, audio analysis drives mouth shapes, motion timelines drive blink, breath, nod, gesture, and glow, and FFmpeg composes the final video.
+- The local IP talking-avatar renderer can create A-roll with the canonical sloth master: Blender drives the body, three-segment digits, face, visemes, camera, and warm studio while the pinned GPT-SoVITS voice and FFmpeg complete the delivery.
 - Users can approve, edit, reject, or regenerate key stages.
 
 ### 2. Cinematic / AIGC Shot Videos
@@ -63,7 +63,7 @@ flowchart LR
 | `frontend` | React + Electron desktop client for project launch, tracking, review, material import, JiMeng setup, and local settings. |
 | `cloud-backend` | Go cloud service for auth, projects, agent plans, DAGs, review gates, tool manifests, video workflows, and APIs. |
 | `local-backend` | Go local agent for files, runner registration, local tools, MCP providers, JiMeng CLI adapter, and artifact read/write. |
-| `assets/characters` | Local IP character asset protocol, currently including `bobo` and `aster` `svg2d` puppets, rigs, reference-image cutouts, voice profiles, segmented prosody defaults, and richer limb motion channels. |
+| `ip形象/main_ip` | Canonical Tangying sloth references, source model, reusable Blender master, GLB, voice reference, and warm A-roll studio. |
 | `skill-capabilities` / `cloud-backend/skills` | Video creation roles, tools, and workflow capability definitions. |
 | `.github/workflows/ci.yml` | Basic CI for frontend lint/build, Go tests, and repository whitespace checks. |
 

@@ -44,8 +44,8 @@ Each character must include `character.json`:
 
 ```json
 {
-  "characterId": "demo_ip_001",
-  "displayName": "Demo IP",
+  "characterId": "your_ip",
+  "displayName": "Your IP",
   "type": "cartoon_ip",
   "renderer": "sprite2d",
   "defaultExpression": "normal",
@@ -84,23 +84,16 @@ All listed paths are relative to the character directory. Required assets are va
 `renderer` can be:
 
 - `sprite2d`: layered PNG sprites, useful for a simple first pass.
-- `svg2d`: deterministic local puppet rendering with stable SVG part IDs and `rig.json` control channels. This is the current preferred mode for 波波 and 阿斯特.
+- `svg2d`: deterministic local puppet rendering with stable SVG part IDs and `rig.json` control channels.
 - `live2d`: reserved for real Live2D Cubism assets. It requires `.model3.json`, texture atlas, physics, and motion files. Plain multi-view PNG references are not enough to become a high-quality Live2D model.
 
-The repository includes:
-
-```text
-assets/characters/bobo/
-assets/characters/aster/
-```
-
-Both define `referenceSvg`, `rig.json`, and `voiceProfile`. HyperGen should bind its layer animation to `avatar_scene.json.hypergenControl` instead of guessing part names.
+Character packages are user-managed runtime assets. HyperGen should bind its layer animation to `avatar_scene.json.hypergenControl` instead of guessing part names.
 
 ## Input JSON
 
 ```json
 {
-  "characterId": "demo_ip_001",
+  "characterId": "your_ip",
   "script": "今天我们测试一个本地 IP 数字人口播工具。",
   "audioPath": "testdata/audio/demo.wav",
   "subtitlePath": "testdata/subtitle/demo.srt",
@@ -131,10 +124,7 @@ Both define `referenceSvg`, `rig.json`, and `voiceProfile`. HyperGen should bind
 
 If `audioPath` is omitted and `script` is present, the tool can create a deterministic local preview narration with macOS `say`. It now splits the script into prosody segments with varied rate, volume, and pauses, and writes `narration_prosody_plan.json`. That preview is marked `previewOnly` in `voice_profile.json`; production output should still use uploaded or provider-generated narration audio that matches the IP personality.
 
-Default voice personas:
-
-- `bobo` / 波波: young, lively, playful, faster rhythm.
-- `aster` / 阿斯特: calm, precise, scholarly, slower rhythm.
+Voice persona and prosody defaults come from each user-managed character package. The release tree does not silently substitute a legacy bundled character voice.
 
 ## Output Files
 
@@ -183,7 +173,7 @@ The integration test generates a temporary character, WAV, SRT, background, and 
 go test -C local-backend ./internal/localtool -run TestLocalIpTalkingAvatarRenderGeneratesTimelinesAndScene -v
 ```
 
-The repository also contains `assets/characters/demo_ip_001/` as a minimal sprite protocol example, plus `assets/characters/bobo/` and `assets/characters/aster/` as controllable `svg2d` IP puppet examples.
+Tests create temporary sprite and SVG fixtures, so no legacy character package is required in the release tree.
 
 ## FFmpeg Dependency
 

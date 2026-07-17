@@ -2,13 +2,13 @@
 
 ## Context
 
-The repository already contains a reusable dark editorial Blender studio and an A-roll import contract for the main sloth character. The new request is different: create a detailed, warm, domestic talking-head studio that closely follows `工作室设计版.png` and can be reused as a complete filming environment.
+The repository already contains a reusable dark editorial Blender studio and an A-roll import contract for the main sloth character. The new request is different: create a detailed, warm, domestic talking-head studio that closely follows `ip形象/main_ip/scenes/references/工作室设计版.png` and can be reused as a complete filming environment.
 
 The character is being produced independently. This project therefore delivers an empty studio scene with stable spawn and focus markers, not a bundled character.
 
 ## Goals
 
-- Reconstruct the layout, composition, colors, furniture, and practical lighting shown in `工作室设计版.png`.
+- Reconstruct the layout, composition, colors, furniture, and practical lighting shown in `ip形象/main_ip/scenes/references/工作室设计版.png`.
 - Deliver a complete 360-degree room that supports the reference hero angle, side angles, reverse angles, and restrained camera moves without revealing missing geometry.
 - Keep the room detailed enough for 1920x1080 production framing and 4K close shots of the desk, shelves, lamps, books, ceramics, plants, curtains, and branded artwork.
 - Preserve Blender 5.1.2 compatibility and support both Eevee preview renders and Cycles final renders.
@@ -297,7 +297,7 @@ The studio is complete when:
 
 1. The required `.blend`, builder, preview, packed brand source, QA report, and contact sheet exist.
 2. The scene opens cleanly in Blender 5.1.2 with no missing external resources.
-3. The hero render is recognizably derived from `工作室设计版.png`.
+3. The hero render is recognizably derived from `ip形象/main_ip/scenes/references/工作室设计版.png`.
 4. The room remains complete and believable from every saved camera.
 5. The linked plant pair is symmetrical.
 6. Standard A-roll cameras and character markers satisfy the current scene contract.

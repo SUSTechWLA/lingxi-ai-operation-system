@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and render-verify a detailed, empty, 360-degree warm sloth talking-head studio in Blender 5.1.2 that matches `工作室设计版.png` and preserves the existing A-roll scene contract.
+**Goal:** Build and render-verify a detailed, empty, 360-degree warm sloth talking-head studio in Blender 5.1.2 that matches `ip形象/main_ip/scenes/references/工作室设计版.png` and preserves the existing A-roll scene contract.
 
 **Architecture:** A pure-Python contract module owns dimensions, required names, camera specifications, and symmetry rules. A Blender builder consumes that contract through staged architecture, furniture, prop, vegetation, brand, lighting, and camera functions; a separate validator and QA renderer produce machine-readable checks and render evidence. The new scene is additive and never modifies the character profile or existing dark editorial studio.
 
@@ -725,7 +725,7 @@ Expected: all tests print PASS and final validation contains no errors.
 
 Inspect the hero preview and contact sheet at original size. Confirm:
 
-- hero layout matches `工作室设计版.png`;
+- hero layout matches `ip形象/main_ip/scenes/references/工作室设计版.png`;
 - both large plants are visibly symmetrical;
 - left cabinet/brand zone and right slat/shelf zone retain the reference relationship;
 - every saved camera is inside the complete room and does not clip geometry;

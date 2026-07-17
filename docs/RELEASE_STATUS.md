@@ -12,7 +12,7 @@ The `release` branch is the initial closed beta launch baseline for controlled t
 
 The release branch now also includes the shot workspace refresh: each shot opens as a linear 1-6 creator review flow, automatically switching between voice/knowledge video and cinematic/AIGC shot video. The workspace shows readable scripts, reference images, AIGC layer prompts, HyperFrames layer prompts, subtitle timelines, upload slots, and playable final media instead of exposing raw `local://` storage references or success-only artifact status messages.
 
-The release candidate also includes the local IP talking-avatar render foundation for oral-video A-roll. It can load `bobo` and `aster` character assets, render `svg2d` high-fidelity reference-image puppets, generate audio-driven lip-sync and motion timelines, expose HyperGen control metadata, and compose a final MP4 locally with FFmpeg. This path is deterministic local rendering, not AIGC video generation.
+The release candidate also includes the canonical sloth A-roll path. It loads the approved Blender master into the warm studio, drives body, wrist, independent three-segment digits, visemes and facial controls from the script timeline, uses the pinned GPT-SoVITS voice, and composes a final MP4 locally with FFmpeg. This path is deterministic local rendering, not AIGC video generation.
 
 For creator-facing real AIGC trials, run the readiness gate in the target environment and require `GO` before inviting users.
 
@@ -50,7 +50,7 @@ decision: GO
 - Shot material packages expose `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so users can generate text-free AIGC backgrounds or partial videos, keep exact Chinese text in HyperFrames, and merge layers with FFmpeg.
 - Shot pages let users inspect the actual generated media: reference/storyboard images can be enlarged, video artifacts can be played in a large modal, subtitles are displayed as a readable timeline, and only actionable status messages are shown.
 - External AIGC video calls use the AIGC layer prompt (`aigcPrompt`, `aigcVideoPrompt`, or `aigcPlan.prompt`) before falling back to legacy prompt fields, so JiMeng/Dreamina is not sent HyperFrames text-layer copy.
-- Local IP talking-avatar render can generate `final.mp4`, `avatar_layer.webm`, `avatar_scene.json`, `voice_profile.json`, `narration_prosody_plan.json`, lip-sync and richer limb motion timelines, and `render_report.json` for `bobo` / `aster` without AIGC video calls.
+- Local IP A-roll rendering can generate a 1080p CFR 30fps video, motion and viseme plans, rig/render reports, and media QA evidence from the canonical sloth master without AIGC video calls.
 - At least one AIGC video MCP provider is healthy when real creator trials are planned.
 - OpenAI-compatible model provider routes are configured for the selected workflow.
 - Artifact provenance distinguishes real AIGC from fallback storyboard/preview.

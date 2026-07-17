@@ -53,3 +53,21 @@ frontend/vite.config.d.ts
 frontend/vite.config.js
 cloud-backend/tangying-ai-os
 cloud-backend/runtime-model-provider.json
+
+# Local production artifacts and recoverable workspace archives
+/.workspace-archive/
+/outputs/
+/tmp/
+/tmp */
+/test/
+/test全流程/
+/logs/
+/.run/
+/.codex/cinematic-shot-preview/
+/.codex/shot-preview/
+/frontend/build/
+/frontend/dist/
+/frontend/release/
+/local-backend/tmp/
+/工作室设计版.png
+*.blend1
