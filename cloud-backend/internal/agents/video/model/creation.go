@@ -312,6 +312,21 @@ type ShotRegenerationTask struct {
 	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
+// ShotMutationReceipt records a completed creator mutation for scoped idempotent retries.
+// It is deliberately distinct from regeneration tasks: it has no dispatcher lifecycle.
+type ShotMutationReceipt struct {
+	Operation          string    `json:"operation"`
+	ShotID             string    `json:"shotId"`
+	CandidateID        string    `json:"candidateId"`
+	BaseVersion        int       `json:"baseVersion"`
+	Scope              string    `json:"scope"`
+	Locks              []string  `json:"locks,omitempty"`
+	IdempotencyKey     string    `json:"idempotencyKey"`
+	RequestFingerprint string    `json:"requestFingerprint"`
+	ResultShot         ShotUnit  `json:"resultShot"`
+	CreatedAt          time.Time `json:"createdAt"`
+}
+
 type ShotContinuity struct {
 	Characters        []string `json:"characters,omitempty"`
 	Props             []string `json:"props,omitempty"`
@@ -772,14 +787,15 @@ type CompositePlan struct {
 }
 
 type ShotDrivenState struct {
-	SchemaVersion     int                             `json:"schemaVersion"`
-	Spec              *VideoCreationSpec              `json:"spec,omitempty"`
-	Shots             []ShotUnit                      `json:"shots,omitempty"`
-	ShotHistory       map[string][]ShotRevision       `json:"shotHistory,omitempty"`
-	RegenerationTasks map[string]ShotRegenerationTask `json:"regenerationTasks,omitempty"`
-	IdempotencyTasks  map[string]string               `json:"idempotencyTasks,omitempty"`
-	AssemblyDirty     bool                            `json:"assemblyDirty"`
-	UpdatedAt         time.Time                       `json:"updatedAt"`
+	SchemaVersion        int                             `json:"schemaVersion"`
+	Spec                 *VideoCreationSpec              `json:"spec,omitempty"`
+	Shots                []ShotUnit                      `json:"shots,omitempty"`
+	ShotHistory          map[string][]ShotRevision       `json:"shotHistory,omitempty"`
+	RegenerationTasks    map[string]ShotRegenerationTask `json:"regenerationTasks,omitempty"`
+	IdempotencyTasks     map[string]string               `json:"idempotencyTasks,omitempty"`
+	ShotMutationReceipts map[string]ShotMutationReceipt  `json:"shotMutationReceipts,omitempty"`
+	AssemblyDirty        bool                            `json:"assemblyDirty"`
+	UpdatedAt            time.Time                       `json:"updatedAt"`
 }
 
 type PendingShotRegeneration struct {

@@ -37,6 +37,9 @@ func DecodeShotDrivenState(raw json.RawMessage) (model.ShotDrivenState, error) {
 	if state.IdempotencyTasks == nil {
 		state.IdempotencyTasks = map[string]string{}
 	}
+	if state.ShotMutationReceipts == nil {
+		state.ShotMutationReceipts = map[string]model.ShotMutationReceipt{}
+	}
 	return state, nil
 }
 
@@ -65,10 +68,11 @@ func EncodeShotDrivenState(raw json.RawMessage, state model.ShotDrivenState) (js
 
 func emptyShotDrivenState() model.ShotDrivenState {
 	return model.ShotDrivenState{
-		SchemaVersion:     1,
-		Shots:             []model.ShotUnit{},
-		ShotHistory:       map[string][]model.ShotRevision{},
-		RegenerationTasks: map[string]model.ShotRegenerationTask{},
-		IdempotencyTasks:  map[string]string{},
+		SchemaVersion:        1,
+		Shots:                []model.ShotUnit{},
+		ShotHistory:          map[string][]model.ShotRevision{},
+		RegenerationTasks:    map[string]model.ShotRegenerationTask{},
+		IdempotencyTasks:     map[string]string{},
+		ShotMutationReceipts: map[string]model.ShotMutationReceipt{},
 	}
 }

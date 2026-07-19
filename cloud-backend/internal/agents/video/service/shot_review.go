@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -37,6 +38,9 @@ const (
 	ShotRegenerationRunning       = "running"
 	ShotRegenerationCompleted     = "completed"
 	ShotRegenerationFailed        = "failed"
+	ShotRegenerationCancelled     = "cancelled"
+	CandidateAcceptScope          = "candidate_accept"
+	CandidateRestoreScope         = "candidate_restore"
 )
 
 var allowedRegenerationScopes = map[string]bool{
@@ -53,6 +57,13 @@ var allowedShotLocks = map[string]bool{
 
 type ShotRegenerationImpact = model.ShotImpact
 
+type CandidateMutationRequest struct {
+	BaseVersion    int      `json:"baseVersion"`
+	Scope          string   `json:"scope"`
+	Locks          []string `json:"locks,omitempty"`
+	IdempotencyKey string   `json:"-"`
+}
+
 func (s *CreationService) ListShotPage(ctx context.Context, userID, projectID string, query model.ShotPageQuery) (model.ShotPage, error) {
 	_, state, err := s.load(ctx, userID, projectID)
 	if err != nil {
@@ -66,9 +77,10 @@ func (s *CreationService) ListShotPage(ctx context.Context, userID, projectID st
 		limit = 50
 	}
 	lastSequenceIndex := 0
+	lastShotID := ""
 	if query.Cursor != "" {
-		lastSequenceIndex, err = strconv.Atoi(query.Cursor)
-		if err != nil || lastSequenceIndex < 1 {
+		lastSequenceIndex, lastShotID, err = decodeShotCursor(query.Cursor)
+		if err != nil || lastSequenceIndex < 1 || lastShotID == "" {
 			return model.ShotPage{}, fmt.Errorf("invalid shot page cursor %q", query.Cursor)
 		}
 	}
@@ -87,11 +99,12 @@ func (s *CreationService) ListShotPage(ctx context.Context, userID, projectID st
 	}
 	page := model.ShotPage{Items: make([]model.ShotListItem, 0, limit), Total: len(filtered)}
 	for _, shot := range filtered {
-		if shot.SequenceIndex <= lastSequenceIndex {
+		if shot.SequenceIndex < lastSequenceIndex || (shot.SequenceIndex == lastSequenceIndex && shot.ID <= lastShotID) {
 			continue
 		}
 		if len(page.Items) == limit {
-			page.NextCursor = strconv.Itoa(page.Items[len(page.Items)-1].SequenceIndex)
+			last := page.Items[len(page.Items)-1]
+			page.NextCursor = encodeShotCursor(last.SequenceIndex, last.ID)
 			break
 		}
 		page.Items = append(page.Items, shotListItem(state, shot))
@@ -106,6 +119,10 @@ func (s *CreationService) GetShotSummary(ctx context.Context, userID, projectID 
 	}
 	summary := model.ShotSummary{Total: len(state.Shots)}
 	for _, shot := range state.Shots {
+		if shotHasTerminalFailure(state, shot.ID) {
+			summary.NeedsAction++
+			continue
+		}
 		if isShotGenerating(state, shot.ID) {
 			summary.Generating++
 		}
@@ -142,76 +159,18 @@ func (s *CreationService) GetShotWorkspace(ctx context.Context, userID, projectI
 	}, nil
 }
 
-func (s *CreationService) AcceptShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, baseVersion int) (*model.ShotUnit, error) {
-	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
-		project, state, err := s.load(ctx, userID, projectID)
-		if err != nil {
-			return nil, err
-		}
-		shot, index, ok := findShot(state.Shots, shotID)
-		if !ok {
-			return nil, fmt.Errorf("shot %s not found", shotID)
-		}
-		if shot.Version != baseVersion {
-			return nil, shotVersionConflict(shot, baseVersion)
-		}
-		candidateIndex, candidate, ok := findShotCandidate(shot, candidateID)
-		if !ok {
-			return nil, fmt.Errorf("candidate %s not found for shot %s", candidateID, shotID)
-		}
-		if candidate.ShotID != shot.ID {
-			return nil, fmt.Errorf("candidate %s belongs to shot %s, not shot %s", candidateID, candidate.ShotID, shot.ID)
-		}
-		if err := validateCandidateAcceptance(candidate); err != nil {
-			return nil, err
-		}
-		now := time.Now()
-		state.ShotHistory[shot.ID] = append(state.ShotHistory[shot.ID], model.ShotRevision{RevisionID: "shot-revision-" + uuid.NewString(), ShotID: shot.ID, Version: shot.Version, Reason: "accept candidate " + candidateID, Snapshot: cloneShot(shot), CreatedAt: now})
-		candidate.Status = model.CandidateAcceptedForAssembly
-		shot.Candidates[candidateIndex] = candidate
-		shot.AcceptedCandidateID = candidateID
+func (s *CreationService) AcceptShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req CandidateMutationRequest) (*model.ShotUnit, error) {
+	return s.mutateShotCandidate(ctx, userID, projectID, shotID, candidateID, req, CandidateAcceptScope, func(shot *model.ShotUnit, candidate model.ShotCandidate, now time.Time) error {
+		shot.AcceptedCandidateID = candidate.CandidateID
 		shot.ReviewStatus = model.ReviewStatusApproved
 		shot.QAStatus = candidateQAStatus(candidate)
 		shot.Stale = false
-		shot.Version++
-		shot.UpdatedAt = now
-		state.Shots[index] = shot
-		state.AssemblyDirty = true
-		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-		return &shot, nil
-	}
-	return nil, fmt.Errorf("%w: project changed while accepting candidate for shot %s", ErrShotVersionConflict, shotID)
+		return nil
+	})
 }
 
-func (s *CreationService) RestoreShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, baseVersion int) (*model.ShotUnit, error) {
-	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
-		project, state, err := s.load(ctx, userID, projectID)
-		if err != nil {
-			return nil, err
-		}
-		shot, index, ok := findShot(state.Shots, shotID)
-		if !ok {
-			return nil, fmt.Errorf("shot %s not found", shotID)
-		}
-		if shot.Version != baseVersion {
-			return nil, shotVersionConflict(shot, baseVersion)
-		}
-		_, historical, ok := findShotCandidate(shot, candidateID)
-		if !ok {
-			return nil, fmt.Errorf("candidate %s not found for shot %s", candidateID, shotID)
-		}
-		if historical.ShotID != shot.ID {
-			return nil, fmt.Errorf("candidate %s belongs to shot %s, not shot %s", candidateID, historical.ShotID, shot.ID)
-		}
-		if err := validateCandidateAcceptance(historical); err != nil {
-			return nil, err
-		}
-		now := time.Now()
-		state.ShotHistory[shot.ID] = append(state.ShotHistory[shot.ID], model.ShotRevision{RevisionID: "shot-revision-" + uuid.NewString(), ShotID: shot.ID, Version: shot.Version, Reason: "restore candidate " + candidateID, Snapshot: cloneShot(shot), CreatedAt: now})
+func (s *CreationService) RestoreShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req CandidateMutationRequest) (*model.ShotUnit, error) {
+	return s.mutateShotCandidate(ctx, userID, projectID, shotID, candidateID, req, CandidateRestoreScope, func(shot *model.ShotUnit, historical model.ShotCandidate, now time.Time) error {
 		restored := cloneShotCandidate(historical)
 		restored.CandidateID = "candidate-restore-" + uuid.NewString()
 		restored.AttemptIndex = len(shot.Candidates) + 1
@@ -228,18 +187,127 @@ func (s *CreationService) RestoreShotCandidate(ctx context.Context, userID, proj
 		shot.ReviewStatus = model.ReviewStatusApproved
 		shot.QAStatus = candidateQAStatus(restored)
 		shot.Stale = false
+		return nil
+	})
+}
+
+func (s *CreationService) mutateShotCandidate(
+	ctx context.Context, userID, projectID, shotID, candidateID string, req CandidateMutationRequest, operation string,
+	mutate func(*model.ShotUnit, model.ShotCandidate, time.Time) error,
+) (*model.ShotUnit, error) {
+	if err := validateCandidateMutationRequest(req, operation); err != nil {
+		return nil, err
+	}
+	fingerprint := candidateMutationFingerprint(operation, shotID, candidateID, req)
+	receiptKey := candidateMutationReceiptKey(operation, shotID, req.IdempotencyKey)
+	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
+		project, state, err := s.load(ctx, userID, projectID)
+		if err != nil {
+			return nil, err
+		}
+		shot, index, ok := findShot(state.Shots, shotID)
+		if !ok {
+			return nil, fmt.Errorf("shot %s not found", shotID)
+		}
+		if receipt, ok := state.ShotMutationReceipts[receiptKey]; ok {
+			if receipt.RequestFingerprint != fingerprint {
+				return nil, fmt.Errorf("%w: key %q was used with different candidate mutation input", ErrShotIdempotencyConflict, req.IdempotencyKey)
+			}
+			result := cloneShot(receipt.ResultShot)
+			return &result, nil
+		}
+		if shot.Version != req.BaseVersion {
+			return nil, shotVersionConflict(shot, req.BaseVersion)
+		}
+		_, candidate, ok := findShotCandidate(shot, candidateID)
+		if !ok {
+			return nil, fmt.Errorf("candidate %s not found for shot %s", candidateID, shotID)
+		}
+		if candidate.ShotID != shot.ID {
+			return nil, fmt.Errorf("candidate %s belongs to shot %s, not shot %s", candidateID, candidate.ShotID, shot.ID)
+		}
+		if err := validateCandidateAcceptance(candidate); err != nil {
+			return nil, err
+		}
+		now := time.Now().Round(0)
+		state.ShotHistory[shot.ID] = append(state.ShotHistory[shot.ID], model.ShotRevision{RevisionID: "shot-revision-" + uuid.NewString(), ShotID: shot.ID, Version: shot.Version, Reason: operation + " " + candidateID, Snapshot: cloneShot(shot), CreatedAt: now})
+		if err := mutate(&shot, candidate, now); err != nil {
+			return nil, err
+		}
 		shot.Version++
 		shot.UpdatedAt = now
 		state.Shots[index] = shot
 		state.AssemblyDirty = true
+		state.ShotMutationReceipts[receiptKey] = model.ShotMutationReceipt{
+			Operation: operation, ShotID: shotID, CandidateID: candidateID, BaseVersion: req.BaseVersion,
+			Scope: req.Scope, Locks: append([]string(nil), req.Locks...), IdempotencyKey: req.IdempotencyKey,
+			RequestFingerprint: fingerprint, ResultShot: cloneShot(shot), CreatedAt: now,
+		}
 		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
 			continue
 		} else if err != nil {
 			return nil, err
 		}
-		return &shot, nil
+		result := cloneShot(state.ShotMutationReceipts[receiptKey].ResultShot)
+		return &result, nil
 	}
-	return nil, fmt.Errorf("%w: project changed while restoring candidate for shot %s", ErrShotVersionConflict, shotID)
+	return nil, fmt.Errorf("%w: project changed while applying %s for shot %s", ErrShotVersionConflict, operation, shotID)
+}
+
+func encodeShotCursor(sequenceIndex int, shotID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(sequenceIndex) + "\x00" + shotID))
+}
+
+func decodeShotCursor(cursor string) (int, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return 0, "", err
+	}
+	parts := strings.Split(string(raw), "\x00")
+	if len(parts) != 2 || parts[1] == "" {
+		return 0, "", fmt.Errorf("invalid cursor")
+	}
+	sequenceIndex, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, "", err
+	}
+	return sequenceIndex, parts[1], nil
+}
+
+func validateCandidateMutationRequest(req CandidateMutationRequest, operation string) error {
+	if strings.TrimSpace(req.IdempotencyKey) == "" {
+		return fmt.Errorf("idempotency key is required")
+	}
+	wantScope := CandidateAcceptScope
+	if operation == CandidateRestoreScope {
+		wantScope = CandidateRestoreScope
+	}
+	if req.Scope != wantScope {
+		return fmt.Errorf("invalid candidate mutation scope %q", req.Scope)
+	}
+	seen := map[string]bool{}
+	for _, lock := range req.Locks {
+		if !allowedShotLocks[lock] {
+			return fmt.Errorf("invalid shot mutation lock %q", lock)
+		}
+		if seen[lock] {
+			return fmt.Errorf("duplicate shot mutation lock %q", lock)
+		}
+		seen[lock] = true
+	}
+	return nil
+}
+
+func candidateMutationReceiptKey(operation, shotID, idempotencyKey string) string {
+	return "shot_mutation\x00" + operation + "\x00" + shotID + "\x00" + strings.TrimSpace(idempotencyKey)
+}
+
+func candidateMutationFingerprint(operation, shotID, candidateID string, req CandidateMutationRequest) string {
+	locks := append([]string(nil), req.Locks...)
+	sort.Strings(locks)
+	payload := fmt.Sprintf("shot_mutation\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s", operation, shotID, candidateID, req.BaseVersion, req.Scope, strings.Join(locks, ","))
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
 }
 
 func shotMatchesPageQuery(shot model.ShotUnit, query model.ShotPageQuery) bool {
@@ -285,6 +353,9 @@ func generationStatusForShot(state model.ShotDrivenState, shot model.ShotUnit) s
 			latest = &taskCopy
 		}
 	}
+	if latest != nil && (latest.Status == ShotRegenerationFailed || latest.Status == ShotRegenerationCancelled) {
+		return latest.Status
+	}
 	if latest != nil && !isShotRegenerationTerminal(latest.Status) {
 		return latest.Status
 	}
@@ -309,6 +380,20 @@ func isShotGenerating(state model.ShotDrivenState, shotID string) bool {
 	return false
 }
 
+func shotHasTerminalFailure(state model.ShotDrivenState, shotID string) bool {
+	var latest *model.ShotRegenerationTask
+	for _, task := range state.RegenerationTasks {
+		if task.ShotID != shotID {
+			continue
+		}
+		if latest == nil || task.UpdatedAt.After(latest.UpdatedAt) {
+			taskCopy := task
+			latest = &taskCopy
+		}
+	}
+	return latest != nil && (latest.Status == ShotRegenerationFailed || latest.Status == ShotRegenerationCancelled)
+}
+
 func hasHumanReviewCandidate(shot model.ShotUnit) bool {
 	for _, candidate := range shot.Candidates {
 		if candidate.Status == model.CandidateHumanReviewRequired {
@@ -319,10 +404,11 @@ func hasHumanReviewCandidate(shot model.ShotUnit) bool {
 }
 
 func shotThumbnailRef(shot model.ShotUnit) string {
-	refs := shot.ArtifactRefs
-	if candidate, ok := acceptedCandidateForShot(shot); ok {
-		refs = candidate.ArtifactRefs
+	candidate, ok := acceptedCandidateForShot(shot)
+	if !ok {
+		return ""
 	}
+	refs := candidate.ArtifactRefs
 	for _, ref := range []string{refs.KeyframeImageArtifactID, refs.VideoClipArtifactID, refs.CompositedShotVideoArtifactID, refs.HTMLPreviewVideoArtifactID} {
 		if ref != "" {
 			return ref
@@ -379,9 +465,45 @@ func cloneShotCandidate(candidate model.ShotCandidate) model.ShotCandidate {
 	}
 	if candidate.RepairPlan != nil {
 		plan := *candidate.RepairPlan
+		plan.LockedDimensions = append([]string(nil), candidate.RepairPlan.LockedDimensions...)
+		plan.RepairTargets = append([]string(nil), candidate.RepairPlan.RepairTargets...)
+		plan.PromptPatch = cloneInterfaceMap(candidate.RepairPlan.PromptPatch)
+		plan.RenderStrategyPatch = cloneInterfaceMap(candidate.RepairPlan.RenderStrategyPatch)
 		cloned.RepairPlan = &plan
 	}
 	return cloned
+}
+
+func cloneInterfaceMap(values map[string]interface{}) map[string]interface{} {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		cloned[key] = cloneInterfaceValue(value)
+	}
+	return cloned
+}
+
+func cloneInterfaceValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneInterfaceMap(typed)
+	case []interface{}:
+		cloned := make([]interface{}, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneInterfaceValue(item)
+		}
+		return cloned
+	case []string:
+		return append([]string(nil), typed...)
+	case map[string]string:
+		return maps.Clone(typed)
+	case map[string]int:
+		return maps.Clone(typed)
+	default:
+		return value
+	}
 }
 
 func (s *CreationService) RegenerateShotV2(
@@ -798,15 +920,33 @@ func shotRegenerationRunID(taskID string) string {
 }
 
 func isShotRegenerationTerminal(status string) bool {
-	return status == ShotRegenerationCompleted || status == ShotRegenerationFailed
+	return status == ShotRegenerationCompleted || status == ShotRegenerationFailed || status == ShotRegenerationCancelled
 }
 
 func cloneShot(shot model.ShotUnit) model.ShotUnit {
 	cloned := shot
 	cloned.ScreenText = append([]string(nil), shot.ScreenText...)
-	cloned.Candidates = append([]model.ShotCandidate(nil), shot.Candidates...)
-	cloned.RepairPlans = append([]model.RepairPlan(nil), shot.RepairPlans...)
+	cloned.Candidates = make([]model.ShotCandidate, len(shot.Candidates))
+	for index, candidate := range shot.Candidates {
+		cloned.Candidates[index] = cloneShotCandidate(candidate)
+	}
+	cloned.RepairPlans = make([]model.RepairPlan, len(shot.RepairPlans))
+	for index, plan := range shot.RepairPlans {
+		cloned.RepairPlans[index] = *cloneRepairPlan(&plan)
+	}
 	cloned.PromptConstraints.MustInclude = append([]string(nil), shot.PromptConstraints.MustInclude...)
 	cloned.PromptConstraints.MustAvoid = append([]string(nil), shot.PromptConstraints.MustAvoid...)
 	return cloned
+}
+
+func cloneRepairPlan(plan *model.RepairPlan) *model.RepairPlan {
+	if plan == nil {
+		return nil
+	}
+	cloned := *plan
+	cloned.LockedDimensions = append([]string(nil), plan.LockedDimensions...)
+	cloned.RepairTargets = append([]string(nil), plan.RepairTargets...)
+	cloned.PromptPatch = cloneInterfaceMap(plan.PromptPatch)
+	cloned.RenderStrategyPatch = cloneInterfaceMap(plan.RenderStrategyPatch)
+	return &cloned
 }

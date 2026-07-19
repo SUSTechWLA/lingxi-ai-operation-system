@@ -26,8 +26,8 @@ type creationService interface {
 	GetShotHistory(ctx context.Context, userID, projectID, shotID string) ([]model.ShotRevision, error)
 	PreviewShotRegeneration(ctx context.Context, userID, projectID, shotID string) (videoSvc.ShotRegenerationImpact, error)
 	RegenerateShotV2(ctx context.Context, userID, projectID, shotID string, req videoSvc.RegenerateShotRequest) (videoSvc.RegenerateShotResult, error)
-	AcceptShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, baseVersion int) (*model.ShotUnit, error)
-	RestoreShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, baseVersion int) (*model.ShotUnit, error)
+	AcceptShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req videoSvc.CandidateMutationRequest) (*model.ShotUnit, error)
+	RestoreShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req videoSvc.CandidateMutationRequest) (*model.ShotUnit, error)
 	GetShot(ctx context.Context, userID, projectID, shotID string) (*model.ShotUnit, error)
 	UpsertShot(ctx context.Context, userID, projectID string, shot *model.ShotUnit) (*model.ShotUnit, error)
 	GenerateShots(ctx context.Context, userID, projectID string) ([]model.ShotUnit, error)
@@ -374,10 +374,6 @@ func (h *CreationHandler) RegenerateShotV2(c *gin.Context) {
 	ok(c, gin.H{"shot": result.Shot, "task": result.Task})
 }
 
-type candidateMutationRequest struct {
-	BaseVersion int `json:"baseVersion"`
-}
-
 func (h *CreationHandler) AcceptShotCandidate(c *gin.Context) {
 	h.mutateShotCandidate(c, h.svc.AcceptShotCandidate)
 }
@@ -386,17 +382,22 @@ func (h *CreationHandler) RestoreShotCandidate(c *gin.Context) {
 	h.mutateShotCandidate(c, h.svc.RestoreShotCandidate)
 }
 
-func (h *CreationHandler) mutateShotCandidate(c *gin.Context, action func(context.Context, string, string, string, string, int) (*model.ShotUnit, error)) {
+func (h *CreationHandler) mutateShotCandidate(c *gin.Context, action func(context.Context, string, string, string, string, videoSvc.CandidateMutationRequest) (*model.ShotUnit, error)) {
 	userID, okAuth := authenticatedUserID(c)
 	if !okAuth {
 		return
 	}
-	var req candidateMutationRequest
+	var req videoSvc.CandidateMutationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	shot, err := action(c.Request.Context(), userID, c.Param("id"), c.Param("shotId"), c.Param("candidateId"), req.BaseVersion)
+	req.IdempotencyKey = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if req.IdempotencyKey == "" {
+		fail(c, http.StatusBadRequest, "Idempotency-Key header is required")
+		return
+	}
+	shot, err := action(c.Request.Context(), userID, c.Param("id"), c.Param("shotId"), c.Param("candidateId"), req)
 	if err != nil {
 		failShotReview(c, err)
 		return
