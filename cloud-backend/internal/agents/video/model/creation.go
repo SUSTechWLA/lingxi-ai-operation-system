@@ -296,6 +296,7 @@ type ShotRevision struct {
 
 type ShotRegenerationTask struct {
 	TaskID         string    `json:"taskId"`
+	RunID          string    `json:"runId,omitempty"`
 	ShotID         string    `json:"shotId"`
 	BaseVersion    int       `json:"baseVersion"`
 	Scope          string    `json:"scope"`
@@ -303,6 +304,7 @@ type ShotRegenerationTask struct {
 	Instruction    string    `json:"instruction,omitempty"`
 	IdempotencyKey string    `json:"idempotencyKey"`
 	Status         string    `json:"status"`
+	FailureReason  string    `json:"failureReason,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
 	UpdatedAt      time.Time `json:"updatedAt"`
 }

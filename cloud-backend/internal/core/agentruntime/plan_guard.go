@@ -115,6 +115,9 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 		if err := validateReferenceExpressions(step, stepMap, stepManifests); err != nil {
 			return err
 		}
+		if err := validateShotRegenerationScope(step, stepMap); err != nil {
+			return err
+		}
 	}
 
 	if err := g.validateStageGuard(plan, stepMap, stepManifests); err != nil {
@@ -129,6 +132,94 @@ func (g *PlanGuard) ValidatePlan(ctx context.Context, userID string, plan *Agent
 		}
 	}
 
+	return nil
+}
+
+func validateShotRegenerationScope(step AgentStep, stepMap map[string]AgentStep) error {
+	if strings.TrimSpace(fmt.Sprint(step.Arguments["operation"])) != "shot_regeneration" {
+		return nil
+	}
+	targetShotID := strings.TrimSpace(fmt.Sprint(step.Arguments["targetShotId"]))
+	if targetShotID == "" || targetShotID == "<nil>" {
+		return fmt.Errorf("shot regeneration plan target shot is required")
+	}
+	allowed := shotIDList(step.Arguments["allowedShotIds"])
+	if len(allowed) != 1 || allowed[0] != targetShotID {
+		return shotRegenerationEscapeError(targetShotID)
+	}
+	for _, field := range []string{"shotId", "targetShotId"} {
+		if err := validateScopedShotValue(step.Arguments[field], targetShotID, stepMap); err != nil {
+			return err
+		}
+	}
+	for _, value := range shotValues(step.Arguments["shotIds"]) {
+		if err := validateScopedShotValue(value, targetShotID, stepMap); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateScopedShotValue(value interface{}, targetShotID string, stepMap map[string]AgentStep) error {
+	shotID := strings.TrimSpace(fmt.Sprint(value))
+	if shotID == "" || shotID == "<nil>" {
+		return nil
+	}
+	if matches := referencePattern.FindStringSubmatch(shotID); len(matches) == 3 {
+		producer, ok := stepMap[matches[1]]
+		if !ok || !stepTargetsOnlyShot(producer, targetShotID) {
+			return shotRegenerationEscapeError(targetShotID)
+		}
+		return nil
+	}
+	if shotID != targetShotID {
+		return shotRegenerationEscapeError(targetShotID)
+	}
+	return nil
+}
+
+func stepTargetsOnlyShot(step AgentStep, targetShotID string) bool {
+	if strings.TrimSpace(fmt.Sprint(step.Arguments["operation"])) != "shot_regeneration" {
+		return false
+	}
+	if strings.TrimSpace(fmt.Sprint(step.Arguments["targetShotId"])) != targetShotID {
+		return false
+	}
+	allowed := shotIDList(step.Arguments["allowedShotIds"])
+	return len(allowed) == 1 && allowed[0] == targetShotID
+}
+
+func shotRegenerationEscapeError(targetShotID string) error {
+	return fmt.Errorf("shot regeneration plan escapes target shot %s", targetShotID)
+}
+
+func shotIDList(value interface{}) []string {
+	values := shotValues(value)
+	out := make([]string, 0, len(values))
+	for _, item := range values {
+		text := strings.TrimSpace(fmt.Sprint(item))
+		if text != "" && text != "<nil>" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func shotValues(value interface{}) []interface{} {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]interface{}, len(typed))
+		for i := range typed {
+			out[i] = typed[i]
+		}
+		return out
+	case []interface{}:
+		return typed
+	case string:
+		if strings.TrimSpace(typed) != "" {
+			return []interface{}{typed}
+		}
+	}
 	return nil
 }
 

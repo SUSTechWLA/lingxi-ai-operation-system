@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -17,7 +19,9 @@ type CreationProjectStore interface {
 }
 
 type CreationService struct {
-	store CreationProjectStore
+	store         CreationProjectStore
+	dispatcher    ShotGenerationDispatcher
+	mutationMutex sync.Mutex
 }
 
 type GenerateSpecRequest struct {
@@ -26,16 +30,32 @@ type GenerateSpecRequest struct {
 }
 
 type RegenerateShotRequest struct {
-	Scope       string `json:"scope"`
-	Instruction string `json:"instruction,omitempty"`
+	BaseVersion    int      `json:"baseVersion"`
+	Scope          string   `json:"scope"`
+	Locks          []string `json:"locks,omitempty"`
+	Instruction    string   `json:"instruction,omitempty"`
+	IdempotencyKey string   `json:"-"`
+}
+
+type RegenerateShotResult struct {
+	Shot model.ShotUnit             `json:"shot"`
+	Task model.ShotRegenerationTask `json:"task"`
+}
+
+type ShotGenerationDispatcher interface {
+	EnqueueShotRegeneration(ctx context.Context, userID, projectID string, task model.ShotRegenerationTask) (runID string, err error)
 }
 
 type RejectRequest struct {
 	Reason string `json:"reason"`
 }
 
-func NewCreationService(store CreationProjectStore) *CreationService {
-	return &CreationService{store: store}
+func NewCreationService(store CreationProjectStore, dispatchers ...ShotGenerationDispatcher) *CreationService {
+	svc := &CreationService{store: store}
+	if len(dispatchers) > 0 {
+		svc.dispatcher = dispatchers[0]
+	}
+	return svc
 }
 
 func (s *CreationService) GetSpec(ctx context.Context, userID, projectID string) (*model.VideoCreationSpec, error) {
@@ -245,21 +265,34 @@ func (s *CreationService) UnlockShot(ctx context.Context, userID, projectID, sho
 }
 
 func (s *CreationService) RegenerateShot(ctx context.Context, userID, projectID, shotID string, req RegenerateShotRequest) (*model.ShotUnit, error) {
-	return s.updateShot(ctx, userID, projectID, shotID, func(shot *model.ShotUnit) error {
-		if shot.Locked {
-			return fmt.Errorf("shot %s is locked; unlock before regeneration", shot.ID)
+	current, err := s.GetShot(ctx, userID, projectID, shotID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowedRegenerationScopes[req.Scope] {
+		switch req.Scope {
+		case "text_layers":
+			req.Scope = "overlay"
+		default:
+			req.Scope = "full_shot"
 		}
-		if shot.LastRejectReason != "" {
-			shot.PromptConstraints.MustInclude = append([]string{"regenerate using reject reason: " + shot.LastRejectReason}, shot.PromptConstraints.MustInclude...)
-		}
-		if req.Instruction != "" {
-			shot.PromptConstraints.MustInclude = append(shot.PromptConstraints.MustInclude, req.Instruction)
-		}
-		shot.ReviewStatus = model.ReviewStatusPending
-		shot.Stale = true
-		shot.Version++
-		return nil
-	})
+	}
+	if req.IdempotencyKey == "" {
+		req.IdempotencyKey = legacyShotRegenerationKey(projectID, shotID, req)
+	}
+	if req.BaseVersion == 0 {
+		req.BaseVersion = current.Version
+	}
+	result, err := s.RegenerateShotV2(ctx, userID, projectID, shotID, req)
+	if err != nil {
+		return nil, err
+	}
+	return &result.Shot, nil
+}
+
+func legacyShotRegenerationKey(projectID, shotID string, req RegenerateShotRequest) string {
+	payload := fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s\x00%s", projectID, shotID, req.BaseVersion, req.Scope, strings.Join(req.Locks, ","), req.Instruction)
+	return fmt.Sprintf("legacy-%x", sha256.Sum256([]byte(payload)))
 }
 
 func (s *CreationService) GenerateVisualPlan(ctx context.Context, userID, projectID, shotID string) (*model.VisualPlan, error) {

@@ -50,6 +50,7 @@ import (
 	videoAssets "github.com/tangying-ai/aios-core/internal/agents/video/assets"
 	videoAssistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
+	videoModel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	videoPlanJudge "github.com/tangying-ai/aios-core/internal/agents/video/planjudge"
 	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
 	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
@@ -500,7 +501,7 @@ func main() {
 		agentRuntimeHandler.WithTaskPauser(taskExecutionCtrl)
 		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, requireAuth)
 		projectHandler.RegisterRoutes(r)
-		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo)
+		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo, &shotRegenerationAgentDispatcher{runner: agentRunner})
 		videoHandler.NewCreationHandler(videoCreationSvc, requireAuth).RegisterRoutes(r)
 		videoAssistant.NewHandler(requireAuth).RegisterRoutes(r)
 
@@ -598,7 +599,15 @@ func main() {
 				)
 				workflowRunID = taskID
 			}
-			return syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, workflowRunID, taskID, nodeID, toolName, command, output)
+			if err := syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, workflowRunID, taskID, nodeID, toolName, command, output); err != nil {
+				return err
+			}
+			return completeShotRegenerationFromOutput(ctx, videoCreationSvc, videoProjectRepo, projectID, output)
+		}).WithJobFailureCallback(func(ctx context.Context, job *localrunner.LocalJob, reason string) error {
+			if job == nil {
+				return nil
+			}
+			return failShotRegenerationFromJob(ctx, videoCreationSvc, videoProjectRepo, job.ProjectID, job.Payload, reason)
 		})
 
 		zap.L().Info("Video project and watch workflow run services registered")
@@ -758,6 +767,176 @@ func (a *artifactStateAdapter) FindCurrentByStageAndKind(ctx context.Context, pr
 // by delegating to SupportsCommandForAnyUser (no user context needed for guard checks).
 type runnerServiceAdapter struct {
 	svc *localrunner.Service
+}
+
+type asyncAgentRunner interface {
+	StartAsync(ctx context.Context, req agentruntime.StartRunRequest) (*agentruntime.Run, error)
+}
+
+type shotRegenerationAgentDispatcher struct {
+	runner asyncAgentRunner
+}
+
+func (d *shotRegenerationAgentDispatcher) EnqueueShotRegeneration(
+	ctx context.Context,
+	userID, projectID string,
+	task videoModel.ShotRegenerationTask,
+) (string, error) {
+	if d == nil || d.runner == nil {
+		return "", fmt.Errorf("shot regeneration agent runner is not configured")
+	}
+	run, err := d.runner.StartAsync(ctx, agentruntime.StartRunRequest{
+		UserID:  userID,
+		Message: fmt.Sprintf("Regenerate shot %s", task.ShotID),
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"operation":              "shot_regeneration",
+			"projectId":              projectID,
+			"targetShotId":           task.ShotID,
+			"allowedShotIds":         []string{task.ShotID},
+			"regenerationScope":      task.Scope,
+			"locks":                  append([]string(nil), task.Locks...),
+			"baseVersion":            task.BaseVersion,
+			"shotRegenerationTaskId": task.TaskID,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if run == nil || strings.TrimSpace(run.ID) == "" {
+		return "", fmt.Errorf("shot regeneration agent runner returned no run id")
+	}
+	return run.ID, nil
+}
+
+type shotRegenerationCompletionService interface {
+	CompleteShotRegeneration(ctx context.Context, userID, projectID, taskID string, candidate videoModel.ShotCandidate) error
+	FailShotRegeneration(ctx context.Context, userID, projectID, taskID, reason string) error
+}
+
+type shotProjectFinder interface {
+	FindByID(ctx context.Context, id string) (*videoModel.VideoProject, error)
+}
+
+func completeShotRegenerationFromOutput(
+	ctx context.Context,
+	completion shotRegenerationCompletionService,
+	projects shotProjectFinder,
+	projectID string,
+	output map[string]interface{},
+) error {
+	metadata := shotRegenerationMetadata(output)
+	taskID := metadataString(metadata, "shotRegenerationTaskId")
+	if taskID == "" {
+		return nil
+	}
+	shotID := metadataString(metadata, "relatedShotId")
+	if shotID == "" {
+		return fmt.Errorf("shot regeneration output metadata for task %s is missing relatedShotId", taskID)
+	}
+	userID, err := projectOwnerID(ctx, projects, projectID)
+	if err != nil {
+		return err
+	}
+	candidateID := metadataString(metadata, "candidateId")
+	if candidateID == "" {
+		candidateID = "shot-candidate-" + taskID
+	}
+	status := metadataString(metadata, "status")
+	if status == "" {
+		status = videoModel.CandidateRendered
+	}
+	candidate := videoModel.ShotCandidate{
+		CandidateID:        candidateID,
+		ShotID:             shotID,
+		Status:             status,
+		DurationSec:        metadataFloat(metadata, "durationSec"),
+		SourceType:         metadataString(metadata, "sourceType"),
+		ProductionEligible: metadataBool(metadata, "productionEligible"),
+		CreatedAt:          time.Now(),
+	}
+	return completion.CompleteShotRegeneration(ctx, userID, projectID, taskID, candidate)
+}
+
+func failShotRegenerationFromJob(
+	ctx context.Context,
+	completion shotRegenerationCompletionService,
+	projects shotProjectFinder,
+	projectID string,
+	payload map[string]interface{},
+	reason string,
+) error {
+	taskID := metadataString(payload, "shotRegenerationTaskId")
+	if taskID == "" {
+		return nil
+	}
+	userID, err := projectOwnerID(ctx, projects, projectID)
+	if err != nil {
+		return err
+	}
+	return completion.FailShotRegeneration(ctx, userID, projectID, taskID, reason)
+}
+
+func projectOwnerID(ctx context.Context, projects shotProjectFinder, projectID string) (string, error) {
+	if projects == nil {
+		return "", fmt.Errorf("shot regeneration project store is not configured")
+	}
+	project, err := projects.FindByID(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("resolve shot regeneration project owner for %s: %w", projectID, err)
+	}
+	if project == nil || strings.TrimSpace(project.UserID) == "" {
+		return "", fmt.Errorf("resolve shot regeneration project owner for %s: project owner is missing", projectID)
+	}
+	return project.UserID, nil
+}
+
+func shotRegenerationMetadata(output map[string]interface{}) map[string]interface{} {
+	if output == nil {
+		return nil
+	}
+	if metadata, ok := output["metadata"].(map[string]interface{}); ok && metadataString(metadata, "shotRegenerationTaskId") != "" {
+		return metadata
+	}
+	if metadataString(output, "shotRegenerationTaskId") != "" {
+		return output
+	}
+	if artifacts, ok := output["artifacts"].([]interface{}); ok {
+		for _, item := range artifacts {
+			artifact, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if metadata, ok := artifact["metadata"].(map[string]interface{}); ok && metadataString(metadata, "shotRegenerationTaskId") != "" {
+				return metadata
+			}
+		}
+	}
+	return nil
+}
+
+func metadataString(metadata map[string]interface{}, key string) string {
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func metadataFloat(metadata map[string]interface{}, key string) float64 {
+	switch value := metadata[key].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	}
+	return 0
+}
+
+func metadataBool(metadata map[string]interface{}, key string) bool {
+	value, _ := metadata[key].(bool)
+	return value
 }
 
 func (a *runnerServiceAdapter) SupportsCommand(ctx context.Context, command string) (bool, error) {

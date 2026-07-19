@@ -212,6 +212,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 	}
 	applyRequestPlanDefaults(plan, req)
 	plan = r.compiler.PreparePlan(plan)
+	applyShotRegenerationPlanScope(plan, req.Context)
 	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
 		// Attempt plan repair if the planner supports it.
 		if repairer, ok := r.planner.(PlanRepairer); ok {
@@ -222,6 +223,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 			if repairErr == nil && repaired != nil {
 				applyRequestPlanDefaults(repaired, req)
 				repaired = r.compiler.PreparePlan(repaired)
+				applyShotRegenerationPlanScope(repaired, req.Context)
 				revalidateErr := r.guard.ValidatePlan(ctx, req.UserID, repaired)
 				if revalidateErr == nil {
 					plan = repaired
@@ -358,6 +360,26 @@ func applyRequestPlanDefaults(plan *AgentPlan, req StartRunRequest) {
 		plan.Mode = "dynamic_agent"
 	}
 	applyRequestSafeContextDefaults(plan, req.Context)
+	applyShotRegenerationPlanScope(plan, req.Context)
+}
+
+func applyShotRegenerationPlanScope(plan *AgentPlan, ctx map[string]interface{}) {
+	if plan == nil || len(plan.Steps) == 0 || strings.TrimSpace(fmt.Sprint(ctx["operation"])) != "shot_regeneration" {
+		return
+	}
+	targetShotID := strings.TrimSpace(fmt.Sprint(ctx["targetShotId"]))
+	regenerationTaskID := strings.TrimSpace(fmt.Sprint(ctx["shotRegenerationTaskId"]))
+	for i := range plan.Steps {
+		if plan.Steps[i].Arguments == nil {
+			plan.Steps[i].Arguments = map[string]interface{}{}
+		}
+		plan.Steps[i].Arguments["operation"] = "shot_regeneration"
+		plan.Steps[i].Arguments["targetShotId"] = targetShotID
+		plan.Steps[i].Arguments["allowedShotIds"] = []string{targetShotID}
+		if regenerationTaskID != "" && regenerationTaskID != "<nil>" {
+			plan.Steps[i].Arguments["shotRegenerationTaskId"] = regenerationTaskID
+		}
+	}
 }
 
 func applyRequestSafeContextDefaults(plan *AgentPlan, ctx map[string]interface{}) {
