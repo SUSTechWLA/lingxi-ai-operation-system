@@ -22,10 +22,13 @@ func TestClosedBetaShotPolicyDefaults(t *testing.T) {
 }
 
 func TestShotDurationCheckerAcceptsFractionalBoundary(t *testing.T) {
-	for _, duration := range []float64{3, 14.99, 15.0} {
+	for _, duration := range []float64{3, 14.99} {
 		if issues := CheckShotDurationSec("shot-ok", duration); len(issues) != 0 {
 			t.Fatalf("duration %.2f should pass, got %+v", duration, issues)
 		}
+	}
+	if issues := CheckShotDurationSec("shot-boundary", 15.0); !hasIssueCode(issues, "shot_duration_out_of_range") {
+		t.Fatalf("15.0s should fail strict duration validation, got %+v", issues)
 	}
 	if issues := CheckShotDurationSec("shot-long", 15.1); !hasIssueCode(issues, "shot_duration_out_of_range") {
 		t.Fatalf("15.1s should fail duration validation, got %+v", issues)

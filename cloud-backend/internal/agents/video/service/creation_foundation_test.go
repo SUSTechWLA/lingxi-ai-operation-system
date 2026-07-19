@@ -39,7 +39,7 @@ func TestVideoCreationSpecDefaults(t *testing.T) {
 	}
 }
 
-func TestShotDurationCheckerRejectsOutside3To15(t *testing.T) {
+func TestShotDurationCheckerRejectsOutside3To14(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sec  int
@@ -59,8 +59,8 @@ func TestShotDurationCheckerRejectsOutside3To15(t *testing.T) {
 	}
 }
 
-func TestShotDurationCheckerAccepts3To15(t *testing.T) {
-	for _, sec := range []int{3, 6, 15} {
+func TestShotDurationCheckerAccepts3To14(t *testing.T) {
+	for _, sec := range []int{3, 6, 14} {
 		issues := CheckShotDuration(model.ShotUnit{ID: "shot-1", DurationSec: sec})
 		if len(issues) != 0 {
 			t.Fatalf("duration %d issues = %+v", sec, issues)
