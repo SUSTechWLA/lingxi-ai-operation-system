@@ -1,5 +1,56 @@
 package model
 
+type CreatorStepID string
+type CreatorStepState string
+
+const (
+	CreatorStepRequirements CreatorStepID = "requirements"
+	CreatorStepDirection    CreatorStepID = "direction"
+	CreatorStepScript       CreatorStepID = "script"
+	CreatorStepShots        CreatorStepID = "shots"
+	CreatorStepPreview      CreatorStepID = "preview"
+	CreatorStepDelivery     CreatorStepID = "delivery"
+
+	CreatorStepNotStarted     CreatorStepState = "not_started"
+	CreatorStepGenerating     CreatorStepState = "generating"
+	CreatorStepNeedsReview    CreatorStepState = "needs_review"
+	CreatorStepConfirmed      CreatorStepState = "confirmed"
+	CreatorStepNeedsAttention CreatorStepState = "needs_attention"
+	CreatorStepFailed         CreatorStepState = "failed"
+)
+
+// CreatorStep is the stable, creator-facing summary of a production step.
+// Internal stages are intentionally collapsed into the six IDs above.
+type CreatorStep struct {
+	ID                CreatorStepID    `json:"id"`
+	Label             string           `json:"label"`
+	State             CreatorStepState `json:"state"`
+	CurrentArtifactID string           `json:"currentArtifactId,omitempty"`
+	CurrentVersion    int              `json:"currentVersion,omitempty"`
+	ReviewID          string           `json:"reviewId,omitempty"`
+	RunID             string           `json:"runId,omitempty"`
+	AllowedActions    []string         `json:"allowedActions"`
+}
+
+// CreationView is the backend-authoritative state for the creator workspace.
+type CreationView struct {
+	Project       *VideoProject `json:"project"`
+	ActiveStep    CreatorStepID `json:"activeStep"`
+	Steps         []CreatorStep `json:"steps"`
+	ShotSummary   ShotSummary   `json:"shotSummary"`
+	ActiveTasks   []CreatorTask `json:"activeTasks"`
+	AssemblyDirty bool          `json:"assemblyDirty"`
+}
+
+// CreatorTask only exposes durable work that a creator can safely resume after reconnecting.
+type CreatorTask struct {
+	ID     string `json:"id"`
+	Scope  string `json:"scope"`
+	ShotID string `json:"shotId,omitempty"`
+	Status string `json:"status"`
+	Label  string `json:"label"`
+}
+
 // ShotPageQuery scopes a creator-facing Shot review list without returning full media payloads.
 type ShotPageQuery struct {
 	Cursor  string
