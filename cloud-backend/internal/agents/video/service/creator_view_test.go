@@ -80,7 +80,6 @@ func TestCreatorViewUsesPriorityIgnoresUnknownStagesAndExposesDurableActiveTasks
 		t.Fatalf("shots state = %q, want confirmed; unknown stage must not affect a creator step", got)
 	}
 	wantTasks := []model.CreatorTask{
-		{ID: "artifact-task", Scope: "script", Status: "pending", Label: "正在准备脚本"},
 		{ID: "task-a", Scope: "shots", ShotID: "shot-1", Status: ShotRegenerationQueued, Label: "正在重新生成镜头"},
 		{ID: "task-b", Scope: "shots", ShotID: "shot-2", Status: ShotRegenerationRunning, Label: "正在重新生成镜头"},
 	}
@@ -159,6 +158,111 @@ func TestCreatorViewMapsMixedArtifactStatesWithFixedPriority(t *testing.T) {
 	}
 	if got := stepStates(view.Steps); !reflect.DeepEqual(got, want) {
 		t.Fatalf("step states = %v, want %v", got, want)
+	}
+}
+
+func TestCreatorViewUsesOnlyLatestDurableTaskPerShot(t *testing.T) {
+	base := time.Date(2026, time.July, 20, 10, 0, 0, 0, time.UTC)
+	for _, terminal := range []string{ShotRegenerationCompleted, ShotRegenerationFailed, ShotRegenerationCancelled} {
+		t.Run(terminal, func(t *testing.T) {
+			store := newFakeCreationProjectStore()
+			store.project = projectWithShotState(t, model.ShotUnit{
+				ID: "shot-1", ProjectID: "vp-1", DurationSec: 6, ReviewStatus: model.ReviewStatusApproved,
+			})
+			state := decodeStateFromTest(t, store.project.Config)
+			state.RegenerationTasks["old-running"] = model.ShotRegenerationTask{
+				TaskID: "old-running", ShotID: "shot-1", Status: ShotRegenerationRunning,
+				UpdatedAt: base, CreatedAt: base,
+			}
+			state.RegenerationTasks["latest-terminal"] = model.ShotRegenerationTask{
+				TaskID: "latest-terminal", ShotID: "shot-1", Status: terminal,
+				UpdatedAt: base.Add(time.Second), CreatedAt: base,
+			}
+			setProjectStateForTest(t, store.project, state)
+
+			view, err := NewCreatorViewService(
+				fakeCreatorProjectReader{project: store.project}, NewCreationService(store), fakeCreatorArtifactReader{},
+			).GetCreationView(context.Background(), "u-1", "vp-1")
+			if err != nil {
+				t.Fatalf("GetCreationView() error = %v", err)
+			}
+			if len(view.ActiveTasks) != 0 {
+				t.Fatalf("active tasks = %+v, terminal latest task must hide older running work", view.ActiveTasks)
+			}
+			if terminal == ShotRegenerationCompleted {
+				if view.ShotSummary.Confirmed != 1 || view.ShotSummary.NeedsAction != 0 || view.ShotSummary.Generating != 0 {
+					t.Fatalf("summary = %+v, want completed latest task", view.ShotSummary)
+				}
+			} else if view.ShotSummary.NeedsAction != 1 || view.ShotSummary.Generating != 0 {
+				t.Fatalf("summary = %+v, want terminal failure/cancellation", view.ShotSummary)
+			}
+		})
+	}
+}
+
+func TestCreatorViewLatestShotTaskUsesUpdatedCreatedAndTaskIDOrdering(t *testing.T) {
+	base := time.Date(2026, time.July, 20, 10, 0, 0, 0, time.UTC)
+	for _, tasks := range [][]model.ShotRegenerationTask{
+		{
+			{TaskID: "running", ShotID: "shot-1", Status: ShotRegenerationRunning, UpdatedAt: base, CreatedAt: base},
+			{TaskID: "completed", ShotID: "shot-1", Status: ShotRegenerationCompleted, UpdatedAt: base, CreatedAt: base.Add(time.Second)},
+		},
+		{
+			{TaskID: "a-running", ShotID: "shot-1", Status: ShotRegenerationRunning, UpdatedAt: base, CreatedAt: base},
+			{TaskID: "z-completed", ShotID: "shot-1", Status: ShotRegenerationCompleted, UpdatedAt: base, CreatedAt: base},
+		},
+	} {
+		latest := latestCreatorShotTasks(tasks)
+		if len(latest) != 1 || latest[0].Status != ShotRegenerationCompleted {
+			t.Fatalf("latest = %+v, want the terminal task selected", latest)
+		}
+	}
+}
+
+func TestCreatorViewDeduplicatesDurableTaskIDsAndPrefersShotTask(t *testing.T) {
+	view, err := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
+		fakeCreatorShotReader{state: creatorShotReadState{Tasks: []model.ShotRegenerationTask{
+			{TaskID: "shared-task", ShotID: "shot-1", Status: ShotRegenerationRunning},
+			{TaskID: "shot-task", ShotID: "shot-2", Status: ShotRegenerationQueued},
+		}}},
+		fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{
+			{ID: "direction-run", StageName: "proposal", Status: "running", TaskID: "duplicate-artifact-task"},
+			{ID: "script-run", StageName: "script", Status: "running", TaskID: "duplicate-artifact-task"},
+			{ID: "preview-run", StageName: "preview", Status: "running", TaskID: "shared-task"},
+		}},
+	).GetCreationView(context.Background(), "user-1", "vp-1")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	want := []model.CreatorTask{
+		{ID: "duplicate-artifact-task", Scope: "direction", Status: "running", Label: "正在准备创意方向"},
+		{ID: "shared-task", Scope: "shots", ShotID: "shot-1", Status: ShotRegenerationRunning, Label: "正在重新生成镜头"},
+		{ID: "shot-task", Scope: "shots", ShotID: "shot-2", Status: ShotRegenerationQueued, Label: "正在重新生成镜头"},
+	}
+	if !reflect.DeepEqual(view.ActiveTasks, want) {
+		t.Fatalf("active tasks = %#v, want %#v", view.ActiveTasks, want)
+	}
+}
+
+func TestCreatorViewDoesNotTreatPendingArtifactsAsActiveTasks(t *testing.T) {
+	view, err := NewCreatorViewService(
+		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
+		fakeCreatorShotReader{},
+		fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{
+			{ID: "materialized-pending", StageName: "script", Status: "pending", TaskID: "pending-task"},
+			{ID: "script-running", StageName: "script", Status: "running", TaskID: "running-task"},
+		}},
+	).GetCreationView(context.Background(), "user-1", "vp-1")
+	if err != nil {
+		t.Fatalf("GetCreationView() error = %v", err)
+	}
+	if got := view.Steps[2].State; got != model.CreatorStepNeedsReview {
+		t.Fatalf("script state = %q, want needs_review", got)
+	}
+	want := []model.CreatorTask{{ID: "running-task", Scope: "script", Status: "running", Label: "正在准备脚本"}}
+	if !reflect.DeepEqual(view.ActiveTasks, want) {
+		t.Fatalf("active tasks = %#v, want %#v", view.ActiveTasks, want)
 	}
 }
 

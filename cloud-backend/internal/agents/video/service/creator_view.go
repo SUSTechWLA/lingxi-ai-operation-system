@@ -158,7 +158,7 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 
 	shotsIndex := stepIndexes[model.CreatorStepShots]
 	steps[shotsIndex].State = mergeCreatorState(steps[shotsIndex].State, stateForShots(shotState.Summary))
-	for _, task := range shotState.Tasks {
+	for _, task := range latestCreatorShotTasks(shotState.Tasks) {
 		if !isActiveShotRegeneration(task.Status) || task.TaskID == "" {
 			continue
 		}
@@ -176,7 +176,7 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	for i := range steps {
 		steps[i].AllowedActions = actionsForCreatorState(steps[i].State)
 	}
-	sortCreatorTasks(activeTasks)
+	activeTasks = deduplicateCreatorTasks(activeTasks)
 
 	return &model.CreationView{
 		Project: project, ActiveStep: activeCreatorStep(steps), Steps: steps,
@@ -305,7 +305,7 @@ func applyArtifact(step *model.CreatorStep, current *artifact.Artifact, state mo
 
 func isActiveArtifact(current *artifact.Artifact) bool {
 	switch normalizeCreatorStage(current.Status) {
-	case "pending", "generating", "running", "queued", "processing":
+	case "generating", "running", "processing":
 		return true
 	default:
 		return false
@@ -319,6 +319,49 @@ func isActiveShotRegeneration(status string) bool {
 	default:
 		return false
 	}
+}
+
+// latestCreatorShotTasks applies the same UpdatedAt, CreatedAt, TaskID ordering
+// as Shot summary/workspace reads. A terminal newest task deliberately hides an
+// older queued or running task for that Shot.
+func latestCreatorShotTasks(tasks []model.ShotRegenerationTask) []model.ShotRegenerationTask {
+	latestByShot := make(map[string]model.ShotRegenerationTask)
+	for _, task := range tasks {
+		if task.ShotID == "" {
+			continue
+		}
+		latest, ok := latestByShot[task.ShotID]
+		if !ok || taskIsLater(task, latest) {
+			latestByShot[task.ShotID] = task
+		}
+	}
+	latest := make([]model.ShotRegenerationTask, 0, len(latestByShot))
+	for _, task := range latestByShot {
+		latest = append(latest, task)
+	}
+	sort.Slice(latest, func(i, j int) bool {
+		if latest[i].ShotID != latest[j].ShotID {
+			return latest[i].ShotID < latest[j].ShotID
+		}
+		return latest[i].TaskID < latest[j].TaskID
+	})
+	return latest
+}
+
+func deduplicateCreatorTasks(tasks []model.CreatorTask) []model.CreatorTask {
+	sortCreatorTasks(tasks)
+	byID := make(map[string]model.CreatorTask, len(tasks))
+	for _, task := range tasks {
+		if existing, ok := byID[task.ID]; !ok || (task.ShotID != "" && existing.ShotID == "") {
+			byID[task.ID] = task
+		}
+	}
+	unique := make([]model.CreatorTask, 0, len(byID))
+	for _, task := range byID {
+		unique = append(unique, task)
+	}
+	sortCreatorTasks(unique)
+	return unique
 }
 
 func sortCreatorTasks(tasks []model.CreatorTask) {
