@@ -201,6 +201,167 @@ func TestPreviewShotRegenerationReportsTargetOnlyImpact(t *testing.T) {
 	}
 }
 
+func TestListShotPagePaginatesOneHundredShotsWithStableCursor(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	shots := make([]model.ShotUnit, 100)
+	for i := range shots {
+		shots[i] = model.ShotUnit{
+			ID: fmt.Sprintf("shot-%03d", i+1), ProjectID: "vp-1", SequenceIndex: i + 1,
+			Title: fmt.Sprintf("Shot %03d", i+1), DurationSec: 6, Version: 3,
+			ReviewStatus: model.ReviewStatusPending,
+		}
+	}
+	store.project = projectWithShotState(t, shots...)
+	svc := NewCreationService(store)
+
+	page, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{
+		Limit: 24, Status: model.ReviewStatusPending,
+	})
+	if err != nil || len(page.Items) != 24 || page.NextCursor == "" || page.Total != 100 {
+		t.Fatalf("page = %+v error = %v", page, err)
+	}
+	if page.Items[0].SequenceIndex != 1 || page.Items[23].SequenceIndex != 24 {
+		t.Fatalf("first page sequence indexes = %d..%d", page.Items[0].SequenceIndex, page.Items[23].SequenceIndex)
+	}
+	next, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Cursor: page.NextCursor, Limit: 24})
+	if err != nil || len(next.Items) != 24 || next.Items[0].SequenceIndex != 25 || next.Items[23].SequenceIndex != 48 {
+		t.Fatalf("next page = %+v error = %v", next, err)
+	}
+	if _, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Cursor: "not-an-index"}); err == nil {
+		t.Fatal("invalid cursor should fail")
+	}
+	clamped, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Limit: 99})
+	if err != nil || len(clamped.Items) != 50 {
+		t.Fatalf("clamped page = %+v error = %v", clamped, err)
+	}
+	minimum, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Limit: -1})
+	if err != nil || len(minimum.Items) != 1 {
+		t.Fatalf("minimum page = %+v error = %v", minimum, err)
+	}
+}
+
+func TestListShotPageSearchesCreatorReviewFields(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t,
+		model.ShotUnit{ID: "shot-title", ProjectID: "vp-1", SequenceIndex: 1, Title: "Morning light", DurationSec: 6},
+		model.ShotUnit{ID: "shot-narration", ProjectID: "vp-1", SequenceIndex: 2, Narration: "A useful hook", DurationSec: 6},
+		model.ShotUnit{ID: "shot-scene", ProjectID: "vp-1", SequenceIndex: 3, SceneSummary: "A quiet library", DurationSec: 6},
+		model.ShotUnit{ID: "shot-text", ProjectID: "vp-1", SequenceIndex: 4, ScreenText: []string{"Keep this exact phrase"}, DurationSec: 6},
+	)
+	svc := NewCreationService(store)
+	for _, query := range []string{"morning", "hook", "library", "exact phrase"} {
+		page, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Query: query})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("query %q page=%+v error=%v", query, page, err)
+		}
+	}
+}
+
+func TestRestoreShotCandidateCreatesNewImmutableCandidate(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	historical := model.ShotCandidate{
+		CandidateID: "candidate-v1", ShotID: "shot-001", DurationSec: 6,
+		Status:       model.CandidateShotQAPassed,
+		QAReport:     &model.ShotQAReport{Status: model.ShotQAPassed, Passed: true},
+		ArtifactRefs: model.ShotArtifactRefs{VideoClipArtifactID: "artifact-video-v1"},
+	}
+	store.project = projectWithShotState(t, model.ShotUnit{
+		ID: "shot-001", ProjectID: "vp-1", SequenceIndex: 1, DurationSec: 6, Version: 3,
+		AcceptedCandidateID: "candidate-v2", Candidates: []model.ShotCandidate{historical},
+	})
+	svc := NewCreationService(store)
+
+	restored, err := svc.RestoreShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-v1", 3)
+	if err != nil || restored.Version != 4 || restored.AcceptedCandidateID == "candidate-v1" {
+		t.Fatalf("restored shot = %+v error = %v", restored, err)
+	}
+	state := decodeStateFromTest(t, store.updated.Config)
+	if len(state.Shots[0].Candidates) != 2 || state.Shots[0].Candidates[0].CandidateID != "candidate-v1" {
+		t.Fatalf("historical candidate was changed: %+v", state.Shots[0].Candidates)
+	}
+	copy := state.Shots[0].Candidates[1]
+	if copy.CandidateID == historical.CandidateID || copy.ArtifactRefs != historical.ArtifactRefs || copy.Status != model.CandidateAcceptedForAssembly || !state.AssemblyDirty {
+		t.Fatalf("restored copy = %+v", copy)
+	}
+	if _, err := svc.RestoreShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-v1", 3); !errors.Is(err, ErrShotVersionConflict) {
+		t.Fatalf("duplicate restore error = %v, want version conflict", err)
+	}
+}
+
+func TestAcceptShotCandidateRequiresOwnedQAPassedCandidateAndExactVersion(t *testing.T) {
+	base := model.ShotUnit{ID: "shot-001", ProjectID: "vp-1", DurationSec: 6, Version: 3}
+	valid := model.ShotCandidate{
+		CandidateID: "candidate-ok", ShotID: "shot-001", DurationSec: 6, Status: model.CandidateShotQAPassed,
+		QAReport: &model.ShotQAReport{Status: model.ShotQAPassed, Passed: true},
+	}
+	tests := []struct {
+		name      string
+		candidate model.ShotCandidate
+		base      int
+		want      string
+	}{
+		{name: "wrong target", candidate: model.ShotCandidate{CandidateID: "candidate-wrong", ShotID: "shot-002", DurationSec: 6, Status: model.CandidateShotQAPassed, QAReport: valid.QAReport}, base: 3, want: "belongs"},
+		{name: "qa gate", candidate: model.ShotCandidate{CandidateID: "candidate-qa", ShotID: "shot-001", DurationSec: 6, Status: model.CandidateShotQAFailed}, base: 3, want: "QA"},
+		{name: "strict duration", candidate: model.ShotCandidate{CandidateID: "candidate-15", ShotID: "shot-001", DurationSec: 15, Status: model.CandidateShotQAPassed, QAReport: valid.QAReport}, base: 3, want: "less than 15"},
+		{name: "base version", candidate: valid, base: 2, want: "version conflict"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeCreationProjectStore()
+			shot := base
+			shot.Candidates = []model.ShotCandidate{tt.candidate}
+			store.project = projectWithShotState(t, shot)
+			_, err := NewCreationService(store).AcceptShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", tt.candidate.CandidateID, tt.base)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			state := decodeStateFromTest(t, store.project.Config)
+			if state.Shots[0].Version != 3 || state.Shots[0].AcceptedCandidateID != "" {
+				t.Fatalf("rejected acceptance mutated state: %+v", state.Shots[0])
+			}
+		})
+	}
+}
+
+func TestAcceptShotCandidateAcceptsHumanReviewRequiredAndRejectsStaleDuplicate(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t, model.ShotUnit{
+		ID: "shot-001", ProjectID: "vp-1", DurationSec: 6, Version: 3,
+		Candidates: []model.ShotCandidate{{
+			CandidateID: "candidate-review", ShotID: "shot-001", DurationSec: 6,
+			Status: model.CandidateHumanReviewRequired,
+		}}},
+	)
+	svc := NewCreationService(store)
+	accepted, err := svc.AcceptShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-review", 3)
+	if err != nil || accepted.Version != 4 || accepted.AcceptedCandidateID != "candidate-review" || accepted.ReviewStatus != model.ReviewStatusApproved {
+		t.Fatalf("accepted=%+v error=%v", accepted, err)
+	}
+	if _, err := svc.AcceptShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-review", 3); !errors.Is(err, ErrShotVersionConflict) {
+		t.Fatalf("duplicate accept error = %v, want version conflict", err)
+	}
+}
+
+func TestAcceptShotCandidateRetriesCASWithoutChangingOtherShots(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t,
+		model.ShotUnit{ID: "shot-001", ProjectID: "vp-1", DurationSec: 6, Version: 3, Candidates: []model.ShotCandidate{{
+			CandidateID: "candidate-ok", ShotID: "shot-001", DurationSec: 6, Status: model.CandidateShotQAPassed,
+			QAReport: &model.ShotQAReport{Status: model.ShotQAPassed, Passed: true},
+		}}},
+		model.ShotUnit{ID: "shot-002", ProjectID: "vp-1", DurationSec: 6, Version: 7},
+	)
+	store.casConflicts = 1
+	accepted, err := NewCreationService(store).AcceptShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-ok", 3)
+	if err != nil || accepted.Version != 4 || store.casCalls != 2 {
+		t.Fatalf("accepted=%+v error=%v CAS calls=%d", accepted, err, store.casCalls)
+	}
+	state := decodeStateFromTest(t, store.updated.Config)
+	if state.Shots[1].Version != 7 || state.Shots[1].AcceptedCandidateID != "" {
+		t.Fatalf("CAS retry changed non-target shot: %+v", state.Shots[1])
+	}
+}
+
 func TestLegacyRegenerateShotDerivesStableRetryKeyBeforeDefaultingVersion(t *testing.T) {
 	store := newFakeCreationProjectStore()
 	store.project = projectWithShotState(t, model.ShotUnit{

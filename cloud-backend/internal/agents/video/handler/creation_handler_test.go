@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -49,10 +50,57 @@ func TestCreationHandlerUsesAuthenticatedUserForShotLock(t *testing.T) {
 	}
 }
 
+func TestCreationHandlerRegenerateShotV2PassesHeaderAndRequestFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/regenerations", strings.NewReader(`{"baseVersion":3,"scope":"base_media","locks":["duration"],"instruction":"make it warmer"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "request-1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.userID != "u-auth" || fake.projectID != "vp-1" || fake.shotID != "shot-1" || fake.regenerateV2Req.BaseVersion != 3 || fake.regenerateV2Req.Scope != "base_media" || fake.regenerateV2Req.IdempotencyKey != "request-1" || len(fake.regenerateV2Req.Locks) != 1 || fake.regenerateV2Req.Instruction != "make it warmer" {
+		t.Fatalf("captured request = %+v user=%q project=%q shot=%q", fake.regenerateV2Req, fake.userID, fake.projectID, fake.shotID)
+	}
+}
+
+func TestCreationHandlerMapsShotVersionConflictToConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{regenerateV2Err: videoSvc.ErrShotVersionConflict}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/regenerations", strings.NewReader(`{"baseVersion":3,"scope":"base_media"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "request-1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeCreationService struct {
-	userID    string
-	projectID string
-	shotID    string
+	userID          string
+	projectID       string
+	shotID          string
+	regenerateV2Req videoSvc.RegenerateShotRequest
+	regenerateV2Err error
 }
 
 func (f *fakeCreationService) GetSpec(ctx context.Context, userID, projectID string) (*model.VideoCreationSpec, error) {
@@ -87,6 +135,40 @@ func (f *fakeCreationService) RejectSpec(ctx context.Context, userID, projectID 
 func (f *fakeCreationService) ListShots(ctx context.Context, userID, projectID string) ([]model.ShotUnit, error) {
 	f.userID, f.projectID = userID, projectID
 	return []model.ShotUnit{}, nil
+}
+
+func (f *fakeCreationService) ListShotPage(ctx context.Context, userID, projectID string, query model.ShotPageQuery) (model.ShotPage, error) {
+	f.userID, f.projectID = userID, projectID
+	return model.ShotPage{}, nil
+}
+
+func (f *fakeCreationService) GetShotSummary(ctx context.Context, userID, projectID string) (model.ShotSummary, error) {
+	f.userID, f.projectID = userID, projectID
+	return model.ShotSummary{}, nil
+}
+
+func (f *fakeCreationService) GetShotWorkspace(ctx context.Context, userID, projectID, shotID string) (model.ShotWorkspace, error) {
+	f.userID, f.projectID, f.shotID = userID, projectID, shotID
+	return model.ShotWorkspace{Shot: model.ShotUnit{ID: shotID, ProjectID: projectID}}, nil
+}
+
+func (f *fakeCreationService) GetShotHistory(ctx context.Context, userID, projectID, shotID string) ([]model.ShotRevision, error) {
+	f.userID, f.projectID, f.shotID = userID, projectID, shotID
+	return nil, nil
+}
+
+func (f *fakeCreationService) PreviewShotRegeneration(ctx context.Context, userID, projectID, shotID string) (videoSvc.ShotRegenerationImpact, error) {
+	f.userID, f.projectID, f.shotID = userID, projectID, shotID
+	return videoSvc.ShotRegenerationImpact{ShotID: shotID}, nil
+}
+
+func (f *fakeCreationService) AcceptShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, baseVersion int) (*model.ShotUnit, error) {
+	f.userID, f.projectID, f.shotID = userID, projectID, shotID
+	return &model.ShotUnit{ID: shotID, ProjectID: projectID, AcceptedCandidateID: candidateID, Version: baseVersion + 1}, nil
+}
+
+func (f *fakeCreationService) RestoreShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, baseVersion int) (*model.ShotUnit, error) {
+	return f.AcceptShotCandidate(ctx, userID, projectID, shotID, candidateID, baseVersion)
 }
 
 func (f *fakeCreationService) GetShot(ctx context.Context, userID, projectID, shotID string) (*model.ShotUnit, error) {
@@ -128,6 +210,14 @@ func (f *fakeCreationService) UnlockShot(ctx context.Context, userID, projectID,
 func (f *fakeCreationService) RegenerateShot(ctx context.Context, userID, projectID, shotID string, req videoSvc.RegenerateShotRequest) (*model.ShotUnit, error) {
 	f.userID, f.projectID, f.shotID = userID, projectID, shotID
 	return &model.ShotUnit{ID: shotID, ProjectID: projectID, Stale: true}, nil
+}
+
+func (f *fakeCreationService) RegenerateShotV2(ctx context.Context, userID, projectID, shotID string, req videoSvc.RegenerateShotRequest) (videoSvc.RegenerateShotResult, error) {
+	f.userID, f.projectID, f.shotID, f.regenerateV2Req = userID, projectID, shotID, req
+	if f.regenerateV2Err != nil {
+		return videoSvc.RegenerateShotResult{}, f.regenerateV2Err
+	}
+	return videoSvc.RegenerateShotResult{Shot: model.ShotUnit{ID: shotID, ProjectID: projectID, Version: req.BaseVersion + 1}}, nil
 }
 
 func (f *fakeCreationService) GenerateVisualPlan(ctx context.Context, userID, projectID, shotID string) (*model.VisualPlan, error) {
