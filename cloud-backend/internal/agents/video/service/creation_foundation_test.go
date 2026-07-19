@@ -22,7 +22,7 @@ func TestVideoCreationSpecDefaults(t *testing.T) {
 	if spec.AspectRatio != "16:9" || spec.Language != "zh-CN" {
 		t.Fatalf("aspect/language = %q/%q", spec.AspectRatio, spec.Language)
 	}
-	if spec.ShotPolicy.MinDurationSec != 3 || spec.ShotPolicy.MaxDurationSec != 15 || spec.ShotPolicy.PreferDurationSec != 6 {
+	if spec.ShotPolicy.MinDurationSec != 3 || spec.ShotPolicy.MaxDurationSec != 14 || spec.ShotPolicy.PreferDurationSec != 6 {
 		t.Fatalf("shot policy defaults = %+v", spec.ShotPolicy)
 	}
 	if !spec.ShotPolicy.SingleSceneRequired || !spec.ShotPolicy.LowVisualChangeRequired || !spec.ShotPolicy.AvoidCrossShotDependency {

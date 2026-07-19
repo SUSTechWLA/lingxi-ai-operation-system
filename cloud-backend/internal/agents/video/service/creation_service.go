@@ -128,6 +128,9 @@ func (s *CreationService) UpsertShot(ctx context.Context, userID, projectID stri
 		return nil, err
 	}
 	normalized := normalizeShot(projectID, *shot, len(state.Shots)+1)
+	if err := model.ValidateShotDuration(normalized); err != nil {
+		return nil, err
+	}
 	if current, index, ok := findShot(state.Shots, normalized.ID); ok {
 		if current.Locked {
 			return nil, fmt.Errorf("shot %s is locked", normalized.ID)
@@ -167,7 +170,7 @@ func (s *CreationService) GenerateShots(ctx context.Context, userID, projectID s
 		count = 1
 	}
 	duration := int(math.Ceil(float64(total) / float64(count)))
-	for duration > spec.ShotPolicy.MaxDurationSec {
+	for duration >= model.MaxShotDurationExclusiveSec {
 		count++
 		duration = int(math.Ceil(float64(total) / float64(count)))
 	}

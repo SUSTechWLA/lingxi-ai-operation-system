@@ -1,8 +1,13 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
+	MaxShotDurationExclusiveSec = 15
+
 	ReviewModeShotLevel = "shot_level_review"
 
 	RenderStrategyAuto = "auto"
@@ -193,7 +198,7 @@ func NewVideoCreationSpec(projectID, sourceMessage string) *VideoCreationSpec {
 func DefaultShotPolicy() ShotPolicy {
 	return ShotPolicy{
 		MinDurationSec:           3,
-		MaxDurationSec:           15,
+		MaxDurationSec:           14,
 		PreferDurationSec:        6,
 		PreferredMinDurationSec:  6,
 		PreferredMaxDurationSec:  8,
@@ -267,6 +272,39 @@ type ShotUnit struct {
 	LastRejectReason    string                 `json:"lastRejectReason,omitempty"`
 	CreatedAt           time.Time              `json:"createdAt"`
 	UpdatedAt           time.Time              `json:"updatedAt"`
+}
+
+func ValidateShotDuration(shot ShotUnit) error {
+	durationMs := shot.DurationMs
+	if durationMs == 0 && shot.DurationSec > 0 {
+		durationMs = int64(shot.DurationSec) * 1000
+	}
+	if durationMs <= 0 || durationMs >= int64(MaxShotDurationExclusiveSec*1000) {
+		return fmt.Errorf("shot duration must be greater than 0 and less than 15 seconds")
+	}
+	return nil
+}
+
+type ShotRevision struct {
+	RevisionID string    `json:"revisionId"`
+	ShotID     string    `json:"shotId"`
+	Version    int       `json:"version"`
+	Reason     string    `json:"reason"`
+	Snapshot   ShotUnit  `json:"snapshot"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type ShotRegenerationTask struct {
+	TaskID         string    `json:"taskId"`
+	ShotID         string    `json:"shotId"`
+	BaseVersion    int       `json:"baseVersion"`
+	Scope          string    `json:"scope"`
+	Locks          []string  `json:"locks,omitempty"`
+	Instruction    string    `json:"instruction,omitempty"`
+	IdempotencyKey string    `json:"idempotencyKey"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type ShotContinuity struct {
@@ -729,8 +767,12 @@ type CompositePlan struct {
 }
 
 type ShotDrivenState struct {
-	SchemaVersion int                `json:"schemaVersion"`
-	Spec          *VideoCreationSpec `json:"spec,omitempty"`
-	Shots         []ShotUnit         `json:"shots,omitempty"`
-	UpdatedAt     time.Time          `json:"updatedAt"`
+	SchemaVersion     int                             `json:"schemaVersion"`
+	Spec              *VideoCreationSpec              `json:"spec,omitempty"`
+	Shots             []ShotUnit                      `json:"shots,omitempty"`
+	ShotHistory       map[string][]ShotRevision       `json:"shotHistory,omitempty"`
+	RegenerationTasks map[string]ShotRegenerationTask `json:"regenerationTasks,omitempty"`
+	IdempotencyTasks  map[string]string               `json:"idempotencyTasks,omitempty"`
+	AssemblyDirty     bool                            `json:"assemblyDirty"`
+	UpdatedAt         time.Time                       `json:"updatedAt"`
 }

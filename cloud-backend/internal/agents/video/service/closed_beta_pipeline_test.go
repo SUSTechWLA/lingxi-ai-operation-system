@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -9,8 +10,8 @@ import (
 func TestClosedBetaShotPolicyDefaults(t *testing.T) {
 	policy := model.DefaultShotPolicy()
 
-	if policy.MinDurationSec != 3 || policy.MaxDurationSec != 15 {
-		t.Fatalf("duration bounds = %d..%d, want 3..15", policy.MinDurationSec, policy.MaxDurationSec)
+	if policy.MinDurationSec != 3 || policy.MaxDurationSec != 14 {
+		t.Fatalf("duration bounds = %d..%d, want 3..14", policy.MinDurationSec, policy.MaxDurationSec)
 	}
 	if policy.PreferredMinDurationSec != 6 || policy.PreferredMaxDurationSec != 8 {
 		t.Fatalf("preferred range = %d..%d, want 6..8", policy.PreferredMinDurationSec, policy.PreferredMaxDurationSec)
@@ -28,6 +29,18 @@ func TestShotDurationCheckerAcceptsFractionalBoundary(t *testing.T) {
 	}
 	if issues := CheckShotDurationSec("shot-long", 15.1); !hasIssueCode(issues, "shot_duration_out_of_range") {
 		t.Fatalf("15.1s should fail duration validation, got %+v", issues)
+	}
+}
+
+func TestBuildShotGenerationPlanBlocksFifteenSecondShot(t *testing.T) {
+	plan := BuildShotGenerationPlan(
+		model.ShotUnit{ID: "shot-15", DurationSec: 15},
+		model.VisualPlan{},
+		model.DefaultRenderPreference(),
+		RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true},
+	)
+	if plan.Mode != model.GenerationModePlaceholderPreview || !strings.Contains(plan.Reason, "less than 15 seconds") {
+		t.Fatalf("fifteen-second shot must not receive a generation plan: %+v", plan)
 	}
 }
 

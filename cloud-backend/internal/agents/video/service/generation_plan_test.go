@@ -72,7 +72,7 @@ func TestBuildShotGenerationPlanAIGCDurationClampsToProviderWindow(t *testing.T)
 		durationSec int
 		want        int
 	}{
-		{name: "too_long", durationSec: 40, want: 15},
+		{name: "too_long", durationSec: 40},
 		{name: "too_short", durationSec: 1, want: 3},
 	}
 
@@ -99,6 +99,12 @@ func TestBuildShotGenerationPlanAIGCDurationClampsToProviderWindow(t *testing.T)
 			}
 
 			generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+			if tt.name == "too_long" {
+				if generationPlan.Mode != model.GenerationModePlaceholderPreview {
+					t.Fatalf("mode = %q, want strict-duration placeholder", generationPlan.Mode)
+				}
+				return
+			}
 
 			if generationPlan.Mode != model.GenerationModeAIGCVideo {
 				t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModeAIGCVideo)
@@ -119,7 +125,7 @@ func TestBuildShotGenerationPlanExternalAIGCNeedClampsDurationToProviderWindow(t
 		durationSec int
 		want        int
 	}{
-		{name: "too_long", durationSec: 40, want: 15},
+		{name: "too_long", durationSec: 40},
 		{name: "too_short", durationSec: 1, want: 3},
 	}
 
@@ -146,6 +152,12 @@ func TestBuildShotGenerationPlanExternalAIGCNeedClampsDurationToProviderWindow(t
 			}
 
 			generationPlan := BuildShotGenerationPlan(shot, plan, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: false, HTMLAvailable: true})
+			if tt.name == "too_long" {
+				if generationPlan.Mode != model.GenerationModePlaceholderPreview || generationPlan.RenderInputs != nil {
+					t.Fatalf("plan = %+v, want strict-duration placeholder without render inputs", generationPlan)
+				}
+				return
+			}
 
 			if generationPlan.Mode != model.GenerationModePlaceholderPreview {
 				t.Fatalf("mode = %q, want %q", generationPlan.Mode, model.GenerationModePlaceholderPreview)

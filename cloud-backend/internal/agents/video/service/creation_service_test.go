@@ -93,6 +93,42 @@ func TestCreationServiceGenerateShotsFor60SecProduces8To12ValidShots(t *testing.
 	}
 }
 
+func TestCreationServiceRejectsShotAtFifteenSeconds(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = &model.VideoProject{ID: "vp-1", UserID: "u-1"}
+	svc := NewCreationService(store)
+
+	_, err := svc.UpsertShot(context.Background(), "u-1", "vp-1", &model.ShotUnit{
+		ID: "shot-15", DurationSec: 15,
+	})
+	if err == nil || !strings.Contains(err.Error(), "less than 15 seconds") {
+		t.Fatalf("UpsertShot error = %v, want strict duration error", err)
+	}
+}
+
+func TestCreationServiceAcceptsFourteenSecondShot(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = &model.VideoProject{ID: "vp-1", UserID: "u-1"}
+	svc := NewCreationService(store)
+
+	shot, err := svc.UpsertShot(context.Background(), "u-1", "vp-1", &model.ShotUnit{
+		ID: "shot-14", DurationSec: 14,
+	})
+	if err != nil || shot.DurationSec != 14 {
+		t.Fatalf("shot = %+v error = %v", shot, err)
+	}
+}
+
+func TestDecodeShotDrivenStateInitializesDurableMaps(t *testing.T) {
+	state, err := DecodeShotDrivenState(nil)
+	if err != nil {
+		t.Fatalf("DecodeShotDrivenState error: %v", err)
+	}
+	if state.ShotHistory == nil || state.RegenerationTasks == nil || state.IdempotencyTasks == nil {
+		t.Fatalf("durable state maps must be initialized: %+v", state)
+	}
+}
+
 func TestCreationServiceRejectsRegenerateLockedShot(t *testing.T) {
 	store := newFakeCreationProjectStore()
 	store.project = projectWithShotState(t, model.ShotUnit{ID: "shot-1", ProjectID: "vp-1", DurationSec: 6, Locked: true, ReviewStatus: model.ReviewStatusApproved})
