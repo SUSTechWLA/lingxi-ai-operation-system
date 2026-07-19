@@ -36,9 +36,13 @@ const videoProjectConfigRevisionMigration = `
 
 const agentTerminalOutboxMigration = `
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_json JSONB;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_id VARCHAR(96);
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_delivered_at TIMESTAMPTZ;
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_attempts INT NOT NULL DEFAULT 0;
 	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_lease_until TIMESTAMPTZ;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_claim_token VARCHAR(96);
+	UPDATE agent_runs SET terminal_event_id='legacy_terminal_' || id || '_' || COALESCE(terminal_event_attempts, 0)::text
+		WHERE terminal_event_json IS NOT NULL AND terminal_event_id IS NULL;
 	CREATE INDEX IF NOT EXISTS idx_agent_runs_terminal_pending
 		ON agent_runs(updated_at) WHERE terminal_event_json IS NOT NULL AND terminal_event_delivered_at IS NULL;
 `

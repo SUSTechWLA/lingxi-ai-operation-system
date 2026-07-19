@@ -26,6 +26,17 @@ func TestEnsureVideoProjectConfigRevisionReturnsStartupError(t *testing.T) {
 	}
 }
 
+func TestAgentTerminalOutboxMigrationIncludesEventAndClaimIdentity(t *testing.T) {
+	for _, column := range []string{"terminal_event_id", "terminal_event_claim_token"} {
+		if !strings.Contains(agentTerminalOutboxMigration, column) {
+			t.Fatalf("terminal outbox migration missing %s: %s", column, agentTerminalOutboxMigration)
+		}
+	}
+	if !strings.Contains(agentTerminalOutboxMigration, "UPDATE agent_runs SET terminal_event_id") {
+		t.Fatalf("terminal outbox migration does not backfill pending legacy events: %s", agentTerminalOutboxMigration)
+	}
+}
+
 type revisionMigrationExecer struct{ err error }
 
 func (e revisionMigrationExecer) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {

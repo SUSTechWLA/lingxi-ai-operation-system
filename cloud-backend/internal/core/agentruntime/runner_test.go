@@ -907,14 +907,14 @@ type memoryRunStore struct {
 	runs            map[string]*Run
 	terminal        map[string]RunTerminalEvent
 	delivered       map[string]bool
-	terminalClaimed map[string]bool
+	terminalClaim   map[string]string
 	saveTerminalErr error
 }
 
 func newMemoryRunStore() *memoryRunStore {
 	return &memoryRunStore{
 		runs: make(map[string]*Run), terminal: make(map[string]RunTerminalEvent),
-		delivered: make(map[string]bool), terminalClaimed: make(map[string]bool),
+		delivered: make(map[string]bool), terminalClaim: make(map[string]string),
 	}
 }
 
@@ -927,11 +927,11 @@ func (s *memoryRunStore) SaveRunTerminal(_ context.Context, run *Run, event RunT
 	s.runs[run.ID] = run
 	s.terminal[run.ID] = event
 	s.delivered[run.ID] = false
-	s.terminalClaimed[run.ID] = false
+	s.terminalClaim[run.ID] = ""
 	return nil
 }
 
-func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ time.Time) ([]TerminalEventDelivery, error) {
+func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ time.Time, claimToken string) ([]TerminalEventDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	deliveries := make([]TerminalEventDelivery, 0, limit)
@@ -939,28 +939,36 @@ func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ tim
 		if len(deliveries) >= limit {
 			break
 		}
-		if s.delivered[runID] || s.terminalClaimed[runID] {
+		if s.delivered[runID] || s.terminalClaim[runID] != "" {
 			continue
 		}
-		s.terminalClaimed[runID] = true
-		deliveries = append(deliveries, TerminalEventDelivery{RunID: runID, Event: event})
+		s.terminalClaim[runID] = claimToken
+		deliveries = append(deliveries, TerminalEventDelivery{RunID: runID, EventID: event.EventID, ClaimToken: claimToken, Event: event})
 	}
 	return deliveries, nil
 }
 
-func (s *memoryRunStore) AckTerminalEvent(_ context.Context, runID string) error {
+func (s *memoryRunStore) AckTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.delivered[runID] = true
-	s.terminalClaimed[runID] = false
-	return nil
+	current, ok := s.terminal[delivery.RunID]
+	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+		return false, nil
+	}
+	s.delivered[delivery.RunID] = true
+	s.terminalClaim[delivery.RunID] = ""
+	return true, nil
 }
 
-func (s *memoryRunStore) ReleaseTerminalEvent(_ context.Context, runID string) error {
+func (s *memoryRunStore) ReleaseTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.terminalClaimed[runID] = false
-	return nil
+	current, ok := s.terminal[delivery.RunID]
+	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+		return false, nil
+	}
+	s.terminalClaim[delivery.RunID] = ""
+	return true, nil
 }
 
 func (s *memoryRunStore) hasPendingTerminal(runID string) bool {

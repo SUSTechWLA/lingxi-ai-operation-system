@@ -76,6 +76,33 @@ func TestRunnerExistingFailedRunRedeliversPendingTerminalEvent(t *testing.T) {
 	}
 }
 
+func TestRunnerStaleClaimCannotAcknowledgeReplacementTerminalEvent(t *testing.T) {
+	store := newMemoryRunStore()
+	run := &Run{ID: "agent_run_shot_stable", Status: RunStatusFailed}
+	first := RunTerminalEvent{EventID: "event-1", RunID: run.ID, Status: RunStatusFailed, Error: "first"}
+	if err := store.SaveRunTerminal(context.Background(), run, first); err != nil {
+		t.Fatalf("seed first event: %v", err)
+	}
+	claimed, err := store.ClaimTerminalEvents(context.Background(), 1, time.Now().Add(time.Minute), "claim-1")
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim first event: deliveries=%+v error=%v", claimed, err)
+	}
+	second := RunTerminalEvent{EventID: "event-2", RunID: run.ID, Status: RunStatusCancelled, Error: "replacement"}
+	if err := store.SaveRunTerminal(context.Background(), run, second); err != nil {
+		t.Fatalf("save replacement event: %v", err)
+	}
+	if acked, err := store.AckTerminalEvent(context.Background(), claimed[0]); err != nil || acked {
+		t.Fatalf("stale ack accepted=%v error=%v", acked, err)
+	}
+	if released, err := store.ReleaseTerminalEvent(context.Background(), claimed[0]); err != nil || released {
+		t.Fatalf("stale release accepted=%v error=%v", released, err)
+	}
+	newer, err := store.ClaimTerminalEvents(context.Background(), 1, time.Now().Add(time.Minute), "claim-2")
+	if err != nil || len(newer) != 1 || newer[0].Event.EventID != second.EventID {
+		t.Fatalf("replacement event not deliverable: deliveries=%+v error=%v", newer, err)
+	}
+}
+
 func TestRunnerStartAsyncReturnsExistingCallerSuppliedRun(t *testing.T) {
 	store := newMemoryRunStore()
 	existing := &Run{

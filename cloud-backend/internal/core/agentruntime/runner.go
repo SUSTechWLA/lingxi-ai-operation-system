@@ -53,6 +53,7 @@ type Run struct {
 }
 
 type RunTerminalEvent struct {
+	EventID string                 `json:"eventId"`
 	RunID   string                 `json:"runId"`
 	UserID  string                 `json:"userId,omitempty"`
 	Status  RunStatus              `json:"status"`
@@ -84,14 +85,16 @@ type RunStore interface {
 	SaveRun(ctx context.Context, run *Run) error
 	SaveRunTerminal(ctx context.Context, run *Run, event RunTerminalEvent) error
 	FindRun(ctx context.Context, id string) (*Run, error)
-	ClaimTerminalEvents(ctx context.Context, limit int, leaseUntil time.Time) ([]TerminalEventDelivery, error)
-	AckTerminalEvent(ctx context.Context, runID string) error
-	ReleaseTerminalEvent(ctx context.Context, runID string) error
+	ClaimTerminalEvents(ctx context.Context, limit int, leaseUntil time.Time, claimToken string) ([]TerminalEventDelivery, error)
+	AckTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
+	ReleaseTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
 }
 
 type TerminalEventDelivery struct {
-	RunID string
-	Event RunTerminalEvent
+	RunID      string
+	EventID    string
+	ClaimToken string
+	Event      RunTerminalEvent
 }
 
 type PlanJudge interface {
@@ -774,6 +777,9 @@ func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event 
 	if r == nil || r.store == nil {
 		return fmt.Errorf("agent runner is not configured")
 	}
+	if strings.TrimSpace(event.EventID) == "" {
+		event.EventID = "agent_terminal_" + uuid.NewString()
+	}
 	if err := r.store.SaveRunTerminal(ctx, run, event); err != nil {
 		return fmt.Errorf("persist agent terminal event: %w", err)
 	}
@@ -784,18 +790,19 @@ func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int
 	if r == nil || r.store == nil || r.terminal == nil || limit <= 0 {
 		return nil
 	}
-	deliveries, err := r.store.ClaimTerminalEvents(ctx, limit, time.Now().Add(30*time.Second))
+	claimToken := "agent_terminal_claim_" + uuid.NewString()
+	deliveries, err := r.store.ClaimTerminalEvents(ctx, limit, time.Now().Add(30*time.Second), claimToken)
 	if err != nil {
 		return fmt.Errorf("claim agent terminal events: %w", err)
 	}
 	var deliveryErrors []error
 	for _, delivery := range deliveries {
 		if callbackErr := r.terminal(ctx, delivery.Event); callbackErr != nil {
-			_ = r.store.ReleaseTerminalEvent(ctx, delivery.RunID)
+			_, _ = r.store.ReleaseTerminalEvent(ctx, delivery)
 			deliveryErrors = append(deliveryErrors, fmt.Errorf("deliver terminal event for %s: %w", delivery.RunID, callbackErr))
 			continue
 		}
-		if ackErr := r.store.AckTerminalEvent(ctx, delivery.RunID); ackErr != nil {
+		if _, ackErr := r.store.AckTerminalEvent(ctx, delivery); ackErr != nil {
 			deliveryErrors = append(deliveryErrors, fmt.Errorf("ack terminal event for %s: %w", delivery.RunID, ackErr))
 		}
 	}

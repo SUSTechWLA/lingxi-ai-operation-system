@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -278,4 +279,33 @@ func TestShotRegenerationReconcilerStopsWithCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	reconciler.Run(ctx)
+}
+
+func TestShotRegenerationReconcilerFailsExpiredTaskWhenExistingRunSucceededWithoutCandidate(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t,
+		model.ShotUnit{ID: "shot-012", ProjectID: "vp-1", DurationSec: 6, Version: 2},
+		model.ShotUnit{ID: "shot-013", ProjectID: "vp-1", DurationSec: 7, Version: 4},
+	)
+	state := decodeStateFromTest(t, store.project.Config)
+	taskID := "regen-task-1"
+	state.RegenerationTasks[taskID] = model.ShotRegenerationTask{
+		TaskID: taskID, RunID: shotRegenerationRunID(taskID), ShotID: "shot-012",
+		Status: ShotRegenerationDispatching, DispatchLeaseUntil: time.Now().Add(-time.Minute),
+	}
+	state.ShotHistory["shot-012"] = []model.ShotRevision{{ShotID: "shot-012", Version: 1}}
+	setProjectStateForTest(t, store.project, state)
+	before := decodeStateFromTest(t, store.project.Config)
+	store.pendingRegenerations = []PendingShotRegeneration{{UserID: "u-1", ProjectID: "vp-1", TaskID: taskID}}
+	dispatcher := &recordingShotDispatcher{store: store, err: errors.New("Agent run succeeded without durable candidate; retry regeneration")}
+	reconciler := NewShotRegenerationReconciler(store, NewCreationService(store, dispatcher), time.Minute, 10)
+
+	if err := reconciler.RunOnce(context.Background()); err == nil {
+		t.Fatal("successful Agent run without candidate did not fail reconciliation")
+	}
+	after := decodeStateFromTest(t, store.project.Config)
+	if after.RegenerationTasks[taskID].Status != ShotRegenerationFailed || !reflect.DeepEqual(after.Shots, before.Shots) ||
+		!reflect.DeepEqual(after.ShotHistory, before.ShotHistory) {
+		t.Fatalf("before=%+v after=%+v", before, after)
+	}
 }

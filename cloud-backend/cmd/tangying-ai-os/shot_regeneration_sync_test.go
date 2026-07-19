@@ -41,6 +41,17 @@ func TestShotRegenerationDispatcherRejectsExistingTerminalRun(t *testing.T) {
 	}
 }
 
+func TestShotRegenerationDispatcherRejectsExistingSuccessfulRunWithoutCandidate(t *testing.T) {
+	runner := &fakeAsyncAgentRunner{run: &agentruntime.Run{ID: "agent_run_shot_stable", Status: agentruntime.RunStatusSuccess}}
+	dispatcher := &shotRegenerationAgentDispatcher{runner: runner}
+	_, err := dispatcher.EnqueueShotRegeneration(context.Background(), "u-1", "vp-1", videomodel.ShotRegenerationTask{
+		TaskID: "regen-task-1", RunID: "agent_run_shot_stable", ShotID: "shot-012",
+	})
+	if err == nil || !strings.Contains(err.Error(), "succeeded without durable candidate") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestCompleteShotRegenerationFromLocalJobUsesDurableProvenance(t *testing.T) {
 	projects := &fakeShotProjectFinder{project: &videomodel.VideoProject{ID: "vp-1", UserID: "u-1"}}
 	completion := &fakeShotCompletionService{}

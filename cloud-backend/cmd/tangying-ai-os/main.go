@@ -650,14 +650,13 @@ func main() {
 	<-quit
 
 	zap.L().Info("Shutting down server...")
-	cancel()
-	backgroundWorkers.Wait()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		zap.L().Fatal("Server forced to shutdown", zap.Error(err))
+	if err := shutdownHTTPAndWorkers(shutdownCtx, srv, cancel, backgroundWorkers.Wait); err != nil {
+		zap.L().Error("Server shutdown returned an error", zap.Error(err))
+		return
 	}
 
 	zap.L().Info("Server exited")
@@ -827,6 +826,9 @@ func (d *shotRegenerationAgentDispatcher) EnqueueShotRegeneration(
 	}
 	if run.Status == agentruntime.RunStatusFailed || run.Status == agentruntime.RunStatusCancelled {
 		return "", fmt.Errorf("shot regeneration agent run %s is terminal with status %s", run.ID, run.Status)
+	}
+	if run.Status == agentruntime.RunStatusSuccess {
+		return "", fmt.Errorf("shot regeneration agent run %s succeeded without durable candidate; retry regeneration", run.ID)
 	}
 	return run.ID, nil
 }
