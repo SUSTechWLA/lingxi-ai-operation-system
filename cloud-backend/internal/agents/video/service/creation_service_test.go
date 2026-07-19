@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -238,8 +239,13 @@ func projectWithShotState(t *testing.T, shots ...model.ShotUnit) *model.VideoPro
 }
 
 type fakeCreationProjectStore struct {
-	project *model.VideoProject
-	updated *model.VideoProject
+	mu                    sync.Mutex
+	project               *model.VideoProject
+	updated               *model.VideoProject
+	casConflicts          int
+	casCalls              int
+	onCASConflict         func(*model.VideoProject)
+	persistedTaskStatuses []string
 }
 
 func newFakeCreationProjectStore() *fakeCreationProjectStore {
@@ -247,6 +253,8 @@ func newFakeCreationProjectStore() *fakeCreationProjectStore {
 }
 
 func (f *fakeCreationProjectStore) FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.project == nil {
 		return nil, errProjectNotFoundForTest()
 	}
@@ -255,10 +263,51 @@ func (f *fakeCreationProjectStore) FindByIDForUser(ctx context.Context, userID s
 }
 
 func (f *fakeCreationProjectStore) UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	updated := *p
 	f.updated = &updated
 	f.project = &updated
 	return nil
+}
+
+func (f *fakeCreationProjectStore) hasPersistedTaskStatus(status string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, persisted := range f.persistedTaskStatuses {
+		if persisted == status {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeCreationProjectStore) CompareAndSwapForUser(_ context.Context, _ string, p *model.VideoProject, expectedRevision int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.casCalls++
+	if f.project == nil || f.project.ConfigRevision != expectedRevision {
+		return false, nil
+	}
+	if f.casConflicts > 0 {
+		f.casConflicts--
+		if f.onCASConflict != nil {
+			f.onCASConflict(f.project)
+		}
+		f.project.ConfigRevision++
+		return false, nil
+	}
+	updated := *p
+	updated.ConfigRevision = expectedRevision + 1
+	f.updated = &updated
+	f.project = &updated
+	if state, err := DecodeShotDrivenState(updated.Config); err == nil {
+		for _, task := range state.RegenerationTasks {
+			f.persistedTaskStatuses = append(f.persistedTaskStatuses, task.Status)
+		}
+	}
+	p.ConfigRevision = updated.ConfigRevision
+	return true, nil
 }
 
 func containsString(values []string, want string) bool {

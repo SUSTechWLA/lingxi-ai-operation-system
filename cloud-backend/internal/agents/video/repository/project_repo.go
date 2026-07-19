@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -13,11 +15,17 @@ import (
 
 // ProjectRepository provides data access for video projects.
 type ProjectRepository struct {
-	pool *pgxpool.Pool
+	db projectDB
+}
+
+type projectDB interface {
+	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
 }
 
 func NewProjectRepository(pool *pgxpool.Pool) *ProjectRepository {
-	return &ProjectRepository{pool: pool}
+	return &ProjectRepository{db: pool}
 }
 
 // Create inserts a new video project.
@@ -33,7 +41,7 @@ func (r *ProjectRepository) Create(ctx context.Context, p *model.VideoProject) e
 		p.UpdatedAt = now
 	}
 
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`INSERT INTO video_projects (id, user_id, name, description, mode, status,
 		 skill_name, skill_version, workflow_name, workflow_version,
 		 generation_mode, aspect_ratio, target_duration_sec, language,
@@ -53,18 +61,18 @@ func (r *ProjectRepository) Create(ctx context.Context, p *model.VideoProject) e
 // FindByID returns a project by ID (excludes soft-deleted).
 func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*model.VideoProject, error) {
 	var p model.VideoProject
-	err := r.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 		        skill_name, skill_version, workflow_name, workflow_version,
 		        generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
-		        COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
+		        COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), COALESCE(config_revision, 0), deleted_at, created_at, updated_at
 		 FROM video_projects
 		 WHERE id=$1 AND deleted_at IS NULL`, id,
 	).Scan(
 		&p.ID, &p.UserID, &p.Name, &p.Description, &p.Mode, &p.Status,
 		&p.SkillName, &p.SkillVersion, &p.WorkflowName, &p.WorkflowVersion,
 		&p.GenerationMode, &p.AspectRatio, &p.TargetDuration, &p.Language,
-		&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
+		&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.ConfigRevision, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("project not found: %w", err)
@@ -74,18 +82,18 @@ func (r *ProjectRepository) FindByID(ctx context.Context, id string) (*model.Vid
 
 func (r *ProjectRepository) FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error) {
 	var p model.VideoProject
-	err := r.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 		        skill_name, skill_version, workflow_name, workflow_version,
 		        generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
-		        COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
+		        COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), COALESCE(config_revision, 0), deleted_at, created_at, updated_at
 		 FROM video_projects
 		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, id, userID,
 	).Scan(
 		&p.ID, &p.UserID, &p.Name, &p.Description, &p.Mode, &p.Status,
 		&p.SkillName, &p.SkillVersion, &p.WorkflowName, &p.WorkflowVersion,
 		&p.GenerationMode, &p.AspectRatio, &p.TargetDuration, &p.Language,
-		&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
+		&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.ConfigRevision, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("project not found: %w", err)
@@ -99,7 +107,7 @@ func (r *ProjectRepository) FindAll(ctx context.Context, modeFilter string, stat
 	query := `SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 	           skill_name, skill_version, workflow_name, workflow_version,
 	           generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
-	           COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
+	           COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), COALESCE(config_revision, 0), deleted_at, created_at, updated_at
 	 FROM video_projects WHERE deleted_at IS NULL`
 	countQuery := `SELECT COUNT(*) FROM video_projects WHERE deleted_at IS NULL`
 
@@ -121,7 +129,7 @@ func (r *ProjectRepository) FindAll(ctx context.Context, modeFilter string, stat
 
 	// Count
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
@@ -129,7 +137,7 @@ func (r *ProjectRepository) FindAll(ctx context.Context, modeFilter string, stat
 	query += fmt.Sprintf(" ORDER BY updated_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -142,7 +150,7 @@ func (r *ProjectRepository) FindAll(ctx context.Context, modeFilter string, stat
 			&p.ID, &p.UserID, &p.Name, &p.Description, &p.Mode, &p.Status,
 			&p.SkillName, &p.SkillVersion, &p.WorkflowName, &p.WorkflowVersion,
 			&p.GenerationMode, &p.AspectRatio, &p.TargetDuration, &p.Language,
-			&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
+			&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.ConfigRevision, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -155,7 +163,7 @@ func (r *ProjectRepository) FindAllForUser(ctx context.Context, userID string, m
 	query := `SELECT id, user_id, name, COALESCE(description, ''), mode, status,
 	           skill_name, skill_version, workflow_name, workflow_version,
 	           generation_mode, COALESCE(aspect_ratio, ''), COALESCE(target_duration_sec, 0), COALESCE(language, ''),
-	           COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), deleted_at, created_at, updated_at
+	           COALESCE(config, '{}'::jsonb), COALESCE(current_run_id, ''), COALESCE(local_path_hint, ''), COALESCE(config_revision, 0), deleted_at, created_at, updated_at
 	 FROM video_projects WHERE deleted_at IS NULL AND user_id=$1`
 	countQuery := `SELECT COUNT(*) FROM video_projects WHERE deleted_at IS NULL AND user_id=$1`
 
@@ -176,14 +184,14 @@ func (r *ProjectRepository) FindAllForUser(ctx context.Context, userID string, m
 	}
 
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	query += fmt.Sprintf(" ORDER BY updated_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -196,7 +204,7 @@ func (r *ProjectRepository) FindAllForUser(ctx context.Context, userID string, m
 			&p.ID, &p.UserID, &p.Name, &p.Description, &p.Mode, &p.Status,
 			&p.SkillName, &p.SkillVersion, &p.WorkflowName, &p.WorkflowVersion,
 			&p.GenerationMode, &p.AspectRatio, &p.TargetDuration, &p.Language,
-			&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
+			&p.Config, &p.CurrentRunID, &p.LocalPathHint, &p.ConfigRevision, &p.DeletedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -208,11 +216,11 @@ func (r *ProjectRepository) FindAllForUser(ctx context.Context, userID string, m
 // Update modifies an existing project.
 func (r *ProjectRepository) Update(ctx context.Context, p *model.VideoProject) error {
 	p.UpdatedAt = time.Now()
-	_, err := r.pool.Exec(ctx,
+	tag, err := r.db.Exec(ctx,
 		`UPDATE video_projects SET name=$2, description=$3, status=$4,
 		 generation_mode=$5, aspect_ratio=$6, target_duration_sec=$7,
 		 language=$8, config=$9, current_run_id=$10, local_path_hint=$11,
-		 updated_at=$12
+		 updated_at=$12, config_revision=config_revision+1
 		 WHERE id=$1 AND deleted_at IS NULL`,
 		p.ID, p.Name, p.Description, string(p.Status),
 		string(p.GenerationMode), p.AspectRatio, p.TargetDuration,
@@ -222,16 +230,20 @@ func (r *ProjectRepository) Update(ctx context.Context, p *model.VideoProject) e
 	if err != nil {
 		return fmt.Errorf("failed to update project: %w", err)
 	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("project not found")
+	}
+	p.ConfigRevision++
 	return nil
 }
 
 func (r *ProjectRepository) UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error {
 	p.UpdatedAt = time.Now()
-	tag, err := r.pool.Exec(ctx,
+	tag, err := r.db.Exec(ctx,
 		`UPDATE video_projects SET name=$3, description=$4, status=$5,
 		 generation_mode=$6, aspect_ratio=$7, target_duration_sec=$8,
 		 language=$9, config=$10, current_run_id=$11, local_path_hint=$12,
-		 updated_at=$13
+		 updated_at=$13, config_revision=config_revision+1
 		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,
 		p.ID, userID, p.Name, p.Description, string(p.Status),
 		string(p.GenerationMode), p.AspectRatio, p.TargetDuration,
@@ -244,13 +256,38 @@ func (r *ProjectRepository) UpdateForUser(ctx context.Context, userID string, p 
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("project not found")
 	}
+	p.ConfigRevision++
 	return nil
+}
+
+func (r *ProjectRepository) CompareAndSwapForUser(ctx context.Context, userID string, p *model.VideoProject, expectedRevision int64) (bool, error) {
+	p.UpdatedAt = time.Now()
+	nextRevision := expectedRevision + 1
+	tag, err := r.db.Exec(ctx,
+		`UPDATE video_projects SET name=$3, description=$4, status=$5,
+		 generation_mode=$6, aspect_ratio=$7, target_duration_sec=$8,
+		 language=$9, config=$10, current_run_id=$11, local_path_hint=$12,
+		 updated_at=$13, config_revision=$14
+		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND config_revision=$15`,
+		p.ID, userID, p.Name, p.Description, string(p.Status),
+		string(p.GenerationMode), p.AspectRatio, p.TargetDuration,
+		p.Language, p.Config, p.CurrentRunID, p.LocalPathHint,
+		p.UpdatedAt, nextRevision, expectedRevision,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to compare and swap project: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	p.ConfigRevision = nextRevision
+	return true, nil
 }
 
 // SoftDelete marks a project as deleted.
 func (r *ProjectRepository) SoftDelete(ctx context.Context, id string) error {
 	now := time.Now()
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`UPDATE video_projects SET deleted_at=$2, updated_at=$2 WHERE id=$1 AND deleted_at IS NULL`,
 		id, now,
 	)
@@ -262,7 +299,7 @@ func (r *ProjectRepository) SoftDelete(ctx context.Context, id string) error {
 
 func (r *ProjectRepository) SoftDeleteForUser(ctx context.Context, userID string, id string) error {
 	now := time.Now()
-	tag, err := r.pool.Exec(ctx,
+	tag, err := r.db.Exec(ctx,
 		`UPDATE video_projects SET deleted_at=$3, updated_at=$3 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,
 		id, userID, now,
 	)

@@ -30,7 +30,7 @@ type NodeResultSink interface {
 
 // ArtifactSyncCallback is invoked after a local job completes successfully,
 // allowing the caller to materialize artifact records from the job output.
-type ArtifactSyncCallback func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error
+type ArtifactSyncCallback func(ctx context.Context, job *LocalJob, output map[string]interface{}) error
 
 // JobFailureCallback is invoked after a local job is durably marked failed.
 // The full job context lets domain services resolve their own durable task IDs.
@@ -179,8 +179,8 @@ func (h *Handler) completeJob(c *gin.Context) {
 		}
 	}
 	// Sync artifact metadata to cloud ArtifactIndex after local job completion.
-	if h.artifactSyncCallback != nil && job != nil {
-		if err := h.artifactSyncCallback(c.Request.Context(), job.ProjectID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), req.Output); err != nil {
+	if h.artifactSyncCallback != nil && jobContext != nil {
+		if err := h.artifactSyncCallback(c.Request.Context(), jobContext, req.Output); err != nil {
 			writeError(c, http.StatusInternalServerError, err.Error())
 			return
 		}

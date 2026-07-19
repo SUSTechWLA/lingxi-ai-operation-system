@@ -502,6 +502,9 @@ func main() {
 		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, requireAuth)
 		projectHandler.RegisterRoutes(r)
 		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo, &shotRegenerationAgentDispatcher{runner: agentRunner})
+		agentRunner.WithTerminalCallback(func(ctx context.Context, event agentruntime.RunTerminalEvent) error {
+			return failShotRegenerationFromAgentTerminal(ctx, videoCreationSvc, videoProjectRepo, event)
+		})
 		videoHandler.NewCreationHandler(videoCreationSvc, requireAuth).RegisterRoutes(r)
 		videoAssistant.NewHandler(requireAuth).RegisterRoutes(r)
 
@@ -586,28 +589,28 @@ func main() {
 
 		// Wire artifact sync callback so local job completions automatically
 		// write artifact metadata to the cloud ArtifactIndex.
-		localRunnerHandler.WithArtifactSyncCallback(func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error {
-			workflowRunID, err := workflowRunRepo.FindRunIDByTaskID(ctx, taskID)
+		localRunnerHandler.WithArtifactSyncCallback(func(ctx context.Context, job *localrunner.LocalJob, output map[string]interface{}) error {
+			workflowRunID, err := workflowRunRepo.FindRunIDByTaskID(ctx, job.TaskID)
 			if err != nil || workflowRunID == "" {
 				zap.L().Warn("artifact sync: workflowRunID missing, fallback to taskID",
-					zap.String("taskID", taskID),
-					zap.String("nodeID", nodeID),
-					zap.String("projectID", projectID),
-					zap.String("toolName", toolName),
-					zap.String("command", command),
+					zap.String("taskID", job.TaskID),
+					zap.String("nodeID", job.NodeID),
+					zap.String("projectID", job.ProjectID),
+					zap.String("toolName", job.ToolName),
+					zap.String("command", string(job.Command)),
 					zap.Error(err),
 				)
-				workflowRunID = taskID
+				workflowRunID = job.TaskID
 			}
-			if err := syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, workflowRunID, taskID, nodeID, toolName, command, output); err != nil {
+			if err := syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, job.ProjectID, workflowRunID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), output); err != nil {
 				return err
 			}
-			return completeShotRegenerationFromOutput(ctx, videoCreationSvc, videoProjectRepo, projectID, output)
+			return completeShotRegenerationFromLocalJob(ctx, videoCreationSvc, videoProjectRepo, job, output)
 		}).WithJobFailureCallback(func(ctx context.Context, job *localrunner.LocalJob, reason string) error {
 			if job == nil {
 				return nil
 			}
-			return failShotRegenerationFromJob(ctx, videoCreationSvc, videoProjectRepo, job.ProjectID, job.Payload, reason)
+			return failShotRegenerationFromJob(ctx, videoCreationSvc, videoProjectRepo, job, reason)
 		})
 
 		zap.L().Info("Video project and watch workflow run services registered")
@@ -786,6 +789,7 @@ func (d *shotRegenerationAgentDispatcher) EnqueueShotRegeneration(
 		return "", fmt.Errorf("shot regeneration agent runner is not configured")
 	}
 	run, err := d.runner.StartAsync(ctx, agentruntime.StartRunRequest{
+		RunID:   task.RunID,
 		UserID:  userID,
 		Message: fmt.Sprintf("Regenerate shot %s", task.ShotID),
 		Domain:  "video_creation",
@@ -798,6 +802,7 @@ func (d *shotRegenerationAgentDispatcher) EnqueueShotRegeneration(
 			"locks":                  append([]string(nil), task.Locks...),
 			"baseVersion":            task.BaseVersion,
 			"shotRegenerationTaskId": task.TaskID,
+			"shotRegenerationRunId":  task.RunID,
 		},
 	})
 	if err != nil {
@@ -810,37 +815,36 @@ func (d *shotRegenerationAgentDispatcher) EnqueueShotRegeneration(
 }
 
 type shotRegenerationCompletionService interface {
-	CompleteShotRegeneration(ctx context.Context, userID, projectID, taskID string, candidate videoModel.ShotCandidate) error
-	FailShotRegeneration(ctx context.Context, userID, projectID, taskID, reason string) error
+	CompleteShotRegeneration(ctx context.Context, userID, projectID string, provenance videoSvc.ShotRegenerationProvenance, candidate videoModel.ShotCandidate) error
+	FailShotRegeneration(ctx context.Context, userID, projectID string, provenance videoSvc.ShotRegenerationProvenance, reason string) error
 }
 
 type shotProjectFinder interface {
 	FindByID(ctx context.Context, id string) (*videoModel.VideoProject, error)
 }
 
-func completeShotRegenerationFromOutput(
+func completeShotRegenerationFromLocalJob(
 	ctx context.Context,
 	completion shotRegenerationCompletionService,
 	projects shotProjectFinder,
-	projectID string,
+	job *localrunner.LocalJob,
 	output map[string]interface{},
 ) error {
-	metadata := shotRegenerationMetadata(output)
-	taskID := metadataString(metadata, "shotRegenerationTaskId")
-	if taskID == "" {
+	if job == nil {
 		return nil
 	}
-	shotID := metadataString(metadata, "relatedShotId")
-	if shotID == "" {
-		return fmt.Errorf("shot regeneration output metadata for task %s is missing relatedShotId", taskID)
+	provenance, ok, err := shotRegenerationProvenanceFromPayload(job.Payload)
+	if err != nil || !ok {
+		return err
 	}
-	userID, err := projectOwnerID(ctx, projects, projectID)
+	metadata := shotRegenerationMetadata(output)
+	userID, err := projectOwnerID(ctx, projects, job.ProjectID)
 	if err != nil {
 		return err
 	}
 	candidateID := metadataString(metadata, "candidateId")
 	if candidateID == "" {
-		candidateID = "shot-candidate-" + taskID
+		candidateID = "shot-candidate-" + provenance.TaskID
 	}
 	status := metadataString(metadata, "status")
 	if status == "" {
@@ -848,33 +852,81 @@ func completeShotRegenerationFromOutput(
 	}
 	candidate := videoModel.ShotCandidate{
 		CandidateID:        candidateID,
-		ShotID:             shotID,
+		ShotID:             provenance.ShotID,
 		Status:             status,
 		DurationSec:        metadataFloat(metadata, "durationSec"),
 		SourceType:         metadataString(metadata, "sourceType"),
 		ProductionEligible: metadataBool(metadata, "productionEligible"),
 		CreatedAt:          time.Now(),
 	}
-	return completion.CompleteShotRegeneration(ctx, userID, projectID, taskID, candidate)
+	return completion.CompleteShotRegeneration(ctx, userID, job.ProjectID, provenance, candidate)
 }
 
 func failShotRegenerationFromJob(
 	ctx context.Context,
 	completion shotRegenerationCompletionService,
 	projects shotProjectFinder,
-	projectID string,
-	payload map[string]interface{},
+	job *localrunner.LocalJob,
 	reason string,
 ) error {
-	taskID := metadataString(payload, "shotRegenerationTaskId")
-	if taskID == "" {
+	if job == nil {
 		return nil
+	}
+	provenance, ok, err := shotRegenerationProvenanceFromPayload(job.Payload)
+	if err != nil || !ok {
+		return err
+	}
+	userID, err := projectOwnerID(ctx, projects, job.ProjectID)
+	if err != nil {
+		return err
+	}
+	return completion.FailShotRegeneration(ctx, userID, job.ProjectID, provenance, reason)
+}
+
+func failShotRegenerationFromAgentTerminal(
+	ctx context.Context,
+	completion shotRegenerationCompletionService,
+	projects shotProjectFinder,
+	event agentruntime.RunTerminalEvent,
+) error {
+	if event.Status != agentruntime.RunStatusFailed {
+		return nil
+	}
+	provenance, ok, err := shotRegenerationProvenanceFromPayload(event.Context)
+	if err != nil || !ok {
+		return err
+	}
+	if strings.TrimSpace(event.RunID) != provenance.RunID {
+		return fmt.Errorf("shot regeneration terminal run %s does not match durable provenance %s", event.RunID, provenance.RunID)
+	}
+	projectID := metadataString(event.Context, "projectId")
+	if projectID == "" {
+		return fmt.Errorf("shot regeneration terminal event is missing projectId")
 	}
 	userID, err := projectOwnerID(ctx, projects, projectID)
 	if err != nil {
 		return err
 	}
-	return completion.FailShotRegeneration(ctx, userID, projectID, taskID, reason)
+	reason := strings.TrimSpace(event.Error)
+	if reason == "" {
+		reason = "agent run failed before local job completion"
+	}
+	return completion.FailShotRegeneration(ctx, userID, projectID, provenance, reason)
+}
+
+func shotRegenerationProvenanceFromPayload(payload map[string]interface{}) (videoSvc.ShotRegenerationProvenance, bool, error) {
+	provenance := videoSvc.ShotRegenerationProvenance{
+		TaskID: metadataString(payload, "shotRegenerationTaskId"),
+		RunID:  metadataString(payload, "shotRegenerationRunId"),
+		ShotID: metadataString(payload, "targetShotId"),
+	}
+	if provenance.TaskID == "" {
+		return provenance, false, nil
+	}
+	if provenance.RunID == "" || provenance.ShotID == "" {
+		return provenance, false, fmt.Errorf("shot regeneration payload for task %s is missing durable run or shot provenance", provenance.TaskID)
+	}
+	return provenance, true, nil
 }
 
 func projectOwnerID(ctx context.Context, projects shotProjectFinder, projectID string) (string, error) {
@@ -895,10 +947,10 @@ func shotRegenerationMetadata(output map[string]interface{}) map[string]interfac
 	if output == nil {
 		return nil
 	}
-	if metadata, ok := output["metadata"].(map[string]interface{}); ok && metadataString(metadata, "shotRegenerationTaskId") != "" {
+	if metadata, ok := output["metadata"].(map[string]interface{}); ok {
 		return metadata
 	}
-	if metadataString(output, "shotRegenerationTaskId") != "" {
+	if metadataString(output, "candidateId") != "" || metadataFloat(output, "durationSec") != 0 {
 		return output
 	}
 	if artifacts, ok := output["artifacts"].([]interface{}); ok {
@@ -907,7 +959,7 @@ func shotRegenerationMetadata(output map[string]interface{}) map[string]interfac
 			if !ok {
 				continue
 			}
-			if metadata, ok := artifact["metadata"].(map[string]interface{}); ok && metadataString(metadata, "shotRegenerationTaskId") != "" {
+			if metadata, ok := artifact["metadata"].(map[string]interface{}); ok {
 				return metadata
 			}
 		}

@@ -7,7 +7,6 @@ import (
 	"math"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -16,12 +15,12 @@ import (
 type CreationProjectStore interface {
 	FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error)
 	UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error
+	CompareAndSwapForUser(ctx context.Context, userID string, p *model.VideoProject, expectedRevision int64) (bool, error)
 }
 
 type CreationService struct {
-	store         CreationProjectStore
-	dispatcher    ShotGenerationDispatcher
-	mutationMutex sync.Mutex
+	store      CreationProjectStore
+	dispatcher ShotGenerationDispatcher
 }
 
 type GenerateSpecRequest struct {
@@ -30,11 +29,12 @@ type GenerateSpecRequest struct {
 }
 
 type RegenerateShotRequest struct {
-	BaseVersion    int      `json:"baseVersion"`
-	Scope          string   `json:"scope"`
-	Locks          []string `json:"locks,omitempty"`
-	Instruction    string   `json:"instruction,omitempty"`
-	IdempotencyKey string   `json:"-"`
+	BaseVersion        int      `json:"baseVersion"`
+	Scope              string   `json:"scope"`
+	Locks              []string `json:"locks,omitempty"`
+	Instruction        string   `json:"instruction,omitempty"`
+	IdempotencyKey     string   `json:"-"`
+	requestFingerprint string
 }
 
 type RegenerateShotResult struct {
@@ -278,6 +278,7 @@ func (s *CreationService) RegenerateShot(ctx context.Context, userID, projectID,
 		}
 	}
 	if req.IdempotencyKey == "" {
+		req.requestFingerprint = shotRegenerationFingerprint(shotID, req)
 		req.IdempotencyKey = legacyShotRegenerationKey(projectID, shotID, req)
 	}
 	if req.BaseVersion == 0 {
@@ -381,12 +382,20 @@ func (s *CreationService) load(ctx context.Context, userID, projectID string) (*
 }
 
 func (s *CreationService) save(ctx context.Context, userID string, project *model.VideoProject, state model.ShotDrivenState) error {
+	expectedRevision := project.ConfigRevision
 	raw, err := EncodeShotDrivenState(project.Config, state)
 	if err != nil {
 		return err
 	}
 	project.Config = raw
-	return s.store.UpdateForUser(ctx, userID, project)
+	swapped, err := s.store.CompareAndSwapForUser(ctx, userID, project, expectedRevision)
+	if err != nil {
+		return err
+	}
+	if !swapped {
+		return errProjectRevisionConflict
+	}
+	return nil
 }
 
 func applySpecDefaults(project *model.VideoProject, spec *model.VideoCreationSpec) *model.VideoCreationSpec {

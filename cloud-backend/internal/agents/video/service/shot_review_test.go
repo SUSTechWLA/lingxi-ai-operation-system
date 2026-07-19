@@ -61,11 +61,7 @@ func TestRegenerateShotV2IsIdempotentAndHistoryIncludesCurrentVersion(t *testing
 	if err != nil {
 		t.Fatalf("first regeneration: %v", err)
 	}
-	retryReq := req
-	retryReq.BaseVersion = 999
-	retryReq.Scope = "invalid-on-retry"
-	retryReq.Locks = []string{"invalid-on-retry"}
-	second, err := svc.RegenerateShotV2(context.Background(), "u-1", "vp-1", "shot-012", retryReq)
+	second, err := svc.RegenerateShotV2(context.Background(), "u-1", "vp-1", "shot-012", req)
 	if err != nil {
 		t.Fatalf("idempotent regeneration: %v", err)
 	}
@@ -85,7 +81,7 @@ func TestRegenerateShotV2IsIdempotentAndHistoryIncludesCurrentVersion(t *testing
 func TestRegenerateShotV2PersistsBeforeDispatchAndStoresRunID(t *testing.T) {
 	store := newFakeCreationProjectStore()
 	store.project = projectWithShotState(t, model.ShotUnit{ID: "shot-012", ProjectID: "vp-1", DurationSec: 6, Version: 1})
-	dispatcher := &recordingShotDispatcher{store: store, runID: "agent-run-1"}
+	dispatcher := &recordingShotDispatcher{store: store}
 	svc := NewCreationService(store, dispatcher)
 
 	result, err := svc.RegenerateShotV2(context.Background(), "u-1", "vp-1", "shot-012", RegenerateShotRequest{
@@ -95,13 +91,13 @@ func TestRegenerateShotV2PersistsBeforeDispatchAndStoresRunID(t *testing.T) {
 		t.Fatalf("RegenerateShotV2 error: %v", err)
 	}
 	if !dispatcher.sawDurableQueuedTask {
-		t.Fatal("dispatcher called before queued task was durable")
+		t.Fatalf("dispatcher called before queued task was durable; statuses=%v project=%s", store.persistedTaskStatuses, store.project.Config)
 	}
-	if result.Task.RunID != "agent-run-1" {
+	if result.Task.RunID == "" {
 		t.Fatalf("result task = %+v", result.Task)
 	}
 	state := decodeStateFromTest(t, store.updated.Config)
-	if state.RegenerationTasks[result.Task.TaskID].RunID != "agent-run-1" {
+	if state.RegenerationTasks[result.Task.TaskID].RunID != result.Task.RunID {
 		t.Fatalf("run id not durable: %+v", state.RegenerationTasks[result.Task.TaskID])
 	}
 }
@@ -160,7 +156,7 @@ func TestRegenerateShotV2ValidatesVersionScopeLocksAndDuration(t *testing.T) {
 func TestCompleteShotRegenerationValidatesDurableTargetAndIsIdempotent(t *testing.T) {
 	store, svc, taskID := projectWithQueuedRegeneration(t)
 	wrong := model.ShotCandidate{CandidateID: "candidate-wrong", ShotID: "shot-013", DurationSec: 6}
-	if err := svc.CompleteShotRegeneration(context.Background(), "u-1", "vp-1", taskID, wrong); err == nil {
+	if err := svc.CompleteShotRegeneration(context.Background(), "u-1", "vp-1", provenanceForTask(taskID), wrong); err == nil {
 		t.Fatal("expected mismatched candidate target to fail")
 	}
 	state := decodeStateFromTest(t, store.project.Config)
@@ -169,10 +165,10 @@ func TestCompleteShotRegenerationValidatesDurableTargetAndIsIdempotent(t *testin
 	}
 
 	candidate := model.ShotCandidate{CandidateID: "candidate-2", ShotID: "shot-012", DurationSec: 6}
-	if err := svc.CompleteShotRegeneration(context.Background(), "u-1", "vp-1", taskID, candidate); err != nil {
+	if err := svc.CompleteShotRegeneration(context.Background(), "u-1", "vp-1", provenanceForTask(taskID), candidate); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	if err := svc.CompleteShotRegeneration(context.Background(), "u-1", "vp-1", taskID, candidate); err != nil {
+	if err := svc.CompleteShotRegeneration(context.Background(), "u-1", "vp-1", provenanceForTask(taskID), candidate); err != nil {
 		t.Fatalf("idempotent complete: %v", err)
 	}
 	state = decodeStateFromTest(t, store.project.Config)
@@ -184,7 +180,7 @@ func TestCompleteShotRegenerationValidatesDurableTargetAndIsIdempotent(t *testin
 func TestFailShotRegenerationMutatesOnlyDurableTask(t *testing.T) {
 	store, svc, taskID := projectWithQueuedRegeneration(t)
 	before := decodeStateFromTest(t, store.project.Config).Shots
-	if err := svc.FailShotRegeneration(context.Background(), "u-1", "vp-1", taskID, "provider timeout"); err != nil {
+	if err := svc.FailShotRegeneration(context.Background(), "u-1", "vp-1", provenanceForTask(taskID), "provider timeout"); err != nil {
 		t.Fatalf("fail regeneration: %v", err)
 	}
 	state := decodeStateFromTest(t, store.project.Config)
@@ -231,15 +227,20 @@ type recordingShotDispatcher struct {
 	runID                string
 	err                  error
 	sawDurableQueuedTask bool
+	calls                int
 }
 
 func (d *recordingShotDispatcher) EnqueueShotRegeneration(_ context.Context, _, _ string, task model.ShotRegenerationTask) (string, error) {
+	d.calls++
 	if d.store != nil && d.store.project != nil {
 		state, err := DecodeShotDrivenState(d.store.project.Config)
 		if err == nil {
 			durable, ok := state.RegenerationTasks[task.TaskID]
-			d.sawDurableQueuedTask = ok && durable.Status == "queued"
+			d.sawDurableQueuedTask = ok && durable.Status == ShotRegenerationDispatching && d.store.hasPersistedTaskStatus(ShotRegenerationQueued)
 		}
+	}
+	if d.runID == "" {
+		d.runID = task.RunID
 	}
 	return d.runID, d.err
 }
@@ -253,9 +254,13 @@ func projectWithQueuedRegeneration(t *testing.T) (*fakeCreationProjectStore, *Cr
 	)
 	state := decodeStateFromTest(t, store.project.Config)
 	taskID := "regen-task-1"
-	state.RegenerationTasks[taskID] = model.ShotRegenerationTask{TaskID: taskID, ShotID: "shot-012", Status: "queued"}
+	state.RegenerationTasks[taskID] = model.ShotRegenerationTask{TaskID: taskID, RunID: shotRegenerationRunID(taskID), ShotID: "shot-012", Status: ShotRegenerationQueued}
 	setProjectStateForTest(t, store.project, state)
 	return store, NewCreationService(store), taskID
+}
+
+func provenanceForTask(taskID string) ShotRegenerationProvenance {
+	return ShotRegenerationProvenance{TaskID: taskID, RunID: shotRegenerationRunID(taskID), ShotID: "shot-012"}
 }
 
 func setProjectStateForTest(t *testing.T, project *model.VideoProject, state model.ShotDrivenState) {

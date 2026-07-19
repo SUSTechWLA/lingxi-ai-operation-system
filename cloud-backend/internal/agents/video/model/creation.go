@@ -295,18 +295,21 @@ type ShotRevision struct {
 }
 
 type ShotRegenerationTask struct {
-	TaskID         string    `json:"taskId"`
-	RunID          string    `json:"runId,omitempty"`
-	ShotID         string    `json:"shotId"`
-	BaseVersion    int       `json:"baseVersion"`
-	Scope          string    `json:"scope"`
-	Locks          []string  `json:"locks,omitempty"`
-	Instruction    string    `json:"instruction,omitempty"`
-	IdempotencyKey string    `json:"idempotencyKey"`
-	Status         string    `json:"status"`
-	FailureReason  string    `json:"failureReason,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	TaskID             string    `json:"taskId"`
+	RunID              string    `json:"runId,omitempty"`
+	ShotID             string    `json:"shotId"`
+	BaseVersion        int       `json:"baseVersion"`
+	Scope              string    `json:"scope"`
+	Locks              []string  `json:"locks,omitempty"`
+	Instruction        string    `json:"instruction,omitempty"`
+	IdempotencyKey     string    `json:"idempotencyKey"`
+	RequestFingerprint string    `json:"requestFingerprint"`
+	Status             string    `json:"status"`
+	FailureReason      string    `json:"failureReason,omitempty"`
+	DispatchAttempts   int       `json:"dispatchAttempts,omitempty"`
+	DispatchLeaseUntil time.Time `json:"dispatchLeaseUntil,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 type ShotContinuity struct {

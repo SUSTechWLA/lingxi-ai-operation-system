@@ -765,6 +765,7 @@ func TestScopeDAGToTask_KeepsNodeIDsWithinDatabaseLimit(t *testing.T) {
 
 type staticPlanner struct {
 	plan *AgentPlan
+	err  error
 }
 
 func findPlanStep(plan *AgentPlan, id string) AgentStep {
@@ -871,7 +872,7 @@ func (betaCompletionJudge) Evaluate(plan *AgentPlan) PlanJudgeReport {
 }
 
 func (p staticPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {
-	return p.plan, nil
+	return p.plan, p.err
 }
 
 type fakeOrchestrator struct {
@@ -915,6 +916,16 @@ func (s *memoryRunStore) SaveRun(_ context.Context, run *Run) error {
 	defer s.mu.Unlock()
 	s.runs[run.ID] = run
 	return nil
+}
+
+func (s *memoryRunStore) CreateRun(_ context.Context, run *Run) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.runs[run.ID]; exists {
+		return false, nil
+	}
+	s.runs[run.ID] = run
+	return true, nil
 }
 
 func (s *memoryRunStore) FindRun(_ context.Context, id string) (*Run, error) {

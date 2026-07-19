@@ -14,11 +14,13 @@ func TestHandlerShotRegenerationCompletionPreservesExplicitDurableMetadata(t *te
 	gin.SetMode(gin.TestMode)
 	service := &fakeRunnerService{job: &LocalJob{
 		ID: "job-1", ProjectID: "vp-1", TaskID: "agent-task-1", NodeID: "node-1",
-		Payload: map[string]interface{}{},
+		Payload: map[string]interface{}{"shotRegenerationTaskId": "regen-task-1", "targetShotId": "shot-012", "shotRegenerationRunId": "run-1"},
 	}}
 	var synced map[string]interface{}
+	var syncedJob *LocalJob
 	router := gin.New()
-	NewHandler(service, nil).WithArtifactSyncCallback(func(_ context.Context, _, _, _, _, _ string, output map[string]interface{}) error {
+	NewHandler(service, nil).WithArtifactSyncCallback(func(_ context.Context, job *LocalJob, output map[string]interface{}) error {
+		syncedJob = job
 		synced = output
 		return nil
 	}).RegisterRoutes(router)
@@ -38,6 +40,9 @@ func TestHandlerShotRegenerationCompletionPreservesExplicitDurableMetadata(t *te
 	metadata, _ := synced["metadata"].(map[string]interface{})
 	if metadata["shotRegenerationTaskId"] != "regen-task-1" || metadata["relatedShotId"] != "shot-012" {
 		t.Fatalf("durable regeneration metadata not preserved: %#v", synced)
+	}
+	if syncedJob == nil || syncedJob.Payload["shotRegenerationRunId"] != "run-1" {
+		t.Fatalf("artifact callback did not receive durable job provenance: %+v", syncedJob)
 	}
 }
 

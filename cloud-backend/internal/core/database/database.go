@@ -10,6 +10,10 @@ import (
 	"github.com/tangying-ai/aios-core/internal/core/config"
 )
 
+const videoProjectConfigRevisionMigration = `
+	ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS config_revision BIGINT NOT NULL DEFAULT 0;
+`
+
 func NewPool(ctx context.Context, cfg config.PostgresConfig) *pgxpool.Pool {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {
@@ -347,6 +351,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	`
 	if _, err := pool.Exec(ctx, artifactSchema); err != nil {
 		zap.L().Warn("Failed to run video creation migrations (non-fatal)", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, videoProjectConfigRevisionMigration); err != nil {
+		zap.L().Warn("Failed to add video project config revision (non-fatal)", zap.Error(err))
 	}
 
 	// Workflow Run tables (video creation upgrade P3)

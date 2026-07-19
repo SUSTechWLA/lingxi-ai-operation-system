@@ -28,6 +28,7 @@ const (
 var errRunCancelled = errors.New("agent run cancelled")
 
 type StartRunRequest struct {
+	RunID        string                 `json:"-"`
 	UserID       string                 `json:"userId,omitempty"`
 	Message      string                 `json:"message"`
 	Domain       string                 `json:"domain,omitempty"`
@@ -51,6 +52,16 @@ type Run struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
+type RunTerminalEvent struct {
+	RunID   string                 `json:"runId"`
+	UserID  string                 `json:"userId,omitempty"`
+	Status  RunStatus              `json:"status"`
+	Context map[string]interface{} `json:"context,omitempty"`
+	Error   string                 `json:"error,omitempty"`
+}
+
+type RunTerminalCallback func(ctx context.Context, event RunTerminalEvent) error
+
 type Planner interface {
 	GeneratePlan(ctx context.Context, req StartRunRequest) (*AgentPlan, error)
 }
@@ -69,6 +80,7 @@ type Orchestrator interface {
 }
 
 type RunStore interface {
+	CreateRun(ctx context.Context, run *Run) (bool, error)
 	SaveRun(ctx context.Context, run *Run) error
 	FindRun(ctx context.Context, id string) (*Run, error)
 }
@@ -97,6 +109,7 @@ type Runner struct {
 	guard        *PlanGuard
 	compiler     *PlanCompiler
 	planJudge    PlanJudge
+	terminal     RunTerminalCallback
 }
 
 const asyncRunStartTimeout = 10 * time.Minute
@@ -116,6 +129,11 @@ func (r *Runner) WithPlanJudge(judge PlanJudge) *Runner {
 	return r
 }
 
+func (r *Runner) WithTerminalCallback(callback RunTerminalCallback) *Runner {
+	r.terminal = callback
+	return r
+}
+
 func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	if err := r.validateStartRequest(req); err != nil {
 		return nil, err
@@ -128,8 +146,19 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 		return nil, err
 	}
 	run := newRunShell(req)
-	if err := r.store.SaveRun(ctx, run); err != nil {
+	created, err := r.store.CreateRun(ctx, run)
+	if err != nil {
 		return nil, fmt.Errorf("store agent run: %w", err)
+	}
+	if !created {
+		existing, findErr := r.store.FindRun(ctx, run.ID)
+		if findErr != nil {
+			return nil, fmt.Errorf("find existing agent run: %w", findErr)
+		}
+		if existing == nil {
+			return nil, fmt.Errorf("agent run %s already exists but cannot be loaded", run.ID)
+		}
+		return existing, nil
 	}
 	backgroundRun := *run
 	go r.completeStartInBackground(req, &backgroundRun)
@@ -156,15 +185,21 @@ func newRunShell(req StartRunRequest) *Run {
 		mode = "dynamic_agent"
 	}
 	now := time.Now()
+	runID := strings.TrimSpace(req.RunID)
+	if runID == "" {
+		runID = "agent_run_" + uuid.NewString()
+	}
 	return &Run{
-		ID:        "agent_run_" + uuid.NewString(),
+		ID:        runID,
 		UserID:    req.UserID,
 		Domain:    domain,
 		Message:   req.Message,
 		Status:    RunStatusCreated,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Metadata:  map[string]interface{}{"mode": mode, "startPhase": "planning"},
+		Metadata: map[string]interface{}{
+			"mode": mode, "startPhase": "planning", "requestContext": sanitizedRunContext(req.Context),
+		},
 	}
 }
 
@@ -192,6 +227,10 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
 				zap.Error(saveErr),
 			)
 		}
+		r.emitTerminal(context.Background(), RunTerminalEvent{
+			RunID: failed.ID, UserID: failed.UserID, Status: RunStatusFailed,
+			Context: sanitizedRunContext(req.Context), Error: err.Error(),
+		})
 		zap.L().Warn("async agent run start failed",
 			zap.String("runId", run.ID),
 			zap.Error(err),
@@ -276,7 +315,9 @@ planOK:
 	run.Status = RunStatusCreated
 	run.Budget = plan.Budget
 	run.UpdatedAt = now
-	run.Metadata = map[string]interface{}{"mode": plan.Mode, "agentToolTrace": agentToolTrace}
+	run.Metadata = map[string]interface{}{
+		"mode": plan.Mode, "agentToolTrace": agentToolTrace, "requestContext": sanitizedRunContext(req.Context),
+	}
 	if len(judgeReport.Warnings) > 0 {
 		run.Metadata["planJudgeWarnings"] = judgeReport.Warnings
 		run.Metadata["planJudgePassed"] = judgeReport.Passed
@@ -369,6 +410,7 @@ func applyShotRegenerationPlanScope(plan *AgentPlan, ctx map[string]interface{})
 	}
 	targetShotID := strings.TrimSpace(fmt.Sprint(ctx["targetShotId"]))
 	regenerationTaskID := strings.TrimSpace(fmt.Sprint(ctx["shotRegenerationTaskId"]))
+	regenerationRunID := strings.TrimSpace(fmt.Sprint(ctx["shotRegenerationRunId"]))
 	for i := range plan.Steps {
 		if plan.Steps[i].Arguments == nil {
 			plan.Steps[i].Arguments = map[string]interface{}{}
@@ -378,6 +420,9 @@ func applyShotRegenerationPlanScope(plan *AgentPlan, ctx map[string]interface{})
 		plan.Steps[i].Arguments["allowedShotIds"] = []string{targetShotID}
 		if regenerationTaskID != "" && regenerationTaskID != "<nil>" {
 			plan.Steps[i].Arguments["shotRegenerationTaskId"] = regenerationTaskID
+		}
+		if regenerationRunID != "" && regenerationRunID != "<nil>" {
+			plan.Steps[i].Arguments["shotRegenerationRunId"] = regenerationRunID
 		}
 	}
 }
@@ -672,6 +717,7 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
 			return run, task, saveErr
 		}
+		r.emitTerminal(ctx, terminalEventFromRun(run, ""))
 	}
 	if taskStatus == string(model.TaskFailed) && run.Status != RunStatusFailed && run.Status != RunStatusCancelled {
 		run.Status = RunStatusFailed
@@ -679,6 +725,7 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
 			return run, task, saveErr
 		}
+		r.emitTerminal(ctx, terminalEventFromRun(run, taskErrorString(task)))
 	}
 	return run, task, nil
 }
@@ -710,7 +757,38 @@ func (r *Runner) Cancel(ctx context.Context, id string) (*Run, error) {
 	if err := r.store.SaveRun(ctx, run); err != nil {
 		return nil, err
 	}
+	r.emitTerminal(ctx, terminalEventFromRun(run, ""))
 	return run, nil
+}
+
+func (r *Runner) emitTerminal(ctx context.Context, event RunTerminalEvent) {
+	if r == nil || r.terminal == nil {
+		return
+	}
+	if err := r.terminal(ctx, event); err != nil {
+		zap.L().Warn("agent terminal callback failed", zap.String("runId", event.RunID), zap.Error(err))
+	}
+}
+
+func terminalEventFromRun(run *Run, errorMessage string) RunTerminalEvent {
+	event := RunTerminalEvent{Error: errorMessage}
+	if run == nil {
+		return event
+	}
+	event.RunID, event.UserID, event.Status = run.ID, run.UserID, run.Status
+	if run.Metadata != nil {
+		event.Context, _ = run.Metadata["requestContext"].(map[string]interface{})
+	}
+	return event
+}
+
+func taskErrorString(task map[string]interface{}) string {
+	for _, key := range []string{"error", "errorMessage", "message"} {
+		if value := strings.TrimSpace(fmt.Sprint(task[key])); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return "agent task failed"
 }
 
 func scopeDAGToTask(taskID string, dag *model.DAGRequest) *model.DAGRequest {

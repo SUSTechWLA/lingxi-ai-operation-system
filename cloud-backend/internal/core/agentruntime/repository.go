@@ -17,14 +17,20 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+func (r *Repository) CreateRun(ctx context.Context, run *Run) (bool, error) {
+	planJSON, budgetJSON, metadataJSON := marshalRunFields(run)
+	result, err := r.pool.Exec(ctx,
+		`INSERT INTO agent_runs (id, task_id, user_id, domain, message, plan_json, status, budget_json, metadata_json, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 ON CONFLICT (id) DO NOTHING`,
+		run.ID, run.TaskID, run.UserID, run.Domain, run.Message, planJSON,
+		string(run.Status), budgetJSON, metadataJSON, run.CreatedAt, run.UpdatedAt,
+	)
+	return err == nil && result.RowsAffected() == 1, err
+}
+
 func (r *Repository) SaveRun(ctx context.Context, run *Run) error {
-	planJSON, _ := json.Marshal(run.Plan)
-	budgetJSON, _ := json.Marshal(run.Budget)
-	metadataJSON, _ := json.Marshal(run.Metadata)
-	if run.CreatedAt.IsZero() {
-		run.CreatedAt = time.Now()
-	}
-	run.UpdatedAt = time.Now()
+	planJSON, budgetJSON, metadataJSON := marshalRunFields(run)
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO agent_runs (id, task_id, user_id, domain, message, plan_json, status, budget_json, metadata_json, created_at, updated_at)
@@ -36,6 +42,17 @@ func (r *Repository) SaveRun(ctx context.Context, run *Run) error {
 		string(run.Status), budgetJSON, metadataJSON, run.CreatedAt, run.UpdatedAt,
 	)
 	return err
+}
+
+func marshalRunFields(run *Run) ([]byte, []byte, []byte) {
+	planJSON, _ := json.Marshal(run.Plan)
+	budgetJSON, _ := json.Marshal(run.Budget)
+	metadataJSON, _ := json.Marshal(run.Metadata)
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now()
+	}
+	run.UpdatedAt = time.Now()
+	return planJSON, budgetJSON, metadataJSON
 }
 
 func (r *Repository) FindRun(ctx context.Context, id string) (*Run, error) {
