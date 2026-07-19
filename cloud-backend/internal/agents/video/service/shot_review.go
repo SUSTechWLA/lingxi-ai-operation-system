@@ -63,8 +63,8 @@ func (s *CreationService) RegenerateShotV2(
 	userID, projectID, shotID string,
 	req RegenerateShotRequest,
 ) (RegenerateShotResult, error) {
-	if err := validateRegenerateShotRequest(req); err != nil {
-		return RegenerateShotResult{}, err
+	if strings.TrimSpace(req.IdempotencyKey) == "" {
+		return RegenerateShotResult{}, fmt.Errorf("idempotency key is required")
 	}
 	fingerprint := shotRegenerationFingerprint(shotID, req)
 	idempotencyScope := shotRegenerationIdempotencyScope(shotID, req.IdempotencyKey)
@@ -85,10 +85,23 @@ func (s *CreationService) RegenerateShotV2(
 			if err != nil {
 				return RegenerateShotResult{}, err
 			}
-			if result.Task.ShotID != shotID || durableTaskFingerprint(result.Task) != fingerprint {
+			if result.Task.ShotID != shotID || !durableTaskFingerprintMatches(result.Task, fingerprint) {
 				return RegenerateShotResult{}, fmt.Errorf("%w: key %q was used with different regeneration input", ErrShotIdempotencyConflict, req.IdempotencyKey)
 			}
+			if result.Task.RequestFingerprint == "" || state.IdempotencyTasks[idempotencyScope] == "" {
+				result.Task.RequestFingerprint = fingerprint
+				state.RegenerationTasks[taskID] = result.Task
+				state.IdempotencyTasks[idempotencyScope] = taskID
+				if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
+					continue
+				} else if err != nil {
+					return RegenerateShotResult{}, err
+				}
+			}
 			return s.dispatchDurableTask(ctx, userID, projectID, result)
+		}
+		if err := validateRegenerateShotRequest(req); err != nil {
+			return RegenerateShotResult{}, err
 		}
 		shot, index, ok := findShot(state.Shots, shotID)
 		if !ok {
@@ -439,6 +452,18 @@ func durableTaskFingerprint(task model.ShotRegenerationTask) string {
 		BaseVersion: task.BaseVersion, Scope: task.Scope, Locks: task.Locks,
 		Instruction: task.Instruction, IdempotencyKey: task.IdempotencyKey,
 	})
+}
+
+func durableTaskFingerprintMatches(task model.ShotRegenerationTask, fingerprint string) bool {
+	if durableTaskFingerprint(task) == fingerprint {
+		return true
+	}
+	if task.RequestFingerprint != "" {
+		return false
+	}
+	legacyZeroBase := task
+	legacyZeroBase.BaseVersion = 0
+	return durableTaskFingerprint(legacyZeroBase) == fingerprint
 }
 
 func shotRegenerationRunID(taskID string) string {

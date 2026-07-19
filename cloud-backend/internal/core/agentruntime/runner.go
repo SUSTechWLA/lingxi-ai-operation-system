@@ -82,7 +82,16 @@ type Orchestrator interface {
 type RunStore interface {
 	CreateRun(ctx context.Context, run *Run) (bool, error)
 	SaveRun(ctx context.Context, run *Run) error
+	SaveRunTerminal(ctx context.Context, run *Run, event RunTerminalEvent) error
 	FindRun(ctx context.Context, id string) (*Run, error)
+	ClaimTerminalEvents(ctx context.Context, limit int, leaseUntil time.Time) ([]TerminalEventDelivery, error)
+	AckTerminalEvent(ctx context.Context, runID string) error
+	ReleaseTerminalEvent(ctx context.Context, runID string) error
+}
+
+type TerminalEventDelivery struct {
+	RunID string
+	Event RunTerminalEvent
 }
 
 type PlanJudge interface {
@@ -158,6 +167,9 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 		if existing == nil {
 			return nil, fmt.Errorf("agent run %s already exists but cannot be loaded", run.ID)
 		}
+		if deliverErr := r.DeliverPendingTerminalEventsOnce(ctx, 1); deliverErr != nil {
+			zap.L().Warn("existing agent run terminal reconciliation failed", zap.String("runId", run.ID), zap.Error(deliverErr))
+		}
 		return existing, nil
 	}
 	backgroundRun := *run
@@ -221,16 +233,16 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
 		}
 		failed.Metadata["startPhase"] = "failed"
 		failed.Metadata["error"] = err.Error()
-		if saveErr := r.store.SaveRun(context.Background(), &failed); saveErr != nil {
-			zap.L().Warn("failed to persist async agent run failure",
+		event := RunTerminalEvent{
+			RunID: failed.ID, UserID: failed.UserID, Status: RunStatusFailed,
+			Context: sanitizedRunContext(req.Context), Error: err.Error(),
+		}
+		if saveErr := r.persistAndDeliverTerminal(context.Background(), &failed, event); saveErr != nil {
+			zap.L().Warn("failed to persist or deliver async agent run failure",
 				zap.String("runId", run.ID),
 				zap.Error(saveErr),
 			)
 		}
-		r.emitTerminal(context.Background(), RunTerminalEvent{
-			RunID: failed.ID, UserID: failed.UserID, Status: RunStatusFailed,
-			Context: sanitizedRunContext(req.Context), Error: err.Error(),
-		})
 		zap.L().Warn("async agent run start failed",
 			zap.String("runId", run.ID),
 			zap.Error(err),
@@ -714,18 +726,16 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 	if taskStatus == string(model.TaskSuccess) && run.Status != RunStatusSuccess && run.Status != RunStatusCancelled {
 		run.Status = RunStatusSuccess
 		run.UpdatedAt = time.Now()
-		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
+		if saveErr := r.persistAndDeliverTerminal(ctx, run, terminalEventFromRun(run, "")); saveErr != nil {
 			return run, task, saveErr
 		}
-		r.emitTerminal(ctx, terminalEventFromRun(run, ""))
 	}
 	if taskStatus == string(model.TaskFailed) && run.Status != RunStatusFailed && run.Status != RunStatusCancelled {
 		run.Status = RunStatusFailed
 		run.UpdatedAt = time.Now()
-		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
+		if saveErr := r.persistAndDeliverTerminal(ctx, run, terminalEventFromRun(run, taskErrorString(task))); saveErr != nil {
 			return run, task, saveErr
 		}
-		r.emitTerminal(ctx, terminalEventFromRun(run, taskErrorString(task)))
 	}
 	return run, task, nil
 }
@@ -754,19 +764,60 @@ func (r *Runner) Cancel(ctx context.Context, id string) (*Run, error) {
 		run.Metadata = map[string]interface{}{}
 	}
 	run.Metadata["cancelledBy"] = "user"
-	if err := r.store.SaveRun(ctx, run); err != nil {
+	if err := r.persistAndDeliverTerminal(ctx, run, terminalEventFromRun(run, "agent run cancelled by user")); err != nil {
 		return nil, err
 	}
-	r.emitTerminal(ctx, terminalEventFromRun(run, ""))
 	return run, nil
 }
 
-func (r *Runner) emitTerminal(ctx context.Context, event RunTerminalEvent) {
-	if r == nil || r.terminal == nil {
+func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event RunTerminalEvent) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("agent runner is not configured")
+	}
+	if err := r.store.SaveRunTerminal(ctx, run, event); err != nil {
+		return fmt.Errorf("persist agent terminal event: %w", err)
+	}
+	return r.DeliverPendingTerminalEventsOnce(ctx, 1)
+}
+
+func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int) error {
+	if r == nil || r.store == nil || r.terminal == nil || limit <= 0 {
+		return nil
+	}
+	deliveries, err := r.store.ClaimTerminalEvents(ctx, limit, time.Now().Add(30*time.Second))
+	if err != nil {
+		return fmt.Errorf("claim agent terminal events: %w", err)
+	}
+	var deliveryErrors []error
+	for _, delivery := range deliveries {
+		if callbackErr := r.terminal(ctx, delivery.Event); callbackErr != nil {
+			_ = r.store.ReleaseTerminalEvent(ctx, delivery.RunID)
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("deliver terminal event for %s: %w", delivery.RunID, callbackErr))
+			continue
+		}
+		if ackErr := r.store.AckTerminalEvent(ctx, delivery.RunID); ackErr != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("ack terminal event for %s: %w", delivery.RunID, ackErr))
+		}
+	}
+	return errors.Join(deliveryErrors...)
+}
+
+func (r *Runner) RunTerminalDelivery(ctx context.Context, interval time.Duration, batchSize int) {
+	if interval <= 0 || batchSize <= 0 {
 		return
 	}
-	if err := r.terminal(ctx, event); err != nil {
-		zap.L().Warn("agent terminal callback failed", zap.String("runId", event.RunID), zap.Error(err))
+	_ = r.DeliverPendingTerminalEventsOnce(ctx, batchSize)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.DeliverPendingTerminalEventsOnce(ctx, batchSize); err != nil {
+				zap.L().Warn("agent terminal event retry failed", zap.Error(err))
+			}
+		}
 	}
 }
 

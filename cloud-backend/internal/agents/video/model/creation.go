@@ -781,3 +781,9 @@ type ShotDrivenState struct {
 	AssemblyDirty     bool                            `json:"assemblyDirty"`
 	UpdatedAt         time.Time                       `json:"updatedAt"`
 }
+
+type PendingShotRegeneration struct {
+	UserID    string
+	ProjectID string
+	TaskID    string
+}

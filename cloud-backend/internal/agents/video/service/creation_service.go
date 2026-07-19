@@ -14,7 +14,6 @@ import (
 
 type CreationProjectStore interface {
 	FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error)
-	UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error
 	CompareAndSwapForUser(ctx context.Context, userID string, p *model.VideoProject, expectedRevision int64) (bool, error)
 }
 

@@ -30,6 +30,17 @@ func TestShotRegenerationDispatcherStartsTargetOnlyAgentRun(t *testing.T) {
 	}
 }
 
+func TestShotRegenerationDispatcherRejectsExistingTerminalRun(t *testing.T) {
+	runner := &fakeAsyncAgentRunner{run: &agentruntime.Run{ID: "agent_run_shot_stable", Status: agentruntime.RunStatusFailed}}
+	dispatcher := &shotRegenerationAgentDispatcher{runner: runner}
+	_, err := dispatcher.EnqueueShotRegeneration(context.Background(), "u-1", "vp-1", videomodel.ShotRegenerationTask{
+		TaskID: "regen-task-1", RunID: "agent_run_shot_stable", ShotID: "shot-012",
+	})
+	if err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestCompleteShotRegenerationFromLocalJobUsesDurableProvenance(t *testing.T) {
 	projects := &fakeShotProjectFinder{project: &videomodel.VideoProject{ID: "vp-1", UserID: "u-1"}}
 	completion := &fakeShotCompletionService{}
@@ -99,6 +110,24 @@ func TestFailShotRegenerationFromAgentTerminalUsesRequestContext(t *testing.T) {
 		t.Fatalf("fail from terminal event: %v", err)
 	}
 	if completion.provenance.TaskID != "regen-task-1" || completion.provenance.RunID != event.RunID || completion.reason == "" {
+		t.Fatalf("completion=%+v", completion)
+	}
+}
+
+func TestCancelledAgentTerminalFailsScopedShotTask(t *testing.T) {
+	projects := &fakeShotProjectFinder{project: &videomodel.VideoProject{ID: "vp-1", UserID: "u-1"}}
+	completion := &fakeShotCompletionService{}
+	event := agentruntime.RunTerminalEvent{
+		RunID: "agent_run_shot_stable", Status: agentruntime.RunStatusCancelled,
+		Context: map[string]interface{}{
+			"projectId": "vp-1", "shotRegenerationTaskId": "regen-task-1",
+			"shotRegenerationRunId": "agent_run_shot_stable", "targetShotId": "shot-012",
+		},
+	}
+	if err := failShotRegenerationFromAgentTerminal(context.Background(), completion, projects, event); err != nil {
+		t.Fatalf("cancel terminal event: %v", err)
+	}
+	if completion.provenance.TaskID != "regen-task-1" || !strings.Contains(completion.reason, "cancel") {
 		t.Fatalf("completion=%+v", completion)
 	}
 }

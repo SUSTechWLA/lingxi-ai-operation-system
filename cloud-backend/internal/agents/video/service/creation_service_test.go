@@ -246,6 +246,15 @@ type fakeCreationProjectStore struct {
 	casCalls              int
 	onCASConflict         func(*model.VideoProject)
 	persistedTaskStatuses []string
+	pendingRegenerations  []PendingShotRegeneration
+	pendingLimit          int
+}
+
+func (f *fakeCreationProjectStore) FindPendingShotRegenerations(_ context.Context, limit int) ([]PendingShotRegeneration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pendingLimit = limit
+	return append([]PendingShotRegeneration(nil), f.pendingRegenerations...), nil
 }
 
 func newFakeCreationProjectStore() *fakeCreationProjectStore {

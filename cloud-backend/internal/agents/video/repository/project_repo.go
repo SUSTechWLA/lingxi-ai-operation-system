@@ -24,8 +24,43 @@ type projectDB interface {
 	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
 }
 
+const pendingShotRegenerationQuery = `
+	SELECT projects.user_id, projects.id, tasks.key
+	FROM video_projects AS projects
+	CROSS JOIN LATERAL jsonb_each(COALESCE(projects.config->'shotDrivenState'->'regenerationTasks', '{}'::jsonb)) AS tasks(key, value)
+	WHERE projects.deleted_at IS NULL
+	  AND (
+		tasks.value->>'status' = 'queued'
+		OR (
+			tasks.value->>'status' = 'dispatching'
+			AND COALESCE(NULLIF(tasks.value->>'dispatchLeaseUntil', '')::timestamptz, '-infinity'::timestamptz) <= NOW()
+		)
+	  )
+	ORDER BY projects.updated_at ASC, tasks.key ASC
+	LIMIT $1`
+
 func NewProjectRepository(pool *pgxpool.Pool) *ProjectRepository {
 	return &ProjectRepository{db: pool}
+}
+
+func (r *ProjectRepository) FindPendingShotRegenerations(ctx context.Context, limit int) ([]model.PendingShotRegeneration, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.db.Query(ctx, pendingShotRegenerationQuery, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find pending shot regenerations: %w", err)
+	}
+	defer rows.Close()
+	pending := make([]model.PendingShotRegeneration, 0, limit)
+	for rows.Next() {
+		var item model.PendingShotRegeneration
+		if err := rows.Scan(&item.UserID, &item.ProjectID, &item.TaskID); err != nil {
+			return nil, err
+		}
+		pending = append(pending, item)
+	}
+	return pending, rows.Err()
 }
 
 // Create inserts a new video project.
@@ -215,60 +250,27 @@ func (r *ProjectRepository) FindAllForUser(ctx context.Context, userID string, m
 
 // Update modifies an existing project.
 func (r *ProjectRepository) Update(ctx context.Context, p *model.VideoProject) error {
-	p.UpdatedAt = time.Now()
-	tag, err := r.db.Exec(ctx,
-		`UPDATE video_projects SET name=$2, description=$3, status=$4,
-		 generation_mode=$5, aspect_ratio=$6, target_duration_sec=$7,
-		 language=$8, config=$9, current_run_id=$10, local_path_hint=$11,
-		 updated_at=$12, config_revision=config_revision+1
-		 WHERE id=$1 AND deleted_at IS NULL`,
-		p.ID, p.Name, p.Description, string(p.Status),
-		string(p.GenerationMode), p.AspectRatio, p.TargetDuration,
-		p.Language, p.Config, p.CurrentRunID, p.LocalPathHint,
-		p.UpdatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update project: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("project not found")
-	}
-	p.ConfigRevision++
-	return nil
+	return fmt.Errorf("unconditional project update is disabled; use compare-and-swap with an expected config revision")
 }
 
 func (r *ProjectRepository) UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error {
-	p.UpdatedAt = time.Now()
-	tag, err := r.db.Exec(ctx,
-		`UPDATE video_projects SET name=$3, description=$4, status=$5,
-		 generation_mode=$6, aspect_ratio=$7, target_duration_sec=$8,
-		 language=$9, config=$10, current_run_id=$11, local_path_hint=$12,
-		 updated_at=$13, config_revision=config_revision+1
-		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,
-		p.ID, userID, p.Name, p.Description, string(p.Status),
-		string(p.GenerationMode), p.AspectRatio, p.TargetDuration,
-		p.Language, p.Config, p.CurrentRunID, p.LocalPathHint,
-		p.UpdatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update project: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("project not found")
-	}
-	p.ConfigRevision++
-	return nil
+	return fmt.Errorf("unconditional project update is disabled; use compare-and-swap with an expected config revision")
 }
 
 func (r *ProjectRepository) CompareAndSwapForUser(ctx context.Context, userID string, p *model.VideoProject, expectedRevision int64) (bool, error) {
 	p.UpdatedAt = time.Now()
 	nextRevision := expectedRevision + 1
 	tag, err := r.db.Exec(ctx,
-		`UPDATE video_projects SET name=$3, description=$4, status=$5,
+		`WITH revision_guard AS (
+		 SELECT set_config('app.video_project_expected_revision', $15::text, true) AS expected_revision
+		)
+		UPDATE video_projects SET name=$3, description=$4, status=$5,
 		 generation_mode=$6, aspect_ratio=$7, target_duration_sec=$8,
 		 language=$9, config=$10, current_run_id=$11, local_path_hint=$12,
 		 updated_at=$13, config_revision=$14
-		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND config_revision=$15`,
+		 FROM revision_guard
+		 WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL AND config_revision=$15
+		 AND revision_guard.expected_revision=$15::text`,
 		p.ID, userID, p.Name, p.Description, string(p.Status),
 		string(p.GenerationMode), p.AspectRatio, p.TargetDuration,
 		p.Language, p.Config, p.CurrentRunID, p.LocalPathHint,

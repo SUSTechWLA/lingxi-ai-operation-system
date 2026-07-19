@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,6 +75,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var backgroundWorkers sync.WaitGroup
 
 	// Infrastructure
 	pool := database.NewPool(ctx, cfg.Postgres)
@@ -505,6 +507,16 @@ func main() {
 		agentRunner.WithTerminalCallback(func(ctx context.Context, event agentruntime.RunTerminalEvent) error {
 			return failShotRegenerationFromAgentTerminal(ctx, videoCreationSvc, videoProjectRepo, event)
 		})
+		shotRegenerationReconciler := videoSvc.NewShotRegenerationReconciler(videoProjectRepo, videoCreationSvc, 5*time.Second, 50)
+		backgroundWorkers.Add(2)
+		go func() {
+			defer backgroundWorkers.Done()
+			shotRegenerationReconciler.Run(ctx)
+		}()
+		go func() {
+			defer backgroundWorkers.Done()
+			agentRunner.RunTerminalDelivery(ctx, 5*time.Second, 50)
+		}()
 		videoHandler.NewCreationHandler(videoCreationSvc, requireAuth).RegisterRoutes(r)
 		videoAssistant.NewHandler(requireAuth).RegisterRoutes(r)
 
@@ -638,6 +650,8 @@ func main() {
 	<-quit
 
 	zap.L().Info("Shutting down server...")
+	cancel()
+	backgroundWorkers.Wait()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -811,6 +825,9 @@ func (d *shotRegenerationAgentDispatcher) EnqueueShotRegeneration(
 	if run == nil || strings.TrimSpace(run.ID) == "" {
 		return "", fmt.Errorf("shot regeneration agent runner returned no run id")
 	}
+	if run.Status == agentruntime.RunStatusFailed || run.Status == agentruntime.RunStatusCancelled {
+		return "", fmt.Errorf("shot regeneration agent run %s is terminal with status %s", run.ID, run.Status)
+	}
 	return run.ID, nil
 }
 
@@ -889,7 +906,7 @@ func failShotRegenerationFromAgentTerminal(
 	projects shotProjectFinder,
 	event agentruntime.RunTerminalEvent,
 ) error {
-	if event.Status != agentruntime.RunStatusFailed {
+	if event.Status != agentruntime.RunStatusFailed && event.Status != agentruntime.RunStatusCancelled {
 		return nil
 	}
 	provenance, ok, err := shotRegenerationProvenanceFromPayload(event.Context)
@@ -909,7 +926,11 @@ func failShotRegenerationFromAgentTerminal(
 	}
 	reason := strings.TrimSpace(event.Error)
 	if reason == "" {
-		reason = "agent run failed before local job completion"
+		if event.Status == agentruntime.RunStatusCancelled {
+			reason = "agent run cancelled before local job completion"
+		} else {
+			reason = "agent run failed before local job completion"
+		}
 	}
 	return completion.FailShotRegeneration(ctx, userID, projectID, provenance, reason)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
@@ -12,7 +13,46 @@ import (
 
 const videoProjectConfigRevisionMigration = `
 	ALTER TABLE video_projects ADD COLUMN IF NOT EXISTS config_revision BIGINT NOT NULL DEFAULT 0;
+	CREATE OR REPLACE FUNCTION enforce_video_project_config_revision_guard() RETURNS trigger AS $$
+	DECLARE expected_revision TEXT;
+	BEGIN
+		IF NEW.config IS DISTINCT FROM OLD.config THEN
+			expected_revision := current_setting('app.video_project_expected_revision', true);
+			IF expected_revision IS NULL OR expected_revision = '' OR expected_revision::BIGINT <> OLD.config_revision THEN
+				RAISE EXCEPTION 'video project config update requires expected revision %', OLD.config_revision;
+			END IF;
+			IF NEW.config_revision <> OLD.config_revision + 1 THEN
+				RAISE EXCEPTION 'video project config revision must advance exactly once';
+			END IF;
+		END IF;
+		RETURN NEW;
+	END;
+	$$ LANGUAGE plpgsql;
+	DROP TRIGGER IF EXISTS video_project_config_revision_guard ON video_projects;
+	CREATE TRIGGER video_project_config_revision_guard
+		BEFORE UPDATE OF config ON video_projects
+		FOR EACH ROW EXECUTE FUNCTION enforce_video_project_config_revision_guard();
 `
+
+const agentTerminalOutboxMigration = `
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_json JSONB;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_delivered_at TIMESTAMPTZ;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_attempts INT NOT NULL DEFAULT 0;
+	ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS terminal_event_lease_until TIMESTAMPTZ;
+	CREATE INDEX IF NOT EXISTS idx_agent_runs_terminal_pending
+		ON agent_runs(updated_at) WHERE terminal_event_json IS NOT NULL AND terminal_event_delivered_at IS NULL;
+`
+
+type migrationExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
+}
+
+func ensureVideoProjectConfigRevision(ctx context.Context, execer migrationExecer) error {
+	if _, err := execer.Exec(ctx, videoProjectConfigRevisionMigration); err != nil {
+		return fmt.Errorf("required video project config revision schema: %w", err)
+	}
+	return nil
+}
 
 func NewPool(ctx context.Context, cfg config.PostgresConfig) *pgxpool.Pool {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN())
@@ -352,8 +392,11 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) {
 	if _, err := pool.Exec(ctx, artifactSchema); err != nil {
 		zap.L().Warn("Failed to run video creation migrations (non-fatal)", zap.Error(err))
 	}
-	if _, err := pool.Exec(ctx, videoProjectConfigRevisionMigration); err != nil {
-		zap.L().Warn("Failed to add video project config revision (non-fatal)", zap.Error(err))
+	if err := ensureVideoProjectConfigRevision(ctx, pool); err != nil {
+		zap.L().Fatal("Failed to install required video project config revision schema", zap.Error(err))
+	}
+	if _, err := pool.Exec(ctx, agentTerminalOutboxMigration); err != nil {
+		zap.L().Fatal("Failed to install required agent terminal outbox schema", zap.Error(err))
 	}
 
 	// Workflow Run tables (video creation upgrade P3)

@@ -20,7 +20,7 @@ type ProjectStore interface {
 	Create(ctx context.Context, p *model.VideoProject) error
 	FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error)
 	FindAllForUser(ctx context.Context, userID string, modeFilter string, statusFilter string, offset, limit int) ([]*model.VideoProject, int, error)
-	UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error
+	CompareAndSwapForUser(ctx context.Context, userID string, p *model.VideoProject, expectedRevision int64) (bool, error)
 	SoftDeleteForUser(ctx context.Context, userID string, id string) error
 }
 
@@ -184,7 +184,7 @@ func (s *ProjectService) MarkAgentRunStarted(ctx context.Context, userID, projec
 	}
 	project.Status = model.StatusRunning
 	project.CurrentRunID = runID
-	return s.repo.UpdateForUser(ctx, userID, project)
+	return s.saveExpectedRevision(ctx, userID, project)
 }
 
 // MarkAgentRunStopped marks a linked project as paused after a user stops the
@@ -202,7 +202,7 @@ func (s *ProjectService) MarkAgentRunStopped(ctx context.Context, userID, projec
 	}
 	project.Status = model.StatusPaused
 	project.CurrentRunID = runID
-	return s.repo.UpdateForUser(ctx, userID, project)
+	return s.saveExpectedRevision(ctx, userID, project)
 }
 
 // UpdateProject updates a project. Mode and version fields cannot be changed.
@@ -243,12 +243,24 @@ func (s *ProjectService) UpdateProject(ctx context.Context, userID string, id st
 		project.LocalPathHint = req.LocalPathHint
 	}
 
-	if err := s.repo.UpdateForUser(ctx, userID, project); err != nil {
+	if err := s.saveExpectedRevision(ctx, userID, project); err != nil {
 		return nil, err
 	}
 
 	zap.L().Info("Video project updated", zap.String("id", project.ID))
 	return project, nil
+}
+
+func (s *ProjectService) saveExpectedRevision(ctx context.Context, userID string, project *model.VideoProject) error {
+	expectedRevision := project.ConfigRevision
+	swapped, err := s.repo.CompareAndSwapForUser(ctx, userID, project, expectedRevision)
+	if err != nil {
+		return err
+	}
+	if !swapped {
+		return fmt.Errorf("%w: project %s changed concurrently", errProjectRevisionConflict, project.ID)
+	}
+	return nil
 }
 
 // ArchiveProject soft-deletes a project.

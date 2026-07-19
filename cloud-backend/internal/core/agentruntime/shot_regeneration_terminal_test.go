@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -11,6 +12,67 @@ func TestRunnerStartAsyncUsesCallerSuppliedRunID(t *testing.T) {
 	req := StartRunRequest{RunID: "agent_run_shot_stable", UserID: "u-1", Message: "regenerate"}
 	if shell := newRunShell(req); shell.ID != req.RunID {
 		t.Fatalf("run id=%q, want %q", shell.ID, req.RunID)
+	}
+}
+
+func TestRunnerTerminalEventRetriesUntilAcknowledged(t *testing.T) {
+	store := newMemoryRunStore()
+	var attempts atomic.Int32
+	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{}, NewPlanGuard(nil, nil), NewPlanCompiler(nil)).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			if attempts.Add(1) == 1 {
+				return errors.New("temporary callback failure")
+			}
+			return nil
+		})
+	run := &Run{ID: "agent_run_shot_stable", UserID: "u-1", Status: RunStatusFailed}
+	event := RunTerminalEvent{RunID: run.ID, UserID: run.UserID, Status: run.Status, Context: map[string]interface{}{"projectId": "vp-1"}}
+	if err := runner.persistAndDeliverTerminal(context.Background(), run, event); err == nil {
+		t.Fatal("first callback failure was not reported")
+	}
+	if !store.hasPendingTerminal(run.ID) || store.terminalDelivered(run.ID) {
+		t.Fatal("failed callback was not left durable and pending")
+	}
+	if err := runner.DeliverPendingTerminalEventsOnce(context.Background(), 10); err != nil {
+		t.Fatalf("retry terminal delivery: %v", err)
+	}
+	if attempts.Load() != 2 || !store.terminalDelivered(run.ID) {
+		t.Fatalf("attempts=%d delivered=%v", attempts.Load(), store.terminalDelivered(run.ID))
+	}
+}
+
+func TestRunnerNeverEmitsTerminalWhenTerminalSaveFails(t *testing.T) {
+	store := newMemoryRunStore()
+	store.saveTerminalErr = errors.New("database unavailable")
+	var callbacks atomic.Int32
+	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{}, NewPlanGuard(nil, nil), NewPlanCompiler(nil)).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbacks.Add(1)
+			return nil
+		})
+	run := &Run{ID: "agent_run_shot_stable", Status: RunStatusFailed}
+	err := runner.persistAndDeliverTerminal(context.Background(), run, RunTerminalEvent{RunID: run.ID, Status: run.Status})
+	if err == nil || callbacks.Load() != 0 || store.hasPendingTerminal(run.ID) {
+		t.Fatalf("error=%v callbacks=%d pending=%v", err, callbacks.Load(), store.hasPendingTerminal(run.ID))
+	}
+}
+
+func TestRunnerExistingFailedRunRedeliversPendingTerminalEvent(t *testing.T) {
+	store := newMemoryRunStore()
+	existing := &Run{ID: "agent_run_shot_stable", UserID: "u-1", Message: "regenerate", Status: RunStatusFailed}
+	event := RunTerminalEvent{RunID: existing.ID, UserID: existing.UserID, Status: existing.Status}
+	if err := store.SaveRunTerminal(context.Background(), existing, event); err != nil {
+		t.Fatalf("seed terminal run: %v", err)
+	}
+	var callbacks atomic.Int32
+	runner := NewRunner(&fakeOrchestrator{}, store, staticPlanner{}, NewPlanGuard(nil, nil), NewPlanCompiler(nil)).
+		WithTerminalCallback(func(context.Context, RunTerminalEvent) error {
+			callbacks.Add(1)
+			return nil
+		})
+	run, err := runner.StartAsync(context.Background(), StartRunRequest{RunID: existing.ID, UserID: "u-1", Message: "regenerate"})
+	if err != nil || run.Status != RunStatusFailed || callbacks.Load() != 1 || !store.terminalDelivered(existing.ID) {
+		t.Fatalf("run=%+v error=%v callbacks=%d delivered=%v", run, err, callbacks.Load(), store.terminalDelivered(existing.ID))
 	}
 }
 

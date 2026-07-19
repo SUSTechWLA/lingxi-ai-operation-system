@@ -20,11 +20,32 @@ func TestProjectRepositoryCompareAndSwapForUserUsesConfigRevision(t *testing.T) 
 	if err != nil || !swapped {
 		t.Fatalf("swapped=%v error=%v", swapped, err)
 	}
-	if !strings.Contains(db.sql, "config_revision=$14") || !strings.Contains(db.sql, "config_revision=$15") {
+	if !strings.Contains(db.sql, "config_revision=$14") || !strings.Contains(db.sql, "config_revision=$15") ||
+		!strings.Contains(db.sql, "set_config('app.video_project_expected_revision'") {
 		t.Fatalf("CAS SQL does not compare and increment revision: %s", db.sql)
 	}
 	if project.ConfigRevision != 8 {
 		t.Fatalf("project revision=%d, want 8", project.ConfigRevision)
+	}
+}
+
+func TestProjectRepositoryHasNoUnconditionalFullConfigUpdate(t *testing.T) {
+	db := &recordingProjectDB{tag: pgconn.NewCommandTag("UPDATE 1")}
+	repo := &ProjectRepository{db: db}
+	project := &model.VideoProject{ID: "vp-1", UserID: "u-1", ConfigRevision: 7}
+
+	if err := repo.UpdateForUser(context.Background(), "u-1", project); err == nil {
+		t.Fatal("unconditional full-config update remained available")
+	}
+}
+
+func TestPendingShotRegenerationQueryIsBoundedAndLeaseAware(t *testing.T) {
+	for _, fragment := range []string{
+		"jsonb_each", "regenerationTasks", "LIMIT $1", "status' = 'queued'", "dispatchLeaseUntil", "NOW()",
+	} {
+		if !strings.Contains(pendingShotRegenerationQuery, fragment) {
+			t.Fatalf("pending query missing %q: %s", fragment, pendingShotRegenerationQuery)
+		}
 	}
 }
 

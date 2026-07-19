@@ -903,12 +903,77 @@ func (o *fakeOrchestrator) GetTaskWithDetails(context.Context, string) (map[stri
 }
 
 type memoryRunStore struct {
-	mu   sync.RWMutex
-	runs map[string]*Run
+	mu              sync.RWMutex
+	runs            map[string]*Run
+	terminal        map[string]RunTerminalEvent
+	delivered       map[string]bool
+	terminalClaimed map[string]bool
+	saveTerminalErr error
 }
 
 func newMemoryRunStore() *memoryRunStore {
-	return &memoryRunStore{runs: make(map[string]*Run)}
+	return &memoryRunStore{
+		runs: make(map[string]*Run), terminal: make(map[string]RunTerminalEvent),
+		delivered: make(map[string]bool), terminalClaimed: make(map[string]bool),
+	}
+}
+
+func (s *memoryRunStore) SaveRunTerminal(_ context.Context, run *Run, event RunTerminalEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.saveTerminalErr != nil {
+		return s.saveTerminalErr
+	}
+	s.runs[run.ID] = run
+	s.terminal[run.ID] = event
+	s.delivered[run.ID] = false
+	s.terminalClaimed[run.ID] = false
+	return nil
+}
+
+func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ time.Time) ([]TerminalEventDelivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deliveries := make([]TerminalEventDelivery, 0, limit)
+	for runID, event := range s.terminal {
+		if len(deliveries) >= limit {
+			break
+		}
+		if s.delivered[runID] || s.terminalClaimed[runID] {
+			continue
+		}
+		s.terminalClaimed[runID] = true
+		deliveries = append(deliveries, TerminalEventDelivery{RunID: runID, Event: event})
+	}
+	return deliveries, nil
+}
+
+func (s *memoryRunStore) AckTerminalEvent(_ context.Context, runID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.delivered[runID] = true
+	s.terminalClaimed[runID] = false
+	return nil
+}
+
+func (s *memoryRunStore) ReleaseTerminalEvent(_ context.Context, runID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.terminalClaimed[runID] = false
+	return nil
+}
+
+func (s *memoryRunStore) hasPendingTerminal(runID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.terminal[runID]
+	return ok && !s.delivered[runID]
+}
+
+func (s *memoryRunStore) terminalDelivered(runID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.delivered[runID]
 }
 
 func (s *memoryRunStore) SaveRun(_ context.Context, run *Run) error {

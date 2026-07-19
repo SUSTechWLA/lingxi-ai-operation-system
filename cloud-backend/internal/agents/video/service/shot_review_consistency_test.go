@@ -206,3 +206,76 @@ func TestShotRegenerationCompletionValidatesDurableProvenance(t *testing.T) {
 		t.Fatalf("mismatched provenance mutated state: %+v", state)
 	}
 }
+
+func TestRegenerateShotV2ExistingTaskBypassesCurrentScopeValidation(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t, model.ShotUnit{ID: "shot-012", ProjectID: "vp-1", DurationSec: 6, Version: 2})
+	req := RegenerateShotRequest{BaseVersion: 1, Scope: "retired_scope", IdempotencyKey: "request-1"}
+	state := decodeStateFromTest(t, store.project.Config)
+	task := model.ShotRegenerationTask{
+		TaskID: "regen-task-1", ShotID: "shot-012", BaseVersion: 1, Scope: req.Scope,
+		IdempotencyKey: req.IdempotencyKey, RequestFingerprint: shotRegenerationFingerprint("shot-012", req), Status: ShotRegenerationQueued,
+	}
+	state.RegenerationTasks[task.TaskID] = task
+	state.IdempotencyTasks[shotRegenerationIdempotencyScope("shot-012", req.IdempotencyKey)] = task.TaskID
+	setProjectStateForTest(t, store.project, state)
+
+	result, err := NewCreationService(store).RegenerateShotV2(context.Background(), "u-1", "vp-1", "shot-012", req)
+	if err != nil || result.Task.TaskID != task.TaskID || result.Shot.Version != 2 {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+}
+
+func TestLegacyZeroBaseTaskWithoutFingerprintIsMigratedAndRetried(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t, model.ShotUnit{ID: "shot-012", ProjectID: "vp-1", DurationSec: 6, Version: 2})
+	legacyReq := RegenerateShotRequest{Scope: "overlay"}
+	legacyKey := legacyShotRegenerationKey("vp-1", "shot-012", legacyReq)
+	state := decodeStateFromTest(t, store.project.Config)
+	task := model.ShotRegenerationTask{
+		TaskID: "regen-task-1", ShotID: "shot-012", BaseVersion: 1, Scope: "overlay",
+		IdempotencyKey: legacyKey, Status: ShotRegenerationQueued,
+	}
+	state.RegenerationTasks[task.TaskID] = task
+	state.IdempotencyTasks[legacyKey] = task.TaskID
+	state.ShotHistory["shot-012"] = []model.ShotRevision{{ShotID: "shot-012", Version: 1}}
+	setProjectStateForTest(t, store.project, state)
+
+	shot, err := NewCreationService(store).RegenerateShot(context.Background(), "u-1", "vp-1", "shot-012", RegenerateShotRequest{Scope: "text_layers"})
+	if err != nil || shot.Version != 2 {
+		t.Fatalf("shot=%+v error=%v", shot, err)
+	}
+	after := decodeStateFromTest(t, store.project.Config)
+	migrated := after.RegenerationTasks[task.TaskID]
+	if migrated.RequestFingerprint == "" || len(after.ShotHistory["shot-012"]) != 1 || len(after.RegenerationTasks) != 1 {
+		t.Fatalf("legacy task was not migrated in place: %+v", after)
+	}
+}
+
+func TestShotRegenerationReconcilerDispatchesPendingTaskWithoutShotMutation(t *testing.T) {
+	store, _, taskID := projectWithQueuedRegeneration(t)
+	before := decodeStateFromTest(t, store.project.Config)
+	store.pendingRegenerations = []PendingShotRegeneration{{UserID: "u-1", ProjectID: "vp-1", TaskID: taskID}}
+	dispatcher := &recordingShotDispatcher{store: store}
+	reconciler := NewShotRegenerationReconciler(store, NewCreationService(store, dispatcher), time.Minute, 10)
+
+	if err := reconciler.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	after := decodeStateFromTest(t, store.project.Config)
+	if dispatcher.calls != 1 || after.Shots[0].Version != before.Shots[0].Version ||
+		len(after.ShotHistory["shot-012"]) != len(before.ShotHistory["shot-012"]) || after.RegenerationTasks[taskID].Status != ShotRegenerationRunning {
+		t.Fatalf("before=%+v after=%+v calls=%d", before, after, dispatcher.calls)
+	}
+	if store.pendingLimit != 10 {
+		t.Fatalf("discovery limit=%d", store.pendingLimit)
+	}
+}
+
+func TestShotRegenerationReconcilerStopsWithCancelledContext(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	reconciler := NewShotRegenerationReconciler(store, NewCreationService(store), time.Minute, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reconciler.Run(ctx)
+}
