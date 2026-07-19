@@ -133,6 +133,34 @@ func (r *Repository) Save(ctx context.Context, a *Artifact) error {
 	}
 	defer tx.Rollback(ctx)
 
+	// Serialize version allocation for one lineage. CreateArtifact obtains a
+	// candidate version before Save; rechecking while this advisory lock is
+	// held turns a concurrent allocation into a conflict instead of silently
+	// writing two versions with the same parent/version.
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1 || ':' || $2 || ':' || $3))`,
+		a.ProjectID, a.StageName, a.UnitID,
+	); err != nil {
+		return fmt.Errorf("failed to lock artifact lineage: %w", err)
+	}
+	var currentID string
+	var currentVersion int
+	err = tx.QueryRow(ctx,
+		`SELECT id, version FROM artifacts
+		 WHERE project_id=$1 AND stage_name=$2 AND unit_id=$3 AND is_current=true
+		 ORDER BY version DESC LIMIT 1`,
+		a.ProjectID, a.StageName, a.UnitID,
+	).Scan(&currentID, &currentVersion)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to read current artifact for version allocation: %w", err)
+	}
+	if err == nil && (a.Version != currentVersion+1 || a.ParentID != currentID) {
+		return fmt.Errorf("%w: lineage advanced from %s@%d", ErrArtifactVersionConflict, currentID, currentVersion)
+	}
+	if errors.Is(err, pgx.ErrNoRows) && (a.Version != 1 || a.ParentID != "") {
+		return fmt.Errorf("%w: artifact lineage has no current parent", ErrArtifactVersionConflict)
+	}
+
 	// Set previous current versions to false
 	_, err = tx.Exec(ctx,
 		`UPDATE artifacts SET is_current=false

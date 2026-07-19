@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"regexp"
@@ -9,6 +10,8 @@ import (
 
 	"go.uber.org/zap"
 )
+
+var ErrArtifactVersionConflict = errors.New("artifact version conflict")
 
 // ArtifactStatus represents the lifecycle status of an artifact.
 type ArtifactStatus string
@@ -40,7 +43,7 @@ func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest
 	}
 
 	// Check for idempotent duplicate (same content hash = same result)
-	if req.ContentHash != "" {
+	if contentHashDedupEnabled(req) {
 		existing, err := s.repo.FindByHash(ctx, req.ProjectID, req.StageName, req.UnitID, req.ContentHash)
 		if err == nil && existing != nil {
 			zap.L().Debug("Artifact already exists (idempotent)", zap.String("hash", req.ContentHash))
@@ -69,6 +72,10 @@ func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest
 		zap.Int("version", artifact.Version),
 	)
 	return artifact, nil
+}
+
+func contentHashDedupEnabled(req *CreateArtifactRequest) bool {
+	return req != nil && !req.ForceNewVersion && req.ContentHash != ""
 }
 
 // GetCurrent returns the current version of an artifact for the given scope.
@@ -266,6 +273,9 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 	}
 
 	metadata := cloneMetadata(req.Metadata)
+	if req.RestoredFromID != "" {
+		metadata["restoredFromArtifactId"] = req.RestoredFromID
+	}
 	metadata["cloudPayloadStored"] = false
 	metadata["localOnly"] = true
 	if _, exists := metadata["requestedStorageType"]; !exists && req.StorageType != "" && req.StorageType != StorageLocal {
@@ -284,7 +294,7 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 
 	storageType := StorageLocal
 	inlineJSON := ""
-	if isReviewableInlineProvider(req.Provider) && req.StorageType == StorageInline && len(req.Data) > 0 {
+	if (isReviewableInlineProvider(req.Provider) || req.ForceNewVersion) && req.StorageType == StorageInline && len(req.Data) > 0 {
 		storageType = StorageInline
 		inlineJSON = string(req.Data)
 		metadata["cloudPayloadStored"] = true
@@ -464,9 +474,26 @@ func LocalArtifactRef(projectID, stageName, unitID, contentHash, name string) st
 func cloneMetadata(metadata map[string]interface{}) map[string]interface{} {
 	cloned := map[string]interface{}{}
 	for key, value := range metadata {
-		cloned[key] = value
+		cloned[key] = deepCloneMetadataValue(value)
 	}
 	return cloned
+}
+
+func deepCloneMetadataValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneMetadata(typed)
+	case []interface{}:
+		cloned := make([]interface{}, len(typed))
+		for i, item := range typed {
+			cloned[i] = deepCloneMetadataValue(item)
+		}
+		return cloned
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return typed
+	}
 }
 
 var unsafeStorageSegmentPattern = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
