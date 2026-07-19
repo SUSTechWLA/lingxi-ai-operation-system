@@ -358,7 +358,7 @@ func (h *CreationHandler) RegenerateShotV2(c *gin.Context) {
 		return
 	}
 	var payload struct {
-		BaseVersion int             `json:"baseVersion"`
+		BaseVersion *int            `json:"baseVersion"`
 		Scope       string          `json:"scope"`
 		Locks       json.RawMessage `json:"locks"`
 		Instruction string          `json:"instruction"`
@@ -367,12 +367,17 @@ func (h *CreationHandler) RegenerateShotV2(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	baseVersion, err := requiredPositiveBaseVersion(payload.BaseVersion)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	locks, err := decodeRequiredLocks(payload.Locks)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	req := videoSvc.RegenerateShotRequest{BaseVersion: payload.BaseVersion, Scope: payload.Scope, Locks: locks, Instruction: payload.Instruction}
+	req := videoSvc.RegenerateShotRequest{BaseVersion: baseVersion, Scope: payload.Scope, Locks: locks, Instruction: payload.Instruction}
 	req.IdempotencyKey = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
 	if req.IdempotencyKey == "" {
 		fail(c, http.StatusBadRequest, "Idempotency-Key header is required")
@@ -397,6 +402,13 @@ func decodeRequiredLocks(raw json.RawMessage) ([]string, error) {
 	return locks, nil
 }
 
+func requiredPositiveBaseVersion(value *int) (int, error) {
+	if value == nil || *value <= 0 {
+		return 0, errors.New("baseVersion is required and must be positive")
+	}
+	return *value, nil
+}
+
 func (h *CreationHandler) AcceptShotCandidate(c *gin.Context) {
 	h.mutateShotCandidate(c, h.svc.AcceptShotCandidate)
 }
@@ -411,7 +423,7 @@ func (h *CreationHandler) mutateShotCandidate(c *gin.Context, action func(contex
 		return
 	}
 	var payload struct {
-		BaseVersion int             `json:"baseVersion"`
+		BaseVersion *int            `json:"baseVersion"`
 		Scope       string          `json:"scope"`
 		Locks       json.RawMessage `json:"locks"`
 	}
@@ -419,12 +431,17 @@ func (h *CreationHandler) mutateShotCandidate(c *gin.Context, action func(contex
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	baseVersion, err := requiredPositiveBaseVersion(payload.BaseVersion)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	locks, err := decodeRequiredLocks(payload.Locks)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	req := videoSvc.CandidateMutationRequest{BaseVersion: payload.BaseVersion, Scope: payload.Scope, Locks: locks}
+	req := videoSvc.CandidateMutationRequest{BaseVersion: baseVersion, Scope: payload.Scope, Locks: locks}
 	req.IdempotencyKey = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
 	if req.IdempotencyKey == "" {
 		fail(c, http.StatusBadRequest, "Idempotency-Key header is required")

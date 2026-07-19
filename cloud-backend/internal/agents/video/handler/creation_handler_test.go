@@ -162,6 +162,43 @@ func TestCreationHandlerRequiresExplicitLocksForV2ShotMutations(t *testing.T) {
 	}
 }
 
+func TestCreationHandlerRequiresPositiveWireBaseVersionForV2ShotMutations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+	for _, tt := range []struct{ path, suffix string }{
+		{"/api/video-projects/vp-1/shots/shot-1/regenerations", `"scope":"base_media","locks":[]`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", `"scope":"candidate_accept","locks":[]`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/restore", `"scope":"candidate_restore","locks":[]`},
+	} {
+		for _, base := range []string{"", `"baseVersion":null,`, `"baseVersion":0,`, `"baseVersion":-1,`, `"baseVersion":"3",`} {
+			body := "{" + base + tt.suffix + "}"
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "request-1")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("path=%s body=%s status=%d response=%s", tt.path, body, rec.Code, rec.Body.String())
+			}
+		}
+		positive := "{\"baseVersion\":3," + tt.suffix + "}"
+		req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(positive))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "request-2")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path=%s positive status=%d response=%s", tt.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 type fakeCreationService struct {
 	userID               string
 	projectID            string
