@@ -209,6 +209,9 @@ func (s *CreationService) mutateShotCandidate(
 		if !ok {
 			return nil, fmt.Errorf("shot %s not found", shotID)
 		}
+		if err := model.ValidateShotDuration(shot); err != nil {
+			return nil, err
+		}
 		if receipt, ok := state.ShotMutationReceipts[receiptKey]; ok {
 			if receipt.RequestFingerprint != fingerprint {
 				return nil, fmt.Errorf("%w: key %q was used with different candidate mutation input", ErrShotIdempotencyConflict, req.IdempotencyKey)
@@ -343,16 +346,7 @@ func shotChapter(shot model.ShotUnit) string {
 }
 
 func generationStatusForShot(state model.ShotDrivenState, shot model.ShotUnit) string {
-	var latest *model.ShotRegenerationTask
-	for _, task := range state.RegenerationTasks {
-		if task.ShotID != shot.ID {
-			continue
-		}
-		if latest == nil || task.UpdatedAt.After(latest.UpdatedAt) {
-			taskCopy := task
-			latest = &taskCopy
-		}
-	}
+	latest := latestShotRegenerationTask(state, shot.ID)
 	if latest != nil && (latest.Status == ShotRegenerationFailed || latest.Status == ShotRegenerationCancelled) {
 		return latest.Status
 	}
@@ -372,26 +366,37 @@ func generationStatusForShot(state model.ShotDrivenState, shot model.ShotUnit) s
 }
 
 func isShotGenerating(state model.ShotDrivenState, shotID string) bool {
-	for _, task := range state.RegenerationTasks {
-		if task.ShotID == shotID && !isShotRegenerationTerminal(task.Status) {
-			return true
-		}
-	}
-	return false
+	latest := latestShotRegenerationTask(state, shotID)
+	return latest != nil && !isShotRegenerationTerminal(latest.Status)
 }
 
 func shotHasTerminalFailure(state model.ShotDrivenState, shotID string) bool {
+	latest := latestShotRegenerationTask(state, shotID)
+	return latest != nil && (latest.Status == ShotRegenerationFailed || latest.Status == ShotRegenerationCancelled)
+}
+
+func latestShotRegenerationTask(state model.ShotDrivenState, shotID string) *model.ShotRegenerationTask {
 	var latest *model.ShotRegenerationTask
 	for _, task := range state.RegenerationTasks {
 		if task.ShotID != shotID {
 			continue
 		}
-		if latest == nil || task.UpdatedAt.After(latest.UpdatedAt) {
+		if latest == nil || taskIsLater(task, *latest) {
 			taskCopy := task
 			latest = &taskCopy
 		}
 	}
-	return latest != nil && (latest.Status == ShotRegenerationFailed || latest.Status == ShotRegenerationCancelled)
+	return latest
+}
+
+func taskIsLater(left, right model.ShotRegenerationTask) bool {
+	if !left.UpdatedAt.Equal(right.UpdatedAt) {
+		return left.UpdatedAt.After(right.UpdatedAt)
+	}
+	if !left.CreatedAt.Equal(right.CreatedAt) {
+		return left.CreatedAt.After(right.CreatedAt)
+	}
+	return left.TaskID > right.TaskID
 }
 
 func hasHumanReviewCandidate(shot model.ShotUnit) bool {

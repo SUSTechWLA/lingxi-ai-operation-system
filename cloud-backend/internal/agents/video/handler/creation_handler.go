@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -356,11 +357,22 @@ func (h *CreationHandler) RegenerateShotV2(c *gin.Context) {
 	if !okAuth {
 		return
 	}
-	var req videoSvc.RegenerateShotRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var payload struct {
+		BaseVersion int             `json:"baseVersion"`
+		Scope       string          `json:"scope"`
+		Locks       json.RawMessage `json:"locks"`
+		Instruction string          `json:"instruction"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	locks, err := decodeRequiredLocks(payload.Locks)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	req := videoSvc.RegenerateShotRequest{BaseVersion: payload.BaseVersion, Scope: payload.Scope, Locks: locks, Instruction: payload.Instruction}
 	req.IdempotencyKey = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
 	if req.IdempotencyKey == "" {
 		fail(c, http.StatusBadRequest, "Idempotency-Key header is required")
@@ -372,6 +384,17 @@ func (h *CreationHandler) RegenerateShotV2(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"shot": result.Shot, "task": result.Task})
+}
+
+func decodeRequiredLocks(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, errors.New("locks is required")
+	}
+	var locks []string
+	if err := json.Unmarshal(raw, &locks); err != nil {
+		return nil, errors.New("locks must be an array")
+	}
+	return locks, nil
 }
 
 func (h *CreationHandler) AcceptShotCandidate(c *gin.Context) {
@@ -387,11 +410,21 @@ func (h *CreationHandler) mutateShotCandidate(c *gin.Context, action func(contex
 	if !okAuth {
 		return
 	}
-	var req videoSvc.CandidateMutationRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var payload struct {
+		BaseVersion int             `json:"baseVersion"`
+		Scope       string          `json:"scope"`
+		Locks       json.RawMessage `json:"locks"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	locks, err := decodeRequiredLocks(payload.Locks)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	req := videoSvc.CandidateMutationRequest{BaseVersion: payload.BaseVersion, Scope: payload.Scope, Locks: locks}
 	req.IdempotencyKey = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
 	if req.IdempotencyKey == "" {
 		fail(c, http.StatusBadRequest, "Idempotency-Key header is required")

@@ -474,6 +474,61 @@ func TestShotPageAndSummarySurfaceLatestFailedOrCancelledTask(t *testing.T) {
 	}
 }
 
+func TestCandidateMutationsRejectInvalidShotOrCandidateDurationBeforeReceipt(t *testing.T) {
+	tests := []struct {
+		name              string
+		shotDuration      int
+		candidateDuration float64
+	}{
+		{name: "zero shot", shotDuration: 0, candidateDuration: 6},
+		{name: "fifteen second shot", shotDuration: 15, candidateDuration: 6},
+		{name: "zero candidate", shotDuration: 6, candidateDuration: 0},
+		{name: "fifteen second candidate", shotDuration: 6, candidateDuration: 15},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeCreationProjectStore()
+			store.project = projectWithShotState(t, model.ShotUnit{ID: "shot-001", ProjectID: "vp-1", DurationSec: tt.shotDuration, Version: 3, Candidates: []model.ShotCandidate{{
+				CandidateID: "candidate-1", ShotID: "shot-001", DurationSec: tt.candidateDuration, Status: model.CandidateHumanReviewRequired,
+			}}})
+			svc := NewCreationService(store)
+			if _, err := svc.AcceptShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-1", CandidateMutationRequest{BaseVersion: 3, Scope: CandidateAcceptScope, IdempotencyKey: "accept-1"}); err == nil {
+				t.Fatal("accept should reject invalid duration")
+			}
+			if _, err := svc.RestoreShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-1", CandidateMutationRequest{BaseVersion: 3, Scope: CandidateRestoreScope, IdempotencyKey: "restore-1"}); err == nil {
+				t.Fatal("restore should reject invalid duration")
+			}
+			state := decodeStateFromTest(t, store.project.Config)
+			if state.Shots[0].Version != 3 || len(state.ShotHistory["shot-001"]) != 0 || len(state.ShotMutationReceipts) != 0 {
+				t.Fatalf("invalid duration mutated durable state: %+v", state)
+			}
+		})
+	}
+}
+
+func TestShotPageAndSummaryUseOneDeterministicLatestTask(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t,
+		model.ShotUnit{ID: "shot-completed", ProjectID: "vp-1", SequenceIndex: 1, DurationSec: 6, ReviewStatus: model.ReviewStatusPending},
+		model.ShotUnit{ID: "shot-failed", ProjectID: "vp-1", SequenceIndex: 2, DurationSec: 6, ReviewStatus: model.ReviewStatusPending},
+	)
+	state := decodeStateFromTest(t, store.project.Config)
+	base := time.Now().Round(0)
+	state.RegenerationTasks["queued-old"] = model.ShotRegenerationTask{TaskID: "queued-old", ShotID: "shot-completed", Status: ShotRegenerationQueued, CreatedAt: base, UpdatedAt: base}
+	state.RegenerationTasks["completed-new"] = model.ShotRegenerationTask{TaskID: "completed-new", ShotID: "shot-completed", Status: ShotRegenerationCompleted, CreatedAt: base.Add(time.Second), UpdatedAt: base.Add(time.Second)}
+	state.RegenerationTasks["running-old"] = model.ShotRegenerationTask{TaskID: "running-old", ShotID: "shot-failed", Status: ShotRegenerationRunning, CreatedAt: base, UpdatedAt: base}
+	state.RegenerationTasks["failed-new"] = model.ShotRegenerationTask{TaskID: "z-failed-new", ShotID: "shot-failed", Status: ShotRegenerationFailed, CreatedAt: base, UpdatedAt: base}
+	setProjectStateForTest(t, store.project, state)
+	page, err := NewCreationService(store).ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Limit: 10})
+	if err != nil || page.Items[0].GenerationStatus != model.ShotPlanned || page.Items[1].GenerationStatus != ShotRegenerationFailed {
+		t.Fatalf("page=%+v error=%v", page, err)
+	}
+	summary, err := NewCreationService(store).GetShotSummary(context.Background(), "u-1", "vp-1")
+	if err != nil || summary.Generating != 0 || summary.NeedsAction != 1 || summary.AwaitingReview != 1 {
+		t.Fatalf("summary=%+v error=%v", summary, err)
+	}
+}
+
 func TestLegacyRegenerateShotDerivesStableRetryKeyBeforeDefaultingVersion(t *testing.T) {
 	store := newFakeCreationProjectStore()
 	store.project = projectWithShotState(t, model.ShotUnit{

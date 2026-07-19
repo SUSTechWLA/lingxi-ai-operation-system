@@ -84,7 +84,7 @@ func TestCreationHandlerMapsShotVersionConflictToConflict(t *testing.T) {
 	})
 	NewCreationHandler(fake).RegisterRoutes(router)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/regenerations", strings.NewReader(`{"baseVersion":3,"scope":"base_media"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/regenerations", strings.NewReader(`{"baseVersion":3,"scope":"base_media","locks":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "request-1")
 	rec := httptest.NewRecorder()
@@ -120,6 +120,45 @@ func TestCreationHandlerCandidateMutationRequiresHeaderAndPassesContract(t *test
 	router.ServeHTTP(missingRec, missing)
 	if missingRec.Code != http.StatusBadRequest {
 		t.Fatalf("missing idempotency header status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+}
+
+func TestCreationHandlerRequiresExplicitLocksForV2ShotMutations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+	for _, tt := range []struct{ path, body string }{
+		{"/api/video-projects/vp-1/shots/shot-1/regenerations", `{"baseVersion":3,"scope":"base_media"}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", `{"baseVersion":3,"scope":"candidate_accept"}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/restore", `{"baseVersion":3,"scope":"candidate_restore"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "request-1")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("path=%s absent locks status=%d body=%s", tt.path, rec.Code, rec.Body.String())
+		}
+	}
+	for _, tt := range []struct{ path, body string }{
+		{"/api/video-projects/vp-1/shots/shot-1/regenerations", `{"baseVersion":3,"scope":"base_media","locks":[]}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", `{"baseVersion":3,"scope":"candidate_accept","locks":[]}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/restore", `{"baseVersion":3,"scope":"candidate_restore","locks":[]}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "request-2")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path=%s explicit empty locks status=%d body=%s", tt.path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

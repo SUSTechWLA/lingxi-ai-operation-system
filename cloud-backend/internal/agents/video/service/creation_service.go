@@ -264,6 +264,10 @@ func (s *CreationService) UnlockShot(ctx context.Context, userID, projectID, sho
 }
 
 func (s *CreationService) RegenerateShot(ctx context.Context, userID, projectID, shotID string, req RegenerateShotRequest) (*model.ShotUnit, error) {
+	// Legacy route compatibility: normalize an omitted locks field to an explicit empty set before V2/CAS handling.
+	if req.Locks == nil {
+		req.Locks = []string{}
+	}
 	current, err := s.GetShot(ctx, userID, projectID, shotID)
 	if err != nil {
 		return nil, err
