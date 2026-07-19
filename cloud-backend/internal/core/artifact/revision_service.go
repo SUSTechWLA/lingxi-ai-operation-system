@@ -98,7 +98,11 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 		}
 	}
 
-	revision, err := s.artifacts.CreateArtifact(ctx, BuildRevisionRequest(base, req.Message, data))
+	revisionRequest := BuildRevisionRequest(base, req.Message, data)
+	// An explicit revision is an auditable user action, even when it happens
+	// to produce bytes that hash-identically to an existing version.
+	revisionRequest.ForceNewVersion = true
+	revision, err := s.artifacts.CreateArtifact(ctx, revisionRequest)
 	if err != nil {
 		return nil, err
 	}

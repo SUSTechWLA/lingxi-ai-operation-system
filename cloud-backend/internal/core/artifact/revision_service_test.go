@@ -80,6 +80,24 @@ func TestRevisionServiceDirectContentBypassesGeneratorAndMarksDownstreamOnce(t *
 	}
 }
 
+func TestRevisionServiceDirectIdenticalContentForcesNewVersion(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	revisions := NewRevisionService(repo)
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", Message: "keep content", DirectContent: []byte("original content"),
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	if !repo.lastCreate.ForceNewVersion || result.Artifact.ID == "artifact-v1" || result.Artifact.Version != 2 || result.Artifact.ParentID != "artifact-v1" {
+		t.Fatalf("identical direct revision did not create a new current child: request=%+v artifact=%+v", repo.lastCreate, result.Artifact)
+	}
+	if repo.stale != 1 {
+		t.Fatalf("identical direct revision stale calls = %d, want 1", repo.stale)
+	}
+}
+
 func TestRevisionServiceInstructionUsesGeneratorAndForwardsTextProvider(t *testing.T) {
 	repo := newRevisionServiceFake(t, revisionTestArtifact())
 	revisions := NewRevisionService(repo)
@@ -104,6 +122,41 @@ func TestRevisionServiceInstructionUsesGeneratorAndForwardsTextProvider(t *testi
 	}
 	if string(repo.lastCreate.Data) != "generator replacement" {
 		t.Fatalf("generated content was not versioned: %q", repo.lastCreate.Data)
+	}
+}
+
+func TestRevisionServiceIdenticalGeneratedContentForcesNewVersion(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	revisions := NewRevisionService(repo)
+	revisions.SetConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
+		return "original content", nil
+	})
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{ArtifactID: "artifact-v1", Message: "keep content"})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	if !repo.lastCreate.ForceNewVersion || result.Artifact.ID == "artifact-v1" || result.Artifact.Version != 2 || result.Artifact.ParentID != "artifact-v1" {
+		t.Fatalf("identical generated revision did not create a new current child: request=%+v artifact=%+v", repo.lastCreate, result.Artifact)
+	}
+	if repo.stale != 1 {
+		t.Fatalf("identical generated revision stale calls = %d, want 1", repo.stale)
+	}
+}
+
+func TestRevisionServiceFailedCreateDoesNotMarkDownstreamStale(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	repo.createErr = errRevisionTestCreate
+	revisions := NewRevisionService(repo)
+
+	result, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", Message: "replace", DirectContent: []byte("replacement"),
+	})
+	if err != errRevisionTestCreate || result != nil {
+		t.Fatalf("failed revision = result=%+v err=%v", result, err)
+	}
+	if repo.stale != 0 {
+		t.Fatalf("failed revision stale calls = %d, want 0", repo.stale)
 	}
 }
 
@@ -138,6 +191,95 @@ func TestForcedRestoreVersionBypassesOnlyContentHashDedupAndPreservesStoredIdent
 	}, 5, "artifact-v4")
 	if inlineRecord.StorageType != StorageInline || inlineRecord.InlineJSON != "historical inline bytes" {
 		t.Fatalf("forced restore did not preserve inline bytes: %+v", inlineRecord)
+	}
+}
+
+func TestRevisionServiceRestorePreservesRemoteStorageTypes(t *testing.T) {
+	for _, storageType := range []string{StorageMinIO, "url"} {
+		t.Run(storageType, func(t *testing.T) {
+			historical := revisionTestArtifact()
+			historical.StorageType = storageType
+			historical.StorageRef = "https://media.example.test/restored.mp4"
+			historical.ContentHash = "historical-hash"
+			historical.InlineJSON = ""
+			historical.IsCurrent = false
+			current := cloneArtifactForRevisionTest(historical)
+			current.ID, current.Version, current.IsCurrent = "artifact-v3", 3, true
+			repo := newRevisionServiceFake(t, historical, current)
+
+			result, err := NewRevisionService(repo).Restore(context.Background(), RestoreRequest{ArtifactID: historical.ID})
+			if err != nil {
+				t.Fatalf("Restore error: %v", err)
+			}
+			if result.Artifact.StorageType != storageType || result.Artifact.StorageRef != historical.StorageRef || result.Artifact.ContentHash != historical.ContentHash {
+				t.Fatalf("remote restore identity = %+v", result.Artifact)
+			}
+			if len(repo.lastCreate.Data) != 0 {
+				t.Fatalf("remote restore must retain external bytes by reference, got %q", repo.lastCreate.Data)
+			}
+		})
+	}
+}
+
+func TestForcedRestoreRecordPreservesRemoteMediaURLCompatibility(t *testing.T) {
+	for _, storageType := range []string{StorageMinIO, "url"} {
+		t.Run(storageType, func(t *testing.T) {
+			ref := "https://media.example.test/restored.mp4"
+			restored := buildArtifactRecord(&CreateArtifactRequest{
+				ProjectID: "project-1", StageName: "script", UnitID: "main", Kind: KindVideo, Name: "restored.mp4",
+				StorageType: storageType, StorageRef: ref, ContentHash: "historical-hash", ForceNewVersion: true,
+			}, 4, "artifact-v3")
+			if restored.StorageType != storageType || restored.StorageRef != ref {
+				t.Fatalf("forced record changed remote storage: %+v", restored)
+			}
+			_, mediaURL, mediaURLs := artifactContent(restored)
+			if mediaURL != ref || !reflect.DeepEqual(mediaURLs, []string{ref}) {
+				t.Fatalf("legacy remote media response = mediaURL=%q mediaURLs=%v", mediaURL, mediaURLs)
+			}
+		})
+	}
+}
+
+func TestRestoreDeepClonesTypedMutableMetadata(t *testing.T) {
+	historical := revisionTestArtifact()
+	historical.IsCurrent = false
+	historical.Metadata = revisionTypedMetadata()
+	current := *historical
+	current.Metadata = revisionTypedMetadata()
+	current.ID, current.Version, current.IsCurrent = "artifact-v3", 3, true
+	originalHistorical := revisionTypedMetadata()
+	originalCurrent := revisionTypedMetadata()
+	repo := newRevisionServiceFake(t, historical, &current)
+
+	result, err := NewRevisionService(repo).Restore(context.Background(), RestoreRequest{ArtifactID: historical.ID})
+	if err != nil {
+		t.Fatalf("Restore error: %v", err)
+	}
+	metadata := result.Artifact.Metadata
+	metadata["bytes"].([]byte)[0] = 9
+	metadata["strings"].([]string)[0] = "changed"
+	metadata["typedMap"].(map[string]string)["owner"] = "changed"
+	metadata["typedSlice"].([]revisionMetadataValue)[0].Labels[0] = "changed"
+	metadata["pointer"].(*revisionMetadataValue).Labels[0] = "changed"
+	if !reflect.DeepEqual(historical.Metadata, originalHistorical) {
+		t.Fatalf("historical metadata was aliased: %+v", historical.Metadata)
+	}
+	if !reflect.DeepEqual(current.Metadata, originalCurrent) {
+		t.Fatalf("current metadata was aliased: %+v", current.Metadata)
+	}
+}
+
+func TestCloneMetadataPreservesCyclicValuesWithoutAliasing(t *testing.T) {
+	cycle := map[string]interface{}{}
+	cycle["self"] = cycle
+	cloned := cloneMetadata(map[string]interface{}{"cycle": cycle})
+	clonedCycle := cloned["cycle"].(map[string]interface{})
+	clonedCycle["self"].(map[string]interface{})["changedThroughCycle"] = true
+	if cycle["changedThroughCycle"] != nil {
+		t.Fatal("cyclic metadata clone aliases the original map")
+	}
+	if clonedCycle["changedThroughCycle"] != true {
+		t.Fatal("cyclic metadata clone did not preserve the cycle")
 	}
 }
 
@@ -206,6 +348,7 @@ type revisionServiceFake struct {
 	byID       map[string]*Artifact
 	stale      int
 	lastCreate *CreateArtifactRequest
+	createErr  error
 }
 
 func newRevisionServiceFake(t *testing.T, artifacts ...*Artifact) *revisionServiceFake {
@@ -236,6 +379,9 @@ func (f *revisionServiceFake) GetCurrent(_ context.Context, projectID, stageName
 
 func (f *revisionServiceFake) CreateArtifact(_ context.Context, req *CreateArtifactRequest) (*Artifact, error) {
 	f.lastCreate = cloneCreateRequestForRevisionTest(req)
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	var current *Artifact
 	for _, artifact := range f.byID {
 		if artifact.ProjectID == req.ProjectID && artifact.StageName == req.StageName && artifact.UnitID == req.UnitID && artifact.IsCurrent {
@@ -276,10 +422,31 @@ func (f *revisionServiceFake) MarkDownstreamStale(_ context.Context, _, _, _ str
 }
 
 var errRevisionTestNotFound = &revisionTestError{}
+var errRevisionTestCreate = &revisionTestCreateError{}
 
 type revisionTestError struct{}
 
 func (*revisionTestError) Error() string { return "not found" }
+
+type revisionTestCreateError struct{}
+
+func (*revisionTestCreateError) Error() string { return "create failed" }
+
+type revisionMetadataValue struct {
+	Labels []string
+}
+
+func revisionTypedMetadata() map[string]interface{} {
+	return map[string]interface{}{
+		"bytes":    []byte{1, 2},
+		"strings":  []string{"historical"},
+		"typedMap": map[string]string{"owner": "historical"},
+		"typedSlice": []revisionMetadataValue{{
+			Labels: []string{"historical"},
+		}},
+		"pointer": &revisionMetadataValue{Labels: []string{"historical"}},
+	}
+}
 
 func cloneArtifactForRevisionTest(artifact *Artifact) *Artifact {
 	copy := *artifact
