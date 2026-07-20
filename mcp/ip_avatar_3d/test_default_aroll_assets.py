@@ -196,6 +196,45 @@ class BundledDefaultArollAssetsTests(unittest.TestCase):
             profile["render"]["sceneBlendPath"],
         )
 
+    def test_bundled_manifest_advertises_only_validated_presentation_modes(self) -> None:
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            manifest["supportedOverrides"]["presentationModes"],
+            ["standing"],
+        )
+
+    def test_bundled_studio_audit_contains_standing_runtime_contract(self) -> None:
+        report_path = self.profile_root / "reports/default-aroll-studio-audit.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["presentationModes"], ["standing"])
+        self.assertTrue(all(report["standingMarkers"].values()))
+        self.assertTrue(all(report["standingCameras"].values()))
+        self.assertEqual(report["render"]["resolutionX"], 1920)
+        self.assertEqual(report["render"]["resolutionY"], 1080)
+
+    def test_bundled_character_audit_contains_complete_runtime_oral_roles(self) -> None:
+        report_path = self.profile_root / "reports/default-aroll-character-audit.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(
+            set(report["faceTopologyRoles"]),
+            {
+                "oral_cavity",
+                "upper_teeth",
+                "lower_teeth",
+                "upper_gum",
+                "lower_gum",
+                "tongue",
+            },
+        )
+        self.assertTrue(
+            all(len(objects) == 1 for objects in report["faceTopologyRoles"].values())
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,10 +5,11 @@
 ## 当前主资产
 
 ```text
-ip形象/main_ip/models/main-ip-aroll-master-refined.blend
+ip形象/main_ip/models/main-ip-aroll-master-20260720.blend
 ip形象/main_ip/models/main-ip-rigged.glb
 ip形象/main_ip/models/main-ip-rig-report.json
-ip形象/main_ip/scenes/warm-sloth-studio-v1.blend
+ip形象/main_ip/scenes/warm-sloth-studio-20260720.blend
+ip形象/main_ip/manifests/default-aroll-assets.json
 ip形象/main_ip/voice/reference/main_ip_voice_ref_v1.wav
 ```
 
@@ -20,6 +21,22 @@ ip形象/main_ip/voice/reference/main_ip_voice_ref_v1.wav
 - 正面口播相机、暖色工作室和以角色为主的灯光；
 - GPT-SoVITS 固定 IP 声音合同与失败关闭策略。
 
+角色 Master 与暖色工作室是两个独立资产。工作室文件不内置角色，渲染器每次只从 Master 导入一套正式角色，因此不会因为切换景别产生重复角色、重复 Armature 或镜头专用模型。
+
+## 系统默认 A-roll
+
+调用方同时省略 `characterProfilePath` 和 `modelPath` 时，`ip_avatar_3d` 自动使用仓库内置的 `ip形象/main_ip/character-profile.json`。当前默认身份固定为：
+
+- 角色：`main_ip_sloth`；
+- 角色资产：`main-ip-aroll-master-20260720.blend`；
+- 场景资产：`warm-sloth-studio-20260720.blend`；
+- 默认构图：`front_talking`；
+- 默认形态：`standing`；
+- 默认输出：1920x1080、30fps、Eevee、AgX；
+- 默认正式声音：`main_ip_warm_knowledge_host_v1`。
+
+`wide`、`medium`、`close`、`three_quarter`、`transition` 和 `auto` 使用同一套角色与当前工作室，不会选择另一份角色模型。当前版本化工作室已验证的默认形态是 `standing`；需要坐姿时必须显式选择具备双形态契约的场景，不能把未校准的坐姿冒充为生产可用。资产路径和 SHA-256 由 `default-aroll-assets.json` 固定；升级时发布新的版本化文件，不覆盖旧资产。
+
 ## MCP 调用
 
 启动服务：
@@ -28,12 +45,11 @@ ip形象/main_ip/voice/reference/main_ip_voice_ref_v1.wav
 python3 mcp/ip_avatar_3d/server.py
 ```
 
-调用 `render_talking_video` 时至少传入口播稿和角色配置：
+默认 A-roll 只需传入口播稿；以下参数展示显式覆盖写法：
 
 ```json
 {
   "script": "今天我们用一个主题，走完整条 AI 视频创作流水线。",
-  "characterProfilePath": "ip形象/main_ip/character-profile.json",
   "presentationMode": "standing",
   "cameraPreset": "front_talking",
   "durationSec": 15,
@@ -42,7 +58,7 @@ python3 mcp/ip_avatar_3d/server.py
 }
 ```
 
-`presentationMode` 支持 `standing`、`seated` 和自动选择。动作时间线由脚本语义生成，并在基础站姿或坐姿之上叠加，不允许手穿身体、脚底漂移或手指缩放。
+当前默认工作室的 `presentationMode` 使用 `standing` 或自动选择。角色 Master 仍保留坐姿及坐站转换动作；坐姿渲染需要显式传入已完成座椅、脚底和双形态镜头校准的场景。动作时间线由脚本语义生成，不允许手穿身体、脚底漂移或手指缩放。
 
 ## 产物与门禁
 

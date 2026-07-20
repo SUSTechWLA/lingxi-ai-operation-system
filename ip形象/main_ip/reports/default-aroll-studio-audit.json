@@ -4,8 +4,8 @@
   "kind": "studio",
   "errors": [],
   "filePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip形象/main_ip/scenes/warm-sloth-studio-20260720.blend",
-  "fileBytes": 669076,
-  "fileSha256": "f3bb6a960036dea3eb482609fc08a487fc0007c80170ae2adb018e36b2184071",
+  "fileBytes": 670609,
+  "fileSha256": "baffd6c9ca7c6c739c0e807492aa6790911b0d2de91bea6c574b6b96fa5d4c48",
   "blenderVersion": "5.1.2",
   "pythonVersion": "3.13.9",
   "sceneNames": [
@@ -657,6 +657,41 @@
       "parent": "SET_MASTER",
       "collections": [
         "STUDIO_CAMERAS"
+      ]
+    },
+    "Camera_Standing_Close": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_Medium": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_ThreeQuarter": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_Transition": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_Wide": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
       ]
     },
     "Camera_ThreeQuarter_Left": {
@@ -1765,6 +1800,48 @@
         "STUDIO_MARKERS"
       ]
     },
+    "IP_Seat_Target": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Focus_Head": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Foot_Target.L": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Foot_Target.R": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Spawn": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Transition_Focus": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
     "Portrait_Play_Motif": {
       "type": "MESH",
       "parent": "RightWall_Portrait",
@@ -2725,6 +2802,11 @@
     "Camera_Desk_Detail",
     "Camera_Medium",
     "Camera_Shelf_Detail",
+    "Camera_Standing_Close",
+    "Camera_Standing_Medium",
+    "Camera_Standing_ThreeQuarter",
+    "Camera_Standing_Transition",
+    "Camera_Standing_Wide",
     "Camera_ThreeQuarter_Left",
     "Camera_ThreeQuarter_Right",
     "Camera_Wide",
@@ -2883,6 +2965,12 @@
     "IP_Focus_Desk",
     "IP_Focus_Head",
     "IP_Focus_Shelf",
+    "IP_Seat_Target",
+    "IP_Standing_Focus_Head",
+    "IP_Standing_Foot_Target.L",
+    "IP_Standing_Foot_Target.R",
+    "IP_Standing_Spawn",
+    "IP_Transition_Focus",
     "Portrait_Play_Motif",
     "Portrait_Sloth_EyePatch_Left",
     "Portrait_Sloth_EyePatch_Right",
@@ -3009,9 +3097,9 @@
     "Window_Softbox"
   ],
   "objectCounts": {
-    "CAMERA": 7,
+    "CAMERA": 12,
     "CURVE": 56,
-    "EMPTY": 11,
+    "EMPTY": 17,
     "FONT": 2,
     "LIGHT": 8,
     "MESH": 288
@@ -3022,6 +3110,11 @@
     "Camera_Desk_Detail",
     "Camera_Medium",
     "Camera_Shelf_Detail",
+    "Camera_Standing_Close",
+    "Camera_Standing_Medium",
+    "Camera_Standing_ThreeQuarter",
+    "Camera_Standing_Transition",
+    "Camera_Standing_Wide",
     "Camera_ThreeQuarter_Left",
     "Camera_ThreeQuarter_Right",
     "Camera_Wide"
@@ -3040,6 +3133,25 @@
     "IP_Character_Spawn": true,
     "IP_Focus_Head": true
   },
+  "standingMarkers": {
+    "IP_Standing_Spawn": true,
+    "IP_Standing_Focus_Head": true,
+    "IP_Transition_Focus": true,
+    "IP_Seat_Target": true,
+    "IP_Standing_Foot_Target.L": true,
+    "IP_Standing_Foot_Target.R": true
+  },
+  "standingCameras": {
+    "Camera_Standing_Wide": true,
+    "Camera_Standing_Medium": true,
+    "Camera_Standing_Close": true,
+    "Camera_Standing_ThreeQuarter": true,
+    "Camera_Standing_Transition": true
+  },
+  "sceneContract": "tangying-default-sloth-aroll-studio/v1",
+  "presentationModes": [
+    "standing"
+  ],
   "meshVertexOrder": {
     "Baseboard_Back": {
       "vertices": 8,
@@ -5625,8 +5737,8 @@
   ],
   "render": {
     "engine": "BLENDER_EEVEE",
-    "resolutionX": 960,
-    "resolutionY": 540,
+    "resolutionX": 1920,
+    "resolutionY": 1080,
     "fps": 30,
     "viewTransform": "AgX",
     "look": "AgX - Medium High Contrast"
@@ -5634,9 +5746,28 @@
   "sourcePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/codex-warm-sloth-studio/outputs/warm_sloth_fullbody_demo_v1/blend/warm_sloth_fullbody_demo_v1.blend",
   "sourceSha256": "e606afb61454c58895f2c81ce5308218b324f62bcbd7505df226ebf3c63c358c",
   "outputPath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip形象/main_ip/scenes/warm-sloth-studio-20260720.blend",
-  "outputSha256": "f3bb6a960036dea3eb482609fc08a487fc0007c80170ae2adb018e36b2184071",
+  "outputSha256": "baffd6c9ca7c6c739c0e807492aa6790911b0d2de91bea6c574b6b96fa5d4c48",
   "auditOnly": false,
   "mutationSummary": {
-    "orphanDatablocksPurged": 80
+    "orphanDatablocksPurged": 80,
+    "sceneContract": "tangying-default-sloth-aroll-studio/v1",
+    "presentationModes": [
+      "standing"
+    ],
+    "standingMarkers": [
+      "IP_Standing_Spawn",
+      "IP_Standing_Focus_Head",
+      "IP_Transition_Focus",
+      "IP_Seat_Target",
+      "IP_Standing_Foot_Target.L",
+      "IP_Standing_Foot_Target.R"
+    ],
+    "standingCameras": [
+      "Camera_Standing_Wide",
+      "Camera_Standing_Medium",
+      "Camera_Standing_Close",
+      "Camera_Standing_ThreeQuarter",
+      "Camera_Standing_Transition"
+    ]
   }
 }

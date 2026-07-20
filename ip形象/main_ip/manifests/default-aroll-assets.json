@@ -31,8 +31,7 @@
       "auto"
     ],
     "presentationModes": [
-      "standing",
-      "seated"
+      "standing"
     ],
     "assetIdentityPolicy": "All presets use this same character master and studio template."
   },
@@ -40,8 +39,8 @@
     "characterMaster": {
       "role": "single_formal_character",
       "path": "models/main-ip-aroll-master-20260720.blend",
-      "sha256": "e08495917ad721e6644c822009290417b11bfcb94f64280bd2c97cfb3d5391f1",
-      "bytes": 25477968,
+      "sha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+      "bytes": 25494667,
       "formalCollection": "COL_CHR_SLOTH_FINAL",
       "runtimeCollection": "IP_Character_Master",
       "armature": "RIG_Sloth",
@@ -50,8 +49,8 @@
     "studioTemplate": {
       "role": "character_free_warm_studio",
       "path": "scenes/warm-sloth-studio-20260720.blend",
-      "sha256": "f3bb6a960036dea3eb482609fc08a487fc0007c80170ae2adb018e36b2184071",
-      "bytes": 674413,
+      "sha256": "baffd6c9ca7c6c739c0e807492aa6790911b0d2de91bea6c574b6b96fa5d4c48",
+      "bytes": 670609,
       "spawnMarker": "IP_Character_Spawn",
       "focusMarker": "IP_Focus_Head",
       "auditReport": "reports/default-aroll-studio-audit.json"
@@ -65,6 +64,7 @@
     "singleArmature": true,
     "studioContainsNoCharacter": true,
     "studioContainsNoArmature": true,
+    "standingRuntimeContract": true,
     "vertexOrderPreserved": true,
     "shapeKeyOrderPreserved": true,
     "driverCountPreserved": 8,
@@ -76,6 +76,20 @@
       "Aroll_Greeting_Wave",
       "Aroll_OpenPalm_Explain",
       "Talk_Loop"
-    ]
+    ],
+    "smokeRender": {
+      "status": "PASS",
+      "report": "reports/default-aroll-smoke.json",
+      "reportSha256": "08a22adf4ad0e4e767141a0cd4e5f949da4ef964512dc3f504ff21e2692a4906",
+      "preview": "renders/default-aroll-smoke.png",
+      "previewSha256": "ed92e60b96ffb97be8ecb3dae4aa85b395de972f918a6615ca563ec1820b9709",
+      "engine": "BLENDER_EEVEE",
+      "viewTransform": "AgX",
+      "dimensions": [
+        640,
+        360
+      ],
+      "renderSeconds": 2.8455672080162913
+    }
   }
 }

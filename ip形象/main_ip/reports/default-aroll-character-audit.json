@@ -4,8 +4,8 @@
   "kind": "character",
   "errors": [],
   "filePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip形象/main_ip/models/main-ip-aroll-master-20260720.blend",
-  "fileBytes": 25477968,
-  "fileSha256": "e08495917ad721e6644c822009290417b11bfcb94f64280bd2c97cfb3d5391f1",
+  "fileBytes": 25494667,
+  "fileSha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
   "blenderVersion": "5.1.2",
   "pythonVersion": "3.13.9",
   "sceneNames": [
@@ -64,6 +64,8 @@
     "FUR_HeadTuft",
     "FUR_Muzzle",
     "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
     "GEO_HeadBody",
     "GEO_MouthInterior",
     "GEO_Nail_01_L",
@@ -120,6 +122,8 @@
     "FUR_HeadTuft",
     "FUR_Muzzle",
     "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
     "GEO_HeadBody",
     "GEO_MouthInterior",
     "GEO_Nail_01_L",
@@ -176,6 +180,8 @@
     "FUR_HeadTuft",
     "FUR_Muzzle",
     "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
     "GEO_HeadBody",
     "GEO_MouthInterior",
     "GEO_Nail_01_L",
@@ -505,6 +511,22 @@
         "IP_Character_Master"
       ]
     },
+    "GEO_GumLower": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_GumUpper": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
     "GEO_HeadBody": {
       "type": "MESH",
       "parent": "RIG_Sloth",
@@ -666,6 +688,8 @@
     "FUR_HeadTuft",
     "FUR_Muzzle",
     "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
     "GEO_HeadBody",
     "GEO_MouthInterior",
     "GEO_Nail_01_L",
@@ -686,7 +710,7 @@
     "ARMATURE": 1,
     "CURVE": 12,
     "EMPTY": 11,
-    "MESH": 30
+    "MESH": 32
   },
   "armatures": [
     "RIG_Sloth"
@@ -697,6 +721,23 @@
     "IP_Character_Spawn": false,
     "IP_Focus_Head": false
   },
+  "standingMarkers": {
+    "IP_Standing_Spawn": false,
+    "IP_Standing_Focus_Head": false,
+    "IP_Transition_Focus": false,
+    "IP_Seat_Target": false,
+    "IP_Standing_Foot_Target.L": false,
+    "IP_Standing_Foot_Target.R": false
+  },
+  "standingCameras": {
+    "Camera_Standing_Wide": false,
+    "Camera_Standing_Medium": false,
+    "Camera_Standing_Close": false,
+    "Camera_Standing_ThreeQuarter": false,
+    "Camera_Standing_Transition": false
+  },
+  "sceneContract": "",
+  "presentationModes": [],
   "meshVertexOrder": {
     "EYE_CatchlightSecondary_L": {
       "vertices": 128,
@@ -805,6 +846,18 @@
       "edges": 4032,
       "polygons": 2048,
       "orderedCoordinateSha256": "03c957b6d1a90e97244cc063ef0201164a143943e681f03647abdfaa55055d4b"
+    },
+    "GEO_GumLower": {
+      "vertices": 576,
+      "edges": 1080,
+      "polygons": 504,
+      "orderedCoordinateSha256": "f37d743e9a4f49f940051246a007d6ff3b8cf385a02039887aca2d3f1e1726d9"
+    },
+    "GEO_GumUpper": {
+      "vertices": 576,
+      "edges": 1080,
+      "polygons": 504,
+      "orderedCoordinateSha256": "132e1004ca7d4aa326ccca87d93f184518088563a8b4577d95ee72e49b717a01"
     },
     "GEO_HeadBody": {
       "vertices": 5478,
@@ -978,6 +1031,8 @@
     "EYE_Sclera_R": [
       "UV贴图"
     ],
+    "GEO_GumLower": [],
+    "GEO_GumUpper": [],
     "GEO_HeadBody": [
       "UVMap"
     ],
@@ -1066,6 +1121,7 @@
     "MAT_Fur_Ivory",
     "MAT_Fur_RootBrown",
     "MAT_Fur_TipBrown",
+    "MAT_Gums",
     "MAT_MouthInterior",
     "MAT_Nail_Keratin",
     "MAT_Ribbing_Ivory",
@@ -1092,6 +1148,26 @@
     "FUR_Muzzle",
     "FUR_Outline"
   ],
+  "faceTopologyRoles": {
+    "oral_cavity": [
+      "GEO_MouthInterior"
+    ],
+    "upper_teeth": [
+      "GEO_TeethUpper"
+    ],
+    "lower_teeth": [
+      "GEO_TeethLower"
+    ],
+    "upper_gum": [
+      "GEO_GumUpper"
+    ],
+    "lower_gum": [
+      "GEO_GumLower"
+    ],
+    "tongue": [
+      "GEO_Tongue"
+    ]
+  },
   "render": {
     "engine": "BLENDER_EEVEE",
     "resolutionX": 1920,
@@ -1103,9 +1179,13 @@
   "sourcePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/codex-warm-sloth-studio/outputs/warm_sloth_fullbody_demo_v1/blend/warm_sloth_fullbody_demo_v1.blend",
   "sourceSha256": "e606afb61454c58895f2c81ce5308218b324f62bcbd7505df226ebf3c63c358c",
   "outputPath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip形象/main_ip/models/main-ip-aroll-master-20260720.blend",
-  "outputSha256": "e08495917ad721e6644c822009290417b11bfcb94f64280bd2c97cfb3d5391f1",
+  "outputSha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
   "auditOnly": false,
   "mutationSummary": {
-    "orphanDatablocksPurged": 324
+    "orphanDatablocksPurged": 324,
+    "createdRuntimeComponents": [
+      "GEO_GumUpper",
+      "GEO_GumLower"
+    ]
   }
 }

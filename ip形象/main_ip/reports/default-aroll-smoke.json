@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "tangying-default-aroll-smoke/v1",
+  "status": "PASS",
+  "productionReady": true,
+  "errors": [],
+  "masterPath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip形象/main_ip/models/main-ip-aroll-master-20260720.blend",
+  "masterSha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+  "studioPath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip形象/main_ip/scenes/warm-sloth-studio-20260720.blend",
+  "studioSha256": "baffd6c9ca7c6c739c0e807492aa6790911b0d2de91bea6c574b6b96fa5d4c48",
+  "studioSourceUnchanged": true,
+  "outputPath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip形象/main_ip/renders/default-aroll-smoke.png",
+  "outputSha256": "ed92e60b96ffb97be8ecb3dae4aa85b395de972f918a6615ca563ec1820b9709",
+  "outputBytes": 415611,
+  "dimensions": [
+    640,
+    360
+  ],
+  "camera": "Camera_Standing_Medium",
+  "presentationMode": "standing",
+  "cameraPreset": "front_talking",
+  "engine": "BLENDER_EEVEE",
+  "viewTransform": "AgX",
+  "look": "AgX - Medium High Contrast",
+  "formalCollectionCount": 1,
+  "masterCollectionCount": 1,
+  "armatureCount": 1,
+  "characterMeshCount": 32,
+  "renderSeconds": 2.8455672080162913,
+  "blenderVersion": "5.1.2",
+  "pythonVersion": "3.13.9"
+}

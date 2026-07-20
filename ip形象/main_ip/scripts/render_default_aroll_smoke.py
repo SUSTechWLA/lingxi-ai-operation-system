@@ -102,7 +102,10 @@ def main() -> None:
         if camera is None or camera.type != "CAMERA":
             raise RuntimeError("studio is missing a usable medium camera")
         scene.camera = camera
-        scene.render.engine = "BLENDER_EEVEE_NEXT"
+        try:
+            scene.render.engine = "BLENDER_EEVEE_NEXT"
+        except TypeError:
+            scene.render.engine = "BLENDER_EEVEE"
         scene.render.resolution_x = 640
         scene.render.resolution_y = 360
         scene.render.resolution_percentage = 100
@@ -115,8 +118,11 @@ def main() -> None:
         bpy.ops.render.render(write_still=True)
         if not output_path.is_file() or output_path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
             raise RuntimeError("smoke render did not produce a valid PNG")
-        render_result = bpy.data.images.get("Render Result")
-        dimensions_px = list(render_result.size[:]) if render_result is not None else [0, 0]
+        rendered_image = bpy.data.images.load(str(output_path), check_existing=False)
+        try:
+            dimensions_px = [int(value) for value in rendered_image.size]
+        finally:
+            bpy.data.images.remove(rendered_image)
 
         formal_count = sum(
             collection.name == FORMAL_COLLECTION for collection in bpy.data.collections

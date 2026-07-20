@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import bpy
+from mathutils import Vector
 
 
 FORMAL_COLLECTION = "COL_CHR_SLOTH_FINAL"
@@ -24,6 +25,29 @@ MASTER_COLLECTION = "IP_Character_Master"
 MASTER_VERSION_PROPERTY = "ip_aroll_master_version"
 MASTER_VERSION = 1
 REQUIRED_STUDIO_MARKERS = ("IP_Character_Spawn", "IP_Focus_Head")
+STANDING_STUDIO_MARKERS = (
+    "IP_Standing_Spawn",
+    "IP_Standing_Focus_Head",
+    "IP_Transition_Focus",
+    "IP_Seat_Target",
+    "IP_Standing_Foot_Target.L",
+    "IP_Standing_Foot_Target.R",
+)
+STANDING_STUDIO_CAMERAS = (
+    "Camera_Standing_Wide",
+    "Camera_Standing_Medium",
+    "Camera_Standing_Close",
+    "Camera_Standing_ThreeQuarter",
+    "Camera_Standing_Transition",
+)
+RUNTIME_ORAL_ROLES = (
+    "oral_cavity",
+    "upper_teeth",
+    "lower_teeth",
+    "upper_gum",
+    "lower_gum",
+    "tongue",
+)
 SCHEMA_VERSION = "tangying-default-aroll-blender-audit/v1"
 
 
@@ -141,10 +165,83 @@ def _purge_orphans(*, preserve_actions: bool) -> int:
     return int(result or 0)
 
 
+def _gum_material() -> bpy.types.Material:
+    material = bpy.data.materials.get("MAT_Gums")
+    if material is None:
+        material = bpy.data.materials.new("MAT_Gums")
+        material.use_nodes = True
+    principled = next(
+        (node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED"),
+        None,
+    )
+    if principled is not None:
+        principled.inputs["Base Color"].default_value = (0.24, 0.055, 0.045, 1.0)
+        principled.inputs["Roughness"].default_value = 0.58
+        if "Specular IOR Level" in principled.inputs:
+            principled.inputs["Specular IOR Level"].default_value = 0.28
+    return material
+
+
+def _ensure_runtime_gum_roles(formal: bpy.types.Collection) -> list[str]:
+    role_objects = {
+        str(obj.get("ip_face_topology_role") or ""): obj
+        for obj in formal.all_objects
+        if obj.type == "MESH" and obj.get("ip_face_topology_role")
+    }
+    created: list[str] = []
+    material = _gum_material()
+    specifications = (
+        ("upper_gum", "upper_teeth", "GEO_GumUpper"),
+        ("lower_gum", "lower_teeth", "GEO_GumLower"),
+    )
+    for role, source_role, name in specifications:
+        if role in role_objects:
+            continue
+        source = role_objects.get(source_role)
+        if source is None:
+            raise RuntimeError(f"cannot derive {role}: missing {source_role}")
+        gum = source.copy()
+        gum.data = source.data.copy()
+        gum.name = name
+        gum.data.name = f"{name}_Mesh"
+        gum.animation_data_clear()
+        if gum.data.shape_keys is not None:
+            raise RuntimeError(f"cannot derive {role} from Shape Key geometry")
+        for collection in tuple(gum.users_collection):
+            collection.objects.unlink(gum)
+        formal.objects.link(gum)
+        for key in tuple(gum.keys()):
+            del gum[key]
+        gum["ip_face_topology_role"] = role
+        gum["ip_published_runtime_component"] = True
+        gum["formal_material_system"] = "COL_CHR_SLOTH_FINAL"
+        gum.data.materials.clear()
+        gum.data.materials.append(material)
+
+        minimum = Vector(
+            tuple(min(vertex.co[axis] for vertex in gum.data.vertices) for axis in range(3))
+        )
+        maximum = Vector(
+            tuple(max(vertex.co[axis] for vertex in gum.data.vertices) for axis in range(3))
+        )
+        center = (minimum + maximum) * 0.5
+        for vertex in gum.data.vertices:
+            delta = vertex.co - center
+            delta.x *= 1.06
+            delta.y *= 1.10
+            delta.z *= 1.10
+            vertex.co = center + delta
+        gum.data.update()
+        role_objects[role] = gum
+        created.append(gum.name)
+    return created
+
+
 def export_character() -> dict[str, Any]:
     formal = bpy.data.collections.get(FORMAL_COLLECTION)
     if formal is None:
         raise RuntimeError(f"missing required collection {FORMAL_COLLECTION}")
+    created_runtime_components = _ensure_runtime_gum_roles(formal)
     keep_objects = character_objects()
     if not any(obj.type == "ARMATURE" for obj in keep_objects):
         raise RuntimeError("formal character dependency closure has no Armature")
@@ -189,7 +286,10 @@ def export_character() -> dict[str, Any]:
     scene.frame_end = 1
     scene.frame_set(1)
     bpy.context.view_layer.update()
-    return {"orphanDatablocksPurged": _purge_orphans(preserve_actions=True)}
+    return {
+        "orphanDatablocksPurged": _purge_orphans(preserve_actions=True),
+        "createdRuntimeComponents": created_runtime_components,
+    }
 
 
 def _studio_scene() -> bpy.types.Scene:
@@ -203,8 +303,100 @@ def _studio_scene() -> bpy.types.Scene:
     return min(candidates, key=lambda scene: (scene.name != "SCENE_PRODUCTION", scene.name))
 
 
+def _copy_custom_properties(source: bpy.types.Object, target: bpy.types.Object) -> None:
+    for key in source.keys():
+        target[key] = source[key]
+
+
+def _ensure_empty(
+    scene: bpy.types.Scene,
+    name: str,
+    source: bpy.types.Object,
+    *,
+    location: Vector | None = None,
+) -> bpy.types.Object:
+    existing = bpy.data.objects.get(name)
+    if existing is not None:
+        return existing
+    marker = bpy.data.objects.new(name, None)
+    scene.collection.objects.link(marker)
+    marker.matrix_world = source.matrix_world.copy()
+    if location is not None:
+        marker.matrix_world.translation = location
+    marker.empty_display_type = "SPHERE"
+    marker.empty_display_size = 0.08
+    _copy_custom_properties(source, marker)
+    return marker
+
+
+def _ensure_camera(
+    scene: bpy.types.Scene,
+    name: str,
+    source: bpy.types.Object,
+) -> bpy.types.Object:
+    existing = bpy.data.objects.get(name)
+    if existing is not None:
+        return existing
+    camera = source.copy()
+    camera.data = source.data.copy()
+    camera.name = name
+    camera.data.name = f"{name}_Data"
+    camera.animation_data_clear()
+    camera.data.animation_data_clear()
+    scene.collection.objects.link(camera)
+    return camera
+
+
+def _ensure_standing_aroll_contract(scene: bpy.types.Scene) -> dict[str, Any]:
+    spawn = bpy.data.objects["IP_Character_Spawn"]
+    focus = bpy.data.objects["IP_Focus_Head"]
+    chair = bpy.data.objects.get("Chair_Seat")
+    seat_location = chair.matrix_world.translation.copy() if chair else spawn.matrix_world.translation.copy()
+    seat_location.z = float(seat_location.z + 0.08)
+
+    _ensure_empty(scene, "IP_Standing_Spawn", spawn)
+    _ensure_empty(scene, "IP_Standing_Focus_Head", focus)
+    _ensure_empty(scene, "IP_Transition_Focus", focus)
+    _ensure_empty(scene, "IP_Seat_Target", chair or spawn, location=seat_location)
+    for suffix, offset in (("L", -0.22), ("R", 0.22)):
+        foot_location = spawn.matrix_world.translation + Vector((offset, 0.0, 0.0))
+        _ensure_empty(
+            scene,
+            f"IP_Standing_Foot_Target.{suffix}",
+            spawn,
+            location=foot_location,
+        )
+
+    camera_sources = {
+        "Camera_Standing_Wide": "Camera_Wide",
+        "Camera_Standing_Medium": "Camera_Medium",
+        "Camera_Standing_Close": "Camera_Close",
+        "Camera_Standing_ThreeQuarter": "Camera_ThreeQuarter_Left",
+        "Camera_Standing_Transition": "Camera_Wide",
+    }
+    for name, source_name in camera_sources.items():
+        source = bpy.data.objects.get(source_name)
+        if source is None or source.type != "CAMERA":
+            raise RuntimeError(f"missing camera required for standing A-roll contract: {source_name}")
+        _ensure_camera(scene, name, source)
+
+    scene["ip_scene_contract"] = "tangying-default-sloth-aroll-studio/v1"
+    scene["ip_presentation_modes"] = json.dumps(["standing"])
+    scene.render.resolution_x = 1920
+    scene.render.resolution_y = 1080
+    scene.render.resolution_percentage = 100
+    scene.camera = bpy.data.objects["Camera_Standing_Medium"]
+    return {
+        "sceneContract": scene["ip_scene_contract"],
+        "presentationModes": ["standing"],
+        "standingMarkers": list(STANDING_STUDIO_MARKERS),
+        "standingCameras": list(STANDING_STUDIO_CAMERAS),
+    }
+
+
 def export_studio() -> dict[str, Any]:
     studio_scene = _studio_scene()
+    contract = _ensure_standing_aroll_contract(studio_scene)
     remove_objects = character_objects()
     remove_objects.update(obj for obj in bpy.data.objects if obj.type == "ARMATURE")
     remove_objects.update(obj for obj in bpy.data.objects if obj.name.startswith("CXR_"))
@@ -237,7 +429,10 @@ def export_studio() -> dict[str, Any]:
     studio_scene.frame_end = 1
     studio_scene.frame_set(1)
     bpy.context.view_layer.update()
-    return {"orphanDatablocksPurged": _purge_orphans(preserve_actions=False)}
+    return {
+        "orphanDatablocksPurged": _purge_orphans(preserve_actions=False),
+        **contract,
+    }
 
 
 def _vertex_fingerprint(obj: bpy.types.Object) -> str:
@@ -310,6 +505,12 @@ def audit(kind: str) -> dict[str, Any]:
     cameras = sorted(obj.name for obj in bpy.data.objects if obj.type == "CAMERA")
     lights = sorted(obj.name for obj in bpy.data.objects if obj.type == "LIGHT")
     markers = {name: bpy.data.objects.get(name) is not None for name in REQUIRED_STUDIO_MARKERS}
+    standing_markers = {
+        name: bpy.data.objects.get(name) is not None for name in STANDING_STUDIO_MARKERS
+    }
+    standing_cameras = {
+        name: bpy.data.objects.get(name) is not None for name in STANDING_STUDIO_CAMERAS
+    }
     driver_records = _driver_records()
     action_names = sorted(action.name for action in bpy.data.actions)
     material_names = sorted(material.name for material in bpy.data.materials)
@@ -318,6 +519,14 @@ def audit(kind: str) -> dict[str, Any]:
         for obj in bpy.data.objects
         if obj.type in {"CURVE", "CURVES"} or obj.name.startswith("FUR_")
     )
+    face_topology_roles = {
+        role: sorted(
+            obj.name
+            for obj in bpy.data.objects
+            if obj.type == "MESH" and str(obj.get("ip_face_topology_role") or "") == role
+        )
+        for role in RUNTIME_ORAL_ROLES
+    }
     errors: list[str] = []
     if kind == "character":
         if len(formal_collections) != 1:
@@ -334,6 +543,14 @@ def audit(kind: str) -> dict[str, Any]:
             errors.append("character master must preserve Shape Keys")
         if not any(uv_layers.values()):
             errors.append("character master must preserve UV layers")
+        invalid_oral_roles = [
+            role for role, objects in face_topology_roles.items() if len(objects) != 1
+        ]
+        if invalid_oral_roles:
+            errors.append(
+                "character master must contain each runtime oral role exactly once: "
+                + ", ".join(invalid_oral_roles)
+            )
     elif kind == "studio":
         if formal_collections or master_collections:
             errors.append("studio template must not contain formal character collections")
@@ -341,6 +558,18 @@ def audit(kind: str) -> dict[str, Any]:
             errors.append("studio template must not contain an Armature")
         if not all(markers.values()):
             errors.append("studio template is missing required spawn/focus markers")
+        if not all(standing_markers.values()):
+            errors.append("studio template is missing the standing A-roll marker contract")
+        if not all(standing_cameras.values()):
+            errors.append("studio template is missing the standing A-roll camera contract")
+        try:
+            presentation_modes = json.loads(
+                str(bpy.context.scene.get("ip_presentation_modes") or "[]")
+            )
+        except json.JSONDecodeError:
+            presentation_modes = []
+        if presentation_modes != ["standing"]:
+            errors.append("studio template must declare standing as its supported presentation mode")
         if len(cameras) < 3:
             errors.append("studio template must contain at least three cameras")
         if len(lights) < 3:
@@ -382,6 +611,12 @@ def audit(kind: str) -> dict[str, Any]:
         "cameras": cameras,
         "lights": lights,
         "requiredMarkers": markers,
+        "standingMarkers": standing_markers,
+        "standingCameras": standing_cameras,
+        "sceneContract": str(scene.get("ip_scene_contract") or ""),
+        "presentationModes": json.loads(
+            str(scene.get("ip_presentation_modes") or "[]")
+        ),
         "meshVertexOrder": vertex_fingerprints,
         "shapeKeyOrder": shape_key_order,
         "shapeKeyCount": sum(len(order) for order in shape_key_order.values()),
@@ -391,6 +626,7 @@ def audit(kind: str) -> dict[str, Any]:
         "actions": action_names,
         "materials": material_names,
         "groomObjects": groom_objects,
+        "faceTopologyRoles": face_topology_roles,
         "render": {
             "engine": scene.render.engine,
             "resolutionX": scene.render.resolution_x,
