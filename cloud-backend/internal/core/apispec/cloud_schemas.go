@@ -771,11 +771,11 @@ func registerCloudSchemas(b *Builder) {
 	b.Schema("CreationView", creationView)
 
 	selection := &Schema{OneOf: []*SchemaRef{
-		{Schema: requiredObject(map[string]*SchemaRef{
+		{Schema: closedObject(map[string]*SchemaRef{
 			"kind": {Schema: enumSchema("rect")}, "x": {Schema: &Schema{Type: "number"}}, "y": {Schema: &Schema{Type: "number"}},
 			"width": {Schema: &Schema{Type: "number"}}, "height": {Schema: &Schema{Type: "number"}},
 		}, "kind", "x", "y", "width", "height")},
-		{Schema: requiredObject(map[string]*SchemaRef{
+		{Schema: closedObject(map[string]*SchemaRef{
 			"kind": {Schema: enumSchema("time")}, "startMs": {Schema: &Schema{Type: "integer", Format: "int64"}}, "endMs": {Schema: &Schema{Type: "integer", Format: "int64"}},
 		}, "kind", "startMs", "endMs")},
 	}}
@@ -787,7 +787,7 @@ func registerCloudSchemas(b *Builder) {
 		return map[string]*SchemaRef{
 			"artifactId": {Schema: StringSchema()}, "baseVersion": {Schema: positiveVersion()}, "mode": {Schema: enumSchema(mode)},
 			"runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
-			"confirmedAffectedShotIds": {Schema: ArraySchema(StringSchema())}, "selection": {Schema: RefSchema("ArtifactSelection")},
+			"confirmedAffectedShotIds": {Schema: ArraySchema(StringSchema())}, "selection": {Schema: &Schema{Ref: "#/components/schemas/ArtifactSelection", Nullable: true}},
 		}
 	}
 	directMutation := mutationProperties("direct")

@@ -175,10 +175,10 @@ func schemaToTSType(s *Schema) string {
 
 func oneOfToTSType(branches []*SchemaRef) string {
 	allProperties := map[string]bool{}
-	exactObjects := true
+	inlineObjects := true
 	for _, branch := range branches {
 		if branch == nil || branch.Schema == nil || branch.Schema.Type != "object" {
-			exactObjects = false
+			inlineObjects = false
 			break
 		}
 		for property := range branch.Schema.Properties {
@@ -187,19 +187,26 @@ func oneOfToTSType(branches []*SchemaRef) string {
 	}
 	parts := make([]string, 0, len(branches))
 	for _, branch := range branches {
-		if !exactObjects {
+		if !inlineObjects {
 			parts = append(parts, schemaRefToTSType(branch))
 			continue
 		}
 		missing := make([]string, 0)
-		for property := range allProperties {
-			if branch.Schema.Properties[property] == nil {
-				missing = append(missing, property)
+		if isExplicitlyClosedObject(branch.Schema) {
+			for property := range allProperties {
+				if branch.Schema.Properties[property] == nil {
+					missing = append(missing, property)
+				}
 			}
 		}
 		parts = append(parts, objectToTSType(branch.Schema, missing))
 	}
 	return strings.Join(parts, " | ")
+}
+
+func isExplicitlyClosedObject(schema *Schema) bool {
+	return schema != nil && schema.AdditionalProperties != nil &&
+		schema.AdditionalProperties.Allowed != nil && !*schema.AdditionalProperties.Allowed
 }
 
 func objectToTSType(schema *Schema, neverProperties []string) string {

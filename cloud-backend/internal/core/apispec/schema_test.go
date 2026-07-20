@@ -100,15 +100,16 @@ func TestRenderTypeScriptPreservesMapsRefsArraysNullabilityAndRequired(t *testin
 	}
 }
 
-func TestRenderTypeScriptEmitsOneOfAsDiscriminatedUnion(t *testing.T) {
+func TestRenderTypeScriptEmitsNeverSiblingsForClosedOneOf(t *testing.T) {
+	closed := false
 	direct := &Schema{Type: "object", Properties: map[string]*SchemaRef{
 		"mode":          {Schema: &Schema{Type: "string", Enum: []any{"direct"}}},
 		"directContent": {Schema: StringSchema()},
-	}, Required: []string{"mode", "directContent"}}
+	}, Required: []string{"mode", "directContent"}, AdditionalProperties: &AdditionalProperties{Allowed: &closed}}
 	instruction := &Schema{Type: "object", Properties: map[string]*SchemaRef{
 		"mode":        {Schema: &Schema{Type: "string", Enum: []any{"instruction"}}},
 		"instruction": {Schema: StringSchema()},
-	}, Required: []string{"mode", "instruction"}}
+	}, Required: []string{"mode", "instruction"}, AdditionalProperties: &AdditionalProperties{Allowed: &closed}}
 	spec := New("test", "1").Schema("Mutation", &Schema{OneOf: []*SchemaRef{
 		{Schema: direct}, {Schema: instruction},
 	}}).Build()
@@ -117,6 +118,43 @@ func TestRenderTypeScriptEmitsOneOfAsDiscriminatedUnion(t *testing.T) {
 	want := "export type Mutation = { directContent: string; instruction?: never; mode: 'direct' } | { directContent?: never; instruction: string; mode: 'instruction' };"
 	if !strings.Contains(generated, want) {
 		t.Fatalf("generated TypeScript missing discriminated union %q:\n%s", want, generated)
+	}
+}
+
+func TestRenderTypeScriptDoesNotStrengthenOpenOneOf(t *testing.T) {
+	left := &Schema{Type: "object", Properties: map[string]*SchemaRef{
+		"kind": {Schema: &Schema{Type: "string", Enum: []any{"left"}}}, "left": {Schema: StringSchema()},
+	}, Required: []string{"kind", "left"}}
+	right := &Schema{Type: "object", Properties: map[string]*SchemaRef{
+		"kind": {Schema: &Schema{Type: "string", Enum: []any{"right"}}}, "right": {Schema: StringSchema()},
+	}, Required: []string{"kind", "right"}}
+	spec := New("test", "1").Schema("OpenUnion", &Schema{OneOf: []*SchemaRef{
+		{Schema: left}, {Schema: right},
+	}}).Build()
+
+	generated := string(RenderTypeScript(spec))
+	want := "export type OpenUnion = { kind: 'left'; left: string } | { kind: 'right'; right: string };"
+	if !strings.Contains(generated, want) || strings.Contains(generated, "never") {
+		t.Fatalf("open oneOf was strengthened beyond OpenAPI %q:\n%s", want, generated)
+	}
+}
+
+func TestRenderTypeScriptAppliesNeverOnlyToClosedBranches(t *testing.T) {
+	closed := false
+	closedLeft := &Schema{Type: "object", Properties: map[string]*SchemaRef{
+		"kind": {Schema: &Schema{Type: "string", Enum: []any{"left"}}}, "left": {Schema: StringSchema()},
+	}, Required: []string{"kind", "left"}, AdditionalProperties: &AdditionalProperties{Allowed: &closed}}
+	openRight := &Schema{Type: "object", Properties: map[string]*SchemaRef{
+		"kind": {Schema: &Schema{Type: "string", Enum: []any{"right"}}}, "right": {Schema: StringSchema()},
+	}, Required: []string{"kind", "right"}}
+	spec := New("test", "1").Schema("MixedUnion", &Schema{OneOf: []*SchemaRef{
+		{Schema: closedLeft}, {Schema: openRight},
+	}}).Build()
+
+	generated := string(RenderTypeScript(spec))
+	want := "export type MixedUnion = { kind: 'left'; left: string; right?: never } | { kind: 'right'; right: string };"
+	if !strings.Contains(generated, want) {
+		t.Fatalf("closed/open oneOf exactness mismatch %q:\n%s", want, generated)
 	}
 }
 

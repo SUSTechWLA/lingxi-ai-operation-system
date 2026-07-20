@@ -1,4 +1,5 @@
 import type {
+  ArtifactSelection,
   ShotCandidate,
   ShotHistoryResponse,
   ShotListItem,
@@ -30,3 +31,25 @@ const bothContents = {
 
 // @ts-expect-error a pre-bound value carrying both sibling contents is invalid
 export const invalidMutation: StepRevisionMutationRequest = bothContents
+
+const mixedRectAndTime = {
+  kind: 'rect' as const,
+  x: 0,
+  y: 0,
+  width: 100,
+  height: 100,
+  startMs: 0,
+  endMs: 1000,
+}
+
+// @ts-expect-error closed rect selection cannot carry time-range fields
+export const invalidMixedSelection: ArtifactSelection = mixedRectAndTime
+
+export const nullableSelectionMutation: StepRevisionMutationRequest = {
+  artifactId: 'artifact-1',
+  baseVersion: 1,
+  confirmedAffectedShotIds: [],
+  directContent: 'direct',
+  mode: 'direct',
+  selection: null,
+}

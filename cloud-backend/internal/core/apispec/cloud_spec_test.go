@@ -240,6 +240,47 @@ func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 	}
 }
 
+func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
+	selection := BuildCloudSpec().Components.Schemas["ArtifactSelection"]
+	if selection == nil || len(selection.OneOf) != 2 {
+		t.Fatalf("selection schema = %+v", selection)
+	}
+	for _, branch := range selection.OneOf {
+		if branch == nil || branch.Schema == nil {
+			t.Fatal("selection branch must be inline")
+		}
+		assertSchemaClosed(t, branch.Schema)
+		wire := serializedObjectSchema(t, branch.Schema)
+		kind := inlineProperty(t, branch.Schema, "kind").Enum[0]
+		switch kind {
+		case "rect":
+			if got, want := sortedRawPropertyNames(wire.Properties), []string{"height", "kind", "width", "x", "y"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("rect properties = %v, want %v", got, want)
+			}
+			if got, want := wire.Required, []string{"kind", "x", "y", "width", "height"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("rect required = %v, want %v", got, want)
+			}
+		case "time":
+			if got, want := sortedRawPropertyNames(wire.Properties), []string{"endMs", "kind", "startMs"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("time properties = %v, want %v", got, want)
+			}
+			if got, want := wire.Required, []string{"kind", "startMs", "endMs"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("time required = %v, want %v", got, want)
+			}
+		default:
+			t.Fatalf("unexpected selection kind %v", kind)
+		}
+	}
+
+	mutation := BuildCloudSpec().Components.Schemas["StepRevisionMutationRequest"]
+	for _, branch := range mutation.OneOf {
+		selectionProperty := inlineProperty(t, branch.Schema, "selection")
+		if !selectionProperty.Nullable {
+			t.Fatalf("optional selection must accept JSON null: %+v", selectionProperty)
+		}
+	}
+}
+
 func TestCloudSpec_ShotPageDocumentsActualQuery(t *testing.T) {
 	op := operationForMethod(t, BuildCloudSpec().Paths["/api/video-projects/:id/shots"], "GET")
 	got := map[string]bool{}
@@ -368,6 +409,38 @@ func assertSchemaClosed(t *testing.T, schema *Schema) {
 	if !strings.Contains(string(encoded), `"additionalProperties":false`) {
 		t.Fatalf("schema is not closed: %s", encoded)
 	}
+}
+
+type serializedObject struct {
+	AdditionalProperties bool                       `json:"additionalProperties"`
+	Properties           map[string]json.RawMessage `json:"properties"`
+	Required             []string                   `json:"required"`
+}
+
+func serializedObjectSchema(t *testing.T, schema *Schema) serializedObject {
+	t.Helper()
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	var wire serializedObject
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("unmarshal serialized schema: %v", err)
+	}
+	if !wire.AdditionalProperties {
+		return wire
+	}
+	t.Fatalf("serialized schema is open: %s", encoded)
+	return serializedObject{}
+}
+
+func sortedRawPropertyNames(properties map[string]json.RawMessage) []string {
+	names := make([]string, 0, len(properties))
+	for name := range properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func TestBuildCloudSpec_NoDuplicateOperationIDs(t *testing.T) {
