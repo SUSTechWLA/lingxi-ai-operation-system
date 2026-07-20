@@ -1009,7 +1009,7 @@ func actionsForCreatorState(state model.CreatorStepState) []string {
 	case model.CreatorStepNeedsAttention:
 		return []string{"view", "retry", "revise"}
 	case model.CreatorStepNeedsReview:
-		return []string{"view", "review", "revise"}
+		return []string{"view", "confirm", "revise"}
 	case model.CreatorStepGenerating:
 		return []string{"view"}
 	case model.CreatorStepConfirmed:

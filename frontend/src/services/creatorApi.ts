@@ -1,4 +1,4 @@
-import type { ApiResponse } from '../utils/types'
+import type { ApiResponse, ArtifactContentResponse } from '../utils/types'
 import type {
   CandidateAcceptRequest,
   CandidateRestoreRequest,
@@ -41,6 +41,13 @@ function assertIdempotencyKey(idempotencyKey: string): void {
 
 export async function getCreationView(projectId: string, signal?: AbortSignal): Promise<CreationView> {
   const response = await api.get<ApiResponse<CreationView>>(creatorPath(projectId, '/creation-view'), { signal })
+  return response.data.data
+}
+
+export async function getCreatorArtifactContent(artifactId: string, signal?: AbortSignal): Promise<ArtifactContentResponse> {
+  const response = await api.get<ApiResponse<ArtifactContentResponse>>(
+    `/artifacts/${encodeURIComponent(artifactId)}/content`, { signal },
+  )
   return response.data.data
 }
 

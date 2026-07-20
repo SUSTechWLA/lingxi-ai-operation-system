@@ -45,6 +45,52 @@ try {
     kind: 'fix', stepId: 'shots', label: '处理分镜与素材',
   })
 
+  assert.deepEqual(logic.CREATOR_WORKSPACE_STEP_IDS, [
+    'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
+  ], 'workspace must keep the six creation steps in their real order')
+  assert.equal(logic.isCreatorStepReadable({ state: 'confirmed' }), true)
+  assert.equal(logic.isCreatorStepReadable({ state: 'needs_attention' }), true)
+  assert.equal(logic.canConfirmCreatorStep({ state: 'confirmed', allowedActions: ['confirm'] }), false)
+  assert.equal(logic.canConfirmCreatorStep({ state: 'needs_attention', allowedActions: ['confirm'] }), false)
+  assert.equal(logic.canConfirmCreatorStep({ state: 'needs_review', allowedActions: [] }), false)
+  assert.equal(logic.canConfirmCreatorStep({ state: 'needs_review', allowedActions: ['confirm'] }), true)
+  assert.equal(
+    logic.formatStepImpact({ affectedStepIds: ['shots', 'preview', 'delivery'], requiresConfirmation: true }),
+    '分镜与素材、成片预览、交付需要更新',
+  )
+  assert.deepEqual(
+    logic.normalizeRectSelection({ x: 80, y: 60, width: -30, height: -20 }, { width: 100, height: 100 }),
+    { kind: 'rect', x: 0.5, y: 0.4, width: 0.3, height: 0.2 },
+  )
+  assert.deepEqual(
+    logic.createTimeSelection(2800, -1200),
+    { kind: 'time', startMs: 0, endMs: 2800 },
+  )
+  const instructionMutation = {
+    artifactId: 'artifact-1', baseVersion: 2, mode: 'instruction', instruction: '语气更轻快',
+    selection: { kind: 'time', startMs: 1200, endMs: 2800 }, confirmedAffectedShotIds: ['shot-02'],
+  }
+  assert.equal(
+    logic.creatorMutationIdempotencyKey('project-1', 'script', instructionMutation),
+    logic.creatorMutationIdempotencyKey('project-1', 'script', { ...instructionMutation, confirmedAffectedShotIds: ['shot-02'] }),
+    'retries of the same requested revision need a stable idempotency key',
+  )
+  assert.notEqual(
+    logic.creatorMutationIdempotencyKey('project-1', 'script', instructionMutation),
+    logic.creatorMutationIdempotencyKey('project-1', 'script', { ...instructionMutation, instruction: '改成沉稳语气' }),
+  )
+  assert.notEqual(
+    logic.creatorMutationIdempotencyKey('project-1', 'script', instructionMutation),
+    logic.creatorMutationIdempotencyKey('project-1', 'script', { ...instructionMutation, confirmedAffectedShotIds: ['shot-03'] }),
+  )
+  assert.notEqual(
+    logic.creatorMutationIdempotencyKey('project-1', 'script', { artifactId: 'artifact-1', baseVersion: 2, mode: 'restore', version: 1, confirmedAffectedShotIds: [] }),
+    logic.creatorMutationIdempotencyKey('project-1', 'script', { artifactId: 'artifact-1', baseVersion: 2, mode: 'restore', version: 2, confirmedAffectedShotIds: [] }),
+  )
+  assert.equal(logic.creatorPollDelay(0), 500)
+  assert.equal(logic.creatorPollDelay(1), 1000)
+  assert.equal(logic.creatorPollDelay(20), 5000)
+
   const creationRequest = logic.buildCreationRequest({
     prompt: '为夏日咖啡新品拍一支轻快的竖版短片',
     durationSec: 30,
@@ -185,6 +231,10 @@ try {
   const generatedSource = readFileSync(new URL('../src/utils/api-types.generated.ts', import.meta.url), 'utf8')
   const startPageSource = readFileSync(new URL('../src/features/creator-studio/StartCreationPage.tsx', import.meta.url), 'utf8')
   const librarySource = readFileSync(new URL('../src/features/creator-studio/VideoLibraryPage.tsx', import.meta.url), 'utf8')
+  const workspaceSource = readFileSync(new URL('../src/features/creator-studio/ProjectWorkspacePage.tsx', import.meta.url), 'utf8')
+  const stripSource = readFileSync(new URL('../src/features/creator-studio/components/CreationStrip.tsx', import.meta.url), 'utf8')
+  const reviewSource = readFileSync(new URL('../src/features/creator-studio/components/ArtifactReviewPanel.tsx', import.meta.url), 'utf8')
+  const recoverySource = readFileSync(new URL('../src/features/creator-studio/components/TaskRecoveryBanner.tsx', import.meta.url), 'utf8')
   for (const functionName of [
     'getCreationView', 'getStepVersions', 'previewStepRevision', 'reviseStep', 'confirmStep',
     'restoreStepVersion', 'registerProjectMaterial', 'listShots', 'getShotSummary',
@@ -222,6 +272,24 @@ try {
   assert.match(runtimeApiSource, /'Idempotency-Key': options\.idempotencyKey/)
   assert.match(runtimeApiSource, /signal: options\.signal/)
   assert.match(librarySource, /prioritizeCreationViewProjects/)
+  assert.match(workspaceSource, /getCreationView\(projectId/)
+  assert.match(workspaceSource, /document\.visibilityState !== 'visible'/)
+  assert.match(workspaceSource, /controller\.abort\(\)/)
+  assert.match(workspaceSource, /\[currentArtifactId, currentVersion, projectId, stepId\]/)
+  assert.doesNotMatch(workspaceSource, /\[projectId, stepId, view\]/)
+  assert.match(recoverySource, /生成仍在后台继续/)
+  assert.match(stripSource, /aria-current=\{isCurrent \? 'step' : undefined\}/)
+  assert.match(stripSource, /canSelect/)
+  assert.match(reviewSource, /确认并继续/)
+  assert.match(reviewSource, /previewStepRevision/)
+  assert.match(reviewSource, /confirmedAffectedShotIds/)
+  assert.match(reviewSource, /normalizeRectSelection/)
+  assert.match(reviewSource, /createTimeSelection/)
+  assert.match(reviewSource, /CREATOR_CONFLICT_COPY/)
+  assert.match(reviewSource, /contentLoadedRef/)
+  assert.match(reviewSource, /artifact-selection-overlay/)
+  assert.match(reviewSource, /onPointerCancel/)
+  assert.match(reviewSource, /开始时间（秒）/)
 
   console.log('creator studio logic and client contract checks passed')
 } finally {

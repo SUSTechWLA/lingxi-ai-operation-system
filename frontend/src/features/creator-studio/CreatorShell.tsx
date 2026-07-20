@@ -5,6 +5,7 @@ import type { AppRoute } from '../../creatorRoutes'
 import { cycleFocusIndex } from './focusCycle'
 import StartCreationPage from './StartCreationPage'
 import VideoLibraryPage from './VideoLibraryPage'
+import ProjectWorkspacePage from './ProjectWorkspacePage'
 
 interface CreatorShellProps {
   user: AuthUser
@@ -178,17 +179,7 @@ function CreatorOutlet({ route, onNavigate }: { route: Extract<AppRoute, { kind:
     return <VideoLibraryPage onContinueProject={(projectId, stepId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/${stepId}`)} />
   }
   if (route.page === 'step') {
-    return <CreatorPlaceholder eyebrow="创作进度" title={`项目 ${route.projectId}`} detail={`当前步骤：${route.stepId}`} />
+    return <ProjectWorkspacePage projectId={route.projectId} stepId={route.stepId} onNavigate={onNavigate} />
   }
   return <StartCreationPage onOpenProject={(projectId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/requirements`)} />
-}
-
-function CreatorPlaceholder({ eyebrow, title, detail }: { eyebrow: string; title: string; detail: string }) {
-  return (
-    <section className="creator-placeholder" aria-labelledby="creator-page-title">
-      <p>{eyebrow}</p>
-      <h1 id="creator-page-title">{title}</h1>
-      <span>{detail}</span>
-    </section>
-  )
 }

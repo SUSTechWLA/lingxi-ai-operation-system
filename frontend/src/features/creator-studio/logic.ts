@@ -1,13 +1,29 @@
 import type { AgentStartRunRequest, CreateVideoProjectPayload } from '../../utils/types'
 import type {
+  ArtifactSelection,
   CreationView,
   CreatorAction,
+  CreatorStep,
+  CreatorStepId,
+  StepImpact,
   ShotImpact,
   ShotListFilters,
   ShotListItem,
 } from './types'
 
 export const CREATOR_CONFLICT_COPY = '内容已更新，请刷新后重试'
+export const CREATOR_WORKSPACE_STEP_IDS: readonly CreatorStepId[] = [
+  'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
+]
+
+const STEP_LABELS: Record<CreatorStepId, string> = {
+  requirements: '需求',
+  direction: '创意方案',
+  script: '脚本',
+  shots: '分镜与素材',
+  preview: '成片预览',
+  delivery: '交付',
+}
 
 export interface CreationRequestInput {
   prompt: string
@@ -158,4 +174,90 @@ export function isTargetOnlyShotImpact(
     !impact.regeneratesOtherShots &&
     impact.affectedShotIds.length === 1 &&
     impact.affectedShotIds[0] === targetShotId
+}
+
+export function creatorStepLabel(stepId: CreatorStepId): string {
+  return STEP_LABELS[stepId]
+}
+
+export function isCreatorStepReadable(step: Pick<CreatorStep, 'state'>): boolean {
+  return step.state !== 'not_started'
+}
+
+export function canConfirmCreatorStep(step: Pick<CreatorStep, 'state' | 'allowedActions'>): boolean {
+  return step.state === 'needs_review' && step.allowedActions.includes('confirm')
+}
+
+export function formatStepImpact(impact: Pick<StepImpact, 'affectedStepIds'>): string {
+  const labels = impact.affectedStepIds.map(creatorStepLabel)
+  return labels.length > 0 ? `${labels.join('、')}需要更新` : '本步骤将更新'
+}
+
+export function normalizeRectSelection(
+  rect: { x: number; y: number; width: number; height: number },
+  bounds: { width: number; height: number },
+): Extract<ArtifactSelection, { kind: 'rect' }> {
+  const left = Math.min(rect.x, rect.x + rect.width)
+  const top = Math.min(rect.y, rect.y + rect.height)
+  const right = Math.max(rect.x, rect.x + rect.width)
+  const bottom = Math.max(rect.y, rect.y + rect.height)
+  const width = Math.max(1, bounds.width)
+  const height = Math.max(1, bounds.height)
+  const x = rounded(clamp(left / width, 0, 1))
+  const y = rounded(clamp(top / height, 0, 1))
+  return {
+    kind: 'rect',
+    x,
+    y,
+    width: rounded(clamp(right / width, x, 1) - x),
+    height: rounded(clamp(bottom / height, y, 1) - y),
+  }
+}
+
+export function createTimeSelection(firstMs: number, secondMs: number): Extract<ArtifactSelection, { kind: 'time' }> {
+  const startMs = Math.max(0, Math.min(firstMs, secondMs))
+  return { kind: 'time', startMs, endMs: Math.max(startMs + 1, firstMs, secondMs) }
+}
+
+export function creatorMutationIdempotencyKey(
+  projectId: string,
+  stepId: CreatorStepId,
+  mutation: Record<string, unknown>,
+): string {
+  return `creator-mutation:${projectId}:${stepId}:${stableFingerprint(mutation)}`
+}
+
+export function creatorPollDelay(attempt: number): number {
+  return Math.min(5000, 500 * (2 ** Math.max(0, Math.floor(attempt))))
+}
+
+export function isCreatorConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('response' in error)) return false
+  const response = error.response
+  return Boolean(response && typeof response === 'object' && 'status' in response && response.status === 409)
+}
+
+function stableFingerprint(value: unknown): string {
+  const text = stableStringify(value)
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+function rounded(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`
 }

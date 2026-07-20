@@ -93,6 +93,12 @@ func TestCreatorViewUsesPriorityIgnoresUnknownStagesAndExposesDurableActiveTasks
 	}
 }
 
+func TestCreatorViewNeedsReviewAdvertisesConfirmAction(t *testing.T) {
+	if got := actionsForCreatorState(model.CreatorStepNeedsReview); !reflect.DeepEqual(got, []string{"view", "confirm", "revise"}) {
+		t.Fatalf("needs-review actions = %v, want creator confirmation contract", got)
+	}
+}
+
 func TestCreatorViewMakesPreviewAndDeliveryNeedAttentionWhenAssemblyIsDirty(t *testing.T) {
 	view, err := NewCreatorViewService(
 		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
