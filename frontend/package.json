@@ -53,7 +53,7 @@
   },
   "build": {
     "appId": "com.tangying.ai-os",
-    "productName": "Tangying AI Video Creator",
+    "productName": "Tangying AI Video Creation Assistant",
     "artifactName": "Tangying-AI-Video-Creator-${version}-${os}-${arch}.${ext}",
     "icon": "build/icon.png",
     "directories": {

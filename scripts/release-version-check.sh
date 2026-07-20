@@ -24,12 +24,12 @@ if [[ "$root_version" != "$root_lock_version" ]] || [[ "$root_version" != "$fron
   exit 1
 fi
 
-if [[ "$desktop_product_name" != "Tangying AI Video Creator" ]]; then
+if [[ "$desktop_product_name" != "Tangying AI Video Creation Assistant" ]]; then
   echo "ERROR: desktop productName must use the English release name: $desktop_product_name" >&2
   exit 1
 fi
 
-if [[ "$desktop_artifact_name" != 'Tangying-AI-Video-Creator-${version}-${os}-${arch}.${ext}' ]]; then
+if [[ "$desktop_artifact_name" != "Tangying-AI-Video-Creator-\${version}-\${os}-\${arch}.\${ext}" ]]; then
   echo "ERROR: desktop artifactName does not match the English release contract: $desktop_artifact_name" >&2
   exit 1
 fi
