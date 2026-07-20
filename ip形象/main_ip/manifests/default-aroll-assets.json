@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "tangying-default-aroll-assets/v1",
+  "characterId": "main_ip_sloth",
+  "releaseId": "main-ip-sloth-warm-studio-20260720",
+  "publishedAt": "2026-07-20",
+  "source": {
+    "description": "Approved warm-sloth full-body studio scene with eye-containment v9",
+    "approvedBlendSha256": "e606afb61454c58895f2c81ce5308218b324f62bcbd7505df226ebf3c63c358c",
+    "validationReport": "reports/default-aroll-character-audit.json",
+    "sourceUnchangedAfterPublication": true
+  },
+  "defaults": {
+    "cameraPreset": "front_talking",
+    "presentationMode": "standing",
+    "qualityPreset": "production_1080p",
+    "renderEngine": "BLENDER_EEVEE_NEXT",
+    "fps": 30,
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    }
+  },
+  "supportedOverrides": {
+    "cameraPresets": [
+      "front_talking",
+      "wide",
+      "medium",
+      "close",
+      "three_quarter",
+      "transition",
+      "auto"
+    ],
+    "presentationModes": [
+      "standing"
+    ],
+    "assetIdentityPolicy": "All presets use this same character master and studio template."
+  },
+  "assets": {
+    "characterMaster": {
+      "role": "single_formal_character",
+      "path": "models/main-ip-aroll-master-20260720.blend",
+      "sha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+      "bytes": 25494667,
+      "formalCollection": "COL_CHR_SLOTH_FINAL",
+      "runtimeCollection": "IP_Character_Master",
+      "armature": "RIG_Sloth",
+      "auditReport": "reports/default-aroll-character-audit.json"
+    },
+    "studioTemplate": {
+      "role": "character_free_warm_studio",
+      "path": "scenes/warm-sloth-studio-20260720.blend",
+      "sha256": "baffd6c9ca7c6c739c0e807492aa6790911b0d2de91bea6c574b6b96fa5d4c48",
+      "bytes": 670609,
+      "spawnMarker": "IP_Character_Spawn",
+      "focusMarker": "IP_Focus_Head",
+      "auditReport": "reports/default-aroll-studio-audit.json"
+    }
+  },
+  "validation": {
+    "decision": "PASS",
+    "productionReady": true,
+    "blenderVersion": "5.1.2",
+    "singleFormalCharacter": true,
+    "singleArmature": true,
+    "studioContainsNoCharacter": true,
+    "studioContainsNoArmature": true,
+    "standingRuntimeContract": true,
+    "vertexOrderPreserved": true,
+    "shapeKeyOrderPreserved": true,
+    "driverCountPreserved": 8,
+    "shapeKeyEntryCountPreserved": 43,
+    "uvLayersPreserved": true,
+    "actionsPreserved": [
+      "Aroll_Agree_Nod",
+      "Aroll_Explain_Right",
+      "Aroll_Greeting_Wave",
+      "Aroll_OpenPalm_Explain",
+      "Talk_Loop"
+    ],
+    "smokeRender": {
+      "status": "PASS",
+      "report": "reports/default-aroll-smoke.json",
+      "reportSha256": "08a22adf4ad0e4e767141a0cd4e5f949da4ef964512dc3f504ff21e2692a4906",
+      "preview": "renders/default-aroll-smoke.png",
+      "previewSha256": "ed92e60b96ffb97be8ecb3dae4aa85b395de972f918a6615ca563ec1820b9709",
+      "engine": "BLENDER_EEVEE",
+      "viewTransform": "AgX",
+      "dimensions": [
+        640,
+        360
+      ],
+      "renderSeconds": 2.8455672080162913
+    }
+  }
+}

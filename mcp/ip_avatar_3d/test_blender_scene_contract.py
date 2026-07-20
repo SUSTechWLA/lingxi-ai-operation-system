@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 import tempfile
@@ -16,6 +17,11 @@ except ModuleNotFoundError as exc:
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
+DEFAULT_PROFILE_PATH = REPO_ROOT / "ip形象/main_ip/character-profile.json"
+DEFAULT_PROFILE = json.loads(DEFAULT_PROFILE_PATH.read_text(encoding="utf-8"))
+DEFAULT_STUDIO_PATH = DEFAULT_PROFILE_PATH.parent / DEFAULT_PROFILE["render"]["sceneBlendPath"]
+DEFAULT_MASTER_PATH = DEFAULT_PROFILE_PATH.parent / DEFAULT_PROFILE["model"]["masterBlendPath"]
+DEFAULT_MANIFEST_PATH = DEFAULT_PROFILE_PATH.parent / DEFAULT_PROFILE["defaultAssetManifest"]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -1303,15 +1309,18 @@ def test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_em
     assert cyan_bsdf.inputs["Emission Strength"].default_value <= 0.9
 
 
-def test_real_warm_studio_character_validation_passes_both_modes() -> None:
+def test_default_aroll_character_validation_passes_supported_modes() -> None:
+    manifest = json.loads(DEFAULT_MANIFEST_PATH.read_text(encoding="utf-8"))
+    supported_modes = tuple(manifest["supportedOverrides"]["presentationModes"])
+    assert supported_modes == ("standing",)
     reports = warm_character_validator.validate_modes(
-        scene_path=REPO_ROOT / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend",
-        master_path=REPO_ROOT / "ip形象/main_ip/models/main-ip-aroll-master.blend",
-        modes=("standing", "seated"),
+        scene_path=DEFAULT_STUDIO_PATH,
+        master_path=DEFAULT_MASTER_PATH,
+        modes=supported_modes,
         sample_frames=(1, 15, 29),
     )
 
-    assert [report["mode"] for report in reports] == ["standing", "seated"]
+    assert [report["mode"] for report in reports] == list(supported_modes)
     for report in reports:
         assert report["sampleCount"] == 3
         assert set(report["floorClearance"]) == {"left", "right"}
@@ -1375,7 +1384,7 @@ if __name__ == "__main__":
         test_render_settings_are_compatible_with_blender_51_agx_and_eevee,
         test_lighting_qa_applies_and_restores_cycles_key_multiplier,
         test_editorial_studio_uses_aroll_camera_framing_and_restrained_background_emission,
-        test_real_warm_studio_character_validation_passes_both_modes,
+        test_default_aroll_character_validation_passes_supported_modes,
     ]
     try:
         for test in tests:
