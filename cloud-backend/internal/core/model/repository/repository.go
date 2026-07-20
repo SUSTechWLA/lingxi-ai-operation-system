@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -229,6 +230,36 @@ func (r *NodeRepository) FindByID(ctx context.Context, id string) (*model.Node, 
 	}
 
 	return &node, nil
+}
+
+// ClaimRetryByIdempotencyKey durably resets a node for one logical retry.
+// Replaying the same key is a read-only success, so a process interruption
+// between this claim and READY initialization cannot enqueue the expensive
+// node twice.
+func (r *NodeRepository) ClaimRetryByIdempotencyKey(ctx context.Context, id, key string) (*model.Node, bool, error) {
+	if strings.TrimSpace(key) == "" {
+		return nil, false, fmt.Errorf("retry idempotency key is required")
+	}
+	tag, err := r.pool.Exec(ctx, `UPDATE ai_node
+		SET status=$1, output='null'::jsonb, error_message='', retry_count=0,
+		    idempotency_key=$2, version=version+1, started_at=NULL,
+		    completed_at=NULL, progress=0, current_step=''
+		WHERE id=$3 AND idempotency_key IS DISTINCT FROM $2`,
+		string(model.NodeCreated), key, id)
+	if err != nil {
+		return nil, false, err
+	}
+	node, err := r.FindByID(ctx, id)
+	if err != nil {
+		return nil, false, err
+	}
+	if node == nil {
+		return nil, false, fmt.Errorf("node %s not found", id)
+	}
+	if node.IdempotencyKey != key {
+		return nil, false, fmt.Errorf("node %s retry claim was superseded", id)
+	}
+	return node, tag.RowsAffected() == 1, nil
 }
 
 func (r *NodeRepository) FindByTaskID(ctx context.Context, taskID string) ([]*model.Node, error) {

@@ -43,6 +43,9 @@ func DecodeShotDrivenState(raw json.RawMessage) (model.ShotDrivenState, error) {
 	if state.AssemblyReceipts == nil {
 		state.AssemblyReceipts = map[string]model.AssemblyReceipt{}
 	}
+	if state.UpstreamRevisions == nil {
+		state.UpstreamRevisions = map[string]time.Time{}
+	}
 	return state, nil
 }
 
@@ -78,5 +81,6 @@ func emptyShotDrivenState() model.ShotDrivenState {
 		IdempotencyTasks:     map[string]string{},
 		ShotMutationReceipts: map[string]model.ShotMutationReceipt{},
 		AssemblyReceipts:     map[string]model.AssemblyReceipt{},
+		UpstreamRevisions:    map[string]time.Time{},
 	}
 }

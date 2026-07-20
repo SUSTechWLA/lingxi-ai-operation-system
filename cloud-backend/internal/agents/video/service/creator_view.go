@@ -94,16 +94,21 @@ type creatorShotReader interface {
 	getCreatorShotReadState(ctx context.Context, userID, projectID string) (creatorShotReadState, error)
 }
 
+type creatorShotInvalidationService interface {
+	InvalidateShotsForUpstreamRevision(context.Context, string, string, string, []string, string) error
+}
+
 // CreatorViewService combines only persisted project, artifact, and Shot data.
 // It has no client-derived state or workflow topology dependency.
 type CreatorViewService struct {
-	projects  creatorProjectReader
-	artifacts creatorArtifactReader
-	shots     creatorShotReader
-	history   creatorArtifactHistoryReader
-	revisions creatorRevisionService
-	reviews   creatorReviewMutations
-	assembly  creatorAssemblyService
+	projects          creatorProjectReader
+	artifacts         creatorArtifactReader
+	shots             creatorShotReader
+	history           creatorArtifactHistoryReader
+	revisions         creatorRevisionService
+	reviews           creatorReviewMutations
+	assembly          creatorAssemblyService
+	shotInvalidations creatorShotInvalidationService
 }
 
 type creatorArtifactHistoryReader interface {
@@ -123,13 +128,15 @@ type creatorReviewMutations interface {
 	ConfirmForArtifact(context.Context, string, string, string, string, string) error
 	ReopenWithArtifact(context.Context, string, string, string, string, string, string, string) error
 	Regenerate(context.Context, string, string, string, string) ([]string, error)
+	RegenerateIdempotent(context.Context, string, string, string, string, string) ([]string, error)
 	RegenerationStatus(context.Context, string, string) (string, error)
 }
 
 type creatorAssemblyService interface {
 	RebuildFinalAssembly(context.Context, string, string, string) (AssemblyRebuildResult, error)
 	MarkFinalAssemblyQueued(context.Context, string, string, string, string, string) (AssemblyRebuildResult, error)
-	ClaimFinalAssemblyDispatch(context.Context, string, string, string) (AssemblyRebuildResult, error)
+	ClaimFinalAssemblyDispatch(context.Context, string, string, string, string, string, string) (AssemblyRebuildResult, error)
+	ClaimFinalAssemblyRedispatch(context.Context, string, string, string) (AssemblyRebuildResult, error)
 	LatestAssemblyReceipt(context.Context, string, string) (model.AssemblyReceipt, bool, error)
 	GetAssemblyReceipt(context.Context, string, string, string) (model.AssemblyReceipt, bool, error)
 }
@@ -172,6 +179,9 @@ func NewCreatorViewService(projects creatorProjectReader, shots creatorShotReade
 	if assembly, ok := shots.(creatorAssemblyService); ok {
 		svc.assembly = assembly
 	}
+	if invalidations, ok := shots.(creatorShotInvalidationService); ok {
+		svc.shotInvalidations = invalidations
+	}
 	return svc
 }
 
@@ -186,16 +196,40 @@ func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, p
 	if err != nil || result.Status == "blocked" {
 		return result, err
 	}
-	if result.Status == "queued" || result.Status == "dispatching" {
+	if result.Status == "dispatching" {
 		receipt, found, receiptErr := s.assembly.GetAssemblyReceipt(ctx, userID, projectID, idempotencyKey)
 		if receiptErr != nil || !found {
 			return result, receiptErr
 		}
 		current, currentErr := s.currentArtifactForStep(ctx, projectID, model.CreatorStepPreview)
-		if currentErr != nil || current == nil || (receipt.BasePreviewArtifactID != "" && current.ID != receipt.BasePreviewArtifactID) {
+		if currentErr != nil || current == nil {
 			return result, currentErr
 		}
-		runID, reviewID, resolveErr := s.reviews.ResolveReviewGate(ctx, current, receipt.PreviewTaskID, "")
+		if receipt.BasePreviewArtifactID == "" || receipt.PreviewTaskID == "" || receipt.PreviewReviewID == "" || receipt.DispatchAttempt <= 0 {
+			return result, fmt.Errorf("assembled preview dispatch receipt is incomplete")
+		}
+		if current.ID != receipt.BasePreviewArtifactID {
+			return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, receipt.BasePreviewArtifactID, receipt.PreviewTaskID)
+		}
+		runID, reviewID, resolveErr := s.reviews.ResolveReviewGate(ctx, current, receipt.PreviewTaskID, receipt.PreviewReviewID)
+		if resolveErr != nil {
+			return result, resolveErr
+		}
+		if _, retryErr := s.reviews.RegenerateIdempotent(ctx, runID, reviewID, userID, "resume durable assembled preview dispatch", assemblyDispatchKey(idempotencyKey, receipt.DispatchAttempt)); retryErr != nil {
+			return result, retryErr
+		}
+		return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
+	}
+	if result.Status == "queued" {
+		receipt, found, receiptErr := s.assembly.GetAssemblyReceipt(ctx, userID, projectID, idempotencyKey)
+		if receiptErr != nil || !found {
+			return result, receiptErr
+		}
+		current, currentErr := s.currentArtifactForStep(ctx, projectID, model.CreatorStepPreview)
+		if currentErr != nil || current == nil || current.ID != receipt.BasePreviewArtifactID {
+			return result, currentErr
+		}
+		runID, reviewID, resolveErr := s.reviews.ResolveReviewGate(ctx, current, receipt.PreviewTaskID, receipt.PreviewReviewID)
 		if resolveErr != nil {
 			return result, resolveErr
 		}
@@ -203,36 +237,26 @@ func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, p
 		if statusErr != nil {
 			return result, fmt.Errorf("assembled preview status is unavailable; wait for the current preview or retry after it reports a failure")
 		}
-		if receipt.BasePreviewArtifactID == "" && status == "READY" {
-			if _, retryErr := s.reviews.Regenerate(ctx, runID, reviewID, userID, "resume claimed assembled preview"); retryErr != nil {
-				return result, retryErr
-			}
-			return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
-		}
-		if status == "CREATED" || status == "RUNNING" || status == "WAITING_LOCAL" || status == "LOCAL_RUNNING" || status == "RETRYING" || status == "SUCCESS" || status == "COMPLETED" {
-			if receipt.Status == "dispatching" {
-				// Regenerate synchronously resets the same preview source before it
-				// returns. Seeing that source active (or complete) proves the
-				// dispatch survived even if the process died before the queued
-				// receipt was persisted. Promote the durable claim without sending
-				// another expensive render request.
-				return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
-			}
+		if status == "CREATED" || status == "READY" || status == "RUNNING" || status == "WAITING_LOCAL" || status == "LOCAL_RUNNING" || status == "RETRYING" || status == "SUCCESS" || status == "COMPLETED" {
 			return result, nil
 		}
 		if status != "FAILED" && status != "CANCELLED" && status != "LOCAL_FAILED" && status != "HEARTBEAT_TIMEOUT" {
 			return result, fmt.Errorf("assembled preview is in unknown state %q", status)
 		}
-		if _, retryErr := s.reviews.Regenerate(ctx, runID, reviewID, userID, "retry assembled preview after a failed attempt"); retryErr != nil {
-			return result, retryErr
+		if result, err = s.assembly.ClaimFinalAssemblyRedispatch(ctx, userID, projectID, idempotencyKey); err != nil || result.Status != "dispatching" {
+			return result, err
+		}
+		receipt, found, err = s.assembly.GetAssemblyReceipt(ctx, userID, projectID, idempotencyKey)
+		if err != nil || !found {
+			return result, err
+		}
+		if _, err = s.reviews.RegenerateIdempotent(ctx, runID, reviewID, userID, "retry assembled preview after a failed attempt", assemblyDispatchKey(idempotencyKey, receipt.DispatchAttempt)); err != nil {
+			return result, err
 		}
 		return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
 	}
 	if result.Status != "validated" {
 		return result, nil
-	}
-	if result, err = s.assembly.ClaimFinalAssemblyDispatch(ctx, userID, projectID, idempotencyKey); err != nil || result.Status != "dispatching" {
-		return result, err
 	}
 	current, err := s.currentArtifactForStep(ctx, projectID, model.CreatorStepPreview)
 	if err != nil {
@@ -242,10 +266,24 @@ func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, p
 	if err != nil {
 		return result, err
 	}
-	if _, err = s.reviews.Regenerate(ctx, runID, reviewID, userID, "accepted Shot changes require a new assembled preview"); err != nil {
+	if result, err = s.assembly.ClaimFinalAssemblyDispatch(ctx, userID, projectID, idempotencyKey, current.ID, runID, reviewID); err != nil || result.Status != "dispatching" {
+		return result, err
+	}
+	receipt, found, err := s.assembly.GetAssemblyReceipt(ctx, userID, projectID, idempotencyKey)
+	if err != nil || !found {
+		return result, err
+	}
+	if _, err = s.reviews.RegenerateIdempotent(ctx, runID, reviewID, userID, "accepted Shot changes require a new assembled preview", assemblyDispatchKey(idempotencyKey, receipt.DispatchAttempt)); err != nil {
 		return result, err
 	}
 	return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
+}
+
+func assemblyDispatchKey(idempotencyKey string, attempt int) string {
+	if attempt <= 0 {
+		attempt = 1
+	}
+	return fmt.Sprintf("%s:dispatch:%d", idempotencyKey, attempt)
 }
 
 func (s *CreatorViewService) WithStepMutations(revisions creatorRevisionService, reviews creatorReviewMutations) *CreatorViewService {
@@ -479,7 +517,7 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	}
 	var providers map[string]interface{}
 	if mode == "instruction" {
-		providers, err = s.creatorModelProviders(ctx, userID, projectID, base)
+		providers, err = s.creatorModelProviders(ctx, userID, projectID, req.ModelProviders)
 		if err != nil {
 			return nil, err
 		}
@@ -502,6 +540,9 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	}
 	if !validCreatorRevisionChild(revised.Artifact, base, projectID, stepID) {
 		return nil, ErrCreatorArtifactNotFound
+	}
+	if err := s.applyCreatorShotInvalidation(ctx, userID, projectID, revised.Artifact.ID, stepID, impact); err != nil {
+		return nil, err
 	}
 	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, projectID, base.ID, revised.Artifact.ID, userID, "内容已修改，请重新确认"); err != nil {
 		return nil, err
@@ -607,6 +648,9 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 	}
 	if !validCreatorRevisionChild(restored.Artifact, current, projectID, stepID) {
 		return nil, ErrCreatorArtifactNotFound
+	}
+	if err := s.applyCreatorShotInvalidation(ctx, userID, projectID, restored.Artifact.ID, stepID, impact); err != nil {
+		return nil, err
 	}
 	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, projectID, current.ID, restored.Artifact.ID, userID, "历史版本已恢复，请重新确认"); err != nil {
 		return nil, err
@@ -876,6 +920,9 @@ func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, p
 	if runID != receipt.RunID || reviewID != receipt.ReviewID {
 		return nil, ErrCreatorIdempotencyConflict
 	}
+	if err := s.applyCreatorShotInvalidation(ctx, userID, projectID, current.ID, stepID, impact); err != nil {
+		return nil, err
+	}
 	reason := "内容已修改，请重新确认"
 	if operation == "restore" {
 		reason = "历史版本已恢复，请重新确认"
@@ -890,13 +937,26 @@ func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, p
 	return &model.StepMutationResult{Artifact: current, Impact: impact, View: view}, nil
 }
 
+func (s *CreatorViewService) applyCreatorShotInvalidation(ctx context.Context, userID, projectID, revisionID string, stepID model.CreatorStepID, impact model.StepImpact) error {
+	if len(impact.AffectedShotIDs) == 0 {
+		return nil
+	}
+	if s.shotInvalidations == nil {
+		return ErrCreatorMutationUnavailable
+	}
+	return s.shotInvalidations.InvalidateShotsForUpstreamRevision(
+		ctx, userID, projectID, revisionID, impact.AffectedShotIDs,
+		fmt.Sprintf("%s changed; review affected Shots before assembly", stepID),
+	)
+}
+
 func reflectCreatorJSON(left, right interface{}) bool {
 	a, _ := json.Marshal(left)
 	b, _ := json.Marshal(right)
 	return string(a) == string(b)
 }
 
-func (s *CreatorViewService) creatorModelProviders(ctx context.Context, userID, projectID string, base *artifact.Artifact) (map[string]interface{}, error) {
+func (s *CreatorViewService) creatorModelProviders(ctx context.Context, userID, projectID string, runtimeProviders map[string]interface{}) (map[string]interface{}, error) {
 	project, err := s.projects.GetProject(ctx, userID, projectID)
 	if err != nil || project == nil || project.ID != projectID {
 		return nil, ErrCreatorModelProviderUnavailable
@@ -905,23 +965,29 @@ func (s *CreatorViewService) creatorModelProviders(ctx context.Context, userID, 
 	if len(project.Config) > 0 {
 		_ = json.Unmarshal(project.Config, &config)
 	}
-	providers, _ := config["modelProviders"].(map[string]interface{})
-	if !validCreatorTextProvider(providers) && base != nil && base.Metadata != nil {
-		providers, _ = base.Metadata["modelProviders"].(map[string]interface{})
-	}
-	if !validCreatorTextProvider(providers) {
+	refs, _ := config["modelProviderRefs"].(map[string]interface{})
+	if !creatorTextProviderMatchesReference(refs, runtimeProviders) {
 		return nil, ErrCreatorModelProviderUnavailable
 	}
-	data, _ := json.Marshal(providers)
+	data, _ := json.Marshal(runtimeProviders)
 	var cloned map[string]interface{}
 	_ = json.Unmarshal(data, &cloned)
 	return cloned, nil
 }
 
-func validCreatorTextProvider(providers map[string]interface{}) bool {
+func creatorTextProviderMatchesReference(refs, providers map[string]interface{}) bool {
+	ref, _ := refs["text_to_text"].(map[string]interface{})
 	provider, _ := providers["text_to_text"].(map[string]interface{})
+	source, _ := ref["source"].(string)
+	refBaseURL, _ := ref["baseUrl"].(string)
+	refModel, _ := ref["model"].(string)
+	baseURL, _ := provider["baseUrl"].(string)
+	modelName, _ := provider["model"].(string)
 	apiKey, _ := provider["apiKey"].(string)
-	return strings.TrimSpace(apiKey) != ""
+	return strings.TrimSpace(source) == "local_agent" &&
+		strings.TrimSpace(refBaseURL) != "" && strings.TrimSpace(refBaseURL) == strings.TrimSpace(baseURL) &&
+		strings.TrimSpace(refModel) != "" && strings.TrimSpace(refModel) == strings.TrimSpace(modelName) &&
+		strings.TrimSpace(apiKey) != ""
 }
 
 func newCreatorSteps() []model.CreatorStep {

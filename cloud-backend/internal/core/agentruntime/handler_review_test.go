@@ -698,8 +698,23 @@ type recordingReviewStateMachine struct {
 }
 
 type recordingRegenerationDispatcher struct {
-	resumedTaskID string
-	retriedNodeID string
+	resumedTaskID   string
+	retriedNodeID   string
+	idempotentKeys  map[string]bool
+	idempotentCalls int
+}
+
+func (d *recordingRegenerationDispatcher) RetryNodeIdempotent(_ context.Context, nodeID, key string) error {
+	if d.idempotentKeys == nil {
+		d.idempotentKeys = map[string]bool{}
+	}
+	if d.idempotentKeys[key] {
+		return nil
+	}
+	d.idempotentKeys[key] = true
+	d.idempotentCalls++
+	d.retriedNodeID = nodeID
+	return nil
 }
 
 func (d *recordingRegenerationDispatcher) ResumeTask(_ context.Context, taskID string) error {

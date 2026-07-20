@@ -27,6 +27,7 @@ type ReviewMutationService interface {
 	ConfirmForArtifact(ctx context.Context, runID, reviewID, artifactID, reviewerID, comment string) error
 	ReopenWithArtifact(ctx context.Context, runID, reviewID, projectID, expectedArtifactID, artifactID, reviewerID, reason string) error
 	Regenerate(ctx context.Context, runID, reviewID, reviewerID, hint string) ([]string, error)
+	RegenerateIdempotent(ctx context.Context, runID, reviewID, reviewerID, hint, idempotencyKey string) ([]string, error)
 	RegenerationStatus(ctx context.Context, runID, reviewID string) (string, error)
 }
 
@@ -302,6 +303,17 @@ func (s *reviewMutationService) SubmitEdited(ctx context.Context, runID, reviewI
 }
 
 func (s *reviewMutationService) Regenerate(ctx context.Context, runID, reviewID, reviewerID, hint string) ([]string, error) {
+	return s.regenerate(ctx, runID, reviewID, reviewerID, hint, "")
+}
+
+func (s *reviewMutationService) RegenerateIdempotent(ctx context.Context, runID, reviewID, reviewerID, hint, idempotencyKey string) ([]string, error) {
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return nil, fmt.Errorf("regeneration idempotency key is required")
+	}
+	return s.regenerate(ctx, runID, reviewID, reviewerID, hint, strings.TrimSpace(idempotencyKey))
+}
+
+func (s *reviewMutationService) regenerate(ctx context.Context, runID, reviewID, reviewerID, hint, idempotencyKey string) ([]string, error) {
 	run, node, err := s.findReviewNode(ctx, runID, reviewID)
 	if err != nil {
 		return nil, err
@@ -319,8 +331,23 @@ func (s *reviewMutationService) Regenerate(ctx context.Context, runID, reviewID,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.nodes.UpdateStatus(ctx, resolvedSourceID, model.NodeCreated, nil, ""); err != nil {
-		return nil, err
+	if idempotencyKey != "" {
+		source, sourceErr := s.reviewNodeByID(ctx, node.TaskID, resolvedSourceID)
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		if source.IdempotencyKey == idempotencyKey && source.Status != model.NodeCreated {
+			// This logical retry already advanced past its durable CREATED claim.
+			// Replaying must not reset a review gate that may already have been
+			// reopened by the completed source; the caller only needs to persist
+			// its own queued receipt.
+			return downstreamStaleArtifactsForReview(node), nil
+		}
+	}
+	if idempotencyKey == "" {
+		if err := s.nodes.UpdateStatus(ctx, resolvedSourceID, model.NodeCreated, nil, ""); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.nodes.UpdateStatus(ctx, node.ID, model.NodeCreated, nil, ""); err != nil {
 		return nil, err
@@ -329,13 +356,34 @@ func (s *reviewMutationService) Regenerate(ctx context.Context, runID, reviewID,
 		if err := s.regeneration.ResumeTask(ctx, node.TaskID); err != nil {
 			return nil, err
 		}
-		if err := s.regeneration.RetryNode(ctx, resolvedSourceID); err != nil {
+		if idempotencyKey != "" {
+			idempotent, ok := s.regeneration.(IdempotentRegenerationDispatcher)
+			if !ok {
+				return nil, fmt.Errorf("regeneration dispatcher does not support idempotent retry")
+			}
+			if err := idempotent.RetryNodeIdempotent(ctx, resolvedSourceID, idempotencyKey); err != nil {
+				return nil, err
+			}
+		} else if err := s.regeneration.RetryNode(ctx, resolvedSourceID); err != nil {
 			return nil, err
 		}
 	}
 	s.writeDecisionLog(ctx, run, node, DecisionStageRegeneration, "approved", reviewerID, hint, false)
 	s.triggerDownstreamStale(ctx, run, node, "用户重新生成阶段")
 	return downstreamStaleArtifactsForReview(node), nil
+}
+
+func (s *reviewMutationService) reviewNodeByID(ctx context.Context, taskID, nodeID string) (*model.Node, error) {
+	nodes, err := s.nodes.FindByTaskID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for _, node := range nodes {
+		if node != nil && node.ID == nodeID {
+			return node, nil
+		}
+	}
+	return nil, ErrReviewNotFound
 }
 
 func (s *reviewMutationService) RegenerationStatus(ctx context.Context, runID, reviewID string) (string, error) {

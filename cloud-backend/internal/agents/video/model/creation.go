@@ -734,6 +734,7 @@ type AssemblyReceipt struct {
 	BasePreviewArtifactID string            `json:"basePreviewArtifactId,omitempty"`
 	PreviewTaskID         string            `json:"previewTaskId,omitempty"`
 	PreviewReviewID       string            `json:"previewReviewId,omitempty"`
+	DispatchAttempt       int               `json:"dispatchAttempt,omitempty"`
 	Plan                  FinalAssemblyPlan `json:"plan"`
 	CreatedAt             time.Time         `json:"createdAt"`
 	UpdatedAt             time.Time         `json:"updatedAt"`
@@ -810,6 +811,7 @@ type ShotDrivenState struct {
 	IdempotencyTasks     map[string]string               `json:"idempotencyTasks,omitempty"`
 	ShotMutationReceipts map[string]ShotMutationReceipt  `json:"shotMutationReceipts,omitempty"`
 	AssemblyReceipts     map[string]AssemblyReceipt      `json:"assemblyReceipts,omitempty"`
+	UpstreamRevisions    map[string]time.Time            `json:"upstreamRevisions,omitempty"`
 	AssemblyDirty        bool                            `json:"assemblyDirty"`
 	UpdatedAt            time.Time                       `json:"updatedAt"`
 }

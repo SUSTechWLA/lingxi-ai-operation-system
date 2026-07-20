@@ -92,7 +92,7 @@ func TestCreatorStudioAssemblyDispatchClaimQueuesAndClearsOnlyMatchingSnapshot(t
 	if result, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "assembly-1"); err != nil || result.Status != "validated" {
 		t.Fatalf("rebuild = %+v, err=%v", result, err)
 	}
-	if result, err := svc.ClaimFinalAssemblyDispatch(context.Background(), "u-1", "vp-1", "assembly-1"); err != nil || result.Status != "dispatching" {
+	if result, err := svc.ClaimFinalAssemblyDispatch(context.Background(), "u-1", "vp-1", "assembly-1", "preview-1", "run-1", "review-1"); err != nil || result.Status != "dispatching" {
 		t.Fatalf("claim = %+v, err=%v", result, err)
 	}
 	if result, err := svc.MarkFinalAssemblyQueued(context.Background(), "u-1", "vp-1", "assembly-1", "preview-1", "run-1"); err != nil || result.Status != "queued" || result.AssemblyDirty {
@@ -113,6 +113,43 @@ func TestCreatorStudioAssemblyDispatchClaimQueuesAndClearsOnlyMatchingSnapshot(t
 	afterConflict := decodeStateFromTest(t, store.project.Config)
 	if !afterConflict.AssemblyDirty || afterConflict.AssemblyReceipts["assembly-1"].PreviewTaskID != "run-1" {
 		t.Fatalf("concurrent Shot update was cleared: %+v", afterConflict.AssemblyReceipts["assembly-1"])
+	}
+}
+
+func TestCreatorStudioUpstreamRevisionInvalidatesOnlyConfirmedShotsIdempotently(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t,
+		acceptedProductionShot("shot-001", 1, "candidate-001"),
+		acceptedProductionShot("shot-002", 2, "candidate-002"),
+	)
+	svc := NewCreationService(store)
+	before := decodeStateFromTest(t, store.project.Config)
+	untouched, err := json.Marshal(before.Shots[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := svc.InvalidateShotsForUpstreamRevision(context.Background(), "u-1", "vp-1", "script-artifact-v2", []string{"shot-001"}, "script changed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after := decodeStateFromTest(t, store.project.Config)
+	if !after.AssemblyDirty || after.Shots[0].Version != before.Shots[0].Version+1 || !after.Shots[0].Stale || after.Shots[0].AcceptedCandidateID != "" {
+		t.Fatalf("affected Shot was not invalidated exactly once: %+v", after.Shots[0])
+	}
+	if len(after.ShotHistory["shot-001"]) != 1 || len(after.UpstreamRevisions) != 1 || !after.Shots[0].Candidates[0].Stale || after.Shots[0].Candidates[0].QAReport.Passed {
+		t.Fatalf("invalidation audit/candidate state = %+v", after)
+	}
+	gotUntouched, err := json.Marshal(after.Shots[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotUntouched, untouched) {
+		t.Fatal("upstream revision changed an unconfirmed Shot")
+	}
+	if rebuilt, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "assembly-after-script"); err != nil || rebuilt.Status != "blocked" {
+		t.Fatalf("stale Shot remained assembly eligible: %+v, err=%v", rebuilt, err)
 	}
 }
 

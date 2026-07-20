@@ -247,6 +247,49 @@ func TestReviewMutationRegenerateResetsSourceAndGateAndDispatches(t *testing.T) 
 	}
 }
 
+func TestReviewMutationRegenerateIdempotentReplaysOneDurableNodeRetry(t *testing.T) {
+	runs := newMemoryRunStore()
+	runs.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodes := &mutationNodeStore{nodes: []*model.Node{
+		{ID: "actual-preview-exec", TaskID: "task-1", Type: model.NodeTypeTool, Status: model.NodeSuccess, Input: map[string]interface{}{"agentOriginalNodeId": "preview-exec"}},
+		{ID: "preview-review", TaskID: "task-1", Type: model.NodeTypeReviewGate, Status: model.NodeReady, Input: map[string]interface{}{"sourceNode": "preview-exec", "stage": "preview"}},
+	}}
+	dispatcher := &recordingRegenerationDispatcher{}
+	svc := NewReviewMutationService(NewRunner(nil, runs, nil, nil, nil), nodes, &recordingReviewStateMachine{}).
+		WithRegenerationDispatcher(dispatcher)
+
+	for replay := 0; replay < 2; replay++ {
+		if _, err := svc.RegenerateIdempotent(context.Background(), "run-1", "preview-review", "user-1", "重新拼接", "assembly-key:dispatch:1"); err != nil {
+			t.Fatalf("RegenerateIdempotent() replay %d error = %v", replay, err)
+		}
+	}
+	if dispatcher.idempotentCalls != 1 || dispatcher.retriedNodeID != "actual-preview-exec" {
+		t.Fatalf("idempotent dispatch calls=%d node=%q", dispatcher.idempotentCalls, dispatcher.retriedNodeID)
+	}
+}
+
+func TestReviewMutationRegenerateIdempotentDoesNotResetGateAfterSourceAdvanced(t *testing.T) {
+	runs := newMemoryRunStore()
+	runs.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodes := &mutationNodeStore{nodes: []*model.Node{
+		{ID: "actual-preview-exec", TaskID: "task-1", Type: model.NodeTypeTool, Status: model.NodeSuccess, IdempotencyKey: "assembly-key:dispatch:1", Input: map[string]interface{}{"agentOriginalNodeId": "preview-exec"}},
+		{ID: "preview-review", TaskID: "task-1", Type: model.NodeTypeReviewGate, Status: model.NodeReady, Input: map[string]interface{}{"sourceNode": "preview-exec", "stage": "preview"}},
+	}}
+	dispatcher := &recordingRegenerationDispatcher{}
+	svc := NewReviewMutationService(NewRunner(nil, runs, nil, nil, nil), nodes, &recordingReviewStateMachine{}).
+		WithRegenerationDispatcher(dispatcher)
+
+	if _, err := svc.RegenerateIdempotent(context.Background(), "run-1", "preview-review", "user-1", "恢复拼接回执", "assembly-key:dispatch:1"); err != nil {
+		t.Fatalf("RegenerateIdempotent() error = %v", err)
+	}
+	if nodes.nodes[0].Status != model.NodeSuccess || nodes.nodes[1].Status != model.NodeReady {
+		t.Fatalf("replay reset advanced source/gate: %s/%s", nodes.nodes[0].Status, nodes.nodes[1].Status)
+	}
+	if dispatcher.idempotentCalls != 0 || dispatcher.resumedTaskID != "" {
+		t.Fatalf("advanced dispatch was replayed: %+v", dispatcher)
+	}
+}
+
 type mutationNodeStore struct {
 	nodes []*model.Node
 }

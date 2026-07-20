@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -309,11 +310,12 @@ func TestConfirmedScriptStepRevisionCreatesNewVersionAndReopensOnlyItsReview(t *
 	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
 	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
 	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "script-review"}
+	shots := &recordingCreatorShotInvalidator{fakeCreatorShotReader: fakeCreatorShotReader{state: creatorShotReadState{
+		Summary: model.ShotSummary{Total: 2}, ShotIDs: []string{"shot-2", "shot-1"},
+	}}}
 	svc := NewCreatorViewService(
 		fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1"}},
-		fakeCreatorShotReader{state: creatorShotReadState{
-			Summary: model.ShotSummary{Total: 2}, ShotIDs: []string{"shot-2", "shot-1"},
-		}},
+		shots,
 		artifacts,
 	).WithStepMutations(revisions, reviews)
 
@@ -342,6 +344,9 @@ func TestConfirmedScriptStepRevisionCreatesNewVersionAndReopensOnlyItsReview(t *
 	if reviews.reopenedArtifactID != result.Artifact.ID || reviews.reopenedReviewID != "script-review" {
 		t.Fatalf("review reopen = %+v, want script-review with new artifact", reviews)
 	}
+	if shots.calls != 1 || shots.revisionID != result.Artifact.ID || !reflect.DeepEqual(shots.shotIDs, []string{"shot-1", "shot-2"}) {
+		t.Fatalf("Shot invalidation = %+v", shots)
+	}
 }
 
 func TestStepRevisionImpactUsesExactDurableShotSetAndRejectsUnknownStep(t *testing.T) {
@@ -369,13 +374,14 @@ func TestStepRevisionInstructionPreservesNormalizedSelectionInProvenance(t *test
 	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
 	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
 	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "script-review"}
-	svc := NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", Config: json.RawMessage(`{"modelProviders":{"text_to_text":{"baseUrl":"https://model.test","apiKey":"secret","model":"writer"}}}`)}}, fakeCreatorShotReader{}, artifacts).
+	svc := NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", Config: json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`)}}, fakeCreatorShotReader{}, artifacts).
 		WithStepMutations(revisions, reviews)
 	x, y, width, height := 0.1, 0.2, 0.3, 0.4
 	_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
 		IdempotencyKey: "revise-instruction-1",
 		ArtifactID:     "script-v3", BaseVersion: 3, Mode: "instruction", Instruction: "语气更自然",
-		Selection: &model.ArtifactSelection{Kind: " RECT ", X: &x, Y: &y, Width: &width, Height: &height},
+		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer"}},
+		Selection:      &model.ArtifactSelection{Kind: " RECT ", X: &x, Y: &y, Width: &width, Height: &height},
 	})
 	if err != nil {
 		t.Fatalf("ReviseStep() error = %v", err)
@@ -531,17 +537,29 @@ func TestInstructionRevisionUsesVerifiedProjectProviderAndRejectsMissingConfig(t
 		return NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1", Config: config}}, fakeCreatorShotReader{}, artifacts).
 			WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}), revisions
 	}
-	req := model.StepRevisionRequest{IdempotencyKey: "provider-key", ArtifactID: base.ID, BaseVersion: 3, Mode: "instruction", Instruction: "rewrite"}
-	svc, revisions := newService(json.RawMessage(`{"modelProviders":{"text_to_text":{"baseUrl":"https://model.test","apiKey":"secret","model":"writer"}}}`))
+	req := model.StepRevisionRequest{
+		IdempotencyKey: "provider-key", ArtifactID: base.ID, BaseVersion: 3, Mode: "instruction", Instruction: "rewrite",
+		ModelProviders: map[string]interface{}{"text_to_text": map[string]interface{}{
+			"baseUrl": "https://model.test", "apiKey": "secret", "model": "writer",
+		}},
+	}
+	svc, revisions := newService(json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer"}}}`))
 	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err != nil {
 		t.Fatal(err)
 	}
 	if revisions.reviseRequest.ModelProviders["text_to_text"].(map[string]interface{})["model"] != "writer" {
 		t.Fatalf("providers=%+v", revisions.reviseRequest.ModelProviders)
 	}
+	if encoded, _ := json.Marshal(revisions.reviseRequest.Provenance); strings.Contains(string(encoded), "secret") {
+		t.Fatalf("revision provenance persisted an API key: %s", encoded)
+	}
 	svc, revisions = newService(nil)
 	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); !errors.Is(err, ErrCreatorModelProviderUnavailable) || revisions.calls != 0 {
 		t.Fatalf("missing provider error=%v calls=%d", err, revisions.calls)
+	}
+	svc, revisions = newService(json.RawMessage(`{"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://other.test","model":"writer"}}}`))
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); !errors.Is(err, ErrCreatorModelProviderUnavailable) || revisions.calls != 0 {
+		t.Fatalf("mismatched provider reference error=%v calls=%d", err, revisions.calls)
 	}
 }
 
@@ -689,6 +707,24 @@ type fakeCreatorShotReader struct {
 	err   error
 }
 
+func (f fakeCreatorShotReader) InvalidateShotsForUpstreamRevision(context.Context, string, string, string, []string, string) error {
+	return nil
+}
+
+type recordingCreatorShotInvalidator struct {
+	fakeCreatorShotReader
+	calls      int
+	revisionID string
+	shotIDs    []string
+}
+
+func (f *recordingCreatorShotInvalidator) InvalidateShotsForUpstreamRevision(_ context.Context, _, _, revisionID string, shotIDs []string, _ string) error {
+	f.calls++
+	f.revisionID = revisionID
+	f.shotIDs = append([]string(nil), shotIDs...)
+	return nil
+}
+
 type fakeCreatorAssemblyReader struct {
 	fakeCreatorShotReader
 	receipt               model.AssemblyReceipt
@@ -719,12 +755,27 @@ func (s *interruptOnceCreatorAssembly) MarkFinalAssemblyQueued(ctx context.Conte
 func (f *fakeCreatorAssemblyReader) RebuildFinalAssembly(context.Context, string, string, string) (AssemblyRebuildResult, error) {
 	return AssemblyRebuildResult{Status: f.rebuildStatus}, nil
 }
-func (f *fakeCreatorAssemblyReader) ClaimFinalAssemblyDispatch(context.Context, string, string, string) (AssemblyRebuildResult, error) {
+func (f *fakeCreatorAssemblyReader) ClaimFinalAssemblyDispatch(_ context.Context, _, _, _, artifactID, taskID, reviewID string) (AssemblyRebuildResult, error) {
 	f.claimCalls++
+	f.receipt.Status = "dispatching"
+	f.receipt.BasePreviewArtifactID = artifactID
+	f.receipt.PreviewTaskID = taskID
+	f.receipt.PreviewReviewID = reviewID
+	if f.receipt.DispatchAttempt <= 0 {
+		f.receipt.DispatchAttempt = 1
+	}
+	return AssemblyRebuildResult{Status: "dispatching"}, nil
+}
+func (f *fakeCreatorAssemblyReader) ClaimFinalAssemblyRedispatch(context.Context, string, string, string) (AssemblyRebuildResult, error) {
+	f.receipt.Status = "dispatching"
+	f.receipt.DispatchAttempt++
 	return AssemblyRebuildResult{Status: "dispatching"}, nil
 }
 func (f *fakeCreatorAssemblyReader) MarkFinalAssemblyQueued(context.Context, string, string, string, string, string) (AssemblyRebuildResult, error) {
 	f.markCalls++
+	if f.markErr == nil {
+		f.receipt.Status = "queued"
+	}
 	return AssemblyRebuildResult{Status: "queued"}, f.markErr
 }
 func (f *fakeCreatorAssemblyReader) LatestAssemblyReceipt(context.Context, string, string) (model.AssemblyReceipt, bool, error) {
@@ -745,7 +796,7 @@ func TestCreatorAssemblyRetryDoesNotRedispatchAfterMarkFailureWhenSourceIsActive
 	if reviews.regenerateCalls != 1 {
 		t.Fatalf("dispatch calls=%d", reviews.regenerateCalls)
 	}
-	shots.rebuildStatus, shots.markErr, shots.receipt = "dispatching", nil, model.AssemblyReceipt{Status: "dispatching"}
+	shots.rebuildStatus, shots.markErr = "dispatching", nil
 	if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +826,7 @@ func TestCreatorAssemblyRealStorePromotesInterruptedDispatchWithoutRedispatch(t 
 			}
 			interrupted := decodeStateFromTest(t, store.project.Config)
 			receipt := interrupted.AssemblyReceipts["key-1"]
-			if receipt.Status != "dispatching" || receipt.BasePreviewArtifactID != "" || receipt.PreviewTaskID != "" || !interrupted.AssemblyDirty {
+			if receipt.Status != "dispatching" || receipt.BasePreviewArtifactID != "preview-1" || receipt.PreviewTaskID != "run-assembly-1" || receipt.PreviewReviewID != "review-assembly-1" || receipt.DispatchAttempt != 1 || !interrupted.AssemblyDirty {
 				t.Fatalf("interrupted receipt = %+v, dirty=%v", receipt, interrupted.AssemblyDirty)
 			}
 
@@ -799,6 +850,38 @@ func TestCreatorAssemblyRealStorePromotesInterruptedDispatchWithoutRedispatch(t 
 				t.Fatalf("running recovery view = %+v", view)
 			}
 		})
+	}
+}
+
+func TestCreatorAssemblyRealStoreResumesClaimInterruptedBeforeDispatch(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t, acceptedProductionShot("shot-001", 1, "candidate-001"))
+	state := decodeStateFromTest(t, store.project.Config)
+	state.AssemblyDirty = true
+	setProjectStateForTest(t, store.project, state)
+	assembly := NewCreationService(store)
+	reviews := &fakeCreatorReviewMutations{
+		resolvedRunID: "run-assembly-1", resolvedReviewID: "review-assembly-1",
+		regenerateKeyErr: errors.New("simulated interruption before durable node retry claim"),
+	}
+	artifacts := fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{{ID: "preview-1", ProjectID: "vp-1", StageName: "assembly", Status: "valid", Version: 1}}}
+	svc := NewCreatorViewService(creatorStoreProjectReader{store: store}, assembly, artifacts).WithStepMutations(nil, reviews)
+
+	if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err == nil {
+		t.Fatal("expected simulated pre-dispatch interruption")
+	}
+	interrupted := decodeStateFromTest(t, store.project.Config)
+	receipt := interrupted.AssemblyReceipts["key-1"]
+	if receipt.Status != "dispatching" || receipt.DispatchAttempt != 1 || receipt.BasePreviewArtifactID != "preview-1" || !interrupted.AssemblyDirty || reviews.regenerateCalls != 0 {
+		t.Fatalf("pre-dispatch interrupted state = %+v, dirty=%v calls=%d", receipt, interrupted.AssemblyDirty, reviews.regenerateCalls)
+	}
+
+	reviews.regenerateKeyErr = nil
+	if result, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err != nil || result.Status != "queued" || result.AssemblyDirty {
+		t.Fatalf("resumed pre-dispatch result = %+v, err=%v", result, err)
+	}
+	if reviews.regenerateCalls != 1 {
+		t.Fatalf("resumed claim dispatch calls=%d", reviews.regenerateCalls)
 	}
 }
 
@@ -944,6 +1027,8 @@ type fakeCreatorReviewMutations struct {
 	reopenCalls        int
 	regenerateCalls    int
 	regenerationStatus string
+	regenerateKeys     map[string]bool
+	regenerateKeyErr   error
 }
 
 func (f *fakeCreatorReviewMutations) ResolveReviewGate(context.Context, *artifact.Artifact, string, string) (string, string, error) {
@@ -966,6 +1051,21 @@ func (f *fakeCreatorReviewMutations) ReopenWithArtifact(_ context.Context, runID
 }
 
 func (f *fakeCreatorReviewMutations) Regenerate(context.Context, string, string, string, string) ([]string, error) {
+	f.regenerateCalls++
+	return nil, f.reopenErr
+}
+
+func (f *fakeCreatorReviewMutations) RegenerateIdempotent(_ context.Context, _, _, _, _, key string) ([]string, error) {
+	if f.regenerateKeys == nil {
+		f.regenerateKeys = map[string]bool{}
+	}
+	if f.regenerateKeys[key] {
+		return nil, nil
+	}
+	if f.regenerateKeyErr != nil {
+		return nil, f.regenerateKeyErr
+	}
+	f.regenerateKeys[key] = true
 	f.regenerateCalls++
 	return nil, f.reopenErr
 }

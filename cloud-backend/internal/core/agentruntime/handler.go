@@ -87,6 +87,11 @@ type RegenerationDispatcher interface {
 	RetryNode(ctx context.Context, nodeID string) error
 }
 
+type IdempotentRegenerationDispatcher interface {
+	RegenerationDispatcher
+	RetryNodeIdempotent(ctx context.Context, nodeID, idempotencyKey string) error
+}
+
 type Handler struct {
 	runner            *Runner
 	nodes             ReviewNodeStore

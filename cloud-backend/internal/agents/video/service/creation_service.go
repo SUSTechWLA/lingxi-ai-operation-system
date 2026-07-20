@@ -79,6 +79,83 @@ func (s *CreationService) GetSpec(ctx context.Context, userID, projectID string)
 	return state.Spec, nil
 }
 
+// InvalidateShotsForUpstreamRevision makes the confirmed dependency impact
+// durable without regenerating any Shot. Old candidates remain available for
+// comparison, but none can enter assembly after their script/style/audio input
+// changed. revisionID makes recovery after a cross-store interruption safe.
+func (s *CreationService) InvalidateShotsForUpstreamRevision(ctx context.Context, userID, projectID, revisionID string, shotIDs []string, reason string) error {
+	revisionID = strings.TrimSpace(revisionID)
+	if revisionID == "" {
+		return fmt.Errorf("upstream revision id is required")
+	}
+	targets := make(map[string]bool, len(shotIDs))
+	for _, shotID := range shotIDs {
+		shotID = strings.TrimSpace(shotID)
+		if shotID == "" || targets[shotID] {
+			return fmt.Errorf("invalid affected Shot ids")
+		}
+		targets[shotID] = true
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "upstream creator step changed"
+	}
+	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
+		project, state, err := s.load(ctx, userID, projectID)
+		if err != nil {
+			return err
+		}
+		if _, applied := state.UpstreamRevisions[revisionID]; applied {
+			return nil
+		}
+		now := time.Now().Round(0)
+		found := make(map[string]bool, len(targets))
+		for index := range state.Shots {
+			shot := &state.Shots[index]
+			if !targets[shot.ID] {
+				continue
+			}
+			found[shot.ID] = true
+			state.ShotHistory[shot.ID] = append(state.ShotHistory[shot.ID], model.ShotRevision{
+				RevisionID: "upstream-" + revisionID + "-" + shot.ID,
+				ShotID:     shot.ID, Version: shot.Version, Reason: reason, Snapshot: cloneShot(*shot), CreatedAt: now,
+			})
+			shot.Version++
+			shot.AcceptedCandidateID = ""
+			shot.QAStatus = model.ReviewStatusStale
+			shot.ReviewStatus = model.ReviewStatusStale
+			shot.Stale = true
+			shot.LastRejectReason = reason
+			shot.UpdatedAt = now
+			for candidateIndex := range shot.Candidates {
+				candidate := &shot.Candidates[candidateIndex]
+				candidate.Stale = true
+				candidate.StaleReason = reason
+				candidate.Status = model.ReviewStatusStale
+				if candidate.QAReport != nil {
+					candidate.QAReport.Passed = false
+					candidate.QAReport.Status = model.ReviewStatusStale
+				}
+			}
+		}
+		if len(found) != len(targets) {
+			return fmt.Errorf("affected Shot set changed during upstream revision")
+		}
+		state.AssemblyDirty = true
+		state.UpstreamRevisions[revisionID] = now
+		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: project changed while invalidating affected Shots", ErrShotVersionConflict)
+}
+
 func (s *CreationService) UpsertSpec(ctx context.Context, userID, projectID string, spec *model.VideoCreationSpec) (*model.VideoCreationSpec, error) {
 	if spec == nil {
 		spec = &model.VideoCreationSpec{}
@@ -429,7 +506,7 @@ func (s *CreationService) MarkFinalAssemblyQueued(ctx context.Context, userID, p
 	return AssemblyRebuildResult{}, fmt.Errorf("%w: project changed while queuing preview", ErrShotVersionConflict)
 }
 
-func (s *CreationService) ClaimFinalAssemblyDispatch(ctx context.Context, userID, projectID, idempotencyKey string) (AssemblyRebuildResult, error) {
+func (s *CreationService) ClaimFinalAssemblyDispatch(ctx context.Context, userID, projectID, idempotencyKey, basePreviewArtifactID, previewTaskID, previewReviewID string) (AssemblyRebuildResult, error) {
 	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
 		project, state, err := s.load(ctx, userID, projectID)
 		if err != nil {
@@ -446,6 +523,12 @@ func (s *CreationService) ClaimFinalAssemblyDispatch(ctx context.Context, userID
 			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
 		}
 		receipt.Status, receipt.UpdatedAt = "dispatching", time.Now().Round(0)
+		receipt.BasePreviewArtifactID = basePreviewArtifactID
+		receipt.PreviewTaskID = previewTaskID
+		receipt.PreviewReviewID = previewReviewID
+		if receipt.DispatchAttempt <= 0 {
+			receipt.DispatchAttempt = 1
+		}
 		state.AssemblyReceipts[idempotencyKey] = receipt
 		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
 			continue
@@ -455,6 +538,43 @@ func (s *CreationService) ClaimFinalAssemblyDispatch(ctx context.Context, userID
 		return AssemblyRebuildResult{Status: "dispatching", AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
 	}
 	return AssemblyRebuildResult{}, fmt.Errorf("%w: project changed while claiming assembly dispatch", ErrShotVersionConflict)
+}
+
+func (s *CreationService) ClaimFinalAssemblyRedispatch(ctx context.Context, userID, projectID, idempotencyKey string) (AssemblyRebuildResult, error) {
+	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
+		project, state, err := s.load(ctx, userID, projectID)
+		if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		receipt, ok := state.AssemblyReceipts[idempotencyKey]
+		if !ok {
+			return AssemblyRebuildResult{}, fmt.Errorf("assembly rebuild receipt not found")
+		}
+		if receipt.RequestFingerprint != finalAssemblyFingerprint(state.Shots) {
+			return AssemblyRebuildResult{}, fmt.Errorf("%w: accepted shots changed while retrying preview", ErrShotIdempotencyConflict)
+		}
+		if receipt.Status == "dispatching" {
+			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+		}
+		if receipt.Status != "queued" {
+			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+		}
+		receipt.Status = "dispatching"
+		receipt.DispatchAttempt++
+		if receipt.DispatchAttempt <= 1 {
+			receipt.DispatchAttempt = 2
+		}
+		receipt.UpdatedAt = time.Now().Round(0)
+		state.AssemblyReceipts[idempotencyKey] = receipt
+		state.AssemblyDirty = true
+		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
+			continue
+		} else if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: true, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+	}
+	return AssemblyRebuildResult{}, fmt.Errorf("%w: project changed while claiming assembly redispatch", ErrShotVersionConflict)
 }
 
 func (s *CreationService) LatestAssemblyReceipt(ctx context.Context, userID, projectID string) (model.AssemblyReceipt, bool, error) {
