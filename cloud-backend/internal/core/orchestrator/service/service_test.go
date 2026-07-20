@@ -216,7 +216,8 @@ func (m *mockContextRepo) FindLatestSnapshotByNodeID(ctx context.Context, nodeID
 }
 
 type mockEventSaver struct {
-	events []savedEvent
+	events         []savedEvent
+	readyEventKeys map[string]bool
 }
 
 type savedEvent struct {
@@ -227,7 +228,19 @@ type savedEvent struct {
 }
 
 func newMockEventSaver() *mockEventSaver {
-	return &mockEventSaver{}
+	return &mockEventSaver{readyEventKeys: map[string]bool{}}
+}
+
+func (m *mockEventSaver) SaveNodeReadyEvent(_ context.Context, nodeID, idempotencyKey string, event eventbus.Event) (bool, error) {
+	key := nodeID + "\x00" + idempotencyKey
+	if m.readyEventKeys[key] {
+		return false, nil
+	}
+	m.readyEventKeys[key] = true
+	m.events = append(m.events, savedEvent{
+		aggregateType: "node", aggregateID: nodeID, eventType: eventbus.TopicNodeReady, event: event,
+	})
+	return true, nil
 }
 
 func (m *mockEventSaver) SaveEvent(ctx context.Context, aggregateType, aggregateID, eventType string, event eventbus.Event) error {
@@ -242,6 +255,7 @@ func (m *mockEventSaver) SaveEvent(ctx context.Context, aggregateType, aggregate
 
 // Verify mockEventSaver satisfies the interface
 var _ outbox.EventSaver = (*mockEventSaver)(nil)
+var _ outbox.AtomicNodeReadySaver = (*mockEventSaver)(nil)
 
 type mockPublisher struct {
 	published []publishedEvent
@@ -614,6 +628,28 @@ func TestStateService_InitializeNodeReady(t *testing.T) {
 	}
 	if !found {
 		t.Error("Expected node ready event to be saved")
+	}
+}
+
+func TestStateService_InitializeNodeReadyAtomicallyPublishesOnceAcrossRecoveryRace(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	eventSaver := newMockEventSaver()
+	node := &model.Node{
+		ID: "n1", TaskID: "t1", Status: model.NodeCreated, Type: model.NodeTypeLLM,
+		Name: "assemble", IdempotencyKey: "assembly-key:dispatch:1",
+	}
+	nodeRepo.nodes[node.ID] = node
+	ss := NewStateService(nodeRepo, newMockTaskRepo(), newMockDepRepo(), newMockContextRepo(), eventSaver)
+
+	staleSchedulerCopy := *node
+	if err := ss.InitializeNodeReady(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	if err := ss.InitializeNodeReady(context.Background(), &staleSchedulerCopy); err != nil {
+		t.Fatal(err)
+	}
+	if node.Status != model.NodeReady || len(eventSaver.events) != 1 {
+		t.Fatalf("status=%s events=%d, want one atomic READY dispatch", node.Status, len(eventSaver.events))
 	}
 }
 

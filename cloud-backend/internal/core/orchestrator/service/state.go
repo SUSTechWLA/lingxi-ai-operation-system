@@ -434,10 +434,36 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 		return nil
 	}
 
-	node.Status = model.NodeReady
 	if node.IdempotencyKey == "" {
 		node.IdempotencyKey = node.TaskID + "-" + node.ID
 	}
+
+	payload := buildEventPayload(node.Input, node.Name)
+	readyEvent := eventbus.Event{
+		TaskID:         node.TaskID,
+		NodeID:         node.ID,
+		Type:           string(node.Type),
+		Payload:        payload,
+		TraceID:        node.TaskID + "-" + node.ID,
+		IdempotencyKey: node.IdempotencyKey,
+	}
+	if node.Type != model.NodeTypeControl && node.Type != model.NodeTypeReviewGate {
+		if atomicSaver, ok := s.eventSaver.(outbox.AtomicNodeReadySaver); ok {
+			applied, atomicErr := atomicSaver.SaveNodeReadyEvent(ctx, node.ID, node.IdempotencyKey, readyEvent)
+			if atomicErr != nil {
+				return atomicErr
+			}
+			if !applied {
+				return nil
+			}
+			node.Status = model.NodeReady
+			s.recordContext(ctx, node.TaskID, node.ID, model.ContextNodeReady, "StateMachine", "初始节点就绪（无依赖），进入 READY 状态", buildNodeMetadata(node, model.NodeReady))
+			zap.L().Info("Node is READY (dependencies met)", zap.String("nodeId", node.ID))
+			return nil
+		}
+	}
+
+	node.Status = model.NodeReady
 	if err := s.nodeRepo.Save(ctx, node); err != nil {
 		return err
 	}
@@ -449,16 +475,9 @@ func (s *StateService) InitializeNodeReady(ctx context.Context, node *model.Node
 		return nil
 	}
 
-	payload := buildEventPayload(node.Input, node.Name)
-
-	_ = s.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeReady, eventbus.Event{
-		TaskID:         node.TaskID,
-		NodeID:         node.ID,
-		Type:           string(node.Type),
-		Payload:        payload,
-		TraceID:        node.TaskID + "-" + node.ID,
-		IdempotencyKey: node.IdempotencyKey,
-	})
+	if err := s.eventSaver.SaveEvent(ctx, "node", node.ID, eventbus.TopicNodeReady, readyEvent); err != nil {
+		return err
+	}
 
 	zap.L().Info("Node is READY (dependencies met)", zap.String("nodeId", node.ID))
 	return nil

@@ -16,21 +16,21 @@ import (
 // DefaultRelayConfig returns sane defaults for the outbox relay.
 func DefaultRelayConfig() RelayConfig {
 	return RelayConfig{
-		PollInterval:     100 * time.Millisecond,
-		MaxRetries:       10,
-		BackoffMax:       30 * time.Second,
+		PollInterval:      100 * time.Millisecond,
+		MaxRetries:        10,
+		BackoffMax:        30 * time.Second,
 		BackoffMultiplier: 2.0,
-		BatchSize:        100,
+		BatchSize:         100,
 	}
 }
 
 // RelayConfig tunes the relay behaviour.
 type RelayConfig struct {
-	PollInterval     time.Duration // base interval between polls
-	MaxRetries       int           // moves to DLQ after this many failed attempts
-	BackoffMax       time.Duration // cap for exponential backoff
+	PollInterval      time.Duration // base interval between polls
+	MaxRetries        int           // moves to DLQ after this many failed attempts
+	BackoffMax        time.Duration // cap for exponential backoff
 	BackoffMultiplier float64       // multiplier when Kafka is down
-	BatchSize        int           // max rows to fetch per poll
+	BatchSize         int           // max rows to fetch per poll
 }
 
 type OutboxEntry struct {
@@ -48,11 +48,11 @@ type OutboxEntry struct {
 // It supports retry with exponential backoff, a dead-letter queue, and
 // concurrent-safe row locking (FOR UPDATE SKIP LOCKED).
 type Relay struct {
-	store    OutboxStore
-	pub      EventPublisher
-	cfg      RelayConfig
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	store  OutboxStore
+	pub    EventPublisher
+	cfg    RelayConfig
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewRelay creates a Relay backed by a real PostgreSQL pool.
@@ -329,4 +329,40 @@ func SaveEvent(ctx context.Context, pool *pgxpool.Pool, aggregateType, aggregate
 		aggregateType, aggregateID, eventType, payload,
 	)
 	return err
+}
+
+// SaveNodeReadyEvent closes the crash window between making an executable node
+// READY and recording the event that actually dispatches it. The conditional
+// update also lets scheduler recovery race safely with an API retry: exactly
+// one caller inserts the outbox row.
+func SaveNodeReadyEvent(ctx context.Context, pool *pgxpool.Pool, nodeID, idempotencyKey string, event eventbus.Event) (bool, error) {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return false, err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `UPDATE ai_node
+		SET status='READY', idempotency_key=$1, version=version+1
+		WHERE id=$2 AND status='CREATED'
+		  AND (idempotency_key=$1 OR idempotency_key IS NULL OR idempotency_key='')`,
+		idempotencyKey, nodeID)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload)
+		VALUES ('node', $1, $2, $3)`, nodeID, eventbus.TopicNodeReady, payload); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }

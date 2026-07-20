@@ -13,6 +13,13 @@ type EventSaver interface {
 	SaveEvent(ctx context.Context, aggregateType, aggregateID, eventType string, event eventbus.Event) error
 }
 
+// AtomicNodeReadySaver makes an executable node READY and records its outbox
+// event in the same database transaction. The bool reports whether this caller
+// won the conditional CREATED -> READY transition.
+type AtomicNodeReadySaver interface {
+	SaveNodeReadyEvent(ctx context.Context, nodeID, idempotencyKey string, event eventbus.Event) (bool, error)
+}
+
 // EventPublisher defines the interface for publishing events to the message broker.
 // eventbus.Producer satisfies this via its Publish method.
 type EventPublisher interface {
@@ -48,4 +55,8 @@ func NewOutboxSaver(pool *pgxpool.Pool) *OutboxSaver {
 
 func (s *OutboxSaver) SaveEvent(ctx context.Context, aggregateType, aggregateID, eventType string, event eventbus.Event) error {
 	return SaveEvent(ctx, s.pool, aggregateType, aggregateID, eventType, event)
+}
+
+func (s *OutboxSaver) SaveNodeReadyEvent(ctx context.Context, nodeID, idempotencyKey string, event eventbus.Event) (bool, error) {
+	return SaveNodeReadyEvent(ctx, s.pool, nodeID, idempotencyKey, event)
 }
