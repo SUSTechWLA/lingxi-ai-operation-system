@@ -7,11 +7,15 @@ import type {
   CreatorStepId,
   StepImpact,
   ShotImpact,
+  ShotQueueStatus,
   ShotListFilters,
   ShotListItem,
 } from './types'
 
 export const CREATOR_CONFLICT_COPY = '内容已更新，请刷新后重试'
+export const SHOT_QUEUE_CONFLICT_COPY = '这个 Shot 已有更新，请基于最新版本重试'
+export const SHOT_QUEUE_ROW_HEIGHT = 64
+export const DEFAULT_SHOT_QUEUE_FILTER: Readonly<{ status: ShotQueueStatus }> = { status: 'needs_attention' }
 export const CREATOR_WORKSPACE_STEP_IDS: readonly CreatorStepId[] = [
   'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
 ]
@@ -164,6 +168,36 @@ export function selectShotListItems(
       left.originalIndex - right.originalIndex,
     )
     .map(({ item }) => item)
+}
+
+export function shotQueueWindow(input: {
+  total: number
+  scrollTop: number
+  viewportHeight: number
+  rowHeight?: number
+  overscan?: number
+}): { start: number; end: number; items: number[]; offsetTop: number; totalHeight: number } {
+  const rowHeight = input.rowHeight ?? SHOT_QUEUE_ROW_HEIGHT
+  const overscan = input.overscan ?? 2
+  const total = Math.max(0, Math.floor(input.total))
+  const visible = Math.max(1, Math.ceil(Math.max(0, input.viewportHeight) / rowHeight))
+  const start = Math.max(0, Math.floor(Math.max(0, input.scrollTop) / rowHeight) - overscan)
+  const end = Math.min(total, start + visible + overscan * 2)
+  return {
+    start,
+    end,
+    items: Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index),
+    offsetTop: start * rowHeight,
+    totalHeight: total * rowHeight,
+  }
+}
+
+export function selectedShotAfterAppend<T extends { id: string }>(
+  selectedShotId: string | undefined,
+  current: readonly T[],
+  appended: readonly T[],
+): string | undefined {
+  return selectedShotId || current[0]?.id || appended[0]?.id
 }
 
 export function isTargetOnlyShotImpact(

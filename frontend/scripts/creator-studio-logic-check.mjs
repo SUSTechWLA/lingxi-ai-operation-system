@@ -112,6 +112,15 @@ try {
   assert.equal(logic.didSelectedShotTaskChange(previousTasks, [{ id: 'task-b', shotId: 'shot-b', status: 'running' }], 'shot-a'), true, 'selected shot task disappearing must refetch')
   assert.equal(logic.didSelectedShotTaskChange(previousTasks, [{ id: 'task-a', shotId: 'shot-a', status: 'running' }, { id: 'task-b', shotId: 'shot-b', status: 'processing' }], 'shot-a'), false, 'other shot changes must not refetch selected shot')
   assert.equal(logic.didSelectedShotTaskChange(previousTasks, [], undefined), false, 'no selected shot must not fan out callbacks')
+
+  const hundredShotWindow = logic.shotQueueWindow({
+    total: 100, scrollTop: 0, viewportHeight: 480,
+  })
+  assert.equal(logic.DEFAULT_SHOT_QUEUE_FILTER.status, 'needs_attention', 'the review queue starts with actionable Shots')
+  assert.ok(hundredShotWindow.items.length <= 12, '480px / 64px rows with overscan must render at most 12 queue rows')
+  assert.deepEqual(hundredShotWindow.items, Array.from({ length: hundredShotWindow.items.length }, (_, index) => index))
+  assert.equal(logic.selectedShotAfterAppend('shot-024', [{ id: 'shot-001' }], [{ id: 'shot-025' }]), 'shot-024', 'page append never clears the active Shot')
+  assert.equal(logic.selectedShotAfterAppend(undefined, [{ id: 'shot-001' }], [{ id: 'shot-025' }]), 'shot-001', 'initial page picks its first Shot')
   assert.equal(focus.cycleFocusIndex(1, 3, false), 2)
   assert.equal(focus.cycleFocusIndex(0, 3, true), 2)
   assert.equal(focus.cycleFocusIndex(-1, 3, true), 2)
@@ -260,6 +269,9 @@ try {
   const stripSource = readFileSync(new URL('../src/features/creator-studio/components/CreationStrip.tsx', import.meta.url), 'utf8')
   const reviewSource = readFileSync(new URL('../src/features/creator-studio/components/ArtifactReviewPanel.tsx', import.meta.url), 'utf8')
   const recoverySource = readFileSync(new URL('../src/features/creator-studio/components/TaskRecoveryBanner.tsx', import.meta.url), 'utf8')
+  const queueSource = readFileSync(new URL('../src/features/creator-studio/components/ShotReviewQueue.tsx', import.meta.url), 'utf8')
+  const inspectorSource = readFileSync(new URL('../src/features/creator-studio/components/ShotInspector.tsx', import.meta.url), 'utf8')
+  const improveSource = readFileSync(new URL('../src/features/creator-studio/components/ShotImprovePanel.tsx', import.meta.url), 'utf8')
   for (const functionName of [
     'getCreationView', 'getStepVersions', 'previewStepRevision', 'reviseStep', 'confirmStep',
     'restoreStepVersion', 'registerProjectMaterial', 'listShots', 'getShotSummary',
@@ -320,6 +332,26 @@ try {
   assert.match(reviewSource, /aria-modal="true"/)
   assert.match(reviewSource, /cycleFocusIndex/)
   assert.match(reviewSource, /operationControllerRef\.current === controller/)
+  assert.match(queueSource, /height: 480/)
+  assert.match(queueSource, /SHOT_QUEUE_ROW_HEIGHT/)
+  assert.match(queueSource, /Math\.min\(3, unresolved\.length\)/, 'visible thumbnails must use bounded concurrency')
+  assert.match(queueSource, /getCreatorArtifactContent/, 'queue thumbnails use real artifact metadata')
+  assert.match(queueSource, /scrollRef\.current\.scrollTop = 0/, 'filter changes reset the virtual scroll origin')
+  assert.doesNotMatch(queueSource, /<video\b/, 'the queue never mounts a video player')
+  assert.equal((inspectorSource.match(/<video\b/g) || []).length, 1, 'only the selected candidate mounts one video player')
+  assert.match(inspectorSource, /getCreatorArtifactContent/)
+  assert.match(inspectorSource, /candidateId/)
+  assert.match(inspectorSource, /baseVersion: shot\.version/)
+  assert.match(inspectorSource, /SHOT_QUEUE_CONFLICT_COPY/)
+  assert.match(inspectorSource, /canSubmitShotDuration/)
+  assert.match(inspectorSource, /artifactId of candidateRefs/, 'media source falls back through candidate artifacts')
+  assert.match(improveSource, /isTargetOnlyShotImpact/)
+  assert.match(improveSource, /只会新增 Shot \{sequence\} 的候选，不影响其他 \{Math\.max\(0, totalShots - 1\)\} 个 Shot/)
+  assert.match(improveSource, /crypto\.randomUUID/)
+  assert.match(improveSource, /aria-modal="true"/)
+  assert.match(improveSource, /重试这个 Shot/)
+  assert.match(workspaceSource, /ShotReviewQueue/)
+  assert.match(workspaceSource, /shotWorkspace\?\.shot\.id !== activeShotId/)
 
   console.log('creator studio logic and client contract checks passed')
 } finally {

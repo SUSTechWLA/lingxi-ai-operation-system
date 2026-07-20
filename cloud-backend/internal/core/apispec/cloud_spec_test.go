@@ -180,7 +180,7 @@ func TestCloudSpec_CreatorParametersAndMaterialConstraints(t *testing.T) {
 		t.Fatalf("shot limit schema = %+v", limit)
 	}
 	status := findParameter(shots, "query", "status")
-	if status == nil || inlineParameterSchema(status) == nil || !reflect.DeepEqual(inlineParameterSchema(status).Enum, []any{"pending", "approved", "rejected", "stale"}) {
+	if status == nil || inlineParameterSchema(status) == nil || !reflect.DeepEqual(inlineParameterSchema(status).Enum, []any{"all", "needs_attention", "confirmed", "generating", "failed", "pending", "approved", "rejected", "stale"}) {
 		t.Fatalf("shot status schema = %+v", status)
 	}
 }

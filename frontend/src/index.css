@@ -62,6 +62,26 @@ body {
   cursor: pointer;
 }
 
+.shot-review-workspace { display: grid; grid-template-columns: minmax(17rem, 24rem) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+.shot-review-queue { min-width: 0; padding: 1rem; background: #FFFDF6; border: 1px solid #E8CF86; border-radius: .75rem; box-shadow: 0 14px 32px rgba(43,22,6,.08); }
+.shot-review-queue-heading { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
+.shot-review-queue-heading h2, .shot-improve-panel h3 { margin: .2rem 0; color: #2B1606; }
+.shot-review-queue-heading > span { padding: .25rem .5rem; color: #7B5B2B; background: #FFF0BE; border-radius: 999px; font-size: .75rem; font-weight: 900; }
+.shot-queue-filters { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: .75rem 0; }
+.shot-queue-filters label, .shot-improve-panel > label, .shot-improve-panel fieldset { display: grid; gap: .3rem; color: #7B5B2B; font-size: .75rem; font-weight: 800; }
+.shot-queue-search { grid-column: 1 / -1; }
+.shot-queue-filters select, .shot-queue-filters input, .shot-improve-panel select, .shot-improve-panel textarea { min-width: 0; padding: .45rem .55rem; color: #2B1606; background: #FFF6D6; border: 1px solid #E8CF86; border-radius: .375rem; font: inherit; }
+.shot-queue-scroll { overflow: auto; border-top: 1px solid #E8CF86; border-bottom: 1px solid #E8CF86; }
+.shot-queue-row { display: flex; align-items: center; width: 100%; height: 64px; gap: .55rem; padding: .35rem; color: #2B1606; background: transparent; border: 0; border-bottom: 1px solid rgba(232,207,134,.55); font: inherit; text-align: left; cursor: pointer; }
+.shot-queue-row:hover, .shot-queue-row.is-selected { background: #FFF0BE; }
+.shot-queue-thumb { display: grid; flex: 0 0 3rem; width: 3rem; height: 2.5rem; place-items: center; overflow: hidden; color: #7B5B2B; background: #E8CF86; border-radius: .25rem; font-size: .62rem; font-style: normal; }
+.shot-queue-thumb img { width: 100%; height: 100%; object-fit: cover; }.shot-queue-thumb i { font-style: normal; }
+.shot-queue-copy { display: grid; min-width: 0; flex: 1; }.shot-queue-copy small { overflow: hidden; color: #B44222; font-size: .62rem; text-overflow: ellipsis; white-space: nowrap; }.shot-queue-copy strong { overflow: hidden; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.shot-queue-status { color: #7B5B2B; font-size: .68rem; font-weight: 800; white-space: nowrap; }.shot-queue-status.is-failed, .shot-queue-status.is-cancelled { color: #B44222; }.shot-queue-loading { color: #7B5B2B; font-size: .75rem; }
+.shot-candidate-tabs { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .75rem; }.shot-candidate-tabs button { padding: .4rem .6rem; color: #7B5B2B; background: #FFF6D6; border: 1px solid #E8CF86; border-radius: .35rem; font: inherit; font-size: .75rem; font-weight: 800; }.shot-candidate-tabs button[aria-selected="true"] { color: #2B1606; background: #FFF0BE; border-color: #E89412; }
+.shot-video-stage { min-height: 3rem; }.shot-inspector-meta { display: grid; gap: .5rem; margin-top: 1rem; }.shot-inspector-meta p, .shot-neighbors p { margin: 0; color: #7B5B2B; line-height: 1.55; }.shot-inspector-meta strong, .shot-neighbors strong { display: inline-block; min-width: 5rem; color: #2B1606; }.shot-neighbors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem .75rem; margin-top: 1rem; padding: .75rem; color: #7B5B2B; background: #FFF6D6; border: 1px dashed #E8CF86; border-radius: .5rem; font-size: .8rem; }.shot-neighbors p { grid-column: 1 / -1; }
+.shot-improve-panel { display: grid; gap: .75rem; margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px dashed #E8CF86; }.shot-improve-panel fieldset { padding: .5rem; border: 1px solid #E8CF86; border-radius: .375rem; }.shot-lock-grid { display: flex; flex-wrap: wrap; gap: .45rem .7rem; }.shot-lock-grid label { display: inline-flex; gap: .25rem; align-items: center; }.shot-improve-panel textarea { min-height: 4.5rem; resize: vertical; }
+
 .creator-nav-button {
   padding: 0.55rem 0.8rem;
   color: #2B1606;
@@ -728,6 +748,7 @@ body {
 
   .creation-strip { grid-template-columns: repeat(6, minmax(6.5rem, 1fr)); }
   .artifact-review-heading { align-items: stretch; flex-direction: column; }
+  .shot-review-workspace { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

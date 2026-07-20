@@ -529,6 +529,51 @@ func TestShotPageAndSummaryUseOneDeterministicLatestTask(t *testing.T) {
 	}
 }
 
+func TestListShotPageFriendlyStatusFiltersFullSetBeforePagination(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	shots := make([]model.ShotUnit, 100)
+	for index := range shots {
+		shots[index] = model.ShotUnit{
+			ID: fmt.Sprintf("shot-%03d", index+1), ProjectID: "vp-1", SequenceIndex: index + 1,
+			DurationSec: 6, Version: 1, ReviewStatus: model.ReviewStatusApproved,
+		}
+	}
+	shots[0].ReviewStatus = model.ReviewStatusPending
+	shots[49].ReviewStatus = model.ReviewStatusRejected
+	shots[89].ReviewStatus = model.ReviewStatusStale
+	shots[96].QAStatus = "SHOT_QA_FAILED"
+	store.project = projectWithShotState(t, shots...)
+	state := decodeStateFromTest(t, store.project.Config)
+	state.RegenerationTasks["queued"] = model.ShotRegenerationTask{TaskID: "queued", ShotID: "shot-020", Status: ShotRegenerationQueued, UpdatedAt: time.Now()}
+	state.RegenerationTasks["failed"] = model.ShotRegenerationTask{TaskID: "failed", ShotID: "shot-095", Status: ShotRegenerationFailed, UpdatedAt: time.Now()}
+	setProjectStateForTest(t, store.project, state)
+
+	svc := NewCreationService(store)
+	attention, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Status: "needs_attention", Limit: 2})
+	if err != nil {
+		t.Fatalf("needs attention page: %v", err)
+	}
+	if attention.Total != 5 || len(attention.Items) != 2 || attention.Items[0].ID != "shot-001" || attention.Items[1].ID != "shot-050" || attention.NextCursor == "" {
+		t.Fatalf("friendly filter must be applied before cursor pagination: %+v", attention)
+	}
+	second, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Status: "needs_attention", Limit: 2, Cursor: attention.NextCursor})
+	if err != nil || len(second.Items) != 2 || second.Items[0].ID != "shot-090" || second.Items[1].ID != "shot-095" {
+		t.Fatalf("second friendly filter page=%+v error=%v", second, err)
+	}
+	third, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Status: "needs_attention", Limit: 2, Cursor: second.NextCursor})
+	if err != nil || len(third.Items) != 1 || third.Items[0].ID != "shot-097" {
+		t.Fatalf("QA failure must remain in attention queue: page=%+v error=%v", third, err)
+	}
+	generating, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Status: "generating", Limit: 24})
+	if err != nil || generating.Total != 1 || generating.Items[0].ID != "shot-020" {
+		t.Fatalf("generating page=%+v error=%v", generating, err)
+	}
+	failed, err := svc.ListShotPage(context.Background(), "u-1", "vp-1", model.ShotPageQuery{Status: "failed", Limit: 24})
+	if err != nil || failed.Total != 2 || len(failed.Items) != 2 || failed.Items[0].ID != "shot-095" || failed.Items[1].ID != "shot-097" {
+		t.Fatalf("failed page=%+v error=%v", failed, err)
+	}
+}
+
 func TestLegacyRegenerateShotDerivesStableRetryKeyBeforeDefaultingVersion(t *testing.T) {
 	store := newFakeCreationProjectStore()
 	store.project = projectWithShotState(t, model.ShotUnit{

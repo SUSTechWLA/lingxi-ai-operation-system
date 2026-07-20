@@ -580,7 +580,7 @@ func BuildCloudSpec() *Spec {
 			minimum, maximum := float64(1), float64(50)
 			return &Schema{Type: "integer", Minimum: &minimum, Maximum: &maximum, Default: 24}
 		}(), false).
-		QueryParam("status", "Review status filter", enumSchema("pending", "approved", "rejected", "stale"), false).
+		QueryParam("status", "Creator queue filter; friendly filters use durable review and task state, legacy review statuses remain supported", enumSchema("all", "needs_attention", "confirmed", "generating", "failed", "pending", "approved", "rejected", "stale"), false).
 		QueryParam("chapter", "Chapter filter", StringSchema(), false).
 		QueryParam("query", "Case-insensitive title, narration, or scene search", StringSchema(), false).
 		creatorAuth(false).

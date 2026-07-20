@@ -46,17 +46,18 @@ export type CreatorAction =
 export type ShotReviewStatus = GeneratedShotListItem['reviewStatus']
 export type ShotGenerationStatus = GeneratedShotListItem['generationStatus']
 export type ShotListItem = GeneratedShotListItem
+export type ShotQueueStatus = 'all' | 'needs_attention' | 'confirmed' | 'generating' | 'failed' | ShotReviewStatus
 
 export interface ShotListQuery {
   cursor?: string
   limit?: number
-  status?: ShotReviewStatus
+  status?: ShotQueueStatus
   chapter?: string
   query?: string
 }
 
 export interface ShotListFilters {
-  status?: ShotReviewStatus
+  status?: ShotQueueStatus
   chapter?: string
   query?: string
 }

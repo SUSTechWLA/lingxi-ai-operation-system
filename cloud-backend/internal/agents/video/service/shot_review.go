@@ -93,7 +93,7 @@ func (s *CreationService) ListShotPage(ctx context.Context, userID, projectID st
 	})
 	filtered := make([]model.ShotUnit, 0, len(shots))
 	for _, shot := range shots {
-		if shotMatchesPageQuery(shot, query) {
+		if shotMatchesPageQuery(state, shot, query) {
 			filtered = append(filtered, shot)
 		}
 	}
@@ -119,7 +119,7 @@ func (s *CreationService) GetShotSummary(ctx context.Context, userID, projectID 
 	}
 	summary := model.ShotSummary{Total: len(state.Shots)}
 	for _, shot := range state.Shots {
-		if shotHasTerminalFailure(state, shot.ID) {
+		if shotHasFailure(state, shot) {
 			summary.NeedsAction++
 			continue
 		}
@@ -313,8 +313,8 @@ func candidateMutationFingerprint(operation, shotID, candidateID string, req Can
 	return hex.EncodeToString(sum[:])
 }
 
-func shotMatchesPageQuery(shot model.ShotUnit, query model.ShotPageQuery) bool {
-	if status := strings.TrimSpace(query.Status); status != "" && !strings.EqualFold(shot.ReviewStatus, status) {
+func shotMatchesPageQuery(state model.ShotDrivenState, shot model.ShotUnit, query model.ShotPageQuery) bool {
+	if !shotMatchesFriendlyStatus(state, shot, strings.TrimSpace(query.Status)) {
 		return false
 	}
 	chapter := shotChapter(shot)
@@ -327,6 +327,36 @@ func shotMatchesPageQuery(shot model.ShotUnit, query model.ShotPageQuery) bool {
 	}
 	haystack := strings.ToLower(strings.Join(append([]string{shot.Title, shot.Narration, shot.SceneSummary}, shot.ScreenText...), "\n"))
 	return strings.Contains(haystack, needle)
+}
+
+// shotMatchesFriendlyStatus is deliberately evaluated against the whole durable state
+// before a page cursor is applied. A queue filter is not a cosmetic alias for review
+// status: a Shot can need attention or be generating because of its latest task.
+func shotMatchesFriendlyStatus(state model.ShotDrivenState, shot model.ShotUnit, status string) bool {
+	if status == "" || strings.EqualFold(status, "all") {
+		return true
+	}
+	switch strings.ToLower(status) {
+	case "needs_attention":
+		return shot.ReviewStatus == model.ReviewStatusPending ||
+			shot.ReviewStatus == model.ReviewStatusRejected ||
+			shot.ReviewStatus == model.ReviewStatusStale ||
+			shot.QAStatus == model.ShotHumanReviewRequired ||
+			hasHumanReviewCandidate(shot) ||
+			shotHasFailure(state, shot)
+	case "confirmed":
+		return shot.ReviewStatus == model.ReviewStatusApproved || shot.AcceptedCandidateID != ""
+	case "generating":
+		if isShotGenerating(state, shot.ID) {
+			return true
+		}
+		return strings.EqualFold(shot.QAStatus, "GENERATING") || strings.EqualFold(generationStatusForShot(state, shot), "GENERATING") || strings.EqualFold(generationStatusForShot(state, shot), "SHOT_QA_RUNNING")
+	case "failed":
+		return shotHasFailure(state, shot)
+	default:
+		// Preserve the original public review-status filter for existing clients.
+		return strings.EqualFold(shot.ReviewStatus, status)
+	}
 }
 
 func shotListItem(state model.ShotDrivenState, shot model.ShotUnit) model.ShotListItem {
@@ -373,6 +403,21 @@ func isShotGenerating(state model.ShotDrivenState, shotID string) bool {
 func shotHasTerminalFailure(state model.ShotDrivenState, shotID string) bool {
 	latest := latestShotRegenerationTask(state, shotID)
 	return latest != nil && (latest.Status == ShotRegenerationFailed || latest.Status == ShotRegenerationCancelled)
+}
+
+func shotHasFailure(state model.ShotDrivenState, shot model.ShotUnit) bool {
+	if shotHasTerminalFailure(state, shot.ID) {
+		return true
+	}
+	if strings.EqualFold(shot.QAStatus, "SHOT_QA_FAILED") || strings.EqualFold(generationStatusForShot(state, shot), "SHOT_QA_FAILED") {
+		return true
+	}
+	for _, candidate := range shot.Candidates {
+		if strings.EqualFold(candidate.Status, "SHOT_QA_FAILED") || (candidate.QAReport != nil && strings.EqualFold(candidate.QAReport.Status, "SHOT_QA_FAILED")) {
+			return true
+		}
+	}
+	return false
 }
 
 func latestShotRegenerationTask(state model.ShotDrivenState, shotID string) *model.ShotRegenerationTask {

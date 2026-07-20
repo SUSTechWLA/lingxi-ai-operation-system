@@ -50,6 +50,24 @@ func TestCreationHandlerUsesAuthenticatedUserForShotLock(t *testing.T) {
 	}
 }
 
+func TestCreationHandlerPassesFriendlyShotQueueFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/video-projects/vp-1/shots?status=needs_attention&limit=24&chapter=opening&query=morning", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || fake.shotPageQuery.Status != "needs_attention" || fake.shotPageQuery.Limit != 24 || fake.shotPageQuery.Chapter != "opening" || fake.shotPageQuery.Query != "morning" {
+		t.Fatalf("status=%d query=%+v body=%s", rec.Code, fake.shotPageQuery, rec.Body.String())
+	}
+}
+
 func TestCreationHandlerRegenerateShotV2PassesHeaderAndRequestFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeCreationService{}
@@ -206,6 +224,7 @@ type fakeCreationService struct {
 	regenerateV2Req      videoSvc.RegenerateShotRequest
 	regenerateV2Err      error
 	candidateMutationReq videoSvc.CandidateMutationRequest
+	shotPageQuery        model.ShotPageQuery
 }
 
 func (f *fakeCreationService) GetSpec(ctx context.Context, userID, projectID string) (*model.VideoCreationSpec, error) {
@@ -244,6 +263,7 @@ func (f *fakeCreationService) ListShots(ctx context.Context, userID, projectID s
 
 func (f *fakeCreationService) ListShotPage(ctx context.Context, userID, projectID string, query model.ShotPageQuery) (model.ShotPage, error) {
 	f.userID, f.projectID = userID, projectID
+	f.shotPageQuery = query
 	return model.ShotPage{}, nil
 }
 
