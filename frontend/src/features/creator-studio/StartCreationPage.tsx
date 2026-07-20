@@ -1,9 +1,9 @@
-import { useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { createVideoProject, startAgentRun } from '../../services/api'
 import { uploadLocalArtifactFile, type LocalArtifactUploadResponse } from '../../services/localAgent'
 import { registerProjectMaterial } from '../../services/creatorApi'
 import type { ProjectMaterial, ProjectMaterialKind } from './types'
-import { buildCreationRequest } from './logic'
+import { buildCreationRequest, buildProjectMaterialStorageRef, creatorStartIdempotencyKey } from './logic'
 
 type MaterialStatus = 'ready' | 'uploading' | 'success' | 'failed'
 
@@ -37,9 +37,37 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
   const [projectId, setProjectId] = useState<string>()
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string>()
+  const [optionsOpen, setOptionsOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const activeRef = useRef(true)
+  const projectIdRef = useRef<string>()
+  const operationControllerRef = useRef<AbortController>()
+
+  useEffect(() => {
+    activeRef.current = true
+    return () => {
+      activeRef.current = false
+      operationControllerRef.current?.abort()
+    }
+  }, [])
+
+  const isCurrentOperation = (controller: AbortController) => activeRef.current &&
+    operationControllerRef.current === controller && !controller.signal.aborted
+
+  const beginOperation = () => {
+    operationControllerRef.current?.abort()
+    const controller = new AbortController()
+    operationControllerRef.current = controller
+    return controller
+  }
+
+  const setProjectIdSafely = (nextProjectId: string) => {
+    projectIdRef.current = nextProjectId
+    if (activeRef.current) setProjectId(nextProjectId)
+  }
 
   const updateMaterial = (id: string, patch: Partial<MaterialItem>) => {
+    if (!activeRef.current) return
     setMaterials(current => current.map(item => item.id === id ? { ...item, ...patch } : item))
   }
 
@@ -57,35 +85,40 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
     ])
   }
 
-  const processMaterial = async (item: MaterialItem, nextProjectId: string): Promise<boolean> => {
+  const processMaterial = async (item: MaterialItem, nextProjectId: string, signal: AbortSignal): Promise<boolean> => {
     updateMaterial(item.id, { status: 'uploading' })
     try {
       const upload = item.upload || await uploadLocalArtifactFile({
         projectId: nextProjectId,
         id: item.id,
+        storageRef: buildProjectMaterialStorageRef(nextProjectId, item.id),
         file: item.file,
         mimeType: item.file.type || undefined,
+        signal,
         metadata: {
           artifactType: 'project_source_material',
           source: 'creator_studio',
           localOnly: true,
         },
       })
+      if (signal.aborted || !activeRef.current) return false
       updateMaterial(item.id, { upload })
-      await registerProjectMaterial(nextProjectId, materialFromUpload(item.file, upload))
+      await registerProjectMaterial(nextProjectId, materialFromUpload(item.file, upload), signal)
+      if (signal.aborted || !activeRef.current) return false
       updateMaterial(item.id, { status: 'success', upload })
       return true
     } catch {
-      updateMaterial(item.id, { status: 'failed' })
+      if (!signal.aborted) updateMaterial(item.id, { status: 'failed' })
       return false
     }
   }
 
-  const processRemainingMaterials = async (nextProjectId: string): Promise<boolean> => {
+  const processRemainingMaterials = async (nextProjectId: string, signal: AbortSignal): Promise<boolean> => {
     let allSucceeded = true
     for (const item of materials) {
+      if (signal.aborted || !activeRef.current) return false
       if (item.status === 'success') continue
-      const succeeded = await processMaterial(item, nextProjectId)
+      const succeeded = await processMaterial(item, nextProjectId, signal)
       allSucceeded = allSucceeded && succeeded
     }
     return allSucceeded
@@ -93,14 +126,25 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
 
   const retryMaterial = async (item: MaterialItem) => {
     if (!projectId || starting) return
-    setError(undefined)
-    await processMaterial(item, projectId)
+    const controller = beginOperation()
+    if (isCurrentOperation(controller)) {
+      setStarting(true)
+      setError(undefined)
+    }
+    try {
+      await processMaterial(item, projectId, controller.signal)
+    } finally {
+      if (isCurrentOperation(controller)) setStarting(false)
+    }
   }
 
   const startCreation = async () => {
     if (!prompt.trim() || starting) return
+    const controller = beginOperation()
+    if (!isCurrentOperation(controller)) return
     setStarting(true)
     setError(undefined)
+    let nextProjectId = projectIdRef.current
     try {
       const durationSec = durationValue ? Number(durationValue) : undefined
       const request = buildCreationRequest({
@@ -110,26 +154,31 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
         platform: platform || undefined,
         materialCount: materials.length,
       })
-      let nextProjectId = projectId
       if (!nextProjectId) {
-        const project = await createVideoProject(request.project)
+        const project = await createVideoProject(request.project, controller.signal)
+        if (!isCurrentOperation(controller)) return
         nextProjectId = project.id
-        setProjectId(project.id)
+        setProjectIdSafely(project.id)
       }
-      const materialsReady = await processRemainingMaterials(nextProjectId)
+      const materialsReady = await processRemainingMaterials(nextProjectId, controller.signal)
       if (!materialsReady) {
-        setError('部分素材未准备好，请重试失败的文件后再开始创作。')
+        if (isCurrentOperation(controller)) setError('部分素材未准备好，请重试失败的文件后再开始创作。')
         return
       }
       await startAgentRun({
         ...request.agentRun,
         context: { ...request.agentRun.context, projectId: nextProjectId },
+      }, {
+        idempotencyKey: creatorStartIdempotencyKey(nextProjectId),
+        signal: controller.signal,
       })
-      onOpenProject(nextProjectId)
+      if (isCurrentOperation(controller)) onOpenProject(nextProjectId)
     } catch {
-      setError(projectId ? '暂时无法开始创作，请重试。' : '项目创建未完成，请重试。')
+      if (isCurrentOperation(controller)) {
+        setError(nextProjectId ? '暂时无法开始创作，请重试。' : '项目创建未完成，请重试。')
+      }
     } finally {
-      setStarting(false)
+      if (isCurrentOperation(controller)) setStarting(false)
     }
   }
 
@@ -146,6 +195,7 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
         onChange={(event) => setPrompt(event.target.value)}
         placeholder="例如：为夏日咖啡新品拍一支轻快的竖版短片"
         rows={5}
+        disabled={starting}
       />
 
       <div className="creator-materials" aria-label="参考素材">
@@ -153,8 +203,8 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
           <h2>让它更像你想要的样子</h2>
           <p>可以添加图片、视频、音频或文档作为参考。</p>
         </div>
-        <button type="button" className="creator-secondary-button" onClick={() => fileInputRef.current?.click()}>添加素材</button>
-        <input ref={fileInputRef} className="creator-visually-hidden" type="file" multiple onChange={addMaterials} />
+        <button type="button" className="creator-secondary-button" onClick={() => fileInputRef.current?.click()} disabled={starting}>添加素材</button>
+        <input ref={fileInputRef} className="creator-visually-hidden" type="file" multiple onChange={addMaterials} disabled={starting} />
       </div>
       {materials.length > 0 && (
         <ul className="creator-material-list" aria-live="polite">
@@ -170,21 +220,31 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
         </ul>
       )}
 
-      <details className="creator-options">
-        <summary>调整创作选项</summary>
+      <details className="creator-options" open={optionsOpen} aria-disabled={starting} onToggle={(event) => {
+        if (starting) {
+          event.currentTarget.open = optionsOpen
+          return
+        }
+        setOptionsOpen(event.currentTarget.open)
+      }}>
+        <summary onClick={(event) => {
+          if (starting) event.preventDefault()
+        }} onKeyDown={(event) => {
+          if (starting && (event.key === 'Enter' || event.key === ' ')) event.preventDefault()
+        }}>调整创作选项</summary>
         <div className="creator-option-grid">
           <label>时长
-            <select value={durationValue} onChange={(event) => setDurationValue(event.target.value)}>
+            <select value={durationValue} onChange={(event) => setDurationValue(event.target.value)} disabled={starting}>
               {durationOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label>画面比例
-            <select value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)}>
+            <select value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)} disabled={starting}>
               {aspectOptions.map(option => <option key={option} value={option}>{option}</option>)}
             </select>
           </label>
           <label>发布平台
-            <select value={platform} onChange={(event) => setPlatform(event.target.value)}>
+            <select value={platform} onChange={(event) => setPlatform(event.target.value)} disabled={starting}>
               {platformOptions.map(option => <option key={option} value={option}>{option || '暂不设定'}</option>)}
             </select>
           </label>

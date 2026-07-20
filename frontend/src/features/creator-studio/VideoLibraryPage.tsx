@@ -3,7 +3,7 @@ import { fetchVideoProjects } from '../../services/api'
 import { getCreationView } from '../../services/creatorApi'
 import type { CreationView } from './types'
 import type { VideoProject } from '../../utils/types'
-import { mapWithConcurrency } from './logic'
+import { mapWithConcurrency, prioritizeCreationViewProjects } from './logic'
 
 interface VideoLibraryPageProps {
   onContinueProject: (projectId: string, stepId: string) => void
@@ -31,16 +31,15 @@ export default function VideoLibraryPage({ onContinueProject }: VideoLibraryPage
         if (!active) return
         setProjects(sorted.map(project => ({ project })))
         setLoading(false)
-        void mapWithConcurrency(sorted, 4, async project => {
+        void mapWithConcurrency(prioritizeCreationViewProjects(sorted), 4, async project => {
           try {
             return [project.id, await getCreationView(project.id, controller.signal)] as const
           } catch {
             return [project.id, undefined] as const
           }
-        }).then(views => {
+        }, ([projectId, view]) => {
           if (!active) return
-          const viewsByProject = new Map(views)
-          setProjects(current => current.map(item => ({ ...item, view: viewsByProject.get(item.project.id) })))
+          setProjects(current => current.map(item => item.project.id === projectId ? { ...item, view } : item))
         })
       } catch {
         if (active) setError(true)

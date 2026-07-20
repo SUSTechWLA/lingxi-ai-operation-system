@@ -69,6 +69,19 @@ func TestCloudSpec_CreatorRoutesMatchHandlers(t *testing.T) {
 	}
 }
 
+func TestCloudSpecAgentStartRunDocumentsOptionalIdempotencyKey(t *testing.T) {
+	op := operationForMethod(t, BuildCloudSpec().Paths["/api/agent/runs"], "POST")
+	for _, parameter := range op.Parameters {
+		if parameter.In == "header" && parameter.Name == "Idempotency-Key" {
+			if parameter.Required {
+				t.Fatal("agent start idempotency key must remain optional for existing callers")
+			}
+			return
+		}
+	}
+	t.Fatal("agent start route must document Idempotency-Key")
+}
+
 func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 	spec := BuildCloudSpec()
 	wantRequired := map[string][]string{

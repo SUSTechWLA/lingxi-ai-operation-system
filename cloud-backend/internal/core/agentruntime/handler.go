@@ -2,6 +2,8 @@ package agentruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -194,8 +196,11 @@ func (h *Handler) StartRun(c *gin.Context) {
 		httpx.Fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	if req.UserID == "" {
-		req.UserID = ginUserID(c)
+	if userID := ginUserID(c); userID != "" {
+		req.UserID = userID
+	}
+	if key := strings.TrimSpace(c.GetHeader("Idempotency-Key")); key != "" {
+		req.RunID = idempotentRunID(req.UserID, key)
 	}
 	run, err := h.runner.StartAsync(c.Request.Context(), req)
 	if err != nil {
@@ -209,6 +214,11 @@ func (h *Handler) StartRun(c *gin.Context) {
 		"status": run.Status,
 		"plan":   run.Plan,
 	})
+}
+
+func idempotentRunID(userID, key string) string {
+	sum := sha256.Sum256([]byte(userID + "\x00" + key))
+	return "agent_run_idem_" + hex.EncodeToString(sum[:])
 }
 
 func (h *Handler) CancelRun(c *gin.Context) {

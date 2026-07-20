@@ -185,6 +185,111 @@ func TestStartRunReturnsRunIDBeforeSlowPlannerCompletes(t *testing.T) {
 	}
 }
 
+func TestStartRunIdempotencyKeyReturnsPersistedRunWithoutPlanningAgain(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newMemoryRunStore()
+	planner := &blockingPlanner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		plan: &AgentPlan{Goal: "make video", Domain: "video_creation", Mode: "dynamic_agent", Steps: []AgentStep{{
+			ID: "script", Tool: "video_script_generator", ExpectedOutput: []string{"script"},
+		}}},
+	}
+	catalog := staticToolCatalog{"video_script_generator": &tool.ToolManifest{Name: "video_script_generator"}}
+	handler := NewHandler(
+		NewRunner(&fakeOrchestrator{taskID: "task-1"}, store, planner, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)),
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("userID", "user-1")
+		c.Next()
+	})
+	handler.RegisterRoutes(router)
+
+	start := func(key string) string {
+		req := httptest.NewRequest(http.MethodPost, "/api/agent/runs", bytes.NewBufferString(`{"message":"make a video","domain":"video_creation"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", key)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data struct {
+				RunID string `json:"runId"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return body.Data.RunID
+	}
+
+	firstID := start("creator-start:project-1")
+	select {
+	case <-planner.started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("planner was not invoked for the first request")
+	}
+	secondID := start("creator-start:project-1")
+	if secondID != firstID {
+		t.Fatalf("duplicate run id = %q, want %q", secondID, firstID)
+	}
+	if store.Len() != 1 {
+		t.Fatalf("stored runs = %d, want one idempotent run", store.Len())
+	}
+	close(planner.release)
+}
+
+func TestStartRunIdempotencyKeySeparatesDifferentKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newMemoryRunStore()
+	catalog := staticToolCatalog{"video_script_generator": &tool.ToolManifest{Name: "video_script_generator"}}
+	handler := NewHandler(
+		NewRunner(&fakeOrchestrator{taskID: "task-1"}, store, staticPlanner{plan: &AgentPlan{Goal: "make video", Steps: []AgentStep{{ID: "script", Tool: "video_script_generator"}}}}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)),
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("userID", "user-1")
+		c.Next()
+	})
+	handler.RegisterRoutes(router)
+
+	start := func(key string) string {
+		req := httptest.NewRequest(http.MethodPost, "/api/agent/runs", bytes.NewBufferString(`{"message":"make a video"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", key)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data struct {
+				RunID string `json:"runId"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return body.Data.RunID
+	}
+
+	if first, second := start("creator-start:project-1"), start("creator-start:project-2"); first == second {
+		t.Fatalf("different idempotency keys returned the same run %q", first)
+	}
+	if store.Len() != 2 {
+		t.Fatalf("stored runs = %d, want two distinct runs", store.Len())
+	}
+}
+
 func TestCancelRunPausesTaskAndMarksProjectStopped(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

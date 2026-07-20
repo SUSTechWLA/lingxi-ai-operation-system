@@ -421,6 +421,7 @@ func BuildCloudSpec() *Spec {
 	// ── Dynamic Agent Runs ──
 	b.Route("POST", "/api/agent/runs", "Start a dynamic agent run from natural language").
 		Tags("Agent Runs").
+		HeaderParam("Idempotency-Key", "Optional stable caller key; duplicate requests from the same user return the existing run", StringSchema(), false).
 		BodyJSON("AgentStartRunRequest", "Agent run request", true).
 		ResponseJSON("200", "Agent run started", "AgentRunStartResponse").
 		ResponseJSON("400", "Invalid plan or request", "ErrorResponse")

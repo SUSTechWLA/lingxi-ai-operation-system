@@ -219,6 +219,7 @@ export async function uploadLocalArtifactFile(params: {
   storageRef?: string
   mimeType?: string
   metadata?: Record<string, unknown>
+  signal?: AbortSignal
 }): Promise<LocalArtifactUploadResponse> {
   const formData = new FormData()
   formData.append('projectId', params.projectId)
@@ -231,6 +232,7 @@ export async function uploadLocalArtifactFile(params: {
   const response = await fetch(localAgentUrl('/api/local/artifacts'), {
     method: 'POST',
     body: formData,
+    signal: params.signal,
   })
   if (!response.ok) {
     throw new Error(await errorMessage(response, '上传本地产物失败'))

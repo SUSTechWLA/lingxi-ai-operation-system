@@ -111,6 +111,30 @@ try {
   assert.deepEqual(concurrentResults, [2, 4, 6, 8, 10])
   assert.equal(maxActiveWorkers, 2, 'creation view loading must have a bounded concurrency')
 
+  const settledIndexes = []
+  await logic.mapWithConcurrency([1, 2], 2, async value => {
+    await new Promise(resolve => setTimeout(resolve, value === 1 ? 3 : 1))
+    return value
+  }, (_value, index) => settledIndexes.push(index))
+  assert.deepEqual(settledIndexes, [1, 0], 'each creation view must update as it settles')
+
+  assert.equal(
+    logic.buildProjectMaterialStorageRef('project-1', 'material-1'),
+    'local://projects/project-1/materials/material-1',
+  )
+  for (const unsafe of ['material/1', 'material%1', 'material\\1', 'material?1', 'material#1']) {
+    assert.throws(() => logic.buildProjectMaterialStorageRef('project-1', unsafe), /safe path segment/)
+  }
+  assert.equal(logic.creatorStartIdempotencyKey('project-1'), 'creator-start:project-1')
+
+  const viewOrder = logic.prioritizeCreationViewProjects([
+    { id: 'completed-new', status: 'COMPLETED', updatedAt: '2026-07-20T12:00:00Z' },
+    { id: 'active-old', status: 'RUNNING', updatedAt: '2026-07-20T09:00:00Z' },
+    { id: 'active-new', status: 'PAUSED', updatedAt: '2026-07-20T11:00:00Z' },
+    { id: 'archived', status: 'ARCHIVED', updatedAt: '2026-07-20T13:00:00Z' },
+  ])
+  assert.deepEqual(viewOrder.map(project => project.id), ['active-new', 'active-old', 'archived', 'completed-new'])
+
   for (const accepted of [0.001, 1, 14.999]) assert.equal(logic.canSubmitShotDuration(accepted), true)
   for (const rejected of [-1, 0, 15, 16, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.equal(logic.canSubmitShotDuration(rejected), false)
@@ -156,8 +180,11 @@ try {
   }, 'shot-042'), false)
 
   const apiSource = readFileSync(new URL('../src/services/creatorApi.ts', import.meta.url), 'utf8')
+  const runtimeApiSource = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8')
   const typeSource = readFileSync(new URL('../src/features/creator-studio/types.ts', import.meta.url), 'utf8')
   const generatedSource = readFileSync(new URL('../src/utils/api-types.generated.ts', import.meta.url), 'utf8')
+  const startPageSource = readFileSync(new URL('../src/features/creator-studio/StartCreationPage.tsx', import.meta.url), 'utf8')
+  const librarySource = readFileSync(new URL('../src/features/creator-studio/VideoLibraryPage.tsx', import.meta.url), 'utf8')
   for (const functionName of [
     'getCreationView', 'getStepVersions', 'previewStepRevision', 'reviseStep', 'confirmStep',
     'restoreStepVersion', 'registerProjectMaterial', 'listShots', 'getShotSummary',
@@ -179,6 +206,22 @@ try {
   assert.match(generatedSource, /export type StepRevisionMutationRequest = .*mode: 'direct'.* \| .*mode: 'instruction'/)
   assert.match(apiSource, /assertPositiveVersion\(request\.baseVersion\)/)
   assert.match(apiSource, /signal/g, 'creator requests must support AbortSignal')
+  assert.match(startPageSource, /storageRef: buildProjectMaterialStorageRef\(nextProjectId, item\.id\)/)
+  assert.match(startPageSource, /creatorStartIdempotencyKey\(nextProjectId\)/)
+  assert.ok((startPageSource.match(/disabled=\{starting\}/g) || []).length >= 6, 'creation inputs must lock while starting')
+  assert.match(startPageSource, /AbortController/)
+  assert.match(startPageSource, /useEffect\(\(\) => \{\s+activeRef\.current = true/)
+  assert.match(startPageSource, /signal: controller\.signal/g)
+  assert.match(startPageSource, /operationControllerRef\.current\?\.abort\(\)/)
+  assert.match(startPageSource, /item\.upload \|\| await uploadLocalArtifactFile/)
+  assert.ok(
+    startPageSource.indexOf('const upload = item.upload') < startPageSource.indexOf('await registerProjectMaterial') &&
+    startPageSource.indexOf('await registerProjectMaterial') < startPageSource.indexOf('await startAgentRun'),
+    'materials must upload, register, then start in that order',
+  )
+  assert.match(runtimeApiSource, /'Idempotency-Key': options\.idempotencyKey/)
+  assert.match(runtimeApiSource, /signal: options\.signal/)
+  assert.match(librarySource, /prioritizeCreationViewProjects/)
 
   console.log('creator studio logic and client contract checks passed')
 } finally {

@@ -26,6 +26,7 @@ export async function mapWithConcurrency<T, Result>(
   values: readonly T[],
   concurrency: number,
   map: (value: T, index: number) => Promise<Result>,
+  onResult?: (result: Result, index: number) => void,
 ): Promise<Result[]> {
   const results = new Array<Result>(values.length)
   let nextIndex = 0
@@ -34,10 +35,36 @@ export async function mapWithConcurrency<T, Result>(
     while (nextIndex < values.length) {
       const index = nextIndex
       nextIndex += 1
-      results[index] = await map(values[index], index)
+      const result = await map(values[index], index)
+      results[index] = result
+      onResult?.(result, index)
     }
   }))
   return results
+}
+
+export function buildProjectMaterialStorageRef(projectId: string, materialId: string): string {
+  if (!isSafeStorageSegment(projectId) || !isSafeStorageSegment(materialId)) {
+    throw new TypeError('project and material ids must be safe path segments')
+  }
+  return `local://projects/${projectId}/materials/${materialId}`
+}
+
+export function creatorStartIdempotencyKey(projectId: string): string {
+  if (!isSafeStorageSegment(projectId)) throw new TypeError('project id must be a safe path segment')
+  return `creator-start:${projectId}`
+}
+
+export function prioritizeCreationViewProjects<T extends { status: string; updatedAt: string }>(projects: readonly T[]): T[] {
+  return [...projects].sort((left, right) => {
+    const leftHistory = left.status === 'COMPLETED' || left.status === 'ARCHIVED'
+    const rightHistory = right.status === 'COMPLETED' || right.status === 'ARCHIVED'
+    return Number(leftHistory) - Number(rightHistory) || Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+  })
+}
+
+function isSafeStorageSegment(value: string): boolean {
+  return value.length > 0 && value !== '.' && value !== '..' && !/[/%\\?#]/.test(value)
 }
 
 export function buildCreationRequest(input: CreationRequestInput): CreationRequest {
