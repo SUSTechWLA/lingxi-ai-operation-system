@@ -413,7 +413,7 @@ func (s *CreationService) MarkFinalAssemblyQueued(ctx context.Context, userID, p
 		if receipt.RequestFingerprint != finalAssemblyFingerprint(state.Shots) {
 			return AssemblyRebuildResult{}, fmt.Errorf("%w: accepted shots changed while queuing preview", ErrShotIdempotencyConflict)
 		}
-		if receipt.Status != "validated" && receipt.Status != "queued" {
+		if receipt.Status != "validated" && receipt.Status != "dispatching" && receipt.Status != "queued" {
 			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
 		}
 		receipt.Status, receipt.BasePreviewArtifactID, receipt.PreviewTaskID, receipt.UpdatedAt = "queued", basePreviewArtifactID, previewTaskID, time.Now().Round(0)

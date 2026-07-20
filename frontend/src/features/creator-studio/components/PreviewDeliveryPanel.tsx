@@ -52,8 +52,8 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
       assemblyKeyRef.current = idempotencyKey
       const result = await rebuildFinalAssembly(projectId, idempotencyKey, controller.signal)
       if (controller.signal.aborted) return
-		if (result.status === 'queued' || result.status === 'validated') {
-		setNotice('已开始重新拼接成片。镜头审核可继续进行；新预览完成前不会显示旧成片。')
+      if (result.status === 'queued' || result.status === 'dispatching' || result.status === 'validated') {
+        setNotice('已开始重新拼接成片。镜头审核可继续进行；新预览完成前不会显示旧成片。')
       } else {
         setNotice('还不能拼接成片：请先完成需要处理的镜头。')
         assemblyKeyRef.current = null
@@ -61,10 +61,18 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
       await onAssemblyUpdated()
     } catch (caught) {
       if (!controller.signal.aborted) {
-        if (isCreatorConflict(caught) || (typeof caught === 'object' && caught !== null && 'response' in caught)) {
+        if (isCreatorConflict(caught)) {
           assemblyKeyRef.current = null
           setNotice('镜头内容已更新，请重新点击拼接成片。')
-        } else setNotice('暂时无法重新拼接，请稍后重试。')
+        } else if (typeof caught === 'object' && caught !== null && 'response' in caught) {
+          // The server returned a definite failure, so the next click is a new
+          // attempt. A response-less network failure keeps the UUID because
+          // the original request may already have reached the server.
+          assemblyKeyRef.current = null
+          setNotice('这次拼接未能继续，请重新点击拼接成片。')
+        } else {
+          setNotice('网络状态不确定，请稍后重试。系统会继续核对同一次拼接，避免重复生成。')
+        }
       }
     } finally {
       if (!controller.signal.aborted && controllerRef.current === controller) setWorking(false)

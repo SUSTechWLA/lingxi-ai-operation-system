@@ -29,13 +29,13 @@ Implemented the creator preview and delivery surface, default creator routing ch
 
 ## Limits / follow-up
 
-- No live visual capture was performed: launching the authenticated cloud/local/frontend stack requires external service configuration not present in this worktree. CSS retains the established warm-yellow/deep-brown/card tokens; focus styling is present, status has text, and the creator logic check asserts only one selected Shot player.
-- The receipt has a queued recovery representation and removes old media once a new preview artifact becomes current. It now reads the source-node status so failed/cancelled/unknown work becomes retryable instead of spinning forever.
+- Authenticated start and project-list surfaces were captured at all required breakpoints. The already-running backend did not expose this branch's new creation-view contract, so opening an existing project returned the user-safe retry alert and the live Shot workspace itself could not be inspected against that older process.
+- The receipt has durable dispatching and queued recovery representations. Active work is reconnected without redispatch; an explicit terminal failure retries once; unknown state fails safe and a definite server response allows the client to start a new key, while an ambiguous network failure retains the original key.
 
 ## Follow-up fix
 
 - Added the read-only review-source `RegenerationStatus` query and used it in creation-view recovery. Active work remains generating with a durable task; failed/cancelled/unknown work is fail-safe failed with `assemblyDirty` in the view, so old media remains hidden and the creator can retry.
-- Ran `bash scripts/beta-smoke-check.sh`: code checks passed; smoke is blocked solely because `hyperframes-render-service/node_modules` is absent. Ran `bash scripts/beta-readiness-check.sh`: BLOCKED because the smoke prerequisite failed; local agent, HyperFrames health, FFmpeg and diagnostics were detected, but no real provider was configured.
+- Ran `bash scripts/beta-smoke-check.sh`: EXIT 0, including cloud and local Go checks, Python QA, creator/developer frontend contracts, lint/build, and HyperFrames build. Ran `bash scripts/beta-readiness-check.sh`: EXIT 0 with `CONDITIONAL`; the only remaining readiness warning is that no real AIGC video provider or text-to-video route is configured.
 
 ## Browser evidence
 

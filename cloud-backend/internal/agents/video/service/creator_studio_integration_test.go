@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -77,6 +78,41 @@ func TestCreatorStudioAssemblyRetainsDirtyStateWhenAcceptedCandidateIsInvalid(t 
 	result, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "assembly-invalid")
 	if err != nil || result.Status != "blocked" || !result.AssemblyDirty || len(result.Issues) == 0 {
 		t.Fatalf("invalid assembly result = %+v, err=%v", result, err)
+	}
+}
+
+func TestCreatorStudioAssemblyDispatchClaimQueuesAndClearsOnlyMatchingSnapshot(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = projectWithShotState(t, acceptedProductionShot("shot-001", 1, "candidate-001"))
+	state := decodeStateFromTest(t, store.project.Config)
+	state.AssemblyDirty = true
+	setProjectStateForTest(t, store.project, state)
+	svc := NewCreationService(store)
+
+	if result, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "assembly-1"); err != nil || result.Status != "validated" {
+		t.Fatalf("rebuild = %+v, err=%v", result, err)
+	}
+	if result, err := svc.ClaimFinalAssemblyDispatch(context.Background(), "u-1", "vp-1", "assembly-1"); err != nil || result.Status != "dispatching" {
+		t.Fatalf("claim = %+v, err=%v", result, err)
+	}
+	if result, err := svc.MarkFinalAssemblyQueued(context.Background(), "u-1", "vp-1", "assembly-1", "preview-1", "run-1"); err != nil || result.Status != "queued" || result.AssemblyDirty {
+		t.Fatalf("mark matching snapshot = %+v, err=%v", result, err)
+	}
+	queued := decodeStateFromTest(t, store.project.Config)
+	if queued.AssemblyDirty || queued.AssemblyReceipts["assembly-1"].Status != "queued" {
+		t.Fatalf("queued state = %+v", queued.AssemblyReceipts["assembly-1"])
+	}
+
+	queued.AssemblyDirty = true
+	queued.Shots[0].AcceptedCandidateID = "candidate-concurrent"
+	setProjectStateForTest(t, store.project, queued)
+	result, err := svc.MarkFinalAssemblyQueued(context.Background(), "u-1", "vp-1", "assembly-1", "preview-2", "run-2")
+	if !errors.Is(err, ErrShotIdempotencyConflict) {
+		t.Fatalf("concurrent mark = %+v, err=%v", result, err)
+	}
+	afterConflict := decodeStateFromTest(t, store.project.Config)
+	if !afterConflict.AssemblyDirty || afterConflict.AssemblyReceipts["assembly-1"].PreviewTaskID != "run-1" {
+		t.Fatalf("concurrent Shot update was cleared: %+v", afterConflict.AssemblyReceipts["assembly-1"])
 	}
 }
 

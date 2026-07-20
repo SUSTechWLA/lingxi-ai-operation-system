@@ -385,8 +385,11 @@ try {
 
   assert.match(previewSource, /deliveryArtifactPassesFinalReview/)
   assert.match(previewSource, /result\.status === 'queued'/)
+  assert.match(previewSource, /result\.status === 'dispatching'/)
   assert.match(previewSource, /crypto\.randomUUID/)
   assert.match(previewSource, /assemblyKeyRef\.current = null/)
+  assert.match(previewSource, /'response' in caught[\s\S]*assemblyKeyRef\.current = null/, 'a definite server failure starts a new assembly attempt')
+  assert.match(previewSource, /network failure keeps the UUID|response-less network failure keeps the UUID/, 'an ambiguous network failure must retain the assembly attempt key')
   assert.match(previewSource, /成片检查通过后，才会显示最终视频和交付文件/)
   assert.equal((previewSource.match(/<video\b/g) || []).length, 1, 'preview mounts at most one assembled video player')
 

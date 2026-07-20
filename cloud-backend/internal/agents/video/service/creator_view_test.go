@@ -745,6 +745,27 @@ func TestCreatorAssemblyQueuedTerminalRetriesButRunningAndSuccessDoNot(t *testin
 	}
 }
 
+func TestCreatorAssemblyUnknownStatusFailsSafeAndNewAttemptCanProceed(t *testing.T) {
+	shots := &fakeCreatorAssemblyReader{rebuildStatus: "queued", receipt: model.AssemblyReceipt{Status: "queued", BasePreviewArtifactID: "preview-1", PreviewTaskID: "run-1"}}
+	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review-1", regenerationStatus: "MYSTERY"}
+	svc := NewCreatorViewService(fakeCreatorProjectReader{}, shots, fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{{ID: "preview-1", ProjectID: "vp-1", StageName: "assembly", Version: 1}}}).WithStepMutations(nil, reviews)
+	if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err == nil {
+		t.Fatal("unknown source status must fail safe")
+	}
+	if reviews.regenerateCalls != 0 {
+		t.Fatalf("unknown source status redispatched: %d", reviews.regenerateCalls)
+	}
+
+	shots.rebuildStatus = "validated"
+	reviews.regenerationStatus = ""
+	if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-2"); err != nil {
+		t.Fatalf("new attempt after explicit unknown failure: %v", err)
+	}
+	if reviews.regenerateCalls != 1 {
+		t.Fatalf("new attempt dispatch calls=%d", reviews.regenerateCalls)
+	}
+}
+
 func (f fakeCreatorShotReader) getCreatorShotReadState(context.Context, string, string) (creatorShotReadState, error) {
 	return f.state, f.err
 }
