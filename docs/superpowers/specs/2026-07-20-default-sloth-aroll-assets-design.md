@@ -120,4 +120,3 @@ The change produces:
 - No camera-specific character proportion changes.
 - No external asset downloads or 3D generation services.
 - No deletion of earlier release assets or validated checkpoints.
-
