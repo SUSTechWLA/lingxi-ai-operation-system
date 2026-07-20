@@ -129,6 +129,7 @@ type creatorReviewMutations interface {
 type creatorAssemblyService interface {
 	RebuildFinalAssembly(context.Context, string, string, string) (AssemblyRebuildResult, error)
 	MarkFinalAssemblyQueued(context.Context, string, string, string, string, string) (AssemblyRebuildResult, error)
+	ClaimFinalAssemblyDispatch(context.Context, string, string, string) (AssemblyRebuildResult, error)
 	LatestAssemblyReceipt(context.Context, string, string) (model.AssemblyReceipt, bool, error)
 	GetAssemblyReceipt(context.Context, string, string, string) (model.AssemblyReceipt, bool, error)
 }
@@ -185,13 +186,13 @@ func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, p
 	if err != nil || result.Status == "blocked" {
 		return result, err
 	}
-	if result.Status == "queued" {
+	if result.Status == "queued" || result.Status == "dispatching" {
 		receipt, found, receiptErr := s.assembly.GetAssemblyReceipt(ctx, userID, projectID, idempotencyKey)
 		if receiptErr != nil || !found {
 			return result, receiptErr
 		}
 		current, currentErr := s.currentArtifactForStep(ctx, projectID, model.CreatorStepPreview)
-		if currentErr != nil || current == nil || current.ID != receipt.BasePreviewArtifactID {
+		if currentErr != nil || current == nil || (receipt.BasePreviewArtifactID != "" && current.ID != receipt.BasePreviewArtifactID) {
 			return result, currentErr
 		}
 		runID, reviewID, resolveErr := s.reviews.ResolveReviewGate(ctx, current, receipt.PreviewTaskID, "")
@@ -202,7 +203,13 @@ func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, p
 		if statusErr != nil {
 			return result, fmt.Errorf("assembled preview status is unavailable; wait for the current preview or retry after it reports a failure")
 		}
-		if status == "CREATED" || status == "READY" || status == "RUNNING" || status == "WAITING_LOCAL" || status == "LOCAL_RUNNING" || status == "RETRYING" || status == "SUCCESS" || status == "COMPLETED" {
+		if receipt.BasePreviewArtifactID == "" && status == "READY" {
+			if _, retryErr := s.reviews.Regenerate(ctx, runID, reviewID, userID, "resume claimed assembled preview"); retryErr != nil {
+				return result, retryErr
+			}
+			return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
+		}
+		if status == "CREATED" || status == "RUNNING" || status == "WAITING_LOCAL" || status == "LOCAL_RUNNING" || status == "RETRYING" || status == "SUCCESS" || status == "COMPLETED" {
 			return result, nil
 		}
 		if status != "FAILED" && status != "CANCELLED" && status != "LOCAL_FAILED" && status != "HEARTBEAT_TIMEOUT" {
@@ -215,6 +222,9 @@ func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, p
 	}
 	if result.Status != "validated" {
 		return result, nil
+	}
+	if result, err = s.assembly.ClaimFinalAssemblyDispatch(ctx, userID, projectID, idempotencyKey); err != nil || result.Status != "dispatching" {
+		return result, err
 	}
 	current, err := s.currentArtifactForStep(ctx, projectID, model.CreatorStepPreview)
 	if err != nil {

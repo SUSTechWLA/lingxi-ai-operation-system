@@ -429,6 +429,34 @@ func (s *CreationService) MarkFinalAssemblyQueued(ctx context.Context, userID, p
 	return AssemblyRebuildResult{}, fmt.Errorf("%w: project changed while queuing preview", ErrShotVersionConflict)
 }
 
+func (s *CreationService) ClaimFinalAssemblyDispatch(ctx context.Context, userID, projectID, idempotencyKey string) (AssemblyRebuildResult, error) {
+	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
+		project, state, err := s.load(ctx, userID, projectID)
+		if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		receipt, ok := state.AssemblyReceipts[idempotencyKey]
+		if !ok {
+			return AssemblyRebuildResult{}, fmt.Errorf("assembly rebuild receipt not found")
+		}
+		if receipt.Status == "queued" || receipt.Status == "dispatching" {
+			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+		}
+		if receipt.Status != "validated" {
+			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+		}
+		receipt.Status, receipt.UpdatedAt = "dispatching", time.Now().Round(0)
+		state.AssemblyReceipts[idempotencyKey] = receipt
+		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
+			continue
+		} else if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		return AssemblyRebuildResult{Status: "dispatching", AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+	}
+	return AssemblyRebuildResult{}, fmt.Errorf("%w: project changed while claiming assembly dispatch", ErrShotVersionConflict)
+}
+
 func (s *CreationService) LatestAssemblyReceipt(ctx context.Context, userID, projectID string) (model.AssemblyReceipt, bool, error) {
 	_, state, err := s.load(ctx, userID, projectID)
 	if err != nil {
