@@ -105,16 +105,20 @@ func (tc *TaskExecutionControl) RetryNode(ctx context.Context, nodeID string) er
 }
 
 // RetryNodeIdempotent persists the logical retry key before publishing READY.
-// If the caller is replaying after a crash, a CREATED claim is safely resumed
-// and any later state is left untouched.
+// Only the caller that wins the claim may publish; replays are read-only. If
+// the winner crashes before READY, the scheduler's stale-CREATED recovery owns
+// resumption, avoiding a concurrent replay publishing the expensive node twice.
 func (tc *TaskExecutionControl) RetryNodeIdempotent(ctx context.Context, nodeID, key string) error {
 	claimer, ok := tc.nodeRepo.(idempotentRetryNodeClaimer)
 	if !ok {
 		return fmt.Errorf("node repository does not support idempotent retry claims")
 	}
-	node, _, err := claimer.ClaimRetryByIdempotencyKey(ctx, nodeID, key)
+	node, claimed, err := claimer.ClaimRetryByIdempotencyKey(ctx, nodeID, key)
 	if err != nil {
 		return fmt.Errorf("failed to claim idempotent node retry: %w", err)
+	}
+	if !claimed {
+		return nil
 	}
 	if node.Status != model.NodeCreated {
 		return nil

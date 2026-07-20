@@ -1026,6 +1026,25 @@ func TestTaskExecutionControl_RetryNodeIdempotentClaimsAndPublishesOnce(t *testi
 	}
 }
 
+func TestTaskExecutionControl_RetryNodeIdempotentLeavesClaimedCreatedForSchedulerRecovery(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	eventSaver := newMockEventSaver()
+	nodeRepo.nodes["n1"] = &model.Node{
+		ID: "n1", TaskID: "t1", Type: model.NodeTypeLLM, Name: "assemble",
+		Status: model.NodeCreated, IdempotencyKey: "assembly-key:dispatch:1",
+	}
+	ss := NewStateService(nodeRepo, taskRepo, newMockDepRepo(), newMockContextRepo(), eventSaver)
+	tc := NewTaskExecutionControl(taskRepo, nodeRepo, ss)
+
+	if err := tc.RetryNodeIdempotent(context.Background(), "n1", "assembly-key:dispatch:1"); err != nil {
+		t.Fatal(err)
+	}
+	if nodeRepo.nodes["n1"].Status != model.NodeCreated || nodeRepo.retryClaims != 0 || len(eventSaver.events) != 0 {
+		t.Fatalf("replay republished an in-flight claim: claims=%d node=%+v events=%d", nodeRepo.retryClaims, nodeRepo.nodes["n1"], len(eventSaver.events))
+	}
+}
+
 func TestTaskExecutionControl_GetTaskPauseReason_Paused(t *testing.T) {
 	nodeRepo := newMockNodeRepo()
 	taskRepo := newMockTaskRepo()
