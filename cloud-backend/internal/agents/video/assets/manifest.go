@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 )
@@ -15,9 +18,10 @@ import (
 type AssetType string
 
 const (
-	AssetTypeImage AssetType = "image"
-	AssetTypeAudio AssetType = "audio"
-	AssetTypeVideo AssetType = "video"
+	AssetTypeImage    AssetType = "image"
+	AssetTypeAudio    AssetType = "audio"
+	AssetTypeVideo    AssetType = "video"
+	AssetTypeDocument AssetType = "document"
 )
 
 const (
@@ -80,6 +84,19 @@ type ManualAssetManifest struct {
 	ExternalPlatform    string    `json:"externalPlatform,omitempty"`
 	ReferenceAssetIDs   []string  `json:"referenceAssetIds,omitempty"`
 }
+
+// ProjectMaterial is the small, stable metadata-only representation returned
+// after a local source material has been registered with a project.
+type ProjectMaterial struct {
+	Name        string    `json:"name"`
+	Kind        AssetType `json:"kind"`
+	MimeType    string    `json:"mimeType"`
+	SizeBytes   int64     `json:"sizeBytes"`
+	StorageRef  string    `json:"storageRef"`
+	ContentHash string    `json:"contentHash"`
+}
+
+var projectMaterialContentHashPattern = regexp.MustCompile(`^sha256:[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type ExternalGenerationTarget struct {
 	AspectRatio string `json:"aspectRatio,omitempty"`
@@ -227,6 +244,126 @@ func BuildArtifactRequest(projectID, workflowRunID, taskID string, manifest Manu
 			"assetType":    string(manifest.Type),
 		},
 	}, nil
+}
+
+// BuildProjectMaterialArtifactRequest creates a metadata-only source material
+// artifact. The referenced bytes remain with the local agent.
+func BuildProjectMaterialArtifactRequest(projectID string, input ProjectMaterial) (ProjectMaterial, *artifact.CreateArtifactRequest, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return ProjectMaterial{}, nil, fmt.Errorf("project id is required")
+	}
+	input.Name = safeMaterialName(input.Name)
+	if input.Name == "" {
+		return ProjectMaterial{}, nil, fmt.Errorf("name is required")
+	}
+	if !validProjectMaterialKind(input.Kind) {
+		return ProjectMaterial{}, nil, fmt.Errorf("kind must be image, video, audio, or document")
+	}
+	input.MimeType = strings.TrimSpace(input.MimeType)
+	if input.MimeType == "" {
+		return ProjectMaterial{}, nil, fmt.Errorf("mimeType is required")
+	}
+	if input.SizeBytes < 0 {
+		return ProjectMaterial{}, nil, fmt.Errorf("sizeBytes must be non-negative")
+	}
+	input.ContentHash = strings.TrimSpace(input.ContentHash)
+	if !projectMaterialContentHashPattern.MatchString(input.ContentHash) {
+		return ProjectMaterial{}, nil, fmt.Errorf("contentHash must use the sha256:<value> format")
+	}
+	input.StorageRef = strings.TrimSpace(input.StorageRef)
+	if !isLocalProjectMaterialRef(input.StorageRef, projectID) {
+		return ProjectMaterial{}, nil, fmt.Errorf("storageRef must be a local reference scoped to this project")
+	}
+
+	kind, err := projectMaterialArtifactKind(input.Kind)
+	if err != nil {
+		return ProjectMaterial{}, nil, err
+	}
+	return input, &artifact.CreateArtifactRequest{
+		ProjectID:   projectID,
+		StageName:   "requirements",
+		UnitID:      "source-materials",
+		Kind:        kind,
+		Name:        input.Name,
+		StorageType: artifact.StorageLocal,
+		StorageRef:  input.StorageRef,
+		MimeType:    input.MimeType,
+		SizeBytes:   input.SizeBytes,
+		ContentHash: input.ContentHash,
+		Provider:    "project-source-material",
+		Metadata: map[string]interface{}{
+			"schemaVersion":    1,
+			"artifactType":     "project_source_material",
+			"relatedProjectId": projectID,
+			"name":             input.Name,
+			"kind":             string(input.Kind),
+			"mimeType":         input.MimeType,
+			"sizeBytes":        input.SizeBytes,
+			"storageRef":       input.StorageRef,
+			"contentHash":      input.ContentHash,
+			"status":           string(artifact.ArtifactStatusPending),
+			"humanApproved":    false,
+			"localOnly":        true,
+		},
+	}, nil
+}
+
+func validProjectMaterialKind(kind AssetType) bool {
+	switch kind {
+	case AssetTypeImage, AssetTypeVideo, AssetTypeAudio, AssetTypeDocument:
+		return true
+	default:
+		return false
+	}
+}
+
+func projectMaterialArtifactKind(kind AssetType) (artifact.ArtifactKind, error) {
+	switch kind {
+	case AssetTypeImage:
+		return artifact.KindImage, nil
+	case AssetTypeVideo:
+		return artifact.KindVideo, nil
+	case AssetTypeAudio:
+		return artifact.KindAudio, nil
+	case AssetTypeDocument:
+		return artifact.KindBundle, nil
+	default:
+		return "", fmt.Errorf("unsupported material kind %q", kind)
+	}
+}
+
+func safeMaterialName(name string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name))
+}
+
+func isLocalProjectMaterialRef(storageRef, projectID string) bool {
+	const prefix = "local://"
+	if !strings.HasPrefix(storageRef, prefix) {
+		return false
+	}
+	path, err := url.PathUnescape(strings.TrimPrefix(storageRef, prefix))
+	if err != nil || path == "" || strings.ContainsAny(path, `\\?#`) {
+		return false
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	if parts[0] == "projects" {
+		return len(parts) >= 3 && parts[1] == projectID
+	}
+	return parts[0] == projectID
 }
 
 func BuildExternalGenerationRequest(input ExternalGenerationInput) (ExternalGenerationRequest, error) {

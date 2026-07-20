@@ -546,7 +546,7 @@ func main() {
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
 		stageApprovalSvc.WithArtifactApprover(artifactSvc)
-		videoAssets.NewHandler(artifactSvc, requireAuth).RegisterRoutes(r)
+		videoAssets.NewHandler(artifactSvc, videoProjectSvc, requireAuth).RegisterRoutes(r)
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
 			WithCheckpointService(checkpointSvc).
 			RegisterRoutes(r, requireAuth)
