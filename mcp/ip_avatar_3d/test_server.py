@@ -1751,7 +1751,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(render_input["voice"]["speed"], 0.94)
 
     def test_main_ip_profile_declares_stable_aroll_master_contract(self) -> None:
-        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip形象" / "main_ip" / "character-profile.json"
+        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip-assets" / "main-ip" / "character-profile.json"
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         model = profile["model"]
 
@@ -1774,7 +1774,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
         )
 
     def test_main_ip_profile_pins_verified_local_production_voice(self) -> None:
-        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip形象" / "main_ip" / "character-profile.json"
+        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip-assets" / "main-ip" / "character-profile.json"
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         voice = profile["voice"]
 
@@ -1795,9 +1795,9 @@ class IPAvatar3DMCPTests(unittest.TestCase):
                 "endpoint": "http://127.0.0.1:9880",
                 "allowRemoteEndpoint": False,
                 "referenceSource": {
-                    "path": "../ip音频.wav",
-                    "sha256": "0304b63d381c065e90b34ad373c6438f8b71123ffa74781f66fe191043570dd9",
-                    "clipStartSec": 1.248396,
+                    "path": "voice/reference/main_ip_voice_ref_v1.wav",
+                    "sha256": "0119b8a407ed1be5731db699d6166b7e4c86de540435c69bf4fb5229415382d8",
+                    "clipStartSec": 0.0,
                     "clipDurationSec": 8.542,
                     "sampleRateHz": 48000,
                     "channels": 1,
@@ -1823,7 +1823,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
     def test_main_ip_local_voice_health_resolves_pinned_bundle_without_synthesis(self) -> None:
         server = load_server()
-        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip形象" / "main_ip" / "character-profile.json"
+        profile_path = pathlib.Path(__file__).resolve().parents[2] / "ip-assets" / "main-ip" / "character-profile.json"
         provenance = {
             "provider": "gpt_sovits_local",
             "voiceId": "main_ip_warm_knowledge_host_v1",

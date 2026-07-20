@@ -17,7 +17,7 @@ except ModuleNotFoundError as exc:
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
-DEFAULT_PROFILE_PATH = REPO_ROOT / "ip形象/main_ip/character-profile.json"
+DEFAULT_PROFILE_PATH = REPO_ROOT / "ip-assets/main-ip/character-profile.json"
 DEFAULT_PROFILE = json.loads(DEFAULT_PROFILE_PATH.read_text(encoding="utf-8"))
 DEFAULT_STUDIO_PATH = DEFAULT_PROFILE_PATH.parent / DEFAULT_PROFILE["render"]["sceneBlendPath"]
 DEFAULT_MASTER_PATH = DEFAULT_PROFILE_PATH.parent / DEFAULT_PROFILE["model"]["masterBlendPath"]
@@ -734,7 +734,7 @@ def test_authored_scene_placement_persists_selected_mode_contract() -> None:
     mode_objects = blender_renderer.resolve_scene_mode_objects("seated")
     data = {
         "presentationMode": "seated",
-        "sceneBlendPath": "warm-sloth-studio-v1.blend",
+        "sceneBlendPath": "warm-sloth-studio-20260720.blend",
         "durationSec": 2,
         "fps": 30,
         "resolution": {"width": 1920, "height": 1080},
@@ -1348,7 +1348,7 @@ if __name__ == "__main__":
     if bpy.context.scene.get("ip_scene_contract") != "tangying-warm-sloth-studio/v1":
         bpy.ops.wm.open_mainfile(
             filepath=str(
-                REPO_ROOT / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
+                REPO_ROOT / "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
             )
         )
     tests = [

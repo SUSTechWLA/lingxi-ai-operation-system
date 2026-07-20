@@ -28,10 +28,10 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 
-MODEL_PATH = REPO_ROOT / "ip形象/main_ip/turnaround/3d模型.glb"
-RIGGED_FBX_PATH = REPO_ROOT / "ip形象/main_ip/turnaround/带骨骼3d模型.fbx"
-EXPORTED_GLB_PATH = REPO_ROOT / "ip形象/main_ip/models/main-ip-rigged.glb"
-WARM_STUDIO_PATH = REPO_ROOT / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
+MODEL_PATH = REPO_ROOT / "ip-assets/main-ip/models/main-ip-rigged.glb"
+RIGGED_FBX_PATH = MODEL_PATH
+EXPORTED_GLB_PATH = MODEL_PATH
+WARM_STUDIO_PATH = REPO_ROOT / "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
 SOLE_BAND_HEIGHT_M = 0.005
 SOLE_CLEARANCE_MAX_M = 0.003
 BLENDER_FLOAT_EPSILON_M = 0.0005
@@ -52,7 +52,15 @@ def reset_scene() -> None:
 def load_rigged_character():
     reset_scene()
     character_objects, armatures, imported_assets, _ = blender_renderer.import_model(str(MODEL_PATH))
-    assert armatures == []
+    for obj in character_objects:
+        for modifier in tuple(obj.modifiers):
+            if modifier.type == "ARMATURE":
+                obj.modifiers.remove(modifier)
+        if obj.parent in armatures:
+            obj.parent = None
+        obj.vertex_groups.clear()
+    for armature in armatures:
+        bpy.data.objects.remove(armature, do_unlink=True)
     dimensions = blender_renderer.prepare_character(character_objects, target_height=2.55)
     armature, rig_stats, bone_map = blender_renderer.create_simple_rig(character_objects, dimensions)
     return character_objects, imported_assets, dimensions, armature, rig_stats, bone_map

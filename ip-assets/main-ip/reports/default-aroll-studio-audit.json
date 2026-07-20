@@ -1,0 +1,5742 @@
+{
+  "schemaVersion": "tangying-default-aroll-blender-audit/v1",
+  "status": "PASS",
+  "kind": "studio",
+  "errors": [],
+  "filePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend",
+  "fileBytes": 528279,
+  "fileSha256": "65a7358afa1aa2612d24993f7a7644d9f90c63a9e7d1cd2dbd0176dc6e095432",
+  "blenderVersion": "5.1.2",
+  "pythonVersion": "3.13.9",
+  "sceneNames": [
+    "Scene_Warm_Sloth_Studio"
+  ],
+  "activeScene": "Scene_Warm_Sloth_Studio",
+  "collections": [
+    "QA_ONLY",
+    "STUDIO_ARCHITECTURE",
+    "STUDIO_BRAND",
+    "STUDIO_CAMERAS",
+    "STUDIO_FURNITURE",
+    "STUDIO_LIGHTS",
+    "STUDIO_MARKERS",
+    "STUDIO_PROPS",
+    "STUDIO_VEGETATION"
+  ],
+  "formalCollections": [],
+  "masterCollections": [],
+  "formalObjects": [],
+  "masterObjects": [],
+  "characterDependencyClosure": [],
+  "objectHierarchy": {
+    "Baseboard_Back": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Baseboard_Front": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Baseboard_Left": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Baseboard_Right_Front": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Baseboard_Right_Rear": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Book_Shelf_Linked_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Linked_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Linked_03": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Linked_04": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Linked_05": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Source_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Source_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Source_03": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Source_04": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Book_Shelf_Source_05": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Brand_Artwork": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_BackPanel": {
+      "type": "MESH",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Copy_Line1": {
+      "type": "FONT",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Copy_Line2": {
+      "type": "FONT",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Frame_Bottom": {
+      "type": "MESH",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Frame_Left": {
+      "type": "MESH",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Frame_Right": {
+      "type": "MESH",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Frame_Top": {
+      "type": "MESH",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Glass": {
+      "type": "MESH",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Brand_Mug": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Brand_Mug_Emblem_Simple": {
+      "type": "MESH",
+      "parent": "Brand_Mug",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Brand_Mug_Handle": {
+      "type": "CURVE",
+      "parent": "Brand_Mug",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Brand_Paper": {
+      "type": "MESH",
+      "parent": "Brand_Artwork",
+      "collections": [
+        "STUDIO_BRAND"
+      ]
+    },
+    "Cabinet_Basket": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_01": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_02": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_03": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_04": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_05": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_06": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_07": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_08": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_09": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_10": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_11": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Reed_12": {
+      "type": "CURVE",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Weave_Hoop_01": {
+      "type": "MESH",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Weave_Hoop_02": {
+      "type": "MESH",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Weave_Hoop_03": {
+      "type": "MESH",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Weave_Hoop_04": {
+      "type": "MESH",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Basket_Weave_Hoop_05": {
+      "type": "MESH",
+      "parent": "Cabinet_Basket",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Book_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Book_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Book_03": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Drawer_01": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Drawer_02": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Drawer_03": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Drawer_04": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Drawer_05": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Drawer_06": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Foot_01": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Foot_02": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Foot_03": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Foot_04": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Globe": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Globe_Axis": {
+      "type": "CURVE",
+      "parent": "Cabinet_Globe",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Globe_Base": {
+      "type": "MESH",
+      "parent": "Cabinet_Globe",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Globe_Meridian": {
+      "type": "MESH",
+      "parent": "Cabinet_Globe",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Handle_01": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Handle_02": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Handle_03": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Handle_04": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Handle_05": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Handle_06": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Left": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Left_Top": {
+      "type": "MESH",
+      "parent": "Cabinet_Left",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Cabinet_Planter": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Planter_Leaf_01": {
+      "type": "MESH",
+      "parent": "Cabinet_Planter",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Planter_Leaf_02": {
+      "type": "MESH",
+      "parent": "Cabinet_Planter",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Planter_Leaf_03": {
+      "type": "MESH",
+      "parent": "Cabinet_Planter",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Planter_Stem_01": {
+      "type": "CURVE",
+      "parent": "Cabinet_Planter",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Planter_Stem_02": {
+      "type": "CURVE",
+      "parent": "Cabinet_Planter",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_Planter_Stem_03": {
+      "type": "CURVE",
+      "parent": "Cabinet_Planter",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_StackBook_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_StackBook_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_StackBook_03": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_TaskLamp": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_TaskLamp_Diffuser": {
+      "type": "MESH",
+      "parent": "Cabinet_TaskLamp",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_TaskLamp_Shade": {
+      "type": "MESH",
+      "parent": "Cabinet_TaskLamp",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Cabinet_TaskLamp_Stem": {
+      "type": "CURVE",
+      "parent": "Cabinet_TaskLamp",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Camera_Close": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_CAMERAS"
+      ]
+    },
+    "Camera_Desk_Detail": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_CAMERAS"
+      ]
+    },
+    "Camera_Medium": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_CAMERAS"
+      ]
+    },
+    "Camera_Shelf_Detail": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_CAMERAS"
+      ]
+    },
+    "Camera_Standing_Close": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_Medium": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_ThreeQuarter": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_Transition": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_Standing_Wide": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Camera_ThreeQuarter_Left": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_CAMERAS"
+      ]
+    },
+    "Camera_ThreeQuarter_Right": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_CAMERAS"
+      ]
+    },
+    "Camera_Wide": {
+      "type": "CAMERA",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_CAMERAS"
+      ]
+    },
+    "Chair_Arm_Left": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Arm_Right": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_ArmSupport_Left": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_ArmSupport_Right": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Back": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Foot_01": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Foot_02": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Foot_03": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Foot_04": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Main": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Chair_Seat": {
+      "type": "MESH",
+      "parent": "Chair_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Crown_Back": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Crown_Front": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Crown_Left": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Crown_Right": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Curtain_Outer_Front": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Curtain_Outer_Rear": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Curtain_Rail": {
+      "type": "CURVE",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Curtain_Sheer": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Desk_Book_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Book_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Book_03": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Drawer_Case": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Drawer_Front_01": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Drawer_Front_02": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Drawer_Handle_01": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Drawer_Handle_02": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Foot_Left": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Foot_Right": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Frame_BackRail": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Frame_FrontRail": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Notebook": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Pen": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Plant": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Plant_Leaf_01": {
+      "type": "MESH",
+      "parent": "Desk_Plant",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Plant_Leaf_02": {
+      "type": "MESH",
+      "parent": "Desk_Plant",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Plant_Leaf_03": {
+      "type": "MESH",
+      "parent": "Desk_Plant",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Plant_Stem_01": {
+      "type": "CURVE",
+      "parent": "Desk_Plant",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Plant_Stem_02": {
+      "type": "CURVE",
+      "parent": "Desk_Plant",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Plant_Stem_03": {
+      "type": "CURVE",
+      "parent": "Desk_Plant",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Desk_Top": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Top_Endgrain_Left": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Desk_Top_Endgrain_Right": {
+      "type": "MESH",
+      "parent": "Desk_Top",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Door_Frame_FrontJamb": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_Frame_Header": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_Frame_RearJamb": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_Handle_Inner": {
+      "type": "MESH",
+      "parent": "Door_Hinge",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_Handle_Outer": {
+      "type": "MESH",
+      "parent": "Door_Hinge",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_Hinge": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_HingePlate_01": {
+      "type": "MESH",
+      "parent": "Door_Hinge",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_HingePlate_02": {
+      "type": "MESH",
+      "parent": "Door_Hinge",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_HingePlate_03": {
+      "type": "MESH",
+      "parent": "Door_Hinge",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_Leaf": {
+      "type": "MESH",
+      "parent": "Door_Hinge",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Door_SwingClearance": {
+      "type": "CURVE",
+      "parent": "SET_MASTER",
+      "collections": [
+        "QA_ONLY"
+      ]
+    },
+    "Downlight_01": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_01_Diffuser": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_01_Trim": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_02": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_02_Diffuser": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_02_Trim": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_03": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_03_Diffuser": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Downlight_03_Trim": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Floorboard_001": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_002": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_003": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_004": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_005": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_006": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_007": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_008": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_009": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_010": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_011": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_012": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_013": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_014": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_015": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_016": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_017": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_018": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_019": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_020": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_021": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_022": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_023": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_024": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_025": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_026": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_027": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_028": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_029": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_030": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_031": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_032": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Floorboard_033": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "FloorPlant_Left": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_01": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_02": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_03": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_04": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_05": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_06": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_07": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_08": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_09": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_10": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_11": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_12": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_13": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_14": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_15": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_16": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_17": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_18": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_19": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_20": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_21": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_22": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_23": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Leaf_24": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Pot": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Left_Soil": {
+      "type": "MESH",
+      "parent": "FloorPlant_Left",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_01": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_02": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_03": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_04": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_05": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_06": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_07": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_08": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_09": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_10": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_11": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_12": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_13": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_14": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_15": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_16": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_17": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_18": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_19": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_20": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_21": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_22": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_23": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Leaf_24": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Pot": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "FloorPlant_Right_Soil": {
+      "type": "MESH",
+      "parent": "FloorPlant_Right",
+      "collections": [
+        "STUDIO_VEGETATION"
+      ]
+    },
+    "Glass_Window": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "IP_Character_Spawn": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_MARKERS"
+      ]
+    },
+    "IP_Focus_Desk": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_MARKERS"
+      ]
+    },
+    "IP_Focus_Head": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_MARKERS"
+      ]
+    },
+    "IP_Focus_Shelf": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_MARKERS"
+      ]
+    },
+    "IP_Seat_Target": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Focus_Head": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Foot_Target.L": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Foot_Target.R": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Standing_Spawn": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "IP_Transition_Focus": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "Scene Collection"
+      ]
+    },
+    "Portrait_Play_Motif": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Portrait_Sloth_Eye_Left": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Portrait_Sloth_Eye_Right": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Portrait_Sloth_EyePatch_Left": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Portrait_Sloth_EyePatch_Right": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Portrait_Sloth_Face": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Portrait_Sloth_Nose": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Practical_Shelf": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Practical_Wall": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "RightWall_Portrait": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "RightWall_Portrait_Panel": {
+      "type": "MESH",
+      "parent": "RightWall_Portrait",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Rug_EdgeFiber_01": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_02": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_03": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_04": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_05": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_06": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_07": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_08": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_09": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_10": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_11": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_12": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_13": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_14": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_15": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_16": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_17": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_18": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_19": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_20": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_21": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_22": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_23": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_EdgeFiber_24": {
+      "type": "CURVE",
+      "parent": "Rug_Main",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Rug_Main": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "SET_MASTER": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "STUDIO_MARKERS"
+      ]
+    },
+    "Shelf_Frame_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Frame_01_Inset": {
+      "type": "MESH",
+      "parent": "Shelf_Frame_01",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Frame_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Frame_02_Inset": {
+      "type": "MESH",
+      "parent": "Shelf_Frame_02",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Globe": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Globe_Axis": {
+      "type": "CURVE",
+      "parent": "Shelf_Globe",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Globe_Base": {
+      "type": "MESH",
+      "parent": "Shelf_Globe",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Globe_Meridian": {
+      "type": "MESH",
+      "parent": "Shelf_Globe",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_01_Leaf_01": {
+      "type": "MESH",
+      "parent": "Shelf_Plant_01",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_01_Leaf_02": {
+      "type": "MESH",
+      "parent": "Shelf_Plant_01",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_01_Leaf_03": {
+      "type": "MESH",
+      "parent": "Shelf_Plant_01",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_01_Stem_01": {
+      "type": "CURVE",
+      "parent": "Shelf_Plant_01",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_01_Stem_02": {
+      "type": "CURVE",
+      "parent": "Shelf_Plant_01",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_01_Stem_03": {
+      "type": "CURVE",
+      "parent": "Shelf_Plant_01",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_02_Leaf_01": {
+      "type": "MESH",
+      "parent": "Shelf_Plant_02",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_02_Leaf_02": {
+      "type": "MESH",
+      "parent": "Shelf_Plant_02",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_02_Leaf_03": {
+      "type": "MESH",
+      "parent": "Shelf_Plant_02",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_02_Stem_01": {
+      "type": "CURVE",
+      "parent": "Shelf_Plant_02",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_02_Stem_02": {
+      "type": "CURVE",
+      "parent": "Shelf_Plant_02",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Plant_02_Stem_03": {
+      "type": "CURVE",
+      "parent": "Shelf_Plant_02",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Pottery_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Pottery_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_Right_01": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Shelf_Right_02": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Shelf_Right_03": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Shelf_TableLamp": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_TableLamp_Diffuser": {
+      "type": "MESH",
+      "parent": "Shelf_TableLamp",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_TableLamp_Shade": {
+      "type": "MESH",
+      "parent": "Shelf_TableLamp",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Shelf_TableLamp_Stem": {
+      "type": "CURVE",
+      "parent": "Shelf_TableLamp",
+      "collections": [
+        "STUDIO_PROPS"
+      ]
+    },
+    "Slat_Back_001": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_002": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_003": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_004": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_005": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_006": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_007": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_008": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_009": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_010": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_011": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_012": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_013": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_014": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_015": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_016": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_017": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_018": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_019": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_020": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_021": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_022": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_023": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_024": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_025": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_026": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Slat_Back_027": {
+      "type": "MESH",
+      "parent": "SlatWall_Back_Right",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "SlatWall_Back_Right": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_FURNITURE"
+      ]
+    },
+    "Studio_Ceiling": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Studio_Fill": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Studio_Floor": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Studio_InteriorVolume": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "QA_ONLY"
+      ]
+    },
+    "Studio_Key": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Wall_Back": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Front_Left": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Front_Right": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Left_WindowFront": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Left_WindowLower": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Left_WindowRear": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Left_WindowUpper": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Right_DoorFront": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Right_DoorLintel": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Right_DoorRear": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Wall_Sconce": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Wall_Sconce_Arm": {
+      "type": "CURVE",
+      "parent": "Wall_Sconce",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Wall_Sconce_Backplate": {
+      "type": "MESH",
+      "parent": "Wall_Sconce",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Wall_Sconce_Diffuser": {
+      "type": "MESH",
+      "parent": "Wall_Sconce",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Wall_Sconce_Shade": {
+      "type": "MESH",
+      "parent": "Wall_Sconce",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    },
+    "Window_ExteriorLightBlocker": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Window_Frame": {
+      "type": "EMPTY",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Window_Frame_FrontJamb": {
+      "type": "MESH",
+      "parent": "Window_Frame",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Window_Frame_Header": {
+      "type": "MESH",
+      "parent": "Window_Frame",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Window_Frame_Lower": {
+      "type": "MESH",
+      "parent": "Window_Frame",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Window_Frame_RearJamb": {
+      "type": "MESH",
+      "parent": "Window_Frame",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Window_Sill": {
+      "type": "MESH",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_ARCHITECTURE"
+      ]
+    },
+    "Window_Softbox": {
+      "type": "LIGHT",
+      "parent": "SET_MASTER",
+      "collections": [
+        "STUDIO_LIGHTS"
+      ]
+    }
+  },
+  "objects": [
+    "Baseboard_Back",
+    "Baseboard_Front",
+    "Baseboard_Left",
+    "Baseboard_Right_Front",
+    "Baseboard_Right_Rear",
+    "Book_Shelf_Linked_01",
+    "Book_Shelf_Linked_02",
+    "Book_Shelf_Linked_03",
+    "Book_Shelf_Linked_04",
+    "Book_Shelf_Linked_05",
+    "Book_Shelf_Source_01",
+    "Book_Shelf_Source_02",
+    "Book_Shelf_Source_03",
+    "Book_Shelf_Source_04",
+    "Book_Shelf_Source_05",
+    "Brand_Artwork",
+    "Brand_BackPanel",
+    "Brand_Copy_Line1",
+    "Brand_Copy_Line2",
+    "Brand_Frame_Bottom",
+    "Brand_Frame_Left",
+    "Brand_Frame_Right",
+    "Brand_Frame_Top",
+    "Brand_Glass",
+    "Brand_Mug",
+    "Brand_Mug_Emblem_Simple",
+    "Brand_Mug_Handle",
+    "Brand_Paper",
+    "Cabinet_Basket",
+    "Cabinet_Basket_Reed_01",
+    "Cabinet_Basket_Reed_02",
+    "Cabinet_Basket_Reed_03",
+    "Cabinet_Basket_Reed_04",
+    "Cabinet_Basket_Reed_05",
+    "Cabinet_Basket_Reed_06",
+    "Cabinet_Basket_Reed_07",
+    "Cabinet_Basket_Reed_08",
+    "Cabinet_Basket_Reed_09",
+    "Cabinet_Basket_Reed_10",
+    "Cabinet_Basket_Reed_11",
+    "Cabinet_Basket_Reed_12",
+    "Cabinet_Basket_Weave_Hoop_01",
+    "Cabinet_Basket_Weave_Hoop_02",
+    "Cabinet_Basket_Weave_Hoop_03",
+    "Cabinet_Basket_Weave_Hoop_04",
+    "Cabinet_Basket_Weave_Hoop_05",
+    "Cabinet_Book_01",
+    "Cabinet_Book_02",
+    "Cabinet_Book_03",
+    "Cabinet_Drawer_01",
+    "Cabinet_Drawer_02",
+    "Cabinet_Drawer_03",
+    "Cabinet_Drawer_04",
+    "Cabinet_Drawer_05",
+    "Cabinet_Drawer_06",
+    "Cabinet_Foot_01",
+    "Cabinet_Foot_02",
+    "Cabinet_Foot_03",
+    "Cabinet_Foot_04",
+    "Cabinet_Globe",
+    "Cabinet_Globe_Axis",
+    "Cabinet_Globe_Base",
+    "Cabinet_Globe_Meridian",
+    "Cabinet_Handle_01",
+    "Cabinet_Handle_02",
+    "Cabinet_Handle_03",
+    "Cabinet_Handle_04",
+    "Cabinet_Handle_05",
+    "Cabinet_Handle_06",
+    "Cabinet_Left",
+    "Cabinet_Left_Top",
+    "Cabinet_Planter",
+    "Cabinet_Planter_Leaf_01",
+    "Cabinet_Planter_Leaf_02",
+    "Cabinet_Planter_Leaf_03",
+    "Cabinet_Planter_Stem_01",
+    "Cabinet_Planter_Stem_02",
+    "Cabinet_Planter_Stem_03",
+    "Cabinet_StackBook_01",
+    "Cabinet_StackBook_02",
+    "Cabinet_StackBook_03",
+    "Cabinet_TaskLamp",
+    "Cabinet_TaskLamp_Diffuser",
+    "Cabinet_TaskLamp_Shade",
+    "Cabinet_TaskLamp_Stem",
+    "Camera_Close",
+    "Camera_Desk_Detail",
+    "Camera_Medium",
+    "Camera_Shelf_Detail",
+    "Camera_Standing_Close",
+    "Camera_Standing_Medium",
+    "Camera_Standing_ThreeQuarter",
+    "Camera_Standing_Transition",
+    "Camera_Standing_Wide",
+    "Camera_ThreeQuarter_Left",
+    "Camera_ThreeQuarter_Right",
+    "Camera_Wide",
+    "Chair_ArmSupport_Left",
+    "Chair_ArmSupport_Right",
+    "Chair_Arm_Left",
+    "Chair_Arm_Right",
+    "Chair_Back",
+    "Chair_Foot_01",
+    "Chair_Foot_02",
+    "Chair_Foot_03",
+    "Chair_Foot_04",
+    "Chair_Main",
+    "Chair_Seat",
+    "Crown_Back",
+    "Crown_Front",
+    "Crown_Left",
+    "Crown_Right",
+    "Curtain_Outer_Front",
+    "Curtain_Outer_Rear",
+    "Curtain_Rail",
+    "Curtain_Sheer",
+    "Desk_Book_01",
+    "Desk_Book_02",
+    "Desk_Book_03",
+    "Desk_Drawer_Case",
+    "Desk_Drawer_Front_01",
+    "Desk_Drawer_Front_02",
+    "Desk_Drawer_Handle_01",
+    "Desk_Drawer_Handle_02",
+    "Desk_Foot_Left",
+    "Desk_Foot_Right",
+    "Desk_Frame_BackRail",
+    "Desk_Frame_FrontRail",
+    "Desk_Notebook",
+    "Desk_Pen",
+    "Desk_Plant",
+    "Desk_Plant_Leaf_01",
+    "Desk_Plant_Leaf_02",
+    "Desk_Plant_Leaf_03",
+    "Desk_Plant_Stem_01",
+    "Desk_Plant_Stem_02",
+    "Desk_Plant_Stem_03",
+    "Desk_Top",
+    "Desk_Top_Endgrain_Left",
+    "Desk_Top_Endgrain_Right",
+    "Door_Frame_FrontJamb",
+    "Door_Frame_Header",
+    "Door_Frame_RearJamb",
+    "Door_Handle_Inner",
+    "Door_Handle_Outer",
+    "Door_Hinge",
+    "Door_HingePlate_01",
+    "Door_HingePlate_02",
+    "Door_HingePlate_03",
+    "Door_Leaf",
+    "Door_SwingClearance",
+    "Downlight_01",
+    "Downlight_01_Diffuser",
+    "Downlight_01_Trim",
+    "Downlight_02",
+    "Downlight_02_Diffuser",
+    "Downlight_02_Trim",
+    "Downlight_03",
+    "Downlight_03_Diffuser",
+    "Downlight_03_Trim",
+    "FloorPlant_Left",
+    "FloorPlant_Left_Leaf_01",
+    "FloorPlant_Left_Leaf_02",
+    "FloorPlant_Left_Leaf_03",
+    "FloorPlant_Left_Leaf_04",
+    "FloorPlant_Left_Leaf_05",
+    "FloorPlant_Left_Leaf_06",
+    "FloorPlant_Left_Leaf_07",
+    "FloorPlant_Left_Leaf_08",
+    "FloorPlant_Left_Leaf_09",
+    "FloorPlant_Left_Leaf_10",
+    "FloorPlant_Left_Leaf_11",
+    "FloorPlant_Left_Leaf_12",
+    "FloorPlant_Left_Leaf_13",
+    "FloorPlant_Left_Leaf_14",
+    "FloorPlant_Left_Leaf_15",
+    "FloorPlant_Left_Leaf_16",
+    "FloorPlant_Left_Leaf_17",
+    "FloorPlant_Left_Leaf_18",
+    "FloorPlant_Left_Leaf_19",
+    "FloorPlant_Left_Leaf_20",
+    "FloorPlant_Left_Leaf_21",
+    "FloorPlant_Left_Leaf_22",
+    "FloorPlant_Left_Leaf_23",
+    "FloorPlant_Left_Leaf_24",
+    "FloorPlant_Left_Pot",
+    "FloorPlant_Left_Soil",
+    "FloorPlant_Right",
+    "FloorPlant_Right_Leaf_01",
+    "FloorPlant_Right_Leaf_02",
+    "FloorPlant_Right_Leaf_03",
+    "FloorPlant_Right_Leaf_04",
+    "FloorPlant_Right_Leaf_05",
+    "FloorPlant_Right_Leaf_06",
+    "FloorPlant_Right_Leaf_07",
+    "FloorPlant_Right_Leaf_08",
+    "FloorPlant_Right_Leaf_09",
+    "FloorPlant_Right_Leaf_10",
+    "FloorPlant_Right_Leaf_11",
+    "FloorPlant_Right_Leaf_12",
+    "FloorPlant_Right_Leaf_13",
+    "FloorPlant_Right_Leaf_14",
+    "FloorPlant_Right_Leaf_15",
+    "FloorPlant_Right_Leaf_16",
+    "FloorPlant_Right_Leaf_17",
+    "FloorPlant_Right_Leaf_18",
+    "FloorPlant_Right_Leaf_19",
+    "FloorPlant_Right_Leaf_20",
+    "FloorPlant_Right_Leaf_21",
+    "FloorPlant_Right_Leaf_22",
+    "FloorPlant_Right_Leaf_23",
+    "FloorPlant_Right_Leaf_24",
+    "FloorPlant_Right_Pot",
+    "FloorPlant_Right_Soil",
+    "Floorboard_001",
+    "Floorboard_002",
+    "Floorboard_003",
+    "Floorboard_004",
+    "Floorboard_005",
+    "Floorboard_006",
+    "Floorboard_007",
+    "Floorboard_008",
+    "Floorboard_009",
+    "Floorboard_010",
+    "Floorboard_011",
+    "Floorboard_012",
+    "Floorboard_013",
+    "Floorboard_014",
+    "Floorboard_015",
+    "Floorboard_016",
+    "Floorboard_017",
+    "Floorboard_018",
+    "Floorboard_019",
+    "Floorboard_020",
+    "Floorboard_021",
+    "Floorboard_022",
+    "Floorboard_023",
+    "Floorboard_024",
+    "Floorboard_025",
+    "Floorboard_026",
+    "Floorboard_027",
+    "Floorboard_028",
+    "Floorboard_029",
+    "Floorboard_030",
+    "Floorboard_031",
+    "Floorboard_032",
+    "Floorboard_033",
+    "Glass_Window",
+    "IP_Character_Spawn",
+    "IP_Focus_Desk",
+    "IP_Focus_Head",
+    "IP_Focus_Shelf",
+    "IP_Seat_Target",
+    "IP_Standing_Focus_Head",
+    "IP_Standing_Foot_Target.L",
+    "IP_Standing_Foot_Target.R",
+    "IP_Standing_Spawn",
+    "IP_Transition_Focus",
+    "Portrait_Play_Motif",
+    "Portrait_Sloth_EyePatch_Left",
+    "Portrait_Sloth_EyePatch_Right",
+    "Portrait_Sloth_Eye_Left",
+    "Portrait_Sloth_Eye_Right",
+    "Portrait_Sloth_Face",
+    "Portrait_Sloth_Nose",
+    "Practical_Shelf",
+    "Practical_Wall",
+    "RightWall_Portrait",
+    "RightWall_Portrait_Panel",
+    "Rug_EdgeFiber_01",
+    "Rug_EdgeFiber_02",
+    "Rug_EdgeFiber_03",
+    "Rug_EdgeFiber_04",
+    "Rug_EdgeFiber_05",
+    "Rug_EdgeFiber_06",
+    "Rug_EdgeFiber_07",
+    "Rug_EdgeFiber_08",
+    "Rug_EdgeFiber_09",
+    "Rug_EdgeFiber_10",
+    "Rug_EdgeFiber_11",
+    "Rug_EdgeFiber_12",
+    "Rug_EdgeFiber_13",
+    "Rug_EdgeFiber_14",
+    "Rug_EdgeFiber_15",
+    "Rug_EdgeFiber_16",
+    "Rug_EdgeFiber_17",
+    "Rug_EdgeFiber_18",
+    "Rug_EdgeFiber_19",
+    "Rug_EdgeFiber_20",
+    "Rug_EdgeFiber_21",
+    "Rug_EdgeFiber_22",
+    "Rug_EdgeFiber_23",
+    "Rug_EdgeFiber_24",
+    "Rug_Main",
+    "SET_MASTER",
+    "Shelf_Frame_01",
+    "Shelf_Frame_01_Inset",
+    "Shelf_Frame_02",
+    "Shelf_Frame_02_Inset",
+    "Shelf_Globe",
+    "Shelf_Globe_Axis",
+    "Shelf_Globe_Base",
+    "Shelf_Globe_Meridian",
+    "Shelf_Plant_01",
+    "Shelf_Plant_01_Leaf_01",
+    "Shelf_Plant_01_Leaf_02",
+    "Shelf_Plant_01_Leaf_03",
+    "Shelf_Plant_01_Stem_01",
+    "Shelf_Plant_01_Stem_02",
+    "Shelf_Plant_01_Stem_03",
+    "Shelf_Plant_02",
+    "Shelf_Plant_02_Leaf_01",
+    "Shelf_Plant_02_Leaf_02",
+    "Shelf_Plant_02_Leaf_03",
+    "Shelf_Plant_02_Stem_01",
+    "Shelf_Plant_02_Stem_02",
+    "Shelf_Plant_02_Stem_03",
+    "Shelf_Pottery_01",
+    "Shelf_Pottery_02",
+    "Shelf_Right_01",
+    "Shelf_Right_02",
+    "Shelf_Right_03",
+    "Shelf_TableLamp",
+    "Shelf_TableLamp_Diffuser",
+    "Shelf_TableLamp_Shade",
+    "Shelf_TableLamp_Stem",
+    "SlatWall_Back_Right",
+    "Slat_Back_001",
+    "Slat_Back_002",
+    "Slat_Back_003",
+    "Slat_Back_004",
+    "Slat_Back_005",
+    "Slat_Back_006",
+    "Slat_Back_007",
+    "Slat_Back_008",
+    "Slat_Back_009",
+    "Slat_Back_010",
+    "Slat_Back_011",
+    "Slat_Back_012",
+    "Slat_Back_013",
+    "Slat_Back_014",
+    "Slat_Back_015",
+    "Slat_Back_016",
+    "Slat_Back_017",
+    "Slat_Back_018",
+    "Slat_Back_019",
+    "Slat_Back_020",
+    "Slat_Back_021",
+    "Slat_Back_022",
+    "Slat_Back_023",
+    "Slat_Back_024",
+    "Slat_Back_025",
+    "Slat_Back_026",
+    "Slat_Back_027",
+    "Studio_Ceiling",
+    "Studio_Fill",
+    "Studio_Floor",
+    "Studio_InteriorVolume",
+    "Studio_Key",
+    "Wall_Back",
+    "Wall_Front_Left",
+    "Wall_Front_Right",
+    "Wall_Left_WindowFront",
+    "Wall_Left_WindowLower",
+    "Wall_Left_WindowRear",
+    "Wall_Left_WindowUpper",
+    "Wall_Right_DoorFront",
+    "Wall_Right_DoorLintel",
+    "Wall_Right_DoorRear",
+    "Wall_Sconce",
+    "Wall_Sconce_Arm",
+    "Wall_Sconce_Backplate",
+    "Wall_Sconce_Diffuser",
+    "Wall_Sconce_Shade",
+    "Window_ExteriorLightBlocker",
+    "Window_Frame",
+    "Window_Frame_FrontJamb",
+    "Window_Frame_Header",
+    "Window_Frame_Lower",
+    "Window_Frame_RearJamb",
+    "Window_Sill",
+    "Window_Softbox"
+  ],
+  "objectCounts": {
+    "CAMERA": 12,
+    "CURVE": 56,
+    "EMPTY": 17,
+    "FONT": 2,
+    "LIGHT": 8,
+    "MESH": 287
+  },
+  "armatures": [],
+  "cameras": [
+    "Camera_Close",
+    "Camera_Desk_Detail",
+    "Camera_Medium",
+    "Camera_Shelf_Detail",
+    "Camera_Standing_Close",
+    "Camera_Standing_Medium",
+    "Camera_Standing_ThreeQuarter",
+    "Camera_Standing_Transition",
+    "Camera_Standing_Wide",
+    "Camera_ThreeQuarter_Left",
+    "Camera_ThreeQuarter_Right",
+    "Camera_Wide"
+  ],
+  "lights": [
+    "Downlight_01",
+    "Downlight_02",
+    "Downlight_03",
+    "Practical_Shelf",
+    "Practical_Wall",
+    "Studio_Fill",
+    "Studio_Key",
+    "Window_Softbox"
+  ],
+  "requiredMarkers": {
+    "IP_Character_Spawn": true,
+    "IP_Focus_Head": true
+  },
+  "standingMarkers": {
+    "IP_Standing_Spawn": true,
+    "IP_Standing_Focus_Head": true,
+    "IP_Transition_Focus": true,
+    "IP_Seat_Target": true,
+    "IP_Standing_Foot_Target.L": true,
+    "IP_Standing_Foot_Target.R": true
+  },
+  "standingCameras": {
+    "Camera_Standing_Wide": true,
+    "Camera_Standing_Medium": true,
+    "Camera_Standing_Close": true,
+    "Camera_Standing_ThreeQuarter": true,
+    "Camera_Standing_Transition": true
+  },
+  "sceneContract": "tangying-default-sloth-aroll-studio/v1",
+  "presentationModes": [
+    "standing"
+  ],
+  "meshVertexOrder": {
+    "Baseboard_Back": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6c8096972492cbf2cccd989f893e3beb8fde6800bfe1bdd45ea4a35de9d64f77"
+    },
+    "Baseboard_Front": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "0f469a2378605c8c9022d5c25014b45a1cce32a95c255f23111bdbe407e8b30c"
+    },
+    "Baseboard_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "279beaf4bbdd43f5972cc9039588871513745c6f77b2aa96a88600811f4c59f3"
+    },
+    "Baseboard_Right_Front": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "16f1df63a00c3a066ec504f8e99c7e4221885f2ee6b8642dcc8976415be71a2f"
+    },
+    "Baseboard_Right_Rear": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "0d205d1fac532ee59dfa193fb677a0753b13e5889080ae0aae87bcc9e16690c5"
+    },
+    "Book_Shelf_Linked_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "373ace79a052572d6578450e65bf70772662f2567fb48940dceebe54806c4105"
+    },
+    "Book_Shelf_Linked_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "98bfc790538ec3fa85a4855686bc43a23cc14518d86c5f5e045148c778618090"
+    },
+    "Book_Shelf_Linked_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "32e98515c96d5108640184ffc33c102a972108ad4029dd3c142ea40af862dba9"
+    },
+    "Book_Shelf_Linked_04": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "807c55e91c9027a090199ca0c553870a7de8d7d17d44b2e8c8198d4259b16fe2"
+    },
+    "Book_Shelf_Linked_05": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "34699e2cafd09fd6d4f99645e050ee6bf051b816baca2397b0e306625bfabe56"
+    },
+    "Book_Shelf_Source_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "7ad96301003c3cf030480f4262367c5ddb595524146698c3c131c2fb0c743187"
+    },
+    "Book_Shelf_Source_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "c8c56d9ee0d2a35c36733ae8ddfd2d8dca9668f75becd48db40b116e86b3b0be"
+    },
+    "Book_Shelf_Source_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "980c66bae0895c047353c44ac2810e5d152b642adf65ecfc6b440a0ea4a576c6"
+    },
+    "Book_Shelf_Source_04": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3aee82ee57ba2c8e71eaa388903913e9d3bb8bddb82cf06def07a468a09665d5"
+    },
+    "Book_Shelf_Source_05": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "773ee1c703d84b6f7c1be45de59db99e734a252aae259ce38bbe1e498fa741bb"
+    },
+    "Brand_BackPanel": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "c461fc2d1bf1b6356111dd229eccbe989565c6f3df6ea59fa06de48e801acd7d"
+    },
+    "Brand_Frame_Bottom": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3f5399c18e0a7d7a6e54fb694788d8d1632ced7cccfe24f1c2bc8bb10b0a4149"
+    },
+    "Brand_Frame_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "4597eac4a590dadb3be4819df09f6d9fc1d6ab5e4c6427994269900b29bf808d"
+    },
+    "Brand_Frame_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "9a470ffd7ecebe65b756fabaad0ee2e1166c1a0c082ca1fcc769715f3b5d1869"
+    },
+    "Brand_Frame_Top": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "73df68acc050b322b016e02f0a89ed3e07639630f862ccc5dd0f9e7ae831528a"
+    },
+    "Brand_Glass": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "01f53e0c0535f2bd1a33c48491256328ac1e389b610dba25e51f5f083457b29b"
+    },
+    "Brand_Mug": {
+      "vertices": 162,
+      "edges": 360,
+      "polygons": 200,
+      "orderedCoordinateSha256": "5a34257725bb629c005033fa010e3039f92d9b0ecbe4664b8f6a0b4a890d2438"
+    },
+    "Brand_Mug_Emblem_Simple": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "68d59301c066ca500c616ac65d56b91d3f211c72952b5ab95221978d2df05d79"
+    },
+    "Brand_Paper": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "ee87f54362fc83e49126b64bf6c9f664108335c378fd30cedf031d09892c0458"
+    },
+    "Cabinet_Basket_Weave_Hoop_01": {
+      "vertices": 288,
+      "edges": 576,
+      "polygons": 288,
+      "orderedCoordinateSha256": "15431515c85c5a98f8d8a3104d4576a64ae11dcb69aa392b01505b16efacaf07"
+    },
+    "Cabinet_Basket_Weave_Hoop_02": {
+      "vertices": 288,
+      "edges": 576,
+      "polygons": 288,
+      "orderedCoordinateSha256": "714bdb020cc5ab550daca47496e3b3f85a2f060217a1d0719e257ef50f9f7a35"
+    },
+    "Cabinet_Basket_Weave_Hoop_03": {
+      "vertices": 288,
+      "edges": 576,
+      "polygons": 288,
+      "orderedCoordinateSha256": "8272349f7da07af7ff287e97016b99e28c775c2dc00a10c0489e59b590a65cbb"
+    },
+    "Cabinet_Basket_Weave_Hoop_04": {
+      "vertices": 288,
+      "edges": 576,
+      "polygons": 288,
+      "orderedCoordinateSha256": "561d0b6849cbe3ccf3d0eb59ba6a937189b5aded974e64f63977ccfa109058f5"
+    },
+    "Cabinet_Basket_Weave_Hoop_05": {
+      "vertices": 288,
+      "edges": 576,
+      "polygons": 288,
+      "orderedCoordinateSha256": "6a853b145845d9caa1dbeb6f6088459759891eda669d49335c0ec35c7b912b97"
+    },
+    "Cabinet_Book_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "220651b5c495ea2085c6d93d185a09213a2bddb5e62a632f9ed2824eb4e4367f"
+    },
+    "Cabinet_Book_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "d8e1f00a7592d9e5112bbde743fbf3a3839a92544769ec95e61d1a16d4377f88"
+    },
+    "Cabinet_Book_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "610c448e97c9a84ed0285b9fb7ec73fa97d180cf4aa38539f0f581fa1d0cba0c"
+    },
+    "Cabinet_Drawer_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "2a0edf3917c2ae07ed0cbd5239a568dbc8130253d32c6b845e84290ed280b5cc"
+    },
+    "Cabinet_Drawer_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "53214c12fbc045c270a5fb8583c62959dc28ec8e6f4ace4ac272a77017bcf6ed"
+    },
+    "Cabinet_Drawer_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "21b2e9b5465d2a35a34df397221b98c5b93ee57f42ae431ae02ec5d9e03fad05"
+    },
+    "Cabinet_Drawer_04": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6df0a9f1d92b18d45dfd67fc14f9b69adeacbd629a970ab2b3b63f47154831d9"
+    },
+    "Cabinet_Drawer_05": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "43956d91c18475c6dde9c9d3fe1e242e47d5282a51f86483d3006a9659defef8"
+    },
+    "Cabinet_Drawer_06": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "b1f69260ac8216c313babab22adb155fe90af4ff17c50a5a5b3680e010269817"
+    },
+    "Cabinet_Foot_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "88c669cb8069874d47d4d07ed942be1004d9591265830512517156c9d4f5268c"
+    },
+    "Cabinet_Foot_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "58208d4d04e98faccd0861038ad569bc904034f7358e6f00c1f0606429b2d899"
+    },
+    "Cabinet_Foot_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "d7ad75a7322ef6c416b0d6d6c5f3bbafad853d1c7f8fe0d2c8f28559cc949aa7"
+    },
+    "Cabinet_Foot_04": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6c51d752a0b78071dd18b17f56c5677a930ab2702d1b6400ab79299840efe9e6"
+    },
+    "Cabinet_Globe": {
+      "vertices": 1106,
+      "edges": 2256,
+      "polygons": 1152,
+      "orderedCoordinateSha256": "45926ef1ce711c8de34e7af9dd1a2711d553046fbb142d815c51736cd32b745f"
+    },
+    "Cabinet_Globe_Base": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "b236908cfb5c66d8840855b17e45e521ea54d2b6a4d4f2a83953d49b9b90ae84"
+    },
+    "Cabinet_Globe_Meridian": {
+      "vertices": 288,
+      "edges": 576,
+      "polygons": 288,
+      "orderedCoordinateSha256": "7fec3999a6f27cf363f3048b614259c9324abff7450c8435b1b5c1025f487a1c"
+    },
+    "Cabinet_Handle_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "17f391089c05c7690aa556cec2d03a5d39d7a71cc1eb50275238b217be848bd3"
+    },
+    "Cabinet_Handle_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "ff7f8d32f15feef4918cf54535d6d0aaa83a25e3698e8441dd3eb7e5ad2d1fb5"
+    },
+    "Cabinet_Handle_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5683bc2bba5b62a8aaad47c0c8154677b763382ca71f08ff82a333a61b522408"
+    },
+    "Cabinet_Handle_04": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "c87a5e8ff0c33641a90f4122f2825d8b05e0b9fdb45877faf700783f393a51b0"
+    },
+    "Cabinet_Handle_05": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "290dd8ea0a533e0aca17ad2c45b5a33f56805a6272da8f84c89b48a807191352"
+    },
+    "Cabinet_Handle_06": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "0e0280d17fc615bf6a1e2e48a930ff1bd8e10f169f86c61577965235523a6775"
+    },
+    "Cabinet_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "a1e3468655bc42a1e4274530d1d9a5172667778b260b02228451a6ec5d4df4ff"
+    },
+    "Cabinet_Left_Top": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "756be14e7a2dfcf7c39e49eecc0a22d6635be4fff5543c6fd80d6d5eca74876e"
+    },
+    "Cabinet_Planter": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "cabba3c2ae3d587e06d70118f03c5ba154ba8cee9b27912e3b3c48dfde4544ac"
+    },
+    "Cabinet_Planter_Leaf_01": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "d25f5d38a870c9192994274b5d68a99a14056087d088bbd4c7cf38ff09047df8"
+    },
+    "Cabinet_Planter_Leaf_02": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "df658b7b75792c2e6a4986bae3d627ffeb702adbbd2ba3bc2b37c212027d1f4e"
+    },
+    "Cabinet_Planter_Leaf_03": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "8ebf37c342588c9659fad07663ef1d39f2954a807bb0fcad6f1e37bce63b39f0"
+    },
+    "Cabinet_StackBook_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "08dbbf6022ac811d19b3467b9b7835bf9a3101f85424488ae02e9a5979e3a59d"
+    },
+    "Cabinet_StackBook_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "601e7db7bfc4cb1f0972b5a2b367bedafbc841771bf570adc79a9b3bed4b3747"
+    },
+    "Cabinet_StackBook_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "2e06dfcabbb1e1e60c2e8c1cc33e681041f3e5b9a47d50985f5428b4ab64d2dc"
+    },
+    "Cabinet_TaskLamp": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "7b40ce80b54eb7604176574d767841177a3d330d89ad5652d1d265e272c82f46"
+    },
+    "Cabinet_TaskLamp_Diffuser": {
+      "vertices": 1106,
+      "edges": 2256,
+      "polygons": 1152,
+      "orderedCoordinateSha256": "ad0495f818cda88f6047ff2344e213d03dcc685a3e5af0f7193b89590a211b01"
+    },
+    "Cabinet_TaskLamp_Shade": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 40,
+      "orderedCoordinateSha256": "4f11e16fd6f658b36c5b247fceefe6fe7509f40eb1bcae8f56604e42668b1844"
+    },
+    "Chair_ArmSupport_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6c625a5a8f6bdf3562289b0ce2802742f8f5dc12f10965c02eae6d73a094877e"
+    },
+    "Chair_ArmSupport_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5ee15427802071e56783fd21a03799b28730da32264b1c508323b52ca81d6cc7"
+    },
+    "Chair_Arm_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "56d917724cad1b74d1ab1140f9be5b1665b90bb2f14d9d181aa28ba2f10bf17a"
+    },
+    "Chair_Arm_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "cf73040ad67afc0f9640fee35784e06a7350742bb34858ebeae75bc6e8422b38"
+    },
+    "Chair_Back": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3ba363fbad77cb2c53ba4ff96bdcabd124acdfe034389cd984bd6cd8324d8b3d"
+    },
+    "Chair_Foot_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "8e6b1e6870b873d10be7c97238333661ccce642e45d15e61673bef6121ac0d46"
+    },
+    "Chair_Foot_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5e90591c8fa37fa3f057062900a4841db81382e451fca0f9534a82040b3a3702"
+    },
+    "Chair_Foot_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "7e6b761d6ad7227295cd960e8f04fce6e9fd57a5cf1a95df57050bb3e431bd35"
+    },
+    "Chair_Foot_04": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "8eca00607fe00a941475862c2002ac552b8514f83358932106fa1b262cf3cc38"
+    },
+    "Chair_Seat": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "d977d980394e348b820ca38db5f8e6f10995e06fbda7386480f933b0cef24b92"
+    },
+    "Crown_Back": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "9b54587ac1773051bc303761fd824fb4d447e9843ed32869b42c14b1d57035c7"
+    },
+    "Crown_Front": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "4460999d2365cfbae396a6c32a9bd78db23020ee5ba6d86ba28a24e29491b14d"
+    },
+    "Crown_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "fe0d2cc22bf1394244310bec4389518028246bc4c629aa040b5a48a67d6a62a0"
+    },
+    "Crown_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "9b2e26ef5ac0d88bcde22886da9128d349ac0116c33f72dada355e4e60ae7d08"
+    },
+    "Curtain_Outer_Front": {
+      "vertices": 58,
+      "edges": 85,
+      "polygons": 28,
+      "orderedCoordinateSha256": "91bd1480d2980fffa62e6ba17e518cadaf23ccf4b6390eaf17ff551c184a75a0"
+    },
+    "Curtain_Outer_Rear": {
+      "vertices": 58,
+      "edges": 85,
+      "polygons": 28,
+      "orderedCoordinateSha256": "4850814c964f797117588a6fba346cb8e64eb041aaf8609d42932b7b4c3fadc0"
+    },
+    "Curtain_Sheer": {
+      "vertices": 98,
+      "edges": 145,
+      "polygons": 48,
+      "orderedCoordinateSha256": "70c5f00af841d653ea7c76fcc2d8abdc5120f61fa7ce984a509fef3033cc9a72"
+    },
+    "Desk_Book_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "40d6fb70f66d3a26e569d1528d95d377b481498e74923c226bf0eaa8da60d2aa"
+    },
+    "Desk_Book_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3856ca072c661900b96231fc878c6e9716c0da7b59c5172ade9f107dc824f812"
+    },
+    "Desk_Book_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "d9cf2f523e04d5f7d4044ec448dce1adb3cc10d30afc915e8fb336f177f92b35"
+    },
+    "Desk_Drawer_Case": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "33f37d5d17a28dcb91af88fd737634497ece6b1eb7b40dac93d51b1be14d3718"
+    },
+    "Desk_Drawer_Front_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "de51ae48b66a93708e1e762e5c641790a2380077ed277d1534dd0d6077fb1abd"
+    },
+    "Desk_Drawer_Front_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "b8cb27759e62c80e5b673f31e36c8e6644bcae450c3d6b71a16c233f2f1c6378"
+    },
+    "Desk_Drawer_Handle_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "97657ac94f388be6605513e51e270fa1f89f150ac31a6da32a7abecb47958799"
+    },
+    "Desk_Drawer_Handle_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5ae7ee68bcb76aaa5022c92a6d398648c122879b9986a109a35f4b3960b00597"
+    },
+    "Desk_Foot_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "c1f50abf00ceebc6fbcc7460f68fc9c8ad8cad782a29d4a1dd4e924d467884ea"
+    },
+    "Desk_Foot_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "15d871b9de27c2253acb0abf189a8e0e4df43e82c11e6bcfd271a66a73cb665f"
+    },
+    "Desk_Frame_BackRail": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "94062b068069e75db3fecc277aeebc2e3ba23fae5a1178045fe9a3efb60cf6c1"
+    },
+    "Desk_Frame_FrontRail": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "f56ad38ca1f98fd1a3ac10b0f9dcd551e2f3b869c1af997b27946937b2cb43d0"
+    },
+    "Desk_Notebook": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "4a4efcd0f03919db3511a6548fcb741ad9d34b8137254ef95b744ac124fd519b"
+    },
+    "Desk_Pen": {
+      "vertices": 32,
+      "edges": 48,
+      "polygons": 18,
+      "orderedCoordinateSha256": "51fc4e16eb47b3e19607929d841b5234c069260c5f9856d13c055821b7ad4eb2"
+    },
+    "Desk_Plant": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "c69f7d4cee338308354264e4a8021b07c3446f389cca750d0c493ac9488c698e"
+    },
+    "Desk_Plant_Leaf_01": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "1b5b5696238e6ef52d3e88c6bf64b37fd92143d0c400af82b0af18ab40c3a4f6"
+    },
+    "Desk_Plant_Leaf_02": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "673a0119afe10ec7a13ba862fd4914124fceb6cb243a682a1d5d16e63dd30cce"
+    },
+    "Desk_Plant_Leaf_03": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "73377327944b021e6dc3716741ef547c16d07577d7593d2cf889c5dda19f2fde"
+    },
+    "Desk_Top": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "f780e38f22f6713a866867074332e6a67a5802c0ad4bdf4bd25bd0269b8daeb9"
+    },
+    "Desk_Top_Endgrain_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "da3243fe1dc487093845222b00d62cff0a176d8b49adf791410b138752d88a13"
+    },
+    "Desk_Top_Endgrain_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5bcf6fa23cf802a13a70567cc757b6e58acb61f862a07c3e15ba241a349c56d2"
+    },
+    "Door_Frame_FrontJamb": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "cfce220f02a0d8a278277ec54a466fb9baab285fe88e8aa198991c97a3c77fd4"
+    },
+    "Door_Frame_Header": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "600d2839b0b48b882a8e1b8cc6f14a911336a33854f6bff628c15c9bead010ca"
+    },
+    "Door_Frame_RearJamb": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "4c12d07960759d39402bb4bbaf49c68fd72b54f700f3df96491da0274eab9d25"
+    },
+    "Door_Handle_Inner": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "8de82bcbad58bc6dea10852ac6bbe7cee079d1cf496fdde45f6aad886cd78c86"
+    },
+    "Door_Handle_Outer": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "9ceb1ad4a5dea51512ddee902366c951a250e46f033cdfff8a600c0558b5e365"
+    },
+    "Door_HingePlate_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "cd07c3e87d11c8bef17ef8ec4d77162f9c659c57ebf82a105c65903e445d14c7"
+    },
+    "Door_HingePlate_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6ef6e10ca5e7a72a333422a4f823b2b70558ceea4bbdb95ad94fc262737afb10"
+    },
+    "Door_HingePlate_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "501649bdcbfb58c1ebc1fbb23d2eda1d822b81a848af7909da946ef235d21d7e"
+    },
+    "Door_Leaf": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "b45817f59f39dde34d3679637fa9b11379f265d6234daa6bdeb3e25df3171872"
+    },
+    "Downlight_01_Diffuser": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 42,
+      "orderedCoordinateSha256": "f72561a4ad3ed3044e80eebd32944e5d3734f09e368fd5b0f574648de02b13dd"
+    },
+    "Downlight_01_Trim": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 42,
+      "orderedCoordinateSha256": "c5a8edb1d30bded722f2ad9d474d10bc2ab0d87459260c42538f95f5a9aa6401"
+    },
+    "Downlight_02_Diffuser": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 42,
+      "orderedCoordinateSha256": "548388e9eeebdeccc8a9ad64448a276df5228ab4435823248f10a1ca3f1b7edf"
+    },
+    "Downlight_02_Trim": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 42,
+      "orderedCoordinateSha256": "76e11dd34428e0bcc5f9e8d052a013e6111caa4f34d0b6800ff3fd98538e372d"
+    },
+    "Downlight_03_Diffuser": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 42,
+      "orderedCoordinateSha256": "eaba4e3a5c6252ac77653d96c3f620da91d88c1f0df84bc37fd7098696515962"
+    },
+    "Downlight_03_Trim": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 42,
+      "orderedCoordinateSha256": "b0796daabb1d533a76b436a86dbe6e9daae08ce47b1bc419c4be7c9cc20230d2"
+    },
+    "FloorPlant_Left": {
+      "vertices": 2160,
+      "edges": 4080,
+      "polygons": 1920,
+      "orderedCoordinateSha256": "68e17818a0318e34f7703b4255d8d833e1972ceaf33708073fdce509ab48af16"
+    },
+    "FloorPlant_Left_Leaf_01": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "77229fa041b31d23e16ecfc72fb5cc51fe58b4bdb3a1b351253b1a902de22cf0"
+    },
+    "FloorPlant_Left_Leaf_02": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "e571e0aca4e940debc0e0165a339dbcc86aae69528cef7cd898341fee944b828"
+    },
+    "FloorPlant_Left_Leaf_03": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "97ed55179635f29ad03ab53ebbaf6e5ed9defec86e2b3bd54a76c70eac654f09"
+    },
+    "FloorPlant_Left_Leaf_04": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "96740a13cdab086ec0696930d8c0a79e50f35c9de22e3202799cff34963af440"
+    },
+    "FloorPlant_Left_Leaf_05": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "0e5b5c9537450fdf0721f046f7312af7788c1a48498f60b17bd94e2f78583933"
+    },
+    "FloorPlant_Left_Leaf_06": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "fc3c976572a468c36eade9b2271fd06ac049ea90acd812d39151b745d1140466"
+    },
+    "FloorPlant_Left_Leaf_07": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "26b1c2c0455d2a91bb68332db77b4e7b19b6450d11601643b572a95a046dac27"
+    },
+    "FloorPlant_Left_Leaf_08": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "ed20296bf8a7e35fe650a2b0e9da85a1828dce2922c489b4435d08a5193d18b5"
+    },
+    "FloorPlant_Left_Leaf_09": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "2c1ff1ed4a2431b683bcbc15a13b54644867fae2e179e6b9748d0a97798321d7"
+    },
+    "FloorPlant_Left_Leaf_10": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "99732c369b108c79e5639f95a912071766dc377ada28502d7bc7fb8046a01506"
+    },
+    "FloorPlant_Left_Leaf_11": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "aa204a39b1b386a7e18eb2652030925c42ff65fb81c198cc8a101a91cba71113"
+    },
+    "FloorPlant_Left_Leaf_12": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "60380962d5ec004717fa7804cb56de8929483eba01b147723a100703930f0b90"
+    },
+    "FloorPlant_Left_Leaf_13": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "372adf64fd5aa9a1abfcdb34aed1a6dcdcb4dddc47fef82cba263b931bd35b17"
+    },
+    "FloorPlant_Left_Leaf_14": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "9d4aad619f877ba4e79b7a0ff8feea649e0a1436a66c4c4e6dfe49c50c5fff35"
+    },
+    "FloorPlant_Left_Leaf_15": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "efbd2d79431f923c9f0e6c4bccef9cd0d49c5d7856a5038641094fdbe1a2349f"
+    },
+    "FloorPlant_Left_Leaf_16": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "7d1a13d728d44adc202841e637a61c96eb7b8db3a6299b9b2197ea7f1ca84d0e"
+    },
+    "FloorPlant_Left_Leaf_17": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "d2c7abb5bbd1171a3400d63ea42178e62825e5ebae4b6c2297f73ef73fef416b"
+    },
+    "FloorPlant_Left_Leaf_18": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "e529d21d3f3f226f6b67a85c83ea70047e6a80602fe741f2e9b258bcf043bc75"
+    },
+    "FloorPlant_Left_Leaf_19": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "bcab345e0477df0919af75f6d4ff58d5ad6b48196032da4918dd611fd7cab4d1"
+    },
+    "FloorPlant_Left_Leaf_20": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "04da11908f1cb5c24e1c38fa6e621d72ad104d184c04632b019c8d6c3d76d958"
+    },
+    "FloorPlant_Left_Leaf_21": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "9b0a6c9f5c861b7f0282f647c31e2027f43e7226d3548586cf280840769daf4a"
+    },
+    "FloorPlant_Left_Leaf_22": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "8a77727d375cdcf46ca75ea61ff7e091fbffa23fb36c800b370457ece2126370"
+    },
+    "FloorPlant_Left_Leaf_23": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "e712a2da3ceefa84f450b16ff70d3ae55b0805c4f3297f3d7c2dad88e085f07b"
+    },
+    "FloorPlant_Left_Leaf_24": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "623bdea8e1b1acb09eb9d642aaefd2e0824c54c23cbe5254cbc9fd6f5cb69140"
+    },
+    "FloorPlant_Left_Pot": {
+      "vertices": 192,
+      "edges": 384,
+      "polygons": 192,
+      "orderedCoordinateSha256": "8b145f2b1b1358beb63ee95eefa70945343c0d6392eb254646c8d4d67a117a53"
+    },
+    "FloorPlant_Left_Soil": {
+      "vertices": 96,
+      "edges": 144,
+      "polygons": 50,
+      "orderedCoordinateSha256": "61b30b5bcc3d8e6db902b3f954c4a3e3394e166a347fb4e63101ca891a526a8c"
+    },
+    "FloorPlant_Right": {
+      "vertices": 2160,
+      "edges": 4080,
+      "polygons": 1920,
+      "orderedCoordinateSha256": "da190dc3f68577ea1eb90a41a0a20f7848534a7b985facb0fdbe79e4639328ab"
+    },
+    "FloorPlant_Right_Leaf_01": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "32d8082ce11ba08448de8e7255671222d6d6d39fd227e3988bb42cf2eaeff86f"
+    },
+    "FloorPlant_Right_Leaf_02": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "7cbb3709e8e509ecfc17d0ef960a3592bff208abf0934502e2d8b7a380c24085"
+    },
+    "FloorPlant_Right_Leaf_03": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "8639816e8149d2e75726d7c26e456cb5870e34d8e1543a7ad0a162ce4ee35e44"
+    },
+    "FloorPlant_Right_Leaf_04": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "3318456253848ec568e1df0ee1c688bbf452ee2f63734c8883d6c4b1ec0aa2f3"
+    },
+    "FloorPlant_Right_Leaf_05": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "987d12b56704d4d5fe5c868ceca9f2e0e96acfef0e51a306b936419dca9fed7d"
+    },
+    "FloorPlant_Right_Leaf_06": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "844452d40d12cad5befa57847c7e85194df13d5d76c491e388495b0a21df1852"
+    },
+    "FloorPlant_Right_Leaf_07": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "5b7c97426cd2511b12408e7aea518b7028f85e11660eddba33c85b1ea07fc502"
+    },
+    "FloorPlant_Right_Leaf_08": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "2d3a654eb1bfa5994673ae2087148ae2f76d24edb45d92f0cbc3ea5684f47efb"
+    },
+    "FloorPlant_Right_Leaf_09": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "63d4a9f277305ed71638d565c86f29a1f900baa0877fea9e074925639dd44b62"
+    },
+    "FloorPlant_Right_Leaf_10": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "350ea78341ed4955a122506d34e64c2ac656c7a51ee1e7143dce54cc1b031e0d"
+    },
+    "FloorPlant_Right_Leaf_11": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "f28412d64a83560d85190c9cb3c696247751e5fbb1ea36d334b3fb1351816328"
+    },
+    "FloorPlant_Right_Leaf_12": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "28ad10831c530e878adc31d4577619c7dffb6a88313b2199e7a28c5f8d976ced"
+    },
+    "FloorPlant_Right_Leaf_13": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "436194a6ac48b5739914ce719366164188db4900159c2ab96bd5dc48b3153fb6"
+    },
+    "FloorPlant_Right_Leaf_14": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "e33ed182016bb8e23d52cbf90b117c5ab2317ab688d043411e87cc4b79a7734f"
+    },
+    "FloorPlant_Right_Leaf_15": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "df667d8903b47323f3cab525cc4ff71ab795a4e1c8e3b97e3669b58efe5d55c7"
+    },
+    "FloorPlant_Right_Leaf_16": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "2ec832c080f3b6ccea0190c81fcf186ffa7c21c594bf7911fc094df98be257f3"
+    },
+    "FloorPlant_Right_Leaf_17": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "62808f3a3c7f83b368e39d777dc511f467588f186620bf14a695ef4762f83abf"
+    },
+    "FloorPlant_Right_Leaf_18": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "b76e9b9eaf52ee87923fe6f4b627fb597cf504eaeb395c7b373b1aec88126fe4"
+    },
+    "FloorPlant_Right_Leaf_19": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "cc007da58f142d61c393a6d5b94347f953b4dbd2510addf66c3f66532288d564"
+    },
+    "FloorPlant_Right_Leaf_20": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "21667729de560ed805cbff2409c9ff2ab42d32a544e877576396780e647427a3"
+    },
+    "FloorPlant_Right_Leaf_21": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "3c683dc1380719e1a4ba6ab1e49386a89976b5bd1e4045e28c2709300b96ef35"
+    },
+    "FloorPlant_Right_Leaf_22": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "aa0aa3983d50a19562b467ed48eaa1afb30d7fd814307251ac7d7d0101d62729"
+    },
+    "FloorPlant_Right_Leaf_23": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "199621e10c82a843daf3fc3c09db5700f108c23db8ebbd477e76537afaf5498a"
+    },
+    "FloorPlant_Right_Leaf_24": {
+      "vertices": 15,
+      "edges": 22,
+      "polygons": 8,
+      "orderedCoordinateSha256": "837090b37efd87ecaba4924c46d25f9d1c22dd1170d988148978967f71da187f"
+    },
+    "FloorPlant_Right_Pot": {
+      "vertices": 192,
+      "edges": 384,
+      "polygons": 192,
+      "orderedCoordinateSha256": "0537550874059f503c3145b6e00004af2e020219ecdd6fc4d56beff14132d32c"
+    },
+    "FloorPlant_Right_Soil": {
+      "vertices": 96,
+      "edges": 144,
+      "polygons": 50,
+      "orderedCoordinateSha256": "c293e07e7e15086ba1c2d566433cbe095ae70dcb4ece94d42a2834bb9462c6bb"
+    },
+    "Floorboard_001": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "981aa2fc703045cd5ab662aa0e1e021c4c54f8a8db5780c3b1fcf58c0c4cb97e"
+    },
+    "Floorboard_002": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6b0f8af8db8c7bb72758e55daa3bd0f17c4d9ebfee96e6daf2365fc4d4d736f5"
+    },
+    "Floorboard_003": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5ffd9ca7f3ada1952f2bf99e6d12b19899c3f08e5251b3bcbc8407c097b90f83"
+    },
+    "Floorboard_004": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "594579f94ac04a0a83ca0ad821186e59fad7e98be775d22b2f4b34218a09059d"
+    },
+    "Floorboard_005": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "09e3d7e22dd75a6afd230fec6bdf26bfb701c5fbba6a23775ab40c86a70c107e"
+    },
+    "Floorboard_006": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "08690f5136bb2d5ca17669327809cb4641845d0c4a6be62f4887cb7a5d45d3ad"
+    },
+    "Floorboard_007": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "e2ab6e0e0a422ae9df9d32cea87b211efffd0a3b9494b841dec2aa823fe9eede"
+    },
+    "Floorboard_008": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "93c9d7c7e4929b683f77169a334aaafdb64a12b1bab4e3d28a1888e8219c0271"
+    },
+    "Floorboard_009": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "e52d914302227abe4dc9750abd561b135405ba9cbd9e46fb1400f9ca995d0f5f"
+    },
+    "Floorboard_010": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "06f6a5d5c9f9555a1493e9e620db0d655504c5847fbd6c24bc32a7c90ce86641"
+    },
+    "Floorboard_011": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "7f10ffe2cdd671e4afb6128f663ac6cdb16038f3e630972ffb774d558aba9f87"
+    },
+    "Floorboard_012": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "a04ad131fd1bf90342635ec131dce51058f6203cc6dbcf92d5002173e55ab98d"
+    },
+    "Floorboard_013": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "45ee9c8e92711e27030577e4c9f093392e462a09a2960396bc654bf6c4dd9e33"
+    },
+    "Floorboard_014": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "b2d7f421b3723a7d2eb4b56db0799799bc2c5f9b220021266ffce8454883dd75"
+    },
+    "Floorboard_015": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "c49fc00eefbb013d73f76a3ded61e4ce07852c3ec189050e353e2637b9a19f79"
+    },
+    "Floorboard_016": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "30ee0cb8a220c047dd6ca5cdabb2b9d42e10b8741b4c860c1dec80ffb22f8ddd"
+    },
+    "Floorboard_017": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "e32052b6015f02598195e243fdf39adba1f16a31ccf3b50219e6d4bb5b3d325f"
+    },
+    "Floorboard_018": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "842abf18ee6f28d2f8645bed8d4448b661c99594d993c315e1730624fcef9273"
+    },
+    "Floorboard_019": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "1a6761d1dd8a06d68ae88e510ca2aab71901d8f7223bc204329ee6435fb141f4"
+    },
+    "Floorboard_020": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "08a38f18323df791aaf1e59dc61537de26815fc7994a989929539a564d7a0188"
+    },
+    "Floorboard_021": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "604afe4a92a7645e94346252fb2c230cdfbf109d464cf2681df9bf7bdbcb4d41"
+    },
+    "Floorboard_022": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "86a5ccde4d0306d138b6bc8fb6431febd41d122cb36b3bd40abec9b55c0b4431"
+    },
+    "Floorboard_023": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "1d782a9310ff37c8078790425a4531c4968d8a03bc2c344be168e54dbe043981"
+    },
+    "Floorboard_024": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "f2f59d4dc62f1611ac39e86981c1c3bec8ed628ddf946f7d7b5eae396314a212"
+    },
+    "Floorboard_025": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "572094aef093fd0243dfb678c9fa2c092de9e806b7a72ae0314238b8b3ff04d2"
+    },
+    "Floorboard_026": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "8da03782e3f12cea85023a99100cd999936729351a4f618c40e89c7bfa02fb85"
+    },
+    "Floorboard_027": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "edd669d46945b214a7fda9a73b92ce2f21e1ea846dbbd44292cac752cc6b37f0"
+    },
+    "Floorboard_028": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "c7fa37b2fc45d93dea034c604c5bb8603145b444b349af2b368c7aeeab23c0c6"
+    },
+    "Floorboard_029": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3e30b4b75ab918cb313db4353018d0082de2e5d6010bff7c1a95f634ddb2c67a"
+    },
+    "Floorboard_030": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "57c0597d23d17827c121713d298d79da42810cd93809aff29243524f039af7a8"
+    },
+    "Floorboard_031": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "752e5087cd65b8c087fe622a6feef822b368169b5db757a70921040db548e9e8"
+    },
+    "Floorboard_032": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "ceba659f879cab53caa78ff52ba2b3ba2b2cde611199b30c44b8b1476fd3762d"
+    },
+    "Floorboard_033": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "ac32105ed2998900512881bfe2d5059db306efedaa2d18b725a5b42c3fd0e5a5"
+    },
+    "Glass_Window": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "8817a4c48fd484001172505c0f246cbb91919b92b9bb7c70e9356fb6b481ee22"
+    },
+    "Portrait_Play_Motif": {
+      "vertices": 6,
+      "edges": 9,
+      "polygons": 5,
+      "orderedCoordinateSha256": "c0946a03eca5fdc4fdad53850d2fa53508217dc9de68496ba685e96b69d6ea5f"
+    },
+    "Portrait_Sloth_EyePatch_Left": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "9105f20074a59d90319bc49417fb14b9d32d922e33d7bf5d8be570d290457da7"
+    },
+    "Portrait_Sloth_EyePatch_Right": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "b65cfec133c3016fb025254aef9e16ddde22efed21b5243d71560ed363a4553a"
+    },
+    "Portrait_Sloth_Eye_Left": {
+      "vertices": 114,
+      "edges": 240,
+      "polygons": 128,
+      "orderedCoordinateSha256": "37ff5ee0733526e125129aa95f7e21015d55eb29775ac5b8f6195395895fbd78"
+    },
+    "Portrait_Sloth_Eye_Right": {
+      "vertices": 114,
+      "edges": 240,
+      "polygons": 128,
+      "orderedCoordinateSha256": "9924e5ec3a4a4c81a09f0b8cac9b8f5d0f6c3861857fe58a146cf0ff65cc77bf"
+    },
+    "Portrait_Sloth_Face": {
+      "vertices": 366,
+      "edges": 756,
+      "polygons": 392,
+      "orderedCoordinateSha256": "5b2cc14e737c146b2d65258b9619bc23e852fcdb77823f4aaae0fa57d6c836e5"
+    },
+    "Portrait_Sloth_Nose": {
+      "vertices": 146,
+      "edges": 306,
+      "polygons": 162,
+      "orderedCoordinateSha256": "eb4545ab754d6683626eef878de038ba6e82e3b23482c9bff288c5559d5a5aa9"
+    },
+    "RightWall_Portrait": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "ac55ec40643f736d85400cf3ffc28e34776fccb88a33e664725caa21e63df1e7"
+    },
+    "RightWall_Portrait_Panel": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "51a006a688034d5462f3a5b1d3f98285b7539b3cee0832f22136e00dff7562f5"
+    },
+    "Rug_Main": {
+      "vertices": 192,
+      "edges": 288,
+      "polygons": 98,
+      "orderedCoordinateSha256": "765335e5c8368a522aaf1fe513de524b5472174f03e0f2c1027a0cb44e4c7e42"
+    },
+    "Shelf_Frame_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "2cc6f44b4ab27b4cf4b04c1ce8c3365fcc1dc1c0d8179e185fd2095eb444f787"
+    },
+    "Shelf_Frame_01_Inset": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "2e6674c24ad783b7a7608d2576791354127b94a57c30672d345abeb899946577"
+    },
+    "Shelf_Frame_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "b6b0bd66ed00c2c0173ed4b81496268706f55c94ccfa8e68f63b798aea6c83d2"
+    },
+    "Shelf_Frame_02_Inset": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "f84742883002cf5938360440b8a0468114857b2e25c484775d2e585043a02ff9"
+    },
+    "Shelf_Globe": {
+      "vertices": 1106,
+      "edges": 2256,
+      "polygons": 1152,
+      "orderedCoordinateSha256": "c775101a71b068f41005fd4dec06e94f1eb97248cbc5d39b2b2b5e13224b957f"
+    },
+    "Shelf_Globe_Base": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "147fe6707e47afdb14af8b8749b178b96d6eb2967b0684f13ac66fde00cc5ef0"
+    },
+    "Shelf_Globe_Meridian": {
+      "vertices": 288,
+      "edges": 576,
+      "polygons": 288,
+      "orderedCoordinateSha256": "d130c99c14c3c2fbe5d2a8b72626e0e74af77909b02402c359b8d49435cf4450"
+    },
+    "Shelf_Plant_01": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "4fa6de26aceeccd7a5bb3ad90fb15296e63535d20d85f1580f8d7aa9c2aa3541"
+    },
+    "Shelf_Plant_01_Leaf_01": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "d1e6413c00a0312e7fbd50f7241c6ae1e6684a98d6a40d64a20c02caa7db9c08"
+    },
+    "Shelf_Plant_01_Leaf_02": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "61e8a8bf9f0a5e49f2f1d930855a01cb4c51d0a9b60e759d8ea2df6be2e2c608"
+    },
+    "Shelf_Plant_01_Leaf_03": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "cc3b52ea135b7f1f132431de2e0ec3a02cabb07cea8bad66839fe761cbff9534"
+    },
+    "Shelf_Plant_02": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "3004465c977d027ada11f80125865e06fe6e7c1fcca75a74340c854c3fc4878f"
+    },
+    "Shelf_Plant_02_Leaf_01": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "8878b07f487e190a207b1376c3bc6121a51430c0cb40973d67ba022fe7e86961"
+    },
+    "Shelf_Plant_02_Leaf_02": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "070c399ec07d5a4f62428519b85fd30ed620e4cc64aa32c349b4c34ec098665f"
+    },
+    "Shelf_Plant_02_Leaf_03": {
+      "vertices": 182,
+      "edges": 380,
+      "polygons": 200,
+      "orderedCoordinateSha256": "aa8c7acb8175d13c464793112529ac990931d7988017b8cc636c40802e587296"
+    },
+    "Shelf_Pottery_01": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "ae0101cf2d71c661488e462822c0f429ecb5ae7ccba47ffe5b56ba59944da231"
+    },
+    "Shelf_Pottery_02": {
+      "vertices": 366,
+      "edges": 756,
+      "polygons": 392,
+      "orderedCoordinateSha256": "9d0e689b357c1f8af507ed556de08093e58822b698405fca9d276d16e4ad47c9"
+    },
+    "Shelf_Right_01": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "ff64bcb7642c630502e3bd7dc66884cd477777b8040e474b96060c6e0a3902c0"
+    },
+    "Shelf_Right_02": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "aa1cad35b934e247aa462fde2950edfd41b0401fe86913244dcac3dd16c3f24e"
+    },
+    "Shelf_Right_03": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "e3685916aae32c98367d07034b75375fa42d179501b6572b6884ad22db5936a9"
+    },
+    "Shelf_TableLamp": {
+      "vertices": 64,
+      "edges": 96,
+      "polygons": 34,
+      "orderedCoordinateSha256": "03860c305f526ea4227016c9b43fcdb3b65731e8ac00b9637a8be66d2f5dd48d"
+    },
+    "Shelf_TableLamp_Diffuser": {
+      "vertices": 1106,
+      "edges": 2256,
+      "polygons": 1152,
+      "orderedCoordinateSha256": "725b619827ba52e87f70ccfa9e401fc320c9b59337a924fc94fef9f15ea08a4f"
+    },
+    "Shelf_TableLamp_Shade": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 40,
+      "orderedCoordinateSha256": "7087e0d79487162d5187274727b20947909e393f7b2db0c2485e6087b8dee601"
+    },
+    "SlatWall_Back_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "d336fb862d0cc548e4573e0365e1a2af3a1fb1b3efc44f8f26481c11ef873f1a"
+    },
+    "Slat_Back_001": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "4c4b7d79af1355e57c54ea6b037187353ce5201b05a1739d94620960d95c17c6"
+    },
+    "Slat_Back_002": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "08828348676c1541cc526e09b905561c61b14d36a2b9873d6f03b006ec6862bd"
+    },
+    "Slat_Back_003": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "be81711515f4f7a996b0dc4fe14b754d7678e220bbe5547582d78a95f32bfd1d"
+    },
+    "Slat_Back_004": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "aa5d31d255b7304b9a6d4f3dc738a4e26d5541d51a0fe59a24b1262e9443ebd9"
+    },
+    "Slat_Back_005": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6bcbaa5761f136d72cff75a8bb5a4aa793b87315c8591a67225c4774c60c347c"
+    },
+    "Slat_Back_006": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "50d4ed8184b05b7a57c9d4a4d28ba470711aa5d441d97e7ebceb9ab24b0e6536"
+    },
+    "Slat_Back_007": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5400faed5391054e6aacce66903b89d707c57897fc66134da590d9f83cb42161"
+    },
+    "Slat_Back_008": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "1e11bf121949f49ebdf2b6dec349446ca82d3b4c490ec7937833ec53dd03325c"
+    },
+    "Slat_Back_009": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3b6be7f5ecc208590b95a0ccb3e5a925ae3a5f610ceb65235128023c5ce392d7"
+    },
+    "Slat_Back_010": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "e88458f0f744e409b0bfde9b6fb94e869a92e3386c807c084f9221e55080bd5b"
+    },
+    "Slat_Back_011": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "815535f4d7f94117b111be74c59e058da72c4854b0b61d9986576d38e89e1330"
+    },
+    "Slat_Back_012": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "09dd70e93d922afdaf8005541cca45d7aa95085d123b7ddd94ee7de6c74a58d1"
+    },
+    "Slat_Back_013": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "50cfde5886564fa7d2dd09430f59982138d42b9413ace66e060ebd2112dd57ff"
+    },
+    "Slat_Back_014": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "de55ad63e0516536ecb83ea3c152b1e68283525ac1e1bf7af72e92adfb55c12c"
+    },
+    "Slat_Back_015": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "0914bed9cd3ac4a4835c52a11b127c0d664d4aa1e532d05a6f6c562642e8d3f9"
+    },
+    "Slat_Back_016": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "99108f708eabfffa000563bd1bec7e6a289091435c79b2bf6e88f416b0f503f7"
+    },
+    "Slat_Back_017": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "048a4f21478fc7e0efe9ccf2719e46d1ee539dfaf09d07f2313f4406df62ce31"
+    },
+    "Slat_Back_018": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "11c0c1369ccff43ecfe66f834d373cae70bafb5f6b16de595a9c068a7c9b6b7a"
+    },
+    "Slat_Back_019": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "18fd46b0dd51428bbfaf34a86ca795e27368aba18a5b5507fdc53ffc91275e6e"
+    },
+    "Slat_Back_020": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "04852207d059f0656891f65f5d3d7adb7e9e8a366303e1b2c867471e628afc0f"
+    },
+    "Slat_Back_021": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "e6eb8b344f2351658cfba8421f383ae7215e47d80b2dcc3a1ba20cf69a0d1f55"
+    },
+    "Slat_Back_022": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "08469be836d64e36304240dffd361720a453d93ec0ecbd3e74dff4b01f474b96"
+    },
+    "Slat_Back_023": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "881197e9e9d1fdf15951f517489a7ddc33b0bbb41908f78cfe418aaa084f6057"
+    },
+    "Slat_Back_024": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "de4f74819ed6413dbb1f0b710a98ff729e4080fa148153263ef92959ff491ef9"
+    },
+    "Slat_Back_025": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3d1cc3ea1a4cd12147106ef70699e85057df25ceca3cdaa82e5f2b2269b6fb59"
+    },
+    "Slat_Back_026": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "d9138b671543e51b58579ae803977d4e3d7bb37a917530182f553d40bfc4ec08"
+    },
+    "Slat_Back_027": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "0865a9e95f7734dccf1d847f448dc04b9d24dc6b3129dc829ef703c2f3c68105"
+    },
+    "Studio_Ceiling": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "64215f3ab9996b06be08cfcadebd596291bf7b01ff8a285a4f182a5a80173b13"
+    },
+    "Studio_Floor": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "586a1997baa336ba93770779b224c8a2628dcc0c799f010e93fc7cedb9b148cc"
+    },
+    "Studio_InteriorVolume": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "d56717e3ed879318b3c183b02c6f6e889b0600740699c11500a8cb581cf7bcd5"
+    },
+    "Wall_Back": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6324294d4a9fd38b51c31460e4bfadb32f6367e4176184bf9d8af4f95443f533"
+    },
+    "Wall_Front_Left": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "ccdefa958aab10d83cf93acba4bb48bf68fe6c5d5aeeb16f03b636e198adc1d3"
+    },
+    "Wall_Front_Right": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "6013ccc1508d4f5f494d9ee641e59e08473d8101381107d73ed67a145c001d84"
+    },
+    "Wall_Left_WindowFront": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "226ab5be7258eb7caffb3bc30f473a2e7a51dd68d6824d7dfd320aeb7cc55bcc"
+    },
+    "Wall_Left_WindowLower": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "3cf80e137c1ad3f27f259d3c01b92e556e945d16b13dc28af141782ffac9ba2a"
+    },
+    "Wall_Left_WindowRear": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "852c6b32740652f3892ad33a3477bbd15293c9bc176bd41f4db6efb8badf691f"
+    },
+    "Wall_Left_WindowUpper": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "82f38751d9687fbb81094823ed4549da56a3bf11dacec7a68d20b6e404aef09a"
+    },
+    "Wall_Right_DoorFront": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "4ad93e2ad6ced2de232b661139e2a11e3c36354f6cb85e45dccd30d99852bffc"
+    },
+    "Wall_Right_DoorLintel": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "5dd4b316b843bc2ce6844f8fb235845eddbc9df576088b0d092e816819912da5"
+    },
+    "Wall_Right_DoorRear": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "a5f6e5e24bd020bf5fb5dc2aa2f4157a8b98b6e7b0a54c5c29fc1a4793340f8d"
+    },
+    "Wall_Sconce_Backplate": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 42,
+      "orderedCoordinateSha256": "3e5f94d713243a83280d06c6b7e962eb6a8e50f02b881bfddcd82c4690925b0d"
+    },
+    "Wall_Sconce_Diffuser": {
+      "vertices": 1106,
+      "edges": 2256,
+      "polygons": 1152,
+      "orderedCoordinateSha256": "6e7e88f1e9c751ad630c98f06160156c54a62ccdc31ce378574858f341a8b95d"
+    },
+    "Wall_Sconce_Shade": {
+      "vertices": 80,
+      "edges": 120,
+      "polygons": 40,
+      "orderedCoordinateSha256": "b9914a87dc86708d78ada0dcda5945795961280efc41d345660a99913e2aa20e"
+    },
+    "Window_ExteriorLightBlocker": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "53e418288db28c2aaafe5ece19a2c6f27953322f98940a0559720bdacd7eedaf"
+    },
+    "Window_Frame_FrontJamb": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "c19deb93bc00c77dff84a42532af2fda2bd7c3a86ebe6540299d79b2b9fb98e2"
+    },
+    "Window_Frame_Header": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "781b76187a6a59ab7af99eabfbd9ea4cb729f479ce00f0d26dcb2225ae113250"
+    },
+    "Window_Frame_Lower": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "f50cdb39eb70f91053692ad232e7cb2e0214656cb05577dc92e8765fd28fd354"
+    },
+    "Window_Frame_RearJamb": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "159200555888c50fa27d8aca0540083392d22d9c4582d3ce8b89884b46222284"
+    },
+    "Window_Sill": {
+      "vertices": 8,
+      "edges": 12,
+      "polygons": 6,
+      "orderedCoordinateSha256": "1697e5ad4a44afbe21d662eb2848c929f3de40fcce605bde0550147793896b4d"
+    }
+  },
+  "shapeKeyOrder": {},
+  "shapeKeyCount": 0,
+  "uvLayers": {
+    "Baseboard_Back": [
+      "UVMap"
+    ],
+    "Baseboard_Front": [
+      "UVMap"
+    ],
+    "Baseboard_Left": [
+      "UVMap"
+    ],
+    "Baseboard_Right_Front": [
+      "UVMap"
+    ],
+    "Baseboard_Right_Rear": [
+      "UVMap"
+    ],
+    "Book_Shelf_Linked_01": [
+      "UVMap"
+    ],
+    "Book_Shelf_Linked_02": [
+      "UVMap"
+    ],
+    "Book_Shelf_Linked_03": [
+      "UVMap"
+    ],
+    "Book_Shelf_Linked_04": [
+      "UVMap"
+    ],
+    "Book_Shelf_Linked_05": [
+      "UVMap"
+    ],
+    "Book_Shelf_Source_01": [
+      "UVMap"
+    ],
+    "Book_Shelf_Source_02": [
+      "UVMap"
+    ],
+    "Book_Shelf_Source_03": [
+      "UVMap"
+    ],
+    "Book_Shelf_Source_04": [
+      "UVMap"
+    ],
+    "Book_Shelf_Source_05": [
+      "UVMap"
+    ],
+    "Brand_BackPanel": [
+      "UVMap"
+    ],
+    "Brand_Frame_Bottom": [
+      "UVMap"
+    ],
+    "Brand_Frame_Left": [
+      "UVMap"
+    ],
+    "Brand_Frame_Right": [
+      "UVMap"
+    ],
+    "Brand_Frame_Top": [
+      "UVMap"
+    ],
+    "Brand_Glass": [
+      "UVMap"
+    ],
+    "Brand_Mug": [],
+    "Brand_Mug_Emblem_Simple": [
+      "UVMap"
+    ],
+    "Brand_Paper": [
+      "UVMap"
+    ],
+    "Cabinet_Basket_Weave_Hoop_01": [
+      "UVMap"
+    ],
+    "Cabinet_Basket_Weave_Hoop_02": [
+      "UVMap"
+    ],
+    "Cabinet_Basket_Weave_Hoop_03": [
+      "UVMap"
+    ],
+    "Cabinet_Basket_Weave_Hoop_04": [
+      "UVMap"
+    ],
+    "Cabinet_Basket_Weave_Hoop_05": [
+      "UVMap"
+    ],
+    "Cabinet_Book_01": [
+      "UVMap"
+    ],
+    "Cabinet_Book_02": [
+      "UVMap"
+    ],
+    "Cabinet_Book_03": [
+      "UVMap"
+    ],
+    "Cabinet_Drawer_01": [
+      "UVMap"
+    ],
+    "Cabinet_Drawer_02": [
+      "UVMap"
+    ],
+    "Cabinet_Drawer_03": [
+      "UVMap"
+    ],
+    "Cabinet_Drawer_04": [
+      "UVMap"
+    ],
+    "Cabinet_Drawer_05": [
+      "UVMap"
+    ],
+    "Cabinet_Drawer_06": [
+      "UVMap"
+    ],
+    "Cabinet_Foot_01": [
+      "UVMap"
+    ],
+    "Cabinet_Foot_02": [
+      "UVMap"
+    ],
+    "Cabinet_Foot_03": [
+      "UVMap"
+    ],
+    "Cabinet_Foot_04": [
+      "UVMap"
+    ],
+    "Cabinet_Globe": [
+      "UVMap"
+    ],
+    "Cabinet_Globe_Base": [
+      "UVMap"
+    ],
+    "Cabinet_Globe_Meridian": [
+      "UVMap"
+    ],
+    "Cabinet_Handle_01": [
+      "UVMap"
+    ],
+    "Cabinet_Handle_02": [
+      "UVMap"
+    ],
+    "Cabinet_Handle_03": [
+      "UVMap"
+    ],
+    "Cabinet_Handle_04": [
+      "UVMap"
+    ],
+    "Cabinet_Handle_05": [
+      "UVMap"
+    ],
+    "Cabinet_Handle_06": [
+      "UVMap"
+    ],
+    "Cabinet_Left": [
+      "UVMap"
+    ],
+    "Cabinet_Left_Top": [
+      "UVMap"
+    ],
+    "Cabinet_Planter": [
+      "UVMap"
+    ],
+    "Cabinet_Planter_Leaf_01": [
+      "UVMap"
+    ],
+    "Cabinet_Planter_Leaf_02": [
+      "UVMap"
+    ],
+    "Cabinet_Planter_Leaf_03": [
+      "UVMap"
+    ],
+    "Cabinet_StackBook_01": [
+      "UVMap"
+    ],
+    "Cabinet_StackBook_02": [
+      "UVMap"
+    ],
+    "Cabinet_StackBook_03": [
+      "UVMap"
+    ],
+    "Cabinet_TaskLamp": [
+      "UVMap"
+    ],
+    "Cabinet_TaskLamp_Diffuser": [
+      "UVMap"
+    ],
+    "Cabinet_TaskLamp_Shade": [],
+    "Chair_ArmSupport_Left": [
+      "UVMap"
+    ],
+    "Chair_ArmSupport_Right": [
+      "UVMap"
+    ],
+    "Chair_Arm_Left": [
+      "UVMap"
+    ],
+    "Chair_Arm_Right": [
+      "UVMap"
+    ],
+    "Chair_Back": [
+      "UVMap"
+    ],
+    "Chair_Foot_01": [
+      "UVMap"
+    ],
+    "Chair_Foot_02": [
+      "UVMap"
+    ],
+    "Chair_Foot_03": [
+      "UVMap"
+    ],
+    "Chair_Foot_04": [
+      "UVMap"
+    ],
+    "Chair_Seat": [
+      "UVMap"
+    ],
+    "Crown_Back": [
+      "UVMap"
+    ],
+    "Crown_Front": [
+      "UVMap"
+    ],
+    "Crown_Left": [
+      "UVMap"
+    ],
+    "Crown_Right": [
+      "UVMap"
+    ],
+    "Curtain_Outer_Front": [],
+    "Curtain_Outer_Rear": [],
+    "Curtain_Sheer": [],
+    "Desk_Book_01": [
+      "UVMap"
+    ],
+    "Desk_Book_02": [
+      "UVMap"
+    ],
+    "Desk_Book_03": [
+      "UVMap"
+    ],
+    "Desk_Drawer_Case": [
+      "UVMap"
+    ],
+    "Desk_Drawer_Front_01": [
+      "UVMap"
+    ],
+    "Desk_Drawer_Front_02": [
+      "UVMap"
+    ],
+    "Desk_Drawer_Handle_01": [
+      "UVMap"
+    ],
+    "Desk_Drawer_Handle_02": [
+      "UVMap"
+    ],
+    "Desk_Foot_Left": [
+      "UVMap"
+    ],
+    "Desk_Foot_Right": [
+      "UVMap"
+    ],
+    "Desk_Frame_BackRail": [
+      "UVMap"
+    ],
+    "Desk_Frame_FrontRail": [
+      "UVMap"
+    ],
+    "Desk_Notebook": [
+      "UVMap"
+    ],
+    "Desk_Pen": [
+      "UVMap"
+    ],
+    "Desk_Plant": [
+      "UVMap"
+    ],
+    "Desk_Plant_Leaf_01": [
+      "UVMap"
+    ],
+    "Desk_Plant_Leaf_02": [
+      "UVMap"
+    ],
+    "Desk_Plant_Leaf_03": [
+      "UVMap"
+    ],
+    "Desk_Top": [
+      "UVMap"
+    ],
+    "Desk_Top_Endgrain_Left": [
+      "UVMap"
+    ],
+    "Desk_Top_Endgrain_Right": [
+      "UVMap"
+    ],
+    "Door_Frame_FrontJamb": [
+      "UVMap"
+    ],
+    "Door_Frame_Header": [
+      "UVMap"
+    ],
+    "Door_Frame_RearJamb": [
+      "UVMap"
+    ],
+    "Door_Handle_Inner": [
+      "UVMap"
+    ],
+    "Door_Handle_Outer": [
+      "UVMap"
+    ],
+    "Door_HingePlate_01": [
+      "UVMap"
+    ],
+    "Door_HingePlate_02": [
+      "UVMap"
+    ],
+    "Door_HingePlate_03": [
+      "UVMap"
+    ],
+    "Door_Leaf": [
+      "UVMap"
+    ],
+    "Downlight_01_Diffuser": [
+      "UVMap"
+    ],
+    "Downlight_01_Trim": [
+      "UVMap"
+    ],
+    "Downlight_02_Diffuser": [
+      "UVMap"
+    ],
+    "Downlight_02_Trim": [
+      "UVMap"
+    ],
+    "Downlight_03_Diffuser": [
+      "UVMap"
+    ],
+    "Downlight_03_Trim": [
+      "UVMap"
+    ],
+    "FloorPlant_Left": [
+      "UVMap"
+    ],
+    "FloorPlant_Left_Leaf_01": [],
+    "FloorPlant_Left_Leaf_02": [],
+    "FloorPlant_Left_Leaf_03": [],
+    "FloorPlant_Left_Leaf_04": [],
+    "FloorPlant_Left_Leaf_05": [],
+    "FloorPlant_Left_Leaf_06": [],
+    "FloorPlant_Left_Leaf_07": [],
+    "FloorPlant_Left_Leaf_08": [],
+    "FloorPlant_Left_Leaf_09": [],
+    "FloorPlant_Left_Leaf_10": [],
+    "FloorPlant_Left_Leaf_11": [],
+    "FloorPlant_Left_Leaf_12": [],
+    "FloorPlant_Left_Leaf_13": [],
+    "FloorPlant_Left_Leaf_14": [],
+    "FloorPlant_Left_Leaf_15": [],
+    "FloorPlant_Left_Leaf_16": [],
+    "FloorPlant_Left_Leaf_17": [],
+    "FloorPlant_Left_Leaf_18": [],
+    "FloorPlant_Left_Leaf_19": [],
+    "FloorPlant_Left_Leaf_20": [],
+    "FloorPlant_Left_Leaf_21": [],
+    "FloorPlant_Left_Leaf_22": [],
+    "FloorPlant_Left_Leaf_23": [],
+    "FloorPlant_Left_Leaf_24": [],
+    "FloorPlant_Left_Pot": [],
+    "FloorPlant_Left_Soil": [
+      "UVMap"
+    ],
+    "FloorPlant_Right": [
+      "UVMap"
+    ],
+    "FloorPlant_Right_Leaf_01": [],
+    "FloorPlant_Right_Leaf_02": [],
+    "FloorPlant_Right_Leaf_03": [],
+    "FloorPlant_Right_Leaf_04": [],
+    "FloorPlant_Right_Leaf_05": [],
+    "FloorPlant_Right_Leaf_06": [],
+    "FloorPlant_Right_Leaf_07": [],
+    "FloorPlant_Right_Leaf_08": [],
+    "FloorPlant_Right_Leaf_09": [],
+    "FloorPlant_Right_Leaf_10": [],
+    "FloorPlant_Right_Leaf_11": [],
+    "FloorPlant_Right_Leaf_12": [],
+    "FloorPlant_Right_Leaf_13": [],
+    "FloorPlant_Right_Leaf_14": [],
+    "FloorPlant_Right_Leaf_15": [],
+    "FloorPlant_Right_Leaf_16": [],
+    "FloorPlant_Right_Leaf_17": [],
+    "FloorPlant_Right_Leaf_18": [],
+    "FloorPlant_Right_Leaf_19": [],
+    "FloorPlant_Right_Leaf_20": [],
+    "FloorPlant_Right_Leaf_21": [],
+    "FloorPlant_Right_Leaf_22": [],
+    "FloorPlant_Right_Leaf_23": [],
+    "FloorPlant_Right_Leaf_24": [],
+    "FloorPlant_Right_Pot": [],
+    "FloorPlant_Right_Soil": [
+      "UVMap"
+    ],
+    "Floorboard_001": [
+      "UVMap"
+    ],
+    "Floorboard_002": [
+      "UVMap"
+    ],
+    "Floorboard_003": [
+      "UVMap"
+    ],
+    "Floorboard_004": [
+      "UVMap"
+    ],
+    "Floorboard_005": [
+      "UVMap"
+    ],
+    "Floorboard_006": [
+      "UVMap"
+    ],
+    "Floorboard_007": [
+      "UVMap"
+    ],
+    "Floorboard_008": [
+      "UVMap"
+    ],
+    "Floorboard_009": [
+      "UVMap"
+    ],
+    "Floorboard_010": [
+      "UVMap"
+    ],
+    "Floorboard_011": [
+      "UVMap"
+    ],
+    "Floorboard_012": [
+      "UVMap"
+    ],
+    "Floorboard_013": [
+      "UVMap"
+    ],
+    "Floorboard_014": [
+      "UVMap"
+    ],
+    "Floorboard_015": [
+      "UVMap"
+    ],
+    "Floorboard_016": [
+      "UVMap"
+    ],
+    "Floorboard_017": [
+      "UVMap"
+    ],
+    "Floorboard_018": [
+      "UVMap"
+    ],
+    "Floorboard_019": [
+      "UVMap"
+    ],
+    "Floorboard_020": [
+      "UVMap"
+    ],
+    "Floorboard_021": [
+      "UVMap"
+    ],
+    "Floorboard_022": [
+      "UVMap"
+    ],
+    "Floorboard_023": [
+      "UVMap"
+    ],
+    "Floorboard_024": [
+      "UVMap"
+    ],
+    "Floorboard_025": [
+      "UVMap"
+    ],
+    "Floorboard_026": [
+      "UVMap"
+    ],
+    "Floorboard_027": [
+      "UVMap"
+    ],
+    "Floorboard_028": [
+      "UVMap"
+    ],
+    "Floorboard_029": [
+      "UVMap"
+    ],
+    "Floorboard_030": [
+      "UVMap"
+    ],
+    "Floorboard_031": [
+      "UVMap"
+    ],
+    "Floorboard_032": [
+      "UVMap"
+    ],
+    "Floorboard_033": [
+      "UVMap"
+    ],
+    "Glass_Window": [
+      "UVMap"
+    ],
+    "Portrait_Play_Motif": [
+      "UVMap"
+    ],
+    "Portrait_Sloth_EyePatch_Left": [
+      "UVMap"
+    ],
+    "Portrait_Sloth_EyePatch_Right": [
+      "UVMap"
+    ],
+    "Portrait_Sloth_Eye_Left": [
+      "UVMap"
+    ],
+    "Portrait_Sloth_Eye_Right": [
+      "UVMap"
+    ],
+    "Portrait_Sloth_Face": [
+      "UVMap"
+    ],
+    "Portrait_Sloth_Nose": [
+      "UVMap"
+    ],
+    "RightWall_Portrait": [
+      "UVMap"
+    ],
+    "RightWall_Portrait_Panel": [
+      "UVMap"
+    ],
+    "Rug_Main": [
+      "UVMap"
+    ],
+    "Shelf_Frame_01": [
+      "UVMap"
+    ],
+    "Shelf_Frame_01_Inset": [
+      "UVMap"
+    ],
+    "Shelf_Frame_02": [
+      "UVMap"
+    ],
+    "Shelf_Frame_02_Inset": [
+      "UVMap"
+    ],
+    "Shelf_Globe": [
+      "UVMap"
+    ],
+    "Shelf_Globe_Base": [
+      "UVMap"
+    ],
+    "Shelf_Globe_Meridian": [
+      "UVMap"
+    ],
+    "Shelf_Plant_01": [
+      "UVMap"
+    ],
+    "Shelf_Plant_01_Leaf_01": [
+      "UVMap"
+    ],
+    "Shelf_Plant_01_Leaf_02": [
+      "UVMap"
+    ],
+    "Shelf_Plant_01_Leaf_03": [
+      "UVMap"
+    ],
+    "Shelf_Plant_02": [
+      "UVMap"
+    ],
+    "Shelf_Plant_02_Leaf_01": [
+      "UVMap"
+    ],
+    "Shelf_Plant_02_Leaf_02": [
+      "UVMap"
+    ],
+    "Shelf_Plant_02_Leaf_03": [
+      "UVMap"
+    ],
+    "Shelf_Pottery_01": [
+      "UVMap"
+    ],
+    "Shelf_Pottery_02": [
+      "UVMap"
+    ],
+    "Shelf_Right_01": [
+      "UVMap"
+    ],
+    "Shelf_Right_02": [
+      "UVMap"
+    ],
+    "Shelf_Right_03": [
+      "UVMap"
+    ],
+    "Shelf_TableLamp": [
+      "UVMap"
+    ],
+    "Shelf_TableLamp_Diffuser": [
+      "UVMap"
+    ],
+    "Shelf_TableLamp_Shade": [],
+    "SlatWall_Back_Right": [
+      "UVMap"
+    ],
+    "Slat_Back_001": [
+      "UVMap"
+    ],
+    "Slat_Back_002": [
+      "UVMap"
+    ],
+    "Slat_Back_003": [
+      "UVMap"
+    ],
+    "Slat_Back_004": [
+      "UVMap"
+    ],
+    "Slat_Back_005": [
+      "UVMap"
+    ],
+    "Slat_Back_006": [
+      "UVMap"
+    ],
+    "Slat_Back_007": [
+      "UVMap"
+    ],
+    "Slat_Back_008": [
+      "UVMap"
+    ],
+    "Slat_Back_009": [
+      "UVMap"
+    ],
+    "Slat_Back_010": [
+      "UVMap"
+    ],
+    "Slat_Back_011": [
+      "UVMap"
+    ],
+    "Slat_Back_012": [
+      "UVMap"
+    ],
+    "Slat_Back_013": [
+      "UVMap"
+    ],
+    "Slat_Back_014": [
+      "UVMap"
+    ],
+    "Slat_Back_015": [
+      "UVMap"
+    ],
+    "Slat_Back_016": [
+      "UVMap"
+    ],
+    "Slat_Back_017": [
+      "UVMap"
+    ],
+    "Slat_Back_018": [
+      "UVMap"
+    ],
+    "Slat_Back_019": [
+      "UVMap"
+    ],
+    "Slat_Back_020": [
+      "UVMap"
+    ],
+    "Slat_Back_021": [
+      "UVMap"
+    ],
+    "Slat_Back_022": [
+      "UVMap"
+    ],
+    "Slat_Back_023": [
+      "UVMap"
+    ],
+    "Slat_Back_024": [
+      "UVMap"
+    ],
+    "Slat_Back_025": [
+      "UVMap"
+    ],
+    "Slat_Back_026": [
+      "UVMap"
+    ],
+    "Slat_Back_027": [
+      "UVMap"
+    ],
+    "Studio_Ceiling": [
+      "UVMap"
+    ],
+    "Studio_Floor": [
+      "UVMap"
+    ],
+    "Studio_InteriorVolume": [
+      "UVMap"
+    ],
+    "Wall_Back": [
+      "UVMap"
+    ],
+    "Wall_Front_Left": [
+      "UVMap"
+    ],
+    "Wall_Front_Right": [
+      "UVMap"
+    ],
+    "Wall_Left_WindowFront": [
+      "UVMap"
+    ],
+    "Wall_Left_WindowLower": [
+      "UVMap"
+    ],
+    "Wall_Left_WindowRear": [
+      "UVMap"
+    ],
+    "Wall_Left_WindowUpper": [
+      "UVMap"
+    ],
+    "Wall_Right_DoorFront": [
+      "UVMap"
+    ],
+    "Wall_Right_DoorLintel": [
+      "UVMap"
+    ],
+    "Wall_Right_DoorRear": [
+      "UVMap"
+    ],
+    "Wall_Sconce_Backplate": [
+      "UVMap"
+    ],
+    "Wall_Sconce_Diffuser": [
+      "UVMap"
+    ],
+    "Wall_Sconce_Shade": [],
+    "Window_ExteriorLightBlocker": [
+      "UVMap"
+    ],
+    "Window_Frame_FrontJamb": [
+      "UVMap"
+    ],
+    "Window_Frame_Header": [
+      "UVMap"
+    ],
+    "Window_Frame_Lower": [
+      "UVMap"
+    ],
+    "Window_Frame_RearJamb": [
+      "UVMap"
+    ],
+    "Window_Sill": [
+      "UVMap"
+    ]
+  },
+  "driverCount": 0,
+  "drivers": [],
+  "actions": [],
+  "materials": [
+    "Basket_Wicker",
+    "Book_Brown",
+    "Book_Gray",
+    "Book_Mustard",
+    "Book_Olive",
+    "Brand_Copy_Dark",
+    "Brand_Glass_Rough",
+    "Ceramic_Sand",
+    "Chair_Fabric",
+    "Curtain_Outer",
+    "Curtain_Sheer",
+    "Desk_WarmOak",
+    "Desk_WarmOak_EndGrain",
+    "Desk_WarmOak_GrainY",
+    "Desk_WarmOak_GrainZ",
+    "FloorLeaf_Sage_A",
+    "FloorLeaf_Sage_B",
+    "FloorLeaf_Sage_C",
+    "Floor_LightOak",
+    "Floor_LightOak_GrainZ",
+    "Glass_Window",
+    "Lamp_Emissive_Warm",
+    "Lamp_Shade_Warm",
+    "Leaf_MutedGreen",
+    "Leaf_Olive",
+    "Metal_DarkBrown",
+    "Paper_Warm",
+    "Portrait_Background",
+    "Portrait_Dark",
+    "Rug_Jute",
+    "Slat_Walnut",
+    "Slat_Walnut_GrainZ",
+    "Stem_DarkGreen",
+    "Trim_WarmWhite",
+    "Wall_WarmPlaster"
+  ],
+  "groomObjects": [
+    "Brand_Mug_Handle",
+    "Cabinet_Basket_Reed_01",
+    "Cabinet_Basket_Reed_02",
+    "Cabinet_Basket_Reed_03",
+    "Cabinet_Basket_Reed_04",
+    "Cabinet_Basket_Reed_05",
+    "Cabinet_Basket_Reed_06",
+    "Cabinet_Basket_Reed_07",
+    "Cabinet_Basket_Reed_08",
+    "Cabinet_Basket_Reed_09",
+    "Cabinet_Basket_Reed_10",
+    "Cabinet_Basket_Reed_11",
+    "Cabinet_Basket_Reed_12",
+    "Cabinet_Globe_Axis",
+    "Cabinet_Planter_Stem_01",
+    "Cabinet_Planter_Stem_02",
+    "Cabinet_Planter_Stem_03",
+    "Cabinet_TaskLamp_Stem",
+    "Curtain_Rail",
+    "Desk_Plant_Stem_01",
+    "Desk_Plant_Stem_02",
+    "Desk_Plant_Stem_03",
+    "Door_SwingClearance",
+    "Rug_EdgeFiber_01",
+    "Rug_EdgeFiber_02",
+    "Rug_EdgeFiber_03",
+    "Rug_EdgeFiber_04",
+    "Rug_EdgeFiber_05",
+    "Rug_EdgeFiber_06",
+    "Rug_EdgeFiber_07",
+    "Rug_EdgeFiber_08",
+    "Rug_EdgeFiber_09",
+    "Rug_EdgeFiber_10",
+    "Rug_EdgeFiber_11",
+    "Rug_EdgeFiber_12",
+    "Rug_EdgeFiber_13",
+    "Rug_EdgeFiber_14",
+    "Rug_EdgeFiber_15",
+    "Rug_EdgeFiber_16",
+    "Rug_EdgeFiber_17",
+    "Rug_EdgeFiber_18",
+    "Rug_EdgeFiber_19",
+    "Rug_EdgeFiber_20",
+    "Rug_EdgeFiber_21",
+    "Rug_EdgeFiber_22",
+    "Rug_EdgeFiber_23",
+    "Rug_EdgeFiber_24",
+    "Shelf_Globe_Axis",
+    "Shelf_Plant_01_Stem_01",
+    "Shelf_Plant_01_Stem_02",
+    "Shelf_Plant_01_Stem_03",
+    "Shelf_Plant_02_Stem_01",
+    "Shelf_Plant_02_Stem_02",
+    "Shelf_Plant_02_Stem_03",
+    "Shelf_TableLamp_Stem",
+    "Wall_Sconce_Arm"
+  ],
+  "faceTopologyRoles": {
+    "oral_cavity": [],
+    "upper_teeth": [],
+    "lower_teeth": [],
+    "upper_gum": [],
+    "lower_gum": [],
+    "tongue": []
+  },
+  "render": {
+    "engine": "BLENDER_EEVEE",
+    "resolutionX": 1920,
+    "resolutionY": 1080,
+    "fps": 30,
+    "viewTransform": "AgX",
+    "look": "AgX - Medium High Contrast"
+  },
+  "sourcePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend",
+  "sourceSha256": "65a7358afa1aa2612d24993f7a7644d9f90c63a9e7d1cd2dbd0176dc6e095432",
+  "outputPath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend",
+  "outputSha256": "65a7358afa1aa2612d24993f7a7644d9f90c63a9e7d1cd2dbd0176dc6e095432",
+  "auditOnly": true,
+  "mutationSummary": {}
+}

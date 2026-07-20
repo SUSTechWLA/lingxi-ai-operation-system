@@ -52,6 +52,21 @@
 
 详细版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前可用性和内测门槛见 [docs/RELEASE_STATUS.md](docs/RELEASE_STATUS.md)。
 
+## 默认 IP / A-roll 资产
+
+默认树懒 IP 与演播室使用单一、版本化的正式资产对：
+
+```text
+ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend
+ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend
+ip-assets/main-ip/character-profile.json
+ip-assets/main-ip/manifests/default-aroll-assets.json
+```
+
+演播室不再依赖外部或打包 PNG 贴图，也不保存 demo 音轨。角色的 4 张 PBR 图已打包在角色母版内；`main-ip-rigged.glb` 仅作为兼容运行时导出，正式角色来源仍是唯一的 Blender 母版。预览、烟测图片、turnaround 和渲染输出只能写入 `tmp/` 或 `outputs/`，不得作为发布资产提交。所有跟踪路径必须使用英文 ASCII 名称。
+
+资产结构、完整性校验和升级规则见 [Default IP A-roll Assets](docs/default-ip-aroll-assets.md) 与 [本地 IP 数字人口播渲染](docs/local-ip-talking-avatar-render.md)。
+
 ## 一句话理解
 
 ## 创作者工作台
@@ -223,6 +238,7 @@ Local agent:   http://localhost:18080/api/local/docs
 - [版本管理 Wiki](docs/version-management.md)
 - [视频抽帧 QA Wiki](docs/video-frame-qa.md)
 - [本地 IP 数字人口播渲染 Wiki](docs/local-ip-talking-avatar-render.md)
+- [Default IP A-roll Assets](docs/default-ip-aroll-assets.md)
 - [影视类视频创作流程](docs/cinematic-video-workflow.md)
 - [工作区归档与清理](docs/workspace-maintenance.md)
 

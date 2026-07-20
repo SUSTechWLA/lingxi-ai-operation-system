@@ -893,7 +893,7 @@ func applyVideoCreationManifestOverrides(name string, manifest *tool.ToolManifes
 			UserActions: []string{"edit_timeline", "switch_character", "regenerate_actions"},
 		}
 		manifest.Parameters = map[string]tool.ParamDef{
-			"assetRoot":   {Type: "string", Description: "IP character asset root, default resolves to ip形象/", Required: false},
+			"assetRoot":   {Type: "string", Description: "IP character asset root, default resolves to ip-assets/", Required: false},
 			"characters":  {Type: "array", Description: "Character names to use, default [波波, 阿斯特]", Required: false},
 			"shotId":      {Type: "string", Description: "Target shot id", Required: false},
 			"narration":   {Type: "string", Description: "Voiceover text for this shot; execution requires this even though planner wiring keeps it optional", Required: false},
@@ -1530,7 +1530,7 @@ func resolveIPCharacterAssetRoot(preferred string) string {
 	if strings.TrimSpace(preferred) != "" {
 		candidates = append(candidates, preferred)
 	}
-	candidates = append(candidates, "ip形象", "../ip形象", "../../ip形象")
+	candidates = append(candidates, "ip-assets", "../ip-assets", "../../ip-assets")
 
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
@@ -1555,10 +1555,10 @@ func resolveIPCharacterAssetRoot(preferred string) string {
 		}
 		return preferred
 	}
-	if abs, err := filepath.Abs("ip形象"); err == nil {
+	if abs, err := filepath.Abs("ip-assets"); err == nil {
 		return abs
 	}
-	return "ip形象"
+	return "ip-assets"
 }
 
 func buildIPCharacterAssetIndex(assetRoot string, names []string) ([]map[string]interface{}, []string) {

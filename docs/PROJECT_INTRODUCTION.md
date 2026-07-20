@@ -63,7 +63,7 @@ flowchart LR
 | `frontend` | React + Electron 用户端，负责项目启动、状态追踪、审核、素材回填、即梦安装向导和本地设置。 |
 | `cloud-backend` | Go 云端服务，负责登录、项目、Agent plan、DAG、审核门、工具 manifest、视频工作流和 API。 |
 | `local-backend` | Go 本地 agent，负责本地文件、runner 注册、本地工具、MCP provider、JiMeng CLI 适配和 artifact 上传读取。 |
-| `ip形象/main_ip` | 唐影主树懒 IP 的参考图、源模型、可复用 Blender 母版、GLB、语音参考和暖色口播工作室。 |
+| `ip-assets/main-ip` | 唐影主树懒 IP 的唯一正式 Blender 母版、运行时 GLB、语音参考、完整性报告和无外部贴图暖色口播工作室。 |
 | `skill-capabilities` / `cloud-backend/skills` | 视频创作角色、工具和工作流能力定义。 |
 | `.github/workflows/ci.yml` | 基础 CI：前端 lint/build、Go 测试和仓库 whitespace 检查。 |
 

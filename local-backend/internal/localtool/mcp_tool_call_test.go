@@ -485,7 +485,7 @@ func TestMCPToolCallExecutorPackagesDeterministicIPArollWithoutAIGCPreflight(t *
 		if args["script"] != "今天聊聊 AI 视频为什么需要连续 A-roll。" {
 			t.Fatalf("script = %#v", args["script"])
 		}
-		if args["characterProfilePath"] != "ip形象/main_ip/character-profile.json" {
+		if args["characterProfilePath"] != "ip-assets/main-ip/character-profile.json" {
 			t.Fatalf("characterProfilePath = %#v", args["characterProfilePath"])
 		}
 		if _, exists := args["prompt"]; exists {
@@ -524,7 +524,7 @@ func TestMCPToolCallExecutorPackagesDeterministicIPArollWithoutAIGCPreflight(t *
 					"kind":      "ip_aroll_video",
 					"arguments": map[string]interface{}{
 						"script":               "今天聊聊 AI 视频为什么需要连续 A-roll。",
-						"characterProfilePath": "ip形象/main_ip/character-profile.json",
+						"characterProfilePath": "ip-assets/main-ip/character-profile.json",
 						"presentationMode":     "standing",
 					},
 				},

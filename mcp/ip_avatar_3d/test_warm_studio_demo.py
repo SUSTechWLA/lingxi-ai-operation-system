@@ -14,7 +14,7 @@ import render_warm_studio_demo as demo
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROFILE_PATH = REPO_ROOT / "ip形象/main_ip/character-profile.json"
+PROFILE_PATH = REPO_ROOT / "ip-assets/main-ip/character-profile.json"
 
 VALID_TRANSITION_METRICS = {
     "maxFootDriftL": 0.012,

@@ -1,0 +1,1185 @@
+{
+  "schemaVersion": "tangying-default-aroll-blender-audit/v1",
+  "status": "PASS",
+  "kind": "character",
+  "errors": [],
+  "filePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend",
+  "fileBytes": 25494667,
+  "fileSha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+  "blenderVersion": "5.1.2",
+  "pythonVersion": "3.13.9",
+  "sceneNames": [
+    "SCENE_CHARACTER_MASTER"
+  ],
+  "activeScene": "SCENE_CHARACTER_MASTER",
+  "collections": [
+    "CLOTHING_DETAILS",
+    "COL_CHR_SLOTH_FINAL",
+    "GROOM_SLOTH",
+    "IP_Character_Master"
+  ],
+  "formalCollections": [
+    "COL_CHR_SLOTH_FINAL"
+  ],
+  "masterCollections": [
+    "IP_Character_Master"
+  ],
+  "formalObjects": [
+    "CLO_Buttons",
+    "CLO_Cardigan",
+    "CLO_Drawstrings",
+    "CLO_Hoodie",
+    "CLO_Ribbing_Cuff_L",
+    "CLO_Ribbing_Cuff_R",
+    "CLO_Trousers",
+    "EYE_CatchlightSecondary_L",
+    "EYE_CatchlightSecondary_R",
+    "EYE_Catchlight_L",
+    "EYE_Catchlight_R",
+    "EYE_Cornea_L",
+    "EYE_Cornea_R",
+    "EYE_IrisLimbal_L",
+    "EYE_IrisLimbal_R",
+    "EYE_Iris_L",
+    "EYE_Iris_R",
+    "EYE_LidLower_L",
+    "EYE_LidLower_R",
+    "EYE_LidUpper_L",
+    "EYE_LidUpper_R",
+    "EYE_Pupil_L",
+    "EYE_Pupil_R",
+    "EYE_Sclera_L",
+    "EYE_Sclera_R",
+    "EYE_TearLine_L",
+    "EYE_TearLine_R",
+    "FUR_Body",
+    "FUR_Brows",
+    "FUR_Brows_L",
+    "FUR_Brows_R",
+    "FUR_Ears",
+    "FUR_Face",
+    "FUR_HandsFeet",
+    "FUR_HandsFeet_L",
+    "FUR_HandsFeet_R",
+    "FUR_HeadTuft",
+    "FUR_Muzzle",
+    "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
+    "GEO_HeadBody",
+    "GEO_MouthInterior",
+    "GEO_Nail_01_L",
+    "GEO_Nail_01_R",
+    "GEO_Nail_02_L",
+    "GEO_Nail_02_R",
+    "GEO_Nail_03_L",
+    "GEO_Nail_03_R",
+    "GEO_Nose",
+    "GEO_SecondaryBoundDetail",
+    "GEO_TeethLower",
+    "GEO_TeethUpper",
+    "GEO_Tongue",
+    "IP_Character_Container",
+    "RIG_Sloth"
+  ],
+  "masterObjects": [
+    "CLO_Buttons",
+    "CLO_Cardigan",
+    "CLO_Drawstrings",
+    "CLO_Hoodie",
+    "CLO_Ribbing_Cuff_L",
+    "CLO_Ribbing_Cuff_R",
+    "CLO_Trousers",
+    "EYE_CatchlightSecondary_L",
+    "EYE_CatchlightSecondary_R",
+    "EYE_Catchlight_L",
+    "EYE_Catchlight_R",
+    "EYE_Cornea_L",
+    "EYE_Cornea_R",
+    "EYE_IrisLimbal_L",
+    "EYE_IrisLimbal_R",
+    "EYE_Iris_L",
+    "EYE_Iris_R",
+    "EYE_LidLower_L",
+    "EYE_LidLower_R",
+    "EYE_LidUpper_L",
+    "EYE_LidUpper_R",
+    "EYE_Pupil_L",
+    "EYE_Pupil_R",
+    "EYE_Sclera_L",
+    "EYE_Sclera_R",
+    "EYE_TearLine_L",
+    "EYE_TearLine_R",
+    "FUR_Body",
+    "FUR_Brows",
+    "FUR_Brows_L",
+    "FUR_Brows_R",
+    "FUR_Ears",
+    "FUR_Face",
+    "FUR_HandsFeet",
+    "FUR_HandsFeet_L",
+    "FUR_HandsFeet_R",
+    "FUR_HeadTuft",
+    "FUR_Muzzle",
+    "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
+    "GEO_HeadBody",
+    "GEO_MouthInterior",
+    "GEO_Nail_01_L",
+    "GEO_Nail_01_R",
+    "GEO_Nail_02_L",
+    "GEO_Nail_02_R",
+    "GEO_Nail_03_L",
+    "GEO_Nail_03_R",
+    "GEO_Nose",
+    "GEO_SecondaryBoundDetail",
+    "GEO_TeethLower",
+    "GEO_TeethUpper",
+    "GEO_Tongue",
+    "IP_Character_Container",
+    "RIG_Sloth"
+  ],
+  "characterDependencyClosure": [
+    "CLO_Buttons",
+    "CLO_Cardigan",
+    "CLO_Drawstrings",
+    "CLO_Hoodie",
+    "CLO_Ribbing_Cuff_L",
+    "CLO_Ribbing_Cuff_R",
+    "CLO_Trousers",
+    "EYE_CatchlightSecondary_L",
+    "EYE_CatchlightSecondary_R",
+    "EYE_Catchlight_L",
+    "EYE_Catchlight_R",
+    "EYE_Cornea_L",
+    "EYE_Cornea_R",
+    "EYE_IrisLimbal_L",
+    "EYE_IrisLimbal_R",
+    "EYE_Iris_L",
+    "EYE_Iris_R",
+    "EYE_LidLower_L",
+    "EYE_LidLower_R",
+    "EYE_LidUpper_L",
+    "EYE_LidUpper_R",
+    "EYE_Pupil_L",
+    "EYE_Pupil_R",
+    "EYE_Sclera_L",
+    "EYE_Sclera_R",
+    "EYE_TearLine_L",
+    "EYE_TearLine_R",
+    "FUR_Body",
+    "FUR_Brows",
+    "FUR_Brows_L",
+    "FUR_Brows_R",
+    "FUR_Ears",
+    "FUR_Face",
+    "FUR_HandsFeet",
+    "FUR_HandsFeet_L",
+    "FUR_HandsFeet_R",
+    "FUR_HeadTuft",
+    "FUR_Muzzle",
+    "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
+    "GEO_HeadBody",
+    "GEO_MouthInterior",
+    "GEO_Nail_01_L",
+    "GEO_Nail_01_R",
+    "GEO_Nail_02_L",
+    "GEO_Nail_02_R",
+    "GEO_Nail_03_L",
+    "GEO_Nail_03_R",
+    "GEO_Nose",
+    "GEO_SecondaryBoundDetail",
+    "GEO_TeethLower",
+    "GEO_TeethUpper",
+    "GEO_Tongue",
+    "IP_Character_Container",
+    "RIG_Sloth"
+  ],
+  "objectHierarchy": {
+    "CLO_Buttons": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "CLO_Cardigan": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "CLO_Drawstrings": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "CLO_Hoodie": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "CLO_Ribbing_Cuff_L": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "CLO_Ribbing_Cuff_R": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "CLO_Trousers": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Catchlight_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Catchlight_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_CatchlightSecondary_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_CatchlightSecondary_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Cornea_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Cornea_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Iris_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Iris_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_IrisLimbal_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_IrisLimbal_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_LidLower_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_LidLower_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_LidUpper_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_LidUpper_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Pupil_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Pupil_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Sclera_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_Sclera_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_TearLine_L": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "EYE_TearLine_R": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Body": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Brows": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Brows_L": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Brows_R": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Ears": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Face": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_HandsFeet": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_HandsFeet_L": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_HandsFeet_R": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_HeadTuft": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Muzzle": {
+      "type": "CURVE",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "FUR_Outline": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "GROOM_SLOTH",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_GumLower": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_GumUpper": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_HeadBody": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_MouthInterior": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Nail_01_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Nail_01_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Nail_02_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Nail_02_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Nail_03_L": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Nail_03_R": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "CLOTHING_DETAILS",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Nose": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_SecondaryBoundDetail": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_TeethLower": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_TeethUpper": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "GEO_Tongue": {
+      "type": "MESH",
+      "parent": "RIG_Sloth",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "IP_Character_Container": {
+      "type": "EMPTY",
+      "parent": "",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    },
+    "RIG_Sloth": {
+      "type": "ARMATURE",
+      "parent": "IP_Character_Container",
+      "collections": [
+        "COL_CHR_SLOTH_FINAL",
+        "IP_Character_Master"
+      ]
+    }
+  },
+  "objects": [
+    "CLO_Buttons",
+    "CLO_Cardigan",
+    "CLO_Drawstrings",
+    "CLO_Hoodie",
+    "CLO_Ribbing_Cuff_L",
+    "CLO_Ribbing_Cuff_R",
+    "CLO_Trousers",
+    "EYE_CatchlightSecondary_L",
+    "EYE_CatchlightSecondary_R",
+    "EYE_Catchlight_L",
+    "EYE_Catchlight_R",
+    "EYE_Cornea_L",
+    "EYE_Cornea_R",
+    "EYE_IrisLimbal_L",
+    "EYE_IrisLimbal_R",
+    "EYE_Iris_L",
+    "EYE_Iris_R",
+    "EYE_LidLower_L",
+    "EYE_LidLower_R",
+    "EYE_LidUpper_L",
+    "EYE_LidUpper_R",
+    "EYE_Pupil_L",
+    "EYE_Pupil_R",
+    "EYE_Sclera_L",
+    "EYE_Sclera_R",
+    "EYE_TearLine_L",
+    "EYE_TearLine_R",
+    "FUR_Body",
+    "FUR_Brows",
+    "FUR_Brows_L",
+    "FUR_Brows_R",
+    "FUR_Ears",
+    "FUR_Face",
+    "FUR_HandsFeet",
+    "FUR_HandsFeet_L",
+    "FUR_HandsFeet_R",
+    "FUR_HeadTuft",
+    "FUR_Muzzle",
+    "FUR_Outline",
+    "GEO_GumLower",
+    "GEO_GumUpper",
+    "GEO_HeadBody",
+    "GEO_MouthInterior",
+    "GEO_Nail_01_L",
+    "GEO_Nail_01_R",
+    "GEO_Nail_02_L",
+    "GEO_Nail_02_R",
+    "GEO_Nail_03_L",
+    "GEO_Nail_03_R",
+    "GEO_Nose",
+    "GEO_SecondaryBoundDetail",
+    "GEO_TeethLower",
+    "GEO_TeethUpper",
+    "GEO_Tongue",
+    "IP_Character_Container",
+    "RIG_Sloth"
+  ],
+  "objectCounts": {
+    "ARMATURE": 1,
+    "CURVE": 12,
+    "EMPTY": 11,
+    "MESH": 32
+  },
+  "armatures": [
+    "RIG_Sloth"
+  ],
+  "cameras": [],
+  "lights": [],
+  "requiredMarkers": {
+    "IP_Character_Spawn": false,
+    "IP_Focus_Head": false
+  },
+  "standingMarkers": {
+    "IP_Standing_Spawn": false,
+    "IP_Standing_Focus_Head": false,
+    "IP_Transition_Focus": false,
+    "IP_Seat_Target": false,
+    "IP_Standing_Foot_Target.L": false,
+    "IP_Standing_Foot_Target.R": false
+  },
+  "standingCameras": {
+    "Camera_Standing_Wide": false,
+    "Camera_Standing_Medium": false,
+    "Camera_Standing_Close": false,
+    "Camera_Standing_ThreeQuarter": false,
+    "Camera_Standing_Transition": false
+  },
+  "sceneContract": "",
+  "presentationModes": [],
+  "meshVertexOrder": {
+    "EYE_CatchlightSecondary_L": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "4ac14aa6eecad5d56744c7a49ddcbb6641a33755ca5280c46d49d2f61633f922"
+    },
+    "EYE_CatchlightSecondary_R": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "7c7d357ec14f8e69cbcd9f6fef2f4dc57a2683cb68cd19fe70b7eddbf5d5d49c"
+    },
+    "EYE_Catchlight_L": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "c5e35d49da7183770c408fa670ec99838e1736290a2f3a7537bb2f15aecf7832"
+    },
+    "EYE_Catchlight_R": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "b03b7e0e567b8ee33d22d3663f3ca4d0cd6f8ef8991f2934f2d4eee53bd19bc3"
+    },
+    "EYE_Cornea_L": {
+      "vertices": 1986,
+      "edges": 4032,
+      "polygons": 2048,
+      "orderedCoordinateSha256": "fde3384b9524e8384c6faa671f267ad05dd5fd3c18585b3ffb6b1155f4ee89c2"
+    },
+    "EYE_Cornea_R": {
+      "vertices": 1986,
+      "edges": 4032,
+      "polygons": 2048,
+      "orderedCoordinateSha256": "b5dc70528840a2a17b2989f5d7c3c9d20d3715b29f65dab40c23c2aeaca4230c"
+    },
+    "EYE_IrisLimbal_L": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 64,
+      "orderedCoordinateSha256": "0de5dbf258b23ab62893277d2c1fc742fd0aef62799a7687bc74af9ecdb96b3e"
+    },
+    "EYE_IrisLimbal_R": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 64,
+      "orderedCoordinateSha256": "ae573ed90e806a50cc0352a9a22daa02f1229f4a9dd8d9cb6d1764b7d34fe22c"
+    },
+    "EYE_Iris_L": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "18adc273c9e702d6a4f91dc05bf7deacb73db815b21c5349279ccc47c628cee0"
+    },
+    "EYE_Iris_R": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "8185529d9a1e8fe07f3f606e0b850f7fe5dd9754b4b3419e4ac4b80046b26a25"
+    },
+    "EYE_LidLower_L": {
+      "vertices": 288,
+      "edges": 522,
+      "polygons": 235,
+      "orderedCoordinateSha256": "410ae8910cb8f445a38e735c10c7b9df1bd12cdfc798b38d9c295c626abf6c39"
+    },
+    "EYE_LidLower_R": {
+      "vertices": 288,
+      "edges": 522,
+      "polygons": 235,
+      "orderedCoordinateSha256": "935b0a70bcbad46b68e718876e7915135f4bf61ad24433b3b71f27092103c62e"
+    },
+    "EYE_LidUpper_L": {
+      "vertices": 288,
+      "edges": 522,
+      "polygons": 235,
+      "orderedCoordinateSha256": "56c80a74546f714e9b361ba6286193a98875dc385aa1fa71fc95f5ec61f1a787"
+    },
+    "EYE_LidUpper_R": {
+      "vertices": 288,
+      "edges": 522,
+      "polygons": 235,
+      "orderedCoordinateSha256": "04a0618dfc108b41bfc4de147328a593f35a4fa5ee84407d80f70be0c8c70e70"
+    },
+    "EYE_Pupil_L": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "2a15bce3ff1d376cf401fc25a28566e9b19e010524fec977176e9db3d31ee018"
+    },
+    "EYE_Pupil_R": {
+      "vertices": 128,
+      "edges": 192,
+      "polygons": 66,
+      "orderedCoordinateSha256": "adfcc062052e9f652f6c0b25f0e2787d8665fce9c2d4387c25aa7c61c7dcebb8"
+    },
+    "EYE_Sclera_L": {
+      "vertices": 1986,
+      "edges": 4032,
+      "polygons": 2048,
+      "orderedCoordinateSha256": "f9d41e4194a6d4038c0465c50d91dfda08af25d46b5bcb56942c14065ad2ea32"
+    },
+    "EYE_Sclera_R": {
+      "vertices": 1986,
+      "edges": 4032,
+      "polygons": 2048,
+      "orderedCoordinateSha256": "03c957b6d1a90e97244cc063ef0201164a143943e681f03647abdfaa55055d4b"
+    },
+    "GEO_GumLower": {
+      "vertices": 576,
+      "edges": 1080,
+      "polygons": 504,
+      "orderedCoordinateSha256": "f37d743e9a4f49f940051246a007d6ff3b8cf385a02039887aca2d3f1e1726d9"
+    },
+    "GEO_GumUpper": {
+      "vertices": 576,
+      "edges": 1080,
+      "polygons": 504,
+      "orderedCoordinateSha256": "132e1004ca7d4aa326ccca87d93f184518088563a8b4577d95ee72e49b717a01"
+    },
+    "GEO_HeadBody": {
+      "vertices": 5478,
+      "edges": 11336,
+      "polygons": 5846,
+      "orderedCoordinateSha256": "ef81f4ce91d089a0a8b55847c42c44f058f453050ce93850cf3e79296ebbead8"
+    },
+    "GEO_MouthInterior": {
+      "vertices": 129,
+      "edges": 256,
+      "polygons": 128,
+      "orderedCoordinateSha256": "f95857599e2cfda8b800c18bffd5bcecd9d62a805332651c64e25994410870b8"
+    },
+    "GEO_Nail_01_L": {
+      "vertices": 314,
+      "edges": 648,
+      "polygons": 336,
+      "orderedCoordinateSha256": "772fbb17576f08163162c5977c21fe2cc409b05b4ec299c77f248a93170d8c2c"
+    },
+    "GEO_Nail_01_R": {
+      "vertices": 314,
+      "edges": 648,
+      "polygons": 336,
+      "orderedCoordinateSha256": "79c48ad96963a8c657dc030b9394b5384f18126601044e0d4b7de7790261f28a"
+    },
+    "GEO_Nail_02_L": {
+      "vertices": 314,
+      "edges": 648,
+      "polygons": 336,
+      "orderedCoordinateSha256": "683ca4e07d48e40029c662bb91c86899f818fa9a2a64375f5bd27b2ac06cdc0f"
+    },
+    "GEO_Nail_02_R": {
+      "vertices": 314,
+      "edges": 648,
+      "polygons": 336,
+      "orderedCoordinateSha256": "61e29b2fb7c380a12cf9adffac148fc3f487a5c850b335e736bc1ece9f02d509"
+    },
+    "GEO_Nail_03_L": {
+      "vertices": 314,
+      "edges": 648,
+      "polygons": 336,
+      "orderedCoordinateSha256": "f6c48a48bb07d05373246b24b18c7e2d1e2b0921e0e3e848ba6f1004f39a45b6"
+    },
+    "GEO_Nail_03_R": {
+      "vertices": 314,
+      "edges": 648,
+      "polygons": 336,
+      "orderedCoordinateSha256": "d5af11220137055fc62cdc5d72e9f77351a5c84518674d4b41e49c6f5b8273c8"
+    },
+    "GEO_SecondaryBoundDetail": {
+      "vertices": 25,
+      "edges": 50,
+      "polygons": 27,
+      "orderedCoordinateSha256": "4be7de39936e177be8d5c5b47c8cb48d755353eeb6ff2a0e5e2ab03dfa5f7719"
+    },
+    "GEO_TeethLower": {
+      "vertices": 576,
+      "edges": 1080,
+      "polygons": 504,
+      "orderedCoordinateSha256": "c0281e7bf4511b0f3bc7710aff3980389024871d9ddaa90a771247f308f66afb"
+    },
+    "GEO_TeethUpper": {
+      "vertices": 576,
+      "edges": 1080,
+      "polygons": 504,
+      "orderedCoordinateSha256": "f41b1cec49452947019afcdec1cb76f3801ee64981690f3cba1982890db37fd5"
+    },
+    "GEO_Tongue": {
+      "vertices": 96,
+      "edges": 180,
+      "polygons": 84,
+      "orderedCoordinateSha256": "f5524471d230f04f04a977937fe9bf6b99b078a389f5de2a199a8998a11cfb2e"
+    }
+  },
+  "shapeKeyOrder": {
+    "EYE_LidLower_L": [
+      "Basis",
+      "Blink",
+      "Wide"
+    ],
+    "EYE_LidLower_R": [
+      "Basis",
+      "Blink",
+      "Wide"
+    ],
+    "EYE_LidUpper_L": [
+      "Basis",
+      "Blink",
+      "Wide"
+    ],
+    "EYE_LidUpper_R": [
+      "Basis",
+      "Blink",
+      "Wide"
+    ],
+    "GEO_HeadBody": [
+      "Basis",
+      "Mouth_Rest",
+      "Mouth_A",
+      "Mouth_E",
+      "Mouth_O",
+      "Mouth_U",
+      "Mouth_MBP",
+      "Mouth_Smile",
+      "Mouth_Frown",
+      "Mouth_Surprise",
+      "Eye_Squint.L",
+      "Eye_Squint.R",
+      "Eye_Wide.L",
+      "Eye_Wide.R",
+      "Eye_Look_Left",
+      "Eye_Look_Right",
+      "Brow_Raise.L",
+      "Brow_Raise.R",
+      "Brow_Furrow.L",
+      "Brow_Furrow.R",
+      "Cheek_Smile.L",
+      "Cheek_Smile.R",
+      "Cheek_Puff.L",
+      "Cheek_Puff.R",
+      "Nose_Flare.L",
+      "Nose_Flare.R",
+      "Blink.L",
+      "Blink.R",
+      "CheekRaise.L",
+      "CheekRaise.R",
+      "JawOpen"
+    ]
+  },
+  "shapeKeyCount": 43,
+  "uvLayers": {
+    "EYE_CatchlightSecondary_L": [
+      "UV贴图"
+    ],
+    "EYE_CatchlightSecondary_R": [
+      "UV贴图"
+    ],
+    "EYE_Catchlight_L": [
+      "UV贴图"
+    ],
+    "EYE_Catchlight_R": [
+      "UV贴图"
+    ],
+    "EYE_Cornea_L": [
+      "UV贴图"
+    ],
+    "EYE_Cornea_R": [
+      "UV贴图"
+    ],
+    "EYE_IrisLimbal_L": [],
+    "EYE_IrisLimbal_R": [],
+    "EYE_Iris_L": [
+      "UV贴图"
+    ],
+    "EYE_Iris_R": [
+      "UV贴图"
+    ],
+    "EYE_LidLower_L": [],
+    "EYE_LidLower_R": [],
+    "EYE_LidUpper_L": [],
+    "EYE_LidUpper_R": [],
+    "EYE_Pupil_L": [
+      "UV贴图"
+    ],
+    "EYE_Pupil_R": [
+      "UV贴图"
+    ],
+    "EYE_Sclera_L": [
+      "UV贴图"
+    ],
+    "EYE_Sclera_R": [
+      "UV贴图"
+    ],
+    "GEO_GumLower": [],
+    "GEO_GumUpper": [],
+    "GEO_HeadBody": [
+      "UVMap"
+    ],
+    "GEO_MouthInterior": [],
+    "GEO_Nail_01_L": [],
+    "GEO_Nail_01_R": [],
+    "GEO_Nail_02_L": [],
+    "GEO_Nail_02_R": [],
+    "GEO_Nail_03_L": [],
+    "GEO_Nail_03_R": [],
+    "GEO_SecondaryBoundDetail": [
+      "UVMap"
+    ],
+    "GEO_TeethLower": [],
+    "GEO_TeethUpper": [],
+    "GEO_Tongue": []
+  },
+  "driverCount": 8,
+  "drivers": [
+    {
+      "owner": "SHAPE_KEYS:Key.001",
+      "dataPath": "key_blocks[\"Blink\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    },
+    {
+      "owner": "SHAPE_KEYS:Key.001",
+      "dataPath": "key_blocks[\"Wide\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    },
+    {
+      "owner": "SHAPE_KEYS:Key.002",
+      "dataPath": "key_blocks[\"Blink\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    },
+    {
+      "owner": "SHAPE_KEYS:Key.002",
+      "dataPath": "key_blocks[\"Wide\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    },
+    {
+      "owner": "SHAPE_KEYS:Key.003",
+      "dataPath": "key_blocks[\"Blink\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    },
+    {
+      "owner": "SHAPE_KEYS:Key.003",
+      "dataPath": "key_blocks[\"Wide\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    },
+    {
+      "owner": "SHAPE_KEYS:Key.004",
+      "dataPath": "key_blocks[\"Blink\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    },
+    {
+      "owner": "SHAPE_KEYS:Key.004",
+      "dataPath": "key_blocks[\"Wide\"].value",
+      "arrayIndex": 0,
+      "variableCount": 1
+    }
+  ],
+  "actions": [
+    "Aroll_Agree_Nod",
+    "Aroll_Explain_Right",
+    "Aroll_Greeting_Wave",
+    "Aroll_OpenPalm_Explain",
+    "Talk_Loop"
+  ],
+  "materials": [
+    "MAT_Character_Master",
+    "MAT_EyeSocket",
+    "MAT_Eye_Catchlight",
+    "MAT_Eye_Cornea",
+    "MAT_Eye_Iris_Amber",
+    "MAT_Eye_Iris_Limbal",
+    "MAT_Eye_Pupil",
+    "MAT_Eye_Sclera",
+    "MAT_Eyelid_Skin_Brown",
+    "MAT_Fur_Ivory",
+    "MAT_Fur_RootBrown",
+    "MAT_Fur_TipBrown",
+    "MAT_Gums",
+    "MAT_MouthInterior",
+    "MAT_Nail_Keratin",
+    "MAT_Ribbing_Ivory",
+    "MAT_SecondaryBoundDetail",
+    "MAT_TearLine",
+    "MAT_Teeth",
+    "MAT_Tongue"
+  ],
+  "groomObjects": [
+    "CLO_Ribbing_Cuff_L",
+    "CLO_Ribbing_Cuff_R",
+    "EYE_TearLine_L",
+    "EYE_TearLine_R",
+    "FUR_Body",
+    "FUR_Brows",
+    "FUR_Brows_L",
+    "FUR_Brows_R",
+    "FUR_Ears",
+    "FUR_Face",
+    "FUR_HandsFeet",
+    "FUR_HandsFeet_L",
+    "FUR_HandsFeet_R",
+    "FUR_HeadTuft",
+    "FUR_Muzzle",
+    "FUR_Outline"
+  ],
+  "faceTopologyRoles": {
+    "oral_cavity": [
+      "GEO_MouthInterior"
+    ],
+    "upper_teeth": [
+      "GEO_TeethUpper"
+    ],
+    "lower_teeth": [
+      "GEO_TeethLower"
+    ],
+    "upper_gum": [
+      "GEO_GumUpper"
+    ],
+    "lower_gum": [
+      "GEO_GumLower"
+    ],
+    "tongue": [
+      "GEO_Tongue"
+    ]
+  },
+  "render": {
+    "engine": "BLENDER_EEVEE",
+    "resolutionX": 1920,
+    "resolutionY": 1080,
+    "fps": 24,
+    "viewTransform": "AgX",
+    "look": "None"
+  },
+  "sourcePath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend",
+  "sourceSha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+  "outputPath": "/Users/wanglian/.config/superpowers/worktrees/tangying-ai-operation-system/default-sloth-aroll/ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend",
+  "outputSha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+  "auditOnly": true,
+  "mutationSummary": {}
+}

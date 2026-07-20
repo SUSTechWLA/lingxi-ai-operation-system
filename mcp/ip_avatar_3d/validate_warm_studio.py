@@ -421,8 +421,6 @@ def validate_lighting_evidence_payload(payload: dict[str, Any]) -> list[str]:
     if extra:
         errors.append(f"unexpected lighting measurements: {extra}")
     return errors
-BRAND_IMAGE_NAME = "warm-sloth-brand-icon.png"
-BRAND_IMAGE_SIZE = (2048, 2048)
 FLOOR_CONTACT_ROOTS = (
     "Desk_Top",
     "Chair_Main",
@@ -438,7 +436,6 @@ REQUIRED_MATERIALS = (
     "Rug_Jute",
     "Ceramic_Sand",
     "FloorLeaf_Sage_A",
-    "Brand_Icon_Alpha",
 )
 PRODUCTION_COLLECTIONS = tuple(
     name for name in contract.REQUIRED_COLLECTIONS if name != "QA_ONLY"
@@ -447,7 +444,6 @@ BRAND_OBJECTS = (
     "Brand_Artwork",
     "Brand_BackPanel",
     "Brand_Paper",
-    "Brand_Icon",
     "Brand_Copy_Line1",
     "Brand_Copy_Line2",
     "Brand_Glass",
@@ -463,7 +459,6 @@ MATERIAL_BINDINGS = {
     "Curtain_Sheer": "Curtain_Sheer",
     "Curtain_Outer_Front": "Curtain_Outer",
     "Rug_Main": "Rug_Jute",
-    "Brand_Icon": "Brand_Icon_Alpha",
     "Brand_Glass": "Brand_Glass_Rough",
     "FloorPlant_Left_Pot": "Ceramic_Sand",
     "FloorPlant_Left_Leaf_01": "FloorLeaf_Sage_A",
@@ -1041,34 +1036,13 @@ def _validate_lights(report: dict[str, Any]) -> None:
         )
 
 
-def _validate_brand(report: dict[str, Any], require_packed_brand: bool) -> None:
-    image = bpy.data.images.get(BRAND_IMAGE_NAME)
-    if image is None:
-        if require_packed_brand:
-            report["errors"].append(f"Packed brand image '{BRAND_IMAGE_NAME}' is missing")
-        return
-    if tuple(image.size) != BRAND_IMAGE_SIZE:
-        report["errors"].append(
-            f"Brand image '{BRAND_IMAGE_NAME}' is {tuple(image.size)}; expected {BRAND_IMAGE_SIZE}"
-        )
-    if image.channels != 4:
-        report["errors"].append(
-            f"Brand image '{BRAND_IMAGE_NAME}' must be RGBA (4 channels); found {image.channels}"
-        )
-    if image.packed_file is not None:
-        report["packedImages"].append(image.name)
-    elif require_packed_brand:
-        report["errors"].append(
-            f"Brand image '{BRAND_IMAGE_NAME}' must be packed into the .blend"
-        )
-
-    if require_packed_brand:
-        line1 = _scene_object("Brand_Copy_Line1")
-        line2 = _scene_object("Brand_Copy_Line2")
-        if line1 is not None and getattr(line1.data, "body", None) != "Slow Down.":
-            report["errors"].append("Brand_Copy_Line1 must read exactly 'Slow Down.'")
-        if line2 is not None and getattr(line2.data, "body", None) != "Think Better.":
-            report["errors"].append("Brand_Copy_Line2 must read exactly 'Think Better.'")
+def _validate_brand(report: dict[str, Any]) -> None:
+    line1 = _scene_object("Brand_Copy_Line1")
+    line2 = _scene_object("Brand_Copy_Line2")
+    if line1 is not None and getattr(line1.data, "body", None) != "Slow Down.":
+        report["errors"].append("Brand_Copy_Line1 must read exactly 'Slow Down.'")
+    if line2 is not None and getattr(line2.data, "body", None) != "Think Better.":
+        report["errors"].append("Brand_Copy_Line2 must read exactly 'Think Better.'")
 
 
 def _validate_plants(report: dict[str, Any]) -> None:
@@ -1136,10 +1110,7 @@ def _validate_plants(report: dict[str, Any]) -> None:
 def _validate_materials_and_hierarchy(
     report: dict[str, Any], require_packed_brand: bool
 ) -> None:
-    material_names = REQUIRED_MATERIALS if require_packed_brand else tuple(
-        name for name in REQUIRED_MATERIALS if not name.startswith("Brand_")
-    )
-    for material_name in material_names:
+    for material_name in REQUIRED_MATERIALS:
         if bpy.data.materials.get(material_name) is None:
             report["errors"].append(f"Required material '{material_name}' is missing")
 
@@ -1176,8 +1147,6 @@ def _validate_materials_and_hierarchy(
         )
 
     for object_name, expected_material in MATERIAL_BINDINGS.items():
-        if not require_packed_brand and object_name.startswith("Brand_"):
-            continue
         obj = _scene_object(object_name)
         if obj is None:
             continue
@@ -1457,7 +1426,7 @@ def validate_scene(require_packed_brand: bool = True) -> dict[str, Any]:
                 "FloorPlant_Right",
                 *CRITICAL_PRODUCTION_OBJECTS,
                 *LIGHT_SPECS,
-                *(BRAND_OBJECTS if require_packed_brand else ()),
+                *BRAND_OBJECTS,
             )
         )
     )
@@ -1466,7 +1435,7 @@ def validate_scene(require_packed_brand: bool = True) -> dict[str, Any]:
     _validate_markers(report)
     _validate_cameras(report)
     _validate_lights(report)
-    _validate_brand(report, require_packed_brand)
+    _validate_brand(report)
     _validate_plants(report)
     _validate_materials_and_hierarchy(report, require_packed_brand)
     _validate_no_character(report)
@@ -1487,7 +1456,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-unpacked-brand",
         action="store_true",
-        help="Do not require the optional brand image to be present and packed",
+        help="Deprecated compatibility flag; the studio no longer uses external brand images",
     )
     raw_argv = sys.argv if argv is None else argv
     args = parser.parse_args(_arguments_after_separator(raw_argv))
