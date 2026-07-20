@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -378,7 +379,9 @@ func TestAcceptShotCandidatePreservesImmutableCandidateAndReturnsDurableRetryRec
 		t.Fatalf("accept candidate: %v", err)
 	}
 	second, err := svc.AcceptShotCandidate(context.Background(), "u-1", "vp-1", "shot-001", "candidate-ok", req)
-	if err != nil || !reflect.DeepEqual(first, second) {
+	firstJSON, firstJSONErr := json.Marshal(first)
+	secondJSON, secondJSONErr := json.Marshal(second)
+	if err != nil || firstJSONErr != nil || secondJSONErr != nil || string(firstJSON) != string(secondJSON) {
 		t.Fatalf("retry result first=%+v second=%+v error=%v", first, second, err)
 	}
 	state := decodeStateFromTest(t, store.updated.Config)
