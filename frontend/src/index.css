@@ -646,12 +646,22 @@ body {
 .artifact-time-selection input { width: 9rem; padding: 0.5rem; color: #2B1606; background: #FFF6D6; border: 1px solid #E8CF86; border-radius: 0.375rem; font: inherit; }
 
 .artifact-impact-confirmation {
-  margin-top: 1rem;
+  width: min(100%, 30rem);
   padding: 1rem;
   color: #2B1606;
   background: #FFF0BE;
   border: 1px solid #E89412;
   border-radius: 0.5rem;
+}
+
+.artifact-impact-backdrop {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(43, 22, 6, 0.52);
 }
 
 .artifact-impact-confirmation p { margin: 0.5rem 0 0; color: #7B5B2B; }

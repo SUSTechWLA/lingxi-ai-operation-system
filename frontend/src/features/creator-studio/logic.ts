@@ -237,6 +237,46 @@ export function isCreatorConflict(error: unknown): boolean {
   return Boolean(response && typeof response === 'object' && 'status' in response && response.status === 409)
 }
 
+export interface WorkspaceArtifactSelection {
+  stepId: CreatorStepId
+  artifactId: string
+  version: number
+}
+
+export interface KeyedWorkspaceArtifact<T> {
+  key: string
+  value: T
+}
+
+export function workspaceArtifactKey(selection: WorkspaceArtifactSelection): string {
+  return `${selection.stepId}:${selection.artifactId}:${selection.version}`
+}
+
+export function isCurrentWorkspaceArtifact<T>(
+  result: KeyedWorkspaceArtifact<T> | null | undefined,
+  selection: WorkspaceArtifactSelection | null | undefined,
+): boolean {
+  return Boolean(result && selection && result.key === workspaceArtifactKey(selection))
+}
+
+export function isLatestWorkspaceRequest(requestToken: number, latestToken: number): boolean {
+  return requestToken === latestToken
+}
+
+export function didSelectedShotTaskChange(
+  previous: readonly { id: string; shotId?: string; status: string }[],
+  next: readonly { id: string; shotId?: string; status: string }[],
+  selectedShotId?: string,
+): boolean {
+  if (!selectedShotId) return false
+  const signature = (tasks: readonly { id: string; shotId?: string; status: string }[]) => tasks
+    .filter(task => task.shotId === selectedShotId)
+    .map(task => `${task.id}:${task.status}`)
+    .sort()
+    .join('|')
+  return signature(previous) !== signature(next)
+}
+
 function stableFingerprint(value: unknown): string {
   const text = stableStringify(value)
   let hash = 2166136261

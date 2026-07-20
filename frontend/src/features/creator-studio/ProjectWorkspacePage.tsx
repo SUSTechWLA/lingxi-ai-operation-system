@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactContentResponse } from '../../utils/types'
 import { getCreationView, getCreatorArtifactContent, getStepVersions } from '../../services/creatorApi'
 import type { CreationView, CreatorArtifactVersion, CreatorStep, CreatorStepId } from './types'
-import { creatorPollDelay, creatorStepLabel } from './logic'
+import {
+  creatorPollDelay,
+  creatorStepLabel,
+  didSelectedShotTaskChange,
+  isCurrentWorkspaceArtifact,
+  isLatestWorkspaceRequest,
+  type KeyedWorkspaceArtifact,
+  type WorkspaceArtifactSelection,
+  workspaceArtifactKey,
+} from './logic'
 import CreationStrip from './components/CreationStrip'
 import ArtifactReviewPanel from './components/ArtifactReviewPanel'
 import TaskRecoveryBanner from './components/TaskRecoveryBanner'
@@ -11,31 +20,43 @@ interface ProjectWorkspacePageProps {
   projectId: string
   stepId: CreatorStepId
   onNavigate: (hash: string) => void
+  selectedShotId?: string
   onSelectedShotTaskChanged?: (shotId: string) => Promise<void> | void
 }
 
-export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, onSelectedShotTaskChanged }: ProjectWorkspacePageProps) {
+type LoadedWorkspaceArtifact = KeyedWorkspaceArtifact<{
+  content: ArtifactContentResponse
+  versions: CreatorArtifactVersion[]
+}>
+
+export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, selectedShotId, onSelectedShotTaskChanged }: ProjectWorkspacePageProps) {
   const [view, setView] = useState<CreationView | null>(null)
-  const [content, setContent] = useState<ArtifactContentResponse | null>(null)
-  const [versions, setVersions] = useState<CreatorArtifactVersion[]>([])
+  const [artifactResult, setArtifactResult] = useState<LoadedWorkspaceArtifact | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const activeTaskIdsRef = useRef('')
+  const activeTasksRef = useRef<CreationView['activeTasks']>([])
+  const viewRequestTokenRef = useRef(0)
+  const artifactRequestTokenRef = useRef(0)
   const currentStep = view?.steps.find(step => step.id === stepId)
   const currentArtifactId = currentStep?.currentArtifactId
   const currentVersion = currentStep?.currentVersion
+  const artifactSelection = useMemo<WorkspaceArtifactSelection | null>(() => (
+    currentArtifactId && currentVersion ? { stepId, artifactId: currentArtifactId, version: currentVersion } : null
+  ), [currentArtifactId, currentVersion, stepId])
 
   const refreshView = useCallback(async (signal?: AbortSignal) => {
+    const requestToken = ++viewRequestTokenRef.current
     const nextView = await getCreationView(projectId, signal)
-    const activeShotIds = nextView.activeTasks.map(task => task.shotId).filter((shotId): shotId is string => Boolean(shotId)).sort()
-    const nextTaskIds = nextView.activeTasks.map(task => `${task.id}:${task.status}`).sort().join('|')
-    if (activeTaskIdsRef.current && activeTaskIdsRef.current !== nextTaskIds) {
-      await Promise.all(activeShotIds.map(shotId => onSelectedShotTaskChanged?.(shotId)))
+    if (signal?.aborted || !isLatestWorkspaceRequest(requestToken, viewRequestTokenRef.current)) return undefined
+    const previousTasks = activeTasksRef.current
+    if (didSelectedShotTaskChange(previousTasks, nextView.activeTasks, selectedShotId) && selectedShotId) {
+      await onSelectedShotTaskChanged?.(selectedShotId)
     }
-    activeTaskIdsRef.current = nextTaskIds
+    if (signal?.aborted || !isLatestWorkspaceRequest(requestToken, viewRequestTokenRef.current)) return undefined
+    activeTasksRef.current = nextView.activeTasks
     setView(nextView)
     return nextView
-  }, [onSelectedShotTaskChanged, projectId])
+  }, [onSelectedShotTaskChanged, projectId, selectedShotId])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -59,23 +80,25 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, on
   }, [refreshView])
 
   useEffect(() => {
-    if (!currentArtifactId) {
-      setContent(null)
-      setVersions([])
-      return
-    }
+    const requestToken = ++artifactRequestTokenRef.current
+    const requestSelection = artifactSelection
+    if (!requestSelection) return () => undefined
     const controller = new AbortController()
     void Promise.all([
-      getCreatorArtifactContent(currentArtifactId, controller.signal),
+      getCreatorArtifactContent(requestSelection.artifactId, controller.signal),
       getStepVersions(projectId, stepId, controller.signal),
     ]).then(([nextContent, nextVersions]) => {
-      setContent(nextContent)
-      setVersions(nextVersions)
+      if (
+        controller.signal.aborted ||
+        !isLatestWorkspaceRequest(requestToken, artifactRequestTokenRef.current) ||
+        nextContent.artifact.id !== requestSelection.artifactId
+      ) return
+      setArtifactResult({ key: workspaceArtifactKey(requestSelection), value: { content: nextContent, versions: nextVersions } })
     }).catch(() => {
-      if (!controller.signal.aborted) setError('暂时无法读取当前内容，请稍后重试。')
+      if (!controller.signal.aborted && isLatestWorkspaceRequest(requestToken, artifactRequestTokenRef.current)) setError('暂时无法读取当前内容，请稍后重试。')
     })
     return () => controller.abort()
-  }, [currentArtifactId, currentVersion, projectId, stepId])
+  }, [artifactSelection, projectId, stepId])
 
   useEffect(() => {
     if (!view?.activeTasks.length) return
@@ -119,6 +142,11 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, on
   if (!view) return null
 
   const selectedStep = view.steps.find(step => step.id === stepId) ?? fallbackStep(stepId)
+  const currentArtifactResult = isCurrentWorkspaceArtifact(artifactResult, artifactSelection) && artifactResult?.value.content.artifact.id === currentArtifactId
+    ? artifactResult
+    : null
+  const content = currentArtifactResult?.value.content ?? null
+  const versions = currentArtifactResult?.value.versions ?? []
   const navigateToStep = (nextStepId: CreatorStepId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/${nextStepId}`)
   return (
     <section className="creator-workspace" aria-labelledby="creator-page-title">
@@ -134,8 +162,10 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, on
         step={selectedStep}
         content={content}
         versions={versions}
-        onConflict={async () => { await refreshView() }}
+        onConflict={async signal => { await refreshView(signal) }}
         onViewChanged={(nextView, navigateToActiveStep) => {
+          viewRequestTokenRef.current += 1
+          activeTasksRef.current = nextView.activeTasks
           setView(nextView)
           if (navigateToActiveStep) navigateToStep(nextView.activeStep)
         }}

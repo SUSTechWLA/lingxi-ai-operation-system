@@ -9,6 +9,7 @@ import { build } from 'esbuild'
 
 const temp = await mkdtemp(join(tmpdir(), 'creator-studio-'))
 const bundle = join(temp, 'logic.mjs')
+const focusBundle = join(temp, 'focus-cycle.mjs')
 
 try {
   execFileSync(process.execPath, [
@@ -25,6 +26,14 @@ try {
     outfile: bundle,
   })
   const logic = await import(pathToFileURL(bundle))
+  await build({
+    entryPoints: [new URL('../src/features/creator-studio/focusCycle.ts', import.meta.url).pathname],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: focusBundle,
+  })
+  const focus = await import(pathToFileURL(focusBundle))
 
   const emptyView = { steps: [] }
   assert.deepEqual(logic.nextCreatorAction(emptyView), {
@@ -90,6 +99,22 @@ try {
   assert.equal(logic.creatorPollDelay(0), 500)
   assert.equal(logic.creatorPollDelay(1), 1000)
   assert.equal(logic.creatorPollDelay(20), 5000)
+  const scriptKey = logic.workspaceArtifactKey({ stepId: 'script', artifactId: 'script-v1', version: 1 })
+  const directionKey = logic.workspaceArtifactKey({ stepId: 'direction', artifactId: 'direction-v1', version: 1 })
+  const scriptResult = { key: scriptKey, value: { artifact: { id: 'script-v1' }, versions: ['v1'] } }
+  assert.equal(logic.isCurrentWorkspaceArtifact(scriptResult, { stepId: 'direction', artifactId: 'direction-v1', version: 1 }), false, 'step B must not render step A while B loads')
+  const directionResult = { key: directionKey, value: { artifact: { id: 'direction-v1' }, versions: ['v1'] } }
+  assert.equal(logic.isCurrentWorkspaceArtifact(directionResult, { stepId: 'direction', artifactId: 'direction-v1', version: 1 }), true)
+  assert.equal(logic.isCurrentWorkspaceArtifact(scriptResult, { stepId: 'direction', artifactId: 'direction-v1', version: 1 }), false, 'late A response must not overwrite B')
+  assert.equal(logic.isLatestWorkspaceRequest(2, 2), true)
+  assert.equal(logic.isLatestWorkspaceRequest(1, 2), false)
+  const previousTasks = [{ id: 'task-a', shotId: 'shot-a', status: 'running' }, { id: 'task-b', shotId: 'shot-b', status: 'running' }]
+  assert.equal(logic.didSelectedShotTaskChange(previousTasks, [{ id: 'task-b', shotId: 'shot-b', status: 'running' }], 'shot-a'), true, 'selected shot task disappearing must refetch')
+  assert.equal(logic.didSelectedShotTaskChange(previousTasks, [{ id: 'task-a', shotId: 'shot-a', status: 'running' }, { id: 'task-b', shotId: 'shot-b', status: 'processing' }], 'shot-a'), false, 'other shot changes must not refetch selected shot')
+  assert.equal(logic.didSelectedShotTaskChange(previousTasks, [], undefined), false, 'no selected shot must not fan out callbacks')
+  assert.equal(focus.cycleFocusIndex(1, 3, false), 2)
+  assert.equal(focus.cycleFocusIndex(0, 3, true), 2)
+  assert.equal(focus.cycleFocusIndex(-1, 3, true), 2)
 
   const creationRequest = logic.buildCreationRequest({
     prompt: '为夏日咖啡新品拍一支轻快的竖版短片',
@@ -275,7 +300,9 @@ try {
   assert.match(workspaceSource, /getCreationView\(projectId/)
   assert.match(workspaceSource, /document\.visibilityState !== 'visible'/)
   assert.match(workspaceSource, /controller\.abort\(\)/)
-  assert.match(workspaceSource, /\[currentArtifactId, currentVersion, projectId, stepId\]/)
+  assert.match(workspaceSource, /workspaceArtifactKey\(requestSelection\)/)
+  assert.match(workspaceSource, /isLatestWorkspaceRequest/)
+  assert.match(workspaceSource, /selectedShotId/)
   assert.doesNotMatch(workspaceSource, /\[projectId, stepId, view\]/)
   assert.match(recoverySource, /生成仍在后台继续/)
   assert.match(stripSource, /aria-current=\{isCurrent \? 'step' : undefined\}/)
@@ -290,6 +317,9 @@ try {
   assert.match(reviewSource, /artifact-selection-overlay/)
   assert.match(reviewSource, /onPointerCancel/)
   assert.match(reviewSource, /开始时间（秒）/)
+  assert.match(reviewSource, /aria-modal="true"/)
+  assert.match(reviewSource, /cycleFocusIndex/)
+  assert.match(reviewSource, /operationControllerRef\.current === controller/)
 
   console.log('creator studio logic and client contract checks passed')
 } finally {

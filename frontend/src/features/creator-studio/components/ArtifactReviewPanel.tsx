@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react'
 import type { ArtifactContentResponse } from '../../../utils/types'
 import {
   confirmStep,
@@ -24,6 +24,7 @@ import {
   isCreatorConflict,
   normalizeRectSelection,
 } from '../logic'
+import { cycleFocusIndex } from '../focusCycle'
 
 interface ArtifactReviewPanelProps {
   projectId: string
@@ -31,7 +32,7 @@ interface ArtifactReviewPanelProps {
   content: ArtifactContentResponse | null
   versions: readonly CreatorArtifactVersion[]
   onViewChanged: (view: CreationView, navigateToActiveStep?: boolean) => void
-  onConflict: () => Promise<void>
+  onConflict: (signal: AbortSignal) => Promise<unknown>
 }
 
 type PendingAction =
@@ -51,6 +52,7 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
   const mountedRef = useRef(true)
   const operationControllerRef = useRef<AbortController | null>(null)
   const contentLoadedRef = useRef<string | null>(null)
+  const impactTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const artifactId = step.currentArtifactId
   const baseVersion = step.currentVersion
@@ -84,30 +86,40 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
 
   useEffect(() => {
     const key = `${artifactId || 'none'}:${baseVersion || 0}`
-    if (!content || contentLoadedRef.current === key) return
+    if (!content || content.artifact.id !== artifactId || contentLoadedRef.current === key) return
     contentLoadedRef.current = key
     setDirectContent(contentText(content.content))
   }, [artifactId, baseVersion, content])
 
-  const withErrorHandling = async (operation: (signal: AbortSignal) => Promise<void>) => {
+  const withErrorHandling = async (operation: (signal: AbortSignal, isCurrent: () => boolean) => Promise<void>) => {
     operationControllerRef.current?.abort()
     const controller = new AbortController()
     operationControllerRef.current = controller
+    const isCurrent = () => mountedRef.current && !controller.signal.aborted && operationControllerRef.current === controller
     setError('')
     setWorking(true)
     try {
-      await operation(controller.signal)
+      await operation(controller.signal, isCurrent)
     } catch (caught) {
-      if (controller.signal.aborted || !mountedRef.current) return
+      if (!isCurrent()) return
       if (isCreatorConflict(caught)) {
         setError(CREATOR_CONFLICT_COPY)
-        await onConflict()
+        try {
+          await onConflict(controller.signal)
+        } catch {
+          if (isCurrent()) setError('暂时无法刷新最新内容，请稍后重试。')
+        }
       } else {
         setError('暂时无法保存，请稍后重试。')
       }
     } finally {
-      if (mountedRef.current) setWorking(false)
+      if (isCurrent()) setWorking(false)
     }
+  }
+
+  const closeImpact = () => {
+    setPending(null)
+    window.requestAnimationFrame(() => impactTriggerRef.current?.focus())
   }
 
   const previewRevision = () => {
@@ -131,9 +143,9 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
           artifactId, baseVersion, mode, directContent: trimmedContent,
           reviewId: step.reviewId, runId: step.runId, selection, confirmedAffectedShotIds: [],
         }
-    void withErrorHandling(async signal => {
+    void withErrorHandling(async (signal, isCurrent) => {
       const impact = await previewStepRevision(projectId, step.id, { artifactId, baseVersion }, signal)
-      if (mountedRef.current) setPending({ kind: 'revision', request, impact })
+      if (isCurrent()) setPending({ kind: 'revision', request, impact })
     })
   }
 
@@ -141,15 +153,15 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
     if (!pending || pending.kind !== 'revision' || !canRevise) return
     const confirmedAffectedShotIds = pending.impact.affectedShotIds ?? []
     const request = { ...pending.request, confirmedAffectedShotIds }
-    void withErrorHandling(async signal => {
+    void withErrorHandling(async (signal, isCurrent) => {
       const result = await reviseStep(
         projectId,
         step.id,
         request,
         creatorMutationIdempotencyKey(projectId, step.id, request as unknown as Record<string, unknown>), signal,
       )
-      if (mountedRef.current) {
-        setPending(null)
+      if (isCurrent()) {
+        closeImpact()
         onViewChanged(result.view)
       }
     })
@@ -157,9 +169,9 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
 
   const previewRestore = (version: number) => {
     if (!artifactId || !baseVersion || !canRevise) return
-    void withErrorHandling(async signal => {
+    void withErrorHandling(async (signal, isCurrent) => {
       const impact = await previewStepRevision(projectId, step.id, { artifactId, baseVersion }, signal)
-      if (mountedRef.current) setPending({ kind: 'restore', version, impact })
+      if (isCurrent()) setPending({ kind: 'restore', version, impact })
     })
   }
 
@@ -171,7 +183,7 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
       runId: step.runId,
       confirmedAffectedShotIds: pending.impact.affectedShotIds ?? [],
     }
-    void withErrorHandling(async signal => {
+    void withErrorHandling(async (signal, isCurrent) => {
       const result = await restoreStepVersion(
         projectId,
         step.id,
@@ -179,8 +191,8 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
         request,
         creatorMutationIdempotencyKey(projectId, step.id, { ...request, mode: 'restore', version: pending.version }), signal,
       )
-      if (mountedRef.current) {
-        setPending(null)
+      if (isCurrent()) {
+        closeImpact()
         onViewChanged(result.view)
       }
     })
@@ -188,13 +200,13 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
 
   const handleConfirm = () => {
     if (!artifactId || !canConfirm) return
-    void withErrorHandling(async signal => {
+    void withErrorHandling(async (signal, isCurrent) => {
       const view = await confirmStep(projectId, step.id, {
         artifactId,
         reviewId: step.reviewId,
         runId: step.runId,
       }, signal)
-      if (mountedRef.current) onViewChanged(view, true)
+      if (isCurrent()) onViewChanged(view, true)
     })
   }
 
@@ -260,10 +272,10 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
           {mode === 'direct' && isText && (
             <label className="artifact-editor-label">直接编辑内容
               <textarea value={directContent} onChange={event => setDirectContent(event.target.value)} />
-              <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={previewRevision}>预览修改影响</button>
+              <button type="button" className="creator-secondary-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>
             </label>
           )}
-          {mode === 'instruction' && <button type="button" className="creator-secondary-button artifact-preview-button" disabled={!canRevise || working} onClick={previewRevision}>预览修改影响</button>}
+          {mode === 'instruction' && <button type="button" className="creator-secondary-button artifact-preview-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRevision() }}>预览修改影响</button>}
 
           <details className="artifact-history">
             <summary>查看版本</summary>
@@ -271,7 +283,7 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
               {versionList.map(version => (
                 <li key={`${version.artifactId}-${version.version}`}>
                   <span>版本 {version.version}{version.isCurrent ? '（当前）' : ''}</span>
-                  {!version.isCurrent && <button type="button" className="creator-text-button" disabled={!canRevise || working} onClick={() => previewRestore(version.version)}>恢复这一版</button>}
+                  {!version.isCurrent && <button type="button" className="creator-text-button" disabled={!canRevise || working} onClick={event => { impactTriggerRef.current = event.currentTarget; previewRestore(version.version) }}>恢复这一版</button>}
                 </li>
               ))}
             </ul>
@@ -279,7 +291,7 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
         </>
       )}
 
-      {pending && <ImpactConfirmation pending={pending} working={working} onCancel={() => setPending(null)} onConfirm={pending.kind === 'revision' ? confirmRevision : confirmRestore} />}
+      {pending && <ImpactConfirmation pending={pending} working={working} onCancel={closeImpact} onConfirm={pending.kind === 'revision' ? confirmRevision : confirmRestore} />}
       {error && <p className="creator-form-error" role="alert">{error}</p>}
     </section>
   )
@@ -323,16 +335,45 @@ function TimeSelection({ selection, onChange }: { selection: ArtifactSelection |
 
 function ImpactConfirmation({ pending, working, onCancel, onConfirm }: { pending: PendingAction; working: boolean; onCancel: () => void; onConfirm: () => void }) {
   const shotIds = pending.impact.affectedShotIds ?? []
+  const dialogRef = useRef<HTMLElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    window.requestAnimationFrame(() => cancelRef.current?.focus())
+  }, [])
+
+  const trapFocus = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      if (!working) onCancel()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') || [])
+    if (controls.length === 0) {
+      event.preventDefault()
+      dialogRef.current?.focus()
+      return
+    }
+    const nextIndex = cycleFocusIndex(controls.indexOf(document.activeElement as HTMLButtonElement), controls.length, event.shiftKey)
+    if (nextIndex >= 0) {
+      event.preventDefault()
+      controls[nextIndex]?.focus()
+    }
+  }
+
   return (
-    <aside className="artifact-impact-confirmation" role="dialog" aria-label="确认修改影响">
-      <strong>确认这次修改</strong>
-      <p>{formatStepImpact(pending.impact)}</p>
-      {shotIds.length > 0 && <p>受影响镜头：{shotIds.join('、')}</p>}
-      <div>
-        <button type="button" className="creator-secondary-button" disabled={working} onClick={onCancel}>取消</button>
-        <button type="button" className="creator-primary-button" disabled={working} onClick={onConfirm}>{pending.kind === 'restore' ? '确认恢复' : '确认修改'}</button>
-      </div>
-    </aside>
+    <div className="artifact-impact-backdrop" role="presentation" onPointerDown={event => { if (!working && event.currentTarget === event.target) onCancel() }}>
+      <aside className="artifact-impact-confirmation" ref={dialogRef} role="dialog" aria-modal="true" aria-label="确认修改影响" tabIndex={-1} onPointerDown={event => event.stopPropagation()} onKeyDown={trapFocus}>
+        <strong>确认这次修改</strong>
+        <p>{formatStepImpact(pending.impact)}</p>
+        {shotIds.length > 0 && <p>受影响镜头：{shotIds.join('、')}</p>}
+        <div>
+          <button ref={cancelRef} type="button" className="creator-secondary-button" disabled={working} onClick={onCancel}>取消</button>
+          <button type="button" className="creator-primary-button" disabled={working} onClick={onConfirm}>{pending.kind === 'restore' ? '确认恢复' : '确认修改'}</button>
+        </div>
+      </aside>
+    </div>
   )
 }
 
