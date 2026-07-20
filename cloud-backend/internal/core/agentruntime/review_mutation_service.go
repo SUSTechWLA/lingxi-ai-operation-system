@@ -27,6 +27,7 @@ type ReviewMutationService interface {
 	ConfirmForArtifact(ctx context.Context, runID, reviewID, artifactID, reviewerID, comment string) error
 	ReopenWithArtifact(ctx context.Context, runID, reviewID, projectID, expectedArtifactID, artifactID, reviewerID, reason string) error
 	Regenerate(ctx context.Context, runID, reviewID, reviewerID, hint string) ([]string, error)
+	RegenerationStatus(ctx context.Context, runID, reviewID string) (string, error)
 }
 
 type ReviewReopenRequest struct {
@@ -335,6 +336,31 @@ func (s *reviewMutationService) Regenerate(ctx context.Context, runID, reviewID,
 	s.writeDecisionLog(ctx, run, node, DecisionStageRegeneration, "approved", reviewerID, hint, false)
 	s.triggerDownstreamStale(ctx, run, node, "用户重新生成阶段")
 	return downstreamStaleArtifactsForReview(node), nil
+}
+
+func (s *reviewMutationService) RegenerationStatus(ctx context.Context, runID, reviewID string) (string, error) {
+	_, gate, err := s.findReviewNode(ctx, runID, reviewID)
+	if err != nil {
+		return "", err
+	}
+	sourceID := nodeInputString(gate, "sourceNode")
+	if sourceID == "" {
+		sourceID = nodeInputString(gate, "stepId") + "_exec"
+	}
+	resolved, err := s.resolveSourceNodeID(ctx, gate, sourceID)
+	if err != nil {
+		return "", err
+	}
+	nodes, err := s.nodes.FindByTaskID(ctx, gate.TaskID)
+	if err != nil {
+		return "", err
+	}
+	for _, node := range nodes {
+		if node.ID == resolved {
+			return string(node.Status), nil
+		}
+	}
+	return "", ErrReviewNotFound
 }
 
 func (s *reviewMutationService) resolveSourceNodeID(ctx context.Context, gate *model.Node, sourceID string) (string, error) {

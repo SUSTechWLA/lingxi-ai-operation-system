@@ -123,6 +123,7 @@ type creatorReviewMutations interface {
 	ConfirmForArtifact(context.Context, string, string, string, string, string) error
 	ReopenWithArtifact(context.Context, string, string, string, string, string, string, string) error
 	Regenerate(context.Context, string, string, string, string) ([]string, error)
+	RegenerationStatus(context.Context, string, string) (string, error)
 }
 
 type creatorAssemblyService interface {
@@ -279,14 +280,26 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 			steps[index].State = mergeCreatorState(steps[index].State, model.CreatorStepNeedsAttention)
 		}
 	}
+	viewAssemblyDirty := shotState.AssemblyDirty
 	if s.assembly != nil {
 		if receipt, found, receiptErr := s.assembly.LatestAssemblyReceipt(ctx, userID, projectID); receiptErr == nil && found && receipt.Status == "queued" {
 			previewIndex := stepIndexes[model.CreatorStepPreview]
 			if receipt.BasePreviewArtifactID != "" && steps[previewIndex].CurrentArtifactID == receipt.BasePreviewArtifactID {
-				steps[previewIndex].State = model.CreatorStepGenerating
-				steps[stepIndexes[model.CreatorStepDelivery]].State = model.CreatorStepGenerating
-				if receipt.PreviewTaskID != "" {
-					activeTasks = append(activeTasks, model.CreatorTask{ID: receipt.PreviewTaskID, Scope: string(model.CreatorStepPreview), Status: "running", Label: "正在重新拼接成片"})
+				runID, reviewID, statusErr := s.reviews.ResolveReviewGate(ctx, artifactsByID(artifacts, receipt.BasePreviewArtifactID), receipt.PreviewTaskID, "")
+				status := "UNKNOWN"
+				if statusErr == nil {
+					status, statusErr = s.reviews.RegenerationStatus(ctx, runID, reviewID)
+				}
+				if statusErr != nil || status == "FAILED" || status == "CANCELLED" || status == "LOCAL_FAILED" || status == "HEARTBEAT_TIMEOUT" {
+					steps[previewIndex].State = model.CreatorStepFailed
+					steps[stepIndexes[model.CreatorStepDelivery]].State = model.CreatorStepNeedsAttention
+					viewAssemblyDirty = true
+				} else {
+					steps[previewIndex].State = model.CreatorStepGenerating
+					steps[stepIndexes[model.CreatorStepDelivery]].State = model.CreatorStepGenerating
+					if receipt.PreviewTaskID != "" {
+						activeTasks = append(activeTasks, model.CreatorTask{ID: receipt.PreviewTaskID, Scope: string(model.CreatorStepPreview), Status: "running", Label: "正在重新拼接成片"})
+					}
 				}
 			}
 		}
@@ -310,8 +323,17 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 
 	return &model.CreationView{
 		Project: project, ActiveStep: activeCreatorStep(steps), Steps: steps,
-		ShotSummary: shotState.Summary, ActiveTasks: activeTasks, AssemblyDirty: shotState.AssemblyDirty,
+		ShotSummary: shotState.Summary, ActiveTasks: activeTasks, AssemblyDirty: viewAssemblyDirty,
 	}, nil
+}
+
+func artifactsByID(items []*artifact.Artifact, id string) *artifact.Artifact {
+	for _, item := range items {
+		if item != nil && item.ID == id {
+			return item
+		}
+	}
+	return nil
 }
 
 func (s *CreationService) getCreatorShotReadState(ctx context.Context, userID, projectID string) (creatorShotReadState, error) {

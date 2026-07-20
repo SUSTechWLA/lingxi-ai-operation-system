@@ -733,6 +733,7 @@ type AssemblyReceipt struct {
 	Status                string            `json:"status"`
 	BasePreviewArtifactID string            `json:"basePreviewArtifactId,omitempty"`
 	PreviewTaskID         string            `json:"previewTaskId,omitempty"`
+	PreviewReviewID       string            `json:"previewReviewId,omitempty"`
 	Plan                  FinalAssemblyPlan `json:"plan"`
 	CreatedAt             time.Time         `json:"createdAt"`
 	UpdatedAt             time.Time         `json:"updatedAt"`

@@ -804,3 +804,7 @@ func (f *fakeCreatorReviewMutations) ReopenWithArtifact(_ context.Context, runID
 func (f *fakeCreatorReviewMutations) Regenerate(context.Context, string, string, string, string) ([]string, error) {
 	return nil, f.reopenErr
 }
+
+func (f *fakeCreatorReviewMutations) RegenerationStatus(context.Context, string, string) (string, error) {
+	return "RUNNING", nil
+}

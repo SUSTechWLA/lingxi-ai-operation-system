@@ -31,3 +31,8 @@ Implemented the creator preview and delivery surface, default creator routing ch
 
 - No live visual capture was performed: launching the authenticated cloud/local/frontend stack requires external service configuration not present in this worktree. CSS retains the established warm-yellow/deep-brown/card tokens; focus styling is present, status has text, and the creator logic check asserts only one selected Shot player.
 - The receipt has a queued recovery representation and removes old media once a new preview artifact becomes current. This task did not add a low-level review-node status query for a failed/cancelled source node; failure presentation currently depends on the authoritative preview artifact state. A follow-up should expose that node status so a queued receipt can explicitly become failed before an artifact update.
+
+## Follow-up fix
+
+- Added the read-only review-source `RegenerationStatus` query and used it in creation-view recovery. Active work remains generating with a durable task; failed/cancelled/unknown work is fail-safe failed with `assemblyDirty` in the view, so old media remains hidden and the creator can retry.
+- Ran `bash scripts/beta-smoke-check.sh`: code checks passed; smoke is blocked solely because `hyperframes-render-service/node_modules` is absent. Ran `bash scripts/beta-readiness-check.sh`: BLOCKED because the smoke prerequisite failed; local agent, HyperFrames health, FFmpeg and diagnostics were detected, but no real provider was configured.
