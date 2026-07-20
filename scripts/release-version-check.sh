@@ -12,12 +12,12 @@ root_lock_version="$(node -p "require('./package-lock.json').version")"
 frontend_lock_version="$(node -p "require('./frontend/package-lock.json').version")"
 render_lock_version="$(node -p "require('./hyperframes-render-service/package-lock.json').version")"
 
-if [[ "$root_version" != "$frontend_version" || "$root_version" != "$render_version" ]]; then
+if [[ "$root_version" != "$frontend_version" ]] || [[ "$root_version" != "$render_version" ]]; then
   echo "ERROR: package versions do not match: root=$root_version frontend=$frontend_version render=$render_version" >&2
   exit 1
 fi
 
-if [[ "$root_version" != "$root_lock_version" || "$root_version" != "$frontend_lock_version" || "$root_version" != "$render_lock_version" ]]; then
+if [[ "$root_version" != "$root_lock_version" ]] || [[ "$root_version" != "$frontend_lock_version" ]] || [[ "$root_version" != "$render_lock_version" ]]; then
   echo "ERROR: lockfile versions do not match v$root_version: root=$root_lock_version frontend=$frontend_lock_version render=$render_lock_version" >&2
   exit 1
 fi
