@@ -1,5 +1,11 @@
 package model
 
+import (
+	"time"
+
+	"github.com/tangying-ai/aios-core/internal/core/artifact"
+)
+
 type CreatorStepID string
 type CreatorStepState string
 
@@ -102,4 +108,64 @@ type ShotWorkspace struct {
 	Shot    ShotUnit       `json:"shot"`
 	History []ShotRevision `json:"history"`
 	Impact  ShotImpact     `json:"impact"`
+}
+
+type ArtifactSelection struct {
+	Kind    string   `json:"kind"`
+	X       *float64 `json:"x,omitempty"`
+	Y       *float64 `json:"y,omitempty"`
+	Width   *float64 `json:"width,omitempty"`
+	Height  *float64 `json:"height,omitempty"`
+	StartMs *int64   `json:"startMs,omitempty"`
+	EndMs   *int64   `json:"endMs,omitempty"`
+}
+
+type StepRevisionRequest struct {
+	ArtifactID               string             `json:"artifactId"`
+	BaseVersion              int                `json:"baseVersion"`
+	Mode                     string             `json:"mode"`
+	Instruction              string             `json:"instruction,omitempty"`
+	DirectContent            string             `json:"directContent,omitempty"`
+	RunID                    string             `json:"runId,omitempty"`
+	ReviewID                 string             `json:"reviewId,omitempty"`
+	ConfirmedAffectedShotIDs []string           `json:"confirmedAffectedShotIds,omitempty"`
+	Selection                *ArtifactSelection `json:"selection,omitempty"`
+}
+
+type StepRestoreRequest struct {
+	BaseVersion              int      `json:"baseVersion"`
+	RunID                    string   `json:"runId,omitempty"`
+	ReviewID                 string   `json:"reviewId,omitempty"`
+	Reason                   string   `json:"reason,omitempty"`
+	ConfirmedAffectedShotIDs []string `json:"confirmedAffectedShotIds,omitempty"`
+}
+
+type StepConfirmRequest struct {
+	ArtifactID string `json:"artifactId"`
+	RunID      string `json:"runId,omitempty"`
+	ReviewID   string `json:"reviewId,omitempty"`
+	Comment    string `json:"comment,omitempty"`
+}
+
+type StepImpact struct {
+	AffectedStepIDs      []CreatorStepID `json:"affectedStepIds"`
+	AffectedShotIDs      []string        `json:"affectedShotIds,omitempty"`
+	RequiresConfirmation bool            `json:"requiresConfirmation"`
+}
+
+type StepMutationResult struct {
+	Artifact *artifact.Artifact `json:"artifact"`
+	Impact   StepImpact         `json:"impact"`
+	View     *CreationView      `json:"view"`
+}
+
+type CreatorArtifactVersion struct {
+	ArtifactID string    `json:"artifactId"`
+	Version    int       `json:"version"`
+	IsCurrent  bool      `json:"isCurrent"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type StepVersions struct {
+	Versions []CreatorArtifactVersion `json:"versions"`
 }

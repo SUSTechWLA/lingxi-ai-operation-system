@@ -95,34 +95,49 @@ type Handler struct {
 	projectLifecycle  ProjectLifecycleUpdater
 	taskPauser        TaskPauser
 	regeneration      RegenerationDispatcher
+	reviewMutations   *reviewMutationService
 }
 
 func NewHandler(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *Handler {
-	return &Handler{runner: runner, nodes: nodes, stateMachine: stateMachine}
+	return &Handler{
+		runner: runner, nodes: nodes, stateMachine: stateMachine,
+		reviewMutations: NewReviewMutationService(runner, nodes, stateMachine),
+	}
+}
+
+func (h *Handler) ensureReviewMutations() *reviewMutationService {
+	if h.reviewMutations == nil {
+		h.reviewMutations = NewReviewMutationService(h.runner, h.nodes, h.stateMachine)
+	}
+	return h.reviewMutations
 }
 
 // WithArtifactReviewStore sets the artifact review store for persisting
 // PENDING/APPROVED/REJECTED artifact review records.
 func (h *Handler) WithArtifactReviewStore(store ArtifactReviewStore) *Handler {
 	h.artifactReview = store
+	h.ensureReviewMutations().WithArtifactReviewStore(store)
 	return h
 }
 
 // WithDecisionLogWriter sets the decision log writer for audit-trail persistence.
 func (h *Handler) WithDecisionLogWriter(w DecisionLogWriter) *Handler {
 	h.decisionLog = w
+	h.ensureReviewMutations().WithDecisionLogWriter(w)
 	return h
 }
 
 // WithArtifactService sets the artifact service for stale tracking on review actions.
 func (h *Handler) WithArtifactService(s ArtifactService) *Handler {
 	h.artifactService = s
+	h.ensureReviewMutations().WithArtifactService(s)
 	return h
 }
 
 // WithProjectIDResolver sets the resolver to look up project ID from task ID.
 func (h *Handler) WithProjectIDResolver(r ProjectIDResolver) *Handler {
 	h.projectIDResolver = r
+	h.ensureReviewMutations().WithProjectIDResolver(r)
 	return h
 }
 
@@ -140,7 +155,17 @@ func (h *Handler) WithTaskPauser(pauser TaskPauser) *Handler {
 
 func (h *Handler) WithRegenerationDispatcher(dispatcher RegenerationDispatcher) *Handler {
 	h.regeneration = dispatcher
+	h.ensureReviewMutations().WithRegenerationDispatcher(dispatcher)
 	return h
+}
+
+type CreatorReviewMutationService interface {
+	ReviewMutationService
+	ReviewGateResolver
+}
+
+func (h *Handler) ReviewMutations() CreatorReviewMutationService {
+	return h.ensureReviewMutations()
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
@@ -333,26 +358,10 @@ func (h *Handler) ApproveReview(c *gin.Context) {
 		ReviewerID string `json:"reviewerId,omitempty"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	if err := h.stateMachine.OnSuccess(c.Request.Context(), node.ID, map[string]interface{}{
-		"approved":      true,
-		"humanApproved": true,
-		"comment":       req.Comment,
-		"artifactId":    nodeInputString(node, "artifactId"),
-		"stage":         nodeInputString(node, "stage"),
-		"roleAgentId":   nodeInputString(node, "roleAgentId"),
-	}); err != nil {
+	if err := h.reviewMutations.Confirm(c.Request.Context(), run.ID, node.ID, req.ReviewerID, req.Comment); err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	// Sync artifact_review status to APPROVED.
-	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewApproved, req.ReviewerID, req.Comment)
-
-	// Write decision log entry for audit trail.
-	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageApproval, req.ReviewerID, req.Comment)
-
-	// Mark the reviewed artifact as approved.
-	h.approveReviewedArtifact(c.Request.Context(), run, node, req.ReviewerID)
 
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "APPROVED"})
 }
@@ -420,6 +429,7 @@ func (h *Handler) writeDecisionLog(ctx context.Context, run *Run, node *model.No
 		}
 	}
 	_ = h.decisionLog.Save(ctx, &DecisionLogRecord{
+		WorkflowRunID:  run.ID,
 		TaskID:         run.TaskID,
 		StageName:      stageName,
 		DecisionType:   decisionType,
@@ -922,31 +932,10 @@ func (h *Handler) SubmitEdited(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	output := map[string]interface{}{
-		"approved":              true,
-		"humanApproved":         true,
-		"edited":                true,
-		"editContent":           req.Content,
-		"comment":               req.Comment,
-		"stage":                 nodeInputString(node, "stage"),
-		"roleAgentId":           nodeInputString(node, "roleAgentId"),
-		"staleTrackingRequired": true,
-		"staleTracker":          "stale_tracker",
-		"staleArtifacts":        downstreamStaleArtifactsForReview(node),
-	}
-	if err := h.stateMachine.OnSuccess(c.Request.Context(), node.ID, output); err != nil {
+	if err := h.reviewMutations.SubmitEdited(c.Request.Context(), run.ID, node.ID, req.ReviewerID, req.Comment, req.Content); err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	h.updateArtifactReviewStatus(c.Request.Context(), node.ID, ArtifactReviewApproved, req.ReviewerID, req.Comment)
-	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageEdit, req.ReviewerID, req.Comment)
-
-	// Mark reviewed artifact as approved.
-	h.approveReviewedArtifact(c.Request.Context(), run, node, req.ReviewerID)
-
-	// Force downstream stale: editing an artifact invalidates everything downstream.
-	h.triggerDownstreamStale(c.Request.Context(), run, node, "用户修改上游产物")
 
 	httpx.OK(c, gin.H{"reviewId": node.ID, "status": "APPROVED_EDITED"})
 }
@@ -972,41 +961,18 @@ func (h *Handler) RegenerateStage(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	// Reset the exec node that feeds into this review gate.
-	sourceNodeID, err := h.regenerateSourceNode(c.Request.Context(), node)
+	staleArtifacts, err := h.reviewMutations.Regenerate(c.Request.Context(), run.ID, node.ID, req.ReviewerID, req.Hint)
 	if err != nil {
 		httpx.Fail(c, http.StatusInternalServerError, "failed to regenerate source: "+err.Error())
 		return
 	}
-
-	// Reset the review gate itself to CREATED so it re-enters the ready cycle.
-	if err := h.nodes.UpdateStatus(c.Request.Context(), node.ID, model.NodeCreated, nil, ""); err != nil {
-		httpx.Fail(c, http.StatusInternalServerError, "failed to reset review gate: "+err.Error())
-		return
-	}
-	if h.regeneration != nil {
-		if err := h.regeneration.ResumeTask(c.Request.Context(), node.TaskID); err != nil {
-			httpx.Fail(c, http.StatusInternalServerError, "failed to resume regenerated task: "+err.Error())
-			return
-		}
-		if err := h.regeneration.RetryNode(c.Request.Context(), sourceNodeID); err != nil {
-			httpx.Fail(c, http.StatusInternalServerError, "failed to dispatch regenerated source: "+err.Error())
-			return
-		}
-	}
-
-	// Write audit trail.
-	h.writeDecisionLog(c.Request.Context(), run, node, DecisionStageRegeneration, req.ReviewerID, req.Hint)
-
-	// Force downstream stale: regenerating a stage invalidates everything downstream.
-	h.triggerDownstreamStale(c.Request.Context(), run, node, "用户重新生成阶段")
 
 	httpx.OK(c, gin.H{
 		"reviewId":              node.ID,
 		"status":                "REGENERATING",
 		"staleTrackingRequired": true,
 		"staleTracker":          "stale_tracker",
-		"staleArtifacts":        downstreamStaleArtifactsForReview(node),
+		"staleArtifacts":        staleArtifacts,
 	})
 }
 

@@ -130,11 +130,22 @@ func marshalRunFields(run *Run) ([]byte, []byte, []byte) {
 }
 
 func (r *Repository) FindRun(ctx context.Context, id string) (*Run, error) {
-	row := r.pool.QueryRow(ctx,
+	return scanRun(r.pool.QueryRow(ctx,
 		`SELECT id, task_id, user_id, domain, message, plan_json, status, budget_json, metadata_json, created_at, updated_at
 		 FROM agent_runs WHERE id=$1`, id,
-	)
+	))
+}
 
+func (r *Repository) FindRunByTaskID(ctx context.Context, taskID string) (*Run, error) {
+	return scanRun(r.pool.QueryRow(ctx,
+		`SELECT id, task_id, user_id, domain, message, plan_json, status, budget_json, metadata_json, created_at, updated_at
+		 FROM agent_runs
+		 WHERE task_id=$1
+		   AND (SELECT COUNT(*) FROM agent_runs WHERE task_id=$1)=1`, taskID,
+	))
+}
+
+func scanRun(row pgx.Row) (*Run, error) {
 	var run Run
 	var planJSON, budgetJSON, metadataJSON []byte
 	var taskID, userID, domain *string

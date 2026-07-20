@@ -56,6 +56,12 @@ func (h *Handler) SetRevisionConfig(skillRoot string, llm ReviseLLMFunc) {
 	h.revisions.SetConfig(skillRoot, llm)
 }
 
+// RevisionService exposes the configured immutable revision coordinator to
+// other authenticated backend surfaces without duplicating its LLM/content setup.
+func (h *Handler) RevisionService() *RevisionService {
+	return h.revisions
+}
+
 func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
 	api := r.Group("/api", middleware...)
 	{

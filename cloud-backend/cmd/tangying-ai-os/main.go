@@ -545,8 +545,6 @@ func main() {
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
 		stageApprovalSvc.WithArtifactApprover(artifactSvc)
-		creatorViewSvc := videoSvc.NewCreatorViewService(videoProjectSvc, videoCreationSvc, artifactSvc)
-		videoHandler.NewCreatorViewHandler(videoProjectSvc, creatorViewSvc, requireAuth).RegisterRoutes(r)
 		videoAssets.NewHandler(artifactSvc, requireAuth).RegisterRoutes(r)
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
 			WithCheckpointService(checkpointSvc).
@@ -578,6 +576,9 @@ func main() {
 			}
 			return content, nil
 		})
+		creatorViewSvc := videoSvc.NewCreatorViewService(videoProjectSvc, videoCreationSvc, artifactSvc).
+			WithStepMutations(artifactHandler.RevisionService(), agentRuntimeHandler.ReviewMutations())
+		videoHandler.NewCreatorViewHandler(videoProjectSvc, creatorViewSvc, requireAuth).RegisterRoutes(r)
 		artifactHandler.RegisterRoutes(r, requireAuth)
 
 		// Wire artifact service into the agent runtime handler for stale tracking

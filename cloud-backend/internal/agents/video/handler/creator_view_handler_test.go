@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
+	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
+	"github.com/tangying-ai/aios-core/internal/core/artifact"
 	"github.com/tangying-ai/aios-core/internal/core/auth"
 )
 
@@ -84,6 +87,101 @@ func TestCreatorViewRouteDoesNotConflictWithProjectIDRoute(t *testing.T) {
 	}
 }
 
+func TestCreatorStepRoutesRequireAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	NewCreatorViewHandler(&fakeCreatorViewProjectReader{}, &fakeCreatorViewReader{}).WithStepMutator(&fakeCreatorStepMutator{}).RegisterRoutes(router)
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/video-projects/vp-1/steps/script/versions", ""},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/revision-impact", `{"artifactId":"a","baseVersion":1}`},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", `{"artifactId":"a","baseVersion":1,"mode":"direct","directContent":"x"}`},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/confirm", `{"artifactId":"a"}`},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/versions/1/restore", `{"baseVersion":2}`},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s status=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestCreatorStepRoutesVerifyOwnerAndDelegateAllContracts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	project := &fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "u-auth"}}
+	mutations := &fakeCreatorStepMutator{
+		impact: model.StepImpact{AffectedStepIDs: []model.CreatorStepID{model.CreatorStepShots}, RequiresConfirmation: true},
+		result: &model.StepMutationResult{Artifact: &artifact.Artifact{ID: "script-v4", Version: 4}, View: &model.CreationView{}},
+		view:   &model.CreationView{}, versions: &model.StepVersions{Versions: []model.CreatorArtifactVersion{{ArtifactID: "script-v3", Version: 3, IsCurrent: true}}},
+	}
+	router := authenticatedCreatorRouter(project, mutations)
+
+	cases := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/video-projects/vp-1/steps/script/versions", ""},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/revision-impact", `{"artifactId":"script-v3","baseVersion":3}`},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", `{"artifactId":"script-v3","baseVersion":3,"mode":"direct","directContent":"新版"}`},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/confirm", `{"artifactId":"script-v4"}`},
+		{http.MethodPost, "/api/video-projects/vp-1/steps/script/versions/2/restore", `{"baseVersion":4}`},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s status=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+	if project.userID != "u-auth" || mutations.userID != "u-auth" || mutations.projectID != "vp-1" || mutations.stepID != model.CreatorStepScript || mutations.restoreVersion != 2 {
+		t.Fatalf("project=%+v mutations=%+v", project, mutations)
+	}
+}
+
+func TestCreatorStepRevisionRequiresPositiveBaseVersionBeforeServiceCall(t *testing.T) {
+	mutations := &fakeCreatorStepMutator{}
+	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1"}}, mutations)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", bytes.NewBufferString(`{"artifactId":"script-v3","mode":"direct","directContent":"新版"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || mutations.reviseCalls != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", rec.Code, mutations.reviseCalls, rec.Body.String())
+	}
+}
+
+func TestCreatorStepHandlerMapsStaleBaseToConflict(t *testing.T) {
+	mutations := &fakeCreatorStepMutator{err: videoSvc.ErrCreatorVersionConflict}
+	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1"}}, mutations)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", bytes.NewBufferString(`{"artifactId":"script-v3","baseVersion":3,"mode":"direct","directContent":"新版"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func authenticatedCreatorRouter(projects creatorViewProjectReader, mutations creatorStepMutator) *gin.Engine {
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreatorViewHandler(projects, &fakeCreatorViewReader{}).WithStepMutator(mutations).RegisterRoutes(router)
+	return router
+}
+
 type fakeCreatorViewProjectReader struct {
 	project   *model.VideoProject
 	err       error
@@ -106,4 +204,48 @@ type fakeCreatorViewReader struct {
 func (f *fakeCreatorViewReader) GetCreationView(_ context.Context, userID, projectID string) (*model.CreationView, error) {
 	f.userID, f.projectID = userID, projectID
 	return f.view, f.err
+}
+
+type fakeCreatorStepMutator struct {
+	impact         model.StepImpact
+	result         *model.StepMutationResult
+	view           *model.CreationView
+	versions       *model.StepVersions
+	err            error
+	userID         string
+	projectID      string
+	stepID         model.CreatorStepID
+	restoreVersion int
+	reviseCalls    int
+}
+
+func (f *fakeCreatorStepMutator) capture(userID, projectID string, stepID model.CreatorStepID) {
+	f.userID, f.projectID, f.stepID = userID, projectID, stepID
+}
+
+func (f *fakeCreatorStepMutator) GetStepVersions(_ context.Context, userID, projectID string, stepID model.CreatorStepID) (*model.StepVersions, error) {
+	f.capture(userID, projectID, stepID)
+	return f.versions, f.err
+}
+
+func (f *fakeCreatorStepMutator) PreviewStepRevision(_ context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepRevisionRequest) (model.StepImpact, error) {
+	f.capture(userID, projectID, stepID)
+	return f.impact, f.err
+}
+
+func (f *fakeCreatorStepMutator) ReviseStep(_ context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepRevisionRequest) (*model.StepMutationResult, error) {
+	f.capture(userID, projectID, stepID)
+	f.reviseCalls++
+	return f.result, f.err
+}
+
+func (f *fakeCreatorStepMutator) ConfirmStep(_ context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepConfirmRequest) (*model.CreationView, error) {
+	f.capture(userID, projectID, stepID)
+	return f.view, f.err
+}
+
+func (f *fakeCreatorStepMutator) RestoreStepVersion(_ context.Context, userID, projectID string, stepID model.CreatorStepID, version int, req model.StepRestoreRequest) (*model.StepMutationResult, error) {
+	f.capture(userID, projectID, stepID)
+	f.restoreVersion = version
+	return f.result, f.err
 }

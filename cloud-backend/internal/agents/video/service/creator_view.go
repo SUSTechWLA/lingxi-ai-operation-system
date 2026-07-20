@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -23,6 +24,8 @@ var creatorStageSteps = map[string]model.CreatorStepID{
 	"proposal":           model.CreatorStepDirection,
 	"research":           model.CreatorStepDirection,
 	"style":              model.CreatorStepDirection,
+	"character":          model.CreatorStepDirection,
+	"characters":         model.CreatorStepDirection,
 	"feasibility":        model.CreatorStepDirection,
 
 	"script":       model.CreatorStepScript,
@@ -81,6 +84,7 @@ type creatorShotReadState struct {
 	Summary       model.ShotSummary
 	Tasks         []model.ShotRegenerationTask
 	AssemblyDirty bool
+	ShotIDs       []string
 }
 
 type creatorShotReader interface {
@@ -93,10 +97,47 @@ type CreatorViewService struct {
 	projects  creatorProjectReader
 	artifacts creatorArtifactReader
 	shots     creatorShotReader
+	history   creatorArtifactHistoryReader
+	revisions creatorRevisionService
+	reviews   creatorReviewMutations
 }
+
+type creatorArtifactHistoryReader interface {
+	GetByID(context.Context, string) (*artifact.Artifact, error)
+	GetCurrent(context.Context, string, string, string) (*artifact.Artifact, error)
+	GetHistory(context.Context, string, string, string) ([]*artifact.Artifact, error)
+}
+
+type creatorRevisionService interface {
+	Revise(context.Context, artifact.ReviseRequest) (*artifact.RevisionResult, error)
+	Restore(context.Context, artifact.RestoreRequest) (*artifact.RevisionResult, error)
+}
+
+type creatorReviewMutations interface {
+	ResolveReviewGate(context.Context, *artifact.Artifact, string, string) (string, string, error)
+	Confirm(context.Context, string, string, string, string) error
+	ReopenWithArtifact(context.Context, string, string, string, string, string) error
+}
+
+var (
+	ErrCreatorStepInvalid         = errors.New("creator step is invalid")
+	ErrCreatorArtifactNotFound    = errors.New("creator artifact not found")
+	ErrCreatorVersionConflict     = errors.New("creator artifact version conflict")
+	ErrCreatorImpactMismatch      = errors.New("creator impact confirmation mismatch")
+	ErrCreatorMutationUnavailable = errors.New("creator step mutation is unavailable")
+	ErrCreatorInvalidRequest      = errors.New("creator step request is invalid")
+)
 
 func NewCreatorViewService(projects creatorProjectReader, shots creatorShotReader, artifacts creatorArtifactReader) *CreatorViewService {
 	return &CreatorViewService{projects: projects, artifacts: artifacts, shots: shots}
+}
+
+func (s *CreatorViewService) WithStepMutations(revisions creatorRevisionService, reviews creatorReviewMutations) *CreatorViewService {
+	s.revisions, s.reviews = revisions, reviews
+	if history, ok := s.artifacts.(creatorArtifactHistoryReader); ok {
+		s.history = history
+	}
+	return s
 }
 
 func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projectID string) (*model.CreationView, error) {
@@ -175,6 +216,18 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 	}
 	for i := range steps {
 		steps[i].AllowedActions = actionsForCreatorState(steps[i].State)
+		if steps[i].CurrentArtifactID != "" && s.reviews != nil {
+			for _, current := range artifacts {
+				if current != nil && current.ID == steps[i].CurrentArtifactID {
+					if runID, reviewID, resolveErr := s.reviews.ResolveReviewGate(ctx, current, "", ""); resolveErr == nil {
+						steps[i].RunID, steps[i].ReviewID = runID, reviewID
+					} else {
+						steps[i].RunID, steps[i].ReviewID = "", ""
+					}
+					break
+				}
+			}
+		}
 	}
 	activeTasks = deduplicateCreatorTasks(activeTasks)
 
@@ -203,7 +256,367 @@ func (s *CreationService) getCreatorShotReadState(ctx context.Context, userID, p
 		}
 		return tasks[i].TaskID < tasks[j].TaskID
 	})
-	return creatorShotReadState{Summary: summary, Tasks: tasks, AssemblyDirty: state.AssemblyDirty}, nil
+	shotIDs := make([]string, 0, len(state.Shots))
+	for _, shot := range state.Shots {
+		if shot.ID != "" {
+			shotIDs = append(shotIDs, shot.ID)
+		}
+	}
+	sort.Strings(shotIDs)
+	return creatorShotReadState{Summary: summary, Tasks: tasks, AssemblyDirty: state.AssemblyDirty, ShotIDs: shotIDs}, nil
+}
+
+func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepRevisionRequest) (*model.StepMutationResult, error) {
+	if s.revisions == nil || s.reviews == nil || s.history == nil {
+		return nil, ErrCreatorMutationUnavailable
+	}
+	if !knownCreatorStep(stepID) {
+		return nil, ErrCreatorStepInvalid
+	}
+	if req.BaseVersion <= 0 {
+		return nil, ErrCreatorVersionConflict
+	}
+	base, err := s.history.GetByID(ctx, req.ArtifactID)
+	if err != nil || base == nil || base.ProjectID != projectID {
+		return nil, ErrCreatorArtifactNotFound
+	}
+	current, err := s.history.GetCurrent(ctx, projectID, base.StageName, base.UnitID)
+	if err != nil || current == nil || current.ID != base.ID || current.Version != req.BaseVersion {
+		return nil, ErrCreatorVersionConflict
+	}
+	authoritative, err := s.currentArtifactForStep(ctx, projectID, stepID)
+	if err != nil || authoritative.ID != base.ID {
+		return nil, ErrCreatorVersionConflict
+	}
+	if mapped, ok := creatorStepForStage(base.StageName); !ok || mapped != stepID {
+		return nil, ErrCreatorArtifactNotFound
+	}
+	mode := req.Mode
+	var directContent []byte
+	message := ""
+	switch mode {
+	case "direct":
+		if strings.TrimSpace(req.DirectContent) == "" || strings.TrimSpace(req.Instruction) != "" {
+			return nil, ErrCreatorInvalidRequest
+		}
+		directContent = []byte(req.DirectContent)
+	case "instruction":
+		if strings.TrimSpace(req.Instruction) == "" || strings.TrimSpace(req.DirectContent) != "" {
+			return nil, ErrCreatorInvalidRequest
+		}
+		message = strings.TrimSpace(req.Instruction)
+	default:
+		return nil, ErrCreatorInvalidRequest
+	}
+	selection, err := normalizeArtifactSelection(req.Selection)
+	if err != nil {
+		return nil, err
+	}
+	impact, err := s.stepImpact(ctx, userID, projectID, stepID, base)
+	if err != nil {
+		return nil, err
+	}
+	if !sameExactIDs(req.ConfirmedAffectedShotIDs, impact.AffectedShotIDs) {
+		return nil, ErrCreatorImpactMismatch
+	}
+	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, base, req.RunID, req.ReviewID)
+	if err != nil {
+		return nil, err
+	}
+	provenance := map[string]interface{}{"mode": mode, "baseVersion": req.BaseVersion}
+	if selection != nil {
+		provenance["selection"] = selection
+	}
+	revised, err := s.revisions.Revise(ctx, artifact.ReviseRequest{
+		ArtifactID: base.ID, Message: message, DirectContent: directContent, Provenance: provenance,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if revised == nil || revised.Artifact == nil {
+		return nil, fmt.Errorf("revision produced no artifact")
+	}
+	if !validCreatorRevisionChild(revised.Artifact, base, projectID, stepID) {
+		return nil, ErrCreatorArtifactNotFound
+	}
+	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, revised.Artifact.ID, userID, "内容已修改，请重新确认"); err != nil {
+		return nil, err
+	}
+	view, err := s.GetCreationView(ctx, userID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StepMutationResult{Artifact: revised.Artifact, Impact: impact, View: view}, nil
+}
+
+func (s *CreatorViewService) PreviewStepRevision(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepRevisionRequest) (model.StepImpact, error) {
+	if !knownCreatorStep(stepID) {
+		return model.StepImpact{}, ErrCreatorStepInvalid
+	}
+	if s.history == nil || req.BaseVersion <= 0 {
+		return model.StepImpact{}, ErrCreatorVersionConflict
+	}
+	base, err := s.history.GetByID(ctx, req.ArtifactID)
+	if err != nil || base == nil || base.ProjectID != projectID {
+		return model.StepImpact{}, ErrCreatorArtifactNotFound
+	}
+	if mapped, ok := creatorStepForStage(base.StageName); !ok || mapped != stepID {
+		return model.StepImpact{}, ErrCreatorArtifactNotFound
+	}
+	current, err := s.history.GetCurrent(ctx, projectID, base.StageName, base.UnitID)
+	if err != nil || current == nil || current.ID != base.ID || current.Version != req.BaseVersion {
+		return model.StepImpact{}, ErrCreatorVersionConflict
+	}
+	authoritative, err := s.currentArtifactForStep(ctx, projectID, stepID)
+	if err != nil || authoritative.ID != base.ID {
+		return model.StepImpact{}, ErrCreatorVersionConflict
+	}
+	return s.stepImpact(ctx, userID, projectID, stepID, base)
+}
+
+func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, version int, req model.StepRestoreRequest) (*model.StepMutationResult, error) {
+	if s.revisions == nil || s.reviews == nil || s.history == nil {
+		return nil, ErrCreatorMutationUnavailable
+	}
+	if !knownCreatorStep(stepID) || version <= 0 {
+		return nil, ErrCreatorStepInvalid
+	}
+	current, err := s.currentArtifactForStep(ctx, projectID, stepID)
+	if err != nil {
+		return nil, err
+	}
+	if req.BaseVersion <= 0 || current.Version != req.BaseVersion {
+		return nil, ErrCreatorVersionConflict
+	}
+	history, err := s.history.GetHistory(ctx, projectID, current.StageName, current.UnitID)
+	if err != nil {
+		return nil, err
+	}
+	var historical *artifact.Artifact
+	for _, candidate := range history {
+		if candidate != nil && candidate.Version == version && candidate.ProjectID == projectID && candidate.StageName == current.StageName && candidate.UnitID == current.UnitID {
+			historical = candidate
+			break
+		}
+	}
+	if historical == nil {
+		return nil, ErrCreatorArtifactNotFound
+	}
+	impact, err := s.stepImpact(ctx, userID, projectID, stepID, current)
+	if err != nil {
+		return nil, err
+	}
+	if !sameExactIDs(req.ConfirmedAffectedShotIDs, impact.AffectedShotIDs) {
+		return nil, ErrCreatorImpactMismatch
+	}
+	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, current, req.RunID, req.ReviewID)
+	if err != nil {
+		return nil, err
+	}
+	restored, err := s.revisions.Restore(ctx, artifact.RestoreRequest{ArtifactID: historical.ID, ReviewerID: userID, Reason: strings.TrimSpace(req.Reason)})
+	if err != nil {
+		return nil, err
+	}
+	if restored == nil || restored.Artifact == nil {
+		return nil, fmt.Errorf("restore produced no artifact")
+	}
+	if !validCreatorRevisionChild(restored.Artifact, current, projectID, stepID) {
+		return nil, ErrCreatorArtifactNotFound
+	}
+	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, restored.Artifact.ID, userID, "历史版本已恢复，请重新确认"); err != nil {
+		return nil, err
+	}
+	view, err := s.GetCreationView(ctx, userID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StepMutationResult{Artifact: restored.Artifact, Impact: impact, View: view}, nil
+}
+
+func (s *CreatorViewService) GetStepVersions(ctx context.Context, userID, projectID string, stepID model.CreatorStepID) (*model.StepVersions, error) {
+	if s.history == nil {
+		return nil, ErrCreatorMutationUnavailable
+	}
+	if !knownCreatorStep(stepID) {
+		return nil, ErrCreatorStepInvalid
+	}
+	current, err := s.currentArtifactForStep(ctx, projectID, stepID)
+	if err != nil {
+		return nil, err
+	}
+	history, err := s.history.GetHistory(ctx, projectID, current.StageName, current.UnitID)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]*artifact.Artifact, 0, len(history))
+	for _, item := range history {
+		if item != nil && item.ProjectID == projectID && item.StageName == current.StageName && item.UnitID == current.UnitID {
+			filtered = append(filtered, item)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Version != filtered[j].Version {
+			return filtered[i].Version > filtered[j].Version
+		}
+		return filtered[i].ID > filtered[j].ID
+	})
+	versions := make([]model.CreatorArtifactVersion, 0, len(filtered))
+	for _, item := range filtered {
+		versions = append(versions, model.CreatorArtifactVersion{ArtifactID: item.ID, Version: item.Version, IsCurrent: item.ID == current.ID, CreatedAt: item.CreatedAt})
+	}
+	return &model.StepVersions{Versions: versions}, nil
+}
+
+func (s *CreatorViewService) ConfirmStep(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepConfirmRequest) (*model.CreationView, error) {
+	if s.reviews == nil || s.history == nil {
+		return nil, ErrCreatorMutationUnavailable
+	}
+	if !knownCreatorStep(stepID) {
+		return nil, ErrCreatorStepInvalid
+	}
+	current, err := s.currentArtifactForStep(ctx, projectID, stepID)
+	if err != nil {
+		return nil, err
+	}
+	if req.ArtifactID == "" || req.ArtifactID != current.ID {
+		return nil, ErrCreatorArtifactNotFound
+	}
+	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, current, req.RunID, req.ReviewID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.reviews.Confirm(ctx, runID, reviewID, userID, strings.TrimSpace(req.Comment)); err != nil {
+		return nil, err
+	}
+	return s.GetCreationView(ctx, userID, projectID)
+}
+
+func (s *CreatorViewService) currentArtifactForStep(ctx context.Context, projectID string, stepID model.CreatorStepID) (*artifact.Artifact, error) {
+	items, err := s.artifacts.ListCurrentByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	selection := model.CreatorStep{ID: stepID, State: model.CreatorStepNotStarted}
+	byID := make(map[string]*artifact.Artifact, len(items))
+	for _, candidate := range items {
+		if candidate == nil {
+			continue
+		}
+		mapped, ok := creatorStepForStage(candidate.StageName)
+		if !ok || mapped != stepID || candidate.ProjectID != projectID {
+			continue
+		}
+		byID[candidate.ID] = candidate
+		if stepID == model.CreatorStepShots {
+			if artifactPreferred(candidate, selection) {
+				applyArtifact(&selection, candidate, selection.State)
+			}
+			continue
+		}
+		state := stateForArtifact(candidate)
+		if statePriority(state) > statePriority(selection.State) ||
+			(statePriority(state) == statePriority(selection.State) && artifactPreferred(candidate, selection)) {
+			applyArtifact(&selection, candidate, state)
+		}
+	}
+	current := byID[selection.CurrentArtifactID]
+	if current == nil {
+		return nil, ErrCreatorArtifactNotFound
+	}
+	return current, nil
+}
+
+func knownCreatorStep(stepID model.CreatorStepID) bool {
+	for _, definition := range creatorStepDefinitions {
+		if definition.id == stepID {
+			return true
+		}
+	}
+	return false
+}
+
+func validCreatorRevisionChild(candidate, parent *artifact.Artifact, projectID string, stepID model.CreatorStepID) bool {
+	if candidate == nil || parent == nil || candidate.ProjectID != projectID || candidate.ParentID != parent.ID || candidate.Version != parent.Version+1 {
+		return false
+	}
+	mapped, ok := creatorStepForStage(candidate.StageName)
+	return ok && mapped == stepID && candidate.StageName == parent.StageName && candidate.UnitID == parent.UnitID
+}
+
+func normalizeArtifactSelection(selection *model.ArtifactSelection) (map[string]interface{}, error) {
+	if selection == nil {
+		return nil, nil
+	}
+	kind := strings.ToLower(strings.TrimSpace(selection.Kind))
+	switch kind {
+	case "rect":
+		if selection.X == nil || selection.Y == nil || selection.Width == nil || selection.Height == nil || selection.StartMs != nil || selection.EndMs != nil {
+			return nil, ErrCreatorInvalidRequest
+		}
+		x, y, width, height := *selection.X, *selection.Y, *selection.Width, *selection.Height
+		if x < 0 || y < 0 || width <= 0 || height <= 0 || x > 1 || y > 1 || x+width > 1 || y+height > 1 {
+			return nil, ErrCreatorInvalidRequest
+		}
+		return map[string]interface{}{"kind": kind, "x": x, "y": y, "width": width, "height": height}, nil
+	case "time":
+		if selection.StartMs == nil || selection.EndMs == nil || selection.X != nil || selection.Y != nil || selection.Width != nil || selection.Height != nil {
+			return nil, ErrCreatorInvalidRequest
+		}
+		if *selection.StartMs < 0 || *selection.EndMs <= *selection.StartMs {
+			return nil, ErrCreatorInvalidRequest
+		}
+		return map[string]interface{}{"kind": kind, "startMs": *selection.StartMs, "endMs": *selection.EndMs}, nil
+	default:
+		return nil, ErrCreatorInvalidRequest
+	}
+}
+
+func (s *CreatorViewService) stepImpact(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact) (model.StepImpact, error) {
+	downstream := map[model.CreatorStepID][]model.CreatorStepID{
+		model.CreatorStepRequirements: {model.CreatorStepDirection, model.CreatorStepScript, model.CreatorStepShots, model.CreatorStepPreview, model.CreatorStepDelivery},
+		model.CreatorStepDirection:    {model.CreatorStepScript, model.CreatorStepShots, model.CreatorStepPreview, model.CreatorStepDelivery},
+		model.CreatorStepScript:       {model.CreatorStepShots, model.CreatorStepPreview, model.CreatorStepDelivery},
+		model.CreatorStepShots:        {model.CreatorStepPreview, model.CreatorStepDelivery},
+		model.CreatorStepPreview:      {model.CreatorStepDelivery},
+		model.CreatorStepDelivery:     {},
+	}
+	affected, ok := downstream[stepID]
+	if !ok {
+		return model.StepImpact{}, ErrCreatorStepInvalid
+	}
+	impact := model.StepImpact{AffectedStepIDs: append([]model.CreatorStepID(nil), affected...), RequiresConfirmation: len(affected) > 0}
+	stage := ""
+	if current != nil {
+		stage = normalizeCreatorStage(current.StageName)
+	}
+	if stage == "script" || stage == "character" || stage == "characters" || stage == "audio_master" || stage == "style" {
+		shotState, err := s.shots.getCreatorShotReadState(ctx, userID, projectID)
+		if err != nil {
+			return model.StepImpact{}, err
+		}
+		impact.AffectedShotIDs = append([]string(nil), shotState.ShotIDs...)
+		sort.Strings(impact.AffectedShotIDs)
+	}
+	return impact, nil
+}
+
+func sameExactIDs(actual, expected []string) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	seen := make(map[string]bool, len(actual))
+	for _, id := range actual {
+		if id == "" || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	for _, id := range expected {
+		if !seen[id] {
+			return false
+		}
+	}
+	return true
 }
 
 func newCreatorSteps() []model.CreatorStep {

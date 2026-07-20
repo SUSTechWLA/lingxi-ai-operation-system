@@ -34,6 +34,9 @@ type ReviseRequest struct {
 	DirectContent  []byte
 	ModelProvider  map[string]interface{}
 	ModelProviders map[string]interface{}
+	// Provenance is immutable structured context supplied by higher-level
+	// revision surfaces, such as a normalized rectangle or time selection.
+	Provenance map[string]interface{}
 }
 
 type RestoreRequest struct {
@@ -99,6 +102,12 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 	}
 
 	revisionRequest := BuildRevisionRequest(base, req.Message, data)
+	if revisionRequest.Metadata == nil {
+		revisionRequest.Metadata = map[string]interface{}{}
+	}
+	for key, value := range req.Provenance {
+		revisionRequest.Metadata[key] = deepCloneMetadataValue(value)
+	}
 	// An explicit revision is an auditable user action, even when it happens
 	// to produce bytes that hash-identically to an existing version.
 	revisionRequest.ForceNewVersion = true

@@ -90,6 +90,10 @@ type RunStore interface {
 	ReleaseTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
 }
 
+type runByTaskStore interface {
+	FindRunByTaskID(ctx context.Context, taskID string) (*Run, error)
+}
+
 type TerminalEventDelivery struct {
 	RunID      string
 	EventID    string
@@ -741,6 +745,17 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 		}
 	}
 	return run, task, nil
+}
+
+func (r *Runner) findRunByTaskID(ctx context.Context, taskID string) (*Run, error) {
+	if r == nil || r.store == nil || strings.TrimSpace(taskID) == "" {
+		return nil, nil
+	}
+	store, ok := r.store.(runByTaskStore)
+	if !ok {
+		return nil, nil
+	}
+	return store.FindRunByTaskID(ctx, taskID)
 }
 
 func taskStatusString(task map[string]interface{}) string {

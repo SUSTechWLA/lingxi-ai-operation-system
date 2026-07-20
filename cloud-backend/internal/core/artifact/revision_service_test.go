@@ -80,6 +80,28 @@ func TestRevisionServiceDirectContentBypassesGeneratorAndMarksDownstreamOnce(t *
 	}
 }
 
+func TestRevisionServiceCopiesStructuredCreatorProvenanceIntoNewArtifact(t *testing.T) {
+	repo := newRevisionServiceFake(t, revisionTestArtifact())
+	revisions := NewRevisionService(repo)
+	selection := map[string]interface{}{"kind": "time", "startMs": int64(100), "endMs": int64(900)}
+
+	_, err := revisions.Revise(context.Background(), ReviseRequest{
+		ArtifactID: "artifact-v1", DirectContent: []byte("direct replacement"),
+		Provenance: map[string]interface{}{"mode": "direct", "baseVersion": 1, "selection": selection},
+	})
+	if err != nil {
+		t.Fatalf("Revise error: %v", err)
+	}
+	want := map[string]interface{}{"kind": "time", "startMs": int64(100), "endMs": int64(900)}
+	if got := repo.lastCreate.Metadata["selection"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("selection metadata = %#v, want %#v", got, want)
+	}
+	selection["startMs"] = int64(500)
+	if got := repo.lastCreate.Metadata["selection"].(map[string]interface{})["startMs"]; got != int64(100) {
+		t.Fatalf("stored provenance aliased caller selection: %#v", repo.lastCreate.Metadata["selection"])
+	}
+}
+
 func TestRevisionServiceDirectIdenticalContentForcesNewVersion(t *testing.T) {
 	repo := newRevisionServiceFake(t, revisionTestArtifact())
 	revisions := NewRevisionService(repo)
