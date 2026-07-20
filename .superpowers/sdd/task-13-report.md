@@ -36,3 +36,10 @@ Implemented the creator preview and delivery surface, default creator routing ch
 
 - Added the read-only review-source `RegenerationStatus` query and used it in creation-view recovery. Active work remains generating with a durable task; failed/cancelled/unknown work is fail-safe failed with `assemblyDirty` in the view, so old media remains hidden and the creator can retry.
 - Ran `bash scripts/beta-smoke-check.sh`: code checks passed; smoke is blocked solely because `hyperframes-render-service/node_modules` is absent. Ran `bash scripts/beta-readiness-check.sh`: BLOCKED because the smoke prerequisite failed; local agent, HyperFrames health, FFmpeg and diagnostics were detected, but no real provider was configured.
+
+## Browser evidence
+
+- Authenticated 1440x900 start page: document/client/scroll width all 1440; only 开始创作 and 我的视频 navigation; screenshot `/Users/wanglian/.codex/visualizations/2026/07/19/019f7ad3-f7d4-7f00-832a-28a858d009fa/creator-start-1440.png`.
+- 1024x768 start page: client/scroll width both 1024, document height 905; screenshot `creator-start-1024.png` in the same folder.
+- 390x844 projects page: client/scroll width both 390, twelve cards, no internal-term regex match; screenshot `creator-projects-390.png` in the same folder. Active nav focus outline was `rgb(232,148,18) solid 3px`.
+- The running backend returned the user-safe `暂时无法读取创作进度，请稍后重试。` for the existing project's creation-view, so the live Shot workspace could not be inspected.

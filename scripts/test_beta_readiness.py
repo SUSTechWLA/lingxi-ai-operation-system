@@ -14,6 +14,7 @@ def base_snapshot():
         "ffmpeg": {"available": True},
         "diagnostics": {"available": True},
         "qaFixture": {"passed": True, "structuredShotReports": 2, "repairPlanAvailable": True},
+        "creatorStudio": {"checked": True},
         "mcpProviders": [
             {
                 "id": "jimeng",
@@ -30,6 +31,13 @@ def base_snapshot():
 
 
 class BetaReadinessTest(unittest.TestCase):
+    def test_creator_studio_contract_failure_blocks_beta(self):
+        snapshot = base_snapshot()
+        snapshot["creatorStudio"] = {"checked": False}
+        result = beta_readiness.evaluate(snapshot)
+        self.assertEqual(result["decision"], "BLOCKED")
+        self.assertIn("creator studio contract checks did not pass", result["blockingIssues"])
+
     def test_go_when_real_aigc_services_and_gates_are_ready(self):
         result = beta_readiness.evaluate(base_snapshot(), require_real_aigc=True)
 

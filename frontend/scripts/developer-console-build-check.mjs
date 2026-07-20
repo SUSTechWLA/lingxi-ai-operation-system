@@ -13,7 +13,7 @@ try {
     const env = { ...process.env }
     if (consoleValue === undefined) delete env.VITE_ENABLE_DEVELOPER_CONSOLE
     else env.VITE_ENABLE_DEVELOPER_CONSOLE = consoleValue
-    execFileSync(process.execPath, [vite, 'build', '--outDir', outDir, '--manifest'], {
+    execFileSync(process.execPath, [vite, 'build', '--outDir', outDir, '--emptyOutDir', '--manifest'], {
       env,
       stdio: 'inherit',
     })
