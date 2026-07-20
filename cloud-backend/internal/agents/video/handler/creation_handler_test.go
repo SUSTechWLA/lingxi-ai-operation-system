@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -49,10 +50,181 @@ func TestCreationHandlerUsesAuthenticatedUserForShotLock(t *testing.T) {
 	}
 }
 
+func TestCreationHandlerPassesFriendlyShotQueueFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/video-projects/vp-1/shots?status=needs_attention&limit=24&chapter=opening&query=morning", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || fake.shotPageQuery.Status != "needs_attention" || fake.shotPageQuery.Limit != 24 || fake.shotPageQuery.Chapter != "opening" || fake.shotPageQuery.Query != "morning" {
+		t.Fatalf("status=%d query=%+v body=%s", rec.Code, fake.shotPageQuery, rec.Body.String())
+	}
+}
+
+func TestCreationHandlerRegenerateShotV2PassesHeaderAndRequestFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/regenerations", strings.NewReader(`{"baseVersion":3,"scope":"base_media","locks":["duration"],"instruction":"make it warmer"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "request-1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.userID != "u-auth" || fake.projectID != "vp-1" || fake.shotID != "shot-1" || fake.regenerateV2Req.BaseVersion != 3 || fake.regenerateV2Req.Scope != "base_media" || fake.regenerateV2Req.IdempotencyKey != "request-1" || len(fake.regenerateV2Req.Locks) != 1 || fake.regenerateV2Req.Instruction != "make it warmer" {
+		t.Fatalf("captured request = %+v user=%q project=%q shot=%q", fake.regenerateV2Req, fake.userID, fake.projectID, fake.shotID)
+	}
+}
+
+func TestCreationHandlerMapsShotVersionConflictToConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{regenerateV2Err: videoSvc.ErrShotVersionConflict}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/regenerations", strings.NewReader(`{"baseVersion":3,"scope":"base_media","locks":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "request-1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreationHandlerCandidateMutationRequiresHeaderAndPassesContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", strings.NewReader(`{"baseVersion":3,"scope":"candidate_accept","locks":["duration"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "accept-1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || fake.candidateMutationReq.BaseVersion != 3 || fake.candidateMutationReq.Scope != "candidate_accept" || fake.candidateMutationReq.IdempotencyKey != "accept-1" || len(fake.candidateMutationReq.Locks) != 1 {
+		t.Fatalf("status=%d request=%+v body=%s", rec.Code, fake.candidateMutationReq, rec.Body.String())
+	}
+
+	missing := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", strings.NewReader(`{"baseVersion":3,"scope":"candidate_accept"}`))
+	missing.Header.Set("Content-Type", "application/json")
+	missingRec := httptest.NewRecorder()
+	router.ServeHTTP(missingRec, missing)
+	if missingRec.Code != http.StatusBadRequest {
+		t.Fatalf("missing idempotency header status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+}
+
+func TestCreationHandlerRequiresExplicitLocksForV2ShotMutations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+	for _, tt := range []struct{ path, body string }{
+		{"/api/video-projects/vp-1/shots/shot-1/regenerations", `{"baseVersion":3,"scope":"base_media"}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", `{"baseVersion":3,"scope":"candidate_accept"}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/restore", `{"baseVersion":3,"scope":"candidate_restore"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "request-1")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("path=%s absent locks status=%d body=%s", tt.path, rec.Code, rec.Body.String())
+		}
+	}
+	for _, tt := range []struct{ path, body string }{
+		{"/api/video-projects/vp-1/shots/shot-1/regenerations", `{"baseVersion":3,"scope":"base_media","locks":[]}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", `{"baseVersion":3,"scope":"candidate_accept","locks":[]}`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/restore", `{"baseVersion":3,"scope":"candidate_restore","locks":[]}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "request-2")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path=%s explicit empty locks status=%d body=%s", tt.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestCreationHandlerRequiresPositiveWireBaseVersionForV2ShotMutations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeCreationService{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), "u-auth"))
+		c.Next()
+	})
+	NewCreationHandler(fake).RegisterRoutes(router)
+	for _, tt := range []struct{ path, suffix string }{
+		{"/api/video-projects/vp-1/shots/shot-1/regenerations", `"scope":"base_media","locks":[]`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/accept", `"scope":"candidate_accept","locks":[]`},
+		{"/api/video-projects/vp-1/shots/shot-1/candidates/candidate-1/restore", `"scope":"candidate_restore","locks":[]`},
+	} {
+		for _, base := range []string{"", `"baseVersion":null,`, `"baseVersion":0,`, `"baseVersion":-1,`, `"baseVersion":"3",`} {
+			body := "{" + base + tt.suffix + "}"
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "request-1")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("path=%s body=%s status=%d response=%s", tt.path, body, rec.Code, rec.Body.String())
+			}
+		}
+		positive := "{\"baseVersion\":3," + tt.suffix + "}"
+		req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(positive))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "request-2")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path=%s positive status=%d response=%s", tt.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 type fakeCreationService struct {
-	userID    string
-	projectID string
-	shotID    string
+	userID               string
+	projectID            string
+	shotID               string
+	regenerateV2Req      videoSvc.RegenerateShotRequest
+	regenerateV2Err      error
+	candidateMutationReq videoSvc.CandidateMutationRequest
+	shotPageQuery        model.ShotPageQuery
 }
 
 func (f *fakeCreationService) GetSpec(ctx context.Context, userID, projectID string) (*model.VideoCreationSpec, error) {
@@ -87,6 +259,41 @@ func (f *fakeCreationService) RejectSpec(ctx context.Context, userID, projectID 
 func (f *fakeCreationService) ListShots(ctx context.Context, userID, projectID string) ([]model.ShotUnit, error) {
 	f.userID, f.projectID = userID, projectID
 	return []model.ShotUnit{}, nil
+}
+
+func (f *fakeCreationService) ListShotPage(ctx context.Context, userID, projectID string, query model.ShotPageQuery) (model.ShotPage, error) {
+	f.userID, f.projectID = userID, projectID
+	f.shotPageQuery = query
+	return model.ShotPage{}, nil
+}
+
+func (f *fakeCreationService) GetShotSummary(ctx context.Context, userID, projectID string) (model.ShotSummary, error) {
+	f.userID, f.projectID = userID, projectID
+	return model.ShotSummary{}, nil
+}
+
+func (f *fakeCreationService) GetShotWorkspace(ctx context.Context, userID, projectID, shotID string) (model.ShotWorkspace, error) {
+	f.userID, f.projectID, f.shotID = userID, projectID, shotID
+	return model.ShotWorkspace{Shot: model.ShotUnit{ID: shotID, ProjectID: projectID}}, nil
+}
+
+func (f *fakeCreationService) GetShotHistory(ctx context.Context, userID, projectID, shotID string) ([]model.ShotRevision, error) {
+	f.userID, f.projectID, f.shotID = userID, projectID, shotID
+	return nil, nil
+}
+
+func (f *fakeCreationService) PreviewShotRegeneration(ctx context.Context, userID, projectID, shotID string) (videoSvc.ShotRegenerationImpact, error) {
+	f.userID, f.projectID, f.shotID = userID, projectID, shotID
+	return videoSvc.ShotRegenerationImpact{ShotID: shotID}, nil
+}
+
+func (f *fakeCreationService) AcceptShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req videoSvc.CandidateMutationRequest) (*model.ShotUnit, error) {
+	f.userID, f.projectID, f.shotID, f.candidateMutationReq = userID, projectID, shotID, req
+	return &model.ShotUnit{ID: shotID, ProjectID: projectID, AcceptedCandidateID: candidateID, Version: req.BaseVersion + 1}, nil
+}
+
+func (f *fakeCreationService) RestoreShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req videoSvc.CandidateMutationRequest) (*model.ShotUnit, error) {
+	return f.AcceptShotCandidate(ctx, userID, projectID, shotID, candidateID, req)
 }
 
 func (f *fakeCreationService) GetShot(ctx context.Context, userID, projectID, shotID string) (*model.ShotUnit, error) {
@@ -128,6 +335,14 @@ func (f *fakeCreationService) UnlockShot(ctx context.Context, userID, projectID,
 func (f *fakeCreationService) RegenerateShot(ctx context.Context, userID, projectID, shotID string, req videoSvc.RegenerateShotRequest) (*model.ShotUnit, error) {
 	f.userID, f.projectID, f.shotID = userID, projectID, shotID
 	return &model.ShotUnit{ID: shotID, ProjectID: projectID, Stale: true}, nil
+}
+
+func (f *fakeCreationService) RegenerateShotV2(ctx context.Context, userID, projectID, shotID string, req videoSvc.RegenerateShotRequest) (videoSvc.RegenerateShotResult, error) {
+	f.userID, f.projectID, f.shotID, f.regenerateV2Req = userID, projectID, shotID, req
+	if f.regenerateV2Err != nil {
+		return videoSvc.RegenerateShotResult{}, f.regenerateV2Err
+	}
+	return videoSvc.RegenerateShotResult{Shot: model.ShotUnit{ID: shotID, ProjectID: projectID, Version: req.BaseVersion + 1}}, nil
 }
 
 func (f *fakeCreationService) GenerateVisualPlan(ctx context.Context, userID, projectID, shotID string) (*model.VisualPlan, error) {

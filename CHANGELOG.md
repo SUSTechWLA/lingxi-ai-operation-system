@@ -6,6 +6,9 @@ All notable release changes are tracked here. README only carries the current ve
 
 ### Added
 
+- Added the default six-step creator studio with two persistent creator destinations, isolated Shot review, and a separately gated developer console.
+- Added a durable, idempotent assembly retry that snapshots only accepted current Shot candidates and restarts the real preview review gate without regenerating any Shot.
+- Added fail-closed delivery UI: final media and download controls require an explicit passed server-side final-review result on the current delivery artifact.
 - Added layered shot material packages with `aigcPlan`, `hyperframesPlan`, and `ffmpegFusionPlan` so AIGC generates text-free background or partial motion, HyperFrames renders exact Chinese text and keyframes, and FFmpeg fuses the layers into complete shots.
 - Added Director Studio checks and UI coverage for progressive shot material review, editable prompts/references, prompt approval locks, and AIGC/HyperFrames/FFmpeg layer explanations.
 - Added a creator-facing shot workspace that auto-selects the voice / knowledge workflow or cinematic / AIGC shot workflow, then presents each shot as a linear 1-6 review flow instead of a two-column technical artifact index.

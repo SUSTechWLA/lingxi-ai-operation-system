@@ -14,8 +14,9 @@ import (
 // ==================== Mock Implementations ====================
 
 type mockNodeRepo struct {
-	nodes    map[string]*model.Node
-	findByID func(ctx context.Context, id string) (*model.Node, error)
+	nodes       map[string]*model.Node
+	findByID    func(ctx context.Context, id string) (*model.Node, error)
+	retryClaims int
 }
 
 func newMockNodeRepo() *mockNodeRepo {
@@ -77,6 +78,23 @@ func (m *mockNodeRepo) UpdateStatus(ctx context.Context, id string, status model
 		n.ErrorMessage = errMsg
 	}
 	return nil
+}
+
+func (m *mockNodeRepo) ClaimRetryByIdempotencyKey(_ context.Context, id, key string) (*model.Node, bool, error) {
+	node, ok := m.nodes[id]
+	if !ok {
+		return nil, false, fmt.Errorf("not found")
+	}
+	if node.IdempotencyKey == key {
+		return node, false, nil
+	}
+	m.retryClaims++
+	node.Status = model.NodeCreated
+	node.Output = nil
+	node.ErrorMessage = ""
+	node.RetryCount = 0
+	node.IdempotencyKey = key
+	return node, true, nil
 }
 
 func (m *mockNodeRepo) FindStaleRunningNodes(ctx context.Context, timeoutSec int) ([]*model.Node, error) {
@@ -198,7 +216,8 @@ func (m *mockContextRepo) FindLatestSnapshotByNodeID(ctx context.Context, nodeID
 }
 
 type mockEventSaver struct {
-	events []savedEvent
+	events         []savedEvent
+	readyEventKeys map[string]bool
 }
 
 type savedEvent struct {
@@ -209,7 +228,19 @@ type savedEvent struct {
 }
 
 func newMockEventSaver() *mockEventSaver {
-	return &mockEventSaver{}
+	return &mockEventSaver{readyEventKeys: map[string]bool{}}
+}
+
+func (m *mockEventSaver) SaveNodeReadyEvent(_ context.Context, nodeID, idempotencyKey string, event eventbus.Event) (bool, error) {
+	key := nodeID + "\x00" + idempotencyKey
+	if m.readyEventKeys[key] {
+		return false, nil
+	}
+	m.readyEventKeys[key] = true
+	m.events = append(m.events, savedEvent{
+		aggregateType: "node", aggregateID: nodeID, eventType: eventbus.TopicNodeReady, event: event,
+	})
+	return true, nil
 }
 
 func (m *mockEventSaver) SaveEvent(ctx context.Context, aggregateType, aggregateID, eventType string, event eventbus.Event) error {
@@ -224,6 +255,7 @@ func (m *mockEventSaver) SaveEvent(ctx context.Context, aggregateType, aggregate
 
 // Verify mockEventSaver satisfies the interface
 var _ outbox.EventSaver = (*mockEventSaver)(nil)
+var _ outbox.AtomicNodeReadySaver = (*mockEventSaver)(nil)
 
 type mockPublisher struct {
 	published []publishedEvent
@@ -596,6 +628,28 @@ func TestStateService_InitializeNodeReady(t *testing.T) {
 	}
 	if !found {
 		t.Error("Expected node ready event to be saved")
+	}
+}
+
+func TestStateService_InitializeNodeReadyAtomicallyPublishesOnceAcrossRecoveryRace(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	eventSaver := newMockEventSaver()
+	node := &model.Node{
+		ID: "n1", TaskID: "t1", Status: model.NodeCreated, Type: model.NodeTypeLLM,
+		Name: "assemble", IdempotencyKey: "assembly-key:dispatch:1",
+	}
+	nodeRepo.nodes[node.ID] = node
+	ss := NewStateService(nodeRepo, newMockTaskRepo(), newMockDepRepo(), newMockContextRepo(), eventSaver)
+
+	staleSchedulerCopy := *node
+	if err := ss.InitializeNodeReady(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	if err := ss.InitializeNodeReady(context.Background(), &staleSchedulerCopy); err != nil {
+		t.Fatal(err)
+	}
+	if node.Status != model.NodeReady || len(eventSaver.events) != 1 {
+		t.Fatalf("status=%s events=%d, want one atomic READY dispatch", node.Status, len(eventSaver.events))
 	}
 }
 
@@ -973,6 +1027,57 @@ func TestTaskExecutionControl_RetryNode_NotFound(t *testing.T) {
 	err := tc.RetryNode(context.Background(), "nonexistent")
 	if err == nil {
 		t.Error("Expected error for nonexistent node")
+	}
+}
+
+func TestTaskExecutionControl_RetryNodeIdempotentClaimsAndPublishesOnce(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	depRepo := newMockDepRepo()
+	ctxRepo := newMockContextRepo()
+	eventSaver := newMockEventSaver()
+	nodeRepo.nodes["n1"] = &model.Node{
+		ID: "n1", TaskID: "t1", Type: model.NodeTypeLLM, Name: "assemble",
+		Status: model.NodeSuccess, RetryCount: 2, ErrorMessage: "old failure",
+	}
+
+	ss := NewStateService(nodeRepo, taskRepo, depRepo, ctxRepo, eventSaver)
+	tc := NewTaskExecutionControl(taskRepo, nodeRepo, ss)
+	for replay := 0; replay < 2; replay++ {
+		if err := tc.RetryNodeIdempotent(context.Background(), "n1", "assembly-key:dispatch:1"); err != nil {
+			t.Fatalf("replay %d: %v", replay, err)
+		}
+	}
+	if nodeRepo.retryClaims != 1 || nodeRepo.nodes["n1"].Status != model.NodeReady {
+		t.Fatalf("claims=%d node=%+v", nodeRepo.retryClaims, nodeRepo.nodes["n1"])
+	}
+	readyEvents := 0
+	for _, event := range eventSaver.events {
+		if event.eventType == eventbus.TopicNodeReady {
+			readyEvents++
+		}
+	}
+	if readyEvents != 1 {
+		t.Fatalf("ready events=%d, want one durable dispatch", readyEvents)
+	}
+}
+
+func TestTaskExecutionControl_RetryNodeIdempotentLeavesClaimedCreatedForSchedulerRecovery(t *testing.T) {
+	nodeRepo := newMockNodeRepo()
+	taskRepo := newMockTaskRepo()
+	eventSaver := newMockEventSaver()
+	nodeRepo.nodes["n1"] = &model.Node{
+		ID: "n1", TaskID: "t1", Type: model.NodeTypeLLM, Name: "assemble",
+		Status: model.NodeCreated, IdempotencyKey: "assembly-key:dispatch:1",
+	}
+	ss := NewStateService(nodeRepo, taskRepo, newMockDepRepo(), newMockContextRepo(), eventSaver)
+	tc := NewTaskExecutionControl(taskRepo, nodeRepo, ss)
+
+	if err := tc.RetryNodeIdempotent(context.Background(), "n1", "assembly-key:dispatch:1"); err != nil {
+		t.Fatal(err)
+	}
+	if nodeRepo.nodes["n1"].Status != model.NodeCreated || nodeRepo.retryClaims != 0 || len(eventSaver.events) != 0 {
+		t.Fatalf("replay republished an in-flight claim: claims=%d node=%+v events=%d", nodeRepo.retryClaims, nodeRepo.nodes["n1"], len(eventSaver.events))
 	}
 }
 

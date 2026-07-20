@@ -22,7 +22,7 @@ func TestVideoCreationSpecDefaults(t *testing.T) {
 	if spec.AspectRatio != "16:9" || spec.Language != "zh-CN" {
 		t.Fatalf("aspect/language = %q/%q", spec.AspectRatio, spec.Language)
 	}
-	if spec.ShotPolicy.MinDurationSec != 3 || spec.ShotPolicy.MaxDurationSec != 15 || spec.ShotPolicy.PreferDurationSec != 6 {
+	if spec.ShotPolicy.MinDurationSec != 3 || spec.ShotPolicy.MaxDurationSec != 14 || spec.ShotPolicy.PreferDurationSec != 6 {
 		t.Fatalf("shot policy defaults = %+v", spec.ShotPolicy)
 	}
 	if !spec.ShotPolicy.SingleSceneRequired || !spec.ShotPolicy.LowVisualChangeRequired || !spec.ShotPolicy.AvoidCrossShotDependency {
@@ -39,7 +39,7 @@ func TestVideoCreationSpecDefaults(t *testing.T) {
 	}
 }
 
-func TestShotDurationCheckerRejectsOutside3To15(t *testing.T) {
+func TestShotDurationCheckerRejectsOutside3To14(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sec  int
@@ -59,8 +59,8 @@ func TestShotDurationCheckerRejectsOutside3To15(t *testing.T) {
 	}
 }
 
-func TestShotDurationCheckerAccepts3To15(t *testing.T) {
-	for _, sec := range []int{3, 6, 15} {
+func TestShotDurationCheckerAccepts3To14(t *testing.T) {
+	for _, sec := range []int{3, 6, 14} {
 		issues := CheckShotDuration(model.ShotUnit{ID: "shot-1", DurationSec: sec})
 		if len(issues) != 0 {
 			t.Fatalf("duration %d issues = %+v", sec, issues)

@@ -1,11 +1,70 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
 )
+
+func TestProjectServiceUsesExpectedRevisionCAS(t *testing.T) {
+	store := &fakeProjectCASStore{project: &model.VideoProject{ID: "vp-1", UserID: "u-1", ConfigRevision: 7}}
+	svc := NewProjectService(store)
+	if err := svc.MarkAgentRunStarted(context.Background(), "u-1", "vp-1", "run-1"); err != nil {
+		t.Fatalf("MarkAgentRunStarted: %v", err)
+	}
+	if store.casCalls != 1 || store.expectedRevision != 7 || store.updateCalls != 0 {
+		t.Fatalf("CAS calls=%d expectedRevision=%d unconditional calls=%d", store.casCalls, store.expectedRevision, store.updateCalls)
+	}
+}
+
+func TestProjectServiceReturnsRevisionConflictWithoutBlindRetry(t *testing.T) {
+	store := &fakeProjectCASStore{
+		project: &model.VideoProject{ID: "vp-1", UserID: "u-1", ConfigRevision: 7},
+		lostCAS: true,
+	}
+	svc := NewProjectService(store)
+	_, err := svc.UpdateProject(context.Background(), "u-1", "vp-1", &model.UpdateProjectRequest{Name: "new"})
+	if !errors.Is(err, errProjectRevisionConflict) || store.casCalls != 1 {
+		t.Fatalf("error=%v CAS calls=%d", err, store.casCalls)
+	}
+}
+
+type fakeProjectCASStore struct {
+	project          *model.VideoProject
+	updateCalls      int
+	casCalls         int
+	expectedRevision int64
+	lostCAS          bool
+}
+
+func (f *fakeProjectCASStore) Create(context.Context, *model.VideoProject) error { return nil }
+func (f *fakeProjectCASStore) FindByIDForUser(context.Context, string, string) (*model.VideoProject, error) {
+	copy := *f.project
+	return &copy, nil
+}
+func (f *fakeProjectCASStore) FindAllForUser(context.Context, string, string, string, int, int) ([]*model.VideoProject, int, error) {
+	return nil, 0, nil
+}
+func (f *fakeProjectCASStore) UpdateForUser(context.Context, string, *model.VideoProject) error {
+	f.updateCalls++
+	return nil
+}
+func (f *fakeProjectCASStore) CompareAndSwapForUser(_ context.Context, _ string, project *model.VideoProject, expected int64) (bool, error) {
+	f.casCalls++
+	f.expectedRevision = expected
+	if f.lostCAS {
+		return false, nil
+	}
+	copy := *project
+	copy.ConfigRevision = expected + 1
+	f.project = &copy
+	return true, nil
+}
+func (f *fakeProjectCASStore) SoftDeleteForUser(context.Context, string, string) error { return nil }
 
 func TestIsValidMode(t *testing.T) {
 	tests := []struct {
@@ -45,6 +104,28 @@ func TestMergeProjectConfigPreservesPinnedIPAssetPackAndCanonicalRuntime(t *test
 	}
 }
 
+func TestCanonicalProjectConfigPersistsOnlyNonSecretProviderReferences(t *testing.T) {
+	raw := json.RawMessage(`{
+		"modelProviders":{"text_to_text":{"baseUrl":"https://model.test","model":"writer","apiKey":"sk-raw"}},
+		"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer","apiKey":"sk-nested"}}
+	}`)
+	encoded := canonicalProjectConfig(raw, model.VideoProfileCinematicStory)
+	if strings.Contains(string(encoded), "sk-raw") || strings.Contains(string(encoded), "sk-nested") || strings.Contains(string(encoded), "apiKey") {
+		t.Fatalf("canonical project config persisted provider credentials: %s", encoded)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(encoded, &config); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := config["modelProviders"]; exists {
+		t.Fatalf("legacy raw provider config must be removed: %+v", config)
+	}
+	ref := config["modelProviderRefs"].(map[string]interface{})["text_to_text"].(map[string]interface{})
+	if ref["source"] != "local_agent" || ref["baseUrl"] != "https://model.test" || ref["model"] != "writer" {
+		t.Fatalf("non-secret provider reference was not preserved: %+v", ref)
+	}
+}
+
 func TestIsValidGenerationMode(t *testing.T) {
 	tests := []struct {
 		mode     model.GenerationMode
@@ -67,9 +148,9 @@ func TestIsValidGenerationMode(t *testing.T) {
 
 func TestCreateProjectRequest_ModeRequired(t *testing.T) {
 	req := &model.CreateProjectRequest{
-		Name:        "Test Project",
-		Mode:        model.ModeAIGCShot,
-		SkillName:   "aigc-shot-video",
+		Name:         "Test Project",
+		Mode:         model.ModeAIGCShot,
+		SkillName:    "aigc-shot-video",
 		SkillVersion: "1.0.0",
 	}
 	if req.Name == "" {

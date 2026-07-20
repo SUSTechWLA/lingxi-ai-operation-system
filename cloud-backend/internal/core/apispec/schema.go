@@ -14,7 +14,7 @@ import (
 // Supported types:
 //   - string, int, int64, float64, bool → primitive schemas
 //   - time.Time → string format: date-time
-//   - json.RawMessage → object (free-form / additionalProperties: true)
+//   - json.RawMessage → unconstrained JSON value
 //   - map[string]interface{} → object (free-form)
 //   - map[string]T → object with additionalProperties: T
 //   - []T → array with items: T
@@ -34,7 +34,13 @@ func reflectType(t reflect.Type, seen map[reflect.Type]bool) *Schema {
 	}
 
 	if t == nil {
-		return &Schema{Type: "object", Description: "null / any"}
+		return &Schema{Description: "arbitrary JSON value"}
+	}
+
+	// json.RawMessage is a named []byte. Detect it before the slice branch so
+	// the wire value remains honest JSON instead of becoming a base64 string.
+	if t == reflect.TypeOf(json.RawMessage{}) {
+		return &Schema{Description: "arbitrary JSON value"}
 	}
 
 	// Prevent infinite recursion
@@ -70,12 +76,12 @@ func reflectType(t reflect.Type, seen map[reflect.Type]bool) *Schema {
 		return &Schema{Type: "boolean"}
 
 	case reflect.Interface:
-		return &Schema{Type: "object", Description: "free-form / any"}
+		return &Schema{Description: "arbitrary JSON value"}
 
 	case reflect.Map:
 		if t.Key().Kind() == reflect.String {
 			valSchema := reflectType(t.Elem(), seen)
-			return &Schema{Type: "object", AdditionalProperties: &SchemaRef{Schema: valSchema}}
+			return &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: valSchema}}}
 		}
 		return &Schema{Type: "object", Description: "map"}
 
@@ -91,10 +97,6 @@ func reflectType(t reflect.Type, seen map[reflect.Type]bool) *Schema {
 		// time.Time special case
 		if t == reflect.TypeOf(time.Time{}) {
 			return &Schema{Type: "string", Format: "date-time"}
-		}
-		// json.RawMessage special case
-		if t == reflect.TypeOf(json.RawMessage{}) {
-			return &Schema{Type: "object", Description: "JSON raw message (free-form)"}
 		}
 		return reflectStruct(t, seen)
 
@@ -139,7 +141,7 @@ func reflectStruct(t reflect.Type, seen map[reflect.Type]bool) *Schema {
 		}
 
 		schema.Properties[name] = &SchemaRef{Schema: fieldSchema}
-		if !omitempty && !nullable {
+		if !omitempty {
 			required = append(required, name)
 		}
 	}

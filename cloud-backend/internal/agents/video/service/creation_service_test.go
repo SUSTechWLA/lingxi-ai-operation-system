@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -90,6 +91,42 @@ func TestCreationServiceGenerateShotsFor60SecProduces8To12ValidShots(t *testing.
 	}
 	if !foundExactText {
 		t.Fatalf("generated shots did not carry exact screen text: %+v", shots)
+	}
+}
+
+func TestCreationServiceRejectsShotAtFifteenSeconds(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = &model.VideoProject{ID: "vp-1", UserID: "u-1"}
+	svc := NewCreationService(store)
+
+	_, err := svc.UpsertShot(context.Background(), "u-1", "vp-1", &model.ShotUnit{
+		ID: "shot-15", DurationSec: 15,
+	})
+	if err == nil || !strings.Contains(err.Error(), "less than 15 seconds") {
+		t.Fatalf("UpsertShot error = %v, want strict duration error", err)
+	}
+}
+
+func TestCreationServiceAcceptsFourteenSecondShot(t *testing.T) {
+	store := newFakeCreationProjectStore()
+	store.project = &model.VideoProject{ID: "vp-1", UserID: "u-1"}
+	svc := NewCreationService(store)
+
+	shot, err := svc.UpsertShot(context.Background(), "u-1", "vp-1", &model.ShotUnit{
+		ID: "shot-14", DurationSec: 14,
+	})
+	if err != nil || shot.DurationSec != 14 {
+		t.Fatalf("shot = %+v error = %v", shot, err)
+	}
+}
+
+func TestDecodeShotDrivenStateInitializesDurableMaps(t *testing.T) {
+	state, err := DecodeShotDrivenState(nil)
+	if err != nil {
+		t.Fatalf("DecodeShotDrivenState error: %v", err)
+	}
+	if state.ShotHistory == nil || state.RegenerationTasks == nil || state.IdempotencyTasks == nil {
+		t.Fatalf("durable state maps must be initialized: %+v", state)
 	}
 }
 
@@ -202,8 +239,22 @@ func projectWithShotState(t *testing.T, shots ...model.ShotUnit) *model.VideoPro
 }
 
 type fakeCreationProjectStore struct {
-	project *model.VideoProject
-	updated *model.VideoProject
+	mu                    sync.Mutex
+	project               *model.VideoProject
+	updated               *model.VideoProject
+	casConflicts          int
+	casCalls              int
+	onCASConflict         func(*model.VideoProject)
+	persistedTaskStatuses []string
+	pendingRegenerations  []PendingShotRegeneration
+	pendingLimit          int
+}
+
+func (f *fakeCreationProjectStore) FindPendingShotRegenerations(_ context.Context, limit int) ([]PendingShotRegeneration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pendingLimit = limit
+	return append([]PendingShotRegeneration(nil), f.pendingRegenerations...), nil
 }
 
 func newFakeCreationProjectStore() *fakeCreationProjectStore {
@@ -211,6 +262,8 @@ func newFakeCreationProjectStore() *fakeCreationProjectStore {
 }
 
 func (f *fakeCreationProjectStore) FindByIDForUser(ctx context.Context, userID string, id string) (*model.VideoProject, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.project == nil {
 		return nil, errProjectNotFoundForTest()
 	}
@@ -219,10 +272,51 @@ func (f *fakeCreationProjectStore) FindByIDForUser(ctx context.Context, userID s
 }
 
 func (f *fakeCreationProjectStore) UpdateForUser(ctx context.Context, userID string, p *model.VideoProject) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	updated := *p
 	f.updated = &updated
 	f.project = &updated
 	return nil
+}
+
+func (f *fakeCreationProjectStore) hasPersistedTaskStatus(status string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, persisted := range f.persistedTaskStatuses {
+		if persisted == status {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeCreationProjectStore) CompareAndSwapForUser(_ context.Context, _ string, p *model.VideoProject, expectedRevision int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.casCalls++
+	if f.project == nil || f.project.ConfigRevision != expectedRevision {
+		return false, nil
+	}
+	if f.casConflicts > 0 {
+		f.casConflicts--
+		if f.onCASConflict != nil {
+			f.onCASConflict(f.project)
+		}
+		f.project.ConfigRevision++
+		return false, nil
+	}
+	updated := *p
+	updated.ConfigRevision = expectedRevision + 1
+	f.updated = &updated
+	f.project = &updated
+	if state, err := DecodeShotDrivenState(updated.Config); err == nil {
+		for _, task := range state.RegenerationTasks {
+			f.persistedTaskStatuses = append(f.persistedTaskStatuses, task.Status)
+		}
+	}
+	p.ConfigRevision = updated.ConfigRevision
+	return true, nil
 }
 
 func containsString(values []string, want string) bool {

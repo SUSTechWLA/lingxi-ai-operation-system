@@ -77,6 +77,7 @@ type Artifact struct {
 
 // CreateArtifactRequest is the input for creating a new artifact version.
 type CreateArtifactRequest struct {
+	ID            string
 	ProjectID     string
 	WorkflowRunID string
 	TaskID        string
@@ -95,4 +96,10 @@ type CreateArtifactRequest struct {
 	Provider      string
 	Model         string
 	Metadata      map[string]interface{}
+	// ForceNewVersion creates a version even when an identical content hash
+	// already exists. It is reserved for explicit history restores.
+	ForceNewVersion bool
+	// RestoredFromID records the historical artifact selected for an explicit
+	// restore. It is copied to immutable provenance metadata on creation.
+	RestoredFromID string
 }

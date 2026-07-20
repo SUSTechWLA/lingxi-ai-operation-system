@@ -139,6 +139,9 @@ interface Props {
   user: AuthUser
   onLogout: () => void
   serviceStatus: 'unknown' | 'ok' | 'unhealthy'
+  initialView?: DirectorNavKey
+  currentView?: DirectorNavKey
+  onViewChange?: (view: DirectorNavKey) => void
 }
 
 const navItems: Array<{ key: DirectorNavKey; label: string; icon: React.ComponentType<{ className?: string }> }> = [
@@ -186,8 +189,16 @@ type ModelProviderStatus = {
   missing: ModelCapability[]
 }
 
-export default function DirectorStudioPage({ user, onLogout, serviceStatus }: Props) {
-  const [activeNav, setActiveNav] = useState<DirectorNavKey>('overview')
+export default function DirectorStudioPage({ user, onLogout, serviceStatus, initialView, currentView, onViewChange }: Props) {
+  const [activeNav, setActiveNavState] = useState<DirectorNavKey>(currentView || initialView || 'overview')
+  const setActiveNav = useCallback((view: DirectorNavKey) => {
+    setActiveNavState(view)
+    onViewChange?.(view)
+  }, [onViewChange])
+
+  useEffect(() => {
+    if (currentView) setActiveNavState(currentView)
+  }, [currentView])
   const [topic, setTopic] = useState('')
   const [durationSec, setDurationSec] = useState(45)
   const [roleAgents, setRoleAgents] = useState<VideoRoleAgent[]>(fallbackRoles)

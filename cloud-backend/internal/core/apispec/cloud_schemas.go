@@ -663,6 +663,186 @@ func registerCloudSchemas(b *Builder) {
 	b.Schema("GenerateVideoCreationSpecRequest", Reflect(videoservice.GenerateSpecRequest{}))
 	b.Schema("RejectVideoCreationArtifactRequest", Reflect(videoservice.RejectRequest{}))
 	b.Schema("RegenerateShotRequest", Reflect(videoservice.RegenerateShotRequest{}))
+
+	// Creator Studio contracts. The stricter mutation schemas deliberately do
+	// not reuse the legacy RegenerateShotRequest: the V2 handlers require a
+	// positive baseVersion, an exact scope, and an explicit locks array.
+	creatorStepID := enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")
+	creatorStepState := enumSchema("not_started", "generating", "needs_review", "confirmed", "needs_attention", "failed")
+	reviewStatus := enumSchema("pending", "approved", "rejected", "stale")
+	shotQAStatus := enumSchema("PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale")
+	shotGenerationStatus := enumSchema("PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale", "queued", "dispatching", "running", "failed", "cancelled")
+	candidateStatus := enumSchema("CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale")
+	regenerationScope := enumSchema("prompt", "reference", "base_media", "overlay", "audio_alignment", "full_shot")
+	regenerationStatus := enumSchema("queued", "dispatching", "running", "completed", "failed", "cancelled")
+	shotLocks := enumSchema("duration", "narration", "character", "wardrobe", "scene", "camera", "first_frame", "last_frame", "reference_set", "accepted_overlay")
+	positiveVersion := func() *Schema {
+		minimum := float64(1)
+		return &Schema{Type: "integer", Minimum: &minimum, Description: "Positive current version"}
+	}
+	requiredEnvelope := func(data *Schema) *Schema {
+		return &Schema{Type: "object", Properties: map[string]*SchemaRef{
+			"code": {Schema: IntegerSchema()}, "message": {Schema: StringSchema()}, "data": {Schema: data},
+		}, Required: []string{"code", "message", "data"}}
+	}
+	requiredObject := func(properties map[string]*SchemaRef, required ...string) *Schema {
+		return &Schema{Type: "object", Properties: properties, Required: required}
+	}
+	closedObject := func(properties map[string]*SchemaRef, required ...string) *Schema {
+		allowed := false
+		return &Schema{Type: "object", Properties: properties, Required: required, AdditionalProperties: &AdditionalProperties{Allowed: &allowed}}
+	}
+	freeFormObject := func(description string) *Schema {
+		return &Schema{Type: "object", Description: description, AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: &Schema{Description: "arbitrary JSON value"}}}}
+	}
+
+	b.Schema("CreatorStep", requiredObject(map[string]*SchemaRef{
+		"id": {Schema: creatorStepID}, "label": {Schema: StringSchema()}, "state": {Schema: creatorStepState},
+		"currentArtifactId": {Schema: StringSchema()}, "currentVersion": {Schema: IntegerSchema()},
+		"reviewId": {Schema: StringSchema()}, "runId": {Schema: StringSchema()},
+		"allowedActions": {Schema: ArraySchema(StringSchema())},
+	}, "id", "label", "state", "allowedActions"))
+	creatorTask := Reflect(videomodel.CreatorTask{})
+	creatorTask.Properties["scope"] = &SchemaRef{Schema: creatorStepID}
+	creatorTask.Properties["status"] = &SchemaRef{Schema: enumSchema("generating", "running", "processing", "queued", "dispatching")}
+	b.Schema("CreatorTask", creatorTask)
+	b.Schema("ShotSummary", Reflect(videomodel.ShotSummary{}))
+	shotListItem := Reflect(videomodel.ShotListItem{})
+	shotListItem.Properties["reviewStatus"] = &SchemaRef{Schema: reviewStatus}
+	shotListItem.Properties["qaStatus"] = &SchemaRef{Schema: shotQAStatus}
+	shotListItem.Properties["generationStatus"] = &SchemaRef{Schema: shotGenerationStatus}
+	b.Schema("ShotListItem", shotListItem)
+	b.Schema("ShotImpact", Reflect(videomodel.ShotImpact{}))
+	shotRevision := Reflect(videomodel.ShotRevision{})
+	shotRevision.Properties["snapshot"] = &SchemaRef{Schema: RefSchema("ShotUnit")}
+	b.Schema("ShotRevision", shotRevision)
+	b.Schema("ShotWorkspace", requiredObject(map[string]*SchemaRef{
+		"shot": {Schema: RefSchema("ShotUnit")}, "history": {Schema: ArraySchema(RefSchema("ShotRevision"))}, "impact": {Schema: RefSchema("ShotImpact")},
+	}, "shot", "history", "impact"))
+	b.Schema("CreatorArtifactVersion", Reflect(videomodel.CreatorArtifactVersion{}))
+	stepImpact := Reflect(videomodel.StepImpact{})
+	stepImpact.Properties["affectedStepIds"] = &SchemaRef{Schema: ArraySchema(creatorStepID)}
+	b.Schema("StepImpact", stepImpact)
+	materialKind := enumSchema("image", "audio", "video", "document")
+	zero := float64(0)
+	materialProperties := map[string]*SchemaRef{
+		"name": {Schema: StringSchema()}, "kind": {Schema: materialKind},
+		"mimeType":    {Schema: &Schema{Type: "string", Description: "Valid media type whose top-level type must match kind"}},
+		"sizeBytes":   {Schema: &Schema{Type: "integer", Format: "int64", Minimum: &zero}},
+		"storageRef":  {Schema: &Schema{Type: "string", Description: "Canonical local, project-scoped storage reference"}},
+		"contentHash": {Schema: &Schema{Type: "string", Pattern: `^sha256:[A-Za-z0-9][A-Za-z0-9._-]*$`}},
+	}
+	b.Schema("ProjectMaterial", requiredObject(materialProperties, "name", "kind", "mimeType", "sizeBytes", "storageRef", "contentHash"))
+	b.Schema("ProjectMaterialManifest", requiredObject(map[string]*SchemaRef{
+		"schemaVersion": {Schema: IntegerSchema()}, "relatedProjectId": {Schema: StringSchema()}, "materials": {Schema: ArraySchema(RefSchema("ProjectMaterial"))},
+	}, "schemaVersion", "relatedProjectId", "materials"))
+
+	videoProject := Reflect(videomodel.VideoProject{})
+	videoProject.Properties["mode"] = &SchemaRef{Schema: enumSchema("aigc_shot", "voice_visual", "cinematic_story")}
+	videoProject.Properties["status"] = &SchemaRef{Schema: enumSchema("DRAFT", "RUNNING", "PAUSED", "COMPLETED", "ARCHIVED")}
+	videoProject.Properties["generationMode"] = &SchemaRef{Schema: enumSchema("provider_api", "manual_import")}
+	videoProject.Properties["config"] = &SchemaRef{Schema: freeFormObject("Project-specific JSON configuration")}
+	b.Schema("VideoProject", videoProject)
+
+	shotQAReport := Reflect(videomodel.ShotQAReport{})
+	shotQAReport.Properties["status"] = &SchemaRef{Schema: shotQAStatus}
+	b.Schema("ShotQAReport", shotQAReport)
+	shotCandidate := Reflect(videomodel.ShotCandidate{})
+	shotCandidate.Properties["status"] = &SchemaRef{Schema: candidateStatus}
+	shotCandidate.Properties["executionMode"] = &SchemaRef{Schema: enumSchema("unknown", "real", "fixture", "fallback", "placeholder")}
+	shotCandidate.Properties["qaReport"] = &SchemaRef{Schema: &Schema{Ref: "#/components/schemas/ShotQAReport", Nullable: true}}
+	b.Schema("ShotCandidate", shotCandidate)
+	shotUnit := Reflect(videomodel.ShotUnit{})
+	shotUnit.Properties["reviewStatus"] = &SchemaRef{Schema: reviewStatus}
+	shotUnit.Properties["qaStatus"] = &SchemaRef{Schema: shotQAStatus}
+	shotUnit.Properties["candidates"] = &SchemaRef{Schema: ArraySchema(RefSchema("ShotCandidate"))}
+	b.Schema("ShotUnit", shotUnit)
+	shotRegenerationTask := Reflect(videomodel.ShotRegenerationTask{})
+	shotRegenerationTask.Properties["scope"] = &SchemaRef{Schema: regenerationScope}
+	shotRegenerationTask.Properties["locks"] = &SchemaRef{Schema: ArraySchema(shotLocks)}
+	shotRegenerationTask.Properties["status"] = &SchemaRef{Schema: regenerationStatus}
+	b.Schema("ShotRegenerationTask", shotRegenerationTask)
+
+	creationView := requiredObject(map[string]*SchemaRef{
+		"project": {Schema: RefSchema("VideoProject")}, "activeStep": {Schema: creatorStepID},
+		"steps": {Schema: ArraySchema(RefSchema("CreatorStep"))}, "shotSummary": {Schema: RefSchema("ShotSummary")},
+		"activeTasks": {Schema: ArraySchema(RefSchema("CreatorTask"))}, "assemblyDirty": {Schema: BoolSchema()},
+	}, "project", "activeStep", "steps", "shotSummary", "activeTasks", "assemblyDirty")
+	b.Schema("CreationView", creationView)
+
+	selection := &Schema{OneOf: []*SchemaRef{
+		{Schema: closedObject(map[string]*SchemaRef{
+			"kind": {Schema: enumSchema("rect")}, "x": {Schema: &Schema{Type: "number"}}, "y": {Schema: &Schema{Type: "number"}},
+			"width": {Schema: &Schema{Type: "number"}}, "height": {Schema: &Schema{Type: "number"}},
+		}, "kind", "x", "y", "width", "height")},
+		{Schema: closedObject(map[string]*SchemaRef{
+			"kind": {Schema: enumSchema("time")}, "startMs": {Schema: &Schema{Type: "integer", Format: "int64"}}, "endMs": {Schema: &Schema{Type: "integer", Format: "int64"}},
+		}, "kind", "startMs", "endMs")},
+	}}
+	b.Schema("ArtifactSelection", selection)
+	b.Schema("StepRevisionPreviewRequest", requiredObject(map[string]*SchemaRef{
+		"artifactId": {Schema: StringSchema()}, "baseVersion": {Schema: positiveVersion()},
+	}, "artifactId", "baseVersion"))
+	mutationProperties := func(mode string) map[string]*SchemaRef {
+		return map[string]*SchemaRef{
+			"artifactId": {Schema: StringSchema()}, "baseVersion": {Schema: positiveVersion()}, "mode": {Schema: enumSchema(mode)},
+			"runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
+			"confirmedAffectedShotIds": {Schema: ArraySchema(StringSchema())}, "selection": {Schema: &Schema{Ref: "#/components/schemas/ArtifactSelection", Nullable: true}},
+		}
+	}
+	directMutation := mutationProperties("direct")
+	directMutation["directContent"] = &SchemaRef{Schema: StringSchema()}
+	instructionMutation := mutationProperties("instruction")
+	instructionMutation["instruction"] = &SchemaRef{Schema: StringSchema()}
+	instructionMutation["modelProviders"] = &SchemaRef{Schema: freeFormObject("Transient desktop model-provider credentials; never persisted")}
+	b.Schema("StepRevisionMutationRequest", &Schema{OneOf: []*SchemaRef{
+		{Schema: closedObject(directMutation, "artifactId", "baseVersion", "mode", "directContent", "confirmedAffectedShotIds")},
+		{Schema: closedObject(instructionMutation, "artifactId", "baseVersion", "mode", "instruction", "confirmedAffectedShotIds")},
+	}})
+	b.Schema("StepConfirmRequest", requiredObject(map[string]*SchemaRef{
+		"artifactId": {Schema: StringSchema()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()}, "comment": {Schema: StringSchema()},
+	}, "artifactId"))
+	b.Schema("StepRestoreRequest", requiredObject(map[string]*SchemaRef{
+		"baseVersion": {Schema: positiveVersion()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
+		"reason": {Schema: StringSchema()}, "confirmedAffectedShotIds": {Schema: ArraySchema(StringSchema())},
+	}, "baseVersion", "confirmedAffectedShotIds"))
+	b.Schema("RegisterProjectMaterialRequest", closedObject(materialProperties,
+		"name", "kind", "storageRef", "mimeType", "sizeBytes", "contentHash"))
+	b.Schema("ShotRegenerationRequest", requiredObject(map[string]*SchemaRef{
+		"baseVersion": {Schema: positiveVersion()}, "scope": {Schema: regenerationScope},
+		"locks": {Schema: ArraySchema(shotLocks)}, "instruction": {Schema: StringSchema()},
+	}, "baseVersion", "scope", "locks"))
+	b.Schema("CandidateAcceptRequest", requiredObject(map[string]*SchemaRef{
+		"baseVersion": {Schema: positiveVersion()}, "scope": {Schema: enumSchema("candidate_accept")}, "locks": {Schema: ArraySchema(shotLocks)},
+	}, "baseVersion", "scope", "locks"))
+	b.Schema("CandidateRestoreRequest", requiredObject(map[string]*SchemaRef{
+		"baseVersion": {Schema: positiveVersion()}, "scope": {Schema: enumSchema("candidate_restore")}, "locks": {Schema: ArraySchema(shotLocks)},
+	}, "baseVersion", "scope", "locks"))
+
+	b.Schema("CreationViewResponse", requiredEnvelope(RefSchema("CreationView")))
+	b.Schema("StepVersionsResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"versions": {Schema: ArraySchema(RefSchema("CreatorArtifactVersion"))},
+	}, "versions")))
+	b.Schema("StepImpactResponse", requiredEnvelope(RefSchema("StepImpact")))
+	b.Schema("StepMutationResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"artifact": {Schema: Reflect(artifacts.Artifact{})}, "impact": {Schema: RefSchema("StepImpact")}, "view": {Schema: RefSchema("CreationView")},
+	}, "artifact", "impact", "view")))
+	b.Schema("ProjectMaterialResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"material": {Schema: RefSchema("ProjectMaterial")}, "artifact": {Schema: Reflect(artifacts.Artifact{})},
+	}, "material", "artifact")))
+	b.Schema("ShotPageResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"shots": {Schema: ArraySchema(RefSchema("ShotListItem"))}, "nextCursor": {Schema: StringSchema()}, "total": {Schema: IntegerSchema()},
+	}, "shots", "nextCursor", "total")))
+	b.Schema("ShotSummaryResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{"summary": {Schema: RefSchema("ShotSummary")}}, "summary")))
+	b.Schema("ShotWorkspaceResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{"workspace": {Schema: RefSchema("ShotWorkspace")}}, "workspace")))
+	b.Schema("ShotHistoryResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{"history": {Schema: ArraySchema(RefSchema("ShotRevision"))}}, "history")))
+	b.Schema("ShotImpactResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{"impact": {Schema: RefSchema("ShotImpact")}}, "impact")))
+	b.Schema("ShotRegenerationResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"shot": {Schema: RefSchema("ShotUnit")}, "task": {Schema: RefSchema("ShotRegenerationTask")},
+	}, "shot", "task")))
+	b.Schema("CreatorShotUnitResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"shot": {Schema: RefSchema("ShotUnit")},
+	}, "shot")))
 	b.Schema("VideoCreationSpecResponse", &Schema{
 		Type: "object",
 		Properties: map[string]*SchemaRef{
@@ -740,6 +920,9 @@ func registerCloudSchemas(b *Builder) {
 			}},
 		},
 	})
+	b.Schema("AssemblyRebuildResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"assembly": {Schema: Reflect(videoservice.AssemblyRebuildResult{})},
+	}, "assembly")))
 	b.Schema("PublishPackageResponse", &Schema{
 		Type: "object",
 		Properties: map[string]*SchemaRef{
@@ -914,9 +1097,7 @@ func registerCloudSchemas(b *Builder) {
 	})
 
 	// ── Real Go model types (used by multiple responses) ──
-	b.Schema("VideoProject", Reflect(videomodel.VideoProject{}))
 	b.Schema("VideoCreationSpec", Reflect(videomodel.VideoCreationSpec{}))
-	b.Schema("ShotUnit", Reflect(videomodel.ShotUnit{}))
 	b.Schema("VisualPlan", Reflect(videomodel.VisualPlan{}))
 	b.Schema("RenderStrategy", Reflect(videomodel.RenderStrategy{}))
 	b.Schema("Artifact", Reflect(artifacts.Artifact{}))
@@ -926,4 +1107,12 @@ func registerCloudSchemas(b *Builder) {
 	_ = model.TaskCreated
 	_ = model.NodeCreated
 	_ = workflow.Template{}
+}
+
+func enumSchema(values ...string) *Schema {
+	enums := make([]any, len(values))
+	for index, value := range values {
+		enums[index] = value
+	}
+	return &Schema{Type: "string", Enum: enums}
 }

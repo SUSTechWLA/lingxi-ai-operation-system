@@ -421,6 +421,7 @@ func BuildCloudSpec() *Spec {
 	// ── Dynamic Agent Runs ──
 	b.Route("POST", "/api/agent/runs", "Start a dynamic agent run from natural language").
 		Tags("Agent Runs").
+		HeaderParam("Idempotency-Key", "Optional stable caller key; duplicate requests from the same user return the existing run", StringSchema(), false).
 		BodyJSON("AgentStartRunRequest", "Agent run request", true).
 		ResponseJSON("200", "Agent run started", "AgentRunStartResponse").
 		ResponseJSON("400", "Invalid plan or request", "ErrorResponse")
@@ -574,7 +575,17 @@ func BuildCloudSpec() *Spec {
 	b.Route("GET", "/api/video-projects/:id/shots", "List shot units").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
-		ResponseJSON("200", "Shot units", "ShotUnitListResponse").
+		QueryParam("cursor", "Opaque cursor from the previous page", StringSchema(), false).
+		QueryParam("limit", "Page size; defaults to 24 and is constrained to 1 through 50", func() *Schema {
+			minimum, maximum := float64(1), float64(50)
+			return &Schema{Type: "integer", Minimum: &minimum, Maximum: &maximum, Default: 24}
+		}(), false).
+		QueryParam("status", "Creator queue filter; friendly filters use durable review and task state, legacy review statuses remain supported", enumSchema("all", "needs_attention", "confirmed", "generating", "failed", "pending", "approved", "rejected", "stale"), false).
+		QueryParam("chapter", "Chapter filter", StringSchema(), false).
+		QueryParam("query", "Case-insensitive title, narration, or scene search", StringSchema(), false).
+		creatorAuth(false).
+		ResponseJSON("200", "Shot page", "ShotPageResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
 		ResponseJSON("400", "Invalid request", "ErrorResponse")
 	b.Route("POST", "/api/video-projects/:id/shots", "Create or update a shot unit").
 		Tags("Video Projects").
@@ -587,6 +598,150 @@ func BuildCloudSpec() *Spec {
 		PathParam("id", "Project identifier", StringSchema()).
 		ResponseJSON("200", "Generated shot units", "ShotUnitListResponse").
 		ResponseJSON("400", "Invalid request", "ErrorResponse")
+
+	// Creator-facing project steps. These routes expose backend-authoritative
+	// state and immutable version mutations without leaking workflow topology.
+	b.Route("GET", "/api/video-projects/:id/creation-view", "Get the creator workspace aggregate").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		creatorAuth(false).
+		ResponseJSON("200", "Creator workspace", "CreationViewResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project not found", "ErrorResponse").
+		ResponseJSON("500", "Creation view unavailable", "ErrorResponse")
+	b.Route("GET", "/api/video-projects/:id/steps/:stepId/versions", "List immutable versions for one creator step").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		creatorAuth(false).
+		ResponseJSON("200", "Step versions", "StepVersionsResponse").
+		ResponseJSON("400", "Invalid step", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project or content not found", "ErrorResponse").
+		ResponseJSON("500", "Content tools unavailable", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/steps/:stepId/revision-impact", "Preview the exact impact of revising a creator step").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		creatorAuth(false).
+		BodyJSON("StepRevisionPreviewRequest", "Current artifact identity for impact preview", true).
+		ResponseJSON("200", "Exact downstream impact", "StepImpactResponse").
+		ResponseJSON("400", "Invalid revision request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project or content not found", "ErrorResponse").
+		ResponseJSON("409", "Content version conflict", "ErrorResponse").
+		ResponseJSON("500", "Content impact unavailable", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/steps/:stepId/revisions", "Create an immutable creator-step revision").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		creatorAuth(true).
+		BodyJSON("StepRevisionMutationRequest", "Revision proposal and exact confirmed Shot impact", true).
+		ResponseJSON("200", "New artifact, impact, and authoritative view", "StepMutationResponse").
+		ResponseJSON("400", "Invalid revision or impact confirmation", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project or content not found", "ErrorResponse").
+		ResponseJSON("409", "Content version or idempotency conflict", "ErrorResponse").
+		ResponseJSON("500", "Content update failed", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/steps/:stepId/confirm", "Confirm the current creator-step artifact").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		creatorAuth(false).
+		BodyJSON("StepConfirmRequest", "Current artifact and optional review gate identity", true).
+		ResponseJSON("200", "Authoritative creator workspace", "CreationViewResponse").
+		ResponseJSON("400", "Invalid confirmation", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project or content not found", "ErrorResponse").
+		ResponseJSON("409", "Review gate conflict", "ErrorResponse").
+		ResponseJSON("500", "Content update failed", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/steps/:stepId/versions/:version/restore", "Restore a historical step version as a new current version").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		PathParam("version", "Positive historical version", func() *Schema { minimum := float64(1); return &Schema{Type: "integer", Minimum: &minimum} }()).
+		creatorAuth(true).
+		BodyJSON("StepRestoreRequest", "Positive current baseVersion and exact confirmed Shot impact", true).
+		ResponseJSON("200", "Restored artifact, impact, and authoritative view", "StepMutationResponse").
+		ResponseJSON("400", "Invalid restore or impact confirmation", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project, content, or version not found", "ErrorResponse").
+		ResponseJSON("409", "Content version or idempotency conflict", "ErrorResponse").
+		ResponseJSON("500", "Content update failed", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/materials", "Register local source-material metadata in the aggregate manifest").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		creatorAuth(false).
+		BodyJSON("RegisterProjectMaterialRequest", "Canonical local material metadata", true).
+		ResponseJSON("200", "Registered material and current aggregate manifest artifact", "ProjectMaterialResponse").
+		ResponseJSON("400", "Invalid material metadata", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Project not found", "ErrorResponse").
+		ResponseJSON("409", "Material manifest changed", "ErrorResponse").
+		ResponseJSON("500", "Material registration failed", "ErrorResponse")
+	b.Route("GET", "/api/video-projects/:id/shots/summary", "Get creator-facing Shot review counts").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		creatorAuth(false).
+		ResponseJSON("200", "Shot summary", "ShotSummaryResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("GET", "/api/video-projects/:id/shots/:shotId/workspace", "Get one Shot's current review workspace").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		creatorAuth(false).
+		ResponseJSON("200", "Shot workspace", "ShotWorkspaceResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Shot not found", "ErrorResponse")
+	b.Route("GET", "/api/video-projects/:id/shots/:shotId/history", "Get immutable history for one Shot").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		creatorAuth(false).
+		ResponseJSON("200", "Shot history", "ShotHistoryResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("404", "Shot not found", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/regeneration-impact", "Preview target-only Shot regeneration impact").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		creatorAuth(false).
+		ResponseJSON("200", "Exact target-only impact", "ShotImpactResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/regenerations", "Queue an idempotent scoped Shot regeneration").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		creatorAuth(true).
+		BodyJSON("ShotRegenerationRequest", "Positive baseVersion, exact scope, and explicit locks", true).
+		ResponseJSON("200", "Current Shot and durable regeneration task", "ShotRegenerationResponse").
+		ResponseJSON("400", "Invalid regeneration request", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("409", "Shot version conflict", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/candidates/:candidateId/accept", "Accept an explicit Shot candidate").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		PathParam("candidateId", "Candidate identifier", StringSchema()).
+		creatorAuth(true).
+		BodyJSON("CandidateAcceptRequest", "Positive baseVersion, candidate_accept scope, and explicit locks", true).
+		ResponseJSON("200", "Updated Shot", "CreatorShotUnitResponse").
+		ResponseJSON("400", "Invalid candidate acceptance", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("409", "Shot version conflict", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/shots/:shotId/candidates/:candidateId/restore", "Restore a historical Shot candidate").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		PathParam("shotId", "Shot identifier", StringSchema()).
+		PathParam("candidateId", "Candidate identifier", StringSchema()).
+		creatorAuth(true).
+		BodyJSON("CandidateRestoreRequest", "Positive baseVersion, candidate_restore scope, and explicit locks", true).
+		ResponseJSON("200", "Updated Shot", "CreatorShotUnitResponse").
+		ResponseJSON("400", "Invalid candidate restore", "ErrorResponse").
+		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
+		ResponseJSON("409", "Shot version conflict", "ErrorResponse")
 	b.Route("GET", "/api/video-projects/:id/shots/:shotId", "Get shot unit").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
@@ -655,6 +810,13 @@ func BuildCloudSpec() *Spec {
 		PathParam("id", "Project identifier", StringSchema()).
 		ResponseJSON("200", "Assembly validation issues", "AssemblyValidationResponse").
 		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/assembly/rebuild", "Persist an accepted-candidate assembly snapshot").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		HeaderParam("Idempotency-Key", "Stable key for an assembly retry", StringSchema(), true).
+		ResponseJSON("200", "Assembly snapshot result", "AssemblyRebuildResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("409", "Assembly inputs changed", "ErrorResponse")
 	b.Route("POST", "/api/video-projects/:id/publish-package/generate", "Generate publish package metadata").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).

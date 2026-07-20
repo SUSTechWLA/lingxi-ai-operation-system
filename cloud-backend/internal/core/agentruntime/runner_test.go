@@ -765,6 +765,7 @@ func TestScopeDAGToTask_KeepsNodeIDsWithinDatabaseLimit(t *testing.T) {
 
 type staticPlanner struct {
 	plan *AgentPlan
+	err  error
 }
 
 func findPlanStep(plan *AgentPlan, id string) AgentStep {
@@ -871,7 +872,7 @@ func (betaCompletionJudge) Evaluate(plan *AgentPlan) PlanJudgeReport {
 }
 
 func (p staticPlanner) GeneratePlan(context.Context, StartRunRequest) (*AgentPlan, error) {
-	return p.plan, nil
+	return p.plan, p.err
 }
 
 type fakeOrchestrator struct {
@@ -902,12 +903,85 @@ func (o *fakeOrchestrator) GetTaskWithDetails(context.Context, string) (map[stri
 }
 
 type memoryRunStore struct {
-	mu   sync.RWMutex
-	runs map[string]*Run
+	mu              sync.RWMutex
+	runs            map[string]*Run
+	terminal        map[string]RunTerminalEvent
+	delivered       map[string]bool
+	terminalClaim   map[string]string
+	saveTerminalErr error
 }
 
 func newMemoryRunStore() *memoryRunStore {
-	return &memoryRunStore{runs: make(map[string]*Run)}
+	return &memoryRunStore{
+		runs: make(map[string]*Run), terminal: make(map[string]RunTerminalEvent),
+		delivered: make(map[string]bool), terminalClaim: make(map[string]string),
+	}
+}
+
+func (s *memoryRunStore) SaveRunTerminal(_ context.Context, run *Run, event RunTerminalEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.saveTerminalErr != nil {
+		return s.saveTerminalErr
+	}
+	s.runs[run.ID] = run
+	s.terminal[run.ID] = event
+	s.delivered[run.ID] = false
+	s.terminalClaim[run.ID] = ""
+	return nil
+}
+
+func (s *memoryRunStore) ClaimTerminalEvents(_ context.Context, limit int, _ time.Time, claimToken string) ([]TerminalEventDelivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deliveries := make([]TerminalEventDelivery, 0, limit)
+	for runID, event := range s.terminal {
+		if len(deliveries) >= limit {
+			break
+		}
+		if s.delivered[runID] || s.terminalClaim[runID] != "" {
+			continue
+		}
+		s.terminalClaim[runID] = claimToken
+		deliveries = append(deliveries, TerminalEventDelivery{RunID: runID, EventID: event.EventID, ClaimToken: claimToken, Event: event})
+	}
+	return deliveries, nil
+}
+
+func (s *memoryRunStore) AckTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.terminal[delivery.RunID]
+	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+		return false, nil
+	}
+	s.delivered[delivery.RunID] = true
+	s.terminalClaim[delivery.RunID] = ""
+	return true, nil
+}
+
+func (s *memoryRunStore) ReleaseTerminalEvent(_ context.Context, delivery TerminalEventDelivery) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.terminal[delivery.RunID]
+	if !ok || current.EventID != delivery.EventID || s.terminalClaim[delivery.RunID] != delivery.ClaimToken {
+		return false, nil
+	}
+	s.terminalClaim[delivery.RunID] = ""
+	return true, nil
+}
+
+func (s *memoryRunStore) hasPendingTerminal(runID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.terminal[runID]
+	return ok && !s.delivered[runID]
+}
+
+func (s *memoryRunStore) terminalDelivered(runID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.delivered[runID]
 }
 
 func (s *memoryRunStore) SaveRun(_ context.Context, run *Run) error {
@@ -915,6 +989,16 @@ func (s *memoryRunStore) SaveRun(_ context.Context, run *Run) error {
 	defer s.mu.Unlock()
 	s.runs[run.ID] = run
 	return nil
+}
+
+func (s *memoryRunStore) CreateRun(_ context.Context, run *Run) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.runs[run.ID]; exists {
+		return false, nil
+	}
+	s.runs[run.ID] = run
+	return true, nil
 }
 
 func (s *memoryRunStore) FindRun(_ context.Context, id string) (*Run, error) {

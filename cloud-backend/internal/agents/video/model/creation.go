@@ -1,8 +1,13 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
+	MaxShotDurationExclusiveSec = 15
+
 	ReviewModeShotLevel = "shot_level_review"
 
 	RenderStrategyAuto = "auto"
@@ -193,7 +198,7 @@ func NewVideoCreationSpec(projectID, sourceMessage string) *VideoCreationSpec {
 func DefaultShotPolicy() ShotPolicy {
 	return ShotPolicy{
 		MinDurationSec:           3,
-		MaxDurationSec:           15,
+		MaxDurationSec:           14,
 		PreferDurationSec:        6,
 		PreferredMinDurationSec:  6,
 		PreferredMaxDurationSec:  8,
@@ -267,6 +272,59 @@ type ShotUnit struct {
 	LastRejectReason    string                 `json:"lastRejectReason,omitempty"`
 	CreatedAt           time.Time              `json:"createdAt"`
 	UpdatedAt           time.Time              `json:"updatedAt"`
+}
+
+func ValidateShotDuration(shot ShotUnit) error {
+	durationMs := shot.DurationMs
+	if durationMs == 0 && shot.DurationSec > 0 {
+		durationMs = int64(shot.DurationSec) * 1000
+	}
+	if durationMs <= 0 || durationMs >= int64(MaxShotDurationExclusiveSec*1000) {
+		return fmt.Errorf("shot duration must be greater than 0 and less than 15 seconds")
+	}
+	return nil
+}
+
+type ShotRevision struct {
+	RevisionID string    `json:"revisionId"`
+	ShotID     string    `json:"shotId"`
+	Version    int       `json:"version"`
+	Reason     string    `json:"reason"`
+	Snapshot   ShotUnit  `json:"snapshot"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type ShotRegenerationTask struct {
+	TaskID             string    `json:"taskId"`
+	RunID              string    `json:"runId,omitempty"`
+	ShotID             string    `json:"shotId"`
+	BaseVersion        int       `json:"baseVersion"`
+	Scope              string    `json:"scope"`
+	Locks              []string  `json:"locks,omitempty"`
+	Instruction        string    `json:"instruction,omitempty"`
+	IdempotencyKey     string    `json:"idempotencyKey"`
+	RequestFingerprint string    `json:"requestFingerprint"`
+	Status             string    `json:"status"`
+	FailureReason      string    `json:"failureReason,omitempty"`
+	DispatchAttempts   int       `json:"dispatchAttempts,omitempty"`
+	DispatchLeaseUntil time.Time `json:"dispatchLeaseUntil,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+}
+
+// ShotMutationReceipt records a completed creator mutation for scoped idempotent retries.
+// It is deliberately distinct from regeneration tasks: it has no dispatcher lifecycle.
+type ShotMutationReceipt struct {
+	Operation          string    `json:"operation"`
+	ShotID             string    `json:"shotId"`
+	CandidateID        string    `json:"candidateId"`
+	BaseVersion        int       `json:"baseVersion"`
+	Scope              string    `json:"scope"`
+	Locks              []string  `json:"locks,omitempty"`
+	IdempotencyKey     string    `json:"idempotencyKey"`
+	RequestFingerprint string    `json:"requestFingerprint"`
+	ResultShot         ShotUnit  `json:"resultShot"`
+	CreatedAt          time.Time `json:"createdAt"`
 }
 
 type ShotContinuity struct {
@@ -666,6 +724,22 @@ type FinalAssemblyPlan struct {
 	ArtifactProvenance []ArtifactProvenance `json:"artifactProvenance,omitempty"`
 }
 
+// AssemblyReceipt is the durable outcome of a final-assembly rebuild. It is
+// intentionally kept in the project state instead of being inferred by the
+// client, so reconnects and idempotent retries observe the same result.
+type AssemblyReceipt struct {
+	IdempotencyKey        string            `json:"idempotencyKey"`
+	RequestFingerprint    string            `json:"requestFingerprint"`
+	Status                string            `json:"status"`
+	BasePreviewArtifactID string            `json:"basePreviewArtifactId,omitempty"`
+	PreviewTaskID         string            `json:"previewTaskId,omitempty"`
+	PreviewReviewID       string            `json:"previewReviewId,omitempty"`
+	DispatchAttempt       int               `json:"dispatchAttempt,omitempty"`
+	Plan                  FinalAssemblyPlan `json:"plan"`
+	CreatedAt             time.Time         `json:"createdAt"`
+	UpdatedAt             time.Time         `json:"updatedAt"`
+}
+
 type ArtifactProvenance struct {
 	ArtifactID        string   `json:"artifactId,omitempty"`
 	Kind              string   `json:"kind,omitempty"`
@@ -729,8 +803,21 @@ type CompositePlan struct {
 }
 
 type ShotDrivenState struct {
-	SchemaVersion int                `json:"schemaVersion"`
-	Spec          *VideoCreationSpec `json:"spec,omitempty"`
-	Shots         []ShotUnit         `json:"shots,omitempty"`
-	UpdatedAt     time.Time          `json:"updatedAt"`
+	SchemaVersion        int                             `json:"schemaVersion"`
+	Spec                 *VideoCreationSpec              `json:"spec,omitempty"`
+	Shots                []ShotUnit                      `json:"shots,omitempty"`
+	ShotHistory          map[string][]ShotRevision       `json:"shotHistory,omitempty"`
+	RegenerationTasks    map[string]ShotRegenerationTask `json:"regenerationTasks,omitempty"`
+	IdempotencyTasks     map[string]string               `json:"idempotencyTasks,omitempty"`
+	ShotMutationReceipts map[string]ShotMutationReceipt  `json:"shotMutationReceipts,omitempty"`
+	AssemblyReceipts     map[string]AssemblyReceipt      `json:"assemblyReceipts,omitempty"`
+	UpstreamRevisions    map[string]time.Time            `json:"upstreamRevisions,omitempty"`
+	AssemblyDirty        bool                            `json:"assemblyDirty"`
+	UpdatedAt            time.Time                       `json:"updatedAt"`
+}
+
+type PendingShotRegeneration struct {
+	UserID    string
+	ProjectID string
+	TaskID    string
 }

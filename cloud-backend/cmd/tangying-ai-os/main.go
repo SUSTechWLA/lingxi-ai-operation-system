@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -50,6 +51,7 @@ import (
 	videoAssets "github.com/tangying-ai/aios-core/internal/agents/video/assets"
 	videoAssistant "github.com/tangying-ai/aios-core/internal/agents/video/assistant"
 	videoHandler "github.com/tangying-ai/aios-core/internal/agents/video/handler"
+	videoModel "github.com/tangying-ai/aios-core/internal/agents/video/model"
 	videoPlanJudge "github.com/tangying-ai/aios-core/internal/agents/video/planjudge"
 	videoRepo "github.com/tangying-ai/aios-core/internal/agents/video/repository"
 	videoSvc "github.com/tangying-ai/aios-core/internal/agents/video/service"
@@ -73,6 +75,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var backgroundWorkers sync.WaitGroup
 
 	// Infrastructure
 	pool := database.NewPool(ctx, cfg.Postgres)
@@ -317,19 +320,7 @@ func main() {
 	allowedCORSOrigins := configuredCORSOrigins(cfg.Server.CORSAllowedOrigins)
 
 	// CORS middleware
-	r.Use(func(c *gin.Context) {
-		if origin := allowedCORSOrigin(c.GetHeader("Origin"), allowedCORSOrigins); origin != "" {
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Vary", "Origin")
-		}
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, DeviceID")
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-		c.Next()
-	})
+	r.Use(corsMiddleware(allowedCORSOrigins))
 
 	auth.NewHandler(authService).RegisterRoutes(r)
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r, requireAuth)
@@ -500,7 +491,20 @@ func main() {
 		agentRuntimeHandler.WithTaskPauser(taskExecutionCtrl)
 		projectHandler := videoHandler.NewProjectHandler(videoProjectSvc, requireAuth)
 		projectHandler.RegisterRoutes(r)
-		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo)
+		videoCreationSvc := videoSvc.NewCreationService(videoProjectRepo, &shotRegenerationAgentDispatcher{runner: agentRunner})
+		agentRunner.WithTerminalCallback(func(ctx context.Context, event agentruntime.RunTerminalEvent) error {
+			return failShotRegenerationFromAgentTerminal(ctx, videoCreationSvc, videoProjectRepo, event)
+		})
+		shotRegenerationReconciler := videoSvc.NewShotRegenerationReconciler(videoProjectRepo, videoCreationSvc, 5*time.Second, 50)
+		backgroundWorkers.Add(2)
+		go func() {
+			defer backgroundWorkers.Done()
+			shotRegenerationReconciler.Run(ctx)
+		}()
+		go func() {
+			defer backgroundWorkers.Done()
+			agentRunner.RunTerminalDelivery(ctx, 5*time.Second, 50)
+		}()
 		videoHandler.NewCreationHandler(videoCreationSvc, requireAuth).RegisterRoutes(r)
 		videoAssistant.NewHandler(requireAuth).RegisterRoutes(r)
 
@@ -525,16 +529,21 @@ func main() {
 		// Wire decision log into the agent runtime handler so approve/reject
 		// writes audit-trail entries automatically.
 		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore})
+		agentRuntimeHandler.WithAtomicReviewReopener(agentruntime.NewPGXReviewReopener(pool))
 
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)
 		stageApprovalSvc.WithArtifactApprover(artifactSvc)
-		videoAssets.NewHandler(artifactSvc, requireAuth).RegisterRoutes(r)
+		videoAssets.NewHandler(artifactSvc, videoProjectSvc, requireAuth).RegisterRoutes(r)
 		videoHandler.NewWorkflowHandler(workflowRunSvc, stageApprovalSvc).
 			WithCheckpointService(checkpointSvc).
 			RegisterRoutes(r, requireAuth)
 		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo).
-			WithAgentTaskStore(taskRepo)
+			WithAgentTaskStore(taskRepo).
+			WithProjectAccess(artifact.ProjectAccessFunc(func(ctx context.Context, userID, projectID string) bool {
+				project, err := videoProjectSvc.GetProject(ctx, userID, projectID)
+				return err == nil && project != nil && project.ID == projectID
+			}))
 
 		// Wire session dependencies into the project handler
 		projectHandler.WithSessionDependencies(artifactSvc, localRunnerService)
@@ -560,6 +569,9 @@ func main() {
 			}
 			return content, nil
 		})
+		creatorViewSvc := videoSvc.NewCreatorViewService(videoProjectSvc, videoCreationSvc, artifactSvc).
+			WithStepMutations(artifactHandler.RevisionService(), agentRuntimeHandler.ReviewMutations())
+		videoHandler.NewCreatorViewHandler(videoProjectSvc, creatorViewSvc, requireAuth).RegisterRoutes(r)
 		artifactHandler.RegisterRoutes(r, requireAuth)
 
 		// Wire artifact service into the agent runtime handler for stale tracking
@@ -585,20 +597,28 @@ func main() {
 
 		// Wire artifact sync callback so local job completions automatically
 		// write artifact metadata to the cloud ArtifactIndex.
-		localRunnerHandler.WithArtifactSyncCallback(func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error {
-			workflowRunID, err := workflowRunRepo.FindRunIDByTaskID(ctx, taskID)
+		localRunnerHandler.WithArtifactSyncCallback(func(ctx context.Context, job *localrunner.LocalJob, output map[string]interface{}) error {
+			workflowRunID, err := workflowRunRepo.FindRunIDByTaskID(ctx, job.TaskID)
 			if err != nil || workflowRunID == "" {
 				zap.L().Warn("artifact sync: workflowRunID missing, fallback to taskID",
-					zap.String("taskID", taskID),
-					zap.String("nodeID", nodeID),
-					zap.String("projectID", projectID),
-					zap.String("toolName", toolName),
-					zap.String("command", command),
+					zap.String("taskID", job.TaskID),
+					zap.String("nodeID", job.NodeID),
+					zap.String("projectID", job.ProjectID),
+					zap.String("toolName", job.ToolName),
+					zap.String("command", string(job.Command)),
 					zap.Error(err),
 				)
-				workflowRunID = taskID
+				workflowRunID = job.TaskID
 			}
-			return syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, projectID, workflowRunID, taskID, nodeID, toolName, command, output)
+			if err := syncArtifactsFromLocalJob(ctx, artifactSvc, nodeRepo, job.ProjectID, workflowRunID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), output); err != nil {
+				return err
+			}
+			return completeShotRegenerationFromLocalJob(ctx, videoCreationSvc, videoProjectRepo, job, output)
+		}).WithJobFailureCallback(func(ctx context.Context, job *localrunner.LocalJob, reason string) error {
+			if job == nil {
+				return nil
+			}
+			return failShotRegenerationFromJob(ctx, videoCreationSvc, videoProjectRepo, job, reason)
 		})
 
 		zap.L().Info("Video project and watch workflow run services registered")
@@ -630,8 +650,9 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		zap.L().Fatal("Server forced to shutdown", zap.Error(err))
+	if err := shutdownHTTPAndWorkers(shutdownCtx, srv, cancel, backgroundWorkers.Wait); err != nil {
+		zap.L().Error("Server shutdown returned an error", zap.Error(err))
+		return
 	}
 
 	zap.L().Info("Server exited")
@@ -758,6 +779,235 @@ func (a *artifactStateAdapter) FindCurrentByStageAndKind(ctx context.Context, pr
 // by delegating to SupportsCommandForAnyUser (no user context needed for guard checks).
 type runnerServiceAdapter struct {
 	svc *localrunner.Service
+}
+
+type asyncAgentRunner interface {
+	StartAsync(ctx context.Context, req agentruntime.StartRunRequest) (*agentruntime.Run, error)
+}
+
+type shotRegenerationAgentDispatcher struct {
+	runner asyncAgentRunner
+}
+
+func (d *shotRegenerationAgentDispatcher) EnqueueShotRegeneration(
+	ctx context.Context,
+	userID, projectID string,
+	task videoModel.ShotRegenerationTask,
+) (string, error) {
+	if d == nil || d.runner == nil {
+		return "", fmt.Errorf("shot regeneration agent runner is not configured")
+	}
+	run, err := d.runner.StartAsync(ctx, agentruntime.StartRunRequest{
+		RunID:   task.RunID,
+		UserID:  userID,
+		Message: fmt.Sprintf("Regenerate shot %s", task.ShotID),
+		Domain:  "video_creation",
+		Context: map[string]interface{}{
+			"operation":              "shot_regeneration",
+			"projectId":              projectID,
+			"targetShotId":           task.ShotID,
+			"allowedShotIds":         []string{task.ShotID},
+			"regenerationScope":      task.Scope,
+			"locks":                  append([]string(nil), task.Locks...),
+			"baseVersion":            task.BaseVersion,
+			"shotRegenerationTaskId": task.TaskID,
+			"shotRegenerationRunId":  task.RunID,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if run == nil || strings.TrimSpace(run.ID) == "" {
+		return "", fmt.Errorf("shot regeneration agent runner returned no run id")
+	}
+	if run.Status == agentruntime.RunStatusFailed || run.Status == agentruntime.RunStatusCancelled {
+		return "", fmt.Errorf("shot regeneration agent run %s is terminal with status %s", run.ID, run.Status)
+	}
+	if run.Status == agentruntime.RunStatusSuccess {
+		return "", fmt.Errorf("shot regeneration agent run %s succeeded without durable candidate; retry regeneration", run.ID)
+	}
+	return run.ID, nil
+}
+
+type shotRegenerationCompletionService interface {
+	CompleteShotRegeneration(ctx context.Context, userID, projectID string, provenance videoSvc.ShotRegenerationProvenance, candidate videoModel.ShotCandidate) error
+	FailShotRegeneration(ctx context.Context, userID, projectID string, provenance videoSvc.ShotRegenerationProvenance, reason string) error
+}
+
+type shotProjectFinder interface {
+	FindByID(ctx context.Context, id string) (*videoModel.VideoProject, error)
+}
+
+func completeShotRegenerationFromLocalJob(
+	ctx context.Context,
+	completion shotRegenerationCompletionService,
+	projects shotProjectFinder,
+	job *localrunner.LocalJob,
+	output map[string]interface{},
+) error {
+	if job == nil {
+		return nil
+	}
+	provenance, ok, err := shotRegenerationProvenanceFromPayload(job.Payload)
+	if err != nil || !ok {
+		return err
+	}
+	metadata := shotRegenerationMetadata(output)
+	userID, err := projectOwnerID(ctx, projects, job.ProjectID)
+	if err != nil {
+		return err
+	}
+	candidateID := metadataString(metadata, "candidateId")
+	if candidateID == "" {
+		candidateID = "shot-candidate-" + provenance.TaskID
+	}
+	status := metadataString(metadata, "status")
+	if status == "" {
+		status = videoModel.CandidateRendered
+	}
+	candidate := videoModel.ShotCandidate{
+		CandidateID:        candidateID,
+		ShotID:             provenance.ShotID,
+		Status:             status,
+		DurationSec:        metadataFloat(metadata, "durationSec"),
+		SourceType:         metadataString(metadata, "sourceType"),
+		ProductionEligible: metadataBool(metadata, "productionEligible"),
+		CreatedAt:          time.Now(),
+	}
+	return completion.CompleteShotRegeneration(ctx, userID, job.ProjectID, provenance, candidate)
+}
+
+func failShotRegenerationFromJob(
+	ctx context.Context,
+	completion shotRegenerationCompletionService,
+	projects shotProjectFinder,
+	job *localrunner.LocalJob,
+	reason string,
+) error {
+	if job == nil {
+		return nil
+	}
+	provenance, ok, err := shotRegenerationProvenanceFromPayload(job.Payload)
+	if err != nil || !ok {
+		return err
+	}
+	userID, err := projectOwnerID(ctx, projects, job.ProjectID)
+	if err != nil {
+		return err
+	}
+	return completion.FailShotRegeneration(ctx, userID, job.ProjectID, provenance, reason)
+}
+
+func failShotRegenerationFromAgentTerminal(
+	ctx context.Context,
+	completion shotRegenerationCompletionService,
+	projects shotProjectFinder,
+	event agentruntime.RunTerminalEvent,
+) error {
+	if event.Status != agentruntime.RunStatusFailed && event.Status != agentruntime.RunStatusCancelled {
+		return nil
+	}
+	provenance, ok, err := shotRegenerationProvenanceFromPayload(event.Context)
+	if err != nil || !ok {
+		return err
+	}
+	if strings.TrimSpace(event.RunID) != provenance.RunID {
+		return fmt.Errorf("shot regeneration terminal run %s does not match durable provenance %s", event.RunID, provenance.RunID)
+	}
+	projectID := metadataString(event.Context, "projectId")
+	if projectID == "" {
+		return fmt.Errorf("shot regeneration terminal event is missing projectId")
+	}
+	userID, err := projectOwnerID(ctx, projects, projectID)
+	if err != nil {
+		return err
+	}
+	reason := strings.TrimSpace(event.Error)
+	if reason == "" {
+		if event.Status == agentruntime.RunStatusCancelled {
+			reason = "agent run cancelled before local job completion"
+		} else {
+			reason = "agent run failed before local job completion"
+		}
+	}
+	return completion.FailShotRegeneration(ctx, userID, projectID, provenance, reason)
+}
+
+func shotRegenerationProvenanceFromPayload(payload map[string]interface{}) (videoSvc.ShotRegenerationProvenance, bool, error) {
+	provenance := videoSvc.ShotRegenerationProvenance{
+		TaskID: metadataString(payload, "shotRegenerationTaskId"),
+		RunID:  metadataString(payload, "shotRegenerationRunId"),
+		ShotID: metadataString(payload, "targetShotId"),
+	}
+	if provenance.TaskID == "" {
+		return provenance, false, nil
+	}
+	if provenance.RunID == "" || provenance.ShotID == "" {
+		return provenance, false, fmt.Errorf("shot regeneration payload for task %s is missing durable run or shot provenance", provenance.TaskID)
+	}
+	return provenance, true, nil
+}
+
+func projectOwnerID(ctx context.Context, projects shotProjectFinder, projectID string) (string, error) {
+	if projects == nil {
+		return "", fmt.Errorf("shot regeneration project store is not configured")
+	}
+	project, err := projects.FindByID(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("resolve shot regeneration project owner for %s: %w", projectID, err)
+	}
+	if project == nil || strings.TrimSpace(project.UserID) == "" {
+		return "", fmt.Errorf("resolve shot regeneration project owner for %s: project owner is missing", projectID)
+	}
+	return project.UserID, nil
+}
+
+func shotRegenerationMetadata(output map[string]interface{}) map[string]interface{} {
+	if output == nil {
+		return nil
+	}
+	if metadata, ok := output["metadata"].(map[string]interface{}); ok {
+		return metadata
+	}
+	if metadataString(output, "candidateId") != "" || metadataFloat(output, "durationSec") != 0 {
+		return output
+	}
+	if artifacts, ok := output["artifacts"].([]interface{}); ok {
+		for _, item := range artifacts {
+			artifact, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if metadata, ok := artifact["metadata"].(map[string]interface{}); ok {
+				return metadata
+			}
+		}
+	}
+	return nil
+}
+
+func metadataString(metadata map[string]interface{}, key string) string {
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func metadataFloat(metadata map[string]interface{}, key string) float64 {
+	switch value := metadata[key].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	}
+	return 0
+}
+
+func metadataBool(metadata map[string]interface{}, key string) bool {
+	value, _ := metadata[key].(bool)
+	return value
 }
 
 func (a *runnerServiceAdapter) SupportsCommand(ctx context.Context, command string) (bool, error) {
@@ -1134,6 +1384,22 @@ func allowedCORSOrigin(requestOrigin string, allowed []string) string {
 		}
 	}
 	return ""
+}
+
+func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if origin := allowedCORSOrigin(c.GetHeader("Origin"), allowedOrigins); origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+		}
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, DeviceID, Idempotency-Key")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
 }
 
 // decisionLogAdapter bridges the workflow DecisionLogStore to the

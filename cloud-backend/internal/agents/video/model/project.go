@@ -51,6 +51,7 @@ type VideoProject struct {
 	TargetDuration     int             `json:"targetDurationSec,omitempty"`
 	Language           string          `json:"language,omitempty"`
 	Config             json.RawMessage `json:"config,omitempty"`
+	ConfigRevision     int64           `json:"configRevision"`
 	CurrentRunID       string          `json:"currentRunId,omitempty"`
 	LocalPathHint      string          `json:"localPathHint,omitempty"`
 	DeletedAt          *time.Time      `json:"deletedAt,omitempty"`

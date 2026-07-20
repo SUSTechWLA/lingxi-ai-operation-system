@@ -2,13 +2,17 @@ package artifact
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
+	"reflect"
 	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
 )
+
+var ErrArtifactVersionConflict = errors.New("artifact version conflict")
 
 // ArtifactStatus represents the lifecycle status of an artifact.
 type ArtifactStatus string
@@ -40,7 +44,7 @@ func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest
 	}
 
 	// Check for idempotent duplicate (same content hash = same result)
-	if req.ContentHash != "" {
+	if contentHashDedupEnabled(req) {
 		existing, err := s.repo.FindByHash(ctx, req.ProjectID, req.StageName, req.UnitID, req.ContentHash)
 		if err == nil && existing != nil {
 			zap.L().Debug("Artifact already exists (idempotent)", zap.String("hash", req.ContentHash))
@@ -69,6 +73,10 @@ func (s *Service) CreateArtifact(ctx context.Context, req *CreateArtifactRequest
 		zap.Int("version", artifact.Version),
 	)
 	return artifact, nil
+}
+
+func contentHashDedupEnabled(req *CreateArtifactRequest) bool {
+	return req != nil && !req.ForceNewVersion && req.ContentHash != ""
 }
 
 // GetCurrent returns the current version of an artifact for the given scope.
@@ -266,9 +274,10 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 	}
 
 	metadata := cloneMetadata(req.Metadata)
-	metadata["cloudPayloadStored"] = false
-	metadata["localOnly"] = true
-	if _, exists := metadata["requestedStorageType"]; !exists && req.StorageType != "" && req.StorageType != StorageLocal {
+	if req.RestoredFromID != "" {
+		metadata["restoredFromArtifactId"] = req.RestoredFromID
+	}
+	if _, exists := metadata["requestedStorageType"]; !exists && !req.ForceNewVersion && req.StorageType != "" && req.StorageType != StorageLocal {
 		metadata["requestedStorageType"] = req.StorageType
 	}
 
@@ -282,18 +291,7 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		sizeBytes = int64(len(req.Data))
 	}
 
-	storageType := StorageLocal
-	inlineJSON := ""
-	if isReviewableInlineProvider(req.Provider) && req.StorageType == StorageInline && len(req.Data) > 0 {
-		storageType = StorageInline
-		inlineJSON = string(req.Data)
-		metadata["cloudPayloadStored"] = true
-		metadata["localOnly"] = false
-		metadata["contentAvailability"] = "inline"
-	}
-	if len(req.Data) > 0 && storageType == StorageLocal {
-		metadata["contentAvailability"] = "local-agent"
-	}
+	storageType, inlineJSON := artifactStorageForCreate(req, metadata)
 
 	// Determine beta index fields from metadata or default
 	status := stringMetadata(metadata, "status")
@@ -307,6 +305,7 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 	producedByRole := stringMetadata(metadata, "producedByRole")
 
 	return &Artifact{
+		ID:             req.ID,
 		ProjectID:      req.ProjectID,
 		WorkflowRunID:  req.WorkflowRunID,
 		TaskID:         req.TaskID,
@@ -335,6 +334,48 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 		ProducedByRole: producedByRole,
 		Metadata:       metadata,
 	}
+}
+
+func artifactStorageForCreate(req *CreateArtifactRequest, metadata map[string]interface{}) (string, string) {
+	metadata["cloudPayloadStored"] = false
+	metadata["localOnly"] = true
+
+	// Restores are copies of an already-confirmed artifact, so retain the
+	// exact storage representation instead of applying the normal new-artifact
+	// local-storage normalization.
+	if req.ForceNewVersion {
+		storageType := req.StorageType
+		if storageType == "" {
+			storageType = StorageLocal
+		}
+		switch storageType {
+		case StorageInline:
+			metadata["cloudPayloadStored"] = true
+			metadata["localOnly"] = false
+			metadata["contentAvailability"] = "inline"
+			return storageType, string(req.Data)
+		case StorageLocal:
+			if len(req.Data) > 0 {
+				metadata["contentAvailability"] = "local-agent"
+			}
+		default:
+			metadata["cloudPayloadStored"] = true
+			metadata["localOnly"] = false
+			metadata["contentAvailability"] = "remote"
+		}
+		return storageType, ""
+	}
+
+	if isReviewableInlineProvider(req.Provider) && req.StorageType == StorageInline && len(req.Data) > 0 {
+		metadata["cloudPayloadStored"] = true
+		metadata["localOnly"] = false
+		metadata["contentAvailability"] = "inline"
+		return StorageInline, string(req.Data)
+	}
+	if len(req.Data) > 0 {
+		metadata["contentAvailability"] = "local-agent"
+	}
+	return StorageLocal, ""
 }
 
 func isReviewableInlineProvider(provider string) bool {
@@ -464,9 +505,113 @@ func LocalArtifactRef(projectID, stageName, unitID, contentHash, name string) st
 func cloneMetadata(metadata map[string]interface{}) map[string]interface{} {
 	cloned := map[string]interface{}{}
 	for key, value := range metadata {
-		cloned[key] = value
+		cloned[key] = deepCloneMetadataValue(value)
 	}
 	return cloned
+}
+
+func deepCloneMetadataValue(value interface{}) interface{} {
+	if value == nil {
+		return nil
+	}
+	cloned := cloneMetadataReflectValue(reflect.ValueOf(value), map[metadataCloneVisit]reflect.Value{})
+	if !cloned.IsValid() || !cloned.CanInterface() {
+		return value
+	}
+	return cloned.Interface()
+}
+
+type metadataCloneVisit struct {
+	typ  reflect.Type
+	kind reflect.Kind
+	ptr  uintptr
+}
+
+// cloneMetadataReflectValue recursively preserves concrete metadata types.
+// Metadata normally contains JSON-shaped values, but revision callers can
+// supply typed maps/slices/pointers too; cloning those avoids historical
+// provenance being changed by later edits. The visited table also preserves
+// cyclic pointer/map/slice graphs without unbounded recursion.
+func cloneMetadataReflectValue(value reflect.Value, visited map[metadataCloneVisit]reflect.Value) reflect.Value {
+	if !value.IsValid() || !value.CanInterface() {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(cloneMetadataReflectValue(value.Elem(), visited))
+		return cloned
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := metadataCloneVisit{typ: value.Type(), kind: value.Kind(), ptr: uintptr(value.UnsafePointer())}
+		if existing, ok := visited[key]; ok {
+			return existing
+		}
+		cloned := reflect.New(value.Type().Elem())
+		visited[key] = cloned
+		cloned.Elem().Set(cloneMetadataReflectValue(value.Elem(), visited))
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := metadataCloneVisit{typ: value.Type(), kind: value.Kind(), ptr: uintptr(value.UnsafePointer())}
+		if existing, ok := visited[key]; ok {
+			return existing
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		visited[key] = cloned
+		iterator := value.MapRange()
+		for iterator.Next() {
+			cloned.SetMapIndex(
+				cloneMetadataReflectValue(iterator.Key(), visited),
+				cloneMetadataReflectValue(iterator.Value(), visited),
+			)
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := metadataCloneVisit{typ: value.Type(), kind: value.Kind(), ptr: uintptr(value.UnsafePointer())}
+		if key.ptr != 0 {
+			if existing, ok := visited[key]; ok {
+				return existing
+			}
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Cap())
+		if key.ptr != 0 {
+			visited[key] = cloned
+		}
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneMetadataReflectValue(value.Index(i), visited))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneMetadataReflectValue(value.Index(i), visited))
+		}
+		return cloned
+	case reflect.Struct:
+		// Start from a value copy so unexported implementation fields (for
+		// example in standard-library structs) retain their exact values.
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(value)
+		for i := 0; i < value.NumField(); i++ {
+			if cloned.Field(i).CanSet() && value.Field(i).CanInterface() {
+				cloned.Field(i).Set(cloneMetadataReflectValue(value.Field(i), visited))
+			}
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 var unsafeStorageSegmentPattern = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)

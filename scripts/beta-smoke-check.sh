@@ -105,12 +105,16 @@ check_port 8787 "HyperFrames render service"
 check_release_env
 
 run_check "cloud-backend go test ./..." bash -c "cd '$ROOT_DIR/cloud-backend' && go test ./..."
+run_check "creator authenticated creation view handler" bash -c "cd '$ROOT_DIR/cloud-backend' && go test ./internal/agents/video/handler -run 'TestCreatorViewHandler(RequiresAuthentication|VerifiesOwnerBeforeReturningView)' -count=1"
+run_check "creator strict duration and target assembly integration" bash -c "cd '$ROOT_DIR/cloud-backend' && go test ./internal/agents/video/service -run 'TestCreatorStudio|TestCreationServiceRejectsShotAtFifteenSeconds|TestCreationServiceAcceptsFourteenSecondShot|TestListShotPagePaginatesOneHundredShotsWithStableCursor' -count=1"
 run_check "local-backend go test ./..." bash -c "cd '$ROOT_DIR/local-backend' && go test ./..."
 run_check "mcp/video_qa unittest" bash -c "cd '$ROOT_DIR' && python3 -m unittest discover -s mcp/video_qa -p 'test*.py'"
 run_check "fallback E2E fixture" bash "$ROOT_DIR/scripts/beta-fallback-fixture.sh"
 
 if check_node_module_dir "$ROOT_DIR/frontend" "frontend"; then
   run_check "frontend npm run lint" bash -c "cd '$ROOT_DIR/frontend' && npm run lint"
+  run_check "frontend creator studio contract" bash -c "cd '$ROOT_DIR/frontend' && npm run test:creator"
+  run_check "frontend developer console gate" bash -c "cd '$ROOT_DIR/frontend' && npm run test:developer-build"
   run_check "frontend npm run build" bash -c "cd '$ROOT_DIR/frontend' && npm run build"
 fi
 

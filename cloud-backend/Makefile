@@ -1,4 +1,4 @@
-.PHONY: backend-build backend-run backend-test build run test clean tidy migrate docker-up docker-down frontend-install frontend-dev frontend-build
+.PHONY: backend-build backend-run backend-test build run test clean tidy migrate docker-up docker-down frontend-install frontend-dev frontend-build gen-ts api-types-check
 
 APP_NAME := tangying-ai-os
 BUILD_DIR := build
@@ -54,6 +54,12 @@ frontend-dev:
 
 frontend-build:
 	cd ../frontend && npm run build
+
+gen-ts:
+	go run ./cmd/gen-ts
+
+api-types-check:
+	go run ./cmd/gen-ts -check
 
 sandbox-build:
 	@echo "Building Rust sandbox..."

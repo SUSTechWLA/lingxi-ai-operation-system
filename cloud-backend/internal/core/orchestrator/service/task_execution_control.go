@@ -16,6 +16,10 @@ type TaskExecutionControl struct {
 	stateService *StateService
 }
 
+type idempotentRetryNodeClaimer interface {
+	ClaimRetryByIdempotencyKey(context.Context, string, string) (*model.Node, bool, error)
+}
+
 func NewTaskExecutionControl(
 	taskRepo repository.TaskRepo,
 	nodeRepo repository.NodeRepo,
@@ -97,6 +101,32 @@ func (tc *TaskExecutionControl) RetryNode(ctx context.Context, nodeID string) er
 	}
 
 	zap.L().Info("Node retry initiated", zap.String("nodeId", nodeID))
+	return nil
+}
+
+// RetryNodeIdempotent persists the logical retry key before publishing READY.
+// Only the caller that wins the claim may publish; replays are read-only. If
+// the winner crashes before READY, the scheduler's stale-CREATED recovery owns
+// resumption, avoiding a concurrent replay publishing the expensive node twice.
+func (tc *TaskExecutionControl) RetryNodeIdempotent(ctx context.Context, nodeID, key string) error {
+	claimer, ok := tc.nodeRepo.(idempotentRetryNodeClaimer)
+	if !ok {
+		return fmt.Errorf("node repository does not support idempotent retry claims")
+	}
+	node, claimed, err := claimer.ClaimRetryByIdempotencyKey(ctx, nodeID, key)
+	if err != nil {
+		return fmt.Errorf("failed to claim idempotent node retry: %w", err)
+	}
+	if !claimed {
+		return nil
+	}
+	if node.Status != model.NodeCreated {
+		return nil
+	}
+	if err := tc.stateService.InitializeNodeReady(ctx, node); err != nil {
+		return fmt.Errorf("failed to initialize idempotent node retry: %w", err)
+	}
+	zap.L().Info("Idempotent node retry initiated", zap.String("nodeId", nodeID), zap.String("idempotencyKey", key))
 	return nil
 }
 

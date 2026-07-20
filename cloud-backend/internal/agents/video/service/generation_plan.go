@@ -32,6 +32,14 @@ func BuildShotGenerationPlan(
 ) model.ShotGenerationPlan {
 	signals := scoreShotGenerationSignals(shot, visual, pref)
 	durationSec := resolveShotDuration(shot, visual)
+	if err := model.ValidateShotDuration(model.ShotUnit{DurationSec: durationSec}); err != nil {
+		return model.ShotGenerationPlan{
+			ShotID:    shot.ID,
+			Mode:      model.GenerationModePlaceholderPreview,
+			Reason:    err.Error(),
+			RiskLevel: "high",
+		}
+	}
 	aigcDurationSec := normalizeAIGCGenerationDurationSec(durationSec)
 	htmlNeeded := signals.HTMLScore > 0
 	aigcNeeded := signals.AIGCScore > 0

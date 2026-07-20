@@ -39,6 +39,14 @@ func BuildFinalAssemblyPlanWithPolicy(shots []model.ShotUnit, policy model.Assem
 	issues := make([]ValidationIssue, 0)
 	cursor := 0.0
 	for _, shot := range shots {
+		if err := model.ValidateShotDuration(shot); err != nil {
+			issues = append(issues, ValidationIssue{
+				Code:     "shot_duration_out_of_range",
+				Field:    "durationSec",
+				Message:  err.Error(),
+				Severity: "error",
+			})
+		}
 		if durationIssues := CheckShotDurationSec(shot.ID, float64(shot.DurationSec)); len(durationIssues) > 0 {
 			issues = append(issues, durationIssues...)
 		}
@@ -111,6 +119,15 @@ func BuildFinalAssemblyPlanWithPolicy(shots []model.ShotUnit, policy model.Assem
 		duration := candidate.DurationSec
 		if duration <= 0 {
 			duration = float64(shot.DurationSec)
+		}
+		if err := model.ValidateShotDuration(model.ShotUnit{DurationMs: int64(duration * 1000)}); err != nil {
+			issues = append(issues, ValidationIssue{
+				Code:     "shot_duration_out_of_range",
+				Field:    "candidates.durationSec",
+				Message:  err.Error(),
+				Severity: "error",
+			})
+			continue
 		}
 		plan.AcceptedShots = append(plan.AcceptedShots, model.AcceptedShotRef{
 			ShotID:             shot.ID,

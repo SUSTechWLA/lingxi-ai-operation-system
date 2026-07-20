@@ -30,12 +30,17 @@ type NodeResultSink interface {
 
 // ArtifactSyncCallback is invoked after a local job completes successfully,
 // allowing the caller to materialize artifact records from the job output.
-type ArtifactSyncCallback func(ctx context.Context, projectID, taskID, nodeID, toolName, command string, output map[string]interface{}) error
+type ArtifactSyncCallback func(ctx context.Context, job *LocalJob, output map[string]interface{}) error
+
+// JobFailureCallback is invoked after a local job is durably marked failed.
+// The full job context lets domain services resolve their own durable task IDs.
+type JobFailureCallback func(ctx context.Context, job *LocalJob, reason string) error
 
 type Handler struct {
 	service              RunnerService
 	results              NodeResultSink
 	artifactSyncCallback ArtifactSyncCallback
+	jobFailureCallback   JobFailureCallback
 	middleware           []gin.HandlerFunc
 }
 
@@ -47,6 +52,12 @@ func NewHandler(service RunnerService, results NodeResultSink, middleware ...gin
 // local job completion to sync artifacts to the cloud ArtifactIndex.
 func (h *Handler) WithArtifactSyncCallback(cb ArtifactSyncCallback) *Handler {
 	h.artifactSyncCallback = cb
+	return h
+}
+
+// WithJobFailureCallback registers a domain failure callback.
+func (h *Handler) WithJobFailureCallback(cb JobFailureCallback) *Handler {
+	h.jobFailureCallback = cb
 	return h
 }
 
@@ -168,8 +179,8 @@ func (h *Handler) completeJob(c *gin.Context) {
 		}
 	}
 	// Sync artifact metadata to cloud ArtifactIndex after local job completion.
-	if h.artifactSyncCallback != nil && job != nil {
-		if err := h.artifactSyncCallback(c.Request.Context(), job.ProjectID, job.TaskID, job.NodeID, job.ToolName, string(job.Command), req.Output); err != nil {
+	if h.artifactSyncCallback != nil && jobContext != nil {
+		if err := h.artifactSyncCallback(c.Request.Context(), jobContext, req.Output); err != nil {
 			writeError(c, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -305,6 +316,12 @@ func (h *Handler) failJob(c *gin.Context) {
 	}
 	if h.results != nil && job != nil && job.NodeID != "" {
 		if err := h.results.OnFailure(c.Request.Context(), job.NodeID, errorMessageFromMap(req.Error)); err != nil {
+			writeError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if h.jobFailureCallback != nil && job != nil {
+		if err := h.jobFailureCallback(c.Request.Context(), job, errorMessageFromMap(req.Error)); err != nil {
 			writeError(c, http.StatusInternalServerError, err.Error())
 			return
 		}

@@ -2,7 +2,11 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -17,6 +21,14 @@ type creationService interface {
 	ApproveSpec(ctx context.Context, userID, projectID string) (*model.VideoCreationSpec, error)
 	RejectSpec(ctx context.Context, userID, projectID string, reason string) (*model.VideoCreationSpec, error)
 	ListShots(ctx context.Context, userID, projectID string) ([]model.ShotUnit, error)
+	ListShotPage(ctx context.Context, userID, projectID string, query model.ShotPageQuery) (model.ShotPage, error)
+	GetShotSummary(ctx context.Context, userID, projectID string) (model.ShotSummary, error)
+	GetShotWorkspace(ctx context.Context, userID, projectID, shotID string) (model.ShotWorkspace, error)
+	GetShotHistory(ctx context.Context, userID, projectID, shotID string) ([]model.ShotRevision, error)
+	PreviewShotRegeneration(ctx context.Context, userID, projectID, shotID string) (videoSvc.ShotRegenerationImpact, error)
+	RegenerateShotV2(ctx context.Context, userID, projectID, shotID string, req videoSvc.RegenerateShotRequest) (videoSvc.RegenerateShotResult, error)
+	AcceptShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req videoSvc.CandidateMutationRequest) (*model.ShotUnit, error)
+	RestoreShotCandidate(ctx context.Context, userID, projectID, shotID, candidateID string, req videoSvc.CandidateMutationRequest) (*model.ShotUnit, error)
 	GetShot(ctx context.Context, userID, projectID, shotID string) (*model.ShotUnit, error)
 	UpsertShot(ctx context.Context, userID, projectID string, shot *model.ShotUnit) (*model.ShotUnit, error)
 	GenerateShots(ctx context.Context, userID, projectID string) ([]model.ShotUnit, error)
@@ -37,6 +49,7 @@ type CreationHandler struct {
 	middleware []gin.HandlerFunc
 }
 
+
 func NewCreationHandler(svc creationService, middleware ...gin.HandlerFunc) *CreationHandler {
 	return &CreationHandler{svc: svc, middleware: middleware}
 }
@@ -50,8 +63,11 @@ func (h *CreationHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/:id/spec/approve", h.ApproveSpec)
 		api.POST("/:id/spec/reject", h.RejectSpec)
 		api.GET("/:id/shots", h.ListShots)
+		api.GET("/:id/shots/summary", h.GetShotSummary)
 		api.POST("/:id/shots", h.UpsertShot)
 		api.POST("/:id/shots/generate", h.GenerateShots)
+		api.GET("/:id/shots/:shotId/workspace", h.GetShotWorkspace)
+		api.GET("/:id/shots/:shotId/history", h.GetShotHistory)
 		api.GET("/:id/shots/:shotId", h.GetShot)
 		api.PATCH("/:id/shots/:shotId", h.UpdateShot)
 		api.POST("/:id/shots/:shotId/approve", h.ApproveShot)
@@ -59,6 +75,10 @@ func (h *CreationHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/:id/shots/:shotId/lock", h.LockShot)
 		api.POST("/:id/shots/:shotId/unlock", h.UnlockShot)
 		api.POST("/:id/shots/:shotId/regenerate", h.RegenerateShot)
+		api.POST("/:id/shots/:shotId/regeneration-impact", h.PreviewShotRegeneration)
+		api.POST("/:id/shots/:shotId/regenerations", h.RegenerateShotV2)
+		api.POST("/:id/shots/:shotId/candidates/:candidateId/accept", h.AcceptShotCandidate)
+		api.POST("/:id/shots/:shotId/candidates/:candidateId/restore", h.RestoreShotCandidate)
 		api.POST("/:id/shots/:shotId/visual-plan/generate", h.GenerateVisualPlan)
 		api.POST("/:id/shots/:shotId/render-strategy/decide", h.DecideRenderStrategy)
 		api.POST("/:id/shots/:shotId/text-layers/generate", h.GenerateTextLayers)
@@ -149,12 +169,62 @@ func (h *CreationHandler) ListShots(c *gin.Context) {
 	if !okAuth {
 		return
 	}
-	shots, err := h.svc.ListShots(c.Request.Context(), userID, c.Param("id"))
+	query := model.ShotPageQuery{
+		Cursor: c.Query("cursor"), Status: c.Query("status"), Chapter: c.Query("chapter"), Query: c.Query("query"), Limit: 24,
+	}
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		limit, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			fail(c, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		query.Limit = limit
+	}
+	page, err := h.svc.ListShotPage(c.Request.Context(), userID, c.Param("id"), query)
 	if err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ok(c, gin.H{"shots": shots})
+	ok(c, gin.H{"shots": page.Items, "nextCursor": page.NextCursor, "total": page.Total})
+}
+
+func (h *CreationHandler) GetShotSummary(c *gin.Context) {
+	userID, okAuth := authenticatedUserID(c)
+	if !okAuth {
+		return
+	}
+	summary, err := h.svc.GetShotSummary(c.Request.Context(), userID, c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, gin.H{"summary": summary})
+}
+
+func (h *CreationHandler) GetShotWorkspace(c *gin.Context) {
+	userID, okAuth := authenticatedUserID(c)
+	if !okAuth {
+		return
+	}
+	workspace, err := h.svc.GetShotWorkspace(c.Request.Context(), userID, c.Param("id"), c.Param("shotId"))
+	if err != nil {
+		fail(c, http.StatusNotFound, err.Error())
+		return
+	}
+	ok(c, gin.H{"workspace": workspace})
+}
+
+func (h *CreationHandler) GetShotHistory(c *gin.Context) {
+	userID, okAuth := authenticatedUserID(c)
+	if !okAuth {
+		return
+	}
+	history, err := h.svc.GetShotHistory(c.Request.Context(), userID, c.Param("id"), c.Param("shotId"))
+	if err != nil {
+		fail(c, http.StatusNotFound, err.Error())
+		return
+	}
+	ok(c, gin.H{"history": history})
 }
 
 func (h *CreationHandler) GetShot(c *gin.Context) {
@@ -270,6 +340,130 @@ func (h *CreationHandler) RegenerateShot(c *gin.Context) {
 	ok(c, gin.H{"shot": shot})
 }
 
+func (h *CreationHandler) PreviewShotRegeneration(c *gin.Context) {
+	userID, okAuth := authenticatedUserID(c)
+	if !okAuth {
+		return
+	}
+	impact, err := h.svc.PreviewShotRegeneration(c.Request.Context(), userID, c.Param("id"), c.Param("shotId"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, gin.H{"impact": impact})
+}
+
+func (h *CreationHandler) RegenerateShotV2(c *gin.Context) {
+	userID, okAuth := authenticatedUserID(c)
+	if !okAuth {
+		return
+	}
+	var payload struct {
+		BaseVersion *int            `json:"baseVersion"`
+		Scope       string          `json:"scope"`
+		Locks       json.RawMessage `json:"locks"`
+		Instruction string          `json:"instruction"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	baseVersion, err := requiredPositiveBaseVersion(payload.BaseVersion)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	locks, err := decodeRequiredLocks(payload.Locks)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	req := videoSvc.RegenerateShotRequest{BaseVersion: baseVersion, Scope: payload.Scope, Locks: locks, Instruction: payload.Instruction}
+	req.IdempotencyKey = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if req.IdempotencyKey == "" {
+		fail(c, http.StatusBadRequest, "Idempotency-Key header is required")
+		return
+	}
+	result, err := h.svc.RegenerateShotV2(c.Request.Context(), userID, c.Param("id"), c.Param("shotId"), req)
+	if err != nil {
+		failShotReview(c, err)
+		return
+	}
+	ok(c, gin.H{"shot": result.Shot, "task": result.Task})
+}
+
+func decodeRequiredLocks(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, errors.New("locks is required")
+	}
+	var locks []string
+	if err := json.Unmarshal(raw, &locks); err != nil {
+		return nil, errors.New("locks must be an array")
+	}
+	return locks, nil
+}
+
+func requiredPositiveBaseVersion(value *int) (int, error) {
+	if value == nil || *value <= 0 {
+		return 0, errors.New("baseVersion is required and must be positive")
+	}
+	return *value, nil
+}
+
+func (h *CreationHandler) AcceptShotCandidate(c *gin.Context) {
+	h.mutateShotCandidate(c, h.svc.AcceptShotCandidate)
+}
+
+func (h *CreationHandler) RestoreShotCandidate(c *gin.Context) {
+	h.mutateShotCandidate(c, h.svc.RestoreShotCandidate)
+}
+
+func (h *CreationHandler) mutateShotCandidate(c *gin.Context, action func(context.Context, string, string, string, string, videoSvc.CandidateMutationRequest) (*model.ShotUnit, error)) {
+	userID, okAuth := authenticatedUserID(c)
+	if !okAuth {
+		return
+	}
+	var payload struct {
+		BaseVersion *int            `json:"baseVersion"`
+		Scope       string          `json:"scope"`
+		Locks       json.RawMessage `json:"locks"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	baseVersion, err := requiredPositiveBaseVersion(payload.BaseVersion)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	locks, err := decodeRequiredLocks(payload.Locks)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	req := videoSvc.CandidateMutationRequest{BaseVersion: baseVersion, Scope: payload.Scope, Locks: locks}
+	req.IdempotencyKey = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if req.IdempotencyKey == "" {
+		fail(c, http.StatusBadRequest, "Idempotency-Key header is required")
+		return
+	}
+	shot, err := action(c.Request.Context(), userID, c.Param("id"), c.Param("shotId"), c.Param("candidateId"), req)
+	if err != nil {
+		failShotReview(c, err)
+		return
+	}
+	ok(c, gin.H{"shot": shot})
+}
+
+func failShotReview(c *gin.Context, err error) {
+	if errors.Is(err, videoSvc.ErrShotVersionConflict) {
+		fail(c, http.StatusConflict, err.Error())
+		return
+	}
+	fail(c, http.StatusBadRequest, err.Error())
+}
+
 func (h *CreationHandler) GenerateVisualPlan(c *gin.Context) {
 	userID, okAuth := authenticatedUserID(c)
 	if !okAuth {
@@ -321,6 +515,7 @@ func (h *CreationHandler) Assemble(c *gin.Context) {
 	}
 	ok(c, gin.H{"issues": issues})
 }
+
 
 func (h *CreationHandler) GeneratePublishPackage(c *gin.Context) {
 	userID, okAuth := authenticatedUserID(c)

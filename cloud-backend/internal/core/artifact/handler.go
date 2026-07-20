@@ -3,39 +3,51 @@ package artifact
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
-
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	modelRepo "github.com/tangying-ai/aios-core/internal/core/model/repository"
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
 )
 
-// ReviseLLMFunc is called to generate revised content via an LLM.
-// systemPrompt provides the stage instruction context; userPrompt contains
-// the original content and the user's revision instruction.
-type ReviseLLMFunc func(ctx context.Context, systemPrompt, userPrompt string, opts ReviseLLMOptions) (string, error)
+// ReviseLLMFunc is retained for callers configuring the legacy HTTP endpoint.
+type ReviseLLMFunc = RevisionGenerator
 
 type ReviseLLMOptions struct {
 	ModelProvider map[string]interface{}
 }
 
 type Handler struct {
-	service    *Service
+	service    handlerArtifactStore
 	runRepo    *workflow.RunRepository
 	nodeRepo   modelRepo.NodeRepo
 	agentTasks AgentTaskStore
+	access     ProjectAccessChecker
 
-	// Revision support — set via SetRevisionConfig.
-	skillRoot string
-	reviseLLM ReviseLLMFunc
+	revisions *RevisionService
+}
+
+type handlerArtifactStore interface {
+	revisionArtifactStore
+	GetHistory(context.Context, string, string, string) ([]*Artifact, error)
+	ListByProject(context.Context, string) ([]*Artifact, error)
+}
+
+// ProjectAccessChecker resolves project ownership without coupling the core
+// artifact package to the video-project model package.
+type ProjectAccessChecker interface {
+	CanAccessProject(context.Context, string, string) bool
+}
+
+type ProjectAccessFunc func(context.Context, string, string) bool
+
+func (f ProjectAccessFunc) CanAccessProject(ctx context.Context, userID, projectID string) bool {
+	return f != nil && f(ctx, userID, projectID)
 }
 
 type AgentTaskStore interface {
@@ -47,7 +59,14 @@ type taskNodeFinder interface {
 }
 
 func NewHandler(service *Service, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
-	return &Handler{service: service, runRepo: runRepo, nodeRepo: nodeRepo}
+	return newHandlerForStore(service, runRepo, nodeRepo)
+}
+
+func newHandlerForStore(service handlerArtifactStore, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
+	handler := &Handler{service: service, runRepo: runRepo, nodeRepo: nodeRepo}
+	handler.revisions = NewRevisionService(service)
+	handler.revisions.SetContentResolver(handler.hydrateLocalTextArtifactContent)
+	return handler
 }
 
 func (h *Handler) WithAgentTaskStore(store AgentTaskStore) *Handler {
@@ -55,11 +74,21 @@ func (h *Handler) WithAgentTaskStore(store AgentTaskStore) *Handler {
 	return h
 }
 
+func (h *Handler) WithProjectAccess(access ProjectAccessChecker) *Handler {
+	h.access = access
+	return h
+}
+
 // SetRevisionConfig wires the skill root path and LLM call function needed for
 // the /artifacts/:id/revise endpoint to actually process revisions.
 func (h *Handler) SetRevisionConfig(skillRoot string, llm ReviseLLMFunc) {
-	h.skillRoot = skillRoot
-	h.reviseLLM = llm
+	h.revisions.SetConfig(skillRoot, llm)
+}
+
+// RevisionService exposes the configured immutable revision coordinator to
+// other authenticated backend surfaces without duplicating its LLM/content setup.
+func (h *Handler) RevisionService() *RevisionService {
+	return h.revisions
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
@@ -75,6 +104,9 @@ func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
 
 func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 	projectID := c.Param("id")
+	if !h.authorizeProject(c, projectID) {
+		return
+	}
 	if err := h.materializeProject(c.Request.Context(), projectID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
@@ -91,18 +123,16 @@ func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 }
 
 func (h *Handler) GetArtifact(c *gin.Context) {
-	artifact, err := h.service.GetByID(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+	artifact, ok := h.authorizedArtifact(c)
+	if !ok {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{"artifact": artifact}})
 }
 
 func (h *Handler) GetArtifactContent(c *gin.Context) {
-	artifact, err := h.service.GetByID(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+	artifact, ok := h.authorizedArtifact(c)
+	if !ok {
 		return
 	}
 	content, mediaURL, mediaURLs := artifactContent(artifact)
@@ -121,9 +151,8 @@ func (h *Handler) GetArtifactContent(c *gin.Context) {
 }
 
 func (h *Handler) GetArtifactHistory(c *gin.Context) {
-	artifact, err := h.service.GetByID(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+	artifact, ok := h.authorizedArtifact(c)
+	if !ok {
 		return
 	}
 	history, err := h.service.GetHistory(c.Request.Context(), artifact.ProjectID, artifact.StageName, artifact.UnitID)
@@ -135,6 +164,9 @@ func (h *Handler) GetArtifactHistory(c *gin.Context) {
 }
 
 func (h *Handler) ReviseArtifact(c *gin.Context) {
+	if _, ok := h.authorizedArtifact(c); !ok {
+		return
+	}
 	var req struct {
 		Message        string                 `json:"message" binding:"required"`
 		ModelProvider  map[string]interface{} `json:"modelProvider,omitempty"`
@@ -144,144 +176,63 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request: " + err.Error(), "data": nil})
 		return
 	}
-	base, err := h.service.GetByID(c.Request.Context(), c.Param("id"))
+	result, err := h.revisions.Revise(c.Request.Context(), ReviseRequest{
+		ArtifactID: c.Param("id"), Message: req.Message,
+		ModelProvider: req.ModelProvider, ModelProviders: req.ModelProviders,
+	})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
-		return
-	}
-
-	// 1. Resolve the original content.
-	originalContent := h.resolveOriginalContent(c.Request.Context(), base)
-	if originalContent == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无法读取原始产物内容，请确保产物已生成后再返工", "data": nil})
-		return
-	}
-
-	// 2. Build the stage instruction context.
-	stageInstruction := h.readStageInstruction(base)
-	systemPrompt := buildRevisionSystemPrompt(base.StageName, stageInstruction)
-	userPrompt := fmt.Sprintf("原始内容：\n\n%s\n\n---\n\n修改意见：\n%s\n\n请根据修改意见重新生成完整内容，保持原有的格式结构。", originalContent, req.Message)
-
-	// 3. Call the LLM to generate revised content.
-	var revisedData []byte
-	if h.reviseLLM != nil {
-		revisedText, err := h.reviseLLM(c.Request.Context(), systemPrompt, userPrompt, ReviseLLMOptions{
-			ModelProvider: textModelProviderFromRevisionRequest(req.ModelProvider, req.ModelProviders),
-		})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "返工生成失败: " + err.Error(), "data": nil})
-			return
+		switch {
+		case errors.Is(err, ErrRevisionArtifactNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+		case errors.Is(err, ErrRevisionContentUnavailable):
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无法读取原始产物内容，请确保产物已生成后再返工", "data": nil})
+		case errors.Is(err, ErrRevisionGeneration):
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "返工生成失败: " + strings.TrimPrefix(err.Error(), ErrRevisionGeneration.Error()+": "), "data": nil})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		}
-		revisedData = []byte(revisedText)
-	} else {
-		// Fallback: embed the revision instruction in a local-only record.
-		revisedData = buildLocalRevisionData(base, req.Message)
-	}
-
-	// 4. Create the revision artifact with inline content.
-	revisionReq := BuildRevisionRequest(base, req.Message, revisedData)
-	revisionReq.StorageType = StorageInline // store the LLM response inline
-	revision, err := h.service.CreateArtifact(c.Request.Context(), revisionReq)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
 	}
-	// Mark downstream artifacts stale when an upstream artifact is revised.
-	if base.ProjectID != "" && base.StageName != "" {
-		if _, err := h.service.MarkDownstreamStale(c.Request.Context(), base.ProjectID, base.ID, "用户返工修改产物"); err != nil {
-			zap.L().Warn("revise artifact: failed to mark downstream stale",
-				zap.String("artifactId", base.ID),
-				zap.Error(err),
-			)
-		}
-	}
-	content, mediaURL, mediaURLs := artifactContent(revision)
+	content, mediaURL, mediaURLs := artifactContent(result.Artifact)
 	mediaURLs = normalizeMediaURLs(mediaURLs)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{
-		"artifact":  revision,
+		"artifact":  result.Artifact,
 		"content":   content,
 		"mediaUrl":  mediaURL,
 		"mediaUrls": mediaURLs,
 	}})
 }
 
-func textModelProviderFromRevisionRequest(modelProvider, modelProviders map[string]interface{}) map[string]interface{} {
-	if len(modelProvider) > 0 {
-		return modelProvider
+func (h *Handler) authorizedArtifact(c *gin.Context) (*Artifact, bool) {
+	var artifact *Artifact
+	var err error
+	if h.service != nil {
+		artifact, err = h.service.GetByID(c.Request.Context(), c.Param("id"))
+	} else if h.revisions != nil && h.revisions.artifacts != nil {
+		artifact, err = h.revisions.artifacts.GetByID(c.Request.Context(), c.Param("id"))
+	} else {
+		err = errors.New("artifact store unavailable")
 	}
-	if len(modelProviders) == 0 {
-		return nil
+	if err != nil || artifact == nil || !h.authorizeProject(c, artifact.ProjectID) {
+		if !c.IsAborted() {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+		}
+		return nil, false
 	}
-	if textProvider, ok := modelProviders["text_to_text"].(map[string]interface{}); ok {
-		return textProvider
-	}
-	return nil
+	return artifact, true
 }
 
-// resolveOriginalContent returns the full original artifact content as a string.
-func (h *Handler) resolveOriginalContent(ctx context.Context, a *Artifact) string {
-	// If inline content exists, use it.
-	if strings.TrimSpace(a.InlineJSON) != "" {
-		return a.InlineJSON
+func (h *Handler) authorizeProject(c *gin.Context, projectID string) bool {
+	userID, ok := auth.UserIDFromContext(c.Request.Context())
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "unauthorized", "data": nil})
+		return false
 	}
-	// Try hydrating from the workflow node output.
-	if hydrated, ok := h.hydrateLocalTextArtifactContent(ctx, a); ok {
-		return string(hydrated)
+	if h.access == nil || !h.access.CanAccessProject(c.Request.Context(), userID, projectID) {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+		return false
 	}
-	// Fallback: use the artifact content helper result.
-	content, _, _ := artifactContent(a)
-	return stringifyContent(content)
-}
-
-// readStageInstruction reads the stage instruction markdown file for the given artifact.
-func (h *Handler) readStageInstruction(a *Artifact) string {
-	if h.skillRoot == "" || a.StageName == "" {
-		return ""
-	}
-	// Look for <skillRoot>/<anything>/<version>/stages/<stageName>.md
-	// Walk the skill root to find the matching stage file.
-	entries, err := os.ReadDir(h.skillRoot)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Try version subdirectories
-		versions, err := os.ReadDir(filepath.Join(h.skillRoot, entry.Name()))
-		if err != nil {
-			continue
-		}
-		for _, ver := range versions {
-			if !ver.IsDir() {
-				continue
-			}
-			stagePath := filepath.Join(h.skillRoot, entry.Name(), ver.Name(), "stages", a.StageName+".md")
-			if data, err := os.ReadFile(stagePath); err == nil {
-				return string(data)
-			}
-		}
-	}
-	return ""
-}
-
-func buildRevisionSystemPrompt(stageName string, stageInstruction string) string {
-	prompt := fmt.Sprintf(`你是一个专业的内容返工助手，正在帮助用户修改「%s」阶段的产物。
-
-重要规则：
-- 严格根据用户的修改意见，在原始内容的基础上进行修改
-- 保持原始内容的整体结构和格式风格
-- 只修改用户明确要求修改的部分，不要擅自改动其他内容
-- 如果原始内容是 Markdown 格式，输出 Markdown
-- 如果原始内容是 JSON 格式，输出严格符合相同结构的 JSON
-- 不要引入原始内容中没有的新字段、新章节或额外内容
-- 输出完整内容，不要省略或截断`, stageName)
-
-	if stageInstruction != "" {
-		prompt += "\n\n阶段说明（参考上下文）：\n" + stageInstruction
-	}
-	return prompt
+	return true
 }
 
 func (h *Handler) materializeProject(ctx context.Context, projectID string) error {
@@ -596,32 +547,4 @@ func isMediaURL(value string) bool {
 		strings.HasPrefix(value, "data:") ||
 		strings.HasPrefix(value, "blob:") ||
 		strings.HasPrefix(value, "/")
-}
-
-func buildLocalRevisionData(base *Artifact, instruction string) []byte {
-	content, _, _ := artifactContent(base)
-	switch base.Kind {
-	case KindMarkdown:
-		return []byte("## 返工版本\n\n返工要求：" + instruction + "\n\n" + stringifyContent(content))
-	case KindJSON, KindImage, KindVideo, KindAudio, KindBundle:
-		payload := map[string]interface{}{
-			"revisionInstruction": instruction,
-			"previous":            content,
-			"status":              "regenerated",
-		}
-		data, _ := json.MarshalIndent(payload, "", "  ")
-		return data
-	default:
-		return []byte("返工要求：" + instruction + "\n\n" + stringifyContent(content))
-	}
-}
-
-func stringifyContent(content interface{}) string {
-	switch typed := content.(type) {
-	case string:
-		return typed
-	default:
-		data, _ := json.MarshalIndent(typed, "", "  ")
-		return string(data)
-	}
 }

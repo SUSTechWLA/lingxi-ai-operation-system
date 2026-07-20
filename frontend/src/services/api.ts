@@ -40,7 +40,7 @@ const API_BASE = configuredCloudBase || electronCloudBase || '/api'
 const DEFAULT_API_TIMEOUT_MS = 30000
 const AGENT_RUN_REQUEST_TIMEOUT_MS = 300000
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: API_BASE,
   timeout: DEFAULT_API_TIMEOUT_MS,
 })
@@ -131,9 +131,10 @@ export const fetchVideoProjects = async (): Promise<VideoProjectListResponse> =>
 }
 
 export const createVideoProject = async (
-  payload: CreateVideoProjectPayload
+  payload: CreateVideoProjectPayload,
+  signal?: AbortSignal,
 ): Promise<VideoProject> => {
-  const response = await api.post<ApiResponse<{ project: VideoProject }>>('/video-projects', payload)
+  const response = await api.post<ApiResponse<{ project: VideoProject }>>('/video-projects', payload, { signal })
   return response.data.data.project
 }
 
@@ -240,10 +241,13 @@ export const registerExternalGenerationResult = async (
 // ── Agent Run API (dynamic agent runtime) ──────────────────────────────
 
 export const startAgentRun = async (
-  payload: AgentStartRunRequest
+  payload: AgentStartRunRequest,
+  options: { idempotencyKey?: string; signal?: AbortSignal } = {},
 ): Promise<AgentStartRunResponse> => {
   const response = await api.post<ApiResponse<AgentStartRunResponse>>('/agent/runs', payload, {
     timeout: AGENT_RUN_REQUEST_TIMEOUT_MS,
+    ...(options.idempotencyKey ? { headers: { 'Idempotency-Key': options.idempotencyKey } } : {}),
+    signal: options.signal,
   })
   return response.data.data
 }

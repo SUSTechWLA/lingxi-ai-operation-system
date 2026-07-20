@@ -25,16 +25,21 @@ const (
 	RunStatusCancelled RunStatus = "CANCELLED"
 )
 
-var errRunCancelled = errors.New("agent run cancelled")
+var (
+	errRunCancelled        = errors.New("agent run cancelled")
+	ErrIdempotencyConflict = errors.New("agent run idempotency key conflicts with a different request")
+)
 
 type StartRunRequest struct {
-	UserID       string                 `json:"userId,omitempty"`
-	Message      string                 `json:"message"`
-	Domain       string                 `json:"domain,omitempty"`
-	Context      map[string]interface{} `json:"context,omitempty"`
-	Mode         string                 `json:"mode,omitempty"`
-	MaxCostLevel string                 `json:"maxCostLevel,omitempty"`
-	MaxRiskLevel string                 `json:"maxRiskLevel,omitempty"`
+	RunID                  string                 `json:"-"`
+	UserID                 string                 `json:"userId,omitempty"`
+	Message                string                 `json:"message"`
+	Domain                 string                 `json:"domain,omitempty"`
+	Context                map[string]interface{} `json:"context,omitempty"`
+	Mode                   string                 `json:"mode,omitempty"`
+	MaxCostLevel           string                 `json:"maxCostLevel,omitempty"`
+	MaxRiskLevel           string                 `json:"maxRiskLevel,omitempty"`
+	IdempotencyFingerprint string                 `json:"-"`
 }
 
 type Run struct {
@@ -50,6 +55,17 @@ type Run struct {
 	UpdatedAt time.Time              `json:"updatedAt"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
+
+type RunTerminalEvent struct {
+	EventID string                 `json:"eventId"`
+	RunID   string                 `json:"runId"`
+	UserID  string                 `json:"userId,omitempty"`
+	Status  RunStatus              `json:"status"`
+	Context map[string]interface{} `json:"context,omitempty"`
+	Error   string                 `json:"error,omitempty"`
+}
+
+type RunTerminalCallback func(ctx context.Context, event RunTerminalEvent) error
 
 type Planner interface {
 	GeneratePlan(ctx context.Context, req StartRunRequest) (*AgentPlan, error)
@@ -69,8 +85,24 @@ type Orchestrator interface {
 }
 
 type RunStore interface {
+	CreateRun(ctx context.Context, run *Run) (bool, error)
 	SaveRun(ctx context.Context, run *Run) error
+	SaveRunTerminal(ctx context.Context, run *Run, event RunTerminalEvent) error
 	FindRun(ctx context.Context, id string) (*Run, error)
+	ClaimTerminalEvents(ctx context.Context, limit int, leaseUntil time.Time, claimToken string) ([]TerminalEventDelivery, error)
+	AckTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
+	ReleaseTerminalEvent(ctx context.Context, delivery TerminalEventDelivery) (bool, error)
+}
+
+type runByTaskStore interface {
+	FindRunByTaskID(ctx context.Context, taskID string) (*Run, error)
+}
+
+type TerminalEventDelivery struct {
+	RunID      string
+	EventID    string
+	ClaimToken string
+	Event      RunTerminalEvent
 }
 
 type PlanJudge interface {
@@ -97,6 +129,7 @@ type Runner struct {
 	guard        *PlanGuard
 	compiler     *PlanCompiler
 	planJudge    PlanJudge
+	terminal     RunTerminalCallback
 }
 
 const asyncRunStartTimeout = 10 * time.Minute
@@ -116,6 +149,11 @@ func (r *Runner) WithPlanJudge(judge PlanJudge) *Runner {
 	return r
 }
 
+func (r *Runner) WithTerminalCallback(callback RunTerminalCallback) *Runner {
+	r.terminal = callback
+	return r
+}
+
 func (r *Runner) Start(ctx context.Context, req StartRunRequest) (*Run, error) {
 	if err := r.validateStartRequest(req); err != nil {
 		return nil, err
@@ -128,8 +166,25 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 		return nil, err
 	}
 	run := newRunShell(req)
-	if err := r.store.SaveRun(ctx, run); err != nil {
+	created, err := r.store.CreateRun(ctx, run)
+	if err != nil {
 		return nil, fmt.Errorf("store agent run: %w", err)
+	}
+	if !created {
+		existing, findErr := r.store.FindRun(ctx, run.ID)
+		if findErr != nil {
+			return nil, fmt.Errorf("find existing agent run: %w", findErr)
+		}
+		if existing == nil {
+			return nil, fmt.Errorf("agent run %s already exists but cannot be loaded", run.ID)
+		}
+		if req.IdempotencyFingerprint != "" && existingIdempotencyFingerprint(existing) != req.IdempotencyFingerprint {
+			return nil, ErrIdempotencyConflict
+		}
+		if deliverErr := r.DeliverPendingTerminalEventsOnce(ctx, 1); deliverErr != nil {
+			zap.L().Warn("existing agent run terminal reconciliation failed", zap.String("runId", run.ID), zap.Error(deliverErr))
+		}
+		return existing, nil
 	}
 	backgroundRun := *run
 	go r.completeStartInBackground(req, &backgroundRun)
@@ -156,16 +211,34 @@ func newRunShell(req StartRunRequest) *Run {
 		mode = "dynamic_agent"
 	}
 	now := time.Now()
+	runID := strings.TrimSpace(req.RunID)
+	if runID == "" {
+		runID = "agent_run_" + uuid.NewString()
+	}
+	metadata := map[string]interface{}{
+		"mode": mode, "startPhase": "planning", "requestContext": sanitizedRunContext(req.Context),
+	}
+	if req.IdempotencyFingerprint != "" {
+		metadata["idempotencyFingerprint"] = req.IdempotencyFingerprint
+	}
 	return &Run{
-		ID:        "agent_run_" + uuid.NewString(),
+		ID:        runID,
 		UserID:    req.UserID,
 		Domain:    domain,
 		Message:   req.Message,
 		Status:    RunStatusCreated,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Metadata:  map[string]interface{}{"mode": mode, "startPhase": "planning"},
+		Metadata:  metadata,
 	}
+}
+
+func existingIdempotencyFingerprint(run *Run) string {
+	if run == nil || run.Metadata == nil {
+		return ""
+	}
+	fingerprint, _ := run.Metadata["idempotencyFingerprint"].(string)
+	return fingerprint
 }
 
 func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
@@ -186,8 +259,12 @@ func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
 		}
 		failed.Metadata["startPhase"] = "failed"
 		failed.Metadata["error"] = err.Error()
-		if saveErr := r.store.SaveRun(context.Background(), &failed); saveErr != nil {
-			zap.L().Warn("failed to persist async agent run failure",
+		event := RunTerminalEvent{
+			RunID: failed.ID, UserID: failed.UserID, Status: RunStatusFailed,
+			Context: sanitizedRunContext(req.Context), Error: err.Error(),
+		}
+		if saveErr := r.persistAndDeliverTerminal(context.Background(), &failed, event); saveErr != nil {
+			zap.L().Warn("failed to persist or deliver async agent run failure",
 				zap.String("runId", run.ID),
 				zap.Error(saveErr),
 			)
@@ -212,6 +289,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 	}
 	applyRequestPlanDefaults(plan, req)
 	plan = r.compiler.PreparePlan(plan)
+	applyShotRegenerationPlanScope(plan, req.Context)
 	if err := r.guard.ValidatePlan(ctx, req.UserID, plan); err != nil {
 		// Attempt plan repair if the planner supports it.
 		if repairer, ok := r.planner.(PlanRepairer); ok {
@@ -222,6 +300,7 @@ func (r *Runner) completeStart(ctx context.Context, req StartRunRequest, run *Ru
 			if repairErr == nil && repaired != nil {
 				applyRequestPlanDefaults(repaired, req)
 				repaired = r.compiler.PreparePlan(repaired)
+				applyShotRegenerationPlanScope(repaired, req.Context)
 				revalidateErr := r.guard.ValidatePlan(ctx, req.UserID, repaired)
 				if revalidateErr == nil {
 					plan = repaired
@@ -274,7 +353,9 @@ planOK:
 	run.Status = RunStatusCreated
 	run.Budget = plan.Budget
 	run.UpdatedAt = now
-	run.Metadata = map[string]interface{}{"mode": plan.Mode, "agentToolTrace": agentToolTrace}
+	run.Metadata = map[string]interface{}{
+		"mode": plan.Mode, "agentToolTrace": agentToolTrace, "requestContext": sanitizedRunContext(req.Context),
+	}
 	if len(judgeReport.Warnings) > 0 {
 		run.Metadata["planJudgeWarnings"] = judgeReport.Warnings
 		run.Metadata["planJudgePassed"] = judgeReport.Passed
@@ -358,6 +439,30 @@ func applyRequestPlanDefaults(plan *AgentPlan, req StartRunRequest) {
 		plan.Mode = "dynamic_agent"
 	}
 	applyRequestSafeContextDefaults(plan, req.Context)
+	applyShotRegenerationPlanScope(plan, req.Context)
+}
+
+func applyShotRegenerationPlanScope(plan *AgentPlan, ctx map[string]interface{}) {
+	if plan == nil || len(plan.Steps) == 0 || strings.TrimSpace(fmt.Sprint(ctx["operation"])) != "shot_regeneration" {
+		return
+	}
+	targetShotID := strings.TrimSpace(fmt.Sprint(ctx["targetShotId"]))
+	regenerationTaskID := strings.TrimSpace(fmt.Sprint(ctx["shotRegenerationTaskId"]))
+	regenerationRunID := strings.TrimSpace(fmt.Sprint(ctx["shotRegenerationRunId"]))
+	for i := range plan.Steps {
+		if plan.Steps[i].Arguments == nil {
+			plan.Steps[i].Arguments = map[string]interface{}{}
+		}
+		plan.Steps[i].Arguments["operation"] = "shot_regeneration"
+		plan.Steps[i].Arguments["targetShotId"] = targetShotID
+		plan.Steps[i].Arguments["allowedShotIds"] = []string{targetShotID}
+		if regenerationTaskID != "" && regenerationTaskID != "<nil>" {
+			plan.Steps[i].Arguments["shotRegenerationTaskId"] = regenerationTaskID
+		}
+		if regenerationRunID != "" && regenerationRunID != "<nil>" {
+			plan.Steps[i].Arguments["shotRegenerationRunId"] = regenerationRunID
+		}
+	}
 }
 
 func applyRequestSafeContextDefaults(plan *AgentPlan, ctx map[string]interface{}) {
@@ -647,18 +752,29 @@ func (r *Runner) Get(ctx context.Context, id string) (*Run, map[string]interface
 	if taskStatus == string(model.TaskSuccess) && run.Status != RunStatusSuccess && run.Status != RunStatusCancelled {
 		run.Status = RunStatusSuccess
 		run.UpdatedAt = time.Now()
-		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
+		if saveErr := r.persistAndDeliverTerminal(ctx, run, terminalEventFromRun(run, "")); saveErr != nil {
 			return run, task, saveErr
 		}
 	}
 	if taskStatus == string(model.TaskFailed) && run.Status != RunStatusFailed && run.Status != RunStatusCancelled {
 		run.Status = RunStatusFailed
 		run.UpdatedAt = time.Now()
-		if saveErr := r.store.SaveRun(ctx, run); saveErr != nil {
+		if saveErr := r.persistAndDeliverTerminal(ctx, run, terminalEventFromRun(run, taskErrorString(task))); saveErr != nil {
 			return run, task, saveErr
 		}
 	}
 	return run, task, nil
+}
+
+func (r *Runner) findRunByTaskID(ctx context.Context, taskID string) (*Run, error) {
+	if r == nil || r.store == nil || strings.TrimSpace(taskID) == "" {
+		return nil, nil
+	}
+	store, ok := r.store.(runByTaskStore)
+	if !ok {
+		return nil, nil
+	}
+	return store.FindRunByTaskID(ctx, taskID)
 }
 
 func taskStatusString(task map[string]interface{}) string {
@@ -685,10 +801,86 @@ func (r *Runner) Cancel(ctx context.Context, id string) (*Run, error) {
 		run.Metadata = map[string]interface{}{}
 	}
 	run.Metadata["cancelledBy"] = "user"
-	if err := r.store.SaveRun(ctx, run); err != nil {
+	if err := r.persistAndDeliverTerminal(ctx, run, terminalEventFromRun(run, "agent run cancelled by user")); err != nil {
 		return nil, err
 	}
 	return run, nil
+}
+
+func (r *Runner) persistAndDeliverTerminal(ctx context.Context, run *Run, event RunTerminalEvent) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("agent runner is not configured")
+	}
+	if strings.TrimSpace(event.EventID) == "" {
+		event.EventID = "agent_terminal_" + uuid.NewString()
+	}
+	if err := r.store.SaveRunTerminal(ctx, run, event); err != nil {
+		return fmt.Errorf("persist agent terminal event: %w", err)
+	}
+	return r.DeliverPendingTerminalEventsOnce(ctx, 1)
+}
+
+func (r *Runner) DeliverPendingTerminalEventsOnce(ctx context.Context, limit int) error {
+	if r == nil || r.store == nil || r.terminal == nil || limit <= 0 {
+		return nil
+	}
+	claimToken := "agent_terminal_claim_" + uuid.NewString()
+	deliveries, err := r.store.ClaimTerminalEvents(ctx, limit, time.Now().Add(30*time.Second), claimToken)
+	if err != nil {
+		return fmt.Errorf("claim agent terminal events: %w", err)
+	}
+	var deliveryErrors []error
+	for _, delivery := range deliveries {
+		if callbackErr := r.terminal(ctx, delivery.Event); callbackErr != nil {
+			_, _ = r.store.ReleaseTerminalEvent(ctx, delivery)
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("deliver terminal event for %s: %w", delivery.RunID, callbackErr))
+			continue
+		}
+		if _, ackErr := r.store.AckTerminalEvent(ctx, delivery); ackErr != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("ack terminal event for %s: %w", delivery.RunID, ackErr))
+		}
+	}
+	return errors.Join(deliveryErrors...)
+}
+
+func (r *Runner) RunTerminalDelivery(ctx context.Context, interval time.Duration, batchSize int) {
+	if interval <= 0 || batchSize <= 0 {
+		return
+	}
+	_ = r.DeliverPendingTerminalEventsOnce(ctx, batchSize)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := r.DeliverPendingTerminalEventsOnce(ctx, batchSize); err != nil {
+				zap.L().Warn("agent terminal event retry failed", zap.Error(err))
+			}
+		}
+	}
+}
+
+func terminalEventFromRun(run *Run, errorMessage string) RunTerminalEvent {
+	event := RunTerminalEvent{Error: errorMessage}
+	if run == nil {
+		return event
+	}
+	event.RunID, event.UserID, event.Status = run.ID, run.UserID, run.Status
+	if run.Metadata != nil {
+		event.Context, _ = run.Metadata["requestContext"].(map[string]interface{})
+	}
+	return event
+}
+
+func taskErrorString(task map[string]interface{}) string {
+	for _, key := range []string{"error", "errorMessage", "message"} {
+		if value := strings.TrimSpace(fmt.Sprint(task[key])); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return "agent task failed"
 }
 
 func scopeDAGToTask(taskID string, dag *model.DAGRequest) *model.DAGRequest {

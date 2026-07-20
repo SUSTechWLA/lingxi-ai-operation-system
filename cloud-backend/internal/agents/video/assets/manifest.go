@@ -3,11 +3,15 @@ package assets
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tangying-ai/aios-core/internal/core/artifact"
 )
@@ -15,9 +19,10 @@ import (
 type AssetType string
 
 const (
-	AssetTypeImage AssetType = "image"
-	AssetTypeAudio AssetType = "audio"
-	AssetTypeVideo AssetType = "video"
+	AssetTypeImage    AssetType = "image"
+	AssetTypeAudio    AssetType = "audio"
+	AssetTypeVideo    AssetType = "video"
+	AssetTypeDocument AssetType = "document"
 )
 
 const (
@@ -80,6 +85,27 @@ type ManualAssetManifest struct {
 	ExternalPlatform    string    `json:"externalPlatform,omitempty"`
 	ReferenceAssetIDs   []string  `json:"referenceAssetIds,omitempty"`
 }
+
+// ProjectMaterial is the small, stable metadata-only representation returned
+// after a local source material has been registered with a project.
+type ProjectMaterial struct {
+	Name        string    `json:"name"`
+	Kind        AssetType `json:"kind"`
+	MimeType    string    `json:"mimeType"`
+	SizeBytes   int64     `json:"sizeBytes"`
+	StorageRef  string    `json:"storageRef"`
+	ContentHash string    `json:"contentHash"`
+}
+
+// ProjectMaterialManifest is the immutable content model of one version in
+// the requirements/source-materials artifact lineage.
+type ProjectMaterialManifest struct {
+	SchemaVersion    int               `json:"schemaVersion"`
+	RelatedProjectID string            `json:"relatedProjectId"`
+	Materials        []ProjectMaterial `json:"materials"`
+}
+
+var projectMaterialContentHashPattern = regexp.MustCompile(`^sha256:[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type ExternalGenerationTarget struct {
 	AspectRatio string `json:"aspectRatio,omitempty"`
@@ -227,6 +253,190 @@ func BuildArtifactRequest(projectID, workflowRunID, taskID string, manifest Manu
 			"assetType":    string(manifest.Type),
 		},
 	}, nil
+}
+
+// NormalizeProjectMaterial validates and canonicalizes a metadata-only local
+// material entry. The referenced bytes remain with the local agent.
+func NormalizeProjectMaterial(projectID string, input ProjectMaterial) (ProjectMaterial, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return ProjectMaterial{}, fmt.Errorf("project id is required")
+	}
+	input.Name = safeMaterialName(input.Name)
+	if input.Name == "" {
+		return ProjectMaterial{}, fmt.Errorf("name is required")
+	}
+	if !validProjectMaterialKind(input.Kind) {
+		return ProjectMaterial{}, fmt.Errorf("kind must be image, video, audio, or document")
+	}
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(input.MimeType))
+	if err != nil || mediaType == "" || !mimeMatchesProjectMaterialKind(input.Kind, mediaType) {
+		return ProjectMaterial{}, fmt.Errorf("mimeType is incompatible with kind")
+	}
+	input.MimeType = strings.ToLower(mediaType)
+	if input.SizeBytes < 0 {
+		return ProjectMaterial{}, fmt.Errorf("sizeBytes must be non-negative")
+	}
+	input.ContentHash = strings.TrimSpace(input.ContentHash)
+	if !projectMaterialContentHashPattern.MatchString(input.ContentHash) {
+		return ProjectMaterial{}, fmt.Errorf("contentHash must use the sha256:<value> format")
+	}
+	input.StorageRef = strings.TrimSpace(input.StorageRef)
+	if !isLocalProjectMaterialRef(input.StorageRef, projectID) {
+		return ProjectMaterial{}, fmt.Errorf("storageRef must be a canonical local reference scoped to this project")
+	}
+	return input, nil
+}
+
+// BuildProjectMaterialManifestArtifactRequest creates the next immutable
+// collection version. It deliberately stores no source file bytes.
+func BuildProjectMaterialManifestArtifactRequest(projectID string, materials []ProjectMaterial) (*artifact.CreateArtifactRequest, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, fmt.Errorf("project id is required")
+	}
+	if len(materials) == 0 {
+		return nil, fmt.Errorf("at least one material is required")
+	}
+	canonical := make([]ProjectMaterial, 0, len(materials))
+	for _, material := range materials {
+		normalized, err := NormalizeProjectMaterial(projectID, material)
+		if err != nil {
+			return nil, err
+		}
+		canonical = append(canonical, normalized)
+	}
+	manifest := ProjectMaterialManifest{SchemaVersion: 1, RelatedProjectID: projectID, Materials: canonical}
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(manifestJSON)
+	manifestHash := "sha256:" + hex.EncodeToString(sum[:])
+	return &artifact.CreateArtifactRequest{
+		ProjectID:   projectID,
+		StageName:   "requirements",
+		UnitID:      "source-materials",
+		Kind:        artifact.KindBundle,
+		Name:        "source_materials_manifest.json",
+		StorageType: artifact.StorageLocal,
+		StorageRef:  "local://" + projectID + "/materials/manifest",
+		MimeType:    "application/json",
+		SizeBytes:   int64(len(manifestJSON)),
+		ContentHash: manifestHash,
+		Provider:    "project-source-material-manifest",
+		Metadata: map[string]interface{}{
+			"schemaVersion":    manifest.SchemaVersion,
+			"artifactType":     "project_source_material_manifest",
+			"relatedProjectId": projectID,
+			"materials":        manifest.Materials,
+			"manifestHash":     manifestHash,
+			"status":           string(artifact.ArtifactStatusPending),
+			"humanApproved":    false,
+			"localOnly":        true,
+		},
+	}, nil
+}
+
+// ProjectMaterialsFromArtifact reads the canonical material collection from a
+// persisted manifest artifact. It also recognizes the initial single-entry
+// metadata shape so a pre-manifest registration is not silently discarded.
+func ProjectMaterialsFromArtifact(record *artifact.Artifact) ([]ProjectMaterial, error) {
+	if record == nil || record.Metadata == nil {
+		return nil, nil
+	}
+	if rawMaterials, ok := record.Metadata["materials"]; ok {
+		raw, err := json.Marshal(rawMaterials)
+		if err != nil {
+			return nil, err
+		}
+		var materials []ProjectMaterial
+		if err := json.Unmarshal(raw, &materials); err != nil {
+			return nil, err
+		}
+		return materials, nil
+	}
+	if record.Metadata["artifactType"] != "project_source_material" {
+		return nil, nil
+	}
+	raw, err := json.Marshal(record.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	var material ProjectMaterial
+	if err := json.Unmarshal(raw, &material); err != nil {
+		return nil, err
+	}
+	if material.ContentHash == "" {
+		return nil, fmt.Errorf("legacy project material is missing contentHash")
+	}
+	return []ProjectMaterial{material}, nil
+}
+
+func projectMaterialByContentHash(materials []ProjectMaterial, contentHash string) (ProjectMaterial, bool) {
+	for _, material := range materials {
+		if material.ContentHash == contentHash {
+			return material, true
+		}
+	}
+	return ProjectMaterial{}, false
+}
+
+func validProjectMaterialKind(kind AssetType) bool {
+	switch kind {
+	case AssetTypeImage, AssetTypeVideo, AssetTypeAudio, AssetTypeDocument:
+		return true
+	default:
+		return false
+	}
+}
+
+func mimeMatchesProjectMaterialKind(kind AssetType, mimeType string) bool {
+	switch kind {
+	case AssetTypeImage:
+		return strings.HasPrefix(mimeType, "image/")
+	case AssetTypeVideo:
+		return strings.HasPrefix(mimeType, "video/")
+	case AssetTypeAudio:
+		return strings.HasPrefix(mimeType, "audio/")
+	case AssetTypeDocument:
+		return strings.HasPrefix(mimeType, "application/") || strings.HasPrefix(mimeType, "text/")
+	default:
+		return false
+	}
+}
+
+func safeMaterialName(name string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name))
+}
+
+func isLocalProjectMaterialRef(storageRef, projectID string) bool {
+	const prefix = "local://"
+	if !strings.HasPrefix(storageRef, prefix) || strings.ContainsAny(storageRef, `%\\?#`) {
+		return false
+	}
+	path := strings.TrimPrefix(storageRef, prefix)
+	if path == "" {
+		return false
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) < 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	if parts[0] == "projects" {
+		return len(parts) >= 4 && parts[1] == projectID && parts[2] == "materials"
+	}
+	return parts[0] == projectID && parts[1] == "materials"
 }
 
 func BuildExternalGenerationRequest(input ExternalGenerationInput) (ExternalGenerationRequest, error) {

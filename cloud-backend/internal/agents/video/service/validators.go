@@ -20,11 +20,11 @@ func CheckShotDuration(shot model.ShotUnit) []ValidationIssue {
 }
 
 func CheckShotDurationSec(shotID string, durationSec float64) []ValidationIssue {
-	if durationSec < 3 || durationSec > 15 || math.IsNaN(durationSec) || math.IsInf(durationSec, 0) {
+	if durationSec < 3 || durationSec >= 15 || math.IsNaN(durationSec) || math.IsInf(durationSec, 0) {
 		return []ValidationIssue{{
 			Code:     "shot_duration_out_of_range",
 			Field:    "durationSec",
-			Message:  fmt.Sprintf("shot duration must be between 3 and 15 seconds, got %.2f for %s", durationSec, shotID),
+			Message:  fmt.Sprintf("shot duration must be at least 3 seconds and less than 15 seconds, got %.2f for %s", durationSec, shotID),
 			Severity: "error",
 		}}
 	}

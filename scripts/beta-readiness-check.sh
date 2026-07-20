@@ -130,6 +130,15 @@ def qa_fixture_status():
         "repairPlanAvailable": isinstance(repair, dict) and bool(repair),
     }
 
+def creator_studio_status():
+    log = out_dir / "beta-smoke.log"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    labels = ["creator authenticated creation view handler", "creator strict duration and target assembly integration", "frontend creator studio contract", "frontend developer console gate"]
+    lines = text.splitlines()
+    def passed(label):
+        return any(label in line and any("[OK]" in follow and label in follow for follow in lines[index:index+3]) for index, line in enumerate(lines))
+    return {"checked": all(passed(label) for label in labels), "labels": labels}
+
 diagnostics = load_json("diagnostics-response.json")
 snapshot = {
     "schemaVersion": 1,
@@ -139,6 +148,7 @@ snapshot = {
     "ffmpeg": {"available": shutil.which("ffmpeg") is not None},
     "diagnostics": {"available": isinstance(diagnostics, dict) and bool(diagnostics.get("path"))},
     "qaFixture": qa_fixture_status(),
+    "creatorStudio": creator_studio_status(),
     "mcpProviders": normalize_mcp(load_json("mcp-provider-status.json")),
     "modelProviders": normalize_models(load_json("model-providers.json")),
 }
