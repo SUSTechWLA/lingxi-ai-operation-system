@@ -6,6 +6,7 @@ import {
   restoreStepVersion,
   reviseStep,
 } from '../../../services/creatorApi'
+import { buildClientModelProvidersForRun } from '../../../services/localAgent'
 import type {
   ArtifactSelection,
   CreationView,
@@ -154,10 +155,14 @@ export default function ArtifactReviewPanel({ projectId, step, content, versions
     const confirmedAffectedShotIds = pending.impact.affectedShotIds ?? []
     const request = { ...pending.request, confirmedAffectedShotIds }
     void withErrorHandling(async (signal, isCurrent) => {
+      const modelProviders = request.mode === 'instruction'
+        ? await buildClientModelProvidersForRun()
+        : undefined
+      if (!isCurrent()) return
       const result = await reviseStep(
         projectId,
         step.id,
-        request,
+        request.mode === 'instruction' && modelProviders ? { ...request, modelProviders } : request,
         creatorMutationIdempotencyKey(projectId, step.id, request as unknown as Record<string, unknown>), signal,
       )
       if (isCurrent()) {

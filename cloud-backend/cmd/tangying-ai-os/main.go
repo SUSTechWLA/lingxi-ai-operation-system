@@ -320,19 +320,7 @@ func main() {
 	allowedCORSOrigins := configuredCORSOrigins(cfg.Server.CORSAllowedOrigins)
 
 	// CORS middleware
-	r.Use(func(c *gin.Context) {
-		if origin := allowedCORSOrigin(c.GetHeader("Origin"), allowedCORSOrigins); origin != "" {
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Vary", "Origin")
-		}
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, DeviceID")
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-		c.Next()
-	})
+	r.Use(corsMiddleware(allowedCORSOrigins))
 
 	auth.NewHandler(authService).RegisterRoutes(r)
 	orchestratorHandler.NewOrchestratorHandler(orchestratorService, stateMachine, taskExecutionCtrl, contextService).RegisterRoutes(r, requireAuth)
@@ -551,7 +539,11 @@ func main() {
 			WithCheckpointService(checkpointSvc).
 			RegisterRoutes(r, requireAuth)
 		artifactHandler := artifact.NewHandler(artifactSvc, workflowRunRepo, nodeRepo).
-			WithAgentTaskStore(taskRepo)
+			WithAgentTaskStore(taskRepo).
+			WithProjectAccess(artifact.ProjectAccessFunc(func(ctx context.Context, userID, projectID string) bool {
+				project, err := videoProjectSvc.GetProject(ctx, userID, projectID)
+				return err == nil && project != nil && project.ID == projectID
+			}))
 
 		// Wire session dependencies into the project handler
 		projectHandler.WithSessionDependencies(artifactSvc, localRunnerService)
@@ -1392,6 +1384,22 @@ func allowedCORSOrigin(requestOrigin string, allowed []string) string {
 		}
 	}
 	return ""
+}
+
+func corsMiddleware(allowedOrigins []string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if origin := allowedCORSOrigin(c.GetHeader("Origin"), allowedOrigins); origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Vary", "Origin")
+		}
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, DeviceID, Idempotency-Key")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
 }
 
 // decisionLogAdapter bridges the workflow DecisionLogStore to the

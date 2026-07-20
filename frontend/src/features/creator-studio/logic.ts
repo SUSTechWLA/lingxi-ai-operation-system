@@ -1,4 +1,5 @@
 import type { AgentStartRunRequest, CreateVideoProjectPayload } from '../../utils/types'
+import type { ModelCapability, ModelProviderConfig } from '../../services/localAgent'
 import type {
   ArtifactSelection,
   CreationView,
@@ -35,6 +36,7 @@ export interface CreationRequestInput {
   aspectRatio: string
   platform?: string
   materialCount: number
+  modelProviders?: Partial<Record<ModelCapability, ModelProviderConfig>>
 }
 
 export interface CreationRequest {
@@ -92,6 +94,7 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
   const durationSec = input.durationSec
   const platform = input.platform?.trim()
   const materialCount = Math.max(0, Math.floor(input.materialCount))
+  const modelProviderRefs = buildProjectModelProviderRefs(input.modelProviders)
   const context = {
     topic: prompt,
     durationSec,
@@ -99,6 +102,9 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
     aspectRatio: input.aspectRatio,
     platform,
     materialCount,
+    ...(input.modelProviders && Object.keys(input.modelProviders).length > 0
+      ? { modelProviders: input.modelProviders }
+      : {}),
   }
   const durationCopy = durationSec ? `一支 ${durationSec} 秒` : ''
   const platformCopy = platform ? `适合${platform}发布的` : ''
@@ -121,7 +127,13 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
       language: 'zh-CN',
       config: {
         entry: 'creator_studio',
-        ...context,
+        topic: prompt,
+        durationSec,
+        targetDurationSec: durationSec,
+        aspectRatio: input.aspectRatio,
+        platform,
+        materialCount,
+        ...(Object.keys(modelProviderRefs).length > 0 ? { modelProviderRefs } : {}),
       },
     },
     agentRun: {
@@ -131,6 +143,22 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
       context,
     },
   }
+}
+
+export function buildProjectModelProviderRefs(
+  providers?: Partial<Record<ModelCapability, ModelProviderConfig>>,
+): Partial<Record<ModelCapability, { source: 'local_agent'; baseUrl: string; model: string }>> {
+  const refs: Partial<Record<ModelCapability, { source: 'local_agent'; baseUrl: string; model: string }>> = {}
+  for (const capability of ['text_to_text', 'text_to_image', 'text_to_video'] as const) {
+    const provider = providers?.[capability]
+    if (!provider?.apiKey || !provider.baseUrl.trim() || !provider.model.trim()) continue
+    refs[capability] = {
+      source: 'local_agent',
+      baseUrl: provider.baseUrl.trim(),
+      model: provider.model.trim(),
+    }
+  }
+  return refs
 }
 
 export function nextCreatorAction(view: Pick<CreationView, 'steps'>): CreatorAction {

@@ -794,6 +794,7 @@ func registerCloudSchemas(b *Builder) {
 	directMutation["directContent"] = &SchemaRef{Schema: StringSchema()}
 	instructionMutation := mutationProperties("instruction")
 	instructionMutation["instruction"] = &SchemaRef{Schema: StringSchema()}
+	instructionMutation["modelProviders"] = &SchemaRef{Schema: freeFormObject("Transient desktop model-provider credentials; never persisted")}
 	b.Schema("StepRevisionMutationRequest", &Schema{OneOf: []*SchemaRef{
 		{Schema: closedObject(directMutation, "artifactId", "baseVersion", "mode", "directContent", "confirmedAffectedShotIds")},
 		{Schema: closedObject(instructionMutation, "artifactId", "baseVersion", "mode", "instruction", "confirmedAffectedShotIds")},

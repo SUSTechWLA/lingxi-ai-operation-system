@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 )
 
 func TestRevisionServiceRestoreCreatesImmutableCurrentChild(t *testing.T) {
@@ -308,8 +309,11 @@ func TestCloneMetadataPreservesCyclicValuesWithoutAliasing(t *testing.T) {
 func TestReviseArtifactKeepsLegacySuccessResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newRevisionServiceFake(t, revisionTestArtifact())
-	handler := &Handler{revisions: NewRevisionService(repo)}
+	handler := (&Handler{revisions: NewRevisionService(repo)}).WithProjectAccess(ProjectAccessFunc(func(_ context.Context, userID, projectID string) bool {
+		return userID == "user-1" && projectID == "project-1"
+	}))
 	request := httptest.NewRequest(http.MethodPost, "/api/artifacts/artifact-v1/revise", strings.NewReader(`{"message":"make it tighter"}`))
+	request = request.WithContext(auth.ContextWithUser(request.Context(), "user-1"))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
@@ -338,11 +342,14 @@ func TestReviseArtifactKeepsLegacySuccessResponse(t *testing.T) {
 func TestHandlerSetRevisionConfigConfiguresSharedService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newRevisionServiceFake(t, revisionTestArtifact())
-	handler := &Handler{revisions: NewRevisionService(repo)}
+	handler := (&Handler{revisions: NewRevisionService(repo)}).WithProjectAccess(ProjectAccessFunc(func(_ context.Context, userID, projectID string) bool {
+		return userID == "user-1" && projectID == "project-1"
+	}))
 	handler.SetRevisionConfig("", func(context.Context, string, string, ReviseLLMOptions) (string, error) {
 		return "configured generator content", nil
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/artifacts/artifact-v1/revise", strings.NewReader(`{"message":"make it tighter"}`))
+	request = request.WithContext(auth.ContextWithUser(request.Context(), "user-1"))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)

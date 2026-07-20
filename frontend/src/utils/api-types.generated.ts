@@ -958,7 +958,7 @@ export interface StepRestoreRequest {
 
 /**  */
 // StepRevisionMutationRequest
-export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; instruction?: never; mode: 'direct'; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction: string; mode: 'instruction'; reviewId?: string; runId?: string; selection?: ArtifactSelection | null };
+export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; instruction?: never; mode: 'direct'; modelProviders?: never; reviewId?: string; runId?: string; selection?: ArtifactSelection | null } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction: string; mode: 'instruction'; modelProviders?: Record<string, unknown>; reviewId?: string; runId?: string; selection?: ArtifactSelection | null };
 
 /**  */
 // StepRevisionPreviewRequest

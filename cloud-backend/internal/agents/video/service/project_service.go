@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -138,6 +139,7 @@ func canonicalProjectConfig(raw json.RawMessage, canonicalProfileID string) json
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &config)
 	}
+	sanitizeProjectModelProviderConfig(config)
 	config["canonicalProfileId"] = canonicalProfileID
 	config["profileSchemaVersion"] = model.VideoProfileSchemaVersion
 	config["runtimePipelineId"] = model.VideoRuntimePipelineID
@@ -148,6 +150,31 @@ func canonicalProjectConfig(raw json.RawMessage, canonicalProfileID string) json
 		return raw
 	}
 	return encoded
+}
+
+func sanitizeProjectModelProviderConfig(config map[string]interface{}) {
+	delete(config, "modelProvider")
+	delete(config, "modelProviders")
+	rawRefs, _ := config["modelProviderRefs"].(map[string]interface{})
+	refs := map[string]interface{}{}
+	for _, capability := range []string{"text_to_text", "text_to_image", "text_to_video"} {
+		raw, _ := rawRefs[capability].(map[string]interface{})
+		source, _ := raw["source"].(string)
+		baseURL, _ := raw["baseUrl"].(string)
+		modelName, _ := raw["model"].(string)
+		source = strings.TrimSpace(source)
+		baseURL = strings.TrimSpace(baseURL)
+		modelName = strings.TrimSpace(modelName)
+		if source != "local_agent" || baseURL == "" || modelName == "" {
+			continue
+		}
+		refs[capability] = map[string]interface{}{"source": source, "baseUrl": baseURL, "model": modelName}
+	}
+	if len(refs) == 0 {
+		delete(config, "modelProviderRefs")
+		return
+	}
+	config["modelProviderRefs"] = refs
 }
 
 func mergeProjectConfig(existing, update json.RawMessage, canonicalProfileID string) json.RawMessage {

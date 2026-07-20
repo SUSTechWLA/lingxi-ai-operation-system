@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tangying-ai/aios-core/internal/agents/video/model"
@@ -100,6 +101,28 @@ func TestMergeProjectConfigPreservesPinnedIPAssetPackAndCanonicalRuntime(t *test
 	}
 	if config["canonicalProfileId"] != model.VideoProfileTalkingHead || config["runtimePipelineId"] != model.VideoRuntimePipelineID {
 		t.Fatalf("canonical runtime metadata should be authoritative: %+v", config)
+	}
+}
+
+func TestCanonicalProjectConfigPersistsOnlyNonSecretProviderReferences(t *testing.T) {
+	raw := json.RawMessage(`{
+		"modelProviders":{"text_to_text":{"baseUrl":"https://model.test","model":"writer","apiKey":"sk-raw"}},
+		"modelProviderRefs":{"text_to_text":{"source":"local_agent","baseUrl":"https://model.test","model":"writer","apiKey":"sk-nested"}}
+	}`)
+	encoded := canonicalProjectConfig(raw, model.VideoProfileCinematicStory)
+	if strings.Contains(string(encoded), "sk-raw") || strings.Contains(string(encoded), "sk-nested") || strings.Contains(string(encoded), "apiKey") {
+		t.Fatalf("canonical project config persisted provider credentials: %s", encoded)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(encoded, &config); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := config["modelProviders"]; exists {
+		t.Fatalf("legacy raw provider config must be removed: %+v", config)
+	}
+	ref := config["modelProviderRefs"].(map[string]interface{})["text_to_text"].(map[string]interface{})
+	if ref["source"] != "local_agent" || ref["baseUrl"] != "https://model.test" || ref["model"] != "writer" {
+		t.Fatalf("non-secret provider reference was not preserved: %+v", ref)
 	}
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { createVideoProject, startAgentRun } from '../../services/api'
-import { uploadLocalArtifactFile, type LocalArtifactUploadResponse } from '../../services/localAgent'
+import { buildClientModelProvidersForRun, uploadLocalArtifactFile, type LocalArtifactUploadResponse } from '../../services/localAgent'
 import { registerProjectMaterial } from '../../services/creatorApi'
 import type { ProjectMaterial, ProjectMaterialKind } from './types'
 import { buildCreationRequest, buildProjectMaterialStorageRef, creatorStartIdempotencyKey } from './logic'
@@ -147,12 +147,15 @@ export default function StartCreationPage({ onOpenProject }: StartCreationPagePr
     let nextProjectId = projectIdRef.current
     try {
       const durationSec = durationValue ? Number(durationValue) : undefined
+      const modelProviders = await buildClientModelProvidersForRun()
+      if (!isCurrentOperation(controller)) return
       const request = buildCreationRequest({
         prompt,
         durationSec,
         aspectRatio,
         platform: platform || undefined,
         materialCount: materials.length,
+        modelProviders,
       })
       if (!nextProjectId) {
         const project = await createVideoProject(request.project, controller.signal)

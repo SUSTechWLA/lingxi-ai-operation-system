@@ -239,6 +239,12 @@ func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
 		if mode == "instruction" && branch.Schema.Properties["directContent"] != nil {
 			t.Fatal("instruction branch exposes directContent")
 		}
+		if mode == "direct" && branch.Schema.Properties["modelProviders"] != nil {
+			t.Fatal("direct branch must not accept model provider credentials")
+		}
+		if mode == "instruction" && branch.Schema.Properties["modelProviders"] == nil {
+			t.Fatal("instruction branch must accept transient model provider credentials")
+		}
 	}
 
 	material := spec.Components.Schemas["RegisterProjectMaterialRequest"]

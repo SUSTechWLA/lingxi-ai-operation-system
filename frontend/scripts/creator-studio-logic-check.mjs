@@ -141,6 +141,9 @@ try {
     aspectRatio: '9:16',
     platform: '抖音',
     materialCount: 2,
+    modelProviders: {
+      text_to_text: { baseUrl: 'https://model.test/v1', model: 'writer', apiKey: 'sk-private' },
+    },
   })
   assert.deepEqual(creationRequest.project, {
     name: '为夏日咖啡新品拍一支轻快的竖版短片',
@@ -162,6 +165,9 @@ try {
       aspectRatio: '9:16',
       platform: '抖音',
       materialCount: 2,
+      modelProviderRefs: {
+        text_to_text: { source: 'local_agent', baseUrl: 'https://model.test/v1', model: 'writer' },
+      },
     },
   })
   assert.deepEqual(creationRequest.agentRun, {
@@ -175,8 +181,12 @@ try {
       aspectRatio: '9:16',
       platform: '抖音',
       materialCount: 2,
+      modelProviders: {
+        text_to_text: { baseUrl: 'https://model.test/v1', model: 'writer', apiKey: 'sk-private' },
+      },
     },
   })
+  assert.doesNotMatch(JSON.stringify(creationRequest.project), /sk-private/, 'project config must never persist API keys')
   const creationCopy = `${creationRequest.project.description} ${creationRequest.agentRun.message}`
   assert.doesNotMatch(creationCopy, /provider|run|trace|artifact/i, 'creator copy must not expose developer vocabulary')
 
@@ -314,6 +324,9 @@ try {
   assert.match(apiSource, /signal/g, 'creator requests must support AbortSignal')
   assert.match(startPageSource, /storageRef: buildProjectMaterialStorageRef\(nextProjectId, item\.id\)/)
   assert.match(startPageSource, /creatorStartIdempotencyKey\(nextProjectId\)/)
+  assert.match(startPageSource, /const modelProviders = await buildClientModelProvidersForRun\(\)/, 'creator start resolves runtime providers')
+  assert.match(startPageSource, /buildCreationRequest\(\{[\s\S]*modelProviders,[\s\S]*\}\)/, 'creator start sends provider refs and transient runtime providers through the request builder')
+  assert.match(reviewSource, /request\.mode === 'instruction'\s*\? await buildClientModelProvidersForRun\(\)\s*:\s*undefined/, 'instruction revisions resolve runtime providers while direct edits do not')
   assert.ok((startPageSource.match(/disabled=\{starting\}/g) || []).length >= 6, 'creation inputs must lock while starting')
   assert.match(startPageSource, /AbortController/)
   assert.match(startPageSource, /useEffect\(\(\) => \{\s+activeRef\.current = true/)

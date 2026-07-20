@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tangying-ai/aios-core/internal/core/auth"
 	"github.com/tangying-ai/aios-core/internal/core/model"
 	modelRepo "github.com/tangying-ai/aios-core/internal/core/model/repository"
 	"github.com/tangying-ai/aios-core/internal/core/workflow"
@@ -22,12 +23,31 @@ type ReviseLLMOptions struct {
 }
 
 type Handler struct {
-	service    *Service
+	service    handlerArtifactStore
 	runRepo    *workflow.RunRepository
 	nodeRepo   modelRepo.NodeRepo
 	agentTasks AgentTaskStore
+	access     ProjectAccessChecker
 
 	revisions *RevisionService
+}
+
+type handlerArtifactStore interface {
+	revisionArtifactStore
+	GetHistory(context.Context, string, string, string) ([]*Artifact, error)
+	ListByProject(context.Context, string) ([]*Artifact, error)
+}
+
+// ProjectAccessChecker resolves project ownership without coupling the core
+// artifact package to the video-project model package.
+type ProjectAccessChecker interface {
+	CanAccessProject(context.Context, string, string) bool
+}
+
+type ProjectAccessFunc func(context.Context, string, string) bool
+
+func (f ProjectAccessFunc) CanAccessProject(ctx context.Context, userID, projectID string) bool {
+	return f != nil && f(ctx, userID, projectID)
 }
 
 type AgentTaskStore interface {
@@ -39,6 +59,10 @@ type taskNodeFinder interface {
 }
 
 func NewHandler(service *Service, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
+	return newHandlerForStore(service, runRepo, nodeRepo)
+}
+
+func newHandlerForStore(service handlerArtifactStore, runRepo *workflow.RunRepository, nodeRepo modelRepo.NodeRepo) *Handler {
 	handler := &Handler{service: service, runRepo: runRepo, nodeRepo: nodeRepo}
 	handler.revisions = NewRevisionService(service)
 	handler.revisions.SetContentResolver(handler.hydrateLocalTextArtifactContent)
@@ -47,6 +71,11 @@ func NewHandler(service *Service, runRepo *workflow.RunRepository, nodeRepo mode
 
 func (h *Handler) WithAgentTaskStore(store AgentTaskStore) *Handler {
 	h.agentTasks = store
+	return h
+}
+
+func (h *Handler) WithProjectAccess(access ProjectAccessChecker) *Handler {
+	h.access = access
 	return h
 }
 
@@ -75,6 +104,9 @@ func (h *Handler) RegisterRoutes(r *gin.Engine, middleware ...gin.HandlerFunc) {
 
 func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 	projectID := c.Param("id")
+	if !h.authorizeProject(c, projectID) {
+		return
+	}
 	if err := h.materializeProject(c.Request.Context(), projectID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error(), "data": nil})
 		return
@@ -91,18 +123,16 @@ func (h *Handler) ListProjectArtifacts(c *gin.Context) {
 }
 
 func (h *Handler) GetArtifact(c *gin.Context) {
-	artifact, err := h.service.GetByID(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+	artifact, ok := h.authorizedArtifact(c)
+	if !ok {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": gin.H{"artifact": artifact}})
 }
 
 func (h *Handler) GetArtifactContent(c *gin.Context) {
-	artifact, err := h.service.GetByID(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+	artifact, ok := h.authorizedArtifact(c)
+	if !ok {
 		return
 	}
 	content, mediaURL, mediaURLs := artifactContent(artifact)
@@ -121,9 +151,8 @@ func (h *Handler) GetArtifactContent(c *gin.Context) {
 }
 
 func (h *Handler) GetArtifactHistory(c *gin.Context) {
-	artifact, err := h.service.GetByID(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+	artifact, ok := h.authorizedArtifact(c)
+	if !ok {
 		return
 	}
 	history, err := h.service.GetHistory(c.Request.Context(), artifact.ProjectID, artifact.StageName, artifact.UnitID)
@@ -135,6 +164,9 @@ func (h *Handler) GetArtifactHistory(c *gin.Context) {
 }
 
 func (h *Handler) ReviseArtifact(c *gin.Context) {
+	if _, ok := h.authorizedArtifact(c); !ok {
+		return
+	}
 	var req struct {
 		Message        string                 `json:"message" binding:"required"`
 		ModelProvider  map[string]interface{} `json:"modelProvider,omitempty"`
@@ -169,6 +201,38 @@ func (h *Handler) ReviseArtifact(c *gin.Context) {
 		"mediaUrl":  mediaURL,
 		"mediaUrls": mediaURLs,
 	}})
+}
+
+func (h *Handler) authorizedArtifact(c *gin.Context) (*Artifact, bool) {
+	var artifact *Artifact
+	var err error
+	if h.service != nil {
+		artifact, err = h.service.GetByID(c.Request.Context(), c.Param("id"))
+	} else if h.revisions != nil && h.revisions.artifacts != nil {
+		artifact, err = h.revisions.artifacts.GetByID(c.Request.Context(), c.Param("id"))
+	} else {
+		err = errors.New("artifact store unavailable")
+	}
+	if err != nil || artifact == nil || !h.authorizeProject(c, artifact.ProjectID) {
+		if !c.IsAborted() {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+		}
+		return nil, false
+	}
+	return artifact, true
+}
+
+func (h *Handler) authorizeProject(c *gin.Context, projectID string) bool {
+	userID, ok := auth.UserIDFromContext(c.Request.Context())
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "unauthorized", "data": nil})
+		return false
+	}
+	if h.access == nil || !h.access.CanAccessProject(c.Request.Context(), userID, projectID) {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"code": 404, "message": "artifact not found", "data": nil})
+		return false
+	}
+	return true
 }
 
 func (h *Handler) materializeProject(ctx context.Context, projectID string) error {

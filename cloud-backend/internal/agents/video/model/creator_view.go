@@ -121,16 +121,17 @@ type ArtifactSelection struct {
 }
 
 type StepRevisionRequest struct {
-	IdempotencyKey           string             `json:"-"`
-	ArtifactID               string             `json:"artifactId"`
-	BaseVersion              int                `json:"baseVersion"`
-	Mode                     string             `json:"mode"`
-	Instruction              string             `json:"instruction,omitempty"`
-	DirectContent            string             `json:"directContent,omitempty"`
-	RunID                    string             `json:"runId,omitempty"`
-	ReviewID                 string             `json:"reviewId,omitempty"`
-	ConfirmedAffectedShotIDs []string           `json:"confirmedAffectedShotIds,omitempty"`
-	Selection                *ArtifactSelection `json:"selection,omitempty"`
+	IdempotencyKey           string                 `json:"-"`
+	ArtifactID               string                 `json:"artifactId"`
+	BaseVersion              int                    `json:"baseVersion"`
+	Mode                     string                 `json:"mode"`
+	Instruction              string                 `json:"instruction,omitempty"`
+	DirectContent            string                 `json:"directContent,omitempty"`
+	ModelProviders           map[string]interface{} `json:"modelProviders,omitempty"`
+	RunID                    string                 `json:"runId,omitempty"`
+	ReviewID                 string                 `json:"reviewId,omitempty"`
+	ConfirmedAffectedShotIDs []string               `json:"confirmedAffectedShotIds,omitempty"`
+	Selection                *ArtifactSelection     `json:"selection,omitempty"`
 }
 
 type StepRestoreRequest struct {
