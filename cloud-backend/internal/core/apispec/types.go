@@ -5,21 +5,21 @@ package apispec
 
 // Spec is the root OpenAPI 3.0 document.
 type Spec struct {
-	OpenAPI    string                   `json:"openapi"`
-	Info       Info                     `json:"info"`
-	Servers    []Server                 `json:"servers,omitempty"`
-	Tags       []Tag                    `json:"tags,omitempty"`
-	Paths      map[string]*PathItem     `json:"paths"`
-	Components *Components             `json:"components,omitempty"`
+	OpenAPI    string               `json:"openapi"`
+	Info       Info                 `json:"info"`
+	Servers    []Server             `json:"servers,omitempty"`
+	Tags       []Tag                `json:"tags,omitempty"`
+	Paths      map[string]*PathItem `json:"paths"`
+	Components *Components          `json:"components,omitempty"`
 }
 
 // Info describes the API.
 type Info struct {
-	Title          string `json:"title"`
-	Description    string `json:"description,omitempty"`
-	Version        string `json:"version"`
-	Contact        *Contact `json:"contact,omitempty"`
-	License        *License `json:"license,omitempty"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Version     string   `json:"version"`
+	Contact     *Contact `json:"contact,omitempty"`
+	License     *License `json:"license,omitempty"`
 }
 
 type Contact struct {
@@ -55,34 +55,34 @@ type PathItem struct {
 
 // Operation describes a single API operation.
 type Operation struct {
-	OperationID string                `json:"operationId"`
-	Summary     string                `json:"summary"`
-	Description string                `json:"description,omitempty"`
-	Tags        []string              `json:"tags,omitempty"`
-	Parameters  []Parameter           `json:"parameters,omitempty"`
-	RequestBody *RequestBody          `json:"requestBody,omitempty"`
+	OperationID string               `json:"operationId"`
+	Summary     string               `json:"summary"`
+	Description string               `json:"description,omitempty"`
+	Tags        []string             `json:"tags,omitempty"`
+	Parameters  []Parameter          `json:"parameters,omitempty"`
+	RequestBody *RequestBody         `json:"requestBody,omitempty"`
 	Responses   map[string]*Response `json:"responses"`
-	Deprecated  bool                  `json:"deprecated,omitempty"`
+	Deprecated  bool                 `json:"deprecated,omitempty"`
 }
 
 type Parameter struct {
-	Name            string `json:"name"`
-	In              string `json:"in"`                 // query, path, header, cookie
-	Description     string `json:"description,omitempty"`
-	Required        bool   `json:"required"`
-	Schema          *SchemaRef `json:"schema,omitempty"`
-	Style           string `json:"style,omitempty"`
-	Explode         *bool  `json:"explode,omitempty"`
+	Name        string     `json:"name"`
+	In          string     `json:"in"` // query, path, header, cookie
+	Description string     `json:"description,omitempty"`
+	Required    bool       `json:"required"`
+	Schema      *SchemaRef `json:"schema,omitempty"`
+	Style       string     `json:"style,omitempty"`
+	Explode     *bool      `json:"explode,omitempty"`
 }
 
 type RequestBody struct {
-	Description string              `json:"description,omitempty"`
-	Required    bool                `json:"required"`
+	Description string                `json:"description,omitempty"`
+	Required    bool                  `json:"required"`
 	Content     map[string]*MediaType `json:"content"`
 }
 
 type Response struct {
-	Description string              `json:"description"`
+	Description string                `json:"description"`
 	Content     map[string]*MediaType `json:"content,omitempty"`
 }
 
@@ -92,31 +92,32 @@ type MediaType struct {
 
 // SchemaRef is a $ref or inline schema.
 type SchemaRef struct {
-	Ref         string  `json:"$ref,omitempty"`
-	Schema      *Schema `json:"schema,omitempty"`  // for inline schemas
+	Ref    string  `json:"$ref,omitempty"`
+	Schema *Schema `json:"schema,omitempty"` // for inline schemas
 }
 
 // Schema represents a JSON Schema object used in components/schemas and
 // operation request/response bodies.
 type Schema struct {
-	Type                 string             `json:"type,omitempty"`
-	Format               string             `json:"format,omitempty"`
-	Description          string             `json:"description,omitempty"`
-	Items                *SchemaRef         `json:"items,omitempty"`
+	Type                 string                `json:"type,omitempty"`
+	Format               string                `json:"format,omitempty"`
+	Description          string                `json:"description,omitempty"`
+	Items                *SchemaRef            `json:"items,omitempty"`
 	Properties           map[string]*SchemaRef `json:"properties,omitempty"`
-	Required             []string           `json:"required,omitempty"`
-	AdditionalProperties *SchemaRef         `json:"additionalProperties,omitempty"`
-	AllOf                []*SchemaRef       `json:"allOf,omitempty"`
-	Ref                  string             `json:"$ref,omitempty"`
-	Enum                 []any              `json:"enum,omitempty"`
-	Default              any                `json:"default,omitempty"`
-	Nullable             bool               `json:"nullable,omitempty"`
-	Deprecated           bool               `json:"deprecated,omitempty"`
-	Example              any                `json:"example,omitempty"`
+	Required             []string              `json:"required,omitempty"`
+	AdditionalProperties *SchemaRef            `json:"additionalProperties,omitempty"`
+	AllOf                []*SchemaRef          `json:"allOf,omitempty"`
+	Ref                  string                `json:"$ref,omitempty"`
+	Enum                 []any                 `json:"enum,omitempty"`
+	Minimum              *float64              `json:"minimum,omitempty"`
+	Default              any                   `json:"default,omitempty"`
+	Nullable             bool                  `json:"nullable,omitempty"`
+	Deprecated           bool                  `json:"deprecated,omitempty"`
+	Example              any                   `json:"example,omitempty"`
 }
 
 type Components struct {
-	Schemas         map[string]*Schema   `json:"schemas,omitempty"`
+	Schemas         map[string]*Schema         `json:"schemas,omitempty"`
 	SecuritySchemes map[string]*SecurityScheme `json:"securitySchemes,omitempty"`
 }
 

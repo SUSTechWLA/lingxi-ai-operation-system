@@ -83,7 +83,7 @@ func RenderTypeScript(spec *Spec) []byte {
 		b.WriteString("}\n\n")
 	}
 
-	return []byte(b.String())
+	return []byte(strings.TrimRight(b.String(), "\n") + "\n")
 }
 
 func toPascalCase(s string) string {

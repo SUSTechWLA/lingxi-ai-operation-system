@@ -40,7 +40,7 @@ const API_BASE = configuredCloudBase || electronCloudBase || '/api'
 const DEFAULT_API_TIMEOUT_MS = 30000
 const AGENT_RUN_REQUEST_TIMEOUT_MS = 300000
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: API_BASE,
   timeout: DEFAULT_API_TIMEOUT_MS,
 })

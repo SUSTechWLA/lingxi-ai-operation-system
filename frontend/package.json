@@ -13,6 +13,7 @@
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
     "test:director": "node scripts/director-studio-logic-check.mjs",
+    "test:creator": "node scripts/creator-studio-logic-check.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
