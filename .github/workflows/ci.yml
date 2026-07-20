@@ -67,6 +67,10 @@ jobs:
           grep -q "scripts/beta-fallback-fixture.sh" docs/BETA_RUNBOOK.md
           grep -q "scripts/beta-readiness-check.sh" docs/BETA_RUNBOOK.md
 
+      - name: Check release version consistency
+        shell: bash
+        run: bash scripts/release-version-check.sh
+
       - name: Check release tree contract
         if: github.ref_name == 'release' || github.base_ref == 'release'
         shell: bash
@@ -77,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck scripts/beta-smoke-check.sh scripts/beta-fallback-fixture.sh scripts/beta-readiness-check.sh
+            shellcheck scripts/beta-smoke-check.sh scripts/beta-fallback-fixture.sh scripts/beta-readiness-check.sh scripts/release-version-check.sh
           else
             echo "shellcheck not installed; skipping"
           fi

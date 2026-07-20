@@ -4,6 +4,8 @@ All notable release changes are tracked here. README only carries the current ve
 
 ## Unreleased
 
+## v0.2.0 - 2026-07-21
+
 ### Added
 
 - Added the default six-step creator studio with two persistent creator destinations, isolated Shot review, and a separately gated developer console.
@@ -16,6 +18,8 @@ All notable release changes are tracked here. README only carries the current ve
 - Added image regeneration instructions for selected reference/storyboard frames so users can request local AI edits while preserving locked role, scene, prop, and continuity constraints.
 - Added `LocalIpTalkingAvatarRenderTool`, a deterministic local IP talking-avatar renderer for oral-video A-roll. It supports `bobo` / `aster` character assets, `svg2d` high-fidelity reference-image puppets, audio-driven lip-sync, motion timelines, HyperGen control metadata, voice profiles, FFmpeg composition, QA reports, and local demo generation.
 - Added segmented prosody preview audio and richer limb motion for local IP talking avatars, including varied local preview speech rate/pauses, `narration_prosody_plan.json`, left/right arm gestures, both-hands presentation, foot bounce, and body weight shift.
+- Added the canonical 3D sloth A-roll asset pair: one Blender character master, one shared warm-studio scene, one runtime GLB compatibility export, one material system, and one versioned asset manifest.
+- Added tag-driven macOS arm64 and x64 desktop packaging with English artifact names and automatic GitHub Release publication.
 
 ### Changed
 
@@ -24,6 +28,13 @@ All notable release changes are tracked here. README only carries the current ve
 - Changed external video generation calls so JiMeng/Dreamina receives the AIGC layer prompt first (`aigcPrompt` / `aigcVideoPrompt` / `aigcPlan.prompt`) instead of HyperFrames text-layer or full-shot engineering descriptions.
 - Changed local artifact preview loading so web dev uses the same-origin `/api/local` proxy, avoiding `Failed to fetch` for local media previews when the desktop/web app is served from `127.0.0.1:3000`.
 - Changed backend project and artifact reads to coalesce nullable legacy fields, reducing scan failures for older project/artifact rows during shot workspace loading.
+- Consolidated all default IP assets under the English-only `ip-assets/main-ip/` path and removed obsolete preview renders, duplicate character files, external studio textures, demo audio strips, and stale generated-video assets.
+- Unified root, frontend, and HyperFrames Render Service versions at `0.2.0`, with CI checks that reject version, README, release-status, or tag drift.
+
+### Fixed
+
+- Fixed the GitHub repository Releases panel being stuck at `v0.1.9` by restoring a real GitHub Release publishing path instead of creating tags without release records.
+- Fixed desktop package filenames so downloadable artifacts use stable English names containing version, platform, and CPU architecture.
 
 ## v0.1.13 - 2026-07-05
 

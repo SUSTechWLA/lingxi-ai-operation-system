@@ -1,6 +1,6 @@
 # Release Status
 
-Current release: `v0.1.13`
+Current release: `v0.2.0`
 
 Status: **initial closed beta launch-ready for controlled technical users; real creator trials require readiness `GO`.**
 
@@ -8,11 +8,13 @@ Status: **initial closed beta launch-ready for controlled technical users; real 
 
 The `release` branch is the initial closed beta launch baseline for controlled technical users. The system can run the fallback smoke path without real AIGC provider accounts, and it can produce local preview artifacts, semantic shot split metadata, structured shot QA reports, machine-readable repair plans, accepted-shot assembly plans, provenance labels, and diagnostics packages.
 
-`v0.1.13` keeps the packaged desktop local runner restart fix and consolidates JiMeng CLI/MCP setup into Settings, alongside text-to-image and text-to-video provider configuration. Project pages now keep JiMeng guidance minimal and link to Settings instead of owning setup actions.
+`v0.2.0` consolidates the complete creator-facing six-step workspace, durable Shot review and assembly, fail-closed delivery, layered AIGC/HyperFrames/FFmpeg production, JiMeng settings, and the packaged desktop local runner restart fix into one versioned release baseline.
 
 The release branch now also includes the shot workspace refresh: each shot opens as a linear 1-6 creator review flow, automatically switching between voice/knowledge video and cinematic/AIGC shot video. The workspace shows readable scripts, reference images, AIGC layer prompts, HyperFrames layer prompts, subtitle timelines, upload slots, and playable final media instead of exposing raw `local://` storage references or success-only artifact status messages.
 
 The release candidate also includes the canonical sloth A-roll path. It loads the approved Blender master into the warm studio, drives body, wrist, independent three-segment digits, visemes and facial controls from the script timeline, uses the pinned GPT-SoVITS voice, and composes a final MP4 locally with FFmpeg. This path is deterministic local rendering, not AIGC video generation.
+
+Desktop installers are built from the matching `v0.2.0` tag. macOS artifacts use English filenames containing the version and architecture; unsigned closed-beta builds may still require the tester to approve the app in macOS Privacy & Security.
 
 For creator-facing real AIGC trials, run the readiness gate in the target environment and require `GO` before inviting users.
 

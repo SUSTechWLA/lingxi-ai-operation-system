@@ -1,6 +1,6 @@
 # 视频抽帧 QA Wiki
 
-本文说明 v0.1.13 的 shot 级视频 QA 和 final assembly QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤、画面复杂度、剧本匹配、素材 provenance 和 shot 规格风险提前暴露出来，并把每个 shot candidate 的问题量化成可用于保守返修的机器可读结论。
+本文说明 v0.2.0 的 shot 级视频 QA 和 final assembly QA 链路。它的目标不是替代人工审片，而是在交付前把明显的文字遮挡、底部字幕拥挤、画面复杂度、剧本匹配、素材 provenance 和 shot 规格风险提前暴露出来，并把每个 shot candidate 的问题量化成可用于保守返修的机器可读结论。
 
 ## 流程位置
 
