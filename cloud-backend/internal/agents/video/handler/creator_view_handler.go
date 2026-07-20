@@ -110,7 +110,8 @@ func (h *CreatorViewHandler) ReviseStep(c *gin.Context) {
 		return
 	}
 	var req model.StepRevisionRequest
-	if err := c.ShouldBindJSON(&req); err != nil || req.ArtifactID == "" || req.BaseVersion <= 0 {
+	req.IdempotencyKey = c.GetHeader("Idempotency-Key")
+	if err := c.ShouldBindJSON(&req); err != nil || req.ArtifactID == "" || req.BaseVersion <= 0 || req.IdempotencyKey == "" {
 		fail(c, http.StatusBadRequest, "invalid content request")
 		return
 	}
@@ -157,7 +158,8 @@ func (h *CreatorViewHandler) RestoreStepVersion(c *gin.Context) {
 		return
 	}
 	var req model.StepRestoreRequest
-	if err := c.ShouldBindJSON(&req); err != nil || req.BaseVersion <= 0 {
+	req.IdempotencyKey = c.GetHeader("Idempotency-Key")
+	if err := c.ShouldBindJSON(&req); err != nil || req.BaseVersion <= 0 || req.IdempotencyKey == "" {
 		fail(c, http.StatusBadRequest, "invalid restore request")
 		return
 	}
@@ -194,12 +196,15 @@ func (h *CreatorViewHandler) authorizeProject(c *gin.Context) (string, string, b
 func (h *CreatorViewHandler) failMutation(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, videoSvc.ErrCreatorVersionConflict), errors.Is(err, artifact.ErrArtifactVersionConflict),
+		errors.Is(err, videoSvc.ErrCreatorIdempotencyConflict),
 		errors.Is(err, agentruntime.ErrReviewNotPending), errors.Is(err, agentruntime.ErrReviewCannotReopen),
 		errors.Is(err, agentruntime.ErrReviewGateAmbiguous):
 		fail(c, http.StatusConflict, "content changed; reload and try again")
 	case errors.Is(err, videoSvc.ErrCreatorArtifactNotFound), errors.Is(err, artifact.ErrRevisionArtifactNotFound),
 		errors.Is(err, agentruntime.ErrReviewNotFound):
 		fail(c, http.StatusNotFound, "content not found")
+	case errors.Is(err, videoSvc.ErrCreatorModelProviderUnavailable):
+		fail(c, http.StatusBadRequest, "text revision model provider is not configured")
 	case errors.Is(err, videoSvc.ErrCreatorStepInvalid), errors.Is(err, videoSvc.ErrCreatorInvalidRequest),
 		errors.Is(err, videoSvc.ErrCreatorImpactMismatch), errors.Is(err, agentruntime.ErrReviewReferenceMismatch):
 		fail(c, http.StatusBadRequest, "invalid content request")

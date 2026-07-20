@@ -127,6 +127,11 @@ func (h *Handler) WithDecisionLogWriter(w DecisionLogWriter) *Handler {
 	return h
 }
 
+func (h *Handler) WithAtomicReviewReopener(store AtomicReviewReopener) *Handler {
+	h.ensureReviewMutations().WithAtomicReviewReopener(store)
+	return h
+}
+
 // WithArtifactService sets the artifact service for stale tracking on review actions.
 func (h *Handler) WithArtifactService(s ArtifactService) *Handler {
 	h.artifactService = s

@@ -69,6 +69,13 @@ func BuildRevisionRequest(base *Artifact, instruction string, data []byte) *Crea
 	for k, v := range base.Metadata {
 		metadata[k] = v
 	}
+	for key, value := range map[string]string{
+		"producedByNode": base.ProducedByNode, "producedByTool": base.ProducedByTool, "producedByRole": base.ProducedByRole,
+	} {
+		if strings.TrimSpace(value) != "" {
+			metadata[key] = value
+		}
+	}
 	metadata["status"] = "valid"
 	metadata["humanApproved"] = false
 	return &CreateArtifactRequest{

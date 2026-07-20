@@ -305,6 +305,7 @@ func buildArtifactRecord(req *CreateArtifactRequest, nextVersion int, parentID s
 	producedByRole := stringMetadata(metadata, "producedByRole")
 
 	return &Artifact{
+		ID:             req.ID,
 		ProjectID:      req.ProjectID,
 		WorkflowRunID:  req.WorkflowRunID,
 		TaskID:         req.TaskID,

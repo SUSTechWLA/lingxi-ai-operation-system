@@ -365,6 +365,30 @@ func revisionTestArtifact() *Artifact {
 	}
 }
 
+func TestRestoreUsesHistoricalBytesButCurrentExecutionIdentity(t *testing.T) {
+	historical := revisionTestArtifact()
+	historical.ID, historical.Version, historical.IsCurrent = "artifact-v1", 1, false
+	historical.WorkflowRunID, historical.TaskID, historical.RoleAgentID = "old-run", "old-task", "old-role"
+	historical.Metadata = map[string]interface{}{"producedByNode": "old-node", "producedByTool": "old-tool", "producedByRole": "old-role"}
+	current := cloneArtifactForRevisionTest(historical)
+	current.ID, current.Version, current.IsCurrent = "artifact-v3", 3, true
+	current.WorkflowRunID, current.TaskID, current.RoleAgentID = "new-run", "new-task", "new-role"
+	current.ProducedByNode, current.ProducedByTool, current.ProducedByRole = "new-node", "new-tool", "new-role"
+	current.Metadata = map[string]interface{}{}
+	repo := newRevisionServiceFake(t, historical, current)
+
+	if _, err := NewRevisionService(repo).Restore(context.Background(), RestoreRequest{ArtifactID: historical.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got := repo.lastCreate
+	if got.WorkflowRunID != "new-run" || got.TaskID != "new-task" || got.RoleAgentID != "new-role" {
+		t.Fatalf("execution identity = run=%q task=%q role=%q", got.WorkflowRunID, got.TaskID, got.RoleAgentID)
+	}
+	if got.Metadata["producedByNode"] != "new-node" || got.Metadata["producedByTool"] != "new-tool" || got.ContentHash != historical.ContentHash {
+		t.Fatalf("request=%+v metadata=%+v", got, got.Metadata)
+	}
+}
+
 type revisionServiceFake struct {
 	t          *testing.T
 	byID       map[string]*Artifact

@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,7 +24,19 @@ var (
 // ReviewMutationService is the small creator-facing review state-machine API.
 type ReviewMutationService interface {
 	Confirm(ctx context.Context, runID, reviewID, reviewerID, comment string) error
-	ReopenWithArtifact(ctx context.Context, runID, reviewID, artifactID, reviewerID, reason string) error
+	ConfirmForArtifact(ctx context.Context, runID, reviewID, artifactID, reviewerID, comment string) error
+	ReopenWithArtifact(ctx context.Context, runID, reviewID, projectID, expectedArtifactID, artifactID, reviewerID, reason string) error
+}
+
+type ReviewReopenRequest struct {
+	RunID, TaskID, ProjectID, ReviewID, StageName string
+	ExpectedArtifactID, NewArtifactID             string
+	SourceNodeRefs                                []string
+	ReviewerID, Reason, AuditID                   string
+}
+
+type AtomicReviewReopener interface {
+	ReopenReviewGateAtomic(context.Context, ReviewReopenRequest) error
 }
 
 // ReviewGateResolver derives and verifies the gate identity from durable
@@ -41,6 +54,12 @@ type reviewMutationService struct {
 	artifactService   ArtifactService
 	projectIDResolver ProjectIDResolver
 	regeneration      RegenerationDispatcher
+	atomicReopener    AtomicReviewReopener
+}
+
+func (s *reviewMutationService) WithAtomicReviewReopener(store AtomicReviewReopener) *reviewMutationService {
+	s.atomicReopener = store
+	return s
 }
 
 func NewReviewMutationService(runner *Runner, nodes ReviewNodeStore, stateMachine ReviewStateMachine) *reviewMutationService {
@@ -180,15 +199,25 @@ func reviewSourceAliases(nodes []*model.Node, producedByNode string) map[string]
 }
 
 func (s *reviewMutationService) Confirm(ctx context.Context, runID, reviewID, reviewerID, comment string) error {
+	return s.ConfirmForArtifact(ctx, runID, reviewID, "", reviewerID, comment)
+}
+
+func (s *reviewMutationService) ConfirmForArtifact(ctx context.Context, runID, reviewID, artifactID, reviewerID, comment string) error {
 	run, node, err := s.findReviewNode(ctx, runID, reviewID)
 	if err != nil {
 		return err
 	}
 	if node.Status == model.NodeSuccess {
+		if artifactID != "" && nodeInputString(node, "artifactId") != artifactID {
+			return ErrReviewReferenceMismatch
+		}
 		return nil
 	}
 	if node.Status != model.NodeReady {
 		return ErrReviewNotPending
+	}
+	if artifactID != "" && nodeInputString(node, "artifactId") != artifactID {
+		return ErrReviewReferenceMismatch
 	}
 	if s.stateMachine == nil {
 		return fmt.Errorf("review state machine is unavailable")
@@ -206,7 +235,7 @@ func (s *reviewMutationService) Confirm(ctx context.Context, runID, reviewID, re
 	return nil
 }
 
-func (s *reviewMutationService) ReopenWithArtifact(ctx context.Context, runID, reviewID, artifactID, reviewerID, reason string) error {
+func (s *reviewMutationService) ReopenWithArtifact(ctx context.Context, runID, reviewID, projectID, expectedArtifactID, artifactID, reviewerID, reason string) error {
 	run, node, err := s.findReviewNode(ctx, runID, reviewID)
 	if err != nil {
 		return err
@@ -219,25 +248,29 @@ func (s *reviewMutationService) ReopenWithArtifact(ctx context.Context, runID, r
 	default:
 		return ErrReviewCannotReopen
 	}
-	updater, ok := s.nodes.(ReviewNodeInputUpdater)
-	if !ok {
-		return fmt.Errorf("review input updater is unavailable")
+	if s.atomicReopener == nil {
+		return fmt.Errorf("atomic review reopener is unavailable")
 	}
-	if err := updater.UpdateInputFields(ctx, node.ID, map[string]interface{}{"artifactId": artifactID}); err != nil {
-		return err
+	sources := reviewSourceAliasesForGate(node)
+	auditSum := sha256.Sum256([]byte(runID + "\x00" + reviewID + "\x00" + artifactID))
+	return s.atomicReopener.ReopenReviewGateAtomic(ctx, ReviewReopenRequest{
+		RunID: runID, TaskID: run.TaskID, ProjectID: projectID, ReviewID: reviewID,
+		StageName: nodeInputString(node, "stage"), ExpectedArtifactID: expectedArtifactID,
+		NewArtifactID: artifactID, SourceNodeRefs: sources, ReviewerID: reviewerID,
+		Reason: reason, AuditID: fmt.Sprintf("dl-creator-%x", auditSum[:12]),
+	})
+}
+
+func reviewSourceAliasesForGate(node *model.Node) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, key := range []string{"sourceNode", "productionSourceNode"} {
+		if value := strings.TrimSpace(nodeInputString(node, key)); value != "" && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
 	}
-	if node.Input == nil {
-		node.Input = map[string]interface{}{}
-	}
-	node.Input["artifactId"] = artifactID
-	if err := s.nodes.UpdateStatus(ctx, node.ID, model.NodeReady, map[string]interface{}{
-		"approved": false, "humanApproved": false, "artifactId": artifactID, "comment": reason,
-	}, ""); err != nil {
-		return err
-	}
-	s.updateArtifactReviewStatus(ctx, node.ID, ArtifactReviewPending, reviewerID, reason)
-	s.writeDecisionLog(ctx, run, node, DecisionStageEdit, artifactID, reviewerID, reason, false)
-	return nil
+	return out
 }
 
 func (s *reviewMutationService) SubmitEdited(ctx context.Context, runID, reviewID, reviewerID, comment string, content interface{}) error {

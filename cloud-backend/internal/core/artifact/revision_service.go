@@ -29,6 +29,7 @@ type RevisionResult struct {
 }
 
 type ReviseRequest struct {
+	NewArtifactID  string
 	ArtifactID     string
 	Message        string
 	DirectContent  []byte
@@ -40,9 +41,11 @@ type ReviseRequest struct {
 }
 
 type RestoreRequest struct {
-	ArtifactID string
-	ReviewerID string
-	Reason     string
+	ArtifactID    string
+	NewArtifactID string
+	ReviewerID    string
+	Reason        string
+	Provenance    map[string]interface{}
 }
 
 var (
@@ -102,6 +105,7 @@ func (s *RevisionService) Revise(ctx context.Context, req ReviseRequest) (*Revis
 	}
 
 	revisionRequest := BuildRevisionRequest(base, req.Message, data)
+	revisionRequest.ID = req.NewArtifactID
 	if revisionRequest.Metadata == nil {
 		revisionRequest.Metadata = map[string]interface{}{}
 	}
@@ -137,6 +141,24 @@ func (s *RevisionService) Restore(ctx context.Context, req RestoreRequest) (*Rev
 		data = []byte(historical.InlineJSON)
 	}
 	metadata := cloneMetadata(historical.Metadata)
+	for key, value := range req.Provenance {
+		metadata[key] = deepCloneMetadataValue(value)
+	}
+	// A restore selects historical bytes, but it is executed in the current
+	// workflow. Never resurrect a stale run/task/node identity.
+	currentProducer := map[string]string{
+		"producedByNode": current.ProducedByNode, "producedByTool": current.ProducedByTool, "producedByRole": current.ProducedByRole,
+	}
+	for key, fieldValue := range currentProducer {
+		delete(metadata, key)
+		if strings.TrimSpace(fieldValue) != "" {
+			metadata[key] = fieldValue
+			continue
+		}
+		if value, ok := current.Metadata[key]; ok {
+			metadata[key] = deepCloneMetadataValue(value)
+		}
+	}
 	metadata["status"] = string(ArtifactStatusValid)
 	metadata["humanApproved"] = false
 	if strings.TrimSpace(req.ReviewerID) != "" {
@@ -146,8 +168,8 @@ func (s *RevisionService) Restore(ctx context.Context, req RestoreRequest) (*Rev
 		metadata["restoreReason"] = req.Reason
 	}
 	restored, err := s.artifacts.CreateArtifact(ctx, &CreateArtifactRequest{
-		ProjectID: historical.ProjectID, WorkflowRunID: historical.WorkflowRunID, TaskID: historical.TaskID,
-		StageName: historical.StageName, RoleAgentID: historical.RoleAgentID, UnitID: historical.UnitID,
+		ID: req.NewArtifactID, ProjectID: historical.ProjectID, WorkflowRunID: current.WorkflowRunID, TaskID: current.TaskID,
+		StageName: historical.StageName, RoleAgentID: current.RoleAgentID, UnitID: historical.UnitID,
 		Kind: historical.Kind, Name: historical.Name, StorageType: historical.StorageType, StorageRef: historical.StorageRef,
 		Data: data, MimeType: historical.MimeType, SizeBytes: historical.SizeBytes, ContentHash: historical.ContentHash,
 		PromptHash: historical.PromptHash, Provider: historical.Provider, Model: historical.Model, Metadata: metadata,

@@ -24,18 +24,20 @@ func TestReviewMutationReopenChangesOnlyGateAndLeavesSourceSuccessful(t *testing
 	state := &recordingReviewStateMachine{}
 	dispatcher := &recordingRegenerationDispatcher{}
 	log := &mutationDecisionLog{}
+	atomic := &mutationAtomicReopener{}
 	svc := NewReviewMutationService(NewRunner(nil, runs, nil, nil, nil), nodes, state).
 		WithDecisionLogWriter(log).
-		WithRegenerationDispatcher(dispatcher)
+		WithRegenerationDispatcher(dispatcher).
+		WithAtomicReviewReopener(atomic)
 
-	if err := svc.ReopenWithArtifact(context.Background(), "run-1", "script-review", "script-v4", "user-1", "修改后重新确认"); err != nil {
+	if err := svc.ReopenWithArtifact(context.Background(), "run-1", "script-review", "vp-1", "script-v3", "script-v4", "user-1", "修改后重新确认"); err != nil {
 		t.Fatalf("ReopenWithArtifact() error = %v", err)
 	}
 	if nodes.nodes[0].Status != model.NodeSuccess {
 		t.Fatalf("source status = %s, want SUCCESS", nodes.nodes[0].Status)
 	}
-	if nodes.nodes[1].Status != model.NodeReady || nodes.nodes[1].Input["artifactId"] != "script-v4" {
-		t.Fatalf("target gate = %+v, want READY with script-v4", nodes.nodes[1])
+	if len(atomic.requests) != 1 || atomic.requests[0].ExpectedArtifactID != "script-v3" || atomic.requests[0].NewArtifactID != "script-v4" {
+		t.Fatalf("atomic request = %+v", atomic.requests)
 	}
 	if nodes.nodes[2].Status != model.NodeSuccess || nodes.nodes[2].Input["artifactId"] != "preview-v1" {
 		t.Fatalf("unrelated gate changed: %+v", nodes.nodes[2])
@@ -43,8 +45,53 @@ func TestReviewMutationReopenChangesOnlyGateAndLeavesSourceSuccessful(t *testing
 	if state.successNodeID != "" || dispatcher.resumedTaskID != "" || dispatcher.retriedNodeID != "" {
 		t.Fatalf("reopen resumed work: state=%q resume=%q retry=%q", state.successNodeID, dispatcher.resumedTaskID, dispatcher.retriedNodeID)
 	}
-	if len(log.records) != 1 || log.records[0].WorkflowRunID != "run-1" || log.records[0].TaskID != "task-1" {
-		t.Fatalf("decision log = %+v", log.records)
+	if len(log.records) != 0 {
+		t.Fatalf("decision audit must be owned by atomic store: %+v", log.records)
+	}
+}
+
+func TestReviewMutationAtomicFailureLeavesInMemoryGateAndAuditUnchanged(t *testing.T) {
+	runs := newMemoryRunStore()
+	runs.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	node := &model.Node{ID: "review", TaskID: "task-1", Type: model.NodeTypeReviewGate, Status: model.NodeSuccess,
+		Input: map[string]interface{}{"sourceNode": "source", "stage": "script", "artifactId": "v1"}}
+	nodes := &mutationNodeStore{nodes: []*model.Node{node}}
+	wantErr := errors.New("transaction failed")
+	atomic := &mutationAtomicReopener{err: wantErr}
+	svc := NewReviewMutationService(NewRunner(nil, runs, nil, nil, nil), nodes, &recordingReviewStateMachine{}).
+		WithAtomicReviewReopener(atomic)
+
+	err := svc.ReopenWithArtifact(context.Background(), "run-1", "review", "vp-1", "v1", "v2", "user", "edit")
+	if !errors.Is(err, wantErr) || node.Status != model.NodeSuccess || node.Input["artifactId"] != "v1" {
+		t.Fatalf("error=%v node=%+v", err, node)
+	}
+}
+
+func TestReviewMutationReopenRetryUsesStableAuditIdentity(t *testing.T) {
+	runs := newMemoryRunStore()
+	runs.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}
+	nodes := &mutationNodeStore{nodes: []*model.Node{{ID: "review", TaskID: "task-1", Type: model.NodeTypeReviewGate,
+		Status: model.NodeReady, Input: map[string]interface{}{"sourceNode": "source", "stage": "script", "artifactId": "v2"}}}}
+	atomic := &mutationAtomicReopener{}
+	svc := NewReviewMutationService(NewRunner(nil, runs, nil, nil, nil), nodes, nil).WithAtomicReviewReopener(atomic)
+	for i := 0; i < 2; i++ {
+		if err := svc.ReopenWithArtifact(context.Background(), "run-1", "review", "vp-1", "v1", "v2", "user", "edit"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(atomic.requests) != 2 || atomic.requests[0].AuditID == "" || atomic.requests[0].AuditID != atomic.requests[1].AuditID {
+		t.Fatalf("requests=%+v", atomic.requests)
+	}
+}
+
+func TestReviewMutationConfirmForArtifactRejectsSuccessfulWrongArtifact(t *testing.T) {
+	runs := newMemoryRunStore()
+	runs.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1"}
+	nodes := &mutationNodeStore{nodes: []*model.Node{{ID: "review", TaskID: "task-1", Type: model.NodeTypeReviewGate,
+		Status: model.NodeSuccess, Input: map[string]interface{}{"artifactId": "v1"}}}}
+	svc := NewReviewMutationService(NewRunner(nil, runs, nil, nil, nil), nodes, nil)
+	if err := svc.ConfirmForArtifact(context.Background(), "run-1", "review", "v2", "user", ""); !errors.Is(err, ErrReviewReferenceMismatch) {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -221,6 +268,16 @@ func (s *mutationNodeStore) UpdateInputFields(_ context.Context, id string, fiel
 
 type mutationDecisionLog struct {
 	records []*DecisionLogRecord
+}
+
+type mutationAtomicReopener struct {
+	requests []ReviewReopenRequest
+	err      error
+}
+
+func (s *mutationAtomicReopener) ReopenReviewGateAtomic(_ context.Context, req ReviewReopenRequest) error {
+	s.requests = append(s.requests, req)
+	return s.err
 }
 
 type taskAwareMemoryRunStore struct {

@@ -121,6 +121,7 @@ type ArtifactSelection struct {
 }
 
 type StepRevisionRequest struct {
+	IdempotencyKey           string             `json:"-"`
 	ArtifactID               string             `json:"artifactId"`
 	BaseVersion              int                `json:"baseVersion"`
 	Mode                     string             `json:"mode"`
@@ -133,6 +134,7 @@ type StepRevisionRequest struct {
 }
 
 type StepRestoreRequest struct {
+	IdempotencyKey           string   `json:"-"`
 	BaseVersion              int      `json:"baseVersion"`
 	RunID                    string   `json:"runId,omitempty"`
 	ReviewID                 string   `json:"reviewId,omitempty"`

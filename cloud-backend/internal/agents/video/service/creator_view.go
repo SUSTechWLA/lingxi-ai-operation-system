@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -116,17 +119,42 @@ type creatorRevisionService interface {
 type creatorReviewMutations interface {
 	ResolveReviewGate(context.Context, *artifact.Artifact, string, string) (string, string, error)
 	Confirm(context.Context, string, string, string, string) error
-	ReopenWithArtifact(context.Context, string, string, string, string, string) error
+	ConfirmForArtifact(context.Context, string, string, string, string, string) error
+	ReopenWithArtifact(context.Context, string, string, string, string, string, string, string) error
 }
 
 var (
-	ErrCreatorStepInvalid         = errors.New("creator step is invalid")
-	ErrCreatorArtifactNotFound    = errors.New("creator artifact not found")
-	ErrCreatorVersionConflict     = errors.New("creator artifact version conflict")
-	ErrCreatorImpactMismatch      = errors.New("creator impact confirmation mismatch")
-	ErrCreatorMutationUnavailable = errors.New("creator step mutation is unavailable")
-	ErrCreatorInvalidRequest      = errors.New("creator step request is invalid")
+	ErrCreatorStepInvalid              = errors.New("creator step is invalid")
+	ErrCreatorArtifactNotFound         = errors.New("creator artifact not found")
+	ErrCreatorVersionConflict          = errors.New("creator artifact version conflict")
+	ErrCreatorImpactMismatch           = errors.New("creator impact confirmation mismatch")
+	ErrCreatorMutationUnavailable      = errors.New("creator step mutation is unavailable")
+	ErrCreatorInvalidRequest           = errors.New("creator step request is invalid")
+	ErrCreatorIdempotencyConflict      = errors.New("creator idempotency key conflict")
+	ErrCreatorModelProviderUnavailable = errors.New("creator model provider is unavailable")
 )
+
+const creatorMutationReceiptKey = "creatorStepMutationReceipt"
+
+type creatorMutationReceipt struct {
+	Operation            string                 `json:"operation"`
+	IdempotencyKey       string                 `json:"idempotencyKey"`
+	Fingerprint          string                 `json:"fingerprint"`
+	ProjectID            string                 `json:"projectId"`
+	StepID               string                 `json:"stepId"`
+	BaseArtifactID       string                 `json:"baseArtifactId"`
+	HistoricalArtifactID string                 `json:"historicalArtifactId,omitempty"`
+	BaseVersion          int                    `json:"baseVersion"`
+	HistoricalVersion    int                    `json:"historicalVersion,omitempty"`
+	RunID                string                 `json:"runId"`
+	ReviewID             string                 `json:"reviewId"`
+	NewArtifactID        string                 `json:"newArtifactId"`
+	ParentArtifactID     string                 `json:"parentArtifactId"`
+	AffectedStepIDs      []model.CreatorStepID  `json:"affectedStepIds"`
+	AffectedShotIDs      []string               `json:"affectedShotIds,omitempty"`
+	Selection            map[string]interface{} `json:"selection,omitempty"`
+	RequestDigest        string                 `json:"requestDigest"`
+}
 
 func NewCreatorViewService(projects creatorProjectReader, shots creatorShotReader, artifacts creatorArtifactReader) *CreatorViewService {
 	return &CreatorViewService{projects: projects, artifacts: artifacts, shots: shots}
@@ -273,20 +301,12 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if !knownCreatorStep(stepID) {
 		return nil, ErrCreatorStepInvalid
 	}
-	if req.BaseVersion <= 0 {
+	if req.BaseVersion <= 0 || strings.TrimSpace(req.IdempotencyKey) == "" {
 		return nil, ErrCreatorVersionConflict
 	}
 	base, err := s.history.GetByID(ctx, req.ArtifactID)
 	if err != nil || base == nil || base.ProjectID != projectID {
 		return nil, ErrCreatorArtifactNotFound
-	}
-	current, err := s.history.GetCurrent(ctx, projectID, base.StageName, base.UnitID)
-	if err != nil || current == nil || current.ID != base.ID || current.Version != req.BaseVersion {
-		return nil, ErrCreatorVersionConflict
-	}
-	authoritative, err := s.currentArtifactForStep(ctx, projectID, stepID)
-	if err != nil || authoritative.ID != base.ID {
-		return nil, ErrCreatorVersionConflict
 	}
 	if mapped, ok := creatorStepForStage(base.StageName); !ok || mapped != stepID {
 		return nil, ErrCreatorArtifactNotFound
@@ -319,18 +339,41 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if !sameExactIDs(req.ConfirmedAffectedShotIDs, impact.AffectedShotIDs) {
 		return nil, ErrCreatorImpactMismatch
 	}
+	authoritative, err := s.currentArtifactForStep(ctx, projectID, stepID)
+	if err != nil {
+		return nil, err
+	}
+	requestDigest := creatorRequestDigest(map[string]interface{}{"mode": mode, "instruction": message, "directContent": string(directContent)})
+	if authoritative.ID != base.ID || authoritative.Version != req.BaseVersion {
+		return s.retryCreatorMutation(ctx, userID, projectID, stepID, authoritative, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, impact, req.RunID, req.ReviewID)
+	}
 	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, base, req.RunID, req.ReviewID)
 	if err != nil {
 		return nil, err
 	}
-	provenance := map[string]interface{}{"mode": mode, "baseVersion": req.BaseVersion}
+	receipt := newCreatorMutationReceipt("revise", req.IdempotencyKey, projectID, stepID, base, nil, runID, reviewID, impact, selection, requestDigest)
+	provenance := map[string]interface{}{"mode": mode, "baseVersion": req.BaseVersion, creatorMutationReceiptKey: receipt}
 	if selection != nil {
 		provenance["selection"] = selection
 	}
+	var providers map[string]interface{}
+	if mode == "instruction" {
+		providers, err = s.creatorModelProviders(ctx, userID, projectID, base)
+		if err != nil {
+			return nil, err
+		}
+	}
 	revised, err := s.revisions.Revise(ctx, artifact.ReviseRequest{
-		ArtifactID: base.ID, Message: message, DirectContent: directContent, Provenance: provenance,
+		ArtifactID: base.ID, NewArtifactID: receipt.NewArtifactID, Message: message, DirectContent: directContent,
+		ModelProviders: providers, Provenance: provenance,
 	})
 	if err != nil {
+		if errors.Is(err, artifact.ErrArtifactVersionConflict) {
+			current, reloadErr := s.currentArtifactForStep(ctx, projectID, stepID)
+			if reloadErr == nil {
+				return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "revise", base.ID, req.BaseVersion, "", 0, requestDigest, selection, impact, req.RunID, req.ReviewID)
+			}
+		}
 		return nil, err
 	}
 	if revised == nil || revised.Artifact == nil {
@@ -339,7 +382,7 @@ func (s *CreatorViewService) ReviseStep(ctx context.Context, userID, projectID s
 	if !validCreatorRevisionChild(revised.Artifact, base, projectID, stepID) {
 		return nil, ErrCreatorArtifactNotFound
 	}
-	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, revised.Artifact.ID, userID, "内容已修改，请重新确认"); err != nil {
+	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, projectID, base.ID, revised.Artifact.ID, userID, "内容已修改，请重新确认"); err != nil {
 		return nil, err
 	}
 	view, err := s.GetCreationView(ctx, userID, projectID)
@@ -378,15 +421,25 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 	if s.revisions == nil || s.reviews == nil || s.history == nil {
 		return nil, ErrCreatorMutationUnavailable
 	}
-	if !knownCreatorStep(stepID) || version <= 0 {
+	if !knownCreatorStep(stepID) || version <= 0 || strings.TrimSpace(req.IdempotencyKey) == "" {
 		return nil, ErrCreatorStepInvalid
 	}
 	current, err := s.currentArtifactForStep(ctx, projectID, stepID)
 	if err != nil {
 		return nil, err
 	}
-	if req.BaseVersion <= 0 || current.Version != req.BaseVersion {
+	if req.BaseVersion <= 0 {
 		return nil, ErrCreatorVersionConflict
+	}
+	if current.Version != req.BaseVersion {
+		impact, impactErr := s.stepImpact(ctx, userID, projectID, stepID, current)
+		if impactErr != nil {
+			return nil, impactErr
+		}
+		if !sameExactIDs(req.ConfirmedAffectedShotIDs, impact.AffectedShotIDs) {
+			return nil, ErrCreatorImpactMismatch
+		}
+		return s.retryCreatorMutation(ctx, userID, projectID, stepID, current, req.IdempotencyKey, "restore", "", req.BaseVersion, "", version, creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)}), nil, impact, req.RunID, req.ReviewID)
 	}
 	history, err := s.history.GetHistory(ctx, projectID, current.StageName, current.UnitID)
 	if err != nil {
@@ -413,8 +466,19 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 	if err != nil {
 		return nil, err
 	}
-	restored, err := s.revisions.Restore(ctx, artifact.RestoreRequest{ArtifactID: historical.ID, ReviewerID: userID, Reason: strings.TrimSpace(req.Reason)})
+	requestDigest := creatorRequestDigest(map[string]interface{}{"reason": strings.TrimSpace(req.Reason)})
+	receipt := newCreatorMutationReceipt("restore", req.IdempotencyKey, projectID, stepID, current, historical, runID, reviewID, impact, nil, requestDigest)
+	restored, err := s.revisions.Restore(ctx, artifact.RestoreRequest{
+		ArtifactID: historical.ID, NewArtifactID: receipt.NewArtifactID, ReviewerID: userID,
+		Reason: strings.TrimSpace(req.Reason), Provenance: map[string]interface{}{creatorMutationReceiptKey: receipt},
+	})
 	if err != nil {
+		if errors.Is(err, artifact.ErrArtifactVersionConflict) {
+			latest, reloadErr := s.currentArtifactForStep(ctx, projectID, stepID)
+			if reloadErr == nil {
+				return s.retryCreatorMutation(ctx, userID, projectID, stepID, latest, req.IdempotencyKey, "restore", current.ID, req.BaseVersion, historical.ID, version, requestDigest, nil, impact, req.RunID, req.ReviewID)
+			}
+		}
 		return nil, err
 	}
 	if restored == nil || restored.Artifact == nil {
@@ -423,7 +487,7 @@ func (s *CreatorViewService) RestoreStepVersion(ctx context.Context, userID, pro
 	if !validCreatorRevisionChild(restored.Artifact, current, projectID, stepID) {
 		return nil, ErrCreatorArtifactNotFound
 	}
-	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, restored.Artifact.ID, userID, "历史版本已恢复，请重新确认"); err != nil {
+	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, projectID, current.ID, restored.Artifact.ID, userID, "历史版本已恢复，请重新确认"); err != nil {
 		return nil, err
 	}
 	view, err := s.GetCreationView(ctx, userID, projectID)
@@ -485,7 +549,7 @@ func (s *CreatorViewService) ConfirmStep(ctx context.Context, userID, projectID 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.reviews.Confirm(ctx, runID, reviewID, userID, strings.TrimSpace(req.Comment)); err != nil {
+	if err := s.reviews.ConfirmForArtifact(ctx, runID, reviewID, current.ID, userID, strings.TrimSpace(req.Comment)); err != nil {
 		return nil, err
 	}
 	return s.GetCreationView(ctx, userID, projectID)
@@ -617,6 +681,126 @@ func sameExactIDs(actual, expected []string) bool {
 		}
 	}
 	return true
+}
+
+func creatorRequestDigest(value interface{}) string {
+	data, _ := json.Marshal(value)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func newCreatorMutationReceipt(operation, key, projectID string, stepID model.CreatorStepID, base, historical *artifact.Artifact, runID, reviewID string, impact model.StepImpact, selection map[string]interface{}, requestDigest string) creatorMutationReceipt {
+	receipt := creatorMutationReceipt{
+		Operation: operation, IdempotencyKey: key, ProjectID: projectID, StepID: string(stepID),
+		BaseArtifactID: base.ID, BaseVersion: base.Version, RunID: runID, ReviewID: reviewID,
+		ParentArtifactID: base.ID, AffectedStepIDs: append([]model.CreatorStepID(nil), impact.AffectedStepIDs...),
+		AffectedShotIDs: append([]string(nil), impact.AffectedShotIDs...), Selection: selection, RequestDigest: requestDigest,
+	}
+	if historical != nil {
+		receipt.HistoricalArtifactID, receipt.HistoricalVersion = historical.ID, historical.Version
+	}
+	idSeed := sha256.Sum256([]byte(operation + "\x00" + projectID + "\x00" + string(stepID) + "\x00" + key))
+	receipt.NewArtifactID = "art-creator-" + hex.EncodeToString(idSeed[:12])
+	receipt.Fingerprint = creatorReceiptFingerprint(receipt)
+	return receipt
+}
+
+func creatorReceiptFingerprint(receipt creatorMutationReceipt) string {
+	receipt.IdempotencyKey, receipt.Fingerprint, receipt.NewArtifactID = "", "", ""
+	data, _ := json.Marshal(receipt)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func creatorReceiptFromArtifact(current *artifact.Artifact) (creatorMutationReceipt, bool) {
+	if current == nil || current.Metadata == nil {
+		return creatorMutationReceipt{}, false
+	}
+	value, ok := current.Metadata[creatorMutationReceiptKey]
+	if !ok {
+		return creatorMutationReceipt{}, false
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return creatorMutationReceipt{}, false
+	}
+	var receipt creatorMutationReceipt
+	if json.Unmarshal(data, &receipt) != nil || receipt.NewArtifactID != current.ID || receipt.Fingerprint == "" {
+		return creatorMutationReceipt{}, false
+	}
+	return receipt, creatorReceiptFingerprint(receipt) == receipt.Fingerprint
+}
+
+func (s *CreatorViewService) retryCreatorMutation(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, current *artifact.Artifact, key, operation, baseArtifactID string, baseVersion int, historicalArtifactID string, historicalVersion int, requestDigest string, selection map[string]interface{}, impact model.StepImpact, assertedRunID, assertedReviewID string) (*model.StepMutationResult, error) {
+	receipt, ok := creatorReceiptFromArtifact(current)
+	if !ok || receipt.ProjectID != projectID || receipt.StepID != string(stepID) || receipt.Operation != operation {
+		return nil, ErrCreatorVersionConflict
+	}
+	if receipt.IdempotencyKey != key {
+		return nil, ErrCreatorVersionConflict
+	}
+	if receipt.BaseVersion != baseVersion || (baseArtifactID != "" && receipt.BaseArtifactID != baseArtifactID) ||
+		receipt.HistoricalVersion != historicalVersion || (historicalArtifactID != "" && receipt.HistoricalArtifactID != historicalArtifactID) ||
+		receipt.RequestDigest != requestDigest || !reflectCreatorJSON(receipt.Selection, selection) ||
+		!reflectCreatorJSON(receipt.AffectedStepIDs, impact.AffectedStepIDs) || !reflectCreatorJSON(receipt.AffectedShotIDs, impact.AffectedShotIDs) {
+		return nil, ErrCreatorIdempotencyConflict
+	}
+	if (assertedRunID != "" && assertedRunID != receipt.RunID) || (assertedReviewID != "" && assertedReviewID != receipt.ReviewID) {
+		return nil, ErrCreatorIdempotencyConflict
+	}
+	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, current, assertedRunID, assertedReviewID)
+	if err != nil {
+		return nil, err
+	}
+	if runID != receipt.RunID || reviewID != receipt.ReviewID {
+		return nil, ErrCreatorIdempotencyConflict
+	}
+	reason := "内容已修改，请重新确认"
+	if operation == "restore" {
+		reason = "历史版本已恢复，请重新确认"
+	}
+	if err := s.reviews.ReopenWithArtifact(ctx, runID, reviewID, projectID, receipt.ParentArtifactID, current.ID, userID, reason); err != nil {
+		return nil, err
+	}
+	view, err := s.GetCreationView(ctx, userID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StepMutationResult{Artifact: current, Impact: impact, View: view}, nil
+}
+
+func reflectCreatorJSON(left, right interface{}) bool {
+	a, _ := json.Marshal(left)
+	b, _ := json.Marshal(right)
+	return string(a) == string(b)
+}
+
+func (s *CreatorViewService) creatorModelProviders(ctx context.Context, userID, projectID string, base *artifact.Artifact) (map[string]interface{}, error) {
+	project, err := s.projects.GetProject(ctx, userID, projectID)
+	if err != nil || project == nil || project.ID != projectID {
+		return nil, ErrCreatorModelProviderUnavailable
+	}
+	var config map[string]interface{}
+	if len(project.Config) > 0 {
+		_ = json.Unmarshal(project.Config, &config)
+	}
+	providers, _ := config["modelProviders"].(map[string]interface{})
+	if !validCreatorTextProvider(providers) && base != nil && base.Metadata != nil {
+		providers, _ = base.Metadata["modelProviders"].(map[string]interface{})
+	}
+	if !validCreatorTextProvider(providers) {
+		return nil, ErrCreatorModelProviderUnavailable
+	}
+	data, _ := json.Marshal(providers)
+	var cloned map[string]interface{}
+	_ = json.Unmarshal(data, &cloned)
+	return cloned, nil
+}
+
+func validCreatorTextProvider(providers map[string]interface{}) bool {
+	provider, _ := providers["text_to_text"].(map[string]interface{})
+	apiKey, _ := provider["apiKey"].(string)
+	return strings.TrimSpace(apiKey) != ""
 }
 
 func newCreatorSteps() []model.CreatorStep {

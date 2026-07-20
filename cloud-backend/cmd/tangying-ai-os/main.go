@@ -541,6 +541,7 @@ func main() {
 		// Wire decision log into the agent runtime handler so approve/reject
 		// writes audit-trail entries automatically.
 		agentRuntimeHandler.WithDecisionLogWriter(&decisionLogAdapter{store: decisionLogStore})
+		agentRuntimeHandler.WithAtomicReviewReopener(agentruntime.NewPGXReviewReopener(pool))
 
 		artifactRepo := artifact.NewRepository(pool)
 		artifactSvc := artifact.NewService(artifactRepo)

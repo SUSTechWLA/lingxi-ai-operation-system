@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -311,7 +312,8 @@ func TestConfirmedScriptStepRevisionCreatesNewVersionAndReopensOnlyItsReview(t *
 	).WithStepMutations(revisions, reviews)
 
 	result, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
-		ArtifactID: "script-v3", BaseVersion: 3, Mode: "direct", DirectContent: "新版脚本",
+		IdempotencyKey: "revise-1",
+		ArtifactID:     "script-v3", BaseVersion: 3, Mode: "direct", DirectContent: "新版脚本",
 		ConfirmedAffectedShotIDs: []string{"shot-2", "shot-1"},
 	})
 	if err != nil {
@@ -325,6 +327,11 @@ func TestConfirmedScriptStepRevisionCreatesNewVersionAndReopensOnlyItsReview(t *
 	}
 	if got, want := result.Impact.AffectedShotIDs, []string{"shot-1", "shot-2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("affected shots = %v, want %v", got, want)
+	}
+	receipt, ok := creatorReceiptFromArtifact(result.Artifact)
+	if !ok || receipt.IdempotencyKey != "revise-1" || receipt.BaseArtifactID != "script-v3" || receipt.ParentArtifactID != "script-v3" ||
+		receipt.RunID != "run-1" || receipt.ReviewID != "script-review" || !reflect.DeepEqual(receipt.AffectedShotIDs, []string{"shot-1", "shot-2"}) {
+		t.Fatalf("receipt = %+v valid=%v", receipt, ok)
 	}
 	if reviews.reopenedArtifactID != result.Artifact.ID || reviews.reopenedReviewID != "script-review" {
 		t.Fatalf("review reopen = %+v, want script-review with new artifact", reviews)
@@ -356,11 +363,12 @@ func TestStepRevisionInstructionPreservesNormalizedSelectionInProvenance(t *test
 	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
 	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
 	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "script-review"}
-	svc := NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}}, fakeCreatorShotReader{}, artifacts).
+	svc := NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", Config: json.RawMessage(`{"modelProviders":{"text_to_text":{"baseUrl":"https://model.test","apiKey":"secret","model":"writer"}}}`)}}, fakeCreatorShotReader{}, artifacts).
 		WithStepMutations(revisions, reviews)
 	x, y, width, height := 0.1, 0.2, 0.3, 0.4
 	_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
-		ArtifactID: "script-v3", BaseVersion: 3, Mode: "instruction", Instruction: "语气更自然",
+		IdempotencyKey: "revise-instruction-1",
+		ArtifactID:     "script-v3", BaseVersion: 3, Mode: "instruction", Instruction: "语气更自然",
 		Selection: &model.ArtifactSelection{Kind: " RECT ", X: &x, Y: &y, Width: &width, Height: &height},
 	})
 	if err != nil {
@@ -383,13 +391,15 @@ func TestStepRevisionRejectsStaleBaseAndMismatchedImpactBeforeMutation(t *testin
 		WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "script-review"})
 
 	_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
-		ArtifactID: "script-v3", BaseVersion: 2, Mode: "direct", DirectContent: "新版", ConfirmedAffectedShotIDs: []string{"shot-1"},
+		IdempotencyKey: "revise-stale-1",
+		ArtifactID:     "script-v3", BaseVersion: 2, Mode: "direct", DirectContent: "新版", ConfirmedAffectedShotIDs: []string{"shot-1"},
 	})
 	if !errors.Is(err, ErrCreatorVersionConflict) || revisions.calls != 0 {
 		t.Fatalf("stale revision error=%v calls=%d", err, revisions.calls)
 	}
 	_, err = svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
-		ArtifactID: "script-v3", BaseVersion: 3, Mode: "direct", DirectContent: "新版", ConfirmedAffectedShotIDs: []string{"shot-extra"},
+		IdempotencyKey: "revise-impact-1",
+		ArtifactID:     "script-v3", BaseVersion: 3, Mode: "direct", DirectContent: "新版", ConfirmedAffectedShotIDs: []string{"shot-extra"},
 	})
 	if !errors.Is(err, ErrCreatorImpactMismatch) || revisions.calls != 0 {
 		t.Fatalf("impact mismatch error=%v calls=%d", err, revisions.calls)
@@ -404,7 +414,8 @@ func TestStepRevisionRejectsNonExactModeBeforeMutation(t *testing.T) {
 		WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "script-review"})
 
 	_, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, model.StepRevisionRequest{
-		ArtifactID: "script-v3", BaseVersion: 3, Mode: " DIRECT ", DirectContent: "新版",
+		IdempotencyKey: "revise-mode-1",
+		ArtifactID:     "script-v3", BaseVersion: 3, Mode: " DIRECT ", DirectContent: "新版",
 	})
 	if !errors.Is(err, ErrCreatorInvalidRequest) || revisions.calls != 0 {
 		t.Fatalf("mode error=%v calls=%d", err, revisions.calls)
@@ -421,7 +432,8 @@ func TestStepRestoreCreatesNewCurrentVersionAndReopensReview(t *testing.T) {
 		WithStepMutations(revisions, reviews)
 
 	result, err := svc.RestoreStepVersion(context.Background(), "user-1", "vp-1", model.CreatorStepScript, 1, model.StepRestoreRequest{
-		BaseVersion: 4, ConfirmedAffectedShotIDs: []string{"shot-1"},
+		IdempotencyKey: "restore-1",
+		BaseVersion:    4, ConfirmedAffectedShotIDs: []string{"shot-1"},
 	})
 	if err != nil {
 		t.Fatalf("RestoreStepVersion() error = %v", err)
@@ -429,8 +441,101 @@ func TestStepRestoreCreatesNewCurrentVersionAndReopensReview(t *testing.T) {
 	if result.Artifact.Version != 5 || result.Artifact.ParentID != "script-v4" || result.Artifact.Metadata["restoredFromArtifactId"] != "script-v1" {
 		t.Fatalf("restored artifact = %+v", result.Artifact)
 	}
+	receipt, ok := creatorReceiptFromArtifact(result.Artifact)
+	if !ok || receipt.Operation != "restore" || receipt.HistoricalArtifactID != "script-v1" || receipt.HistoricalVersion != 1 || receipt.BaseArtifactID != "script-v4" {
+		t.Fatalf("restore receipt=%+v valid=%v", receipt, ok)
+	}
 	if reviews.reopenedArtifactID != result.Artifact.ID || result.View.Steps[2].CurrentVersion != 5 {
 		t.Fatalf("result/review = %+v / %+v", result, reviews)
+	}
+}
+
+func TestStepRevisionRetryAfterReopenFailureReusesReceiptArtifact(t *testing.T) {
+	base := &artifact.Artifact{ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1", StageName: "script", Version: 3, IsCurrent: true}
+	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review", reopenErr: errors.New("temporary reopen failure")}
+	svc := NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}}, fakeCreatorShotReader{}, artifacts).WithStepMutations(revisions, reviews)
+	req := model.StepRevisionRequest{IdempotencyKey: "same-key", ArtifactID: base.ID, BaseVersion: 3, Mode: "direct", DirectContent: "new"}
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err == nil {
+		t.Fatal("expected reopen failure")
+	}
+	createdID := artifacts.current[0].ID
+	reviews.reopenErr = nil
+	result, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisions.calls != 1 || result.Artifact.ID != createdID || reviews.reopenCalls != 2 {
+		t.Fatalf("revision calls=%d artifact=%q/%q reopen=%d", revisions.calls, result.Artifact.ID, createdID, reviews.reopenCalls)
+	}
+}
+
+func TestStepRevisionSameKeyDifferentIntentConflictsAndConcurrentLoserRecovers(t *testing.T) {
+	base := &artifact.Artifact{ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1", StageName: "script", Version: 3, IsCurrent: true}
+	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts, reviseErrAfterCreate: artifact.ErrArtifactVersionConflict}
+	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}
+	svc := NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}}, fakeCreatorShotReader{}, artifacts).WithStepMutations(revisions, reviews)
+	req := model.StepRevisionRequest{IdempotencyKey: "race-key", ArtifactID: base.ID, BaseVersion: 3, Mode: "direct", DirectContent: "new"}
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err != nil {
+		t.Fatalf("concurrent loser recovery: %v", err)
+	}
+	req.DirectContent = "different"
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); !errors.Is(err, ErrCreatorIdempotencyConflict) {
+		t.Fatalf("different intent error=%v", err)
+	}
+	req.IdempotencyKey, req.DirectContent = "different-key", "new"
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); !errors.Is(err, ErrCreatorVersionConflict) {
+		t.Fatalf("different key error=%v", err)
+	}
+}
+
+func TestStepRestoreRetryReusesSingleNewVersion(t *testing.T) {
+	historical := &artifact.Artifact{ID: "script-v1", ProjectID: "vp-1", StageName: "script", Version: 1}
+	current := &artifact.Artifact{ID: "script-v4", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1", StageName: "script", Version: 4, IsCurrent: true}
+	artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{current}, history: []*artifact.Artifact{current, historical}}
+	revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review", reopenErr: errors.New("temporary")}
+	svc := NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1"}}, fakeCreatorShotReader{state: creatorShotReadState{ShotIDs: []string{"shot-1"}}}, artifacts).WithStepMutations(revisions, reviews)
+	req := model.StepRestoreRequest{IdempotencyKey: "restore-key", BaseVersion: 4, Reason: "undo", ConfirmedAffectedShotIDs: []string{"shot-1"}}
+	if _, err := svc.RestoreStepVersion(context.Background(), "user-1", "vp-1", model.CreatorStepScript, 1, req); err == nil {
+		t.Fatal("expected reopen failure")
+	}
+	reviews.reopenErr = nil
+	req.ConfirmedAffectedShotIDs = nil
+	if _, err := svc.RestoreStepVersion(context.Background(), "user-1", "vp-1", model.CreatorStepScript, 1, req); !errors.Is(err, ErrCreatorImpactMismatch) {
+		t.Fatalf("retry impact error=%v", err)
+	}
+	req.ConfirmedAffectedShotIDs = []string{"shot-1"}
+	result, err := svc.RestoreStepVersion(context.Background(), "user-1", "vp-1", model.CreatorStepScript, 1, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisions.calls != 1 || result.Artifact.Version != 5 {
+		t.Fatalf("calls=%d artifact=%+v", revisions.calls, result.Artifact)
+	}
+}
+
+func TestInstructionRevisionUsesVerifiedProjectProviderAndRejectsMissingConfig(t *testing.T) {
+	base := &artifact.Artifact{ID: "script-v3", ProjectID: "vp-1", WorkflowRunID: "run-1", TaskID: "task-1", StageName: "script", Version: 3, IsCurrent: true}
+	newService := func(config json.RawMessage) (*CreatorViewService, *fakeCreatorRevisionService) {
+		artifacts := &fakeCreatorMutationArtifacts{current: []*artifact.Artifact{base}, history: []*artifact.Artifact{base}}
+		revisions := &fakeCreatorRevisionService{artifacts: artifacts}
+		return NewCreatorViewService(fakeCreatorProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "user-1", Config: config}}, fakeCreatorShotReader{}, artifacts).
+			WithStepMutations(revisions, &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review"}), revisions
+	}
+	req := model.StepRevisionRequest{IdempotencyKey: "provider-key", ArtifactID: base.ID, BaseVersion: 3, Mode: "instruction", Instruction: "rewrite"}
+	svc, revisions := newService(json.RawMessage(`{"modelProviders":{"text_to_text":{"baseUrl":"https://model.test","apiKey":"secret","model":"writer"}}}`))
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); err != nil {
+		t.Fatal(err)
+	}
+	if revisions.reviseRequest.ModelProviders["text_to_text"].(map[string]interface{})["model"] != "writer" {
+		t.Fatalf("providers=%+v", revisions.reviseRequest.ModelProviders)
+	}
+	svc, revisions = newService(nil)
+	if _, err := svc.ReviseStep(context.Background(), "user-1", "vp-1", model.CreatorStepScript, req); !errors.Is(err, ErrCreatorModelProviderUnavailable) || revisions.calls != 0 {
+		t.Fatalf("missing provider error=%v calls=%d", err, revisions.calls)
 	}
 }
 
@@ -605,9 +710,10 @@ func (f *fakeCreatorMutationArtifacts) GetHistory(_ context.Context, projectID, 
 }
 
 type fakeCreatorRevisionService struct {
-	artifacts     *fakeCreatorMutationArtifacts
-	reviseRequest artifact.ReviseRequest
-	calls         int
+	artifacts            *fakeCreatorMutationArtifacts
+	reviseRequest        artifact.ReviseRequest
+	calls                int
+	reviseErrAfterCreate error
 }
 
 func (f *fakeCreatorRevisionService) Revise(_ context.Context, req artifact.ReviseRequest) (*artifact.RevisionResult, error) {
@@ -615,12 +721,22 @@ func (f *fakeCreatorRevisionService) Revise(_ context.Context, req artifact.Revi
 	f.reviseRequest = req
 	base, _ := f.artifacts.GetByID(context.Background(), req.ArtifactID)
 	revised := *base
-	revised.ID = "script-v4"
+	revised.ID = req.NewArtifactID
+	if revised.ID == "" {
+		revised.ID = "script-v4"
+	}
 	revised.Version = 4
 	revised.ParentID = base.ID
 	revised.HumanApproved = false
+	revised.Metadata = map[string]interface{}{}
+	for key, value := range req.Provenance {
+		revised.Metadata[key] = value
+	}
 	f.artifacts.current = []*artifact.Artifact{&revised}
 	f.artifacts.history = append([]*artifact.Artifact{&revised}, f.artifacts.history...)
+	if f.reviseErrAfterCreate != nil {
+		return nil, f.reviseErrAfterCreate
+	}
 	return &artifact.RevisionResult{Artifact: &revised}, nil
 }
 
@@ -629,12 +745,18 @@ func (f *fakeCreatorRevisionService) Restore(_ context.Context, req artifact.Res
 	historical, _ := f.artifacts.GetByID(context.Background(), req.ArtifactID)
 	current, _ := f.artifacts.GetCurrent(context.Background(), historical.ProjectID, historical.StageName, historical.UnitID)
 	restored := *historical
-	restored.ID = "script-v5"
+	restored.ID = req.NewArtifactID
+	if restored.ID == "" {
+		restored.ID = "script-v5"
+	}
 	restored.Version = current.Version + 1
 	restored.ParentID = current.ID
 	restored.IsCurrent = true
 	restored.HumanApproved = false
 	restored.Metadata = map[string]interface{}{"restoredFromArtifactId": historical.ID}
+	for key, value := range req.Provenance {
+		restored.Metadata[key] = value
+	}
 	current.IsCurrent = false
 	f.artifacts.current = []*artifact.Artifact{&restored}
 	f.artifacts.history = append([]*artifact.Artifact{&restored}, f.artifacts.history...)
@@ -650,6 +772,8 @@ type fakeCreatorReviewMutations struct {
 	confirmedRunID     string
 	confirmedReviewID  string
 	resolveErr         error
+	reopenErr          error
+	reopenCalls        int
 }
 
 func (f *fakeCreatorReviewMutations) ResolveReviewGate(context.Context, *artifact.Artifact, string, string) (string, string, error) {
@@ -661,7 +785,12 @@ func (f *fakeCreatorReviewMutations) Confirm(_ context.Context, runID, reviewID,
 	return nil
 }
 
-func (f *fakeCreatorReviewMutations) ReopenWithArtifact(_ context.Context, runID, reviewID, artifactID, reviewerID, reason string) error {
+func (f *fakeCreatorReviewMutations) ConfirmForArtifact(_ context.Context, runID, reviewID, artifactID, reviewerID, comment string) error {
+	return f.Confirm(context.Background(), runID, reviewID, reviewerID, comment)
+}
+
+func (f *fakeCreatorReviewMutations) ReopenWithArtifact(_ context.Context, runID, reviewID, projectID, expectedArtifactID, artifactID, reviewerID, reason string) error {
+	f.reopenCalls++
 	f.reopenedRunID, f.reopenedReviewID, f.reopenedArtifactID = runID, reviewID, artifactID
-	return nil
+	return f.reopenErr
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -106,6 +107,7 @@ func TestCreatorStepRoutesRequireAuthentication(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "test-key")
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("%s %s status=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
@@ -138,6 +140,7 @@ func TestCreatorStepRoutesVerifyOwnerAndDelegateAllContracts(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "test-key")
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s %s status=%d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
@@ -154,6 +157,7 @@ func TestCreatorStepRevisionRequiresPositiveBaseVersionBeforeServiceCall(t *test
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", bytes.NewBufferString(`{"artifactId":"script-v3","mode":"direct","directContent":"新版"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "test-key")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || mutations.reviseCalls != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", rec.Code, mutations.reviseCalls, rec.Body.String())
@@ -166,9 +170,43 @@ func TestCreatorStepHandlerMapsStaleBaseToConflict(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", bytes.NewBufferString(`{"artifactId":"script-v3","baseVersion":3,"mode":"direct","directContent":"新版"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "test-key")
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreatorStepHandlerExplainsMissingRevisionProvider(t *testing.T) {
+	mutations := &fakeCreatorStepMutator{err: videoSvc.ErrCreatorModelProviderUnavailable}
+	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1"}}, mutations)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/steps/script/revisions", bytes.NewBufferString(`{"artifactId":"script-v3","baseVersion":3,"mode":"instruction","instruction":"rewrite"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "provider-key")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "model provider") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreatorRevisionAndRestoreRequireIdempotencyKey(t *testing.T) {
+	mutations := &fakeCreatorStepMutator{}
+	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1"}}, mutations)
+	for _, tc := range []struct{ path, body string }{
+		{"/api/video-projects/vp-1/steps/script/revisions", `{"artifactId":"script-v3","baseVersion":3,"mode":"direct","directContent":"new"}`},
+		{"/api/video-projects/vp-1/steps/script/versions/2/restore", `{"baseVersion":3}`},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewBufferString(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status=%d body=%s", tc.path, rec.Code, rec.Body.String())
+		}
+	}
+	if mutations.reviseCalls != 0 || mutations.restoreVersion != 0 {
+		t.Fatalf("mutations=%+v", mutations)
 	}
 }
 

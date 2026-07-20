@@ -77,6 +77,7 @@ type Artifact struct {
 
 // CreateArtifactRequest is the input for creating a new artifact version.
 type CreateArtifactRequest struct {
+	ID            string
 	ProjectID     string
 	WorkflowRunID string
 	TaskID        string
