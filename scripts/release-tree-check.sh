@@ -83,6 +83,20 @@ for path in "${required_files[@]}"; do
   fi
 done
 
+required_release_workflow_contracts=(
+  "workflow_dispatch:"
+  "electron_arch: x64"
+  "go_arch: amd64"
+  "CGO_ENABLED=0 GOOS=darwin GOARCH=\${{ matrix.go_arch }}"
+  "gh release view \"\$RELEASE_TAG\""
+)
+for contract in "${required_release_workflow_contracts[@]}"; do
+  if ! grep -Fq "$contract" .github/workflows/release.yml; then
+    echo "ERROR: desktop release workflow is missing contract: $contract" >&2
+    failed="true"
+  fi
+done
+
 bash scripts/release-version-check.sh
 
 if [[ "$failed" == "true" ]]; then
