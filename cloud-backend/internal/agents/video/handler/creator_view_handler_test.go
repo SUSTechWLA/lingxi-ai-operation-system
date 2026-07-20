@@ -115,6 +115,26 @@ func TestCreatorStepRoutesRequireAuthentication(t *testing.T) {
 	}
 }
 
+func TestCreatorAssemblyRebuildRejectsMissingIdempotencyKey(t *testing.T) {
+	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "u-auth"}}, &fakeCreatorStepMutator{err: videoSvc.ErrCreatorInvalidRequest})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/assembly/rebuild", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreatorAssemblyRebuildMapsSnapshotConflictToConflict(t *testing.T) {
+	router := authenticatedCreatorRouter(&fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "u-auth"}}, &fakeCreatorStepMutator{err: videoSvc.ErrShotIdempotencyConflict})
+	req := httptest.NewRequest(http.MethodPost, "/api/video-projects/vp-1/assembly/rebuild", nil)
+	req.Header.Set("Idempotency-Key", "assembly-1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreatorStepRoutesVerifyOwnerAndDelegateAllContracts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	project := &fakeCreatorViewProjectReader{project: &model.VideoProject{ID: "vp-1", UserID: "u-auth"}}
@@ -286,4 +306,9 @@ func (f *fakeCreatorStepMutator) RestoreStepVersion(_ context.Context, userID, p
 	f.capture(userID, projectID, stepID)
 	f.restoreVersion = version
 	return f.result, f.err
+}
+
+func (f *fakeCreatorStepMutator) RebuildFinalAssembly(_ context.Context, userID, projectID, _ string) (videoSvc.AssemblyRebuildResult, error) {
+	f.userID, f.projectID = userID, projectID
+	return videoSvc.AssemblyRebuildResult{}, f.err
 }

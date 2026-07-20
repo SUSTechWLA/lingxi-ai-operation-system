@@ -26,6 +26,7 @@ type ReviewMutationService interface {
 	Confirm(ctx context.Context, runID, reviewID, reviewerID, comment string) error
 	ConfirmForArtifact(ctx context.Context, runID, reviewID, artifactID, reviewerID, comment string) error
 	ReopenWithArtifact(ctx context.Context, runID, reviewID, projectID, expectedArtifactID, artifactID, reviewerID, reason string) error
+	Regenerate(ctx context.Context, runID, reviewID, reviewerID, hint string) ([]string, error)
 }
 
 type ReviewReopenRequest struct {

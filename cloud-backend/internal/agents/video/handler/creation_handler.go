@@ -49,6 +49,7 @@ type CreationHandler struct {
 	middleware []gin.HandlerFunc
 }
 
+
 func NewCreationHandler(svc creationService, middleware ...gin.HandlerFunc) *CreationHandler {
 	return &CreationHandler{svc: svc, middleware: middleware}
 }
@@ -514,6 +515,7 @@ func (h *CreationHandler) Assemble(c *gin.Context) {
 	}
 	ok(c, gin.H{"issues": issues})
 }
+
 
 func (h *CreationHandler) GeneratePublishPackage(c *gin.Context) {
 	userID, okAuth := authenticatedUserID(c)

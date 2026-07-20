@@ -800,3 +800,7 @@ func (f *fakeCreatorReviewMutations) ReopenWithArtifact(_ context.Context, runID
 	f.reopenedRunID, f.reopenedReviewID, f.reopenedArtifactID = runID, reviewID, artifactID
 	return f.reopenErr
 }
+
+func (f *fakeCreatorReviewMutations) Regenerate(context.Context, string, string, string, string) ([]string, error) {
+	return nil, f.reopenErr
+}

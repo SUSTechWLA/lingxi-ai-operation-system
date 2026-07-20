@@ -1,5 +1,6 @@
 import type {
   Artifact as GeneratedArtifact,
+  AssemblyRebuildResponse,
   ArtifactSelection as GeneratedArtifactSelection,
   CandidateAcceptRequest as GeneratedCandidateAcceptRequest,
   CandidateRestoreRequest as GeneratedCandidateRestoreRequest,
@@ -97,3 +98,4 @@ export interface ProjectMaterialManifestMetadata extends ProjectMaterialManifest
 
 export type ProjectMaterialManifestArtifact = Artifact
 export type RegisterProjectMaterialResult = ProjectMaterialResponse['data']
+export type AssemblyRebuildResult = AssemblyRebuildResponse['data']['assembly']

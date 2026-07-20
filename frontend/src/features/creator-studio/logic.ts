@@ -334,6 +334,29 @@ export function didSelectedShotTaskChange(
   return signature(previous) !== signature(next)
 }
 
+// Delivery is intentionally fail-closed: a current media URL is not a final
+// deliverable until the server artifact explicitly records a passed review.
+export function deliveryArtifactPassesFinalReview(value: unknown): boolean {
+	if (!value || typeof value !== 'object') return false
+	const record = value as Record<string, unknown>
+	if (deliveryArtifactPassesFinalReview(record.content)) return true
+	if (record.artifact && typeof record.artifact === 'object') {
+		const artifact = record.artifact as Record<string, unknown>
+		if (deliveryArtifactPassesFinalReview(artifact.metadata)) return true
+	}
+	for (const key of ['finalQaStatus', 'qaStatus', 'status']) {
+		if (typeof record[key] === 'string' && record[key].toLowerCase() === 'passed') return true
+	}
+	for (const key of ['finalQa', 'qa', 'qualityCheck']) {
+		const value = record[key]
+		if (value && typeof value === 'object') {
+			const check = value as Record<string, unknown>
+			if (check.passed === true || (typeof check.status === 'string' && check.status.toLowerCase() === 'passed')) return true
+		}
+	}
+	return false
+}
+
 function stableFingerprint(value: unknown): string {
   const text = stableStringify(value)
   let hash = 2166136261

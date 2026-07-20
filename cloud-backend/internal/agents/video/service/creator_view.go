@@ -103,6 +103,7 @@ type CreatorViewService struct {
 	history   creatorArtifactHistoryReader
 	revisions creatorRevisionService
 	reviews   creatorReviewMutations
+	assembly  creatorAssemblyService
 }
 
 type creatorArtifactHistoryReader interface {
@@ -121,6 +122,13 @@ type creatorReviewMutations interface {
 	Confirm(context.Context, string, string, string, string) error
 	ConfirmForArtifact(context.Context, string, string, string, string, string) error
 	ReopenWithArtifact(context.Context, string, string, string, string, string, string, string) error
+	Regenerate(context.Context, string, string, string, string) ([]string, error)
+}
+
+type creatorAssemblyService interface {
+	RebuildFinalAssembly(context.Context, string, string, string) (AssemblyRebuildResult, error)
+	MarkFinalAssemblyQueued(context.Context, string, string, string, string, string) (AssemblyRebuildResult, error)
+	LatestAssemblyReceipt(context.Context, string, string) (model.AssemblyReceipt, bool, error)
 }
 
 var (
@@ -157,7 +165,36 @@ type creatorMutationReceipt struct {
 }
 
 func NewCreatorViewService(projects creatorProjectReader, shots creatorShotReader, artifacts creatorArtifactReader) *CreatorViewService {
-	return &CreatorViewService{projects: projects, artifacts: artifacts, shots: shots}
+	svc := &CreatorViewService{projects: projects, artifacts: artifacts, shots: shots}
+	if assembly, ok := shots.(creatorAssemblyService); ok {
+		svc.assembly = assembly
+	}
+	return svc
+}
+
+func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, projectID, idempotencyKey string) (AssemblyRebuildResult, error) {
+	if s.assembly == nil || s.reviews == nil {
+		return AssemblyRebuildResult{}, ErrCreatorMutationUnavailable
+	}
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return AssemblyRebuildResult{}, ErrCreatorInvalidRequest
+	}
+	result, err := s.assembly.RebuildFinalAssembly(ctx, userID, projectID, idempotencyKey)
+	if err != nil || result.Status != "validated" {
+		return result, err
+	}
+	current, err := s.currentArtifactForStep(ctx, projectID, model.CreatorStepPreview)
+	if err != nil {
+		return result, err
+	}
+	runID, reviewID, err := s.reviews.ResolveReviewGate(ctx, current, "", "")
+	if err != nil {
+		return result, err
+	}
+	if _, err = s.reviews.Regenerate(ctx, runID, reviewID, userID, "accepted Shot changes require a new assembled preview"); err != nil {
+		return result, err
+	}
+	return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
 }
 
 func (s *CreatorViewService) WithStepMutations(revisions creatorRevisionService, reviews creatorReviewMutations) *CreatorViewService {
@@ -240,6 +277,18 @@ func (s *CreatorViewService) GetCreationView(ctx context.Context, userID, projec
 		for _, stepID := range []model.CreatorStepID{model.CreatorStepPreview, model.CreatorStepDelivery} {
 			index := stepIndexes[stepID]
 			steps[index].State = mergeCreatorState(steps[index].State, model.CreatorStepNeedsAttention)
+		}
+	}
+	if s.assembly != nil {
+		if receipt, found, receiptErr := s.assembly.LatestAssemblyReceipt(ctx, userID, projectID); receiptErr == nil && found && receipt.Status == "queued" {
+			previewIndex := stepIndexes[model.CreatorStepPreview]
+			if receipt.BasePreviewArtifactID != "" && steps[previewIndex].CurrentArtifactID == receipt.BasePreviewArtifactID {
+				steps[previewIndex].State = model.CreatorStepGenerating
+				steps[stepIndexes[model.CreatorStepDelivery]].State = model.CreatorStepGenerating
+				if receipt.PreviewTaskID != "" {
+					activeTasks = append(activeTasks, model.CreatorTask{ID: receipt.PreviewTaskID, Scope: string(model.CreatorStepPreview), Status: "running", Label: "正在重新拼接成片"})
+				}
+			}
 		}
 	}
 	for i := range steps {

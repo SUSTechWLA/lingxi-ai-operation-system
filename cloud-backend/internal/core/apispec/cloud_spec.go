@@ -810,6 +810,13 @@ func BuildCloudSpec() *Spec {
 		PathParam("id", "Project identifier", StringSchema()).
 		ResponseJSON("200", "Assembly validation issues", "AssemblyValidationResponse").
 		ResponseJSON("400", "Invalid request", "ErrorResponse")
+	b.Route("POST", "/api/video-projects/:id/assembly/rebuild", "Persist an accepted-candidate assembly snapshot").
+		Tags("Video Projects").
+		PathParam("id", "Project identifier", StringSchema()).
+		HeaderParam("Idempotency-Key", "Stable key for an assembly retry", StringSchema(), true).
+		ResponseJSON("200", "Assembly snapshot result", "AssemblyRebuildResponse").
+		ResponseJSON("400", "Invalid request", "ErrorResponse").
+		ResponseJSON("409", "Assembly inputs changed", "ErrorResponse")
 	b.Route("POST", "/api/video-projects/:id/publish-package/generate", "Generate publish package metadata").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -39,6 +40,16 @@ type RegenerateShotRequest struct {
 type RegenerateShotResult struct {
 	Shot model.ShotUnit             `json:"shot"`
 	Task model.ShotRegenerationTask `json:"task"`
+}
+
+// AssemblyRebuildResult contains only creator-safe assembly progress. The
+// plan remains durable server state; it includes internal artifact lineage and
+// must not be rendered in creator routes.
+type AssemblyRebuildResult struct {
+	Status            string            `json:"status"`
+	AssemblyDirty     bool              `json:"assemblyDirty"`
+	AcceptedShotCount int               `json:"acceptedShotCount"`
+	Issues            []ValidationIssue `json:"issues,omitempty"`
 }
 
 type ShotGenerationDispatcher interface {
@@ -338,6 +349,128 @@ func (s *CreationService) Assemble(ctx context.Context, userID, projectID string
 		return nil, err
 	}
 	return CheckFinalAssembly(state.Shots), nil
+}
+
+// RebuildFinalAssembly persists a validated assembly plan made only from the
+// current accepted candidates. It never queues or regenerates individual
+// shots. Rendering and final QA are owned by the existing downstream pipeline;
+// this method deliberately does not claim to have produced a final video or
+// clear AssemblyDirty (doing so could revive an older preview artifact).
+func (s *CreationService) RebuildFinalAssembly(ctx context.Context, userID, projectID, idempotencyKey string) (AssemblyRebuildResult, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return AssemblyRebuildResult{}, fmt.Errorf("idempotency key is required")
+	}
+	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
+		project, state, err := s.load(ctx, userID, projectID)
+		if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		fingerprint := finalAssemblyFingerprint(state.Shots)
+		if receipt, ok := state.AssemblyReceipts[idempotencyKey]; ok {
+			if receipt.RequestFingerprint != fingerprint {
+				return AssemblyRebuildResult{}, fmt.Errorf("%w: key %q was used after accepted shots changed", ErrShotIdempotencyConflict, idempotencyKey)
+			}
+			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+		}
+
+		plan, planIssues := BuildFinalAssemblyPlan(state.Shots)
+		issues := append(planIssues, finalAssemblyApprovalIssues(state.Shots)...)
+		now := time.Now().Round(0)
+		status := "blocked"
+		if len(issues) == 0 {
+			status = "validated"
+			plan.Status = status
+			issues = nil
+		}
+		state.AssemblyReceipts[idempotencyKey] = model.AssemblyReceipt{
+			IdempotencyKey: idempotencyKey, RequestFingerprint: fingerprint, Status: status,
+			Plan: plan, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
+			continue
+		} else if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		return AssemblyRebuildResult{Status: status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(plan.AcceptedShots), Issues: issues}, nil
+	}
+	return AssemblyRebuildResult{}, fmt.Errorf("%w: project changed while rebuilding final assembly", ErrShotVersionConflict)
+}
+
+// MarkFinalAssemblyQueued is called only after the real preview review gate
+// has accepted a regeneration request. The fingerprint check prevents an
+// intervening Shot acceptance from being accidentally cleared as clean.
+func (s *CreationService) MarkFinalAssemblyQueued(ctx context.Context, userID, projectID, idempotencyKey, basePreviewArtifactID, previewTaskID string) (AssemblyRebuildResult, error) {
+	for attempt := 0; attempt < maxProjectCASAttempts; attempt++ {
+		project, state, err := s.load(ctx, userID, projectID)
+		if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		receipt, ok := state.AssemblyReceipts[idempotencyKey]
+		if !ok {
+			return AssemblyRebuildResult{}, fmt.Errorf("assembly rebuild receipt not found")
+		}
+		if receipt.RequestFingerprint != finalAssemblyFingerprint(state.Shots) {
+			return AssemblyRebuildResult{}, fmt.Errorf("%w: accepted shots changed while queuing preview", ErrShotIdempotencyConflict)
+		}
+		if receipt.Status != "validated" && receipt.Status != "queued" {
+			return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: state.AssemblyDirty, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+		}
+		receipt.Status, receipt.BasePreviewArtifactID, receipt.PreviewTaskID, receipt.UpdatedAt = "queued", basePreviewArtifactID, previewTaskID, time.Now().Round(0)
+		state.AssemblyReceipts[idempotencyKey] = receipt
+		state.AssemblyDirty = false
+		if err := s.save(ctx, userID, project, state); errors.Is(err, errProjectRevisionConflict) {
+			continue
+		} else if err != nil {
+			return AssemblyRebuildResult{}, err
+		}
+		return AssemblyRebuildResult{Status: receipt.Status, AssemblyDirty: false, AcceptedShotCount: len(receipt.Plan.AcceptedShots)}, nil
+	}
+	return AssemblyRebuildResult{}, fmt.Errorf("%w: project changed while queuing preview", ErrShotVersionConflict)
+}
+
+func (s *CreationService) LatestAssemblyReceipt(ctx context.Context, userID, projectID string) (model.AssemblyReceipt, bool, error) {
+	_, state, err := s.load(ctx, userID, projectID)
+	if err != nil {
+		return model.AssemblyReceipt{}, false, err
+	}
+	var latest model.AssemblyReceipt
+	for _, receipt := range state.AssemblyReceipts {
+		if latest.UpdatedAt.IsZero() || receipt.UpdatedAt.After(latest.UpdatedAt) {
+			latest = receipt
+		}
+	}
+	return latest, !latest.UpdatedAt.IsZero(), nil
+}
+
+func finalAssemblyApprovalIssues(shots []model.ShotUnit) []ValidationIssue {
+	issues := make([]ValidationIssue, 0)
+	for _, shot := range shots {
+		if shot.ReviewStatus != "" && shot.ReviewStatus != model.ReviewStatusApproved {
+			issues = append(issues, ValidationIssue{Code: "final_assembly_requires_approved_shot", Field: "reviewStatus", Message: "final assembly can only use approved shots: " + shot.ID, Severity: "error"})
+		}
+		if shot.Stale {
+			issues = append(issues, ValidationIssue{Code: "final_assembly_rejects_stale_shot", Field: "stale", Message: "final assembly cannot use stale shots: " + shot.ID, Severity: "error"})
+		}
+	}
+	return issues
+}
+
+func finalAssemblyFingerprint(shots []model.ShotUnit) string {
+	accepted := make([]string, 0, len(shots))
+	for _, shot := range shots {
+		candidateID := shot.AcceptedCandidateID
+		candidateVersion := ""
+		for _, candidate := range shot.Candidates {
+			if candidate.CandidateID == candidateID {
+				candidateVersion = candidate.TimelineRevision + ":" + candidate.ArtifactRefs.CompositedShotVideoArtifactID + ":" + candidate.ArtifactRefs.VideoClipArtifactID
+				break
+			}
+		}
+		accepted = append(accepted, shot.ID+":"+fmt.Sprint(shot.Version)+":"+candidateID+":"+candidateVersion+":"+fmt.Sprint(shot.Stale))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(accepted, "\n")))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func (s *CreationService) GeneratePublishPackage(ctx context.Context, userID, projectID string) (map[string]interface{}, error) {

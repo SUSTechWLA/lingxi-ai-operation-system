@@ -724,6 +724,20 @@ type FinalAssemblyPlan struct {
 	ArtifactProvenance []ArtifactProvenance `json:"artifactProvenance,omitempty"`
 }
 
+// AssemblyReceipt is the durable outcome of a final-assembly rebuild. It is
+// intentionally kept in the project state instead of being inferred by the
+// client, so reconnects and idempotent retries observe the same result.
+type AssemblyReceipt struct {
+	IdempotencyKey        string            `json:"idempotencyKey"`
+	RequestFingerprint    string            `json:"requestFingerprint"`
+	Status                string            `json:"status"`
+	BasePreviewArtifactID string            `json:"basePreviewArtifactId,omitempty"`
+	PreviewTaskID         string            `json:"previewTaskId,omitempty"`
+	Plan                  FinalAssemblyPlan `json:"plan"`
+	CreatedAt             time.Time         `json:"createdAt"`
+	UpdatedAt             time.Time         `json:"updatedAt"`
+}
+
 type ArtifactProvenance struct {
 	ArtifactID        string   `json:"artifactId,omitempty"`
 	Kind              string   `json:"kind,omitempty"`
@@ -794,6 +808,7 @@ type ShotDrivenState struct {
 	RegenerationTasks    map[string]ShotRegenerationTask `json:"regenerationTasks,omitempty"`
 	IdempotencyTasks     map[string]string               `json:"idempotencyTasks,omitempty"`
 	ShotMutationReceipts map[string]ShotMutationReceipt  `json:"shotMutationReceipts,omitempty"`
+	AssemblyReceipts     map[string]AssemblyReceipt      `json:"assemblyReceipts,omitempty"`
 	AssemblyDirty        bool                            `json:"assemblyDirty"`
 	UpdatedAt            time.Time                       `json:"updatedAt"`
 }

@@ -29,6 +29,7 @@ type creatorStepMutator interface {
 	ReviseStep(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepRevisionRequest) (*model.StepMutationResult, error)
 	ConfirmStep(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, req model.StepConfirmRequest) (*model.CreationView, error)
 	RestoreStepVersion(ctx context.Context, userID, projectID string, stepID model.CreatorStepID, version int, req model.StepRestoreRequest) (*model.StepMutationResult, error)
+	RebuildFinalAssembly(ctx context.Context, userID, projectID, idempotencyKey string) (videoSvc.AssemblyRebuildResult, error)
 }
 
 // CreatorViewHandler serves the creator-facing aggregate without exposing
@@ -61,6 +62,20 @@ func (h *CreatorViewHandler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/:id/steps/:stepId/revisions", h.ReviseStep)
 	api.POST("/:id/steps/:stepId/confirm", h.ConfirmStep)
 	api.POST("/:id/steps/:stepId/versions/:version/restore", h.RestoreStepVersion)
+	api.POST("/:id/assembly/rebuild", h.RebuildFinalAssembly)
+}
+
+func (h *CreatorViewHandler) RebuildFinalAssembly(c *gin.Context) {
+	userID, projectID, authorized := h.authorizeProject(c)
+	if !authorized || !h.mutationsAvailable(c) {
+		return
+	}
+	result, err := h.mutations.RebuildFinalAssembly(c.Request.Context(), userID, projectID, c.GetHeader("Idempotency-Key"))
+	if err != nil {
+		h.failMutation(c, err)
+		return
+	}
+	httpx.OK(c, gin.H{"assembly": result})
 }
 
 func (h *CreatorViewHandler) GetStepVersions(c *gin.Context) {
@@ -197,6 +212,7 @@ func (h *CreatorViewHandler) failMutation(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, videoSvc.ErrCreatorVersionConflict), errors.Is(err, artifact.ErrArtifactVersionConflict),
 		errors.Is(err, videoSvc.ErrCreatorIdempotencyConflict),
+		errors.Is(err, videoSvc.ErrShotIdempotencyConflict), errors.Is(err, videoSvc.ErrShotVersionConflict),
 		errors.Is(err, agentruntime.ErrReviewNotPending), errors.Is(err, agentruntime.ErrReviewCannotReopen),
 		errors.Is(err, agentruntime.ErrReviewGateAmbiguous):
 		fail(c, http.StatusConflict, "content changed; reload and try again")

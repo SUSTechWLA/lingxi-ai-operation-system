@@ -2,6 +2,7 @@ import type { ApiResponse, ArtifactContentResponse } from '../utils/types'
 import type {
   CandidateAcceptRequest,
   CandidateRestoreRequest,
+  AssemblyRebuildResult,
   CreationView,
   CreatorArtifactVersion,
   CreatorStepId,
@@ -227,4 +228,17 @@ export async function restoreShotCandidate(
     request, { headers: { 'Idempotency-Key': idempotencyKey }, signal },
   )
   return response.data.data.shot
+}
+
+export async function rebuildFinalAssembly(
+  projectId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<AssemblyRebuildResult> {
+  assertIdempotencyKey(idempotencyKey)
+  const response = await api.post<ApiResponse<{ assembly: AssemblyRebuildResult }>>(
+    creatorPath(projectId, '/assembly/rebuild'), undefined,
+    { headers: { 'Idempotency-Key': idempotencyKey }, signal },
+  )
+  return response.data.data.assembly
 }

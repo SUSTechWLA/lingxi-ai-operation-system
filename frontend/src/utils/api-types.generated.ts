@@ -146,6 +146,14 @@ export interface ArtifactListResponse {
 export type ArtifactSelection = { endMs?: never; height: number; kind: 'rect'; startMs?: never; width: number; x: number; y: number } | { endMs: number; height?: never; kind: 'time'; startMs: number; width?: never; x?: never; y?: never };
 
 /**  */
+// AssemblyRebuildResponse
+export interface AssemblyRebuildResponse {
+  code: number;
+  data: { assembly: { acceptedShotCount: number; assemblyDirty: boolean; issues?: { code: string; field?: string; message: string; severity: string }[]; status: string } };
+  message: string;
+}
+
+/**  */
 // AssemblyValidationResponse
 export interface AssemblyValidationResponse {
   code?: number;

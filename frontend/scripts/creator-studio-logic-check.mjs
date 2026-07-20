@@ -229,6 +229,12 @@ try {
   for (const rejected of [-1, 0, 15, 16, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.equal(logic.canSubmitShotDuration(rejected), false)
   }
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ finalQaStatus: 'passed' }), true)
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ qualityCheck: { passed: true } }), true)
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ finalQaStatus: 'failed' }), false)
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ artifact: { metadata: { qaStatus: 'passed' } } }), true)
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ artifact: { metadata: { qaStatus: 'failed' } } }), false)
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ mediaUrl: '/video.mp4' }), false, 'a media URL alone must never unlock delivery')
 
   const shots = Array.from({ length: 100 }, (_, index) => ({
     id: `shot-${String(100 - index).padStart(3, '0')}`,
@@ -282,11 +288,12 @@ try {
   const queueSource = readFileSync(new URL('../src/features/creator-studio/components/ShotReviewQueue.tsx', import.meta.url), 'utf8')
   const inspectorSource = readFileSync(new URL('../src/features/creator-studio/components/ShotInspector.tsx', import.meta.url), 'utf8')
   const improveSource = readFileSync(new URL('../src/features/creator-studio/components/ShotImprovePanel.tsx', import.meta.url), 'utf8')
+  const previewSource = readFileSync(new URL('../src/features/creator-studio/components/PreviewDeliveryPanel.tsx', import.meta.url), 'utf8')
   for (const functionName of [
     'getCreationView', 'getStepVersions', 'previewStepRevision', 'reviseStep', 'confirmStep',
     'restoreStepVersion', 'registerProjectMaterial', 'listShots', 'getShotSummary',
     'getShotWorkspace', 'getShotHistory', 'previewShotRegeneration', 'regenerateShot',
-    'acceptShotCandidate', 'restoreShotCandidate',
+    'acceptShotCandidate', 'restoreShotCandidate', 'rebuildFinalAssembly',
   ]) {
     assert.match(apiSource, new RegExp(`export (?:async )?function ${functionName}\\b`), `${functionName} must be exported`)
   }
@@ -368,6 +375,18 @@ try {
   assert.match(workspaceSource, /activeTaskSignature/)
   assert.match(workspaceSource, /viewRequestTokenRef\.current \+= 1[\s\S]*adoptCreatorShotTask/, 'adopting a newer Shot task invalidates an older in-flight creation view before it can overwrite the task set')
   assert.match(workspaceSource, /SHOT_QUEUE_CONFLICT_COPY/)
+  assert.match(workspaceSource, /PreviewDeliveryPanel/)
+  assert.match(previewSource, /getCreatorArtifactContent/, 'preview and delivery use current server artifacts')
+  assert.match(previewSource, /rebuildFinalAssembly/, 'assembly retry is a dedicated action')
+  assert.doesNotMatch(previewSource, /regenerateShot\(/, 'assembly retry must never regenerate a Shot')
+  assert.match(previewSource, /assemblyDirty/)
+
+  assert.match(previewSource, /deliveryArtifactPassesFinalReview/)
+  assert.match(previewSource, /result\.status === 'queued'/)
+  assert.match(previewSource, /crypto\.randomUUID/)
+  assert.match(previewSource, /assemblyKeyRef\.current = null/)
+  assert.match(previewSource, /成片检查通过后，才会显示最终视频和交付文件/)
+  assert.equal((previewSource.match(/<video\b/g) || []).length, 1, 'preview mounts at most one assembled video player')
 
   console.log('creator studio logic and client contract checks passed')
 } finally {

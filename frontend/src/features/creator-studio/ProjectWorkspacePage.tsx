@@ -22,6 +22,7 @@ import ArtifactReviewPanel from './components/ArtifactReviewPanel'
 import TaskRecoveryBanner from './components/TaskRecoveryBanner'
 import ShotReviewQueue from './components/ShotReviewQueue'
 import ShotInspector from './components/ShotInspector'
+import PreviewDeliveryPanel from './components/PreviewDeliveryPanel'
 
 interface ProjectWorkspacePageProps {
   projectId: string
@@ -64,6 +65,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const previousActiveTaskSignatureRef = useRef<string | null>(null)
   const currentStep = view?.steps.find(step => step.id === stepId)
   const isShotsStep = stepId === 'shots'
+  const isPreviewDeliveryStep = stepId === 'preview' || stepId === 'delivery'
   const activeShotId = selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
   const activeTaskSignature = useMemo(() => (view?.activeTasks ?? []).map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`).sort().join('|'), [view?.activeTasks])
 
@@ -306,7 +308,13 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         />}
         {shotNotice && <p className="creator-form-error" role="alert">{shotNotice}</p>}
         </div>
-      </div> : <ArtifactReviewPanel
+      </div> : isPreviewDeliveryStep ? <PreviewDeliveryPanel
+        projectId={projectId}
+        step={selectedStep}
+        content={content}
+        assemblyDirty={view.assemblyDirty}
+        onAssemblyUpdated={async () => { await refreshView() }}
+      /> : <ArtifactReviewPanel
         projectId={projectId}
         step={selectedStep}
         content={content}

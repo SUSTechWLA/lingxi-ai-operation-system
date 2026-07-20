@@ -111,6 +111,8 @@ run_check "fallback E2E fixture" bash "$ROOT_DIR/scripts/beta-fallback-fixture.s
 
 if check_node_module_dir "$ROOT_DIR/frontend" "frontend"; then
   run_check "frontend npm run lint" bash -c "cd '$ROOT_DIR/frontend' && npm run lint"
+  run_check "frontend creator studio contract" bash -c "cd '$ROOT_DIR/frontend' && npm run test:creator"
+  run_check "frontend developer console gate" bash -c "cd '$ROOT_DIR/frontend' && npm run test:developer-build"
   run_check "frontend npm run build" bash -c "cd '$ROOT_DIR/frontend' && npm run build"
 fi
 

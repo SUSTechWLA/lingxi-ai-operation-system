@@ -617,6 +617,18 @@ body {
 .artifact-empty,
 .artifact-selection-help { color: #7B5B2B; line-height: 1.55; }
 
+.preview-delivery-panel { display: grid; gap: 1rem; }
+.preview-delivery-warning, .preview-delivery-package, .preview-delivery-checklist { padding: 1rem; border: 1px solid #E8CF86; border-radius: .5rem; }
+.preview-delivery-warning { background: #FFF0BE; border-color: #E89412; }
+.preview-delivery-warning strong, .preview-delivery-warning p, .preview-delivery-package p, .preview-delivery-checklist p { margin: 0; }
+.preview-delivery-warning p, .preview-delivery-package p, .preview-delivery-checklist p { margin-top: .4rem; color: #7B5B2B; line-height: 1.55; }
+.preview-delivery-warning .creator-primary-button { width: auto; margin-top: .8rem; }
+.preview-delivery-checklist { background: #FFF6D6; }
+.preview-delivery-checklist h3, .preview-delivery-package h3 { margin: 0; color: #2B1606; font-size: 1rem; }
+.preview-delivery-checklist p span { display: inline-block; width: 1.2rem; color: #1F9D62; font-weight: 900; }
+.preview-delivery-package { display: grid; gap: .65rem; }
+.preview-delivery-package .creator-primary-button { width: fit-content; margin-top: 0; text-decoration: none; }
+
 .artifact-actions,
 .artifact-impact-confirmation > div {
   display: flex;

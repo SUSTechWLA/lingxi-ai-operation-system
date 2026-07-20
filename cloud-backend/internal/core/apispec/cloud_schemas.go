@@ -919,6 +919,9 @@ func registerCloudSchemas(b *Builder) {
 			}},
 		},
 	})
+	b.Schema("AssemblyRebuildResponse", requiredEnvelope(requiredObject(map[string]*SchemaRef{
+		"assembly": {Schema: Reflect(videoservice.AssemblyRebuildResult{})},
+	}, "assembly")))
 	b.Schema("PublishPackageResponse", &Schema{
 		Type: "object",
 		Properties: map[string]*SchemaRef{
