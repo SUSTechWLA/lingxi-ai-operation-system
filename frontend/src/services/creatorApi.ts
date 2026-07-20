@@ -21,7 +21,7 @@ import type {
   StepMutationResult,
   StepRestoreRequest,
   StepRevisionPreviewRequest,
-  StepRevisionRequest,
+  StepRevisionMutationRequest,
 } from '../features/creator-studio/types'
 import { api } from './api'
 
@@ -71,7 +71,7 @@ export async function previewStepRevision(
 export async function reviseStep(
   projectId: string,
   stepId: CreatorStepId,
-  request: StepRevisionRequest,
+  request: StepRevisionMutationRequest,
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<StepMutationResult> {

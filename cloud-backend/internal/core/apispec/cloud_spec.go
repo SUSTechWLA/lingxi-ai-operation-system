@@ -575,8 +575,11 @@ func BuildCloudSpec() *Spec {
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
 		QueryParam("cursor", "Opaque cursor from the previous page", StringSchema(), false).
-		QueryParam("limit", "Page size; the server caps this at 50", IntegerSchema(), false).
-		QueryParam("status", "Review status filter", StringSchema(), false).
+		QueryParam("limit", "Page size; defaults to 24 and is constrained to 1 through 50", func() *Schema {
+			minimum, maximum := float64(1), float64(50)
+			return &Schema{Type: "integer", Minimum: &minimum, Maximum: &maximum, Default: 24}
+		}(), false).
+		QueryParam("status", "Review status filter", enumSchema("pending", "approved", "rejected", "stale"), false).
 		QueryParam("chapter", "Chapter filter", StringSchema(), false).
 		QueryParam("query", "Case-insensitive title, narration, or scene search", StringSchema(), false).
 		creatorAuth(false).
@@ -608,7 +611,7 @@ func BuildCloudSpec() *Spec {
 	b.Route("GET", "/api/video-projects/:id/steps/:stepId/versions", "List immutable versions for one creator step").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("stepId", "Creator step identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
 		creatorAuth(false).
 		ResponseJSON("200", "Step versions", "StepVersionsResponse").
 		ResponseJSON("400", "Invalid step", "ErrorResponse").
@@ -618,9 +621,9 @@ func BuildCloudSpec() *Spec {
 	b.Route("POST", "/api/video-projects/:id/steps/:stepId/revision-impact", "Preview the exact impact of revising a creator step").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("stepId", "Creator step identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
 		creatorAuth(false).
-		BodyJSON("StepRevisionRequest", "Revision proposal with a positive baseVersion", true).
+		BodyJSON("StepRevisionPreviewRequest", "Current artifact identity for impact preview", true).
 		ResponseJSON("200", "Exact downstream impact", "StepImpactResponse").
 		ResponseJSON("400", "Invalid revision request", "ErrorResponse").
 		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
@@ -630,9 +633,9 @@ func BuildCloudSpec() *Spec {
 	b.Route("POST", "/api/video-projects/:id/steps/:stepId/revisions", "Create an immutable creator-step revision").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("stepId", "Creator step identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
 		creatorAuth(true).
-		BodyJSON("StepRevisionRequest", "Revision proposal and exact confirmed Shot impact", true).
+		BodyJSON("StepRevisionMutationRequest", "Revision proposal and exact confirmed Shot impact", true).
 		ResponseJSON("200", "New artifact, impact, and authoritative view", "StepMutationResponse").
 		ResponseJSON("400", "Invalid revision or impact confirmation", "ErrorResponse").
 		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
@@ -642,7 +645,7 @@ func BuildCloudSpec() *Spec {
 	b.Route("POST", "/api/video-projects/:id/steps/:stepId/confirm", "Confirm the current creator-step artifact").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("stepId", "Creator step identifier", StringSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
 		creatorAuth(false).
 		BodyJSON("StepConfirmRequest", "Current artifact and optional review gate identity", true).
 		ResponseJSON("200", "Authoritative creator workspace", "CreationViewResponse").
@@ -654,8 +657,8 @@ func BuildCloudSpec() *Spec {
 	b.Route("POST", "/api/video-projects/:id/steps/:stepId/versions/:version/restore", "Restore a historical step version as a new current version").
 		Tags("Video Projects").
 		PathParam("id", "Project identifier", StringSchema()).
-		PathParam("stepId", "Creator step identifier", StringSchema()).
-		PathParam("version", "Positive historical version", IntegerSchema()).
+		PathParam("stepId", "Creator step identifier", enumSchema("requirements", "direction", "script", "shots", "preview", "delivery")).
+		PathParam("version", "Positive historical version", func() *Schema { minimum := float64(1); return &Schema{Type: "integer", Minimum: &minimum} }()).
 		creatorAuth(true).
 		BodyJSON("StepRestoreRequest", "Positive current baseVersion and exact confirmed Shot impact", true).
 		ResponseJSON("200", "Restored artifact, impact, and authoritative view", "StepMutationResponse").
@@ -723,7 +726,7 @@ func BuildCloudSpec() *Spec {
 		PathParam("candidateId", "Candidate identifier", StringSchema()).
 		creatorAuth(true).
 		BodyJSON("CandidateAcceptRequest", "Positive baseVersion, candidate_accept scope, and explicit locks", true).
-		ResponseJSON("200", "Updated Shot", "ShotUnitResponse").
+		ResponseJSON("200", "Updated Shot", "CreatorShotUnitResponse").
 		ResponseJSON("400", "Invalid candidate acceptance", "ErrorResponse").
 		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
 		ResponseJSON("409", "Shot version conflict", "ErrorResponse")
@@ -734,7 +737,7 @@ func BuildCloudSpec() *Spec {
 		PathParam("candidateId", "Candidate identifier", StringSchema()).
 		creatorAuth(true).
 		BodyJSON("CandidateRestoreRequest", "Positive baseVersion, candidate_restore scope, and explicit locks", true).
-		ResponseJSON("200", "Updated Shot", "ShotUnitResponse").
+		ResponseJSON("200", "Updated Shot", "CreatorShotUnitResponse").
 		ResponseJSON("400", "Invalid candidate restore", "ErrorResponse").
 		ResponseJSON("401", "Missing or invalid access token", "ErrorResponse").
 		ResponseJSON("409", "Shot version conflict", "ErrorResponse")

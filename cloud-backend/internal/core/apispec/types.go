@@ -107,9 +107,12 @@ type Schema struct {
 	Required             []string              `json:"required,omitempty"`
 	AdditionalProperties *SchemaRef            `json:"additionalProperties,omitempty"`
 	AllOf                []*SchemaRef          `json:"allOf,omitempty"`
+	OneOf                []*SchemaRef          `json:"oneOf,omitempty"`
 	Ref                  string                `json:"$ref,omitempty"`
 	Enum                 []any                 `json:"enum,omitempty"`
 	Minimum              *float64              `json:"minimum,omitempty"`
+	Maximum              *float64              `json:"maximum,omitempty"`
+	Pattern              string                `json:"pattern,omitempty"`
 	Default              any                   `json:"default,omitempty"`
 	Nullable             bool                  `json:"nullable,omitempty"`
 	Deprecated           bool                  `json:"deprecated,omitempty"`

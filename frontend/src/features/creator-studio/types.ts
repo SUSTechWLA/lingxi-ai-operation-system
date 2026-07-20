@@ -1,43 +1,40 @@
 import type {
   Artifact as GeneratedArtifact,
+  ArtifactSelection as GeneratedArtifactSelection,
+  CandidateAcceptRequest as GeneratedCandidateAcceptRequest,
+  CandidateRestoreRequest as GeneratedCandidateRestoreRequest,
   CreationView as GeneratedCreationView,
   CreatorArtifactVersion as GeneratedCreatorArtifactVersion,
   CreatorStep as GeneratedCreatorStep,
   CreatorTask as GeneratedCreatorTask,
+  ProjectMaterial as GeneratedProjectMaterial,
   ProjectMaterialManifest as GeneratedProjectMaterialManifest,
+  ProjectMaterialResponse,
   ShotHistoryResponse,
   ShotImpact as GeneratedShotImpact,
   ShotListItem as GeneratedShotListItem,
+  ShotPageResponse,
+  ShotRegenerationRequest as GeneratedShotRegenerationRequest,
   ShotRegenerationResponse,
   ShotSummary as GeneratedShotSummary,
   ShotWorkspace as GeneratedShotWorkspace,
+  StepConfirmRequest as GeneratedStepConfirmRequest,
+  StepImpact as GeneratedStepImpact,
+  StepMutationResponse,
+  StepRestoreRequest as GeneratedStepRestoreRequest,
+  StepRevisionMutationRequest as GeneratedStepRevisionMutationRequest,
+  StepRevisionPreviewRequest as GeneratedStepRevisionPreviewRequest,
 } from '../../utils/api-types.generated'
 
-export type CreatorStepId =
-  | 'requirements'
-  | 'direction'
-  | 'script'
-  | 'shots'
-  | 'preview'
-  | 'delivery'
-
-export type CreatorStepState =
-  | 'not_started'
-  | 'generating'
-  | 'needs_review'
-  | 'confirmed'
-  | 'needs_attention'
-  | 'failed'
-
+export type CreatorStepId = GeneratedCreatorStep['id']
+export type CreatorStepState = GeneratedCreatorStep['state']
 export type CreatorStep = GeneratedCreatorStep
 export type CreatorTask = GeneratedCreatorTask
 export type CreatorArtifactVersion = GeneratedCreatorArtifactVersion
 export type ShotSummary = GeneratedShotSummary
-export type CreatorProject = Omit<GeneratedCreationView['project'], 'config'> & {
-  config?: Record<string, unknown>
-}
-export type CreationView = Omit<GeneratedCreationView, 'project'> & { project: CreatorProject }
-export type Artifact = Omit<GeneratedArtifact, 'metadata'> & { metadata?: Record<string, unknown> }
+export type CreatorProject = GeneratedCreationView['project']
+export type CreationView = GeneratedCreationView
+export type Artifact = GeneratedArtifact
 
 export type CreatorAction =
   | { kind: 'start'; stepId: 'requirements'; label: string }
@@ -46,26 +43,9 @@ export type CreatorAction =
   | { kind: 'fix'; stepId: CreatorStepId; label: string }
   | { kind: 'continue'; stepId: CreatorStepId; label: string }
 
-export type ShotReviewStatus = 'pending' | 'approved' | 'rejected' | 'stale'
-export type ShotGenerationStatus =
-  | 'PLANNED'
-  | 'GENERATING'
-  | 'CANDIDATE_RENDERED'
-  | 'SHOT_QA_RUNNING'
-  | 'SHOT_QA_PASSED'
-  | 'SHOT_QA_FAILED'
-  | 'HUMAN_REVIEW_REQUIRED'
-  | 'ACCEPTED_FOR_ASSEMBLY'
-  | 'queued'
-  | 'dispatching'
-  | 'running'
-  | 'failed'
-  | 'cancelled'
-
-export type ShotListItem = Omit<GeneratedShotListItem, 'reviewStatus' | 'generationStatus'> & {
-  reviewStatus: ShotReviewStatus
-  generationStatus: ShotGenerationStatus
-}
+export type ShotReviewStatus = GeneratedShotListItem['reviewStatus']
+export type ShotGenerationStatus = GeneratedShotListItem['generationStatus']
+export type ShotListItem = GeneratedShotListItem
 
 export interface ShotListQuery {
   cursor?: string
@@ -81,119 +61,30 @@ export interface ShotListFilters {
   query?: string
 }
 
-export interface ShotPage {
-  shots: ShotListItem[]
-  nextCursor: string
-  total: number
-}
-
+export type ShotPage = ShotPageResponse['data']
 export type ShotUnit = ShotRegenerationResponse['data']['shot']
 export type ShotRevision = ShotHistoryResponse['data']['history'][number]
-export type ShotWorkspace = Omit<GeneratedShotWorkspace, 'impact'> & { impact: ShotImpact }
+export type ShotWorkspace = GeneratedShotWorkspace
 export type ShotImpact = GeneratedShotImpact
 export type ShotRegenerationResult = ShotRegenerationResponse['data']
 
-export type ShotRegenerationScope =
-  | 'prompt'
-  | 'reference'
-  | 'base_media'
-  | 'overlay'
-  | 'audio_alignment'
-  | 'full_shot'
+export type ShotRegenerationRequest = GeneratedShotRegenerationRequest
+export type ShotRegenerationScope = GeneratedShotRegenerationRequest['scope']
+export type ShotLock = GeneratedShotRegenerationRequest['locks'][number]
+export type CandidateAcceptRequest = GeneratedCandidateAcceptRequest
+export type CandidateRestoreRequest = GeneratedCandidateRestoreRequest
 
-export type ShotLock =
-  | 'duration'
-  | 'narration'
-  | 'character'
-  | 'wardrobe'
-  | 'scene'
-  | 'camera'
-  | 'first_frame'
-  | 'last_frame'
-  | 'reference_set'
-  | 'accepted_overlay'
+export type ArtifactSelection = GeneratedArtifactSelection
+export type StepRevisionPreviewRequest = GeneratedStepRevisionPreviewRequest
+export type StepRevisionMutationRequest = GeneratedStepRevisionMutationRequest
+export type StepRestoreRequest = GeneratedStepRestoreRequest
+export type StepConfirmRequest = GeneratedStepConfirmRequest
+export type StepImpact = GeneratedStepImpact
+export type StepMutationResult = StepMutationResponse['data']
 
-export interface ShotRegenerationRequest {
-  baseVersion: number
-  scope: ShotRegenerationScope
-  locks: ShotLock[]
-  instruction?: string
-}
-
-export interface CandidateAcceptRequest {
-  baseVersion: number
-  scope: 'candidate_accept'
-  locks: ShotLock[]
-}
-
-export interface CandidateRestoreRequest {
-  baseVersion: number
-  scope: 'candidate_restore'
-  locks: ShotLock[]
-}
-
-export type ArtifactSelection =
-  | { kind: 'rect'; x: number; y: number; width: number; height: number }
-  | { kind: 'time'; startMs: number; endMs: number }
-
-interface StepRevisionBase {
-  artifactId: string
-  baseVersion: number
-  runId?: string
-  reviewId?: string
-  selection?: ArtifactSelection
-}
-
-export type StepRevisionPreviewRequest = StepRevisionBase & (
-  | { mode: 'direct'; directContent: string; instruction?: never }
-  | { mode: 'instruction'; instruction: string; directContent?: never }
-)
-
-export type StepRevisionRequest = StepRevisionPreviewRequest & {
-  confirmedAffectedShotIds: string[]
-}
-
-export interface StepRestoreRequest {
-  baseVersion: number
-  runId?: string
-  reviewId?: string
-  reason?: string
-  confirmedAffectedShotIds: string[]
-}
-
-export interface StepConfirmRequest {
-  artifactId: string
-  runId?: string
-  reviewId?: string
-  comment?: string
-}
-
-export interface StepImpact {
-  affectedStepIds: CreatorStepId[]
-  affectedShotIds?: string[]
-  requiresConfirmation: boolean
-}
-
-export interface StepMutationResult {
-  artifact: Artifact
-  impact: StepImpact
-  view: CreationView
-}
-
-export type ProjectMaterialKind = 'image' | 'audio' | 'video' | 'document'
-
-export interface ProjectMaterial {
-  name: string
-  kind: ProjectMaterialKind
-  storageRef: string
-  mimeType: string
-  sizeBytes: number
-  contentHash: string
-}
-
-export type ProjectMaterialManifest = Omit<GeneratedProjectMaterialManifest, 'materials'> & {
-  materials: ProjectMaterial[]
-}
+export type ProjectMaterialKind = GeneratedProjectMaterial['kind']
+export type ProjectMaterial = GeneratedProjectMaterial
+export type ProjectMaterialManifest = GeneratedProjectMaterialManifest
 
 export interface ProjectMaterialManifestMetadata extends ProjectMaterialManifest {
   artifactType: 'project_source_material_manifest'
@@ -203,11 +94,5 @@ export interface ProjectMaterialManifestMetadata extends ProjectMaterialManifest
   localOnly: true
 }
 
-export type ProjectMaterialManifestArtifact = Omit<Artifact, 'metadata'> & {
-  metadata?: ProjectMaterialManifestMetadata
-}
-
-export interface RegisterProjectMaterialResult {
-  material: ProjectMaterial
-  artifact: ProjectMaterialManifestArtifact
-}
+export type ProjectMaterialManifestArtifact = Artifact
+export type RegisterProjectMaterialResult = ProjectMaterialResponse['data']

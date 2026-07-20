@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -32,8 +33,8 @@ func TestCloudSpec_CreatorRoutesMatchHandlers(t *testing.T) {
 	}{
 		{"GET", "/api/video-projects/:id/creation-view", "", "CreationViewResponse", false},
 		{"GET", "/api/video-projects/:id/steps/:stepId/versions", "", "StepVersionsResponse", false},
-		{"POST", "/api/video-projects/:id/steps/:stepId/revision-impact", "StepRevisionRequest", "StepImpactResponse", false},
-		{"POST", "/api/video-projects/:id/steps/:stepId/revisions", "StepRevisionRequest", "StepMutationResponse", true},
+		{"POST", "/api/video-projects/:id/steps/:stepId/revision-impact", "StepRevisionPreviewRequest", "StepImpactResponse", false},
+		{"POST", "/api/video-projects/:id/steps/:stepId/revisions", "StepRevisionMutationRequest", "StepMutationResponse", true},
 		{"POST", "/api/video-projects/:id/steps/:stepId/confirm", "StepConfirmRequest", "CreationViewResponse", false},
 		{"POST", "/api/video-projects/:id/steps/:stepId/versions/:version/restore", "StepRestoreRequest", "StepMutationResponse", true},
 		{"POST", "/api/video-projects/:id/materials", "RegisterProjectMaterialRequest", "ProjectMaterialResponse", false},
@@ -43,8 +44,8 @@ func TestCloudSpec_CreatorRoutesMatchHandlers(t *testing.T) {
 		{"GET", "/api/video-projects/:id/shots/:shotId/history", "", "ShotHistoryResponse", false},
 		{"POST", "/api/video-projects/:id/shots/:shotId/regeneration-impact", "", "ShotImpactResponse", false},
 		{"POST", "/api/video-projects/:id/shots/:shotId/regenerations", "ShotRegenerationRequest", "ShotRegenerationResponse", true},
-		{"POST", "/api/video-projects/:id/shots/:shotId/candidates/:candidateId/accept", "CandidateAcceptRequest", "ShotUnitResponse", true},
-		{"POST", "/api/video-projects/:id/shots/:shotId/candidates/:candidateId/restore", "CandidateRestoreRequest", "ShotUnitResponse", true},
+		{"POST", "/api/video-projects/:id/shots/:shotId/candidates/:candidateId/accept", "CandidateAcceptRequest", "CreatorShotUnitResponse", true},
+		{"POST", "/api/video-projects/:id/shots/:shotId/candidates/:candidateId/restore", "CandidateRestoreRequest", "CreatorShotUnitResponse", true},
 	}
 
 	for _, tt := range tests {
@@ -69,9 +70,9 @@ func TestCloudSpec_CreatorRoutesMatchHandlers(t *testing.T) {
 func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 	spec := BuildCloudSpec()
 	wantRequired := map[string][]string{
-		"StepRevisionRequest":            {"artifactId", "baseVersion", "mode"},
+		"StepRevisionPreviewRequest":     {"artifactId", "baseVersion"},
 		"StepConfirmRequest":             {"artifactId"},
-		"StepRestoreRequest":             {"baseVersion"},
+		"StepRestoreRequest":             {"baseVersion", "confirmedAffectedShotIds"},
 		"RegisterProjectMaterialRequest": {"name", "kind", "storageRef", "mimeType", "sizeBytes", "contentHash"},
 		"ShotRegenerationRequest":        {"baseVersion", "scope", "locks"},
 		"CandidateAcceptRequest":         {"baseVersion", "scope", "locks"},
@@ -90,11 +91,119 @@ func TestCloudSpec_CreatorMutationSchemasAreStrict(t *testing.T) {
 
 	assertSchemaEnum(t, spec, "CreatorStep", "id", []any{"requirements", "direction", "script", "shots", "preview", "delivery"})
 	assertSchemaEnum(t, spec, "CreatorStep", "state", []any{"not_started", "generating", "needs_review", "confirmed", "needs_attention", "failed"})
-	assertSchemaEnum(t, spec, "StepRevisionRequest", "mode", []any{"direct", "instruction"})
-	assertSchemaEnum(t, spec, "ArtifactSelection", "kind", []any{"rect", "time"})
+	preview := spec.Components.Schemas["StepRevisionPreviewRequest"]
+	if got := sortedPropertyNames(preview); !reflect.DeepEqual(got, []string{"artifactId", "baseVersion"}) {
+		t.Fatalf("preview properties = %v", got)
+	}
+	mutation := spec.Components.Schemas["StepRevisionMutationRequest"]
+	if mutation == nil || len(mutation.OneOf) != 2 {
+		t.Fatalf("mutation oneOf = %+v", mutation)
+	}
+	for _, branch := range mutation.OneOf {
+		if branch == nil || branch.Schema == nil {
+			t.Fatal("mutation has non-inline branch")
+		}
+		mode := inlineProperty(t, branch.Schema, "mode")
+		if len(mode.Enum) != 1 {
+			t.Fatalf("mutation mode enum = %v", mode.Enum)
+		}
+		content := "directContent"
+		if mode.Enum[0] == "instruction" {
+			content = "instruction"
+		}
+		want := []string{"artifactId", "baseVersion", "mode", content, "confirmedAffectedShotIds"}
+		if !reflect.DeepEqual(branch.Schema.Required, want) {
+			t.Fatalf("mutation %v required = %v, want %v", mode.Enum[0], branch.Schema.Required, want)
+		}
+	}
 	assertSchemaEnum(t, spec, "ShotRegenerationRequest", "scope", []any{"prompt", "reference", "base_media", "overlay", "audio_alignment", "full_shot"})
 	assertSchemaEnum(t, spec, "CandidateAcceptRequest", "scope", []any{"candidate_accept"})
 	assertSchemaEnum(t, spec, "CandidateRestoreRequest", "scope", []any{"candidate_restore"})
+}
+
+func TestCloudSpec_CreatorParametersAndMaterialConstraints(t *testing.T) {
+	spec := BuildCloudSpec()
+	stepIDs := []any{"requirements", "direction", "script", "shots", "preview", "delivery"}
+	for path, item := range spec.Paths {
+		if !strings.Contains(path, "/steps/:stepId") {
+			continue
+		}
+		for _, op := range []*Operation{item.Get, item.Post} {
+			if op == nil {
+				continue
+			}
+			parameter := findParameter(op, "path", "stepId")
+			if parameter == nil || inlineParameterSchema(parameter) == nil || !reflect.DeepEqual(inlineParameterSchema(parameter).Enum, stepIDs) {
+				t.Errorf("%s stepId enum = %+v", path, parameter)
+			}
+		}
+	}
+	restore := operationForMethod(t, spec.Paths["/api/video-projects/:id/steps/:stepId/versions/:version/restore"], "POST")
+	version := findParameter(restore, "path", "version")
+	if version == nil || inlineParameterSchema(version) == nil || inlineParameterSchema(version).Minimum == nil || *inlineParameterSchema(version).Minimum != 1 {
+		t.Fatalf("restore version constraint = %+v", version)
+	}
+
+	request := spec.Components.Schemas["RegisterProjectMaterialRequest"]
+	assertSchemaEnum(t, spec, "RegisterProjectMaterialRequest", "kind", []any{"image", "audio", "video", "document"})
+	size := inlineProperty(t, request, "sizeBytes")
+	if size.Minimum == nil || *size.Minimum != 0 {
+		t.Fatalf("sizeBytes minimum = %v", size.Minimum)
+	}
+	hash := inlineProperty(t, request, "contentHash")
+	if hash.Pattern != `^sha256:[A-Za-z0-9][A-Za-z0-9._-]*$` {
+		t.Fatalf("contentHash pattern = %q", hash.Pattern)
+	}
+	if !strings.Contains(inlineProperty(t, request, "storageRef").Description, "project-scoped") ||
+		!strings.Contains(inlineProperty(t, request, "mimeType").Description, "match kind") {
+		t.Fatal("material storageRef/mimeType semantics are undocumented")
+	}
+
+	shots := operationForMethod(t, spec.Paths["/api/video-projects/:id/shots"], "GET")
+	limit := findParameter(shots, "query", "limit")
+	if limit == nil || inlineParameterSchema(limit) == nil || inlineParameterSchema(limit).Minimum == nil || *inlineParameterSchema(limit).Minimum != 1 || inlineParameterSchema(limit).Maximum == nil || *inlineParameterSchema(limit).Maximum != 50 || inlineParameterSchema(limit).Default != 24 {
+		t.Fatalf("shot limit schema = %+v", limit)
+	}
+	status := findParameter(shots, "query", "status")
+	if status == nil || inlineParameterSchema(status) == nil || !reflect.DeepEqual(inlineParameterSchema(status).Enum, []any{"pending", "approved", "rejected", "stale"}) {
+		t.Fatalf("shot status schema = %+v", status)
+	}
+}
+
+func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
+	spec := BuildCloudSpec()
+	for _, name := range []string{
+		"CreationViewResponse", "StepVersionsResponse", "StepImpactResponse", "StepMutationResponse",
+		"ProjectMaterialResponse", "ShotPageResponse", "ShotSummaryResponse", "ShotWorkspaceResponse",
+		"ShotHistoryResponse", "ShotImpactResponse", "ShotRegenerationResponse", "CreatorShotUnitResponse",
+	} {
+		schema := spec.Components.Schemas[name]
+		if schema == nil || !reflect.DeepEqual(schema.Required, []string{"code", "message", "data"}) {
+			t.Errorf("%s envelope required = %v", name, requiredOf(schema))
+		}
+	}
+	creatorShot := spec.Components.Schemas["CreatorShotUnitResponse"]
+	if data := inlineProperty(t, creatorShot, "data"); !reflect.DeepEqual(data.Required, []string{"shot"}) {
+		t.Fatalf("creator shot data required = %v", data.Required)
+	}
+
+	assertSchemaEnum(t, spec, "CreatorTask", "scope", []any{"requirements", "direction", "script", "shots", "preview", "delivery"})
+	assertSchemaEnum(t, spec, "CreatorTask", "status", []any{"generating", "running", "processing", "queued", "dispatching"})
+	assertSchemaEnum(t, spec, "ShotListItem", "reviewStatus", []any{"pending", "approved", "rejected", "stale"})
+	assertSchemaEnum(t, spec, "ShotListItem", "generationStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "queued", "dispatching", "running", "failed", "cancelled"})
+	assertSchemaEnum(t, spec, "ShotListItem", "qaStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale"})
+	assertSchemaEnum(t, spec, "ShotRegenerationTask", "status", []any{"queued", "dispatching", "running", "completed", "failed", "cancelled"})
+	assertSchemaEnum(t, spec, "ShotRegenerationTask", "scope", []any{"prompt", "reference", "base_media", "overlay", "audio_alignment", "full_shot"})
+	assertSchemaEnum(t, spec, "ShotCandidate", "status", []any{"CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY"})
+	assertSchemaEnum(t, spec, "ShotCandidate", "executionMode", []any{"unknown", "real", "fixture", "fallback", "placeholder"})
+	assertSchemaEnum(t, spec, "ShotQAReport", "status", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale"})
+	assertSchemaEnum(t, spec, "VideoProject", "mode", []any{"aigc_shot", "voice_visual", "cinematic_story"})
+	assertSchemaEnum(t, spec, "VideoProject", "status", []any{"DRAFT", "RUNNING", "PAUSED", "COMPLETED", "ARCHIVED"})
+	assertSchemaEnum(t, spec, "VideoProject", "generationMode", []any{"provider_api", "manual_import"})
+	config := inlineProperty(t, spec.Components.Schemas["VideoProject"], "config")
+	if config.Type != "object" || config.AdditionalProperties == nil {
+		t.Fatalf("known VideoProject.config must be a free-form object: %+v", config)
+	}
 }
 
 func TestCloudSpec_ShotPageDocumentsActualQuery(t *testing.T) {
@@ -175,6 +284,45 @@ func assertSchemaEnum(t *testing.T, spec *Spec, schemaName, property string, wan
 	if got := schema.Properties[property].Schema.Enum; !reflect.DeepEqual(got, want) {
 		t.Fatalf("schema enum %s.%s = %v, want %v", schemaName, property, got, want)
 	}
+}
+
+func sortedPropertyNames(schema *Schema) []string {
+	if schema == nil {
+		return nil
+	}
+	names := make([]string, 0, len(schema.Properties))
+	for name := range schema.Properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func findParameter(op *Operation, in, name string) *Parameter {
+	if op == nil {
+		return nil
+	}
+	for index := range op.Parameters {
+		parameter := &op.Parameters[index]
+		if parameter.In == in && parameter.Name == name {
+			return parameter
+		}
+	}
+	return nil
+}
+
+func inlineParameterSchema(parameter *Parameter) *Schema {
+	if parameter == nil || parameter.Schema == nil {
+		return nil
+	}
+	return parameter.Schema.Schema
+}
+
+func requiredOf(schema *Schema) []string {
+	if schema == nil {
+		return nil
+	}
+	return schema.Required
 }
 
 func TestBuildCloudSpec_NoDuplicateOperationIDs(t *testing.T) {

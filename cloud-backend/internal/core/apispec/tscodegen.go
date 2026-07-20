@@ -7,7 +7,8 @@ import (
 )
 
 // RenderTypeScript generates TypeScript type definitions from an OpenAPI Spec's
-// component schemas. Only object-typed schemas are emitted as interfaces.
+// component schemas. Object schemas are emitted as interfaces; composed schemas
+// are emitted as aliases so OpenAPI unions and intersections survive generation.
 func RenderTypeScript(spec *Spec) []byte {
 	var b strings.Builder
 
@@ -34,6 +35,14 @@ func RenderTypeScript(spec *Spec) []byte {
 	for _, name := range names {
 		schema := spec.Components.Schemas[name]
 		if schema == nil {
+			continue
+		}
+		if len(schema.OneOf) > 0 || len(schema.AllOf) > 0 {
+			b.WriteString(fmt.Sprintf("/** %s */\n", schema.Description))
+			if schema.Description == "" {
+				b.WriteString(fmt.Sprintf("// %s\n", name))
+			}
+			b.WriteString(fmt.Sprintf("export type %s = %s;\n\n", toPascalCase(name), schemaToTSType(schema)))
 			continue
 		}
 		// Only emit object schemas as interfaces
@@ -107,15 +116,28 @@ func schemaToTSType(s *Schema) string {
 	if s == nil {
 		return "unknown"
 	}
+	if s.Nullable {
+		innerSchema := *s
+		innerSchema.Nullable = false
+		inner := schemaToTSType(&innerSchema)
+		return inner + " | null"
+	}
 	if s.Ref != "" {
 		return toPascalCase(strings.TrimPrefix(s.Ref, "#/components/schemas/"))
 	}
-	if s.Nullable {
-		inner := schemaToTSType(&Schema{
-			Type: s.Type, Format: s.Format, Items: s.Items,
-			Properties: s.Properties, Enum: s.Enum,
-		})
-		return inner + " | null"
+	if len(s.OneOf) > 0 {
+		parts := make([]string, 0, len(s.OneOf))
+		for _, branch := range s.OneOf {
+			parts = append(parts, schemaRefToTSType(branch))
+		}
+		return strings.Join(parts, " | ")
+	}
+	if len(s.AllOf) > 0 {
+		parts := make([]string, 0, len(s.AllOf))
+		for _, branch := range s.AllOf {
+			parts = append(parts, schemaRefToTSType(branch))
+		}
+		return strings.Join(parts, " & ")
 	}
 	switch s.Type {
 	case "string":
@@ -132,16 +154,13 @@ func schemaToTSType(s *Schema) string {
 	case "boolean":
 		return "boolean"
 	case "array":
-		if s.Items != nil && s.Items.Schema != nil {
-			return schemaToTSType(s.Items.Schema) + "[]"
-		}
-		if s.Items != nil && s.Items.Ref != "" {
-			return toPascalCase(strings.TrimPrefix(s.Items.Ref, "#/components/schemas/")) + "[]"
+		if s.Items != nil {
+			return arrayItemType(s.Items) + "[]"
 		}
 		return "unknown[]"
 	case "object":
-		if s.AdditionalProperties != nil && s.AdditionalProperties.Schema != nil {
-			return "Record<string, " + schemaToTSType(s.AdditionalProperties.Schema) + ">"
+		if s.AdditionalProperties != nil {
+			return "Record<string, " + schemaRefToTSType(s.AdditionalProperties) + ">"
 		}
 		if len(s.Properties) > 0 {
 			var b strings.Builder
@@ -177,4 +196,22 @@ func schemaToTSType(s *Schema) string {
 	default:
 		return "unknown"
 	}
+}
+
+func schemaRefToTSType(ref *SchemaRef) string {
+	if ref == nil {
+		return "unknown"
+	}
+	if ref.Ref != "" {
+		return toPascalCase(strings.TrimPrefix(ref.Ref, "#/components/schemas/"))
+	}
+	return schemaToTSType(ref.Schema)
+}
+
+func arrayItemType(item *SchemaRef) string {
+	typeName := schemaRefToTSType(item)
+	if strings.Contains(typeName, " | ") || strings.Contains(typeName, " & ") {
+		return "(" + typeName + ")"
+	}
+	return typeName
 }

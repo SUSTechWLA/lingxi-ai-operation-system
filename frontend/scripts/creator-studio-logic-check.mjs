@@ -84,6 +84,7 @@ try {
 
   const apiSource = readFileSync(new URL('../src/services/creatorApi.ts', import.meta.url), 'utf8')
   const typeSource = readFileSync(new URL('../src/features/creator-studio/types.ts', import.meta.url), 'utf8')
+  const generatedSource = readFileSync(new URL('../src/utils/api-types.generated.ts', import.meta.url), 'utf8')
   for (const functionName of [
     'getCreationView', 'getStepVersions', 'previewStepRevision', 'reviseStep', 'confirmStep',
     'restoreStepVersion', 'registerProjectMaterial', 'listShots', 'getShotSummary',
@@ -93,10 +94,16 @@ try {
     assert.match(apiSource, new RegExp(`export (?:async )?function ${functionName}\\b`), `${functionName} must be exported`)
   }
   assert.doesNotMatch(apiSource, /\bany\b/, 'creator API boundaries must not use any')
+  assert.doesNotMatch(typeSource, /Omit<Generated/, 'honest generated contracts must not be masked by curated Omit types')
   assert.match(apiSource, /'Idempotency-Key': idempotencyKey/g)
-  assert.match(typeSource, /scope: 'candidate_accept'/)
-  assert.match(typeSource, /scope: 'candidate_restore'/)
-  assert.match(typeSource, /locks: ShotLock\[\]/g)
+  assert.match(apiSource, /request: StepRevisionPreviewRequest/)
+  assert.match(apiSource, /request: StepRevisionMutationRequest/)
+  assert.match(typeSource, /StepRevisionPreviewRequest = GeneratedStepRevisionPreviewRequest/)
+  assert.match(typeSource, /StepRevisionMutationRequest = GeneratedStepRevisionMutationRequest/)
+  assert.match(generatedSource, /scope: 'candidate_accept'/)
+  assert.match(generatedSource, /scope: 'candidate_restore'/)
+  assert.match(generatedSource, /export interface StepRevisionPreviewRequest \{\s+artifactId: string;\s+baseVersion: number;\s+\}/)
+  assert.match(generatedSource, /export type StepRevisionMutationRequest = .*mode: 'direct'.* \| .*mode: 'instruction'/)
   assert.match(apiSource, /assertPositiveVersion\(request\.baseVersion\)/)
   assert.match(apiSource, /signal/g, 'creator requests must support AbortSignal')
 
