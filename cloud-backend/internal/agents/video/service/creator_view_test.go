@@ -657,6 +657,15 @@ func stepStates(steps []model.CreatorStep) []model.CreatorStepState {
 	return states
 }
 
+func containsCreatorTask(tasks []model.CreatorTask, taskID string) bool {
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return true
+		}
+	}
+	return false
+}
+
 type fakeCreatorProjectReader struct {
 	project *model.VideoProject
 	err     error
@@ -688,6 +697,25 @@ type fakeCreatorAssemblyReader struct {
 	claimCalls, markCalls int
 }
 
+type creatorStoreProjectReader struct{ store *fakeCreationProjectStore }
+
+func (r creatorStoreProjectReader) GetProject(ctx context.Context, userID, projectID string) (*model.VideoProject, error) {
+	return r.store.FindByIDForUser(ctx, userID, projectID)
+}
+
+type interruptOnceCreatorAssembly struct {
+	*CreationService
+	interruptMark bool
+}
+
+func (s *interruptOnceCreatorAssembly) MarkFinalAssemblyQueued(ctx context.Context, userID, projectID, key, artifactID, taskID string) (AssemblyRebuildResult, error) {
+	if s.interruptMark {
+		s.interruptMark = false
+		return AssemblyRebuildResult{}, errors.New("simulated process interruption before queued persistence")
+	}
+	return s.CreationService.MarkFinalAssemblyQueued(ctx, userID, projectID, key, artifactID, taskID)
+}
+
 func (f *fakeCreatorAssemblyReader) RebuildFinalAssembly(context.Context, string, string, string) (AssemblyRebuildResult, error) {
 	return AssemblyRebuildResult{Status: f.rebuildStatus}, nil
 }
@@ -717,12 +745,60 @@ func TestCreatorAssemblyRetryDoesNotRedispatchAfterMarkFailureWhenSourceIsActive
 	if reviews.regenerateCalls != 1 {
 		t.Fatalf("dispatch calls=%d", reviews.regenerateCalls)
 	}
-	shots.rebuildStatus, shots.markErr, shots.receipt = "dispatching", nil, model.AssemblyReceipt{Status: "dispatching", BasePreviewArtifactID: "preview-1", PreviewTaskID: "run-1"}
+	shots.rebuildStatus, shots.markErr, shots.receipt = "dispatching", nil, model.AssemblyReceipt{Status: "dispatching"}
 	if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err != nil {
 		t.Fatal(err)
 	}
 	if reviews.regenerateCalls != 1 {
 		t.Fatalf("active retry redispatched: %d", reviews.regenerateCalls)
+	}
+	if shots.markCalls != 2 {
+		t.Fatalf("active recovery mark calls=%d, want initial failure plus durable promotion", shots.markCalls)
+	}
+}
+
+func TestCreatorAssemblyRealStorePromotesInterruptedDispatchWithoutRedispatch(t *testing.T) {
+	for _, sourceStatus := range []string{"RUNNING", "SUCCESS"} {
+		t.Run(sourceStatus, func(t *testing.T) {
+			store := newFakeCreationProjectStore()
+			store.project = projectWithShotState(t, acceptedProductionShot("shot-001", 1, "candidate-001"))
+			state := decodeStateFromTest(t, store.project.Config)
+			state.AssemblyDirty = true
+			setProjectStateForTest(t, store.project, state)
+			assembly := &interruptOnceCreatorAssembly{CreationService: NewCreationService(store), interruptMark: true}
+			reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-assembly-1", resolvedReviewID: "review-assembly-1", regenerationStatus: sourceStatus}
+			artifacts := fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{{ID: "preview-1", ProjectID: "vp-1", StageName: "assembly", Status: "valid", Version: 1}}}
+			svc := NewCreatorViewService(creatorStoreProjectReader{store: store}, assembly, artifacts).WithStepMutations(nil, reviews)
+
+			if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err == nil {
+				t.Fatal("expected simulated dispatch-to-mark interruption")
+			}
+			interrupted := decodeStateFromTest(t, store.project.Config)
+			receipt := interrupted.AssemblyReceipts["key-1"]
+			if receipt.Status != "dispatching" || receipt.BasePreviewArtifactID != "" || receipt.PreviewTaskID != "" || !interrupted.AssemblyDirty {
+				t.Fatalf("interrupted receipt = %+v, dirty=%v", receipt, interrupted.AssemblyDirty)
+			}
+
+			if result, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err != nil || result.Status != "queued" || result.AssemblyDirty {
+				t.Fatalf("recovered result = %+v, err=%v", result, err)
+			}
+			if reviews.regenerateCalls != 1 {
+				t.Fatalf("recovery redispatched expensive assembly: %d", reviews.regenerateCalls)
+			}
+			recovered := decodeStateFromTest(t, store.project.Config)
+			receipt = recovered.AssemblyReceipts["key-1"]
+			if receipt.Status != "queued" || receipt.BasePreviewArtifactID != "preview-1" || receipt.PreviewTaskID != "run-assembly-1" || recovered.AssemblyDirty {
+				t.Fatalf("recovered receipt = %+v, dirty=%v", receipt, recovered.AssemblyDirty)
+			}
+
+			view, err := svc.GetCreationView(context.Background(), "u-1", "vp-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sourceStatus == "RUNNING" && (view.Steps[4].State != model.CreatorStepGenerating || !containsCreatorTask(view.ActiveTasks, "run-assembly-1")) {
+				t.Fatalf("running recovery view = %+v", view)
+			}
+		})
 	}
 }
 

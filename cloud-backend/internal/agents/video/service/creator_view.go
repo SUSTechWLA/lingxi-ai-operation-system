@@ -210,6 +210,14 @@ func (s *CreatorViewService) RebuildFinalAssembly(ctx context.Context, userID, p
 			return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
 		}
 		if status == "CREATED" || status == "RUNNING" || status == "WAITING_LOCAL" || status == "LOCAL_RUNNING" || status == "RETRYING" || status == "SUCCESS" || status == "COMPLETED" {
+			if receipt.Status == "dispatching" {
+				// Regenerate synchronously resets the same preview source before it
+				// returns. Seeing that source active (or complete) proves the
+				// dispatch survived even if the process died before the queued
+				// receipt was persisted. Promote the durable claim without sending
+				// another expensive render request.
+				return s.assembly.MarkFinalAssemblyQueued(ctx, userID, projectID, idempotencyKey, current.ID, runID)
+			}
 			return result, nil
 		}
 		if status != "FAILED" && status != "CANCELLED" && status != "LOCAL_FAILED" && status != "HEARTBEAT_TIMEOUT" {
