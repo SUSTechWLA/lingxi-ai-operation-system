@@ -58,6 +58,25 @@ Wiki 首页不维护完整 release 流水账，只展示当前状态并链接到
 
 ## 当前发布检查清单
 
+v0.2.0 对应能力：
+
+- 默认入口升级为六步 Creator Studio，并保留独立 Shot 审核、版本恢复、候选确认、成片重拼接和显式 final-review gate。
+- Shot 生产拆分为 AIGC、HyperFrames 和 FFmpeg 三层，外部视频模型只接收对应的 AIGC 层提示词。
+- 默认口播资产固化为唯一 Blender 树懒角色母版、共享暖色演播室、运行时 GLB、统一资产清单和 GPT-SoVITS 参考声音。
+- 默认 IP 资产全部迁移至英文路径；废弃贴图、重复角色、旧预览、demo 音轨和低质量生成视频资产不进入 release。
+- tag 发布会构建 macOS arm64/x64 客户端并创建 GitHub Release；包名固定包含版本、平台和架构。
+
+发布 v0.2.0 tag 前必须确认：
+
+1. root、frontend 和 HyperFrames Render Service 的 package version 全部为 `0.2.0`。
+2. README 当前版本摘要、release badge、`CHANGELOG.md` 和 `docs/RELEASE_STATUS.md` 已更新为 v0.2.0。
+3. `bash scripts/release-version-check.sh` 与 `bash scripts/release-tree-check.sh` 通过。
+4. `bash scripts/beta-smoke-check.sh` 通过；无 production 环境时允许 readiness 环境检查给出预期警告。
+5. macOS arm64 本机安装包构建通过，tag 工作流同时构建 arm64/x64 包。
+6. PR 流水线通过后合入 `release`，tag 必须指向合并后的 release 提交。
+7. GitHub Release 创建成功且包含安装包，仓库首页 Releases 不再停留在旧版本。
+8. `git tag v0.2.0 <release_commit>` 只在 release 合并与合并后 CI 通过后创建。
+
 v0.1.13 对应能力：
 
 - Closed beta shot split policy 已固定：`minShotDurationSec=3`、`maxShotDurationSec=15`、`preferredShotDurationSec=6-8`、`splitByScriptSemantics=true`、`splitByVisualChange=true`。

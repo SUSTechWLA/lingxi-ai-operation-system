@@ -64,6 +64,7 @@ fi
 required_files=(
   ".github/workflows/branch-guard.yml"
   ".github/workflows/ci.yml"
+  ".github/workflows/release.yml"
   "docs/BETA_RUNBOOK.md"
   "frontend/package-lock.json"
   "ip-assets/main-ip/character-profile.json"
@@ -73,6 +74,7 @@ required_files=(
   "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
   "ip-assets/main-ip/voice/reference/main_ip_voice_ref_v1.wav"
   "scripts/beta-smoke-check.sh"
+  "scripts/release-version-check.sh"
 )
 for path in "${required_files[@]}"; do
   if [[ ! -f "$path" ]]; then
@@ -80,6 +82,8 @@ for path in "${required_files[@]}"; do
     failed="true"
   fi
 done
+
+bash scripts/release-version-check.sh
 
 if [[ "$failed" == "true" ]]; then
   exit 1
