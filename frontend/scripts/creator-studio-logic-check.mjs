@@ -366,6 +366,7 @@ try {
   assert.match(workspaceSource, /selectedShotAfterReplacement/)
   assert.match(workspaceSource, /adoptCreatorShotTask/)
   assert.match(workspaceSource, /activeTaskSignature/)
+  assert.match(workspaceSource, /viewRequestTokenRef\.current \+= 1[\s\S]*adoptCreatorShotTask/, 'adopting a newer Shot task invalidates an older in-flight creation view before it can overwrite the task set')
   assert.match(workspaceSource, /SHOT_QUEUE_CONFLICT_COPY/)
 
   console.log('creator studio logic and client contract checks passed')

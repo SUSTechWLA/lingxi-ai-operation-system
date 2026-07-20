@@ -297,6 +297,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           onReload={async () => { setShotNotice(SHOT_QUEUE_CONFLICT_COPY); await reloadShotWorkspace(activeShotId); void loadShotPage(true); void getShotSummary(projectId).then(setShotSummary).catch(() => undefined) }}
           onRegenerationStarted={async (result: ShotRegenerationResult) => {
             setShotNotice('')
+            viewRequestTokenRef.current += 1
             setShotItems(current => current.map(item => item.id === result.shot.id ? { ...item, version: result.shot.version, generationStatus: result.task.status as ShotListItem['generationStatus'], reviewStatus: result.shot.reviewStatus as ShotListItem['reviewStatus'], qaStatus: result.shot.qaStatus as ShotListItem['qaStatus'] } : item))
             const task: CreatorTask = { id: result.task.taskId, scope: 'shots', shotId: result.task.shotId, status: result.task.status as CreatorTask['status'], label: '正在重新生成镜头' }
             activeTasksRef.current = adoptCreatorShotTask(activeTasksRef.current, task)
