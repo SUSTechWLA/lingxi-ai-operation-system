@@ -680,6 +680,52 @@ type fakeCreatorShotReader struct {
 	err   error
 }
 
+type fakeCreatorAssemblyReader struct {
+	fakeCreatorShotReader
+	receipt               model.AssemblyReceipt
+	rebuildStatus         string
+	markErr               error
+	claimCalls, markCalls int
+}
+
+func (f *fakeCreatorAssemblyReader) RebuildFinalAssembly(context.Context, string, string, string) (AssemblyRebuildResult, error) {
+	return AssemblyRebuildResult{Status: f.rebuildStatus}, nil
+}
+func (f *fakeCreatorAssemblyReader) ClaimFinalAssemblyDispatch(context.Context, string, string, string) (AssemblyRebuildResult, error) {
+	f.claimCalls++
+	return AssemblyRebuildResult{Status: "dispatching"}, nil
+}
+func (f *fakeCreatorAssemblyReader) MarkFinalAssemblyQueued(context.Context, string, string, string, string, string) (AssemblyRebuildResult, error) {
+	f.markCalls++
+	return AssemblyRebuildResult{Status: "queued"}, f.markErr
+}
+func (f *fakeCreatorAssemblyReader) LatestAssemblyReceipt(context.Context, string, string) (model.AssemblyReceipt, bool, error) {
+	return f.receipt, true, nil
+}
+func (f *fakeCreatorAssemblyReader) GetAssemblyReceipt(context.Context, string, string, string) (model.AssemblyReceipt, bool, error) {
+	return f.receipt, true, nil
+}
+
+func TestCreatorAssemblyRetryDoesNotRedispatchAfterMarkFailureWhenSourceIsActive(t *testing.T) {
+	shots := &fakeCreatorAssemblyReader{rebuildStatus: "validated", markErr: errors.New("crash after dispatch")}
+	reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review-1", regenerationStatus: "RUNNING"}
+	artifacts := fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{{ID: "preview-1", ProjectID: "vp-1", StageName: "assembly", Version: 1}}}
+	svc := NewCreatorViewService(fakeCreatorProjectReader{}, shots, artifacts).WithStepMutations(nil, reviews)
+	if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err == nil {
+		t.Fatal("expected mark failure")
+	}
+	if reviews.regenerateCalls != 1 {
+		t.Fatalf("dispatch calls=%d", reviews.regenerateCalls)
+	}
+	shots.rebuildStatus, shots.markErr, shots.receipt = "dispatching", nil, model.AssemblyReceipt{Status: "dispatching", BasePreviewArtifactID: "preview-1", PreviewTaskID: "run-1"}
+	if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err != nil {
+		t.Fatal(err)
+	}
+	if reviews.regenerateCalls != 1 {
+		t.Fatalf("active retry redispatched: %d", reviews.regenerateCalls)
+	}
+}
+
 func (f fakeCreatorShotReader) getCreatorShotReadState(context.Context, string, string) (creatorShotReadState, error) {
 	return f.state, f.err
 }
@@ -780,6 +826,8 @@ type fakeCreatorReviewMutations struct {
 	resolveErr         error
 	reopenErr          error
 	reopenCalls        int
+	regenerateCalls    int
+	regenerationStatus string
 }
 
 func (f *fakeCreatorReviewMutations) ResolveReviewGate(context.Context, *artifact.Artifact, string, string) (string, string, error) {
@@ -802,9 +850,13 @@ func (f *fakeCreatorReviewMutations) ReopenWithArtifact(_ context.Context, runID
 }
 
 func (f *fakeCreatorReviewMutations) Regenerate(context.Context, string, string, string, string) ([]string, error) {
+	f.regenerateCalls++
 	return nil, f.reopenErr
 }
 
 func (f *fakeCreatorReviewMutations) RegenerationStatus(context.Context, string, string) (string, error) {
+	if f.regenerationStatus != "" {
+		return f.regenerationStatus, nil
+	}
 	return "RUNNING", nil
 }
