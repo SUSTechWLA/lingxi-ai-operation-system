@@ -27,8 +27,8 @@ class FrontTalkingDemoTests(unittest.TestCase):
             self.skipTest("requires Blender's bpy runtime")
 
         root = Path(__file__).resolve().parents[2]
-        studio = root / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
-        master = root / "ip形象/main_ip/models/main-ip-aroll-master-refined.blend"
+        studio = root / "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
+        master = root / "ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend"
         bpy.ops.wm.open_mainfile(filepath=str(studio), load_ui=False)
         data = {
             "sceneBlendPath": str(studio),
@@ -332,8 +332,8 @@ class FrontTalkingDemoTests(unittest.TestCase):
             self.skipTest("requires Blender's bpy runtime")
 
         root = Path(__file__).resolve().parents[2]
-        studio = root / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
-        master = root / "ip形象/main_ip/models/main-ip-aroll-master-refined.blend"
+        studio = root / "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
+        master = root / "ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend"
         bpy.ops.wm.open_mainfile(filepath=str(studio), load_ui=False)
         data = {
             "sceneBlendPath": str(studio),
@@ -672,8 +672,8 @@ class FrontTalkingDemoTests(unittest.TestCase):
             self.skipTest("requires Blender's bpy runtime")
 
         root = Path(__file__).resolve().parents[2]
-        studio = root / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
-        master = root / "ip形象/main_ip/models/main-ip-aroll-master-refined.blend"
+        studio = root / "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
+        master = root / "ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend"
         bpy.ops.wm.open_mainfile(filepath=str(studio), load_ui=False)
 
         objects = blender_renderer.append_runtime_master_collection(
@@ -693,8 +693,8 @@ class FrontTalkingDemoTests(unittest.TestCase):
             self.skipTest("requires Blender's bpy runtime")
 
         root = Path(__file__).resolve().parents[2]
-        studio = root / "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
-        master = root / "ip形象/main_ip/models/main-ip-aroll-master-refined.blend"
+        studio = root / "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
+        master = root / "ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend"
         bpy.ops.wm.open_mainfile(filepath=str(studio), load_ui=False)
         baseline = {
             "collections": {item.name for item in bpy.data.collections},

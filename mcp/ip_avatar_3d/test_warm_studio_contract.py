@@ -15,7 +15,7 @@ class WarmStudioContractTests(unittest.TestCase):
         profile = json.loads(
             (
                 contract.repo_root()
-                / "ip形象/main_ip/character-profile.json"
+                / "ip-assets/main-ip/character-profile.json"
             ).read_text()
         )
         render = profile["render"]
@@ -259,7 +259,7 @@ class WarmStudioContractTests(unittest.TestCase):
         self.assertTrue(
             (
                 root
-                / "docs/superpowers/specs/2026-07-20-default-sloth-aroll-assets-design.md"
+                / "docs/default-ip-aroll-assets.md"
             ).is_file()
         )
 

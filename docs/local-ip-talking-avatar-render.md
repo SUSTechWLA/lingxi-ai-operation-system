@@ -1,16 +1,17 @@
 # 本地 IP 数字人口播渲染
 
-当前发布路径使用 `ip形象/main_ip/character-profile.json` 作为唯一入口。角色、骨骼、口型、动作、摄像机、灯光、场景和声音都从该配置解析，避免每条视频重复建模或发生形象漂移。
+当前发布路径使用 `ip-assets/main-ip/character-profile.json` 作为唯一入口。角色、骨骼、口型、动作、摄像机、灯光、场景和声音都从该配置解析，避免每条视频重复建模或发生形象漂移。
 
 ## 当前主资产
 
 ```text
-ip形象/main_ip/models/main-ip-aroll-master-20260720.blend
-ip形象/main_ip/models/main-ip-rigged.glb
-ip形象/main_ip/models/main-ip-rig-report.json
-ip形象/main_ip/scenes/warm-sloth-studio-20260720.blend
-ip形象/main_ip/manifests/default-aroll-assets.json
-ip形象/main_ip/voice/reference/main_ip_voice_ref_v1.wav
+ip-assets/main-ip/models/main-ip-aroll-master-20260720.blend
+ip-assets/main-ip/models/main-ip-rigged.glb
+ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend
+ip-assets/main-ip/manifests/default-aroll-assets.json
+ip-assets/main-ip/reports/default-aroll-character-audit.json
+ip-assets/main-ip/reports/default-aroll-studio-audit.json
+ip-assets/main-ip/voice/reference/main_ip_voice_ref_v1.wav
 ```
 
 主资产包含：
@@ -21,11 +22,11 @@ ip形象/main_ip/voice/reference/main_ip_voice_ref_v1.wav
 - 正面口播相机、暖色工作室和以角色为主的灯光；
 - GPT-SoVITS 固定 IP 声音合同与失败关闭策略。
 
-角色 Master 与暖色工作室是两个独立资产。工作室文件不内置角色，渲染器每次只从 Master 导入一套正式角色，因此不会因为切换景别产生重复角色、重复 Armature 或镜头专用模型。
+角色 Master 与暖色工作室是两个独立资产。工作室文件不内置角色、贴图或 demo 音轨，渲染器每次只从 Master 导入一套正式角色，因此不会因为切换景别产生重复角色、重复 Armature 或镜头专用模型。角色 PBR 图已打包进角色母版；运行时 GLB 是兼容导出，不是第二套正式角色来源。
 
 ## 系统默认 A-roll
 
-调用方同时省略 `characterProfilePath` 和 `modelPath` 时，`ip_avatar_3d` 自动使用仓库内置的 `ip形象/main_ip/character-profile.json`。当前默认身份固定为：
+调用方同时省略 `characterProfilePath` 和 `modelPath` 时，`ip_avatar_3d` 自动使用仓库内置的 `ip-assets/main-ip/character-profile.json`。当前默认身份固定为：
 
 - 角色：`main_ip_sloth`；
 - 角色资产：`main-ip-aroll-master-20260720.blend`；
@@ -35,7 +36,9 @@ ip形象/main_ip/voice/reference/main_ip_voice_ref_v1.wav
 - 默认输出：1920x1080、30fps、Eevee、AgX；
 - 默认正式声音：`main_ip_warm_knowledge_host_v1`。
 
-`wide`、`medium`、`close`、`three_quarter`、`transition` 和 `auto` 使用同一套角色与当前工作室，不会选择另一份角色模型。当前版本化工作室已验证的默认形态是 `standing`；需要坐姿时必须显式选择具备双形态契约的场景，不能把未校准的坐姿冒充为生产可用。资产路径和 SHA-256 由 `default-aroll-assets.json` 固定；升级时发布新的版本化文件，不覆盖旧资产。
+`wide`、`medium`、`close`、`three_quarter`、`transition` 和 `auto` 使用同一套角色与当前工作室，不会选择另一份角色模型。当前版本化工作室已验证的默认形态是 `standing`；需要坐姿时必须显式选择具备双形态契约的场景，不能把未校准的坐姿冒充为生产可用。资产路径和 SHA-256 由 `default-aroll-assets.json` 固定；升级时必须更新 manifest、审计报告和代码审查证据，发布树不保留重复旧母版。
+
+正式资产目录禁止跟踪背景贴图、turnaround、预览图、烟测渲染或视频输出。这些 QA 产物只能写入 `tmp/` 或 `outputs/`，并通过 Git 历史或外部归档恢复。
 
 ## MCP 调用
 

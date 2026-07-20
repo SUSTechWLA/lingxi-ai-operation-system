@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "tangying-studio-asset-cleanup/v1",
+  "status": "PASS",
+  "sourceSha256": "baffd6c9ca7c6c739c0e807492aa6790911b0d2de91bea6c574b6b96fa5d4c48",
+  "outputPath": "scenes/warm-sloth-studio-20260720.blend",
+  "outputSha256": "65a7358afa1aa2612d24993f7a7644d9f90c63a9e7d1cd2dbd0176dc6e095432",
+  "before": {
+    "objects": 383,
+    "meshes": 207,
+    "materials": 36,
+    "images": 1,
+    "sounds": 1,
+    "cameras": 12,
+    "lights": 8,
+    "armatures": 0
+  },
+  "after": {
+    "objects": 382,
+    "meshes": 206,
+    "materials": 35,
+    "images": 0,
+    "sounds": 0,
+    "cameras": 12,
+    "lights": 8,
+    "armatures": 0
+  },
+  "removed": {
+    "objects": ["Brand_Icon"],
+    "meshes": ["Brand_Icon"],
+    "materials": ["Brand_Icon_Alpha"],
+    "images": ["warm-sloth-brand-icon.png"],
+    "sequenceStrips": ["Scene_Warm_Sloth_Studio:CXR_AROLL_VOICE"],
+    "sounds": ["warm_sloth_aroll_voice.wav"]
+  },
+  "dependencyAudit": {
+    "dependencyCount": 0,
+    "externalUnpackedCount": 0,
+    "missingExternalCount": 0
+  },
+  "adjustedBrandCopy": {
+    "Brand_Copy_Line1": [-1.72, 2.706, 2.245],
+    "Brand_Copy_Line2": [-1.72, 2.706, 2.055]
+  },
+  "preserved": {
+    "studioGeometry": true,
+    "cameraCount": 12,
+    "lightCount": 8,
+    "armatureCount": 0,
+    "newContractValidationErrors": 0
+  }
+}

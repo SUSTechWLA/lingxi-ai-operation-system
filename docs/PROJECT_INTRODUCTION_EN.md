@@ -63,7 +63,7 @@ flowchart LR
 | `frontend` | React + Electron desktop client for project launch, tracking, review, material import, JiMeng setup, and local settings. |
 | `cloud-backend` | Go cloud service for auth, projects, agent plans, DAGs, review gates, tool manifests, video workflows, and APIs. |
 | `local-backend` | Go local agent for files, runner registration, local tools, MCP providers, JiMeng CLI adapter, and artifact read/write. |
-| `ip形象/main_ip` | Canonical Tangying sloth references, source model, reusable Blender master, GLB, voice reference, and warm A-roll studio. |
+| `ip-assets/main-ip` | Canonical Tangying sloth Blender master, runtime GLB export, voice reference, integrity reports, and texture-free warm A-roll studio. |
 | `skill-capabilities` / `cloud-backend/skills` | Video creation roles, tools, and workflow capability definitions. |
 | `.github/workflows/ci.yml` | Basic CI for frontend lint/build, Go tests, and repository whitespace checks. |
 

@@ -284,7 +284,7 @@ python3 mcp/ip_avatar_3d/server.py
 }
 ```
 
-首次启动且本地尚未创建 `mcp-providers.json` 时，Local Agent 会自动发现并启用仓库内置的 `ip_avatar_3d` stdio provider；已经存在的用户配置不会被覆盖。主角色配置按“请求显式路径 -> `TANGYING_IP_AVATAR_PROFILE` -> 仓库内 `ip形象/main_ip/character-profile.json`”的顺序解析，后续替换 IP 时无需修改编排代码。
+首次启动且本地尚未创建 `mcp-providers.json` 时，Local Agent 会自动发现并启用仓库内置的 `ip_avatar_3d` stdio provider；已经存在的用户配置不会被覆盖。主角色配置按“请求显式路径 -> `TANGYING_IP_AVATAR_PROFILE` -> 仓库内 `ip-assets/main-ip/character-profile.json`”的顺序解析，后续替换 IP 时无需修改编排代码。
 
 系统调用时使用通用 `LOCAL_MCP_TOOL_CALL`，不要新增 `LOCAL_IP_*` 一类本地命令。该 provider 返回 `videoPath` / `localPath` / `motionPlanPath` / `renderReportPath`，主系统只把它作为 IP A-roll 视频层预览和合成。
 
@@ -297,7 +297,7 @@ python3 mcp/ip_avatar_3d/server.py
 ```json
 {
   "script": "今天分享一个值得关注的观点。",
-  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "characterProfilePath": "/absolute/path/to/ip-assets/main-ip/character-profile.json",
   "presentationMode": "standing"
 }
 ```
@@ -305,7 +305,7 @@ python3 mcp/ip_avatar_3d/server.py
 ```json
 {
   "script": "今天分享一个值得关注的观点。",
-  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "characterProfilePath": "/absolute/path/to/ip-assets/main-ip/character-profile.json",
   "presentationMode": "seated"
 }
 ```

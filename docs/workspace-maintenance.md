@@ -12,4 +12,4 @@ The command moves known generated paths into `.workspace-archive/<timestamp>/pay
 ./scripts/workspace-archive.sh restore --label <snapshot>
 ```
 
-The canonical Tangying sloth assets under `ip形象/main_ip/` are never part of the default archive target set. Legacy tracked assets and reports remain recoverable from the remote branch `archive/legacy-assets-2026-07`.
+The canonical Tangying sloth assets under `ip-assets/main-ip/` are never part of the default archive target set. Only the versioned Blender master, runtime GLB export, texture-free studio, profile, manifest, voice reference, scripts, and integrity reports may be tracked there. Previews, renders, turnarounds, static backgrounds, and demo media belong in ignored `tmp/` or `outputs/` paths. Legacy tracked assets remain recoverable from Git history and the remote branch `archive/legacy-assets-2026-07`.

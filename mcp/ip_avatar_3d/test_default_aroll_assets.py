@@ -154,7 +154,7 @@ class DefaultArollAssetsTests(unittest.TestCase):
 class BundledDefaultArollAssetsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo_root = SCRIPT_DIR.parents[1]
-        self.profile_root = self.repo_root / "ip形象/main_ip"
+        self.profile_root = self.repo_root / "ip-assets/main-ip"
         self.profile_path = self.profile_root / "character-profile.json"
         self.manifest_path = self.profile_root / "manifests/default-aroll-assets.json"
 

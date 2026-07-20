@@ -157,7 +157,7 @@ def _default_character_profile_path() -> str:
     configured = str(os.environ.get("TANGYING_IP_AVATAR_PROFILE") or "").strip()
     if configured:
         return str(_readable_path(configured))
-    bundled = _repo_root() / "ip形象" / "main_ip" / "character-profile.json"
+    bundled = _repo_root() / "ip-assets" / "main-ip" / "character-profile.json"
     return str(bundled.resolve()) if bundled.is_file() else ""
 
 

@@ -1,0 +1,85 @@
+{
+  "schemaVersion": "tangying-default-aroll-assets/v1",
+  "characterId": "main_ip_sloth",
+  "releaseId": "main-ip-sloth-warm-studio-20260720",
+  "publishedAt": "2026-07-20",
+  "source": {
+    "description": "Approved sloth character master and texture-free warm studio template",
+    "approvedBlendSha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+    "validationReport": "reports/default-aroll-character-audit.json",
+    "sourceUnchangedAfterPublication": true
+  },
+  "defaults": {
+    "cameraPreset": "front_talking",
+    "presentationMode": "standing",
+    "qualityPreset": "production_1080p",
+    "renderEngine": "BLENDER_EEVEE_NEXT",
+    "fps": 30,
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    }
+  },
+  "supportedOverrides": {
+    "cameraPresets": [
+      "front_talking",
+      "wide",
+      "medium",
+      "close",
+      "three_quarter",
+      "transition",
+      "auto"
+    ],
+    "presentationModes": [
+      "standing"
+    ],
+    "assetIdentityPolicy": "All presets use this same character master and studio template."
+  },
+  "assets": {
+    "characterMaster": {
+      "role": "single_formal_character",
+      "path": "models/main-ip-aroll-master-20260720.blend",
+      "sha256": "e1bb86aa386a93737bfc873af1822286702d56fd4fa64b1c513c9e300cd692c9",
+      "bytes": 25494667,
+      "formalCollection": "COL_CHR_SLOTH_FINAL",
+      "runtimeCollection": "IP_Character_Master",
+      "armature": "RIG_Sloth",
+      "auditReport": "reports/default-aroll-character-audit.json"
+    },
+    "studioTemplate": {
+      "role": "character_free_warm_studio",
+      "path": "scenes/warm-sloth-studio-20260720.blend",
+      "sha256": "65a7358afa1aa2612d24993f7a7644d9f90c63a9e7d1cd2dbd0176dc6e095432",
+      "bytes": 528279,
+      "spawnMarker": "IP_Character_Spawn",
+      "focusMarker": "IP_Focus_Head",
+      "auditReport": "reports/default-aroll-studio-audit.json",
+      "cleanupReport": "reports/studio-asset-cleanup.json"
+    }
+  },
+  "validation": {
+    "decision": "PASS",
+    "productionReady": true,
+    "blenderVersion": "5.1.2",
+    "singleFormalCharacter": true,
+    "singleArmature": true,
+    "studioContainsNoCharacter": true,
+    "studioContainsNoArmature": true,
+    "standingRuntimeContract": true,
+    "vertexOrderPreserved": true,
+    "shapeKeyOrderPreserved": true,
+    "driverCountPreserved": 8,
+    "shapeKeyEntryCountPreserved": 43,
+    "uvLayersPreserved": true,
+    "actionsPreserved": [
+      "Aroll_Agree_Nod",
+      "Aroll_Explain_Right",
+      "Aroll_Greeting_Wave",
+      "Aroll_OpenPalm_Explain",
+      "Talk_Loop"
+    ],
+    "studioTextureDependencies": 0,
+    "studioAudioDependencies": 0,
+    "generatedPreviewAssetsTracked": false
+  }
+}

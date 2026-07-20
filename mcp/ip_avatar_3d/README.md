@@ -58,10 +58,10 @@ export TANGYING_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
 ```json
 {
   "script": "今天分享一个值得关注的观点。",
-  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "characterProfilePath": "/absolute/path/to/ip-assets/main-ip/character-profile.json",
   "modelPath": "/absolute/path/to/main-ip-rigged.glb",
   "audioPath": "",
-  "sceneBlendPath": "/absolute/path/to/warm-sloth-studio-v1.blend",
+  "sceneBlendPath": "/absolute/path/to/ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend",
   "outputDir": "tmp/ip_avatar_3d_main_ip_demo",
   "durationSec": 8,
   "fps": 30,
@@ -93,7 +93,7 @@ The same approved profile drives both common A-roll layouts. These direct
 ```json
 {
   "script": "今天分享一个值得关注的观点。",
-  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "characterProfilePath": "/absolute/path/to/ip-assets/main-ip/character-profile.json",
   "presentationMode": "standing"
 }
 ```
@@ -101,7 +101,7 @@ The same approved profile drives both common A-roll layouts. These direct
 ```json
 {
   "script": "今天分享一个值得关注的观点。",
-  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "characterProfilePath": "/absolute/path/to/ip-assets/main-ip/character-profile.json",
   "presentationMode": "seated"
 }
 ```
@@ -113,7 +113,7 @@ sequence with the render input and report:
 ```json
 {
   "script": "先站着开场，然后坐下解释，最后站起来总结。",
-  "characterProfilePath": "/absolute/path/to/ip形象/main_ip/character-profile.json",
+  "characterProfilePath": "/absolute/path/to/ip-assets/main-ip/character-profile.json",
   "presentationMode": "standing",
   "actionSequence": [
     "Aroll_Welcome_OpenArms",
@@ -123,7 +123,7 @@ sequence with the render input and report:
 }
 ```
 
-## Canonical Warm-Studio Demo
+## Legacy Warm-Studio QA Utility
 
 The demo publisher performs one continuous Blender render, then derives the
 15-second seated review clip, two byte-identical aliases, an 18-frame transition
@@ -132,15 +132,14 @@ remain 1920x1080, 30 fps CFR, and 15-30 seconds or publication fails atomically.
 
 ```bash
 python3 mcp/ip_avatar_3d/render_warm_studio_demo.py \
-  --profile "$PWD/ip形象/main_ip/character-profile.json" \
+  --profile "$PWD/ip-assets/main-ip/character-profile.json" \
   --output-dir "$PWD/outputs" \
   --lighting-evidence "$PWD/outputs/Sloth_WarmStudio_Lighting_Evidence.json"
 ```
 
-The canonical action timeline opens standing, sits for the explanation, and
-stands for the conclusion. The report records the resolved state timeline,
-transition and viseme QA, voice provenance, hashes, and derived review windows
-in `Sloth_WarmStudio_ActionPack_Report.json`.
+This utility writes temporary QA media under `outputs/`; those renders are not
+canonical assets and must not be committed. The current bundled studio contract
+is standing-only. A seated demo requires an explicitly supplied dual-mode scene.
 
 ## Refined Master Publication
 
@@ -230,8 +229,9 @@ deliberately enabled.
 
 The canonical main-IP profile pins `main_ip_warm_knowledge_host_v1`, its
 human-verified prompt, the stable reference-clip hash, both checkpoint hashes,
-`v2ProPlus`, and seed `20260714`. The source and stable reference WAVs remain
-untracked local assets. `check_gpt_sovits_voice` reports `bundleReady=true`
+`v2ProPlus`, and seed `20260714`. The stable reference WAV is tracked under the
+English canonical asset path; generated speech remains local and untracked.
+`check_gpt_sovits_voice` reports `bundleReady=true`
 when those local files match; preflight metadata keeps `productionReady=false`
 because no generated output WAV exists yet.
 
@@ -260,4 +260,4 @@ fallback.
 - `renderEngine` supports `BLENDER_EEVEE_NEXT` (mapped to the installed Eevee enum) and `CYCLES`. Eevee is recommended for full talking videos; Cycles is intended for short high-quality shots.
 - When `backgroundPath` is supplied, Blender renders an RGBA avatar pass and FFmpeg composites that pass over one static A-roll plate.
 - A `.blend` scene takes precedence when both scene and plate are configured. `backgroundBrightness` only affects the static-plate fallback.
-- The canonical main-IP profile uses `ip形象/main_ip/scenes/warm-sloth-studio-v1.blend` for standing and seated knowledge-sharing A-roll. The subject-first lighting keeps the character neutral and readable while the room remains darker and warm.
+- The canonical main-IP profile uses `ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend` for standing knowledge-sharing A-roll. The studio contains no external or packed image textures and no demo audio; the subject-first lighting keeps the character readable while the room remains darker and warm.

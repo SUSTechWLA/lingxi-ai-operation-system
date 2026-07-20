@@ -320,7 +320,7 @@ func TestApplyRequestPlanDefaultsCopiesSafeVideoContext(t *testing.T) {
 			"presentationMode":      "standing",
 			"cameraPreset":          "front_talking",
 			"actionSequence":        []interface{}{"Aroll_Greeting_Wave"},
-			"characterProfilePath":  "ip形象/main_ip/character-profile.json",
+			"characterProfilePath":  "ip-assets/main-ip/character-profile.json",
 			"modelProviders":        map[string]interface{}{"text_to_text": map[string]interface{}{"apiKey": "secret"}},
 			"unrelatedContextValue": "ignored",
 		},

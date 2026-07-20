@@ -967,7 +967,7 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 				Arguments: map[string]interface{}{
 					"topic":                "AI 视频创作工作流",
 					"aigcProvider":         "disabled",
-					"characterProfilePath": "ip形象/main_ip/character-profile.json",
+					"characterProfilePath": "ip-assets/main-ip/character-profile.json",
 					"presentationMode":     "standing",
 					"cameraPreset":         "front_talking",
 					"actionSequence": []interface{}{
@@ -1016,7 +1016,7 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	if got := findStep(t, prepared, "script_generation").Arguments["topic"]; got != "AI 视频创作工作流" {
 		t.Fatalf("explicit topic was overwritten during profile compilation: %#v", got)
 	}
-	if got := arguments["characterProfilePath"]; got != "ip形象/main_ip/character-profile.json" {
+	if got := arguments["characterProfilePath"]; got != "ip-assets/main-ip/character-profile.json" {
 		t.Fatalf("characterProfilePath = %#v", got)
 	}
 	if got := arguments["cameraPreset"]; got != "front_talking" {

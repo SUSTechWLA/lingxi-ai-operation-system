@@ -3032,69 +3032,6 @@ def build_symmetric_floor_plants(
     return left, right
 
 
-def _brand_icon_material(image: bpy.types.Image) -> bpy.types.Material:
-    """Create the alpha-aware image material used by the framed icon plane."""
-
-    material = bpy.data.materials.get("Brand_Icon_Alpha") or bpy.data.materials.new(
-        "Brand_Icon_Alpha"
-    )
-    material.use_nodes = True
-    nodes = material.node_tree.nodes
-    nodes.clear()
-    output = nodes.new("ShaderNodeOutputMaterial")
-    shader = nodes.new("ShaderNodeBsdfPrincipled")
-    texture = nodes.new("ShaderNodeTexImage")
-    texture.name = "Brand_Icon_Packed_Texture"
-    texture.image = image
-    texture.interpolation = "Linear"
-    _set_principled_input(shader, "Roughness", 0.58)
-    _set_principled_input(shader, "Metallic", 0.0)
-    material.node_tree.links.new(texture.outputs["Color"], shader.inputs["Base Color"])
-    material.node_tree.links.new(texture.outputs["Alpha"], shader.inputs["Alpha"])
-    material.node_tree.links.new(shader.outputs["BSDF"], output.inputs["Surface"])
-    try:
-        material.surface_render_method = "DITHERED"
-    except (AttributeError, TypeError, ValueError):
-        try:
-            material.blend_method = "BLEND"
-        except (AttributeError, TypeError, ValueError):
-            pass
-    material.use_transparency_overlap = False
-    material.use_backface_culling = True
-    return material
-
-
-def _add_vertical_image_plane(
-    ctx: StudioContext,
-    name: str,
-    location: tuple[float, float, float],
-    size: tuple[float, float],
-    material: bpy.types.Material,
-) -> bpy.types.Object:
-    """Create a front-facing XZ plane with deterministic full-frame UVs."""
-
-    width, height = size
-    vertices = (
-        (-width / 2.0, 0.0, -height / 2.0),
-        (width / 2.0, 0.0, -height / 2.0),
-        (width / 2.0, 0.0, height / 2.0),
-        (-width / 2.0, 0.0, height / 2.0),
-    )
-    mesh = bpy.data.meshes.new(name)
-    mesh.from_pydata(vertices, [], ((0, 1, 2, 3),))
-    mesh.validate()
-    mesh.update()
-    uv_layer = mesh.uv_layers.new(name="UVMap")
-    for loop, uv in zip(uv_layer.data, ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))):
-        loop.uv = uv
-    mesh.materials.append(material)
-    obj = bpy.data.objects.new(name, mesh)
-    ctx.collections["STUDIO_BRAND"].objects.link(obj)
-    obj.location = location
-    parent_to_master(obj, ctx.master)
-    return obj
-
-
 def _add_brand_text(
     ctx: StudioContext,
     name: str,
@@ -3120,18 +3057,9 @@ def _add_brand_text(
     return obj
 
 
-def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
-    """Build packed, editable framed artwork in the back-left cabinet zone."""
+def build_brand_art(ctx: StudioContext) -> bpy.types.Object:
+    """Build texture-free editable artwork in the back-left cabinet zone."""
 
-    resolved_path = Path(icon_path).expanduser().resolve()
-    if not resolved_path.is_file():
-        raise FileNotFoundError(f"Warm studio brand icon not found: {resolved_path}")
-    image = bpy.data.images.load(str(resolved_path), check_existing=True)
-    image.name = resolved_path.name
-    image.alpha_mode = "STRAIGHT"
-    image.pack()
-
-    icon_material = _brand_icon_material(image)
     glass_material = _principled_material(
         "Brand_Glass_Rough",
         (0.93, 0.90, 0.85, 1.0),
@@ -3144,7 +3072,6 @@ def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
         (0.055, 0.018, 0.008, 1.0),
         roughness=0.52,
     )
-    ctx.materials["Brand_Icon_Alpha"] = icon_material
     ctx.materials["Brand_Glass_Rough"] = glass_material
     ctx.materials["Brand_Copy_Dark"] = copy_material
 
@@ -3161,7 +3088,7 @@ def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
     )
     root["brand_zone"] = "back_left_above_cabinet"
     root["copy_language"] = "English"
-    root["source_icon"] = resolved_path.name
+    root["brand_rendering"] = "native_geometry_and_builtin_text"
 
     back_panel = add_box(
         ctx,
@@ -3181,24 +3108,17 @@ def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
         "STUDIO_BRAND",
         bevel=0.004,
     )
-    icon = _add_vertical_image_plane(
-        ctx,
-        "Brand_Icon",
-        (center_x, 2.711, center_z + 0.205),
-        (0.50, 0.50),
-        icon_material,
-    )
     line1 = _add_brand_text(
         ctx,
         "Brand_Copy_Line1",
         "Slow Down.",
-        (center_x, 2.706, center_z - 0.225),
+        (center_x, 2.706, center_z + 0.095),
     )
     line2 = _add_brand_text(
         ctx,
         "Brand_Copy_Line2",
         "Think Better.",
-        (center_x, 2.706, center_z - 0.395),
+        (center_x, 2.706, center_z - 0.095),
     )
     glass = add_box(
         ctx,
@@ -3249,7 +3169,7 @@ def build_brand_art(ctx: StudioContext, icon_path: Path) -> bpy.types.Object:
     ]
     parent_assembly(
         root,
-        [back_panel, paper, icon, line1, line2, glass, *frame_parts],
+        [back_panel, paper, line1, line2, glass, *frame_parts],
     )
     return root
 
@@ -3903,7 +3823,6 @@ def build_scene(
     *,
     include_brand: bool = True,
     include_lighting: bool = True,
-    brand_icon_path: Path | None = None,
 ) -> dict[str, object]:
     """Build the complete empty warm studio through explicit production stages."""
 
@@ -3913,11 +3832,7 @@ def build_scene(
     build_set_dressing(ctx)
     build_symmetric_floor_plants(ctx)
     if include_brand:
-        icon_path = brand_icon_path or (
-            contract.repo_root()
-            / "ip形象/main_ip/scenes/assets/warm-sloth-brand-icon.png"
-        )
-        build_brand_art(ctx, icon_path)
+        build_brand_art(ctx)
     cameras = build_markers_and_cameras(ctx)
     if include_lighting:
         build_lighting(ctx)
@@ -3942,7 +3857,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         nargs="?",
         type=Path,
         default=_default_output_path(
-            "ip形象/main_ip/scenes/warm-sloth-studio-v1.blend"
+            "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
         ),
         help="Packed warm studio .blend output path",
     )
@@ -3951,23 +3866,13 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         nargs="?",
         type=Path,
         default=_default_output_path(
-            "ip形象/main_ip/scenes/warm-sloth-studio-v1-preview.png"
+            "tmp/ip-avatar-3d/warm-sloth-studio-preview.png"
         ),
         help="Opaque Camera_Wide PNG preview output path",
-    )
-    parser.add_argument(
-        "brand_icon_path",
-        nargs="?",
-        type=Path,
-        default=_default_output_path(
-            "ip形象/main_ip/scenes/assets/warm-sloth-brand-icon.png"
-        ),
-        help="Approved transparent warm sloth brand icon",
     )
     args = parser.parse_args(argv)
     args.blend_path = args.blend_path.expanduser().resolve()
     args.preview_path = args.preview_path.expanduser().resolve()
-    args.brand_icon_path = args.brand_icon_path.expanduser().resolve()
     return args
 
 
@@ -4027,7 +3932,6 @@ def main(argv: list[str] | None = None) -> int:
     named_paths = (
         ("blend_path", args.blend_path),
         ("preview_path", args.preview_path),
-        ("brand_icon_path", args.brand_icon_path),
     )
     for index, (left_name, left_path) in enumerate(named_paths):
         for right_name, right_path in named_paths[index + 1 :]:
@@ -4036,15 +3940,9 @@ def main(argv: list[str] | None = None) -> int:
                     "Warm studio CLI paths must be pairwise distinct: "
                     f"{left_name} and {right_name} both resolve to {left_path}"
                 )
-    if not args.brand_icon_path.is_file():
-        raise FileNotFoundError(
-            f"Warm studio brand icon does not exist: {args.brand_icon_path}"
-        )
-
     built = build_scene(
         include_brand=True,
         include_lighting=True,
-        brand_icon_path=args.brand_icon_path,
     )
     scene = built["context"].scene
     wide = bpy.data.objects["Camera_Wide"]
@@ -4065,7 +3963,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"WARM_STUDIO_BLEND={args.blend_path}")
     print(f"WARM_STUDIO_PREVIEW={args.preview_path}")
-    print(f"WARM_STUDIO_BRAND_ICON={args.brand_icon_path}")
     return 0
 
 
