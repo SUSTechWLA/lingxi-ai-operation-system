@@ -67,6 +67,26 @@ func TestReviewMutationAtomicFailureLeavesInMemoryGateAndAuditUnchanged(t *testi
 	}
 }
 
+func TestReviewMutationReopenAcceptsControlGateAndRejectsExecutionNode(t *testing.T) {
+	runs := newMemoryRunStore()
+	runs.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1"}
+	control := &model.Node{ID: "control", TaskID: "task-1", Type: model.NodeTypeControl, Status: model.NodeSuccess,
+		Input: map[string]interface{}{"sourceNode": "source", "stage": "script", "artifactId": "v1"}}
+	tool := &model.Node{ID: "tool", TaskID: "task-1", Type: model.NodeTypeTool, Status: model.NodeSuccess,
+		Input: map[string]interface{}{"sourceNode": "source", "stage": "script", "artifactId": "v1"}}
+	atomic := &mutationAtomicReopener{}
+	svc := NewReviewMutationService(NewRunner(nil, runs, nil, nil, nil), &mutationNodeStore{nodes: []*model.Node{control, tool}}, nil).WithAtomicReviewReopener(atomic)
+	if err := svc.ReopenWithArtifact(context.Background(), "run-1", "control", "vp-1", "v1", "v2", "user", "edit"); err != nil {
+		t.Fatalf("CONTROL reopen: %v", err)
+	}
+	if err := svc.ReopenWithArtifact(context.Background(), "run-1", "tool", "vp-1", "v1", "v2", "user", "edit"); !errors.Is(err, ErrReviewNotFound) {
+		t.Fatalf("execution node error=%v", err)
+	}
+	if len(atomic.requests) != 1 || atomic.requests[0].ReviewID != "control" {
+		t.Fatalf("requests=%+v", atomic.requests)
+	}
+}
+
 func TestReviewMutationReopenRetryUsesStableAuditIdentity(t *testing.T) {
 	runs := newMemoryRunStore()
 	runs.runs["run-1"] = &Run{ID: "run-1", TaskID: "task-1", Status: RunStatusRunning}

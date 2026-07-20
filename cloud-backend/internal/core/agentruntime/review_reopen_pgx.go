@@ -19,16 +19,23 @@ type pgxReviewReopener struct{ pool *pgxpool.Pool }
 type reviewReopenArtifactIdentity struct {
 	ProjectID, WorkflowRunID, TaskID, StageName, ParentID, ProducedByNode string
 	IsCurrent                                                             bool
+	UniqueTaskRun                                                         bool
 }
 
 func validateReviewReopenArtifact(req ReviewReopenRequest, artifact reviewReopenArtifactIdentity) error {
-	validRun := artifact.WorkflowRunID == req.RunID || artifact.WorkflowRunID == req.TaskID
-	if artifact.ProjectID != req.ProjectID || !validRun || artifact.TaskID != req.TaskID ||
+	directRunLink := artifact.WorkflowRunID == req.RunID
+	uniqueTaskLink := artifact.UniqueTaskRun && (artifact.WorkflowRunID == req.TaskID || artifact.TaskID == req.RunID || artifact.TaskID == req.TaskID)
+	validTaskIdentity := artifact.TaskID == "" || artifact.TaskID == req.RunID || artifact.TaskID == req.TaskID
+	if artifact.ProjectID != req.ProjectID || (!directRunLink && !uniqueTaskLink) || !validTaskIdentity ||
 		artifact.StageName != req.StageName || artifact.ParentID != req.ExpectedArtifactID || !artifact.IsCurrent ||
 		strings.TrimSpace(artifact.ProducedByNode) == "" {
 		return ErrReviewReferenceMismatch
 	}
 	return nil
+}
+
+func validAtomicReviewGateNodeType(nodeType string) bool {
+	return nodeType == string(model.NodeTypeControl) || nodeType == string(model.NodeTypeReviewGate)
 }
 
 func NewPGXReviewReopener(pool *pgxpool.Pool) AtomicReviewReopener {
@@ -50,23 +57,26 @@ func (s *pgxReviewReopener) ReopenReviewGateAtomic(ctx context.Context, req Revi
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var taskID, nodeType, status, projectID string
+	var uniqueTaskRun bool
 	var inputJSON []byte
 	err = tx.QueryRow(ctx, `
 		SELECT r.task_id, n.type, n.status, COALESCE(n.input, '{}'::jsonb),
 		       COALESCE(t.input->>'projectId', t.input->>'projectID',
-		         (SELECT wr.project_id FROM workflow_runs wr WHERE wr.task_id=r.task_id ORDER BY wr.created_at DESC LIMIT 1), '')
+		         (SELECT CASE WHEN COUNT(DISTINCT wr.project_id)=1 THEN MAX(wr.project_id) ELSE '' END
+		          FROM workflow_runs wr WHERE wr.task_id=r.task_id), ''),
+		       (SELECT COUNT(*)=1 FROM agent_runs task_runs WHERE task_runs.task_id=r.task_id)
 		FROM agent_runs r
 		JOIN ai_node n ON n.task_id=r.task_id AND n.id=$2
 		LEFT JOIN ai_task t ON t.id=r.task_id
 		WHERE r.id=$1
-		FOR UPDATE OF r, n`, req.RunID, req.ReviewID).Scan(&taskID, &nodeType, &status, &inputJSON, &projectID)
+		FOR UPDATE OF r, n`, req.RunID, req.ReviewID).Scan(&taskID, &nodeType, &status, &inputJSON, &projectID, &uniqueTaskRun)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return ErrReviewNotFound
 		}
 		return err
 	}
-	if taskID != req.TaskID || nodeType != string(model.NodeTypeReviewGate) || projectID != req.ProjectID {
+	if taskID != req.TaskID || !validAtomicReviewGateNodeType(nodeType) || projectID != req.ProjectID {
 		return ErrReviewReferenceMismatch
 	}
 	var input map[string]interface{}
@@ -103,6 +113,7 @@ func (s *pgxReviewReopener) ReopenReviewGateAtomic(ctx context.Context, req Revi
 		}
 		return err
 	}
+	artifactIdentity.UniqueTaskRun = uniqueTaskRun
 	if err := validateReviewReopenArtifact(req, artifactIdentity); err != nil {
 		return err
 	}
