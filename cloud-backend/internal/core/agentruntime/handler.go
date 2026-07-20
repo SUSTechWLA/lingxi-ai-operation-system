@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -201,9 +202,19 @@ func (h *Handler) StartRun(c *gin.Context) {
 	}
 	if key := strings.TrimSpace(c.GetHeader("Idempotency-Key")); key != "" {
 		req.RunID = idempotentRunID(req.UserID, key)
+		fingerprint, err := startRequestFingerprint(req)
+		if err != nil {
+			httpx.Fail(c, http.StatusBadRequest, "invalid idempotency request: "+err.Error())
+			return
+		}
+		req.IdempotencyFingerprint = fingerprint
 	}
 	run, err := h.runner.StartAsync(c.Request.Context(), req)
 	if err != nil {
+		if errors.Is(err, ErrIdempotencyConflict) {
+			httpx.Fail(c, http.StatusConflict, "Idempotency-Key was already used for a different request")
+			return
+		}
 		httpx.Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -219,6 +230,26 @@ func (h *Handler) StartRun(c *gin.Context) {
 func idempotentRunID(userID, key string) string {
 	sum := sha256.Sum256([]byte(userID + "\x00" + key))
 	return "agent_run_idem_" + hex.EncodeToString(sum[:])
+}
+
+func startRequestFingerprint(req StartRunRequest) (string, error) {
+	payload, err := json.Marshal(struct {
+		UserID       string                 `json:"userId"`
+		Message      string                 `json:"message"`
+		Domain       string                 `json:"domain"`
+		Mode         string                 `json:"mode"`
+		Context      map[string]interface{} `json:"context,omitempty"`
+		MaxCostLevel string                 `json:"maxCostLevel,omitempty"`
+		MaxRiskLevel string                 `json:"maxRiskLevel,omitempty"`
+	}{
+		UserID: req.UserID, Message: req.Message, Domain: req.Domain, Mode: req.Mode, Context: req.Context,
+		MaxCostLevel: req.MaxCostLevel, MaxRiskLevel: req.MaxRiskLevel,
+	})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (h *Handler) CancelRun(c *gin.Context) {

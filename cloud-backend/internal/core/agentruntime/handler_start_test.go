@@ -290,6 +290,47 @@ func TestStartRunIdempotencyKeySeparatesDifferentKeys(t *testing.T) {
 	}
 }
 
+func TestStartRunIdempotencyKeyRejectsDifferentProjectWithoutRelinking(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newMemoryRunStore()
+	catalog := staticToolCatalog{"video_script_generator": &tool.ToolManifest{Name: "video_script_generator"}}
+	updater := &recordingProjectLifecycleUpdater{}
+	handler := NewHandler(
+		NewRunner(&fakeOrchestrator{taskID: "task-1"}, store, staticPlanner{plan: &AgentPlan{Goal: "make video", Steps: []AgentStep{{ID: "script", Tool: "video_script_generator"}}}}, NewPlanGuard(catalog, nil), NewPlanCompiler(catalog)),
+		nil,
+		nil,
+	).WithProjectLifecycleUpdater(updater)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("userID", "user-1")
+		c.Next()
+	})
+	handler.RegisterRoutes(router)
+
+	start := func(projectID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/agent/runs", bytes.NewBufferString(`{"message":"make a video","domain":"video_creation","mode":"dynamic_agent","context":{"projectId":"`+projectID+`"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "creator-start:project-a")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := start("project-a"); rec.Code != http.StatusOK {
+		t.Fatalf("first request status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := start("project-b"); rec.Code != http.StatusConflict {
+		t.Fatalf("conflicting request status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if store.Len() != 1 {
+		t.Fatalf("stored runs = %d, want one", store.Len())
+	}
+	if updater.projectID != "project-a" {
+		t.Fatalf("project lifecycle updated project %q, want project-a only", updater.projectID)
+	}
+}
+
 func TestCancelRunPausesTaskAndMarksProjectStopped(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

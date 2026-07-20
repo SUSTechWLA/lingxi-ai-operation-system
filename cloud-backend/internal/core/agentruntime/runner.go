@@ -25,17 +25,21 @@ const (
 	RunStatusCancelled RunStatus = "CANCELLED"
 )
 
-var errRunCancelled = errors.New("agent run cancelled")
+var (
+	errRunCancelled        = errors.New("agent run cancelled")
+	ErrIdempotencyConflict = errors.New("agent run idempotency key conflicts with a different request")
+)
 
 type StartRunRequest struct {
-	RunID        string                 `json:"-"`
-	UserID       string                 `json:"userId,omitempty"`
-	Message      string                 `json:"message"`
-	Domain       string                 `json:"domain,omitempty"`
-	Context      map[string]interface{} `json:"context,omitempty"`
-	Mode         string                 `json:"mode,omitempty"`
-	MaxCostLevel string                 `json:"maxCostLevel,omitempty"`
-	MaxRiskLevel string                 `json:"maxRiskLevel,omitempty"`
+	RunID                  string                 `json:"-"`
+	UserID                 string                 `json:"userId,omitempty"`
+	Message                string                 `json:"message"`
+	Domain                 string                 `json:"domain,omitempty"`
+	Context                map[string]interface{} `json:"context,omitempty"`
+	Mode                   string                 `json:"mode,omitempty"`
+	MaxCostLevel           string                 `json:"maxCostLevel,omitempty"`
+	MaxRiskLevel           string                 `json:"maxRiskLevel,omitempty"`
+	IdempotencyFingerprint string                 `json:"-"`
 }
 
 type Run struct {
@@ -174,6 +178,9 @@ func (r *Runner) StartAsync(ctx context.Context, req StartRunRequest) (*Run, err
 		if existing == nil {
 			return nil, fmt.Errorf("agent run %s already exists but cannot be loaded", run.ID)
 		}
+		if req.IdempotencyFingerprint != "" && existingIdempotencyFingerprint(existing) != req.IdempotencyFingerprint {
+			return nil, ErrIdempotencyConflict
+		}
 		if deliverErr := r.DeliverPendingTerminalEventsOnce(ctx, 1); deliverErr != nil {
 			zap.L().Warn("existing agent run terminal reconciliation failed", zap.String("runId", run.ID), zap.Error(deliverErr))
 		}
@@ -208,6 +215,12 @@ func newRunShell(req StartRunRequest) *Run {
 	if runID == "" {
 		runID = "agent_run_" + uuid.NewString()
 	}
+	metadata := map[string]interface{}{
+		"mode": mode, "startPhase": "planning", "requestContext": sanitizedRunContext(req.Context),
+	}
+	if req.IdempotencyFingerprint != "" {
+		metadata["idempotencyFingerprint"] = req.IdempotencyFingerprint
+	}
 	return &Run{
 		ID:        runID,
 		UserID:    req.UserID,
@@ -216,10 +229,16 @@ func newRunShell(req StartRunRequest) *Run {
 		Status:    RunStatusCreated,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Metadata: map[string]interface{}{
-			"mode": mode, "startPhase": "planning", "requestContext": sanitizedRunContext(req.Context),
-		},
+		Metadata:  metadata,
 	}
+}
+
+func existingIdempotencyFingerprint(run *Run) string {
+	if run == nil || run.Metadata == nil {
+		return ""
+	}
+	fingerprint, _ := run.Metadata["idempotencyFingerprint"].(string)
+	return fingerprint
 }
 
 func (r *Runner) completeStartInBackground(req StartRunRequest, run *Run) {
