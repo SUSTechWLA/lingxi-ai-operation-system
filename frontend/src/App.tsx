@@ -5,8 +5,8 @@ import { fetchLocalAgentHealth } from './services/localAgent'
 import CreatorShell from './features/creator-studio/CreatorShell'
 import { parseAppRoute, replaceHashRoute, type AppRoute } from './creatorRoutes'
 
-const DeveloperConsolePage = lazy(() => import('./features/developer-console/DeveloperConsolePage'))
 const developerConsoleEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEVELOPER_CONSOLE === '1'
+const DeveloperConsolePage = developerConsoleEnabled ? lazy(() => import('./features/developer-console/DeveloperConsolePage')) : null
 
 function currentRoute(): AppRoute {
   return parseAppRoute(window.location.hash, developerConsoleEnabled)
@@ -90,7 +90,7 @@ function App() {
     setAuthUser(null)
   }
 
-  if (route.kind === 'developer') {
+  if (route.kind === 'developer' && DeveloperConsolePage) {
     return (
       <Suspense fallback={<div className="flex h-screen items-center justify-center bg-background text-sm text-ink-muted">正在打开工作台...</div>}>
         <DeveloperConsolePage
@@ -103,6 +103,8 @@ function App() {
       </Suspense>
     )
   }
+
+  if (route.kind === 'developer') return null
 
   return <CreatorShell user={authUser} serviceStatus={serviceStatus} route={route} onNavigate={(hash) => { window.location.hash = hash }} onLogout={handleLogout} />
 }

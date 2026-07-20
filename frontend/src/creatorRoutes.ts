@@ -12,7 +12,8 @@ export type AppRoute = CreatorPageRoute | { kind: 'developer'; view: DirectorNav
 const developerViews: readonly DirectorNavKey[] = ['overview', 'review', 'trace', 'assets', 'roles', 'export', 'system']
 
 export function parseAppRoute(hash: string, developerConsoleEnabled: boolean): AppRoute {
-  if (!hash || hash === '#') return { kind: 'creator', page: 'create' }
+  if (!hash) return { kind: 'creator', page: 'create' }
+  if (hash === '#') return creatorFallback()
   if (!hash.startsWith('#/')) return creatorFallback()
 
   const segments = hash.slice(2).split('/')

@@ -80,7 +80,7 @@ body {
   position: relative;
 }
 
-.creator-profile summary {
+.creator-profile-trigger {
   display: grid;
   width: 2.25rem;
   height: 2.25rem;
@@ -90,11 +90,7 @@ body {
   border-radius: 50%;
   cursor: pointer;
   font-weight: 800;
-  list-style: none;
-}
-
-.creator-profile summary::-webkit-details-marker {
-  display: none;
+  border: 0;
 }
 
 .creator-profile-menu {
