@@ -230,10 +230,12 @@ try {
     assert.equal(logic.canSubmitShotDuration(rejected), false)
   }
   assert.equal(logic.deliveryArtifactPassesFinalReview({ finalQaStatus: 'passed' }), true)
-  assert.equal(logic.deliveryArtifactPassesFinalReview({ qualityCheck: { passed: true } }), true)
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ finalQualityCheck: { passed: true } }), true)
   assert.equal(logic.deliveryArtifactPassesFinalReview({ finalQaStatus: 'failed' }), false)
-  assert.equal(logic.deliveryArtifactPassesFinalReview({ artifact: { metadata: { qaStatus: 'passed' } } }), true)
-  assert.equal(logic.deliveryArtifactPassesFinalReview({ artifact: { metadata: { qaStatus: 'failed' } } }), false)
+	assert.equal(logic.deliveryArtifactPassesFinalReview({ status: 'passed' }), false, 'generic artifact status is not final QA')
+	assert.equal(logic.deliveryArtifactPassesFinalReview({ qaStatus: 'passed' }), false, 'Shot QA is not final QA')
+  assert.equal(logic.deliveryArtifactPassesFinalReview({ artifact: { metadata: { finalQaStatus: 'passed' } } }), true)
+	assert.equal(logic.deliveryArtifactPassesFinalReview({ artifact: { metadata: { qaStatus: 'passed' } } }), false)
   assert.equal(logic.deliveryArtifactPassesFinalReview({ mediaUrl: '/video.mp4' }), false, 'a media URL alone must never unlock delivery')
 
   const shots = Array.from({ length: 100 }, (_, index) => ({

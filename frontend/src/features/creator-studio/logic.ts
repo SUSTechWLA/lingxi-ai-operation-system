@@ -344,10 +344,8 @@ export function deliveryArtifactPassesFinalReview(value: unknown): boolean {
 		const artifact = record.artifact as Record<string, unknown>
 		if (deliveryArtifactPassesFinalReview(artifact.metadata)) return true
 	}
-	for (const key of ['finalQaStatus', 'qaStatus', 'status']) {
-		if (typeof record[key] === 'string' && record[key].toLowerCase() === 'passed') return true
-	}
-	for (const key of ['finalQa', 'qa', 'qualityCheck']) {
+	if (typeof record.finalQaStatus === 'string' && record.finalQaStatus.toLowerCase() === 'passed') return true
+	for (const key of ['finalQa', 'finalQualityCheck']) {
 		const value = record[key]
 		if (value && typeof value === 'object') {
 			const check = value as Record<string, unknown>

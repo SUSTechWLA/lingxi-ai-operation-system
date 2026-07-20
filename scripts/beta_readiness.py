@@ -28,10 +28,14 @@ def evaluate(snapshot: dict[str, Any], require_real_aigc: bool = False) -> dict[
     real_aigc = _has_healthy_aigc_video_provider(snapshot.get("mcpProviders"))
     text_model = _model_configured(snapshot.get("modelProviders"), "text_to_text")
     video_model = _model_configured(snapshot.get("modelProviders"), "text_to_video")
+    creator_studio_checked = bool(_dig(snapshot, "creatorStudio", "checked"))
 
     if not smoke_passed:
         blocking.append("beta smoke did not pass")
         actions.append("Run bash scripts/beta-smoke-check.sh and fix all failures.")
+    if not creator_studio_checked:
+        blocking.append("creator studio contract checks did not pass")
+        actions.append("Run the named creator Studio smoke checks and fix their failures.")
     if not ffmpeg_available:
         blocking.append("FFmpeg is not available")
         actions.append("Install FFmpeg and restart local agent and HyperFrames service.")
