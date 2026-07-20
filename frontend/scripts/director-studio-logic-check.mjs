@@ -2302,9 +2302,9 @@ try {
   assert.ok(
     brandSource.includes("APP_NAME = '躺营AI视频创作助手'") &&
       indexSource.includes('<title>躺营AI视频创作助手</title>') &&
-      packageSource.includes('"productName": "躺营AI视频创作助手"') &&
+      packageSource.includes('"productName": "Tangying AI Video Creation Assistant"') &&
       electronSource.includes("title: '躺营AI视频创作助手'"),
-    'user-facing desktop product name should be Tangying AI Video Creation Assistant',
+    'desktop package name should be English while the in-app Chinese brand remains unchanged',
   )
   assert.ok(
     !brandSource.includes('自媒体运营助手') &&
