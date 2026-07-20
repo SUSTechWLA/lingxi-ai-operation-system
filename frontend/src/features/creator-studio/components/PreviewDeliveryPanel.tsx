@@ -61,7 +61,7 @@ export default function PreviewDeliveryPanel({ projectId, step, content, assembl
       await onAssemblyUpdated()
     } catch (caught) {
       if (!controller.signal.aborted) {
-        if (isCreatorConflict(caught)) {
+        if (isCreatorConflict(caught) || (typeof caught === 'object' && caught !== null && 'response' in caught)) {
           assemblyKeyRef.current = null
           setNotice('镜头内容已更新，请重新点击拼接成片。')
         } else setNotice('暂时无法重新拼接，请稍后重试。')

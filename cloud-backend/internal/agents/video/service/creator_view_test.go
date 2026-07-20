@@ -726,6 +726,25 @@ func TestCreatorAssemblyRetryDoesNotRedispatchAfterMarkFailureWhenSourceIsActive
 	}
 }
 
+func TestCreatorAssemblyQueuedTerminalRetriesButRunningAndSuccessDoNot(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   int
+	}{{"RUNNING", 0}, {"SUCCESS", 0}, {"FAILED", 1}} {
+		t.Run(tc.status, func(t *testing.T) {
+			shots := &fakeCreatorAssemblyReader{rebuildStatus: "queued", receipt: model.AssemblyReceipt{Status: "queued", BasePreviewArtifactID: "preview-1", PreviewTaskID: "run-1"}}
+			reviews := &fakeCreatorReviewMutations{resolvedRunID: "run-1", resolvedReviewID: "review-1", regenerationStatus: tc.status}
+			svc := NewCreatorViewService(fakeCreatorProjectReader{}, shots, fakeCreatorArtifactReader{artifacts: []*artifact.Artifact{{ID: "preview-1", ProjectID: "vp-1", StageName: "assembly", Status: "COMPLETED", Version: 1}}}).WithStepMutations(nil, reviews)
+			if _, err := svc.RebuildFinalAssembly(context.Background(), "u-1", "vp-1", "key-1"); err != nil {
+				t.Fatal(err)
+			}
+			if reviews.regenerateCalls != tc.want {
+				t.Fatalf("calls=%d want=%d", reviews.regenerateCalls, tc.want)
+			}
+		})
+	}
+}
+
 func (f fakeCreatorShotReader) getCreatorShotReadState(context.Context, string, string) (creatorShotReadState, error) {
 	return f.state, f.err
 }
