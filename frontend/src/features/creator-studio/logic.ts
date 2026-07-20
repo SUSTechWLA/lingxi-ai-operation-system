@@ -1,3 +1,4 @@
+import type { AgentStartRunRequest, CreateVideoProjectPayload } from '../../utils/types'
 import type {
   CreationView,
   CreatorAction,
@@ -7,6 +8,83 @@ import type {
 } from './types'
 
 export const CREATOR_CONFLICT_COPY = '内容已更新，请刷新后重试'
+
+export interface CreationRequestInput {
+  prompt: string
+  durationSec?: number
+  aspectRatio: string
+  platform?: string
+  materialCount: number
+}
+
+export interface CreationRequest {
+  project: CreateVideoProjectPayload
+  agentRun: AgentStartRunRequest
+}
+
+export async function mapWithConcurrency<T, Result>(
+  values: readonly T[],
+  concurrency: number,
+  map: (value: T, index: number) => Promise<Result>,
+): Promise<Result[]> {
+  const results = new Array<Result>(values.length)
+  let nextIndex = 0
+  const workerCount = Math.min(values.length, Math.max(1, Math.floor(concurrency)))
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await map(values[index], index)
+    }
+  }))
+  return results
+}
+
+export function buildCreationRequest(input: CreationRequestInput): CreationRequest {
+  const prompt = input.prompt.trim()
+  const durationSec = input.durationSec
+  const platform = input.platform?.trim()
+  const materialCount = Math.max(0, Math.floor(input.materialCount))
+  const context = {
+    topic: prompt,
+    durationSec,
+    targetDurationSec: durationSec,
+    aspectRatio: input.aspectRatio,
+    platform,
+    materialCount,
+  }
+  const durationCopy = durationSec ? `一支 ${durationSec} 秒` : ''
+  const platformCopy = platform ? `适合${platform}发布的` : ''
+  const message = durationCopy || platformCopy
+    ? `创作${durationCopy}${durationCopy && platformCopy ? '、' : ''}${platformCopy}视频：${prompt}`
+    : `创作视频：${prompt}`
+
+  return {
+    project: {
+      name: prompt.slice(0, 40) || '视频创作项目',
+      description: prompt,
+      mode: 'aigc_shot',
+      skillName: 'video-creator',
+      skillVersion: 'v4.0',
+      workflowName: 'dynamic-agent-video-creation',
+      workflowVersion: 'v4.0',
+      generationMode: 'provider_api',
+      aspectRatio: input.aspectRatio,
+      ...(durationSec ? { targetDurationSec: durationSec } : {}),
+      language: 'zh-CN',
+      config: {
+        entry: 'creator_studio',
+        ...context,
+      },
+    },
+    agentRun: {
+      message,
+      domain: 'video_creation',
+      mode: 'dynamic_agent',
+      context,
+    },
+  }
+}
 
 export function nextCreatorAction(view: Pick<CreationView, 'steps'>): CreatorAction {
   const step = view.steps.find(item =>

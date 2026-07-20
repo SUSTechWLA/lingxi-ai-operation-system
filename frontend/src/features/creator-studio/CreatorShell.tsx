@@ -3,12 +3,14 @@ import { APP_ICON_PATH } from '../../utils/brand'
 import type { AuthUser } from '../../services/auth'
 import type { AppRoute } from '../../creatorRoutes'
 import { cycleFocusIndex } from './focusCycle'
+import StartCreationPage from './StartCreationPage'
+import VideoLibraryPage from './VideoLibraryPage'
 
 interface CreatorShellProps {
   user: AuthUser
   serviceStatus: 'unknown' | 'ok' | 'unhealthy'
   route: Extract<AppRoute, { kind: 'creator' }>
-  onNavigate: (hash: '#/create' | '#/videos') => void
+  onNavigate: (hash: string) => void
   onLogout: () => void
 }
 
@@ -153,7 +155,7 @@ export default function CreatorShell({ user, serviceStatus, route, onNavigate, o
         </header>
 
         <main className="creator-main">
-          <CreatorOutlet route={route} />
+          <CreatorOutlet route={route} onNavigate={onNavigate} />
         </main>
       </div>
 
@@ -171,14 +173,14 @@ export default function CreatorShell({ user, serviceStatus, route, onNavigate, o
   )
 }
 
-function CreatorOutlet({ route }: { route: Extract<AppRoute, { kind: 'creator' }> }) {
+function CreatorOutlet({ route, onNavigate }: { route: Extract<AppRoute, { kind: 'creator' }>; onNavigate: CreatorShellProps['onNavigate'] }) {
   if (route.page === 'videos') {
-    return <CreatorPlaceholder eyebrow="我的视频" title="视频项目将在这里呈现" detail="项目列表会在下一步接入。" />
+    return <VideoLibraryPage onContinueProject={(projectId, stepId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/${stepId}`)} />
   }
   if (route.page === 'step') {
     return <CreatorPlaceholder eyebrow="创作进度" title={`项目 ${route.projectId}`} detail={`当前步骤：${route.stepId}`} />
   }
-  return <CreatorPlaceholder eyebrow="开始创作" title="准备好讲一个好故事" detail="创作入口会在下一步接入。" />
+  return <StartCreationPage onOpenProject={(projectId) => onNavigate(`#/videos/${encodeURIComponent(projectId)}/steps/requirements`)} />
 }
 
 function CreatorPlaceholder({ eyebrow, title, detail }: { eyebrow: string; title: string; detail: string }) {

@@ -45,6 +45,72 @@ try {
     kind: 'fix', stepId: 'shots', label: '处理分镜与素材',
   })
 
+  const creationRequest = logic.buildCreationRequest({
+    prompt: '为夏日咖啡新品拍一支轻快的竖版短片',
+    durationSec: 30,
+    aspectRatio: '9:16',
+    platform: '抖音',
+    materialCount: 2,
+  })
+  assert.deepEqual(creationRequest.project, {
+    name: '为夏日咖啡新品拍一支轻快的竖版短片',
+    description: '为夏日咖啡新品拍一支轻快的竖版短片',
+    mode: 'aigc_shot',
+    skillName: 'video-creator',
+    skillVersion: 'v4.0',
+    workflowName: 'dynamic-agent-video-creation',
+    workflowVersion: 'v4.0',
+    generationMode: 'provider_api',
+    aspectRatio: '9:16',
+    targetDurationSec: 30,
+    language: 'zh-CN',
+    config: {
+      entry: 'creator_studio',
+      topic: '为夏日咖啡新品拍一支轻快的竖版短片',
+      durationSec: 30,
+      targetDurationSec: 30,
+      aspectRatio: '9:16',
+      platform: '抖音',
+      materialCount: 2,
+    },
+  })
+  assert.deepEqual(creationRequest.agentRun, {
+    message: '创作一支 30 秒、适合抖音发布的视频：为夏日咖啡新品拍一支轻快的竖版短片',
+    domain: 'video_creation',
+    mode: 'dynamic_agent',
+    context: {
+      topic: '为夏日咖啡新品拍一支轻快的竖版短片',
+      durationSec: 30,
+      targetDurationSec: 30,
+      aspectRatio: '9:16',
+      platform: '抖音',
+      materialCount: 2,
+    },
+  })
+  const creationCopy = `${creationRequest.project.description} ${creationRequest.agentRun.message}`
+  assert.doesNotMatch(creationCopy, /provider|run|trace|artifact/i, 'creator copy must not expose developer vocabulary')
+
+  const defaultCreationRequest = logic.buildCreationRequest({
+    prompt: '做一个品牌故事',
+    aspectRatio: '16:9',
+    materialCount: 0,
+  })
+  assert.equal(defaultCreationRequest.project.targetDurationSec, undefined)
+  assert.equal(defaultCreationRequest.agentRun.context.durationSec, undefined)
+  assert.equal(defaultCreationRequest.agentRun.message, '创作视频：做一个品牌故事')
+
+  let activeWorkers = 0
+  let maxActiveWorkers = 0
+  const concurrentResults = await logic.mapWithConcurrency([1, 2, 3, 4, 5], 2, async value => {
+    activeWorkers += 1
+    maxActiveWorkers = Math.max(maxActiveWorkers, activeWorkers)
+    await new Promise(resolve => setTimeout(resolve, 1))
+    activeWorkers -= 1
+    return value * 2
+  })
+  assert.deepEqual(concurrentResults, [2, 4, 6, 8, 10])
+  assert.equal(maxActiveWorkers, 2, 'creation view loading must have a bounded concurrency')
+
   for (const accepted of [0.001, 1, 14.999]) assert.equal(logic.canSubmitShotDuration(accepted), true)
   for (const rejected of [-1, 0, 15, 16, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.equal(logic.canSubmitShotDuration(rejected), false)
