@@ -3,6 +3,8 @@
 // annotations) and served as JSON / YAML alongside a Swagger UI.
 package apispec
 
+import "encoding/json"
+
 // Spec is the root OpenAPI 3.0 document.
 type Spec struct {
 	OpenAPI    string               `json:"openapi"`
@@ -96,6 +98,45 @@ type SchemaRef struct {
 	Schema *Schema `json:"schema,omitempty"` // for inline schemas
 }
 
+// AdditionalProperties is the JSON Schema union accepted by the
+// additionalProperties keyword: either a boolean or a schema.
+type AdditionalProperties struct {
+	Allowed *bool
+	Schema  *SchemaRef
+}
+
+func (additional *AdditionalProperties) MarshalJSON() ([]byte, error) {
+	if additional == nil {
+		return []byte("null"), nil
+	}
+	if additional.Allowed != nil {
+		return json.Marshal(*additional.Allowed)
+	}
+	if additional.Schema == nil {
+		return []byte("true"), nil
+	}
+	if additional.Schema.Ref != "" {
+		return json.Marshal(map[string]string{"$ref": additional.Schema.Ref})
+	}
+	return json.Marshal(additional.Schema.Schema)
+}
+
+func (additional *AdditionalProperties) UnmarshalJSON(data []byte) error {
+	var allowed bool
+	if err := json.Unmarshal(data, &allowed); err == nil {
+		additional.Allowed = &allowed
+		additional.Schema = nil
+		return nil
+	}
+	var schema Schema
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return err
+	}
+	additional.Allowed = nil
+	additional.Schema = &SchemaRef{Schema: &schema}
+	return nil
+}
+
 // Schema represents a JSON Schema object used in components/schemas and
 // operation request/response bodies.
 type Schema struct {
@@ -105,7 +146,7 @@ type Schema struct {
 	Items                *SchemaRef            `json:"items,omitempty"`
 	Properties           map[string]*SchemaRef `json:"properties,omitempty"`
 	Required             []string              `json:"required,omitempty"`
-	AdditionalProperties *SchemaRef            `json:"additionalProperties,omitempty"`
+	AdditionalProperties *AdditionalProperties `json:"additionalProperties,omitempty"`
 	AllOf                []*SchemaRef          `json:"allOf,omitempty"`
 	OneOf                []*SchemaRef          `json:"oneOf,omitempty"`
 	Ref                  string                `json:"$ref,omitempty"`

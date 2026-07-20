@@ -143,7 +143,7 @@ export interface ArtifactListResponse {
 
 /**  */
 // ArtifactSelection
-export type ArtifactSelection = { height: number; kind: 'rect'; width: number; x: number; y: number } | { endMs: number; kind: 'time'; startMs: number };
+export type ArtifactSelection = { endMs?: never; height: number; kind: 'rect'; startMs?: never; width: number; x: number; y: number } | { endMs: number; height?: never; kind: 'time'; startMs: number; width?: never; x?: never; y?: never };
 
 /**  */
 // AssemblyValidationResponse
@@ -626,7 +626,7 @@ export interface ShotCandidate {
   sourceType?: string;
   stale?: boolean;
   staleReason?: string;
-  status: 'CANDIDATE_RENDERED' | 'SHOT_QA_RUNNING' | 'SHOT_QA_PASSED' | 'SHOT_QA_FAILED' | 'HUMAN_REVIEW_REQUIRED' | 'ACCEPTED_FOR_ASSEMBLY';
+  status: 'CANDIDATE_RENDERED' | 'SHOT_QA_RUNNING' | 'SHOT_QA_PASSED' | 'SHOT_QA_FAILED' | 'HUMAN_REVIEW_REQUIRED' | 'ACCEPTED_FOR_ASSEMBLY' | 'stale';
   timelineRevision?: string;
 }
 
@@ -663,7 +663,7 @@ export interface ShotListItem {
   acceptedCandidateId?: string;
   chapter?: string;
   durationSec: number;
-  generationStatus: 'PLANNED' | 'GENERATING' | 'CANDIDATE_RENDERED' | 'SHOT_QA_RUNNING' | 'SHOT_QA_PASSED' | 'SHOT_QA_FAILED' | 'HUMAN_REVIEW_REQUIRED' | 'ACCEPTED_FOR_ASSEMBLY' | 'queued' | 'dispatching' | 'running' | 'failed' | 'cancelled';
+  generationStatus: 'PLANNED' | 'GENERATING' | 'CANDIDATE_RENDERED' | 'SHOT_QA_RUNNING' | 'SHOT_QA_PASSED' | 'SHOT_QA_FAILED' | 'HUMAN_REVIEW_REQUIRED' | 'ACCEPTED_FOR_ASSEMBLY' | 'stale' | 'queued' | 'dispatching' | 'running' | 'failed' | 'cancelled';
   id: string;
   qaStatus?: 'PLANNED' | 'GENERATING' | 'CANDIDATE_RENDERED' | 'SHOT_QA_RUNNING' | 'SHOT_QA_PASSED' | 'SHOT_QA_FAILED' | 'HUMAN_REVIEW_REQUIRED' | 'ACCEPTED_FOR_ASSEMBLY' | 'stale';
   reviewStatus: 'pending' | 'approved' | 'rejected' | 'stale';
@@ -950,7 +950,7 @@ export interface StepRestoreRequest {
 
 /**  */
 // StepRevisionMutationRequest
-export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; mode: 'direct'; reviewId?: string; runId?: string; selection?: ArtifactSelection } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; instruction: string; mode: 'instruction'; reviewId?: string; runId?: string; selection?: ArtifactSelection };
+export type StepRevisionMutationRequest = { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent: string; instruction?: never; mode: 'direct'; reviewId?: string; runId?: string; selection?: ArtifactSelection } | { artifactId: string; baseVersion: number; confirmedAffectedShotIds: string[]; directContent?: never; instruction: string; mode: 'instruction'; reviewId?: string; runId?: string; selection?: ArtifactSelection };
 
 /**  */
 // StepRevisionPreviewRequest

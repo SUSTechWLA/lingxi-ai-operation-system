@@ -81,7 +81,7 @@ func reflectType(t reflect.Type, seen map[reflect.Type]bool) *Schema {
 	case reflect.Map:
 		if t.Key().Kind() == reflect.String {
 			valSchema := reflectType(t.Elem(), seen)
-			return &Schema{Type: "object", AdditionalProperties: &SchemaRef{Schema: valSchema}}
+			return &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: valSchema}}}
 		}
 		return &Schema{Type: "object", Description: "map"}
 

@@ -126,11 +126,7 @@ func schemaToTSType(s *Schema) string {
 		return toPascalCase(strings.TrimPrefix(s.Ref, "#/components/schemas/"))
 	}
 	if len(s.OneOf) > 0 {
-		parts := make([]string, 0, len(s.OneOf))
-		for _, branch := range s.OneOf {
-			parts = append(parts, schemaRefToTSType(branch))
-		}
-		return strings.Join(parts, " | ")
+		return oneOfToTSType(s.OneOf)
 	}
 	if len(s.AllOf) > 0 {
 		parts := make([]string, 0, len(s.AllOf))
@@ -159,43 +155,87 @@ func schemaToTSType(s *Schema) string {
 		}
 		return "unknown[]"
 	case "object":
-		if s.AdditionalProperties != nil {
-			return "Record<string, " + schemaRefToTSType(s.AdditionalProperties) + ">"
-		}
 		if len(s.Properties) > 0 {
-			var b strings.Builder
-			b.WriteString("{ ")
-			propNames := make([]string, 0, len(s.Properties))
-			for p := range s.Properties {
-				propNames = append(propNames, p)
-			}
-			sort.Strings(propNames)
-			required := map[string]bool{}
-			for _, r := range s.Required {
-				required[r] = true
-			}
-			for i, p := range propNames {
-				if i > 0 {
-					b.WriteString("; ")
+			return objectToTSType(s, nil)
+		}
+		if s.AdditionalProperties != nil {
+			if s.AdditionalProperties.Allowed != nil {
+				if *s.AdditionalProperties.Allowed {
+					return "Record<string, unknown>"
 				}
-				ts := "unknown"
-				if s.Properties[p] != nil && s.Properties[p].Schema != nil {
-					ts = schemaToTSType(s.Properties[p].Schema)
-				} else if s.Properties[p] != nil && s.Properties[p].Ref != "" {
-					ts = toPascalCase(strings.TrimPrefix(s.Properties[p].Ref, "#/components/schemas/"))
-				}
-				b.WriteString(p)
-				b.WriteString(optionalSuffix(required, p))
-				b.WriteString(": ")
-				b.WriteString(ts)
+				return "Record<string, never>"
 			}
-			b.WriteString(" }")
-			return b.String()
+			return "Record<string, " + schemaRefToTSType(s.AdditionalProperties.Schema) + ">"
 		}
 		return "Record<string, unknown>"
 	default:
 		return "unknown"
 	}
+}
+
+func oneOfToTSType(branches []*SchemaRef) string {
+	allProperties := map[string]bool{}
+	exactObjects := true
+	for _, branch := range branches {
+		if branch == nil || branch.Schema == nil || branch.Schema.Type != "object" {
+			exactObjects = false
+			break
+		}
+		for property := range branch.Schema.Properties {
+			allProperties[property] = true
+		}
+	}
+	parts := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		if !exactObjects {
+			parts = append(parts, schemaRefToTSType(branch))
+			continue
+		}
+		missing := make([]string, 0)
+		for property := range allProperties {
+			if branch.Schema.Properties[property] == nil {
+				missing = append(missing, property)
+			}
+		}
+		parts = append(parts, objectToTSType(branch.Schema, missing))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func objectToTSType(schema *Schema, neverProperties []string) string {
+	var b strings.Builder
+	b.WriteString("{ ")
+	propertyTypes := make(map[string]string, len(schema.Properties)+len(neverProperties))
+	for property, propertySchema := range schema.Properties {
+		propertyTypes[property] = schemaRefToTSType(propertySchema)
+	}
+	for _, property := range neverProperties {
+		propertyTypes[property] = "never"
+	}
+	propertyNames := make([]string, 0, len(propertyTypes))
+	for property := range propertyTypes {
+		propertyNames = append(propertyNames, property)
+	}
+	sort.Strings(propertyNames)
+	required := make(map[string]bool, len(schema.Required))
+	for _, property := range schema.Required {
+		required[property] = true
+	}
+	for index, property := range propertyNames {
+		if index > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(property)
+		if propertyTypes[property] == "never" {
+			b.WriteString("?")
+		} else {
+			b.WriteString(optionalSuffix(required, property))
+		}
+		b.WriteString(": ")
+		b.WriteString(propertyTypes[property])
+	}
+	b.WriteString(" }")
+	return b.String()
 }
 
 func schemaRefToTSType(ref *SchemaRef) string {

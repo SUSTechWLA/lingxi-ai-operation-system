@@ -671,8 +671,8 @@ func registerCloudSchemas(b *Builder) {
 	creatorStepState := enumSchema("not_started", "generating", "needs_review", "confirmed", "needs_attention", "failed")
 	reviewStatus := enumSchema("pending", "approved", "rejected", "stale")
 	shotQAStatus := enumSchema("PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale")
-	shotGenerationStatus := enumSchema("PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "queued", "dispatching", "running", "failed", "cancelled")
-	candidateStatus := enumSchema("CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY")
+	shotGenerationStatus := enumSchema("PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale", "queued", "dispatching", "running", "failed", "cancelled")
+	candidateStatus := enumSchema("CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale")
 	regenerationScope := enumSchema("prompt", "reference", "base_media", "overlay", "audio_alignment", "full_shot")
 	regenerationStatus := enumSchema("queued", "dispatching", "running", "completed", "failed", "cancelled")
 	shotLocks := enumSchema("duration", "narration", "character", "wardrobe", "scene", "camera", "first_frame", "last_frame", "reference_set", "accepted_overlay")
@@ -688,8 +688,12 @@ func registerCloudSchemas(b *Builder) {
 	requiredObject := func(properties map[string]*SchemaRef, required ...string) *Schema {
 		return &Schema{Type: "object", Properties: properties, Required: required}
 	}
+	closedObject := func(properties map[string]*SchemaRef, required ...string) *Schema {
+		allowed := false
+		return &Schema{Type: "object", Properties: properties, Required: required, AdditionalProperties: &AdditionalProperties{Allowed: &allowed}}
+	}
 	freeFormObject := func(description string) *Schema {
-		return &Schema{Type: "object", Description: description, AdditionalProperties: &SchemaRef{Schema: &Schema{Description: "arbitrary JSON value"}}}
+		return &Schema{Type: "object", Description: description, AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: &Schema{Description: "arbitrary JSON value"}}}}
 	}
 
 	b.Schema("CreatorStep", requiredObject(map[string]*SchemaRef{
@@ -791,8 +795,8 @@ func registerCloudSchemas(b *Builder) {
 	instructionMutation := mutationProperties("instruction")
 	instructionMutation["instruction"] = &SchemaRef{Schema: StringSchema()}
 	b.Schema("StepRevisionMutationRequest", &Schema{OneOf: []*SchemaRef{
-		{Schema: requiredObject(directMutation, "artifactId", "baseVersion", "mode", "directContent", "confirmedAffectedShotIds")},
-		{Schema: requiredObject(instructionMutation, "artifactId", "baseVersion", "mode", "instruction", "confirmedAffectedShotIds")},
+		{Schema: closedObject(directMutation, "artifactId", "baseVersion", "mode", "directContent", "confirmedAffectedShotIds")},
+		{Schema: closedObject(instructionMutation, "artifactId", "baseVersion", "mode", "instruction", "confirmedAffectedShotIds")},
 	}})
 	b.Schema("StepConfirmRequest", requiredObject(map[string]*SchemaRef{
 		"artifactId": {Schema: StringSchema()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()}, "comment": {Schema: StringSchema()},
@@ -801,7 +805,7 @@ func registerCloudSchemas(b *Builder) {
 		"baseVersion": {Schema: positiveVersion()}, "runId": {Schema: StringSchema()}, "reviewId": {Schema: StringSchema()},
 		"reason": {Schema: StringSchema()}, "confirmedAffectedShotIds": {Schema: ArraySchema(StringSchema())},
 	}, "baseVersion", "confirmedAffectedShotIds"))
-	b.Schema("RegisterProjectMaterialRequest", requiredObject(materialProperties,
+	b.Schema("RegisterProjectMaterialRequest", closedObject(materialProperties,
 		"name", "kind", "storageRef", "mimeType", "sizeBytes", "contentHash"))
 	b.Schema("ShotRegenerationRequest", requiredObject(map[string]*SchemaRef{
 		"baseVersion": {Schema: positiveVersion()}, "scope": {Schema: regenerationScope},

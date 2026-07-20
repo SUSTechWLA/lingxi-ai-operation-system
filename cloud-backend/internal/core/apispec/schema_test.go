@@ -30,15 +30,15 @@ func TestReflectPreservesJSONWireSemantics(t *testing.T) {
 	}
 
 	arbitrary := inlineProperty(t, schema, "arbitrary")
-	if arbitrary.Type != "object" || arbitrary.AdditionalProperties == nil || arbitrary.AdditionalProperties.Schema == nil {
+	if arbitrary.Type != "object" || arbitrary.AdditionalProperties == nil || arbitrary.AdditionalProperties.Schema == nil || arbitrary.AdditionalProperties.Schema.Schema == nil {
 		t.Fatalf("arbitrary map schema = %+v", arbitrary)
 	}
-	if got := arbitrary.AdditionalProperties.Schema; got.Type != "" || len(got.Properties) != 0 {
+	if got := arbitrary.AdditionalProperties.Schema.Schema; got.Type != "" || len(got.Properties) != 0 {
 		t.Fatalf("interface{} map value must be arbitrary JSON, got %+v", got)
 	}
 
 	typed := inlineProperty(t, schema, "typed")
-	if got := typed.AdditionalProperties.Schema.Type; got != "integer" {
+	if got := typed.AdditionalProperties.Schema.Schema.Type; got != "integer" {
 		t.Fatalf("typed map value type = %q", got)
 	}
 
@@ -68,11 +68,11 @@ func TestRenderTypeScriptPreservesMapsRefsArraysNullabilityAndRequired(t *testin
 			"name": {Schema: StringSchema()},
 		}, Required: []string{"name"}}).
 		Schema("Complex", &Schema{Type: "object", Properties: map[string]*SchemaRef{
-			"arbitrary":     {Schema: &Schema{Type: "object", AdditionalProperties: &SchemaRef{Schema: &Schema{}}}},
-			"typed":         {Schema: &Schema{Type: "object", AdditionalProperties: &SchemaRef{Schema: IntegerSchema()}}},
+			"arbitrary":     {Schema: &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: &Schema{}}}}},
+			"typed":         {Schema: &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: IntegerSchema()}}}},
 			"children":      {Schema: &Schema{Type: "array", Items: &SchemaRef{Ref: "#/components/schemas/Child"}}},
-			"byId":          {Schema: &Schema{Type: "object", AdditionalProperties: &SchemaRef{Ref: "#/components/schemas/Child"}}},
-			"nullableMap":   {Schema: &Schema{Type: "object", Nullable: true, AdditionalProperties: &SchemaRef{Schema: IntegerSchema()}}},
+			"byId":          {Schema: &Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Ref: "#/components/schemas/Child"}}}},
+			"nullableMap":   {Schema: &Schema{Type: "object", Nullable: true, AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: IntegerSchema()}}}},
 			"nullableChild": {Schema: &Schema{Ref: "#/components/schemas/Child", Nullable: true}},
 			"nested": {Schema: &Schema{Type: "object", Properties: map[string]*SchemaRef{
 				"requiredValue": {Schema: StringSchema()}, "optionalValue": {Schema: StringSchema()},
@@ -114,9 +114,38 @@ func TestRenderTypeScriptEmitsOneOfAsDiscriminatedUnion(t *testing.T) {
 	}}).Build()
 
 	generated := string(RenderTypeScript(spec))
-	want := "export type Mutation = { directContent: string; mode: 'direct' } | { instruction: string; mode: 'instruction' };"
+	want := "export type Mutation = { directContent: string; instruction?: never; mode: 'direct' } | { directContent?: never; instruction: string; mode: 'instruction' };"
 	if !strings.Contains(generated, want) {
 		t.Fatalf("generated TypeScript missing discriminated union %q:\n%s", want, generated)
+	}
+}
+
+func TestSchemaAdditionalPropertiesSupportsClosedAndTypedObjects(t *testing.T) {
+	var closed Schema
+	if err := json.Unmarshal([]byte(`{"type":"object","additionalProperties":false}`), &closed); err != nil {
+		t.Fatalf("unmarshal closed object: %v", err)
+	}
+	closedJSON, err := json.Marshal(closed)
+	if err != nil {
+		t.Fatalf("marshal closed object: %v", err)
+	}
+	if !strings.Contains(string(closedJSON), `"additionalProperties":false`) {
+		t.Fatalf("closed schema JSON = %s", closedJSON)
+	}
+
+	typedJSON, err := json.Marshal(&Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Schema: IntegerSchema()}}})
+	if err != nil {
+		t.Fatalf("marshal typed map: %v", err)
+	}
+	if !strings.Contains(string(typedJSON), `"additionalProperties":{"type":"integer"}`) {
+		t.Fatalf("typed map schema JSON = %s", typedJSON)
+	}
+	refJSON, err := json.Marshal(&Schema{Type: "object", AdditionalProperties: &AdditionalProperties{Schema: &SchemaRef{Ref: "#/components/schemas/Child"}}})
+	if err != nil {
+		t.Fatalf("marshal ref map: %v", err)
+	}
+	if !strings.Contains(string(refJSON), `"additionalProperties":{"$ref":"#/components/schemas/Child"}`) {
+		t.Fatalf("ref map schema JSON = %s", refJSON)
 	}
 }
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -10,6 +11,12 @@ const temp = await mkdtemp(join(tmpdir(), 'creator-studio-'))
 const bundle = join(temp, 'logic.mjs')
 
 try {
+  execFileSync(process.execPath, [
+    new URL('../node_modules/typescript/bin/tsc', import.meta.url).pathname,
+    '--noEmit', '--strict', '--skipLibCheck', '--module', 'ESNext', '--moduleResolution', 'bundler',
+    '--target', 'ES2020', new URL('./fixtures/creator-contract-types.ts', import.meta.url).pathname,
+  ], { stdio: 'inherit' })
+
   await build({
     entryPoints: [new URL('../src/features/creator-studio/logic.ts', import.meta.url).pathname],
     bundle: true,

@@ -2,6 +2,7 @@ package apispec
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -190,11 +191,11 @@ func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
 	assertSchemaEnum(t, spec, "CreatorTask", "scope", []any{"requirements", "direction", "script", "shots", "preview", "delivery"})
 	assertSchemaEnum(t, spec, "CreatorTask", "status", []any{"generating", "running", "processing", "queued", "dispatching"})
 	assertSchemaEnum(t, spec, "ShotListItem", "reviewStatus", []any{"pending", "approved", "rejected", "stale"})
-	assertSchemaEnum(t, spec, "ShotListItem", "generationStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "queued", "dispatching", "running", "failed", "cancelled"})
+	assertSchemaEnum(t, spec, "ShotListItem", "generationStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale", "queued", "dispatching", "running", "failed", "cancelled"})
 	assertSchemaEnum(t, spec, "ShotListItem", "qaStatus", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale"})
 	assertSchemaEnum(t, spec, "ShotRegenerationTask", "status", []any{"queued", "dispatching", "running", "completed", "failed", "cancelled"})
 	assertSchemaEnum(t, spec, "ShotRegenerationTask", "scope", []any{"prompt", "reference", "base_media", "overlay", "audio_alignment", "full_shot"})
-	assertSchemaEnum(t, spec, "ShotCandidate", "status", []any{"CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY"})
+	assertSchemaEnum(t, spec, "ShotCandidate", "status", []any{"CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale"})
 	assertSchemaEnum(t, spec, "ShotCandidate", "executionMode", []any{"unknown", "real", "fixture", "fallback", "placeholder"})
 	assertSchemaEnum(t, spec, "ShotQAReport", "status", []any{"PLANNED", "GENERATING", "CANDIDATE_RENDERED", "SHOT_QA_RUNNING", "SHOT_QA_PASSED", "SHOT_QA_FAILED", "HUMAN_REVIEW_REQUIRED", "ACCEPTED_FOR_ASSEMBLY", "stale"})
 	assertSchemaEnum(t, spec, "VideoProject", "mode", []any{"aigc_shot", "voice_visual", "cinematic_story"})
@@ -203,6 +204,39 @@ func TestCloudSpec_CreatorResponsesAndFiniteStates(t *testing.T) {
 	config := inlineProperty(t, spec.Components.Schemas["VideoProject"], "config")
 	if config.Type != "object" || config.AdditionalProperties == nil {
 		t.Fatalf("known VideoProject.config must be a free-form object: %+v", config)
+	}
+}
+
+func TestCloudSpec_ExactRevisionUnionAndClosedMaterialRequest(t *testing.T) {
+	spec := BuildCloudSpec()
+	mutation := spec.Components.Schemas["StepRevisionMutationRequest"]
+	if mutation == nil || len(mutation.OneOf) != 2 {
+		t.Fatalf("mutation schema = %+v", mutation)
+	}
+	for _, branch := range mutation.OneOf {
+		if branch == nil || branch.Schema == nil {
+			t.Fatal("mutation branch must be inline")
+		}
+		assertSchemaClosed(t, branch.Schema)
+		mode := inlineProperty(t, branch.Schema, "mode").Enum[0]
+		if mode == "direct" && branch.Schema.Properties["instruction"] != nil {
+			t.Fatal("direct branch exposes instruction")
+		}
+		if mode == "instruction" && branch.Schema.Properties["directContent"] != nil {
+			t.Fatal("instruction branch exposes directContent")
+		}
+	}
+
+	material := spec.Components.Schemas["RegisterProjectMaterialRequest"]
+	assertSchemaClosed(t, material)
+	wantProperties := []string{"contentHash", "kind", "mimeType", "name", "sizeBytes", "storageRef"}
+	if got := sortedPropertyNames(material); !reflect.DeepEqual(got, wantProperties) {
+		t.Fatalf("material properties = %v, want %v", got, wantProperties)
+	}
+	for _, forbidden := range []string{"bytes", "inlineBytes", "inlineJson", "storageType"} {
+		if material.Properties[forbidden] != nil {
+			t.Errorf("material request exposes forbidden field %q", forbidden)
+		}
 	}
 }
 
@@ -323,6 +357,17 @@ func requiredOf(schema *Schema) []string {
 		return nil
 	}
 	return schema.Required
+}
+
+func assertSchemaClosed(t *testing.T, schema *Schema) {
+	t.Helper()
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"additionalProperties":false`) {
+		t.Fatalf("schema is not closed: %s", encoded)
+	}
 }
 
 func TestBuildCloudSpec_NoDuplicateOperationIDs(t *testing.T) {
