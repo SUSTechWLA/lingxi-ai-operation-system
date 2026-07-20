@@ -9,6 +9,7 @@ const tempDir = await mkdtemp(join(tmpdir(), 'director-studio-logic-'))
 const outfile = join(tempDir, 'directorStudioLogic.mjs')
 const apiResponseOutfile = join(tempDir, 'apiResponse.mjs')
 const layerSelectorsOutfile = join(tempDir, 'talkingHeadLayerSelectors.mjs')
+const creatorRoutesOutfile = join(tempDir, 'creatorRoutes.mjs')
 
 try {
   await build({
@@ -30,6 +31,14 @@ try {
   await build({
     entryPoints: [new URL('../src/utils/apiResponse.ts', import.meta.url).pathname],
     outfile: apiResponseOutfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+  })
+  await build({
+    entryPoints: [new URL('../src/creatorRoutes.ts', import.meta.url).pathname],
+    outfile: creatorRoutesOutfile,
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -91,7 +100,39 @@ try {
   } = await import(pathToFileURL(outfile))
   const { unwrapApiData } = await import(pathToFileURL(apiResponseOutfile))
   const { buildTalkingHeadLayerDisplays } = await import(pathToFileURL(layerSelectorsOutfile))
+  const { parseAppRoute, replaceHashRoute } = await import(pathToFileURL(creatorRoutesOutfile))
   const directorPageSource = await readFile(new URL('../src/pages/DirectorStudioPage.tsx', import.meta.url), 'utf8')
+  const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  const creatorShellSource = await readFile(new URL('../src/features/creator-studio/CreatorShell.tsx', import.meta.url), 'utf8')
+  const developerConsoleSource = await readFile(new URL('../src/features/developer-console/DeveloperConsolePage.tsx', import.meta.url), 'utf8')
+  assert.match(creatorShellSource, /开始创作/)
+  assert.match(creatorShellSource, /我的视频/)
+  for (const forbiddenCreatorTerm of ['追踪', '角色', '原始产物', 'Provider', 'Run']) {
+    assert.doesNotMatch(creatorShellSource, new RegExp(forbiddenCreatorTerm))
+  }
+  assert.doesNotMatch(creatorShellSource, /developer-console|DeveloperConsolePage|DirectorStudioPage/)
+  assert.match(developerConsoleSource, /import DirectorStudioPage from ['"]\.\.\/\.\.\/pages\/DirectorStudioPage['"]/)
+  assert.match(appSource, /hashchange/)
+  assert.match(appSource, /removeEventListener\('hashchange', syncRoute\)/)
+  assert.match(appSource, /VITE_ENABLE_DEVELOPER_CONSOLE === '1'/)
+  assert.match(appSource, /logout\(\)/)
+  assert.match(appSource, /setAuthUser\(null\)/)
+  assert.match(appSource, /onAuthenticated=\{\(user\) => \{\s+setAuthUser\(user\)\s+syncRoute\(\)/)
+
+  assert.deepEqual(parseAppRoute('', false), { kind: 'creator', page: 'create' })
+  assert.deepEqual(parseAppRoute('#/unknown', false), { kind: 'creator', page: 'create', shouldReplace: true })
+  assert.deepEqual(parseAppRoute('#/videos/project%20one/steps/script', false), {
+    kind: 'creator', page: 'step', projectId: 'project one', stepId: 'script',
+  })
+  assert.deepEqual(parseAppRoute('#/videos/project/steps/not-a-step', false), { kind: 'creator', page: 'create', shouldReplace: true })
+  assert.deepEqual(parseAppRoute('#/videos/project/steps/script/extra', false), { kind: 'creator', page: 'create', shouldReplace: true })
+  assert.deepEqual(parseAppRoute('#/videos/%E0%A4%A/steps/script', false), { kind: 'creator', page: 'create', shouldReplace: true })
+  assert.deepEqual(parseAppRoute('#/developer/review', false), { kind: 'creator', page: 'create', shouldReplace: true })
+  for (const view of ['overview', 'review', 'trace', 'assets', 'roles', 'export', 'system']) {
+    assert.deepEqual(parseAppRoute(`#/developer/${view}`, true), { kind: 'developer', view })
+  }
+  assert.deepEqual(parseAppRoute('#/developer/not-a-view', true), { kind: 'creator', page: 'create', shouldReplace: true })
+  assert.equal(replaceHashRoute('#/create'), '#/create')
   assert.match(directorPageSource, /放大播放/)
   assert.doesNotMatch(directorPageSource, /图片预览已就绪|照片预览已就绪|视频预览已就绪|参考图已登记|产物已登记/)
   assert.doesNotMatch(directorPageSource, /QA \{openGroup\.production\.qaStatus\}|\{openGroup\.production\.sourceType\}/)
