@@ -1536,6 +1536,42 @@ class IPAvatar3DMCPTests(unittest.TestCase):
             self.assertEqual(result["characterProfilePath"], str(profile.resolve()))
             self.assertEqual(result["modelPath"], str(model.resolve()))
 
+    def test_render_uses_bundled_sloth_pair_when_identity_is_omitted(self) -> None:
+        server = load_server()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            with mock.patch.dict(
+                os.environ,
+                {"TANGYING_IP_AVATAR_PROFILE": ""},
+                clear=False,
+            ):
+                result = server.render_talking_video(
+                    script="默认树懒在暖色工作室讲解这个观点。",
+                    outputDir=str(root / "out"),
+                    renderMode="preview",
+                    durationSec=2,
+                    dryRun=True,
+                )
+
+            render_input = json.loads(
+                pathlib.Path(result["renderInputPath"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(result["characterId"], "main_ip_sloth")
+            self.assertTrue(
+                result["masterBlendPath"].endswith(
+                    "/models/main-ip-aroll-master-20260720.blend"
+                )
+            )
+            self.assertTrue(
+                result["sceneBlendPath"].endswith(
+                    "/scenes/warm-sloth-studio-20260720.blend"
+                )
+            )
+            self.assertEqual(render_input["cameraPreset"], "front_talking")
+            self.assertEqual(result["presentationMode"], "standing")
+            self.assertEqual(render_input["masterBlendPath"], result["masterBlendPath"])
+            self.assertEqual(render_input["sceneBlendPath"], result["sceneBlendPath"])
+
     def test_render_defaults_to_source_face_and_auto_rig_outputs(self) -> None:
         server = load_server()
         with tempfile.TemporaryDirectory() as tmp:
@@ -1721,7 +1757,7 @@ class IPAvatar3DMCPTests(unittest.TestCase):
 
         self.assertEqual(
             model["masterBlendPath"],
-            "models/main-ip-aroll-master-refined.blend",
+            "models/main-ip-aroll-master-20260720.blend",
         )
         self.assertEqual(model["qualityTier"], "aroll_close")
         self.assertEqual(model["fingerTopology"], "three_digits_three_segments")

@@ -3,6 +3,7 @@
   "characterId": "main_ip_sloth",
   "displayName": "Main IP Sloth",
   "status": "ready_for_talking_video",
+  "defaultAssetManifest": "manifests/default-aroll-assets.json",
   "sourceReference": "../image.png",
   "turnaround": {
     "front": "turnaround/front.png",
@@ -27,7 +28,7 @@
     "sourcePath": "turnaround/带骨骼3d模型.fbx",
     "sourceFormat": "fbx",
     "riggedBlendPath": "models/main-ip-talking-head.blend",
-    "masterBlendPath": "models/main-ip-aroll-master-refined.blend",
+    "masterBlendPath": "models/main-ip-aroll-master-20260720.blend",
     "rigReportPath": "models/main-ip-rig-report.json",
     "format": "glb",
     "qualityTier": "aroll_close",
@@ -105,7 +106,7 @@
     "fallbackIndependentMouthAllowed": false
   },
   "render": {
-    "sceneBlendPath": "scenes/warm-sloth-studio-v1.blend",
+    "sceneBlendPath": "scenes/warm-sloth-studio-20260720.blend",
     "backgroundPath": "backgrounds/editorial-dark-v1.png",
     "backgroundBrightness": 0.88,
     "cameraPreset": "front_talking",

@@ -151,5 +151,51 @@ class DefaultArollAssetsTests(unittest.TestCase):
         self.assertIn("assets.studioTemplate is required", result["errors"])
 
 
+class BundledDefaultArollAssetsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo_root = SCRIPT_DIR.parents[1]
+        self.profile_root = self.repo_root / "ip形象/main_ip"
+        self.profile_path = self.profile_root / "character-profile.json"
+        self.manifest_path = self.profile_root / "manifests/default-aroll-assets.json"
+
+    def test_bundled_profile_points_to_versioned_default_pair(self) -> None:
+        profile = json.loads(self.profile_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            profile["model"]["masterBlendPath"],
+            "models/main-ip-aroll-master-20260720.blend",
+        )
+        self.assertEqual(
+            profile["render"]["sceneBlendPath"],
+            "scenes/warm-sloth-studio-20260720.blend",
+        )
+        self.assertEqual(
+            profile["defaultAssetManifest"],
+            "manifests/default-aroll-assets.json",
+        )
+        self.assertEqual(profile["render"]["cameraPreset"], "front_talking")
+        self.assertEqual(profile["render"]["presentationMode"], "standing")
+
+    def test_bundled_manifest_hashes_are_current(self) -> None:
+        result = validate_manifest(self.manifest_path, repo_root=self.profile_root)
+
+        self.assertTrue(result["success"], result["errors"])
+        self.assertEqual(result["characterId"], "main_ip_sloth")
+        self.assertEqual(result["releaseId"], "main-ip-sloth-warm-studio-20260720")
+
+    def test_bundled_manifest_matches_profile_paths(self) -> None:
+        profile = json.loads(self.profile_path.read_text(encoding="utf-8"))
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            manifest["assets"]["characterMaster"]["path"],
+            profile["model"]["masterBlendPath"],
+        )
+        self.assertEqual(
+            manifest["assets"]["studioTemplate"]["path"],
+            profile["render"]["sceneBlendPath"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,18 @@ class WarmStudioContractTests(unittest.TestCase):
         render = profile["render"]
         voice = profile["voice"]
 
-        self.assertEqual(render["sceneBlendPath"], "scenes/warm-sloth-studio-v1.blend")
+        self.assertEqual(
+            profile["model"]["masterBlendPath"],
+            "models/main-ip-aroll-master-20260720.blend",
+        )
+        self.assertEqual(
+            render["sceneBlendPath"],
+            "scenes/warm-sloth-studio-20260720.blend",
+        )
+        self.assertEqual(
+            profile["defaultAssetManifest"],
+            "manifests/default-aroll-assets.json",
+        )
         self.assertEqual(render["presentationMode"], "standing")
         self.assertEqual(render["cameraPreset"], "front_talking")
         self.assertEqual(render["qualityPreset"], "production_1080p")
@@ -246,7 +257,10 @@ class WarmStudioContractTests(unittest.TestCase):
         self.assertEqual(root, Path(contract.__file__).resolve().parents[2])
         self.assertTrue((root / "mcp/ip_avatar_3d/warm_studio_contract.py").is_file())
         self.assertTrue(
-            (root / "docs/superpowers/specs/2026-07-13-warm-sloth-studio-design.md").is_file()
+            (
+                root
+                / "docs/superpowers/specs/2026-07-20-default-sloth-aroll-assets-design.md"
+            ).is_file()
         )
 
 

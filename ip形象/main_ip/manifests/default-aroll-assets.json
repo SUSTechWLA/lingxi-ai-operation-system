@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "tangying-default-aroll-assets/v1",
+  "characterId": "main_ip_sloth",
+  "releaseId": "main-ip-sloth-warm-studio-20260720",
+  "publishedAt": "2026-07-20",
+  "source": {
+    "description": "Approved warm-sloth full-body studio scene with eye-containment v9",
+    "approvedBlendSha256": "e606afb61454c58895f2c81ce5308218b324f62bcbd7505df226ebf3c63c358c",
+    "validationReport": "reports/default-aroll-character-audit.json",
+    "sourceUnchangedAfterPublication": true
+  },
+  "defaults": {
+    "cameraPreset": "front_talking",
+    "presentationMode": "standing",
+    "qualityPreset": "production_1080p",
+    "renderEngine": "BLENDER_EEVEE_NEXT",
+    "fps": 30,
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    }
+  },
+  "supportedOverrides": {
+    "cameraPresets": [
+      "front_talking",
+      "wide",
+      "medium",
+      "close",
+      "three_quarter",
+      "transition",
+      "auto"
+    ],
+    "presentationModes": [
+      "standing",
+      "seated"
+    ],
+    "assetIdentityPolicy": "All presets use this same character master and studio template."
+  },
+  "assets": {
+    "characterMaster": {
+      "role": "single_formal_character",
+      "path": "models/main-ip-aroll-master-20260720.blend",
+      "sha256": "e08495917ad721e6644c822009290417b11bfcb94f64280bd2c97cfb3d5391f1",
+      "bytes": 25477968,
+      "formalCollection": "COL_CHR_SLOTH_FINAL",
+      "runtimeCollection": "IP_Character_Master",
+      "armature": "RIG_Sloth",
+      "auditReport": "reports/default-aroll-character-audit.json"
+    },
+    "studioTemplate": {
+      "role": "character_free_warm_studio",
+      "path": "scenes/warm-sloth-studio-20260720.blend",
+      "sha256": "f3bb6a960036dea3eb482609fc08a487fc0007c80170ae2adb018e36b2184071",
+      "bytes": 674413,
+      "spawnMarker": "IP_Character_Spawn",
+      "focusMarker": "IP_Focus_Head",
+      "auditReport": "reports/default-aroll-studio-audit.json"
+    }
+  },
+  "validation": {
+    "decision": "PASS",
+    "productionReady": true,
+    "blenderVersion": "5.1.2",
+    "singleFormalCharacter": true,
+    "singleArmature": true,
+    "studioContainsNoCharacter": true,
+    "studioContainsNoArmature": true,
+    "vertexOrderPreserved": true,
+    "shapeKeyOrderPreserved": true,
+    "driverCountPreserved": 8,
+    "shapeKeyEntryCountPreserved": 43,
+    "uvLayersPreserved": true,
+    "actionsPreserved": [
+      "Aroll_Agree_Nod",
+      "Aroll_Explain_Right",
+      "Aroll_Greeting_Wave",
+      "Aroll_OpenPalm_Explain",
+      "Talk_Loop"
+    ]
+  }
+}
