@@ -187,6 +187,47 @@ func TestSchemaAdditionalPropertiesSupportsClosedAndTypedObjects(t *testing.T) {
 	}
 }
 
+func TestSchemaRefMarshalsStandardOpenAPIShapes(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  SchemaRef
+		want string
+	}{
+		{
+			name: "pure ref",
+			ref:  SchemaRef{Ref: "#/components/schemas/Child"},
+			want: `{"$ref":"#/components/schemas/Child"}`,
+		},
+		{
+			name: "inline schema",
+			ref:  SchemaRef{Schema: &Schema{Type: "string"}},
+			want: `{"type":"string"}`,
+		},
+		{
+			name: "nullable inline ref",
+			ref:  SchemaRef{Schema: &Schema{Ref: "#/components/schemas/Child", Nullable: true}},
+			want: `{"$ref":"#/components/schemas/Child","nullable":true}`,
+		},
+		{
+			name: "empty",
+			ref:  SchemaRef{},
+			want: `{}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.ref)
+			if err != nil {
+				t.Fatalf("marshal SchemaRef: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("SchemaRef JSON = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func inlineProperty(t *testing.T, schema *Schema, name string) *Schema {
 	t.Helper()
 	ref := schema.Properties[name]

@@ -98,6 +98,18 @@ type SchemaRef struct {
 	Schema *Schema `json:"schema,omitempty"` // for inline schemas
 }
 
+func (ref SchemaRef) MarshalJSON() ([]byte, error) {
+	if ref.Schema != nil {
+		return json.Marshal(ref.Schema)
+	}
+	if ref.Ref != "" {
+		return json.Marshal(struct {
+			Ref string `json:"$ref"`
+		}{Ref: ref.Ref})
+	}
+	return []byte("{}"), nil
+}
+
 // AdditionalProperties is the JSON Schema union accepted by the
 // additionalProperties keyword: either a boolean or a schema.
 type AdditionalProperties struct {

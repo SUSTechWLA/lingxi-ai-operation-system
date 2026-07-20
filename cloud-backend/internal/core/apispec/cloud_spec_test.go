@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -277,6 +278,93 @@ func TestCloudSpec_ArtifactSelectionBranchesAreClosedAndDisjoint(t *testing.T) {
 		selectionProperty := inlineProperty(t, branch.Schema, "selection")
 		if !selectionProperty.Nullable {
 			t.Fatalf("optional selection must accept JSON null: %+v", selectionProperty)
+		}
+	}
+}
+
+func TestCloudSpec_SerializesCreatorSchemaRefsAsOpenAPI(t *testing.T) {
+	encoded, err := json.Marshal(BuildCloudSpec())
+	if err != nil {
+		t.Fatalf("marshal cloud spec: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatalf("unmarshal cloud spec JSON: %v", err)
+	}
+
+	components := jsonObject(t, document["components"], "components")
+	schemas := jsonObject(t, components["schemas"], "components.schemas")
+	selection := jsonObject(t, schemas["ArtifactSelection"], "ArtifactSelection")
+	selectionBranches := jsonArray(t, selection["oneOf"], "ArtifactSelection.oneOf")
+	if len(selectionBranches) != 2 {
+		t.Fatalf("ArtifactSelection.oneOf length = %d", len(selectionBranches))
+	}
+	for index, value := range selectionBranches {
+		branch := jsonObject(t, value, "ArtifactSelection.oneOf branch")
+		assertNoSchemaWrapper(t, branch, "ArtifactSelection.oneOf")
+		if branch["type"] != "object" || branch["additionalProperties"] != false {
+			t.Fatalf("ArtifactSelection.oneOf[%d] is not a closed object: %#v", index, branch)
+		}
+	}
+
+	mutation := jsonObject(t, schemas["StepRevisionMutationRequest"], "StepRevisionMutationRequest")
+	mutationBranches := jsonArray(t, mutation["oneOf"], "StepRevisionMutationRequest.oneOf")
+	if len(mutationBranches) != 2 {
+		t.Fatalf("StepRevisionMutationRequest.oneOf length = %d", len(mutationBranches))
+	}
+	for index, value := range mutationBranches {
+		branch := jsonObject(t, value, "StepRevisionMutationRequest.oneOf branch")
+		assertNoSchemaWrapper(t, branch, "StepRevisionMutationRequest.oneOf")
+		properties := jsonObject(t, branch["properties"], "StepRevisionMutationRequest.properties")
+		selectionRef := jsonObject(t, properties["selection"], "StepRevisionMutationRequest.selection")
+		if selectionRef["$ref"] != "#/components/schemas/ArtifactSelection" || selectionRef["nullable"] != true {
+			t.Fatalf("StepRevisionMutationRequest.oneOf[%d] selection = %#v", index, selectionRef)
+		}
+	}
+
+	paths := jsonObject(t, document["paths"], "paths")
+	revisionsPath := jsonObject(t, paths["/api/video-projects/:id/steps/:stepId/revisions"], "revisions path")
+	post := jsonObject(t, revisionsPath["post"], "revisions POST")
+	requestBody := jsonObject(t, post["requestBody"], "revisions request body")
+	content := jsonObject(t, requestBody["content"], "revisions request content")
+	mediaType := jsonObject(t, content["application/json"], "revisions JSON media type")
+	requestRef := jsonObject(t, mediaType["schema"], "revisions request schema")
+	if !reflect.DeepEqual(requestRef, map[string]any{"$ref": "#/components/schemas/StepRevisionMutationRequest"}) {
+		t.Fatalf("revisions request schema = %#v", requestRef)
+	}
+}
+
+func jsonObject(t *testing.T, value any, path string) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want JSON object", path, value)
+	}
+	return object
+}
+
+func jsonArray(t *testing.T, value any, path string) []any {
+	t.Helper()
+	array, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want JSON array", path, value)
+	}
+	return array
+}
+
+func assertNoSchemaWrapper(t *testing.T, value any, path string) {
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]any:
+		if _, wrapped := typed["schema"]; wrapped {
+			t.Fatalf("%s contains non-OpenAPI SchemaRef wrapper: %#v", path, typed)
+		}
+		for name, child := range typed {
+			assertNoSchemaWrapper(t, child, path+"."+name)
+		}
+	case []any:
+		for index, child := range typed {
+			assertNoSchemaWrapper(t, child, path+"["+strconv.Itoa(index)+"]")
 		}
 	}
 }
