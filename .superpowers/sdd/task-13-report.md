@@ -30,7 +30,7 @@ Implemented the creator preview and delivery surface, default creator routing ch
 ## Limits / follow-up
 
 - No live visual capture was performed: launching the authenticated cloud/local/frontend stack requires external service configuration not present in this worktree. CSS retains the established warm-yellow/deep-brown/card tokens; focus styling is present, status has text, and the creator logic check asserts only one selected Shot player.
-- The receipt has a queued recovery representation and removes old media once a new preview artifact becomes current. This task did not add a low-level review-node status query for a failed/cancelled source node; failure presentation currently depends on the authoritative preview artifact state. A follow-up should expose that node status so a queued receipt can explicitly become failed before an artifact update.
+- The receipt has a queued recovery representation and removes old media once a new preview artifact becomes current. It now reads the source-node status so failed/cancelled/unknown work becomes retryable instead of spinning forever.
 
 ## Follow-up fix
 

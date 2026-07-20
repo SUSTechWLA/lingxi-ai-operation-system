@@ -443,6 +443,15 @@ func (s *CreationService) LatestAssemblyReceipt(ctx context.Context, userID, pro
 	return latest, !latest.UpdatedAt.IsZero(), nil
 }
 
+func (s *CreationService) GetAssemblyReceipt(ctx context.Context, userID, projectID, idempotencyKey string) (model.AssemblyReceipt, bool, error) {
+	_, state, err := s.load(ctx, userID, projectID)
+	if err != nil {
+		return model.AssemblyReceipt{}, false, err
+	}
+	receipt, ok := state.AssemblyReceipts[idempotencyKey]
+	return receipt, ok, nil
+}
+
 func finalAssemblyApprovalIssues(shots []model.ShotUnit) []ValidationIssue {
 	issues := make([]ValidationIssue, 0)
 	for _, shot := range shots {
