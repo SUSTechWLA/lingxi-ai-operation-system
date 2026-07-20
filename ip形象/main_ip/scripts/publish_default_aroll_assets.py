@@ -71,7 +71,7 @@ def _driver_target_objects(owner: Any) -> set[bpy.types.Object]:
 
 def _object_dependencies(obj: bpy.types.Object) -> set[bpy.types.Object]:
     dependencies: set[bpy.types.Object] = set()
-    if obj.parent is not None:
+    if obj.parent is not None and obj.name != "IP_Character_Container":
         dependencies.add(obj.parent)
     for constraint in obj.constraints:
         target = getattr(constraint, "target", None)
@@ -118,7 +118,11 @@ def character_objects() -> set[bpy.types.Object]:
                 changed = True
 
     keep.update(obj for obj in bpy.data.objects if obj.type == "ARMATURE")
-    return keep
+    return {
+        obj
+        for obj in keep
+        if not obj.name.startswith("CXR_") and obj.type not in {"CAMERA", "LIGHT"}
+    }
 
 
 def _set_active_scene(scene: bpy.types.Scene) -> None:
@@ -126,9 +130,10 @@ def _set_active_scene(scene: bpy.types.Scene) -> None:
         bpy.context.window.scene = scene
 
 
-def _purge_orphans() -> int:
-    for action in bpy.data.actions:
-        action.use_fake_user = True
+def _purge_orphans(*, preserve_actions: bool) -> int:
+    if preserve_actions:
+        for action in bpy.data.actions:
+            action.use_fake_user = True
     purge = getattr(bpy.data, "orphans_purge", None)
     if purge is None:
         return 0
@@ -143,6 +148,15 @@ def export_character() -> dict[str, Any]:
     keep_objects = character_objects()
     if not any(obj.type == "ARMATURE" for obj in keep_objects):
         raise RuntimeError("formal character dependency closure has no Armature")
+
+    for obj in keep_objects:
+        if obj.parent is not None and obj.parent not in keep_objects:
+            matrix_world = obj.matrix_world.copy()
+            obj.parent = None
+            obj.matrix_world = matrix_world
+    for action in list(bpy.data.actions):
+        if action.name.startswith("CXR_"):
+            bpy.data.actions.remove(action)
 
     master = bpy.data.collections.get(MASTER_COLLECTION)
     if master is None:
@@ -175,7 +189,7 @@ def export_character() -> dict[str, Any]:
     scene.frame_end = 1
     scene.frame_set(1)
     bpy.context.view_layer.update()
-    return {"orphanDatablocksPurged": _purge_orphans()}
+    return {"orphanDatablocksPurged": _purge_orphans(preserve_actions=True)}
 
 
 def _studio_scene() -> bpy.types.Scene:
@@ -193,6 +207,7 @@ def export_studio() -> dict[str, Any]:
     studio_scene = _studio_scene()
     remove_objects = character_objects()
     remove_objects.update(obj for obj in bpy.data.objects if obj.type == "ARMATURE")
+    remove_objects.update(obj for obj in bpy.data.objects if obj.name.startswith("CXR_"))
     _set_active_scene(studio_scene)
     for scene in list(bpy.data.scenes):
         if scene != studio_scene:
@@ -208,15 +223,21 @@ def export_studio() -> dict[str, Any]:
         collections_to_remove.update(_collection_tree(formal))
     if master is not None:
         collections_to_remove.update(_collection_tree(master))
+    collections_to_remove.update(
+        collection for collection in bpy.data.collections if collection.name.startswith("CXR_")
+    )
     for collection in sorted(collections_to_remove, key=lambda item: item.name, reverse=True):
         if collection.name in bpy.data.collections:
             bpy.data.collections.remove(collection, do_unlink=True)
+    for action in list(bpy.data.actions):
+        if action.name.startswith("CXR_"):
+            bpy.data.actions.remove(action)
 
     studio_scene.frame_start = 1
     studio_scene.frame_end = 1
     studio_scene.frame_set(1)
     bpy.context.view_layer.update()
-    return {"orphanDatablocksPurged": _purge_orphans()}
+    return {"orphanDatablocksPurged": _purge_orphans(preserve_actions=False)}
 
 
 def _vertex_fingerprint(obj: bpy.types.Object) -> str:
@@ -258,6 +279,11 @@ def _driver_records() -> list[dict[str, Any]]:
 
 def audit(kind: str) -> dict[str, Any]:
     current_path = Path(bpy.data.filepath).expanduser().resolve()
+    formal = bpy.data.collections.get(FORMAL_COLLECTION)
+    master = bpy.data.collections.get(MASTER_COLLECTION)
+    formal_objects = sorted(obj.name for obj in formal.all_objects) if formal else []
+    master_objects = sorted(obj.name for obj in master.all_objects) if master else []
+    closure_objects = sorted(obj.name for obj in character_objects()) if formal else []
     formal_collections = [
         collection.name for collection in bpy.data.collections if collection.name == FORMAL_COLLECTION
     ]
@@ -336,6 +362,17 @@ def audit(kind: str) -> dict[str, Any]:
         "collections": sorted(collection.name for collection in bpy.data.collections),
         "formalCollections": formal_collections,
         "masterCollections": master_collections,
+        "formalObjects": formal_objects,
+        "masterObjects": master_objects,
+        "characterDependencyClosure": closure_objects,
+        "objectHierarchy": {
+            obj.name: {
+                "type": obj.type,
+                "parent": obj.parent.name if obj.parent else "",
+                "collections": sorted(collection.name for collection in obj.users_collection),
+            }
+            for obj in bpy.data.objects
+        },
         "objects": sorted(obj.name for obj in bpy.data.objects),
         "objectCounts": {
             object_type: sum(obj.type == object_type for obj in bpy.data.objects)
