@@ -3,10 +3,11 @@ package assets
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/url"
+	"mime"
 	"regexp"
 	"strings"
 	"time"
@@ -94,6 +95,14 @@ type ProjectMaterial struct {
 	SizeBytes   int64     `json:"sizeBytes"`
 	StorageRef  string    `json:"storageRef"`
 	ContentHash string    `json:"contentHash"`
+}
+
+// ProjectMaterialManifest is the immutable content model of one version in
+// the requirements/source-materials artifact lineage.
+type ProjectMaterialManifest struct {
+	SchemaVersion    int               `json:"schemaVersion"`
+	RelatedProjectID string            `json:"relatedProjectId"`
+	Materials        []ProjectMaterial `json:"materials"`
 }
 
 var projectMaterialContentHashPattern = regexp.MustCompile(`^sha256:[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -246,67 +255,131 @@ func BuildArtifactRequest(projectID, workflowRunID, taskID string, manifest Manu
 	}, nil
 }
 
-// BuildProjectMaterialArtifactRequest creates a metadata-only source material
-// artifact. The referenced bytes remain with the local agent.
-func BuildProjectMaterialArtifactRequest(projectID string, input ProjectMaterial) (ProjectMaterial, *artifact.CreateArtifactRequest, error) {
+// NormalizeProjectMaterial validates and canonicalizes a metadata-only local
+// material entry. The referenced bytes remain with the local agent.
+func NormalizeProjectMaterial(projectID string, input ProjectMaterial) (ProjectMaterial, error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
-		return ProjectMaterial{}, nil, fmt.Errorf("project id is required")
+		return ProjectMaterial{}, fmt.Errorf("project id is required")
 	}
 	input.Name = safeMaterialName(input.Name)
 	if input.Name == "" {
-		return ProjectMaterial{}, nil, fmt.Errorf("name is required")
+		return ProjectMaterial{}, fmt.Errorf("name is required")
 	}
 	if !validProjectMaterialKind(input.Kind) {
-		return ProjectMaterial{}, nil, fmt.Errorf("kind must be image, video, audio, or document")
+		return ProjectMaterial{}, fmt.Errorf("kind must be image, video, audio, or document")
 	}
-	input.MimeType = strings.TrimSpace(input.MimeType)
-	if input.MimeType == "" {
-		return ProjectMaterial{}, nil, fmt.Errorf("mimeType is required")
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(input.MimeType))
+	if err != nil || mediaType == "" || !mimeMatchesProjectMaterialKind(input.Kind, mediaType) {
+		return ProjectMaterial{}, fmt.Errorf("mimeType is incompatible with kind")
 	}
+	input.MimeType = strings.ToLower(mediaType)
 	if input.SizeBytes < 0 {
-		return ProjectMaterial{}, nil, fmt.Errorf("sizeBytes must be non-negative")
+		return ProjectMaterial{}, fmt.Errorf("sizeBytes must be non-negative")
 	}
 	input.ContentHash = strings.TrimSpace(input.ContentHash)
 	if !projectMaterialContentHashPattern.MatchString(input.ContentHash) {
-		return ProjectMaterial{}, nil, fmt.Errorf("contentHash must use the sha256:<value> format")
+		return ProjectMaterial{}, fmt.Errorf("contentHash must use the sha256:<value> format")
 	}
 	input.StorageRef = strings.TrimSpace(input.StorageRef)
 	if !isLocalProjectMaterialRef(input.StorageRef, projectID) {
-		return ProjectMaterial{}, nil, fmt.Errorf("storageRef must be a local reference scoped to this project")
+		return ProjectMaterial{}, fmt.Errorf("storageRef must be a canonical local reference scoped to this project")
 	}
+	return input, nil
+}
 
-	kind, err := projectMaterialArtifactKind(input.Kind)
-	if err != nil {
-		return ProjectMaterial{}, nil, err
+// BuildProjectMaterialManifestArtifactRequest creates the next immutable
+// collection version. It deliberately stores no source file bytes.
+func BuildProjectMaterialManifestArtifactRequest(projectID string, materials []ProjectMaterial) (*artifact.CreateArtifactRequest, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, fmt.Errorf("project id is required")
 	}
-	return input, &artifact.CreateArtifactRequest{
+	if len(materials) == 0 {
+		return nil, fmt.Errorf("at least one material is required")
+	}
+	canonical := make([]ProjectMaterial, 0, len(materials))
+	for _, material := range materials {
+		normalized, err := NormalizeProjectMaterial(projectID, material)
+		if err != nil {
+			return nil, err
+		}
+		canonical = append(canonical, normalized)
+	}
+	manifest := ProjectMaterialManifest{SchemaVersion: 1, RelatedProjectID: projectID, Materials: canonical}
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(manifestJSON)
+	manifestHash := "sha256:" + hex.EncodeToString(sum[:])
+	return &artifact.CreateArtifactRequest{
 		ProjectID:   projectID,
 		StageName:   "requirements",
 		UnitID:      "source-materials",
-		Kind:        kind,
-		Name:        input.Name,
+		Kind:        artifact.KindBundle,
+		Name:        "source_materials_manifest.json",
 		StorageType: artifact.StorageLocal,
-		StorageRef:  input.StorageRef,
-		MimeType:    input.MimeType,
-		SizeBytes:   input.SizeBytes,
-		ContentHash: input.ContentHash,
-		Provider:    "project-source-material",
+		StorageRef:  "local://" + projectID + "/materials/manifest",
+		MimeType:    "application/json",
+		SizeBytes:   int64(len(manifestJSON)),
+		ContentHash: manifestHash,
+		Provider:    "project-source-material-manifest",
 		Metadata: map[string]interface{}{
-			"schemaVersion":    1,
-			"artifactType":     "project_source_material",
+			"schemaVersion":    manifest.SchemaVersion,
+			"artifactType":     "project_source_material_manifest",
 			"relatedProjectId": projectID,
-			"name":             input.Name,
-			"kind":             string(input.Kind),
-			"mimeType":         input.MimeType,
-			"sizeBytes":        input.SizeBytes,
-			"storageRef":       input.StorageRef,
-			"contentHash":      input.ContentHash,
+			"materials":        manifest.Materials,
+			"manifestHash":     manifestHash,
 			"status":           string(artifact.ArtifactStatusPending),
 			"humanApproved":    false,
 			"localOnly":        true,
 		},
 	}, nil
+}
+
+// ProjectMaterialsFromArtifact reads the canonical material collection from a
+// persisted manifest artifact. It also recognizes the initial single-entry
+// metadata shape so a pre-manifest registration is not silently discarded.
+func ProjectMaterialsFromArtifact(record *artifact.Artifact) ([]ProjectMaterial, error) {
+	if record == nil || record.Metadata == nil {
+		return nil, nil
+	}
+	if rawMaterials, ok := record.Metadata["materials"]; ok {
+		raw, err := json.Marshal(rawMaterials)
+		if err != nil {
+			return nil, err
+		}
+		var materials []ProjectMaterial
+		if err := json.Unmarshal(raw, &materials); err != nil {
+			return nil, err
+		}
+		return materials, nil
+	}
+	if record.Metadata["artifactType"] != "project_source_material" {
+		return nil, nil
+	}
+	raw, err := json.Marshal(record.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	var material ProjectMaterial
+	if err := json.Unmarshal(raw, &material); err != nil {
+		return nil, err
+	}
+	if material.ContentHash == "" {
+		return nil, fmt.Errorf("legacy project material is missing contentHash")
+	}
+	return []ProjectMaterial{material}, nil
+}
+
+func projectMaterialByContentHash(materials []ProjectMaterial, contentHash string) (ProjectMaterial, bool) {
+	for _, material := range materials {
+		if material.ContentHash == contentHash {
+			return material, true
+		}
+	}
+	return ProjectMaterial{}, false
 }
 
 func validProjectMaterialKind(kind AssetType) bool {
@@ -318,18 +391,18 @@ func validProjectMaterialKind(kind AssetType) bool {
 	}
 }
 
-func projectMaterialArtifactKind(kind AssetType) (artifact.ArtifactKind, error) {
+func mimeMatchesProjectMaterialKind(kind AssetType, mimeType string) bool {
 	switch kind {
 	case AssetTypeImage:
-		return artifact.KindImage, nil
+		return strings.HasPrefix(mimeType, "image/")
 	case AssetTypeVideo:
-		return artifact.KindVideo, nil
+		return strings.HasPrefix(mimeType, "video/")
 	case AssetTypeAudio:
-		return artifact.KindAudio, nil
+		return strings.HasPrefix(mimeType, "audio/")
 	case AssetTypeDocument:
-		return artifact.KindBundle, nil
+		return strings.HasPrefix(mimeType, "application/") || strings.HasPrefix(mimeType, "text/")
 	default:
-		return "", fmt.Errorf("unsupported material kind %q", kind)
+		return false
 	}
 }
 
@@ -344,15 +417,15 @@ func safeMaterialName(name string) string {
 
 func isLocalProjectMaterialRef(storageRef, projectID string) bool {
 	const prefix = "local://"
-	if !strings.HasPrefix(storageRef, prefix) {
+	if !strings.HasPrefix(storageRef, prefix) || strings.ContainsAny(storageRef, `%\\?#`) {
 		return false
 	}
-	path, err := url.PathUnescape(strings.TrimPrefix(storageRef, prefix))
-	if err != nil || path == "" || strings.ContainsAny(path, `\\?#`) {
+	path := strings.TrimPrefix(storageRef, prefix)
+	if path == "" {
 		return false
 	}
 	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
+	if len(parts) < 3 {
 		return false
 	}
 	for _, part := range parts {
@@ -361,9 +434,9 @@ func isLocalProjectMaterialRef(storageRef, projectID string) bool {
 		}
 	}
 	if parts[0] == "projects" {
-		return len(parts) >= 3 && parts[1] == projectID
+		return len(parts) >= 4 && parts[1] == projectID && parts[2] == "materials"
 	}
-	return parts[0] == projectID
+	return parts[0] == projectID && parts[1] == "materials"
 }
 
 func BuildExternalGenerationRequest(input ExternalGenerationInput) (ExternalGenerationRequest, error) {
