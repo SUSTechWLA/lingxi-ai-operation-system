@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactContentResponse } from '../../utils/types'
 import { getCreationView, getCreatorArtifactContent, getShotSummary, getShotWorkspace, getStepVersions, listShots } from '../../services/creatorApi'
-import type { CreationView, CreatorArtifactVersion, CreatorStep, CreatorStepId, ShotListFilters, ShotListItem, ShotSummary, ShotUnit, ShotWorkspace } from './types'
+import type { CreationView, CreatorArtifactVersion, CreatorStep, CreatorStepId, CreatorTask, ShotListFilters, ShotListItem, ShotRegenerationResult, ShotSummary, ShotUnit, ShotWorkspace } from './types'
 import {
   creatorPollDelay,
   creatorStepLabel,
@@ -9,7 +9,10 @@ import {
   isCurrentWorkspaceArtifact,
   isLatestWorkspaceRequest,
   DEFAULT_SHOT_QUEUE_FILTER,
+  adoptCreatorShotTask,
   selectedShotAfterAppend,
+  selectedShotAfterReplacement,
+  SHOT_QUEUE_CONFLICT_COPY,
   type KeyedWorkspaceArtifact,
   type WorkspaceArtifactSelection,
   workspaceArtifactKey,
@@ -47,20 +50,25 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const [selectedQueueShotId, setSelectedQueueShotId] = useState<string | undefined>(selectedShotId)
   const [shotWorkspace, setShotWorkspace] = useState<ShotWorkspace | null>(null)
   const [shotWorkspaceLoading, setShotWorkspaceLoading] = useState(false)
+  const [shotNotice, setShotNotice] = useState('')
   const activeTasksRef = useRef<CreationView['activeTasks']>([])
   const viewRequestTokenRef = useRef(0)
   const artifactRequestTokenRef = useRef(0)
   const shotListRequestTokenRef = useRef(0)
   const shotWorkspaceRequestTokenRef = useRef(0)
   const selectedShotIdRef = useRef<string | undefined>(selectedShotId)
+  const selectedQueueShotIdRef = useRef<string | undefined>(selectedShotId)
   const shotItemsRef = useRef<ShotListItem[]>([])
   const shotNextCursorRef = useRef('')
   const shotQueueLoadingRef = useRef(false)
+  const previousActiveTaskSignatureRef = useRef<string | null>(null)
   const currentStep = view?.steps.find(step => step.id === stepId)
   const isShotsStep = stepId === 'shots'
-  const activeShotId = selectedShotId ?? selectedQueueShotId
+  const activeShotId = selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
+  const activeTaskSignature = useMemo(() => (view?.activeTasks ?? []).map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`).sort().join('|'), [view?.activeTasks])
 
   useEffect(() => { shotItemsRef.current = shotItems }, [shotItems])
+  useEffect(() => { selectedQueueShotIdRef.current = selectedQueueShotId }, [selectedQueueShotId])
   const currentArtifactId = currentStep?.currentArtifactId
   const currentVersion = currentStep?.currentVersion
   const artifactSelection = useMemo<WorkspaceArtifactSelection | null>(() => (
@@ -111,7 +119,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       const merged = reset ? page.shots : [...current, ...page.shots.filter(next => !current.some(item => item.id === next.id))]
       shotItemsRef.current = merged
       setShotItems(merged)
-      if (reset) setSelectedQueueShotId(selectedShotAfterAppend(undefined, [], merged))
+      if (reset) setSelectedQueueShotId(selectedShotAfterReplacement(selectedShotId ?? selectedQueueShotIdRef.current, merged))
       else setSelectedQueueShotId(selected => selectedShotAfterAppend(selected, current, page.shots))
     } catch {
       if (!signal?.aborted) setError('暂时无法读取 Shot 队列，请稍后重试。')
@@ -121,7 +129,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         setShotQueueLoading(false)
       }
     }
-  }, [isShotsStep, projectId, shotFilters])
+  }, [isShotsStep, projectId, selectedShotId, shotFilters])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -157,6 +165,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
 
   useEffect(() => {
     selectedShotIdRef.current = activeShotId
+    setShotNotice('')
     if (!isShotsStep || !activeShotId) return
     const controller = new AbortController()
     void reloadShotWorkspace(activeShotId, controller.signal).catch(() => {
@@ -187,7 +196,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   }, [artifactSelection, projectId, stepId])
 
   useEffect(() => {
-    if (!view?.activeTasks.length) return
+    if (!activeTaskSignature) return
     let stopped = false
     let polling = false
     let attempt = 0
@@ -224,7 +233,19 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       controller.abort()
       document.removeEventListener('visibilitychange', resume)
     }
-  }, [refreshView, view?.activeTasks.length])
+  }, [activeTaskSignature, refreshView])
+
+  useEffect(() => {
+    if (!isShotsStep) return
+    if (previousActiveTaskSignatureRef.current === null) {
+      previousActiveTaskSignatureRef.current = activeTaskSignature
+      return
+    }
+    if (previousActiveTaskSignatureRef.current === activeTaskSignature) return
+    previousActiveTaskSignatureRef.current = activeTaskSignature
+    void loadShotPage(true)
+    void getShotSummary(projectId).then(setShotSummary).catch(() => undefined)
+  }, [activeTaskSignature, isShotsStep, loadShotPage, projectId])
 
   if (loading) return <section className="creator-library-state" aria-live="polite">正在打开创作内容…</section>
   if (error && !view) return <section className="creator-library-state" role="alert">{error}</section>
@@ -255,9 +276,10 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           loading={shotQueueLoading}
           hasMore={Boolean(shotNextCursor)}
           onFiltersChange={setShotFilters}
-          onSelect={setSelectedQueueShotId}
+          onSelect={shotId => { setShotNotice(''); setSelectedQueueShotId(shotId) }}
           onLoadMore={() => { void loadShotPage(false) }}
         />
+        <div className="shot-review-detail">
         {shotWorkspaceLoading || shotWorkspace?.shot.id !== activeShotId ? <section className="shot-inspector artifact-review-panel" aria-live="polite">正在打开 Shot…</section> : <ShotInspector
           projectId={projectId}
           workspace={shotWorkspace}
@@ -266,13 +288,23 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
           next={shotItems[shotItems.findIndex(item => item.id === activeShotId) + 1]}
           totalShots={shotSummary?.total ?? filteredShotTotal}
           onShotChanged={async (shot: ShotUnit) => {
+            setShotNotice('')
             setShotItems(current => current.map(item => item.id === shot.id ? { ...item, version: shot.version, reviewStatus: shot.reviewStatus as ShotListItem['reviewStatus'], acceptedCandidateId: shot.acceptedCandidateId, qaStatus: shot.qaStatus as ShotListItem['qaStatus'] } : item))
             void loadShotPage(true)
             void getShotSummary(projectId).then(setShotSummary).catch(() => undefined)
             await reloadShotWorkspace(shot.id)
           }}
-          onReload={async () => { await reloadShotWorkspace(activeShotId); void loadShotPage(true); void getShotSummary(projectId).then(setShotSummary).catch(() => undefined) }}
+          onReload={async () => { setShotNotice(SHOT_QUEUE_CONFLICT_COPY); await reloadShotWorkspace(activeShotId); void loadShotPage(true); void getShotSummary(projectId).then(setShotSummary).catch(() => undefined) }}
+          onRegenerationStarted={async (result: ShotRegenerationResult) => {
+            setShotNotice('')
+            setShotItems(current => current.map(item => item.id === result.shot.id ? { ...item, version: result.shot.version, generationStatus: result.task.status as ShotListItem['generationStatus'], reviewStatus: result.shot.reviewStatus as ShotListItem['reviewStatus'], qaStatus: result.shot.qaStatus as ShotListItem['qaStatus'] } : item))
+            const task: CreatorTask = { id: result.task.taskId, scope: 'shots', shotId: result.task.shotId, status: result.task.status as CreatorTask['status'], label: '正在重新生成镜头' }
+            activeTasksRef.current = adoptCreatorShotTask(activeTasksRef.current, task)
+            setView(current => current ? { ...current, activeTasks: adoptCreatorShotTask(current.activeTasks, task) } : current)
+          }}
         />}
+        {shotNotice && <p className="creator-form-error" role="alert">{shotNotice}</p>}
+        </div>
       </div> : <ArtifactReviewPanel
         projectId={projectId}
         step={selectedStep}

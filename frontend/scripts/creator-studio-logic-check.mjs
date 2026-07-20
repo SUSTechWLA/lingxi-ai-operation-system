@@ -121,6 +121,16 @@ try {
   assert.deepEqual(hundredShotWindow.items, Array.from({ length: hundredShotWindow.items.length }, (_, index) => index))
   assert.equal(logic.selectedShotAfterAppend('shot-024', [{ id: 'shot-001' }], [{ id: 'shot-025' }]), 'shot-024', 'page append never clears the active Shot')
   assert.equal(logic.selectedShotAfterAppend(undefined, [{ id: 'shot-001' }], [{ id: 'shot-025' }]), 'shot-001', 'initial page picks its first Shot')
+  assert.equal(logic.selectedShotAfterReplacement('shot-024', [{ id: 'shot-024' }, { id: 'shot-025' }]), 'shot-024', 'a queue refresh preserves the selected Shot when it still matches')
+  assert.equal(logic.selectedShotAfterReplacement('shot-024', [{ id: 'shot-025' }]), 'shot-025', 'a queue refresh moves only when the selected Shot no longer matches')
+  assert.equal(logic.isShotRetryEligible({ qaStatus: '', candidates: [{ status: 'SHOT_QA_FAILED' }] }), true, 'candidate QA failures offer a scoped retry')
+  assert.equal(logic.isShotRetryEligible({ qaStatus: '', candidates: [{ status: 'SHOT_QA_PASSED', qaReport: { status: 'SHOT_QA_FAILED' } }] }), true, 'candidate report failures offer a scoped retry')
+  assert.equal(logic.isShotRetryEligible({ qaStatus: 'SHOT_QA_PASSED', candidates: [] }), false)
+  const adoptedTasks = logic.adoptCreatorShotTask(
+    [{ id: 'task-older', scope: 'shots', shotId: 'shot-001', status: 'running', label: '旧任务' }],
+    { id: 'task-new', scope: 'shots', shotId: 'shot-002', status: 'queued', label: '正在重新生成镜头' },
+  )
+  assert.deepEqual(adoptedTasks.map(task => task.id), ['task-older', 'task-new'], 'adopting a new Shot task keeps other durable Shot work active')
   assert.equal(focus.cycleFocusIndex(1, 3, false), 2)
   assert.equal(focus.cycleFocusIndex(0, 3, true), 2)
   assert.equal(focus.cycleFocusIndex(-1, 3, true), 2)
@@ -350,8 +360,13 @@ try {
   assert.match(improveSource, /crypto\.randomUUID/)
   assert.match(improveSource, /aria-modal="true"/)
   assert.match(improveSource, /重试这个 Shot/)
+  assert.match(improveSource, /onRegenerationStarted\(result\)/, 'a queued task is handed to the workspace immediately')
   assert.match(workspaceSource, /ShotReviewQueue/)
   assert.match(workspaceSource, /shotWorkspace\?\.shot\.id !== activeShotId/)
+  assert.match(workspaceSource, /selectedShotAfterReplacement/)
+  assert.match(workspaceSource, /adoptCreatorShotTask/)
+  assert.match(workspaceSource, /activeTaskSignature/)
+  assert.match(workspaceSource, /SHOT_QUEUE_CONFLICT_COPY/)
 
   console.log('creator studio logic and client contract checks passed')
 } finally {

@@ -20,3 +20,10 @@ Completed the scalable Shot review queue and inspector while preserving the exis
 
 - `cd frontend && npm run test:creator && npm run lint && npm run test:director && npm run test:developer-build && npm run build`
 - `cd cloud-backend && go test ./internal/agents/video/service ./internal/agents/video/handler ./internal/core/apispec -count=1 && make api-types-check && git diff --check`
+
+## Review-fix follow-up
+
+- RED: the new creator logic contract failed because replacement-page selection and candidate/QA failure retry selectors did not exist.
+- GREEN: reset pages now preserve the selected Shot only while it remains in the replacement result, including safe fallback from a stale external selection; candidate status and nested QA report failures both make retry available.
+- A regeneration response now remains durable client state immediately: the target row adopts its returned task status and the returned task is merged into the shared creation-view task set. The existing single workspace poller supports multiple concurrent Shots; task signature changes refresh queue and summary, while terminal selected-task transitions reload only that workspace.
+- The Shot conflict copy is held by the parent workspace, so reloading the inspector cannot erase `这个 Shot 已有更新，请基于最新版本重试`.

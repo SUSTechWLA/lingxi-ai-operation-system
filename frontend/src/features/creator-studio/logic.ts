@@ -200,6 +200,29 @@ export function selectedShotAfterAppend<T extends { id: string }>(
   return selectedShotId || current[0]?.id || appended[0]?.id
 }
 
+export function selectedShotAfterReplacement<T extends { id: string }>(
+  selectedShotId: string | undefined,
+  replacement: readonly T[],
+): string | undefined {
+  return replacement.some(item => item.id === selectedShotId) ? selectedShotId : replacement[0]?.id
+}
+
+export function isShotRetryEligible(shot: {
+  qaStatus?: string
+  candidates?: readonly { status?: string; qaReport?: { status?: string } | null }[]
+}): boolean {
+  if (shot.qaStatus === 'SHOT_QA_FAILED') return true
+  return (shot.candidates ?? []).some(candidate =>
+    candidate.status === 'SHOT_QA_FAILED' || candidate.qaReport?.status === 'SHOT_QA_FAILED',
+  )
+}
+
+export function adoptCreatorShotTask<T extends { id: string }>(tasks: readonly T[], task: T): T[] {
+  const index = tasks.findIndex(item => item.id === task.id)
+  if (index < 0) return [...tasks, task]
+  return tasks.map(item => item.id === task.id ? task : item)
+}
+
 export function isTargetOnlyShotImpact(
   impact: Pick<ShotImpact, 'shotId' | 'affectedShotIds' | 'regeneratesOtherShots'>,
   targetShotId: string,

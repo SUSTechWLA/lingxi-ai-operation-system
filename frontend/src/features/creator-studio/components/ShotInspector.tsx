@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { acceptShotCandidate, getCreatorArtifactContent } from '../../../services/creatorApi'
-import type { ShotListItem, ShotUnit, ShotWorkspace } from '../types'
+import type { ShotListItem, ShotRegenerationResult, ShotUnit, ShotWorkspace } from '../types'
 import { canSubmitShotDuration, isCreatorConflict, SHOT_QUEUE_CONFLICT_COPY } from '../logic'
 import ShotImprovePanel from './ShotImprovePanel'
 
@@ -13,9 +13,10 @@ interface ShotInspectorProps {
   totalShots: number
   onShotChanged: (shot: ShotUnit) => Promise<void> | void
   onReload: () => Promise<void> | void
+  onRegenerationStarted: (result: ShotRegenerationResult) => Promise<void> | void
 }
 
-export default function ShotInspector({ projectId, workspace, item, previous, next, totalShots, onShotChanged, onReload }: ShotInspectorProps) {
+export default function ShotInspector({ projectId, workspace, item, previous, next, totalShots, onShotChanged, onReload, onRegenerationStarted }: ShotInspectorProps) {
   const [candidateId, setCandidateId] = useState('')
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
   const [mediaState, setMediaState] = useState<'idle' | 'loading' | 'unavailable'>('idle')
@@ -131,7 +132,7 @@ export default function ShotInspector({ projectId, workspace, item, previous, ne
       <div className="shot-neighbors"><p><strong>前后镜头</strong></p><span>上一镜：{previous ? `Shot ${previous.sequenceIndex} · ${previous.title}` : '无'}</span><span>下一镜：{next ? `Shot ${next.sequenceIndex} · ${next.title}` : '无'}</span></div>
       <div className="artifact-actions"><button type="button" className="creator-primary-button" disabled={!selectedCandidate || working || !durationValid} onClick={accept}>接受这个候选</button></div>
       {error && <p className="creator-form-error" role="alert">{error}</p>}
-      <ShotImprovePanel projectId={projectId} workspace={workspace} item={item} totalShots={totalShots} onRegenerated={async () => onReload()} onConflict={onReload} />
+      <ShotImprovePanel projectId={projectId} workspace={workspace} item={item} totalShots={totalShots} onRegenerationStarted={onRegenerationStarted} onConflict={onReload} />
     </section>
   )
 }
