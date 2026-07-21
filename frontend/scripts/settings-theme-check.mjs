@@ -130,6 +130,15 @@ try {
   assert.doesNotMatch(accentControlSource, /(?:from|to)-primary(?:-dark)?[^'"\n]*text-white|text-white[^'"\n]*(?:from|to)-primary(?:-dark)?/, 'theme-aware primary gradients must not use a hard-coded white foreground')
   assert.doesNotMatch(directorSource, /\bbg-violet\b[^'"\n]*\btext-white\b|\btext-white\b[^'"\n]*\bbg-violet\b/, 'violet is a primary-dark alias and must use its semantic foreground')
   assert.doesNotMatch(directorSource, /\bbg-white(?:\/(?:65|70|75|80))?(?=[\s'"`])/, 'themed Director surfaces must use the semantic background-card token')
+  assert.doesNotMatch(directorSource, /\bbg-ink(?:\/80)?\b[^'"\n]*\btext-white\b|\btext-white\b[^'"\n]*\bbg-ink(?:\/80)?\b/, 'ink surfaces invert in dark mode and must use the semantic card foreground')
+  assert.doesNotMatch(directorSource, /\btangying-gradient\b[^'"\n]*\btext-white\b/, 'the custom gradient cannot guarantee white-text contrast in dark mode')
+
+  const primaryActionStart = directorSource.indexOf('disabled={primaryAction.disabled}')
+  const primaryActionEnd = directorSource.indexOf('</button>', primaryActionStart)
+  assert.notEqual(primaryActionStart, -1, 'missing Director primary action')
+  assert.notEqual(primaryActionEnd, -1, 'missing Director primary action boundary')
+  const primaryActionSource = directorSource.slice(primaryActionStart, primaryActionEnd)
+  assert.match(primaryActionSource, /bg-primary\s+text-on-primary[^'"\n]*hover:bg-primary-dark\s+hover:text-on-primary-dark/, 'Director primary action and hover must use matching semantic foregrounds')
 
   const primaryHoverMatch = cssSource.match(/\.creator-primary-button:hover:not\(:disabled\)\s*\{([\s\S]*?)\}/)
   assert.ok(primaryHoverMatch, 'missing creator primary-button hover style')

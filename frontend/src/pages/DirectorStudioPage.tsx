@@ -823,8 +823,8 @@ function OverviewPage(props: {
               disabled={primaryAction.disabled}
               onClick={isStopAction ? onStop : onStart}
               className={clsx(
-                'flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-50',
-                isStopAction ? 'bg-red-600 hover:bg-red-700' : 'bg-primary shadow-glow hover:bg-primary-dark',
+                'flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50',
+                isStopAction ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-primary text-on-primary shadow-glow hover:bg-primary-dark hover:text-on-primary-dark',
               )}
             >
               {isStopAction ? <FiSquare /> : <FiPlay />} {primaryAction.label}
@@ -1342,7 +1342,7 @@ function TracePage({ traceNodes, run }: { traceNodes: DirectorTraceNode[]; run: 
                 traceNodeHasError(node) && 'border-red-300 bg-red-50/60',
               )}>
               <div className="flex items-center justify-between gap-2 min-w-0">
-                <span className={clsx('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black text-white', traceNodeHasError(node) ? 'bg-red-500' : 'bg-ink')}>
+                <span className={clsx('grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-black', traceNodeHasError(node) ? 'bg-red-600 text-white' : 'bg-ink text-background-card')}>
                   {String(index + 1).padStart(2, '0')}
                 </span>
                 <StatusBadge status={node.status} />
@@ -4134,7 +4134,7 @@ function ExternalReferenceCard({ reference, index, mode, projectId }: { referenc
                 setPreviewUrl(null)
               }}
             />
-            <span className="pointer-events-none absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-white opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">
+            <span className="pointer-events-none absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-background-card opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">
               <FiSearch /> 点击放大
             </span>
           </button>
@@ -4464,7 +4464,7 @@ function ShotArtifactPreview({
               aria-label={`放大预览 ${artifact.name}`}
             >
               <img src={previewUrl} alt={artifact.name} className="h-40 w-full object-contain" />
-              <span className="pointer-events-none absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-white opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">
+              <span className="pointer-events-none absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-background-card opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">
                 <FiSearch /> 点击放大
               </span>
             </button>
@@ -4929,7 +4929,7 @@ function RolesPage({ stages }: { stages: DirectorStage[] }) {
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
         {stages.map((role) => (
           <div key={role.id} className="card p-5">
-            <div className="flex items-start justify-between"><div className="flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-lg tangying-gradient text-white"><FiUserCheck /></div><div><h3 className="font-black text-ink">{role.displayName}</h3><p className="text-xs text-ink-soft">{role.name}</p></div></div><StatusBadge status={role.status} /></div>
+            <div className="flex items-start justify-between"><div className="flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-lg bg-primary-dark text-on-primary-dark"><FiUserCheck /></div><div><h3 className="font-black text-ink">{role.displayName}</h3><p className="text-xs text-ink-soft">{role.name}</p></div></div><StatusBadge status={role.status} /></div>
             <p className="mt-4 min-h-12 text-sm leading-6 text-ink-muted">{role.goal}</p>
             <div className="mt-4"><b className="text-xs text-ink-soft">允许工具</b><div className="mt-2 flex flex-col gap-2">{role.allowedTools.map((tool) => <span key={tool} className="rounded-full bg-primary-soft px-2.5 py-1 text-[11px] font-bold text-primary-dark">{tool}</span>)}</div></div>
             <div className="mt-4 flex items-center gap-2 text-xs text-ink-muted"><FiLock /> 输出：{role.requiredOutputs.join(' / ') || '-'}</div>
