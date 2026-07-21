@@ -17,14 +17,11 @@ import { renderVideo } from "./render.js";
 import { lintProject } from "./lint.js";
 import { takeSnapshots } from "./snapshot.js";
 import { getJobProgress, listJobIds } from "./queue.js";
+import { configuredRoots } from "./security.js";
 // ── Security config ──────────────────────────────────────────────────
 const security = {
-    allowedProjectRoots: [
-        process.env.HYPERFRAMES_PROJECT_ROOT ?? "/data/aios/projects",
-    ],
-    allowedOutputRoots: [
-        process.env.HYPERFRAMES_OUTPUT_ROOT ?? "/data/aios/projects",
-    ],
+    allowedProjectRoots: configuredRoots(process.env.HYPERFRAMES_PROJECT_ROOT ?? "/data/aios/projects", process.env.HYPERFRAMES_ADDITIONAL_PROJECT_ROOTS),
+    allowedOutputRoots: configuredRoots(process.env.HYPERFRAMES_OUTPUT_ROOT ?? "/data/aios/projects", process.env.HYPERFRAMES_ADDITIONAL_OUTPUT_ROOTS),
 };
 // ── Zod schemas ──────────────────────────────────────────────────────
 const renderSchema = z.object({

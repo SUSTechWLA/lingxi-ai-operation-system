@@ -1,24 +1,12 @@
-FROM golang:1.25-alpine AS builder
+FROM postgres:16-alpine
 
+ENTRYPOINT []
 WORKDIR /app
 
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY cmd ./cmd
-COPY internal ./internal
+COPY build/tangying-ai-os ./tangying-ai-os
 COPY skills ./skills
 COPY skill-capabilities ./skill-capabilities
-RUN CGO_ENABLED=0 GOOS=linux go build -o /tangying-ai-os ./cmd/tangying-ai-os
-
-FROM alpine:3.19
-
-RUN apk --no-cache add ca-certificates bash curl
-WORKDIR /app
-
-COPY --from=builder /tangying-ai-os .
-COPY --from=builder /app/skills ./skills
-COPY --from=builder /app/skill-capabilities ./skill-capabilities
+COPY video-pipelines ./video-pipelines
 
 EXPOSE 8080
 

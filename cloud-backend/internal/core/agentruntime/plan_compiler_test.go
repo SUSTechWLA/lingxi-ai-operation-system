@@ -911,6 +911,15 @@ func TestPlanCompiler_PreparePlanInsertsMCPGenerationRunnerWhenRequested(t *test
 
 func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testing.T) {
 	catalog := videoProfileTemplateCatalog()
+	for _, toolName := range []string{"shot_generation_planner", "video_prompt_generator"} {
+		for key, paramType := range map[string]string{
+			"aigcProvider": "string", "aigcEnabled": "boolean", "aigcPolicy": "string",
+			"productionRoute": "string", "visualLayerContract": "string",
+			"designedLayers": "array", "layerExecutionPolicy": "object", "requiredLayers": "array",
+		} {
+			catalog[toolName].Parameters[key] = tool.ParamDef{Type: paramType, Required: false}
+		}
+	}
 	catalog["video_prompt_generator"].Output["externalGenerationRequests"] = tool.ParamDef{Type: "array"}
 	catalog["hyperframes_project_generator"].Parameters["shotAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
 	catalog["hyperframes_project_generator"].Parameters["aRollAssetPackages"] = tool.ParamDef{Type: "array", Required: false}
@@ -967,6 +976,16 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 				Arguments: map[string]interface{}{
 					"topic":                "AI 视频创作工作流",
 					"aigcProvider":         "disabled",
+					"aigcEnabled":          false,
+					"aigcPolicy":           "disabled",
+					"productionRoute":      "talking_head",
+					"visualLayerContract":  "shot_visual_layers_v1",
+					"designedLayers":       []interface{}{"ip_aroll", "hyperframes_text", "aigc_enrichment"},
+					"layerExecutionPolicy": map[string]interface{}{"ip_aroll": "required", "hyperframes_text": "required", "aigc_enrichment": "disabled"},
+					"requiredLayers":       []interface{}{"ip_aroll", "hyperframes_text"},
+					"ipRenderMode":         "preview",
+					"aspectRatio":          "9:16",
+					"targetDurationSec":    15,
 					"characterProfilePath": "ip-assets/main-ip/character-profile.json",
 					"presentationMode":     "standing",
 					"cameraPreset":         "front_talking",
@@ -998,6 +1017,9 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	if got := aroll.Arguments["mcpTool"]; got != "ip_avatar_3d.render_talking_video" {
 		t.Fatalf("mcpTool = %#v", got)
 	}
+	if got := aroll.Arguments["failOnUnmetRequirements"]; got != true {
+		t.Fatalf("failOnUnmetRequirements = %#v, want true", got)
+	}
 	requests, ok := aroll.Arguments["externalGenerationRequests"].([]interface{})
 	if !ok || len(requests) != 1 {
 		t.Fatalf("externalGenerationRequests = %#v, want one request", aroll.Arguments["externalGenerationRequests"])
@@ -1013,8 +1035,35 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	if got := arguments["script"]; got != "{{script_generation.output.script}}" {
 		t.Fatalf("script ref = %#v", got)
 	}
+	if got := arguments["renderMode"]; got != "preview" {
+		t.Fatalf("renderMode = %#v, want preview", got)
+	}
+	if got := arguments["durationSec"]; got != float64(15) {
+		t.Fatalf("durationSec = %#v, want 15", got)
+	}
+	if got := arguments["width"]; got != 720 {
+		t.Fatalf("width = %#v, want 720 for a 9:16 local preview", got)
+	}
+	if got := arguments["height"]; got != 1280 {
+		t.Fatalf("height = %#v, want 1280 for a 9:16 local preview", got)
+	}
+	if got := arguments["fps"]; got != 15 {
+		t.Fatalf("fps = %#v, want 15 for local preview", got)
+	}
 	if got := findStep(t, prepared, "script_generation").Arguments["topic"]; got != "AI 视频创作工作流" {
 		t.Fatalf("explicit topic was overwritten during profile compilation: %#v", got)
+	}
+	for _, stepID := range []string{"shot_generation", "video_prompt"} {
+		step := findStep(t, prepared, stepID)
+		if got := step.Arguments["visualLayerContract"]; got != "shot_visual_layers_v1" {
+			t.Fatalf("%s visualLayerContract = %#v", stepID, got)
+		}
+		if got := step.Arguments["aigcPolicy"]; got != "disabled" {
+			t.Fatalf("%s aigcPolicy = %#v", stepID, got)
+		}
+		if got := step.Arguments["layerExecutionPolicy"]; !reflect.DeepEqual(got, map[string]interface{}{"ip_aroll": "required", "hyperframes_text": "required", "aigc_enrichment": "disabled"}) {
+			t.Fatalf("%s layerExecutionPolicy = %#v", stepID, got)
+		}
 	}
 	if got := arguments["characterProfilePath"]; got != "ip-assets/main-ip/character-profile.json" {
 		t.Fatalf("characterProfilePath = %#v", got)
@@ -1035,6 +1084,10 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	if !containsString(preview.DependsOn, "ip_aroll_generation") {
 		t.Fatalf("preview dependencies = %#v, want ip_aroll_generation", preview.DependsOn)
 	}
+	render := findStep(t, prepared, "render")
+	if render.Arguments["width"] != 720 || render.Arguments["height"] != 1280 || render.Arguments["fps"] != 15 {
+		t.Fatalf("final render should preserve the requested preview canvas, got %#v", render.Arguments)
+	}
 	for _, step := range prepared.Steps {
 		if step.ID == "mcp_generation" {
 			t.Fatalf("disabled AIGC provider should not insert generic MCP generation: %#v", step)
@@ -1048,6 +1101,54 @@ func TestPlanCompiler_PreparePlanInsertsContinuousIPArollBeforePreview(t *testin
 	}
 	if err := NewPlanGuard(catalog, nil).Validate(prepared); err != nil {
 		t.Fatalf("prepared plan should pass PlanGuard: %v", err)
+	}
+}
+
+func TestPlanCompiler_PreparePlanFeedsScriptToSelectedIPArollDirector(t *testing.T) {
+	catalog := videoProfileTemplateCatalog()
+	catalog["ip_aroll_director"] = &tool.ToolManifest{
+		Name: "ip_aroll_director",
+		Parameters: map[string]tool.ParamDef{
+			"narration": {Type: "string", Required: true},
+		},
+		Output: map[string]tool.ParamDef{
+			"ipArollPlan": {Type: "object"},
+		},
+	}
+	compiler := NewPlanCompiler(catalog)
+	plan := &AgentPlan{
+		Goal:   "制作一条树懒 IP 口播视频",
+		Domain: "video_creation",
+		Mode:   "dynamic_agent",
+		Steps: []AgentStep{
+			{
+				ID:   "script_generation",
+				Tool: "video_script_generator",
+				Arguments: map[string]interface{}{
+					"topic":              "三层 Shot 协同",
+					"canonicalProfileId": "talking_head",
+					"productionRoute":    "talking_head",
+				},
+				ExpectedOutput: []string{"script", "scriptSpans"},
+			},
+			{
+				ID:        "ip_aroll_director",
+				Tool:      "ip_aroll_director",
+				Arguments: map[string]interface{}{"brief": "树懒连续口播"},
+			},
+		},
+	}
+
+	prepared := compiler.PreparePlan(plan)
+	director := findStep(t, prepared, "ip_aroll_director")
+	if got := director.Arguments["narration"]; got != "{{script_generation.output.script}}" {
+		t.Fatalf("IP A-roll director narration = %#v, want canonical script output", got)
+	}
+	if !containsString(director.DependsOn, "script_generation") {
+		t.Fatalf("IP A-roll director must wait for script generation, got deps %#v", director.DependsOn)
+	}
+	if stepIndex(t, prepared, "ip_aroll_director") <= stepIndex(t, prepared, "script_generation") {
+		t.Fatalf("IP A-roll director must be ordered after script generation")
 	}
 }
 

@@ -245,6 +245,14 @@ func TestStartRunIdempotencyKeyReturnsPersistedRunWithoutPlanningAgain(t *testin
 	close(planner.release)
 }
 
+func TestIdempotentRunIDFitsPersistentStoreColumn(t *testing.T) {
+	const persistentRunIDLimit = 64
+	runID := idempotentRunID("user-with-a-realistic-identifier", "creator-start:vp-4f158892")
+	if len(runID) > persistentRunIDLimit {
+		t.Fatalf("idempotent run id length = %d, want at most %d: %q", len(runID), persistentRunIDLimit, runID)
+	}
+}
+
 func TestStartRunIdempotencyKeySeparatesDifferentKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -74,6 +74,9 @@ required_files=(
   "ip-assets/main-ip/scenes/warm-sloth-studio-20260720.blend"
   "ip-assets/main-ip/voice/reference/main_ip_voice_ref_v1.wav"
   "scripts/beta-smoke-check.sh"
+  "scripts/build-local-desktop.sh"
+  "scripts/one-click-deploy.sh"
+  "scripts/test_one_click_deploy.py"
   "scripts/release-version-check.sh"
 )
 for path in "${required_files[@]}"; do

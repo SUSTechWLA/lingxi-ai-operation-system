@@ -96,6 +96,15 @@ func (tc *TaskExecutionControl) RetryNode(ctx context.Context, nodeID string) er
 		return fmt.Errorf("failed to save node: %w", err)
 	}
 
+	// A failed node transitions its parent task to FAILED. Manual retry is an
+	// explicit request to reopen that task, otherwise local jobs dispatched by
+	// the retried node remain unclaimable and downstream nodes never resume.
+	if node.TaskID != "" {
+		if err := tc.stateService.TransitionTask(ctx, node.TaskID, model.TaskRunning); err != nil {
+			return fmt.Errorf("failed to reopen task for node retry: %w", err)
+		}
+	}
+
 	if err := tc.stateService.InitializeNodeReady(ctx, node); err != nil {
 		return fmt.Errorf("failed to initialize node as ready: %w", err)
 	}

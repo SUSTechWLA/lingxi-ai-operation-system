@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -154,6 +155,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/local/jimeng/setup/check-login", s.handleJiMengCheckLogin)
 	s.mux.HandleFunc("/api/local/artifacts", s.handleArtifacts)
 	s.mux.HandleFunc("/api/local/artifacts/", s.handleArtifactByID)
+	s.mux.HandleFunc("/api/local/media", s.handleLocalProjectMedia)
 	s.mux.HandleFunc("/api/local/projects/", s.handleProjectByID)
 	s.mux.HandleFunc("/api/local/diagnostics", s.handleDiagnostics)
 	s.mux.HandleFunc("/api/local/openapi.json", handleOpenAPI)
@@ -586,6 +588,52 @@ func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 		"projectId":    projectID,
 		"deletedPaths": deleted,
 	})
+}
+
+func (s *Server) handleLocalProjectMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
+	if !isSafePathSegment(projectID) {
+		writeError(w, http.StatusBadRequest, "projectId is required and must be a safe path segment")
+		return
+	}
+	requestedPath := filepath.Clean(strings.TrimSpace(r.URL.Query().Get("path")))
+	if requestedPath == "." || !filepath.IsAbs(requestedPath) {
+		writeError(w, http.StatusBadRequest, "path must be an absolute project media path")
+		return
+	}
+	projectRoot := filepath.Clean(filepath.Join(s.paths.ProjectDir, projectID))
+	relativePath, err := filepath.Rel(projectRoot, requestedPath)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		writeError(w, http.StatusBadRequest, "media path must stay inside the requested project")
+		return
+	}
+	file, err := os.Open(requestedPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, http.StatusNotFound, "project media not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		writeError(w, http.StatusNotFound, "project media not found")
+		return
+	}
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(requestedPath)))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Tangying-Project-ID", projectID)
+	http.ServeContent(w, r, filepath.Base(requestedPath), info.ModTime(), file)
 }
 
 func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {

@@ -119,15 +119,17 @@ contact sheet 会根据抽帧数量动态选择 tile，例如 8 张抽帧使用 
 
 ## Shot 分层素材计划
 
-视频生成资料阶段会为每个需要外部生成的视频 shot 输出三层计划，避免“画面说明”和“视频素材提示词”重复，也避免所有 HyperFrames 画面变成类似 PPT 的单一风格：
+视频生成资料阶段会为每个 Shot 输出 `shot_visual_layers_v1` 三层画面计划，避免“画面说明”和“视频素材提示词”重复，也避免所有 HyperFrames 画面变成类似 PPT 的单一风格。AIGC 本次不执行时，设计仍必须保留：
 
 | 字段 | 用途 |
 |---|---|
+| `visualLayers` | 统一声明三层设计、执行状态、时间窗、安全区、层级和合成策略，作为 QA 按层定位问题的入口。 |
+| `ipArollPlan` | 正式 3D IP A-roll 层。负责口型、眼神、表情、动作、角色/声音一致性和主体安全区。 |
 | `aigcPlan` | 面向外部图片/视频生成工具的 AIGC 层。只生成背景、角色/道具运动、氛围或局部动态视频；必须给标题、字幕、流程标签和 UI 文案留出文字安全区；必须声明不要生成文字、Logo、水印或可读汉字，避免乱码。 |
-| `hyperframesPlan` | 本地 HyperFrames 层。负责精确中文标题、字幕、关键帧、图形强调、UI 卡片和流程标签，像可控演示层一样承载文字信息。 |
-| `ffmpegFusionPlan` | 合成层。统一分辨率、fps、像素格式和时长，把 AIGC 背景/局部视频与 HyperFrames 文字/图形层裁剪、叠加、遮盖和融合成完整 shot。 |
+| `hyperframesPlan` | 本地 HyperFrames / HyperKeyframes 层。负责精确中文标题、字幕、关键帧、图形强调、UI 卡片和流程标签，像可控演示层一样承载文字信息。 |
+| `ffmpegFusionPlan` | 合成层。统一分辨率、fps、像素格式和时长，把 IP A-roll、AIGC 背景/B-roll/局部视频与 HyperFrames 文字/图形层裁剪、叠加、遮盖和融合成完整 Shot。 |
 
-QA 和 repair plan 会按层处理问题：文字乱码、字幕/标题安全区和排版问题优先 `RERENDER_HTML` 或 `RECOMPOSITE`；AIGC 只在主体、动作、场景、氛围或时序失败时才小幅 patch prompt 或重生。已经通过的角色、场景、动作、文字意图、时长和风格必须锁定，不应因为一个文字问题粗暴重写整个 shot。
+QA 和 repair plan 会按层处理问题：IP 口型、眼神、穿插和角色一致性问题只返修 A-roll；文字乱码、字幕/标题安全区和排版问题优先 `RERENDER_HTML` 或 `RECOMPOSITE`；AIGC 只在背景/B-roll、主体动作、场景、氛围或时序失败时才小幅 patch prompt 或重生。已经通过的层必须锁定，不应因为一个文字问题粗暴重写整个 Shot。
 
 影视模式会额外输出硬指标：
 

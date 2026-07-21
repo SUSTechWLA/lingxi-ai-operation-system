@@ -1,4 +1,4 @@
-import type { AgentStartRunRequest, CreateVideoProjectPayload } from '../../utils/types'
+import type { AgentReviewItem, AgentStartRunRequest, ArtifactContentResponse, CreateVideoProjectPayload } from '../../utils/types'
 import type { ModelCapability, ModelProviderConfig } from '../../services/localAgent'
 import type {
   ArtifactSelection,
@@ -21,6 +21,20 @@ export const CREATOR_WORKSPACE_STEP_IDS: readonly CreatorStepId[] = [
   'requirements', 'direction', 'script', 'shots', 'preview', 'delivery',
 ]
 
+export function creatorProjectProgress(
+  projectStatus: string,
+  view?: Pick<CreationView, 'steps'>,
+): { label: string; percent: number } {
+  const total = view?.steps.length || CREATOR_WORKSPACE_STEP_IDS.length
+  const terminal = projectStatus === 'COMPLETED' || projectStatus === 'ARCHIVED'
+  const complete = terminal ? total : (view?.steps.filter(step => step.state === 'confirmed').length || 0)
+  if (!view && !terminal) return { label: '正在准备创作', percent: 0 }
+  return {
+    label: `已完成 ${complete}/${total} 个步骤`,
+    percent: Math.round((complete / total) * 100),
+  }
+}
+
 const STEP_LABELS: Record<CreatorStepId, string> = {
   requirements: '需求',
   direction: '创意方案',
@@ -36,8 +50,13 @@ export interface CreationRequestInput {
   aspectRatio: string
   platform?: string
   materialCount: number
+  productionRoute?: CreatorProductionRoute
+  aigcPolicy?: CreatorAIGCPolicy
   modelProviders?: Partial<Record<ModelCapability, ModelProviderConfig>>
 }
+
+export type CreatorProductionRoute = 'talking_head' | 'cinematic_story'
+export type CreatorAIGCPolicy = 'auto' | 'disabled'
 
 export interface CreationRequest {
   project: CreateVideoProjectPayload
@@ -72,6 +91,22 @@ export function buildProjectMaterialStorageRef(projectId: string, materialId: st
   return `local://projects/${projectId}/materials/${materialId}`
 }
 
+export function resolveCreatorArtifactMediaUrl(
+	projectId: string,
+	content: ArtifactContentResponse | null | undefined,
+	localAgentBaseUrl: string,
+): string | undefined {
+	const direct = content?.mediaUrl || content?.mediaUrls?.[0]
+	if (direct) return direct
+	if (!content || content.artifact.projectId !== projectId || !isSafeStorageSegment(projectId)) return undefined
+	const metadata = content.artifact.metadata
+	const localPath = typeof metadata?.localPath === 'string' ? metadata.localPath.trim() : ''
+	if (!localPath || metadata?.localOnly !== true) return undefined
+	const baseUrl = localAgentBaseUrl.replace(/\/+$/, '')
+	if (!baseUrl) return undefined
+	return `${baseUrl}/api/local/media?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(localPath)}`
+}
+
 export function creatorStartIdempotencyKey(projectId: string): string {
   if (!isSafeStorageSegment(projectId)) throw new TypeError('project id must be a safe path segment')
   return `creator-start:${projectId}`
@@ -94,7 +129,22 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
   const durationSec = input.durationSec
   const platform = input.platform?.trim()
   const materialCount = Math.max(0, Math.floor(input.materialCount))
-  const modelProviderRefs = buildProjectModelProviderRefs(input.modelProviders)
+  const productionRoute = input.productionRoute ?? 'talking_head'
+  const aigcPolicy = input.aigcPolicy ?? 'auto'
+  const projectMode = productionRoute === 'talking_head' ? 'voice_visual' : 'aigc_shot'
+  const aigcEnabled = aigcPolicy !== 'disabled'
+  const ipRenderMode = productionRoute === 'talking_head' ? 'preview' : undefined
+  const requiredLayers = productionRoute === 'talking_head'
+    ? ['ip_aroll', 'hyperframes_text']
+    : ['aigc_main', 'hyperframes_text']
+  const designedLayers = ['ip_aroll', 'hyperframes_text', 'aigc_enrichment']
+  const layerExecutionPolicy = {
+    ip_aroll: productionRoute === 'talking_head' ? 'required' : 'optional',
+    hyperframes_text: 'required',
+    aigc_enrichment: aigcEnabled ? 'auto' : 'disabled',
+  }
+  const modelProviders = modelProvidersForPolicy(input.modelProviders, aigcEnabled)
+  const modelProviderRefs = buildProjectModelProviderRefs(modelProviders)
   const context = {
     topic: prompt,
     durationSec,
@@ -102,8 +152,19 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
     aspectRatio: input.aspectRatio,
     platform,
     materialCount,
-    ...(input.modelProviders && Object.keys(input.modelProviders).length > 0
-      ? { modelProviders: input.modelProviders }
+    productionRoute,
+    canonicalProfileId: productionRoute,
+    videoType: projectMode,
+    aigcEnabled,
+    aigcProvider: aigcEnabled ? 'auto' : 'disabled',
+    aigcPolicy,
+    visualLayerContract: 'shot_visual_layers_v1',
+    designedLayers,
+    layerExecutionPolicy,
+    requiredLayers,
+    ...(ipRenderMode ? { ipRenderMode } : {}),
+    ...(modelProviders && Object.keys(modelProviders).length > 0
+      ? { modelProviders }
       : {}),
   }
   const durationCopy = durationSec ? `一支 ${durationSec} 秒` : ''
@@ -116,7 +177,7 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
     project: {
       name: prompt.slice(0, 40) || '视频创作项目',
       description: prompt,
-      mode: 'aigc_shot',
+      mode: projectMode,
       skillName: 'video-creator',
       skillVersion: 'v4.0',
       workflowName: 'dynamic-agent-video-creation',
@@ -133,6 +194,16 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
         aspectRatio: input.aspectRatio,
         platform,
         materialCount,
+        productionRoute,
+        canonicalProfileId: productionRoute,
+        aigcEnabled,
+        aigcProvider: aigcEnabled ? 'auto' : 'disabled',
+        aigcPolicy,
+        visualLayerContract: 'shot_visual_layers_v1',
+        designedLayers,
+        layerExecutionPolicy,
+        requiredLayers,
+        ...(ipRenderMode ? { ipRenderMode } : {}),
         ...(Object.keys(modelProviderRefs).length > 0 ? { modelProviderRefs } : {}),
       },
     },
@@ -143,6 +214,14 @@ export function buildCreationRequest(input: CreationRequestInput): CreationReque
       context,
     },
   }
+}
+
+function modelProvidersForPolicy(
+  providers: Partial<Record<ModelCapability, ModelProviderConfig>> | undefined,
+  aigcEnabled: boolean,
+): Partial<Record<ModelCapability, ModelProviderConfig>> | undefined {
+  if (!providers || aigcEnabled) return providers
+  return providers.text_to_text ? { text_to_text: providers.text_to_text } : undefined
 }
 
 export function buildProjectModelProviderRefs(
@@ -174,6 +253,22 @@ export function nextCreatorAction(view: Pick<CreationView, 'steps'>): CreatorAct
     return { kind: 'fix', stepId: step.id, label: `处理${step.label}` }
   }
   return { kind: 'continue', stepId: step.id, label: `继续${step.label}` }
+}
+
+export function nextPendingCreatorReview(reviews: readonly AgentReviewItem[]): AgentReviewItem | undefined {
+  return reviews.find(review => review.status === 'PENDING')
+}
+
+export function creatorStepForAgentReview(
+  review: Pick<AgentReviewItem, 'stage' | 'stepId' | 'tool'>,
+): CreatorStepId {
+  const key = `${review.stage ?? ''} ${review.stepId ?? ''} ${review.tool ?? ''}`.toLowerCase()
+  if (/visual_qa|publish_copy|delivery|package/.test(key)) return 'delivery'
+  if (/preview|render/.test(key)) return 'preview'
+  if (/audio_master|time_window|visual_alignment|shot_generation|video_prompt|ip_aroll|mcp_generation|storyboard/.test(key)) return 'shots'
+  if (/script/.test(key)) return 'script'
+  if (/proposal|direction|creative/.test(key)) return 'direction'
+  return 'requirements'
 }
 
 export function canSubmitShotDuration(durationSec: number): boolean {

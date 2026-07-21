@@ -4,6 +4,9 @@
 
 # Local runtime and build output
 build/
+!build/
+build/*
+!build/tangying-ai-os
 *.log
 .env
 .env.local

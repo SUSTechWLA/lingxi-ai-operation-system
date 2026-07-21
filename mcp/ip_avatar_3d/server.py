@@ -394,11 +394,21 @@ def find_blender() -> str:
 
 
 def find_ffmpeg() -> str:
-    return _tool_path(["TANGYING_FFMPEG_BIN", "FFMPEG_BIN"], ["ffmpeg"])
+    return _tool_path(
+        ["TANGYING_FFMPEG_BIN", "FFMPEG_BIN"],
+        ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"],
+    )
 
 
 def find_ffprobe() -> str:
-    return _tool_path(["TANGYING_FFPROBE_BIN", "FFPROBE_BIN"], ["ffprobe"])
+    return _tool_path(
+        ["TANGYING_FFPROBE_BIN", "FFPROBE_BIN"],
+        ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "ffprobe"],
+    )
+
+
+def find_say() -> str:
+    return _tool_path(["TANGYING_SAY_BIN"], ["/usr/bin/say", "say"])
 
 
 def find_audio_engine() -> str:
@@ -469,6 +479,48 @@ def audio_duration_sec(audio_path: str) -> float:
         return float(completed.stdout.strip())
     except ValueError:
         return 0.0
+
+
+def _fit_preview_audio_duration(
+    source_path: Path,
+    output_dir: Path,
+    source_duration: float,
+    target_duration: float,
+) -> Path:
+    """Time-fit preview narration without changing production voice policy."""
+    source_duration = max(0.01, float(source_duration))
+    target_duration = max(0.01, float(target_duration))
+    ratio = source_duration / target_duration
+    factors: list[float] = []
+    while ratio > 2.0:
+        factors.append(2.0)
+        ratio /= 2.0
+    while ratio < 0.5:
+        factors.append(0.5)
+        ratio /= 0.5
+    factors.append(ratio)
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required to fit preview narration duration")
+    output_path = output_dir / "narration_preview_fitted.m4a"
+    atempo = ",".join(f"atempo={factor:.6f}" for factor in factors)
+    _run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source_path),
+            "-filter:a",
+            atempo,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output_path),
+        ],
+        timeout=180,
+    )
+    return output_path
 
 
 def _srt_time(seconds: float) -> str:
@@ -1273,7 +1325,7 @@ def ensure_audio(
         return str(mastered_path), "gpt_sovits_local", metadata
     if provider == "apple":
         ffmpeg = find_ffmpeg()
-        say = shutil.which("say")
+        say = find_say()
         if not ffmpeg or not say:
             raise RuntimeError("voiceProvider=apple requires macOS say and ffmpeg")
         selected_voice = pinned_voice or "Eddy (中文（中国大陆）)"
@@ -3174,10 +3226,13 @@ def render_talking_video(
         if not Path(resolved_background).is_file():
             raise FileNotFoundError(f"backgroundPath does not exist: {resolved_background}")
 
-    initial_duration = float(durationSec or 0)
+    requested_duration = float(durationSec or 0)
+    initial_duration = requested_duration
     if audioPath:
         resolved_audio = str(_readable_path(audioPath))
-        initial_duration = audio_duration_sec(resolved_audio) or initial_duration
+        uploaded_duration = audio_duration_sec(resolved_audio)
+        if render_mode == "production" or requested_duration <= 0:
+            initial_duration = uploaded_duration or initial_duration
     duration = initial_duration or estimate_duration(script)
     if not initial_duration and not audioPath and actionSequence:
         action_events = aroll_actions.build_action_events(
@@ -3291,8 +3346,29 @@ def render_talking_video(
         )
         generated_audio_duration = audio_duration_sec(audio_out)
         if generated_audio_duration > 0:
-            duration = float(generated_audio_duration)
-            if actionSequence:
+            if render_mode != "production" and requested_duration > 0:
+                if generated_audio_duration > requested_duration * 1.01:
+                    source_audio_path = Path(audio_out).expanduser().resolve()
+                    fitted_audio_path = _fit_preview_audio_duration(
+                        source_audio_path,
+                        output_dir,
+                        generated_audio_duration,
+                        requested_duration,
+                    )
+                    audio_out = str(fitted_audio_path)
+                    audio_metadata.update(
+                        {
+                            "durationFitted": True,
+                            "sourceDurationSec": round(generated_audio_duration, 6),
+                            "targetDurationSec": round(requested_duration, 6),
+                        }
+                    )
+                duration = requested_duration
+            else:
+                duration = float(generated_audio_duration)
+            if actionSequence and not (
+                render_mode != "production" and requested_duration > 0
+            ):
                 action_events = aroll_actions.build_action_events(
                     [str(name) for name in actionSequence if str(name).strip()],
                     presentation_mode,

@@ -234,7 +234,9 @@ func (h *Handler) StartRun(c *gin.Context) {
 
 func idempotentRunID(userID, key string) string {
 	sum := sha256.Sum256([]byte(userID + "\x00" + key))
-	return "agent_run_idem_" + hex.EncodeToString(sum[:])
+	// agent_runs.id is VARCHAR(64). A 192-bit digest remains collision resistant
+	// while keeping the prefixed identifier within the persistent schema limit.
+	return "agent_run_idem_" + hex.EncodeToString(sum[:24])
 }
 
 func startRequestFingerprint(req StartRunRequest) (string, error) {

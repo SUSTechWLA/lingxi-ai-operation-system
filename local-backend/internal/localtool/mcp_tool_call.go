@@ -310,7 +310,7 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 			aRollPackages = append(aRollPackages, item)
 		}
 	}
-	return &Result{Output: map[string]interface{}{
+	result := &Result{Output: map[string]interface{}{
 		"providerId":                 providerID,
 		"toolName":                   toolName,
 		"shotAssetPackages":          packages,
@@ -322,7 +322,12 @@ func (e *mcpToolCallExecutor) executeExternalGenerationBatch(ctx context.Context
 		"sourceSummary":              sourceSummary,
 		"requirementsSatisfied":      sourceSummary["externalVideoRequirementSatisfied"],
 		"summary":                    mcpGenerationSummaryText(sourceSummary),
-	}}, nil
+	}}
+	if mcpBoolFromInterface(job.Payload["failOnUnmetRequirements"]) &&
+		!mcpBoolFromInterface(sourceSummary["externalVideoRequirementSatisfied"]) {
+		return nil, fmt.Errorf("required MCP video generation was not satisfied: %s", result.Output["summary"])
+	}
+	return result, nil
 }
 
 func mcpMaxReadyGenerations(job Job) int {

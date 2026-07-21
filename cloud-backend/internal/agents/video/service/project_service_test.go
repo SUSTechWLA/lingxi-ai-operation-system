@@ -21,6 +21,22 @@ func TestProjectServiceUsesExpectedRevisionCAS(t *testing.T) {
 	}
 }
 
+func TestProjectServiceMarksSuccessfulAgentRunCompleted(t *testing.T) {
+	store := &fakeProjectCASStore{project: &model.VideoProject{
+		ID: "vp-1", UserID: "u-1", Status: model.StatusRunning, CurrentRunID: "run-1", ConfigRevision: 4,
+	}}
+	svc := NewProjectService(store)
+	if err := svc.MarkAgentRunCompleted(context.Background(), "u-1", "vp-1", "run-1"); err != nil {
+		t.Fatalf("MarkAgentRunCompleted: %v", err)
+	}
+	if store.project.Status != model.StatusCompleted || store.project.CurrentRunID != "run-1" {
+		t.Fatalf("project terminal state = %+v", store.project)
+	}
+	if store.casCalls != 1 || store.expectedRevision != 4 {
+		t.Fatalf("CAS calls=%d expectedRevision=%d", store.casCalls, store.expectedRevision)
+	}
+}
+
 func TestProjectServiceReturnsRevisionConflictWithoutBlindRetry(t *testing.T) {
 	store := &fakeProjectCASStore{
 		project: &model.VideoProject{ID: "vp-1", UserID: "u-1", ConfigRevision: 7},

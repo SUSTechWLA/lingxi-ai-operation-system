@@ -377,10 +377,7 @@ func (s *Server) readMCPProviders() ([]localmcp.ProviderConfig, error) {
 	data, err := os.ReadFile(s.mcpProvidersPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if provider, ok := defaultIPAvatarProvider(); ok {
-				return normalizeMCPProviders([]localmcp.ProviderConfig{provider})
-			}
-			return []localmcp.ProviderConfig{}, nil
+			return withBundledIPAvatarProvider(nil)
 		}
 		return nil, err
 	}
@@ -388,7 +385,23 @@ func (s *Server) readMCPProviders() ([]localmcp.ProviderConfig, error) {
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, err
 	}
-	return normalizeMCPProviders(resp.Providers)
+	return withBundledIPAvatarProvider(resp.Providers)
+}
+
+func withBundledIPAvatarProvider(providers []localmcp.ProviderConfig) ([]localmcp.ProviderConfig, error) {
+	normalized, err := normalizeMCPProviders(providers)
+	if err != nil {
+		return nil, err
+	}
+	for _, provider := range normalized {
+		if provider.ID == ipAvatarProviderID {
+			return normalized, nil
+		}
+	}
+	if provider, ok := defaultIPAvatarProvider(); ok {
+		normalized = append(normalized, provider)
+	}
+	return normalized, nil
 }
 
 func (s *Server) ReadMCPProviders() ([]localmcp.ProviderConfig, error) {

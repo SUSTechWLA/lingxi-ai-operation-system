@@ -62,6 +62,80 @@ func TestHyperFramesProjectExecutorWritesOnlyInsideProjectWorkspace(t *testing.T
 	}
 }
 
+func TestHyperFramesProjectExecutorPersistsThreeLayerDesignOnEveryShot(t *testing.T) {
+	root := t.TempDir()
+	executor := NewHyperFramesProjectExecutor(root)
+	_, err := executor.Execute(context.Background(), Job{
+		ID:        "job-three-layers",
+		ProjectID: "project_three_layers",
+		Command:   CommandHyperFramesProjectGenerate,
+		Payload: map[string]interface{}{
+			"topic": "一个 Shot，三层协同",
+			"shotList": []interface{}{
+				map[string]interface{}{
+					"shotId": "SHOT_01", "durationSec": float64(6),
+					"narrationText": "树懒 IP 连续口播。", "screenText": []interface{}{"三层协同"},
+				},
+			},
+			"shotGenerationPlans": []interface{}{
+				map[string]interface{}{
+					"shotId": "SHOT_01",
+					"visualLayers": map[string]interface{}{
+						"schemaVersion": "shot_visual_layers_v1",
+						"shotId":        "SHOT_01",
+						"ipAroll": map[string]interface{}{
+							"layerKey": "ip_aroll", "executionPolicy": "generate", "required": true,
+						},
+						"hyperframes": map[string]interface{}{
+							"layerKey": "hyperframes_text", "executionPolicy": "generate", "required": true,
+						},
+						"aigc": map[string]interface{}{
+							"layerKey": "aigc_enrichment", "executionPolicy": "disabled", "required": false,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_three_layers", "hyperframes", "assets", "data.json"))
+	if err != nil {
+		t.Fatalf("read data.json: %v", err)
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatalf("decode data.json: %v", err)
+	}
+	if len(interfaceSlice(data["shotGenerationPlans"])) != 1 {
+		t.Fatalf("shotGenerationPlans must be preserved: %s", raw)
+	}
+	shots := interfaceSlice(data["shotList"])
+	if len(shots) != 1 {
+		t.Fatalf("shotList = %#v", data["shotList"])
+	}
+	shot := mapFromInterface(shots[0])
+	if shot["visualLayerContract"] != "shot_visual_layers_v1" {
+		t.Fatalf("shot contract missing: %#v", shot)
+	}
+	layers := mapFromMap(shot, "visualLayers")
+	for _, layerName := range []string{"ipAroll", "hyperframes", "aigc"} {
+		layer := mapFromMap(layers, layerName)
+		if layer == nil || strings.TrimSpace(stringFromMap(layer, "designSummary")) == "" {
+			t.Fatalf("%s layer must have a readable design summary: %#v", layerName, layers)
+		}
+	}
+	policy := mapFromMap(shot, "layerExecutionPolicy")
+	if policy["ip_aroll"] != "generate" || policy["hyperframes_text"] != "generate" || policy["aigc_enrichment"] != "disabled" {
+		t.Fatalf("shot layer policy = %#v", policy)
+	}
+	if len(interfaceSlice(shot["requiredLayers"])) != 2 {
+		t.Fatalf("required layers = %#v, want IP and HyperFrames", shot["requiredLayers"])
+	}
+}
+
 func TestHyperFramesProjectExecutorRejectsTraversalProjectID(t *testing.T) {
 	executor := NewHyperFramesProjectExecutor(t.TempDir())
 	_, err := executor.Execute(context.Background(), Job{
@@ -85,7 +159,7 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 	}
 
 	executor := NewHyperFramesProjectExecutor(root)
-	_, err := executor.Execute(context.Background(), Job{
+	result, err := executor.Execute(context.Background(), Job{
 		ID:        "job-1",
 		ProjectID: "project_001",
 		Command:   CommandHyperFramesProjectGenerate,
@@ -119,6 +193,9 @@ func TestHyperFramesProjectExecutorUsesShotAssetPackageMedia(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
+	}
+	if result.Output["visualLayerContract"] != "shot_visual_layers_v1" {
+		t.Fatalf("HyperFrames output must declare the canonical Shot layer contract: %#v", result.Output)
 	}
 
 	raw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "index.html"))
@@ -235,6 +312,13 @@ func TestHyperFramesProjectExecutorBuildsContinuousIPArollWithSeparateAudioAndBr
 	}
 	if strings.Contains(html[videoStart:sceneStart], `<div`) {
 		t.Fatalf("A-roll video/audio must not be nested in a decorative media container")
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(root, "projects", "project_001", "hyperframes", "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest.json: %v", err)
+	}
+	if !strings.Contains(string(manifestRaw), `"visualLayerContract": "shot_visual_layers_v1"`) {
+		t.Fatalf("manifest must preserve the three-layer Shot contract: %s", manifestRaw)
 	}
 }
 

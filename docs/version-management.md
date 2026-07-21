@@ -58,10 +58,25 @@ Wiki 首页不维护完整 release 流水账，只展示当前状态并链接到
 
 ## 当前发布检查清单
 
+v0.2.1 对应能力：
+
+- 一键源码部署同时管理 Docker 后端、HyperFrames 健康检查和 macOS 客户端打包。
+- 安装包内置唯一正式树懒 IP、工作室和本地 MCP provider；无 AIGC 口播路由 fail closed。
+- 动态规划保留时长、预览模式、production route 和 required layers，安装态媒体工具路径可确定发现。
+
+发布 v0.2.1 tag 前必须确认：
+
+1. root、frontend 和 HyperFrames Render Service 的 package version 全部为 `0.2.1`。
+2. README、`CHANGELOG.md` 和 `docs/RELEASE_STATUS.md` 已更新为 v0.2.1。
+3. one-click、creator、Go、Electron、beta smoke、release tree 和 version 检查通过。
+4. macOS 安装态客户端从前端完成一条无 AIGC 的默认 IP 口播并输出可播放 MP4。
+5. PR 流水线通过后合入 `release`，`v0.2.1` tag 指向合并后的 release 提交并创建 GitHub Release。
+
 v0.2.0 对应能力：
 
 - 默认入口升级为六步 Creator Studio，并保留独立 Shot 审核、版本恢复、候选确认、成片重拼接和显式 final-review gate。
-- Shot 生产拆分为 AIGC、HyperFrames 和 FFmpeg 三层，外部视频模型只接收对应的 AIGC 层提示词。
+- Shot 生产统一为 `shot_visual_layers_v1`：IP A-roll、HyperFrames/HyperKeyframes 文字特效、AIGC 丰富层三层画面设计，加一份 FFmpeg/HyperFrames 合成计划；外部视频模型只接收对应的 AIGC 层提示词。
+- AIGC 执行策略独立于口播/影视路线；纯本地模式必须保留完整 AIGC 设计，并证明不会创建外部生成请求。
 - 默认口播资产固化为唯一 Blender 树懒角色母版、共享暖色演播室、运行时 GLB、统一资产清单和 GPT-SoVITS 参考声音。
 - 默认 IP 资产全部迁移至英文路径；废弃贴图、重复角色、旧预览、demo 音轨和低质量生成视频资产不进入 release。
 - tag 发布会构建 macOS arm64/x64 客户端并创建 GitHub Release；包名固定包含版本、平台和架构。

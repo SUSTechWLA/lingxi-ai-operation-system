@@ -143,6 +143,34 @@ func TestCancelledAgentTerminalFailsScopedShotTask(t *testing.T) {
 	}
 }
 
+func TestSyncVideoProjectFromSuccessfulAgentTerminal(t *testing.T) {
+	projects := &fakeAgentProjectLifecycle{}
+	event := agentruntime.RunTerminalEvent{
+		RunID: "run-1", UserID: "u-1", Status: agentruntime.RunStatusSuccess,
+		Context: map[string]interface{}{"projectId": "vp-1"},
+	}
+	if err := syncVideoProjectFromAgentTerminal(context.Background(), projects, event); err != nil {
+		t.Fatalf("sync project terminal: %v", err)
+	}
+	if projects.completedProjectID != "vp-1" || projects.completedRunID != "run-1" || projects.stoppedProjectID != "" {
+		t.Fatalf("project lifecycle = %+v", projects)
+	}
+}
+
+func TestSyncVideoProjectFromFailedAgentTerminalPausesProject(t *testing.T) {
+	projects := &fakeAgentProjectLifecycle{}
+	event := agentruntime.RunTerminalEvent{
+		RunID: "run-1", UserID: "u-1", Status: agentruntime.RunStatusFailed,
+		Context: map[string]interface{}{"projectId": "vp-1"},
+	}
+	if err := syncVideoProjectFromAgentTerminal(context.Background(), projects, event); err != nil {
+		t.Fatalf("sync project terminal: %v", err)
+	}
+	if projects.stoppedProjectID != "vp-1" || projects.stoppedRunID != "run-1" || projects.completedProjectID != "" {
+		t.Fatalf("project lifecycle = %+v", projects)
+	}
+}
+
 func shotRegenerationLocalJob() *localrunner.LocalJob {
 	return &localrunner.LocalJob{ProjectID: "vp-1", Payload: map[string]interface{}{
 		"shotRegenerationTaskId": "regen-task-1", "shotRegenerationRunId": "agent_run_shot_stable", "targetShotId": "shot-012",
@@ -179,6 +207,23 @@ type fakeShotCompletionService struct {
 	candidate  videomodel.ShotCandidate
 	reason     string
 	err        error
+}
+
+type fakeAgentProjectLifecycle struct {
+	completedProjectID string
+	completedRunID     string
+	stoppedProjectID   string
+	stoppedRunID       string
+}
+
+func (f *fakeAgentProjectLifecycle) MarkAgentRunCompleted(_ context.Context, _, projectID, runID string) error {
+	f.completedProjectID, f.completedRunID = projectID, runID
+	return nil
+}
+
+func (f *fakeAgentProjectLifecycle) MarkAgentRunStopped(_ context.Context, _, projectID, runID string) error {
+	f.stoppedProjectID, f.stoppedRunID = projectID, runID
+	return nil
 }
 
 func (f *fakeShotCompletionService) CompleteShotRegeneration(_ context.Context, userID, projectID string, provenance videoservice.ShotRegenerationProvenance, candidate videomodel.ShotCandidate) error {

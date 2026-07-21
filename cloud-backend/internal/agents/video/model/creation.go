@@ -534,6 +534,57 @@ type RenderStrategy struct {
 	CompositePlan     *CompositePlan `json:"compositePlan,omitempty"`
 }
 
+const (
+	LayerExecutionGenerate = "generate"
+	LayerExecutionAuto     = "auto"
+	LayerExecutionOptional = "optional"
+	LayerExecutionDeferred = "deferred"
+	LayerExecutionDisabled = "disabled"
+)
+
+// ShotVisualLayerDesign describes one independently reviewable part of a Shot.
+// Designed is deliberately separate from the execution policy: an optional or
+// disabled layer still carries a complete design so the same Shot can be
+// enriched later without rewriting its visual intent.
+type ShotVisualLayerDesign struct {
+	LayerKey        string   `json:"layerKey"`
+	Designed        bool     `json:"designed"`
+	Enabled         bool     `json:"enabled"`
+	Required        bool     `json:"required"`
+	ExecutionPolicy string   `json:"executionPolicy"`
+	Role            string   `json:"role"`
+	Description     string   `json:"description"`
+	Prompt          string   `json:"prompt,omitempty"`
+	Renderer        string   `json:"renderer,omitempty"`
+	ArtifactKinds   []string `json:"artifactKinds,omitempty"`
+	SafeArea        string   `json:"safeArea,omitempty"`
+	ZIndex          int      `json:"zIndex"`
+	StartSec        float64  `json:"startSec"`
+	DurationSec     float64  `json:"durationSec"`
+}
+
+type ShotCompositionDesign struct {
+	Description        string   `json:"description"`
+	Assembler          string   `json:"assembler"`
+	LayerOrder         []string `json:"layerOrder"`
+	TimingPolicy       string   `json:"timingPolicy"`
+	SafeAreaPolicy     string   `json:"safeAreaPolicy"`
+	OutputArtifactKind string   `json:"outputArtifactKind"`
+}
+
+// ShotVisualLayerContract is the canonical three-layer visual contract shared
+// by talking-head and cinematic production. Every Shot always describes all
+// three layers; execution policy controls whether a layer is rendered now.
+type ShotVisualLayerContract struct {
+	SchemaVersion string                `json:"schemaVersion"`
+	ShotID        string                `json:"shotId"`
+	Description   string                `json:"description"`
+	IPAroll       ShotVisualLayerDesign `json:"ipAroll"`
+	HyperFrames   ShotVisualLayerDesign `json:"hyperframes"`
+	AIGC          ShotVisualLayerDesign `json:"aigc"`
+	Composition   ShotCompositionDesign `json:"composition"`
+}
+
 type ShotGenerationPlan struct {
 	ShotID         string                  `json:"shotId"`
 	Mode           string                  `json:"mode"`
@@ -547,6 +598,7 @@ type ShotGenerationPlan struct {
 	FusionPlan     FusionPlan              `json:"fusionPlan"`
 	FallbackPlan   *ShotGenerationFallback `json:"fallbackPlan,omitempty"`
 	ReviewFocus    []string                `json:"reviewFocus,omitempty"`
+	VisualLayers   ShotVisualLayerContract `json:"visualLayers"`
 }
 
 type ShotGenerationFallback struct {

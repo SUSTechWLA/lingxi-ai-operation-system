@@ -994,6 +994,7 @@ func TestTaskExecutionControl_RetryNode(t *testing.T) {
 		ID: "n1", TaskID: "t1", Status: model.NodeFailed,
 		RetryCount: 3, MaxRetry: 3, ErrorMessage: "permanent error",
 	}
+	taskRepo.tasks["t1"] = &model.Task{ID: "t1", Status: model.TaskFailed}
 
 	ss := NewStateService(nodeRepo, taskRepo, depRepo, ctxRepo, eventSaver)
 	tc := NewTaskExecutionControl(taskRepo, nodeRepo, ss)
@@ -1011,6 +1012,9 @@ func TestTaskExecutionControl_RetryNode(t *testing.T) {
 	}
 	if nodeRepo.nodes["n1"].ErrorMessage != "" {
 		t.Errorf("Expected empty error message after retry, got '%s'", nodeRepo.nodes["n1"].ErrorMessage)
+	}
+	if taskRepo.tasks["t1"].Status != model.TaskRunning {
+		t.Errorf("Expected parent task RUNNING after manual retry, got %s", taskRepo.tasks["t1"].Status)
 	}
 }
 

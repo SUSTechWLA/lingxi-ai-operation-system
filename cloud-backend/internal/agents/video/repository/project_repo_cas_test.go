@@ -20,9 +20,12 @@ func TestProjectRepositoryCompareAndSwapForUserUsesConfigRevision(t *testing.T) 
 	if err != nil || !swapped {
 		t.Fatalf("swapped=%v error=%v", swapped, err)
 	}
-	if !strings.Contains(db.sql, "config_revision=$14") || !strings.Contains(db.sql, "config_revision=$15") ||
+	if !strings.Contains(db.sql, "config_revision=$14") || !strings.Contains(db.sql, "config_revision=$15::bigint") ||
 		!strings.Contains(db.sql, "set_config('app.video_project_expected_revision'") {
 		t.Fatalf("CAS SQL does not compare and increment revision: %s", db.sql)
+	}
+	if got, ok := db.args[14].(string); !ok || got != "7" {
+		t.Fatalf("expected revision argument = %#v, want decimal text for set_config", db.args[14])
 	}
 	if project.ConfigRevision != 8 {
 		t.Fatalf("project revision=%d, want 8", project.ConfigRevision)
@@ -60,12 +63,14 @@ func TestProjectRepositoryCompareAndSwapForUserReportsLostRace(t *testing.T) {
 }
 
 type recordingProjectDB struct {
-	tag pgconn.CommandTag
-	sql string
+	tag  pgconn.CommandTag
+	sql  string
+	args []interface{}
 }
 
-func (d *recordingProjectDB) Exec(_ context.Context, sql string, _ ...interface{}) (pgconn.CommandTag, error) {
+func (d *recordingProjectDB) Exec(_ context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
 	d.sql = sql
+	d.args = args
 	return d.tag, nil
 }
 

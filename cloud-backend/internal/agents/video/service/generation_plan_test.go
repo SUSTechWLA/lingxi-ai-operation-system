@@ -66,6 +66,64 @@ func TestBuildShotGenerationPlanMotionSceneUsesAIGCVideo(t *testing.T) {
 	}
 }
 
+func TestBuildShotGenerationPlanAlwaysDescribesThreeVisualLayers(t *testing.T) {
+	shot := model.ShotUnit{
+		ID:           "SHOT_THREE_LAYERS",
+		DurationSec:  8,
+		Narration:    "树懒阿洛解释为什么每个镜头都需要三层画面设计。",
+		SceneSummary: "IP 在工作室面对镜头口播，背景加入克制的补充素材。",
+		ScreenText:   []string{"三层画面设计"},
+	}
+	visual := model.VisualPlan{
+		Background: model.BackgroundSpec{Description: "柔和的工作室背景与抽象动态素材", RequiresAIGC: true},
+		TextLayers: []model.TextLayerSpec{{
+			ID: "headline", Text: "三层画面设计", Role: model.TextRoleKeyword, MustBeExact: true,
+		}},
+	}
+
+	plan := BuildShotGenerationPlan(shot, visual, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: true, HTMLAvailable: true})
+	layers := plan.VisualLayers
+	if layers.SchemaVersion != "shot_visual_layers_v1" || layers.ShotID != shot.ID {
+		t.Fatalf("visual layer contract identity = %#v", layers)
+	}
+	for name, layer := range map[string]model.ShotVisualLayerDesign{
+		"ip_aroll":         layers.IPAroll,
+		"hyperframes_text": layers.HyperFrames,
+		"aigc_enrichment":  layers.AIGC,
+	} {
+		if !layer.Designed || layer.Role == "" || layer.Description == "" || layer.ExecutionPolicy == "" {
+			t.Fatalf("%s layer must be explicitly designed and described: %#v", name, layer)
+		}
+		if layer.DurationSec != float64(shot.DurationSec) {
+			t.Fatalf("%s duration = %v, want %d", name, layer.DurationSec, shot.DurationSec)
+		}
+	}
+	if layers.IPAroll.ZIndex >= layers.HyperFrames.ZIndex || layers.AIGC.ZIndex >= layers.IPAroll.ZIndex {
+		t.Fatalf("layer z-order must be AIGC -> IP A-roll -> HyperFrames: %#v", layers)
+	}
+	if layers.Composition.Assembler == "" || len(layers.Composition.LayerOrder) != 3 {
+		t.Fatalf("composition must describe all three layers: %#v", layers.Composition)
+	}
+	if !strings.Contains(layers.AIGC.Prompt, "禁止生成任何可读文字") {
+		t.Fatalf("AIGC layer must reserve exact text for HyperFrames: %q", layers.AIGC.Prompt)
+	}
+}
+
+func TestBuildShotGenerationPlanKeepsDisabledAIGCAsDesignedLayer(t *testing.T) {
+	shot := model.ShotUnit{ID: "SHOT_LOCAL", DurationSec: 6, Narration: "纯本地口播仍然保留 AIGC 层设计。"}
+	plan := BuildShotGenerationPlan(shot, model.VisualPlan{}, model.DefaultRenderPreference(), RenderCapabilities{AIGCAvailable: false, HTMLAvailable: true})
+
+	if !plan.VisualLayers.AIGC.Designed {
+		t.Fatal("AIGC layer design must not disappear when execution is unavailable")
+	}
+	if plan.VisualLayers.AIGC.ExecutionPolicy != model.LayerExecutionOptional {
+		t.Fatalf("optional AIGC policy = %q, want %q", plan.VisualLayers.AIGC.ExecutionPolicy, model.LayerExecutionOptional)
+	}
+	if !plan.VisualLayers.HyperFrames.Required {
+		t.Fatalf("HyperFrames should remain required for deterministic talking-head text: %#v", plan.VisualLayers.HyperFrames)
+	}
+}
+
 func TestBuildShotGenerationPlanAIGCDurationClampsToProviderWindow(t *testing.T) {
 	tests := []struct {
 		name        string

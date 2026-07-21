@@ -105,30 +105,77 @@ func (e *HyperFramesRenderExecutor) renderFastStoryboard(ctx context.Context, pr
 	}
 
 	concatPath := filepath.Join(workDir, "concat.txt")
-	ffmpegArgs := []string{
-		"-y",
-		"-f", "concat",
-		"-safe", "0",
-		"-i", concatPath,
-		"-t", fmt.Sprintf("%.3f", durationSec),
-		"-vf", fmt.Sprintf("fps=%d,format=yuv420p", fps),
-		"-r", strconv.Itoa(fps),
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-crf", "18",
-		"-movflags", "+faststart",
-		outputPath,
-	}
+	aRollPath, hasAroll := storyboardArollMediaPath(projectDir)
+	ffmpegArgs := storyboardFFmpegArgs(concatPath, aRollPath, outputPath, durationSec, fps, width, height)
 	ffmpegCmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
 	if combined, err := ffmpegCmd.CombinedOutput(); err != nil {
 		return nil, true, fmt.Errorf("assemble storyboard video: %w: %s", err, strings.TrimSpace(string(combined)))
 	}
 
+	jobID := "storyboard_fast_render"
+	if hasAroll {
+		jobID = "storyboard_ip_composite"
+	}
 	return &hyperFramesRenderResponse{
 		OK:         true,
-		JobID:      "storyboard_fast_render",
+		JobID:      jobID,
 		OutputPath: outputPath,
 	}, true, nil
+}
+
+func storyboardArollMediaPath(projectDir string) (string, bool) {
+	mediaDir := filepath.Join(projectDir, "assets", "media")
+	entries, err := os.ReadDir(mediaDir)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		if !strings.Contains(name, "ip_aroll") || (filepath.Ext(name) != ".mp4" && filepath.Ext(name) != ".mov") {
+			continue
+		}
+		candidate := filepath.Join(mediaDir, entry.Name())
+		if info, statErr := os.Stat(candidate); statErr == nil && info.Mode().IsRegular() {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func storyboardFFmpegArgs(concatPath, aRollPath, outputPath string, durationSec float64, fps, width, height int) []string {
+	common := []string{
+		"-t", fmt.Sprintf("%.3f", durationSec),
+		"-r", strconv.Itoa(fps),
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-crf", "18",
+		"-movflags", "+faststart",
+	}
+	if strings.TrimSpace(aRollPath) == "" {
+		args := []string{"-y", "-f", "concat", "-safe", "0", "-i", concatPath, "-vf", fmt.Sprintf("fps=%d,format=yuv420p", fps)}
+		return append(append(args, common...), outputPath)
+	}
+	filter := fmt.Sprintf(
+		"[0:v]fps=%d,split=2[bgsrc][fgsrc];"+
+			"[bgsrc]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,boxblur=20:2[bg];"+
+			"[fgsrc]scale=%d:%d:force_original_aspect_ratio=decrease[fg];"+
+			"[bg][fg]overlay=(W-w)/2:(H-h)/2[base];"+
+			"[1:v]fps=%d,format=rgba[textfx];"+
+			"[base][textfx]overlay=0:0:shortest=1,format=yuv420p[v]",
+		fps, width, height, width, height, width, height, fps,
+	)
+	args := []string{
+		"-y", "-stream_loop", "-1", "-i", aRollPath,
+		"-f", "concat", "-safe", "0", "-i", concatPath,
+		"-filter_complex", filter,
+		"-map", "[v]", "-map", "0:a?",
+	}
+	args = append(args, common...)
+	args = append(args, "-c:a", "aac", "-b:a", "192k", outputPath)
+	return args
 }
 
 func storyboardTotalDurationSec(shots []storyboardRenderShot) float64 {
@@ -219,6 +266,8 @@ data = json.loads(data_path.read_text(encoding="utf-8"))
 shots = data.get("shotList") or []
 packages = {pkg.get("shotId"): pkg for pkg in (data.get("shotAssetPackages") or [])}
 screens_dir = project_dir / "assets" / "screens"
+media_dir = project_dir / "assets" / "media"
+has_ip_aroll = any("ip_aroll" in item.name.lower() and item.suffix.lower() in (".mp4", ".mov") for item in media_dir.glob("*")) if media_dir.exists() else False
 
 def font(size, bold=False):
     candidates = [
@@ -380,10 +429,67 @@ def draw_common_text(draw, idx, total, route, title, action, duration):
     draw.rounded_rectangle((92, 875, 92 + int(1678 * ((idx + 1) / max(1, total))), 916), radius=18, fill=(200, 107, 52))
     draw.text((92, 940), f"{duration:.0f}s · 可审核 · 可追踪 · 可本地执行", font=FONT_SMALL, fill=(242, 239, 228, 188))
 
+def draw_ip_aroll_text_layer(draw, shot, idx, total, duration):
+    margin = max(24, int(width * 0.05))
+    badge_font = font(max(16, int(width * 0.024)), True)
+    title_font_size = max(30, int(width * 0.052))
+    body_font_size = max(20, int(width * 0.028))
+    small_font_size = max(15, int(width * 0.021))
+    title_font = font(title_font_size, True)
+    body_font = font(body_font_size)
+    small_font = font(small_font_size)
+
+    badges = ["IP A-ROLL", "HYPERFRAMES TEXT", "AIGC READY"]
+    cursor_x = margin
+    badge_y = margin
+    for badge_index, badge in enumerate(badges):
+        tw, th = text_size(draw, badge, badge_font)
+        fill = (200, 107, 52, 225) if badge_index == 0 else (9, 20, 30, 175)
+        draw.rounded_rectangle((cursor_x, badge_y, cursor_x + tw + 28, badge_y + th + 18), radius=14, fill=fill, outline=(255, 255, 255, 80), width=1)
+        draw.text((cursor_x + 14, badge_y + 8), badge, font=badge_font, fill=(248, 244, 235, 245))
+        cursor_x += tw + 38
+
+    panel_height = min(max(int(height * 0.25), 190), 360)
+    panel_top = height - panel_height - margin
+    draw.rounded_rectangle((margin, panel_top, width - margin, height - margin), radius=max(20, int(width * 0.025)), fill=(7, 15, 24, 188), outline=(242, 194, 139, 115), width=2)
+
+    screen_text = shot.get("screenText") or []
+    if isinstance(screen_text, str):
+        screen_text = [screen_text]
+    title = next((str(item).strip() for item in screen_text if str(item).strip()), "一个 Shot，三层协同")
+    narration = str(shot.get("narrationText") or shot.get("mainAction") or "IP 角色、可控文字与 AIGC 丰富层在同一 Shot 时间窗中协同。")
+    text_x = margin + max(22, int(width * 0.035))
+    max_text_width = width - text_x - margin - max(22, int(width * 0.035))
+    title_y = panel_top + max(22, int(panel_height * 0.12))
+    title_lines = wrap_text(draw, title, title_font, max_text_width, 2)
+    for line_index, line in enumerate(title_lines):
+        draw.text((text_x, title_y + line_index * int(title_font_size * 1.24)), line, font=title_font, fill=(250, 244, 233, 255))
+
+    body_y = title_y + max(1, len(title_lines)) * int(title_font_size * 1.24) + max(8, int(panel_height * 0.025))
+    for line_index, line in enumerate(wrap_text(draw, narration, body_font, max_text_width, 2)):
+        draw.text((text_x, body_y + line_index * int(body_font_size * 1.35)), line, font=body_font, fill=(235, 237, 232, 225))
+
+    progress_y = height - margin - max(20, int(panel_height * 0.09))
+    progress_w = width - margin * 2 - max(44, int(width * 0.07))
+    draw.rounded_rectangle((text_x, progress_y, text_x + progress_w, progress_y + 8), radius=4, fill=(255, 255, 255, 60))
+    draw.rounded_rectangle((text_x, progress_y, text_x + int(progress_w * ((idx + 1) / max(1, total))), progress_y + 8), radius=4, fill=(218, 142, 77, 245))
+    marker = f"SHOT {idx+1:02d}/{total:02d} · {duration:.0f}s · THREE-LAYER CONTRACT"
+    draw.text((text_x, progress_y - small_font_size - 8), marker, font=small_font, fill=(242, 194, 139, 230))
+
 manifest_lines = []
 total = len(shots)
 for idx, shot in enumerate(shots):
     global img
+    duration = float(shot.get("durationSec") or 6)
+    if has_ip_aroll:
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw_ip_aroll_text_layer(draw, shot, idx, total, duration)
+        out = out_dir / f"shot_{idx+1:03d}.png"
+        img.save(out, "PNG")
+        manifest_lines.append(f"file '{out.as_posix()}'\n")
+        manifest_lines.append(f"duration {max(1.0, duration):.3f}\n")
+        continue
     img = gradient_bg(idx)
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -393,7 +499,6 @@ for idx, shot in enumerate(shots):
     draw = ImageDraw.Draw(img)
     route, title = split_route(shot.get("sceneSummary"))
     action = shot.get("mainAction") or "把复杂流程变成非技术用户也能看懂的画面。"
-    duration = float(shot.get("durationSec") or 6)
     route_upper = route.upper()
     if "SCREEN" in route_upper or "录屏" in route:
         draw_browser_frame(draw, shot, idx)

@@ -192,6 +192,15 @@ func (s *Service) ClaimJob(ctx context.Context, runnerID string) (*LocalJob, err
 		       FROM agent_runs ar
 		       WHERE ar.task_id = lj.task_id
 		         AND ar.status IN ('CANCELLED', 'FAILED')
+		         AND (
+		           ar.status = 'CANCELLED'
+		           OR NOT EXISTS (
+		             SELECT 1
+		             FROM ai_task task
+		             WHERE task.id = lj.task_id
+		               AND task.status = 'RUNNING'
+		           )
+		         )
 		     )
 		     AND EXISTS (
 		       SELECT 1

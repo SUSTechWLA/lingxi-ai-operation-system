@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactContentResponse } from '../../utils/types'
+import type { AgentReviewItem, AgentRun, ArtifactContentResponse } from '../../utils/types'
+import { getAgentRun, getAgentRunReviews } from '../../services/api'
 import { getCreationView, getCreatorArtifactContent, getShotSummary, getShotWorkspace, getStepVersions, listShots } from '../../services/creatorApi'
 import type { CreationView, CreatorArtifactVersion, CreatorStep, CreatorStepId, CreatorTask, ShotListFilters, ShotListItem, ShotRegenerationResult, ShotSummary, ShotUnit, ShotWorkspace } from './types'
 import {
   creatorPollDelay,
   creatorStepLabel,
+  creatorStepForAgentReview,
   didSelectedShotTaskChange,
   isCurrentWorkspaceArtifact,
   isLatestWorkspaceRequest,
@@ -12,6 +14,7 @@ import {
   adoptCreatorShotTask,
   selectedShotAfterAppend,
   selectedShotAfterReplacement,
+  nextPendingCreatorReview,
   SHOT_QUEUE_CONFLICT_COPY,
   type KeyedWorkspaceArtifact,
   type WorkspaceArtifactSelection,
@@ -23,6 +26,7 @@ import TaskRecoveryBanner from './components/TaskRecoveryBanner'
 import ShotReviewQueue from './components/ShotReviewQueue'
 import ShotInspector from './components/ShotInspector'
 import PreviewDeliveryPanel from './components/PreviewDeliveryPanel'
+import AgentReviewGatePanel from './components/AgentReviewGatePanel'
 
 interface ProjectWorkspacePageProps {
   projectId: string
@@ -52,6 +56,8 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const [shotWorkspace, setShotWorkspace] = useState<ShotWorkspace | null>(null)
   const [shotWorkspaceLoading, setShotWorkspaceLoading] = useState(false)
   const [shotNotice, setShotNotice] = useState('')
+  const [agentRun, setAgentRun] = useState<AgentRun | null>(null)
+  const [agentReviews, setAgentReviews] = useState<AgentReviewItem[]>([])
   const activeTasksRef = useRef<CreationView['activeTasks']>([])
   const viewRequestTokenRef = useRef(0)
   const artifactRequestTokenRef = useRef(0)
@@ -68,6 +74,15 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
   const isPreviewDeliveryStep = stepId === 'preview' || stepId === 'delivery'
   const activeShotId = selectedShotId && (shotItems.length === 0 || shotItems.some(item => item.id === selectedShotId)) ? selectedShotId : selectedQueueShotId
   const activeTaskSignature = useMemo(() => (view?.activeTasks ?? []).map(task => `${task.id}:${task.shotId ?? ''}:${task.status}`).sort().join('|'), [view?.activeTasks])
+  const currentRunId = view?.project.currentRunId
+  const pendingAgentReview = nextPendingCreatorReview(agentReviews)
+  const displaySteps = useMemo(() => {
+    if (!view || !pendingAgentReview) return view?.steps ?? []
+    const reviewStepId = creatorStepForAgentReview(pendingAgentReview)
+    return view.steps.map(step => step.id === reviewStepId
+      ? { ...step, state: 'needs_review' as const, allowedActions: ['confirm'] }
+      : step)
+  }, [pendingAgentReview, view])
 
   useEffect(() => { shotItemsRef.current = shotItems }, [shotItems])
   useEffect(() => { selectedQueueShotIdRef.current = selectedQueueShotId }, [selectedQueueShotId])
@@ -153,6 +168,32 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
       controller.abort()
     }
   }, [refreshView])
+
+  const refreshAgentBridge = useCallback(async (runId: string, signal?: AbortSignal) => {
+    const [nextRun, nextReviews] = await Promise.all([
+      getAgentRun(runId),
+      getAgentRunReviews(runId),
+    ])
+    if (signal?.aborted) return
+    setAgentRun(nextRun)
+    setAgentReviews(nextReviews.reviews ?? [])
+  }, [])
+
+  useEffect(() => {
+    if (!currentRunId) {
+      setAgentRun(null)
+      setAgentReviews([])
+      return
+    }
+    const controller = new AbortController()
+    const refresh = () => void refreshAgentBridge(currentRunId, controller.signal).catch(() => undefined)
+    refresh()
+    const timer = window.setInterval(refresh, 2500)
+    return () => {
+      controller.abort()
+      window.clearInterval(timer)
+    }
+  }, [currentRunId, refreshAgentBridge])
 
   useEffect(() => {
     if (!isShotsStep) return
@@ -267,9 +308,16 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         <h1 id="creator-page-title">{view.project.name || '正在创作的视频'}</h1>
         <p>从需求到交付，每一步都可以回看和继续调整。</p>
       </header>
-      <CreationStrip steps={view.steps} currentStepId={stepId} onSelect={navigateToStep} />
+      <CreationStrip steps={displaySteps} currentStepId={stepId} onSelect={navigateToStep} />
       <TaskRecoveryBanner tasks={view.activeTasks} />
-      {isShotsStep ? <div className="shot-review-workspace">
+      {pendingAgentReview && currentRunId ? <AgentReviewGatePanel
+        runId={currentRunId}
+        review={pendingAgentReview}
+        onApproved={async () => {
+          await refreshAgentBridge(currentRunId)
+          await refreshView()
+        }}
+      /> : isShotsStep ? <div className="shot-review-workspace">
         <ShotReviewQueue
           items={shotItems}
           total={filteredShotTotal}
@@ -328,6 +376,7 @@ export default function ProjectWorkspacePage({ projectId, stepId, onNavigate, se
         }}
       />}
       {error && <p className="creator-form-error" role="alert">{error}</p>}
+      {agentRun?.status === 'FAILED' && <p className="creator-form-error" role="alert">创作任务未完成，请返回“我的视频”重试。</p>}
     </section>
   )
 }

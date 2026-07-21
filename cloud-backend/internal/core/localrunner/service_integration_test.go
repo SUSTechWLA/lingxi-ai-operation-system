@@ -143,3 +143,64 @@ func TestServiceDispatchClaimCompleteAndFailJobPostgres(t *testing.T) {
 		t.Fatalf("unexpected failed job: %#v", failed)
 	}
 }
+
+func TestServiceClaimAllowsManuallyReopenedAgentTaskPostgres(t *testing.T) {
+	dsn := os.Getenv("LOCALRUNNER_TEST_DATABASE_URL")
+	if strings.TrimSpace(dsn) == "" {
+		t.Skip("set LOCALRUNNER_TEST_DATABASE_URL to run postgres integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	service := NewService(pool)
+	prefix := "lr-reopen-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	taskID := prefix + "-task"
+	runID := prefix + "-run"
+	runner, err := service.RegisterRunner(ctx, RegisterRunnerRequest{
+		DeviceID:      prefix + "-device",
+		UserID:        prefix + "-user",
+		RunnerVersion: "test",
+		WorkspaceRoot: "local://test",
+		Capabilities: []RunnerCapability{{
+			ToolName:  "hyperframes_lint",
+			Command:   CommandHyperFramesLint,
+			Available: true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("register runner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM local_jobs WHERE project_id=$1`, prefix)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, runID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM ai_task WHERE id=$1`, taskID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM local_runners WHERE id=$1`, runner.RunnerID)
+	})
+	if _, err := pool.Exec(ctx, `INSERT INTO ai_task (id, user_id, status, input) VALUES ($1,$2,'RUNNING','{}'::jsonb)`, taskID, prefix+"-user"); err != nil {
+		t.Fatalf("insert reopened task: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_runs (id, task_id, user_id, domain, message, plan_json, status) VALUES ($1,$2,$3,'video_creation','test','{}'::jsonb,'FAILED')`, runID, taskID, prefix+"-user"); err != nil {
+		t.Fatalf("insert terminal run: %v", err)
+	}
+	job, err := service.DispatchLocalJob(ctx, DispatchLocalJobRequest{
+		ProjectID: prefix,
+		TaskID:    taskID,
+		NodeID:    prefix + "-node",
+		Command:   CommandHyperFramesLint,
+	})
+	if err != nil {
+		t.Fatalf("dispatch reopened task job: %v", err)
+	}
+	claimed, err := service.ClaimJob(ctx, runner.RunnerID)
+	if err != nil {
+		t.Fatalf("claim reopened task job: %v", err)
+	}
+	if claimed == nil || claimed.ID != job.ID {
+		t.Fatalf("manually reopened task should be claimable despite terminal run status: got %#v want %s", claimed, job.ID)
+	}
+}
