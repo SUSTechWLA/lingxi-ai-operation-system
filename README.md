@@ -82,6 +82,8 @@ ip-assets/main-ip/manifests/default-aroll-assets.json
 
 登录后的默认入口是 `#/create`。持久导航只有“开始创作”和“我的视频”；开发诊断保留在开发环境开关下的 `#/developer/*`，不会出现在生产创作者导航中。
 
+头像菜单中的“设置”统一管理文本生成、图片生成和视频生成接口，API 密钥只保存在本机；外观可选择跟随系统、浅色或深色并自动记住。开始创作页只展示创作者需要做的选择，不暴露 Shot 内部三层编排术语，后端仍按 `shot_visual_layers_v1` 自动生成并执行完整的 IP A-roll、HyperFrames 与 AIGC 画面计划。
+
 项目按需求、创意方案、脚本、分镜与素材、成片预览、交付六步推进。单个 Shot 必须大于 0 且小于 15 秒；重生成和候选确认只影响该 Shot 与成片待更新状态，历史版本可恢复为新的当前版本。重新拼接会重试真实的预览审核节点，不会重生成任何 Shot。最终视频与下载入口只在当前交付产物明确记录成片检查通过后出现。
 
 常用验证：`cd cloud-backend && go test ./... && go vet ./... && make api-types-check`，`cd frontend && npm run test:creator && npm run test:developer-build && npm run lint && npm run build`，以及 `bash scripts/beta-smoke-check.sh`。
