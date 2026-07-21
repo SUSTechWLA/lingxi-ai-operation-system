@@ -318,12 +318,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-ink-soft">连接状态</span>
                   <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${
-                    backendStatus === 'connected' ? 'text-green-600' :
-                    backendStatus === 'checking' ? 'text-yellow-600' : 'text-red-600'
+                    backendStatus === 'connected' ? 'text-success-ink' :
+                    backendStatus === 'checking' ? 'text-warning-ink' : 'text-danger-ink'
                   }`}>
                     <span className={`w-2 h-2 rounded-full ${
-                      backendStatus === 'connected' ? 'bg-green-500' :
-                      backendStatus === 'checking' ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'
+                      backendStatus === 'connected' ? 'bg-success' :
+                      backendStatus === 'checking' ? 'bg-warning animate-pulse' : 'bg-danger'
                     }`} />
                     {backendStatus === 'connected' ? '已连接' :
                      backendStatus === 'checking' ? '检查中...' : '未连接'}
@@ -597,7 +597,7 @@ function JiMengSettingsPanel(props: {
         </div>
         <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ${
           ready
-            ? 'bg-success/10 text-success ring-success/25'
+            ? 'bg-success-soft text-success-ink ring-success-line'
             : mcpRegistered || status?.dreaminaAvailable
               ? 'bg-primary-soft text-primary-dark ring-line'
               : 'bg-background text-ink-muted ring-line'
@@ -662,7 +662,7 @@ function JiMengSettingsPanel(props: {
             <span className="text-xs font-black text-primary-dark">MCP 启动命令</span>
             <SettingsCopyButton value={startCommand} label="复制命令" />
           </div>
-          <code className="mt-2 block break-all rounded bg-ink px-3 py-2 font-mono text-[11px] leading-5 text-white">{startCommand}</code>
+          <code className="mt-2 block break-all rounded bg-ink px-3 py-2 font-mono text-[11px] leading-5 text-background-card">{startCommand}</code>
         </div>
 
         <div className="rounded-lg bg-background-card p-4 ring-1 ring-line">
@@ -717,10 +717,10 @@ function LoginCopyRow({ label, value }: { label: string; value: string }) {
 function SettingsActionNotice({ message, compact = false, className = '' }: { message: SettingsActionMessage | null; compact?: boolean; className?: string }) {
   if (!message) return null
   const toneClass = message.type === 'success'
-    ? 'border-success/25 bg-success/10 text-success'
+    ? 'border-success-line bg-success-soft text-success-ink'
     : message.type === 'info'
       ? 'border-primary/15 bg-primary-soft text-primary-dark'
-      : 'border-danger/25 bg-danger/10 text-danger'
+      : 'border-danger-line bg-danger-soft text-danger-ink'
   return (
     <div className={`${className} flex items-center gap-2 rounded-lg border px-3 ${compact ? 'py-1.5' : 'py-2'} text-xs font-semibold ${toneClass}`}>
       {message.type === 'success' ? (
@@ -737,10 +737,10 @@ function SettingsActionNotice({ message, compact = false, className = '' }: { me
 
 function JiMengStep({ label, detail, done }: { label: string; detail: string; done: boolean }) {
   return (
-    <div className={`rounded-lg border p-3 ${done ? 'border-success/25 bg-success/10' : 'border-line bg-background-card'}`}>
+    <div className={`rounded-lg border p-3 ${done ? 'border-success-line bg-success-soft' : 'border-line bg-background-card'}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-black text-ink">{label}</span>
-        <span className={`grid h-5 w-5 place-items-center rounded-full text-[11px] ${done ? 'bg-success text-background-card' : 'bg-background-mist text-ink-soft'}`}>
+        <span className={`grid h-5 w-5 place-items-center rounded-full text-[11px] ${done ? 'bg-success text-on-success' : 'bg-background-mist text-ink-soft'}`}>
           {done ? <FiCheck /> : <FiX />}
         </span>
       </div>
@@ -764,7 +764,7 @@ function SettingsCopyButton({ value, label }: { value: string; label: string }) 
     <button
       type="button"
       onClick={handleCopy}
-      className={`inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black ring-1 ring-line hover:bg-primary-soft ${copyState === 'failed' ? 'text-red-700' : 'text-primary-dark'}`}
+      className={`inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black ring-1 ring-line hover:bg-primary-soft ${copyState === 'failed' ? 'text-danger-ink' : 'text-primary-dark'}`}
     >
       <FiCopy /> {copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : label}
     </button>

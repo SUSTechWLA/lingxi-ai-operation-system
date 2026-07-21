@@ -16,7 +16,7 @@ export function TalkingHeadLayerInspector({ artifacts }: { artifacts: TalkingHea
       <div className="text-xs font-black text-primary-dark">分层状态 · 后端 authoritative state</div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
         {layers.map((layer) => (
-          <div key={layer.key} className="rounded-lg bg-white p-3 ring-1 ring-line">
+          <div key={layer.key} className="rounded-lg bg-background-card p-3 ring-1 ring-line">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-black text-ink">{layer.label}</span>
               <span className="rounded-full bg-background-card px-2 py-0.5 text-[10px] font-black text-ink-muted">{statusLabels[layer.status]}</span>

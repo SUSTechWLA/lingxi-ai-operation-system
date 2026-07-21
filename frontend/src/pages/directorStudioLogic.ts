@@ -3539,17 +3539,17 @@ export interface StageStateDisplay {
 export function getStageStateDisplay(status: DirectorStageStatus): StageStateDisplay {
   switch (status) {
     case 'done':
-      return { icon: 'check', label: '已通过', colorClass: 'border-green-300 bg-green-50 text-green-700', dotColor: 'bg-green-500', animate: false, active: false }
+      return { icon: 'check', label: '已通过', colorClass: 'border-success-line bg-success-soft text-success-ink', dotColor: 'bg-success', animate: false, active: false }
     case 'review':
-      return { icon: 'shield', label: '待审核', colorClass: 'border-amber-400 bg-amber-50 text-amber-700', dotColor: 'bg-amber-500', animate: true, active: true }
+      return { icon: 'shield', label: '待审核', colorClass: 'border-warning-line bg-warning-soft text-warning-ink', dotColor: 'bg-warning', animate: true, active: true }
     case 'running':
     case 'active':
       return { icon: 'refresh', label: '生成中', colorClass: 'border-line bg-primary-soft text-primary-dark', dotColor: 'bg-primary', animate: true, active: true }
     case 'blocked':
     case 'failed':
-      return { icon: 'x', label: '已阻断', colorClass: 'border-red-300 bg-red-50 text-red-700', dotColor: 'bg-red-500', animate: false, active: false }
+      return { icon: 'x', label: '已阻断', colorClass: 'border-danger-line bg-danger-soft text-danger-ink', dotColor: 'bg-danger', animate: false, active: false }
     case 'pending':
     default:
-      return { icon: 'cpu', label: '等待中', colorClass: 'border-stone-200 bg-stone-50/60 text-stone-400', dotColor: 'bg-stone-300', animate: false, active: false }
+      return { icon: 'cpu', label: '等待中', colorClass: 'border-neutral-line bg-neutral-soft/60 text-neutral-ink', dotColor: 'bg-neutral-muted', animate: false, active: false }
   }
 }

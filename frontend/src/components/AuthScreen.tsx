@@ -35,23 +35,23 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
     <div className="min-h-screen bg-background px-6 py-8 text-ink">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-5xl items-center justify-center">
         <div className="grid w-full overflow-hidden rounded-lg border border-line bg-background-card shadow-card md:grid-cols-[0.9fr_1.1fr]">
-          <div className="hidden bg-primary-dark p-8 text-on-primary-dark md:flex md:flex-col md:justify-between">
+          <div className="hidden bg-brand-panel p-8 text-on-brand-panel md:flex md:flex-col md:justify-between">
             <div>
               <div className="flex items-center gap-3">
                 <img src={APP_ICON_PATH} alt="躺营 AI" className="h-9 w-9 rounded-lg" />
                 <div>
                   <div className="text-base font-semibold">躺营 AI</div>
-                  <div className="text-xs text-on-primary-dark/55">AI 视频创作助手</div>
+                  <div className="text-xs text-on-brand-panel/60">AI 视频创作助手</div>
                 </div>
               </div>
               <div className="mt-12 border-l border-primary-light pl-5">
                 <p className="text-sm font-medium text-primary-light">Cloud identity</p>
-                <p className="mt-3 max-w-xs text-sm leading-6 text-on-primary-dark/72">
+                <p className="mt-3 max-w-xs text-sm leading-6 text-on-brand-panel/75">
                   登录后项目、素材索引和运行记录按账号隔离；模型 API Key 仅在桌面端持久化，执行请求遵循设置页的传输说明。
                 </p>
               </div>
             </div>
-            <div className="text-xs leading-5 text-on-primary-dark/45">Provider secrets persist only on this device.</div>
+            <div className="text-xs leading-5 text-on-brand-panel/55">Provider secrets persist only on this device.</div>
           </div>
 
           <form onSubmit={submit} className="p-6 sm:p-8">
@@ -119,7 +119,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             </div>
 
             {error && (
-              <div className="mt-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <div className="mt-4 rounded-lg border border-danger-line bg-danger-soft px-3 py-2 text-sm text-danger-ink">
                 {error}
               </div>
             )}
@@ -127,7 +127,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthenticated }) => {
             <button
               type="submit"
               disabled={loading}
-              className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary-dark text-sm font-semibold text-on-primary-dark hover:bg-ink hover:text-background-card disabled:opacity-60"
+              className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-on-primary shadow-glow transition hover:bg-primary-dark hover:text-on-primary-dark disabled:opacity-60"
             >
               {loading ? <FiRefreshCw className="h-4 w-4 animate-spin" /> : <FiLogIn className="h-4 w-4" />}
               {mode === 'login' ? '登录' : '注册并登录'}

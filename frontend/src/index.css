@@ -10,6 +10,8 @@
   --color-primary-light: 255 214 90;
   --color-primary-dark: 92 52 12;
   --color-on-primary-dark: 255 253 246;
+  --color-brand-panel: 92 52 12;
+  --color-on-brand-panel: 255 244 216;
   --color-background: 255 246 214;
   --color-background-mist: 255 233 168;
   --color-background-card: 255 253 246;
@@ -18,7 +20,29 @@
   --color-ink-soft: 152 114 58;
   --color-line: 232 207 134;
   --color-success: 31 157 98;
+  --color-on-success: 16 39 25;
+  --color-success-soft: 234 248 240;
+  --color-success-muted: 216 242 228;
+  --color-success-line: 156 213 182;
+  --color-success-ink: 23 98 63;
   --color-danger: 180 66 34;
+  --color-on-danger: 255 244 237;
+  --color-danger-soft: 253 236 231;
+  --color-danger-muted: 248 217 208;
+  --color-danger-line: 219 154 136;
+  --color-danger-ink: 143 47 26;
+  --color-warning: 232 148 18;
+  --color-on-warning: 43 22 6;
+  --color-warning-soft: 255 244 214;
+  --color-warning-muted: 255 230 163;
+  --color-warning-line: 210 158 54;
+  --color-warning-ink: 109 58 0;
+  --color-neutral: 104 91 75;
+  --color-on-neutral: 255 247 232;
+  --color-neutral-soft: 242 237 229;
+  --color-neutral-muted: 232 224 213;
+  --color-neutral-line: 198 183 164;
+  --color-neutral-ink: 93 81 67;
 }
 
 [data-theme='dark'] {
@@ -29,6 +53,8 @@
   --color-primary-light: 248 198 91;
   --color-primary-dark: 255 218 142;
   --color-on-primary-dark: 43 22 6;
+  --color-brand-panel: 42 29 17;
+  --color-on-brand-panel: 238 210 166;
   --color-background: 22 17 12;
   --color-background-mist: 39 29 18;
   --color-background-card: 31 25 19;
@@ -37,7 +63,29 @@
   --color-ink-soft: 169 147 116;
   --color-line: 76 61 43;
   --color-success: 69 190 127;
+  --color-on-success: 16 39 25;
+  --color-success-soft: 18 48 36;
+  --color-success-muted: 23 62 46;
+  --color-success-line: 46 108 78;
+  --color-success-ink: 123 220 168;
   --color-danger: 244 126 96;
+  --color-on-danger: 43 22 18;
+  --color-danger-soft: 55 25 22;
+  --color-danger-muted: 72 31 25;
+  --color-danger-line: 132 61 49;
+  --color-danger-ink: 255 156 137;
+  --color-warning: 245 171 64;
+  --color-on-warning: 43 22 6;
+  --color-warning-soft: 55 39 15;
+  --color-warning-muted: 72 50 16;
+  --color-warning-line: 126 88 35;
+  --color-warning-ink: 247 193 100;
+  --color-neutral: 104 91 75;
+  --color-on-neutral: 247 239 225;
+  --color-neutral-soft: 42 37 31;
+  --color-neutral-muted: 55 48 40;
+  --color-neutral-line: 89 76 63;
+  --color-neutral-ink: 210 194 174;
 }
 
 @layer base {
