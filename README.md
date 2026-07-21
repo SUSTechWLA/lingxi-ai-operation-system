@@ -42,7 +42,6 @@
 - 制作路线与 AIGC 执行策略已解耦：口播默认按 Shot 自动使用 AIGC 丰富层，也可选择纯本地执行；`aigcEnabled=false` 只禁止本次 AIGC 调用，不会删除该层的提示词、安全区和未来重启执行所需设计。
 - 已安装 App 内置正式 IP 资产与 MCP provider，并显式发现 macOS `say`、Homebrew FFmpeg/FFprobe；本地预览严格遵守用户时长。
 - 动态审核 UI 可随真实 Agent review gate 推进；MCP 必需素材失败时会 fail closed，不再把失败渲染伪装成成功。
-- 头像菜单内置统一设置页：分开管理文本、图片和视频生成接口，密钥仅保存在本机，并支持跟随系统、浅色和深色外观。
 - Closed beta runbook、beta smoke、fallback fixture、diagnostics、artifact provenance 和 readiness gate 已就绪。
 - 视频流水线已对齐 shot 级生产闭环：语义/画面变化切分、3-15 秒时长校验、candidate 级 QA、保守 repair loop、accepted shot gate、FFmpeg final assembly 和 final QA。
 - Shot 素材包已拆成可读的三层画面设计与一份合成计划：`ipArollPlan`、`hyperframesPlan`、`aigcPlan` 和 `ffmpegFusionPlan`，并统一收敛到 `visualLayers` 契约。
@@ -58,6 +57,12 @@
 - 当前 release 分支可作为初版受控内测上线基线，用于技术型用户安装、诊断、反馈和小范围创作者试用。
 - GitHub Release 提供按版本和 CPU 架构命名的 macOS 客户端安装包；安装包由对应 release tag 自动构建，避免 tag、源码和用户端版本漂移。
 - 邀请真实创作者前，必须在完整本地环境中运行 `BETA_READINESS_REQUIRE_AIGC=1 bash scripts/beta-readiness-check.sh` 并得到 `GO`。
+
+### release 分支待发布更新
+
+- 头像菜单内置统一设置页：分开管理文本、图片和视频生成接口，密钥仅在本地 Agent 持久化，并支持跟随系统、浅色和深色外观。
+- 执行生成任务时，所需密钥会随当次认证请求传输给云端编排，不写入项目配置或云端数据库；设置页可显式清除本地密钥。
+- 这些改动在下一个语义化 tag 之前均属于 `Unreleased`；当前可下载安装包仍为 `v0.2.1`。
 
 详细版本历史见 [CHANGELOG.md](CHANGELOG.md)。当前可用性和内测门槛见 [docs/RELEASE_STATUS.md](docs/RELEASE_STATUS.md)。
 
@@ -82,7 +87,7 @@ ip-assets/main-ip/manifests/default-aroll-assets.json
 
 登录后的默认入口是 `#/create`。持久导航只有“开始创作”和“我的视频”；开发诊断保留在开发环境开关下的 `#/developer/*`，不会出现在生产创作者导航中。
 
-头像菜单中的“设置”统一管理文本生成、图片生成和视频生成接口，API 密钥只保存在本机；外观可选择跟随系统、浅色或深色并自动记住。开始创作页只展示创作者需要做的选择，不暴露 Shot 内部三层编排术语，后端仍按 `shot_visual_layers_v1` 自动生成并执行完整的 IP A-roll、HyperFrames 与 AIGC 画面计划。
+头像菜单中的“设置”统一管理文本生成、图片生成和视频生成接口，API 密钥仅在本地 Agent 持久化；外观可选择跟随系统、浅色或深色并自动记住。开始创作页只展示创作者需要做的选择，不暴露 Shot 内部三层编排术语，后端仍按 `shot_visual_layers_v1` 自动生成并执行完整的 IP A-roll、HyperFrames 与 AIGC 画面计划。
 
 项目按需求、创意方案、脚本、分镜与素材、成片预览、交付六步推进。单个 Shot 必须大于 0 且小于 15 秒；重生成和候选确认只影响该 Shot 与成片待更新状态，历史版本可恢复为新的当前版本。重新拼接会重试真实的预览审核节点，不会重生成任何 Shot。最终视频与下载入口只在当前交付产物明确记录成片检查通过后出现。
 
@@ -161,7 +166,7 @@ Shot split policy 固定为 `minShotDurationSec=3`、`maxShotDurationSec=15`、`
 
 - 想把短视频生产流程标准化的个人创作者和小团队
 - 需要“AI 生成 + 人工确认 + 本地交付”的视频工作流
-- 希望保留本地文件控制权，不把所有素材、密钥和中间产物交给云端的团队
+- 希望保留本地文件控制权，不把所有素材、密钥持久化和中间产物存储交给云端的团队
 - 正在验证 AIGC 影视化、口播视频、自动分镜和多 Agent 编排的产品原型
 
 ## 快速开始

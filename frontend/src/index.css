@@ -5,9 +5,11 @@
 :root {
   color-scheme: light;
   --color-primary: 232 148 18;
+  --color-on-primary: 43 22 6;
   --color-primary-soft: 255 240 190;
   --color-primary-light: 255 214 90;
   --color-primary-dark: 92 52 12;
+  --color-on-primary-dark: 255 253 246;
   --color-background: 255 246 214;
   --color-background-mist: 255 233 168;
   --color-background-card: 255 253 246;
@@ -22,9 +24,11 @@
 [data-theme='dark'] {
   color-scheme: dark;
   --color-primary: 245 171 64;
+  --color-on-primary: 43 22 6;
   --color-primary-soft: 70 48 18;
   --color-primary-light: 248 198 91;
   --color-primary-dark: 255 218 142;
+  --color-on-primary-dark: 43 22 6;
   --color-background: 22 17 12;
   --color-background-mist: 39 29 18;
   --color-background-card: 31 25 19;
@@ -127,7 +131,7 @@ body {
 
 .creator-nav-button:hover,
 .creator-nav-button.is-active {
-  color: rgb(var(--color-background-card));
+  color: rgb(var(--color-on-primary));
   background: rgb(var(--color-primary));
 }
 
@@ -316,7 +320,7 @@ body {
   width: 100%;
   margin-top: 1.5rem;
   padding: 0.9rem 1rem;
-  color: rgb(var(--color-background-card));
+  color: rgb(var(--color-on-primary));
   background: rgb(var(--color-primary));
 }
 
@@ -899,7 +903,7 @@ body {
 }
 
 .settings-panel-actions button.is-primary {
-  color: rgb(var(--color-background-card));
+  color: rgb(var(--color-on-primary));
   background: rgb(var(--color-primary));
   border-color: rgb(var(--color-primary));
 }
@@ -920,7 +924,8 @@ body {
   gap: 0.75rem;
 }
 
-.settings-field > span {
+.settings-field > span,
+.settings-field > label {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -950,6 +955,23 @@ body {
 .settings-field small {
   color: rgb(var(--color-ink-soft));
   font-size: 0.6875rem;
+}
+
+.settings-clear-key {
+  justify-self: start;
+  padding: 0;
+  color: rgb(var(--color-danger));
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.settings-clear-key:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .settings-theme-options {

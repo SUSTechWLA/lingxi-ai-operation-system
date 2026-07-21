@@ -6,6 +6,7 @@ export interface ModelProviderConfig {
   baseUrl: string
   model: string
   apiKey?: string
+  clearApiKey?: boolean
   hasApiKey?: boolean
   apiKeyPreview?: string
 }

@@ -12,11 +12,13 @@ The `release` branch is the initial closed beta launch baseline for controlled t
 
 The release branch now also includes the Shot workspace refresh: each Shot opens as a linear 1-6 creator review flow, automatically switching between voice/knowledge video and cinematic/AIGC Shot video. Every Shot visibly distinguishes IP A-roll, HyperFrames/HyperKeyframes text and effects, AIGC enrichment, and the final composition plan, including whether a layer executes now or remains designed for later. The workspace shows readable scripts, reference images, prompts, subtitle timelines, upload slots, and playable final media instead of exposing raw `local://` storage references or success-only artifact status messages.
 
-The production Creator shell exposes one settings page from the user-avatar menu. It keeps text, image, and video generation providers separate, stores their credentials only in the local agent, and supports persisted system, light, and dark appearances. The start-creation page uses creator-facing labels only; the canonical three-layer Shot design continues in backend orchestration without exposing implementation terminology at project intake.
+The production Creator shell exposes one settings page from the user-avatar menu. It keeps text, image, and video generation providers separate, persists their credentials only in the local agent, and supports persisted system, light, and dark appearances. A generation request transmits only the runtime credentials required for that authenticated cloud orchestration request; project configuration and cloud persistence are sanitized. The settings page can explicitly clear each locally saved key. The start-creation page uses creator-facing labels only; the canonical three-layer Shot design continues in backend orchestration without exposing implementation terminology at project intake.
 
 The release candidate also includes the canonical sloth A-roll path. It loads the approved Blender master into the warm studio, drives body, wrist, independent three-segment digits, visemes and facial controls from the script timeline, uses the pinned GPT-SoVITS voice, and composes a final MP4 locally with FFmpeg. This layer is deterministic local rendering; the same talking-head Shot may independently add AIGC background/B-roll enrichment when its policy and provider allow it.
 
 Desktop installers are built from the matching `v0.2.1` tag. macOS artifacts use English filenames containing the version and architecture; unsigned closed-beta builds may still require the tester to approve the app in macOS Privacy & Security.
+
+The settings and appearance work above remains `Unreleased` until a new semantic version tag is created. The currently downloadable desktop installers are still the `v0.2.1` artifacts.
 
 For creator-facing real AIGC trials, run the readiness gate in the target environment and require `GO` before inviting users.
 

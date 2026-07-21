@@ -580,7 +580,7 @@ function JiMengProjectNotice({ ready, selectedProfile, onOpenSettings }: { ready
         <button
           type="button"
           onClick={onOpenSettings}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-black text-white shadow-glow transition hover:bg-primary-dark"
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-black text-on-primary shadow-glow transition hover:bg-primary-dark hover:text-on-primary-dark"
         >
           <FiSettings /> 配置即梦 CLI
         </button>
@@ -637,7 +637,7 @@ function DirectorSidebar({ active, setActive, user, serviceStatus, preflight, on
               onClick={() => setActive(item.key)}
               className={clsx(
                 'flex shrink-0 items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-semibold transition lg:w-full',
-                isActive ? 'bg-primary text-white shadow-glow' : 'text-ink-muted hover:bg-primary-soft hover:text-primary-dark',
+                isActive ? 'bg-primary text-on-primary shadow-glow' : 'text-ink-muted hover:bg-primary-soft hover:text-primary-dark',
               )}
             >
               <Icon className="text-lg" />
@@ -840,7 +840,7 @@ function OverviewPage(props: {
           <p className="text-sm font-bold text-primary-dark">项目状态</p>
           <h3 className="mt-2 text-xl font-black text-ink">{nextAction?.label || '准备开始'}</h3>
           <p className="mt-3 text-sm leading-6 text-ink-muted">{nextAction?.description || '输入需求后开始动态 Agent 创作线。'}</p>
-          <button onClick={onGoReview} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-black text-white shadow-glow transition hover:bg-primary-dark">
+          <button onClick={onGoReview} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-black text-on-primary shadow-glow transition hover:bg-primary-dark hover:text-on-primary-dark">
             {stages.some((stage) => stage.status === 'review') ? '前往审核' : '查看工作台'} <FiChevronRight />
           </button>
         </section>
@@ -1100,7 +1100,7 @@ function NowGeneratingBanner({ stages }: { stages: DirectorStage[] }) {
     return (
       <div className="col-span-12 rounded-xl border border-line bg-primary-soft px-5 py-4 transition-all">
         <div className="flex items-center gap-3">
-          <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-white">
+          <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-on-primary">
             <span className="absolute inset-0 rounded-lg bg-primary-light animate-ping opacity-30" />
             <FiRefreshCw className="animate-spin relative z-10" />
           </span>
@@ -1229,7 +1229,7 @@ function ReviewPage({ review, stage, feedback, loading, onFeedbackChange, onActi
                         <button
                           type="button"
                           onClick={onGoAssets}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white shadow-sm hover:bg-primary-dark"
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-on-primary shadow-sm hover:bg-primary-dark hover:text-on-primary-dark"
                         >
                           <FiArchive /> 查看产物页提示词和上传入口
                         </button>
@@ -1691,7 +1691,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                   onClick={() => onModeChange?.(itemMode)}
                   className={clsx(
                     'inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-black transition',
-                    mode === itemMode ? 'bg-primary text-white shadow-sm' : 'text-primary-dark hover:bg-primary-soft',
+                    mode === itemMode ? 'bg-primary text-on-primary shadow-sm' : 'text-primary-dark hover:bg-primary-soft',
                   )}
                 >
                   <Icon /> {label}
@@ -1804,7 +1804,7 @@ function ShotAssetWorkbench({ artifacts, projectId, mode, modeDetection, onModeC
                 下一 shot
               </button>
               <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiCheck /> 保存</button>
-              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-black text-white shadow-sm"><FiRefreshCw /> 重新生成</button>
+              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-black text-on-primary shadow-sm"><FiRefreshCw /> 重新生成</button>
               <button type="button" className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-black text-primary-dark ring-1 ring-line hover:bg-primary-soft"><FiDownload /> 导出</button>
             </div>
           </div>
@@ -2264,7 +2264,7 @@ function ShotPrototypePanel({
             onClick={() => setCompleted((current) => !current)}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-black ring-1',
-              completed ? 'bg-green-50 text-green-700 ring-green-100 hover:bg-white' : 'bg-primary text-white ring-primary shadow-sm',
+              completed ? 'bg-green-50 text-green-700 ring-green-100 hover:bg-white' : 'bg-primary text-on-primary ring-primary shadow-sm',
             )}
           >
             <FiCheck /> {completed ? '取消完成' : '完成本步骤'}
@@ -3404,7 +3404,7 @@ function SelectionFloatingAssistant({
           type="button"
           disabled={loading}
           onClick={() => { void onApply(instruction) }}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-on-primary shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading ? <FiRefreshCw className="animate-spin" /> : <FiEdit3 />} {loading ? '处理中...' : actionLabel}
         </button>
@@ -3689,7 +3689,7 @@ function ShotRequestSummaryCard({
       {allowUpload && onUpload ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <label className={clsx(
-            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
+            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-on-primary',
             (!projectReady || uploading) && 'cursor-not-allowed opacity-50',
           )}>
             <FiUpload /> {uploading ? '上传中...' : request.kind === 'image' ? '上传图片结果' : '上传视频结果'}
@@ -3997,7 +3997,7 @@ function ShotAssetSlotCard({
         {copyValue ? <CopyButton value={copyValue} label={slot.kind === 'prompt' ? '复制任务包' : '复制信息'} /> : null}
         {canUpload ? (
           <label className={clsx(
-            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
+            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-on-primary',
             (!projectReady || uploadingKey === manualUploadKey) && 'cursor-not-allowed opacity-50',
           )}>
             <FiUpload /> {uploadingKey === manualUploadKey ? '上传中...' : `上传${slot.label}`}
@@ -4250,7 +4250,7 @@ function ImagePreviewDialog({
                 增强情绪
               </button>
             </div>
-            <button type="button" onClick={buildDraft} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-black text-white shadow-sm">
+            <button type="button" onClick={buildDraft} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-black text-on-primary shadow-sm">
               <FiRefreshCw /> 按要求生成返工提示词
             </button>
           </div>
@@ -4487,7 +4487,7 @@ function ShotArtifactPreview({
               <button
                 type="button"
                 onClick={() => setDialogOpen(true)}
-                className="absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-white shadow-sm ring-1 ring-white/15 hover:bg-primary focus:outline-none focus:ring-2 focus:ring-white"
+                className="absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-lg bg-ink/80 px-2.5 py-1.5 text-[11px] font-black text-background-card shadow-sm ring-1 ring-white/15 hover:bg-primary hover:text-on-primary focus:outline-none focus:ring-2 focus:ring-white"
                 aria-label={`放大播放 ${artifact.name}`}
               >
                 <FiPlayCircle /> 放大播放
@@ -5124,7 +5124,7 @@ function ExportPage({ artifacts, durationSec, projectId }: { artifacts: Director
           <h3 className="text-lg font-black text-ink">导出操作</h3>
           {!videoReady && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">最终视频尚未生成</div>}
           {videoPreviewError && <div className="mb-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-primary-dark ring-1 ring-amber-200">{videoPreviewError}</div>}
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} onClick={() => { void openFinalVideoFolder() }} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"><button disabled={!videoPreviewUrl} onClick={() => { void previewVideoRef.current?.play().catch(() => undefined) }} className="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-black text-on-primary shadow-glow disabled:cursor-not-allowed disabled:opacity-45"><FiPlayCircle /> 预览视频</button><button disabled={!videoReady} onClick={() => { void openFinalVideoFolder() }} className="flex items-center justify-center gap-2 rounded-lg bg-background-card px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFolder /> 打开文件夹</button></div>
           <button disabled={!videoReady} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-violet px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><FiDownload /> {packageReady ? '下载交付包' : '导出交付包'}</button>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button disabled={!publishReady} onClick={() => downloadTextFile('publish-copy.md', markdown, 'text/markdown')} className="flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-3 text-sm font-black text-primary-dark ring-1 ring-line disabled:cursor-not-allowed disabled:opacity-45"><FiFileText /> Markdown</button>
@@ -5538,7 +5538,7 @@ function ArtifactTable({ artifacts, compact = false, projectId, mode = 'voice_vi
                             <button
                               onClick={submitRevision}
                               disabled={revisionLoading || !revisionMessage.trim() || !selected || !isInspectableArtifact(selected)}
-                              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-black text-on-primary disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <FiRefreshCw /> {revisionLoading ? '返工中...' : '提交返工'}
                             </button>
@@ -5723,7 +5723,7 @@ function ExternalGenerationRequestPanel({
         <div className="flex flex-wrap gap-2">
           <StatusBadge status="review" label="待用户回填" />
           <label className={clsx(
-            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-white',
+            'inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-black text-on-primary',
             disabled && 'cursor-not-allowed opacity-50'
           )}>
             <FiUpload /> {uploading ? '上传中...' : '上传回此依赖点'}
@@ -6367,8 +6367,8 @@ function stageTone(status: DirectorStageStatus) {
 
 function stageIconTone(status: DirectorStageStatus) {
   if (status === 'done') return 'bg-green-600 text-white'
-  if (status === 'review') return 'bg-primary text-white'
-  if (status === 'running' || status === 'active') return 'bg-primary text-white'
+  if (status === 'review') return 'bg-primary text-on-primary'
+  if (status === 'running' || status === 'active') return 'bg-primary text-on-primary'
   if (status === 'blocked' || status === 'failed') return 'bg-red-500 text-white'
   return 'bg-stone-200 text-stone-600'
 }

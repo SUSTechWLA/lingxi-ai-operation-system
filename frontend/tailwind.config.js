@@ -13,6 +13,8 @@ export default {
           light: 'rgb(var(--color-primary-light) / <alpha-value>)',
           dark: 'rgb(var(--color-primary-dark) / <alpha-value>)',
         },
+        'on-primary': 'rgb(var(--color-on-primary) / <alpha-value>)',
+        'on-primary-dark': 'rgb(var(--color-on-primary-dark) / <alpha-value>)',
         background: {
           DEFAULT: 'rgb(var(--color-background) / <alpha-value>)',
           mist: 'rgb(var(--color-background-mist) / <alpha-value>)',

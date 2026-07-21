@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, type KeyboardEvent } from 'react'
 import { FiArrowLeft, FiCheck, FiCheckCircle, FiCopy, FiCpu, FiDownload, FiFilm, FiImage, FiKey, FiMessageSquare, FiMonitor, FiMoon, FiRefreshCw, FiSave, FiSun, FiUserCheck, FiX } from 'react-icons/fi'
 import {
   checkJiMengLogin,
@@ -57,6 +57,9 @@ const settingsTabs: Array<{
   ...providerRows.map(({ id, label, icon }) => ({ id, label, icon })),
   { id: 'appearance', label: '外观', icon: FiSun },
 ]
+
+const settingsTabId = (tab: SettingsTab) => `settings-tab-${tab}`
+const settingsPanelId = (tab: SettingsTab) => `settings-panel-${tab}`
 
 const appearanceModes: Array<{
   id: ThemeMode
@@ -156,13 +159,48 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
       setProviderSettings(mergeModelProviderSettings(response.providers))
       setProviderMessage({
         type: 'success',
-        text: '模型 API 设置已保存到本机，不会上传云端',
+        text: '模型 API 设置已在本机持久化',
       })
     } catch (error) {
       setProviderMessage({ type: 'error', text: error instanceof Error ? error.message : '保存模型设置失败' })
     } finally {
       setProviderSaving(false)
     }
+  }
+
+  const handleClearProviderKey = async (capability: ModelCapability) => {
+    if (!window.confirm('确定清除该生成能力已保存的 API 密钥？')) return
+    setProviderSaving(true)
+    setProviderMessage({ type: 'info', text: '正在清除已保存密钥...' })
+    try {
+      const response = await saveModelProviderSettings({
+        ...providerSettings,
+        [capability]: {
+          ...providerSettings[capability],
+          apiKey: '',
+          clearApiKey: true,
+        },
+      })
+      setProviderSettings(mergeModelProviderSettings(response.providers))
+      setProviderMessage({ type: 'success', text: '已从本机清除该 API 密钥' })
+    } catch (error) {
+      setProviderMessage({ type: 'error', text: error instanceof Error ? error.message : '清除 API 密钥失败' })
+    } finally {
+      setProviderSaving(false)
+    }
+  }
+
+  const handleSettingsTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | undefined
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % settingsTabs.length
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + settingsTabs.length) % settingsTabs.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = settingsTabs.length - 1
+    if (nextIndex === undefined) return
+    event.preventDefault()
+    const nextTab = settingsTabs[nextIndex].id
+    setActiveTab(nextTab)
+    document.getElementById(settingsTabId(nextTab))?.focus()
   }
 
   const loadJiMengSetupStatus = async (showFeedback = false) => {
@@ -263,7 +301,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
             </div>
             <div>
               <h1 className="text-2xl font-bold text-ink">设置</h1>
-              <p className="text-sm text-ink-soft">管理生成能力和界面外观，密钥仅保存在本机</p>
+              <p className="text-sm text-ink-soft">管理生成能力和界面外观，密钥仅在本地 Agent 持久化</p>
             </div>
           </div>
         </div>
@@ -346,18 +384,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
                     <FiCpu className="w-4 h-4 text-ink-soft" />
                     生成与外观
                   </h3>
-                  <p className="mt-1 text-xs text-ink-soft">三种生成能力分别配置，密钥仅保存在本机</p>
+                  <p className="mt-1 text-xs text-ink-soft">三种生成能力分别配置，密钥仅在本机持久化</p>
                 </div>
               </div>
 
               <div className="settings-tab-list" role="tablist" aria-label="设置分类">
-                {settingsTabs.map((row) => (
+                {settingsTabs.map((row, index) => (
                   <button
                     key={row.id}
+                    id={settingsTabId(row.id)}
                     type="button"
                     role="tab"
                     aria-selected={activeTab === row.id}
+                    aria-controls={settingsPanelId(row.id)}
+                    tabIndex={activeTab === row.id ? 0 : -1}
                     onClick={() => setActiveTab(row.id)}
+                    onKeyDown={(event) => handleSettingsTabKeyDown(event, index)}
                     className={activeTab === row.id ? 'settings-tab is-active' : 'settings-tab'}
                   >
                     <row.icon aria-hidden="true" />
@@ -367,7 +409,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
               </div>
 
               {activeTab === 'appearance' ? (
-                <section className="settings-appearance" role="tabpanel" aria-label="外观">
+                <section
+                  id={settingsPanelId(activeTab)}
+                  className="settings-appearance"
+                  role="tabpanel"
+                  aria-labelledby={settingsTabId(activeTab)}
+                >
                   <div>
                     <h3>选择界面外观</h3>
                     <p>跟随环境切换，也可以固定使用浅色或夜间皮肤。</p>
@@ -392,7 +439,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
                   </div>
                 </section>
               ) : activeProviderRow && activeProvider ? (
-                <section className="settings-provider-panel" role="tabpanel" aria-label={activeProviderRow.label}>
+                <section
+                  id={settingsPanelId(activeTab)}
+                  className="settings-provider-panel"
+                  role="tabpanel"
+                  aria-labelledby={settingsTabId(activeTab)}
+                >
                   <div className="settings-panel-heading">
                     <div>
                       <h3>{activeProviderRow.label}</h3>
@@ -420,17 +472,28 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ variant = 'developer', onBa
                       <span>模型名称</span>
                       <input value={activeProvider.model} onChange={(event) => updateProvider(activeProviderRow.id, 'model', event.target.value)} placeholder="model-name" />
                     </label>
-                    <label className="settings-field">
-                      <span><FiKey aria-hidden="true" /> API 密钥</span>
+                    <div className="settings-field">
+                      <label htmlFor={`provider-api-key-${activeProviderRow.id}`}><FiKey aria-hidden="true" /> API 密钥</label>
                       <input
+                        id={`provider-api-key-${activeProviderRow.id}`}
                         value={activeProvider.apiKey || ''}
                         onChange={(event) => updateProvider(activeProviderRow.id, 'apiKey', event.target.value)}
                         placeholder={activeProvider.hasApiKey ? `已保存 ${activeProvider.apiKeyPreview || 'token'}，留空保留` : '输入 API Key'}
                         type="password"
                         autoComplete="off"
                       />
-                      <small>密钥仅保存在本机，不上传云端</small>
-                    </label>
+                      <small>密钥仅在本机持久化；开始生成时会随本次已认证生成请求传输给云端编排，不写入项目配置或数据库。</small>
+                      {activeProvider.hasApiKey && (
+                        <button
+                          type="button"
+                          className="settings-clear-key"
+                          disabled={providerLoading || providerSaving}
+                          onClick={() => handleClearProviderKey(activeProviderRow.id)}
+                        >
+                          清除已保存密钥
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <SettingsActionNotice message={providerMessage} className="mt-4" />
@@ -573,7 +636,7 @@ function JiMengSettingsPanel(props: {
             type="button"
             onClick={onInstallCLI}
             disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-black text-white shadow-glow disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-black text-on-primary shadow-glow disabled:cursor-not-allowed disabled:opacity-50"
           >
             {action === 'install' ? <FiRefreshCw className="animate-spin" /> : <FiDownload />} {action === 'install' ? '正在安装/更新' : '安装/更新 CLI'}
           </button>
@@ -704,7 +767,7 @@ function SettingsCopyButton({ value, label }: { value: string; label: string }) 
     <button
       type="button"
       onClick={handleCopy}
-      className={`inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs font-black ring-1 ring-line hover:bg-primary-soft ${copyState === 'failed' ? 'text-red-700' : 'text-primary-dark'}`}
+      className={`inline-flex items-center gap-1.5 rounded-lg bg-background-card px-2.5 py-1.5 text-xs font-black ring-1 ring-line hover:bg-primary-soft ${copyState === 'failed' ? 'text-red-700' : 'text-primary-dark'}`}
     >
       <FiCopy /> {copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : label}
     </button>
